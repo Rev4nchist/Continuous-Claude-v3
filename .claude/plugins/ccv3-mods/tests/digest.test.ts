@@ -4,6 +4,7 @@ import { applyBrief } from '../hooks/agentic-os/brief'
 import type { Brief } from '../hooks/agentic-os/brief'
 import { MAX_ITEMS, MIN_ITEMS, digest, fold } from '../hooks/agentic-os/digest'
 import type { DigestAsk, DigestBlock, DigestCommit, DigestCompaction, DigestDecision, DigestLane, DigestOptions, DigestPr, DigestProof } from '../hooks/agentic-os/digest'
+import { TABS } from '../hooks/agentic-os/os-tabs-model'
 import { drift as driftOf } from '../hooks/agentic-os/steward'
 import type { Drift } from '../hooks/agentic-os/steward'
 import type { PaneRow } from '../hooks/agentic-os/pane-model'
@@ -23,9 +24,9 @@ import type { AgentRun, OsTask } from '../types'
 //   - No `[source]` tag. The age is the right group of row 1 (now, Nm, Nh, Nd) on a pane of 24 columns or more. Under 24 columns the age is
 //     dropped (wrapRows drops the right group there): a documented loss, not asserted. An item with no time has no age (or `-`).
 //   - `[derived]` stays: a derived item carries the literal `[derived]` in its text; a plain item never says "derived".
-//   - Hint rule (plan): an item whose home tab holds more ALWAYS ends with `...more -> <Tab>` (an ask with a recommendation: Decisions; a
+//   - Hint rule (plan): an item whose home tab holds more ALWAYS ends with `...more -> <Tab>` (an ask with a recommendation: Choices; a
 //     peer lane with overlap: Work); a plain item shows the hint only when its text is cut at lineCap rows. Home tabs pinned here: ask
-//     Decisions, change (PR) Work, peer lane Work.
+//     Choices, change (PR) Work, peer lane Work. Tab words (Dave, 2026-10-30): Plan is Steps, Proof is Checks, Decisions is Choices.
 //   - Wording comes from plain.ts: askSentence ("Answer: x" and "I suggest: r" on the NEXT row), prSentence ("Change #N ..."; no title,
 //     no "PR #"), stepSentence, helperSentence, driftSentence, laneSentence, proofSentence, keeperSentence. A commit shows its subject
 //     only (no sha). A passed proof drops the artifact name.
@@ -54,7 +55,7 @@ import type { AgentRun, OsTask } from '../types'
 // D18 a raw code (LIMITED, REVIEWED, null, undefined) leaks into plain words
 // N1  a long item is not wrapped to 3 rows ending "...more -> <home tab>" (itemRows caps at 1 or 5, or the hint is missing)
 // N2  a short plain item gets a hint anyway
-// N3  an ask with a recommendation does not always end with the Decisions hint, or the recommendation is not on the next row
+// N3  an ask with a recommendation does not always end with the Choices hint, or the recommendation is not on the next row
 // N4  a peer lane with overlap is not marked "may touch the same files" with the Work hint, or one without it is
 // N5  lineCap 1 draws more than one row per item
 // N6  fold() slices rows instead of item groups, or its "+N more" counts rows
@@ -681,13 +682,13 @@ describe('digest width and plain words', () => {
 })
 
 describe('digest multi-row items', () => {
-  test('N1 an ask longer than 3 rows draws exactly 3 rows, inside the width, ending "...more -> Decisions"; the keys are -, -2, -3', () => {
+  test('N1 an ask longer than 3 rows draws exactly 3 rows, inside the width, ending "...more -> Choices"; the keys are -, -2, -3', () => {
     const found = go({ asks: [ask(LONG_ASK, 5 * MIN)] }, { columns: 40 })
     const group = found.needs.items[0]!
     expect(group).toHaveLength(3)
     expect(group.map(one => one.key)).toEqual(['brief-needs-0', 'brief-needs-0-2', 'brief-needs-0-3'])
     for (const row of group) expect(rowWidth(row)).toBeLessThanOrEqual(40)
-    expect(leftText(group[2]!)).toMatch(HINT('Decisions'))
+    expect(leftText(group[2]!)).toMatch(HINT('Choices'))
     expect(leftText(group[0]!)).not.toMatch(/more/)
     expect(rowText(group[0]!)).toMatch(/^\s*> Answer: word0 word1/)
     expect(found.needs.rows).toEqual(group)
@@ -702,24 +703,57 @@ describe('digest multi-row items', () => {
     expect(text).toMatch(/(?:\.\.\.|…)more -> [A-Z][a-z]+$/)
   })
 
+  test('N1b a cut blocked step ends with the Steps hint, not Plan', () => {
+    const brief = made({ goal: 'g', plan: [{ id: 'a', text: LONG_ASK.slice(0, 190), status: 'blocked' }] })
+    const group = go({ brief }, { columns: 40 }).needs.items[0]!
+    expect(leftText(group[group.length - 1]!)).toMatch(HINT('Steps'))
+  })
+
+  test('N1c a cut failed check ends with the Checks hint, not Proof', () => {
+    const failed = proofOk(LONG_ASK, 5 * MIN, { result: { passed: 3, failed: 2 } })
+    const group = go({ proofs: [failed] }, { columns: 40 }).needs.items[0]!
+    expect(group.map(leftText).join(' ')).toContain('Check failed: word0 word1')
+    expect(leftText(group[group.length - 1]!)).toMatch(HINT('Checks'))
+  })
+
+  // Guards the shared word list: the strip label of a tab and the digest hint for that tab must be one word. Fails if either
+  // side keeps the old word or the two drift apart.
+  test('N1d the digest hint for each home tab equals the TABS label of that tab: Steps, Work, Checks, Choices', () => {
+    const blocked = made({ goal: 'g', plan: [{ id: 'a', text: LONG_ASK.slice(0, 190), status: 'blocked' }] })
+    const hintOf = (found: ReturnType<typeof go>, block: 'needs' | 'watch'): string | undefined =>
+      /(?:\.\.\.|…)more -> (\S+)$/.exec(found[block].items[0]!.map(leftText).join(' '))?.[1]
+    const hints: Record<string, string | undefined> = {
+      plan: hintOf(go({ brief: blocked }, { columns: 40 }), 'needs'),
+      proof: hintOf(go({ proofs: [proofOk(LONG_ASK, 5 * MIN, { result: { passed: 3, failed: 2 } })] }, { columns: 40 }), 'needs'),
+      decisions: hintOf(go({ asks: [ask(LONG_ASK, 5 * MIN)] }, { columns: 40 }), 'needs'),
+      work: hintOf(go({ lanes: [peer('api-core', { overlap: ['hooks/agentic-os/digest.ts'] })] }), 'watch'),
+    }
+    const want: Record<string, string> = { plan: 'Steps', proof: 'Checks', decisions: 'Choices', work: 'Work' }
+    for (const id of Object.keys(want)) {
+      const label = TABS.find(one => one.id === id)?.label
+      expect(hints[id], `hint of ${id}`).toBe(label)
+      expect(label, `label of ${id}`).toBe(want[id])
+    }
+  })
+
   test('N2 a short plain item gets no hint and stays one row', () => {
     const group = go({ asks: [ask('Paste the T2 response here', 5 * MIN)] }).needs.items[0]!
     expect(group).toHaveLength(1)
     expect(group.map(leftText).join(' ')).not.toMatch(/more/)
   })
 
-  test('N3 an ask with a recommendation ends with the Decisions hint even when it all fits, and the hint is on its last row only', () => {
+  test('N3 an ask with a recommendation ends with the Choices hint even when it all fits, and the hint is on its last row only', () => {
     const group = go({ asks: [ask('Which branch?', 5 * MIN, { recommend: 'main' })] }).needs.items[0]!
     expect(group).toHaveLength(2)
     expect(rowText(group[0]!)).toContain('Answer: Which branch?')
     expect(leftText(group[0]!)).not.toMatch(/more/)
     expect(rowText(group[1]!).trim().startsWith('I suggest: main')).toBe(true)
-    expect(leftText(group[1]!)).toMatch(HINT('Decisions'))
+    expect(leftText(group[1]!)).toMatch(HINT('Choices'))
   })
 
-  test('N3 an approval with a recommendation also ends with the Decisions hint; one without does not', () => {
+  test('N3 an approval with a recommendation also ends with the Choices hint; one without does not', () => {
     const withRec = go({ asks: [ask('Create the roles?', MIN, { kind: 'approval', recommend: 'yes, after review' })] }).needs.items[0]!
-    expect(withRec.map(leftText).join(' ')).toMatch(HINT('Decisions'))
+    expect(withRec.map(leftText).join(' ')).toMatch(HINT('Choices'))
     const without = go({ asks: [ask('Create the roles?', MIN, { kind: 'approval' })] }).needs.items[0]!
     expect(without.map(leftText).join(' ')).not.toMatch(/more/)
   })

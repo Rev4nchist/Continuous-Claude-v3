@@ -10,7 +10,7 @@ import type { PaneRow } from '../hooks/agentic-os/pane-model'
 import type { KeeperRecord } from '../types'
 
 // Round 2 review findings that the other test files do not pin. Each test names the source change that breaks it.
-// RR1 a home tab (Plan, Proof, Decisions) draws an ask, step or proof as one clipped row, so the Overview hint "...more -> <tab>" promises text no tab shows
+// RR1 a home tab (Steps, Checks, Choices) draws an ask, step or proof as one clipped row, so the Overview hint "...more -> <tab>" promises text no tab shows
 // RR2 the Session tab throws on a null record in the compactions atom (the Overview keeper line skips it)
 // RR3 two keeper records with one time: the row tone follows the first record while the text follows the later one
 // RR4 with the HUD off, a quiet session under 40 columns draws the chip and goal with no ctx anywhere
@@ -47,7 +47,7 @@ const SENTENCE = 'the quick brown fox jumps over the lazy dog and keeps running 
 const LONG = SENTENCE.repeat(2).trim()
 
 describe('home tabs wrap what the Overview hint points to', () => {
-  test('RR1 an ask wider than the pane takes up to 3 rows on Decisions, its recommendation too, and nothing is clipped to one row', () => {
+  test('RR1 an ask wider than the pane takes up to 3 rows on Choices, its recommendation too, and nothing is clipped to one row', () => {
     const state = empty({ brief: briefWith({ ask: [{ kind: 'question', text: LONG, recommend: LONG }] }), activeAt: NOW })
     const rows = tabRows('decisions', state, NOW, 40, 40)
     const ask = rows.filter(one => /^a-0(-\d)?$/.test(one.key))
@@ -60,14 +60,14 @@ describe('home tabs wrap what the Overview hint points to', () => {
     for (const row of rows) expect(row.left.reduce((n, one) => n + one.text.length, 0)).toBeLessThanOrEqual(40)
   })
 
-  test('RR1 a decision wider than the pane wraps on Decisions', () => {
+  test('RR1 a decision wider than the pane wraps on Choices', () => {
     const state = empty({ brief: briefWith({ decision: { text: LONG, by: 'Dave' } }) })
     const rows = tabRows('decisions', state, NOW, 40, 40).filter(one => /^d-0(-\d)?$/.test(one.key))
     expect(rows.length).toBeGreaterThan(1)
     expect(all(rows)).toContain('far beyond')
   })
 
-  test('RR1 a step wider than the pane wraps on Plan, and keeps UNPROVEN beside its first row', () => {
+  test('RR1 a step wider than the pane wraps on Steps, and keeps UNPROVEN beside its first row', () => {
     const state = empty({ brief: briefWith({ plan: [{ id: 'a', text: LONG, status: 'done' }] }) })
     const rows = tabRows('plan', state, NOW, 50, 40)
     const step = rows.filter(one => /^p-a(-\d)?$/.test(one.key))
@@ -76,14 +76,14 @@ describe('home tabs wrap what the Overview hint points to', () => {
     expect(rowText(step[0]!)).toContain('UNPROVEN')
   })
 
-  test('RR1 a short plan whose rows wrap still fits the budget: a cut ends with +N more, never past the rows given', () => {
+  test('RR1 a short step list whose rows wrap still fits the budget: a cut ends with +N more, never past the rows given', () => {
     const plan = Array.from({ length: 6 }, (_, i) => ({ id: `s${i}`, text: LONG, status: 'todo' }))
     const rows = tabRows('plan', empty({ brief: briefWith({ plan }) }), NOW, 40, 8)
     expect(rows.length).toBeLessThanOrEqual(8)
     expect(all(rows)).toMatch(/\+\d+ more/)
   })
 
-  test('RR1 an unproven step wider than the pane wraps on Proof', () => {
+  test('RR1 an unproven step wider than the pane wraps on Checks', () => {
     const tasks = [{ id: '1', subject: LONG, status: 'completed' as const }]
     const state = empty({ view: { ...empty().view, tasks }, brief: briefWith({ goal: 'g' }) })
     const rows = tabRows('proof', state, NOW, 50, 40).filter(one => /^u-t-1(-\d)?$/.test(one.key))

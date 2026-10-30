@@ -95,7 +95,7 @@ export const askSentence = (ask: AskFact, stale: boolean): { text: string; next?
 
 export type StepFact = { state: 'todo' | 'doing' | 'done' | 'blocked'; subject: string; proven: boolean }
 
-/** One plan step. The artifact is not here: the Plan and Proof tabs add its file name. */
+/** One plan step. The artifact is not here: the Steps and Checks tabs add its file name. */
 export const stepSentence = (step: StepFact): string => {
   const subject = piece(step.subject, 'a step')
   switch (step.state) {

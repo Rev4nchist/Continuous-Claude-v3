@@ -593,6 +593,17 @@ export const agenticOs = (on: On) => {
     }).catch(($, e, next) => next(e))
   }
 
+  // After an in-session resume or clear the engine wipes the atoms and fires classic.SessionStart, not session.start,
+  // so the band lost repo and branch until the first turn. Read the .git files again on those two sources only.
+  on('classic.SessionStart', { source: ['resume', 'clear'] }, async ($, e, next) => {
+    try {
+      if (!(await isOff($))) await refreshGit($)
+    } catch {
+      // Observer only.
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
     if (await isOff($)) return next(e)
     await writeProof($, { trigger: 'attach', isInteractive: false, surface: e.surface })

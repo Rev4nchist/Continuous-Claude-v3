@@ -116,11 +116,12 @@ const start = async ($: EngineInterface): Promise<void> => {
   const usage = await $.session.usage().catch(() => null)
   // After /clear or a resume, usage() may still hold the old cost until the new conversation's first reply: show the dash.
   const costUsd = (await isCostForgotten($)) ? null : (usage?.cost?.usd ?? null)
-  // A re-run start (reload, respawn, attach) keeps the advisor count (read here, so a step's increment is not lost) but takes
-  // the state from the settings as they are now: an advisor turned off or blocked since is not drawn "on". reset() zeroes the count.
+  // A re-run start (reload, respawn, attach) keeps the advisor count and the effort (read here, so a step's increment is not lost)
+  // but takes the advisor state from the settings as they are now: an advisor turned off or blocked since is not drawn "on".
+  // reset() zeroes the count.
   await update($, hud, now => ({
     model,
-    effort: null,
+    effort: now?.effort ?? null,
     advisor: { ...advisor, calls: now?.advisor.calls ?? 0 },
     costUsd,
     limits: (usage?.rateLimits ?? []).map(({ kind, percentUsed }) => ({ kind, percentUsed })),

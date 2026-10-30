@@ -11,6 +11,7 @@ import { gap } from './pane-model'
 import { chipWord } from './plain'
 import { sessionTab } from './session-tab'
 import type { Drift } from './steward'
+import { STEP_SOURCE, WORDS } from './tab-words'
 import type { PaneRow, Span, Tone } from './pane-model'
 import { oneLine, wrapRows } from './text'
 import { workTab } from './work-tab'
@@ -19,10 +20,11 @@ import { workTab } from './work-tab'
 //   Overview   the three questions at a glance: chip word, repo and branch; GOAL; NOW; NEEDS YOU, DONE, WATCH (digest.ts); one dim health row.
 //              Each briefing item is at most 3 rows and ends `...more -> <tab>` when its home tab holds more.
 //   Session    state, now, helpers (the ledger), a timeline of milestones, and the room left (session-tab.ts)
-//   Plan       the steps: tasks when there are any, else the brief plan (PRD 5.1), each done step proven or UNPROVEN
+//   Steps      the steps (id `plan`): tasks when there are any, else the brief plan (PRD 5.1), each done step proven or UNPROVEN
 //   Work       lanes, other sessions, changes, files, where (work-tab.ts)
-//   Proof      done-but-unproven steps first, then each proof with its artifact
-//   Decisions  the decision log newest first, then the open asks
+//   Checks     (id `proof`) done-but-unproven steps first, then each proof with its artifact
+//   Choices    (id `decisions`) the decision log newest first, then the open asks
+// The words Steps, Checks and Choices come from tab-words.ts; the ids, the Button keys and the osTab atom keep plan, proof and decisions.
 // Comms, Swarm and Resources are one dim `later:` footer row, drawn only when the body keeps 3 rows or more.
 // Text gauges only. Observer only. Every drawn string is redacted again at the end (idempotent) and only then cut to the
 // width, so a secret in any source cannot reach a row whole or in half.
@@ -35,10 +37,10 @@ export type TabSpec = { id: string; label: string; enabled: boolean }
 export const TABS: readonly TabSpec[] = [
   { id: 'overview', label: 'Overview', enabled: true },
   { id: 'session', label: 'Session', enabled: true },
-  { id: 'plan', label: 'Plan', enabled: true },
+  { id: 'plan', label: WORDS.plan.label, enabled: true },
   { id: 'work', label: 'Work', enabled: true },
-  { id: 'proof', label: 'Proof', enabled: true },
-  { id: 'decisions', label: 'Decisions', enabled: true },
+  { id: 'proof', label: WORDS.proof.label, enabled: true },
+  { id: 'decisions', label: WORDS.decisions.label, enabled: true },
 ]
 
 /** The tabs that are not built yet. They show as one dim footer row, never as a strip item. */
@@ -46,7 +48,7 @@ export const LATER: readonly string[] = ['Comms', 'Swarm', 'Resources']
 
 const LIVE: readonly string[] = TABS.filter(one => one.enabled).map(one => one.id)
 
-/** The digit that presses a tab: 1 for Overview, 6 for Decisions. */
+/** The digit that presses a tab: 1 for Overview, 6 for Choices. */
 const hotkeyOf = (id: string): string | undefined => (LIVE.includes(id) ? String(LIVE.indexOf(id) + 1) : undefined)
 
 /** True for the six tabs only: a later tab, or anything else, is not a tab id. */
@@ -125,7 +127,7 @@ export const tabStrip = (selected: TabId, columns: number): TabItem[][] => {
   return lines
 }
 
-// --- Steps (Plan, Proof, Overview) ---
+// --- Steps (the Steps and Checks tabs, Overview) ---
 
 type Step = { key: string; id: string; subject: string; text: string; state: 'todo' | 'doing' | 'done' | 'blocked'; proof: OsProof | null }
 
@@ -319,19 +321,19 @@ const fillBlocks = (blocks: Block[], budget: number): PaneRow[] => {
   return [...shown, more('more-overview', blocks.length - kept.size)]
 }
 
-// --- Plan ---
+// --- Steps ---
 
 const plan = (s: TabState, columns: number, rows: number): PaneRow[] => {
   const steps = stepsOf(s)
   const done = steps.filter(one => one.state === 'done').length
-  const source = s.view.tasks.length > 0 ? 'tasks' : 'brief plan'
+  const source = s.view.tasks.length > 0 ? STEP_SOURCE.tasks : STEP_SOURCE.brief
   const header: PaneRow = {
     key: 'h-plan',
-    left: [sp('PLAN', 'head'), ...(steps.length ? [sp(`  from ${source}`, 'dim')] : [])],
+    left: [sp(WORDS.plan.head, 'head'), ...(steps.length ? [sp(`  from ${source}`, 'dim')] : [])],
     ...(steps.length ? { right: [sp(`${done} of ${steps.length} done`, 'dim')] } : {}),
   }
   const room = rows - 1
-  if (steps.length === 0) return [header, line('plan-none', sp('  no steps yet (no task list, no brief_set plan)', 'dim'))]
+  if (steps.length === 0) return [header, line('plan-none', sp(`  ${WORDS.plan.none}`, 'dim'))]
   const groups = steps.map(one => stepRows(one, columns))
   if (groups.reduce((n, group) => n + group.length, 0) <= room) return [header, ...groups.flat()]
   // Too long: the finished steps fold into one row, so the running step stays in view; what still does not fit becomes "+N more".
@@ -344,15 +346,15 @@ const plan = (s: TabState, columns: number, rows: number): PaneRow[] => {
   return [header, ...fold, ...takeGroups(rest, room - fold.length, 'more-plan')]
 }
 
-// --- Proof ---
+// --- Checks ---
 
 const proof = (s: TabState, columns: number, rows: number): PaneRow[] => {
   const steps = stepsOf(s)
   const unproven = steps.filter(isUnproven)
   const proven = steps.filter(one => one.state === 'done' && one.proof !== null).length
   const proofs = [...(s.brief?.proofs ?? [])].sort((a, b) => b.at - a.at)
-  const header: PaneRow = { key: 'h-proof', left: [sp('PROOF', 'head')], right: [sp(`${proven} proven · ${unproven.length} unproven`, 'dim')] }
-  if (unproven.length === 0 && proofs.length === 0) return [header, line('proof-none', sp('  no proof yet (nothing is done, or nothing is proven)', 'dim'))]
+  const header: PaneRow = { key: 'h-proof', left: [sp(WORDS.proof.head, 'head')], right: [sp(`${proven} proven · ${unproven.length} unproven`, 'dim')] }
+  if (unproven.length === 0 && proofs.length === 0) return [header, line('proof-none', sp(`  ${WORDS.proof.none}`, 'dim'))]
   const groups: PaneRow[][] = [
     ...unproven.map(one => wrapRows(`u-${one.key}`, [sp('  ! ', 'warn')], one.text, 'todo', columns, LINES, rightOf([sp('UNPROVEN', 'warn')], columns))),
     ...proofs.map((one, i) => wrapRows(`proof-${i}`, [sp('  ✓ ', 'done')], one.subject, 'todo', columns, LINES, rightOf([sp(one.artifact, 'dim')], columns))),
@@ -360,7 +362,7 @@ const proof = (s: TabState, columns: number, rows: number): PaneRow[] => {
   return [header, ...takeGroups(groups, rows - 1, 'more-proof')]
 }
 
-// --- Decisions ---
+// --- Choices ---
 
 const decisions = (s: TabState, now: number, columns: number, rows: number): PaneRow[] => {
   const { brief } = s
@@ -371,7 +373,7 @@ const decisions = (s: TabState, now: number, columns: number, rows: number): Pan
 
   const decisionGroups: PaneRow[][] = log.length
     ? log.map((one, i) => [...wrapRows(`d-${i}`, [sp('  • ', 'dim')], one.text, 'todo', columns, LINES), line(`d-${i}-by`, sp(`    ${one.by} · ${ago(now, one.at)}`, 'dim'))])
-    : [[line('d-none', sp('  no decisions yet', 'dim'))]]
+    : [[line('d-none', sp(`  ${WORDS.decisions.none}`, 'dim'))]]
 
   const askGroups: PaneRow[][] = asks.length
     ? asks.map((one, i) => {
@@ -386,7 +388,7 @@ const decisions = (s: TabState, now: number, columns: number, rows: number): Pan
     : [[line('a-none', sp('  nothing open', 'dim'))]]
 
   const askRight = asks.length ? [sp(`${open} open${stale && open > 0 ? ' · stale' : ''}`, open > 0 && !stale ? 'warn' : 'dim')] : undefined
-  const headD: PaneRow = { key: 'h-decisions', left: [sp('DECISIONS', 'head')], ...(log.length ? { right: [sp(`${log.length} recorded`, 'dim')] } : {}) }
+  const headD: PaneRow = { key: 'h-decisions', left: [sp(WORDS.decisions.head, 'head')], ...(log.length ? { right: [sp(`${log.length} recorded`, 'dim')] } : {}) }
   const headA: PaneRow = { key: 'h-asks', left: [sp('OPEN ASKS', 'head')], ...(askRight ? { right: askRight } : {}) }
 
   const needD = decisionGroups.reduce((n, g) => n + g.length, 0)
