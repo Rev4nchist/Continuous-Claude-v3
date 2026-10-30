@@ -1432,8 +1432,9 @@ describe('pr-loop checkpoint states', () => {
     expect(line).toContain('--use-credits')
   })
 
-  // PR #225 round 3: after the paid-review step, the later "post @coderabbitai review" must hold only when no paid review was posted for this head.
-  const PAID_GATE = /only if no paid review was posted for this head/
+  // PR #225 round 3: after the paid-review step, the later "post @coderabbitai review" must not wait on a paid review that was only posted.
+  // CodeRabbit round 1 (PR #227): the fallback depends on the paid review finishing or still running, not on the request having been posted.
+  const PAID_GATE = /If a paid review was posted for this head and no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back/
 
   test('CW4n a paid-eligible rate limit makes the later post conditional on no paid review for this head, with and without a record', async ($, on) => {
     const withRecord = await limitedLine($, on, record({ budget: [1, 2] }), RATE_LIMITED({ coderabbitRounds: 1 }))
@@ -1446,6 +1447,12 @@ describe('pr-loop checkpoint states', () => {
     const line = await limitedLine($, on, null, RATE_LIMITED())
     expect(line).toMatch(PAID_GATE)
     expect(line.search(PAID_GATE)).toBeLessThan(line.indexOf('Post @coderabbitai review once when capacity is back'))
+  })
+
+  test('CW4n2 the paid gate keeps a retry path: wait while the paid review runs, retry when none appeared, never "only if none was posted"', async ($, on) => {
+    const line = await limitedLine($, on, null, RATE_LIMITED())
+    expect(line).toMatch(/still running, wait for it/)
+    expect(line).not.toMatch(/only if no paid review was posted/)
   })
 
   test('CW4p a rate limit that offers no paid review keeps its later post unconditional', async ($, on) => {

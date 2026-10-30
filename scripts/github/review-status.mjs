@@ -1000,6 +1000,18 @@ function summaryCoveredCommit(body) {
   return between ? between[1] : null;
 }
 
+/** The trusted CodeRabbit summary when it is no notice and says no actionable comments. null otherwise. */
+function cleanTrustedSummary(comments, commentEdits) {
+  const summary = trustedCodeRabbitSummary(comments, commentEdits);
+  return summary === null || codeRabbitNotice(summary.body) || !CLEAN_ROUND.test(String(summary.body)) ? null : summary;
+}
+
+/** The commit a trusted, clean, reviewed summary covers (a summary-only round when no review object holds it). 40 hex or null. */
+export function cleanSummaryCommit(comments, commentEdits) {
+  const summary = cleanTrustedSummary(comments, commentEdits);
+  return summary === null ? null : summaryCoveredCommit(summary.body);
+}
+
 /**
  * C2: the CodeRabbit round the carry reads. A review object (newestCodeRabbitReview), or a clean round that left only the summary
  * comment (live PR 213: 0 review objects). The summary stands in for a zero-finding review of the commit it covers: { id: null,
@@ -1008,8 +1020,8 @@ function summaryCoveredCommit(body) {
  */
 export function newestCodeRabbitRound({ reviews, comments, commentEdits, head } = {}) {
   const object = newestCodeRabbitReview(reviews);
-  const summary = trustedCodeRabbitSummary(comments, commentEdits);
-  if (summary === null || codeRabbitNotice(summary.body) || !CLEAN_ROUND.test(String(summary.body))) return object;
+  const summary = cleanTrustedSummary(comments, commentEdits);
+  if (summary === null) return object;
   const covered = summaryCoveredCommit(summary.body);
   if (covered === null || covered === head) return object;
   if ((reviews || []).some((r) => isCodeRabbitUser(r?.user) && r.commit_id === covered)) return object;

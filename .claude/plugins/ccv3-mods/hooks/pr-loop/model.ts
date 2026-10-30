@@ -395,8 +395,11 @@ const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpoint
 const paidReview = (pr: number): string =>
   `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post the comment it prints (@coderabbitai review --use-credits), then run cr-paid.mjs record. On ESCALATE, ask Dave.`
 
-/** A paid review replaces the capacity post: the later "post @coderabbitai review" holds only when none was bought for this head. */
-const PAID_GATE = 'The post below applies only if no paid review was posted for this head.'
+/**
+ * A paid review replaces the capacity post while it runs. The retry depends on the paid review finishing or still running, not on the
+ * request having been posted: a request that produced no review must not leave the watcher LIMITED with no way out.
+ */
+const PAID_GATE = 'If a paid review was posted for this head and is still running, wait for it. If a paid review was posted for this head and no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back. If none was posted, the post below applies.'
 
 /** The one line the model gets: LIMITED, PROOF, STALLED or REVIEWED. READY, merged and closed get a toast only. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {

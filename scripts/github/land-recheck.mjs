@@ -75,7 +75,8 @@ export function recheckPr({ pr, repo, head, readyAt }, gh) {
     // The shared reader READY uses: all REST pages, each comment paired with its GraphQL body and edit history.
     const [owner, name] = repo.split('/');
     const { comments, commentEdits } = readIssueComments(gh, owner, name, pr);
-    const statuses = gh([`${base}/commits/${pull.head.sha}/status`]).statuses || [];
+    // The combined status lists 30 statuses a page: read every page (100 each), so a pending CodeRabbit status on a later page counts.
+    const statuses = flatPages(gh(['--paginate', '--slurp', `${base}/commits/${pull.head.sha}/status?per_page=100`])).flatMap((page) => page?.statuses ?? []);
     return decideRecheck({ readyHead: head, readyAt, pull, reviews, comments, commentEdits, statuses });
   } catch (err) {
     return { ok: false, refusals: [`could not re-read PR #${pr}: ${String(err?.message ?? err).split('\n')[0]}`] };

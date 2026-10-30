@@ -257,3 +257,25 @@ test('CP16: a review object plus a newer summary-only clean round label the next
   assert.equal(r.from, OLD);
   h.done();
 });
+
+test('CP17: a summary-only clean round on A, then a review object on B, label the next round 3 (the older summary round counts)', async () => {
+  const h = harness({
+    reviews: [review(1, OLD, '2026-10-30T08:00:00Z')],
+    comments: [cleanSummary(OLDER, '2026-10-30T07:00:00Z')],
+    compareFiles: [prFile(0)],
+  });
+  const r = await h.check();
+  assert.equal(r.round, 3);
+  assert.equal(r.from, OLD);
+  h.done();
+});
+
+test('CP18: a summary that covers a commit a review object already holds counts no extra round', async () => {
+  const h = harness({
+    reviews: [review(1, OLD, '2026-10-30T08:00:00Z')],
+    comments: [cleanSummary(OLD, '2026-10-30T07:00:00Z')],
+    compareFiles: [prFile(0)],
+  });
+  assert.equal((await h.check()).round, 2);
+  h.done();
+});

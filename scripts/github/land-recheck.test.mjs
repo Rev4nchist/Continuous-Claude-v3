@@ -206,7 +206,7 @@ test('RC8: every gate that fires is listed', () => {
 // ---- recheckPr: the reads ----
 
 /** A fake gh keyed on the endpoint. `fail` makes the matching call throw. */
-function fakeGh({ pull = { head: { sha: HEAD } }, reviews = [review(1, BEFORE)], comments = [summary(BEFORE)], edits = { 900: [] }, combined = { statuses: [status('success')] }, fail = null } = {}) {
+function fakeGh({ pull = { head: { sha: HEAD } }, reviews = [review(1, BEFORE)], comments = [summary(BEFORE)], edits = { 900: [] }, combined = { statuses: [status('success')] }, combinedPages = null, fail = null } = {}) {
   const calls = [];
   // The GraphQL node of a REST comment (what readIssueComments pairs it with): same body, author and the edit history.
   const node = (c) => ({
@@ -225,7 +225,8 @@ function fakeGh({ pull = { head: { sha: HEAD } }, reviews = [review(1, BEFORE)],
     if (/\/pulls\/7$/.test(url)) return pull;
     if (/\/pulls\/7\/reviews/.test(url)) return [reviews];
     if (/\/issues\/7\/comments/.test(url)) return [comments];
-    if (/\/commits\/[^/]+\/status/.test(url)) return combined;
+    // A paginated read (--paginate --slurp) gets every page as an array; a plain read gets page 1 only, as the real API does.
+    if (/\/commits\/[^/]+\/status/.test(url)) return combinedPages ? (args.includes('--paginate') ? combinedPages : combinedPages[0]) : combined;
     throw new Error(`unexpected gh call ${args.join(' ')}`);
   };
   return { gh, calls };
@@ -253,6 +254,19 @@ for (const [n, fail] of [['10a', /\/pulls\/7$/], ['10b', /\/reviews/], ['10c', /
     assert.match(r.refusals.join(' '), /could not re-read.*boom/i);
   });
 }
+
+test('RC10f: a pending CodeRabbit status on page 2 of the commit statuses refuses (the read must page)', async () => {
+  const page1 = { total_count: 31, statuses: Array.from({ length: 30 }, (_, i) => status('success', `ci/${i}`)) };
+  const page2 = { total_count: 31, statuses: [status('pending')] };
+  const r = await recheckPr(asked, fakeGh({ combinedPages: [page1, page2] }).gh);
+  assert.equal(r.ok, false);
+  assert.match(r.refusals.join(' '), /commit status.*pending/i);
+});
+
+test('RC10g: two pages of passing statuses still let a quiet PR through', async () => {
+  const pages = [{ statuses: [status('success', 'ci/a')] }, { statuses: [status('success')] }];
+  assert.deepEqual(await recheckPr(asked, fakeGh({ combinedPages: pages }).gh), { ok: true, refusals: [] });
+});
 
 // PR 211 as recheckPr reads it: request 13:42:03Z, summary edited by CodeRabbit only at 13:48:07Z, covers the head.
 const asked211 = { ...asked, readyAt: T211.ready };
