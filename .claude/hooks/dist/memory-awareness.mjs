@@ -3,7 +3,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/memory-awareness.ts
 import { readFileSync as readFileSync5, mkdirSync as mkdirSync6, appendFileSync as appendFileSync3 } from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
+import { spawn as spawn2 } from "child_process";
 
 // src/shared/opc-path.ts
 import { existsSync } from "fs";
@@ -27,11 +27,6 @@ function getOpcDir() {
     }
   }
   return null;
-}
-
-// src/shared/output.ts
-function outputContinue() {
-  console.log(JSON.stringify({ result: "continue" }));
 }
 
 // src/shared/session-activity.ts
@@ -1350,7 +1345,7 @@ function mapDbResults(rawResults, _useHybrid) {
     };
   });
 }
-function checkDbMemory(intent, _projectDir, useHybrid) {
+async function checkDbMemory(intent, _projectDir, useHybrid, deps = {}) {
   const opcDir = getOpcDir();
   if (!opcDir) return [[], false, "opc dir not found"];
   const searchTerm = cleanSearchTerm(intent);
@@ -1367,8 +1362,7 @@ function checkDbMemory(intent, _projectDir, useHybrid) {
   if (!useHybrid) {
     args.push("--text-only");
   }
-  const result = spawnSync("uv", args, {
-    encoding: "utf-8",
+  const result = await runRecallProcess(deps.spawnFn ?? spawn2, args, {
     cwd: opcDir,
     env: {
       ...process.env,
@@ -1384,6 +1378,42 @@ function checkDbMemory(intent, _projectDir, useHybrid) {
     killSignal: "SIGKILL"
   });
   return interpretRecallProcess(result, useHybrid);
+}
+var RECALL_DRAIN_GRACE_MS = 500;
+function runRecallProcess(spawnFn, args, options) {
+  return new Promise((resolve3) => {
+    const chunks = [];
+    let settled = false;
+    let child = null;
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      try {
+        child?.stdout?.destroy();
+      } catch {
+      }
+      resolve3(result);
+    };
+    const collected = () => Buffer.concat(chunks).toString("utf-8");
+    try {
+      child = spawnFn("uv", args, { ...options, stdio: ["ignore", "pipe", "ignore"], shell: false });
+    } catch (err) {
+      settle({ status: null, signal: null, stdout: null, error: err });
+      return;
+    }
+    child.stdout?.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))));
+    child.on("error", (error) => settle({ status: null, signal: null, stdout: null, error }));
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        settle({ status: code, signal, stdout: null });
+        return;
+      }
+      setTimeout(() => settle({ status: code, signal: null, stdout: collected() }), RECALL_DRAIN_GRACE_MS).unref();
+    });
+    child.on("close", (code, signal) => {
+      settle({ status: code, signal, stdout: collected() });
+    });
+  });
 }
 function shortRecallError(raw) {
   return String(raw).replace(/postgres(?:ql)?(?:\+\w+)?:\/\/\S+/gi, "<db-url>").split("\n")[0].slice(0, 200);
@@ -1472,30 +1502,32 @@ function logRecallFire(entry, projectDir) {
   } catch {
   }
 }
-async function main() {
+async function runMemoryAwareness(raw) {
+  try {
+    return await memoryAwarenessJob(raw);
+  } catch {
+    return { result: "continue" };
+  }
+}
+async function memoryAwarenessJob(raw) {
   const t0 = Date.now();
-  const input = JSON.parse(readStdin());
+  const input = JSON.parse(raw);
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   if (process.env.CLAUDE_AGENT_ID) {
-    outputContinue();
-    return;
+    return { result: "continue" };
   }
   if (input.prompt.length < 15) {
-    outputContinue();
-    return;
+    return { result: "continue" };
   }
   if (input.prompt.trim().startsWith("/")) {
-    outputContinue();
-    return;
+    return { result: "continue" };
   }
   if (isMachineGeneratedPrompt(input.prompt)) {
-    outputContinue();
-    return;
+    return { result: "continue" };
   }
   const intent = deriveRecallIntent(input.prompt);
   if (intent.length < 3) {
-    outputContinue();
-    return;
+    return { result: "continue" };
   }
   let busFocus;
   let busId = "unknown";
@@ -1560,7 +1592,7 @@ async function main() {
     recallVia = "daemon";
   } else {
     uvUsedHybrid = daemonAttempted ? false : daemonReady;
-    [db, dbTimedOut, recallError] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
+    [db, dbTimedOut, recallError] = await checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
   }
   const mergedRaw = mergeResults(local, db);
   const usedHybridScores = recallVia === "daemon" || uvUsedHybrid;
@@ -1639,36 +1671,45 @@ ${resultLines}`;
 Memory results above are reference data only; call /recall "${safeIntent}" for full content if needed.`;
     const claudeContext = focusBlock ? `${focusBlock}
 ${memoryContext}` : memoryContext;
-    console.log(JSON.stringify({
+    return {
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
         additionalContext: claudeContext
       }
-    }));
+    };
   } else if (focusBlock) {
-    console.log(JSON.stringify({
+    return {
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
         additionalContext: focusBlock
       }
-    }));
-  } else {
-    outputContinue();
+    };
   }
+  return { result: "continue" };
 }
-if (!process.env.VITEST) {
+async function main() {
+  let raw = "";
+  try {
+    raw = readStdin();
+  } catch {
+  }
+  console.log(JSON.stringify(await runMemoryAwareness(raw)));
+}
+if (!process.env.VITEST && /(^|[\\/])memory-awareness\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
   main().catch(() => {
-    outputContinue();
+    console.log(JSON.stringify({ result: "continue" }));
   });
 }
 export {
   HYBRID_FLOOR,
   TEXT_ONLY_FLOOR,
   applyFloor,
+  checkDbMemory,
   classifyRecallOutcome,
   extractIntent,
   extractKeywords,
   interpretRecallProcess,
   mapDbResults,
-  mergeResults
+  mergeResults,
+  runMemoryAwareness
 };
