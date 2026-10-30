@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, BoardLane, CacheState, FileTouch, HudState, KeeperRecord, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, BoardLane, CacheState, FileTouch, HudLimit, HudState, KeeperRecord, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch } from '../../types'
 import { EMPTY_CACHE, cacheView, hitRate } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
@@ -9,7 +9,7 @@ import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
-import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd } from './brief'
+import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact } from './brief'
 import { hudOrSeed, seedHud } from '../hud/seed'
 import { bandLines, compactLine } from './band-model'
 import type { BandState } from './band-model'
@@ -194,6 +194,18 @@ const refreshGit = async ($: EngineInterface): Promise<void> => {
   }
 }
 
+/** The part of the HUD the state file carries (cost and limits). The atom only: a seed read here would use up the retries HS7 and M7 count. The atom is null for a headless run, with the HUD off, or on a resume before the seed (an interactive start fills it through hooks/hud session.start); a null atom writes null. A limit kind is redacted, then clipped; a value that is not a finite number is null (cost) or drops the limit. */
+const hudForState = (state: HudState | null): { costUsd: number | null; limits: HudLimit[] } | null =>
+  state === null
+    ? null
+    : {
+        costUsd: typeof state.costUsd === 'number' && Number.isFinite(state.costUsd) ? state.costUsd : null,
+        limits: (Array.isArray(state.limits) ? state.limits : [])
+          .filter(limit => typeof limit.percentUsed === 'number' && Number.isFinite(limit.percentUsed))
+          .slice(0, 8)
+          .map(limit => ({ kind: redact(String(limit.kind)).text.slice(0, 60), percentUsed: limit.percentUsed })),
+      }
+
 /**
  * One JSON file per session under ~/.claude/state/agentic-os/: the read side
  * for the web dashboard (Slice 2) and the evidence for headless probes.
@@ -215,6 +227,7 @@ const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; exce
       ...now,
       agentRuns: await read($, agentRuns),
       cache: await read($, cache),
+      hud: hudForState(await read($, hud)),
       brief: current,
       chip,
       repo: where?.repo ?? null,
@@ -680,11 +693,14 @@ export const agenticOs = (on: On) => {
     // The HUD's cost and limits. Here, not in hooks/hud: a plugin holds one unmatched hook per event.
     // A resumed session has no HUD yet: seed it first, so the measured cost and limits go over the seed.
     await seedHud($)
+    const before = JSON.stringify(await read($, hud))
     await update($, hud, now =>
       now === null
         ? now
         : { ...now, costUsd: e.cost?.usd ?? now.costUsd, limits: e.rateLimits.map(({ kind, percentUsed }) => ({ kind, percentUsed })) },
     )
+    // The engine measures after the turn-end snapshot, so an idle session's file would keep the last turn's cost and limits.
+    if (JSON.stringify(await read($, hud)) !== before && (await worthSnapshot($))) await writeSnapshot($)
     return next(e)
   })
 

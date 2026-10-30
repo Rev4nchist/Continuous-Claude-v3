@@ -3,15 +3,16 @@ import type { AgentInfo, On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import type { OsTask } from '../types'
-import { taskRows } from '../hooks/agentic-os/pane-model'
+import { tabRows } from '../hooks/agentic-os/os-tabs-model'
+import type { TabState } from '../hooks/agentic-os/os-tabs-model'
 import type { PaneRow } from '../hooks/agentic-os/pane-model'
 
 const textOf = (row: PaneRow) => [...row.left, ...(row.right ?? [])].map(span => span.text).join('').trim()
 
 // Critic review of f1131b6, reproduced before the fix:
-// R1 the fold returns room + 1 rows when tasks are hidden
-// R2 the active task drops out when it was created after room - 1 open tasks
-// R3 the fold shows "✓ 0 done" when nothing is finished
+// R1 the fold returns room + 1 rows when tasks are hidden (retired with the pane-model task fold)
+// R2 the active task drops out when it was created after room - 1 open tasks (retired with the pane-model task fold)
+// R3 the fold shows "✓ 0 done" when nothing is finished (re-pointed at the Plan tab)
 // R4 many live agents push the pane past its body rows
 // R5 two parallel calls: the later one finishing first clears NOW while the earlier still runs
 //
@@ -23,21 +24,26 @@ const textOf = (row: PaneRow) => [...row.left, ...(row.right ?? [])].map(span =>
 const tasks = (n: number, status: (i: number) => OsTask['status']): OsTask[] =>
   Array.from({ length: n }, (_, i) => ({ id: String(i + 1), subject: `task ${i + 1}`, status: status(i) }))
 
-describe('task fold', () => {
-  test('R1 R2 R3 twelve open tasks, the tenth active, fit six rows with the active one shown', () => {
-    const rows = taskRows(tasks(12, i => (i === 9 ? 'in_progress' : 'pending')), 6)
-    expect(rows.length).toBeLessThanOrEqual(6)
-    expect(rows.some(row => textOf(row) === '▶ task 10')).toBe(true)
-    expect(rows.some(row => textOf(row).startsWith('✓ 0'))).toBe(false)
-  })
+// The task fold now lives in the Plan tab (os-tabs-model.ts `plan`). Only R3 is still true there: the old pane-model `taskRows` is deleted, and so is
+// R2 (it moved the active task ahead of the pending ones; the Plan tab keeps plan order and cuts the tail). The finished-steps fold keeping the
+// running step in view is pinned by os-tabs-model.test.ts O7.
+const planState = (list: OsTask[]): TabState => ({
+  view: { tasks: list, plan: null, turn: null, step: null, ctx: null, agents: [], lanes: null, prs: [] },
+  chip: 'idle',
+  brief: null,
+  repo: null,
+  branch: null,
+  worktree: null,
+  costUsd: null,
+  activeAt: null,
+})
 
-  test('R1 finished and open tasks together never pass the room, at any room size', () => {
-    const list = tasks(15, i => (i < 5 ? 'completed' : i === 14 ? 'in_progress' : 'pending'))
-    for (const room of [1, 2, 3, 6, 10]) {
-      const rows = taskRows(list, room)
-      expect(rows.length).toBeLessThanOrEqual(room)
-      expect(rows.some(row => textOf(row).startsWith('▶'))).toBe(true)
-    }
+describe('task fold', () => {
+  test('R3 twelve open tasks, none finished, fold to a "+N more" row and never show "✓ 0 done"', () => {
+    const rows = tabRows('plan', planState(tasks(12, i => (i === 9 ? 'in_progress' : 'pending'))), 1_000, 80, 7)
+    expect(rows.length).toBeLessThanOrEqual(7)
+    expect(rows.some(row => /\+\d+ more/.test(textOf(row)))).toBe(true)
+    expect(rows.some(row => textOf(row).startsWith('✓ 0'))).toBe(false)
   })
 })
 

@@ -1,6 +1,6 @@
 // The plain words for three /os tabs (Dave, 2026-10-30): Plan is Steps, Proof is Checks, Decisions is Choices. Labels only: the tab ids
 // (plan, proof, decisions), the Button keys, the osTab atom and the brief_set fields keep their old names. One list, so the strip label, the
-// header, the empty state and the `...more -> <tab>` hint of digest.ts cannot drift apart. It is its own file because os-tabs-model.ts imports
+// header, the empty state and the `…more -> <tab>` hint of digest.ts cannot drift apart. It is its own file because os-tabs-model.ts imports
 // digest.ts, so digest.ts cannot import os-tabs-model.ts.
 
 export type TabWord = {
