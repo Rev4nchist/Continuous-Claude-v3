@@ -316,6 +316,8 @@ declare module 'claude-code' {
       checkpointAsks: CheckpointAsk[]
       /** Lock patterns already shown in a warn toast this session. */
       lockWarned: string[]
+      /** True from /clear or a resume until the new conversation's first reply: the HUD cost reads as a dash (hooks/hud/seed.ts). */
+      costForgotten: boolean
     }
   }
 }
