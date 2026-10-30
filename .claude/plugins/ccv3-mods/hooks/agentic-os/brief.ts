@@ -417,10 +417,27 @@ const askOf = (item: string): AskItem => {
 
 const NEXT_STEPS = /^\s*(?:#{1,6}\s*|\*\*)next steps\s*:?\s*(?:\*\*)?\s*$/i
 const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
-/** "None — waiting on X" (CLAUDE.md's form, with or without a list marker). "None of the options fit" is a real item. */
-const NONE_ITEM = /^none\s*(?:[-–—:.,;]|$)/i
+/**
+ * A Next steps item that asks nothing of Dave. The set is closed: the WHOLE item (one final period allowed) must match, or it is an ask.
+ * (a) A lead: "None", "None for now/today/yet/right now", "Nothing (for you/Dave) to do", "Nothing required/yet/for now", "No action/input/reply needed/required".
+ *     After the lead come at most a sentence end, " - ", " — " or ":" and ONE waiting clause: "None for now. I'm waiting on X", "None — waiting on your merge yes".
+ * (b) A bare waiting clause, "(I'm) Waiting on/for X", where X does not start with you, your or Dave ("Waiting on Dave's approval" asks Dave).
+ * X is 1 to 80 characters with no ? ; , ! : – —, no sentence end (". "), no dash separator and no " then ", " and ", " or ", " but ".
+ * Anything else stays an ask: "Waiting on CI, then approve PR 12", "None for now. Paste the build log", "None, but review the diff", "None of the options fit".
+ * Every part is bounded or anchored, with no nested quantifier: linear on a long line.
+ */
+const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:–—\s]|\s)){1,80}`
+const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
+const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+now|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
+const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
+const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:your?|dave)\\b)${WAIT_OBJECT}$`, 'i')
+/** A question mark makes any item an ask, whatever its words. */
+const noAsk = (text: string): boolean => {
+  const whole = text.replace(/\.$/, '')
+  return !whole.includes('?') && (LEAD_ITEM.test(whole) || BARE_WAIT.test(whole))
+}
 
-/** The ask items of the `## Next steps` block. undefined: no block, or one with nothing readable. `None — ...`: []. */
+/** The ask items of the `## Next steps` block. undefined: no block, or one with nothing readable. Only no-ask items (None, Nothing to do, Waiting on X): []. A bare line is an ask only with a "?". */
 const nextSteps = (lines: string[]): AskItem[] | undefined => {
   const start = lines.findIndex(line => NEXT_STEPS.test(line))
   if (start < 0) return undefined
@@ -430,9 +447,10 @@ const nextSteps = (lines: string[]): AskItem[] | undefined => {
     if (/^\s*#{1,6}\s/.test(raw)) break
     const item = ITEM.exec(raw)
     const text = item ? lineOf(item[1] ?? '') : ''
-    if (item && NONE_ITEM.test(text)) none = true
+    if (item && noAsk(text)) none = true
     else if (item) items.push(askOf(text))
-    else if (/^\s*(?:\*\*)?none\b/i.test(raw)) none = true
+    else if (noAsk(lineOf(raw))) none = true
+    else if (raw.includes('?')) items.push(askOf(lineOf(raw)))
   }
   const kept = items.filter(one => one.text !== '').slice(0, LIMITS.askItems)
   return kept.length > 0 ? kept : none ? [] : undefined
