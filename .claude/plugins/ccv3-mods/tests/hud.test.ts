@@ -311,6 +311,8 @@ describe('hud', () => {
       await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
       flag.value = false // the engine's reset
       await $.classic.SessionStart({ source: reason } as never)
+      // The atom itself: the module flag alone would hide the cost, so this fails when reassertCostForgotten writes nothing.
+      expect(flag.value).toBe(true)
       await start($)
       const after = await hudOn($, 'terminal')
       for (const old of ['$3.84', '$4.10', '$0.00']) expect(after.text).not.toContain(old)
