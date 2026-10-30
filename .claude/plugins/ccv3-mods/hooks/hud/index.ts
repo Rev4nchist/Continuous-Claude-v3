@@ -7,7 +7,7 @@ import { mergeParsed, parseStep } from '../agentic-os/brief'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
-import { forgetSeedCost, seedHud, setSwitches } from './seed'
+import { costShownAgain, forgetSeedCost, isCostForgotten, reassertCostForgotten, seedHud, setSwitches } from './seed'
 
 // HUD capture. The agentic-os band draws the row from these atoms (declared there under the same keys).
 // The HUD row is for interactive sessions only: a headless run has no band to read it. The context
@@ -89,11 +89,12 @@ const seedCtx = async ($: EngineInterface, tokens: number): Promise<void> => {
  * context figure, advisor count and cost start over. The cost shows again at the next session.measure.
  * Both states of the hud atom happen. A set one is edited here, so the row keeps the last step's model and effort.
  * In the real engine (E2E 2026-10-30) it is already null by now: the next render or handler re-seeds it from the cached
- * seed, so forgetSeedCost() keeps the old conversation's cost, and the startup $0.00, out of that seed.
+ * seed, so forgetSeedCost() keeps the old conversation's cost, and the startup $0.00, out of that seed. It also sets the
+ * "cost forgotten" atom, which a reload's start() reads (module state would not survive the reload); the first reply clears it.
  */
 const reset = async ($: EngineInterface): Promise<void> => {
   if ((await $.env.get('CCV3_MODS_OFF')) === '1') return
-  forgetSeedCost()
+  await forgetSeedCost($)
   await update($, cache, () => EMPTY_CACHE)
   await update($, ctx, () => null)
   await update($, hud, now => (now === null ? now : { ...now, costUsd: null, advisor: { ...now.advisor, calls: 0 } }))
@@ -113,13 +114,15 @@ const start = async ($: EngineInterface): Promise<void> => {
   const advisor = advisorFrom(settings.advisorModel, await setSwitches($))
   const model = await $.session.model().catch(() => null)
   const usage = await $.session.usage().catch(() => null)
+  // After /clear or a resume, usage() may still hold the old cost until the new conversation's first reply: show the dash.
+  const costUsd = (await isCostForgotten($)) ? null : (usage?.cost?.usd ?? null)
   // A re-run start (reload, respawn, attach) keeps the advisor count (read here, so a step's increment is not lost) but takes
   // the state from the settings as they are now: an advisor turned off or blocked since is not drawn "on". reset() zeroes the count.
   await update($, hud, now => ({
     model,
     effort: null,
     advisor: { ...advisor, calls: now?.advisor.calls ?? 0 },
-    costUsd: usage?.cost?.usd ?? null,
+    costUsd,
     limits: (usage?.rateLimits ?? []).map(({ kind, percentUsed }) => ({ kind, percentUsed })),
   }))
 }
@@ -166,6 +169,9 @@ export const hudCapture = (on: On) => {
     try {
       // A resumed session never ran the start above: seed the HUD here, then the step's own model and effort go over it.
       await seedHud($)
+      // After the seed, so a seed made at this step still carries no cost; session.measure writes it next.
+      // Only a step with usage: an aborted request measured no cost, and a reload after it would show the old one.
+      if (result.usage) await costShownAgain($)
       if ((await read($, hud)) === null) return result
       // The model that answered (a fallback or a lower hook may have changed the one asked for).
       const model = result.usage?.model ?? e.model
@@ -226,6 +232,7 @@ export const hudCapture = (on: On) => {
     } catch {
       // Observer only.
     }
+    await reassertCostForgotten($)
     try {
       if ((e.source === 'resume' || e.source === 'fork') && typeof e.context_tokens === 'number') await seedCtx($, e.context_tokens)
     } catch {

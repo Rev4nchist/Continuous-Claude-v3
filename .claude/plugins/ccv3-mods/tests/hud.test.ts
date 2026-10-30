@@ -12,6 +12,8 @@ import { hudParts } from '../hooks/hud/model'
 // H4b a re-run start (reload, respawn, desktop attach) zeroes the advisor count
 // H4e a re-run start draws an advisor "on" that the settings now turn off, or drops the kept count when they come back
 // H4c /clear or a resume keeps the old conversation's advisor count and cost
+// H4f a plugin reload (start runs again) between /clear or a resume and the first measure writes the old or startup cost back
+// H4g the cost stays hidden for the whole process: after the new conversation's first reply a reload shows usage()'s cost again
 // H5 rate-limit bars draw with no subscription windows, or miss a measured change
 // H6 the terminal gets Svg (it can't draw it) or the desktop gets none
 // H7 CCV3_MOD_HUD_OFF or a headless run still draws the HUD row
@@ -32,9 +34,14 @@ const BAND_PROPS = {
   view: {},
 }
 
-type World = { env?: Record<string, string>; settings?: Record<string, unknown>; limits?: { kind: string; percentUsed: number }[] }
+type World = {
+  env?: Record<string, string>
+  settings?: Record<string, unknown>
+  limits?: { kind: string; percentUsed: number }[]
+  cost?: number
+}
 
-const beneath = { advisorCalls: 0 }
+const beneath = { advisorCalls: 0, usage: null as Record<string, unknown> | null }
 
 const world = (on: On, w: World = {}) => {
   on('turn.step', async function* (_$, e) {
@@ -45,7 +52,7 @@ const world = (on: On, w: World = {}) => {
       toolUses: [],
       serverToolUses: Array.from({ length: beneath.advisorCalls }, (_, i) => ({ id: `a${i}`, name: 'advisor', input: {}, startedAt: 1 })),
       stopReason: 'end_turn' as const,
-      usage: null,
+      usage: beneath.usage as never,
     }
   })
   mock.clock(on, { now: 1_000 })
@@ -54,7 +61,7 @@ const world = (on: On, w: World = {}) => {
   on('settings.read', () => ({ value: w.settings ?? { advisorModel: 'fable' } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({
-    value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: w.limits ?? [{ kind: 'five_hour', percentUsed: 38 }], cost: { usd: 3.84 } },
+    value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: w.limits ?? [{ kind: 'five_hour', percentUsed: 38 }], cost: { usd: w.cost ?? 3.84 } },
   }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('fs.exists', () => ({ value: false }))
@@ -67,9 +74,15 @@ const world = (on: On, w: World = {}) => {
 
 const start = ($: Engine, isInteractive = true) => $.session.start({ cwd: '/repo', surface: isInteractive ? 'terminal' : null, isInteractive } as never)
 
-/** One model request; the engine beneath (in `world`) answers with `beneath.advisorCalls` advisor uses. */
-const step = async ($: Engine, input: { model: string; effort?: string; agentId?: string }, advisorCalls = 0) => {
+/**
+ * One model request; the engine beneath (in `world`) answers with `beneath.advisorCalls` advisor uses.
+ * `withUsage` gives the answer a usage block; without it the request ended with no usage (an aborted one).
+ */
+const step = async ($: Engine, input: { model: string; effort?: string; agentId?: string }, advisorCalls = 0, withUsage = false) => {
   beneath.advisorCalls = advisorCalls
+  beneath.usage = withUsage
+    ? { input_tokens: 2, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: input.model }
+    : null
   const stream = $.turn.step({ turnId: 't1', index: 0, messageCount: 1, ...input } as never)
   for await (const _chunk of stream) {
     // drain
@@ -218,6 +231,123 @@ describe('hud', () => {
       await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 0.5 }, changed: ['cost'] } as never)
       expect((await hudOn($, 'terminal')).text).toContain('$0.50')
     }
+  })
+
+  // H4f start() writes usage()'s cost into the hud atom. After a reload that follows /clear or a resume, usage() still holds
+  // the old conversation's cost (3.84 here), so the dash must stand until the new conversation's first measure.
+  test('H4f a reload after /clear or a resume keeps the cost hidden until the first measure', async ($, on) => {
+    world(on)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await step($, { model: 'claude-opus-5-5', effort: 'high' })
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      expect((await hudOn($, 'terminal')).text).toContain('$4.10')
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      // The reload: session.start fires again, as in H4b.
+      await start($)
+      const after = await hudOn($, 'terminal')
+      for (const old of ['$3.84', '$4.10', '$0.00']) {
+        expect(after.text).not.toContain(old)
+        expect(after.core).not.toContain(old)
+      }
+      expect(after.core).toContain('$-')
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 0.5 }, changed: ['cost'] } as never)
+      expect((await hudOn($, 'terminal')).text).toContain('$0.50')
+    }
+  })
+
+  // H4g the hiding ends with the new conversation's first reply: a reload after it reads usage() again. A guard against a
+  // fix that leaves the "cost forgotten" flag on for the rest of the process.
+  test('H4g after the new conversation\'s first reply a reload shows the usage cost again', async ($, on) => {
+    const w: World = {}
+    world(on, w)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      await step($, { model: 'claude-opus-5-5', effort: 'high' }, 0, true)
+      w.cost = 0.5
+      await start($)
+      const after = await hudOn($, 'terminal')
+      expect(after.text).toContain('$0.50')
+      expect(after.text).not.toContain('$3.84')
+      expect(after.text).not.toContain('$4.10')
+      w.cost = undefined
+    }
+  })
+
+  // H4k the first request of the new conversation ended with no usage (aborted): no cost was measured, so a reload after it
+  // still shows the dash. A step with usage ends the hiding (H4g).
+  test('H4k a first step with no usage keeps the cost hidden across a reload', async ($, on) => {
+    const w: World = {}
+    world(on, w)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      await step($, { model: 'claude-opus-5-5', effort: 'high' })
+      await start($)
+      const after = await hudOn($, 'terminal')
+      for (const old of ['$3.84', '$4.10', '$0.00']) expect(after.text).not.toContain(old)
+      expect(after.core).toContain('$-')
+    }
+  })
+
+  // H4h the real engine resets the plugin's atoms after session.end (E2E 2026-10-30), so a flag written in reset() is gone before
+  // the reload. classic.SessionStart follows session.end in the same process: the flag is written again there.
+  test('H4h a flag wiped after session.end is set again at classic.SessionStart, so a reload keeps the dash', async ($, on) => {
+    world(on)
+    on('classic.SessionStart', () => ({}))
+    const flag = { value: false }
+    const ref = { plugin: 'ccv3-mods', key: 'costForgotten' } as never
+    on('state.get', ref, (() => ({ value: { value: flag.value, version: 0 } })) as never)
+    on('state.set', ref, ((_$: unknown, e: { value: boolean }) => {
+      flag.value = e.value
+      return { value: { isSet: true, version: 0 } }
+    }) as never)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      flag.value = false // the engine's reset
+      await $.classic.SessionStart({ source: reason } as never)
+      // The atom itself: the module flag alone would hide the cost, so this fails when reassertCostForgotten writes nothing.
+      expect(flag.value).toBe(true)
+      await start($)
+      const after = await hudOn($, 'terminal')
+      for (const old of ['$3.84', '$4.10', '$0.00']) expect(after.text).not.toContain(old)
+      expect(after.core).toContain('$-')
+    }
+  })
+
+  // H4j a render between the engine's atom reset and classic.SessionStart (E2E: reply, reload, then /resume) finds the atom flag
+  // wiped and the seed lost to the reload; it must still read the module flag that forgetSeedCost set, not usage()'s old cost.
+  test('H4j a render in the gap after session.end shows the dash, with the atom flag wiped and no seed cached', async ($, on) => {
+    world(on)
+    on('classic.SessionStart', () => ({}))
+    const flag = { value: false }
+    const ref = { plugin: 'ccv3-mods', key: 'costForgotten' } as never
+    on('state.get', ref, (() => ({ value: { value: flag.value, version: 0 } })) as never)
+    on('state.set', ref, ((_$: unknown, e: { value: boolean }) => {
+      flag.value = e.value
+      return { value: { isSet: true, version: 0 } }
+    }) as never)
+    const held = heldHud(on)
+    held.value = null
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } } as never)
+    flag.value = false // the engine's reset
+    const gap = await hudOn($, 'terminal')
+    expect(gap.text).not.toContain('$3.84')
+    expect(gap.core).toContain('$-')
+  })
+
+  // H4i a CLI --resume at launch has no earlier conversation in the process: its cost shows at once.
+  test('H4i a resume at launch shows the usage cost', async ($, on) => {
+    world(on)
+    on('classic.SessionStart', () => ({}))
+    await $.classic.SessionStart({ source: 'resume' } as never)
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('$3.84')
   })
 
   test('H9 an advisor use clears a "blocked" chip', async ($, on) => {

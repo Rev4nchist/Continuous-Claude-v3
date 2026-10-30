@@ -19,17 +19,61 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
  * handler (session.measure, turn.step) moves it into the atom. It keeps the model, settings and usage from being read twice.
  */
 let seeded: HudState | null = null
-/** Set when a conversation ends in this process: from then on no seed carries a cost (see forgetSeedCost). */
-let costForgotten = false
+/**
+ * Set when a conversation ends in this process, cleared at the next one's first reply (see forgetSeedCost). An atom, not a
+ * module variable: a plugin reload drops module state but keeps atoms, and the reload re-runs start() before any measure.
+ */
+let endedHere = false
+const costForgotten = atom({ plugin: 'ccv3-mods', key: 'costForgotten' } as const, false)
 
 /**
  * A conversation ended in this process (/clear, an in-session resume). The engine leaves the hud atom null then, and the next
  * render or handler re-seeds it from `seeded`, whose cost is the old conversation's or the startup $0.00. Limits are
  * account-wide and stay. The new conversation shows no cost until its first session.measure writes one.
+ * Never throws: reset() goes on to the counts and the context figure.
  */
-export function forgetSeedCost(): void {
-  costForgotten = true
+export async function forgetSeedCost($: EngineInterface): Promise<void> {
+  endedHere = true
   if (seeded !== null) seeded = { ...seeded, costUsd: null }
+  try {
+    await update($, costForgotten, () => true)
+  } catch {
+    // Observer only.
+  }
+}
+
+/**
+ * The real engine resets the plugin's atoms after session.end (E2E 2026-10-30), wiping the flag forgetSeedCost wrote.
+ * classic.SessionStart follows in the same process, so it writes the flag again. Only after a conversation ended here:
+ * a resume at launch has none, and its cost shows at once. Never throws.
+ */
+export async function reassertCostForgotten($: EngineInterface): Promise<void> {
+  if (!endedHere) return
+  try {
+    await update($, costForgotten, () => true)
+  } catch {
+    // Observer only.
+  }
+}
+
+/** True from forgetSeedCost until the new conversation's first reply: usage() may still hold the old cost. Never throws. */
+export async function isCostForgotten($: EngineInterface): Promise<boolean> {
+  // The module flag covers the gap after session.end, where the engine has wiped the atom and classic.SessionStart has not
+  // written it again; the atom covers a reload, which drops the module flag.
+  return endedHere || (await read($, costForgotten).catch(() => false))
+}
+
+/**
+ * The new conversation's first reply is in: usage() is its own now, so a seed or a re-run start may show its cost.
+ * Called by the main-loop turn.step only, after the response, so a reload before that reply still sees the flag.
+ */
+export async function costShownAgain($: EngineInterface): Promise<void> {
+  endedHere = false
+  try {
+    if (await read($, costForgotten)) await update($, costForgotten, () => false)
+  } catch {
+    // Observer only.
+  }
 }
 
 /** The kill switches that are set. `$.env.get` takes literals only, so each is spelled out. */
@@ -58,7 +102,7 @@ async function readHud($: EngineInterface): Promise<HudState | null> {
       model,
       effort: null,
       advisor,
-      costUsd: costForgotten ? null : (usage.cost?.usd ?? null),
+      costUsd: (await isCostForgotten($)) ? null : (usage.cost?.usd ?? null),
       limits: usage.rateLimits.map(({ kind, percentUsed }) => ({ kind, percentUsed })),
     }
     return seeded
