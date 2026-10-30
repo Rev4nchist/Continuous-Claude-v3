@@ -11,6 +11,10 @@
      (Greptile reviewed that exact commit, confidence >= 4, 0 unresolved threads, checks green,
      mergeable clean).
      -IgnoreReview skips this; say why in the PR when you use it.
+  1b. Pre-merge re-check (Gate C, scripts/github/land-recheck.mjs): right before the merge, re-read the
+     PR and refuse (nothing merged) when the head changed, a CodeRabbit review or summary-comment edit
+     is newer than the READY check, an "@coderabbitai review" request has no review after it, or the
+     CodeRabbit commit status on the head is pending. A read error refuses. -IgnoreReview skips it too.
   2. Merge through the REST API with sha=<head>: GitHub refuses the merge if the head moved after
      the check, so nothing unreviewed can land between check and merge (review note P35).
   3. fetch fork --prune; fast-forward local main (never a reset; refuses if main diverged).
@@ -66,9 +70,13 @@ $branch = $pull.head.ref; $head = $pull.head.sha
 if (-not $pull.merged -and -not $CleanupOnly) {
   if (-not $IgnoreReview) {
     Step "ready check for #$Pr at $($head.Substring(0,7))"
+    $skewMargin = 120  # seconds. The READY time is the local clock; GitHub stamps reviews. A fast local clock would hide a review that landed just before it.
+    Write-Host "  clock margin: the re-check treats anything CodeRabbit did in the $skewMargin s before the READY check as new"
     # GitHub reports mergeable_state "unknown" for a while after the base branch moves (every PR
     # after the first in a landing run). Re-ask for up to ~90s before treating it as not ready.
     for ($try = 1; $try -le 7; $try++) {
+      # The last attempt's start, backed off by the margin and taken before review-status reads: Gate C refuses anything CodeRabbit did after it.
+      $readyAt = [DateTime]::UtcNow.AddSeconds(-$skewMargin).ToString('o')
       $statusJson = node (Join-Path $PSScriptRoot 'review-status.mjs') $Pr --repo $Repo --json
       $ready = $LASTEXITCODE
       $st = $null; try { $st = $statusJson | ConvertFrom-Json } catch { }
@@ -79,6 +87,13 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     if ($ready -eq 1 -and $st) { Write-Host "  not ready: $($st.reasons -join '; ')"; Fail "PR #$Pr is not ready. Re-run after the review lands, or pass -IgnoreReview deliberately." }
     # Exit 0 alone is not proof: require the JSON to say ready for THIS head commit.
     if ($ready -ne 0 -or -not $st -or $st.ready -ne $true -or $st.head -ne $head) { Fail "could not confirm PR #$Pr is ready (review-status exit $ready). Nothing was merged." }
+    # Gate C: re-read the PR right before the merge. Fails closed: a changed head, a CodeRabbit review or summary edit
+    # since the READY check, a review request still in flight, or a pending CodeRabbit status refuses the merge.
+    Step "pre-merge re-check for #$Pr"
+    node (Join-Path $PSScriptRoot 'land-recheck.mjs') $Pr --repo $Repo --head $head --ready-at $readyAt | Out-Host
+    if ($LASTEXITCODE) { Fail "pre-merge re-check refused #$Pr (exit $LASTEXITCODE). Nothing was merged. Read what changed, then re-run." }
+  } else {
+    Write-Host "  -IgnoreReview: skipping the READY check and the pre-merge re-check"
   }
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1
