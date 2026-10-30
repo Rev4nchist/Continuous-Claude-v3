@@ -119,6 +119,10 @@ describe('agentic-os band', () => {
 // C4 repo, branch and worktree are not read at the session start, or not re-read at a turn start, or not in the snapshot
 // C5 a git read that fails reaches the session, or leaves something other than null in the snapshot
 // C6 the existing widget line (row-band) is dropped or moved above the core lines, or the rows do not give way
+// C7 repo and branch stay `-` in the band after an in-session /resume (classic.SessionStart, no session.start) until the first prompt
+// C8 the same after /clear
+// C9 a compaction (classic.SessionStart source compact) triggers an extra .git read
+// C10 the off switch (CCV3_MODS_OFF) does not stop the .git read at classic.SessionStart for resume and clear
 
 const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
 const SECRET = 'sk-' + 'ant-' + 'a'.repeat(40)
@@ -293,6 +297,78 @@ describe('agentic-os git info', () => {
     await $.turn.start({ turnId: 't1' } as never)
     expect(seen.reads).toEqual([])
   })
+
+  /**
+   * The git atom as a store a test controls (idea of heldHud in hud.test.ts, copied here). In the real engine the atom is already
+   * null when classic.SessionStart fires after /clear or an in-session /resume; the fake engine keeps atoms across session.end.
+   * state.get and state.set for key 'git' answer from `held`; a test nulls it with `held.value = null`.
+   */
+  const heldGit = (on: On) => {
+    const held = { value: null as unknown, version: 0 }
+    const ref = { plugin: 'ccv3-mods', key: 'git' } as never
+    on('state.get', ref, (() => ({ value: { value: held.value, version: held.version } })) as never)
+    on('state.set', ref, ((_$: unknown, e: { value: unknown; ifVersion?: number }) => {
+      if (e.ifVersion !== undefined && e.ifVersion !== held.version) return { value: { isSet: false, version: held.version } }
+      held.value = e.value
+      held.version += 1
+      return { value: { isSet: true, version: held.version } }
+    }) as never)
+    return held
+  }
+
+  // C7 C8 after an in-session /resume or /clear the engine wipes the atoms and fires classic.SessionStart, not session.start:
+  // the band keeps `- · -` for repo and branch until the first prompt
+  for (const reason of ['resume', 'clear']) {
+    test(`C7 C8 after ${reason}, classic.SessionStart with source ${reason} fills repo and branch in the band again`, async ($, on) => {
+      const seen = gitWorld(on, { ...LINKED })
+      on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+      on('classic.SessionStart', () => ({}))
+      const held = heldGit(on)
+      await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+      const before = (await core($)).line1
+      expect(before).toContain('repo-x')
+      expect(before).toContain('feat/one')
+
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      held.value = null // the engine's reset
+      const gap = (await core($)).line1
+      expect(gap).toContain('● - · - ·')
+      expect(gap).not.toContain('repo-x')
+      expect(gap).not.toContain('feat/one')
+
+      await $.classic.SessionStart({ source: reason } as never)
+      const after = (await core($)).line1
+      expect(after).toContain('repo-x')
+      expect(after).toContain('feat/one')
+      expect(seen.reads.length).toBeGreaterThan(0)
+    })
+  }
+
+  // C9 a compaction keeps the atoms, so classic.SessionStart with source compact needs no extra .git read
+  test('C9 classic.SessionStart with source compact reads no .git file', async ($, on) => {
+    const seen = gitWorld(on, { ...LINKED })
+    on('classic.SessionStart', () => ({}))
+    heldGit(on)
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+    const reads = seen.reads.length
+    expect(reads).toBeGreaterThan(0)
+    await $.classic.SessionStart({ source: 'compact' } as never)
+    expect(seen.reads.length).toBe(reads)
+  })
+
+  // C10 the off switch (CCV3_MODS_OFF) also covers the refill: classic.SessionStart for resume and clear reads nothing
+  for (const reason of ['resume', 'clear']) {
+    test(`C10 the off switch reads nothing at classic.SessionStart with source ${reason}`, async ($, on) => {
+      const seen = gitWorld(on, { ...LINKED }, { env: { CCV3_MODS_OFF: '1' } })
+      on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+      on('classic.SessionStart', () => ({}))
+      heldGit(on)
+      await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      await $.classic.SessionStart({ source: reason } as never)
+      expect(seen.reads).toEqual([])
+    })
+  }
 })
 
 // /os redesign, round 2 (tests first): the lane board, compactions and touched-files reads behind the Session and Work tabs.

@@ -14,6 +14,7 @@ import { hudParts } from '../hooks/hud/model'
 // H4c /clear or a resume keeps the old conversation's advisor count and cost
 // H4f a plugin reload (start runs again) between /clear or a resume and the first measure writes the old or startup cost back
 // H4g the cost stays hidden for the whole process: after the new conversation's first reply a reload shows usage()'s cost again
+// H4l a re-run start drops the effort suffix from the model chip
 // H5 rate-limit bars draw with no subscription windows, or miss a measured change
 // H6 the terminal gets Svg (it can't draw it) or the desktop gets none
 // H7 CCV3_MOD_HUD_OFF or a headless run still draws the HUD row
@@ -348,6 +349,26 @@ describe('hud', () => {
     await $.classic.SessionStart({ source: 'resume' } as never)
     await start($)
     expect((await hudOn($, 'terminal')).text).toContain('$3.84')
+  })
+
+  // H4l /reload-plugins fires session.start again while the atoms survive; the chip keeps the effort the last step set.
+  test('H4l a second session.start keeps the effort suffix on the model chip', async ($, on) => {
+    world(on)
+    await start($)
+    await step($, { model: 'claude-opus-5-5', effort: 'medium' })
+    await start($)
+    const after = await hudOn($, 'terminal')
+    expect(after.text).toContain('Opus 5.5 · medium')
+    expect(after.modelProps?.backgroundColor).toBe('error')
+  })
+
+  // H4l (fresh) a first start with no step has no effort to keep: the chip shows the model alone.
+  test('H4l a first session.start with no step shows no effort suffix', async ($, on) => {
+    world(on)
+    await start($)
+    const fresh = await hudOn($, 'terminal')
+    expect(fresh.text).toContain('Opus 5.5')
+    expect(fresh.text).not.toMatch(/Opus 5\.5 · \w+/)
   })
 
   test('H9 an advisor use clears a "blocked" chip', async ($, on) => {

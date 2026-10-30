@@ -53,6 +53,7 @@ import type { AgentRun, BoardLane, FileTouch, OsBrief, OsTask } from '../types'
 // O23 the footer is missing, is not dim, steals a body row, or draws on a body of fewer than 3 rows
 // O24 the same state and clock give different rows on any of the six tabs, or tabRows does not dispatch Session and Work
 // O25 the Overview health row loses ctx, cost or cache, or draws NaN
+// O27 a tab header keeps the old word (PLAN, PROOF, DECISIONS), or a tab id changes with its label
 // O26 a peer lane that overlaps my files is not in WATCH as "may touch the same files"; my own lane or a stopped session's lane is
 // B1-B12 the briefing (see the second block)
 //
@@ -185,7 +186,7 @@ describe('os tab strip', () => {
     expect(items.map(one => one.hotkey)).toEqual(['1', '2', '3', '4', '5', '6'])
     expect(items.filter(one => one.selected).map(one => one.id)).toEqual(['plan'])
     expect(items.map(itemText).join('')).not.toMatch(/Comms|Swarm|Resources|NEXT|LATER/)
-    expect(items.map(itemText).map(one => one.trim())).toEqual(['Overview', 'Session', 'Plan', 'Work', 'Proof', 'Decisions'])
+    expect(items.map(itemText).map(one => one.trim())).toEqual(['Overview', 'Session', 'Steps', 'Work', 'Checks', 'Choices'])
     expect(TABS.map(one => one.id)).toEqual(TABS_LIVE)
     expect(TABS.every(one => one.enabled && !('tag' in one))).toBe(true)
     expect(model.LATER).toEqual(['Comms', 'Swarm', 'Resources'])
@@ -289,6 +290,24 @@ describe('os overview', () => {
     const bare = tabRows('overview', { ...rich(), cachePct: null, costUsd: null, view: { ...rich().view, ctx: null } }, NOW, 100, 60)
     expect(keyed(bare, 'ov-health')).not.toMatch(/cache/)
     expect(keyed(bare, 'ov-health')).not.toMatch(/NaN|undefined|null/)
+  })
+})
+
+describe('os tab words: Steps, Checks, Choices (labels only; ids and Button keys stay)', () => {
+  test('O27 the three tab headers use the plain words, and the tab ids stay plan, proof and decisions', () => {
+    const heads: Array<[TabId, string, string, string]> = [
+      ['plan', 'h-plan', 'STEPS', 'PLAN'],
+      ['proof', 'h-proof', 'CHECKS', 'PROOF'],
+      ['decisions', 'h-decisions', 'CHOICES', 'DECISIONS'],
+    ]
+    for (const [tab, key, word, old] of heads) {
+      const head = tabRows(tab, empty(), NOW, 60, 30).find(one => one.key === key)
+      expect(head, key).toBeDefined()
+      const left = head!.left.map(one => one.text).join('')
+      expect(left.startsWith(word), key).toBe(true)
+      expect(left, key).not.toContain(old)
+    }
+    expect(TABS.filter(one => ['plan', 'proof', 'decisions'].includes(one.id)).map(one => one.label)).toEqual(['Steps', 'Checks', 'Choices'])
   })
 })
 
@@ -509,8 +528,8 @@ describe('os tabs: width, size and safety', () => {
       session: /no helpers yet/,
       plan: /no steps yet/,
       work: /lane board not read/,
-      proof: /no proof yet/,
-      decisions: /no decisions yet[\s\S]*nothing open/,
+      proof: /no checks yet/,
+      decisions: /no choices yet[\s\S]*nothing open/,
     }
     for (const tab of TABS_LIVE) {
       const rows = tabRows(tab, empty(), NOW, 60, 30)
@@ -989,14 +1008,14 @@ describe('os overview: the session briefing', () => {
     }
   })
 
-  test('B13 a roomy pane draws a long ask as 3 rows ending "...more -> Decisions"; the keys are brief-needs-0, -2, -3', () => {
+  test('B13 a roomy pane draws a long ask as 3 rows ending "...more -> Choices"; the keys are brief-needs-0, -2, -3', () => {
     const text = Array.from({ length: 40 }, (_, i) => `word${i % 10}`).join(' ')
     const brief = briefWith({ goal: 'g', ask: [{ kind: 'question', text }] }, [], null, NOW - 5 * MIN)
     const rows = tabRows('overview', empty({ brief, activeAt: NOW }), NOW, 40, 60)
     const keys = rows.map(one => one.key)
     expect(keys).toEqual(expect.arrayContaining(['brief-needs-0', 'brief-needs-0-2', 'brief-needs-0-3']))
     const last = rows.find(one => one.key === 'brief-needs-0-3')!
-    expect(last.left.map(one => one.text).join('')).toMatch(/(?:\.\.\.|…)more -> Decisions$/)
+    expect(last.left.map(one => one.text).join('')).toMatch(/(?:\.\.\.|…)more -> Choices$/)
     expect(keys).not.toContain('brief-needs-0-4')
   })
 

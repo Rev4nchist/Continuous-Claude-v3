@@ -123,7 +123,7 @@ describe('agentic-os pane', () => {
   })
 
   // Changed with the /os tabs: the task list moved from the one-page pane to the Plan tab (os-tabs-model.ts), so F7 presses
-  // that tab, and the Plan header reads "15 of 20 done" where the old TASKS header read "15/20 done". The fold is unchanged.
+  // that tab (now labelled Steps), and its header reads "15 of 20 done" where the old TASKS header read "15/20 done". The fold is unchanged.
   test('F7 F10 a long list folds finished tasks and keeps the active one, on both surfaces', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TodoWrite' }, (_$, e) => ({ result: { oldTodos: [], newTodos: e.todos } }))
