@@ -155,12 +155,16 @@ step 1 does not list.
   label or ready text. `gh pr ready --undo` and `-F "draft=true"` inside quotes read as a ready and a
   non-draft create (the hook does not lex quotes). The ccv3-mods lock closes the Write-tool route:
   it denies a Write, Edit, MultiEdit or NotebookEdit of `pathway.json` and any shell text that names it.
-  An indirect script that builds the path from parts is accepted. A confirmed label is tied to
+  An indirect script that builds the path from parts is accepted. The mod lock also denies a gh write
+  shape (a comment, a pr edit or create body, an api POST, PATCH or PUT, a `body=` field, a GraphQL mutation, or `--input`) whose text
+  names `pathway-confirmed`, the router's marker. A gh read that names it is allowed. A node or
+  PowerShell script that posts the marker, or a body file that holds it, is accepted. A confirmed label is tied to
   HEAD, not to a PR number, in this hook: `gh pr edit <other> --add-label review:deep` passes while that
   pathway stands. The mod lock also checks the PR number against its store record.
   The hook does not read a subcommand built from a variable (`gh pr $sub 201`). The hook reads the mode
-  from the cwd checkout. A command that names CCv3 is enforced when that cwd has no usable
-  `review-router.config.json`. A command that names no repo, from such a cwd, stays in warn mode.
+  from the cwd checkout. When that cwd has no readable `review-router.config.json`, a command is
+  enforced if it names CCv3, if it is a self-confirm, or if it runs in a CCv3 checkout. A readable
+  config keeps its own `enforce` value.
 - `SKIP_PRE_PR_GATE=1` is Dave-only. An agent never sets it, never suggests it, and never copies it
   from a deny message. It works only as a leading assignment. Each use writes an `override` line to the
   guard decision log.

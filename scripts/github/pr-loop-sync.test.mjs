@@ -71,3 +71,13 @@ test('the mod waits OPENING_WAIT_MS before the opening ask and its ask text name
   assert.equal(said[1], wait[1], 'the ask text and OPENING_WAIT_MS name different minutes');
   assert.equal(Number(wait[1]), 30);
 });
+
+// PR D review C9: where only the CLI fix line blocks the carry, review-status.mjs says to run cr-fix.mjs and post no review. The mod tells
+// the model the same only while it recognises that reason, so its prefix must be the start of the real reason.
+test('the mod CARRY_REASON_PREFIX is the start of the reason review-status.mjs writes when only the CLI fix line blocks the carry', async () => {
+  const RS = await import('./review-status.mjs');
+  assert.equal(typeof RS.noReviewCliReason, 'function', 'review-status.mjs must export noReviewCliReason');
+  const prefix = modelHolds('CARRY_REASON_PREFIX');
+  assert.ok(RS.noReviewCliReason(221).startsWith(prefix), `the reason "${RS.noReviewCliReason(221)}" does not start with "${prefix}"`);
+  assert.match(RS.noReviewCliReason(221), /cr-fix\.mjs --pr 221/, 'the reason no longer names cr-fix.mjs');
+});

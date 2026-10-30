@@ -865,6 +865,52 @@ describe('pr-checkpoint: lock B, shell text', () => {
     expect(LOCK_DENIED(await shell($, 'git commit -m "docs: the router reads the pathway-confirmed marker"'))).toBe(false)
   })
 
+  // PR D review C12: the marker lock covers write shapes only. A read of the comments that names the word is not a post.
+  test('K13f a gh read that names pathway-confirmed is not denied: view, list, api GET, a pipe to a filter', async ($, on) => {
+    world(on)
+    await start($)
+    for (const [tool, command] of [
+      ['Bash', `gh pr view 221 --json comments --jq '.comments[]|select(.body|test("pathway-confirmed"))'`],
+      ['Bash', `gh api repos/o/r/issues/221/comments --jq '.[]|select(.body|test("pathway-confirmed"))'`],
+      ['PowerShell', 'gh api repos/o/r/issues/221/comments | Select-String pathway-confirmed'],
+      ['Bash', 'gh issue list --search "pathway-confirmed"'],
+      ['Bash', `gh api graphql -f query='query { repository(owner:"o",name:"r") { issue(number:5) { comments(first:50) { nodes { body } } } } }' --jq '.. | select(.body? | test("pathway-confirmed"))'`],
+    ] as const) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(false)
+    }
+  })
+
+  test('K13g every gh write shape that names pathway-confirmed is denied: issue comment, pr edit or create body, api POST or PATCH, api -f or -F body=', async ($, on) => {
+    world(on)
+    await start($)
+    const word = 'pathway-confirmed head=' + 'a'.repeat(40) + ' pathway=none'
+    for (const command of [
+      `gh issue comment 5 --body '<!-- ${word} -->'`,
+      `gh pr edit 201 --body '<!-- ${word} -->'`,
+      `gh pr create --title t --body '<!-- ${word} -->'`,
+      `gh api repos/o/r/issues/comments/9 -X PATCH -f body='<!-- ${word} -->'`,
+      `gh api repos/o/r/issues/201/comments --method POST --input body.json -f note='<!-- ${word} -->'`,
+      `gh api repos/o/r/issues/201/comments -F body='<!-- ${word} -->'`,
+    ]) {
+      expect(LOCK_DENIED(await shell($, command)), command).toBe(true)
+    }
+  })
+
+  // PR D verifier follow-up (C12): two write shapes the first narrowing missed. The old regex denied both.
+  test('K13h a gh api graphql mutation, and a gh api --input body from stdin, that carry pathway-confirmed are denied', async ($, on) => {
+    world(on)
+    await start($)
+    const marker = '<!-- pathway-confirmed head=' + 'a'.repeat(40) + ' pathway=none -->'
+    for (const [tool, command] of [
+      ['Bash', `gh api graphql -f query='mutation { addComment(input:{subjectId:"X", body:"${marker}"}) { clientMutationId } }'`],
+      ['PowerShell', `gh api graphql -f query='mutation { addComment(input:{subjectId:"X", body:"${marker}"}) { clientMutationId } }'`],
+      ['Bash', `echo '{"body":"${marker}"}' | gh api repos/o/r/issues/201/comments --input -`],
+      ['PowerShell', `'{"body":"${marker}"}' | gh api repos/o/r/issues/201/comments --input -`],
+    ] as const) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(true)
+    }
+  })
+
   test('K15 enforce: ready, a label add and a self-confirm are denied; --undo and plain reads pass; reads spawn nothing', async ($, on) => {
     const { seen } = world(on, { files: CONFIG_ENFORCE })
     await start($)

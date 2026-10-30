@@ -46,7 +46,8 @@ PR ready based on CLI output alone. READY comes only from `review-status.mjs` (P
   with no forbidden flags. `cr-fix.mjs` never passes `--use-credits` or `--api-key`.
 - `--use-credits` on one CLI run, only when both are true: that run returned `awaiting_confirmation`,
   and the PR is on the risk list (a PR file matches `checkpoint.critical` or `checkpoint.parser` in
-  `review-router.config.json`). On any other PR, ask Dave first. Spend from the $25 CLI credit only.
+  `review-router.config.json`, or the router class is r3; same list as `pr-review-loop.md`). On any
+  other PR, ask Dave first. Spend from the $25 CLI credit only.
 - **Read-only commands**, which never count as a run: `cr doctor`, `cr usage` (also
   `cr usage --agent`), `cr auth login`, `cr auth status`, `cr --help`, `cr <subcommand> --help`,
   `cr --version`, and the `coderabbit` equivalents.

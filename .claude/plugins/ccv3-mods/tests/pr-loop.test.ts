@@ -1302,6 +1302,40 @@ describe('pr-loop checkpoint states', () => {
     expect(seen.submits[0]).toMatch(/post one @coderabbitai review/i)
   })
 
+  // PR D review C9: READY carries an earlier Minor-only review, so a pr_watch line must not order a paid @coderabbitai review where the carry says to post nothing.
+  const CARRY_REASON = 'no CodeRabbit PR-bot review of the head commit; the earlier review carries once the PR body has a clean CLI fix review line. Run node scripts/github/cr-fix.mjs --pr 7 and put its line in the PR body (or fix its findings, then run it again); do not request a review'
+
+  test('CW4c a REVIEWED line with a round left posts a review only after a Major or a fix over 30 lines, else it runs cr-fix.mjs', async ($, on) => {
+    const { clock, seen } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record({ budget: [1, 1] }) }, script: { 7: [REVIEWED_AT(1)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('Rounds used 1 of 1+1')
+    expect(seen.submits[0]).toContain('cr-fix.mjs')
+    expect(seen.submits[0]).toMatch(/only if the last round had a Major or Critical or the fix is over 30 lines/)
+  })
+
+  test('CW4d STALLED on the carry reason tells the model to run cr-fix.mjs and never to post @coderabbitai review', async ($, on) => {
+    const carry = status(7, { routing: CR_ROUTE, routedReviewed: false, coderabbitRounds: 1, reasons: [CARRY_REASON] })
+    const { clock, seen } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record({ budget: [1, 1] }) }, script: { 7: [carry] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('cr-fix.mjs')
+    expect(seen.submits[0]).toMatch(/paste its line/i)
+    expect(seen.submits[0]).not.toMatch(/post one @coderabbitai review/i)
+  })
+
+  test('CW4e LIMITED on the carry reason also runs cr-fix.mjs and never posts @coderabbitai review', async ($, on) => {
+    const carry = status(7, { routing: CR_ROUTE, routedReviewed: false, rateLimited: true, coderabbitRounds: 1, reasons: [CARRY_REASON] })
+    const { clock, seen } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record({ budget: [1, 1] }) }, script: { 7: [carry] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('cr-fix.mjs')
+    expect(seen.submits[0]).not.toMatch(/post one @coderabbitai review/i)
+  })
+
   // Clock anchor (critic finding 14): CW5 and the pr-checkpoint A2/A2b start the 30 minutes at the record's `appliedAt`, the moment the mod's
   // --apply succeeded. That is when the PR left draft (plan 4.2 "since the PR left draft"), not the first watcher check and not the push.
   test('CW5 the opening ask is queued 30 minutes after ready on a coderabbit record with 0 rounds', async ($, on) => {
