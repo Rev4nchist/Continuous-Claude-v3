@@ -22,7 +22,7 @@ alongside Greptile. A CLI or plugin run **never** grants READY.
 - The CLI has its own hourly allowance, apart from PR reviews. `cr usage` shows 10 per hour for this repo.
 - Past it, in On demand mode, `cr review --agent` returns `awaiting_confirmation`. It charges nothing unless `--use-credits` is passed.
 - Dave has $25 of CLI and IDE credit. It does not pay for PR reviews.
-- PR reviews have usage billing On demand with a $50 monthly cap. Past the included limit a review waits for a seat holder to consent. It then costs $0.25 per reviewed file.
+- PR reviews have usage billing On demand with a $50 monthly cap. Past the included limit a review waits for a seat holder to consent. It then costs $0.25 per reviewed file. `pr-review-loop.md` "Paid PR reviews (Dave, 2026-10-30)" says when a session may authorize it.
 - These each count as 1 PR review: marking a draft ready, each `@coderabbitai review`, each push with incremental review on, and GitHub's "Update branch" button.
 
 ## Findings are advisory
@@ -33,7 +33,7 @@ PR ready based on CLI output alone. READY comes only from `review-status.mjs` (P
 ## Forbidden (coderabbit-guard blocks these once registered)
 
 - `--api-key` on any CodeRabbit command.
-- `--use-credits` on a PR comment (`@coderabbitai review --use-credits`). Never post it.
+- `--use-credits` on a PR comment (`@coderabbitai review --use-credits`), except under "Paid PR reviews (Dave, 2026-10-30)" in `pr-review-loop.md`. Run `cr-paid.mjs check` first.
 - `--use-credits` on the CLI, except in the one case under "Allowed".
 - `cr code new`, `cr code push`, `coderabbit code new`, `coderabbit code push`.
 - Skill **`coderabbit:autofix`** (writes/autofix mode).
@@ -93,4 +93,4 @@ each use writes an `override` line to the guard decision log.
   `@coderabbitai autopilot`. It publishes commits and follow-up fixes without per-patch approval.
 
 - Read, mint, echo, or pass CodeRabbit API keys in chat, commits, or hook state.
-- Buy on-demand PR reviews or enable usage billing without Dave's explicit yes. Never click the "Review with credits" button.
+- Buy on-demand PR reviews (except under "Paid PR reviews" in `pr-review-loop.md`) or enable usage billing without Dave's explicit yes. Never click the "Review with credits" button.

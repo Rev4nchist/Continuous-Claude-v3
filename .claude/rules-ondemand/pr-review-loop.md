@@ -230,7 +230,8 @@ Case two: the last review was cancelled, failed or skipped.
 In either case, post ONE review request for that bot (`@coderabbitai review`), then wait again.
 
 After a CodeRabbit "Review rate limited" or "Review limit reached" notice, do not post
-the request; report to Dave. If the request also produces no review, report to Dave. With his merge
+a plain request. When the next slot is over 15 minutes away, follow "Paid PR reviews (Dave, 2026-10-30)".
+Otherwise wait. If the request also produces no review, report to Dave. With his merge
 yes, post the reason on the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #111 precedent).
 
 On a both PR, `pr_watch` asks Dave once in the pane for Greptile on the final head. Post `@greptileai`
@@ -269,7 +270,8 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 6. Request the review of the new head (`@coderabbitai review`; a push does not start one) only when the
    `pr_watch` line says a round is left, or after the pane shows "Dave allowed round N". After a
    Minor-only round with a fix of 30 lines or fewer, post nothing: READY carries the earlier review.
-   Never post while the CodeRabbit status is pending. Then wait.
+   Never post while the CodeRabbit status is pending. Before any request, run the cap check in
+   "Paid PR reviews (Dave, 2026-10-30)". Then wait.
 7. Post the outcome to the user: finding count, fixed count, dismissed count, Greptile confidence
    (when Greptile reviewed), CI status.
 8. For FourthBot, add a Sync row in the Grok↔Claude comms hub.
@@ -277,6 +279,48 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 Never merge the PR. That is a separate, confirmed decision. Before Dave says merge, check three facts: you
 read the newest round in full, the fix push is verified (`review-status.mjs` on the pushed head), and the carry
 line or a review names that head.
+
+## Paid PR reviews (Dave, 2026-10-30)
+
+Billing facts (CodeRabbit docs, measured on PR #221):
+
+- A reviewed file costs $0.25.
+- Round 1 bills every reviewable PR file. A later round bills only the files changed since the last reviewed commit.
+- Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` applies the filters and shows both file counts.
+- The mode is On demand. Past the included limit, a plain `@coderabbitai review` never bills.
+- A seat holder pays with `@coderabbitai review --use-credits`. It covers the current commit only.
+- In Automatic mode, an over-limit review bills with no prompt. So run the cap check before EVERY review request.
+
+Post a paid round without asking only when ALL six conditions hold:
+
+1. READY needs a CodeRabbit review of this head, and no carry is possible.
+2. The round is inside the PR round budget (`pr-checkpoint`: 1+1, risk list 1+2).
+3. The next included slot is more than 15 minutes away (comment `@coderabbitai rate limit`). Otherwise wait.
+4. The round costs $5 or less.
+5. The paid spend of all sessions today (America/Chicago date) plus this round is $15 or less.
+6. For round 2 or later: every finding of the last round is fixed, its threads are resolved, and the `cr-fix` line is clean.
+
+Stop and ask Dave when any of these is true:
+
+- The round is past the budget.
+- A fix round brings a new Major in code the fix touched (a spiral).
+- The fix since the last reviewed commit is over 30 lines or adds files.
+- Either cap would be crossed.
+- This would be the third paid round on one PR.
+
+Commands:
+
+1. Run `node scripts/github/cr-paid.mjs check --pr <N>`. It checks conditions 4 and 5, the paid round count and the fix size. It does not check conditions 1, 2, 3 and 6.
+2. On ALLOW (exit 0), post exactly the comment it prints: `@coderabbitai review --use-credits`.
+3. On ESCALATE (exit 3), stop and ask Dave. Exit 2 gives no verdict, so treat it as ESCALATE.
+4. After you post, run `node scripts/github/cr-paid.mjs record --pr <N> --head <sha> --files <K>`. It writes the shared ledger `~/.claude/state/coderabbit-paid.jsonl`.
+5. Run `node scripts/github/cr-paid.mjs today` to read today's total.
+
+Packaging rules:
+
+- Open one PR per area, with about 15 reviewable files or fewer.
+- Run the Claude review and the `pre-pr.mjs` CLI review before round 1.
+- Push once per fix round.
 
 ## Proof in the PR body (live, P4b)
 
@@ -437,8 +481,8 @@ A repo without `.greptile/config.json` may still use CodeRabbit (`coderabbitai[b
   "Actionable comments posted: N", or its summary comment naming the head commit. A green
   `CodeRabbit` commit status alone is not a review.
 - "Review rate limited" or "Review limit reached" is not a review. Do not post `@coderabbitai review`
-  after that notice; it is refused. Never request the paid on-demand review. Report to Dave; with his
-  merge yes, land with `-IgnoreReview`.
+  after that notice; it is refused. Request the paid review only under "Paid PR reviews (Dave,
+  2026-10-30)". Otherwise report to Dave; with his merge yes, land with `-IgnoreReview`.
 - Steps 1-8 of "When the review lands" apply, without the `@greptileai` tag.
 
 ## Loop prompt (fallback, for a repo without pr_watch)

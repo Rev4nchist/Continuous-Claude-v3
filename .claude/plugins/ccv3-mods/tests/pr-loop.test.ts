@@ -536,6 +536,32 @@ describe('pr-loop watcher', () => {
     expect(stored(store)?.prs.map(p => p.state)).toEqual(['LIMITED'])
   })
 
+  test('W31 a rate limit over 15 minutes away points to the paid-review cap check, ESCALATE asks Dave', async ($, on) => {
+    const s = status(8, {
+      routing: CR_ONLY, routedReviewed: false, coderabbitLimited: true, coderabbitRateLimited: true, coderabbitRetryMinutes: 40,
+      reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)'],
+    })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    const line = seen.submits[0] as string
+    expect(line).toContain('Do NOT post @coderabbitai review')
+    expect(line).toContain('node scripts/github/cr-paid.mjs check --pr 8')
+    expect(line).toContain('over 15 minutes')
+    expect(line).toContain('@coderabbitai review --use-credits')
+    expect(line).toContain('cr-paid.mjs record')
+    expect(line).toMatch(/ESCALATE, ask Dave/)
+  })
+
+  test('W31 the general LIMITED line (skipped or failed) has no paid-review step', async ($, on) => {
+    const s = status(8, { coderabbitLimited: true, coderabbitRateLimited: false, reasons: ['CodeRabbit skipped the review of the head (PR-bot review did not run; CLI/plugin output does not count)'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).not.toContain('cr-paid.mjs')
+  })
+
   test('W31 an older status script is still read as a rate limit from its reason, with no minutes', async ($, on) => {
     const s = status(8, { coderabbitLimited: true, reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)'] })
     const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
