@@ -480,16 +480,17 @@ function makeCtx(input, command, deps, shapes) {
     named,
     top,
     ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d))),
-    enforcing: once(() => enforceIn(deps, top(cwd)))
+    // No usable config in the cwd checkout: a command that names CCv3 enforces (fail closed); any other command is warn mode.
+    enforcing: once(() => enforceIn(deps, top(cwd)) ?? named === CCV3_REPO)
   };
 }
 function enforceIn(deps, top) {
   const text = top === null ? null : deps.readFile(join3(top, CONFIG_REL));
-  if (text === null) return false;
+  if (text === null) return null;
   try {
     return JSON.parse(text)?.checkpoint?.enforce === true;
   } catch {
-    return false;
+    return null;
   }
 }
 function decide(input, deps) {
