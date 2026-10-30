@@ -32,6 +32,10 @@ reviews:
     - "!docs/reviews/**"
     # Test data. It needs no review, and each reviewed file bills $0.25.
     - "!scripts/github/fixtures/**"
+    # Proposal 2026-10-30 option A (Dave): prose and vendored skills need no paid review.
+    - "!docs/**"
+    - "!thoughts/**"
+    - "!.claude/skills/_vendor/**"
   profile: chill
   auto_approvals:
     enabled: false
@@ -77,6 +81,9 @@ reviews:
     languagetool:
       enabled: false
     dotenvLint:
+      enabled: false
+    # CI runs Trivy (ccv3-checks.yml); proposal 2026-10-30 option A.
+    trivy:
       enabled: false
   # Review CCv3 the way its gates cannot: intent, agreement between two surfaces, fail-open vs
   # fail-closed. Do not re-check what a gate measures (context budget, dist freshness, model drift,

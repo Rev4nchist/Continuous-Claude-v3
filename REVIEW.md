@@ -18,4 +18,7 @@ two bots match globs with different engines, and the narrow form still works if 
 .claude/cache/**
 docs/reviews/**
 scripts/github/fixtures/**
+docs/**
+thoughts/**
+.claude/skills/_vendor/**
 ```

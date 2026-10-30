@@ -318,7 +318,10 @@ Commands:
 
 Packaging rules:
 
-- Open one PR per area, with about 15 reviewable files or fewer.
+- Open fewer, larger PRs: bundle related work in one area into one PR (Dave, 2026-10-30).
+- Larger PRs need fewer rounds: 0 to 10 file PRs average 2.2 rounds, 26 to 60 file PRs average 1.75.
+- Round 1 bills every reviewable file, so a round 1 over 20 files goes past the $5 cap and needs Dave.
+- `docs/**`, `thoughts/**` and vendored skills are not reviewed, so they add no cost.
 - Run the Claude review and the `pre-pr.mjs` CLI review before round 1.
 - Push once per fix round.
 
