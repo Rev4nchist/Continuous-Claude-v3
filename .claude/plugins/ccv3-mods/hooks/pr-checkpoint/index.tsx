@@ -702,7 +702,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
         type: 'object',
         properties: {
           pr: { type: 'integer', minimum: 1, description: 'The draft pull request number' },
-          body: { type: 'string', description: 'The PR body file that pre-pr.mjs --body checked (absolute, or relative to the PR branch worktree or the session root)' },
+          body: { type: 'string', description: 'The PR body file that pre-pr.mjs --body checked (absolute, or relative to the PR branch worktree or the session root; a headless run looks in the session root only)' },
         },
         required: ['pr', 'body'],
       },
