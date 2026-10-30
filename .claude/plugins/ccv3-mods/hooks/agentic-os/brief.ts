@@ -417,10 +417,12 @@ const askOf = (item: string): AskItem => {
 
 const NEXT_STEPS = /^\s*(?:#{1,6}\s*|\*\*)next steps\s*:?\s*(?:\*\*)?\s*$/i
 const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
-/** "None — waiting on X" (CLAUDE.md's form, with or without a list marker). "None of the options fit" is a real item. */
-const NONE_ITEM = /^none\s*(?:[-–—:.,;]|$)/i
+/** A Next steps item that asks nothing of Dave: "None — waiting on X", "None for now. I'm waiting on X", "Nothing for you to do", "No action needed", "Waiting on the CI run". "None of the options fit" and "Waiting for your decision" stay asks. Anchored, no nested quantifier: linear on a long line. */
+const NO_ASK = /^(?:none\b(?!\s+of\b)|nothing\s+(?:(?:for\s+(?:you|dave|me)\s+)?to\s+do|needed|required|yet|for\s+now)\b|no\s+(?:action|input|reply)\s+(?:needed|required)\b|(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+(?!your?\b))/i
+/** An item with a question mark is always an ask, whatever its first word. */
+const noAsk = (text: string): boolean => !text.includes('?') && NO_ASK.test(text)
 
-/** The ask items of the `## Next steps` block. undefined: no block, or one with nothing readable. `None — ...`: []. */
+/** The ask items of the `## Next steps` block. undefined: no block, or one with nothing readable. Only no-ask items (None, Nothing to do, Waiting on X): []. */
 const nextSteps = (lines: string[]): AskItem[] | undefined => {
   const start = lines.findIndex(line => NEXT_STEPS.test(line))
   if (start < 0) return undefined
@@ -430,9 +432,9 @@ const nextSteps = (lines: string[]): AskItem[] | undefined => {
     if (/^\s*#{1,6}\s/.test(raw)) break
     const item = ITEM.exec(raw)
     const text = item ? lineOf(item[1] ?? '') : ''
-    if (item && NONE_ITEM.test(text)) none = true
+    if (item && noAsk(text)) none = true
     else if (item) items.push(askOf(text))
-    else if (/^\s*(?:\*\*)?none\b/i.test(raw)) none = true
+    else if (noAsk(lineOf(raw))) none = true
   }
   const kept = items.filter(one => one.text !== '').slice(0, LIMITS.askItems)
   return kept.length > 0 ? kept : none ? [] : undefined
