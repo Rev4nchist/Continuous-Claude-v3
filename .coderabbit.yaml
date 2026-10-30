@@ -11,8 +11,9 @@ reviews:
       - "review:coderabbit"
       - "review:deep"
       - "review:deep-held"
-    # Off: a push does not start a review, so after a push on a labelled PR post "@coderabbitai review"
-    # once. review-status.mjs says so in its reason. Do not post it after a rate-limit notice.
+    # Off: a push does not start a review. READY carries an earlier Minor-only review over a fix of
+    # 30 lines or fewer. Otherwise post "@coderabbitai review" once, only when the pr_watch line
+    # allows a round. Never post it after a rate-limit notice or while the CodeRabbit status is pending.
     auto_incremental_review: false
     # Backstop only: if the label gate is ever removed, pause after 2 reviewed commits.
     auto_pause_after_reviewed_commits: 2
@@ -46,7 +47,7 @@ reviews:
   suggested_labels: false
   # Advisory only: no CodeRabbit-authored commits. fix_ci and resolve_merge_conflict default to true
   # on the Team plan and commit to the branch when triggered, so all writing touches are off.
-  # The ongoing "Autofix"/autopilot mode has no documented YAML key (coderabbit-cli.md forbids it).
+  # The autofix key below is off too (coderabbit-cli.md forbids autopilot mode).
   finishing_touches:
     autofix:
       enabled: false

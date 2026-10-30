@@ -67,6 +67,8 @@ const REPO = resolve(HERE, '..', '..', '..', '..');
 const NOW = Date.parse('2026-10-27T12:00:00Z');
 const HEAD = 'a'.repeat(40);
 const ROOT = '/work/ccv3';
+/** PR D: a command that names CCv3 and meets no config enforces. The stamp tests below are about the stamp, so they serve a readable warn-mode config. */
+const WARN_CONFIG = { [join(ROOT, 'review-router.config.json')]: JSON.stringify({ checkpoint: { enforce: false } }) };
 const CCV3_REMOTES = 'fork\thttps://github.com/Rev4nchist/Continuous-Claude-v3.git (fetch)\nfork\thttps://github.com/Rev4nchist/Continuous-Claude-v3.git (push)\n';
 
 /** The default body file of the CREATE and CONTINUED fixtures. deps() serves its text and stampJson() hashes it. */
@@ -334,7 +336,7 @@ describe('D: the stamp decides', () => {
     const seen: string[] = [];
     const d = deps({ stamp: stampJson() });
     // PR B: a non-draft create also reads review-router.config.json (the warn or enforce switch). This test is about where the STAMP is read.
-    const spy: Deps = { ...d, readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; if (p.endsWith('review-router.config.json')) return null; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
+    const spy: Deps = { ...d, readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; if (p.endsWith('review-router.config.json')) return WARN_CONFIG[join(ROOT, 'review-router.config.json')]; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
     decide(input(CREATE[0]), spy);
     expect(seen).toEqual([`${ROOT}/${STAMP_REL}`]);
     seen.length = 0;
@@ -343,7 +345,7 @@ describe('D: the stamp decides', () => {
     seen.length = 0;
     const wt = 'worktree /work/ccv3\nHEAD aaa\nbranch refs/heads/main\n\nworktree /work/wt-x\nHEAD bbb\nbranch refs/heads/feat/x\n';
     const c = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t -F body=@' + DB;
-    const res = decide(input(c), deps({ worktrees: wt, stamps: { [join('/work/wt-x', STAMP_REL)]: stampJson() } }));
+    const res = decide(input(c), deps({ worktrees: wt, stamps: { ...WARN_CONFIG, [join('/work/wt-x', STAMP_REL)]: stampJson() } }));
     expect(res.action).toBe('allow');
   });
 });
@@ -414,7 +416,7 @@ describe('B: the pushed head and the body file', () => {
 
   const BODY_PATH = resolve('/work/body.md');
   const bodyDeps = (text: string | null, stampBody: string) => {
-    const stamps: Record<string, string> = { [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: stampBody }) };
+    const stamps: Record<string, string> = { ...WARN_CONFIG, [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: stampBody }) };
     if (text !== null) stamps[BODY_PATH] = text;
     return deps({ stamps });
   };
@@ -444,7 +446,7 @@ describe('X: the PR body must be verifiable, and the body path and checkout must
   const TEXT = 'the body\n';
   /** A fresh stamp for HEAD whose body hash matches TEXT, plus the files the hook may read. */
   const withBody = (files: Record<string, string> = {}, remotes?: string): Deps =>
-    deps({ remotes, stamps: { [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: sha(TEXT) }), [BODY]: TEXT, ...files } });
+    deps({ remotes, stamps: { ...WARN_CONFIG, [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: sha(TEXT) }), [BODY]: TEXT, ...files } });
   const fwd = (p: string) => p.replace(/\\/g, '/');
   const denyReason = (c: string, d: Deps): string => {
     const r = decide(input(c), d);
@@ -575,7 +577,7 @@ describe('Y: the body flag, the repo forms and the body path are read the way gh
   const O = fwd(OTHER);
   const API = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t';
   const withBody = (over: { remotes?: string; env?: NodeJS.ProcessEnv } = {}): Deps => ({
-    ...deps({ remotes: over.remotes, stamps: { [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: createHash('sha256').update(TEXT).digest('hex') }), [BODY]: TEXT, [OTHER]: 'other\n' } }),
+    ...deps({ remotes: over.remotes, stamps: { ...WARN_CONFIG, [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: createHash('sha256').update(TEXT).digest('hex') }), [BODY]: TEXT, [OTHER]: 'other\n' } }),
     ...(over.env ? { env: over.env } : {}),
   });
   const reasonOf = (c: string, d: Deps, tool = 'Bash'): string => {
@@ -957,6 +959,8 @@ describe('B: the checkpoint gate (PR B)', () => {
   const PATHWAY_FILE = join(ROOT, '.claude', 'cache', 'pre-pr', 'pathway.json');
   const FOREIGN_REMOTES = 'origin\thttps://github.com/someone/else.git (fetch)\norigin\thttps://github.com/someone/else.git (push)\n';
   const ENFORCE = JSON.stringify({ checkpoint: { enforce: true } });
+  /** Warn mode by a readable config. A missing or bad config in a CCv3 checkout enforces since the PR D review (D8, D10). */
+  const WARN_OFF = JSON.stringify({ checkpoint: { enforce: false } });
   const PATHWAY_OF: Record<string, string> = { 'review:none': 'none', 'review:coderabbit': 'coderabbit', 'review:deep': 'both' };
   /** A pathway.json for `head`. `label` is the label the pathway allows (Dave A.a: a label add must equal it). */
   const pathwayFor = (head: string, label = 'review:coderabbit'): string => JSON.stringify({ head, body_sha256: sha256(DEFAULT_BODY_TEXT), pathway: PATHWAY_OF[label], label, class: 'normal', recommended: 'coderabbit', decided_by: 'dave', at: new Date(NOW).toISOString(), budget: [1, 1] });
@@ -1125,8 +1129,8 @@ describe('B: the checkpoint gate (PR B)', () => {
     for (const c of [NEW_DENIES[0].command, NEW_DENIES[2].command, NEW_DENIES[3].command]) expect(denied(c, { config: ENFORCE })?.reason, c).toContain('/pathway');
   });
 
-  it('B4: warn mode (no config, enforce false, no key, bad JSON): every new deny is ALLOWED and logs one warn row of the pinned shape', () => {
-    const configs: Array<[string, string | undefined]> = [['no config file', undefined], ['enforce false', JSON.stringify({ checkpoint: { enforce: false } })], ['no key', JSON.stringify({ checkpoint: {} })], ['bad JSON', '{not json']];
+  it('B4: warn mode (a readable config: enforce false, no key, a string): every new deny is ALLOWED and logs one warn row of the pinned shape', () => {
+    const configs: Array<[string, string | undefined]> = [['enforce false', WARN_OFF], ['no key', JSON.stringify({ checkpoint: {} })], ['enforce a string', JSON.stringify({ checkpoint: { enforce: 'true' } })]];
     for (const [label, config] of configs) {
       for (const n of NEW_DENIES) {
         for (const tool of ['Bash', 'PowerShell']) {
@@ -1162,6 +1166,122 @@ describe('B: the checkpoint gate (PR B)', () => {
     for (const enforce of ['true', 1, 'yes']) {
       const d = act(NEW_DENIES[2].command, { config: JSON.stringify({ checkpoint: { enforce } }) });
       expect(d.action, String(enforce)).toBe('allow');
+    }
+  });
+
+  // ---- PR D: a CCv3-targeted command from a cwd with no usable config enforces (Dave 2026-10-30: fail closed) ----
+  const NAMED_NO_CONFIG = [
+    'gh pr ready 217 --repo Rev4nchist/Continuous-Claude-v3',
+    'gh pr ready 217 -R rev4nchist/continuous-claude-v3',
+    'gh pr ready https://github.com/Rev4nchist/Continuous-Claude-v3/pull/217',
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t -F body=@${DB}`,
+  ];
+  /** A cwd that is no git checkout at all (the home directory): `rev-parse --show-toplevel` fails, remotes cannot be read. */
+  const noCheckout = (config?: string): Deps => {
+    const base = gdeps({ config });
+    return { ...base, git: (cwd, args) => (args[0] === 'rev-parse' && args[1] === '--show-toplevel' ? { status: 128, stdout: '' } : base.git(cwd, args)) };
+  };
+
+  it('D1: no config in the cwd + a command that names CCv3: ready is denied (enforce) on Bash and PowerShell, in a CCv3 checkout and in no checkout', () => {
+    for (const c of [NAMED_NO_CONFIG[0], NAMED_NO_CONFIG[1], NAMED_NO_CONFIG[2]]) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(denied(c, {}, tool)?.pattern, `${tool} CCv3 cwd: ${c}`).toBe('ready');
+        expect(denied(c, { remotes: FOREIGN_REMOTES }, tool)?.pattern, `${tool} foreign cwd: ${c}`).toBe('ready');
+        const d = decide(input(c, { tool_name: tool, cwd: 'C:\\Users\\dkhay' }), noCheckout());
+        expect(d.action === 'deny' ? d.pattern : d.action, `${tool} no checkout: ${c}`).toBe('ready');
+      }
+    }
+  });
+
+  it('D2: no config + a non-draft CCv3 create (gh api POST) is denied non-draft; a review label add naming CCv3 is denied review-label', () => {
+    expect(denied(NAMED_NO_CONFIG[3], {})?.pattern).toBe('non-draft');
+    expect(denied('gh pr edit 217 --add-label review:deep -R Rev4nchist/Continuous-Claude-v3', {})?.pattern).toBe('review-label');
+    expect(denied('gh pr create --draft -R Rev4nchist/Continuous-Claude-v3 --body-file ' + DB, {})).toBeNull();
+  });
+
+  it('D3: no config + a command for another repo is unchanged: allowed, no log row', () => {
+    for (const c of ['gh pr ready 217 --repo someone/else', 'gh pr ready https://github.com/someone/else/pull/9', 'gh api repos/someone/else/pulls -X POST -f title=t -F body=@' + DB]) {
+      let out = '';
+      const rows = logged(() => { out = handle(payload(c), gdeps({ remotes: FOREIGN_REMOTES })); });
+      expect(out, c).toBe('{}');
+      expect(rows, c).toEqual([]);
+    }
+  });
+
+  it('D4: a config with enforce false, no key or the string "true" keeps warn mode for a CCv3-named command: allowed, one warn row', () => {
+    for (const config of [JSON.stringify({ checkpoint: { enforce: false } }), JSON.stringify({ checkpoint: {} }), JSON.stringify({ checkpoint: { enforce: 'true' } })]) {
+      let out = '';
+      const rows = logged(() => { out = handle(payload(NAMED_NO_CONFIG[0]), gdeps({ config })); });
+      expect(out, config).toBe('{}');
+      expect(rows, config).toHaveLength(1);
+      expect(rows[0], config).toMatchObject({ decision: 'warn', reason: 'ready' });
+    }
+  });
+
+  it('D5: a config with enforce true still denies a CCv3-named command, and one that names no repo is judged by the config as before', () => {
+    expect(denied(NAMED_NO_CONFIG[0], { config: ENFORCE })?.pattern).toBe('ready');
+    expect(denied('gh pr ready 217', { config: ENFORCE })?.pattern).toBe('ready');
+    expect(act('gh pr ready 217', { config: WARN_OFF }).action).toBe('allow');
+  });
+
+  it('D6: a config that is not valid JSON counts as no config: a CCv3-named command is denied, and so is one that names no repo in a CCv3 checkout; a foreign checkout stays warn', () => {
+    for (const config of ['{not json', '']) {
+      expect(denied(NAMED_NO_CONFIG[0], { config })?.pattern, JSON.stringify(config)).toBe('ready');
+      expect(denied('gh pr ready 217', { config })?.pattern, JSON.stringify(config)).toBe('ready'); // C4: a CCv3 checkout with no usable config enforces
+      expect(act('gh pr ready 217', { config, remotes: FOREIGN_REMOTES }).action, JSON.stringify(config)).toBe('allow');
+    }
+  });
+
+  it('D7: the leading override still lets a CCv3-named command through when the config is missing, and logs an override row', () => {
+    let out = '';
+    const rows = logged(() => { out = handle(payload(`SKIP_PRE_PR_GATE=1 ${NAMED_NO_CONFIG[0]}`), gdeps()); });
+    expect(out).toBe('{}');
+    expect(rows.map((r) => r.decision)).toEqual(['override']);
+  });
+
+  // ---- PR D review C3 and C4: an unreadable config fails closed for a self-confirm and for a command run in a CCv3 checkout ----
+  const SELF_ABS = 'node C:\\Users\\dkhay\\continuous-claude\\scripts\\github\\pr-checkpoint.mjs --confirm coderabbit --by dave';
+  const UNREADABLE: Array<[string, string | undefined]> = [['no config file', undefined], ['bad JSON', '{not json'], ['empty file', '']];
+
+  it('D8 (C3): no usable config + a self-confirm that names no repo is denied self-confirm, from a CCv3 checkout, a foreign checkout and a cwd that is no checkout', () => {
+    for (const [label, config] of UNREADABLE) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(denied(SELF_ABS, { config }, tool)?.pattern, `${label} / ${tool} CCv3 cwd`).toBe('self-confirm');
+        expect(denied(SELF_ABS, { config, remotes: FOREIGN_REMOTES }, tool)?.pattern, `${label} / ${tool} foreign cwd`).toBe('self-confirm');
+        const d = decide(input(SELF_ABS, { tool_name: tool, cwd: 'C:\\Users\\dkhay' }), noCheckout(config));
+        expect(d.action === 'deny' ? d.pattern : d.action, `${label} / ${tool} no checkout`).toBe('self-confirm');
+      }
+    }
+  });
+
+  it('D9 (C3): a readable config keeps its own value for a self-confirm: enforce false is warn mode (allowed, one warn row), enforce true denies', () => {
+    let out = '';
+    const rows = logged(() => { out = handle(payload(SELF_ABS), gdeps({ config: JSON.stringify({ checkpoint: { enforce: false } }), remotes: FOREIGN_REMOTES })); });
+    expect(out).toBe('{}');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ decision: 'warn', reason: 'self-confirm' });
+    expect(denied(SELF_ABS, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('self-confirm');
+  });
+
+  it('D10 (C4): no usable config in a CCv3 checkout + a ready or review-label command with no -R is denied, on Bash and PowerShell', () => {
+    for (const [label, config] of UNREADABLE) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(denied('gh pr ready 201', { config }, tool)?.pattern, `${label} / ${tool}: ready`).toBe('ready');
+        expect(denied('gh pr edit 201 --add-label review:deep', { config }, tool)?.pattern, `${label} / ${tool}: label`).toBe('review-label');
+        expect(denied(CREATE[0], { config, stamp: true }, tool)?.pattern, `${label} / ${tool}: non-draft create`).toBe('non-draft');
+      }
+    }
+  });
+
+  it('D10b (C4): a cd into a CCv3 checkout from a cwd with no config is a CCv3 command too: ready is denied, no longer the documented residual', () => {
+    const d = decide(input('cd C:\\work\\ccv3; gh pr ready 201', { tool_name: 'PowerShell', cwd: 'C:\\Users\\dkhay' }), noCheckout());
+    expect(d.action === 'deny' ? d.pattern : d.action).toBe('ready');
+  });
+
+  it('D11 (C4): the same commands stay warn mode with a readable config that says enforce false, and from a foreign checkout with no config', () => {
+    for (const c of ['gh pr ready 201', 'gh pr edit 201 --add-label review:deep']) {
+      expect(act(c, { config: JSON.stringify({ checkpoint: { enforce: false } }) }).action, `enforce false: ${c}`).toBe('allow');
+      expect(act(c, { remotes: FOREIGN_REMOTES }).action, `foreign, no config: ${c}`).toBe('allow');
     }
   });
 
@@ -1313,7 +1433,7 @@ describe('B: the checkpoint gate (PR B)', () => {
         }
       }
       // Warn mode with a pathway: allowed, one warn row. (No pathway in warn mode is B4.)
-      for (const config of [undefined, JSON.stringify({ checkpoint: { enforce: false } })]) {
+      for (const config of [WARN_OFF]) {
         let out = '';
         const rows = logged(() => { out = handle(payload(c), gdeps({ config, pathway: pathwayFor(HEAD) })); });
         expect(out, `warn, pathway: ${c}`).toBe('{}');
@@ -1361,7 +1481,7 @@ describe('B: the checkpoint gate (PR B)', () => {
     // Warn mode: logged and allowed, like the other new patterns.
     for (const c of LABEL_BLIND) {
       let out = '';
-      const rows = logged(() => { out = handle(payload(c), gdeps({})); });
+      const rows = logged(() => { out = handle(payload(c), gdeps({ config: JSON.stringify({ checkpoint: { enforce: false } }) })); });
       expect(out, `warn: ${c}`).toBe('{}');
       expect(rows, `warn: ${c}`).toHaveLength(1);
       expect(rows[0], c).toMatchObject({ decision: 'warn', reason: 'review-label' });
@@ -1391,7 +1511,7 @@ describe('B: the checkpoint gate (PR B)', () => {
       expect(denied(c, { config: ENFORCE, pathway: pathwayFor(BHEAD, labelOf(c)) })?.pattern, `pathway of another head: ${c}`).toBe('review-label');
       // Warn mode: allowed with one warn row.
       let out = '';
-      const rows = logged(() => { out = handle(payload(c), gdeps({})); });
+      const rows = logged(() => { out = handle(payload(c), gdeps({ config: WARN_OFF })); });
       expect(out, `warn: ${c}`).toBe('{}');
       expect(rows, `warn: ${c}`).toHaveLength(1);
       expect(rows[0], c).toMatchObject({ decision: 'warn', reason: 'review-label' });
@@ -1508,7 +1628,7 @@ describe('B: the checkpoint gate (PR B)', () => {
         expect(denied(c, { config: ENFORCE }, tool)?.pattern, `enforce ${tool}: ${JSON.stringify(c)}`).toBe('ready');
       }
       let out = '';
-      const rows = logged(() => { out = handle(payload(c), gdeps({})); });
+      const rows = logged(() => { out = handle(payload(c), gdeps({ config: WARN_OFF })); });
       expect(out, `warn: ${JSON.stringify(c)}`).toBe('{}');
       expect(rows, `warn: ${JSON.stringify(c)}`).toHaveLength(1);
       expect(rows[0], c).toMatchObject({ decision: 'warn', reason: 'ready' });

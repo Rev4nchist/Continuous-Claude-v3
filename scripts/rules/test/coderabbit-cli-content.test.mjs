@@ -41,7 +41,7 @@ test('DW-91 guard clauses: Dave-only override, read-only allow list, no Autofix 
   for (const cmd of ['cr doctor', 'cr usage', 'cr auth login', 'cr auth status', 'cr --help', 'cr --version']) {
     assert.ok(rule.includes('`' + cmd), `read-only command listed: ${cmd}`);
   }
-  assert.match(rule, /never count toward the run cap/i);
+  assert.match(rule, /Read-only commands\*\*, which never count as a run/i);
   assert.match(rule, /Autofix\*\* or autopilot checkbox/);
   assert.match(rule, /Click or tick/);
 });

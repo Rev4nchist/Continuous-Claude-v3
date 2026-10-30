@@ -227,6 +227,26 @@ export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)
 
+/** The gh write shapes: a comment, a pr or issue edit or create with a body, and an api call that is a POST, PATCH or PUT, sets a body field, runs a GraphQL mutation or sends --input. */
+const GH = String.raw`\bgh(?:\.exe)?\s+`
+const GH_WRITE_SHAPES: RegExp[] = [
+  new RegExp(`${GH}(?:pr|issue)\\s+comment\\b`, 'i'),
+  new RegExp(`${GH}(?:pr|issue)\\s+(?:edit|create)\\b[\\s\\S]*(?:--body\\b|--body-file\\b|\\s-[bF][\\s=])`, 'i'),
+  new RegExp(`${GH}api\\b[\\s\\S]*(?:(?:-X|--method)[\\s=]*['"]?(?:POST|PATCH|PUT)\\b|(?:-[fF]|--field|--raw-field)[\\s=]*['"]?body=)`, 'i'),
+  // A GraphQL mutation (addComment) writes with no body= field. --input is an implicit POST: the body comes from a file or stdin.
+  new RegExp(`${GH}api\\b[\\s\\S]*\\bmutation\\b`, 'i'),
+  new RegExp(`${GH}api\\b[\\s\\S]*--input\\b`, 'i'),
+]
+
+/**
+ * Shell text that holds the router's pathway-confirmed marker word in a gh write shape (gh pr or issue comment, gh pr edit or create with a body,
+ * gh api with -X POST, PATCH or PUT, a body field, a GraphQL mutation or --input). Only /pathway posts that marker, from node (`$.process.run`, not a shell tool call).
+ * Raw text, no lexer: a doubt reads as a deny. A gh read (view, list, api GET) that names the word is not a post and is not touched.
+ * Not covered, accepted: a node or PowerShell script, or a body file, that builds the marker apart from this text.
+ */
+export const namesMarker = (command: string): boolean => /pathway-confirmed/i.test(command) && GH_WRITE_SHAPES.some(shape => shape.test(command))
+export const MARKER_DENY = 'The pathway-confirmed comment is posted by /pathway when Dave presses a pathway. A shell command may not post it.'
+
 /** A cheap test on the raw text. A miss spawns nothing; a hit asks the shapes CLI. */
 export const mayBeGated = (command: string): boolean =>
   (/pr-checkpoint/i.test(command) && /--(confirm|apply)/i.test(command)) || (/\bgh(\.exe)?\b/i.test(command) && /ready|label|review:|graphql/i.test(command))

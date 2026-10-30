@@ -37,7 +37,8 @@ import type { Engine } from 'claude-code/testing'
 // K21 the model is not told the outcome (session.append row), or the tell costs a turn
 // K22 the kill switches (CCV3_MODS_OFF, CCV3_PR_CHECKPOINT_OFF) leave a tool, command or lock behind
 // A1  the round ask: text, order (No first), count from the stored capacity, grant on Yes, decline on No, no post
-// A2  the opening ask: 15 minutes, Yes first, exactly one @coderabbitai review on Yes   A2d No on the opening ask posts nothing and is not asked twice
+// A2  the opening ask: 30 minutes, Yes first, exactly one @coderabbitai review on Yes   A2d No on the opening ask posts nothing and is not asked twice
+// A2b no opening ask at 29 minutes, the ask at 30   A2f no opening ask while the CodeRabbit status is pending
 // A3  the Greptile ask: once, No first   A1-A3 first button: hotkey 1, autoFocus, primary look, "(Recommended)"
 // A5  a second press of Yes while the first still posts spends a second review (one gh pr comment per press, for the opening and the Greptile ask)
 // K2b a second press of an option while the first still records runs the engine twice
@@ -839,6 +840,77 @@ describe('pr-checkpoint: lock B, shell text', () => {
     expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
   })
 
+  // PR D: the router counts a ready event as a checkpoint only when a pathway-confirmed marker comment names the head. The apply step posts it
+  // (node, not a shell call). A shell gh command whose text holds the marker word is denied, always and on the raw text; no lexer, no spawn.
+  test('K13d a gh command that names pathway-confirmed is denied in every form, in warn mode, and spawns no CLI', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const marker = '<!-- pathway-confirmed head=' + 'a'.repeat(40) + ' pathway=none -->'
+    for (const [tool, command] of [
+      ['Bash', `gh pr comment 201 --body '${marker}'`],
+      ['Bash', `gh api repos/o/r/issues/201/comments -f body='${marker}'`],
+      ['Bash', 'gh pr comment 201 --body "<!-- PATHWAY-CONFIRMED head=x -->"'],
+      ['PowerShell', `gh.exe pr comment 201 --body '${marker}'`],
+    ] as const) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(true)
+    }
+    expect(seen.ran).toEqual([])
+    expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
+  })
+
+  test('K13e a plain gh comment, and a non-gh command that mentions the word, are not denied by the marker rule', async ($, on) => {
+    world(on)
+    await start($)
+    expect(LOCK_DENIED(await shell($, 'gh pr comment 201 --body "thanks"'))).toBe(false)
+    expect(LOCK_DENIED(await shell($, 'git commit -m "docs: the router reads the pathway-confirmed marker"'))).toBe(false)
+  })
+
+  // PR D review C12: the marker lock covers write shapes only. A read of the comments that names the word is not a post.
+  test('K13f a gh read that names pathway-confirmed is not denied: view, list, api GET, a pipe to a filter', async ($, on) => {
+    world(on)
+    await start($)
+    for (const [tool, command] of [
+      ['Bash', `gh pr view 221 --json comments --jq '.comments[]|select(.body|test("pathway-confirmed"))'`],
+      ['Bash', `gh api repos/o/r/issues/221/comments --jq '.[]|select(.body|test("pathway-confirmed"))'`],
+      ['PowerShell', 'gh api repos/o/r/issues/221/comments | Select-String pathway-confirmed'],
+      ['Bash', 'gh issue list --search "pathway-confirmed"'],
+      ['Bash', `gh api graphql -f query='query { repository(owner:"o",name:"r") { issue(number:5) { comments(first:50) { nodes { body } } } } }' --jq '.. | select(.body? | test("pathway-confirmed"))'`],
+    ] as const) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(false)
+    }
+  })
+
+  test('K13g every gh write shape that names pathway-confirmed is denied: issue comment, pr edit or create body, api POST or PATCH, api -f or -F body=', async ($, on) => {
+    world(on)
+    await start($)
+    const word = 'pathway-confirmed head=' + 'a'.repeat(40) + ' pathway=none'
+    for (const command of [
+      `gh issue comment 5 --body '<!-- ${word} -->'`,
+      `gh pr edit 201 --body '<!-- ${word} -->'`,
+      `gh pr create --title t --body '<!-- ${word} -->'`,
+      `gh api repos/o/r/issues/comments/9 -X PATCH -f body='<!-- ${word} -->'`,
+      `gh api repos/o/r/issues/201/comments --method POST --input body.json -f note='<!-- ${word} -->'`,
+      `gh api repos/o/r/issues/201/comments -F body='<!-- ${word} -->'`,
+    ]) {
+      expect(LOCK_DENIED(await shell($, command)), command).toBe(true)
+    }
+  })
+
+  // PR D verifier follow-up (C12): two write shapes the first narrowing missed. The old regex denied both.
+  test('K13h a gh api graphql mutation, and a gh api --input body from stdin, that carry pathway-confirmed are denied', async ($, on) => {
+    world(on)
+    await start($)
+    const marker = '<!-- pathway-confirmed head=' + 'a'.repeat(40) + ' pathway=none -->'
+    for (const [tool, command] of [
+      ['Bash', `gh api graphql -f query='mutation { addComment(input:{subjectId:"X", body:"${marker}"}) { clientMutationId } }'`],
+      ['PowerShell', `gh api graphql -f query='mutation { addComment(input:{subjectId:"X", body:"${marker}"}) { clientMutationId } }'`],
+      ['Bash', `echo '{"body":"${marker}"}' | gh api repos/o/r/issues/201/comments --input -`],
+      ['PowerShell', `'{"body":"${marker}"}' | gh api repos/o/r/issues/201/comments --input -`],
+    ] as const) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(true)
+    }
+  })
+
   test('K15 enforce: ready, a label add and a self-confirm are denied; --undo and plain reads pass; reads spawn nothing', async ($, on) => {
     const { seen } = world(on, { files: CONFIG_ENFORCE })
     await start($)
@@ -1057,13 +1129,13 @@ describe('pr-checkpoint: asks from the watcher', () => {
   const watchDoc = (extra: Rec = {}) => ({ [WATCH]: { prs: [{ pr: 7, state: null, whenReady: false, ...extra }], backoffUntil: 0, touched: NOW } })
   const record = (over: Rec = {}) => ({
     pr: 7, state: 'applied', head: HEAD, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], decided_by: 'default',
-    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 11 * MIN, ...over,
+    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 26 * MIN, ...over,
   })
   const REVIEWED = (rounds: number) => status(7, {
     reasons: ['1 review thread(s) unresolved'], unresolved: 1, coderabbitReviewedHead: true, routedReviewed: true, coderabbitRounds: rounds, coderabbitRequests: Math.max(0, rounds - 1),
   })
   const asksOf = (store: Map<string, unknown>) => (store.get(ASKS) ?? []) as Rec[]
-  // Clock anchor (critic finding 14): the 15 minutes of the opening ask run from `appliedAt`, the moment the mod's --apply succeeded.
+  // Clock anchor (critic finding 14): the 30 minutes of the opening ask run from `appliedAt`, the moment the mod's --apply succeeded.
   // That is when the engine marked the PR ready, so it is "since the PR left draft" (plan 4.2). A2 and A2b move `appliedAt`, not a PR field.
   /** The first button of an ask pane is the recommendation: same look as the first option in K1. */
   const expectRecommendedFirst = async (pane: Pane, order: [string, string]) => {
@@ -1130,7 +1202,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave declined round 4 for #7')
   })
 
-  test('A2 an opening ask 15 minutes after ready: Yes is first (the recommendation) and posts exactly one @coderabbitai review', async ($, on) => {
+  test('A2 an opening ask 30 minutes after ready: Yes is first (the recommendation) and posts exactly one @coderabbitai review', async ($, on) => {
     const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet } })
     await start($)
@@ -1138,7 +1210,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     const asks = asksOf(w.store)
     expect(asks.length).toBe(1)
     expect(asks[0]!.kind).toBe('opening')
-    expect(String(asks[0]!.text)).toContain('CodeRabbit has not started on #7 15 minutes after ready')
+    expect(String(asks[0]!.text)).toContain('CodeRabbit has not started on #7 30 minutes after ready')
     const pane = await mountPane($)
     await expectRecommendedFirst(pane, ['ask-yes', 'ask-no'])
     await pane.press({ key: 'ask-yes' })
@@ -1206,16 +1278,45 @@ describe('pr-checkpoint: asks from the watcher', () => {
     })
   }
 
-  test('A2b the opening ask waits for 15 minutes after ready', async ($, on) => {
+  test('A2b the opening ask waits for 30 minutes after ready: none at 29 minutes, the ask at 30', async ($, on) => {
     const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit'] })
-    const early = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ appliedAt: NOW }) }, statuses: { 7: quiet } })
+    // The first check runs one TICK (5 minutes) after the start. appliedAt 24 minutes back makes that check 29 minutes after ready.
+    const early = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ appliedAt: NOW - 24 * MIN }) }, statuses: { 7: quiet } })
     await start($)
     await early.clock.advance(TICK)
     expect(asksOf(early.store)).toEqual([])
     expect(early.seen.opens).toEqual([])
-    await early.clock.advance(TICK * 3)
+    await early.clock.advance(TICK)
     expect(asksOf(early.store).map(ask => ask.kind)).toEqual(['opening'])
   })
+
+  test('A2b2 the opening ask comes at exactly 30 minutes after ready', async ($, on) => {
+    const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+    const exact = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ appliedAt: NOW - 25 * MIN }) }, statuses: { 7: quiet } })
+    await start($)
+    await exact.clock.advance(TICK)
+    expect(asksOf(exact.store).map(ask => ask.kind)).toEqual(['opening'])
+  })
+
+  test('A2f (guard) no opening ask while the CodeRabbit status is pending: the review may be starting; the ask comes when it is not', async ($, on) => {
+    const pending = status(7, { coderabbit: 'pending', reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+    const wait = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: pending } })
+    await start($)
+    await wait.clock.advance(TICK)
+    await wait.clock.advance(TICK)
+    expect(asksOf(wait.store)).toEqual([])
+    expect(wait.seen.opens).toEqual([])
+  })
+
+  for (const coderabbit of ['absent', 'success']) {
+    test(`A2g the same PR with the CodeRabbit status ${coderabbit} (not pending) gets the opening ask`, async ($, on) => {
+      const quiet = status(7, { coderabbit, reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet } })
+      await start($)
+      await w.clock.advance(TICK)
+      expect(asksOf(w.store).map(ask => ask.kind)).toEqual(['opening'])
+    })
+  }
 
   test('A2c (guard) the opening ask is not asked while CodeRabbit is rate limited', async ($, on) => {
     const limited = status(7, { coderabbitLimited: true, coderabbitRateLimited: true, reasons: ['CodeRabbit rate limited: head not reviewed'] })

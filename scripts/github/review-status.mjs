@@ -40,6 +40,13 @@
  * pr-loop mod maps it to LIMITED). A leftover CodeRabbit commit status alone does not grant READY.
  * Any review thread, from any reviewer, still counts as unresolved.
  *
+ * The carry (PR D, Dave 2026-10-29): a CodeRabbit-required PR whose head has no review is still READY when the NEWEST CodeRabbit
+ * review (of an earlier head) is Minor-only, the push since is 30 lines or fewer over the PR's own files, and the PR body holds a
+ * `CLI fix review: <from>..<head> clean` line from cr-fix.mjs for that range (see carryBlockers). Every other READY item
+ * applies. Result field `coderabbitCarried`: { from, deltaLines } or null; `coderabbitReviewedHead` stays false. A missing input or
+ * a failed read is "not eligible", never exit 2. `--fixture <file>` evaluates saved inputs with no gh call (the result says
+ * `fixture: true`); it is for the end-to-end check and is never used by land-pr.ps1.
+ *
  * P4b proof gate (DW-102): the PR BODY must name one proof type and show RED and GREEN evidence, and the
  * GREEN line must name the head (see PROOF_TYPES and pr-review-loop.md "Proof in the PR body"). Missing,
  * unknown or incomplete proof is a reason. Exempt: a Dependabot PR (the signed-bot rule above) and a
@@ -54,7 +61,7 @@
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
@@ -818,7 +825,172 @@ export function outsideDiffHandled(body) {
   return count;
 }
 
-export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true, nowMs = Date.now() }) {
+// ---- The carry (PR D): READY accepts a CodeRabbit review of an EARLIER head -------------------------------------------
+// A Minor-only round plus a small fix push needs no second review. CodeRabbit puts the severity in each INLINE comment
+// (`**<picture>..</picture> Major** ·`); the review body has none, except in its outside-diff and nitpick sections. The reader is
+// a minimal pattern on the raw text and fails closed: no marker is "unknown", and unknown counts as Major.
+// pr-checkpoint.mjs and pr-review-loop.md name the same limit.
+export const CARRY_MAX_LINES = 30;
+const SEVERITY_MARK = /(?:<\/picture>|[\u{1F534}\u{1F7E0}\u{1F7E1}\u{1F535}\u{1F7E2}\u{1F9F9}])\s*(Critical|Major|Minor|Trivial|Nitpick)\b/giu;
+const SEVERITY_OF = { critical: 'critical', major: 'major', minor: 'minor', trivial: 'minor', nitpick: 'minor' };
+const SEVERITY_RANK = { unknown: 0, minor: 1, major: 2, critical: 3 };
+const severityMarks = (text) => [...String(text ?? '').matchAll(SEVERITY_MARK)].map((m) => SEVERITY_OF[m[1].toLowerCase()]);
+
+/** 'critical', 'major', 'minor' (Trivial and Nitpick too) or 'unknown'. The highest marker in the text wins. */
+export function codeRabbitSeverity(text) {
+  return severityMarks(text).reduce((best, s) => (SEVERITY_RANK[s] > SEVERITY_RANK[best] ? s : best), 'unknown');
+}
+
+/** The newest CodeRabbit app review with a body (an empty body is a thread reply, no round). null when none. */
+export function newestCodeRabbitReview(reviews) {
+  const at = (r) => Date.parse(r?.submitted_at || '') || 0;
+  return (reviews || [])
+    .filter((r) => isCodeRabbitUser(r?.user) && String(r.body ?? '').trim() !== '')
+    .reduce((best, r) => (best === null || at(r) >= at(best) ? r : best), null);
+}
+
+// GitHub lists at most 300 files in a compare. A list that long may be cut off, and the PR's own files may be the ones cut.
+const COMPARE_FILE_CAP = 300;
+
+/**
+ * Lines changed since the reviewed head, over the PR's own files only: additions plus deletions of each compare file that is
+ * also in the PR file list (by its name or its old name). A merge of main that touches files outside the PR does not count.
+ * Accepted limit: a change of main INSIDE a PR file counts, because the compare cannot tell it from a fix line.
+ * A file that counts none (binary, pure rename) counts one, so such a push cannot hide under the limit. null (fail closed)
+ * when the compare file list is missing, is full (300 or more), or holds a bad count, or when the PR file list is missing.
+ */
+export function deltaLinesOf(compare, prFiles) {
+  const files = compare?.files;
+  if (!Array.isArray(files) || files.length >= COMPARE_FILE_CAP) return null;
+  if (!files.every((f) => Number.isInteger(f?.additions) && Number.isInteger(f?.deletions))) return null;
+  if (!Array.isArray(prFiles) || !prFiles.every((f) => typeof f?.filename === 'string')) return null;
+  const own = new Set(prFiles.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean)));
+  const mine = files.filter((f) => own.has(f.filename) || (f.previous_filename && own.has(f.previous_filename)));
+  return mine.reduce((sum, f) => sum + Math.max(1, f.additions + f.deletions), 0);
+}
+
+// The CLI fix review line (cr-fix.mjs prints it; the author pastes it into the PR body): `CLI fix review: <from>..<head> <verdict>`.
+// Verdict is clean, "N major", "N critical" or incomplete. Fences and HTML comments are skipped, as in parseProof.
+const CLI_FIX_LINE = /^(?:[-*+]\s+)?CLI fix review:\s*([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})\s+(\S.*?)\s*$/i;
+
+/** Every CLI fix review line of a PR body: [{ from, head, verdict }], the shas in lower case. [] for no body. Pure. */
+export function parseCliFixReviews(body) {
+  const out = [];
+  const state = { inComment: false };
+  let fence = null;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    if (fence) {
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null;
+      continue;
+    }
+    const clean = stripComments(line, state);
+    const open = FENCE_OPEN.exec(clean);
+    if (open) { fence = { ch: open[1][0], len: open[1].length }; continue; }
+    const m = CLI_FIX_LINE.exec(clean.trim());
+    if (m) out.push({ from: m[1].toLowerCase(), head: m[2].toLowerCase(), verdict: m[3] });
+  }
+  return out;
+}
+
+function reviewBlockers({ newest, reviewComments }, head) {
+  if (!newest) return ['no CodeRabbit review to carry'];
+  if (!/^[0-9a-f]{40}$/.test(newest.commit_id ?? '') || newest.commit_id === head) return ['the newest CodeRabbit review names no earlier head'];
+  const stated = /Actionable comments posted:\s*(\d+)/.exec(newest.body);
+  if (!stated) return ['the newest CodeRabbit review has no review sentence'];
+  if (!Array.isArray(reviewComments)) return ['the inline comments of the newest review were not read'];
+  const blocks = [];
+  const bodySeverity = codeRabbitSeverity(newest.body);
+  if (bodySeverity === 'critical' || bodySeverity === 'major') blocks.push(`the review body lists a ${bodySeverity} finding`);
+  // Best effort: a marker per outside-diff finding. Each finding carries two, so this only catches a body with none.
+  const outside = Number(OUTSIDE_DIFF_HEADING.exec(newest.body)?.[1] ?? 0);
+  if (outside > 0 && severityMarks(newest.body).length < outside) blocks.push('an outside-diff finding has no severity marker');
+  // N counts the inline comments only (PR 204 review 5691302687: N 1, one inline comment, one more finding outside the diff).
+  if (reviewComments.length < Number(stated[1])) blocks.push(`only ${reviewComments.length} of ${stated[1]} inline comments were read`);
+  for (const c of reviewComments) {
+    const s = codeRabbitSeverity(c?.body);
+    if (s !== 'minor') blocks.push(s === 'unknown' ? 'an inline comment has no severity marker' : `an inline comment is ${s}`);
+  }
+  return blocks;
+}
+
+function deltaBlockers(compare, prFiles) {
+  if (compare?.status !== 'ahead') return [`the earlier head is not an ancestor of this head (compare: ${compare?.status ?? 'unread'})`];
+  const lines = deltaLinesOf(compare, prFiles);
+  if (lines === null) return ['the push since the reviewed head could not be measured'];
+  return lines > CARRY_MAX_LINES ? [`the push since the reviewed head is ${lines} lines, over ${CARRY_MAX_LINES}`] : [];
+}
+
+/**
+ * The PR body must hold a CLI fix review line for exactly this range: from is a prefix (7 or more hex) of the carried review's
+ * commit, head is a prefix of the current head. Every line that names the range must say clean, except that a clean line
+ * overrides `incomplete` lines for the range. Anything else blocks.
+ */
+function cliFixBlockers({ body, newest }, head) {
+  const from = String(newest?.commit_id ?? '');
+  const range = `${from.slice(0, 7)}..${String(head ?? '').slice(0, 7)}`;
+  const mine = parseCliFixReviews(body).filter((l) => shaIsHead(l.from, from) && shaIsHead(l.head, String(head ?? '')));
+  if (mine.length === 0) return [`the PR body has no "CLI fix review: ${range} clean" line (run scripts/github/cr-fix.mjs)`];
+  // A clean line overrides `incomplete` lines (an earlier run that did not finish). A Major or Critical line never yields.
+  const bad = mine.find((l) => l.verdict !== 'clean' && (l.verdict !== 'incomplete' || !mine.some((m) => m.verdict === 'clean')));
+  return bad ? [`the CLI fix review of ${range} is "${bad.verdict}", not clean`] : [];
+}
+
+function fileBlockers({ prFiles, config, matchGlob }) {
+  const { critical, parser } = config?.checkpoint ?? {};
+  if (!Array.isArray(critical) || !Array.isArray(parser)) return ['the base review-router config lists no critical and parser files'];
+  if (typeof matchGlob !== 'function') return ['no glob matcher'];
+  if (!Array.isArray(prFiles) || prFiles.length === 0 || !prFiles.every((f) => typeof f?.filename === 'string')) return ['the PR file list was not read'];
+  const paths = prFiles.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean));
+  try {
+    const hit = paths.find((p) => [...critical, ...parser].some((g) => matchGlob(g, p)));
+    return hit ? [`the PR changes a critical or parser file (${hit})`] : [];
+  } catch { return ['a critical or parser glob could not be matched']; }
+}
+
+function scopeBlockers({ state, labels, cr }, head) {
+  const blocks = [];
+  if (!state || state.head !== head) blocks.push('the review router has not classified this head');
+  if (state?.class === 'r3' || (labels || []).some((n) => n === 'risk:high' || n === 'risk:r3')) blocks.push('the PR is class r3 or risk:high');
+  if (!cr || cr.status === 'pending') blocks.push('the CodeRabbit status is pending or unread');
+  return blocks;
+}
+
+/**
+ * Why a CodeRabbit review of an earlier head cannot stand for this head. [] means it can (the carry). Any missing input
+ * is a reason: a failed fetch never makes a PR eligible. Needs the newest review, its inline comments, the compare of
+ * that commit to the head, the PR files, the BASE branch's router config and a matchGlob (review-router.mjs).
+ */
+export function carryBlockers({ head, newest, reviewComments, compare, prFiles, config, state, labels, cr, matchGlob, body } = {}) {
+  return [
+    ...reviewBlockers({ newest, reviewComments }, head),
+    ...deltaBlockers(compare, prFiles),
+    ...cliFixBlockers({ body, newest }, head),
+    ...fileBlockers({ prFiles, config, matchGlob }),
+    ...scopeBlockers({ state, labels, cr }, head),
+  ];
+}
+
+/**
+ * { carried, cliOnly }. carried is { from, deltaLines } when the newest CodeRabbit review stands for the head (see carryBlockers), else null.
+ * cliOnly is true when the CLI fix review line is the ONLY blocker: every other carry condition holds, so the author needs cr-fix.mjs, not a PR review.
+ */
+function carriedReview({ carry, reviews, head, comments, labels, cr, body }) {
+  const newest = newestCodeRabbitReview(reviews);
+  const blocks = carryBlockers({ ...carry, head, newest, state: routerState(comments), labels, cr, body });
+  const carried = blocks.length === 0 ? { from: newest.commit_id, deltaLines: deltaLinesOf(carry.compare, carry.prFiles) } : null;
+  return { carried, cliOnly: blocks.length > 0 && blocks.length === cliFixBlockers({ body, newest }, head).length };
+}
+
+/** The reasons a head with no CodeRabbit review carries. The first two are for a draft and an unrouted PR; a person must not post a review request for either. */
+export const NO_REVIEW_REASON = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one';
+export const NO_REVIEW_DRAFT_REASON = 'no CodeRabbit PR-bot review of the head commit. Draft: run /pathway; do not request a review';
+export const NO_REVIEW_UNVERIFIED_REASON = 'no CodeRabbit PR-bot review of the head commit; re-run the review-router workflow for this head; do not request a review';
+/** Only the CLI fix review line blocks the carry: run cr-fix.mjs and paste its line. Never a paid PR review. The prefix is the one the mod and the rule match. */
+export const noReviewCliReason = (prNumber) => `no CodeRabbit PR-bot review of the head commit; the earlier review carries once the PR body has a clean CLI fix review line. Run node scripts/github/cr-fix.mjs --pr ${prNumber} and put its line in the PR body (or fix its findings, then run it again); do not request a review`;
+const noReviewReason = (pull, need, cliOnly) => (pull.draft === true ? NO_REVIEW_DRAFT_REASON : need.unverified ? NO_REVIEW_UNVERIFIED_REASON : cliOnly ? noReviewCliReason(pull.number) : NO_REVIEW_REASON);
+
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true, nowMs = Date.now(), carry = null }) {
   const head = pull.head.sha;
   const labels = pullLabelNames(pull);
   const dependabot = isDependabotPr(pull, commits);
@@ -875,6 +1047,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   let coderabbitLimited = null;
   let coderabbitRateLimited = null;
   let coderabbitRetryMinutes = null;
+  let coderabbitCarried = null;
   if (need.coderabbit) {
     const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt, nowMs });
     coderabbit = cr.status;
@@ -888,7 +1061,10 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
       reasons.push(`CodeRabbit ${cr.notice === 'skipped' ? 'skipped the review of' : 'review failed on'} the head (PR-bot review did not run; CLI/plugin output does not count)`);
     } else if (!cr.reviewedHead) {
       // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
-      reasons.push('no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one');
+      // A Minor-only review of an earlier head plus a small push stands for the head (the carry); every other case asks for a review.
+      const carryResult = carriedReview({ carry, reviews, head, comments, labels, cr, body: pull.body });
+      coderabbitCarried = carryResult.carried;
+      if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
     }
     if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);
   }
@@ -900,6 +1076,9 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
     reviewed: reviewedHead, reviewedHead, unavailable,
     coderabbit, coderabbitReviewedHead,
+    // { from, deltaLines }: READY took a Minor-only CodeRabbit review of the earlier head `from`, plus a push of `deltaLines` lines or fewer, for this head.
+    // null otherwise. coderabbitReviewedHead stays false for a carry: the head itself was not reviewed.
+    coderabbitCarried,
     // N from "Outside diff range comments (N)" in the newest CodeRabbit review of the head. 0 when none. Blocks READY until handled.
     coderabbitOutsideDiff: outsideDiff,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
@@ -916,7 +1095,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     rateLimited: unavailable && need.greptile,
     // Every bot in `routing.required` reviewed the head (Greptile: reviewedHead; CodeRabbit: coderabbitReviewedHead).
     // True when no bot is required. The pr-loop mod keys on this, not on the Greptile-only `reviewedHead`.
-    routedReviewed: (!need.greptile || reviewedHead) && (!need.coderabbit || coderabbitReviewedHead === true),
+    routedReviewed: (!need.greptile || reviewedHead) && (!need.coderabbit || coderabbitReviewedHead === true || coderabbitCarried !== null),
     // Which bots the labels require. `held` is a note, never a reason. `source` is 'default' with no review:* or risk:* label.
     routing: { required: [...(need.greptile ? ['greptile'] : []), ...(need.coderabbit ? ['coderabbit'] : [])], held: need.held, source: need.source, ...(need.unverified ? { unverified: need.unverified } : {}) },
     // P4b: the PR body proof. status is 'ok', 'missing' (no Proof type line), 'invalid', 'exempt' (Dependabot) or 'off' (other repos).
@@ -941,50 +1120,99 @@ function readGreptileAuto(baseRef) {
   return greptileAutoFrom(JSON.parse(Buffer.from(doc.content ?? '', 'base64').toString('utf8')));
 }
 
-function main() {
-  if (!pr) { console.error('usage: review-status.mjs <pr-number> [--repo owner/name] [--json]'); process.exit(2); }
+/** The value of fn(), or null when it throws: a failed carry fetch makes the PR not eligible, never an error. */
+function attempt(fn) {
+  try { return fn(); } catch { return null; }
+}
+
+/**
+ * The four reads the carry needs, only for a PR whose CodeRabbit review does not name the head. Each read that fails is null,
+ * and carryBlockers turns a null into "not eligible". The router config comes from the BASE branch: a PR must not lower its own bar.
+ */
+function readCarry({ pull, reviews }) {
+  const newest = newestCodeRabbitReview(reviews);
+  if (!newest?.id || !newest.commit_id) return null;
+  const files = attempt(() => gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/files?per_page=100`]).flat());
+  return {
+    reviewComments: attempt(() => gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews/${newest.id}/comments?per_page=100`]).flat()),
+    compare: attempt(() => gh([`repos/${owner}/${name}/compare/${newest.commit_id}...${pull.head.sha}`])),
+    // changed_files must match the list read: a short or long list is not the PR's files. Above 300 files: not eligible.
+    prFiles: files && files.length === pull.changed_files && files.length <= 300 ? files : null,
+    config: attempt(() => JSON.parse(Buffer.from(gh([`repos/${owner}/${name}/contents/review-router.config.json?ref=${encodeURIComponent(pull.base.ref)}`]).content ?? '', 'base64').toString('utf8'))),
+  };
+}
+
+/** Does this result want the carry? CodeRabbit is required, did not review the head and did not rate limit, skip or fail. */
+// A draft or an unrouted PR can never carry (scopeBlockers), so it pays for no read.
+const wantsCarry = (r) => r.routing.required.includes('coderabbit') && r.coderabbitReviewedHead === false && r.coderabbitLimited === false
+  && !r.isDraft && !r.routing.unverified;
+
+/**
+ * Evaluate once without the carry. Only a PR that wants it pays for the reads and the dynamic import. matchGlob lives in
+ * review-router.mjs, which imports this file, so it is imported here and not at the top.
+ */
+async function evaluateWithCarry(inputs, readCarryFn) {
+  const first = evaluate(inputs);
+  if (!wantsCarry(first)) return first;
+  const carry = inputs.carry ?? readCarryFn(inputs);
+  const matchGlob = await import('./review-router.mjs').then((m) => m.matchGlob, () => undefined);
+  return carry ? evaluate({ ...inputs, carry: { ...carry, matchGlob } }) : first;
+}
+
+/** --fixture <file>: the evaluate inputs as JSON (plus carry, with no matchGlob). No gh call. The result says fixture: true. */
+const fixturePath = opt('--fixture', null);
+
+/** Every gh read evaluate needs, for the live PR. A truncated page or a moved head throws: "cannot determine". */
+function readLiveInputs() {
+  const pull = gh([`repos/${owner}/${name}/pulls/${pr}`]);
+  // Page sizes are explicit, and a truncated page is "cannot determine", never READY:
+  // a failing check or open thread past the first page must not be dropped silently.
+  const combined = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/status?per_page=100`]);
+  if ((combined.total_count ?? 0) > (combined.statuses || []).length) throw new Error(`more than ${combined.statuses.length} commit statuses`);
+  const runsDoc = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/check-runs?per_page=100`]);
+  const checkRuns = runsDoc.check_runs;
+  if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
+  // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
+  // Comments: the first 100, with body, author and 20 edits each in ONE response, so the parsed body and its edit
+  // history cannot come from different moments. More than 100 is "cannot determine", like threads.
+  // commits(last:1) is the head commit, for the CodeRabbit notice date.
+  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+  const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
+  const prq = g.data.repository.pullRequest;
+  const rt = prq.reviewThreads;
+  if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
+  if (prq.comments.pageInfo.hasNextPage) throw new Error('more than 100 comments');
+  // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them.
+  const restComments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
+  // REST finds the candidates; only the GraphQL body is parsed.
+  const { comments, commentEdits } = mergeGraphqlComments(restComments, prq.comments.nodes);
+  const greptileAuto = readGreptileAuto(pull.base.ref);
+  // Every PR reads the reviews: outside-diff findings in a CodeRabbit review body block READY whatever the labels.
+  const reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
+  const headCommit = prq.commits.nodes[0]?.commit;
+  const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
+  // The GraphQL read must describe the head the REST read saw; a push in between is "cannot determine".
+  // headRefOid, not the commit list: an empty list must still reach evaluate, which then denies the exemption.
+  if (prq.headRefOid !== pull.head.sha) throw new Error(`head moved during the read (${String(prq.headRefOid).slice(0, 7)} vs ${pull.head.sha.slice(0, 7)})`);
+  // Every commit's author account and GitHub signature, for the Dependabot rule. More than 100 commits = unknown.
+  const ac = prq.allCommits;
+  const commits = ac.totalCount > ac.nodes.length ? [] : ac.nodes.map((n) => ({
+    author: n.commit.author?.user?.login ?? null,
+    githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
+  }));
+  return {
+    pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
+    proofGate: PROOF_REPOS.has(repo.toLowerCase()),
+  };
+}
+
+async function main() {
+  if (!pr && !fixturePath) { console.error('usage: review-status.mjs <pr-number> [--repo owner/name] [--json] [--fixture file]'); process.exit(2); }
   let result;
   try {
-    const pull = gh([`repos/${owner}/${name}/pulls/${pr}`]);
-    // Page sizes are explicit, and a truncated page is "cannot determine", never READY:
-    // a failing check or open thread past the first page must not be dropped silently.
-    const combined = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/status?per_page=100`]);
-    if ((combined.total_count ?? 0) > (combined.statuses || []).length) throw new Error(`more than ${combined.statuses.length} commit statuses`);
-    const runsDoc = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/check-runs?per_page=100`]);
-    const checkRuns = runsDoc.check_runs;
-    if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
-    // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
-    // Comments: the first 100, with body, author and 20 edits each in ONE response, so the parsed body and its edit
-    // history cannot come from different moments. More than 100 is "cannot determine", like threads.
-    // commits(last:1) is the head commit, for the CodeRabbit notice date.
-    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
-    const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
-    const prq = g.data.repository.pullRequest;
-    const rt = prq.reviewThreads;
-    if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
-    if (prq.comments.pageInfo.hasNextPage) throw new Error('more than 100 comments');
-    // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them.
-    const restComments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
-    // REST finds the candidates; only the GraphQL body is parsed.
-    const { comments, commentEdits } = mergeGraphqlComments(restComments, prq.comments.nodes);
-    const greptileAuto = readGreptileAuto(pull.base.ref);
-    // Every PR reads the reviews: outside-diff findings in a CodeRabbit review body block READY whatever the labels.
-    const reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
-    const headCommit = prq.commits.nodes[0]?.commit;
-    const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
-    // The GraphQL read must describe the head the REST read saw; a push in between is "cannot determine".
-    // headRefOid, not the commit list: an empty list must still reach evaluate, which then denies the exemption.
-    if (prq.headRefOid !== pull.head.sha) throw new Error(`head moved during the read (${String(prq.headRefOid).slice(0, 7)} vs ${pull.head.sha.slice(0, 7)})`);
-    // Every commit's author account and GitHub signature, for the Dependabot rule. More than 100 commits = unknown.
-    const ac = prq.allCommits;
-    const commits = ac.totalCount > ac.nodes.length ? [] : ac.nodes.map((n) => ({
-      author: n.commit.author?.user?.login ?? null,
-      githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
-    }));
-    result = evaluate({
-      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
-      proofGate: PROOF_REPOS.has(repo.toLowerCase()),
-    });
+    result = fixturePath
+      ? { ...(await evaluateWithCarry(JSON.parse(readFileSync(fixturePath, 'utf8')), () => null)), fixture: true }
+      : await evaluateWithCarry(readLiveInputs(), readCarry);
   } catch (err) {
     console.error(`review-status: could not determine (${String(err.message).split('\n')[0]})`);
     process.exit(2);
@@ -1007,4 +1235,9 @@ function isDirectRun() {
   try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
   catch { return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)); }
 }
-if (isDirectRun()) main();
+if (isDirectRun()) {
+  main().catch((err) => {
+    console.error(`review-status: could not determine (${String(err?.message).split('\n')[0]})`);
+    process.exit(2);
+  });
+}
