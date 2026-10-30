@@ -97,11 +97,6 @@ function findStoreCall(mock: { mock: { calls: unknown[][] } }): any[] | undefine
   });
 }
 
-/** The first spawnSync call whose argv contains store_learning.py. */
-function storeCall(): any[] | undefined {
-  return findStoreCall(spawnSyncMock);
-}
-
 /**
  * VESTIGIAL as of 2026-07-29: hook-error-pipeline is archived, so nothing in this
  * file writes the marker any more. The cleanup is kept because it is free and the
@@ -170,16 +165,25 @@ describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
   // a module nothing loads is what made the sibling arscontexta fossils survive a
   // month of red. The two live producers below still carry their QW-01 coverage.
 
-  it('user-confirmation-detector.ts: USER_PREFERENCE store via spawnSync with raw content', async () => {
+  it('user-confirmation-detector.ts: USER_PREFERENCE store via detached spawn with raw content', async () => {
     const mod: any = await import('../user-confirmation-detector.js');
     const fn = mod.storeUserConfirmedLearning;
     expect(typeof fn, 'storeUserConfirmedLearning must be exported').toBe('function');
 
-    await fn('sess-3', INJECTION, null, OPC_DIR);
+    // 14: the store is dispatched DETACHED through the injected spawnFn (the 60 s
+    // spawnSync could never finish under the 5 s hook timeout). The hook returns at once.
+    const child = { pid: 99, unref: vi.fn() };
+    const seamSpawn = vi.fn(() => child as any);
+    const t0 = Date.now();
+    await fn('sess-3', INJECTION, null, OPC_DIR, { spawnFn: seamSpawn });
+    expect(Date.now() - t0, 'the hook must return at once').toBeLessThan(500);
 
     expect(execSyncMock).not.toHaveBeenCalled();
-    const call = storeCall();
-    expect(call, 'spawnSync should have been called with store_learning.py').toBeDefined();
+    expect(spawnSyncMock, 'the store must not block on spawnSync').not.toHaveBeenCalled();
+    const call = findStoreCall(seamSpawn);
+    expect(call, 'spawnFn should have been called with store_learning.py').toBeDefined();
+    expect((call![2] as any).detached, 'the store must be detached').toBe(true);
+    expect(child.unref, 'the child must be unreffed').toHaveBeenCalled();
 
     const argv = call![1];
     expect(Array.isArray(argv)).toBe(true);
@@ -196,7 +200,7 @@ describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
     expect(opts.shell).not.toBe(true);
   });
 
-  it('user-confirmation-detector.ts: WORKING_SOLUTION store via spawnSync with raw content', async () => {
+  it('user-confirmation-detector.ts: WORKING_SOLUTION store via detached spawn with raw content', async () => {
     const mod: any = await import('../user-confirmation-detector.js');
     const fn = mod.storeVictoryFromConfirmation;
     expect(typeof fn, 'storeVictoryFromConfirmation must be exported').toBe('function');
@@ -214,11 +218,16 @@ describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
       current_turn: 5,
     };
 
-    await fn(state, INJECTION, OPC_DIR);
+    const child = { pid: 99, unref: vi.fn() };
+    const seamSpawn = vi.fn(() => child as any);
+    await fn(state, INJECTION, OPC_DIR, { spawnFn: seamSpawn });
 
     expect(execSyncMock).not.toHaveBeenCalled();
-    const call = storeCall();
-    expect(call, 'spawnSync should have been called with store_learning.py').toBeDefined();
+    expect(spawnSyncMock, 'the store must not block on spawnSync').not.toHaveBeenCalled();
+    const call = findStoreCall(seamSpawn);
+    expect(call, 'spawnFn should have been called with store_learning.py').toBeDefined();
+    expect((call![2] as any).detached, 'the store must be detached').toBe(true);
+    expect(child.unref, 'the child must be unreffed').toHaveBeenCalled();
 
     const argv = call![1];
     expect(Array.isArray(argv)).toBe(true);

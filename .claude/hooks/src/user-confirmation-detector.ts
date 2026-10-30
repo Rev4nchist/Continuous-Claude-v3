@@ -18,9 +18,10 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { writeStateWithLock } from './shared/atomic-write.js';
 import { isHarnessWrappedPrompt } from './shared/intent-extractor.js';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 
 interface UserPromptSubmitInput {
   session_id: string;
@@ -112,11 +113,61 @@ function isMemoryRequest(prompt: string): boolean {
   return MEMORY_SIGNALS.some(p => p.test(prompt));
 }
 
+/** Test seam: replaces child_process.spawn for the store dispatch. */
+export interface StoreDeps {
+  spawnFn?: typeof spawn;
+}
+
+/**
+ * Let go of a detached child, but only once the OS reports it running.
+ * `unref()` and an exit in the same tick kills the child (measured 2026-07-29,
+ * see releaseWhenRunning in agent-error-capture.ts). prompt-submit exits right
+ * after it writes, so the same rule applies here. Kept inline: importing it
+ * would pull agent-error-capture into this bundle.
+ */
+function releaseWhenRunning(child: { unref?: () => void; once?: (e: string, f: () => void) => void }): void {
+  const release = () => {
+    try {
+      child.unref?.();
+    } catch {
+      // Already gone.
+    }
+  };
+  if (typeof child.once !== 'function') {
+    release();
+    return;
+  }
+  child.once('spawn', release);
+  child.once('error', release);
+}
+
+/**
+ * Start store_learning.py and return at once. This was a 60 s spawnSync under a 5 s
+ * hook timeout: it could never finish, and it blocked every other prompt hook.
+ * Detached through the hidden-window relay, as agent-error-capture does (09ba655).
+ * Returns true when the dispatch did not throw, which is what `stored` always meant.
+ */
+function dispatchStore(args: string[], opcDir: string, spawnFn: typeof spawn): boolean {
+  try {
+    const child = spawnDetachedHidden(
+      'uv',
+      args,
+      { cwd: opcDir, shell: false, detached: true, stdio: 'ignore', windowsHide: true },
+      spawnFn,
+    );
+    releaseWhenRunning(child);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function storeUserConfirmedLearning(
   sessionId: string,
   prompt: string,
   context: string | null,
-  projectDir: string
+  projectDir: string,
+  deps: StoreDeps = {}
 ): Promise<boolean> {
   const opcDir = getOpcDir();
 
@@ -132,38 +183,28 @@ export async function storeUserConfirmedLearning(
   const script = 'scripts/core/store_learning.py';
   const cappedContent = content.slice(0, 1000);
 
-  try {
-    spawnSync(
-      'uv',
-      [
-        'run', 'python', script,
-        '--session-id', sessionId,
-        '--type', 'USER_PREFERENCE',
-        '--content', cappedContent,
-        '--context', 'user confirmation',
-        '--tags', 'user_confirmed,verified',
-        '--confidence', 'high',
-        '--source', 'hook',
-        '--project-dir', projectDir,
-      ],
-      {
-        encoding: 'utf-8',
-        cwd: opcDir,
-        timeout: 60000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        shell: false,
-      }
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  return dispatchStore(
+    [
+      'run', 'python', script,
+      '--session-id', sessionId,
+      '--type', 'USER_PREFERENCE',
+      '--content', cappedContent,
+      '--context', 'user confirmation',
+      '--tags', 'user_confirmed,verified',
+      '--confidence', 'high',
+      '--source', 'hook',
+      '--project-dir', projectDir,
+    ],
+    opcDir,
+    deps.spawnFn ?? spawn,
+  );
 }
 
 export async function storeVictoryFromConfirmation(
   state: SmarterState,
   prompt: string,
-  projectDir: string
+  projectDir: string,
+  deps: StoreDeps = {}
 ): Promise<boolean> {
   const opcDir = getOpcDir();
 
@@ -188,47 +229,46 @@ ${failedApproaches ? `Failed approaches: ${failedApproaches}` : ''}`;
   const contextStr = `Victory (user confirmed): ${state.context || state.tracked_file}`;
   const tagsStr = `victory,verified,user_confirmed,attempts:${state.attempts}`;
 
+  return dispatchStore(
+    [
+      'run', 'python', script,
+      '--session-id', state.session_id,
+      '--type', 'WORKING_SOLUTION',
+      '--content', cappedContent,
+      '--context', contextStr,
+      '--tags', tagsStr,
+      '--confidence', 'high',
+      '--source', 'hook',
+      '--project-dir', projectDir,
+    ],
+    opcDir,
+    deps.spawnFn ?? spawn,
+  );
+}
+
+/**
+ * The job. Takes the raw stdin text so prompt-submit can run it in one process with
+ * the other prompt hooks. Returns what main() prints. Never writes to stdout.
+ */
+export async function runUserConfirmationDetector(input: string): Promise<object> {
   try {
-    spawnSync(
-      'uv',
-      [
-        'run', 'python', script,
-        '--session-id', state.session_id,
-        '--type', 'WORKING_SOLUTION',
-        '--content', cappedContent,
-        '--context', contextStr,
-        '--tags', tagsStr,
-        '--confidence', 'high',
-        '--source', 'hook',
-        '--project-dir', projectDir,
-      ],
-      {
-        encoding: 'utf-8',
-        cwd: opcDir,
-        timeout: 60000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        shell: false,
-      }
-    );
-    return true;
-  } catch {
-    return false;
+    return await detectConfirmation(input);
+  } catch (err) {
+    console.error('user-confirmation-detector error:', err);
+    return { continue: true };
   }
 }
 
-async function main() {
-  const input = await readStdin();
+async function detectConfirmation(input: string): Promise<object> {
   if (!input.trim()) {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
 
   let data: UserPromptSubmitInput;
   try {
     data = JSON.parse(input);
   } catch {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
 
   const prompt = data.prompt?.trim() || '';
@@ -237,8 +277,7 @@ async function main() {
 
   // Skip empty or very short prompts
   if (prompt.length < 3) {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
 
   // UserPromptSubmit also fires for task notifications and subagent hand-backs. Their text
@@ -246,8 +285,7 @@ async function main() {
   // "User confirmed" memories (2026-09-23 eval, P29). Only a human's prompt can confirm.
   // Explicit wrappers only: a long or XML-heavy HUMAN prompt must still be able to confirm.
   if (isHarnessWrappedPrompt(prompt)) {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
 
   let message: string | null = null;
@@ -302,7 +340,11 @@ async function main() {
     systemMessage: message || undefined
   };
 
-  console.log(JSON.stringify(output));
+  return output;
+}
+
+async function main() {
+  console.log(JSON.stringify(await runUserConfirmationDetector(await readStdin())));
 }
 
 async function readStdin(): Promise<string> {
@@ -314,9 +356,10 @@ async function readStdin(): Promise<string> {
   });
 }
 
-// Only auto-run when invoked directly as a hook (not when imported by tests).
-// process.argv[1] is the bundled dist filename when Claude Code runs the hook.
-if (process.argv[1] && process.argv[1].includes('user-confirmation-detector')) {
+// Only auto-run when invoked directly as a hook (not when imported by tests or by
+// prompt-submit). process.argv[1] is the bundled dist filename when Claude Code runs
+// the hook. Basename check, not `includes`: a directory named like a hook must not start it.
+if (/(^|[\\/])user-confirmation-detector\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
   main().catch(err => {
     console.error('user-confirmation-detector error:', err);
     console.log(JSON.stringify({ continue: true }));
