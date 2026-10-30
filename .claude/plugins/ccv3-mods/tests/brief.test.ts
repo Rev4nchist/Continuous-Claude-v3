@@ -56,6 +56,7 @@ import type { AgentRun, OsTask } from '../types'
 // P26 a block of only "None for now. I'm waiting on X" is no list instead of [], so old asks stay open
 // P27 a nothing-for-Dave form (None today, Nothing for you to do, No action needed, Waiting on X) becomes an ask
 // P28 an item that waits on Dave ("Waiting for your decision", a "?") is dropped
+// P30 "Waiting on Dave's approval" or "Nothing for me to do" is dropped, so an open ask on Dave is cleared
 // P29 a bare unbulleted "Nothing for you to do." line gives no list
 // E14c a "None for now" turn leaves the earlier ask open and the chip on waiting-on-dave
 
@@ -802,6 +803,13 @@ describe('parseTurnEnd on real answers', () => {
     const ask = parseTurnEnd(answer).ask
     expect(ask).toHaveLength(3)
     expect(ask?.[2]?.recommend).toBe('yes')
+  })
+
+  test('P30 an item that waits on Dave by name, or says only that the model has nothing to do, stays an ask', () => {
+    const waits = parseTurnEnd("## Next steps\n1. Waiting on Dave's approval.").ask
+    expect(waits).toHaveLength(1)
+    const mine = parseTurnEnd('## Next steps\n1. Nothing for me to do.').ask
+    expect(mine).toHaveLength(1)
   })
 
   test('P29 a bare unbulleted "Nothing for you to do." line under Next steps is an empty ask list', () => {

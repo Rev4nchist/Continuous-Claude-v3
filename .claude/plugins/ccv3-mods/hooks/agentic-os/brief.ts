@@ -417,8 +417,8 @@ const askOf = (item: string): AskItem => {
 
 const NEXT_STEPS = /^\s*(?:#{1,6}\s*|\*\*)next steps\s*:?\s*(?:\*\*)?\s*$/i
 const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
-/** A Next steps item that asks nothing of Dave: "None — waiting on X", "None for now. I'm waiting on X", "Nothing for you to do", "No action needed", "Waiting on the CI run". "None of the options fit" and "Waiting for your decision" stay asks. Anchored, no nested quantifier: linear on a long line. */
-const NO_ASK = /^(?:none\b(?!\s+of\b)|nothing\s+(?:(?:for\s+(?:you|dave|me)\s+)?to\s+do|needed|required|yet|for\s+now)\b|no\s+(?:action|input|reply)\s+(?:needed|required)\b|(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+(?!your?\b))/i
+/** A Next steps item that asks nothing of Dave: "None — waiting on X", "None for now. I'm waiting on X", "Nothing for you to do", "No action needed", "Waiting on the CI run". "None of the options fit", "Waiting for your decision", "Waiting on Dave's approval" and "Nothing for me to do" (the model's own state, not Dave's) stay asks. Anchored, no nested quantifier: linear on a long line. */
+const NO_ASK = /^(?:none\b(?!\s+of\b)|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|needed|required|yet|for\s+now)\b|no\s+(?:action|input|reply)\s+(?:needed|required)\b|(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+(?!(?:your?|dave)\b))/i
 /** An item with a question mark is always an ask, whatever its first word. */
 const noAsk = (text: string): boolean => !text.includes('?') && NO_ASK.test(text)
 
