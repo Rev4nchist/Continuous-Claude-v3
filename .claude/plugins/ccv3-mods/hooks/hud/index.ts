@@ -7,7 +7,7 @@ import { mergeParsed, parseStep } from '../agentic-os/brief'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
-import { seedHud, setSwitches } from './seed'
+import { forgetSeedCost, seedHud, setSwitches } from './seed'
 
 // HUD capture. The agentic-os band draws the row from these atoms (declared there under the same keys).
 // The HUD row is for interactive sessions only: a headless run has no band to read it. The context
@@ -71,12 +71,35 @@ const learnFromStep = async ($: EngineInterface, answer: unknown): Promise<void>
   }
 }
 
-/** A new conversation in the same process (`/clear`, or another session resumed in its place): its counts start over. */
+/**
+ * A resumed or forked conversation reports no context until its first response, but classic.SessionStart
+ * carries its transcript's size. That size stands in until the reply, which counts the last reply's output,
+ * so it reads slightly high. Only the window comes from usage(): its percent may still be the old conversation's.
+ * CCV3_MODS_OFF only, not isOff(): the figure is captured with the HUD off too.
+ */
+const seedCtx = async ($: EngineInterface, tokens: number): Promise<void> => {
+  if ((await $.env.get('CCV3_MODS_OFF')) === '1') return
+  const context = (await $.session.usage().catch(() => null))?.context
+  if (context === undefined) return
+  if (context.window > 0) await update($, ctx, () => Math.min(100, Math.round((tokens / context.window) * 100)))
+}
+
+/**
+ * A new conversation in the same process (`/clear`, or another session resumed in its place): its counts,
+ * context figure, advisor count and cost start over. The cost shows again at the next session.measure.
+ * Both states of the hud atom happen. A set one is edited here, so the row keeps the last step's model and effort.
+ * In the real engine (E2E 2026-10-30) it is already null by now: the next render or handler re-seeds it from the cached
+ * seed, so forgetSeedCost() keeps the old conversation's cost, and the startup $0.00, out of that seed.
+ */
 const reset = async ($: EngineInterface): Promise<void> => {
   if ((await $.env.get('CCV3_MODS_OFF')) === '1') return
+  forgetSeedCost()
   await update($, cache, () => EMPTY_CACHE)
   await update($, ctx, () => null)
+  await update($, hud, now => (now === null ? now : { ...now, costUsd: null, advisor: { ...now.advisor, calls: 0 } }))
 }
+
+const advisorOn = (model: string | undefined, calls: number) => ({ state: 'on' as const, ...(model === undefined ? {} : { model }), calls })
 
 const start = async ($: EngineInterface): Promise<void> => {
   if (await isOff($)) return
@@ -90,10 +113,12 @@ const start = async ($: EngineInterface): Promise<void> => {
   const advisor = advisorFrom(settings.advisorModel, await setSwitches($))
   const model = await $.session.model().catch(() => null)
   const usage = await $.session.usage().catch(() => null)
-  await update($, hud, () => ({
+  // A re-run start (reload, respawn, attach) keeps the advisor count (read here, so a step's increment is not lost) but takes
+  // the state from the settings as they are now: an advisor turned off or blocked since is not drawn "on". reset() zeroes the count.
+  await update($, hud, now => ({
     model,
     effort: null,
-    advisor,
+    advisor: { ...advisor, calls: now?.advisor.calls ?? 0 },
     costUsd: usage?.cost?.usd ?? null,
     limits: (usage?.rateLimits ?? []).map(({ kind, percentUsed }) => ({ kind, percentUsed })),
   }))
@@ -157,7 +182,7 @@ export const hudCapture = (on: On) => {
               effort,
               advisor:
                 advised > 0
-                  ? { state: 'on' as const, ...(now.advisor.model === undefined ? {} : { model: now.advisor.model }), calls: now.advisor.calls + advised }
+                  ? advisorOn(now.advisor.model, now.advisor.calls + advised)
                   : now.advisor,
             },
       )
@@ -189,12 +214,20 @@ export const hudCapture = (on: On) => {
   // may no longer hold, so a rewrite on its first request is flagged; a fresh one always writes, and is not.
   // The message count cannot tell them apart: a fresh first request here carries about 40 messages of hook
   // and memory context (probe, 2026-10-13: 41 fresh, 60 resumed). `compact` is not a new conversation.
+  // A resumed or forked transcript's size also stands in for the context figure until the first reply (seedCtx).
+  // Written with no condition, so it does not depend on what ctx held. If session.end fires after this event,
+  // reset() clears it and the HUD shows no ctx until the first reply.
   on('classic.SessionStart', async ($, e, next) => {
     try {
       if (e.source !== 'compact' && !(await isOff($))) {
         const resumed = e.source === 'resume' || e.source === 'fork'
         await update($, cache, now => (now.resumed === resumed ? now : { ...now, resumed }))
       }
+    } catch {
+      // Observer only.
+    }
+    try {
+      if ((e.source === 'resume' || e.source === 'fork') && typeof e.context_tokens === 'number') await seedCtx($, e.context_tokens)
     } catch {
       // Observer only.
     }
