@@ -248,12 +248,20 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    - Any level: a security, privacy or data finding that is new to you or unclear. Ask Dave before you
      fix or dismiss it.
    - Read the whole review body. CodeRabbit lists "Outside diff range comments (N)" there. They have no
-     thread, so no thread count shows them. READY (`review-status.mjs`) adds N over every CodeRabbit
-     review body of the PR. The body needs no "Actionable comments posted" sentence.
-     A push does not clear them. READY fails while that total is above the number of handled bullets.
+     thread, so no thread count shows them. READY (`review-status.mjs`) collects the findings from every CodeRabbit
+     review body of the PR and counts each marker id once. The body needs no "Actionable comments posted" sentence.
+     A push does not clear them. READY fails while a finding has no bullet that names it (gate A, finding identity).
+     A body with the heading and no marker ids falls back to the count N: it needs N bullets.
    - Fix each one, or list it in the PR body under the heading `Outside-diff: handled`. Write one
-     top-level bullet per finding, with the fix commit or the reason. READY needs one bullet per finding.
-     If a later review lists the same finding again, write one more bullet for it.
+     top-level bullet per finding, with the fix commit or the reason.
+     Each bullet names the finding by its CodeRabbit marker id (`cr-comment:v1:` plus exactly 24 hex characters,
+     written as a whole token) or by its `path:lines`. A marker of another length counts as no id.
+     Filler bullets do not count. A marker in an HTML comment does not count.
+     A nitpick needs no bullet.
+     READY reads only the quoted lines under the "Outside diff range comments (N)" heading.
+     It counts a finding repeated in two reviews once.
+     A review body with no markers falls back to the count: N findings need N bullets.
+     The READY reason lists each unnamed finding by id and `path:lines`.
    - Read every finding of the NEWEST round: inline, outside-diff and nitpick. Nobody may merge on a round that
      nobody read. READY blocks an open thread and an unhandled outside-diff finding. It has no gate for a
      nitpick, so you are that gate. In the 2026-10-30 study, 14 of 37 later rounds got no fix and no reply.
@@ -321,7 +329,8 @@ Packaging rules:
 - Open fewer, larger PRs: bundle related work in one area into one PR (Dave, 2026-10-30).
 - Larger PRs need fewer rounds: 0 to 10 file PRs average 2.2 rounds, 26 to 60 file PRs average 1.75.
 - Round 1 bills every reviewable file, so a round 1 over 20 files goes past the $5 cap and needs Dave.
-- `docs/**`, `thoughts/**` and vendored skills are not reviewed, so they add no cost.
+- `docs/**`, `thoughts/**` and vendored skills are not reviewed.
+  Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` leaves them out of its estimate.
 - Run the Claude review and the `pre-pr.mjs` CLI review before round 1.
 - Push once per fix round.
 
@@ -475,6 +484,25 @@ checkout: `git worktree add --detach <tmp> main`, then in `<tmp>` run
 (`C:\Program Files\Git\bin\bash.exe`; `bash` on PATH is WSL), then `git worktree remove <tmp>`.
 Never hand-copy a synced file into `~/.claude`: the next sync quarantines it.
 Every step is idempotent; re-run after a partial failure.
+
+Gate C, the pre-merge re-check: `land-pr.ps1` records the time of its last READY check.
+Right before the merge call, it runs `node scripts/github/land-recheck.mjs`. That script re-reads the PR, its reviews, its comments and the head's commit statuses.
+It reads the comments with their edit history, through the same reader READY uses (`readIssueComments`).
+It refuses, and nothing merges, in four cases:
+
+1. The head SHA changed.
+2. A CodeRabbit review, or an edit of the CodeRabbit summary comment, is newer than the READY check.
+3. A person's `@coderabbitai review` or `@coderabbitai full review` comment is newer than the last CodeRabbit review with a body
+   and newer than the CodeRabbit summary comment, when that summary is trusted, covers the head and is not a notice. A review is in flight.
+   A clean on-demand round can end as a summary edit with no new review object. That edit answers the request.
+   Trusted is the READY rule (`trustedCodeRabbitSummary`): a summary a person or another app edited, or one with no readable edit history, answers nothing.
+4. The CodeRabbit commit status on the head is pending.
+
+Exit 1 is a refusal. Exit 2 is a read error or a bad payload. `land-pr.ps1` treats both as a refusal and prints "Nothing was merged".
+`land-pr.ps1` takes the READY time from the local clock minus a 120-second margin, before the READY check reads the PR, and prints the margin.
+A review that landed in the 120 seconds before the READY check counts as new, so a local clock that runs ahead of GitHub cannot hide it.
+A clock skew can still refuse a PR by seconds. The check fails closed.
+`-IgnoreReview` still bypasses the READY check and the re-check. It prints a skip line. Post the reason on the PR.
 
 ## Repos still on CodeRabbit
 
