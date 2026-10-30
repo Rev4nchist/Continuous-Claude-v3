@@ -1,7 +1,7 @@
 // Tests for review-status.mjs. Run: node --test scripts/github/review-status.test.mjs
 // READY and NOT READY outcomes, plus the fields the pr-loop mod reads.
 import { test } from 'node:test';
-import { readFileSync, symlinkSync, unlinkSync, rmdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, symlinkSync, unlinkSync, rmdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -1787,7 +1787,7 @@ test('outside-diff F4: the count is the sum over every CodeRabbit review, whatev
 
 test('outside-diff F4: a newer CodeRabbit review of the head with no review sentence (a thread reply) does not reset N', () => {
   // GitHub can record a reply to a review comment as an extra COMMENTED review with an empty body.
-  // Only reviews that carry the "Actionable comments posted: N" sentence are real PR-bot reviews (see L282).
+  // A reply review holds no "Outside diff range comments (N)" heading, so it adds 0 and cannot reset the sum.
   const count = odFn('codeRabbitOutsideDiff');
   const reply = (body) => odReview(HEAD, null, T2, { body });
   for (const [name, body] of [['empty body', ''], ['null body', null], ['short text without the sentence', 'Thanks, noted.']]) {
@@ -2641,4 +2641,171 @@ test('RC26: the PR file list decides, by new or old name; a missing list or a co
   const bad = { status: 'ahead', ahead_by: 1, files: [{ filename: 'other/m.mjs', additions: 'x', deletions: 0 }, { filename: 'scripts/x.mjs', additions: 1, deletions: 0 }] };
   assert.equal(carried(carryEval({ carry: carryOf({ compare: bad }) })), false, 'a bad count in a file outside the PR is still unreadable');
   assert.equal(carried(carryEval({ carry: carryOf({ compare: { status: 'ahead', files: [] } }) })), true, 'an empty compare counts 0 lines');
+});
+
+// ---------------------------------------------------------------------------------------------
+// PR D follow-up C2 (2026-10-30): the carry ignored real CodeRabbit rounds, and its blockers were invisible.
+// Ways it can fail, one test each:
+//   a clean round that left only the summary comment (live PR 213: 0 review objects) needs a paid review   -> C2a
+//   a summary that is not a clean, trusted, reviewed round (notice, findings, edited by a person) is carried  -> C2b
+//   a summary-only round is ranked wrongly against a review object (an older clean summary beats a newer Major,
+//     or a newer clean summary is ignored behind an older Major review object, or it erases that object's findings) -> C2c
+//   an outside-diff-only review (live PR 205 review 5691905341: no "Actionable comments posted") blocks      -> C2d
+//   a body with no sentence and nothing to read, or a Major outside-diff finding, is carried                 -> C2e
+//   carry blockers stay hidden: not in the result, or an existing reason text changes                        -> C2f
+//   carry blockers are not printed in the non-JSON output under the reasons                                  -> C2g
+// ---------------------------------------------------------------------------------------------
+const BASE_SHA = 'e'.repeat(40);
+// Shape of the live coderabbitai[bot] summary comment of PR 213 (the picture and details markup is cut; the marker, the
+// "No actionable comments" sentence, the "between <sha> and <sha>" line and the coverage marker are verbatim).
+const CR_SUMMARY_ONLY = (covered, { id = 800, at = '2026-10-28T12:00:00Z', sentence = 'No actionable comments were generated in the recent review.' } = {}) => ({
+  id, user: CR_BOT, created_at: at, updated_at: at,
+  body: `<!-- coderabbit-ai-generated:v1 -->\n\n${SUMMARY_MARKER}\n<!-- review_stack_entry_start -->\n<!-- review_stack_entry_end -->\n<!-- recent_review_start -->\n\n${sentence}\n\n`
+    + `Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${covered}.\n\n`
+    + `<!-- final_review_risk_coverage:{"sourceCommitId":"${covered}","coveredCommitId":"${covered}","kind":"reviewed"} -->\n`,
+});
+const summaryOnly = (summary, over = {}) => carryEval({ evalOver: { reviews: [], comments: [summary], commentEdits: { [summary.id]: [] }, ...over } });
+
+test('C2a: a clean round of an earlier head that left only the summary comment (live PR 213 shape) is a carry source', () => {
+  const r = summaryOnly(CR_SUMMARY_ONLY(OLD));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.deepEqual(r.coderabbitCarried, { from: OLD, deltaLines: 12 });
+  assert.equal(r.coderabbitReviewedHead, false, 'the head itself was not reviewed');
+  assert.deepEqual(r.coderabbitCarryBlockers, []);
+});
+
+test('C2b: a summary that is not a trusted clean reviewed round is not a carry source', () => {
+  const notReady = (r, why) => { assert.equal(r.coderabbitCarried, null, why); assert.equal(r.ready, false, why); };
+  notReady(summaryOnly(CR_SUMMARY_ONLY(OLD, { sentence: 'Actionable comments posted: 2' })), 'a summary that states findings');
+  notReady(summaryOnly({ ...CR_SKIPPED_155, id: 800 }), 'a review skipped notice');
+  const person = [{ editor: { login: 'Rev4nchist', __typename: 'User' } }];
+  notReady(summaryOnly(CR_SUMMARY_ONLY(OLD), { commentEdits: { 800: person } }), 'a summary a person edited');
+  notReady(summaryOnly(CR_SUMMARY_ONLY(OLD), { commentEdits: {} }), 'a summary with no edit history');
+  const impostor = { ...CR_SUMMARY_ONLY(OLD), user: { login: 'someone', type: 'User' } };
+  notReady(summaryOnly(impostor), 'a copy of the marker from a person');
+  const noCoverage = CR_SUMMARY_ONLY(OLD);
+  noCoverage.body = noCoverage.body.replace(/<!-- final_review_risk_coverage.*-->/, '').replace(/between \w+ and \w+/, 'between nothing');
+  notReady(summaryOnly(noCoverage), 'a summary that names no reviewed commit');
+});
+
+test('C2c: a summary-only round and a review object rank by time; the same commit goes to the review object', () => {
+  const MAJOR_OBJ = { ...CR_OLD_REVIEW, id: 710, commit_id: OLD, submitted_at: '2026-10-28T10:00:00Z', body: 'Actionable comments posted: 1' };
+  const major = carryOf({ reviewComments: [{ id: 1, body: MAJOR_206 }] });
+  const H2 = 'd'.repeat(40);
+  const ev = (summary, cli = CLI_LINE()) => carryEval({ carry: major, cli, evalOver: { reviews: [MAJOR_OBJ], comments: [summary], commentEdits: { 800: [] } } });
+  // A clean summary-only round at H2 AFTER a Major review object at OLD: the later clean coverage is the source.
+  assert.deepEqual(ev(CR_SUMMARY_ONLY(H2, { at: '2026-10-28T12:00:00Z' }), CLI_LINE(H2)).coderabbitCarried, { from: H2, deltaLines: 12 });
+  // The same clean summary BEFORE the Major review object: the Major round is the newest source.
+  const older = ev(CR_SUMMARY_ONLY(H2, { at: '2026-10-28T09:00:00Z' }), CLI_LINE(H2));
+  assert.equal(older.coderabbitCarried, null);
+  assert.equal(older.ready, false);
+  // The summary covers the SAME commit as the Major review object: the object has the findings, the summary does not erase them.
+  assert.equal(ev(CR_SUMMARY_ONLY(OLD, { at: '2026-10-28T12:00:00Z' })).coderabbitCarried, null);
+});
+
+// Shape of the live review 5691905341 on PR 205: the body starts at "Outside diff range comments (2)" and has no "Actionable comments posted".
+const outsideOnly = (severity = 'Minor') => '<!-- coderabbit-ai-generated:v1 -->\n\n\n\n> [!CAUTION]\n> Some comments are outside the diff and can’t be posted inline due to GitHub limitations.\n> \n'
+  + '> **⚠️ Outside diff range comments (2)**\n> \n'
+  + `> <details>\n> <summary><strong><picture><img alt=""></picture> ${severity}</strong> · Reject negated stop clauses at…</summary><blockquote>\n> **\u{1F3AF} Functional Correctness** | **\u{1F7E1} ${severity}** | **⚡ Quick win**\n> </blockquote></details>\n`
+  + `> <details>\n> <summary><strong><picture><img alt=""></picture> ${severity}</strong> · Second finding</summary><blockquote>\n> **\u{1F3AF} Functional Correctness** | **\u{1F7E1} ${severity}** | **⚡ Quick win**\n> </blockquote></details>\n`;
+const outsideReview = (body) => ({ ...CR_OLD_REVIEW, id: 5691905341, body });
+
+test('C2d: an outside-diff-only review with no review sentence (live PR 205 shape) counts as 0 inline comments and carries when Minor and handled', () => {
+  const r = carryEval({ carry: carryOf({ reviewComments: [] }), cli: `${CLI_LINE()}${HANDLED(2)}`, evalOver: { reviews: [outsideReview(outsideOnly('Minor'))] } });
+  assert.deepEqual(r.coderabbitCarried, { from: OLD, deltaLines: 12 }, r.reasons.join('; '));
+  assert.deepEqual(r.coderabbitCarryBlockers, []);
+});
+
+test('C2e: with no review sentence, a Major outside-diff finding, an unreadable body or a Major inline comment is not carried', () => {
+  const none = (body, rc = []) => carryEval({ carry: carryOf({ reviewComments: rc }), evalOver: { reviews: [outsideReview(body)] } });
+  assert.equal(none(outsideOnly('Major')).coderabbitCarried, null, 'Major in the outside-diff section');
+  assert.equal(none('Thanks. I will look at this again later, there is nothing else to report here.').coderabbitCarried, null, 'no sentence, no outside-diff section, no marker: nothing to read');
+  assert.equal(none(outsideOnly('Minor'), [{ id: 1, body: MAJOR_206 }]).coderabbitCarried, null, 'a Major inline comment next to it');
+  assert.equal(none(outsideOnly('Minor').replace(/Minor/g, 'Plain')).coderabbitCarried, null, 'outside-diff findings with no marker');
+});
+
+test('C2f: carry blockers are in the result as strings; a carried PR has none; the missing-review reason text is unchanged', () => {
+  const blocked = carryEval({ cli: null });
+  assert.ok(Array.isArray(blocked.coderabbitCarryBlockers) && blocked.coderabbitCarryBlockers.length > 0, 'blockers are listed');
+  assert.ok(blocked.coderabbitCarryBlockers.every((b) => typeof b === 'string'));
+  assert.ok(blocked.coderabbitCarryBlockers.some((b) => /CLI fix review/.test(b)), blocked.coderabbitCarryBlockers.join('; '));
+  assert.ok(!blocked.reasons.some((x) => blocked.coderabbitCarryBlockers.includes(x)), 'blockers are a separate field, not extra reasons');
+  const major = carryEval({ carry: carryOf({ reviewComments: [{ id: 1, body: MAJOR_206 }] }) });
+  assert.deepEqual(major.coderabbitCarryBlockers, ['an inline comment is major']);
+  assert.deepEqual(carryEval().coderabbitCarryBlockers, []);
+  assert.deepEqual(evaluate(input()).coderabbitCarryBlockers, [], 'a PR that does not need CodeRabbit lists none');
+  assert.equal(blocked.reasons.find((x) => CARRY_REASON.test(x)), RS.noReviewCliReason(blocked.pr), 'reason text unchanged');
+});
+
+test('C2g: the non-JSON output prints the carry blockers under the reasons (fixture run, no gh call)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rs-c2g-'));
+  try {
+    const i = routed(['review:coderabbit', 'risk:normal'], { input: NO_GREPTILE, eval: { reviews: [CR_OLD_REVIEW], carry: carryOf({ matchGlob: undefined, reviewComments: [{ id: 1, body: MAJOR_206 }] }) } });
+    i.pull.body = `${i.pull.body}\n${CLI_LINE()}\n`;
+    const file = path.join(dir, 'in.json');
+    writeFileSync(file, JSON.stringify(i));
+    const script = fileURLToPath(new URL('./review-status.mjs', import.meta.url));
+    const text = spawnSync(process.execPath, [script, '--fixture', file], { encoding: 'utf8' });
+    assert.equal(text.status, 1, text.stdout + text.stderr);
+    const lines = text.stdout.split('\n');
+    const lastReason = Math.max(...lines.map((l, k) => (l.startsWith('  - ') ? k : -1)));
+    const at = lines.findIndex((l) => l.includes('an inline comment is major'));
+    assert.ok(at > lastReason, `the blocker line comes after the last reason:\n${text.stdout}`);
+    const json = spawnSync(process.execPath, [script, '--fixture', file, '--json'], { encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(json.stdout).coderabbitCarryBlockers, ['an inline comment is major']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Verifier round 2 (2026-10-30), items 2 and 3.
+// Ways it can fail, one test each:
+//   a CodeRabbit review body that starts at "Outside diff range comments (N)" (no sentence) counts 0   -> OD-A (live PR 205, PR 221)
+//   the carry passes and READY never asks for "Outside-diff: handled" for those findings             -> OD-B
+//   a coverage marker that is not "reviewed" falls back to the "between <sha> and <sha>" line         -> SC-A, SC-B
+// ---------------------------------------------------------------------------------------------
+const LIVE_205 = fixtureText('pr205-review-5691905341-outside-only.md');
+const LIVE_221 = fixtureText('pr221-review-5712203534-outside-only.md');
+const liveReview = (id, commit, body, at = T1) => ({ id, user: CR_BOT, commit_id: commit, submitted_at: at, body });
+
+test('OD-A: outside-diff findings count in a review body with no "Actionable comments posted" sentence (live PR 205 and PR 221 bodies)', () => {
+  const count = RS.codeRabbitOutsideDiff;
+  assert.ok(!/Actionable comments posted/.test(LIVE_205 + LIVE_221), 'the live bodies hold no review sentence');
+  assert.equal(count({ head: HEAD, reviews: [liveReview(5691905341, OLD, LIVE_205)] }), 2);
+  assert.equal(count({ head: HEAD, reviews: [liveReview(5712203534, OLD, LIVE_221)] }), 5);
+  assert.equal(count({ head: HEAD, reviews: [liveReview(5691905341, OLD, LIVE_205), liveReview(5712203534, HEAD, LIVE_221, T2)] }), 7, 'old and head reviews add up');
+  assert.equal(count({ head: HEAD, reviews: [liveReview(5691905341, OLD, LIVE_205), liveReview(5691905341, OLD, LIVE_205)] }), 2, 'the same review id counts once');
+  assert.equal(count({ head: HEAD, reviews: [{ ...liveReview(1, OLD, LIVE_205), user: { login: 'someone', type: 'User' } }] }), 0, 'only the CodeRabbit app');
+  assert.equal(count({ head: HEAD, reviews: [liveReview(2, OLD, 'Thanks, noted.')] }), 0, 'a reply with no heading');
+});
+
+test('OD-B: a carried Minor round whose body lists outside-diff findings with no sentence needs "Outside-diff: handled"', () => {
+  const ev = (cli) => carryEval({ carry: carryOf({ reviewComments: [] }), cli, evalOver: { reviews: [outsideReview(LIVE_205)] } });
+  const open = ev(CLI_LINE());
+  assert.equal(open.coderabbitOutsideDiff, 2);
+  assert.equal(open.ready, false, 'the carry alone must not clear the findings');
+  const why = open.reasons.find((x) => /outside.diff/i.test(x));
+  assert.ok(why.startsWith('CodeRabbit lists 2 outside-diff finding(s) across its reviews of this PR (head aaaaaaa) and the PR body "Outside-diff: handled" list has 0.'), why);
+  const done = ev(`${CLI_LINE()}${HANDLED(2)}`);
+  assert.equal(done.ready, true, done.reasons.join('; '));
+  assert.deepEqual(done.coderabbitCarried, { from: OLD, deltaLines: 12 });
+});
+
+const coverage = (kind, covered, bodyCovered = covered) => {
+  const s = CR_SUMMARY_ONLY(bodyCovered);
+  s.body = s.body.replace(/<!-- final_review_risk_coverage.*-->/, `<!-- final_review_risk_coverage:{"sourceCommitId":"${covered}","coveredCommitId":"${covered}","kind":"${kind}"} -->`);
+  return s;
+};
+const roundOf = (summary) => RS.newestCodeRabbitRound({ reviews: [], comments: [summary], commentEdits: { [summary.id]: [] }, head: HEAD });
+
+test('SC-A: a coverage marker whose kind is not "reviewed" gives no covered commit, though a "between" line names one', () => {
+  assert.deepEqual(roundOf(coverage('reviewed', OLD)), { id: null, commit_id: OLD, body: '', summaryOnly: true }, 'control: a reviewed marker is a source');
+  for (const kind of ['skipped', 'partial', 'Reviewed', '']) assert.equal(roundOf(coverage(kind, OLD)), null, `kind "${kind}"`);
+});
+
+test('SC-B: a coverage marker that cannot be read gives no covered commit; the marker wins over the "between" line', () => {
+  const broken = CR_SUMMARY_ONLY(OLD);
+  broken.body = broken.body.replace(/<!-- final_review_risk_coverage.*-->/, '<!-- final_review_risk_coverage:{"kind":"reviewed","coveredCommitId": -->');
+  assert.equal(roundOf(broken), null);
+  const other = 'c'.repeat(40);
+  assert.equal(roundOf(coverage('reviewed', other, OLD)).commit_id, other, 'the reviewed marker names the commit');
 });
