@@ -20,6 +20,7 @@ import {
 } from './review-status.mjs';
 // P4b proof gate: parseProof, PROOF_REASON_PREFIX, PROOF_TYPES, PROOF_REPOS, docsHeadVerified.
 import * as RS from './review-status.mjs';
+import { matchGlob as matchGlobFn } from './review-router.mjs';
 
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
@@ -667,7 +668,8 @@ test('CodeRabbit comment editors: the rule also holds through mergeGraphqlCommen
 });
 
 test('CodeRabbit: a missing review tells the agent to post @coderabbitai review after a push; a rate limit does not', () => {
-  const missing = evaluate(crInput(HEAD, []));
+  // PR D: an unrouted head gets "re-run the review-router workflow" instead (RC14); this test is about a routed head.
+  const missing = evaluate(crInput(HEAD, [routerComment(HEAD)]));
   assert.ok(missing.reasons.some((x) => /no CodeRabbit PR-bot review of the head/.test(x) && /@coderabbitai review/.test(x)), missing.reasons.join('; '));
   const limited = evaluate(crInput(HEAD, [], [], { combined: { statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited' }] } }));
   assert.ok(limited.reasons.length > 0);
@@ -685,7 +687,7 @@ test('CodeRabbit: a notice naming the previous head, posted after the new head w
   const NEW_HEAD = 'c'.repeat(40);
   const OLD_HEAD = HEAD155; // the notice names this commit
   // Notice posted 01:00, new head committed 00:30 (earlier), pushed after the notice.
-  const r = evaluate(crInput(NEW_HEAD, [CR_SKIPPED_155]));
+  const r = evaluate(crInput(NEW_HEAD, [CR_SKIPPED_155, routerComment(NEW_HEAD)]));
   assert.equal(r.coderabbitLimited, false, r.reasons.join('; '));
   assert.equal(r.coderabbitReviewedHead, false);
   assert.ok(r.reasons.some((x) => /no CodeRabbit PR-bot review of the head/.test(x) && /@coderabbitai review/.test(x)), r.reasons.join('; '));
@@ -2211,4 +2213,252 @@ test('RS6: DRAFT_REASON is exported and is the reason a draft carries; a draft i
   const draft = evaluate(routed(['review:none'], { draft: true, eval: { comments: [NONE_STATE()] } }));
   assert.ok(draft.reasons.includes(RS.DRAFT_REASON), draft.reasons.join('; '));
   assert.equal(draft.ready, false);
+});
+
+// ---------------------------------------------------------------------------------------------
+// PR D: READY accepts a CodeRabbit review of an earlier head (the carry), and the missing-review reason text.
+// Ways it can fail, one test each:
+//   the severity reader calls a Major finding minor (a Major fix then merges unreviewed)   -> SV1
+//   it calls a Minor finding major, or reads the word "Major" in prose as a marker           -> SV2, SV4
+//   it reads the REVIEW BODY of a round for a marker (the body has none; only inline ones do) -> SV4
+//   an outside-diff or nitpick finding in the body is missed                                  -> SV3, RC3
+//   the carry is not built (a Minor-only round plus a small push still asks for a new review) -> RC1
+//   a Major, Critical or unmarked finding is carried                                          -> RC2, RC3, RC4
+//   the 30-line limit is off by one, or counts only additions                                 -> RC5
+//   a force-push (diverged) or a behind compare is carried                                    -> RC6
+//   a critical, parser or renamed critical file is carried                                    -> RC7
+//   an r3 or risk:high PR is carried                                                          -> RC8
+//   a router state of another head, or a pending CodeRabbit status, is carried               -> RC9, RC10
+//   the carry hides an unresolved thread, or drops the Greptile need of a both PR             -> RC11, RC13
+//   a missing or failed input is read as eligible                                             -> RC12
+//   a newer CodeRabbit review without the review sentence is skipped for an older one         -> RC15
+//   the draft or unrouted reason tells a person to post "@coderabbitai review"                -> RC14
+// ---------------------------------------------------------------------------------------------
+const fixtureText = (name) => readFileSync(new URL(`./fixtures/coderabbit-severity/${name}`, import.meta.url), 'utf8');
+const MAJOR_206 = fixtureText('pr206-inline-major.md');
+const MINOR_205 = fixtureText('pr205-inline-minor.md');
+const BODY_204 = fixtureText('pr204-body-outside-minor-nitpick-trivial.md');
+const BODY_206 = fixtureText('pr206-review-body-no-marker.md');
+// No real Critical sample was available; this one has the shape of the real Major header with the word changed.
+const CRITICAL = MAJOR_206.replace('</picture> Major**', '</picture> Critical**');
+const UNMARKED = '<!-- coderabbit-ai-generated:v1 -->\n\nA finding with no severity header.';
+const REAL_CONFIG = JSON.parse(readFileSync(new URL('../../review-router.config.json', import.meta.url), 'utf8'));
+
+const sevFn = () => {
+  assert.equal(typeof RS.codeRabbitSeverity, 'function', 'review-status.mjs must export codeRabbitSeverity');
+  return RS.codeRabbitSeverity;
+};
+
+test('SV1: the real PR #206 inline comment (Major) reads as major', () => {
+  assert.equal(sevFn()(MAJOR_206), 'major');
+});
+
+test('SV2: the real PR #205 inline comment (Minor) reads as minor', () => {
+  assert.equal(sevFn()(MINOR_205), 'minor');
+});
+
+test('SV3: the real PR #204 review body (outside-diff Minor, nitpick Trivial) reads as minor; Trivial and Nitpick are minor', () => {
+  assert.equal(sevFn()(BODY_204), 'minor');
+  assert.equal(sevFn()('<picture></picture> Trivial** and <picture></picture> Nitpick**'), 'minor');
+});
+
+test('SV4: a marker is the severity after the icon; prose, a review body with no marker and an empty text are unknown; the highest wins', () => {
+  const sev = sevFn();
+  assert.equal(sev(BODY_206), 'unknown', 'the #206 review body has no marker (the Major one is inline)');
+  assert.equal(sev('This is a Major problem and a Critical one.'), 'unknown', 'prose is not a marker');
+  assert.equal(sev(''), 'unknown');
+  assert.equal(sev(null), 'unknown');
+  assert.equal(sev(CRITICAL), 'critical');
+  assert.equal(sev(`${MINOR_205}\n${MAJOR_206}`), 'major', 'the highest marker in a text wins');
+  assert.equal(sev(`${MAJOR_206}\n${CRITICAL}`), 'critical');
+  assert.equal(sev('**\u{1F7E0} Major**'), 'major', 'the emoji form of the outside-diff blockquote');
+  assert.equal(sev('**\u{1F7E1} Minor**'), 'minor');
+});
+
+// The scenario of a Minor-only round plus a small fix push. routed() builds a PR the router classed on HEAD.
+const CR_OLD_REVIEW = { id: 701, user: CR_BOT, commit_id: OLD, submitted_at: '2026-10-28T10:00:00Z', body: 'Actionable comments posted: 1' };
+const compareOf = (lines, over = {}) => ({ status: 'ahead', ahead_by: 1, files: [{ filename: 'scripts/x.mjs', additions: lines, deletions: 0 }], ...over });
+const carryOf = (over = {}) => ({
+  reviewComments: [{ id: 1, body: MINOR_205 }], compare: compareOf(12), prFiles: [{ filename: 'scripts/x.mjs' }], config: REAL_CONFIG,
+  matchGlob: matchGlobFn, ...over,
+});
+const carryEval = ({ labels = ['review:coderabbit', 'risk:normal'], carry = carryOf(), evalOver = {}, ...over } = {}) => {
+  const i = routed(labels, { input: NO_GREPTILE, eval: { reviews: [CR_OLD_REVIEW], carry, ...evalOver }, ...over });
+  return evaluate(i);
+};
+const CARRY_REASON = /no CodeRabbit PR-bot review of the head commit/;
+
+test('RC1: a Minor-only round on an earlier head plus a 12-line push is READY, with the carry named', () => {
+  const r = carryEval();
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.coderabbitReviewedHead, false, 'the head itself was not reviewed');
+  assert.deepEqual(r.coderabbitCarried, { from: OLD, deltaLines: 12 });
+  assert.equal(r.routedReviewed, true);
+  assert.equal(r.routing.unverified, undefined);
+});
+
+test('RC1b: every other result carries coderabbitCarried: null (a head review, no CodeRabbit need, no carry)', () => {
+  const onHead = carryEval({ evalOver: { reviews: [{ ...CR_OLD_REVIEW, commit_id: HEAD }] } });
+  assert.equal(onHead.coderabbitCarried, null);
+  assert.equal(onHead.ready, true, onHead.reasons.join('; '));
+  assert.equal(evaluate(input()).coderabbitCarried, null, 'Greptile-only PR');
+  assert.equal(carryEval({ carry: null }).coderabbitCarried, null);
+});
+
+test('RC2: an inline Major is not carried: NOT READY with the missing-review reason', () => {
+  const r = carryEval({ carry: carryOf({ reviewComments: [{ id: 1, body: MAJOR_206 }] }) });
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+  assert.ok(r.reasons.some((x) => CARRY_REASON.test(x)), r.reasons.join('; '));
+  assert.equal(r.routedReviewed, false);
+});
+
+test('RC3: a Critical inline, or a Major in the outside-diff or nitpick part of the body, is not carried', () => {
+  assert.equal(carryEval({ carry: carryOf({ reviewComments: [{ id: 1, body: CRITICAL }] }) }).ready, false);
+  const outside = 'Actionable comments posted: 1\n> **Outside diff range comments (1)**\n> <summary><strong><picture></picture> Major</strong> x</summary>';
+  const r = carryEval({ evalOver: { reviews: [{ ...CR_OLD_REVIEW, body: outside }] } });
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+  const nit = 'Actionable comments posted: 1\n<summary><picture></picture> Nitpick comments: 1</summary>\n`5-9`: **<picture></picture> Critical** · x';
+  assert.equal(carryEval({ evalOver: { reviews: [{ ...CR_OLD_REVIEW, body: nit }] } }).coderabbitCarried, null);
+});
+
+test('RC4: a finding with no marker, or fewer markers than "Actionable comments posted", is not carried (unknown counts as Major)', () => {
+  assert.equal(carryEval({ carry: carryOf({ reviewComments: [{ id: 1, body: UNMARKED }] }) }).coderabbitCarried, null);
+  const two = { evalOver: { reviews: [{ ...CR_OLD_REVIEW, body: 'Actionable comments posted: 2' }] } };
+  assert.equal(carryEval({ ...two, carry: carryOf({ reviewComments: [{ id: 1, body: MINOR_205 }] }) }).coderabbitCarried, null, '1 of 2 comments read');
+  assert.equal(carryEval({ ...two, carry: carryOf({ reviewComments: [{ id: 1, body: MINOR_205 }, { id: 2, body: MINOR_205 }] }) }).ready, true, 'both read and marked');
+  const outside = { evalOver: { reviews: [{ ...CR_OLD_REVIEW, body: 'Actionable comments posted: 1\n> **Outside diff range comments (1)**\n> a finding with no marker' }] } };
+  assert.equal(carryEval(outside).coderabbitCarried, null, 'an outside-diff finding without a marker');
+  // N counts inline comments only (live PR 204: N 1, one inline comment, one more finding outside the diff): an outside-diff marker is no inline comment.
+  const marked = { evalOver: { reviews: [{ ...CR_OLD_REVIEW, body: 'Actionable comments posted: 1\n> **Outside diff range comments (1)**\n> <summary><strong><picture></picture> Minor</strong> x</summary>' }] } };
+  assert.equal(carryEval({ ...marked, carry: carryOf({ reviewComments: [] }) }).coderabbitCarried, null, 'N 1 but no inline comment read');
+  const both = carryEval({ ...marked, carry: carryOf() });
+  assert.deepEqual(both.coderabbitCarried, { from: OLD, deltaLines: 12 }, 'one inline Minor plus one outside-diff Minor is carried');
+  assert.ok(both.reasons.some((x) => /outside-diff finding/.test(x)), 'the outside-diff count still needs its handled list');
+});
+
+test('RC5: the carry limit is 30 lines of additions plus deletions: 30 is READY, 31 is not', () => {
+  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(30) }) }).ready, true);
+  const over = carryEval({ carry: carryOf({ compare: compareOf(31) }) });
+  assert.equal(over.ready, false);
+  assert.equal(over.coderabbitCarried, null);
+  const mixed = (a, d) => carryOf({ compare: compareOf(0, { files: [{ filename: 'a', additions: a, deletions: d }, { filename: 'b', additions: 5, deletions: 5 }] }) });
+  assert.deepEqual(carryEval({ carry: mixed(10, 10) }).coderabbitCarried, { from: OLD, deltaLines: 30 }, 'deletions and a second file count');
+  assert.equal(carryEval({ carry: mixed(10, 11) }).coderabbitCarried, null);
+  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: [{ filename: 'a', additions: 0, deletions: 30 }] }) }) }).ready, true, 'a deletion-only push of 30');
+});
+
+test('RC5b: a file that counts no lines (binary, pure rename) counts as one, and a full compare file list is not trusted', () => {
+  const binaries = Array.from({ length: 31 }, (_, i) => ({ filename: `img${i}.png`, additions: 0, deletions: 0 }));
+  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: binaries }) }) }).coderabbitCarried, null, '31 binary files are 31 lines');
+  const capped = Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}`, additions: 0, deletions: 0 }));
+  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: capped }) }) }).coderabbitCarried, null);
+  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: [{ filename: 'a', additions: 'x', deletions: 0 }] }) }) }).coderabbitCarried, null, 'a non-number');
+});
+
+test('RC6: a force-push (diverged), a behind compare and any status but ahead are not carried', () => {
+  for (const status of ['diverged', 'behind', 'identical', undefined]) {
+    const r = carryEval({ carry: carryOf({ compare: compareOf(3, { status }) }) });
+    assert.equal(r.ready, false, String(status));
+    assert.equal(r.coderabbitCarried, null, String(status));
+  }
+});
+
+test('RC7: a PR file that matches a critical or parser glob, or the old name of a renamed one, is not carried', () => {
+  const only = (prFiles) => carryEval({ carry: carryOf({ prFiles }) });
+  assert.equal(only([{ filename: 'scripts/x.mjs' }, { filename: 'scripts/github/land-pr.ps1' }]).coderabbitCarried, null, 'critical');
+  assert.equal(only([{ filename: '.claude/hooks/src/package-install-guard.ts' }]).coderabbitCarried, null, 'parser');
+  assert.equal(only([{ filename: 'scripts/old-name.ps1', previous_filename: 'scripts/github/land-pr.ps1' }]).coderabbitCarried, null, 'renamed away from a critical file');
+  assert.equal(only([{ filename: '.claude/hooks/src/other-guard.ts' }]).coderabbitCarried, null, 'a *-guard.ts glob');
+  assert.equal(only([{ filename: 'scripts/x.mjs' }]).ready, true);
+});
+
+test('RC8: an r3 class or a risk:high label is not carried', () => {
+  const r3 = carryEval({ router: false, evalOver: { comments: [stateComment(HEAD, 'class=r3 head=HEAD')] } });
+  assert.equal(r3.coderabbitCarried, null);
+  const high = carryEval({ labels: ['review:coderabbit', 'risk:high'] });
+  assert.equal(high.coderabbitCarried, null);
+  assert.equal(high.ready, false);
+});
+
+test('RC9: a router state of another head is not carried (Greptile stays required)', () => {
+  const r = carryEval({ router: OLD });
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+});
+
+test('RC10: a pending CodeRabbit status is not carried; a success or absent status is', () => {
+  const status = (state) => ({ context: 'CodeRabbit', state, description: 'x' });
+  const pending = carryEval({ input: { ...NO_GREPTILE, statuses: [status('pending')] } });
+  assert.equal(pending.coderabbitCarried, null);
+  assert.equal(pending.coderabbit, 'pending');
+  assert.equal(carryEval({ input: { ...NO_GREPTILE, statuses: [status('success')] } }).ready, true);
+});
+
+test('RC11: a carry does not clear an unresolved thread or a failing check', () => {
+  const r = carryEval({ input: { ...NO_GREPTILE, threads: [{ isResolved: false }] } });
+  assert.equal(r.ready, false);
+  assert.deepEqual(r.coderabbitCarried, { from: OLD, deltaLines: 12 });
+  assert.ok(r.reasons.some((x) => /review thread\(s\) unresolved/.test(x)), r.reasons.join('; '));
+  assert.ok(!r.reasons.some((x) => CARRY_REASON.test(x)), 'the carry removes only the missing-review reason');
+  const ci = carryEval({ input: { ...NO_GREPTILE, statuses: [{ context: 'ci', state: 'failure' }] } });
+  assert.equal(ci.ready, false);
+  assert.ok(ci.reasons.some((x) => /status "ci" is failure/.test(x)));
+});
+
+test('RC12: any missing input or failed fetch is not eligible, never an error', () => {
+  for (const [name, carry] of [
+    ['no carry', null],
+    ['no inline comments', carryOf({ reviewComments: null })],
+    ['no compare', carryOf({ compare: null })],
+    ['no PR files', carryOf({ prFiles: null })],
+    ['no config', carryOf({ config: null })],
+    ['a config with no checkpoint lists', carryOf({ config: {} })],
+    ['no matchGlob', carryOf({ matchGlob: undefined })],
+    ['a matchGlob that throws', carryOf({ matchGlob: () => { throw new Error('bad glob'); } })],
+  ]) {
+    const r = carryEval({ carry });
+    assert.equal(r.ready, false, name);
+    assert.equal(r.coderabbitCarried, null, name);
+    assert.ok(r.reasons.some((x) => CARRY_REASON.test(x)), `${name}: ${r.reasons.join('; ')}`);
+  }
+  assert.equal(typeof RS.carryBlockers, 'function', 'review-status.mjs must export carryBlockers');
+  const direct = RS.carryBlockers({});
+  assert.ok(Array.isArray(direct) && direct.length > 0, 'carryBlockers({}) returns reasons and does not throw');
+});
+
+test('RC13: the carry does not drop the Greptile need of a pathway=both PR', () => {
+  const both = stateComment(HEAD, 'class=infra head=HEAD pathway=both');
+  const r = carryEval({ router: false, evalOver: { comments: [both] } });
+  assert.equal(r.routing.required.includes('greptile'), true);
+  assert.equal(r.ready, false, 'Greptile has not reviewed');
+  assert.ok(r.reasons.some((x) => /Greptile/.test(x)), r.reasons.join('; '));
+});
+
+test('RC15: when a newer CodeRabbit review has no review sentence, an older Minor-only round is not carried', () => {
+  const newer = { id: 702, user: CR_BOT, commit_id: 'd'.repeat(40), submitted_at: '2026-10-28T11:00:00Z', body: 'Outside diff range comments (1) only, no sentence' };
+  const r = carryEval({ evalOver: { reviews: [CR_OLD_REVIEW, newer] } });
+  assert.equal(r.coderabbitCarried, null);
+  assert.equal(r.ready, false);
+  const empty = { id: 703, user: CR_BOT, commit_id: HEAD, submitted_at: '2026-10-28T12:00:00Z', body: '' };
+  assert.equal(carryEval({ evalOver: { reviews: [CR_OLD_REVIEW, empty] } }).ready, true, 'an empty thread-reply review is no round');
+  const person = { id: 704, user: { login: 'Rev4nchist', type: 'User' }, commit_id: HEAD, submitted_at: '2026-10-28T12:00:00Z', body: 'x' };
+  assert.equal(carryEval({ evalOver: { reviews: [CR_OLD_REVIEW, person] } }).ready, true, 'a person review is not CodeRabbit');
+});
+
+test('RC14: the missing-review reason names /pathway for a draft and the router workflow for an unrouted PR; a routed PR keeps the old text', () => {
+  assert.equal(RS.NO_REVIEW_DRAFT_REASON, 'no CodeRabbit PR-bot review of the head commit. Draft: run /pathway; do not request a review');
+  assert.equal(RS.NO_REVIEW_UNVERIFIED_REASON, 'no CodeRabbit PR-bot review of the head commit; re-run the review-router workflow for this head; do not request a review');
+  const noReview = (r) => r.reasons.find((x) => CARRY_REASON.test(x));
+  const draft = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, draft: true }));
+  assert.equal(noReview(draft), RS.NO_REVIEW_DRAFT_REASON);
+  const unrouted = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, router: false }));
+  assert.equal(noReview(unrouted), RS.NO_REVIEW_UNVERIFIED_REASON);
+  const routedPr = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE }));
+  assert.equal(noReview(routedPr), 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one');
+  for (const r of [draft, unrouted]) {
+    assert.ok(!r.reasons.some((x) => CARRY_REASON.test(x) && /@coderabbitai review/.test(x)), 'no text asks for a review');
+    assert.ok(!r.reasons.some((x) => x.includes('/checkpoint')), '/checkpoint is a built-in of Claude Code');
+  }
 });

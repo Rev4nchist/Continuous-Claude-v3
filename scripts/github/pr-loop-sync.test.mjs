@@ -60,3 +60,14 @@ test('the mod holds the same ROUTER_NONE_UNVERIFIED_NOTE, NONE_NO_CHECKPOINT_NOT
     assert.equal(modelHolds(name), RS[name], `model.ts ${name} differs from review-status.mjs`);
   }
 });
+
+// PR D (Dave 2026-10-29): the opening ask waits 30 minutes. The wait is a constant and the ask text names it; one without the other
+// tells Dave a time that the mod does not wait.
+test('the mod waits OPENING_WAIT_MS before the opening ask and its ask text names the same number of minutes', () => {
+  const wait = /export const OPENING_WAIT_MS = (\d+) \* 60_000/.exec(MODEL);
+  assert.ok(wait, 'model.ts no longer declares OPENING_WAIT_MS as <minutes> * 60_000');
+  const said = /CodeRabbit has not started on #\$\{status\.pr\} (\d+) minutes after ready/.exec(MODEL);
+  assert.ok(said, 'model.ts no longer words the opening ask as "has not started on #N <minutes> minutes after ready"');
+  assert.equal(said[1], wait[1], 'the ask text and OPENING_WAIT_MS name different minutes');
+  assert.equal(Number(wait[1]), 30);
+});

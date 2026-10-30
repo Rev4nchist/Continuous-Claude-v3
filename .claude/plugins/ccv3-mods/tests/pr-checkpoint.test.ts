@@ -37,7 +37,8 @@ import type { Engine } from 'claude-code/testing'
 // K21 the model is not told the outcome (session.append row), or the tell costs a turn
 // K22 the kill switches (CCV3_MODS_OFF, CCV3_PR_CHECKPOINT_OFF) leave a tool, command or lock behind
 // A1  the round ask: text, order (No first), count from the stored capacity, grant on Yes, decline on No, no post
-// A2  the opening ask: 15 minutes, Yes first, exactly one @coderabbitai review on Yes   A2d No on the opening ask posts nothing and is not asked twice
+// A2  the opening ask: 30 minutes, Yes first, exactly one @coderabbitai review on Yes   A2d No on the opening ask posts nothing and is not asked twice
+// A2b no opening ask at 29 minutes, the ask at 30   A2f no opening ask while the CodeRabbit status is pending
 // A3  the Greptile ask: once, No first   A1-A3 first button: hotkey 1, autoFocus, primary look, "(Recommended)"
 // A5  a second press of Yes while the first still posts spends a second review (one gh pr comment per press, for the opening and the Greptile ask)
 // K2b a second press of an option while the first still records runs the engine twice
@@ -1034,13 +1035,13 @@ describe('pr-checkpoint: asks from the watcher', () => {
   const watchDoc = (extra: Rec = {}) => ({ [WATCH]: { prs: [{ pr: 7, state: null, whenReady: false, ...extra }], backoffUntil: 0, touched: NOW } })
   const record = (over: Rec = {}) => ({
     pr: 7, state: 'applied', head: HEAD, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], decided_by: 'default',
-    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 11 * MIN, ...over,
+    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 26 * MIN, ...over,
   })
   const REVIEWED = (rounds: number) => status(7, {
     reasons: ['1 review thread(s) unresolved'], unresolved: 1, coderabbitReviewedHead: true, routedReviewed: true, coderabbitRounds: rounds, coderabbitRequests: Math.max(0, rounds - 1),
   })
   const asksOf = (store: Map<string, unknown>) => (store.get(ASKS) ?? []) as Rec[]
-  // Clock anchor (critic finding 14): the 15 minutes of the opening ask run from `appliedAt`, the moment the mod's --apply succeeded.
+  // Clock anchor (critic finding 14): the 30 minutes of the opening ask run from `appliedAt`, the moment the mod's --apply succeeded.
   // That is when the engine marked the PR ready, so it is "since the PR left draft" (plan 4.2). A2 and A2b move `appliedAt`, not a PR field.
   /** The first button of an ask pane is the recommendation: same look as the first option in K1. */
   const expectRecommendedFirst = async (pane: Pane, order: [string, string]) => {
@@ -1107,7 +1108,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave declined round 4 for #7')
   })
 
-  test('A2 an opening ask 15 minutes after ready: Yes is first (the recommendation) and posts exactly one @coderabbitai review', async ($, on) => {
+  test('A2 an opening ask 30 minutes after ready: Yes is first (the recommendation) and posts exactly one @coderabbitai review', async ($, on) => {
     const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet } })
     await start($)
@@ -1115,7 +1116,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     const asks = asksOf(w.store)
     expect(asks.length).toBe(1)
     expect(asks[0]!.kind).toBe('opening')
-    expect(String(asks[0]!.text)).toContain('CodeRabbit has not started on #7 15 minutes after ready')
+    expect(String(asks[0]!.text)).toContain('CodeRabbit has not started on #7 30 minutes after ready')
     const pane = await mountPane($)
     await expectRecommendedFirst(pane, ['ask-yes', 'ask-no'])
     await pane.press({ key: 'ask-yes' })
@@ -1183,16 +1184,45 @@ describe('pr-checkpoint: asks from the watcher', () => {
     })
   }
 
-  test('A2b the opening ask waits for 15 minutes after ready', async ($, on) => {
+  test('A2b the opening ask waits for 30 minutes after ready: none at 29 minutes, the ask at 30', async ($, on) => {
     const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit'] })
-    const early = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ appliedAt: NOW }) }, statuses: { 7: quiet } })
+    // The first check runs one TICK (5 minutes) after the start. appliedAt 24 minutes back makes that check 29 minutes after ready.
+    const early = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ appliedAt: NOW - 24 * MIN }) }, statuses: { 7: quiet } })
     await start($)
     await early.clock.advance(TICK)
     expect(asksOf(early.store)).toEqual([])
     expect(early.seen.opens).toEqual([])
-    await early.clock.advance(TICK * 3)
+    await early.clock.advance(TICK)
     expect(asksOf(early.store).map(ask => ask.kind)).toEqual(['opening'])
   })
+
+  test('A2b2 the opening ask comes at exactly 30 minutes after ready', async ($, on) => {
+    const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+    const exact = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ appliedAt: NOW - 25 * MIN }) }, statuses: { 7: quiet } })
+    await start($)
+    await exact.clock.advance(TICK)
+    expect(asksOf(exact.store).map(ask => ask.kind)).toEqual(['opening'])
+  })
+
+  test('A2f (guard) no opening ask while the CodeRabbit status is pending: the review may be starting; the ask comes when it is not', async ($, on) => {
+    const pending = status(7, { coderabbit: 'pending', reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+    const wait = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: pending } })
+    await start($)
+    await wait.clock.advance(TICK)
+    await wait.clock.advance(TICK)
+    expect(asksOf(wait.store)).toEqual([])
+    expect(wait.seen.opens).toEqual([])
+  })
+
+  for (const coderabbit of ['absent', 'success']) {
+    test(`A2g the same PR with the CodeRabbit status ${coderabbit} (not pending) gets the opening ask`, async ($, on) => {
+      const quiet = status(7, { coderabbit, reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet } })
+      await start($)
+      await w.clock.advance(TICK)
+      expect(asksOf(w.store).map(ask => ask.kind)).toEqual(['opening'])
+    })
+  }
 
   test('A2c (guard) the opening ask is not asked while CodeRabbit is rate limited', async ($, on) => {
     const limited = status(7, { coderabbitLimited: true, coderabbitRateLimited: true, reasons: ['CodeRabbit rate limited: head not reviewed'] })

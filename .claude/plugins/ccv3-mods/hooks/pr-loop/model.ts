@@ -28,6 +28,10 @@ export type PrStatus = {
   routedReviewed?: boolean
   /** CodeRabbit PR-bot review on the head. Null when the labels do not require CodeRabbit. */
   coderabbitReviewedHead?: boolean | null
+  /** The CodeRabbit commit status on the head: pending, success, failure, error or absent. Null when the labels do not require CodeRabbit. Absent from older scripts. */
+  coderabbit?: string | null
+  /** READY took a Minor-only CodeRabbit review of the earlier head `from` plus a push of `deltaLines` lines or fewer. Null otherwise. Absent from older scripts. */
+  coderabbitCarried?: { from: string; deltaLines: number } | null
   /** N from "Outside diff range comments (N)" in the newest CodeRabbit review of the head. Those findings make no thread. Absent from older scripts. */
   coderabbitOutsideDiff?: number
   /** The bots the PR labels require. Absent from older scripts: Greptile is the reviewer then. */
@@ -443,7 +447,7 @@ export const landCommand = (root: string, pr: number): string => `pwsh -File "${
 export const clipTail = (text: string, max: number): string => (text.length <= max ? text : `...${text.slice(text.length - max)}`)
 
 /** The opening review waits this long after the PR left draft before Dave is asked to request it. */
-export const OPENING_WAIT_MS = 15 * 60_000
+export const OPENING_WAIT_MS = 30 * 60_000
 
 /** The checkpoint record of a PR, or null when the stored value lacks the fields the asks read. */
 export const readRecord = (value: unknown): CheckpointRecord | null => {
@@ -476,7 +480,8 @@ const askAt = (status: PrStatus, kind: CheckpointAsk['kind'], text: string, roun
  * The one question the checkpoint pane asks Dave about this PR now, or null. Pure; the caller queues it once.
  * - round: CodeRabbit reviewed the head (REVIEWED) or skipped it (LIMITED, not a rate limit) and the rounds bought reach the budget.
  *   A grant for that round, or a No on it, ends the ask.
- * - opening: a coderabbit or both PR with no CodeRabbit round 15 minutes after the mod's --apply (the PR left draft), not rate limited.
+ * - opening: a coderabbit or both PR with no CodeRabbit round 30 minutes after the mod's --apply (the PR left draft), not rate limited, and
+ *   not while the CodeRabbit commit status is pending (a review may be starting; the ask comes at a later check if it is not).
  * - greptile: a both PR, CodeRabbit reviewed the head, nothing unresolved, Greptile has not. Once per PR.
  * An older status script has no round count: no round ask, and the opening ask reads the count as 0.
  */
@@ -497,12 +502,12 @@ export const askFor = (record: CheckpointRecord | null, status: PrStatus, now: n
     return askAt(status, 'round', `Round ${round} of ${opening}+${extra} for #${status.pr}. Spend 1 more? 7d ≈${typeof count === 'number' ? count : 'unknown'}`, round)
   }
   // An older status script has no round count: no CodeRabbit review and no request on the PR reads as round 0.
-  if ((rounds ?? 0) === 0 && (status.coderabbitRequests ?? 0) === 0 && !reviewed && !limited && status.coderabbitLimited !== true && !record.opened && record.declined?.kind !== 'opening') {
+  if ((rounds ?? 0) === 0 && (status.coderabbitRequests ?? 0) === 0 && !reviewed && !limited && status.coderabbitLimited !== true && status.coderabbit !== 'pending' && !record.opened && record.declined?.kind !== 'opening') {
     if (now - (record.appliedAt ?? now) < OPENING_WAIT_MS) return null
     return askAt(
       status,
       'opening',
-      `CodeRabbit has not started on #${status.pr} 15 minutes after ready. Post one @coderabbitai review? It counts as the opening review (round 1 of ${opening}+${extra}).`,
+      `CodeRabbit has not started on #${status.pr} 30 minutes after ready. Post one @coderabbitai review? It counts as the opening review (round 1 of ${opening}+${extra}).`,
       1,
     )
   }
