@@ -334,7 +334,10 @@ hold. `review-status.mjs --json` then prints `coderabbitCarried: { from, deltaLi
   not-clean line blocks the carry.
 - The CodeRabbit status is not pending. CI is green. The proof GREEN line names the head.
 
-Any missing fact blocks the carry. Then READY asks for a review of the head as before. A carry does
+When only the CLI line blocks the carry, the reason says to run `node scripts/github/cr-fix.mjs --pr <N>` and put its
+line in the PR body; it does not ask for a review. Do not post `@coderabbitai review` for it.
+
+Any other missing fact blocks the carry. Then READY asks for a review of the head as before. A carry does
 not clear unresolved threads, outside-diff findings or the Greptile requirement.
 
 READY checks the shape and the head. It does not judge whether RED really failed. The reviewer does.

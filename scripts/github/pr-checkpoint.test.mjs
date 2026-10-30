@@ -57,8 +57,9 @@
 //       gh call shapes (pinned; every call ends with '-R', DEFAULT_REPO so gh never picks the repo from the cwd remotes, where origin is parcadei):
 //                                read   ['pr','view',String(pr),'--json','isDraft,headRefOid','-R',repo] -> stdout {"isDraft":bool,"headRefOid":sha}
 //                                label  ['pr','edit',String(pr),'--add-label',<label>,'-R',repo]
+//                                comment ['pr','comment',String(pr),'--body',<marker + visible line>,'-R',repo]  (PR D: the router reads the marker)
 //                                ready  ['pr','ready',String(pr),'-R',repo]
-//       Order: read, refuse (not a draft, or headRefOid != record.head), label, ready. A failed label never reaches ready.
+//       Order: read, refuse (not a draft, or headRefOid != record.head), label, comment, ready. A failed label or comment never reaches ready.
 //   CLI gh seam: env PR_CHECKPOINT_GH=<script.mjs> runs `node <script.mjs> <gh args>` in place of gh (tests; never a real gh).
 //   Exit codes: 0 done, 1 refused or gh failed, 2 bad usage (before anything is read or written), 3 internal error.
 //
@@ -984,16 +985,17 @@ test('TB9: with no --state-dir, --confirm reads stamp.json and writes pathway.js
 const RECORD = { head: HEAD, body_sha256: BODY_SHA, pathway: 'coderabbit', label: 'review:coderabbit', class: 'normal', recommended: 'coderabbit', decided_by: 'dave', at: NOW, budget: [1, 1] };
 const LABEL_OF = { none: 'review:none', coderabbit: 'review:coderabbit', both: 'review:deep' };
 
-/** A fake gh. A `pr edit` or `pr ready` call is a mutation; every other call is a read and gets the PR view. */
+/** A fake gh. A `pr edit`, `pr comment` or `pr ready` call is a mutation; every other call is a read and gets the PR view. */
+const MUTATIONS = ['edit', 'comment', 'ready'];
 function fakeGh({ view = { isDraft: true, headRefOid: HEAD }, fail = null } = {}) {
   const calls = [];
   const gh = (args) => {
     calls.push(args);
     const kind = args[0] === 'pr' ? args[1] : null;
     if (kind === fail) return { status: 1, stdout: '', stderr: `fake gh: ${kind} failed` };
-    return { status: 0, stdout: kind === 'edit' || kind === 'ready' ? '' : JSON.stringify(view), stderr: '' };
+    return { status: 0, stdout: MUTATIONS.includes(kind) ? '' : JSON.stringify(view), stderr: '' };
   };
-  return { gh, calls, mutations: () => calls.filter((a) => a[0] === 'pr' && (a[1] === 'edit' || a[1] === 'ready')) };
+  return { gh, calls, mutations: () => calls.filter((a) => a[0] === 'pr' && MUTATIONS.includes(a[1])) };
 }
 
 test('TA1 (spec 17): apply refuses a PR that is not a draft and makes no mutation', async () => {
@@ -1024,7 +1026,7 @@ test('TA3 (spec 18): apply adds the review label BEFORE it marks the PR ready, f
     assert.deepEqual(r, { ok: true }, pathway);
     const calls = g.calls.map((a) => `${a[0]} ${a[1]}`);
     assert.equal(calls[0], 'pr view', `${pathway}: the live PR is read before any mutation`);
-    assert.deepEqual(calls.filter((c) => c !== 'pr view'), ['pr edit', 'pr ready'], `${pathway}: label first, ready second`);
+    assert.deepEqual(calls.filter((c) => c !== 'pr view'), ['pr edit', 'pr comment', 'pr ready'], `${pathway}: label, then the pathway-confirmed comment, then ready last`);
     assert.equal(calls.lastIndexOf('pr view'), 0, `${pathway}: no read after a mutation`);
     assert.deepEqual(g.calls.find((a) => a[1] === 'edit'), ['pr', 'edit', '201', '--add-label', LABEL_OF[pathway], '-R', DEFAULT_REPO], pathway);
     assert.deepEqual(g.calls.find((a) => a[1] === 'ready'), ['pr', 'ready', '201', '-R', DEFAULT_REPO], pathway);
@@ -1042,6 +1044,52 @@ test('TA4 (spec 18): a failed label never reaches ready; a failed ready after th
   const b = await applyPathway({ pr: 201, record: RECORD, gh: noReady.gh });
   assert.equal(b.ok, false);
   assert.match(b.error, /ready/i);
+});
+
+// PR D: a ready_for_review alone is not a checkpoint. /pathway posts one comment with a hidden marker BEFORE it marks the PR ready;
+// the router counts a ready_for_review as a new checkpoint only when a marker names the head and the label's pathway.
+// It fails if: apply posts no marker, or posts it after ready (the router runs on the ready event and sees no marker) -> TA3b
+//              the marker names another head or pathway than the record                                              -> TA3b, TA3c
+//              a failed post still reaches ready                                                                      -> TA4c
+//              the router cannot read the marker the apply step writes (two copies of the format drift)              -> TA3c
+test('TA3b: apply posts one pr comment with the pathway-confirmed marker for the record head and pathway, before ready', async () => {
+  const { applyPathway } = await load();
+  for (const pathway of ['none', 'coderabbit', 'both']) {
+    const g = fakeGh();
+    const r = await applyPathway({ pr: 201, record: { ...RECORD, pathway, label: LABEL_OF[pathway] }, gh: g.gh });
+    assert.deepEqual(r, { ok: true }, pathway);
+    const comments = g.calls.filter((a) => a[1] === 'comment');
+    assert.equal(comments.length, 1, pathway);
+    const [c] = comments;
+    assert.deepEqual([c[0], c[1], c[2]], ['pr', 'comment', '201'], pathway);
+    assert.deepEqual(c.slice(-2), ['-R', DEFAULT_REPO], pathway);
+    const body = c[c.indexOf('--body') + 1];
+    assert.ok(body.startsWith(`<!-- pathway-confirmed head=${HEAD} pathway=${pathway} -->\n`), `${pathway}: ${body}`);
+    assert.match(body, new RegExp(`Checkpoint: ${pathway} at ${HEAD.slice(0, 7)}, chosen in /pathway\\.`), pathway);
+    const order = g.calls.map((a) => a[1]);
+    assert.ok(order.indexOf('comment') < order.indexOf('ready'), `${pathway}: the marker comes before ready: ${order}`);
+  }
+});
+
+test('TA3c: the router reads the marker the apply step writes (same head, same pathway), and nothing else', async () => {
+  const { applyPathway } = await load();
+  const { confirmedPathways } = await import('./review-router.mjs');
+  const g = fakeGh();
+  await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
+  const c = g.calls.find((a) => a[1] === 'comment');
+  const comment = { id: 5, body: c[c.indexOf('--body') + 1] };
+  assert.deepEqual(confirmedPathways([comment], HEAD), ['coderabbit']);
+  assert.deepEqual(confirmedPathways([comment], OTHER), []);
+});
+
+test('TA4c: a failed marker comment never reaches ready and says so; the label was already added', async () => {
+  const { applyPathway } = await load();
+  const g = fakeGh({ fail: 'comment' });
+  const r = await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /comment/i);
+  assert.match(r.error, /not marked ready/i);
+  assert.deepEqual(g.calls.map((a) => a[1]), ['view', 'edit', 'comment'], 'view, label, the failed comment, and no ready');
 });
 
 test('TA4b: apply with no record, or a record with an unknown pathway or no head, refuses before any gh call', async () => {
@@ -1081,7 +1129,7 @@ test('TA5 (CLI): --apply reads pathway.json, then the PR, adds the label and mar
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
   const kinds = r.calls.map((a) => `${a[0]} ${a[1]}`);
   assert.equal(kinds[0], 'pr view');
-  assert.deepEqual(kinds.filter((k) => k !== 'pr view'), ['pr edit', 'pr ready']);
+  assert.deepEqual(kinds.filter((k) => k !== 'pr view'), ['pr edit', 'pr comment', 'pr ready']);
   assert.ok(r.calls.find((a) => a[1] === 'edit').includes('review:coderabbit'));
   assert.ok(r.calls.every((a) => a[0] !== 'pr' || a.includes('999999')), 'every pr call names the PR');
   assert.ok(r.calls.every((a) => a.slice(-2).join(' ') === `-R ${DEFAULT_REPO}`), `every gh call names the fork (critic: gh picks the repo from the cwd remotes otherwise): ${JSON.stringify(r.calls)}`);

@@ -969,18 +969,24 @@ export function carryBlockers({ head, newest, reviewComments, compare, prFiles, 
   ];
 }
 
-/** { from, deltaLines } when the newest CodeRabbit review stands for the head (see carryBlockers), else null. */
+/**
+ * { carried, cliOnly }. carried is { from, deltaLines } when the newest CodeRabbit review stands for the head (see carryBlockers), else null.
+ * cliOnly is true when the CLI fix review line is the ONLY blocker: every other carry condition holds, so the author needs cr-fix.mjs, not a PR review.
+ */
 function carriedReview({ carry, reviews, head, comments, labels, cr, body }) {
   const newest = newestCodeRabbitReview(reviews);
   const blocks = carryBlockers({ ...carry, head, newest, state: routerState(comments), labels, cr, body });
-  return blocks.length === 0 ? { from: newest.commit_id, deltaLines: deltaLinesOf(carry.compare, carry.prFiles) } : null;
+  const carried = blocks.length === 0 ? { from: newest.commit_id, deltaLines: deltaLinesOf(carry.compare, carry.prFiles) } : null;
+  return { carried, cliOnly: blocks.length > 0 && blocks.length === cliFixBlockers({ body, newest }, head).length };
 }
 
 /** The reasons a head with no CodeRabbit review carries. The first two are for a draft and an unrouted PR; a person must not post a review request for either. */
 export const NO_REVIEW_REASON = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one';
 export const NO_REVIEW_DRAFT_REASON = 'no CodeRabbit PR-bot review of the head commit. Draft: run /pathway; do not request a review';
 export const NO_REVIEW_UNVERIFIED_REASON = 'no CodeRabbit PR-bot review of the head commit; re-run the review-router workflow for this head; do not request a review';
-const noReviewReason = (pull, need) => (pull.draft === true ? NO_REVIEW_DRAFT_REASON : need.unverified ? NO_REVIEW_UNVERIFIED_REASON : NO_REVIEW_REASON);
+/** Only the CLI fix review line blocks the carry: run cr-fix.mjs and paste its line. Never a paid PR review. The prefix is the one the mod and the rule match. */
+export const noReviewCliReason = (prNumber) => `no CodeRabbit PR-bot review of the head commit; the earlier review carries once the PR body has a clean CLI fix review line. Run node scripts/github/cr-fix.mjs --pr ${prNumber} and put its line in the PR body (or fix its findings, then run it again); do not request a review`;
+const noReviewReason = (pull, need, cliOnly) => (pull.draft === true ? NO_REVIEW_DRAFT_REASON : need.unverified ? NO_REVIEW_UNVERIFIED_REASON : cliOnly ? noReviewCliReason(pull.number) : NO_REVIEW_REASON);
 
 export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true, nowMs = Date.now(), carry = null }) {
   const head = pull.head.sha;
@@ -1054,8 +1060,9 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     } else if (!cr.reviewedHead) {
       // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
       // A Minor-only review of an earlier head plus a small push stands for the head (the carry); every other case asks for a review.
-      coderabbitCarried = carriedReview({ carry, reviews, head, comments, labels, cr, body: pull.body });
-      if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need));
+      const carryResult = carriedReview({ carry, reviews, head, comments, labels, cr, body: pull.body });
+      coderabbitCarried = carryResult.carried;
+      if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
     }
     if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);
   }

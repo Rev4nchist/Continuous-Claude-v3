@@ -11,6 +11,7 @@ import {
   ENGINE_TIMEOUT_MS,
   GIT_TIMEOUT_MS,
   LOCK_FAILED,
+  MARKER_DENY,
   NEED_PR,
   PANE,
   PATHWAY_DENY,
@@ -36,6 +37,7 @@ import {
   lockDeny,
   lockWarn,
   mayBeGated,
+  namesMarker,
   namesPathway,
   optionLabel,
   optionsInOrder,
@@ -605,6 +607,7 @@ const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh
     if (await isOff($)) return null
     const command = typeof e.command === 'string' ? e.command : ''
     if (namesPathway(command)) return { deny: PATHWAY_DENY }
+    if (namesMarker(command)) return { deny: MARKER_DENY }
     if (!mayBeGated(command)) return null
     // The root lookup is not rootOf(): that one answers "no checkout" for a lookup that threw. Here only a clean `false` means "not CCv3";
     // a throw from session.root or fs.exists reaches the catch below and denies, as the other failures after a prefilter hit do.

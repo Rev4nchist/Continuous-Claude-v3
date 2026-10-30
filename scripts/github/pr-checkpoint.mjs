@@ -33,7 +33,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_REPO, classify, creditsState, matchGlob, route } from './review-router.mjs';
+import { DEFAULT_REPO, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -465,10 +465,15 @@ function readPr(pr, gh) {
   try { return JSON.parse(r.stdout); } catch { return { error: `Could not read PR #${pr}: gh gave no JSON.` }; }
 }
 
+/** The comment applyPathway posts before ready: the hidden marker the router reads (review-router.mjs confirmedPathways), then one visible line. */
+const confirmBody = (record) => `${renderPathwayMarker(record.head.toLowerCase(), record.pathway)}
+Checkpoint: ${record.pathway} at ${record.head.slice(0, 7)}, chosen in /pathway.`;
+
 /**
  * applyPathway({ pr, record, gh }) -> { ok: true } | { ok: false, error }. gh(args) -> { status, stdout, stderr }.
- * Order: refuse a bad record, read the PR, refuse a PR that is not a draft or whose head moved, add the label, then mark it ready.
- * A failed label never reaches ready: a ready PR with no label would be routed with no pathway.
+ * Order: refuse a bad record, read the PR, refuse a PR that is not a draft or whose head moved, add the label, post the
+ * pathway-confirmed comment, then mark it ready. A failed label never reaches ready: a ready PR with no label would be routed with no pathway.
+ * A failed comment never reaches ready either: the router counts a ready_for_review as a new checkpoint only with that comment (PR D).
  */
 export function applyPathway({ pr, record, gh }) {
   const bad = recordProblem(record);
@@ -481,6 +486,8 @@ export function applyPathway({ pr, record, gh }) {
   }
   const label = gh(['pr', 'edit', String(pr), '--add-label', record.label, ...REPO_ARGS]);
   if (label.status !== 0) return failed(`Could not add the label ${record.label} (${firstLine(label.stderr)}). The PR was not marked ready.`);
+  const note = gh(['pr', 'comment', String(pr), '--body', confirmBody(record), ...REPO_ARGS]);
+  if (note.status !== 0) return failed(`The label ${record.label} was added, but the pathway-confirmed comment failed (${firstLine(note.stderr)}). The PR was not marked ready.`);
   const ready = gh(['pr', 'ready', String(pr), ...REPO_ARGS]);
   if (ready.status !== 0) return failed(`The label ${record.label} was added, but gh pr ready failed (${firstLine(ready.stderr)}).`);
   return { ok: true };

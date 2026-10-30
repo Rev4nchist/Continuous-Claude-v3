@@ -32,7 +32,7 @@
  *   - PR checkpoint (spec 2026-10-28, section 3.3): at a person_override the comment also holds pathway=none|coderabbit|both
  *     (from the strongest review:* label) and pclass=<class at the checkpoint>. A later person_override or no_change run
  *     re-reads the pathway from the labels (no review:* label keeps the saved one) and keeps pclass. A raise keeps both.
- *     A ready_for_review with a review:* label is a new checkpoint (only /pathway marks a PR ready): pclass becomes the current class.
+ *     A ready_for_review with a review:* label is a new checkpoint only when a "pathway-confirmed head=<sha> pathway=<p>" marker comment (posted by /pathway before it marks the PR ready) names this head and the label's pathway: then pclass becomes the current class. Without one, pclass stays.
  *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Return the PR to draft (gh pr ready --undo), then run /pathway again.". A raise on a PR that
  *     already has review:coderabbit or review:deep-held adds neither of them (review:deep is still added when wanted).
  * Files: compare/<base>...<head sha> (pinned to the head), or the PR files list above 300 files.
@@ -191,21 +191,37 @@ const PATHWAY_LABELS = [['review:deep', 'both'], ['review:deep-held', 'coderabbi
 /** The pathway of the strongest review:* label on the PR (both > coderabbit > none), else null. */
 export const pathwayFrom = (labels) => PATHWAY_LABELS.find(([l]) => labels.includes(l))?.[1] ?? null;
 
+// The marker /pathway posts (pr-checkpoint.mjs applyPathway) before it marks a PR ready. `\x3C` is `<`: see STATE_RE.
+const PATHWAY_MARKER_RE = /^\s*\x3C!--\s*pathway-confirmed head=([0-9a-f]{40}) pathway=(none|coderabbit|both)\s*-->/;
+export const renderPathwayMarker = (head, pathway) => `\x3C!-- pathway-confirmed head=${head} pathway=${pathway} -->`;
+
+/**
+ * The pathways that /pathway confirmed for this head: from PR comments that START with a marker naming the full head sha.
+ * The author is not checked: /pathway posts as the person who runs gh, not as a bot, and anyone with write access can also
+ * add a review:* label (the same trust level). A marker quoted inside another comment, or for another head, never counts.
+ */
+export function confirmedPathways(comments, head) {
+  const want = String(head ?? '').toLowerCase();
+  const found = (comments || []).map((c) => PATHWAY_MARKER_RE.exec(String(c?.body ?? ''))).filter((m) => m && m[1] === want);
+  return [...new Set(found.map((m) => m[2]))];
+}
+
 /**
  * The pathway and pclass this run saves. First run: only a person_override writes them (pclass = the class then).
  * Later runs: person_override and no_change re-read the pathway from the labels (no review:* label keeps the saved one);
- * every reason keeps pclass, except a ready_for_review with a review:* label on the PR: only the /pathway mod marks a PR ready, so that
- * is a new checkpoint and pclass becomes the current class (this clears the class-raised note). opened and reopened happen without one.
- * A comment saved before the checkpoint existed (no pclass) stays without them.
+ * every reason keeps pclass, except a ready_for_review that /pathway confirmed: a pathway-confirmed marker for this head names the
+ * pathway of the review:* label on the PR. That is a new checkpoint and pclass becomes the current class (this clears the class-raised note).
+ * A ready_for_review without such a marker (a person clicked "Ready for review", or ran gh pr ready) is not a checkpoint.
+ * opened and reopened happen without one. A comment saved before the checkpoint existed (no pclass) stays without them.
  */
-function checkpointOf({ event, reason, previousClass, labelsNow, effective, saved }) {
+function checkpointOf({ event, reason, previousClass, labelsNow, effective, saved, confirmed = [] }) {
   const none = { pathway: null, pclass: null };
   if (previousClass === null) {
     const pathway = reason === 'person_override' ? pathwayFrom(labelsNow) : null;
     return pathway ? { pathway, pclass: effective } : none;
   }
-  // A ready_for_review with a review:* label is a new checkpoint, also when it is a raise run (a draft run saves no class).
-  const redone = event === 'ready_for_review' && hasReview(labelsNow);
+  // A confirmed ready_for_review is a new checkpoint, also when it is a raise run (a draft run saves no class).
+  const redone = event === 'ready_for_review' && hasReview(labelsNow) && confirmed.includes(pathwayFrom(labelsNow));
   const reread = reason === 'person_override' || reason === 'no_change' || redone;
   const pathway = (reread ? pathwayFrom(labelsNow) : null) ?? saved.pathway;
   if (saved.pclass === null || pathway === null) return none;
@@ -252,7 +268,7 @@ const releasable = (previousHeld, r, labelsNow, credits) => Boolean(previousHeld
 /**
  * decide(event, pr, labelsNow, previousClass, config, { now, previousHeld }) -> a decision
  *   previousHeld: the hold saved in the router comment (apex_d3, credits_u2) or null.
- *   previousPathway, previousPclass: the checkpoint attributes saved in the router comment, or null.
+ *   previousPathway, previousPclass: the checkpoint attributes saved in the router comment, or null. confirmed: pathways /pathway confirmed for this head (confirmedPathways).
  *   pr: { number, head, draft, state, paths, codeRabbitRateLimited }
  *   -> { reason, class, effective, matched, previousClass, add, comment, held, pathway, pclass, builder, credits, noop }
  * reason: draft | not_open | event_ignored | person_label | routed | raised | released | person_override | no_change.
@@ -301,7 +317,7 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   }
   const personChose = previousClass === null && reason === 'person_override';
   const saved = { pathway: opts.previousPathway ?? null, pclass: opts.previousPclass ?? null };
-  const cp = checkpointOf({ event, reason, previousClass, labelsNow, effective, saved });
+  const cp = checkpointOf({ event, reason, previousClass, labelsNow, effective, saved, confirmed: opts.confirmed ?? [] });
   // One signal for "wants no bot": the saved pathway (also after a person removed review:none) drives the adds and the hold alike.
   if (reason === 'raised') add = raiseAdds(add, labelsNow, cp.pathway === 'none');
   // A review:none PR wants no bot: no hold and no hold note. If the class rose above the checkpoint class, say so on every run.
@@ -508,7 +524,7 @@ function main() {
     const existing = findRouterComment(comments);
     const saved = stateFrom(existing?.body);
     const now = new Date();
-    const d = decide(event, prState, labels, saved.class, config, { now, previousHeld: saved.held, previousPathway: saved.pathway, previousPclass: saved.pclass });
+    const d = decide(event, prState, labels, saved.class, config, { now, previousHeld: saved.held, previousPathway: saved.pathway, previousPclass: saved.pclass, confirmed: confirmedPathways(comments, head) });
     const ops = planOps(d, existing);
     const done = applyOps(ops, { repo, pr: number, dryRun, gh });
     emitLedger(ledgerLine({ d, pr: prState, event, ops, now }));

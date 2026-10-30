@@ -840,6 +840,31 @@ describe('pr-checkpoint: lock B, shell text', () => {
     expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
   })
 
+  // PR D: the router counts a ready event as a checkpoint only when a pathway-confirmed marker comment names the head. The apply step posts it
+  // (node, not a shell call). A shell gh command whose text holds the marker word is denied, always and on the raw text; no lexer, no spawn.
+  test('K13d a gh command that names pathway-confirmed is denied in every form, in warn mode, and spawns no CLI', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const marker = '<!-- pathway-confirmed head=' + 'a'.repeat(40) + ' pathway=none -->'
+    for (const [tool, command] of [
+      ['Bash', `gh pr comment 201 --body '${marker}'`],
+      ['Bash', `gh api repos/o/r/issues/201/comments -f body='${marker}'`],
+      ['Bash', 'gh pr comment 201 --body "<!-- PATHWAY-CONFIRMED head=x -->"'],
+      ['PowerShell', `gh.exe pr comment 201 --body '${marker}'`],
+    ] as const) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(true)
+    }
+    expect(seen.ran).toEqual([])
+    expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
+  })
+
+  test('K13e a plain gh comment, and a non-gh command that mentions the word, are not denied by the marker rule', async ($, on) => {
+    world(on)
+    await start($)
+    expect(LOCK_DENIED(await shell($, 'gh pr comment 201 --body "thanks"'))).toBe(false)
+    expect(LOCK_DENIED(await shell($, 'git commit -m "docs: the router reads the pathway-confirmed marker"'))).toBe(false)
+  })
+
   test('K15 enforce: ready, a label add and a self-confirm are denied; --undo and plain reads pass; reads spawn nothing', async ($, on) => {
     const { seen } = world(on, { files: CONFIG_ENFORCE })
     await start($)

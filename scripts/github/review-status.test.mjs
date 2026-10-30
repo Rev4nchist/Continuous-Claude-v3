@@ -2514,7 +2514,31 @@ test('RC18: only "clean" carries: 1 major, 2 critical, incomplete, a word after 
   }
 });
 
-test('RC19: the shas are a prefix of 7 or more hex characters or the full 40; 6 characters, non-hex and a non-prefix do not match', () => {
+// PR D: when only the CLI line blocks the carry, the reason sends the author to cr-fix.mjs and never to a paid PR review.
+// It fails if: the missing-line, stale-head or not-clean case still says "@coderabbitai review"            -> RC18b
+//              the reason drops the "no CodeRabbit PR-bot review of the head commit" prefix (mod, rule)     -> RC18b
+//              another blocker (a Major inline, a big push) also switches to the cr-fix text                -> RC18c
+test('RC18b: with only the CLI line missing, stale or not clean, the reason names cr-fix.mjs and does not say @coderabbitai review', () => {
+  const OTHER_SHA = 'c'.repeat(40);
+  for (const [name, cli] of [['missing line', null], ['stale head', CLI_LINE(OLD, OTHER_SHA)], ['1 major', CLI_LINE(OLD, HEAD, '1 major')]]) {
+    const r = carryEval({ cli });
+    assert.equal(r.ready, false, name);
+    const reason = r.reasons.find((x) => MISSING_LINE.test(x));
+    assert.ok(reason, `${name}: ${r.reasons.join('; ')}`);
+    assert.ok(reason.startsWith('no CodeRabbit PR-bot review of the head commit'), name);
+    assert.match(reason, /cr-fix\.mjs --pr 111\b/, name);
+    assert.doesNotMatch(reason, /@coderabbitai review/, name);
+  }
+});
+
+test('RC18c: when another carry condition also fails, the reason keeps asking for a review', () => {
+  const r = carryEval({ cli: null, carry: carryOf({ compare: compareOf(31) }) });
+  const reason = r.reasons.find((x) => MISSING_LINE.test(x));
+  assert.match(reason, /@coderabbitai review/);
+  assert.doesNotMatch(reason, /cr-fix/);
+});
+
+test('RC19: the shas are a prefix of 7 or more hex characters or the full 40;6 characters, non-hex and a non-prefix do not match', () => {
   const line = (from, head) => `CLI fix review: ${from}..${head} clean`;
   assert.equal(carried(carryEval({ cli: line(OLD.slice(0, 7), HEAD.slice(0, 7)) })), true, '7 and 7');
   assert.equal(carried(carryEval({ cli: line(OLD, HEAD) })), true, '40 and 40');

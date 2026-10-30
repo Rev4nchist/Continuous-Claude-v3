@@ -227,6 +227,13 @@ export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)
 
+/**
+ * Shell text that holds the router's pathway-confirmed marker word in a gh command (gh pr comment, gh api ...). Only /pathway posts that marker,
+ * from node (`$.process.run`, not a shell tool call). Raw text, no lexer: a doubt reads as a deny. A command without gh is not touched.
+ */
+export const namesMarker = (command: string): boolean => /pathway-confirmed/i.test(command) && /\bgh(\.exe)?\b/i.test(command)
+export const MARKER_DENY = 'The pathway-confirmed comment is posted by /pathway when Dave presses a pathway. A shell command may not post it.'
+
 /** A cheap test on the raw text. A miss spawns nothing; a hit asks the shapes CLI. */
 export const mayBeGated = (command: string): boolean =>
   (/pr-checkpoint/i.test(command) && /--(confirm|apply)/i.test(command)) || (/\bgh(\.exe)?\b/i.test(command) && /ready|label|review:|graphql/i.test(command))
