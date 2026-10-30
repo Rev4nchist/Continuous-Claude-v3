@@ -339,7 +339,7 @@ export const toastText = (alert: Alert): string => `PR #${alert.pr}: ${word(aler
 /** The status script's reason for a Greptile run that a newer push cancelled (review-status.mjs CANCELLED_REASON). */
 const CANCELLED_REVIEW = /was cancelled \(superseded by a push\)/
 
-const CLASS_RAISED_LINE = `Return the PR to draft (gh pr ready --undo), then run ${SLASH} again: the class rose after the checkpoint. Do not request a review.`
+const classRaisedLine = (pr: number): string => `Return the PR to draft (gh pr ready ${pr} --undo), then run ${SLASH} again: the class rose after the checkpoint. Do not request a review.`
 
 /**
  * What the model may do about a CodeRabbit review on a PR with a checkpoint record. `when` starts the clause that allows a post.
@@ -386,7 +386,7 @@ export const reportLine = (alert: Alert): string => {
     const bots = botWords(missingBots(alert))
     const why = alert.reasons.length ? ` Reasons: ${alert.reasons.slice(0, 5).join('; ')}.` : ''
     // A review:none PR with no router state, or one classed higher after the checkpoint: a bot review is not the fix.
-    if (alert.reasons.some(reason => reason.includes(CLASS_RAISED_NOTE))) return `${lead} (review:none): ${CLASS_RAISED_LINE} Then report to Dave. Do not merge it.`
+    if (alert.reasons.some(reason => reason.includes(CLASS_RAISED_NOTE))) return `${lead} (review:none): ${classRaisedLine(alert.pr)} Then report to Dave. Do not merge it.`
     if (alert.reasons.some(reason => reason.includes(ROUTER_NONE_UNVERIFIED_NOTE) || reason.includes(NONE_NO_CHECKPOINT_NOTE))) {
       return `${lead} (review:none) has no router state for this head. Re-run the review-router workflow for this head. Do not request a bot review. Then report to Dave. Do not merge it.`
     }

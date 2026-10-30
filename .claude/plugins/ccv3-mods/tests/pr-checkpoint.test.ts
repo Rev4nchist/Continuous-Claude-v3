@@ -776,6 +776,29 @@ describe('pr-checkpoint: lock A fails closed by its own return', () => {
   }
 })
 
+describe('pr-checkpoint: lock B fails closed by its own return, off switch included', () => {
+  // K13f for Bash and PowerShell: the kill-switch read is the first step of the handler. A throw there must be answered by shellLock's own
+  // return, because an outer unmatched tool.call hook can drop the deny of a handler that threw (the same loss as lock A, fd8dbae7).
+  // It fails if the handler awaits isOff before shellLock, as the old code did: the deny is then only the .catch one.
+  for (const tool of ['Bash', 'PowerShell'] as const) {
+    for (const where of ['none', 'outer-first', 'outer-last'] as const) {
+      test(`K13f ${tool}: a throw from the env.get read (${where === 'none' ? 'no outer hook' : `an unmatched outer tool.call hook, registered ${where === 'outer-first' ? 'before' : 'after'} the mod`}) denies with the lock-failed text, and the command never ran`, async ($, on) => {
+        const outer = (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e)
+        if (where === 'outer-first') on('tool.call', outer as never)
+        const w = world(on)
+        const { seen } = w
+        if (where === 'outer-last') on('tool.call', outer as never)
+        await start($)
+        w.fail.env = true
+        const r = (await $.tool.call({ tool, command: 'git status' } as never)) as unknown as { deny?: string }
+        expect(LOCK_DENIED(r as never)).toBe(true)
+        expect(r.deny).toMatch(/lock failed/i)
+        expect(seen.ran).toEqual([])
+      })
+    }
+  }
+})
+
 describe('pr-checkpoint: lock B, shell text', () => {
   const shell = async ($: Engine, command: string, tool: 'Bash' | 'PowerShell' = 'Bash') =>
     (await $.tool.call({ tool, command } as never)) as unknown as { deny?: string }

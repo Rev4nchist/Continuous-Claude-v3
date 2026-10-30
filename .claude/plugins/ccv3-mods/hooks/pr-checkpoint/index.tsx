@@ -596,11 +596,13 @@ type ShellCall = { command?: unknown }
 
 /**
  * The verdict for one shell command: a deny, or null to let it go on. Any failure after a prefilter hit is a deny, in both modes.
+ * The kill-switch read is inside the try as well: a throw from env.get must be answered here, like Lock A's (writeLock).
  * It is answered here and not left to `.catch`: under an outer unmatched hook (the Agentic OS observer) the engine drops a `.catch` deny
  * of a hook that threw, while a plain return survives (scratchpad repro, kit 2.1.312).
  */
 const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh'): Promise<{ deny: string } | null> => {
   try {
+    if (await isOff($)) return null
     const command = typeof e.command === 'string' ? e.command : ''
     if (namesPathway(command)) return { deny: PATHWAY_DENY }
     if (!mayBeGated(command)) return null
@@ -698,15 +700,9 @@ export const prCheckpoint = (on: On) => {
   on('tool.call', { tool: /^(Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => (await writeLock($, e as unknown as WriteCall)) ?? next(e)).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
   // Lock B: shell text. Judge first, call next last, so a throw never denies a command that already ran.
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    return (await shellLock($, e as unknown as ShellCall, 'bash')) ?? next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => (await shellLock($, e as unknown as ShellCall, 'bash')) ?? next(e)).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
-  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    return (await shellLock($, e as unknown as ShellCall, 'pwsh')) ?? next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => (await shellLock($, e as unknown as ShellCall, 'pwsh')) ?? next(e)).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
   on('command.run', { command: COMMAND }, ($, e) => checkpointCommand($, e)).catch(() => ({
     text: `${SLASH} failed. Nothing was recorded.`,
