@@ -395,6 +395,12 @@ const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpoint
 const paidReview = (pr: number): string =>
   `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post the comment it prints (@coderabbitai review --use-credits), then run cr-paid.mjs record. On ESCALATE, ask Dave.`
 
+/**
+ * A paid review replaces the capacity post while it runs. The retry depends on the paid review finishing or still running, not on the
+ * request having been posted: a request that produced no review must not leave the watcher LIMITED with no way out.
+ */
+const PAID_GATE = 'If a paid review was posted for this head: while the CodeRabbit status on the head is pending, wait for it. Otherwise, if no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back. If none was posted, the post below applies.'
+
 /** The one line the model gets: LIMITED, PROOF, STALLED or REVIEWED. READY, merged and closed get a toast only. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {
   const lead = `PR watcher: #${alert.pr} head ${alert.headShort}`
@@ -404,7 +410,7 @@ export const reportLine = (alert: Alert): string => {
   if (alert.state === 'LIMITED' && alert.rateLimit) {
     const wait = alert.rateLimit.minutes === null ? '' : ` CodeRabbit says the next included review is available in ${alert.rateLimit.minutes} minutes.`
     const act = carryHolds(alert) ? `${carryAction(alert.pr)} Then` : alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When capacity is back')} Then` : 'Post @coderabbitai review once when capacity is back, then'
-    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} ${paidEligible(alert) ? `${paidReview(alert.pr)} ` : ''}${act} report to Dave. Do not merge it.`
+    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} ${paidEligible(alert) ? `${paidReview(alert.pr)} ${PAID_GATE} ` : ''}${act} report to Dave. Do not merge it.`
   }
   if (alert.state === 'LIMITED') {
     const act = carryHolds(alert) ? `${carryAction(alert.pr)} Then` : alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When the review can run')} Then` : 'Act per pr-review-loop.md "No review on the head", then'

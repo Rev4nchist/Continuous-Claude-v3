@@ -26,7 +26,7 @@ import { appendFileSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codeRabbitHeadReview, deltaLinesOf, newestCodeRabbitRound, readIssueComments } from './review-status.mjs';
+import { cleanSummaryCommit, codeRabbitHeadReview, deltaLinesOf, isCodeRabbitUser, newestCodeRabbitRound, readIssueComments } from './review-status.mjs';
 import { pathFiltersFrom, reviewableFiles } from './pr-checkpoint.mjs';
 import { ghApi } from './cr-fix.mjs';
 
@@ -108,6 +108,19 @@ function fixOf(compare, prFiles) {
   return { lines, added: compare.files.filter((f) => f.status === 'added' && own.has(f.filename)).length };
 }
 
+/**
+ * The reviewed CodeRabbit rounds so far: one per distinct commit named by a bot review with a body (an empty body is a thread reply),
+ * plus the commit a trusted clean summary covers when no review object holds it (a summary-only round, even an older one).
+ * A request still unanswered counts none.
+ */
+function reviewedRounds(facts) {
+  const bot = (facts.reviews ?? []).filter((r) => isCodeRabbitUser(r?.user) && String(r.body ?? '').trim() !== '');
+  const commits = new Set(bot.map((r) => r.commit_id));
+  const covered = cleanSummaryCommit(facts.comments, facts.commentEdits);
+  if (covered !== null && covered !== facts.head) commits.add(covered);
+  return commits.size;
+}
+
 /** { round, from, head, list, fix }: the files this round bills and, for round 2 or later, the fix size. */
 function estimate(facts, repo, gh) {
   if (codeRabbitHeadReview(facts).reviewedHead) throw new Error('CodeRabbit already reviewed the head; a round would buy nothing');
@@ -116,7 +129,7 @@ function estimate(facts, repo, gh) {
   const from = String(newest.commit_id ?? '').toLowerCase();
   if (!SHA40.test(from)) throw new Error('the newest CodeRabbit round names no commit');
   const compare = gh([`repos/${repo}/compare/${from}...${facts.head}`]);
-  return { round: 2, from, head: facts.head, list: compare.files ?? [], fix: fixOf(compare, facts.prFiles) };
+  return { round: reviewedRounds(facts) + 1, from, head: facts.head, list: compare.files ?? [], fix: fixOf(compare, facts.prFiles) };
 }
 
 // ---- the verdict ----

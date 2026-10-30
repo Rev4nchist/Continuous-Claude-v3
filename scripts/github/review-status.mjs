@@ -219,7 +219,7 @@ export function verifiedBots(labels, comments, head, greptileAuto = true) {
   return need;
 }
 
-const isCodeRabbitUser = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
+export const isCodeRabbitUser = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
 
 const LIMIT_WARNING = /Review limit reached/i;
 /** Notice headings seen on live PRs, e.g. "> ## Review skipped" (#155). A notice is never a review. */
@@ -290,7 +290,7 @@ export function latestCodeRabbitSummary(comments) {
  * The newest CodeRabbit summary comment, only when it is trusted: no edit history is untrusted, and once the comment has edits
  * every editor must be the CodeRabbit app (a person or another app makes it untrusted). null when none or untrusted.
  */
-function trustedCodeRabbitSummary(comments, commentEdits) {
+export function trustedCodeRabbitSummary(comments, commentEdits) {
   const summary = latestCodeRabbitSummary(comments);
   const trusted = summary !== null
     && commentEditedAfterApp(commentEdits, summary.id, CODERABBIT_EDITOR) === null
@@ -783,28 +783,64 @@ function proofResult({ gate, dependabot, body, head, labels, comments }) {
 }
 
 // CodeRabbit lists findings on lines outside the diff in the review body: "Outside diff range comments (N)".
-// They make no review thread, so `unresolved` stays 0. N is the sum over every PR-bot review of the PR: a review
-// of a new head covers only the new commits and never repeats older outside-diff findings, so a push must not clear
-// them. N blocks READY until the PR body "Outside-diff: handled" list has N entries (pr-review-loop.md "When the
-// review lands"). A full re-review can list a finding twice; that over-counts, which fails closed.
+// They make no review thread, so `unresolved` stays 0. Findings are collected across every CodeRabbit review body of the PR,
+// each marker id once: a review of a new head covers only the new commits and never repeats older findings, so a push must
+// not clear them, and a re-review that repeats a finding counts it once. READY needs the PR body "Outside-diff: handled"
+// list to name each id, by id or by path:lines (pr-review-loop.md "When the review lands"). A body with a heading and no
+// marker id falls back to the count N: it needs N entries.
 const OUTSIDE_DIFF_HEADING = /^(?:[^\w\n<]|<\/?(?:summary|details|strong)>)*Outside diff range comments\s*\((\d+)\)/im;
 
+const OUTSIDE_MARKER = /<!--\s*cr-comment:v1:([0-9a-f]{24})\s*-->/i;
+const OUTSIDE_PLACE = /^>\s*`([^`\n]+?):(\d+(?:[-–]\d+)?)`\s*$/;
+
 /**
- * N summed over every CodeRabbit app review body, each review id once; 0 when none. The review sentence is not needed: a body that
- * starts at the heading (live PR 205 review 5691905341, PR 221 review 5712203534) has none. A reply holds no heading, so it adds 0.
+ * The outside-diff section of one review body: the quoted lines (`>`) that follow the heading. Pure.
+ * Returns [{ id, location }], one per `<!-- cr-comment:v1:HEX -->` marker (HEX is exactly 24 hex characters); location is the `path:lines` line that
+ * opens the finding, or null. Markers outside the quote (inline, nitpick and other sections) are not findings.
  */
-export function codeRabbitOutsideDiff({ reviews = [] }) {
+function outsideDiffFindings(body) {
+  const lines = String(body ?? '').split(/\r?\n/);
+  const start = lines.findIndex((l) => OUTSIDE_DIFF_HEADING.test(l));
+  const found = [];
+  let location = null;
+  for (let i = start + 1; start >= 0 && i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() !== '' && !line.startsWith('>')) break;
+    const marker = OUTSIDE_MARKER.exec(line);
+    if (marker) { found.push({ id: marker[1].toLowerCase(), location }); location = null; continue; }
+    const place = OUTSIDE_PLACE.exec(line);
+    if (place && location === null) location = `${place[1]}:${place[2]}`;
+  }
+  return found;
+}
+
+/**
+ * Every outside-diff finding of every CodeRabbit app review, each review id once. { findings, unidentified }.
+ * findings: the marker ids with their place, one per id however many reviews repeat it. unidentified: findings the
+ * heading counts but no marker names (a body with no markers, or a CodeRabbit format change), so the old count rule applies.
+ */
+export function codeRabbitOutsideFindings({ reviews = [] }) {
   const seen = new Set();
-  let total = 0;
+  const byId = new Map();
+  let unidentified = 0;
   for (const r of reviews || []) {
     if (!isCodeRabbitUser(r?.user)) continue;
     if (r.id != null && seen.has(r.id)) continue;
     if (r.id != null) seen.add(r.id);
     if (codeRabbitNotice(r.body)) continue; // a notice is never a review, even when it quotes an outside-diff heading
     const m = OUTSIDE_DIFF_HEADING.exec(r.body || '');
-    if (m) total += Number(m[1]);
+    if (!m) continue;
+    const found = outsideDiffFindings(r.body);
+    for (const f of found) if (!byId.has(f.id)) byId.set(f.id, f);
+    unidentified += Math.max(0, Number(m[1]) - found.length);
   }
-  return total;
+  return { findings: [...byId.values()], unidentified };
+}
+
+/** How many outside-diff findings CodeRabbit lists across the PR; 0 when none. Distinct marker ids plus the unidentified ones. */
+export function codeRabbitOutsideDiff({ reviews = [] }) {
+  const { findings, unidentified } = codeRabbitOutsideFindings({ reviews });
+  return findings.length + unidentified;
 }
 
 /** The reason a draft carries. The pr-loop mod holds this text by value (pr-loop-sync.test.mjs pins it). */
@@ -843,14 +879,14 @@ const EMPTY_BULLET = /^[-*+]\s*$/;
 const PLACEHOLDER_BULLET = /^[-*+]\s+<[^>]*>\s*$/;
 
 /**
- * Counts the top-level bullets under the "Outside-diff: handled" heading of the PR body. Fences and HTML
- * comments are skipped. Indented lines are detail. A heading or a prose line ends the list.
+ * The top-level bullets under the "Outside-diff: handled" heading of the PR body, each with its indented detail lines
+ * (one string per entry). Fences and HTML comments are skipped. A heading or a prose line ends the list.
  */
-export function outsideDiffHandled(body) {
+export function outsideDiffEntries(body) {
   const state = { inComment: false };
   let fence = null;
   let inList = false;
-  let count = 0;
+  const entries = [];
   for (const line of String(body ?? '').split(/\r?\n/)) {
     if (fence) {
       const close = FENCE_CLOSE.exec(line);
@@ -859,13 +895,49 @@ export function outsideDiffHandled(body) {
     }
     const clean = stripComments(line, state);
     const open = FENCE_OPEN.exec(clean);
-    if (open) { fence = { ch: open[1][0], len: open[1].length }; if (inList) return count; continue; }
-    if (HANDLED_HEADING.test(clean)) { if (inList) return count; inList = true; continue; }
-    if (!inList || clean.trim() === '' || /^\s/.test(clean) || EMPTY_BULLET.test(clean) || PLACEHOLDER_BULLET.test(clean)) continue;
-    if (TOP_BULLET.test(clean)) count += 1;
-    else return count;
+    if (open) { fence = { ch: open[1][0], len: open[1].length }; if (inList) return entries; continue; }
+    if (HANDLED_HEADING.test(clean)) { if (inList) return entries; inList = true; continue; }
+    if (!inList || clean.trim() === '' || EMPTY_BULLET.test(clean) || PLACEHOLDER_BULLET.test(clean)) continue;
+    if (/^\s/.test(clean)) { if (entries.length > 0) entries[entries.length - 1] += `\n${clean}`; continue; }
+    if (TOP_BULLET.test(clean)) entries.push(clean);
+    else return entries;
   }
-  return count;
+  return entries;
+}
+
+/** How many top-level bullets the "Outside-diff: handled" list holds. */
+export const outsideDiffHandled = (body) => outsideDiffEntries(body).length;
+
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Does this entry name the finding: its marker id, or its exact path with its line or range? */
+function entryNames(entry, finding) {
+  if (new RegExp(`(?<![0-9a-f])${finding.id}(?![0-9a-f])`).test(entry.toLowerCase())) return true;
+  const place = /^(.+):(\d+(?:[-–]\d+)?)$/.exec(finding.location ?? '');
+  if (!place) return false;
+  const lines = place[2].split(/[-–]/).join('[-–]L?');
+  return new RegExp(`(?<![\\w./-])${escapeRegex(place[1])}(?:[:#]L?|\\s+lines?\\s+)${lines}(?!\\d)`).test(entry);
+}
+
+/**
+ * What the PR body leaves open. { missing, short }: the findings no entry names, and how many of the unidentified
+ * findings have no spare entry (an entry that names no known finding). Both 0 and [] = every finding is handled.
+ */
+export function outsideDiffOpen({ reviews, body }) {
+  const { findings, unidentified } = codeRabbitOutsideFindings({ reviews });
+  const entries = outsideDiffEntries(body);
+  const missing = findings.filter((f) => !entries.some((e) => entryNames(e, f)));
+  const spare = entries.filter((e) => !findings.some((f) => entryNames(e, f))).length;
+  return { missing, short: Math.max(0, unidentified - spare) };
+}
+
+/** The text appended to the outside-diff reason: each finding no entry names (id and place), then the unidentified shortfall. */
+function openFindingsText({ missing, short }) {
+  const named = missing.map((f) => `${f.id}${f.location ? ` (${f.location})` : ''}`);
+  const parts = [];
+  if (named.length > 0) parts.push(`not named in the list: ${named.join(', ')}`);
+  if (short > 0) parts.push(`${short} finding(s) without a marker id need one more entry each`);
+  return `. ${parts.join('; ')}`;
 }
 
 // ---- The carry (PR D): READY accepts a CodeRabbit review of an EARLIER head -------------------------------------------
@@ -928,6 +1000,18 @@ function summaryCoveredCommit(body) {
   return between ? between[1] : null;
 }
 
+/** The trusted CodeRabbit summary when it is no notice and says no actionable comments. null otherwise. */
+function cleanTrustedSummary(comments, commentEdits) {
+  const summary = trustedCodeRabbitSummary(comments, commentEdits);
+  return summary === null || codeRabbitNotice(summary.body) || !CLEAN_ROUND.test(String(summary.body)) ? null : summary;
+}
+
+/** The commit a trusted, clean, reviewed summary covers (a summary-only round when no review object holds it). 40 hex or null. */
+export function cleanSummaryCommit(comments, commentEdits) {
+  const summary = cleanTrustedSummary(comments, commentEdits);
+  return summary === null ? null : summaryCoveredCommit(summary.body);
+}
+
 /**
  * C2: the CodeRabbit round the carry reads. A review object (newestCodeRabbitReview), or a clean round that left only the summary
  * comment (live PR 213: 0 review objects). The summary stands in for a zero-finding review of the commit it covers: { id: null,
@@ -936,8 +1020,8 @@ function summaryCoveredCommit(body) {
  */
 export function newestCodeRabbitRound({ reviews, comments, commentEdits, head } = {}) {
   const object = newestCodeRabbitReview(reviews);
-  const summary = trustedCodeRabbitSummary(comments, commentEdits);
-  if (summary === null || codeRabbitNotice(summary.body) || !CLEAN_ROUND.test(String(summary.body))) return object;
+  const summary = cleanTrustedSummary(comments, commentEdits);
+  if (summary === null) return object;
   const covered = summaryCoveredCommit(summary.body);
   if (covered === null || covered === head) return object;
   if ((reviews || []).some((r) => isCodeRabbitUser(r?.user) && r.commit_id === covered)) return object;
@@ -1122,6 +1206,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   const unresolved = threads.filter((t) => !t.isResolved).length;
   const outsideDiff = codeRabbitOutsideDiff({ head, reviews });
   const outsideHandled = outsideDiffHandled(pull.body);
+  const outsideOpen = outsideDiffOpen({ reviews, body: pull.body });
 
   const reasons = [];
   if (pull.merged) reasons.push('already merged');
@@ -1137,8 +1222,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   // Say WHY Greptile is needed when the labels alone would not need it (the router check kept it).
   if (need.unverified && greptileBlocks.length > 0) reasons.push(`Greptile is required because ${need.unverified}`);
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
-  if (outsideDiff > outsideHandled) {
-    reasons.push(`CodeRabbit lists ${outsideDiff} outside-diff finding(s) across its reviews of this PR (head ${head.slice(0, 7)}) and the PR body "Outside-diff: handled" list has ${outsideHandled}. Read the review body, then fix each finding or list it as handled`);
+  if (outsideOpen.missing.length > 0 || outsideOpen.short > 0) {
+    reasons.push(`CodeRabbit lists ${outsideDiff} outside-diff finding(s) across its reviews of this PR (head ${head.slice(0, 7)}) and the PR body "Outside-diff: handled" list has ${outsideHandled}. Read the review body, then fix each finding or list it as handled by its marker id or its path:lines${openFindingsText(outsideOpen)}`);
   }
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);

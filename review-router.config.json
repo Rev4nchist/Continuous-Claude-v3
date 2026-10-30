@@ -87,6 +87,7 @@
       "scripts/github/review-router.mjs",
       "scripts/github/cr-paid.mjs",
       "scripts/github/land-pr.ps1",
+      "scripts/github/land-recheck.mjs",
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",
       "apps/agentic-os/src/server/sources/safe-message.ts",

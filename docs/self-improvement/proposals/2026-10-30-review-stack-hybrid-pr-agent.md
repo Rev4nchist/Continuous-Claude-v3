@@ -5,7 +5,7 @@ Verdict: **A (keep CodeRabbit and tighten) is ADOPT.** **B (add self-hosted PR-A
 CCv3 already has 2 of the 3 hybrid parts. B costs about $20 to $80 a month and saves $0 to $50 of paid CodeRabbit rounds.
 No evidence yet shows that PR-Agent catches CCv3's real Major defect classes.
 
-Status: Dave approved D-1 to D-5 on 2026-10-30. Option A config and the D3 policy line ship in PR #225. The merge gate is a separate infra PR. Phase 0 waits on Dave's Console workspace and key.
+Status: Dave approved D-1 to D-5 on 2026-10-30. Option A config and the D3 policy line ship in PR #225. The merge gate is a separate infra PR. Dave put D-2 (Phase 0) on hold the same day: B costs more than it saves, and the merge gate comes first. Revisit if paid CodeRabbit spend or missed Majors grow.
 
 Source: `what are people using inside of Code Rabbit for C....md` checked by research, evaluation and critique agents on 2026-10-30.
 
