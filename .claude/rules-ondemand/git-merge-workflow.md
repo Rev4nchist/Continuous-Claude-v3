@@ -26,7 +26,7 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
 
 **For CCv3 PRs, steps 4-5 are one command** (after Dave says merge): `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
 It refuses unless `scripts/github/review-status.mjs` reports READY for the current head, merges
-with `sha=<head>`, fast-forwards `main`, and removes the worktree and branches. Before it removes the worktree it copies the gitignored `.claude/cache/e2e/` evidence to `.claudedocs/e2e-pr<N>` and keeps the worktree if the copy conflicts or fails. It syncs `~/.claude`
+with `sha=<head>`, fast-forwards `main`, and removes the worktree and branches. Before it removes the worktree, it copies the gitignored `.claude/cache/e2e/` evidence to `.claudedocs/e2e-pr<N>`. It keeps the worktree if the copy conflicts or fails. It syncs `~/.claude`
 itself, always from a temporary detached worktree of `main` (`%TEMP%\land-pr-sync-<N>-<pid>`,
 removed afterwards), and leaves the primary checkout alone: another session can switch it mid-sync.
 If it prints "skipped" or "NOT confirmed synced", sync by hand from a detached worktree of `main`
