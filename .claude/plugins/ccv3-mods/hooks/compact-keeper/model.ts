@@ -1,4 +1,4 @@
-import type { OsLane, OsPlan, OsTask, PrWatch } from '../../types'
+import type { KeeperRecord, OsLane, OsPlan, OsTask, PrWatch } from '../../types'
 import { clip } from '../agentic-os/model'
 
 /** What the keeper reads: the Agentic OS state of this session. */
@@ -21,6 +21,39 @@ const taskLine = (task: OsTask) => `- ${task.status === 'in_progress' ? '[doing]
 export const keeperMarker = (sessionId: string, open: number, total: number): string =>
   `KEEPER ${sessionId.slice(0, 8)} open ${open} of ${total}`
 
+/** The open and total task counts the marker carries. compactBlock and the keeper's record both read them here, so they agree. */
+export const openCounts = (tasks: readonly OsTask[]): { open: number; total: number } => ({
+  open: tasks.filter(task => task.status !== 'completed').length,
+  total: tasks.length,
+})
+
+/**
+ * True when one of `texts` holds the marker line for exactly these counts. A longer count is no match ("of 20" does not
+ * match "of 2"), and a later true marker still counts after such a lookalike.
+ */
+export const markerKept = (texts: readonly string[], sessionId: string, open: number, total: number): boolean => {
+  const marker = keeperMarker(sessionId, open, total)
+  for (const text of texts) {
+    if (typeof text !== 'string') continue
+    for (let from = 0; ; ) {
+      const at = text.indexOf(marker, from)
+      if (at < 0) break
+      if (!/\d/.test(text[at + marker.length] ?? '')) return true
+      from = at + 1
+    }
+  }
+  return false
+}
+
+/** Compactions kept in the record: the newest ones. */
+export const MAX_RECORDS = 10
+
+/** The list with `rec` last, cut to the newest `cap`. The list passed in is kept. */
+export const addRecord = (list: readonly KeeperRecord[], rec: KeeperRecord, cap: number = MAX_RECORDS): KeeperRecord[] =>
+  [...list, rec].slice(-Math.max(1, Math.floor(cap)))
+
+export type { KeeperRecord }
+
 /**
  * The text added to a manual compaction's `instructions`: plan, open tasks, lane and watched PRs, then the marker.
  * Null when there is nothing to keep (no plan, no open task, no lane, no watched PR): the compaction is left alone.
@@ -34,7 +67,8 @@ export const compactBlock = (view: KeeperView, sessionId: string, limit: number 
   const prs = view.prs.slice(0, MAX_PRS)
   if (view.plan === null && open.length === 0 && lanes.length === 0 && prs.length === 0) return null
 
-  const marker = `Copy this line into the summary word for word: ${keeperMarker(sessionId, open.length, view.tasks.length)}`
+  const counts = openCounts(view.tasks)
+  const marker = `Copy this line into the summary word for word: ${keeperMarker(sessionId, counts.open, counts.total)}`
   const head = [
     INTRO,
     ...(view.plan === null ? [] : [`Plan: ${clip(view.plan.title, 120)}${view.plan.file ? ` (${clip(view.plan.file, 120)})` : ''}`]),

@@ -1,47 +1,55 @@
-import type { AgentRun, OsBrief, OsProof } from '../../types'
-import { redact } from '../shared/redact'
+import type { AgentRun, BoardLane, FileTouch, HudLimit, KeeperRecord, OsBrief, OsProof } from '../../types'
 import { CHIP } from './band-model'
 import { isAskStale, proofOf } from './brief'
 import type { Chip } from './brief'
 import { MAX_ITEMS, MIN_ITEMS, digest, fold } from './digest'
-import type { Digest, DigestBlock, DigestCommit, DigestCompaction, DigestLane, DigestPr } from './digest'
-import { clip, elapsed } from './model'
+import type { Digest, DigestBlock, DigestCommit, DigestLane, DigestPr } from './digest'
+import { ago, clipSpans, line, more, scrubFit, takeGroups, width } from './fit-rows'
+import { laneOverlap } from './lanes-model'
 import type { OsView } from './model'
-import { agentRows, bar, gaugeTone, gap, head, laneRows, prRows } from './pane-model'
+import { gap } from './pane-model'
+import { chipWord } from './plain'
+import { sessionTab } from './session-tab'
 import type { Drift } from './steward'
 import type { PaneRow, Span, Tone } from './pane-model'
+import { oneLine, wrapRows } from './text'
+import { workTab } from './work-tab'
 
-// The /os pane tabs (PRD 5.3), as plain rows. Pure: no engine, no clock (the caller passes `now`).
-//   Overview   chip, goal, the session briefing (NEEDS YOU, HIGHLIGHTS, WATCH; digest.ts, PRD 5.3), stop-at, where, plan bar, counts, now, lane, agents, PRs
-//              ctx and cost sit below them. The steward's `brief stale` reason is one WATCH row, shown once.
+// The /os pane tabs (PRD 5.3, redesigned 2026-10-29), as plain rows. Pure: no engine, no clock (the caller passes `now`).
+//   Overview   the three questions at a glance: chip word, repo and branch; GOAL; NOW; NEEDS YOU, DONE, WATCH (digest.ts); one dim health row.
+//              Each briefing item is at most 3 rows and ends `...more -> <tab>` when its home tab holds more.
+//   Session    state, now, helpers (the ledger), a timeline of milestones, and the room left (session-tab.ts)
 //   Plan       the steps: tasks when there are any, else the brief plan (PRD 5.1), each done step proven or UNPROVEN
+//   Work       lanes, other sessions, changes, files, where (work-tab.ts)
 //   Proof      done-but-unproven steps first, then each proof with its artifact
 //   Decisions  the decision log newest first, then the open asks
-// Comms, Swarm and Resources are tabs in the strip only: disabled, with a NEXT or LATER tag, never selectable.
+// Comms, Swarm and Resources are one dim `later:` footer row, drawn only when the body keeps 3 rows or more.
 // Text gauges only. Observer only. Every drawn string is redacted again at the end (idempotent) and only then cut to the
 // width, so a secret in any source cannot reach a row whole or in half.
 
-export type TabId = 'overview' | 'plan' | 'proof' | 'decisions'
+export type TabId = 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions'
 
-export type TabSpec = { id: string; label: string; tag?: 'NEXT' | 'LATER'; enabled: boolean }
+export type TabSpec = { id: string; label: string; enabled: boolean }
 
-/** The strip, in order. Only an `enabled` entry has a TabId and a Button. */
+/** The strip, in order. Every entry has a TabId and a Button. */
 export const TABS: readonly TabSpec[] = [
   { id: 'overview', label: 'Overview', enabled: true },
+  { id: 'session', label: 'Session', enabled: true },
   { id: 'plan', label: 'Plan', enabled: true },
+  { id: 'work', label: 'Work', enabled: true },
   { id: 'proof', label: 'Proof', enabled: true },
   { id: 'decisions', label: 'Decisions', enabled: true },
-  { id: 'comms', label: 'Comms', tag: 'NEXT', enabled: false },
-  { id: 'swarm', label: 'Swarm', tag: 'LATER', enabled: false },
-  { id: 'resources', label: 'Resources', tag: 'LATER', enabled: false },
 ]
+
+/** The tabs that are not built yet. They show as one dim footer row, never as a strip item. */
+export const LATER: readonly string[] = ['Comms', 'Swarm', 'Resources']
 
 const LIVE: readonly string[] = TABS.filter(one => one.enabled).map(one => one.id)
 
-/** The digit that presses a live tab: 1 for Overview. A tab that is not live has none. */
+/** The digit that presses a tab: 1 for Overview, 6 for Decisions. */
 const hotkeyOf = (id: string): string | undefined => (LIVE.includes(id) ? String(LIVE.indexOf(id) + 1) : undefined)
 
-/** True for the four live tabs only: a disabled tab, or anything else, is not a tab id. */
+/** True for the six tabs only: a later tab, or anything else, is not a tab id. */
 export const isTabId = (value: unknown): value is TabId => typeof value === 'string' && LIVE.includes(value)
 
 /**
@@ -65,30 +73,27 @@ export type TabState = {
   drift?: Drift | null
   /** The subagent runs of this session (agent-ledger): start and end times for the long-running and finished-run rows of the briefing. */
   agentRuns?: AgentRun[]
+  /** The manual compactions the compact keeper watched, oldest first (compact-keeper). Not given: no keeper line. */
+  compactions?: KeeperRecord[]
+  /** Every lane of the lane board at the last good read (`lane.mjs board --json`); null or not given: the board was not read. */
+  board?: BoardLane[] | null
+  /** When that read happened (epoch ms); the Work tab says "as of <age>". Unknown reads "as of last read". */
+  boardAt?: number | null
+  /** The files this session touched (touched-files). A peer lane whose scope matches an edited or committed file may overlap. */
+  files?: FileTouch[]
+  /** Share of input tokens the prompt cache served, 0 to 100; null or not given: unknown. */
+  cachePct?: number | null
+  /** The 5-hour and weekly allowance (the HUD's limits). */
+  limits?: HudLimit[]
   /** Facts the pane state does not hold yet. Each is optional and may be empty: the briefing then has fewer rows, never invented ones. */
-  feed?: { commits?: DigestCommit[]; compactions?: DigestCompaction[]; lanes?: DigestLane[]; prs?: DigestPr[] }
+  feed?: { commits?: DigestCommit[]; prs?: DigestPr[] }
 }
 
 const sp = (text: string, tone: Tone): Span => ({ text, tone })
-const width = (spans: Span[] = []): number => spans.reduce((n, one) => n + one.text.length, 0)
-
-/** Cuts a run of spans to `max` cells, with an ellipsis on the span it cuts. */
-const clipSpans = (spans: Span[], max: number): Span[] => {
-  const out: Span[] = []
-  let room = Math.max(0, max)
-  for (const one of spans) {
-    if (room <= 0) break
-    const text = clip(one.text, room)
-    out.push({ ...one, text })
-    room -= text.length
-  }
-  return out
-}
 
 // --- Strip ---
 
-const itemSpans = (spec: TabSpec, selected: boolean): Span[] =>
-  spec.enabled ? [sp(` ${spec.label} `, selected ? 'chip' : 'todo')] : [sp(` ${spec.label}`, 'track'), sp(` ${spec.tag ?? ''} `, 'dim')]
+const itemSpans = (spec: TabSpec, selected: boolean): Span[] => [sp(` ${spec.label} `, selected ? 'chip' : 'todo')]
 
 /**
  * The strip as lines of items, one space between items. A strip wider than `columns` wraps to more lines; an item wider
@@ -118,53 +123,6 @@ export const tabStrip = (selected: TabId, columns: number): TabItem[][] => {
     }
   }
   return lines
-}
-
-// --- Rows ---
-
-const fitRow = (row: PaneRow, columns: number): PaneRow => {
-  const cap = Math.max(1, columns)
-  // The right group never takes more than half the row; on a narrow pane it goes, and the left carries the meaning.
-  const right = row.right && cap >= 24 ? clipSpans(row.right, Math.floor(cap / 2)) : undefined
-  const left = clipSpans(row.left, cap - (right ? width(right) + 1 : 0))
-  return { key: row.key, left, ...(right && right.length > 0 ? { right } : {}) }
-}
-
-const scrub = (row: PaneRow): PaneRow => ({
-  ...row,
-  left: row.left.map(one => ({ ...one, text: redact(one.text).text })),
-  ...(row.right ? { right: row.right.map(one => ({ ...one, text: redact(one.text).text })) } : {}),
-})
-
-const line = (key: string, ...left: Span[]): PaneRow => ({ key, left })
-
-/** A "+N more" row. Each list gives its own `key`: two lists in one tab (decisions and asks) must not share one. */
-const more = (key: string, hidden: number): PaneRow => line(key, sp(`  +${hidden} more`, 'dim'))
-
-/** Whole groups of rows (a group is one item) that fit `budget`; what does not fit becomes one "+N more" row. */
-const takeGroups = (groups: PaneRow[][], budget: number, moreKey: string): PaneRow[] => {
-  if (budget <= 0) return []
-  const total = groups.reduce((n, group) => n + group.length, 0)
-  if (total <= budget) return groups.flat()
-  const out: PaneRow[] = []
-  let used = 0
-  let shown = 0
-  for (const group of groups) {
-    if (used + group.length > budget - 1) break
-    out.push(...group)
-    used += group.length
-    shown++
-  }
-  return [...out, more(moreKey, groups.length - shown)]
-}
-
-const ago = (now: number, at: number): string => {
-  const seconds = Math.max(0, Math.floor((now - at) / 1000))
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
 }
 
 // --- Steps (Plan, Proof, Overview) ---
@@ -197,42 +155,53 @@ const MARK: Record<Step['state'], Span> = {
   blocked: sp('■ ', 'bad'),
 }
 
-const stepRow = (step: Step): PaneRow => {
+/** The rows an item may take on its home tab: the Overview shows up to the same 3, so the `...more -> <tab>` hint never promises text this tab hides. */
+const LINES = 3
+
+/** The right group of a wrapped row: never more than half the pane, so wrapRows keeps it beside the text. Redacted before the cut, so a secret is never left in half. */
+const rightOf = (spans: Span[] | undefined, columns: number): { right?: Span[] } =>
+  spans === undefined ? {} : { right: clipSpans(spans.map(one => ({ ...one, text: oneLine(one.text) })), Math.floor(columns / 2)) }
+
+const stepRows = (step: Step, columns: number): PaneRow[] => {
   const unproven = isUnproven(step)
   const mark = unproven ? sp('! ', 'warn') : MARK[step.state]
-  const text = sp(step.text, step.state === 'done' ? 'dim' : step.state === 'doing' ? 'active' : step.state === 'blocked' ? 'bad' : 'todo')
+  const tone: Tone = step.state === 'done' ? 'dim' : step.state === 'doing' ? 'active' : step.state === 'blocked' ? 'bad' : 'todo'
   const right = unproven ? [sp('UNPROVEN', 'warn')] : step.proof ? [sp(`proven: ${step.proof.artifact}`, 'done')] : undefined
-  return { key: step.key, left: [sp('  ', 'dim'), mark, text], ...(right ? { right } : {}) }
+  return wrapRows(step.key, [sp('  ', 'dim'), mark], step.text, tone, columns, LINES, rightOf(right, columns))
 }
 
 // --- Overview ---
-
-const label = (name: string, value: string | null, empty = '-'): PaneRow =>
-  line(`ov-${name.trim()}`, sp(`  ${name.padEnd(9)}`, 'dim'), sp(value && value.trim() !== '' ? value : empty, value && value.trim() !== '' ? 'todo' : 'dim'))
 
 // --- Briefing (PR 5) ---
 
 const BRIEF_BLOCKS = ['needs', 'highlights', 'watch'] as const
 
-/** Maps what the pane reads onto the digest inputs. Pure. An ask has no time of its own: it carries the brief's. */
-const digestOf = (s: TabState, now: number, columns: number): Digest => {
+/**
+ * Maps what the pane reads onto the digest inputs. Pure. An ask has no time of its own: it carries the brief's. The peer lanes are the board's
+ * lanes that another live session owns, each with the edited or committed files its scope may touch; my own lane, an unowned lane and the
+ * lane of a stopped session stay out of WATCH.
+ */
+const digestOf = (s: TabState, now: number, columns: number, lineCap: 1 | 3): Digest => {
   const { brief, view } = s
   const at = brief?.updatedAt
   const prs: DigestPr[] = [
     ...view.prs.map(one => ({ pr: one.pr, state: one.state, whenReady: one.whenReady, ...(one.since === undefined ? {} : { at: one.since }) })),
     ...(s.feed?.prs ?? []),
   ]
+  const peers: DigestLane[] = (s.board ?? [])
+    .filter(one => !one.mine && one.owner !== null && one.live !== false)
+    .map(one => ({ id: one.id, title: one.title, state: one.state, mine: false, ...(one.note === undefined ? {} : { note: one.note }), overlap: laneOverlap(one.scope, s.files ?? []) }))
   return digest(
     brief,
     view.tasks,
     s.drift ?? null,
     prs,
     s.agentRuns ?? [],
-    s.feed?.lanes ?? [],
+    peers,
     (brief?.ask ?? []).map(one => ({ kind: one.kind, text: one.text, recommend: one.recommend, source: one.source, at, answered: one.answered })),
     (brief?.decisions ?? []).map(one => ({ text: one.text, by: one.by, at: one.at })),
     (brief?.proofs ?? []).map(one => ({ id: one.id, kind: one.kind, subject: one.subject, artifact: one.artifact, at: one.at })),
-    { now, columns, limit: MAX_ITEMS, commits: s.feed?.commits, compactions: s.feed?.compactions },
+    { now, columns, limit: MAX_ITEMS, lineCap, commits: s.feed?.commits, compactions: s.compactions },
   )
 }
 
@@ -259,100 +228,66 @@ const grow = (full: DigestBlock[], limits: number[], spare: number, to: number):
   return left
 }
 
-const overview = (s: TabState, now: number, columns: number, rows: number): PaneRow[] => {
-  const { view, brief } = s
-  const steps = stepsOf(s)
-  const done = steps.filter(one => one.state === 'done').length
-  const unproven = steps.filter(isUnproven).length
-  const asks = brief?.ask ?? []
-  const open = asks.filter(one => one.answered !== true).length
-  const answered = asks.length - open
-  const stale = brief !== null && isAskStale(brief, now, s.activeAt)
-  const chip = CHIP[s.chip] ?? CHIP.idle
-  const running = view.agents.filter(one => one.status === 'running').length
-  const runningText = `${running} agent${running === 1 ? '' : 's'} running`
-  const working = view.step || view.turn ? [sp('● ', 'warn'), sp(`working ${elapsed(now - (view.turn ?? view.step)!.startedAt)}`, 'dim')] : running > 0 ? [sp('● ', 'warn'), sp(runningText, 'dim')] : [sp('○ idle', 'dim')]
-  const goal = brief?.goal?.trim() ?? ''
-  const stop = brief?.stopAt?.trim() ?? ''
-  const cap = Math.max(1, Math.floor(rows / 4))
+/** NOW, in plain words: the in-progress task (its activeForm, else its subject), else Thinking, else the running helpers. Never the tool or its label. */
+const nowText = (s: TabState): string => {
+  const running = s.view.agents.filter(one => one.status === 'running').length
+  const helpers = `${running} ${running === 1 ? 'helper' : 'helpers'} running`
+  const doing = s.view.tasks.find(one => one.status === 'in_progress')
+  if (doing !== undefined) return `${oneLine(doing.activeForm ?? doing.subject)}${running > 0 ? ` (${helpers})` : ''}`
+  if (s.view.turn !== null) return 'Thinking'
+  return running > 0 ? helpers : 'nothing in progress'
+}
 
-  const chipRow: PaneRow = { key: 'ov-chip', left: [sp(` ${chip.word} `, chip.tone)], right: working }
-  const goalRow = line('ov-goal', sp('GOAL ', 'dim'), goal === '' ? sp('not set', 'warn') : sp(goal, 'todo'), ...(goal !== '' && brief?.sources.goal === 'parsed' ? [sp(' [parsed]', 'dim')] : []))
-  const stopRow = line('ov-stop', sp('STOP AT ', 'dim'), stop === '' ? sp('not set', 'dim') : sp(stop, 'todo'), ...(stop !== '' && brief?.sources.stopAt === 'parsed' ? [sp(' [parsed]', 'dim')] : []))
-
-  const cells = Math.max(4, Math.min(10, Math.floor(columns / 4)))
-  const planRow = line('ov-plan', sp('PLAN ', 'dim'), ...bar(steps.length ? done / steps.length : 0, cells, 'ok'), sp(` ${done}/${steps.length}`, 'todo'))
-  const planTitle: PaneRow[] = view.plan
-    ? [{ key: 'ov-plan-title', left: [sp('  ◆ ', 'title'), sp(view.plan.title, 'todo')], ...(view.plan.file ? { right: [sp(view.plan.file.split(/[\\/]/).pop() ?? '', 'dim')] } : {}) }]
-    : []
-  const counts = line(
-    'ov-counts',
-    sp(`ASK ${open}${stale && open > 0 ? ' stale' : ''}`, open > 0 && !stale ? 'warn' : 'dim'),
-    ...(answered > 0 ? [sp(`  ${answered} answered?`, 'dim')] : []),
-    sp(`  UNPROVEN ${unproven}`, unproven > 0 ? 'warn' : 'dim'),
-  )
-
-  const nowRows: PaneRow[] = [
-    head('h-now', 'NOW'),
-    view.step
-      ? { key: 'now', left: [sp('  ', 'dim'), sp(` ${view.step.tool} `, 'chip'), sp(` ${view.step.label}`, 'active')], right: [sp(elapsed(now - view.step.startedAt), 'dim')] }
-      : view.turn
-        ? { key: 'now', left: [sp('  ◌ thinking', 'dim')], right: [sp(elapsed(now - view.turn.startedAt), 'dim')] }
-        : running > 0
-          ? line('now', sp('  ◌ ', 'dim'), sp(runningText, 'active'))
-          : line('now', sp('  ○ idle', 'dim')),
-  ]
-
-  const ctx = view.ctx
+/** One dim row: context, cost and cache. An unknown figure reads `-`; an unknown cache is left out. */
+const healthRow = (s: TabState): PaneRow => {
+  const ctx = s.view.ctx
   const cost = s.costUsd
-  const health: PaneRow[] = [
-    line(
-      'ov-health',
-      sp('ctx ', 'dim'),
-      ...(ctx === null ? [sp('-', 'dim')] : [...bar(ctx / 100, Math.max(4, Math.min(10, Math.floor(columns / 4))), gaugeTone(ctx), ['▰', '▱']), sp(` ${ctx}%`, gaugeTone(ctx))]),
-      sp(`   cost ${typeof cost === 'number' && Number.isFinite(cost) ? `$${cost.toFixed(2)}` : '$-'}`, 'dim'),
-    ),
+  const cache = s.cachePct
+  const parts = [
+    `ctx ${typeof ctx === 'number' && Number.isFinite(ctx) ? `${Math.round(ctx)}%` : '-'}`,
+    typeof cost === 'number' && Number.isFinite(cost) ? `$${cost.toFixed(2)}` : '$-',
+    ...(typeof cache === 'number' && Number.isFinite(cache) ? [`cache ${Math.round(cache)}%`] : []),
   ]
+  return line('ov-health', sp(parts.join('   '), 'dim'))
+}
 
-  const lane: PaneRow[] = [head('h-lane', 'LANE'), ...laneRows(view.lanes)]
-  const live = view.agents.filter(one => one.status === 'running').length
-  const agents: PaneRow[] = view.agents.length ? [head('h-agents', 'AGENTS', [sp(`${live} running`, 'dim')]), ...agentRows(view.agents, cap)] : []
-  const prs: PaneRow[] = view.prs.length ? [head('h-prs', 'PRS', [sp(`${view.prs.length} watched`, 'dim')]), ...prRows(view.prs, cap)] : []
+const overview = (s: TabState, now: number, columns: number, rows: number): PaneRow[] => {
+  const { brief } = s
+  const chip = CHIP[s.chip] ?? CHIP.idle
+  const goal = oneLine(brief?.goal)
+  const where = [oneLine(s.repo), oneLine(s.branch)].filter(one => one !== '').join(' . ')
+
+  const chipRow: PaneRow = line('ov-chip', sp(` ${chipWord(s.chip)} `, chip.tone), ...(where === '' ? [] : [sp(` ${where}`, 'dim')]))
+  const goalRow = line('ov-goal', sp('GOAL ', 'dim'), goal === '' ? sp('not set', 'warn') : sp(goal, 'todo'), ...(goal !== '' && brief?.sources.goal === 'parsed' ? [sp(' [parsed]', 'dim')] : []))
+  const nowRow = line('now', sp('NOW ', 'dim'), sp(nowText(s), 'active'))
 
   // `rank` is how much a block matters when the pane is short (0 first); `group` is the section a gap goes between.
-  // The briefing (NEEDS YOU, HIGHLIGHTS, WATCH) comes straight after the chip and GOAL and outranks the detail rows: it holds the
-  // PRs, agents and steps the old sections list. `must` blocks are never traded for a "+N more" row.
-  const full = digestOf(s, now, columns)
-  const parts = BRIEF_BLOCKS.map(key => full[key])
+  // The briefing (NEEDS YOU, DONE, WATCH) comes straight after the chip, GOAL and NOW. `must` blocks are never traded for a "+N more" row.
+  const roomy = digestOf(s, now, columns, 3)
+  let parts = BRIEF_BLOCKS.map(key => roomy[key])
   const limits = parts.map(() => 1)
   const layout = (): Block[] => [
     { rank: 0, group: 0, must: true, rows: [chipRow] },
     { rank: 1, group: 0, must: true, rows: [goalRow] },
+    { rank: 9, group: 0, rows: [nowRow] },
     ...parts.map((one, i) => ({ rank: 2 + i, group: 1 + i, must: true, rows: [one.head, ...fold(one, limits[i] ?? 1).rows] })),
-    { rank: 11, group: 4, rows: [stopRow] },
-    { rank: 13, group: 4, rows: [label('repo', s.repo)] },
-    { rank: 14, group: 4, rows: [label('branch', s.branch)] },
-    { rank: 15, group: 4, rows: [label('worktree', s.worktree)] },
-    { rank: 5, group: 5, rows: [planRow] },
-    { rank: 16, group: 5, rows: planTitle },
-    { rank: 6, group: 5, rows: [counts] },
-    { rank: 9, group: 6, rows: nowRows },
-    { rank: 12, group: 6, rows: health },
-    { rank: 10, group: 7, rows: lane },
-    { rank: 7, group: 8, rows: agents },
-    { rank: 8, group: 9, rows: prs },
-  ].filter(block => block.rows.length > 0)
+    { rank: 12, group: 4, rows: [healthRow(s)] },
+  ]
   const total = (list: Block[]): number => list.reduce((n, block) => n + block.rows.length, 0)
   // Room: the must rows first (every block at one item), then each block up to MIN_ITEMS, then, when the detail rows fit too, up to MAX_ITEMS.
   const mustRowsAt = (): number => total(layout().filter(block => block.must))
+  // A pane too short for 3-row items draws one row per item first; only then are the blocks folded to heads.
+  if (mustRowsAt() > rows) {
+    const short = digestOf(s, now, columns, 1)
+    parts = BRIEF_BLOCKS.map(key => short[key])
+  }
   // Blocks of 2 or more items cost 3 rows each at limit 1: fold them to head plus "+N more" so the three heads fit a short pane.
   if (mustRowsAt() > rows) limits.fill(0)
   // One row stays for the "+N more" of the detail blocks, so they are never dropped without a marker.
   grow(parts, limits, rows - mustRowsAt() - (layout().some(block => !block.must) ? 1 : 0), MIN_ITEMS)
   const bare = total(layout())
   if (bare <= rows) grow(parts, limits, rows - bare, MAX_ITEMS)
-  const blocks = layout()
-  return fillBlocks(blocks, rows)
+  return fillBlocks(layout(), rows)
 }
 
 type Block = { rank: number; group: number; rows: PaneRow[]; must?: boolean }
@@ -386,7 +321,7 @@ const fillBlocks = (blocks: Block[], budget: number): PaneRow[] => {
 
 // --- Plan ---
 
-const plan = (s: TabState, rows: number): PaneRow[] => {
+const plan = (s: TabState, columns: number, rows: number): PaneRow[] => {
   const steps = stepsOf(s)
   const done = steps.filter(one => one.state === 'done').length
   const source = s.view.tasks.length > 0 ? 'tasks' : 'brief plan'
@@ -397,20 +332,21 @@ const plan = (s: TabState, rows: number): PaneRow[] => {
   }
   const room = rows - 1
   if (steps.length === 0) return [header, line('plan-none', sp('  no steps yet (no task list, no brief_set plan)', 'dim'))]
-  if (steps.length <= room) return [header, ...steps.map(stepRow)]
+  const groups = steps.map(one => stepRows(one, columns))
+  if (groups.reduce((n, group) => n + group.length, 0) <= room) return [header, ...groups.flat()]
   // Too long: the finished steps fold into one row, so the running step stays in view; what still does not fit becomes "+N more".
   const finished = steps.filter(one => one.state === 'done')
   const unproven = finished.filter(isUnproven).length
   const fold: PaneRow[] = finished.length > 0 && room > 1
     ? [line('plan-done', sp('  ✓ ', 'done'), sp(`${finished.length} done`, 'done'), ...(unproven > 0 ? [sp(` · ${unproven} UNPROVEN`, 'warn')] : []))]
     : []
-  const rest = (fold.length > 0 ? steps.filter(one => one.state !== 'done') : steps).map(one => [stepRow(one)])
+  const rest = (fold.length > 0 ? steps.filter(one => one.state !== 'done') : steps).map(one => stepRows(one, columns))
   return [header, ...fold, ...takeGroups(rest, room - fold.length, 'more-plan')]
 }
 
 // --- Proof ---
 
-const proof = (s: TabState, rows: number): PaneRow[] => {
+const proof = (s: TabState, columns: number, rows: number): PaneRow[] => {
   const steps = stepsOf(s)
   const unproven = steps.filter(isUnproven)
   const proven = steps.filter(one => one.state === 'done' && one.proof !== null).length
@@ -418,15 +354,15 @@ const proof = (s: TabState, rows: number): PaneRow[] => {
   const header: PaneRow = { key: 'h-proof', left: [sp('PROOF', 'head')], right: [sp(`${proven} proven · ${unproven.length} unproven`, 'dim')] }
   if (unproven.length === 0 && proofs.length === 0) return [header, line('proof-none', sp('  no proof yet (nothing is done, or nothing is proven)', 'dim'))]
   const groups: PaneRow[][] = [
-    ...unproven.map(one => [{ key: `u-${one.key}`, left: [sp('  ! ', 'warn'), sp(one.text, 'todo')], right: [sp('UNPROVEN', 'warn')] }]),
-    ...proofs.map((one, i) => [{ key: `proof-${i}`, left: [sp('  ✓ ', 'done'), sp(one.subject, 'todo')], right: [sp(one.artifact, 'dim')] }]),
+    ...unproven.map(one => wrapRows(`u-${one.key}`, [sp('  ! ', 'warn')], one.text, 'todo', columns, LINES, rightOf([sp('UNPROVEN', 'warn')], columns))),
+    ...proofs.map((one, i) => wrapRows(`proof-${i}`, [sp('  ✓ ', 'done')], one.subject, 'todo', columns, LINES, rightOf([sp(one.artifact, 'dim')], columns))),
   ]
   return [header, ...takeGroups(groups, rows - 1, 'more-proof')]
 }
 
 // --- Decisions ---
 
-const decisions = (s: TabState, now: number, rows: number): PaneRow[] => {
+const decisions = (s: TabState, now: number, columns: number, rows: number): PaneRow[] => {
   const { brief } = s
   const log = [...(brief?.decisions ?? [])].sort((a, b) => b.at - a.at)
   const asks = brief?.ask ?? []
@@ -434,7 +370,7 @@ const decisions = (s: TabState, now: number, rows: number): PaneRow[] => {
   const stale = brief !== null && isAskStale(brief, now, s.activeAt)
 
   const decisionGroups: PaneRow[][] = log.length
-    ? log.map((one, i) => [line(`d-${i}`, sp('  • ', 'dim'), sp(one.text, 'todo')), line(`d-${i}-by`, sp(`    ${one.by} · ${ago(now, one.at)}`, 'dim'))])
+    ? log.map((one, i) => [...wrapRows(`d-${i}`, [sp('  • ', 'dim')], one.text, 'todo', columns, LINES), line(`d-${i}-by`, sp(`    ${one.by} · ${ago(now, one.at)}`, 'dim'))])
     : [[line('d-none', sp('  no decisions yet', 'dim'))]]
 
   const askGroups: PaneRow[][] = asks.length
@@ -443,8 +379,8 @@ const decisions = (s: TabState, now: number, rows: number): PaneRow[] => {
         const fresh = !answeredAsk && !stale
         const mark = answeredAsk ? ' · answered?' : stale ? ' · stale' : ''
         return [
-          line(`a-${i}`, sp('  ', 'dim'), sp(one.kind, fresh ? 'warn' : 'dim'), ...(mark ? [sp(mark, 'dim')] : []), sp('  ', 'dim'), sp(one.text, fresh ? 'todo' : 'dim')),
-          ...(one.recommend ? [line(`a-${i}-rec`, sp(`    recommend: ${one.recommend}`, 'dim'))] : []),
+          ...wrapRows(`a-${i}`, [sp('  ', 'dim'), sp(one.kind, fresh ? 'warn' : 'dim'), ...(mark ? [sp(mark, 'dim')] : []), sp('  ', 'dim')], one.text, fresh ? 'todo' : 'dim', columns, LINES),
+          ...(one.recommend ? wrapRows(`a-${i}-rec`, [sp('    recommend: ', 'dim')], one.recommend, 'dim', columns, LINES) : []),
         ]
       })
     : [[line('a-none', sp('  nothing open', 'dim'))]]
@@ -471,13 +407,32 @@ export const tabRows = (tab: TabId, state: TabState, now: number, columns: numbe
   const cap = Math.max(1, Math.floor(columns))
   const live = isTabId(tab) ? tab : 'overview'
   const built =
-    live === 'plan' ? plan(state, budget) : live === 'proof' ? proof(state, budget) : live === 'decisions' ? decisions(state, now, budget) : overview(state, now, cap, budget)
-  return built.slice(0, budget).map(row => fitRow(scrub(row), cap))
+    live === 'session'
+      ? sessionTab(state, now, cap, budget)
+      : live === 'work'
+        ? workTab(state, now, cap, budget)
+        : live === 'plan'
+          ? plan(state, cap, budget)
+          : live === 'proof'
+            ? proof(state, cap, budget)
+            : live === 'decisions'
+              ? decisions(state, now, cap, budget)
+              : overview(state, now, cap, budget)
+  return built.slice(0, budget).map(row => scrubFit(row, cap))
 }
 
-/** The strip and the body for a pane `columns` wide and `rows` high: together never more than `rows`, the body at least one row when there are two. */
-export const osPane = (selected: TabId, state: TabState, now: number, columns: number, rows: number): { strip: TabItem[][]; body: PaneRow[] } => {
+/** The body keeps at least this many rows or the footer is not drawn: the footer goes first. */
+const FOOTER_MIN_BODY = 3
+
+/**
+ * The strip, the body and the footer for a pane `columns` wide and `rows` high: together never more than `rows`, the body at least one row when
+ * there are two. The footer is one dim row naming the tabs that are not built yet; it is drawn only when the body still keeps 3 rows.
+ */
+export const osPane = (selected: TabId, state: TabState, now: number, columns: number, rows: number): { strip: TabItem[][]; body: PaneRow[]; footer: PaneRow | null } => {
   const budget = Math.max(1, Math.floor(rows))
   const strip = tabStrip(selected, columns).slice(0, Math.max(1, budget - 1))
-  return { strip, body: tabRows(selected, state, now, columns, budget - strip.length) }
+  const room = budget - strip.length
+  const withFooter = room - 1 >= FOOTER_MIN_BODY
+  const footer = withFooter ? scrubFit(line('footer-later', sp(`later: ${LATER.join(' · ')}`, 'dim')), Math.max(1, Math.floor(columns))) : null
+  return { strip, body: tabRows(selected, state, now, columns, withFooter ? room - 1 : room), footer }
 }
