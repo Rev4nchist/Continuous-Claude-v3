@@ -100,6 +100,7 @@ try {
   $c3 = New-Case 'w3' 0 '  re-check: PR #7 is unchanged'
   $t3 = [DateTime]::UtcNow
   $r3 = Invoke-Land $c3
+  $t3end = [DateTime]::UtcNow
   $args3 = if (Test-Path $c3.Args) { Get-Content -LiteralPath $c3.Args -Raw } else { '' }
   Check 'W3 quiet: the merge call was made' (Test-Path $c3.Merge)
   Check 'W3 quiet: land-pr exits 0' ($r3.Code -eq 0)
@@ -108,7 +109,8 @@ try {
   $m3 = [regex]::Match($args3, '--ready-at (\S+)')
   $at3 = [DateTime]::MinValue
   $parsed3 = $m3.Success -and [DateTime]::TryParse($m3.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$at3)
-  Check 'W3b clock margin: --ready-at is at least 119 s before the run started' ($parsed3 -and $at3 -le $t3.AddSeconds(-119))
+  # land-pr reads its clock between $t3 and $t3end, so --ready-at must sit at least 119 s before $t3end (no timing race).
+  Check 'W3b clock margin: --ready-at is at least 119 s before the run ended' ($parsed3 -and $at3 -le $t3end.AddSeconds(-119))
   Check 'W3b clock margin: --ready-at is not further back than 180 s' ($parsed3 -and $at3 -ge $t3.AddSeconds(-180))
   Check 'W3b clock margin: the output states the 120 s margin' ($r3.Text -match '120 s')
   if ($fail) { Write-Host "---- w3 output ----"; Write-Host $r3.Text; Write-Host "---- end ----" }

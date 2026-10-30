@@ -492,8 +492,9 @@ It refuses, and nothing merges, in four cases:
 
 1. The head SHA changed.
 2. A CodeRabbit review, or an edit of the CodeRabbit summary comment, is newer than the READY check.
-3. A person's `@coderabbitai review` or `@coderabbitai full review` comment is newer than the last CodeRabbit review with a body
-   and newer than the CodeRabbit summary comment, when that summary is trusted, covers the head and is not a notice. A review is in flight.
+3. A person's `@coderabbitai review` or `@coderabbitai full review` comment is newer than the last CodeRabbit review with a body.
+   It is also newer than the CodeRabbit summary comment. That second test counts only a summary that is trusted, covers the head and is not a notice.
+   Then a review is in flight.
    A clean on-demand round can end as a summary edit with no new review object. That edit answers the request.
    Trusted is the READY rule (`trustedCodeRabbitSummary`): a summary a person or another app edited, or one with no readable edit history, answers nothing.
 4. The CodeRabbit commit status on the head is pending.
