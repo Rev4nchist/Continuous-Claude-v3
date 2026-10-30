@@ -85,6 +85,7 @@
       ".claude/hooks/src/*-guard.ts",
       "scripts/github/review-status.mjs",
       "scripts/github/review-router.mjs",
+      "scripts/github/cr-paid.mjs",
       "scripts/github/land-pr.ps1",
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",

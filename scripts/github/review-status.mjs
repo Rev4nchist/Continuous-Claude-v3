@@ -43,7 +43,10 @@
  * The carry (PR D, Dave 2026-10-29): a CodeRabbit-required PR whose head has no review is still READY when the NEWEST CodeRabbit
  * review (of an earlier head) is Minor-only, the push since is 30 lines or fewer over the PR's own files, and the PR body holds a
  * `CLI fix review: <from>..<head> clean` line from cr-fix.mjs for that range (see carryBlockers). Every other READY item
- * applies. Result field `coderabbitCarried`: { from, deltaLines } or null; `coderabbitReviewedHead` stays false. A missing input or
+ * applies. The carry source is the newest CodeRabbit review object, or a clean round that left only the trusted summary comment
+ * (newestCodeRabbitRound); a review with no "Actionable comments posted" sentence counts 0 inline comments and its body is still read.
+ * Result field `coderabbitCarried`: { from, deltaLines } or null; `coderabbitCarryBlockers`: the strings that stopped the carry (not
+ * reasons; the non-JSON output lists them under the reasons); `coderabbitReviewedHead` stays false. A missing input or
  * a failed read is "not eligible", never exit 2. `--fixture <file>` evaluates saved inputs with no gh call (the result says
  * `fixture: true`); it is for the end-to-end check and is never used by land-pr.ps1.
  *
@@ -284,6 +287,18 @@ export function latestCodeRabbitSummary(comments) {
 }
 
 /**
+ * The newest CodeRabbit summary comment, only when it is trusted: no edit history is untrusted, and once the comment has edits
+ * every editor must be the CodeRabbit app (a person or another app makes it untrusted). null when none or untrusted.
+ */
+function trustedCodeRabbitSummary(comments, commentEdits) {
+  const summary = latestCodeRabbitSummary(comments);
+  const trusted = summary !== null
+    && commentEditedAfterApp(commentEdits, summary.id, CODERABBIT_EDITOR) === null
+    && appCommentForeignEditor(summary, commentEdits?.[summary.id], CODERABBIT_EDITOR) === null;
+  return trusted ? summary : null;
+}
+
+/**
  * Commits a CodeRabbit comment names: `/commit/<sha>` links (the "Commit" line of a notice), the
  * `/blob/<sha>/` link of the run configuration, and a "between <sha> and <sha>" range. 7 to 40 hex.
  */
@@ -315,14 +330,11 @@ const noticeIsAfterHead = (comment, headCommittedAt, head) => {
 export function codeRabbitHeadReview({ head, reviews = [], comments = [], statuses = [], commentEdits, headCommittedAt, nowMs = Date.now() }) {
   const cr = (statuses || []).find((s) => /coderabbit/i.test(s?.context || ''));
   const summary = latestCodeRabbitSummary(comments);
-  // Same rule as the Greptile comment: no edit history is untrusted, and once the comment has edits
-  // every editor must be the CodeRabbit app (a person or another app makes it untrusted).
-  const summaryTrusted = summary !== null
-    && commentEditedAfterApp(commentEdits, summary.id, CODERABBIT_EDITOR) === null
-    && appCommentForeignEditor(summary, commentEdits?.[summary.id], CODERABBIT_EDITOR) === null;
+  // Same rule as the Greptile comment (see trustedCodeRabbitSummary).
+  const summaryTrusted = trustedCodeRabbitSummary(comments, commentEdits) !== null;
   const reviewedHead =
     reviews.some(
-      (r) => isCodeRabbitUser(r.user) && r.commit_id === head && /Actionable comments posted:\s*\d+/.test(r.body || ''),
+      (r) => isCodeRabbitUser(r.user) && r.commit_id === head && !codeRabbitNotice(r.body) && hasReviewContent(r.body),
     ) || (summaryTrusted && summaryCoversHead(summary.body, head));
   const statusLimited = !reviewedHead && /rate limit|limit reached/i.test(cr?.description || '');
   // The summary comment from the CodeRabbit app holds the notice ("Review skipped", "Review failed",
@@ -490,7 +502,9 @@ export function mergeGraphqlComments(restComments, nodes) {
   for (const c of restComments || []) {
     const n = byId.get(c?.id);
     const restLogin = String(c?.user?.login ?? '').replace(/\[bot\]$/, '');
-    if (!n || typeof n.body !== 'string' || n.author?.login !== restLogin || n.author?.__typename !== c?.user?.type) {
+    // An edit history with more pages may hide a person's edit past page 1: treat it like no history (untrusted).
+    if (!n || typeof n.body !== 'string' || n.author?.login !== restLogin || n.author?.__typename !== c?.user?.type
+      || n.userContentEdits?.pageInfo?.hasNextPage === true) {
       comments.push(c);
       continue;
     }
@@ -498,6 +512,32 @@ export function mergeGraphqlComments(restComments, nodes) {
     commentEdits[c.id] = n.userContentEdits?.nodes ?? [];
   }
   return { comments, commentEdits };
+}
+
+// One page of issue comments, with the body, author and 20 edits of each in the same response, so a parsed body and its edit
+// history cannot come from different moments. `$c` is the end cursor of the page before (null for the first page).
+const COMMENTS_QUERY = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){pageInfo{hasNextPage} nodes{editor{__typename login} editedAt}}}}}}}';
+
+/**
+ * Every issue comment of the PR with its edit history: all REST pages, paired (mergeGraphqlComments) with all GraphQL pages.
+ * review-status.mjs and cr-fix.mjs both read through this, so they see the same comment set. `gh(args)` returns parsed JSON.
+ * Throws when any read fails, a cursor is missing or a cursor repeats: a partial set must never stand for the whole.
+ */
+export function readIssueComments(gh, owner, name, pr) {
+  const nodes = [];
+  const seen = new Set();
+  let cursor = null;
+  do {
+    const args = ['graphql', '-f', `query=${COMMENTS_QUERY}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`];
+    if (cursor !== null) args.push('-f', `c=${cursor}`);
+    const page = gh(args).data.repository.pullRequest.comments;
+    nodes.push(...page.nodes);
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    if (page.pageInfo.hasNextPage && (typeof cursor !== 'string' || cursor === '' || seen.has(cursor))) throw new Error('the comment pages have no usable cursor');
+    seen.add(cursor);
+  } while (cursor !== null);
+  const rest = [gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`])].flat(2);
+  return mergeGraphqlComments(rest, nodes);
 }
 
 export const CANCELLED_REASON = 'Greptile review of the head was cancelled (superseded by a push); wait for the review of the new head';
@@ -748,17 +788,20 @@ function proofResult({ gate, dependabot, body, head, labels, comments }) {
 // them. N blocks READY until the PR body "Outside-diff: handled" list has N entries (pr-review-loop.md "When the
 // review lands"). A full re-review can list a finding twice; that over-counts, which fails closed.
 const OUTSIDE_DIFF_HEADING = /^(?:[^\w\n<]|<\/?(?:summary|details|strong)>)*Outside diff range comments\s*\((\d+)\)/im;
-const REVIEW_SENTENCE = /Actionable comments posted:\s*\d+/;
 
-/** N summed over the CodeRabbit app reviews that carry the review sentence, each review id once; 0 when none. */
+/**
+ * N summed over every CodeRabbit app review body, each review id once; 0 when none. The review sentence is not needed: a body that
+ * starts at the heading (live PR 205 review 5691905341, PR 221 review 5712203534) has none. A reply holds no heading, so it adds 0.
+ */
 export function codeRabbitOutsideDiff({ reviews = [] }) {
   const seen = new Set();
   let total = 0;
   for (const r of reviews || []) {
-    if (!isCodeRabbitUser(r?.user) || !REVIEW_SENTENCE.test(r.body || '')) continue;
+    if (!isCodeRabbitUser(r?.user)) continue;
     if (r.id != null && seen.has(r.id)) continue;
     if (r.id != null) seen.add(r.id);
-    const m = OUTSIDE_DIFF_HEADING.exec(r.body);
+    if (codeRabbitNotice(r.body)) continue; // a notice is never a review, even when it quotes an outside-diff heading
+    const m = OUTSIDE_DIFF_HEADING.exec(r.body || '');
     if (m) total += Number(m[1]);
   }
   return total;
@@ -836,6 +879,18 @@ const SEVERITY_OF = { critical: 'critical', major: 'major', minor: 'minor', triv
 const SEVERITY_RANK = { unknown: 0, minor: 1, major: 2, critical: 3 };
 const severityMarks = (text) => [...String(text ?? '').matchAll(SEVERITY_MARK)].map((m) => SEVERITY_OF[m[1].toLowerCase()]);
 
+const REVIEW_SENTENCE = /Actionable comments posted:\s*(\d+)/;
+
+/**
+ * Is this a CodeRabbit review body worth reading? It holds the review sentence, an outside-diff section or a severity marker (the
+ * live PR 205 and PR 221 outside-diff-only reviews have no sentence). The head review (codeRabbitHeadReview) and the carry
+ * (reviewBlockers) both use this rule, so they cannot drift. It does not test for a notice: the head review does that itself.
+ */
+export function hasReviewContent(body) {
+  const text = String(body ?? '');
+  return REVIEW_SENTENCE.test(text) || OUTSIDE_DIFF_HEADING.test(text) || severityMarks(text).length > 0;
+}
+
 /** 'critical', 'major', 'minor' (Trivial and Nitpick too) or 'unknown'. The highest marker in the text wins. */
 export function codeRabbitSeverity(text) {
   return severityMarks(text).reduce((best, s) => (SEVERITY_RANK[s] > SEVERITY_RANK[best] ? s : best), 'unknown');
@@ -847,6 +902,47 @@ export function newestCodeRabbitReview(reviews) {
   return (reviews || [])
     .filter((r) => isCodeRabbitUser(r?.user) && String(r.body ?? '').trim() !== '')
     .reduce((best, r) => (best === null || at(r) >= at(best) ? r : best), null);
+}
+
+const CLEAN_ROUND = /No actionable comments were generated/i;
+
+/** The commit named by a coverage marker of kind reviewed. 40 hex or null. */
+function reviewedCoverage(text) {
+  for (const m of text.matchAll(/final_review_risk_coverage:(\{[^}]*\})/g)) {
+    try {
+      const c = JSON.parse(m[1]);
+      if (c.kind === 'reviewed' && /^[0-9a-f]{40}$/.test(c.coveredCommitId ?? '')) return c.coveredCommitId;
+    } catch { /* not a marker */ }
+  }
+  return null;
+}
+
+/**
+ * The commit a clean, reviewed summary covers: the coverage marker of kind reviewed. With no marker at all, the last "between <sha> and <sha>".
+ * A marker that exists but does not say reviewed (or cannot be read) gives null: the "between" line must not override it. 40 hex or null.
+ */
+function summaryCoveredCommit(body) {
+  const text = String(body ?? '');
+  if (text.includes('final_review_risk_coverage:')) return reviewedCoverage(text);
+  const between = [...text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)].pop();
+  return between ? between[1] : null;
+}
+
+/**
+ * C2: the CodeRabbit round the carry reads. A review object (newestCodeRabbitReview), or a clean round that left only the summary
+ * comment (live PR 213: 0 review objects). The summary stands in for a zero-finding review of the commit it covers: { id: null,
+ * commit_id, summaryOnly: true }. It counts only when it is trusted, is no notice, says no actionable comments, covers a commit
+ * that is not the head, was written after the newest review object, and no review object holds that commit (the object has the findings).
+ */
+export function newestCodeRabbitRound({ reviews, comments, commentEdits, head } = {}) {
+  const object = newestCodeRabbitReview(reviews);
+  const summary = trustedCodeRabbitSummary(comments, commentEdits);
+  if (summary === null || codeRabbitNotice(summary.body) || !CLEAN_ROUND.test(String(summary.body))) return object;
+  const covered = summaryCoveredCommit(summary.body);
+  if (covered === null || covered === head) return object;
+  if ((reviews || []).some((r) => isCodeRabbitUser(r?.user) && r.commit_id === covered)) return object;
+  const objectAt = object ? Date.parse(object.submitted_at || '') || 0 : -1;
+  return commentStamp(summary) > objectAt ? { id: null, commit_id: covered, body: '', summaryOnly: true } : object;
 }
 
 // GitHub lists at most 300 files in a compare. A list that long may be cut off, and the PR's own files may be the ones cut.
@@ -896,8 +992,13 @@ export function parseCliFixReviews(body) {
 function reviewBlockers({ newest, reviewComments }, head) {
   if (!newest) return ['no CodeRabbit review to carry'];
   if (!/^[0-9a-f]{40}$/.test(newest.commit_id ?? '') || newest.commit_id === head) return ['the newest CodeRabbit review names no earlier head'];
-  const stated = /Actionable comments posted:\s*(\d+)/.exec(newest.body);
-  if (!stated) return ['the newest CodeRabbit review has no review sentence'];
+  if (newest.summaryOnly) return []; // a clean summary-only round has no findings and no inline comments
+  // A notice (rate limit, skipped, failed) is never a review, even when it quotes review content.
+  if (codeRabbitNotice(newest.body)) return ['the newest CodeRabbit review is a notice'];
+  const stated = REVIEW_SENTENCE.exec(newest.body);
+  // No sentence (an outside-diff or nitpick only review, live PR 205 review 5691905341): 0 inline comments, the body is still read.
+  // A body with no sentence, no outside-diff section and no severity marker has nothing to read, so it fails closed.
+  if (!hasReviewContent(newest.body)) return ['the newest CodeRabbit review has no review sentence'];
   if (!Array.isArray(reviewComments)) return ['the inline comments of the newest review were not read'];
   const blocks = [];
   const bodySeverity = codeRabbitSeverity(newest.body);
@@ -906,7 +1007,8 @@ function reviewBlockers({ newest, reviewComments }, head) {
   const outside = Number(OUTSIDE_DIFF_HEADING.exec(newest.body)?.[1] ?? 0);
   if (outside > 0 && severityMarks(newest.body).length < outside) blocks.push('an outside-diff finding has no severity marker');
   // N counts the inline comments only (PR 204 review 5691302687: N 1, one inline comment, one more finding outside the diff).
-  if (reviewComments.length < Number(stated[1])) blocks.push(`only ${reviewComments.length} of ${stated[1]} inline comments were read`);
+  const inline = Number(stated?.[1] ?? 0);
+  if (reviewComments.length < inline) blocks.push(`only ${reviewComments.length} of ${inline} inline comments were read`);
   for (const c of reviewComments) {
     const s = codeRabbitSeverity(c?.body);
     if (s !== 'minor') blocks.push(s === 'unknown' ? 'an inline comment has no severity marker' : `an inline comment is ${s}`);
@@ -975,11 +1077,11 @@ export function carryBlockers({ head, newest, reviewComments, compare, prFiles, 
  * { carried, cliOnly }. carried is { from, deltaLines } when the newest CodeRabbit review stands for the head (see carryBlockers), else null.
  * cliOnly is true when the CLI fix review line is the ONLY blocker: every other carry condition holds, so the author needs cr-fix.mjs, not a PR review.
  */
-function carriedReview({ carry, reviews, head, comments, labels, cr, body }) {
-  const newest = newestCodeRabbitReview(reviews);
+function carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body }) {
+  const newest = newestCodeRabbitRound({ reviews, comments, commentEdits, head });
   const blocks = carryBlockers({ ...carry, head, newest, state: routerState(comments), labels, cr, body });
   const carried = blocks.length === 0 ? { from: newest.commit_id, deltaLines: deltaLinesOf(carry.compare, carry.prFiles) } : null;
-  return { carried, cliOnly: blocks.length > 0 && blocks.length === cliFixBlockers({ body, newest }, head).length };
+  return { carried, blockers: blocks, cliOnly: blocks.length > 0 && blocks.length === cliFixBlockers({ body, newest }, head).length };
 }
 
 /** The reasons a head with no CodeRabbit review carries. The first two are for a draft and an unrouted PR; a person must not post a review request for either. */
@@ -1048,6 +1150,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   let coderabbitRateLimited = null;
   let coderabbitRetryMinutes = null;
   let coderabbitCarried = null;
+  let coderabbitCarryBlockers = [];
   if (need.coderabbit) {
     const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt, nowMs });
     coderabbit = cr.status;
@@ -1062,8 +1165,10 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     } else if (!cr.reviewedHead) {
       // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
       // A Minor-only review of an earlier head plus a small push stands for the head (the carry); every other case asks for a review.
-      const carryResult = carriedReview({ carry, reviews, head, comments, labels, cr, body: pull.body });
+      const carryResult = carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body: pull.body });
       coderabbitCarried = carryResult.carried;
+      // Only a carry whose inputs were read has blockers to show; a draft or unrouted PR never reads them.
+      coderabbitCarryBlockers = carry ? carryResult.blockers : [];
       if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
     }
     if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);
@@ -1079,6 +1184,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     // { from, deltaLines }: READY took a Minor-only CodeRabbit review of the earlier head `from`, plus a push of `deltaLines` lines or fewer, for this head.
     // null otherwise. coderabbitReviewedHead stays false for a carry: the head itself was not reviewed.
     coderabbitCarried,
+    // Why the carry did not stand for the head: the carryBlockers strings. [] when carried or not tried. Never a reason: READY ignores it.
+    coderabbitCarryBlockers,
     // N from "Outside diff range comments (N)" in the newest CodeRabbit review of the head. 0 when none. Blocks READY until handled.
     coderabbitOutsideDiff: outsideDiff,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
@@ -1129,12 +1236,13 @@ function attempt(fn) {
  * The four reads the carry needs, only for a PR whose CodeRabbit review does not name the head. Each read that fails is null,
  * and carryBlockers turns a null into "not eligible". The router config comes from the BASE branch: a PR must not lower its own bar.
  */
-function readCarry({ pull, reviews }) {
-  const newest = newestCodeRabbitReview(reviews);
-  if (!newest?.id || !newest.commit_id) return null;
+function readCarry({ pull, reviews, comments, commentEdits }) {
+  const newest = newestCodeRabbitRound({ reviews, comments, commentEdits, head: pull.head.sha });
+  if (!newest?.commit_id || (!newest.id && !newest.summaryOnly)) return null;
   const files = attempt(() => gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/files?per_page=100`]).flat());
   return {
-    reviewComments: attempt(() => gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews/${newest.id}/comments?per_page=100`]).flat()),
+    // A summary-only round has no review object and no inline comments: nothing to read.
+    reviewComments: newest.summaryOnly ? [] : attempt(() => gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews/${newest.id}/comments?per_page=100`]).flat()),
     compare: attempt(() => gh([`repos/${owner}/${name}/compare/${newest.commit_id}...${pull.head.sha}`])),
     // changed_files must match the list read: a short or long list is not the PR's files. Above 300 files: not eligible.
     prFiles: files && files.length === pull.changed_files && files.length <= 300 ? files : null,
@@ -1173,19 +1281,16 @@ function readLiveInputs() {
   const checkRuns = runsDoc.check_runs;
   if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
   // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
-  // Comments: the first 100, with body, author and 20 edits each in ONE response, so the parsed body and its edit
-  // history cannot come from different moments. More than 100 is "cannot determine", like threads.
+  // Comments are read apart, page by page (readIssueComments). More than 100 review threads is "cannot determine".
   // commits(last:1) is the head commit, for the CodeRabbit notice date.
-  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
   const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
   const prq = g.data.repository.pullRequest;
   const rt = prq.reviewThreads;
   if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
-  if (prq.comments.pageInfo.hasNextPage) throw new Error('more than 100 comments');
-  // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them.
-  const restComments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
+  // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them. All pages, through the reader cr-fix.mjs uses.
   // REST finds the candidates; only the GraphQL body is parsed.
-  const { comments, commentEdits } = mergeGraphqlComments(restComments, prq.comments.nodes);
+  const { comments, commentEdits } = readIssueComments(gh, owner, name, pr);
   const greptileAuto = readGreptileAuto(pull.base.ref);
   // Every PR reads the reviews: outside-diff findings in a CodeRabbit review body block READY whatever the labels.
   const reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
@@ -1223,6 +1328,10 @@ async function main() {
     console.log(`  Greptile: ${result.greptile} | review of head: ${result.reviewedHead ? 'yes' : 'NO'} | confidence: ${result.confidence === null ? 'n/a' : `${result.confidence}/5`} | unresolved threads: ${result.unresolved}/${result.totalThreads} | mergeable: ${result.mergeable_state}`);
     console.log(`  Proof: ${result.proof.type ?? 'none'} (${result.proof.status})`);
     for (const r of result.reasons) console.log(`  - ${r}`);
+    if (result.coderabbitCarryBlockers?.length > 0) {
+      console.log('  Carry blockers (why the earlier CodeRabbit review does not stand for this head):');
+      for (const b of result.coderabbitCarryBlockers) console.log(`    - ${b}`);
+    }
   }
   process.exit(result.ready ? 0 : 1);
 }

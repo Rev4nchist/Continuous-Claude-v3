@@ -179,6 +179,7 @@
         "^node(\\.exe)?\\s.*review-status\\.mjs",
         "^node(\\.exe)?\\s.*pre-pr\\.mjs",
         "^node(\\.exe)?\\s.*cr-fix\\.mjs",
+        "^node(\\.exe)?\\s.*cr-paid\\.mjs",
         "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
       ]
     },
@@ -194,6 +195,7 @@
       "segment": [
         "^(cr|coderabbit)\\b",
         "^node(\\.exe)?\\s.*cr-fix\\.mjs",
+        "^node(\\.exe)?\\s.*cr-paid\\.mjs",
         "^skills(@\\S+)?\\s+add\\b.*coderabbit",
         "^coderabbit\\s+skills\\b"
       ]

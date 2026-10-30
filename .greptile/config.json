@@ -2,7 +2,7 @@
   "autoReview": [],
   "statusCheck": true,
   "strictness": 2,
-  "ignorePatterns": "**/*.min.js\n**/*.lock\n**/package-lock.json\n**/dist/**\n.claude/hooks/dist/**\n.claude/cache/**\ndocs/reviews/**",
+  "ignorePatterns": "**/*.min.js\n**/*.lock\n**/package-lock.json\n**/dist/**\n.claude/hooks/dist/**\n.claude/cache/**\ndocs/reviews/**\nscripts/github/fixtures/**\ndocs/**\nthoughts/**\n.claude/skills/_vendor/**",
   "instructions": "CCv3 is a Windows-first Claude Code harness. Many files exist as two copies (repo and ~/.claude, src and dist, settings.json and its template). Prefer findings about correctness, security and drift between the two copies over style.",
   "rules": [
     {

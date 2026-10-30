@@ -73,3 +73,14 @@ test('DW-91 .coderabbit.yaml: a push does not start a review, and the recovery s
   assert.match(yaml, /auto_incremental_review: false/);
   assert.match(yaml, /@coderabbitai review/);
 });
+
+test('Paid-review policy (Dave, 2026-10-30): the PR-comment ban points to the policy section, and the loop rule holds it', () => {
+  const loop = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../.claude/rules-ondemand/pr-review-loop.md'), 'utf8');
+  assert.doesNotMatch(rule, /on a PR comment[^\n]*Never post it/i);
+  assert.match(rule, /Paid PR reviews/);
+  assert.match(rule, /cr-paid\.mjs/);
+  assert.match(loop, /## Paid PR reviews \(Dave, 2026-10-30\)/);
+  assert.match(loop, /cr-paid\.mjs check --pr/);
+  assert.match(loop, /@coderabbitai review --use-credits/);
+  assert.doesNotMatch(loop, /Never request the paid on-demand review/);
+});

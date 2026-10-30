@@ -195,6 +195,9 @@ const CASES = [
   ['npx skills add of another package does not claim the CodeRabbit rule', bash('s96', 'npx skills add vercel-labs/skills'), 'none', [], ['coderabbit-cli']],
   // PR D review C11: a cr-fix.mjs run is a CodeRabbit step of the review loop, so both rules load.
   ['node cr-fix.mjs injects the review loop rule and the CodeRabbit rule', bash('s97', 'node scripts/github/cr-fix.mjs 221 --json'), 'inject', ['pr-review-loop', 'coderabbit-cli'], []],
+  // Paid-review policy (Dave, 2026-10-30): a cr-paid.mjs run loads both rules, in a pipeline segment too.
+  ['node cr-paid.mjs injects the review loop rule and the CodeRabbit rule', bash('s98', 'node scripts/github/cr-paid.mjs check --pr 225 --json'), 'inject', ['pr-review-loop', 'coderabbit-cli'], []],
+  ['cr-paid.mjs after a cd injects both rules', bash('s99', 'cd scripts && node github/cr-paid.mjs record --pr 225 --head abc1234 --files 3'), 'inject', ['pr-review-loop', 'coderabbit-cli'], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'grok exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];

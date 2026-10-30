@@ -89,11 +89,13 @@ lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recomm
    and returns at once. Wait for Dave's press in the pane. Then the mod adds the `review:` label and
    marks the PR ready. A headless run gets a text plan and records nothing. Never run `gh pr ready`,
    never add a `review:` label by hand, and never run `pr-checkpoint.mjs --confirm` or `--apply` from a
-   shell. The mod lock denies a Write-tool edit of `pathway.json` and any shell text that names it.
+   shell. Lock A of the ccv3-mods `pr-checkpoint` hook denies a Write-tool edit of `pathway.json`.
+   Lock B of the same hook denies any shell text that names it.
    To return a PR to draft, run `gh pr ready --undo`.
 3. Batch every fix into one push. After the push, run `node scripts/github/cr-fix.mjs --pr <N>` in the
-   PR checkout. It stops when local HEAD is not the PR head. It reviews only the commits after the newest
-   CodeRabbit review. Paste its one line (`CLI fix review: <from>..<head> clean`) in the PR body. A body
+   PR checkout. It stops when local HEAD is not the PR head, or when CodeRabbit already reviewed the head. It reviews only the commits after the carry source.
+   The carry source is the newest CodeRabbit review, or a newer clean summary-only round (see "What READY checks").
+   Paste the one line of the script (`CLI fix review: <from>..<head> clean`) in the PR body. A body
    edit does not change the head. For a Major or Critical: fix, commit, push, and run it again.
    Then post one `@coderabbitai review`, only when the `pr_watch` line says a round is left or says Dave
    allowed the round. After a Minor-only round, a fix of 30 lines or fewer with a clean line needs no new
@@ -102,7 +104,7 @@ lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recomm
 5. Do not stack PRs by default. `base_branches` is `main`, so a stacked PR gets no review. READY pins the
    review to the head, so each restack needs a new review.
 6. When the week is busy, post `@coderabbitai rate limit` before a review request. It costs no review.
-   Warn at a 7-day count of 30. Wait at 40.
+   The warn and wait counts are in the first paragraph of this section.
 
 ### PR review budget per class
 
@@ -154,18 +156,27 @@ step 1 does not list.
   above are enforced in both modes.
 - Residual risks, accepted: GraphQL with the query text in a file (`-F query=@file`) shows the hook no
   label or ready text. `gh pr ready --undo` and `-F "draft=true"` inside quotes read as a ready and a
-  non-draft create (the hook does not lex quotes). The ccv3-mods lock closes the Write-tool route:
-  it denies a Write, Edit, MultiEdit or NotebookEdit of `pathway.json` and any shell text that names it.
-  An indirect script that builds the path from parts is accepted. The mod lock also denies a gh write
-  shape (a comment, a pr edit or create body, an api POST, PATCH or PUT, a `body=` field, a GraphQL mutation, or `--input`) whose text
-  names `pathway-confirmed`, the router's marker. A gh read that names it is allowed. A node or
+  non-draft create (the hook does not lex quotes). Lock A of the ccv3-mods `pr-checkpoint` hook closes the Write-tool route.
+  Lock A denies a Write, Edit, MultiEdit or NotebookEdit of `pathway.json`. Lock B of the same hook
+  denies any shell text that names `pathway.json`. An indirect script that builds the path from parts is accepted.
+  Lock B also denies a gh write shape whose text names `pathway-confirmed`, the router's marker.
+  A gh write shape is any of these.
+  A comment is one. A `pr edit` or `pr create` with a body is one.
+  An `api` call with POST, PATCH or PUT is one. A `body=` field is one.
+  A GraphQL mutation is one. The `--input` flag is one.
+  A gh read that names the marker is allowed. A node or
   PowerShell script that posts the marker, or a body file that holds it, is accepted. A confirmed label is tied to
   HEAD, not to a PR number, in this hook: `gh pr edit <other> --add-label review:deep` passes while that
-  pathway stands. The mod lock also checks the PR number against its store record.
-  The hook does not read a subcommand built from a variable (`gh pr $sub 201`). The hook reads the mode
-  from the cwd checkout. When that cwd has no readable `review-router.config.json`, a command is
-  enforced if it names CCv3, if it is a self-confirm, or if it runs in a CCv3 checkout. A readable
-  config keeps its own `enforce` value.
+  pathway stands. Lock B also checks the PR number against its store record.
+  The hook does not read a subcommand built from a variable (`gh pr $sub 201`).
+  The hook reads the mode from the cwd checkout. Sometimes that cwd has no readable
+  `review-router.config.json`. Then the hook enforces a command in three cases. Case one: the command names CCv3.
+  Case two: the command is a self-confirm. Case three: the command runs in a CCv3 checkout.
+  A readable config keeps its own `enforce` value.
+- Residual risk, accepted (Dave, 2026-10-30): `review-status.mjs` trusts the `CLI fix review:` line in the PR body.
+  Anyone who can edit the body can write that line. This is the same trust as a label, which needs write access.
+- Residual risk, accepted: a router comment written before the consumed line existed has no `consumed` id.
+  A stale marker on such a PR can count once more at the next same-head ready. After that run the router saves the id, and the marker is bound.
 - `SKIP_PRE_PR_GATE=1` is Dave-only. An agent never sets it, never suggests it, and never copies it
   from a deny message. It works only as a leading assignment. Each use writes an `override` line to the
   guard decision log.
@@ -219,7 +230,8 @@ Case two: the last review was cancelled, failed or skipped.
 In either case, post ONE review request for that bot (`@coderabbitai review`), then wait again.
 
 After a CodeRabbit "Review rate limited" or "Review limit reached" notice, do not post
-the request; report to Dave. If the request also produces no review, report to Dave. With his merge
+a plain request. When the next slot is over 15 minutes away, follow "Paid PR reviews (Dave, 2026-10-30)".
+Otherwise wait. If the request also produces no review, report to Dave. With his merge
 yes, post the reason on the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #111 precedent).
 
 On a both PR, `pr_watch` asks Dave once in the pane for Greptile on the final head. Post `@greptileai`
@@ -237,7 +249,7 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
      fix or dismiss it.
    - Read the whole review body. CodeRabbit lists "Outside diff range comments (N)" there. They have no
      thread, so no thread count shows them. READY (`review-status.mjs`) adds N over every CodeRabbit
-     review of the PR.
+     review body of the PR. The body needs no "Actionable comments posted" sentence.
      A push does not clear them. READY fails while that total is above the number of handled bullets.
    - Fix each one, or list it in the PR body under the heading `Outside-diff: handled`. Write one
      top-level bullet per finding, with the fix commit or the reason. READY needs one bullet per finding.
@@ -258,7 +270,8 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 6. Request the review of the new head (`@coderabbitai review`; a push does not start one) only when the
    `pr_watch` line says a round is left, or after the pane shows "Dave allowed round N". After a
    Minor-only round with a fix of 30 lines or fewer, post nothing: READY carries the earlier review.
-   Never post while the CodeRabbit status is pending. Then wait.
+   Never post while the CodeRabbit status is pending. Before any request, run the cap check in
+   "Paid PR reviews (Dave, 2026-10-30)". Then wait.
 7. Post the outcome to the user: finding count, fixed count, dismissed count, Greptile confidence
    (when Greptile reviewed), CI status.
 8. For FourthBot, add a Sync row in the Grok↔Claude comms hub.
@@ -266,6 +279,51 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 Never merge the PR. That is a separate, confirmed decision. Before Dave says merge, check three facts: you
 read the newest round in full, the fix push is verified (`review-status.mjs` on the pushed head), and the carry
 line or a review names that head.
+
+## Paid PR reviews (Dave, 2026-10-30)
+
+Billing facts (CodeRabbit docs, measured on PR #221):
+
+- A reviewed file costs $0.25.
+- Round 1 bills every reviewable PR file. A later round bills only the files changed since the last reviewed commit.
+- Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` applies the filters and shows both file counts.
+- The mode is On demand. Past the included limit, a plain `@coderabbitai review` never bills.
+- A seat holder pays with `@coderabbitai review --use-credits`. It covers the current commit only.
+- In Automatic mode, an over-limit review bills with no prompt. So run the cap check before EVERY review request.
+
+Post a paid round without asking only when ALL six conditions hold:
+
+1. READY needs a CodeRabbit review of this head, and no carry is possible.
+2. The round is inside the PR round budget (`pr-checkpoint`: 1+1, risk list 1+2).
+3. The next included slot is more than 15 minutes away (comment `@coderabbitai rate limit`). Otherwise wait.
+4. The round costs $5 or less.
+5. The paid spend of all sessions today (America/Chicago date) plus this round is $15 or less.
+6. For round 2 or later: every finding of the last round is fixed, its threads are resolved, and the `cr-fix` line is clean.
+
+Stop and ask Dave when any of these is true:
+
+- The round is past the budget.
+- A fix round brings a new Major in code the fix touched (a spiral).
+- The fix since the last reviewed commit is over 30 lines or adds files.
+- Either cap would be crossed.
+- This would be the third paid round on one PR.
+
+Commands:
+
+1. Run `node scripts/github/cr-paid.mjs check --pr <N>`. It checks conditions 4 and 5, the paid round count and the fix size. It does not check conditions 1, 2, 3 and 6.
+2. On ALLOW (exit 0), post exactly the comment it prints: `@coderabbitai review --use-credits`.
+3. On ESCALATE (exit 3), stop and ask Dave. Exit 2 gives no verdict, so treat it as ESCALATE.
+4. After you post, run `node scripts/github/cr-paid.mjs record --pr <N> --head <sha> --files <K>`. It writes the shared ledger `~/.claude/state/coderabbit-paid.jsonl`.
+5. Run `node scripts/github/cr-paid.mjs today` to read today's total.
+
+Packaging rules:
+
+- Open fewer, larger PRs: bundle related work in one area into one PR (Dave, 2026-10-30).
+- Larger PRs need fewer rounds: 0 to 10 file PRs average 2.2 rounds, 26 to 60 file PRs average 1.75.
+- Round 1 bills every reviewable file, so a round 1 over 20 files goes past the $5 cap and needs Dave.
+- `docs/**`, `thoughts/**` and vendored skills are not reviewed, so they add no cost.
+- Run the Claude review and the `pre-pr.mjs` CLI review before round 1.
+- Push once per fix round.
 
 ## Proof in the PR body (live, P4b)
 
@@ -328,7 +386,17 @@ missing behaviour. Subagents never commit: the main session supplies the RED com
 CodeRabbit carry. READY accepts the newest CodeRabbit review of an earlier head when all of these
 hold. `review-status.mjs --json` then prints `coderabbitCarried: { from, deltaLines }`.
 
-- That review has Minor or nitpick findings only. An unknown severity counts as Major.
+- That review has Minor or nitpick findings only. `review-status.mjs` maps Trivial to minor. An unknown severity counts as Major.
+  A review with no "Actionable comments posted" sentence counts 0 inline comments. Its body severity and outside-diff marker checks still apply.
+  READY also counts its outside-diff findings, and the PR body must list each one as handled.
+  A body with nothing to read blocks the carry.
+- A clean round can leave only the summary comment and no review object. That summary is a carry source when it
+  meets seven conditions. The CodeRabbit app wrote it. No person edited it. It is not a notice.
+  It says "No actionable comments were generated". It covers an earlier commit, not the head. It is newer than the newest
+  review object. No review object holds the commit it covers.
+  The covered commit comes from the first coverage marker of `kind: reviewed`, even when other markers exist.
+  With no coverage marker, it comes from the last "between <sha> and <sha>" line.
+  A coverage marker with no reviewed kind, or one that is unreadable, rules the summary out. The "between" line then does not count.
 - The head is `ahead` of the reviewed head. The delta is 30 lines or fewer: additions plus
   deletions over the files that are in both the compare and the PR. A merge of main that touches
   other files does not count. A change of main inside a PR file still counts. A compare of 300 files blocks.
@@ -339,11 +407,23 @@ hold. `review-status.mjs --json` then prints `coderabbitCarried: { from, deltaLi
   not-clean line blocks the carry.
 - The CodeRabbit status is not pending. CI is green. The proof GREEN line names the head.
 
-When only the CLI line blocks the carry, the reason says to run `node scripts/github/cr-fix.mjs --pr <N>` and put its
-line in the PR body; it does not ask for a review. Do not post `@coderabbitai review` for it.
+Sometimes only the CLI line blocks the carry. Then the reason tells you to run `node scripts/github/cr-fix.mjs --pr <N>`.
+It also tells you to put the output line in the PR body. It does not ask for a review. Do not post `@coderabbitai review` for it.
 
 Any other missing fact blocks the carry. Then READY asks for a review of the head as before. A carry does
 not clear unresolved threads, outside-diff findings or the Greptile requirement.
+READY counts outside-diff findings in every CodeRabbit review body, with or without the review sentence.
+A carried round with unhandled outside-diff findings stays NOT READY.
+
+`review-status.mjs --json` prints `coderabbitCarryBlockers`. It is a list of strings that stopped the carry.
+It is not a READY reason and does not change READY. The text output lists the strings under the reasons.
+
+`cr-fix.mjs` stops with exit 2 when CodeRabbit already reviewed the head. The head has a review object, or a trusted clean summary that covers it.
+It prints "CodeRabbit already reviewed the head; no CLI run needed" and spends no CLI run.
+`cr-fix.mjs` lists the merge commits in `<from>..HEAD` after the run. It names each one on stderr, with 7 characters of the sha.
+The review still runs, and the exit code does not change. Merged-in code, such as main, is part of that review.
+A finding may come from that code and not from your fix commits. Read `.claude/cache/e2e/<date>-cr-fix-<head7>.txt`
+to see which commit holds a finding. The `CLI fix review:` line on stdout keeps its form, so the carry still reads `clean`.
 
 READY checks the shape and the head. It does not judge whether RED really failed. The reviewer does.
 
@@ -404,8 +484,8 @@ A repo without `.greptile/config.json` may still use CodeRabbit (`coderabbitai[b
   "Actionable comments posted: N", or its summary comment naming the head commit. A green
   `CodeRabbit` commit status alone is not a review.
 - "Review rate limited" or "Review limit reached" is not a review. Do not post `@coderabbitai review`
-  after that notice; it is refused. Never request the paid on-demand review. Report to Dave; with his
-  merge yes, land with `-IgnoreReview`.
+  after that notice; it is refused. Request the paid review only under "Paid PR reviews (Dave,
+  2026-10-30)". Otherwise report to Dave; with his merge yes, land with `-IgnoreReview`.
 - Steps 1-8 of "When the review lands" apply, without the `@greptileai` tag.
 
 ## Loop prompt (fallback, for a repo without pr_watch)
@@ -456,6 +536,17 @@ number (Actions, `review-router`, Run workflow).
   `builder:*` label and a CodeRabbit rate limit. A missing builder label never blocks.
 - That comment is the router's only memory. It holds the class and the full head SHA the router last saw.
   Only a comment by `github-actions[bot]` that starts with the marker counts. A person's copy is ignored.
+- After a checkpoint, the state line also holds `pclass`. The router writes `consumed` in its own comment line,
+  `<!-- review-router-consumed id=<n> -->`, right after the state line. The state line keeps the shape that an older router reads.
+- The router writes `consumed` only after a ready event that a marker confirmed. It is the highest fresh `pathway-confirmed` marker id for the head.
+  That id covers an unused marker above the one the ready event used, such as a marker left by a failed ready step.
+  An older comment without the line still parses.
+- A marker belongs to one ready event. The router skips a marker whose comment id is not above `consumed`.
+  Once an id is consumed, the router ignores a marker with no numeric id. Only an owner, member or collaborator marker counts.
+- `gh pr ready --undo` followed by a UI "Ready for review" on the same head is not a checkpoint. The old marker does not count again.
+  The "Class raised ... run /pathway again" note stays.
+- A new `/pathway` run posts a new marker with a higher id. The next ready then counts as a checkpoint.
+  `pclass` becomes the current class, and the note clears. A push, a reopen and an open keep the saved `consumed` id.
 - READY trusts a label that drops Greptile only when that comment names the current head and no
   `risk:*` label is above its class. Otherwise Greptile stays required (CodeRabbit instead while
   Greptile auto review is off), and READY says why.

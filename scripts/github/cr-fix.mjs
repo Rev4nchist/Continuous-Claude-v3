@@ -6,13 +6,18 @@
  * PR review of the PR, so a fix is checked once before the READY carry (review-status.mjs) accepts it.
  *
  * Usage: node scripts/github/cr-fix.mjs --pr <N> [--repo owner/name] [--timeout-min N]   (run it in the PR checkout)
- *   1. Reads the PR reviews with `gh api` and takes the newest CodeRabbit review with a body (its commit_id is <from>).
+ *   1. Reads the PR reviews, issue comments and comment edit history with `gh api`, and takes the same carry source as review-status.mjs
+ *      (newestCodeRabbitRound): the newest CodeRabbit review with a body, or a newer clean summary-only round. Its commit is <from>.
  *   2. Runs `cr review --agent --committed --base-commit <from>` in the current checkout. HEAD is <head>.
  *   3. Saves the full output to .claude/cache/e2e/<date>-cr-fix-<head7>.txt.
  *   4. Prints ONE line on stdout when the run finished. Paste it into the PR body:
  *        CLI fix review: <from7>..<head7> <clean|N major|N critical|incomplete>
  *      Critical wins over Major; Minor, Trivial and Info findings still print `clean`. The READY carry reads the line
  *      (parseCliFixReviews in review-status.mjs) and accepts only `clean`.
+ *
+ * A merge commit in <from>..HEAD (for example a merge of main after the review) puts that code into the CLI review, so a finding in it can
+ * block the carry. The run still goes ahead. The merge shas are named on stderr only: the stdout line keeps its exact form, because the carry
+ * reads everything after the range as the verdict and accepts only `clean`.
  *
  * It never passes --use-credits or --api-key. Past the hourly CLI allowance the CLI returns awaiting_confirmation or
  * action_required: this script prints the `incomplete` line and the reason on stderr only (nothing to paste) and exits 1. Dave decides about credits
@@ -27,7 +32,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newestCodeRabbitReview } from './review-status.mjs';
+import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -104,21 +109,31 @@ export function fixVerdict(p, run) {
 const dayOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const stop = (reason) => ({ line: null, exitCode: 2, reason, outFile: null, from: null, head: null, verdict: null });
 
-/** The newest CodeRabbit review's commit and the checkout head, or a stop result. No CLI run has been spent yet. */
+/** { reviews, comments, commentEdits }: the three inputs of newestCodeRabbitRound. Throws when a read fails. */
+function readSource(pr, repo, deps) {
+  const [owner, name] = repo.split('/');
+  const reviews = [deps.gh(['--paginate', '--slurp', `repos/${repo}/pulls/${pr}/reviews?per_page=100`])].flat(2);
+  // The issue comments with their edit history: every page, through the reader review-status.mjs uses (the summary is trusted only with it).
+  return { reviews, ...readIssueComments(deps.gh, owner, name, pr) };
+}
+
+/** The carry source's commit (the same round review-status.mjs reads) and the checkout head, or a stop result. No CLI run has been spent yet. */
 function readRange(pr, repo, cwd, deps) {
   let head;
-  let reviews;
+  let source;
   try {
     head = String(deps.headSha(cwd) ?? '').trim().toLowerCase();
-    reviews = [deps.gh(['--paginate', '--slurp', `repos/${repo}/pulls/${pr}/reviews?per_page=100`])].flat(2);
+    source = readSource(pr, repo, deps);
   } catch (err) {
     return { stop: stop(`could not read the PR or the checkout (${String(err.message).split('\n')[0]})`) };
   }
   if (!SHA40.test(head)) return { stop: stop('the checkout head is not a commit sha') };
-  const newest = newestCodeRabbitReview(reviews);
-  if (!newest) return { stop: stop('the PR has no CodeRabbit review to start from') };
+  // The head has a CodeRabbit review (the PR #211 shape: an older review object plus a trusted clean summary of the head). No fix range is left.
+  if (codeRabbitHeadReview({ head, ...source }).reviewedHead) return { stop: stop('CodeRabbit already reviewed the head; no CLI run needed') };
+  const newest = newestCodeRabbitRound({ ...source, head });
+  if (!newest) return { stop: stop('the PR has no CodeRabbit review (or clean summary round) to start from') };
   const from = String(newest.commit_id ?? '').toLowerCase();
-  if (!SHA40.test(from)) return { stop: stop('the newest CodeRabbit review names no commit') };
+  if (!SHA40.test(from)) return { stop: stop('the newest CodeRabbit round names no commit') };
   if (from === head) return { stop: stop('the newest CodeRabbit review is of the head: there is no fix commit to review') };
   return { from, head };
 }
@@ -136,6 +151,11 @@ function checkCheckout({ pr, repo, cwd, from, head }, deps) {
   return null;
 }
 
+/** The merge commit shas in <from>..HEAD, or null when git could not list them. Never stops the run. */
+function safeMerges(deps, cwd, from) {
+  try { return deps.mergesIn(cwd, from); } catch { return null; }
+}
+
 /** Saves the CLI output. A failed save is returned as text; the line is still printed. */
 function save(file, text, deps) {
   try { deps.writeOut(file, text); return null; } catch (err) { return String(err.message); }
@@ -146,12 +166,13 @@ function save(file, text, deps) {
  * writeOut(file, text), now. Returns { line, exitCode, reason, outFile, from, head, verdict }.
  */
 export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN }, deps = {}) {
-  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), ...deps };
+  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), ...deps };
   const range = readRange(pr, repo, cwd, d);
   if (range.stop) return range.stop;
   const { from, head } = range;
   const bad = checkCheckout({ pr, repo, cwd, from, head }, d);
   if (bad) return bad;
+  const merges = safeMerges(d, cwd, from);
   const run = await d.runCr({ cwd, args: CR_FIX_ARGS(from), timeoutMs });
   const stdout = String(run.stdout ?? '');
   const outFile = path.join(cwd, '.claude', 'cache', 'e2e', `${dayOf(d.now)}-cr-fix-${head.slice(0, 7)}.txt`);
@@ -159,11 +180,11 @@ export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEO
   const { verdict, reason } = fixVerdict(parseAgentStream(stdout), run);
   const line = `CLI fix review: ${from.slice(0, 7)}..${head.slice(0, 7)} ${verdict}`;
   const note = saveError ? `the output could not be saved (${saveError})` : null;
-  return { line, exitCode: verdict === 'incomplete' ? 1 : 0, reason: [reason, note].filter(Boolean).join('; ') || null, outFile, from, head, verdict };
+  return { line, exitCode: verdict === 'incomplete' ? 1 : 0, reason: [reason, note].filter(Boolean).join('; ') || null, outFile, from, head, verdict, merges };
 }
 
 // ---- real gh, git and file calls ----
-function ghApi(apiArgs) {
+export function ghApi(apiArgs) {
   const personal = path.join(os.homedir(), '.config', 'gh-personal');
   const dir = process.env.GH_CONFIG_DIR || (existsSync(personal) ? personal : undefined);
   const env = { ...process.env, ...(dir ? { GH_CONFIG_DIR: dir } : {}) };
@@ -180,6 +201,13 @@ function gitIsAncestor(cwd, from) {
   return spawnSync('git', ['merge-base', '--is-ancestor', from, 'HEAD'], { cwd, windowsHide: true }).status === 0;
 }
 
+/** The merge commit shas in <from>..HEAD, newest first. Throws when git fails. */
+export function gitMergesIn(cwd, from) {
+  const r = spawnSync('git', ['rev-list', '--merges', `${from}..HEAD`], { cwd, encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) throw new Error(`git rev-list --merges failed: ${String(r.stderr).trim()}`);
+  return r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+}
+
 function writeText(file, text) {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, text);
@@ -191,6 +219,11 @@ export function reportOf(r) {
   const err = [];
   if (r.line) (r.verdict === 'incomplete' ? err : out).push(r.line);
   if (r.reason) err.push(`cr-fix: ${r.exitCode === 0 ? 'note' : r.line ? 'incomplete' : 'stopped'}: ${r.reason}`);
+  if (r.merges === null) err.push('cr-fix: note: could not check the range for merge commits');
+  else if (r.merges?.length > 0) {
+    const shas = r.merges.map((m) => m.slice(0, 7)).join(', ');
+    err.push(`cr-fix: note: the range holds ${r.merges.length} merge commit(s): ${shas}. Code merged in (for example main) is part of this review; a finding there is not from the fix commits`);
+  }
   if (r.outFile) err.push(`cr-fix: full output: ${r.outFile}`);
   return { out, err };
 }

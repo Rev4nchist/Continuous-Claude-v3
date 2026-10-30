@@ -128,7 +128,7 @@ const pathsOf = (files) => [...new Set(files.flatMap((f) => [f.filename, f.previ
 const tagged = (paths, globs = []) => paths.filter((p) => globs.some((g) => matchGlob(g, p)));
 
 /** A file is reviewable unless a "!glob" path filter excludes it (an include glob, when any exists, must match). */
-function reviewableFiles(files, filters = []) {
+export function reviewableFiles(files, filters = []) {
   const skip = filters.filter((g) => g.startsWith('!')).map((g) => g.slice(1));
   const keep = filters.filter((g) => !g.startsWith('!'));
   return files.filter((f) => !skip.some((g) => matchGlob(g, f.filename)) && (keep.length === 0 || keep.some((g) => matchGlob(g, f.filename))));
