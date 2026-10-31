@@ -26,7 +26,7 @@ import { appendFileSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cleanSummaryCommit, codeRabbitHeadReview, deltaLinesOf, isCodeRabbitUser, newestCodeRabbitRound, readIssueComments } from './review-status.mjs';
+import { cleanSummaryCommit, codeRabbitHeadReview, deltaLinesOf, isCodeRabbitUser, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
 import { pathFiltersFrom, reviewableFiles } from './pr-checkpoint.mjs';
 import { ghApi } from './cr-fix.mjs';
 
@@ -97,7 +97,7 @@ function readFacts(pr, repo, gh) {
   if (!SHA40.test(head)) throw new Error('the PR head is not a commit sha');
   const reviews = readList(gh, `repos/${repo}/pulls/${pr}/reviews?per_page=100`);
   const prFiles = readList(gh, `repos/${repo}/pulls/${pr}/files?per_page=100`);
-  return { head, reviews, prFiles, ...readIssueComments(gh, owner, name, pr) };
+  return { head, reviews, prFiles, commits: readPrCommits(gh, owner, name, pr), ...readIssueComments(gh, owner, name, pr) };
 }
 
 /** The fix since the last reviewed commit: { lines, added }. Throws when the compare cannot be sized. */
