@@ -31,6 +31,11 @@
  * the deny text does NOT mention it, because agents followed that advice 59 of 59 times.
  * Every override is logged to guard-decisions.jsonl (shared/guard-log.ts).
  *
+ * Scoped cleanup (2026-10-31, replay item 9.1): a command that is exactly ONE bare `rm -rf <path>`
+ * or `Remove-Item -Recurse [-Force] <path>` with one literal absolute path under the session
+ * scratchpad or <repo>/.claude/worktrees/<name> is allowed in every mode and logged as an 'allow'
+ * row (not 'override') with reason `scoped-cleanup:scratchpad` or `scoped-cleanup:worktree`. Rules and fail-closed checks: shared/scoped-cleanup.ts. Anything else is unchanged.
+ *
  * ACCEPTED LIMITATIONS (white-box verify sweep 2026-06-29 — this is a BACKSTOP,
  * NOT a sandbox; human confirm-first + settings deny + per-tool rules also apply):
  *   - Lexical command-name evasion: "rm" / 'rm' / r\m / $'rm' / rm${IFS}-rf
@@ -58,6 +63,7 @@ import {
 } from './shared/destructive-classifier.js';
 import { isUnattended } from './shared/unattended.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
+import { scopedCleanupKind, type ScopedCleanupDeps, type ScopedKind } from './shared/scoped-cleanup.js';
 
 // Re-exported so existing imports (and the test file) keep working.
 export { classifyDestructive, stripQuotedStrings, parseExecutable, extractShellWrapperPayloads, normalizeGitGlobalOptions };
@@ -72,6 +78,7 @@ interface HookInput {
   permission_mode?: string;
   session_id?: string;
   agent_id?: string;
+  cwd?: string;
 }
 
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
@@ -90,7 +97,20 @@ interface HookOutput {
 export { isUnattended };
 
 /** `override` is set only when the override let a command through that the guard would have flagged. */
-export type Decision = { decision: 'allow' | 'ask' | 'deny'; pattern?: string; override?: boolean };
+export type Decision = {
+  decision: 'allow' | 'ask' | 'deny';
+  pattern?: string;
+  override?: boolean;
+  /** Set when the scoped-cleanup rule allowed a flagged delete: which root it lay in. */
+  scoped?: ScopedKind;
+};
+
+/** Reason on the decision log row for a scoped-cleanup allow, so Dave can audit these rows. */
+export const SCOPED_CLEANUP_REASON = 'scoped-cleanup';
+
+// Only these two patterns are a lone recursive delete. Any other pattern in the same command
+// (the classifier returns the first match) is not the shape the scoped rule allows.
+const SCOPED_PATTERNS = new Set(['recursive rm', 'PowerShell recursive delete (Remove-Item -Recurse)']);
 
 /**
  * Decide allow/ask/deny for a Bash command. Pure — easy to unit test.
@@ -101,7 +121,12 @@ export type Decision = { decision: 'allow' | 'ask' | 'deny'; pattern?: string; o
  * the COMMAND STRING (the prefix the user actually types), with the env var kept
  * as a fallback in case the parent process exports it.
  */
-export function decide(command: string, input: HookInput, env: NodeJS.ProcessEnv = process.env): Decision {
+export function decide(
+  command: string,
+  input: HookInput,
+  env: NodeJS.ProcessEnv = process.env,
+  scopedDeps?: ScopedCleanupDeps,
+): Decision {
   // F2: the override is only honored as a LEADING command prefix (the env-var
   // form the user actually types), NOT as a substring anywhere — otherwise
   // `echo SKIP_DESTRUCTIVE_GUARD=1 && rm -rf x` would disable the guard.
@@ -112,6 +137,10 @@ export function decide(command: string, input: HookInput, env: NodeJS.ProcessEnv
   const pattern = classifyDestructive(command, 0, input.tool_name || input.tool || 'Bash');
   if (overridden) return pattern ? { decision: 'allow', pattern, override: true } : { decision: 'allow' };
   if (!pattern) return { decision: 'allow' };
+  // Scoped cleanup (replay item 9.1): one literal recursive delete under the session scratchpad
+  // or <repo>/.claude/worktrees/<name>. Allowed in every mode. Any doubt falls through to the gate.
+  const scoped = SCOPED_PATTERNS.has(pattern) ? scopedCleanupKind(command, input, scopedDeps) : null;
+  if (scoped) return { decision: 'allow', pattern, scoped };
   return { decision: isUnattended(input, env) ? 'deny' : 'ask', pattern };
 }
 
@@ -147,8 +176,10 @@ async function main(): Promise<void> {
   const command = input.tool_input?.command;
   if (typeof command !== 'string' || !command.trim()) { console.log('{}'); return; }
 
-  const { decision, pattern, override } = decide(command, input);
+  const { decision, pattern, override, scoped } = decide(command, input);
   if (override && pattern) logGuardDecision(HOOK, input, 'override', pattern, { command });
+  // An 'allow' row, not 'override': a scoped delete is no bypass, and the SKIP audit counts 'override' rows.
+  if (scoped) logGuardDecision(HOOK, input, 'allow', `${SCOPED_CLEANUP_REASON}:${scoped}`, { command });
   if (decision === 'allow' || !pattern) { console.log('{}'); return; }
   logGuardDecision(HOOK, input, decision, pattern, { command });
 

@@ -423,6 +423,15 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 var COMMAND_HEAD_CHARS = 80;
 var REASON_CHARS = 200;
+var PATH_CHARS = 300;
+var TARGET_FIELD = {
+  Read: "file_path",
+  Edit: "file_path",
+  Write: "file_path",
+  Agent: "subagent_type",
+  Task: "subagent_type",
+  Skill: "skill"
+};
 function guardLogPath(env = process.env) {
   const home = env.USERPROFILE || env.HOME || homedir();
   return env.CCV3_GUARD_DECISIONS_LOG || join(home, ".claude", "logs", "guard-decisions.jsonl");
@@ -464,20 +473,39 @@ function commandHead(command) {
 function shouldWrite(env) {
   return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
 }
+function pathText(value, max = PATH_CHARS) {
+  return typeof value === "string" && value ? value.slice(0, max) : void 0;
+}
+function targetOf(input, tool) {
+  const explicit = pathText(input?.target);
+  if (explicit) return explicit;
+  const field = Object.hasOwn(TARGET_FIELD, tool) ? TARGET_FIELD[tool] : void 0;
+  const toolInput = input?.tool_input;
+  if (!field || typeof toolInput !== "object" || toolInput === null) return void 0;
+  return pathText(toolInput[field]);
+}
 function logGuardDecision(hook, input, decision, reason, opts = {}) {
   const env = opts.env ?? process.env;
   try {
     if (!shouldWrite(env)) return;
     const agent = input?.agent_id || env.CLAUDE_AGENT_ID || void 0;
+    const tool = input?.tool_name || input?.tool || "";
     const entry = {
       ts: (/* @__PURE__ */ new Date()).toISOString(),
       hook,
-      tool: input?.tool_name || input?.tool || "",
+      tool,
       decision,
       reason: maskSecrets(String(reason)).replace(/\s+/g, " ").trim().slice(0, REASON_CHARS),
-      session_id: input?.session_id || ""
+      session_id: input?.session_id || "",
+      agent: !!agent
     };
     if (agent) entry.agent_id = agent;
+    const cwd = pathText(input?.cwd);
+    if (cwd) entry.cwd = cwd;
+    const mode = pathText(input?.permission_mode, 40);
+    if (mode) entry.permission_mode = mode;
+    const target = targetOf(input, tool);
+    if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
     const path = guardLogPath(env);
     mkdirSync(dirname(path), { recursive: true, mode: 448 });
@@ -517,14 +545,235 @@ function logGuardError(hook, err, opts = {}) {
   }
 }
 
+// src/shared/scoped-cleanup.ts
+import { execFileSync } from "child_process";
+import { lstatSync, readdirSync, realpathSync } from "fs";
+import { tmpdir } from "os";
+import * as nodePath from "path";
+var BASH_RM = /^rm[ \t]+(?:-rf|-fr|-r[ \t]+-f|-f[ \t]+-r)[ \t]+(?:'([^']*)'|"([^"]*)"|([^\s'"]+))$/;
+var PS_HEAD = /^Remove-Item[ \t]+/i;
+var PS_TOKEN = /[ \t]*(-[A-Za-z]+(?=[ \t]|$)|'[^']*'|"[^"]*"|[^\s'"]+)/y;
+var PATH_BLACKLIST = /[^\x20-\x7e]|[$`%*?[\]{}~;&|<>()!#,@]/;
+var SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
+function bashRmPath(command) {
+  const m = BASH_RM.exec(command);
+  if (!m) return null;
+  const [, single, double, bare] = m;
+  if (bare !== void 0 && bare.includes("\\")) return null;
+  if (double !== void 0 && /\\[\\$`"]|\\$/.test(double)) return null;
+  return single ?? double ?? bare ?? null;
+}
+function powershellPath(command) {
+  const head = PS_HEAD.exec(command);
+  if (!head) return null;
+  PS_TOKEN.lastIndex = head[0].length;
+  const tokens = [];
+  let end = head[0].length;
+  for (let m = PS_TOKEN.exec(command); m; m = PS_TOKEN.exec(command)) {
+    tokens.push(m[1]);
+    end = PS_TOKEN.lastIndex;
+  }
+  if (command.slice(end).trim() !== "") return null;
+  return interpretPowershellTokens(tokens);
+}
+function unquote(token) {
+  if (token.startsWith("'") && token.endsWith("'") && token.length >= 2) return token.slice(1, -1);
+  if (token.startsWith('"') && token.endsWith('"') && token.length >= 2) return token.slice(1, -1);
+  if (token.startsWith("'") || token.startsWith('"')) return null;
+  return token;
+}
+function interpretPowershellTokens(tokens) {
+  let recurse = false;
+  let force = false;
+  const paths = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    const lower = t.toLowerCase();
+    if (lower === "-recurse") {
+      if (recurse) return null;
+      recurse = true;
+      continue;
+    }
+    if (lower === "-force") {
+      if (force) return null;
+      force = true;
+      continue;
+    }
+    if (lower === "-path" || lower === "-literalpath") {
+      const value = tokens[++i];
+      if (value === void 0 || /^-[A-Za-z]/.test(value)) return null;
+      const v2 = unquote(value);
+      if (v2 === null) return null;
+      paths.push(v2);
+      continue;
+    }
+    if (/^-[A-Za-z]/.test(t)) return null;
+    const v = unquote(t);
+    if (v === null) return null;
+    paths.push(v);
+  }
+  if (!recurse || paths.length !== 1) return null;
+  return paths[0];
+}
+function literalPath(command, tool) {
+  if (/[\r\n\u0000]/.test(command)) return null;
+  const c = command.trim();
+  if (!c) return null;
+  const path = tool === "PowerShell" ? powershellPath(c) : tool === "Bash" ? bashRmPath(c) : null;
+  if (!path || path.startsWith("-") || PATH_BLACKLIST.test(path)) return null;
+  return path;
+}
+function absolute(raw, tool, ctx) {
+  let s = raw;
+  if (ctx.platform === "win32") {
+    if (tool === "Bash") {
+      const m = /^\/([a-zA-Z])(\/.*)?$/.exec(s);
+      if (m) s = `${m[1]}:${m[2] ?? "/"}`;
+    }
+    if (!/^[a-zA-Z]:[\\/]/.test(s) || s.slice(2).includes(":")) return null;
+    if (s.split(/[\\/]/).includes("..")) return null;
+    const out = ctx.p.resolve(s);
+    return out.split("\\").slice(1).some((seg2) => /[. ]$/.test(seg2)) ? null : out;
+  }
+  if (!s.startsWith("/") || s.split("/").includes("..")) return null;
+  return ctx.p.resolve(s);
+}
+var fold = (s, ctx) => ctx.platform === "win32" ? s.toLowerCase() : s;
+function below(base, target, ctx) {
+  const b = fold(base, ctx).replace(/[\\/]+$/, "");
+  const t = fold(target, ctx);
+  if (!t.startsWith(b + ctx.p.sep)) return null;
+  const rest = target.slice(b.length + 1).split(ctx.p.sep).filter(Boolean);
+  return rest.length ? rest : null;
+}
+function realResolve(p, ctx) {
+  const tail = [];
+  let cur = p;
+  for (; ; ) {
+    try {
+      const r = ctx.realpath(cur);
+      return tail.length ? ctx.p.join(r, ...tail.reverse()) : r;
+    } catch {
+    }
+    const parent = ctx.p.dirname(cur);
+    if (parent === cur) return null;
+    tail.push(ctx.p.basename(cur));
+    cur = parent;
+  }
+}
+function sameName(a, b, ctx) {
+  return fold(a, ctx) === fold(b, ctx);
+}
+function isScratchShape(segs, sessionId, ctx) {
+  return !!segs && segs.length >= 4 && sameName(segs[1], sessionId, ctx) && sameName(segs[2], "scratchpad", ctx);
+}
+function inScratchpad(target, real, sessionId, tmp, ctx) {
+  if (!SESSION_ID.test(sessionId)) return false;
+  const realClaude = realResolve(ctx.p.join(tmp, "claude"), ctx);
+  if (!realClaude) return false;
+  const realTmp = realResolve(tmp, ctx);
+  const lexicalBases = [ctx.p.join(tmp, "claude"), ...realTmp ? [ctx.p.join(realTmp, "claude")] : []];
+  const lexical = lexicalBases.some((base) => isScratchShape(below(base, target, ctx), sessionId, ctx));
+  return lexical && isScratchShape(below(realClaude, real, ctx), sessionId, ctx);
+}
+function defaultGitCommonDir(cwd) {
+  const env = { ...process.env };
+  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[k];
+  try {
+    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
+      encoding: "utf8",
+      timeout: 3e3,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+      env
+    }).trim();
+    return out ? nodePath.resolve(cwd, out) : null;
+  } catch {
+    return null;
+  }
+}
+function worktreesRoot(cwd, deps, ctx) {
+  if (!cwd || !ctx.p.isAbsolute(cwd)) return null;
+  const common = (deps.gitCommonDir ?? defaultGitCommonDir)(cwd);
+  if (!common || ctx.p.basename(common).toLowerCase() !== ".git") return null;
+  return ctx.p.join(ctx.p.dirname(common), ".claude", "worktrees");
+}
+function inWorktrees(target, real, wtRoot, ctx) {
+  const realRepo = realResolve(ctx.p.dirname(ctx.p.dirname(wtRoot)), ctx);
+  const realRoot = realResolve(wtRoot, ctx);
+  if (!realRepo || !realRoot) return false;
+  if (!sameName(realRoot, ctx.p.join(realRepo, ".claude", "worktrees"), ctx)) return false;
+  const lexical = [wtRoot, realRoot].some((base) => below(base, target, ctx) !== null);
+  return lexical && below(realRoot, real, ctx) !== null;
+}
+var DEFAULT_MAX_ENTRIES = 2e3;
+function treeIsPlain(root, max, ctx) {
+  const stack = [root];
+  let seen = 0;
+  while (stack.length) {
+    const dir = stack.pop();
+    let st;
+    try {
+      st = lstatSync(dir);
+    } catch (err) {
+      if (err.code === "ENOENT" && dir === root) return true;
+      return false;
+    }
+    if (st.isSymbolicLink()) return false;
+    if (!st.isDirectory()) continue;
+    let names;
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return false;
+    }
+    seen += names.length;
+    if (seen > max) return false;
+    for (const n of names) stack.push(ctx.p.join(dir, n));
+  }
+  return true;
+}
+function rootKind(target, real, tmp, input, deps, ctx) {
+  if (typeof input.session_id === "string" && inScratchpad(target, real, input.session_id, tmp, ctx)) return "scratchpad";
+  const wtRoot = worktreesRoot(input.cwd, deps, ctx);
+  return wtRoot && inWorktrees(target, real, wtRoot, ctx) ? "worktree" : null;
+}
+function scopedCleanupKind(command, input, deps = {}) {
+  try {
+    const tool = input.tool_name || input.tool || "Bash";
+    const raw = literalPath(command, tool);
+    if (!raw) return null;
+    const platform = deps.platform ?? process.platform;
+    const ctx = {
+      platform,
+      p: platform === "win32" ? nodePath.win32 : nodePath.posix,
+      realpath: deps.realpath ?? ((p) => realpathSync.native(p))
+    };
+    const target = absolute(raw, tool, ctx);
+    if (!target) return null;
+    const real = realResolve(target, ctx);
+    if (!real) return null;
+    const tmp = ctx.p.resolve(deps.tmpdir ?? tmpdir());
+    const kind = rootKind(target, real, tmp, input, deps, ctx);
+    if (!kind) return null;
+    return treeIsPlain(real, deps.maxEntries ?? DEFAULT_MAX_ENTRIES, ctx) ? kind : null;
+  } catch {
+    return null;
+  }
+}
+
 // src/destructive-command-guard.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var HOOK = "destructive-command-guard";
-function decide(command, input, env = process.env) {
+var SCOPED_CLEANUP_REASON = "scoped-cleanup";
+var SCOPED_PATTERNS = /* @__PURE__ */ new Set(["recursive rm", "PowerShell recursive delete (Remove-Item -Recurse)"]);
+function decide(command, input, env = process.env, scopedDeps) {
   const overridden = env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
   const pattern = classifyDestructive(command, 0, input.tool_name || input.tool || "Bash");
   if (overridden) return pattern ? { decision: "allow", pattern, override: true } : { decision: "allow" };
   if (!pattern) return { decision: "allow" };
+  const scoped = SCOPED_PATTERNS.has(pattern) ? scopedCleanupKind(command, input, scopedDeps) : null;
+  if (scoped) return { decision: "allow", pattern, scoped };
   return { decision: isUnattended(input, env) ? "deny" : "ask", pattern };
 }
 function reasonFor(decision, pattern, command) {
@@ -558,8 +807,9 @@ async function main() {
     console.log("{}");
     return;
   }
-  const { decision, pattern, override } = decide(command, input);
+  const { decision, pattern, override, scoped } = decide(command, input);
   if (override && pattern) logGuardDecision(HOOK, input, "override", pattern, { command });
+  if (scoped) logGuardDecision(HOOK, input, "allow", `${SCOPED_CLEANUP_REASON}:${scoped}`, { command });
   if (decision === "allow" || !pattern) {
     console.log("{}");
     return;
@@ -581,6 +831,7 @@ if (!process.env.VITEST) {
   });
 }
 export {
+  SCOPED_CLEANUP_REASON,
   classifyDestructive,
   decide,
   extractShellWrapperPayloads,
