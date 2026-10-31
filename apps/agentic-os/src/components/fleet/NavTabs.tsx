@@ -54,7 +54,7 @@ export function NavTabs({ view, onSelect }: { view: ViewId; onSelect: (view: Vie
             {tab.tag !== null && (
               <span
                 data-testid="nav-tab-tag"
-                className="rounded-[3px] border border-[#3a4356] px-[5px] text-[0.625rem] tracking-[0.08em] text-[#7d8798]"
+                className="rounded-[3px] border border-[var(--line2)] px-[5px] text-[0.625rem] tracking-[0.08em] text-[#7d8798]"
               >
                 {tab.tag}
               </span>

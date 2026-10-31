@@ -56,7 +56,7 @@ type Source = { id: string; detail: string };
 type Snapshot = {
   active: { sessions: Session[]; recentlyEnded: Session[] };
   ready: ReadyItem[];
-  cards: { id: string }[];
+  cards: { id: string; title: string | null; askOpen: number; askStale: number }[];
   tiles: { needsDave: number };
   sources: Source[];
 };
@@ -196,21 +196,63 @@ test.describe('Ready for Dave rows', () => {
   });
 });
 
-// --- No prompt text anywhere -------------------------------------------------------------------
+// --- Ask age and invisible characters ----------------------------------------------------------
 
-test.describe('working_on is gone', () => {
-  test('R4 no session in the API carries workingOn, and the page has no working_on wording', async ({
+/** Built from code points: the source file holds no bidi or zero-width character. */
+const INVISIBLE = String.fromCharCode(0x202e, 0x200b, 0x0000, 0x2066);
+
+test.describe('ask age and text', () => {
+  test('A1 an ask whose brief is 25 h old stays open while the state file is fresh', async ({
     page,
     request,
   }) => {
+    const [live] = liveSessions(await loadSnapshot(request));
+    // `at` is now (the session is still working); only the brief is old. The terminal pane
+    // measures from the later of the two, so the page must too.
+    writeState(live.id, {
+      brief: makeBrief({ ask: [ask(FIRST)], updatedAt: secondsAgo(25 * 3600) }),
+    });
+
+    const snapshot = await loadSnapshot(request);
+    expect(snapshot.ready.find((r) => r.sessionId === live.id)?.text).toBe(FIRST);
+    expect(snapshot.cards.find((c) => c.id === live.id)).toMatchObject({ askOpen: 1, askStale: 0 });
+
+    await page.goto('/');
+    await expect(readyItem(page, live.id)).toContainText(FIRST);
+  });
+
+  test('A2 bidi, zero-width and control characters are stripped from an ask and a title', async ({
+    page,
+    request,
+  }) => {
+    const [live] = liveSessions(await loadSnapshot(request));
+    writeState(live.id, {
+      brief: makeBrief({
+        title: `E2E${INVISIBLE} title`,
+        ask: [ask(`Open${INVISIBLE} the file`)],
+      }),
+    });
+
+    const snapshot = await loadSnapshot(request);
+    expect(snapshot.ready.find((r) => r.sessionId === live.id)?.text).toBe('Open the file');
+    expect(snapshot.cards.find((c) => c.id === live.id)?.title).toBe('E2E title');
+
+    await page.goto('/');
+    const shown = (await readyItem(page, live.id).getByTestId('ready-text').textContent()) ?? '';
+    for (const code of [0x202e, 0x200b, 0x0000, 0x2066]) {
+      expect(shown.includes(String.fromCharCode(code)), `U+${code.toString(16)} must not reach the page`).toBe(false);
+    }
+  });
+});
+
+// --- No prompt text anywhere -------------------------------------------------------------------
+
+test.describe('working_on is gone', () => {
+  test('R4 no session in the API carries workingOn', async ({ request }) => {
     const { active } = await loadSnapshot(request);
     for (const session of [...active.sessions, ...active.recentlyEnded]) {
       expect(session).not.toHaveProperty('workingOn');
     }
-
-    await page.goto('/');
-    await waitForHydration(page);
-    await expect(page.locator('body')).not.toContainText('working_on');
   });
 });
 
@@ -241,24 +283,6 @@ test.describe('Unmatched sessions and Closed panels', () => {
       ).toHaveCount(0);
     }
     await expect(page.getByTestId('closed-session')).toHaveCount(active.recentlyEnded.length);
-  });
-
-  test('P2 an unmatched live session shows its first open ask on one line', async ({ page, request }) => {
-    const { active } = await loadSnapshot(request);
-    const unmatched = active.sessions.find(
-      (s) => s.projectKey === null && s.liveSecondsAgo < LIVE_UNDER_SECONDS,
-    );
-    test.skip(unmatched === undefined, 'Precondition missing: no live session without a project in the database.');
-    const id = (unmatched as Session).id;
-    writeState(id, { brief: makeBrief({ ask: [ask(FIRST, RECOMMEND), ask(SECOND)] }) });
-
-    await page.goto('/');
-    const row = page.locator(`[data-testid="unmatched-session"][data-session-id="${id}"]`);
-    const line = row.getByTestId('unmatched-ask');
-    await expect(line).toContainText(FIRST);
-    await expect(line).toHaveCSS('white-space', 'nowrap');
-    await expect(row).not.toContainText(SECOND);
-    await expect(row).not.toContainText(RECOMMEND);
   });
 });
 

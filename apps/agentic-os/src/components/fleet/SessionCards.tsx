@@ -71,7 +71,7 @@ export function SessionCards({
               : 'No live sessions. A session shows here within 15 minutes of its last sign of life.'}
           </p>
         ) : (
-          <ul className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
+          <ul className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))]">
             {cards.map((card) => (
               <SessionCardItem
                 key={card.id}

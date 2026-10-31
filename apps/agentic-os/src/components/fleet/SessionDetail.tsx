@@ -83,7 +83,7 @@ export function SessionDetail({ detail, onClose }: { detail: Detail; onClose: ()
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-accent"
+            className="min-h-6 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-accent"
           >
             Close
           </button>

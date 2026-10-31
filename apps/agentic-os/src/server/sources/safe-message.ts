@@ -77,6 +77,17 @@ export function scrubPathsInText(text: string): string {
     .replace(PATH_TAIL, (_all, tail: string) => `<path>${TRAILING_MARKS.exec(tail)?.[0] ?? ''}`);
 }
 
+/**
+ * Control characters (not tab or line breaks), bidi overrides and isolates, zero-width characters and the BOM.
+ * They are invisible or flip the text around them ("gnp.exe" shown as "exe.png"); Dave reads this text.
+ * Run after redaction: a marker or a secret split by one of these still matches the redact patterns first.
+ */
+const INVISIBLE = /[\u0000-\u0008\u000E-\u001F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+
+export function stripControl(text: string): string {
+  return text.replace(INVISIBLE, '');
+}
+
 export function safeMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   const redacted = redact(raw.slice(0, 2000)).text;

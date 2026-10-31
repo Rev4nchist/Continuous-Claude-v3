@@ -4,7 +4,8 @@ import { formatAge } from './format';
 
 /**
  * Ready for Dave: one row per session that waits on Dave. The row shows the session's FIRST open,
- * unanswered, non-stale ask, redacted, on one line (the full text is the `title`). There is no
+ * unanswered, non-stale ask, redacted, on one line (the `title` holds the same text: the server clips an
+ * ask to 240 characters, so the title is that clip, not the full ask). There is no
  * recommendation here, and never a prompt: the session detail panel holds every ask and the plan.
  *
  * Amber is the colour for "a person is needed". The strip sits at the very top of the page.
@@ -24,7 +25,7 @@ export function ReadyForDave({
 
   return (
     <section data-testid="ready-for-dave" className="rounded-md border bg-card">
-      <header className="flex items-baseline justify-between gap-3 border-b px-3 py-2 text-xs text-muted-foreground">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b px-3 py-2 text-xs text-muted-foreground">
         <h2 className="text-foreground">
           Ready for Dave
           <span className="ml-2 font-normal text-muted-foreground">· every item waiting on you</span>
@@ -39,7 +40,7 @@ export function ReadyForDave({
         {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">Nothing waiting on Dave.</p>
         ) : (
-          <ul className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
+          <ul className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))]">
             {items.map((item) => (
               <li
                 key={item.sessionId}
@@ -57,7 +58,7 @@ export function ReadyForDave({
                       type="button"
                       onClick={() => onSelect(item.sessionId)}
                       title="Open the session detail"
-                      className="text-left font-mono underline-offset-2 transition-colors hover:text-foreground hover:underline [overflow-wrap:anywhere]"
+                      className="inline-flex min-h-6 items-center text-left font-mono underline-offset-2 transition-colors hover:text-foreground hover:underline [overflow-wrap:anywhere]"
                     >
                       {item.name}
                     </button>

@@ -162,11 +162,24 @@ async function loadSnapshot(request: APIRequestContext, sessionId?: string): Pro
  * A live session: in active.sessions with a sign of life under 15 minutes ago AND an id the app
  * accepts in ?session= (the design ignores any other id). Fails if none.
  */
-async function liveSession(request: APIRequestContext): Promise<LiveSession> {
+async function liveSession(
+  request: APIRequestContext,
+  options: { mapped?: boolean } = {},
+): Promise<LiveSession> {
   const snapshot = await loadSnapshot(request);
   const live = snapshot.active.sessions.filter(
-    (s) => s.liveSecondsAgo < LIVE_UNDER_SECONDS && SESSION_ID_FORMAT.test(s.id),
+    (s) =>
+      s.liveSecondsAgo < LIVE_UNDER_SECONDS &&
+      SESSION_ID_FORMAT.test(s.id) &&
+      (options.mapped !== true || (s.projectKey !== null && s.projectDisplayName !== null)),
   );
+  // A live session exists but none maps to a project: the case cannot run, which is not a fault of the page.
+  if (options.mapped === true) {
+    test.skip(
+      live.length === 0 && snapshot.active.sessions.some((s) => s.liveSecondsAgo < LIVE_UNDER_SECONDS),
+      'Precondition missing: no live session maps to a project (projectKey and projectDisplayName set).',
+    );
+  }
   expect(
     live.length,
     `Precondition: the database needs a live session (liveSecondsAgo < ${LIVE_UNDER_SECONDS}) ` +
@@ -505,11 +518,8 @@ test.describe('Sessions view', () => {
 
   test('the project filter set on Overview applies to the table', async ({ page, request }) => {
     const errors = watchErrors(page);
-    const live = await liveSession(request);
-    expect(
-      live.projectKey && live.projectDisplayName,
-      `Precondition: live session ${live.id} must map to a project`,
-    ).toBeTruthy();
+    // The first live session that maps to a project: an unmapped one cannot be filtered by a project card.
+    const live = await liveSession(request, { mapped: true });
     writeDetailFixture(live.id);
 
     const snapshot = await loadSnapshot(request);
@@ -1272,6 +1282,8 @@ test.describe('ask flags in the detail', () => {
   test('an ask older than 24 h shows as stale in the Ask section', async ({ page, request }) => {
     const live = await liveSession(request);
     writeDetailFixture(live.id, {
+      // Both stamps are old: the age is the later of the brief update and the file write.
+      at: secondsAgo(25 * HOUR),
       brief: makeBrief({
         title: 'E2E stale detail',
         ask: [ask('E2E stale detail ask', 'E2E stale detail recommend')],

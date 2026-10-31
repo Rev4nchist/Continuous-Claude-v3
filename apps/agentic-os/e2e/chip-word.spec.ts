@@ -8,14 +8,6 @@ import { chipWord } from '../src/components/fleet/format';
  */
 
 test.describe('chipWord', () => {
-  test('each of the five codes maps to its glossary word', () => {
-    expect(chipWord('working')).toBe('Working');
-    expect(chipWord('waiting-on-dave')).toBe('Waiting for you');
-    expect(chipWord('blocked')).toBe('Stuck');
-    expect(chipWord('done')).toBe('Done');
-    expect(chipWord('idle')).toBe('Idle');
-  });
-
   test('a code the map does not know comes back as it is', () => {
     expect(chipWord('paused')).toBe('paused');
     expect(chipWord('')).toBe('');

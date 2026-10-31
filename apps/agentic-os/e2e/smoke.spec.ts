@@ -61,6 +61,8 @@ test.describe('Mission Control page (/)', () => {
     const cards = page.getByRole('article');
     await expect(cards.first()).toBeVisible();
     await expect(cards.first().getByRole('heading', { level: 3 })).not.toBeEmpty();
+    // Last active sits behind the card's closed disclosure.
+    await cards.first().locator('summary').click();
     await expect(cards.first().getByText('Last active')).toBeVisible();
     await expect(page.getByText(/^No projects in/)).toHaveCount(0);
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import type { MissionControlSnapshot } from '@/server/queries/mission-control';
 
@@ -91,11 +91,32 @@ export function MissionControl({
       ? data.detailUnavailable
       : null;
 
+  // Choosing a session moves focus to the detail heading and, only when the heading is off screen,
+  // scrolls to it. On a phone the detail is drawn first but comes late in the DOM, so a keyboard or
+  // screen-reader user would otherwise stay on the card they pressed. A load with ?session= or a poll
+  // does not move focus: only a choice does.
+  const detailRef = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef(false);
+  const panelState = detail !== null ? 'detail' : unavailable !== null ? 'unavailable' : 'loading';
+  useEffect(() => {
+    if (!pendingFocus.current || selected === null || panelState === 'loading') return;
+    const area = detailRef.current;
+    const heading = area?.querySelector('h2');
+    if (!area || !heading) return;
+    pendingFocus.current = false;
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+    // The whole detail scrolls to the top of the screen, not only its heading.
+    const { top, bottom } = heading.getBoundingClientRect();
+    if (top < 0 || bottom > window.innerHeight) area.scrollIntoView({ block: 'start' });
+  }, [selected, panelState]);
+
   const changeView = (next: ViewId) => {
     setView(next);
     mirrorUrl(next, selected);
   };
   const choose = (id: string | null, nextView: ViewId = view) => {
+    pendingFocus.current = id !== null;
     setSelected(id);
     setView(nextView);
     mirrorUrl(nextView, id);
@@ -179,7 +200,7 @@ export function MissionControl({
               onClear={clearFilter}
               onSelect={toggleSession}
             />
-            {panel}
+            {panel !== null && <div ref={detailRef}>{panel}</div>}
           </div>
         ) : (
           // Two columns from `lg` up. On a phone the column wrappers are `contents`, so every panel
@@ -229,7 +250,10 @@ export function MissionControl({
             </div>
 
             <div className="contents lg:flex lg:min-w-0 lg:flex-[1_1_380px] lg:flex-col lg:gap-3.5">
-              <div className={cn('order-1 min-w-0 lg:order-none', panel === null && 'hidden lg:block')}>
+              <div
+                ref={detailRef}
+                className={cn('order-1 min-w-0 lg:order-none', panel === null && 'hidden lg:block')}
+              >
                 {panel ?? (
                   <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
                     Select a session to see its goal, plan and asks.
@@ -343,7 +367,7 @@ function LiveIndicator({
         <button
           type="button"
           onClick={onRefresh}
-          className="flex items-center gap-2 rounded px-1.5 py-1 transition-colors hover:bg-accent"
+          className="flex min-h-6 items-center gap-2 rounded px-1.5 py-1 transition-colors hover:bg-accent"
           title="Refresh now"
         >
           <span

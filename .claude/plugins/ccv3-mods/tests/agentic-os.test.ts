@@ -716,7 +716,15 @@ describe('agentic-os hud in the state file', () => {
 // E13 a later write (turn end, brief_set) for the ended id overwrites the final file; or the guard blocks other ids
 // E14 a headless run with nothing to say writes a file at exit
 // E15 CCV3_MODS_OFF=1 writes at exit
-const endWorld = (on: On, env: Record<string, string> = {}) => {
+// E13b a write that started before the end and lands after it (the engine has reset the ended-id atom by then) replaces the final file
+// E11c /clear or a resume resets the HUD before the final write: the final file loses the ending conversation's cost and context
+// Not tested: the 300 ms floor (FINAL_WRITE_MIN_MS). The kit runs a hook under a root budget of Infinity (`next.budget.remainingMs`) and
+// SessionEndInput has no field to cut it, so a test cannot give the hook 200 ms. A live `claude -p` run would be the only check.
+const endWorld = (on: On, env: Record<string, string> = {}, id = 'test-session') => {
+  // `sid.current` is what `$.session.id()` answers: a /clear moves the process to a new id, so a test sets it after the end.
+  const sid = { current: id }
+  // A test sets `slow.wait` to hold the next `process.run` (the lane read behind /os) until it resolves.
+  const slow = { wait: null as Promise<void> | null }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/home', ...env })
   const writes: { path: string; text: string }[] = []
@@ -730,12 +738,16 @@ const endWorld = (on: On, env: Record<string, string> = {}) => {
     writes.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
-  on('session.id', () => ({ value: 'test-session' }))
+  on('process.run', async () => {
+    if (slow.wait !== null) await slow.wait
+    return { value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.id', () => ({ value: sid.current }))
   on('agent.list', () => ({ value: [] as never }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('tool.register', (_$, e) => ({ value: { tool: `mcp__ccv3-mods__${e.name}` } }))
-  return { writes, clock }
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  return { writes, clock, sid, slow }
 }
 
 const filesOf = (seen: { writes: { path: string; text: string }[] }, id: string) =>
@@ -748,13 +760,16 @@ const endWith = ($: Engine, reason: string, sessionId = 's1') => $.session.end({
 describe('agentic-os final snapshot at session end', () => {
   for (const reason of ['clear', 'resume', 'logout', 'prompt_input_exit', 'other']) {
     test(`E11 reason ${reason} writes the ending session's file once, with endedAt equal to at`, async ($, on) => {
-      const seen = endWorld(on)
+      // The session id is the ending id, so the brief_set write and the final write go to the same file.
+      const seen = endWorld(on, {}, 's1')
       await startEnd($, true)
       await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
-      expect(lastOf(seen, 'test-session')).not.toHaveProperty('endedAt')
+      const before = filesOf(seen, 's1').length
+      expect(before).toBeGreaterThan(0)
+      expect(lastOf(seen, 's1')).not.toHaveProperty('endedAt')
       await seen.clock.advance(4_000)
       await endWith($, reason)
-      expect(filesOf(seen, 's1')).toHaveLength(1)
+      expect(filesOf(seen, 's1')).toHaveLength(before + 1)
       const final = lastOf(seen, 's1')
       expect(final.sessionId).toBe('s1')
       expect(final.at).toBe(5_000)
@@ -763,14 +778,17 @@ describe('agentic-os final snapshot at session end', () => {
   }
 
   test('E12 /clear writes the old brief into the final file before the resets; the new conversation starts without it', async ($, on) => {
-    const seen = endWorld(on)
+    const seen = endWorld(on, {}, 's1')
     await startEnd($, true)
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'old goal' })
     await endWith($, 'clear')
     expect(lastOf(seen, 's1').brief.goal).toBe('old goal')
+    // After /clear the process goes on under a new id; its first turn end writes that id's file.
+    seen.sid.current = 's2'
     await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
-    expect(lastOf(seen, 'test-session').brief ?? null).toBeNull()
-    expect(lastOf(seen, 'test-session')).not.toHaveProperty('endedAt')
+    expect(filesOf(seen, 's2').length).toBeGreaterThan(0)
+    expect(lastOf(seen, 's2').brief ?? null).toBeNull()
+    expect(lastOf(seen, 's2')).not.toHaveProperty('endedAt')
   })
 
   test('E13 after the end, a turn end and a brief_set for the ended id leave the final file as it was', async ($, on) => {
@@ -786,6 +804,78 @@ describe('agentic-os final snapshot at session end', () => {
     await seen.clock.advance(10_000)
     expect(filesOf(seen, 'test-session')).toHaveLength(count)
     expect(filesOf(seen, 'test-session').at(-1)?.text).toBe(final)
+  })
+
+  for (const reason of ['clear', 'resume']) {
+    test(`E11c reason ${reason}: the final file keeps the cost and the context of the ending conversation, not the reset ones`, async ($, on) => {
+      const seen = endWorld(on, {}, 's1')
+      on('settings.read', () => ({ value: {} }))
+      on('session.model', () => ({ value: 'claude-opus-5-5' }))
+      on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 3.1 } } as never }))
+      on('session.measure', (_$, e) => ({ changed: e.changed }))
+      await startEnd($, true)
+      await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 41 }, cost: { usd: 7.25 }, rateLimits: [], changed: ['context', 'cost'] } as never)
+      const live = lastOf(seen, 's1')
+      expect(live.hud.costUsd).toBe(7.25)
+      expect(live.ctx).toBe(41)
+      const before = filesOf(seen, 's1').length
+      await endWith($, reason)
+      expect(filesOf(seen, 's1')).toHaveLength(before + 1)
+      const final = lastOf(seen, 's1')
+      expect(final.endedAt).toBeDefined()
+      expect(final.hud.costUsd).toBe(7.25)
+      expect(final.ctx).toBe(41)
+    })
+  }
+
+  // The real engine resets the plugin's atoms after session.end (E2E 2026-10-30); the fake engine keeps them. This store lets a test do the reset.
+  test('E13b a write that started before the end and lands after the engine reset the ended-id atom leaves the final file as it was', async ($, on) => {
+    const seen = endWorld(on)
+    const held = { value: null as unknown, version: 0 }
+    const ref = { plugin: 'ccv3-mods', key: 'endedId' } as never
+    on('state.get', ref, (() => ({ value: { value: held.value, version: held.version } })) as never)
+    on('state.set', ref, ((_$: unknown, e: { value: unknown }) => {
+      held.value = e.value
+      held.version += 1
+      return { value: { isSet: true, version: held.version } }
+    }) as never)
+    await startEnd($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    // /os opens: its snapshot waits for the lane read (process.run), which is held here.
+    let release = () => {}
+    seen.slow.wait = new Promise<void>(resolve => { release = resolve })
+    await $.command.run({ command: 'os', args: '', origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 160 } })
+    await endWith($, 'other', 'test-session')
+    const count = filesOf(seen, 'test-session').length
+    const final = filesOf(seen, 'test-session').at(-1)?.text
+    expect(JSON.parse(final ?? '{}').endedAt).toBe(1_000)
+    held.value = null // the engine's reset
+    seen.slow.wait = null
+    release()
+    await seen.clock.advance(10)
+    expect(filesOf(seen, 'test-session')).toHaveLength(count)
+    expect(filesOf(seen, 'test-session').at(-1)?.text).toBe(final)
+  })
+
+  // E13c: /resume s2 ends s1, a later /resume s1 ends s2 and the process is s1 again. The ended-id set must not freeze s1's file.
+  test('E13c a session that ended and is resumed again in the same process writes its file again, without endedAt', async ($, on) => {
+    const seen = endWorld(on, {}, 's1')
+    on('classic.SessionStart', () => ({}))
+    await startEnd($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'first' })
+    await endWith($, 'resume')
+    expect(lastOf(seen, 's1').endedAt).toBeDefined()
+    seen.sid.current = 's2'
+    await $.classic.SessionStart({ source: 'resume' } as never)
+    await endWith($, 'resume', 's2')
+    seen.sid.current = 's1'
+    await $.classic.SessionStart({ source: 'resume' } as never)
+    const before = filesOf(seen, 's1').length
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'again' })
+    expect(filesOf(seen, 's1').length).toBeGreaterThan(before)
+    expect(lastOf(seen, 's1').brief.goal).toBe('again')
+    expect(lastOf(seen, 's1')).not.toHaveProperty('endedAt')
   })
 
   test('E14 a headless run with no task, plan or brief writes no file at exit; with a brief it does', async ($, on) => {

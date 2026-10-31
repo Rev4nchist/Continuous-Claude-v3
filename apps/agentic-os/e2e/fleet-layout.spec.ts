@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 
-import { ask, clearStateDir, makeBrief, writeState, type FixturePlanStep } from './state-fixture';
+import { ask, clearStateDir, findQuietSessionId, makeBrief, writeState, type FixturePlanStep } from './state-fixture';
 
 /**
  * End-to-end check for the Fleet page LAYOUT (build map 5.2: L1-L5, P1 and the tile order).
@@ -70,6 +70,15 @@ async function waitForHydration(page: Page): Promise<void> {
   });
 }
 
+/** The project cards: articles that hold an h3 (the session detail is an article too, with an h2). */
+const projectCards = (page: Page): Locator => page.locator('article').filter({ has: page.locator('h3') });
+
+/** How many distinct left edges the project cards have: the number of columns of the grid. */
+async function projectColumns(page: Page): Promise<{ columns: number; cards: number }> {
+  const lefts = await projectCards(page).evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left)));
+  return { columns: new Set(lefts).size, cards: lefts.length };
+}
+
 const refreshButton = (page: Page): Locator =>
   page.getByRole('button', { name: /updated \d+s ago/ });
 
@@ -122,11 +131,7 @@ test.describe('layout at every width', () => {
     expect(labels).toEqual(['Live sessions', 'Active lanes', 'Blocked', 'Open PRs', 'Needs Dave']);
   });
 
-  test('the left column reads Projects, then Live sessions, then Unmatched sessions', async ({
-    page,
-    request,
-  }) => {
-    writeFixture(await liveId(request));
+  test('the left column reads Projects, then Live sessions, then Unmatched sessions', async ({ page }) => {
     await page.goto('/');
     await waitForHydration(page);
 
@@ -160,6 +165,20 @@ test.describe('layout at every width', () => {
       loaded.some((name) => /JetBrains/i.test(name) && !/fallback/i.test(name)),
       `a loaded JetBrains Mono face is needed; loaded: ${loaded.join(', ') || 'none'}`,
     ).toBe(true);
+  });
+});
+
+test.describe('font stack', () => {
+  test('the mono stack still applies when the next/font variable is missing', async ({ page }) => {
+    await page.goto('/');
+    await waitForHydration(page);
+    // Drop the class that defines --font-jetbrains and keep `dark` (it defines --font-terminal).
+    // A var() with no fallback would make the whole declaration invalid and the page would fall back to serif.
+    const family = await page.evaluate(() => {
+      document.documentElement.className = 'dark';
+      return getComputedStyle(document.body).fontFamily;
+    });
+    expect(family).toMatch(/JetBrains Mono|monospace/i);
   });
 });
 
@@ -239,6 +258,50 @@ test.describe('layout at 1440 px', () => {
     expect(Math.abs(prs.x - detail.x)).toBeLessThan(2);
   });
 
+  test('the Projects grid has four columns (fewer only when the registry has fewer projects)', async ({ page }) => {
+    await page.goto('/');
+    await waitForHydration(page);
+    const { columns, cards } = await projectColumns(page);
+    expect(cards, 'the registry needs at least one project card').toBeGreaterThan(0);
+    expect(columns).toBe(Math.min(cards, 4));
+  });
+
+  test('Live sessions start in the first screen: the first card begins above the fold', async ({ page, request }) => {
+    writeFixture(await liveId(request));
+    await page.goto('/');
+    await waitForHydration(page);
+    const header = await box(h2(page, /^Live sessions/), 'the Live sessions header');
+    const card = await box(page.getByTestId('session-card').first(), 'the first session card');
+    expect(header.y, 'the Live sessions header is inside the first screen').toBeLessThan(DESKTOP.height);
+    expect(card.y + 80, `the first card (top ${card.y}) shows at least 80 px inside ${DESKTOP.height}`).toBeLessThanOrEqual(DESKTOP.height);
+  });
+
+  test('a project card is name, counts and status, with the rest behind a closed disclosure', async ({ page }) => {
+    await page.goto('/');
+    await waitForHydration(page);
+    const card = projectCards(page).first();
+    const more = card.locator('details');
+    await expect(more).toHaveCount(1);
+    expect(await more.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
+    await expect(card.getByTestId('project-counts')).toBeVisible();
+    await expect(card.getByTestId('project-status')).toBeVisible();
+    for (const hidden of ['Last active', 'Path spellings']) {
+      await expect(card.getByText(hidden), `"${hidden}" is behind the disclosure`).toBeHidden();
+    }
+    await more.locator('summary').click();
+    await expect(card.getByText('Last active')).toBeVisible();
+    await expect(card.getByText('Path spellings')).toBeVisible();
+  });
+
+  test('a project key is never cut with an ellipsis', async ({ page }) => {
+    await page.goto('/');
+    await waitForHydration(page);
+    const overflow = await projectCards(page).evaluateAll((els) =>
+      els.flatMap((el) => [...el.querySelectorAll('p')].map((p) => getComputedStyle(p).textOverflow)),
+    );
+    expect(overflow).not.toContain('ellipsis');
+  });
+
   test('no project name is clipped in the Projects grid', async ({ page }) => {
     await page.goto('/');
     await waitForHydration(page);
@@ -285,5 +348,79 @@ test.describe('layout at 390 px', () => {
     await page.goto('/');
     await waitForHydration(page);
     expect(await horizontalOverflow(page), 'overview is wider than the screen').toBeLessThanOrEqual(0);
+  });
+
+  test('the Projects grid is one column', async ({ page }) => {
+    await page.goto('/');
+    await waitForHydration(page);
+    const { columns, cards } = await projectColumns(page);
+    expect(cards).toBeGreaterThan(0);
+    expect(columns).toBe(1);
+  });
+
+  test('the Ready for Dave header is at most two lines tall, with the longest count text', async ({ page, request }) => {
+    const live = await liveId(request);
+    const quiet = await findQuietSessionId();
+    writeState(live, { brief: makeBrief({ ask: [ask('E2E header live ask')] }) });
+    writeState(quiet, { brief: makeBrief({ ask: [ask('E2E header quiet ask')] }) });
+    await page.goto('/');
+    await waitForHydration(page);
+    await expect(page.getByTestId('ready-for-dave')).toContainText('from quiet sessions');
+    const lines = await page.getByTestId('ready-for-dave').locator('header').evaluate((el) => {
+      const style = getComputedStyle(el);
+      const inner =
+        el.getBoundingClientRect().height -
+        parseFloat(style.paddingTop) -
+        parseFloat(style.paddingBottom) -
+        parseFloat(style.borderBottomWidth);
+      // The wrap gap between two rows is not a line of text.
+      const gap = parseFloat(style.rowGap) || 0;
+      return (inner - gap) / parseFloat(style.lineHeight);
+    });
+    expect(lines, 'header height in lines').toBeLessThanOrEqual(2.1);
+  });
+
+  test('choosing a session moves focus into the detail and brings it into view', async ({ page, request }) => {
+    const id = await liveId(request);
+    writeFixture(id);
+    await page.goto('/');
+    await waitForHydration(page);
+    const card = page.locator(`[data-testid="session-card"][data-session-id="${id}"]`);
+    await card.getByRole('button').first().click();
+    const detail = page.getByTestId('session-detail');
+    await expect(detail).toBeVisible();
+    await expect
+      .poll(() => detail.evaluate((el) => el.contains(document.activeElement)), { message: 'focus is inside the detail' })
+      .toBe(true);
+    const rect = await box(detail, 'the session detail');
+    expect(rect.y, 'the detail top is inside the screen').toBeGreaterThanOrEqual(0);
+    expect(rect.y, 'the detail top is inside the screen').toBeLessThan(844);
+  });
+
+  test('the small controls are at least 24 px tall and wide', async ({ page, request }) => {
+    const id = await liveId(request);
+    writeFixture(id);
+    await page.goto(`/?session=${id}`);
+    await waitForHydration(page);
+    const targets: [string, Locator][] = [
+      ['the refresh button', refreshButton(page)],
+      ['the ready item name', page.getByTestId('ready-item').first().getByRole('button')],
+      ['the detail Close button', page.getByTestId('session-detail').getByRole('button', { name: 'Close' })],
+    ];
+    for (const [what, target] of targets) {
+      const found = await box(target, what);
+      expect(found.height, `${what} height`).toBeGreaterThanOrEqual(24);
+      expect(found.width, `${what} width`).toBeGreaterThanOrEqual(24);
+    }
+  });
+
+  test('at 320 px the ready rows and session cards do not push the page sideways', async ({ page, request }) => {
+    writeFixture(await liveId(request));
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto('/');
+    await waitForHydration(page);
+    await expect(page.getByTestId('ready-item').first()).toBeVisible();
+    await expect(page.getByTestId('session-card').first()).toBeVisible();
+    expect(await horizontalOverflow(page), 'overview at 320 px is wider than the screen').toBeLessThanOrEqual(0);
   });
 });
