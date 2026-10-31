@@ -177,6 +177,21 @@ export type AgentRun = {
   drift: string | null
 }
 
+/**
+ * What the Swarm tab may know about one workflow run beyond the ledger: its name, its phase and a label per helper (hooks/agentic-os/journal-model.ts reads it
+ * from the run's journal). Absent: the tab draws counts only.
+ */
+export type WorkflowFeed = {
+  runId: string
+  name: string | null
+  /** The phase as drawn: `index` counts from 1; `total` is null when the plan is not known. */
+  phase: { index: number; total: number | null; title: string | null } | null
+  /** Helper label by AgentRun.id. */
+  labels: Record<string, string>
+  /** Helper phase (same numbering as `phase.index`) by AgentRun.id, so the tab can apply the phase rule against the ledger status. */
+  agentPhases: Record<string, number>
+}
+
 /** A file this session touched: read, edited, or edited and then committed. Path is relative to the session root. */
 export type FileTouch = { path: string; state: 'read' | 'edited' | 'committed'; added: number; removed: number }
 
@@ -310,6 +325,8 @@ declare module 'claude-code' {
       git: OsGit | null
       /** The tab the /os pane shows (agentic-os): reset to overview at /clear and resume. A tab that is not live (Comms, Swarm, Resources) is never stored. */
       osTab: 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions' | 'swarm'
+      /** What the workflow journals say about this session's workflow runs: a label and a phase per helper, and the run name (agentic-os, journal-model.ts). Read at /os open and at a press of Swarm only; each read replaces the whole list. */
+      workflows: WorkflowFeed[]
       /** The steward's counts since the last brief_set (agentic-os, steward.ts). Reset at session.start, /clear and resume. */
       steward: OsSteward
       /** The checkpoint a draft PR waits on (hooks/pr-checkpoint); null when none is open. */

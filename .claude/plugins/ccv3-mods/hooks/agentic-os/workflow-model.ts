@@ -1,4 +1,4 @@
-import type { AgentRun } from '../../types'
+import type { AgentRun, WorkflowFeed } from '../../types'
 
 // Workflow progress, derived from the agent ledger. Pure: no engine, no clock, no state. The engine gives every workflow agent one
 // run id (spawn.workflow.runId, empty outside a real run), so helpers group by `workflowRunId` and by nothing else: a shared
@@ -7,17 +7,7 @@ import type { AgentRun } from '../../types'
 
 export type WorkflowProgress = { key: string; done: number; failed: number; running: number; startedAt: number; latestAt: number }
 
-/** What the Swarm tab may know about one workflow run beyond the ledger: its name, its phase and a label per helper. Absent: the tab draws counts only. */
-export type WorkflowFeed = {
-  runId: string
-  name: string | null
-  /** The phase as drawn: `index` counts from 1; `total` is null when the plan is not known. */
-  phase: { index: number; total: number | null; title: string | null } | null
-  /** Helper label by AgentRun.id. */
-  labels: Record<string, string>
-  /** Helper phase (same numbering as `phase.index`) by AgentRun.id, so the tab can apply the phase rule against the ledger status. */
-  agentPhases: Record<string, number>
-}
+export type { WorkflowFeed }
 
 const endOf = (run: AgentRun): number => run.endedAt ?? run.startedAt
 
