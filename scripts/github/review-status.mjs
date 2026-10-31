@@ -855,6 +855,15 @@ export function coderabbitRequestComments(comments = []) {
 }
 
 /**
+ * The CodeRabbit PR reviews that finished: distinct commit_id among the app reviews with a non-empty body. A request that CodeRabbit
+ * rate limited or skipped made none. The pr-loop mod counts this where a limit shows (coderabbitRoundsOf counts the request).
+ */
+export function coderabbitFinishedOf({ reviews = [] } = {}) {
+  const bot = (reviews || []).filter((r) => isCodeRabbitUser(r?.user) && (r.body || '').trim().length > 0);
+  return new Set(bot.map((r) => r.commit_id)).size;
+}
+
+/**
  * The CodeRabbit PR reviews bought so far. 0 with no bot review and no request. Else max(botReviews, requests + opening), where
  * botReviews = distinct commit_id among the CodeRabbit app reviews with a non-empty body (a thread-reply review has an empty one) and opening = 1 when the first bot review is older than the first
  * request (the automatic opening review was not asked for). Requests whose review is not in yet still count.
@@ -1280,7 +1289,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     // A rate-limited PR must not get an @coderabbitai review request (the pr-loop mod says so).
     coderabbitRateLimited, coderabbitRetryMinutes,
     // PR checkpoint fields the pr-loop mod reads: draft state, the label names, the requests people posted, and the rounds bought.
-    isDraft: pull.draft === true, labels, coderabbitRequests: coderabbitRequestComments(comments).length, coderabbitRounds: coderabbitRoundsOf({ reviews, comments }),
+    isDraft: pull.draft === true, labels, coderabbitRequests: coderabbitRequestComments(comments).length, coderabbitRounds: coderabbitRoundsOf({ reviews, comments }), coderabbitReviews: coderabbitFinishedOf({ reviews }),
     // 'comment' or 'body': where the usable Greptile summary came from. null when none was used.
     summarySource: reviewedHead ? summary.source : null,
     // rateLimited is the pre-Greptile name for "the reviewer did not finish". Older mod copies read it.
