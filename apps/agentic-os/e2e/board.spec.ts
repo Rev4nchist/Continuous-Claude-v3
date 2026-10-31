@@ -623,6 +623,35 @@ test.describe('layout', () => {
   });
 });
 
+test.describe('column count', () => {
+  const lefts = () =>
+    [...document.querySelectorAll('[data-testid="board-column"]')].map((el) => {
+      const { left, top } = el.getBoundingClientRect();
+      return { left: Math.round(left), top: Math.round(top) };
+    });
+
+  test('at 1440 px the six columns sit in one row', async ({ page, request }, testInfo) => {
+    test.skip(testInfo.project.name === 'phone', 'desktop width only');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await loadBoard(request);
+    await openBoard(page);
+    await expect(page.getByTestId('board-column')).toHaveCount(6);
+    const boxes = await page.evaluate(lefts);
+    expect(new Set(boxes.map((b) => b.left)).size, 'six distinct left edges').toBe(6);
+    expect(new Set(boxes.map((b) => b.top)).size, 'one row').toBe(1);
+  });
+
+  test('on a phone the columns stack in one column', async ({ page, request }, testInfo) => {
+    test.skip(testInfo.project.name !== 'phone', 'phone width only');
+    await loadBoard(request);
+    await openBoard(page);
+    await expect(page.getByTestId('board-column')).toHaveCount(6);
+    const boxes = await page.evaluate(lefts);
+    expect(new Set(boxes.map((b) => b.left)).size, 'one left edge').toBe(1);
+    expect(await horizontalOverflow(page), 'the Board is wider than the viewport').toBeLessThanOrEqual(0);
+  });
+});
+
 // --- Spec 8: the selection survives the Board ----------------------------------------------------
 
 test.describe('selection and the Board', () => {

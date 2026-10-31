@@ -43,6 +43,28 @@ test.describe('projectLabel', () => {
     });
   }
 
+  // An invisible character inside a checked part must not defeat the home, UNC or drive checks.
+  // Source stays ASCII: the zero-width space (U+200B) is built at run time.
+  const ZW = String.fromCharCode(0x200b);
+  const BS = String.fromCharCode(92);
+  const INVISIBLE_CASES: [string, string, string][] = [
+    ['zero-width inside Users', `C:/Us${ZW}ers/dkhay`, '~'],
+    ['zero-width inside home', `/ho${ZW}me/dkhay`, '~'],
+    [
+      'zero-width inside UNC',
+      [BS + BS + '?', 'U' + ZW + 'NC', 'server', 'share', 'Users', 'dkhay'].join(BS),
+      '~',
+    ],
+    ['zero-width-only last folder under home', `/home/dkhay/${ZW}`, '~'],
+    ['zero-width-only last folder of a repo', `C:/work/api/${ZW}/`, 'api'],
+    ['zero-width inside a drive root', `C${ZW}:`, 'unknown'],
+  ];
+  for (const [name, input, expected] of INVISIBLE_CASES) {
+    test(`invisible characters: ${name}`, () => {
+      expect(projectLabel(input)).toBe(expected);
+    });
+  }
+
   test('a secret in a folder name is redacted', () => {
     const token = ['ghp', 'A'.repeat(36)].join('_');
     const label = projectLabel(`c:/users/${USER}/${token}`);
