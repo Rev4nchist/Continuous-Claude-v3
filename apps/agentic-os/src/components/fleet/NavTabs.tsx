@@ -19,18 +19,19 @@ const TABS: Tab[] = [
 const isLive = (tab: Tab): tab is Tab & { id: ViewId } => tab.tag === null;
 
 /**
- * The top bar: the mark and the view tabs. Pure props. Only Overview, Board and Sessions work; the rest
- * are disabled buttons (not focusable) with a NEXT or LATER tag. The active tab has
- * aria-current="page". Wraps on a phone.
+ * The left half of the top strip: the mark and the view tabs. Pure props. Only Overview, Board and
+ * Sessions work; the rest are disabled buttons (not focusable) with a NEXT or LATER tag. The active
+ * tab has aria-current="page" and an underline. The `nav` has no box of its own: MissionControl draws
+ * the strip around it and puts the live indicator on the right. Wraps on a phone.
  */
 export function NavTabs({ view, onSelect }: { view: ViewId; onSelect: (view: ViewId) => void }) {
   return (
     <nav
       data-testid="nav-tabs"
       aria-label="Views"
-      className="flex flex-wrap items-center gap-x-1 gap-y-1 rounded-lg border bg-card p-1"
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-1"
     >
-      <span className="px-2 font-mono text-xs font-semibold tracking-tight">agentic-os</span>
+      <span className="py-2.5 pr-3 text-xs font-bold">▌agentic-os</span>
       {TABS.map((tab) => {
         const active = isLive(tab) && tab.id === view;
         return (
@@ -43,16 +44,17 @@ export function NavTabs({ view, onSelect }: { view: ViewId; onSelect: (view: Vie
             aria-current={active ? 'page' : undefined}
             onClick={isLive(tab) ? () => onSelect(tab.id) : undefined}
             className={cn(
-              'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors',
-              active ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground',
-              isLive(tab) ? 'hover:bg-accent hover:text-foreground' : 'cursor-not-allowed opacity-60',
+              'flex items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-2.5 py-2.5 text-xs transition-colors',
+              active && 'border-doing text-foreground',
+              !active && isLive(tab) && 'text-muted-foreground hover:text-foreground',
+              !isLive(tab) && 'cursor-not-allowed text-[#5d6677]',
             )}
           >
             {tab.label}
             {tab.tag !== null && (
               <span
                 data-testid="nav-tab-tag"
-                className="rounded border px-1 font-mono text-[0.625rem] leading-4 text-muted-foreground"
+                className="rounded-[3px] border border-[#3a4356] px-[5px] text-[0.625rem] tracking-[0.08em] text-[#7d8798]"
               >
                 {tab.tag}
               </span>

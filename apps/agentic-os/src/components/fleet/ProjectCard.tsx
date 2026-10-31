@@ -47,7 +47,7 @@ export function ProjectCard({
     >
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate font-medium tracking-tight" title={project.displayName}>
+          <h3 className="font-medium tracking-tight [overflow-wrap:anywhere]" title={project.displayName}>
             {onSelect ? (
               // The button holds ONLY the name, so its accessible name is the display name.
               // The pseudo-element stretches the click target over the whole card.
@@ -55,7 +55,7 @@ export function ProjectCard({
                 type="button"
                 aria-pressed={selected}
                 onClick={() => onSelect(project.key)}
-                className="block max-w-full truncate text-left after:absolute after:inset-0 after:content-['']"
+                className="block max-w-full text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-['']"
               >
                 {project.displayName}
               </button>

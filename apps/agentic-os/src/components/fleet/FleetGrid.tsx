@@ -26,7 +26,7 @@ export function FleetGrid({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
       {projects.map((project) => (
         <ProjectCard
           key={project.key}
