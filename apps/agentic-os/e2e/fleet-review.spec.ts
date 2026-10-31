@@ -41,7 +41,7 @@ type LiveCard = {
 type Snapshot = {
   active: { sessions: { id: string; liveSecondsAgo: number }[] };
   cards: LiveCard[];
-  ready: { sessionId: string; text: string; recommend: string | null; name: string }[];
+  ready: { sessionId: string; text: string; openAsks: number; live: boolean; name: string }[];
   tiles: { needsDave: number; liveSessions: number };
   sources: Source[];
 };
@@ -238,7 +238,9 @@ test.describe('quiet sessions (15 minutes to 24 hours) still feed Ready for Dave
     const snapshot = await loadSnapshot(request);
     const item = snapshot.ready.find((r) => r.sessionId === id);
     expect(item, `ready must hold the ask of the quiet session ${id}`).toBeDefined();
-    expect(item).toMatchObject({ text: QUIET_ASK, recommend: QUIET_RECOMMEND });
+    // A quiet session is one ready row marked live:false; the row carries no recommendation.
+    expect(item).toMatchObject({ text: QUIET_ASK, openAsks: 1, live: false });
+    expect(Object.keys(item as object)).not.toContain('recommend');
     expect(item?.name, 'the item needs a name: <project>/<branch>/<id4>').toMatch(
       new RegExp(`/-/${id.slice(0, 4)}$`),
     );
@@ -257,7 +259,12 @@ test.describe('quiet sessions (15 minutes to 24 hours) still feed Ready for Dave
     const stripItem = page.locator(`[data-testid="ready-item"][data-session-id="${id}"]`);
     await expect(stripItem).toBeVisible();
     await expect(stripItem).toContainText(QUIET_ASK);
-    await expect(stripItem).toContainText(QUIET_RECOMMEND);
+    await expect(stripItem).not.toContainText(QUIET_RECOMMEND);
+    await expect(stripItem).toContainText('· quiet');
+    // The header counts the quiet rows: "N waiting · 1 from quiet sessions".
+    await expect(page.getByTestId('ready-for-dave').locator('header')).toContainText(
+      /\d+ waiting · 1 from quiet sessions/,
+    );
     await expect(
       page.locator(`[data-testid="session-card"][data-session-id="${id}"]`),
       'no session card for a quiet session',

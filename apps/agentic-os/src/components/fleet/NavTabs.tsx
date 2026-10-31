@@ -31,7 +31,7 @@ export function NavTabs({ view, onSelect }: { view: ViewId; onSelect: (view: Vie
       aria-label="Views"
       className="flex flex-wrap items-center gap-x-1.5 gap-y-1"
     >
-      <span className="py-2.5 pr-3 text-xs font-bold">▌agentic-os</span>
+      <span className="py-2.5 pr-3 text-xs font-bold">{'\u258c'}agentic-os</span>
       {TABS.map((tab) => {
         const active = isLive(tab) && tab.id === view;
         return (

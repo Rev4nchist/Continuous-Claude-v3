@@ -76,7 +76,8 @@ type ReadyItem = {
   name: string;
   kind: string;
   text: string;
-  recommend: string | null;
+  openAsks: number;
+  live: boolean;
   ageSeconds: number;
 };
 
@@ -267,8 +268,11 @@ test.describe('fixture brief for a live session', () => {
       shortId: live.id.slice(0, 8),
       kind: 'question',
       text: FIXTURE_ASK,
-      recommend: FIXTURE_RECOMMEND,
+      openAsks: 1,
+      live: true,
     });
+    // The strip never carries a recommendation: the DTO has no such key at all.
+    expect(Object.keys(item as object)).not.toContain('recommend');
     // updatedAt is 600 s ago: the age is seconds, not milliseconds.
     expect(item?.ageSeconds).toBeGreaterThanOrEqual(590);
     expect(item?.ageSeconds).toBeLessThan(700);
@@ -328,13 +332,18 @@ test.describe('fixture brief for a live session', () => {
     const item = readyItem(page, live.id);
     await expect(item).toBeVisible({ timeout: 10_000 });
     await expect(item).toContainText(FIXTURE_ASK);
-    await expect(item).toContainText(FIXTURE_RECOMMEND);
+    // The strip holds the first ask only, never the recommendation (the detail panel keeps it).
+    await expect(item).not.toContainText(FIXTURE_RECOMMEND);
+    await expect(page.getByTestId('ready-for-dave')).not.toContainText(FIXTURE_RECOMMEND);
     await expect(item).toContainText('question');
 
     const card = sessionCard(page, live.id);
     await expect(card).toBeVisible();
     await expect(card).toContainText('E2E fixture title');
-    await expect(card).toContainText('waiting-on-dave');
+    // The card shows the glossary word; the raw code stays in data-chip.
+    await expect(card).toContainText('Waiting for you');
+    await expect(card).not.toContainText('waiting-on-dave');
+    await expect(card.locator('[data-chip]')).toHaveAttribute('data-chip', 'waiting-on-dave');
     await expect(card).toContainText('1 of 3');
     await expect(card).toContainText('UNPROVEN 1');
     await expect(card).toContainText(/\bASK 1\b/);
@@ -342,6 +351,46 @@ test.describe('fixture brief for a live session', () => {
     await expect(card).not.toContainText('No brief yet');
 
     expect(errors).toEqual([]);
+  });
+
+  test('one row per session: the first open ask, "+1 more" for the rest, no recommendation', async ({
+    page,
+    request,
+  }) => {
+    const [live] = liveSessions(await loadSnapshot(request));
+    // An answered ask first, then two open asks. Only the first OPEN one is the row.
+    writeState(live.id, {
+      chip: 'waiting-on-dave',
+      brief: makeBrief({
+        plan: PLAN,
+        ask: [
+          ask('E2E answered ask', 'E2E answered recommend', { answered: true }),
+          ask('E2E first open ask', 'E2E first recommend'),
+          ask('E2E second open ask', 'E2E second recommend'),
+        ],
+      }),
+    });
+
+    const snapshot = await loadSnapshot(request);
+    const rows = snapshot.ready.filter((r) => r.sessionId === live.id);
+    expect(rows, 'two open asks of one session must make ONE ready row').toHaveLength(1);
+    expect(rows[0]).toMatchObject({ text: 'E2E first open ask', openAsks: 2, live: true });
+    expect(snapshot.tiles.needsDave).toBe(snapshot.ready.length);
+
+    await page.goto('/');
+    await waitForHydration(page);
+    const item = readyItem(page, live.id);
+    await expect(item).toHaveCount(1);
+    await expect(item).toContainText('E2E first open ask');
+    await expect(item).toContainText('+1 more');
+    for (const absent of [
+      'E2E second open ask',
+      'E2E answered ask',
+      'E2E first recommend',
+      'E2E second recommend',
+    ]) {
+      await expect(item, `the row must not show "${absent}"`).not.toContainText(absent);
+    }
   });
 
   test('unproven counts only done steps that have no proof', async ({ request }) => {
@@ -392,23 +441,35 @@ test.describe('fixture brief for a live session', () => {
 
     const tiles = page.getByTestId('stat-tile');
     await expect(tiles).toHaveCount(5);
-    const labels = ['Live sessions', 'Needs Dave', 'Blocked', 'Active lanes', 'Open PRs'];
+    // The mockup's order: Live sessions, Active lanes, Blocked, Open PRs, Needs Dave.
+    const labels = ['Live sessions', 'Active lanes', 'Blocked', 'Open PRs', 'Needs Dave'];
     for (const [index, label] of labels.entries()) {
       await expect(tiles.nth(index)).toContainText(label);
     }
 
-    // Values come from the same snapshot the page polls.
+    // Values come from the same snapshot the page polls. Needs Dave counts the ready rows:
+    // one row per session.
     const snapshot = await loadSnapshot(request);
     await expect(tiles.nth(0)).toContainText(String(snapshot.tiles.liveSessions));
-    await expect(tiles.nth(1)).toContainText(String(snapshot.tiles.needsDave));
+    await expect(tiles.nth(4)).toContainText(String(snapshot.tiles.needsDave));
+    expect(snapshot.tiles.needsDave).toBe(snapshot.ready.length);
+    await expect(page.getByTestId('ready-item')).toHaveCount(snapshot.ready.length);
 
-    // The strip is at the very top: above the tiles, and the tiles are above the cards.
+    // The strip is at the very top: above the tiles, the tiles are above Projects, and
+    // Projects is above the session cards (the mockup order).
     const strip = await page.getByTestId('ready-for-dave').boundingBox();
     const tileBox = await page.getByTestId('stat-tiles').boundingBox();
+    const projectsBox = await page
+      .getByRole('heading', { level: 2, name: /^Projects/ })
+      .boundingBox();
     const cardsBox = await sessionCard(page, live.id).boundingBox();
-    expect(strip && tileBox && cardsBox, 'strip, tiles and card must all be rendered').toBeTruthy();
+    expect(
+      strip && tileBox && projectsBox && cardsBox,
+      'strip, tiles, Projects and card must all be rendered',
+    ).toBeTruthy();
     expect(strip!.y).toBeLessThan(tileBox!.y);
-    expect(tileBox!.y).toBeLessThan(cardsBox!.y);
+    expect(tileBox!.y).toBeLessThan(projectsBox!.y);
+    expect(projectsBox!.y).toBeLessThan(cardsBox!.y);
 
     // Source health: one row per source, status in the row, state-files counts in the detail.
     const health = page.getByRole('heading', { level: 2, name: /^Data sources/ });

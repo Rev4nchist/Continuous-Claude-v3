@@ -54,8 +54,9 @@ test.describe('Mission Control page (/)', () => {
     await page.goto('/');
 
     const projects = page.getByRole('heading', { level: 2, name: /^Projects/ });
-    await expect(projects).toContainText(/\d+ in the registry/);
-    await expect(projects).not.toContainText(/^Projects\s*0 in the registry/);
+    // The header is now "Projects · fleet home" and no longer prints the registry count. An empty
+    // registry still fails here: the first project card must render and "No projects in" must be absent.
+    await expect(projects).toContainText(/^Projects\s*·\s*fleet home/);
 
     const cards = page.getByRole('article');
     await expect(cards.first()).toBeVisible();
@@ -81,13 +82,15 @@ test.describe('Mission Control page (/)', () => {
     expect(errors).toEqual([]);
   });
 
-  test('active sessions strip and the SELECT-only footer render', async ({ page }) => {
+  test('unmatched and closed session panels and the SELECT-only footer render', async ({ page }) => {
     const errors = watchErrors(page);
     await page.goto('/');
 
-    await expect(page.getByRole('heading', { level: 2, name: /^Active sessions/ })).toContainText(
-      /\d+ in the last \d+m/,
-    );
+    // The old "Active sessions" strip is now two panels: sessions with no project, and the closed list.
+    await expect(page.getByRole('heading', { level: 2, name: /^Unmatched sessions/ })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { level: 2, name: /^Closed in the last \d+m/ }),
+    ).toBeVisible();
     await expect(page.getByText(/Connected as agentic_os_app \(SELECT-only, \d+ms\)\./)).toBeVisible();
 
     await waitForHydration(page);

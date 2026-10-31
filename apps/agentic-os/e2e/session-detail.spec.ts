@@ -222,6 +222,21 @@ const projectButton = (page: Page, displayName: string): Locator =>
 const urlParam = (page: Page, key: string): string | null =>
   new URL(page.url()).searchParams.get(key);
 
+/** Tailwind `lg`: the width from which the right column (and its placeholder) is drawn. */
+const LG_PX = 1024;
+
+/**
+ * The "Select a session" hint sits in the right column. It is `hidden lg:block`: drawn on a desktop
+ * viewport, present in the DOM but not drawn on a phone, where the column becomes the page flow and
+ * an empty hint would only push Projects down.
+ */
+async function expectSelectPlaceholder(page: Page): Promise<void> {
+  const hint = page.getByText(/^Select a session/);
+  await expect(hint).toHaveCount(1);
+  if ((page.viewportSize()?.width ?? 0) >= LG_PX) await expect(hint).toBeVisible();
+  else await expect(hint).toBeHidden();
+}
+
 async function horizontalOverflow(page: Page): Promise<number> {
   return page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -467,7 +482,13 @@ test.describe('Sessions view', () => {
 
     const row = sessionRow(page, live.id);
     await expect(row).toBeVisible();
-    await expect(row.getByTestId('session-row-state')).toContainText('waiting-on-dave');
+    // The table shows the glossary word; the raw code stays in data-chip.
+    await expect(row.getByTestId('session-row-state')).toContainText('Waiting for you');
+    await expect(row.getByTestId('session-row-state')).not.toContainText('waiting-on-dave');
+    await expect(row.getByTestId('session-row-state').locator('[data-chip]')).toHaveAttribute(
+      'data-chip',
+      'waiting-on-dave',
+    );
     await expect(row.getByTestId('session-row-select')).toHaveText(card?.name ?? '');
     await expect(row.getByTestId('session-row-title')).toHaveText('E2E row title');
     await expect(row.getByTestId('session-row-lane')).toHaveText(card?.laneId ?? '-');
@@ -542,7 +563,7 @@ test.describe('session detail panel', () => {
 
     await page.goto('/');
     await waitForHydration(page);
-    await expect(page.getByText(/^Select a session/)).toBeVisible();
+    await expectSelectPlaceholder(page);
     await expect(detailPanel(page)).toHaveCount(0);
 
     const cardButton = sessionCard(page, live.id).getByRole('button');
@@ -557,7 +578,9 @@ test.describe('session detail panel', () => {
     const header = panel.getByTestId('detail-header');
     await expect(header).toContainText('Session');
     await expect(header).toContainText(live.id.slice(0, 4));
-    await expect(header).toContainText('waiting-on-dave');
+    await expect(header).toContainText('Waiting for you');
+    await expect(header).not.toContainText('waiting-on-dave');
+    await expect(header.locator('[data-chip]')).toHaveAttribute('data-chip', 'waiting-on-dave');
 
     // The h3 titles, exactly, in order. Decisions only because the fixture has some.
     await expect(panel.getByRole('heading', { level: 3 })).toHaveText([
@@ -749,7 +772,7 @@ test.describe('URL state', () => {
     await expect(navTab(page, 'overview')).toHaveAttribute('aria-current', 'page');
     await expect(detailPanel(page)).toHaveCount(0);
     await expect(page.getByTestId('detail-unavailable')).toHaveCount(0);
-    await expect(page.getByText(/^Select a session/)).toBeVisible();
+    await expectSelectPlaceholder(page);
     expect(errors).toEqual([]);
   });
 });
@@ -1209,7 +1232,7 @@ test.describe('click-through', () => {
 
     await detailPanel(page).getByRole('button', { name: 'Close', exact: true }).click();
     await expect(detailPanel(page)).toHaveCount(0);
-    await expect(page.getByText(/^Select a session/)).toBeVisible();
+    await expectSelectPlaceholder(page);
     await expect.poll(() => urlParam(page, 'session')).toBeNull();
     // Ready for Dave still lists the ask: Close clears the selection only.
     await expect(readyItem(page, live.id)).toBeVisible();
