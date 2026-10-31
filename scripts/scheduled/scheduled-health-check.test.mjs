@@ -58,7 +58,8 @@ function run(fx, extraEnv = {}, wrapper = WRAPPER) {
   };
   const started = Date.now();
   for (const k of Object.keys(extraEnv)) if (extraEnv[k] === undefined) delete env[k];
-  const r = spawnSync(`"${wrapper}"`, [], { shell: true, env, encoding: 'utf8', windowsHide: true, timeout: 120000 });
+  // cmd.exe with an argument list, as Task Scheduler runs it; no shell: true.
+  const r = spawnSync('cmd.exe', ['/d', '/c', wrapper], { env, encoding: 'utf8', windowsHide: true, timeout: 120000 });
   return { status: r.status, ms: Date.now() - started, log: existsSync(fx.log) ? readFileSync(fx.log, 'utf8') : '' };
 }
 
