@@ -46,6 +46,8 @@ export type PrStatus = {
   coderabbitRequests?: number
   /** CodeRabbit PR reviews bought so far (the automatic opening counts once). Absent from older scripts: the round ask never fires then. */
   coderabbitRounds?: number
+  /** CodeRabbit PR reviews that finished (distinct commits with a review body). A request that was rate limited or skipped is not in it. Absent from older scripts. */
+  coderabbitReviews?: number
 }
 
 /** `perPr` marks an error that belongs to this PR alone (a 404, a list too long); any other error is shared by all PRs. */
@@ -55,6 +57,8 @@ export type Probe = { kind: 'ok'; status: PrStatus } | { kind: 'error'; text: st
 export type Alert = {
   pr: number
   state: PrState
+  /** The full head the alert was built for: the re-probe before delivery compares it with the PR's head then. */
+  head: string
   headShort: string
   merged: boolean
   whenReady: boolean
@@ -79,7 +83,11 @@ export type AlertCheckpoint = {
   declined: { round: number } | null
 }
 
-export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number }
+/** `sent` is the ledger of model lines delivered (alertKey): each head and reason pair goes out once. */
+export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number; sent?: string[] }
+
+/** The ledger keeps this many keys; older ones fall off. */
+export const SENT_MAX = 40
 
 export const TICK_MS = 300_000
 export const BACKOFF_MS = 900_000
@@ -108,7 +116,8 @@ export const readDoc = (value: unknown, now: number): WatchDoc => {
     ...(typeof one.alerted === 'string' ? { alerted: one.alerted } : {}),
     ...(typeof one.fails === 'number' && one.fails > 0 ? { fails: one.fails } : {}),
   }))
-  return { prs, backoffUntil: typeof doc.backoffUntil === 'number' ? doc.backoffUntil : 0, touched: now }
+  const sent = Array.isArray(doc.sent) ? doc.sent.filter((key): key is string => typeof key === 'string').slice(-SENT_MAX) : []
+  return { prs, backoffUntil: typeof doc.backoffUntil === 'number' ? doc.backoffUntil : 0, touched: now, ...(sent.length ? { sent } : {}) }
 }
 
 export const isStale = (value: unknown, now: number): boolean => {
@@ -272,20 +281,43 @@ const reviewedSeen = (alerted: string | undefined, head: string): string[] | nul
   return rest.startsWith(':') ? rest.slice(1).split('+').filter(Boolean) : ['greptile']
 }
 
+const alertOf = (pr: number, whenReady: boolean, state: PrState, status: PrStatus, cp: AlertCheckpoint | null): Alert => ({
+  pr, state, head: status.head, headShort: status.headShort, merged: status.merged, whenReady, reasons: status.reasons,
+  ...(status.routing ? { bots: status.routing.required, reviewedBy: reviewedBots(status) } : {}),
+  ...(state === 'LIMITED' && rateLimitedByCodeRabbit(status) ? { rateLimit: { minutes: status.coderabbitRetryMinutes ?? null } } : {}),
+  ...(state === 'PROOF' ? { proofProblems: proofProblemsOf(status) } : {}),
+  ...(state === 'REVIEWED' && outsideDiffCount(status) > 0 ? { outsideDiff: outsideDiffCount(status) } : {}),
+  ...(cp ? { checkpoint: cp } : {}),
+})
+
+/**
+ * The alert as the PR reads now, for the re-probe right before a model line goes out. Null when the problem is gone:
+ * the PR is merged or closed, its head moved (the new head alerts at the next check), or its state is no longer the alert's.
+ * STALLED is PENDING that waited 60 minutes, so a PENDING PR still holds it.
+ */
+export const refreshAlert = (alert: Alert, fresh: PrStatus, cp: AlertCheckpoint | null): Alert | null => {
+  if (isClosed(fresh) || fresh.head !== alert.head) return null
+  if (stateOf(fresh) !== (alert.state === 'STALLED' ? 'PENDING' : alert.state)) return null
+  return alertOf(alert.pr, alert.whenReady, alert.state, fresh, cp)
+}
+
+/** One model line per PR, state, head and reason. A REVIEWED line is keyed by the bots that reviewed, a PROOF line by its problems. */
+export const alertKey = (alert: Alert): string => {
+  const detail = alert.state === 'REVIEWED' ? [...(alert.reviewedBy ?? [])].sort() : alert.state === 'PROOF' ? alert.proofProblems ?? [] : alert.reasons
+  return [alert.pr, alert.state, alert.head, detail.join('|')].join(' ')
+}
+
+export const wasSent = (doc: WatchDoc, key: string): boolean => (doc.sent ?? []).includes(key)
+
+export const markSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sent: [...(doc.sent ?? []), key].slice(-SENT_MAX) })
+
 export const settle = (watch: PrWatch, status: PrStatus, now: number, cp: AlertCheckpoint | null = null): { watch: PrWatch | null; alert: Alert | null } => {
   const found = stateOf(status)
   const onHead = forHead(watch, status.head, now)
   // Leaving DRAFT starts the 60 minute clock: the hours a draft waited are not hours without a review.
   const base = watch.state === 'DRAFT' && found !== 'DRAFT' ? { ...onHead, since: now } : onHead
   const state = found === 'PENDING' && now - (base.since ?? now) >= STALL_MS ? 'STALLED' : found
-  const alert: Alert = {
-    pr: watch.pr, state, headShort: status.headShort, merged: status.merged, whenReady: watch.whenReady, reasons: status.reasons,
-    ...(status.routing ? { bots: status.routing.required, reviewedBy: reviewedBots(status) } : {}),
-    ...(state === 'LIMITED' && rateLimitedByCodeRabbit(status) ? { rateLimit: { minutes: status.coderabbitRetryMinutes ?? null } } : {}),
-    ...(state === 'PROOF' ? { proofProblems: proofProblemsOf(status) } : {}),
-    ...(state === 'REVIEWED' && outsideDiffCount(status) > 0 ? { outsideDiff: outsideDiffCount(status) } : {}),
-    ...(cp ? { checkpoint: cp } : {}),
-  }
+  const alert = alertOf(watch.pr, watch.whenReady, state, status, cp)
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
   if (state === 'LIMITED' && watch.state !== 'LIMITED') return { watch: next, alert }
@@ -349,7 +381,8 @@ const CANCELLED_REVIEW = /was cancelled \(superseded by a push\)/
  */
 export const CARRY_REASON_PREFIX = 'no CodeRabbit PR-bot review of the head commit; the earlier review carries once'
 
-const carryHolds = (alert: Alert): boolean => alert.reasons.some(reason => reason.startsWith(CARRY_REASON_PREFIX))
+// At round 0 no review exists, so nothing can carry: the carry reason cannot hold then.
+const carryHolds = (alert: Alert): boolean => alert.checkpoint?.rounds !== 0 && alert.reasons.some(reason => reason.startsWith(CARRY_REASON_PREFIX))
 
 const carryAction = (pr: number): string =>
   `Run node scripts/github/cr-fix.mjs --pr ${pr} and paste its line in the PR body: READY carries the earlier review. Do not post @coderabbitai review.`
@@ -370,6 +403,8 @@ const budgetSentence = (cp: AlertCheckpoint, pr: number, when: string): string =
   if (cp.rounds >= opening + extra) {
     return `Rounds used ${cp.rounds} of ${opening}+${extra}. Do not post @coderabbitai review. Dave decides round ${next} in the checkpoint pane.`
   }
+  // Round 0: no review has run, so the advice is the opening review, not a carry of an earlier one.
+  if (cp.rounds === 0) return `Rounds used 0 of ${opening}+${extra}. No CodeRabbit review has run on #${pr} yet. ${when}, post one @coderabbitai review: it is the opening review.`
   // The carry (review-status.mjs): after a Minor-only round, a fix of 30 lines or fewer with a clean cr-fix line needs no new review.
   return `Rounds used ${cp.rounds} of ${opening}+${extra}. ${when}, post one @coderabbitai review only if the last round had a Major or Critical or the fix is over 30 lines; otherwise run node scripts/github/cr-fix.mjs --pr ${pr} and paste its line in the PR body (READY carries the earlier review).`
 }
@@ -504,6 +539,17 @@ export const grantRound = (value: unknown): number | null => {
   return typeof round === 'number' ? round : null
 }
 
+/**
+ * The rounds bought. A request that CodeRabbit rate limited or skipped made no review, so while a limit shows, only finished reviews
+ * count (`coderabbitReviews`). With no limit a request in flight still counts. An older script has no `coderabbitReviews`: its total stands.
+ */
+const roundsOf = (status: PrStatus): number | undefined => {
+  const total = status.coderabbitRounds
+  const finished = status.coderabbitReviews
+  if (typeof total !== 'number' || typeof finished !== 'number') return total
+  return rateLimitedByCodeRabbit(status) || status.coderabbitLimited === true ? Math.min(total, finished) : total
+}
+
 /** A draft or an older script's DRAFT_REASON: no bot reviews a draft, so no ask is made. */
 const isDraftStatus = (status: PrStatus): boolean => status.isDraft ?? status.reasons.includes(DRAFT_REASON)
 
@@ -527,7 +573,7 @@ const askAt = (status: PrStatus, kind: CheckpointAsk['kind'], text: string, roun
 export const askFor = (record: CheckpointRecord | null, status: PrStatus, now: number, granted: number | null): CheckpointAsk | null => {
   if (!record || record.state !== 'applied' || isClosed(status) || status.ready || isDraftStatus(status)) return null
   if (record.pathway !== 'coderabbit' && record.pathway !== 'both') return null
-  const rounds = status.coderabbitRounds
+  const rounds = roundsOf(status)
   const [opening, extra] = record.budget
   const reviewed = status.coderabbitReviewedHead === true
   const limited = rateLimitedByCodeRabbit(status) || status.rateLimited
@@ -561,7 +607,7 @@ export const checkpointOf = (record: CheckpointRecord | null, status: PrStatus, 
   record
     ? {
         budget: record.budget,
-        rounds: typeof status.coderabbitRounds === 'number' ? status.coderabbitRounds : null,
+        rounds: roundsOf(status) ?? null,
         granted,
         declined: record.declined ? { round: record.declined.round } : null,
       }

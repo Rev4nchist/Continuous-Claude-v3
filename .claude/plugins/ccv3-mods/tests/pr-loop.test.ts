@@ -71,6 +71,8 @@ type Status = {
   labels?: string[]
   coderabbitRequests?: number
   coderabbitRounds?: number
+  /** Finished CodeRabbit reviews. Absent from an older script. */
+  coderabbitReviews?: number
   coderabbit?: string | null
 }
 
@@ -399,7 +401,7 @@ describe('pr-loop watcher', () => {
   test('W30 a review:deep PR alerts REVIEWED again when the second bot reviews the same head', async ($, on) => {
     const first = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: false, routedReviewed: false, unresolved: 2, reasons: ['2 review thread(s) unresolved', 'no CodeRabbit PR-bot review of the head commit'] })
     const second = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: true, routedReviewed: true, unresolved: 3, reasons: ['3 review thread(s) unresolved'] })
-    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [first, first, second, second] } })
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [first, first, first, second, second] } })
     await start($)
     await clock.advance(TICK)
     expect(seen.submits.length).toBe(1)
@@ -622,7 +624,7 @@ describe('pr-loop watcher', () => {
   test('W32 a new head with a stale GREEN alerts again; the structured proof field counts without the reason text', async ($, on) => {
     const first = status(8, { reasons: [GREEN_REASON] })
     const second = status(8, { head: 'b'.repeat(40), headShort: 'bbbbbbb', reasons: [], proof: { required: true, type: 'feature', status: 'invalid', problems: [GREEN_REASON] } })
-    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [first, second] } })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [first, first, second, second] } })
     await start($)
     await clock.advance(TICK)
     await clock.advance(TICK)
@@ -1582,5 +1584,174 @@ describe('pr-loop checkpoint states', () => {
     expect(asks(store)).toEqual([])
     expect(seen.submits.length).toBe(1)
     expect(seen.submits[0]).toContain('rounds unknown')
+  })
+})
+
+// Stale prompts (lane pr-watch-stale-prompts). A model line waits behind the probe, other alerts and dialogs, so the PR can change
+// before it goes out. The world() mock hands out one queued reply per status call: reply 1 is the check, reply 2 is the re-probe
+// right before the line is submitted.
+// SP1  a PROOF line whose proof problem is gone at delivery time is dropped (#230, #231, #232)
+// SP2  a PROOF line for a head that has moved is dropped; the new head alerts once at the next check
+// SP3  a LIMITED, REVIEWED or STALLED line for a PR that is merged at delivery time is dropped (#231)
+// SP4  a line whose state changed at delivery time is dropped
+// SP5  a PROOF line that still holds is delivered with the problems read by the re-probe
+// SP6  a failed re-probe still delivers the line: the re-probe is a filter, not a gate
+// SP7  the same head and reason are delivered once, even when the state flaps in between
+// SP8  a rate limited or skipped request is not a round: the line and the round ask count finished reviews
+// SP9  a request still in flight (no limit) still counts as a round
+// SP10 round 0 gives opening-review advice, never the cr-fix carry
+describe('pr-loop stale prompts', () => {
+  const CR_ROUTE = { required: ['coderabbit'], held: null, source: 'labels' }
+  const GREEN_OLD = 'PR body proof: GREEN names commit 1111111, not the head aaaaaaa. Run the check on the head and update the GREEN line'
+  const record = (over: Record<string, unknown> = {}) => ({
+    pr: 7, state: 'applied', head: HEAD_A, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 0], decided_by: 'default',
+    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 26 * MIN, ...over,
+  })
+  const cw = (on: On, opts: Opts = {}) => {
+    const w = world(on, opts)
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    on('ui.close', () => ({ value: undefined }))
+    mock.session(on)
+    return w
+  }
+  const watching = (pr: number, over: Partial<SeedPr> = {}) => seed([{ pr, state: 'PENDING', head: HEAD_A, since: NOW - MIN, ...over }])
+  const RATE_LIMITED = (over: Partial<Status> = {}) => status(7, {
+    routing: CR_ROUTE, routedReviewed: false, coderabbitLimited: true, coderabbitRateLimited: true, coderabbitRetryMinutes: 40, coderabbitRounds: 1,
+    reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)'], ...over,
+  })
+  const asks = (store: Map<string, unknown>) => (store.get(`checkpoint:asks:${SESSION}`) ?? []) as { kind: string; text: string }[]
+
+  test('SP1 a PROOF line is dropped when the PR body was patched to the head before delivery', async ($, on) => {
+    const wrong = status(8, { reasons: [GREEN_OLD] })
+    const fixed = status(8, { reasons: [] })
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [wrong, fixed] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('SP2 a PROOF line for a head that moved is dropped, and the new head alerts once at the next check', async ($, on) => {
+    const old = status(8, { reasons: [GREEN_OLD] })
+    const next = status(8, { head: 'b'.repeat(40), headShort: 'bbbbbbb', reasons: [GREEN_REASON] })
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [old, next, next] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('bbbbbbb')
+    expect(seen.submits[0]).not.toContain('head aaaaaaa')
+  })
+
+  const FIRST: [string, Status, number][] = [
+    ['LIMITED', status(8, { rateLimited: true, reasons: ['Greptile did not finish a review of the head (completed/neutral)'] }), MIN],
+    ['REVIEWED', status(8, { reviewedHead: true, unresolved: 2, reasons: ['2 review thread(s) unresolved'] }), MIN],
+    ['STALLED', status(8, { reasons: ['no Greptile check on the head commit yet (review pending)'] }), 61 * MIN],
+  ]
+  for (const [name, first, age] of FIRST) {
+    test(`SP3 a ${name} line is dropped when the PR is merged before delivery`, async ($, on) => {
+      const { clock, seen } = world(on, { store: watching(8, { since: NOW - age }), script: { 8: [first, MERGED(8)] } })
+      await start($)
+      await clock.advance(TICK)
+      expect(seen.submits).toEqual([])
+    })
+  }
+
+  test('SP4 a LIMITED line is dropped when the review finished and the PR is pending again', async ($, on) => {
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), status(8)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('SP5 a PROOF line that still holds is delivered with the problems the re-probe read', async ($, on) => {
+    const first = status(8, { reasons: [GREEN_OLD] })
+    const again = status(8, { reasons: [PROOF_REASON] })
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [first, again] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('no "Proof type:" line')
+    expect(seen.submits[0]).not.toContain('GREEN names commit 1111111')
+  })
+
+  test('SP6 a failed re-probe still delivers the line', async ($, on) => {
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), 'error'] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('no finished review')
+  })
+
+  test('SP7 the same head and reason are delivered once, even when the state flaps between', async ($, on) => {
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), LIMITED(8), status(8), status(8), LIMITED(8), LIMITED(8), LIMITED(8), LIMITED(8)] } })
+    await start($)
+    for (let i = 0; i < 6; i += 1) await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
+  test('SP7b a new head with the same reason is delivered again', async ($, on) => {
+    const next = status(8, { head: 'b'.repeat(40), headShort: 'bbbbbbb', rateLimited: true, reasons: ['Greptile did not finish a review of the head (completed/neutral)'] })
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), LIMITED(8), status(8), next, next] } })
+    await start($)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(2)
+    expect(seen.submits[1]).toContain('bbbbbbb')
+  })
+
+  test('SP8 a rate limited request is not a round: 2 requested, 1 finished reads "Rounds used 1 of 1+0", never round 3', async ($, on) => {
+    const kept = { ...watching(7), 'checkpoint:pr:7': record() }
+    const { clock, seen } = cw(on, { store: kept, script: { 7: [RATE_LIMITED({ coderabbitRounds: 2, coderabbitReviews: 1 })] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('Rounds used 1 of 1+0')
+    expect(seen.submits[0]).toContain('Dave decides round 2')
+    expect(seen.submits[0]).not.toContain('round 3')
+  })
+
+  test('SP8b a skipped request is not a round for the round ask either: "Round 2 of 1+0"', async ($, on) => {
+    const skipped = status(7, { routing: CR_ROUTE, routedReviewed: false, coderabbitLimited: true, coderabbitRateLimited: false, coderabbitRounds: 2, coderabbitReviews: 1,
+      reasons: ['CodeRabbit skipped the review of the head (PR-bot review did not run; CLI/plugin output does not count)'] })
+    const kept = { ...watching(7), 'checkpoint:pr:7': record() }
+    const { clock, store } = cw(on, { store: kept, script: { 7: [skipped] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(asks(store).map(ask => ask.kind)).toEqual(['round'])
+    expect(asks(store)[0]!.text).toContain('Round 2 of 1+0 for #7')
+  })
+
+  test('SP9 a request in flight with no limit still counts as a round', async ($, on) => {
+    const s = status(7, { routing: CR_ROUTE, routedReviewed: true, coderabbitReviewedHead: true, unresolved: 1, reasons: ['1 review thread(s) unresolved'], coderabbitRounds: 2, coderabbitReviews: 1 })
+    const kept = { ...watching(7), 'checkpoint:pr:7': record({ budget: [1, 1] }) }
+    const { clock, seen } = cw(on, { store: kept, script: { 7: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toContain('Rounds used 2 of 1+1')
+  })
+
+  test('SP10 a rate limit at round 0 gives opening-review advice and no carry advice', async ($, on) => {
+    const kept = { ...watching(7), 'checkpoint:pr:7': record() }
+    const { clock, seen } = cw(on, { store: kept, script: { 7: [RATE_LIMITED({ coderabbitRounds: 0, coderabbitReviews: 0 })] } })
+    await start($)
+    await clock.advance(TICK)
+    const line = seen.submits[0] as string
+    expect(line).toMatch(/opening review/)
+    expect(line).not.toContain('cr-fix.mjs')
+    expect(line).not.toMatch(/carries/)
+    expect(line).not.toMatch(/earlier review/)
+  })
+
+  test('SP10b STALLED at round 0 gives opening-review advice and no carry advice', async ($, on) => {
+    const s = status(7, { routing: CR_ROUTE, routedReviewed: false, coderabbitRounds: 0, coderabbitReviews: 0, reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+    const kept = { ...watching(7, { since: NOW - 61 * MIN }), 'checkpoint:pr:7': record() }
+    const { clock, seen } = cw(on, { store: kept, script: { 7: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    const line = seen.submits[0] as string
+    expect(line).toMatch(/opening review/)
+    expect(line).not.toContain('cr-fix.mjs')
   })
 })

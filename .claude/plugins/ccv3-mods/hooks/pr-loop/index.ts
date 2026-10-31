@@ -10,6 +10,7 @@ import {
   STATUS_TIMEOUT_MS,
   TICK_MS,
   addWatch,
+  alertKey,
   askFor,
   checkpointOf,
   clipTail,
@@ -18,17 +19,20 @@ import {
   isPrNumber,
   isStale,
   landCommand,
+  markSent,
   noteFailure,
   parseArgs,
   parseProbe,
   readDoc,
   readRecord,
+  refreshAlert,
   reportLine,
   settle,
   stateOf,
   statusForModel,
   statusText,
   toastText,
+  wasSent,
   watchLine,
 } from './model'
 import type { Alert, AlertCheckpoint, Probe, PrStatus, WatchDoc } from './model'
@@ -185,6 +189,23 @@ const lastLine = (text: string): string =>
     .filter(Boolean)
     .at(-1) ?? ''
 
+/**
+ * The model line for this alert as the PR reads right now, or null when it must not go out. The line waits behind the probe, other
+ * alerts and dialogs, so the PR may have changed: one more probe drops it when the PR is merged or closed, its head moved or its state
+ * changed (the new head alerts at the next check). The same PR, state, head and reason goes out once. A failed re-probe keeps the line.
+ */
+const currentLine = async ($: EngineInterface, alert: Alert): Promise<string | null> => {
+  if (wasSent(await loadDoc($), alertKey(alert))) return null
+  const result = await probe($, alert.pr)
+  const live = result.kind === 'ok' ? refreshAlert(alert, result.status, await checkpointFor($, result.status)) : alert
+  if (!live) return null
+  const doc = await loadDoc($)
+  const key = alertKey(live)
+  if (wasSent(doc, key)) return null
+  await saveDoc($, markSent(doc, key))
+  return reportLine(live)
+}
+
 /** Tells Dave and, for an alert the model must act on, the model. Never merges. */
 const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
   $.ui.toast(toastText(alert), { timeoutMs: 10_000 })
@@ -199,7 +220,8 @@ const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
   }
   // READY needs no model turn, and quiet mode wants none: the toast is the alert.
   if (alert.state === 'READY' || (await isQuiet($))) return
-  await $.prompt.submit({ text: reportLine(alert) })
+  const line = await currentLine($, alert)
+  if (line !== null) await $.prompt.submit({ text: line })
 }
 
 const isAsk = (value: unknown): value is CheckpointAsk => {
