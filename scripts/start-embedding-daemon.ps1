@@ -176,8 +176,12 @@ $psi = [System.Diagnostics.ProcessStartInfo]::new()
 $psi.FileName         = 'uv'
 $psi.Arguments        = "run --project opc python opc/scripts/core/embedding_daemon.py --daemon"
 $psi.WorkingDirectory = $repoRoot
-$psi.UseShellExecute  = $false
-$psi.CreateNoWindow   = $true
+# UseShellExecute=$true: ShellExecuteEx passes no inheritable handles, so the daemon does NOT
+# inherit this script's stdout/stderr. With $false the daemon held the caller's pipe open and
+# `start-embedding-daemon.ps1 | cat` (or a hook with piped stdio) hung until the daemon exited.
+# CreateNoWindow is ignored under ShellExecute; WindowStyle Hidden keeps the console hidden.
+$psi.UseShellExecute  = $true
+$psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
 
 $spawnedProc = [System.Diagnostics.Process]::Start($psi)
 if (-not $spawnedProc) {
