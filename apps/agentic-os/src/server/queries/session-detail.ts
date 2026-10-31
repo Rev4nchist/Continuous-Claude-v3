@@ -90,9 +90,10 @@ export type SessionDetail = {
   cache: { hitPct: number; savedUsd: number } | null;
   agentRuns: { count: number; running: number; costUsd: number } | null;
   prs: { pr: number; state: string | null }[];
-  /** Not recorded anywhere yet: the panel shows a dash. */
-  sessionCost: null;
-  limits: null;
+  /** From the state file's `hud`. Null when absent: the panel shows a dash. */
+  sessionCost: number | null;
+  /** Rate-limit windows, shortest first as the HUD wrote them. Null when the file has none. */
+  limits: { label: string; percent: number }[] | null;
   stateAgeSeconds: number | null;
   hasBrief: boolean;
 };
@@ -192,6 +193,17 @@ function cacheOf(cache: StateSnapshot['cache']): SessionDetail['cache'] {
   };
 }
 
+/** The HUD's own names for the two windows; any other kind reads with spaces for underscores. */
+const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d' };
+
+function limitsOf(hud: StateSnapshot['hud']): SessionDetail['limits'] {
+  if (hud === null || hud.limits.length === 0) return null;
+  return hud.limits.map(({ kind, percentUsed }) => ({
+    label: Object.hasOwn(LIMIT_LABEL, kind) ? LIMIT_LABEL[kind] : kind.replace(/_/g, ' '),
+    percent: Math.min(100, Math.max(0, Math.round(percentUsed))),
+  }));
+}
+
 function agentRunsOf(runs: StateSnapshot['agentRuns']): SessionDetail['agentRuns'] {
   if (runs.length === 0) return null;
   return {
@@ -280,8 +292,8 @@ function buildDetail(
     cache: cacheOf(snapshot.cache),
     agentRuns: agentRunsOf(snapshot.agentRuns),
     prs: snapshot.prs.slice(0, MAX_PRS).map(({ pr, state }) => ({ pr, state })),
-    sessionCost: null,
-    limits: null,
+    sessionCost: snapshot.hud?.costUsd ?? null,
+    limits: limitsOf(snapshot.hud),
     stateAgeSeconds: seconds(nowMs, snapshot.at),
     hasBrief: brief !== null,
   };

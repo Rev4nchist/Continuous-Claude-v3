@@ -94,6 +94,8 @@ export type StateSnapshot = {
   }[];
   /** `input` is kept beside the design's fields: the hit rate needs it (hud/cache.ts hitRate). */
   cache: { requests: number; input: number; read: number; write: number; savedUsd: number } | null;
+  /** The HUD's session cost and rate-limit windows (writer: `hud` in writeSnapshot). Null when the file has none. */
+  hud: { costUsd: number | null; limits: { kind: string; percentUsed: number }[] } | null;
 };
 
 export type StateFileStats = {
@@ -313,6 +315,18 @@ function parseCache(value: unknown): StateSnapshot['cache'] {
   };
 }
 
+function parseHud(value: unknown): StateSnapshot['hud'] {
+  if (!isRecord(value)) return null;
+  const limits: { kind: string; percentUsed: number }[] = [];
+  for (const item of list(value.limits, 8)) {
+    if (!isRecord(item)) continue;
+    const kind = str(item.kind, CLIP.kind);
+    const percentUsed = num(item.percentUsed);
+    if (kind !== null && percentUsed !== null) limits.push({ kind, percentUsed });
+  }
+  return { costUsd: num(value.costUsd), limits };
+}
+
 /** Null when the text is not a valid state file. */
 function parseSnapshot(text: string): StateSnapshot | null {
   let raw: unknown;
@@ -341,6 +355,7 @@ function parseSnapshot(text: string): StateSnapshot | null {
     agents: parseAgents(raw.agents),
     agentRuns: parseAgentRuns(raw.agentRuns),
     cache: parseCache(raw.cache),
+    hud: parseHud(raw.hud),
   };
 }
 

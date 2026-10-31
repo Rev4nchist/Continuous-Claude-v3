@@ -296,8 +296,14 @@ function HealthSection({ detail }: { detail: Detail }) {
             ? 'agents -'
             : `agents ${usd(runs.costUsd)} (${runs.count} ${runs.count === 1 ? 'run' : 'runs'}, ${runs.running} running)`}
         </li>
-        <li data-testid="health-session-cost">session cost - (not recorded)</li>
-        <li data-testid="health-limits">limits - (not recorded)</li>
+        <li data-testid="health-session-cost">
+          {detail.sessionCost === null ? 'session cost - (not recorded)' : `session cost ${usd(detail.sessionCost)}`}
+        </li>
+        <li data-testid="health-limits">
+          {detail.limits === null
+            ? 'limits - (not recorded)'
+            : `limits ${detail.limits.map((l) => `${l.label} ${l.percent}%`).join(', ')}`}
+        </li>
         {detail.prs.map((p) => (
           <li key={p.pr} data-testid="health-pr">
             {p.state === null ? `#${p.pr}` : `#${p.pr} ${p.state}`}
