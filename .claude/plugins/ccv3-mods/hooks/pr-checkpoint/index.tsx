@@ -42,6 +42,7 @@ import {
   optionLabel,
   optionsInOrder,
   parseCheckpointArgs,
+  parseGrantArgs,
   parseResult,
   parseShapes,
   pressNotice,
@@ -332,6 +333,15 @@ const recordPathway = async (
     capacity: a.result.capacity,
     root: a.root,
   } as CheckpointRecord
+  // A grant belongs to the record it was made under (its budget and rounds). A new record voids it, or it would cover the new one.
+  await $.store.delete(`${GRANT_PREFIX}${a.pr}`)
+  // The queued asks of the old record go too: an old Yes would recreate the grant just deleted.
+  const queued = await loadAsks($)
+  const live = queued.filter(ask => ask.pr !== a.pr)
+  if (live.length !== queued.length) {
+    await saveAsks($, live)
+    await closeIfIdle($)
+  }
   await $.store.set(`${RECORD_PREFIX}${a.pr}`, stored)
   return applyRecord($, a.root, stored)
 }
@@ -518,8 +528,53 @@ const toolText = async ($: EngineInterface, pr: number, body: string): Promise<s
 }
 
 
+/**
+ * `/pathway grant <pr> <round>`: Dave allows a review round the pane did not ask about, or one he declined. It stores the grant
+ * (`checkpoint:grant:<pr>`) on the record's head and clears a round decline it covers. Only his own composer command writes. It posts nothing.
+ */
+const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: number; round: number }): Promise<{ text: string }> => {
+  if (origin !== 'composer' || !(await interactive($))) return { text: `Only Dave's own ${SLASH} grant records. Nothing was recorded.` }
+  const key = `${RECORD_PREFIX}${grant.pr}`
+  const stored = readRecord(await $.store.get(key))
+  if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. Run ${SLASH} on it first. Nothing was recorded.` }
+  // A lower grant never lowers a round Dave already allowed, whichever head that grant carries (the pane stores the PR head at ask time).
+  // A grant never outlives its checkpoint record: recordPathway deletes it, so a stored grant belongs to this record.
+  const prior = (await $.store.get(`${GRANT_PREFIX}${grant.pr}`)) as { round?: unknown } | null | undefined
+  const allowed = prior && typeof prior.round === 'number' ? Math.max(prior.round, grant.round) : grant.round
+  await $.store.set(`${GRANT_PREFIX}${grant.pr}`, { round: allowed, head: stored.head, at: await $.clock.now() })
+  // Only a round decline the grant covers goes. An opening decline or a decline of a later round stays, or the watcher asks again.
+  const covered = stored.declined?.kind === 'round' && stored.declined.round <= allowed
+  const retained = stored.declined && !covered ? (stored.declined.kind === 'opening' ? 'the opening review' : `round ${stored.declined.round}`) : null
+  try {
+    if (covered) {
+      const { declined: _declined, ...rest } = stored
+      await $.store.set(key, rest as CheckpointRecord)
+    }
+    // A queued round ask this grant covers is answered: a later No in the pane would write `declined`, which the model line reads before the grant.
+    const queue = await loadAsks($)
+    const kept = queue.filter(ask => !(ask.kind === 'round' && ask.pr === grant.pr && (ask.round ?? 1) <= allowed))
+    if (kept.length !== queue.length) {
+      await saveAsks($, kept)
+      await closeIfIdle($)
+    }
+  } catch (err) {
+    // The grant is already stored and the watcher reads it, so say so. The decline or the queued ask may still be there.
+    await tellModel($, `PR checkpoint: Dave allowed round ${grant.round} for #${grant.pr}, but the cleanup failed (${message(err)}). Read pr_status before you request a review.`)
+    return { text: `PR #${grant.pr}: the grant is stored for round ${grant.round}, but the cleanup failed (${message(err)}). A decline or a queued ask may remain. Type the command again.` }
+  }
+  if (retained) {
+    await tellModel($, `PR checkpoint: Dave allowed round ${grant.round} for #${grant.pr}, but his decline of ${retained} stays. Do not request that review.`)
+    return { text: `PR #${grant.pr}: round ${grant.round} allowed. His decline of ${retained} stays.` }
+  }
+  await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: stored.head, text: '', round: grant.round }, 'yes'))
+  return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, post one @coderabbitai review.` }
+}
+
 /** The command (SLASH). It answers its own command: Dave's text, and one hidden line for the model. It never calls prompt.submit. */
 const checkpointCommand = async ($: EngineInterface, e: { args: string; origin: { kind: string } }): Promise<{ text: string; context?: string[] }> => {
+  const grant = parseGrantArgs(e.args)
+  if (grant === 'usage') return { text: USAGE }
+  if (grant) return grantCommand($, e.origin.kind, grant)
   const parsed = parseCheckpointArgs(e.args)
   if (!parsed) return { text: USAGE }
   const live = await interactive($)

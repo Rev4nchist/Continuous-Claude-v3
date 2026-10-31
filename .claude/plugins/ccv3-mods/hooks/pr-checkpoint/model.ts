@@ -18,7 +18,7 @@ export const APPLY_TIMEOUT_MS = 180_000
 export const GIT_TIMEOUT_MS = 20_000
 export const PENDING_STALE_MS = 7 * 24 * 3_600_000
 
-export const USAGE = `Usage: ${SLASH} [pr] [accept|coderabbit|both|none|wait] [--body <file>]`
+export const USAGE = `Usage: ${SLASH} [pr] [accept|coderabbit|both|none|wait] [--body <file>]   or   ${SLASH} grant <pr> <round>`
 export const NEED_PR = 'Call pr_checkpoint first, or pass <pr> --body <file>.'
 const PATHWAY_WORDS = ['accept', 'coderabbit', 'both', 'none', 'wait']
 
@@ -49,6 +49,20 @@ export const parseCheckpointArgs = (args: string): CheckpointArgs | null => {
     }
   }
   return { pr, word, body }
+}
+
+/**
+ * `grant <pr> <round>`: Dave's typed Yes for a review round. Null when the text is not a grant command, 'usage' when it starts
+ * with `grant` and is not exactly `grant <pr> <round>` with both numbers at least 1.
+ */
+export const parseGrantArgs = (args: string): { pr: number; round: number } | 'usage' | null => {
+  const words = args.trim().split(/\s+/).filter(Boolean)
+  if (words[0]?.toLowerCase() !== 'grant') return null
+  const match = words.length === 3 ? [/^#?(\d+)$/.exec(words[1]!), /^(\d+)$/.exec(words[2]!)] : null
+  if (!match || !match[0] || !match[1]) return 'usage'
+  const pr = Number(match[0][1])
+  const round = Number(match[1][1])
+  return Number.isSafeInteger(pr) && Number.isSafeInteger(round) && pr >= 1 && round >= 1 ? { pr, round } : 'usage'
 }
 
 const ABSOLUTE = /^([a-zA-Z]:[\\/]|[\\/])/

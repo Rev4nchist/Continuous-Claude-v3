@@ -2230,6 +2230,17 @@ test('RS5: the JSON result carries isDraft, labels, coderabbitRequests and coder
   }
 });
 
+test('RS5b: coderabbitReviews counts finished reviews only: a request with no review (rate limited or skipped) adds none', () => {
+  const A = 'a'.repeat(40);
+  const r = evaluate(routed(['review:coderabbit'], { eval: { reviews: [crBotReview(A, '2026-10-28T10:00:00Z')], comments: [reqComment(1, '@coderabbitai review', '2026-10-28T11:00:00Z')] } }));
+  assert.equal(r.coderabbitRounds, 2, 'the request still counts as a bought round');
+  assert.equal(r.coderabbitReviews, 1, 'one review finished');
+  const none = evaluate(routed(['review:coderabbit'], { eval: { reviews: [], comments: [reqComment(1, '@coderabbitai review', '2026-10-28T11:00:00Z')] } }));
+  assert.equal(none.coderabbitReviews, 0);
+  const reply = { user: CR_BOT, commit_id: A, submitted_at: '2026-10-28T10:00:00Z', body: '' };
+  assert.equal(evaluate(routed(['review:coderabbit'], { eval: { reviews: [reply], comments: [] } })).coderabbitReviews, 0, 'an empty-body thread reply is no review');
+});
+
 test('RS6: DRAFT_REASON is exported and is the reason a draft carries; a draft is still never READY', () => {
   assert.equal(RS.DRAFT_REASON, 'PR is a draft (no bot review on drafts)');
   const draft = evaluate(routed(['review:none'], { draft: true, eval: { comments: [NONE_STATE()] } }));
