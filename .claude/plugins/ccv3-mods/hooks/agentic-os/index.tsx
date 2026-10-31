@@ -67,7 +67,7 @@ const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as
 /** Repo, branch and worktree of the session folder: read from the .git files at the session start and at each turn start. */
 const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | null)
 
-/** The tab the /os pane shows. Only a live tab is ever stored (a Comms, Swarm or Resources tab has no Button); reset at /clear and resume. */
+/** The tab the /os pane shows. Only a live tab is ever stored (a Comms or Resources tab has no Button); reset at /clear and resume. */
 const osTab = atom({ plugin: 'ccv3-mods', key: 'osTab' } as const, 'overview' as TabId)
 
 /**

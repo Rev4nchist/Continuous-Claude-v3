@@ -307,7 +307,7 @@ declare module 'claude-code' {
       /** Repo, branch and worktree of the session folder (agentic-os): the band's line 1 and the snapshot's `repo`, `branch`, `worktree`. */
       git: OsGit | null
       /** The tab the /os pane shows (agentic-os): reset to overview at /clear and resume. A tab that is not live (Comms, Swarm, Resources) is never stored. */
-      osTab: 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions'
+      osTab: 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions' | 'swarm'
       /** The steward's counts since the last brief_set (agentic-os, steward.ts). Reset at session.start, /clear and resume. */
       steward: OsSteward
       /** The checkpoint a draft PR waits on (hooks/pr-checkpoint); null when none is open. */
