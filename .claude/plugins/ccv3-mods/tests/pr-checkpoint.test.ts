@@ -1364,6 +1364,17 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
   })
 
+  test('G5 a /pathway grant drops the queued round ask it covers, so a later No cannot override the grant', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
+    await start($)
+    await w.clock.advance(TICK)
+    expect(asksOf(w.store).length).toBe(1)
+    await slash($, 'grant 7 4')
+    expect(asksOf(w.store)).toEqual([])
+    expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+    expect((w.store.get('checkpoint:pr:7') as Rec).declined).toBeUndefined()
+  })
+
   for (const args of ['grant', 'grant 7', 'grant 7 0', 'grant 7 x', 'grant 7 4 5', 'grant 0 4', 'grant 7 4 --body b.md']) {
     test(`G4 "/pathway ${args}" gives the usage text and writes nothing`, async ($, on) => {
       const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
