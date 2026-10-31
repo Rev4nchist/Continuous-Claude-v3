@@ -11,6 +11,7 @@ import {
   type ReadyItem,
   type SessionCard,
 } from '@/server/queries/fleet-sessions';
+import { stateFilesSource } from '@/server/queries/fleet-join';
 import { getLaneBoard, type LaneBoard } from '@/server/queries/lane-board';
 import { getFleetOverview, type FleetOverview } from '@/server/queries/projects';
 import {
@@ -64,7 +65,7 @@ export type MissionControlSnapshot = {
   fleet: FleetOverview;
   active: ActiveSessions;
   database: { ok: true; latencyMs: number } | { ok: false; error: string };
-  /** Open, unanswered, non-stale asks of live sessions, oldest first. */
+  /** One row per session that waits on Dave: its first open, unanswered, non-stale ask, oldest first. */
   ready: ReadyItem[];
   /** One card per live session. */
   cards: SessionCard[];
@@ -92,7 +93,7 @@ const NO_FILES: StateFiles = {
 const NO_FLEET: FleetSessions = {
   cards: [],
   ready: [],
-  join: { matched: 0, quiet: 0, noSessionRow: 0, droppedEnded: 0, droppedStale: 0, unchecked: 0 },
+  join: { matched: 0, quiet: 0, noSessionRow: 0, droppedEnded: 0, droppedStale: 0, unchecked: 0, lookupFailed: 0 },
   prs: [],
 };
 
@@ -104,32 +105,6 @@ async function settle<T>(read: () => Promise<T>): Promise<{ ok: true; value: T }
     // Every message that reaches a DTO is redacted, path-free and clipped (safeMessage).
     return { ok: false, error: safeMessage(error) };
   }
-}
-
-function stateFilesSource(
-  files: { ok: true; value: StateFiles } | { ok: false; error: string },
-  fleet: FleetSessions,
-): DataSource {
-  const base = { id: 'state-files', label: 'Session state files' };
-  if (!files.ok) return { ...base, status: 'error', detail: files.error };
-  const { stats } = files.value;
-  const { join } = fleet;
-  if (stats.dirUnreadable) return { ...base, status: 'degraded', detail: 'directory unreadable' };
-  const parts = [
-    `files ${stats.filesSeen}`,
-    `unreadable ${stats.unreadable}`,
-    `oversize ${stats.oversize}`,
-    `too many ${stats.tooMany}`,
-    `no session row ${join.noSessionRow}`,
-    `ended ${join.droppedEnded}`,
-    // `stale` = session quiet for over 24 h. `quiet` = 15 min to 24 h: no card, asks in the strip.
-    `stale ${join.droppedStale}`,
-    `quiet ${join.quiet}`,
-  ];
-  if (join.unchecked > 0) parts.push(`unchecked ${join.unchecked}`);
-  // `too many` shows in the detail but is not a fault by itself: the writer never prunes old files.
-  const bad = stats.unreadable + stats.oversize + join.unchecked;
-  return { ...base, status: bad > 0 ? 'degraded' : 'ok', detail: parts.join(', ') };
 }
 
 /** The lane-registry row. On a board request it adds the rows seen, and shows a failed board read. */
@@ -179,7 +154,7 @@ export async function getMissionControlSnapshot(
 
   const tiles: StatTiles = {
     liveSessions: active.sessions.length,
-    needsDave: new Set(sessions.ready.map((r) => r.sessionId)).size,
+    needsDave: sessions.ready.length,
     blocked: sessions.cards.filter((c) => c.chip === 'blocked').length,
     activeLanes: lanes.ok ? lanes.value : 0,
     openPrs: sessions.prs.length,

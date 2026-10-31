@@ -4,7 +4,6 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { projectLabel } from '@/server/sources/project-label';
-import { promptText } from '@/server/sources/prompt-text';
 
 /**
  * The live half of the fleet view — who is working right now.
@@ -52,9 +51,6 @@ export type ActiveSession = {
    *  present. Shown when unmapped as a hint to which project it is. The alias row needs the full
    *  path, which this label no longer carries: read it in psql. */
   rawProject: string;
-  /** Truncated in SQL, not in the browser — this is the user's prompt text and
-   *  there is no reason to ship 4KB of it over the wire every 5 seconds. */
-  workingOn: string | null;
   /** Seconds since the last USER PROMPT. Kept as its own field rather than
    *  folded into liveness because "the human last said something 20 minutes ago"
    *  is a genuinely different fact from "the agent is idle", and the strip is
@@ -108,7 +104,6 @@ type ActiveRow = {
   project_key: string | null;
   display_name: string | null;
   raw_project: string;
-  working_on: string | null;
   heartbeat_seconds_ago: number;
   activity_seconds_ago: number | null;
   live_seconds_ago: number;
@@ -142,8 +137,6 @@ export async function getActiveSessions(
       a.project_key,
       p.display_name,
       s.project                                                   AS raw_project,
-      NULLIF(left(btrim(regexp_replace(s.working_on, '\\s+', ' ', 'g')), 140), '')
-                                                                  AS working_on,
       EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - s.last_heartbeat))::int
                                                                   AS heartbeat_seconds_ago,
       EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - s.last_activity_at))::int
@@ -219,7 +212,6 @@ export async function getActiveSessions(
       projectKey: r.project_key,
       projectDisplayName: r.display_name,
       rawProject: projectLabel(r.raw_project),
-      workingOn: r.working_on === null ? null : promptText(r.working_on, 140),
       heartbeatSecondsAgo: Number(r.heartbeat_seconds_ago ?? 0),
       // NOT `?? 0`: zero would render as "active this second" for every row that
       // predates agent-activity tracking, which is the confidently-wrong failure

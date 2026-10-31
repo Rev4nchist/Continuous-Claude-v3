@@ -162,11 +162,24 @@ async function loadSnapshot(request: APIRequestContext, sessionId?: string): Pro
  * A live session: in active.sessions with a sign of life under 15 minutes ago AND an id the app
  * accepts in ?session= (the design ignores any other id). Fails if none.
  */
-async function liveSession(request: APIRequestContext): Promise<LiveSession> {
+async function liveSession(
+  request: APIRequestContext,
+  options: { mapped?: boolean } = {},
+): Promise<LiveSession> {
   const snapshot = await loadSnapshot(request);
   const live = snapshot.active.sessions.filter(
-    (s) => s.liveSecondsAgo < LIVE_UNDER_SECONDS && SESSION_ID_FORMAT.test(s.id),
+    (s) =>
+      s.liveSecondsAgo < LIVE_UNDER_SECONDS &&
+      SESSION_ID_FORMAT.test(s.id) &&
+      (options.mapped !== true || (s.projectKey !== null && s.projectDisplayName !== null)),
   );
+  // A live session exists but none maps to a project: the case cannot run, which is not a fault of the page.
+  if (options.mapped === true) {
+    test.skip(
+      live.length === 0 && snapshot.active.sessions.some((s) => s.liveSecondsAgo < LIVE_UNDER_SECONDS),
+      'Precondition missing: no live session maps to a project (projectKey and projectDisplayName set).',
+    );
+  }
   expect(
     live.length,
     `Precondition: the database needs a live session (liveSecondsAgo < ${LIVE_UNDER_SECONDS}) ` +
@@ -221,6 +234,21 @@ const projectButton = (page: Page, displayName: string): Locator =>
 
 const urlParam = (page: Page, key: string): string | null =>
   new URL(page.url()).searchParams.get(key);
+
+/** Tailwind `lg`: the width from which the right column (and its placeholder) is drawn. */
+const LG_PX = 1024;
+
+/**
+ * The "Select a session" hint sits in the right column. It is `hidden lg:block`: drawn on a desktop
+ * viewport, present in the DOM but not drawn on a phone, where the column becomes the page flow and
+ * an empty hint would only push Projects down.
+ */
+async function expectSelectPlaceholder(page: Page): Promise<void> {
+  const hint = page.getByText(/^Select a session/);
+  await expect(hint).toHaveCount(1);
+  if ((page.viewportSize()?.width ?? 0) >= LG_PX) await expect(hint).toBeVisible();
+  else await expect(hint).toBeHidden();
+}
 
 async function horizontalOverflow(page: Page): Promise<number> {
   return page.evaluate(
@@ -467,7 +495,13 @@ test.describe('Sessions view', () => {
 
     const row = sessionRow(page, live.id);
     await expect(row).toBeVisible();
-    await expect(row.getByTestId('session-row-state')).toContainText('waiting-on-dave');
+    // The table shows the glossary word; the raw code stays in data-chip.
+    await expect(row.getByTestId('session-row-state')).toContainText('Waiting for you');
+    await expect(row.getByTestId('session-row-state')).not.toContainText('waiting-on-dave');
+    await expect(row.getByTestId('session-row-state').locator('[data-chip]')).toHaveAttribute(
+      'data-chip',
+      'waiting-on-dave',
+    );
     await expect(row.getByTestId('session-row-select')).toHaveText(card?.name ?? '');
     await expect(row.getByTestId('session-row-title')).toHaveText('E2E row title');
     await expect(row.getByTestId('session-row-lane')).toHaveText(card?.laneId ?? '-');
@@ -484,11 +518,8 @@ test.describe('Sessions view', () => {
 
   test('the project filter set on Overview applies to the table', async ({ page, request }) => {
     const errors = watchErrors(page);
-    const live = await liveSession(request);
-    expect(
-      live.projectKey && live.projectDisplayName,
-      `Precondition: live session ${live.id} must map to a project`,
-    ).toBeTruthy();
+    // The first live session that maps to a project: an unmapped one cannot be filtered by a project card.
+    const live = await liveSession(request, { mapped: true });
     writeDetailFixture(live.id);
 
     const snapshot = await loadSnapshot(request);
@@ -542,7 +573,7 @@ test.describe('session detail panel', () => {
 
     await page.goto('/');
     await waitForHydration(page);
-    await expect(page.getByText(/^Select a session/)).toBeVisible();
+    await expectSelectPlaceholder(page);
     await expect(detailPanel(page)).toHaveCount(0);
 
     const cardButton = sessionCard(page, live.id).getByRole('button');
@@ -557,7 +588,9 @@ test.describe('session detail panel', () => {
     const header = panel.getByTestId('detail-header');
     await expect(header).toContainText('Session');
     await expect(header).toContainText(live.id.slice(0, 4));
-    await expect(header).toContainText('waiting-on-dave');
+    await expect(header).toContainText('Waiting for you');
+    await expect(header).not.toContainText('waiting-on-dave');
+    await expect(header.locator('[data-chip]')).toHaveAttribute('data-chip', 'waiting-on-dave');
 
     // The h3 titles, exactly, in order. Decisions only because the fixture has some.
     await expect(panel.getByRole('heading', { level: 3 })).toHaveText([
@@ -749,7 +782,7 @@ test.describe('URL state', () => {
     await expect(navTab(page, 'overview')).toHaveAttribute('aria-current', 'page');
     await expect(detailPanel(page)).toHaveCount(0);
     await expect(page.getByTestId('detail-unavailable')).toHaveCount(0);
-    await expect(page.getByText(/^Select a session/)).toBeVisible();
+    await expectSelectPlaceholder(page);
     expect(errors).toEqual([]);
   });
 });
@@ -1209,7 +1242,7 @@ test.describe('click-through', () => {
 
     await detailPanel(page).getByRole('button', { name: 'Close', exact: true }).click();
     await expect(detailPanel(page)).toHaveCount(0);
-    await expect(page.getByText(/^Select a session/)).toBeVisible();
+    await expectSelectPlaceholder(page);
     await expect.poll(() => urlParam(page, 'session')).toBeNull();
     // Ready for Dave still lists the ask: Close clears the selection only.
     await expect(readyItem(page, live.id)).toBeVisible();
@@ -1249,6 +1282,8 @@ test.describe('ask flags in the detail', () => {
   test('an ask older than 24 h shows as stale in the Ask section', async ({ page, request }) => {
     const live = await liveSession(request);
     writeDetailFixture(live.id, {
+      // Both stamps are old: the age is the later of the brief update and the file write.
+      at: secondsAgo(25 * HOUR),
       brief: makeBrief({
         title: 'E2E stale detail',
         ask: [ask('E2E stale detail ask', 'E2E stale detail recommend')],

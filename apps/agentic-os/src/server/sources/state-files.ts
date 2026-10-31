@@ -4,7 +4,7 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { redact } from './redact';
-import { scrubPathsInText } from './safe-message';
+import { scrubPathsInText, stripControl } from './safe-message';
 
 /**
  * Reader for the per-session state files the ccv3-mods plugin writes.
@@ -18,8 +18,10 @@ import { scrubPathsInText } from './safe-message';
  *   - Every key is optional except `sessionId` (string) and `at` (epoch ms). A key with the
  *     wrong type is treated as absent. A file that is not JSON, or lacks either required
  *     key, counts as `unreadable`. Nothing here throws.
- *   - Every string that leaves this module is redacted FIRST and clipped SECOND. Clipping
- *     first could cut a token in half and leave a tail the patterns no longer match.
+ *   - Every string that leaves this module is stripped of invisible characters FIRST, redacted
+ *     SECOND and clipped LAST. Redacting before the strip would miss a secret split by a
+ *     zero-width character. Clipping first could cut a token in half and leave a tail the
+ *     patterns no longer match.
  *   - At most MAX_FILES files (newest first), each at most MAX_BYTES. Others are counted.
  */
 
@@ -71,6 +73,12 @@ export type StateSnapshot = {
   sessionId: string;
   /** Epoch milliseconds the file was written. */
   at: number;
+  /**
+   * Epoch milliseconds the session ended, from the final snapshot the writer makes at session.end
+   * (it equals `at` there). Null for every other file. Only a fallback for a session the database
+   * has no ended row for; see fleet-sessions.ts `endedByFile`.
+   */
+  endedAt: number | null;
   chip: string | null;
   repo: string | null;
   branch: string | null;
@@ -121,18 +129,23 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 3))}...`;
 }
 
-/** Redact, then clip. Null when the value is not a string or is empty after trimming. */
+/**
+ * Strip invisible characters, redact, then clip. Null when the value is not a string or is empty
+ * after stripping and trimming. The strip comes FIRST: a secret split by a zero-width character
+ * ("sk-<U+200B>ant-...") matches no redact pattern, and a strip after redact would show it whole.
+ * Redact, scrub and clip add only fixed ASCII markers or cut the text, so no second strip is needed.
+ */
 function str(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
-  const trimmed = value.slice(0, PRE_REDACT_CAP).trim();
+  const trimmed = stripControl(value.slice(0, PRE_REDACT_CAP)).trim();
   if (trimmed === '') return null;
   return clip(redact(trimmed).text, max);
 }
 
-/** Redact, scrub absolute paths to `<path>`, then clip. For values that can hold a path or command output. */
+/** Strip, redact, scrub absolute paths to `<path>`, then clip. For values that can hold a path or command output. */
 function strScrubbed(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
-  const trimmed = value.slice(0, PRE_REDACT_CAP).trim();
+  const trimmed = stripControl(value.slice(0, PRE_REDACT_CAP)).trim();
   if (trimmed === '') return null;
   return clip(scrubPathsInText(redact(trimmed).text), max);
 }
@@ -343,6 +356,7 @@ function parseSnapshot(text: string): StateSnapshot | null {
   return {
     sessionId,
     at,
+    endedAt: num(raw.endedAt),
     chip: str(raw.chip, CLIP.short),
     repo: strLeaf(raw.repo, CLIP.short),
     branch: str(raw.branch, CLIP.short),
