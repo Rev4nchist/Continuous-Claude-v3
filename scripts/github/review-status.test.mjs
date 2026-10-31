@@ -3190,3 +3190,45 @@ test('RB11: a commit missing from the list falls back to the stamp, and one comm
   const twice = [{ ...a, id: 3, submitted_at: '2026-10-28T12:00:00Z' }, a];
   assert.equal(RS.newestCodeRabbitReview(twice, ORDER).id, 3, 'same commit: the later stamp breaks the tie');
 });
+
+// Fix round (review of the round-order commit). Findings 1 to 4.
+test('RB12: the newest round does not depend on the input order when some round commits are missing from the commit list', () => {
+  // After a force-push: A is on a commit the list lost. B (listed, newer commit) is stamped first, C (listed, older commit) last, A between.
+  // Pairs: A beats B and C beats A by stamp, B beats C by rank: a cycle, so a pairwise reduce answers by input order.
+  const mk = (id, commit_id, submitted_at) => ({ ...CR_OLD_REVIEW, id, commit_id, submitted_at });
+  const A = mk(1, 'e'.repeat(40), '2026-10-28T12:00:00Z');
+  const B = mk(2, OLD, '2026-10-28T11:00:00Z');
+  const C = mk(3, X_COMMIT, '2026-10-28T13:00:00Z');
+  const list = [X_COMMIT, OLD, HEAD].map((sha) => ({ sha }));
+  const orders = [[A, B, C], [A, C, B], [B, A, C], [B, C, A], [C, A, B], [C, B, A]];
+  const picked = orders.map((o) => RS.newestCodeRabbitReview(o, list).id);
+  assert.deepEqual([...new Set(picked)], [picked[0]], `one answer for all six orders, got ${picked.join(',')}`);
+});
+
+test('RB13: readPrCommits returns [] above 100 commits, the same cut as review-status, so every script ranks rounds the same way', () => {
+  const shas = (n) => Array.from({ length: n }, (_, i) => ({ sha: i.toString(16).padStart(40, '0') }));
+  const page = (n) => [shas(n)];
+  assert.equal(RS.readPrCommits(() => page(100), 'o', 'r', 1).length, 100, '100 commits are read');
+  assert.deepEqual(RS.readPrCommits(() => [shas(100), shas(20)], 'o', 'r', 1), [], '120 commits: unknown order, the stamp decides');
+});
+
+test('RB14: a skipped head where only the CLI fix review line is missing also names cr-fix.mjs, and keeps the skip reason', () => {
+  const r = withNotice('Review skipped', { carry: { cli: null } });
+  assert.ok(r.reasons.some((x) => SKIP_REASON.test(x)), r.reasons.join('; '));
+  assert.ok(r.reasons.some((x) => x.startsWith('no CodeRabbit PR-bot review of the head commit; the earlier review carries once') && /cr-fix\.mjs --pr/.test(x)), r.reasons.join('; '));
+  // Another blocker as well (a Major inline): the hint would send the author to the wrong step, so it stays out.
+  const two = withNotice('Review skipped', { carry: { cli: null, carry: carryOf({ reviewComments: [{ id: 1, body: MAJOR_206 }] }) } });
+  assert.ok(!two.reasons.some((x) => /cr-fix\.mjs --pr/.test(x)), two.reasons.join('; '));
+});
+
+test('RB15: a "Review failed" head pays for no carry read; a skipped head still does', async () => {
+  let reads = 0;
+  const reader = () => { reads += 1; return null; };
+  const inputsFor = (heading) => routed(['review:coderabbit', 'risk:normal'], { input: NO_GREPTILE, eval: { reviews: [CR_OLD_REVIEW], comments: [rbNotice(heading)], headCommittedAt: HEAD_DATE } });
+  const failed = await RS.evaluateWithCarry(inputsFor('Review failed'), reader);
+  assert.equal(failed.coderabbitNotice, 'failed');
+  assert.equal(reads, 0, 'a failed head never carries, so no read');
+  const skipped = await RS.evaluateWithCarry(inputsFor('Review skipped'), reader);
+  assert.equal(skipped.coderabbitNotice, 'skipped');
+  assert.equal(reads, 1, 'a skipped head reads the carry once');
+});
