@@ -43,7 +43,7 @@ const DONE = { type: 'complete', status: 'review_completed', outcome: 'completed
 const gqlNode = (edits) => (c) => ({ databaseId: c.id, body: c.body, author: { login: 'coderabbitai', __typename: 'Bot' }, lastEditedAt: null, updatedAt: c.updated_at, userContentEdits: { nodes: edits[c.id] ?? [] } });
 
 /** A harness: fake gh (reviews list), fake git head, fake cr runner. Records every call. */
-function harness({ merges = [], reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], comments = [], commentEdits = {}, head = HEAD, prHead = head, ancestor = true, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null } = {}) {
+function harness({ merges = [], reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], comments = [], commentEdits = {}, head = HEAD, prHead = head, ancestor = true, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null, commits = [] } = {}) {
   const calls = { gh: [], runs: [], writes: [], ancestor: [], merges: [] };
   const deps = {
     gh: (args) => {
@@ -51,6 +51,7 @@ function harness({ merges = [], reviews = [review(1, OLD, '2026-10-30T08:00:00Z'
       if (ghError) throw new Error(ghError);
       if (args.includes('graphql')) return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false }, nodes: comments.map(gqlNode(commentEdits)) } } } } };
       if (args.some((a) => /issues\/\d+\/comments/.test(a))) return comments;
+      if (args.some((a) => /pulls\/\d+\/commits/.test(a))) return commits.map((sha) => ({ sha }));
       return args.some((a) => /pulls\/\d+$/.test(a)) ? { head: { sha: prHead } } : reviews;
     },
     isAncestor: (cwd, from) => { calls.ancestor.push(from); return ancestor; },
@@ -430,4 +431,19 @@ test('CF23: an error on page 2 of the GraphQL comments ends with exit 2 and star
   assert.equal(r.exitCode, 2);
   assert.equal(h.calls.runs.length, 0, 'no CLI run is spent');
   assert.match(r.reason, /HTTP 502 page 2/);
+});
+
+// Lane review-status-bugs, bug 2: the round order is the reviewed commit (the PR commit list), not the summary comment's updated_at.
+// cr-fix must read the same list, or it prints a range review-status.mjs does not accept.
+test('CF21: an older clean summary edited after a newer review object is not the source: the newer commit is, as in review-status', async () => {
+  const reviews = [review(1, OLD, '2026-10-30T07:00:00Z')]; // OLD is the newer commit
+  const comments = [cleanSummary(OLDER, '2026-10-30T09:00:00Z')]; // covers the older commit, edited last
+  const commentEdits = { 800: [] };
+  const commits = [OLDER, OLD, HEAD];
+  const h = harness({ reviews, comments, commentEdits, commits });
+  const r = await h.go();
+  assert.equal(r.exitCode, 0, r.reason ?? '');
+  assert.equal(r.from, OLD, 'the review of the newer commit');
+  assert.deepEqual(h.calls.runs[0].args, ['review', '--agent', '--committed', '--base-commit', OLD]);
+  assert.equal(newestCodeRabbitRound({ reviews, comments, commentEdits, head: HEAD, commits: commits.map((sha) => ({ sha })) }).commit_id, OLD, 'review-status names the same source');
 });
