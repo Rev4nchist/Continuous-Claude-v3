@@ -533,6 +533,13 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
     const { declined: _declined, ...rest } = stored
     await $.store.set(key, rest as CheckpointRecord)
   }
+  // A queued round ask this grant covers is answered: a later No in the pane would write `declined`, which the model line reads before the grant.
+  const queue = await loadAsks($)
+  const kept = queue.filter(ask => !(ask.kind === 'round' && ask.pr === grant.pr && (ask.round ?? 1) <= grant.round))
+  if (kept.length !== queue.length) {
+    await saveAsks($, kept)
+    await closeIfIdle($)
+  }
   await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: stored.head, text: '', round: grant.round }, 'yes'))
   return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, post one @coderabbitai review.` }
 }
