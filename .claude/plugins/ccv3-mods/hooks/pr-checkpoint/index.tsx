@@ -530,16 +530,28 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. Run ${SLASH} on it first. Nothing was recorded.` }
   await $.store.set(`${GRANT_PREFIX}${grant.pr}`, { round: grant.round, head: stored.head, at: await $.clock.now() })
   // Only a round decline the grant covers goes. An opening decline or a decline of a later round stays, or the watcher asks again.
-  if (stored.declined?.kind === 'round' && stored.declined.round <= grant.round) {
-    const { declined: _declined, ...rest } = stored
-    await $.store.set(key, rest as CheckpointRecord)
+  const covered = stored.declined?.kind === 'round' && stored.declined.round <= grant.round
+  const retained = stored.declined && !covered ? (stored.declined.kind === 'opening' ? 'the opening review' : `round ${stored.declined.round}`) : null
+  try {
+    if (covered) {
+      const { declined: _declined, ...rest } = stored
+      await $.store.set(key, rest as CheckpointRecord)
+    }
+    // A queued round ask this grant covers is answered: a later No in the pane would write `declined`, which the model line reads before the grant.
+    const queue = await loadAsks($)
+    const kept = queue.filter(ask => !(ask.kind === 'round' && ask.pr === grant.pr && (ask.round ?? 1) <= grant.round))
+    if (kept.length !== queue.length) {
+      await saveAsks($, kept)
+      await closeIfIdle($)
+    }
+  } catch (err) {
+    // The grant is already stored and the watcher reads it, so say so. The decline or the queued ask may still be there.
+    await tellModel($, `PR checkpoint: Dave allowed round ${grant.round} for #${grant.pr}, but the cleanup failed (${message(err)}). Read pr_status before you request a review.`)
+    return { text: `PR #${grant.pr}: the grant is stored for round ${grant.round}, but the cleanup failed (${message(err)}). A decline or a queued ask may remain. Type the command again.` }
   }
-  // A queued round ask this grant covers is answered: a later No in the pane would write `declined`, which the model line reads before the grant.
-  const queue = await loadAsks($)
-  const kept = queue.filter(ask => !(ask.kind === 'round' && ask.pr === grant.pr && (ask.round ?? 1) <= grant.round))
-  if (kept.length !== queue.length) {
-    await saveAsks($, kept)
-    await closeIfIdle($)
+  if (retained) {
+    await tellModel($, `PR checkpoint: Dave allowed round ${grant.round} for #${grant.pr}, but his decline of ${retained} stays. Do not request that review.`)
+    return { text: `PR #${grant.pr}: round ${grant.round} allowed. His decline of ${retained} stays.` }
   }
   await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: stored.head, text: '', round: grant.round }, 'yes'))
   return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, post one @coderabbitai review.` }

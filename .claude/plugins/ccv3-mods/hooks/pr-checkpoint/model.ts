@@ -62,7 +62,7 @@ export const parseGrantArgs = (args: string): { pr: number; round: number } | 'u
   if (!match || !match[0] || !match[1]) return 'usage'
   const pr = Number(match[0][1])
   const round = Number(match[1][1])
-  return pr >= 1 && round >= 1 ? { pr, round } : 'usage'
+  return Number.isSafeInteger(pr) && Number.isSafeInteger(round) && pr >= 1 && round >= 1 ? { pr, round } : 'usage'
 }
 
 const ABSOLUTE = /^([a-zA-Z]:[\\/]|[\\/])/
