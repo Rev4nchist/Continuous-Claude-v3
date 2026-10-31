@@ -100,14 +100,15 @@ echo "work_paths=$(grep -rIl 'david[.-]hayes' "$H/.claude" 2>/dev/null | wc -l)"
     $pe = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$pe)
     $n++; $errs += $pe.Count; $o += "$($pe.Count) errors  $($_.FullName)"
   }
-  $hits = @(Select-String -Path .claude\scripts\*.ps1, .claude\scripts\scheduled\*.ps1, scripts\scheduled-health-check.bat -Pattern 'david[.-]hayes')
+  $hits = @(Select-String -Path .claude\scripts\*.ps1, .claude\scripts\scheduled\* -Pattern 'david[.-]hayes')
   $o += "work_path_hits=$($hits.Count)"; $o += @($hits | ForEach-Object { "$_" })
   $tasks = $null; try { $tasks = Get-Content scripts\scheduled\tasks.json -Raw | ConvertFrom-Json } catch { $o += "tasks.json parse error: $_" }
-  $tl = @($tasks.tasks ?? $tasks); $personal = @($tl | Where-Object { "$($_.profile)" -match 'personal' }).Count
-  $other = @($tl | Where-Object { "$($_.profile)" -and "$($_.profile)" -notmatch 'personal' }).Count
-  $rr = @(Select-String -Path scripts\scheduled-health-check.bat -Pattern 'report-registry').Count
-  $o += "tasks=$($tl.Count) personal=$personal other_profiles=$other report_registry_refs=$rr"
-  Save-Gate 'W9' 'ps1-parse' $o ($n -gt 0 -and $errs -eq 0 -and $hits.Count -eq 0 -and $personal -gt 0 -and $other -eq 0 -and $rr -eq 0) "ps1=$n parse_errors=$errs work_paths=$($hits.Count) personal_tasks=$personal other_profiles=$other report_registry_refs=$rr"
+  $tl = @($tasks.tasks)
+  $fields = 'name', 'script', 'trigger', 'execLimitMin', 'allowedExit', 'maxAgeHours'
+  $badFields = @($tl | Where-Object { $e = $_; @($fields | Where-Object { $null -eq $e.PSObject.Properties[$_] }).Count -gt 0 }).Count
+  $missing = @($tl | Where-Object { -not (Test-Path -LiteralPath "$($_.script)" -PathType Leaf) }).Count
+  $o += "tasks=$($tl.Count) tasks_missing_fields=$badFields tasks_missing_script=$missing"
+  Save-Gate 'W9' 'ps1-parse' $o ($n -gt 0 -and $errs -eq 0 -and $hits.Count -eq 0 -and $tl.Count -eq 4 -and $badFields -eq 0 -and $missing -eq 0) "ps1=$n parse_errors=$errs work_paths=$($hits.Count) tasks=$($tl.Count) tasks_missing_fields=$badFields tasks_missing_script=$missing"
 }
 
 if ($runPost) {

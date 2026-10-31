@@ -99,11 +99,24 @@ describe('findRecentHandoff', () => {
 
   it('honours the recentMs override', () => {
     const now = Date.now();
-    const recent = makeHandoff('auto-handoff-dir/h.yaml', now - 90_000);
+    const recent = makeHandoff('auto-handoff-dir/h.yaml', now - 15 * 60_000);
     expect(findRecentHandoff({ projectDir, now })).toBeNull();
     expect(
-      findRecentHandoff({ projectDir, now, recentMs: 120_000 }),
+      findRecentHandoff({ projectDir, now, recentMs: 20 * 60_000 }),
     ).toBe(recent);
+  });
+
+  it('finds a handoff written 8 minutes before SessionEnd (default window is about 10 minutes)', () => {
+    // Live log: 103 of 103 SessionEnd runs skipped with no_recent_handoff under the 30 s window.
+    const now = Date.now();
+    const recent = makeHandoff('auto-handoff-dir/h.yaml', now - 8 * 60_000);
+    expect(findRecentHandoff({ projectDir, now })).toBe(recent);
+  });
+
+  it('still skips a handoff written 12 minutes before SessionEnd', () => {
+    const now = Date.now();
+    makeHandoff('auto-handoff-dir/h.yaml', now - 12 * 60_000);
+    expect(findRecentHandoff({ projectDir, now })).toBeNull();
   });
 
   it('ignores files with unrelated extensions', () => {
@@ -124,6 +137,25 @@ describe('resolveIndexerScript', () => {
   it('returns the path when index_handoffs.py exists under opc/scripts/core', () => {
     const script = makeIndexerScript();
     expect(resolveIndexerScript({ opcDir })).toBe(script);
+  });
+
+  it('falls back to ~/.claude/scripts/core/index_handoffs.py when opcDir has no script', () => {
+    // The active install keeps the script at scripts/core, not scripts/core/core.
+    const home = path.join(testDir, 'home');
+    const fallback = path.join(home, '.claude', 'scripts', 'core', 'index_handoffs.py');
+    fs.mkdirSync(path.dirname(fallback), { recursive: true });
+    fs.writeFileSync(fallback, 'print("noop")');
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    try {
+      expect(resolveIndexerScript({ opcDir })).toBe(fallback);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 
   it('returns null when no candidate path exists', () => {

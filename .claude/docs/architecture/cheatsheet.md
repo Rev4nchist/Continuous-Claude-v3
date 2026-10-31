@@ -39,7 +39,7 @@ cd $env:CLAUDE_OPC_DIR ; $env:PYTHONPATH = "." ; uv run python scripts/core/lazy
 
 ## Task Scheduler (Auto-Start)
 
-The `ClaudeMemoryDaemon` scheduled task (and `setup-task-scheduler.ps1`) targeted a daemon that does not exist. If that task was ever registered on this machine, remove it:
+The `ClaudeMemoryDaemon` scheduled task (and `setup-task-scheduler.ps1`, deleted 2026-10-31) targeted a daemon that does not exist. If that task was ever registered on this machine, remove it:
 
 ```powershell
 # Inspect (likely "task does not exist")

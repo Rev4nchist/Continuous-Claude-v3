@@ -411,6 +411,6 @@ So-What Ladder (banlist + rubric) as a `generate` build-step over Latest-Update 
 ---
 
 ## Related
-- Scheduling pattern: `scripts/scheduled-health-check.bat` + `scripts/notion-health-prompt.md`.
+- Scheduling pattern: `.claude/scripts/scheduled/scheduled-blocklist-update.bat` (the GOTO self-log pattern).
 - Task inventory: `.claude/docs/architecture/cheatsheet.md` (`CCv3-FourthOS-Weekly`).
 - Plan of record: `~/.claude/plans/i-need-to-set-piped-minsky.md`.

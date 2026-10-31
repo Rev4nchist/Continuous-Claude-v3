@@ -2,21 +2,35 @@
   "tasks": [
     {
       "name": "CCv3-Health-Check",
-      "script": "scripts/scheduled-health-check.bat",
-      "trigger": "weekly Friday 08:03",
-      "profile": "personal"
+      "script": ".claude/scripts/scheduled/scheduled-health-check.bat",
+      "trigger": "daily 07:50",
+      "execLimitMin": 10,
+      "allowedExit": [0],
+      "maxAgeHours": 48
     },
     {
       "name": "CCv3-Blocklist-Update",
-      "script": ".claude/scripts/scheduled/scheduled-blocklist-update.ps1",
+      "script": ".claude/scripts/scheduled/scheduled-blocklist-update.bat",
       "trigger": "daily 09:00",
-      "profile": "personal"
+      "execLimitMin": 30,
+      "allowedExit": [0],
+      "maxAgeHours": 48
     },
     {
-      "name": "ClaudeMemoryDaemon",
-      "script": ".claude/scripts/start-memory-daemon.ps1",
-      "trigger": "at logon",
-      "profile": "personal"
+      "name": "CCv3-RuleRouter-Audit",
+      "script": ".claude/scripts/scheduled/scheduled-rule-router-audit.bat",
+      "trigger": "weekly Monday 09:07",
+      "execLimitMin": 5,
+      "allowedExit": [0],
+      "maxAgeHours": 336
+    },
+    {
+      "name": "CCv3-RuleRouter-Review",
+      "script": ".claude/scripts/scheduled/scheduled-rule-router-review.ps1",
+      "trigger": "weekly Monday 09:20",
+      "execLimitMin": 15,
+      "allowedExit": [0],
+      "maxAgeHours": 336
     }
   ]
 }

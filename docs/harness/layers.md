@@ -173,7 +173,7 @@ Observability records what each session did and makes failures visible.
 - Braintrust tracing was retired on 2026-09-30. Sessions keep their local transcripts under
   `~/.claude/projects/`. The old tracing code is in `archive/braintrust-2026-10/`.
 - `rule-router` logs each fire. A weekly scheduled audit
-  (`scripts/scheduled-rule-router-audit.bat`) checks rule precision.
+  (`.claude/scripts/scheduled/scheduled-rule-router-audit.bat`) checks rule precision.
 - The `/health-check` skill runs `opc/scripts/health_check.py`. It exercises the real code path
   in 13 categories, such as memory and hooks. It does not only check that files exist.
 - `apps/agentic-os/` is a Next.js dashboard over the session and lane tables.

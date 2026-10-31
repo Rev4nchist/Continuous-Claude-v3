@@ -10,6 +10,12 @@
 //   logs: 0 / 1 / 4 / 5 error thresholds, the 24 h window, bad JSON lines, each log's own error rule
 //   review: ledger at 80% of the day cap, rows of another day, stale review count date
 //   output: exit code, summary line, --json artifact, no artifact without --json
+//   --out: writes the JSON to the named file (parent dir created), needs a value, works without --json
+//   repo:branch: main (PASS), another branch (WARN), detached HEAD (WARN)
+//   schedule:<task>: tasks.json missing / not JSON / no tasks array (WARN), a bad entry (WARN), task not registered (WARN),
+//          last result outside allowedExit (FAIL), last run older than maxAgeHours (WARN), never run (WARN),
+//          schtasks columns not found (WARN), columns in another order and quoted commas (parsed by name), skipped off Windows
+//   blocklist:age: 1 day (PASS), 3 days exactly (PASS), 4 days (WARN), 14 days exactly (WARN), 15 days (FAIL), never committed (WARN)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -17,6 +23,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimes
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs, parseCsv, scheduleChecks, blocklistAge } from './harness-doctor.mjs';
 
 const DOCTOR = join(dirname(fileURLToPath(import.meta.url)), 'harness-doctor.mjs');
 const HOUR = 3600 * 1000;
@@ -30,26 +37,62 @@ const chicagoToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America
 const daysAgoDay = (n) => new Date(Date.now() - n * DAY).toISOString().slice(0, 10);
 
 const CHECK_SCRIPTS = [['hooks', 'registration-reconcile.mjs'], ['hooks', 'hook-contract-guard.mjs'], ['settings', 'hook-parity.mjs']];
+const BLOCKLIST_REL = ['.claude', 'hooks', 'src', 'shared', 'malicious-packages.json'];
 
-/** A clean fixture: a git repo on main with a build manifest and passing check scripts, a home whose cursor equals main, a fresh review count. */
-function fixture() {
+// ---- fake schtasks output (shape copied from a real `schtasks /query /tn <name> /v /fo csv` run) ----
+const HEADERS = ['HostName', 'TaskName', 'Next Run Time', 'Status', 'Logon Mode', 'Last Run Time', 'Last Result', 'Author', 'Comment'];
+const csvLine = (cells) => cells.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',');
+const usTime = (msAgo) => new Date(Date.now() - msAgo).toLocaleString('en-US', { hour12: true }).replace(',', '');
+/** One header row and one data row. `fields` override the defaults; `order` sets the column order. */
+const taskCsv = (name, fields = {}, order = HEADERS) => {
+  const row = { HostName: 'HOST', TaskName: `\\${name}`, 'Next Run Time': 'N/A', Status: 'Ready', 'Logon Mode': 'Interactive only', 'Last Run Time': usTime(HOUR), 'Last Result': '0', Author: 'a', Comment: 'x', ...fields };
+  return `${csvLine(order)}\r\n${csvLine(order.map((h) => row[h] ?? ''))}\r\n`;
+};
+/** A fake schtasks: name to output. A name that is not in the map answers like schtasks does for an unknown task. */
+const fakeQuery = (map) => (name) => (name in map ? { status: 0, stdout: map[name], stderr: '' }
+  : { status: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.\r\n' });
+const task = (over = {}) => ({ name: 'CCv3-Fake-Task', script: 's.bat', trigger: 'daily 07:50', execLimitMin: 10, allowedExit: [0], maxAgeHours: 48, ...over });
+const TASK_NAME = 'CCv3-Fake-Task';
+
+/**
+ * A clean fixture: a git repo on main with a build manifest and passing check scripts, a home whose cursor equals main,
+ * a fresh review count, a tasks.json with one healthy fake task, and a blocklist file committed `blocklistDaysAgo` days ago
+ * (null: never committed).
+ */
+function fixture({ blocklistDaysAgo = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'hdoc-'));
   const repo = join(root, 'repo');
   const home = join(root, 'home');
+  const schtasks = join(root, 'schtasks');
   mkdirSync(repo, { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main', repo], { windowsHide: true });
   put(join(repo, '.claude', 'hooks', 'registration-baseline.json'), '{}\n');
   put(join(repo, '.claude', 'hooks', 'dist', '.build-inputs.json'), '{}\n');
   for (const rel of CHECK_SCRIPTS) put(join(repo, 'scripts', ...rel), "console.log('PASS  stub'); process.exit(0);\n");
   put(join(repo, 'review-router.config.json'), JSON.stringify({ coderabbit: { reviews_7d_manual: 10, reviews_7d_manual_date: daysAgoDay(1) } }));
+  put(join(repo, 'scripts', 'scheduled', 'tasks.json'), JSON.stringify({ tasks: [task()] }));
+  put(join(schtasks, `${TASK_NAME}.csv`), taskCsv(TASK_NAME));
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '--no-verify', '-m', 'init');
+  if (blocklistDaysAgo !== null) commitBlocklist(repo, blocklistDaysAgo);
   put(join(home, '.claude', 'state', 'sync-cursor'), `${git(repo, 'rev-parse', 'main')}\n`);
-  return { root, repo, home };
+  return { root, repo, home, schtasks };
+}
+
+/** Commits the blocklist file with a committer date `days` days back. */
+function commitBlocklist(repo, days) {
+  put(join(repo, ...BLOCKLIST_REL), '{}\n');
+  const when = new Date(Date.now() - days * DAY - 60000).toISOString();
+  const env = { ...process.env, GIT_COMMITTER_DATE: when, GIT_AUTHOR_DATE: when };
+  const base = ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false'];
+  execFileSync('git', [...base, 'add', '-A'], { env, windowsHide: true });
+  execFileSync('git', [...base, 'commit', '-q', '--no-verify', '-m', 'blocklist'], { env, windowsHide: true });
 }
 
 function run(fx, extra = []) {
-  const r = spawnSync(process.execPath, [DOCTOR, '--home', fx.home, '--repo', fx.repo, ...extra], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
+  // HARNESS_DOCTOR_SCHTASKS_DIR points the doctor at fake schtasks output, so a test never reads the real Task Scheduler.
+  const env = { ...process.env, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks };
+  const r = spawnSync(process.execPath, [DOCTOR, '--home', fx.home, '--repo', fx.repo, ...extra], { encoding: 'utf8', windowsHide: true, timeout: 60000, env });
   const lines = (r.stdout ?? '').split(/\r?\n/).filter(Boolean);
   const checks = {};
   for (const l of lines) {
@@ -295,6 +338,203 @@ test('a missing review-router config is a WARN', () => {
   const fx = fixture();
   execFileSync(process.execPath, ['-e', `require('fs').rmSync(${JSON.stringify(join(fx.repo, 'review-router.config.json'))})`]);
   assert.equal(run(fx).checks['review:reviews-7d'].status, 'WARN');
+});
+
+// ---- repo:branch ----
+test('repo:branch is a PASS on main, a WARN naming the branch on another branch, a WARN on a detached HEAD', () => {
+  const fx = fixture();
+  assert.equal(run(fx).checks['repo:branch'].status, 'PASS');
+  git(fx.repo, 'checkout', '-q', '-b', 'feat/other');
+  const other = run(fx).checks['repo:branch'];
+  assert.equal(other.status, 'WARN');
+  assert.match(other.detail, /feat\/other/);
+  git(fx.repo, 'checkout', '-q', '--detach');
+  const det = run(fx).checks['repo:branch'];
+  assert.equal(det.status, 'WARN');
+  assert.match(det.detail, /detached/);
+});
+
+// ---- schedule (the real scheduleChecks with a fake schtasks) ----
+const schedRepo = (tasksJson) => {
+  const repo = mkdtempSync(join(tmpdir(), 'hdoc-sched-'));
+  if (tasksJson !== undefined) put(join(repo, 'scripts', 'scheduled', 'tasks.json'), typeof tasksJson === 'string' ? tasksJson : JSON.stringify(tasksJson));
+  return { repo };
+};
+const sched = (tasks, map, extra = {}) => scheduleChecks(schedRepo({ tasks }), { platform: 'win32', query: fakeQuery(map), ...extra });
+const only = (checks) => { assert.equal(checks.length, 1, JSON.stringify(checks)); return checks[0]; };
+
+test('parseCsv reads quoted commas, doubled quotes and CRLF line ends', () => {
+  const rows = parseCsv('"a","b, c","say ""hi"""\r\n"1","2","3"\r\n');
+  assert.deepEqual(rows, [['a', 'b, c', 'say "hi"'], ['1', '2', '3']]);
+});
+
+test('a missing tasks.json is one WARN naming the file, not a crash', () => {
+  const c = only(scheduleChecks(schedRepo(), { platform: 'win32', query: fakeQuery({}) }));
+  assert.equal(c.status, 'WARN');
+  assert.match(c.detail, /tasks\.json/);
+});
+
+test('a tasks.json that is not JSON, or has no tasks array, is a WARN', () => {
+  assert.equal(only(scheduleChecks(schedRepo('{nope'), { platform: 'win32', query: fakeQuery({}) })).status, 'WARN');
+  assert.equal(only(scheduleChecks(schedRepo({ nothing: [] }), { platform: 'win32', query: fakeQuery({}) })).status, 'WARN');
+});
+
+test('a registered task with an allowed result and a fresh run is a PASS named schedule:<task>', () => {
+  const c = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME) }));
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.equal(`${c.section}:${c.check}`, `schedule:${TASK_NAME}`);
+});
+
+test('a task that schtasks does not know is a WARN that says not registered', () => {
+  const c = only(sched([task()], {}));
+  assert.equal(c.status, 'WARN');
+  assert.match(c.detail, /not registered/);
+});
+
+test('a last result outside allowedExit is a FAIL naming the result; one inside allowedExit is a PASS', () => {
+  const bad = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Result': '1' }) }));
+  assert.equal(bad.status, 'FAIL');
+  assert.match(bad.detail, /\b1\b/);
+  const ok = only(sched([task({ allowedExit: [0, 1] })], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Result': '1' }) }));
+  assert.equal(ok.status, 'PASS');
+});
+
+test('a last run older than maxAgeHours is a WARN; one inside it is a PASS', () => {
+  const stale = only(sched([task({ maxAgeHours: 48 })], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Run Time': usTime(49 * HOUR) }) }));
+  assert.equal(stale.status, 'WARN');
+  assert.match(stale.detail, /48/);
+  const fresh = only(sched([task({ maxAgeHours: 48 })], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Run Time': usTime(47 * HOUR) }) }));
+  assert.equal(fresh.status, 'PASS');
+});
+
+test('a task that never ran (N/A, or result 267011) is a WARN', () => {
+  for (const f of [{ 'Last Run Time': 'N/A', 'Last Result': '267011' }, { 'Last Run Time': '11/30/1999 12:00:00 AM', 'Last Result': '267011' }, { 'Last Run Time': 'N/A' }]) {
+    const c = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME, f) }));
+    assert.equal(c.status, 'WARN', JSON.stringify(f));
+    assert.match(c.detail, /never ran/);
+  }
+});
+
+test('a task that is running now (result 267009) is not judged by its result', () => {
+  const c = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Result': '267009' }) }));
+  assert.equal(c.status, 'PASS', c.detail);
+});
+
+test('columns are found by header name: another column order and a quoted-comma field still parse', () => {
+  const order = ['Last Result', 'Comment', 'Last Run Time', 'TaskName', 'HostName'];
+  const fail = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Result': '5', Comment: 'a, "b", c' }, order) }));
+  assert.equal(fail.status, 'FAIL');
+  assert.match(fail.detail, /\b5\b/);
+  const pass = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME, { Comment: 'a, "b", c' }, order) }));
+  assert.equal(pass.status, 'PASS', pass.detail);
+});
+
+test('headers the doctor cannot find (another Windows language) are a WARN naming them, not a crash or a PASS', () => {
+  const order = ['HostName', 'TaskName', 'Letzte Laufzeit', 'Letztes Ergebnis'];
+  const c = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Letzte Laufzeit': 'x', 'Letztes Ergebnis': '0' }, order) }));
+  assert.equal(c.status, 'WARN');
+  assert.match(c.detail, /Last Run Time/);
+});
+
+test('a task entry with a missing or wrong field is a WARN naming it; the other entries are still checked', () => {
+  const broken = { name: 'CCv3-Broken', script: 's.bat', trigger: 'daily', execLimitMin: 5 };
+  const checks = sched([broken, task()], { [TASK_NAME]: taskCsv(TASK_NAME) });
+  assert.equal(checks.length, 2);
+  assert.equal(checks[0].status, 'WARN');
+  assert.match(checks[0].detail, /allowedExit/);
+  assert.match(checks[0].check, /CCv3-Broken/);
+  assert.equal(checks[1].status, 'PASS');
+});
+
+test('off Windows the schedule check is a PASS that says skipped and runs no query', () => {
+  let calls = 0;
+  const c = only(scheduleChecks(schedRepo({ tasks: [task()] }), { platform: 'linux', query: () => { calls++; return { status: 0, stdout: '', stderr: '' }; } }));
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /skipped/);
+  assert.equal(calls, 0);
+});
+
+test('a schtasks that cannot start is a WARN', () => {
+  const c = only(scheduleChecks(schedRepo({ tasks: [task()] }), { platform: 'win32', query: () => ({ error: 'spawn schtasks ENOENT' }) }));
+  assert.equal(c.status, 'WARN');
+  assert.match(c.detail, /ENOENT/);
+});
+
+test('end to end: a task with no schtasks output is a WARN and a bad last result is a FAIL with exit 1', () => {
+  const fx = fixture();
+  execFileSync(process.execPath, ['-e', `require('fs').rmSync(${JSON.stringify(join(fx.schtasks, `${TASK_NAME}.csv`))})`]);
+  const warn = run(fx);
+  assert.equal(warn.checks[`schedule:${TASK_NAME}`].status, 'WARN');
+  assert.equal(warn.code, 0);
+  put(join(fx.schtasks, `${TASK_NAME}.csv`), taskCsv(TASK_NAME, { 'Last Result': '1' }));
+  const fail = run(fx);
+  assert.equal(fail.checks[`schedule:${TASK_NAME}`].status, 'FAIL');
+  assert.equal(fail.code, 1);
+});
+
+// ---- blocklist:age ----
+test('blocklist:age is PASS up to 3 days, WARN over 3, FAIL over 14, by the last commit that touched the file', () => {
+  const expected = [[1, 'PASS', 0], [4, 'WARN', 0], [15, 'FAIL', 1]];
+  for (const [days, status, code] of expected) {
+    const r = run(fixture({ blocklistDaysAgo: days }));
+    assert.equal(r.checks['blocklist:age'].status, status, `${days} days: ${r.checks['blocklist:age'].detail}`);
+    assert.equal(r.code, code, `${days} days`);
+  }
+});
+
+test('blocklist:age names the file and the age in days', () => {
+  const c = run(fixture({ blocklistDaysAgo: 15 })).checks['blocklist:age'];
+  assert.match(c.detail, /malicious-packages\.json/);
+  assert.match(c.detail, /15\.\d day/);
+});
+
+test('blocklist:age edges: exactly 3 days is a PASS and exactly 14 days is a WARN (over means strictly over)', () => {
+  const at = (days) => blocklistAge({ repo: 'r' }, { now: 1e12, lastCommit: () => ({ sec: (1e12 - days * DAY) / 1000, sha: 'abc1234' }) });
+  assert.equal(at(3).status, 'PASS');
+  assert.equal(at(14).status, 'WARN');
+  assert.equal(at(14.01).status, 'FAIL');
+});
+
+test('blocklist:age is a WARN when no commit touched the file', () => {
+  const c = run(fixture({ blocklistDaysAgo: null })).checks['blocklist:age'];
+  assert.equal(c.status, 'WARN');
+  assert.match(c.detail, /no commit/);
+});
+
+// ---- --out ----
+test('parseArgs reads --out as a resolved path and rejects --out without a value', () => {
+  assert.equal(parseArgs(['--out', 'x.json']).out, join(process.cwd(), 'x.json'));
+  assert.equal(parseArgs([]).out, null);
+  assert.throws(() => parseArgs(['--out']), /--out needs a file/);
+});
+
+test('--out writes the JSON result to the named file, creates its parent dirs, and needs no --json', () => {
+  const fx = fixture();
+  const out = join(fx.root, 'a', 'b', 'latest.json');
+  const r = run(fx, ['--out', out]);
+  assert.ok(existsSync(out), `missing ${out}\n${r.stdout}${r.stderr}`);
+  const j = JSON.parse(readFileSync(out, 'utf8'));
+  assert.equal(j.summary.fail, 0);
+  assert.ok(j.checks.length >= 14);
+  assert.ok(j.checks.some((c) => c.section === 'schedule' && c.check === TASK_NAME));
+  assert.equal(existsSync(join(fx.repo, '.claude', 'cache', 'e2e')), false, '--out alone must not write the default artifact');
+});
+
+test('--out and --json together write both files', () => {
+  const fx = fixture();
+  const out = join(fx.root, 'both.json');
+  run(fx, ['--json', '--out', out]);
+  assert.ok(existsSync(out));
+  assert.ok(existsSync(join(fx.repo, '.claude', 'cache', 'e2e')));
+});
+
+test('an --out file that cannot be written exits 2 and says so, after the check lines', () => {
+  const fx = fixture();
+  put(join(fx.root, 'blocker'), 'a file, not a dir');
+  const r = run(fx, ['--out', join(fx.root, 'blocker', 'x.json')]);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /cannot write/);
+  assert.match(r.lines.at(-1), /^harness: /);
 });
 
 // ---- output ----

@@ -115,7 +115,7 @@ Then, as needed:
 
 | Pipeline (registry type) | Scheduled task | Manual command |
 |---|---|---|
-| System Health | `CCv3-Health-Check` (Fri 08:00) | `scripts\scheduled-health-check.bat` (Notion mirror = `node scripts/report-registry/health-mirror.mjs`, ntn-only) |
+| System Health | `CCv3-Health-Check` (daily 07:50) | `.claude\scripts\scheduled\scheduled-health-check.bat`; output `~/.claude/state/health/latest.json`; Notion mirror skipped (D3) |
 | FourthOS Sponsor | `CCv3-FourthOS-Weekly` (Thu 07:00) | `scripts\fourthos-weekly\scheduled-fourthos-weekly.bat` |
 | Team Dashboard | `CCv3-Dashboard-Sync` (daily) | `scripts\sync-tasks-dashboard.ps1` (LLM path; deterministic replacement is BLOCKED — see the 2026-07-17 efficiency handoff GAP-1..4) |
 | Project Portfolio (cards) | `CCv3-Project-Cards` (daily) | `node scripts/project-cards/sweep.mjs` (`--dry-run` is safe: no publishes, no claude spawn) |
