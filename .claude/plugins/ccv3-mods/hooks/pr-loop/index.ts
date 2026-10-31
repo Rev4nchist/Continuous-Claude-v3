@@ -204,6 +204,12 @@ const resync = async ($: EngineInterface, prior: PrWatch, fresh: PrStatus): Prom
   await saveDoc($, { ...doc, prs: doc.prs.map(one => (one.pr === prior.pr ? { ...next, whenReady: one.whenReady || next.whenReady } : one)) })
 }
 
+/** A delivery failed: the check already saved the advanced state, so put the prior watch back and the next check alerts again. */
+const keepPending = async ($: EngineInterface, prior: PrWatch): Promise<void> => {
+  const doc = await loadDoc($)
+  await saveDoc($, { ...doc, prs: doc.prs.map(one => (one.pr === prior.pr ? { ...prior, whenReady: one.whenReady || prior.whenReady } : one)) })
+}
+
 /**
  * The alert as the PR reads right now, or null when it must not go out. The alert waits behind the probe, other alerts and
  * dialogs, so the PR may have changed: one more probe drops it when the PR is merged or closed, its head moved or its state
@@ -364,7 +370,14 @@ const check = async ($: EngineInterface): Promise<void> => {
     $.ui.toast(`PR watcher: status check failed (${failure}). Trying again in 15 minutes.`, { timeoutMs: 10_000 })
   }
   for (const notice of notices) $.ui.toast(notice, { timeoutMs: 10_000 })
-  for (const { alert, prior } of alerts) await deliver($, alert, prior)
+  // One failed delivery must not cost the others their line, and its own alert must come back at the next check.
+  for (const { alert, prior } of alerts) {
+    try {
+      await deliver($, alert, prior)
+    } catch {
+      await keepPending($, prior)
+    }
+  }
 }
 
 const arm = ($: EngineInterface): void => {

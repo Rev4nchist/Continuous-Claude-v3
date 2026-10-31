@@ -335,6 +335,13 @@ const recordPathway = async (
   } as CheckpointRecord
   // A grant belongs to the record it was made under (its budget and rounds). A new record voids it, or it would cover the new one.
   await $.store.delete(`${GRANT_PREFIX}${a.pr}`)
+  // The queued asks of the old record go too: an old Yes would recreate the grant just deleted.
+  const queued = await loadAsks($)
+  const live = queued.filter(ask => ask.pr !== a.pr)
+  if (live.length !== queued.length) {
+    await saveAsks($, live)
+    await closeIfIdle($)
+  }
   await $.store.set(`${RECORD_PREFIX}${a.pr}`, stored)
   return applyRecord($, a.root, stored)
 }
