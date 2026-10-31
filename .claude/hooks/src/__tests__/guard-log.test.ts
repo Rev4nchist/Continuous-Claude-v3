@@ -9,9 +9,17 @@
  *  5. Tests write to the real log (VITEST with no override must not write).
  *  6. A logging failure throws and blocks a tool call.
  *  7. The destructive guard does not report an override, or reports one for a harmless command.
+ *  8. cwd or permission_mode is in the payload and missing from the line (replay cannot tell why a guard decided).
+ *  9. target is missing for a non-command tool (Read/Edit/Write file_path, Agent subagent_type, Skill skill),
+ *     or a Bash call picks up a stray file_path.
+ * 10. `agent` is not a boolean: false with no agent, true from the payload or from CLAUDE_AGENT_ID.
+ * 11. cwd or target is unbounded, or a non-string value is written, or a path segment that looks like an id
+ *     (a UUID directory) is erased. These are paths: replay needs them exact, so they are cut, not masked.
+ * 12. Dropping the new fields changes the old shape: command stays 80 chars, agent_id stays absent without an agent.
+ * 13. The file is not owner-only (POSIX only: Windows ignores the mode).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { logGuardDecision, maskSecrets, commandHead, guardLogPath, COMMAND_HEAD_CHARS } from '../shared/guard-log.js';
@@ -197,5 +205,82 @@ describe('destructive guard reports an override', () => {
 
   it('does not flag an ordinary deny', () => {
     expect(decide('rm -rf build', input, {}).override).toBeUndefined();
+  });
+});
+
+describe('replay fields: cwd, permission_mode, target, agent', () => {
+  const row = (input: Record<string, unknown>, extraEnv: NodeJS.ProcessEnv = {}, opts: { command?: string } = {}) => {
+    logGuardDecision('h', { tool_name: 'Bash', session_id: 's', ...input }, 'deny', 'r', { env: env(extraEnv), ...opts });
+    return lines().pop() as Record<string, unknown>;
+  };
+
+  it('writes cwd and permission_mode from the payload', () => {
+    const r = row({ cwd: 'C:\\work\\repo', permission_mode: 'bypassPermissions' });
+    expect(r.cwd).toBe('C:\\work\\repo');
+    expect(r.permission_mode).toBe('bypassPermissions');
+  });
+
+  it('leaves cwd, permission_mode and target out of the line when the payload has none', () => {
+    const r = row({});
+    expect('cwd' in r).toBe(false);
+    expect('permission_mode' in r).toBe(false);
+    expect('target' in r).toBe(false);
+  });
+
+  it.each([
+    ['Read', { file_path: '/a/b.ts' }, '/a/b.ts'],
+    ['Edit', { file_path: '/a/c.ts', old_string: 'x', new_string: 'y' }, '/a/c.ts'],
+    ['Write', { file_path: '/a/d.ts', content: 'z' }, '/a/d.ts'],
+    ['Agent', { subagent_type: 'scout', prompt: 'p' }, 'scout'],
+    ['Skill', { skill: 'databases' }, 'databases'],
+  ])('derives target from tool_input for %s', (tool, tool_input, target) => {
+    expect(row({ tool_name: tool, tool_input }).target).toBe(target);
+  });
+
+  it('an explicit input.target wins over the derived one', () => {
+    expect(row({ tool_name: 'Read', tool_input: { file_path: '/a' }, target: '/explicit' }).target).toBe('/explicit');
+  });
+
+  it('a Bash call gets no target, even when tool_input carries a file_path', () => {
+    const r = row({ tool_name: 'Bash', tool_input: { command: 'ls', file_path: '/stray' } });
+    expect('target' in r).toBe(false);
+  });
+
+  it('agent is false with no agent, true from the payload agent_id, true from CLAUDE_AGENT_ID', () => {
+    expect(row({}).agent).toBe(false);
+    expect(row({ agent_id: 'sub-1' }).agent).toBe(true);
+    expect(row({}, { CLAUDE_AGENT_ID: 'env-2' }).agent).toBe(true);
+  });
+
+  it('cuts a long cwd and a long target; the bound is 300 characters', () => {
+    const r = row({ tool_name: 'Read', cwd: `/${'c'.repeat(1000)}`, tool_input: { file_path: `/${'f'.repeat(1000)}` } });
+    expect((r.cwd as string).length).toBe(300);
+    expect((r.target as string).length).toBe(300);
+  });
+
+  it('ignores a non-string cwd, permission_mode and target', () => {
+    const r = row({ cwd: { a: 1 }, permission_mode: 7, tool_name: 'Read', tool_input: { file_path: ['x'] } });
+    expect('cwd' in r).toBe(false);
+    expect('permission_mode' in r).toBe(false);
+    expect('target' in r).toBe(false);
+  });
+
+  it('keeps a UUID directory name in cwd and target (paths are cut, not masked)', () => {
+    // Letters and digits: the generic long-token mask would erase this name if pathText ran maskSecrets.
+    const uuid = 'd11fb964-286c-483c-a5fc-7d6c40bcbb40';
+    const r = row({ tool_name: 'Read', cwd: `/tmp/${uuid}/scratchpad`, tool_input: { file_path: `/tmp/${uuid}/f.txt` } });
+    expect(r.cwd).toBe(`/tmp/${uuid}/scratchpad`);
+    expect(r.target).toBe(`/tmp/${uuid}/f.txt`);
+  });
+
+  it('still cuts command at 80 characters and writes no agent_id without an agent', () => {
+    const r = row({ cwd: '/x' }, {}, { command: 'z'.repeat(500) });
+    expect((r.command as string).length).toBe(COMMAND_HEAD_CHARS);
+    expect('agent_id' in r).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('creates the log owner-only (0o600)', () => {
+    row({});
+    expect(statSync(log).mode & 0o777).toBe(0o600);
   });
 });

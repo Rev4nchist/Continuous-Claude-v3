@@ -4,9 +4,19 @@
  * Every PreToolUse hook that can deny or ask appends ONE JSON line per deny, ask or override to
  * ~/.claude/logs/guard-decisions.jsonl:
  *
- *   {ts, hook, tool, decision: 'deny'|'ask'|'override'|'warn', reason, session_id, agent_id?, command?}
+ *   {ts, hook, tool, decision: 'deny'|'ask'|'override'|'warn'|'inject'|'allow', reason, session_id, agent, agent_id?,
+ *    cwd?, permission_mode?, target?, command?}
  *
- * 'override' = a guard let a command through because of an override (SKIP_DESTRUCTIVE_GUARD).
+ * `agent` is true when the payload has agent_id or CLAUDE_AGENT_ID is set. `cwd` and `permission_mode` come from
+ * the payload: they decide a guard's result, so a replay needs them. `target` is the thing a non-command tool acts
+ * on: file_path (Read, Edit, Write), subagent_type (Agent), skill (Skill). `cwd` and `target` are paths: they are
+ * cut at 300 characters and NOT masked (masking would erase a UUID directory name and break a replay).
+ * This stores more than the 80-character masked command did. Replay item 2 asks Dave to accept that; until
+ * he decides, a path with a secret in it would be written as is. The file is owner-only (0o600).
+ * 'inject' = a hook blocked the call to inject context (tldr-read-enforcer): not a denial of a bad action.
+ * 'override' = a guard let a command through because of an override (SKIP_DESTRUCTIVE_GUARD). Count these for SKIP uses.
+ * 'allow' = a guard let a command through under a built-in allow rule (destructive-command-guard scoped cleanup,
+ * reason 'scoped-cleanup:scratchpad' or ':worktree'). It is not a bypass, so it is not an 'override'.
  * 'warn' = a guard rule in warn mode let a command through and recorded the rule that would have denied it (pre-pr-gate, PR B).
  * This log records the hooks this process runs.
  *
@@ -28,7 +38,7 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 
-export type GuardDecisionKind = 'deny' | 'ask' | 'override' | 'warn';
+export type GuardDecisionKind = 'deny' | 'ask' | 'override' | 'warn' | 'inject' | 'allow';
 
 /** The subset of a PreToolUse payload the log reads. */
 export interface GuardInput {
@@ -36,10 +46,26 @@ export interface GuardInput {
   tool_name?: string;
   session_id?: string;
   agent_id?: string;
+  cwd?: string;
+  permission_mode?: string;
+  /** file_path (Read, Edit, Write), subagent_type (Agent), skill (Skill). Set it, or leave it to be read from tool_input. */
+  target?: string;
+  tool_input?: unknown;
 }
 
 export const COMMAND_HEAD_CHARS = 80;
 const REASON_CHARS = 200;
+const PATH_CHARS = 300;
+
+/** The tool_input field that names the target, per tool. A tool not listed has no target. */
+const TARGET_FIELD: Record<string, string> = {
+  Read: 'file_path',
+  Edit: 'file_path',
+  Write: 'file_path',
+  Agent: 'subagent_type',
+  Task: 'subagent_type',
+  Skill: 'skill',
+};
 
 export function guardLogPath(env: NodeJS.ProcessEnv = process.env): string {
   // Home comes from the env it is given, so a caller (or a test) with its own HOME stays inside it.
@@ -88,8 +114,24 @@ export function commandHead(command: string): string {
   return maskSecrets(command).replace(/\s+/g, ' ').trim().slice(0, COMMAND_HEAD_CHARS);
 }
 
-function shouldWrite(env: NodeJS.ProcessEnv): boolean {
+/** False under VITEST with no CCV3_GUARD_DECISIONS_LOG: a test must never write the real log. */
+export function shouldWrite(env: NodeJS.ProcessEnv): boolean {
   return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
+}
+
+/** A non-empty string cut to `max` characters, or undefined. Not masked: replay needs a path exact. */
+function pathText(value: unknown, max = PATH_CHARS): string | undefined {
+  return typeof value === 'string' && value ? value.slice(0, max) : undefined;
+}
+
+/** The explicit `target`, else the tool_input field that names the target of this tool. */
+function targetOf(input: GuardInput | null | undefined, tool: string): string | undefined {
+  const explicit = pathText(input?.target);
+  if (explicit) return explicit;
+  const field = Object.hasOwn(TARGET_FIELD, tool) ? TARGET_FIELD[tool] : undefined;
+  const toolInput = input?.tool_input;
+  if (!field || typeof toolInput !== 'object' || toolInput === null) return undefined;
+  return pathText((toolInput as Record<string, unknown>)[field]);
 }
 
 /**
@@ -107,15 +149,23 @@ export function logGuardDecision(
   try {
     if (!shouldWrite(env)) return;
     const agent = input?.agent_id || env.CLAUDE_AGENT_ID || undefined;
+    const tool = input?.tool_name || input?.tool || '';
     const entry: Record<string, unknown> = {
       ts: new Date().toISOString(),
       hook,
-      tool: input?.tool_name || input?.tool || '',
+      tool,
       decision,
       reason: maskSecrets(String(reason)).replace(/\s+/g, ' ').trim().slice(0, REASON_CHARS),
       session_id: input?.session_id || '',
+      agent: !!agent,
     };
     if (agent) entry.agent_id = agent;
+    const cwd = pathText(input?.cwd);
+    if (cwd) entry.cwd = cwd;
+    const mode = pathText(input?.permission_mode, 40);
+    if (mode) entry.permission_mode = mode;
+    const target = targetOf(input, tool);
+    if (target) entry.target = target;
     if (typeof opts.command === 'string' && opts.command) entry.command = commandHead(opts.command);
     const path = guardLogPath(env);
     // Owner-only. The mode applies when the directory or file is created; Windows mostly ignores it.
