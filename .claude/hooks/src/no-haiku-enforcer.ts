@@ -10,7 +10,7 @@
  * Fix (haiku): use model="sonnet", or omit it for an ad-hoc chat-level call.
  */
 
-import { logGuardDecision } from './shared/guard-log.js';
+import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 
 export interface HookInput {
   tool?: string;
@@ -82,7 +82,8 @@ async function main(): Promise<void> {
   try {
     const rawInput = Buffer.concat(chunks).toString('utf-8').trim();
     if (rawInput) input = JSON.parse(rawInput);
-  } catch {
+  } catch (err) {
+    logGuardError('no-haiku-enforcer', err);
     console.log('{}');
     return;
   }
@@ -94,6 +95,7 @@ async function main(): Promise<void> {
   console.log(output ? JSON.stringify(output) : '{}');
 }
 
-main().catch(() => {
+main().catch((err) => {
+  logGuardError('no-haiku-enforcer', err);
   console.log('{}');
 });

@@ -30,7 +30,7 @@ import { readFileSync, readdirSync, appendFileSync, mkdirSync, openSync, closeSy
 import { homedir, tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
-import { logGuardDecision } from './shared/guard-log.js';
+import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { stripQuotedStrings, parseExecutable, extractShellWrapperPayloads } from './shared/destructive-classifier.js';
 
 export interface RuleEntry {
@@ -294,7 +294,7 @@ function onSessionStart(input: HookInput): void {
 
 export function run(raw: string): void {
   let input: HookInput;
-  try { input = JSON.parse(raw); } catch { outputContinue(); return; }
+  try { input = JSON.parse(raw); } catch (err) { logGuardError('rule-router', err); outputContinue(); return; }
   if (input.hook_event_name === 'SessionStart') { onSessionStart(input); return; }
   const dir = rulesDir();
   const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as Manifest;
@@ -338,7 +338,8 @@ export function run(raw: string): void {
 function main(): void {
   try {
     run(readFileSync(0, 'utf8'));
-  } catch {
+  } catch (err) {
+    logGuardError('rule-router', err);
     outputContinue(); // fail open: a router bug must never block a tool call
   }
 }

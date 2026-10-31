@@ -45,6 +45,27 @@ jobs:
         run: node --test scripts/github/review-router.test.mjs
       - name: tdd skill tidy unit tests
         run: node --test scripts/skills/tdd-tidy.test.mjs
+      - name: review-status unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/review-status.test.mjs
+      - name: pr-checkpoint unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/pr-checkpoint.test.mjs
+      - name: pre-pr unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/pre-pr.test.mjs
+      - name: land-recheck unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/land-recheck.test.mjs
+      - name: cr-paid unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/cr-paid.test.mjs
+      - name: cr-fix unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/cr-fix.test.mjs
+      - name: harness-doctor unit tests
+        timeout-minutes: 5
+        run: node --test scripts/harness-doctor.test.mjs
 
   trivy:
     runs-on: ubuntu-latest
