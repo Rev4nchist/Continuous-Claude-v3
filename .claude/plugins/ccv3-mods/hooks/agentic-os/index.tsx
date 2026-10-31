@@ -201,7 +201,7 @@ const hudForState = (state: HudState | null): { costUsd: number | null; limits: 
     : {
         costUsd: typeof state.costUsd === 'number' && Number.isFinite(state.costUsd) ? state.costUsd : null,
         limits: (Array.isArray(state.limits) ? state.limits : [])
-          .filter(limit => typeof limit.percentUsed === 'number' && Number.isFinite(limit.percentUsed))
+          .filter(limit => limit != null && typeof limit.percentUsed === 'number' && Number.isFinite(limit.percentUsed))
           .slice(0, 8)
           .map(limit => ({ kind: redact(String(limit.kind)).text.slice(0, 60), percentUsed: limit.percentUsed })),
       }

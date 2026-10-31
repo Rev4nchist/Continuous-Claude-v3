@@ -687,6 +687,17 @@ describe('agentic-os hud in the state file', () => {
     expect(snapshot.hud).toEqual({ costUsd: 2.5, limits: [] })
   })
 
+  test('H6 a null entry inside limits is skipped and the snapshot is still written', async ($, on) => {
+    const seen = hudWorld(on, { cost: { usd: 1 }, rateLimits: [] })
+    const held = heldHud(on)
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: true } as never)
+    held.value = { model: 'm', effort: null, advisor: null, costUsd: 2.5, limits: [null, { kind: 'five_hour', percentUsed: 38 }] }
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const snapshot = lastSnapshot(seen)
+    expect(snapshot.brief.goal).toBe('g')
+    expect(snapshot.hud).toEqual({ costUsd: 2.5, limits: [{ kind: 'five_hour', percentUsed: 38 }] })
+  })
+
   test('H7 the writer keeps 8 limits and clips a kind to 60 characters', async ($, on) => {
     const long = `k_${'x'.repeat(98)}`
     const nine = Array.from({ length: 9 }, (_, i) => ({ kind: i === 0 ? long : `kind_${i}`, percentUsed: i }))
