@@ -317,6 +317,9 @@ export const wasSent = (doc: WatchDoc, key: string): boolean => (doc.sent ?? [])
 
 export const markSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sent: [...(doc.sent ?? []), key].slice(-SENT_MAX) })
 
+/** Takes a key back out of the ledger: the line it stood for was never delivered. */
+export const unmarkSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sent: (doc.sent ?? []).filter(one => one !== key) })
+
 export const settle = (watch: PrWatch, status: PrStatus, now: number, cp: AlertCheckpoint | null = null): { watch: PrWatch | null; alert: Alert | null } => {
   const found = stateOf(status)
   const onHead = forHead(watch, status.head, now)

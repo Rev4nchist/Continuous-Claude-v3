@@ -306,7 +306,7 @@ describe('pr-loop watcher', () => {
     await start($)
     await clock.advance(TICK)
     expect(seen.submits).toEqual([])
-    expect(stored(store)?.sent ?? []).toEqual([])
+    expect((stored(store) as { sent?: string[] } | undefined)?.sent ?? []).toEqual([])
   })
 
   // P3b: Greptile ends its check `neutral` when a newer push superseded it, and `failure` when it reviewed below the bar.

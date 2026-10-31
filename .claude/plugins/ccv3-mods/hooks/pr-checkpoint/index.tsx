@@ -530,9 +530,10 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   const key = `${RECORD_PREFIX}${grant.pr}`
   const stored = readRecord(await $.store.get(key))
   if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. Run ${SLASH} on it first. Nothing was recorded.` }
-  // A lower grant on the same head never lowers a round Dave already allowed. A grant on another head replaces it.
-  const prior = (await $.store.get(`${GRANT_PREFIX}${grant.pr}`)) as { round?: unknown; head?: unknown } | null | undefined
-  const allowed = prior && prior.head === stored.head && typeof prior.round === 'number' ? Math.max(prior.round, grant.round) : grant.round
+  // A lower grant never lowers a round Dave already allowed, whichever head that grant carries (the pane stores the PR head at ask time).
+  // A grant never outlives its checkpoint record: recordPathway deletes it, so a stored grant belongs to this record.
+  const prior = (await $.store.get(`${GRANT_PREFIX}${grant.pr}`)) as { round?: unknown } | null | undefined
+  const allowed = prior && typeof prior.round === 'number' ? Math.max(prior.round, grant.round) : grant.round
   await $.store.set(`${GRANT_PREFIX}${grant.pr}`, { round: allowed, head: stored.head, at: await $.clock.now() })
   // Only a round decline the grant covers goes. An opening decline or a decline of a later round stays, or the watcher asks again.
   const covered = stored.declined?.kind === 'round' && stored.declined.round <= allowed

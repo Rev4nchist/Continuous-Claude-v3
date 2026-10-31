@@ -20,6 +20,7 @@ import {
   isStale,
   landCommand,
   markSent,
+  unmarkSent,
   noteFailure,
   parseArgs,
   parseProbe,
@@ -216,13 +217,21 @@ const liveAlert = async ($: EngineInterface, alert: Alert, prior: PrWatch): Prom
   return live
 }
 
-/** Submits the model line once per PR, state, head and reason. The ledger entry is written before the submit. */
+/**
+ * Submits the model line once per PR, state, head and reason. The ledger entry is written before the submit, so two overlapping
+ * deliveries cannot both send. A rejected submit takes the entry back out, or the line would be skipped when the state returns.
+ */
 const submitLine = async ($: EngineInterface, live: Alert): Promise<void> => {
   const doc = await loadDoc($)
   const key = alertKey(live)
   if (wasSent(doc, key)) return
   await saveDoc($, markSent(doc, key))
-  await $.prompt.submit({ text: reportLine(live) })
+  try {
+    await $.prompt.submit({ text: reportLine(live) })
+  } catch (err) {
+    await saveDoc($, unmarkSent(await loadDoc($), key))
+    throw err
+  }
 }
 
 /**
