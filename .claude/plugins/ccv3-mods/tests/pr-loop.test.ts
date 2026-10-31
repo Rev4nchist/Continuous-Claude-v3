@@ -109,6 +109,8 @@ type Opts = {
   tools?: string[]
   home?: boolean
   landThrows?: boolean
+  /** The first N prompt.submit calls reject. */
+  submitFails?: number
 }
 
 const world = (on: On, opts: Opts = {}) => {
@@ -148,7 +150,10 @@ const world = (on: On, opts: Opts = {}) => {
     seen.toasts.push(e.text)
     return { value: undefined }
   })
+  let submitCalls = 0
   on('prompt.submit', (_$, e) => {
+    submitCalls += 1
+    if (submitCalls <= (opts.submitFails ?? 0)) throw new Error('prompt.submit rejected')
     seen.submits.push(e.text)
     return { text: e.text }
   })
@@ -294,6 +299,14 @@ describe('pr-loop watcher', () => {
     expect(seen.toasts[0]).toMatch(/did not finish/i)
     expect(seen.submits.length).toBe(1)
     expect(stored(store)?.prs.map(p => p.pr)).toEqual([6])
+  })
+
+  test('W31 a rejected submit leaves no ledger key, so the same line can still go out when the state comes back', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 6 }]), script: { 6: [LIMITED(6)] }, submitFails: 1 })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(stored(store)?.sent ?? []).toEqual([])
   })
 
   // P3b: Greptile ends its check `neutral` when a newer push superseded it, and `failure` when it reviewed below the bar.

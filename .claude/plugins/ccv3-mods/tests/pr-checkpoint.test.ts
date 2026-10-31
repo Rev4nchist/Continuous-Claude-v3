@@ -1415,7 +1415,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     })
   }
 
-  test('G10 a lower grant on the same head keeps the higher stored round; a new head replaces it', async ($, on) => {
+  test('G10 a lower grant keeps the higher stored round, whichever head that grant carries (the pane stores the PR head at ask time)', async ($, on) => {
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
     await start($)
     await slash($, 'grant 7 5')
@@ -1423,7 +1423,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(5)
     w.store.set('checkpoint:grant:7', { round: 5, head: 'b'.repeat(40), at: NOW })
     await slash($, 'grant 7 4')
-    expect(w.store.get('checkpoint:grant:7')).toMatchObject({ round: 4, head: HEAD })
+    expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(5)
   })
 
   test('G11 a new checkpoint record voids the grant stored under the old one, so it cannot cover the new record', async ($, on) => {
