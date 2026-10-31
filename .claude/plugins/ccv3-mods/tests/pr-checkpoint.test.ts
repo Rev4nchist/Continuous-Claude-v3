@@ -1415,6 +1415,17 @@ describe('pr-checkpoint: asks from the watcher', () => {
     })
   }
 
+  test('G10 a lower grant on the same head keeps the higher stored round; a new head replaces it', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
+    await start($)
+    await slash($, 'grant 7 5')
+    await slash($, 'grant 7 4')
+    expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(5)
+    w.store.set('checkpoint:grant:7', { round: 5, head: 'b'.repeat(40), at: NOW })
+    await slash($, 'grant 7 4')
+    expect(w.store.get('checkpoint:grant:7')).toMatchObject({ round: 4, head: HEAD })
+  })
+
   test('G5 a /pathway grant drops the queued round ask it covers, so a later No cannot override the grant', async ($, on) => {
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
     await start($)
