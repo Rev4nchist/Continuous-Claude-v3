@@ -1331,6 +1331,49 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave declined round 4 for #7')
   })
 
+  // G1 to G4: /pathway grant <pr> <round> is Dave's typed Yes, for a round the pane never asked about (or asked about and he declined).
+  test('G1 /pathway grant 7 4 after a No: a grant for round 4 on the record head, the decline is cleared, the model is told, nothing posted', async ($, on) => {
+    const declined = { kind: 'round', round: 4, head: HEAD }
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ declined }) }, statuses: { 7: REVIEWED(3) } })
+    await start($)
+    const submitted = w.seen.submits.length
+    const ran = await slash($, 'grant 7 4')
+    expect(ran.text ?? '').toContain('round 4')
+    const grant = w.store.get('checkpoint:grant:7') as Rec
+    expect(grant.round).toBe(4)
+    expect(grant.head).toBe(HEAD)
+    expect((w.store.get('checkpoint:pr:7') as Rec).declined).toBeUndefined()
+    expect(counts(w.seen).comments).toEqual([])
+    expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave allowed round 4 for #7')
+    expect(w.seen.submits.length).toBe(submitted)
+  })
+
+  test('G2 a /pathway grant raised by a plugin writes nothing', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ declined: { kind: 'round', round: 4, head: HEAD } }) }, statuses: { 7: REVIEWED(3) } })
+    await start($)
+    await slash($, 'grant 7 4', 'plugin')
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    expect((w.store.get('checkpoint:pr:7') as Rec).declined).toBeDefined()
+  })
+
+  test('G3 a /pathway grant for a PR with no checkpoint record writes nothing and says why', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc() }, statuses: { 7: REVIEWED(3) } })
+    await start($)
+    const ran = await slash($, 'grant 7 4')
+    expect(ran.text ?? '').toMatch(/no checkpoint record/i)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+  })
+
+  for (const args of ['grant', 'grant 7', 'grant 7 0', 'grant 7 x', 'grant 7 4 5', 'grant 0 4', 'grant 7 4 --body b.md']) {
+    test(`G4 "/pathway ${args}" gives the usage text and writes nothing`, async ($, on) => {
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, args)
+      expect(ran.text ?? '').toMatch(/usage/i)
+      expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    })
+  }
+
   test('A2 an opening ask 30 minutes after ready: Yes is first (the recommendation) and posts exactly one @coderabbitai review', async ($, on) => {
     const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet } })
