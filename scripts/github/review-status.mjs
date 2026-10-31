@@ -49,6 +49,9 @@
  * reasons; the non-JSON output lists them under the reasons); `coderabbitReviewedHead` stays false. A missing input or
  * a failed read is "not eligible", never exit 2. `--fixture <file>` evaluates saved inputs with no gh call (the result says
  * `fixture: true`); it is for the end-to-end check and is never used by land-pr.ps1.
+ * The carry runs before a "Review skipped" notice is read: a skip blocks READY only when no carry applies, and a carried head reports
+ * `coderabbitLimited: false`. A "Review failed" notice and a rate limit never carry. CodeRabbit rounds are ordered by the reviewed
+ * commit (its place in the PR commit list, `commits[].sha`); a summary comment's updated_at only breaks a tie (see compareRounds).
  *
  * P4b proof gate (DW-102): the PR BODY must name one proof type and show RED and GREEN evidence, and the
  * GREEN line must name the head (see PROOF_TYPES and pr-review-loop.md "Proof in the PR body"). Missing,
@@ -977,12 +980,52 @@ export function codeRabbitSeverity(text) {
   return severityMarks(text).reduce((best, s) => (SEVERITY_RANK[s] > SEVERITY_RANK[best] ? s : best), 'unknown');
 }
 
-/** The newest CodeRabbit app review with a body (an empty body is a thread reply, no round). null when none. */
-export function newestCodeRabbitReview(reviews) {
-  const at = (r) => Date.parse(r?.submitted_at || '') || 0;
-  return (reviews || [])
-    .filter((r) => isCodeRabbitUser(r?.user) && String(r.body ?? '').trim() !== '')
-    .reduce((best, r) => (best === null || at(r) >= at(best) ? r : best), null);
+/**
+ * Round order (lane review-status-bugs, bug 2). A round is a CodeRabbit review object (commit_id, submitted_at) or a summary-only round
+ * (the commit it covers, the comment updated_at). The summary comment is edited on every notice, chat update and re-summary, so its
+ * updated_at says when it was last touched, not which commit it reviewed. The REVIEWED COMMIT decides: its place in the PR commit list
+ * (`commits`, oldest first, [{ sha }]). The stamp only breaks a tie (same commit). It is the whole rule when no list is given, and
+ * when ANY round names a commit the list does not hold (after a force-push): a pair that mixes a listed and an unlisted commit cannot be
+ * ranked, and ranking only the listed pairs makes the order cycle, so the answer would depend on the input order.
+ */
+const commitRanks = (commits) => new Map((commits || []).flatMap((c, i) => (typeof c?.sha === 'string' ? [[c.sha.toLowerCase(), i]] : [])));
+
+/** The ranks to compare rounds with: the list's ranks when it holds every commit in `shas`, else none (the stamp alone, a total order). */
+function ranksFor(commits, shas) {
+  const ranks = commitRanks(commits);
+  return shas.every((sha) => ranks.has(String(sha ?? '').toLowerCase())) ? ranks : new Map();
+}
+
+/** < 0 when round a is older than round b, 0 for a tie, > 0 when a is newer. A round is { sha, at }. ranks comes from ranksFor: all or none. */
+function compareRounds(a, b, ranks) {
+  const ra = ranks.get(String(a.sha ?? '').toLowerCase());
+  const rb = ranks.get(String(b.sha ?? '').toLowerCase());
+  if (ra !== undefined && rb !== undefined && ra !== rb) return ra - rb;
+  return a.at - b.at;
+}
+
+const isCodeRabbitRound = (r) => isCodeRabbitUser(r?.user) && String(r.body ?? '').trim() !== '';
+const reviewRound = (r) => ({ sha: r.commit_id, at: Date.parse(r?.submitted_at || '') || 0 });
+const newestReviewBy = (reviews, ranks) => (reviews || []).filter(isCodeRabbitRound)
+  .reduce((best, r) => (best === null || compareRounds(reviewRound(r), reviewRound(best), ranks) >= 0 ? r : best), null);
+
+/**
+ * The PR's commit shas, oldest first, as [{ sha }]: the order newestCodeRabbitRound reads rounds by. [] when the read fails, so the stamp
+ * decides (an unknown order is never a reason to stop). [] above COMMIT_LIST_CAP commits too: review-status reads 100 commits over
+ * GraphQL and treats more as unknown, so cr-fix and cr-paid must rank rounds the same way (the "same carry source" rule).
+ */
+const COMMIT_LIST_CAP = 100;
+export function readPrCommits(gh, owner, name, pr) {
+  try {
+    const list = [gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/commits?per_page=100`])].flat(2);
+    return list.length > COMMIT_LIST_CAP ? [] : list.filter((c) => /^[0-9a-f]{40}$/i.test(c?.sha ?? '')).map((c) => ({ sha: c.sha.toLowerCase() }));
+  } catch { return []; }
+}
+
+/** The newest CodeRabbit app review with a body (an empty body is a thread reply, no round), by reviewed commit then submitted_at. null when none. */
+export function newestCodeRabbitReview(reviews, commits) {
+  const rounds = (reviews || []).filter(isCodeRabbitRound);
+  return newestReviewBy(rounds, ranksFor(commits, rounds.map((r) => r.commit_id)));
 }
 
 const CLEAN_ROUND = /No actionable comments were generated/i;
@@ -1027,15 +1070,18 @@ export function cleanSummaryCommit(comments, commentEdits) {
  * commit_id, summaryOnly: true }. It counts only when it is trusted, is no notice, says no actionable comments, covers a commit
  * that is not the head, was written after the newest review object, and no review object holds that commit (the object has the findings).
  */
-export function newestCodeRabbitRound({ reviews, comments, commentEdits, head } = {}) {
-  const object = newestCodeRabbitReview(reviews);
+export function newestCodeRabbitRound({ reviews, comments, commentEdits, head, commits } = {}) {
+  const object = newestCodeRabbitReview(reviews, commits);
   const summary = cleanTrustedSummary(comments, commentEdits);
   if (summary === null) return object;
   const covered = summaryCoveredCommit(summary.body);
   if (covered === null || covered === head) return object;
   if ((reviews || []).some((r) => isCodeRabbitUser(r?.user) && r.commit_id === covered)) return object;
-  const objectAt = object ? Date.parse(object.submitted_at || '') || 0 : -1;
-  return commentStamp(summary) > objectAt ? { id: null, commit_id: covered, body: '', summaryOnly: true } : object;
+  // The commit the summary covers against the commit of the review object; the summary's updated_at only breaks a tie. The object was
+  // picked by the ranks of the review commits alone, so this pair is ranked by the list only when it holds both commits.
+  const objectRound = object ? reviewRound(object) : null;
+  const newer = objectRound === null || compareRounds({ sha: covered, at: commentStamp(summary) }, objectRound, ranksFor(commits, [covered, object.commit_id])) > 0;
+  return newer ? { id: null, commit_id: covered, body: '', summaryOnly: true } : object;
 }
 
 // GitHub lists at most 300 files in a compare. A list that long may be cut off, and the PR's own files may be the ones cut.
@@ -1170,8 +1216,8 @@ export function carryBlockers({ head, newest, reviewComments, compare, prFiles, 
  * { carried, cliOnly }. carried is { from, deltaLines } when the newest CodeRabbit review stands for the head (see carryBlockers), else null.
  * cliOnly is true when the CLI fix review line is the ONLY blocker: every other carry condition holds, so the author needs cr-fix.mjs, not a PR review.
  */
-function carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body }) {
-  const newest = newestCodeRabbitRound({ reviews, comments, commentEdits, head });
+function carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body, commits }) {
+  const newest = newestCodeRabbitRound({ reviews, comments, commentEdits, head, commits });
   const blocks = carryBlockers({ ...carry, head, newest, state: routerState(comments), labels, cr, body });
   const carried = blocks.length === 0 ? { from: newest.commit_id, deltaLines: deltaLinesOf(carry.compare, carry.prFiles) } : null;
   return { carried, blockers: blocks, cliOnly: blocks.length > 0 && blocks.length === cliFixBlockers({ body, newest }, head).length };
@@ -1245,6 +1291,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   let coderabbitRetryMinutes = null;
   let coderabbitCarried = null;
   let coderabbitCarryBlockers = [];
+  let coderabbitNotice = null;
   if (need.coderabbit) {
     const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt, nowMs });
     coderabbit = cr.status;
@@ -1252,18 +1299,26 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     coderabbitLimited = cr.limited;
     coderabbitRateLimited = cr.rateLimited;
     coderabbitRetryMinutes = cr.retryMinutes;
+    coderabbitNotice = cr.notice;
     if (cr.rateLimited) {
       reasons.push('CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)');
-    } else if (cr.limited) {
-      reasons.push(`CodeRabbit ${cr.notice === 'skipped' ? 'skipped the review of' : 'review failed on'} the head (PR-bot review did not run; CLI/plugin output does not count)`);
     } else if (!cr.reviewedHead) {
       // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
-      // A Minor-only review of an earlier head plus a small push stands for the head (the carry); every other case asks for a review.
-      const carryResult = carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body: pull.body });
+      // A Minor-only review of an earlier head plus a small push stands for the head (the carry). The carry runs BEFORE a skip
+      // notice is read: a "Review skipped" notice blocks READY only when no carry applies (live PRs #230 and #231). A "Review failed"
+      // notice never carries: the app tried the head and broke, so an earlier review is not the answer.
+      const carryResult = cr.notice === 'failed' ? { carried: null, blockers: [], cliOnly: false }
+        : carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body: pull.body, commits });
       coderabbitCarried = carryResult.carried;
       // Only a carry whose inputs were read has blockers to show; a draft or unrouted PR never reads them.
       coderabbitCarryBlockers = carry ? carryResult.blockers : [];
-      if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
+      // A carried review is not a missing one: the skip notice then is no limit on this head.
+      if (coderabbitCarried !== null) coderabbitLimited = false;
+      else if (cr.limited) {
+        reasons.push(`CodeRabbit ${cr.notice === 'skipped' ? 'skipped the review of' : 'review failed on'} the head (PR-bot review did not run; CLI/plugin output does not count)`);
+        // Only the CLI fix review line is missing: say so too, so the pr-loop mod sends the author to cr-fix.mjs (CARRY_REASON_PREFIX).
+        if (carryResult.cliOnly) reasons.push(noReviewCliReason(pull.number));
+      } else reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
     }
     if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);
   }
@@ -1280,9 +1335,13 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     coderabbitCarried,
     // Why the carry did not stand for the head: the carryBlockers strings. [] when carried or not tried. Never a reason: READY ignores it.
     coderabbitCarryBlockers,
+    // 'skipped', 'failed' or 'rate limited': the CodeRabbit notice that applies to the head. null when none, or when the head was reviewed.
+    // evaluateWithCarry reads it to skip the carry reads for a failed head, which never carries.
+    coderabbitNotice,
     // N from "Outside diff range comments (N)" in the newest CodeRabbit review of the head. 0 when none. Blocks READY until handled.
     coderabbitOutsideDiff: outsideDiff,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
+    // false when a carry stands for the skipped head (coderabbitCarried is set): that review is not missing.
     coderabbitLimited,
     // true when that missing review is a rate limit or review limit (not a skip or a failure). null when unlabelled.
     // coderabbitRetryMinutes: CodeRabbit's own "next review in N minutes" figure from the notice, else null.
@@ -1330,8 +1389,8 @@ function attempt(fn) {
  * The four reads the carry needs, only for a PR whose CodeRabbit review does not name the head. Each read that fails is null,
  * and carryBlockers turns a null into "not eligible". The router config comes from the BASE branch: a PR must not lower its own bar.
  */
-function readCarry({ pull, reviews, comments, commentEdits }) {
-  const newest = newestCodeRabbitRound({ reviews, comments, commentEdits, head: pull.head.sha });
+function readCarry({ pull, reviews, comments, commentEdits, commits }) {
+  const newest = newestCodeRabbitRound({ reviews, comments, commentEdits, head: pull.head.sha, commits });
   if (!newest?.commit_id || (!newest.id && !newest.summaryOnly)) return null;
   const files = attempt(() => gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/files?per_page=100`]).flat());
   return {
@@ -1346,14 +1405,16 @@ function readCarry({ pull, reviews, comments, commentEdits }) {
 
 /** Does this result want the carry? CodeRabbit is required, did not review the head and did not rate limit, skip or fail. */
 // A draft or an unrouted PR can never carry (scopeBlockers), so it pays for no read.
-const wantsCarry = (r) => r.routing.required.includes('coderabbit') && r.coderabbitReviewedHead === false && r.coderabbitLimited === false
-  && !r.isDraft && !r.routing.unverified;
+// A skipped head wants it too (live PRs #230, #231): coderabbitLimited is true for a skip, a failure and a rate limit, and only the
+// rate limit is excluded here, and so is a failed head: evaluate() never carries one, so the four reads could not change the result.
+const wantsCarry = (r) => r.routing.required.includes('coderabbit') && r.coderabbitReviewedHead === false && r.coderabbitRateLimited !== true
+  && r.coderabbitNotice !== 'failed' && !r.isDraft && !r.routing.unverified;
 
 /**
  * Evaluate once without the carry. Only a PR that wants it pays for the reads and the dynamic import. matchGlob lives in
  * review-router.mjs, which imports this file, so it is imported here and not at the top.
  */
-async function evaluateWithCarry(inputs, readCarryFn) {
+export async function evaluateWithCarry(inputs, readCarryFn) {
   const first = evaluate(inputs);
   if (!wantsCarry(first)) return first;
   const carry = inputs.carry ?? readCarryFn(inputs);
@@ -1377,7 +1438,7 @@ function readLiveInputs() {
   // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
   // Comments are read apart, page by page (readIssueComments). More than 100 review threads is "cannot determine".
   // commits(last:1) is the head commit, for the CodeRabbit notice date.
-  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{oid author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
   const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
   const prq = g.data.repository.pullRequest;
   const rt = prq.reviewThreads;
@@ -1395,7 +1456,9 @@ function readLiveInputs() {
   if (prq.headRefOid !== pull.head.sha) throw new Error(`head moved during the read (${String(prq.headRefOid).slice(0, 7)} vs ${pull.head.sha.slice(0, 7)})`);
   // Every commit's author account and GitHub signature, for the Dependabot rule. More than 100 commits = unknown.
   const ac = prq.allCommits;
+  // `sha` (oldest first) orders the CodeRabbit rounds by the reviewed commit (newestCodeRabbitRound); the Dependabot rule ignores it.
   const commits = ac.totalCount > ac.nodes.length ? [] : ac.nodes.map((n) => ({
+    sha: n.commit.oid,
     author: n.commit.author?.user?.login ?? null,
     githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
   }));

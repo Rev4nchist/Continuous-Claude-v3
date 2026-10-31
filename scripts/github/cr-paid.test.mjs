@@ -28,7 +28,7 @@ const files = (count) => Array.from({ length: count }, (_, i) => prFile(i));
 const gqlNode = (c) => ({ databaseId: c.id, body: c.body, author: { login: 'coderabbitai', __typename: 'Bot' }, lastEditedAt: null, updatedAt: c.updated_at, userContentEdits: { nodes: [] } });
 
 /** A temp ledger file plus a fake gh. `rows` (objects) or `raw` (text) seed the ledger. */
-function harness({ reviews = [], comments = [], prFiles = files(4), compareFiles = [], rows = [], raw = null, filters = [], ghError = null, now = NOW, env = {} } = {}) {
+function harness({ reviews = [], comments = [], prFiles = files(4), compareFiles = [], rows = [], raw = null, filters = [], ghError = null, now = NOW, env = {}, commits = [] } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cr-paid-'));
   const ledgerPath = path.join(dir, 'state', 'coderabbit-paid.jsonl');
   if (raw !== null || rows.length > 0) {
@@ -44,6 +44,7 @@ function harness({ reviews = [], comments = [], prFiles = files(4), compareFiles
     if (args.some((a) => /issues\/\d+\/comments/.test(a))) return comments;
     if (args.some((a) => /compare\//.test(a))) return { files: compareFiles };
     if (args.some((a) => /pulls\/\d+\/files/.test(a))) return [prFiles];
+    if (args.some((a) => /pulls\/\d+\/commits/.test(a))) return [commits.map((sha) => ({ sha }))];
     if (args.some((a) => /pulls\/\d+\/reviews/.test(a))) return [reviews];
     return { head: { sha: HEAD } };
   };
@@ -277,5 +278,18 @@ test('CP18: a summary that covers a commit a review object already holds counts 
     compareFiles: [prFile(0)],
   });
   assert.equal((await h.check()).round, 2);
+  h.done();
+});
+
+// Lane review-status-bugs, bug 2: the round to estimate from is the newest REVIEWED commit (PR commit list), not the last-edited summary.
+test('CP16: an older clean summary edited after a newer review object does not move the estimate off the newer commit', async () => {
+  const h = harness({
+    reviews: [review(1, OLD, '2026-10-30T07:00:00Z')],
+    comments: [cleanSummary(OLDER, '2026-10-30T09:00:00Z')],
+    commits: [OLDER, OLD, HEAD],
+    compareFiles: [prFile(0, { additions: 10, deletions: 5 })],
+  });
+  const r = await h.check();
+  assert.equal(r.from, OLD);
   h.done();
 });

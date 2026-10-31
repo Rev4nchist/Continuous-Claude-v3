@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import type { MissionControlSnapshot } from '@/server/queries/mission-control';
 
@@ -91,11 +91,32 @@ export function MissionControl({
       ? data.detailUnavailable
       : null;
 
+  // Choosing a session moves focus to the detail heading and, only when the heading is off screen,
+  // scrolls to it. On a phone the detail is drawn first but comes late in the DOM, so a keyboard or
+  // screen-reader user would otherwise stay on the card they pressed. A load with ?session= or a poll
+  // does not move focus: only a choice does.
+  const detailRef = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef(false);
+  const panelState = detail !== null ? 'detail' : unavailable !== null ? 'unavailable' : 'loading';
+  useEffect(() => {
+    if (!pendingFocus.current || selected === null || panelState === 'loading') return;
+    const area = detailRef.current;
+    const heading = area?.querySelector('h2');
+    if (!area || !heading) return;
+    pendingFocus.current = false;
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+    // The whole detail scrolls to the top of the screen, not only its heading.
+    const { top, bottom } = heading.getBoundingClientRect();
+    if (top < 0 || bottom > window.innerHeight) area.scrollIntoView({ block: 'start' });
+  }, [selected, panelState]);
+
   const changeView = (next: ViewId) => {
     setView(next);
     mirrorUrl(next, selected);
   };
   const choose = (id: string | null, nextView: ViewId = view) => {
+    pendingFocus.current = id !== null;
     setSelected(id);
     setView(nextView);
     mirrorUrl(nextView, id);
@@ -123,119 +144,142 @@ export function MissionControl({
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-[100rem] flex-col gap-6 p-6 lg:p-8">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Agentic OS</h1>
-          <p className="text-sm text-muted-foreground">
-            Fleet overview · what each session is doing and what needs Dave
-          </p>
+    <div className="flex min-h-screen flex-col">
+      {/* One top strip: the mark and the tabs on the left, the live text on the right. */}
+      <header className="border-b bg-background">
+        <div className="mx-auto flex w-full max-w-[1360px] flex-wrap items-center gap-x-1.5 gap-y-1 px-4">
+          <h1 className="sr-only">Agentic OS</h1>
+          <NavTabs view={view} onSelect={changeView} />
+          <LiveIndicator
+            status={status}
+            error={error}
+            ageMs={ageMs}
+            generatedAt={data.generatedAt}
+            consecutiveFailures={consecutiveFailures}
+            onRefresh={refresh}
+          />
         </div>
-        <LiveIndicator
-          status={status}
-          error={error}
-          ageMs={ageMs}
-          generatedAt={data.generatedAt}
-          consecutiveFailures={consecutiveFailures}
-          onRefresh={refresh}
-        />
       </header>
 
-      <NavTabs view={view} onSelect={changeView} />
-
-      {!database.ok && (
-        <div
-          role="alert"
-          className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm"
-        >
-          <p className="font-medium text-destructive">Database unreachable.</p>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">{database.error}</p>
-          <p className="mt-1 text-muted-foreground">
-            Everything below is the last successful read and may be arbitrarily old.
-          </p>
-        </div>
-      )}
-
-      <ReadyForDave items={ready} onSelect={(id) => choose(id, 'overview')} />
-
-      <StatTiles tiles={tiles} />
-
-      {view === 'board' ? (
-        // The hook keeps old data after an endpoint change, so the Board shows only once it arrives.
-        data.board !== null ? (
-          <LaneBoard board={data.board} />
-        ) : (
-          <p
-            data-testid="board-loading"
-            className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
+      <main className="mx-auto flex w-full max-w-[1360px] flex-1 flex-col gap-3.5 p-4">
+        {!database.ok && (
+          <div
+            role="alert"
+            className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm"
           >
-            Loading board
-          </p>
-        )
-      ) : view === 'sessions' ? (
-        <div className="space-y-6">
-          <SessionsTable
-            cards={shownCards}
-            selectedId={selected}
-            filter={filter}
-            onClear={clearFilter}
-            onSelect={toggleSession}
-          />
-          {panel}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
-          <div className="order-2 min-w-0 space-y-8 lg:order-1 lg:row-span-3">
-            <SessionCards
+            <p className="font-medium text-destructive">Database unreachable.</p>
+            <p className="mt-1 font-mono text-xs text-muted-foreground">{database.error}</p>
+            <p className="mt-1 text-muted-foreground">
+              Everything below is the last successful read and may be arbitrarily old.
+            </p>
+          </div>
+        )}
+
+        <ReadyForDave items={ready} onSelect={(id) => choose(id, 'overview')} />
+
+        <StatTiles tiles={tiles} />
+
+        {view === 'board' ? (
+          // The hook keeps old data after an endpoint change, so the Board shows only once it arrives.
+          data.board !== null ? (
+            <LaneBoard board={data.board} />
+          ) : (
+            <p
+              data-testid="board-loading"
+              className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
+            >
+              Loading board
+            </p>
+          )
+        ) : view === 'sessions' ? (
+          <div className="space-y-6">
+            <SessionsTable
               cards={shownCards}
+              selectedId={selected}
               filter={filter}
               onClear={clearFilter}
-              selectedId={selected}
               onSelect={toggleSession}
             />
-
-            <ActiveSessionsStrip active={active} />
-
-            <section className="space-y-3">
-              <h2 className="text-sm font-medium tracking-tight">
-                Projects
-                <span className="ml-2 font-normal text-muted-foreground">
-                  {fleet.projects.length} in the registry
-                </span>
-              </h2>
-              <FleetGrid projects={fleet.projects} selectedKey={selectedKey} onSelect={toggleProject} />
-            </section>
-
-            <AccountingBar fleet={fleet} />
-
-            <UnmatchedPanel unmatched={fleet.unmatched} />
+            {panel !== null && <div ref={detailRef}>{panel}</div>}
           </div>
+        ) : (
+          // Two columns from `lg` up. On a phone the column wrappers are `contents`, so every panel
+          // sits in one column and the `order-*` classes put the selected session first.
+          <div className="flex flex-col gap-3.5 lg:flex-row lg:items-start">
+            <div className="contents lg:flex lg:min-w-0 lg:flex-[999_1_620px] lg:flex-col lg:gap-3.5">
+              <div className="order-2 min-w-0 lg:order-none">
+                <section className="rounded-md border bg-card">
+                  <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b px-3 py-2 text-xs text-muted-foreground">
+                    <h2 className="text-foreground">
+                      Projects
+                      <span className="ml-2 font-normal text-muted-foreground">· fleet home</span>
+                    </h2>
+                    <span>click to filter sessions</span>
+                  </header>
+                  <div className="p-3">
+                    <FleetGrid
+                      projects={fleet.projects}
+                      selectedKey={selectedKey}
+                      onSelect={toggleProject}
+                    />
+                  </div>
+                </section>
+              </div>
 
-          <div className="order-1 min-w-0 lg:order-2">
-            {panel ?? (
-              <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                Select a session to see its goal, plan and asks.
-              </p>
-            )}
+              <div className="order-3 min-w-0 lg:order-none">
+                <SessionCards
+                  cards={shownCards}
+                  filter={filter}
+                  onClear={clearFilter}
+                  selectedId={selected}
+                  onSelect={toggleSession}
+                />
+              </div>
+
+              <div className="order-4 min-w-0 lg:order-none">
+                <ActiveSessionsStrip active={active} asks={ready} />
+              </div>
+
+              <div className="order-5 min-w-0 lg:order-none">
+                <AccountingBar fleet={fleet} />
+              </div>
+
+              <div className="order-6 min-w-0 lg:order-none">
+                <UnmatchedPanel unmatched={fleet.unmatched} />
+              </div>
+            </div>
+
+            <div className="contents lg:flex lg:min-w-0 lg:flex-[1_1_380px] lg:flex-col lg:gap-3.5">
+              <div
+                ref={detailRef}
+                className={cn('order-1 min-w-0 lg:order-none', panel === null && 'hidden lg:block')}
+              >
+                {panel ?? (
+                  <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                    Select a session to see its goal, plan and asks.
+                  </p>
+                )}
+              </div>
+
+              <div className="order-7 min-w-0 lg:order-none">
+                <PrPanel prs={prs} onSelect={(id) => choose(id)} />
+              </div>
+
+              <div className="order-8 min-w-0 lg:order-none">
+                <SourceHealth sources={sources} />
+              </div>
+            </div>
           </div>
+        )}
 
-          <div className="order-3 min-w-0 lg:order-3">
-            <PrPanel prs={prs} onSelect={(id) => choose(id)} />
-          </div>
-
-          <div className="order-4 min-w-0 lg:order-4">
-            <SourceHealth sources={sources} />
-          </div>
-        </div>
-      )}
-
-      <footer className="mt-auto border-t pt-4 text-xs text-muted-foreground">
-        {database.ok
-          ? `Connected as agentic_os_app (SELECT-only, ${database.latencyMs}ms).`
-          : 'Not connected.'}{' '}
-        Read-only, localhost, no login. Briefs come from session state files; asks older than 24
-        hours are hidden.
-      </footer>
+        <footer className="mt-auto px-0.5 py-1 text-xs text-muted-foreground">
+          {database.ok
+            ? `Connected as agentic_os_app (SELECT-only, ${database.latencyMs}ms).`
+            : 'Not connected.'}{' '}
+          Read-only, localhost, no login. Briefs come from session state files; asks older than 24
+          hours are hidden.
+        </footer>
+      </main>
     </div>
   );
 }
@@ -272,14 +316,26 @@ function LiveIndicator({
   consecutiveFailures: number;
   onRefresh: () => void;
 }) {
-  // Sliced out of the ISO string, never parsed into a Date. new Date(...) here
-  // would render in the viewer's local zone on the client and UTC during SSR —
-  // a hydration mismatch — and this file's own timestamps are UTC-bearing
-  // `timestamp without time zone`, the exact class of bug that has already cost
-  // this project two rounds. A substring cannot be five hours wrong.
-  const serverClock = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(generatedAt)
-    ? `${generatedAt.slice(11, 19)}Z`
-    : null;
+  // The server render and the first client render both slice UTC out of the ISO string, never a
+  // Date: new Date(...) there would print the viewer's zone on the client and UTC during SSR, a
+  // hydration mismatch. After mount the clock switches to local time, which is what Dave reads.
+  // useSyncExternalStore gives the `mounted` flag without a setState in an effect.
+  const mounted = useSyncExternalStore(
+    subscribeNothing,
+    () => true,
+    () => false,
+  );
+  const isoOk = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(generatedAt);
+  const serverClock = !isoOk
+    ? null
+    : mounted
+      ? new Date(generatedAt).toLocaleTimeString(undefined, {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hourCycle: 'h23',
+        })
+      : `${generatedAt.slice(11, 19)}Z`;
 
   const dot =
     status === 'error'
@@ -306,31 +362,33 @@ function LiveIndicator({
           : `updated ${ageSeconds}s ago`;
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={onRefresh}
-        className="flex items-center gap-2 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-accent"
-        title="Refresh now"
-      >
-        <span
-          aria-hidden
-          className={cn(
-            'size-2 rounded-full',
-            dot,
-            status === 'refreshing' && 'animate-pulse',
-          )}
-        />
-        <span className="tabular-nums">{label}</span>
-      </button>
-      {serverClock && (
-        <span
-          className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground"
-          title="When the SERVER built the data on screen (UTC). Unlike the relative age above, this cannot keep counting while the data underneath it is frozen."
+    <div className="ml-auto flex flex-col items-end gap-0.5 py-1">
+      <div className="flex flex-wrap items-center justify-end gap-x-1 text-xs">
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="flex min-h-6 items-center gap-2 rounded px-1.5 py-1 transition-colors hover:bg-accent"
+          title="Refresh now"
         >
-          data as of {serverClock}
-        </span>
-      )}
+          <span
+            aria-hidden
+            className={cn(
+              'size-2 rounded-full',
+              dot,
+              status === 'refreshing' && 'animate-pulse',
+            )}
+          />
+          <span className="tabular-nums">{label}</span>
+        </button>
+        {serverClock && (
+          <span
+            className="tabular-nums text-muted-foreground"
+            title="Local time of the server read. Unlike the relative age, this cannot keep counting while the data underneath it is frozen."
+          >
+            {`· polls 5s · data as of ${serverClock}`}
+          </span>
+        )}
+      </div>
       {status === 'error' && error && (
         <span className="max-w-xs truncate text-right font-mono text-[0.6875rem] text-destructive">
           {error}
@@ -338,4 +396,9 @@ function LiveIndicator({
       )}
     </div>
   );
+}
+
+/** useSyncExternalStore needs a subscribe; the mounted flag never changes after mount. */
+function subscribeNothing(): () => void {
+  return () => {};
 }

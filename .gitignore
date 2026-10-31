@@ -135,6 +135,9 @@ opc/outputs/
 opc/workspace/
 opc/thoughts/
 opc/.env
+# Local backups of opc/.env hold the same secrets (audit 2026-10-30)
+opc/.env.backup*
+.env.backup*
 opc/:memory:/
 
 # OPC .claude (wizard uses root .claude, not this)

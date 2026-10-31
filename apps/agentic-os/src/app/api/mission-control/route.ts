@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { getMissionControlSnapshot, parseViewName } from '@/server/queries/mission-control';
 import { parseSessionId } from '@/server/queries/session-detail';
+import { safeMessage } from '@/server/sources/safe-message';
 
 /**
  * The one endpoint `useLiveData()` polls.
@@ -40,9 +41,9 @@ export async function GET(request: NextRequest) {
     // A failed poll must not look like an empty fleet. Return the failure with a
     // 503 so the hook keeps its last good data and the header goes amber, rather
     // than rendering zero projects as though the database said so.
-    const message = error instanceof Error ? error.message : String(error);
+    // safeMessage: redacted, path-free and clipped. A raw driver message can hold a path or the query text.
     return NextResponse.json(
-      { error: message },
+      { error: safeMessage(error) },
       { status: 503, headers: { 'cache-control': 'no-store' } },
     );
   }

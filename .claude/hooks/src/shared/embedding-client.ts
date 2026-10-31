@@ -759,9 +759,9 @@ let _uvPathCache: string | null | undefined = undefined;
  * on Windows, so the old code used ``shell: true`` — which launches
  * ``cmd.exe /c uv ...`` and flashes a visible console window per spawn (the
  * thundering-herd symptom). Resolving uv to an absolute path lets us spawn
- * with no shell and ``windowsHide: true`` — the same approach the proven
- * scripts/start-embedding-daemon.ps1 launcher uses
- * (UseShellExecute=$false + CreateNoWindow=$true).
+ * with no shell and ``windowsHide: true``. The scripts/start-embedding-daemon.ps1
+ * launcher does the same in PowerShell (UseShellExecute=$false + CreateNoWindow=$true,
+ * with the caller's inheritable pipe handles cleared around Start).
  *
  * Resolution order:
  *   (a) ``$CCV3_UV_PATH`` env override, if it points at an existing file.
@@ -969,9 +969,10 @@ export function ensureDaemonRunning(): void {
   // Step 5: spawn with NO shell. uv resolved to an absolute path means a
   // detached spawn no longer ENOENTs, so we can drop shell:true (which on
   // Windows launched cmd.exe and flashed a console window per spawn — the
-  // herd symptom). windowsHide:true + no shell mirrors the proven
+  // herd symptom). windowsHide:true + no shell matches the
   // scripts/start-embedding-daemon.ps1 launcher (UseShellExecute=$false +
-  // CreateNoWindow=$true). uv with cwd=repoRoot resolves `--project opc`.
+  // CreateNoWindow=$true, console with no window). uv with cwd=repoRoot
+  // resolves `--project opc`.
   // spawnDetachedHidden: a plain detached uv leaves the daemon's python with a
   // visible console window. The relay stays alive while the daemon runs.
   try {

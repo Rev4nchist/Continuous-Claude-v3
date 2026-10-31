@@ -124,7 +124,7 @@ brief_set {
   that lists the valid ids, and the step stays unproven.
 - **Registration.** Register the tool in interactive and headless runs, as `pr_status` does. The P1a proof is a headless `claude -p` run.
 - **How the model learns to call it.** The tool description carries the instruction and says when to call it. No always-loaded rule text is added (context budget). A `prompt.compose` section is the fallback if calls are too rare; P1a measures calls per session.
-- **Fallbacks when it is not called.** Goal shows `GOAL not set` (visible, on purpose); `public.sessions.working_on` shows as a dim fallback.
+- **Fallbacks when it is not called.** Goal shows `GOAL not set` (visible, on purpose). `public.sessions.working_on` is a prompt, so it shows nowhere: not on the Fleet page, not in the API, and nothing feeds the band's dim fallback slot (Dave, 2026-10-30).
   A turn-end parser reads the model's own output: the restate line (goal and stop-at) and the `## Next steps` block (ask).
   CLAUDE.md already requires both in every response, so the parser has input in every session. Parsed values are marked `parsed` in the Pane and never override a `brief_set` value.
 - All strings pass the redaction patterns in `opc/scripts/core/db/memory_redact.py` before storage or display.

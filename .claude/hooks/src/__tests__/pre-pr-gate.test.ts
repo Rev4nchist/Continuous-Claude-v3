@@ -37,7 +37,7 @@
  *   - registered on Bash only, or the dist file is missing             -> W1
  *   - the stamp path drifts from pre-pr.mjs                            -> W2
  */
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,6 +59,7 @@ import {
   isCcv3Remote,
   makeGit,
   namedRepo,
+  resolveGit,
   type Deps,
 } from '../pre-pr-gate.js';
 
@@ -686,14 +687,18 @@ describe('Y: the body flag, the repo forms and the body path are read the way gh
   });
 });
 
+// A stubbed spawn never runs this path, so the host git does not matter. NO_SUCH_GIT is a path that does not exist on any host.
+const STUB_GIT = '/usr/bin/git';
+const NO_SUCH_GIT = join(tmpdir(), 'prepr-gate-no-such-dir', 'git-does-not-exist');
+
 describe('T: the git runner', () => {
-  it('T1: a git timeout or a spawn error throws (the hook then fails open); a git exit code is a result', () => {
-    const slow = makeGit(() => ({ status: null, stdout: '', error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }) }));
+  it('T1: a git timeout or a spawn error throws (handle() then denies a gated command and allows any other); a git exit code is a result', () => {
+    const slow = makeGit(() => ({ status: null, stdout: '', error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }) }), {}, STUB_GIT);
     expect(() => slow('/x', ['status'])).toThrow(/ETIMEDOUT/);
-    const missing = makeGit(() => ({ status: null, stdout: '', error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }) }));
+    const missing = makeGit(() => ({ status: null, stdout: '', error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }) }), {}, NO_SUCH_GIT);
     expect(() => missing('/x', ['status'])).toThrow(/ENOENT/);
     const seen: Array<Record<string, unknown>> = [];
-    const exit = makeGit((_cmd, _args, opts) => { seen.push(opts); return { status: 128, stdout: 'x' }; });
+    const exit = makeGit((_cmd, _args, opts) => { seen.push(opts); return { status: 128, stdout: 'x' }; }, {}, STUB_GIT);
     expect(exit('/x', ['status'])).toEqual({ status: 128, stdout: 'x' });
     expect(seen[0].timeout).toBe(2000);
     // Up to 6 git calls per decision must fit in the 15 s hook timeout.
@@ -705,6 +710,119 @@ describe('T: the git runner', () => {
     const timing: Deps = { ...deps(), git: slow, logError: (m) => errors.push(m) };
     expect(JSON.parse(handle(JSON.stringify(input(CREATE[0])), timing)).hookSpecificOutput.permissionDecision).toBe('deny');
     expect(errors.length).toBe(1);
+  });
+});
+
+describe('G: finding git', () => {
+  const WIN_TOOLS = 'C:\\tools\\bin\\git.exe';
+  const WIN_STD = 'C:\\Program Files\\Git\\cmd\\git.exe';
+  const only = (...hits: string[]) => (path: string) => hits.includes(path);
+
+  it('G1: resolveGit takes git from a PATH directory first', () => {
+    const env = { PATH: 'C:\\nope;C:\\tools\\bin' };
+    expect(resolveGit(env, only(WIN_TOOLS, WIN_STD), 'win32')).toBe(WIN_TOOLS);
+    expect(resolveGit({ PATH: '/a:/b' }, only('/b/git', '/usr/bin/git'), 'linux')).toBe('/b/git');
+  });
+
+  it('G2: resolveGit falls back to the Git for Windows locations when PATH has no git', () => {
+    expect(resolveGit({ PATH: 'C:\\nope' }, only(WIN_STD), 'win32')).toBe(WIN_STD);
+    expect(resolveGit({}, only(WIN_STD), 'win32')).toBe(WIN_STD);
+    const alt = 'D:\\Apps\\Git\\cmd\\git.exe';
+    expect(resolveGit({ ProgramFiles: 'D:\\Apps' }, only(alt), 'win32')).toBe(alt);
+    const user = 'C:\\Users\\u\\AppData\\Local\\Programs\\Git\\cmd\\git.exe';
+    expect(resolveGit({ LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }, only(user), 'win32')).toBe(user);
+    expect(resolveGit({ PATH: '/a' }, only('/usr/bin/git'), 'linux')).toBe('/usr/bin/git');
+  });
+
+  it('G2b: with the real file check, a directory named git in an earlier PATH dir is skipped', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gitres-'));
+    const exe = process.platform === 'win32' ? 'git.exe' : 'git';
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    mkdirSync(join(first, exe), { recursive: true });
+    mkdirSync(second, { recursive: true });
+    writeFileSync(join(second, exe), '#!/bin/sh\n', { mode: 0o755 });
+    const sep = process.platform === 'win32' ? ';' : ':';
+    expect(resolveGit({ PATH: `${first}${sep}${second}` })).toBe(join(second, exe));
+  });
+
+  it.skipIf(process.platform === 'win32')('G2c: with the real file check, a non-executable git in an earlier PATH dir is skipped (POSIX)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gitres-'));
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    mkdirSync(first, { recursive: true });
+    mkdirSync(second, { recursive: true });
+    writeFileSync(join(first, 'git'), '#!/bin/sh\n', { mode: 0o644 });
+    writeFileSync(join(second, 'git'), '#!/bin/sh\n', { mode: 0o755 });
+    expect(resolveGit({ PATH: `${first}:${second}` })).toBe(join(second, 'git'));
+  });
+
+  it('G3: resolveGit returns null when git is nowhere', () => {
+    expect(resolveGit({ PATH: 'C:\\nope' }, () => false, 'win32')).toBeNull();
+    expect(resolveGit({}, () => false, 'linux')).toBeNull();
+  });
+
+  it('G4: makeGit spawns the resolved absolute path, not bare "git"', () => {
+    const seen: string[] = [];
+    makeGit((cmd) => { seen.push(cmd); return { status: 0, stdout: '' }; }, {}, WIN_STD)('/x', ['status']);
+    expect(seen).toEqual([WIN_STD]);
+  });
+
+  it('G5: makeGit with no git throws "git not found on PATH" with the fix, and spawns nothing', () => {
+    let spawned = 0;
+    const git = makeGit(() => { spawned++; return { status: 0, stdout: '' }; }, {}, null);
+    expect(() => git('/x', ['status'])).toThrow(/git not found on PATH/);
+    expect(() => git('/x', ['status'])).toThrow(/Git for Windows/);
+    expect(spawned).toBe(0);
+  });
+
+  it('G6: a spawn ENOENT when the git file is missing is "git not found on PATH"', () => {
+    const git = makeGit(() => ({ status: null, stdout: '', error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }) }), {}, NO_SUCH_GIT);
+    expect(() => git(tmpdir(), ['status'])).toThrow(/git not found on PATH.*ENOENT/);
+  });
+
+  it('G6b: a spawn ENOENT when git exists but the cwd does not names the directory, not git', () => {
+    const gone = join(tmpdir(), 'prepr-gate-no-such-cwd');
+    const git = makeGit(() => ({ status: null, stdout: '', error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }) }), {}, process.execPath);
+    let caught: (Error & { code?: string }) | undefined;
+    try { git(gone, ['status']); } catch (err) { caught = err as Error & { code?: string }; }
+    expect(caught?.message).toMatch(/directory not found/);
+    expect(caught?.message).toContain(gone);
+    expect(caught?.message).not.toMatch(/git not found|Git for Windows/);
+    expect(caught?.code).not.toBe('GIT_NOT_FOUND');
+  });
+
+  it('G6c: handle() on a gated command with a missing cwd denies with the directory and logs verify-error, not git-not-found', () => {
+    const gone = join(tmpdir(), 'prepr-gate-no-such-cwd');
+    const errors: string[] = [];
+    const spawn = () => ({ status: null, stdout: '', error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }) });
+    const d: Deps = { ...deps({ stamp: stampJson() }), git: makeGit(spawn, {}, process.execPath), logError: (m) => errors.push(m) };
+    const out = JSON.parse(handle(JSON.stringify(input(CREATE[0], { cwd: gone })), d));
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    const reason: string = out.hookSpecificOutput.permissionDecisionReason;
+    expect(reason).toMatch(/directory not found/);
+    expect(reason).not.toMatch(/Git for Windows/);
+  });
+
+  it('G7: handle() denies a gated command with the cause and the fix, not the generic verify-error text', () => {
+    const errors: string[] = [];
+    const d: Deps = { ...deps({ stamp: stampJson() }), git: makeGit(() => ({ status: 0, stdout: '' }), {}, null), logError: (m) => errors.push(m) };
+    for (const payload of [input(CREATE[0]), input(CREATE[2])]) {
+      const out = JSON.parse(handle(JSON.stringify(payload), d));
+      expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+      const reason: string = out.hookSpecificOutput.permissionDecisionReason;
+      expect(reason).toMatch(/git not found on PATH/);
+      expect(reason).toMatch(/Git for Windows/);
+      expect(reason).not.toMatch(/could not verify/);
+      expect(reason).not.toMatch(/SKIP_PRE_PR_GATE/);
+    }
+    expect(errors.length).toBe(2);
+  });
+
+  it('G8: with git missing, a command that is not gated still allows, and the leading override still lets a create through', () => {
+    const d: Deps = { ...deps({ stamp: stampJson() }), git: makeGit(() => ({ status: 0, stdout: '' }), {}, null), logError: () => {} };
+    expect(handle(JSON.stringify(input('ls -la')), d)).toBe('{}');
+    expect(handle(JSON.stringify(input(`SKIP_PRE_PR_GATE=1 ${CREATE[0]}`)), d)).toBe('{}');
   });
 });
 
@@ -733,10 +851,8 @@ describe('F: fail open', () => {
     const errors: string[] = [];
     const base = (over: Partial<Deps>): Deps => ({ ...deps({ stamp: stampJson() }), logError: (m) => errors.push(m), ...over });
     const timeout = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
-    const spawnErr = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
     const kinds: Array<[string, Deps, string, RegExp]> = [
-      ['git timeout', base({ git: makeGit(() => ({ status: null, stdout: '', error: timeout })) }), create, /ETIMEDOUT/],
-      ['git spawn error', base({ git: makeGit(() => ({ status: null, stdout: '', error: spawnErr })) }), create, /ENOENT/],
+      ['git timeout', base({ git: makeGit(() => ({ status: null, stdout: '', error: timeout }), {}, STUB_GIT) }), create, /ETIMEDOUT/],
       ['git remote fails', base({ git: (_cwd, args) => (args[0] === 'remote' ? { status: 128, stdout: '' } : { status: 0, stdout: `${ROOT}\n` }) }), create, /git remote/],
       ['stamp unreadable', base({ readFile: () => { throw new Error('EACCES: permission denied'); } }), create, /EACCES/],
       ['worktree list throws', base({ git: (cwd, args) => { if (args[0] === 'worktree') throw new Error('worktree boom'); return deps({ stamp: stampJson() }).git(cwd, args); } }), named, /worktree boom/],
@@ -752,7 +868,7 @@ describe('F: fail open', () => {
       expect(errors.length, kind).toBe(1);
     }
     // PowerShell is gated the same way.
-    const ps = JSON.parse(handle(JSON.stringify(input(CREATE[0], { tool_name: 'PowerShell' })), base({ git: makeGit(() => ({ status: null, stdout: '', error: timeout })) })));
+    const ps = JSON.parse(handle(JSON.stringify(input(CREATE[0], { tool_name: 'PowerShell' })), base({ git: makeGit(() => ({ status: null, stdout: '', error: timeout }), {}, STUB_GIT) })));
     expect(ps.hookSpecificOutput.permissionDecision).toBe('deny');
   });
 

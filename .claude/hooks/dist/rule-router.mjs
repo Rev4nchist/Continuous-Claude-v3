@@ -88,6 +88,37 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
   } catch {
   }
 }
+var ERROR_FIELD_CHARS = 200;
+function oneLine(text) {
+  return maskSecrets(text).replace(/\s+/g, " ").trim().slice(0, ERROR_FIELD_CHARS);
+}
+function errorMessage(err) {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : safeJson(err);
+  return oneLine(String(raw).split(/\r?\n/)[0]);
+}
+function safeJson(value) {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+function firstFrame(err) {
+  const stack = err instanceof Error ? err.stack : void 0;
+  const frame = typeof stack === "string" ? stack.split(/\r?\n/).find((l) => /^\s*at\s/.test(l)) : void 0;
+  return frame ? oneLine(frame) : "";
+}
+function logGuardError(hook, err, opts = {}) {
+  try {
+    const env = opts.env ?? process.env;
+    if (!shouldWrite(env)) return;
+    const entry = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook, kind: "error", message: errorMessage(err), stack: firstFrame(err) };
+    const path = guardLogPath(env);
+    mkdirSync(dirname(path), { recursive: true, mode: 448 });
+    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+  } catch {
+  }
+}
 
 // src/shared/destructive-classifier.ts
 var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
@@ -510,7 +541,8 @@ function run(raw) {
   let input;
   try {
     input = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    logGuardError("rule-router", err);
     outputContinue();
     return;
   }
@@ -572,7 +604,8 @@ function run(raw) {
 function main() {
   try {
     run(readFileSync(0, "utf8"));
-  } catch {
+  } catch (err) {
+    logGuardError("rule-router", err);
     outputContinue();
   }
 }

@@ -2,7 +2,7 @@ import type { SessionCard } from '@/server/queries/mission-control';
 
 import { cn } from '@/lib/utils';
 
-import { formatAgo } from './format';
+import { chipWord, formatAgo } from './format';
 import type { SessionFilter } from './SessionCards';
 
 const COLUMNS = ['State', 'Name', 'Title', 'Lane', 'Plan', 'Ask', 'Ctx', 'Last seen'] as const;
@@ -98,7 +98,9 @@ function Row({
               card.liveColour === 'green' ? 'bg-done' : 'bg-warn',
             )}
           />
-          <span className="font-mono">{card.chip ?? '-'}</span>
+          <span className="font-mono" data-chip={card.chip ?? undefined}>
+            {card.chip === null ? '-' : chipWord(card.chip)}
+          </span>
         </span>
       </td>
       <td className="px-3 py-2 align-top">
