@@ -1,5 +1,5 @@
 import { redact } from './redact';
-import { scrubPathsInText } from './safe-message';
+import { scrubPathsInText, stripControl } from './safe-message';
 
 const MAX_PROJECT_LABEL = 60;
 const HOME_ROOTS = new Set(['users', 'home']);
@@ -21,6 +21,6 @@ export function projectLabel(raw: string): string {
   if (underHomeRoot) return '~';
   const last = parts.pop() ?? '';
   if (/^[A-Za-z]:$/.test(last) || last === '?') return 'unknown';
-  const leaf = scrubPathsInText(redact(last).text);
+  const leaf = scrubPathsInText(redact(stripControl(last)).text);
   return leaf === '' ? 'unknown' : leaf.slice(0, MAX_PROJECT_LABEL);
 }

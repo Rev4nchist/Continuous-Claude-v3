@@ -1,6 +1,20 @@
 import type { Metadata } from 'next';
+import { JetBrains_Mono } from 'next/font/google';
 
 import './globals.css';
+
+/**
+ * The terminal face (PRD design system). next/font downloads it at build time and serves it from the
+ * app, so a page load makes no request to Google. `next dev` offline falls back to the stack in
+ * globals.css (a var() with no fallback would make the whole declaration invalid, so the stack names
+ * the face itself). `next build` offline throws: it needs the network once.
+ */
+const mono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '700'],
+  variable: '--font-jetbrains',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'Agentic OS',
@@ -23,7 +37,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" className={`dark ${mono.variable}`} suppressHydrationWarning>
       <body className="min-h-screen antialiased">{children}</body>
     </html>
   );

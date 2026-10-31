@@ -35,7 +35,6 @@ import { pgTable, text, timestamp, uuid, jsonb, vector } from 'drizzle-orm/pg-co
 export const sessions = pgTable('sessions', {
   id: text('id').primaryKey(),
   project: text('project').notNull(),
-  workingOn: text('working_on'),
   startedAt: timestamp('started_at'),
   lastHeartbeat: timestamp('last_heartbeat'),
   memoryExtractedAt: timestamp('memory_extracted_at'),
