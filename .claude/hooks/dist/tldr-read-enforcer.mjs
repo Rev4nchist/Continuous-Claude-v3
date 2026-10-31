@@ -394,6 +394,15 @@ import { homedir } from "os";
 import { dirname, join as join3 } from "path";
 var COMMAND_HEAD_CHARS = 80;
 var REASON_CHARS = 200;
+var PATH_CHARS = 300;
+var TARGET_FIELD = {
+  Read: "file_path",
+  Edit: "file_path",
+  Write: "file_path",
+  Agent: "subagent_type",
+  Task: "subagent_type",
+  Skill: "skill"
+};
 function guardLogPath(env = process.env) {
   const home = env.USERPROFILE || env.HOME || homedir();
   return env.CCV3_GUARD_DECISIONS_LOG || join3(home, ".claude", "logs", "guard-decisions.jsonl");
@@ -435,20 +444,39 @@ function commandHead(command) {
 function shouldWrite(env) {
   return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
 }
+function pathText(value, max = PATH_CHARS) {
+  return typeof value === "string" && value ? value.slice(0, max) : void 0;
+}
+function targetOf(input, tool) {
+  const explicit = pathText(input?.target);
+  if (explicit) return explicit;
+  const field = Object.hasOwn(TARGET_FIELD, tool) ? TARGET_FIELD[tool] : void 0;
+  const toolInput = input?.tool_input;
+  if (!field || typeof toolInput !== "object" || toolInput === null) return void 0;
+  return pathText(toolInput[field]);
+}
 function logGuardDecision(hook, input, decision, reason, opts = {}) {
   const env = opts.env ?? process.env;
   try {
     if (!shouldWrite(env)) return;
     const agent = input?.agent_id || env.CLAUDE_AGENT_ID || void 0;
+    const tool = input?.tool_name || input?.tool || "";
     const entry = {
       ts: (/* @__PURE__ */ new Date()).toISOString(),
       hook,
-      tool: input?.tool_name || input?.tool || "",
+      tool,
       decision,
       reason: maskSecrets(String(reason)).replace(/\s+/g, " ").trim().slice(0, REASON_CHARS),
-      session_id: input?.session_id || ""
+      session_id: input?.session_id || "",
+      agent: !!agent
     };
     if (agent) entry.agent_id = agent;
+    const cwd = pathText(input?.cwd);
+    if (cwd) entry.cwd = cwd;
+    const mode = pathText(input?.permission_mode, 40);
+    if (mode) entry.permission_mode = mode;
+    const target = targetOf(input, tool);
+    if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
     const path2 = guardLogPath(env);
     mkdirSync2(dirname(path2), { recursive: true, mode: 448 });
@@ -802,6 +830,9 @@ function recordRead(projectDir, ev) {
   } catch {
   }
 }
+function logSummaryInjected(input, env) {
+  logGuardDecision("tldr-read-enforcer", input, "inject", "tldr-summary-injected", { env });
+}
 function readStdin() {
   return readFileSync2(0, "utf-8");
 }
@@ -901,7 +932,7 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
       permissionDecisionReason: reasonText
     }
   };
-  logGuardDecision("tldr-read-enforcer", input, "deny", "tldr-summary-injected");
+  logSummaryInjected(input);
   finish(JSON.stringify(output), {
     outcome: "deny",
     reason: "summary_injected",
@@ -928,6 +959,7 @@ export {
   appendLogRows,
   buildLogRow,
   contextMatchesFile,
+  logSummaryInjected,
   recordRead,
   rollupJournal
 };

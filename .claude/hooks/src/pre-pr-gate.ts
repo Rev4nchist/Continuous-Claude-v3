@@ -55,7 +55,7 @@ import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileS
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
-import { guardLogPath, logGuardDecision, logGuardError } from './shared/guard-log.js';
+import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
 
 export { CCV3_REPO, namedRepo };
 export const STAMP_REL = '.claude/cache/pre-pr/stamp.json';
@@ -84,8 +84,10 @@ export interface Deps {
   readFile: (path: string) => string | null;
   now: () => number;
   env: NodeJS.ProcessEnv;
-  logError?: (message: string) => void;
+  logError?: (message: string, ctx?: ErrorContext) => void;
 }
+/** What handle() knows about an error beyond its message: the error's `code` and the payload `cwd`. Both can be absent. */
+export interface ErrorContext { code?: string; cwd?: string }
 /**
  * `warn` on an allow: a PR B rule fired in warn mode. handle() logs it. `soft` on a deny: a PR B rule (not a stamp rule),
  * which warn mode turns into an allow.
@@ -384,6 +386,13 @@ const sha256Of = (text: string | null): string | null => (text === null ? null :
 
 // ---------- hook plumbing ----------
 
+/** The `code` of an error (a string only) and the payload `cwd` (a string only). `input` can be any parsed JSON, so read it defensively. */
+function errorContext(err: unknown, input: HookInput | null): ErrorContext {
+  const code = (err as { code?: unknown } | null)?.code;
+  const cwd = (input as { cwd?: unknown } | null)?.cwd;
+  return { ...(typeof code === 'string' && code ? { code } : {}), ...(typeof cwd === 'string' && cwd ? { cwd } : {}) };
+}
+
 /** The whole hook: raw stdin text in, stdout text out. Never throws. */
 export function handle(raw: string, deps: Deps): string {
   let input: HookInput = {};
@@ -396,7 +405,7 @@ export function handle(raw: string, deps: Deps): string {
     } catch (parseErr) {
       // Parse doubt: fail closed on the raw text. A payload whose text reads as a PR create is denied; any other
       // unreadable payload allows, because this hook sees every Bash and PowerShell call (deny-all would block them all).
-      try { deps.logError?.(String((parseErr as Error)?.message ?? parseErr)); } catch { /* the log never blocks */ }
+      try { deps.logError?.(String((parseErr as Error)?.message ?? parseErr), errorContext(parseErr, null)); } catch { /* the log never blocks */ }
       if (!isPrOpenCommand(raw)) return '{}';
       logGuardDecision(HOOK, {}, 'deny', 'unreadable-input', { command: raw.slice(0, 500) });
       const why = `BLOCKED (pre-pr-gate): could not read the hook input, and its text looks like a PR create, so the pre-PR stamp could not be checked. Run the command again. If it keeps failing, ask Dave.\n\nThe stamp comes from: ${RUN}`;
@@ -416,7 +425,7 @@ export function handle(raw: string, deps: Deps): string {
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: d.reason } });
   } catch (err) {
     const message = String((err as Error)?.message ?? err);
-    try { deps.logError?.(message); } catch { /* the log never blocks */ }
+    try { deps.logError?.(message, errorContext(err, input)); } catch { /* the log never blocks */ }
     // Unparsable input, another tool, or a command that is not a gated shape: nothing to guard, so allow.
     if (!gated) return '{}';
     // A gated command that could not be checked (git timeout, git error, unreadable stamp): the leading override allows it, else deny.
@@ -522,17 +531,33 @@ export function makeGit(
   };
 }
 
+/**
+ * The error logger. It writes pre-pr-gate-errors.jsonl in the folder of the guard decision log, so
+ * CCV3_GUARD_DECISIONS_LOG redirects it too. A row: ts, hook, error, code (only when the error has
+ * one), cwd (the payload cwd, null when absent) and cwd_exists. cwd_exists is true when the directory
+ * the gate ran in exists (the payload cwd, else the hook's own cwd). A false value explains an ENOENT
+ * that is a missing cwd and not a missing git.
+ */
+export function makeErrorLogger(env: NodeJS.ProcessEnv = process.env): NonNullable<Deps['logError']> {
+  return (message, ctx = {}) => {
+    if (!shouldWrite(env)) return;
+    const file = join(dirname(guardLogPath(env)), 'pre-pr-gate-errors.jsonl');
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    const cwd = ctx.cwd ?? null;
+    let cwdExists = false;
+    try { cwdExists = existsSync(cwd ?? process.cwd()); } catch { /* an unreadable path counts as missing */ }
+    const row = { ts: new Date().toISOString(), hook: HOOK, error: maskSecrets(message).slice(0, 300), ...(ctx.code ? { code: ctx.code.slice(0, 40) } : {}), cwd: cwd === null ? null : cwd.slice(0, 300), cwd_exists: cwdExists };
+    appendFileSync(file, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+  };
+}
+
 function realDeps(): Deps {
   return {
     git: makeGit(),
     readFile: (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } },
     now: () => Date.now(),
     env: process.env,
-    logError: (message) => {
-      const file = join(dirname(guardLogPath(process.env)), 'pre-pr-gate-errors.jsonl');
-      mkdirSync(dirname(file), { recursive: true });
-      appendFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), hook: HOOK, error: message.slice(0, 300) })}\n`);
-    },
+    logError: makeErrorLogger(process.env),
   };
 }
 

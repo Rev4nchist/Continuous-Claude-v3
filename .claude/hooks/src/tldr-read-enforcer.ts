@@ -585,6 +585,16 @@ export function recordRead(projectDir: string, ev: ReadLogEvent): void {
   }
 }
 
+/**
+ * The guard-decisions row for a Read that was blocked so a TLDR summary could be injected.
+ * The hook returns permissionDecision 'deny' to do this, but nothing was refused: the row is
+ * 'inject', so a count of denies does not include it. (Net-savings inputs, remediation §7, ride
+ * on the hook_activity row, not this one.)
+ */
+export function logSummaryInjected(input: HookInput, env?: NodeJS.ProcessEnv): void {
+  logGuardDecision('tldr-read-enforcer', input, 'inject', 'tldr-summary-injected', { env });
+}
+
 function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
@@ -722,8 +732,7 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
     }
   };
 
-  // Net-savings inputs (remediation §7) ride on the deny row.
-  logGuardDecision('tldr-read-enforcer', input, 'deny', 'tldr-summary-injected');
+  logSummaryInjected(input);
   finish(JSON.stringify(output), {
     outcome: 'deny',
     reason: 'summary_injected',

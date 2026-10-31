@@ -52,7 +52,7 @@ interface HookInput {
   tool?: string;
   tool_input?: { command?: unknown };
   session_id?: string;
-  cwd?: unknown;
+  cwd?: string;
   permission_mode?: string;
 }
 

@@ -910,6 +910,74 @@ describe('F: fail open', () => {
     expect(errors.length).toBe(1);
   });
 
+  describe('E: the error log row (replay report item 4)', () => {
+    // The real logger, with its output redirected: the errors file sits beside CCV3_GUARD_DECISIONS_LOG, so the real home is never touched.
+    const run = (git: Deps['git'], payload: unknown): Array<Record<string, unknown>> => {
+      const dir = mkdtempSync(join(tmpdir(), 'prepr-gate-err-'));
+      const env = { CCV3_GUARD_DECISIONS_LOG: join(dir, 'guard-decisions.jsonl') };
+      const d: Deps = { ...deps({ stamp: stampJson() }), git, logError: gateModule.makeErrorLogger(env) };
+      handle(typeof payload === 'string' ? payload : JSON.stringify(payload), d);
+      const file = join(dir, 'pre-pr-gate-errors.jsonl');
+      return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+    };
+    const timeout = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    const throwing = (err: Error): Deps['git'] => () => { throw err; };
+
+    it('E1: a thrown error with a code writes that code, and the old fields stay', () => {
+      const [row] = run(throwing(timeout), input(CREATE[0]));
+      expect(row.code).toBe('ETIMEDOUT');
+      expect(row.hook).toBe('pre-pr-gate');
+      expect(row.error).toBe('spawnSync git ETIMEDOUT');
+      expect(typeof row.ts).toBe('string');
+    });
+
+    it('E2: an error with no code has no code key at all (not null, not "undefined")', () => {
+      const [row] = run(throwing(new Error('plain failure')), input(CREATE[0]));
+      expect(row.error).toBe('plain failure');
+      expect('code' in row).toBe(false);
+    });
+
+    it('E3: the payload cwd is logged, with cwd_exists true for a real directory and false for a missing one', () => {
+      const real = mkdtempSync(join(tmpdir(), 'prepr-gate-cwd-'));
+      const gone = join(real, 'does-not-exist');
+      const [okRow] = run(throwing(timeout), input(CREATE[0], { cwd: real }));
+      expect(okRow.cwd).toBe(real);
+      expect(okRow.cwd_exists).toBe(true);
+      const [badRow] = run(throwing(timeout), input(CREATE[0], { cwd: gone }));
+      expect(badRow.cwd).toBe(gone);
+      expect(badRow.cwd_exists).toBe(false);
+    });
+
+    it('E4: a payload with no cwd logs cwd null and a boolean cwd_exists, and still writes the row', () => {
+      const [row] = run(throwing(timeout), { tool_name: 'Bash', tool_input: { command: CREATE[0] } });
+      expect(row.cwd).toBeNull();
+      expect(typeof row.cwd_exists).toBe('boolean');
+    });
+
+    it('E5: an unreadable payload still writes a row, with no cwd to report', () => {
+      const [row] = run(() => ({ status: 0, stdout: '' }), '{"tool_name":"Bash","tool_input":{"command":"ls"');
+      expect(row.error).toMatch(/JSON|position|Expected|Unexpected/);
+      expect(row.cwd).toBeNull();
+    });
+  });
+
+  describe('E6-E7: the error logger keeps the guard log rules', () => {
+    it('E6: a remote URL with a password inside an error message is masked in the row', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'prepr-gate-mask-'));
+      const env = { CCV3_GUARD_DECISIONS_LOG: join(dir, 'guard-decisions.jsonl') };
+      gateModule.makeErrorLogger(env)('fatal: unable to access https://dave:ghp_abcdefghijklmnop12345678@github.com/x/y.git');
+      const text = readFileSync(join(dir, 'pre-pr-gate-errors.jsonl'), 'utf8');
+      expect(text).not.toContain('ghp_abcdefghijklmnop12345678');
+      expect(JSON.parse(text).error).toContain('***@github.com');
+    });
+
+    it('E7: under VITEST with no CCV3_GUARD_DECISIONS_LOG the logger writes nothing, not even under its home', () => {
+      const home = mkdtempSync(join(tmpdir(), 'prepr-gate-home-'));
+      gateModule.makeErrorLogger({ VITEST: 'true', USERPROFILE: home, HOME: home })('boom');
+      expect(existsSync(join(home, '.claude'))).toBe(false);
+    });
+  });
+
   it('F5: the leading override still lets a PR create through when the check itself failed, and is logged', () => {
     const dir = mkdtempSync(join(tmpdir(), 'prepr-gate-f5-'));
     const file = join(dir, 'guard-decisions.jsonl');

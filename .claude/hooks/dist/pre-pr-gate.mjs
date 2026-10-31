@@ -262,6 +262,15 @@ import { homedir } from "os";
 import { dirname, join as join2 } from "path";
 var COMMAND_HEAD_CHARS = 80;
 var REASON_CHARS = 200;
+var PATH_CHARS = 300;
+var TARGET_FIELD = {
+  Read: "file_path",
+  Edit: "file_path",
+  Write: "file_path",
+  Agent: "subagent_type",
+  Task: "subagent_type",
+  Skill: "skill"
+};
 function guardLogPath(env = process.env) {
   const home = env.USERPROFILE || env.HOME || homedir();
   return env.CCV3_GUARD_DECISIONS_LOG || join2(home, ".claude", "logs", "guard-decisions.jsonl");
@@ -303,20 +312,39 @@ function commandHead(command) {
 function shouldWrite(env) {
   return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
 }
+function pathText(value, max = PATH_CHARS) {
+  return typeof value === "string" && value ? value.slice(0, max) : void 0;
+}
+function targetOf(input, tool) {
+  const explicit = pathText(input?.target);
+  if (explicit) return explicit;
+  const field = Object.hasOwn(TARGET_FIELD, tool) ? TARGET_FIELD[tool] : void 0;
+  const toolInput = input?.tool_input;
+  if (!field || typeof toolInput !== "object" || toolInput === null) return void 0;
+  return pathText(toolInput[field]);
+}
 function logGuardDecision(hook, input, decision, reason, opts = {}) {
   const env = opts.env ?? process.env;
   try {
     if (!shouldWrite(env)) return;
     const agent = input?.agent_id || env.CLAUDE_AGENT_ID || void 0;
+    const tool = input?.tool_name || input?.tool || "";
     const entry = {
       ts: (/* @__PURE__ */ new Date()).toISOString(),
       hook,
-      tool: input?.tool_name || input?.tool || "",
+      tool,
       decision,
       reason: maskSecrets(String(reason)).replace(/\s+/g, " ").trim().slice(0, REASON_CHARS),
-      session_id: input?.session_id || ""
+      session_id: input?.session_id || "",
+      agent: !!agent
     };
     if (agent) entry.agent_id = agent;
+    const cwd = pathText(input?.cwd);
+    if (cwd) entry.cwd = cwd;
+    const mode = pathText(input?.permission_mode, 40);
+    if (mode) entry.permission_mode = mode;
+    const target = targetOf(input, tool);
+    if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
     const path = guardLogPath(env);
     mkdirSync2(dirname(path), { recursive: true, mode: 448 });
@@ -595,6 +623,11 @@ function pathwayLabel(deps, ctx) {
   return p.head.toLowerCase() === head.stdout.trim().toLowerCase() ? p.label.toLowerCase() : null;
 }
 var sha256Of = (text) => text === null ? null : createHash("sha256").update(text).digest("hex");
+function errorContext(err, input) {
+  const code = err?.code;
+  const cwd = input?.cwd;
+  return { ...typeof code === "string" && code ? { code } : {}, ...typeof cwd === "string" && cwd ? { cwd } : {} };
+}
 function handle(raw, deps) {
   let input = {};
   let command = "";
@@ -605,7 +638,7 @@ function handle(raw, deps) {
       input = JSON.parse(raw.trim() || "{}");
     } catch (parseErr) {
       try {
-        deps.logError?.(String(parseErr?.message ?? parseErr));
+        deps.logError?.(String(parseErr?.message ?? parseErr), errorContext(parseErr, null));
       } catch {
       }
       if (!isPrOpenCommand(raw)) return "{}";
@@ -629,7 +662,7 @@ The stamp comes from: ${RUN}`;
   } catch (err) {
     const message = String(err?.message ?? err);
     try {
-      deps.logError?.(message);
+      deps.logError?.(message, errorContext(err, input));
     } catch {
     }
     if (!gated) return "{}";
@@ -706,6 +739,22 @@ function makeGit(spawn = spawnSync, env = process.env, gitPath) {
     return { status: r.status ?? 1, stdout: r.stdout ?? "" };
   };
 }
+function makeErrorLogger(env = process.env) {
+  return (message, ctx = {}) => {
+    if (!shouldWrite(env)) return;
+    const file = join3(dirname2(guardLogPath(env)), "pre-pr-gate-errors.jsonl");
+    mkdirSync3(dirname2(file), { recursive: true, mode: 448 });
+    const cwd = ctx.cwd ?? null;
+    let cwdExists = false;
+    try {
+      cwdExists = existsSync2(cwd ?? process.cwd());
+    } catch {
+    }
+    const row = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK, error: maskSecrets(message).slice(0, 300), ...ctx.code ? { code: ctx.code.slice(0, 40) } : {}, cwd: cwd === null ? null : cwd.slice(0, 300), cwd_exists: cwdExists };
+    appendFileSync2(file, `${JSON.stringify(row)}
+`, { mode: 384 });
+  };
+}
 function realDeps() {
   return {
     git: makeGit(),
@@ -718,12 +767,7 @@ function realDeps() {
     },
     now: () => Date.now(),
     env: process.env,
-    logError: (message) => {
-      const file = join3(dirname2(guardLogPath(process.env)), "pre-pr-gate-errors.jsonl");
-      mkdirSync3(dirname2(file), { recursive: true });
-      appendFileSync2(file, `${JSON.stringify({ ts: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK, error: message.slice(0, 300) })}
-`);
-    }
+    logError: makeErrorLogger(process.env)
   };
 }
 async function main2() {
@@ -750,6 +794,7 @@ export {
   hasOverride,
   headBranchOf,
   isCcv3Remote,
+  makeErrorLogger,
   makeGit,
   namedRepo,
   resolveGit,
