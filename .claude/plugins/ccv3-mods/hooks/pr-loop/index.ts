@@ -375,7 +375,8 @@ const check = async ($: EngineInterface): Promise<void> => {
     try {
       await deliver($, alert, prior)
     } catch {
-      await keepPending($, prior)
+      // A failing store must not stop the alerts after this one either.
+      await keepPending($, prior).catch(() => undefined)
     }
   }
 }
