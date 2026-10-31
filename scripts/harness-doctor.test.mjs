@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,6 +123,15 @@ test('a worktree folder that git does not list is a WARN naming it; a listed one
   assert.equal(r.checks['sync:worktrees'].status, 'WARN');
   assert.match(r.checks['sync:worktrees'].detail, /orphan-one/);
   assert.doesNotMatch(r.checks['sync:worktrees'].detail, /real-one/);
+});
+
+test('a --repo reached through a link still matches its listed worktrees (no false orphan)', () => {
+  const fx = fixture();
+  git(fx.repo, 'worktree', 'add', '-q', '-b', 'wt-linked', join(fx.repo, '.claude', 'worktrees', 'linked-one'));
+  const link = join(fx.root, 'repo-link');
+  symlinkSync(fx.repo, link, 'junction');
+  const r = run({ ...fx, repo: link });
+  assert.equal(r.checks['sync:worktrees'].status, 'PASS', r.checks['sync:worktrees'].detail);
 });
 
 // ---- hooks ----

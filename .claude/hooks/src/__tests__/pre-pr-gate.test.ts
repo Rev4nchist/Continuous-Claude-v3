@@ -37,7 +37,7 @@
  *   - registered on Bash only, or the dist file is missing             -> W1
  *   - the stamp path drifts from pre-pr.mjs                            -> W2
  */
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -732,6 +732,29 @@ describe('G: finding git', () => {
     const user = 'C:\\Users\\u\\AppData\\Local\\Programs\\Git\\cmd\\git.exe';
     expect(resolveGit({ LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }, only(user), 'win32')).toBe(user);
     expect(resolveGit({ PATH: '/a' }, only('/usr/bin/git'), 'linux')).toBe('/usr/bin/git');
+  });
+
+  it('G2b: with the real file check, a directory named git in an earlier PATH dir is skipped', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gitres-'));
+    const exe = process.platform === 'win32' ? 'git.exe' : 'git';
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    mkdirSync(join(first, exe), { recursive: true });
+    mkdirSync(second, { recursive: true });
+    writeFileSync(join(second, exe), '#!/bin/sh\n', { mode: 0o755 });
+    const sep = process.platform === 'win32' ? ';' : ':';
+    expect(resolveGit({ PATH: `${first}${sep}${second}` })).toBe(join(second, exe));
+  });
+
+  it.skipIf(process.platform === 'win32')('G2c: with the real file check, a non-executable git in an earlier PATH dir is skipped (POSIX)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gitres-'));
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    mkdirSync(first, { recursive: true });
+    mkdirSync(second, { recursive: true });
+    writeFileSync(join(first, 'git'), '#!/bin/sh\n', { mode: 0o644 });
+    writeFileSync(join(second, 'git'), '#!/bin/sh\n', { mode: 0o755 });
+    expect(resolveGit({ PATH: `${first}:${second}` })).toBe(join(second, 'git'));
   });
 
   it('G3: resolveGit returns null when git is nowhere', () => {

@@ -22,7 +22,7 @@
  *   review-router.config.json coderabbit.reviews_7d_manual_date         scripts/github/pr-checkpoint.mjs
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,8 +58,10 @@ function git(repo, args) {
   return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', windowsHide: true, timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 const msg = (err) => String(err?.stderr || err?.message || err).trim().split('\n')[0];
+// git prints real paths; --repo may come through a link (a junction, macOS /var -> /private/var, an 8.3 short name).
+const realOrResolved = (p) => { try { return realpathSync.native(p); } catch { return resolve(p); } };
 const samePath = (a, b) => {
-  const norm = (p) => resolve(p).replace(/\\/g, '/').replace(/\/$/, '');
+  const norm = (p) => realOrResolved(p).replace(/\\/g, '/').replace(/\/$/, '');
   return process.platform === 'win32' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
 };
 

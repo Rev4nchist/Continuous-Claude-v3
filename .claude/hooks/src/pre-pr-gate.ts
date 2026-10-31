@@ -51,7 +51,7 @@
  */
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
@@ -455,11 +455,27 @@ function gitNotFound(detail: string): Error {
  * bare `git` fails there with ENOENT. `exists` and `platform` are parameters so a test does not
  * depend on this machine.
  */
+/**
+ * A git candidate counts only when it is a regular file that can run (execute bit on POSIX).
+ * A directory or a non-executable file named git is skipped, so the lookup goes on to the next
+ * PATH entry, as a bare spawn('git') would.
+ */
+export function runnableFile(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+    if (platform !== 'win32') accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveGit(
   env: NodeJS.ProcessEnv = process.env,
-  exists: (path: string) => boolean = existsSync,
+  exists?: (path: string) => boolean,
   platform: NodeJS.Platform = process.platform,
 ): string | null {
+  exists ??= (path: string) => runnableFile(path, platform);
   const win = platform === 'win32';
   const p = win ? win32 : posix;
   const exe = win ? 'git.exe' : 'git';

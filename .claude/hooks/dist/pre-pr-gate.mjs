@@ -4,7 +4,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/pre-pr-gate.ts
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { appendFileSync as appendFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2 } from "fs";
+import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2, statSync } from "fs";
 import { dirname as dirname2, isAbsolute, join as join3, posix, resolve, win32 } from "path";
 
 // src/pr-opened-review-loop.ts
@@ -657,7 +657,17 @@ var GIT_FIX = "Fix: install Git for Windows (https://git-scm.com/download/win) o
 function gitNotFound(detail) {
   return Object.assign(new Error(`git not found on PATH: ${detail}. ${GIT_FIX}`), { code: GIT_NOT_FOUND });
 }
-function resolveGit(env = process.env, exists = existsSync2, platform = process.platform) {
+function runnableFile(path, platform = process.platform) {
+  try {
+    if (!statSync(path).isFile()) return false;
+    if (platform !== "win32") accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveGit(env = process.env, exists, platform = process.platform) {
+  exists ??= (path) => runnableFile(path, platform);
   const win = platform === "win32";
   const p = win ? win32 : posix;
   const exe = win ? "git.exe" : "git";
@@ -742,5 +752,6 @@ export {
   isCcv3Remote,
   makeGit,
   namedRepo,
-  resolveGit
+  resolveGit,
+  runnableFile
 };
