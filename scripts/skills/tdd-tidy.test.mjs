@@ -17,12 +17,15 @@ test('no root .md in the tdd folder duplicates a references/ file', () => {
 });
 
 // retryOperation takes `() => Promise<T>` (ccv3-tdd.md:73, philosophy.md:75). A sync operation does not type-check.
+// Only a doc that shows retryOperation is scanned, and a callback that returns a Promise on its line is valid.
 test('every retry example in the tdd docs passes an async operation', () => {
   const files = [...mdIn(TDD).map((f) => path.join(TDD, f)), ...mdIn(REFS).map((f) => path.join(REFS, f))];
   const bad = [];
   for (const file of files) {
-    fs.readFileSync(file, 'utf8').split(/\r?\n/).forEach((line, i) => {
-      if (/const operation = \(/.test(line)) bad.push(`${path.relative(TDD, file)}:${i + 1}`);
+    const text = fs.readFileSync(file, 'utf8');
+    if (!text.includes('retryOperation')) continue;
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (/const operation = \(/.test(line) && !/Promise/.test(line)) bad.push(`${path.relative(TDD, file)}:${i + 1}`);
     });
   }
   assert.deepEqual(bad, [], `sync operation passed to retryOperation: ${bad.join(', ')}`);
