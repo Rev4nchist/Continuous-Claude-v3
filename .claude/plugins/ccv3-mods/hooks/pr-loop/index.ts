@@ -190,38 +190,59 @@ const lastLine = (text: string): string =>
     .at(-1) ?? ''
 
 /**
- * The model line for this alert as the PR reads right now, or null when it must not go out. The line waits behind the probe, other
- * alerts and dialogs, so the PR may have changed: one more probe drops it when the PR is merged or closed, its head moved or its state
- * changed (the new head alerts at the next check). The same PR, state, head and reason goes out once. A failed re-probe keeps the line.
+ * Puts the watch of a PR whose alert was dropped back in line with the re-probe. The dropped alert never reached the model, so
+ * its mark (the LIMITED state, the PROOF or REVIEWED marker) must not suppress the next one. The watch from before the check is
+ * folded with the fresh status. When that fold alerts, the fresh state is news that nothing delivered: the watch from before the
+ * check stays, and the next check alerts.
  */
-const currentLine = async ($: EngineInterface, alert: Alert): Promise<string | null> => {
-  if (wasSent(await loadDoc($), alertKey(alert))) return null
-  const result = await probe($, alert.pr)
-  const live = result.kind === 'ok' ? refreshAlert(alert, result.status, await checkpointFor($, result.status)) : alert
-  if (!live) return null
+const resync = async ($: EngineInterface, prior: PrWatch, fresh: PrStatus): Promise<void> => {
+  const folded = settle(prior, fresh, await $.clock.now(), await checkpointFor($, fresh))
+  const next = folded.alert ? prior : folded.watch
+  if (!next) return
   const doc = await loadDoc($)
-  const key = alertKey(live)
-  if (wasSent(doc, key)) return null
-  await saveDoc($, markSent(doc, key))
-  return reportLine(live)
+  await saveDoc($, { ...doc, prs: doc.prs.map(one => (one.pr === prior.pr ? { ...next, whenReady: one.whenReady || next.whenReady } : one)) })
 }
 
-/** Tells Dave and, for an alert the model must act on, the model. Never merges. */
-const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
-  $.ui.toast(toastText(alert), { timeoutMs: 10_000 })
-  // A closed PR needs no line. A draft gets the toast only: it waits on Dave's checkpoint command, not on the model.
-  if (alert.state === 'CLOSED' || alert.state === 'DRAFT') return
-  if (alert.state === 'READY' && alert.whenReady) {
-    if (await confirmLand($, alert.pr)) {
+/**
+ * The alert as the PR reads right now, or null when it must not go out. The alert waits behind the probe, other alerts and
+ * dialogs, so the PR may have changed: one more probe drops it when the PR is merged or closed, its head moved or its state
+ * changed (the new head alerts at the next check). A failed re-probe keeps the alert.
+ */
+const liveAlert = async ($: EngineInterface, alert: Alert, prior: PrWatch): Promise<Alert | null> => {
+  const result = await probe($, alert.pr)
+  if (result.kind !== 'ok') return alert
+  const live = refreshAlert(alert, result.status, await checkpointFor($, result.status))
+  if (!live) await resync($, prior, result.status)
+  return live
+}
+
+/** Submits the model line once per PR, state, head and reason. The ledger entry is written before the submit. */
+const submitLine = async ($: EngineInterface, live: Alert): Promise<void> => {
+  const doc = await loadDoc($)
+  const key = alertKey(live)
+  if (wasSent(doc, key)) return
+  await saveDoc($, markSent(doc, key))
+  await $.prompt.submit({ text: reportLine(live) })
+}
+
+/**
+ * Tells Dave and, for an alert the model must act on, the model. Never merges. CLOSED, DRAFT and READY toast at once. LIMITED, PROOF,
+ * STALLED and REVIEWED wait for the re-probe, so a PR that was merged or fixed meanwhile gets neither a toast nor a line.
+ */
+const deliver = async ($: EngineInterface, alert: Alert, prior: PrWatch): Promise<void> => {
+  if (alert.state === 'CLOSED' || alert.state === 'DRAFT' || alert.state === 'READY') {
+    $.ui.toast(toastText(alert), { timeoutMs: 10_000 })
+    if (alert.state === 'READY' && alert.whenReady && (await confirmLand($, alert.pr))) {
       const out = await landNow($, alert.pr, `the READY alert for #${alert.pr}`)
       $.ui.toast(`Land #${alert.pr}: ${lastLine(out)}`, { timeoutMs: 15_000 })
-      return
     }
+    return
   }
-  // READY needs no model turn, and quiet mode wants none: the toast is the alert.
-  if (alert.state === 'READY' || (await isQuiet($))) return
-  const line = await currentLine($, alert)
-  if (line !== null) await $.prompt.submit({ text: line })
+  const live = await liveAlert($, alert, prior)
+  if (!live) return
+  $.ui.toast(toastText(live), { timeoutMs: 10_000 })
+  // Quiet mode wants no model turn: the toast is the alert.
+  if (!(await isQuiet($))) await submitLine($, live)
 }
 
 const isAsk = (value: unknown): value is CheckpointAsk => {
@@ -306,7 +327,7 @@ const check = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   if (before.prs.length === 0 || now + BACKOFF_SLACK_MS < before.backoffUntil) return
   const results: Results = new Map()
-  const alerts: Alert[] = []
+  const alerts: { alert: Alert; prior: PrWatch }[] = []
   const notices: string[] = []
   let failure: string | null = null
   for (const watch of before.prs) {
@@ -324,7 +345,7 @@ const check = async ($: EngineInterface): Promise<void> => {
     }
     const settled = settle(watch, result.status, now, await checkpointFor($, result.status))
     results.set(watch.pr, settled.watch)
-    if (settled.alert) alerts.push(settled.alert)
+    if (settled.alert) alerts.push({ alert: settled.alert, prior: watch })
     await asking($, result.status, now).catch(() => undefined)
   }
   const fresh = await loadDoc($)
@@ -334,7 +355,7 @@ const check = async ($: EngineInterface): Promise<void> => {
     $.ui.toast(`PR watcher: status check failed (${failure}). Trying again in 15 minutes.`, { timeoutMs: 10_000 })
   }
   for (const notice of notices) $.ui.toast(notice, { timeoutMs: 10_000 })
-  for (const alert of alerts) await deliver($, alert)
+  for (const { alert, prior } of alerts) await deliver($, alert, prior)
 }
 
 const arm = ($: EngineInterface): void => {

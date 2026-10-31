@@ -1600,6 +1600,10 @@ describe('pr-loop checkpoint states', () => {
 // SP8  a rate limited or skipped request is not a round: the line and the round ask count finished reviews
 // SP9  a request still in flight (no limit) still counts as a round
 // SP10 round 0 gives opening-review advice, never the cr-fix carry
+// SP7c the ledger keys a LIMITED line on its cause: a CI line that changes between two LIMITED reads is not a new reason
+// SP10c the carry reason at round 0 still gives no cr-fix advice
+// SP11 a dropped line leaves the watch as the re-probe reads it: LIMITED, PROOF and the REVIEWED alert still come when they hold again
+// SP12 a toast waits for the re-probe: a stale PROOF, LIMITED or STALLED toast is dropped with its line
 describe('pr-loop stale prompts', () => {
   const CR_ROUTE = { required: ['coderabbit'], held: null, source: 'labels' }
   const GREEN_OLD = 'PR body proof: GREEN names commit 1111111, not the head aaaaaaa. Run the check on the head and update the GREEN line'
@@ -1753,5 +1757,84 @@ describe('pr-loop stale prompts', () => {
     const line = seen.submits[0] as string
     expect(line).toMatch(/opening review/)
     expect(line).not.toContain('cr-fix.mjs')
+  })
+
+  test('SP7c a CI line that changes between two LIMITED reads does not make the rate limit line a new reason', async ($, on) => {
+    const building = status(8, { rateLimited: true, reasons: ['Greptile did not finish a review of the head (completed/neutral)', 'check "build" is in_progress/null'] })
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [building, building, status(8), status(8), LIMITED(8)] } })
+    await start($)
+    for (let i = 0; i < 4; i += 1) await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
+  test('SP10c the carry reason at round 0 gives opening-review advice and no cr-fix advice', async ($, on) => {
+    const carry = 'no CodeRabbit PR-bot review of the head commit; the earlier review carries once the PR body has a clean CLI fix review line. Run node scripts/github/cr-fix.mjs --pr 7'
+    const kept = { ...watching(7), 'checkpoint:pr:7': record() }
+    const limited = RATE_LIMITED({ coderabbitRounds: 0, coderabbitReviews: 0, reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count)', carry] })
+    const { clock, seen } = cw(on, { store: kept, script: { 7: [limited] } })
+    await start($)
+    await clock.advance(TICK)
+    const line = seen.submits[0] as string
+    expect(line).toMatch(/opening review/)
+    expect(line).not.toContain('cr-fix.mjs')
+  })
+
+  test('SP11 a LIMITED line dropped at delivery does not stop the next LIMITED read from alerting', async ($, on) => {
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), status(8), LIMITED(8), LIMITED(8)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('no finished review')
+  })
+
+  test('SP11b a PROOF line dropped at delivery does not stop the same head alerting when the proof breaks again', async ($, on) => {
+    const wrong = status(8, { reasons: [GREEN_OLD] })
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [wrong, status(8, { reasons: [] }), wrong, wrong] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('GREEN names commit 1111111')
+  })
+
+  test('SP11c a line dropped for a state that needs its own line does not swallow that line', async ($, on) => {
+    const reviewed = status(8, { reviewedHead: true, unresolved: 2, reasons: ['2 review thread(s) unresolved'] })
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), reviewed, reviewed, reviewed] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('unresolved')
+  })
+
+  test('SP12 the toast of a PROOF alert is dropped with its line when the proof is fixed before delivery', async ($, on) => {
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [status(8, { reasons: [GREEN_OLD] }), status(8, { reasons: [] })] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(seen.toasts).toEqual([])
+  })
+
+  test('SP12b the toast of a LIMITED alert is dropped when the PR merged before delivery', async ($, on) => {
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), MERGED(8)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(seen.toasts).toEqual([])
+  })
+
+  test('SP12c the toast stays when the alert still holds, and when the re-probe fails', async ($, on) => {
+    const { clock, seen } = world(on, { store: watching(8), script: { 8: [LIMITED(8), LIMITED(8), status(8), status(8), LIMITED(8), 'error'] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.toasts.length).toBe(1)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.toasts.length).toBe(2)
   })
 })

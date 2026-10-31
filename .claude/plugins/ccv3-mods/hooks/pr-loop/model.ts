@@ -301,9 +301,15 @@ export const refreshAlert = (alert: Alert, fresh: PrStatus, cp: AlertCheckpoint 
   return alertOf(alert.pr, alert.whenReady, alert.state, fresh, cp)
 }
 
-/** One model line per PR, state, head and reason. A REVIEWED line is keyed by the bots that reviewed, a PROOF line by its problems. */
+/**
+ * The lines of review-status.mjs that report a CI run or the merge state (`check "x" is in_progress/null`, `status "x" is pending`,
+ * `mergeable_state is "blocked"`). They change as CI runs and say nothing about why the review is missing, so they stay out of the key.
+ */
+const CI_REASON = /^(?:(?:status|check) ".*" is |mergeable_state is )/
+
+/** One model line per PR, state, head and reason. A REVIEWED line is keyed by the bots that reviewed, a PROOF line by its problems, LIMITED and STALLED by their reasons without the CI lines. */
 export const alertKey = (alert: Alert): string => {
-  const detail = alert.state === 'REVIEWED' ? [...(alert.reviewedBy ?? [])].sort() : alert.state === 'PROOF' ? alert.proofProblems ?? [] : alert.reasons
+  const detail = alert.state === 'REVIEWED' ? [...(alert.reviewedBy ?? [])].sort() : alert.state === 'PROOF' ? alert.proofProblems ?? [] : alert.reasons.filter(reason => !CI_REASON.test(reason))
   return [alert.pr, alert.state, alert.head, detail.join('|')].join(' ')
 }
 
