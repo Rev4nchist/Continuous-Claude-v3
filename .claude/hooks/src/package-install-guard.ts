@@ -27,7 +27,7 @@ import {
   parseExecutable, executableView, normalizeEscapes, wrapperPayloadsFromSegments,
 } from './shared/destructive-classifier.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
-import { logGuardDecision } from './shared/guard-log.js';
+import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import maliciousPackages from './shared/malicious-packages.json';
 
 // ---------------------------------------------------------------------------
@@ -731,7 +731,8 @@ async function main() {
   let input: PreToolUseInput;
   try {
     input = JSON.parse(readStdin());
-  } catch {
+  } catch (err) {
+    logGuardError('package-install-guard', err);
     outputContinue();
     return;
   }
@@ -781,8 +782,9 @@ async function main() {
 // by vitest or other test runners. Vitest sets VITEST=true and
 // VITEST_WORKER_ID in the environment.
 if (!process.env.VITEST) {
-  main().catch(() => {
-    // Fail-open: if the hook itself crashes, allow the command
+  main().catch((err) => {
+    // Fail-open: if the hook itself crashes, allow the command. Log the crash first.
+    logGuardError('package-install-guard', err);
     outputContinue();
   });
 }

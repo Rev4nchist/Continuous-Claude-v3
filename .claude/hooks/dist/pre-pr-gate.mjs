@@ -4,8 +4,8 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/pre-pr-gate.ts
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2 } from "fs";
-import { dirname as dirname2, isAbsolute, join as join3, resolve } from "path";
+import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2, statSync } from "fs";
+import { dirname as dirname2, isAbsolute, join as join3, posix, resolve, win32 } from "path";
 
 // src/pr-opened-review-loop.ts
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
@@ -324,6 +324,37 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
   } catch {
   }
 }
+var ERROR_FIELD_CHARS = 200;
+function oneLine(text) {
+  return maskSecrets(text).replace(/\s+/g, " ").trim().slice(0, ERROR_FIELD_CHARS);
+}
+function errorMessage(err) {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : safeJson(err);
+  return oneLine(String(raw).split(/\r?\n/)[0]);
+}
+function safeJson(value) {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+function firstFrame(err) {
+  const stack = err instanceof Error ? err.stack : void 0;
+  const frame = typeof stack === "string" ? stack.split(/\r?\n/).find((l) => /^\s*at\s/.test(l)) : void 0;
+  return frame ? oneLine(frame) : "";
+}
+function logGuardError(hook, err, opts = {}) {
+  try {
+    const env = opts.env ?? process.env;
+    if (!shouldWrite(env)) return;
+    const entry = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook, kind: "error", message: errorMessage(err), stack: firstFrame(err) };
+    const path = guardLogPath(env);
+    mkdirSync2(dirname(path), { recursive: true, mode: 448 });
+    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+  } catch {
+  }
+}
 
 // src/pre-pr-gate.ts
 var STAMP_REL = ".claude/cache/pre-pr/stamp.json";
@@ -606,6 +637,13 @@ The stamp comes from: ${RUN}`;
       logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
       return "{}";
     }
+    if (err?.code === GIT_NOT_FOUND) {
+      logGuardDecision(HOOK, input, "deny", "git-not-found", { command });
+      const why = `BLOCKED (pre-pr-gate): ${message.slice(0, 400)}
+
+The gate needs git to check ${create ? "the pre-PR stamp" : "the PR checkpoint rules"}.`;
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
+    }
     logGuardDecision(HOOK, input, "deny", "verify-error", { command });
     const what = create ? "the pre-PR stamp" : "the PR checkpoint rules";
     const reason = `BLOCKED (pre-pr-gate): could not verify ${what} (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.
@@ -614,12 +652,57 @@ The stamp comes from: ${RUN}`;
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
   }
 }
-function makeGit(spawn = spawnSync, env = process.env) {
+var GIT_NOT_FOUND = "GIT_NOT_FOUND";
+var GIT_FIX = "Fix: install Git for Windows (https://git-scm.com/download/win) or add its cmd folder (for example C:\\Program Files\\Git\\cmd) to PATH, then run the command again.";
+function gitNotFound(detail) {
+  return Object.assign(new Error(`git not found on PATH: ${detail}. ${GIT_FIX}`), { code: GIT_NOT_FOUND });
+}
+function runnableFile(path, platform = process.platform) {
+  try {
+    if (!statSync(path).isFile()) return false;
+    if (platform !== "win32") accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveGit(env = process.env, exists, platform = process.platform) {
+  exists ??= (path) => runnableFile(path, platform);
+  const win = platform === "win32";
+  const p = win ? win32 : posix;
+  const exe = win ? "git.exe" : "git";
+  const dirs = (env.PATH ?? env.Path ?? "").split(p.delimiter).map((d) => d.replace(/^"|"$/g, "")).filter(Boolean);
+  const candidates = dirs.map((d) => p.join(d, exe));
+  if (win) {
+    const roots = [env.ProgramFiles, env["ProgramFiles(x86)"], "C:\\Program Files", "C:\\Program Files (x86)"].filter((r) => !!r);
+    for (const root of roots) candidates.push(p.join(root, "Git", "cmd", exe), p.join(root, "Git", "bin", exe));
+    if (env.LOCALAPPDATA) candidates.push(p.join(env.LOCALAPPDATA, "Programs", "Git", "cmd", exe));
+  } else {
+    candidates.push("/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git");
+  }
+  return candidates.find((c) => {
+    try {
+      return exists(c);
+    } catch {
+      return false;
+    }
+  }) ?? null;
+}
+function makeGit(spawn = spawnSync, env = process.env, gitPath) {
   const asked = Number(env.PRE_PR_GATE_GIT_TIMEOUT_MS);
   const timeout = Number.isFinite(asked) && asked > GIT_TIMEOUT_MS ? asked : GIT_TIMEOUT_MS;
+  let resolved = gitPath;
   return (cwd, args) => {
-    const r = spawn("git", args, { cwd, encoding: "utf8", timeout, windowsHide: true });
-    if (r.error) throw r.error;
+    if (resolved === void 0) resolved = resolveGit(env);
+    if (resolved === null) throw gitNotFound("no git program in PATH or in the standard install folders");
+    const r = spawn(resolved, args, { cwd, encoding: "utf8", timeout, windowsHide: true });
+    if (r.error) {
+      if (r.error.code === "ENOENT") {
+        if (!existsSync2(resolved)) throw gitNotFound(r.error.message);
+        if (!existsSync2(cwd)) throw new Error(`directory not found: ${cwd}`);
+      }
+      throw r.error;
+    }
     return { status: r.status ?? 1, stdout: r.stdout ?? "" };
   };
 }
@@ -649,12 +732,14 @@ async function main2() {
   console.log(handle(Buffer.concat(chunks).toString("utf-8"), realDeps()));
 }
 if (!process.env.VITEST) {
-  main2().catch(() => {
+  main2().catch((err) => {
+    logGuardError(HOOK, err);
     console.log("{}");
   });
 }
 export {
   CCV3_REPO,
+  GIT_NOT_FOUND,
   GIT_TIMEOUT_MS,
   MAX_STAMP_AGE_MS,
   PATHWAY_REL,
@@ -666,5 +751,7 @@ export {
   headBranchOf,
   isCcv3Remote,
   makeGit,
-  namedRepo
+  namedRepo,
+  resolveGit,
+  runnableFile
 };

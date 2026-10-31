@@ -10,6 +10,9 @@
  * 'warn' = a guard rule in warn mode let a command through and recorded the rule that would have denied it (pre-pr-gate, PR B).
  * This log records the hooks this process runs.
  *
+ * A crash line is different: {ts, hook, kind:'error', message, stack}. It has no `decision`. A guard writes it
+ * (logGuardError) in the catch that turns a crash into its allow or deny output.
+ *
  * Secrets: the log never holds a raw command. `reason` is a rule name, and `command` is at most
  * the first 80 characters of the command after obvious tokens are masked. The mask runs on the
  * whole command BEFORE the cut, so a token that straddles character 80 cannot leak its head.
@@ -116,6 +119,48 @@ export function logGuardDecision(
     if (typeof opts.command === 'string' && opts.command) entry.command = commandHead(opts.command);
     const path = guardLogPath(env);
     // Owner-only. The mode applies when the directory or file is created; Windows mostly ignores it.
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    appendFileSync(path, JSON.stringify(entry) + '\n', { mode: 0o600 });
+  } catch { /* logging never blocks a tool call */ }
+}
+
+const ERROR_FIELD_CHARS = 200;
+
+/** One line of text, secrets masked, cut to a safe length. Pure. */
+function oneLine(text: string): string {
+  return maskSecrets(text).replace(/\s+/g, ' ').trim().slice(0, ERROR_FIELD_CHARS);
+}
+
+/** The message of any thrown value, first line only. A value that is not an Error is turned into text. */
+function errorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : safeJson(err);
+  return oneLine(String(raw).split(/\r?\n/)[0]);
+}
+
+function safeJson(value: unknown): string {
+  try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
+}
+
+/** The first `at ...` line of the stack, or an empty string when the value has no stack. */
+function firstFrame(err: unknown): string {
+  const stack = err instanceof Error ? err.stack : undefined;
+  const frame = typeof stack === 'string' ? stack.split(/\r?\n/).find((l) => /^\s*at\s/.test(l)) : undefined;
+  return frame ? oneLine(frame) : '';
+}
+
+/**
+ * Append one crash line: {ts, hook, kind:'error', message, stack}. A guard calls this in the catch
+ * that turns a crash into allow (or deny), so a crashing guard is not the same as a guard that
+ * allows. `message` is the first line of the error with secrets masked. `stack` is the first frame.
+ * It has no `decision` field. Same file, same path rules and same test gate as logGuardDecision.
+ * It never throws.
+ */
+export function logGuardError(hook: string, err: unknown, opts: { env?: NodeJS.ProcessEnv } = {}): void {
+  try {
+    const env = opts.env ?? process.env;
+    if (!shouldWrite(env)) return;
+    const entry = { ts: new Date().toISOString(), hook, kind: 'error', message: errorMessage(err), stack: firstFrame(err) };
+    const path = guardLogPath(env);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     appendFileSync(path, JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch { /* logging never blocks a tool call */ }
