@@ -1245,16 +1245,20 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     coderabbitRetryMinutes = cr.retryMinutes;
     if (cr.rateLimited) {
       reasons.push('CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)');
-    } else if (cr.limited) {
-      reasons.push(`CodeRabbit ${cr.notice === 'skipped' ? 'skipped the review of' : 'review failed on'} the head (PR-bot review did not run; CLI/plugin output does not count)`);
     } else if (!cr.reviewedHead) {
       // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
-      // A Minor-only review of an earlier head plus a small push stands for the head (the carry); every other case asks for a review.
-      const carryResult = carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body: pull.body });
+      // A Minor-only review of an earlier head plus a small push stands for the head (the carry). The carry runs BEFORE a skip
+      // notice is read: a "Review skipped" notice blocks READY only when no carry applies (live PRs #230 and #231). A "Review failed"
+      // notice never carries: the app tried the head and broke, so an earlier review is not the answer.
+      const carryResult = cr.notice === 'failed' ? { carried: null, blockers: [], cliOnly: false }
+        : carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body: pull.body });
       coderabbitCarried = carryResult.carried;
       // Only a carry whose inputs were read has blockers to show; a draft or unrouted PR never reads them.
       coderabbitCarryBlockers = carry ? carryResult.blockers : [];
-      if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
+      // A carried review is not a missing one: the skip notice then is no limit on this head.
+      if (coderabbitCarried !== null) coderabbitLimited = false;
+      else if (cr.limited) reasons.push(`CodeRabbit ${cr.notice === 'skipped' ? 'skipped the review of' : 'review failed on'} the head (PR-bot review did not run; CLI/plugin output does not count)`);
+      else reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
     }
     if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);
   }
@@ -1274,6 +1278,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     // N from "Outside diff range comments (N)" in the newest CodeRabbit review of the head. 0 when none. Blocks READY until handled.
     coderabbitOutsideDiff: outsideDiff,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
+    // false when a carry stands for the skipped head (coderabbitCarried is set): that review is not missing.
     coderabbitLimited,
     // true when that missing review is a rate limit or review limit (not a skip or a failure). null when unlabelled.
     // coderabbitRetryMinutes: CodeRabbit's own "next review in N minutes" figure from the notice, else null.
@@ -1337,7 +1342,9 @@ function readCarry({ pull, reviews, comments, commentEdits }) {
 
 /** Does this result want the carry? CodeRabbit is required, did not review the head and did not rate limit, skip or fail. */
 // A draft or an unrouted PR can never carry (scopeBlockers), so it pays for no read.
-const wantsCarry = (r) => r.routing.required.includes('coderabbit') && r.coderabbitReviewedHead === false && r.coderabbitLimited === false
+// A skipped head wants it too (live PRs #230, #231): coderabbitLimited is true for a skip, a failure and a rate limit, and only the
+// rate limit is excluded here. evaluate() itself never carries a failed head.
+const wantsCarry = (r) => r.routing.required.includes('coderabbit') && r.coderabbitReviewedHead === false && r.coderabbitRateLimited !== true
   && !r.isDraft && !r.routing.unverified;
 
 /**
