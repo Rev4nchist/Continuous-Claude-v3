@@ -3052,3 +3052,141 @@ test('ID-H2: an id inside a longer hex string is not named; the exact id, alone 
   assert.equal(odEval([odLive(F193)], idList(...trailing)).ready, false, 'a longer hex run after the id');
   assert.equal(odEval([odLive(F193)], idList(...IDS_193.map((id) => `see (${id}), fixed`))).ready, true);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Lane review-status-bugs (2026-10-31). Two bugs, replayed from real PRs under fixtures/replay/ (capture.mjs, read-only gh).
+// Ways it can fail, one test each:
+//   BUG 1: a "Review skipped" notice on the head returned before the carry ran, so a Minor-only review never carried
+//     a skipped head with a valid carry (synthetic)                                              -> RB1
+//     the real PR #230 and #231 heads, through the CLI --fixture path (wantsCarry too)           -> RB2, RB3
+//     the carry fails (a Major inline, no CLI line): the notice still blocks, with its reason    -> RB4, RB5
+//     the real PR #230 body as pasted (prose after "clean"): the carry is tried and says why     -> RB6
+//     a "Review failed" or rate-limit notice must not carry                                       -> RB7
+//   BUG 2: CodeRabbit rounds were ordered by the summary comment's updated_at, which moves on every edit
+//     a clean summary of an older commit, edited after a newer review object (synthetic)         -> RB8
+//     a clean summary of a newer commit, edited before an older review object (synthetic)        -> RB9
+//     two review objects, the older commit's delivered last (real PR #225 commits, real reviews) -> RB10
+//     a commit missing from the list, or one commit twice, falls back to the stamp                -> RB11
+// ---------------------------------------------------------------------------------------------
+const replayPath = (n) => new URL(`./fixtures/replay/pr${n}.json`, import.meta.url);
+const replay = (n) => JSON.parse(readFileSync(replayPath(n), 'utf8'));
+// The merged PR as it stood while open: only the PR state changes, so the reasons left are the review reasons.
+const asOpen = (f) => ({ ...f, pull: { ...f.pull, state: 'open', merged: false, draft: false, mergeable_state: 'clean' } });
+// cr-fix.mjs prints a bare `CLI fix review: <from>..<head> clean` (CF17); the live bodies of #230 and #231 have prose after "clean".
+const bareCliLine = (f) => ({ ...f, pull: { ...f.pull, body: f.pull.body.replace(/(CLI fix review: \S+ clean)[^\n]*/g, '$1') } });
+/** The real CLI path (--fixture runs evaluateWithCarry, so the wantsCarry gate counts). The fixture carries no matchGlob; the script imports it. */
+function cliResult(inputs) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rs-rb-'));
+  try {
+    const file = path.join(dir, 'in.json');
+    writeFileSync(file, JSON.stringify(inputs));
+    const script = fileURLToPath(new URL('./review-status.mjs', import.meta.url));
+    const out = spawnSync(process.execPath, [script, '--fixture', file, '--json'], { encoding: 'utf8' });
+    return JSON.parse(out.stdout);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+const SKIP_REASON = /CodeRabbit skipped the review of the head/;
+// A CodeRabbit notice comment for HEAD (it names the head in a Commit link, as the live notices do), dated after the head commit.
+const rbNotice = (heading, id = 11) => ({
+  id, user: CR_BOT, created_at: '2026-10-26T01:00:00Z', updated_at: '2026-10-26T01:00:00Z',
+  body: `${SUMMARY_MARKER}\n> ## ${heading}\n> Auto reviews are disabled.\n> - **Commit**: [${HEAD.slice(0, 7)}](<https://github.com/o/r/commit/${HEAD}>)\n`,
+});
+const withNotice = (heading, over = {}) => carryEval({ evalOver: { comments: [rbNotice(heading)], headCommittedAt: HEAD_DATE, ...over.eval }, ...over.carry });
+
+test('RB1: a skipped head with a Minor-only review, a small push and a clean CLI line carries and is READY', () => {
+  const r = withNotice('Review skipped');
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.deepEqual(r.coderabbitCarried, { from: OLD, deltaLines: 12 });
+  assert.equal(r.coderabbitLimited, false, 'a carried review is not a missing one');
+  assert.ok(!r.reasons.some((x) => SKIP_REASON.test(x)), r.reasons.join('; '));
+});
+
+for (const n of [230, 231]) {
+  test(`RB${n === 230 ? 2 : 3}: the real PR #${n} head (CodeRabbit skipped it) carries the Minor-only review through the CLI path`, () => {
+    const f = bareCliLine(asOpen(replay(n)));
+    const r = cliResult(f);
+    assert.equal(r.coderabbitCarryBlockers.length, 0, r.coderabbitCarryBlockers.join('; '));
+    assert.equal(r.coderabbitCarried?.from, f.reviews.find((x) => x.user.login === 'coderabbitai[bot]').commit_id);
+    assert.ok(!r.reasons.some((x) => SKIP_REASON.test(x)), r.reasons.join('; '));
+    assert.equal(r.ready, true, r.reasons.join('; '));
+  });
+}
+
+test('RB4: a skipped head whose carry fails (a Major inline comment) stays NOT READY with the skip reason', () => {
+  const r = withNotice('Review skipped', { carry: { carry: carryOf({ reviewComments: [{ id: 1, body: MAJOR_206 }] }) } });
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+  assert.equal(r.coderabbitLimited, true);
+  assert.ok(r.reasons.some((x) => SKIP_REASON.test(x)), r.reasons.join('; '));
+  assert.deepEqual(r.coderabbitCarryBlockers, ['an inline comment is major'], 'the carry was tried and says why it failed');
+});
+
+test('RB5: a skipped head with no CLI fix review line stays NOT READY with the skip reason, and names the missing line', () => {
+  const r = withNotice('Review skipped', { carry: { cli: null } });
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.some((x) => SKIP_REASON.test(x)), r.reasons.join('; '));
+  assert.ok(r.coderabbitCarryBlockers.some((b) => /CLI fix review/.test(b)), r.coderabbitCarryBlockers.join('; '));
+});
+
+test('RB6: the real PR #230 body as pasted (prose after "clean") does not carry; the blocker names the CLI line, the skip reason stays', () => {
+  const r = cliResult(asOpen(replay(230)));
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+  assert.ok(r.reasons.some((x) => SKIP_REASON.test(x)), r.reasons.join('; '));
+  assert.ok(r.coderabbitCarryBlockers.some((b) => /CLI fix review of a57453f\.\.e37bed8/.test(b)), r.coderabbitCarryBlockers.join('; '));
+});
+
+test('RB7: a "Review failed" notice and a rate-limit notice never carry, whatever the earlier review says', () => {
+  const failed = withNotice('Review failed');
+  assert.equal(failed.ready, false);
+  assert.equal(failed.coderabbitCarried, null);
+  assert.ok(failed.reasons.some((x) => /review failed on the head/.test(x)), failed.reasons.join('; '));
+  const limited = withNotice('Rate limit exceeded');
+  assert.equal(limited.ready, false);
+  assert.equal(limited.coderabbitCarried, null);
+  assert.ok(limited.reasons.some((x) => /CodeRabbit rate limited/.test(x)), limited.reasons.join('; '));
+});
+
+// Bug 2. Commit order: X is the oldest commit, OLD the next, HEAD the newest. The PR commit list is oldest first.
+const X_COMMIT = 'd'.repeat(40);
+const ORDER = [X_COMMIT, OLD, HEAD].map((sha) => ({ sha }));
+const rbRoundOf = (over = {}) => RS.newestCodeRabbitRound({ head: HEAD, ...over });
+
+test('RB8: a clean summary of an OLDER commit, edited after a newer review object, does not become the newest round', () => {
+  const summary = CR_SUMMARY_ONLY(X_COMMIT, { at: '2026-10-29T12:00:00Z' }); // edited after the review below
+  const reviews = [{ ...CR_OLD_REVIEW, submitted_at: '2026-10-28T10:00:00Z' }]; // OLD is the newer commit
+  const input = { reviews, comments: [summary], commentEdits: { 800: [] } };
+  assert.equal(rbRoundOf({ ...input, commits: ORDER }).commit_id, OLD, 'the review of the newer commit wins');
+  assert.equal(rbRoundOf({ ...input, commits: ORDER }).summaryOnly, undefined);
+  const r = carryEval({ evalOver: { reviews, comments: [summary], commentEdits: { 800: [] }, commits: ORDER } });
+  assert.deepEqual(r.coderabbitCarried, { from: OLD, deltaLines: 12 }, r.reasons.join('; '));
+});
+
+test('RB9: a clean summary of a NEWER commit, edited before an older review object, is the newest round', () => {
+  const summary = CR_SUMMARY_ONLY(OLD, { at: '2026-10-27T12:00:00Z' }); // edited before the review below
+  const reviews = [{ ...CR_OLD_REVIEW, commit_id: X_COMMIT, submitted_at: '2026-10-28T10:00:00Z' }]; // X is the older commit, delivered last
+  const newest = rbRoundOf({ reviews, comments: [summary], commentEdits: { 800: [] }, commits: ORDER });
+  assert.equal(newest.commit_id, OLD);
+  assert.equal(newest.summaryOnly, true);
+});
+
+test('RB10: two review objects, the older commit delivered last: the review of the newer commit is the newest (real PR #225 commits and reviews)', () => {
+  const f = replay(225);
+  const bots = f.reviews.filter((x) => x.user.login === 'coderabbitai[bot]' && x.body.trim() !== '');
+  assert.equal(bots.length, 3, 'PR #225 has three CodeRabbit rounds');
+  const newestCommit = bots[bots.length - 1].commit_id;
+  // Deliver the review of the newest commit FIRST: only the commit order can still name it.
+  const late = bots.map((x, k) => ({ ...x, submitted_at: `2026-10-30T1${bots.length - k}:00:00Z` }));
+  assert.equal(RS.newestCodeRabbitReview(late).commit_id, bots[0].commit_id, 'by stamp alone the oldest commit looks newest');
+  assert.equal(RS.newestCodeRabbitReview(late, f.commits).commit_id, newestCommit, 'by commit order the newest commit wins');
+});
+
+test('RB11: a commit missing from the list falls back to the stamp, and one commit twice is ordered by its stamp', () => {
+  const a = { ...CR_OLD_REVIEW, id: 1, commit_id: OLD, submitted_at: '2026-10-28T10:00:00Z' };
+  const b = { ...CR_OLD_REVIEW, id: 2, commit_id: X_COMMIT, submitted_at: '2026-10-28T11:00:00Z' };
+  assert.equal(RS.newestCodeRabbitReview([a, b], []).id, 2, 'no list: the later stamp');
+  assert.equal(RS.newestCodeRabbitReview([a, b], [{ sha: OLD }]).id, 2, 'one commit unknown: the later stamp');
+  assert.equal(RS.newestCodeRabbitReview([b, a]).id, 2, 'no list given: the later stamp');
+  const twice = [{ ...a, id: 3, submitted_at: '2026-10-28T12:00:00Z' }, a];
+  assert.equal(RS.newestCodeRabbitReview(twice, ORDER).id, 3, 'same commit: the later stamp breaks the tie');
+});
