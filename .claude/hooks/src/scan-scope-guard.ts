@@ -22,7 +22,7 @@
 
 import { readFileSync } from 'fs';
 import { outputContinue, outputDeny } from './shared/output.js';
-import { logGuardDecision } from './shared/guard-log.js';
+import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 
 interface PreToolUseInput {
   session_id: string;
@@ -91,7 +91,8 @@ function main(): void {
   let input: PreToolUseInput;
   try {
     input = JSON.parse(readFileSync(0, 'utf-8'));
-  } catch {
+  } catch (err) {
+    logGuardError('scan-scope-guard', err);
     outputContinue();
     return;
   }
@@ -125,7 +126,8 @@ function main(): void {
 if (!process.env.VITEST) {
   try {
     main();
-  } catch {
+  } catch (err) {
+    logGuardError('scan-scope-guard', err);
     outputContinue(); // fail-open: a guard crash must never block a tool call
   }
 }
