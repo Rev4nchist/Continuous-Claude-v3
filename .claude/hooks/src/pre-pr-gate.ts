@@ -40,7 +40,8 @@
  * a repos/<o>/<r>/ endpoint, a PR URL); the command is a self-confirm (repo-free; pr-checkpoint is CCv3-only); or the command runs in a CCv3
  * checkout (the cwd, or a cd target in the text: the same test the ready, label and non-draft rules use).
  * A readable config keeps its own value (false = warn). Any other command is unchanged.
- * An internal error while judging any gated shape denies in both modes (verify-error). A leading override logs `override`, not `warn`.
+ * An internal error while judging any gated shape denies in both modes (verify-error). A git that cannot be found denies with its own
+ * message (git-not-found: names the cause and the fix). A leading override logs `override`, not `warn`.
  * Accepted residual risks: GraphQL with the query text in a file (-F query=@file) shows no label or ready text;
  * `gh pr ready --undo` inside quotes is read as a ready (fail closed); a quoted -F "draft=true" is read as non-draft (fail closed);
  * a hand-written pathway.json (the Write tool) or an indirect script is accepted until the lock of spec section 3.6 (spike S2);
@@ -50,11 +51,11 @@
  */
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'fs';
-import { dirname, isAbsolute, join, resolve } from 'path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
-import { guardLogPath, logGuardDecision } from './shared/guard-log.js';
+import { guardLogPath, logGuardDecision, logGuardError } from './shared/guard-log.js';
 
 export { CCV3_REPO, namedRepo };
 export const STAMP_REL = '.claude/cache/pre-pr/stamp.json';
@@ -424,6 +425,12 @@ export function handle(raw: string, deps: Deps): string {
       logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
       return '{}';
     }
+    if ((err as { code?: string } | null)?.code === GIT_NOT_FOUND) {
+      // Name the cause and the fix. A generic "could not verify" text hides a missing git.
+      logGuardDecision(HOOK, input, 'deny', 'git-not-found', { command });
+      const why = `BLOCKED (pre-pr-gate): ${message.slice(0, 400)}\n\nThe gate needs git to check ${create ? 'the pre-PR stamp' : 'the PR checkpoint rules'}.`;
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } });
+    }
     logGuardDecision(HOOK, input, 'deny', 'verify-error', { command });
     const what = create ? 'the pre-PR stamp' : 'the PR checkpoint rules';
     const reason = `BLOCKED (pre-pr-gate): could not verify ${what} (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.\n\nThe stamp comes from: ${RUN}`;
@@ -433,14 +440,68 @@ export function handle(raw: string, deps: Deps): string {
 
 type SpawnFn = (cmd: string, args: string[], opts: Record<string, unknown>) => { status: number | null; stdout?: string | null; error?: Error };
 
-/** A git runner. A git exit code is a result. A timeout or a spawn error throws: the hook then fails open and logs. */
-export function makeGit(spawn: SpawnFn = spawnSync as unknown as SpawnFn, env: NodeJS.ProcessEnv = process.env): Deps['git'] {
+/** `code` of the error makeGit throws when no git program can be run. handle() reads it. */
+export const GIT_NOT_FOUND = 'GIT_NOT_FOUND';
+
+const GIT_FIX = 'Fix: install Git for Windows (https://git-scm.com/download/win) or add its cmd folder (for example C:\\Program Files\\Git\\cmd) to PATH, then run the command again.';
+
+function gitNotFound(detail: string): Error {
+  return Object.assign(new Error(`git not found on PATH: ${detail}. ${GIT_FIX}`), { code: GIT_NOT_FOUND });
+}
+
+/**
+ * The absolute path of a git program, or null. Looks in PATH first, then in the standard install
+ * places. The hook process can start with a PATH that has no git (the desktop app does this), so a
+ * bare `git` fails there with ENOENT. `exists` and `platform` are parameters so a test does not
+ * depend on this machine.
+ */
+export function resolveGit(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = existsSync,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const win = platform === 'win32';
+  const p = win ? win32 : posix;
+  const exe = win ? 'git.exe' : 'git';
+  const dirs = (env.PATH ?? env.Path ?? '').split(p.delimiter).map((d) => d.replace(/^"|"$/g, '')).filter(Boolean);
+  const candidates = dirs.map((d) => p.join(d, exe));
+  if (win) {
+    const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], 'C:\\Program Files', 'C:\\Program Files (x86)'].filter((r): r is string => !!r);
+    for (const root of roots) candidates.push(p.join(root, 'Git', 'cmd', exe), p.join(root, 'Git', 'bin', exe));
+    if (env.LOCALAPPDATA) candidates.push(p.join(env.LOCALAPPDATA, 'Programs', 'Git', 'cmd', exe));
+  } else {
+    candidates.push('/usr/bin/git', '/usr/local/bin/git', '/opt/homebrew/bin/git');
+  }
+  return candidates.find((c) => { try { return exists(c); } catch { return false; } }) ?? null;
+}
+
+/**
+ * A git runner. A git exit code is a result. A timeout throws. A git that cannot be found throws an
+ * error with code GIT_NOT_FOUND ("git not found on PATH: ... Fix: ..."). handle() turns any throw into a
+ * deny for a gated command (and an allow for any other). The gate fails closed by design (PR D).
+ * `gitPath` is resolved once, on the first call. A test passes a path, or null for "no git".
+ */
+export function makeGit(
+  spawn: SpawnFn = spawnSync as unknown as SpawnFn,
+  env: NodeJS.ProcessEnv = process.env,
+  gitPath?: string | null,
+): Deps['git'] {
   // PRE_PR_GATE_GIT_TIMEOUT_MS can only raise the limit: the end-to-end tests set it when the machine is busy.
   const asked = Number(env.PRE_PR_GATE_GIT_TIMEOUT_MS);
   const timeout = Number.isFinite(asked) && asked > GIT_TIMEOUT_MS ? asked : GIT_TIMEOUT_MS;
+  let resolved: string | null | undefined = gitPath;
   return (cwd, args) => {
-    const r = spawn('git', args, { cwd, encoding: 'utf8', timeout, windowsHide: true });
-    if (r.error) throw r.error;
+    if (resolved === undefined) resolved = resolveGit(env);
+    if (resolved === null) throw gitNotFound('no git program in PATH or in the standard install folders');
+    const r = spawn(resolved, args, { cwd, encoding: 'utf8', timeout, windowsHide: true });
+    if (r.error) {
+      if ((r.error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // spawn also fails with ENOENT when the cwd is missing. Name the real cause.
+        if (!existsSync(resolved)) throw gitNotFound(r.error.message);
+        if (!existsSync(cwd)) throw new Error(`directory not found: ${cwd}`);
+      }
+      throw r.error;
+    }
     return { status: r.status ?? 1, stdout: r.stdout ?? '' };
   };
 }
@@ -467,5 +528,5 @@ async function main(): Promise<void> {
 
 // Auto-run only as a hook; VITEST imports the pure functions above.
 if (!process.env.VITEST) {
-  main().catch(() => { console.log('{}'); });
+  main().catch((err) => { logGuardError(HOOK, err); console.log('{}'); });
 }

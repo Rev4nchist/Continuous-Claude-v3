@@ -57,7 +57,7 @@ import {
   normalizeGitGlobalOptions,
 } from './shared/destructive-classifier.js';
 import { isUnattended } from './shared/unattended.js';
-import { logGuardDecision } from './shared/guard-log.js';
+import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 
 // Re-exported so existing imports (and the test file) keep working.
 export { classifyDestructive, stripQuotedStrings, parseExecutable, extractShellWrapperPayloads, normalizeGitGlobalOptions };
@@ -133,7 +133,8 @@ async function main(): Promise<void> {
   try {
     const raw = Buffer.concat(chunks).toString('utf-8').trim();
     if (raw) input = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    logGuardError(HOOK, err);
     console.log('{}'); // fail-open on malformed input
     return;
   }
@@ -163,7 +164,8 @@ async function main(): Promise<void> {
 
 // Auto-run only as a hook; VITEST imports the pure functions above.
 if (!process.env.VITEST) {
-  main().catch(() => {
+  main().catch((err) => {
+    logGuardError(HOOK, err);
     console.log('{}'); // fail-open: a guard crash must never brick Bash
   });
 }
