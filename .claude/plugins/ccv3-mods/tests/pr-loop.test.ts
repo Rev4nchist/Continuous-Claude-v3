@@ -309,6 +309,17 @@ describe('pr-loop watcher', () => {
     expect((stored(store) as { sent?: string[] } | undefined)?.sent ?? []).toEqual([])
   })
 
+  test('W32 a rejected submit does not stop the other alerts, and its own alert comes back at the next check', async ($, on) => {
+    const { clock, seen } = world(on, { store: seed([{ pr: 6 }, { pr: 7 }]), script: { 6: [LIMITED(6)], 7: [LIMITED(7)] }, submitFails: 1 })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(2)
+    expect(seen.submits.some(text => text.includes('#6'))).toBe(true)
+    expect(seen.submits.some(text => text.includes('#7'))).toBe(true)
+  })
+
   // P3b: Greptile ends its check `neutral` when a newer push superseded it, and `failure` when it reviewed below the bar.
   test('W28 a Greptile review a push cancelled says cancelled, not rate limited or "no finished review"', async ($, on) => {
     const cancelled = status(6, { rateLimited: true, reasons: ['Greptile review of the head was cancelled (superseded by a push); wait for the review of the new head'] })

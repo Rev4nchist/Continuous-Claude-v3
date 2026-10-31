@@ -1434,6 +1434,16 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
   })
 
+  test('G12 a new checkpoint record drops the queued asks of the old record, so an old Yes cannot recreate a grant', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
+    await start($)
+    await w.clock.advance(TICK)
+    expect(asksOf(w.store).length).toBe(1)
+    await slash($, '7 none --body pr-body.md')
+    expect(asksOf(w.store)).toEqual([])
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+  })
+
   test('G5 a /pathway grant drops the queued round ask it covers, so a later No cannot override the grant', async ($, on) => {
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
     await start($)
