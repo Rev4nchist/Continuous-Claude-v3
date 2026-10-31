@@ -537,6 +537,17 @@ test('an --out file that cannot be written exits 2 and says so, after the check 
   assert.match(r.lines.at(-1), /^harness: /);
 });
 
+test('a failed --json artifact write still writes --out, then exits 2', () => {
+  // The scheduled wrapper passes both. latest.json feeds the session-start line, so it must not depend on the repo cache.
+  const fx = fixture();
+  put(join(fx.repo, '.claude', 'cache'), 'a file, not a dir');
+  const out = join(fx.root, 'latest.json');
+  const r = run(fx, ['--json', '--out', out]);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /cannot write/);
+  assert.ok(existsSync(out), `--out was skipped after the --json write failed\n${r.stderr}`);
+});
+
 // ---- output ----
 test('--json writes the artifact under the repo; a plain run writes nothing', () => {
   const fx = fixture();

@@ -437,9 +437,11 @@ const defaultArtifact = (o) => join(o.repo, '.claude', 'cache', 'e2e', `${localD
 /** Writes the --json and --out files. A write that fails is reported and returns false: the caller exits 2. */
 function writeArtifacts(o, checks, summary) {
   const files = [o.json && defaultArtifact(o), o.out].filter(Boolean);
-  return files.every((file) => {
+  // Try every file: a failed repo artifact must not skip --out, which feeds the session-start line.
+  const ok = files.map((file) => {
     try { console.error(`artifact: ${writeArtifact(file, o, checks, summary)}`); return true; } catch (err) { console.error(`cannot write ${file}: ${msg(err)}`); return false; }
   });
+  return ok.every(Boolean);
 }
 
 function main() {
