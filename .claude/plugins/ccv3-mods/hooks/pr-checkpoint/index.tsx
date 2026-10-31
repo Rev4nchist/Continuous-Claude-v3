@@ -50,6 +50,9 @@ import {
   resolveBody,
   stateArgv,
   viewArgv,
+  WORKTREE_ARGV,
+  samePath,
+  worktreeFor,
 } from './model'
 import type { LockPattern, LockShapes } from './model'
 
@@ -197,30 +200,66 @@ const stampAt = async ($: EngineInterface, root: string): Promise<string | null>
 }
 
 /**
- * gh pr view, the engine's --json, and the checks the plan lists: the PR is a draft, the checkout is at its head.
- * It records nothing. The PR number and the body path come from the tool or the command.
+ * The checkout whose facts the engine reads (its cwd): the worktree that has the PR branch checked out, when it is a CCv3 checkout;
+ * else the session root. So Dave can press /pathway from any CCv3 session, not only from one started in the PR's worktree.
+ * The engine CODE always comes from the session root (engineArgv(sessionRoot)); pr-checkpoint.mjs reads every fact from the git
+ * toplevel of its cwd. So a session in main never runs another worktree's copy of the engine.
  */
-const prepare = async ($: EngineInterface, root: string, pr: number, body: string): Promise<Prepared | Failure> => {
-  const viewed = await run($, viewArgv(pr), root, VIEW_TIMEOUT_MS)
+const checkoutOf = async ($: EngineInterface, root: string, branch: string): Promise<string> => {
+  const listed = await gitLines($, root, WORKTREE_ARGV)
+  const found = listed === null ? null : worktreeFor(listed, branch)
+  if (!found || samePath(found, root)) return root
+  return (await $.fs.exists(`${found}/${ENGINE_REL}`)) ? found : root
+}
+
+/** The roots a relative body path is looked up in, in order: the PR checkout, then the session root. */
+const bodyBases = (checkout: string, root: string): string[] => (samePath(checkout, root) ? [root] : [checkout, root])
+
+/** The body file, or null when no base has it. */
+const bodyIn = async ($: EngineInterface, checkout: string, root: string, body: string): Promise<string | null> => {
+  for (const base of bodyBases(checkout, root)) {
+    const path = resolveBody(base, body)
+    if (await $.fs.exists(path)) return path
+  }
+  return null
+}
+
+const missingBody = (body: string, checkout: string, root: string = checkout): string =>
+  `The body file ${body} was not found (${[...new Set(bodyBases(checkout, root).map(base => resolveBody(base, body)))].join(', ')}). Write the PR body to a file and pass it. Nothing was run.`
+
+/** The engine code: the session root's copy, else the checkout's (a session root that lost the engine since the checkpoint opened). */
+const engineRoot = async ($: EngineInterface, fallback: string): Promise<string> => (await rootOf($)) ?? fallback
+
+/**
+ * gh pr view, the engine's --json, and the checks the plan lists: the PR is a draft, the checkout is at its head.
+ * It records nothing. The PR number and the body path come from the tool or the command; the body resolves in the PR checkout.
+ */
+const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawBody: string): Promise<Prepared | Failure> => {
+  const viewed = await run($, viewArgv(pr), sessionRoot, VIEW_TIMEOUT_MS)
   if (!viewed.ok) return fail(`Could not read PR #${pr} (${viewed.text}). Nothing was recorded.`)
   if (viewed.code !== 0) return fail(`Could not read PR #${pr}: ${firstLine(viewed.err || viewed.out)}. Nothing was recorded.`)
-  let info: { isDraft?: unknown; headRefOid?: unknown; author?: { login?: unknown } }
+  let info: { isDraft?: unknown; headRefOid?: unknown; headRefName?: unknown; author?: { login?: unknown } }
   try {
     info = JSON.parse(viewed.out)
   } catch {
     return fail(`gh pr view printed no JSON for PR #${pr}. Nothing was recorded.`)
   }
   if (info.isDraft !== true) return fail(`PR #${pr} is not a draft. The checkpoint applies to a draft PR only. Nothing was recorded.`)
+  const branch = typeof info.headRefName === 'string' ? info.headRefName : ''
+  const root = await checkoutOf($, sessionRoot, branch)
+  const body = await bodyIn($, root, sessionRoot, rawBody)
+  if (body === null) return fail(missingBody(rawBody, root, sessionRoot))
   const dependabot = info.author?.login === 'dependabot[bot]'
-  const ran = await run($, engineArgv(root, '--json', ...(dependabot ? ['--dependabot'] : [])), root, ENGINE_TIMEOUT_MS)
+  const ran = await run($, engineArgv(sessionRoot, '--json', ...(dependabot ? ['--dependabot'] : [])), root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return fail(`pr-checkpoint did not finish (timed out or failed to start: ${ran.text}). Nothing was recorded. The PR stays a draft.`)
   if (ran.code !== 0) return fail(`pr-checkpoint exited ${ran.code}: ${lastLine(ran.err || ran.out)}. Nothing was recorded. The PR stays a draft.`)
   const result = parseResult(ran.out)
   if (!result) return fail(`pr-checkpoint printed no JSON the mod can read (${clip(firstLine(ran.out), 80)}). Nothing was recorded. The PR stays a draft.`)
   const prHead = typeof info.headRefOid === 'string' ? info.headRefOid : ''
   if (result.head !== prHead) {
+    const named = branch ? ` (branch ${branch})` : ''
     return fail(
-      `This checkout is at ${result.head.slice(0, 7)} but PR #${pr} is at ${prHead.slice(0, 7)}: check out the PR branch at its head, run pre-pr.mjs, then ask for the checkpoint again. Nothing was recorded.`,
+      `The checkout ${root} is at ${result.head.slice(0, 7)} but PR #${pr}${named} is at ${prHead.slice(0, 7)}: check out the PR branch at its head in any worktree, run pre-pr.mjs, then ask for the checkpoint again. Nothing was recorded.`,
     )
   }
   const subjects = await gitLines($, root, ['git', 'log', '--format=%s', '-n', '8', 'fork/main..HEAD'])
@@ -256,7 +295,7 @@ type Outcome =
 
 /** --apply for a confirmed record. A refusal keeps the record confirmed. */
 const applyRecord = async ($: EngineInterface, root: string, record: CheckpointRecord): Promise<Outcome> => {
-  const ran = await run($, engineArgv(root, '--apply', String(record.pr)), root, APPLY_TIMEOUT_MS)
+  const ran = await run($, engineArgv(await engineRoot($, root), '--apply', String(record.pr)), root, APPLY_TIMEOUT_MS)
   if (!ran.ok) return { stage: 'apply', text: `--apply could not run (${ran.text})` }
   if (ran.code !== 0) return { stage: 'apply', text: lastLine(ran.err || ran.out) || `--apply exited ${ran.code}` }
   const applied: CheckpointRecord = { ...record, state: 'applied', appliedAt: await $.clock.now() }
@@ -271,7 +310,7 @@ const recordPathway = async (
   pathway: string,
   by: string,
 ): Promise<Outcome> => {
-  const ran = await run($, engineArgv(a.root, '--confirm', pathway, '--by', by, '--body', a.body), a.root, ENGINE_TIMEOUT_MS)
+  const ran = await run($, engineArgv(await engineRoot($, a.root), '--confirm', pathway, '--by', by, '--body', a.body), a.root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return { stage: 'confirm', text: `--confirm could not run (${ran.text})` }
   if (ran.code !== 0) return { stage: 'confirm', text: lastLine(ran.err || ran.out) || `--confirm exited ${ran.code}` }
   let printed: Partial<CheckpointRecord>
@@ -291,6 +330,7 @@ const recordPathway = async (
     state: 'confirmed',
     session: await sessionId($),
     capacity: a.result.capacity,
+    root: a.root,
   } as CheckpointRecord
   await $.store.set(`${RECORD_PREFIX}${a.pr}`, stored)
   return applyRecord($, a.root, stored)
@@ -466,10 +506,11 @@ const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> =
 const toolText = async ($: EngineInterface, pr: number, body: string): Promise<string> => {
   const root = await rootOf($)
   if (!root) return `pr_checkpoint runs in a CCv3 checkout (it needs ${ENGINE_REL} in the session root). Nothing was recorded.`
-  const bodyPath = resolveBody(root, body)
-  if (!(await $.fs.exists(bodyPath))) return `The body file ${body} was not found (${bodyPath}). Write the PR body to a file and pass it as "body". Nothing was run.`
-  if (!(await interactive($))) return textPlan($, root)
-  const prepared = await prepare($, root, pr, bodyPath)
+  if (!(await interactive($))) {
+    if (!(await $.fs.exists(resolveBody(root, body)))) return missingBody(body, root)
+    return textPlan($, root)
+  }
+  const prepared = await prepare($, root, pr, body)
   if (!prepared.ok) return prepared.text
   const placed = await show($, prepared.pending)
   if (placed.isPlaced) return `The checkpoint for #${pr} is in Dave's side pane. ${WAIT_FOR_PRESS}`
@@ -496,11 +537,12 @@ const checkpointCommand = async ($: EngineInterface, e: { args: string; origin: 
   if (pr === null || body === null) return { text: NEED_PR }
   const root = await rootOf($)
   if (!root) return { text: `${SLASH} runs in a CCv3 checkout (it needs ${ENGINE_REL} in the session root). Nothing was recorded.` }
-  const bodyPath = resolveBody(root, body)
-  if (!(await $.fs.exists(bodyPath))) return { text: `The body file ${body} was not found (${bodyPath}). Pass --body <file>. Nothing was run.` }
   // Only Dave's own command records. A plugin, the SDK or a headless run gets the text plan.
-  if (!live || e.origin.kind !== 'composer') return { text: await textPlan($, root) }
-  const prepared = await prepare($, root, pr, bodyPath)
+  if (!live || e.origin.kind !== 'composer') {
+    if (!(await $.fs.exists(resolveBody(root, body)))) return { text: missingBody(body, root) }
+    return { text: await textPlan($, root) }
+  }
+  const prepared = await prepare($, root, pr, body)
   if (!prepared.ok) return { text: prepared.text }
   const next = prepared.pending
   if (parsed.word === null) {
@@ -514,7 +556,7 @@ const checkpointCommand = async ($: EngineInterface, e: { args: string; origin: 
   const option = result.options.find(one => one.pathway === pathway)
   if (!option || !option.available) return { text: `Pathway ${pathway} is not available${option ? `: ${option.reason}` : ''}. Nothing was recorded.` }
   const by = parsed.word === 'accept' ? 'default' : 'dave'
-  const out = await recordPathway($, { pr, root, body: bodyPath, result }, pathway, by)
+  const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by)
   if (out.stage !== 'done') {
     return { text: out.stage === 'apply' ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}` : `PR #${pr}: ${pathway} was not recorded: ${out.text}` }
   }
@@ -557,7 +599,10 @@ const labelAllowed = async ($: EngineInterface, root: string, command: string, s
   if (shapes.label?.blind || labels.length !== 1 || pr === null) return false
   const stored = await $.store.get(`${RECORD_PREFIX}${pr}`)
   if (stored === undefined || stored === null) return false
-  const head = await $.process.run(['git', 'rev-parse', 'HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS })
+  // HEAD of the checkout the record came from (the PR branch worktree), else the session root. Only the mod writes the store.
+  const recorded = (stored as { root?: unknown }).root
+  const cwd = typeof recorded === 'string' && recorded.length > 0 ? recorded : root
+  const head = await $.process.run(['git', 'rev-parse', 'HEAD'], { cwd, timeoutMs: GIT_TIMEOUT_MS })
   if (head.exitCode !== 0) throw lockFailure('git rev-parse HEAD failed')
   return recordAllowsLabel(stored, pr, head.stdout.trim(), labels[0]!)
 }
@@ -657,7 +702,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
         type: 'object',
         properties: {
           pr: { type: 'integer', minimum: 1, description: 'The draft pull request number' },
-          body: { type: 'string', description: 'The PR body file that pre-pr.mjs --body checked (a path relative to the session root, or absolute)' },
+          body: { type: 'string', description: 'The PR body file that pre-pr.mjs --body checked (absolute, or relative to the PR branch worktree or the session root; a headless run looks in the session root only)' },
         },
         required: ['pr', 'body'],
       },
