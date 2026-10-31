@@ -673,10 +673,12 @@ test('T3: the hard timeout kills a child that does not end, and keeps the partia
 
 // The grandchild is spawned detached: on Windows libuv puts a normal child in a job object that dies with its parent, which
 // would hide a missing tree kill. A native exe such as cr.exe has no such job, so the test must break away from it.
+// On POSIX the runner kills the process group of the child. A detached grandchild leaves that group, so no group kill can
+// reach it. The real cr binary does not detach, so on POSIX the grandchild stays in the group of the child.
 test('T5: the hard timeout stops the whole process tree, not only the child (no tree-kill command)', async () => {
   const pidFile = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gc-')), 'gc.pid');
   const script = fakeCr(`import { spawn } from 'node:child_process';
-spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', ${JSON.stringify(pidFile)}], { stdio: 'ignore', detached: true }).unref();
+spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', ${JSON.stringify(pidFile)}], { stdio: 'ignore', detached: process.platform === 'win32' }).unref();
 setInterval(() => console.log('{"type":"heartbeat"}'), 100);`);
   const r = await defaultCrRunner({ cwd: os.tmpdir(), args: REVIEW, timeoutMs: 5000 }, { ...asFake(script), killGraceMs: 8000 });
   assert.equal(r.timedOut, true);

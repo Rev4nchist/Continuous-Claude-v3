@@ -716,3 +716,19 @@ Relevant to CCv3 refinement specifically:
 | `github-dual-account` | board says `active`, **LAPSED** | Its board note is stale — the gitconfig/`gh`-routing half SHIPPED on this branch (`65d1444`…`351a377`): bare `git` and bare `gh` route themselves, shared resolution in `scripts/github/accounts-lib.ps1`, `gh-shim.ps1` dot-sourced from both PS profiles, gates `sweep-remotes.ps1` (0 failures / 63 remotes) + `verify-github-accounts.ps1` (24/24). Remaining scope: ssh, `.mcp.json` github server. See §6 |
 
 Serialize commits — one branch, several sessions, and `.git/index.lock` races.
+
+## 9. Harness doctor
+
+`node scripts/harness-doctor.mjs [--json] [--home <dir>] [--repo <dir>]` is a read-only health check.
+It runs no Docker, no network and no paid call. It prints one line per check
+(`PASS|WARN|FAIL  <section>:<check>  <detail>`) and a last line `harness: N pass / N warn / N fail`.
+It exits 1 on any FAIL. With `--json` it also writes `.claude/cache/e2e/<YYYY-MM-DD>-harness-doctor.json`.
+
+| Section | Checks |
+|---|---|
+| `hooks` | `registration-reconcile`, `hook-contract-guard` and `hook-parity` as child processes; `registration-baseline.json` dirty in git; `~/.claude/hooks/dist/.build-inputs.json` missing |
+| `sync` | cursor against `git rev-parse main` (missing cursor is FAIL); `.sync.pending`; `.sync-quarantine` dirs under 7 days old; folders under `.claude/worktrees` that git does not list |
+| `logs` | errors in the last 24 h in `pre-pr-gate-errors.jsonl`, `guard-decisions.jsonl` (kind `error`), `memory-write-failures.jsonl`, `hooks.log` (level `error`). 0 is PASS, 1 to 4 WARN, 5 or more FAIL. A line that does not parse is skipped and counted |
+| `review` | today's `coderabbit-paid.jsonl` total against the $15 day cap (WARN from $12); `reviews_7d_manual_date` in `review-router.config.json` older than 7 days |
+
+A missing optional file is a PASS with `absent` in the detail. Tests: `node --test scripts/harness-doctor.test.mjs`.
