@@ -28,7 +28,8 @@ function countText(column: BoardColumn): string {
 
 /**
  * The read-only Work board: six state columns of lane cards. Pure props. A card has no button, no
- * link and is not draggable (P2 adds moving). Columns wrap, so a phone has no horizontal scroll.
+ * link and is not draggable (P2 adds moving). Columns are at least 210 px wide and wrap: six in one
+ * row from about 1340 px, one column on a phone, so a phone has no horizontal scroll.
  * A failed lane read shows one error line instead of six empty columns.
  */
 export function LaneBoard({ board }: { board: LaneBoardData }) {
@@ -53,7 +54,7 @@ export function LaneBoard({ board }: { board: LaneBoardData }) {
           {`Lane registry unavailable: ${board.error ?? 'read failed'}`}
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr))]">
           {board.columns.map((column) => (
             <Column key={column.state} column={column} />
           ))}
