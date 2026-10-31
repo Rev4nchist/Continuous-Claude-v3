@@ -1377,6 +1377,44 @@ describe('pr-checkpoint: asks from the watcher', () => {
     })
   }
 
+  test('G7 a failed cleanup after the grant write reports the stored grant, not "nothing recorded"', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ declined: { kind: 'round', round: 4, head: HEAD } }) }, statuses: { 7: REVIEWED(3) } })
+    await start($)
+    w.fail.set = true
+    const ran = await slash($, 'grant 7 4')
+    w.fail.set = false
+    expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+    expect(ran.text ?? '').toMatch(/grant is stored/i)
+    expect(ran.text ?? '').not.toMatch(/nothing was recorded/i)
+    expect(JSON.stringify(w.session.appended().map(row => row.message))).not.toContain('post one @coderabbitai review')
+  })
+
+  for (const [name, declined, what] of [
+    ['an opening decline', { kind: 'opening', round: 1, head: HEAD }, 'the opening review'],
+    ['a decline of round 5', { kind: 'round', round: 5, head: HEAD }, 'round 5'],
+  ] as [string, Rec, string][]) {
+    test(`G8 /pathway grant 7 4 with ${name} kept: the model is not told to post a review`, async ($, on) => {
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ declined }) }, statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      const rows = JSON.stringify(w.session.appended().map(row => row.message))
+      expect(rows).toContain('Dave allowed round 4 for #7')
+      expect(rows).toContain(`decline of ${what} stays`)
+      expect(rows).not.toContain('post one @coderabbitai review')
+      expect(ran.text ?? '').toContain(`decline of ${what} stays`)
+    })
+  }
+
+  for (const args of ['grant 7 99999999999999999999', 'grant 99999999999999999999 4']) {
+    test(`G9 "/pathway ${args}" is a usage error: an unsafe integer is never stored`, async ($, on) => {
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, args)
+      expect(ran.text ?? '').toMatch(/usage/i)
+      expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    })
+  }
+
   test('G5 a /pathway grant drops the queued round ask it covers, so a later No cannot override the grant', async ($, on) => {
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
     await start($)
