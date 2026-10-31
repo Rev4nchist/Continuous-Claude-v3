@@ -1,4 +1,4 @@
-// The plain words for three /os tabs (Dave, 2026-10-30): Plan is Steps, Proof is Checks, Decisions is Choices. Labels only: the tab ids
+// The plain words for four /os tabs (Dave, 2026-10-30): Plan is Steps, Proof is Checks, Decisions is Choices, and Swarm is new. Labels only: the tab ids
 // (plan, proof, decisions), the Button keys, the osTab atom and the brief_set fields keep their old names. One list, so the strip label, the
 // header, the empty state and the `…more -> <tab>` hint of digest.ts cannot drift apart. It is its own file because os-tabs-model.ts imports
 // digest.ts, so digest.ts cannot import os-tabs-model.ts.
@@ -19,6 +19,7 @@ export const WORDS = {
   plan: word('Steps', 'no steps yet (no task list, no brief_set plan)'),
   proof: word('Checks', 'no checks yet (nothing is done, or nothing is proven)'),
   decisions: word('Choices', 'no choices yet'),
+  swarm: word('Swarm', 'no helpers yet this session'),
 } as const
 
 /** Where the Steps tab took its steps from: the task list, else the brief's own list. */

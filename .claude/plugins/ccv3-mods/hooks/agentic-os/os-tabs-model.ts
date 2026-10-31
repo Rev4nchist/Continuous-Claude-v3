@@ -11,10 +11,14 @@ import { gap } from './pane-model'
 import { chipWord } from './plain'
 import { sessionTab } from './session-tab'
 import type { Drift } from './steward'
+import { swarmTab } from './swarm-tab'
 import { STEP_SOURCE, WORDS } from './tab-words'
 import type { PaneRow, Span, Tone } from './pane-model'
 import { oneLine, wrapRows } from './text'
+import type { WorkflowFeed } from './workflow-model'
 import { workTab } from './work-tab'
+
+export type { WorkflowFeed } from './workflow-model'
 
 // The /os pane tabs (PRD 5.3, redesigned 2026-10-29), as plain rows. Pure: no engine, no clock (the caller passes `now`).
 //   Overview   the three questions at a glance: chip word, repo and branch; GOAL; NOW; NEEDS YOU, DONE, WATCH (digest.ts); one dim health row.
@@ -24,12 +28,13 @@ import { workTab } from './work-tab'
 //   Work       lanes, other sessions, changes, files, where (work-tab.ts)
 //   Checks     (id `proof`) done-but-unproven steps first, then each proof with its artifact
 //   Choices    (id `decisions`) the decision log newest first, then the open asks
+//   Swarm      every helper of this session: one row per workflow run, then its helpers, then the plain helpers (swarm-tab.ts)
 // The words Steps, Checks and Choices come from tab-words.ts; the ids, the Button keys and the osTab atom keep plan, proof and decisions.
-// Comms, Swarm and Resources are one dim `later:` footer row, drawn only when the body keeps 3 rows or more.
+// Comms and Resources are one dim `later:` footer row, drawn only when the body keeps 3 rows or more.
 // Text gauges only. Observer only. Every drawn string is redacted again at the end (idempotent) and only then cut to the
 // width, so a secret in any source cannot reach a row whole or in half.
 
-export type TabId = 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions'
+export type TabId = 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions' | 'swarm'
 
 export type TabSpec = { id: string; label: string; enabled: boolean }
 
@@ -41,17 +46,18 @@ export const TABS: readonly TabSpec[] = [
   { id: 'work', label: 'Work', enabled: true },
   { id: 'proof', label: WORDS.proof.label, enabled: true },
   { id: 'decisions', label: WORDS.decisions.label, enabled: true },
+  { id: 'swarm', label: WORDS.swarm.label, enabled: true },
 ]
 
 /** The tabs that are not built yet. They show as one dim footer row, never as a strip item. */
-export const LATER: readonly string[] = ['Comms', 'Swarm', 'Resources']
+export const LATER: readonly string[] = ['Comms', 'Resources']
 
 const LIVE: readonly string[] = TABS.filter(one => one.enabled).map(one => one.id)
 
-/** The digit that presses a tab: 1 for Overview, 6 for Choices. */
+/** The digit that presses a tab: 1 for Overview, 7 for Swarm. */
 const hotkeyOf = (id: string): string | undefined => (LIVE.includes(id) ? String(LIVE.indexOf(id) + 1) : undefined)
 
-/** True for the six tabs only: a later tab, or anything else, is not a tab id. */
+/** True for the seven tabs only: a later tab, or anything else, is not a tab id. */
 export const isTabId = (value: unknown): value is TabId => typeof value === 'string' && LIVE.includes(value)
 
 /**
@@ -88,7 +94,7 @@ export type TabState = {
   /** The 5-hour and weekly allowance (the HUD's limits). */
   limits?: HudLimit[]
   /** Facts the pane state does not hold yet. Each is optional and may be empty: the briefing then has fewer rows, never invented ones. */
-  feed?: { commits?: DigestCommit[]; prs?: DigestPr[] }
+  feed?: { commits?: DigestCommit[]; prs?: DigestPr[]; workflows?: WorkflowFeed[] }
 }
 
 const sp = (text: string, tone: Tone): Span => ({ text, tone })
@@ -419,7 +425,9 @@ export const tabRows = (tab: TabId, state: TabState, now: number, columns: numbe
             ? proof(state, cap, budget)
             : live === 'decisions'
               ? decisions(state, now, cap, budget)
-              : overview(state, now, cap, budget)
+              : live === 'swarm'
+                ? swarmTab(state, now, cap, budget)
+                : overview(state, now, cap, budget)
   return built.slice(0, budget).map(row => scrubFit(row, cap))
 }
 

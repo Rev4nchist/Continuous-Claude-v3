@@ -2,7 +2,7 @@ import type { AgentRun, BoardLane, FileTouch, HudLimit, KeeperRecord, PrState } 
 import type { AskKind, Chip } from './brief'
 import type { Drift } from './steward'
 import { oneLine } from './text'
-import type { WorkflowProgress } from './workflow-model'
+import type { WorkflowFeed, WorkflowProgress } from './workflow-model'
 
 // The /os glossary (.claudedocs/2026-10-29-os-pane-glossary.md) as functions: an event in, one plain English sentence out. Pure: no engine,
 // no clock, no state. Every returned string is redacted as a whole, made one line and bounded (oneLine). An unknown state or kind reads as a
@@ -115,7 +115,7 @@ export const stepSentence = (step: StepFact): string => {
 // --- Helpers ---
 
 /** The purpose of a helper: its spawn description, else its type, else "a task". */
-const purposeOf = (run: Pick<AgentRun, 'description' | 'type'>): string => oneLine(run.description) || oneLine(run.type) || 'a task'
+export const purposeOf =(run: Pick<AgentRun, 'description' | 'type'>): string => oneLine(run.description) || oneLine(run.type) || 'a task'
 
 export const helperSentence = (run: Pick<AgentRun, 'description' | 'type' | 'status' | 'startedAt' | 'endedAt'>, now: number): string => {
   const purpose = purposeOf(run)
@@ -139,6 +139,26 @@ export const workflowSentence = (progress: WorkflowProgress): string => {
   const running = known(progress.running) ? progress.running : 0
   const failed = known(progress.failed) && progress.failed > 0 ? `, ${progress.failed} failed` : ''
   return oneLine(`A workflow: ${plural(done, 'helper')} done, ${running} running${failed}`)
+}
+
+/**
+ * One workflow run on the Swarm tab, counts first so a narrow cut loses the name before the numbers: "1 running, 4 done, 1 failed · phase 2 of 2: Judge ·
+ * pane-fleet-assess". A zero count is left out (a run that has nothing else reads "0 done"). The phase and the name come from the feed; with none
+ * the line reads "a workflow", and a total that is not known is not drawn.
+ */
+export const swarmRunSentence = (progress: WorkflowProgress, feed?: Pick<WorkflowFeed, 'name' | 'phase'> | null): string => {
+  const count = (value: unknown): number => (known(value) ? value : 0)
+  const counts = [
+    ...(count(progress.running) > 0 ? [`${count(progress.running)} running`] : []),
+    ...(count(progress.done) > 0 ? [`${count(progress.done)} done`] : []),
+    ...(count(progress.failed) > 0 ? [`${count(progress.failed)} failed`] : []),
+  ]
+  const phase = feed?.phase
+  const title = oneLine(phase?.title)
+  const total = phase?.total
+  const of = known(total) && total > 0 ? ` of ${total}` : ''
+  const phased = phase != null && known(phase.index) ? [`phase ${phase.index}${of}${title === '' ? '' : `: ${title}`}`] : []
+  return oneLine([counts.length > 0 ? counts.join(', ') : '0 done', ...phased, oneLine(feed?.name) || 'a workflow'].join(' · '))
 }
 
 // --- Brief health ---

@@ -30,7 +30,7 @@ import type { AgentRun, BoardLane, FileTouch, OsBrief, OsTask } from '../types'
 //     A lane of a stopped session is not "held by another session", so it stays out of WATCH.
 //   - tabRows dispatches 'session' to sessionTab and 'work' to workTab (their own files: session-tab.test.ts, work-tab.test.ts).
 //
-// O1  a tab is missing, out of order, a later tab (Comms, Swarm, Resources) is a strip item or has a tag, or the hotkeys are not 1 to 6
+// O1  a tab is missing, out of order, a later tab (Comms, Resources) is a strip item or has a tag, or the hotkeys are not 1 to 7 (Swarm is the seventh live tab, 2026-10-30)
 // O2  Overview drops the chip word, repo, branch, GOAL, NOW, health, or still draws a removed row (STOP AT, label rows, counts, LANE, AGENTS, PRS)
 // O3  Plan takes the wrong source (tasks first, else the brief plan), a wrong mark, or a done step without proven or UNPROVEN
 // O4  Proof lists proofs before the done-but-unproven steps, or loses an artifact
@@ -54,6 +54,7 @@ import type { AgentRun, BoardLane, FileTouch, OsBrief, OsTask } from '../types'
 // O24 the same state and clock give different rows on any of the six tabs, or tabRows does not dispatch Session and Work
 // O25 the Overview health row loses ctx, cost or cache, or draws NaN
 // O27 a tab header keeps the old word (PLAN, PROOF, DECISIONS), or a tab id changes with its label
+// O28 tabRows does not dispatch 'swarm' to the Swarm tab (swarm-tab.ts), or draws Overview, or a Swarm tab that the runs never reach
 // O26 a peer lane that overlaps my files is not in WATCH as "may touch the same files"; my own lane or a stopped session's lane is
 // B1-B12 the briefing (see the second block)
 //
@@ -76,8 +77,8 @@ import type { AgentRun, BoardLane, FileTouch, OsBrief, OsTask } from '../types'
 const NOW = 100 * 3600_000
 const MIN = 60_000
 const SECRET = 'sk-' + 'ant-' + 'a'.repeat(40)
-const TABS_LIVE: TabId[] = ['overview', 'session', 'plan', 'work', 'proof', 'decisions']
-const LATER_FOOTER = 'later: Comms · Swarm · Resources'
+const TABS_LIVE: TabId[] = ['overview', 'session', 'plan', 'work', 'proof', 'decisions', 'swarm']
+const LATER_FOOTER = 'later: Comms · Resources'
 
 const empty = (over: Partial<TabState> = {}): TabState => ({
   view: { tasks: [], plan: null, turn: null, step: null, ctx: null, agents: [], lanes: null, prs: [] },
@@ -177,24 +178,25 @@ const rich = (): TabState => {
 }
 
 describe('os tab strip', () => {
-  test('O1 six live tabs in order with hotkeys 1 to 6; no Comms, Swarm or Resources item; LATER names them', () => {
+  test('O1 seven live tabs in order with hotkeys 1 to 7; no Comms or Resources item; LATER names them', () => {
     const strip = tabStrip('plan', 200)
     expect(strip).toHaveLength(1)
     const items = strip[0] ?? []
     expect(items.map(one => one.id)).toEqual(TABS_LIVE)
     expect(items.every(one => one.enabled)).toBe(true)
-    expect(items.map(one => one.hotkey)).toEqual(['1', '2', '3', '4', '5', '6'])
+    expect(items.map(one => one.hotkey)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
     expect(items.filter(one => one.selected).map(one => one.id)).toEqual(['plan'])
-    expect(items.map(itemText).join('')).not.toMatch(/Comms|Swarm|Resources|NEXT|LATER/)
-    expect(items.map(itemText).map(one => one.trim())).toEqual(['Overview', 'Session', 'Steps', 'Work', 'Checks', 'Choices'])
+    expect(items.map(itemText).join('')).not.toMatch(/Comms|Resources|NEXT|LATER/)
+    expect(items.map(itemText).map(one => one.trim())).toEqual(['Overview', 'Session', 'Steps', 'Work', 'Checks', 'Choices', 'Swarm'])
     expect(TABS.map(one => one.id)).toEqual(TABS_LIVE)
     expect(TABS.every(one => one.enabled && !('tag' in one))).toBe(true)
-    expect(model.LATER).toEqual(['Comms', 'Swarm', 'Resources'])
+    expect(model.LATER).toEqual(['Comms', 'Resources'])
   })
 
-  test('O1 isTabId takes the six ids and nothing else', () => {
+  test('O1 isTabId takes the seven ids and nothing else', () => {
     for (const id of TABS_LIVE) expect(isTabId(id)).toBe(true)
-    for (const id of ['comms', 'swarm', 'resources', '', 'x', 3, null, undefined]) expect(isTabId(id)).toBe(false)
+    expect(isTabId('swarm')).toBe(true)
+    for (const id of ['comms', 'resources', 'Swarm', '', 'x', 3, null, undefined]) expect(isTabId(id)).toBe(false)
   })
 
   test('O1 a tab that is not live passed as the selection draws Overview and selects nothing else', () => {
@@ -202,7 +204,7 @@ describe('os tab strip', () => {
     expect(all(tabRows('comms' as TabId, empty(), NOW, 80, 20))).toBe(all(tabRows('overview', empty(), NOW, 80, 20)))
   })
 
-  test('O1 O6 a narrow strip wraps to more lines and keeps all six tabs once, each line inside the width', () => {
+  test('O1 O6 a narrow strip wraps to more lines and keeps all seven tabs once, each line inside the width', () => {
     for (const columns of [20, 40, 58, 120]) {
       const strip = tabStrip('overview', columns)
       expect(strip.flat().map(one => one.id)).toEqual(TABS_LIVE)
@@ -211,9 +213,10 @@ describe('os tab strip', () => {
     expect(tabStrip('overview', 20).length).toBeGreaterThan(tabStrip('overview', 200).length)
   })
 
-  test('O22 the strip is 5, 2, 2 and 1 lines at 20, 40, 58 and 72 columns, and 2 at 71 (the 3-cell prefix counts: 67 + 5 gaps = 72)', () => {
-    expect([20, 40, 58, 72].map(columns => tabStrip('overview', columns).length)).toEqual([5, 2, 2, 1])
-    expect(tabStrip('overview', 71)).toHaveLength(2)
+  test('O22 the strip is 6, 3, 2 and 2 lines at 20, 40, 58 and 72 columns, 2 at 82 and 1 at 83 (the 3-cell prefix counts: 77 + 6 gaps = 83)', () => {
+    expect([20, 40, 58, 72].map(columns => tabStrip('overview', columns).length)).toEqual([6, 3, 2, 2])
+    expect(tabStrip('overview', 82)).toHaveLength(2)
+    expect(tabStrip('overview', 83)).toHaveLength(1)
   })
 })
 
@@ -530,6 +533,7 @@ describe('os tabs: width, size and safety', () => {
       work: /lane board not read/,
       proof: /no checks yet/,
       decisions: /no choices yet[\s\S]*nothing open/,
+      swarm: /no helpers yet this session/,
     }
     for (const tab of TABS_LIVE) {
       const rows = tabRows(tab, empty(), NOW, 60, 30)
@@ -555,14 +559,16 @@ describe('os tabs: width, size and safety', () => {
 describe('os footer', () => {
   const longPlan = (): TabState => empty({ view: { ...empty().view, tasks: Array.from({ length: 40 }, (_, i) => task(`t${i}`, `step ${i}`, 'pending')) } })
 
-  test('O23 the footer is one dim row "later: Comms · Swarm · Resources", drawn once, in no body row', () => {
+  test('O23 the footer is one dim row "later: Comms · Resources", drawn once, in no body row, and never names Swarm', () => {
     const pane = osPane('plan', longPlan(), NOW, 58, 40)
     expect(pane.footer ?? null).not.toBeNull()
     expect(rowText(pane.footer!)).toContain(LATER_FOOTER)
     expect(pane.footer!.left.every(one => one.tone === 'dim')).toBe(true)
     expect(all(pane.body)).not.toContain('later:')
     expect(new Set([...pane.body.map(one => one.key), pane.footer!.key]).size).toBe(pane.body.length + 1)
-    for (const text of ['Comms', 'Swarm', 'Resources']) expect(model.LATER).toContain(text)
+    expect(rowText(pane.footer!)).not.toContain('Swarm')
+    for (const text of ['Comms', 'Resources']) expect(model.LATER).toContain(text)
+    expect(model.LATER).not.toContain('Swarm')
   })
 
   test('O23 the footer goes first: with 5 rows (2 strip lines) the body keeps 3 rows and no footer; with 6 rows the footer is back', () => {
@@ -1135,7 +1141,22 @@ describe('os tabs: dispatch and determinism', () => {
     expect(all(tabRows('session', rich(), NOW, 100, 40))).not.toBe(all(tabRows('overview', rich(), NOW, 100, 40)))
   })
 
-  test('O24 the same state and clock give the same rows on all six tabs, at two widths', () => {
+  test('O28 tabRows draws the Swarm tab: its header, the plain helpers under HELPERS, and the workflow run before its helpers', () => {
+    const state = rich()
+    state.agentRuns = [
+      ...(state.agentRuns ?? []),
+      run('w1', 'running', 4 * MIN, { description: 'judge the maps', workflowRunId: 'wf_a' }),
+      run('w2', 'done', 9 * MIN, { description: 'map the hooks', workflowRunId: 'wf_a' }),
+    ]
+    const text = all(tabRows('swarm', state, NOW, 100, 40))
+    expect(text).toMatch(/^SWARM/)
+    expect(text).toMatch(/1 running, 1 done · a workflow[\s\S]*judge the maps[\s\S]*map the hooks[\s\S]*HELPERS[\s\S]*map hooks[\s\S]*old review/)
+    expect(text).not.toBe(all(tabRows('overview', state, NOW, 100, 40)))
+    expect(text).not.toBe(all(tabRows('session', state, NOW, 100, 40)))
+    expect(all(tabRows('swarm', empty(), NOW, 100, 40))).toContain('no helpers yet this session')
+  })
+
+  test('O24 the same state and clock give the same rows on all seven tabs, at two widths', () => {
     for (const tab of TABS_LIVE) {
       for (const columns of [30, 100]) {
         expect(osPane(tab, rich(), NOW, columns, 30), tab).toEqual(osPane(tab, rich(), NOW, columns, 30))

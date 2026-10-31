@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, BoardLane, CacheState, FileTouch, HudLimit, HudState, KeeperRecord, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, BoardLane, CacheState, FileTouch, HudLimit, HudState, KeeperRecord, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch, WorkflowFeed } from '../../types'
 import { EMPTY_CACHE, cacheView, hitRate } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
@@ -18,6 +18,8 @@ import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
 import { parseBoard } from './lanes-model'
+import { swarmGroups } from './workflow-model'
+import { JOURNAL_MAX_BYTES, journalPath, projectSlug, runFilePath, workflowFeed } from './journal-model'
 import { osPane, isTabId } from './os-tabs-model'
 import type { TabId, TabState } from './os-tabs-model'
 import { bandSpans } from './pane-model'
@@ -41,6 +43,8 @@ const files = atom({ plugin: 'ccv3-mods', key: 'files' } as const, [] as FileTou
 const compactions = atom({ plugin: 'ccv3-mods', key: 'compactions' } as const, [] as KeeperRecord[])
 /** The PRs the pr-loop module watches. Read only here: the same atom pr-loop declares and writes. */
 const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
+/** The journal feed of this session's workflow runs (the Swarm tab): a label and a phase per helper, and the run name. Written by refreshWorkflows only. */
+const workflows = atom({ plugin: 'ccv3-mods', key: 'workflows' } as const, [] as WorkflowFeed[])
 /** Bumped every few seconds while a turn runs, so elapsed times redraw. */
 const tick = atom({ plugin: 'ccv3-mods', key: 'tick' } as const, 0)
 /**
@@ -67,7 +71,7 @@ const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as
 /** Repo, branch and worktree of the session folder: read from the .git files at the session start and at each turn start. */
 const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | null)
 
-/** The tab the /os pane shows. Only a live tab is ever stored (a Comms, Swarm or Resources tab has no Button); reset at /clear and resume. */
+/** The tab the /os pane shows. Only a live tab is ever stored (a Comms or Resources tab has no Button); reset at /clear and resume. */
 const osTab = atom({ plugin: 'ccv3-mods', key: 'osTab' } as const, 'overview' as TabId)
 
 /**
@@ -295,6 +299,56 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
     await update($, boardAt, () => at)
   } catch {
     // Best effort: no board, no DB, or no node; the pane says "lane board not read".
+  }
+}
+
+/** The workflow runs whose journals one refresh reads (running first, then the latest activity, as the Swarm tab draws them): each costs two file stats and at most two reads. */
+const MAX_FEED_RUNS = 8
+
+/** A file's text, or null when it is missing, not a file, over the size cap or unreadable. The size is checked first, so a huge file is never copied in. */
+const readCapped = async ($: EngineInterface, path: string): Promise<string | null> => {
+  try {
+    const stat = await $.fs.stat(path)
+    if (stat.kind !== 'file' || stat.size > JOURNAL_MAX_BYTES) return null
+    const text = await $.fs.read(path)
+    return typeof text === 'string' ? text : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Reads the journal (and, once a run has ended, the run file) of each workflow run the ledger holds, for the Swarm tab: a label and a phase per
+ * helper, and the run name. Called at /os open and at a press of Swarm only, never by the pulse. The project folder is the session folder's path
+ * as Claude Code names it; the working folder and the session root are both tried. A file that is missing or bad leaves its run with no feed, and
+ * the tab then draws counts only. Never throws: the pane does not wait for it.
+ */
+const refreshWorkflows = async ($: EngineInterface): Promise<void> => {
+  try {
+    const home = await homeDir($)
+    const ids = swarmGroups(await read($, agentRuns)).flows.map(flow => flow.progress.key).slice(0, MAX_FEED_RUNS)
+    const before = await read($, workflows)
+    if (!home || (ids.length === 0 && before.length === 0)) return
+    const sessionId = await $.session.id()
+    const folders = [await $.session.cwd().catch(() => null), await $.session.root().catch(() => null)]
+    const slugs = [...new Set(folders.filter((one): one is string => typeof one === 'string' && one !== '').map(projectSlug))]
+    const found: WorkflowFeed[] = []
+    for (const id of ids) {
+      for (const slug of slugs) {
+        const journalAt = journalPath(home, slug, sessionId, id)
+        const runAt = runFilePath(home, slug, sessionId, id)
+        const journal = journalAt === null ? null : await readCapped($, journalAt)
+        const runFile = runAt === null ? null : await readCapped($, runAt)
+        const feed = workflowFeed(id, journal, runFile)
+        if (feed === null) continue
+        found.push(feed)
+        break
+      }
+    }
+    // An unchanged feed writes nothing, so the pane does not redraw for it.
+    if (JSON.stringify(found) !== JSON.stringify(before)) await update($, workflows, () => found)
+  } catch {
+    // Best effort: the tab keeps the last feed, or draws counts only.
   }
 }
 
@@ -633,8 +687,8 @@ export const agenticOs = (on: On) => {
 
   on('command.run', { command: 'os' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: 'Agentic OS' })
-    // The pane is up at once; the AGENTS and LANE rows fill in as the reads land.
-    void Promise.all([refreshLanes($), refreshAgents($)]).then(() => writeSnapshot($))
+    // The pane is up at once; the AGENTS, LANE and Swarm rows fill in as the reads land.
+    void Promise.all([refreshLanes($), refreshAgents($), refreshWorkflows($)]).then(() => writeSnapshot($))
     return { text: opened.isPlaced ? 'Agentic OS pane opened.' : `Agentic OS pane waits: ${opened.reason}` }
   }).catch(() => ({ text: 'Agentic OS pane failed to open.' }))
 
@@ -865,14 +919,21 @@ export const agenticOs = (on: On) => {
       files: await read($, files),
       cachePct: hitRate(await read($, cache)),
       limits: hudState?.limits ?? [],
+      // The Swarm tab: the journal feed of the workflow runs, read at /os open and at a press of Swarm.
+      feed: { workflows: await read($, workflows) },
     }
     // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
     // paddingX takes one column each side.
     const { strip, body, footer } = osPane(selected, state, at, e.props.bodyColumns - 2, e.props.scroll.bodyRows)
-    // Every tab is a Button (a press, or its digit while the pane has the focus). The board is read at /os and at a press of Work, so it is not stale when Dave looks.
+    // Every tab is a Button (a press, or its digit while the pane has the focus). The board is read at /os and at a press of Work, the agents and journals at a press of Swarm, so they are not stale when Dave looks.
     const select = (id: TabId) => () => {
       void update($, osTab, () => id)
       if (id === 'work') void refreshLanes($)
+      // A workflow helper is not in agent.list, but a plain one is: the list settles a run it holds as ended. The journal is read now, never by the pulse.
+      if (id === 'swarm') {
+        void refreshAgents($)
+        void refreshWorkflows($)
+      }
     }
     return (
       <Box flexDirection="column" paddingX={1}>
