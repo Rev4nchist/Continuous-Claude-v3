@@ -15,7 +15,7 @@ import type { WorkflowFeed } from './workflow-model'
 // `workflowProgress`, not `result` or `toolsUsed` of the journal, not the `key`. Every string is redacted, made one line and clipped.
 // Observer only.
 
-/** A file over this many characters is not read: the engine rejects 4 MiB, and a journal of a long run is a few tens of KB. */
+/** A file over this many bytes is not read: the engine rejects 4 MiB, and a journal of a long run is a few tens of KB. */
 export const JOURNAL_MAX_BYTES = 1_000_000
 /** A label or a run name; a phase title. Longer text ends with an ellipsis. */
 export const LABEL_MAX = 80

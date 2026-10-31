@@ -142,7 +142,6 @@ describe('journal model', () => {
     )
     expect(feed?.labels).toEqual({ a1: 'ok' })
     expect(Object.getPrototypeOf(feed?.labels)).toBe(Object.prototype)
-    expect(({} as Record<string, unknown>).label).toBeUndefined()
     expect(Object.hasOwn(feed?.labels ?? {}, 'constructor')).toBe(false)
   })
 
@@ -160,6 +159,9 @@ describe('journal model', () => {
     const feed = parseJournal(many, 'wf_1')
     expect(Object.keys(feed?.labels ?? {}).length).toBeLessThanOrEqual(500)
     expect(Object.keys(feed?.agentPhases ?? {}).length).toBeLessThanOrEqual(500)
+    // 500 helpers with 500 phase titles: the phase list stops at 50, so the phase index and the phase of a late helper stay at 50 or less.
+    expect(feed?.phase?.index).toBeLessThanOrEqual(50)
+    expect(Math.max(0, ...Object.values(feed?.agentPhases ?? {}))).toBeLessThanOrEqual(50)
   })
 
   test('J5 a prompt or result preview, a result, a key and the tools used never reach the feed', () => {

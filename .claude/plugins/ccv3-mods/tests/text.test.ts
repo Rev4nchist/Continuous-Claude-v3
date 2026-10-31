@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { PaneRow, Span } from '../hooks/agentic-os/pane-model'
+import { cellWidth, cutCells, splitCells } from '../hooks/agentic-os/cells'
 import { oneLine, wrap, wrapRows } from '../hooks/agentic-os/text'
 
 // /os redesign, round 1: hooks/agentic-os/text.ts, the pure text step every pane row passes through.
@@ -276,5 +277,82 @@ describe('wrap', () => {
       expect(last).toMatch(/more/)
       if (columns >= 40) expect(last).toMatch(HINT_END('Decisions'))
     }
+  })
+})
+
+// Terminal cells, not UTF-16 units: a wide letter (CJK, fullwidth) or an emoji takes 2 cells, a combining mark 0. Measured here with Unicode
+// properties, not with the code under test.
+const CELLS_OF = (text: string): number =>
+  [...text].reduce((n, ch) => n + (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Emoji_Presentation}　-〾＀-｠]/u.test(ch) ? 2 : /[\p{Mn}​-‏]/u.test(ch) ? 0 : 1), 0)
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
+const CJK_TEXT = '日本語のとても長い文章です '.repeat(30)
+const EMOJI_TEXT = `ab ${'🚀🎉🔥'.repeat(40)} cd é${'ＡＢ'.repeat(30)}`
+
+describe('cells', () => {
+  // X17 wrap or wrapRows measures UTF-16 length: a CJK or emoji row passes the pane in cells (2 per letter), or a cut splits a surrogate pair
+  test('X17 wrap keeps CJK and emoji rows inside the pane in cells, with no half surrogate, from 20 to 200 columns', () => {
+    for (const text of [CJK_TEXT, EMOJI_TEXT, '日'.repeat(500), '🚀'.repeat(500)]) {
+      for (let columns = 20; columns <= 200; columns += 3) {
+        for (const hint of [undefined, 'Decisions']) {
+          const out = wrap(text, columns, 3, hint)
+          for (const line of out.lines) {
+            expect(CELLS_OF(line), `${columns} ${line}`).toBeLessThanOrEqual(columns)
+            expect(LONE_SURROGATE.test(line), `${columns} ${line}`).toBe(false)
+          }
+        }
+      }
+    }
+  })
+
+  test('X17 wrapRows with a lead and a right group keeps every row inside the pane in cells', () => {
+    const lead: Span[] = [{ text: '  ● ', tone: 'active' }]
+    const right: Span[] = [{ text: '日本 4:00', tone: 'dim' }]
+    for (const text of [CJK_TEXT, EMOJI_TEXT]) {
+      for (let columns = 20; columns <= 200; columns += 3) {
+        for (const row of wrapRows('k', lead, text, 'todo', columns, 3, { right })) {
+          const cells = row.left.reduce((n, one) => n + CELLS_OF(one.text), 0) + (row.right ? row.right.reduce((n, one) => n + CELLS_OF(one.text), 0) + 1 : 0)
+          expect(cells, `${columns} ${row.key}`).toBeLessThanOrEqual(columns)
+          for (const one of [...row.left, ...(row.right ?? [])]) expect(LONE_SURROGATE.test(one.text)).toBe(false)
+        }
+      }
+    }
+    // A lead of wide letters is cut to the pane in cells too.
+    const wide: Span[] = [{ text: '日本語'.repeat(10), tone: 'dim' }]
+    for (let columns = 1; columns <= 40; columns++) {
+      const row = wrapRows('k', wide, 'x', 'todo', columns, 1)[0]!
+      expect(row.left.reduce((n, one) => n + CELLS_OF(one.text), 0), `${columns}`).toBeLessThanOrEqual(columns)
+    }
+  })
+
+  test('X17 a pane one cell wide cannot hold a wide letter: the wrap ends and no row passes one cell', () => {
+    const out = wrap('日本語', 1, 5)
+    expect(out.lines.length).toBeGreaterThan(0)
+    for (const line of out.lines) expect(CELLS_OF(line)).toBeLessThanOrEqual(1)
+  })
+
+  // X17 the width table: a wide letter or an emoji is 2, a mark is 0, the glyphs the pane draws stay 1, and a cut keeps a mark with its base
+  test('X17 cellWidth and cutCells: CJK and emoji take 2 cells, marks 0, pane glyphs 1; a cut keeps a mark with its base and a pair whole', () => {
+    expect([cellWidth('日本'), cellWidth('🚀'), cellWidth('ＡＢ'), cellWidth('é'), cellWidth('❤️'), cellWidth('✓✗●○▶■…·'), cellWidth('abc')]).toEqual([4, 2, 4, 1, 2, 8, 3])
+    expect([cutCells('日本', 3), cutCells('🚀🚀', 3), cutCells('abéd', 3), cutCells('ab​cd', 2), cutCells('日', 1), cutCells('abc', 0)]).toEqual(['日', '🚀', 'abé', 'ab​', '', ''])
+    expect(splitCells('日本', 1)).toEqual(['…', '本'])
+    expect(splitCells('abcde', 3)).toEqual(['abc', 'de'])
+  })
+
+  // X18 oneLine cuts at max UTF-16 units and splits an emoji
+  test('X18 oneLine never cuts an emoji in half, at any cap', () => {
+    for (let max = 2; max <= 40; max++) {
+      const out = oneLine('🚀'.repeat(100), max)
+      expect(LONE_SURROGATE.test(out), `${max}`).toBe(false)
+      expect(out.length).toBeLessThanOrEqual(max)
+      expect(out).toMatch(/…$/)
+    }
+  })
+
+  // X19 CONTROL misses the bidi and zero-width characters: a label can reorder the row or hide text
+  test('X19 oneLine replaces zero-width, bidi and BOM characters with a space', () => {
+    for (const mark of ['​', '‌', '‍', '‎', '‏', '‪', '‭', '‮', '⁦', '⁧', '⁩', '﻿']) {
+      expect(oneLine(`a${mark}b`), `U+${mark.codePointAt(0)!.toString(16)}`).toBe('a b')
+    }
+    expect(oneLine('﻿name‮ txet')).toBe('name txet')
   })
 })

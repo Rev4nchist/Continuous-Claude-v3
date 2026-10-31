@@ -1,4 +1,5 @@
 import { redact } from '../shared/redact'
+import { cellWidth } from './cells'
 import { clip } from './model'
 import type { PaneRow, Span } from './pane-model'
 
@@ -7,9 +8,9 @@ import type { PaneRow, Span } from './pane-model'
 
 const sp = (text: string, tone: Span['tone']): Span => ({ text, tone })
 
-export const width = (spans: Span[] = []): number => spans.reduce((n, one) => n + one.text.length, 0)
+export const width = (spans: Span[] = []): number => spans.reduce((n, one) => n + cellWidth(one.text), 0)
 
-/** Cuts a run of spans to `max` cells, with an ellipsis on the span it cuts. */
+/** Cuts a run of spans to `max` terminal cells (a wide letter takes 2), with an ellipsis on the span it cuts. */
 export const clipSpans = (spans: Span[], max: number): Span[] => {
   const out: Span[] = []
   let room = Math.max(0, max)
@@ -17,7 +18,7 @@ export const clipSpans = (spans: Span[], max: number): Span[] => {
     if (room <= 0) break
     const text = clip(one.text, room)
     out.push({ ...one, text })
-    room -= text.length
+    room -= cellWidth(text)
   }
   return out
 }

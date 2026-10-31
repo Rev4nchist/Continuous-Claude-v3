@@ -17,7 +17,7 @@ import { oneLine, wrapRows } from './text'
 // rows indented 4. The mark is `>` (needs), `+` (done) or `!` (watch). A text cut at `lineCap` rows ends with `...more -> <home tab>`; an item
 // whose home tab holds more (an ask with a recommendation, a peer lane that may overlap) always ends with it. A derived fact (read from a
 // handoff or a log, not stated by the session) starts with `[derived]`. Wording comes from plain.ts. The home tab is named by its label
-// (Steps, Work, Checks, Choices, Swarm; the plain words are in tab-words.ts; a helper item points to Swarm, the keeper line to Session). Every string is redacted, made one line
+// (Steps, Work, Checks, Choices, Swarm; the plain words are in tab-words.ts; a helper item names no tab, the keeper line points to Session). Every string is redacted, made one line
 // and bounded before it is cut to the width (text.ts). Observer only: it injects nothing.
 
 export type DigestAsk = { kind: AskKind; text: string; recommend?: string | undefined; source: 'brief_set' | 'parsed'; at?: number | undefined; answered?: true | undefined }
@@ -114,6 +114,12 @@ type Body = { text: string; next?: string; more?: boolean }
 
 /** An item before it is drawn. `make` runs only for the items that are shown, so a long list costs a sort, not a redaction each. `home` names the tab that holds the full text. */
 type Item = { rank: number; at: number | undefined; home: string; derived: boolean; tone: Tone; make: () => Body }
+
+/**
+ * The `home` of an item whose text the home tab does not hold in full: no hint. A helper item is this: the Swarm tab draws a helper in one row, hides the done helpers
+ * of a clean finished workflow and folds done helpers in a short pane, so `…more -> Swarm` would promise text Swarm does not show.
+ */
+const NO_HOME = ''
 
 const item = (rank: number, at: number | undefined, home: string, tone: Tone, make: () => Body, derived = false): Item => ({ rank, at, home, derived, tone, make })
 
@@ -263,7 +269,7 @@ const decisionItems = (decisions: DigestDecision[]): Item[] =>
 const milestoneItems = (prs: DigestPr[], agents: AgentRun[], commits: DigestCommit[], now: number): Item[] => [
   ...commits.map(one => item(0, one.at, 'Work', 'todo', () => ({ text: oneLine(one.subject) }))),
   ...prs.filter(one => one.merged === true).map(one => item(0, one.at, 'Work', 'todo', () => ({ text: prSentence({ pr: one.pr, state: one.state, merged: true })?.text ?? '' }))),
-  ...agents.filter(one => one.status === 'done').map(one => item(0, one.endedAt ?? one.startedAt, WORDS.swarm.label, 'todo', () => ({ text: helperSentence(one, now) }))),
+  ...agents.filter(one => one.status === 'done').map(one => item(0, one.endedAt ?? one.startedAt, NO_HOME, 'todo', () => ({ text: helperSentence(one, now) }))),
 ]
 
 // --- WATCH ---
@@ -279,7 +285,7 @@ const threadItems = (prs: DigestPr[]): Item[] =>
     .map(one => item(0, one.at, 'Work', 'todo', () => ({ text: oneLine(`Change #${one.pr} has ${plural(one.threads ?? 0, 'unresolved thread')}`) })))
 
 const longRunItems = (agents: AgentRun[], now: number): Item[] =>
-  agents.filter(one => one.status === 'running' && now - one.startedAt > LONG_RUN_MS).map(one => item(0, one.startedAt, WORDS.swarm.label, 'todo', () => ({ text: helperSentence(one, now) })))
+  agents.filter(one => one.status === 'running' && now - one.startedAt > LONG_RUN_MS).map(one => item(0, one.startedAt, NO_HOME, 'todo', () => ({ text: helperSentence(one, now) })))
 
 const peerItems = (lanes: DigestLane[]): Item[] =>
   lanes

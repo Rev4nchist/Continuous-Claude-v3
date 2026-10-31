@@ -1,4 +1,5 @@
-import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTaskStatus, OsTurn, PrWatch } from '../../types'
+import { cellWidth, cutCells } from './cells'
+import type { OsAgent,OsLane, OsPlan, OsStep, OsTask, OsTaskStatus, OsTurn, PrWatch } from '../../types'
 
 export type OsView = {
   tasks: OsTask[]
@@ -75,8 +76,9 @@ export const stepLabel = (input: Record<string, unknown>): string => {
   return ''
 }
 
+/** `text` in at most `max` terminal cells (a wide letter takes 2); a longer text ends with an ellipsis. Never splits a surrogate pair. */
 export const clip = (text: string, max: number): string =>
-  text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
+  cellWidth(text) <= max ? text : `${cutCells(text, Math.max(0, max - 1))}…`
 
 export const elapsed = (ms: number): string => {
   const total = Math.max(0, Math.floor(ms / 1000))

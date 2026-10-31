@@ -25,7 +25,7 @@ import type { AgentRun } from '../types'
 //   - Fit, in order: all rows; the done agents of each section fold into one "✓ N done" row (`sw-wf-<i>-done`, `sw-hp-done`); then "+N more"
 //     (`more-swarm`). The header is never cut. A cut text ends with a bare ellipsis: Swarm is the home tab, so it names no other tab.
 //   - Feed (optional `feed.workflows`, one WorkflowFeed per runId): name and phase of the run row, a label per agent id. Phase = the highest
-//     `agentPhases` value of its running agents, else the highest seen, else `feed.phase`; its title and total come from `feed.phase` and the
+//     `agentPhases` value of its running agents; a running agent the feed does not know (SW19) gives no phase; with none running, the highest seen, else `feed.phase`; its title and total come from `feed.phase` and the
 //     title only when it is the same phase. No feed: no phase, and the name reads "a workflow". A feed alone never makes a row.
 //
 // Ways the Swarm tab can fail, one test each:
@@ -294,7 +294,7 @@ describe('swarm tab: the run row and the feed', () => {
   })
 
   test('SW17 with a feed the run row reads counts, then phase, then name; without one it reads a workflow', () => {
-    const fed = swarm(withRuns(mockup(), [feedOf()]), 120, 40)
+    const fed = swarm(withRuns(mockup(), [feedOf({ agentPhases: { 'a-judge': 2 } })]), 120, 40)
     expect(rowText(byKey(fed, 'sw-wf-0')!)).toMatch(/^ {2}● 1 running, 4 done · phase 2 of 2: Judge · pane-fleet-assess /)
     expect(rowText(byKey(fed, 'sw-wf-1')!)).toMatch(/^ {2}✓ 3 done · a workflow /)
     const bare = swarm(withRuns(mockup()), 120, 40)
@@ -303,7 +303,7 @@ describe('swarm tab: the run row and the feed', () => {
   })
 
   test('SW17 a narrow cut loses the name first: at 40 columns the counts are there and the name is not', () => {
-    const row = byKey(swarm(withRuns(mockup(), [feedOf()]), 40, 40), 'sw-wf-0')!
+    const row = byKey(swarm(withRuns(mockup(), [feedOf({ agentPhases: { 'a-judge': 2 } })]), 40, 40), 'sw-wf-0')!
     const text = rowText(row)
     expect(text).toMatch(/^ {2}● 1 running, 4 done · /)
     expect(text).not.toContain('pane-fleet-assess')
@@ -323,12 +323,25 @@ describe('swarm tab: the run row and the feed', () => {
     // Nothing runs: the highest phase seen.
     const done = [wf('wf_a', 'd1', 'done', 9 * MIN), wf('wf_a', 'd2', 'done', 8 * MIN)]
     expect(row(feedOf({ phase: { index: 1, total: 3, title: 'Map' }, agentPhases: { d1: 1, d2: 3 } }), done)).toContain('phase 3 of 3 · pane-fleet-assess')
-    // No agent phase at all: the feed phase, title included.
-    expect(row(feedOf({ phase: { index: 1, total: 3, title: 'Map' }, agentPhases: {} }))).toContain('phase 1 of 3: Map · pane-fleet-assess')
+    // No agent phase at all and nothing runs: the feed phase, title included.
+    expect(row(feedOf({ phase: { index: 1, total: 3, title: 'Map' }, agentPhases: {} }), done)).toContain('phase 1 of 3: Map · pane-fleet-assess')
+    // A helper runs and the feed does not know it yet: the feed phase may be old, so the row claims no phase (SW19).
+    expect(row(feedOf({ phase: { index: 1, total: 3, title: 'Map' }, agentPhases: {} }))).not.toContain('phase')
     // No phase anywhere: no phase words.
     expect(row(feedOf({ phase: null, agentPhases: {} }))).not.toContain('phase')
     // A phase value that is not a number is ignored.
     expect(row(feedOf({ phase: null, agentPhases: { r1: Number.NaN, d1: undefined as never } }))).not.toMatch(/phase|NaN/)
+  })
+
+  test('SW19 helpers that started after the last journal read have no phase entry: the run row does not claim the old phase of the finished ones', () => {
+    const runs = [wf('wf_a', 'd1', 'done', 9 * MIN), wf('wf_a', 'd2', 'done', 8 * MIN), wf('wf_a', 'r3', 'running', MIN), wf('wf_a', 'r4', 'running', MIN)]
+    const stale = feedOf({ phase: { index: 1, total: 2, title: 'One' }, agentPhases: { d1: 1, d2: 1 } })
+    const text = rowText(byKey(swarm(withRuns(runs, [stale]), 140, 20), 'sw-wf-0')!)
+    expect(text).toMatch(/^ {2}● 2 running, 2 done · pane-fleet-assess /)
+    expect(text).not.toMatch(/phase|One/)
+    // Once one running helper is in the feed, the ledger decides again.
+    const known = feedOf({ phase: { index: 2, total: 2, title: 'Two' }, agentPhases: { d1: 1, d2: 1, r3: 2 } })
+    expect(rowText(byKey(swarm(withRuns(runs, [known]), 140, 20), 'sw-wf-0')!)).toContain('phase 2 of 2: Two · pane-fleet-assess')
   })
 
   test('F14 a feed whose runId matches no run makes no row; a feed with no runs at all draws the empty line', () => {
@@ -520,6 +533,38 @@ describe('swarm tab: width, safety and keys', () => {
         expect(byKey(rows, key)?.left.map(one => one.text).join(''), `${columns} ${key}`).toMatch(/…$/)
       }
       expect(all(rows)).not.toMatch(/y{500}/)
+    }
+  })
+
+  // The width is measured in terminal cells with Unicode properties, not with the code under test: a wide letter or an emoji takes 2 cells, a mark takes 0.
+  const cellsOf = (text: string): number =>
+    [...text].reduce((n, ch) => n + (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Emoji_Presentation}　-〾＀-｠]/u.test(ch) ? 2 : /[\p{Mn}​-‏]/u.test(ch) ? 0 : 1), 0)
+  const rowCells = (row: PaneRow): number =>
+    row.left.reduce((n, one) => n + cellsOf(one.text), 0) + (row.right ? row.right.reduce((n, one) => n + cellsOf(one.text), 0) + 1 : 0)
+  const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
+
+  test('SW20 a CJK or an emoji text (label, description, name, phase title) never passes the pane in cells and never leaves half a surrogate pair, at 20 to 200 columns', () => {
+    const cjk = '日本語のとても長いラベル'.repeat(8)
+    const mixed = `ab${'🚀🎉🔥'.repeat(25)}`
+    const fullwidth = 'ＡＢＣ漢字한국어'.repeat(10)
+    const runs = [
+      wf('wf_a', 'r1', 'running', 4 * MIN, { description: 'x' }),
+      wf('wf_a', 'r2', 'failed', 9 * MIN, { description: 'x' }),
+      wf('wf_a', 'r3', 'done', 8 * MIN, { description: 'x' }),
+      run('p1', 'running', MIN, { description: cjk }),
+      run('p2', 'failed', 5 * MIN, { description: mixed }),
+      run('p3', 'done', 6 * MIN, { description: `${mixed} ${cjk}`, type: fullwidth }),
+    ]
+    const feeds = [feedOf({ name: cjk, phase: { index: 1, total: 2, title: mixed }, agentPhases: { r1: 1 }, labels: { r1: cjk, r2: mixed, r3: fullwidth } })]
+    for (const columns of WIDTHS) {
+      for (const budget of [4, 8, 40]) {
+        for (const row of swarm(withRuns(runs, feeds), columns, budget)) {
+          expect(rowCells(row), `${columns}x${budget} ${row.key}`).toBeLessThanOrEqual(columns)
+          for (const one of [...row.left, ...(row.right ?? [])]) expect(LONE_SURROGATE.test(one.text), `${columns}x${budget} ${row.key}`).toBe(false)
+        }
+      }
+      // The same text through the tab dispatcher, whose rows pass the same last step.
+      for (const row of viaTab(withRuns(runs, feeds), columns, 40)) expect(rowCells(row), `tab ${columns} ${row.key}`).toBeLessThanOrEqual(columns)
     }
   })
 

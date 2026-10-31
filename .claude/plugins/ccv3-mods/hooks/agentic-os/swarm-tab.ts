@@ -86,12 +86,14 @@ const labelOf = (feed: WorkflowFeed | undefined, run: AgentRun): string => {
 }
 
 /**
- * The phase of a run: the highest phase of its running helpers (the ledger decides what is running), else the highest seen, else the feed's own.
+ * The phase of a run: the highest phase of its running helpers (the ledger decides what is running). When helpers run and the feed knows none of them
+ * (they started after the last journal read), no phase: the feed holds an older one. With nothing running: the highest seen, else the feed's own.
  * The feed gives the total and the title of its own phase only: another phase has no title here.
  */
 const phaseOf = (flow: SwarmFlow, feed: WorkflowFeed): WorkflowFeed['phase'] => {
   const phases = (runs: AgentRun[]): number[] => runs.map(run => own(feed.agentPhases, run.id)).filter(known)
   const live = phases(flow.runs.filter(run => run.status === 'running'))
+  if (live.length === 0 && flow.progress.running > 0) return null
   const seen = live.length > 0 ? live : phases(flow.runs)
   const base = feed.phase ?? null
   if (seen.length === 0) return base

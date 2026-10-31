@@ -200,14 +200,14 @@ const jl = (...lines: Record<string, unknown>[]): string => lines.map(one => JSO
 const started = (agentId: string, label: string, phase: string, extra: Record<string, unknown> = {}) => ({ type: 'started', key: 'k'.repeat(67), agentId, label, phase, ...extra })
 const finished = (agentId: string) => ({ type: 'result', key: 'k'.repeat(67), agentId, result: { summary: 'RESULT-LEAK' }, toolsUsed: ['Read'] })
 
-const journalWorld = (on: On, files: Record<string, string>, opts: { sizeOf?: (path: string) => number; readFails?: boolean } = {}) => {
+const journalWorld = (on: On, files: Record<string, string>, opts: { sizeOf?: (path: string) => number; readFails?: boolean; runs?: Record<string, unknown>[] } = {}) => {
   const reads: string[] = []
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { USERPROFILE: 'C:/home' })
-  const runs = [
+  const runs = (opts.runs ?? [
     { id: 'a-0', type: 'scout', description: 'task', status: 'done', startedAt: 1_000_000 - 600_000, endedAt: 1_000_000 - 300_000, workflowRunId: 'wf_1' },
     { id: 'a-1', type: 'scout', description: 'task', status: 'running', startedAt: 1_000_000 - 60_000, endedAt: null, workflowRunId: 'wf_1' },
-  ].map(one => ({ model: 'claude-sonnet-5-5', effort: 'high', spec: {}, tokens: 0, costUsd: 0, drift: null, ...one }))
+  ]).map(one => ({ model: 'claude-sonnet-5-5', effort: 'high', spec: {}, tokens: 0, costUsd: 0, drift: null, ...one }))
   on('state.get', { plugin: 'ccv3-mods', key: 'agentRuns' } as never, (() => ({ value: { value: runs, version: 1 } })) as never)
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
@@ -287,6 +287,25 @@ describe('agentic-os Swarm tab: the journal feed', () => {
     await advance(30_000)
     expect(journalReads()).toBe(2)
     await pane.unmount()
+  })
+
+  // F21 the feed keeps the 8 runs the ledger saw last, not the 8 that matter: a run still going loses its labels behind 8 newer finished runs
+  test('F21 a still-running old run keeps its journal feed behind eight newer finished runs', async ($, on) => {
+    const at = 1_000_000
+    const ids = Array.from({ length: 8 }, (_, i) => `wf_new${i}`)
+    const runs = [
+      { id: 'o-0', type: 'scout', description: 'task', status: 'running', startedAt: at - 3_000_000, endedAt: null, workflowRunId: 'wf_old' },
+      ...ids.map((id, i) => ({ id: `n-${i}`, type: 'scout', description: 'task', status: 'done', startedAt: at - 200_000 + i * 1_000, endedAt: at - 100_000 + i * 1_000, workflowRunId: id })),
+    ]
+    const journalOf = (id: string): string => `C:/home/.claude/projects/C--r/${SID}/subagents/workflows/${id}/journal.jsonl`
+    const files: Record<string, string> = { [journalOf('wf_old')]: jl(started('o-0', 'old-still-running', 'Slow')) }
+    ids.forEach((id, i) => {
+      files[journalOf(id)] = jl(started(`n-${i}`, `new-${i}`, 'Fast'))
+    })
+    const { settle } = journalWorld(on, files, { runs })
+    await $.command.run(OS)
+    await settle()
+    expect(await swarmText($)).toContain('old-still-running')
   })
 
   const BAD_CASES: [string, Record<string, string>, { sizeOf?: (path: string) => number; readFails?: boolean }][] = [

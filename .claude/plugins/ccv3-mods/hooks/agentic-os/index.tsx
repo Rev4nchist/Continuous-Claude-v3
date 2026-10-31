@@ -18,6 +18,7 @@ import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
 import { parseBoard } from './lanes-model'
+import { swarmGroups } from './workflow-model'
 import { JOURNAL_MAX_BYTES, journalPath, projectSlug, runFilePath, workflowFeed } from './journal-model'
 import { osPane, isTabId } from './os-tabs-model'
 import type { TabId, TabState } from './os-tabs-model'
@@ -301,7 +302,7 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-/** The newest workflow runs whose journals one refresh reads: each costs two file stats and at most two reads. */
+/** The workflow runs whose journals one refresh reads (running first, then the latest activity, as the Swarm tab draws them): each costs two file stats and at most two reads. */
 const MAX_FEED_RUNS = 8
 
 /** A file's text, or null when it is missing, not a file, over the size cap or unreadable. The size is checked first, so a huge file is never copied in. */
@@ -325,7 +326,7 @@ const readCapped = async ($: EngineInterface, path: string): Promise<string | nu
 const refreshWorkflows = async ($: EngineInterface): Promise<void> => {
   try {
     const home = await homeDir($)
-    const ids = [...new Set((await read($, agentRuns)).map(run => run.workflowRunId).filter((id): id is string => typeof id === 'string' && id !== ''))].slice(-MAX_FEED_RUNS)
+    const ids = swarmGroups(await read($, agentRuns)).flows.map(flow => flow.progress.key).slice(0, MAX_FEED_RUNS)
     const before = await read($, workflows)
     if (!home || (ids.length === 0 && before.length === 0)) return
     const sessionId = await $.session.id()
