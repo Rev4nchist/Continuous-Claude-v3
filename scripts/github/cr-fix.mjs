@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments } from './review-status.mjs';
+import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -114,7 +114,8 @@ function readSource(pr, repo, deps) {
   const [owner, name] = repo.split('/');
   const reviews = [deps.gh(['--paginate', '--slurp', `repos/${repo}/pulls/${pr}/reviews?per_page=100`])].flat(2);
   // The issue comments with their edit history: every page, through the reader review-status.mjs uses (the summary is trusted only with it).
-  return { reviews, ...readIssueComments(deps.gh, owner, name, pr) };
+  // `commits` orders the rounds by the reviewed commit, as review-status.mjs does, so both name the same carry source.
+  return { reviews, commits: readPrCommits(deps.gh, owner, name, pr), ...readIssueComments(deps.gh, owner, name, pr) };
 }
 
 /** The carry source's commit (the same round review-status.mjs reads) and the checkout head, or a stop result. No CLI run has been spent yet. */
