@@ -63,4 +63,14 @@ test.describe('safeMessage for the 503 body', () => {
     expect(body).not.toContain(tail);
     expect(body).not.toContain(chars(0x200b));
   });
+
+  // S6 invisible characters outside the first set: word joiner, soft hyphen, DEL.
+  for (const point of [0x2060, 0x00ad, 0x007f]) {
+    test(`S6 a secret split by U+${point.toString(16).toUpperCase().padStart(4, '0')} is redacted`, () => {
+      const tail = 'a'.repeat(40);
+      const body = safeMessage(new Error(`call failed with sk-${chars(point)}ant-${tail} in the header`));
+      expect(body).not.toContain(tail);
+      expect(body).not.toContain(chars(point));
+    });
+  }
 });

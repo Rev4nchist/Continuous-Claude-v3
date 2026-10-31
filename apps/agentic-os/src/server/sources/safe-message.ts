@@ -82,7 +82,7 @@ export function scrubPathsInText(text: string): string {
  * They are invisible or flip the text around them ("gnp.exe" shown as "exe.png"); Dave reads this text.
  * Run BEFORE redaction: a secret split by one of these matches no redact pattern, and a strip after redact would show it whole.
  */
-const INVISIBLE = /[\u0000-\u0008\u000E-\u001F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+const INVISIBLE = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
 
 export function stripControl(text: string): string {
   return text.replace(INVISIBLE, '');
