@@ -61,15 +61,15 @@ Delete `$T` afterwards.
 **W9 Scheduled-task scripts** → `$D-pr1-win-ps1-parse.txt`
 ```powershell
 Get-ChildItem .claude\scripts -Recurse -Filter *.ps1 | % { $e=$null; [void][Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$null,[ref]$e); "$($e.Count) errors  $($_.FullName)" }
-Select-String -Path .claude\scripts\*.ps1,.claude\scripts\scheduled\*.ps1,scripts\scheduled-health-check.bat -Pattern 'david[.-]hayes'
-Select-String -Path scripts\scheduled-health-check.bat -Pattern 'report-registry'   # must be 0 (harness-only, David 2026-10-22)
-Get-Content scripts\scheduled\tasks.json | ConvertFrom-Json | ft
+Select-String -Path .claude\scripts\*.ps1,.claude\scripts\scheduled\* -Pattern 'david[.-]hayes'
+Get-Content scripts\scheduled\tasks.json | ConvertFrom-Json | Select-Object -ExpandProperty tasks | ft
 ```
 Pass when all of these hold:
 - every file reports `0 errors`;
 - there are 0 `david.hayes` matches;
-- there are 0 `report-registry` references in `scheduled-health-check.bat` (harness checks only);
-- `tasks.json` parses, lists ≥ 1 task with the `personal` profile, and lists no other profile.
+- `tasks.json` parses and lists exactly 4 tasks;
+- each task has the fields `name`, `script`, `trigger`, `execLimitMin`, `allowedExit`, `maxAgeHours`;
+- each task's `script` path exists in the repo.
 
 **Do not register tasks here.** That happens in runbook §3.9.
 

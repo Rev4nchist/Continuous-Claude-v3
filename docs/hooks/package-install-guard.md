@@ -112,7 +112,7 @@ Requires `gh` CLI authenticated (`gh auth status`).
 
 ### Scheduled (daily at 9am)
 
-A Windows Task Scheduler job runs `C:\Users\david.hayes\.claude\scripts\scheduled\scheduled-blocklist-update.bat` daily at 9am.
+A Windows Task Scheduler job runs `<machine profile home>\.claude\scripts\scheduled\scheduled-blocklist-update.bat` (the `.claude` folder of the profile that runs the task) daily at 9am.
 The repo source is `.claude/scripts/scheduled/`; the forward sync (`scripts/sync-to-active.sh`, from `main` only)
 installs it, so the job that runs is always main's version, not the primary checkout's branch. The .bat keeps
 the durable log (`.claude/logs/blocklist-update.log`) and passes its arguments unchanged to `scheduled-blocklist-update.ps1`.

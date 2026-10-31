@@ -3,7 +3,7 @@
  * Session End Handoff Indexer Hook
  *
  * After a SessionEnd event, scans ``thoughts/shared/handoffs/`` for a handoff
- * file that was written within the last 30 seconds and (if found) spawns the
+ * file that was written within the last 10 minutes and (if found) spawns the
  * Python indexer to push that handoff's fields into ``archival_memory``.
  *
  * This complements ``session-end-extract`` (which extracts learnings from the
@@ -32,9 +32,11 @@ interface SessionEndInput {
 }
 
 // A handoff written more than this many ms before SessionEnd is treated as
-// "already indexed by a previous run" and skipped. 30 seconds matches the
-// PostToolUse handoff-index hook's typical lag.
-export const RECENT_WINDOW_MS = 30_000;
+// "already indexed by a previous run" and skipped. A handoff is usually written
+// well before the session closes, so 30 s never matched: the live log shows
+// 103 of 103 SessionEnd runs skipped with no_recent_handoff. 10 minutes covers
+// a handoff written near the end of a session; indexing is idempotent.
+export const RECENT_WINDOW_MS = 10 * 60_000;
 
 // File extensions we consider as handoff payloads.
 export const HANDOFF_EXTS = ['.yaml', '.yml', '.md'] as const;
@@ -120,7 +122,7 @@ export interface ResolveIndexerScriptInput {
  *
  * We prefer ``<opcDir>/scripts/core/index_handoffs.py`` (the canonical
  * location for repo-level work) but fall back to the active install at
- * ``~/.claude/scripts/core/core/index_handoffs.py`` so the hook still
+ * ``~/.claude/scripts/core/index_handoffs.py`` so the hook still
  * works after a forward sync.
  */
 export function resolveIndexerScript(input: ResolveIndexerScriptInput): string | null {
@@ -131,7 +133,6 @@ export function resolveIndexerScript(input: ResolveIndexerScriptInput): string |
       process.env.HOME || process.env.USERPROFILE || '',
       '.claude',
       'scripts',
-      'core',
       'core',
       'index_handoffs.py',
     ),

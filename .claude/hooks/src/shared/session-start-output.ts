@@ -23,14 +23,16 @@ export function isClaudeHomeProject(project: string, home: string): boolean {
 /**
  * Build the hook output. The health line goes to the model (additionalContext) and to
  * Dave's terminal (systemMessage) in every state, so a healthy store is visible too.
+ * `harnessLine` (shared/health-alert.ts) goes after it in both places, only when there is one.
  */
 export function buildSessionStartOutput(
   daemonOutput: string,
   health: HealthLine,
+  harnessLine?: string | null,
 ): ContextInjectionHookOutput {
-  const additionalContext = [daemonOutput, health.line].filter(Boolean).join('\n');
+  const additionalContext = [daemonOutput, health.line, harnessLine].filter(Boolean).join('\n');
   return {
     hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext },
-    systemMessage: health.line,
+    systemMessage: [health.line, harnessLine].filter(Boolean).join('\n'),
   };
 }

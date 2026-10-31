@@ -14,6 +14,8 @@
  * Also reports memory health (shared/memory-health.ts): one line appended to
  * additionalContext, and the same line as systemMessage in every state, so Dave
  * sees it at the start of each session.
+ * Also appends one harness-doctor line (shared/health-alert.ts) when the doctor
+ * report shows a problem or is more than 36 h old; silent when healthy.
  * Starts a background backup (shared/memory-backup.ts) when the newest one is stale.
  */
 
@@ -26,6 +28,7 @@ import { runCommand } from './lib/run-command.js';
 import { getOpcDir } from './shared/opc-path.js';
 import { runSessionHealth } from './shared/memory-health.js';
 import { buildSessionStartOutput, isClaudeHomeProject } from './shared/session-start-output.js';
+import { healthAlertLine } from './shared/health-alert.js';
 
 export async function main(): Promise<void> {
   const project = getProject();
@@ -63,7 +66,7 @@ export async function main(): Promise<void> {
     runSessionHealth({ opcDir: getOpcDir() }),
   ]);
 
-  emitAndExit(buildSessionStartOutput(result.output ?? '', health));
+  emitAndExit(buildSessionStartOutput(result.output ?? '', health, healthAlertLine()));
 }
 
 /**

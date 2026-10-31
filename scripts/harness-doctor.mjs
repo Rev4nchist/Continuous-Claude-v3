@@ -2,12 +2,15 @@
 /**
  * harness-doctor: a slim, read-only health check of the harness.
  *
- * Usage: node scripts/harness-doctor.mjs [--json] [--home <dir>] [--repo <dir>]
+ * Usage: node scripts/harness-doctor.mjs [--json] [--out <file>] [--home <dir>] [--repo <dir>]
  *   --home  the dir that holds .claude (default: the user home)
  *   --repo  the repo root (default: the repo that holds this script)
  *   --json  also write <repo>/.claude/cache/e2e/<YYYY-MM-DD>-harness-doctor.json
+ *   --out   also write the same JSON to <file> (parent dirs are created). Needs no --json. A failed write exits 2.
  *
- * It runs no Docker, no network and no paid call. It writes only the --json artifact.
+ * It runs no Docker, no network and no paid call. It writes only the --json and --out artifacts.
+ * schedule:* reads scripts/scheduled/tasks.json and runs `schtasks /query /v /fo csv` (read-only, Windows only).
+ * blocklist:age reads git history. Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds fake <task>.csv schtasks output.
  * One line per check: PASS|WARN|FAIL  <section>:<check>  <detail>. Last line: harness: N pass / N warn / N fail.
  * Exit 1 on any FAIL, else 0.
  *
@@ -42,10 +45,13 @@ const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
 // ---- options ----
 export function parseArgs(argv) {
-  const o = { json: false, home: homedir(), repo: resolve(HERE, '..') };
+  const o = { json: false, out: null, home: homedir(), repo: resolve(HERE, '..') };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--json') o.json = true;
-    else if (argv[i] === '--home' || argv[i] === '--repo') {
+    else if (argv[i] === '--out') {
+      if (!argv[i + 1]) throw new Error('--out needs a file');
+      o.out = resolve(argv[++i]);
+    } else if (argv[i] === '--home' || argv[i] === '--repo') {
       if (!argv[i + 1]) throw new Error(`${argv[i]} needs a directory`);
       o[argv[i].slice(2)] = resolve(argv[++i]);
     } else throw new Error(`unknown argument: ${argv[i]}`);
@@ -251,8 +257,159 @@ function reviews7d(o) {
 
 const reviewSection = (o) => [crPaidCap(o), reviews7d(o)];
 
+// ---- repo ----
+/** A scheduled run reads whatever branch another session left checked out. The result must say so. */
+function repoBranch(o) {
+  let branch;
+  try { branch = git(o.repo, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch (err) { return result('WARN', 'repo', 'branch', `cannot read the branch of ${o.repo}: ${msg(err)}`); }
+  if (branch === 'main') return result('PASS', 'repo', 'branch', `${o.repo} is on main`);
+  const what = branch === 'HEAD' ? 'a detached HEAD' : `branch ${branch}`;
+  return result('WARN', 'repo', 'branch', `${o.repo} is on ${what}, not main: every check here reads that tree, not main`);
+}
+
+const repoSection = (o) => [repoBranch(o)];
+
+// ---- schedule ----
+const SCHEDULE_REL = ['scripts', 'scheduled', 'tasks.json'];
+const TASK_RUNNING = 267009; // SCHED_S_TASK_RUNNING
+const TASK_NEVER_RAN = 267011; // SCHED_S_TASK_HAS_NOT_RUN
+
+/** Rows of a CSV text. Handles quoted commas, doubled quotes and CRLF. */
+export function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch !== '"') cell += ch;
+      else if (text[i + 1] === '"') { cell += '"'; i++; } else quoted = false;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); cell = '';
+      if (row.some((c) => c !== '')) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+/** Runs the real schtasks. Read-only. */
+function schtasksQuery(name) {
+  const r = spawnSync('schtasks', ['/query', '/tn', name, '/v', '/fo', 'csv'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  return r.error ? { error: msg(r.error) } : { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds <task name>.csv files of fake schtasks output. A missing file answers like an unknown task. */
+function fakeSchtasksQuery(dir) {
+  return (name) => {
+    const file = join(dir, `${name}.csv`);
+    return existsSync(file) ? { status: 0, stdout: readFileSync(file, 'utf8'), stderr: '' }
+      : { status: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.' };
+  };
+}
+
+/** schtasks prints the last run as M/D/YYYY h:mm:ss AM|PM (English locale), or an ISO-like stamp. NaN when it is neither. */
+function parseRunTime(s) {
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2}):(\d{2})\s*([AP]M)?$/i.exec(s);
+  if (us) {
+    const [, mo, d, y, h, mi, sec, ap] = us;
+    const hour = ap ? (+h % 12) + (ap.toUpperCase() === 'PM' ? 12 : 0) : +h;
+    return +mo > 12 ? NaN : new Date(+y, +mo - 1, +d, hour, +mi, +sec).getTime();
+  }
+  return /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s) ? new Date(s.replace(' ', 'T')).getTime() : NaN;
+}
+
+/** The problem with a tasks.json entry, or null. */
+function entryProblem(t) {
+  if (!t || typeof t.name !== 'string' || !t.name) return 'has no name';
+  if (!Array.isArray(t.allowedExit) || !t.allowedExit.every(Number.isInteger)) return 'allowedExit is not an array of integers';
+  if (!(t.maxAgeHours > 0)) return 'maxAgeHours is not a positive number';
+  return null;
+}
+
+/** The header-name lookup of one schtasks answer, or the WARN text. */
+function taskRow(out, name) {
+  const rows = parseCsv(out);
+  const header = rows[0] ?? [];
+  const col = Object.fromEntries(['TaskName', 'Last Run Time', 'Last Result'].map((h) => [h, header.indexOf(h)]));
+  const missing = ['Last Run Time', 'Last Result'].filter((h) => col[h] < 0);
+  if (missing.length) return { warn: `schtasks has no column ${missing.join(', ')} (headers: ${header.slice(0, 8).join('|')}): another Windows language?` };
+  const data = rows.slice(1).find((r) => col.TaskName < 0 || r[col.TaskName] === `\\${name}`);
+  return data ? { lastRun: data[col['Last Run Time']], lastResult: data[col['Last Result']] } : { warn: `schtasks answered with no row for \\${name}` };
+}
+
+/** Judges one registered task's last run and result. */
+function judgeTask(t, row, now) {
+  const code = Number(row.lastResult);
+  if (!Number.isInteger(code)) return result('WARN', 'schedule', t.name, `Last Result "${row.lastResult}" is not a number`);
+  const ran = parseRunTime(row.lastRun);
+  if (code === TASK_NEVER_RAN || row.lastRun === 'N/A' || new Date(ran).getFullYear() === 1999) return result('WARN', 'schedule', t.name, `task is registered but never ran (trigger ${t.trigger})`);
+  if (code !== TASK_RUNNING && !t.allowedExit.includes(code)) return result('FAIL', 'schedule', t.name, `last result ${code} is not in allowedExit [${t.allowedExit}]; last run ${row.lastRun}`);
+  if (Number.isNaN(ran)) return result('WARN', 'schedule', t.name, `Last Run Time "${row.lastRun}" is not a date the doctor reads`);
+  const hours = (now - ran) / HOUR;
+  return hours > t.maxAgeHours ? result('WARN', 'schedule', t.name, `last run ${row.lastRun} is ${hours.toFixed(1)} h old, over maxAgeHours ${t.maxAgeHours}`)
+    : result('PASS', 'schedule', t.name, `last result ${code}, last run ${row.lastRun} (${hours.toFixed(1)} h ago, limit ${t.maxAgeHours})`);
+}
+
+function checkTask(t, query, now) {
+  const problem = entryProblem(t);
+  if (problem) return result('WARN', 'schedule', t?.name || 'entry', `tasks.json entry ${problem}`);
+  const q = query(t.name);
+  if (q.error) return result('WARN', 'schedule', t.name, `cannot run schtasks: ${q.error}`);
+  if (q.status !== 0) return result('WARN', 'schedule', t.name, `task is not registered (schtasks exit ${q.status}: ${String(q.stderr).trim().split('\n')[0]}); trigger ${t.trigger}`);
+  const row = taskRow(q.stdout, t.name);
+  return row.warn ? result('WARN', 'schedule', t.name, row.warn) : judgeTask(t, row, now);
+}
+
+/** One check per task in scripts/scheduled/tasks.json. `deps` (platform, query, now) is injectable for tests. */
+export function scheduleChecks(o, deps = {}) {
+  const seam = process.env.HARNESS_DOCTOR_SCHTASKS_DIR;
+  const platform = deps.platform ?? (seam ? 'win32' : process.platform);
+  const query = deps.query ?? (seam ? fakeSchtasksQuery(seam) : schtasksQuery);
+  if (platform !== 'win32') return [result('PASS', 'schedule', 'tasks', `skipped: Task Scheduler exists only on Windows (this is ${platform})`)];
+  const file = join(o.repo, ...SCHEDULE_REL);
+  if (!existsSync(file)) return [result('WARN', 'schedule', 'tasks', `missing ${file}: no scheduled task is checked`)];
+  let tasks;
+  try { tasks = readJson(file).tasks; } catch (err) { return [result('WARN', 'schedule', 'tasks', `${file} is not valid JSON: ${msg(err)}`)]; }
+  if (!Array.isArray(tasks)) return [result('WARN', 'schedule', 'tasks', `${file} has no "tasks" array`)];
+  if (!tasks.length) return [result('PASS', 'schedule', 'tasks', `${file} lists 0 tasks`)];
+  return tasks.map((t) => checkTask(t, query, deps.now ?? Date.now()));
+}
+
+const scheduleSection = (o) => scheduleChecks(o);
+
+// ---- blocklist ----
+const BLOCKLIST_REL = '.claude/hooks/src/shared/malicious-packages.json';
+const BLOCKLIST_WARN_DAYS = 3;
+const BLOCKLIST_FAIL_DAYS = 14;
+
+/** The last commit that touched the blocklist: { sec, sha }, or null when none did. */
+function blocklistCommit(repo) {
+  const out = git(repo, ['log', '-1', '--format=%ct %h', '--', BLOCKLIST_REL]);
+  const [sec, sha] = out.split(' ');
+  return out ? { sec: Number(sec), sha } : null;
+}
+
+/** The blocklist job stopped for 16 days once and nobody knew. WARN over 3 days, FAIL over 14. `deps` (now, lastCommit) is injectable. */
+export function blocklistAge(o, deps = {}) {
+  const commit = (deps.lastCommit ?? blocklistCommit)(o.repo);
+  if (!commit) return result('WARN', 'blocklist', 'age', `no commit touches ${BLOCKLIST_REL} in ${o.repo}`);
+  const days = ((deps.now ?? Date.now()) - commit.sec * 1000) / DAY;
+  const detail = `${BLOCKLIST_REL} last changed in commit ${commit.sha}, ${days.toFixed(1)} days ago`;
+  if (days > BLOCKLIST_FAIL_DAYS) return result('FAIL', 'blocklist', 'age', `${detail} (over ${BLOCKLIST_FAIL_DAYS}): is the update job running?`);
+  return days > BLOCKLIST_WARN_DAYS ? result('WARN', 'blocklist', 'age', `${detail} (over ${BLOCKLIST_WARN_DAYS})`) : result('PASS', 'blocklist', 'age', detail);
+}
+
+const blocklistSection = (o) => [blocklistAge(o)];
+
 // ---- run ----
-const SECTIONS = [['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection]];
+const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],
+  ['schedule', scheduleSection], ['blocklist', blocklistSection]];
 
 /** Runs every section. A section that throws becomes one WARN, so one bad input never hides the rest. */
 export function collect(o) {
@@ -268,25 +425,36 @@ export function summarize(checks) {
 
 const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-function writeArtifact(o, checks, summary) {
-  const dir = join(o.repo, '.claude', 'cache', 'e2e');
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, `${localDay(new Date())}-harness-doctor.json`);
+/** Writes the JSON result to `file` and creates its parent dir. */
+function writeArtifact(file, o, checks, summary) {
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), repo: o.repo, home: o.home, summary, checks }, null, 2)}\n`);
   return file;
+}
+
+const defaultArtifact = (o) => join(o.repo, '.claude', 'cache', 'e2e', `${localDay(new Date())}-harness-doctor.json`);
+
+/** Writes the --json and --out files. A write that fails is reported and returns false: the caller exits 2. */
+function writeArtifacts(o, checks, summary) {
+  const files = [o.json && defaultArtifact(o), o.out].filter(Boolean);
+  // Try every file: a failed repo artifact must not skip --out, which feeds the session-start line.
+  const ok = files.map((file) => {
+    try { console.error(`artifact: ${writeArtifact(file, o, checks, summary)}`); return true; } catch (err) { console.error(`cannot write ${file}: ${msg(err)}`); return false; }
+  });
+  return ok.every(Boolean);
 }
 
 function main() {
   let o;
   try { o = parseArgs(process.argv.slice(2)); } catch (err) {
-    console.error(`${msg(err)}\nusage: harness-doctor.mjs [--json] [--home <dir>] [--repo <dir>]`);
+    console.error(`${msg(err)}\nusage: harness-doctor.mjs [--json] [--out <file>] [--home <dir>] [--repo <dir>]`);
     process.exit(2);
   }
   const checks = collect(o);
   for (const c of checks) console.log(`${c.status}  ${c.section}:${c.check}  ${c.detail}`);
   const s = summarize(checks);
   console.log(`harness: ${s.pass} pass / ${s.warn} warn / ${s.fail} fail`);
-  if (o.json) console.error(`artifact: ${writeArtifact(o, checks, s)}`);
+  if (!writeArtifacts(o, checks, s)) process.exit(2);
   process.exit(s.fail > 0 ? 1 : 0);
 }
 

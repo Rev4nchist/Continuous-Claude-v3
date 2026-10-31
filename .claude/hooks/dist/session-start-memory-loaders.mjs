@@ -5347,9 +5347,9 @@ var require_lib2 = __commonJS({
 });
 
 // src/session-start-memory-loaders.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync2, readFileSync as readFileSync3 } from "fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join6 } from "node:path";
 
 // src/shared/session-id.ts
 function getProject() {
@@ -5721,12 +5721,82 @@ function isClaudeHomeProject(project, home) {
   const h = home.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
   return p === `${h}/.claude` || p.startsWith(`${h}/.claude/`);
 }
-function buildSessionStartOutput(daemonOutput, health) {
-  const additionalContext = [daemonOutput, health.line].filter(Boolean).join("\n");
+function buildSessionStartOutput(daemonOutput, health, harnessLine) {
+  const additionalContext = [daemonOutput, health.line, harnessLine].filter(Boolean).join("\n");
   return {
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext },
-    systemMessage: health.line
+    systemMessage: [health.line, harnessLine].filter(Boolean).join("\n")
   };
+}
+
+// src/shared/health-alert.ts
+import { readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join5 } from "node:path";
+var STALE_AFTER_MS = 36 * 36e5;
+var MAX_NAMES = 3;
+var RUN_HINT = "Run: node scripts/harness-doctor.mjs";
+var runHintFor = (repo) => typeof repo === "string" && repo.trim() !== "" ? `Run: node "${repo}/scripts/harness-doctor.mjs"` : RUN_HINT;
+function defaultLatestPath() {
+  return process.env.CCV3_HEALTH_LATEST || join5(homedir2(), ".claude", "state", "health", "latest.json");
+}
+function formatTime(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function asRecord(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v) ? v : null;
+}
+function problemsOf(checks) {
+  if (!Array.isArray(checks)) return [];
+  const out = [];
+  for (const c of checks) {
+    const rec = asRecord(c);
+    const status = typeof rec?.status === "string" ? rec.status.toUpperCase() : "";
+    if (!rec || status !== "FAIL" && status !== "WARN") continue;
+    out.push({ status, name: `${String(rec.section ?? "?")}:${String(rec.check ?? "?")}` });
+  }
+  return out;
+}
+var asCount = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+function formatHealthAlert(doc, now, fallbackTime) {
+  const rec = asRecord(doc);
+  if (!rec || !Array.isArray(rec.checks)) return null;
+  const parsed = typeof rec.ts === "string" ? new Date(rec.ts) : null;
+  const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : fallbackTime;
+  if (!when || Number.isNaN(when.getTime())) return null;
+  if (now.getTime() - when.getTime() > STALE_AFTER_MS) {
+    return `harness doctor has not run since ${formatTime(when)}`;
+  }
+  const problems = problemsOf(rec.checks);
+  const fails = problems.filter((p) => p.status === "FAIL");
+  const warns = problems.filter((p) => p.status === "WARN");
+  const summary = asRecord(rec.summary);
+  const failCount = asCount(summary?.fail) ?? fails.length;
+  const warnCount = asCount(summary?.warn) ?? warns.length;
+  if (failCount === 0 && warnCount === 0) return null;
+  const names = [...fails, ...warns].map((p) => p.name);
+  const shown = names.slice(0, MAX_NAMES).join(", ");
+  const more = names.length > MAX_NAMES ? ` and ${names.length - MAX_NAMES} more` : "";
+  const list = names.length > 0 ? `: ${shown}${more}` : "";
+  return `harness: ${failCount} fail, ${warnCount} warn as of ${formatTime(when)}${list}. ${runHintFor(rec.repo)}`;
+}
+function healthAlertLine(opts = {}) {
+  try {
+    const path = opts.path ?? defaultLatestPath();
+    let text;
+    let mtime;
+    try {
+      text = readFileSync2(path, "utf-8");
+      mtime = statSync2(path).mtime;
+    } catch (err) {
+      if (err?.code === "ENOENT") return `harness doctor has never run. ${RUN_HINT}`;
+      return null;
+    }
+    return formatHealthAlert(JSON.parse(text), opts.now ?? /* @__PURE__ */ new Date(), mtime);
+  } catch {
+    return null;
+  }
 }
 
 // src/session-start-memory-loaders.ts
@@ -5739,11 +5809,11 @@ async function main() {
   }
   let stdinContent = "{}";
   try {
-    stdinContent = readFileSync2(0, "utf-8");
+    stdinContent = readFileSync3(0, "utf-8");
     JSON.parse(stdinContent);
   } catch {
   }
-  const hooksDir = join5(homedir2(), ".claude", "hooks").replace(/\\/g, "/");
+  const hooksDir = join6(homedir3(), ".claude", "hooks").replace(/\\/g, "/");
   const daemonScript = `${hooksDir}/session-start-memory-daemon.ps1`;
   const [result, health] = await Promise.all([
     existsSync2(daemonScript) ? runCommand(
@@ -5755,7 +5825,7 @@ async function main() {
     ) : Promise.resolve({ name: "memory-daemon", success: true, output: void 0, duration: 0 }),
     runSessionHealth({ opcDir: getOpcDir() })
   ]);
-  emitAndExit(buildSessionStartOutput(result.output ?? "", health));
+  emitAndExit(buildSessionStartOutput(result.output ?? "", health, healthAlertLine()));
 }
 function emitAndExit(output) {
   process.stdout.write(JSON.stringify(output) + "\n", () => process.exit(0));

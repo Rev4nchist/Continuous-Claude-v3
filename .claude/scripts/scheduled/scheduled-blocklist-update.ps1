@@ -58,9 +58,13 @@ if (-not $RepoPath) { $RepoPath = $paths.RepoRoot }
 if (-not $GitBash) { $GitBash = $paths.GitBash }
 if (-not $NodeModules) { $NodeModules = Join-Path $RepoPath '.claude\hooks\node_modules' }
 if (-not $SyncCursor) { $SyncCursor = Join-Path $HOME '.claude\state\sync-cursor' }
-# Always the personal gh account, as the old .bat did: a GH_CONFIG_DIR inherited from the task's
-# environment must not switch the account update-blocklist.mjs uses.
-$env:GH_CONFIG_DIR = Join-Path $env:USERPROFILE '.config\gh-personal'
+# Use the personal gh account when its own config folder exists, as the old .bat did: a GH_CONFIG_DIR
+# inherited from the task's environment must not switch the account update-blocklist.mjs uses.
+# When the folder is absent (a machine with one gh login), clear any inherited value so gh falls back
+# to its default config instead of pointing at a missing folder.
+$ghPersonal = Join-Path $env:USERPROFILE '.config\gh-personal'
+if (Test-Path -LiteralPath $ghPersonal -PathType Container) { $env:GH_CONFIG_DIR = $ghPersonal }
+else { Remove-Item Env:\GH_CONFIG_DIR -ErrorAction SilentlyContinue }
 
 $wtLeaf = 'blocklist-update-' + $PID
 $wt = Join-Path ([System.IO.Path]::GetTempPath()) $wtLeaf

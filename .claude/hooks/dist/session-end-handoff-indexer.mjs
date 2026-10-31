@@ -20,7 +20,7 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
 }
 
 // src/session-end-handoff-indexer.ts
-var RECENT_WINDOW_MS = 3e4;
+var RECENT_WINDOW_MS = 10 * 6e4;
 var HANDOFF_EXTS = [".yaml", ".yml", ".md"];
 function findRecentHandoff(input) {
   const recentMs = input.recentMs ?? RECENT_WINDOW_MS;
@@ -68,7 +68,6 @@ function resolveIndexerScript(input) {
       process.env.HOME || process.env.USERPROFILE || "",
       ".claude",
       "scripts",
-      "core",
       "core",
       "index_handoffs.py"
     )
