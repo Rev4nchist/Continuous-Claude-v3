@@ -1,4 +1,5 @@
 import { redact } from '../shared/redact'
+import { cellWidth, cutCells, splitCells } from './cells'
 import type { PaneRow, Span, Tone } from './pane-model'
 
 // The /os text step. Pure: no engine, no clock, no state. Every row of the pane passes through it.
@@ -7,7 +8,8 @@ import type { PaneRow, Span, Tone } from './pane-model'
 //   wrapRows wrap text into PaneRows: line 1 carries the lead and an optional right group, later lines indent
 // Observer only: it injects nothing into the session.
 
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g
+/** Control characters, line breaks, and the zero-width and bidi characters that hide text or turn a row round (U+200B-200F, U+202A-202E, U+2066-2069, U+FEFF). */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g
 const TEXT_MAX = 400
 /** The wrap works on at most this many characters: more is cut by oneLine and always shows as cut at pane widths. */
 const WRAP_MAX = 2000
@@ -19,13 +21,18 @@ const ELLIPSIS = '…'
 export const oneLine = (value: unknown, max: number = TEXT_MAX): string => {
   if (typeof value !== 'string') return ''
   const one = redact(value).text.replace(CONTROL, ' ').replace(/ {2,}/g, ' ').trim()
-  return one.length > max ? `${one.slice(0, Math.max(0, max - 1))}${ELLIPSIS}` : one
+  if (one.length <= max) return one
+  // The cut is in UTF-16 units; it never leaves half of a surrogate pair.
+  const cut = Math.max(0, max - 1)
+  const half = cut > 0 && (one.charCodeAt(cut - 1) & 0xfc00) === 0xd800
+  return `${one.slice(0, half ? cut - 1 : cut)}${ELLIPSIS}`
 }
 
 /** Greedy layout. `width(i)` is the room of line i; a width of 0 or less leaves that line empty. A word longer than its line is hard-broken. */
 const layout = (text: string, width: (line: number) => number): string[] => {
   const lines: string[] = []
   let current = ''
+  let used = 0
   for (let word of text.split(' ')) {
     if (word === '') continue
     for (;;) {
@@ -35,21 +42,25 @@ const layout = (text: string, width: (line: number) => number): string[] => {
         continue
       }
       if (current === '') {
-        if (word.length <= room) {
-          current = word
+        const [piece, rest] = splitCells(word, room)
+        if (rest === '') {
+          current = piece
+          used = cellWidth(piece)
           break
         }
-        lines.push(word.slice(0, room))
-        word = word.slice(room)
-        if (word === '') break
+        lines.push(piece)
+        word = rest
         continue
       }
-      if (current.length + 1 + word.length <= room) {
+      const wordCells = cellWidth(word)
+      if (used + 1 + wordCells <= room) {
         current += ` ${word}`
+        used += 1 + wordCells
         break
       }
       lines.push(current)
       current = ''
+      used = 0
     }
   }
   if (current !== '') lines.push(current)
@@ -58,13 +69,13 @@ const layout = (text: string, width: (line: number) => number): string[] => {
 
 /** `line` plus `tail` inside `room` cells: trailing words of the line go first, then characters. */
 const attach = (line: string, room: number, tail: string, joiner: string): string => {
-  const space = room - tail.length - joiner.length
-  if (space <= 0) return tail.slice(0, Math.max(0, room))
+  const space = room - cellWidth(tail) - joiner.length
+  if (space <= 0) return cutCells(tail, room)
   let kept = line
-  while (kept.length > space) {
+  while (cellWidth(kept) > space) {
     const at = kept.lastIndexOf(' ')
     if (at < 0) {
-      kept = kept.slice(0, space)
+      kept = cutCells(kept, space)
       break
     }
     kept = kept.slice(0, at)
@@ -87,7 +98,7 @@ const wrapWith = (value: string, width: (line: number) => number, maxLines: numb
   const lines = all.slice(0, limit)
   const named = oneLine(hint, 40)
   const last = limit - 1
-  const form = named !== '' && width(last) - `${ELLIPSIS}more -> ${named}`.length >= HINT_ROOM ? `${ELLIPSIS}more -> ${named}` : `${ELLIPSIS}more`
+  const form = named !== '' && width(last) - cellWidth(`${ELLIPSIS}more -> ${named}`) >= HINT_ROOM ? `${ELLIPSIS}more -> ${named}` : `${ELLIPSIS}more`
   const tail = named === '' ? ELLIPSIS : form
   const joiner = named === '' ? '' : ' '
   if (cut) {
@@ -98,8 +109,8 @@ const wrapWith = (value: string, width: (line: number) => number, maxLines: numb
   if (named !== '' && homeHoldsMore === true) {
     const end = lines.length - 1
     const room = width(end)
-    if ((lines[end] ?? '').length + 1 + tail.length <= room) lines[end] = `${lines[end]} ${tail}`
-    else if (lines.length < limit) lines.push(tail.slice(0, Math.max(0, width(lines.length))))
+    if (cellWidth(lines[end] ?? '') + 1 + cellWidth(tail) <= room) lines[end] = `${lines[end]} ${tail}`
+    else if (lines.length < limit) lines.push(cutCells(tail, width(lines.length)))
     else lines[end] = attach(lines[end] ?? '', room, tail, joiner)
   }
   return { lines, cut }
@@ -115,7 +126,7 @@ export const wrap = (text: string, columns: number, maxLines: number, hint?: str
   return wrapWith(text, () => room, maxLines, hint, homeHoldsMore)
 }
 
-const widthOf = (spans: readonly Span[] = []): number => spans.reduce((n, one) => n + one.text.length, 0)
+const widthOf = (spans: readonly Span[] = []): number => spans.reduce((n, one) => n + cellWidth(one.text), 0)
 
 /** Text smaller than this cannot sit beside a lead and a right group on line 1. */
 const MIN_FIRST = 8
@@ -136,9 +147,9 @@ export const wrapRows = (key: string, lead: Span[], text: string, tone: Tone, co
   for (const one of lead) {
     const room = cols - used
     if (room <= 0) break
-    const part = one.text.length > room ? one.text.slice(0, room) : one.text
+    const part = cellWidth(one.text) > room ? cutCells(one.text, room) : one.text
     head.push({ ...one, text: part })
-    used += part.length
+    used += cellWidth(part)
   }
   const right = opts.right !== undefined && opts.right.length > 0 && cols >= RIGHT_MIN_COLUMNS && cols - used - widthOf(opts.right) - 1 >= MIN_FIRST ? opts.right : undefined
   const first = cols - used - (right === undefined ? 0 : widthOf(right) + 1)

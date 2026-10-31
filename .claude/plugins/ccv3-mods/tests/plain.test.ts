@@ -16,6 +16,8 @@ import {
   stepSentence,
   workflowSentence,
 } from '../hooks/agentic-os/plain'
+// New exports come through the namespace, so a missing one fails its own test and not the whole file.
+import * as plain from '../hooks/agentic-os/plain'
 import { drift as driftOf } from '../hooks/agentic-os/steward'
 import type { Activity } from '../hooks/agentic-os/steward'
 import type { BoardLane, FileTouch, HudLimit, KeeperRecord } from '../types'
@@ -50,6 +52,9 @@ import type { BoardLane, FileTouch, HudLimit, KeeperRecord } from '../types'
 // W6  a helper at exactly 10 minutes reads as long (long means over 10 minutes)
 // W7  a secret, a newline or a 5,000 character text in any input reaches any returned string, or a string is longer than 400
 // W8  the keeper kill rule fires at 2 of 5, or the newest record does not decide the plain line
+// W9  the Swarm run sentence puts a count before the counts, shows a zero running or a zero failed, or invents a total
+// W10 the Swarm run sentence without a feed names a script or a phase it cannot know, or with one drops the name, the phase or its order
+// W11 purposeOf is not exported, or reads the description after the type
 
 const SECRET = 'sk-' + 'ant-' + 'a'.repeat(40)
 const MIN = 60_000
@@ -223,6 +228,67 @@ describe('workflowSentence', () => {
   })
 })
 
+describe('swarmRunSentence', () => {
+  const progress = (over: Record<string, number> = {}) => ({ key: 'wf_1', done: 4, failed: 0, running: 1, startedAt: 1, latestAt: 2, ...over })
+
+  test('W9 the counts come first: running, done, then failed only above 0; a zero count is left out', () => {
+    expect(plain.swarmRunSentence(progress())).toBe('1 running, 4 done · a workflow')
+    expect(plain.swarmRunSentence(progress({ failed: 1 }))).toBe('1 running, 4 done, 1 failed · a workflow')
+    expect(plain.swarmRunSentence(progress({ running: 0, done: 3 }))).toBe('3 done · a workflow')
+    expect(plain.swarmRunSentence(progress({ running: 2, done: 0, failed: 0 }))).toBe('2 running · a workflow')
+    expect(plain.swarmRunSentence(progress({ running: 0, done: 0, failed: 2 }))).toBe('2 failed · a workflow')
+    expect(plain.swarmRunSentence(progress({ running: 0, done: 0, failed: 0 }))).toBe('0 done · a workflow')
+  })
+
+  test('W9 W10 with a feed the order is counts, phase, name; the phase reads "of N" only when the total is known', () => {
+    const feed = { name: 'pane-fleet-assess', phase: { index: 2, total: 2, title: 'Judge' } }
+    expect(plain.swarmRunSentence(progress(), feed)).toBe('1 running, 4 done · phase 2 of 2: Judge · pane-fleet-assess')
+    expect(plain.swarmRunSentence(progress(), { name: 'pane-fleet-assess', phase: { index: 2, total: null, title: 'Judge' } })).toBe('1 running, 4 done · phase 2: Judge · pane-fleet-assess')
+    expect(plain.swarmRunSentence(progress(), { name: 'pane-fleet-assess', phase: { index: 2, total: 3, title: null } })).toBe('1 running, 4 done · phase 2 of 3 · pane-fleet-assess')
+  })
+
+  test('W10 no feed, an empty feed or a feed with no name reads "a workflow"; a feed with no phase draws no phase', () => {
+    for (const feed of [undefined, null, { name: null, phase: null }, { name: '  ', phase: null }]) {
+      const text = plain.swarmRunSentence(progress(), feed)
+      expect(text).toBe('1 running, 4 done · a workflow')
+      expect(text).not.toMatch(/phase/)
+    }
+    expect(plain.swarmRunSentence(progress(), { name: 'flow', phase: null })).toBe('1 running, 4 done · flow')
+    expect(plain.swarmRunSentence(progress(), { name: null, phase: { index: 1, total: 2, title: 'Map' } })).toBe('1 running, 4 done · phase 1 of 2: Map · a workflow')
+  })
+
+  test('W9 W2 a count that is not a number, or a total that is not finite, prints no NaN, null or undefined', () => {
+    const odd = plain.swarmRunSentence({ key: 'k', done: Number.NaN, failed: undefined, running: null, startedAt: 1, latestAt: 2 } as never, { name: null, phase: { index: Number.NaN, total: Number.POSITIVE_INFINITY, title: null } })
+    expect(odd).not.toMatch(/NaN|Infinity|null|undefined/)
+    expect(odd).toContain('a workflow')
+  })
+
+  test('W7 a secret or a 5,000-character name or title reaches no part of the sentence', () => {
+    for (const text of [SECRET, `x ${SECRET}\ny`, 'q'.repeat(5000)]) {
+      const one = plain.swarmRunSentence(progress(), { name: text, phase: { index: 1, total: 2, title: text } })
+      expect(one).not.toContain('sk-ant')
+      expect(one).not.toMatch(/a{12}/)
+      expect(one).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/)
+      expect(one.length).toBeLessThanOrEqual(400)
+    }
+  })
+})
+
+describe('purposeOf', () => {
+  test('W11 W5 the description first, then the type, then "a task"; the export is the one helperSentence uses', () => {
+    expect(plain.purposeOf({ description: 'map the hooks', type: 'scout' })).toBe('map the hooks')
+    expect(plain.purposeOf({ description: '', type: 'scout' })).toBe('scout')
+    expect(plain.purposeOf({ description: '  ', type: '' })).toBe('a task')
+    expect(plain.purposeOf({ description: null, type: undefined } as never)).toBe('a task')
+    expect(helperSentence(run({ description: 'map the hooks' }), NOW)).toContain(plain.purposeOf({ description: 'map the hooks', type: 'scout' }))
+  })
+
+  test('W11 W7 a secret in the description or the type is redacted', () => {
+    expect(plain.purposeOf({ description: SECRET, type: 'scout' })).not.toContain('sk-ant')
+    expect(plain.purposeOf({ description: '', type: SECRET })).not.toContain('sk-ant')
+  })
+})
+
 describe('driftSentence', () => {
   const activity = (over: Partial<Activity> = {}): Activity => ({ toolCalls: 0, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0, ...over })
   const withGoal = (plan?: unknown[]) => {
@@ -392,6 +458,7 @@ describe('every sentence', () => {
     helperSentence(run({ description: text }), NOW),
     helperSentence(run({ description: text, startedAt: NOW - 30 * MIN }), NOW),
     helperSentence(run({ description: text, status: 'done', endedAt: NOW }), NOW),
+    plain.swarmRunSentence({ key: 'wf', done: 1, failed: 1, running: 1, startedAt: 1, latestAt: 2 }, { name: text, phase: { index: 1, total: 2, title: text } }),
     laneSentence(lane({ id: text, title: text })),
     laneSentence(lane({ id: text, title: text, mine: false })),
     proofSentence({ subject: text, result: { passed: 1, failed: 0 } }),

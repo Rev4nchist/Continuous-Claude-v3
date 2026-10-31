@@ -720,7 +720,7 @@ describe('digest multi-row items', () => {
   // side keeps the old word or the two drift apart.
   test('N1d the digest hint for each home tab equals the TABS label of that tab: Steps, Work, Checks, Choices', () => {
     const blocked = made({ goal: 'g', plan: [{ id: 'a', text: LONG_ASK.slice(0, 190), status: 'blocked' }] })
-    const hintOf = (found: ReturnType<typeof go>, block: 'needs' | 'watch'): string | undefined =>
+    const hintOf = (found: ReturnType<typeof go>, block: 'needs' | 'highlights' | 'watch'): string | undefined =>
       /(?:\.\.\.|…)more -> (\S+)$/.exec(found[block].items[0]!.map(leftText).join(' '))?.[1]
     const hints: Record<string, string | undefined> = {
       plan: hintOf(go({ brief: blocked }, { columns: 40 }), 'needs'),
@@ -733,6 +733,25 @@ describe('digest multi-row items', () => {
       const label = TABS.find(one => one.id === id)?.label
       expect(hints[id], `hint of ${id}`).toBe(label)
       expect(label, `label of ${id}`).toBe(want[id])
+    }
+  })
+
+  // The Swarm tab draws a helper in one row, hides the done helpers of a clean finished workflow and folds done helpers in a short pane (Dave, 2026-10-30),
+  // so it never holds more text than the Overview item. A helper item therefore names no tab. Fails if either helper item gets a `…more -> <tab>` hint again.
+  test('N8 a cut helper item (finished in DONE, long-running in WATCH; plain or in a workflow) ends with a bare ellipsis and names no tab', () => {
+    const cases: [string, ReturnType<typeof go>['highlights'] | ReturnType<typeof go>['watch']][] = [
+      ['A helper finished: word0 word1', go({ agents: [run('r1', 'done', 20 * MIN, { description: LONG_ASK })] }, { columns: 40 }).highlights],
+      ['A helper finished: word0 word1', go({ agents: [run('r1', 'done', 20 * MIN, { description: LONG_ASK, workflowRunId: 'wf_a' })] }, { columns: 40 }).highlights],
+      ['A helper has run 20 min: word0', go({ agents: [run('r2', 'running', 20 * MIN, { description: LONG_ASK })] }, { columns: 40 }).watch],
+      ['A helper has run 20 min: word0', go({ agents: [run('r2', 'running', 20 * MIN, { description: LONG_ASK, workflowRunId: 'wf_a' })] }, { columns: 40 }).watch],
+    ]
+    for (const [start, found] of cases) {
+      const group = found.items[0]!
+      const text = group.map(leftText).join(' ')
+      expect(text).toContain(start)
+      expect(group).toHaveLength(3)
+      expect(text).not.toMatch(/more|->|Swarm|Session/)
+      expect(leftText(group[group.length - 1]!)).toMatch(/…$/)
     }
   })
 
