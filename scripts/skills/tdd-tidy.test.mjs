@@ -25,7 +25,7 @@ test('every retry example in the tdd docs passes an async operation', () => {
     const text = fs.readFileSync(file, 'utf8');
     if (!text.includes('retryOperation')) continue;
     text.split(/\r?\n/).forEach((line, i) => {
-      if (/const operation = \(/.test(line) && !/Promise/.test(line)) bad.push(`${path.relative(TDD, file)}:${i + 1}`);
+      if (/const operation = \((?!\s*async\b)/.test(line) && !/Promise/.test(line)) bad.push(`${path.relative(TDD, file)}:${i + 1}`);
     });
   }
   assert.deepEqual(bad, [], `sync operation passed to retryOperation: ${bad.join(', ')}`);
