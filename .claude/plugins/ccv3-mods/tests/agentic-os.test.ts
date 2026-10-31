@@ -708,3 +708,100 @@ describe('agentic-os hud in the state file', () => {
     expect(limits[0].kind).not.toContain('REDACTED')
   })
 })
+
+// The final snapshot at session end (the Fleet page reads `endedAt` as a fallback when the database has no ended row).
+// Ways it can fail, one test each:
+// E11 a reason writes no final file, or twice, or `endedAt` and `at` differ, or an ordinary snapshot carries `endedAt`
+// E12 /clear writes the final file after the resets, so it loses the brief of the ending conversation, or the new conversation inherits it
+// E13 a later write (turn end, brief_set) for the ended id overwrites the final file; or the guard blocks other ids
+// E14 a headless run with nothing to say writes a file at exit
+// E15 CCV3_MODS_OFF=1 writes at exit
+const endWorld = (on: On, env: Record<string, string> = {}) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  mock.env(on, { USERPROFILE: 'C:/home', ...env })
+  const writes: { path: string; text: string }[] = []
+  on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.write', (_$, e) => {
+    writes.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.id', () => ({ value: 'test-session' }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('tool.register', (_$, e) => ({ value: { tool: `mcp__ccv3-mods__${e.name}` } }))
+  return { writes, clock }
+}
+
+const filesOf = (seen: { writes: { path: string; text: string }[] }, id: string) =>
+  seen.writes.filter(write => write.path.replace(/\\/g, '/').endsWith(`/agentic-os/${id}.json`))
+const lastOf = (seen: { writes: { path: string; text: string }[] }, id: string): Record<string, any> =>
+  JSON.parse(filesOf(seen, id).at(-1)?.text ?? '{}')
+const startEnd = ($: Engine, isInteractive: boolean) => $.session.start({ cwd: 'C:/r', surface: isInteractive ? 'terminal' : null, isInteractive })
+const endWith = ($: Engine, reason: string, sessionId = 's1') => $.session.end({ reason, sessionId, resume: { id: sessionId } } as never)
+
+describe('agentic-os final snapshot at session end', () => {
+  for (const reason of ['clear', 'resume', 'logout', 'prompt_input_exit', 'other']) {
+    test(`E11 reason ${reason} writes the ending session's file once, with endedAt equal to at`, async ($, on) => {
+      const seen = endWorld(on)
+      await startEnd($, true)
+      await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+      expect(lastOf(seen, 'test-session')).not.toHaveProperty('endedAt')
+      await seen.clock.advance(4_000)
+      await endWith($, reason)
+      expect(filesOf(seen, 's1')).toHaveLength(1)
+      const final = lastOf(seen, 's1')
+      expect(final.sessionId).toBe('s1')
+      expect(final.at).toBe(5_000)
+      expect(final.endedAt).toBe(final.at)
+    })
+  }
+
+  test('E12 /clear writes the old brief into the final file before the resets; the new conversation starts without it', async ($, on) => {
+    const seen = endWorld(on)
+    await startEnd($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'old goal' })
+    await endWith($, 'clear')
+    expect(lastOf(seen, 's1').brief.goal).toBe('old goal')
+    await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+    expect(lastOf(seen, 'test-session').brief ?? null).toBeNull()
+    expect(lastOf(seen, 'test-session')).not.toHaveProperty('endedAt')
+  })
+
+  test('E13 after the end, a turn end and a brief_set for the ended id leave the final file as it was', async ($, on) => {
+    const seen = endWorld(on)
+    await startEnd($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    await endWith($, 'other', 'test-session')
+    const final = filesOf(seen, 'test-session').at(-1)?.text
+    const count = filesOf(seen, 'test-session').length
+    expect(JSON.parse(final ?? '{}').endedAt).toBe(1_000)
+    await $.turn.complete({ answer: 'late', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'later' })
+    await seen.clock.advance(10_000)
+    expect(filesOf(seen, 'test-session')).toHaveLength(count)
+    expect(filesOf(seen, 'test-session').at(-1)?.text).toBe(final)
+  })
+
+  test('E14 a headless run with no task, plan or brief writes no file at exit; with a brief it does', async ($, on) => {
+    const seen = endWorld(on)
+    await startEnd($, false)
+    await endWith($, 'other')
+    expect(seen.writes.filter(write => /state[\\/]agentic-os[\\/]/.test(write.path))).toEqual([])
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    await endWith($, 'other')
+    expect(lastOf(seen, 's1').brief.goal).toBe('g')
+  })
+
+  test('E15 CCV3_MODS_OFF=1 writes nothing at exit', async ($, on) => {
+    const seen = endWorld(on, { CCV3_MODS_OFF: '1' })
+    await startEnd($, true)
+    await endWith($, 'other')
+    expect(seen.writes).toEqual([])
+  })
+})
