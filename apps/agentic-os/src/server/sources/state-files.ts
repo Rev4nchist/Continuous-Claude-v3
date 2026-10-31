@@ -71,6 +71,12 @@ export type StateSnapshot = {
   sessionId: string;
   /** Epoch milliseconds the file was written. */
   at: number;
+  /**
+   * Epoch milliseconds the session ended, from the final snapshot the writer makes at session.end
+   * (it equals `at` there). Null for every other file. Only a fallback for a session the database
+   * has no ended row for; see fleet-sessions.ts `endedByFile`.
+   */
+  endedAt: number | null;
   chip: string | null;
   repo: string | null;
   branch: string | null;
@@ -343,6 +349,7 @@ function parseSnapshot(text: string): StateSnapshot | null {
   return {
     sessionId,
     at,
+    endedAt: num(raw.endedAt),
     chip: str(raw.chip, CLIP.short),
     repo: strLeaf(raw.repo, CLIP.short),
     branch: str(raw.branch, CLIP.short),

@@ -82,6 +82,9 @@ const NO_ACTIVITY: Activity = { toolCalls: 0, commits: 0, prs: 0, runs: 0, resum
 const FRESH_STEWARD: OsSteward = { briefAt: null, activity: NO_ACTIVITY }
 const steward = atom({ plugin: 'ccv3-mods', key: 'steward' } as const, FRESH_STEWARD)
 
+/** The id of the session whose final snapshot (with `endedAt`) is written. After it, no other write for that id lands. The engine wipes the atom with the rest after a /clear or a resume, and the next id differs anyway. */
+const endedId = atom({ plugin: 'ccv3-mods', key: 'endedId' } as const, null as string | null)
+
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
 const uiArmed = atom({ plugin: 'ccv3-mods', key: 'uiArmed' } as const, false)
@@ -214,13 +217,15 @@ const hudForState = (state: HudState | null): { costUsd: number | null; limits: 
  * One JSON file per session under ~/.claude/state/agentic-os/: the read side
  * for the web dashboard (Slice 2) and the evidence for headless probes.
  * A failed write never touches the session.
+ * `end` is the final snapshot of a session that ends: its id and time, and `endedAt` in the file. Every other write for that id is
+ * refused after it (the pulse, a turn end, /os), checked right before the write because the /os write waits on a lane read.
  */
-const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; except?: string } = {}): Promise<void> => {
+const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; except?: string; end?: { sessionId: string; at: number } } = {}): Promise<void> => {
   try {
     const home = await homeDir($)
     if (!home) return
-    const sessionId = await $.session.id()
-    const at = await $.clock.now()
+    const sessionId = opts.end?.sessionId ?? (await $.session.id())
+    const at = opts.end?.at ?? (await $.clock.now())
     const now = await view($)
     const current = await read($, brief)
     const chip = await chipNow($, now, at, opts)
@@ -237,7 +242,9 @@ const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; exce
       repo: where?.repo ?? null,
       branch: where?.branch ?? null,
       worktree: where?.worktree ?? null,
+      ...(opts.end ? { endedAt: opts.end.at } : {}),
     }
+    if (opts.end === undefined && sessionId === (await read($, endedId))) return
     await $.fs.write(`${home}/.claude/state/agentic-os/${sessionId}.json`, JSON.stringify(snapshot, null, 2))
   } catch {
     // Observer only: a snapshot is best effort.
@@ -253,6 +260,25 @@ const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
   (await read($, tasks)).length > 0 ||
   (await read($, plan)) !== null ||
   (await read($, brief)) !== null
+
+/** The final write needs this much of the session.end bound (1.5 s, shared with every other hook): less, and the web falls back to the database's ended_at. */
+const FINAL_WRITE_MIN_MS = 300
+
+/**
+ * One last snapshot of the ending session, with `endedAt` = its time, under the ending id (`e.sessionId`: after a /clear or a resume
+ * `$.session.id()` is already the next one). Runs before the /clear and resume resets, so the file keeps that conversation's brief.
+ * `endedId` is set first, so a write that is already under way cannot land after the final file.
+ */
+const writeFinalSnapshot = async ($: EngineInterface, sessionId: string, remainingMs: number): Promise<void> => {
+  try {
+    if (remainingMs <= FINAL_WRITE_MIN_MS || !(await worthSnapshot($))) return
+    const at = await $.clock.now()
+    await update($, endedId, () => sessionId)
+    await writeSnapshot($, { end: { sessionId, at } })
+  } catch {
+    // Observer only: a snapshot is best effort.
+  }
+}
 
 const refreshAgents = async ($: EngineInterface): Promise<void> => {
   try {
@@ -642,11 +668,13 @@ export const agenticOs = (on: On) => {
     }
   })
 
-  // A /clear or a resume in the same process starts a new conversation: the old tasks and plan are not its own.
+  // Every end writes one last snapshot with `endedAt`, first: the file keeps the brief of the conversation that ends.
+  // A /clear or a resume in the same process then starts a new conversation: the old tasks and plan are not its own.
   // The engine keeps the process, so these atoms would outlive the conversation (the HUD resets ctx and the cache the same way).
-  for (const reason of ['clear', 'resume'] as const) {
-    on('session.end', { reason }, async ($, e, next) => {
-      if (!(await isOff($))) {
+  on('session.end', async ($, e, next) => {
+    if (!(await isOff($))) {
+      await writeFinalSnapshot($, e.sessionId, next.budget.remainingMs)
+      if (e.reason === 'clear' || e.reason === 'resume') {
         await update($, tasks, () => [])
         await update($, plan, () => null)
         await update($, brief, () => null)
@@ -656,9 +684,9 @@ export const agenticOs = (on: On) => {
         // The keeper's records belong to the conversation they watched: the new one has had no compaction.
         await update($, compactions, () => [])
       }
-      return next(e)
-    }).catch(($, e, next) => next(e))
-  }
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // After an in-session resume or clear the engine wipes the atoms and fires classic.SessionStart, not session.start,
   // so the band lost repo and branch until the first turn. Read the .git files again on those two sources only.

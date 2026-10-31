@@ -59,3 +59,20 @@ export function statusClasses(status: string): string {
       return 'border-border bg-muted text-muted-foreground';
   }
 }
+
+/**
+ * The words for the chip codes (.claudedocs/2026-10-29-os-pane-glossary.md, the same ones the /os
+ * pane uses). The raw code stays the data (`data-chip`, the API); only the label changes.
+ * A code this map does not know comes back as it is.
+ */
+const CHIP_WORDS: Record<string, string> = {
+  working: 'Working',
+  'waiting-on-dave': 'Waiting for you',
+  blocked: 'Stuck',
+  done: 'Done',
+  idle: 'Idle',
+};
+
+export function chipWord(code: string): string {
+  return Object.hasOwn(CHIP_WORDS, code) ? CHIP_WORDS[code] : code;
+}

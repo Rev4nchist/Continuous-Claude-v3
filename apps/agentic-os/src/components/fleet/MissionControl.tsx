@@ -194,7 +194,7 @@ export function MissionControl({
               onSelect={toggleSession}
             />
 
-            <ActiveSessionsStrip active={active} />
+            <ActiveSessionsStrip active={active} asks={ready} />
 
             <section className="space-y-3">
               <h2 className="text-sm font-medium tracking-tight">

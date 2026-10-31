@@ -25,7 +25,9 @@ import type { ActiveSession, ActiveSessions } from './sessions';
  *   matched        its session is in `active.sessions` (quiet 15 minutes or less): card and strip
  *   quiet          not ended, quiet over 15 minutes and up to 24 hours: NO card, but its open,
  *                  unanswered, non-stale asks feed the strip and tiles.needsDave
- *   droppedEnded   its session ended (in `active.recentlyEnded`, or ended_at is its latest sign): dropped
+ *   droppedEnded   its session ended (in `active.recentlyEnded`, or ended_at is its latest sign): dropped.
+ *                  Also a file with no database answer (no row, or the lookup failed or was capped)
+ *                  whose own `endedAt` says it ended (`endedByFile`). A database row always wins.
  *   droppedStale   its session row exists but has been quiet for over 24 hours: dropped
  *   noSessionRow   no row in public.sessions: dropped (a copied file, a test, another machine)
  *   unchecked      the lookup query failed: dropped, and the source says so
@@ -42,13 +44,18 @@ const LOOKUP_LIMIT = 200;
 export const CHIPS = ['working', 'waiting-on-dave', 'blocked', 'done', 'idle'] as const;
 export type Chip = (typeof CHIPS)[number];
 
+/** One row per session that waits on Dave: its first open, unanswered, non-stale ask. */
 export type ReadyItem = {
   sessionId: string;
   shortId: string;
   name: string;
   kind: string;
+  /** One line: whitespace collapsed. The state-file reader already redacted and clipped it. */
   text: string;
-  recommend: string | null;
+  /** How many asks of this session are open (this row shows the first). */
+  openAsks: number;
+  /** False for a quiet session (no card, last sign of life over 15 minutes ago). */
+  live: boolean;
   /** Seconds since the brief was last updated (or the file was written). */
   ageSeconds: number;
 };
@@ -243,22 +250,45 @@ export function askAgeSeconds(updatedAt: number | null, snapshot: StateSnapshot 
   return Math.max(0, Math.round((nowMs - stamp) / 1000));
 }
 
-function buildReady(id: string, name: string, snapshot: StateSnapshot, nowMs: number): ReadyItem[] {
+/** Zero or one row: the first open ask in the order the brief lists them. */
+function buildReady(
+  id: string,
+  name: string,
+  snapshot: StateSnapshot,
+  nowMs: number,
+  live: boolean,
+): ReadyItem[] {
   const brief = snapshot.brief;
   if (brief === null) return [];
   const ageSeconds = askAgeSeconds(brief.updatedAt, snapshot, nowMs);
   if (ageSeconds > STALE_ASK_SECONDS) return [];
-  return brief.ask
-    .filter((a) => !a.answered)
-    .map((a) => ({
+  const open = brief.ask.filter((a) => !a.answered);
+  const first = open[0];
+  if (first === undefined) return [];
+  return [
+    {
       sessionId: id,
       shortId: id.slice(0, 8),
       name,
-      kind: a.kind,
-      text: a.text,
-      recommend: a.recommend,
+      kind: first.kind,
+      text: first.text.replace(/\s+/g, ' '),
+      openAsks: open.length,
+      live,
       ageSeconds,
-    }));
+    },
+  ];
+}
+
+/**
+ * The final snapshot (written at session.end) says the session ended: `endedAt` is not older than the
+ * latest thing the file knows happened. A session that came back (a later prompt, brief change or tool
+ * call) writes a newer stamp and is not ended. Used only where the database has no answer.
+ */
+function endedByFile(snapshot: StateSnapshot): boolean {
+  return (
+    snapshot.endedAt !== null &&
+    snapshot.endedAt >= Math.max(snapshot.at, snapshot.brief?.updatedAt ?? 0, snapshot.step?.startedAt ?? 0)
+  );
 }
 
 type LookupRow = { hasEnded: boolean; quietSeconds: number | null; projectKey: string | null };
@@ -338,18 +368,26 @@ export async function getFleetSessions(
     else leftover.push(id);
   }
 
+  // The database has no answer for this id: the final snapshot may still say it ended.
+  // Otherwise it is counted under `fallback`.
+  const noAnswer = (id: string, fallback: 'noSessionRow' | 'unchecked'): void => {
+    const snapshot = bySession.get(id);
+    if (snapshot !== undefined && endedByFile(snapshot)) join.droppedEnded += 1;
+    else join[fallback] += 1;
+  };
+
   // Walk only the ids that were queried. An id past the cap was never looked up, so it is
   // `unchecked`, never `noSessionRow`.
   const queried = leftover.slice(0, LOOKUP_LIMIT);
-  join.unchecked += leftover.length - queried.length;
+  for (const id of leftover.slice(LOOKUP_LIMIT)) noAnswer(id, 'unchecked');
   const known = await lookupRows(queried);
   const quietRows = new Map<string, LookupRow>();
   if (known === null) {
-    join.unchecked += queried.length;
+    for (const id of queried) noAnswer(id, 'unchecked');
   } else {
     for (const id of queried) {
       const row = known.get(id);
-      if (row === undefined) join.noSessionRow += 1;
+      if (row === undefined) noAnswer(id, 'noSessionRow');
       else if (row.hasEnded) join.droppedEnded += 1;
       // No timestamp at all, or quiet for over 24 hours: stale.
       else if (row.quietSeconds === null || row.quietSeconds > QUIET_MAX_SECONDS) join.droppedStale += 1;
@@ -371,13 +409,13 @@ export async function getFleetSessions(
     const card = buildCard(session, snapshot, nowMs, lanes.get(session.id)?.[0] ?? null);
     cards.push(card);
     if (!snapshot) continue;
-    ready.push(...buildReady(card.id, card.name, snapshot, nowMs));
+    ready.push(...buildReady(card.id, card.name, snapshot, nowMs, true));
     watching.push({ card, snapshot, rank: rankOf.get(session.id) ?? 0 });
   }
   // Quiet sessions: no card and no PR count (those stay live-only), but their asks count.
   for (const [id, row] of quietRows) {
     const snapshot = bySession.get(id);
-    if (snapshot) ready.push(...buildReady(id, cardName(row.projectKey, id, snapshot), snapshot, nowMs));
+    if (snapshot) ready.push(...buildReady(id, cardName(row.projectKey, id, snapshot), snapshot, nowMs, false));
   }
   ready.sort((a, b) => b.ageSeconds - a.ageSeconds || a.sessionId.localeCompare(b.sessionId));
 

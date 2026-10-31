@@ -64,7 +64,7 @@ export type MissionControlSnapshot = {
   fleet: FleetOverview;
   active: ActiveSessions;
   database: { ok: true; latencyMs: number } | { ok: false; error: string };
-  /** Open, unanswered, non-stale asks of live sessions, oldest first. */
+  /** One row per session that waits on Dave: its first open, unanswered, non-stale ask, oldest first. */
   ready: ReadyItem[];
   /** One card per live session. */
   cards: SessionCard[];
@@ -179,7 +179,7 @@ export async function getMissionControlSnapshot(
 
   const tiles: StatTiles = {
     liveSessions: active.sessions.length,
-    needsDave: new Set(sessions.ready.map((r) => r.sessionId)).size,
+    needsDave: sessions.ready.length,
     blocked: sessions.cards.filter((c) => c.chip === 'blocked').length,
     activeLanes: lanes.ok ? lanes.value : 0,
     openPrs: sessions.prs.length,

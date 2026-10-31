@@ -315,6 +315,8 @@ declare module 'claude-code' {
       uiArmed: boolean
       /** True once this session's first turn left its beacon file (agentic-os). */
       turnBeaconed: boolean
+      /** The id of the session whose final snapshot (with `endedAt`) was written at session.end; no later write for that id lands (agentic-os). */
+      endedId: string | null
       /** The brief_set tool's record (agentic-os): goal, stop-at, plan, asks, decisions, proofs. Cleared at /clear and resume. */
       brief: OsBrief | null
       /** True once a main-loop tool call was refused in the current turn: the chip reads blocked. Cleared at the next turn. */
