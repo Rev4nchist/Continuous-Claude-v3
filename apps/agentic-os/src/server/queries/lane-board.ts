@@ -5,7 +5,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '@/db';
 
 import { redact } from '@/server/sources/redact';
-import { safeMessage, scrubPathsInText } from '@/server/sources/safe-message';
+import { safeMessage, scrubPathsInText, stripControl } from '@/server/sources/safe-message';
 
 /**
  * The read-only lane Board (P1b part B2).
@@ -70,10 +70,10 @@ type LaneRow = {
 
 const OWNER_STATES: readonly string[] = ['live', 'quiet', 'ended', 'unknown'];
 
-/** Redact, scrub absolute paths, flatten whitespace, then clip. Null when nothing is left. */
+/** Strip invisible characters, redact, scrub absolute paths, flatten whitespace, then clip. Null when nothing is left. */
 function cleanText(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
-  const flat = scrubPathsInText(redact(value.slice(0, 20_000)).text).replace(/\s+/g, ' ').trim();
+  const flat = scrubPathsInText(redact(stripControl(value.slice(0, 20_000))).text).replace(/\s+/g, ' ').trim();
   if (flat === '') return null;
   return flat.length <= max ? flat : `${flat.slice(0, Math.max(0, max - 3))}...`;
 }

@@ -4,7 +4,6 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 
-import { stripControl } from '@/server/sources/safe-message';
 import type { StateFiles, StateSnapshot } from '@/server/sources/state-files';
 
 import { joinSnapshots, LOOKUP_LIMIT, type JoinStats, type LookupRow } from './fleet-join';
@@ -269,7 +268,8 @@ function buildReady(
       shortId: id.slice(0, 8),
       name,
       kind: first.kind,
-      text: stripControl(first.text.replace(/\s+/g, ' ')),
+      // first.text was stripped, redacted and scrubbed in state-files; a whitespace replace adds no character.
+      text: first.text.replace(/\s+/g, ' '),
       openAsks: open.length,
       live,
       ageSeconds,

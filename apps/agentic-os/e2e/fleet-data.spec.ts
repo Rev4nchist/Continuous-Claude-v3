@@ -243,6 +243,22 @@ test.describe('ask age and text', () => {
       expect(shown.includes(String.fromCharCode(code)), `U+${code.toString(16)} must not reach the page`).toBe(false);
     }
   });
+
+  test('A3 a secret split by an invisible character is redacted, not revealed by the strip', async ({
+    request,
+  }) => {
+    const [live] = liveSessions(await loadSnapshot(request));
+    // Built at run time: gitleaks scans this file. The zero-width space sits inside the key prefix,
+    // so a redact pass that runs before the strip does not see a key.
+    const tail = 'a'.repeat(40);
+    const split = `sk-${String.fromCharCode(0x200b)}ant-${tail}`;
+    writeState(live.id, { brief: makeBrief({ ask: [ask(`Use ${split} for the call?`)] }) });
+
+    const snapshot = await loadSnapshot(request);
+    const text = snapshot.ready.find((r) => r.sessionId === live.id)?.text ?? '';
+    expect(text).not.toContain(tail);
+    expect(JSON.stringify(snapshot)).not.toContain(tail);
+  });
 });
 
 // --- No prompt text anywhere -------------------------------------------------------------------
