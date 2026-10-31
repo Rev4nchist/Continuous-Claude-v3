@@ -521,7 +521,7 @@ const toolText = async ($: EngineInterface, pr: number, body: string): Promise<s
 
 /**
  * `/pathway grant <pr> <round>`: Dave allows a review round the pane did not ask about, or one he declined. It stores the grant
- * (`checkpoint:grant:<pr>`) on the record's head and clears `declined`. Only his own composer command writes. It posts nothing.
+ * (`checkpoint:grant:<pr>`) on the record's head and clears a round decline it covers. Only his own composer command writes. It posts nothing.
  */
 const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: number; round: number }): Promise<{ text: string }> => {
   if (origin !== 'composer' || !(await interactive($))) return { text: `Only Dave's own ${SLASH} grant records. Nothing was recorded.` }
@@ -529,7 +529,8 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   const stored = readRecord(await $.store.get(key))
   if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. Run ${SLASH} on it first. Nothing was recorded.` }
   await $.store.set(`${GRANT_PREFIX}${grant.pr}`, { round: grant.round, head: stored.head, at: await $.clock.now() })
-  if (stored.declined) {
+  // Only a round decline the grant covers goes. An opening decline or a decline of a later round stays, or the watcher asks again.
+  if (stored.declined?.kind === 'round' && stored.declined.round <= grant.round) {
     const { declined: _declined, ...rest } = stored
     await $.store.set(key, rest as CheckpointRecord)
   }
