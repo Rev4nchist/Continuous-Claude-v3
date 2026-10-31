@@ -49,7 +49,7 @@
   --bad: #ff7b7b;
   --agent: #b69cff;
   --font-terminal:
-    'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
+    var(--font-jetbrains, 'JetBrains Mono'), ui-monospace, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
 
   --background: var(--bg0);
   --foreground: var(--tx);

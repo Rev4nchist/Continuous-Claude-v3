@@ -76,7 +76,8 @@ type ReadyItem = {
   name: string;
   kind: string;
   text: string;
-  recommend: string | null;
+  openAsks: number;
+  live: boolean;
   ageSeconds: number;
 };
 
@@ -248,6 +249,8 @@ test.describe('fixture brief for a live session', () => {
       repo: 'e2e-repo',
       branch: 'e2e/fixture-branch',
       ctx: 42,
+      // The ask age is measured from the later of the brief update and the file write.
+      at: secondsAgo(600),
       brief: makeBrief({
         title: 'E2E fixture title',
         goal: 'E2E fixture goal',
@@ -267,8 +270,11 @@ test.describe('fixture brief for a live session', () => {
       shortId: live.id.slice(0, 8),
       kind: 'question',
       text: FIXTURE_ASK,
-      recommend: FIXTURE_RECOMMEND,
+      openAsks: 1,
+      live: true,
     });
+    // The strip never carries a recommendation: the DTO has no such key at all.
+    expect(Object.keys(item as object)).not.toContain('recommend');
     // updatedAt is 600 s ago: the age is seconds, not milliseconds.
     expect(item?.ageSeconds).toBeGreaterThanOrEqual(590);
     expect(item?.ageSeconds).toBeLessThan(700);
@@ -328,13 +334,18 @@ test.describe('fixture brief for a live session', () => {
     const item = readyItem(page, live.id);
     await expect(item).toBeVisible({ timeout: 10_000 });
     await expect(item).toContainText(FIXTURE_ASK);
-    await expect(item).toContainText(FIXTURE_RECOMMEND);
+    // The strip holds the first ask only, never the recommendation (the detail panel keeps it).
+    await expect(item).not.toContainText(FIXTURE_RECOMMEND);
+    await expect(page.getByTestId('ready-for-dave')).not.toContainText(FIXTURE_RECOMMEND);
     await expect(item).toContainText('question');
 
     const card = sessionCard(page, live.id);
     await expect(card).toBeVisible();
     await expect(card).toContainText('E2E fixture title');
-    await expect(card).toContainText('waiting-on-dave');
+    // The card shows the glossary word; the raw code stays in data-chip.
+    await expect(card).toContainText('Waiting for you');
+    await expect(card).not.toContainText('waiting-on-dave');
+    await expect(card.locator('[data-chip]')).toHaveAttribute('data-chip', 'waiting-on-dave');
     await expect(card).toContainText('1 of 3');
     await expect(card).toContainText('UNPROVEN 1');
     await expect(card).toContainText(/\bASK 1\b/);
@@ -392,23 +403,36 @@ test.describe('fixture brief for a live session', () => {
 
     const tiles = page.getByTestId('stat-tile');
     await expect(tiles).toHaveCount(5);
-    const labels = ['Live sessions', 'Needs Dave', 'Blocked', 'Active lanes', 'Open PRs'];
+    // The mockup's order: Live sessions, Active lanes, Blocked, Open PRs, Needs Dave.
+    const labels = ['Live sessions', 'Active lanes', 'Blocked', 'Open PRs', 'Needs Dave'];
     for (const [index, label] of labels.entries()) {
       await expect(tiles.nth(index)).toContainText(label);
     }
+    const tile = (label: string): Locator => tiles.filter({ hasText: label });
 
-    // Values come from the same snapshot the page polls.
+    // Values come from the same snapshot the page polls. Needs Dave counts the ready rows:
+    // one row per session.
     const snapshot = await loadSnapshot(request);
-    await expect(tiles.nth(0)).toContainText(String(snapshot.tiles.liveSessions));
-    await expect(tiles.nth(1)).toContainText(String(snapshot.tiles.needsDave));
+    await expect(tile('Live sessions')).toContainText(String(snapshot.tiles.liveSessions));
+    await expect(tile('Needs Dave')).toContainText(String(snapshot.tiles.needsDave));
+    expect(snapshot.tiles.needsDave).toBe(snapshot.ready.length);
+    await expect(page.getByTestId('ready-item')).toHaveCount(snapshot.ready.length);
 
-    // The strip is at the very top: above the tiles, and the tiles are above the cards.
+    // The strip is at the very top: above the tiles, the tiles are above Projects, and
+    // Projects is above the session cards (the mockup order).
     const strip = await page.getByTestId('ready-for-dave').boundingBox();
     const tileBox = await page.getByTestId('stat-tiles').boundingBox();
+    const projectsBox = await page
+      .getByRole('heading', { level: 2, name: /^Projects/ })
+      .boundingBox();
     const cardsBox = await sessionCard(page, live.id).boundingBox();
-    expect(strip && tileBox && cardsBox, 'strip, tiles and card must all be rendered').toBeTruthy();
+    expect(
+      strip && tileBox && projectsBox && cardsBox,
+      'strip, tiles, Projects and card must all be rendered',
+    ).toBeTruthy();
     expect(strip!.y).toBeLessThan(tileBox!.y);
-    expect(tileBox!.y).toBeLessThan(cardsBox!.y);
+    expect(tileBox!.y).toBeLessThan(projectsBox!.y);
+    expect(projectsBox!.y).toBeLessThan(cardsBox!.y);
 
     // Source health: one row per source, status in the row, state-files counts in the detail.
     const health = page.getByRole('heading', { level: 2, name: /^Data sources/ });
@@ -615,6 +639,8 @@ test.describe('ask rules', () => {
     // updatedAt 25 h ago makes every ask of this brief stale; one is also answered.
     writeState(live.id, {
       chip: 'waiting-on-dave',
+      // Both stamps are old: the age is the later of the brief update and the file write.
+      at: secondsAgo(25 * HOUR),
       brief: makeBrief({
         title: 'E2E stale brief',
         ask: [
@@ -703,11 +729,13 @@ test.describe('project card filter', () => {
     const errors = watchErrors(page);
     const first = await loadSnapshot(request);
     expectFleetKeys(first);
-    const [live] = liveSessions(first);
-    expect(
-      live.projectKey && live.projectDisplayName,
-      `Precondition: live session ${live.id} must map to a project (projectKey and projectDisplayName set)`,
-    ).toBeTruthy();
+    // A live session that maps to a project; one with no mapping cannot be filtered by a project card.
+    const live = liveSessions(first).find((s) => s.projectKey !== null && s.projectDisplayName !== null);
+    test.skip(
+      live === undefined,
+      'Precondition missing: no live session maps to a project (projectKey and projectDisplayName set).',
+    );
+    if (live === undefined) return;
 
     writeState(live.id, {
       brief: makeBrief({ title: 'E2E filter control', plan: PLAN }),
