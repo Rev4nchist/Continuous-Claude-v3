@@ -1364,6 +1364,19 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
   })
 
+  for (const [name, declined] of [
+    ['an opening decline', { kind: 'opening', round: 1, head: HEAD }],
+    ['a decline of a later round (5)', { kind: 'round', round: 5, head: HEAD }],
+  ] as [string, Rec][]) {
+    test(`G6 /pathway grant 7 4 keeps ${name}, which the grant does not cover`, async ($, on) => {
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ declined }) }, statuses: { 7: REVIEWED(3) } })
+      await start($)
+      await slash($, 'grant 7 4')
+      expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+      expect((w.store.get('checkpoint:pr:7') as Rec).declined).toEqual(declined)
+    })
+  }
+
   test('G5 a /pathway grant drops the queued round ask it covers, so a later No cannot override the grant', async ($, on) => {
     const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
     await start($)
