@@ -4,17 +4,9 @@ import type { DetailUnavailable, SessionDetail as Detail } from '@/server/querie
 
 import { cn } from '@/lib/utils';
 
-import { formatAgo } from './format';
+import { chipTone, chipWord, formatAgo } from './format';
 
 const WRAP = '[overflow-wrap:anywhere]';
-
-const CHIP_TONE: Record<string, string> = {
-  working: 'border-doing/40 text-doing',
-  'waiting-on-dave': 'border-warn/50 bg-warn/10 text-warn',
-  blocked: 'border-bad/50 bg-bad/10 text-bad',
-  done: 'border-done/40 text-done',
-  idle: 'border-border text-muted-foreground',
-};
 
 const STEP_TONE: Record<string, string> = {
   done: 'text-done',
@@ -79,18 +71,19 @@ export function SessionDetail({ detail, onClose }: { detail: Detail; onClose: ()
         <div className="flex shrink-0 items-center gap-2">
           {detail.chip !== null && (
             <span
+              data-chip={detail.chip}
               className={cn(
                 'rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium',
-                CHIP_TONE[detail.chip],
+                chipTone(detail.chip),
               )}
             >
-              {detail.chip}
+              {chipWord(detail.chip)}
             </span>
           )}
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-accent"
+            className="min-h-6 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-accent"
           >
             Close
           </button>

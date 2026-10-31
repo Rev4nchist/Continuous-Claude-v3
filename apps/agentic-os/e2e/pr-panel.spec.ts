@@ -138,7 +138,10 @@ const rows = (page: Page): Locator => page.getByTestId('pr-row');
 const rowByKey = (page: Page, key: string): Locator =>
   page.locator(`[data-testid="pr-row"][data-pr-key="${key}"]`);
 const detailPanel = (page: Page): Locator => page.getByTestId('session-detail');
-const openPrsTile = (page: Page): Locator => page.getByTestId('stat-tile').nth(4);
+// The mockup order is Live sessions, Active lanes, Blocked, Open PRs, Needs Dave: Open PRs is the
+// 4th tile (index 3). Found by its label, so the next reorder cannot silently point at another tile.
+const openPrsTile = (page: Page): Locator =>
+  page.getByTestId('stat-tile').filter({ hasText: 'Open PRs' });
 
 const urlParam = (page: Page, key: string): string | null =>
   new URL(page.url()).searchParams.get(key);
