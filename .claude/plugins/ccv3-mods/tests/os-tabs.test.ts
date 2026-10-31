@@ -20,6 +20,9 @@ import type { Engine } from 'claude-code/testing'
 // T7 the footer is a Button, or is missing from the terminal or the desktop
 // T8 a press of tab-work does not ask for a board refresh (or a press of another tab does), or the refresh argv is wrong
 // T9 the Work tab does not draw what the board read returned
+// T10 a press of tab-swarm does not show the Swarm tab (header, then the empty line or the ledger's runs)
+// T11 a press of tab-swarm does not start one agent.list read (so a run the list holds as ended stays `running`), or a press of another tab starts one
+// T12 /clear or a resume leaves the Swarm tab on a stale selection, or the tab lies about the ledger after it (the pinned behaviour: the mod keeps agentRuns)
 //
 // Edits to the pre-redesign tests (each listed with the reason; none weakened):
 //   T1/T5 four Buttons -> six; the Comms NEXT / Swarm LATER / Resources LATER text -> the footer Text. T6 four hotkeys -> six.
@@ -39,7 +42,7 @@ const PANE_PROPS = {
 const SEVEN = ['tab-overview', 'tab-session', 'tab-plan', 'tab-work', 'tab-proof', 'tab-decisions', 'tab-swarm']
 const FOOTER = /later:\s*Comms\s*·\s*Resources/
 
-const world = (on: On) => {
+const world = (on: On, onList?: () => void) => {
   mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/home' })
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
@@ -47,7 +50,10 @@ const world = (on: On) => {
   on('fs.write', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'test-session' }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
-  on('agent.list', () => ({ value: [] as AgentInfo[] }))
+  on('agent.list', () => {
+    onList?.()
+    return { value: [] as AgentInfo[] }
+  })
   on('tool.call', { tool: 'TodoWrite' }, (_$, e) => ({ result: { oldTodos: [], newTodos: e.todos } }))
 }
 
@@ -205,9 +211,9 @@ describe('agentic-os /os tabs', () => {
       await after.unmount()
     })
 
-    test(`T4 the Session and Work selections are stored too, and ${name} resets them to Overview`, async ($, on) => {
+    test(`T4 the Session, Work and Swarm selections are stored too, and ${name} resets them to Overview`, async ($, on) => {
       world(on)
-      for (const [key, head] of [['tab-session', 'HELPERS'], ['tab-work', 'YOUR LANES']] as const) {
+      for (const [key, head] of [['tab-session', 'HELPERS'], ['tab-work', 'YOUR LANES'], ['tab-swarm', 'SWARM']] as const) {
         const first = await mountPane('terminal', $)
         await first.press({ key })
         await first.unmount()
@@ -289,4 +295,74 @@ describe('agentic-os /os tabs: the board refresh', () => {
     expect(text).not.toContain('lane board not read')
     await pane.unmount()
   })
+})
+
+// The Swarm tab (key 7). Runs come from a real spawn through the ledger (a workflow agent and a plain helper), not from a seeded atom.
+const swarmWorld = (on: On) => {
+  let lists = 0
+  world(on, () => {
+    lists += 1
+  })
+  on('session.root', () => ({ value: 'C:/r' }))
+  on('agent.spawn', (_$, e) => ({ model: 'claude-sonnet-5-5', agentId: e.description === 'map the hooks' ? 'a-wf' : 'a-plain' }))
+  return { lists: () => lists }
+}
+
+const spawn = ($: Engine, description: string, extra: Record<string, unknown> = {}) =>
+  $.agent.spawn({ tool_use_id: 't', prompt: 'p', description, subagentType: 'scout', parentModel: 'claude-opus-5-5', background: false, fork: false, ...extra } as never)
+
+describe('agentic-os /os tabs: the Swarm tab', () => {
+  test('T10 a press of tab-swarm shows SWARM and the empty line; with a spawned workflow agent and a plain helper it shows both sections', async ($, on) => {
+    swarmWorld(on)
+    const pane = await mountPane('terminal', $)
+    await pane.press({ key: 'tab-swarm' })
+    let text = await drawn(pane)
+    expect(text).toContain('SWARM')
+    expect(text).toContain('no helpers yet this session')
+    expect(text).not.toContain('GOAL')
+    await spawn($, 'map the hooks', { workflow: { runId: 'wf_1', agentIndex: 1 } })
+    await spawn($, 'review the plan')
+    text = await drawn(pane)
+    expect(text).toMatch(/SWARM\s*2 running · 0 done/)
+    expect(text).toContain('1 running · a workflow')
+    expect(text).toContain('map the hooks')
+    expect(text).toMatch(/HELPERS[\s\S]*review the plan/)
+    expect(text).not.toContain('no helpers yet this session')
+    await pane.press({ key: 'tab-overview' })
+    expect(await drawn(pane)).toContain('GOAL not set')
+    await pane.unmount()
+  })
+
+  test('T11 a press of tab-swarm starts one agent.list read; a press of any other tab starts none', async ($, on) => {
+    const { lists } = swarmWorld(on)
+    const pane = await mountPane('terminal', $)
+    const start = lists()
+    for (const key of ['tab-session', 'tab-plan', 'tab-work', 'tab-proof', 'tab-decisions', 'tab-overview']) await pane.press({ key })
+    expect(lists()).toBe(start)
+    await pane.press({ key: 'tab-swarm' })
+    expect(lists()).toBe(start + 1)
+    await pane.press({ key: 'tab-swarm' })
+    expect(lists()).toBe(start + 2)
+    await pane.unmount()
+  })
+
+  for (const [name, end] of [['/clear', END_CLEAR], ['resume', END_RESUME]] as const) {
+    test(`T12 ${name} with runs in the ledger: the pane opens on Overview, and Swarm lists the runs the ledger still holds`, async ($, on) => {
+      swarmWorld(on)
+      await spawn($, 'review the plan')
+      const first = await mountPane('terminal', $)
+      await first.press({ key: 'tab-swarm' })
+      expect(await drawn(first)).toContain('review the plan')
+      await first.unmount()
+      await $.session.end(end)
+      const after = await mountPane('terminal', $)
+      expect(await drawn(after)).toContain('GOAL not set')
+      expect(await drawn(after)).not.toContain('SWARM')
+      await after.press({ key: 'tab-swarm' })
+      const text = await drawn(after)
+      expect(text).toContain('SWARM')
+      expect(text).toContain('review the plan')
+      await after.unmount()
+    })
+  }
 })

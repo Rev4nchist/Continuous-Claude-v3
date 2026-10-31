@@ -718,22 +718,33 @@ describe('digest multi-row items', () => {
 
   // Guards the shared word list: the strip label of a tab and the digest hint for that tab must be one word. Fails if either
   // side keeps the old word or the two drift apart.
-  test('N1d the digest hint for each home tab equals the TABS label of that tab: Steps, Work, Checks, Choices', () => {
+  test('N1d the digest hint for each home tab equals the TABS label of that tab: Steps, Work, Checks, Choices, Swarm', () => {
     const blocked = made({ goal: 'g', plan: [{ id: 'a', text: LONG_ASK.slice(0, 190), status: 'blocked' }] })
-    const hintOf = (found: ReturnType<typeof go>, block: 'needs' | 'watch'): string | undefined =>
+    const hintOf = (found: ReturnType<typeof go>, block: 'needs' | 'highlights' | 'watch'): string | undefined =>
       /(?:\.\.\.|…)more -> (\S+)$/.exec(found[block].items[0]!.map(leftText).join(' '))?.[1]
     const hints: Record<string, string | undefined> = {
       plan: hintOf(go({ brief: blocked }, { columns: 40 }), 'needs'),
       proof: hintOf(go({ proofs: [proofOk(LONG_ASK, 5 * MIN, { result: { passed: 3, failed: 2 } })] }, { columns: 40 }), 'needs'),
       decisions: hintOf(go({ asks: [ask(LONG_ASK, 5 * MIN)] }, { columns: 40 }), 'needs'),
       work: hintOf(go({ lanes: [peer('api-core', { overlap: ['hooks/agentic-os/digest.ts'] })] }), 'watch'),
+      swarm: hintOf(go({ agents: [run('r1', 'done', 20 * MIN, { description: LONG_ASK })] }, { columns: 40 }), 'highlights'),
     }
-    const want: Record<string, string> = { plan: 'Steps', proof: 'Checks', decisions: 'Choices', work: 'Work' }
+    const want: Record<string, string> = { plan: 'Steps', proof: 'Checks', decisions: 'Choices', work: 'Work', swarm: 'Swarm' }
     for (const id of Object.keys(want)) {
       const label = TABS.find(one => one.id === id)?.label
       expect(hints[id], `hint of ${id}`).toBe(label)
       expect(label, `label of ${id}`).toBe(want[id])
     }
+  })
+
+  // The Swarm tab holds every helper (Dave, 2026-10-30), so a cut helper item points there. Fails if either helper item keeps the Session home.
+  test('N8 a cut finished helper in DONE and a cut long-running helper in WATCH both end "…more -> Swarm", never Session', () => {
+    const done = go({ agents: [run('r1', 'done', 20 * MIN, { description: LONG_ASK })] }, { columns: 40 }).highlights.items[0]!
+    expect(done.map(leftText).join(' ')).toContain('A helper finished: word0 word1')
+    expect(leftText(done[done.length - 1]!)).toMatch(HINT('Swarm'))
+    const slow = go({ agents: [run('r2', 'running', 20 * MIN, { description: LONG_ASK })] }, { columns: 40 }).watch.items[0]!
+    expect(slow.map(leftText).join(' ')).toMatch(/A helper has run 20 min: word0\s+word1/)
+    expect(leftText(slow[slow.length - 1]!)).toMatch(HINT('Swarm'))
   })
 
   test('N2 a short plain item gets no hint and stays one row', () => {
