@@ -17,11 +17,15 @@ const STUB_SLEEP_MS = 30000; // the stub dies by itself if the test cannot kill 
 const PIPE_WAIT_MS = 10000;  // a healthy run closes the pipe in a few seconds
 
 const STUB_SOURCE = `
-using System; using System.IO; using System.Threading; using System.Diagnostics;
+using System; using System.IO; using System.Threading; using System.Diagnostics; using System.Runtime.InteropServices;
 public static class Stub {
+  [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   public static void Main(string[] args) {
+    // Record whether this process owns a console window. The real daemon (uv, then python) inherits the same console.
+    IntPtr h = GetConsoleWindow();
     File.WriteAllText(Environment.GetEnvironmentVariable("STUB_MARKER"),
-      Process.GetCurrentProcess().Id + "|" + string.Join(" ", args));
+      Process.GetCurrentProcess().Id + "|" + string.Join(" ", args) + "|hwnd=" + h.ToInt64() + "|visible=" + (h != IntPtr.Zero && IsWindowVisible(h)));
     Thread.Sleep(${STUB_SLEEP_MS});
   }
 }`;
@@ -37,7 +41,8 @@ function killQuietly(pid) { try { process.kill(pid); } catch { /* already gone *
 
 test('a piped call returns: the spawned daemon does not hold the caller pipe open', { skip: process.platform !== 'win32' }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-pipe-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // TerminateProcess can return before the stub releases bin\uv.exe: retry the delete on EBUSY.
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
   const home = path.join(root, 'home');
   const repo = path.join(root, 'repo');
   const bin = path.join(root, 'bin');
@@ -53,7 +58,7 @@ test('a piped call returns: the spawned daemon does not hold the caller pipe ope
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
     STUB_MARKER: marker,
   };
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let out = '';
   child.stdout.on('data', (b) => { out += b; });
   child.stderr.on('data', (b) => { out += b; });
@@ -73,5 +78,8 @@ test('a piped call returns: the spawned daemon does not hold the caller pipe ope
   assert.ok(stubPid, `the stub daemon never started, so this run proves nothing. script output:\n${out}`);
   assert.match(fs.readFileSync(marker, 'utf8'), /run --project opc python opc\/scripts\/core\/embedding_daemon\.py --daemon/);
   assert.match(out, /Daemon spawned \(pid=\d+\)/);
+  // CreateNoWindow gives the daemon a console with no window (hwnd=0). A ShellExecute spawn gives it a new console
+  // whose window can show or take focus (the focus-stealing popups in memory windows-detached-spawn-popups.md).
+  assert.match(fs.readFileSync(marker, 'utf8'), /\|hwnd=0\|visible=False$/, 'the daemon got a console window: it can pop up and steal focus');
   assert.equal(outcome, 'RETURNED', `the piped caller still waited for EOF after ${PIPE_WAIT_MS} ms: the daemon holds the pipe`);
 });

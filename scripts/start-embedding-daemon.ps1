@@ -172,18 +172,53 @@ if (-not (Test-Path $daemonScript)) {
     exit 1
 }
 
+# The daemon must not hold this script's stdout/stderr open. With UseShellExecute=$false .NET passes
+# bInheritHandles=true, so every inheritable pipe handle of this process leaks into uv and python.
+# `start-embedding-daemon.ps1 | cat` (or a hook with piped stdio) then hangs until the daemon exits.
+# That includes the std handles AND host duplicates of them (clearing only the three std handles
+# still hung, measured 2026-10-30). So clear HANDLE_FLAG_INHERIT on every inheritable pipe handle
+# around Start, then restore it. Keep CreateNoWindow: it gives python a console with NO window.
+# UseShellExecute=$true avoided the leak but gave python a new console window (GetConsoleWindow != 0)
+# that can show and take focus, see memory windows-detached-spawn-popups.md.
+Add-Type -Namespace Ccv3 -Name PipeInherit -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+static extern bool SetHandleInformation(System.IntPtr h, int mask, int flags);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+static extern bool GetHandleInformation(System.IntPtr h, out int flags);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+static extern uint GetFileType(System.IntPtr h);
+
+// Clear HANDLE_FLAG_INHERIT (1) on every inheritable pipe handle. Returns the handles it cleared.
+public static System.Collections.Generic.List<long> Clear() {
+    var cleared = new System.Collections.Generic.List<long>();
+    for (long v = 4; v < 0x10000; v += 4) {
+        var h = new System.IntPtr(v);
+        int flags;
+        if (!GetHandleInformation(h, out flags) || (flags & 1) == 0) continue;
+        if (GetFileType(h) != 3) continue; // FILE_TYPE_PIPE
+        if (SetHandleInformation(h, 1, 0)) cleared.Add(v);
+    }
+    return cleared;
+}
+
+public static void Restore(System.Collections.Generic.List<long> handles) {
+    foreach (var v in handles) SetHandleInformation(new System.IntPtr(v), 1, 1);
+}
+'@
+
 $psi = [System.Diagnostics.ProcessStartInfo]::new()
 $psi.FileName         = 'uv'
 $psi.Arguments        = "run --project opc python opc/scripts/core/embedding_daemon.py --daemon"
 $psi.WorkingDirectory = $repoRoot
-# UseShellExecute=$true: ShellExecuteEx passes no inheritable handles, so the daemon does NOT
-# inherit this script's stdout/stderr. With $false the daemon held the caller's pipe open and
-# `start-embedding-daemon.ps1 | cat` (or a hook with piped stdio) hung until the daemon exited.
-# CreateNoWindow is ignored under ShellExecute; WindowStyle Hidden keeps the console hidden.
-$psi.UseShellExecute  = $true
-$psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
+$psi.UseShellExecute  = $false
+$psi.CreateNoWindow   = $true
 
-$spawnedProc = [System.Diagnostics.Process]::Start($psi)
+$clearedPipes = [Ccv3.PipeInherit]::Clear()
+try {
+    $spawnedProc = [System.Diagnostics.Process]::Start($psi)
+} finally {
+    [Ccv3.PipeInherit]::Restore($clearedPipes)
+}
 if (-not $spawnedProc) {
     Write-Log 'ERROR: failed to start daemon process.'
     exit 1
