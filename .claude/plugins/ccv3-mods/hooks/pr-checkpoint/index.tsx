@@ -333,6 +333,8 @@ const recordPathway = async (
     capacity: a.result.capacity,
     root: a.root,
   } as CheckpointRecord
+  // A grant belongs to the record it was made under (its budget and rounds). A new record voids it, or it would cover the new one.
+  await $.store.delete(`${GRANT_PREFIX}${a.pr}`)
   await $.store.set(`${RECORD_PREFIX}${a.pr}`, stored)
   return applyRecord($, a.root, stored)
 }
