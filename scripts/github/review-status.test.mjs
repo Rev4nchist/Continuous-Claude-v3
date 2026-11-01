@@ -138,6 +138,33 @@ test('NOT READY: no body edit history, or none by Greptile, is untrusted', () =>
   assert.equal(evaluate(input({ bodyEdits: [{ editor: { __typename: 'User', login: 'Rev4nchist' } }] })).ready, false);
 });
 
+// BE-A..BE-C: the PR body edit history is one page (userContentEdits(first:20)). Like the comment edit history
+// (74962d04), a history with more pages is distrusted, so a person's edit past page 1 cannot hide.
+// BE-A breaks if bodyEditsFrom ignores pageInfo.hasNextPage (the more-pages history then stays READY).
+// BE-B breaks if a history with no pageInfo at all is taken as complete. BE-C breaks if a complete page is dropped.
+const BODY_EDIT_PAGE = (hasNextPage) => ({ pageInfo: { hasNextPage }, nodes: [GREPTILE_EDIT] });
+
+test('BE-A: a PR body edit history with more pages is distrusted: NOT READY', () => {
+  assert.equal(typeof RS.bodyEditsFrom, 'function', 'review-status.mjs exports bodyEditsFrom');
+  const r = evaluate(input({ bodyEdits: RS.bodyEditsFrom(BODY_EDIT_PAGE(true)) }));
+  assert.equal(r.ready, false);
+  assert.equal(r.unavailable, true);
+  assert.ok(r.reasons.some((x) => /no edit history/.test(x)), r.reasons.join('; '));
+});
+
+test('BE-B: a PR body edit history with no pageInfo is distrusted too', () => {
+  assert.equal(typeof RS.bodyEditsFrom, 'function', 'review-status.mjs exports bodyEditsFrom');
+  assert.equal(RS.bodyEditsFrom({ nodes: [GREPTILE_EDIT] }), null);
+  assert.equal(RS.bodyEditsFrom(undefined), null);
+});
+
+test('BE-C: a PR body edit history that fits one page is read as before: READY', () => {
+  assert.equal(typeof RS.bodyEditsFrom, 'function', 'review-status.mjs exports bodyEditsFrom');
+  const edits = RS.bodyEditsFrom(BODY_EDIT_PAGE(false));
+  assert.deepEqual(edits, [GREPTILE_EDIT]);
+  assert.equal(evaluate(input({ bodyEdits: edits })).ready, true);
+});
+
 test('NOT READY: a missing summary block is UNAVAILABLE, and the check-only state stays visible', () => {
   const r = evaluate(input({ prBody: 'A body without the block.' }));
   assert.equal(r.ready, false);

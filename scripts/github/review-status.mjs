@@ -450,6 +450,14 @@ export const UNAVAILABLE_TAIL = "Post one @greptileai comment to re-run it, or l
 const GREPTILE_EDITOR = 'greptile-apps';
 
 /**
+ * The PR body edits from a userContentEdits connection: its nodes when the page is the whole history, else null (no history,
+ * so untrusted). A history with more pages, or one that did not ask for pageInfo, may hide a person's edit past page 1.
+ */
+export function bodyEditsFrom(connection) {
+  return connection?.pageInfo?.hasNextPage === false && Array.isArray(connection.nodes) ? connection.nodes : null;
+}
+
+/**
  * Who last touched the PR body after Greptile. `edits` is GraphQL userContentEdits, newest first.
  * Returns null when Greptile's newest edit is followed only by app edits, else the login (or a
  * description) of the first non-app editor. Missing history is untrusted.
@@ -1435,10 +1443,10 @@ function readLiveInputs() {
   const runsDoc = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/check-runs?per_page=100`]);
   const checkRuns = runsDoc.check_runs;
   if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
-  // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
+  // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit. A history with more pages is distrusted (bodyEditsFrom).
   // Comments are read apart, page by page (readIssueComments). More than 100 review threads is "cannot determine".
   // commits(last:1) is the head commit, for the CodeRabbit notice date.
-  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{oid author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){pageInfo{hasNextPage} nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{oid author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
   const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
   const prq = g.data.repository.pullRequest;
   const rt = prq.reviewThreads;
@@ -1463,7 +1471,7 @@ function readLiveInputs() {
     githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
   }));
   return {
-    pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
+    pull, combined, checkRuns, threads: rt.nodes, bodyEdits: bodyEditsFrom(prq.userContentEdits), reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
     proofGate: PROOF_REPOS.has(repo.toLowerCase()),
   };
 }
