@@ -10,7 +10,7 @@
  * Usage: node scripts/rules/rule-router-probe.mjs [--json]    exit 1 on any failed case
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, copyFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +52,13 @@ function fireParallel(payload, n) {
 const brokenDir = mkdtempSync(join(tmpdir(), 'rule-router-broken-'));
 copyFileSync(join(RULES, 'manifest.json'), join(brokenDir, 'manifest.json'));
 
+// A synthetic deny-first rule with no "subagent" key. Since 2026-10-31 the commit style rule is inject, so no real rule is
+// deny-first without a subagent block. This one keeps the downgrade covered: the main thread is blocked once, then each
+// subagent of that session gets the rule as an inject, not a second block.
+const denyDir = mkdtempSync(join(tmpdir(), 'rule-router-denyfirst-'));
+writeFileSync(join(denyDir, 'manifest.json'), JSON.stringify({ rules: [{ id: 'probe-deny', files: ['probe-deny.md'], mode: 'deny-first', command: ['^probe-deny-cmd(\\s|$)'] }] }));
+writeFileSync(join(denyDir, 'probe-deny.md'), '# probe-deny\nA synthetic rule for the probe.\n');
+
 const bash = (session, command, extra = {}) => ({ session_id: session, tool_name: 'Bash', tool_input: { command }, ...extra });
 const ps = (session, command) => ({ session_id: session, tool_name: 'PowerShell', tool_input: { command } });
 
@@ -60,22 +67,26 @@ const CASES = [
   ['grok exec blocks first time', bash('s1', 'grok exec --sandbox read-only - < p.txt'), 'deny', ['grok'], ['pr-and-commit-style']],
   ['same rule, same session: passes', bash('s1', 'grok exec --sandbox read-only - < p.txt'), 'none', [], []],
   ['env -u prefix still matches', bash('s2', 'env -u OPENAI_API_KEY -u GROK_API_KEY grok exec -'), 'deny', ['grok'], []],
-  ['quoted "grok" in a commit message is not grok', bash('s3', 'git commit -m "hand this to grok exec later"'), 'deny', ['pr-and-commit-style'], ['grok']],
-  ['a ; inside a quoted message does not start a grok segment', bash('s3b', 'git commit -m "step 1; grok exec later"'), 'deny', ['pr-and-commit-style'], ['grok']],
+  ['quoted "grok" in a commit message is not grok', bash('s3', 'git commit -m "hand this to grok exec later"'), 'inject', ['pr-and-commit-style'], ['grok']],
+  ['a ; inside a quoted message does not start a grok segment', bash('s3b', 'git commit -m "step 1; grok exec later"'), 'inject', ['pr-and-commit-style'], ['grok']],
   ['grok as an argument is not a command', bash('s4', 'ls grok/ && cat notes/grok.md'), 'none', [], []],
   ['echo of a grok command does not fire', bash('s4', 'echo "grok exec"'), 'none', [], []],
-  ['commit through git-safe.ps1 with quoted paths', ps('s5', 'pwsh -File "C:\\r\\scripts\\git-safe.ps1" -C C:\\r -c "core.hooksPath=x" commit -F "C:\\m.txt"'), 'deny', ['pr-and-commit-style'], []],
-  ['git -C repo commit', bash('s6', 'git -C /c/repo commit -F msg.txt'), 'deny', ['pr-and-commit-style'], []],
-  ['PR create via REST: block for style, plus the review loop', bash('s7', 'gh api repos/o/r/pulls -X POST -f title=x -f head=b'), 'deny', ['pr-and-commit-style', 'pr-review-loop'], []],
+  ['commit through git-safe.ps1 with quoted paths', ps('s5', 'pwsh -File "C:\\r\\scripts\\git-safe.ps1" -C C:\\r -c "core.hooksPath=x" commit -F "C:\\m.txt"'), 'inject', ['pr-and-commit-style'], []],
+  ['git -C repo commit', bash('s6', 'git -C /c/repo commit -F msg.txt'), 'inject', ['pr-and-commit-style'], []],
+  ['PR create via REST: injects the style rule and the review loop, no block', bash('s7', 'gh api repos/o/r/pulls -X POST -f title=x -f head=b'), 'inject', ['pr-and-commit-style', 'pr-review-loop'], []],
   ['REST merge injects the merge workflow', bash('s8', 'gh api repos/o/r/pulls/57/merge -X PUT -f merge_method=merge'), 'inject', ['git-merge'], ['pr-and-commit-style']],
   ['land-pr injects merge + review loop rules', ps('s9', 'pwsh -File scripts/github/land-pr.ps1 -Pr 57'), 'inject', ['git-merge', 'pr-review-loop'], []],
   ['pre-pr.mjs injects the review loop rule (Before you open a PR)', bash('s9b', 'node scripts/github/pre-pr.mjs --body draft.md'), 'inject', ['pr-review-loop'], ['pr-and-commit-style']],
   ['grok-adversary agent blocks', { session_id: 's10', tool_name: 'Agent', tool_input: { subagent_type: 'grok-adversary' } }, 'deny', ['grok'], []],
   ['Task tool name works too', { session_id: 's10b', tool_name: 'Task', tool_input: { subagent_type: 'grok-worker' } }, 'deny', ['grok'], []],
   ['a gate rule (grok) still blocks a subagent after the session had the block', bash('s10', 'grok exec -', { agent_id: 'sub-1' }), 'deny', ['grok'], []],
-  ['an ordinary block rule (commit style) blocks the main thread once', bash('s10d', 'git -C /c/repo commit -F msg.txt'), 'deny', ['pr-and-commit-style'], []],
-  ['...then a subagent of that session gets it injected, not blocked again', bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-1' }), 'inject', ['pr-and-commit-style'], []],
-  ['...and the next subagent gets the inject too', bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-2' }), 'inject', ['pr-and-commit-style'], []],
+  ['the commit style rule injects the main thread and the call runs (2026-10-31: no first-call block)', bash('s10d', 'git -C /c/repo commit -F msg.txt'), 'inject', ['pr-and-commit-style'], []],
+  ['...and not again on the next commit in that session', bash('s10d', 'git -C /c/repo commit -F msg.txt'), 'none', [], []],
+  ['...a subagent of that session gets its own copy',bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-1' }), 'inject', ['pr-and-commit-style'], []],
+  ['...and so does the next subagent', bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-2' }), 'inject', ['pr-and-commit-style'], []],
+  ['a deny-first rule with no subagent key blocks the main thread once', bash('s10g', 'probe-deny-cmd'), 'deny', ['probe-deny'], [], denyDir],
+  ['...then a subagent of that session gets it injected, not blocked again', bash('s10g', 'probe-deny-cmd', { agent_id: 'sub-1' }), 'inject', ['probe-deny'], [], denyDir],
+  ['...and the next subagent gets the inject too', bash('s10g', 'probe-deny-cmd', { agent_id: 'sub-2' }), 'inject', ['probe-deny'], [], denyDir],
   ['spend gate (kie-spend): main thread blocked first', bash('s10e', 'node scripts/kie.mjs still --prompt hero'), 'deny', ['kie-spend'], []],
   ['...a later subagent running the paid call is blocked too, not injected', bash('s10e', 'node scripts/kie.mjs still --prompt hero', { agent_id: 'sub-1' }), 'deny', ['kie-spend'], []],
   ['CMA gate: main thread blocked first', bash('s10f', 'ant sessions list'), 'deny', ['cma'], []],
