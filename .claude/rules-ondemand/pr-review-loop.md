@@ -269,6 +269,9 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 3. For each real finding you fixed, reply `Fixed in <sha>: <what changed>` and add a 👍 reaction to
    the finding. Then resolve the thread through GraphQL `resolveReviewThread`. The bots never
    resolve GitHub threads themselves. On a Greptile finding, start the reply with `@greptileai`.
+   Post each reply with `node scripts/github/reply-thread.mjs <pr> <comment-id> --body-file <file>`.
+   Write the file with the Write tool. Never build the reply in a PowerShell hashtable: `-f body=$h[$id]`
+   posts the text `System.Collections.Hashtable[<id>]` (14 replies on #225, #227 and #238).
 4. For each false positive, reply `<reason>` (with `@greptileai` on a Greptile finding) and add a
    👎 reaction to the finding. Then resolve the thread.
    The bots learn from replies and from 👍 and 👎 reactions. React only on a finding you
