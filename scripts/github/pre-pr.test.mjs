@@ -1656,6 +1656,22 @@ test('GU6: RED is never changed, and a GREEN-looking line inside a fenced block 
   assert.ok(after.includes(`GREEN: \`node --test x\` @ ${repo.head.slice(0, 7)}\n`));
 });
 
+// GU9 (CodeRabbit on #242): the body file was edited while the gates ran. The GREEN rewrite must not overwrite that edit;
+// the run keeps the "GREEN names commit" FAIL and writes no stamp.
+test('GU9: a body file edited during the run is not overwritten by the GREEN rewrite', async () => {
+  const repo = mergedRepo();
+  const before = greenBody({ green: repo.old });
+  const bodyPath = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-body-')), 'body.md');
+  writeFileSync(bodyPath, before);
+  const edited = `${before}\nDave's note added during the run.\n`;
+  const exec = () => { writeFileSync(bodyPath, edited); return { status: 0, stdout: 'ok\n', stderr: '' }; };
+  const { result } = await prePr(repo, { bodyText: before, bodyPath, skipCr: true, exec });
+  assert.equal(readFileSync(bodyPath, 'utf8'), edited, 'the edit made during the run survives');
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.some((l) => /GREEN names commit/.test(l)), result.lines.join('\n'));
+  assert.equal(existsSync(stampFile(repo)), false);
+});
+
 // ---------- GU7, GU8: a GREEN taken before an own change is not carried to the new head (review of PR flow quickfixes) ----------
 // The rewrite is only for "the base was merged in". GU7: an own commit after the GREEN commit (linear, or after a merge of
 // main) changed code that the GREEN run never saw. GU8: a merge of main whose conflict was resolved by hand holds code that

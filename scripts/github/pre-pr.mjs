@@ -441,7 +441,10 @@ export function updateGreen({ git, base = 'main', bodyPath, bodyText, head, path
   if (text === null) return null;
   const again = checkEvidence({ body: text, head, paths, config });
   if (again.status !== 'PASS') return null;
-  try { writeFileSync(bodyPath, text); } catch { return null; }
+  try {
+    if (readFileSync(bodyPath, 'utf8') !== bodyText) return null; // the file changed during the run: never overwrite it
+    writeFileSync(bodyPath, text);
+  } catch { return null; }
   return { evidence: again, bodyText: text, note: result('evidence:green', 'NOTE', `GREEN updated ${oldSha.slice(0, 7)} -> ${newSha}`) };
 }
 
