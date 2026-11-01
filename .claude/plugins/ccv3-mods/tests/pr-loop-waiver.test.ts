@@ -122,7 +122,8 @@ const world = (on: On, opts: Opts = {}) => {
     if (!argv.some(part => part.includes('review-status.mjs'))) return done(0, '[]')
     seen.status.push(pr)
     const queue = script[pr] ?? []
-    const reply = (queue.length > 1 ? queue.shift() : queue[0]) as Status
+    const reply = (queue.length > 1 ? queue.shift() : queue[0]) as Status | undefined
+    if (!reply) return done(1, '', `review-status: cannot read PR ${pr}`)
     return done(reply.ready ? 0 : 1, JSON.stringify(reply))
   })
   return { clock, seen, store }
