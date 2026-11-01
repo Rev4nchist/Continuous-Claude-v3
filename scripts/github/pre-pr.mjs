@@ -292,13 +292,23 @@ export function fetchBase(root, base, { timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   if (run(['remote', 'get-url', FORK]).status !== 0) return { state: 'no-remote', detail: `no ${FORK} remote` };
   // The spawn timeout kills git.exe only. On Windows git-remote-https or ssh can keep the stderr pipe open, so the network
   // limits below stop a hung transfer in git itself, and stdout and stdin are not piped.
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o ConnectTimeout=10 -o BatchMode=yes' };
+  const env = fetchEnv(process.env, run(['config', '--get', 'core.sshCommand']).stdout?.trim() ?? '');
   const refspec = `+refs/heads/${base}:refs/remotes/${FORK}/${base}`;
   const r = run(['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=15', 'fetch', '--quiet', FORK, refspec], { timeout: timeoutMs, env, stdio: ['ignore', 'ignore', 'pipe'] });
   if (r.error?.code === 'ETIMEDOUT') return { state: 'failed', detail: `timed out after ${Math.round(timeoutMs / 1000)} s` };
   if (r.error) return { state: 'failed', detail: clip(String(r.error.message), 100) };
   if (r.status !== 0) return { state: 'failed', detail: clip((r.stderr || '').trim().split(/\r?\n/).pop() || `exit ${r.status}`, 100) };
   return { state: 'ok', detail: `fetched ${FORK}/${base}` };
+}
+
+/**
+ * The env of the base fetch: no credential prompt, and a bounded batch ssh only when the user set no ssh transport.
+ * GIT_SSH_COMMAND outranks GIT_SSH and core.sshCommand, so a default here would override the user's own transport.
+ */
+export function fetchEnv(env, coreSshCommand) {
+  const ownSsh = env.GIT_SSH_COMMAND || env.GIT_SSH || coreSshCommand;
+  const sshDefault = ownSsh ? {} : { GIT_SSH_COMMAND: 'ssh -o ConnectTimeout=10 -o BatchMode=yes' };
+  return { ...env, GIT_TERMINAL_PROMPT: '0', ...sshDefault };
 }
 
 /** { n } commits that `ref` has and HEAD lacks, or { error }. */

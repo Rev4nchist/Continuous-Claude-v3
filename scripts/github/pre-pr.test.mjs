@@ -1551,6 +1551,17 @@ test('PF3: fetchBase reports no-remote without a fork remote, and a timeout as a
   assert.equal(PRE.fetchBase(repo.dir, 'main').state, 'ok');
 });
 
+// PF4 (CodeRabbit CLI, 2026-11-01): the default ssh command must not override the user's own ssh transport,
+// because GIT_SSH_COMMAND outranks GIT_SSH and core.sshCommand.
+test('PF4: fetchEnv sets the default ssh command only when no ssh transport is configured', () => {
+  const dflt = PRE.fetchEnv({}, '').GIT_SSH_COMMAND;
+  assert.match(dflt, /BatchMode=yes/);
+  assert.equal(PRE.fetchEnv({}, '').GIT_TERMINAL_PROMPT, '0');
+  assert.equal(PRE.fetchEnv({ GIT_SSH_COMMAND: 'my-ssh' }, '').GIT_SSH_COMMAND, 'my-ssh');
+  assert.equal('GIT_SSH_COMMAND' in PRE.fetchEnv({ GIT_SSH: 'plink.exe' }, ''), false);
+  assert.equal('GIT_SSH_COMMAND' in PRE.fetchEnv({}, 'ssh -i key'), false);
+});
+
 // ---------- GU: the GREEN sha follows a merge of the base (PR flow review, 2026-10-31) ----------
 // Ways it can fail: the sha is not rewritten (GU1); it is rewritten when it is not an ancestor of HEAD (GU2), when a gate
 // failed (GU3), or when another proof problem exists (GU4); the stamp hash is not the hash of the new file bytes (GU1);
