@@ -26,6 +26,7 @@ import type { Cell } from './state-table'
 //   a grant keeps a decline it covers (round-3):                               round-3/none + grant
 //   a grant leaves a covered queued ask in the queue:                          none/covered + grant
 //   a grant removes an uncovered queued ask:                                   none/uncovered + grant
+//   the pane Yes clears a decline it does not cover (D-a):                    opening/covered + pane-yes, round-5/covered + pane-yes
 //   the table loses a cell or a kind:                                          T3 table is complete
 
 const SESSION = 'test-session'
@@ -158,24 +159,21 @@ const QUEUE_AFTER_GRANT: Record<string, number[]> = { none: [], covered: [], unc
 
 type Want = { declined: Rec | undefined; queued: number[]; kept: string | null }
 const grantWant = (decline: string, queue: string): Want => ({ declined: DECLINE_AFTER_GRANT[decline], queued: QUEUE_AFTER_GRANT[queue]!, kept: KEPT_WORDS[decline]! })
-// A Yes in the pane answers the first queued ask and clears whatever decline the record holds.
-// KNOWN: that is wider than the typed grant, which keeps a decline it does not cover. Pinned as it is; see the note on the cell.
-const paneWant = (): Want => ({ declined: undefined, queued: [], kept: null })
+// A Yes in the pane on a round 4 ask is the typed grant of 4: it clears only a round decline it covers (D-a, Dave 11-01).
 
 const declineIds = Object.keys(DECLINES)
 const queueIds = Object.keys(QUEUES)
 const states = declineIds.flatMap(d => queueIds.map(q => `${d}/${q}`))
 const events = Object.keys(EVENTS)
 
-type TableCell = Cell & { want?: Want; known?: string }
+type TableCell = Cell & { want?: Want }
 const label = (w: Want) => `declined ${w.declined ? `${w.declined.kind}-${w.declined.round}` : 'none'}, queued [${w.queued.join(' ')}], ${w.kept ? `decline of ${w.kept} stays, no review request` : 'post one review'}`
 const cells: TableCell[] = []
 for (const state of states) {
   const [decline, queue] = state.split('/') as [string, string]
   for (const event of ['grant', 'grant-twice']) cells.push({ state, event, expect: label(grantWant(decline, queue)), want: grantWant(decline, queue) })
   if (queue === 'covered') {
-    const known = decline === 'opening' || decline === 'round-5' ? 'KNOWN: the pane Yes clears a decline it does not cover' : undefined
-    cells.push({ state, event: 'pane-yes', expect: `${label(paneWant())}${known ? ` (${known})` : ''}`, want: paneWant(), known })
+    cells.push({ state, event: 'pane-yes', expect: label(grantWant(decline, queue)), want: grantWant(decline, queue) })
   } else {
     cells.push({
       state,

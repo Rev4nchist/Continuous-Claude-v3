@@ -423,6 +423,22 @@ const pressDismiss = async ($: EngineInterface): Promise<void> => {
   await $.ui.close({ id: PANE })
 }
 
+/** A round allowed up to `allowed` clears only a round decline at or below it. An opening decline or a later round decline stays. */
+const coverDecline = (stored: CheckpointRecord | null, allowed: number): { covered: boolean; retained: string | null } => {
+  const covered = stored?.declined?.kind === 'round' && stored.declined.round <= allowed
+  const retained = stored?.declined && !covered ? (stored.declined.kind === 'opening' ? 'the opening review' : `round ${stored.declined.round}`) : null
+  return { covered, retained }
+}
+
+/** A lower grant never lowers a round Dave already allowed, whichever head that grant carries. */
+const allowedRound = async ($: EngineInterface, pr: number, round: number): Promise<number> => {
+  const prior = (await $.store.get(`${GRANT_PREFIX}${pr}`)) as { round?: unknown } | null | undefined
+  return prior && typeof prior.round === 'number' ? Math.max(prior.round, round) : round
+}
+
+const keptNotice = (pr: number, round: number, retained: string): string =>
+  `PR checkpoint: Dave allowed round ${round} for #${pr}, but his decline of ${retained} stays. Do not request that review.`
+
 const askNotice = (ask: CheckpointAsk, answer: 'yes' | 'no'): string => {
   const round = ask.round ?? 1
   if (ask.kind === 'round') {
@@ -493,9 +509,14 @@ const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> =
       return
     }
   }
+  let retained: string | null = null
   if (ask.kind === 'round' && answer === 'yes') {
-    await $.store.set(`${GRANT_PREFIX}${ask.pr}`, { round: ask.round ?? 1, head: ask.head, at: now })
-    if (next) {
+    // The same rule as the typed grant (D-a, Dave 11-01): only a round decline this Yes covers goes.
+    const allowed = await allowedRound($, ask.pr, ask.round ?? 1)
+    await $.store.set(`${GRANT_PREFIX}${ask.pr}`, { round: allowed, head: ask.head, at: now })
+    const cover = coverDecline(next, allowed)
+    retained = cover.retained
+    if (next && cover.covered) {
       const { declined: _declined, ...rest } = next
       next = rest as CheckpointRecord
     }
@@ -506,7 +527,7 @@ const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> =
   }
   if (next && next !== stored) await $.store.set(key, next)
   await saveAsks($, queue.slice(1))
-  await tellModel($, askNotice(ask, answer))
+  await tellModel($, retained ? keptNotice(ask.pr, ask.round ?? 1, retained) : askNotice(ask, answer))
   await closeIfIdle($)
 }
 
@@ -539,12 +560,10 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. Run ${SLASH} on it first. Nothing was recorded.` }
   // A lower grant never lowers a round Dave already allowed, whichever head that grant carries (the pane stores the PR head at ask time).
   // A grant never outlives its checkpoint record: recordPathway deletes it, so a stored grant belongs to this record.
-  const prior = (await $.store.get(`${GRANT_PREFIX}${grant.pr}`)) as { round?: unknown } | null | undefined
-  const allowed = prior && typeof prior.round === 'number' ? Math.max(prior.round, grant.round) : grant.round
+  const allowed = await allowedRound($, grant.pr, grant.round)
   await $.store.set(`${GRANT_PREFIX}${grant.pr}`, { round: allowed, head: stored.head, at: await $.clock.now() })
   // Only a round decline the grant covers goes. An opening decline or a decline of a later round stays, or the watcher asks again.
-  const covered = stored.declined?.kind === 'round' && stored.declined.round <= allowed
-  const retained = stored.declined && !covered ? (stored.declined.kind === 'opening' ? 'the opening review' : `round ${stored.declined.round}`) : null
+  const { covered, retained } = coverDecline(stored, allowed)
   try {
     if (covered) {
       const { declined: _declined, ...rest } = stored
@@ -563,7 +582,7 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
     return { text: `PR #${grant.pr}: the grant is stored for round ${grant.round}, but the cleanup failed (${message(err)}). A decline or a queued ask may remain. Type the command again.` }
   }
   if (retained) {
-    await tellModel($, `PR checkpoint: Dave allowed round ${grant.round} for #${grant.pr}, but his decline of ${retained} stays. Do not request that review.`)
+    await tellModel($, keptNotice(grant.pr, grant.round, retained))
     return { text: `PR #${grant.pr}: round ${grant.round} allowed. His decline of ${retained} stays.` }
   }
   await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: stored.head, text: '', round: grant.round }, 'yes'))
