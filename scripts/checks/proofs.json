@@ -95,6 +95,90 @@
       "fireMatch": "corpus R59a ",
       "expect": { "pre": "fire", "fix": "no-fire" },
       "note": "CodeRabbit #222 round 2. An unspaced em dash after a waiting object dropped the request."
+    },
+    {
+      "major": "#43",
+      "check": "c5",
+      "pre": "1ec6ab3c^",
+      "fix": "1ec6ab3c",
+      "paths": ["scripts/github/review-router.mjs", "scripts/github/review-status.mjs", "review-router.config.json"],
+      "copy": [{"from":"scripts/github/review-router-checkpoint-table.test.mjs","to":"scripts/github/review-router-checkpoint-table.test.mjs"}, {"from":"scripts/checks/state-table.mjs","to":"scripts/checks/state-table.mjs"}],
+      "cmd": ["{node}", "--test", "--test-reporter=tap", "scripts/github/review-router-checkpoint-table.test.mjs"],
+      "fireMatch": "^not ok \\d+ - T2 ready-raised \\+ ready\\+marker -> ",
+      "expect": {"pre": "fire", "fix": "no-fire"},
+      "note": "CodeRabbit #217 round 1. After a raise on a review:none PR, a confirmed ready (a /pathway marker for the head) did not save the new class, so the class-raised note never cleared. Era adapter (arrange only): the marker helpers come from the module namespace when they exist; the expected values do not change."
+    },
+    {
+      "major": "#45",
+      "check": "c5",
+      "pre": "75d6d032^",
+      "fix": "75d6d032",
+      "paths": ["scripts/github/review-router.mjs", "scripts/github/review-status.mjs", "review-router.config.json"],
+      "copy": [{"from":"scripts/github/review-router-checkpoint-table.test.mjs","to":"scripts/github/review-router-checkpoint-table.test.mjs"}, {"from":"scripts/checks/state-table.mjs","to":"scripts/checks/state-table.mjs"}],
+      "cmd": ["{node}", "--test", "--test-reporter=tap", "scripts/github/review-router-checkpoint-table.test.mjs"],
+      "fireMatch": "^not ok \\d+ - T2 ready-raised \\+ ready-no-marker -> ",
+      "expect": {"pre": "fire", "fix": "no-fire"},
+      "note": "CodeRabbit #217 round 2. A hand Ready for review click, with no /pathway marker, saved the new class and cleared the class-raised note. Era adapter (arrange only): at the pre-fix SHA the router has no marker helpers, so the comments are not read; the expected values do not change."
+    },
+    {
+      "major": "#27",
+      "check": "c5",
+      "pre": "42e1fbf^",
+      "fix": "42e1fbf",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/state-table.ts","to":".claude/plugins/ccv3-mods/tests/state-table.ts"}, {"from":".claude/plugins/ccv3-mods/tests/agent-status-table.test.ts","to":".claude/plugins/ccv3-mods/tests/agent-status-table.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "^\\(fail\\) .*T1 ledger-running-unlisted \\+ idle-pulse -> ",
+      "expect": {"pre": "fire", "fix": "no-fire"},
+      "note": "CodeRabbit #206 round 1, first half. An idle pulse never re-read agent.list while a ledger run was running, so a run the list holds as completed stayed running. The table file is copied onto an archive with no tests/ folder, with the state-table.ts twin."
+    },
+    {
+      "major": "#27b",
+      "check": "c5",
+      "pre": "42e1fbf^",
+      "fix": "42e1fbf",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/state-table.ts","to":".claude/plugins/ccv3-mods/tests/state-table.ts"}, {"from":".claude/plugins/ccv3-mods/tests/agent-status-table.test.ts","to":".claude/plugins/ccv3-mods/tests/agent-status-table.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "^\\(fail\\) .*T1 listed-waiting \\+ subagent-turn-start -> ",
+      "expect": {"pre": "fire", "fix": "no-fire"},
+      "note": "CodeRabbit #206 round 1, second half (credited as #27). A subagent turn.start left a waiting list entry in place, so the chip stayed idle."
+    },
+    {
+      "major": "#28",
+      "check": "c5",
+      "pre": "e9579469^",
+      "fix": "e9579469",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/state-table.ts","to":".claude/plugins/ccv3-mods/tests/state-table.ts"}, {"from":".claude/plugins/ccv3-mods/tests/agent-status-table.test.ts","to":".claude/plugins/ccv3-mods/tests/agent-status-table.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "^\\(fail\\) .*T1 running-after-start \\+ list-waiting -> ",
+      "expect": {"pre": "fire", "fix": "no-fire"},
+      "note": "CodeRabbit #206 round 2. The next list read put an older waiting over the running that a subagent turn.start set. At 42e1fbf (the first fix) this cell still fails; the proof compares e9579469^ with e9579469."
+    },
+    {
+      "major": "#84",
+      "check": "c5",
+      "pre": "9bcb694d^",
+      "fix": "9bcb694d",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/state-table.ts","to":".claude/plugins/ccv3-mods/tests/state-table.ts"}, {"from":".claude/plugins/ccv3-mods/tests/grant-decline-table.test.ts","to":".claude/plugins/ccv3-mods/tests/grant-decline-table.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "^\\(fail\\) .*T3 opening/none \\+ grant -> ",
+      "expect": {"pre": "fire", "fix": "no-fire"},
+      "note": "CodeRabbit #238 round 1. With an opening decline the grant does not cover, the model was told to post a review after the next push."
+    },
+    {
+      "major": "#84b",
+      "check": "c5",
+      "pre": "9bcb694d^",
+      "fix": "9bcb694d",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/state-table.ts","to":".claude/plugins/ccv3-mods/tests/state-table.ts"}, {"from":".claude/plugins/ccv3-mods/tests/grant-decline-table.test.ts","to":".claude/plugins/ccv3-mods/tests/grant-decline-table.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "^\\(fail\\) .*T3 round-5/none \\+ grant -> ",
+      "expect": {"pre": "fire", "fix": "no-fire"},
+      "note": "CodeRabbit #238 round 1, second shape of #84: a decline of round 5, which a grant of round 4 does not cover."
     }
   ]
 }
