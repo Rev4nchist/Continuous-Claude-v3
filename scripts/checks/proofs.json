@@ -35,6 +35,66 @@
       "fireMatch": "ccv3-argv-index-as-path scripts/settings/remove-maestro-registrations\\.mjs:\\d+$",
       "expect": { "pre": "fire", "fix": "no-fire" },
       "note": "CodeRabbit #211 round 1. At the pre-fix SHA process.argv[2] is the settings path and also an --option flag position, and reaches readFileSync, copyFileSync and writeFileSync."
+    },
+    {
+      "major": "#2",
+      "check": "c1",
+      "pre": "f0b6736^",
+      "fix": "f0b6736",
+      "paths": ["apps/agentic-os/src/server/sources"],
+      "copy": [{"from":"apps/agentic-os/playwright.pure.config.ts","to":"apps/agentic-os/playwright.pure.config.ts"}, {"from":"apps/agentic-os/e2e/safe-message-invariant.spec.ts","to":"apps/agentic-os/e2e/safe-message-invariant.spec.ts"}],
+      "cmd": ["{node}", "{repo}/node_modules/@playwright/test/cli.js", "test", "--config", "apps/agentic-os/playwright.pure.config.ts", "--reporter=list", "--grep", "leak root=(posix|win) seg=space wrap=bare"],
+      "fireMatch": "leak root=(posix|win) seg=space wrap=bare",
+      "expect": { "pre": "fire", "fix": "no-fire" },
+      "note": "CodeRabbit #200 round 2. A path with a space lost only its first word to the scrub. Roots are posix and win only: the tilde, home and userprofile roots came later (5f491a6) and are red at both SHAs."
+    },
+    {
+      "major": "#3",
+      "check": "c1",
+      "pre": "16b8f38^",
+      "fix": "16b8f38",
+      "paths": ["apps/agentic-os/src/server/sources"],
+      "copy": [{"from":"apps/agentic-os/playwright.pure.config.ts","to":"apps/agentic-os/playwright.pure.config.ts"}, {"from":"apps/agentic-os/e2e/safe-message-invariant.spec.ts","to":"apps/agentic-os/e2e/safe-message-invariant.spec.ts"}],
+      "cmd": ["{node}", "{repo}/node_modules/@playwright/test/cli.js", "test", "--config", "apps/agentic-os/playwright.pure.config.ts", "--reporter=list", "--grep", "leak root=(posix|win) seg=apostrophe wrap=dq"],
+      "fireMatch": "leak root=(posix|win) seg=apostrophe wrap=dq",
+      "expect": { "pre": "fire", "fix": "no-fire" },
+      "note": "CodeRabbit #200 round 3. A quoted path with an apostrophe was cut at the apostrophe. Roots are posix and win only, as for #2."
+    },
+    {
+      "major": "#57",
+      "check": "c1",
+      "pre": "6c91c6bf^",
+      "fix": "6c91c6bf",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/fixtures/next-steps-corpus.ts","to":".claude/plugins/ccv3-mods/tests/fixtures/next-steps-corpus.ts"}, {"from":".claude/plugins/ccv3-mods/tests/next-steps-corpus.test.ts","to":".claude/plugins/ccv3-mods/tests/next-steps-corpus.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "corpus R57 ",
+      "expect": { "pre": "fire", "fix": "no-fire" },
+      "note": "CodeRabbit #222 round 1. \"Waiting on CI, then approve PR 12\" was dropped whole. The corpus test and fixture are copied onto an archive that has no tests/ folder."
+    },
+    {
+      "major": "#58",
+      "check": "c1",
+      "pre": "6c91c6bf^",
+      "fix": "6c91c6bf",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/fixtures/next-steps-corpus.ts","to":".claude/plugins/ccv3-mods/tests/fixtures/next-steps-corpus.ts"}, {"from":".claude/plugins/ccv3-mods/tests/next-steps-corpus.test.ts","to":".claude/plugins/ccv3-mods/tests/next-steps-corpus.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "corpus R58 ",
+      "expect": { "pre": "fire", "fix": "no-fire" },
+      "note": "CodeRabbit #222 round 1. An unbulleted question next to an unbulleted no-ask line was dropped."
+    },
+    {
+      "major": "#59",
+      "check": "c1",
+      "pre": "61f94d5^",
+      "fix": "61f94d5",
+      "paths": [".claude/plugins/ccv3-mods/hooks", ".claude/plugins/ccv3-mods/types", ".claude/plugins/ccv3-mods/.claude-plugin", ".claude/plugins/ccv3-mods/tsconfig.json", ".claude/plugins/ccv3-mods/README.md"],
+      "copy": [{"from":".claude/plugins/ccv3-mods/.claude-plugin/types","to":".claude/plugins/ccv3-mods/.claude-plugin/types","root":"primary"}, {"from":".claude/plugins/ccv3-mods/tests/fixtures/next-steps-corpus.ts","to":".claude/plugins/ccv3-mods/tests/fixtures/next-steps-corpus.ts"}, {"from":".claude/plugins/ccv3-mods/tests/next-steps-corpus.test.ts","to":".claude/plugins/ccv3-mods/tests/next-steps-corpus.test.ts"}],
+      "cmd": ["claude", "plugin", "test", "{tree}/.claude/plugins/ccv3-mods"],
+      "fireMatch": "corpus R59a ",
+      "expect": { "pre": "fire", "fix": "no-fire" },
+      "note": "CodeRabbit #222 round 2. An unspaced em dash after a waiting object dropped the request."
     }
   ]
 }
