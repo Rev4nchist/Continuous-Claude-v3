@@ -107,7 +107,7 @@ const STATES: Record<string, Arrange> = {
     await mainTurnPulse($, seen)
   },
   'running-after-start': async ($, seen) => {
-    await STATES['listed-waiting']($, seen)
+    await STATES['listed-waiting']!($, seen)
     await subagentStart($)
   },
   'ledger-running-unlisted': async ($, seen) => {
@@ -218,8 +218,8 @@ describe('T1 agent status table', () => {
     test(`T1 ${cell.state} + ${cell.event} -> ${cell.expect}`, async ($, on) => {
       const seen = world(on)
       await startMod($)
-      await STATES[cell.state]($, seen)
-      await EVENTS[cell.event]($, seen)
+      await STATES[cell.state]!($, seen)
+      await EVENTS[cell.event]!($, seen)
       await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
       const snapshot = lastSnapshot(seen)
       const want = cell.want as Want
