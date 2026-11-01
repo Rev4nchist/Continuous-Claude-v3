@@ -91,9 +91,8 @@ function leaked(output: string, seg: string): string[] {
 
 /**
  * The sentences that e2e/session-detail-review.spec.ts feeds through the page, run here on the function. That
- * spec needs a dev server and a database, so CI cannot run it. Break it: end a quoted path at the first
- * closing quote that is followed by a space and the apostrophe row fails; let PATH_TAIL absorb a link and the
- * link rows fail.
+ * spec needs a dev server and a database, so CI cannot run it. Break it: end a quoted path at its first
+ * quote (the old QUOTED_PATH) and the two apostrophe rows fail; let PATH_TAIL absorb a link and the link rows fail.
  */
 const SENTENCES: [string, string][] = [
   ['Move logs from /var/log/app1 to S3 and add tests', 'Move logs from <path> to S3 and add tests'],
