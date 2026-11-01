@@ -13,9 +13,25 @@ import { redact } from './redact';
 
 const MAX_MESSAGE = 160;
 
-const WINDOWS_PATH = /(?:\b[A-Za-z]:[\\/]|\\\\)[^'"`<>|\r\n]*/g;
-const POSIX_HOME_PATH =
-  /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^'"`<>|\r\n]*/g;
+/** What may follow a quote that closes a quoted path or ends a path token. Any other next character means the quote is part of the path. */
+const QUOTE_CLOSES = String.raw`[\s.,;:!?)\]}'"\x60<>|]`;
+/**
+ * A quote inside a path: O'Brien, a"b. It belongs to the path when a path character follows it. A quote
+ * followed by white space, a sentence mark, a closing bracket, another quote, `<>|` or the end of the text
+ * ends the path instead. Before this rule "/home/alice/O'Brien/finance.txt" left "Brien/finance.txt".
+ */
+const PATH_QUOTE = String.raw`['"\x60](?!${QUOTE_CLOSES}|$)`;
+/** One character of a path that runs to the line end (error messages), and of a path that ends at white space (free text). */
+const LINE_CHAR = String.raw`(?:[^'"\x60<>|\r\n]|${PATH_QUOTE})*`;
+const TOKEN_CHAR = String.raw`(?:[^\s'"\x60<>|]|${PATH_QUOTE})*`;
+
+const WINDOWS_PATH = new RegExp(String.raw`(?:\b[A-Za-z]:[\\/]|\\\\)${LINE_CHAR}`, 'g');
+const POSIX_HOME_PATH = new RegExp(
+  String.raw`(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b${LINE_CHAR}`,
+  'g',
+);
+/** Home-relative forms in error messages: ~/x, $HOME/x, %USERPROFILE%\x. They carry file names even with no user name. */
+const HOME_REL_PATH = new RegExp(String.raw`(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/]${LINE_CHAR}`, 'g');
 const POSIX_DEEP_PATH = /(?<![\w:/.])(?:\/[\w.@~+-]+){2,}\/?/g;
 
 /** Replace every absolute path in already redacted text with `<path>`. For error messages: greedy to the line end. */
@@ -23,6 +39,7 @@ export function scrubPaths(text: string): string {
   return text
     .replace(WINDOWS_PATH, '<path>')
     .replace(POSIX_HOME_PATH, '<path>')
+    .replace(HOME_REL_PATH, '<path>')
     .replace(POSIX_DEEP_PATH, '<path>');
 }
 
@@ -35,11 +52,13 @@ export function scrubPaths(text: string): string {
  * ("C:\Users\First Last", ending there) leaves "Last" visible. This is for free text Dave reads
  * (goal, ask, plan, decisions); error messages keep the greedy scrub.
  */
-const WINDOWS_PATH_TOKEN = /(?:\b[A-Za-z]:[\\/]|\\\\)[^\s'"`<>|]*/g;
-const POSIX_HOME_PATH_TOKEN =
-  /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^\s'"`<>|]*/g;
+const WINDOWS_PATH_TOKEN = new RegExp(String.raw`(?:\b[A-Za-z]:[\\/]|\\\\)${TOKEN_CHAR}`, 'g');
+const POSIX_HOME_PATH_TOKEN = new RegExp(
+  String.raw`(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b${TOKEN_CHAR}`,
+  'g',
+);
 /** Home-relative forms: ~/x, $HOME/x, %USERPROFILE%\x. They carry file names even with no user name. */
-const HOME_REL_TOKEN = /(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/][^\s'"`<>|]*/g;
+const HOME_REL_TOKEN = new RegExp(String.raw`(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/]${TOKEN_CHAR}`, 'g');
 const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
 const PATH_START =
   /(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\$HOME[\\/]|%USERPROFILE%[\\/]|\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b)/
@@ -47,12 +66,12 @@ const PATH_START =
 /**
  * A whole quoted absolute path, spaces included: "C:\Users\First Last\x", '/home/a/Acme Corp/y'.
  * Each quote kind ends at its own closing quote, so another quote character may sit inside the
- * path: "/home/alice/O'Brien/x.txt".
+ * path: "/home/alice/O'Brien/x.txt". A quote of the same kind inside the path ("/home/a/a"b/x") closes
+ * it only when white space, a sentence mark or a closing bracket follows (QUOTE_CLOSES).
  */
-const QUOTED_PATH = new RegExp(
-  `"${PATH_START}[^"\\r\\n]*"|'${PATH_START}[^'\\r\\n]*'|\`${PATH_START}[^\`\\r\\n]*\``,
-  'g',
-);
+const quotedPath = (quote: string): string =>
+  `${quote}${PATH_START}(?:[^${quote}\\r\\n]|${quote}(?!${QUOTE_CLOSES}|$))*${quote}`;
+const QUOTED_PATH = new RegExp(['"', "'", '`'].map(quotedPath).join('|'), 'g');
 /**
  * Words right after a scrubbed path that still hold a path separator ("Corp/layoffs.csv",
  * "Last\My") are the rest of a path with spaces: absorb them. A plain word (or, to, today) has no
