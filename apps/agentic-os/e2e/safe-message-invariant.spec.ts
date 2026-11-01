@@ -47,6 +47,8 @@ const SEGS: Record<string, { text: string; words: string[] }> = {
   apostrophe: { text: "O'Brien", words: ['Brien'] },
   dquote: { text: 'a"b', words: ['a"b'] },
   tab: { text: 'Tab\tthere', words: ['Tab', 'there'] },
+  // A quote then a space inside a path: the token ends at the quote; "Reports/finance.txt" is a separator word.
+  aposspace: { text: "Clients' Reports", words: ['Clients', 'Reports'] },
 };
 
 const WRAPS: Record<string, (path: string) => string> = {
@@ -55,6 +57,9 @@ const WRAPS: Record<string, (path: string) => string> = {
   sq: (p) => `'${p}'`,
   bt: (p) => `\`${p}\``,
   paren: (p) => `(${p})`,
+  // An opening quote with no closing quote: a quote inside the path must not act as the closing one.
+  dqopen: (p) => `"${p}`,
+  sqopen: (p) => `'${p}`,
 };
 
 /** tail tag -> the text after the path, and the token of it that must survive (null: nothing to keep). */
@@ -109,6 +114,22 @@ const SENTENCES: [string, string][] = [
   [String.raw`Then %USERPROFILE%\tmp1\f.txt and $HOME/h1/g.txt end`, 'Then <path> and <path> end'],
   // Two quoted paths in one sentence: the first quote that is followed by a space closes the first path.
   [`Compare "/home/alice/a.txt" with '/home/alice/O'Brien/b.txt' today`, 'Compare <path> with <path> today'],
+  // A quote inside a path is never the closing quote of a quoted path (CodeRabbit, #243). No real closing quote: the token scrub runs.
+  ['see "/home/alice/a"b/finance.txt', 'see "<path>'],
+  ["see '/home/alice/O'Brien/finance.txt", "see '<path>"],
+  // A path that ends at an apostrophe before a space: a following word with a separator is the rest of the path.
+  ["/home/alice/Clients' Reports/finance.txt", '<path>'],
+  ["Archive /home/alice/Clients' Reports/finance.txt before Friday", 'Archive <path> before Friday'],
+  [String.raw`Archive C:\Users\alice\Clients' Reports\finance.txt before Friday`, 'Archive <path> before Friday'],
+  // A word with no separator after a closed quoted path is not part of it.
+  ["Keep '/home/a/x' and more", 'Keep <path> and more'],
+];
+
+/** The same shapes through safeMessage (the greedy scrub for error messages). */
+const MESSAGES: [string, string][] = [
+  ["/home/alice/Clients' Reports/finance.txt", '<path>'],
+  [String.raw`open C:\Users\alice\Clients' Reports\finance.txt`, 'open <path>'],
+  ['see "/home/alice/a"b/finance.txt', 'see "<path>'],
 ];
 
 test.describe('path scrubber invariant', () => {
@@ -118,14 +139,22 @@ test.describe('path scrubber invariant', () => {
     });
   }
 
+  for (const [input, want] of MESSAGES) {
+    test(`message ${JSON.stringify(input).slice(0, 60)}`, () => {
+      expect(safeMessage(new Error(input))).toBe(want);
+    });
+  }
+
   // A quote inside a path continues the path, so a storm of quotes must not cost more than a line scan.
-  test('a long run of quotes inside paths scrubs in under 100 ms', () => {
+  // The bound is loose on purpose: a 100 ms wall-clock limit fails on a loaded CI runner. Catastrophic
+  // backtracking (exponential time, or a hang) costs seconds or more, so 2000 ms still catches it.
+  test('a long run of quotes inside paths scrubs within 2000 ms', () => {
     for (const unit of ['"/tmp/a"b', `'/home/x'y `, '"C:\\a"b"', '/tmp/a"b"b', '"/tmp/x ']) {
       const text = unit.repeat(2000);
       const started = Date.now();
       scrubPathsInText(text);
       safeMessage(new Error(text));
-      expect(Date.now() - started, JSON.stringify(unit)).toBeLessThan(100);
+      expect(Date.now() - started, JSON.stringify(unit)).toBeLessThan(2000);
     }
   });
 

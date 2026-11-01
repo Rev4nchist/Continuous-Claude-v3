@@ -34,13 +34,32 @@ const POSIX_HOME_PATH = new RegExp(
 const HOME_REL_PATH = new RegExp(String.raw`(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/]${LINE_CHAR}`, 'g');
 const POSIX_DEEP_PATH = /(?<![\w:/.])(?:\/[\w.@~+-]+){2,}\/?/g;
 
+/**
+ * Words right after a scrubbed path that still hold a path separator ("Corp/layoffs.csv",
+ * "Last\My") are the rest of a path with spaces: absorb them. A plain word (or, to, today) has no
+ * separator, so the sentence around the path survives. A word that holds a link (scheme://, also
+ * inside a Markdown link) is not a path tail.
+ *
+ * A path that ends at a quote followed by white space ("/home/alice/Clients' Reports/x.txt") leaves
+ * `<path>'`: one optional quote between `<path>` and the white space is part of the match, so
+ * "Reports/x.txt" is absorbed as well. Over-scrubbing is on purpose: losing a word beats leaking a path.
+ */
+const PATH_TAIL = /<path>['"`]?((?:[ \t]+(?![^\s]*:\/\/)[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
+const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
+
+function absorbPathTail(text: string): string {
+  return text.replace(PATH_TAIL, (_all, tail: string) => `<path>${TRAILING_MARKS.exec(tail)?.[0] ?? ''}`);
+}
+
 /** Replace every absolute path in already redacted text with `<path>`. For error messages: greedy to the line end. */
 export function scrubPaths(text: string): string {
-  return text
-    .replace(WINDOWS_PATH, '<path>')
-    .replace(POSIX_HOME_PATH, '<path>')
-    .replace(HOME_REL_PATH, '<path>')
-    .replace(POSIX_DEEP_PATH, '<path>');
+  return absorbPathTail(
+    text
+      .replace(WINDOWS_PATH, '<path>')
+      .replace(POSIX_HOME_PATH, '<path>')
+      .replace(HOME_REL_PATH, '<path>')
+      .replace(POSIX_DEEP_PATH, '<path>'),
+  );
 }
 
 /**
@@ -59,7 +78,6 @@ const POSIX_HOME_PATH_TOKEN = new RegExp(
 );
 /** Home-relative forms: ~/x, $HOME/x, %USERPROFILE%\x. They carry file names even with no user name. */
 const HOME_REL_TOKEN = new RegExp(String.raw`(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/]${TOKEN_CHAR}`, 'g');
-const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
 const PATH_START =
   /(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\$HOME[\\/]|%USERPROFILE%[\\/]|\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b)/
     .source;
@@ -68,18 +86,13 @@ const PATH_START =
  * Each quote kind ends at its own closing quote, so another quote character may sit inside the
  * path: "/home/alice/O'Brien/x.txt". A quote of the same kind inside the path ("/home/a/a"b/x") closes
  * it only when white space, a sentence mark or a closing bracket follows (QUOTE_CLOSES).
+ * The final quote meets the same condition. Without it the match could end at an inner quote:
+ * `"/home/alice/a"b/finance.txt` (no real closing quote) would leave "b/finance.txt". With no closing quote
+ * the quoted form does not match, and the token scrubbers take the path.
  */
 const quotedPath = (quote: string): string =>
-  `${quote}${PATH_START}(?:[^${quote}\\r\\n]|${quote}(?!${QUOTE_CLOSES}|$))*${quote}`;
+  `${quote}${PATH_START}(?:[^${quote}\\r\\n]|${quote}(?!${QUOTE_CLOSES}|$))*${quote}(?=${QUOTE_CLOSES}|$)`;
 const QUOTED_PATH = new RegExp(['"', "'", '`'].map(quotedPath).join('|'), 'g');
-/**
- * Words right after a scrubbed path that still hold a path separator ("Corp/layoffs.csv",
- * "Last\My") are the rest of a path with spaces: absorb them. A plain word (or, to, today) has no
- * separator, so the sentence around the path survives. A word that holds a link (scheme://, also
- * inside a Markdown link) is not a path tail.
- */
-const PATH_TAIL = /<path>((?:[ \t]+(?![^\s]*:\/\/)[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
-
 function pathToken(match: string): string {
   const tail = TRAILING_MARKS.exec(match);
   return `<path>${tail ? tail[0] : ''}`;
@@ -87,13 +100,14 @@ function pathToken(match: string): string {
 
 /** Replace every absolute path in already redacted free text with `<path>`, keeping the words around it. */
 export function scrubPathsInText(text: string): string {
-  return text
-    .replace(QUOTED_PATH, '<path>')
-    .replace(WINDOWS_PATH_TOKEN, pathToken)
-    .replace(POSIX_HOME_PATH_TOKEN, pathToken)
-    .replace(HOME_REL_TOKEN, pathToken)
-    .replace(POSIX_DEEP_PATH, pathToken)
-    .replace(PATH_TAIL, (_all, tail: string) => `<path>${TRAILING_MARKS.exec(tail)?.[0] ?? ''}`);
+  return absorbPathTail(
+    text
+      .replace(QUOTED_PATH, '<path>')
+      .replace(WINDOWS_PATH_TOKEN, pathToken)
+      .replace(POSIX_HOME_PATH_TOKEN, pathToken)
+      .replace(HOME_REL_TOKEN, pathToken)
+      .replace(POSIX_DEEP_PATH, pathToken),
+  );
 }
 
 /**
