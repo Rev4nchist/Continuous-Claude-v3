@@ -1,0 +1,9 @@
+{
+  "tool": "semgrep",
+  "reason": "Zero rule findings on 5812f64b plus the PR A fixes. The 2 scan-error keys are Semgrep PartialParsing on files its JavaScript grammar cannot fully parse (same two files as in semgrep-baseline.json, semgrep 1.179.0). Rules run on those files in part only; the regex rule is unaffected.",
+  "total": 2,
+  "counts": {
+    "scan-error|.claude/skills/impeccable/scripts/live-accept.mjs": 1,
+    "scan-error|scripts/github/review-status.mjs": 1
+  }
+}
