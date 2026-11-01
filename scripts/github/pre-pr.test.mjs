@@ -43,6 +43,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdi
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as PRE from './pre-pr.mjs';
 import {
   SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
@@ -1169,6 +1170,8 @@ async function prePr(repo, extra = {}) {
   const opts = {
     root: repo.dir, base: 'main', config: CONFIG, now: new Date(),
     exec: okExec(gateRuns), crRunner: (o) => { if (o.args[0] === 'usage') return { status: 0, stdout: USAGE_OK, stderr: '' }; crCalls.push(o); return { status: 0, stdout: NDJSON_OK, stderr: '' }; },
+    // No fetch by default: withFork adds a GitHub URL as the fork remote. The PF tests pass fetch: undefined for the real one.
+    fetch: () => null,
     guardLog: () => {},
     bodyText: 'Proof type: docs\n', ...extra,
   };
@@ -1488,4 +1491,257 @@ test('RR4: mods-validate still FAILs on a failing mod test, a failed validate, o
 test('RR5: the tsc-not-run allowance is mods-validate only; another gate with the same text still FAILs', () => {
   const r = runGate(gateById('github-tests'), { root: REPO_ROOT, exec: execOut(1, MODS_SUMMARY('test 215 pass 0 fail')), git: fakeGit({}) });
   assert.equal(r.status, 'FAIL');
+});
+
+// ---------- PF: a bounded fetch of the base before the behind check (PR flow review, 2026-10-31) ----------
+// Ways it can fail: the fetch is not run, so a stale fork/main passes (PF1); a failed fetch fails the run or hides
+// that it failed (PF2); the fetch has no time limit, or a missing remote is an error (PF3).
+
+const makeBare = () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'prepr-bare-'));
+  git(dir, 'init', '-q', '--bare', '-b', 'main');
+  return dir;
+};
+
+/** A repo whose fork remote holds a newer main than the fork/main ref the repo last fetched. */
+function repoWithStaleFork() {
+  const repo = makeRepo();
+  const bare = makeBare();
+  git(repo.dir, 'remote', 'add', 'fork', bare);
+  git(repo.dir, 'push', '-q', 'fork', 'main');
+  const base = git(repo.dir, 'rev-parse', 'main');
+  const newer = git(repo.dir, 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'newer main');
+  git(repo.dir, 'push', '-q', 'fork', `${newer}:refs/heads/main`);
+  git(repo.dir, 'update-ref', 'refs/remotes/fork/main', base);
+  return { ...repo, bare, newer, base };
+}
+
+const behindLine = (result) => result.results.find((r) => r.step === 'git:behind');
+
+test('PF1: the run fetches the base from the fork first, so a fork/main that moved is seen as behind', async () => {
+  const repo = repoWithStaleFork();
+  const { result } = await prePr(repo, { fetch: undefined, skipCr: true });
+  const behind = behindLine(result);
+  assert.equal(behind.status, 'FAIL', result.lines.join('\n'));
+  assert.match(behind.detail, /1 commit\(s\) behind fork\/main/);
+  assert.doesNotMatch(behind.detail, /as last fetched/);
+  assert.equal(git(repo.dir, 'rev-parse', 'refs/remotes/fork/main'), repo.newer, 'the remote-tracking ref was updated');
+});
+
+test('PF2: a fetch that fails keeps the old comparison, says the fetch failed, and does not fail the run', async () => {
+  const repo = repoWithStaleFork();
+  git(repo.dir, 'remote', 'set-url', 'fork', path.join(os.tmpdir(), 'prepr-no-such-remote-dir'));
+  const { result } = await prePr(repo, { fetch: undefined, skipCr: true });
+  const behind = behindLine(result);
+  assert.equal(behind.status, 'PASS', result.lines.join('\n'));
+  assert.match(behind.detail, /fetch of fork\/main failed/);
+  assert.match(behind.detail, /last-fetched fork\/main/);
+  assert.equal(result.ok, true, result.lines.join('\n'));
+});
+
+test('PF3: fetchBase reports no-remote without a fork remote, and a timeout as a failure that says so', () => {
+  const repo = makeRepo();
+  assert.equal(PRE.fetchBase(repo.dir, 'main').state, 'no-remote');
+  const bare = makeBare();
+  git(repo.dir, 'remote', 'add', 'fork', bare);
+  git(repo.dir, 'push', '-q', 'fork', 'main');
+  const slow = PRE.fetchBase(repo.dir, 'main', { timeoutMs: 1 });
+  assert.equal(slow.state, 'failed');
+  assert.match(slow.detail, /timed out/);
+  assert.equal(PRE.fetchBase(repo.dir, 'main').state, 'ok');
+});
+
+// PF4 (CodeRabbit CLI, 2026-11-01): the default ssh command must not override the user's own ssh transport,
+// because GIT_SSH_COMMAND outranks GIT_SSH and core.sshCommand.
+test('PF4: fetchEnv sets the default ssh command only when no ssh transport is configured', () => {
+  const dflt = PRE.fetchEnv({}, '').GIT_SSH_COMMAND;
+  assert.match(dflt, /BatchMode=yes/);
+  assert.equal(PRE.fetchEnv({}, '').GIT_TERMINAL_PROMPT, '0');
+  assert.equal(PRE.fetchEnv({ GIT_SSH_COMMAND: 'my-ssh' }, '').GIT_SSH_COMMAND, 'my-ssh');
+  assert.equal('GIT_SSH_COMMAND' in PRE.fetchEnv({ GIT_SSH: 'plink.exe' }, ''), false);
+  assert.equal('GIT_SSH_COMMAND' in PRE.fetchEnv({}, 'ssh -i key'), false);
+});
+
+// ---------- GU: the GREEN sha follows a merge of the base (PR flow review, 2026-10-31) ----------
+// Ways it can fail: the sha is not rewritten (GU1); it is rewritten when it is not an ancestor of HEAD (GU2), when a gate
+// failed (GU3), or when another proof problem exists (GU4); the stamp hash is not the hash of the new file bytes (GU1);
+// CRLF is turned into LF (GU5); a GREEN-looking line inside a RED output block is rewritten, or RED changes (GU6).
+
+const sha256 = (t) => createHash('sha256').update(t).digest('hex');
+const greenBody = ({ redExtra = '', green, nl = '\n', redSha = 'b'.repeat(40), withRed = true }) => [
+  '## Evidence', '', 'Proof type: feature', '',
+  ...(withRed ? [`RED: \`node --test x\` @ ${redSha}`, '```text', 'not ok 1', ...(redExtra ? [redExtra] : []), '```', ''] : []),
+  `GREEN: \`node --test x\` @ ${green}`, '```text', 'ok 1', '```', '',
+].join(nl);
+
+/** A feature branch that merged a newer main after its work. `old` is the head before the merge. */
+function mergedRepo() {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  git(repo.dir, 'checkout', '-q', 'main');
+  writeFileSync(path.join(repo.dir, 'NEW.md'), 'main moved\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'main moves');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  git(repo.dir, 'merge', '-q', '--no-edit', 'main');
+  return { dir: repo.dir, old: repo.head, head: git(repo.dir, 'rev-parse', 'HEAD') };
+}
+
+/** Runs pre-pr on a body file kept outside the repo. Returns the run, the file path and its bytes before. */
+async function runWithBodyFile(repo, text, extra = {}) {
+  const bodyPath = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-body-')), 'body.md');
+  writeFileSync(bodyPath, text);
+  const run = await prePr(repo, { bodyText: readFileSync(bodyPath, 'utf8'), bodyPath, skipCr: true, ...extra });
+  return { ...run, bodyPath, after: readFileSync(bodyPath, 'utf8') };
+}
+
+test('GU1: GREEN names an ancestor of HEAD and every gate passes: the sha is rewritten, logged, and the stamp hashes the new file', async () => {
+  const repo = mergedRepo();
+  const before = greenBody({ green: repo.old });
+  const { result, bodyPath, after } = await runWithBodyFile(repo, before);
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(after, before.replace(`@ ${repo.old}\n\`\`\`text\nok 1`, `@ ${repo.head.slice(0, 7)}\n\`\`\`text\nok 1`), 'only the sha after @ on the GREEN line changed');
+  assert.ok(result.lines.some((l) => l.includes(`GREEN updated ${repo.old.slice(0, 7)} -> ${repo.head.slice(0, 7)}`)), result.lines.join('\n'));
+  assert.ok(result.lines.some((l) => /^PASS evidence/.test(l)), result.lines.join('\n'));
+  const stamp = JSON.parse(readFileSync(stampFile(repo), 'utf8'));
+  assert.equal(stamp.body_sha256, sha256(readFileSync(bodyPath, 'utf8')));
+});
+
+test('GU2: GREEN names a commit that is not an ancestor of HEAD: FAIL as before, the file is not touched', async () => {
+  const repo = mergedRepo();
+  const orphan = git(repo.dir, 'commit-tree', 'HEAD^{tree}', '-m', 'orphan');
+  const before = greenBody({ green: orphan });
+  const { result, after } = await runWithBodyFile(repo, before);
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.some((l) => /GREEN names commit/.test(l)), result.lines.join('\n'));
+  assert.equal(after, before);
+  assert.equal(existsSync(stampFile(repo)), false);
+});
+
+test('GU3: a gate fails: the file is not touched and there is no stamp', async () => {
+  const repo = mergedRepo();
+  const before = greenBody({ green: repo.old });
+  const { result, after } = await runWithBodyFile(repo, before, { exec: () => ({ status: 1, stdout: 'bad\n# fail 1\n', stderr: '' }) });
+  assert.equal(result.ok, false);
+  assert.equal(after, before);
+  assert.equal(existsSync(stampFile(repo)), false);
+});
+
+test('GU4: another proof problem (no RED line) with a stale GREEN: the file is not touched', async () => {
+  const repo = mergedRepo();
+  const before = greenBody({ green: repo.old, withRed: false });
+  const { result, after } = await runWithBodyFile(repo, before);
+  assert.equal(result.ok, false);
+  assert.equal(after, before);
+});
+
+test('GU5: a CRLF body keeps every CRLF and still gets the new sha', async () => {
+  const repo = mergedRepo();
+  const before = greenBody({ green: repo.old, nl: '\r\n' });
+  const { result, bodyPath, after } = await runWithBodyFile(repo, before);
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.ok(after.includes(`@ ${repo.head.slice(0, 7)}`));
+  assert.equal(after.split('\r').length, before.split('\r').length, 'the CR count is unchanged');
+  assert.equal(after.replace(/\r\n/g, '').includes('\n'), false, 'no bare LF');
+  assert.equal(JSON.parse(readFileSync(stampFile(repo), 'utf8')).body_sha256, sha256(readFileSync(bodyPath, 'utf8')));
+});
+
+test('GU6: RED is never changed, and a GREEN-looking line inside a fenced block is left alone', async () => {
+  const repo = mergedRepo();
+  const decoy = `GREEN: \`x\` @ ${repo.old}`;
+  const before = greenBody({ green: repo.old, redExtra: decoy, redSha: repo.old });
+  const { result, after } = await runWithBodyFile(repo, before);
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.ok(after.includes(`RED: \`node --test x\` @ ${repo.old}\n`), 'RED keeps its sha');
+  assert.ok(after.includes(`\n${decoy}\n`), 'the fenced line keeps its sha');
+  assert.ok(after.includes(`GREEN: \`node --test x\` @ ${repo.head.slice(0, 7)}\n`));
+});
+
+// GU9 (CodeRabbit on #242): the body file was edited while the gates ran. The GREEN rewrite must not overwrite that edit;
+// the run keeps the "GREEN names commit" FAIL and writes no stamp.
+test('GU9: a body file edited during the run is not overwritten by the GREEN rewrite', async () => {
+  const repo = mergedRepo();
+  const before = greenBody({ green: repo.old });
+  const bodyPath = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-body-')), 'body.md');
+  writeFileSync(bodyPath, before);
+  const edited = `${before}\nDave's note added during the run.\n`;
+  const exec = () => { writeFileSync(bodyPath, edited); return { status: 0, stdout: 'ok\n', stderr: '' }; };
+  const { result } = await prePr(repo, { bodyText: before, bodyPath, skipCr: true, exec });
+  assert.equal(readFileSync(bodyPath, 'utf8'), edited, 'the edit made during the run survives');
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.some((l) => /GREEN names commit/.test(l)), result.lines.join('\n'));
+  assert.equal(existsSync(stampFile(repo)), false);
+});
+
+// ---------- GU7, GU8: a GREEN taken before an own change is not carried to the new head (review of PR flow quickfixes) ----------
+// The rewrite is only for "the base was merged in". GU7: an own commit after the GREEN commit (linear, or after a merge of
+// main) changed code that the GREEN run never saw. GU8: a merge of main whose conflict was resolved by hand holds code that
+// nobody ran. In both, the old sha stays and the "GREEN names commit" FAIL stays; no stamp.
+
+test('GU7: an own code commit after the GREEN commit: the sha is not rewritten, FAIL stays, no stamp', async () => {
+  const kinds = {
+    linear: () => makeRepo({ files: { 'misc/x.dat': 'x\n' } }),
+    'after a merge of main': () => mergedRepo(),
+  };
+  for (const [name, make] of Object.entries(kinds)) {
+    const repo = make();
+    const old = repo.old ?? repo.head;
+    writeFileSync(path.join(repo.dir, 'misc/x.dat'), 'changed after the GREEN run\n');
+    git(repo.dir, 'add', '.');
+    git(repo.dir, 'commit', '-q', '-m', 'own change after GREEN');
+    const before = greenBody({ green: old });
+    const { result, after } = await runWithBodyFile({ dir: repo.dir }, before);
+    assert.equal(result.ok, false, `${name}: ${result.lines.join('\n')}`);
+    assert.ok(result.lines.some((l) => /GREEN names commit/.test(l)), `${name}: ${result.lines.join('\n')}`);
+    assert.equal(after, before, `${name}: the body file is unchanged`);
+    assert.equal(existsSync(stampFile(repo)), false, `${name}: no stamp`);
+  }
+});
+
+// GU8b (CodeRabbit round 2 on #242): a conflict resolved by taking one parent's version shows no combined diff, so
+// diff-tree --cc reads it as clean. The resolved tree was never run: no rewrite.
+test('GU8b: a conflict resolved by taking main\'s version whole is not a clean merge: no rewrite, no stamp', async () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'README.md'), 'feature line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'feature edits README');
+  const old = git(repo.dir, 'rev-parse', 'HEAD');
+  git(repo.dir, 'checkout', '-q', 'main');
+  writeFileSync(path.join(repo.dir, 'README.md'), 'main line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'main edits README');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  const merge = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '--no-edit', 'main'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+  assert.notEqual(merge.status, 0, 'the merge must conflict');
+  writeFileSync(path.join(repo.dir, 'README.md'), 'main line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '--no-edit');
+  const before = greenBody({ green: old });
+  const { result, after } = await runWithBodyFile({ dir: repo.dir }, before);
+  assert.equal(after, before, 'the GREEN line is not rewritten');
+  assert.equal(result.ok, false, result.lines.join('\n'));
+  assert.equal(existsSync(stampFile(repo)), false);
+});
+
+test('GU8: a merge of main with a hand-resolved conflict: the sha is not rewritten, FAIL stays, no stamp', async () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'README.md'), 'feature line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'feature edits README');
+  const old = git(repo.dir, 'rev-parse', 'HEAD');
+  git(repo.dir, 'checkout', '-q', 'main');
+  writeFileSync(path.join(repo.dir, 'README.md'), 'main line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'main edits README');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  const merge = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '--no-edit', 'main'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+  assert.notEqual(merge.status, 0, 'the merge must conflict');
+  writeFileSync(path.join(repo.dir, 'README.md'), 'a hand-written resolution that no run saw\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '--no-edit');
+  const before = greenBody({ green: old });
+  const { result, after } = await runWithBodyFile({ dir: repo.dir }, before);
+  assert.equal(result.ok, false, result.lines.join('\n'));
+  assert.ok(result.lines.some((l) => /GREEN names commit/.test(l)), result.lines.join('\n'));
+  assert.equal(after, before);
+  assert.equal(existsSync(stampFile(repo)), false);
 });

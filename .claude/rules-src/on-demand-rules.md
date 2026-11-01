@@ -12,7 +12,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the tool ca
 |---|---|---|
 | `grok-worker-safety.md` | Grok runs | block |
 | `cma-safety.md` | Claude Managed Agents (CMA, `ant`) | block |
-| `pr-and-commit-style.md` | commits and PR creation | block |
+| `pr-and-commit-style.md` | commits and PR creation | inject |
 | `design-work.md` | design, deck and chart skills; paid kie.ai images block | inject / block |
 | `browser-automation.md` | browser automation; claude-in-chrome blocks | inject / block |
 | `opencli-first.md` | web fetch and search | inject |
