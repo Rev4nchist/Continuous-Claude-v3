@@ -234,6 +234,12 @@ a plain request. When the next slot is over 15 minutes away, follow "Paid PR rev
 Otherwise wait. If the request also produces no review, report to Dave. With his merge
 yes, post the reason on the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #111 precedent).
 
+Review waiver: after Dave's explicit yes to waive the bot review, post a PR comment that starts with
+`Review waived by Dave`, then the reason. Post it only after that yes. `pr_watch` then stops queueing the
+opening-review question for that PR. The comment is not proof of Dave's yes (the agents post as the same
+account), so it hides no alert and changes no status text. Do not word it any other way: the watcher
+matches the exact phrase.
+
 On a both PR, `pr_watch` asks Dave once in the pane for Greptile on the final head. Post `@greptileai`
 only when he asks: each review bills a credit. Do not raise the review tier (`@greptileai review this at apex`, 10 credits) without Dave's
 yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).

@@ -206,6 +206,30 @@ export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none
 const outsideDiffCount = (status: PrStatus): number =>
   status.reasons.some(reason => OUTSIDE_DIFF_REASON.test(reason)) ? status.coderabbitOutsideDiff ?? 0 : 0
 
+/**
+ * The phrase that starts a waiver comment: "Review waived by Dave". Post it only after Dave's explicit yes to waive the bot review
+ * (pr-review-loop.md "Review waiver"; scripts/github/waiver-phrase.test.mjs pins the phrase in both files).
+ * A waiver stops ONE thing: the opening-review question the watcher queues for Dave (`asking` in index.ts). It is not proof that
+ * Dave said yes: the agents post as the PR author too (same GitHub account). So it never hides an alert, never changes a status
+ * text and never reaches the model. A signal only Dave can send must wait for a UserPromptSubmit marker (PR flow review, Phase 3).
+ */
+export const WAIVER_PREFIX = 'Review waived by Dave'
+
+/**
+ * Whether `gh pr view N --json author,comments` shows a waiver comment: one from the PR author whose body starts with WAIVER_PREFIX.
+ * A comment from another account does not count (a bot or a reviewer can quote the words). Any other shape is "not waived", never a throw.
+ */
+export const isWaived = (view: unknown): boolean => {
+  const pr = view as { author?: { login?: unknown } | null; comments?: unknown } | null | undefined
+  const author = pr?.author?.login
+  const comments: unknown = pr?.comments
+  if (typeof author !== 'string' || !Array.isArray(comments)) return false
+  return comments.some((one: { author?: { login?: unknown } | null; body?: unknown } | null) => {
+    const login = one?.author?.login
+    return typeof login === 'string' && login.toLowerCase() === author.toLowerCase() && typeof one?.body === 'string' && one.body.trimStart().startsWith(WAIVER_PREFIX)
+  })
+}
+
 /** The bots that reviewed the head: the required ones, plus Greptile or CodeRabbit when its own result needs action. */
 const reviewedBots = (status: PrStatus): string[] => {
   const required = status.routing?.required ?? []

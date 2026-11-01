@@ -18,6 +18,7 @@ import {
   isClosed,
   isPrNumber,
   isStale,
+  isWaived,
   landCommand,
   markSent,
   unmarkSent,
@@ -59,6 +60,8 @@ const STATUS_TOOL = 'mcp__ccv3-mods__pr_status'
 const ASKS_PREFIX = 'checkpoint:asks:'
 const RECORD_PREFIX = 'checkpoint:pr:'
 const GRANT_PREFIX = 'checkpoint:grant:'
+/** The head for which the PR author's waiver comment was seen. A PR with a waiver is read once per head, not once per tick. */
+const WAIVED_PREFIX = 'checkpoint:waived:'
 const CHECKPOINT_PANE = 'pr-checkpoint'
 
 const prSchema = {
@@ -113,6 +116,22 @@ const probe = async ($: EngineInterface, pr: number): Promise<Probe> => {
 
 const probeText = (pr: number, result: Probe): string =>
   result.kind === 'ok' ? statusText(result.status) : `PR #${pr}: could not read the status (${result.text}).`
+
+/**
+ * Whether the PR author posted a waiver comment (isWaived): one `gh pr view` of its author and comments, kept per head after a hit.
+ * Any failure reads as "not waived", so a gh outage keeps the question. It only decides whether `asking` queues a question for Dave.
+ */
+const waivedFor = async ($: EngineInterface, pr: number, head: string): Promise<boolean> => {
+  if ((await $.store.get(`${WAIVED_PREFIX}${pr}`)) === head) return true
+  try {
+    const run = await $.process.run(['gh', 'pr', 'view', String(pr), '--json', 'author,comments', '-R', REPO], { timeoutMs: STATUS_TIMEOUT_MS })
+    const waived = run.exitCode === 0 && isWaived(JSON.parse(run.stdout))
+    if (waived) await $.store.set(`${WAIVED_PREFIX}${pr}`, head)
+    return waived
+  } catch {
+    return false
+  }
+}
 
 const storeKey = async ($: EngineInterface): Promise<string> => `${KEY_PREFIX}${await $.session.id()}`
 
@@ -309,6 +328,7 @@ const asking = async ($: EngineInterface, status: PrStatus, now: number): Promis
   if (isClosed(status)) {
     await $.store.delete(`${RECORD_PREFIX}${status.pr}`)
     await $.store.delete(`${GRANT_PREFIX}${status.pr}`)
+    await $.store.delete(`${WAIVED_PREFIX}${status.pr}`)
     if (queue.some(one => one.pr === status.pr)) await saveAsks($, queue.filter(one => one.pr !== status.pr))
     return
   }
@@ -316,7 +336,9 @@ const asking = async ($: EngineInterface, status: PrStatus, now: number): Promis
   if (kept.length !== queue.length) await saveAsks($, kept)
   const record = readRecord(await $.store.get(`${RECORD_PREFIX}${status.pr}`))
   const ask = askFor(record, status, now, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)))
-  if (ask) await queueAsk($, ask)
+  if (!ask || kept.some(one => one.pr === ask.pr && one.kind === ask.kind && one.head === ask.head)) return
+  // A waiver comment by the PR author means Dave needs no question about requesting a review. Nothing else reads it.
+  if (!(await waivedFor($, status.pr, status.head))) await queueAsk($, ask)
 }
 
 /** The PR's checkpoint record and grant, read for the report lines. Null with no record, a closed PR or the kill switch. */
