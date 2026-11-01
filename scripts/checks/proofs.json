@@ -20,9 +20,10 @@
       "paths": ["scripts/github/review-status.mjs"],
       "copy": [],
       "cmd": ["{docker}", "run", "--rm", "-v", "{tree}:/src", "-v", "{repo}\\scripts\\ratchets\\semgrep-ccv3:/rules:ro", "-w", "/src", "{image}", "semgrep", "scan", "--config", "/rules", "--metrics=off", "--json", "--quiet"],
-      "fireMatch": "ccv3-graphql-connection-no-pageinfo scripts/github/review-status\\.mjs:517$",
+      "fireMatch": "ccv3-graphql-connection-no-pageinfo scripts/github/review-status\\.mjs:\\d+$",
+      "fireText": "^const COMMENTS_QUERY = ",
       "expect": { "pre": "fire", "fix": "no-fire" },
-      "note": "CodeRabbit #225 round 1. fireMatch is anchored to the COMMENTS_QUERY line (517 at the pre-fix SHA). The readLiveInputs query line (1283 at pre-fix, 1286 at the fix) holds the same shape and fires at both SHAs: it was the forward hit that D1 fixed in this PR, not the #64 line."
+      "note": "CodeRabbit #225 round 1. fireText ties the hit to the COMMENTS_QUERY source line, not to a line number, so a fix that only moves the line still fires. The readLiveInputs query (1283 at pre-fix, 1286 at the fix) has the same shape and fires at both SHAs: it was the forward hit that D1 fixed in this PR, not the #64 line."
     },
     {
       "major": "#38",

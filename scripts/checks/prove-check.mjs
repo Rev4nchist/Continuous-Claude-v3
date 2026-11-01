@@ -19,7 +19,9 @@
  * Row shape (see proofs.json):
  *   { major, check, pre, fix, paths: [archive paths], copy: [{ from, to, root?: "primary" }],
  *     cmd: [exe, ...args], fireMatch: "<regex over failing lines>", expect: { pre: "fire", fix: "no-fire" },
+ *     fireText?: "<Semgrep rows only: regex the hit's source line must match>",
  *     note?: "<era adapter or other record>", timeoutMs? }
+ * A run that exits non-zero with no failing line (docker exit 125, a crash before output) is BROKEN.
  * cmd placeholders: {tree} {repo} {node} {docker} {image}. The command runs with cwd = the tree, with no shell.
  *
  * Exit: 0 every row proven, 1 a row failed (no fire at pre, fire at fix, broken run, setup error),
@@ -91,6 +93,7 @@ export function classifyRun(row, run) {
     return { verdict: 'broken', why: run.error || 'no exit code (killed or timed out)' };
   }
   const sg = parseSemgrep(run.stdout ?? '');
+  if (!sg && isSemgrepRow(row)) return { verdict: 'broken', why: `Semgrep row printed no Semgrep JSON (exit ${run.code})` };
   if (sg) {
     const fatal = (sg.errors ?? []).filter((e) => e.level === 'error');
     if (fatal.length) return { verdict: 'broken', why: `semgrep reported ${fatal.length} error(s): ${fatal[0].type ?? fatal[0].message}` };
@@ -99,10 +102,31 @@ export function classifyRun(row, run) {
   const marker = BROKEN_MARKERS.find((re) => re.test(text));
   if (marker) return { verdict: 'broken', why: `output matches ${marker}` };
   const lines = sg ? semgrepLines(sg) : failingLines(text);
+  if (run.code !== 0 && lines.length === 0) {
+    return { verdict: 'broken', why: `exit ${run.code} with no failing line: the check did not run` };
+  }
   const re = new RegExp(row.fireMatch);
-  const hit = lines.find((l) => re.test(l));
-  return hit ? { verdict: 'fire', fireLine: hit } : { verdict: 'no-fire' };
+  const hits = sg ? sg.results.filter((r, i) => re.test(lines[i])) : lines.filter((l) => re.test(l));
+  if (!sg || !row.fireText) {
+    if (!hits.length) return { verdict: 'no-fire' };
+    return { verdict: 'fire', fireLine: sg ? semgrepLines({ results: [hits[0]] })[0] : hits[0] };
+  }
+  return fireTextVerdict(row, run, hits);
 }
+
+/** A Semgrep hit counts only when the source line it names matches row.fireText. Line numbers move; text does not. */
+function fireTextVerdict(row, run, hits) {
+  const re = new RegExp(row.fireText);
+  for (const h of hits) {
+    const file = path.join(run.tree ?? '', h.path);
+    if (!run.tree || !existsSync(file)) return { verdict: 'broken', why: `fireText: cannot read ${h.path} in the tree` };
+    const text = readFileSync(file, 'utf8').split(/\r?\n/)[(h.start?.line ?? 0) - 1] ?? '';
+    if (re.test(text)) return { verdict: 'fire', fireLine: `${h.check_id} ${h.path}:${h.start?.line} ${text.trim().slice(0, 80)}` };
+  }
+  return { verdict: 'no-fire' };
+}
+
+const isSemgrepRow = (row) => Array.isArray(row.cmd) && row.cmd.includes('semgrep') && row.cmd.includes('--json');
 
 /** Throws InputError for a row that cannot prove anything. Returns the row with defaults filled in. */
 export function validateRow(row) {
@@ -120,6 +144,17 @@ export function validateRow(row) {
     throw bad(`"fireMatch" is not a valid regex: ${e.message}`);
   }
   if (re.test('')) throw bad('"fireMatch" matches an empty line, so it would fire on every run');
+  if (row.fireText !== undefined) {
+    if (!isSemgrepRow(row)) throw bad('"fireText" works only on a Semgrep row (cmd has semgrep and --json)');
+    if (!str('fireText')) throw bad('"fireText" must be a non-empty string');
+    let t;
+    try {
+      t = new RegExp(row.fireText);
+    } catch (e) {
+      throw bad(`"fireText" is not a valid regex: ${e.message}`);
+    }
+    if (t.test('')) throw bad('"fireText" matches an empty line, so it would fire on every hit');
+  }
   const copy = row.copy ?? [];
   if (!Array.isArray(copy) || copy.some((c) => !c || typeof c.from !== 'string' || typeof c.to !== 'string')) {
     throw bad('"copy" must be a list of { from, to }');
@@ -233,7 +268,7 @@ export function realDeps({ repo, env = process.env }) {
         windowsHide: true,
         env: { ...env, MSYS_NO_PATHCONV: '1' },
       });
-      return { code: r.status, signal: r.signal, stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error?.message, cmd };
+      return { code: r.status, signal: r.signal, stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error?.message, cmd, tree };
     },
   };
 }

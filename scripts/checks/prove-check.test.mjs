@@ -25,6 +25,10 @@
 //       breaks it: archive the same sha for both phases, or skip the copy step
 //   PC10 a fix that does not fix (F still fires) exits 1 through the real CLI.
 //       breaks it: exit 0 whatever the verdicts are
+//   PC11 a run that exits non-zero with no output (docker exit 125), or a Semgrep row with no JSON, is read as clean.
+//       breaks it: drop the "exit != 0 and no failing line" or the "Semgrep row printed no JSON" check
+//   PC12 a Semgrep hit is matched by line number only, so a fix that moves the line reads as clean.
+//       breaks it: ignore row.fireText
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -183,6 +187,34 @@ test('PC8 Semgrep: only a result of the named rule fires; a scan error is broken
   // a rule that failed to load or a file that failed to parse: broken, even with exit 0
   const err = out([], [{ level: 'error', type: 'Rule parse error', message: 'bad rule' }]);
   assert.equal(classifyRun(row, err).verdict, 'broken');
+});
+
+test('PC11 a run that exits non-zero with no failing line, or a Semgrep row with no JSON, is broken, never a clean fix', () => {
+  // docker exit 125 (daemon down, bad mount) prints nothing on stdout
+  assert.equal(classifyRun(ROW, run(125, '', '')).verdict, 'broken');
+  assert.equal(judge(ROW, FIRE, run(125, '', '')).ok, false);
+  const sgRow = { ...ROW, cmd: ['{docker}', 'run', '{image}', 'semgrep', 'scan', '--json'], fireMatch: 'rule-x a\\.mjs:\\d+$' };
+  // a Semgrep row whose run printed no JSON did not scan anything, even with exit 0
+  assert.equal(classifyRun(sgRow, run(0, '')).verdict, 'broken');
+  assert.equal(classifyRun(sgRow, run(0, 'Error response from daemon')).verdict, 'broken');
+  // still a clean fix: a non-zero exit that names a different failing test, and a Semgrep JSON with no results
+  assert.equal(classifyRun(ROW, run(1, 'not ok 2 - other\n')).verdict, 'no-fire');
+  assert.equal(classifyRun(sgRow, run(0, JSON.stringify({ results: [], errors: [] }))).verdict, 'no-fire');
+});
+
+test('PC12 fireText: a Semgrep hit fires only when its source line matches, so a moved line cannot pass a fix', () => {
+  const tree = mkdtempSync(path.join(tmpdir(), 'pc12-'));
+  mkdirSync(path.join(tree, 'src'), { recursive: true });
+  writeFileSync(path.join(tree, 'src', 'a.mjs'), 'const OTHER_QUERY = 1;\nconst COMMENTS_QUERY = 2;\n');
+  const row = { ...ROW, cmd: ['semgrep', '--json'], fireMatch: 'rule-x src/a\\.mjs:\\d+$', fireText: '^const COMMENTS_QUERY = ' };
+  const at = (line) => ({ ...run(0, JSON.stringify({ results: [{ check_id: 'rule-x', path: 'src/a.mjs', start: { line } }], errors: [] })), tree });
+  assert.equal(classifyRun(row, at(2)).verdict, 'fire');
+  assert.equal(classifyRun(row, at(1)).verdict, 'no-fire');
+  // a hit whose source line cannot be read proves nothing
+  assert.equal(classifyRun(row, { ...at(2), tree: path.join(tree, 'missing') }).verdict, 'broken');
+  assert.throws(() => validateRow({ ...row, fireText: '(' }), InputError);
+  assert.throws(() => validateRow({ ...row, fireText: '.*' }), InputError);
+  assert.throws(() => validateRow({ ...ROW, fireText: 'x' }), /Semgrep/);
 });
 
 // ---- end to end: real git archive, real copy, real child process, real CLI --------------------------------------
