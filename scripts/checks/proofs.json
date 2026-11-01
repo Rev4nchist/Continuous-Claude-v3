@@ -7,7 +7,7 @@
       "fix": "1ec6ab3c",
       "paths": [".claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx"],
       "copy": [],
-      "cmd": ["{docker}", "run", "--rm", "-v", "{tree}:/src", "-v", "{repo}\\scripts\\ratchets\\semgrep-ccv3:/rules:ro", "-w", "/src", "{image}", "semgrep", "scan", "--config", "/rules", "--metrics=off", "--json", "--quiet"],
+      "cmd": ["{docker}", "run", "--rm", "-v", "{tree}:/src", "-v", "{rules}:/rules:ro", "-w", "/src", "{image}", "semgrep", "scan", "--config", "/rules", "--metrics=off", "--json", "--quiet"],
       "fireMatch": "ccv3-handler-await-before-lock \\.claude/plugins/ccv3-mods/hooks/pr-checkpoint/index\\.tsx:\\d+$",
       "expect": { "pre": "fire", "fix": "no-fire" },
       "note": "CodeRabbit #217 round 1. At the pre-fix SHA the Bash and the PowerShell tool.call handler each await the off switch outside any try (2 results). The check_id carries the rules. prefix of the /rules mount."
@@ -19,7 +19,7 @@
       "fix": "74962d04",
       "paths": ["scripts/github/review-status.mjs"],
       "copy": [],
-      "cmd": ["{docker}", "run", "--rm", "-v", "{tree}:/src", "-v", "{repo}\\scripts\\ratchets\\semgrep-ccv3:/rules:ro", "-w", "/src", "{image}", "semgrep", "scan", "--config", "/rules", "--metrics=off", "--json", "--quiet"],
+      "cmd": ["{docker}", "run", "--rm", "-v", "{tree}:/src", "-v", "{rules}:/rules:ro", "-w", "/src", "{image}", "semgrep", "scan", "--config", "/rules", "--metrics=off", "--json", "--quiet"],
       "fireMatch": "ccv3-graphql-connection-no-pageinfo scripts/github/review-status\\.mjs:\\d+$",
       "fireText": "^const COMMENTS_QUERY = ",
       "expect": { "pre": "fire", "fix": "no-fire" },
@@ -32,7 +32,7 @@
       "fix": "574eb221",
       "paths": ["scripts/settings/remove-maestro-registrations.mjs"],
       "copy": [],
-      "cmd": ["{docker}", "run", "--rm", "-v", "{tree}:/src", "-v", "{repo}\\scripts\\ratchets\\semgrep-ccv3:/rules:ro", "-w", "/src", "{image}", "semgrep", "scan", "--config", "/rules", "--metrics=off", "--json", "--quiet"],
+      "cmd": ["{docker}", "run", "--rm", "-v", "{tree}:/src", "-v", "{rules}:/rules:ro", "-w", "/src", "{image}", "semgrep", "scan", "--config", "/rules", "--metrics=off", "--json", "--quiet"],
       "fireMatch": "ccv3-argv-index-as-path scripts/settings/remove-maestro-registrations\\.mjs:\\d+$",
       "expect": { "pre": "fire", "fix": "no-fire" },
       "note": "CodeRabbit #211 round 1. At the pre-fix SHA process.argv[2] is the settings path and also an --option flag position, and reaches readFileSync, copyFileSync and writeFileSync."
@@ -56,8 +56,8 @@
       "fix": "16b8f38",
       "paths": ["apps/agentic-os/src/server/sources"],
       "copy": [{"from":"apps/agentic-os/playwright.pure.config.ts","to":"apps/agentic-os/playwright.pure.config.ts"}, {"from":"apps/agentic-os/e2e/safe-message-invariant.spec.ts","to":"apps/agentic-os/e2e/safe-message-invariant.spec.ts"}],
-      "cmd": ["{node}", "{repo}/node_modules/@playwright/test/cli.js", "test", "--config", "apps/agentic-os/playwright.pure.config.ts", "--reporter=list", "--grep", "leak root=(posix|win) seg=apostrophe wrap=dq"],
-      "fireMatch": "leak root=(posix|win) seg=apostrophe wrap=dq",
+      "cmd": ["{node}", "{repo}/node_modules/@playwright/test/cli.js", "test", "--config", "apps/agentic-os/playwright.pure.config.ts", "--reporter=list", "--grep", "leak root=(posix|win) seg=apostrophe wrap=dq(?![a-z])"],
+      "fireMatch": "leak root=(posix|win) seg=apostrophe wrap=dq(?![a-z])",
       "expect": { "pre": "fire", "fix": "no-fire" },
       "note": "CodeRabbit #200 round 3. A quoted path with an apostrophe was cut at the apostrophe. Roots are posix and win only, as for #2."
     },

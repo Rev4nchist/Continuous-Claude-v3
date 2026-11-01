@@ -14,7 +14,8 @@
  *   node scripts/checks/prove-check.mjs --check <name> [--major "#44"]... [--proofs file] [--repo dir]
  *                                       [--date YYYY-MM-DD] [--out dir]
  * Writes <out>/<date>-prove-<check>.json and .txt (default out: <repo>/.claude/cache/e2e).
- * Trees: <repo>/.claude/cache/proof/<sha8>/<check>-<major>/ (gitignored; never deleted by this script).
+ * Trees: <repo>/.claude/cache/proof/<sha8>/<check>-<major>/ (gitignored). Each run clears its tree first, so a stale
+ * file from an earlier copy list cannot change a verdict. The tree stays after the run, for inspection.
  *
  * Row shape (see proofs.json):
  *   { major, check, pre, fix, paths: [archive paths], copy: [{ from, to, root?: "primary" }],
@@ -22,7 +23,7 @@
  *     fireText?: "<Semgrep rows only: regex the hit's source line must match>",
  *     note?: "<era adapter or other record>", timeoutMs? }
  * A run that exits non-zero with no failing line (docker exit 125, a crash before output) is BROKEN.
- * cmd placeholders: {tree} {repo} {node} {docker} {image}. The command runs with cwd = the tree, with no shell.
+ * cmd placeholders: {tree} {repo} {rules} {node} {docker} {image}. {rules} is <repo>/scripts/ratchets/semgrep-ccv3. The command runs with cwd = the tree, with no shell.
  *
  * Exit: 0 every row proven, 1 a row failed (no fire at pre, fire at fix, broken run, setup error),
  *       2 bad input or NO rows (a vacuous run is not a pass).
@@ -30,7 +31,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -244,6 +245,24 @@ function copyOne(repo, primary, tree, c) {
   return rec;
 }
 
+/** Empty and recreate a proof tree. Refuses any path outside <repo>/.claude/cache/proof/. */
+function resetTree(repo, tree) {
+  const root = path.join(path.resolve(repo), '.claude', 'cache', 'proof');
+  const rel = path.relative(root, path.resolve(tree));
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`refusing to clear ${tree}: not inside ${root}`);
+  rmSync(tree, { recursive: true, force: true });
+  mkdirSync(tree, { recursive: true });
+}
+
+/**
+ * Fill the cmd placeholders. {rules} is the Semgrep rule folder, built with path.join so the separator fits the host.
+ * A row must not spell that path with backslashes: on Linux they stay literal and Docker mounts the wrong folder.
+ */
+export function substitute(cmd, { tree, repo, node, docker, image }) {
+  const rules = path.join(repo, 'scripts', 'ratchets', 'semgrep-ccv3');
+  return cmd.map((s) => s.replaceAll('{tree}', tree).replaceAll('{repo}', repo).replaceAll('{rules}', rules).replaceAll('{node}', node).replaceAll('{docker}', docker).replaceAll('{image}', image));
+}
+
 export function realDeps({ repo, env = process.env }) {
   const primary = primaryRoot(repo);
   const docker = env.DOCKER_BIN ?? (existsSync(DOCKER_WIN) ? DOCKER_WIN : 'docker');
@@ -252,14 +271,13 @@ export function realDeps({ repo, env = process.env }) {
     buildTree(row, ref) {
       const sha = gitText(repo, ['rev-parse', '--verify', `${ref}^{commit}`]);
       const tree = path.join(repo, '.claude', 'cache', 'proof', sha.slice(0, 8), `${slug(row.check)}-${slug(row.major)}`);
-      mkdirSync(tree, { recursive: true });
+      resetTree(repo, tree);
       extractArchive(repo, sha, row.paths, tree);
       const copied = row.copy.map((c) => copyOne(repo, primary, tree, c));
       return { ref, sha, tree, copied };
     },
     runCmd(row, tree) {
-      const subst = (s) => s.replaceAll('{tree}', tree).replaceAll('{repo}', repo).replaceAll('{node}', process.execPath).replaceAll('{docker}', docker).replaceAll('{image}', image);
-      const cmd = row.cmd.map(subst);
+      const cmd = substitute(row.cmd, { tree, repo, node: process.execPath, docker, image });
       const r = spawnSync(cmd[0], cmd.slice(1), {
         cwd: tree,
         encoding: 'utf8',

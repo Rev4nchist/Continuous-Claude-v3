@@ -19,6 +19,7 @@ const cellProblems = (states: string[], events: string[], cells: Cell[]): string
     if (seen.has(key)) problems.push(`repeated cell ${key}`)
     seen.add(key)
     if ('na' in c && !hasReason(c.na)) problems.push(`cell ${key}: na needs a reason`)
+    if (!('na' in c) && !hasReason(c.expect)) problems.push(`cell ${key}: a cell that runs needs an expect`)
   }
   for (const s of states) for (const e of events) if (!seen.has(`${s} + ${e}`)) problems.push(`missing cell ${s} + ${e}`)
   return problems

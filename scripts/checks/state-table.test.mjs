@@ -11,6 +11,8 @@
 //       breaks it: drop the kinds check in tableProblems()
 //   ST3 an `na` with an empty reason is accepted, on a cell and on a kind.
 //       breaks it: accept any `na` (check only that the key exists)
+//   ST5 a cell that is not `na` and has no non-empty `expect` fills the grid but asserts nothing.
+//       breaks it: treat any non-na cell as runnable without looking at expect
 //   ST4 a kind that names an event whose cells are all `na` passes, though nothing runs for it. A kind that names
 //       an event the table does not have passes, though nothing can cover it.
 //       breaks it: do not look at the cells of the event a kind names
@@ -81,6 +83,15 @@ test('ST3 an na cell with an empty or blank reason is a problem', () => {
 test('ST3 an na kind with an empty reason is a problem', () => {
   const k = { ...kinds(), 'timer-overlap': { na: '' } };
   assert.match(tableProblems({ states, events, cells: full(), kinds: k }).join('\n'), /kind timer-overlap: na needs a reason/);
+});
+
+test('ST5 a runnable cell with no expect, or a blank one, is a problem and does not fill the grid', () => {
+  // breaks it: drop the expect check in cellProblems()
+  for (const bare of [{ state: 's2', event: 'e1', run }, { state: 's2', event: 'e1', expect: '', run }, { state: 's2', event: 'e1', expect: '  ', run }]) {
+    const cells = full().map((c) => (c.state === 's2' && c.event === 'e1' ? bare : c));
+    const problems = tableProblems({ states, events, cells, kinds: kinds() });
+    assert.deepEqual(problems, ['cell s2 + e1: a cell that runs needs an expect']);
+  }
 });
 
 test('ST4 a kind whose event has only na cells is a problem', () => {

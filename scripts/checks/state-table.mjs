@@ -2,7 +2,7 @@
  * state-table.mjs - the completeness check for a state x event table (check C5).
  *
  * A table test lists every state, every event, and one cell per pair. A cell either runs and asserts
- * ({ state, event, expect, run }), or is `na` with a written reason ({ state, event, na }).
+ * ({ state, event, expect, run }, with a non-empty `expect`), or is `na` with a written reason ({ state, event, na }).
  * A table also names, for each kind of state bug, the events that cover it (an array of event ids), or
  * { na: '<reason>' }. `tableProblems` returns what is missing; a table test asserts that it returns [].
  *
@@ -23,6 +23,7 @@ function cellProblems(states, events, cells) {
     if (seen.has(key)) problems.push(`repeated cell ${key}`);
     seen.add(key);
     if ('na' in c && !hasReason(c.na)) problems.push(`cell ${key}: na needs a reason`);
+    if (!('na' in c) && !hasReason(c.expect)) problems.push(`cell ${key}: a cell that runs needs an expect`);
   }
   for (const s of states) for (const e of events) if (!seen.has(`${s} + ${e}`)) problems.push(`missing cell ${s} + ${e}`);
   return problems;

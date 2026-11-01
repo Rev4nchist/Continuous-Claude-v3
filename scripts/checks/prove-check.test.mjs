@@ -36,7 +36,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyRun, validateRow, judge, proveRow, InputError } from './prove-check.mjs';
+import { classifyRun, validateRow, judge, proveRow, substitute, realDeps, InputError } from './prove-check.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./prove-check.mjs', import.meta.url));
 const SHIPPED_PROOFS = fileURLToPath(new URL('./proofs.json', import.meta.url));
@@ -294,6 +294,39 @@ test('PC10 a fix that does not fix exits 1 through the real CLI; a broken row ex
     const noCheck = prove(root, [{ ...GOOD_ROW, copy: [] }]); // check.mjs is not in the archive: Cannot find module
     assert.equal(noCheck.status, 1, noCheck.out);
     assert.match(noCheck.out, /broken/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PC13 {rules} becomes the join of repo/scripts/ratchets/semgrep-ccv3, and no shipped row hard-codes a backslash path', () => {
+  // breaks it: put a literal "{repo}\\scripts\\ratchets\\..." back in a proofs.json row, or drop {rules} from substitute()
+  const repo = path.join(path.sep, 'home', 'u', 'repo');
+  const ctx = { tree: path.join(repo, 't'), repo, node: 'node', docker: 'docker', image: 'img' };
+  const [arg] = substitute(['{rules}:/rules:ro'], ctx);
+  assert.equal(arg, `${path.join(repo, 'scripts', 'ratchets', 'semgrep-ccv3')}:/rules:ro`);
+  const rows = JSON.parse(readFileSync(SHIPPED_PROOFS, 'utf8')).rows.filter((r) => r.cmd.includes('semgrep'));
+  assert.ok(rows.length >= 3, `expected the three c2 Semgrep rows, got ${rows.length}`);
+  for (const r of rows) {
+    assert.ok(r.cmd.includes('{rules}:/rules:ro'), `${r.major}: mount uses {rules}`);
+    assert.ok(!r.cmd.some((a) => a.includes('\\')), `${r.major}: no backslash in any cmd argument`);
+  }
+});
+
+test('PC14 buildTree clears a tree left by an earlier run, so a stale file cannot flip a verdict', () => {
+  // breaks it: drop the rmSync before mkdirSync in buildTree()
+  const root = makeRepo();
+  try {
+    const deps = realDeps({ repo: root });
+    const first = deps.buildTree(GOOD_ROW, 'HEAD');
+    const stale = path.join(first.tree, 'stale-from-earlier-copy-list.mjs');
+    writeFileSync(stale, 'export {};\n');
+    assert.ok(existsSync(stale));
+    const second = deps.buildTree(GOOD_ROW, 'HEAD');
+    assert.equal(second.tree, first.tree, 'same tree path is reused');
+    assert.ok(!existsSync(stale), 'the stale file is gone');
+    assert.ok(existsSync(path.join(second.tree, 'src', 'lib.mjs')), 'the archive is rebuilt');
+    assert.ok(existsSync(path.join(second.tree, 'check.mjs')), 'the copy is rebuilt');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

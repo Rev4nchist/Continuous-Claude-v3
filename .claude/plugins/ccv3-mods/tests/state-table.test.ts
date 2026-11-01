@@ -9,6 +9,7 @@ import type { Cell, Table } from './state-table'
 //   TW2 a required kind with no events and no na is not named. Break it: drop the kinds check.
 //   TW3 an na with a blank reason is accepted, on a cell or on a kind. Break it: accept any na.
 //   TW4 a kind whose event has only na cells passes. Break it: do not look at the cells of the event a kind names.
+//   TW5 a non-na cell with no non-empty expect passes. Break it: drop the expect check in tests/state-table.ts.
 
 const states = ['s1', 's2']
 const events = ['e1', 'e2']
@@ -46,6 +47,14 @@ describe('state-table twin', () => {
     const cells = full().map(c => (c.na ? { ...c, na: '  ' } : c))
     expect(tableProblems({ states, events, cells, kinds: kinds() })).toEqual(['cell s2 + e2: na needs a reason'])
     expect(tableProblems({ states, events, cells: full(), kinds: { ...kinds(), 'timer-overlap': { na: '' } } })).toEqual(['kind timer-overlap: na needs a reason'])
+  })
+
+  test('TW5 a runnable cell with no expect, or a blank one, is a problem', () => {
+    const bare: Cell[] = [{ state: 's2', event: 'e1' }, { state: 's2', event: 'e1', expect: '' }, { state: 's2', event: 'e1', expect: '  ' }]
+    for (const b of bare) {
+      const cells = full().map(c => (c.state === 's2' && c.event === 'e1' ? b : c))
+      expect(tableProblems({ states, events, cells, kinds: kinds() })).toEqual(['cell s2 + e1: a cell that runs needs an expect'])
+    }
   })
 
   test('TW4 a kind whose event has only na cells is a problem', () => {

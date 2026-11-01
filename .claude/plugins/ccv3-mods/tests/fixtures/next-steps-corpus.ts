@@ -30,7 +30,7 @@ export const CORPUS: CorpusRow[] = [
   { id: 'R35a', text: done('1. No action needed — paste the build log'), asks: ['paste the build log'], source: 'P35' },
   { id: 'R30a', text: steps("1. Waiting on Dave's approval."), asks: ["Waiting on Dave's approval"], source: 'P30' },
   { id: 'R30b', text: steps('1. Nothing for me to do.'), asks: ['Nothing for me to do'], source: 'P30' },
-  { id: 'R14', text: steps('1. None of the three options fit. Pick another approach?'), asks: ['None of the three options'], source: 'P14' },
+  { id: 'R14', text: steps('1. None of the three options fit. Pick another approach?'), asks: ['None of the three options fit. Pick another approach?'], source: 'P14' },
   // Closed no-ask forms: the block gives an empty list.
   { id: 'N13a', text: done('1. None — waiting on the CI run.'), asks: [], source: 'P13' },
   { id: 'N13b', text: done('1. **None** — waiting on the Greptile review.'), asks: [], source: 'P13' },
