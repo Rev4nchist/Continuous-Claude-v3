@@ -100,7 +100,7 @@ const SENTENCES: [string, string][] = [
   [String.raw`Keep C:\tmp\rec1.txt, then stop.`, 'Keep <path>, then stop.'],
   ['Archive /home/alice1/Acme Corp/layoffs1.csv before Friday', 'Archive <path> before Friday'],
   [String.raw`Open "C:\Users\First Last1\My Docs\plan.txt" now?`, 'Open <path> now?'],
-  [String.raw`Use C:\Users\Jo Smith1\Program Files\x.exe today.`, 'Use <path> today.'],
+  [String.raw`Use C:\Users\Jo Smith1\Program Files\setup.exe today.`, 'Use <path> today.'],
   [`Archive "/home/alice1/O'Brien/finance1.txt" before Friday`, 'Archive <path> before Friday'],
   [String.raw`Open "C:\Users\Pat1\O'Neil Docs\plan.txt" now?`, 'Open <path> now?'],
   ['Fix the report in /tmp/report1 https://example.com/ticket/1 then stop', 'Fix the report in <path> https://example.com/ticket/1 then stop'],
