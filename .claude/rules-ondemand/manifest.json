@@ -157,7 +157,7 @@
       "files": [
         "pr-and-commit-style.md"
       ],
-      "mode": "deny-first",
+      "mode": "inject",
       "command": [
         "^git(\\s+-[Cc]\\s+\\S+)*\\s+commit(\\s|$)",
         "^(pwsh|powershell)(\\.exe)?\\s.*\\scommit(\\s|$)",

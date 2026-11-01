@@ -234,6 +234,12 @@ a plain request. When the next slot is over 15 minutes away, follow "Paid PR rev
 Otherwise wait. If the request also produces no review, report to Dave. With his merge
 yes, post the reason on the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #111 precedent).
 
+Review waiver: after Dave's explicit yes to waive the bot review, post a PR comment that starts with
+`Review waived by Dave`, then the reason. Post it only after that yes. `pr_watch` then stops queueing the
+opening-review question for that PR. The comment is not proof of Dave's yes (the agents post as the same
+account), so it hides no alert and changes no status text. Do not word it any other way: the watcher
+matches the exact phrase.
+
 On a both PR, `pr_watch` asks Dave once in the pane for Greptile on the final head. Post `@greptileai`
 only when he asks: each review bills a credit. Do not raise the review tier (`@greptileai review this at apex`, 10 credits) without Dave's
 yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
@@ -269,6 +275,9 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 3. For each real finding you fixed, reply `Fixed in <sha>: <what changed>` and add a 👍 reaction to
    the finding. Then resolve the thread through GraphQL `resolveReviewThread`. The bots never
    resolve GitHub threads themselves. On a Greptile finding, start the reply with `@greptileai`.
+   Post each reply with `node scripts/github/reply-thread.mjs <pr> <comment-id> --body-file <file>`.
+   Write the file with the Write tool. Never build the reply in a PowerShell hashtable: `-f body=$h[$id]`
+   posts the text `System.Collections.Hashtable[<id>]` (14 replies on #225, #227 and #238).
 4. For each false positive, reply `<reason>` (with `@greptileai` on a Greptile finding) and add a
    👎 reaction to the finding. Then resolve the thread.
    The bots learn from replies and from 👍 and 👎 reactions. React only on a finding you
