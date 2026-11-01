@@ -138,7 +138,7 @@ test('NOT READY: no body edit history, or none by Greptile, is untrusted', () =>
   assert.equal(evaluate(input({ bodyEdits: [{ editor: { __typename: 'User', login: 'Rev4nchist' } }] })).ready, false);
 });
 
-// BE-A..BE-C: the PR body edit history is one page (userContentEdits(first:20)). Like the comment edit history
+// BE-A..BE-C: bodyEditsFrom takes one userContentEdits page (first:20). Like the comment edit history
 // (74962d04), a history with more pages is distrusted, so a person's edit past page 1 cannot hide.
 // BE-A breaks if bodyEditsFrom ignores pageInfo.hasNextPage (the more-pages history then stays READY).
 // BE-B breaks if a history with no pageInfo at all is taken as complete. BE-C breaks if a complete page is dropped.
@@ -149,8 +149,65 @@ test('BE-A: a PR body edit history with more pages is distrusted: NOT READY', ()
   const r = evaluate(input({ bodyEdits: RS.bodyEditsFrom(BODY_EDIT_PAGE(true)) }));
   assert.equal(r.ready, false);
   assert.equal(r.unavailable, true);
-  // D-b (Dave 11-01): keep NOT READY, and the reason names the cause, so Dave knows why
-  assert.ok(r.reasons.some((x) => /more than 20 PR body edits/.test(x)), r.reasons.join('; '));
+  // D-b (Dave 11-01): keep NOT READY, and the reason names the cause, so Dave knows why. A single page with more pages behind
+  // it is not complete: readBodyEdits (BE-D..) fetches the rest, bodyEditsFrom alone never trusts it.
+  assert.equal(typeof RS.MAX_BODY_EDITS, 'number', 'review-status.mjs exports MAX_BODY_EDITS');
+  assert.ok(r.reasons.some((x) => x.includes(`more than ${RS.MAX_BODY_EDITS} PR body edits`)), r.reasons.join('; '));
+});
+
+// BE-D..BE-H: a history of more than one page is read whole (readBodyEdits), page by page like readIssueComments.
+// GitHub returns userContentEdits newest first, and `after: endCursor` continues in that order, so the pages append.
+const CR_BODY_EDIT = { editor: { __typename: 'Bot', login: 'coderabbitai' } };
+const BE_PERSON_EDIT ={ editor: { __typename: 'User', login: 'someone' } };
+const bePage = (nodes, next) => ({ pageInfo: { hasNextPage: next !== undefined, endCursor: next ?? null }, nodes });
+const pagesOf = (...pages) => { const calls = []; return { calls, fetchPage: (c) => { calls.push(c); return pages[calls.length - 1]; } }; };
+
+test('BE-D: Greptile edit on page 2 with only bot edits after it: the history is read whole, READY', () => {
+  assert.equal(typeof RS.readBodyEdits, 'function', 'review-status.mjs exports readBodyEdits');
+  const { calls, fetchPage } = pagesOf(bePage([GREPTILE_EDIT], undefined));
+  const edits = RS.readBodyEdits(bePage([CR_BODY_EDIT], 'c1'), fetchPage);
+  assert.deepEqual(calls, ['c1']);
+  assert.deepEqual(edits, [CR_BODY_EDIT, GREPTILE_EDIT]);
+  assert.equal(evaluate(input({ bodyEdits: edits })).ready, true);
+});
+
+test('BE-E: a person edit on page 2, between Greptile and the newest edit, is found: NOT READY with that login', () => {
+  assert.equal(typeof RS.readBodyEdits, 'function', 'review-status.mjs exports readBodyEdits');
+  const { calls, fetchPage } = pagesOf(bePage([BE_PERSON_EDIT], 'c2'), bePage([GREPTILE_EDIT], undefined));
+  const edits = RS.readBodyEdits(bePage([CR_BODY_EDIT], 'c1'), fetchPage);
+  assert.deepEqual(calls, ['c1', 'c2'], 'each page continues from the end cursor of the one before');
+  assert.deepEqual(edits, [CR_BODY_EDIT, BE_PERSON_EDIT, GREPTILE_EDIT]);
+  const r = evaluate(input({ bodyEdits: edits }));
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.some((x) => /edited by someone after Greptile/.test(x)), r.reasons.join('; '));
+});
+
+test('BE-F: a history beyond the page cap is untrusted, and the reason names the cause', () => {
+  assert.equal(typeof RS.readBodyEdits, 'function', 'review-status.mjs exports readBodyEdits');
+  const calls = [];
+  const fetchPage = (c) => { calls.push(c); return bePage([CR_BODY_EDIT], `c${calls.length}`); };
+  assert.equal(RS.readBodyEdits(bePage([CR_BODY_EDIT], 'c0'), fetchPage, 3), null);
+  assert.equal(calls.length, 3, 'stops at the cap');
+  const r = evaluate(input({ bodyEdits: null }));
+  assert.equal(r.ready, false);
+  assert.equal(r.unavailable, true);
+  assert.ok(r.reasons.some((x) => x.includes(`more than ${RS.MAX_BODY_EDITS} PR body edits`)), r.reasons.join('; '));
+});
+
+test('BE-G: a failing page read is untrusted, not a crash', () => {
+  assert.equal(typeof RS.readBodyEdits, 'function', 'review-status.mjs exports readBodyEdits');
+  const fetchPage = () => { throw new Error('HTTP 502'); };
+  assert.equal(RS.readBodyEdits(bePage([GREPTILE_EDIT], 'c1'), fetchPage), null);
+});
+
+test('BE-H: a page with no cursor, a repeated cursor or no nodes is untrusted', () => {
+  assert.equal(typeof RS.readBodyEdits, 'function', 'review-status.mjs exports readBodyEdits');
+  const never = () => { throw new Error('must not fetch'); };
+  assert.equal(RS.readBodyEdits({ pageInfo: { hasNextPage: true }, nodes: [GREPTILE_EDIT] }, never), null, 'no cursor');
+  assert.equal(RS.readBodyEdits(bePage([GREPTILE_EDIT], 'c1'), () => bePage([CR_BODY_EDIT], 'c1')), null, 'repeated cursor');
+  assert.equal(RS.readBodyEdits(bePage([GREPTILE_EDIT], 'c1'), () => ({ pageInfo: { hasNextPage: false } })), null, 'no nodes');
+  assert.equal(RS.readBodyEdits(undefined, never), null, 'no first page');
+  assert.deepEqual(RS.readBodyEdits(bePage([GREPTILE_EDIT], undefined), never), [GREPTILE_EDIT], 'one complete page needs no fetch');
 });
 
 test('BE-B: a PR body edit history with no pageInfo is distrusted too', () => {
