@@ -66,6 +66,23 @@ jobs:
       - name: harness-doctor unit tests
         timeout-minutes: 5
         run: node --test scripts/harness-doctor.test.mjs
+      # Pre-PR checks built from CodeRabbit Majors (C1 scrubber grid, C2 Semgrep pack, C5 state tables).
+      # semgrep-ccv3 unit tests also read the Semgrep digest above (SG2): they fail when the two digests differ.
+      - name: semgrep-ccv3 wrapper unit tests
+        timeout-minutes: 5
+        run: node --test scripts/ratchets/semgrep-ccv3.test.mjs
+      - name: checks unit tests (state-table helper, prove-check harness)
+        timeout-minutes: 5
+        run: node --test scripts/checks/state-table.test.mjs scripts/checks/prove-check.test.mjs
+      - name: router checkpoint state x event table (C5 T2)
+        timeout-minutes: 5
+        run: node --test scripts/github/review-router-checkpoint-table.test.mjs
+      - name: Install root dev dependencies (Playwright test runner, no scripts, no browser download)
+        timeout-minutes: 5
+        run: npm ci --ignore-scripts
+      - name: Path scrubber grid (C1 part A, pure Node, no server, no database, no browser)
+        timeout-minutes: 5
+        run: npx playwright test --config apps/agentic-os/playwright.pure.config.ts
 
   trivy:
     runs-on: ubuntu-latest
@@ -122,3 +139,17 @@ jobs:
           mv .semgrep.json "$RUNNER_TEMP/semgrep.json"
       - name: Semgrep ratchet
         run: node scripts/ratchets/scan-ratchet.mjs --tool semgrep --report "$RUNNER_TEMP/semgrep.json" --baseline scripts/ratchets/semgrep-baseline.json --changed "$RUNNER_TEMP/changed.txt"
+      # The repo's own rules (scripts/ratchets/semgrep-ccv3/), built from CodeRabbit Majors #44, #64 and #38.
+      # Own baseline (semgrep-ccv3-baseline.json, target: empty) so the p/default baseline stays readable.
+      - name: ccv3 rule pack is valid
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep --validate --config scripts/ratchets/semgrep-ccv3 --metrics=off
+      - name: ccv3 rule pack fixtures (semgrep --test)
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep --test scripts/ratchets/semgrep-ccv3 --metrics=off
+      - name: ccv3 rule pack ratchet
+        run: node scripts/ratchets/semgrep-ccv3.mjs --changed "$RUNNER_TEMP/changed.txt"
