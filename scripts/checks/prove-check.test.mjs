@@ -136,7 +136,8 @@ test('PC5 a row that would fire on every run is refused', () => {
 test('PC6 zero rows is exit 2 with a "no rows" line, not a pass (the shipped proofs.json, real CLI)', () => {
   const shipped = JSON.parse(readFileSync(SHIPPED_PROOFS, 'utf8'));
   assert.ok(Array.isArray(shipped.rows), 'proofs.json holds a rows array');
-  const r = spawnSync(process.execPath, [SCRIPT, '--check', 'c2'], { encoding: 'utf8' });
+  // a check name no row will ever use, so this stays a "no rows" test after the c1, c2 and c5 rows land
+  const r = spawnSync(process.execPath, [SCRIPT, '--check', 'no-such-check'], { encoding: 'utf8' });
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stdout + r.stderr, /no rows/i);
 });
