@@ -11,7 +11,14 @@
  * the background (Bash run_in_background) and read its log when the exit notice arrives. It prints a progress line
  * to stderr each minute while `cr` runs, and streams the review to e2e/<date>-pre-pr-cr-<sha7>.running.txt.
  *   --body     the draft PR body (the Evidence block from pr-and-commit-style.md). Required.
- *   --base     the base branch. Default main. It is compared as a LOCAL ref: this script does no fetch.
+ *   --base     the base branch. Default main. It is compared as a LOCAL ref, and as fork/<base> after a bounded
+ *              (30 s) `git fetch fork <base>` that runs first. A failed fetch keeps the last-fetched fork ref, says so
+ *              on the git:behind line, and never fails the run by itself.
+ *              The body file is edited in one case: after a merge of the base the GREEN line names the old head. When the
+ *              evidence has no other problem, that commit is an ancestor of HEAD, nothing but a clean merge of the base
+ *              came after it (no own commit, no hand-resolved conflict) and every other step passed, the sha
+ *              after "@" on the GREEN line becomes the HEAD short sha (line endings kept; RED never changes), a NOTE
+ *              "GREEN updated <old> -> <new>" is printed, and the stamp holds the hash of the new file.
  *   --skip-cr  do not run the CodeRabbit CLI review. The stamp records cr_skipped and cr_skip_reason "flag",
  *              and the pre-pr-gate hook denies such a stamp. Use it to test this script, not to open a PR.
  *   --cr-timeout-min N  the hard time limit of the CodeRabbit review in minutes (default 30; env PRE_PR_CR_TIMEOUT_MIN).
@@ -23,7 +30,8 @@
  * gates: a surface with no automatic gate, a changed file no surface owns, an opc source change with no test.
  * A step FAILs when:
  *   - the branch is main, the base or detached; the tree has an edited, staged or untracked file;
- *     HEAD is behind the local base or behind fork/<base> (no fetch is done); no file differs from the base;
+ *     HEAD is behind the local base or behind fork/<base> (fetched first; the last-fetched ref if the fetch fails);
+ *     no file differs from the base;
  *   - the Evidence in the body has a problem READY would report, the body cannot be read, a docs type has a
  *     non-docs changed file, or the GREEN line does not name HEAD;
  *   - a gate exits non-zero, times out, cannot start, or (the hooks build) leaves dist changed or untracked;
@@ -228,13 +236,13 @@ export function makeGit(root) {
 
 // ---------- git preconditions ----------
 
-/** Three results: branch, clean tree, behind. The base is a local ref: no fetch is done. */
-export function checkGit(git, base) {
+/** Three results: branch, clean tree, behind. `fetched` is the fetchBase result, or null when no fetch was tried. */
+export function checkGit(git, base, fetched = null) {
   const branch = git(['branch', '--show-current']).stdout.trim();
   const branchResult = !branch ? result('git:branch', 'FAIL', 'HEAD is detached: switch to the feature branch')
     : branch === 'main' || branch === base ? result('git:branch', 'FAIL', `on ${branch}: a PR opens from a feature branch, never from ${branch}`)
       : result('git:branch', 'PASS', `on ${branch}`);
-  return [branchResult, checkClean(git), checkBehind(git, base)];
+  return [branchResult, checkClean(git), checkBehind(git, base, fetched)];
 }
 
 /**
@@ -269,8 +277,29 @@ export function checkStable(git, head) {
   return result('git:stable', 'PASS', 'HEAD and tracked files are unchanged since the start');
 }
 
-/** The fork remote: every CCv3 push goes there (CONTEXT.md). Its remote-tracking ref is read without a fetch. */
+/** The fork remote: every CCv3 push goes there (CONTEXT.md). runPrePr fetches the base from it first (fetchBase). */
 const FORK = 'fork';
+/** The time limit of the fetch before the behind check. A slow or dead network must not hold the run. */
+export const FETCH_TIMEOUT_MS = 30_000;
+
+/**
+ * Fetches `<base>` from the fork into refs/remotes/fork/<base>, so the behind check sees the real remote base.
+ * Returns { state, detail }: "ok", "failed" (the exit, the time limit or the spawn error; the caller keeps the old
+ * comparison) or "no-remote" (no fork remote, so nothing to fetch). Never throws. A credential prompt is switched off.
+ */
+export function fetchBase(root, base, { timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+  const run = (args, extra = {}) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, ...extra });
+  if (run(['remote', 'get-url', FORK]).status !== 0) return { state: 'no-remote', detail: `no ${FORK} remote` };
+  // The spawn timeout kills git.exe only. On Windows git-remote-https or ssh can keep the stderr pipe open, so the network
+  // limits below stop a hung transfer in git itself, and stdout and stdin are not piped.
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o ConnectTimeout=10 -o BatchMode=yes' };
+  const refspec = `+refs/heads/${base}:refs/remotes/${FORK}/${base}`;
+  const r = run(['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=15', 'fetch', '--quiet', FORK, refspec], { timeout: timeoutMs, env, stdio: ['ignore', 'ignore', 'pipe'] });
+  if (r.error?.code === 'ETIMEDOUT') return { state: 'failed', detail: `timed out after ${Math.round(timeoutMs / 1000)} s` };
+  if (r.error) return { state: 'failed', detail: clip(String(r.error.message), 100) };
+  if (r.status !== 0) return { state: 'failed', detail: clip((r.stderr || '').trim().split(/\r?\n/).pop() || `exit ${r.status}`, 100) };
+  return { state: 'ok', detail: `fetched ${FORK}/${base}` };
+}
 
 /** { n } commits that `ref` has and HEAD lacks, or { error }. */
 function behindCount(git, ref) {
@@ -280,15 +309,25 @@ function behindCount(git, ref) {
   return { n: Number(text) };
 }
 
-function checkBehind(git, base) {
+/** What the compared text says about the fork ref: fetched just now, a fetch that failed, or no fetch. */
+function behindCaveat(base, hasFork, fetched) {
+  const fresh = fetched?.state === 'ok' && hasFork;
+  if (fresh) return `compared with local ${base} and ${FORK}/${base}, fetched just now; local ${base} is not fetched, so run git fetch first if it may be stale`;
+  const compared = `compared with local ${base}${hasFork ? ` and the last-fetched ${FORK}/${base}` : ''}`;
+  if (fetched?.state === 'failed') return `fetch of ${FORK}/${base} failed (${fetched.detail}); ${compared}, so the ${FORK} side may be stale`;
+  return `${compared}; no fetch was done, so run git fetch first if ${base} may be stale`;
+}
+
+function checkBehind(git, base, fetched = null) {
   if (git(['rev-parse', '--verify', '--quiet', base]).status !== 0) return result('git:behind', 'FAIL', `base ref "${base}" does not exist locally`);
   const forkRef = `refs/remotes/${FORK}/${base}`;
   const hasFork = git(['rev-parse', '--verify', '--quiet', forkRef]).status === 0;
   const counts = [{ name: base, ...behindCount(git, base) }, ...(hasFork ? [{ name: `${FORK}/${base}`, ...behindCount(git, forkRef) }] : [])];
   const broken = counts.find((c) => c.error);
   if (broken) return result('git:behind', 'FAIL', broken.error);
-  const caveat = `compared with local ${base}${hasFork ? ` and the last-fetched ${FORK}/${base}` : ''}; no fetch was done, so run git fetch first if ${base} may be stale`;
-  const behind = counts.filter((c) => c.n > 0).map((c) => `${c.n} commit(s) behind ${c.name}${c.name === base ? '' : ' (as last fetched)'}`);
+  const caveat = behindCaveat(base, hasFork, fetched);
+  const asFetched = fetched?.state === 'ok' ? '' : ' (as last fetched)';
+  const behind = counts.filter((c) => c.n > 0).map((c) => `${c.n} commit(s) behind ${c.name}${c.name === base ? '' : asFetched}`);
   // Merge, not rebase: the CLI run cap keys on the branch's first own commit, which a merge keeps and a rebase rewrites.
   if (behind.length > 0) {
     const how = `merge ${base} in (a rebase rewrites the first own commit and starts a new CodeRabbit CLI run count)`;
@@ -316,6 +355,84 @@ export function checkEvidence({ body, head, paths, config }) {
   const problems = proofProblems(parsed, { head, docsVerified });
   if (problems.length > 0) return result('evidence', 'FAIL', `${problems.length} problem(s) READY would report`, problems);
   return result('evidence', 'PASS', `Proof type ${parsed.types[0].trim()}${docsVerified ? ' (every changed file is docs)' : `, GREEN names the head ${head.slice(0, 7)}`}`);
+}
+
+// ---------- GREEN sha after a merge of the base ----------
+
+const GREEN_KEY = /^\s*(?:[-*+]\s+)?(?:\*\*|__)?GREEN(?:\*\*|__)?\s*:/;
+const GREEN_SHA = /((?:^|\s)(?:@|at\s)\s*`?)([0-9a-fA-F]{7,40})(`?(?=[\s.,;)]|$))/;
+const FENCE_START = /^\s*(`{3,}|~{3,})/;
+const FENCE_END = /^\s*(`{3,}|~{3,})\s*$/;
+
+/**
+ * Text with the sha after "@" on the one GREEN field line replaced by `newSha`, or null. Null when the text has not
+ * exactly one GREEN line outside a code fence, or that line does not hold `oldSha`. Only that sha changes: the
+ * line endings (CRLF or LF, kept per line), RED, BEFORE and every output block stay byte for byte.
+ */
+export function rewriteGreenSha(text, oldSha, newSha) {
+  const parts = String(text).split(/(\r\n|\n)/); // even indexes are lines, odd indexes are their endings
+  let fence = null;
+  const hits = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const close = fence && FENCE_END.exec(parts[i]);
+    if (fence) { if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null; continue; }
+    const open = FENCE_START.exec(parts[i]);
+    if (open) { fence = { ch: open[1][0], len: open[1].length }; continue; }
+    if (GREEN_KEY.test(parts[i])) hits.push(i);
+  }
+  if (hits.length !== 1) return null;
+  const line = parts[hits[0]];
+  const afterKey = line.indexOf(':') + 1;
+  const command = /^\s*(?:\*\*|__)?\s*`[^`]+`/.exec(line.slice(afterKey));
+  const from = afterKey + (command ? command[0].length : 0);
+  const m = GREEN_SHA.exec(line.slice(from));
+  if (!m || m[2].toLowerCase() !== oldSha) return null;
+  const at = from + m.index + m[1].length;
+  parts[hits[0]] = `${line.slice(0, at)}${newSha}${line.slice(at + m[2].length)}`;
+  return parts.join('');
+}
+
+/**
+ * True when the only change from `oldSha` to `head` is a clean merge of the base: no own non-merge commit sits between them
+ * (the commits the base and fork/<base> already hold do not count), and no merge there holds an edit of its own (a conflict
+ * resolved by hand). An ancestor check alone is true for any later commit on a linear branch, so it cannot say that.
+ * Any git failure reads as false.
+ */
+export function onlyBaseMergedSince(git, base, oldSha, head) {
+  const forkRef = `refs/remotes/${FORK}/${base}`;
+  const hasFork = git(['rev-parse', '--verify', '--quiet', forkRef]).status === 0;
+  const range = [`${oldSha}..${head}`, '--not', base, ...(hasFork ? [forkRef] : [])];
+  const own = git(['rev-list', '--no-merges', ...range]);
+  if (own.status !== 0 || own.stdout.trim() !== '') return false;
+  const merges = git(['rev-list', '--merges', ...range]);
+  if (merges.status !== 0) return false;
+  return merges.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).every((m) => {
+    const edits = git(['diff-tree', '--cc', '--no-commit-id', '-p', m]); // a clean merge has no combined diff
+    return edits.status === 0 && edits.stdout.trim() === '';
+  });
+}
+
+/**
+ * After a merge of the base the GREEN line names the pre-merge head. This updates it when that is safe: the evidence has
+ * no other problem, the GREEN commit is an ancestor of HEAD, nothing but a clean merge of the base came after it
+ * (onlyBaseMergedSince), and no other step failed (the gates ran on HEAD). It writes the body file and returns
+ * { evidence, bodyText, note }. Any other case returns null and changes nothing.
+ */
+export function updateGreen({ git, base = 'main', bodyPath, bodyText, head, paths, config, results, evidence }) {
+  if (!bodyPath || typeof bodyText !== 'string' || evidence.status !== 'FAIL') return null;
+  if (evidence.notes.length !== 1 || !/GREEN names commit/.test(evidence.notes[0])) return null;
+  if (results.some((r) => r !== evidence && r.status === 'FAIL')) return null;
+  const greens = parseProof(bodyText).fields.GREEN;
+  const oldSha = greens.length === 1 ? greens[0].sha : null;
+  if (!oldSha || git(['merge-base', '--is-ancestor', oldSha, head]).status !== 0) return null;
+  if (!onlyBaseMergedSince(git, base, oldSha, head)) return null;
+  const newSha = head.slice(0, 7);
+  const text = rewriteGreenSha(bodyText, oldSha, newSha);
+  if (text === null) return null;
+  const again = checkEvidence({ body: text, head, paths, config });
+  if (again.status !== 'PASS') return null;
+  try { writeFileSync(bodyPath, text); } catch { return null; }
+  return { evidence: again, bodyText: text, note: result('evidence:green', 'NOTE', `GREEN updated ${oldSha.slice(0, 7)} -> ${newSha}`) };
 }
 
 // ---------- gates ----------
@@ -833,7 +950,7 @@ function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${dayOf(now)}-pre-pr-${head.slice(0, 7)}.log`);
   const outputs = results.filter((r) => r.output).map((r) => `\n===== ${r.step}: ${r.command}\n${clip(r.output.replace(ANSI, ''), 200_000)}`);
-  const head2 = [`pre-pr ${now.toISOString()}`, `head ${head}`, `branch ${branch}`, `base ${base} (local ref, no fetch)`, `body_sha256 ${bodySha}`, ''];
+  const head2 = [`pre-pr ${now.toISOString()}`, `head ${head}`, `branch ${branch}`, `base ${base} (local ref; fork/${base} fetched first, see git:behind)`, `body_sha256 ${bodySha}`, ''];
   writeFileSync(file, [...head2, ...lines, ...outputs, ''].join('\n'));
   return file;
 }
@@ -850,17 +967,27 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b) }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const headRun = git(['rev-parse', 'HEAD']);
   const head = headRun.status === 0 ? headRun.stdout.trim() : null;
   const branch = git(['branch', '--show-current']).stdout.trim();
-  const results = [...checkGit(git, base)];
+  const fetched = fetch(root, base);
+  if (fetched?.state === 'failed') log(`pre-pr: fetch of ${FORK}/${base} failed (${fetched.detail}); the behind check uses the last-fetched ref`);
+  const results = [...checkGit(git, base, fetched)];
   const changes = head ? changedFiles(git, base) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') };
   results.push(changes.result);
+  const evidenceAt = results.length;
   results.push(checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg }));
   for (const gate of gatesFor(changes.paths)) results.push(runGate(gate, { root, exec, git }));
+  // A stale GREEN sha after a merge of the base: fix the body file once the gates passed on this head.
+  const green = head ? updateGreen({ git, base, bodyPath, bodyText, head, paths: changes.paths, config: cfg, results, evidence: results[evidenceAt] }) : null;
+  if (green) {
+    bodyText = green.bodyText;
+    results.splice(evidenceAt, 1, green.evidence, green.note);
+    log(`pre-pr: ${green.note.detail}`);
+  }
   results.push(...notesFor(changes.paths, cfg));
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(failedBefore && !skipCr
@@ -916,7 +1043,7 @@ async function main() {
   const timeoutProblem = crTimeoutProblem(args);
   if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
   const run = await runPrePr({
-    root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, skipCr: args.includes('--skip-cr'),
+    root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, bodyPath: path.resolve(bodyPath), skipCr: args.includes('--skip-cr'),
     crTimeout: crTimeoutMs(args), log: (line) => console.error(line),
   });
   if (args.includes('--json')) {
