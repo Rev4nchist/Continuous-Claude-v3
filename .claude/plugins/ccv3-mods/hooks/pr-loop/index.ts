@@ -337,8 +337,8 @@ const asking = async ($: EngineInterface, status: PrStatus, now: number): Promis
   const record = readRecord(await $.store.get(`${RECORD_PREFIX}${status.pr}`))
   const ask = askFor(record, status, now, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)))
   if (!ask || kept.some(one => one.pr === ask.pr && one.kind === ask.kind && one.head === ask.head)) return
-  // A waiver comment by the PR author means Dave needs no question about requesting a review. Nothing else reads it.
-  if (!(await waivedFor($, status.pr, status.head))) await queueAsk($, ask)
+  // A waiver comment by the PR author quiets only the opening question. Round and Greptile questions still reach Dave.
+  if (ask.kind !== 'opening' || !(await waivedFor($, status.pr, status.head))) await queueAsk($, ask)
 }
 
 /** The PR's checkpoint record and grant, read for the report lines. Null with no record, a closed PR or the kill switch. */

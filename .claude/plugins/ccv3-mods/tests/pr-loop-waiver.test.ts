@@ -215,6 +215,18 @@ describe('pr-loop review waiver', () => {
     expect(openingAsks(store)).toEqual([])
   })
 
+  // CodeRabbit on #242: the waiver quiets only the opening question. A round (spend) question must still reach Dave.
+  test('RW7c a waived PR still queues the round question once its budget is used', async ($, on) => {
+    const spent = status(7, {
+      reviewedHead: true, unresolved: 2, coderabbitReviewedHead: true, coderabbitRounds: 1, coderabbitReviews: 1,
+      reasons: ['2 review thread(s) unresolved'],
+    } as Partial<Status>)
+    const { clock, store } = world(on, { store: { ...watching(7), 'checkpoint:pr:7': APPLIED_RECORD }, script: { 7: [spent] }, gh: { 7: WAIVED } })
+    await start($)
+    await clock.advance(TICK)
+    expect(openingAsks(store)).toEqual(['round'])
+  })
+
   test('RW7b the same PR with no waiver does queue the opening question', async ($, on) => {
     const { clock, store } = world(on, { store: { ...watching(7), 'checkpoint:pr:7': APPLIED_RECORD }, script: { 7: [status(7)] } })
     await start($)
