@@ -463,7 +463,8 @@ export function bodyEditsFrom(connection) {
  * description) of the first non-app editor. Missing history is untrusted.
  */
 export function bodyEditedAfterGreptile(edits) {
-  if (!Array.isArray(edits)) return 'unknown (no edit history)';
+  // bodyEditsFrom gives null for a history with more than one page: D-b (Dave 11-01) keeps that NOT READY, with its cause named.
+  if (!Array.isArray(edits)) return 'unknown (no edit history, or more than 20 PR body edits)';
   const at = edits.findIndex((e) => e?.editor?.login === GREPTILE_EDITOR);
   if (at < 0) return 'unknown (no Greptile edit in the history read)';
   const later = edits.slice(0, at).find((e) => e?.editor?.__typename !== 'Bot');

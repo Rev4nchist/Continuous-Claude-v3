@@ -149,7 +149,8 @@ test('BE-A: a PR body edit history with more pages is distrusted: NOT READY', ()
   const r = evaluate(input({ bodyEdits: RS.bodyEditsFrom(BODY_EDIT_PAGE(true)) }));
   assert.equal(r.ready, false);
   assert.equal(r.unavailable, true);
-  assert.ok(r.reasons.some((x) => /no edit history/.test(x)), r.reasons.join('; '));
+  // D-b (Dave 11-01): keep NOT READY, and the reason names the cause, so Dave knows why
+  assert.ok(r.reasons.some((x) => /more than 20 PR body edits/.test(x)), r.reasons.join('; '));
 });
 
 test('BE-B: a PR body edit history with no pageInfo is distrusted too', () => {
