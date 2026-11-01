@@ -416,10 +416,22 @@ export function onlyBaseMergedSince(git, base, oldSha, head) {
   if (own.status !== 0 || own.stdout.trim() !== '') return false;
   const merges = git(['rev-list', '--merges', ...range]);
   if (merges.status !== 0) return false;
-  return merges.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).every((m) => {
-    const edits = git(['diff-tree', '--cc', '--no-commit-id', '-p', m]); // a clean merge has no combined diff
-    return edits.status === 0 && edits.stdout.trim() === '';
-  });
+  return merges.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).every((m) => isCleanMerge(git, m));
+}
+
+/**
+ * True when merge `m` holds exactly the tree git builds from its two parents with no conflict. diff-tree --cc cannot say
+ * this: a conflict resolved by taking one parent's version whole shows no combined diff. A conflict, an octopus merge or
+ * any git failure reads as false.
+ */
+function isCleanMerge(git, m) {
+  const parents = git(['rev-list', '--parents', '-n', '1', m]);
+  const fields = parents.stdout.trim().split(/\s+/);
+  if (parents.status !== 0 || fields.length !== 3) return false;
+  const rebuilt = git(['merge-tree', '--write-tree', fields[1], fields[2]]); // exit 1 on a conflict
+  if (rebuilt.status !== 0) return false;
+  const actual = git(['rev-parse', `${m}^{tree}`]);
+  return actual.status === 0 && actual.stdout.trim() === rebuilt.stdout.trim().split(/\r?\n/)[0];
 }
 
 /**

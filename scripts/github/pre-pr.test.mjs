@@ -1697,6 +1697,31 @@ test('GU7: an own code commit after the GREEN commit: the sha is not rewritten, 
   }
 });
 
+// GU8b (CodeRabbit round 2 on #242): a conflict resolved by taking one parent's version shows no combined diff, so
+// diff-tree --cc reads it as clean. The resolved tree was never run: no rewrite.
+test('GU8b: a conflict resolved by taking main\'s version whole is not a clean merge: no rewrite, no stamp', async () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'README.md'), 'feature line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'feature edits README');
+  const old = git(repo.dir, 'rev-parse', 'HEAD');
+  git(repo.dir, 'checkout', '-q', 'main');
+  writeFileSync(path.join(repo.dir, 'README.md'), 'main line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'main edits README');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  const merge = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '--no-edit', 'main'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+  assert.notEqual(merge.status, 0, 'the merge must conflict');
+  writeFileSync(path.join(repo.dir, 'README.md'), 'main line\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '--no-edit');
+  const before = greenBody({ green: old });
+  const { result, after } = await runWithBodyFile({ dir: repo.dir }, before);
+  assert.equal(after, before, 'the GREEN line is not rewritten');
+  assert.equal(result.ok, false, result.lines.join('\n'));
+  assert.equal(existsSync(stampFile(repo)), false);
+});
+
 test('GU8: a merge of main with a hand-resolved conflict: the sha is not rewritten, FAIL stays, no stamp', async () => {
   const repo = makeRepo();
   writeFileSync(path.join(repo.dir, 'README.md'), 'feature line\n');
