@@ -53,6 +53,8 @@ lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recomm
 A change that adds a state or an event needs a state x event table (`scripts/checks/state-table.mjs`).
 For each new or changed state, list every event that can arrive in it. Include stale, duplicate and
 out-of-order events, and timers. Each pair is a cell with an `expect`, or `na` with the reason.
+Also cover each kind in `KINDS` (stale-read, duplicate, second-entry, timer-overlap, retained-flag):
+name an event that runs it, or give `na` with the reason.
 
 1. Run `node scripts/github/pre-pr.mjs --body <draft.md>` from the repo root. Use a clean branch and a
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
