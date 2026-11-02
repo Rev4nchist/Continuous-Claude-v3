@@ -3447,6 +3447,17 @@ test('FU-I: a rule line or a "# comment" inside a fenced suggestion does not end
   assert.equal(unidentified, 0);
 });
 
+test('FU-R: a fence line with info text inside an open fence does not close it; both findings still count', () => {
+  const block = fuBlock();
+  const fenced = block.replace('```diff\n', '```diff\n```js\n');
+  assert.notEqual(fenced, block);
+  const second = block.replace(FU_ID, FU_ID2).replace('pre-pr.mjs#L405-L423', 'second.mjs#L7-L9');
+  const body = FU_242.replace(block, `${fenced}\n\n${second}`);
+  const { findings, unidentified } = RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] });
+  assert.deepEqual(findings.map((f) => f.id), [FU_ID, FU_ID2]);
+  assert.equal(unidentified, 0);
+});
+
 test('FU-J: an Outside diff badge the parse misses fails closed as unidentified', () => {
   const block = fuBlock();
   const second = block.replace(FU_ID, FU_ID2);

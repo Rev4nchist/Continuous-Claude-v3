@@ -885,13 +885,18 @@ function followUpBadge(line) {
   return alts.find((a) => /^Outside diff$/i.test(a)) ?? alts[0] ?? null;
 }
 
-/** For each line: is it inside (or on the edge of) a fenced code block? A fence closes on the same character, at least as long. */
+/** For each line: is it inside (or on the edge of) a fenced code block? A fence closes on the same character, at least as long,
+ * with no info text: a "```js" line inside an open fence is content, not a close. */
 function fencedLines(lines) {
   let open = null;
   return lines.map((line) => {
-    const f = FOLLOWUP_FENCE.exec(line)?.[1];
-    if (open === null) { open = f ? { ch: f[0], len: f.length } : null; return open !== null; }
-    if (f && f[0] === open.ch && f.length >= open.len) open = null;
+    if (open === null) {
+      const f = FOLLOWUP_FENCE.exec(line)?.[1];
+      open = f ? { ch: f[0], len: f.length } : null;
+      return open !== null;
+    }
+    const c = FENCE_CLOSE.exec(line)?.[1];
+    if (c && c[0] === open.ch && c.length >= open.len) open = null;
     return true;
   });
 }
