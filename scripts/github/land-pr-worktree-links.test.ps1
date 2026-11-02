@@ -25,6 +25,8 @@
 #   a TRACKED symlink is unlinked, so git sees a tracked deletion
 #   and refuses the removal (or a later run skips the cleanup)     -> F6, W3
 #   the old unlink covered only .claude\hooks\node_modules         -> W1 (root node_modules)
+#   the primary checkout is on the PR branch and the cleanup walks
+#   it, unlinking junctions of other sessions' worktrees            -> W4
 #
 # An unremovable link cannot be made reliably: Windows ignores FILE_ATTRIBUTE_READONLY on directories.
 # So the failure is injected: F5 passes -Delete a scriptblock that throws; W2 sets the test-only env var
@@ -243,6 +245,25 @@ try {
     Check 'W3 wiring: LANDED line says the worktree was removed' ($run3.Text -match 'LANDED #7:.*removed worktree')
     if ($fail) { Write-Host '---- w3 land-pr output ----'; Write-Host $run3.Text; Write-Host '---- end ----' }
   } else { Write-Host 'SKIP  W3: this account cannot create tracked symlinks (no Developer Mode or elevation)' }
+
+  # W4: the PRIMARY checkout is on the PR branch. Its worktree entry is the main one: land-pr must not
+  # walk it, or it unlinks the junctions of other sessions' worktrees that sit under .claude\worktrees.
+  $fx4 = New-Fixture 'w4'
+  [System.IO.DirectoryInfo]::new((Join-Path $fx4.Worktree 'node_modules')).Delete()   # unlink only; keeps the target
+  git -C $fx4.Repo worktree remove $fx4.Worktree 2>&1 | Out-Null
+  git -C $fx4.Repo checkout -q $branch 2>&1 | Out-Null
+  $sibling = Join-Path $fx4.Repo '.claude\worktrees\sibling'
+  git -C $fx4.Repo worktree add -q $sibling -b other/sibling main 2>&1 | Out-Null
+  $siblingLink = Join-Path $sibling 'node_modules'
+  New-Junction $siblingLink $fx4.Target
+  Check 'W4 harness: the primary is on the PR branch and a sibling worktree holds a junction' (((git -C $fx4.Repo branch --show-current) -eq $branch) -and (Test-Path -LiteralPath $siblingLink))
+  $run4 = Invoke-Land $fx4.Repo
+  Check 'W4 wiring: land-pr exits 0' ($run4.Code -eq 0)
+  Check 'W4 wiring: the sibling worktree junction is intact' (Test-Path -LiteralPath $siblingLink)
+  Check 'W4 wiring: the junction target and its file survive' ((Test-Path -LiteralPath $fx4.Target) -and (Test-Path -LiteralPath $fx4.TargetFile))
+  Check 'W4 wiring: output says "kept primary checkout" (the guard message is present)' ($run4.Text -match 'kept primary checkout')
+  Check 'W4 wiring: the primary checkout is not reported as removed or unlinked' ($run4.Text -notmatch 'unlinked \d+ link' -and $run4.Text -notmatch 'removed worktree')
+  if ($fail) { Write-Host '---- w4 land-pr output ----'; Write-Host $run4.Text; Write-Host '---- end ----' }
 }
 finally {
   $env:PATH = $oldPath

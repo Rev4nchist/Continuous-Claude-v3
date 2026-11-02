@@ -297,6 +297,14 @@ $wtPath = $null
 for ($i = 0; $i -lt $wtLines.Count; $i++) {
   if ($wtLines[$i] -eq "branch refs/heads/$branch") { $wtPath = ($wtLines[$i - 2] -replace '^worktree ', '') }
 }
+# The first porcelain entry is the primary checkout. Never walk or remove it: its tree holds the
+# junctions of other sessions' worktrees (.claude\worktrees\*), and git cannot remove a main worktree.
+$mainWt = @($wtLines | Where-Object { $_ -like 'worktree *' } | Select-Object -First 1)
+$normWt = { param($p) [IO.Path]::GetFullPath(($p -replace '^worktree ', '')).TrimEnd('\', '/') }
+if ($wtPath -and $mainWt.Count -and ((& $normWt $wtPath) -ieq (& $normWt $mainWt[0]))) {
+  Write-Host "  kept primary checkout $wtPath (it is on $branch; no link cleanup, no removal)"
+  $wtPath = $null
+}
 if ($wtPath) {
   $dirty = git -C $wtPath status --porcelain 2>$null
   if ($LASTEXITCODE -or $dirty) {
