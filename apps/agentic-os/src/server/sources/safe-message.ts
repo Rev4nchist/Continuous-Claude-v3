@@ -98,27 +98,16 @@ function pathToken(match: string): string {
   return `<path>${tail ? tail[0] : ''}`;
 }
 
-/**
- * Stands for a CLOSED quoted path until absorbPathTail has run. PATH_TAIL matches the text `<path>` only, so the
- * words after a closed quote ("and/or continue") are never taken as the rest of the path. A private-use character
- * that no pass in this file matches. A copy of it in the input is dropped first.
- * Not for a path in single quotes: an apostrophe can sit inside a name ("Clients' Reports/x.txt"), so a path that
- * ends at `'` is not trusted as closed. It stays `<path>` and PATH_TAIL absorbs the next separator word.
- * Over-scrubbing is on purpose: losing "and/or" beats leaking "Reports/x.txt".
- */
-const CLOSED_QUOTED = '\uE000';
-
 /** Replace every absolute path in already redacted free text with `<path>`, keeping the words around it. */
 export function scrubPathsInText(text: string): string {
   return absorbPathTail(
     text
-      .replaceAll(CLOSED_QUOTED, '')
-      .replace(QUOTED_PATH, (quoted) => (quoted.startsWith("'") ? '<path>' : CLOSED_QUOTED))
+      .replace(QUOTED_PATH, '<path>')
       .replace(WINDOWS_PATH_TOKEN, pathToken)
       .replace(POSIX_HOME_PATH_TOKEN, pathToken)
       .replace(HOME_REL_TOKEN, pathToken)
       .replace(POSIX_DEEP_PATH, pathToken),
-  ).replaceAll(CLOSED_QUOTED, '<path>');
+  );
 }
 
 /**
