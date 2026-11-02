@@ -1,0 +1,20 @@
+{
+  "holdoutExclude": [217, 222, 225, 238],
+  "shadowFromPr": 250,
+  "shadowDays": 21,
+  "cursorEvalBudget": 40,
+  "cursorHeadroom": 60,
+  "headlessDailyCap": 30,
+  "judgeModel": "sonnet",
+  "lineSlack": 3,
+  "labelWeekCap": 20,
+  "freeze": {},
+  "shadow": {
+    "tol": 3,
+    "minConfidence": 4,
+    "retroMax": 40,
+    "dailyMax": 6,
+    "ttlHours": 12,
+    "bar": { "holdoutRecall": 0.8, "precision": 0.78, "minMajors": 20, "minLabels": 30 }
+  }
+}
