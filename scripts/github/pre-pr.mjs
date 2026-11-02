@@ -75,9 +75,13 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync,
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { killTree, processChildren } from './lib/proc.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+
+// killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
+export { killTree, processChildren };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT_ROOT = path.resolve(HERE, '..', '..');
@@ -595,51 +599,6 @@ export function crTimeoutProblem(argv, env = process.env) {
   const n = Number(raw);
   if (Number.isFinite(n) && n >= CR_TIMEOUT_MIN_FLOOR) return null;
   return `${name}=${raw} is not used: the time limit must be a number of at least ${CR_TIMEOUT_MIN_FLOOR} minutes. Using ${CR_TIMEOUT_MIN_DEFAULT}.`;
-}
-
-/**
- * A lookup from a pid to the pids of its direct children, from CIM through powershell (Windows only). The process table is read
- * once, on the first lookup. It runs only when a review is stopped by its time limit.
- */
-export function processChildren() {
-  let table = null;
-  const load = () => {
-    // One CIM call (about 5 s on this machine) lists every pid with its parent pid; the tree is then walked in memory.
-    const query = `Get-CimInstance Win32_Process | ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.ParentProcessId }`;
-    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', query], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
-    const byParent = new Map();
-    for (const line of (r.stdout ?? '').split(/\r?\n/)) {
-      const [pid, parent] = line.trim().split(' ').map(Number);
-      if (Number.isInteger(pid) && Number.isInteger(parent) && pid > 0) byParent.set(parent, [...(byParent.get(parent) ?? []), pid]);
-    }
-    return byParent;
-  };
-  return (pid) => {
-    if (!Number.isInteger(pid) || pid <= 0) return [];
-    table ??= load();
-    return table.get(pid) ?? [];
-  };
-}
-
-/**
- * Stops a process and everything it started, children first. The tree-kill switch of the Windows task killer is forbidden on
- * this machine, so Windows walks the tree through `children` and stops each pid. POSIX kills the process group (the child
- * is spawned detached, so it leads one). A pid that is already gone is ignored.
- */
-export function killTree(pid, { platform = process.platform, children = processChildren(), kill = (p) => process.kill(p, 'SIGKILL') } = {}) {
-  const stop = (p) => { try { kill(p); } catch { /* already gone */ } };
-  if (platform !== 'win32') {
-    try { kill(-pid); } catch { stop(pid); }
-    return;
-  }
-  const seen = new Set();
-  const walk = (p) => {
-    if (seen.has(p)) return;
-    seen.add(p);
-    for (const c of children(p)) walk(c);
-    stop(p);
-  };
-  walk(pid);
 }
 
 /**
