@@ -252,6 +252,38 @@ test('json items with a missing file or title are dropped and reported; the rest
   assert.match(p.problems.join(' '), /dropped 1/);
 });
 
+test('a malformed final block after an earlier [] example is NOT clean', () => {
+  const text = `Example of a clean answer:
+${block({ findings: [] })}
+My real answer follows.
+\`\`\`json
+{"findings": [ {broken
+\`\`\``;
+  const p = parseReviewOutput(resultLine(text));
+  assert.equal(p.ok, false);
+  assert.equal(p.clean, false);
+});
+
+test('text after the final findings block voids the block (it must be last)', () => {
+  const p = parseReviewOutput(resultLine(`${block({ findings: [] })}
+Actually I found a bug in a.ts line 3.`));
+  assert.equal(p.ok, false);
+  assert.equal(p.clean, false);
+});
+
+test('an earlier code fence does not hide the final findings block', () => {
+  const text = `Look:
+\`\`\`701:709:a.ts
+code
+\`\`\`
+Done.
+${block({ findings: [{ file: 'a.ts', line: 2, severity: 'major', title: 't', body: '' }] })}
+`;
+  const p = parseReviewOutput(resultLine(text));
+  assert.equal(p.format, 'json');
+  assert.equal(p.findings.length, 1);
+});
+
 test('a json block that holds only unusable items is a failure', () => {
   const p = parseReviewOutput(resultLine(block({ findings: [{ severity: 'major' }] })));
   assert.equal(p.ok, false);
@@ -518,6 +550,9 @@ test('main maps a bad argument to exit 2 without touching the ledger or the agen
 
 // ---------- the real process: the time-out kills the whole tree ----------
 
+// Windows: a plain child dies with its parent through the job object, which hides a missing killTree, so the grandchild is detached
+// (breaks away from the job) and only the process-table walk can stop it. POSIX: the agent leads its own process group and killTree
+// signals that group; a detached grandchild would leave the group, so there it is not detached.
 test('runAgent time-out stops the agent AND the process it started', { timeout: 90_000 }, async () => {
   const dir = tmp('kill');
   const pidFile = path.join(dir, 'grandchild.pid');
@@ -527,7 +562,7 @@ test('runAgent time-out stops the agent AND the process it started', { timeout: 
   writeFileSync(fake, [
     "import { spawn } from 'node:child_process';",
     "import { writeFileSync } from 'node:fs';",
-    `const g = spawn(process.execPath, [${JSON.stringify(grand)}], { stdio: 'ignore', windowsHide: true, detached: true });`,
+    `const g = spawn(process.execPath, [${JSON.stringify(grand)}], { stdio: 'ignore', windowsHide: true, detached: ${JSON.stringify(process.platform === 'win32')} });`,
     `writeFileSync(${JSON.stringify(pidFile)}, String(g.pid));`,
     'setInterval(() => {}, 1000);',
   ].join('\n'));
@@ -614,7 +649,7 @@ test('prepareReview builds a clean tree: head content, PR.diff, no .git, no answ
 test('prepareReview for a PR number reads head and base from gh and diffs against the merge base', async () => {
   const { root, base, head } = gitRepo();
   const calls = [];
-  const gh = (args) => { calls.push(args); return { head: { sha: head }, base: { ref: 'main' } }; };
+  const gh = (args) => { calls.push(args); return { head: { sha: head }, base: { ref: 'main', sha: base } }; };
   const prep = await prepareReview({ root, input: { pr: 77 }, tmpRoot: tmp('trees'), gh, repo: 'o/r' });
   try {
     assert.equal(prep.ref, 'pr-77');
@@ -624,6 +659,41 @@ test('prepareReview for a PR number reads head and base from gh and diffs agains
   } finally {
     prep.cleanup();
   }
+});
+
+test('a PR diff is taken from the base sha GitHub reports, not from a stale local main', async () => {
+  const root = tmp('stale');
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.t'); git('config', 'user.name', 't'); git('config', 'core.autocrlf', 'false');
+  writeFileSync(path.join(root, 'a.txt'), 'one\n');
+  git('add', '-A'); git('commit', '-q', '-m', 'm0');
+  const m0 = git('rev-parse', 'HEAD');
+  git('switch', '-q', '-c', 'topic');
+  writeFileSync(path.join(root, 'topic.txt'), 'mine\n');
+  git('add', '-A'); git('commit', '-q', '-m', 'topic');
+  git('switch', '-q', 'main');
+  writeFileSync(path.join(root, 'other.txt'), 'unrelated main work\n');
+  git('add', '-A'); git('commit', '-q', '-m', 'm1');
+  const m1 = git('rev-parse', 'HEAD');
+  git('switch', '-q', 'topic');
+  git('merge', '-q', '--no-edit', 'main');
+  const head = git('rev-parse', 'HEAD');
+  git('branch', '-f', 'main', m0); // the local main is stale: the PR base is m1
+  const gh = () => ({ head: { sha: head }, base: { ref: 'main', sha: m1 } });
+  const prep = await prepareReview({ root, input: { pr: 5 }, tmpRoot: tmp('trees'), gh, repo: 'o/r' });
+  try {
+    assert.equal(prep.base, m1);
+    assert.deepEqual(prep.files, ['topic.txt']);
+    assert.doesNotMatch(readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8'), /other\.txt|unrelated main work/);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+test('a PR whose gh reply has no base sha is refused', async () => {
+  const { root, head } = gitRepo();
+  await assert.rejects(() => prepareReview({ root, input: { pr: 9 }, tmpRoot: tmp('trees'), gh: () => ({ head: { sha: head }, base: { ref: 'main' } }), repo: 'o/r' }), /base/i);
 });
 
 test('prepareReview rejects an unknown revision with a clear error (exit 2 at the CLI)', async () => {

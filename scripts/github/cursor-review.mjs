@@ -178,7 +178,6 @@ export function buildPrompt({ ref, files = [] }) {
 
 // ---------- output parser ----------
 
-const FENCE = /```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```/g;
 const HEADER = /^\s*(?:[-*]\s+)?(?:#{1,6}\s+|\*\*)\s*(Critical|Major|Minor|Nit|Nitpick|Info)\b\s*[—–-]+\s*(.*)$/i;
 const LOCATION = /`([^`\s]*?):(\d+)(?:-(\d+))?`/;
 const LOCATIONS = /`[^`\s]*:\d+(?:-\d+)?`/g;
@@ -211,16 +210,22 @@ function fromJsonItems(items) {
   return { findings, dropped };
 }
 
-/** The last fenced block that parses as a findings list. { items } or null. */
+/**
+ * The findings list in the LAST fenced block, and only when that block ends the answer. A block that does not parse, or text after
+ * it, gives null: an earlier fenced example (such as an empty list) must never turn a broken answer into a clean one. The block is
+ * found from the end, so an earlier code fence cannot throw the pairing off. { items } or null.
+ */
 function jsonBlock(text) {
-  const blocks = [...text.matchAll(FENCE)].map((m) => m[1]);
-  for (const raw of blocks.reverse()) {
-    try {
-      const v = JSON.parse(raw);
-      if (Array.isArray(v)) return { items: v };
-      if (v && Array.isArray(v.findings)) return { items: v.findings };
-    } catch { /* not the block we want */ }
-  }
+  const lines = text.trimEnd().split(/\r?\n/);
+  if (lines.at(-1)?.trim() !== '```') return null;
+  let open = lines.length - 2;
+  while (open >= 0 && !lines[open].trim().startsWith('```')) open -= 1;
+  if (open < 0 || !/^```(?:json)?\s*$/.test(lines[open].trim())) return null;
+  try {
+    const v = JSON.parse(lines.slice(open + 1, -1).join('\n'));
+    if (Array.isArray(v)) return { items: v };
+    if (v && Array.isArray(v.findings)) return { items: v.findings };
+  } catch { /* not a findings block */ }
   return null;
 }
 
@@ -447,13 +452,16 @@ export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = d
     const pull = await gh(['api', `repos/${repo}/pulls/${input.pr}`]);
     head = pull?.head?.sha;
     const baseRef = pull?.base?.ref;
+    const baseSha = pull?.base?.sha;
     if (!head || !baseRef) throw badInput(`PR ${input.pr}: gh returned no head sha or base ref`);
-    if (gitOut(root, ['cat-file', '-e', `${head}^{commit}`], { allowFail: true }) === null) {
-      gitOut(root, ['fetch', '--quiet', remote, `pull/${input.pr}/head`]);
-    }
+    if (!baseSha) throw badInput(`PR ${input.pr}: gh returned no base sha`);
+    const have = (sha) => gitOut(root, ['cat-file', '-e', `${sha}^{commit}`], { allowFail: true }) !== null;
+    if (!have(head)) gitOut(root, ['fetch', '--quiet', remote, `pull/${input.pr}/head`]);
+    // The base is the sha GitHub reports, never a local branch: a stale local main would put other commits in the diff.
+    if (!have(baseSha)) gitOut(root, ['fetch', '--quiet', remote, baseRef], { allowFail: true });
+    if (!have(baseSha)) gitOut(root, ['fetch', '--quiet', remote, baseSha], { allowFail: true });
     head = resolveRev(root, head);
-    const remoteBase = gitOut(root, ['rev-parse', '--verify', '--quiet', `${remote}/${baseRef}^{commit}`], { allowFail: true });
-    baseSide = remoteBase ? remoteBase.trim() : resolveRev(root, baseRef);
+    baseSide = resolveRev(root, baseSha);
     ref = `pr-${input.pr}`;
   } else {
     const [a, b] = String(input.range).split(/\.{2,3}/);
