@@ -71,7 +71,7 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
 
 | Kanban input | Lane change |
 |---|---|
-| Column order | priority: now 10+i, next 20+i, later 50+i, waiting 70+i |
+| Column order | priority: one rank per card, 1..n across now, next, later, waiting (new lanes default to 50) |
 | Lane moved into waiting | state `blocked` and the note "Waiting on Dave (kanban)" |
 | Lane moved out of waiting | `blocked` goes back to `backlog`. `ready` stays `ready` |
 | Card status | state `backlog`, `ready`, `blocked` or `done` |

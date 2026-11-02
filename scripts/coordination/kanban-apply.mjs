@@ -21,12 +21,13 @@
  *   pending so it applies after the lane stops being active. A column still sets the
  *   priority of an active lane. Priority does not affect a claim.
  * - Done lanes are never moved into waiting. Done work stays done.
+ * - Priority = one rank per placed card, 1..n in board order (now, next, later,
+ *   waiting). New lanes default to 50, so they sort after a board of up to 49 cards.
  * - "Leaving waiting" has no history in the planner. A lane counts as "was waiting"
- *   only when it is blocked AND (its note is the waiting note OR its priority is in
- *   the waiting band 70-99). A lane a session blocked for its own reason carries
- *   neither, so it stays blocked. The band test covers a later note that replaced
- *   the waiting note. A lane that was both overwritten and set to priority 70+ by
- *   hand would be unblocked by mistake. That case is accepted.
+ *   only when it is blocked AND its note still contains the waiting marker (kept
+ *   notes carry it after "|| before:"). The priority number never decides it. A lane
+ *   a session blocked for its own reason, or whose note a session replaced, stays
+ *   blocked: the safe side.
  * - When a lane has a column rule and a pending card status, the card status wins and
  *   the lane gets ONE state action. The waiting note is added only when the final
  *   state is blocked and the lane was not blocked before.
@@ -37,10 +38,10 @@
  *   2026-11-02). lane_event keeps every step.
  */
 
-export const BANDS = { now: 10, next: 20, later: 50, waiting: 70 };
+/** Board order: every placed card gets ONE rank, 1..n across the columns in this order. No bands, so no overflow. */
+export const COLUMNS = ['now', 'next', 'later', 'waiting'];
 export const WAITING_NOTE = 'Waiting on Dave (kanban)';
 export const CARD_STATUSES = ['backlog', 'ready', 'blocked', 'done'];
-const WAITING_BAND = [BANDS.waiting, 100];
 const NOTE_MAX = 1000;
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -58,19 +59,18 @@ export function isPending(updatedAt, syncedAt) {
 function placements(board) {
   const out = new Map();
   if (!isObj(board) || !isObj(board.columns) || !isPending(board.updatedAt, board.syncedAt)) return out;
-  for (const column of Object.keys(BANDS)) {
+  for (const column of COLUMNS) {
     const ids = Array.isArray(board.columns[column]) ? board.columns[column] : [];
     ids.forEach((id, index) => {
-      if (typeof id === 'string' && id && !out.has(id)) out.set(id, { column, index });
+      if (typeof id === 'string' && id && !out.has(id)) out.set(id, { column, index, rank: out.size + 1 });
     });
   }
   return out;
 }
 
 function wasWaiting(lane) {
-  return lane.state === 'blocked'
-    && (shows(lane.note, WAITING_NOTE)
-      || (lane.priority >= WAITING_BAND[0] && lane.priority < WAITING_BAND[1]));
+  // The marker only, never the priority number: a kept note may carry it after "|| before:".
+  return lane.state === 'blocked' && typeof lane.note === 'string' && lane.note.includes(WAITING_NOTE);
 }
 
 const cleanText = (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, NOTE_MAX) : null);
@@ -140,7 +140,7 @@ export function planKanban(input, lanes) {
 
     const cardDone = [];
     if (p) {
-      const target = BANDS[p.column] + p.index;
+      const target = p.rank;
       if (lane.priority !== target) act(id, 'priority', lane.priority, target, `${p.column} #${p.index}`);
     }
     if (read.result?.applied !== false) {

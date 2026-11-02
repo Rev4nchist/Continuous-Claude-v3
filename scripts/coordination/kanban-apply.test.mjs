@@ -24,11 +24,11 @@ function applyTo(lanes, p) {
 
 // ---- priority bands
 
-test('column order maps to priority bands: now 10+i, next 20+i, later 50+i, waiting 70+i', () => {
+test('column order maps to one rank per card, 1..n across now, next, later, waiting', () => {
   const lanes = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => lane(id, 'backlog', 99));
   const p = plan({ board: board({ now: ['a', 'b'], next: ['c'], later: ['d', 'e'], waiting: ['f', 'g'] }), cards: [] }, lanes);
   const pri = Object.fromEntries(p.actions.filter((a) => a.kind === 'priority').map((a) => [a.laneId, a.to]));
-  assert.deepEqual(pri, { a: 10, b: 11, c: 20, d: 50, e: 51, f: 70, g: 71 });
+  assert.deepEqual(pri, { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7 });
 });
 
 test('a lane in no column keeps its priority and state', () => {
@@ -37,18 +37,18 @@ test('a lane in no column keeps its priority and state', () => {
 });
 
 test('a lane already at its target priority gets no priority action', () => {
-  const p = plan({ board: board({ now: ['a'], next: ['b'] }), cards: [] }, [lane('a', 'ready', 10), lane('b', 'ready', 20)]);
+  const p = plan({ board: board({ now: ['a'], next: ['b'] }), cards: [] }, [lane('a', 'ready', 1), lane('b', 'ready', 2)]);
   assert.deepEqual(p.actions, []);
 });
 
 test('an id listed twice: the first column position wins', () => {
   const p = plan({ board: board({ now: ['a'], later: ['a'] }), cards: [] }, [lane('a', 'backlog', 99)]);
-  assert.deepEqual(kinds(p), ['a:priority:99->10']);
+  assert.deepEqual(kinds(p), ['a:priority:99->1']);
 });
 
 test('an active lane in a column still gets its priority but never a state change', () => {
   const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'active', 50)]);
-  assert.deepEqual(kinds(p), ['a:priority:50->70']);
+  assert.deepEqual(kinds(p), ['a:priority:50->1']);
 });
 
 test('a column id with no lane is reported as skipped and causes no action', () => {
@@ -61,46 +61,48 @@ test('a column id with no lane is reported as skipped and causes no action', () 
 
 test('moving into waiting blocks the lane and adds the waiting note once', () => {
   const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'backlog', 50)]);
-  assert.deepEqual(kinds(p), ['a:priority:50->70', 'a:state:backlog->blocked', `a:note:null->${WAITING_NOTE}`]);
+  assert.deepEqual(kinds(p), ['a:priority:50->1', 'a:state:backlog->blocked', `a:note:null->${WAITING_NOTE}`]);
 });
 
 test('a ready lane moved into waiting becomes blocked', () => {
-  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'ready', 70)]);
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'ready', 1)]);
   assert.deepEqual(kinds(p), ['a:state:ready->blocked', `a:note:null->${WAITING_NOTE}`]);
 });
 
 test('a lane already blocked in waiting gets no state action and no second waiting note', () => {
-  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'blocked', 70, WAITING_NOTE)]);
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'blocked', 1, WAITING_NOTE)]);
   assert.deepEqual(p.actions, []);
 });
 
 test('a lane blocked by a session and then put in waiting gets no new note', () => {
-  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'blocked', 70, 'needs the vendor key')]);
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'blocked', 1, 'needs the vendor key')]);
   assert.deepEqual(p.actions, []);
 });
 
 test('a done lane in waiting is not reopened', () => {
-  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'done', 70)]);
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'done', 1)]);
   assert.deepEqual(p.actions, []);
 });
 
 test('leaving waiting: a blocked lane carrying the waiting note goes back to backlog', () => {
   const p = plan({ board: board({ now: ['a'] }), cards: [] }, [lane('a', 'blocked', 70, WAITING_NOTE)]);
-  assert.deepEqual(kinds(p), ['a:priority:70->10', 'a:state:blocked->backlog']);
+  assert.deepEqual(kinds(p), ['a:priority:70->1', 'a:state:blocked->backlog']);
 });
 
-test('leaving waiting: the waiting note is gone but the priority is still in the waiting band', () => {
-  const p = plan({ board: board({ next: ['a'] }), cards: [] }, [lane('a', 'blocked', 71, 'Dave (kanban): see PR')]);
-  assert.deepEqual(kinds(p), ['a:priority:71->20', 'a:state:blocked->backlog']);
+test('leaving waiting: the waiting marker kept after a later kanban note still counts; a priority number alone never does', () => {
+  const kept = plan({ board: board({ next: ['a'] }), cards: [] }, [lane('a', 'blocked', 9, `Dave (kanban): see PR || before: ${WAITING_NOTE}`)]);
+  assert.deepEqual(kinds(kept), ['a:priority:9->1', 'a:state:blocked->backlog']);
+  const numberOnly = plan({ board: board({ next: ['a'] }), cards: [] }, [lane('a', 'blocked', 71, 'needs the vendor key')]);
+  assert.deepEqual(kinds(numberOnly), ['a:priority:71->1'], 'no marker: stays blocked whatever its priority');
 });
 
 test('leaving waiting: a ready lane stays ready', () => {
   const p = plan({ board: board({ now: ['a'] }), cards: [] }, [lane('a', 'ready', 70, WAITING_NOTE)]);
-  assert.deepEqual(kinds(p), ['a:priority:70->10']);
+  assert.deepEqual(kinds(p), ['a:priority:70->1']);
 });
 
 test('a lane a session blocked for its own reason is not unblocked by sitting in a non-waiting column', () => {
-  const p = plan({ board: board({ later: ['a'] }), cards: [] }, [lane('a', 'blocked', 50, 'needs the vendor key')]);
+  const p = plan({ board: board({ later: ['a'] }), cards: [] }, [lane('a', 'blocked', 1, 'needs the vendor key')]);
   assert.deepEqual(p.actions, []);
 });
 
@@ -208,12 +210,12 @@ test('the board columns apply only while the board is pending', () => {
 // ---- rule order
 
 test('a pending card status overrides the column rule, in one state action and no waiting note', () => {
-  const p = plan({ board: board({ waiting: ['a'] }), cards: [card('a', { status: 'ready' })] }, [lane('a', 'backlog', 70)]);
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [card('a', { status: 'ready' })] }, [lane('a', 'backlog', 1)]);
   assert.deepEqual(kinds(p), ['a:state:backlog->ready']);
 });
 
 test('a waiting column and a pending blocked card give one blocked state action', () => {
-  const p = plan({ board: board({ waiting: ['a'] }), cards: [card('a', { status: 'blocked' })] }, [lane('a', 'ready', 70)]);
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [card('a', { status: 'blocked' })] }, [lane('a', 'ready', 1)]);
   assert.deepEqual(kinds(p), ['a:state:ready->blocked', `a:note:null->${WAITING_NOTE}`]);
 });
 
@@ -298,4 +300,14 @@ test('applied results carry appliedNote and appliedQuestion for the write-back',
   const r = result(p, 'a');
   assert.equal(r.appliedNote, 'n1');
   assert.equal(r.appliedQuestion, 'q1');
+});
+
+test('a long column never overflows into another column: 30 later lanes, then waiting, get unique increasing ranks', () => {
+  const later = Array.from({ length: 30 }, (_, i) => `l${i}`);
+  const lanes = [...later, 'w'].map((id) => lane(id, 'blocked', 99, 'needs the vendor key'));
+  const p = plan({ board: board({ later, waiting: ['w'] }), cards: [] }, lanes);
+  const pri = Object.fromEntries(p.actions.filter((a) => a.kind === 'priority').map((a) => [a.laneId, a.to]));
+  assert.equal(pri.l29, 30);
+  assert.equal(pri.w, 31);
+  assert.ok(!p.actions.some((a) => a.kind === 'state'), 'session-blocked later lanes are never unblocked');
 });
