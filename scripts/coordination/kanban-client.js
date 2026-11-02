@@ -477,7 +477,9 @@
     try {
       db.collection(CARDS).onSnapshot(function (snap) {
         clearTimeout(timer);
-        try { applyCards(snap); } catch (e) { /* keep the page alive */ }
+        // The first snapshot failing would leave editing stuck on "Loading": turn editing off with the reason.
+        // After a good snapshot, a bad one is swallowed so the page stays alive.
+        try { applyCards(snap); } catch (e) { if (cardsState === 'wait') fail(e); }
       }, fail);
     } catch (e) { fail(e); }
   }
