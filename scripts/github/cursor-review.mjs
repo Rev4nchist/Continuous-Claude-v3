@@ -49,7 +49,7 @@ export const DEFAULT_TIMEOUT_SEC = 1500;
 export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const SEVERITIES = ['critical', 'major', 'minor', 'info'];
 /** Folders left out of the review tree: answers and old review output the model must not see. */
-const TREE_EXCLUDES = ['.git', '.claudedocs', '.claude/cache', 'artifacts', 'thoughts'];
+const TREE_EXCLUDES = ['.git', '.claudedocs', '.claude/cache', '.claude/reviews', 'artifacts', 'thoughts'];
 
 // ---------- model and band ----------
 

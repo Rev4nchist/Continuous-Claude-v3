@@ -541,6 +541,9 @@ function gitRepo() {
   writeFileSync(path.join(root, '.claudedocs', 'answers.md'), 'SECRET ANSWER Major in a.txt\n');
   mkdirSync(path.join(root, 'artifacts'));
   writeFileSync(path.join(root, 'artifacts', 'old-review.txt'), 'old review comment\n');
+  mkdirSync(path.join(root, '.claude', 'reviews'), { recursive: true });
+  writeFileSync(path.join(root, '.claude', 'reviews', 'old-report.md'), 'old review report\n');
+  writeFileSync(path.join(root, '.claude', 'keep.md'), 'kept\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
   const base = git('rev-parse', 'HEAD');
@@ -566,6 +569,8 @@ test('prepareReview builds a clean tree: head content, PR.diff, no .git, no answ
     assert.equal(existsSync(path.join(prep.dir, 'b.txt')), true);
     assert.equal(existsSync(path.join(prep.dir, '.claudedocs')), false, 'review docs are left out');
     assert.equal(existsSync(path.join(prep.dir, 'artifacts')), false, 'old review artifacts are left out');
+    assert.equal(existsSync(path.join(prep.dir, '.claude', 'reviews')), false, 'old review reports are left out');
+    assert.equal(existsSync(path.join(prep.dir, '.claude', 'keep.md')), true, 'the rest of .claude stays');
     const diff = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
     assert.match(diff, /^\+two$/m);
     assert.match(diff, /b\.txt/);
