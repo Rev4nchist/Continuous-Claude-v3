@@ -15,10 +15,11 @@
  *   --facts    read the facts from a JSON file, not from git and the stamp (tests, like review-router.mjs --fixture).
  *   --config   the router config (default: review-router.config.json of this checkout).
  *
- * node scripts/github/pr-checkpoint.mjs --confirm <none|coderabbit|both> --by <dave|default> --body <draft.md> [--state-dir <dir>]
+ * node scripts/github/pr-checkpoint.mjs --confirm <none|coderabbit|both> --by <dave|default|auto> --body <draft.md> [--state-dir <dir>]
  *   Records the pathway in <state-dir>/pathway.json and prints the record. It refuses (exit 1, nothing written) when the stamp is
  *   missing, for another head or has a FAIL row; the body hash differs from the stamp; the pathway is wait, not offered or held; or
- *   --by default names a pathway that is not the recommendation. The state dir holds stamp.json and pathway.json. Default:
+ *   --by default names a pathway that is not the recommendation; or --by auto names anything but `none`, or the result's `auto`
+ *   block is not eligible (autoOf: kill switch checkpoint.autoConfirm, band LOW/MID/ELEVATED, no security-tier or critical file, no drift, labels read). The state dir holds stamp.json and pathway.json. Default:
  *   <git toplevel of the cwd>/.claude/cache/pre-pr. --facts and --config work as above (tests).
  * node scripts/github/pr-checkpoint.mjs --apply <pr> [--state-dir <dir>]
  *   Reads pathway.json, checks the live PR (a draft, at the recorded head), adds the review label, then marks it ready. The label
@@ -369,7 +370,39 @@ function waitWhy(c, picked) {
   return only && buys && c.capacity.band === 'high' ? { recommended: 'wait', why: [`CodeRabbit 7-day count is ${c.capacity.count}: wait is the default at 40 or more. It never blocks.`] } : null;
 }
 
+// ---------- auto-confirm (review factory step A, Dave 2026-11-01) ----------
+
+/** Bands whose recommendation is `none`: the internal review stack covers them. HIGH and CRITICAL always go to Dave. */
+const AUTO_BANDS = ['LOW', 'MID', 'ELEVATED'];
+
+/**
+ * May the mod record `none` without Dave's press? Fails closed: every doubt is "no, Dave presses". Only a literal `true` in
+ * checkpoint.autoConfirm turns it on (the kill switch; it ships false). The band must be known and below HIGH, with no security-tier
+ * or critical file (floorApplies, spec 3.1: that floor needs aegis + critic before READY, so Dave presses), the config must match main, the PR
+ * labels must have been read (an absent list is as bad as a failed read), and the recommendation must be `none`.
+ * HIGH with a free CodeRabbit slot is not covered: the slot is not readable without the pr-loop poller's queue (spec 3.7), and the
+ * 7-day count is a hand-set number, so a HIGH PR keeps Dave's press.
+ */
+export function autoOf(c, facts, policy, recommended) {
+  const band = c.band?.band ?? null;
+  const no = (reason) => ({ eligible: false, band, reason });
+  if (policy.checkpoint?.autoConfirm !== true) return no('checkpoint.autoConfirm is not true in review-router.config.json: Dave presses.');
+  if (!band) return no('The PR has no review band (no matrix block): Dave presses.');
+  if (!AUTO_BANDS.includes(band)) return no(`Band ${band}: Dave presses. Auto-confirm covers LOW, MID and ELEVATED only.`);
+  if (floorApplies(c)) return no(`${floorLabel(c)}: the internal pass (aegis + critic) runs before READY, so Dave presses.`);
+  if (facts.config_drift) return no(`${driftWhy(facts.config_drift)}: Dave presses.`);
+  if (!Array.isArray(facts.labels)) return no('The PR labels were not read: Dave presses.');
+  if (recommended !== 'none') return no(`The recommendation is ${recommended ?? 'stopped'}, not none: Dave presses.`);
+  return { eligible: true, band, reason: `Band ${band} is recommended none: no CodeRabbit PR bot, the internal review stack covers it.` };
+}
+
 // ---------- recommend ----------
+
+/** The drift text, or null. facts.config_drift: true or 'differs' (the configs differ), 'unread' (main's config is missing or not JSON). */
+function driftWhy(drift) {
+  if (!drift) return null;
+  return drift === 'unread' ? "Main's review-router.config.json is missing or not JSON, so it counts as drift" : 'Branch config differs from main';
+}
 
 /**
  * Fail closed: the PR labels could not be read (facts.labels is null), so a risk:high label may be hiding. Below HIGH that could
@@ -409,16 +442,19 @@ export function recommend(facts, policy) {
   const base = {
     head: facts.head, class: c.cls, matched: c.matched, size: c.size, checks: facts.stamp?.results ?? [], cli: c.cli, credits: c.credits,
     capacity: c.capacity, band: c.band, recommended: null, options: [], why: [], budget: [0, 0], config_drift: Boolean(facts.config_drift),
+    config_drift_why: driftWhy(facts.config_drift),
   };
+  const auto = (recommended) => ({ auto: autoOf(c, facts, policy, recommended) });
   const stop = stampProblem(facts);
   const notes = facts.notes ?? [];
-  if (stop) return { ...base, why: [stop, ...notes] };
+  if (stop) return { ...base, ...auto(null), why: [stop, ...notes] };
   const unread = labelsProblem(c, facts);
-  if (unread) return { ...base, why: [unread, ...notes] };
+  if (unread) return { ...base, ...auto(null), why: [unread, ...notes] };
   const picked = combine(hitsFor(c));
   const wait = waitWhy(c, picked);
   const options = orderFor(c, picked).map((p) => optionOf(c, picked, p));
-  return { ...base, recommended: wait?.recommended ?? picked.pathway, options, why: [...picked.why, ...(wait?.why ?? []), ...notes], budget: picked.budget };
+  const recommended = wait?.recommended ?? picked.pathway;
+  return { ...base, ...auto(recommended), recommended, options, why: [...picked.why, ...(wait?.why ?? []), ...notes], budget: picked.budget };
 }
 
 // ---------- real inputs (read-only) ----------
@@ -470,11 +506,15 @@ function readCli(head) {
   return name ? cliFromStream(readFileSync(path.join(dir, name), 'utf8')) : null;
 }
 
-/** The branch config differs from the base branch's: the router uses main's config. */
+/**
+ * Does the branch config differ from the base branch's? The router uses main's config. Fails closed: 'unread' when main's config is
+ * missing or not JSON, 'differs' when the two differ (or the branch config is not JSON), false when they match.
+ */
 function configDrift(base, configText) {
   const r = spawnSync('git', ['show', `${base}:review-router.config.json`], { cwd: workTop(), encoding: 'utf8', windowsHide: true });
-  if (r.status !== 0) return false;
-  try { return JSON.stringify(JSON.parse(r.stdout)) !== JSON.stringify(JSON.parse(configText)); } catch { return false; }
+  let main;
+  try { main = JSON.parse(r.status === 0 ? r.stdout : ''); } catch { return 'unread'; }
+  try { return JSON.stringify(main) !== JSON.stringify(JSON.parse(configText)) ? 'differs' : false; } catch { return 'differs'; }
 }
 
 /** The label names in a gh pr view JSON text, or null. */
@@ -533,6 +573,8 @@ export function confirmProblem({ result, facts, pathway, by, bodySha }) {
   if (!option) return `${pathway} is not offered. Offered: ${result.options.map((o) => o.pathway).join(', ')}.`;
   if (!option.available) return `${pathway} is held: ${option.reason}`;
   if (by === 'default' && pathway !== result.recommended) return `--by default needs the recommended pathway (${result.recommended}), not ${pathway}.`;
+  if (by === 'auto' && pathway !== 'none') return `--by auto records none only, not ${pathway}.`;
+  if (by === 'auto' && !result.auto?.eligible) return `--by auto is not allowed here: ${result.auto?.reason ?? 'no auto-confirm answer'}`;
   return null;
 }
 
@@ -623,7 +665,7 @@ function parseArgs(args) {
 
 function confirmUsage(o) {
   if (!PATHWAYS.includes(o['--confirm'])) return `--confirm needs one of ${PATHWAYS.join(', ')}`;
-  if (!['dave', 'default'].includes(o['--by'])) return '--confirm needs --by dave or --by default';
+  if (!['dave', 'default', 'auto'].includes(o['--by'])) return '--confirm needs --by dave, --by default or --by auto';
   return o['--body'] ? null : '--confirm needs --body <file>: the PR body file that pre-pr.mjs checked';
 }
 
@@ -650,7 +692,7 @@ export function renderText(r) {
   lines.push(...r.why.map((w) => `  - ${w}`));
   r.options.forEach((o, i) => lines.push(`  ${i + 1}. ${o.pathway}${o.label ? ` (${o.label})` : ''}${o.available ? '' : ' [held]'}: ${o.reason}`));
   lines.push(`CodeRabbit 7-day count: ${r.capacity.count ?? 'unknown'} (${r.capacity.band})${r.capacity.warning ? `. ${r.capacity.warning}` : ''}`);
-  if (r.config_drift) lines.push('Warning: branch config differs from main. The router uses the config of main.');
+  if (r.config_drift) lines.push(`Warning: ${r.config_drift_why ?? 'Branch config differs from main'}. The router uses the config of main.`);
   return lines.join('\n');
 }
 
@@ -701,7 +743,7 @@ function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const bad = parsed.error ?? usageProblem(parsed.opts);
   if (bad) {
-    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default> --body <file> [--state-dir d] | --apply <pr> [--state-dir d].`);
+    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default|auto> --body <file> [--state-dir d] | --apply <pr> [--state-dir d].`);
     process.exit(2);
   }
   const o = parsed.opts;

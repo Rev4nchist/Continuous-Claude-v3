@@ -20,7 +20,9 @@ import {
   isStale,
   isWaived,
   landCommand,
+  MAX_LAND_BATCH,
   markSent,
+  parseLandArgs,
   unmarkSent,
   noteFailure,
   parseArgs,
@@ -158,13 +160,15 @@ const restore = async ($: EngineInterface): Promise<void> => {
 }
 
 /** Dave's press, and only an exact "Land". Dismiss, a failed dialog or any other reply is No. */
-const confirmLand = async ($: EngineInterface, pr: number): Promise<boolean> => {
+const askLand = async ($: EngineInterface, question: string): Promise<boolean> => {
   try {
-    return (await $.ui.ask(`Land #${pr}?`, ['Land', 'No'])) === 'Land'
+    return (await $.ui.ask(question, ['Land', 'No'])) === 'Land'
   } catch {
     return false
   }
 }
+
+const confirmLand = ($: EngineInterface, pr: number): Promise<boolean> => askLand($, `Land #${pr}?`)
 
 const outputOf = (ran: { text?: string; result?: unknown }): string => {
   if (typeof ran.text === 'string') return ran.text
@@ -176,9 +180,18 @@ const outputOf = (ran: { text?: string; result?: unknown }): string => {
  * Runs land-pr through the normal tool path. The caller has Dave's press;
  * `consent` carries it, so the permission check reads it as his request.
  */
-const landNow = async ($: EngineInterface, pr: number, via: string): Promise<string> => {
+const landNow = async ($: EngineInterface, pr: number, via: string): Promise<string> => (await landRun($, pr, via)).text
+
+/** True when a shell tool exists to run land-pr in sequence. Without one, a landing is handed to the model as a single instruction. */
+const hasShell = async ($: EngineInterface): Promise<boolean> => {
+  const names = new Set((await $.tool.list().catch(() => [])).map(tool => tool.name))
+  return names.has('PowerShell') || names.has('Bash')
+}
+
+/** One land-pr run. `ok` is true only for a run that reached the end without a deny, an error flag or an Escape; the hand-off to the model is not ok. */
+const landRun = async ($: EngineInterface, pr: number, via: string): Promise<{ ok: boolean; text: string }> => {
   const root = await findRoot($)
-  if (!root) return `Nothing landed: ${STATUS_SCRIPT} was not found.`
+  if (!root) return { ok: false, text: `Nothing landed: ${STATUS_SCRIPT} was not found.` }
   const command = landCommand(root, pr)
   const consent = `The user pressed "Land" on ${via}`
   const names = new Set((await $.tool.list().catch(() => [])).map(tool => tool.name))
@@ -188,18 +201,18 @@ const landNow = async ($: EngineInterface, pr: number, via: string): Promise<str
       const ran = names.has('PowerShell')
         ? await $.tool.call({ tool: 'PowerShell', ...common })
         : await $.tool.call({ tool: 'Bash', ...common })
-      if (ran.deny !== undefined) return `Land refused: ${ran.deny}`
+      if (ran.deny !== undefined) return { ok: false, text: `Land refused: ${ran.deny}` }
       const out = clipTail(outputOf(ran).trim(), 800)
-      return ran.isError === true ? `Land failed:\n${out}` : out
+      return ran.isError === true ? { ok: false, text: `Land failed:\n${out}` } : { ok: true, text: out }
     } catch {
       // The engine rejects an aborted call: Dave pressed Escape. His stop is not a reason to merge again.
-      return `Land interrupted: nothing re-submitted. Check PR #${pr}, then press Land again.`
+      return { ok: false, text: `Land interrupted: nothing re-submitted. Check PR #${pr}, then press Land again.` }
     }
   }
   // prompt.submit from inside a command.run hook would wait on the turn that hook holds: submit from a later dispatch.
   const text = `Dave pressed "Land" on ${via}. That press is his merge yes for PR #${pr} only. Run exactly: ${command} Then report its output.`
   $.clock.after(1, () => void $.prompt.submit({ text }).catch(() => undefined))
-  return `No shell tool here: asked the model to run land-pr for #${pr}.`
+  return { ok: false, text: `No shell tool here: asked the model to run land-pr for #${pr}.` }
 }
 
 const lastLine = (text: string): string =>
@@ -446,11 +459,111 @@ const watchCommand = async ($: EngineInterface, args: string): Promise<{ text: s
   return { text: `Watching #${pr}. A check runs every 5 minutes. READY, merged and closed reach Dave by toast only; the model gets a line only for REVIEWED, PROOF, STALLED and LIMITED (none with CCV3_MOD_PRLOOP_QUIET=1).` }
 }
 
-const LAND_USAGE = 'Usage: /land <pr> [--when-ready]'
+const LAND_USAGE = 'Usage: /land <pr> [--when-ready]   or   /land <pr> <pr> ...   or   /land ready'
+
+// ---- batched /land (review factory step A, Dave 2026-11-01) ------------------------------------------------------------------------
+// One press lands a list of READY PRs, or every READY PR on the watch list (`ready`), in order. Each PR is its own land-pr.ps1 run, so each is
+// SHA-pinned through Gate C. Between runs the PR is read again: it must still be READY at the head Dave saw when he pressed. The batch stops at
+// the first PR that does not land. It never lands a PR Dave did not name or that is not on his watch list.
+
+type Row = { pr: number; result: Probe }
+
+const rowText = (row: Row): string => probeText(row.pr, row.result)
+
+/** Why a row cannot land now, or null when it is READY and open. */
+const notLandable = (row: Row): string | null => {
+  if (row.result.kind === 'error') return 'its status could not be read'
+  if (isClosed(row.result.status)) return row.result.status.merged ? 'it is already merged' : 'it is closed'
+  return row.result.status.ready ? null : 'it is not READY'
+}
+
+const batchReport = (landed: number[], stopped: { pr: number; why: string } | null, rest: number[]): string => {
+  const parts = [`Landed: ${landed.length ? landed.map(n => `#${n}`).join(', ') : 'none'}.`]
+  if (stopped) parts.push(`Stopped at #${stopped.pr}: ${stopped.why}`)
+  if (rest.length) parts.push(`Not tried: ${rest.map(n => `#${n}`).join(', ')}.`)
+  return parts.join('\n')
+}
+
+/** land-pr.ps1 asks up to 7 times, 15 s apart, while GitHub computes mergeable_state after the base moved. The batch asks the same way. */
+const RECHECKS = 7
+const RECHECK_MS = 15_000
+
+/** One read of the PR; while it is not READY only because mergeable_state is "unknown" (the base just moved), read again. */
+const readSettled = async ($: EngineInterface, pr: number): Promise<Probe> => {
+  let fresh = await probe($, pr)
+  for (let tries = 1; tries < RECHECKS && fresh.kind === 'ok' && !fresh.status.ready && !isClosed(fresh.status) && fresh.status.mergeable_state === 'unknown'; tries += 1) {
+    await new Promise<void>(resolve => $.clock.after(RECHECK_MS, () => resolve()))
+    fresh = await probe($, pr)
+  }
+  return fresh
+}
+
+/** The state of one PR right before its land run, against the head Dave saw. Null when it may land. */
+const driftBefore = async ($: EngineInterface, row: Row & { head: string }): Promise<string | null> => {
+  const fresh = await readSettled($, row.pr)
+  if (fresh.kind === 'error') return `its status could not be read (${fresh.text}).`
+  const status = fresh.status
+  if (isClosed(status)) return `${status.merged ? 'it was merged' : 'it was closed'} since you pressed Land.`
+  if (!status.ready) return `it is not READY any more (${status.reasons[0] ?? 'no reason given'}).`
+  if (status.head !== row.head) return `the head moved to ${status.headShort} since you pressed Land. Press Land again to land the new head.`
+  return null
+}
+
+/** Lands the rows in order after one dialog. Stops at the first failure. */
+const landRows = async ($: EngineInterface, rows: Row[], table: string): Promise<{ text: string }> => {
+  const prs = rows.map(row => row.pr)
+  const heads = new Map(rows.map(row => [row.pr, row.result.kind === 'ok' ? row.result.status.head : ''] as const))
+  const shown = rows.map(row => `#${row.pr} (${row.result.kind === 'ok' ? row.result.status.headShort : '?'})`).join(', ')
+  if (!(await askLand($, `Land ${shown} in this order? Each is checked READY again and merged by its own land-pr run; the first failure stops the rest.`))) {
+    return { text: `${table}\nNot landed.` }
+  }
+  const via = `/land ${prs.map(n => `#${n}`).join(' ')}`
+  const landed: number[] = []
+  for (const [i, pr] of prs.entries()) {
+    const rest = prs.slice(i + 1)
+    const stop = (why: string) => ({ text: `${table}\n${batchReport(landed, { pr, why }, rest)}` })
+    const drift = await driftBefore($, { pr, result: rows[i]!.result, head: heads.get(pr) ?? '' })
+    if (drift) return stop(drift)
+    const ran = await landRun($, pr, via)
+    if (!ran.ok) return stop(lastLine(ran.text) || 'land-pr did not finish.')
+    const after = await probe($, pr)
+    // Fail closed: a status that cannot be read after the run is no proof of a merge.
+    if (after.kind === 'error') return stop(`could not confirm #${pr} merged; check it before you land again.`)
+    if (!after.status.merged) return stop('land-pr printed no error, but the PR is not merged. Check it before you land again.')
+    landed.push(pr)
+  }
+  return { text: `${table}\n${batchReport(landed, null, [])}` }
+}
+
+/** `/land 12 13 14` or `/land ready`. Interactive and Dave's press only; every other case lands nothing. */
+const landBatch = async ($: EngineInterface, requested: number[] | 'ready'): Promise<{ text: string }> => {
+  const numbers = requested === 'ready' ? (await loadDoc($)).prs.map(one => one.pr) : requested
+  const overCap = (count: number) => ({ text: `Nothing landed: ${count} PRs is over the limit. A press lands at most ${MAX_LAND_BATCH}.` })
+  // An explicit list is capped before any read. `ready` reads the whole watch list and caps the READY rows, which are what would land.
+  if (requested !== 'ready' && numbers.length > MAX_LAND_BATCH) return overCap(numbers.length)
+  if (requested === 'ready' && numbers.length === 0) return { text: 'Nothing landed: no PR is on the watch list, so no watched PR is READY. Name the PRs: /land <pr> <pr>.' }
+  const rows: Row[] = []
+  for (const pr of numbers) rows.push({ pr, result: await probe($, pr) })
+  const table = rows.map(rowText).join('\n')
+  const bad = rows.filter(row => notLandable(row) !== null)
+  const ready = rows.filter(row => notLandable(row) === null)
+  if (requested !== 'ready' && bad.length > 0) {
+    return { text: `${table}\nNothing landed: ${bad.map(row => `#${row.pr} (${notLandable(row)})`).join(', ')}. Fix the list or land the READY ones alone.` }
+  }
+  if (ready.length === 0) return { text: `${table}\nNothing landed: no watched PR is READY.` }
+  if (ready.length > MAX_LAND_BATCH) return { text: `${table}\n${overCap(ready.length).text}` }
+  if (!(await interactive($))) return { text: `${table}\nNot landed: landing needs an interactive session and Dave's press.` }
+  if (!(await hasShell($))) return { text: `${table}\nNot landed: a batch needs a shell tool to run land-pr one PR at a time, and this session has none. Land them one at a time.` }
+  return landRows($, ready, table)
+}
 
 const landCommandRun = async ($: EngineInterface, args: string): Promise<{ text: string }> => {
-  const { pr, whenReady } = parseArgs(args)
-  if (pr === null) return { text: LAND_USAGE }
+  const parsed = parseLandArgs(args)
+  if (parsed.usage) return { text: LAND_USAGE }
+  if (parsed.ready) return landBatch($, 'ready')
+  if (parsed.prs.length > 1) return landBatch($, parsed.prs)
+  const pr = parsed.prs[0]!
+  const whenReady = parsed.whenReady
   const result = await probe($, pr)
   const table = probeText(pr, result)
   if (result.kind === 'error') return { text: `${table}\nNothing landed.` }
@@ -489,8 +602,8 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
     })
     await $.command.register({
       name: 'land',
-      description: 'Show the status of a PR; press Land to merge it when READY',
-      argumentHint: '<pr> [--when-ready]',
+      description: 'Show the status of a PR; press Land to merge it when READY. Several numbers, or "ready", land the READY PRs in turn',
+      argumentHint: '<pr> [<pr> ...] [--when-ready]  |  ready',
     })
     await $.tool.register({
       name: 'pr_status',

@@ -102,7 +102,7 @@ var loopText = (info) => `/loop 5m Check the PR review bots that must review the
 function buildContext(info) {
   const head = `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-review-loop.md, `;
   if (`${info.owner}/${info.repo}`.toLowerCase() === WATCH_REPO) {
-    return head + `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave and you at READY; never merge. Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. This applies to every PR in every session.`;
+    return head + `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave and you at READY; never merge. Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. Either way, also call the pr_checkpoint tool with pr: ${info.number} and body: the path of the PR body file that pre-pr.mjs --body checked (mcp__ccv3-mods__pr_checkpoint). Without that call /pathway has no checkpoint to record, and the PR stays a draft. Never mark it ready or add a review: label yourself; the checkpoint does both. This applies to every PR in every session.`;
   }
   return head + `START THE REVIEW LOOP NOW, in this same turn: ${loopText(info)}. This applies to every PR in every session.`;
 }

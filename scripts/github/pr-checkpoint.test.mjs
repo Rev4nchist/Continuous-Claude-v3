@@ -26,7 +26,7 @@
 //
 //   result = { head, class, matched, size:{files,lines,added}, checks, cli, credits (the creditsState() object, so credits.u3_due follows facts.now),
 //              capacity:{count,band,warning,...}, recommended, options:[{pathway,label,available,cost,reason}],
-//              why:[string], budget:[coderabbit,greptile], config_drift }
+//              why:[string], budget:[coderabbit,greptile], config_drift, config_drift_why (the warning text or null) }
 //   pathway: 'none' | 'coderabbit' | 'both' | 'wait'. band: 'unknown' | 'ok' | 'warn' | 'high'.
 //   R0 (stop): recommended null, options [], a why line that says to run pre-pr.mjs.
 //   Config keys: budget, checkpoint.critical, checkpoint.parser, coderabbit.reviews_7d_manual and coderabbit.reviews_7d_manual_date.
@@ -659,7 +659,7 @@ test('T21 (CLI): --json prints the whole output shape as one JSON object and exi
   const r = runCli(['--json'], facts([file(CRITICAL, 30), file('scripts/b.mjs', 5)]));
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout);
-  const shape = ['head', 'class', 'matched', 'size', 'checks', 'cli', 'credits', 'capacity', 'band', 'recommended', 'options', 'why', 'budget', 'config_drift'];
+  const shape = ['head', 'class', 'matched', 'size', 'checks', 'cli', 'credits', 'capacity', 'band', 'auto', 'recommended', 'options', 'why', 'budget', 'config_drift', 'config_drift_why'];
   assert.deepEqual(Object.keys(out).sort(), [...shape].sort());
   assert.equal(out.head, HEAD);
   assert.equal(out.recommended, 'coderabbit');

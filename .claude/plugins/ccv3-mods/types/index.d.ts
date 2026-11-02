@@ -239,6 +239,8 @@ export type CheckpointResult = {
   why: string[]
   budget: [number, number]
   config_drift: boolean
+  /** The engine's answer to "may the mod record `none` without Dave's press?" (autoOf in pr-checkpoint.mjs). Absent or malformed reads as not eligible. */
+  auto: { eligible: boolean; band: string | null; reason: string }
 }
 
 /** `checkpoint:pr:<n>` in $.store: the pathway.json record the engine printed at --confirm, plus what the mod adds. `appliedAt` is epoch ms (the clock of the pr-loop store). */

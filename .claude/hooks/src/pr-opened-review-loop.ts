@@ -191,6 +191,8 @@ export function buildContext(info: PrInfo): string {
       `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. ` +
       `It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave and you at READY; never merge. ` +
       `Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. ` +
+      `Either way, also call the pr_checkpoint tool with pr: ${info.number} and body: the path of the PR body file that pre-pr.mjs --body checked (mcp__ccv3-mods__pr_checkpoint). ` +
+      `Without that call /pathway has no checkpoint to record, and the PR stays a draft. Never mark it ready or add a review: label yourself; the checkpoint does both. ` +
       `This applies to every PR in every session.`
     );
   }
