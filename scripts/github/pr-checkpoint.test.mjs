@@ -659,7 +659,7 @@ test('T21 (CLI): --json prints the whole output shape as one JSON object and exi
   const r = runCli(['--json'], facts([file(CRITICAL, 30), file('scripts/b.mjs', 5)]));
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout);
-  const shape = ['head', 'class', 'matched', 'size', 'checks', 'cli', 'credits', 'capacity', 'band', 'recommended', 'options', 'why', 'budget', 'config_drift'];
+  const shape = ['head', 'class', 'matched', 'size', 'checks', 'cli', 'credits', 'capacity', 'band', 'auto', 'recommended', 'options', 'why', 'budget', 'config_drift'];
   assert.deepEqual(Object.keys(out).sort(), [...shape].sort());
   assert.equal(out.head, HEAD);
   assert.equal(out.recommended, 'coderabbit');
