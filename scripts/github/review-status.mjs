@@ -914,14 +914,14 @@ const FOLLOWUP_NITPICK = /^(?:Nitpick|Trivial)$/i;
 const countOf = (re, line) => (line.match(re) || []).length;
 
 /**
- * Does the <details> that opens on line i carry a severity mark before it closes? Used for a nested <details>: if so, it is a
+ * Does the <details> that opens on line i carry a severity mark before it closes (a fenced example does not count)? Used for a nested <details>: if so, it is a
  * new finding and not a part of the open block (an unclosed </details> keeps the depth above 0 and would hide it).
  */
 function nestedHasSeverity(lines, fenced, i, end) {
   let d = 0;
   const text = [];
   for (let j = i; j < end; j++) {
-    text.push(lines[j]);
+    if (!fenced[j]) text.push(lines[j]);
     if (!fenced[j]) d += countOf(DETAILS_OPEN, lines[j]) - countOf(DETAILS_CLOSE, lines[j]);
     if (d <= 0) break;
   }
@@ -965,8 +965,8 @@ function followUpBlocks(lines, fenced, start) {
 /** The ids of the markers in a block's text. */
 const blockMarkers = (joined) => [...joined.matchAll(new RegExp(OUTSIDE_MARKER.source, 'gi'))].map((m) => m[1].toLowerCase());
 
-/** Text outside any block that has a marker and a severity mark is a finding written without a block: it fails closed. The count of it. */
-const unplacedFindings = (joined) => (blockMarkers(joined).length > 0 && severityMarks(joined).length > 0 ? Math.max(1, new Set(blockMarkers(joined)).size) : 0);
+/** Text outside any block that has a severity mark is a finding written without a block: it fails closed, with or without a marker. The count of it. A marker alone does not count. */
+const unplacedFindings = (joined) => (severityMarks(joined).length > 0 ? Math.max(1, new Set(blockMarkers(joined)).size) : 0);
 
 /**
  * The Follow-up Comments section of one review body, one block per finding (a block starts at its <details> or its badge line). Pure.

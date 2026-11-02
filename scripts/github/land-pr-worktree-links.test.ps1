@@ -274,6 +274,20 @@ try {
   Check 'W4 wiring: output tells Dave to switch the primary to main and delete the branch' ($run4.Text -match "kept fork/$([regex]::Escape($branch)).*switch the primary to main and delete the branch")
   Check 'W4 wiring: the remote delete is not reported' ($run4.Text -notmatch 'deleted fork/')
   if ($fail) { Write-Host '---- w4 land-pr output ----'; Write-Host $run4.Text; Write-Host '---- end ----' }
+
+  # W5: the primary is on main when land-pr starts, then another session switches it to the PR branch. The
+  # remote delete must re-read the primary's branch and keep the remote branch.
+  $fx5 = New-Fixture 'w5'
+  git -C $fx5.Repo push -q fork $branch 2>&1 | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $fx5.Repo 'scripts') | Out-Null
+  Copy-Item -LiteralPath (Join-Path $here '..\git-safe.ps1') -Destination (Join-Path $fx5.Repo 'scripts\git-safe.ps1')
+  Check 'W5 harness: the primary is on main and the PR branch exists on the remote' (((git -C $fx5.Repo branch --show-current) -eq 'main') -and [bool](git -C $fx5.Repo ls-remote --heads fork $branch))
+  $env:LAND_PR_TEST_SWITCH_PRIMARY = '1'   # test-only: land-pr.ps1 switches the primary to the branch after the worktree step
+  try { $run5 = Invoke-Land $fx5.Repo } finally { Remove-Item Env:\LAND_PR_TEST_SWITCH_PRIMARY -ErrorAction SilentlyContinue }
+  Check 'W5 wiring: land-pr exits 0 and the primary was switched to the PR branch' ($run5.Code -eq 0 -and ((git -C $fx5.Repo branch --show-current) -eq $branch))
+  Check 'W5 wiring: the remote branch still exists' ([bool](git -C $fx5.Repo ls-remote --heads fork $branch))
+  Check 'W5 wiring: output says the remote branch is kept and no remote delete is reported' ($run5.Text -match "kept fork/$([regex]::Escape($branch))" -and $run5.Text -notmatch 'deleted fork/')
+  if ($fail) { Write-Host '---- w5 land-pr output ----'; Write-Host $run5.Text; Write-Host '---- end ----' }
 }
 finally {
   $env:PATH = $oldPath

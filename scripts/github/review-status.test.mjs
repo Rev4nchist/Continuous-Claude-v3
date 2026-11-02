@@ -3567,3 +3567,22 @@ test('FU-T: a Nitpick block with an unclosed </details> does not swallow the nex
   const closed = FU_242.replace(fuBlock(), `${nit}\n\n${odd}`);
   assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(closed)] }), { findings: [], unidentified: 1 }, 'same result with the tag closed');
 });
+
+// CodeRabbit round 3 on PR 252 (2026-11-02), Minor. Ways it can fail, one test each:
+//   a severity word in a fenced example inside a nested Suggested fix splits a real Outside diff block        -> FU-V
+//   a severity-marked line outside any block with no marker returns 0, so READY fails open                    -> FU-W
+test('FU-V: a fenced severity mark inside a nested Suggested fix does not split the Outside diff block', () => {
+  const body = FU_242.replace('```diff\n', '```diff\n+// \u{1F7E0} Major example\n');
+  assert.notEqual(body, FU_242);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 0 });
+});
+
+test('FU-W: a severity-marked line with no marker outside any block counts as unidentified', () => {
+  const nit = fuNitpick();
+  const plain = '\u{1F7E0} Major: plain markdown finding, no marker';
+  const wrap = (before, after) => FU_242.replace(fuBlock(), `${before}${nit}${after}`);
+  const one = { findings: [], unidentified: 1 };
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap(`${plain}\n\n`, ''))] }), one, 'before the first block');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap('', `\n\n${plain}`))] }), one, 'after a closed block');
+  assert.equal(odEval([odLive(wrap('', `\n\n${plain}`))]).ready, false);
+});
