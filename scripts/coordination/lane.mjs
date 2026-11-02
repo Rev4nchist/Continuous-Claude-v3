@@ -46,6 +46,8 @@
  *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--priority N]
  *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add
  *   node scripts/coordination/lane.mjs peers            # who else is live right now
+ *   node scripts/coordination/lane.mjs apply-kanban <file.json> [--dry-run] [--json]
+ *                                                       # carry Dave's kanban changes into the lanes
  *
  * Global flags: --as <session-id>, --json
  */
@@ -54,6 +56,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { planKanban } from './kanban-apply.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -547,8 +550,90 @@ const commands = {
     await logEvent(c, { kind: 'seeded', sessionId: myId, body: `seeded ${n} lanes from ${file}` });
     return `seeded ${n} lane(s)`;
   },
+
+  /**
+   * Carry Dave's kanban changes (order, status, notes, questions) into the lane table.
+   *
+   * The artifact db is reachable only through the agent's ArtifactData tool, so the
+   * agent writes its content to <file> and this command applies it. All rules live in
+   * the pure planner (kanban-apply.mjs). This function only does the I/O.
+   *
+   * One transaction, rows locked, so a half-applied board cannot exist. Events are
+   * logged AFTER the commit: logEvent swallows its own errors, but a failed INSERT
+   * inside a transaction would abort every later statement in it.
+   *
+   * --dry-run reads and plans. It opens no transaction and writes nothing.
+   */
+  async 'apply-kanban'(c) {
+    const dry = flags['dry-run'] !== undefined && flags['dry-run'] !== false;
+    // `--dry-run <file>` makes the flag parser swallow the file name as the flag value.
+    const file = positional[1] ?? (typeof flags['dry-run'] === 'string' ? flags['dry-run'] : undefined);
+    if (!file) throw new Error('usage: lane.mjs apply-kanban <file.json> [--dry-run] [--json]');
+    let input;
+    try { input = JSON.parse(readFileSync(file, 'utf8')); } catch (e) {
+      throw new Error(`cannot read kanban file "${file}": ${e.message}`);
+    }
+    // A file in the wrong shape would plan zero actions and look like "nothing changed".
+    if (!input?.board?.columns && !(Array.isArray(input?.cards) && input.cards.length)) {
+      throw new Error(`"${file}" has no board.columns and no cards. Expected { board: {columns, updatedAt}, cards: [...] }`);
+    }
+    const myId = dry ? null : me();
+    const readAt = Date.parse(input?.readAt);
+    const syncedAt = new Date(Number.isNaN(readAt) ? Date.now() : readAt).toISOString();
+
+    let plan;
+    if (dry) {
+      plan = planKanban(input, (await c.query(`SELECT id, state, priority, note FROM agentic_os.lane`)).rows);
+    } else {
+      await c.query('BEGIN');
+      try {
+        const lanes = (await c.query(`SELECT id, state, priority, note FROM agentic_os.lane FOR UPDATE`)).rows;
+        plan = planKanban(input, lanes);
+        for (const a of plan.actions) await applyKanbanAction(c, a);
+        await c.query('COMMIT');
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => {});
+        throw e;
+      }
+      for (const a of plan.actions) {
+        await logEvent(c, {
+          laneId: a.laneId, kind: 'kanban', sessionId: myId,
+          body: a.kind === 'note' ? a.to : `${a.laneId} ${a.kind} ${a.from ?? '(none)'} -> ${a.to}`,
+          detail: { kind: a.kind, from: a.from, to: a.to, text: a.text },
+        });
+      }
+    }
+
+    const count = (k) => plan.actions.filter((a) => a.kind === k).length;
+    const summary = { priority: count('priority'), state: count('state'), note: count('note'), skipped: plan.skipped.length };
+    const line = `kanban${dry ? ' (dry run, nothing written)' : ''}: ${summary.priority} priority, ${summary.state} state, ${summary.note} notes, ${summary.skipped} skipped`;
+    if (JSON_OUT) {
+      const results = plan.results.map((r) => (r.applied && !dry ? { ...r, syncedAt } : r));
+      return { dryRun: dry, summary, syncedAt, actions: plan.actions, results, skipped: plan.skipped };
+    }
+    const clip = (v) => String(v ?? '(none)').replace(/\s+/g, ' ').slice(0, 70);
+    return [
+      line,
+      ...plan.actions.map((a) => `  ${a.laneId.padEnd(28)} ${a.kind.padEnd(8)} ${clip(a.from)} -> ${clip(a.to)}`),
+      ...plan.skipped.map((k) => `  ${k.laneId.padEnd(28)} skipped  ${k.reason}`),
+    ].join('\n');
+  },
 };
 
+/** One planned action as one UPDATE. The state SQL mirrors the `state` command: done and ready release the lane. */
+async function applyKanbanAction(c, a) {
+  const sql = {
+    priority: `UPDATE agentic_os.lane SET priority=$2, updated_at=now() WHERE id=$1`,
+    note: `UPDATE agentic_os.lane SET note=$2, updated_at=now() WHERE id=$1`,
+    state: `UPDATE agentic_os.lane SET state=$2, updated_at=now(),
+              owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE owner_session_id END,
+              lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE lease_expires_at END
+            WHERE id=$1`,
+  }[a.kind];
+  if (!sql) throw new Error(`unknown kanban action kind "${a.kind}"`);
+  const { rowCount } = await c.query(sql, [a.laneId, a.to]);
+  if (rowCount !== 1) throw new Error(`kanban action on "${a.laneId}" matched ${rowCount} rows`);
+}
 // ---------------------------------------------------------------- main
 
 const cmd = positional[0] || 'board';
