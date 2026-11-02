@@ -184,6 +184,7 @@ export function proveRow(row, deps) {
   let preRun;
   let fixRun;
   let release = null;
+  let j;
   try {
     // One run at a time per row: buildTree clears the tree, so a second run could delete files under a running command.
     release = deps.acquire ? deps.acquire(row) : null;
@@ -191,12 +192,13 @@ export function proveRow(row, deps) {
     preRun = deps.runCmd(row, pre.tree);
     fix = deps.buildTree(row, row.fix);
     fixRun = deps.runCmd(row, fix.tree);
+    // judge reads the trees (fireText), so it runs before the lock goes and another run may clear them
+    j = judge(row, preRun, fixRun);
   } catch (e) {
     return { major: row.major, check: row.check, ok: false, reasons: [`setup error: ${e.message}`], setupError: true };
   } finally {
     if (typeof release === 'function') release();
   }
-  const j = judge(row, preRun, fixRun);
   const phase = (b, v, r) => ({ ref: b.ref, sha: b.sha, tree: b.tree, copied: b.copied ?? [], code: r.code, cmd: r.cmd, ...v });
   return {
     major: row.major,
@@ -263,24 +265,23 @@ const pidAlive = (pid) => {
 };
 
 /**
- * Hold the row's lock from tree creation to the end of its runs. The lock file holds the owner pid. A live owner
- * (this process too) is a refusal; a lock left by a dead process is taken over. Returns the release function.
+ * Hold the row's lock from tree creation until the verdict is read. The lock file holds the owner pid. A live owner
+ * (this process too) is a refusal. A lock left by a dead process is refused too, naming the file to delete: a takeover
+ * cannot be made atomic with plain files. Returns the release function.
  */
 export function acquireRowLock(repo, row) {
   const file = rowLockPath(repo, row);
   mkdirSync(path.dirname(file), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      writeFileSync(file, String(process.pid), { flag: 'wx' });
-      return () => rmSync(file, { force: true });
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const owner = Number.parseInt(readFileSync(file, 'utf8'), 10);
-      if (Number.isInteger(owner) && pidAlive(owner)) throw new Error(`tree of ${row.check} ${row.major} is in use by pid ${owner} (${file})`);
-      rmSync(file, { force: true });
-    }
+  try {
+    writeFileSync(file, String(process.pid), { flag: 'wx' });
+    return () => rmSync(file, { force: true });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
   }
-  throw new Error(`could not take the lock ${file}`);
+  const owner = Number.parseInt(readFileSync(file, 'utf8'), 10);
+  if (Number.isInteger(owner) && pidAlive(owner)) throw new Error(`tree of ${row.check} ${row.major} is in use by pid ${owner} (${file})`);
+  // Never take a stale lock over: two runs that both saw it could each remove the other's fresh lock.
+  throw new Error(`stale lock left by pid ${owner} for ${row.check} ${row.major}: no proof run holds it. Delete ${file} and run again.`);
 }
 
 /** Empty and recreate a proof tree. Refuses any path outside <repo>/.claude/cache/proof/. */

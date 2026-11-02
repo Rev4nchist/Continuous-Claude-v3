@@ -244,12 +244,31 @@ test('PC16 the real lock: a second acquire of the same row fails while the first
   a();
   const b = acquireRowLock(repo, ROW);
   b();
-  // a lock left by a dead process is taken over
+  // a lock left by a dead process is refused with the file to delete, never taken over: two runs that both saw the
+  // stale lock could each remove the other's fresh lock (CLI fix review of 3bcd46c)
   const lockFile = rowLockPath(repo, ROW);
   mkdirSync(path.dirname(lockFile), { recursive: true });
   writeFileSync(lockFile, '999999999');
-  const c = acquireRowLock(repo, ROW);
-  c();
+  assert.throws(() => acquireRowLock(repo, ROW), (e) => /stale lock/.test(e.message) && e.message.includes(lockFile));
+  assert.equal(readFileSync(lockFile, 'utf8'), '999999999');
+});
+
+test('PC17 the lock is held until the verdict is read: a fireText hit reads the tree before release', () => {
+  const tree = mkdtempSync(path.join(tmpdir(), 'pc17-'));
+  mkdirSync(path.join(tree, 'src'), { recursive: true });
+  writeFileSync(path.join(tree, 'src', 'a.mjs'), 'const COMMENTS_QUERY = 2;\n');
+  const row = { ...ROW, cmd: ['semgrep', '--json'], fireMatch: 'rule-x src/a\\.mjs:\\d+$', fireText: '^const COMMENTS_QUERY = ' };
+  const hit = { code: 0, stdout: JSON.stringify({ results: [{ check_id: 'rule-x', path: 'src/a.mjs', start: { line: 1 } }], errors: [] }), stderr: '', tree };
+  const none = { code: 0, stdout: JSON.stringify({ results: [], errors: [] }), stderr: '', tree };
+  const deps = {
+    // release stands for a second run that clears the tree as soon as it gets the lock
+    acquire: () => () => rmSync(tree, { recursive: true, force: true }),
+    buildTree: (r, ref) => ({ ref, sha: ref, tree, copied: [] }),
+    runCmd: (r, t) => (r.pre === 'P' && !deps.seen ? ((deps.seen = true), hit) : none),
+  };
+  const r = proveRow(row, deps);
+  assert.equal(r.pre.verdict, 'fire', JSON.stringify(r.reasons));
+  assert.equal(r.ok, true);
 });
 
 // ---- end to end: real git archive, real copy, real child process, real CLI --------------------------------------
