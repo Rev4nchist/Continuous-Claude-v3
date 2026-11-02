@@ -208,3 +208,41 @@ test('B20: a policy without a matrix block keeps the old rules (R5 recommends Co
   assert.equal(r.recommended, 'coderabbit');
   assert.ok(matchGlob('scripts/*.mjs', 'scripts/a.mjs'));
 });
+
+// ---------- CodeRabbit CLI findings on f5429ecb ----------
+
+const renamed = (n) => Array.from({ length: n }, (_, i) => ({ filename: `.claude/hooks/src/new${i}-guard.ts`, previous_filename: `.claude/hooks/src/old${i}-guard.ts`, additions: 5, deletions: 5 }));
+
+test('B21: three renamed gate files are G = 3 (ELEVATED), not 6: a rename is one changed file', () => {
+  const b = bandOf(renamed(3), LIVE);
+  assert.deepEqual([b.G, b.band], [3, 'ELEVATED']);
+  assert.deepEqual(b.gateFiles, renamed(3).map((f) => f.filename));
+});
+
+test('B22: a rename into or out of the control plane counts once (either name is a gate file)', () => {
+  assert.equal(bandOf([{ filename: GATE[0], previous_filename: 'scripts/old.mjs' }], LIVE).G, 1);
+  assert.equal(bandOf([{ filename: 'scripts/new.mjs', previous_filename: GATE[0] }], LIVE).G, 1);
+  assert.equal(bandOf([{ filename: 'scripts/new.mjs', previous_filename: 'scripts/old.mjs' }], LIVE).G, 0);
+  assert.equal(bandOf(['scripts/a.mjs', { filename: 'scripts/a.mjs' }], LIVE).K, 1, 'strings and objects mix; the same file counts once');
+});
+
+test('B23: the checkpoint recommends none for three renamed gate files', async () => {
+  const r = await recommendFor([], { files: renamed(3) });
+  assert.equal(r.band.G, 3);
+  assert.equal(r.band.band, 'ELEVATED');
+  assert.equal(r.recommended, 'none');
+});
+
+test('B24: decide() counts a rename once when the PR carries the file objects (the router passes them)', () => {
+  const files = renamed(3);
+  const paths = files.flatMap((f) => [f.filename, f.previous_filename]);
+  const d = decide('ready_for_review', { ...prOf(paths), files }, ['builder:claude'], null, LIVE, { now: new Date('2026-10-26T12:00:00Z') });
+  assert.equal(d.band.G, 3);
+  assert.equal(d.band.band, 'ELEVATED');
+});
+
+test('B25: a test-only PR that touches a config-glob test fixture is LOW (C ignores test files)', () => {
+  const b = bandOf(['.greptile/fixtures/sample.json', '.github/workflows/__tests__/x.test.yml'], LIVE);
+  assert.deepEqual([b.C, b.band], [0, 'LOW']);
+  assert.equal(bandOf(['.greptile/config.json'], LIVE).C, 1);
+});

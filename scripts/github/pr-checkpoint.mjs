@@ -356,7 +356,7 @@ function contextOf(facts, policy) {
   const budgetClass = classify(pathsOf(reviewable), policy).class;
   return {
     cls, matched, paths, credits, cli: facts.cli ?? null, dependabot: Boolean(facts.dependabot),
-    band: bandOf(paths, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
+    band: bandOf(facts.files, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
     size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: capacityOf(policy, facts.now),
   };
