@@ -3398,3 +3398,20 @@ test('FU-F: the place comes from the "Open the source location" link, not an ear
   assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }).findings, [{ id: FU_ID, location: FU_PLACE }]);
   assert.equal(odEval([odLive(body)], idList(`\`${FU_PLACE}\` fixed in abc1234`)).ready, true);
 });
+
+// CodeRabbit round 1 on PR 245 (2026-11-02), Major. Ways it can fail, one test each:
+//   an unmarked badged block followed by a marked one lends its source link to the marked finding -> FU-G
+test('FU-G: each Follow-up block owns its marker and its link; an unmarked block lends its place to nobody and still counts', () => {
+  const start = FU_242.indexOf('<details>\n<summary><sub>');
+  const block = FU_242.slice(start, FU_242.lastIndexOf('\n---'));
+  assert.ok(start > 0 && block.includes(FU_ID), 'the fixture block is found');
+  const first = block.replace(/<!-- cr-comment:v1:[0-9a-f]{24} -->/, '').replace('pre-pr.mjs#L405-L423', 'first.mjs#L10-L12');
+  assert.ok(!first.includes('cr-comment') && first.includes('first.mjs#L10-L12'));
+  const two = FU_242.replace(block, `${first}\n\n${block}`);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(two)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 1 });
+  const wrongPlace = odEval([odLive(two)], idList('`scripts/github/first.mjs:10-12` fixed in abc1234', 'filler: another bullet'));
+  assert.equal(wrongPlace.ready, false, 'the first block\'s place does not clear the marked finding');
+  assert.ok(reasonOf(wrongPlace).includes(FU_ID), reasonOf(wrongPlace));
+  assert.equal(odEval([odLive(two)], idList(`${FU_ID}: fixed in abc1234`)).ready, false, 'the unmarked block still needs its own bullet');
+  assert.equal(odEval([odLive(two)], idList(`${FU_ID}: fixed in abc1234`, 'scripts/github/first.mjs:10-12 fixed in abc1234')).ready, true);
+});

@@ -869,34 +869,39 @@ function outsideDiffFindings(body) {
 // link (`blob/<sha>/<path>#L<a>-L<b>`). The section ends at the next rule line (`---`) or heading.
 const FOLLOWUP_HEADING = /^(?:[^\w\n<]|<\/?(?:summary|details|strong)>)*Follow-up Comments\s*$/im;
 const FOLLOWUP_END = /^(?:---+|#{1,6}\s.*)\s*$/;
-const FOLLOWUP_BADGE = /alt="Outside diff"/gi;
+const FOLLOWUP_BADGE = /alt="Outside diff"/i;
 const FOLLOWUP_PLACE = /\[Open the source location\]\(<?https?:\/\/github\.com\/[^/\s)>]+\/[^/\s)>]+\/blob\/[^/\s)>]+\/([^)#\s>]+)#L(\d+)(?:-L(\d+))?>?\)/;
 
 /** `path:a-b` (or `path:a`) from the match of FOLLOWUP_PLACE. */
 const followUpPlace = (m) => `${decodeURIComponent(m[1])}:${m[3] && m[3] !== m[2] ? `${m[2]}-${m[3]}` : m[2]}`;
 
 /**
- * The Follow-up Comments section of one review body. Pure. { found: [{ id, location }], badges }: one finding per marker, its
- * place from the source link of the block it ends; badges counts the "Outside diff" badges, so a section whose markers are
- * missing still counts (the caller adds the shortfall to `unidentified`). { found: [], badges: 0 } with no such section.
+ * The Follow-up Comments section of one review body, one block per finding (a block starts at its "Outside diff" badge line). Pure.
+ * { found: [{ id, location }], unmarked }: a marker and the "Open the source location" link count only inside their own block, so
+ * a block without a marker lends its link to nobody. unmarked = the badged blocks with no marker (the caller adds them to
+ * `unidentified`: they need a bullet). A marker before the first badge is a finding too. No such section gives { found: [], unmarked: 0 }.
  */
 function followUpFindings(body) {
   const lines = String(body ?? '').split(/\r?\n/);
   const start = lines.findIndex((l) => FOLLOWUP_HEADING.test(l));
-  if (start < 0) return { found: [], badges: 0 };
+  if (start < 0) return { found: [], unmarked: 0 };
   const end = lines.findIndex((l, i) => i > start && FOLLOWUP_END.test(l));
-  const section = lines.slice(start + 1, end < 0 ? lines.length : end);
-  const found = [];
-  let block = '';
-  for (const line of section) {
-    block += `${line}\n`;
-    const marker = OUTSIDE_MARKER.exec(line);
-    if (!marker) continue;
-    const place = FOLLOWUP_PLACE.exec(block);
-    found.push({ id: marker[1].toLowerCase(), location: place ? followUpPlace(place) : null });
-    block = '';
+  const blocks = [];
+  for (const line of lines.slice(start + 1, end < 0 ? lines.length : end)) {
+    const badge = FOLLOWUP_BADGE.test(line);
+    if (blocks.length === 0 || badge) blocks.push({ badged: badge, text: [] });
+    blocks[blocks.length - 1].text.push(line);
   }
-  return { found, badges: (section.join('\n').match(FOLLOWUP_BADGE) ?? []).length };
+  const found = [];
+  let unmarked = 0;
+  for (const { badged, text } of blocks) {
+    const joined = text.join('\n');
+    const markers = [...joined.matchAll(new RegExp(OUTSIDE_MARKER.source, 'gi'))];
+    const place = FOLLOWUP_PLACE.exec(joined);
+    for (const m of markers) found.push({ id: m[1].toLowerCase(), location: place ? followUpPlace(place) : null });
+    if (badged && markers.length === 0) unmarked += 1;
+  }
+  return { found, unmarked };
 }
 
 /**
@@ -917,7 +922,7 @@ export function codeRabbitOutsideFindings({ reviews = [] }) {
     const found = m ? outsideDiffFindings(r.body) : [];
     const followUp = followUpFindings(r.body);
     for (const f of [...found, ...followUp.found]) if (!byId.has(f.id)) byId.set(f.id, f);
-    unidentified += (m ? Math.max(0, Number(m[1]) - found.length) : 0) + Math.max(0, followUp.badges - followUp.found.length);
+    unidentified += (m ? Math.max(0, Number(m[1]) - found.length) : 0) + followUp.unmarked;
   }
   return { findings: [...byId.values()], unidentified };
 }
