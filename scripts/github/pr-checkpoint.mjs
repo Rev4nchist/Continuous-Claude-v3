@@ -341,6 +341,17 @@ function waitWhy(c, picked) {
 
 // ---------- recommend ----------
 
+/**
+ * Fail closed: the PR labels could not be read (facts.labels is null), so a risk:high label may be hiding. Below HIGH that could
+ * turn a CRITICAL PR into `none`, so the checkpoint stops (recommended null, like R0). A HIGH or CRITICAL band by paths already
+ * recommends CodeRabbit whatever a label says, and a Dependabot PR gets none whatever its labels. facts.labels absent means a caller
+ * that supplies no labels (a fixture); only null means "tried and failed".
+ */
+function labelsProblem(c, facts) {
+  if (!c.band || facts.labels !== null || c.dependabot || ['HIGH', 'CRITICAL'].includes(c.band.band)) return null;
+  return 'Could not read the PR labels (gh pr view failed, or there is no PR for this branch). The band needs the risk:high label, so no pathway is recommended. Open the draft PR, check gh, and run /pathway again.';
+}
+
 function clockOf(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) throw new Error('facts.now must be an ISO time');
@@ -372,6 +383,8 @@ export function recommend(facts, policy) {
   const stop = stampProblem(facts);
   const notes = facts.notes ?? [];
   if (stop) return { ...base, why: [stop, ...notes] };
+  const unread = labelsProblem(c, facts);
+  if (unread) return { ...base, why: [unread, ...notes] };
   const picked = combine(hitsFor(c));
   const wait = waitWhy(c, picked);
   const options = orderFor(c, picked).map((p) => optionOf(c, picked, p));
@@ -434,12 +447,30 @@ function configDrift(base, configText) {
   try { return JSON.stringify(JSON.parse(r.stdout)) !== JSON.stringify(JSON.parse(configText)); } catch { return false; }
 }
 
+/** The label names of the PR on the current branch (one gh call), or null when they cannot be read. null makes the checkpoint stop below HIGH. */
+function readLabels() {
+  let branch;
+  try { branch = git(['branch', '--show-current']).trim(); } catch { return null; }
+  if (!branch) return null;
+  const r = ghRunner()(['pr', 'view', branch, '--json', 'labels', ...REPO_ARGS]);
+  if (r.status !== 0) return null;
+  try {
+    const labels = JSON.parse(r.stdout).labels;
+    return Array.isArray(labels) ? labels.map((l) => l?.name).filter((n) => typeof n === 'string') : null;
+  } catch { return null; }
+}
+
+const hasMatrix = (configText) => { try { return Boolean(JSON.parse(configText).matrix); } catch { return false; } };
+
 function gatherFacts(configText, stateDir) {
   const { ref: base, notes } = baseRef();
   const head = git(['rev-parse', 'HEAD']).trim();
   // Fallback only: the PR author is the authoritative source, and the mod passes it with --dependabot.
   const dependabot = isDependabotAuthors(git(['log', '--format=%ae', `${base}..HEAD`]));
-  return { head, now: new Date().toISOString(), stamp: readStamp(stateDir), files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), notes };
+  const stamp = readStamp(stateDir);
+  // The band needs the labels (risk:high). Read them only when a band is computed and the stamp lets the checkpoint go on.
+  const labels = hasMatrix(configText) && stamp ? { labels: readLabels() } : {};
+  return { head, now: new Date().toISOString(), stamp, files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), ...labels, notes };
 }
 
 // ---------- PR B: --confirm (record a pathway) and --apply (label, then ready) ----------

@@ -20,7 +20,9 @@
 //   a PR without a matrix block loses the old R2 to R5 rules                    -> B20
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bandOf, decide, ledgerLine, matchGlob } from './review-router.mjs';
@@ -245,4 +247,72 @@ test('B25: a test-only PR that touches a config-glob test fixture is LOW (C igno
   const b = bandOf(['.greptile/fixtures/sample.json', '.github/workflows/__tests__/x.test.yml'], LIVE);
   assert.deepEqual([b.C, b.band], [0, 'LOW']);
   assert.equal(bandOf(['.greptile/config.json'], LIVE).C, 1);
+});
+
+// ---------- CodeRabbit CLI finding on 368d905c: the live path reads the PR labels ----------
+
+test('B26: unreadable labels (facts.labels null) below HIGH stop the checkpoint: never none; HIGH and Dependabot are unaffected', async () => {
+  const stop = await recommendFor(['docs/guide.md'], { labels: null });
+  assert.equal(stop.recommended, null);
+  assert.deepEqual(stop.options, []);
+  assert.match(stop.why[0], /labels/i);
+  assert.equal((await recommendFor(GATE, { labels: null })).recommended, 'coderabbit', 'a path-HIGH PR cannot be lowered by a label');
+  assert.equal((await recommendFor(['docs/guide.md'], { labels: null, dependabot: true })).recommended, 'none');
+  assert.equal((await recommendFor(['docs/guide.md'], { labels: [] })).recommended, 'none', 'read, and no risk:high: none');
+});
+
+/** The live-facts path: a real git repo, a stamp, and a fake gh (env PR_CHECKPOINT_GH) that prints the PR labels or fails. */
+function liveCheckpoint({ labels, ghFails = false, file = 'docs/guide.md' }) {
+  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'band-live-')));
+  const git = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...a], { cwd: repo, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'one');
+  git('checkout', '-q', '-b', 'feat/x');
+  mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+  writeFileSync(path.join(repo, file), 'two\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'two');
+  const head = git('rev-parse', 'HEAD').stdout.trim();
+  mkdirSync(path.join(repo, '.claude', 'cache', 'pre-pr'), { recursive: true });
+  writeFileSync(path.join(repo, '.claude', 'cache', 'pre-pr', 'stamp.json'), JSON.stringify({ head, body_sha256: 'f'.repeat(64), results: [] }));
+  const cfg = path.join(repo, 'cfg.json');
+  writeFileSync(cfg, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null } }));
+  const script = path.join(repo, 'fake-gh.mjs');
+  const log = path.join(repo, 'gh-calls.jsonl');
+  writeFileSync(script, [
+    "import { appendFileSync } from 'node:fs';",
+    "appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');",
+    "if (process.env.FAKE_GH_FAIL) { process.stderr.write('gh: not found'); process.exit(1); }",
+    'process.stdout.write(process.env.FAKE_GH_VIEW);',
+  ].join('\n'));
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', cfg], {
+    cwd: repo, encoding: 'utf8',
+    env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify({ labels: (labels ?? []).map((name) => ({ name })) }), ...(ghFails ? { FAKE_GH_FAIL: '1' } : {}) },
+  });
+  const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null, calls };
+}
+
+test('B27: the live-facts path reads the PR labels: a risk:high docs-only PR is CRITICAL and coderabbit', () => {
+  const { r, out, calls } = liveCheckpoint({ labels: ['risk:high', 'builder:claude'] });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(out.band.band, 'CRITICAL');
+  assert.equal(out.recommended, 'coderabbit');
+  assert.deepEqual(calls, [['pr', 'view', 'feat/x', '--json', 'labels', '-R', 'Rev4nchist/Continuous-Claude-v3']]);
+});
+
+test('B28: the live-facts path with no risk:high label keeps a docs-only PR LOW and none', () => {
+  const { out } = liveCheckpoint({ labels: ['builder:claude'] });
+  assert.equal(out.band.band, 'LOW');
+  assert.equal(out.recommended, 'none');
+});
+
+test('B29: the live-facts path with unreadable labels (gh fails) stops: no recommendation, and never none', () => {
+  const { r, out } = liveCheckpoint({ labels: [], ghFails: true });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(out.recommended, null);
+  assert.deepEqual(out.options, []);
+  assert.match(out.why[0], /labels/i);
 });
