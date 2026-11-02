@@ -34,7 +34,7 @@
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -440,9 +440,38 @@ function defaultGh(args) {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8', env, timeout: 60_000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }));
 }
 
-/** Unpacks <work>/head.tar into <dir>. Relative names and cwd: an absolute C:\ path would read as host:path to GNU tar. */
-export function defaultExtract({ dir }) {
-  return spawnSync('tar', ['-xf', '../head.tar'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+/**
+ * Writes the files of commit `head` into `dir` with git itself, through a temp index in `work`: no tar, so the shell PATH cannot
+ * change how file names are read (Windows PowerShell finds bsdtar first, which mangles UTF-8 names). The repo's own index is untouched.
+ */
+export function defaultExtract({ dir, work, root, head }) {
+  const env = { ...process.env, GIT_INDEX_FILE: path.join(work, 'index') };
+  const git = (args) => spawnSync('git', args, { cwd: root, env, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const read = git(['read-tree', head]);
+  if (read.error || read.status !== 0) return read;
+  return git(['-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', 'checkout-index', '-a', '-f', `--prefix=${dir.replaceAll('\\', '/')}/`]);
+}
+
+/**
+ * True when `rel` (a git path, so always forward slashes) is one of TREE_EXCLUDES or sits under one. Matches whole path segments:
+ * "artifacts-extra" is not "artifacts". On win32 the match ignores case, as the file system does, so it agrees with the rmSync of the folder.
+ */
+export function isExcluded(rel, platform = process.platform) {
+  const fold = (x) => (platform === 'win32' ? x.toLowerCase() : x);
+  const p = fold(String(rel).replace(/^\.\//, ''));
+  return TREE_EXCLUDES.some((x) => p === fold(x) || p.startsWith(`${fold(x)}/`));
+}
+
+/** Changed paths between two commits, as git reports them with -z (no quoting), minus the folders left out of the tree. */
+function changedPaths(root, base, head, diffFilter) {
+  // --no-renames: a file moved into an excluded folder still lists its old path (as a delete) instead of one excluded rename.
+  const args = ['diff', '--name-only', '--no-renames', '-z', ...(diffFilter ? [`--diff-filter=${diffFilter}`] : []), base, head];
+  return gitOut(root, args).split('\0').filter(Boolean).filter((f) => !isExcluded(f));
+}
+
+/** A directory entry exists, even a symlink whose target does not (existsSync follows the link). */
+function entryExists(p) {
+  try { lstatSync(p); return true; } catch { return false; }
 }
 
 /**
@@ -480,16 +509,14 @@ export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = d
   const cleanup = () => { try { rmSync(work, { recursive: true, force: true }); } catch { /* best effort */ } };
   try {
     mkdirSync(dir);
-    gitOut(root, ['archive', '--format=tar', '-o', path.join(work, 'head.tar'), head]);
-    const tar = extract({ dir, work });
-    if (tar.error) throw new Error(`tar failed to start: ${tar.error.message}`);
-    // Any non-zero status is a failed prepare: a part-way unpack leaves a partial tree, and a review of it could answer clean.
-    if (tar.status !== 0) throw new Error(`tar failed (status ${tar.status}): ${(tar.stderr ?? '').trim()}`);
-    rmSync(path.join(work, 'head.tar'), { force: true });
+    const tar = extract({ dir, work, root, head });
+    if (tar.error) throw new Error(`tree checkout failed to start: ${tar.error.message}`);
+    // Any non-zero status is a failed prepare: a part-way checkout leaves a partial tree, and a review of it could answer clean.
+    if (tar.status !== 0) throw new Error(`tree checkout failed (status ${tar.status}): ${(tar.stderr ?? '').trim()}`);
     for (const x of TREE_EXCLUDES) rmSync(path.join(dir, x), { recursive: true, force: true });
-    writeFileSync(path.join(dir, 'PR.diff'), gitOut(root, ['diff', '--no-color', '--no-ext-diff', mergeBase, head]));
-    const files = gitOut(root, ['diff', '--name-only', mergeBase, head]).split(/\r?\n/).filter(Boolean);
-    const missing = gitOut(root, ['diff', '--name-only', '--diff-filter=ACMRT', mergeBase, head]).split(/\r?\n/).filter(Boolean).filter((f) => !existsSync(path.join(dir, f)));
+    writeFileSync(path.join(dir, 'PR.diff'), gitOut(root, ['diff', '--no-color', '--no-ext-diff', mergeBase, head, '--', '.', ...TREE_EXCLUDES.map((x) => `:(exclude)${x}`)]));
+    const files = changedPaths(root, mergeBase, head);
+    const missing = changedPaths(root, mergeBase, head, 'ACMRT').filter((f) => !entryExists(path.join(dir, f)));
     if (missing.length > 0) throw new Error(`the review tree is missing ${missing.length} changed file(s): ${missing.slice(0, 5).join(', ')}`);
     return { ref, base: mergeBase, head, dir, files, cleanup };
   } catch (err) {

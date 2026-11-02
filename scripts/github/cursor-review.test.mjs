@@ -3,20 +3,23 @@
 // The parser samples in fixtures/cursor-review/ are the raw JSON outputs of the 2026-11-01 Cursor runs (PR 217, 222, 225, 238).
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   BAND_MODEL, EXIT, MODEL_ALLOWLIST, PER_REF_CAP, WEEKLY_CAP, WEEK_MS,
-  buildAgentEnv, buildPrompt, countRuns, defaultExtract, finishRun, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
+  buildAgentEnv, buildPrompt, countRuns, defaultExtract, finishRun, isExcluded, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
   resolveAgent, resolveModel, runAgent, runReview,
 } from './cursor-review.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (n) => readFileSync(path.join(HERE, 'fixtures', 'cursor-review', `cursor-${n}.json`), 'utf8');
-const tmp = (label) => mkdtempSync(path.join(os.tmpdir(), `cursor-review-test-${label}-`));
+const madeDirs = [];
+const tmp = (label) => { const d = mkdtempSync(path.join(os.tmpdir(), `cursor-review-test-${label}-`)); madeDirs.push(d); return d; };
+// Remove only the folders this file made, so a run leaves nothing behind in %TEMP%.
+after(() => { for (const d of madeDirs) rmSync(d, { recursive: true, force: true }); });
 const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 const DAY = 86_400_000;
 
@@ -696,13 +699,13 @@ test('a PR whose gh reply has no base sha is refused', async () => {
   await assert.rejects(() => prepareReview({ root, input: { pr: 9 }, tmpRoot: tmp('trees'), gh: () => ({ head: { sha: head }, base: { ref: 'main' } }), repo: 'o/r' }), /base/i);
 });
 
-test('a tar that fails part-way is a failed prepare, even when it left files behind', async () => {
+test('an extract that fails part-way is a failed prepare, even when it left files behind', async () => {
   const { root, base, head } = gitRepo();
   const extract = ({ dir }) => { writeFileSync(path.join(dir, 'a.txt'), 'partial'); return { status: 1, stderr: 'Cannot create symlink: long path' }; };
-  await assert.rejects(() => prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees'), extract }), /tar failed.*long path/);
+  await assert.rejects(() => prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees'), extract }), /tree checkout failed.*long path/);
 });
 
-test('a changed file missing from the extracted tree fails the prepare, though tar said 0', async () => {
+test('a changed file missing from the extracted tree fails the prepare, though the extract said 0', async () => {
   const { root, base, head } = gitRepo();
   const extract = (spec) => { const r = defaultExtract(spec); rmSync(path.join(spec.dir, 'b.txt')); return r; };
   await assert.rejects(() => prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees'), extract }), /missing.*b\.txt/);
@@ -723,6 +726,133 @@ test('a file the diff deletes is not required in the tree', async () => {
   try {
     assert.deepEqual([...prep.files].sort(), ['gone.txt', 'stay.txt']);
     assert.equal(existsSync(path.join(prep.dir, 'gone.txt')), false);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+/** A repo with a base commit and a head commit that adds `headFiles` (path -> text). Returns { root, base, head }. */
+function repoWithHeadFiles(headFiles) {
+  const root = tmp('headfiles');
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.t'); git('config', 'user.name', 't'); git('config', 'core.autocrlf', 'false');
+  writeFileSync(path.join(root, 'base.txt'), 'base\n');
+  git('add', '-A'); git('commit', '-q', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+  for (const [name, text] of Object.entries(headFiles)) {
+    mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+    writeFileSync(path.join(root, name), text);
+  }
+  git('add', '-A'); git('commit', '-q', '-m', 'change');
+  return { root, base, head: git('rev-parse', 'HEAD') };
+}
+
+test('a PR that changes files under an excluded folder still prepares, and those files are not listed', async () => {
+  const { root, base, head } = repoWithHeadFiles({
+    'artifacts/x': 'x\n', 'thoughts/y.md': 'y\n', '.claudedocs/z.md': 'SECRET ANSWER z\n', '.claude/reviews/w.md': 'w\n', '.claude/cache/c.txt': 'c\n', 'src/real.txt': 'real\n',
+  });
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.deepEqual([...prep.files], ['src/real.txt']);
+    const diff = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
+    assert.match(diff, /src\/real\.txt/);
+    assert.doesNotMatch(diff, /SECRET ANSWER|artifacts|thoughts|claudedocs|reviews\/w/, 'PR.diff must not carry the excluded files');
+    assert.equal(existsSync(path.join(prep.dir, 'artifacts')), false);
+    assert.equal(existsSync(path.join(prep.dir, 'src', 'real.txt')), true);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+test('a folder that only shares a name prefix with an excluded one is not excluded', async () => {
+  const { root, base, head } = repoWithHeadFiles({ 'artifacts-extra/k.txt': 'k\n', '.claude/reviews-notes/n.txt': 'n\n' });
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.deepEqual([...prep.files].sort(), ['.claude/reviews-notes/n.txt', 'artifacts-extra/k.txt']);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+test('a changed file with a non-ASCII name is found in the tree (git paths are read without quoting)', async () => {
+  const { root, base, head } = repoWithHeadFiles({ 'café.txt': 'latte\n' });
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.deepEqual([...prep.files], ['café.txt']);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+test('a changed file whose tree path is over 260 characters is found in the tree (core.longpaths)', async () => {
+  const { root, base } = repoWithHeadFiles({ 'short.txt': 'x\n' });
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  // Stage the long path through the index only: the source checkout never writes it, so the repo needs no longpaths setting.
+  const longPath = `${'d'.repeat(60)}/${'e'.repeat(60)}/${'f'.repeat(60)}/${'g'.repeat(40)}.txt`;
+  const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: 'long\n', encoding: 'utf8' }).stdout.trim();
+  git('update-index', '--add', '--cacheinfo', `100644,${blob},${longPath}`);
+  git('commit', '-q', '-m', 'long path');
+  const head = git('rev-parse', 'HEAD');
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.ok(prep.files.includes(longPath));
+  } finally {
+    prep.cleanup();
+  }
+});
+
+test('isExcluded ignores letter case on win32 (NTFS) and keeps it on linux', () => {
+  assert.equal(isExcluded('Artifacts/x', 'win32'), true);
+  assert.equal(isExcluded('.CLAUDE/Cache/c.txt', 'win32'), true);
+  assert.equal(isExcluded('Artifacts/x', 'linux'), false);
+  assert.equal(isExcluded('artifacts/x', 'linux'), true);
+  assert.equal(isExcluded('Artifacts-extra/x', 'win32'), false);
+});
+
+test('a file renamed from a reviewed path into an excluded folder still lists the old path as removed', async () => {
+  const root = tmp('rename');
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.t'); git('config', 'user.name', 't'); git('config', 'core.autocrlf', 'false');
+  writeFileSync(path.join(root, 'old.txt'), 'some content that stays the same\n');
+  git('add', '-A'); git('commit', '-q', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+  mkdirSync(path.join(root, 'artifacts'));
+  git('mv', 'old.txt', 'artifacts/old.txt'); git('commit', '-q', '-m', 'move');
+  const head = git('rev-parse', 'HEAD');
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.deepEqual([...prep.files], ['old.txt']);
+    assert.equal(existsSync(path.join(prep.dir, 'old.txt')), false);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+test('a changed dangling symlink counts as present in the tree', async (t) => {
+  const { root, base, head } = repoWithHeadFiles({ 'real.txt': 'r\n' });
+  const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: 'no-such-target', encoding: 'utf8' }).stdout.trim();
+  assert.equal(spawnSync('git', ['update-index', '--add', '--cacheinfo', `120000,${blob},link`], { cwd: root }).status, 0);
+  assert.equal(spawnSync('git', ['commit', '-q', '-m', 'link'], { cwd: root }).status, 0);
+  const head2 = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+  // Windows may not create a symlink without a privilege; the stub creates the entry itself so the check is the same everywhere.
+  const extract = (spec) => {
+    const r = defaultExtract(spec);
+    if (!existsSync(path.join(spec.dir, 'real.txt'))) return r;
+    try { rmSync(path.join(spec.dir, 'link'), { force: true }); symlinkSync('no-such-target', path.join(spec.dir, 'link')); } catch { return { status: 'skip' }; }
+    return { status: 0 };
+  };
+  let prep;
+  try {
+    prep = await prepareReview({ root, input: { range: `${base}..${head2}` }, tmpRoot: tmp('trees'), extract });
+  } catch (err) {
+    if (/status skip/.test(String(err.message))) { t.skip('this machine cannot create symlinks'); return; }
+    throw err;
+  }
+  try {
+    assert.equal(lstatSync(path.join(prep.dir, 'link')).isSymbolicLink(), true);
+    assert.deepEqual([...prep.files].sort(), ['link', 'real.txt']);
   } finally {
     prep.cleanup();
   }
