@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { readIssueComments, newestCodeRabbitRound } from '../../review-status.mjs';
+import { readIssueComments, newestCodeRabbitRound, readBodyEdits, bodyEditsPageReader } from '../../review-status.mjs';
 
 const args = process.argv.slice(2);
 const pr = Number(args.find((a) => /^\d+$/.test(a)));
@@ -26,8 +26,9 @@ for (const side of ['head', 'base']) delete pull[side].repo;
 const head = pull.head.sha;
 const combined = gh([`${repoPath}/commits/${head}/status?per_page=100`]);
 const checkRuns = gh([`${repoPath}/commits/${head}/check-runs?per_page=100`]).check_runs;
-const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{oid author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){pageInfo{hasNextPage endCursor} nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{oid author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
 const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]).data.repository.pullRequest;
+if (g.reviewThreads.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
 const { comments, commentEdits } = readIssueComments(gh, owner, name, pr);
 const reviews = gh(['--paginate', '--slurp', `${repoPath}/pulls/${pr}/reviews?per_page=100`]).flat();
 const headCommit = g.commits.nodes[0]?.commit;
@@ -48,7 +49,7 @@ if (newest?.commit_id && (newest.id || newest.summaryOnly)) {
   };
 }
 const out = slim({
-  pull, combined, checkRuns, threads: g.reviewThreads.nodes, bodyEdits: g.userContentEdits.nodes, reviews, comments, commentEdits,
+  pull, combined, checkRuns, threads: g.reviewThreads.nodes, bodyEdits: readBodyEdits(g.userContentEdits, bodyEditsPageReader(gh, owner, name, pr)), reviews, comments, commentEdits,
   headCommittedAt: headCommit?.oid === head ? headCommit.committedDate : undefined, greptileAuto: true, commits, proofGate: false, carry,
 });
 const file = fileURLToPath(new URL(`./pr${pr}.json`, import.meta.url));

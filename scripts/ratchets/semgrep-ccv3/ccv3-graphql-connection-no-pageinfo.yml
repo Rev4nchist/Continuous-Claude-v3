@@ -1,0 +1,20 @@
+rules:
+  - id: ccv3-graphql-connection-no-pageinfo
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      A GraphQL connection read with first:N has no pageInfo or totalCount first in its selection. A second
+      page is lost with no signal. Ask for pageInfo{hasNextPage} first and fail closed when it is true.
+    paths:
+      include:
+        - "scripts/**/*.mjs"
+        - ".claude/plugins/ccv3-mods/hooks/**"
+        - ".claude/hooks/src/**"
+      exclude:
+        - "**/*.test.*"
+        - "**/__tests__/**"
+        - "**/archive/**"
+    pattern-regex: '\b\w+\([^)]*\bfirst:\s*\d+[^)]*\)\s*\{(?!\s*(?:pageInfo|totalCount)\b)'
+    metadata:
+      source: "PR 225 round 1 (Major #64), fix 74962d04"
+      scope: "Per connection, not per string. totalCount counts as a signal when the code compares it."

@@ -1,0 +1,24 @@
+rules:
+  - id: ccv3-handler-await-before-lock
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      A tool.call lock handler awaits a check before its lock function runs, outside any try. A throw goes to
+      .catch, and an outer hook can drop a .catch deny. Move the check inside the lock function's try.
+    paths:
+      include:
+        - ".claude/plugins/ccv3-mods/hooks/**"
+    patterns:
+      - pattern-inside: |
+          $ON('tool.call', $FILTER, async ($S, $E, $NEXT) => { ... }).catch($HANDLER)
+      # Only a .catch that can answer with a deny: an observer whose .catch just calls next drops nothing.
+      - metavariable-regex:
+          metavariable: $HANDLER
+          regex: '(?s).*\bdeny\b.*'
+      - pattern: |
+          if (await $CHECK(...)) return $NEXT(...);
+      - pattern-not-inside: |
+          try { ... } catch ($ERR) { ... }
+    metadata:
+      source: "PR 217 round 1 (Major #44), fix 1ec6ab3c"
+      scope: "Narrow on purpose: the #44 shape. Observer handlers whose .catch only calls next are out of scope."

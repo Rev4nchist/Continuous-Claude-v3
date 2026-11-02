@@ -450,12 +450,58 @@ export const UNAVAILABLE_TAIL = "Post one @greptileai comment to re-run it, or l
 const GREPTILE_EDITOR = 'greptile-apps';
 
 /**
+ * The PR body edits from a userContentEdits connection: its nodes when the page is the whole history, else null (no history,
+ * so untrusted). A history with more pages, or one that did not ask for pageInfo, may hide a person's edit past page 1.
+ */
+export function bodyEditsFrom(connection) {
+  return connection?.pageInfo?.hasNextPage === false && Array.isArray(connection.nodes) ? connection.nodes : null;
+}
+
+/** Body edits the main query asks for, and the size and number of the follow-up pages (BODY_EDITS_QUERY). */
+const BODY_EDITS_FIRST_PAGE = 20;
+const BODY_EDITS_PAGE_SIZE = 100;
+const MAX_BODY_EDIT_PAGES = 20;
+/** The most body edits readBodyEdits reads: the first page plus MAX_BODY_EDIT_PAGES full pages. A longer history is untrusted. */
+export const MAX_BODY_EDITS = BODY_EDITS_FIRST_PAGE + MAX_BODY_EDIT_PAGES * BODY_EDITS_PAGE_SIZE;
+
+/**
+ * The whole PR body edit history, newest first: `first` (the userContentEdits connection of the main query) plus every page
+ * `fetchPage(endCursor)` returns after it. GitHub returns userContentEdits newest first and `after` continues in that order,
+ * so appending keeps it. Returns null (untrusted) when a page is malformed, a cursor is missing or repeats, `fetchPage` throws,
+ * or the history needs more than `maxPages` follow-up pages: a partial history must never stand for the whole.
+ */
+export function readBodyEdits(first, fetchPage, maxPages = MAX_BODY_EDIT_PAGES) {
+  const edits = [];
+  const seen = new Set();
+  let page = first;
+  for (let fetched = 0; ; fetched += 1) {
+    if (typeof page?.pageInfo?.hasNextPage !== 'boolean' || !Array.isArray(page.nodes)) return null;
+    edits.push(...page.nodes);
+    if (!page.pageInfo.hasNextPage) return edits;
+    const cursor = page.pageInfo.endCursor;
+    if (fetched >= maxPages || typeof cursor !== 'string' || cursor === '' || seen.has(cursor)) return null;
+    seen.add(cursor);
+    try { page = fetchPage(cursor); } catch { return null; }
+  }
+}
+
+// One follow-up page of the PR body edit history. `$c` is the end cursor of the page before.
+const BODY_EDITS_QUERY = `query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){userContentEdits(first:${BODY_EDITS_PAGE_SIZE},after:$c){pageInfo{hasNextPage endCursor} nodes{editor{__typename login}}}}}}`;
+
+/** A fetchPage(cursor) for readBodyEdits: one BODY_EDITS_QUERY read through `gh(args)`, which returns parsed JSON. */
+export function bodyEditsPageReader(gh, owner, name, pr) {
+  return (cursor) => gh(['graphql', '-f', `query=${BODY_EDITS_QUERY}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`, '-f', `c=${cursor}`])
+    .data.repository.pullRequest.userContentEdits;
+}
+
+/**
  * Who last touched the PR body after Greptile. `edits` is GraphQL userContentEdits, newest first.
  * Returns null when Greptile's newest edit is followed only by app edits, else the login (or a
  * description) of the first non-app editor. Missing history is untrusted.
  */
 export function bodyEditedAfterGreptile(edits) {
-  if (!Array.isArray(edits)) return 'unknown (no edit history)';
+  // readBodyEdits gives null for a history it cannot read whole (D-b, Dave 11-01: NOT READY, with its cause named).
+  if (!Array.isArray(edits)) return `unknown (no edit history, or more than ${MAX_BODY_EDITS} PR body edits)`;
   const at = edits.findIndex((e) => e?.editor?.login === GREPTILE_EDITOR);
   if (at < 0) return 'unknown (no Greptile edit in the history read)';
   const later = edits.slice(0, at).find((e) => e?.editor?.__typename !== 'Bot');
@@ -1435,10 +1481,10 @@ function readLiveInputs() {
   const runsDoc = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/check-runs?per_page=100`]);
   const checkRuns = runsDoc.check_runs;
   if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
-  // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
+  // userContentEdits is newest first. The first 20 come with this query; a longer history is read page by page (readBodyEdits).
   // Comments are read apart, page by page (readIssueComments). More than 100 review threads is "cannot determine".
   // commits(last:1) is the head commit, for the CodeRabbit notice date.
-  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{oid author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){pageInfo{hasNextPage endCursor} nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{oid author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
   const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
   const prq = g.data.repository.pullRequest;
   const rt = prq.reviewThreads;
@@ -1463,7 +1509,7 @@ function readLiveInputs() {
     githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
   }));
   return {
-    pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
+    pull, combined, checkRuns, threads: rt.nodes, bodyEdits: readBodyEdits(prq.userContentEdits, bodyEditsPageReader(gh, owner, name, pr)), reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
     proofGate: PROOF_REPOS.has(repo.toLowerCase()),
   };
 }

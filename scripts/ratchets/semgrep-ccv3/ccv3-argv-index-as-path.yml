@@ -1,0 +1,46 @@
+rules:
+  - id: ccv3-argv-index-as-path
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A positional process.argv[N] value reaches a file call. A flag becomes the path. Parse argv with
+      util.parseArgs, or drop the flags first.
+    paths:
+      include:
+        - "scripts/**"
+      exclude:
+        - "**/archive/**"
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern: process.argv[$N]
+          - metavariable-comparison:
+              metavariable: $N
+              comparison: $N >= 2
+          # Only a script that also reads flags from process.argv. A script with positional arguments only has
+          # no flag that could become the path. (Forward probe at 5812f64b: 4 such scripts, 0 flag-parsing ones.)
+          - pattern-either:
+              - pattern-inside: |
+                  ...
+                  process.argv.includes(...)
+                  ...
+              - pattern-inside: |
+                  ...
+                  $V = process.argv.includes(...)
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (process.argv.includes(...)) $S
+                  ...
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FS.readFileSync($P, ...)
+              - pattern: $FS.writeFileSync($P, ...)
+              - pattern: $FS.copyFileSync($P, ...)
+              - pattern: readFileSync($P, ...)
+              - pattern: writeFileSync($P, ...)
+          - focus-metavariable: $P
+    metadata:
+      source: "PR 211 round 1 (Major #38), fix 574eb221"
+      scope: "process.argv.slice(2) is not a source: the flags are dropped by the caller's own filter."

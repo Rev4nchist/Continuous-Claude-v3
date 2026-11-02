@@ -13,17 +13,53 @@ import { redact } from './redact';
 
 const MAX_MESSAGE = 160;
 
-const WINDOWS_PATH = /(?:\b[A-Za-z]:[\\/]|\\\\)[^'"`<>|\r\n]*/g;
-const POSIX_HOME_PATH =
-  /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^'"`<>|\r\n]*/g;
+/** What may follow a quote that closes a quoted path or ends a path token. Any other next character means the quote is part of the path. */
+const QUOTE_CLOSES = String.raw`[\s.,;:!?)\]}'"\x60<>|]`;
+/**
+ * A quote inside a path: O'Brien, a"b. It belongs to the path when a path character follows it. A quote
+ * followed by white space, a sentence mark, a closing bracket, another quote, `<>|` or the end of the text
+ * ends the path instead. Before this rule "/home/alice/O'Brien/finance.txt" left "Brien/finance.txt".
+ */
+const PATH_QUOTE = String.raw`['"\x60](?!${QUOTE_CLOSES}|$)`;
+/** One character of a path that runs to the line end (error messages), and of a path that ends at white space (free text). */
+const LINE_CHAR = String.raw`(?:[^'"\x60<>|\r\n]|${PATH_QUOTE})*`;
+const TOKEN_CHAR = String.raw`(?:[^\s'"\x60<>|]|${PATH_QUOTE})*`;
+
+const WINDOWS_PATH = new RegExp(String.raw`(?:\b[A-Za-z]:[\\/]|\\\\)${LINE_CHAR}`, 'g');
+const POSIX_HOME_PATH = new RegExp(
+  String.raw`(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b${LINE_CHAR}`,
+  'g',
+);
+/** Home-relative forms in error messages: ~/x, $HOME/x, %USERPROFILE%\x. They carry file names even with no user name. */
+const HOME_REL_PATH = new RegExp(String.raw`(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/]${LINE_CHAR}`, 'g');
 const POSIX_DEEP_PATH = /(?<![\w:/.])(?:\/[\w.@~+-]+){2,}\/?/g;
+
+/**
+ * Words right after a scrubbed path that still hold a path separator ("Corp/layoffs.csv",
+ * "Last\My") are the rest of a path with spaces: absorb them. A plain word (or, to, today) has no
+ * separator, so the sentence around the path survives. A word that holds a link (scheme://, also
+ * inside a Markdown link) is not a path tail.
+ *
+ * A path that ends at a quote followed by white space ("/home/alice/Clients' Reports/x.txt") leaves
+ * `<path>'`: one optional quote between `<path>` and the white space is part of the match, so
+ * "Reports/x.txt" is absorbed as well. Over-scrubbing is on purpose: losing a word beats leaking a path.
+ */
+const PATH_TAIL = /<path>['"`]?((?:[ \t]+(?![^\s]*(?::\/\/|\]\())[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
+const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
+
+function absorbPathTail(text: string): string {
+  return text.replace(PATH_TAIL, (_all, tail: string) => `<path>${TRAILING_MARKS.exec(tail)?.[0] ?? ''}`);
+}
 
 /** Replace every absolute path in already redacted text with `<path>`. For error messages: greedy to the line end. */
 export function scrubPaths(text: string): string {
-  return text
-    .replace(WINDOWS_PATH, '<path>')
-    .replace(POSIX_HOME_PATH, '<path>')
-    .replace(POSIX_DEEP_PATH, '<path>');
+  return absorbPathTail(
+    text
+      .replace(WINDOWS_PATH, '<path>')
+      .replace(POSIX_HOME_PATH, '<path>')
+      .replace(HOME_REL_PATH, '<path>')
+      .replace(POSIX_DEEP_PATH, '<path>'),
+  );
 }
 
 /**
@@ -35,32 +71,28 @@ export function scrubPaths(text: string): string {
  * ("C:\Users\First Last", ending there) leaves "Last" visible. This is for free text Dave reads
  * (goal, ask, plan, decisions); error messages keep the greedy scrub.
  */
-const WINDOWS_PATH_TOKEN = /(?:\b[A-Za-z]:[\\/]|\\\\)[^\s'"`<>|]*/g;
-const POSIX_HOME_PATH_TOKEN =
-  /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^\s'"`<>|]*/g;
+const WINDOWS_PATH_TOKEN = new RegExp(String.raw`(?:\b[A-Za-z]:[\\/]|\\\\)${TOKEN_CHAR}`, 'g');
+const POSIX_HOME_PATH_TOKEN = new RegExp(
+  String.raw`(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b${TOKEN_CHAR}`,
+  'g',
+);
 /** Home-relative forms: ~/x, $HOME/x, %USERPROFILE%\x. They carry file names even with no user name. */
-const HOME_REL_TOKEN = /(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/][^\s'"`<>|]*/g;
-const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
+const HOME_REL_TOKEN = new RegExp(String.raw`(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/]${TOKEN_CHAR}`, 'g');
 const PATH_START =
   /(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\$HOME[\\/]|%USERPROFILE%[\\/]|\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b)/
     .source;
 /**
  * A whole quoted absolute path, spaces included: "C:\Users\First Last\x", '/home/a/Acme Corp/y'.
  * Each quote kind ends at its own closing quote, so another quote character may sit inside the
- * path: "/home/alice/O'Brien/x.txt".
+ * path: "/home/alice/O'Brien/x.txt". A quote of the same kind inside the path ("/home/a/a"b/x") closes
+ * it only when white space, a sentence mark or a closing bracket follows (QUOTE_CLOSES).
+ * The final quote meets the same condition. Without it the match could end at an inner quote:
+ * `"/home/alice/a"b/finance.txt` (no real closing quote) would leave "b/finance.txt". With no closing quote
+ * the quoted form does not match, and the token scrubbers take the path.
  */
-const QUOTED_PATH = new RegExp(
-  `"${PATH_START}[^"\\r\\n]*"|'${PATH_START}[^'\\r\\n]*'|\`${PATH_START}[^\`\\r\\n]*\``,
-  'g',
-);
-/**
- * Words right after a scrubbed path that still hold a path separator ("Corp/layoffs.csv",
- * "Last\My") are the rest of a path with spaces: absorb them. A plain word (or, to, today) has no
- * separator, so the sentence around the path survives. A word that holds a link (scheme://, also
- * inside a Markdown link) is not a path tail.
- */
-const PATH_TAIL = /<path>((?:[ \t]+(?![^\s]*:\/\/)[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
-
+const quotedPath = (quote: string): string =>
+  `${quote}${PATH_START}(?:[^${quote}\\r\\n]|${quote}(?!${QUOTE_CLOSES}|$))*${quote}(?=${QUOTE_CLOSES}|$)`;
+const QUOTED_PATH = new RegExp(['"', "'", '`'].map(quotedPath).join('|'), 'g');
 function pathToken(match: string): string {
   const tail = TRAILING_MARKS.exec(match);
   return `<path>${tail ? tail[0] : ''}`;
@@ -68,13 +100,14 @@ function pathToken(match: string): string {
 
 /** Replace every absolute path in already redacted free text with `<path>`, keeping the words around it. */
 export function scrubPathsInText(text: string): string {
-  return text
-    .replace(QUOTED_PATH, '<path>')
-    .replace(WINDOWS_PATH_TOKEN, pathToken)
-    .replace(POSIX_HOME_PATH_TOKEN, pathToken)
-    .replace(HOME_REL_TOKEN, pathToken)
-    .replace(POSIX_DEEP_PATH, pathToken)
-    .replace(PATH_TAIL, (_all, tail: string) => `<path>${TRAILING_MARKS.exec(tail)?.[0] ?? ''}`);
+  return absorbPathTail(
+    text
+      .replace(QUOTED_PATH, '<path>')
+      .replace(WINDOWS_PATH_TOKEN, pathToken)
+      .replace(POSIX_HOME_PATH_TOKEN, pathToken)
+      .replace(HOME_REL_TOKEN, pathToken)
+      .replace(POSIX_DEEP_PATH, pathToken),
+  );
 }
 
 /**
