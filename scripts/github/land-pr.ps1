@@ -23,8 +23,9 @@
      never used or switched: another session can switch it mid-sync.
   5. Clean up: copy the worktree's gitignored .claude/cache/e2e/ to <repo>\.claudedocs\e2e-pr<N>
      (a differing file already there is never overwritten), then remove the PR's worktree (clean
-     worktrees only; kept when the copy fails or conflicts; a node_modules junction is unlinked
-     first), delete the local branch with -d (merged-only), delete the remote branch on fork.
+     worktrees only; kept when the copy fails or conflicts; every junction and symlink in it is
+     unlinked first, and a link that cannot be unlinked keeps the worktree),
+     delete the local branch with -d (merged-only), delete the remote branch on fork.
   Every step is idempotent: re-running after a partial failure picks up where it stopped.
   -CleanupOnly skips steps 1-2 for a PR that is already merged.
 
@@ -53,6 +54,66 @@ $gitSafe = Join-Path $RepoPath 'scripts\git-safe.ps1'
 $done = [System.Collections.Generic.List[string]]::new()
 function Step($msg) { Write-Host "-> $msg" }
 function Fail($msg) { Write-Host "STOPPED: $msg" -ForegroundColor Red; if ($done.Count) { Write-Host "Done before stopping: $($done -join '; ')" }; exit 1 }
+
+# `git worktree remove` follows a junction or symlink inside the worktree and deletes the TARGET's
+# contents. On 2026-11-01 a gitignored node_modules junction (the worktree looked clean) to the
+# primary checkout's node_modules emptied it. Unlink every link first. Self-contained: it uses no
+# script-level variable and never throws. The walk never descends into a link, so a link inside a
+# link target is not touched. Only the link goes: DirectoryInfo.Delete() on a junction or directory
+# symlink calls RemoveDirectory, which leaves the target alone; a file symlink is deleted as a file.
+#   -SkipPaths  full paths of links to leave alone: TRACKED symlinks. Git removes a tracked symlink as
+#               a file and never follows it; unlinking it here would leave git a tracked deletion,
+#               and `git worktree remove` would then refuse.
+#   -Delete     the unlink, called with the FileSystemInfo. Default: its Delete(). A test passes one
+#               that throws, because an unremovable link cannot be made reliably (Windows ignores
+#               FILE_ATTRIBUTE_READONLY on directories).
+function Remove-WorktreeLinks([string]$Path, [string[]]$SkipPaths = @(), [scriptblock]$Delete = { param($info) $info.Delete() }) {
+  $removed = [System.Collections.Generic.List[string]]::new(); $remaining = [System.Collections.Generic.List[string]]::new(); $errors = [System.Collections.Generic.List[string]]::new()
+  try {
+    $stack = [System.Collections.Generic.Stack[string]]::new()
+    $stack.Push([System.IO.Path]::GetFullPath($Path))
+    $links = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
+    $skip = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($sp in $SkipPaths) { if ($sp) { [void]$skip.Add([System.IO.Path]::GetFullPath($sp)) } }
+    while ($stack.Count) {
+      $dir = $stack.Pop()
+      try {
+        foreach ($e in [System.IO.DirectoryInfo]::new($dir).EnumerateFileSystemInfos()) {
+          if ($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { if (-not $skip.Contains($e.FullName)) { $links.Add($e) } }
+          elseif ($e -is [System.IO.DirectoryInfo]) { $stack.Push($e.FullName) }
+        }
+      } catch { $errors.Add("${dir}: $($_.Exception.Message)") }
+    }
+    foreach ($l in $links) {
+      try {
+        & $Delete $l
+        $l.Refresh()
+        if ($l.Exists) { $remaining.Add($l.FullName) } else { $removed.Add($l.FullName) }
+      } catch { $remaining.Add($l.FullName); $errors.Add("$($l.FullName): $($_.Exception.Message)") }
+    }
+  } catch { $errors.Add($_.Exception.Message) }
+  [pscustomobject]@{
+    Removed   = [string[]]$removed.ToArray()
+    Remaining = [string[]]$remaining.ToArray()
+    Error     = if ($errors.Count) { $errors -join '; ' } else { $null }
+  }
+}
+
+# Full paths of the tracked symlinks (mode 120000) in a worktree. Git removes these itself.
+# Self-contained, never throws; Error is set when git cannot answer, and the caller keeps the worktree.
+function Get-TrackedSymlinkPaths([string]$Worktree) {
+  $paths = [System.Collections.Generic.List[string]]::new(); $err = $null
+  try {
+    $raw = (git -C $Worktree ls-files -s -z 2>$null) -join ''
+    if ($LASTEXITCODE) { $err = "git ls-files exited $LASTEXITCODE" }
+    else {
+      foreach ($rec in ($raw -split "`0")) {
+        if ($rec -match '^120000 [0-9a-f]+ \d\t(.+)$') { $paths.Add([System.IO.Path]::GetFullPath((Join-Path $Worktree $Matches[1]))) }
+      }
+    }
+  } catch { $err = $_.Exception.Message }
+  [pscustomobject]@{ Paths = [string[]]$paths.ToArray(); Error = $err }
+}
 
 # Git Bash, never `bash` on PATH (WSL on these machines). Per-user and machine-wide installs differ.
 $bashCandidates = @($env:CLAUDE_CODE_GIT_BASH_PATH)
@@ -173,18 +234,26 @@ if (-not $NoSync) {
     }
     finally {
       if ($wtOk -or (Test-Path $syncWt)) {
-        git -C $RepoPath worktree remove --force $syncWt 2>&1 | Out-Null
-        if (Test-Path $syncWt) {
-          # git can drop the registration and leave the directory. Delete it only when git no longer
-          # lists it AND it is provably our own temp directory.
-          $listed = @(git -C $RepoPath worktree list --porcelain | Where-Object { $_ -like 'worktree *' } |
-            ForEach-Object { Split-Path $_.Substring(9) -Leaf }) -contains $syncLeaf
-          $full = [System.IO.Path]::GetFullPath($syncWt)
-          $tmpRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
-          $ownsIt = $full.StartsWith($tmpRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path $full -Leaf).StartsWith('land-pr-sync-')
-          if (-not $listed -and $ownsIt) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
+        # The sync script makes no link here, but --force deletes through one, so unlink first.
+        # A link that stays keeps the temp worktree: no removal and no --force hint.
+        $syncLinks = if (Test-Path -LiteralPath $syncWt) { Remove-WorktreeLinks -Path $syncWt } else { $null }
+        if ($syncLinks -and ($syncLinks.Remaining.Count -or $syncLinks.Error)) {
+          $syncNamed = if ($syncLinks.Remaining.Count) { $syncLinks.Remaining -join ', ' } else { $syncLinks.Error }
+          Write-Host "  kept temp worktree $syncWt`: link not removed ($syncNamed)"
+        } else {
+          git -C $RepoPath worktree remove --force $syncWt 2>&1 | Out-Null
+          if (Test-Path $syncWt) {
+            # git can drop the registration and leave the directory. Delete it only when git no longer
+            # lists it AND it is provably our own temp directory.
+            $listed = @(git -C $RepoPath worktree list --porcelain | Where-Object { $_ -like 'worktree *' } |
+              ForEach-Object { Split-Path $_.Substring(9) -Leaf }) -contains $syncLeaf
+            $full = [System.IO.Path]::GetFullPath($syncWt)
+            $tmpRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+            $ownsIt = $full.StartsWith($tmpRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path $full -Leaf).StartsWith('land-pr-sync-')
+            if (-not $listed -and $ownsIt) { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue }
+          }
+          if (Test-Path $syncWt) { Write-Host "  could not remove temp worktree $syncWt; run: git -C $RepoPath worktree remove --force $syncWt" }
         }
-        if (Test-Path $syncWt) { Write-Host "  could not remove temp worktree $syncWt; run: git -C $RepoPath worktree remove --force $syncWt" }
       }
     }
 }
@@ -228,6 +297,14 @@ $wtPath = $null
 for ($i = 0; $i -lt $wtLines.Count; $i++) {
   if ($wtLines[$i] -eq "branch refs/heads/$branch") { $wtPath = ($wtLines[$i - 2] -replace '^worktree ', '') }
 }
+# The first porcelain entry is the primary checkout. Never walk or remove it: its tree holds the
+# junctions of other sessions' worktrees (.claude\worktrees\*), and git cannot remove a main worktree.
+$mainWt = @($wtLines | Where-Object { $_ -like 'worktree *' } | Select-Object -First 1)
+$normWt = { param($p) [IO.Path]::GetFullPath(($p -replace '^worktree ', '')).TrimEnd('\', '/') }
+if ($wtPath -and $mainWt.Count -and ((& $normWt $wtPath) -ieq (& $normWt $mainWt[0]))) {
+  Write-Host "  kept primary checkout $wtPath (it is on $branch; no link cleanup, no removal)"
+  $wtPath = $null
+}
 if ($wtPath) {
   $dirty = git -C $wtPath status --porcelain 2>$null
   if ($LASTEXITCODE -or $dirty) {
@@ -246,10 +323,22 @@ if ($wtPath) {
     if ($saveProblem) {
       Write-Host "  kept worktree $wtPath`: e2e artifacts not saved ($saveProblem)"
     } else {
-      $junction = Join-Path $wtPath '.claude\hooks\node_modules'
-      if ((Test-Path $junction) -and (Get-Item $junction -Force).LinkType -eq 'Junction') { [System.IO.Directory]::Delete($junction, $false) }
-      git -C $RepoPath worktree remove $wtPath 2>&1 | Out-Host
-      if ($LASTEXITCODE -eq 0) { $done.Add("removed worktree $wtPath") } else { Write-Host "  could not remove worktree $wtPath" }
+      # Unlink every junction and symlink first; git would delete through them (see Remove-WorktreeLinks).
+      # Tracked symlinks are left to git (it removes them as files). LAND_PR_TEST_FAIL_UNLINK is
+      # TEST-ONLY: when set, every unlink fails, so a test can reach the "link not removed" branch.
+      $tracked = Get-TrackedSymlinkPaths -Worktree $wtPath
+      $failUnlink = { param($info) throw 'unlink failure injected by LAND_PR_TEST_FAIL_UNLINK' }
+      $links = if ($tracked.Error) { [pscustomobject]@{ Removed = @(); Remaining = @(); Error = "cannot list tracked symlinks: $($tracked.Error)" } }
+        elseif ($env:LAND_PR_TEST_FAIL_UNLINK) { Remove-WorktreeLinks -Path $wtPath -SkipPaths $tracked.Paths -Delete $failUnlink }
+        else { Remove-WorktreeLinks -Path $wtPath -SkipPaths $tracked.Paths }
+      if ($links.Remaining.Count -or $links.Error) {
+        $named = if ($links.Remaining.Count) { $links.Remaining -join ', ' } else { $links.Error }
+        Write-Host "  kept worktree $wtPath`: link not removed ($named)"
+      } else {
+        if ($links.Removed.Count) { $done.Add("unlinked $($links.Removed.Count) link(s) in the worktree") }
+        git -C $RepoPath worktree remove $wtPath 2>&1 | Out-Host
+        if ($LASTEXITCODE -eq 0) { $done.Add("removed worktree $wtPath") } else { Write-Host "  could not remove worktree $wtPath" }
+      }
     }
   }
 }

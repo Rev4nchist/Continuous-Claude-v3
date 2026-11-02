@@ -690,6 +690,9 @@ test.describe('ask rules', () => {
         ask: [ask('E2E older ask')],
         updatedAt: secondsAgo(HOUR),
       }),
+      // The ask age is max(brief.updatedAt, snapshot.at). Without an old `at` both ages are 0
+      // and the order falls to the session id, which is random.
+      at: secondsAgo(HOUR),
     });
 
     const snapshot = await loadSnapshot(request);

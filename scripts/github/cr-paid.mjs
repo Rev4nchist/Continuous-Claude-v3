@@ -82,7 +82,7 @@ export function recordPaid({ pr, head, files }, deps) {
   if (!/^[0-9a-f]{7,40}$/i.test(String(head))) throw new Error('--head must be a commit sha');
   if (!Number.isInteger(files) || files < 0) throw new Error('--files must be a whole number, 0 or more');
   const now = d.now();
-  const row = { ts: now.toISOString(), date: chicagoDay(now), pr, head: String(head).toLowerCase(), files, cost: (files * CENTS_PER_FILE) / 100, session: d.env.CLAUDE_SESSION_ID || 'unknown' };
+  const row = { ts: now.toISOString(), date: chicagoDay(now), pr, head: String(head).toLowerCase(), files, cost: (files * CENTS_PER_FILE) / 100, session: d.env.CLAUDE_CODE_SESSION_ID || d.env.CLAUDE_SESSION_ID || 'unknown' };
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
   appendFileSync(d.ledgerPath, `${JSON.stringify(row)}\n`);
   return row;

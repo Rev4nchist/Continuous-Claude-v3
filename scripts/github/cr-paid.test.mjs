@@ -195,6 +195,15 @@ test('CP13: record appends one parseable line with ts, Chicago date, pr, head, f
   h.done();
 });
 
+// Live ledger rows said "unknown": Claude Code sets CLAUDE_CODE_SESSION_ID (lane.mjs reads it), not CLAUDE_SESSION_ID.
+test('CP13b: record writes the Claude Code session id from CLAUDE_CODE_SESSION_ID; it wins over CLAUDE_SESSION_ID', () => {
+  const h = harness({ env: { CLAUDE_CODE_SESSION_ID: 'real-sess' } });
+  assert.equal(PAID.recordPaid({ pr: 225, head: HEAD, files: 1 }, h.deps).session, 'real-sess');
+  assert.equal(PAID.recordPaid({ pr: 225, head: HEAD, files: 1 }, { ...h.deps, env: { CLAUDE_CODE_SESSION_ID: 'a', CLAUDE_SESSION_ID: 'b' } }).session, 'a');
+  assert.equal(PAID.recordPaid({ pr: 225, head: HEAD, files: 1 }, { ...h.deps, env: { CLAUDE_CODE_SESSION_ID: '' } }).session, 'unknown');
+  h.done();
+});
+
 test('CP14: a recorded round counts in the next check and in today', async () => {
   const h = harness({ prFiles: files(20) });
   PAID.recordPaid({ pr: 225, head: HEAD, files: 20 }, h.deps);

@@ -96,27 +96,35 @@ export function MissionControl({
   // screen-reader user would otherwise stay on the card they pressed. A load with ?session= or a poll
   // does not move focus: only a choice does.
   const detailRef = useRef<HTMLDivElement>(null);
-  const pendingFocus = useRef(false);
+  // A counter, not a flag: choosing the open session changes no other state, and a flag alone
+  // would cause no render and no effect run.
+  const [focusRequest, setFocusRequest] = useState(0);
+  const handledFocus = useRef(0);
   const panelState = detail !== null ? 'detail' : unavailable !== null ? 'unavailable' : 'loading';
   useEffect(() => {
-    if (!pendingFocus.current || selected === null || panelState === 'loading') return;
+    if (focusRequest === handledFocus.current || selected === null || panelState === 'loading') return;
+    // The request ends here, with or without a heading: the "not available" panel has none, and a
+    // later poll that turns it into the detail must not move focus.
+    handledFocus.current = focusRequest;
     const area = detailRef.current;
     const heading = area?.querySelector('h2');
     if (!area || !heading) return;
-    pendingFocus.current = false;
     heading.tabIndex = -1;
     heading.focus({ preventScroll: true });
     // The whole detail scrolls to the top of the screen, not only its heading.
     const { top, bottom } = heading.getBoundingClientRect();
     if (top < 0 || bottom > window.innerHeight) area.scrollIntoView({ block: 'start' });
-  }, [selected, panelState]);
+  }, [focusRequest, selected, panelState]);
 
   const changeView = (next: ViewId) => {
+    handledFocus.current = focusRequest; // a tab switch is not a choice: drop a pending request
     setView(next);
     mirrorUrl(next, selected);
   };
   const choose = (id: string | null, nextView: ViewId = view) => {
-    pendingFocus.current = id !== null;
+    // A close drops a pending request.
+    if (id !== null) setFocusRequest((n) => n + 1);
+    else handledFocus.current = focusRequest;
     setSelected(id);
     setView(nextView);
     mirrorUrl(nextView, id);

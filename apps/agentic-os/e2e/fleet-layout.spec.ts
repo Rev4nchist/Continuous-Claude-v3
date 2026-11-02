@@ -145,6 +145,30 @@ test.describe('layout at every width', () => {
     expect(Math.abs(live.x - unmatched.x)).toBeLessThan(2);
   });
 
+  test('pressing the Ready item of the open session moves focus into the detail', async ({
+    page,
+    request,
+  }) => {
+    const id = await liveId(request);
+    writeFixture(id);
+    await page.goto(`/?session=${id}`);
+    await waitForHydration(page);
+
+    const detail = page.getByTestId('session-detail');
+    await expect(detail).toBeVisible();
+    const hasFocus = () => detail.evaluate((el) => el.contains(document.activeElement));
+    // A load with ?session= does not move focus. Without this line a focus-on-load change
+    // would make the test pass for the wrong reason.
+    expect(await hasFocus()).toBe(false);
+
+    // The session is already selected, so the selection state does not change.
+    await page
+      .locator(`[data-testid="ready-item"][data-session-id="${id}"]`)
+      .getByRole('button')
+      .click();
+    await expect.poll(hasFocus).toBe(true);
+  });
+
   test('the mono face is applied to the page and the JetBrains Mono file is loaded', async ({
     page,
   }) => {
@@ -395,6 +419,24 @@ test.describe('layout at 390 px', () => {
     const rect = await box(detail, 'the session detail');
     expect(rect.y, 'the detail top is inside the screen').toBeGreaterThanOrEqual(0);
     expect(rect.y, 'the detail top is inside the screen').toBeLessThan(844);
+  });
+
+  test('a poll that turns an unavailable panel into the detail does not move focus', async ({ page, request }) => {
+    const id = await liveId(request);
+    // No state file yet: the choice opens the "not available" panel, which has no heading.
+    await page.goto('/');
+    await waitForHydration(page);
+    const card = page.locator(`[data-testid="session-card"][data-session-id="${id}"]`);
+    await card.getByRole('button').first().click();
+    await expect(page.getByTestId('detail-unavailable')).toHaveAttribute('data-reason', 'no state file');
+    // The state file appears. The next poll (every 5 s) renders the detail with no user action.
+    writeFixture(id);
+    const detail = page.getByTestId('session-detail');
+    await expect(detail).toBeVisible({ timeout: 20_000 });
+    // Let the effects of that render run, then check that nothing moved focus into the detail.
+    await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+    await page.waitForTimeout(500);
+    expect(await detail.evaluate((el) => el.contains(document.activeElement)), 'focus moved into the detail on a poll').toBe(false);
   });
 
   test('the small controls are at least 24 px tall and wide', async ({ page, request }) => {

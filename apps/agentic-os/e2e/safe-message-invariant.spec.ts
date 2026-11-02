@@ -126,6 +126,10 @@ const SENTENCES: [string, string][] = [
   ['See /home/alice/file.txt [proof](docs/proof.md).', 'See <path> [proof](docs/proof.md).'],
   // A word with no separator after a closed quoted path is not part of it.
   ["Keep '/home/a/x' and more", 'Keep <path> and more'],
+  // A quote of any kind followed by a space may sit inside the path, so the next word with a separator is absorbed
+  // (CodeRabbit #244). The cost, on purpose: "and/or" after a closed quoted path is lost too.
+  ['Use "/home/alice/Clients" Reports/finance.txt"', 'Use <path>"'],
+  ['Use "/tmp/report" and/or continue', 'Use <path> continue'],
 ];
 
 /** The same shapes through safeMessage (the greedy scrub for error messages). */

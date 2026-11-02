@@ -85,9 +85,9 @@ test('S1: every node script and cwd named in the surface table exists', async ()
   }
 });
 
-test('S2: hooks source runs the build with a dist check, vitest and the always gate', async () => {
+test('S2: hooks source runs the build with a dist check, vitest, the Semgrep pack and the always gate', async () => {
   const got = gatesFor(['.claude/hooks/src/pre-pr-gate.ts'], REPO_ROOT);
-  assert.deepEqual(ids(got).sort(), ['context-budget', 'hooks-build', 'hooks-vitest']);
+  assert.deepEqual(ids(got).sort(), ['context-budget', 'hooks-build', 'hooks-vitest', 'semgrep-ccv3']);
   const build = got.find((g) => g.id === 'hooks-build');
   assert.ok(build.postCheck.argv.every((a) => a.includes('.claude/hooks/dist')));
   assert.deepEqual(build.postCheck.argv.map((a) => a[0]), ['diff', 'ls-files'], 'content changes and new files; never git status');
@@ -172,6 +172,68 @@ test('S10: config, registry and always-loaded files get a NOTE row; rules, skill
   for (const p of ['.claude/rules-ondemand/x.md', '.claude/rules-src/x.md', '.claude/skills/tdd/SKILL.md', '.claude/agents/kraken.md']) {
     assert.match(notesFor([p], CONFIG).map((n) => n.detail).join(' '), /claude -p/, p);
   }
+});
+
+// ---------- PR B gates: Semgrep pack, scrubber grid, checks helpers ----------
+
+test('GW1: a change to the scrubber source runs the scrub-invariant gate on the pure Playwright config', async () => {
+  for (const p of ['apps/agentic-os/src/server/sources/safe-message.ts', 'apps/agentic-os/e2e/safe-message-invariant.spec.ts', 'apps/agentic-os/playwright.pure.config.ts']) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'scrub-invariant');
+    assert.ok(g, p);
+    assert.equal(g.cmd, 'node');
+    assert.deepEqual(g.args, ['node_modules/@playwright/test/cli.js', 'test', '--config', 'apps/agentic-os/playwright.pure.config.ts', '--reporter=line']);
+    assert.ok(existsSync(path.join(REPO_ROOT, g.args[3])), 'the pure config named by the gate exists');
+  }
+});
+
+test('GW2: a script or hook change runs the semgrep-ccv3 gate', async () => {
+  for (const p of ['scripts/github/review-status.mjs', '.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts', '.claude/hooks/src/pre-pr-gate.ts']) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'semgrep-ccv3');
+    assert.ok(g, p);
+    assert.deepEqual(g.args, ['scripts/ratchets/semgrep-ccv3.mjs']);
+    assert.equal(g.acceptExit, undefined, 'no accepted non-zero exit: Docker down must FAIL');
+  }
+});
+
+test('GW3: a docs-only change does not need Docker, so it holds no semgrep-ccv3 gate', async () => {
+  assert.equal(ids(gatesFor(['docs/x.md'], REPO_ROOT)).includes('semgrep-ccv3'), false);
+  assert.equal(ALWAYS_GATES.some((g) => g.id === 'semgrep-ccv3'), false);
+});
+
+test('GW7: a Markdown-only change under scripts/ or a hook folder needs no Docker; code and rule files still run semgrep-ccv3', async () => {
+  for (const p of ['scripts/github/README.md', '.claude/hooks/src/NOTES.md', '.claude/plugins/ccv3-mods/hooks/pr-loop/README.md']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('semgrep-ccv3'), false, p);
+  }
+  for (const p of ['scripts/x.mjs', 'scripts/a/b.js', 'scripts/a/b.ts', 'scripts/ratchets/semgrep-ccv3/ccv3-new-rule.yml', '.claude/hooks/src/a.ts', '.claude/plugins/ccv3-mods/hooks/pr-loop/index.tsx']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('semgrep-ccv3'), true, p);
+  }
+});
+
+test('GW4: a change under scripts/checks runs the checks helper tests, and the files named exist', async () => {
+  const g = gatesFor(['scripts/checks/proofs.json'], REPO_ROOT).find((x) => x.id === 'checks-tests');
+  assert.ok(g);
+  assert.deepEqual(g.args, ['--test', 'scripts/checks/prove-check.test.mjs', 'scripts/checks/state-table.test.mjs']);
+  for (const a of g.args.slice(1)) assert.ok(existsSync(path.join(REPO_ROOT, a)), a);
+});
+
+test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {
+  const gate = SURFACES.flatMap((s) => s.gates ?? []).find((g) => g.id === 'semgrep-ccv3');
+  const saved = process.env.DOCKER_BIN;
+  process.env.DOCKER_BIN = path.join(os.tmpdir(), 'no-such-docker-binary');
+  try {
+    const r = runGate({ ...gate, timeoutMs: 60_000 }, { root: REPO_ROOT, exec: PRE.defaultExec, git: () => ({ status: 0, stdout: '', stderr: '' }) });
+    assert.equal(r.status, 'FAIL');
+    assert.match(r.detail, /Docker Desktop/);
+  } finally {
+    if (saved === undefined) delete process.env.DOCKER_BIN;
+    else process.env.DOCKER_BIN = saved;
+  }
+});
+
+test('GW6: the ccv3-checks workflow is owned by a surface, so pre-pr does not report it as unowned', async () => {
+  const p = '.github/workflows/ccv3-checks.yml';
+  assert.equal(notesFor([p], CONFIG).some((n) => n.step.startsWith('unowned:')), false);
+  assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('ratchets-tests'), 'the ratchets tests read the Semgrep digest in this file (SG2)');
 });
 
 // ---------- summaryLine ----------

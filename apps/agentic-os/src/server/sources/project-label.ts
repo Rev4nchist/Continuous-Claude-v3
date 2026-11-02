@@ -12,7 +12,8 @@ const MAX_HOME_DEPTH = 4;
  *  the path has at most four parts, so `/home/x/projects/home/site` stays `site`. A drive root has
  *  no folder name. */
 export function projectLabel(raw: string): string {
-  const parts = raw.split(/[\\/]/).filter((part) => part !== '');
+  // Invisible characters go first, so one inside `Users`, `UNC` or a drive cannot defeat a check.
+  const parts = stripControl(raw).split(/[\\/]/).filter((part) => part !== '');
   // Extended prefixes: `\\?\C:\x` and `\\?\UNC\server\share\x` name the same paths without them.
   if (parts[0] === '?') parts.shift();
   if (parts[0]?.toUpperCase() === 'UNC') parts.shift();
@@ -21,6 +22,6 @@ export function projectLabel(raw: string): string {
   if (underHomeRoot) return '~';
   const last = parts.pop() ?? '';
   if (/^[A-Za-z]:$/.test(last) || last === '?') return 'unknown';
-  const leaf = scrubPathsInText(redact(stripControl(last)).text);
+  const leaf = scrubPathsInText(redact(last).text);
   return leaf === '' ? 'unknown' : leaf.slice(0, MAX_PROJECT_LABEL);
 }
