@@ -98,6 +98,45 @@ export function classify(paths, config) {
   return { class: top ?? 'normal', matched };
 }
 
+// ---------- review band (.claudedocs/2026-11-01-review-matrix.md sections 2.1 to 2.3, option A) ----------
+
+const anyGlob = (globs = []) => { const res = globs.map(globToRegExp); return (p) => res.some((re) => re.test(p)); };
+
+/**
+ * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, gateFiles, securityTier } | null
+ *   files: path strings or { filename, previous_filename? } objects. A rename is ONE changed file with two names: it counts once,
+ *   and a gate / config / logic test looks at both names (a rename into or out of the control plane counts).
+ *   G gate files: non-test files on matrix.control_plane, any extension. C: a non-test review, merge or reviewer config file changed.
+ *   K: one logic file outside dist/ and test files. L: a risk:high label or an r3 path (forces CRITICAL). r: confirmed internal Majors, already
+ *   weighted (+7 each); nothing posts that record yet, so callers pass 0. Score S = gate score + 3C + K + r. No matrix block: null.
+ * Left out on purpose: H (needs both versions of settings.json.template), the split guard (reads other PRs) and the ratchet (needs saved state).
+ */
+export function bandOf(files, config, { labels = [], r = 0 } = {}) {
+  const m = config?.matrix;
+  if (!m) return null;
+  const seen = new Map();
+  for (const f of files ?? []) {
+    const names = (typeof f === 'string' ? [f] : [f?.filename, f?.previous_filename]).filter(Boolean).map(normalizePath);
+    if (names.length && !seen.has(names[0])) seen.set(names[0], names);
+  }
+  const entries = [...seen.values()];
+  const isTest = (p) => m.test_markers.some((t) => `/${p}`.includes(t));
+  const isLogic = (p) => !`/${p}`.includes('/dist/') && m.logic_ext.includes(path.posix.extname(p).slice(1));
+  // The name that makes an entry count: the first non-test name that passes `match`.
+  const hit = (names, match) => names.find((p) => !isTest(p) && match(p));
+  const inPlane = anyGlob(m.control_plane);
+  const gateFiles = entries.map((names) => hit(names, inPlane)).filter(Boolean);
+  const securityTier = gateFiles.filter(anyGlob(m.security_tier));
+  const G = gateFiles.length;
+  const C = entries.some((names) => hit(names, anyGlob(m.config_files))) ? 1 : 0;
+  const K = entries.some((names) => hit(names, isLogic)) ? 1 : 0;
+  const L = labels.includes('risk:high') || classify(entries.flat(), config).class === 'r3';
+  const gate = m.gate_score.reduce((best, [min, score]) => (G >= min && score > best ? score : best), 0);
+  const score = gate + m.weights.config * C + m.weights.code * K + (Number.isFinite(r) && r > 0 ? r : 0);
+  const band = L ? 'CRITICAL' : score >= m.bands.high ? 'HIGH' : score >= m.bands.elevated ? 'ELEVATED' : score >= m.bands.mid ? 'MID' : 'LOW';
+  return { band, score, G, C, K, L, gateFiles, securityTier };
+}
+
 // ---------- credits ----------
 
 /** credits_used_manual: a non-negative integer, else unknown. Unknown skips the u1 and u2 steps. */
@@ -294,8 +333,9 @@ const releasable = (previousHeld, r, labelsNow, credits) => Boolean(previousHeld
  * decide(event, pr, labelsNow, previousClass, config, { now, previousHeld }) -> a decision
  *   previousHeld: the hold saved in the router comment (apex_d3, credits_u2) or null.
  *   previousPathway, previousPclass: the checkpoint attributes saved in the router comment, or null. confirmed: pathways /pathway confirmed for this head (confirmedMarkers; a plain pathway string has no id). previousConsumed: the marker id saved in the router comment.
- *   pr: { number, head, draft, state, paths, codeRabbitRateLimited }
- *   -> { reason, class, effective, matched, previousClass, add, comment, held, pathway, pclass, builder, credits, noop }
+ *   pr: { number, head, draft, state, paths, files?, codeRabbitRateLimited }  (files: the raw file objects; the band counts a rename once)
+ *   -> { reason, class, effective, matched, previousClass, add, comment, held, pathway, pclass, builder, credits, band, noop }
+ * band: bandOf() of the PR paths and labels (the review band), or null on a label event or a config without a matrix block.
  * reason: draft | not_open | event_ignored | person_label | routed | raised | released | person_override | no_change.
  * noop true = touch nothing, not even the comment. The decision never has a "remove".
  */
@@ -303,7 +343,8 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const credits = creditsState(config, opts.now ?? new Date());
   const { class: cls, matched } = classify(pr.paths ?? [], config);
   const builder = builderOf(labelsNow);
-  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, pathway: null, pclass: null, consumed: null, builder, credits, noop: true };
+  const band = LABEL_EVENTS.has(event) ? null : bandOf(pr.files ?? pr.paths ?? [], config, { labels: labelsNow });
+  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, pathway: null, pclass: null, consumed: null, builder, credits, band, noop: true };
   const stop = (reason) => ({ ...out, reason });
   // A label event reads no files, so it reports no class, on any PR state.
   if (LABEL_EVENTS.has(event)) return { ...stop('person_label'), class: null, effective: null, matched: {} };
@@ -440,6 +481,7 @@ export function ledgerLine({ d, pr, event, ops = [], now = new Date() }) {
     ts: now.toISOString(), tool: 'router', pr: pr.number, head: pr.head, event, class: d.class, decision: d.reason,
     paths_matched: d.matched, labels_added: d.add, held_reason: NOT_DONE.has(d.reason) ? d.reason : d.held,
     builder: d.builder, credits: d.credits, comment: c ? c.op.slice('comment-'.length) : 'none',
+    ...(d.band ? { band: d.band.band, band_score: d.band.score, band_g: d.band.G } : {}),
     ...(pr.labelChange ? { label: pr.labelChange.name, by: pr.labelChange.by } : {}),
     ...(pr.filesSource ? { files_source: pr.filesSource } : {}),
     ...(pr.assumedReady ? { assumed_ready: true } : {}),
@@ -543,7 +585,7 @@ function main() {
     const labels = pullLabelNames(pull);
     const prState = {
       number: pull.number ?? number, head, draft: assumed ? false : pull.draft === true, baseChanged,
-      state: assumed ? 'open' : pull.state, paths: labelEvent ? [] : changedPaths(files, pull), assumedReady: assumed,
+      state: assumed ? 'open' : pull.state, paths: labelEvent ? [] : changedPaths(files, pull), files: labelEvent ? [] : files, assumedReady: assumed,
       codeRabbitRateLimited: codeRabbitRateLimited(comments, head), labelChange, filesSource,
     };
     const existing = findRouterComment(comments);

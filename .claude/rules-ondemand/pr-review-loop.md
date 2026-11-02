@@ -193,6 +193,26 @@ stamp. A PR opened one of those ways skips the checks. It wastes the reviews thi
 
 
 
+## Review band and review models (review matrix, 2026-11-01)
+
+Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
+
+- `bandOf()` in `review-router.mjs` computes the band from the changed files. The numbers live in the `matrix` block of `review-router.config.json`.
+- Bands: LOW, MID, ELEVATED, HIGH, CRITICAL. HIGH is 5 or more control-plane files (`matrix.control_plane`). CRITICAL is a `risk:high` label or an r3 path.
+- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget`, or `both` when a critical file meets an available Greptile (rules R3 and R4 stay).
+- Dave can still press CodeRabbit on a lower band. That is an escalation.
+- A parser file in a HIGH PR keeps rule R2: one review, no loop.
+- A config without a `matrix` block keeps the rules R1 to R5 and RS.
+- The router ledger line names the band. The state comment and the labels do not carry it yet.
+
+**Never run a review in fast mode.** (Dave, 2026-11-01)
+
+- Claude review agents (critic, aegis, principal-reviewer) never run in fast mode.
+- Cursor review runs pass `--model` with an explicit value.
+- Use only `grok-4.7-high` (or `grok-4.7-xhigh` for CRITICAL). No band may use `grok-4.7-low`, `grok-4.7-medium` or `composer-2.5` now (bake-off, 2026-11-01).
+- Never use Auto. Never use a model name that contains `fast`.
+- Never fall back to the CLI default model. If the model is not allowed, stop the run.
+
 ## Waiting for the review
 
 - CodeRabbit reviews when the PR has `review:coderabbit` or `review:deep`. A push does not start a

@@ -33,7 +33,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_REPO, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
+import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -196,6 +196,23 @@ function stampProblem(facts) {
 const hit = (rule, pathway, budget, why) => ({ rule, pathway, budget, why });
 const list = (paths) => paths.join(', ');
 
+/**
+ * The spec 3.1 floor: the PR touches a matrix.security_tier or a checkpoint.critical file. Below HIGH it sets an internal review
+ * floor, not a bot floor: aegis + critic run before READY (rule RF), so auto-confirm never records the PR. Same body in PR A and B.
+ */
+export function floorApplies(c) {
+  return Boolean(c.band?.securityTier?.length || c.critical.length);
+}
+
+/** The floor's cause for a why line: "Security-tier floor (a)", "Critical-file floor (b)", or both joined by "and". */
+function floorLabel(c) {
+  const tier = c.band.securityTier;
+  const crit = c.critical.filter((p) => !tier.includes(p));
+  const parts = [tier.length ? `security-tier floor (${list(tier)})` : '', crit.length ? `critical-file floor (${list(crit)})` : ''];
+  const text = parts.filter(Boolean).join(' and ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function parserRule(c) {
   if (c.parser.length === 0) return null;
   return hit('R2', 'coderabbit', [1, 0], [`Parser file ${list(c.parser)}. Do not loop. Use a vetted parser.`]);
@@ -244,6 +261,22 @@ function smallRule(c) {
   return hit('RS', 'coderabbit', [1, 0], [`Small PR (${sized}), but ${cliProblem(c.cli)}: CodeRabbit 1+0.`]);
 }
 
+/**
+ * RB (review matrix, option A): the band decides. LOW, MID and ELEVATED get no CodeRabbit PR bot; HIGH and CRITICAL get it at the
+ * matrix.bot_budget. Dave can still press CodeRabbit on a lower band (an escalation); this is only the recommendation.
+ */
+function bandRule(c) {
+  const b = c.band;
+  const tier = b.securityTier?.length ? `, security-tier file(s) ${list(b.securityTier)}` : '';
+  const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}${tier}`;
+  if (!['HIGH', 'CRITICAL'].includes(b.band)) {
+    return hit('RB', 'none', [0, 0], [`Band ${b.band} (${facts}): no CodeRabbit PR bot below HIGH. The internal review stack covers it.`]);
+  }
+  const budget = budgetPair(c.botBudget[b.band] ?? [1, 1]);
+  const why = b.L ? 'risk:high or an r3 path' : `${b.G} gate files (${list(b.gateFiles)})`;
+  return hit('RB', 'coderabbit', budget, [`Band ${b.band} (${facts}): CodeRabbit ${budget[0]}+${budget[1]}. Cause: ${why}.`]);
+}
+
 const fallbackRule = (c) => hit('R5', 'coderabbit', c.classBudget, [`Class ${c.budgetClass} (reviewable paths): CodeRabbit ${c.classBudget[0]}+${c.classBudget[1]}.`]);
 
 /** Dependabot wins over every rule: bots refuse bot PRs. A critical or parser file is named so the person reviews it. */
@@ -257,15 +290,33 @@ function dependabotRule(c) {
 
 function hitsFor(c) {
   if (c.dependabot) return [dependabotRule(c)];
+  if (c.band) return bandHits(c);
   const matched = [parserRule(c), criticalRule(c), r3Rule(c)].filter(Boolean);
   if (matched.length) return matched;
   return [noneRule(c) ?? smallRule(c) ?? fallbackRule(c)];
 }
 
+/**
+ * RF (spec 3.1, option A): the security-tier floor below HIGH. A security-tier or critical file sets an internal review floor, not a
+ * bot floor: the pathway stays none, and the why line says aegis + critic must pass before READY. HIGH and CRITICAL keep R2 to R4.
+ */
+function floorRule(c) {
+  if (!floorApplies(c)) return null;
+  return hit('RF', 'none', [0, 0], [`${floorLabel(c)}: run the internal pass (aegis + critic) before READY. No CodeRabbit PR bot; press CodeRabbit to escalate.`]);
+}
+
+/** With a matrix block the band rule replaces R1, RS and R5. A HIGH or CRITICAL PR keeps R2, R3 and R4 beside it (parser budget, Greptile). */
+function bandHits(c) {
+  const rb = bandRule(c);
+  if (rb.pathway === 'none') return [rb, floorRule(c)].filter(Boolean);
+  return [rb, ...[parserRule(c), criticalRule(c), r3Rule(c)].filter(Boolean)];
+}
+
 function combine(hits) {
   const pathway = hits.reduce((best, h) => (PATHWAY_RANK[h.pathway] > PATHWAY_RANK[best] ? h.pathway : best), 'none');
   // Dave 2026-10-28: a parser file (R2) means one review and no loop, so R2's budget beats R3's. R4 (class r3) keeps its own.
-  const counted = hits.some((h) => h.rule === 'R2') ? hits.filter((h) => h.rule !== 'R3') : hits;
+  // The same holds for RB: a parser file in a HIGH PR still means one review and no loop.
+  const counted = hits.some((h) => h.rule === 'R2') ? hits.filter((h) => h.rule !== 'R3' && h.rule !== 'RB') : hits;
   const budget = counted.reduce((b, h) => [Math.max(b[0], h.budget[0]), Math.max(b[1], h.budget[1])], [0, 0]);
   return { pathway, budget, why: hits.flatMap((h) => h.why), rules: hits.map((h) => h.rule) };
 }
@@ -275,7 +326,8 @@ function combine(hits) {
 function orderFor(c, picked) {
   if (c.dependabot) return ['none']; // bots refuse bot PRs: no paid option is offered (Dave decision 3)
   const only = (rule) => picked.rules.length === 1 && picked.rules[0] === rule;
-  if (only('R1')) return ['none', 'coderabbit'];
+  const band = picked.rules[0] === 'RB' && picked.rules.every((r) => r === 'RB' || r === 'RF');
+  if (only('R1') || band) return picked.pathway === 'none' ? ['none', 'coderabbit'] : ['coderabbit', 'both'];
   const waitFirst = c.capacity.band === 'high' ? ['wait'] : [];
   if (only('RS')) return picked.pathway === 'none' ? ['none', 'coderabbit', 'both'] : [...waitFirst, 'coderabbit', 'both'];
   if (only('R5')) return [...waitFirst, 'coderabbit', ...(cliClean(c.cli) ? ['none'] : []), 'both'];
@@ -299,8 +351,10 @@ function costOf(c, picked, pathway) {
 
 function optionOf(c, picked, pathway) {
   const cost = costOf(c, picked, pathway);
+  // RF: the none option must not contradict the floor line, which asks for aegis + critic before READY.
+  const floor = picked.rules.includes('RF');
   const reason = {
-    none: 'No bot review. READY needs CI and proof only.',
+    none: floor ? 'No bot review. READY needs CI, proof and the internal pass (aegis + critic).' : 'No bot review. READY needs CI and proof only.',
     wait: 'Stay a draft and spend nothing until the CodeRabbit 7-day count drops.',
     coderabbit: `CodeRabbit ${cost[0]}+${cost[1]}.`,
     both: c.greptile.reason,
@@ -317,6 +371,17 @@ function waitWhy(c, picked) {
 
 // ---------- recommend ----------
 
+/**
+ * Fail closed: the PR labels could not be read (facts.labels is null), so a risk:high label may be hiding. Below HIGH that could
+ * turn a CRITICAL PR into `none`, so the checkpoint stops (recommended null, like R0). A HIGH or CRITICAL band by paths already
+ * recommends CodeRabbit whatever a label says, and a Dependabot PR gets none whatever its labels. facts.labels absent means a caller
+ * that supplies no labels (a fixture); only null means "tried and failed".
+ */
+function labelsProblem(c, facts) {
+  if (!c.band || facts.labels !== null || c.dependabot || ['HIGH', 'CRITICAL'].includes(c.band.band)) return null;
+  return 'Could not read the PR labels (gh pr view failed, or there is no PR for this branch). The band needs the risk:high label, so no pathway is recommended. Open the draft PR, check gh, and run /pathway again.';
+}
+
 function clockOf(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) throw new Error('facts.now must be an ISO time');
@@ -332,6 +397,7 @@ function contextOf(facts, policy) {
   const budgetClass = classify(pathsOf(reviewable), policy).class;
   return {
     cls, matched, paths, credits, cli: facts.cli ?? null, dependabot: Boolean(facts.dependabot),
+    band: bandOf(facts.files, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
     size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: capacityOf(policy, facts.now),
   };
@@ -342,11 +408,13 @@ export function recommend(facts, policy) {
   const c = contextOf(facts, policy);
   const base = {
     head: facts.head, class: c.cls, matched: c.matched, size: c.size, checks: facts.stamp?.results ?? [], cli: c.cli, credits: c.credits,
-    capacity: c.capacity, recommended: null, options: [], why: [], budget: [0, 0], config_drift: Boolean(facts.config_drift),
+    capacity: c.capacity, band: c.band, recommended: null, options: [], why: [], budget: [0, 0], config_drift: Boolean(facts.config_drift),
   };
   const stop = stampProblem(facts);
   const notes = facts.notes ?? [];
   if (stop) return { ...base, why: [stop, ...notes] };
+  const unread = labelsProblem(c, facts);
+  if (unread) return { ...base, why: [unread, ...notes] };
   const picked = combine(hitsFor(c));
   const wait = waitWhy(c, picked);
   const options = orderFor(c, picked).map((p) => optionOf(c, picked, p));
@@ -409,12 +477,44 @@ function configDrift(base, configText) {
   try { return JSON.stringify(JSON.parse(r.stdout)) !== JSON.stringify(JSON.parse(configText)); } catch { return false; }
 }
 
+/** The label names in a gh pr view JSON text, or null. */
+function labelNames(text) {
+  try {
+    const labels = JSON.parse(text).labels;
+    return Array.isArray(labels) ? labels.map((l) => l?.name).filter((n) => typeof n === 'string') : null;
+  } catch { return null; }
+}
+
+/**
+ * The label names of the PR on the current branch, or null when they cannot be read (null makes the checkpoint stop below HIGH).
+ * First the lookup pinned to the fork repo by branch name. A fork PR is not found that way, so then `gh pr view` with no branch
+ * (gh resolves the current branch's PR, fork-aware). That call cannot be pinned with -R, and origin here is parcadei, so its
+ * answer counts only when the PR url is in DEFAULT_REPO.
+ */
+function readLabels() {
+  let branch;
+  try { branch = git(['branch', '--show-current']).trim(); } catch { return null; }
+  if (!branch) return null;
+  const gh = ghRunner();
+  const pinned = gh(['pr', 'view', branch, '--json', 'labels', ...REPO_ARGS]);
+  if (pinned.status === 0) return labelNames(pinned.stdout);
+  const open = gh(['pr', 'view', '--json', 'labels,url']);
+  let url = '';
+  try { url = String(JSON.parse(open.stdout).url ?? ''); } catch { /* no JSON: not read */ }
+  return open.status === 0 && url.startsWith(`https://github.com/${DEFAULT_REPO}/pull/`) ? labelNames(open.stdout) : null;
+}
+
+const hasMatrix = (configText) => { try { return Boolean(JSON.parse(configText).matrix); } catch { return false; } };
+
 function gatherFacts(configText, stateDir) {
   const { ref: base, notes } = baseRef();
   const head = git(['rev-parse', 'HEAD']).trim();
   // Fallback only: the PR author is the authoritative source, and the mod passes it with --dependabot.
   const dependabot = isDependabotAuthors(git(['log', '--format=%ae', `${base}..HEAD`]));
-  return { head, now: new Date().toISOString(), stamp: readStamp(stateDir), files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), notes };
+  const stamp = readStamp(stateDir);
+  // The band needs the labels (risk:high). Read them only when a band is computed and the stamp lets the checkpoint go on.
+  const labels = hasMatrix(configText) && stamp ? { labels: readLabels() } : {};
+  return { head, now: new Date().toISOString(), stamp, files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), ...labels, notes };
 }
 
 // ---------- PR B: --confirm (record a pathway) and --apply (label, then ready) ----------
