@@ -549,6 +549,35 @@ export const parseArgs = (args: string): WatchArgs => {
   return { pr: pr !== null && pr > 0 ? pr : null, once: words.includes('--once'), whenReady: words.includes('--when-ready') }
 }
 
+/** The most PRs one `/land` press lands. A longer list is a mistake or a runaway, not a plan. */
+export const MAX_LAND_BATCH = 10
+
+export type LandArgs = { prs: number[]; ready: boolean; whenReady: boolean; usage: boolean }
+
+/**
+ * `/land 12`, `/land 12 13 14`, `/land ready`, each with an optional `--when-ready` (one PR only). A repeated number counts once.
+ * Any other word is a usage error: a typo must not land fewer PRs than Dave typed, or more.
+ */
+export const parseLandArgs = (args: string): LandArgs => {
+  const words = args.trim().split(/\s+/).filter(Boolean)
+  const prs: number[] = []
+  let ready = false
+  let whenReady = false
+  let usage = false
+  for (const word of words) {
+    if (/^#?\d+$/.test(word)) {
+      const pr = Number(word.replace('#', ''))
+      if (pr < 1 || !Number.isSafeInteger(pr)) usage = true
+      else if (!prs.includes(pr)) prs.push(pr)
+    } else if (word.toLowerCase() === 'ready') ready = true
+    else if (word === '--when-ready') whenReady = true
+    else usage = true
+  }
+  const several = prs.length > 1 || ready
+  if ((prs.length === 0 && !ready) || (ready && prs.length > 0) || (whenReady && several)) usage = true
+  return { prs, ready, whenReady, usage }
+}
+
 export const landCommand = (root: string, pr: number): string => `pwsh -File "${root}/scripts/github/land-pr.ps1" -Pr ${pr}`
 
 export const clipTail = (text: string, max: number): string => (text.length <= max ? text : `...${text.slice(text.length - max)}`)

@@ -109,6 +109,8 @@ type Opts = {
   tools?: string[]
   home?: boolean
   landThrows?: boolean
+  /** What each PowerShell land call does, in order; later calls succeed. */
+  landSeq?: ('ok' | 'fail' | 'deny' | 'throw')[]
   /** The first N prompt.submit calls reject. */
   submitFails?: number
 }
@@ -186,6 +188,10 @@ const world = (on: On, opts: Opts = {}) => {
     seen.land.push({ ...e })
     // The engine rejects a tool call that is aborted (claude-code.d.ts, tool.call): Dave pressed Escape.
     if (opts.landThrows) throw new Error('aborted')
+    const mode = opts.landSeq?.shift() ?? 'ok'
+    if (mode === 'throw') throw new Error('aborted')
+    if (mode === 'deny') return { deny: 'blocked by the test' }
+    if (mode === 'fail') return { result: { stdout: 'land-pr: PR is not ready', stderr: '', interrupted: false }, isError: true } as never
     return { result: { stdout: 'LANDED #1', stderr: '', interrupted: false } }
   })
   on('tool.call', { tool: 'Bash' }, (_$, e) => {
@@ -1860,5 +1866,194 @@ describe('pr-loop stale prompts', () => {
     await clock.advance(TICK)
     await clock.advance(TICK)
     expect(seen.toasts.length).toBe(2)
+  })
+})
+
+// ---- batched /land (review factory step A, Dave 2026-11-01) ----------------------------------------------------------------------------
+// One press lands a list of READY PRs in order. Each runs land-pr.ps1 on its own, so each is SHA-pinned through Gate C. The batch stops at the first failure.
+// How it can fail, and the test that catches it:
+// BL1  a list lands in the wrong order, in the wrong number, or with more than one dialog, or the dialog does not name every PR
+// BL2  a failure does not stop the batch: a later PR still lands, or the report does not name what landed, what stopped and what was not tried
+// BL3  `ready` lands a PR that is not READY, a PR outside the watch list, or asks when nothing is READY
+// BL4  an explicit list with a PR that is not READY (or closed, or unreadable) asks or lands anything
+// BL5  a head that moved after Dave pressed still lands (the press covers the head he saw)
+// BL6  No, a dismissed dialog, a headless run or a missing shell tool lands something
+// BL7  --when-ready with a list watches or asks   BL8 a repeated number lands twice   BL9 a batch over the cap lands
+// BL10 land-pr printed ok but the PR is not merged, a deny, or an Escape does not stop the batch
+// BL11 the single-PR /land changed (same ask text, same consent), or a stray word is ignored
+const MERGING = (n: number) => [READY(n), READY(n), MERGED(n)]
+
+describe('/land with several PRs', () => {
+  test('BL1 lands the list in order after one dialog that names every PR; each call is its own land-pr run', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: MERGING(13), 14: MERGING(14) } })
+    await start($)
+    const out = await run($, 'land', '12 13 14')
+    expect(seen.asks.length).toBe(1)
+    for (const n of [12, 13, 14]) expect(seen.asks[0]).toContain(`#${n}`)
+    expect(seen.asks[0]!.indexOf('#12')).toBeLessThan(seen.asks[0]!.indexOf('#13'))
+    expect(seen.asks[0]!.indexOf('#13')).toBeLessThan(seen.asks[0]!.indexOf('#14'))
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['12', '13', '14'])
+    for (const call of seen.land) expect(String(call.consent)).toBe('The user pressed "Land" on /land #12 #13 #14')
+    expect(out.text).toMatch(/Landed: #12, #13, #14/)
+    expect(out.text).not.toMatch(/stopped/i)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('BL2 the first failure stops the batch: the next PR is never run, and the report names landed, stopped and not tried', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', landSeq: ['ok', 'fail', 'ok'], script: { 12: MERGING(12), 13: MERGING(13), 14: MERGING(14) } })
+    await start($)
+    const out = await run($, 'land', '12 13 14')
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['12', '13'])
+    expect(out.text).toMatch(/Landed: #12\b/)
+    expect(out.text).toMatch(/Stopped at #13/)
+    expect(out.text).toMatch(/Not tried: #14/)
+    expect(out.text).toContain('not ready')
+  })
+
+  const STOPS: [string, string[], Record<number, unknown[]>, RegExp][] = [
+    ['a deny', ['deny'], { 12: MERGING(12), 13: MERGING(13) }, /refused/i],
+    ['an Escape', ['throw'], { 12: MERGING(12), 13: MERGING(13) }, /interrupted/i],
+    ['an ok run whose PR is still open', ['ok'], { 12: [READY(12), READY(12), READY(12)], 13: MERGING(13) }, /not merged/i],
+  ]
+  for (const [label, seq, script, why] of STOPS) {
+    test(`BL10 ${label} stops the batch at that PR`, async ($, on) => {
+      const w = world(on, { answer: 'Land', landSeq: seq as never, script: script as never })
+      await start($)
+      const out = await run($, 'land', '12 13')
+      expect(w.seen.land.length).toBe(1)
+      expect(out.text).toMatch(/Stopped at #12/)
+      expect(out.text).toMatch(/Not tried: #13/)
+      expect(out.text).toMatch(why)
+    })
+  }
+
+  test('BL3 `ready` lands the READY watched PRs only, in watch order', async ($, on) => {
+    const { seen } = world(on, {
+      answer: 'Land',
+      store: seed([{ pr: 7 }, { pr: 8 }, { pr: 9 }]),
+      script: { 7: MERGING(7), 8: [status(8)], 9: MERGING(9), 10: MERGING(10) },
+    })
+    await start($)
+    const out = await run($, 'land', 'ready')
+    expect(seen.asks.length).toBe(1)
+    expect(seen.asks[0]).toContain('#7')
+    expect(seen.asks[0]).toContain('#9')
+    expect(seen.asks[0]).not.toContain('#8')
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['7', '9'])
+    expect(seen.status).not.toContain(10)
+    expect(out.text).toMatch(/Landed: #7, #9/)
+  })
+
+  test('BL3b `ready` with no READY watched PR asks nobody and lands nothing', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', store: seed([{ pr: 8 }]), script: { 8: [status(8)] } })
+    await start($)
+    const out = await run($, 'land', 'ready')
+    expect(seen.asks).toEqual([])
+    expect(seen.land).toEqual([])
+    expect(out.text).toMatch(/no watched PR is READY/i)
+  })
+
+  test('BL4 a list with a PR that is not READY, is merged, or cannot be read asks nobody and lands nothing', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: [READY(12)], 13: [status(13)], 14: [MERGED(14)], 15: ['error'] } })
+    await start($)
+    const out = await run($, 'land', '12 13 14 15')
+    expect(seen.asks).toEqual([])
+    expect(seen.land).toEqual([])
+    expect(out.text).toMatch(/Nothing landed/)
+    for (const n of [13, 14, 15]) expect(out.text).toContain(`#${n}`)
+  })
+
+  test('BL5 a head that moved after the press stops the batch before that PR lands', async ($, on) => {
+    const moved = status(13, { ready: true, reasons: [], reviewedHead: true, mergeable_state: 'clean', head: 'c'.repeat(40), headShort: 'ccccccc' })
+    const { seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: [READY(13), moved, MERGED(13)], 14: MERGING(14) } })
+    await start($)
+    const out = await run($, 'land', '12 13 14')
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['12'])
+    expect(out.text).toMatch(/Landed: #12\b/)
+    expect(out.text).toMatch(/Stopped at #13/)
+    expect(out.text).toMatch(/head moved/i)
+    expect(out.text).toMatch(/Not tried: #14/)
+  })
+
+  test('BL5b a PR that is no longer READY at its turn stops the batch', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: [READY(13), status(13)], 14: MERGING(14) } })
+    await start($)
+    const out = await run($, 'land', '12 13 14')
+    expect(seen.land.length).toBe(1)
+    expect(out.text).toMatch(/Stopped at #13/)
+    expect(out.text).toMatch(/not READY/i)
+  })
+
+  for (const answer of ['No', 'dismiss'] as const) {
+    test(`BL6 ${answer} lands nothing`, async ($, on) => {
+      const { seen } = world(on, { answer, script: { 12: MERGING(12), 13: MERGING(13) } })
+      await start($)
+      const out = await run($, 'land', '12 13')
+      expect(seen.asks.length).toBe(1)
+      expect(seen.land).toEqual([])
+      expect(out.text).toMatch(/Not landed/)
+    })
+  }
+
+  test('BL6b headless lands nothing and asks nobody', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: MERGING(13) } })
+    await start($, false)
+    const out = await run($, 'land', '12 13')
+    expect(seen.asks).toEqual([])
+    expect(seen.land).toEqual([])
+    expect(out.text).toMatch(/interactive session/i)
+  })
+
+  test('BL6c with no shell tool a batch asks nobody and lands nothing (one instruction per PR cannot be sequenced)', async ($, on) => {
+    const { seen, settle } = world(on, { answer: 'Land', tools: ['Read'], script: { 12: MERGING(12), 13: MERGING(13) } })
+    await start($)
+    const out = await run($, 'land', '12 13')
+    await settle()
+    expect(seen.asks).toEqual([])
+    expect(seen.land).toEqual([])
+    expect(seen.submits).toEqual([])
+    expect(out.text).toMatch(/shell tool/i)
+  })
+
+  test('BL7 --when-ready with a list or with ready is a usage error: nothing watched, nothing asked', async ($, on) => {
+    const { seen, store } = world(on, { answer: 'Land', script: { 12: [READY(12)], 13: [READY(13)] } })
+    await start($)
+    for (const args of ['12 13 --when-ready', 'ready --when-ready']) {
+      const out = await run($, 'land', args)
+      expect(out.text).toMatch(/usage/i)
+    }
+    expect(seen.asks).toEqual([])
+    expect(seen.land).toEqual([])
+    expect(stored(store)).toBeUndefined()
+  })
+
+  test('BL8 a repeated number lands once, and one number plus `ready` is a usage error', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: MERGING(13) } })
+    await start($)
+    await run($, 'land', '12 #12 13')
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['12', '13'])
+    const mixed = await run($, 'land', '12 ready')
+    expect(mixed.text).toMatch(/usage/i)
+    expect(seen.land.length).toBe(2)
+  })
+
+  test('BL9 a batch over the cap of 10 PRs lands nothing', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land' })
+    await start($)
+    const out = await run($, 'land', '1 2 3 4 5 6 7 8 9 10 11')
+    expect(seen.asks).toEqual([])
+    expect(seen.land).toEqual([])
+    expect(out.text).toMatch(/at most 10/i)
+  })
+
+  test('BL11 a single PR keeps its dialog text and consent; a stray word is a usage error, not ignored', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: [READY(12)] } })
+    await start($)
+    await run($, 'land', '12')
+    expect(seen.asks).toEqual(['Land #12?'])
+    expect(seen.land[0]).toMatchObject({ consent: 'The user pressed "Land" on /land #12' })
+    const stray = await run($, 'land', '12 readyy')
+    expect(stray.text).toMatch(/usage/i)
+    expect(seen.land.length).toBe(1)
   })
 })
