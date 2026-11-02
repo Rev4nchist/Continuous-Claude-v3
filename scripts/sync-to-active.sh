@@ -229,6 +229,8 @@ MANIFEST_FILE="$ACTIVE_CLAUDE/state/sync-manifest.txt"
 QUARANTINE_ROOT="$ACTIVE_CLAUDE/.sync-quarantine/$(date +%Y-%m-%d-%H%M%S)"
 QUARANTINED=0
 GUARD_ERRORS=0
+# Set when a copy lands under plugins/ccv3-mods/: a running session keeps the mod code it loaded (2026-11-02).
+MODS_COPIED=false
 declare -A MANIFEST
 declare -A SEEN
 # Identical files that already have a manifest entry. Their entry may be stale (hand copy),
@@ -426,6 +428,12 @@ quarantine_blocked() {
     [[ "$QUARANTINE_STATE" == blocked ]]
 }
 
+# note_copied <rel> -- called after each copy that lands.
+note_copied() {
+    [[ "$1" == plugins/ccv3-mods/* ]] && MODS_COPIED=true
+    return 0
+}
+
 # guarded_copy <src> <dst> -- the ONLY way this script writes a destination file.
 guarded_copy() {
     local src="$1" dst="$2"
@@ -440,6 +448,7 @@ guarded_copy() {
     if [[ ! -f "$dst" ]]; then
         cp "$src" "$dst"
         manifest_set "$rel" "$(file_hash "$dst")"
+        note_copied "$rel"
         $VERBOSE && echo "Copied: $rel" || true
         return 0
     fi
@@ -466,6 +475,7 @@ guarded_copy() {
         cp "$src" "$dst.sync-tmp"
         mv -f "$dst.sync-tmp" "$dst"
         manifest_set "$rel" "$src_hash"
+        note_copied "$rel"
         $VERBOSE && echo "Copied: $rel" || true
         return 0
     fi
@@ -474,6 +484,7 @@ guarded_copy() {
         cp "$src" "$dst.sync-tmp"
         mv -f "$dst.sync-tmp" "$dst"
         manifest_set "$rel" "$src_hash"
+        note_copied "$rel"
         $VERBOSE && echo "Copied (EOL-only difference): $rel" || true
         return 0
     fi
@@ -495,6 +506,7 @@ guarded_copy() {
     fi
     mv -f "$dst.sync-tmp" "$dst"
     manifest_set "$rel" "$src_hash"
+    note_copied "$rel"
     echo "  CLOBBER-GUARD: active copy of $rel had diverged -- preserved at $QUARANTINE_ROOT/$rel"
     QUARANTINED=$((QUARANTINED + 1))
 }
@@ -643,6 +655,7 @@ finish_sync() {
     check_state_links   # before the summary, so a blocked state/ is counted in it
     save_manifest
     print_guard_summary || guard_rc=$?
+    $MODS_COPIED && echo "ccv3-mods changed: running sessions keep the old mod code until /reload-plugins" || true
     [[ $guard_rc -eq 0 ]] && write_cursor "$target"
     release_lock
     [[ $guard_rc -ne 0 ]] && exit 3

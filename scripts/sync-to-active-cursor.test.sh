@@ -630,6 +630,26 @@ out="$(sync)"
 # Other dirs may show a MISMATCH left by earlier fixtures (T16's skill CLAUDE.md), so look at this line only.
 chk "(e) full sync verify: plugins/ccv3-mods OK, not MISMATCH" "$(printf '%s' "$out" | grep -q 'plugins/ccv3-mods: OK' && ! printf '%s' "$out" | grep -q 'plugins/ccv3-mods: MISMATCH' && echo 1 || echo 0)"
 
+echo "=== T17b: a sync that copies a ccv3-mods file says running sessions need /reload-plugins ==="
+# Failure modes: (a) no line after --changed copies a mod file, (b) the line once per file, not once per run,
+# (c) the line on a run that copied no mod file, (d) no line when the full mirror copies a mod file,
+# (e) the line on a dry run, which copies nothing.
+RELOAD='ccv3-mods changed: running sessions keep the old mod code until /reload-plugins'
+reload_count() { printf '%s\n' "$1" | grep -cF "$RELOAD"; }
+printf 'm4\n' > "$MODS/hooks/register.tsx"; printf 'x\n' > "$MODS/hooks/extra.ts"; commit t17b-v1
+out="$(sync --changed)"
+chk "(a)(b) --changed copies two mod files and prints the line once" "$( [ "$(reload_count "$out")" = "1" ] && echo 1 || echo 0)"
+printf 't17b\n' > "$REPO/.claude/rules-src/t17b.md"; commit t17b-rule
+out="$(sync --changed)"
+chk "(c) --changed that copies only a rule prints no line" "$( [ "$(reload_count "$out")" = "0" ] && echo 1 || echo 0)"
+out="$(sync)"
+chk "(c) a full mirror with every mod file current prints no line" "$( [ "$(reload_count "$out")" = "0" ] && echo 1 || echo 0)"
+printf 'm5\n' > "$MODS/hooks/register.tsx"; commit t17b-v2
+out="$(sync --dry-run)"
+chk "(e) a dry run prints no line" "$( [ "$(reload_count "$out")" = "0" ] && echo 1 || echo 0)"
+out="$(sync)"
+chk "(d) a full mirror that copies a mod file prints the line once" "$( [ "$(reload_count "$out")" = "1" ] && echo 1 || echo 0)"
+
 echo "=== T18: no profile warns and syncs; a bad profile stops the sync ==="
 # The fixture copy of sync-to-active.sh warns and continues when the helper is
 # absent. These cases copy the real helper so a missing profile and a malformed
