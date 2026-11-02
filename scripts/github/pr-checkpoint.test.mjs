@@ -148,11 +148,14 @@ const load = () => import('./pr-checkpoint.mjs');
  * The live config with the switches pinned, so editing deep_enabled, the credit count or the 7-day count in the
  * live file cannot change a result. checkpoint.critical, budget and classes come from the live file (the contract).
  * checkpoint.parser is pinned to a test glob: the live list is a data choice, not behaviour.
+ * matrix is dropped (review matrix, Step C2): these tests cover the rule set R1 to R5 and RS, which a policy without a matrix block
+ * keeps. With the live matrix block the band decides instead; review-router-band.test.mjs covers that path.
  */
 async function policy({ deep = false, used = null, count = null } = {}) {
   const { pathFiltersFrom } = await load();
   return {
     ...LIVE,
+    matrix: undefined,
     deep_enabled: deep,
     greptile: { ...LIVE.greptile, credits_used_manual: used },
     coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: count, reviews_7d_manual_date: null },
@@ -647,7 +650,7 @@ function runCli(args, factsObj) {
   const factsFile = path.join(dir, 'facts.json');
   const cfgFile = path.join(dir, 'config.json');
   if (factsObj) writeFileSync(factsFile, JSON.stringify(factsObj));
-  writeFileSync(cfgFile, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null, reviews_7d_manual_date: null } }));
+  writeFileSync(cfgFile, JSON.stringify({ ...LIVE, matrix: undefined, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null, reviews_7d_manual_date: null } }));
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), ...args, '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir });
   return { ...r, dir };
 }
@@ -656,7 +659,7 @@ test('T21 (CLI): --json prints the whole output shape as one JSON object and exi
   const r = runCli(['--json'], facts([file(CRITICAL, 30), file('scripts/b.mjs', 5)]));
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout);
-  const shape = ['head', 'class', 'matched', 'size', 'checks', 'cli', 'credits', 'capacity', 'recommended', 'options', 'why', 'budget', 'config_drift'];
+  const shape = ['head', 'class', 'matched', 'size', 'checks', 'cli', 'credits', 'capacity', 'band', 'recommended', 'options', 'why', 'budget', 'config_drift'];
   assert.deepEqual(Object.keys(out).sort(), [...shape].sort());
   assert.equal(out.head, HEAD);
   assert.equal(out.recommended, 'coderabbit');
@@ -853,7 +856,7 @@ function runB(mode, { files = R5_FILES, facts: factOver = {}, pol = {}, body = B
   writeFileSync(factsFile, JSON.stringify(factsObj));
   writeFileSync(bodyFile, body);
   writeFileSync(cfgFile, JSON.stringify({
-    ...LIVE, deep_enabled: pol.deep ?? false,
+    ...LIVE, matrix: undefined, deep_enabled: pol.deep ?? false,
     greptile: { ...LIVE.greptile, credits_used_manual: pol.used ?? null },
     coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: pol.count ?? null, reviews_7d_manual_date: null },
     checkpoint: { ...LIVE.checkpoint, parser: ['lib/lexer/**'] },

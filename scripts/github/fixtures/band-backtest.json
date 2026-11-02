@@ -1,0 +1,161 @@
+{
+ "_doc": "Backtest rows from .claudedocs/2026-11-01-review-matrix.md section 4 (option A). files = final merge-diff paths of PR #N. band and G = the section 4 table. Used by review-router-band.test.mjs.",
+ "prs": [
+  {
+   "pr": 200,
+   "band": "ELEVATED",
+   "G": 1,
+   "files": [
+    "apps/agentic-os/e2e/session-detail-review.spec.ts",
+    "apps/agentic-os/e2e/session-detail.spec.ts",
+    "apps/agentic-os/e2e/state-fixture.ts",
+    "apps/agentic-os/src/app/(mission-control)/page.tsx",
+    "apps/agentic-os/src/app/api/mission-control/route.ts",
+    "apps/agentic-os/src/components/fleet/MissionControl.tsx",
+    "apps/agentic-os/src/components/fleet/NavTabs.tsx",
+    "apps/agentic-os/src/components/fleet/ReadyForDave.tsx",
+    "apps/agentic-os/src/components/fleet/SessionCards.tsx",
+    "apps/agentic-os/src/components/fleet/SessionDetail.tsx",
+    "apps/agentic-os/src/components/fleet/SessionsTable.tsx",
+    "apps/agentic-os/src/server/queries/fleet-sessions.ts",
+    "apps/agentic-os/src/server/queries/mission-control.ts",
+    "apps/agentic-os/src/server/queries/session-detail.ts",
+    "apps/agentic-os/src/server/sources/safe-message.ts",
+    "apps/agentic-os/src/server/sources/state-files.ts"
+   ]
+  },
+  {
+   "pr": 201,
+   "band": "LOW",
+   "G": 0,
+   "files": [
+    "scripts/ratchets/trivy-baseline.json"
+   ]
+  },
+  {
+   "pr": 203,
+   "band": "ELEVATED",
+   "G": 3,
+   "files": [
+    "review-router.config.json",
+    "scripts/github/pr-checkpoint.mjs",
+    "scripts/github/pr-checkpoint.test.mjs",
+    "scripts/github/review-router.mjs",
+    "scripts/github/review-router.test.mjs",
+    "scripts/github/review-status.mjs",
+    "scripts/github/review-status.test.mjs"
+   ]
+  },
+  {
+   "pr": 209,
+   "band": "LOW",
+   "G": 0,
+   "files": [
+    ".claude/plugins/ccv3-mods/tests/pr-loop.test.ts"
+   ]
+  },
+  {
+   "pr": 212,
+   "band": "ELEVATED",
+   "G": 4,
+   "files": [
+    ".claude/hooks/dist/.build-inputs.json",
+    ".claude/hooks/dist/pr-opened-review-loop.mjs",
+    ".claude/hooks/dist/pre-pr-gate.mjs",
+    ".claude/hooks/src/__tests__/pre-pr-gate.test.ts",
+    ".claude/hooks/src/pr-opened-review-loop.ts",
+    ".claude/hooks/src/pre-pr-gate.ts",
+    ".claude/hooks/src/shared/checkpoint-shapes.ts",
+    ".claude/hooks/src/shared/guard-log.ts",
+    ".claude/rules-ondemand/pr-review-loop.md",
+    "review-router.config.json",
+    "scripts/github/pr-checkpoint.mjs",
+    "scripts/github/pr-checkpoint.test.mjs"
+   ]
+  },
+  {
+   "pr": 217,
+   "band": "HIGH",
+   "G": 6,
+   "files": [
+    ".claude/hooks/dist/.build-inputs.json",
+    ".claude/hooks/dist/pre-pr-gate.mjs",
+    ".claude/hooks/src/__tests__/pre-pr-gate.test.ts",
+    ".claude/hooks/src/pre-pr-gate.ts",
+    ".claude/plugins/ccv3-mods/README.md",
+    ".claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx",
+    ".claude/plugins/ccv3-mods/hooks/pr-loop/model.ts",
+    ".claude/plugins/ccv3-mods/tests/pr-checkpoint.test.ts",
+    ".claude/plugins/ccv3-mods/tests/pr-loop.test.ts",
+    ".claude/plugins/ccv3-mods/types/index.d.ts",
+    ".claude/rules-ondemand/pr-review-loop.md",
+    "scripts/github/pr-checkpoint.mjs",
+    "scripts/github/pr-checkpoint.test.mjs",
+    "scripts/github/pr-loop-sync.test.mjs",
+    "scripts/github/review-router.mjs",
+    "scripts/github/review-router.test.mjs",
+    "scripts/github/review-status.mjs",
+    "scripts/github/review-status.test.mjs"
+   ]
+  },
+  {
+   "pr": 222,
+   "band": "MID",
+   "G": 0,
+   "files": [
+    ".claude/plugins/ccv3-mods/README.md",
+    ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts",
+    ".claude/plugins/ccv3-mods/tests/brief.test.ts"
+   ]
+  },
+  {
+   "pr": 232,
+   "band": "HIGH",
+   "G": 5,
+   "files": [
+    ".claude/hooks/dist/.build-inputs.json",
+    ".claude/hooks/dist/destructive-command-guard.mjs",
+    ".claude/hooks/dist/no-haiku-enforcer.mjs",
+    ".claude/hooks/dist/package-install-guard.mjs",
+    ".claude/hooks/dist/pre-pr-gate.mjs",
+    ".claude/hooks/dist/rule-router.mjs",
+    ".claude/hooks/dist/scan-scope-guard.mjs",
+    ".claude/hooks/registration-baseline.json",
+    ".claude/hooks/src/__tests__/guard-log-error.test.ts",
+    ".claude/hooks/src/__tests__/hook-crash-log.test.ts",
+    ".claude/hooks/src/__tests__/pre-pr-gate.test.ts",
+    ".claude/hooks/src/destructive-command-guard.ts",
+    ".claude/hooks/src/no-haiku-enforcer.ts",
+    ".claude/hooks/src/package-install-guard.ts",
+    ".claude/hooks/src/pre-pr-gate.ts",
+    ".claude/hooks/src/rule-router.ts",
+    ".claude/hooks/src/scan-scope-guard.ts",
+    ".claude/hooks/src/shared/guard-log.ts",
+    ".claude/project-registry.json",
+    ".github/workflows/ccv3-checks.yml",
+    ".gitignore",
+    "docs/harness-strategy/README.md",
+    "scripts/github/pre-pr.test.mjs",
+    "scripts/harness-doctor.mjs",
+    "scripts/harness-doctor.test.mjs",
+    "scripts/rules/context-budget.json"
+   ]
+  },
+  {
+   "pr": 238,
+   "band": "HIGH",
+   "G": 5,
+   "files": [
+    ".claude/plugins/ccv3-mods/README.md",
+    ".claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx",
+    ".claude/plugins/ccv3-mods/hooks/pr-checkpoint/model.ts",
+    ".claude/plugins/ccv3-mods/hooks/pr-loop/index.ts",
+    ".claude/plugins/ccv3-mods/hooks/pr-loop/model.ts",
+    ".claude/plugins/ccv3-mods/tests/pr-checkpoint.test.ts",
+    ".claude/plugins/ccv3-mods/tests/pr-loop.test.ts",
+    "scripts/github/review-status.mjs",
+    "scripts/github/review-status.test.mjs"
+   ]
+  }
+ ]
+}

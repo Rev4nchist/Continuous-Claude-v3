@@ -33,7 +33,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_REPO, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
+import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -244,6 +244,21 @@ function smallRule(c) {
   return hit('RS', 'coderabbit', [1, 0], [`Small PR (${sized}), but ${cliProblem(c.cli)}: CodeRabbit 1+0.`]);
 }
 
+/**
+ * RB (review matrix, option A): the band decides. LOW, MID and ELEVATED get no CodeRabbit PR bot; HIGH and CRITICAL get it at the
+ * matrix.bot_budget. Dave can still press CodeRabbit on a lower band (an escalation); this is only the recommendation.
+ */
+function bandRule(c) {
+  const b = c.band;
+  const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}`;
+  if (!['HIGH', 'CRITICAL'].includes(b.band)) {
+    return hit('RB', 'none', [0, 0], [`Band ${b.band} (${facts}): no CodeRabbit PR bot below HIGH. The internal review stack covers it.`]);
+  }
+  const budget = budgetPair(c.botBudget[b.band] ?? [1, 1]);
+  const why = b.L ? 'risk:high or an r3 path' : `${b.G} gate files (${list(b.gateFiles)})`;
+  return hit('RB', 'coderabbit', budget, [`Band ${b.band} (${facts}): CodeRabbit ${budget[0]}+${budget[1]}. Cause: ${why}.`]);
+}
+
 const fallbackRule = (c) => hit('R5', 'coderabbit', c.classBudget, [`Class ${c.budgetClass} (reviewable paths): CodeRabbit ${c.classBudget[0]}+${c.classBudget[1]}.`]);
 
 /** Dependabot wins over every rule: bots refuse bot PRs. A critical or parser file is named so the person reviews it. */
@@ -257,15 +272,24 @@ function dependabotRule(c) {
 
 function hitsFor(c) {
   if (c.dependabot) return [dependabotRule(c)];
+  if (c.band) return bandHits(c);
   const matched = [parserRule(c), criticalRule(c), r3Rule(c)].filter(Boolean);
   if (matched.length) return matched;
   return [noneRule(c) ?? smallRule(c) ?? fallbackRule(c)];
 }
 
+/** With a matrix block the band rule replaces R1, RS and R5. A HIGH or CRITICAL PR keeps R2, R3 and R4 beside it (parser budget, Greptile). */
+function bandHits(c) {
+  const rb = bandRule(c);
+  if (rb.pathway === 'none') return [rb];
+  return [rb, ...[parserRule(c), criticalRule(c), r3Rule(c)].filter(Boolean)];
+}
+
 function combine(hits) {
   const pathway = hits.reduce((best, h) => (PATHWAY_RANK[h.pathway] > PATHWAY_RANK[best] ? h.pathway : best), 'none');
   // Dave 2026-10-28: a parser file (R2) means one review and no loop, so R2's budget beats R3's. R4 (class r3) keeps its own.
-  const counted = hits.some((h) => h.rule === 'R2') ? hits.filter((h) => h.rule !== 'R3') : hits;
+  // The same holds for RB: a parser file in a HIGH PR still means one review and no loop.
+  const counted = hits.some((h) => h.rule === 'R2') ? hits.filter((h) => h.rule !== 'R3' && h.rule !== 'RB') : hits;
   const budget = counted.reduce((b, h) => [Math.max(b[0], h.budget[0]), Math.max(b[1], h.budget[1])], [0, 0]);
   return { pathway, budget, why: hits.flatMap((h) => h.why), rules: hits.map((h) => h.rule) };
 }
@@ -275,7 +299,7 @@ function combine(hits) {
 function orderFor(c, picked) {
   if (c.dependabot) return ['none']; // bots refuse bot PRs: no paid option is offered (Dave decision 3)
   const only = (rule) => picked.rules.length === 1 && picked.rules[0] === rule;
-  if (only('R1')) return ['none', 'coderabbit'];
+  if (only('R1') || only('RB')) return picked.pathway === 'none' ? ['none', 'coderabbit'] : ['coderabbit', 'both'];
   const waitFirst = c.capacity.band === 'high' ? ['wait'] : [];
   if (only('RS')) return picked.pathway === 'none' ? ['none', 'coderabbit', 'both'] : [...waitFirst, 'coderabbit', 'both'];
   if (only('R5')) return [...waitFirst, 'coderabbit', ...(cliClean(c.cli) ? ['none'] : []), 'both'];
@@ -332,6 +356,7 @@ function contextOf(facts, policy) {
   const budgetClass = classify(pathsOf(reviewable), policy).class;
   return {
     cls, matched, paths, credits, cli: facts.cli ?? null, dependabot: Boolean(facts.dependabot),
+    band: bandOf(paths, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
     size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: capacityOf(policy, facts.now),
   };
@@ -342,7 +367,7 @@ export function recommend(facts, policy) {
   const c = contextOf(facts, policy);
   const base = {
     head: facts.head, class: c.cls, matched: c.matched, size: c.size, checks: facts.stamp?.results ?? [], cli: c.cli, credits: c.credits,
-    capacity: c.capacity, recommended: null, options: [], why: [], budget: [0, 0], config_drift: Boolean(facts.config_drift),
+    capacity: c.capacity, band: c.band, recommended: null, options: [], why: [], budget: [0, 0], config_drift: Boolean(facts.config_drift),
   };
   const stop = stampProblem(facts);
   const notes = facts.notes ?? [];

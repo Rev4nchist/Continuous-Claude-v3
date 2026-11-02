@@ -14,7 +14,13 @@
     "checkpoint.critical: path globs of files whose PR gets Greptile too when it is available (pr-checkpoint.mjs rule R3). A PR that touches one never takes the READY carry (review-status.mjs). Extended 2026-10-30 with the files where a fix added a real Major (.claudedocs/2026-10-30-coderabbit-rereview-study.md section 4).",
     "checkpoint.parser: path globs of hand-written lexer and parser guards. Their PR gets one CodeRabbit review and no loop (rule R2). Dave edits this list.",
     "checkpoint.enforce: boolean, read by the pre-pr-gate hook from the checkout the session runs in. true (live since PR D, 2026-10-29): the checkpoint rules (non-draft create, shell gh pr ready, hand review: label, self-confirm, non-literal --repo) deny the command. false (warn mode): the same commands pass and log one warn row to guard-decisions.jsonl. Only a literal true enforces. The stamp rules are enforced in both modes.",
-    "coderabbit.reviews_7d_manual: CodeRabbit PR reviews in the last 7 days, an integer Dave sets from the free '@coderabbitai rate limit' reply or the dashboard CSV export. null means unknown and changes no rule. reviews_7d_manual_date: the day Dave read it. A count older than 7 days counts as unknown."
+    "coderabbit.reviews_7d_manual: CodeRabbit PR reviews in the last 7 days, an integer Dave sets from the free '@coderabbitai rate limit' reply or the dashboard CSV export. null means unknown and changes no rule. reviews_7d_manual_date: the day Dave read it. A count older than 7 days counts as unknown.",
+    "matrix: the review band (.claudedocs/2026-11-01-review-matrix.md, option A). review-router.mjs bandOf() reads it. No matrix block means no band, and pr-checkpoint.mjs keeps its old rules R2 to R5. Only HIGH and CRITICAL PRs are recommended the CodeRabbit PR bot.",
+    "matrix.control_plane: path globs of the gate files (G). It holds every checkpoint.critical and checkpoint.parser glob, plus the review tooling, the pr-checkpoint and pr-loop mods, the tool.call registrants and the guard helpers (spec 2.2). Any extension counts. A test file never counts. Dave edits this list.",
+    "matrix.security_tier: subset of control_plane. The band output names these files. They set an internal review floor, not a bot floor (option A).",
+    "matrix.config_files: path globs of review, merge and reviewer config (C = 1 when one changes). matrix.test_markers: a path that contains one of these is a test file (weight 0). matrix.logic_ext: extensions of logic files (K = 1 when the PR has one outside dist/ and test files).",
+    "matrix.gate_score: [min G, score] steps, the highest step reached wins. matrix.weights: config is the C weight, code is the K weight. Score S = gate score + config * C + code * K + R. R is +7 per confirmed internal Major (passed to bandOf; nothing posts it yet).",
+    "matrix.bands: the lowest score of MID, ELEVATED and HIGH. Score 0 is LOW. CRITICAL comes from a risk:high label or a path of the r3 class, at any score. matrix.bot_budget: CodeRabbit PR reviews [opening, extra after a Major] for HIGH and CRITICAL. The extra round is free-slot only."
   ],
   "deep_enabled": false,
   "classes": {
@@ -99,6 +105,68 @@
       ".claude/hooks/src/package-install-guard.ts"
     ],
     "enforce": true
+  },
+  "matrix": {
+    "control_plane": [
+      ".claude/hooks/src/pre-pr-gate.ts",
+      ".claude/hooks/src/*-guard.ts",
+      "scripts/github/review-status.mjs",
+      "scripts/github/review-router.mjs",
+      "scripts/github/cr-paid.mjs",
+      "scripts/github/land-pr.ps1",
+      "scripts/github/land-recheck.mjs",
+      ".claude/hooks/src/shared/checkpoint-shapes.ts",
+      "scripts/github/pre-pr.mjs",
+      "apps/agentic-os/src/server/sources/safe-message.ts",
+      "apps/agentic-os/src/server/sources/prompt-text.ts",
+      "apps/agentic-os/scripts/provision-roles.*",
+      ".claude/hooks/src/coderabbit-guard.ts",
+      ".claude/hooks/src/package-install-guard.ts",
+      "scripts/github/cr-fix.mjs",
+      "scripts/github/pr-checkpoint.mjs",
+      ".claude/plugins/*/hooks/pr-checkpoint/**",
+      ".claude/plugins/*/hooks/pr-loop/**",
+      ".claude/plugins/*/hooks/agentic-os/index.tsx",
+      ".claude/plugins/*/hooks/touched-files/index.tsx",
+      ".claude/hooks/src/shared/destructive-classifier.ts",
+      ".claude/hooks/src/shared/unattended.ts",
+      ".claude/hooks/src/shared/scoped-cleanup.ts",
+      ".claude/hooks/src/shared/typosquat-detect.ts",
+      ".claude/hooks/src/shared/guard-log.ts",
+      ".claude/hooks/src/shared/malicious-packages.json"
+    ],
+    "security_tier": [
+      ".claude/hooks/src/*-guard.ts",
+      ".claude/hooks/src/pre-pr-gate.ts",
+      ".claude/plugins/*/hooks/pr-checkpoint/index.tsx",
+      "apps/agentic-os/src/server/sources/safe-message.ts",
+      "apps/agentic-os/src/server/sources/prompt-text.ts",
+      ".claude/hooks/src/shared/destructive-classifier.ts",
+      ".claude/hooks/src/shared/unattended.ts",
+      ".claude/hooks/src/shared/malicious-packages.json"
+    ],
+    "config_files": [
+      ".coderabbit.yaml",
+      "review-router.config.json",
+      ".github/workflows/**",
+      ".claude/settings.json.template",
+      ".greptile/**",
+      "REVIEW.md",
+      ".claude/agents/critic.md",
+      ".claude/agents/critic.json",
+      ".claude/agents/aegis.md",
+      ".claude/agents/aegis.json",
+      ".claude/agents/principal-reviewer.md",
+      ".claude/agents/principal-reviewer.json",
+      ".claude/rules-ondemand/pr-review-loop.md",
+      ".claude/rules-ondemand/manifest.json"
+    ],
+    "test_markers": ["__tests__/", "/test/", "/tests/", ".test.", ".spec.", "/e2e/", "/fixture/", "/fixtures/", "/evals/"],
+    "logic_ext": ["ts", "tsx", "mjs", "js", "cjs", "ps1", "py", "bat", "sh"],
+    "gate_score": [[1, 3], [3, 5], [5, 10]],
+    "weights": { "config": 3, "code": 1 },
+    "bands": { "mid": 1, "elevated": 3, "high": 10 },
+    "bot_budget": { "HIGH": [1, 1], "CRITICAL": [1, 1] }
   },
   "coderabbit": {
     "reviews_7d_manual": 107,
