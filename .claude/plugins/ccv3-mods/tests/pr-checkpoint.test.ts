@@ -147,6 +147,8 @@ type Opts = {
   worktrees?: Reply
   /** `git rev-parse HEAD` per cwd; a cwd not listed answers `head`. */
   headAt?: Record<string, string>
+  /** Replies for the first `gh pr view` calls, in order; later calls answer by `view` or the default. */
+  viewSeq?: Reply[]
 }
 
 type Run = { argv: string[]; stdin?: string; cwd?: string }
@@ -273,7 +275,7 @@ const world = (on: On, opts: Opts = {}) => {
       return { value: { exitCode: one.ready === true ? 0 : 1, stdout: JSON.stringify(one), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') {
-      const reply: Reply = opts.view ?? {
+      const reply: Reply = opts.viewSeq?.shift() ?? opts.view ?? {
         stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, headRefName: opts.branch ?? 'feat/x', author: { login: opts.author ?? 'Rev4nchist' }, number: Number(argv[3]) }),
       }
       return done(reply)
@@ -1703,5 +1705,244 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(w.seen.opens.length).toBe(before + 1)
     const pane = await mountPane($)
     expect(await keys(pane)).toEqual(['ask-no', 'ask-yes'])
+  })
+})
+
+// ---- review factory step A: auto-confirm and the mobile /pathway gap (Dave 2026-11-01) ------------------------------------------------
+// How it can fail, and the test that catches it:
+// AU1  an eligible checkpoint (engine `auto.eligible`, recommended none) waits for a press, or records differently from a press (same record, apply, label)
+// AU1b the visible line to Dave (toast) does not name the band, or the model is told "Dave chose" instead of "auto-confirmed"
+// AU2  a refused record still applies, or leaves the pane closed (the fallback is the pane ask)
+// AU3  a refused apply leaves no way to retry
+// AU4  an engine result with no `auto` block (an old engine), or eligible false, auto-confirms
+// AU5  eligible true with a recommendation other than none auto-confirms
+// AU6  a head that moved between the first read and the record still records
+// AU7  a headless session records
+// AU8  a throw while recording (store.set) loses the checkpoint instead of falling back to the pane
+// AU9  an unreadable PR state at the second read records
+// AU10 a stale pending checkpoint of the same PR survives an auto-confirm
+// M1   /pathway from a non-composer origin (the bridge, i.e. mobile remote control) shows a plan read in the session root, where no stamp lives
+// M2   a bare /pathway with a pending checkpoint does not draw it again, or runs the engine
+// M3   /pathway <pr> with no --body from the bridge does not use the pending body, or records
+const AUTO = { eligible: true, band: 'MID', reason: 'Band MID is recommended none: no CodeRabbit PR bot, the internal review stack covers it.' }
+const autoJson = (over: Rec = {}) =>
+  ({ stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], budget: [0, 0], band: { band: 'MID' }, auto: AUTO, ...over })) })
+const confirms = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.includes('--confirm'))
+const viewJson = (over: Rec = {}) => ({ stdout: JSON.stringify({ isDraft: true, state: 'OPEN', headRefOid: HEAD, headRefName: 'feat/x', author: { login: 'Rev4nchist' }, ...over }) })
+
+describe('pr-checkpoint: auto-confirm', () => {
+  test('AU1 an eligible checkpoint records none with --by auto and applies it, with no pane and no press', async ($, on) => {
+    const { seen, store } = world(on, { json: autoJson() })
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    const calls = engineCalls(seen).filter(call => !call.startsWith('--json'))
+    expect(calls[0]).toMatch(/^--confirm none --by auto --body \S*pr-body\.md$/)
+    expect(calls[1]).toBe('--apply 7')
+    expect(seen.opens).toEqual([])
+    const record = store.get('checkpoint:pr:7') as Rec
+    expect(record.state).toBe('applied')
+    expect(record.pathway).toBe('none')
+    expect(record.label).toBe('review:none')
+    expect(record.decided_by).toBe('auto')
+    expect(record.budget).toEqual([0, 0])
+    expect(record.pr).toBe(7)
+    expect(record.session).toBe(SESSION)
+    expect(store.get(PENDING)).toBeUndefined()
+    expect(told.text).toMatch(/auto-confirmed/i)
+    expect(told.text).toMatch(/ready/i)
+    expect(told.text).not.toMatch(/wait for dave/i)
+  })
+
+  test('AU1b the toast names the band and says auto-confirmed; the model is told it was automatic, with no turn', async ($, on) => {
+    const { seen, session } = world(on, { json: autoJson() })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(seen.toasts.some(text => /#7/.test(text) && /MID/.test(text) && /auto-confirmed/i.test(text))).toBe(true)
+    const rows = session.appended().filter(row => JSON.stringify(row.message).includes('PR checkpoint:'))
+    expect(rows.length).toBe(1)
+    const text = JSON.stringify(rows[0]!.message)
+    expect(text).toMatch(/auto-confirmed/i)
+    expect(text).toContain('MID')
+    expect(text).toContain('review:none')
+    expect(text).not.toMatch(/Dave chose/)
+    expect(text).toMatch(/do not merge/i)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('AU1c in a worktree the auto record runs there, like a press (W2)', async ($, on) => {
+    const { seen } = world(on, wtOpts({ json: autoJson() }))
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(confirms(seen)[0]!.cwd).toBe(WT)
+    expect(seen.run.find(r => r.argv.includes('--apply'))?.cwd).toBe(WT)
+  })
+
+  test('AU2 a refused record opens the pane (the ask), applies nothing, and the tool says why', async ($, on) => {
+    const { seen, store } = world(on, { json: autoJson(), confirm: { exitCode: 1, stderr: 'pr-checkpoint: refused: --by auto is not allowed here: x' } })
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(counts(seen).apply).toBe(0)
+    expect(seen.opens.length).toBe(1)
+    expect(store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(store.get(PENDING)).toBeDefined()
+    expect(told.text).toMatch(/side pane/i)
+    expect(told.text).toMatch(/auto-confirm/i)
+    expect(told.text).toMatch(/wait for dave/i)
+    const pane = await mountPane($)
+    expect(await keys(pane)).toEqual(['opt-none', 'opt-coderabbit', 'dismiss'])
+  })
+
+  test('AU3 a refused apply opens the pane with the error and a Retry button; the record stays confirmed', async ($, on) => {
+    const { seen, store } = world(on, { json: autoJson(), apply: { exitCode: 1, stderr: 'pr-checkpoint: refused: PR #7 is not a draft' } })
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(counts(seen).apply).toBe(1)
+    expect(seen.opens.length).toBe(1)
+    expect((store.get('checkpoint:pr:7') as Rec).state).toBe('confirmed')
+    expect(told.text).toMatch(/side pane/i)
+    const pane = await mountPane($)
+    expect(await keys(pane)).toContain('retry-apply')
+    expect(await paneText(pane)).toContain('not a draft')
+  })
+
+  const NOT_AUTO: [string, Reply][] = [
+    ['no auto block (an old engine)', { stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], budget: [0, 0] })) }],
+    ['eligible false', autoJson({ auto: { ...AUTO, eligible: false } })],
+    ['eligible not a boolean', autoJson({ auto: { ...AUTO, eligible: 'yes' } })],
+    ['a malformed block', autoJson({ auto: 'MID' })],
+  ]
+  for (const [label, json] of NOT_AUTO) {
+    test(`AU4 ${label} waits for the press`, async ($, on) => {
+      const { seen } = world(on, { json })
+      await start($)
+      const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+      expect(counts(seen).confirm + counts(seen).apply).toBe(0)
+      expect(seen.opens.length).toBe(1)
+      expect(told.text).toMatch(/wait for dave/i)
+    })
+  }
+
+  test('AU5 eligible true with a recommendation other than none waits for the press', async ($, on) => {
+    const { seen } = world(on, { json: autoJson({ recommended: 'coderabbit', options: [option('coderabbit'), option('none')] }) })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(counts(seen).confirm).toBe(0)
+    expect(seen.opens.length).toBe(1)
+  })
+
+  test('AU6 a head that moved between the first read and the record waits for the press', async ($, on) => {
+    const { seen, store } = world(on, { json: autoJson(), viewSeq: [viewJson(), viewJson({ headRefOid: OTHER_HEAD })] })
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(counts(seen).confirm).toBe(0)
+    expect(seen.opens.length).toBe(1)
+    expect(store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(told.text).toMatch(/moved/i)
+  })
+
+  const SECOND_READ: [string, Reply][] = [
+    ['a gh failure', { exitCode: 1, stderr: 'gh: HTTP 502' }],
+    ['text that is not JSON', { stdout: 'not json' }],
+    ['a timeout', 'throw'],
+    ['a PR that left draft', viewJson({ isDraft: false })],
+  ]
+  for (const [label, second] of SECOND_READ) {
+    test(`AU9 ${label} at the second PR read waits for the press`, async ($, on) => {
+      const { seen } = world(on, { json: autoJson(), viewSeq: [viewJson(), second] })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      expect(counts(seen).confirm).toBe(0)
+      expect(seen.opens.length).toBe(1)
+    })
+  }
+
+  test('AU7 a headless session still gets the text plan only', async ($, on) => {
+    const { seen, store } = world(on, { json: autoJson() })
+    await start($, false)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(told.text).toMatch(/Nothing was recorded/)
+    expect(counts(seen).confirm + counts(seen).apply).toBe(0)
+    expect([...store.keys()].filter(key => key.startsWith('checkpoint:'))).toEqual([])
+  })
+
+  test('AU8 a throw while recording falls back to the pane and leaves no record behind', async ($, on) => {
+    const w = world(on, { json: autoJson() })
+    await start($)
+    w.fail.set = true
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(w.seen.opens.length).toBe(1)
+    expect(told.text).toMatch(/side pane/i)
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(w.store.get(PENDING)).toBeDefined()
+  })
+
+  test('AU10 a stale pending checkpoint of the same PR is cleared by an auto-confirm', async ($, on) => {
+    const { store } = world(on, {
+      json: autoJson(),
+      store: { [PENDING]: { pr: 7, body: 'old.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: OTHER_HEAD, at: NOW } },
+    })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(store.get(PENDING)).toBeUndefined()
+    expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('auto')
+  })
+})
+
+describe('pr-checkpoint: /pathway from a surface that is not the composer (mobile remote control)', () => {
+  test('M1 a bridge /pathway <pr> reads the plan in the PR worktree (where the stamp is), says why it only shows the plan, and records nothing', async ($, on) => {
+    const { seen, store } = world(on, wtOpts())
+    await start($)
+    const ran = await slash($, '7 none --body pr-body.md', 'bridge')
+    const plan = seen.run.find(r => r.argv.some(a => a.includes('pr-checkpoint.mjs')) && !r.argv.includes('--json'))!
+    expect(plan.argv[1]).toBe(ENGINE)
+    expect(plan.cwd).toBe(WT)
+    expect(counts(seen).confirm + counts(seen).apply).toBe(0)
+    expect(store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(ran.text ?? '').toContain('PR checkpoint for')
+    expect(ran.text ?? '').toMatch(/bridge/)
+    expect(ran.text ?? '').toMatch(/composer/)
+  })
+
+  test('M1b with a pending checkpoint the plan runs in its checkout without a gh call', async ($, on) => {
+    const { seen } = world(on, wtOpts())
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    const before = seen.run.length
+    await slash($, '7', 'bridge')
+    const after = seen.run.slice(before)
+    const plan = after.find(r => r.argv.some(a => a.includes('pr-checkpoint.mjs')) && !r.argv.includes('--json'))!
+    expect(plan.cwd).toBe(WT)
+    expect(after.filter(r => r.argv[0] === 'gh')).toEqual([])
+  })
+
+  test('M1c a headless /pathway makes no gh call to find the worktree (K4b)', async ($, on) => {
+    const { seen } = world(on, wtOpts())
+    await start($, false)
+    const ran = await slash($, '7 none --body pr-body.md')
+    expect(ran.text ?? '').toContain('PR checkpoint for')
+    expect(seen.run.filter(r => r.argv[0] === 'gh')).toEqual([])
+    expect(counts(seen).confirm + counts(seen).apply).toBe(0)
+  })
+
+  test('M2 a bare /pathway with a pending checkpoint draws it again and runs no engine call', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    const engineBefore = engineCalls(seen).length
+    const opensBefore = seen.opens.length
+    const ran = await slash($, '', 'bridge')
+    expect(ran.text ?? '').toMatch(/side pane/i)
+    expect(seen.opens.length).toBe(opensBefore + 1)
+    expect(engineCalls(seen).length).toBe(engineBefore)
+  })
+
+  test('M3 a bridge /pathway 7 none with no --body takes the body of the pending checkpoint, and still records nothing', async ($, on) => {
+    const { seen, store } = world(on, wtOpts())
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    const ran = await slash($, '7 none', 'bridge')
+    expect(ran.text ?? '').toContain('PR checkpoint for')
+    expect(counts(seen).confirm + counts(seen).apply).toBe(0)
+    expect(store.get('checkpoint:pr:7')).toBeUndefined()
   })
 })

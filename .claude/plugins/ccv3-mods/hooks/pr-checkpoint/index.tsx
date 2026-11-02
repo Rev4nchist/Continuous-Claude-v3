@@ -22,6 +22,8 @@ import {
   USAGE,
   askButtonLabel,
   askOrder,
+  autoNotice,
+  autoToast,
   clip,
   commentArgv,
   costText,
@@ -178,12 +180,17 @@ type Prepared = { ok: true; pending: Pending }
 
 const fail = (text: string): Failure => ({ ok: false, text })
 
-/** The text plan: the engine in text mode. Never --json, --confirm or --apply, never gh. */
-const textPlan = async ($: EngineInterface, root: string): Promise<string> => {
-  const ran = await run($, engineArgv(root), root, ENGINE_TIMEOUT_MS)
+/**
+ * The text plan: the engine in text mode. Never --json, --confirm or --apply, never gh.
+ * `checkout` is the cwd the engine reads its facts in (the PR worktree holds the pre-pr stamp; the session root may not).
+ * `via` names a live session's non-composer origin (the bridge is mobile remote control): the plan says why nothing was recorded.
+ */
+const textPlan = async ($: EngineInterface, root: string, checkout: string = root, via: string | null = null): Promise<string> => {
+  const ran = await run($, engineArgv(root), checkout, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return `pr-checkpoint could not run (${ran.text}). Nothing was recorded. The PR stays a draft.`
   const out = (ran.out || ran.err).trim()
-  return `${out}\nNothing was recorded. The PR stays a draft. Dave runs ${SLASH} in an interactive session.`
+  const where = via ? `This ${SLASH} came from ${via}, not Dave's terminal composer, so it only shows the plan. Dave types ${SLASH} in the composer to record it.` : `Dave runs ${SLASH} in an interactive session.`
+  return `${out}\nNothing was recorded. The PR stays a draft. ${where}`
 }
 
 const gitLines = async ($: EngineInterface, root: string, argv: string[]): Promise<string | null> => {
@@ -211,6 +218,18 @@ const checkoutOf = async ($: EngineInterface, root: string, branch: string): Pro
   const found = listed === null ? null : worktreeFor(listed, branch)
   if (!found || samePath(found, root)) return root
   return (await $.fs.exists(`${found}/${ENGINE_REL}`)) ? found : root
+}
+
+/** The checkout of a PR's branch for a command that gave no pending checkpoint: one read of the PR, then checkoutOf. Any failure: the session root. */
+const checkoutOfPr = async ($: EngineInterface, sessionRoot: string, pr: number): Promise<string> => {
+  const viewed = await run($, viewArgv(pr), sessionRoot, VIEW_TIMEOUT_MS)
+  if (!viewed.ok || viewed.code !== 0) return sessionRoot
+  try {
+    const branch = (JSON.parse(viewed.out) as { headRefName?: unknown }).headRefName
+    return typeof branch === 'string' ? await checkoutOf($, sessionRoot, branch) : sessionRoot
+  } catch {
+    return sessionRoot
+  }
 }
 
 /** The roots a relative body path is looked up in, in order: the PR checkout, then the session root. */
@@ -381,6 +400,58 @@ const exclusive = async (press: () => Promise<void>): Promise<void> => {
   }
 }
 
+// ---- auto-confirm (review factory step A, Dave 2026-11-01) --------------------------------------------------------------------
+// The engine says a PR may be confirmed without a press (`result.auto.eligible`: band LOW, MID or ELEVATED, recommended none, config equal
+// to main, labels read, kill switch checkpoint.autoConfirm on). The mod then records exactly what a press of `none` records, with decided_by
+// "auto". Anything short of a clean record falls back to the pane ask. Interactive sessions only (a headless run gets the text plan).
+
+type AutoOutcome = { kind: 'done'; record: CheckpointRecord } | { kind: 'failed'; why: string; stage: 'confirm' | 'apply' | 'check' }
+
+/** Why the PR is no longer what the checkpoint read, or null: a second read right before the record (the first read was before the engine ran). */
+const driftSince = async ($: EngineInterface, root: string, pending: Pending): Promise<string | null> => {
+  const ran = await run($, viewArgv(pending.pr), root, VIEW_TIMEOUT_MS)
+  if (!ran.ok) return `could not read the PR again (${ran.text})`
+  if (ran.code !== 0) return `could not read the PR again (${firstLine(ran.err || ran.out) || `gh exited ${ran.code}`})`
+  let info: { isDraft?: unknown; headRefOid?: unknown }
+  try {
+    info = JSON.parse(ran.out)
+  } catch {
+    return 'gh printed no JSON on the second read'
+  }
+  if (info.isDraft !== true) return 'the PR is no longer a draft'
+  if (info.headRefOid !== pending.prHead) return `the head moved to ${typeof info.headRefOid === 'string' ? info.headRefOid.slice(0, 7) : 'an unknown commit'}`
+  return null
+}
+
+/** null: the engine did not allow it, so nothing was tried. Otherwise the record, or why the pane must ask. Never throws. */
+const autoConfirm = async ($: EngineInterface, pending: Pending): Promise<AutoOutcome | null> => {
+  const { result } = pending
+  // Both the engine's flag and the recommendation: a flag alone never records a pathway the engine does not recommend.
+  if (result.auto.eligible !== true || result.recommended !== 'none') return null
+  if (pressing) return { kind: 'failed', why: 'a pane press is running', stage: 'check' }
+  pressing = true
+  try {
+    const drift = await driftSince($, pending.root, pending)
+    if (drift) return { kind: 'failed', why: drift, stage: 'check' }
+    const out = await recordPathway($, { pr: pending.pr, root: pending.root, body: pending.body, result }, 'none', 'auto')
+    if (out.stage !== 'done') return { kind: 'failed', why: out.text, stage: out.stage }
+    return { kind: 'done', record: out.record }
+  } catch (err) {
+    return { kind: 'failed', why: message(err), stage: 'check' }
+  } finally {
+    pressing = false
+  }
+}
+
+/** The visible line to Dave and the note for the model. The pane is not opened, so an older pending checkpoint of this PR goes. */
+const finishAuto = async ($: EngineInterface, record: CheckpointRecord, band: string | null): Promise<void> => {
+  $.ui.toast(autoToast({ pr: record.pr, band }), { timeoutMs: 15_000 })
+  const old = await loadPending($)
+  if (old && old.pr === record.pr) await clearPending($)
+  await tellModel($, autoNotice({ pr: record.pr, band, label: record.label, budget: record.budget }))
+  await closeIfIdle($)
+}
+
 const pressOption = ($: EngineInterface, pathway: string, isRecommended: boolean): Promise<void> => exclusive(() => runOption($, pathway, isRecommended))
 
 const runOption = async ($: EngineInterface, pathway: string, isRecommended: boolean): Promise<void> => {
@@ -543,9 +614,16 @@ const toolText = async ($: EngineInterface, pr: number, body: string): Promise<s
   }
   const prepared = await prepare($, root, pr, body)
   if (!prepared.ok) return prepared.text
+  const auto = await autoConfirm($, prepared.pending)
+  if (auto?.kind === 'done') {
+    await finishAuto($, auto.record, prepared.pending.result.auto.band)
+    return `The checkpoint for #${pr} was auto-confirmed: band ${prepared.pending.result.auto.band ?? 'unknown'}, none (${auto.record.label ?? 'no label'}). The mod added the label and marked the PR ready. No press is needed. pr_watch continues. Do not merge.`
+  }
   const placed = await show($, prepared.pending)
-  if (placed.isPlaced) return `The checkpoint for #${pr} is in Dave's side pane. ${WAIT_FOR_PRESS}`
-  return `The checkpoint for #${pr} is ready, but the pane could not be placed (${placed.reason}). Dave types ${SLASH} to open it. ${WAIT_FOR_PRESS}`
+  const lead = auto ? `Auto-confirm was not possible (${auto.why}), so the checkpoint for #${pr} waits for Dave. ` : ''
+  if (auto?.stage === 'apply') await update($, checkpoint, v => (v ? { ...v, error: auto.why, retry: { pathway: 'none' } } : v))
+  if (placed.isPlaced) return `${lead}The checkpoint for #${pr} is in Dave's side pane. ${WAIT_FOR_PRESS}`
+  return `${lead}The checkpoint for #${pr} is ready, but the pane could not be placed (${placed.reason}). Dave types ${SLASH} to open it. ${WAIT_FOR_PRESS}`
 }
 
 
@@ -613,8 +691,11 @@ const checkpointCommand = async ($: EngineInterface, e: { args: string; origin: 
   if (!root) return { text: `${SLASH} runs in a CCv3 checkout (it needs ${ENGINE_REL} in the session root). Nothing was recorded.` }
   // Only Dave's own command records. A plugin, the SDK or a headless run gets the text plan.
   if (!live || e.origin.kind !== 'composer') {
-    if (!(await $.fs.exists(resolveBody(root, body)))) return { text: missingBody(body, root) }
-    return { text: await textPlan($, root) }
+    // The plan is read where the pre-pr stamp lives: the pending checkpoint's checkout, else the worktree of the PR branch (one gh read).
+    // A headless run makes no gh call. The consent rule is unchanged: nothing is recorded from here.
+    const checkout = !live ? root : pending && pending.pr === pr ? pending.root : await checkoutOfPr($, root, pr)
+    if ((await bodyIn($, checkout, root, body)) === null) return { text: missingBody(body, checkout, root) }
+    return { text: await textPlan($, root, checkout, live ? e.origin.kind : null) }
   }
   const prepared = await prepare($, root, pr, body)
   if (!prepared.ok) return { text: prepared.text }

@@ -113,6 +113,14 @@ export const firstLine = (text: string): string => text.trim().split(/\r?\n/).fi
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
+/** The engine's auto-confirm answer. Only a boolean true is eligible: an old engine (no block), a string or any other shape is not. */
+const autoOf = (value: unknown): CheckpointResult['auto'] => {
+  if (!isObject(value) || value.eligible !== true) {
+    return { eligible: false, band: isObject(value) && typeof value.band === 'string' ? value.band : null, reason: isObject(value) && typeof value.reason === 'string' ? value.reason : 'The engine gave no auto-confirm answer.' }
+  }
+  return { eligible: true, band: typeof value.band === 'string' ? value.band : null, reason: typeof value.reason === 'string' ? value.reason : '' }
+}
+
 /** The engine's `--json` output, or null when it lacks the fields the pane reads. */
 export const parseResult = (stdout: string): CheckpointResult | null => {
   try {
@@ -133,6 +141,7 @@ export const parseResult = (stdout: string): CheckpointResult | null => {
       why: Array.isArray(parsed.why) ? parsed.why.map(String) : [],
       budget: Array.isArray(parsed.budget) && parsed.budget.length === 2 ? [Number(parsed.budget[0]), Number(parsed.budget[1])] : [0, 0],
       config_drift: parsed.config_drift === true,
+      auto: autoOf(parsed.auto),
     }
   } catch {
     return null
@@ -232,6 +241,14 @@ export const askButtonLabel = (kind: CheckpointAsk['kind'], answer: 'yes' | 'no'
 /** What the model reads after Dave presses an option of the checkpoint. */
 export const pressNotice = (a: { pr: number; pathway: string; label: string | null; budget: [number, number]; by: string }): string =>
   `PR checkpoint: Dave chose ${a.pathway} for #${a.pr} (${a.label ?? 'no label'}, ${costText(a.budget)}, by ${a.by}). The mod added the label and marked the PR ready. pr_watch continues. Do not merge.`
+
+/** The toast for an auto-confirm: names the band and that nobody pressed. */
+export const autoToast = (a: { pr: number; band: string | null }): string =>
+  `PR #${a.pr}: band ${a.band ?? 'unknown'}, none auto-confirmed (no bot review). The PR is ready.`
+
+/** What the model reads after an auto-confirm. It was not Dave's press, so it must not say so. */
+export const autoNotice = (a: { pr: number; band: string | null; label: string | null; budget: [number, number] }): string =>
+  `PR checkpoint: none was auto-confirmed for #${a.pr} (band ${a.band ?? 'unknown'}, ${a.label ?? 'no label'}, ${costText(a.budget)}, by auto). No one pressed. The mod added the label and marked the PR ready. pr_watch continues. Do not merge.`
 
 export const isStalePending = (value: unknown, now: number): boolean => {
   const at = (value as { at?: unknown } | null | undefined)?.at
