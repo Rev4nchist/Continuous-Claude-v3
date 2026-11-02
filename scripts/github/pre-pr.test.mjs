@@ -654,6 +654,20 @@ test('P3: a usage report that is not understood does not block the review; remai
   assert.equal(b.usageCalls.length, 1);
 });
 
+test('P6: a usage report of "unavailable" (CodeRabbit lookup_failed, exit 1) means the count is unknown, so the review still runs', async () => {
+  // The real output of `cr usage --agent` (CLI 0.9.0, 2026-11-02) while CodeRabbit's usage lookup was down; `cr review --agent` still worked.
+  const down = '{"type":"status","phase":"usage","status":"unavailable","organization":"Rev4nchist","includedReviews":{"state":"unavailable","reason":"lookup_failed"},"billingPeriod":{"state":"unavailable","reason":"lookup_failed"}}\n';
+  const f = crFixture();
+  f.runner.usage = { status: 1, stdout: down, stderr: '' };
+  const r = await runCodeRabbit(crOpts(f));
+  assert.equal(r.status, 'PASS', r.detail);
+  assert.equal(f.calls.length, 1, 'the review ran');
+  // An error record with a non-zero exit stays a broken CLI.
+  const g = crFixture();
+  g.runner.usage = { status: 1, stdout: ev({ type: 'status', phase: 'usage', status: 'error', message: 'x' }), stderr: '' };
+  assert.equal((await runCodeRabbit(crOpts(g))).skipReason, 'cli-error');
+});
+
 test('P4: parseUsage reads remaining and the wait', () => {
   assert.deepEqual(parseUsage(ev({ type: 'usage', remaining: 0, fullCapacityInMs: 90_000 })), { remaining: 0, retryMinutes: 2 });
   assert.deepEqual(parseUsage(ev({ type: 'usage', remaining: 3 })), { remaining: 3, retryMinutes: null });
