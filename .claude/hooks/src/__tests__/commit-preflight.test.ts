@@ -608,7 +608,7 @@ describe('the built hook (stdin to stdout)', () => {
 
   // combined-first-commit: breaks when the two outputs conflict (two decisions, or the deny
   // loses the rule text).
-  it('the first commit of a session: rule-router denies with the rule, preflight adds its context', () => {
+  it('the first commit of a session: rule-router injects the rule (#242: inject, not block), preflight adds its context', () => {
     const home = tempDir('home');
     mkdirSync(join(home, '.claude'), { recursive: true });
     const repo = mkRepo(tempDir('combo'), 'work');
@@ -627,8 +627,8 @@ describe('the built hook (stdin to stdout)', () => {
     };
     const router = JSON.parse(run('rule-router', stdin, env).stdout);
     const pre = JSON.parse(run('commit-preflight', stdin, env).stdout);
-    expect(router.hookSpecificOutput.permissionDecision).toBe('deny');
-    expect(router.hookSpecificOutput.permissionDecisionReason).toContain('git-safe.ps1');
+    expect(router.hookSpecificOutput).not.toHaveProperty('permissionDecision');
+    expect(router.hookSpecificOutput.additionalContext).toContain('git-safe.ps1');
     expect(pre.hookSpecificOutput.additionalContext).toContain('verify.mjs');
     expect(pre.hookSpecificOutput).not.toHaveProperty('permissionDecision');
     // The re-issued commit: the router is quiet, the preflight still speaks.
