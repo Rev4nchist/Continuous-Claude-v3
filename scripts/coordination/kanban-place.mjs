@@ -122,13 +122,24 @@ function hashFields(parts) {
 }
 
 /**
+ * The status the form starts from. The saved card status counts only while the card
+ * is pending (Dave changed it after the last sync). A synced status is history: the
+ * lane may have moved since, so the live lane state is the baseline then.
+ */
+function cardBase(doc, laneState) {
+  var four = ['backlog', 'ready', 'blocked', 'done'];
+  if (doc && typeof doc === 'object' && four.indexOf(doc.status) >= 0 && isPending(doc)) return doc.status;
+  return four.indexOf(laneState) >= 0 ? laneState : '';
+}
+
+/**
  * The fields Save must write: only what Dave changed, never `active`.
  *
  * doc       : the saved `cards/<lane>` body, or null.
  * form      : { status, note, question } as typed. status '' means "keep current".
  * laneState : the lane's state when the page was drawn.
  *
- * The status baseline is the saved status, else the lane state. An active lane
+ * The status baseline is the saved status while the card is pending, else the lane state. An active lane
  * never gets a status. Note and question are trimmed and cut at 1000 characters.
  */
 function cardDiff(doc, form, laneState) {
@@ -136,7 +147,7 @@ function cardDiff(doc, form, laneState) {
   var f = form && typeof form === 'object' ? form : {};
   var four = ['backlog', 'ready', 'blocked', 'done'];
   var out = {};
-  var base = four.indexOf(d.status) >= 0 ? d.status : (four.indexOf(laneState) >= 0 ? laneState : '');
+  var base = cardBase(doc, laneState);
   if (laneState !== 'active' && typeof f.status === 'string' && four.indexOf(f.status) >= 0 && f.status !== base) out.status = f.status;
   var keys = ['note', 'question'];
   for (var i = 0; i < keys.length; i++) {
@@ -189,4 +200,4 @@ function plainPrompt(lane, others) {
   ].join('\n');
 }
 
-export { placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardDiff, plainPrompt };
+export { placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt };

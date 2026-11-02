@@ -583,11 +583,11 @@ const commands = {
 
     let plan;
     if (dry) {
-      plan = planKanban(input, (await c.query(`SELECT id, state, priority, note FROM agentic_os.lane`)).rows);
+      plan = planKanban(input, (await c.query(KANBAN_LANES)).rows);
     } else {
       await c.query('BEGIN');
       try {
-        const lanes = (await c.query(`SELECT id, state, priority, note FROM agentic_os.lane FOR UPDATE`)).rows;
+        const lanes = (await c.query(`${KANBAN_LANES} FOR UPDATE OF l`)).rows;
         plan = planKanban(input, lanes);
         for (const a of plan.actions) await applyKanbanAction(c, a);
         await c.query('COMMIT');
@@ -609,7 +609,7 @@ const commands = {
     const line = `kanban${dry ? ' (dry run, nothing written)' : ''}: ${summary.priority} priority, ${summary.state} state, ${summary.note} notes, ${summary.skipped} skipped`;
     if (JSON_OUT) {
       const results = plan.results.map((r) => (r.applied && !dry ? { ...r, syncedAt } : r));
-      return { dryRun: dry, summary, syncedAt, actions: plan.actions, results, skipped: plan.skipped };
+      return { dryRun: dry, summary, syncedAt, appliedColumns: plan.appliedColumns, actions: plan.actions, results, skipped: plan.skipped };
     }
     const clip = (v) => String(v ?? '(none)').replace(/\s+/g, ' ').slice(0, 70);
     return [
@@ -619,6 +619,12 @@ const commands = {
     ].join('\n');
   },
 };
+
+/**
+ * The lanes the kanban planner sees. `held` is NOT RECLAIMABLE: a live session owns the
+ * lane, so a card or column must not change its state. Same predicate as claim and next.
+ */
+const KANBAN_LANES = `SELECT l.id, l.state, l.priority, l.note, NOT ${RECLAIMABLE} AS held FROM agentic_os.lane l`;
 
 /** One planned action as one UPDATE. The state SQL mirrors the `state` command: done and ready release the lane. */
 async function applyKanbanAction(c, a) {

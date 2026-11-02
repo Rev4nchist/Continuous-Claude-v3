@@ -30,12 +30,12 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
    ```json
    {
      "readAt": "<readAt>",
-     "board": { "columns": {"now": [], "next": [], "later": [], "waiting": []}, "updatedAt": "...", "syncedAt": "..." },
+     "board": { "columns": {"now": [], "next": [], "later": [], "waiting": []}, "updatedAt": "...", "syncedAt": "...", "appliedColumns": {"now": [], "next": [], "later": [], "waiting": []} },
      "cards": [ { "id": "<lane id>", "status": "...", "note": "...", "question": "...", "appliedNote": "...", "appliedQuestion": "...", "updatedAt": "...", "syncedAt": "..." } ]
    }
    ```
 
-   Copy the values as they are. The card `id` is the doc id, which is the lane id. Leave out fields the doc does not have.
+   Copy the values as they are, `appliedColumns` too (leave it out on the first sync). The card `id` is the doc id, which is the lane id. Leave out fields the doc does not have.
 
 4. Show the plan. Nothing is written yet.
 
@@ -54,8 +54,8 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
    The command needs `CLAUDE_CODE_SESSION_ID`. It runs in one transaction. A second run of the same file changes nothing.
 
 6. Write back to the page with `ArtifactData update`. Pin each write with `if_version`.
-   - For each entry in `results`: update `cards/<laneId>` with `syncResult`, and with `syncedAt` when the entry has one. Entries with `applied: true` also get `appliedNote` and `appliedQuestion` (copy them from the entry, null included), so a later status-only edit does not post the same note again. Entries with `applied: false` get `syncResult` only. They stay pending.
-   - Update `kanban/board` with the top-level `syncedAt`.
+   - For each entry in `results`: update `cards/<laneId>` with `syncResult`, and with `syncedAt` when the entry has one. Entries with `applied: true` also get `appliedNote` and `appliedQuestion` (copy them from the entry, null included), so a later status-only edit does not post the same note again. Entries with `applied: false` get `syncResult` only, and also `appliedNote` and `appliedQuestion` when the entry has them (a held lane). They stay pending.
+   - Update `kanban/board` with the top-level `syncedAt` and the top-level `appliedColumns` (skip `appliedColumns` when it is null). The next run moves only lanes whose column differs from `appliedColumns`.
    - On a version conflict, Dave edited the doc while you worked. Read the doc again. Retry the write with the new version and the same `syncedAt`. The newer `updatedAt` keeps it pending.
 
 7. Re-render and republish the board to the same url. Follow step 3 of [create_handoff](../create_handoff/SKILL.md):
@@ -80,6 +80,8 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
 
 - A card applies only while pending: `updatedAt` is later than `syncedAt`, or `syncedAt` is missing. The board columns follow the same rule.
 - An active lane is never changed by a card. The result is `skipped: active` and the card stays pending.
+- A held lane (a live session owns it, same test as `lane.mjs claim`) keeps its state. A card status or a column move gives `skipped: held` and the card stays pending. Notes and questions still apply. Priority still applies.
+- A column moves a lane's state only when the lane's column differs from `appliedColumns`. A lane that stays in waiting after Dave set it to `ready` on its card stays `ready`.
 - An id with no lane gets `skipped: no such lane`.
 - A card status wins over the column for the same lane.
 - Each change is logged as a lane event of kind `kanban`. Other sessions see the notes in `lane.mjs inbox`.

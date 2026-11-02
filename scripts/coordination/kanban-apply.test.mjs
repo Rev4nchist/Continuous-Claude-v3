@@ -311,3 +311,81 @@ test('a long column never overflows into another column: 30 later lanes, then wa
   assert.equal(pri.w, 31);
   assert.ok(!p.actions.some((a) => a.kind === 'state'), 'session-blocked later lanes are never unblocked');
 });
+
+// ---- finding 1: column state follows only lanes whose column changed since the last applied board
+
+const held = (l) => ({ ...l, held: true });
+
+test('a reorder after Dave unblocked a waiting lane does not re-block it or re-add the waiting note', () => {
+  // card status ready was applied; the lane still sits in the waiting column; Dave then reorders "now".
+  const lanes = [lane('a', 'ready', 3, 'Dave (kanban): go'), lane('b', 'backlog', 1)];
+  const applied = { now: ['b'], next: [], later: [], waiting: ['a'] };
+  const edited = board({ now: ['b', 'c'], waiting: ['a'] }, { updatedAt: '2026-11-02T12:00:00Z', syncedAt: '2026-11-02T10:05:00Z', appliedColumns: applied });
+  const p = plan({ board: edited, cards: [] }, [...lanes, lane('c', 'backlog', 9)]);
+  assert.ok(!p.actions.some((a) => a.laneId === 'a' && (a.kind === 'state' || a.kind === 'note')), kinds(p).join());
+  assert.ok(kinds(p).includes('c:priority:9->2'), 'rank still follows the full current order');
+});
+
+test('a lane that moves into waiting after the last applied board is still blocked', () => {
+  const edited = board({ waiting: ['a'] }, { updatedAt: '2026-11-02T12:00:00Z', syncedAt: '2026-11-02T10:05:00Z', appliedColumns: cols({ now: ['a'] }) });
+  const p = plan({ board: edited, cards: [] }, [lane('a', 'ready', 1)]);
+  assert.deepEqual(kinds(p), ['a:state:ready->blocked', `a:note:null->${WAITING_NOTE}`]);
+});
+
+test('a lane that leaves waiting after the last applied board goes back to backlog; one that stayed out does not move again', () => {
+  const edited = board({ now: ['a', 'b'] }, { updatedAt: '2026-11-02T12:00:00Z', syncedAt: '2026-11-02T10:05:00Z', appliedColumns: cols({ now: ['b'], waiting: ['a'] }) });
+  const p = plan({ board: edited, cards: [] }, [lane('a', 'blocked', 1, WAITING_NOTE), lane('b', 'blocked', 2, WAITING_NOTE)]);
+  assert.ok(kinds(p).includes('a:state:blocked->backlog'));
+  assert.ok(!kinds(p).some((k) => k.startsWith('b:state')), 'b was already out of waiting in the applied board');
+});
+
+test('with no appliedColumns every lane counts as changed (first sync)', () => {
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [] }, [lane('a', 'ready', 1)]);
+  assert.ok(kinds(p).includes('a:state:ready->blocked'));
+});
+
+test('planKanban returns appliedColumns: a copy of the columns it applied, or the old copy when the board is not pending', () => {
+  const cur = board({ now: ['a'], waiting: ['b'] });
+  const p = plan({ board: cur, cards: [] }, [lane('a'), lane('b')]);
+  assert.deepEqual(p.appliedColumns, cols({ now: ['a'], waiting: ['b'] }));
+  assert.notEqual(p.appliedColumns.now, cur.columns.now, 'a copy, not the same array');
+  const old = cols({ later: ['z'] });
+  const synced = board({ now: ['a'] }, { syncedAt: '2026-11-02T10:05:00Z', appliedColumns: old });
+  assert.deepEqual(plan({ board: synced, cards: [] }, [lane('a')]).appliedColumns, old);
+  assert.equal(plan({ cards: [] }, []).appliedColumns, null);
+});
+
+// ---- finding 3: a held lane keeps its state; notes still apply
+
+test('a pending card status on a held lane is skipped: held, and no state action', () => {
+  const p = plan({ board: board({}), cards: [card('a', { status: 'ready' })] }, [held(lane('a', 'blocked', 1))]);
+  assert.deepEqual(p.actions, []);
+  assert.equal(result(p, 'a').syncResult, 'skipped: held');
+  assert.equal(result(p, 'a').applied, false, 'the card stays pending');
+  assert.deepEqual(p.skipped, [{ laneId: 'a', reason: 'held' }]);
+});
+
+test('a note and question on a held lane still apply, and are recorded so they are not posted twice', () => {
+  const p = plan({ board: board({}), cards: [card('a', { status: 'done', note: 'n', question: 'q' })] }, [held(lane('a', 'review', 1, 'prev'))]);
+  assert.deepEqual(kinds(p).map((k) => k.split(':')[1]), ['note', 'note']);
+  assert.equal(result(p, 'a').syncResult, 'skipped: held');
+  assert.equal(result(p, 'a').appliedNote, 'n');
+  assert.equal(result(p, 'a').appliedQuestion, 'q');
+});
+
+test('a held lane is not moved into or out of waiting by its column, but its rank still follows the order', () => {
+  const p = plan({ board: board({ waiting: ['a'], now: ['b'] }), cards: [] }, [held(lane('a', 'review', 50)), held(lane('b', 'blocked', 50, WAITING_NOTE))]);
+  assert.deepEqual(kinds(p), ['b:priority:50->1', 'a:priority:50->2']);
+  assert.ok(p.skipped.some((k) => k.laneId === 'b' && k.reason === 'held'));
+});
+
+test('a card status equal to a held lane\'s state is a plain no-op, not a skip', () => {
+  const p = plan({ board: board({}), cards: [card('a', { status: 'blocked' })] }, [held(lane('a', 'blocked', 1))]);
+  assert.equal(result(p, 'a').syncResult, 'no change');
+  assert.equal(result(p, 'a').applied, true);
+});
+
+test('a lane that is not held takes the card status as before', () => {
+  const p = plan({ board: board({}), cards: [card('a', { status: 'ready' })] }, [{ ...lane('a', 'blocked', 1), held: false }]);
+  assert.deepEqual(kinds(p), ['a:state:blocked->ready']);
+});

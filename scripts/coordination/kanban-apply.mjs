@@ -20,6 +20,13 @@
  * - Active lanes: the card is skipped whole ("skipped: active"), and the card stays
  *   pending so it applies after the lane stops being active. A column still sets the
  *   priority of an active lane. Priority does not affect a claim.
+ * - Column STATE rules (into waiting -> blocked, out of waiting -> backlog) apply only to
+ *   lanes whose column changed since the last applied board (board.appliedColumns, which
+ *   the sync writes back with syncedAt). Every client save sends all columns, so without
+ *   this a lane Dave unblocked on its card is re-blocked by any later reorder. Rank still
+ *   follows the full current order. No appliedColumns (first sync): every lane counts as changed.
+ * - Held lanes (a live session owns them) never change state from a card or a column.
+ *   Notes still apply. The card result is "skipped: held" and the card stays pending.
  * - Done lanes are never moved into waiting. Done work stays done.
  * - Priority = one rank per placed card, 1..n in board order (now, next, later,
  *   waiting). New lanes default to 50, so they sort after a board of up to 49 cards.
@@ -55,15 +62,42 @@ export function isPending(updatedAt, syncedAt) {
   return !Number.isNaN(updated) && updated > synced;
 }
 
-/** First position wins. Returns Map<laneId, {column, index}>. */
+const boardPending = (board) => isObj(board) && isObj(board.columns) && isPending(board.updatedAt, board.syncedAt);
+
+/** Map<laneId, column> for a saved columns object. First position wins. Not an object: empty map. */
+function columnOf(columns) {
+  const out = new Map();
+  if (!isObj(columns)) return out;
+  for (const column of COLUMNS) {
+    for (const id of Array.isArray(columns[column]) ? columns[column] : []) {
+      if (typeof id === 'string' && id && !out.has(id)) out.set(id, column);
+    }
+  }
+  return out;
+}
+
+/** First position wins. Returns Map<laneId, {column, index, rank, changed}>. */
 function placements(board) {
   const out = new Map();
-  if (!isObj(board) || !isObj(board.columns) || !isPending(board.updatedAt, board.syncedAt)) return out;
+  if (!boardPending(board)) return out;
+  const before = columnOf(board.appliedColumns);
   for (const column of COLUMNS) {
     const ids = Array.isArray(board.columns[column]) ? board.columns[column] : [];
     ids.forEach((id, index) => {
-      if (typeof id === 'string' && id && !out.has(id)) out.set(id, { column, index, rank: out.size + 1 });
+      // changed: another column than in the last applied board (every lane, when none is known).
+      if (typeof id === 'string' && id && !out.has(id)) out.set(id, { column, index, rank: out.size + 1, changed: before.get(id) !== column });
     });
+  }
+  return out;
+}
+
+/** A copy of the columns this run applied (ids only), or the saved copy when the board is not pending. */
+function appliedColumnsOf(board) {
+  if (!isObj(board)) return null;
+  if (!boardPending(board)) return isObj(board.appliedColumns) ? board.appliedColumns : null;
+  const out = {};
+  for (const column of COLUMNS) {
+    out[column] = (Array.isArray(board.columns[column]) ? board.columns[column] : []).filter((id) => typeof id === 'string' && id);
   }
   return out;
 }
@@ -81,9 +115,13 @@ const KEPT_MAX = 2000;
 const withPrevious = (text, prev) => (!prev || prev.startsWith(text) ? text : `${text}${KEEP_SEP}${prev}`.slice(0, KEPT_MAX));
 const shows = (note, text) => typeof note === 'string' && note.startsWith(text);
 
-/** The state the column asks for, or null for "no opinion". */
+/**
+ * The state the column asks for, or null for "no opinion". Only a lane whose column
+ * CHANGED since the last applied board has an opinion: every client save sends all
+ * columns, so a standing column must not undo what Dave set on a card afterwards.
+ */
 function columnState(lane, place) {
-  if (!place || lane.state === 'active') return null;
+  if (!place || !place.changed || lane.state === 'active') return null;
   if (place.column === 'waiting') return ['active', 'done', 'blocked'].includes(lane.state) ? null : 'blocked';
   return wasWaiting(lane) ? 'backlog' : null;
 }
@@ -104,13 +142,18 @@ function readCard(card, lane) {
   if (note && note !== cleanText(card.appliedNote)) notes.push(`Dave (kanban): ${note}`);
   if (question && question !== cleanText(card.appliedQuestion)) notes.push(`Dave asks (kanban): ${question}`);
   const applied = { applied: true, appliedNote: note ?? null, appliedQuestion: question ?? null };
+  // A held lane keeps its state. Its notes still apply; the card stays pending so the status can apply later.
+  if (lane.held && card.status && card.status !== lane.state) {
+    return { status: null, notes, held: true, result: { ...applied, applied: false, syncResult: 'skipped: held' } };
+  }
   return { status: card.status || null, notes, result: applied };
 }
 
 /**
  * @param {{board?: object, cards?: object[]}} input
- * @param {{id: string, state: string, priority: number, note: string|null}[]} lanes
- * @returns {{actions: object[], results: object[], skipped: {laneId: string, reason: string}[]}}
+ * @param {{id: string, state: string, priority: number, note: string|null, held?: boolean}[]} lanes
+ *   held: a live session owns the lane (lane.mjs computes it with the RECLAIMABLE predicate).
+ * @returns {{actions: object[], results: object[], skipped: {laneId: string, reason: string}[], appliedColumns: object|null}}
  */
 export function planKanban(input, lanes) {
   const inp = isObj(input) ? input : {};
@@ -143,8 +186,12 @@ export function planKanban(input, lanes) {
       const target = p.rank;
       if (lane.priority !== target) act(id, 'priority', lane.priority, target, `${p.column} #${p.index}`);
     }
-    if (read.result?.applied !== false) {
-      const want = read.status ?? columnState(lane, p);
+    if (read.result?.applied !== false || read.held) {
+      const colWant = columnState(lane, p);
+      const want = read.status ?? (lane.held ? null : colWant);
+      if (lane.held && !read.status && colWant && colWant !== lane.state && !skipped.some((k) => k.laneId === id)) {
+        skipped.push({ laneId: id, reason: 'held' });
+      }
       if (want && want !== lane.state) {
         act(id, 'state', lane.state, want, read.status ? 'kanban card status' : `kanban column ${p?.column}`);
         if (read.status) cardDone.push('state');
@@ -160,12 +207,12 @@ export function planKanban(input, lanes) {
     }
     if (read.result) {
       const syncResult = read.result.syncResult ?? (cardDone.length ? `applied: ${cardDone.join(', ')}` : 'no change');
-      const kept = read.result.applied ? { appliedNote: read.result.appliedNote, appliedQuestion: read.result.appliedQuestion } : {};
+      const kept = 'appliedNote' in read.result ? { appliedNote: read.result.appliedNote, appliedQuestion: read.result.appliedQuestion } : {};
       results.push({ laneId: id, syncResult, applied: read.result.applied, ...kept });
       if (!read.result.applied && !skipped.some((k) => k.laneId === id)) {
         skipped.push({ laneId: id, reason: syncResult.replace(/^skipped: /, '') });
       }
     }
   }
-  return { actions, results, skipped };
+  return { actions, results, skipped, appliedColumns: appliedColumnsOf(inp.board) };
 }

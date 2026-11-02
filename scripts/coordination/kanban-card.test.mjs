@@ -167,3 +167,18 @@ test('plainPrompt: a huge note and a long sibling list are capped', () => {
   assert.ok(!p.includes('lane-79'));
   assert.match(p, /and \d+ more/);
 });
+
+// ---- finding 2: the saved card status is a baseline only while the card is pending
+
+test('cardDiff: a synced card status is not the baseline; the live lane state is', () => {
+  // card said ready and was applied; a session later blocked the lane. Dave picks ready again: that is a real change.
+  const synced = { status: 'ready', updatedAt: '2026-11-02T10:00:00Z', syncedAt: '2026-11-02T10:05:00Z' };
+  assert.deepEqual(cardDiff(synced, { status: 'ready', note: '', question: '' }, 'blocked'), { status: 'ready' });
+  assert.deepEqual(cardDiff(synced, { status: 'blocked', note: '', question: '' }, 'blocked'), {});
+});
+
+test('cardDiff: a pending card status is still the baseline', () => {
+  const pending = { status: 'done', updatedAt: '2026-11-02T10:10:00Z', syncedAt: '2026-11-02T10:05:00Z' };
+  assert.deepEqual(cardDiff(pending, { status: 'done', note: '', question: '' }, 'ready'), {});
+  assert.deepEqual(cardDiff(pending, { status: 'ready', note: '', question: '' }, 'ready'), { status: 'ready' });
+});

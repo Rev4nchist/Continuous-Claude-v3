@@ -30,7 +30,7 @@
  *    with textContent.
  *  - No localStorage.
  *
- * Globals inlined ahead of this file by render-board.mjs: placeLanes, isPending,
+ * Globals inlined ahead of this file by render-board.mjs: placeLanes, isPending, cardBase,
  * syncState, cardDiff, plainPrompt (all from kanban-place.mjs).
  */
 (function () {
@@ -400,8 +400,7 @@
     var state = stateOf(id);
     var st = part(id, '.kb-st');
     if (st && state !== 'active' && !keep.status) {
-      var four = ['backlog', 'ready', 'blocked', 'done'];
-      st.value = four.indexOf(d.status) >= 0 ? d.status : (four.indexOf(state) >= 0 ? state : '');
+      st.value = cardBase(d, state);
     }
     if (!keep.note) part(id, '.kb-note').value = typeof d.note === 'string' ? d.note : '';
     if (!keep.question) part(id, '.kb-q').value = typeof d.question === 'string' ? d.question : '';

@@ -21,7 +21,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardDiff, plainPrompt,
+  placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
 } from './kanban-place.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -255,7 +255,7 @@ const kbColumn = (key, name, ids, movable) => `<div class="kcol"${movable ? ` da
 // The client script is plain ES5 text: placeLanes' own source, then the page code.
 const kbClient = readFileSync(join(HERE, 'kanban-client.js'), 'utf8');
 if (/<\/script/i.test(kbClient)) throw new Error('kanban-client.js must not contain a closing script tag');
-const kbScript = `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardDiff, plainPrompt].map((f) => f.toString()).join('\n')}
+const kbScript = `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt].map((f) => f.toString()).join('\n')}
 ${kbClient}`;
 
 const html = `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
