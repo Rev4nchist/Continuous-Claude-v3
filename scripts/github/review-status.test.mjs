@@ -2412,6 +2412,46 @@ ${cli}
 };
 const CARRY_REASON = /no CodeRabbit PR-bot review of the head commit/;
 
+// Lane review-status-severity: an inline comment's severity is its headline mark. The #252 Minor comments quote a "🟠 Major"
+// example in their prose, and the old reader (highest mark anywhere) called them major, so the carry failed for 3 Minors.
+const MINOR_252_A = fixtureText('pr252-inline-minor-quotes-major-4446534119.md');
+const MINOR_252_B = fixtureText('pr252-inline-minor-quotes-major-4446534151.md');
+const inlineSevFn = () => {
+  assert.equal(typeof RS.inlineCommentSeverity, 'function', 'review-status.mjs must export inlineCommentSeverity');
+  return RS.inlineCommentSeverity;
+};
+
+test('SV5: the real #252 Minor inline comments that quote a Major example read as minor', () => {
+  assert.equal(RS.codeRabbitSeverity(MINOR_252_A), 'major', 'precondition: the body text holds a Major mark outside the headline');
+  assert.equal(inlineSevFn()(MINOR_252_A), 'minor');
+  assert.equal(inlineSevFn()(MINOR_252_B), 'minor');
+});
+
+test('SV6: the headline decides both ways; the real #205 and #206 inline comments keep their severity', () => {
+  const sev = inlineSevFn();
+  assert.equal(sev(MAJOR_206), 'major');
+  assert.equal(sev(MINOR_205), 'minor');
+  assert.equal(sev(CRITICAL), 'critical');
+  assert.equal(sev(`${MAJOR_206}\nAn example: **<picture></picture> Minor**`), 'major', 'a Minor quoted under a Major headline stays major');
+  assert.equal(sev('<!-- coderabbit-ai-generated:v1 -->\n\n**\u{1F7E0} Major** · x'), 'major', 'the emoji headline form');
+});
+
+test('SV7: no headline fails closed to the highest mark anywhere, and no mark at all is unknown', () => {
+  const sev = inlineSevFn();
+  assert.equal(sev(UNMARKED), 'unknown');
+  assert.equal(sev(''), 'unknown');
+  assert.equal(sev(null), 'unknown');
+  assert.equal(sev('<!-- coderabbit-ai-generated:v1 -->\n\nProse first. Then `\u{1F7E0} Major` and **<picture></picture> Minor**'), 'major',
+    'a mark that is not on the first content line is not a headline: the highest mark wins');
+});
+
+test('RC0: the real #252 round (two Minor inline comments that quote a Major example) is carried: READY, no inline blocker', () => {
+  const r = carryEval({ carry: carryOf({ reviewComments: [{ id: 4446534119, body: MINOR_252_A }, { id: 4446534151, body: MINOR_252_B }] }),
+    evalOver: { reviews: [{ ...CR_OLD_REVIEW, body: 'Actionable comments posted: 2' }] } });
+  assert.deepEqual(r.coderabbitCarryBlockers, []);
+  assert.equal(r.ready, true, r.reasons.join('; '));
+});
+
 test('RC1: a Minor-only round on an earlier head plus a 12-line push is READY, with the carry named', () => {
   const r = carryEval();
   assert.equal(r.ready, true, r.reasons.join('; '));
