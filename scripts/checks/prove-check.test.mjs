@@ -36,7 +36,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyRun, validateRow, judge, proveRow, substitute, realDeps, InputError } from './prove-check.mjs';
+import { acquireRowLock, rowLockPath, classifyRun, validateRow, judge, proveRow, substitute, realDeps, InputError } from './prove-check.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./prove-check.mjs', import.meta.url));
 const SHIPPED_PROOFS = fileURLToPath(new URL('./proofs.json', import.meta.url));
@@ -215,6 +215,41 @@ test('PC12 fireText: a Semgrep hit fires only when its source line matches, so a
   assert.throws(() => validateRow({ ...row, fireText: '(' }), InputError);
   assert.throws(() => validateRow({ ...row, fireText: '.*' }), InputError);
   assert.throws(() => validateRow({ ...ROW, fireText: 'x' }), /Semgrep/);
+});
+
+test('PC15 a row whose tree is held by a live run is a setup error, and nothing is built or run', () => {
+  const calls = [];
+  const deps = {
+    acquire: () => { throw new Error('tree is in use by pid 4242'); },
+    buildTree: (row, ref) => { calls.push(ref); return { ref, sha: ref, tree: `/t/${ref}`, copied: [] }; },
+    runCmd: () => { calls.push('run'); return FIRE; },
+  };
+  const r = proveRow(ROW, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.reasons[0], /setup error: tree is in use/);
+  assert.deepEqual(calls, []);
+  // the lock is released after a run, also when the run throws
+  let released = 0;
+  const d2 = { ...fakes({ '/t/P': FIRE, '/t/F': CLEAN }), acquire: () => () => { released += 1; } };
+  assert.equal(proveRow(ROW, d2).ok, true);
+  const d3 = { ...d2, runCmd: () => { throw new Error('spawn failed'); } };
+  assert.equal(proveRow(ROW, d3).ok, false);
+  assert.equal(released, 2);
+});
+
+test('PC16 the real lock: a second acquire of the same row fails while the first holds it, and works after release', () => {
+  const repo = mkdtempSync(path.join(tmpdir(), 'pc16-'));
+  const a = acquireRowLock(repo, ROW);
+  assert.throws(() => acquireRowLock(repo, ROW), /in use/);
+  a();
+  const b = acquireRowLock(repo, ROW);
+  b();
+  // a lock left by a dead process is taken over
+  const lockFile = rowLockPath(repo, ROW);
+  mkdirSync(path.dirname(lockFile), { recursive: true });
+  writeFileSync(lockFile, '999999999');
+  const c = acquireRowLock(repo, ROW);
+  c();
 });
 
 // ---- end to end: real git archive, real copy, real child process, real CLI --------------------------------------

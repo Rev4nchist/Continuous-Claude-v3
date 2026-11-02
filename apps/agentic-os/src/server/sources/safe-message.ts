@@ -44,7 +44,7 @@ const POSIX_DEEP_PATH = /(?<![\w:/.])(?:\/[\w.@~+-]+){2,}\/?/g;
  * `<path>'`: one optional quote between `<path>` and the white space is part of the match, so
  * "Reports/x.txt" is absorbed as well. Over-scrubbing is on purpose: losing a word beats leaking a path.
  */
-const PATH_TAIL = /<path>['"`]?((?:[ \t]+(?![^\s]*:\/\/)[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
+const PATH_TAIL = /<path>['"`]?((?:[ \t]+(?![^\s]*(?::\/\/|\]\())[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
 const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
 
 function absorbPathTail(text: string): string {

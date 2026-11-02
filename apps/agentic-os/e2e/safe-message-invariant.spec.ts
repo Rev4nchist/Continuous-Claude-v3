@@ -121,6 +121,9 @@ const SENTENCES: [string, string][] = [
   ["/home/alice/Clients' Reports/finance.txt", '<path>'],
   ["Archive /home/alice/Clients' Reports/finance.txt before Friday", 'Archive <path> before Friday'],
   [String.raw`Archive C:\Users\alice\Clients' Reports\finance.txt before Friday`, 'Archive <path> before Friday'],
+  // A relative Markdown link after a path is its own link, not a path tail (CodeRabbit #243 round 2).
+  ['See /home/alice/file.txt [proof](../proof.md) now', 'See <path> [proof](../proof.md) now'],
+  ['See /home/alice/file.txt [proof](docs/proof.md).', 'See <path> [proof](docs/proof.md).'],
   // A word with no separator after a closed quoted path is not part of it.
   ["Keep '/home/a/x' and more", 'Keep <path> and more'],
 ];

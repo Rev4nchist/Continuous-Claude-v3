@@ -183,13 +183,18 @@ export function proveRow(row, deps) {
   let fix;
   let preRun;
   let fixRun;
+  let release = null;
   try {
+    // One run at a time per row: buildTree clears the tree, so a second run could delete files under a running command.
+    release = deps.acquire ? deps.acquire(row) : null;
     pre = deps.buildTree(row, row.pre);
     preRun = deps.runCmd(row, pre.tree);
     fix = deps.buildTree(row, row.fix);
     fixRun = deps.runCmd(row, fix.tree);
   } catch (e) {
     return { major: row.major, check: row.check, ok: false, reasons: [`setup error: ${e.message}`], setupError: true };
+  } finally {
+    if (typeof release === 'function') release();
   }
   const j = judge(row, preRun, fixRun);
   const phase = (b, v, r) => ({ ref: b.ref, sha: b.sha, tree: b.tree, copied: b.copied ?? [], code: r.code, cmd: r.cmd, ...v });
@@ -245,6 +250,39 @@ function copyOne(repo, primary, tree, c) {
   return rec;
 }
 
+export const rowLockPath = (repo, row) =>
+  path.join(path.resolve(repo), '.claude', 'cache', 'proof', 'locks', `${slug(row.check)}-${slug(row.major)}.lock`);
+
+const pidAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
+
+/**
+ * Hold the row's lock from tree creation to the end of its runs. The lock file holds the owner pid. A live owner
+ * (this process too) is a refusal; a lock left by a dead process is taken over. Returns the release function.
+ */
+export function acquireRowLock(repo, row) {
+  const file = rowLockPath(repo, row);
+  mkdirSync(path.dirname(file), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(file, String(process.pid), { flag: 'wx' });
+      return () => rmSync(file, { force: true });
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const owner = Number.parseInt(readFileSync(file, 'utf8'), 10);
+      if (Number.isInteger(owner) && pidAlive(owner)) throw new Error(`tree of ${row.check} ${row.major} is in use by pid ${owner} (${file})`);
+      rmSync(file, { force: true });
+    }
+  }
+  throw new Error(`could not take the lock ${file}`);
+}
+
 /** Empty and recreate a proof tree. Refuses any path outside <repo>/.claude/cache/proof/. */
 function resetTree(repo, tree) {
   const root = path.join(path.resolve(repo), '.claude', 'cache', 'proof');
@@ -268,6 +306,7 @@ export function realDeps({ repo, env = process.env }) {
   const docker = env.DOCKER_BIN ?? (existsSync(DOCKER_WIN) ? DOCKER_WIN : 'docker');
   const image = env.SEMGREP_IMAGE ?? DEFAULT_IMAGE;
   return {
+    acquire: (row) => acquireRowLock(repo, row),
     buildTree(row, ref) {
       const sha = gitText(repo, ['rev-parse', '--verify', `${ref}^{commit}`]);
       const tree = path.join(repo, '.claude', 'cache', 'proof', sha.slice(0, 8), `${slug(row.check)}-${slug(row.major)}`);
