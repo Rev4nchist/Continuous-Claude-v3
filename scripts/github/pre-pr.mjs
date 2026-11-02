@@ -741,6 +741,11 @@ export function parseUsage(text) {
   return null;
 }
 
+/** True when `cr usage --agent` reports that CodeRabbit could not look the usage up: a usage status record with status "unavailable". */
+export function usageUnavailable(text) {
+  return jsonObjects(text).some((o) => o?.type === 'status' && o?.phase === 'usage' && o?.status === 'unavailable');
+}
+
 const SEVERITIES = ['critical', 'major', 'minor', 'trivial', 'info'];
 /** A status or complete record whose own `status` field is one of these stops the run. Text inside a finding never does. */
 const AWAITING_STATUS = /^(?:awaiting_confirmation|action_required)$/i;
@@ -900,6 +905,9 @@ export function acquireLock(file, info, { nowMs, staleMs, stat = statSync }) {
 /** The free check before a slot is spent. Null to go on, or a SKIP: the CLI is missing (cli-missing), broken (cli-error), or no included review is left. */
 async function preflight(runner, root) {
   const r = await runner({ cwd: root, args: CR_USAGE_ARGS, timeoutMs: USAGE_TIMEOUT_MS });
+  // CodeRabbit could not look the count up (exit 1, status "unavailable"): the count is unknown, not the CLI broken. Go on: the
+  // review itself stops on awaiting_confirmation past the allowance, and pre-pr never passes --use-credits.
+  if (!r.error && !r.timedOut && usageUnavailable(r.stdout)) return null;
   if (r.error || r.timedOut || r.status !== 0) {
     const missing = Boolean(r.error) && MISSING.test(String(r.errorCode ?? r.error));
     const why = r.timedOut ? 'timed out' : r.error ?? `exit ${r.status}${r.stderr ? `: ${clip(r.stderr.trim().split(/\r?\n/)[0], 100)}` : ''}`;
