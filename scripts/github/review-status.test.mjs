@@ -3328,3 +3328,210 @@ test('RB15: a "Review failed" head pays for no carry read; a skipped head still 
   assert.equal(skipped.coderabbitNotice, 'skipped');
   assert.equal(reads, 1, 'a skipped head reads the carry once');
 });
+
+// ---------------------------------------------------------------------------------------------
+// READY follow-up (2026-11-02), Step C1 of the review matrix. Live PR 242, CodeRabbit round 2 (review 5729735980):
+// a Major sat in the review BODY under "## Follow-up Comments" (an "Outside diff" badge, no heading "Outside diff range
+// comments (N)", the marker outside a `>` quote, no review thread) and READY said READY.
+// Ways it can fail, one test each:
+//   the collector reads only the "Outside diff range comments (N)" heading, so the section has no findings -> FU-A
+//   the finding is found but READY does not block on it, or the reason does not name it                       -> FU-B
+//   a bullet naming the finding by id or path:lines does not clear it, or a filler bullet does               -> FU-C
+//   a marker after the section (Review info, details) is counted as a finding                                 -> FU-D
+// ---------------------------------------------------------------------------------------------
+const FU_242 = fixtureText('pr242-review-5729735980-follow-up-major.md');
+const FU_ID = 'ac8b9e0203da201875cdf141';
+const FU_PLACE = 'scripts/github/pre-pr.mjs:405-423';
+
+test('FU-A: the Follow-up Comments section of live PR 242 round 2 yields its finding once, with the id and the place', () => {
+  assert.ok(!/Actionable comments posted|Outside diff range comments/.test(FU_242), 'the live body holds neither the sentence nor the old heading');
+  const one = RS.codeRabbitOutsideFindings({ reviews: [odLive(FU_242, 5729735980, HEAD)] });
+  assert.deepEqual(one, { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 0 });
+  const twice = RS.codeRabbitOutsideFindings({ reviews: [odLive(FU_242, 5729735980, HEAD), odLive(FU_242, 77, HEAD, T2)] });
+  assert.equal(twice.findings.length, 1, 'the same marker id in two reviews counts once');
+});
+
+test('FU-B: a Major under Follow-up Comments with nothing in the PR body makes the head NOT READY, and the reason names it', () => {
+  const r = odEval([odLive(FU_242)]);
+  assert.equal(r.coderabbitOutsideDiff, 1);
+  assert.equal(r.ready, false);
+  const why = reasonOf(r);
+  assert.ok(why.startsWith('CodeRabbit lists 1 outside-diff finding(s) across its reviews of this PR (head aaaaaaa) and the PR body "Outside-diff: handled" list has 0.'), why);
+  assert.ok(why.includes(FU_ID) && why.includes(FU_PLACE), why);
+});
+
+test('FU-C: a bullet naming the finding by marker id or by path:lines clears it; a filler bullet does not', () => {
+  assert.equal(odEval([odLive(FU_242)], HANDLED(1)).ready, false, 'filler');
+  const byId = odEval([odLive(FU_242)], idList(`${FU_ID}: fixed in abc1234`));
+  assert.equal(byId.ready, true, byId.reasons.join('; '));
+  const byPlace = odEval([odLive(FU_242)], idList(`\`${FU_PLACE}\` fixed in abc1234`));
+  assert.equal(byPlace.ready, true, byPlace.reasons.join('; '));
+});
+
+test('FU-D: a marker after the Follow-up section is no finding, and a section with an Outside diff badge but no marker needs a bullet', () => {
+  const after = FU_242.replace(/\n---\n?$/, '\n---\n\n<!-- cr-comment:v1:00000000000000000000beef -->\n');
+  assert.notEqual(after, FU_242, 'the fixture ends with the rule line');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(after)] }).findings.map((f) => f.id), [FU_ID]);
+  const noMarker = FU_242.replace(/<!-- cr-comment:v1:[0-9a-f]{24} -->/, '');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(noMarker)] }), { findings: [], unidentified: 1 });
+  assert.equal(odEval([odLive(noMarker)]).ready, false);
+  assert.equal(odEval([odLive(noMarker)], HANDLED(1)).ready, true, 'the count rule: one bullet covers one');
+});
+
+// CodeRabbit CLI review of f60e94f (2026-11-02). Ways it can fail, one test each:
+//   a body with only the "## Follow-up Comments" heading counts as review content, so it can carry               -> FU-E
+//   another GitHub blob link before "Open the source location" gives the finding the wrong place                  -> FU-F
+test('FU-E: a heading-only Follow-up body is no review content, so it fails closed and cannot carry', () => {
+  const headingOnly = '<!-- coderabbit-ai-generated:v1 -->\n\n## Follow-up Comments\n\nNothing else.\n';
+  assert.equal(RS.hasReviewContent(headingOnly), false);
+  assert.equal(RS.hasReviewContent(FU_242), true, 'control: a parsed follow-up finding is content');
+  const r = carryEval({ carry: carryOf({ reviewComments: [] }), cli: `${CLI_LINE()}${idList(FU_ID)}`, evalOver: { reviews: [outsideReview(headingOnly)] } });
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+  assert.ok(r.coderabbitCarryBlockers.includes('the newest CodeRabbit review has no review sentence'), r.coderabbitCarryBlockers.join('; '));
+});
+
+test('FU-F: the place comes from the "Open the source location" link, not an earlier blob link in the finding', () => {
+  const earlier = '[see this](https://github.com/Rev4nchist/Continuous-Claude-v3/blob/c6a5242e2fdda04a4bba98b419302bbd866638ff/scripts/other/file.mjs#L1-L2)\n\n';
+  const body = FU_242.replace('[Open the source location]', `${earlier}[Open the source location]`);
+  assert.notEqual(body, FU_242);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }).findings, [{ id: FU_ID, location: FU_PLACE }]);
+  assert.equal(odEval([odLive(body)], idList(`\`${FU_PLACE}\` fixed in abc1234`)).ready, true);
+});
+
+// CodeRabbit round 1 on PR 245 (2026-11-02), Major. Ways it can fail, one test each:
+//   an unmarked badged block followed by a marked one lends its source link to the marked finding -> FU-G
+test('FU-G: each Follow-up block owns its marker and its link; an unmarked block lends its place to nobody and still counts', () => {
+  const start = FU_242.indexOf('<details>\n<summary><sub>');
+  const block = FU_242.slice(start, FU_242.lastIndexOf('\n---'));
+  assert.ok(start > 0 && block.includes(FU_ID), 'the fixture block is found');
+  const first = block.replace(/<!-- cr-comment:v1:[0-9a-f]{24} -->/, '').replace('pre-pr.mjs#L405-L423', 'first.mjs#L10-L12');
+  assert.ok(!first.includes('cr-comment') && first.includes('first.mjs#L10-L12'));
+  const two = FU_242.replace(block, `${first}\n\n${block}`);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(two)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 1 });
+  const wrongPlace = odEval([odLive(two)], idList('`scripts/github/first.mjs:10-12` fixed in abc1234', 'filler: another bullet'));
+  assert.equal(wrongPlace.ready, false, 'the first block\'s place does not clear the marked finding');
+  assert.ok(reasonOf(wrongPlace).includes(FU_ID), reasonOf(wrongPlace));
+  assert.equal(odEval([odLive(two)], idList(`${FU_ID}: fixed in abc1234`)).ready, false, 'the unmarked block still needs its own bullet');
+  assert.equal(odEval([odLive(two)], idList(`${FU_ID}: fixed in abc1234`, 'scripts/github/first.mjs:10-12 fixed in abc1234')).ready, true);
+});
+
+// CodeRabbit round 2 on PR 245 (2026-11-02). Ways it can fail, one test each:
+//   a nitpick block, or a marker before the first badge, is read as an outside-diff finding (a nitpick blocks READY) -> FU-H
+//   a `---` or `# comment` line inside a fenced suggestion ends the section early and later findings drop out      -> FU-I
+//   an Outside diff badge the parse misses (a rule line between blocks) leaves unidentified at 0, so READY fails open -> FU-J
+//   a malformed %-escape in the source link path throws out of the collector                                       -> FU-K
+const fuBlock = () => FU_242.slice(FU_242.indexOf('<details>\n<summary><sub>'), FU_242.lastIndexOf('\n---'));
+const FU_ID2 = '1111111111111111111111aa';
+
+test('FU-H: a nitpick block and a marker before the first badge are no outside-diff findings, so a nitpick needs no bullet', () => {
+  const block = fuBlock();
+  const nitpick = block.replace('alt="Outside diff"', 'alt="Nitpick"').replace(FU_ID, '00000000000000000000beef');
+  assert.ok(nitpick.includes('alt="Nitpick"') && nitpick.includes('beef'));
+  const stray = '<!-- cr-comment:v1:00000000000000000000dead -->\n\n';
+  const body = FU_242.replace(block, `${stray}${block}\n\n${nitpick}`);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 0 });
+  const r = odEval([odLive(body)], idList(`${FU_ID}: fixed in abc1234`));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(odEval([odLive(body)]).ready, false, 'the real outside-diff finding still blocks');
+});
+
+test('FU-I: a rule line or a "# comment" inside a fenced suggestion does not end the section; the later finding still counts', () => {
+  const block = fuBlock();
+  const fenced = block.replace('```diff\n', '```diff\n---\n# a comment line in the suggested file\n');
+  assert.notEqual(fenced, block);
+  const second = block.replace(FU_ID, FU_ID2).replace('pre-pr.mjs#L405-L423', 'second.mjs#L7-L9');
+  const body = FU_242.replace(block, `${fenced}\n\n${second}`);
+  const { findings, unidentified } = RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] });
+  assert.deepEqual(findings.map((f) => f.id), [FU_ID, FU_ID2]);
+  assert.equal(unidentified, 0);
+});
+
+test('FU-R: a fence line with info text inside an open fence does not close it; both findings still count', () => {
+  const block = fuBlock();
+  const fenced = block.replace('```diff\n', '```diff\n```js\n');
+  assert.notEqual(fenced, block);
+  const second = block.replace(FU_ID, FU_ID2).replace('pre-pr.mjs#L405-L423', 'second.mjs#L7-L9');
+  const body = FU_242.replace(block, `${fenced}\n\n${second}`);
+  const { findings, unidentified } = RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] });
+  assert.deepEqual(findings.map((f) => f.id), [FU_ID, FU_ID2]);
+  assert.equal(unidentified, 0);
+});
+
+test('FU-J: an Outside diff badge the parse misses fails closed as unidentified', () => {
+  const block = fuBlock();
+  const second = block.replace(FU_ID, FU_ID2);
+  const body = FU_242.replace(block, `${block}\n\n---\n\n${second}`);
+  const r = RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] });
+  assert.deepEqual(r.findings.map((f) => f.id), [FU_ID]);
+  assert.equal(r.unidentified, 1, 'the second badge is not parsed, so one finding is unidentified');
+  assert.equal(odEval([odLive(body)], idList(`${FU_ID}: fixed in abc1234`)).ready, false);
+});
+
+test('FU-K: a malformed %-escape in the source link path falls back to the raw path', () => {
+  const body = FU_242.replace('scripts/github/pre-pr.mjs#L405', 'scripts/100%/pre-pr.mjs#L405');
+  assert.notEqual(body, FU_242);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }).findings, [{ id: FU_ID, location: 'scripts/100%/pre-pr.mjs:405-423' }]);
+});
+
+// CodeRabbit CLI review of the PR 245 fix (2026-11-02), two Majors. Ways it can fail, one test each:
+//   a block that repeats its marker offsets an unparsed badge in the floor (it subtracts marker matches)     -> FU-L
+//   a severity badge before the Outside diff badge on one line hides the finding                              -> FU-M
+test('FU-L: a repeated marker in one block does not offset an unparsed Outside diff badge', () => {
+  const block = fuBlock();
+  const twice = `${block}\n\n<!-- cr-comment:v1:${FU_ID} -->`;
+  const body = FU_242.replace(block, `${twice}\n\n---\n\n${block.replace(FU_ID, FU_ID2)}`);
+  const r = RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] });
+  assert.equal(r.findings.length, 1);
+  assert.equal(r.unidentified, 1);
+});
+
+test('FU-M: a severity badge before the Outside diff badge on the same line does not hide the finding', () => {
+  const sev = '<img width="85" height="16" alt="Major" src="https://storage.googleapis.com/coderabbit_public_assets/review-finding-badges-v1/major.svg" />';
+  const block = fuBlock();
+  const body = FU_242.replace(block, block.replace('<img width="120"', `${sev}<img width="120"`));
+  assert.notEqual(body, FU_242);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 0 });
+});
+
+// Verifier round 2 on PR 245 (2026-11-02), Major: READY fails open when CodeRabbit changes the badge. Ways it can fail, one test each:
+//   the badge alt is not exactly "Outside diff" (still an <img>), so the block is skipped as a non-outside block   -> FU-N
+//   the badge <img> is missing, so the block never starts and its marker and Major mark are dropped              -> FU-O
+//   a block with a severity mark and no marker and no badge is invisible; plain text with neither stays no finding -> FU-P
+//   an unbadged block after a good one hides inside the good block, or a Nitpick block turns blocking             -> FU-Q
+const fuSummary = () => FU_242.split('\n').find((l) => l.startsWith('<summary><sub>'));
+
+test('FU-N: a badge whose alt is not "Outside diff" fails closed as unidentified; a bullet by count clears it', () => {
+  const body = FU_242.replace('alt="Outside diff"', 'alt="Out of diff"');
+  assert.notEqual(body, FU_242);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }), { findings: [], unidentified: 1 });
+  assert.equal(odEval([odLive(body)]).ready, false);
+  assert.equal(odEval([odLive(body)], HANDLED(1)).ready, true, 'the count rule: one bullet covers one');
+});
+
+test('FU-O: a block with no badge image, but a marker and a Major mark, fails closed as unidentified', () => {
+  const body = FU_242.replace(fuSummary(), '<summary><sub>Outside the diff</sub></summary>');
+  assert.notEqual(body, FU_242);
+  assert.ok(body.includes(FU_ID) && !/<img[^>]*alt="Outside diff"/.test(body));
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }), { findings: [], unidentified: 1 });
+  assert.equal(odEval([odLive(body)]).ready, false);
+});
+
+test('FU-P: an unbadged block with a severity mark and no marker counts; an unbadged block with neither does not', () => {
+  const noBadge = FU_242.replace(fuSummary(), '<summary><sub>x</sub></summary>').replace(/<!-- cr-comment:v1:[0-9a-f]{24} -->/, '');
+  assert.ok(!noBadge.includes('cr-comment') && /Major/.test(noBadge));
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(noBadge)] }), { findings: [], unidentified: 1 });
+  const plain = '<!-- coderabbit-ai-generated:v1 -->\n\n## Follow-up Comments\n\n<details>\n<summary>Notes</summary>\n\nJust a note, nothing to fix.\n\n</details>\n';
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(plain)] }), { findings: [], unidentified: 0 });
+});
+
+test('FU-Q: an unbadged block after a good one is its own block; a Nitpick-badged block stays non-blocking', () => {
+  const block = fuBlock();
+  const odd = block.replace(fuSummary(), '<summary><sub>x</sub></summary>').replace(FU_ID, FU_ID2);
+  const two = FU_242.replace(block, `${block}\n\n${odd}`);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(two)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 1 });
+  assert.equal(odEval([odLive(two)], idList(`${FU_ID}: fixed in abc1234`)).ready, false, 'the unbadged block needs its own bullet');
+  const nit = block.replace('alt="Outside diff"', 'alt="Nitpick"').replace(FU_ID, FU_ID2);
+  const three = FU_242.replace(block, `${block}\n\n${nit}`);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(three)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 0 });
+});

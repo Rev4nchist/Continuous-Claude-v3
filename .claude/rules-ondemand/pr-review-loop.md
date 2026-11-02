@@ -271,6 +271,8 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
      Filler bullets do not count. A marker in an HTML comment does not count.
      A nitpick needs no bullet.
      READY reads only the quoted lines under the "Outside diff range comments (N)" heading.
+     It also reads the "Follow-up Comments" section of a newer body: one finding per marker, up to the next `---` line.
+     Name those findings the same way. A marker after that line is no finding.
      It counts a finding repeated in two reviews once.
      A review body with no markers falls back to the count: N findings need N bullets.
      The READY reason lists each unnamed finding by id and `path:lines`.
