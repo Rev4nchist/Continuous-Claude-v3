@@ -256,13 +256,23 @@ try {
   git -C $fx4.Repo worktree add -q $sibling -b other/sibling main 2>&1 | Out-Null
   $siblingLink = Join-Path $sibling 'node_modules'
   New-Junction $siblingLink $fx4.Target
+  git -C $fx4.Repo push -q fork $branch 2>&1 | Out-Null   # the PR branch exists on the remote, as it does after a real PR
   Check 'W4 harness: the primary is on the PR branch and a sibling worktree holds a junction' (((git -C $fx4.Repo branch --show-current) -eq $branch) -and (Test-Path -LiteralPath $siblingLink))
+  # land-pr deletes the remote branch through <repo>\scripts\git-safe.ps1. Give the fixture a real copy, or the delete would fail and the check below could not tell a skip from a failure.
+  New-Item -ItemType Directory -Force -Path (Join-Path $fx4.Repo 'scripts') | Out-Null
+  Copy-Item -LiteralPath (Join-Path $here '..\git-safe.ps1') -Destination (Join-Path $fx4.Repo 'scripts\git-safe.ps1')
+  Check 'W4 harness: the PR branch exists on the remote before the run' ([bool](git -C $fx4.Repo ls-remote --heads fork $branch))
   $run4 = Invoke-Land $fx4.Repo
   Check 'W4 wiring: land-pr exits 0' ($run4.Code -eq 0)
   Check 'W4 wiring: the sibling worktree junction is intact' (Test-Path -LiteralPath $siblingLink)
   Check 'W4 wiring: the junction target and its file survive' ((Test-Path -LiteralPath $fx4.Target) -and (Test-Path -LiteralPath $fx4.TargetFile))
   Check 'W4 wiring: output says "kept primary checkout" (the guard message is present)' ($run4.Text -match 'kept primary checkout')
   Check 'W4 wiring: the primary checkout is not reported as removed or unlinked' ($run4.Text -notmatch 'unlinked \d+ link' -and $run4.Text -notmatch 'removed worktree')
+  # The primary stays on a branch that git branch -d refuses to delete. Deleting the remote branch would
+  # leave the primary on a branch that no longer exists on the remote. Keep it and tell Dave what to do.
+  Check 'W4 wiring: the remote branch still exists (the primary is on it)' ([bool](git -C $fx4.Repo ls-remote --heads fork $branch))
+  Check 'W4 wiring: output tells Dave to switch the primary to main and delete the branch' ($run4.Text -match "kept fork/$([regex]::Escape($branch)).*switch the primary to main and delete the branch")
+  Check 'W4 wiring: the remote delete is not reported' ($run4.Text -notmatch 'deleted fork/')
   if ($fail) { Write-Host '---- w4 land-pr output ----'; Write-Host $run4.Text; Write-Host '---- end ----' }
 }
 finally {
