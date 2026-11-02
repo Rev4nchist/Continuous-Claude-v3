@@ -68,11 +68,11 @@ const FUTURE_SLACK_MS = 5 * 60_000;
 /** One git call may take this long. A decision makes up to 6 git calls (6 x 2 s = 12 s), inside the template timeout of 15 s. */
 export const GIT_TIMEOUT_MS = 2000;
 /**
- * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cap" only with cr_finished_runs >= 1; "rate-limited" only with a known retry time. "flag" (--skip-cr),
+ * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cli-cap" (today's paid CLI spend reached the daily cap; no run was spent); "cap" only with cr_finished_runs >= 1; "rate-limited" only with a known retry time. "flag" (--skip-cr),
  * "no-changes" (the CLI saw an empty scope) and "earlier-step-failed" are not allowed. "rate-limited" is allowed only
  * with a known retry time in the stamp (cr_retry_minutes), which the gate log also shows.
  */
-const ALLOWED_SKIP_REASONS = new Set(['cli-missing']);
+const ALLOWED_SKIP_REASONS = new Set(['cli-missing', 'cli-cap']);
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 const HOOK = 'pre-pr-gate';
 const RUN = 'node scripts/github/pre-pr.mjs --body <file>';
@@ -234,7 +234,7 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
     return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? 'none')}). The cap counts runs that finished with a PASS. Fix the CLI and run pre-pr.mjs again`;
   }
   if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned) {
-    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || 'none'}). Only a finished-run cap, a missing CLI (cli-missing), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
+    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || 'none'}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
     if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~, $env: or /c/ paths`;

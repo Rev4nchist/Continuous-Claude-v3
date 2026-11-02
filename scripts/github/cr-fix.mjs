@@ -23,17 +23,24 @@
  * action_required: this script prints the `incomplete` line and the reason on stderr only (nothing to paste) and exits 1. Dave decides about credits
  * (coderabbit-cli.md). pre-pr.mjs keeps its own run count; runs of this script count separately.
  *
+ * Spend log and cap (Dave, 2026-11-02): CLI 0.9.0 can also bill usage credits past the allowance with no flag and no prompt, when usage billing is on.
+ * A finished run whose complete record carries usageCost with costCents above 0 adds one {kind: "cli"} row to ~/.claude/state/coderabbit-paid.jsonl
+ * (cr-paid.mjs recordCliSpend) and a "billed $X.XX" note on stderr. The stdout line does not change. Before a run the script sums today's cli
+ * rows (America/Chicago); at or over coderabbit.cli_daily_cap_usd in review-router.config.json it stops with exit 2 and starts no run (reason cli-cap).
+ * A missing or non-number cap means no cap. An unreadable ledger with a cap also stops the run.
+ *
  * Exit 0 = the review finished (the line says what it found). 1 = it did not finish. 2 = it could not start (usage, gh error,
  * no earlier CodeRabbit review, nothing after it, the checkout is not the PR head, the earlier review is not an ancestor
  * of HEAD); no CLI run is spent.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
-import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
+import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, billedText, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
+import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const FORBIDDEN = /^--(?:use-credits|api-key)\b/;
@@ -157,6 +164,43 @@ function safeMerges(deps, cwd, from) {
   try { return deps.mergesIn(cwd, from); } catch { return null; }
 }
 
+/** The daily CLI cap in dollars from review-router.config.json in the checkout, or null (no cap) when the file or the key is missing or bad. */
+function readCliCap(cwd) {
+  try { return cliCapOf(JSON.parse(readFileSync(path.join(cwd, 'review-router.config.json'), 'utf8'))); } catch { return null; }
+}
+
+function gitBranch(cwd) {
+  const r = spawnSync('git', ['branch', '--show-current'], { cwd, encoding: 'utf8', windowsHide: true });
+  return r.status === 0 ? r.stdout.trim() : '';
+}
+
+/** The deps of the paid ledger helpers in cr-paid.mjs: this run's clock, and a ledger path when the caller gives one. */
+const ledgerDeps = (d) => ({ now: () => d.now, ...(d.ledgerPath ? { ledgerPath: d.ledgerPath } : {}) });
+
+/** A stop result when today's paid CLI spend is at the cap, or the ledger cannot be read with a cap set. No CLI run has been spent yet. */
+function checkCap(cwd, d) {
+  const cap = d.cliCap(cwd);
+  if (cap === null || cap === undefined) return null;
+  try {
+    const check = cliCapCheck(cap, ledgerDeps(d));
+    return check.capped ? stop(`cli-cap: ${cliCapLine(check)}. No CLI run was started. Raise the cap or run it tomorrow; ask Dave`) : null;
+  } catch (err) {
+    return stop(`the paid ledger is unreadable (${String(err.message).split('\n')[0]}), so the CLI spend today is unknown and no CLI run was started: fix or delete the ledger`);
+  }
+}
+
+/** The stderr note for a run that billed: its cost, and a failed ledger write. Null for a free run. The run is already paid for. */
+function spendNote(usageCost, cwd, head, d) {
+  if (!usageCost) return null;
+  const cost = billedText(usageCost).replace(/^, /, '');
+  try {
+    recordCliSpend({ branch: d.branch(cwd), head, usageCost }, ledgerDeps(d));
+    return `this run ${cost}; logged in the paid ledger`;
+  } catch (err) {
+    return `this run ${cost}; could not log it in the paid ledger (${String(err.message).split('\n')[0]}): add the row by hand`;
+  }
+}
+
 /** Saves the CLI output. A failed save is returned as text; the line is still printed. */
 function save(file, text, deps) {
   try { deps.writeOut(file, text); return null; } catch (err) { return String(err.message); }
@@ -167,21 +211,26 @@ function save(file, text, deps) {
  * writeOut(file, text), now. Returns { line, exitCode, reason, outFile, from, head, verdict }.
  */
 export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN }, deps = {}) {
-  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), ...deps };
+  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), cliCap: readCliCap, branch: gitBranch, ledgerPath: null, ...deps };
   const range = readRange(pr, repo, cwd, d);
   if (range.stop) return range.stop;
   const { from, head } = range;
   const bad = checkCheckout({ pr, repo, cwd, from, head }, d);
   if (bad) return bad;
+  const capped = checkCap(cwd, d);
+  if (capped) return capped;
   const merges = safeMerges(d, cwd, from);
   const run = await d.runCr({ cwd, args: CR_FIX_ARGS(from), timeoutMs });
   const stdout = String(run.stdout ?? '');
   const outFile = path.join(cwd, '.claude', 'cache', 'e2e', `${dayOf(d.now)}-cr-fix-${head.slice(0, 7)}.txt`);
   const saveError = save(outFile, run.stderr ? `${stdout}\n# stderr\n${run.stderr}\n` : stdout, d);
-  const { verdict, reason } = fixVerdict(parseAgentStream(stdout), run);
+  const parsed = parseAgentStream(stdout);
+  const { verdict, reason } = fixVerdict(parsed, run);
   const line = `CLI fix review: ${from.slice(0, 7)}..${head.slice(0, 7)} ${verdict}`;
   const note = saveError ? `the output could not be saved (${saveError})` : null;
-  return { line, exitCode: verdict === 'incomplete' ? 1 : 0, reason: [reason, note].filter(Boolean).join('; ') || null, outFile, from, head, verdict, merges };
+  // A run that billed is logged whatever its verdict: a failed or incomplete run can still cost.
+  const spend = spendNote(parsed.usageCost, cwd, head, d);
+  return { line, exitCode: verdict === 'incomplete' ? 1 : 0, reason: [reason, note].filter(Boolean).join('; ') || null, outFile, from, head, verdict, merges, spend };
 }
 
 // ---- real gh, git and file calls ----
@@ -220,6 +269,7 @@ export function reportOf(r) {
   const err = [];
   if (r.line) (r.verdict === 'incomplete' ? err : out).push(r.line);
   if (r.reason) err.push(`cr-fix: ${r.exitCode === 0 ? 'note' : r.line ? 'incomplete' : 'stopped'}: ${r.reason}`);
+  if (r.spend) err.push(`cr-fix: note: ${r.spend}`);
   if (r.merges === null) err.push('cr-fix: note: could not check the range for merge commits');
   else if (r.merges?.length > 0) {
     const shas = r.merges.map((m) => m.slice(0, 7)).join(', ');

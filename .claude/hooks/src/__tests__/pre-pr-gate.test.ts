@@ -364,6 +364,8 @@ describe('K: the CodeRabbit CLI skip in the stamp', () => {
       expect(d.action === 'deny' && d.reason, String(n)).toMatch(/cr_finished_runs/);
     }
     expect(decide(input(CREATE[0]), deps({ stamp: skipped('cli-missing') })).action).toBe('allow');
+    // cli-cap: today's paid CLI spend reached the daily cap (review-router.config.json coderabbit.cli_daily_cap_usd); no run was spent.
+    expect(decide(input(CREATE[0]), deps({ stamp: skipped('cli-cap') })).action).toBe('allow');
     for (const r of ['cli-error', 'cli-unavailable']) {
       const d = decide(input(CREATE[0]), deps({ stamp: skipped(r) }));
       expect(d.action, r).toBe('deny');

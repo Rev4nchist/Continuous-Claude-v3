@@ -79,6 +79,8 @@ name an event that runs it, or give `na` with the reason.
    - `cap`: the 2 CLI runs of the branch are used. It needs `cr_finished_runs` of at least 1.
      That count holds only runs that finished with a PASS.
    - `rate-limited`: no included review is left. It needs a positive `cr_retry_minutes` in the stamp.
+   - `cli-cap`: today's paid CLI spend reached `coderabbit.cli_daily_cap_usd`. No run is spent. The
+     script logs each billed CLI run in the paid ledger (`coderabbit-cli.md` "Billing facts").
 
    The hook denies every other reason:
 

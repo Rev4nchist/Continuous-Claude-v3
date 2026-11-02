@@ -26,6 +26,15 @@
 //   - a failed run does not use a slot                                         -> C5
 //   - awaiting_confirmation or a timeout passes                                -> C6, C7
 //   - --skip-cr still calls the runner                                         -> C2
+// CLI spend log and daily cap (Dave, 2026-11-02; the CLI bills usage credits past the free hour with no prompt)
+//   usageCost is parsed wrongly, or a malformed one (text, zero, negative) counts as a charge     -> P1
+//   a free run (no usageCost) writes a ledger row                                                   -> P2
+//   a billed run writes no cli row, a wrong one, or no cost line in the step output                 -> P3
+//   a billed run that FAILs (outcome failed) is not logged, or a log error stops the step           -> P4
+//   the cap is reached and the run still starts (usage or review), or the skip names no numbers     -> P5
+//   under the cap the run is blocked; no cap configured reads the ledger anyway                      -> P6
+//   an unreadable ledger with a cap lets the run go on                                              -> P7
+//   runPrePr ignores the config key, stamps another reason, or the built hook denies the cli-cap skip -> P8
 // runPrePr (real git in a temp repo, fake gate runner, fake cr runner)
 //   - a stamp is written on a failure, or lacks head/branch/body hash          -> R1, R2
 //   - an old stamp survives a failed run                                       -> R2
@@ -44,16 +53,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as PRE from './pre-pr.mjs';
+import { cliCapOf } from './cr-paid.mjs';
 import {
   SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
-  parseAgentStream, parseUsage, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
+  parseAgentStream, parseUsage, usageCostOf, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
   killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn, acquireLock,
 } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const CONFIG = JSON.parse(readFileSync(path.join(REPO_ROOT, 'review-router.config.json'), 'utf8'));
+// Never read or write Dave's real paid ledger: every run here that could touch it gets a temp one.
+const tempLedger = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
 
 const HEAD = 'a'.repeat(40);
 
@@ -380,9 +392,9 @@ function crFixture() {
     calls.push(opts);
     return runner.next ?? { status: 0, stdout: NDJSON_OK, stderr: '' };
   };
-  return { root, calls, usageCalls, runner, now: new Date('2026-10-27T10:00:00Z') };
+  return { root, calls, usageCalls, runner, now: new Date('2026-10-27T10:00:00Z'), ledgerPath: tempLedger() };
 }
-const crOpts = (f, extra = {}) => ({ root: f.root, branch: 'feat/x', head: HEAD, base: 'main', now: f.now, runner: f.runner, ...extra });
+const crOpts = (f, extra = {}) => ({ root: f.root, branch: 'feat/x', head: HEAD, base: 'main', now: f.now, runner: f.runner, ledgerPath: f.ledgerPath, ...extra });
 
 test('C1: the run uses cr review --agent and never --use-credits or --api-key', async () => {
   const f = crFixture();
@@ -1249,6 +1261,7 @@ async function prePr(repo, extra = {}) {
     // No fetch by default: withFork adds a GitHub URL as the fork remote. The PF tests pass fetch: undefined for the real one.
     fetch: () => null,
     guardLog: () => {},
+    ledgerPath: tempLedger(),
     bodyText: 'Proof type: docs\n', ...extra,
   };
   return { result: await runPrePr(opts), gateRuns, crCalls };
@@ -1820,4 +1833,104 @@ test('GU8: a merge of main with a hand-resolved conflict: the sha is not rewritt
   assert.ok(result.lines.some((l) => /GREEN names commit/.test(l)), result.lines.join('\n'));
   assert.equal(after, before);
   assert.equal(existsSync(stampFile(repo)), false);
+});
+
+// ---------- CLI spend log and daily cap ----------
+
+const BILLED = { type: 'complete', status: 'review_completed', findings: 2, outcome: 'completed', usageCost: { billedFilesCount: 4, costCents: 100, unitPriceCents: 25, billingMethod: 'usage_credits' } };
+const BILLED_OK = ev(CONTEXT, MAJOR, MINOR, BILLED);
+const cliRows = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+const cliRowOf = (cost, at = '2026-10-27') => JSON.stringify({ ts: `${at}T10:00:00.000Z`, date: at, kind: 'cli', branch: 'feat/y', head: HEAD, files: 4, cost, session: 's' });
+const seedLedger = (file, ...lines) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, `${lines.join('\n')}\n`); };
+
+test('P1: usageCost is read from the complete record; a free run and every malformed value read as null', () => {
+  assert.deepEqual(parseAgentStream(BILLED_OK).usageCost, { files: 4, costCents: 100, unitPriceCents: 25, method: 'usage_credits' });
+  assert.equal(parseAgentStream(ev(CONTEXT, DONE)).usageCost, null, 'a free run has no usageCost');
+  assert.deepEqual(usageCostOf({ usageCost: { costCents: 50 } }), { files: 0, costCents: 50, unitPriceCents: null, method: null }, 'a cost with no file count still counts');
+  for (const bad of [{ costCents: '100' }, { costCents: 0 }, { costCents: -25 }, { costCents: 12.5 }, { costCents: null }, { costCents: Number.NaN }, { billedFilesCount: 4 }, { billedFilesCount: -1, costCents: 25 }, [], 'x', 7, null]) {
+    assert.equal(usageCostOf({ usageCost: bad }), null, JSON.stringify(bad));
+  }
+  assert.equal(usageCostOf(null), null);
+});
+
+test('P2: a free run writes no ledger row', async () => {
+  const f = crFixture();
+  assert.equal((await runCodeRabbit(crOpts(f, { cliCapUsd: 3 }))).status, 'PASS');
+  assert.equal(existsSync(f.ledgerPath), false);
+});
+
+test('P3: a billed run writes one cli row and the step line names the cost', async () => {
+  const f = crFixture();
+  f.runner.next = { status: 0, stdout: BILLED_OK, stderr: '' };
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3, now: new Date('2026-10-27T15:00:00Z') }));
+  assert.equal(r.status, 'PASS');
+  assert.match(r.detail, /2 finding\(s\) \(1 major, 1 minor\), billed \$1\.00 \(usage credits\)/);
+  const rows = cliRows(f.ledgerPath);
+  assert.equal(rows.length, 1);
+  assert.deepEqual({ ...rows[0], session: undefined }, { ts: '2026-10-27T15:00:00.000Z', date: '2026-10-27', kind: 'cli', branch: 'feat/x', head: HEAD, files: 4, cost: 1, session: undefined });
+});
+
+test('P4: a billed run that failed is still logged; a ledger that cannot be written adds a note and does not stop the step', async () => {
+  const f = crFixture();
+  const failed = ev(CONTEXT, { ...BILLED, outcome: 'failed' });
+  f.runner.next = { status: 0, stdout: failed, stderr: '' };
+  const r = await runCodeRabbit(crOpts(f));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(cliRows(f.ledgerPath).length, 1);
+  const g = crFixture();
+  g.runner.next = { status: 0, stdout: BILLED_OK, stderr: '' };
+  const dirAsFile = mkdtempSync(path.join(os.tmpdir(), 'prepr-ledgerdir-'));
+  const r2 = await runCodeRabbit(crOpts(g, { ledgerPath: dirAsFile }));
+  assert.equal(r2.status, 'PASS');
+  assert.ok(r2.notes.some((n) => /could not log/i.test(n) && /\$1\.00/.test(n)), r2.notes.join('|'));
+});
+
+test('P5: at the cap the step SKIPs with cli-cap, names the total and the cap, and starts no run (no usage call either)', async () => {
+  const f = crFixture();
+  seedLedger(f.ledgerPath, cliRowOf(2), cliRowOf(1), cliRowOf(5, '2026-10-26'));
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3 }));
+  assert.equal(r.status, 'SKIP');
+  assert.equal(r.skipReason, 'cli-cap');
+  assert.match(r.detail, /\$3\.00/);
+  assert.match(r.detail, /daily cap of \$3\.00/);
+  assert.equal(f.usageCalls.length, 0);
+  assert.equal(f.calls.length, 0);
+  assert.equal(existsSync(crPaths(f.root, 'feat/x').counter), false, 'no slot counted');
+  assert.equal(existsSync(crPaths(f.root, 'feat/x').lock), false);
+});
+
+test('P6: under the cap the run goes ahead; with no cap configured a full ledger does not stop it', async () => {
+  const f = crFixture();
+  seedLedger(f.ledgerPath, cliRowOf(2.75));
+  assert.equal((await runCodeRabbit(crOpts(f, { cliCapUsd: 3 }))).status, 'PASS');
+  assert.equal(f.calls.length, 1);
+  const g = crFixture();
+  seedLedger(g.ledgerPath, cliRowOf(50));
+  assert.equal((await runCodeRabbit(crOpts(g))).status, 'PASS');
+  const h = crFixture();
+  seedLedger(h.ledgerPath, 'not json');
+  assert.equal((await runCodeRabbit(crOpts(h))).status, 'PASS', 'no cap: the ledger is not read');
+});
+
+test('P7: an unreadable ledger with a cap FAILs the step and starts no run', async () => {
+  const f = crFixture();
+  seedLedger(f.ledgerPath, 'not json');
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3 }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /ledger/i);
+  assert.equal(f.usageCalls.length + f.calls.length, 0);
+});
+
+test('P8: runPrePr reads the cap from the config, stamps cli-cap, and the built hook accepts that stamp', async () => {
+  const repo = withFork(makeRepo());
+  const ledgerPath = tempLedger();
+  const today = new Date();
+  seedLedger(ledgerPath, cliRowOf(3, new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(today)));
+  const config = { ...CONFIG, coderabbit: { ...CONFIG.coderabbit, cli_daily_cap_usd: 3 } };
+  const { result, crCalls } = await prePr(repo, { ledgerPath, config, now: today });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(crCalls.length, 0);
+  assert.equal(JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8')).cr_skip_reason, 'cli-cap');
+  assert.equal(hookVerdict(repo.dir).allow, true);
+  assert.notEqual(cliCapOf(CONFIG), null, 'the shipped config sets a cap');
 });
