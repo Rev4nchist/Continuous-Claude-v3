@@ -19,7 +19,7 @@
  *   Records the pathway in <state-dir>/pathway.json and prints the record. It refuses (exit 1, nothing written) when the stamp is
  *   missing, for another head or has a FAIL row; the body hash differs from the stamp; the pathway is wait, not offered or held; or
  *   --by default names a pathway that is not the recommendation; or --by auto names anything but `none`, or the result's `auto`
- *   block is not eligible (autoOf: kill switch checkpoint.autoConfirm, band LOW/MID/ELEVATED, no drift, labels read). The state dir holds stamp.json and pathway.json. Default:
+ *   block is not eligible (autoOf: kill switch checkpoint.autoConfirm, band LOW/MID/ELEVATED, no security-tier or critical file, no drift, labels read). The state dir holds stamp.json and pathway.json. Default:
  *   <git toplevel of the cwd>/.claude/cache/pre-pr. --facts and --config work as above (tests).
  * node scripts/github/pr-checkpoint.mjs --apply <pr> [--state-dir <dir>]
  *   Reads pathway.json, checks the live PR (a draft, at the recorded head), adds the review label, then marks it ready. The label
@@ -197,6 +197,23 @@ function stampProblem(facts) {
 const hit = (rule, pathway, budget, why) => ({ rule, pathway, budget, why });
 const list = (paths) => paths.join(', ');
 
+/**
+ * The spec 3.1 floor: the PR touches a matrix.security_tier or a checkpoint.critical file. Below HIGH it sets an internal review
+ * floor, not a bot floor: aegis + critic run before READY (rule RF), so auto-confirm never records the PR. Same body in PR A and B.
+ */
+export function floorApplies(c) {
+  return Boolean(c.band?.securityTier?.length || c.critical.length);
+}
+
+/** The floor's cause for a why line: "Security-tier floor (a)", "Critical-file floor (b)", or both joined by "and". */
+function floorLabel(c) {
+  const tier = c.band.securityTier;
+  const crit = c.critical.filter((p) => !tier.includes(p));
+  const parts = [tier.length ? `security-tier floor (${list(tier)})` : '', crit.length ? `critical-file floor (${list(crit)})` : ''];
+  const text = parts.filter(Boolean).join(' and ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function parserRule(c) {
   if (c.parser.length === 0) return null;
   return hit('R2', 'coderabbit', [1, 0], [`Parser file ${list(c.parser)}. Do not loop. Use a vetted parser.`]);
@@ -347,7 +364,8 @@ const AUTO_BANDS = ['LOW', 'MID', 'ELEVATED'];
 
 /**
  * May the mod record `none` without Dave's press? Fails closed: every doubt is "no, Dave presses". Only a literal `true` in
- * checkpoint.autoConfirm turns it on (the kill switch). The band must be known and below HIGH, the config must match main, the PR
+ * checkpoint.autoConfirm turns it on (the kill switch; it ships false). The band must be known and below HIGH, with no security-tier
+ * or critical file (floorApplies, spec 3.1: that floor needs aegis + critic before READY, so Dave presses), the config must match main, the PR
  * labels must have been read (an absent list is as bad as a failed read), and the recommendation must be `none`.
  * HIGH with a free CodeRabbit slot is not covered: the slot is not readable without the pr-loop poller's queue (spec 3.7), and the
  * 7-day count is a hand-set number, so a HIGH PR keeps Dave's press.
@@ -358,13 +376,20 @@ export function autoOf(c, facts, policy, recommended) {
   if (policy.checkpoint?.autoConfirm !== true) return no('checkpoint.autoConfirm is not true in review-router.config.json: Dave presses.');
   if (!band) return no('The PR has no review band (no matrix block): Dave presses.');
   if (!AUTO_BANDS.includes(band)) return no(`Band ${band}: Dave presses. Auto-confirm covers LOW, MID and ELEVATED only.`);
-  if (facts.config_drift) return no('The branch config differs from main: Dave presses.');
+  if (floorApplies(c)) return no(`${floorLabel(c)}: the internal pass (aegis + critic) runs before READY, so Dave presses.`);
+  if (facts.config_drift) return no(`${driftWhy(facts.config_drift)}: Dave presses.`);
   if (!Array.isArray(facts.labels)) return no('The PR labels were not read: Dave presses.');
   if (recommended !== 'none') return no(`The recommendation is ${recommended ?? 'stopped'}, not none: Dave presses.`);
   return { eligible: true, band, reason: `Band ${band} is recommended none: no CodeRabbit PR bot, the internal review stack covers it.` };
 }
 
 // ---------- recommend ----------
+
+/** The drift text, or null. facts.config_drift: true or 'differs' (the configs differ), 'unread' (main's config is missing or not JSON). */
+function driftWhy(drift) {
+  if (!drift) return null;
+  return drift === 'unread' ? "Main's review-router.config.json is missing or not JSON, so it counts as drift" : 'Branch config differs from main';
+}
 
 /**
  * Fail closed: the PR labels could not be read (facts.labels is null), so a risk:high label may be hiding. Below HIGH that could
@@ -404,6 +429,7 @@ export function recommend(facts, policy) {
   const base = {
     head: facts.head, class: c.cls, matched: c.matched, size: c.size, checks: facts.stamp?.results ?? [], cli: c.cli, credits: c.credits,
     capacity: c.capacity, band: c.band, recommended: null, options: [], why: [], budget: [0, 0], config_drift: Boolean(facts.config_drift),
+    config_drift_why: driftWhy(facts.config_drift),
   };
   const auto = (recommended) => ({ auto: autoOf(c, facts, policy, recommended) });
   const stop = stampProblem(facts);
@@ -467,11 +493,15 @@ function readCli(head) {
   return name ? cliFromStream(readFileSync(path.join(dir, name), 'utf8')) : null;
 }
 
-/** The branch config differs from the base branch's: the router uses main's config. */
+/**
+ * Does the branch config differ from the base branch's? The router uses main's config. Fails closed: 'unread' when main's config is
+ * missing or not JSON, 'differs' when the two differ (or the branch config is not JSON), false when they match.
+ */
 function configDrift(base, configText) {
   const r = spawnSync('git', ['show', `${base}:review-router.config.json`], { cwd: workTop(), encoding: 'utf8', windowsHide: true });
-  if (r.status !== 0) return false;
-  try { return JSON.stringify(JSON.parse(r.stdout)) !== JSON.stringify(JSON.parse(configText)); } catch { return false; }
+  let main;
+  try { main = JSON.parse(r.status === 0 ? r.stdout : ''); } catch { return 'unread'; }
+  try { return JSON.stringify(main) !== JSON.stringify(JSON.parse(configText)) ? 'differs' : false; } catch { return 'differs'; }
 }
 
 /** The label names in a gh pr view JSON text, or null. */
@@ -649,7 +679,7 @@ export function renderText(r) {
   lines.push(...r.why.map((w) => `  - ${w}`));
   r.options.forEach((o, i) => lines.push(`  ${i + 1}. ${o.pathway}${o.label ? ` (${o.label})` : ''}${o.available ? '' : ' [held]'}: ${o.reason}`));
   lines.push(`CodeRabbit 7-day count: ${r.capacity.count ?? 'unknown'} (${r.capacity.band})${r.capacity.warning ? `. ${r.capacity.warning}` : ''}`);
-  if (r.config_drift) lines.push('Warning: branch config differs from main. The router uses the config of main.');
+  if (r.config_drift) lines.push(`Warning: ${r.config_drift_why ?? 'Branch config differs from main'}. The router uses the config of main.`);
   return lines.join('\n');
 }
 

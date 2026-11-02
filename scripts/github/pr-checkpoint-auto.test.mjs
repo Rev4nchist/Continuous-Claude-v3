@@ -12,10 +12,15 @@
 //   --confirm --by auto records for a PR that is not eligible, or for a pathway other than none   -> AC7
 //   --confirm --by auto does not record decided_by auto in the same nine-field record as a press -> AC8
 //   --by with another word is accepted                                                             -> AC9
+//   a PR below HIGH that touches a security-tier file auto-confirms (it needs Dave's press)       -> AC10
+//   the live config ships autoConfirm true (Dave 2026-11-02: ship it off)                         -> AC3
+//   the drift check reads "no drift" when main's config is missing or not JSON (fail open)        -> AC11, AC12
+//   a PR below HIGH that touches a critical file (the RF floor) auto-confirms                      -> AC13, AC7
+//   the drift warning says "differs" when main's config is missing or not JSON                     -> AC12
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,7 +42,8 @@ const file = (filename, additions = 10, deletions = 0) => ({ filename, additions
 const GATE = ['.claude/hooks/src/pre-pr-gate.ts', 'scripts/github/review-status.mjs', 'scripts/github/review-router.mjs', 'scripts/github/cr-paid.mjs', 'scripts/github/land-pr.ps1'];
 const LOW = ['apps/x/README.txt'];
 const MID = ['apps/x/src/a.ts', 'apps/x/src/b.ts', 'apps/x/src/c.ts'];
-const ELEVATED = [GATE[0], 'scripts/a.mjs', 'scripts/b.mjs', 'scripts/c.mjs', 'scripts/d.mjs'];
+// cr-fix.mjs is a gate file outside matrix.security_tier and checkpoint.critical, so this ELEVATED PR has no floor (AC10, AC13 have one).
+const ELEVATED = ['scripts/github/cr-fix.mjs', 'scripts/a.mjs', 'scripts/b.mjs', 'scripts/c.mjs', 'scripts/d.mjs'];
 
 /** The live config with the switches pinned. The live autoConfirm value is part of the contract, so it is read, not pinned. */
 async function policy(over = {}) {
@@ -85,7 +91,7 @@ test('AC2: HIGH and CRITICAL are never auto-eligible (HIGH stays with Dave: the 
 });
 
 test('AC3: the kill switch is a literal true in checkpoint.autoConfirm; missing, false, "true" or 1 turn auto-confirm off', async () => {
-  assert.equal(typeof LIVE.checkpoint.autoConfirm, 'boolean', 'the live config carries the switch');
+  assert.equal(LIVE.checkpoint.autoConfirm, false, 'the live config carries the switch, and it ships off (Dave 2026-11-02)');
   assert.equal((await recommendFor(MID, {}, withAuto(true))).auto.eligible, true);
   for (const value of [false, 'true', 1, null, undefined]) {
     const r = await recommendFor(MID, {}, withAuto(value));
@@ -154,6 +160,8 @@ test('AC7: --confirm --by auto refuses (exit 1, nothing written) for HIGH, kill 
     ['config drift', confirmAuto('none', 'auto', { factOver: { config_drift: true } })],
     ['unread labels', confirmAuto('none', 'auto', { factOver: { labels: null } })],
     ['coderabbit by auto', confirmAuto('coderabbit', 'auto')],
+    ['security tier', confirmAuto('none', 'auto', { paths: [GATE[0]] })],
+    ['critical file', confirmAuto('none', 'auto', { paths: [GATE[1]] })],
   ];
   for (const [label, r] of cases) {
     assert.equal(r.status, 1, `${label}: ${r.stdout} ${r.stderr}`);
@@ -187,4 +195,79 @@ test('AC9: --by takes dave, default or auto only', () => {
   assert.equal(r.status, 2, `${r.stdout} ${r.stderr}`);
   assert.match(r.stderr, /--by dave, --by default or --by auto/);
   assert.ok(!existsSync(r.pathwayFile));
+});
+
+// ---------- the security-tier floor (spec 3.1: aegis + critic, so Dave presses) ----------
+
+test('AC10: a PR below HIGH that touches a security-tier file is never auto-eligible', async () => {
+  const r = await recommendFor([GATE[0]]);
+  assert.equal(r.band.band, 'ELEVATED');
+  assert.deepEqual(r.band.securityTier, [GATE[0]]);
+  assert.equal(r.recommended, 'none');
+  assert.equal(r.auto.eligible, false);
+  assert.match(r.auto.reason, /security.tier/i);
+  assert.ok(r.auto.reason.includes(GATE[0]), 'the reason names the file');
+});
+
+// ---------- the live drift check (git show main:review-router.config.json) ----------
+
+/** A temp repo whose main holds `mainConfig` (undefined: no file), and a branch with one docs file. Runs the live-facts path. */
+function liveDrift(mainConfig) {
+  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-drift-')));
+  const git = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...a], { cwd: repo, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+  if (mainConfig !== undefined) writeFileSync(path.join(repo, 'review-router.config.json'), mainConfig);
+  git('add', '.');
+  git('commit', '-q', '-m', 'one');
+  git('checkout', '-q', '-b', 'feat/x');
+  mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  writeFileSync(path.join(repo, 'docs', 'guide.md'), 'two\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'two');
+  const head = git('rev-parse', 'HEAD').stdout.trim();
+  mkdirSync(path.join(repo, '.claude', 'cache', 'pre-pr'), { recursive: true });
+  writeFileSync(path.join(repo, '.claude', 'cache', 'pre-pr', 'stamp.json'), JSON.stringify({ head, body_sha256: 'f'.repeat(64), results: [] }));
+  const outside = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-drift-cfg-'));
+  const cfg = path.join(outside, 'cfg.json');
+  writeFileSync(cfg, DRIFT_CONFIG);
+  const gh = path.join(outside, 'fake-gh.mjs');
+  writeFileSync(gh, `process.stdout.write(${JSON.stringify(JSON.stringify({ labels: [] }))});`);
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', cfg], {
+    cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_GH: gh },
+  });
+  return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null };
+}
+const DRIFT_CONFIG = JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, checkpoint: { ...LIVE.checkpoint, autoConfirm: true } });
+
+test('AC11: main with the same config is no drift, so a LOW PR is auto-eligible (the harness can say false)', () => {
+  const { r, out } = liveDrift(DRIFT_CONFIG);
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(out.band.band, 'LOW');
+  assert.equal(out.config_drift, false);
+  assert.equal(out.auto.eligible, true, out.auto.reason);
+});
+
+test('AC12: main with no config, or a config that is not JSON, counts as drift (fail closed): Dave presses', async () => {
+  for (const [label, mainConfig] of [['missing', undefined], ['not JSON', '{ not json']]) {
+    const { r, out } = liveDrift(mainConfig);
+    assert.equal(r.status, 0, `${label}: ${r.stdout} ${r.stderr}`);
+    assert.equal(out.config_drift, true, label);
+    assert.equal(out.auto.eligible, false, label);
+    assert.match(out.auto.reason, /missing or not JSON/, label);
+    assert.doesNotMatch(out.auto.reason, /differs/, label);
+    const { renderText } = await load();
+    assert.match(renderText(out), /Warning: .*missing or not JSON/, label);
+    assert.doesNotMatch(renderText(out), /differs/, label);
+  }
+});
+
+test('AC13: a PR below HIGH that touches a critical file but no security-tier file is never auto-eligible (the RF floor)', async () => {
+  const r = await recommendFor([GATE[1]]);
+  assert.equal(r.band.band, 'ELEVATED');
+  assert.deepEqual(r.band.securityTier, [], 'review-status.mjs is critical, not security tier');
+  assert.equal(r.recommended, 'none');
+  assert.equal(r.auto.eligible, false);
+  assert.match(r.auto.reason, /aegis \+ critic/);
+  assert.ok(r.auto.reason.includes(GATE[1]), 'the reason names the file');
 });

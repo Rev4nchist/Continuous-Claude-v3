@@ -14,7 +14,7 @@
     "checkpoint.critical: path globs of files whose PR gets Greptile too when it is available (pr-checkpoint.mjs rule R3). A PR that touches one never takes the READY carry (review-status.mjs). Extended 2026-10-30 with the files where a fix added a real Major (.claudedocs/2026-10-30-coderabbit-rereview-study.md section 4).",
     "checkpoint.parser: path globs of hand-written lexer and parser guards. Their PR gets one CodeRabbit review and no loop (rule R2). Dave edits this list.",
     "checkpoint.enforce: boolean, read by the pre-pr-gate hook from the checkout the session runs in. true (live since PR D, 2026-10-29): the checkpoint rules (non-draft create, shell gh pr ready, hand review: label, self-confirm, non-literal --repo) deny the command. false (warn mode): the same commands pass and log one warn row to guard-decisions.jsonl. Only a literal true enforces. The stamp rules are enforced in both modes.",
-    "checkpoint.autoConfirm: the kill switch for the auto-confirm of /pathway (review factory step A, Dave 2026-11-01). Only a literal true turns it on. When on, the pr_checkpoint tool records `none` itself (decided_by auto, a toast and a note for the model) for a PR in band LOW, MID or ELEVATED that is recommended none, whose config matches main and whose labels were read. HIGH and CRITICAL always wait for Dave's press. false, missing or anything else: every checkpoint waits for Dave. Read by scripts/github/pr-checkpoint.mjs (autoOf).",
+    "checkpoint.autoConfirm: the kill switch for the auto-confirm of /pathway (review factory step A, Dave 2026-11-01). Only a literal true turns it on. It ships false (Dave 2026-11-02): every checkpoint waits for Dave until he sets true. When on, the pr_checkpoint tool records `none` itself (decided_by auto, a toast and a note for the model) for a PR in band LOW, MID or ELEVATED that is recommended none, whose config matches main, whose labels were read and that touches no matrix.security_tier or checkpoint.critical file (the spec 3.1 floor: aegis + critic before READY). HIGH and CRITICAL always wait for Dave's press. false, missing or anything else: every checkpoint waits for Dave. Read by scripts/github/pr-checkpoint.mjs (autoOf).",
     "coderabbit.reviews_7d_manual: CodeRabbit PR reviews in the last 7 days, an integer Dave sets from the free '@coderabbitai rate limit' reply or the dashboard CSV export. null means unknown and changes no rule. reviews_7d_manual_date: the day Dave read it. A count older than 7 days counts as unknown.",
     "matrix: the review band (.claudedocs/2026-11-01-review-matrix.md, option A). review-router.mjs bandOf() reads it. No matrix block means no band, and pr-checkpoint.mjs keeps its old rules R2 to R5. Only HIGH and CRITICAL PRs are recommended the CodeRabbit PR bot.",
     "matrix.control_plane: path globs of the gate files (G). It holds every checkpoint.critical and checkpoint.parser glob, plus the review tooling, the pr-checkpoint and pr-loop mods, the tool.call registrants and the guard helpers (spec 2.2). Any extension counts. A test file never counts. Dave edits this list.",
@@ -106,7 +106,7 @@
       ".claude/hooks/src/package-install-guard.ts"
     ],
     "enforce": true,
-    "autoConfirm": true
+    "autoConfirm": false
   },
   "matrix": {
     "control_plane": [

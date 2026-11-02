@@ -402,7 +402,9 @@ const exclusive = async (press: () => Promise<void>): Promise<void> => {
 
 // ---- auto-confirm (review factory step A, Dave 2026-11-01) --------------------------------------------------------------------
 // The engine says a PR may be confirmed without a press (`result.auto.eligible`: band LOW, MID or ELEVATED, recommended none, config equal
-// to main, labels read, kill switch checkpoint.autoConfirm on). The mod then records exactly what a press of `none` records, with decided_by
+// to main, labels read, kill switch checkpoint.autoConfirm on). The engine refuses a PR that touches a security-tier or critical file (the
+// spec 3.1 floor: aegis + critic run before READY, so Dave presses). The kill switch ships false, so every checkpoint waits for Dave until
+// he sets it true. The mod then records exactly what a press of `none` records, with decided_by
 // "auto". Anything short of a clean record falls back to the pane ask. Interactive sessions only (a headless run gets the text plan).
 
 type AutoOutcome = { kind: 'done'; record: CheckpointRecord } | { kind: 'failed'; why: string; stage: 'confirm' | 'apply' | 'check' }
