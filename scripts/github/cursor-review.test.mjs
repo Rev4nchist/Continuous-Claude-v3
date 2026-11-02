@@ -10,7 +10,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   BAND_MODEL, EXIT, MODEL_ALLOWLIST, PER_REF_CAP, WEEKLY_CAP, WEEK_MS,
-  buildPrompt, countRuns, finishRun, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
+  buildAgentEnv, buildPrompt, countRuns, finishRun, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
   resolveAgent, resolveModel, runAgent, runReview,
 } from './cursor-review.mjs';
 
@@ -329,6 +329,35 @@ test('resolveAgent reports a missing install, honours CURSOR_AGENT_DIR, and uses
   const d = 'D:\\x';
   const r = resolveAgent({ platform: 'win32', env: { CURSOR_AGENT_DIR: d }, readdir: () => ['2026.10.22-27dcf5f'], exists: () => true });
   assert.ok(r.cmd.startsWith(d));
+});
+
+// ---------- the agent's environment ----------
+// 2026-11-01: a run started from Git Bash inherited SHELL=/bin/bash.exe. Cursor ran its PowerShell hook launcher through that
+// shell ("Hook blocked with message: --: eval: line 1: syntax error near unexpected token `('"), so every Read was blocked. The
+// bake-off, started from PowerShell, had no SHELL and worked. Proof: chat store 81bedd73-944d-4c7d-97c0-7278057f67f5.
+
+const GIT_BASH_ENV = { SHELL: '/bin/bash.exe', MSYSTEM: 'MINGW64', BASH: '/usr/bin/bash', BASH_ENV: '/x', PATH: 'C:/Windows', LOCALAPPDATA: 'C:/L', CLAUDE_CODE_SESSION_ID: 's' };
+
+test('buildAgentEnv drops the POSIX shell variables on Windows and keeps the rest', () => {
+  const env = buildAgentEnv(GIT_BASH_ENV, 'win32');
+  for (const k of ['SHELL', 'MSYSTEM', 'BASH', 'BASH_ENV']) assert.ok(!(k in env), k);
+  assert.equal(env.PATH, 'C:/Windows');
+  assert.equal(env.CLAUDE_CODE_SESSION_ID, 's');
+  assert.equal(env.CURSOR_INVOKED_AS, 'cursor-agent.cmd', 'the value cursor-agent.cmd sets');
+  assert.ok(env.NODE_COMPILE_CACHE.includes('cursor-compile-cache'));
+  assert.ok('SHELL' in GIT_BASH_ENV, 'the input is not changed');
+});
+
+test('buildAgentEnv leaves SHELL alone off Windows', () => {
+  assert.equal(buildAgentEnv({ SHELL: '/bin/zsh' }, 'linux').SHELL, '/bin/zsh');
+});
+
+test('the spawn env that runReview hands to the runner has no SHELL (win32 host)', async () => {
+  const h = harness({ env: GIT_BASH_ENV, platform: 'win32' });
+  await runReview(h.opts, h.deps);
+  const env = h.calls[0].env;
+  assert.ok(!('SHELL' in env) && !('MSYSTEM' in env));
+  assert.equal(env.CURSOR_INVOKED_AS, 'cursor-agent.cmd');
 });
 
 // ---------- runReview with injected pieces ----------

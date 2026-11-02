@@ -340,6 +340,28 @@ export function resolveAgent({ platform = process.platform, env = process.env, r
   return { error: `cursor-agent is not installed under ${root}\\versions (set CURSOR_AGENT_DIR to its folder)` };
 }
 
+/** POSIX shell variables that a Git Bash session sets. See buildAgentEnv. */
+const POSIX_SHELL_VARS = ['SHELL', 'MSYSTEM', 'BASH', 'BASH_ENV'];
+
+/**
+ * The environment for cursor-agent. Cursor runs the user's Claude Code hooks through `process.env.SHELL` when it is set. A session
+ * started from Git Bash has SHELL=/bin/bash.exe, and bash cannot run Cursor's PowerShell hook launcher: every tool call then ends
+ * "Hook blocked with message: --: eval: line 1: syntax error near unexpected token `('" (2026-11-01: all reads blocked, the model
+ * still answered {"findings":[]}). The bake-off, started from PowerShell, had no SHELL and worked. So on Windows these variables are
+ * dropped. It also sets what cursor-agent.cmd and cursor-agent.ps1 set (CURSOR_INVOKED_AS, NODE_COMPILE_CACHE). Pure.
+ */
+export function buildAgentEnv(base = process.env, platform = process.platform) {
+  const env = { ...base };
+  if (platform === 'win32') {
+    for (const k of POSIX_SHELL_VARS) delete env[k];
+    env.CURSOR_INVOKED_AS = 'cursor-agent.cmd';
+    env.NODE_COMPILE_CACHE ||= path.win32.join(env.LOCALAPPDATA || os.tmpdir(), 'cursor-compile-cache');
+  } else {
+    env.CURSOR_INVOKED_AS ||= 'cursor-agent';
+  }
+  return env;
+}
+
 async function defaultKiller(pid) {
   const { killTree } = await import('./pre-pr.mjs');
   killTree(pid);
@@ -350,7 +372,7 @@ async function defaultKiller(pid) {
  * the Windows tree-kill switch is forbidden here, so it walks the process table). Never throws; a spawn error is a result.
  * { status, stdout, stderr, timedOut, error, durationMs }
  */
-export function runAgent({ command, args, cwd, timeoutMs, env = {} }, { spawnFn = spawn, killer = defaultKiller, killGraceMs = 8000 } = {}) {
+export function runAgent({ command, args, cwd, timeoutMs, env = process.env }, { spawnFn = spawn, killer = defaultKiller, killGraceMs = 8000 } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';
@@ -372,7 +394,7 @@ export function runAgent({ command, args, cwd, timeoutMs, env = {} }, { spawnFn 
       setTimeout(() => finish(null), killGraceMs).unref();
     }, timeoutMs);
     try {
-      child = spawnFn(command, args, { cwd, env: { ...process.env, ...env }, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawnFn(command, args, { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
       error = String(err.message);
       finish(null);
@@ -530,7 +552,7 @@ export async function runReview(opts, deps = {}) {
   }
 
   const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', 'json', '--model', m.model, prompt];
-  const spec = { command: agent.cmd, args, cwd: prep.dir, timeoutMs, env: { NODE_COMPILE_CACHE: path.join(env.LOCALAPPDATA ?? os.tmpdir(), 'cursor-compile-cache'), CURSOR_INVOKED_AS: 'cursor-agent' } };
+  const spec = { command: agent.cmd, args, cwd: prep.dir, timeoutMs, env: buildAgentEnv(env, deps.platform ?? process.platform) };
   const startedAt = now();
   let run;
   try { run = await (deps.runner ?? runAgent)(spec); } catch (err) { run = { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message), durationMs: now() - startedAt }; }
