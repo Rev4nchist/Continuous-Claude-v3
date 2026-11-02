@@ -200,6 +200,15 @@ test('GW3: a docs-only change does not need Docker, so it holds no semgrep-ccv3 
   assert.equal(ALWAYS_GATES.some((g) => g.id === 'semgrep-ccv3'), false);
 });
 
+test('GW7: a Markdown-only change under scripts/ or a hook folder needs no Docker; code and rule files still run semgrep-ccv3', async () => {
+  for (const p of ['scripts/github/README.md', '.claude/hooks/src/NOTES.md', '.claude/plugins/ccv3-mods/hooks/pr-loop/README.md']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('semgrep-ccv3'), false, p);
+  }
+  for (const p of ['scripts/x.mjs', 'scripts/a/b.js', 'scripts/a/b.ts', 'scripts/ratchets/semgrep-ccv3/ccv3-new-rule.yml', '.claude/hooks/src/a.ts', '.claude/plugins/ccv3-mods/hooks/pr-loop/index.tsx']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('semgrep-ccv3'), true, p);
+  }
+});
+
 test('GW4: a change under scripts/checks runs the checks helper tests, and the files named exist', async () => {
   const g = gatesFor(['scripts/checks/proofs.json'], REPO_ROOT).find((x) => x.id === 'checks-tests');
   assert.ok(g);

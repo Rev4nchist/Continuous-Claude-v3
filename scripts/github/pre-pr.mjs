@@ -143,7 +143,11 @@ export const SURFACES = [
   // A surface row, not an always gate: a docs-only PR does not need Docker. Docker not running is a FAIL (D3), never a NOTE or SKIP.
   {
     id: 'semgrep-ccv3',
-    globs: ['scripts/**', '.claude/plugins/ccv3-mods/hooks/**', '.claude/hooks/src/**'],
+    // Code files and the rule pack only: a Markdown-only change needs no Docker (CLI review of d405939).
+    globs: [
+      'scripts/**/*.mjs', 'scripts/**/*.js', 'scripts/**/*.cjs', 'scripts/**/*.ts', 'scripts/ratchets/semgrep-ccv3/**',
+      '.claude/plugins/ccv3-mods/hooks/**/*.ts', '.claude/plugins/ccv3-mods/hooks/**/*.tsx', '.claude/hooks/src/**/*.ts',
+    ],
     gates: [nodeGate('semgrep-ccv3', 'scripts/ratchets/semgrep-ccv3.mjs')],
   },
   {
