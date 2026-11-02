@@ -63,13 +63,16 @@ const WRAPS: Record<string, (path: string) => string> = {
 };
 
 /** tail tag -> the text after the path, and the token of it that must survive (null: nothing to keep). */
-const TAILS: Record<string, { text: string; keep: string | null }> = {
+const TAILS: Record<string, { text: string; keep: string | null; wraps?: string[] }> = {
   none: { text: '', keep: null },
   word: { text: ' now?', keep: 'now?' },
   url: { text: ' https://example.com/t/1', keep: 'https://example.com/t/1' },
   mdlink: { text: ' [proof](https://example.com/t/1)', keep: '[proof](https://example.com/t/1)' },
   mark: { text: '.', keep: '.' },
+  // After a closed double quote or backtick only (not 'sq', see the sentence rows): with no quote around the path, "and/or" is a separator word and the scrub absorbs it on purpose.
+  andor: { text: ' and/or continue', keep: 'and/or continue', wraps: ['dq', 'bt'] },
 };
+const tailsFor = (wrap: string): string[] => Object.keys(TAILS).filter((t) => TAILS[t].wraps === undefined || TAILS[t].wraps.includes(wrap));
 
 type Limit = { root?: string; seg: string; wrap: string; oracle: Oracle; reason: string; source: string };
 
@@ -126,6 +129,12 @@ const SENTENCES: [string, string][] = [
   ['See /home/alice/file.txt [proof](docs/proof.md).', 'See <path> [proof](docs/proof.md).'],
   // A word with no separator after a closed quoted path is not part of it.
   ["Keep '/home/a/x' and more", 'Keep <path> and more'],
+  // A closed quoted path ends at its closing quote: a later word that holds a separator ("and/or") is not part of it (CodeRabbit #243 round 3).
+  ['Use "/tmp/report" and/or continue', 'Use <path> and/or continue'],
+  // Single quotes are the exception: a path that ends at `'` may be "Clients' Reports/x.txt", so the next separator word is absorbed (safe-message.ts CLOSED_QUOTED).
+  ["Use '/tmp/report' and/or continue", 'Use <path> continue'],
+  ['Use `/tmp/report` and/or continue', 'Use <path> and/or continue'],
+  ["Use \"/home/alice/Clients' Reports/finance.txt\" and/or continue", 'Use <path> and/or continue'],
 ];
 
 /** The same shapes through safeMessage (the greedy scrub for error messages). */
@@ -179,7 +188,7 @@ test.describe('path scrubber invariant', () => {
         test(`leak ${cell}`, () => {
           const limit = limitFor('leak', root, seg, wrap);
           test.fail(limit !== undefined, limit?.reason);
-          for (const tail of Object.keys(TAILS)) {
+          for (const tail of tailsFor(wrap)) {
             const text = input(root, seg, wrap, tail);
             const out = scrubPathsInText(text);
             expect.soft(leaked(out, seg), `tail=${tail} scrubPathsInText(${JSON.stringify(text)}) = ${JSON.stringify(out)}`).toEqual([]);
@@ -189,7 +198,7 @@ test.describe('path scrubber invariant', () => {
         test(`leak-msg ${cell}`, () => {
           const limit = limitFor('leak-msg', root, seg, wrap);
           test.fail(limit !== undefined, limit?.reason);
-          for (const tail of Object.keys(TAILS)) {
+          for (const tail of tailsFor(wrap)) {
             const text = input(root, seg, wrap, tail);
             const out = safeMessage(new Error(text));
             expect.soft(leaked(out, seg), `tail=${tail} safeMessage(${JSON.stringify(text)}) = ${JSON.stringify(out)}`).toEqual([]);
@@ -199,7 +208,7 @@ test.describe('path scrubber invariant', () => {
         test(`keep ${cell}`, () => {
           const limit = limitFor('keep', root, seg, wrap);
           test.fail(limit !== undefined, limit?.reason);
-          for (const tail of Object.keys(TAILS)) {
+          for (const tail of tailsFor(wrap)) {
             const text = input(root, seg, wrap, tail);
             const out = scrubPathsInText(text);
             const why = `tail=${tail} scrubPathsInText(${JSON.stringify(text)}) = ${JSON.stringify(out)}`;
