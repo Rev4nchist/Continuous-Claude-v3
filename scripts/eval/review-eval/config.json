@@ -1,5 +1,10 @@
 {
-  "holdoutExclude": [217, 222, 225, 238],
+  "holdoutExclude": [
+    217,
+    222,
+    225,
+    238
+  ],
   "shadowFromPr": 250,
   "shadowDays": 21,
   "cursorEvalBudget": 40,
@@ -8,13 +13,23 @@
   "judgeModel": "sonnet",
   "lineSlack": 3,
   "labelWeekCap": 20,
-  "freeze": {},
+  "freeze": {
+    "commit": "3c04b641465ac715dd7a6454d62c98d6b7377e81",
+    "blob": "14eadd830a46321015ab985974fa2e61ca36b64d",
+    "promptSha256": "f53fa6b8c70f718fe351a87256cc4d35c9eef00769fe02897d3b1485310b27aa",
+    "at": "2026-11-02T23:57:34.175Z"
+  },
   "shadow": {
     "tol": 3,
     "minConfidence": 4,
     "retroMax": 40,
     "dailyMax": 6,
     "ttlHours": 12,
-    "bar": { "holdoutRecall": 0.8, "precision": 0.78, "minMajors": 20, "minLabels": 30 }
+    "bar": {
+      "holdoutRecall": 0.8,
+      "precision": 0.78,
+      "minMajors": 20,
+      "minLabels": 30
+    }
   }
 }
