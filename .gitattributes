@@ -29,6 +29,10 @@
 *.js text=auto eol=lf
 *.cjs text=auto eol=lf
 
+# Test fixtures (captured review bodies, JSON) stay LF. Tests cut them apart on "\n"; a CRLF
+# checkout made 9 review-status Follow-up tests fail on Windows only (2026-11-02, after #245).
+/scripts/github/fixtures/** text eol=lf
+
 # Vendored external skills stay byte-identical to upstream (core.autocrlf=true would rewrite them
 # and break the per-file sha256 in vendor.lock.json). Spec: docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md.
 .claude/skills/_vendor/** -text
