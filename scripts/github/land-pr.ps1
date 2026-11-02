@@ -61,24 +61,32 @@ function Fail($msg) { Write-Host "STOPPED: $msg" -ForegroundColor Red; if ($done
 # script-level variable and never throws. The walk never descends into a link, so a link inside a
 # link target is not touched. Only the link goes: DirectoryInfo.Delete() on a junction or directory
 # symlink calls RemoveDirectory, which leaves the target alone; a file symlink is deleted as a file.
-function Remove-WorktreeLinks([string]$Path) {
+#   -SkipPaths  full paths of links to leave alone: TRACKED symlinks. Git removes a tracked symlink as
+#               a file and never follows it; unlinking it here would leave git a tracked deletion,
+#               and `git worktree remove` would then refuse.
+#   -Delete     the unlink, called with the FileSystemInfo. Default: its Delete(). A test passes one
+#               that throws, because an unremovable link cannot be made reliably (Windows ignores
+#               FILE_ATTRIBUTE_READONLY on directories).
+function Remove-WorktreeLinks([string]$Path, [string[]]$SkipPaths = @(), [scriptblock]$Delete = { param($info) $info.Delete() }) {
   $removed = [System.Collections.Generic.List[string]]::new(); $remaining = [System.Collections.Generic.List[string]]::new(); $errors = [System.Collections.Generic.List[string]]::new()
   try {
     $stack = [System.Collections.Generic.Stack[string]]::new()
     $stack.Push([System.IO.Path]::GetFullPath($Path))
     $links = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
+    $skip = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($sp in $SkipPaths) { if ($sp) { [void]$skip.Add([System.IO.Path]::GetFullPath($sp)) } }
     while ($stack.Count) {
       $dir = $stack.Pop()
       try {
         foreach ($e in [System.IO.DirectoryInfo]::new($dir).EnumerateFileSystemInfos()) {
-          if ($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { $links.Add($e) }
+          if ($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { if (-not $skip.Contains($e.FullName)) { $links.Add($e) } }
           elseif ($e -is [System.IO.DirectoryInfo]) { $stack.Push($e.FullName) }
         }
       } catch { $errors.Add("${dir}: $($_.Exception.Message)") }
     }
     foreach ($l in $links) {
       try {
-        $l.Delete()
+        & $Delete $l
         $l.Refresh()
         if ($l.Exists) { $remaining.Add($l.FullName) } else { $removed.Add($l.FullName) }
       } catch { $remaining.Add($l.FullName); $errors.Add("$($l.FullName): $($_.Exception.Message)") }
@@ -89,6 +97,22 @@ function Remove-WorktreeLinks([string]$Path) {
     Remaining = [string[]]$remaining.ToArray()
     Error     = if ($errors.Count) { $errors -join '; ' } else { $null }
   }
+}
+
+# Full paths of the tracked symlinks (mode 120000) in a worktree. Git removes these itself.
+# Self-contained, never throws; Error is set when git cannot answer, and the caller keeps the worktree.
+function Get-TrackedSymlinkPaths([string]$Worktree) {
+  $paths = [System.Collections.Generic.List[string]]::new(); $err = $null
+  try {
+    $raw = (git -C $Worktree ls-files -s -z 2>$null) -join ''
+    if ($LASTEXITCODE) { $err = "git ls-files exited $LASTEXITCODE" }
+    else {
+      foreach ($rec in ($raw -split "`0")) {
+        if ($rec -match '^120000 [0-9a-f]+ \d\t(.+)$') { $paths.Add([System.IO.Path]::GetFullPath((Join-Path $Worktree $Matches[1]))) }
+      }
+    }
+  } catch { $err = $_.Exception.Message }
+  [pscustomobject]@{ Paths = [string[]]$paths.ToArray(); Error = $err }
 }
 
 # Git Bash, never `bash` on PATH (WSL on these machines). Per-user and machine-wide installs differ.
@@ -292,7 +316,13 @@ if ($wtPath) {
       Write-Host "  kept worktree $wtPath`: e2e artifacts not saved ($saveProblem)"
     } else {
       # Unlink every junction and symlink first; git would delete through them (see Remove-WorktreeLinks).
-      $links = Remove-WorktreeLinks -Path $wtPath
+      # Tracked symlinks are left to git (it removes them as files). LAND_PR_TEST_FAIL_UNLINK is
+      # TEST-ONLY: when set, every unlink fails, so a test can reach the "link not removed" branch.
+      $tracked = Get-TrackedSymlinkPaths -Worktree $wtPath
+      $failUnlink = { param($info) throw 'unlink failure injected by LAND_PR_TEST_FAIL_UNLINK' }
+      $links = if ($tracked.Error) { [pscustomobject]@{ Removed = @(); Remaining = @(); Error = "cannot list tracked symlinks: $($tracked.Error)" } }
+        elseif ($env:LAND_PR_TEST_FAIL_UNLINK) { Remove-WorktreeLinks -Path $wtPath -SkipPaths $tracked.Paths -Delete $failUnlink }
+        else { Remove-WorktreeLinks -Path $wtPath -SkipPaths $tracked.Paths }
       if ($links.Remaining.Count -or $links.Error) {
         $named = if ($links.Remaining.Count) { $links.Remaining -join ', ' } else { $links.Error }
         Write-Host "  kept worktree $wtPath`: link not removed ($named)"
