@@ -10,7 +10,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   BAND_MODEL, EXIT, MODEL_ALLOWLIST, PER_REF_CAP, WEEKLY_CAP, WEEK_MS,
-  buildAgentEnv, buildPrompt, countRuns, finishRun, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
+  buildAgentEnv, buildPrompt, countRuns, defaultExtract, finishRun, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
   resolveAgent, resolveModel, runAgent, runReview,
 } from './cursor-review.mjs';
 
@@ -694,6 +694,38 @@ test('a PR diff is taken from the base sha GitHub reports, not from a stale loca
 test('a PR whose gh reply has no base sha is refused', async () => {
   const { root, head } = gitRepo();
   await assert.rejects(() => prepareReview({ root, input: { pr: 9 }, tmpRoot: tmp('trees'), gh: () => ({ head: { sha: head }, base: { ref: 'main' } }), repo: 'o/r' }), /base/i);
+});
+
+test('a tar that fails part-way is a failed prepare, even when it left files behind', async () => {
+  const { root, base, head } = gitRepo();
+  const extract = ({ dir }) => { writeFileSync(path.join(dir, 'a.txt'), 'partial'); return { status: 1, stderr: 'Cannot create symlink: long path' }; };
+  await assert.rejects(() => prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees'), extract }), /tar failed.*long path/);
+});
+
+test('a changed file missing from the extracted tree fails the prepare, though tar said 0', async () => {
+  const { root, base, head } = gitRepo();
+  const extract = (spec) => { const r = defaultExtract(spec); rmSync(path.join(spec.dir, 'b.txt')); return r; };
+  await assert.rejects(() => prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees'), extract }), /missing.*b\.txt/);
+});
+
+test('a file the diff deletes is not required in the tree', async () => {
+  const root = tmp('deleted');
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.t'); git('config', 'user.name', 't'); git('config', 'core.autocrlf', 'false');
+  writeFileSync(path.join(root, 'gone.txt'), 'x'); writeFileSync(path.join(root, 'stay.txt'), 'x');
+  git('add', '-A'); git('commit', '-q', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+  rmSync(path.join(root, 'gone.txt')); writeFileSync(path.join(root, 'stay.txt'), 'y');
+  git('add', '-A'); git('commit', '-q', '-m', 'change');
+  const head = git('rev-parse', 'HEAD');
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.deepEqual([...prep.files].sort(), ['gone.txt', 'stay.txt']);
+    assert.equal(existsSync(path.join(prep.dir, 'gone.txt')), false);
+  } finally {
+    prep.cleanup();
+  }
 });
 
 test('prepareReview rejects an unknown revision with a clear error (exit 2 at the CLI)', async () => {

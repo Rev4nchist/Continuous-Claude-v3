@@ -440,11 +440,16 @@ function defaultGh(args) {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8', env, timeout: 60_000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }));
 }
 
+/** Unpacks <work>/head.tar into <dir>. Relative names and cwd: an absolute C:\ path would read as host:path to GNU tar. */
+export function defaultExtract({ dir }) {
+  return spawnSync('tar', ['-xf', '../head.tar'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+}
+
 /**
  * Resolves the input to base and head, then builds the clean tree. The diff base is the merge base, so a branch that merged
  * main shows only its own change. { ref, base, head, dir, files, cleanup }.
  */
-export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = defaultGh, repo = DEFAULT_REPO, remote = 'fork' }) {
+export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = defaultGh, repo = DEFAULT_REPO, remote = 'fork', extract = defaultExtract }) {
   let head;
   let baseSide;
   let ref;
@@ -476,14 +481,16 @@ export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = d
   try {
     mkdirSync(dir);
     gitOut(root, ['archive', '--format=tar', '-o', path.join(work, 'head.tar'), head]);
-    // Relative names and cwd: an absolute C:\ path would read as host:path to GNU tar.
-    const tar = spawnSync('tar', ['-xf', '../head.tar'], { cwd: dir, encoding: 'utf8', windowsHide: true });
+    const tar = extract({ dir, work });
     if (tar.error) throw new Error(`tar failed to start: ${tar.error.message}`);
-    if (tar.status !== 0 && readdirSync(dir).length === 0) throw new Error(`tar failed: ${(tar.stderr ?? '').trim()}`);
+    // Any non-zero status is a failed prepare: a part-way unpack leaves a partial tree, and a review of it could answer clean.
+    if (tar.status !== 0) throw new Error(`tar failed (status ${tar.status}): ${(tar.stderr ?? '').trim()}`);
     rmSync(path.join(work, 'head.tar'), { force: true });
     for (const x of TREE_EXCLUDES) rmSync(path.join(dir, x), { recursive: true, force: true });
     writeFileSync(path.join(dir, 'PR.diff'), gitOut(root, ['diff', '--no-color', '--no-ext-diff', mergeBase, head]));
     const files = gitOut(root, ['diff', '--name-only', mergeBase, head]).split(/\r?\n/).filter(Boolean);
+    const missing = gitOut(root, ['diff', '--name-only', '--diff-filter=ACMRT', mergeBase, head]).split(/\r?\n/).filter(Boolean).filter((f) => !existsSync(path.join(dir, f)));
+    if (missing.length > 0) throw new Error(`the review tree is missing ${missing.length} changed file(s): ${missing.slice(0, 5).join(', ')}`);
     return { ref, base: mergeBase, head, dir, files, cleanup };
   } catch (err) {
     cleanup();
