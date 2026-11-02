@@ -138,7 +138,21 @@ export const SURFACES = [
   { id: 'rules-scripts', globs: ['scripts/rules/**'], gates: [nodeTest('rules-tests', 'scripts/rules/test/*.test.mjs')] },
   { id: 'skills-scripts', globs: ['scripts/skills/**'], gates: [nodeTest('skills-tests', 'scripts/skills/*.test.mjs')] },
   { id: 'agents-scripts', globs: ['scripts/agents/**'], gates: [nodeTest('agents-tests', 'scripts/agents/*.test.mjs')] },
-  { id: 'ratchets-scripts', globs: ['scripts/ratchets/**'], gates: [nodeTest('ratchets-tests', 'scripts/ratchets/*.test.mjs')] },
+  // The workflow is here because semgrep-ccv3.test.mjs (SG2) compares the Semgrep digest in it with the wrapper default.
+  { id: 'ratchets-scripts', globs: ['scripts/ratchets/**', '.github/workflows/ccv3-checks.yml'], gates: [nodeTest('ratchets-tests', 'scripts/ratchets/*.test.mjs')] },
+  // A surface row, not an always gate: a docs-only PR does not need Docker. Docker not running is a FAIL (D3), never a NOTE or SKIP.
+  {
+    id: 'semgrep-ccv3',
+    globs: ['scripts/**', '.claude/plugins/ccv3-mods/hooks/**', '.claude/hooks/src/**'],
+    gates: [nodeGate('semgrep-ccv3', 'scripts/ratchets/semgrep-ccv3.mjs')],
+  },
+  {
+    id: 'agentic-os-scrub',
+    globs: ['apps/agentic-os/src/server/sources/**', 'apps/agentic-os/e2e/safe-message*.spec.ts', 'apps/agentic-os/playwright.pure.config.ts'],
+    // The pure config needs no server, database or browser. It needs root node_modules: run npm ci --ignore-scripts first.
+    gates: [nodeGate('scrub-invariant', 'node_modules/@playwright/test/cli.js', ['test', '--config', 'apps/agentic-os/playwright.pure.config.ts', '--reporter=line'])],
+  },
+  { id: 'checks-scripts', globs: ['scripts/checks/**'], gates: [{ id: 'checks-tests', cmd: 'node', args: ['--test', 'scripts/checks/prove-check.test.mjs', 'scripts/checks/state-table.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }] },
   {
     id: 'config',
     globs: ['.coderabbit.yaml', 'review-router.config.json', '.claude/project-registry.json'],
