@@ -16,10 +16,13 @@
  * Usage: node scripts/coordination/render-board.mjs [out.html]
  */
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
+} from './kanban-place.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -177,7 +180,86 @@ const laneRow = (l, i) => {
   </div>`;
 };
 
-const html = `<title>Agentic OS — Lane Board</title>
+// ------------------------------------------------------------ priorities kanban
+// Server-side first frame: every open lane in its default column, so the page is
+// complete with no script. kanban-client.js re-places the cards from the saved
+// order. One placement function (kanban-place.mjs) serves both.
+
+const KB_COLS = [
+  ['now', 'Now'], ['next', 'Next'], ['later', 'Later'], ['waiting', 'Waiting on Dave'],
+];
+const kbPrio = (l) => (l.priority != null && Number.isFinite(Number(l.priority)) ? Number(l.priority) : null);
+const kbLanes = lanes.map((l) => ({ id: l.id, state: l.state, priority: kbPrio(l) }));
+const kbPlaced = placeLanes(null, kbLanes);
+const kbById = new Map(lanes.map((l) => [l.id, l]));
+// The page also needs each lane's facts for the Plain English prompt. placeLanes
+// reads only id, state and priority, so the extra keys are inert there.
+const kbData = lanes.map((l, i) => ({
+  ...kbLanes[i], title: l.title || '', track: l.track || '', holder: short(l.owner_session_id),
+  scope: l.scope || '', note: l.note || '',
+}));
+const kbJson = JSON.stringify(kbData).replace(/</g, '\\u003c');
+const KB_STATUS = ['backlog', 'ready', 'blocked', 'done'];
+// Hash of what a Plain English answer was written from. Computed here, read from
+// data-hash by the page, so the page never rebuilds it from DOM text.
+const kbHash = (l) => hashFields([l.title, l.scope, l.state, l.note]);
+let kbSeq = 0;
+
+const kbCard = (l, movable, rank, col) => {
+  const n = kbSeq++;
+  const owner = l.owner_session_id;
+  const leaseMin = l.lease_expires_at
+    ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000) : null;
+  const prio = kbPrio(l) !== null ? `<span class="kb-prio mono" title="DB priority">prio ${kbPrio(l)}</span>` : '';
+  const statusOpts = movable
+    ? `${KB_STATUS.includes(l.state) ? '' : `<option value="" selected>Keep current (${esc(l.state)})</option>`}${KB_STATUS.map((st) => `<option value="${st}"${st === l.state ? ' selected' : ''}>${st}</option>`).join('')}`
+    : '<option value="" selected>Active: a session holds it</option>';
+  return `<li class="card kb-card" data-id="${esc(l.id)}" data-state="${esc(l.state)}" data-hash="${esc(kbHash(l))}">
+      <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Rank in this column">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span>${movable ? '<span class="kb-grip" title="Drag to move" aria-hidden="true">&#8942;&#8942;</span>' : ''}</div>
+      <p class="kb-title">${esc(l.title)}</p>
+      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${prio}<span class="kb-sync" hidden></span></div>
+      ${movable ? '' : `<div class="kb-holder">${owner
+        ? `<span class="kb-who mono">${esc(short(owner))}</span>${leaseMin !== null && leaseMin <= 0
+          ? '<span class="pill p-warn">LAPSED</span>' : leaseMin !== null ? `<span class="kb-lease mono">${leaseMin}m left</span>` : ''}`
+        : '<span class="kb-lease mono">unclaimed</span>'}</div>`}
+      <button class="kb-btn kb-plain" type="button" hidden aria-expanded="false" aria-controls="kb-p${n}">Plain English</button>
+      <p class="kb-plain-out" id="kb-p${n}" role="status" hidden></p>
+      <button class="kb-more" type="button" aria-expanded="false" aria-controls="kb-d${n}">Details</button>
+      <div class="kb-detail" id="kb-d${n}" hidden>
+        <dl class="kb-dl">
+          <dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd>
+          <dt>last note</dt><dd>${esc(l.note || 'none')}</dd>
+        </dl>
+        <div class="kb-edit">
+          <label class="kb-fl"><span>Status</span><select class="kb-st" disabled>${statusOpts}</select></label>
+          <label class="kb-fl"><span>Note to Claude</span><textarea class="kb-note" rows="3" maxlength="1000" disabled></textarea></label>
+          <label class="kb-fl"><span>Question for Claude</span><textarea class="kb-q" rows="3" maxlength="1000" disabled></textarea></label>
+          <div class="kb-sv"><button class="kb-btn kb-save" type="button" disabled>Save</button><span class="kb-saved" role="status"></span></div>
+          <p class="kb-why"></p>
+        </div>
+      </div>
+      ${movable ? `<div class="kb-ctl">
+        <button class="kb-btn kb-up" type="button" aria-label="Move ${esc(l.id)} up" disabled>Up</button>
+        <button class="kb-btn kb-dn" type="button" aria-label="Move ${esc(l.id)} down" disabled>Down</button>
+        <label class="kb-mv">Move to <select class="kb-to" aria-label="Move ${esc(l.id)} to column" disabled>${KB_COLS.map(([k, name]) => `<option value="${k}"${k === col ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
+      </div>` : ''}
+    </li>`;
+};
+
+const kbColumn = (key, name, ids, movable) => `<div class="kcol"${movable ? ` data-col="${key}"` : ' data-col="progress" data-fixed="1"'} data-n="${ids.length}">
+    <h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-${key}"><span class="kb-name">${name}</span><span class="kb-count mono">${ids.length}</span></button></h3>
+    ${movable ? '' : '<p class="kb-sub">Held by a session. Not reorderable.</p>'}
+    <ul class="kb-list" id="kb-list-${key}">${ids.map((id, i) => kbCard(kbById.get(id), movable, i + 1, key)).join('')}</ul>
+  </div>`;
+
+// The client script is plain ES5 text: placeLanes' own source, then the page code.
+const kbClient = readFileSync(join(HERE, 'kanban-client.js'), 'utf8');
+if (/<\/script/i.test(kbClient)) throw new Error('kanban-client.js must not contain a closing script tag');
+const kbScript = `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt].map((f) => f.toString()).join('\n')}
+${kbClient}`;
+
+const html = `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agentic OS — Lane Board</title>
 <style>
   :root {
     /* Carried from the 07-27 board so this reads as the same page, not a new one.
@@ -335,6 +417,100 @@ const html = `<title>Agentic OS — Lane Board</title>
   footer { margin-top:40px; padding-top:18px; border-top:1px solid var(--line); color:var(--faint);
     font:400 11.5px/1.6 var(--mono); display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }
 
+  /* PRIORITIES kanban. Every class is kb-/kcol-prefixed: the lane list below
+     queries .lane, .detail and .chip, and must never see these cards. */
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+  .kb-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin:0 0 12px; }
+  .kb-status { display:flex; align-items:center; gap:8px; margin:0; min-height:18px; color:var(--muted); font:500 11.5px/1.4 var(--mono); }
+  .kb-status::before { content:''; flex:none; width:7px; height:7px; border-radius:50%; background:var(--faint); }
+  .kb-status[data-k="ok"]::before { background:var(--ok); }
+  .kb-status[data-k="warn"]::before { background:var(--warn); }
+  .kb-status[data-k="crit"]::before { background:var(--crit); }
+  .kb-status[data-k="crit"] { color:var(--crit); }
+  .kb-board { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; align-items:start; }
+  .kcol { min-width:0; padding:8px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel-2); }
+  .kcol.kb-over { border-color:var(--ok); background:var(--ok-bg); }
+  .kb-h { margin:0; font:inherit; }
+  .kb-head { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; padding:6px 4px; border:0; background:none;
+    color:var(--ink); font:600 12px/1.2 var(--mono); letter-spacing:.04em; text-align:left; cursor:default; }
+  .kb-count { min-width:22px; padding:3px 7px; border:1px solid var(--line); border-radius:999px; background:var(--panel); color:var(--muted);
+    font:600 10.5px/1.2 var(--mono); text-align:center; }
+  .kb-sub { margin:0 4px 6px; color:var(--faint); font:400 10.5px/1.4 var(--mono); }
+  .kb-list { display:flex; flex-direction:column; gap:8px; min-height:56px; margin:0; padding:0; list-style:none; }
+  .kcol[data-n="0"] .kb-list::after { content:'Nothing here'; display:block; padding:14px 10px; border:1px dashed var(--line); border-radius:var(--r);
+    color:var(--faint); font:400 11px/1.4 var(--mono); text-align:center; }
+  .kb-card { min-width:0; padding:10px 11px; border-left:3px solid var(--line); }
+  .kb-card[data-state="active"] { border-left-color:var(--ok); }
+  .kb-card[data-state="ready"] { border-left-color:var(--info); }
+  .kb-card[data-state="blocked"] { border-left-color:var(--crit); }
+  .kb-card[data-state="review"] { border-left-color:var(--warn); }
+  .kb-card.kb-dragging { opacity:.4; }
+  .kb-ph { height:44px; border:2px dashed var(--ok); border-radius:var(--r); background:var(--ok-bg); list-style:none; }
+  .kb-top { display:flex; align-items:center; gap:8px; }
+  .kb-rank { flex:none; display:grid; place-items:center; min-width:22px; height:22px; padding:0 5px; border-radius:999px;
+    background:var(--ink); color:var(--ground); font:700 11px/1 var(--mono); }
+  .kb-id { flex:1; min-width:0; font:600 12.5px/1.3 var(--mono); letter-spacing:-.01em; overflow-wrap:anywhere; }
+  .kb-grip { flex:none; padding:2px 6px; color:var(--faint); font:700 14px/1 var(--mono); letter-spacing:-2px; cursor:grab; user-select:none; touch-action:none; }
+  .kb-board:not(.kb-on) .kb-grip { display:none; }
+  .kb-title { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; overflow:hidden; overflow-wrap:anywhere;
+    margin:6px 0 0; color:var(--muted); font:400 12px/1.45 var(--sans); }
+  .kb-open .kb-title { display:block; overflow:visible; }
+  .kb-meta, .kb-holder { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
+  .kb-track, .kb-prio, .kb-lease { color:var(--faint); font:500 10.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .kb-who { color:var(--live); font:600 11px/1.4 var(--mono); }
+  .kb-more { margin-top:8px; padding:4px 0; border:0; background:none; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; }
+  .kb-more:hover { text-decoration:underline; }
+  .kb-detail { margin:8px 0 0; min-width:0; }
+  .kb-detail[hidden] { display:none; }
+  .kb-dl { display:grid; grid-template-columns:62px minmax(0,1fr); gap:4px 8px; margin:0; padding:8px 10px; border:1px solid var(--line-soft);
+    border-radius:6px; background:var(--panel-2); }
+  .kb-dl dt { color:var(--faint); font:600 10px/1.5 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
+  .kb-dl dd { margin:0; font:400 11.5px/1.45 var(--mono); overflow-wrap:anywhere; }
+  .kb-chip, .kb-sync { display:inline-flex; max-width:100%; padding:3px 8px; border:1px solid var(--line); border-radius:999px; background:var(--panel-2);
+    color:var(--muted); font:600 10px/1.4 var(--mono); letter-spacing:.03em; overflow-wrap:anywhere; }
+  .kb-chip[hidden], .kb-sync[hidden] { display:none; }
+  .kb-chip[data-k="pending"], .kb-sync[data-k="pending"] { color:var(--warn); background:var(--warn-bg); border-color:color-mix(in srgb,var(--warn) 30%,transparent); }
+  .kb-sync[data-k="synced"] { color:var(--ok); background:var(--ok-bg); border-color:color-mix(in srgb,var(--ok) 30%,transparent); }
+  .kb-plain { margin-top:8px; }
+  .kb-plain[hidden], .kb-plain-out[hidden] { display:none; }
+  .kb-plain-out { margin:8px 0 0; padding:8px 10px; border:1px solid var(--line-soft); border-left:3px solid var(--info); border-radius:6px;
+    background:var(--panel-2); color:var(--ink); font:400 12px/1.5 var(--sans); white-space:pre-line; overflow-wrap:anywhere; }
+  .kb-plain-out[data-k="warn"] { border-left-color:var(--warn); color:var(--warn); }
+  .kb-plain-out[data-k="crit"] { border-left-color:var(--crit); color:var(--crit); }
+  .kb-edit { display:flex; flex-direction:column; gap:8px; margin-top:8px; min-width:0; }
+  .kb-fl { display:flex; flex-direction:column; gap:4px; min-width:0; color:var(--faint); font:600 10px/1.4 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
+  .kb-st, .kb-note, .kb-q { width:100%; min-width:0; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
+    color:var(--ink); font:400 12px/1.45 var(--sans); letter-spacing:normal; text-transform:none; }
+  .kb-st { min-height:34px; font-family:var(--mono); }
+  .kb-note, .kb-q { resize:vertical; min-height:60px; }
+  .kb-st:disabled, .kb-note:disabled, .kb-q:disabled { color:var(--faint); background:var(--panel-2); cursor:not-allowed; }
+  .kb-sv { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .kb-saved { min-width:0; color:var(--muted); font:500 11px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .kb-saved[data-k="ok"] { color:var(--ok); }
+  .kb-saved[data-k="crit"] { color:var(--crit); }
+  .kb-why { margin:0; color:var(--faint); font:400 10.5px/1.4 var(--mono); }
+  .kb-why:empty { display:none; }
+  .kb-ctl { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:9px; }
+  .kb-btn, .kb-to { min-height:30px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
+    color:var(--ink); font:500 11px/1 var(--mono); cursor:pointer; }
+  .kb-btn:hover:not(:disabled), .kb-to:hover:not(:disabled) { border-color:var(--muted); }
+  .kb-btn:disabled, .kb-to:disabled { color:var(--faint); cursor:not-allowed; opacity:.6; }
+  .kb-mv { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1 1 100%; min-width:0; color:var(--faint); font:500 10.5px/1 var(--mono); }
+  .kb-to { width:100%; min-width:0; }
+  @media (max-width:1080px) { .kb-board { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+  @media (max-width:720px) {
+    .kb-board { grid-template-columns:minmax(0,1fr); }
+    .kb-head { cursor:pointer; }
+    .kb-head::after { content:'▾'; color:var(--faint); }
+    .kcol.kb-collapsed .kb-head::after { content:'▸'; }
+    .kcol.kb-collapsed .kb-list, .kcol.kb-collapsed .kb-sub { display:none; }
+  }
+  @media (pointer:coarse), (max-width:720px) {
+    .kb-head, .kb-more, .kb-btn, .kb-to, .kb-st { min-height:44px; }
+    .kb-btn { min-width:44px; }
+    .kb-more { padding:4px 10px 4px 0; }
+  }
+
   @media (max-width:1080px) { .lane { grid-template-columns:3px minmax(160px,1.4fr) 92px 130px 56px; } .lane .scope { display:none; } }
   @media (max-width:720px) { .lane { grid-template-columns:3px 1fr 56px; } .lane .state-c, .lane .own { display:none; } .counters { width:100%; } }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
@@ -358,6 +534,23 @@ const html = `<title>Agentic OS — Lane Board</title>
 </header>
 
 <div class="wrap">
+
+  <section id="priorities" aria-labelledby="kb-title">
+    <div class="sec-head">
+      <h2 id="kb-title">Priorities</h2>
+      <p>Drag or use Move to. Your order saves to this board and Claude reads it.</p>
+    </div>
+    <div class="kb-bar">
+      <p class="kb-status" id="kb-status" role="status" data-k="idle">Default order. Saved order not loaded yet.</p>
+      <span class="kb-chip" id="kb-order" data-k="pending" hidden>Order not yet synced to sessions</span>
+    </div>
+    <div class="sr" id="kb-live" aria-live="polite"></div>
+    <div class="kb-board" id="kb-board">
+      ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true)).join('')}
+      ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false)}
+    </div>
+    <script type="application/json" id="kb-data">${kbJson}</script>
+  </section>
 
   <section>
     <div class="sec-head">
@@ -493,6 +686,9 @@ const html = `<title>Agentic OS — Lane Board</title>
     });
     document.querySelector('.chip[data-f="open"]').click();
   })();
+</script>
+<script>
+${kbScript}
 </script>`;
 
 writeFileSync(OUT, html);
