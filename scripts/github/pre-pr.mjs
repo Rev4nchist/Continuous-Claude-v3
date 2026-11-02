@@ -171,7 +171,7 @@ export const SURFACES = [
   },
   { id: 'templates', globs: ['.claude/templates/**'], gates: [], manual: 'an always-loaded template: the context-budget gate runs anyway; the sync installs it' },
   // The github suite takes about 14 minutes on this machine (real git, child processes and PowerShell).
-  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN)] },
+  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN), nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN)] },
   {
     id: 'mod',
     globs: ['.claude/plugins/ccv3-mods/**'],

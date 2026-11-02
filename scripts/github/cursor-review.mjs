@@ -34,10 +34,11 @@
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withLock } from './lib/file-lock.mjs';
 
 export const EXIT = { OK: 0, FAILED: 1, REFUSED: 2, CAP: 3 };
 export const MODEL_ALLOWLIST = new Set(['grok-4.7-high', 'grok-4.7-xhigh']);
@@ -111,24 +112,6 @@ export function countRuns(entries, { now, ref, windowMs = WEEK_MS }) {
     if (Number.isNaN(t) || t >= cutoff) n += 1; // an unreadable time counts: the cap errs on the safe side
   }
   return n;
-}
-
-const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
-function withLock(file, { lockWaitMs = 5000, lockStaleMs = 30_000 }, fn) {
-  const lock = `${file}.lock`;
-  const began = Date.now();
-  for (;;) {
-    try { closeSync(openSync(lock, 'wx')); break; } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > lockStaleMs) { unlinkSync(lock); continue; }
-      } catch { continue; }
-      if (Date.now() - began >= lockWaitMs) return { ok: false, reason: 'lock', detail: `the ledger lock ${lock} is held by another session` };
-      sleepSync(25);
-    }
-  }
-  try { return fn(); } finally { try { unlinkSync(lock); } catch { /* already gone */ } }
 }
 
 /**
