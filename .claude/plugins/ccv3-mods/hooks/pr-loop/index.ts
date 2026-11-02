@@ -484,9 +484,23 @@ const batchReport = (landed: number[], stopped: { pr: number; why: string } | nu
   return parts.join('\n')
 }
 
+/** land-pr.ps1 asks up to 7 times, 15 s apart, while GitHub computes mergeable_state after the base moved. The batch asks the same way. */
+const RECHECKS = 7
+const RECHECK_MS = 15_000
+
+/** One read of the PR; while it is not READY only because mergeable_state is "unknown" (the base just moved), read again. */
+const readSettled = async ($: EngineInterface, pr: number): Promise<Probe> => {
+  let fresh = await probe($, pr)
+  for (let tries = 1; tries < RECHECKS && fresh.kind === 'ok' && !fresh.status.ready && !isClosed(fresh.status) && fresh.status.mergeable_state === 'unknown'; tries += 1) {
+    await new Promise<void>(resolve => $.clock.after(RECHECK_MS, () => resolve()))
+    fresh = await probe($, pr)
+  }
+  return fresh
+}
+
 /** The state of one PR right before its land run, against the head Dave saw. Null when it may land. */
 const driftBefore = async ($: EngineInterface, row: Row & { head: string }): Promise<string | null> => {
-  const fresh = await probe($, row.pr)
+  const fresh = await readSettled($, row.pr)
   if (fresh.kind === 'error') return `its status could not be read (${fresh.text}).`
   const status = fresh.status
   if (isClosed(status)) return `${status.merged ? 'it was merged' : 'it was closed'} since you pressed Land.`

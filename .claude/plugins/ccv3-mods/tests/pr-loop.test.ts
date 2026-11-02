@@ -2096,3 +2096,51 @@ describe('/land batch: fail closed after a run, and the cap counts READY PRs', (
     expect(out.text).toMatch(/at most 10/i)
   })
 })
+
+// ---- CodeRabbit round 1 on #249: the base moves after a merge ---------------------------------------------------------------------------
+// BL14 right after one PR merges GitHub reports mergeable_state "unknown" for a while; the batch stopped at the next PR instead of asking again
+// BL14b the re-ask has no end: "unknown" forever must stop after 7 reads (land-pr.ps1 retries 7 times, 15 s apart)
+const UNKNOWN = (n: number) => status(n, { mergeable_state: 'unknown', reasons: ['mergeable_state is "unknown"'] })
+
+describe('/land batch: mergeable_state unknown after a merge', () => {
+  /** Runs the command and moves the fake clock until it answers. */
+  const runAdvancing = async (clock: { advance: (ms: number) => Promise<unknown> }, $: Engine, args: string) => {
+    let done = false
+    const pending = run($, 'land', args).then(out => {
+      done = true
+      return out
+    })
+    for (let turn = 0; turn < 40 && !done; turn += 1) {
+      for (let i = 0; i < 200; i += 1) await Promise.resolve()
+      await clock.advance(15_000)
+    }
+    return pending
+  }
+
+  test('BL14 unknown, then READY lands the PR', async ($, on) => {
+    const { clock, seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: [READY(13), UNKNOWN(13), UNKNOWN(13), READY(13), MERGED(13)] } })
+    await start($)
+    const out = await runAdvancing(clock, $, '12 13')
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['12', '13'])
+    expect(out.text).toMatch(/Landed: #12, #13/)
+    expect(seen.status.filter(n => n === 13).length).toBe(5)
+  })
+
+  test('BL14b unknown on every read stops after 7 reads, with the same message as before', async ($, on) => {
+    const { clock, seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: [READY(13), UNKNOWN(13)], 14: MERGING(14) } })
+    await start($)
+    const out = await runAdvancing(clock, $, '12 13 14')
+    expect(seen.land.length).toBe(1)
+    expect(seen.status.filter(n => n === 13).length).toBe(1 + 7)
+    expect(out.text).toMatch(/Stopped at #13/)
+    expect(out.text).toMatch(/not READY any more/)
+    expect(out.text).toMatch(/Not tried: #14/)
+  })
+
+  test('BL14c a PR that is not ready for another reason is not re-asked', async ($, on) => {
+    const { clock, seen } = world(on, { answer: 'Land', script: { 12: MERGING(12), 13: [READY(13), status(13)] } })
+    await start($)
+    await runAdvancing(clock, $, '12 13')
+    expect(seen.status.filter(n => n === 13).length).toBe(2)
+  })
+})
