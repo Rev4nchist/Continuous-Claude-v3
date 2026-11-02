@@ -17,10 +17,16 @@ alongside Greptile. A CLI or plugin run **never** grants READY.
 - Stop and report when the CLI ends in `awaiting_confirmation` or `action_required`; do not
   auto-confirm billing or destructive follow-ups. `cr-fix.mjs` prints `incomplete` and exits 1 then.
 
-## Billing facts (CodeRabbit docs and the account, 2026-10-30)
+## Billing facts (CodeRabbit docs and the account, 2026-10-30; CLI 0.9.0 facts 2026-11-02)
 
 - The CLI has its own hourly allowance, apart from PR reviews. `cr usage` shows 10 per hour for this repo.
-- Past it, in On demand mode, `cr review --agent` returns `awaiting_confirmation`. It charges nothing unless `--use-credits` is passed.
+- Past it, `cr review --agent` can return `awaiting_confirmation`. It then charges nothing unless `--use-credits` is passed.
+- CLI 0.9.0 can also bill past the allowance with no `--use-credits` and no `awaiting_confirmation`. This happens when usage billing is on for the account, and it is on. The `complete` record then holds `usageCost` (`billedFilesCount`, `costCents`, `unitPriceCents`, `billingMethod`), for example `usage_credits` at $0.25 per file. A free run has no `usageCost`. Two runs billed this way on 2026-11-02: $1.00 and $0.50.
+- Do not assume a CLI run is free. `cr usage --agent` does not show this charge.
+- `pre-pr.mjs` and `cr-fix.mjs` log each billed run. They add one `kind: "cli"` row to `~/.claude/state/coderabbit-paid.jsonl` (the PR ledger of `cr-paid.mjs`) and print the cost. `pre-pr.mjs` prints "billed $X.XX (usage credits)" in its CodeRabbit line.
+- They also stop at the daily cap. The cap is `coderabbit.cli_daily_cap_usd` in `review-router.config.json` (3 dollars). Before a run they sum today's `cli` rows (America/Chicago date). At or over the cap, `pre-pr.mjs` skips with reason `cli-cap` (the pre-pr-gate hook allows it) and `cr-fix.mjs` stops with exit 2. No run is spent. Dave raises the cap. `cr-paid.mjs today` lists the rows.
+- At the cap, free runs also skip for the rest of that Chicago day. The check runs before the review and cannot know if the run would bill. A cap of 0 blocks every CLI run.
+- The cap does not cover a bare `cr review` that you run by hand. Run those through the scripts.
 - Dave has $25 of CLI and IDE credit. It does not pay for PR reviews.
 - PR reviews have usage billing On demand with a $50 monthly cap. Past the included limit a review waits for a seat holder to consent. It then costs $0.25 per reviewed file. `pr-review-loop.md` "Paid PR reviews (Dave, 2026-10-30)" says when a session may authorize it.
 - These each count as 1 PR review: marking a draft ready, each `@coderabbitai review`, each push with incremental review on, and GitHub's "Update branch" button.

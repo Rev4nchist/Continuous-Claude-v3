@@ -3,6 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { CheckpointAsk, CheckpointRecord, CheckpointResult, CheckpointView } from '../../types'
 import { isPrNumber, readRecord } from '../pr-loop/model'
+import { DIAG_DIR } from '../shared/diag'
 import {
   APPLY_TIMEOUT_MS,
   COMMAND,
@@ -183,14 +184,36 @@ const fail = (text: string): Failure => ({ ok: false, text })
 /**
  * The text plan: the engine in text mode. Never --json, --confirm or --apply, never gh.
  * `checkout` is the cwd the engine reads its facts in (the PR worktree holds the pre-pr stamp; the session root may not).
- * `via` names a live session's non-composer origin (the bridge is mobile remote control): the plan says why nothing was recorded.
+ * `via` names a live session's non-composer origin (the bridge is mobile remote control); null is a headless session. The plan says
+ * why nothing was recorded. `waiting` is the PR of this session's pending checkpoint, the one PR a bridge command may record.
  */
-const textPlan = async ($: EngineInterface, root: string, checkout: string = root, via: string | null = null): Promise<string> => {
+const textPlan = async ($: EngineInterface, root: string, checkout: string = root, via: string | null = null, waiting: number | null = null): Promise<string> => {
   const ran = await run($, engineArgv(root), checkout, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return `pr-checkpoint could not run (${ran.text}). Nothing was recorded. The PR stays a draft.`
   const out = (ran.out || ran.err).trim()
-  const where = via ? `This ${SLASH} came from ${via}, not Dave's terminal composer, so it only shows the plan. Dave types ${SLASH} in the composer to record it.` : `Dave runs ${SLASH} in an interactive session.`
-  return `${out}\nNothing was recorded. The PR stays a draft. ${where}`
+  return `${out}\nNothing was recorded. The PR stays a draft. ${whyTextOnly(via, waiting)}`
+}
+
+const whyTextOnly = (via: string | null, waiting: number | null): string => {
+  if (via === null) return `This session is headless, so ${SLASH} only shows the plan. Dave runs ${SLASH} in an interactive session.`
+  const where = `This ${SLASH} came from ${via}, not Dave's terminal composer, so it only shows the plan. Dave types ${SLASH} in the composer to record it.`
+  if (via !== 'bridge') return where
+  return `${where} From the bridge, ${SLASH} records only the PR whose checkpoint waits in this session (${waiting === null ? 'none waits now' : `#${waiting}`}).`
+}
+
+/**
+ * A bridge (phone) /pathway for the pending PR with no pathway word: a phone has no side pane. It answers with the PR, its plan read in
+ * the PR checkout, and the exact command to type. It records nothing.
+ */
+const bridgePrompt = async ($: EngineInterface, pending: Pending): Promise<string> => {
+  const ran = await run($, engineArgv(await engineRoot($, pending.root)), pending.root, ENGINE_TIMEOUT_MS)
+  const plan = ran.ok ? (ran.out || ran.err).trim() : `pr-checkpoint could not run (${ran.text}).`
+  const { recommended, options } = pending.result
+  const words = options.filter(one => one.available && one.pathway !== 'wait').map(one => one.pathway)
+  const lead = recommended && words.includes(recommended) ? `To record the recommendation, type: ${SLASH} ${pending.pr} ${recommended}.` : 'The recommendation cannot be recorded now.'
+  const others = words.filter(word => word !== recommended).map(word => `${SLASH} ${pending.pr} ${word}`)
+  const more = others.length > 0 ? ` Other choices: ${others.join(', ')}.` : ''
+  return `PR #${pending.pr} waits for its checkpoint. Nothing was recorded.\n${plan}\n${lead}${more} ${SLASH} ${pending.pr} wait keeps it a draft.`
 }
 
 const gitLines = async ($: EngineInterface, root: string, argv: string[]): Promise<string | null> => {
@@ -669,53 +692,127 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, post one @coderabbitai review.` }
 }
 
-/** The command (SLASH). It answers its own command: Dave's text, and one hidden line for the model. It never calls prompt.submit. */
-const checkpointCommand = async ($: EngineInterface, e: { args: string; origin: { kind: string } }): Promise<{ text: string; context?: string[] }> => {
+type CommandEvent = { args: string; origin: { kind: string } }
+type CommandReply = { text: string; context?: string[] }
+/** What one /pathway did, for its log line. `outcome` stays 'error' when the command throws. */
+type Trace = { outcome: string; root: string | null; checkout: string | null }
+
+const PATHWAY_LOG = `${DIAG_DIR}/pathway-commands.jsonl`
+const PATHWAY_LOG_LINES = 500
+
+/**
+ * One JSON line per /pathway in ~/.claude/state/ccv3-mods/pathway-commands.jsonl, the newest 500 kept. The args hold a body PATH at most;
+ * no file is read for the line. The fs API has no append, so two sessions that write at the same moment can lose one line: accepted.
+ * A failed write never touches the command.
+ */
+const logCommand = async ($: EngineInterface, e: CommandEvent, trace: Trace): Promise<void> => {
+  try {
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+    if (!home) return
+    const entry = {
+      ts: new Date(await $.clock.now()).toISOString(),
+      session: await sessionId($),
+      origin: e.origin.kind,
+      args: clip(e.args, 200),
+      mode: (await interactive($)) ? 'interactive' : 'headless',
+      root: trace.root,
+      checkout: trace.checkout,
+      outcome: trace.outcome,
+    }
+    const path = `${home}/${PATHWAY_LOG}`
+    const old = await $.fs.read(path).then(text => (typeof text === 'string' ? text : ''), () => '')
+    const kept = old.split('\n').filter(line => line.trim() !== '').slice(-(PATHWAY_LOG_LINES - 1))
+    await $.fs.write(path, `${[...kept, JSON.stringify(entry)].join('\n')}\n`)
+  } catch {
+    // Diagnostics only.
+  }
+}
+
+/** The command (SLASH). It answers its own command: Dave's text, and one hidden line for the model. It never calls prompt.submit. Every run leaves one log line. */
+const checkpointCommand = async ($: EngineInterface, e: CommandEvent): Promise<CommandReply> => {
+  const trace: Trace = { outcome: 'error', root: null, checkout: null }
+  try {
+    return await commandReply($, e, trace)
+  } finally {
+    await logCommand($, e, trace)
+  }
+}
+
+/** A reply that notes its outcome for the log line. */
+const sayer = (trace: Trace) => (outcome: string, text: string, context?: string[]): CommandReply => {
+  trace.outcome = outcome
+  return context ? { text, context } : { text }
+}
+
+/** A bare /pathway: the pane in Dave's terminal; on the bridge (a phone, no pane) the pending PR and the command to type. */
+const bareCommand = async ($: EngineInterface, e: CommandEvent, live: boolean, pending: Pending | null, trace: Trace): Promise<CommandReply> => {
+  const say = sayer(trace)
+  if (!live) return say('need-pr', NEED_PR)
+  if (e.origin.kind === 'bridge') {
+    if (!pending) return say('need-pr', NEED_PR)
+    trace.root = await rootOf($)
+    trace.checkout = pending.root
+    return say('bridge-prompt', await bridgePrompt($, pending))
+  }
+  const queued = await loadAsks($)
+  if (!pending && queued.length === 0) return say('need-pr', NEED_PR)
+  if (pending && (await read($, checkpoint)) === null) await update($, checkpoint, () => viewOf(pending))
+  if (queued.length > 0 && (await read($, checkpointAsks)).length === 0) await update($, checkpointAsks, () => queued)
+  const placed = await openPane($)
+  if (placed.isPlaced) return say('pane', 'The checkpoint is in the side pane.')
+  return say('pane-unplaced', `The pane could not be placed (${placed.reason}). Widen the terminal, then type ${SLASH} again.`)
+}
+
+const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): Promise<CommandReply> => {
+  const say = sayer(trace)
   const grant = parseGrantArgs(e.args)
-  if (grant === 'usage') return { text: USAGE }
-  if (grant) return grantCommand($, e.origin.kind, grant)
+  if (grant === 'usage') return say('usage', USAGE)
+  if (grant) return say('grant', (await grantCommand($, e.origin.kind, grant)).text)
   const parsed = parseCheckpointArgs(e.args)
-  if (!parsed) return { text: USAGE }
+  if (!parsed) return say('usage', USAGE)
   const live = await interactive($)
   const pending = await loadPending($)
-  if (parsed.pr === null && parsed.word === null && parsed.body === null) {
-    const queued = await loadAsks($)
-    if (!live || (!pending && queued.length === 0)) return { text: NEED_PR }
-    if (pending && (await read($, checkpoint)) === null) await update($, checkpoint, () => viewOf(pending))
-    if (queued.length > 0 && (await read($, checkpointAsks)).length === 0) await update($, checkpointAsks, () => queued)
-    const placed = await openPane($)
-    return { text: placed.isPlaced ? 'The checkpoint is in the side pane.' : `The pane could not be placed (${placed.reason}). Widen the terminal, then type ${SLASH} again.` }
-  }
+  if (parsed.pr === null && parsed.word === null && parsed.body === null) return bareCommand($, e, live, pending, trace)
   const pr = parsed.pr ?? pending?.pr ?? null
   const body = parsed.body ?? (pending && pending.pr === pr ? pending.body : null)
-  if (pr === null || body === null) return { text: NEED_PR }
+  if (pr === null || body === null) return say('need-pr', NEED_PR)
   const root = await rootOf($)
-  if (!root) return { text: `${SLASH} runs in a CCv3 checkout (it needs ${ENGINE_REL} in the session root). Nothing was recorded.` }
-  // Only Dave's own command records. A plugin, the SDK or a headless run gets the text plan.
-  if (!live || e.origin.kind !== 'composer') {
+  trace.root = root
+  if (!root) return say('refused', `${SLASH} runs in a CCv3 checkout (it needs ${ENGINE_REL} in the session root). Nothing was recorded.`)
+  // Dave's own composer command records. So does a bridge command (Remote Control from his phone, Dave 2026-11-02) for the PR whose
+  // checkpoint waits in THIS session. A plugin, the SDK, any other origin, a bridge command for another PR or a headless run gets the text plan.
+  const phone = live && e.origin.kind === 'bridge' && pending && pending.pr === pr ? pending : null
+  if (!live || (e.origin.kind !== 'composer' && !phone)) {
     // The plan is read where the pre-pr stamp lives: the pending checkpoint's checkout, else the worktree of the PR branch (one gh read).
-    // A headless run makes no gh call. The consent rule is unchanged: nothing is recorded from here.
+    // A headless run makes no gh call. Nothing is recorded from here.
     const checkout = !live ? root : pending && pending.pr === pr ? pending.root : await checkoutOfPr($, root, pr)
-    if ((await bodyIn($, checkout, root, body)) === null) return { text: missingBody(body, checkout, root) }
-    return { text: await textPlan($, root, checkout, live ? e.origin.kind : null) }
+    trace.checkout = checkout
+    if ((await bodyIn($, checkout, root, body)) === null) return say('refused', missingBody(body, checkout, root))
+    return say('text-plan', await textPlan($, root, checkout, live ? e.origin.kind : null, pending?.pr ?? null))
+  }
+  if (phone && parsed.word === null) {
+    trace.checkout = phone.root
+    return say('bridge-prompt', await bridgePrompt($, phone))
   }
   const prepared = await prepare($, root, pr, body)
-  if (!prepared.ok) return { text: prepared.text }
+  if (!prepared.ok) return say('refused', prepared.text)
   const next = prepared.pending
+  trace.checkout = next.root
   if (parsed.word === null) {
     const placed = await show($, next)
-    return { text: placed.isPlaced ? `The checkpoint for #${pr} is in the side pane.` : `The pane could not be placed (${placed.reason}). Widen the terminal, then type ${SLASH} again.` }
+    if (placed.isPlaced) return say('pane', `The checkpoint for #${pr} is in the side pane.`)
+    return say('pane-unplaced', `The pane could not be placed (${placed.reason}). Widen the terminal, then type ${SLASH} again.`)
   }
-  if (parsed.word === 'wait') return { text: `PR #${pr} stays a draft. Nothing was recorded.` }
+  if (parsed.word === 'wait') return say('wait', `PR #${pr} stays a draft. Nothing was recorded.`)
   const result = next.result
   const pathway = parsed.word === 'accept' ? result.recommended : parsed.word
-  if (!pathway) return { text: `There is no recommendation: ${result.why[0] ?? 'run pre-pr.mjs'}. Nothing was recorded.` }
+  if (!pathway) return say('refused', `There is no recommendation: ${result.why[0] ?? 'run pre-pr.mjs'}. Nothing was recorded.`)
   const option = result.options.find(one => one.pathway === pathway)
-  if (!option || !option.available) return { text: `Pathway ${pathway} is not available${option ? `: ${option.reason}` : ''}. Nothing was recorded.` }
+  if (!option || !option.available) return say('refused', `Pathway ${pathway} is not available${option ? `: ${option.reason}` : ''}. Nothing was recorded.`)
   const by = parsed.word === 'accept' ? 'default' : 'dave'
   const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by)
   if (out.stage !== 'done') {
-    return { text: out.stage === 'apply' ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}` : `PR #${pr}: ${pathway} was not recorded: ${out.text}` }
+    return say('not-recorded', out.stage === 'apply' ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}` : `PR #${pr}: ${pathway} was not recorded: ${out.text}`)
   }
   const record = out.record
   if (pending && pending.pr === pr) {
@@ -723,10 +820,11 @@ const checkpointCommand = async ($: EngineInterface, e: { args: string; origin: 
     await closeIfIdle($)
   }
   $.ui.toast(`PR #${pr}: ${pathway} recorded, the PR is ready`, { timeoutMs: 10_000 })
-  return {
-    text: `PR #${pr}: ${pathway} recorded (${record.label ?? 'no label'}, ${costText(record.budget)}, by ${by}). The label is on the PR and it is ready.`,
-    context: [pressNotice({ pr, pathway, label: record.label, budget: record.budget, by })],
-  }
+  return say(
+    'recorded',
+    `PR #${pr}: ${pathway} recorded (${record.label ?? 'no label'}, ${costText(record.budget)}, by ${by}). The label is on the PR and it is ready.`,
+    [pressNotice({ pr, pathway, label: record.label, budget: record.budget, by })],
+  )
 }
 
 // ---- the lock ---------------------------------------------------------------------------------------------------------------

@@ -302,3 +302,85 @@ test('CP16: an older clean summary edited after a newer review object does not m
   assert.equal(r.from, OLD);
   h.done();
 });
+
+// ---- CLI spend ledger rows and the daily CLI cap (Dave, 2026-11-02) ----
+// How the CLI spend log can fail, and the test that catches it:
+//   a cli row (no pr) makes the ledger unreadable, so `check` exits 2 and `today` crashes   -> CP19
+//   an old row with no kind stops reading as a PR row, or a PR row without a pr is accepted  -> CP19
+//   a CLI row eats the PR $15 day cap, or a PR row eats the CLI cap                          -> CP20
+//   recordCliSpend writes the wrong shape, a free run (cost 0) writes a row                  -> CP21
+//   the cap sums another Chicago day, or compares with > and not >=                           -> CP22
+//   a bad cap value or a bad ledger line gives "under cap"                                    -> CP23
+//   `today` prints "PR #undefined" for a cli row                                              -> CP24
+const cliRow = (cost, date = '2026-10-30', branch = 'feat/x') => ({ ts: `${date}T10:00:00.000Z`, date, kind: 'cli', branch, head: HEAD, files: cost * 4, cost, session: 's' });
+
+test('CP19: a ledger of old PR rows (no kind) and cli rows reads; an unknown kind or a PR row with no pr is refused', () => {
+  const h = harness({ rows: [row(225, 1), cliRow(0.5), { ...row(226, 0.25), kind: 'pr' }] });
+  assert.equal(PAID.readLedger(h.ledgerPath).length, 3);
+  assert.equal(PAID.todayOf(h.deps).rows.length, 2, 'today lists the two PR rows');
+  h.done();
+  for (const bad of [{ ...cliRow(1), kind: 'other' }, { ...row(1, 1), pr: undefined }, { ...cliRow(1), branch: undefined }]) {
+    const g = harness({ rows: [bad] });
+    assert.throws(() => PAID.readLedger(g.ledgerPath), /ledger line 1/);
+    g.done();
+  }
+});
+
+test('CP20: CLI spend does not count in the PR day cap, and PR spend does not count in the CLI cap', async () => {
+  const h = harness({ prFiles: files(20), rows: [row(1, 10), cliRow(2.5)] });
+  assert.equal((await h.check()).verdict, 'ALLOW', 'PR today $10 + round $5 = $15, with $2.50 of CLI spend not added');
+  assert.equal(PAID.cliTodayOf(h.deps).total, 2.5);
+  h.done();
+});
+
+test('CP21: recordCliSpend writes one cli row that reads back; a zero or bad cost writes nothing', () => {
+  const h = harness();
+  const usageCost = { files: 4, costCents: 100 };
+  const r = PAID.recordCliSpend({ branch: 'fix/a', head: HEAD, usageCost }, { ...h.deps, env: { CLAUDE_CODE_SESSION_ID: 'sess-1' } });
+  assert.deepEqual(r, { ts: NOW.toISOString(), date: '2026-10-30', kind: 'cli', branch: 'fix/a', head: HEAD, files: 4, cost: 1, session: 'sess-1' });
+  assert.deepEqual(PAID.readLedger(h.ledgerPath), [r]);
+  for (const bad of [null, { files: 4, costCents: 0 }, { files: 4, costCents: -5 }]) {
+    assert.equal(PAID.recordCliSpend({ branch: 'fix/a', head: HEAD, usageCost: bad }, h.deps), null);
+  }
+  assert.equal(PAID.readLedger(h.ledgerPath).length, 1);
+  h.done();
+});
+
+test('CP22: the CLI cap counts only today (Chicago) cli rows and blocks at the cap, not above it', () => {
+  // 2026-10-30T15:00Z is 10:00 in Chicago. A row of 2026-10-29 and a PR row do not count.
+  const h = harness({ rows: [cliRow(1.5), cliRow(1.25), cliRow(9, '2026-10-29'), row(225, 5)] });
+  const under = PAID.cliCapCheck(3, h.deps);
+  assert.equal(under.capped, false);
+  assert.equal(under.total, 2.75);
+  assert.equal(PAID.cliCapCheck(2.75, h.deps).capped, true, 'total equal to the cap is capped');
+  assert.equal(PAID.cliCapCheck(2.76, h.deps).capped, false);
+  const text = PAID.cliCapLine(PAID.cliCapCheck(2.5, h.deps));
+  assert.match(text, /\$2\.75/);
+  assert.match(text, /\$2\.50/);
+  h.done();
+  // 2026-10-31T03:00Z is still 2026-10-30 in Chicago (22:00 CDT): the row of that day counts.
+  const late = harness({ rows: [cliRow(3)], now: new Date('2026-10-31T03:00:00Z') });
+  assert.equal(PAID.cliCapCheck(3, late.deps).capped, true);
+  late.done();
+});
+
+test('CP23: cliCapOf reads the config key; a missing, negative or non-number value means no cap; a bad ledger throws', () => {
+  assert.equal(PAID.cliCapOf({ coderabbit: { cli_daily_cap_usd: 3 } }), 3);
+  assert.equal(PAID.cliCapOf({ coderabbit: { cli_daily_cap_usd: 0 } }), 0);
+  for (const cfg of [{}, { coderabbit: {} }, { coderabbit: { cli_daily_cap_usd: '3' } }, { coderabbit: { cli_daily_cap_usd: -1 } }, { coderabbit: { cli_daily_cap_usd: null } }, null]) {
+    assert.equal(PAID.cliCapOf(cfg), null, JSON.stringify(cfg));
+  }
+  const h = harness({ raw: 'not json\n' });
+  assert.throws(() => PAID.cliCapCheck(3, h.deps), /ledger line 1/);
+  h.done();
+});
+
+test('CP24: `today` lists a cli row as CLI with its branch, not as PR #undefined', () => {
+  const h = harness({ rows: [row(225, 1), cliRow(0.5, '2026-10-30', 'feat/x')] });
+  const lines = PAID.todayLines(PAID.todayOf(h.deps), PAID.cliTodayOf(h.deps));
+  const text = lines.join('\n');
+  assert.doesNotMatch(text, /undefined/);
+  assert.match(text, /CLI feat\/x/);
+  assert.match(text, /PR #225/);
+  h.done();
+});

@@ -225,7 +225,8 @@ export function ledgerTotal(text, day) {
     try {
       const r = JSON.parse(line);
       if (!Number.isFinite(r?.cost)) throw new Error('no cost');
-      if (r.date === day) cents += Math.round(r.cost * 100);
+      // CLI spend rows (kind "cli") have their own daily cap in cr-paid.mjs; the $15 cap counts PR rounds only.
+      if (r.date === day && (r.kind ?? 'pr') === 'pr') cents += Math.round(r.cost * 100);
     } catch { unparsable++; }
   }
   return { cents, unparsable };

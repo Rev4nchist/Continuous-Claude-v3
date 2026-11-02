@@ -121,8 +121,11 @@ const autoOf = (value: unknown): CheckpointResult['auto'] => {
   return { eligible: true, band: typeof value.band === 'string' ? value.band : null, reason: typeof value.reason === 'string' ? value.reason : '' }
 }
 
+/** The result plus the engine's drift text (`config_drift_why`: null or absent without drift, or from an old engine). */
+export type CheckpointResultWithDrift = CheckpointResult & { config_drift_why?: string | null }
+
 /** The engine's `--json` output, or null when it lacks the fields the pane reads. */
-export const parseResult = (stdout: string): CheckpointResult | null => {
+export const parseResult = (stdout: string): CheckpointResultWithDrift | null => {
   try {
     const parsed: unknown = JSON.parse(stdout)
     if (!isObject(parsed) || typeof parsed.head !== 'string' || !Array.isArray(parsed.options)) return null
@@ -141,6 +144,7 @@ export const parseResult = (stdout: string): CheckpointResult | null => {
       why: Array.isArray(parsed.why) ? parsed.why.map(String) : [],
       budget: Array.isArray(parsed.budget) && parsed.budget.length === 2 ? [Number(parsed.budget[0]), Number(parsed.budget[1])] : [0, 0],
       config_drift: parsed.config_drift === true,
+      config_drift_why: typeof parsed.config_drift_why === 'string' ? parsed.config_drift_why : null,
       auto: autoOf(parsed.auto),
     }
   } catch {
@@ -201,7 +205,7 @@ export const clip = (text: string, width: number): string => (width > 3 && text.
 
 /** Text rows above the buttons. Each is one line; the pane cuts a long row with an ellipsis. */
 export const headerRows = (
-  view: { pr: number; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string },
+  view: { pr: number; result: CheckpointResultWithDrift; covers: string[]; stamp: string | null; prHead: string },
   now: number,
 ): string[] => {
   const r = view.result
@@ -220,7 +224,7 @@ export const headerRows = (
       : 'CodeRabbit 7d unknown'
   const grep = typeof r.credits.used === 'number' && typeof r.credits.monthly === 'number' ? `Greptile ${r.credits.used} of ${r.credits.monthly}` : 'Greptile credits unknown'
   rows.push(`${crab}  ${grep}`)
-  if (r.config_drift) rows.push('Warning: branch config differs from main')
+  if (r.config_drift) rows.push(`Warning: ${r.config_drift_why ?? 'branch config differs from main'}`)
   if (cap.warning) rows.push(`Warning: ${cap.warning}`)
   return rows
 }

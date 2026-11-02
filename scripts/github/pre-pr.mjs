@@ -45,8 +45,13 @@
  * event), "cli-missing" (cr cannot start: ENOENT or EINVAL; no run is spent), "cli-error" (cr usage or cr failed in another
  * way: exit code, timeout, auth error, EACCES; no run is spent; a retry costs nothing), "rate-limited" (`cr usage --agent`
  * reports no included review left; no run is spent; the stamp also holds cr_retry_minutes), "no-changes" (the CLI saw an
- * empty --committed scope; the run is given back) or "earlier-step-failed". The hook accepts "cli-missing", "cap" with
+ * empty --committed scope; the run is given back), "cli-cap" (today's paid CLI spend reached coderabbit.cli_daily_cap_usd in
+ * review-router.config.json; no run is spent) or "earlier-step-failed". The hook accepts "cli-missing", "cli-cap", "cap" with
  * cr_finished_runs >= 1, and "rate-limited" with a retry time. It denies the rest, including "cli-error".
+ * Spend log: CLI 0.9.0 bills usage credits past the free hourly allowance with no flag and no prompt. When the complete record
+ * carries usageCost with costCents above 0, the step appends one {kind: "cli"} row to ~/.claude/state/coderabbit-paid.jsonl
+ * (cr-paid.mjs recordCliSpend) and prints "billed $X.XX" in its line. Before a run it sums today's cli rows (America/Chicago).
+ * A cap key that is missing or not a number means no cap.
  * Exit 0 = no step failed and a stamp was written. Exit 1 = a step failed (any old stamp is removed).
  * Exit 2 = bad usage (no --body, or the body file cannot be read). Exit 3 = an internal error (an exception inside the run,
  * for example a missing review-router.config.json); the message goes to stderr.
@@ -72,6 +77,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
+import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT_ROOT = path.resolve(HERE, '..', '..');
@@ -746,18 +752,41 @@ export function usageUnavailable(text) {
   return jsonObjects(text).some((o) => o?.type === 'status' && o?.phase === 'usage' && o?.status === 'unavailable');
 }
 
+/**
+ * What a finished run billed: { files, costCents, unitPriceCents, method } from the complete record's `usageCost`, or null for a free run
+ * (no usageCost) and for a malformed one. A charge needs costCents as a whole number above 0. A missing file count reads as 0; a bad one
+ * makes the whole record malformed. CLI 0.9.0 bills past the free hourly allowance with no flag and no prompt when usage billing is on
+ * (Dave, 2026-11-02).
+ */
+export function usageCostOf(complete) {
+  const u = complete?.usageCost;
+  if (!u || typeof u !== 'object' || Array.isArray(u)) return null;
+  if (!Number.isInteger(u.costCents) || u.costCents <= 0) return null;
+  const given = u.billedFilesCount !== undefined;
+  if (given && (!Number.isInteger(u.billedFilesCount) || u.billedFilesCount < 0)) return null;
+  return { files: given ? u.billedFilesCount : 0, costCents: u.costCents, unitPriceCents: Number.isInteger(u.unitPriceCents) ? u.unitPriceCents : null, method: typeof u.billingMethod === 'string' && u.billingMethod !== '' ? u.billingMethod : null };
+}
+
+/** ", billed $1.00 (usage credits)" for a billed run, or "". */
+export function billedText(usageCost) {
+  if (!usageCost) return '';
+  const method = usageCost.method ? ` (${usageCost.method.replace(/_/g, ' ')})` : '';
+  return `, billed $${(usageCost.costCents / 100).toFixed(2)}${method}`;
+}
+
 const SEVERITIES = ['critical', 'major', 'minor', 'trivial', 'info'];
 /** A status or complete record whose own `status` field is one of these stops the run. Text inside a finding never does. */
 const AWAITING_STATUS = /^(?:awaiting_confirmation|action_required)$/i;
 const KNOWN_EVENTS = new Set(['review_context', 'status', 'heartbeat', 'finding', 'complete', 'error']);
 
 /**
- * Reads an agent stream. Pure. { findings, bySeverity, complete, errors, awaiting, unknown, reviewContext, unparsed }.
+ * Reads an agent stream. Pure. { findings, bySeverity, complete, errors, awaiting, unknown, reviewContext, unparsed, usageCost }.
+ * usageCost is usageCostOf(the complete record): null for a free run.
  * A finding has severity, file (fileName), start and end (startLine, endLine) and text (the first non-empty of title,
  * comment, codegenInstructions). Severity "none" is not a finding.
  */
 export function parseAgentStream(text) {
-  const p = { findings: [], bySeverity: {}, complete: null, errors: [], awaiting: null, unknown: [], reviewContext: false, unparsed: 0 };
+  const p = { findings: [], bySeverity: {}, complete: null, errors: [], awaiting: null, unknown: [], reviewContext: false, unparsed: 0, usageCost: null };
   for (const o of jsonObjects(text)) {
     if (o === null) { p.unparsed += 1; continue; }
     if ((o.type === 'status' || o.type === 'complete') && AWAITING_STATUS.test(String(o.status ?? ''))) p.awaiting ??= String(o.status).toLowerCase();
@@ -766,7 +795,7 @@ export function parseAgentStream(text) {
       if (severity === 'none') continue;
       p.bySeverity[severity] = (p.bySeverity[severity] ?? 0) + 1;
       p.findings.push({ severity, file: o.fileName ?? o.path ?? o.file ?? '?', start: o.startLine, end: o.endLine, text: [o.title, o.comment, o.codegenInstructions].find((v) => typeof v === 'string' && v.trim() !== '') ?? '' });
-    } else if (o.type === 'complete') p.complete = o;
+    } else if (o.type === 'complete') { p.complete = o; p.usageCost = usageCostOf(o); }
     else if (o.type === 'error') p.errors.push(o);
     else if (o.type === 'review_context') p.reviewContext = true;
     else if (!KNOWN_EVENTS.has(o.type) && !p.unknown.includes(String(o.type))) p.unknown.push(String(o.type));
@@ -804,7 +833,7 @@ function crVerdict(p, { exitProblem, base }) {
     return fail(`INCOMPLETE: outcome ${c.outcome ?? 'unknown'}, ${Number(c.unreviewedFileCount) || 0} file(s) not reviewed${c.message ? ` (${clip(String(c.message), 100)})` : ''}.`);
   }
   const words = SEVERITIES.filter((s) => p.bySeverity[s]).map((s) => `${p.bySeverity[s]} ${s}`).join(', ');
-  return result('coderabbit', 'PASS', `${p.findings.length} finding(s)${words ? ` (${words})` : ''}${c.reused ? ', a reused result (not a new review)' : ''}, advisory only (fix real ones, then re-run the Evidence GREEN).`, notes);
+  return result('coderabbit', 'PASS', `${p.findings.length} finding(s)${words ? ` (${words})` : ''}${billedText(p.usageCost)}${c.reused ? ', a reused result (not a new review)' : ''}, advisory only (fix real ones, then re-run the Evidence GREEN).`, notes);
 }
 
 const withOutput = (verdict, savedAs) => ({ ...verdict, detail: `${verdict.detail} Output: ${savedAs}` });
@@ -929,7 +958,7 @@ async function preflight(runner, root) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {} }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
@@ -942,17 +971,44 @@ export async function runCodeRabbit({ root, branch, head, base, now, runner, ski
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath });
   } finally {
     rmSync(paths.lock, { force: true });
   }
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short }) {
+/** The deps of the paid ledger helpers in cr-paid.mjs: the step's clock, and a ledger path when the caller gives one. */
+const ledgerDeps = (now, ledgerPath) => ({ now: () => now, ...(ledgerPath ? { ledgerPath } : {}) });
+
+/**
+ * The daily CLI spend cap (review-router.config.json coderabbit.cli_daily_cap_usd). Null to go on, or a result that stops the run before a
+ * usage call or a slot: SKIP cli-cap at or over the cap, FAIL when the ledger cannot be read (the total is unknown). No cap: never reads the ledger.
+ */
+function cliCapBlock(cliCapUsd, now, ledgerPath) {
+  if (cliCapUsd === null || cliCapUsd === undefined) return null;
+  try {
+    const check = cliCapCheck(cliCapUsd, ledgerDeps(now, ledgerPath));
+    return check.capped ? skipped('cli-cap', `${cliCapLine(check)}, so no CLI review this time and no run was spent. Raise the cap or run it tomorrow; ask Dave`) : null;
+  } catch (err) {
+    return result('coderabbit', 'FAIL', `the paid ledger is unreadable (${String(err.message).split('\n')[0]}), so the CLI spend today is unknown and no CLI review was started: fix or delete the ledger, then re-run`);
+  }
+}
+
+/** Logs the cost of a billed run in the paid ledger. Returns a note when the row could not be written (the run is already paid for), else null. */
+function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
+  if (!parsed.usageCost) return null;
+  try { recordCliSpend({ branch, head, usageCost: parsed.usageCost }, ledgerDeps(now, ledgerPath)); return null; } catch (err) {
+    return `could not log this run's cost (${billedText(parsed.usageCost).replace(/^, /, '')}) in the paid ledger: ${String(err.message).split('\n')[0]}. Add the row by hand`;
+  }
+}
+
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
   if (counter.runs.length >= CR_RUN_LIMIT) return skipped('cap', `limit reached: ${counter.runs.length} cr review runs already used on ${branch} (coderabbit-cli.md allows ${CR_RUN_LIMIT} per PR), so no CLI review this time; the stamp records cr_skip_reason cap`);
+  const capped = cliCapBlock(cliCapUsd, now, ledgerPath);
+  if (capped) return capped;
   const blocked = await preflight(runner, root);
   if (blocked) return blocked;
   const run = { head, at: now.toISOString(), outcome: 'started' };
@@ -979,6 +1035,8 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   const out = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}${verdict.status === 'PASS' ? '' : '.failed'}.txt`);
   writeFileSync(out, r.stderr && verdict.status !== 'PASS' ? `${stdout}\n[stderr]\n${r.stderr}` : stdout);
   rmSync(running, { force: true });
+  const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath });
+  if (logNote) verdict.notes = [...(verdict.notes ?? []), logNote];
   if (verdict.skipReason === 'no-changes') giveBack();
   else {
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
@@ -1018,7 +1076,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b) }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const headRun = git(['rev-parse', 'HEAD']);
@@ -1043,7 +1101,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, and a CLI review run is limited to 2 per branch')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log }));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath }));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.

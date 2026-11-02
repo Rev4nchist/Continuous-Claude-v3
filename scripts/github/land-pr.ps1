@@ -25,7 +25,8 @@
      (a differing file already there is never overwritten), then remove the PR's worktree (clean
      worktrees only; kept when the copy fails or conflicts; every junction and symlink in it is
      unlinked first, and a link that cannot be unlinked keeps the worktree),
-     delete the local branch with -d (merged-only), delete the remote branch on fork.
+     delete the local branch with -d (merged-only), delete the remote branch on fork. When the primary
+  checkout is on the PR branch, it keeps the primary AND the remote branch, and prints what to do.
   Every step is idempotent: re-running after a partial failure picks up where it stopped.
   -CleanupOnly skips steps 1-2 for a PR that is already merged.
 
@@ -293,7 +294,7 @@ function Save-E2eArtifacts([string]$Source, [string]$Destination) {
 }
 
 $wtLines = git -C $RepoPath worktree list --porcelain
-$wtPath = $null
+$wtPath = $null; $primaryOnBranch = $false
 for ($i = 0; $i -lt $wtLines.Count; $i++) {
   if ($wtLines[$i] -eq "branch refs/heads/$branch") { $wtPath = ($wtLines[$i - 2] -replace '^worktree ', '') }
 }
@@ -304,6 +305,7 @@ $normWt = { param($p) [IO.Path]::GetFullPath(($p -replace '^worktree ', '')).Tri
 if ($wtPath -and $mainWt.Count -and ((& $normWt $wtPath) -ieq (& $normWt $mainWt[0]))) {
   Write-Host "  kept primary checkout $wtPath (it is on $branch; no link cleanup, no removal)"
   $wtPath = $null
+  $primaryOnBranch = $true
 }
 if ($wtPath) {
   $dirty = git -C $wtPath status --porcelain 2>$null
@@ -342,12 +344,18 @@ if ($wtPath) {
     }
   }
 }
+if ($env:LAND_PR_TEST_SWITCH_PRIMARY) { git -C $RepoPath checkout -q $branch 2>&1 | Out-Null }   # TEST-ONLY: another session switches the primary here
 if (git -C $RepoPath branch --list $branch) {
   git -C $RepoPath branch -d $branch 2>&1 | Out-Host
   if ($LASTEXITCODE -eq 0) { $done.Add("deleted local $branch") } else { Write-Host "  kept local $branch (git branch -d refused)" }
 }
 $remoteRef = git -C $RepoPath ls-remote --heads $Remote $branch
-if ($remoteRef) {
+# Re-read the primary's branch: another session may have switched it to $branch since the first check.
+if ((git -C $RepoPath branch --show-current) -eq $branch) { $primaryOnBranch = $true }
+if ($remoteRef -and $primaryOnBranch) {
+  # git branch -d refuses a checked-out branch. Deleting the remote one would leave the primary on a branch the remote no longer has.
+  Write-Host "  kept $Remote/$branch (the primary checkout is on it): switch the primary to main and delete the branch: git switch main; git branch -d $branch; git push $Remote --delete $branch"
+} elseif ($remoteRef) {
   pwsh -File $gitSafe -C $RepoPath push $Remote --delete $branch 2>&1 | Out-Host
   if ($LASTEXITCODE -eq 0) { $done.Add("deleted $Remote/$branch") } else { Write-Host "  could not delete $Remote/$branch" }
 }

@@ -21,6 +21,9 @@
  * and pr_watch cover them. Run the check before EVERY review request: in Automatic mode an over-limit review bills with no prompt.
  *
  * Ledger: ~/.claude/state/coderabbit-paid.jsonl, one JSON line per paid round: {ts, date, pr, head, files, cost, session}.
+ * A paid CLI run (pre-pr.mjs and cr-fix.mjs log it from the run's usageCost) adds {ts, date, kind: "cli", branch, head, files, cost, session}.
+ * A row with no kind is a PR row. The PR limits above count PR rows only. The CLI daily cap (review-router.config.json,
+ * coderabbit.cli_daily_cap_usd) counts cli rows only, for the same America/Chicago day.
  */
 import { appendFileSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
@@ -51,12 +54,15 @@ export const liveFilters = () => pathFiltersFrom(readFileSync(path.join(HERE, '.
 export const billable = reviewableFiles;
 
 // ---- ledger ----
+const isCli = (r) => r.kind === 'cli';
+
 function parseRow(line, n) {
   let r;
   try { r = JSON.parse(line); } catch { throw new Error(`ledger line ${n} is not JSON`); }
-  const ok = Number.isInteger(r?.pr) && /^\d{4}-\d{2}-\d{2}$/.test(r.date ?? '') && Number.isFinite(r.cost) && r.cost >= 0;
-  if (!ok) throw new Error(`ledger line ${n} lacks a whole pr, a date or a cost`);
-  return r;
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(r?.date ?? '') && Number.isFinite(r.cost) && r.cost >= 0;
+  if (base && isCli(r) && typeof r.branch === 'string' && r.branch !== '') return r;
+  if (base && (r.kind === undefined || r.kind === 'pr') && Number.isInteger(r.pr)) return r;
+  throw new Error(`ledger line ${n} lacks a whole pr (or a branch for a cli row), a known kind, a date or a cost`);
 }
 
 /** Every ledger row. A missing file is an empty ledger. Throws on any other read error or any bad line. */
@@ -68,13 +74,36 @@ export function readLedger(file) {
 
 const centsOf = (rows) => rows.reduce((sum, r) => sum + Math.round(r.cost * 100), 0);
 
-/** { date, total, rows }: the paid rows of the Chicago day of now. Throws on a bad ledger. */
+/** { date, total, rows }: the paid PR rows of the Chicago day of now. Throws on a bad ledger. */
 export function todayOf(deps) {
   const d = withDefaults(deps);
   const date = chicagoDay(d.now());
-  const rows = readLedger(d.ledgerPath).filter((r) => r.date === date);
+  const rows = readLedger(d.ledgerPath).filter((r) => r.date === date && !isCli(r));
   return { date, total: centsOf(rows) / 100, rows };
 }
+
+/** { date, total, rows }: the paid CLI rows of the Chicago day of now. Throws on a bad ledger. */
+export function cliTodayOf(deps) {
+  const d = withDefaults(deps);
+  const date = chicagoDay(d.now());
+  const rows = readLedger(d.ledgerPath).filter((r) => r.date === date && isCli(r));
+  return { date, total: centsOf(rows) / 100, rows };
+}
+
+/** The daily CLI cap in dollars from the router config (coderabbit.cli_daily_cap_usd), or null when the key is missing or not a number of 0 or more. */
+export function cliCapOf(config) {
+  const cap = config?.coderabbit?.cli_daily_cap_usd;
+  return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0 ? cap : null;
+}
+
+/** { capped, total, cap, date }: today's CLI spend against the cap. capped is true when the total reaches the cap. Throws on a bad ledger. */
+export function cliCapCheck(capUsd, deps) {
+  const { date, total } = cliTodayOf(deps);
+  return { capped: Math.round(total * 100) >= Math.round(capUsd * 100), total, cap: capUsd, date };
+}
+
+/** The line that names the CLI total, the cap and the day. */
+export const cliCapLine = ({ total, cap, date }) => `today's paid CodeRabbit CLI spend is ${usd(Math.round(total * 100))} (${date}, America/Chicago), at or over the daily cap of ${usd(Math.round(cap * 100))} (review-router.config.json coderabbit.cli_daily_cap_usd)`;
 
 /** Appends one paid round to the ledger and returns the row. Throws on a bad head or file count. */
 export function recordPaid({ pr, head, files }, deps) {
@@ -85,6 +114,23 @@ export function recordPaid({ pr, head, files }, deps) {
   const row = { ts: now.toISOString(), date: chicagoDay(now), pr, head: String(head).toLowerCase(), files, cost: (files * CENTS_PER_FILE) / 100, session: d.env.CLAUDE_CODE_SESSION_ID || d.env.CLAUDE_SESSION_ID || 'unknown' };
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
   appendFileSync(d.ledgerPath, `${JSON.stringify(row)}\n`);
+  return row;
+}
+
+/**
+ * Appends one paid CLI run to the ledger and returns the row. `usageCost` is { files, costCents } (usageCostOf in pre-pr.mjs).
+ * Returns null and writes nothing when the cost is not above 0 (a free run). Throws on a bad head or a write error.
+ */
+export function recordCliSpend({ branch, head, usageCost }, deps) {
+  if (!usageCost || !Number.isFinite(usageCost.costCents) || usageCost.costCents <= 0) return null;
+  const d = withDefaults(deps);
+  if (!/^[0-9a-f]{7,40}$/i.test(String(head))) throw new Error('the head must be a commit sha');
+  const now = d.now();
+  const files = Number.isInteger(usageCost.files) && usageCost.files >= 0 ? usageCost.files : 0;
+  const row = { ts: now.toISOString(), date: chicagoDay(now), kind: 'cli', branch: String(branch || 'unknown'), head: String(head).toLowerCase(), files, cost: usageCost.costCents / 100, session: d.env.CLAUDE_CODE_SESSION_ID || d.env.CLAUDE_SESSION_ID || 'unknown' };
+  mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
+  appendFileSync(d.ledgerPath, `${JSON.stringify(row)}
+`);
   return row;
 }
 
@@ -153,8 +199,8 @@ function decide(pr, est, ledger, now, filters) {
   const date = chicagoDay(now);
   const files = billable(est.list, filters).length;
   const costCents = files * CENTS_PER_FILE;
-  const todayCents = centsOf(ledger.filter((r) => r.date === date));
-  const paidRounds = ledger.filter((r) => r.pr === pr).length;
+  const todayCents = centsOf(ledger.filter((r) => r.date === date && !isCli(r)));
+  const paidRounds = ledger.filter((r) => !isCli(r) && r.pr === pr).length;
   const reasons = verdictReasons({ costCents, todayCents, paidRounds, fix: est.fix });
   const allow = reasons.length === 0;
   return {
@@ -223,10 +269,21 @@ function runCheck(o) {
   return r.exitCode;
 }
 
+/** The lines `today` prints: the PR rounds, then the CLI runs of the day. Pure. */
+export function todayLines(t, cli) {
+  const pr = t.rows.map((r) => `PR #${r.pr} ${r.head.slice(0, 7)} ${r.files} file(s) ${usd(r.cost * 100)} ${r.ts} ${r.session}`);
+  const runs = cli.rows.map((r) => `CLI ${r.branch} ${r.head.slice(0, 7)} ${r.files} file(s) ${usd(r.cost * 100)} ${r.ts} ${r.session}`);
+  return [
+    `Paid today (${t.date}, America/Chicago): ${usd(t.total * 100)} in ${t.rows.length} round(s)`, ...pr,
+    `Paid CLI runs today: ${usd(cli.total * 100)} in ${cli.rows.length} run(s)`, ...runs,
+  ];
+}
+
 function runToday(o) {
   const t = todayOf();
-  if (o.json) console.log(JSON.stringify(t));
-  else print([`Paid today (${t.date}, America/Chicago): ${usd(t.total * 100)} in ${t.rows.length} round(s)`, ...t.rows.map((r) => `PR #${r.pr} ${r.head.slice(0, 7)} ${r.files} file(s) ${usd(r.cost * 100)} ${r.ts} ${r.session}`)], console.log);
+  const cli = cliTodayOf();
+  if (o.json) console.log(JSON.stringify({ ...t, cli }));
+  else print(todayLines(t, cli), console.log);
   return 0;
 }
 

@@ -18,9 +18,15 @@
 //   an incomplete run prints a paste-ready line on stdout                              -> CF12
 //   an unknown or missing finding severity prints clean                                -> CF13
 //   a merge inside <from>..HEAD is not named, or the note breaks the stdout line the carry reads -> CF14, CF15
+//   CLI spend (Dave, 2026-11-02; the CLI bills usage credits past the free hour with no prompt):
+//   a free run writes a ledger row, or a billed run writes none or a wrong one                   -> CF24, CF25
+//   a malformed usageCost counts as a charge                                                       -> CF26
+//   the cap is reached and the run still starts, or the stop names no total and cap               -> CF27
+//   under the cap, or with no cap, the run is blocked                                              -> CF28
+//   an unreadable ledger with a cap lets the run go on, or a ledger write error breaks the line   -> CF29, CF30
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -43,9 +49,15 @@ const DONE = { type: 'complete', status: 'review_completed', outcome: 'completed
 const gqlNode = (edits) => (c) => ({ databaseId: c.id, body: c.body, author: { login: 'coderabbitai', __typename: 'Bot' }, lastEditedAt: null, updatedAt: c.updated_at, userContentEdits: { nodes: edits[c.id] ?? [] } });
 
 /** A harness: fake gh (reviews list), fake git head, fake cr runner. Records every call. */
-function harness({ merges = [], reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], comments = [], commentEdits = {}, head = HEAD, prHead = head, ancestor = true, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null, commits = [] } = {}) {
+function harness({ cap = null, ledgerRows = null, ledgerOverride = null, merges = [], reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], comments = [], commentEdits = {}, head = HEAD, prHead = head, ancestor = true, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null, commits = [] } = {}) {
   const calls = { gh: [], runs: [], writes: [], ancestor: [], merges: [] };
+  // Never touch Dave's real paid ledger: every harness has its own temp file.
+  const ledgerPath = ledgerOverride ?? path.join(mkdtempSync(path.join(os.tmpdir(), 'crfix-ledger-')), 'coderabbit-paid.jsonl');
+  if (ledgerRows !== null) writeFileSync(ledgerPath, `${ledgerRows.join('\n')}\n`);
   const deps = {
+    ledgerPath,
+    cliCap: () => cap,
+    branch: () => 'fix/x',
     gh: (args) => {
       calls.gh.push(args);
       if (ghError) throw new Error(ghError);
@@ -61,7 +73,7 @@ function harness({ merges = [], reviews = [review(1, OLD, '2026-10-30T08:00:00Z'
     writeOut: (file, text) => { calls.writes.push({ file, text }); },
     now: NOW,
   };
-  return { calls, deps, go: (over = {}) => FIX.crFix({ pr: 219, repo: 'Rev4nchist/Continuous-Claude-v3', cwd: '/repo', ...over }, deps) };
+  return { calls, deps, ledgerPath, go: (over = {}) => FIX.crFix({ pr: 219, repo: 'Rev4nchist/Continuous-Claude-v3', cwd: '/repo', ...over }, deps) };
 }
 
 test('CF1: the CLI runs `review --agent --committed --base-commit <newest review commit>` in the checkout, with no billing flag', async () => {
@@ -446,4 +458,79 @@ test('CF21: an older clean summary edited after a newer review object is not the
   assert.equal(r.from, OLD, 'the review of the newer commit');
   assert.deepEqual(h.calls.runs[0].args, ['review', '--agent', '--committed', '--base-commit', OLD]);
   assert.equal(newestCodeRabbitRound({ reviews, comments, commentEdits, head: HEAD, commits: commits.map((sha) => ({ sha })) }).commit_id, OLD, 'review-status names the same source');
+});
+
+// ---------- CLI spend log and daily cap ----------
+
+const BILLED = { ...DONE, usageCost: { billedFilesCount: 2, costCents: 50, unitPriceCents: 25, billingMethod: 'usage_credits' } };
+const ledgerRows = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+const cliRow = (cost, date) => JSON.stringify({ ts: `${date}T10:00:00.000Z`, date, kind: 'cli', branch: 'feat/y', head: HEAD, files: 4, cost, session: 's' });
+// NOW is 2026-10-30 09:00 local (the Chicago day of the paid ledger is read through deps.now below).
+const TODAY = '2026-10-30';
+
+test('CF24: a billed run writes one cli row, prints the cost on stderr only, and leaves the stdout line unchanged', async () => {
+  const h = harness({ run: { status: 0, stdout: ev(CONTEXT, finding('minor'), BILLED), stderr: '' } });
+  const r = await h.go();
+  assert.equal(r.line, 'CLI fix review: bbbbbbb..aaaaaaa clean');
+  assert.equal(r.exitCode, 0);
+  const rows = ledgerRows(h.ledgerPath);
+  assert.equal(rows.length, 1);
+  assert.deepEqual({ ...rows[0], ts: undefined, date: undefined, session: undefined }, { ts: undefined, date: undefined, kind: 'cli', branch: 'fix/x', head: HEAD, files: 2, cost: 0.5, session: undefined });
+  const { out, err } = FIX.reportOf(r);
+  assert.deepEqual(out, ['CLI fix review: bbbbbbb..aaaaaaa clean']);
+  assert.ok(err.some((l) => /billed \$0\.50 \(usage credits\)/.test(l)), err.join('|'));
+});
+
+test('CF25: a free run writes no ledger row and prints no cost', async () => {
+  const h = harness({ cap: 3 });
+  const r = await h.go();
+  assert.equal(r.exitCode, 0);
+  assert.equal(existsSync(h.ledgerPath), false);
+  assert.ok(!FIX.reportOf(r).err.some((l) => /billed/.test(l)));
+});
+
+test('CF26: a malformed usageCost (text, zero, negative) writes no row', async () => {
+  for (const bad of [{ costCents: '50' }, { costCents: 0 }, { costCents: -25 }, 'x', []]) {
+    const h = harness({ run: { status: 0, stdout: ev(CONTEXT, { ...DONE, usageCost: bad }), stderr: '' } });
+    assert.equal((await h.go()).exitCode, 0);
+    assert.equal(existsSync(h.ledgerPath), false, JSON.stringify(bad));
+  }
+});
+
+test('CF27: at the cap the run stops with exit 2 before any CLI run, and the reason names the total and the cap', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(2, TODAY), cliRow(1, TODAY), cliRow(9, '2026-10-29')] });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2);
+  assert.equal(r.line, null);
+  assert.match(r.reason, /cli-cap/);
+  assert.match(r.reason, /\$3\.00/);
+  assert.equal(h.calls.runs.length, 0);
+  assert.deepEqual(FIX.reportOf(r).out, []);
+});
+
+test('CF28: under the cap the run goes ahead; with no cap a full or unreadable ledger does not stop it', async () => {
+  const under = harness({ cap: 3, ledgerRows: [cliRow(2.75, TODAY)] });
+  assert.equal((await under.go()).exitCode, 0);
+  assert.equal(under.calls.runs.length, 1);
+  const noCap = harness({ cap: null, ledgerRows: [cliRow(50, TODAY), 'not json'] });
+  assert.equal((await noCap.go()).exitCode, 0);
+  assert.equal(noCap.calls.runs.length, 1);
+});
+
+test('CF29: an unreadable ledger with a cap stops the run with exit 2 and starts no CLI run', async () => {
+  const h = harness({ cap: 3, ledgerRows: ['not json'] });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2);
+  assert.match(r.reason, /ledger/i);
+  assert.equal(h.calls.runs.length, 0);
+});
+
+test('CF30: a ledger that cannot be written leaves the line and exit code alone and adds a stderr note', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'crfix-ledgerdir-'));
+  const h = harness({ ledgerOverride: dir, run: { status: 0, stdout: ev(CONTEXT, BILLED), stderr: '' } });
+  const r = await h.go();
+  assert.equal(r.line, 'CLI fix review: bbbbbbb..aaaaaaa clean');
+  assert.equal(r.exitCode, 0);
+  const { err } = FIX.reportOf(r);
+  assert.ok(err.some((l) => /could not log/i.test(l) && /\$0\.50/.test(l)), err.join('|'));
 });

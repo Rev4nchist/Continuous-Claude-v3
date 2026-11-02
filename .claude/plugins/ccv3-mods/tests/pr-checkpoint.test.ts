@@ -232,13 +232,16 @@ const world = (on: On, opts: Opts = {}) => {
     if (fail.exists && slash(e.path).includes('pr-checkpoint.mjs')) throw new Error('fs.exists failed')
     return { value: !(opts.missing ?? []).some(part => slash(e.path).includes(part)) }
   })
+  // The /pathway log is read back by the mod (read, add a line, write the whole file), so its writes are kept and read again.
+  const written: Record<string, string> = {}
   on('fs.read', (_$, e) => {
-    const text = files[slash(e.path)]
+    const text = files[slash(e.path)] ?? (slash(e.path).endsWith('.jsonl') ? written[slash(e.path)] : undefined)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
   })
   on('fs.write', (_$, e) => {
     seen.writes.push(e.path)
+    written[slash(e.path)] = e.text
     return { value: undefined }
   })
   on('command.register', (_$, e) => {
@@ -329,7 +332,7 @@ const world = (on: On, opts: Opts = {}) => {
     seen.asks.push(String((e as unknown as { questions: { question: string }[] }).questions[0]?.question))
     return { deny: 'no chat prompt in the checkpoint flows' }
   })
-  return { clock, seen, store, session, fail }
+  return { clock, seen, store, session, fail, written }
 }
 
 const start = ($: Engine, isInteractive = true) => $.session.start({ cwd: ROOT, surface: isInteractive ? 'terminal' : null, isInteractive })
@@ -434,6 +437,27 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     const text = await paneText(pane)
     expect(text).toContain('Greptile held: credits unknown')
     expect(text).toMatch(/both/)
+  })
+
+  // Config drift row: the engine's own text (config_drift_why) shows in the pane. An engine without it (old) keeps the generic warning; no drift shows none.
+  test('K1d config drift: the pane shows the engine reason (main config unread), not the generic warning', async ($, on) => {
+    const why = "Main's review-router.config.json is missing or not JSON, so it counts as drift"
+    world(on, { json: { stdout: JSON.stringify(engineJson({ config_drift: true, config_drift_why: why })) } })
+    const unread = await paneText((await openPane($)).pane)
+    expect(unread).toContain(why)
+    expect(unread).not.toContain('branch config differs from main')
+  })
+
+  test('K1e config drift with no reason keeps the generic warning; no drift shows no warning', async ($, on) => {
+    world(on, { json: { stdout: JSON.stringify(engineJson({ config_drift: true })) } })
+    expect(await paneText((await openPane($)).pane)).toContain('Warning: branch config differs from main')
+  })
+
+  test('K1f no config drift shows no config warning even when a reason string is present', async ($, on) => {
+    world(on, { json: { stdout: JSON.stringify(engineJson({ config_drift: false, config_drift_why: 'stale reason' })) } })
+    const text = await paneText((await openPane($)).pane)
+    expect(text).not.toContain('stale reason')
+    expect(text).not.toMatch(/branch config differs/i)
   })
 
   test('K10 an R0 result (no stamp) shows no option Buttons and the reason', async ($, on) => {
@@ -1722,8 +1746,16 @@ describe('pr-checkpoint: asks from the watcher', () => {
 // AU9  an unreadable PR state at the second read records
 // AU10 a stale pending checkpoint of the same PR survives an auto-confirm
 // M1   /pathway from a non-composer origin (the bridge, i.e. mobile remote control) shows a plan read in the session root, where no stamp lives
-// M2   a bare /pathway with a pending checkpoint does not draw it again, or runs the engine
-// M3   /pathway <pr> with no --body from the bridge does not use the pending body, or records
+// M1c  a headless /pathway does not say the session is headless (Dave 2026-11-02, C)
+// M2   a bare composer /pathway with a pending checkpoint does not draw it again, or runs the engine
+// M2b  a bare bridge /pathway opens a pane on a phone, or does not name the PR, its plan and the command to type (Dave 2026-11-02, B)
+// M2c  a bare bridge /pathway with no pending checkpoint opens a pane or runs the engine
+// M3   a bridge /pathway <pending pr> <word> does not record, records outside the PR worktree, or not as dave (Dave 2026-11-02, A)
+// M3b  a bridge accept for the pending PR is not --by default
+// M4   a bridge /pathway for a PR that is not this session's pending checkpoint records
+// M5   a plugin or SDK /pathway records, even for the pending PR
+// L1   a /pathway leaves no line, or more than one, in ~/.claude/state/ccv3-mods/pathway-commands.jsonl, or the line lacks a field (D)
+// L2   a /pathway that throws leaves no log line
 const AUTO = { eligible: true, band: 'MID', reason: 'Band MID is recommended none: no CodeRabbit PR bot, the internal review stack covers it.' }
 const autoJson = (over: Rec = {}) =>
   ({ stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], budget: [0, 0], band: { band: 'MID' }, auto: AUTO, ...over })) })
@@ -1920,29 +1952,158 @@ describe('pr-checkpoint: /pathway from a surface that is not the composer (mobil
     await start($, false)
     const ran = await slash($, '7 none --body pr-body.md')
     expect(ran.text ?? '').toContain('PR checkpoint for')
+    expect(ran.text ?? '').toMatch(/this session is headless/i)
+    expect(ran.text ?? '').not.toMatch(/came from/)
     expect(seen.run.filter(r => r.argv[0] === 'gh')).toEqual([])
     expect(counts(seen).confirm + counts(seen).apply).toBe(0)
   })
 
-  test('M2 a bare /pathway with a pending checkpoint draws it again and runs no engine call', async ($, on) => {
+  test('M2 a bare composer /pathway with a pending checkpoint draws it again and runs no engine call', async ($, on) => {
     const { seen } = world(on)
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
     const engineBefore = engineCalls(seen).length
     const opensBefore = seen.opens.length
-    const ran = await slash($, '', 'bridge')
+    const ran = await slash($, '')
     expect(ran.text ?? '').toMatch(/side pane/i)
     expect(seen.opens.length).toBe(opensBefore + 1)
     expect(engineCalls(seen).length).toBe(engineBefore)
   })
 
-  test('M3 a bridge /pathway 7 none with no --body takes the body of the pending checkpoint, and still records nothing', async ($, on) => {
+  test('M2b a bare bridge /pathway opens no pane: it names the pending PR, its plan read in the PR worktree, and the command to type', async ($, on) => {
+    const { seen, store } = world(on, wtOpts())
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    const opensBefore = seen.opens.length
+    const before = seen.run.length
+    const ran = await slash($, '', 'bridge')
+    const text = ran.text ?? ''
+    expect(seen.opens.length).toBe(opensBefore)
+    expect(text).toContain('#7')
+    expect(text).toContain('PR checkpoint for')
+    expect(text).toContain('/pathway 7 coderabbit')
+    expect(text).toContain('/pathway 7 none')
+    expect(text).not.toMatch(/side pane/i)
+    const after = seen.run.slice(before)
+    const plan = after.find(r => r.argv.some(a => a.includes('pr-checkpoint.mjs')))!
+    expect(plan.argv).not.toContain('--json')
+    expect(plan.cwd).toBe(WT)
+    expect(after.filter(r => r.argv[0] === 'gh')).toEqual([])
+    expect(counts(seen).confirm + counts(seen).apply).toBe(0)
+    expect(store.get('checkpoint:pr:7')).toBeUndefined()
+  })
+
+  test('M2c a bare bridge /pathway with no pending checkpoint asks for the PR and opens nothing', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const ran = await slash($, '', 'bridge')
+    expect(ran.text ?? '').toContain('Call pr_checkpoint first, or pass <pr> --body <file>.')
+    expect(seen.opens).toEqual([])
+    expect(engineCalls(seen)).toEqual([])
+  })
+
+  test('M3 a bridge /pathway 7 none for the pending PR records in the PR worktree with --by dave', async ($, on) => {
     const { seen, store } = world(on, wtOpts())
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
     const ran = await slash($, '7 none', 'bridge')
-    expect(ran.text ?? '').toContain('PR checkpoint for')
+    const confirm = confirms(seen)
+    expect(confirm.length).toBe(1)
+    expect(confirm[0]!.argv.slice(2).join(' ')).toMatch(/^--confirm none --by dave --body \S*pr-body\.md$/)
+    expect(confirm[0]!.cwd).toBe(WT)
+    expect(seen.run.find(r => r.argv.includes('--apply'))?.cwd).toBe(WT)
+    const record = store.get('checkpoint:pr:7') as Rec
+    expect(record.state).toBe('applied')
+    expect(record.decided_by).toBe('dave')
+    expect(store.get(PENDING)).toBeUndefined()
+    expect(ran.text ?? '').toMatch(/recorded/)
+  })
+
+  test('M3b a bridge /pathway 7 accept for the pending PR records the recommendation with --by default', async ($, on) => {
+    const { seen } = world(on, wtOpts())
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 accept', 'bridge')
+    expect(engineCalls(seen).some(call => /^--confirm coderabbit --by default /.test(call))).toBe(true)
+  })
+
+  test('M4 a bridge /pathway for a PR that is not the pending checkpoint shows the plan only and says why', async ($, on) => {
+    const { seen, store } = world(on, wtOpts())
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    const ran = await slash($, '8 none --body pr-body.md', 'bridge')
     expect(counts(seen).confirm + counts(seen).apply).toBe(0)
-    expect(store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(store.get('checkpoint:pr:8')).toBeUndefined()
+    expect(store.get(PENDING)).toBeDefined()
+    expect(ran.text ?? '').toContain('PR checkpoint for')
+    expect(ran.text ?? '').toMatch(/came from bridge/)
+    expect(ran.text ?? '').toMatch(/#7/)
+  })
+
+  for (const kind of ['plugin', 'sdk']) {
+    test(`M5 a ${kind} /pathway 7 none never records, even for the pending PR`, async ($, on) => {
+      const { seen, store } = world(on, wtOpts())
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      const ran = await slash($, '7 none', kind)
+      expect(counts(seen).confirm + counts(seen).apply).toBe(0)
+      expect(store.get('checkpoint:pr:7')).toBeUndefined()
+      expect(ran.text ?? '').toMatch(new RegExp(`came from ${kind}`))
+    })
+  }
+})
+
+const LOG = 'C:/home/.claude/state/ccv3-mods/pathway-commands.jsonl'
+const logLines = (written: Record<string, string>) => (written[LOG] ?? '').split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as Rec)
+
+describe('pr-checkpoint: every /pathway leaves one log line', () => {
+  test('L1 each command writes one line with ts, session, origin, args, mode, root, checkout and outcome; no body text', async ($, on) => {
+    const BODY_TEXT = 'BODY-TEXT-NEVER-LOGGED'
+    const { written } = world(on, wtOpts({ files: { [`${WT}/pr-body.md`]: BODY_TEXT, [`${ROOT}/pr-body.md`]: BODY_TEXT } }))
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(logLines(written)).toEqual([])
+    await slash($, '', 'bridge')
+    await slash($, '8 none --body pr-body.md', 'bridge')
+    await slash($, '7 none', 'bridge')
+    await slash($, 'banana')
+    const lines = logLines(written)
+    expect(lines.length).toBe(4)
+    expect(lines.map(line => line.origin)).toEqual(['bridge', 'bridge', 'bridge', 'composer'])
+    expect(lines.map(line => line.args)).toEqual(['', '8 none --body pr-body.md', '7 none', 'banana'])
+    for (const line of lines) {
+      expect(typeof line.ts).toBe('string')
+      expect(line.session).toBe(SESSION)
+      expect(line.mode).toBe('interactive')
+      expect(typeof line.outcome).toBe('string')
+      expect('root' in line && 'checkout' in line).toBe(true)
+    }
+    expect(lines[0]!.checkout).toBe(WT)
+    expect(lines[2]!.checkout).toBe(WT)
+    for (const line of lines.slice(0, 3)) expect(line.root).toBe(ROOT)
+    expect(lines[2]!.outcome).toBe('recorded')
+    expect(lines[1]!.outcome).toBe('text-plan')
+    expect(new Set(lines.map(line => line.outcome)).size).toBe(4)
+    expect(written[LOG]).not.toContain(BODY_TEXT)
+  })
+
+  test('L1b a headless command logs mode headless', async ($, on) => {
+    const { written } = world(on)
+    await start($, false)
+    await slash($, '7 none --body pr-body.md')
+    const lines = logLines(written)
+    expect(lines.length).toBe(1)
+    expect(lines[0]!.mode).toBe('headless')
+    expect(lines[0]!.outcome).toBe('text-plan')
+  })
+
+  test('L2 a command that throws still logs one line, outcome error', async ($, on) => {
+    const { written } = world(on, { throwStore: 'checkpoint:pending:' })
+    await start($)
+    const ran = await slash($, '7 none --body pr-body.md')
+    expect(ran.text ?? '').toMatch(/failed/)
+    const lines = logLines(written)
+    expect(lines.length).toBe(1)
+    expect(lines[0]!.outcome).toBe('error')
   })
 })

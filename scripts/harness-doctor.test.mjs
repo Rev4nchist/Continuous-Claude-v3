@@ -317,6 +317,16 @@ test('a paid total at 80% of the $15 day cap is a WARN; below it is a PASS', () 
   assert.equal(run(fx).checks['review:cr-paid-cap'].status, 'PASS');
 });
 
+test('CLI spend rows (kind cli) do not count toward the $15 PR day cap: the two caps stay separate', () => {
+  const fx = fixture();
+  ledger(fx, [row(6), row(6), { ...row(3), kind: 'cli', pr: undefined, branch: 'b' }]);
+  const c = run(fx).checks['review:cr-paid-cap'];
+  assert.match(c.detail, /12\.00/, 'only the PR rows are summed');
+  assert.equal(c.status, 'WARN');
+  ledger(fx, [row(5), { ...row(9), kind: 'cli', pr: undefined, branch: 'b' }]);
+  assert.equal(run(fx).checks['review:cr-paid-cap'].status, 'PASS', '$5 of PR rows is under 80%');
+});
+
 test('ledger rows of another day do not count and a bad ledger line is reported', () => {
   const fx = fixture();
   ledger(fx, [row(14, '2020-01-01'), '{broken', row(1)]);
