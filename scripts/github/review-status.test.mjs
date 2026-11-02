@@ -3328,3 +3328,52 @@ test('RB15: a "Review failed" head pays for no carry read; a skipped head still 
   assert.equal(skipped.coderabbitNotice, 'skipped');
   assert.equal(reads, 1, 'a skipped head reads the carry once');
 });
+
+// ---------------------------------------------------------------------------------------------
+// READY follow-up (2026-11-02), Step C1 of the review matrix. Live PR 242, CodeRabbit round 2 (review 5729735980):
+// a Major sat in the review BODY under "## Follow-up Comments" (an "Outside diff" badge, no heading "Outside diff range
+// comments (N)", the marker outside a `>` quote, no review thread) and READY said READY.
+// Ways it can fail, one test each:
+//   the collector reads only the "Outside diff range comments (N)" heading, so the section has no findings -> FU-A
+//   the finding is found but READY does not block on it, or the reason does not name it                       -> FU-B
+//   a bullet naming the finding by id or path:lines does not clear it, or a filler bullet does               -> FU-C
+//   a marker after the section (Review info, details) is counted as a finding                                 -> FU-D
+// ---------------------------------------------------------------------------------------------
+const FU_242 = fixtureText('pr242-review-5729735980-follow-up-major.md');
+const FU_ID = 'ac8b9e0203da201875cdf141';
+const FU_PLACE = 'scripts/github/pre-pr.mjs:405-423';
+
+test('FU-A: the Follow-up Comments section of live PR 242 round 2 yields its finding once, with the id and the place', () => {
+  assert.ok(!/Actionable comments posted|Outside diff range comments/.test(FU_242), 'the live body holds neither the sentence nor the old heading');
+  const one = RS.codeRabbitOutsideFindings({ reviews: [odLive(FU_242, 5729735980, HEAD)] });
+  assert.deepEqual(one, { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 0 });
+  const twice = RS.codeRabbitOutsideFindings({ reviews: [odLive(FU_242, 5729735980, HEAD), odLive(FU_242, 77, HEAD, T2)] });
+  assert.equal(twice.findings.length, 1, 'the same marker id in two reviews counts once');
+});
+
+test('FU-B: a Major under Follow-up Comments with nothing in the PR body makes the head NOT READY, and the reason names it', () => {
+  const r = odEval([odLive(FU_242)]);
+  assert.equal(r.coderabbitOutsideDiff, 1);
+  assert.equal(r.ready, false);
+  const why = reasonOf(r);
+  assert.ok(why.startsWith('CodeRabbit lists 1 outside-diff finding(s) across its reviews of this PR (head aaaaaaa) and the PR body "Outside-diff: handled" list has 0.'), why);
+  assert.ok(why.includes(FU_ID) && why.includes(FU_PLACE), why);
+});
+
+test('FU-C: a bullet naming the finding by marker id or by path:lines clears it; a filler bullet does not', () => {
+  assert.equal(odEval([odLive(FU_242)], HANDLED(1)).ready, false, 'filler');
+  const byId = odEval([odLive(FU_242)], idList(`${FU_ID}: fixed in abc1234`));
+  assert.equal(byId.ready, true, byId.reasons.join('; '));
+  const byPlace = odEval([odLive(FU_242)], idList(`\`${FU_PLACE}\` fixed in abc1234`));
+  assert.equal(byPlace.ready, true, byPlace.reasons.join('; '));
+});
+
+test('FU-D: a marker after the Follow-up section is no finding, and a section with an Outside diff badge but no marker needs a bullet', () => {
+  const after = FU_242.replace(/\n---\n?$/, '\n---\n\n<!-- cr-comment:v1:00000000000000000000beef -->\n');
+  assert.notEqual(after, FU_242, 'the fixture ends with the rule line');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(after)] }).findings.map((f) => f.id), [FU_ID]);
+  const noMarker = FU_242.replace(/<!-- cr-comment:v1:[0-9a-f]{24} -->/, '');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(noMarker)] }), { findings: [], unidentified: 1 });
+  assert.equal(odEval([odLive(noMarker)]).ready, false);
+  assert.equal(odEval([odLive(noMarker)], HANDLED(1)).ready, true, 'the count rule: one bullet covers one');
+});

@@ -863,6 +863,42 @@ function outsideDiffFindings(body) {
   return found;
 }
 
+// Newer CodeRabbit bodies (live PR 242 round 2, review 5729735980) have no "Outside diff range comments (N)" heading. They list
+// the same thread-less findings under "## Follow-up Comments": one <details> per finding with an "Outside diff" badge, the
+// marker `<!-- cr-comment:v1:HEX -->` at the end of the block (not quoted) and the place in the "Open the source location"
+// link (`blob/<sha>/<path>#L<a>-L<b>`). The section ends at the next rule line (`---`) or heading.
+const FOLLOWUP_HEADING = /^(?:[^\w\n<]|<\/?(?:summary|details|strong)>)*Follow-up Comments\s*$/im;
+const FOLLOWUP_END = /^(?:---+|#{1,6}\s.*)\s*$/;
+const FOLLOWUP_BADGE = /alt="Outside diff"/gi;
+const FOLLOWUP_PLACE = /\]\(<?https?:\/\/github\.com\/[^/\s)>]+\/[^/\s)>]+\/blob\/[^/\s)>]+\/([^)#\s>]+)#L(\d+)(?:-L(\d+))?>?\)/;
+
+/** `path:a-b` (or `path:a`) from the match of FOLLOWUP_PLACE. */
+const followUpPlace = (m) => `${decodeURIComponent(m[1])}:${m[3] && m[3] !== m[2] ? `${m[2]}-${m[3]}` : m[2]}`;
+
+/**
+ * The Follow-up Comments section of one review body. Pure. { found: [{ id, location }], badges }: one finding per marker, its
+ * place from the source link of the block it ends; badges counts the "Outside diff" badges, so a section whose markers are
+ * missing still counts (the caller adds the shortfall to `unidentified`). { found: [], badges: 0 } with no such section.
+ */
+function followUpFindings(body) {
+  const lines = String(body ?? '').split(/\r?\n/);
+  const start = lines.findIndex((l) => FOLLOWUP_HEADING.test(l));
+  if (start < 0) return { found: [], badges: 0 };
+  const end = lines.findIndex((l, i) => i > start && FOLLOWUP_END.test(l));
+  const section = lines.slice(start + 1, end < 0 ? lines.length : end);
+  const found = [];
+  let block = '';
+  for (const line of section) {
+    block += `${line}\n`;
+    const marker = OUTSIDE_MARKER.exec(line);
+    if (!marker) continue;
+    const place = FOLLOWUP_PLACE.exec(block);
+    found.push({ id: marker[1].toLowerCase(), location: place ? followUpPlace(place) : null });
+    block = '';
+  }
+  return { found, badges: (section.join('\n').match(FOLLOWUP_BADGE) ?? []).length };
+}
+
 /**
  * Every outside-diff finding of every CodeRabbit app review, each review id once. { findings, unidentified }.
  * findings: the marker ids with their place, one per id however many reviews repeat it. unidentified: findings the
@@ -878,10 +914,10 @@ export function codeRabbitOutsideFindings({ reviews = [] }) {
     if (r.id != null) seen.add(r.id);
     if (codeRabbitNotice(r.body)) continue; // a notice is never a review, even when it quotes an outside-diff heading
     const m = OUTSIDE_DIFF_HEADING.exec(r.body || '');
-    if (!m) continue;
-    const found = outsideDiffFindings(r.body);
-    for (const f of found) if (!byId.has(f.id)) byId.set(f.id, f);
-    unidentified += Math.max(0, Number(m[1]) - found.length);
+    const found = m ? outsideDiffFindings(r.body) : [];
+    const followUp = followUpFindings(r.body);
+    for (const f of [...found, ...followUp.found]) if (!byId.has(f.id)) byId.set(f.id, f);
+    unidentified += (m ? Math.max(0, Number(m[1]) - found.length) : 0) + Math.max(0, followUp.badges - followUp.found.length);
   }
   return { findings: [...byId.values()], unidentified };
 }
@@ -1018,7 +1054,7 @@ const REVIEW_SENTENCE = /Actionable comments posted:\s*(\d+)/;
  */
 export function hasReviewContent(body) {
   const text = String(body ?? '');
-  return REVIEW_SENTENCE.test(text) || OUTSIDE_DIFF_HEADING.test(text) || severityMarks(text).length > 0;
+  return REVIEW_SENTENCE.test(text) || OUTSIDE_DIFF_HEADING.test(text) || FOLLOWUP_HEADING.test(text) || severityMarks(text).length > 0;
 }
 
 /** 'critical', 'major', 'minor' (Trivial and Nitpick too) or 'unknown'. The highest marker in the text wins. */
