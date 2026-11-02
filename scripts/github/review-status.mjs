@@ -866,42 +866,106 @@ function outsideDiffFindings(body) {
 // Newer CodeRabbit bodies (live PR 242 round 2, review 5729735980) have no "Outside diff range comments (N)" heading. They list
 // the same thread-less findings under "## Follow-up Comments": one <details> per finding with an "Outside diff" badge, the
 // marker `<!-- cr-comment:v1:HEX -->` at the end of the block (not quoted) and the place in the "Open the source location"
-// link (`blob/<sha>/<path>#L<a>-L<b>`). The section ends at the next rule line (`---`) or heading.
+// link (`blob/<sha>/<path>#L<a>-L<b>`). The section ends at the next rule line (`---`) or heading, except inside a code fence
+// (a suggestion can hold `---` or `# comment` lines). A block whose badge CodeRabbit changed or dropped is not skipped: with a
+// marker or a severity mark it counts as unidentified (fails closed).
 const FOLLOWUP_HEADING = /^(?:[^\w\n<]|<\/?(?:summary|details|strong)>)*Follow-up Comments\s*$/im;
 const FOLLOWUP_END = /^(?:---+|#{1,6}\s.*)\s*$/;
-const FOLLOWUP_BADGE = /alt="Outside diff"/i;
+const FOLLOWUP_FENCE = /^\s*(`{3,}|~{3,})/;
+const FOLLOWUP_IMG = /<img\b[^>]*>/gi;
 const FOLLOWUP_PLACE = /\[Open the source location\]\(<?https?:\/\/github\.com\/[^/\s)>]+\/[^/\s)>]+\/blob\/[^/\s)>]+\/([^)#\s>]+)#L(\d+)(?:-L(\d+))?>?\)/;
 
-/** `path:a-b` (or `path:a`) from the match of FOLLOWUP_PLACE. */
-const followUpPlace = (m) => `${decodeURIComponent(m[1])}:${m[3] && m[3] !== m[2] ? `${m[2]}-${m[3]}` : m[2]}`;
+/** The alt text of the finding badge on a line (an <img> from review-finding-badges-v1, or "Outside diff"), or null. */
+function followUpBadge(line) {
+  const alts = [];
+  for (const [tag] of line.matchAll(FOLLOWUP_IMG)) {
+    const alt = /\balt="([^"]+)"/i.exec(tag)?.[1];
+    if (alt && (/review-finding-badges-v1\//i.test(tag) || /^Outside diff$/i.test(alt))) alts.push(alt);
+  }
+  return alts.find((a) => /^Outside diff$/i.test(a)) ?? alts[0] ?? null;
+}
+
+/** For each line: is it inside (or on the edge of) a fenced code block? A fence closes on the same character, at least as long. */
+function fencedLines(lines) {
+  let open = null;
+  return lines.map((line) => {
+    const f = FOLLOWUP_FENCE.exec(line)?.[1];
+    if (open === null) { open = f ? { ch: f[0], len: f.length } : null; return open !== null; }
+    if (f && f[0] === open.ch && f.length >= open.len) open = null;
+    return true;
+  });
+}
+
+/** `path:a-b` (or `path:a`) from the match of FOLLOWUP_PLACE. A malformed %-escape keeps the raw path. */
+function followUpPlace(m) {
+  let path = m[1];
+  try { path = decodeURIComponent(path); } catch { /* keep the raw path */ }
+  return `${path}:${m[3] && m[3] !== m[2] ? `${m[2]}-${m[3]}` : m[2]}`;
+}
+
+const DETAILS_OPEN = /<details\b/gi;
+const DETAILS_CLOSE = /<\/details>/gi;
+const FOLLOWUP_NITPICK = /^(?:Nitpick|Trivial)$/i;
+const countOf = (re, line) => (line.match(re) || []).length;
 
 /**
- * The Follow-up Comments section of one review body, one block per finding (a block starts at its "Outside diff" badge line). Pure.
- * { found: [{ id, location }], unmarked }: a marker and the "Open the source location" link count only inside their own block, so
- * a block without a marker lends its link to nobody. unmarked = the badged blocks with no marker (the caller adds them to
- * `unidentified`: they need a bullet). A marker before the first badge is a finding too. No such section gives { found: [], unmarked: 0 }.
+ * The blocks of the section, { alt, text }. A block starts at a top-level <details> line or at a finding badge line, so a block
+ * whose badge is missing or reworded still gets its own block. A badge inside an open block sets its alt (the first badge wins;
+ * a second badge starts a new block). alt is the badge alt text, or null when the block has none. Text before the first block is no block.
+ */
+function followUpBlocks(lines, fenced, start) {
+  const end = lines.findIndex((l, i) => i > start && !fenced[i] && FOLLOWUP_END.test(l));
+  const blocks = [];
+  let depth = 0;
+  for (let i = start + 1; i < (end < 0 ? lines.length : end); i++) {
+    const cur = blocks[blocks.length - 1];
+    if (!fenced[i]) {
+      const alt = followUpBadge(lines[i]);
+      const opens = countOf(DETAILS_OPEN, lines[i]);
+      const attach = alt !== null && cur && cur.alt === null && depth > 0;
+      if (attach) cur.alt = alt;
+      else if ((depth === 0 && opens > 0) || alt !== null) blocks.push({ alt, text: [] });
+      depth = Math.max(0, depth + opens - countOf(DETAILS_CLOSE, lines[i]));
+    }
+    if (blocks.length > 0) blocks[blocks.length - 1].text.push(lines[i]);
+  }
+  return blocks;
+}
+
+/** The ids of the markers in a block's text. */
+const blockMarkers = (joined) => [...joined.matchAll(new RegExp(OUTSIDE_MARKER.source, 'gi'))].map((m) => m[1].toLowerCase());
+
+/**
+ * The Follow-up Comments section of one review body, one block per finding (a block starts at its <details> or its badge line). Pure.
+ * { found: [{ id, location }], unmarked }: a block with an "Outside diff" badge is an outside-diff finding. A Nitpick block needs no
+ * bullet. Any other block (a reworded badge, no badge) that carries a marker or a severity mark fails closed: it counts in unmarked.
+ * A marker and the "Open the source location" link count only inside their own block. unmarked = the Outside diff blocks with no
+ * marker, raised to the number of Outside diff badges in the body that no marker accounts for (a parse miss fails closed; the count
+ * also takes badges inside code fences and past the section end, which only over-counts), plus the other blocks that carry a marker
+ * or severity mark. The section ends at the next rule line or heading outside a code fence. No such section gives { found: [], unmarked: 0 }.
  */
 function followUpFindings(body) {
   const lines = String(body ?? '').split(/\r?\n/);
   const start = lines.findIndex((l) => FOLLOWUP_HEADING.test(l));
   if (start < 0) return { found: [], unmarked: 0 };
-  const end = lines.findIndex((l, i) => i > start && FOLLOWUP_END.test(l));
-  const blocks = [];
-  for (const line of lines.slice(start + 1, end < 0 ? lines.length : end)) {
-    const badge = FOLLOWUP_BADGE.test(line);
-    if (blocks.length === 0 || badge) blocks.push({ badged: badge, text: [] });
-    blocks[blocks.length - 1].text.push(line);
-  }
   const found = [];
   let unmarked = 0;
-  for (const { badged, text } of blocks) {
+  let marked = 0;
+  let unknown = 0;
+  for (const { alt, text } of followUpBlocks(lines, fencedLines(lines), start)) {
     const joined = text.join('\n');
-    const markers = [...joined.matchAll(new RegExp(OUTSIDE_MARKER.source, 'gi'))];
+    const ids = blockMarkers(joined);
+    if (alt !== null && FOLLOWUP_NITPICK.test(alt)) continue;
+    if (alt === null || !/^Outside diff$/i.test(alt)) {
+      if (ids.length > 0 || severityMarks(joined).length > 0) unknown += Math.max(1, new Set(ids).size);
+      continue;
+    }
     const place = FOLLOWUP_PLACE.exec(joined);
-    for (const m of markers) found.push({ id: m[1].toLowerCase(), location: place ? followUpPlace(place) : null });
-    if (badged && markers.length === 0) unmarked += 1;
+    for (const id of ids) found.push({ id, location: place ? followUpPlace(place) : null });
+    if (ids.length === 0) unmarked += 1; else marked += 1;
   }
-  return { found, unmarked };
+  const badges = lines.filter((l) => /^Outside diff$/i.test(followUpBadge(l) ?? '')).length;
+  return { found, unmarked: Math.max(unmarked, badges - marked) + unknown };
 }
 
 /**
