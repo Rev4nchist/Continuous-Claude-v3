@@ -165,6 +165,22 @@ describe('pr-opened-review-loop classifiers (unit)', () => {
     expect(ctx).toContain('never merge');
   });
 
+  // /pathway fails without the checkpoint: the pane needs pr_checkpoint to be called with the body file (memory: draft-pr-needs-checkpoint).
+  it('for the CCv3 repo also names pr_checkpoint with the PR number and the body file, after pr_watch', () => {
+    const ctx = buildContext({ owner: 'Rev4nchist', repo: 'Continuous-Claude-v3', number: '107', url: 'https://github.com/Rev4nchist/Continuous-Claude-v3/pull/107' });
+    expect(ctx).toContain('mcp__ccv3-mods__pr_checkpoint');
+    expect(ctx).toContain('pr: 107');
+    expect(ctx).toMatch(/body file/i);
+    expect(ctx.indexOf('pr_watch')).toBeLessThan(ctx.indexOf('pr_checkpoint'));
+    expect(ctx).toMatch(/draft/i);
+    expect(ctx).toMatch(/never mark it ready/i);
+  });
+
+  it('for another repo does not send the model to pr_checkpoint', () => {
+    const ctx = buildContext({ owner: 'acme', repo: 'widgets', number: '42', url: 'https://github.com/acme/widgets/pull/42' });
+    expect(ctx).not.toContain('pr_checkpoint');
+  });
+
   it('for another repo does not send the model to pr_watch', () => {
     const ctx = buildContext({ owner: 'acme', repo: 'widgets', number: '42', url: 'https://github.com/acme/widgets/pull/42' });
     expect(ctx).not.toContain('pr_watch');
