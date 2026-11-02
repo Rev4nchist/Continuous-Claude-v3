@@ -513,7 +513,9 @@ const landRows = async ($: EngineInterface, rows: Row[], table: string): Promise
     const ran = await landRun($, pr, via)
     if (!ran.ok) return stop(lastLine(ran.text) || 'land-pr did not finish.')
     const after = await probe($, pr)
-    if (after.kind === 'ok' && !after.status.merged) return stop('land-pr printed no error, but the PR is not merged. Check it before you land again.')
+    // Fail closed: a status that cannot be read after the run is no proof of a merge.
+    if (after.kind === 'error') return stop(`could not confirm #${pr} merged; check it before you land again.`)
+    if (!after.status.merged) return stop('land-pr printed no error, but the PR is not merged. Check it before you land again.')
     landed.push(pr)
   }
   return { text: `${table}\n${batchReport(landed, null, [])}` }
@@ -522,7 +524,9 @@ const landRows = async ($: EngineInterface, rows: Row[], table: string): Promise
 /** `/land 12 13 14` or `/land ready`. Interactive and Dave's press only; every other case lands nothing. */
 const landBatch = async ($: EngineInterface, requested: number[] | 'ready'): Promise<{ text: string }> => {
   const numbers = requested === 'ready' ? (await loadDoc($)).prs.map(one => one.pr) : requested
-  if (numbers.length > MAX_LAND_BATCH) return { text: `Nothing landed: ${numbers.length} PRs is over the limit. A press lands at most ${MAX_LAND_BATCH}.` }
+  const overCap = (count: number) => ({ text: `Nothing landed: ${count} PRs is over the limit. A press lands at most ${MAX_LAND_BATCH}.` })
+  // An explicit list is capped before any read. `ready` reads the whole watch list and caps the READY rows, which are what would land.
+  if (requested !== 'ready' && numbers.length > MAX_LAND_BATCH) return overCap(numbers.length)
   if (requested === 'ready' && numbers.length === 0) return { text: 'Nothing landed: no PR is on the watch list, so no watched PR is READY. Name the PRs: /land <pr> <pr>.' }
   const rows: Row[] = []
   for (const pr of numbers) rows.push({ pr, result: await probe($, pr) })
@@ -533,6 +537,7 @@ const landBatch = async ($: EngineInterface, requested: number[] | 'ready'): Pro
     return { text: `${table}\nNothing landed: ${bad.map(row => `#${row.pr} (${notLandable(row)})`).join(', ')}. Fix the list or land the READY ones alone.` }
   }
   if (ready.length === 0) return { text: `${table}\nNothing landed: no watched PR is READY.` }
+  if (ready.length > MAX_LAND_BATCH) return { text: `${table}\n${overCap(ready.length).text}` }
   if (!(await interactive($))) return { text: `${table}\nNot landed: landing needs an interactive session and Dave's press.` }
   if (!(await hasShell($))) return { text: `${table}\nNot landed: a batch needs a shell tool to run land-pr one PR at a time, and this session has none. Land them one at a time.` }
   return landRows($, ready, table)

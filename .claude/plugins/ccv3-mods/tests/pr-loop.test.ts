@@ -2057,3 +2057,42 @@ describe('/land with several PRs', () => {
     expect(seen.land.length).toBe(1)
   })
 })
+
+// ---- CodeRabbit CLI Minors on b6436cae --------------------------------------------------------------------------------------------------
+// BL12 an unreadable status after a land run counts the PR as landed and the batch goes on
+// BL13 `ready` applies the 10-PR cap to the whole watch list, so 11 watched with 2 READY refuses
+// BL13b `ready` with more than 10 READY PRs lands none of them
+describe('/land batch: fail closed after a run, and the cap counts READY PRs', () => {
+  test('BL12 a post-land status that cannot be read stops the batch; the PR is not listed as Landed', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: [READY(12), READY(12), 'error'], 13: MERGING(13) } })
+    await start($)
+    const out = await run($, 'land', '12 13')
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['12'])
+    expect(out.text).toMatch(/Landed: none\./)
+    expect(out.text).toMatch(/Stopped at #12: could not confirm #12 merged; check it before you land again/)
+    expect(out.text).toMatch(/Not tried: #13/)
+  })
+
+  test('BL13 `ready` with 11 watched PRs and 2 READY lands the 2', async ($, on) => {
+    const numbers = Array.from({ length: 11 }, (_, i) => i + 1)
+    const script: Record<number, Status[]> = {}
+    for (const n of numbers) script[n] = n === 3 || n === 7 ? MERGING(n) : [status(n)]
+    const { seen } = world(on, { answer: 'Land', store: seed(numbers.map(pr => ({ pr }))), script })
+    await start($)
+    const out = await run($, 'land', 'ready')
+    expect(seen.land.map(call => String(call.command).match(/-Pr (\d+)$/)?.[1])).toEqual(['3', '7'])
+    expect(out.text).toMatch(/Landed: #3, #7/)
+  })
+
+  test('BL13b `ready` with 11 READY PRs lands none and says the cap', async ($, on) => {
+    const numbers = Array.from({ length: 11 }, (_, i) => i + 1)
+    const script: Record<number, Status[]> = {}
+    for (const n of numbers) script[n] = MERGING(n)
+    const { seen } = world(on, { answer: 'Land', store: seed(numbers.map(pr => ({ pr }))), script })
+    await start($)
+    const out = await run($, 'land', 'ready')
+    expect(seen.asks).toEqual([])
+    expect(seen.land).toEqual([])
+    expect(out.text).toMatch(/at most 10/i)
+  })
+})
