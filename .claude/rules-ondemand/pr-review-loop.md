@@ -202,8 +202,8 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 **Never run a review in fast mode.** (Dave, 2026-11-01)
 
 - Claude review agents (critic, aegis, principal-reviewer) never run in fast mode.
-- Cursor review runs pass `--model` with `grok-4.7-high`. A CRITICAL PR may use `grok-4.7-xhigh`.
-- The other allowed values are `grok-4.7-low`, `grok-4.7-medium` and `composer-2.5`. No band uses them now (bake-off, 2026-11-01).
+- Cursor review runs pass `--model` with an explicit value.
+- Use only `grok-4.7-high` (or `grok-4.7-xhigh` for CRITICAL). The wrapper allowlist also admits `grok-4.7-low`, `grok-4.7-medium` and `composer-2.5`, but no band may use them now (bake-off, 2026-11-01).
 - Never use Auto. Never use a model name that contains `fast`.
 - Never fall back to the CLI default model. If the model is not allowed, stop the run.
 
