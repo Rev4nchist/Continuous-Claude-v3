@@ -870,7 +870,7 @@ function outsideDiffFindings(body) {
 const FOLLOWUP_HEADING = /^(?:[^\w\n<]|<\/?(?:summary|details|strong)>)*Follow-up Comments\s*$/im;
 const FOLLOWUP_END = /^(?:---+|#{1,6}\s.*)\s*$/;
 const FOLLOWUP_BADGE = /alt="Outside diff"/gi;
-const FOLLOWUP_PLACE = /\]\(<?https?:\/\/github\.com\/[^/\s)>]+\/[^/\s)>]+\/blob\/[^/\s)>]+\/([^)#\s>]+)#L(\d+)(?:-L(\d+))?>?\)/;
+const FOLLOWUP_PLACE = /\[Open the source location\]\(<?https?:\/\/github\.com\/[^/\s)>]+\/[^/\s)>]+\/blob\/[^/\s)>]+\/([^)#\s>]+)#L(\d+)(?:-L(\d+))?>?\)/;
 
 /** `path:a-b` (or `path:a`) from the match of FOLLOWUP_PLACE. */
 const followUpPlace = (m) => `${decodeURIComponent(m[1])}:${m[3] && m[3] !== m[2] ? `${m[2]}-${m[3]}` : m[2]}`;
@@ -1054,7 +1054,7 @@ const REVIEW_SENTENCE = /Actionable comments posted:\s*(\d+)/;
  */
 export function hasReviewContent(body) {
   const text = String(body ?? '');
-  return REVIEW_SENTENCE.test(text) || OUTSIDE_DIFF_HEADING.test(text) || FOLLOWUP_HEADING.test(text) || severityMarks(text).length > 0;
+  return REVIEW_SENTENCE.test(text) || OUTSIDE_DIFF_HEADING.test(text) || followUpFindings(text).found.length > 0 || severityMarks(text).length > 0;
 }
 
 /** 'critical', 'major', 'minor' (Trivial and Nitpick too) or 'unknown'. The highest marker in the text wins. */

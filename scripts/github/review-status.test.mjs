@@ -3377,3 +3377,24 @@ test('FU-D: a marker after the Follow-up section is no finding, and a section wi
   assert.equal(odEval([odLive(noMarker)]).ready, false);
   assert.equal(odEval([odLive(noMarker)], HANDLED(1)).ready, true, 'the count rule: one bullet covers one');
 });
+
+// CodeRabbit CLI review of f60e94f (2026-11-02). Ways it can fail, one test each:
+//   a body with only the "## Follow-up Comments" heading counts as review content, so it can carry               -> FU-E
+//   another GitHub blob link before "Open the source location" gives the finding the wrong place                  -> FU-F
+test('FU-E: a heading-only Follow-up body is no review content, so it fails closed and cannot carry', () => {
+  const headingOnly = '<!-- coderabbit-ai-generated:v1 -->\n\n## Follow-up Comments\n\nNothing else.\n';
+  assert.equal(RS.hasReviewContent(headingOnly), false);
+  assert.equal(RS.hasReviewContent(FU_242), true, 'control: a parsed follow-up finding is content');
+  const r = carryEval({ carry: carryOf({ reviewComments: [] }), cli: `${CLI_LINE()}${idList(FU_ID)}`, evalOver: { reviews: [outsideReview(headingOnly)] } });
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+  assert.ok(r.coderabbitCarryBlockers.includes('the newest CodeRabbit review has no review sentence'), r.coderabbitCarryBlockers.join('; '));
+});
+
+test('FU-F: the place comes from the "Open the source location" link, not an earlier blob link in the finding', () => {
+  const earlier = '[see this](https://github.com/Rev4nchist/Continuous-Claude-v3/blob/c6a5242e2fdda04a4bba98b419302bbd866638ff/scripts/other/file.mjs#L1-L2)\n\n';
+  const body = FU_242.replace('[Open the source location]', `${earlier}[Open the source location]`);
+  assert.notEqual(body, FU_242);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }).findings, [{ id: FU_ID, location: FU_PLACE }]);
+  assert.equal(odEval([odLive(body)], idList(`\`${FU_PLACE}\` fixed in abc1234`)).ready, true);
+});
