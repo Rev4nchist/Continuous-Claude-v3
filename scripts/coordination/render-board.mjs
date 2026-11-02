@@ -193,14 +193,14 @@ const kbById = new Map(lanes.map((l) => [l.id, l]));
 const kbJson = JSON.stringify(kbLanes).replace(/</g, '\\u003c');
 let kbSeq = 0;
 
-const kbCard = (l, movable) => {
+const kbCard = (l, movable, rank, col) => {
   const n = kbSeq++;
   const owner = l.owner_session_id;
   const leaseMin = l.lease_expires_at
     ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000) : null;
   const prio = kbPrio(l) !== null ? `<span class="kb-prio mono" title="DB priority">prio ${kbPrio(l)}</span>` : '';
   return `<li class="card kb-card" data-id="${esc(l.id)}" data-state="${esc(l.state)}">
-      <div class="kb-top">${movable ? '<span class="kb-rank mono" title="Rank in this column">0</span>' : ''}<span class="kb-id mono">${esc(l.id)}</span>${movable ? '<span class="kb-grip" title="Drag to move" aria-hidden="true">&#8942;&#8942;</span>' : ''}</div>
+      <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Rank in this column">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span>${movable ? '<span class="kb-grip" title="Drag to move" aria-hidden="true">&#8942;&#8942;</span>' : ''}</div>
       <p class="kb-title">${esc(l.title)}</p>
       <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${prio}</div>
       ${movable ? '' : `<div class="kb-holder">${owner
@@ -215,7 +215,7 @@ const kbCard = (l, movable) => {
       ${movable ? `<div class="kb-ctl">
         <button class="kb-btn kb-up" type="button" aria-label="Move ${esc(l.id)} up" disabled>Up</button>
         <button class="kb-btn kb-dn" type="button" aria-label="Move ${esc(l.id)} down" disabled>Down</button>
-        <label class="kb-mv">Move to <select class="kb-to" aria-label="Move ${esc(l.id)} to column" disabled>${KB_COLS.map(([k, name]) => `<option value="${k}">${name}</option>`).join('')}</select></label>
+        <label class="kb-mv">Move to <select class="kb-to" aria-label="Move ${esc(l.id)} to column" disabled>${KB_COLS.map(([k, name]) => `<option value="${k}"${k === col ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
       </div>` : ''}
     </li>`;
 };
@@ -223,7 +223,7 @@ const kbCard = (l, movable) => {
 const kbColumn = (key, name, ids, movable) => `<div class="kcol"${movable ? ` data-col="${key}"` : ' data-col="progress" data-fixed="1"'} data-n="${ids.length}">
     <h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-${key}"><span class="kb-name">${name}</span><span class="kb-count mono">${ids.length}</span></button></h3>
     ${movable ? '' : '<p class="kb-sub">Held by a session. Not reorderable.</p>'}
-    <ul class="kb-list" id="kb-list-${key}">${ids.map((id) => kbCard(kbById.get(id), movable)).join('')}</ul>
+    <ul class="kb-list" id="kb-list-${key}">${ids.map((id, i) => kbCard(kbById.get(id), movable, i + 1, key)).join('')}</ul>
   </div>`;
 
 // The client script is plain ES5 text: placeLanes' own source, then the page code.
