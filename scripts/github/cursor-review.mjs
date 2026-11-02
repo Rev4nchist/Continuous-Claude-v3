@@ -39,6 +39,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withLock } from './lib/file-lock.mjs';
+import { killTree } from './lib/proc.mjs';
 
 export const EXIT = { OK: 0, FAILED: 1, REFUSED: 2, CAP: 3 };
 export const MODEL_ALLOWLIST = new Set(['grok-4.7-high', 'grok-4.7-xhigh']);
@@ -50,7 +51,13 @@ export const DEFAULT_TIMEOUT_SEC = 1500;
 export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const SEVERITIES = ['critical', 'major', 'minor', 'info'];
 /** Folders left out of the review tree: answers and old review output the model must not see. */
-const TREE_EXCLUDES = ['.git', '.claudedocs', '.claude/cache', '.claude/reviews', 'artifacts', 'thoughts'];
+export const TREE_EXCLUDES = Object.freeze(['.git', '.claudedocs', '.claude/cache', '.claude/reviews', 'artifacts', 'thoughts']);
+/**
+ * Files and folders the review agent must never read as instructions, at any depth. Cursor loads agent rules (AGENTS.md, CLAUDE.md,
+ * .cursorrules, .cursor), runs Claude Code project hooks (.claude/settings*.json) and starts MCP servers (.mcp.json) from the tree it
+ * runs in, and it runs with --trust. A PR could add any of them and have its own review run them. PR.diff keeps their diff as data.
+ */
+export const AGENT_FILES = Object.freeze(['AGENTS.md', 'CLAUDE.md', '.cursorrules', '.cursor', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json']);
 
 // ---------- model and band ----------
 
@@ -328,6 +335,9 @@ export function resolveAgent({ platform = process.platform, env = process.env, r
   return { error: `cursor-agent is not installed under ${root}\\versions (set CURSOR_AGENT_DIR to its folder)` };
 }
 
+/** Credentials that never reach the agent. See buildAgentEnv. */
+const SECRET_VARS = ['ANTHROPIC_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN'];
+
 /** POSIX shell variables that a Git Bash session sets. See buildAgentEnv. */
 const POSIX_SHELL_VARS = ['SHELL', 'MSYSTEM', 'BASH', 'BASH_ENV'];
 
@@ -340,6 +350,8 @@ const POSIX_SHELL_VARS = ['SHELL', 'MSYSTEM', 'BASH', 'BASH_ENV'];
  */
 export function buildAgentEnv(base = process.env, platform = process.platform) {
   const env = { ...base };
+  // The agent has no use for these and runs a PR's tree: its own key and the GitHub tokens must not reach it.
+  for (const k of SECRET_VARS) delete env[k];
   if (platform === 'win32') {
     for (const k of POSIX_SHELL_VARS) delete env[k];
     env.CURSOR_INVOKED_AS = 'cursor-agent.cmd';
@@ -350,13 +362,12 @@ export function buildAgentEnv(base = process.env, platform = process.platform) {
   return env;
 }
 
-async function defaultKiller(pid) {
-  const { killTree } = await import('./pre-pr.mjs');
+function defaultKiller(pid) {
   killTree(pid);
 }
 
 /**
- * Runs the agent and resolves when it ends. A time-out stops the agent pid and its whole process tree (killTree from pre-pr.mjs:
+ * Runs the agent and resolves when it ends. A time-out stops the agent pid and its whole process tree (killTree from lib/proc.mjs:
  * the Windows tree-kill switch is forbidden here, so it walks the process table). Never throws; a spawn error is a result.
  * { status, stdout, stderr, timedOut, error, durationMs }
  */
@@ -445,6 +456,41 @@ export function isExcluded(rel, platform = process.platform) {
   return TREE_EXCLUDES.some((x) => p === fold(x) || p.startsWith(`${fold(x)}/`));
 }
 
+/**
+ * True when `rel` (a git path, so forward slashes) is an AGENT_FILES entry or sits under one, at any depth: "a/b/AGENTS.md" and
+ * "x/.cursor/rules/r.mdc" match. An entry matches whole path segments ("MY-AGENTS.md" does not match) and may span segments
+ * (".claude/settings.json"). On win32 the match ignores case, as the file system does, so it agrees with the rmSync of the entry.
+ */
+export function isAgentFile(rel, platform = process.platform) {
+  const fold = (x) => (platform === 'win32' ? x.toLowerCase() : x);
+  const segs = fold(String(rel).replace(/^\.\//, '').replaceAll('\\', '/')).split('/').filter(Boolean);
+  return AGENT_FILES.some((entry) => {
+    const want = fold(entry).split('/');
+    for (let i = 0; i + want.length <= segs.length; i += 1) {
+      if (want.every((w, j) => segs[i + j] === w)) return true;
+    }
+    return false;
+  });
+}
+
+/** Removes every agent file and folder under `dir`, at every depth. A symlink is removed by name and never followed. Returns the git-style paths removed. */
+export function stripAgentFiles(dir, platform = process.platform) {
+  const removed = [];
+  const walk = (abs, rel) => {
+    for (const ent of readdirSync(abs, { withFileTypes: true })) {
+      const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+      if (isAgentFile(childRel, platform)) {
+        rmSync(path.join(abs, ent.name), { recursive: true, force: true });
+        removed.push(childRel);
+      } else if (ent.isDirectory()) {
+        walk(path.join(abs, ent.name), childRel);
+      }
+    }
+  };
+  walk(dir, '');
+  return removed;
+}
+
 /** Git pathspecs that leave TREE_EXCLUDES out of PR.diff. On win32 they ignore case (icase), as isExcluded and the folder rmSync do. */
 export function excludePathspecs(platform = process.platform) {
   const magic = platform === 'win32' ? 'exclude,icase' : 'exclude';
@@ -465,7 +511,8 @@ function entryExists(p) {
 
 /**
  * Resolves the input to base and head, then builds the clean tree. The diff base is the merge base, so a branch that merged
- * main shows only its own change. { ref, base, head, dir, files, cleanup }.
+ * main shows only its own change. { ref, base, head, dir, files, agentFiles, cleanup }. agentFiles are the changed paths that were
+ * left out of the tree (see AGENT_FILES); `files` still lists them.
  */
 export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = defaultGh, repo = DEFAULT_REPO, remote = 'fork', extract = defaultExtract, platform = process.platform }) {
   let head;
@@ -503,11 +550,14 @@ export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = d
     // Any non-zero status is a failed prepare: a part-way checkout leaves a partial tree, and a review of it could answer clean.
     if (tar.status !== 0) throw new Error(`tree checkout failed (status ${tar.status}): ${(tar.stderr ?? '').trim()}`);
     for (const x of TREE_EXCLUDES) rmSync(path.join(dir, x), { recursive: true, force: true });
+    stripAgentFiles(dir, platform);
     writeFileSync(path.join(dir, 'PR.diff'), gitOut(root, ['diff', '--no-color', '--no-ext-diff', mergeBase, head, '--', '.', ...excludePathspecs(platform)]));
     const files = changedPaths(root, mergeBase, head);
-    const missing = changedPaths(root, mergeBase, head, 'ACMRT').filter((f) => !entryExists(path.join(dir, f)));
+    // A changed agent file is gone from the tree on purpose (its diff stays in PR.diff), so it is not "missing".
+    const missing = changedPaths(root, mergeBase, head, 'ACMRT').filter((f) => !isAgentFile(f, platform) && !entryExists(path.join(dir, f)));
     if (missing.length > 0) throw new Error(`the review tree is missing ${missing.length} changed file(s): ${missing.slice(0, 5).join(', ')}`);
-    return { ref, base: mergeBase, head, dir, files, cleanup };
+    const agentFiles = files.filter((f) => isAgentFile(f, platform));
+    return { ref, base: mergeBase, head, dir, files, agentFiles, cleanup };
   } catch (err) {
     cleanup();
     throw err;
