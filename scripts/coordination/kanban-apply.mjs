@@ -91,14 +91,21 @@ function placements(board) {
   return out;
 }
 
-/** A copy of the columns this run applied (ids only), or the saved copy when the board is not pending. */
-function appliedColumnsOf(board) {
+/**
+ * A copy of the columns this run applied (ids only), or the saved copy when the board is not pending.
+ * A held lane whose column move was skipped keeps its previous column (or is left out), so the
+ * next sync sees the move as still changed and applies it once the lane is released.
+ */
+function appliedColumnsOf(board, deferred = new Set()) {
   if (!isObj(board)) return null;
   if (!boardPending(board)) return isObj(board.appliedColumns) ? board.appliedColumns : null;
+  const before = columnOf(board.appliedColumns);
   const out = {};
   for (const column of COLUMNS) {
-    out[column] = (Array.isArray(board.columns[column]) ? board.columns[column] : []).filter((id) => typeof id === 'string' && id);
+    out[column] = (Array.isArray(board.columns[column]) ? board.columns[column] : [])
+      .filter((id) => typeof id === 'string' && id && !deferred.has(id));
   }
+  for (const id of deferred) if (before.has(id)) out[before.get(id)].push(id);
   return out;
 }
 
@@ -153,7 +160,7 @@ function readCard(card, lane) {
  * @param {{board?: object, cards?: object[]}} input
  * @param {{id: string, state: string, priority: number, note: string|null, held?: boolean}[]} lanes
  *   held: a live session owns the lane (lane.mjs computes it with the RECLAIMABLE predicate).
- * @returns {{actions: object[], results: object[], skipped: {laneId: string, reason: string}[], appliedColumns: object|null}}
+ * @returns {{actions: object[], results: object[], skipped: {laneId: string, reason: string}[], appliedColumns: object|null, boardDone: boolean}}
  */
 export function planKanban(input, lanes) {
   const inp = isObj(input) ? input : {};
@@ -168,6 +175,7 @@ export function planKanban(input, lanes) {
   const results = [];
   const skipped = [];
   const act = (laneId, kind, from, to, text) => actions.push({ laneId, kind, from, to, text });
+  const deferred = new Set();
 
   for (const id of new Set([...place.keys(), ...cards.keys()])) {
     const lane = rows.get(id);
@@ -189,8 +197,9 @@ export function planKanban(input, lanes) {
     if (read.result?.applied !== false || read.held) {
       const colWant = columnState(lane, p);
       const want = read.status ?? (lane.held ? null : colWant);
-      if (lane.held && !read.status && colWant && colWant !== lane.state && !skipped.some((k) => k.laneId === id)) {
-        skipped.push({ laneId: id, reason: 'held' });
+      if (lane.held && !read.status && colWant && colWant !== lane.state) {
+        deferred.add(id);
+        if (!skipped.some((k) => k.laneId === id)) skipped.push({ laneId: id, reason: 'held' });
       }
       if (want && want !== lane.state) {
         act(id, 'state', lane.state, want, read.status ? 'kanban card status' : `kanban column ${p?.column}`);
@@ -214,5 +223,6 @@ export function planKanban(input, lanes) {
       }
     }
   }
-  return { actions, results, skipped, appliedColumns: appliedColumnsOf(inp.board) };
+  // boardDone false: a held column move waits, so the sync must not mark the board synced.
+  return { actions, results, skipped, appliedColumns: appliedColumnsOf(inp.board, deferred), boardDone: deferred.size === 0 };
 }

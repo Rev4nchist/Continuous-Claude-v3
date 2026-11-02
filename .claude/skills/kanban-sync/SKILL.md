@@ -55,7 +55,7 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
 
 6. Write back to the page with `ArtifactData update`. Pin each write with `if_version`.
    - For each entry in `results`: update `cards/<laneId>` with `syncResult`, and with `syncedAt` when the entry has one. Entries with `applied: true` also get `appliedNote` and `appliedQuestion` (copy them from the entry, null included), so a later status-only edit does not post the same note again. Entries with `applied: false` get `syncResult` only, and also `appliedNote` and `appliedQuestion` when the entry has them (a held lane). They stay pending.
-   - Update `kanban/board` with the top-level `syncedAt` and the top-level `appliedColumns` (skip `appliedColumns` when it is null). The next run moves only lanes whose column differs from `appliedColumns`.
+   - Update `kanban/board` with the top-level `appliedColumns` (skip it when it is null). Write the top-level `syncedAt` to `kanban/board` ONLY when `boardDone` is true. When it is false, a held lane's column move waits: the board stays pending and the next sync retries that move. The next run moves only lanes whose column differs from `appliedColumns`.
    - On a version conflict, Dave edited the doc while you worked. Read the doc again. Retry the write with the new version and the same `syncedAt`. The newer `updatedAt` keeps it pending.
 
 7. Re-render and republish the board to the same url. Follow step 3 of [create_handoff](../create_handoff/SKILL.md):

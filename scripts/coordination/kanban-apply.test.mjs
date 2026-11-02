@@ -389,3 +389,18 @@ test('a lane that is not held takes the card status as before', () => {
   const p = plan({ board: board({}), cards: [card('a', { status: 'ready' })] }, [{ ...lane('a', 'blocked', 1), held: false }]);
   assert.deepEqual(kinds(p), ['a:state:blocked->ready']);
 });
+
+test('a held lane moved into waiting is not marked applied: the move retries after the lane is released', () => {
+  const b1 = board({ next: ['a'] });
+  const first = plan({ board: b1, cards: [] }, [lane('a', 'backlog', 1)]);
+  const applied1 = first.appliedColumns;
+  const b2 = board({ waiting: ['a'] }, { updatedAt: '2026-11-02T12:00:00Z', syncedAt: '2026-11-02T11:00:00Z', appliedColumns: applied1 });
+  const held = plan({ board: b2, cards: [] }, [{ ...lane('a', 'backlog', 1), held: true }]);
+  assert.ok(!held.actions.some((a) => a.kind === 'state'), 'held: no state change');
+  assert.equal(held.boardDone, false, 'the board stays pending while a held move waits');
+  assert.ok(!held.appliedColumns.waiting.includes('a'), 'the skipped move is not recorded as applied');
+  const b3 = { ...b2, appliedColumns: held.appliedColumns };
+  const released = plan({ board: b3, cards: [] }, [lane('a', 'backlog', 1)]);
+  assert.ok(kinds(released).includes('a:state:backlog->blocked'), 'after release the move applies');
+  assert.equal(released.boardDone, true);
+});

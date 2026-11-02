@@ -609,7 +609,7 @@ const commands = {
     const line = `kanban${dry ? ' (dry run, nothing written)' : ''}: ${summary.priority} priority, ${summary.state} state, ${summary.note} notes, ${summary.skipped} skipped`;
     if (JSON_OUT) {
       const results = plan.results.map((r) => (r.applied && !dry ? { ...r, syncedAt } : r));
-      return { dryRun: dry, summary, syncedAt, appliedColumns: plan.appliedColumns, actions: plan.actions, results, skipped: plan.skipped };
+      return { dryRun: dry, summary, syncedAt, appliedColumns: plan.appliedColumns, boardDone: plan.boardDone, actions: plan.actions, results, skipped: plan.skipped };
     }
     const clip = (v) => String(v ?? '(none)').replace(/\s+/g, ' ').slice(0, 70);
     return [
