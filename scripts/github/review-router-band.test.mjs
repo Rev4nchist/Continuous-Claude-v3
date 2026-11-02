@@ -262,7 +262,7 @@ test('B26: unreadable labels (facts.labels null) below HIGH stop the checkpoint:
 });
 
 /** The live-facts path: a real git repo, a stamp, and a fake gh (env PR_CHECKPOINT_GH) that prints the PR labels or fails. */
-function liveCheckpoint({ labels, ghFails = false, file = 'docs/guide.md' }) {
+function liveCheckpoint({ labels, ghFails = false, pinnedFails = false, url = 'https://github.com/Rev4nchist/Continuous-Claude-v3/pull/9', file = 'docs/guide.md' }) {
   const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'band-live-')));
   const git = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...a], { cwd: repo, encoding: 'utf8' });
   git('init', '-q', '-b', 'main');
@@ -285,11 +285,12 @@ function liveCheckpoint({ labels, ghFails = false, file = 'docs/guide.md' }) {
     "import { appendFileSync } from 'node:fs';",
     "appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');",
     "if (process.env.FAKE_GH_FAIL) { process.stderr.write('gh: not found'); process.exit(1); }",
+    "if (process.env.FAKE_GH_PINNED_FAIL && process.argv.includes('-R')) { process.stderr.write('no pull requests found'); process.exit(1); }",
     'process.stdout.write(process.env.FAKE_GH_VIEW);',
   ].join('\n'));
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', cfg], {
     cwd: repo, encoding: 'utf8',
-    env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify({ labels: (labels ?? []).map((name) => ({ name })) }), ...(ghFails ? { FAKE_GH_FAIL: '1' } : {}) },
+    env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify({ url, labels: (labels ?? []).map((name) => ({ name })) }), ...(ghFails ? { FAKE_GH_FAIL: '1' } : {}), ...(pinnedFails ? { FAKE_GH_PINNED_FAIL: '1' } : {}) },
   });
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
   return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null, calls };
@@ -315,4 +316,14 @@ test('B29: the live-facts path with unreadable labels (gh fails) stops: no recom
   assert.equal(out.recommended, null);
   assert.deepEqual(out.options, []);
   assert.match(out.why[0], /labels/i);
+});
+
+test('B30: when the pinned lookup finds no PR (a fork PR), the labels come from `gh pr view` with no branch, and only if the PR is in the fork repo', () => {
+  const ok = liveCheckpoint({ labels: ['risk:high'], pinnedFails: true });
+  assert.equal(ok.out.band.band, 'CRITICAL');
+  assert.deepEqual(ok.calls.map((c) => c.includes('-R')), [true, false], 'the pinned call first, then the fork-aware one');
+  assert.deepEqual(ok.calls[1], ['pr', 'view', '--json', 'labels,url']);
+  const other = liveCheckpoint({ labels: ['risk:high'], pinnedFails: true, url: 'https://github.com/parcadei/Continuous-Claude-v3/pull/9' });
+  assert.equal(other.out.recommended, null, 'a PR in another repo (origin is parcadei) never supplies the labels');
+  assert.match(other.out.why[0], /labels/i);
 });

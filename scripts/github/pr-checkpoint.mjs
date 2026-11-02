@@ -447,17 +447,31 @@ function configDrift(base, configText) {
   try { return JSON.stringify(JSON.parse(r.stdout)) !== JSON.stringify(JSON.parse(configText)); } catch { return false; }
 }
 
-/** The label names of the PR on the current branch (one gh call), or null when they cannot be read. null makes the checkpoint stop below HIGH. */
+/** The label names in a gh pr view JSON text, or null. */
+function labelNames(text) {
+  try {
+    const labels = JSON.parse(text).labels;
+    return Array.isArray(labels) ? labels.map((l) => l?.name).filter((n) => typeof n === 'string') : null;
+  } catch { return null; }
+}
+
+/**
+ * The label names of the PR on the current branch, or null when they cannot be read (null makes the checkpoint stop below HIGH).
+ * First the lookup pinned to the fork repo by branch name. A fork PR is not found that way, so then `gh pr view` with no branch
+ * (gh resolves the current branch's PR, fork-aware). That call cannot be pinned with -R, and origin here is parcadei, so its
+ * answer counts only when the PR url is in DEFAULT_REPO.
+ */
 function readLabels() {
   let branch;
   try { branch = git(['branch', '--show-current']).trim(); } catch { return null; }
   if (!branch) return null;
-  const r = ghRunner()(['pr', 'view', branch, '--json', 'labels', ...REPO_ARGS]);
-  if (r.status !== 0) return null;
-  try {
-    const labels = JSON.parse(r.stdout).labels;
-    return Array.isArray(labels) ? labels.map((l) => l?.name).filter((n) => typeof n === 'string') : null;
-  } catch { return null; }
+  const gh = ghRunner();
+  const pinned = gh(['pr', 'view', branch, '--json', 'labels', ...REPO_ARGS]);
+  if (pinned.status === 0) return labelNames(pinned.stdout);
+  const open = gh(['pr', 'view', '--json', 'labels,url']);
+  let url = '';
+  try { url = String(JSON.parse(open.stdout).url ?? ''); } catch { /* no JSON: not read */ }
+  return open.status === 0 && url.startsWith(`https://github.com/${DEFAULT_REPO}/pull/`) ? labelNames(open.stdout) : null;
 }
 
 const hasMatrix = (configText) => { try { return Boolean(JSON.parse(configText).matrix); } catch { return false; } };
