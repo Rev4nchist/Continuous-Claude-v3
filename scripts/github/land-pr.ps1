@@ -214,7 +214,8 @@ if (-not $NoSync) {
         # A link that stays keeps the temp worktree: no removal and no --force hint.
         $syncLinks = if (Test-Path -LiteralPath $syncWt) { Remove-WorktreeLinks -Path $syncWt } else { $null }
         if ($syncLinks -and ($syncLinks.Remaining.Count -or $syncLinks.Error)) {
-          Write-Host "  kept temp worktree $syncWt`: link not removed ($(@($syncLinks.Remaining) -join ', ')$($syncLinks.Error))"
+          $syncNamed = if ($syncLinks.Remaining.Count) { $syncLinks.Remaining -join ', ' } else { $syncLinks.Error }
+          Write-Host "  kept temp worktree $syncWt`: link not removed ($syncNamed)"
         } else {
           git -C $RepoPath worktree remove --force $syncWt 2>&1 | Out-Null
           if (Test-Path $syncWt) {
