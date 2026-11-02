@@ -18,6 +18,12 @@
 //   decide() or the ledger line lose the band, or carry it on a label event   -> B13, B14
 //   the checkpoint still recommends CodeRabbit below HIGH, or none from HIGH   -> B15 to B19
 //   a PR without a matrix block loses the old R2 to R5 rules                    -> B20
+//   a security-tier or critical file below HIGH drops the internal floor (aegis + critic) -> B31, B32
+//   the floor rule hides none from the options, or a plain PR gets the floor       -> B31, B32
+//   the floor turns a HIGH PR away from CodeRabbit or drops its R2/R3 rules      -> B33
+//   the RB line loses the security-tier file names (the RF line hides it)       -> B31
+//   a critical-only file is labelled a security-tier floor                       -> B32
+//   the none option says READY needs CI and proof only next to the RF line        -> B31, B32
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync, existsSync } from 'node:fs';
@@ -326,4 +332,52 @@ test('B30: when the pinned lookup finds no PR (a fork PR), the labels come from 
   const other = liveCheckpoint({ labels: ['risk:high'], pinnedFails: true, url: 'https://github.com/parcadei/Continuous-Claude-v3/pull/9' });
   assert.equal(other.out.recommended, null, 'a PR in another repo (origin is parcadei) never supplies the labels');
   assert.match(other.out.why[0], /labels/i);
+});
+
+// ---------- the security-tier floor (spec 3.1: internal floor, not a bot floor; option A) ----------
+
+const SECURITY = '.claude/hooks/src/pre-pr-gate.ts';
+
+test('B31: an ELEVATED PR with a security-tier file keeps none, names the file and requires aegis + critic', async () => {
+  const r = await recommendFor([SECURITY]);
+  assert.equal(r.band.band, 'ELEVATED');
+  assert.deepEqual(r.band.securityTier, [SECURITY]);
+  assert.equal(r.recommended, 'none', 'the floor is internal: no CodeRabbit PR bot (option A)');
+  assert.deepEqual(r.budget, [0, 0]);
+  const why = r.why.join(' ');
+  assert.match(why, /security.tier/i);
+  assert.ok(why.includes(SECURITY), 'the pane names the security-tier file');
+  assert.match(why, /aegis/);
+  assert.match(why, /critic/);
+  assert.equal(r.options[0].pathway, 'none', 'none stays the first option');
+  assert.ok(r.options.some((o) => o.pathway === 'coderabbit'), 'Dave can still press CodeRabbit (escalation)');
+  assert.match(r.why[0], /^Band ELEVATED \(/, 'why[0] is the RB line');
+  assert.ok(r.why[0].includes(`security-tier file(s) ${SECURITY}`), 'the RB line itself names the security-tier file');
+  assert.ok(r.why.some((w) => w.startsWith(`Security-tier floor (${SECURITY})`)), 'the RF line names its cause');
+  assert.match(r.options[0].reason, /aegis \+ critic/, 'the none option names the internal pass the RF line asks for');
+  assert.doesNotMatch(r.options[0].reason, /CI and proof only/);
+});
+
+test('B32: a critical file below HIGH gets the floor; a plain logic PR does not', async () => {
+  const crit = await recommendFor([GATE[0]]);
+  assert.equal(crit.band.band, 'ELEVATED');
+  assert.deepEqual(crit.band.securityTier, [], 'review-status.mjs is critical, not security tier');
+  assert.equal(crit.recommended, 'none');
+  assert.match(crit.why.join(' '), /aegis/);
+  assert.equal(crit.options[0].pathway, 'none');
+  assert.ok(crit.why.some((w) => w.startsWith(`Critical-file floor (${GATE[0]})`)), 'a critical-only file is a critical-file floor');
+  assert.ok(!crit.why.some((w) => /security.tier/i.test(w)), 'no line calls review-status.mjs security tier');
+  assert.match(crit.options[0].reason, /aegis \+ critic/);
+  const plain = await recommendFor(['apps/x/src/a.ts', 'apps/x/src/b.ts']);
+  assert.equal(plain.band.band, 'MID');
+  assert.doesNotMatch(plain.why.join(' '), /aegis/);
+  assert.equal(plain.options.find((o) => o.pathway === 'none').reason, 'No bot review. READY needs CI and proof only.', 'no floor: the none text is unchanged');
+});
+
+test('B33: a HIGH PR with a security-tier file still gets CodeRabbit and keeps R3 (Greptile line)', async () => {
+  const r = await recommendFor([...GATE.slice(0, 4), SECURITY]);
+  assert.equal(r.band.band, 'HIGH');
+  assert.equal(r.recommended, 'coderabbit');
+  assert.deepEqual(r.budget, [1, 1]);
+  assert.ok(r.why.some((w) => w.startsWith('Critical file')), 'R3 stays beside RB at HIGH');
 });
