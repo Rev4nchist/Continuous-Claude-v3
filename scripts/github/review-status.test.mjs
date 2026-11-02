@@ -3535,3 +3535,35 @@ test('FU-Q: an unbadged block after a good one is its own block; a Nitpick-badge
   const three = FU_242.replace(block, `${block}\n\n${nit}`);
   assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(three)] }), { findings: [{ id: FU_ID, location: FU_PLACE }], unidentified: 0 });
 });
+
+// Verifier round 2 on PR 245, minors (2026-11-02), both fail-open READY cases. Ways it can fail, one test each:
+//   a plain-markdown finding (no <details>, no badge) before the first block, or after a closed block, is invisible    -> FU-S
+//   an unclosed </details> on a Nitpick block swallows the next <details> block that has a marker and a Major mark     -> FU-T
+const fuNitpick = () => fuBlock().replace('alt="Outside diff"', 'alt="Nitpick"').replace(FU_ID, '00000000000000000000beef');
+const FU_PLAIN = `\u{1F7E0} Major: plain markdown finding\n\n<!-- cr-comment:v1:${FU_ID2} -->`;
+
+test('FU-S: plain text with a marker and a severity mark outside any block counts as unidentified; a marker alone does not', () => {
+  const nit = fuNitpick();
+  const wrap = (before, after) => FU_242.replace(fuBlock(), `${before}${nit}${after}`);
+  assert.ok(wrap('x', '').includes('x<details>'));
+  const none = { findings: [], unidentified: 0 };
+  const one = { findings: [], unidentified: 1 };
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap('', ''))] }), none);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap(`${FU_PLAIN}\n\n`, ''))] }), one, 'before the first block');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap('', `\n\n${FU_PLAIN}`))] }), one, 'after a closed block');
+  const marker = `<!-- cr-comment:v1:${FU_ID2} -->`;
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap(`${marker}\n\n`, `\n\n${marker}`))] }), none, 'a marker alone is ignored');
+  assert.equal(odEval([odLive(wrap('', `\n\n${FU_PLAIN}`))]).ready, false);
+});
+
+test('FU-T: a Nitpick block with an unclosed </details> does not swallow the next <details> block with a marker and a Major mark', () => {
+  const nit = fuNitpick().trimEnd();
+  assert.ok(nit.endsWith('</blockquote></details>'));
+  const open = nit.slice(0, -'</details>'.length);
+  const odd = fuBlock().replace(fuSummary(), '<summary><sub>x</sub></summary>').replace(FU_ID, FU_ID2);
+  const body = FU_242.replace(fuBlock(), `${open}\n\n${odd}`);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(body)] }), { findings: [], unidentified: 1 });
+  assert.equal(odEval([odLive(body)]).ready, false);
+  const closed = FU_242.replace(fuBlock(), `${nit}\n\n${odd}`);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(closed)] }), { findings: [], unidentified: 1 }, 'same result with the tag closed');
+});

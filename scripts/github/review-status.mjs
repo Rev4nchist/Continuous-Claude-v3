@@ -914,31 +914,59 @@ const FOLLOWUP_NITPICK = /^(?:Nitpick|Trivial)$/i;
 const countOf = (re, line) => (line.match(re) || []).length;
 
 /**
- * The blocks of the section, { alt, text }. A block starts at a top-level <details> line or at a finding badge line, so a block
- * whose badge is missing or reworded still gets its own block. A badge inside an open block sets its alt (the first badge wins;
- * a second badge starts a new block). alt is the badge alt text, or null when the block has none. Text before the first block is no block.
+ * Does the <details> that opens on line i carry a severity mark before it closes? Used for a nested <details>: if so, it is a
+ * new finding and not a part of the open block (an unclosed </details> keeps the depth above 0 and would hide it).
+ */
+function nestedHasSeverity(lines, fenced, i, end) {
+  let d = 0;
+  const text = [];
+  for (let j = i; j < end; j++) {
+    text.push(lines[j]);
+    if (!fenced[j]) d += countOf(DETAILS_OPEN, lines[j]) - countOf(DETAILS_CLOSE, lines[j]);
+    if (d <= 0) break;
+  }
+  return severityMarks(text.join('\n')).length > 0;
+}
+
+/**
+ * The blocks of the section and the text outside every block: { blocks: [{ alt, text }], outside: [lines per run] }.
+ * A block starts at a top-level <details> line, at a <details> that carries a severity mark even when nested (so an unclosed
+ * </details> cannot hide it), or at a finding badge line, so a block whose badge is missing or reworded still gets its own block.
+ * A badge inside an open block sets its alt (the first badge wins; a second badge starts a new block). alt is the badge alt text,
+ * or null when the block has none. A line at depth 0 after a closed <details> block, or before the first block, is outside text
+ * (one run of lines between two blocks); a badge-only block has no end tag, so it keeps the lines that follow it.
  */
 function followUpBlocks(lines, fenced, start) {
-  const end = lines.findIndex((l, i) => i > start && !fenced[i] && FOLLOWUP_END.test(l));
+  const stop = lines.findIndex((l, i) => i > start && !fenced[i] && FOLLOWUP_END.test(l));
+  const end = stop < 0 ? lines.length : stop;
   const blocks = [];
+  const outside = [[]];
   let depth = 0;
-  for (let i = start + 1; i < (end < 0 ? lines.length : end); i++) {
+  for (let i = start + 1; i < end; i++) {
     const cur = blocks[blocks.length - 1];
+    let into = cur?.text;
     if (!fenced[i]) {
       const alt = followUpBadge(lines[i]);
       const opens = countOf(DETAILS_OPEN, lines[i]);
-      const attach = alt !== null && cur && cur.alt === null && depth > 0;
-      if (attach) cur.alt = alt;
-      else if ((depth === 0 && opens > 0) || alt !== null) blocks.push({ alt, text: [] });
-      depth = Math.max(0, depth + opens - countOf(DETAILS_CLOSE, lines[i]));
+      const split = opens > 0 && depth > 0 && nestedHasSeverity(lines, fenced, i, end);
+      if (alt !== null && cur && cur.alt === null && depth > 0 && !split) cur.alt = alt;
+      else if ((depth === 0 && opens > 0) || split || alt !== null) {
+        blocks.push({ alt, text: [], bare: opens === 0 });
+        outside.push([]);
+        into = blocks[blocks.length - 1].text;
+      } else if (depth === 0 && !cur?.bare) into = outside[outside.length - 1];
+      depth = Math.max(0, (split ? 0 : depth) + opens - countOf(DETAILS_CLOSE, lines[i]));
     }
-    if (blocks.length > 0) blocks[blocks.length - 1].text.push(lines[i]);
+    if (into) into.push(lines[i]);
   }
-  return blocks;
+  return { blocks, outside };
 }
 
 /** The ids of the markers in a block's text. */
 const blockMarkers = (joined) => [...joined.matchAll(new RegExp(OUTSIDE_MARKER.source, 'gi'))].map((m) => m[1].toLowerCase());
+
+/** Text outside any block that has a marker and a severity mark is a finding written without a block: it fails closed. The count of it. */
+const unplacedFindings = (joined) => (blockMarkers(joined).length > 0 && severityMarks(joined).length > 0 ? Math.max(1, new Set(blockMarkers(joined)).size) : 0);
 
 /**
  * The Follow-up Comments section of one review body, one block per finding (a block starts at its <details> or its badge line). Pure.
@@ -957,7 +985,9 @@ function followUpFindings(body) {
   let unmarked = 0;
   let marked = 0;
   let unknown = 0;
-  for (const { alt, text } of followUpBlocks(lines, fencedLines(lines), start)) {
+  const { blocks, outside } = followUpBlocks(lines, fencedLines(lines), start);
+  for (const run of outside) unknown += unplacedFindings(run.join('\n'));
+  for (const { alt, text } of blocks) {
     const joined = text.join('\n');
     const ids = blockMarkers(joined);
     if (alt !== null && FOLLOWUP_NITPICK.test(alt)) continue;
