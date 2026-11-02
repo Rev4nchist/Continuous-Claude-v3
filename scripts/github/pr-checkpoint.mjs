@@ -196,6 +196,23 @@ function stampProblem(facts) {
 const hit = (rule, pathway, budget, why) => ({ rule, pathway, budget, why });
 const list = (paths) => paths.join(', ');
 
+/**
+ * The spec 3.1 floor: the PR touches a matrix.security_tier or a checkpoint.critical file. Below HIGH it sets an internal review
+ * floor, not a bot floor: aegis + critic run before READY (rule RF), so auto-confirm never records the PR. Same body in PR A and B.
+ */
+export function floorApplies(c) {
+  return Boolean(c.band?.securityTier?.length || c.critical.length);
+}
+
+/** The floor's cause for a why line: "Security-tier floor (a)", "Critical-file floor (b)", or both joined by "and". */
+function floorLabel(c) {
+  const tier = c.band.securityTier;
+  const crit = c.critical.filter((p) => !tier.includes(p));
+  const parts = [tier.length ? `security-tier floor (${list(tier)})` : '', crit.length ? `critical-file floor (${list(crit)})` : ''];
+  const text = parts.filter(Boolean).join(' and ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function parserRule(c) {
   if (c.parser.length === 0) return null;
   return hit('R2', 'coderabbit', [1, 0], [`Parser file ${list(c.parser)}. Do not loop. Use a vetted parser.`]);
@@ -250,7 +267,8 @@ function smallRule(c) {
  */
 function bandRule(c) {
   const b = c.band;
-  const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}`;
+  const tier = b.securityTier?.length ? `, security-tier file(s) ${list(b.securityTier)}` : '';
+  const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}${tier}`;
   if (!['HIGH', 'CRITICAL'].includes(b.band)) {
     return hit('RB', 'none', [0, 0], [`Band ${b.band} (${facts}): no CodeRabbit PR bot below HIGH. The internal review stack covers it.`]);
   }
@@ -278,10 +296,19 @@ function hitsFor(c) {
   return [noneRule(c) ?? smallRule(c) ?? fallbackRule(c)];
 }
 
+/**
+ * RF (spec 3.1, option A): the security-tier floor below HIGH. A security-tier or critical file sets an internal review floor, not a
+ * bot floor: the pathway stays none, and the why line says aegis + critic must pass before READY. HIGH and CRITICAL keep R2 to R4.
+ */
+function floorRule(c) {
+  if (!floorApplies(c)) return null;
+  return hit('RF', 'none', [0, 0], [`${floorLabel(c)}: run the internal pass (aegis + critic) before READY. No CodeRabbit PR bot; press CodeRabbit to escalate.`]);
+}
+
 /** With a matrix block the band rule replaces R1, RS and R5. A HIGH or CRITICAL PR keeps R2, R3 and R4 beside it (parser budget, Greptile). */
 function bandHits(c) {
   const rb = bandRule(c);
-  if (rb.pathway === 'none') return [rb];
+  if (rb.pathway === 'none') return [rb, floorRule(c)].filter(Boolean);
   return [rb, ...[parserRule(c), criticalRule(c), r3Rule(c)].filter(Boolean)];
 }
 
@@ -299,7 +326,8 @@ function combine(hits) {
 function orderFor(c, picked) {
   if (c.dependabot) return ['none']; // bots refuse bot PRs: no paid option is offered (Dave decision 3)
   const only = (rule) => picked.rules.length === 1 && picked.rules[0] === rule;
-  if (only('R1') || only('RB')) return picked.pathway === 'none' ? ['none', 'coderabbit'] : ['coderabbit', 'both'];
+  const band = picked.rules[0] === 'RB' && picked.rules.every((r) => r === 'RB' || r === 'RF');
+  if (only('R1') || band) return picked.pathway === 'none' ? ['none', 'coderabbit'] : ['coderabbit', 'both'];
   const waitFirst = c.capacity.band === 'high' ? ['wait'] : [];
   if (only('RS')) return picked.pathway === 'none' ? ['none', 'coderabbit', 'both'] : [...waitFirst, 'coderabbit', 'both'];
   if (only('R5')) return [...waitFirst, 'coderabbit', ...(cliClean(c.cli) ? ['none'] : []), 'both'];
@@ -323,8 +351,10 @@ function costOf(c, picked, pathway) {
 
 function optionOf(c, picked, pathway) {
   const cost = costOf(c, picked, pathway);
+  // RF: the none option must not contradict the floor line, which asks for aegis + critic before READY.
+  const floor = picked.rules.includes('RF');
   const reason = {
-    none: 'No bot review. READY needs CI and proof only.',
+    none: floor ? 'No bot review. READY needs CI, proof and the internal pass (aegis + critic).' : 'No bot review. READY needs CI and proof only.',
     wait: 'Stay a draft and spend nothing until the CodeRabbit 7-day count drops.',
     coderabbit: `CodeRabbit ${cost[0]}+${cost[1]}.`,
     both: c.greptile.reason,
