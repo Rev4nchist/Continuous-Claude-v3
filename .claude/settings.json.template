@@ -474,6 +474,19 @@
         ]
       },
       {
+        "matcher": "Bash|PowerShell|Artifact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 3,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/lane-board-republish-reminder.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "Grep",
         "hooks": [
           {

@@ -1166,6 +1166,18 @@ export function codeRabbitSeverity(text) {
   return severityMarks(text).reduce((best, s) => (SEVERITY_RANK[s] > SEVERITY_RANK[best] ? s : best), 'unknown');
 }
 
+// An inline comment holds ONE finding, and its severity is the headline: the first content line, after the HTML comment markers,
+// starts `**<picture>..</picture> Minor**` (or the emoji form). The prose can quote other marks (the #252 Minors quote a
+// "🟠 Major" example), so the highest mark anywhere is wrong for an inline comment. No headline fails closed to codeRabbitSeverity.
+const INLINE_HEADLINE = /^\*\*(?:<picture>[\s\S]*?<\/picture>|[\u{1F534}\u{1F7E0}\u{1F7E1}\u{1F535}\u{1F7E2}\u{1F9F9}])\s*(Critical|Major|Minor|Trivial|Nitpick)\*\*/iu;
+
+/** The severity of one CodeRabbit inline comment: its headline mark, else the highest mark in the text, else 'unknown'. */
+export function inlineCommentSeverity(text) {
+  const first = String(text ?? '').replace(/<!--[\s\S]*?-->/g, '').trimStart().split('\n', 1)[0];
+  const m = INLINE_HEADLINE.exec(first);
+  return m ? SEVERITY_OF[m[1].toLowerCase()] : codeRabbitSeverity(text);
+}
+
 /**
  * Round order (lane review-status-bugs, bug 2). A round is a CodeRabbit review object (commit_id, submitted_at) or a summary-only round
  * (the commit it covers, the comment updated_at). The summary comment is edited on every notice, chat update and re-summary, so its
@@ -1335,7 +1347,7 @@ function reviewBlockers({ newest, reviewComments }, head) {
   const inline = Number(stated?.[1] ?? 0);
   if (reviewComments.length < inline) blocks.push(`only ${reviewComments.length} of ${inline} inline comments were read`);
   for (const c of reviewComments) {
-    const s = codeRabbitSeverity(c?.body);
+    const s = inlineCommentSeverity(c?.body);
     if (s !== 'minor') blocks.push(s === 'unknown' ? 'an inline comment has no severity marker' : `an inline comment is ${s}`);
   }
   return blocks;
