@@ -232,7 +232,7 @@ if (/<\/script/i.test(kbClient)) throw new Error('kanban-client.js must not cont
 const kbScript = `${placeLanes.toString()}
 ${kbClient}`;
 
-const html = `<meta name="viewport" content="width=device-width, initial-scale=1">
+const html = `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Agentic OS — Lane Board</title>
 <style>
   :root {
