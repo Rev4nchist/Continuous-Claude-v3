@@ -810,6 +810,18 @@ test('isExcluded ignores letter case on win32 (NTFS) and keeps it on linux', () 
   assert.equal(isExcluded('Artifacts-extra/x', 'win32'), false);
 });
 
+test('on win32 a head that changes Artifacts/ and .ClaudeDocs/ (other case) leaves them out of PR.diff; on linux they stay', async () => {
+  const { root, base, head } = repoWithHeadFiles({ 'Artifacts/x.txt': 'MIXED CASE ART\n', '.ClaudeDocs/d.md': 'MIXED CASE DOC\n', 'src/real.txt': 'real\n' });
+  const diffOf = async (platform) => {
+    const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees'), platform });
+    try { return readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8'); } finally { prep.cleanup(); }
+  };
+  const win = await diffOf('win32');
+  assert.match(win, /src\/real\.txt/);
+  assert.doesNotMatch(win, /MIXED CASE|Artifacts|ClaudeDocs/);
+  assert.match(await diffOf('linux'), /MIXED CASE ART/, 'on a case-sensitive host a differently cased folder is a real folder');
+});
+
 test('a file renamed from a reviewed path into an excluded folder still lists the old path as removed', async () => {
   const root = tmp('rename');
   const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };

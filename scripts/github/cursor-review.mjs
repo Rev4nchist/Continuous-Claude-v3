@@ -462,6 +462,12 @@ export function isExcluded(rel, platform = process.platform) {
   return TREE_EXCLUDES.some((x) => p === fold(x) || p.startsWith(`${fold(x)}/`));
 }
 
+/** Git pathspecs that leave TREE_EXCLUDES out of PR.diff. On win32 they ignore case (icase), as isExcluded and the folder rmSync do. */
+export function excludePathspecs(platform = process.platform) {
+  const magic = platform === 'win32' ? 'exclude,icase' : 'exclude';
+  return TREE_EXCLUDES.map((x) => `:(${magic})${x}`);
+}
+
 /** Changed paths between two commits, as git reports them with -z (no quoting), minus the folders left out of the tree. */
 function changedPaths(root, base, head, diffFilter) {
   // --no-renames: a file moved into an excluded folder still lists its old path (as a delete) instead of one excluded rename.
@@ -478,7 +484,7 @@ function entryExists(p) {
  * Resolves the input to base and head, then builds the clean tree. The diff base is the merge base, so a branch that merged
  * main shows only its own change. { ref, base, head, dir, files, cleanup }.
  */
-export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = defaultGh, repo = DEFAULT_REPO, remote = 'fork', extract = defaultExtract }) {
+export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = defaultGh, repo = DEFAULT_REPO, remote = 'fork', extract = defaultExtract, platform = process.platform }) {
   let head;
   let baseSide;
   let ref;
@@ -514,7 +520,7 @@ export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = d
     // Any non-zero status is a failed prepare: a part-way checkout leaves a partial tree, and a review of it could answer clean.
     if (tar.status !== 0) throw new Error(`tree checkout failed (status ${tar.status}): ${(tar.stderr ?? '').trim()}`);
     for (const x of TREE_EXCLUDES) rmSync(path.join(dir, x), { recursive: true, force: true });
-    writeFileSync(path.join(dir, 'PR.diff'), gitOut(root, ['diff', '--no-color', '--no-ext-diff', mergeBase, head, '--', '.', ...TREE_EXCLUDES.map((x) => `:(exclude)${x}`)]));
+    writeFileSync(path.join(dir, 'PR.diff'), gitOut(root, ['diff', '--no-color', '--no-ext-diff', mergeBase, head, '--', '.', ...excludePathspecs(platform)]));
     const files = changedPaths(root, mergeBase, head);
     const missing = changedPaths(root, mergeBase, head, 'ACMRT').filter((f) => !entryExists(path.join(dir, f)));
     if (missing.length > 0) throw new Error(`the review tree is missing ${missing.length} changed file(s): ${missing.slice(0, 5).join(', ')}`);
