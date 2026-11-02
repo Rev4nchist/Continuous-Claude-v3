@@ -50,6 +50,12 @@ A small PR needs no bot review when its CLI run is clean. Small means 3 files or
 lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recommends `none`, at any
 7-day count. A Major, a Critical or a missing CLI result on a small PR recommends CodeRabbit 1+0.
 
+A change that adds a state or an event needs a state x event table (`scripts/checks/state-table.mjs`).
+For each new or changed state, list every event that can arrive in it. Include stale, duplicate and
+out-of-order events, and timers. Each pair is a cell with an `expect`, or `na` with the reason.
+Also cover each kind in `KINDS` (stale-read, duplicate, second-entry, timer-overlap, retained-flag):
+name an event that runs it, or give `na` with the reason.
+
 1. Run `node scripts/github/pre-pr.mjs --body <draft.md>` from the repo root. Use a clean branch and a
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
    Evidence against the head. It runs one `cr review --agent`. Fix the findings, commit, and run it again.
@@ -349,6 +355,8 @@ Every PR body names one proof type and shows its evidence. `review-status.mjs` r
 body only, never from a comment. Write the Evidence block from `pr-and-commit-style.md` when you open
 the PR. After each push, run the GREEN check again on the new head and update the GREEN line only.
 Keep the CodeRabbit and Greptile blocks in the body byte for byte.
+Edit the body with a Node or Bash read-modify-write that keeps LF line endings. PowerShell
+`gh api ... --jq .body | Out-File` writes CRLF and changes the CodeRabbit block.
 
 | Proof type | Use it for | RED (BEFORE for a refactor) | GREEN, on the head |
 |---|---|---|---|
