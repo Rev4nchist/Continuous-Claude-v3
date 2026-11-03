@@ -7,10 +7,21 @@
 // - Release deletes the lock only while it still holds this holder's token, so a former holder
 //   never deletes a replacement lock.
 // - Every retry path sleeps and respects lockWaitMs. An unreadable or undeletable lock counts as held.
-// Known limit: two processes that judge the same dead lock stale at the same instant can race on the
-// takeover. Each re-reads the lock and takes over only when it still holds the content it judged stale.
+// - A takeover runs under a mutex, `<lock>.takeover`, created with 'wx' and holding "<pid> <token>".
+//   A taker that cannot get the mutex does not touch the lock. The taker that holds it judges the lock
+//   stale AGAIN, then unlinks it, then releases the mutex (only while it still holds its own token).
+//   The lock never changes while the mutex is held: other takers wait outside, a dead owner cannot release,
+//   and a fresh acquirer's 'wx' fails while the stale lock exists. After the unlink, 'wx' picks one winner.
+//   No live lock is ever moved, so there is no gap in which the lock path is absent while its owner runs.
+// - A mutex whose owner pid is gone and which is older than MUTEX_STALE_MS is removed by the next taker.
+// Known limit: that removal is itself a read-then-unlink. It needs a taker that crashed inside the few
+// syscalls between its mutex create and release, then two other processes that judge that dead mutex stale
+// in the same gap, then a third event between their steps. The earlier rename design needed only two live
+// takers and one fresh acquirer, so this window is far smaller and needs a crash.
 import { randomUUID } from 'node:crypto';
 import { closeSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
+
+const MUTEX_STALE_MS = 2000;
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
@@ -33,6 +44,35 @@ function staleContent(lock, lockStaleMs) {
   return pidAlive(pid) ? null : content;
 }
 
+/** Creates `path` with 'wx' and writes the token. Throws EEXIST when the file exists. */
+function createExclusive(path, token) {
+  const fd = openSync(path, 'wx');
+  try { writeSync(fd, token); } finally { closeSync(fd); }
+}
+
+/** Removes a takeover mutex whose owner is gone. Its content must be unchanged since the stale judgement. */
+function clearDeadMutex(mutex) {
+  const dead = staleContent(mutex, MUTEX_STALE_MS);
+  if (dead !== null && readLock(mutex) === dead) unlinkSync(mutex);
+}
+
+/** Removes the lock when it is stale, under the takeover mutex. Returns true when this process removed it. */
+function takeOver(lock, lockStaleMs) {
+  const mutex = `${lock}.takeover`;
+  const token = `${process.pid} ${randomUUID()}`;
+  try { createExclusive(mutex, token); } catch (err) {
+    if (err.code === 'EEXIST') clearDeadMutex(mutex);
+    return false; // another taker is at work: leave the lock alone and retry
+  }
+  try {
+    if (staleContent(lock, lockStaleMs) === null) return false; // a fresh lock replaced the one judged stale
+    unlinkSync(lock);
+    return true;
+  } finally {
+    try { if (readLock(mutex) === token) unlinkSync(mutex); } catch { /* already gone */ }
+  }
+}
+
 /**
  * Runs fn while holding `<file>.lock` and returns its value.
  * Returns { ok: false, reason: 'lock', detail } when the lock stays held past lockWaitMs; fn does not run.
@@ -44,16 +84,14 @@ export function withLock(file, { lockWaitMs = 5000, lockStaleMs = 30_000 } = {},
   const began = Date.now();
   for (;;) {
     try {
-      const fd = openSync(lock, 'wx');
-      try { writeSync(fd, token); } finally { closeSync(fd); }
+      createExclusive(lock, token);
       break;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
       let taken = false;
-      try {
-        const stale = staleContent(lock, lockStaleMs);
-        if (stale !== null && readLock(lock) === stale) { unlinkSync(lock); taken = true; }
-      } catch { /* the lock vanished or cannot be removed: wait and retry below */ }
+      try { // the cheap judgement filters; takeOver judges again under the mutex
+        taken = staleContent(lock, lockStaleMs) !== null && takeOver(lock, lockStaleMs);
+      } catch { /* the lock vanished: wait and retry below */ }
       if (taken) continue;
       if (Date.now() - began >= lockWaitMs) return { ok: false, reason: 'lock', detail: `the lock ${lock} is held by another session` };
       sleepSync(25);
