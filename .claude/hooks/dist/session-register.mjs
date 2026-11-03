@@ -5347,7 +5347,7 @@ var require_lib2 = __commonJS({
 });
 
 // src/session-register.ts
-import { readFileSync as readFileSync3 } from "fs";
+import { readFileSync as readFileSync5 } from "fs";
 
 // node_modules/pg/esm/index.mjs
 var import_lib = __toESM(require_lib2(), 1);
@@ -5414,41 +5414,6 @@ async function withPgClient(fn) {
     }
   }
 }
-function describeError(err) {
-  if (!(err instanceof Error)) return String(err);
-  const parts = [];
-  if (err.message) parts.push(err.message);
-  const code = err.code;
-  if (code) parts.push(`code=${code}`);
-  const nested = err.errors;
-  if (Array.isArray(nested) && nested.length > 0) {
-    parts.push(
-      nested.slice(0, 3).map((e) => e instanceof Error ? e.message || e.code : String(e)).filter(Boolean).join("; ")
-    );
-  }
-  return parts.filter(Boolean).join(" ") || err.constructor.name;
-}
-async function withPgClientOrFallback(fn, fallback, context) {
-  try {
-    return { value: await withPgClient(fn), degraded: false };
-  } catch (err) {
-    if (err instanceof MissingDbUrlError) {
-      return { value: fallback, degraded: true, error: err.message };
-    }
-    const message = describeError(err);
-    const code = err?.code;
-    const schemaFault = code === "42703" || code === "42P01" || code === "42883";
-    if (schemaFault) {
-      console.error(
-        `[coordination] ${context} SCHEMA OUT OF DATE (${code}): ${message}
-[coordination] the database is reachable -- it is missing objects this code needs. Apply scripts/coordination/migrations/001-file-claims-leases.sql`
-      );
-    } else {
-      console.error(`[coordination] ${context} degraded: ${message}`);
-    }
-    return { value: fallback, degraded: true, error: message };
-  }
-}
 
 // src/shared/leases.ts
 var FILE_LEASE_MS = 10 * 60 * 1e3;
@@ -5480,32 +5445,6 @@ async function registerSession(sessionId, project, workingOn = "") {
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
-}
-async function getActiveSessions(project) {
-  const { value, degraded } = await withPgClientOrFallback(
-    async (client) => {
-      const sql = `
-        SELECT id, project, working_on,
-               started_at     AT TIME ZONE 'UTC' AS started_at,
-               last_heartbeat AT TIME ZONE 'UTC' AS last_heartbeat
-        FROM sessions
-        WHERE GREATEST(last_heartbeat, last_activity_at) > NOW() - INTERVAL '5 minutes'
-        ${project ? "AND project = $1" : ""}
-        ORDER BY started_at DESC
-      `;
-      const res = await client.query(sql, project ? [project] : []);
-      return res.rows.map((row) => ({
-        id: row.id,
-        project: row.project,
-        working_on: row.working_on,
-        started_at: row.started_at ? row.started_at.toISOString() : null,
-        last_heartbeat: row.last_heartbeat ? row.last_heartbeat.toISOString() : null
-      }));
-    },
-    [],
-    "getActiveSessions"
-  );
-  return { success: !degraded, sessions: value };
 }
 
 // src/shared/session-id.ts
@@ -5606,15 +5545,344 @@ function initActivity(sessionId) {
   writeFileSync2(filePath, JSON.stringify(activity), { encoding: "utf-8" });
 }
 
+// src/shared/session-identity.ts
+import { closeSync as closeSync2, existsSync as existsSync4, mkdirSync as mkdirSync4, openSync as openSync2, readFileSync as readFileSync4, readSync, readdirSync, statSync as statSync3 } from "fs";
+import { homedir as homedir3 } from "os";
+import { join as join6 } from "path";
+
+// src/shared/atomic-write.ts
+import {
+  writeFileSync as writeFileSync3,
+  renameSync as renameSync2,
+  unlinkSync,
+  existsSync as existsSync3,
+  openSync,
+  closeSync,
+  readFileSync as readFileSync3,
+  statSync as statSync2,
+  constants
+} from "fs";
+import { dirname as dirname2, basename, join as join4 } from "path";
+
+// src/shared/logger.ts
+import { appendFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, statSync, renameSync } from "fs";
+import { dirname, join as join3 } from "path";
+import { homedir as homedir2 } from "os";
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join3(homedir2(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
+var MAX_LOG_SIZE = 5 * 1024 * 1024;
+var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
+var LEVEL_ORDER = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function shouldLog(level) {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
+}
+function ensureLogDir() {
+  if (!existsSync2(LOG_DIR)) {
+    mkdirSync3(LOG_DIR, { recursive: true });
+  }
+}
+function rotateIfNeeded() {
+  try {
+    if (existsSync2(LOG_FILE)) {
+      const stat = statSync(LOG_FILE);
+      if (stat.size > MAX_LOG_SIZE) {
+        const rotated = LOG_FILE + ".1";
+        renameSync(LOG_FILE, rotated);
+      }
+    }
+  } catch {
+  }
+}
+function getSessionId() {
+  return process.env.CLAUDE_SESSION_ID || void 0;
+}
+function writeLog(entry) {
+  try {
+    ensureLogDir();
+    rotateIfNeeded();
+    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch {
+  }
+}
+function createLogger(hookName) {
+  function log2(level, msg, data) {
+    if (!shouldLog(level)) return;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      level,
+      hook: hookName,
+      msg,
+      sessionId: getSessionId()
+    };
+    if (data && Object.keys(data).length > 0) {
+      entry.data = data;
+    }
+    writeLog(entry);
+    if (level === "error" || level === "warn") {
+      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
+    }
+  }
+  return {
+    debug: (msg, data) => log2("debug", msg, data),
+    info: (msg, data) => log2("info", msg, data),
+    warn: (msg, data) => log2("warn", msg, data),
+    error: (msg, data) => log2("error", msg, data)
+  };
+}
+
+// src/shared/atomic-write.ts
+var log = createLogger("atomic-write");
+function atomicWriteSync(filePath, content) {
+  const dir = dirname2(filePath);
+  const tmpFile = join4(dir, `.${basename(filePath)}.tmp.${process.pid}`);
+  try {
+    writeFileSync3(tmpFile, content, "utf-8");
+    renameSync2(tmpFile, filePath);
+  } catch (err) {
+    try {
+      if (existsSync3(tmpFile)) unlinkSync(tmpFile);
+    } catch {
+    }
+    throw err;
+  }
+}
+
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+import { tmpdir } from "os";
+import { join as join5 } from "path";
+var RELAY_ERROR_LOG = join5(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/shared/session-identity.ts
+var NAME_CLIP = 16;
+var CLEAR_WINDOW_MS = 12e4;
+var TAIL_BYTES = 256 * 1024;
+var HEAD_BYTES = 512 * 1024;
+var HEAD_LINES = 200;
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var SAFE_ID_RE = /^[0-9a-fA-F-]{8,64}$/;
+function identityDir() {
+  return process.env.CCV3_IDENTITY_DIR || join6(homedir3(), ".claude", "state", "identity");
+}
+var shortId = (uuid) => uuid.slice(0, 8);
+function identityPath(uuid) {
+  return SAFE_ID_RE.test(uuid) ? join6(identityDir(), `${uuid}.json`) : null;
+}
+function asString(v) {
+  return typeof v === "string" && v ? v : null;
+}
+function readIdentity(uuid) {
+  if (!uuid) return null;
+  const file = identityPath(uuid);
+  if (!file) return null;
+  try {
+    const o = JSON.parse(readFileSync4(file, "utf8"));
+    if (!o || typeof o !== "object" || typeof o.uuid !== "string") return null;
+    return {
+      uuid,
+      short: shortId(uuid),
+      name: asString(o.name),
+      previous: asString(o.previous),
+      cwd: asString(o.cwd),
+      endedAt: asString(o.endedAt),
+      endReason: asString(o.endReason),
+      updatedAt: asString(o.updatedAt) ?? ""
+    };
+  } catch {
+    return null;
+  }
+}
+function writeIdentity(uuid, patch) {
+  const file = identityPath(uuid);
+  if (!file) return null;
+  const cur = readIdentity(uuid);
+  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] : null;
+  const next = {
+    uuid,
+    short: shortId(uuid),
+    name: pick("name"),
+    previous: pick("previous"),
+    cwd: pick("cwd"),
+    endedAt: pick("endedAt"),
+    endReason: pick("endReason"),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  try {
+    mkdirSync4(identityDir(), { recursive: true });
+    atomicWriteSync(file, JSON.stringify(next, null, 2));
+    return next;
+  } catch {
+    return null;
+  }
+}
+function clipName(name) {
+  const one = (name ?? "").replace(/\s+/g, " ").trim();
+  if (!one) return null;
+  return one.length > NAME_CLIP ? one.slice(0, NAME_CLIP) : one;
+}
+function label(uuid, name) {
+  const n = clipName(name === void 0 ? readIdentity(uuid)?.name : name);
+  return n ? `${n} #${shortId(uuid)}` : `#${shortId(uuid)}`;
+}
+function fileOffset(path, size, start, len) {
+  const fd = openSync2(path, "r");
+  try {
+    const buf = Buffer.alloc(Math.min(len, size - start));
+    readSync(fd, buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally {
+    closeSync2(fd);
+  }
+}
+function lastCustomTitle(transcriptPath) {
+  if (!transcriptPath) return null;
+  try {
+    const size = statSync3(transcriptPath).size;
+    const start = Math.max(0, size - TAIL_BYTES);
+    const lines = fileOffset(transcriptPath, size, start, TAIL_BYTES).split("\n");
+    if (start > 0) lines.shift();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"custom-title"')) continue;
+      try {
+        const o = JSON.parse(lines[i]);
+        if (o.type === "custom-title" && asString(o.customTitle)) return String(o.customTitle);
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveName(sessionTitle, transcriptPath) {
+  return asString(sessionTitle) ?? lastCustomTitle(transcriptPath);
+}
+function previousFromTranscript(transcriptPath, current) {
+  if (!transcriptPath) return null;
+  let parent = null;
+  try {
+    const size = statSync3(transcriptPath).size;
+    const lines = fileOffset(transcriptPath, size, 0, HEAD_BYTES).split("\n").slice(0, HEAD_LINES);
+    for (const line of lines) {
+      try {
+        const id = JSON.parse(line).sessionId;
+        if (typeof id !== "string" || !UUID_RE.test(id)) continue;
+        if (id === current) return parent;
+        parent = id;
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return parent;
+}
+var normCwd = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+function previousFromClear(current, cwd, now = Date.now(), name) {
+  if (!cwd) return null;
+  let cands = [];
+  const claimed = /* @__PURE__ */ new Set();
+  try {
+    for (const f of readdirSync(identityDir())) {
+      if (!f.endsWith(".json")) continue;
+      const id = readIdentity(f.slice(0, -5));
+      if (!id) continue;
+      if (id.uuid !== current && id.previous) claimed.add(id.previous);
+      if (id.uuid === current || id.endReason !== "clear" || !id.endedAt || !id.cwd) continue;
+      const at = Date.parse(id.endedAt);
+      if (!Number.isFinite(at) || now - at > CLEAR_WINDOW_MS || at > now + 5e3) continue;
+      if (normCwd(id.cwd) !== normCwd(cwd)) continue;
+      cands.push(id);
+    }
+  } catch {
+  }
+  cands = cands.filter((c) => !claimed.has(c.uuid));
+  const want = clipName(name)?.toLowerCase();
+  if (want) {
+    const same = cands.filter((c) => clipName(c.name)?.toLowerCase() === want);
+    if (same.length) cands = same;
+  }
+  return cands.length === 1 ? cands[0].uuid : null;
+}
+function resolvePrevious(source, current, transcriptPath, cwd, now = Date.now(), name) {
+  if (source === "resume" || source === "fork") return previousFromTranscript(transcriptPath, current);
+  if (source === "clear") return previousFromClear(current, cwd, now, name);
+  return null;
+}
+function runAdopt(newUuid, oldUuid, spawnFn = spawnDetachedHidden) {
+  try {
+    const repo = process.env.CCV3_REPO || join6(homedir3(), "continuous-claude");
+    const lane = join6(repo, "scripts", "coordination", "lane.mjs");
+    if (!existsSync4(lane)) return false;
+    const child = spawnFn(process.execPath, [lane, "adopt", "--from", oldUuid], {
+      env: { ...process.env, CLAUDE_CODE_SESSION_ID: newUuid },
+      // No spawn `timeout`: it does not bound a detached child. The pg timeouts in lane.mjs do.
+      stdio: "ignore"
+    });
+    child.on?.("error", () => {
+    });
+    child.unref?.();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // src/session-register.ts
+function recordEnd(input) {
+  if (!input.session_id) return;
+  writeIdentity(input.session_id, {
+    endedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    endReason: input.reason || "other",
+    cwd: input.cwd
+  });
+}
+function recordStart(input) {
+  const uuid = input.session_id;
+  if (!uuid) return "#--------";
+  const name = resolveName(input.session_title, input.transcript_path);
+  const previous = resolvePrevious(input.source, uuid, input.transcript_path, input.cwd, Date.now(), name);
+  const id = writeIdentity(uuid, {
+    ...name ? { name } : {},
+    ...previous ? { previous } : {},
+    cwd: input.cwd,
+    endedAt: null,
+    endReason: null
+  });
+  if (previous) runAdopt(uuid, previous);
+  return label(uuid, id?.name ?? name);
+}
 async function main() {
   let input;
   try {
-    const stdinContent = readFileSync3(0, "utf-8");
+    const stdinContent = readFileSync5(0, "utf-8");
     input = JSON.parse(stdinContent);
   } catch {
     console.log(JSON.stringify({ result: "continue" }));
     return;
+  }
+  if (input.hook_event_name === "SessionEnd") {
+    try {
+      recordEnd(input);
+    } catch {
+    }
+    console.log(JSON.stringify({}));
+    return;
+  }
+  let me = "#--------";
+  try {
+    me = recordStart(input);
+  } catch {
   }
   const sessionId = resolveSessionId(input.session_id);
   const project = canonicalProject(input.cwd);
@@ -5632,32 +5900,18 @@ async function main() {
   if (!registerResult.success) {
     console.error(`[session-register] registration failed: ${registerResult.error}`);
   }
-  const sessionsResult = await getActiveSessions(project);
-  const otherSessions = sessionsResult.sessions.filter((s) => s.id !== sessionId);
-  let awarenessMessage = `
+  const awarenessMessage = `
 <system-reminder>
 MULTI-SESSION COORDINATION ACTIVE
 
-Session: ${sessionId}
+You are ${me}.
 Project: ${projectName}
-`;
-  if (otherSessions.length > 0) {
-    awarenessMessage += `
-Active peer sessions (${otherSessions.length}):
-${otherSessions.map((s) => `  - ${s.id}: ${s.working_on || "working..."}`).join("\n")}
 
 Coordination features:
 - File edits are tracked to prevent conflicts
 - Research findings are shared automatically
 - Use Task tool normally - coordination happens via hooks
-`;
-  } else {
-    awarenessMessage += `
-No other sessions active on this project.
-You are the only session currently working here.
-`;
-  }
-  awarenessMessage += `</system-reminder>`;
+</system-reminder>`;
   const output = {
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: awarenessMessage }
   };

@@ -205,6 +205,8 @@ export type BoardLane = {
   state: string
   mine: boolean
   owner: string | null
+  /** The owner's session name (`owner_name` of `board --json`): a string, null when the owner has no name, absent when the board has no such field. */
+  ownerName?: string | null
   live?: boolean
   note?: string
   scope?: string
@@ -355,6 +357,8 @@ declare module 'claude-code' {
       refused: boolean
       /** When the session last did anything (a prompt, a turn start or end, a main-loop tool call): an open ask stays fresh 24 hours from it. */
       activeAt: number | null
+      /** The Claude Code session name (agentic-os): from `session_title` of classic.SessionStart and classic.UserPromptSubmit, else the identity file. Null: unnamed. */
+      sessionName: string | null
       /** Repo, branch and worktree of the session folder (agentic-os): the band's line 1 and the snapshot's `repo`, `branch`, `worktree`. */
       git: OsGit | null
       /** The tab the /os pane shows (agentic-os): reset to overview at /clear and resume. A tab that is not live (Comms, Swarm, Resources) is never stored. */

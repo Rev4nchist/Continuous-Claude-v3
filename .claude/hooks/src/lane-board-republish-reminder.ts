@@ -38,6 +38,7 @@ export const CHANGING_VERBS = new Set([
   'say',
   'add',
   'apply-kanban',
+  'adopt',
   'state',
   'seed',
 ]);

@@ -45,7 +45,7 @@ describe('lane change fires once per batch', () => {
     expect(d.message).toBeUndefined();
   });
 
-  it.each(['claim', 'release', 'done', 'note', 'say', 'add', 'apply-kanban'])(
+  it.each(['claim', 'release', 'done', 'note', 'say', 'add', 'apply-kanban', 'adopt'])(
     'the %s verb is a lane change',
     (verb) => {
       expect(decide(bash(`node scripts/coordination/lane.mjs ${verb} a b`), false).action).toBe('remind');

@@ -22,6 +22,19 @@
         ]
       },
       {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 3,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/lane-agent-tag.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "Task",
         "hooks": [
           {
@@ -396,6 +409,14 @@
     "SessionEnd": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/session-register.mjs"
+            ]
+          },
           {
             "type": "command",
             "command": "node",

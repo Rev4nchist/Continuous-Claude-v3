@@ -12,7 +12,8 @@ import { oneLine, wrapRows } from './text'
 //   YOUR LANES      the lanes of `board` this session holds (laneSentence), each note dim, at most 3 rows
 //   OTHER SESSIONS  every lane another session owns: live sessions first, then stopped ones. "as of <age>" is its own dim row
 //                   (the board is read at start, at /os and at a press of this tab, so it can be old). A scope that matches my edited files
-//                   reads "may touch the same files": a guess, never a fact.
+//                   reads "may touch the same files": a guess, never a fact. An owner_name on the board adds `held by <name> #sid8`
+//                   (`held by #sid8` when the owner has no name); a board with no such field draws today's rows.
 //   CHANGES         the watched changes (prSentence)
 //   FILES           looked at, changed and saved counts, then the edited paths, dim (only when a file was touched)
 //   WHERE           repo, branch and worktree, dim: the technical rows that left the Overview
@@ -47,6 +48,7 @@ const peerGroup = (one: BoardLane, i: number, s: TabState, columns: number): Gro
   const live = one.live !== false
   const overlap = live ? laneOverlap(one.scope, s.files ?? []) : []
   const details = [
+    ...(one.ownerName === undefined || one.owner === null ? [] : [`held by ${one.ownerName === null ? '' : `${one.ownerName} `}#${one.owner}`]),
     ...(live ? [] : ['held by a stopped session']),
     ...(live && one.leaseLapsed === true ? ['lease lapsed, session alive'] : []),
     ...(overlap.length > 0 ? ['may touch the same files'] : []),
