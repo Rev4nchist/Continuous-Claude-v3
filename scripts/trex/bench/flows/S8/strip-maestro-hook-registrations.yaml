@@ -1,0 +1,83 @@
+id: strip-maestro-hook-registrations
+title: Migration removes only the four deleted maestro hook registrations
+description: A template-shaped settings file loses maestro hooks on --apply and keeps the live hooks that share those groups.
+goal: Users are not left invoking deleted hook files, and a dry run does not rewrite settings.
+paths:
+  - scripts/settings/remove-maestro-registrations.mjs
+  - .claude/settings.json.template
+  - .claude/skills/skill-rules.json
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - -e
+        - |
+          const fs = require('fs');
+          const body = {
+            hooks: {
+              PreToolUse: [
+                { matcher: 'Task', hooks: [
+                  { type: 'command', command: 'node', timeout: 5, args: ['/opt/claude/hooks/dist/task-router.mjs'] },
+                  { type: 'command', command: 'node', timeout: 10, args: ['/opt/claude/hooks/dist/maestro-enforcer.mjs'] }
+                ]},
+                { matcher: 'Bash', hooks: [
+                  { type: 'command', command: 'node', timeout: 15, args: ['/opt/claude/hooks/dist/pre-pr-gate.mjs'] }
+                ]}
+              ],
+              PostToolUse: [
+                { matcher: 'Skill|Task', hooks: [
+                  { type: 'command', command: 'node', timeout: 5, args: ['/opt/claude/hooks/dist/maestro-state-manager.mjs'] }
+                ]}
+              ],
+              SessionStart: [
+                { hooks: [
+                  { type: 'command', command: 'node', timeout: 5, args: ['/opt/claude/hooks/dist/session-start-init-check.mjs'] },
+                  { type: 'command', command: 'node', timeout: 5, args: ['/opt/claude/hooks/dist/session-start-recovery.mjs'] }
+                ]}
+              ],
+              SessionEnd: [
+                { hooks: [
+                  { type: 'command', command: 'node', timeout: 5, args: ['/opt/claude/hooks/dist/maestro-cleanup.mjs'] },
+                  { type: 'command', command: 'node', timeout: 5, args: ['/opt/claude/hooks/dist/session-outcome.mjs'] }
+                ]}
+              ]
+            }
+          };
+          fs.writeFileSync('trex-s8-settings.json', JSON.stringify(body, null, 2) + '\n');
+    checks:
+      - {text: seed writes a settings file that still registers maestro, exit: 0}
+      - {text: enforcer registration is present before migration, file: trex-s8-settings.json, "~": "maestro-enforcer\\.mjs"}
+  - action:
+      cwd: .
+      cmd: [node, scripts/settings/remove-maestro-registrations.mjs, trex-s8-settings.json]
+    checks:
+      - {text: dry run exits cleanly, exit: 0}
+      - {text: dry run counts the four deleted hooks, stdout: "entries removed: 4"}
+      - {text: dry run does not write the file, "!stdout": "written"}
+      - {text: dry run leaves the enforcer registration on disk, file: trex-s8-settings.json, "~": "maestro-enforcer\\.mjs"}
+  - action:
+      cwd: .
+      cmd: [node, scripts/settings/remove-maestro-registrations.mjs, trex-s8-settings.json, --apply]
+    checks:
+      - {text: apply exits cleanly, exit: 0}
+      - {text: apply reports four removals, stdout: "entries removed: 4"}
+      - {text: apply writes the settings path, stdout: "written trex-s8-settings\\.json"}
+      - {text: task group keeps task-router as its first hook, json: {file: trex-s8-settings.json, path: hooks.PreToolUse.0.hooks.0.args.0, equals: /opt/claude/hooks/dist/task-router.mjs}}
+      - {text: task matcher stays on the first group, json: {file: trex-s8-settings.json, path: hooks.PreToolUse.0.matcher, equals: Task}}
+      - {text: bash group keeps pre-pr-gate, json: {file: trex-s8-settings.json, path: hooks.PreToolUse.1.hooks.0.args.0, equals: /opt/claude/hooks/dist/pre-pr-gate.mjs}}
+      - {text: session start keeps init-check, json: {file: trex-s8-settings.json, path: hooks.SessionStart.0.hooks.0.args.0, equals: /opt/claude/hooks/dist/session-start-init-check.mjs}}
+      - {text: session end keeps session-outcome, json: {file: trex-s8-settings.json, path: hooks.SessionEnd.0.hooks.0.args.0, equals: /opt/claude/hooks/dist/session-outcome.mjs}}
+      - {text: enforcer registration is gone, file: trex-s8-settings.json, "!~": "maestro-enforcer"}
+      - {text: state manager registration is gone, file: trex-s8-settings.json, "!~": "maestro-state-manager"}
+      - {text: cleanup registration is gone, file: trex-s8-settings.json, "!~": "maestro-cleanup"}
+      - {text: session-start recovery registration is gone, file: trex-s8-settings.json, "!~": "session-start-recovery"}
+      - {text: empty PostToolUse event is removed, file: trex-s8-settings.json, "!~": "PostToolUse"}
+      - {text: backup still holds the enforcer registration, file: trex-s8-settings.json.bak-maestro, "~": "maestro-enforcer\\.mjs"}
+      - {text: shipped template does not register the deleted hooks, file: .claude/settings.json.template, "!~": "maestro-enforcer\\.mjs|maestro-state-manager\\.mjs|maestro-cleanup\\.mjs|session-start-recovery\\.mjs"}
+      - {text: skill rules no longer name maestro, file: .claude/skills/skill-rules.json, "!~": "maestro"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 20}
+severity: P0

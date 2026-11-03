@@ -1,0 +1,57 @@
+id: smarter-everyday-state-skip
+title: Smarter Everyday tracks maestro state and still skips its own files
+description: An Edit of hook-owned state stays idle, a source edit becomes an attempt, and a maestro-state edit is tracked.
+goal: The skip-list edit drops only the maestro-state exception and still ignores cache, extraction, and self state.
+paths:
+  - .claude/hooks/dist/smarter-everyday.mjs
+  - .claude/hooks/src/smarter-everyday.ts
+symbols: [processTransition]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - -e
+        - |
+          const {spawnSync} = require('child_process');
+          const fs = require('fs');
+          const cases = [
+            ['trexs8own', '/proj/.claude/smarter-everyday-state.json'],
+            ['trexs8cache', '/proj/.claude/cache/notes.md'],
+            ['trexs8ext', '/proj/.claude/extraction-state.json'],
+            ['trexs8src', '/proj/src/app.ts'],
+            ['trexs8mae', '/proj/.claude/maestro-state.json']
+          ];
+          for (const [sid, file] of cases) {
+            const payload = JSON.stringify({
+              session_id: sid,
+              tool_name: 'Edit',
+              tool_input: {file_path: file, old_string: 'a', new_string: 'b'},
+              tool_response: {}
+            });
+            const r = spawnSync(process.execPath, ['.claude/hooks/dist/smarter-everyday.mjs'], {
+              input: payload,
+              encoding: 'utf8',
+              env: {...process.env, CLAUDE_SESSION_ID: sid, TMPDIR: '/tmp'}
+            });
+            const out = (r.stdout || '').trim();
+            if (r.status !== 0 || !out.includes('"continue":true')) {
+              console.log('FAIL ' + sid + ' status=' + r.status + ' out=' + out);
+              process.exit(1);
+            }
+            const state = JSON.parse(fs.readFileSync('/tmp/claude-smarter-everyday-' + sid + '.json', 'utf8'));
+            console.log(sid + ' state=' + state.state + ' tracked=' + state.tracked_file + ' turn=' + state.current_turn + ' attempts=' + state.attempts);
+          }
+    checks:
+      - {text: driver exits cleanly, exit: 0}
+      - {text: no case failed open without a state write, "!stdout": "FAIL "}
+      - {text: own state file stays idle, stdout: "trexs8own state=IDLE tracked=null turn=0 attempts=0"}
+      - {text: cache writes stay idle, stdout: "trexs8cache state=IDLE tracked=null turn=0 attempts=0"}
+      - {text: extraction state stays idle, stdout: "trexs8ext state=IDLE tracked=null turn=0 attempts=0"}
+      - {text: a source edit starts an attempt, stdout: "trexs8src state=ATTEMPTING tracked=/proj/src/app\\.ts turn=1 attempts=1"}
+      - {text: a maestro state edit is tracked, stdout: "trexs8mae state=ATTEMPTING tracked=/proj/\\.claude/maestro-state\\.json turn=1 attempts=1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 20}
+severity: P1
