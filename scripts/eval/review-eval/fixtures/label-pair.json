@@ -1,0 +1,13 @@
+{
+  "kind": "same_issue",
+  "pr": 207,
+  "sha": "0123456789abcdef0123456789abcdef01234567",
+  "file": "scripts/github/pre-pr.mjs",
+  "line": 12,
+  "engine": { "severity": "major", "title": "Unchecked null before dereference", "body": "fixture body" },
+  "cr": { "severity": "major", "title": "Null dereference", "body": "fixture body", "url": "https://github.com/Rev4nchist/Continuous-Claude-v3/pull/207#discussion_r1" },
+  "hunk": "@@ -10,3 +10,4 @@\n const a = b;\n+use(a.c);\n",
+  "judge": { "sameIssue": "yes", "verdict": "real", "reason": "fixture" },
+  "promptSha256": "fixture",
+  "sentAt": "2026-11-02T18:00:00.000Z"
+}
