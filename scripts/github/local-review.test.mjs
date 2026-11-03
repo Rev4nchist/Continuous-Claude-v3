@@ -230,7 +230,7 @@ test('no retry on a model mismatch or a notRun answer, which both exit 0 (breaks
 test('the timeout is passed explicitly from timeout_min (breaks if the runner default 1500 s is used)', async () => {
   const w = world();
   await run(w);
-  assert.equal(w.agentCalls[0].spec.timeoutMs, 20 * 60_000);
+  assert.equal(w.agentCalls[0].spec.timeoutMs, 40 * 60_000); // review-router.config.json local_review.timeout_min (40 since #265)
 });
 
 // ---------- row 19: complete ----------
@@ -902,7 +902,7 @@ test('main without a pin pins the engine and starts that copy with LOCAL_REVIEW_
   assert.deepEqual(spec.args.slice(1), ['--pr', '9', '--json']);
   assert.equal(spec.env.LOCAL_REVIEW_PINNED, SHA);
   assert.equal(spec.cwd, 'C:\\repo');
-  assert.equal(spec.timeoutMs, (5 + 20 * 2 + 5) * 60_000);
+  assert.equal(spec.timeoutMs, (5 + 40 * 2 + 5) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5
   assert.deepEqual(out, ['{"exit":3}']);
   assert.deepEqual(err, ['busy']);
 });

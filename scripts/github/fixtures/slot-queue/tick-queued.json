@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "effective": true,
+  "locked": false,
+  "actions": [
+    {
+      "kind": "toast",
+      "pr": 900,
+      "text": "PR #900: queued for the free CodeRabbit slot, 1 of 1. Next slot in about 12 minutes."
+    }
+  ],
+  "rows": [
+    {
+      "pr": 900,
+      "band": "HIGH",
+      "state": "queued",
+      "position": 1,
+      "total": 1,
+      "head7": "0000000",
+      "queuedMin": 0,
+      "timeoutInMin": 60,
+      "nextSlotInMin": 12,
+      "posts": 0,
+      "asked": {
+        "paid30": false,
+        "timeout60": false
+      }
+    }
+  ],
+  "nextSlotInMin": 12
+}
