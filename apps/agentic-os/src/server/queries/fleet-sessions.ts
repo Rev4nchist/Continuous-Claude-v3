@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 
+import { readSessionNames } from '@/server/sources/identity-names';
 import type { StateFiles, StateSnapshot } from '@/server/sources/state-files';
 
 import { joinSnapshots, LOOKUP_LIMIT, type JoinStats, type LookupRow } from './fleet-join';
@@ -52,6 +53,8 @@ export type ReadyItem = {
   sessionId: string;
   shortId: string;
   name: string;
+  /** The session name from its identity file (cleaned, 16 code points at most), or null: shown as "unnamed". */
+  sessionName: string | null;
   kind: string;
   /** One line: whitespace collapsed. The state-file reader already redacted and clipped it. */
   text: string;
@@ -67,6 +70,8 @@ export type SessionCard = {
   id: string;
   shortId: string;
   name: string;
+  /** The session name from its identity file (cleaned, 16 code points at most), or null: shown as "unnamed". */
+  sessionName: string | null;
   projectKey: string | null;
   projectDisplayName: string | null;
   chip: Chip | null;
@@ -203,6 +208,7 @@ function buildCard(
   snapshot: StateSnapshot | undefined,
   nowMs: number,
   laneId: string | null,
+  sessionName: string | null,
 ): SessionCard {
   const steps = stepsOf(snapshot);
   const brief = snapshot?.brief ?? null;
@@ -213,6 +219,7 @@ function buildCard(
     id: session.id,
     shortId: session.shortId,
     name: cardName(session.projectKey, session.id, snapshot),
+    sessionName,
     projectKey: session.projectKey,
     projectDisplayName: session.projectDisplayName,
     chip: chipOf(snapshot?.chip ?? null),
@@ -251,6 +258,7 @@ export function askAgeSeconds(updatedAt: number | null, snapshot: StateSnapshot 
 function buildReady(
   id: string,
   name: string,
+  sessionName: string | null,
   snapshot: StateSnapshot,
   nowMs: number,
   live: boolean,
@@ -267,6 +275,7 @@ function buildReady(
       sessionId: id,
       shortId: id.slice(0, 8),
       name,
+      sessionName,
       kind: first.kind,
       // first.text was stripped, redacted and scrubbed in state-files; a whitespace replace adds no character.
       text: first.text.replace(/\s+/g, ' '),
@@ -337,6 +346,8 @@ export async function getFleetSessions(
   const liveIds = new Set(active.sessions.map((s) => s.id));
   const endedIds = new Set(active.recentlyEnded.map((s) => s.id));
   const { join, quietRows } = await joinSnapshots(bySession, liveIds, endedIds, lookupRows);
+  // One read for the live sessions and the quiet rows, by id (never a folder listing).
+  const names = await readSessionNames([...liveIds, ...quietRows.keys()]);
 
   const cards: SessionCard[] = [];
   const ready: ReadyItem[] = [];
@@ -344,16 +355,19 @@ export async function getFleetSessions(
   const watching: { card: SessionCard; snapshot: StateSnapshot; rank: number }[] = [];
   for (const session of active.sessions) {
     const snapshot = bySession.get(session.id);
-    const card = buildCard(session, snapshot, nowMs, lanes.get(session.id)?.[0] ?? null);
+    const card = buildCard(session, snapshot, nowMs, lanes.get(session.id)?.[0] ?? null, names.get(session.id) ?? null);
     cards.push(card);
     if (!snapshot) continue;
-    ready.push(...buildReady(card.id, card.name, snapshot, nowMs, true));
+    ready.push(...buildReady(card.id, card.name, card.sessionName, snapshot, nowMs, true));
     watching.push({ card, snapshot, rank: rankOf.get(session.id) ?? 0 });
   }
   // Quiet sessions: no card and no PR count (those stay live-only), but their asks count.
   for (const [id, row] of quietRows) {
     const snapshot = bySession.get(id);
-    if (snapshot) ready.push(...buildReady(id, cardName(row.projectKey, id, snapshot), snapshot, nowMs, false));
+    if (snapshot) {
+      const name = cardName(row.projectKey, id, snapshot);
+      ready.push(...buildReady(id, name, names.get(id) ?? null, snapshot, nowMs, false));
+    }
   }
   ready.sort((a, b) => b.ageSeconds - a.ageSeconds || a.sessionId.localeCompare(b.sessionId));
 

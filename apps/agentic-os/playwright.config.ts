@@ -45,6 +45,14 @@ const ORIGIN = `http://127.0.0.1:${PORT}`;
 export const E2E_STATE_DIR = join(tmpdir(), 'agentic-os-e2e-state');
 mkdirSync(E2E_STATE_DIR, { recursive: true });
 
+/**
+ * Where the E2E server reads session identity files (AGENTIC_OS_IDENTITY_DIR), one
+ * `<sessionId>.json` per session, written by the hooks to ~/.claude/state/identity. A temp dir for
+ * the same reason as E2E_STATE_DIR. e2e/state-fixture.ts imports this constant.
+ */
+export const E2E_IDENTITY_DIR = join(tmpdir(), 'agentic-os-e2e-identity');
+mkdirSync(E2E_IDENTITY_DIR, { recursive: true });
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
@@ -73,7 +81,11 @@ export default defineConfig({
   ],
   webServer: {
     command: `npx next dev --port ${PORT} --hostname 127.0.0.1`,
-    env: { AGENTIC_OS_DIST_DIR: '.next-e2e', AGENTIC_OS_STATE_DIR: E2E_STATE_DIR },
+    env: {
+      AGENTIC_OS_DIST_DIR: '.next-e2e',
+      AGENTIC_OS_STATE_DIR: E2E_STATE_DIR,
+      AGENTIC_OS_IDENTITY_DIR: E2E_IDENTITY_DIR,
+    },
     url: `${ORIGIN}/icon.svg`,
     reuseExistingServer: false,
     timeout: 120_000,
