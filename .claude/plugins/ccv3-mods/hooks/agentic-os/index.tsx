@@ -700,6 +700,8 @@ export const agenticOs = (on: On) => {
       // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
       await registerBrief($)
       await refreshGit($)
+      // A /reload-plugins runs this start but no classic SessionStart or prompt: read the name from the identity file now.
+      await noteName($, undefined)
       if (e.isInteractive) await startUi($)
       return next(e)
     } catch (err) {
