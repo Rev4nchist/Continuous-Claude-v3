@@ -257,6 +257,8 @@ export type CheckpointRecord = {
   appliedAt?: number
   /** The checkout the record's head came from (the PR branch worktree or the session root). Lock B reads HEAD there. */
   root?: string
+  /** The router band the engine printed at --confirm (result.auto.band), kept so the free-slot queue can enqueue the PR. Absent from older records. */
+  band?: string | null
   /** Set when Dave said No to an ask. A grant or a new checkpoint clears it. */
   declined?: { kind: 'opening' | 'round' | 'greptile'; round: number; head: string }
   /** Set when the mod posted the opening review request on Dave's Yes. */
@@ -265,6 +267,34 @@ export type CheckpointRecord = {
   greptile?: { head?: string; at?: number; declined?: true }
   [key: string]: unknown
 }
+
+/** One PR in the free-slot queue, as `slot-queue.mjs tick --json` and `list --json` print it (scripts/github/slot-queue-model.mjs rowOf). */
+export type SlotRow = {
+  pr: number
+  band: 'CRITICAL' | 'HIGH' | 'SAMPLE' | string
+  /** opening, awaiting-fix, queued, posted, timed-out, done, dropped or stuck. */
+  state: string
+  /** 1-based place in line; null for an item that is not in line (posted, finished). */
+  position: number | null
+  /** How many items are in line. */
+  total: number
+  head7: string
+  queuedMin: number | null
+  /** Minutes until the 60 minute time-out; null when no time-out applies. */
+  timeoutInMin: number | null
+  nextSlotInMin: number
+  posts: number
+  asked: { paid30: boolean; timeout60: boolean }
+  dropReason?: string
+}
+
+/** A line the tick wants shown to Dave. Only toasts today. Each one that asks for an answer names a `/slot <verb> <pr>` command. */
+export type SlotAction = { kind: 'toast'; pr: number; text: string }
+
+/** What `slot-queue.mjs tick --json` prints: a good tick, or `{ ok: false, reason }` (exit 2). */
+export type SlotTick =
+  | { ok: true; effective: boolean; locked: boolean; actions: SlotAction[]; rows: SlotRow[]; nextSlotInMin: number | null }
+  | { ok: false; reason: string }
 
 /** A question for Dave, drawn in the checkpoint pane. `round` is the round it asks about (the opening is round 1). */
 export type CheckpointAsk = { kind: 'opening' | 'round' | 'greptile'; pr: number; head: string; text: string; round?: number }
@@ -339,6 +369,8 @@ declare module 'claude-code' {
       checkpointAsks: CheckpointAsk[]
       /** Lock patterns already shown in a warn toast this session. */
       lockWarned: string[]
+      /** The free-slot queue rows at the last tick (hooks/pr-loop/slot.ts); mirrors what the tick printed, so the band and /watch can show the queue. */
+      slotRows: SlotRow[]
       /** True from /clear or a resume until the new conversation's first reply: the HUD cost reads as a dash (hooks/hud/seed.ts). */
       costForgotten: boolean
     }

@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "effective": true,
+  "locked": false,
+  "actions": [
+    {
+      "kind": "toast",
+      "pr": 900,
+      "text": "PR #900: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Type /slot pay 900 or /slot wait 900."
+    }
+  ],
+  "rows": [
+    {
+      "pr": 900,
+      "band": "HIGH",
+      "state": "timed-out",
+      "position": 1,
+      "total": 1,
+      "head7": "0000000",
+      "queuedMin": 61,
+      "timeoutInMin": 0,
+      "nextSlotInMin": 600,
+      "posts": 0,
+      "asked": {
+        "paid30": false,
+        "timeout60": true
+      }
+    }
+  ],
+  "nextSlotInMin": 600
+}

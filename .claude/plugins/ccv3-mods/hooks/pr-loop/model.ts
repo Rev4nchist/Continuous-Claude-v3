@@ -1,5 +1,7 @@
-import type { CheckpointAsk, CheckpointRecord, PrState, PrWatch } from '../../types'
+import type { CheckpointAsk, CheckpointRecord, PrState, PrWatch, SlotRow } from '../../types'
 import { SLASH } from '../pr-checkpoint/model'
+import { slotLine } from './slot-model'
+import type { AlertSlot } from './slot-model'
 
 /** What `review-status.mjs <N> --json` prints. Only the fields the mod reads. */
 export type PrStatus = {
@@ -73,6 +75,8 @@ export type Alert = {
   outsideDiff?: number
   /** Set when the PR has a checkpoint record: the budget and what Dave decided. */
   checkpoint?: AlertCheckpoint
+  /** Set when the free-slot queue holds the PR: the queue posts the CodeRabbit review, so the model lines say not to. */
+  slot?: AlertSlot
 }
 
 /** What the lines about a CodeRabbit round need from the checkpoint record. `rounds` is null for an older status script. */
@@ -469,6 +473,38 @@ const paidReview = (pr: number): string =>
  */
 const PAID_GATE = 'If a paid review was posted for this head: while the CodeRabbit status on the head is pending, wait for it. Otherwise, if no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back. If none was posted, the post below applies.'
 
+/** The queued variant of PAID_GATE: the free-slot queue posts the free review, so the line never says to post one when capacity is back. */
+const PAID_GATE_QUEUED = 'If a paid review was posted for this head: while the CodeRabbit status on the head is pending, wait for it. If none was posted, the free-slot queue posts the free review: do not post it yourself.'
+
+const paidGate = (alert: Alert): string => (alert.slot ? PAID_GATE_QUEUED : PAID_GATE)
+
+const NO_POST = 'Do not post @coderabbitai review.'
+
+/**
+ * What the model does about a CodeRabbit review for a PR the free-slot queue holds: nothing. The queue posts it. Null when the queue does not
+ * hold the PR. A timed-out PR that is STALLED sends the model to the reader (Dave, U1): READY still needs the CodeRabbit review.
+ */
+const queuedAct = (alert: Alert): string | null => {
+  const slot = alert.slot
+  if (!slot) return null
+  const where = slot.position === null ? '' : ` (${slot.position} of ${slot.total})`
+  if (slot.state === 'posted') return `The free-slot queue posted @coderabbitai review for #${alert.pr}. Wait for the review. ${NO_POST}`
+  if (slot.state === 'stuck') return `The free-slot queue posted twice for #${alert.pr} and no review came (stuck). ${NO_POST} Tell Dave to decide: /slot drop ${alert.pr}.`
+  if (slot.state === 'timed-out' && alert.state === 'STALLED') {
+    return `The free-slot queue has had no free slot for #${alert.pr}${where} for 60 minutes. Run the principal-reviewer agent on head ${alert.headShort} (not in fast mode) and report its findings. READY still needs a CodeRabbit review: the queue posts @coderabbitai review when the slot opens, or Dave decides (/slot pay ${alert.pr}). ${NO_POST}`
+  }
+  const after = slot.state === 'awaiting-fix' ? 'after the fix push' : 'when the slot opens'
+  return `The free-slot queue holds #${alert.pr}${where} and posts @coderabbitai review ${after}. ${NO_POST}`
+}
+
+/** The advice in a LIMITED or STALLED line, ending in "Then": the carry first, then the queue, then the budget, then `bare`. */
+const actOf = (alert: Alert, when: string, bare: string): string => {
+  if (carryHolds(alert)) return `${carryAction(alert.pr)} Then`
+  const queued = queuedAct(alert)
+  if (queued) return `${queued} Then`
+  return alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, when)} Then` : bare
+}
+
 /** The one line the model gets: LIMITED, PROOF, STALLED or REVIEWED. READY, merged and closed get a toast only. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {
   const lead = `PR watcher: #${alert.pr} head ${alert.headShort}`
@@ -477,11 +513,11 @@ export const reportLine = (alert: Alert): string => {
   }
   if (alert.state === 'LIMITED' && alert.rateLimit) {
     const wait = alert.rateLimit.minutes === null ? '' : ` CodeRabbit says the next included review is available in ${alert.rateLimit.minutes} minutes.`
-    const act = carryHolds(alert) ? `${carryAction(alert.pr)} Then` : alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When capacity is back')} Then` : 'Post @coderabbitai review once when capacity is back, then'
-    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} ${paidEligible(alert) ? `${paidReview(alert.pr)} ${PAID_GATE} ` : ''}${act} report to Dave. Do not merge it.`
+    const act = actOf(alert, 'When capacity is back', 'Post @coderabbitai review once when capacity is back, then')
+    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} ${paidEligible(alert) ? `${paidReview(alert.pr)} ${paidGate(alert)} ` : ''}${act} report to Dave. Do not merge it.`
   }
   if (alert.state === 'LIMITED') {
-    const act = carryHolds(alert) ? `${carryAction(alert.pr)} Then` : alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When the review can run')} Then` : 'Act per pr-review-loop.md "No review on the head", then'
+    const act = actOf(alert, 'When the review can run', 'Act per pr-review-loop.md "No review on the head", then')
     return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). ${act} report to Dave. Do not merge it.`
   }
   if (alert.state === 'PROOF') {
@@ -502,12 +538,13 @@ export const reportLine = (alert: Alert): string => {
       return `${lead} (review:none) has no router state for this head. Re-run the review-router workflow for this head. Do not request a bot review. Then report to Dave. Do not merge it.`
     }
     if (!bots) return `${lead} is not READY after 60 minutes and ${alert.bots?.length ? 'every required bot has reviewed it' : 'needs no bot review'}: check CI, threads and mergeable state, then report to Dave.${why} Do not merge it.`
-    const act = carryHolds(alert) ? `${carryAction(alert.pr)} Then` : alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When the review can run')} Then` : 'Act per pr-review-loop.md "No review on the head", then'
+    const act = actOf(alert, 'When the review can run', 'Act per pr-review-loop.md "No review on the head", then')
     return `${lead} has no ${bots} review after 60 minutes. ${act} report to Dave.${why} Do not merge it.`
   }
   const by = alert.reviewedBy?.length ? botWords(alert.reviewedBy) : botWords(alert.bots)
   const body = alert.outsideDiff ? ` CodeRabbit lists ${alert.outsideDiff} finding(s) outside the diff in its review body. They have no thread. Read the review body, then fix each one or list it in the PR body under "Outside-diff: handled", one bullet per finding.` : ''
-  const budget = alert.checkpoint ? ` ${budgetSentence(alert.checkpoint, alert.pr, 'After the fix push')}` : ''
+  const advice = queuedAct(alert) ?? (alert.checkpoint ? budgetSentence(alert.checkpoint, alert.pr, 'After the fix push') : '')
+  const budget = advice ? ` ${advice}` : ''
   return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave.${body}${budget} Do not merge it. The watch continues.`
 }
 
@@ -519,7 +556,8 @@ const DRAFT_LINE = `Draft: waiting on Dave's ${SLASH}. Do not request a review.`
 export const statusForModel = (status: PrStatus): PrStatus =>
   isDraftStatus(status) ? { ...status, reasons: [...status.reasons.filter(reason => !BOT_REASON.test(reason)), DRAFT_LINE] } : status
 
-export const statusText = (status: PrStatus): string => {
+/** The status the model reads. `slot` is the PR's free-slot queue row, when the queue holds it: one more row says where it stands. */
+export const statusText = (status: PrStatus, slot?: SlotRow | null): string => {
   const state = stateOf(status)
   if (state === 'DRAFT') {
     const head = `PR #${status.pr} head ${status.headShort} (${status.branch}): NOT READY`
@@ -532,12 +570,13 @@ export const statusText = (status: PrStatus): string => {
     `  Confidence: ${typeof status.confidence === 'number' ? `${status.confidence}/5` : 'unknown'}`,
     `  Threads unresolved: ${status.unresolved}`,
     `  Mergeable state: ${status.mergeable_state ?? 'unknown'}`,
+    ...(slot ? [`  Free-slot queue: ${slotLine(slot)}`] : []),
   ]
   return [head, ...rows, ...status.reasons.map(reason => `  - ${reason}`)].join('\n')
 }
 
-export const watchLine = (watch: PrWatch): string =>
-  `#${watch.pr} ${watch.state ?? 'not checked yet'}${watch.whenReady ? ' (asks Land/No at READY)' : ''}`
+export const watchLine = (watch: PrWatch, slot?: SlotRow | null): string =>
+  `#${watch.pr} ${watch.state ?? 'not checked yet'}${watch.whenReady ? ' (asks Land/No at READY)' : ''}${slot ? ` [queue: ${slotLine(slot)}]` : ''}`
 
 export type WatchArgs = { pr: number | null; once: boolean; whenReady: boolean }
 
@@ -631,8 +670,9 @@ const askAt = (status: PrStatus, kind: CheckpointAsk['kind'], text: string, roun
  *   not while the CodeRabbit commit status is pending (a review may be starting; the ask comes at a later check if it is not).
  * - greptile: a both PR, CodeRabbit reviewed the head, nothing unresolved, Greptile has not. Once per PR.
  * An older status script has no round count: no round ask, and the opening ask reads the count as 0.
+ * `inQueue`: the free-slot queue holds the PR and posts its review, so there is no opening ask.
  */
-export const askFor = (record: CheckpointRecord | null, status: PrStatus, now: number, granted: number | null): CheckpointAsk | null => {
+export const askFor = (record: CheckpointRecord | null, status: PrStatus, now: number, granted: number | null, inQueue = false): CheckpointAsk | null => {
   if (!record || record.state !== 'applied' || isClosed(status) || status.ready || isDraftStatus(status)) return null
   if (record.pathway !== 'coderabbit' && record.pathway !== 'both') return null
   const rounds = roundsOf(status)
@@ -649,7 +689,7 @@ export const askFor = (record: CheckpointRecord | null, status: PrStatus, now: n
     return askAt(status, 'round', `Round ${round} of ${opening}+${extra} for #${status.pr}. Spend 1 more? 7d ≈${typeof count === 'number' ? count : 'unknown'}`, round)
   }
   // An older status script has no round count: no CodeRabbit review and no request on the PR reads as round 0.
-  if ((rounds ?? 0) === 0 && (status.coderabbitRequests ?? 0) === 0 && !reviewed && !limited && status.coderabbitLimited !== true && status.coderabbit !== 'pending' && !record.opened && record.declined?.kind !== 'opening') {
+  if ((rounds ?? 0) === 0 && (status.coderabbitRequests ?? 0) === 0 && !reviewed && !limited && status.coderabbitLimited !== true && status.coderabbit !== 'pending' && !record.opened && !inQueue && record.declined?.kind !== 'opening') {
     if (now - (record.appliedAt ?? now) < OPENING_WAIT_MS) return null
     return askAt(
       status,

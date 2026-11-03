@@ -113,6 +113,8 @@ type Opts = {
   landSeq?: ('ok' | 'fail' | 'deny' | 'throw')[]
   /** The first N prompt.submit calls reject. */
   submitFails?: number
+  /** The command names whose command.register rejects. */
+  rejectCommands?: string[]
 }
 
 const world = (on: On, opts: Opts = {}) => {
@@ -139,6 +141,7 @@ const world = (on: On, opts: Opts = {}) => {
   on('fs.write', () => ({ value: undefined }))
   on('agent.list', () => ({ value: [] }))
   on('command.register', (_$, e) => {
+    if (opts.rejectCommands?.includes(e.name)) throw new Error(`command.register refused ${e.name}`)
     seen.registered.push(e.name)
     return { value: { command: e.name } }
   })
@@ -805,6 +808,12 @@ describe('pr-loop tools', () => {
     expect(seen.tools.filter(name => name !== 'brief_set' && name !== 'pr_checkpoint')).toEqual(['pr_status'])
     expect(seen.status).toEqual([])
     expect(seen.toasts).toEqual([])
+  })
+  test('W5b a rejected /slot registration still registers pr_status and pr_watch', async ($, on) => {
+    const { seen } = world(on, { store: seed([{ pr: 7 }]), script: { 7: [READY(7)] }, rejectCommands: ['slot'] })
+    await start($)
+    expect(seen.registered).toEqual(expect.arrayContaining(['watch', 'land']))
+    expect(seen.tools).toEqual(expect.arrayContaining(['pr_status', 'pr_watch']))
   })
 })
 

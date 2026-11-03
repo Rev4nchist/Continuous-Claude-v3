@@ -93,7 +93,7 @@ When adding any new capability, walk this matrix top-to-bottom. The first row th
 | **Web platform with browser login** | OpenCLI adapter | Reuses Chrome cookies, zero API keys | Twitter, Reddit, HN, LinkedIn (44 platforms; see `opencli list`) |
 | **User-prompted multi-step workflow** | Skill | Skill body is the playbook the model reads | `build`, `fix`, `release`, `tdd`, `refactor`, `ralph`, `security`, `test`, `review` |
 | **One-step methodology guide** | Skill (lightweight) | The skill body is short but the trigger is real | `databases` (guardrail), `code-review` (guardrail), `systematic-debugging` (guardrail), `notion-bridge`, `tldr-code` |
-| **Reusable library called by other components** | `.claude/hooks/src/lib/` (Phase 3) | Imported by hooks; not registered as a hook itself | `daemon-client.ts`, `skill-router.ts`, `transcript-parser.ts`, `skill-validation-prompt.ts`, `hook-trace.ts` |
+| **Reusable library called by other components** | `.claude/hooks/src/lib/` (Phase 3) | Imported by hooks; not registered as a hook itself | `daemon-client.ts`, `transcript-parser.ts`, `skill-validation-prompt.ts`, `hook-trace.ts` |
 | **Per-platform conventional script** | Plain script under `scripts/` | Not a hook, not an MCP — just a CLI helper | `scripts/cdp.mjs`, `scripts/sync-to-active.sh`, `scripts/dev-cleanup.mjs`, `scripts/audit_hook_state.mjs` (planned Phase 2) |
 
 ### Edge cases

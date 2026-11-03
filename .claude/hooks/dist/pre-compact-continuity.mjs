@@ -6,7 +6,6 @@ import * as path from "path";
 
 // src/lib/transcript-parser.ts
 import * as fs from "fs";
-import { pathToFileURL } from "url";
 function parseTranscript(transcriptPath) {
   const summary = {
     lastTodos: [],
@@ -262,7 +261,7 @@ function generateAutoHandoff(summary, sessionName) {
   }
   return lines.join("\n");
 }
-var isMainModule = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+var isMainModule = /(^|[\\/])transcript-parser\.[cm]?[jt]s$/.test(process.argv[1] ?? "");
 if (isMainModule) {
   const args = process.argv.slice(2);
   if (args.length === 0) {

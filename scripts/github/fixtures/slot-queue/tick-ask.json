@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "effective": true,
+  "locked": false,
+  "actions": [
+    {
+      "kind": "toast",
+      "pr": 901,
+      "text": "PR #901: no free slot for 30 minutes. Paid round $2.75 (cr-paid ALLOW). Type /slot pay 901, or wait."
+    }
+  ],
+  "rows": [
+    {
+      "pr": 901,
+      "band": "CRITICAL",
+      "state": "queued",
+      "position": 1,
+      "total": 1,
+      "head7": "0000000",
+      "queuedMin": 31,
+      "timeoutInMin": 29,
+      "nextSlotInMin": 600,
+      "posts": 0,
+      "asked": {
+        "paid30": true,
+        "timeout60": false
+      }
+    }
+  ],
+  "nextSlotInMin": 600
+}
