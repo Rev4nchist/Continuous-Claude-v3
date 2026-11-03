@@ -75,7 +75,7 @@ function run(e, argv, o = {}) {
   const base = makeGh(e.worldPath, e.logPath, o.gh);
   const code = main(argv, {
     gh: (a) => { calls.push(a); return base(a); }, now: () => o.now ?? T0, statePath: e.statePath, ledgerPath: e.ledgerPath,
-    repo: REPO, cfg: o.cfg ?? {}, env: {}, checkPr: o.checkPr, lockWaitMs: o.lockWaitMs ?? 300,
+    repo: REPO, cfg: o.cfg ?? {}, env: {}, checkPr: o.checkPr, lockWaitMs: o.lockWaitMs ?? 300, configPath: o.configPath,
     out: (l) => lines.out.push(l), err: (l) => lines.err.push(l),
   });
   const json = lines.out.length > 0 ? JSON.parse(lines.out.join('\n')) : null;
@@ -469,6 +469,31 @@ test('list prints rows and next slot from the file, with no lock, no write and n
   assert.equal(r.calls.length, 0);
   assert.equal(digest(e.statePath), before);
   assert.equal(existsSync(`${e.statePath}.lock`), false);
+});
+
+// B1. Breaks if the script stops reading matrix.slot from the router config (or the configPath dep), or lets a missing file, bad JSON, a
+// string value or a missing block break the tick instead of falling back to the built-in defaults (spacing 60: 10 minutes after a post, 50 left).
+test('B1: matrix.slot in the router config sets the spacing; a missing, broken or mistyped config falls back to the defaults', () => {
+  const e = setup('config');
+  setState(e, [itemOf(5)], { slot: { nextAt: null, source: 'post', lastPostAt: at(-10), lastPostPr: 9 } });
+  const left = (configText) => {
+    const configPath = path.join(e.dir, 'router.json');
+    if (configText === null) rmSync(configPath, { force: true }); else writeFileSync(configPath, configText);
+    return run(e, ['list', '--json'], { configPath }).json.nextSlotInMin;
+  };
+  assert.equal(left(JSON.stringify({ matrix: { slot: { spacing_min: 30 } } })), 20);
+  assert.equal(left(null), 50);
+  assert.equal(left('{ not json'), 50);
+  assert.equal(left(JSON.stringify({ matrix: { slot: { spacing_min: '30' } } })), 50);
+  assert.equal(left(JSON.stringify({ matrix: {} })), 50);
+});
+
+// B1. Breaks if a key in the repo's review-router.config.json matrix.slot is renamed or mistyped: configOf would then ignore it without a word.
+test('B1: the repo router config carries every matrix.slot key the script reads, as a positive number', () => {
+  const slot = JSON.parse(readFileSync(path.join(HERE, '..', '..', 'review-router.config.json'), 'utf8')).matrix.slot;
+  for (const key of ['spacing_min', 'paid_after_min', 'timeout_min', 'holder_max_min', 'sample_ttl_hours']) {
+    assert.ok(Number.isFinite(slot?.[key]) && slot[key] > 0, key);
+  }
 });
 
 // --- add, decide, drop ----------------------------------------------------------------------------------------

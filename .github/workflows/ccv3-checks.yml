@@ -66,6 +66,9 @@ jobs:
       - name: shared lib unit tests (file lock)
         timeout-minutes: 5
         run: node --test scripts/github/lib/file-lock.test.mjs
+      - name: slot-queue unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs scripts/github/slot-queue-mod-sync.test.mjs
       - name: harness-doctor unit tests
         timeout-minutes: 5
         run: node --test scripts/harness-doctor.test.mjs

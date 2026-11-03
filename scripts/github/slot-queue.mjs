@@ -29,6 +29,7 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
+const DEFAULT_CONFIG = path.join(HERE, '..', '..', 'review-router.config.json');
 const DEFAULT_STATE = path.join(os.homedir(), '.claude', 'state', 'coderabbit-slot.json');
 const SHA40 = /^[0-9a-f]{40}$/;
 const MIN = 60_000;
@@ -79,18 +80,19 @@ export function parseArgs(argv) {
 
 // ---- dependencies and files ----
 
-function loadConfig() {
-  try { return configOf(JSON.parse(readFileSync(path.join(HERE, '..', '..', 'review-router.config.json'), 'utf8'))); } catch { return configOf({}); }
+/** The queue settings: matrix.slot of the router config when it reads and parses, else the built-in DEFAULTS (a missing or broken file never stops a tick). */
+function loadConfig(file) {
+  try { return configOf(JSON.parse(readFileSync(file, 'utf8'))); } catch { return configOf({}); }
 }
 
 /** Deps with defaults. An undefined entry in `deps` is ignored, so a test can pass `checkPr: undefined`. */
 function withDefaults(deps = {}) {
   const given = Object.fromEntries(Object.entries(deps).filter(([, v]) => v !== undefined));
   const d = {
-    gh: ghApi, now: () => Date.now(), statePath: DEFAULT_STATE, repo: DEFAULT_REPO, env: process.env, lockWaitMs: 5000,
+    gh: ghApi, now: () => Date.now(), statePath: DEFAULT_STATE, configPath: DEFAULT_CONFIG, repo: DEFAULT_REPO, env: process.env, lockWaitMs: 5000,
     out: (l) => console.log(l), err: (l) => console.error(l), ...given,
   };
-  return { ...d, cfg: { ...loadConfig(), ...(given.cfg ?? {}) }, checkPr: given.checkPr ?? ((pr) => checkPr({ pr, repo: d.repo }, crDeps(d))) };
+  return { ...d, cfg: { ...loadConfig(d.configPath), ...(given.cfg ?? {}) }, checkPr: given.checkPr ?? ((pr) => checkPr({ pr, repo: d.repo }, crDeps(d))) };
 }
 
 /** The deps cr-paid.mjs reads. Its clock gives a Date. A path left undefined keeps its own default. */
