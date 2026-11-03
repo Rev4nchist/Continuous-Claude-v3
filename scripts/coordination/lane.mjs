@@ -370,7 +370,9 @@ const commands = {
       let cursor = 'unchanged';
       if (newWm === undefined && oldWm !== undefined) {
         await c.query(
-          `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at) VALUES ($1,$2,now())`, [newId, oldWm]);
+          // lane-context can write this row at SessionStart while adopt runs; a key clash must not roll back the adopt.
+          `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at) VALUES ($1,$2,now())
+           ON CONFLICT (session_id) DO NOTHING`, [newId, oldWm]);
         cursor = 'carried';
       } else if (newWm !== undefined && dms.length && Math.min(...dms) <= Number(newWm)) {
         await c.query(

@@ -25,7 +25,7 @@
  * with `zz-sid-probe-`; session ids are random uuids tracked in SESSIONS.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -75,6 +75,19 @@ function lane(as, ...args) {
     env: { ...process.env, CLAUDE_CODE_SESSION_ID: as, CCV3_IDENTITY_DIR: DIR },
   });
   return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}` };
+}
+
+/** lane() without blocking the event loop, so this process can commit another transaction meanwhile. */
+function laneAsync(as, ...args) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [LANE, ...args], {
+      env: { ...process.env, CLAUDE_CODE_SESSION_ID: as, CCV3_IDENTITY_DIR: DIR },
+    });
+    let out = ''; let err = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('close', (code) => resolve({ code, out, err, all: `${out}${err}` }));
+  });
 }
 
 const results = [];
@@ -277,6 +290,31 @@ try {
     must(JSON.parse(step.out).cursor === 'stepped back', step.out);
     must(wm2.n === dmId - 1, `cursor ${wm2.n} != ${dmId - 1}`);
     must(seen.out.includes('probe step dm'), seen.out);
+  });
+
+  // 12. lane-context writes the new session's watermark at SessionStart while adopt runs. adopt reads no
+  // row, then its insert waits on the other transaction's key. When that commits, the insert must not
+  // fail and roll back the whole adopt. A second connection holds the row uncommitted to force the order.
+  const ROLD = sid(); const RNEW = sid();
+  for (const u of [ROLD, RNEW]) {
+    await c.query(`INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES ($1,'zz-sid-probe','x',now())`, [u]);
+  }
+  writeId(ROLD, { name: 'probe-race', endedAt: new Date().toISOString(), endReason: 'clear' });
+  writeId(RNEW, { name: 'probe-race', previous: ROLD });
+  await c.query(`INSERT INTO agentic_os.lane_watermark (session_id,last_event_id) VALUES ($1,1)`, [ROLD]);
+  await mk(`${PREFIX}race`, ROLD);
+  const c2 = await connect();
+  await c2.query('BEGIN');
+  await c2.query(`INSERT INTO agentic_os.lane_watermark (session_id,last_event_id) VALUES ($1,1)`, [RNEW]);
+  const pending = laneAsync(RNEW, 'adopt', '--from', ROLD);
+  await new Promise((r) => setTimeout(r, 3000));
+  await c2.query('COMMIT');
+  await c2.end();
+  const race = await pending;
+  const raceLane = (await c.query(`SELECT owner_session_id FROM agentic_os.lane WHERE id=$1`, [`${PREFIX}race`])).rows[0];
+  check('adopt survives a concurrent watermark insert for the new session (lane moves)', () => {
+    must(race.code === 0, `exit ${race.code}: ${race.all}`);
+    must(raceLane.owner_session_id === RNEW, 'adopt rolled back: lane still on the old session');
   });
 
   // 11. --agent on say and note
