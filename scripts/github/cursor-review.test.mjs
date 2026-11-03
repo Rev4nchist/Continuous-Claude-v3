@@ -13,8 +13,9 @@ import { fileURLToPath } from 'node:url';
 import {
   AGENT_FILES, BAND_MODEL, EXIT, MODEL_ALLOWLIST, PER_REF_CAP, TREE_EXCLUDES, WEEKLY_CAP, WEEK_MS,
   buildAgentEnv, buildPrompt, countRuns, defaultExtract, finishRun, isAgentFile, isExcluded, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
-  resolveAgent, resolveModel, runAgent, runReview,
+  resolveAgent, resolveModel, runAgent as runAgentReal, runReview,
 } from './cursor-review.mjs';
+import * as cr from './cursor-review.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (n) => readFileSync(path.join(HERE, 'fixtures', 'cursor-review', `cursor-${n}.json`), 'utf8');
@@ -24,6 +25,10 @@ const tmp = (label) => { const d = mkdtempSync(path.join(os.tmpdir(), `cursor-re
 after(() => { for (const d of madeDirs) rmSync(d, { recursive: true, force: true }); });
 // runAgent takes a machine-wide grok slot before it spawns. Tests that spawn stubs pass this no-op gate, so they never touch ~/.claude/state.
 const noGate = async () => ({ ok: true, release() {} });
+// runAgent runs a bash preflight on win32 before it spawns. The stub-spawn tests pass this no-op so they never start the machine's real bash
+// (it is WSL when WSL is frozen). Only the E2E test at the end of the file runs the real preflight.
+const noPreflight = () => ({ ok: true, skipped: 'test stub' });
+const runAgent = (spec, deps = {}) => runAgentReal(spec, { preflight: noPreflight, ...deps });
 const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 const DAY = 86_400_000;
 
@@ -378,7 +383,7 @@ test('resolveAgent reports a missing install, honours CURSOR_AGENT_DIR, and uses
 const GIT_BASH_ENV = { SHELL: '/bin/bash.exe', MSYSTEM: 'MINGW64', BASH: '/usr/bin/bash', BASH_ENV: '/x', PATH: 'C:/Windows', LOCALAPPDATA: 'C:/L', CLAUDE_CODE_SESSION_ID: 's' };
 
 test('buildAgentEnv drops the POSIX shell variables on Windows and keeps the rest', () => {
-  const env = buildAgentEnv(GIT_BASH_ENV, 'win32');
+  const env = buildAgentEnv(GIT_BASH_ENV, 'win32', { exists: () => false });
   for (const k of ['SHELL', 'MSYSTEM', 'BASH', 'BASH_ENV']) assert.ok(!(k in env), k);
   assert.equal(env.PATH, 'C:/Windows');
   assert.equal(env.CLAUDE_CODE_SESSION_ID, 's');
@@ -1191,4 +1196,379 @@ test('cursor-review.mjs takes killTree from lib/proc.mjs and does not import pre
   const src = readFileSync(path.join(HERE, 'cursor-review.mjs'), 'utf8');
   assert.match(src, /from '\.\/lib\/proc\.mjs'/);
   assert.doesNotMatch(src, /import\([^)]*pre-pr|from '[^']*pre-pr/);
+});
+
+// ---------- stall guards: bash on PATH, bash preflight, tool-stall stop, tool timing ----------
+// 2026-11-03: the Cursor Azure plugin runs `bash track-telemetry.sh` after every tool call. On this PC the first `bash` on PATH is
+// C:\Windows\system32\bash.exe (WSL). With WSL frozen each hook waited 60 s, so every successful tool call took 61 s.
+// Report: .claudedocs/2026-11-03-grok-slowdown-investigation.md
+
+const GB = 'C:\\Program Files\\Git\\bin';
+const GB_BASH = `${GB}\\bash.exe`;
+const has = (...files) => (p) => files.includes(p);
+const entries = (v) => v.split(';').filter(Boolean);
+
+// Breaks if buildAgentEnv stops putting Git Bash first: a hook's `bash` then resolves to System32 WSL again.
+test('guard: on win32 the Git Bash dir becomes the first PATH entry, found through git on PATH (cmd\\..\\bin)', () => {
+  const base = { Path: 'C:\\Windows\\system32;C:\\Windows;C:\\Program Files\\Git\\cmd', LOCALAPPDATA: 'C:\\L' };
+  const env = buildAgentEnv(base, 'win32', { exists: has('C:\\Program Files\\Git\\cmd\\git.exe', GB_BASH) });
+  assert.equal(env.Path, `${GB};C:\\Windows\\system32;C:\\Windows;C:\\Program Files\\Git\\cmd`);
+  assert.equal(base.Path.startsWith('C:\\Windows\\system32'), true, 'the input is not changed');
+});
+
+// Breaks if the guard writes a second `PATH` key next to Windows' `Path`: the child would see two and use either.
+test('guard: keeps the real key casing (Path or PATH) and never adds a second PATH key', () => {
+  const exists = has(GB_BASH);
+  for (const key of ['Path', 'PATH', 'path']) {
+    const env = buildAgentEnv({ [key]: 'C:\\Windows\\system32', GIT_BASH_DIR: GB }, 'win32', { exists });
+    const keys = Object.keys(env).filter((k) => k.toLowerCase() === 'path');
+    assert.deepEqual(keys, [key]);
+    assert.equal(env[key], `${GB};C:\\Windows\\system32`);
+  }
+});
+
+// Breaks if a dir already on PATH (after System32, other case, trailing slash) is left in place or listed twice.
+test('guard: a Git Bash dir already on PATH moves to the front, once', () => {
+  const env = buildAgentEnv({ Path: 'C:\\Windows\\system32;C:\\PROGRAM FILES\\Git\\bin\\;C:\\x' }, 'win32', { exists: has(GB_BASH) });
+  assert.deepEqual(entries(env.Path), [GB, 'C:\\Windows\\system32', 'C:\\x']);
+});
+
+test('guard: resolution order is GIT_BASH_DIR, then git on PATH, then the default Git folder', () => {
+  const mine = 'D:\\tools\\git\\bin';
+  const all = has(`${mine}\\bash.exe`, GB_BASH, 'C:\\Program Files\\Git\\cmd\\git.exe');
+  assert.equal(cr.resolveGitBashDir({ GIT_BASH_DIR: mine, Path: 'C:\\Program Files\\Git\\cmd' }, { exists: all }), mine);
+  assert.equal(cr.resolveGitBashDir({ GIT_BASH_DIR: 'D:\\nope', Path: 'C:\\Program Files\\Git\\cmd' }, { exists: all }), GB, 'a GIT_BASH_DIR without bash.exe is skipped');
+  assert.equal(cr.resolveGitBashDir({ Path: 'C:\\Windows' }, { exists: has(GB_BASH) }), GB, 'default folder');
+  // git.exe sits in mingw64\bin too, but mingw64\bin\..\bin has no bash.exe: the walk goes on to the next entry.
+  const walk = has('C:\\Program Files\\Git\\mingw64\\bin\\git.exe', 'C:\\Program Files\\Git\\cmd\\git.exe', GB_BASH);
+  assert.equal(cr.resolveGitBashDir({ Path: 'C:\\Program Files\\Git\\mingw64\\bin;C:\\Program Files\\Git\\cmd' }, { exists: walk }), GB);
+});
+
+// Breaks if a PC without Git for Windows gets a made-up PATH entry, or the caller has no way to see that the guard did nothing.
+test('guard: with no Git Bash anywhere the PATH is unchanged and the flag says unresolved', () => {
+  const env = buildAgentEnv({ Path: 'C:\\Windows\\system32' }, 'win32', { exists: () => false });
+  assert.equal(env.Path, 'C:\\Windows\\system32');
+  assert.equal(env.CCV3_BASH_GUARD, 'unresolved');
+  assert.equal(cr.resolveGitBashDir({ Path: 'C:\\Windows\\system32' }, { exists: () => false }), null);
+  const found = buildAgentEnv({ Path: 'C:\\Windows\\system32' }, 'win32', { exists: has(GB_BASH) });
+  assert.equal(found.CCV3_BASH_GUARD, GB);
+});
+
+test('guard: off Windows the PATH is not touched and no flag is set', () => {
+  const env = buildAgentEnv({ PATH: '/usr/bin:/bin' }, 'linux', { exists: () => true });
+  assert.equal(env.PATH, '/usr/bin:/bin');
+  assert.ok(!('CCV3_BASH_GUARD' in env));
+});
+
+// ---- bash preflight ----
+
+// Breaks if the preflight stops running `bash -c "exit 0"` as hidden, bounded by 10 s, with the agent's env, on the FIRST bash of that PATH.
+test('preflightBash spawns the first bash on the env PATH with -c "exit 0", hidden, 10 s cap, the given env', () => {
+  const seen = [];
+  const spawnSyncFn = (file, args, opts) => { seen.push({ file, args, opts }); return { status: 0 }; };
+  const env = { Path: 'C:\\a;C:\\b;C:\\c' };
+  const r = cr.preflightBash(env, { spawnSyncFn, exists: has('C:\\b\\bash.exe', 'C:\\c\\bash.exe'), platform: 'win32' });
+  assert.equal(r.ok, true);
+  assert.equal(r.bash, 'C:\\b\\bash.exe');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].file, 'C:\\b\\bash.exe');
+  assert.deepEqual(seen[0].args, ['-c', 'exit 0']);
+  assert.equal(seen[0].opts.windowsHide, true);
+  assert.equal(seen[0].opts.timeout, 10_000);
+  assert.equal(seen[0].opts.env, env);
+  assert.equal(seen[0].opts.stdio, 'ignore', 'no pipe that a stuck grandchild could hold open past the timeout');
+});
+
+// Breaks if a timeout, a non-zero exit or a spawn error is read as healthy.
+test('preflightBash fails on a time-out, a non-zero exit and a spawn error, and names the reason', () => {
+  const run = (res) => cr.preflightBash({ Path: 'C:\\b' }, { spawnSyncFn: () => res, exists: has('C:\\b\\bash.exe'), platform: 'win32' });
+  const timeout = run({ status: null, error: Object.assign(new Error('spawnSync C:\\b\\bash.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
+  assert.equal(timeout.ok, false);
+  assert.match(timeout.reason, /timed out after 10 s/);
+  const bad = run({ status: 1 });
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /exit 1/);
+  const err = run({ status: null, error: Object.assign(new Error('boom'), { code: 'EACCES' }) });
+  assert.equal(err.ok, false);
+});
+
+// Breaks if a PC with no bash at all is called hung: a missing bash fails fast, it cannot stall a hook.
+test('preflightBash passes (skipped) when no bash is on the PATH, and spawns nothing', () => {
+  let spawned = 0;
+  const r = cr.preflightBash({ Path: 'C:\\a' }, { spawnSyncFn: () => { spawned += 1; return { status: 0 }; }, exists: () => false, platform: 'win32' });
+  assert.equal(r.ok, true);
+  assert.equal(spawned, 0);
+});
+
+// Breaks if runAgent spawns the agent, or takes a grok slot, after a failed preflight; or if the result is not the busy-gate shape.
+test('runAgent on win32 with a hung bash does not take a slot or spawn, and returns the not-started shape', async () => {
+  const { gate, log } = spyGate();
+  let spawned = 0;
+  const preflight = () => ({ ok: false, bash: 'C:\\Windows\\system32\\bash.exe', ms: 10_000, reason: 'bash -c "exit 0" timed out after 10 s' });
+  const r = await runAgentReal(spec(5000), { gate, preflight, platform: 'win32', spawnFn: () => { spawned += 1; return fakeChild(); }, gateEnv: {} });
+  assert.equal(spawned, 0);
+  assert.equal(log.calls, 0, 'no slot wait for a run that cannot work');
+  assert.equal(r.status, null);
+  assert.equal(r.error, 'bash-hang');
+  assert.equal(r.notStarted, true);
+  assert.equal(r.timedOut, false);
+  assert.equal(r.durationMs, 0);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /bash on the agent PATH hangs/);
+  assert.match(r.stderr, /2026-11-03-grok-slowdown-investigation\.md/);
+  assert.match(r.stderr, /timed out after 10 s/);
+});
+
+// Breaks if CCV3_GROK_GATE=off skips the preflight (the preflight guards the run, not the gate).
+test('the bash preflight also runs when CCV3_GROK_GATE=off', async () => {
+  const r = await runAgentReal(spec(5000), { preflight: () => ({ ok: false, reason: 'x' }), platform: 'win32', spawnFn: () => { throw new Error('must not spawn'); }, gateEnv: { CCV3_GROK_GATE: 'off' } });
+  assert.equal(r.error, 'bash-hang');
+});
+
+// Breaks if the preflight runs off Windows (there is no WSL shim) or gets the wrong env.
+test('runAgent runs the preflight only on win32, with the spec env', async () => {
+  const calls = [];
+  const preflight = (env) => { calls.push(env); return { ok: true }; };
+  const run = async (platform) => {
+    const child = fakeChild();
+    const spawnFn = () => { setTimeout(() => child.emit('close', 0), 5); return child; };
+    return runAgentReal({ ...spec(5000), env: { Path: 'x' } }, { gate: noGate, preflight, platform, spawnFn, gateEnv: {} });
+  };
+  assert.equal((await run('linux')).status, 0);
+  assert.equal(calls.length, 0);
+  assert.equal((await run('win32')).status, 0);
+  assert.deepEqual(calls, [{ Path: 'x' }]);
+});
+
+// Breaks if a throwing preflight stops every review (it is a guard, not a gate).
+test('a preflight that throws does not stop the run', async () => {
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => child.emit('close', 0), 5); return child; };
+  const r = await runAgentReal(spec(5000), { gate: noGate, preflight: () => { throw new Error('bug'); }, platform: 'win32', spawnFn, gateEnv: {}, gateLog: () => {} });
+  assert.equal(r.status, 0);
+});
+
+// Breaks if runReview words a bash-hang as a missing grok slot, or counts it against the caps.
+test('runReview with a bash-hang runner says bash hangs, and leaves the ledger uncounted', async () => {
+  const hung = { status: null, stdout: '', stderr: 'x', timedOut: false, error: 'bash-hang', notStarted: true, durationMs: 0, waitedMs: 0 };
+  const h = harness({ runner: async () => hung });
+  const r = await runReview(h.opts, h.deps);
+  assert.equal(r.exit, EXIT.FAILED);
+  assert.match(r.error, /bash on the agent PATH hangs/);
+  assert.match(r.error, /2026-11-03-grok-slowdown-investigation\.md/);
+  assert.doesNotMatch(r.error, /grok slot/);
+  const end = readFileSync(h.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
+  assert.equal(end.notStarted, true);
+  assert.equal(end.exit, 1);
+  assert.equal(countRuns(readLedger(h.opts.ledgerPath).entries, { now: NOW + 1 }), 0);
+});
+
+// ---- tool-stall stop (stream-json) ----
+// Event shape (S18 raw stream, .claude/cache/e2e/2026-11-03-trex-author-S18.raw.json): {"type":"tool_call","subtype":"completed",
+// "call_id":"call-..\nfc_..","tool_call":{"<kind>ToolCall":{"args":{..},"result":{"success":{..}}|{"error":{..}}},
+// "startedAtMs":"1793698175532","completedAtMs":"1793698236850"}} with the times as decimal STRINGS.
+
+const done = (id, startedAtMs, completedAtMs, { ok = true, kind = 'readToolCall' } = {}) => `${JSON.stringify({
+  type: 'tool_call', subtype: 'completed', call_id: `call-${id}\nfc_${id}`,
+  tool_call: { [kind]: { args: {}, result: ok ? { success: {} } : { error: { message: 'File not found' } } }, hookAdditionalContexts: [], startedAtMs: String(startedAtMs), completedAtMs: String(completedAtMs) },
+  session_id: 's', timestamp_ms: completedAtMs,
+})}\n`;
+const startedEvt = (id, t) => `${JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: `call-${id}`, tool_call: { readToolCall: { args: {} }, startedAtMs: String(t) } })}\n`;
+const STREAM = ['index.js', '-p', '--output-format', 'stream-json', '--model', 'grok-4.7-high', 'prompt'];
+const T0 = 1_793_698_000_000;
+const good = (n, ms, gap = 0) => done(`c${n}`, T0 + gap, T0 + gap + ms);
+
+/** Runs runAgent over a fake child that writes `chunks` to stdout, then closes by itself (or when the killer fires). */
+async function streamRun(chunks, { args = STREAM } = {}) {
+  const { gate, log } = spyGate();
+  const child = fakeChild();
+  let kills = 0;
+  const killer = () => { kills += 1; setTimeout(() => child.emit('close', null), 10); };
+  const spawnFn = () => {
+    setTimeout(() => {
+      for (const c of chunks) child.stdout.write(c);
+      setTimeout(() => child.emit('close', 0), 60);
+    }, 5);
+    return child;
+  };
+  const r = await runAgent({ ...spec(10_000), args }, { gate, spawnFn, killer, killGraceMs: 2000, gateEnv: {} });
+  return { r, kills: () => kills, log };
+}
+
+test('constants: a stalled call is 30 s or more, and 3 of them in a row stop the run', () => {
+  assert.equal(cr.STALL_MS, 30_000);
+  assert.equal(cr.STALL_CALLS, 3);
+});
+
+// Breaks if the stall rule is gone: a run with a broken hook then burns its whole time limit (25-40 min) instead of ~3 min.
+test('stall: 3 successful tool calls of 30 s or more kill the tree at once, exit 1 tool-stall, with the 3 times', async () => {
+  const { r, kills, log } = await streamRun([good(1, 61_000), good(2, 61_100, 10), good(3, 30_000, 20), good(4, 61_000, 30)]);
+  assert.equal(kills(), 1, 'killTree path called once');
+  assert.equal(r.status, 1);
+  assert.equal(r.error, 'tool-stall');
+  assert.deepEqual(r.stallMs, [61_000, 61_100, 30_000]);
+  assert.equal(r.timedOut, false, 'callers retry on timedOut; a stall is not a time-out');
+  assert.equal(log.releases, 1, 'the slot is released');
+  assert.ok(r.durationMs < 5000, 'returned long before the 10 s time-out');
+});
+
+// Breaks if the limit moves to > 30000: a call of exactly 30 s is a stall.
+test('stall: 29 999 ms is healthy, 30 000 ms counts', async () => {
+  const fast = await streamRun([good(1, 29_999), good(2, 61_000), good(3, 61_000), good(4, 61_000)]);
+  assert.equal(fast.kills(), 0);
+  assert.equal(fast.r.status, 0);
+  const edge = await streamRun([good(1, 30_000), good(2, 30_000), good(3, 30_000)]);
+  assert.equal(edge.kills(), 1);
+});
+
+// Breaks if a fast call among the first 3 is ignored: one real slow call (a long grep) with fast ones around it is normal.
+test('stall: one fast call among the first 3 means no stall, now or later', async () => {
+  const { r, kills } = await streamRun([good(1, 61_000), good(2, 500), good(3, 61_000), good(4, 61_000), good(5, 61_000), good(6, 61_000)]);
+  assert.equal(kills(), 0);
+  assert.equal(r.status, 0);
+  assert.equal(r.error, undefined);
+});
+
+// Breaks if failed calls are counted. S10 and the probe: errors were fast (0.57 s, 1.36 s); a slow error must not trigger either.
+test('stall: failed tool calls do not count toward the 3', async () => {
+  const slowErr = (n) => done(`e${n}`, T0, T0 + 61_000, { ok: false });
+  const none = await streamRun([good(1, 61_000), good(2, 61_000), slowErr(1), slowErr(2)]);
+  assert.equal(none.kills(), 0, 'two slow successes and two slow errors are not 3 successes');
+  const third = await streamRun([good(1, 61_000), slowErr(1), good(2, 61_000), slowErr(2), good(3, 61_000)]);
+  assert.equal(third.kills(), 1);
+  assert.deepEqual(third.r.stallMs, [61_000, 61_000, 61_000]);
+  const fastErrFirst = await streamRun([done('f', T0, T0 + 600, { ok: false }), good(1, 61_000), good(2, 61_000), good(3, 61_000)]);
+  assert.equal(fastErrFirst.kills(), 1, 'a fast ERROR is not a healthy call: it does not clear the rule');
+});
+
+// Breaks if started events, junk lines or other tool kinds are miscounted.
+test('stall: counts any tool kind, ignores started and non-tool events', async () => {
+  const { kills } = await streamRun([
+    '{"type":"system","subtype":"init"}\n', startedEvt('a', T0), 'not json at all\n',
+    done('g', T0, T0 + 61_000, { kind: 'globToolCall' }), done('r', T0, T0 + 61_000, { kind: 'grepToolCall' }), startedEvt('b', T0), done('x', T0, T0 + 61_000),
+  ]);
+  assert.equal(kills(), 1);
+});
+
+// Breaks if parsing is per chunk: stdout arrives in arbitrary pieces, and a tool_call line is often larger than one chunk.
+test('stall: a line split across chunks parses; the last line without a newline parses', async () => {
+  const a = good(1, 61_000);
+  const b = good(2, 61_000);
+  const c = good(3, 61_000).trimEnd();
+  const cut = (s, n) => [s.slice(0, n), s.slice(n)];
+  const { r, kills } = await streamRun([...cut(a, 17), ...cut(b, 5), ...cut(c, c.length - 3)]);
+  assert.equal(kills(), 1, 'three events, all split mid-line, the last with no newline');
+  assert.equal(r.error, 'tool-stall');
+});
+
+// Breaks if the stall parse also runs for --output-format json (one blob at the end; no tool events to read).
+test('stall: json output mode is not parsed, never killed, and toolStats is null', async () => {
+  const { r, kills } = await streamRun([good(1, 61_000), good(2, 61_000), good(3, 61_000)], { args: ['index.js', '-p', '--output-format', 'json', 'prompt'] });
+  assert.equal(kills(), 0);
+  assert.equal(r.status, 0);
+  assert.equal(r.toolStats, null);
+  assert.equal(r.stdout.includes('completed'), true, 'stdout is kept whole');
+});
+
+test('stall: --output-format=stream-json (one token) is also stream mode', async () => {
+  const { kills } = await streamRun([good(1, 61_000), good(2, 61_000), good(3, 61_000)], { args: ['index.js', '--output-format=stream-json'] });
+  assert.equal(kills(), 1);
+});
+
+// Breaks if the stall kill throws away stdout: the stream up to the kill is evidence for the report.
+test('stall: stdout up to the kill is kept in the result', async () => {
+  const { r } = await streamRun([good(1, 61_000), good(2, 61_000), good(3, 61_000)]);
+  assert.equal(r.stdout.split('\n').filter(Boolean).length >= 3, true);
+});
+
+// Breaks if a stall can fire after the time-out already stopped the run: the killer would run twice and two finishes would race.
+test('stall: a stall line that arrives after the time-out is ignored (one kill, timedOut stays true)', async () => {
+  const { gate } = spyGate();
+  const child = fakeChild();
+  let kills = 0;
+  const killer = () => { kills += 1; setTimeout(() => { for (let i = 1; i <= 3; i += 1) child.stdout.write(good(i, 61_000)); setTimeout(() => child.emit('close', null), 30); }, 20); };
+  const r = await runAgent({ ...spec(50), args: STREAM }, { gate, spawnFn: () => child, killer, killGraceMs: 2000, gateEnv: {} });
+  assert.equal(kills, 1);
+  assert.equal(r.timedOut, true);
+  assert.equal(r.status, null);
+  assert.equal(r.error, undefined);
+});
+
+// ---- tool timing stats ----
+
+// Breaks if toolWaitMs sums parallel calls (the S18 globs ran 2 at once for 61 s: that is 61 s of waiting, not 122 s).
+test('toolStats: toolCalls, toolWaitMs from merged in-flight intervals, maxToolMs', async () => {
+  const { r } = await streamRun([
+    done('a', T0, T0 + 100), done('b', T0 + 50, T0 + 150), // overlap: merged [0,150] = 150
+    done('c', T0 + 1000, T0 + 1200, { ok: false }), // failed calls count in the stats: 200
+    done('d', T0 + 5000, T0 + 5010), // 10
+  ]);
+  assert.deepEqual(r.toolStats, { toolCalls: 4, toolWaitMs: 360, maxToolMs: 200 });
+});
+
+test('toolStats: a stream with no tool calls gives zeros, not null', async () => {
+  const { r } = await streamRun(['{"type":"system"}\n']);
+  assert.deepEqual(r.toolStats, { toolCalls: 0, toolWaitMs: 0, maxToolMs: 0 });
+});
+
+test('toolStats: a not-started run has none', async () => {
+  const r = await runAgentReal(spec(5000), { preflight: () => ({ ok: false, reason: 'x' }), platform: 'win32', gateEnv: {} });
+  assert.equal(r.toolStats ?? null, null);
+});
+
+// Breaks if runReview drops the stats from the ledger end line, or writes them when a run has none (json mode).
+test('ledger end line carries toolCalls, toolWaitMs, maxToolMs when present, and stays as before when absent', async () => {
+  const withStats = harness({ runner: async () => ({ status: 0, stdout: GOOD, stderr: '', timedOut: false, durationMs: 9, toolStats: { toolCalls: 7, toolWaitMs: 4200, maxToolMs: 900 } }) });
+  await runReview(withStats.opts, withStats.deps);
+  const end = readFileSync(withStats.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
+  assert.equal(end.toolCalls, 7);
+  assert.equal(end.toolWaitMs, 4200);
+  assert.equal(end.maxToolMs, 900);
+  const plain = harness();
+  await runReview(plain.opts, plain.deps);
+  const old = readFileSync(plain.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
+  for (const k of ['toolCalls', 'toolWaitMs', 'maxToolMs', 'stallMs']) assert.ok(!(k in old), `no ${k} on a json run`);
+});
+
+// Breaks if a tool-stall run is logged as a crash with no times: the ledger must say what stopped it.
+test('runReview logs a tool-stall: failed, exit 1, error names tool-stall and the 3 times, not a time-out', async () => {
+  const stalled = { status: 1, stdout: '', stderr: '', timedOut: false, error: 'tool-stall', stallMs: [61_000, 61_100, 61_300], durationMs: 190_000, toolStats: { toolCalls: 3, toolWaitMs: 183_400, maxToolMs: 61_300 } };
+  const h = harness({ runner: async () => stalled });
+  const r = await runReview(h.opts, h.deps);
+  assert.equal(r.exit, EXIT.FAILED);
+  assert.match(r.error, /tool-stall/);
+  assert.match(r.error, /61000, 61100, 61300/);
+  const end = readFileSync(h.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
+  assert.equal(end.timedOut, false);
+  assert.deepEqual(end.stallMs, [61_000, 61_100, 61_300]);
+  assert.equal(end.toolCalls, 3);
+  assert.equal(countRuns(readLedger(h.opts.ledgerPath).entries, { now: NOW + 1 }), 1, 'the agent did run: it counts');
+});
+
+// Breaks if runReview does not tell the user when no Git Bash was found (the guard silently did nothing).
+test('runReview logs when the bash guard found no Git Bash, and hands the agent an env with the flag', async () => {
+  const lines = [];
+  const h = harness({ env: { Path: 'C:\\Windows\\system32' }, platform: 'win32', exists: () => false, stderr: (m) => lines.push(m) });
+  await runReview(h.opts, h.deps);
+  assert.ok(lines.some((l) => /no Git Bash found/.test(l)), lines.join('|'));
+  assert.equal(h.calls[0].env.CCV3_BASH_GUARD, 'unresolved');
+});
+
+// ---- E2E, no model: the real preflight against the real PATH that buildAgentEnv builds on this machine ----
+
+test('E2E: real preflightBash on the real agent PATH exits 0 in under 10 s, and bash is not System32 / WSL', { timeout: 60_000 }, (t) => {
+  if (process.platform !== 'win32') { t.skip('not win32: the System32 WSL bash shim does not exist here'); return; }
+  if (cr.resolveGitBashDir(process.env) === null) { t.skip('no Git for Windows found on this PC: nothing to put first on PATH'); return; }
+  const env = buildAgentEnv(process.env, 'win32');
+  const t0 = Date.now();
+  const r = cr.preflightBash(env);
+  const ms = Date.now() - t0;
+  console.log(`E2E preflight: bash=${r.bash} ok=${r.ok} ${ms} ms`);
+  assert.equal(r.ok, true, r.reason);
+  assert.ok(ms < 10_000, `took ${ms} ms`);
+  assert.doesNotMatch(r.bash.toLowerCase(), /\\system32\\|\\sysnative\\|\\windowsapps\\/, `bash resolved to ${r.bash}`);
+  // What a hook runs is bare `bash`; WSL says Linux, Git Bash says MINGW64_NT or MSYS_NT.
+  const u = spawnSync('bash', ['-c', 'uname -s'], { env, encoding: 'utf8', windowsHide: true, timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] });
+  console.log(`E2E uname -s: ${String(u.stdout).trim()}`);
+  assert.match(String(u.stdout), /^(MINGW|MSYS)/);
 });

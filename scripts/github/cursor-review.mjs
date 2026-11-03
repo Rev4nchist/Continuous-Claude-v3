@@ -347,14 +347,50 @@ const SECRET_VARS = ['ANTHROPIC_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN'];
 /** POSIX shell variables that a Git Bash session sets. See buildAgentEnv. */
 const POSIX_SHELL_VARS = ['SHELL', 'MSYSTEM', 'BASH', 'BASH_ENV'];
 
+/** The key of the PATH variable in `env`, in its real casing (Windows copies hold `Path`), or undefined. */
+const pathKey = (env) => Object.keys(env).find((k) => k.toLowerCase() === 'path');
+
+/**
+ * The folder whose bash.exe is Git Bash (Git for Windows), or null. Order: GIT_BASH_DIR, then the `..\bin` of the first PATH entry that
+ * holds git.exe and whose `..\bin` holds bash.exe (Git\cmd\git.exe gives Git\bin; Git\mingw64\bin has no bash.exe, so the walk goes on),
+ * then <ProgramFiles>\Git\bin. Reads no process table. Windows path rules; `exists` is injected for tests.
+ */
+export function resolveGitBashDir(env = process.env, { exists = existsSync } = {}) {
+  const w = path.win32;
+  const hasBash = (dir) => exists(w.join(dir, 'bash.exe'));
+  const own = String(env.GIT_BASH_DIR ?? '').trim().replace(/[\\/]+$/, '');
+  if (own && hasBash(own)) return own;
+  const key = pathKey(env);
+  for (const raw of key ? String(env[key]).split(';') : []) {
+    const entry = raw.trim().replace(/^"|"$/g, '');
+    if (!entry || !exists(w.join(entry, 'git.exe'))) continue;
+    const bin = w.join(entry, '..', 'bin');
+    if (hasBash(bin)) return bin;
+  }
+  const fallback = w.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin');
+  return hasBash(fallback) ? fallback : null;
+}
+
+/** True when two PATH entries name the same folder: quotes, slash style, trailing slash and case are ignored. */
+const samePathEntry = (a, b) => {
+  const n = (x) => path.win32.normalize(x.trim().replace(/^"|"$/g, '')).replace(/[\\/]+$/, '').toLowerCase();
+  return n(a) === n(b);
+};
+
 /**
  * The environment for cursor-agent. Cursor runs the user's Claude Code hooks through `process.env.SHELL` when it is set. A session
  * started from Git Bash has SHELL=/bin/bash.exe, and bash cannot run Cursor's PowerShell hook launcher: every tool call then ends
  * "Hook blocked with message: --: eval: line 1: syntax error near unexpected token `('" (2026-11-01: all reads blocked, the model
  * still answered {"findings":[]}). The bake-off, started from PowerShell, had no SHELL and worked. So on Windows these variables are
- * dropped. It also sets what cursor-agent.cmd and cursor-agent.ps1 set (CURSOR_INVOKED_AS, NODE_COMPILE_CACHE). Pure.
+ * dropped. It also sets what cursor-agent.cmd and cursor-agent.ps1 set (CURSOR_INVOKED_AS, NODE_COMPILE_CACHE).
+ *
+ * PATH guard (Windows only): the Git Bash folder (resolveGitBashDir) becomes the FIRST PATH entry, so a plugin hook that runs `bash`
+ * gets Git Bash and not C:\Windows\system32\bash.exe, the WSL shim (2026-11-03: with WSL frozen every hook waited 60 s and every tool
+ * call took 61 s; .claudedocs/2026-11-03-grok-slowdown-investigation.md). The PATH key keeps its casing and the folder is listed once.
+ * CCV3_BASH_GUARD in the result is that folder, or 'unresolved' when no Git Bash exists (PATH is then unchanged; the caller can log it).
+ * Does not change `base`. `exists` is injected for tests.
  */
-export function buildAgentEnv(base = process.env, platform = process.platform) {
+export function buildAgentEnv(base = process.env, platform = process.platform, { exists = existsSync } = {}) {
   const env = { ...base };
   // The agent has no use for these and runs a PR's tree: its own key and the GitHub tokens must not reach it.
   for (const k of SECRET_VARS) delete env[k];
@@ -362,10 +398,113 @@ export function buildAgentEnv(base = process.env, platform = process.platform) {
     for (const k of POSIX_SHELL_VARS) delete env[k];
     env.CURSOR_INVOKED_AS = 'cursor-agent.cmd';
     env.NODE_COMPILE_CACHE ||= path.win32.join(env.LOCALAPPDATA || os.tmpdir(), 'cursor-compile-cache');
+    const dir = resolveGitBashDir(env, { exists });
+    if (dir) {
+      const key = pathKey(env) ?? 'Path';
+      const rest = String(env[key] ?? '').split(';').filter((e) => e.trim() && !samePathEntry(e, dir));
+      env[key] = [dir, ...rest].join(';');
+    }
+    env.CCV3_BASH_GUARD = dir ?? 'unresolved';
   } else {
     env.CURSOR_INVOKED_AS ||= 'cursor-agent';
   }
   return env;
+}
+
+/** The text of a run that did not start because `bash` on the agent PATH hangs. */
+export const BASH_HANG_MSG = 'bash on the agent PATH hangs (WSL?); see .claudedocs/2026-11-03-grok-slowdown-investigation.md';
+export const BASH_PREFLIGHT_MS = 10_000;
+
+/**
+ * Runs the first `bash` on the env's PATH as `bash -c "exit 0"`: hidden, SIGKILL after 10 s, no pipes (a stuck grandchild cannot hold
+ * one open past the time-out). A Cursor plugin hook runs bare `bash` with this PATH, so this is what the hook would get. A hung WSL
+ * shim times out; Git Bash exits at once. No bash on the PATH is ok (skipped): a missing bash fails fast and cannot stall a hook.
+ * { ok, bash, ms, reason? | skipped? }. deps are for tests.
+ */
+export function preflightBash(env = process.env, { spawnSyncFn = spawnSync, exists = existsSync, platform = process.platform, timeoutMs = BASH_PREFLIGHT_MS } = {}) {
+  const win = platform === 'win32';
+  const join = win ? path.win32.join : path.join;
+  const key = pathKey(env);
+  const dirs = (key ? String(env[key]).split(win ? ';' : path.delimiter) : []).map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean);
+  const bash = dirs.map((d) => join(d, win ? 'bash.exe' : 'bash')).find((f) => exists(f));
+  if (!bash) return { ok: true, bash: null, ms: 0, skipped: 'no bash on the PATH' };
+  const t0 = Date.now();
+  const r = spawnSyncFn(bash, ['-c', 'exit 0'], { env, windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL', stdio: 'ignore' });
+  const ms = Date.now() - t0;
+  if (r.error?.code === 'ETIMEDOUT') return { ok: false, bash, ms, reason: `bash -c "exit 0" timed out after ${Math.round(timeoutMs / 1000)} s (${bash})` };
+  if (r.error) return { ok: false, bash, ms, reason: `bash -c "exit 0" failed to run: ${r.error.message} (${bash})` };
+  if (r.status !== 0) return { ok: false, bash, ms, reason: `bash -c "exit 0" ended with exit ${r.status} (${bash})` };
+  return { ok: true, bash, ms };
+}
+
+// ---------- tool-stall detector (stream-json) ----------
+
+/** A successful tool call this slow is a stall (healthy calls take under 2 s; the 2026-11-02 hook stall was 61 s). */
+export const STALL_MS = 30_000;
+/** The run stops when its first STALL_CALLS successful tool calls each took STALL_MS or more. */
+export const STALL_CALLS = 3;
+
+/** True when the agent args ask for stream-json output. */
+export const isStreamJson = (args = []) => args.some((a, i) => a === '--output-format=stream-json' || (a === '--output-format' && args[i + 1] === 'stream-json'));
+
+/**
+ * One stream-json line as a completed tool call: { startedAt, completedAt, ok } (epoch ms), else null. Fields (cursor-agent stream,
+ * .claude/cache/e2e/2026-11-03-trex-author-S18.raw.json): type 'tool_call', subtype 'completed', tool_call.startedAtMs and
+ * tool_call.completedAtMs (decimal strings), tool_call.<kind>ToolCall.result.success (ok) or .result.error (failed).
+ */
+export function readToolCall(line) {
+  if (!line.includes('tool_call') || !line.includes('completed')) return null;
+  let ev;
+  try { ev = JSON.parse(line); } catch { return null; }
+  if (ev?.type !== 'tool_call' || ev.subtype !== 'completed' || !ev.tool_call) return null;
+  const tc = ev.tool_call;
+  const startedAt = Number(tc.startedAtMs);
+  const completedAt = Number(tc.completedAtMs);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt) return null;
+  const kind = Object.keys(tc).find((k) => k.endsWith('ToolCall') && tc[k] && typeof tc[k] === 'object');
+  const result = kind ? tc[kind].result : undefined;
+  return { startedAt, completedAt, ok: Boolean(result && result.success !== undefined && result.error === undefined) };
+}
+
+/**
+ * Reads stdout chunks of a stream-json run line by line (a line may span chunks). feed(chunk) returns the stall times
+ * (STALL_CALLS numbers) once the first STALL_CALLS successful calls were all >= STALL_MS, else null. Failed calls do not count for
+ * the stall rule. stats() covers every completed call: { toolCalls, toolWaitMs (merged in-flight time), maxToolMs }.
+ */
+export function createToolTracker() {
+  let carry = '';
+  let stall = null;
+  const calls = [];
+  const okTimes = [];
+  const take = (line) => {
+    const c = readToolCall(line);
+    if (!c) return;
+    calls.push(c);
+    if (!c.ok || okTimes.length >= STALL_CALLS) return;
+    okTimes.push(c.completedAt - c.startedAt);
+    if (okTimes.length === STALL_CALLS && okTimes.every((ms) => ms >= STALL_MS)) stall = [...okTimes];
+  };
+  const feed = (chunk) => {
+    carry += chunk;
+    const lines = carry.split('\n');
+    carry = lines.pop();
+    for (const l of lines) take(l);
+    // A last line with no newline yet: read it as soon as it is complete JSON.
+    if (carry.endsWith('}') && readToolCall(carry)) { take(carry); carry = ''; }
+    return stall;
+  };
+  const flush = () => { if (carry) { take(carry); carry = ''; } return stall; };
+  const stats = () => {
+    let wait = 0;
+    let from = null;
+    let to = null;
+    for (const c of [...calls].sort((a, b) => a.startedAt - b.startedAt)) {
+      if (from === null) { from = c.startedAt; to = c.completedAt; } else if (c.startedAt <= to) to = Math.max(to, c.completedAt); else { wait += to - from; from = c.startedAt; to = c.completedAt; }
+    }
+    if (from !== null) wait += to - from;
+    return { toolCalls: calls.length, toolWaitMs: wait, maxToolMs: calls.reduce((m, c) => Math.max(m, c.completedAt - c.startedAt), 0) };
+  };
+  return { feed, flush, stats };
 }
 
 /** How long a time-out waits for the agent to die before it gives up. The grok gate adds it to the slot's lifetime. */
@@ -384,18 +523,29 @@ function defaultKiller(pid) {
  * { status: null, error: 'grok-busy', timedOut: false, notStarted: true, durationMs: 0, waitedMs }. Every result has waitedMs (the
  * wait for the slot) and, when the agent started, spawnedAt (epoch ms); durationMs counts the agent only. CCV3_GROK_GATE=off skips the gate. A gate that cannot reach its state file
  * (reason 'lock', or a throw) is logged and the run goes ahead without a slot: a broken state file must not stop every review.
- * deps: { spawnFn, killer, killGraceMs, gate = acquireGrokSlot, gateOpts, gateEnv = process.env, gateLog }. The slot lives until the
- * run time-out + killGraceMs + 60 s (gateOpts.ttlMs overrides) and records the agent pid. Never throws.
+ * On win32 it first runs preflightBash with the spec env, before the gate and before any spawn (also with the gate off). When bash hangs
+ * it resolves at once, with no slot and no spawn, like the busy result: { status: null, error: 'bash-hang', notStarted: true,
+ * timedOut: false, durationMs: 0, waitedMs: 0, stderr: BASH_HANG_MSG + reason }. A preflight that throws is logged and skipped.
+ * In stream-json mode a stall (see spawnAgent) ends the run with status 1, error 'tool-stall' and stallMs. The result has toolStats
+ * ({ toolCalls, toolWaitMs, maxToolMs }; null in json mode).
+ * deps: { spawnFn, killer, killGraceMs, gate = acquireGrokSlot, gateOpts, gateEnv = process.env, gateLog, preflight = preflightBash,
+ * platform = process.platform }. The slot lives until the run time-out + killGraceMs + 60 s (gateOpts.ttlMs overrides) and records
+ * the agent pid. Never throws.
  */
 export async function runAgent(spec, deps = {}) {
-  const { gate = acquireGrokSlot, gateOpts = {}, gateEnv = process.env, gateLog = (m) => process.stderr.write(`${m}\n`), ...spawnDeps } = deps;
+  const { gate = acquireGrokSlot, gateOpts = {}, gateEnv = process.env, gateLog = (m) => process.stderr.write(`${m}\n`), preflight = preflightBash, platform = process.platform, ...spawnDeps } = deps;
+  if (platform === 'win32') {
+    let pf = { ok: true };
+    try { pf = await preflight(spec.env ?? process.env); } catch (err) { gateLog(`bash preflight: not usable (${err?.message ?? err}); running without it`); }
+    if (!pf.ok) return { status: null, stdout: '', stderr: `${BASH_HANG_MSG}: ${pf.reason ?? 'preflight failed'}`, timedOut: false, error: 'bash-hang', notStarted: true, durationMs: 0, waitedMs: 0, toolStats: null };
+  }
   if (String(gateEnv.CCV3_GROK_GATE ?? '').trim().toLowerCase() === 'off') return { waitedMs: 0, ...(await spawnAgent(spec, spawnDeps)) };
   let slot;
   const ttlMs = spec.timeoutMs + (spawnDeps.killGraceMs ?? KILL_GRACE_MS) + SLOT_MARGIN_MS;
   try { slot = await gate({ ttlMs, ...gateOpts }); } catch (err) { slot = { ok: false, reason: 'lock', detail: String(err?.message ?? err) }; }
   if (!slot.ok && slot.reason === 'busy') {
     const waited = slot.waitedMs ?? 0;
-    return { status: null, stdout: '', stderr: `grok gate: no slot in ${Math.round(waited / 60_000)} min`, timedOut: false, error: 'grok-busy', notStarted: true, durationMs: 0, waitedMs: waited };
+    return { status: null, stdout: '', stderr: `grok gate: no slot in ${Math.round(waited / 60_000)} min`, timedOut: false, error: 'grok-busy', notStarted: true, durationMs: 0, waitedMs: waited, toolStats: null };
   }
   if (!slot.ok) gateLog(`grok gate: not usable (${slot.reason}: ${slot.detail}); running without a slot`);
   const onSpawn = (pid) => { try { slot.attach?.(pid); } catch { /* the entry then follows this process only, and expires */ } };
@@ -407,7 +557,9 @@ export async function runAgent(spec, deps = {}) {
 /**
  * Spawns the agent and resolves when it ends. A time-out stops the agent pid and its whole process tree (killTree from lib/proc.mjs:
  * the Windows tree-kill switch is forbidden here, so it walks the process table). Never throws; a spawn error is a result.
- * { status, stdout, stderr, timedOut, error, durationMs }
+ * { status, stdout, stderr, timedOut, error, durationMs, toolStats, stallMs? }. Stream-json runs (--output-format stream-json) are read line by line
+ * (createToolTracker): when the first STALL_CALLS successful tool calls each took STALL_MS or more, the agent tree is stopped at once and the
+ * result is status 1, error 'tool-stall', stallMs [..], timedOut false.
  */
 function spawnAgent({ command, args, cwd, timeoutMs, env = process.env }, { spawnFn = spawn, killer = defaultKiller, killGraceMs = KILL_GRACE_MS, onSpawn } = {}) {
   return new Promise((resolve) => {
@@ -418,11 +570,26 @@ function spawnAgent({ command, args, cwd, timeoutMs, env = process.env }, { spaw
     let settled = false;
     let error;
     let child;
+    let stallMs = null;
+    const tracker = isStreamJson(args) ? createToolTracker() : null;
     const finish = (status) => {
       if (settled) return;
       settled = true;
       clearTimeout(limit);
-      resolve({ status, stdout, stderr, timedOut, error, spawnedAt: started, durationMs: Date.now() - started });
+      tracker?.flush();
+      resolve({
+        status, stdout, stderr, timedOut, error, spawnedAt: started, durationMs: Date.now() - started,
+        ...(stallMs ? { stallMs } : {}), toolStats: tracker ? tracker.stats() : null,
+      });
+    };
+    // The tool-stall stop mirrors the time-out: stop the tree, wait for the close (or the grace), then resolve with exit 1.
+    const stall = async (times) => {
+      stallMs = times;
+      error = 'tool-stall';
+      clearTimeout(limit);
+      try { await killer(child?.pid); } catch { /* the grace timer below ends the wait */ }
+      try { child?.kill('SIGKILL'); } catch { /* already gone */ }
+      setTimeout(() => finish(1), killGraceMs).unref();
     };
     const limit = setTimeout(async () => {
       timedOut = true;
@@ -440,10 +607,16 @@ function spawnAgent({ command, args, cwd, timeoutMs, env = process.env }, { spaw
     try { onSpawn?.(child.pid); } catch { /* a slot note must not stop the run */ }
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c) => { if (!settled) stdout += c; });
+    child.stdout.on('data', (c) => {
+      if (settled) return;
+      stdout += c;
+      if (!tracker || stallMs || timedOut) return;
+      const times = tracker.feed(c);
+      if (times) stall(times);
+    });
     child.stderr.on('data', (c) => { if (!settled) stderr += c; });
     child.on('error', (err) => { error = String(err.message); finish(null); });
-    child.on('close', (code) => finish(timedOut ? null : code));
+    child.on('close', (code) => finish(timedOut ? null : stallMs ? 1 : code));
   });
 }
 
@@ -672,15 +845,18 @@ export async function runReview(opts, deps = {}) {
   }
 
   const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', 'json', '--model', m.model, prompt];
-  const spec = { command: agent.cmd, args, cwd: prep.dir, timeoutMs, env: buildAgentEnv(env, deps.platform ?? process.platform) };
+  const spec = { command: agent.cmd, args, cwd: prep.dir, timeoutMs, env: buildAgentEnv(env, deps.platform ?? process.platform, { exists: deps.exists }) };
+  if (spec.env.CCV3_BASH_GUARD === 'unresolved') log('cursor-review: no Git Bash found (set GIT_BASH_DIR); `bash` on the agent PATH may be the WSL shim');
   const startedAt = now();
   let run;
   try { run = await (deps.runner ?? runAgent)(spec); } catch (err) { run = { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message), durationMs: now() - startedAt }; }
   const parsed = parseReviewOutput(run.stdout, { expectModel: m.model });
 
   let error = null;
-  if (run.notStarted) error = `no grok slot came free in ${Math.round((run.waitedMs ?? 0) / 60_000)} min; the agent did not start (not counted against the caps)`;
+  if (run.notStarted && run.error === 'bash-hang') error = `${run.stderr?.startsWith(BASH_HANG_MSG) ? run.stderr.trim() : BASH_HANG_MSG}; the agent did not start (not counted against the caps)`;
+  else if (run.notStarted) error = `no grok slot came free in ${Math.round((run.waitedMs ?? 0) / 60_000)} min; the agent did not start (not counted against the caps)`;
   else if (run.timedOut) error = `TIMED OUT after ${Math.round(timeoutMs / 1000)} s: the agent and its process tree were stopped; no findings were read`;
+  else if (run.error === 'tool-stall') error = `tool-stall: the first ${STALL_CALLS} successful tool calls each took ${STALL_MS / 1000} s or more (${(run.stallMs ?? []).join(', ')} ms); the agent and its process tree were stopped. See .claudedocs/2026-11-03-grok-slowdown-investigation.md`;
   else if (run.error) error = `the agent did not start or crashed: ${run.error}`;
   else if (run.status !== 0) error = `the agent exited with status ${run.status}${run.stderr ? `: ${clip(run.stderr.trim(), 200)}` : ''}`;
   else if (parsed.modelMismatch) error = `model check failed: the output names a model other than ${m.model}; the run is void`;
@@ -693,7 +869,7 @@ export async function runReview(opts, deps = {}) {
     schema: 1, status: failed ? 'failed' : 'ok', runId: reserved.id, ref: prep.ref, base: prep.base, head: prep.head, model: m.model, band: m.band,
     ts: new Date(now()).toISOString(), durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), error, format: parsed.format, clean: parsed.clean,
     modelVerified: parsed.modelVerified, usage: parsed.usage, cursorSessionId: parsed.sessionId, problems: parsed.problems,
-    waitedMs: run.waitedMs ?? 0, notStarted: Boolean(run.notStarted),
+    waitedMs: run.waitedMs ?? 0, notStarted: Boolean(run.notStarted), ...(run.toolStats ? { toolStats: run.toolStats } : {}),
     counts, findings: failed ? [] : parsed.findings,
   };
   const when = stamp(new Date(now()));
@@ -706,6 +882,8 @@ export async function runReview(opts, deps = {}) {
     ref: prep.ref, model: m.model, band: m.band, sessionId, durationMs: rec.durationMs, exit: failed ? EXIT.FAILED : EXIT.OK, timedOut: rec.timedOut,
     modelVerified: rec.modelVerified, findingCount: rec.findings.length, usage: parsed.usage,
     waitedMs: rec.waitedMs, spawnedAt: run.spawnedAt ? new Date(run.spawnedAt).toISOString() : null, ...(run.notStarted ? { notStarted: true } : {}), ...(failed ? { error: clip(error, 300) } : {}),
+    ...(run.toolStats ? { toolCalls: run.toolStats.toolCalls, toolWaitMs: run.toolStats.toolWaitMs, maxToolMs: run.toolStats.maxToolMs } : {}),
+    ...(run.stallMs ? { stallMs: run.stallMs } : {}),
   }, { now });
   if (!opts.keepTree) prep.cleanup();
   return { exit: failed ? EXIT.FAILED : EXIT.OK, runId: reserved.id, findingsPath: `${stem}.findings.json`, summaryPath: `${stem}.summary.txt`, rawPath: `${stem}.raw.json`, error };
