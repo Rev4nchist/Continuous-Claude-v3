@@ -6,6 +6,7 @@
  * only tests pass another path):
  *   node scripts/trex/bench/author.mjs --group S18 [--dry-run] [--keep-tree] [--retry | --retry-harness]
  *   node scripts/trex/bench/author.mjs --all
+ *   node scripts/trex/bench/author.mjs --reparse <raw.json> --group <id>   parse a saved stream again: no agent, no ledger line
  *   node scripts/trex/bench/author.mjs --probe [--group S18]       one stream-json run that shows whether tool calls are visible
  *   node scripts/trex/bench/author.mjs --map-negatives [--sha <sha>] [--negatives <file>]
  *   node scripts/trex/bench/author.mjs --host-digest [--sha <sha>]  the digest a human review writes to host-review.json
@@ -72,7 +73,7 @@ export const GROUPS = Object.freeze({
   S12: { range: 'ac03ec78^1..ac03ec78', pre: '707612bd', fix: 'a4952ff5', host: 'pwsh' },
   S13: { range: '82a06d63..18962377', pre: '18962377', fix: '3b5a6018', host: null },
   S14: { range: '707612bd^1..707612bd', pre: '707612bd', fix: '1e285069', host: null },
-  S15: { range: '8e0017ce..73040918', pre: '73040918', fix: '6f36d24f', host: 'pwsh' },
+  S15: { range: 'd47b9709^1..d47b9709', pre: '73040918', fix: '6f36d24f', host: 'pwsh' },
   S17: { range: '73040918..6f36d24f', pre: '73040918', fix: null, skipAt: '6f36d24f', host: 'pwsh', kind: 'honest-skip' },
   S18: { range: '6bc94082^1..6bc94082', pre: 'a309dd66', fix: '82a06d63', host: null },
 });
@@ -214,12 +215,15 @@ function pathProblem(p) {
   return bad ? `file path ${JSON.stringify(p)} is outside the group folder` : null;
 }
 
-/** Fenced blocks that open with "```file path=<p>" and close with a line that holds only "```". */
+/**
+ * Fenced blocks that open with "```file path=<p>" and close with a line that holds only "```". The opener may follow prose on its line
+ * (the S17 answer had "...would actually hit.```file path=x.yaml"): the prose is dropped and the fence starts a new line.
+ */
 function fileBlocks(lines) {
   const blocks = [];
   const problems = [];
   for (let i = 0; i < lines.length; i += 1) {
-    const m = /^```file\s+path=(.+?)\s*$/.exec(lines[i]);
+    const m = /```file[ \t]+path=(.+?)\s*$/.exec(lines[i]);
     if (!m) continue;
     let j = i + 1;
     while (j < lines.length && lines[j].trim() !== '```') j += 1;
@@ -594,6 +598,73 @@ function saveArtifacts({ opts, now, group, probe, rec, run }) {
   writeJson(probe ? `${stem}.json` : `${stem}.manifest.json`, rec);
 }
 
+// ---------- reparse ----------
+
+/** The tree path of a saved run: the cwd of its system init event. null when the stream has none. */
+function streamCwd(stdout) {
+  for (const l of String(stdout ?? '').split(/\r?\n/)) {
+    try { const e = JSON.parse(l); if (isObj(e) && e.type === 'system' && typeof e.cwd === 'string') return e.cwd; } catch { /* not a JSON line */ }
+  }
+  return null;
+}
+
+/** The changed files of a group range, as prepareReview lists them: merge base to head, minus the folders left out of a tree. */
+function groupChangedFiles(git, range) {
+  const [a, b] = String(range).split(/\.{2,3}/);
+  const mb = git(['merge-base', a, b]);
+  const base = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : a;
+  const d = git(['diff', '--name-only', '--no-renames', '-z', base, b]);
+  if (d.status !== 0) throw new Error(`git diff ${base} ${b} failed: ${String(d.stderr).trim()}`);
+  return d.stdout.split('\0').filter(Boolean).filter((f) => !cursor.isExcluded(f));
+}
+
+function readJsonOrNull(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+/** Refuses a reparse that would break a rule. A problem text, or null. */
+function reparseRefusal(raw, group, folder) {
+  if (!new RegExp(`-${group}(?:-r\\d+)?\\.raw\\.json$`).test(path.basename(raw))) return `${path.basename(raw)} is not a raw file of group ${group}`;
+  if (!existsSync(raw)) return `${raw} does not exist`;
+  if (existsSync(folder) && readdirSync(folder).length > 0) return `${folder} is not empty: a reparse never replaces flows`;
+  return null;
+}
+
+/**
+ * Reads the answer of a saved stream-json run again: the same parse, lint and write path as a live run, with no agent call, no ledger
+ * line and no bench cap. Use it after a parser fix, on the raw file of a run that failed to parse. opts: { root, model? }.
+ * deps (tests): { git, notRun }. Returns { exit, runId, files, manifest, usage, problems, manifestFile }.
+ * It refuses (exit 2) when the group folder is not empty or the saved stream shows a read outside the tree (blind: violated).
+ */
+export async function reparseGroup(rawFile, group, opts = {}, deps = {}) {
+  const fail = (exit, problems) => ({ exit, runId: null, files: [], manifest: null, usage: null, problems, manifestFile: null });
+  const bad = validate(group, opts);
+  if (bad) return fail(EXIT.REFUSED, [bad]);
+  const raw = path.resolve(String(rawFile ?? ''));
+  const folder = path.join(opts.root, ...FLOWS_DIR.split('/'), group);
+  const refusal = reparseRefusal(raw, group, folder);
+  if (refusal) return fail(EXIT.REFUSED, [refusal]);
+  const stdout = readFileSync(raw, 'utf8');
+  const treeDir = streamCwd(stdout);
+  const audit = analyzeStream(stdout, treeDir ?? '');
+  if (treeDir === null && audit.toolCallsVisible) return fail(EXIT.REFUSED, ['the saved stream has no system init cwd: its reads cannot be audited']);
+  if (audit.outsideTree.length > 0) return fail(EXIT.REFUSED, [outsideProblem(audit.outsideTree)]);
+  const git = deps.git ?? benchGit(opts.root);
+  let files;
+  try { files = groupChangedFiles(git, GROUPS[group].range); } catch (err) { return fail(EXIT.FAILED, [err.message]); }
+  const parsed = parseReviewOutput(stdout, {});
+  const error = runError({ status: 0 }, parsed, null);
+  const out = error ? { files: [], manifest: null, problems: [] } : readAnswer(parsed.text, { prep: { files }, git, group }, deps);
+  const problems = [...(error ? [error] : []), ...out.problems];
+  const exit = problems.length > 0 ? EXIT.FAILED : EXIT.OK;
+  const written = exit === EXIT.OK ? writeFlows(folder, out.files) : [];
+  const orig = readJsonOrNull(raw.replace(/\.raw\.json$/, '.manifest.json'));
+  const rec = { group, ref: `trex-${group}`, runId: orig?.runId ?? null, model: orig?.model ?? opts.model ?? DEFAULT_MODEL, usage: parsed.usage ?? null, retries: orig?.retries ?? 0, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', reparsedFrom: raw, ...audit, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
+  const manifestFile = raw.replace(/\.raw\.json$/, '-reparse.manifest.json');
+  writeJson(manifestFile, rec);
+  return { exit, runId: rec.runId, files: written, manifest: out.manifest, usage: rec.usage, problems, manifestFile };
+}
+
 // ---------- negatives ----------
 
 const diffNames = (git, id, head) => {
@@ -695,9 +766,10 @@ const gitText = (git, args, what) => {
 };
 
 function latestManifest(cacheDir, group) {
-  const re = new RegExp(`^(\\d{4}-\\d{2}-\\d{2})-trex-author-${group}(?:-r(\\d+))?\\.manifest\\.json$`);
+  const re = new RegExp(`^(\\d{4}-\\d{2}-\\d{2})-trex-author-${group}(?:-r(\\d+))?(-reparse)?\\.manifest\\.json$`);
   const found = existsSync(cacheDir) ? readdirSync(cacheDir).map((n) => ({ n, m: re.exec(n) })).filter((x) => x.m) : [];
-  found.sort((a, b) => (a.m[1] === b.m[1] ? Number(a.m[2] ?? 0) - Number(b.m[2] ?? 0) : a.m[1] < b.m[1] ? -1 : 1));
+  const rank = (x) => Number(x.m[2] ?? 0) * 2 + (x.m[3] ? 1 : 0);
+  found.sort((a, b) => (a.m[1] === b.m[1] ? rank(a) - rank(b) : a.m[1] < b.m[1] ? -1 : 1));
   return found.length ? JSON.parse(readFileSync(path.join(cacheDir, found.at(-1).n), 'utf8')) : null;
 }
 
@@ -750,7 +822,14 @@ export function freeze(sha, opts, deps = {}) {
 
 // ---------- command line ----------
 
-const ACTIONS = ['group', 'all', 'probe', 'map-negatives', 'freeze', 'host-digest'];
+const ACTIONS = ['group', 'all', 'probe', 'map-negatives', 'freeze', 'host-digest', 'reparse'];
+
+/** --reparse <raw.json> --group <id>: nothing else. A reparse has no dry run, no retry and no tree. */
+function reparseArgs(out, acts) {
+  if (acts.length !== 2 || !acts.includes('group') || !out.reparse || !out.group) return { error: '--reparse <raw.json> needs --group <id> and no other action' };
+  if (out.dryRun || out.retry || out.keepTree) return { error: '--reparse takes no --dry-run, --retry or --keep-tree' };
+  return { ...out, action: 'reparse' };
+}
 
 export function parseArgs(argv) {
   const out = { actions: [] };
@@ -760,6 +839,7 @@ export function parseArgs(argv) {
     const next = () => argv[++i];
     if (flag[a]) out.actions.push(flag[a]);
     else if (a === '--group') { out.group = next(); out.actions.push('group'); } else if (a === '--sha') out.sha = next();
+    else if (a === '--reparse') { out.reparse = next(); out.actions.push('reparse'); }
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--keep-tree') out.keepTree = true;
     else if (a === '--retry') out.retry = out.retry ?? true;
@@ -771,6 +851,7 @@ export function parseArgs(argv) {
     else return { error: `unknown argument ${JSON.stringify(a)}` };
   }
   const acts = [...new Set(out.actions)];
+  if (out.actions.includes('reparse')) return reparseArgs(out, acts);
   if (out.actions.includes('probe') && acts.length === 2 && acts.includes('group')) out.action = 'probe';
   else if (acts.length !== 1) return { error: `pass exactly one of --group <id>, --all, --probe, --${ACTIONS.slice(3).join(', --')}` };
   else out.action = acts[0];
@@ -792,6 +873,17 @@ function printDryRun(info, say) {
   say(`other-group hits (not blocking): ${info.crossGroup}`);
   say(`bench runs: ${info.benchRuns} of ${info.benchCap} (weekly ${info.weekly} of ${info.weeklyCap})`);
   say('No agent started, no ledger line.');
+}
+
+async function runReparse(args, root, deps, say) {
+  const r = await reparseGroup(args.reparse, args.group, { root, model: args.model }, deps);
+  say(`${args.group}: reparse exit ${r.exit}${r.problems.length ? ` (${r.problems[0]})` : ''}`);
+  for (const p of r.problems.slice(1)) say(`  - ${p}`);
+  say(`reparsed from: ${path.resolve(args.reparse)}`);
+  for (const f of r.files) say(`wrote: ${f}`);
+  if (r.manifestFile) say(`manifest: ${r.manifestFile}`);
+  say('No agent started, no ledger line.');
+  return r.exit;
 }
 
 function loadNegatives(file) {
@@ -839,6 +931,7 @@ export async function main(argv, deps = {}) {
     return EXIT.REFUSED;
   }
   const root = deps.root ?? repoRoot();
+  if (args.action === 'reparse') return await runReparse(args, root, deps, say);
   const ledgerPath = deps.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
   const base = { root, ledgerPath, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree };
   try {

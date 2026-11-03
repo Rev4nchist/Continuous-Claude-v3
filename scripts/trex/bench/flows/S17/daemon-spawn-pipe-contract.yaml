@@ -1,0 +1,18 @@
+id: daemon-spawn-pipe-contract
+title: Daemon spawn clears inheritable pipes and hides its console
+description: A piped launcher returns while the daemon keeps running, and the child console stays hidden.
+goal: The spawn clears inheritable pipe handles and keeps CreateNoWindow with UseShellExecute false.
+paths:
+  - scripts/start-embedding-daemon.ps1
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+steps:
+  - action: {cmd: [node, scripts/trex/bench/flows/S17/daemon-spawn-pipe-contract.mjs]}
+    checks:
+      - {text: launcher keeps the no-window pipe contract, exit: 0}
+      - {text: contract line, stdout: "daemon spawn clears inheritable pipes and hides the console"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

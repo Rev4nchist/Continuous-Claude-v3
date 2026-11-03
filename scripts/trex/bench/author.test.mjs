@@ -132,6 +132,41 @@ test('parseAuthorOutput reports text after the manifest and a duplicate path', (
   assert.ok(dup.problems.some((p) => /twice|duplicate/i.test(p)));
 });
 
+// A short cut of the real S17 answer (2026-11-03): the first file fence starts mid-line, right after prose.
+const S17_PROSE = 'I\'ll read the diff and the changed files first.The diff is mostly a Windows daemon-pipe fix. I\'ll read those files to see which defect a user would actually hit.';
+const S17_YAML = 'id: daemon-spawn-pipe-contract\ntitle: Daemon spawn clears inheritable pipes\ndescription: d\ngoal: g\npaths:\n  - scripts/start-embedding-daemon.ps1';
+const S17_MANIFEST = { flows: [{ id: 'daemon-spawn-pipe-contract', file: 'daemon-spawn-pipe-contract.yaml', risk: 'pipe' }], cannotVerify: [{ risk: 'r', why: 'w' }] };
+const s17Answer = (opener) => `${S17_PROSE}${opener}\n${S17_YAML}\n\`\`\`\n\n\`\`\`json\n${JSON.stringify(S17_MANIFEST)}\n\`\`\``;
+
+test('parseAuthorOutput accepts an opening file fence that follows prose on the same line (real S17 shape)', () => {
+  // Breaks when fileBlocks goes back to matching the opener only at line start: the S17 run failed with "no file block wrote it".
+  const r = parseAuthorOutput(s17Answer('```file path=daemon-spawn-pipe-contract.yaml'), ['scripts/start-embedding-daemon.ps1']);
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual(r.files.map((f) => f.path), ['daemon-spawn-pipe-contract.yaml']);
+  assert.equal(r.files[0].text, S17_YAML, 'the prose before the fence is not part of the file');
+  assert.equal(r.manifest.flows[0].id, 'daemon-spawn-pipe-contract');
+});
+
+test('parseAuthorOutput keeps the closing-fence rule for a mid-line opener', () => {
+  // A closing fence that follows text on its line is not a closer: the block stays open to the end and is reported.
+  const text = `${S17_PROSE}\`\`\`file path=a.yaml\n${S17_YAML}\nend\`\`\`\n\`\`\`json\n${JSON.stringify(S17_MANIFEST)}\n\`\`\``;
+  const r = parseAuthorOutput(text, ['scripts/start-embedding-daemon.ps1']);
+  assert.ok(r.problems.some((p) => /a\.yaml/.test(p)), r.problems.join('; '));
+});
+
+test('parseAuthorOutput does not treat a ``` in prose that is not "```file path=" as a fence', () => {
+  // Breaks when the mid-line rule matches any ``` instead of only the file-path opener.
+  for (const prose of ['Use ```bash to run it.', 'A ```json example follows', 'text ```file without a path', 'text ```files path=x.yaml']) {
+    const r = parseAuthorOutput(`${prose}\n${S17_YAML}\n\`\`\`\n\`\`\`json\n${JSON.stringify(S17_MANIFEST)}\n\`\`\``, ['scripts/start-embedding-daemon.ps1']);
+    assert.equal(r.files.length, 0, prose);
+    assert.ok(r.problems.some((p) => /no file block/.test(p)), prose);
+  }
+  // Prose with a stray fence, then a real line-start block: only the real block is a file.
+  const both = parseAuthorOutput(`Use \`\`\`bash to run it.\n\`\`\`file path=a.yaml\n${S17_YAML}\n\`\`\`\n\`\`\`json\n${JSON.stringify({ flows: [{ id: 'daemon-spawn-pipe-contract', file: 'a.yaml', risk: 'r' }], cannotVerify: [] })}\n\`\`\``, ['scripts/start-embedding-daemon.ps1']);
+  assert.deepEqual(both.problems, []);
+  assert.deepEqual(both.files.map((f) => f.path), ['a.yaml']);
+});
+
 // ---------- lintFlow ----------
 
 test('lintFlow accepts a valid scripted flow', () => {
@@ -675,6 +710,16 @@ test('the group table matches the spec', () => {
   assert.equal(GROUPS.S1.range, 'beb9d5ef..23b62e5d');
 });
 
+test('every group author range holds at least one commit (real git)', () => {
+  // Breaks when a range is written the wrong way round: git rev-list then counts 0 and Grok gets an empty PR.diff (S15, 2026-11-03).
+  const git = benchGit(fileURLToPath(new URL('../../..', import.meta.url)));
+  for (const [id, g] of Object.entries(GROUPS)) {
+    const r = git(['rev-list', '--count', g.range]);
+    assert.equal(r.status, 0, `${id} ${g.range}: ${r.stderr}`);
+    assert.ok(Number(r.stdout.trim()) > 0, `${id} range ${g.range} is empty`);
+  }
+});
+
 // ---------- P0 scope: prompt and lint share one list ----------
 
 const TEMPLATE = readFileSync(fileURLToPath(new URL('./author-prompt.md', import.meta.url)), 'utf8');
@@ -954,4 +999,106 @@ test('blobAt reads the blob id of a file at a commit with real git, and null for
   assert.equal(blobAt(git, 'HEAD', 'scripts'), null);
   assert.equal(blobAt(git, 'HEAD', 'scripts/gone.ps1'), null);
   assert.equal(blobAt(git, 'nosuchrev', 'scripts/land.ps1'), null);
+});
+
+// ---------- --reparse ----------
+
+const RAW_DAY = '2026-11-03';
+const CHANGED_Z = `${CHANGED.join('\0')}\0`;
+/** Git for a reparse: the merge base and the changed-file list of the group range. */
+const reparseGit = () => gitFrom([
+  [/^merge-base /, () => ({ status: 0, stdout: 'mergebase\n' })],
+  [/^diff --name-only --no-renames -z mergebase /, () => ({ status: 0, stdout: CHANGED_Z })],
+]);
+
+/** A saved stream-json raw file in the e2e cache of a temp root, plus the manifest the live run wrote next to it. */
+function reparseSetup(t, { group = 'S18', answer = GOOD, extra = [], manifest = { group, runId: 'run-orig-1', model: 'grok-4.7-high', status: 'failed' } } = {}) {
+  const s = authorSetup(t, { deps: { git: reparseGit() } });
+  const treeDir = path.join(s.root, 'old-tree');
+  const raw = put(s.root, `.claude/cache/e2e/${RAW_DAY}-trex-author-${group}.raw.json`, streamFor(treeDir, { answer, extra }));
+  if (manifest) put(s.root, `.claude/cache/e2e/${RAW_DAY}-trex-author-${group}.manifest.json`, JSON.stringify(manifest));
+  s.deps.runner = async () => { throw new Error('reparse must not start an agent'); };
+  return { ...s, raw, group, folder: path.join(s.root, 'scripts/trex/bench/flows', group) };
+}
+const reparseManifest = (s) => JSON.parse(readFileSync(path.join(path.dirname(s.raw), `${RAW_DAY}-trex-author-${s.group}-reparse.manifest.json`), 'utf8'));
+
+test('--reparse writes the flows and a reparse manifest, with no agent call and no ledger line', async (t) => {
+  // Breaks when reparse reserves a ledger run (the 18-run cap is spent) or calls the agent.
+  const s = reparseSetup(t);
+  const r = await cli(s, ['--reparse', s.raw, '--group', s.group]);
+  assert.equal(r.code, 0, r.text);
+  assert.ok(existsSync(path.join(s.folder, 'gate.yaml')) && existsSync(path.join(s.folder, 'fixtures/payload.json')));
+  assert.deepEqual(ledgerLines(s.ledger), []);
+  assert.equal(s.state.prepared, 0, 'no tree was built');
+  const m = reparseManifest(s);
+  assert.equal(m.reparsedFrom, s.raw);
+  assert.equal(m.runId, 'run-orig-1');
+  assert.equal(m.status, 'ok');
+  assert.equal(m.blind, 'audited (stream-json reads in tree)');
+  assert.deepEqual(m.files, ['gate.yaml', 'fixtures/payload.json']);
+  assert.match(r.text, /gate\.yaml/);
+});
+
+test('--reparse reads a mid-line file fence from the saved answer (real S17 shape)', async (t) => {
+  const prose = 'I will read the diff first.The change touches scripts/github/pre-pr.mjs.';
+  const answer = `${prose}\`\`\`file path=gate.yaml\n${flowYaml()}\n\`\`\`\n\`\`\`file path=fixtures/payload.json\n{}\n\`\`\`\n\`\`\`json\n${JSON.stringify(MANIFEST)}\n\`\`\``;
+  const s = reparseSetup(t, { answer });
+  const r = await cli(s, ['--reparse', s.raw, '--group', s.group]);
+  assert.equal(r.code, 0, r.text);
+  assert.ok(existsSync(path.join(s.folder, 'gate.yaml')));
+});
+
+test('--reparse refuses a group folder that is not empty and keeps what is there', async (t) => {
+  const s = reparseSetup(t);
+  put(s.root, 'scripts/trex/bench/flows/S18/old.yaml', 'keep me');
+  const r = await cli(s, ['--reparse', s.raw, '--group', s.group]);
+  assert.equal(r.code, 2);
+  assert.match(r.text, /not empty/);
+  assert.deepEqual(readdirSync(s.folder), ['old.yaml']);
+});
+
+test('--reparse refuses a raw file whose audit is blind: violated, and writes nothing', async (t) => {
+  const outside = { type: 'tool_call', subtype: 'started', tool_call: { readToolCall: { args: { path: 'C:/Users/someone/continuous-claude/.claudedocs/answers.md' } } } };
+  const s = reparseSetup(t, { extra: [outside] });
+  const r = await cli(s, ['--reparse', s.raw, '--group', s.group]);
+  assert.equal(r.code, 2);
+  assert.match(r.text, /outside the tree|violated/);
+  assert.ok(!existsSync(s.folder) || readdirSync(s.folder).length === 0);
+});
+
+test('--reparse exits 1 and writes no flow when the lint fails, and still records the reparse', async (t) => {
+  const s = reparseSetup(t, { answer: answer([['gate.yaml', flowYaml().replace('scripts/github/pre-pr.mjs', 'other/file.mjs')]], { flows: [{ id: 'gate-blocks-inline-body', file: 'gate.yaml', risk: 'r' }], cannotVerify: [] }) });
+  const r = await cli(s, ['--reparse', s.raw, '--group', s.group]);
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /paths hit no changed file/);
+  assert.ok(!existsSync(s.folder) || readdirSync(s.folder).length === 0);
+  assert.equal(reparseManifest(s).status, 'failed');
+});
+
+test('--reparse refuses a raw file that belongs to another group, a missing file and a stream with no result', async (t) => {
+  const s = reparseSetup(t);
+  assert.equal((await cli(s, ['--reparse', s.raw, '--group', 'S1'])).code, 2, 'wrong group');
+  assert.equal((await cli(s, ['--reparse', path.join(s.root, 'nope.raw.json'), '--group', s.group])).code, 2, 'missing file');
+  const empty = put(s.root, `.claude/cache/e2e/${RAW_DAY}-trex-author-S9.raw.json`, '{"type":"system","subtype":"init","cwd":"x"}\n');
+  const r = await cli(s, ['--reparse', empty, '--group', 'S9']);
+  assert.equal(r.code, 1, r.text);
+  assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S9')) || readdirSync(path.join(s.root, 'scripts/trex/bench/flows/S9')).length === 0);
+});
+
+test('parseArgs: --reparse needs --group and takes no --dry-run', () => {
+  assert.equal(parseArgs(['--reparse', 'a.raw.json', '--group', 'S17']).action, 'reparse');
+  assert.equal(parseArgs(['--reparse', 'a.raw.json', '--group', 'S17']).reparse, 'a.raw.json');
+  assert.ok(parseArgs(['--reparse', 'a.raw.json']).error);
+  assert.ok(parseArgs(['--reparse', 'a.raw.json', '--group', 'S17', '--dry-run']).error);
+  assert.ok(parseArgs(['--reparse']).error);
+});
+
+test('freeze reads the reparse manifest of a group whose live run failed', (t) => {
+  // Breaks when latestManifest ignores "-reparse.manifest.json": S17 would never freeze.
+  const s = freezeSetup(t);
+  const cacheDir = s.opts.cacheDir;
+  put(cacheDir, '2026-11-03-trex-author-S1.manifest.json', JSON.stringify({ group: 'S1', runId: 'run-S1', status: 'failed', usage: { in: 1 } }));
+  put(cacheDir, '2026-11-03-trex-author-S1-reparse.manifest.json', JSON.stringify({ group: 'S1', runId: 'run-S1', status: 'ok', usage: { in: 1 }, reparsedFrom: 'x', blind: 'audited (stream-json reads in tree)' }));
+  const frozen = freeze('abc123', s.opts, { git: s.git });
+  assert.equal(frozen.groups.S1.blind, 'audited (stream-json reads in tree)');
 });

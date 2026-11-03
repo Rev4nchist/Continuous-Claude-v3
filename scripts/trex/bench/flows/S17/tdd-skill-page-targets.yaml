@@ -1,0 +1,22 @@
+id: tdd-skill-page-targets
+title: TDD skill pages resolve and retry examples are async
+description: Agents that follow the tdd skill open the references pages and copy an async retry operation.
+goal: Broken skill links, root duplicate pages, or a sync retry example fail the flow.
+paths:
+  - .claude/skills/tdd/deep-modules.md
+  - .claude/skills/tdd/mocking-boundaries.md
+  - .claude/skills/tdd/references/philosophy.md
+  - .github/workflows/ccv3-checks.yml
+  - scripts/skills/tdd-tidy.test.mjs
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+steps:
+  - action: {cmd: [node, scripts/trex/bench/flows/S17/tdd-skill-page-targets.mjs]}
+    checks:
+      - {text: skill pages resolve and retry examples are async, exit: 0}
+      - {text: contract line, stdout: "tdd skill links resolve and retry examples are async"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1
