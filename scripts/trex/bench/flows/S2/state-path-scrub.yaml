@@ -1,0 +1,39 @@
+id: state-path-scrub
+title: Home paths and tokens in session state never reach the snapshot
+description: Read a hostile session state file through readStateFiles and print the snapshot.
+goal: Surrounding words stay, home paths become <path>, the worktree is a leaf, and the token is redacted.
+paths:
+  - apps/agentic-os/src/server/sources/state-files.ts
+  - apps/agentic-os/src/server/sources/safe-message.ts
+symbols: [readStateFiles, scrubPathsInText]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, --experimental-strip-types, scripts/trex/bench/flows/S2/check-state-paths.mjs]
+      cwd: .
+    checks:
+      - {text: reader prints one snapshot, exit: 0}
+      - {text: spaced posix path keeps the words around it, stdout: 'Archive <path> before Friday'}
+      - {text: var path keeps the words around it, stdout: 'Move logs from <path> to S3 and add tests'}
+      - {text: windows path keeps the question, stdout: 'Should I delete <path> or keep it\?'}
+      - {text: sentence mark after a path stays, stdout: 'Keep <path>, then stop\.'}
+      - {text: quoted path with spaces is wholly replaced, stdout: 'Open <path> now\?'}
+      - {text: unquoted spaced windows path keeps the last word, stdout: 'Use <path> today\.'}
+      - {text: decision text is scrubbed, stdout: 'kept the file at <path>'}
+      - {text: running step label is scrubbed, stdout: 'git -C <path> status'}
+      - {text: agent description is scrubbed, stdout: 'scan <path> for TODOs'}
+      - {text: deep posix path is scrubbed, stdout: 'Read <path> before editing'}
+      - {text: repo is the leaf name, stdout: '"repo":"repo-name"'}
+      - {text: worktree is the leaf name, stdout: '"worktree":"my-worktree"'}
+      - {text: proof artifact is scrubbed, stdout: '"artifact":"<path>"'}
+      - {text: pr number survives, stdout: '"pr":4321'}
+      - {text: github token in pr state is redacted, stdout: '\[REDACTED:provider_token\]'}
+      - {text: home directory marker never leaves the reader, "!stdout": 'LEAKUSER'}
+      - {text: token prefix never leaves the reader, "!stdout": 'ghp_'}
+      - {text: spaced path tail never stays visible, "!stdout": 'Corp/layoffs'}
+      - {text: quoted path interior never stays visible, "!stdout": 'My Docs'}
+      - {text: program files tail never stays visible, "!stdout": 'Program Files'}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 5}
+severity: P0

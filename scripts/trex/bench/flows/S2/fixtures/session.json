@@ -1,0 +1,66 @@
+{
+  "sessionId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "at": 1762000000000,
+  "chip": "working",
+  "repo": "C:\\Users\\LEAKUSER\\repo-name",
+  "branch": "main",
+  "worktree": "/home/LEAKUSER/my-worktree",
+  "ctx": 12,
+  "tasks": [
+    {
+      "id": "t1",
+      "subject": "Read /data/LEAKUSER/secret.env before editing",
+      "status": "pending"
+    }
+  ],
+  "prs": [{ "pr": 4321, "state": "C:\\Users\\LEAKUSER\\x __TOKEN__" }],
+  "step": {
+    "tool": "Bash",
+    "label": "git -C C:\\Users\\LEAKUSER\\repo status",
+    "startedAt": 1762000000000
+  },
+  "agents": [
+    {
+      "id": "ag1",
+      "description": "scan C:\\Users\\LEAKUSER\\src for TODOs",
+      "type": "scout",
+      "status": "running"
+    }
+  ],
+  "brief": {
+    "title": "Ship the reader",
+    "goal": "Archive /home/LEAKUSER/Acme Corp/layoffs.csv before Friday",
+    "stopAt": "Move logs from /var/log/LEAKUSER to S3 and add tests",
+    "updatedAt": 1762000000000,
+    "plan": [{ "id": "p1", "text": "Write the regression", "status": "done" }],
+    "ask": [
+      {
+        "kind": "question",
+        "text": "Should I delete C:\\Users\\LEAKUSER\\cache or keep it?",
+        "recommend": "Keep C:\\tmp\\LEAKUSER.txt, then stop.",
+        "answered": false
+      },
+      {
+        "kind": "approval",
+        "text": "Open \"C:\\Users\\First LEAKUSER\\My Docs\\plan.txt\" now?",
+        "recommend": "Use C:\\Users\\Jo LEAKUSER\\Program Files\\x.exe today.",
+        "answered": false
+      }
+    ],
+    "proofs": [
+      {
+        "id": "p1",
+        "subject": "Write the regression",
+        "kind": "plan",
+        "artifact": "C:\\Users\\LEAKUSER\\proof.log"
+      }
+    ],
+    "decisions": [
+      {
+        "text": "kept the file at C:\\Users\\LEAKUSER\\notes.txt",
+        "by": "dave",
+        "at": 1761900000000
+      }
+    ]
+  }
+}

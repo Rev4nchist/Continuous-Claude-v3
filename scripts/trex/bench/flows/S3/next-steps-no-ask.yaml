@@ -1,0 +1,22 @@
+id: next-steps-no-ask
+title: Next steps that ask nothing of Dave clear the chip, and a real ask stays
+description: A turn that says Dave has nothing to do clears the open ask; a question, a wait on Dave, or None-of stays.
+goal: Open asks and the chip follow Next steps, clearing only when the block asks nothing of Dave.
+paths:
+  - .claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts
+symbols:
+  - parseTurnEnd
+  - mergeParsed
+  - deriveChip
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+steps:
+  - action: {cmd: [node, --experimental-strip-types, scripts/trex/bench/flows/S3/next-steps-no-ask.mjs]}
+    checks:
+      - {text: probe exits clean, exit: 0}
+      - {text: nothing-for-Dave clears and a real ask stays, stdout: "^PASS clear=0 shot=1 keep=6$"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

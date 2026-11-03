@@ -1,0 +1,21 @@
+id: chip-while-agent-runs
+title: A running agent shows as working, and does not hide a block or an open ask
+description: The band chip and Overview NOW follow a live subagent and keep the older chip order
+goal: Fail if a running agent looks idle or done, or if it beats a block or an open ask
+paths:
+  - .claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts
+  - .claude/plugins/ccv3-mods/hooks/agentic-os/os-tabs-model.ts
+symbols:
+  - deriveChip
+  - tabRows
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, --experimental-strip-types, --import, scripts/trex/bench/flows/S4/register-ts.mjs, scripts/trex/bench/flows/S4/check-chip.mjs]
+    checks:
+      - {text: checker exits clean, exit: 0}
+      - {text: chip and Overview agree, stdout: "CHIP_OK"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1
