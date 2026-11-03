@@ -4,7 +4,7 @@
 
 ## Now ENFORCED by a hook (not just advisory)
 
-The `destructive-command-guard` PreToolUse hook (Bash and PowerShell) (`.claude/hooks/src/destructive-command-guard.ts`) enforces this rule mechanically:
+The `destructive-command-guard` PreToolUse hook (Bash, PowerShell, and desktop-commander `start_process` / `interact_with_process` since 2026-11-03) (`.claude/hooks/src/destructive-command-guard.ts`) enforces this rule mechanically:
 - **Interactive** (permission_mode default/acceptEdits/plan) → destructive commands return `permissionDecision: 'ask'` so the human is prompted.
 - **Unattended** (bypassPermissions, a subagent `CLAUDE_AGENT_ID`, or CI) → destructive commands `deny` (fail-closed; an interactive prompt would hang a headless/autonomous run).
 - Scope = UNQUOTED shell ops, curated HIGH blast radius + LOW false-positive: recursive `rm` (incl. `sudo rm -rf`), `git reset --hard`/force-push/`clean -f`/`checkout --`/`branch -D`/`rebase`/`reflog expire`/`gc --prune`/`filter-branch`, `find -delete`/`-exec rm`, `dd`/`mkfs`/`shred`/`truncate -s 0`, write-to-block-device, `docker prune`/`volume rm`/force-rm. Compound `X && rm -rf Y` is caught; single-file `rm -f file` is NOT gated.
