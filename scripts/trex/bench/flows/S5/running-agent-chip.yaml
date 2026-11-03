@@ -1,0 +1,23 @@
+id: running-agent-chip
+title: Chip and Overview stay on the live subagent
+description: A running agent reads as working on the chip and on Overview NOW, and a refusal or a fresh ask still wins.
+goal: Fail when a live run looks idle or done, or when it outranks blocked or waiting-on-dave.
+paths:
+  - .claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts
+  - .claude/plugins/ccv3-mods/hooks/agentic-os/os-tabs-model.ts
+symbols:
+  - deriveChip
+  - tabRows
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+steps:
+  - action:
+      cmd: [node, scripts/trex/bench/flows/S5/running-agent-chip.mjs]
+    checks:
+      - {text: script exits clean, exit: 0}
+      - {text: chip and Overview agree a live run is working, stdout: "CHIP_OK"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1
