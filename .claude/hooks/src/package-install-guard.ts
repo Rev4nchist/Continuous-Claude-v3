@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Package Install Security Guard (PreToolUse:Bash|PowerShell)
+ * Package Install Security Guard (PreToolUse: Bash, PowerShell, shell-running MCP tools)
  *
  * Intercepts package install commands and blocks dangerous installs.
  * Protects against supply-chain attacks like:
@@ -28,6 +28,7 @@ import {
 } from './shared/destructive-classifier.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
+import { readShellCommand } from './shared/shell-tools.js';
 import maliciousPackages from './shared/malicious-packages.json';
 
 // ---------------------------------------------------------------------------
@@ -681,7 +682,6 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
-const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 const OVERRIDE = 'To override: prefix command with SKIP_PACKAGE_GUARD=1';
 
 /**
@@ -737,20 +737,30 @@ async function main() {
     return;
   }
 
-  // Both shells run installs. The settings.json matcher must name the same tools (two gates).
-  if (!COMMAND_TOOLS.has(input.tool_name)) {
+  // Bash, PowerShell and the shell-running MCP tools (F07) all run installs. The list lives in
+  // shared/shell-tools.ts. The settings.json matchers must name the same tools (two gates).
+  const shell = readShellCommand(input);
+  if (shell.kind === 'not-shell') {
     outputContinue();
     return;
   }
+  if (shell.kind === 'unreadable') {
+    // Fail closed: this guard has no ask, so an unreadable shell command is denied.
+    const reason = `PACKAGE SECURITY: Unreadable command text. ${shell.tool} has no string field "${shell.field}", so the install check cannot run.`;
+    logGuardDecision('package-install-guard', input, 'deny', 'unreadable command text', { command: shell.tool });
+    outputDeny(reason);
+    return;
+  }
 
-  const command = input.tool_input.command as string | undefined;
+  const command = shell.text;
   if (!command) {
     outputContinue();
     return;
   }
 
-  // Fast path: no segment installs a package -> passthrough immediately
-  const installs = installSegments(command, input.tool_name);
+  // Fast path: no segment installs a package -> passthrough immediately.
+  // A desktop-commander shell is chosen at run time, so its text is read as Bash and PowerShell.
+  const installs = [...new Set(shell.dialects.flatMap((dialect) => installSegments(command, dialect)))];
   if (installs.length > 0 && checkOverride(command)) {
     logGuardDecision('package-install-guard', input, 'override', 'SKIP_PACKAGE_GUARD', { command });
   }

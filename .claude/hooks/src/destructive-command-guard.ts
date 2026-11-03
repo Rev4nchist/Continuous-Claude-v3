@@ -64,6 +64,7 @@ import {
 import { isUnattended } from './shared/unattended.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { scopedCleanupKind, type ScopedCleanupDeps, type ScopedKind } from './shared/scoped-cleanup.js';
+import { readShellCommand, dialectsFor } from './shared/shell-tools.js';
 
 // Re-exported so existing imports (and the test file) keep working.
 export { classifyDestructive, stripQuotedStrings, parseExecutable, extractShellWrapperPayloads, normalizeGitGlobalOptions };
@@ -81,8 +82,9 @@ interface HookInput {
   cwd?: string;
 }
 
-const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 const HOOK = 'destructive-command-guard';
+/** Pattern name for a shell-running MCP tool whose command field is missing or not a string. */
+export const UNREADABLE_PATTERN = 'unreadable command text';
 
 interface HookOutput {
   hookSpecificOutput: {
@@ -134,7 +136,12 @@ export function decide(
   // `$env:SKIP_DESTRUCTIVE_GUARD='1';` statement (still leading-only, per F2).
   const overridden = env.SKIP_DESTRUCTIVE_GUARD === '1' || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command)
       || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
-  const pattern = classifyDestructive(command, 0, input.tool_name || input.tool || 'Bash');
+  // A desktop-commander shell is chosen at run time, so its text is checked as Bash and PowerShell.
+  let pattern: string | null = null;
+  for (const dialect of dialectsFor(input.tool_name || input.tool)) {
+    pattern = classifyDestructive(command, 0, dialect);
+    if (pattern) break;
+  }
   if (overridden) return pattern ? { decision: 'allow', pattern, override: true } : { decision: 'allow' };
   if (!pattern) return { decision: 'allow' };
   // Scoped cleanup (replay item 9.1): one literal recursive delete under the session scratchpad
@@ -168,21 +175,30 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Bash AND PowerShell (2026-09-23 eval, P42): destructive git ops run through the PowerShell
-  // tool used to pass ungated. Registered on a separate "PowerShell" matcher block.
-  const tool = input.tool || input.tool_name;
-  if (!tool || !COMMAND_TOOLS.has(tool)) { console.log('{}'); return; }
+  // Bash, PowerShell (P42, 2026-09-23) and the shell-running MCP tools (F07, 2026-11-03).
+  // The list and each tool's command field live in shared/shell-tools.ts.
+  const shell = readShellCommand(input);
+  if (shell.kind === 'not-shell') { console.log('{}'); return; }
+  if (shell.kind === 'unreadable') {
+    // Fail closed: a shell tool whose command text we cannot read could run anything.
+    emit(input, isUnattended(input) ? 'deny' : 'ask', UNREADABLE_PATTERN, `${shell.tool} with no string field "${shell.field}"`);
+    return;
+  }
 
-  const command = input.tool_input?.command;
-  if (typeof command !== 'string' || !command.trim()) { console.log('{}'); return; }
+  const command = shell.text;
+  if (!command.trim()) { console.log('{}'); return; }
 
   const { decision, pattern, override, scoped } = decide(command, input);
   if (override && pattern) logGuardDecision(HOOK, input, 'override', pattern, { command });
   // An 'allow' row, not 'override': a scoped delete is no bypass, and the SKIP audit counts 'override' rows.
   if (scoped) logGuardDecision(HOOK, input, 'allow', `${SCOPED_CLEANUP_REASON}:${scoped}`, { command });
   if (decision === 'allow' || !pattern) { console.log('{}'); return; }
-  logGuardDecision(HOOK, input, decision, pattern, { command });
+  emit(input, decision, pattern, command);
+}
 
+/** Log the decision and print the PreToolUse envelope. */
+function emit(input: HookInput, decision: 'ask' | 'deny', pattern: string, command: string): void {
+  logGuardDecision(HOOK, input, decision, pattern, { command });
   const output: HookOutput = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',

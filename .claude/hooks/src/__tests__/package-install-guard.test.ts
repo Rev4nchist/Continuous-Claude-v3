@@ -763,3 +763,50 @@ describe('package-install-guard', () => {
     });
   });
 });
+
+// F07 (2026-11-03 Cloudflare paper eval): shell-running MCP tools skipped this guard.
+describe('shell-running MCP tools (F07), built hook, subprocess', () => {
+  const START = 'mcp__plugin_desktop-commander_desktop-commander__start_process';
+  const INTERACT = 'mcp__plugin_desktop-commander_desktop-commander__interact_with_process';
+
+  async function run(payload: object): Promise<Record<string, any>> {
+    const { spawnSync } = await import('node:child_process');
+    const { existsSync, mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dist = fileURLToPath(new URL('../../dist/package-install-guard.mjs', import.meta.url));
+    expect(existsSync(dist)).toBe(true);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CCV3_GUARD_DECISIONS_LOG: join(mkdtempSync(join(tmpdir(), 'pig-f07-')), 'guard-decisions.jsonl'),
+    };
+    delete env.VITEST;
+    delete env.VITEST_WORKER_ID;
+    const res = spawnSync(process.execPath, [dist], {
+      input: JSON.stringify({ session_id: 'test-session', ...payload }),
+      encoding: 'utf8',
+      timeout: 20_000,
+      env,
+    });
+    expect(res.status).toBe(0);
+    return JSON.parse(res.stdout.trim().split('\n').pop()!);
+  }
+
+  it('denies an unpinned pip install sent through start_process', async () => {
+    const out = await run({ tool_name: START, tool_input: { command: 'pip install requests', timeout_ms: 5000 } });
+    expect(out.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/requests==/);
+  });
+
+  it('reads interact_with_process text from its input field', async () => {
+    const out = await run({ tool_name: INTERACT, tool_input: { pid: 4242, input: 'python -m pip install requests' } });
+    expect(out.hookSpecificOutput?.permissionDecision).toBe('deny');
+  });
+
+  it('denies when a listed MCP tool has no readable command text', async () => {
+    const out = await run({ tool_name: START, tool_input: { cmd: 'pip install requests', timeout_ms: 5000 } });
+    expect(out.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/unreadable/i);
+  });
+});
