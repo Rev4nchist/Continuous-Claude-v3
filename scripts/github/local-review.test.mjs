@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { EXIT, finishRun, reserveRun } from './cursor-review.mjs';
+import { EXIT, finishRun, reserveRun, runAgent as realRunAgent } from './cursor-review.mjs';
 import {
   ENGINE_FILES, buildEngineEnv, checkPin, computeTrust, loadConfig, main, parseArgs, parseNameStatus, pinEngine, releaseSlot, resolveRange,
   resolveTarget, reviewHead, routeBand, sweepTmp, takeSlot,
@@ -935,6 +935,23 @@ test('main without a pin pins the engine and starts that copy with LOCAL_REVIEW_
   assert.equal(spec.timeoutMs, (5 + 40 * 2 + 5) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5
   assert.deepEqual(out, ['{"exit":3}']);
   assert.deepEqual(err, ['busy']);
+});
+
+// Finding (CodeRabbit CLI, pre-pr run 2): the relaunch went through the grok gate, so the engine process held a slot
+// and its own cursor-agent child had to wait for a second one (grok-busy at capacity 1). Breaks if relaunch takes a slot.
+test('main relaunches the pinned engine without a grok slot and leaves the gate on for its child (breaks if the engine process takes a slot)', async () => {
+  const dir = tmp('relaunch-gate');
+  copyFileSync(REAL_CONFIG, path.join(dir, 'review-router.config.json'));
+  let gateCalls = 0;
+  let childEnv;
+  const gate = async () => { gateCalls += 1; return { ok: false, reason: 'busy', waitedMs: 0 }; };
+  await main(['--pr', '9', '--json'], {
+    root: dir, env: { PATH: 'p' }, stdout: () => {}, stderr: () => {},
+    pinEngine: () => ({ ok: true, engineSha: SHA, dir }),
+    runAgent: (spec, opts = {}) => { childEnv = spec.env; return realRunAgent(spec, { ...opts, gate, gateLog: () => {}, spawnFn: () => { throw new Error('no spawn in test'); } }); },
+  });
+  assert.equal(gateCalls, 0);
+  assert.equal(childEnv.CCV3_GROK_GATE, undefined);
 });
 
 test('main exits 2 when the pin fails and 1 when the child times out (breaks if a failed pin runs the repo copy)', async () => {

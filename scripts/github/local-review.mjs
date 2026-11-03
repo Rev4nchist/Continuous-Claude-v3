@@ -817,7 +817,9 @@ async function relaunch(argv, ctx) {
   const cfg = conf.ok ? conf.cfg : LOCAL_REVIEW_DEFAULTS;
   const timeoutMs = (cfg.slot_wait_min + cfg.timeout_min * (1 + cfg.retry_max) + 5) * MIN;
   const script = path.join(pin.dir, 'scripts', 'github', 'local-review.mjs');
-  const r = await (deps.runAgent ?? runAgent)({ command: process.execPath, args: [script, ...argv], cwd: root, timeoutMs, env: { ...env, LOCAL_REVIEW_PINNED: pin.engineSha } });
+  // The engine process is not a grok run: only its cursor-agent child takes a gate slot. gateEnv is not passed to the child.
+  const spec = { command: process.execPath, args: [script, ...argv], cwd: root, timeoutMs, env: { ...env, LOCAL_REVIEW_PINNED: pin.engineSha } };
+  const r = await (deps.runAgent ?? runAgent)(spec, { gateEnv: { CCV3_GROK_GATE: 'off' } });
   if (r.stdout) out(r.stdout.replace(/\r?\n$/, ''));
   if (r.stderr) err(r.stderr.replace(/\r?\n$/, ''));
   if (r.timedOut) { err('local-review: the pinned engine timed out'); return EXIT.FAILED; }
