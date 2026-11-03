@@ -12,7 +12,7 @@
  *   2. Checks the usage ledger (default ~/.claude/state/cursor-review-ledger.jsonl): at most 300 runs in a rolling 7 days across
  *      all sessions, at most 8 per PR or range. A run is reserved under a lock before the agent starts.
  *   3. Builds a clean review tree: `git archive` of the head (no .git, no review docs, no old artifacts) plus PR.diff.
- *   4. Runs `cursor-agent -p --mode ask --trust --output-format json --model <m>` in that tree. On Windows it runs the agent's
+ *   4. Runs `cursor-agent -p --mode ask --trust --output-format stream-json --model <m>` in that tree. On Windows it runs the agent's
  *      own node.exe on index.js (the way cursor-agent.ps1 does), not the .cmd or .ps1 wrapper, so the pid it holds is the agent.
  *      A time-out (default 2400 s: grok output speed halved under load on 2026-11-02, so a ~40k-token answer took ~1600 s) stops that pid and its whole process tree.
  *      A machine-wide gate (lib/grok-slots.mjs) lets at most 2 runs go at once across all sessions; a run waits up to 60 min for a
@@ -261,21 +261,32 @@ function markdownFindings(text) {
 }
 
 /**
- * Parses the stdout of `cursor-agent --output-format json`. Pure.
+ * The final result of an agent run: the JSON text of the last stdout line that parses as an object with type 'result', else null. Pure.
+ * `--output-format json` (one result line) and `--output-format stream-json` (system, user, thinking, tool_call and assistant events, then
+ * the result) both end in that line, with the same fields: type, subtype, is_error, duration_ms, duration_api_ms, result, session_id,
+ * request_id, usage (fixtures/cursor-review/cursor-238.json; .claude/cache/e2e/2026-11-03-trex-author-S18.raw.json, last line).
+ */
+export function resultFromStream(stdout) {
+  const lines = String(stdout ?? '').split(/\r?\n/).filter((l) => l.trim() !== '');
+  for (const l of lines.reverse()) {
+    try {
+      const o = JSON.parse(l);
+      if (o && typeof o === 'object' && o.type === 'result') return l;
+    } catch { /* not a JSON line */ }
+  }
+  return null;
+}
+
+/**
+ * Parses the stdout of `cursor-agent --output-format json` or `stream-json` (resultFromStream finds the result line). Pure.
  * { ok, isError, format: 'json' | 'markdown' | 'none', findings, clean, problems, usage, sessionId, durationMs, modelVerified, modelMismatch, text }
  * ok is false for an error result and for an answer with no findings block and no recognisable headings: "no major bugs" in
  * prose is not a pass.
  */
 export function parseReviewOutput(stdout, { expectModel } = {}) {
   const base = { ok: false, isError: false, format: 'none', findings: [], clean: false, problems: [], usage: null, sessionId: null, durationMs: null, modelVerified: false, modelMismatch: false, text: '' };
-  let result = null;
-  const lines = String(stdout ?? '').split(/\r?\n/).filter((l) => l.trim() !== '');
-  for (const l of [...lines].reverse()) {
-    try {
-      const o = JSON.parse(l);
-      if (o && typeof o === 'object' && o.type === 'result') { result = o; break; }
-    } catch { /* not a JSON line */ }
-  }
+  const line = resultFromStream(stdout);
+  const result = line === null ? null : JSON.parse(line);
   if (!result) return { ...base, problems: ['no result JSON in the agent output'] };
   const p = { ...base, usage: result.usage ?? null, sessionId: result.session_id ?? null, durationMs: result.duration_ms ?? null, text: String(result.result ?? '') };
   const echo = typeof result.model === 'string' ? result.model : null;
@@ -979,7 +990,7 @@ export async function runReview(opts, deps = {}) {
     return refuse(reserved.reason === 'lock' ? EXIT.FAILED : EXIT.CAP, reserved.detail ?? `${reserved.reason} reached (${reserved.count})`);
   }
 
-  const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', 'json', '--model', m.model, prompt];
+  const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', 'stream-json', '--model', m.model, prompt];
   const spec = { command: agent.cmd, args, cwd: prep.dir, timeoutMs, env: buildAgentEnv(env, deps.platform ?? process.platform, { exists: deps.exists }) };
   if (spec.env.CCV3_BASH_GUARD === 'unresolved') log('cursor-review: no Git Bash found (set GIT_BASH_DIR); `bash` on the agent PATH may be the WSL shim');
   const startedAt = now();

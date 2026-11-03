@@ -453,7 +453,7 @@ test('with no timeoutMs the agent gets the 2400 s default', async () => {
   assert.equal(h.calls[0].timeoutMs, 2_400_000);
 });
 
-test('the agent gets --mode ask, --trust, json output and an explicit allowed model, never force or a key', async () => {
+test('the agent gets --mode ask, --trust, stream-json output and an explicit allowed model, never force or a key', async () => {
   const h = harness({ opts: { band: 'CRITICAL' } });
   await runReview(h.opts, h.deps);
   const { args, cwd, command } = h.calls[0];
@@ -462,7 +462,7 @@ test('the agent gets --mode ask, --trust, json output and an explicit allowed mo
   const at = (flag) => args[args.indexOf(flag) + 1];
   assert.ok(args.includes('-p'));
   assert.equal(at('--mode'), 'ask');
-  assert.equal(at('--output-format'), 'json');
+  assert.equal(at('--output-format'), 'stream-json');
   assert.equal(at('--model'), 'grok-4.7-xhigh');
   assert.ok(args.includes('--trust'));
   for (const bad of ['--force', '--yolo', '-f', '--api-key', '--sandbox', '--auto-review', '--resume', '--continue']) assert.ok(!args.includes(bad), bad);
@@ -1839,6 +1839,93 @@ test('runReview logs a tool-stall: failed, exit 1, error names tool-stall and th
   assert.equal(end.timedOut, false);
   assert.deepEqual(end.stallMs, [61_000, 61_100, 61_300]);
   assert.equal(end.toolCalls, 3);
+  assert.equal(countRuns(readLedger(h.opts.ledgerPath).entries, { now: NOW + 1 }), 1, 'the agent did run: it counts');
+});
+
+// ---- review runs use stream-json, so the tool-stall stop and toolStats apply (CodeRabbit Major, cursor-review.mjs:980-998) ----
+// Shapes: the stream-json result event (S18 raw stream, last line) and the --output-format json result (fixtures/cursor-review/cursor-238.json)
+// carry the same fields: type, subtype, is_error, duration_ms, duration_api_ms, result, session_id, request_id, usage.
+
+const streamOf = (resultJson) => [
+  JSON.stringify({ type: 'system', subtype: 'init', cwd: '/x', model: 'Grok 4.7', session_id: 's' }),
+  JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'review it' }] }, session_id: 's' }),
+  JSON.stringify({ type: 'thinking', subtype: 'delta', text: 'The', session_id: 's', timestamp_ms: 1 }),
+  done('c1', T0, T0 + 900).trim(),
+  JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'looking' }] }, session_id: 's' }),
+  resultJson,
+].join('\n') + '\n';
+
+// Breaks if runReview goes back to --output-format json: the stall stop and toolStats then never run for CLI review runs.
+test('runReview asks the agent for --output-format stream-json', async () => {
+  const h = harness();
+  await runReview(h.opts, h.deps);
+  const { args } = h.calls[0];
+  assert.equal(cr.isStreamJson(args), true);
+  assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json');
+});
+
+// Breaks if resultFromStream takes a non-result line, the first result, or fails to find the result after tool and assistant events.
+test('resultFromStream returns the last result line of a stream, and null when there is none', () => {
+  const r1 = resultLine('first');
+  const r2 = resultLine('second');
+  assert.equal(cr.resultFromStream(streamOf(r2)), r2);
+  assert.equal(cr.resultFromStream(`${r1}\n${streamOf(r2)}`), r2);
+  assert.equal(cr.resultFromStream(resultLine('x') + '\r\n'), resultLine('x'));
+  assert.equal(cr.resultFromStream(streamOf('').trimEnd()), null);
+  assert.equal(cr.resultFromStream('garbage\n{"type":"assistant"}\n'), null);
+  assert.equal(cr.resultFromStream(''), null);
+  assert.equal(cr.resultFromStream(undefined), null);
+});
+
+// Breaks if a stream run is read differently from a json run: same result event, so the same review.
+test('a stream-json run parses to the same review as the json result alone', async () => {
+  const json = harness();
+  const jr = await runReview(json.opts, json.deps);
+  const stream = harness({ runner: async () => ({ status: 0, stdout: streamOf(GOOD), stderr: '', timedOut: false, durationMs: 1234 }) });
+  const sr = await runReview(stream.opts, stream.deps);
+  assert.equal(sr.exit, EXIT.OK);
+  const a = JSON.parse(readFileSync(jr.findingsPath, 'utf8'));
+  const b = JSON.parse(readFileSync(sr.findingsPath, 'utf8'));
+  assert.deepEqual(b.findings, a.findings);
+  assert.equal(b.format, a.format);
+  assert.equal(b.status, 'ok');
+  assert.equal(b.findings[0].file, 'a.ts');
+  assert.deepEqual(parseReviewOutput(cr.resultFromStream(streamOf(GOOD))), parseReviewOutput(GOOD));
+});
+
+// Breaks if a stream with no result event fails differently from unparseable json output.
+test('a stream with no result event fails with the same error as unparseable json output', async () => {
+  const bad = harness({ runner: async () => ({ status: 0, stdout: 'not json at all\n', stderr: '', timedOut: false, durationMs: 5 }) });
+  const noResult = harness({ runner: async () => ({ status: 0, stdout: streamOf('').trimEnd() + '\n', stderr: '', timedOut: false, durationMs: 5 }) });
+  const a = await runReview(bad.opts, bad.deps);
+  const b = await runReview(noResult.opts, noResult.deps);
+  assert.equal(a.exit, EXIT.FAILED);
+  assert.equal(b.exit, a.exit);
+  assert.equal(b.error, a.error);
+  assert.match(b.error, /no result JSON in the agent output/);
+});
+
+// Breaks if a review run does not reach the tracker: with json args the stall is never seen and the run burns its whole time limit.
+test('runReview through the real runAgent: 3 slow tool calls stop the run, error tool-stall, and the run is counted', async () => {
+  const { gate } = spyGate();
+  const child = fakeChild();
+  let kills = 0;
+  const killer = () => { kills += 1; setTimeout(() => child.emit('close', null), 10); };
+  const spawnFn = () => {
+    setTimeout(() => { for (const c of [good(1, 61_000), good(2, 61_100, 10), good(3, 61_300, 20)]) child.stdout.write(c); }, 5);
+    return child;
+  };
+  const h = harness({ opts: { timeoutMs: 3000 } });
+  h.deps.runner = (s) => runAgent(s, { gate, spawnFn, killer, killGraceMs: 2000, gateEnv: {} });
+  const r = await runReview(h.opts, h.deps);
+  assert.equal(kills, 1, 'the tree was stopped');
+  assert.equal(r.exit, EXIT.FAILED);
+  assert.match(r.error, /^tool-stall: /);
+  assert.match(r.error, /61000, 61100, 61300 ms/);
+  assert.doesNotMatch(r.error, /no result JSON|TIMED OUT/);
+  const end = readFileSync(h.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
+  assert.equal(end.toolCalls, 3);
+  assert.deepEqual(end.stallMs, [61_000, 61_100, 61_300]);
   assert.equal(countRuns(readLedger(h.opts.ledgerPath).entries, { now: NOW + 1 }), 1, 'the agent did run: it counts');
 });
 
