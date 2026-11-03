@@ -56,17 +56,14 @@ export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments
   // A request is answered by the newest review with a body, or by a clean summary-only round: the TRUSTED summary covers the
   // head and is no notice (live PR 211 got no review object for its on-demand round, only a summary edit).
   const trusted = trustedCodeRabbitSummary(comments, commentEdits);
-  const bodyReview = newestCodeRabbitReview(reviews, commits);
-  // newestCodeRabbitReview falls back to submitted_at unless the list holds EVERY reviewed commit (ranksFor: all or none).
-  // With rounds on two or more commits that fallback can pick the wrong round, so a missing commit refuses.
-  const roundCommits = new Set(crReviews.filter((r) => String(r.body ?? '').trim() !== '').map((r) => String(r.commit_id ?? '').toLowerCase()));
+  // newestCodeRabbitReview ranks by commit only when the list holds EVERY reviewed commit (ranksFor: all or none), else it
+  // falls back to submitted_at. A round on a commit no longer in the PR (amend, rebase) reviewed code that is gone, so it
+  // answers no request: drop it, then rank the rest. Dropping a round can only lower answeredAt, so the gate gets stricter.
   const listed = new Set((commits ?? []).map((c) => String(c?.sha ?? '').toLowerCase()));
-  const unlisted = [...roundCommits].filter((sha) => !listed.has(sha));
-  if (roundCommits.size >= 2 && unlisted.length) {
-    refusals.push(listed.size
-      ? `could not order CodeRabbit rounds: reviewed commit ${unlisted[0].slice(0, 7)} is not in the PR commit list (history rewritten?)`
-      : 'could not read the PR commit list to order CodeRabbit rounds');
-  }
+  const onPr = listed.size ? reviews.filter((r) => listed.has(String(r?.commit_id ?? '').toLowerCase())) : reviews;
+  const bodyReview = newestCodeRabbitReview(onPr, commits);
+  const roundCommits = new Set(crReviews.filter((r) => String(r.body ?? '').trim() !== '').map((r) => String(r.commit_id ?? '').toLowerCase()));
+  if (!listed.size && roundCommits.size >= 2) refusals.push('could not read the PR commit list to order CodeRabbit rounds');
   const coversHead = trusted && !codeRabbitNotice(trusted.body) && summaryCoversHead(trusted.body, head);
   const answeredAt = Math.max(bodyReview ? ms(bodyReview.submitted_at) : 0, coversHead ? ms(trusted.updated_at || trusted.created_at) : 0);
   const open = coderabbitRequestComments(comments).filter((c) => ms(c.created_at) > answeredAt);

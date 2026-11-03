@@ -215,6 +215,7 @@ test('RC15: a re-posted review of an OLDER commit, newer by time, does not answe
   const r = decideRecheck(quiet({ reviews: lateRounds(), comments: request1120(), commits }));
   assert.equal(r.ok, false);
   assert.match(r.refusals.join(' '), /in flight/i);
+  assert.doesNotMatch(r.refusals.join(' '), /commit list/i);
 });
 
 test('RC15b: with no commit list and rounds on two commits, the order is unknown and it refuses', () => {
@@ -234,11 +235,27 @@ test('RC15d: an empty-body reply or a person review on another commit is no seco
   assert.deepEqual(decideRecheck(quiet({ reviews, commits: [] })), { ok: true, refusals: [] });
 });
 
-test('RC15f: a commit list that misses a reviewed commit cannot order the rounds and refuses', () => {
-  // ranksFor ranks only when the list holds every reviewed commit; otherwise the order falls back to submitted_at.
-  const r = decideRecheck(quiet({ reviews: lateRounds(), comments: [summary(BEFORE)], commits: [{ sha: HEAD }] }));
+test('RC15f: after an amend, a round on a commit no longer in the PR answers nothing, and a quiet PR still lands', () => {
+  // OLDER was rewritten away (only HEAD is listed). Its late round must not answer the 11:20 request; the HEAD round (11:00) is newest.
+  const asked = decideRecheck(quiet({ reviews: lateRounds(), comments: request1120(), commits: [{ sha: HEAD }] }));
+  assert.equal(asked.ok, false);
+  assert.match(asked.refusals.join(' '), /in flight/i);
+  assert.doesNotMatch(asked.refusals.join(' '), /commit list/i);
+  // No request: the dropped round blocks nothing, so the land goes on.
+  assert.deepEqual(decideRecheck(quiet({ reviews: lateRounds(), comments: [summary(BEFORE)], commits: [{ sha: HEAD }] })), { ok: true, refusals: [] });
+});
+
+test('RC15h: a complete commit list with rounds on two commits and an answered request lets the PR land', () => {
+  const comments = [summary(BEFORE), request('2026-10-30T10:30:00Z')];
+  assert.deepEqual(decideRecheck(quiet({ reviews: lateRounds(), comments, commits: [{ sha: OLDER }, { sha: HEAD }] })), { ok: true, refusals: [] });
+});
+
+test('RC15i: sha case does not matter when matching rounds to the commit list', () => {
+  const reviews = [review(1, BEFORE, { commit_id: HEAD.toUpperCase() }), review(2, '2026-10-30T11:40:00Z', { commit_id: OLDER })];
+  const r = decideRecheck(quiet({ reviews, comments: request1120(), commits: [{ sha: OLDER.toUpperCase() }, { sha: HEAD }] }));
   assert.equal(r.ok, false);
-  assert.match(r.refusals.join(' '), /not in the PR commit list/);
+  assert.match(r.refusals.join(' '), /in flight/i);
+  assert.doesNotMatch(r.refusals.join(' '), /commit list/i);
 });
 
 // ---- recheckPr: the reads ----
