@@ -157,7 +157,8 @@ function lightFacts(pr, pull) {
 function fullFacts(base, d) {
   const [owner, name] = d.repo.split('/');
   const { pr, head } = base;
-  const statuses = d.gh([`repos/${d.repo}/commits/${head}/status`]).statuses ?? [];
+  // The combined status lists 30 statuses a page: read every page (100 each), so a pending CodeRabbit status on a later page counts.
+  const statuses = [d.gh(['--paginate', '--slurp', `repos/${d.repo}/commits/${head}/status?per_page=100`])].flat(2).flatMap((page) => page?.statuses ?? []);
   const reviews = [d.gh(['--paginate', '--slurp', `repos/${d.repo}/pulls/${pr}/reviews?per_page=100`])].flat(2);
   const { comments, commentEdits } = readIssueComments(d.gh, owner, name, pr);
   const headCommittedAt = d.gh([`repos/${d.repo}/commits/${head}`]).commit?.committer?.date;

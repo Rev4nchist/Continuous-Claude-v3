@@ -284,7 +284,17 @@ export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)
 
-const SLOT_STATE_FILE = /coderabbit-slot\.json/i
+/**
+ * Text that could be the queue state file or one of its siblings (.lock, .tmp-*), in the literal or in a glob form: `coderabbit-slot.json`,
+ * `coderabbit-slot.*`, `coderabbit-sl*`, `coderabbit-s?ot.json`, `coderabbit-*`, `coderabbit-slot.{json,lock}`, `[c]oderabbit-slot.json`,
+ * `?oderabbit-slot.json`, `*slot.json`. Tested on text with quotes and escapes stripped. Not a `g` regex: `.test()` keeps no state.
+ * A glob must sit right after `coderabbit-` or after `coderabbit-s`, so the other `coderabbit-*` files (the paid ledger, the guard runs) stay open.
+ */
+const SLOT_STATE_LIKE = /coderabbit-slot\.json|coderabbit[-_]{0,2}(?:s[\w.-]{0,30})?[*?[{]|[*?[{][\w.*?[\]{},-]{0,30}(?:rabbit[-_]{1,2}s|slot[.*?[{])/i
+/** A redirect: a read command with one writes the file it names. */
+const REDIRECT = />/
+/** git verbs that delete, move or restore a file; the other git commands only read or commit. */
+const GIT_WRITES_FILES = /^git(?:\.exe)?\s[^\n]{0,400}?\b(?:mv|rm|restore)\b/i
 /** A command longer than this that names the queue module is denied unread: every pattern below is also bounded, and this bounds the number of segments. */
 const SLOT_MAX_NAMING_LENGTH = 20_000
 /**
@@ -336,25 +346,39 @@ const readsOnly = (segment: string, loose: string): boolean => {
   return clean.length === count(SLOT_NAME_LIKE, loose) && !SLOT_CODE_LOADER.test(segment) && !clean.some(m => buildsPath(segment, m.index ?? 0))
 }
 
+/** A segment that names the state file is open only as a read: an inert command with no redirect, and no git verb that deletes, moves or restores. */
+const readsStateFile = (segment: string): boolean => {
+  const text = segment.trim().replace(ENV_PREFIX, '')
+  return isInertSegment(segment) && !REDIRECT.test(segment) && !GIT_WRITES_FILES.test(text)
+}
+
 /**
  * Shell text that names the queue file, or names the queue module in a way that is not a plain read. An allow list on raw text, no lexer.
- * The text splits on `; & | newline`, a backtick and `$(`; every piece that names the module (quotes and escapes stripped, globs counted) must be
- * (a) a git, grep, rg, Select-String, Get-Content or cat command, or `node --test` or `--check`, with no option that runs other code; or
+ * The text splits on `; & | newline`, a backtick and `$(`; every piece that names the module or the state file (quotes and escapes stripped,
+ * globs counted, the file in any glob form) must be
+ * (a) a git, grep, rg, Select-String, Get-Content or cat command, or `node --test` or `--check`, with no option that runs other code. A piece
+ *     that names the state file must also hold no `>` and no git mv, rm or restore, so `cat x > coderabbit-sl*` and `rm coderabbit-slot.*` deny; or
  * (b) a piece where every mention is the module as a clean token followed by exactly tick, list or probe, with no variable in the path.
+ *     A piece that names the state file is never (b).
  * Any (b) piece also denies the whole command when it holds xargs, iex, Invoke-Expression, -EncodedCommand or cmd /c.
  * A long command that names the module is denied unread. A doubt reads as a deny.
  * Not covered, accepted: an -EncodedCommand payload that names nothing, a helper script written to disk that imports `main`, and a path built by
  * concatenation with no `$` or `%` and no module name in the text.
  */
 export const namesSlotWrite = (command: string): boolean => {
-  if (SLOT_STATE_FILE.test(command)) return true
   const wholeLoose = command.replace(/['"`^\\]/g, '')
-  if (count(SLOT_NAME_LIKE, wholeLoose) === 0) return false
+  if (count(SLOT_NAME_LIKE, wholeLoose) === 0 && !SLOT_STATE_LIKE.test(wholeLoose)) return false
   if (command.length > SLOT_MAX_NAMING_LENGTH) return true
   let opaque = false
   for (const segment of command.split(SLOT_SEPARATORS)) {
     const loose = segment.replace(/['"`^\\]/g, '')
-    if (count(SLOT_NAME_LIKE, loose) === 0 || isInertSegment(segment)) continue
+    const state = SLOT_STATE_LIKE.test(loose)
+    if (count(SLOT_NAME_LIKE, loose) === 0 && !state) continue
+    if (state) {
+      if (!readsStateFile(segment)) return true
+      continue
+    }
+    if (isInertSegment(segment)) continue
     if (!readsOnly(segment, loose)) return true
     opaque = true
   }

@@ -345,6 +345,13 @@ const ticksOf = (w: { seen: { slot: { argv: string[] }[] } }) => w.seen.slot.fil
 const FAIL: Reply = { code: 2, out: '{"ok":false,"reason":"slot-queue: bad state file"}' }
 const NO_ACTIONS: Reply = { out: JSON.stringify({ ...JSON.parse(TICKS.queued), actions: [] }) }
 
+/** Valid JSON that slot-queue-model.mjs parseState refuses: a root that is not a plain object, a wrong version, no items list. */
+const BAD_ROOTS: [string, string][] = [
+  ['null', 'null'], ['an array', '[]'], ['a number', '5'], ['a string', '"x"'],
+  ['an object with no items list', '{"version":1}'], ['an object whose items is not a list', '{"version":1,"items":{}}'],
+  ['an object with no version', '{"items":[]}'], ['an object with a wrong version', '{"version":2,"items":[]}'],
+]
+
 describe('slot: the tick runs only for a live queue (M1)', () => {
   for (const [name, file] of [['no state file', null], ['only finished items', DONE], ['an empty item list', '{"version":1,"items":[]}'], ['no fs.read handler at all', undefined]] as const) {
     test(`M1 ${name}: three timer ticks start no slot-queue process, and the watcher still runs`, async ($, on) => {
@@ -353,6 +360,17 @@ describe('slot: the tick runs only for a live queue (M1)', () => {
       for (let i = 0; i < 3; i += 1) await w.clock.advance(TICK)
       expect(w.seen.slot).toEqual([])
       expect(w.seen.status.length).toBe(3)
+    })
+  }
+
+  // Breaks if hasLiveItem reads a valid-JSON file that parseState would refuse (null, [], a number, a string, no items array, a wrong
+  // version) as idle: the tick then never runs and nobody sees the CLI report the bad state file.
+  for (const [name, file] of BAD_ROOTS) {
+    test(`M1 a state file that is ${name} fails closed: the tick runs so the CLI reports it`, async ($, on) => {
+      const w = loopWorld(on, { file, ticks: [FAIL], store: watched(900) })
+      await startLoop($)
+      await w.clock.advance(TICK)
+      expect(ticksOf(w).length).toBe(1)
     })
   }
 
@@ -553,6 +571,17 @@ describe('slot: the alert and the ask see the queue (A1, A2)', () => {
     await w.clock.advance(TICK)
     expect(asksIn(w.store)).toEqual([])
   })
+
+  // Breaks if fileHolds reads a state file that parseState would refuse as "holds nothing": the opening ask then fires beside a queue
+  // that may hold the PR, and a Yes posts outside the queue lock.
+  for (const [name, file] of BAD_ROOTS) {
+    test(`M1 a state file that is ${name} counts as holding the PR: no opening ask when every tick failed`, async ($, on) => {
+      const w = loopWorld(on, { file, ticks: [FAIL], store: { ...seeded, 'checkpoint:pr:900': record }, statuses: { 900: QUIET } })
+      await startLoop($)
+      await w.clock.advance(TICK)
+      expect(asksIn(w.store)).toEqual([])
+    })
+  }
 
   // Control: breaks if the file fallback counts a finished item as held.
   test('M1 a PR the state file lists only as done still gets the opening ask when every tick failed', async ($, on) => {

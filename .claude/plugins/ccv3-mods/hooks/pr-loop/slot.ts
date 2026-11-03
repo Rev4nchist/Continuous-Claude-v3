@@ -56,12 +56,22 @@ async function runCli($: EngineInterface, found: Found, argv: string[], timeoutM
   }
 }
 
-/** True when the file text lists an item that is not finished. Text that is not JSON counts as live, so the failing tick tells Dave. */
+/**
+ * The items list of the parsed state file, or null when slot-queue-model.mjs parseState would refuse it: a root that is not a plain object,
+ * a version other than 1, or no items list. The caller then fails closed, so the CLI reports the bad file instead of the mod reading it as idle.
+ */
+const itemsOf = (root: unknown): unknown[] | null => {
+  if (!root || typeof root !== 'object' || Array.isArray(root)) return null
+  const { version, items } = root as { version?: unknown; items?: unknown }
+  return version === 1 && Array.isArray(items) ? items : null
+}
+
+/** True when the file text lists an item that is not finished. Text that parseState refuses counts as live, so the failing tick tells Dave. */
 const hasLiveItem = (text: unknown): boolean => {
   if (typeof text !== 'string' || text.trim() === '') return false
   try {
-    const items = (JSON.parse(text) as { items?: unknown } | null)?.items
-    return Array.isArray(items) && items.some(item => !FINISHED.has((item as { state?: unknown } | null)?.state as string))
+    const items = itemsOf(JSON.parse(text))
+    return items === null || items.some(item => !FINISHED.has((item as { state?: unknown } | null)?.state as string))
   } catch {
     return true
   }
@@ -146,16 +156,24 @@ export async function queueHolds($: EngineInterface, pr: number): Promise<boolea
 
 /**
  * The row cache is empty when every tick of this session failed, or none ran yet. The state file still says what the queue holds:
- * a PR with an item that is not done or dropped is held. A missing or unreadable file holds nothing.
+ * a PR with an item that is not done or dropped is held. A missing or unreadable file holds nothing. A file that parseState refuses
+ * (not JSON, a bad root, a wrong version, no items list) is held: the queue may hold the PR, so the opening ask must not post beside it.
  */
 async function fileHolds($: EngineInterface, pr: number): Promise<boolean> {
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
   if (!home) return false
+  let text: unknown
   try {
-    const items = (JSON.parse(String(await $.fs.read(`${home}/${STATE_REL}`))) as { items?: unknown } | null)?.items
-    return Array.isArray(items) && items.some(item => (item as { pr?: unknown } | null)?.pr === pr && !FINISHED.has((item as { state?: unknown }).state as string))
+    text = await $.fs.read(`${home}/${STATE_REL}`)
   } catch {
     return false
+  }
+  if (typeof text !== 'string' || text.trim() === '') return false
+  try {
+    const items = itemsOf(JSON.parse(text))
+    return items === null || items.some(item => (item as { pr?: unknown } | null)?.pr === pr && !FINISHED.has((item as { state?: unknown }).state as string))
+  } catch {
+    return true
   }
 }
 

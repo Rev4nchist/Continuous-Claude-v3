@@ -309,6 +309,17 @@ test('F4: a pending CodeRabbit status on the head skips the post', () => {
   assert.deepEqual(posts(e), []);
 });
 
+// Breaks if the commit-status read takes only page one: a pending CodeRabbit status on page 2 then reads as no review in progress and the queue posts.
+test('F4: a pending CodeRabbit status on page 2 of the commit statuses skips the post', () => {
+  const e = setup('f4-page2');
+  const filler = Array.from({ length: 3 }, (_, i) => ({ context: `ci/job-${i}`, state: 'success' }));
+  const pending = { context: 'CodeRabbit', state: 'pending', description: 'Review in progress' };
+  setWorld(e, { 5: prOf(5, { statusPages: [filler, [pending]] }) });
+  setState(e, [itemOf(5)]);
+  run(e, ['tick', '--json']);
+  assert.deepEqual(posts(e), []);
+});
+
 // --- tick: notices, asks, time-out ------------------------------------------------------------------------------
 
 // Breaks if the facts map a limit notice wrongly: the opening item must queue, take nextAt from the figure, and toast with the position.
