@@ -1,0 +1,47 @@
+id: state-file-path-scrub
+title: State files must not show a home path or a token
+description: The session reader is what Mission Control prints, so paths and tokens in a state file must already be gone.
+goal: A home path or a token in a session state file never reaches the strings Dave reads.
+paths:
+  - apps/agentic-os/src/server/sources/state-files.ts
+  - apps/agentic-os/src/server/sources/safe-message.ts
+symbols: [readStateFiles, scrubPathsInText]
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+steps:
+  - action:
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --import
+        - scripts/trex/bench/flows/S1/fixtures/register.mjs
+        - scripts/trex/bench/flows/S1/fixtures/check-scrub.mjs
+    checks:
+      - {text: reader exits cleanly, exit: 0}
+      - {text: goal keeps the words around a var path, stdout: 'Move logs from <path> to S3'}
+      - {text: ask keeps the words around a windows path, stdout: 'Should I delete <path> or keep it\?'}
+      - {text: recommendation keeps the comma after the path, stdout: 'Keep <path>, then stop\.'}
+      - {text: running step keeps the command around a git-bash path, stdout: 'git -C <path> status'}
+      - {text: decision keeps the words around a windows path, stdout: 'kept the file at <path>'}
+      - {text: proof artifact keeps the lead-in and drops the filename, stdout: 'E2E saved at <path>'}
+      - {text: worktree is only the last segment, stdout: '"worktree":"wt-leaf"'}
+      - {text: repo is only the last segment, stdout: '"repo":"repo-leaf"'}
+      - {text: pull request number survives, stdout: '"pr":4321'}
+      - {text: token in the pull request state is redacted, stdout: '\[REDACTED:provider_token\]'}
+      - {text: var log name is absent, "!stdout": varlog9}
+      - {text: windows ask directory is absent, "!stdout": winpath9}
+      - {text: recommendation filename is absent, "!stdout": rectoken9}
+      - {text: git-bash directory is absent, "!stdout": posixpath9}
+      - {text: decision directory is absent, "!stdout": decuser9}
+      - {text: decision filename is absent, "!stdout": 'notes\.txt'}
+      - {text: artifact directory is absent, "!stdout": someone9}
+      - {text: artifact filename is absent, "!stdout": 'file\.txt'}
+      - {text: worktree directory is absent, "!stdout": leafuser9}
+      - {text: repo directory is absent, "!stdout": repouser9}
+      - {text: pull request directory is absent, "!stdout": prsuser9}
+      - {text: token prefix is absent, "!stdout": ghp_}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P0
