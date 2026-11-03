@@ -24,6 +24,8 @@
 //   the RB line loses the security-tier file names (the RF line hides it)       -> B31
 //   a critical-only file is labelled a security-tier floor                       -> B32
 //   the none option says READY needs CI and proof only next to the RF line        -> B31, B32
+//   an engine trust-boundary file is not CRITICAL, or a prompt-tuning file is  -> B40
+//   checkpoint.critical alone (not a trust-boundary file) becomes CRITICAL      -> B40
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync, existsSync } from 'node:fs';
@@ -31,7 +33,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bandOf, decide, ledgerLine, matchGlob } from './review-router.mjs';
+import { bandOf, decide, ledgerLine, matchGlob, CRITICAL_TRUST_BOUNDARY } from './review-router.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -380,4 +382,22 @@ test('B33: a HIGH PR with a security-tier file still gets CodeRabbit and keeps R
   assert.equal(r.recommended, 'coderabbit');
   assert.deepEqual(r.budget, [1, 1]);
   assert.ok(r.why.some((w) => w.startsWith('Critical file')), 'R3 stays beside RB at HIGH');
+});
+
+test('B40: an engine trust-boundary file forces CRITICAL; prompt.mjs, context.mjs and test files do not', () => {
+  for (const f of ['scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/local-review/record.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/lib/file-lock.mjs', 'scripts/github/lib/deep/x.mjs']) {
+    assert.equal(bandOf([f], LIVE).band, 'CRITICAL', f);
+    assert.equal(bandOf([f], LIVE).L, true, f);
+  }
+  for (const f of ['scripts/github/local-review/prompt.mjs', 'scripts/github/local-review/context.mjs', 'scripts/github/local-review.test.mjs', 'scripts/github/lib/file-lock.test.mjs']) {
+    assert.notEqual(bandOf([f], LIVE).band, 'CRITICAL', f);
+  }
+  // a rename out of the trust boundary still counts, and backslashes are normalised
+  assert.equal(bandOf([{ filename: 'scripts/github/old.mjs', previous_filename: 'scripts/github/review-filter.mjs' }], LIVE).band, 'CRITICAL');
+  assert.equal(bandOf(['scripts\\github\\local-review.mjs'], LIVE).band, 'CRITICAL');
+});
+
+test('B40: checkpoint.critical alone does not force CRITICAL (it gives the floor, not the band)', () => {
+  assert.equal(bandOf(['scripts/github/review-status.mjs'], LIVE).band, 'ELEVATED');
+  assert.ok(CRITICAL_TRUST_BOUNDARY.every((g) => !LIVE.checkpoint.critical.includes(g)), 'no second critical list in the config');
 });

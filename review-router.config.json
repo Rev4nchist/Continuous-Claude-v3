@@ -22,7 +22,8 @@
     "matrix.security_tier: subset of control_plane. The band output names these files. They set an internal review floor, not a bot floor (option A).",
     "matrix.config_files: path globs of review, merge and reviewer config (C = 1 when one changes). matrix.test_markers: a path that contains one of these is a test file (weight 0). matrix.logic_ext: extensions of logic files (K = 1 when the PR has one outside dist/ and test files).",
     "matrix.gate_score: [min G, score] steps, the highest step reached wins. matrix.weights: config is the C weight, code is the K weight. Score S = gate score + config * C + code * K + R. R is +7 per confirmed internal Major (passed to bandOf; nothing posts it yet).",
-    "matrix.bands: the lowest score of MID, ELEVATED and HIGH. Score 0 is LOW. CRITICAL comes from a risk:high label or a path of the r3 class, at any score. matrix.bot_budget: CodeRabbit PR reviews [opening, extra after a Major] for HIGH and CRITICAL. The extra round is free-slot only."
+    "matrix.bands: the lowest score of MID, ELEVATED and HIGH. Score 0 is LOW. CRITICAL comes from a risk:high label or a path of the r3 class, at any score. matrix.bot_budget: CodeRabbit PR reviews [opening, extra after a Major] for HIGH and CRITICAL. The extra round is free-slot only.",
+    "matrix.slot: the free-slot queue (scripts/github/slot-queue.mjs). spacing_min is the floor between free CodeRabbit posts; paid_after_min starts the CRITICAL paid ask; timeout_min marks an item timed-out (no READY effect before engine P2); holder_max_min expires a post that made no review; sample_ttl_hours is read by the shadow sync, which runs slot-queue.mjs drop --reason sample-ttl."
   ],
   "deep_enabled": false,
   "classes": {
@@ -136,7 +137,9 @@
       ".claude/hooks/src/shared/scoped-cleanup.ts",
       ".claude/hooks/src/shared/typosquat-detect.ts",
       ".claude/hooks/src/shared/guard-log.ts",
-      ".claude/hooks/src/shared/malicious-packages.json"
+      ".claude/hooks/src/shared/malicious-packages.json",
+      "scripts/github/local-review/prompt.mjs",
+      "scripts/github/local-review/context.mjs"
     ],
     "security_tier": [
       ".claude/hooks/src/*-guard.ts",
@@ -169,7 +172,8 @@
     "gate_score": [[1, 3], [3, 5], [5, 10]],
     "weights": { "config": 3, "code": 1 },
     "bands": { "mid": 1, "elevated": 3, "high": 10 },
-    "bot_budget": { "HIGH": [1, 1], "CRITICAL": [1, 1] }
+    "bot_budget": { "HIGH": [1, 1], "CRITICAL": [1, 1] },
+    "slot": { "spacing_min": 60, "paid_after_min": 30, "timeout_min": 60, "holder_max_min": 20, "sample_ttl_hours": 12 }
   },
   "coderabbit": {
     "reviews_7d_manual": 107,

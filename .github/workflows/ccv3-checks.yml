@@ -66,6 +66,17 @@ jobs:
       - name: shared lib unit tests (file lock)
         timeout-minutes: 5
         run: node --test scripts/github/lib/file-lock.test.mjs
+      # Review engine P1 (units A, B, C). Each test builds its own temp git repos and injects the agent, gh and the clock: no network,
+      # no cursor-agent, no Windows-only binary (the tldr.exe test injects its platform). Node 22 expands the globs itself.
+      - name: local review engine unit tests
+        timeout-minutes: 10
+        run: node --test scripts/github/local-review.test.mjs scripts/github/review-filter.test.mjs scripts/github/local-review/*.test.mjs
+      - name: review-router band tests (engine trust-boundary files are CRITICAL)
+        timeout-minutes: 5
+        run: node --test scripts/github/review-router-band.test.mjs
+      - name: slot-queue unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs scripts/github/slot-queue-mod-sync.test.mjs
       - name: harness-doctor unit tests
         timeout-minutes: 5
         run: node --test scripts/harness-doctor.test.mjs
@@ -74,9 +85,9 @@ jobs:
       - name: semgrep-ccv3 wrapper unit tests
         timeout-minutes: 5
         run: node --test scripts/ratchets/semgrep-ccv3.test.mjs
-      - name: checks unit tests (state-table helper, prove-check harness)
+      - name: checks unit tests (state-table helper, prove-check harness, test-map selector)
         timeout-minutes: 5
-        run: node --test scripts/checks/state-table.test.mjs scripts/checks/prove-check.test.mjs
+        run: node --test scripts/checks/state-table.test.mjs scripts/checks/prove-check.test.mjs scripts/checks/test-map.test.mjs
       - name: router checkpoint state x event table (C5 T2)
         timeout-minutes: 5
         run: node --test scripts/github/review-router-checkpoint-table.test.mjs

@@ -149,6 +149,8 @@ type Opts = {
   headAt?: Record<string, string>
   /** Replies for the first `gh pr view` calls, in order; later calls answer by `view` or the default. */
   viewSeq?: Reply[]
+  /** What slot-queue.mjs prints. Unset: a good `add`. */
+  slot?: Reply
 }
 
 type Run = { argv: string[]; stdin?: string; cwd?: string }
@@ -310,6 +312,9 @@ const world = (on: On, opts: Opts = {}) => {
       }
       if (argv.includes('--apply')) return done(opts.apply ?? OK)
       return done({ stdout: `PR checkpoint for ${HEAD.slice(0, 7)}: class infra, 7 file(s), 212 line(s)\nRecommended: coderabbit  budget 1+2\n` })
+    }
+    if (line.includes('slot-queue.mjs')) {
+      return done(opts.slot ?? { stdout: JSON.stringify({ ok: true, item: { state: argv.includes('--round') ? 'awaiting-fix' : 'opening' }, position: null, total: 0, nextSlotInMin: 0 }) })
     }
     return done(OK)
   })
@@ -1265,6 +1270,278 @@ describe('pr-checkpoint: lock B, shell text', () => {
   }
 })
 
+// F13 (free-slot queue, W3). The queue state file and the queue's write verbs are not the model's to touch: `add --band CRITICAL` jumps the
+// queue, `decide` forges Dave's choice, `drop` removes an item, and a direct write forges any of it. Same shape as K13 and K13b: the deny keys on
+// raw text and path, always (warn mode too), and spawns nothing. The read verbs and the test and git commands stay open.
+describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', () => {
+  const SLOT_SPELLINGS = [
+    'C:/Users/x/.claude/state/coderabbit-slot.json',
+    'C:\\Users\\x\\.claude\\state\\coderabbit-slot.json',
+    'c:/USERS/x/.CLAUDE/State/CodeRabbit-Slot.JSON',
+    'C:/Users/x/.claude/cache/../state/coderabbit-slot.json',
+    // m12: the lock file next to the state file. A tool write of a live pid there would freeze every queue write.
+    'C:/Users/x/.claude/state/coderabbit-slot.json.lock',
+    'C:\\Users\\x\\.claude\\state\\CodeRabbit-Slot.json.LOCK',
+  ]
+  const shell = async ($: Engine, command: string, tool: 'Bash' | 'PowerShell' = 'Bash') =>
+    (await $.tool.call({ tool, command } as never)) as unknown as { deny?: string }
+  const HEAD40 = 'c'.repeat(40)
+
+  for (const tool of ['Write', 'Edit', 'MultiEdit'] as const) {
+    test(`F13 ${tool} on coderabbit-slot.json is denied in every spelling, and in warn mode`, async ($, on) => {
+      const { seen } = world(on)
+      await start($)
+      for (const file_path of SLOT_SPELLINGS) {
+        const r = await $.tool.call({ tool, file_path, content: '{}', old_string: 'a', new_string: 'b', edits: [] } as never)
+        expect(LOCK_DENIED(r as never), file_path).toBe(true)
+      }
+      expect(seen.ran).toEqual([])
+    })
+  }
+
+  test('F13 a Write to another file in the state folder passes', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const passed = await $.tool.call({ tool: 'Write', file_path: 'C:/Users/x/.claude/state/sync-cursor', content: 'x' } as never)
+    expect(LOCK_DENIED(passed as never)).toBe(false)
+    expect(seen.ran.length).toBe(1)
+  })
+
+  const DENIED: [('Bash' | 'PowerShell'), string][] = [
+    ['Bash', 'node scripts/github/slot-queue.mjs decide --pr 1 --kind first'],
+    ['Bash', 'node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', `node scripts/github/slot-queue.mjs add --pr 1 --band CRITICAL --head ${HEAD40}`],
+    ['Bash', `node "C:/Users/x/continuous-claude/scripts/github/slot-queue.mjs" add --pr 1 --band CRITICAL --head ${HEAD40}`],
+    ['PowerShell', 'node scripts\\github\\slot-queue.mjs  DECIDE --pr 1 --kind pay'],
+    ['PowerShell', "node 'scripts/github/slot-queue.mjs' 'drop' --pr 1 --reason x"],
+    ['Bash', 'echo {} > ~/.claude/state/coderabbit-slot.json'],
+    ['PowerShell', "Set-Content -Path $HOME\\.claude\\state\\CodeRabbit-Slot.json -Value '{}'"],
+    ['Bash', 'rm ~/.claude/state/coderabbit-slot.json'],
+    // Lock B globs: a glob of the state file name is the state file. Only a read command may name it.
+    ['Bash', 'rm ~/.claude/state/coderabbit-slot.*'],
+    ['Bash', 'rm -f ~/.claude/state/coderabbit-sl*'],
+    ['Bash', 'mv ~/.claude/state/coderabbit-sl* /tmp'],
+    ['Bash', 'mv ~/.claude/state/coderabbit-s?ot.json /tmp/x'],
+    ['Bash', 'rm ~/.claude/state/[c]oderabbit-slot.json'],
+    ['Bash', 'rm ~/.claude/state/?oderabbit-slot.json'],
+    ['Bash', 'rm ~/.claude/state/*slot.json'],
+    ['Bash', 'rm ~/.claude/state/coderabbit-*'],
+    ['Bash', 'rm ~/.claude/state/coderabbit-slot.{json,lock}'],
+    ['Bash', 'rm ~/.claude/state/coderabbit-slot.json.l*'],
+    ['Bash', 'rm ~/.claude/state/coderabbit-slot.json.tmp-*'],
+    ['Bash', "rm '/home/x/.claude/state/coderabbit-sl'*"],
+    ['Bash', 'cp /tmp/forged.json ~/.claude/state/coderabbit-slot.js*'],
+    ['Bash', 'cp /tmp/forged.json ~/.claude/state/coderabbit-slot.json'],
+    ['Bash', 'cat /tmp/forged.json > ~/.claude/state/coderabbit-slot.json'],
+    ['Bash', 'cat /tmp/forged.json > ~/.claude/state/coderabbit-sl*'],
+    ['Bash', 'cat /tmp/forged.json >> ~/.claude/state/coderabbit-slot.*'],
+    ['Bash', 'cat /tmp/x | tee ~/.claude/state/coderabbit-sl*'],
+    ['Bash', 'cat ~/.claude/state/coderabbit-slot.json; rm ~/.claude/state/coderabbit-sl*'],
+    ['PowerShell', 'Remove-Item $HOME\\.claude\\state\\coderabbit-slot.*'],
+    ['PowerShell', 'Remove-Item -Force $HOME\\.claude\\state\\CodeRabbit-Sl*'],
+    // A glob over the state folder, or the folder itself, can delete the file (CodeRabbit CLI Major on f0edd54).
+    ['Bash', 'rm -f ~/.claude/state/*.json'],
+    ['Bash', 'rm ~/.claude/state/*'],
+    ['Bash', 'mv ~/.claude/state/c* /tmp'],
+    ['Bash', 'rm -rf ~/.claude/state'],
+    ['Bash', 'rm -rf ~/.claude/state/'],
+    ['PowerShell', 'Remove-Item $HOME\\.claude\\state\\*.json'],
+    ['PowerShell', 'Remove-Item -Recurse $HOME\\.claude\\state'],
+    ['PowerShell', 'Move-Item $HOME\\.claude\\state\\* C:\\tmp'],
+    ['PowerShell', 'Move-Item $HOME\\.claude\\state\\coderabbit-s?ot.json C:\\tmp'],
+    ['PowerShell', 'Move-Item $HOME\\.claude\\state\\[c]oderabbit-slot.json C:\\tmp'],
+    ['PowerShell', 'Copy-Item C:\\tmp\\forged.json $HOME\\.claude\\state\\coderabbit-sl*'],
+    ['PowerShell', "Set-Content -Path $HOME\\.claude\\state\\coderabbit-slot.* -Value '{}'"],
+    ['PowerShell', "'{}' | Out-File $HOME\\.claude\\state\\coderabbit-sl*"],
+    ['PowerShell', 'Out-File -FilePath $HOME\\.claude\\state\\coderabbit-slot.json.lock* -InputObject x'],
+    ['PowerShell', 'Get-Content C:\\tmp\\forged.json > $HOME\\.claude\\state\\coderabbit-sl*'],
+    // git is open for a read of the file, not for the verbs that delete or restore it.
+    ['Bash', 'git rm -f ~/.claude/state/coderabbit-slot.json'],
+    ['Bash', 'git -C ~/.claude restore state/coderabbit-sl*'],
+    ['Bash', 'git mv ~/.claude/state/coderabbit-slot.json /tmp/x'],
+    // A quote split of the file name is the file name.
+    ['Bash', "rm ~/.claude/state/coderabbit-sl''ot.json"],
+    // M4: the verb is not a literal token right after the script path.
+    ['PowerShell', "$v='decide'; node scripts/github/slot-queue.mjs $v --pr 1 --kind first"],
+    ['Bash', 'v=drop; node scripts/github/slot-queue.mjs $v --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue.mjs "$VERB" --pr 1 --reason x'],
+    ['PowerShell', "node scripts/github/slot-queue.mjs @('drop','--pr','1','--reason','x')"],
+    ['PowerShell', 'node scripts/github/slot-queue.mjs $(Get-Verb) --pr 1'],
+    ['PowerShell', 'node scripts/github/slot-queue.mjs a`dd --pr 1 --band HIGH --head x'],
+    ['Bash', "node scripts/github/slot-queue.mjs ad''d --pr 1 --band HIGH --head x"],
+    // M4: the script as a variable, so the verb follows a name that is not the script path.
+    ['PowerShell', "$s='scripts/github/slot-queue.mjs'; node $s add --pr 1 --band HIGH --head x"],
+    ['Bash', 's="scripts/github/slot-queue.mjs"; node "$s" drop --pr 1 --reason x'],
+    // M4: node loads the module as code.
+    ['Bash', `node -e "import('./scripts/github/slot-queue.mjs').then(m=>m.main(['add','--pr','1']))"`],
+    ['Bash', `node --eval "import('./scripts/github/slot-queue.mjs').then(m=>m.main(['drop']))"`],
+    ['Bash', `node -pe "require('./scripts/github/slot-queue.mjs')"`],
+    ['PowerShell', `node --input-type=module -e "import { main } from './scripts/github/slot-queue.mjs'; main(['drop'])"`],
+    ['Bash', "node - <<'EOF'\nimport { main } from './scripts/github/slot-queue.mjs'\nmain(['drop', '--pr', '1', '--reason', 'x'])\nEOF"],
+    ['Bash', `node -e "import('file:///C:/r/scripts/github/slot-queue-model.mjs')"`],
+    // Round 2 (Opus re-review): the allow list denies every one of these because the module is not followed by tick, list or probe.
+    ['Bash', "node scripts/github/slot-queue.mjs ''drop --pr 1 --reason x"],
+    ['Bash', 'node scripts/github/slot-queue.mjs \\drop --pr 1 --reason x'],
+    ['PowerShell', 'cmd /c node scripts\\github\\slot-queue.mjs dr^op --pr 1 --reason x'],
+    ['Bash', 'echo decide --pr 1 --kind pay | xargs node scripts/github/slot-queue.mjs'],
+    ['PowerShell', "$env:S='scripts/github/slot-queue.mjs'; node $env:S drop --pr 1 --reason x"],
+    ['Bash', 'for f in scripts/github/slot-queue.mjs; do node $f drop --pr 1 --reason x; done'],
+    ['PowerShell', "foreach ($f in 'scripts/github/slot-queue.mjs') { node $f drop --pr 1 --reason x }"],
+    ['Bash', 'node scripts/github/slot-queue.m* drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-q* drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/*queue.mjs drop --pr 1 --reason x'],
+    ['PowerShell', "iex ('node scripts/github/slot-queue.mjs ' + 'dr'+'op')"],
+    ['PowerShell', 'pwsh -EncodedCommand ZAByAG8AcAA= ; node scripts/github/slot-queue.mjs tick --json'],
+    ['PowerShell', 'pwsh -enc ZAByAG8AcAA= ; node scripts/github/slot-queue.mjs tick --json'],
+    // The tick, list and probe verbs behind a variable-built path, a cmd /c wrapper, a pipe into xargs, iex or a second call with a write verb.
+    ['Bash', '$ROOT/scripts/github/slot-queue.mjs tick'],
+    ['PowerShell', 'node $env:ROOT\\scripts\\github\\slot-queue.mjs tick --json'],
+    ['PowerShell', 'cmd /c node %ROOT%\\scripts\\github\\slot-queue.mjs tick'],
+    ['Bash', 'cmd /c node scripts/github/slot-queue.mjs tick'],
+    ['Bash', 'echo x | xargs node scripts/github/slot-queue.mjs tick'],
+    ['PowerShell', "iex 'node scripts/github/slot-queue.mjs tick'"],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick; node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick && node scripts/github/slot-queue.mjs decide --pr 1 --kind pay'],
+    ['Bash', 'git status\nnode scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'git status && node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue.mjs ti\\ck'],
+    ['Bash', 'NODE_OPTIONS= node scripts/github/SLOT-QUEUE.MJS DROP --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-qu$()eue.mjs drop --pr 1 --reason x'],
+    ['Bash', "node scripts/github/slo''t-que''ue.mjs drop --pr 1 --reason x"],
+    // A split of the name by a backtick escape, an empty substitution or a variable leaves a piece that still reads as the module.
+    ['PowerShell', 'node scripts/github/sl`ot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/sl$()ot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot${X}queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'git commit -m "`node scripts/github/slot-queue.mjs drop --pr 1 --reason x`"'],
+    // The git, grep and rg commands are open only as themselves: a compound, an alias, a subshell or a --pre command runs other code.
+    ['Bash', "git -c alias.x='!node scripts/github/slot-queue.mjs drop --pr 1' x"],
+    ['Bash', "rg --pre 'node scripts/github/slot-queue.mjs drop --pr 1' x"],
+    ['Bash', 'git commit -m "$(node scripts/github/slot-queue.mjs drop --pr 1 --reason x)"'],
+    ['Bash', 'git commit -m "x; node scripts/github/slot-queue.mjs drop --pr 1 --reason x"'],
+    ['Bash', "git commit -F - <<'EOF'\nslot-queue.mjs decide --pr 1 --kind pay\nEOF"],
+    ['Bash', 'grep -n x scripts/github/slot-queue.mjs && node scripts/github/slot-queue.mjs drop --pr 1'],
+    ['Bash', `node --test scripts/github/slot-queue.test.mjs -e "import('./scripts/github/slot-queue.mjs')"`],
+  ]
+
+  test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    for (const [tool, command] of DENIED) {
+      const r = await shell($, command, tool)
+      expect(LOCK_DENIED(r), `${tool}: ${command}`).toBe(true)
+      expect(r.deny).toMatch(/Read or Grep/)
+    }
+    expect(seen.ran).toEqual([])
+    expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
+  })
+
+  const ALLOWED: [('Bash' | 'PowerShell'), string][] = [
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --json'],
+    ['Bash', 'node scripts/github/slot-queue.mjs list --json'],
+    ['Bash', 'node scripts/github/slot-queue.mjs probe --pr 246 --json'],
+    ['Bash', 'git add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
+    ['PowerShell', 'git add scripts\\github\\slot-queue.mjs'],
+    ['Bash', 'node --test scripts/github/slot-queue.test.mjs'],
+    ['Bash', 'node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs'],
+    ['Bash', 'grep -n add scripts/github/slot-queue.mjs'],
+    // M4: the stricter checks must not catch these.
+    ['Bash', 'grep -e add scripts/github/slot-queue.mjs'],
+    ['Bash', 'node scripts/github/slot-queue.mjs list --json | jq .'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --session $SESSION_ID --json'],
+    ['PowerShell', 'node scripts/github/slot-queue.mjs tick --session $env:CLAUDE_SESSION_ID --json'],
+    ['Bash', 'CCV3_X=1 node scripts/github/slot-queue.mjs tick --json'],
+    ['Bash', 'node --check scripts/github/slot-queue.mjs'],
+    ['Bash', 'node -e "console.log(1)"'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --json && git add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
+    ['Bash', 'node --test --test-name-pattern="add" scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs'],
+    // Round 2: a commit message that names the module is a git command (Minor 6); -F is the workaround when it holds a separator.
+    ['Bash', 'git commit -m "fix(slot-queue): slot-queue.mjs decide --pr 1 now needs the lock"'],
+    ['Bash', 'git commit -F C:/tmp/msg.txt'],
+    ['Bash', 'git -C C:/r/.claude/worktrees/free-slot add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
+    ['Bash', 'git diff -- scripts/github/slot-queue.mjs'],
+    ['Bash', 'git log --oneline -3 -- scripts/github/slot-queue-model.mjs'],
+    ['Bash', 'git grep -n drop -- scripts/github/slot-queue.mjs'],
+    ['Bash', 'grep -rn "decide" scripts/github/slot-queue.mjs'],
+    ['Bash', 'rg -n drop scripts/github/slot-queue.mjs'],
+    ['PowerShell', 'Select-String -Path scripts\\github\\slot-queue.mjs -Pattern drop'],
+    ['PowerShell', 'Get-Content scripts\\github\\slot-queue.mjs'],
+    ['Bash', 'cat scripts/github/slot-queue.mjs'],
+    // Reading the state file is open, in the literal and in a glob form. Only a write names it as a denied command.
+    ['Bash', 'cat ~/.claude/state/coderabbit-slot.json'],
+    ['Bash', 'cat ~/.claude/state/coderabbit-slot.*'],
+    ['Bash', 'cat ~/.claude/state/coderabbit-sl*'],
+    ['Bash', 'grep -n queued ~/.claude/state/coderabbit-slot.json'],
+    ['Bash', 'rg -n queued ~/.claude/state/coderabbit-s?ot.json'],
+    ['PowerShell', 'Get-Content $HOME\\.claude\\state\\coderabbit-slot.json'],
+    ['PowerShell', 'Get-Content $HOME\\.claude\\state\\coderabbit-sl* -Raw'],
+    ['PowerShell', 'Select-String -Path $HOME\\.claude\\state\\coderabbit-slot.json -Pattern queued'],
+    ['PowerShell', 'Select-String -Path $HOME\\.claude\\state\\[c]oderabbit-slot.json -Pattern queued'],
+    ['Bash', 'cat ~/.claude/state/coderabbit-slot.json | jq .'],
+    ['Bash', 'cat ~/.claude/state/coderabbit-paid.jsonl'],
+    // Listing or reading the state folder stays open.
+    ['Bash', 'ls ~/.claude/state/*.json'],
+    ['Bash', 'ls -la ~/.claude/state'],
+    ['PowerShell', 'Get-ChildItem $HOME\\.claude\\state\\*.json'],
+    ['Bash', 'cat ~/.claude/state/*.json'],
+    ['Bash', 'cat ~/.claude/state/sync-cursor'],
+    ['Bash', 'rm ~/.claude/state/coderabbit-paid.jsonl'],
+    ['Bash', 'git commit -m "docs: the queue file is coderabbit-slot.json"'],
+    ['Bash', "node 'scripts/github/slot-queue.mjs' 'tick' --json"],
+    ['PowerShell', 'node scripts\\github\\slot-queue.mjs  TICK --json'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --json; node scripts/github/slot-queue.mjs list --json'],
+    ['Bash', 'cd C:/r && git add scripts/github/slot-queue.mjs && git status'],
+    ['Bash', 'node --check scripts/github/slot-queue.mjs && node --test scripts/github/slot-queue.test.mjs'],
+  ]
+
+  test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    for (const [tool, command] of ALLOWED) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(false)
+    }
+    expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
+  })
+
+  test('F13 the deny text names git commit -F for a commit message that mentions the module', async ($, on) => {
+    world(on)
+    await start($)
+    const r = await shell($, 'node scripts/github/slot-queue.mjs drop --pr 1')
+    expect(r.deny).toMatch(/git commit -F/)
+  })
+
+  // Minor 5. Breaks if any pattern is quadratic on a long line (an unbounded quantifier beside a repeated prefix).
+  // 400k characters in under 500 ms: linear work plus the harness call stays far under it, while a quadratic
+  // pattern grows 16x from 100k (the old guard took 199 ms at 100k, so about 3 s here). A 50 ms limit at 100k flaked under load.
+  const LONG: [string, string][] = [
+    ['no module', 'x '.repeat(200_000)],
+    ['module repeated, all tick', 'node scripts/github/slot-queue.mjs tick '.repeat(10_000)],
+    ['module repeated, no verb', 'scripts/github/slot-queue.mjs '.repeat(13_600)],
+    ['slot- prefix repeated', 'slot-'.repeat(80_000)],
+    ['separators and a module at the end', `git commit -m "${'x;'.repeat(200_000)} slot-queue.mjs"`],
+    ['quotes and carets', `${"'^`".repeat(120_000)} slot-queue.mjs tick`],
+    ['one long token before the module', `${'a'.repeat(400_000)}slot-queue.mjs tick`],
+    ['glob chars', `node ${'*?['.repeat(120_000)}slot-queue`],
+  ]
+  for (const [label, command] of LONG) {
+    test(`F13 a 400k-character line (${label}) is judged in under 500 ms`, async ($, on) => {
+      world(on)
+      await start($)
+      await shell($, 'git status')
+      const t0 = performance.now()
+      await shell($, command)
+      expect(performance.now() - t0).toBeLessThan(500)
+    })
+  }
+
+  test('F13 the kill switch lifts the queue lock with the others', async ($, on) => {
+    world(on, { env: { CCV3_MODS_OFF: '1' } })
+    await start($)
+    expect(LOCK_DENIED(await shell($, `node scripts/github/slot-queue.mjs decide --pr 1 --kind first`))).toBe(false)
+    const w = (await $.tool.call({ tool: 'Write', file_path: SLOT_SPELLINGS[0], content: '{}' } as never)) as unknown as { deny?: string }
+    expect(LOCK_DENIED(w)).toBe(false)
+  })
+})
+
 describe('pr-checkpoint: kill switches', () => {
   for (const env of [{ CCV3_MODS_OFF: '1' }, { CCV3_PR_CHECKPOINT_OFF: '1' }] as Record<string, string>[]) {
     test(`K22 (guard) ${Object.keys(env)[0]}=1 leaves no tool, no command and no lock`, async ($, on) => {
@@ -1730,6 +2007,91 @@ describe('pr-checkpoint: asks from the watcher', () => {
     const pane = await mountPane($)
     expect(await keys(pane)).toEqual(['ask-no', 'ask-yes'])
   })
+
+  // T3: the round grants (the pane Yes, `/pathway grant`) put the PR back in the free-slot queue; the queue posts, so the notice says not to.
+  describe('the free-slot queue after a round grant (T3, F12)', () => {
+    const slotRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
+    const ADD_R4 = ['add', '--pr', '7', '--band', 'HIGH', '--head', HEAD, '--round', '4', '--escalated', '--session', SESSION, '--json']
+    const told = (w: { session: { appended: () => readonly { message: unknown }[] } }) => JSON.stringify(w.session.appended().map(row => row.message))
+    const QUEUE_NOTICE = 'the free-slot queue posts @coderabbitai review after the fix push. Do not post it.'
+    const OLD_NOTICE = 'after the fix push, post one @coderabbitai review.'
+    const banded = (over: Rec = {}) => ({ ...watchDoc(), 'checkpoint:pr:7': record({ band: 'HIGH', ...over }) })
+
+    test('T3 the pane Yes on a round ask runs add --round 4 --escalated on the record head, and the notice says the queue posts', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      await w.clock.advance(TICK)
+      const pane = await mountPane($)
+      await pane.press({ key: 'ask-yes' })
+      expect(slotRuns(w.seen)).toEqual([ADD_R4])
+      expect(told(w)).toContain(QUEUE_NOTICE)
+      expect(told(w)).not.toContain(OLD_NOTICE)
+      expect(counts(w.seen).comments).toEqual([])
+    })
+
+    test('T3 /pathway grant 7 4 runs the same add; the reply and the notice say the queue posts', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([ADD_R4])
+      expect(ran.text ?? '').toContain('the free-slot queue posts')
+      expect(ran.text ?? '').not.toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(QUEUE_NOTICE)
+    })
+
+    // F13: /pathway grant comes after fix pushes, so the record head is stale. The add carries the PR's current head, or no add runs.
+    test('T3 /pathway grant 7 4 after a fix push queues the round on the PR current head, not the record head', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, viewHead: OTHER_HEAD })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([ADD_R4.map(arg => (arg === HEAD ? OTHER_HEAD : arg))])
+      expect(ran.text ?? '').toContain('the free-slot queue posts')
+    })
+
+    test('T3 /pathway grant 7 4 with an unreadable PR head runs no add and keeps the old notice', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, view: { exitCode: 1, stderr: 'gh: network down' } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([])
+      expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+      expect(ran.text ?? '').toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(OLD_NOTICE)
+    })
+
+    test('T3 a grant raised by a plugin runs no add', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      await slash($, 'grant 7 4', 'plugin')
+      expect(slotRuns(w.seen)).toEqual([])
+    })
+
+    test('T3 a record with no band (an older record) runs no add and keeps the old notice', async ($, on) => {
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([])
+      expect(ran.text ?? '').toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(OLD_NOTICE)
+    })
+
+    test('T3 a failed add gives one toast, keeps the old notice, and the grant stays stored', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, slot: { exitCode: 2, stdout: '{"ok":false,"reason":"slot-queue: bad state file"}' } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+      expect(w.seen.toasts.filter(text => text.includes('slot-queue: bad state file')).length).toBe(1)
+      expect(ran.text ?? '').toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(OLD_NOTICE)
+    })
+
+    test('T3 a grant that keeps an earlier decline runs no add', async ($, on) => {
+      const declined = { kind: 'opening', round: 1, head: HEAD }
+      const w = world(on, { store: banded({ declined }), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([])
+    })
+  })
 })
 
 // ---- review factory step A: auto-confirm and the mobile /pathway gap (Dave 2026-11-01) ------------------------------------------------
@@ -2105,5 +2467,60 @@ describe('pr-checkpoint: every /pathway leaves one log line', () => {
     const lines = logLines(written)
     expect(lines.length).toBe(1)
     expect(lines[0]!.outcome).toBe('error')
+  })
+})
+
+describe('pr-checkpoint: the apply puts the PR in the free-slot queue (T1)', () => {
+  const slotRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
+  const withBand = (band: string | null) => ({ json: { stdout: JSON.stringify(engineJson({ auto: { eligible: false, band, reason: 'a person decides' } })) } })
+  const ADD_HIGH = ['add', '--pr', '7', '--band', 'HIGH', '--head', HEAD, '--session', SESSION, '--json']
+
+  test('T1 a HIGH coderabbit apply runs add --band HIGH on the record head, stores the band, and toasts the queue line', async ($, on) => {
+    const { seen, store } = world(on, withBand('HIGH'))
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(slotRuns(seen)).toEqual([ADD_HIGH])
+    expect((store.get('checkpoint:pr:7') as Rec).band).toBe('HIGH')
+    expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(seen.toasts.some(text => text.includes('#7') && text.includes('free CodeRabbit slot') && text.includes('label review'))).toBe(true)
+  })
+
+  test('T1 a CRITICAL apply runs add --band CRITICAL', async ($, on) => {
+    const { seen } = world(on, withBand('CRITICAL'))
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(slotRuns(seen)).toEqual([[...ADD_HIGH.slice(0, 4), 'CRITICAL', ...ADD_HIGH.slice(5)]])
+  })
+
+  for (const [name, band] of [['MID', 'MID'], ['no band', null]] as const) {
+    test(`T1 a coderabbit apply in band ${name} runs no add`, async ($, on) => {
+      const { seen, store } = world(on, withBand(band))
+      const { pane } = await openPane($)
+      await pane.press({ key: 'opt-coderabbit' })
+      expect(slotRuns(seen)).toEqual([])
+      expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    })
+  }
+
+  test('T1 a none apply in a HIGH band runs no add', async ($, on) => {
+    const { seen } = world(on, withBand('HIGH'))
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-none' })
+    expect(slotRuns(seen)).toEqual([])
+  })
+
+  test('T1 an engine apply that refuses runs no add', async ($, on) => {
+    const { seen } = world(on, { ...withBand('HIGH'), apply: { exitCode: 1, stderr: 'the head moved' } })
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(slotRuns(seen)).toEqual([])
+  })
+
+  test('T1 a failed add never fails the apply: the record is applied and Dave gets one toast with the reason', async ($, on) => {
+    const { seen, store } = world(on, { ...withBand('HIGH'), slot: { exitCode: 2, stdout: '{"ok":false,"reason":"slot-queue: bad state file"}' } })
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(seen.toasts.filter(text => text.includes('slot-queue: bad state file')).length).toBe(1)
   })
 })

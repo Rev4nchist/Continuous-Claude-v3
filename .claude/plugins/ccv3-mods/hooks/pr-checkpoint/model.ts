@@ -284,6 +284,109 @@ export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)
 
+/**
+ * Text that could be the queue state file or one of its siblings (.lock, .tmp-*), in the literal or in a glob form: `coderabbit-slot.json`,
+ * `coderabbit-slot.*`, `coderabbit-sl*`, `coderabbit-s?ot.json`, `coderabbit-*`, `coderabbit-slot.{json,lock}`, `[c]oderabbit-slot.json`,
+ * `?oderabbit-slot.json`, `*slot.json`. Tested on text with quotes and escapes stripped. Not a `g` regex: `.test()` keeps no state.
+ * A glob must sit right after `coderabbit-` or after `coderabbit-s`, so the other `coderabbit-*` files (the paid ledger, the guard runs) stay open.
+ * A glob anywhere in a `.claude/state` path (`~/.claude/state/*.json`, `.claude\state\*`) and the `.claude/state` folder itself also count:
+ * they can delete or replace the file. The text is tested with backslashes stripped, so the separator is optional.
+ */
+const SLOT_STATE_LIKE = /coderabbit-slot\.json|coderabbit[-_]{0,2}(?:s[\w.-]{0,30})?[*?[{]|[*?[{][\w.*?[\]{},-]{0,30}(?:rabbit[-_]{1,2}s|slot[.*?[{])|\.claude[\\/]{0,2}state(?:[\\/]{0,2}[\w.*?[\]{},-]{0,60}[*?[{]|[\\/]{0,2}(?=\s|$))/i
+/** A redirect: a read command with one writes the file it names. */
+const REDIRECT = />/
+/** git verbs that delete, move or restore a file; the other git commands only read or commit. */
+const GIT_WRITES_FILES = /^git(?:\.exe)?\s[^\n]{0,400}?\b(?:mv|rm|restore)\b/i
+/** A command longer than this that names the queue module is denied unread: every pattern below is also bounded, and this bounds the number of segments. */
+const SLOT_MAX_NAMING_LENGTH = 20_000
+/**
+ * Text that could be the queue module under a quote, caret, backtick or backslash split, or a glob: `slot-q...`, `slot-*`, `queue.m...`, `*queue`, `sl*-queue`.
+ * Quotes and escapes are stripped first. Any split of `slot-queue.mjs` by a separator or a `$()` leaves a piece that still matches (`slot-q` on the left or `queue.m` on the right).
+ */
+const SLOT_NAME_LIKE = /slot[-_]{0,2}[q*?[]|queue(?:-model)?\.m|[*?[][\w.*?[\]-]{0,30}queue/gi
+/** The module as a clean token whose next argument is exactly tick, list or probe (quotes may wrap the verb). Raw text, no stripping. */
+const SLOT_MODULE_THEN_READ_VERB = /slot-queue(?:-model)?\.mjs(?=["']?\s{1,20}["']?(?:tick|list|probe)["']?(?:\s|$|[;&|]))/gi
+/** Code that loads a module: node -e or -p (also -pe), --eval, --print, --input-type, a stdin script, import(), require(), import ... from, main(. Bounded. */
+const SLOT_CODE_LOADER = /\bimport\s{0,10}\(|\brequire\s{0,10}\(|\bimport\b[^\n]{0,400}\bfrom\b|\bmain\s{0,10}\(|--input-type|--eval\b|--print\b|\bnode(?:\.exe)?\s{1,10}(?:[^\n;|&]{0,200}\s)?-[a-z]{0,10}[ep]\b|\bnode(?:\.exe)?\s{1,10}-(?:\s|$)/i
+/** Forms that run text built apart from the command line: a pipe into xargs, iex, an encoded command, cmd /c. */
+const SLOT_OPAQUE = /\bxargs\b|\biex\b|\bInvoke-Expression\b|(?:^|\s)-enc(?:odedcommand)?(?=\s|$)|\bcmd(?:\.exe)?\s{1,10}\/[ck]\b/i
+/** A command separator, a backtick or the start of a command substitution: each piece is judged alone. A paren alone is not a separator (a commit title holds one). */
+const SLOT_SEPARATORS = /[;&|\n\r`]|\$\(/
+
+const ENV_PREFIX = /^(?:\w{1,60}=\S{0,200}\s{1,10}){0,5}/
+const GIT_READ_OR_COMMIT = /^git(?:\.exe)?(?:\s{1,10}-C\s{1,10}(?:"[^"]{1,300}"|'[^']{1,300}'|\S{1,300}))?\s{1,10}(?:add|commit|log|diff|show|status|grep|blame|ls-files|rev-parse|rev-list|cat-file|check-ignore|restore|mv|rm)\b/i
+/** git options that run other code: -c (an alias with `!`), --exec, an external diff or textconv, a pager for grep. */
+const GIT_RUNS_CODE = /(?:^|\s)-c(?:\s|=)|--config|--exec\b|--ext-diff|--textconv|--open-files-in-pager|\s-O\S/
+const SEARCH_OR_READ = /^(?:grep|egrep|fgrep|rg|Select-String|sls|Get-Content|gc|cat|type|ls|dir|Get-ChildItem|gci)(?:\.exe)?\s/i
+/** rg runs a command on each file with --pre. */
+const SEARCH_RUNS_CODE = /--pre\b|--pre-glob\b|--hostname-bin\b/
+const NODE_TEST_OR_CHECK = /^node(?:\.exe)?\s{1,10}(?:--[a-z-]{1,30}(?:=\S{1,100})?\s{1,10}){0,6}--(?:test|check)\b/i
+const NODE_LOADS_CODE = /(?:^|\s)(?:-[a-z]{0,10}[ep]|-r|--(?:eval|print|require|import|loader|experimental-loader|input-type))(?=\s|=|$)/
+
+export const SLOT_DENY = "The free-slot queue file and its write verbs (add, decide, drop) belong to Dave's /slot command and the mod. A tool or a shell command may not name them. Read the queue with the Read or Grep tool, or run slot-queue.mjs tick, list or probe. A commit message that names slot-queue.mjs: write it to a file and run `git commit -F <file>`."
+
+/** A tool write (file_path or notebook_path) that lands on the free-slot queue file, or its temp copy, in any checkout or home. */
+export const isSlotStateFile = (path: string): boolean => /\/\.claude\/state\/coderabbit-slot\.json(?:\.tmp-[^/]*|\.lock)?$/.test(`/${normalizePath(path)}`)
+
+const count = (re: RegExp, text: string): number => text.match(re)?.length ?? 0
+
+/** A segment that is only a git, search, read or `node --test|--check` command. It runs no queue verb, whatever text it holds. */
+const isInertSegment = (segment: string): boolean => {
+  const text = segment.trim().replace(ENV_PREFIX, '')
+  if (GIT_READ_OR_COMMIT.test(text)) return !GIT_RUNS_CODE.test(text)
+  if (SEARCH_OR_READ.test(text)) return !SEARCH_RUNS_CODE.test(text)
+  if (NODE_TEST_OR_CHECK.test(text)) return !NODE_LOADS_CODE.test(text)
+  return false
+}
+
+/** The path token in front of a match: a `$` or `%` in it means a variable builds the path; a `=` means an assignment holds it. */
+const buildsPath = (segment: string, at: number): boolean => /[$%=]/.test(segment.slice(Math.max(0, at - 200), at).split(/\s/).pop() ?? '')
+
+/** A segment that names the module is open only when every mention is the clean module followed by tick, list or probe. */
+const readsOnly = (segment: string, loose: string): boolean => {
+  const clean = [...segment.matchAll(SLOT_MODULE_THEN_READ_VERB)]
+  return clean.length === count(SLOT_NAME_LIKE, loose) && !SLOT_CODE_LOADER.test(segment) && !clean.some(m => buildsPath(segment, m.index ?? 0))
+}
+
+/** A segment that names the state file is open only as a read: an inert command with no redirect, and no git verb that deletes, moves or restores. */
+const readsStateFile = (segment: string): boolean => {
+  const text = segment.trim().replace(ENV_PREFIX, '')
+  return isInertSegment(segment) && !REDIRECT.test(segment) && !GIT_WRITES_FILES.test(text)
+}
+
+/**
+ * Shell text that names the queue file, or names the queue module in a way that is not a plain read. An allow list on raw text, no lexer.
+ * The text splits on `; & | newline`, a backtick and `$(`; every piece that names the module or the state file (quotes and escapes stripped,
+ * globs counted, the file in any glob form) must be
+ * (a) a git, grep, rg, Select-String, Get-Content or cat command, or `node --test` or `--check`, with no option that runs other code. A piece
+ *     that names the state file must also hold no `>` and no git mv, rm or restore, so `cat x > coderabbit-sl*` and `rm coderabbit-slot.*` deny; or
+ * (b) a piece where every mention is the module as a clean token followed by exactly tick, list or probe, with no variable in the path.
+ *     A piece that names the state file is never (b).
+ * Any (b) piece also denies the whole command when it holds xargs, iex, Invoke-Expression, -EncodedCommand or cmd /c.
+ * A long command that names the module is denied unread. A doubt reads as a deny.
+ * Not covered, accepted: an -EncodedCommand payload that names nothing, a helper script written to disk that imports `main`, and a path built by
+ * concatenation with no `$` or `%` and no module name in the text.
+ */
+export const namesSlotWrite = (command: string): boolean => {
+  const wholeLoose = command.replace(/['"`^\\]/g, '')
+  if (count(SLOT_NAME_LIKE, wholeLoose) === 0 && !SLOT_STATE_LIKE.test(wholeLoose)) return false
+  if (command.length > SLOT_MAX_NAMING_LENGTH) return true
+  let opaque = false
+  for (const segment of command.split(SLOT_SEPARATORS)) {
+    const loose = segment.replace(/['"`^\\]/g, '')
+    const state = SLOT_STATE_LIKE.test(loose)
+    if (count(SLOT_NAME_LIKE, loose) === 0 && !state) continue
+    if (state) {
+      if (!readsStateFile(segment)) return true
+      continue
+    }
+    if (isInertSegment(segment)) continue
+    if (!readsOnly(segment, loose)) return true
+    opaque = true
+  }
+  return opaque && SLOT_OPAQUE.test(command)
+}
+
 /** The gh write shapes: a comment, a pr or issue edit or create with a body, and an api call that is a POST, PATCH or PUT, sets a body field, runs a GraphQL mutation or sends --input. */
 const GH = String.raw`\bgh(?:\.exe)?\s+`
 const GH_WRITE_SHAPES: RegExp[] = [

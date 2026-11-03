@@ -166,7 +166,7 @@ export const SURFACES = [
     // The pure config needs no server, database or browser. It needs root node_modules: run npm ci --ignore-scripts first.
     gates: [nodeGate('scrub-invariant', 'node_modules/@playwright/test/cli.js', ['test', '--config', 'apps/agentic-os/playwright.pure.config.ts', '--reporter=line'])],
   },
-  { id: 'checks-scripts', globs: ['scripts/checks/**'], gates: [{ id: 'checks-tests', cmd: 'node', args: ['--test', 'scripts/checks/prove-check.test.mjs', 'scripts/checks/state-table.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }] },
+  { id: 'checks-scripts', globs: ['scripts/checks/**'], gates: [{ id: 'checks-tests', cmd: 'node', args: ['--test', 'scripts/checks/prove-check.test.mjs', 'scripts/checks/state-table.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }, nodeTest('test-map-tests', 'scripts/checks/test-map.test.mjs')] },
   {
     id: 'config',
     globs: ['.coderabbit.yaml', 'review-router.config.json', '.claude/project-registry.json'],
@@ -175,7 +175,8 @@ export const SURFACES = [
   },
   { id: 'templates', globs: ['.claude/templates/**'], gates: [], manual: 'an always-loaded template: the context-budget gate runs anyway; the sync installs it' },
   // The github suite takes about 14 minutes on this machine (real git, child processes and PowerShell).
-  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN), nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN)] },
+  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN), nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/*.test.mjs', 5 * MIN)] },
+  { id: 'trex', globs: ['.trex/**', 'scripts/trex/**', 'docker/trex/**', 'apps/agentic-os/.trex/**', 'apps/agentic-os/e2e/trex-*.spec.ts', 'apps/agentic-os/playwright.trex.config.ts', 'scripts/checks/test-map.mjs'], gates: [nodeTest('trex-tests', 'scripts/trex/**/*.test.mjs')] },
   {
     id: 'mod',
     globs: ['.claude/plugins/ccv3-mods/**'],

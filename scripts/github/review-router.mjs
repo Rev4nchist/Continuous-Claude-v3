@@ -100,6 +100,12 @@ export function classify(paths, config) {
 
 // ---------- review band (.claudedocs/2026-11-01-review-matrix.md sections 2.1 to 2.3, option A) ----------
 
+/** Review-engine trust boundary (engine spec 13.4): a change here can change what the review trusts, so it forces CRITICAL.
+ *  cursor-review.mjs is the review-tree boundary (AGENT_FILES strip, buildAgentEnv secret strip, prepareReview).
+ *  checkpoint.critical is NOT added: it holds the gate files that give the floor (aegis + critic), not the CRITICAL band.
+ *  prompt.mjs and context.mjs stay on matrix.control_plane only, so a prompt-tuning PR is not CRITICAL. */
+export const CRITICAL_TRUST_BOUNDARY = ['scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/local-review/record.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/lib/**'];
+
 const anyGlob = (globs = []) => { const res = globs.map(globToRegExp); return (p) => res.some((re) => re.test(p)); };
 
 /**
@@ -107,7 +113,7 @@ const anyGlob = (globs = []) => { const res = globs.map(globToRegExp); return (p
  *   files: path strings or { filename, previous_filename? } objects. A rename is ONE changed file with two names: it counts once,
  *   and a gate / config / logic test looks at both names (a rename into or out of the control plane counts).
  *   G gate files: non-test files on matrix.control_plane, any extension. C: a non-test review, merge or reviewer config file changed.
- *   K: one logic file outside dist/ and test files. L: a risk:high label or an r3 path (forces CRITICAL). r: confirmed internal Majors, already
+ *   K: one logic file outside dist/ and test files. L: a risk:high label, an r3 path or a non-test CRITICAL_TRUST_BOUNDARY file (forces CRITICAL). r: confirmed internal Majors, already
  *   weighted (+7 each); nothing posts that record yet, so callers pass 0. Score S = gate score + 3C + K + r. No matrix block: null.
  * Left out on purpose: H (needs both versions of settings.json.template), the split guard (reads other PRs) and the ratchet (needs saved state).
  */
@@ -125,12 +131,13 @@ export function bandOf(files, config, { labels = [], r = 0 } = {}) {
   // The name that makes an entry count: the first non-test name that passes `match`.
   const hit = (names, match) => names.find((p) => !isTest(p) && match(p));
   const inPlane = anyGlob(m.control_plane);
+  const inTrust = anyGlob(CRITICAL_TRUST_BOUNDARY);
   const gateFiles = entries.map((names) => hit(names, inPlane)).filter(Boolean);
   const securityTier = gateFiles.filter(anyGlob(m.security_tier));
   const G = gateFiles.length;
   const C = entries.some((names) => hit(names, anyGlob(m.config_files))) ? 1 : 0;
   const K = entries.some((names) => hit(names, isLogic)) ? 1 : 0;
-  const L = labels.includes('risk:high') || classify(entries.flat(), config).class === 'r3';
+  const L = labels.includes('risk:high') || classify(entries.flat(), config).class === 'r3' || entries.some((names) => hit(names, inTrust));
   const gate = m.gate_score.reduce((best, [min, score]) => (G >= min && score > best ? score : best), 0);
   const score = gate + m.weights.config * C + m.weights.code * K + (Number.isFinite(r) && r > 0 ? r : 0);
   const band = L ? 'CRITICAL' : score >= m.bands.high ? 'HIGH' : score >= m.bands.elevated ? 'ELEVATED' : score >= m.bands.mid ? 'MID' : 'LOW';
