@@ -975,6 +975,12 @@ describe('agentic-os session identity', () => {
     expect(got).not.toContain('trex')
   })
 
+  test('I7 a start with no hook event yet (a /reload-plugins) reads the name from the identity file', async ($, on) => {
+    world2(on, { [FILE]: JSON.stringify({ uuid: 'test-session', name: 'trex' }) })
+    await start($)
+    expect(await line1($)).toContain('trex #test-ses')
+  })
+
   test('I5 the off switch reads no identity file', async ($, on) => {
     const seen = world2(on, { [FILE]: JSON.stringify({ name: 'fromfile' }) }, { CCV3_MODS_OFF: '1' })
     await start($)
