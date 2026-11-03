@@ -1336,6 +1336,48 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['PowerShell', `node --input-type=module -e "import { main } from './scripts/github/slot-queue.mjs'; main(['drop'])"`],
     ['Bash', "node - <<'EOF'\nimport { main } from './scripts/github/slot-queue.mjs'\nmain(['drop', '--pr', '1', '--reason', 'x'])\nEOF"],
     ['Bash', `node -e "import('file:///C:/r/scripts/github/slot-queue-model.mjs')"`],
+    // Round 2 (Opus re-review): the allow list denies every one of these because the module is not followed by tick, list or probe.
+    ['Bash', "node scripts/github/slot-queue.mjs ''drop --pr 1 --reason x"],
+    ['Bash', 'node scripts/github/slot-queue.mjs \\drop --pr 1 --reason x'],
+    ['PowerShell', 'cmd /c node scripts\\github\\slot-queue.mjs dr^op --pr 1 --reason x'],
+    ['Bash', 'echo decide --pr 1 --kind pay | xargs node scripts/github/slot-queue.mjs'],
+    ['PowerShell', "$env:S='scripts/github/slot-queue.mjs'; node $env:S drop --pr 1 --reason x"],
+    ['Bash', 'for f in scripts/github/slot-queue.mjs; do node $f drop --pr 1 --reason x; done'],
+    ['PowerShell', "foreach ($f in 'scripts/github/slot-queue.mjs') { node $f drop --pr 1 --reason x }"],
+    ['Bash', 'node scripts/github/slot-queue.m* drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-q* drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/*queue.mjs drop --pr 1 --reason x'],
+    ['PowerShell', "iex ('node scripts/github/slot-queue.mjs ' + 'dr'+'op')"],
+    ['PowerShell', 'pwsh -EncodedCommand ZAByAG8AcAA= ; node scripts/github/slot-queue.mjs tick --json'],
+    ['PowerShell', 'pwsh -enc ZAByAG8AcAA= ; node scripts/github/slot-queue.mjs tick --json'],
+    // The tick, list and probe verbs behind a variable-built path, a cmd /c wrapper, a pipe into xargs, iex or a second call with a write verb.
+    ['Bash', '$ROOT/scripts/github/slot-queue.mjs tick'],
+    ['PowerShell', 'node $env:ROOT\\scripts\\github\\slot-queue.mjs tick --json'],
+    ['PowerShell', 'cmd /c node %ROOT%\\scripts\\github\\slot-queue.mjs tick'],
+    ['Bash', 'cmd /c node scripts/github/slot-queue.mjs tick'],
+    ['Bash', 'echo x | xargs node scripts/github/slot-queue.mjs tick'],
+    ['PowerShell', "iex 'node scripts/github/slot-queue.mjs tick'"],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick; node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick && node scripts/github/slot-queue.mjs decide --pr 1 --kind pay'],
+    ['Bash', 'git status\nnode scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'git status && node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue.mjs ti\\ck'],
+    ['Bash', 'NODE_OPTIONS= node scripts/github/SLOT-QUEUE.MJS DROP --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-qu$()eue.mjs drop --pr 1 --reason x'],
+    ['Bash', "node scripts/github/slo''t-que''ue.mjs drop --pr 1 --reason x"],
+    // A split of the name by a backtick escape, an empty substitution or a variable leaves a piece that still reads as the module.
+    ['PowerShell', 'node scripts/github/sl`ot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/sl$()ot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot${X}queue.mjs drop --pr 1 --reason x'],
+    ['Bash', 'git commit -m "`node scripts/github/slot-queue.mjs drop --pr 1 --reason x`"'],
+    // The git, grep and rg commands are open only as themselves: a compound, an alias, a subshell or a --pre command runs other code.
+    ['Bash', "git -c alias.x='!node scripts/github/slot-queue.mjs drop --pr 1' x"],
+    ['Bash', "rg --pre 'node scripts/github/slot-queue.mjs drop --pr 1' x"],
+    ['Bash', 'git commit -m "$(node scripts/github/slot-queue.mjs drop --pr 1 --reason x)"'],
+    ['Bash', 'git commit -m "x; node scripts/github/slot-queue.mjs drop --pr 1 --reason x"'],
+    ['Bash', "git commit -F - <<'EOF'\nslot-queue.mjs decide --pr 1 --kind pay\nEOF"],
+    ['Bash', 'grep -n x scripts/github/slot-queue.mjs && node scripts/github/slot-queue.mjs drop --pr 1'],
+    ['Bash', `node --test scripts/github/slot-queue.test.mjs -e "import('./scripts/github/slot-queue.mjs')"`],
   ]
 
   test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
@@ -1369,6 +1411,23 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node -e "console.log(1)"'],
     ['Bash', 'node scripts/github/slot-queue.mjs tick --json && git add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
     ['Bash', 'node --test --test-name-pattern="add" scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs'],
+    // Round 2: a commit message that names the module is a git command (Minor 6); -F is the workaround when it holds a separator.
+    ['Bash', 'git commit -m "fix(slot-queue): slot-queue.mjs decide --pr 1 now needs the lock"'],
+    ['Bash', 'git commit -F C:/tmp/msg.txt'],
+    ['Bash', 'git -C C:/r/.claude/worktrees/free-slot add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
+    ['Bash', 'git diff -- scripts/github/slot-queue.mjs'],
+    ['Bash', 'git log --oneline -3 -- scripts/github/slot-queue-model.mjs'],
+    ['Bash', 'git grep -n drop -- scripts/github/slot-queue.mjs'],
+    ['Bash', 'grep -rn "decide" scripts/github/slot-queue.mjs'],
+    ['Bash', 'rg -n drop scripts/github/slot-queue.mjs'],
+    ['PowerShell', 'Select-String -Path scripts\\github\\slot-queue.mjs -Pattern drop'],
+    ['PowerShell', 'Get-Content scripts\\github\\slot-queue.mjs'],
+    ['Bash', 'cat scripts/github/slot-queue.mjs'],
+    ['Bash', "node 'scripts/github/slot-queue.mjs' 'tick' --json"],
+    ['PowerShell', 'node scripts\\github\\slot-queue.mjs  TICK --json'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --json; node scripts/github/slot-queue.mjs list --json'],
+    ['Bash', 'cd C:/r && git add scripts/github/slot-queue.mjs && git status'],
+    ['Bash', 'node --check scripts/github/slot-queue.mjs && node --test scripts/github/slot-queue.test.mjs'],
   ]
 
   test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {
@@ -1379,6 +1438,35 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     }
     expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
   })
+
+  test('F13 the deny text names git commit -F for a commit message that mentions the module', async ($, on) => {
+    world(on)
+    await start($)
+    const r = await shell($, 'node scripts/github/slot-queue.mjs drop --pr 1')
+    expect(r.deny).toMatch(/git commit -F/)
+  })
+
+  // Minor 5. Breaks if any pattern is quadratic on a long line (an unbounded quantifier beside a repeated prefix): 100k characters in under 50 ms.
+  const LONG: [string, string][] = [
+    ['no module', 'x '.repeat(50_000)],
+    ['module repeated, all tick', 'node scripts/github/slot-queue.mjs tick '.repeat(2_500)],
+    ['module repeated, no verb', 'scripts/github/slot-queue.mjs '.repeat(3_400)],
+    ['slot- prefix repeated', 'slot-'.repeat(20_000)],
+    ['separators and a module at the end', `git commit -m "${'x;'.repeat(50_000)} slot-queue.mjs"`],
+    ['quotes and carets', `${"'^`".repeat(30_000)} slot-queue.mjs tick`],
+    ['one long token before the module', `${'a'.repeat(100_000)}slot-queue.mjs tick`],
+    ['glob chars', `node ${'*?['.repeat(30_000)}slot-queue`],
+  ]
+  for (const [label, command] of LONG) {
+    test(`F13 a 100k-character line (${label}) is judged in under 50 ms`, async ($, on) => {
+      world(on)
+      await start($)
+      await shell($, 'git status')
+      const t0 = performance.now()
+      await shell($, command)
+      expect(performance.now() - t0).toBeLessThan(50)
+    })
+  }
 
   test('F13 the kill switch lifts the queue lock with the others', async ($, on) => {
     world(on, { env: { CCV3_MODS_OFF: '1' } })

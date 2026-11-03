@@ -544,6 +544,24 @@ describe('slot: the alert and the ask see the queue (A1, A2)', () => {
     await w.clock.advance(TICK)
     expect(asksIn(w.store)).toEqual([])
   })
+
+  // Breaks if queueHolds reads only the row cache: with every tick failed the cache stays empty, the state file still lists the PR,
+  // and the 30-minute opening ask then fires and a Yes posts outside the queue lock.
+  test('M1 a PR the state file lists gets no opening ask when every tick failed (no cached row)', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [FAIL], store: { ...seeded, 'checkpoint:pr:900': record }, statuses: { 900: QUIET } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(asksIn(w.store)).toEqual([])
+  })
+
+  // Control: breaks if the file fallback counts a finished item as held.
+  test('M1 a PR the state file lists only as done still gets the opening ask when every tick failed', async ($, on) => {
+    const done = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'done' }, { pr: 901, state: 'queued' }] })
+    const w = loopWorld(on, { file: done, ticks: [FAIL], store: { ...seeded, 'checkpoint:pr:900': record }, statuses: { 900: QUIET } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(asksIn(w.store)).toEqual(['opening'])
+  })
 })
 
 describe('slot: /slot pay failures tell the truth (M3)', () => {

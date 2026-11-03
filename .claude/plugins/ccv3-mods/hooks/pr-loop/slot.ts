@@ -140,7 +140,23 @@ export async function withSlot($: EngineInterface, alert: Alert): Promise<Alert>
  */
 export async function queueHolds($: EngineInterface, pr: number): Promise<boolean> {
   const row = await slotFor($, pr)
-  return row?.state === 'opening' || alertSlot(row) !== undefined
+  if (row) return row.state === 'opening' || alertSlot(row) !== undefined
+  return fileHolds($, pr)
+}
+
+/**
+ * The row cache is empty when every tick of this session failed, or none ran yet. The state file still says what the queue holds:
+ * a PR with an item that is not done or dropped is held. A missing or unreadable file holds nothing.
+ */
+async function fileHolds($: EngineInterface, pr: number): Promise<boolean> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  if (!home) return false
+  try {
+    const items = (JSON.parse(String(await $.fs.read(`${home}/${STATE_REL}`))) as { items?: unknown } | null)?.items
+    return Array.isArray(items) && items.some(item => (item as { pr?: unknown } | null)?.pr === pr && !FINISHED.has((item as { state?: unknown }).state as string))
+  } catch {
+    return false
+  }
 }
 
 // ---- add (the apply and the round grants) -------------------------------------------------------------------------------------

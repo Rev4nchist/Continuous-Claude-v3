@@ -157,14 +157,14 @@ export function timers(item, now, cfg, holder = null) {
 
 // --- whole state ------------------------------------------------------------------------------------------------
 
-/** A holder that is too old made no review (#246): count the post, free the slot, queue again, or stuck at 2 posts. */
+/** A holder that is too old made no review (#246): count the post, free the slot, queue again, or stuck at 2 posts. A holder with `failed` (a paid POST that errored) made no post, so it counts none. */
 export function expireHolder(state, now, cfg) {
   const held = state.holder;
   if (!held) return state;
   const item = state.items.find((it) => it.pr === held.pr);
   if (!item || isTerminal(item)) return { ...state, holder: null };
   if (now - held.at < cfg.holder_max_min * MIN) return state;
-  const posts = (item.posts ?? 0) + 1;
+  const posts = (item.posts ?? 0) + (held.failed === true ? 0 : 1);
   const items = state.items.map((it) => (it === item ? { ...it, posts, state: posts >= 2 ? 'stuck' : 'queued' } : it));
   return { ...state, items, holder: null, slot: { ...state.slot, nextAt: now + cfg.spacing_min * MIN, source: 'post' } };
 }

@@ -652,6 +652,41 @@ for (const [label, seed, why] of PAY_REFUSALS) {
   });
 }
 
+// Minor 3. Breaks if payRefusal refuses on any holder: a holder past holder_max_min no longer blocks pay, and its item is settled, not stranded.
+test('M2: a holder past holder_max_min no longer blocks pay; its PR is requeued and the pay goes out', () => {
+  const e = setup('m2old');
+  setWorld(e, { 5: prOf(5), 6: prOf(6) });
+  setState(e, [itemOf(5), itemOf(6, { state: 'posted', posts: 0 })], { holder: { pr: 6, head: headOf(6), at: at(-25), session: 's1' } });
+  const r = run(e, payArgv(5), { checkPr: () => ALLOW(5) });
+  assert.equal(r.code, 0);
+  assert.deepEqual([posts(e).length, ledgerRows(e).length, stateOf(e).holder.pr], [1, 1, 5]);
+  assert.deepEqual([itemIn(e, 6).state, itemIn(e, 6).posts], ['queued', 1]);
+});
+
+// Control for Minor 3. Breaks if the age check is off by the wrong side: a holder inside holder_max_min still refuses.
+test('M2: a holder just inside holder_max_min still blocks pay', () => {
+  const e = setup('m2new');
+  setWorld(e, { 5: prOf(5), 6: prOf(6) });
+  setState(e, [itemOf(5), itemOf(6, { state: 'posted' })], { holder: { pr: 6, head: headOf(6), at: at(-19), session: 's1' } });
+  const r = run(e, payArgv(5), { checkPr: () => ALLOW(5) });
+  assert.equal(r.code, 2);
+  assert.match(r.json.reason, /PR 6 holds the free slot/);
+  assert.equal(posts(e).length, 0);
+});
+
+// Minor 4. Breaks if expireHolder counts a failed paid POST as a post: nothing went out, so a later free post must not reach stuck at 2.
+test('M3: a failed paid POST does not count toward the 2-post limit when its holder expires', () => {
+  const e = setup('m3c');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5, { posts: 1 })]);
+  const r = run(e, payArgv(5), { checkPr: () => ALLOW(5), gh: { failPost: true } });
+  assert.equal(r.code, 2);
+  assert.equal(stateOf(e).holder.failed, true);
+  const late = run(e, ['tick', '--json'], { now: at(25) });
+  assert.equal(late.code, 0);
+  assert.deepEqual([itemIn(e, 5).state, itemIn(e, 5).posts, stateOf(e).holder], ['queued', 1, null]);
+});
+
 // M2. Breaks if the second pay on one head is allowed: only one paid post and one ledger row may exist.
 test('M2: a second /slot pay on the same head posts nothing', () => {
   const e = setup('m2b');

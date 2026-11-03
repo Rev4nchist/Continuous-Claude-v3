@@ -24,7 +24,7 @@ import { ghApi } from './cr-fix.mjs';
 import { codeRabbitHeadReview, coderabbitRequestComments, isCodeRabbitUser, readIssueComments } from './review-status.mjs';
 import { withLock } from './lib/file-lock.mjs';
 import {
-  BANDS, configOf, parseState, pickNext, rowsOf, settle, slotOpensAt, timers,
+  BANDS, configOf, expireHolder, parseState, pickNext, rowsOf, settle, slotOpensAt, timers,
 } from './slot-queue-model.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -361,8 +361,9 @@ function waitItem(it, now) {
 
 /** Why a paid round may not go out now, or null. Checked before any verdict is read. */
 function payRefusal(a, state, it, d) {
+  const now = d.now();
   if (it.state === 'posted') return `PR ${a.pr} is already posted: a review was requested for this head. Wait for CodeRabbit, or type /slot drop ${a.pr}.`;
-  if (state.holder) return `PR ${state.holder.pr} holds the free slot (it expires ${d.cfg.holder_max_min} minutes after its post). Type /slot pay ${a.pr} again after that.`;
+  if (state.holder && now - state.holder.at < d.cfg.holder_max_min * MIN) return `PR ${state.holder.pr} holds the free slot (it expires ${d.cfg.holder_max_min} minutes after its post). Type /slot pay ${a.pr} again after that.`;
   if (it.decision?.kind === 'pay' && it.decision.head === it.head) return `PR ${a.pr}: Dave already paid for this head; a second paid round needs a new head.`;
   return null;
 }
@@ -376,10 +377,17 @@ function paidState(state, it, a, d, v) {
   return { ...replaceItem(state, item), holder: { pr: a.pr, head, at: now, session: sessionOf(a, d) }, slot };
 }
 
-const paidFailure = (d, err) => refuse(
-  `the paid post failed (${firstLine(err)}); the round is counted and the item is marked posted. If no review comes in ${d.cfg.holder_max_min} minutes it returns to the queue.`,
-  { posted: false },
-);
+/**
+ * The holder is marked failed: no comment was made, so its expiry must not count as one of the 2 posts (a later free post would reach stuck early).
+ * The round stays counted (the POST may have landed). A failed mark leaves the file as paidState wrote it.
+ */
+function paidFailure(d, err, paid) {
+  try { writeState(d.statePath, { ...paid, holder: { ...paid.holder, failed: true } }); } catch { /* the first write stands */ }
+  return refuse(
+    `the paid post failed (${firstLine(err)}); the round is counted and the item is marked posted. If no review comes in ${d.cfg.holder_max_min} minutes it returns to the queue without counting this post.`,
+    { posted: false },
+  );
+}
 
 /**
  * Order: the ledger row and the posted state first, the POST last. Every failure then errs toward counting a round that was not bought,
@@ -392,8 +400,9 @@ function payLocked(a, d, state, it) {
   if (!v?.verdict) return refuse(`no cr-paid verdict (${v?.reason ?? 'unknown'})`, { posted: false });
   if (v.verdict !== 'ALLOW') return { code: 3, body: { ok: false, verdict: v.verdict, reasons: v.reasons ?? [], posted: false } };
   recordPaid({ pr: a.pr, head: v.head, files: v.files }, crDeps(d));
-  writeState(d.statePath, paidState(state, it, a, d, v));
-  try { d.gh(['-X', 'POST', `repos/${d.repo}/issues/${a.pr}/comments`, '-f', `body=${v.comment}`]); } catch (err) { return paidFailure(d, err); }
+  const paid = paidState(expireHolder(state, d.now(), d.cfg), it, a, d, v);
+  writeState(d.statePath, paid);
+  try { d.gh(['-X', 'POST', `repos/${d.repo}/issues/${a.pr}/comments`, '-f', `body=${v.comment}`]); } catch (err) { return paidFailure(d, err, paid); }
   return { code: 0, body: { ok: true, verdict: 'ALLOW', cost: v.cost, files: v.files, posted: true } };
 }
 
