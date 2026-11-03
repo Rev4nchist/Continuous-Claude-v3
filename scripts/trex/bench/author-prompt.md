@@ -5,17 +5,21 @@ Read PR.diff, then the changed files. Read only inside this folder.
 Do not run commands. Do not edit files.
 Do not look for review notes, test answers or other test flows.
 
-Write 1 to 3 flows. Each flow must fail if the change has a defect that a user would hit. It must pass if the change is correct.
-Aim at the riskiest behaviour. Use the schema below with `mode: scripted`.
+Write 1 or 2 flows. Each flow must fail if the change has a defect that a user would hit. It must pass if the change is correct.
+Aim at the riskiest defect. Prefer the simplest flow that catches it.
+Use the schema below with `mode: scripted`.
+
+You have about 20 minutes. When you have one good flow, write the answer.
 
 ## Rules
 
-- Drivers: cli, hook, mod-event, api, browser.
-- Checks: exit, stdout, !stdout, json, status, body, !body, file, playwright.
+- Drivers: cli, hook, mod-event.
+- Checks: exit, stdout, !stdout, json, file.
 - One line per check. Never use a `judge` check. Never write `start.note`.
 - `paths` must name changed files (glob syntax: posix, no `./`, no braces).
-- Flows run in a Linux container (Node 22, git, Postgres 16, Chromium, no network), or on a Windows host for the cases in "Host flows".
-- Supply every fixture, spec or shim that a flow names. Put fixtures in your output.
+- Flows run in a Linux container (Node 22, git, Postgres 16, no network), or on a Windows host for the cases in "Host flows".
+- Supply every fixture or shim that a flow names. Put fixtures in your output.
+- Any helper script that a flow runs stays under 60 lines.
 - When you cannot build a risk (scale, OS limits, timing), list it under `cannotVerify`. Never write a flow that claims to test it.
 - A flow file name ends in `.yaml`. A fixture name must NOT end in `.yaml` or `.yml`.
 
@@ -34,7 +38,7 @@ description: one line
 goal: one line
 paths: [path/of/a/changed/file.ts]   # at least one changed file
 symbols: [functionName]              # optional
-driver: hook                         # cli | hook | mod-event | api | browser
+driver: hook                         # cli | hook | mod-event
 mode: scripted
 profile: container                   # container | host
 needs: [git]                         # optional: db | git
@@ -57,18 +61,13 @@ Actions by driver:
 - cli: `{cmd: [argv...], cwd?, env?, stdin?}`
 - hook: `{hook: <path of a built hook in the code tree>, payload: <fixture path>}`
 - mod-event: `{test: <name>}`
-- api: `{method, path, bodyFile?}`
-- browser: `{playwright, config, projects: [...]}`
 
 Check kinds (one per check, plus `text`):
 
 - `exit: int`
 - `stdout: regex` and `"!stdout": regex`
 - `json: {file, path, equals}`
-- `status: int`
-- `body: regex` and `"!body": regex`
 - `file: path` with `"~": regex` or `"!~": regex`
-- `playwright: passed`
 
 Fixture paths are relative to your folder `{folder}`. `{{HEAD}}` in a stamp file becomes the in-container HEAD.
 

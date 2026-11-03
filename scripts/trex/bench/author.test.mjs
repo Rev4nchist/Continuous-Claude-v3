@@ -5,8 +5,10 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  BENCH_CAP, GROUPS, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan, lintFlow, main, mapNegatives, parseAuthorOutput,
+  BENCH_CAP, BENCH_TIMEOUT_SEC, GROUPS, P0_CHECKS, P0_DRIVERS, analyzeStream, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan,
+  lintFlow, main, mapNegatives, parseArgs, parseAuthorOutput,
 } from './author.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 
@@ -396,6 +398,17 @@ test('freeze refuses when a group has no author manifest', (t) => {
   assert.throws(() => freeze('abc123', s.opts, { git: s.git }), /S9/);
 });
 
+test('freeze labels the bench audited only when every group manifest is audited', (t) => {
+  const s = freezeSetup(t);
+  const manifest = (g, blind) => put(s.opts.cacheDir, `2026-11-02-trex-author-${g}.manifest.json`, JSON.stringify({ group: g, runId: `run-${g}`, model: 'grok-4.7-high', retries: 0, blind }));
+  manifest('S1', 'audited (stream-json reads in tree)');
+  assert.match(freeze('abc123', s.opts, { git: s.git }).blind, /best-effort/, 'S8 is not audited');
+  manifest('S8', 'audited (stream-json reads in tree)');
+  const r = freeze('abc123', s.opts, { git: s.git });
+  assert.equal(r.blind, 'audited (stream-json reads in tree)');
+  assert.equal(r.groups.S1.blind, 'audited (stream-json reads in tree)');
+});
+
 test('freeze writes frozen.json and never commits', (t) => {
   const s = freezeSetup(t);
   const r = freeze('abc123', s.opts, { git: s.git });
@@ -416,6 +429,15 @@ test('freeze writes frozen.json and never commits', (t) => {
 const NOW = Date.parse('2026-11-02T18:00:00Z');
 const resultLine = (text, extra = {}) => `${JSON.stringify({ type: 'init' })}\n${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, usage: { inputTokens: 10, outputTokens: 5 }, session_id: 'sess-1', ...extra })}\n`;
 const GOOD = answer([['gate.yaml', flowYaml()], ['fixtures/payload.json', '{}']], MANIFEST);
+// A real cut of the raw probe stream (the first 10 tool call starts). {TREE} stands for the review tree path.
+const FIXTURE = readFileSync(new URL('./fixtures/probe-stream.jsonl', import.meta.url), 'utf8');
+const treeIn = (dir) => FIXTURE.split('{TREE}').join(JSON.stringify(dir).slice(1, -1));
+const asLine = (o) => `${JSON.stringify(o)}\n`;
+/** The fixture with the tree path set to dir, then a synthetic final assistant event and a synthetic result event. */
+const streamFor = (dir, { answer: text = GOOD, extra = [] } = {}) => treeIn(dir) + extra.map(asLine).join('')
+  + asLine({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
+  + asLine({ type: 'result', subtype: 'success', is_error: false, result: text, usage: { inputTokens: 10, outputTokens: 5 }, session_id: 'sess-1' });
+const streamRun = (o = {}) => (spec) => ({ status: 0, stdout: streamFor(spec.cwd, o), stderr: '', timedOut: false, durationMs: 5 });
 
 function authorSetup(t, over = {}) {
   const root = tmp(t);
@@ -462,13 +484,13 @@ test('authorGroup removes the proofs.json section from PR.diff', async (t) => {
 });
 
 test('authorGroup passes --mode ask, the model, the stripped env, and writes the flows and the cache files', async (t) => {
-  const s = authorSetup(t);
+  const s = authorSetup(t, { run: streamRun() });
   const r = await authorGroup('S18', s.opts, s.deps);
   const spec = s.state.runs[0];
   const args = spec.args;
   assert.equal(args[args.indexOf('--mode') + 1], 'ask');
   assert.equal(args[args.indexOf('--model') + 1], 'grok-4.7-high');
-  assert.equal(args[args.indexOf('--output-format') + 1], 'json');
+  assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json');
   assert.equal(spec.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(spec.env.CLAUDE_CODE_SESSION_ID, undefined);
   const folder = path.join(s.root, 'scripts/trex/bench/flows/S18');
@@ -479,7 +501,11 @@ test('authorGroup passes --mode ask, the model, the stripped env, and writes the
   const manifest = JSON.parse(readFileSync(path.join(s.root, '.claude/cache/e2e', mf), 'utf8'));
   assert.equal(manifest.runId, r.runId);
   assert.equal(manifest.model, 'grok-4.7-high');
-  assert.match(manifest.blind, /best-effort \(no read audit\)/);
+  assert.equal(manifest.blind, 'audited (stream-json reads in tree)');
+  assert.equal(manifest.outputFormat, 'stream-json');
+  assert.equal(manifest.toolCalls, 10);
+  assert.deepEqual(manifest.outsideTree, []);
+  assert.ok(manifest.reads.length > 0);
   assert.equal(manifest.retries, 0);
   assert.deepEqual(ledgerLines(s.ledger).map((l) => [l.phase, l.ref]), [['start', 'trex-S18'], ['end', 'trex-S18']]);
   assert.equal(s.state.cleaned, 1);
@@ -610,7 +636,7 @@ test('authorGroup probe uses stream-json, counts against the cap, records tool c
   const args = s.state.runs[0].args;
   assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json');
   assert.equal(args[args.indexOf('--mode') + 1], 'ask');
-  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(r.exit, 1, 'a read outside the tree fails the probe too');
   assert.equal(ledgerLines(s.ledger)[0].ref, 'trex-probe');
   assert.equal(benchRuns(s.ledger).used, 1);
   assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S18')));
@@ -620,6 +646,7 @@ test('authorGroup probe uses stream-json, counts against the cap, records tool c
   assert.equal(probe.toolCallsVisible, true);
   assert.equal(probe.outsideTree.length, 1);
   assert.match(probe.outsideTree[0], /\.claudedocs/);
+  assert.equal(probe.blind, 'violated');
 });
 
 test('authorGroup probe reports when stream-json shows no tool calls', async (t) => {
@@ -646,6 +673,130 @@ test('the group table matches the spec', () => {
   assert.equal(Object.keys(GROUPS).length, 16);
   assert.equal(GROUPS.S18.range, '6bc94082^1..6bc94082');
   assert.equal(GROUPS.S1.range, 'beb9d5ef..23b62e5d');
+});
+
+// ---------- P0 scope: prompt and lint share one list ----------
+
+const TEMPLATE = readFileSync(fileURLToPath(new URL('./author-prompt.md', import.meta.url)), 'utf8');
+const ruleList = (label) => {
+  const m = new RegExp(`^- ${label}: (.+)\\.$`, 'm').exec(TEMPLATE);
+  assert.ok(m, `the prompt has no "- ${label}:" line`);
+  return m[1].split(',').map((x) => x.trim()).sort();
+};
+const NOT_P0 = /\b(?:api|browser|playwright|status)\b|\bbody:|!body/;
+
+test('the prompt names exactly the P0 drivers and checks, and nothing else about the P1 ones', () => {
+  assert.deepEqual(ruleList('Drivers'), [...P0_DRIVERS].sort());
+  assert.deepEqual(ruleList('Checks'), [...P0_CHECKS].sort());
+  const beforeOutput = TEMPLATE.split('## Output format')[0];
+  assert.doesNotMatch(beforeOutput, NOT_P0);
+});
+
+test('the prompt asks for 1 or 2 flows, short helper scripts and a time budget', () => {
+  assert.match(TEMPLATE, /Write 1 or 2 flows/);
+  assert.doesNotMatch(TEMPLATE, /1 to 3 flows/);
+  assert.match(TEMPLATE, /under 60 lines/);
+  assert.match(TEMPLATE, /You have about 20 minutes\. When you have one good flow, write the answer\./);
+  assert.match(TEMPLATE, /simplest flow/i);
+});
+
+test('the rendered prompt of a host group does not offer an api or browser driver either', async (t) => {
+  const s = authorSetup(t, { run: streamRun() });
+  await authorGroup('S15', s.opts, s.deps);
+  assert.doesNotMatch(s.state.runs[0].args.at(-1).split('## Output format')[0], NOT_P0);
+});
+
+test('lintFlow rejects the api and browser drivers as not runnable in P0', () => {
+  const api = flowYaml().replace('driver: hook', 'driver: api').replace(/action: \{hook.*\}/, 'action: {method: GET, path: /health}');
+  assert.ok(lintFlow(api, CHANGED).some((m) => /not runnable in P0/.test(m) && /api/.test(m)), lintFlow(api, CHANGED).join('|'));
+  const browser = flowYaml().replace('driver: hook', 'driver: browser').replace(/action: \{hook.*\}/, 'action: {playwright: e2e/a.spec.ts, config: pw.config.ts, projects: [chromium]}');
+  assert.ok(lintFlow(browser, CHANGED).some((m) => /not runnable in P0/.test(m) && /browser/.test(m)), lintFlow(browser, CHANGED).join('|'));
+});
+
+test('lintFlow rejects the status, body, !body and playwright checks as not runnable in P0', () => {
+  for (const check of ['status: 200', 'body: ok', '"!body": bad', 'playwright: passed']) {
+    const yaml = flowYaml().replace('stdout: "BLOCKED"', check);
+    assert.ok(lintFlow(yaml, CHANGED).some((m) => /not runnable in P0/.test(m)), `${check} passed the lint: ${lintFlow(yaml, CHANGED).join('|')}`);
+  }
+});
+
+test('lintFlow accepts every P0 check on a cli flow', () => {
+  const checks = ['exit: 0', 'stdout: ok', '"!stdout": bad', 'json: {file: out.json, path: a.b, equals: 1}', 'file: out.txt, "~": ok'];
+  const yaml = flowYaml().replace('driver: hook', 'driver: cli').replace(/action: \{hook.*\}/, 'action: {cmd: [node, x.mjs]}').replace('stdout: "BLOCKED"}', 'exit: 0}');
+  assert.deepEqual(lintFlow(yaml, CHANGED), []);
+  for (const c of checks) {
+    const one = yaml.replace('exit: 0}', `${c}}`);
+    assert.ok(!lintFlow(one, CHANGED).some((m) => /not runnable in P0/.test(m)), `${c}: ${lintFlow(one, CHANGED).join('|')}`);
+  }
+});
+
+// ---------- stream-json for every group run ----------
+
+test('analyzeStream reads the real probe fixture: tool calls visible, reads inside the tree', () => {
+  const dir = path.join(os.tmpdir(), 'trex-fixture-tree');
+  const a = analyzeStream(treeIn(dir), dir);
+  assert.equal(a.toolCalls, 10);
+  assert.equal(a.toolCallsVisible, true);
+  assert.ok(a.reads.length >= 5);
+  assert.deepEqual(a.outsideTree, []);
+  assert.ok(a.eventTypes.includes('thinking') && a.eventTypes.includes('assistant'));
+  assert.equal(analyzeStream(treeIn(dir), path.join(os.tmpdir(), 'another-tree')).outsideTree.length, a.reads.length, 'a different tree makes every read outside');
+});
+
+test('authorGroup takes the answer from the result event of a stream, not from an earlier assistant event', async (t) => {
+  const s = authorSetup(t, { run: streamRun() });
+  const r = await authorGroup('S18', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.deepEqual(r.manifest.flows.map((f) => f.id), ['gate-blocks-inline-body']);
+  assert.ok(existsSync(path.join(s.root, 'scripts/trex/bench/flows/S18/gate.yaml')));
+  assert.deepEqual(r.usage, { inputTokens: 10, outputTokens: 5 });
+});
+
+test('authorGroup fails the run and writes no flows when the stream shows a read outside the tree', async (t) => {
+  const outside = { type: 'tool_call', subtype: 'started', tool_call: { readToolCall: { args: { path: 'C:/Users/someone/continuous-claude/.claudedocs/answers.md' } } } };
+  const s = authorSetup(t, { run: streamRun({ extra: [outside] }) });
+  const r = await authorGroup('S18', s.opts, s.deps);
+  assert.equal(r.exit, 1);
+  assert.match(r.problems.join(' '), /outside the tree/);
+  assert.match(r.problems.join(' '), /answers\.md/);
+  assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S18')), 'no flow of a violated run is used');
+  const mf = JSON.parse(readFileSync(path.join(s.root, '.claude/cache/e2e', cacheFiles(s.root).find((f) => f.endsWith('S18.manifest.json'))), 'utf8'));
+  assert.equal(mf.blind, 'violated');
+  assert.equal(mf.status, 'failed');
+  assert.equal(mf.outsideTree.length, 1);
+  assert.equal(ledgerLines(s.ledger).find((l) => l.phase === 'end').exit, 1);
+});
+
+test('authorGroup keeps the best-effort label when the stream shows no tool calls', async (t) => {
+  const s = authorSetup(t);
+  assert.equal((await authorGroup('S18', s.opts, s.deps)).exit, 0);
+  const mf = JSON.parse(readFileSync(path.join(s.root, '.claude/cache/e2e', cacheFiles(s.root).find((f) => f.endsWith('S18.manifest.json'))), 'utf8'));
+  assert.match(mf.blind, /best-effort \(no read audit\)/);
+  assert.equal(mf.toolCallsVisible, false);
+});
+
+// ---------- timeout and budget ----------
+
+test('the bench timeout is 2400 s unless --timeout-sec is given', async (t) => {
+  assert.equal(BENCH_TIMEOUT_SEC, 2400);
+  const s = authorSetup(t, { run: streamRun() });
+  await authorGroup('S18', s.opts, s.deps);
+  assert.equal(s.state.runs[0].timeoutMs, 2_400_000);
+  const s2 = authorSetup(t, { run: streamRun(), opts: { timeoutMs: 90_000 } });
+  await authorGroup('S18', s2.opts, s2.deps);
+  assert.equal(s2.state.runs[0].timeoutMs, 90_000);
+  assert.equal(parseArgs(['--group', 'S1', '--timeout-sec', '90']).timeoutMs, 90_000);
+});
+
+test('the probe run counts toward the 18 and leaves S1 its first group run', async (t) => {
+  const s = authorSetup(t, { ledger: `${startLines(1, 'trex-probe')}\n`, run: streamRun() });
+  assert.equal(benchRuns(s.ledger).used, 1);
+  const dry = await cli(s, ['--group', 'S1', '--dry-run']);
+  assert.equal(dry.code, 0, dry.text);
+  assert.match(dry.text, /bench runs: 1 of 18/);
+  const r = await authorGroup('S1', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.deepEqual(benchRuns(s.ledger).byRef, { 'trex-probe': 1, 'trex-S1': 1 });
 });
 
 // ---------- host .ps1 at every sha the group's flows run at ----------

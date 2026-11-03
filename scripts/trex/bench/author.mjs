@@ -12,7 +12,8 @@
  *   node scripts/trex/bench/author.mjs --freeze --sha <sha>         the sha is a commit that holds the flows; this script never commits
  *
  * Exit codes follow cursor-review.mjs: 0 ran, 1 run failure, 2 bad input or refused by a rule, 3 cap reached.
- * Blindness is best-effort on Windows: the agent has no sandbox and the result JSON holds no read audit (spec 13.4).
+ * Blindness on Windows: the agent has no sandbox. Every run uses stream-json, so analyzeStream audits the reads of the run. A read outside the
+ * tree fails the run (blind: violated). A stream with no visible tool calls keeps the label "best-effort (no read audit)" (spec 13.4).
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -26,7 +27,7 @@ import {
 } from '../../github/cursor-review.mjs';
 import { withLock } from '../../github/lib/file-lock.mjs';
 import { matchGlob } from '../../github/review-router.mjs';
-import { loadFlows, validateFlow } from '../flow.mjs';
+import { CHECK_KINDS, DRIVERS, loadFlows, validateFlow } from '../flow.mjs';
 import { hostActionOk, hostPs1Path } from '../host-allow.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 import { stripEnv } from '../lib/strip-env.mjs';
@@ -35,10 +36,17 @@ import { stripEnv } from '../lib/strip-env.mjs';
 export const benchGit = (root) => makeTrexGit(root);
 
 export const BENCH_CAP = 18;
+/** The bench timeout. The P0 probe timed out at the cursor-review default of 1500 s. */
+export const BENCH_TIMEOUT_SEC = 2400;
+/** What the P0 runtime can run. The prompt and lintFlow share these lists. */
+export const P0_DRIVERS = Object.freeze(['cli', 'hook', 'mod-event']);
+export const P0_CHECKS = Object.freeze(['exit', 'stdout', '!stdout', 'json', 'file']);
 export const MAX_PROMPT_CHARS = 24_000;
 export const DEFAULT_MODEL = 'grok-4.7-high';
 export const FLOWS_DIR = 'scripts/trex/bench/flows';
 export const BLIND = 'best-effort (no read audit)';
+export const AUDITED = 'audited (stream-json reads in tree)';
+export const VIOLATED = 'violated';
 /** Dropped by 13.1: each holds a live seed defect, so a correct "not ok" there is a true positive. */
 export const DROPPED_NEGATIVES = Object.freeze(['N1', 'N4', 'N5']);
 const PROOFS_PATH = 'scripts/checks/proofs.json';
@@ -74,7 +82,7 @@ const HOST_TEXT = 'A flow with `profile: host` runs on the real Windows machine.
   + 'Shape 1: driver mod-event with `{test: <name>}`, which runs `claude plugin test`. '
   + 'Shape 2: driver cli with `{cmd: [pwsh, -NoProfile, -File, <tree-relative path>.ps1]}` and no other key. '
   + 'The .ps1 must already exist in the code after the change. Never write a .ps1 in your output: it is not allowed under `scripts/trex/bench/flows/`. '
-  + 'A host flow has no hook, api or browser driver, no `start.run` and no `start.serve`. Any other host argv fails the lint.';
+  + 'A host flow has no hook driver, no `start.run` and no `start.serve`. Any other host argv fails the lint.';
 const hostRules = (host) => (host ? HOST_TEXT : HOST_NONE);
 
 const two = (n) => String(n).padStart(2, '0');
@@ -284,6 +292,18 @@ function policyErrors(flow) {
   return errors;
 }
 
+/** Spec 5.13: the P0 runtime has no api or browser driver and cannot run status, body, !body or playwright checks. */
+function p0Errors(flow) {
+  if (!isObj(flow)) return [];
+  const errors = [];
+  if (DRIVERS.includes(flow.driver) && !P0_DRIVERS.includes(flow.driver)) errors.push(`driver ${flow.driver} is not runnable in P0: use ${P0_DRIVERS.join(', ')}`);
+  const kinds = stepsOf(flow).flatMap((s) => (Array.isArray(s.checks) ? s.checks.filter(isObj).flatMap((c) => CHECK_KINDS.filter((k) => k in c)) : []));
+  for (const kind of new Set(kinds)) {
+    if (kind !== 'judge' && !P0_CHECKS.includes(kind)) errors.push(`check ${kind} is not runnable in P0: use ${P0_CHECKS.join(', ')}`);
+  }
+  return errors;
+}
+
 /** Spec 13.2: a host flow may run only what host-allow.mjs allows. treeHas(path) says whether a .ps1 exists at the group head. */
 function hostErrors(flow, treeHas) {
   if (flow.profile !== 'host') return [];
@@ -311,7 +331,7 @@ export function lintFlow(yamlText, changedFiles = [], opts = {}) {
   let flow;
   try { flow = parse(yamlText); } catch (err) { return [`YAML error: ${String(err.message).split('\n')[0]}`]; }
   const schema = validateFlow(flow);
-  const errors = [...schema, ...policyErrors(flow)];
+  const errors = [...schema, ...policyErrors(flow), ...p0Errors(flow)];
   if (schema.length === 0) {
     if (!flow.paths.some((g) => changedFiles.some((f) => matchGlob(g, f)))) errors.push('paths hit no changed file');
     errors.push(...hostErrors(flow, opts.treeHas));
@@ -475,7 +495,7 @@ async function callAgent({ group, opts, deps, st, reserved, model, fmt }) {
   const agent = deps.agent ?? resolveAgent({ env });
   if (agent.error) return { run: { error: agent.error }, parsed: null };
   const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', fmt, '--model', model, st.prompt];
-  const spec = { command: agent.cmd, args, cwd: st.prep.dir, timeoutMs: opts.timeoutMs ?? cursor.DEFAULT_TIMEOUT_SEC * 1000, env: buildAgentEnv(stripEnv(env), deps.platform ?? process.platform) };
+  const spec = { command: agent.cmd, args, cwd: st.prep.dir, timeoutMs: opts.timeoutMs ?? BENCH_TIMEOUT_SEC * 1000, env: buildAgentEnv(stripEnv(env), deps.platform ?? process.platform) };
   let run;
   try { run = await (deps.runner ?? runAgent)(spec); } catch (err) { run = { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message) }; }
   return { run, parsed: parseReviewOutput(run.stdout, { expectModel: model }), reserved, group };
@@ -485,6 +505,7 @@ async function callAgent({ group, opts, deps, st, reserved, model, fmt }) {
  * One authoring run for one group. opts: { root, ledgerPath, model, timeoutMs, maxRuns, retry, probe, dryRun, keepTree, cacheDir }.
  * deps (tests): { prepare, runner, agent, env, now, git, template, platform, notRun }.
  * Returns { exit, runId, files, manifest, usage, problems } (a dry run returns `info` too).
+ * Every run asks for stream-json. The answer is the last `result` event. A read outside the tree gives exit 1 and writes no flow.
  */
 export async function authorGroup(group, opts = {}, deps = {}) {
   const now = deps.now ?? Date.now;
@@ -534,17 +555,27 @@ async function reservedRun(c) {
   const sessionId = (deps.env ?? process.env).CLAUDE_CODE_SESSION_ID || null;
   const { reserved, refusal } = reserveUnderLock(c);
   if (refusal) return { exit: refusal.exit, runId: null, files: [], manifest: null, usage: null, problems: refusal.problems };
-  const { run, parsed } = await callAgent({ group, opts, deps, st, reserved, model, fmt: probe ? 'stream-json' : 'json' });
+  const { run, parsed } = await callAgent({ group, opts, deps, st, reserved, model, fmt: 'stream-json' });
   const error = parsed ? runError(run, parsed, model) : run.error;
   const out = parsed && !error ? readAnswer(parsed.text, st, deps) : { files: [], manifest: null, problems: [] };
-  const problems = [...(error ? [error] : []), ...out.problems];
-  const exit = (error || (!probe && problems.length > 0)) ? EXIT.FAILED : EXIT.OK;
+  const audit = analyzeStream(run.stdout, st.prep.dir);
+  const violated = audit.outsideTree.length > 0;
+  const problems = [...(violated ? [outsideProblem(audit.outsideTree)] : []), ...(error ? [error] : []), ...out.problems];
+  const exit = (error || violated || (!probe && problems.length > 0)) ? EXIT.FAILED : EXIT.OK;
   const written = exit === EXIT.OK && !probe ? writeFlows(folder, out.files) : [];
   const retries = (benchRuns(ledgerPath).byRef[ref] ?? 1) - 1;
   finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, durationMs: run.durationMs ?? null, exit, timedOut: Boolean(run.timedOut), usage: parsed?.usage ?? null, ...(problems.length ? { error: problems[0].slice(0, 300) } : {}) }, { now });
-  const rec = { group, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: BLIND, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
-  saveArtifacts({ opts, now, group, probe, rec, run, st });
+  const rec = { group, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
+  saveArtifacts({ opts, now, group, probe, rec, run });
   return { exit, runId: reserved.id, files: written, manifest: out.manifest, usage: rec.usage, problems };
+}
+
+/** The blind label of a run: violated after a read outside the tree, audited when tool calls were visible, else best-effort. */
+const blindLabel = (a) => (a.outsideTree.length > 0 ? VIOLATED : a.toolCallsVisible ? AUDITED : BLIND);
+
+function outsideProblem(paths) {
+  const shown = paths.slice(0, 3).join(', ');
+  return `blind violated: the agent read ${paths.length} path(s) outside the tree (${shown}${paths.length > 3 ? ', ...' : ''}): its flows are not used`;
 }
 
 function readAnswer(text, st, deps) {
@@ -555,12 +586,12 @@ function readAnswer(text, st, deps) {
   return { ...out, problems: [...out.problems, ...lintAll(out.files, st.prep.files, treeHas)] };
 }
 
-function saveArtifacts({ opts, now, group, probe, rec, run, st }) {
+function saveArtifacts({ opts, now, group, probe, rec, run }) {
   const dir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
   const stem = path.join(dir, `${dayOf(now())}-trex-author-${probe ? 'probe' : slug(group)}${!probe && rec.retries > 0 ? `-r${rec.retries}` : ''}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${stem}.raw.json`, run.stdout ?? '');
-  writeJson(probe ? `${stem}.json` : `${stem}.manifest.json`, probe ? { ...rec, outputFormat: 'stream-json', ...analyzeStream(run.stdout, st.prep.dir) } : rec);
+  writeJson(probe ? `${stem}.json` : `${stem}.manifest.json`, rec);
 }
 
 // ---------- negatives ----------
@@ -685,7 +716,7 @@ function groupRecords(cacheDir, groups) {
   for (const g of groups) {
     const m = latestManifest(cacheDir, g);
     if (!m || m.status === 'failed') throw new Error(`group ${g} has no successful author manifest in ${cacheDir}`);
-    out[g] = { runId: m.runId, model: m.model, usage: m.usage ?? null, retries: m.retries ?? 0 };
+    out[g] = { runId: m.runId, model: m.model, usage: m.usage ?? null, retries: m.retries ?? 0, blind: m.blind ?? BLIND };
   }
   return out;
 }
@@ -712,7 +743,7 @@ export function freeze(sha, opts, deps = {}) {
   const digest = hostFlowDigest(git, sha, { flowsDir, groups, negativeHeads });
   checkMarker(opts.markerPath ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'host-review.json'), digest);
   const records = groupRecords(cacheDir, groups);
-  const frozen = { sha, flowsTree, groups: records, negatives: map.negatives, skipped: map.skipped, hostReview: digest, blind: BLIND };
+  const frozen = { sha, flowsTree, groups: records, negatives: map.negatives, skipped: map.skipped, hostReview: digest, blind: Object.values(records).every((r) => r.blind === AUDITED) ? AUDITED : BLIND };
   writeJson(opts.outFile ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'frozen.json'), frozen);
   return frozen;
 }
