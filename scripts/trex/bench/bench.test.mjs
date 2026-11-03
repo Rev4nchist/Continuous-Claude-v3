@@ -679,6 +679,18 @@ test('F3: --plan for the xhigh arm lists its four groups only, with no negative 
   assert.equal(await main(['--arm', 'xhigh', '--rows', 'S3', '--plan'], { out: () => {}, loadNegatives: boom }), 2);
 });
 
+test('--plan for the intent arm lists S1, S8, S14 and S18 only, and refuses a row outside the arm', async () => {
+  // Breaks when the intent arm is missing from ARMS (--arm intent is refused) or lists more than the four probe groups.
+  const lines = [];
+  const boom = () => { throw new Error('--plan must not reach this'); };
+  const code = await main(['--arm', 'intent', '--repeats', '1', '--plan'], { out: (l) => lines.push(l), spawn: boom, docker: boom, hasImage: boom, loadRows: boom, loadNegatives: boom });
+  const text = lines.join('\n');
+  assert.equal(code, 0, text);
+  assert.match(text, /bench plan \(arm intent\)/);
+  assert.match(text, /rows: S1, S8, S14, S18\n/);
+  assert.equal(await main(['--arm', 'intent', '--rows', 'S3', '--plan'], { out: () => {}, loadNegatives: boom }), 2);
+});
+
 test('parseArgs: the composer2 arm is accepted', () => {
   assert.equal(parseArgs(['--arm', 'composer2']).arm, 'composer2');
 });

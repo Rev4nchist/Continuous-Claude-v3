@@ -5,7 +5,7 @@
  *   node scripts/trex/bench/bench.mjs --rows S18,S8,S3 --repeats 1          smoke: positives only, no negatives
  *   node scripts/trex/bench/bench.mjs [--repeats 3]                          full: every row, the negatives and S17
  *   node scripts/trex/bench/bench.mjs --plan [--rows ...]                    print rows, hours and image tags; run nothing
- *   options: [--arm grok|composer|composer2|xhigh|grok2] [--frozen <file>] [--image-sha <ref>] [--negatives] [--proofs <file>] [--out <dir>]
+ *   options: [--arm grok|composer|composer2|xhigh|grok2|intent] [--frozen <file>] [--image-sha <ref>] [--negatives] [--proofs <file>] [--out <dir>]
  *
  * Exit codes: 0 the bench ran (the verdict is data), 2 refused by preflight or bad input, 4 internal error.
  * Every world call (git, Docker, prove-check, run.mjs, the process table) goes through `deps`, so tests run with fakes.

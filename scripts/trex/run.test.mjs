@@ -555,13 +555,13 @@ test('withDefaults: the default git does not pass ANTHROPIC_API_KEY to the git c
   }
 });
 
-test('--flows-dir allows the three model-arm flow folders and no look-alike', () => {
+test('--flows-dir allows the model-arm and intent-arm flow folders and no look-alike', () => {
   // Breaks when the allow-list drops an arm folder (its flows cannot run) or widens to any "flows-*" folder.
   const dir = (v) => parseArgs(['--simulate', 'a', '--flows-dir', v]).flowsDir;
-  for (const arm of ['flows-composer', 'flows-composer2', 'flows-xhigh', 'flows-grok2']) {
+  for (const arm of ['flows-composer', 'flows-composer2', 'flows-xhigh', 'flows-grok2', 'flows-intent']) {
     for (const g of ['S1', 'S18']) assert.equal(dir(`scripts/trex/bench/${arm}/${g}`), `scripts/trex/bench/${arm}/${g}`);
   }
-  for (const bad of ['flows-foo/S1', 'flows-composer', 'flows-composer/s1', 'flows-composer/S100', 'flows-composer22/S1', 'flows-composer2x/S1', 'flows-composer/S1/x', 'flows-/S1', 'flows--xhigh/S1']) {
+  for (const bad of ['flows-foo/S1', 'flows-composer', 'flows-composer/s1', 'flows-composer/S100', 'flows-composer22/S1', 'flows-composer2x/S1', 'flows-composer/S1/x', 'flows-/S1', 'flows--xhigh/S1', 'flows-intent', 'flows-intent/s1', 'flows-intents/S1', 'flows-intent2/S1']) {
     assert.throws(() => dir(`scripts/trex/bench/${bad}`), UsageError, bad);
   }
 });

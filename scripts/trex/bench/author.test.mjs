@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   BENCH_CAP, BENCH_TIMEOUT_SEC, GROUP_CAP, GROUPS, P0_CHECKS, P0_DRIVERS, analyzeStream, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan,
-  lintFlow, main, mapNegatives, parseArgs, parseAuthorOutput,
+  lintFlow, main, mapNegatives, parseArgs, parseAuthorOutput, renderPrompt,
 } from './author.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 import { runAgent } from '../../github/cursor-review.mjs';
@@ -1257,21 +1257,29 @@ test('authorGroup --arm composer: composer-2.5, its own ref, flows folder and ca
   assert.equal(m.ref, 'trex-composer-S18');
 });
 
-test('authorGroup --arm xhigh and grok2 use their model, ref and folder', async (t) => {
-  // Breaks when an arm table row is wrong: grok2 would run xhigh or xhigh would run high.
-  for (const [arm, model] of [['xhigh', 'grok-4.7-xhigh'], ['grok2', 'grok-4.7-high']]) {
-    const s = authorSetup(t, { run: streamRun() });
-    const r = await authorGroup('S8', { ...s.opts, arm }, s.deps);
-    assert.equal(r.exit, 0, `${arm}: ${r.problems.join('; ')}`);
-    assert.equal(modelOf(s.state.runs[0]), model, arm);
-    assert.equal(ledgerLines(s.ledger)[0].ref, `trex-${arm}-S8`);
-    assert.ok(existsSync(path.join(s.root, ARM_DIR(arm), 'S8', 'gate.yaml')), arm);
-  }
+test('authorGroup --arm xhigh uses its model, ref and folder', async (t) => {
+  // Breaks when an arm table row is wrong: xhigh would run high. (grok2 has cap 0 since Dave 11-03 and no longer runs live.)
+  const s = authorSetup(t, { run: streamRun() });
+  const r = await authorGroup('S8', { ...s.opts, arm: 'xhigh' }, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(modelOf(s.state.runs[0]), 'grok-4.7-xhigh');
+  assert.equal(ledgerLines(s.ledger)[0].ref, 'trex-xhigh-S8');
+  assert.ok(existsSync(path.join(s.root, ARM_DIR('xhigh'), 'S8', 'gate.yaml')));
 });
 
-test('each arm has its own cap: 24 composer, 4 xhigh, 4 grok2, and other arms never spend the grok 24', async (t) => {
+test('grok2 has a cap of 0: a live run exits 3, starts no agent and writes no ledger line', async (t) => {
+  // Breaks when the grok2 cap goes back to 4: its 4 runs belong to the intent probe (Dave 11-03).
+  const s = authorSetup(t, { run: streamRun() });
+  const r = await authorGroup('S8', { ...s.opts, arm: 'grok2' }, s.deps);
+  assert.equal(r.exit, 3);
+  assert.match(r.problems[0], /0 of 0/);
+  assert.equal(runsOf(s), 0);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+});
+
+test('each arm has its own cap: 24 composer, 4 xhigh, 0 grok2, 4 intent, and other arms never spend the grok 24', async (t) => {
   // Breaks when the cap or the count is shared between arms.
-  for (const [arm, cap] of [['composer', 24], ['xhigh', 4], ['grok2', 4]]) {
+  for (const [arm, cap] of [['composer', 24], ['xhigh', 4], ['grok2', 0], ['intent', 4]]) {
     const full = authorSetup(t, { ledger: armLedger(arm, cap), run: streamRun() });
     assert.equal(benchRuns(full.ledger, arm).used, cap, arm);
     assert.equal((await authorGroup('S1', { ...full.opts, arm }, full.deps)).exit, 3, `${arm} is full`);
@@ -1506,4 +1514,181 @@ test('F5: freeze refuses when an input cannot be hashed, and writes no frozen fi
   const s = freezeSetup(t, { noHash: true });
   assert.throws(() => freeze('abc123', s.opts, { git: s.git }), /negatives\.json/);
   assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/frozen.json')));
+});
+
+// ---------- the intent arm (Dave 11-03: grok2's 4 runs moved to the intent probe) ----------
+
+const SEPR = '\x1f';
+const INTENT = { pr: 193, title: 'feat(pre-pr): run every gate before a PR opens', body: 'The gate runs the checks.\nA PR that skips the review is blocked.', source: 'pr', fetchedAt: '2026-11-03T00:00:00.000Z' };
+const intentPath = (root, g = 'S18') => path.join(root, 'scripts/trex/bench/intent', `${g}.json`);
+const storeIntent = (root, intent = INTENT, g = 'S18') => put(root, `scripts/trex/bench/intent/${g}.json`, JSON.stringify(intent));
+const PR_JSON = { number: 193, title: INTENT.title, body: 'Fetched body.', merged_at: '2026-10-30T00:00:00Z' };
+const promptOf = (spec) => spec.args.at(-1);
+const IGIT = (extra = []) => gitFrom([
+  [/^log -1 --format=%s%x1f%B 6bc94082$/, () => ({ status: 0, stdout: `Merge pull request #193 from Rev4nchist/feat/review-budget-prepr-gate${SEPR}Merge pull request #193 from x\n\n${INTENT.title}\n` })],
+  ...extra,
+  [/^log -1 --format=%s/, () => ({ status: 0, stdout: 'fix: something unrelated to any file\n' })],
+]);
+
+function intentSetup(t, { intent = INTENT, gh, git, ...over } = {}) {
+  const s = authorSetup(t, { run: streamRun(), ...over });
+  if (intent) storeIntent(s.root, intent);
+  s.gh = (args) => { s.gh.calls.push(args); return gh ? gh(args) : { status: 0, stdout: JSON.stringify(PR_JSON), stderr: '' }; };
+  s.gh.calls = [];
+  s.deps.gh = s.gh;
+  if (git) s.deps.git = git;
+  return s;
+}
+const iopts = (s, extra = {}) => ({ ...s.opts, arm: 'intent', ...extra });
+
+test('authorGroup --arm intent: grok-4.7-high, its own ref, folder and stem, and the prompt holds the stored intent', async (t) => {
+  // Breaks when the arm row is wrong, or when the arm still uses the plain template: the author would get no statement of intent.
+  const s = intentSetup(t);
+  const r = await authorGroup('S18', iopts(s), s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(modelOf(s.state.runs[0]), 'grok-4.7-high');
+  assert.deepEqual(ledgerLines(s.ledger).map((l) => [l.phase, l.ref]), [['start', 'trex-intent-S18'], ['end', 'trex-intent-S18']]);
+  assert.ok(existsSync(path.join(s.root, ARM_DIR('intent'), 'S18', 'gate.yaml')));
+  assert.ok(cacheFiles(s.root).some((f) => /-trex-author-intent-S18\.manifest\.json$/.test(f)));
+  const prompt = promptOf(s.state.runs[0]);
+  assert.match(prompt, /## What the change is meant to do/);
+  assert.ok(prompt.includes(INTENT.title) && prompt.includes('A PR that skips the review is blocked.'));
+  assert.match(prompt, /Test what the change is meant to do, not what the code happens to output\./);
+  assert.ok(!/undefined/.test(prompt));
+  assert.equal(s.gh.calls.length, 0, 'a stored intent is never fetched');
+});
+
+test('the intent prompt strips lines written after the merge, and a body that holds {files} is not filled again', async (t) => {
+  // Breaks when the strip runs only on fetch (a hand-edited file would leak) or when the body is rendered before the file list.
+  const s = intentSetup(t, { intent: { ...INTENT, body: 'Keep {files} and {ref} literal.\nAlso fixed in #300.\nDone.' } });
+  await authorGroup('S18', iopts(s), s.deps);
+  const prompt = promptOf(s.state.runs[0]);
+  assert.ok(prompt.includes('Keep {files} and {ref} literal.'));
+  assert.ok(!prompt.includes('#300'));
+  assert.ok(JSON.parse(readFileSync(intentPath(s.root), 'utf8')).body.includes('#300'), 'the stored file keeps the raw body');
+});
+
+test('the intent arm refuses xhigh and composer models, a group outside S1, S8, S14 and S18, and a full cap, before any run', async (t) => {
+  const s = intentSetup(t);
+  for (const model of ['grok-4.7-xhigh', 'composer-2.5', 'grok-4.7-fast']) assert.equal((await authorGroup('S18', iopts(s, { model }), s.deps)).exit, 2, model);
+  assert.equal((await authorGroup('S3', iopts(s), s.deps)).exit, 2);
+  const full = intentSetup(t, { ledger: armLedger('intent', 4) });
+  assert.equal((await authorGroup('S18', iopts(full), full.deps)).exit, 3);
+  assert.equal(runsOf(s) + runsOf(full), 0);
+});
+
+test('a live intent run with no stored file and a failing gh exits 1, starts no agent and writes no ledger line', async (t) => {
+  // Breaks when a failed fetch falls through to an empty intent: the probe would burn a run with no intent.
+  const s = intentSetup(t, { intent: null, git: IGIT(), gh: () => ({ status: 1, stdout: '', stderr: 'gh: not logged in' }) });
+  const r = await authorGroup('S18', iopts(s), s.deps);
+  assert.equal(r.exit, 1);
+  assert.match(r.problems[0], /not logged in/);
+  assert.equal(runsOf(s), 0);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+  assert.ok(!existsSync(intentPath(s.root)));
+});
+
+test('main --arm intent --dry-run fetches and stores a missing intent once, shows its title, and reads the file on the next dry run', async (t) => {
+  // Breaks when the dry run skips the intent (no title shown) or fetches again each time.
+  const s = intentSetup(t, { intent: null, git: IGIT() });
+  const a = await cli(s, ['--group', 'S18', '--arm', 'intent', '--dry-run']);
+  assert.equal(a.code, 0, a.text);
+  assert.match(a.text, /intent: PR #193 "feat\(pre-pr\): run every gate before a PR opens"/);
+  assert.match(a.text, /scripts\/trex\/bench\/intent\/S18\.json \(fetched\)/);
+  assert.match(a.text, /leak scan: clean/);
+  assert.match(a.text, /bench runs: 0 of 4/);
+  assert.match(a.text, /flows: scripts\/trex\/bench\/flows-intent\/S18/);
+  assert.equal(JSON.parse(readFileSync(intentPath(s.root), 'utf8')).body, 'Fetched body.');
+  const b = await cli(s, ['--group', 'S18', '--arm', 'intent', '--dry-run']);
+  assert.match(b.text, /\(stored\)/);
+  assert.equal(s.gh.calls.length, 1);
+  assert.equal(runsOf(s), 0);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+});
+
+test('main --refetch-intent replaces the stored file; it needs the intent arm', async (t) => {
+  // Breaks when the flag is ignored or when another arm accepts it.
+  const s = intentSetup(t, { git: IGIT() });
+  const r = await cli(s, ['--group', 'S18', '--arm', 'intent', '--dry-run', '--refetch-intent']);
+  assert.equal(r.code, 0, r.text);
+  assert.match(r.text, /\(refetched\)/);
+  assert.equal(JSON.parse(readFileSync(intentPath(s.root), 'utf8')).body, 'Fetched body.');
+  assert.equal(parseArgs(['--group', 'S18', '--arm', 'intent', '--refetch-intent']).refetchIntent, true);
+  assert.match(parseArgs(['--group', 'S18', '--refetch-intent']).error, /intent arm/);
+});
+
+test('dry run reports what the strip removed', async (t) => {
+  const s = intentSetup(t, { intent: { ...INTENT, body: 'Gate.\nFollow-up: spaces.' } });
+  const r = await cli(s, ['--group', 'S18', '--arm', 'intent', '--dry-run']);
+  assert.match(r.text, /stripped 1 line\(s\)/);
+  assert.match(r.text, /Follow-up: spaces\./);
+});
+
+test('an intent that names the fix sha refuses a live run with exit 2, prints the hit, and starts no agent', async (t) => {
+  // Breaks when the intent text skips the leak scan: the answer would reach the author.
+  const s = intentSetup(t, { intent: { ...INTENT, body: `Reverted to ${GROUPS.S18.fix.slice(0, 8)} later.` } });
+  const r = await authorGroup('S18', iopts(s), s.deps);
+  assert.equal(r.exit, 2);
+  assert.ok(r.problems.some((p) => /intent/.test(p) && p.includes('fix sha')), r.problems.join('; '));
+  assert.equal(runsOf(s), 0);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+  const dry = await cli(s, ['--group', 'S18', '--arm', 'intent', '--dry-run']);
+  assert.equal(dry.code, 2);
+  assert.match(dry.text, /leak scan: 1 hit/);
+  assert.match(dry.text, /intent.*fix sha/);
+});
+
+test('an intent that holds the fix PR title or a later commit subject refuses the run (a line that names the later fix PR is stripped first)', async (t) => {
+  // Breaks when the PR and later-commit rules are not wired to git: they would pass in the unit test and miss in a run.
+  const git = IGIT([
+    [/^log -1 --format=%s%x1f%b 82a06d63$/, () => ({ status: 0, stdout: `Merge pull request #197 from a/b${SEPR}fix: the gate findings\n` })],
+    [/^log -1 --format=%s%x1f%b 6bc94082$/, () => ({ status: 0, stdout: `Merge pull request #193 from a/c${SEPR}${INTENT.title}\n` })],
+    [/^log --format=%s 6bc94082\.\.82a06d63$/, () => ({ status: 0, stdout: 'a later commit subject that repairs it\n' })],
+  ]);
+  for (const body of ['Note: fix: the gate findings in pre-pr', 'then a later commit subject that repairs it']) {
+    const s = intentSetup(t, { intent: { ...INTENT, body }, git });
+    const r = await authorGroup('S18', iopts(s), s.deps);
+    assert.equal(r.exit, 2, body);
+    assert.equal(runsOf(s), 0);
+  }
+  const stripped = intentSetup(t, { intent: { ...INTENT, body: 'See #197.' }, git });
+  assert.equal((await authorGroup('S18', iopts(stripped), stripped.deps)).exit, 0, 'a later PR number is stripped, so it never reaches the author');
+  assert.ok(!promptOf(stripped.state.runs[0]).includes('#197'));
+  const clean = intentSetup(t, { git });
+  assert.equal((await authorGroup('S18', iopts(clean), clean.deps)).exit, 0);
+});
+
+test('the other arms never read the intent: no gh call, no intent section in the prompt', async (t) => {
+  // Breaks when the intent code runs for every arm: the grok control prompt would change.
+  const s = intentSetup(t);
+  for (const arm of ['grok', 'composer', 'xhigh']) await authorGroup('S18', { ...s.opts, arm, retry: true }, s.deps);
+  assert.equal(s.state.runs.length, 3);
+  for (const spec of s.state.runs) assert.ok(!/meant to do/.test(promptOf(spec)));
+  assert.equal(s.gh.calls.length, 0);
+});
+
+// ---------- the intent prompt template ----------
+
+const benchFile = (name) => readFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), 'utf8');
+const between = (text, from, to) => text.slice(text.indexOf(from), to ? text.indexOf(to) : undefined);
+
+test('author-prompt-intent.md keeps the rules, schema and output format of author-prompt.md and adds the intent section', () => {
+  // Breaks when one template is edited alone: the intent arm would be graded on a different task than the control.
+  const plain = benchFile('author-prompt.md');
+  const intent = benchFile('author-prompt-intent.md');
+  assert.equal(between(intent, '## Rules', '## The change'), between(plain, '## Rules', '## The change'));
+  assert.ok(intent.includes('You have about 20 minutes.'));
+  assert.match(intent, /## What the change is meant to do\n[\s\S]*\{intentTitle\}[\s\S]*\{intentBody\}/);
+  for (const line of [
+    'Test what the change is meant to do, not what the code happens to output.',
+    'Assume the change may contain a bug.',
+    'Aim each flow at an edge case or a promise in the description that the code might break.',
+    'Do not assert exact message text that this change itself adds or rewords; assert behaviour (exit code, decision, file state, presence of a key fact).',
+    'A flow must pass on a correct implementation of the description.',
+  ]) assert.ok(intent.includes(line), line);
+});
+
+test('the plain template has no intent variable, and renderPrompt never fills a value again', () => {
+  assert.ok(!/intentTitle|intentBody/.test(benchFile('author-prompt.md')));
+  assert.equal(renderPrompt('{ref} {intentTitle}|{intentBody}', { ref: 'r', intentTitle: 'T', intentBody: '{ref}' }), 'r T|{ref}');
 });

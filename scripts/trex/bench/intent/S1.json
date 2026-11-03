@@ -1,0 +1,8 @@
+{
+  "pr": null,
+  "title": "fix(agentic-os): keep the words around a path in a goal, ask or decision",
+  "body": "The path scrub I applied to all state-file free text ran to the end of the\nline, so \"Should I delete C:\\tmp\\cache or keep it?\" reached Dave as \"Should I\ndelete <path>\" and the question lost its meaning (CodeRabbit finding on #200).\nFree text now uses patterns that end a path at whitespace and keep a trailing\nsentence mark; error messages keep the greedy scrub. A path with a space in it\ncan leave its tail visible, which is the chosen trade-off.\n\nRED: the new spec showed the goal as \"Move logs from <path>\".\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_0162xu8Dx2n2ptBdNzRauTnD",
+  "source": "commit",
+  "fetchedAt": "2026-11-03T18:24:27.224Z",
+  "rangeEnd": "23b62e5d"
+}

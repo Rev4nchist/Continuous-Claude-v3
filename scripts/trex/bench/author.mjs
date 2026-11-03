@@ -11,8 +11,10 @@
  *   node scripts/trex/bench/author.mjs --map-negatives [--sha <sha>] [--negatives <file>]
  *   node scripts/trex/bench/author.mjs --host-digest [--sha <sha>]  the digest a human review writes to host-review.json
  *   node scripts/trex/bench/author.mjs --freeze --sha <sha>         the sha is a commit that holds the flows; this script never commits
- * Model arms (arms spec section 4): add `--arm <grok|composer|xhigh|grok2>` to any of these. The default arm is grok, the original bench.
+ * Model arms (arms spec section 4): add `--arm <grok|composer|composer2|xhigh|grok2|intent>` to any of these. The default arm is grok, the original bench.
  * An arm has its own model, flows folder, ledger ref prefix, run cap, groups and frozen file (see ARMS). `--model` must be a model of the arm.
+ * The intent arm also reads scripts/trex/bench/intent/<group>.json (the PR title and body, fetched once with gh, see intent.mjs).
+ *   `--refetch-intent` fetches it again. A leak hit in the intent text refuses the run (exit 2): edit that file, then run again.
  *
  * Exit codes follow cursor-review.mjs: 0 ran, 1 run failure, 2 bad input or refused by a rule, 3 cap reached or the run did not start.
  * Exit 3 for a run that did not start: runAgent found no free grok slot (grok-busy) and never spawned. The ledger end line has notStarted: true,
@@ -34,6 +36,7 @@ import { withLock } from '../../github/lib/file-lock.mjs';
 import { matchGlob } from '../../github/review-router.mjs';
 import { CHECK_KINDS, DRIVERS, loadFlows, validateFlow } from '../flow.mjs';
 import { hostActionOk, hostPs1Path } from '../host-allow.mjs';
+import { INTENT_DIR, intentFacts, intentLeakHits, loadIntent, rangeEnd, stripLate } from './intent.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 import { stripEnv } from '../lib/strip-env.mjs';
 
@@ -58,7 +61,7 @@ export const VIOLATED = 'violated';
 /** Dropped by 13.1: each holds a live seed defect, so a correct "not ok" there is a true positive. */
 export const DROPPED_NEGATIVES = Object.freeze(['N1', 'N4', 'N5']);
 const PROOFS_PATH = 'scripts/checks/proofs.json';
-const PROMPT_FILE = fileURLToPath(new URL('./author-prompt.md', import.meta.url));
+const promptFile = (arm) => fileURLToPath(new URL(`./${arm.prompt ?? 'author-prompt.md'}`, import.meta.url));
 const FILES_SHOWN = 80;
 
 /**
@@ -94,13 +97,17 @@ export const AUTHOR_MODELS = Object.freeze(['grok-4.7-high', 'grok-4.7-xhigh', '
 /**
  * The model arms (arms spec sections 2 and 4). `models` is what the arm may run (the first is its default), `refPrefix` is the ledger ref prefix,
  * `stem` is the cache file prefix (empty for grok, so the old grok manifests keep their names) and `cap` is the arm's own run cap.
+ * Optional: `prompt` is the template file beside this script (default author-prompt.md), and `intent: true` makes the arm read the stored
+ * PR intent of the group (intent.mjs) and fill {intentTitle} and {intentBody} in that template.
  */
 export const ARMS = Object.freeze({
   grok: { name: 'grok', models: ['grok-4.7-high'], flowsDir: FLOWS_DIR, refPrefix: 'trex-', stem: '', cap: BENCH_CAP, groups: GROUP_IDS, frozen: 'frozen.json' },
   composer: { name: 'composer', models: ['composer-2.5'], flowsDir: `${BENCH_DIR}/flows-composer`, refPrefix: 'trex-composer-', stem: 'composer-', cap: 20 /* Dave 11-02: 24 composer runs in all; composer2 owns 4 */, groups: GROUP_IDS, frozen: 'frozen-composer.json' },
   composer2: { name: 'composer2', models: ['composer-2.5'], flowsDir: `${BENCH_DIR}/flows-composer2`, refPrefix: 'trex-composer2-', stem: 'composer2-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-composer2.json' },
   xhigh: { name: 'xhigh', models: ['grok-4.7-xhigh'], flowsDir: `${BENCH_DIR}/flows-xhigh`, refPrefix: 'trex-xhigh-', stem: 'xhigh-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-xhigh.json' },
-  grok2: { name: 'grok2', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-grok2`, refPrefix: 'trex-grok2-', stem: 'grok2-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-grok2.json' },
+  grok2: { name: 'grok2', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-grok2`, refPrefix: 'trex-grok2-', stem: 'grok2-', cap: 0 /* Dave 11-03: grok2's 4 runs moved to the intent probe */, groups: VARIANCE_GROUPS, frozen: 'frozen-grok2.json' },
+  // The intent arm: grok-4.7-high, told what the PR says the change is meant to do (intent.mjs). Its prompt is author-prompt-intent.md.
+  intent: { name: 'intent', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-intent`, refPrefix: 'trex-intent-', stem: 'intent-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-intent.json', prompt: 'author-prompt-intent.md', intent: true },
 });
 export const ARM_NAMES = Object.freeze(Object.keys(ARMS));
 const OTHER_PREFIXES = Object.freeze(ARM_NAMES.filter((n) => n !== 'grok').map((n) => ARMS[n].refPrefix));
@@ -248,9 +255,14 @@ export function leakScan(dir, rows) {
   for (const rel of walk(dir)) {
     const text = readText(dir, rel);
     if (text === null) continue;
-    for (const why of [...shaHits(text, rows), ...subjectHits(text, rows), ...fixFileHits(text, rows, rel)]) hits.push(`${rel}: ${why}`);
+    for (const why of leakScanText(text, rows, rel)) hits.push(`${rel}: ${why}`);
   }
   return hits;
+}
+
+/** The three text rules of leakScan on one text. `rel` is the file name the text stands for (a note file name turns the fix file rule on). */
+export function leakScanText(text, rows, rel = 'text.md') {
+  return [...shaHits(text, rows), ...subjectHits(text, rows), ...fixFileHits(text, rows, rel)];
 }
 
 /** Leak rows, one per group. Git failures give a row without subject or fix files: those two rules are best effort. */
@@ -404,13 +416,33 @@ export function lintFlow(yamlText, changedFiles = [], opts = {}) {
 
 /** Fills the template in one pass, so a value that holds "{files}" is never filled again. */
 export function renderPrompt(template, vars) {
-  return template.replace(/\{(ref|group|folder|files|fileCount|hostRules)\}/g, (_, k) => String(vars[k]));
+  return template.replace(/\{(ref|group|folder|files|fileCount|hostRules|intentTitle|intentBody)\}/g, (_, k) => String(vars[k]));
 }
 
-function promptFor(template, group, files, ref, arm) {
+function promptFor(template, group, files, ref, arm, intent) {
   const shown = files.slice(0, FILES_SHOWN);
   const more = files.length > shown.length ? `\n... and ${files.length - shown.length} more` : '';
-  return renderPrompt(template, { ref, group, folder: `${arm.flowsDir}/${group}/`, files: `${shown.join('\n')}${more}`, fileCount: files.length, hostRules: hostRules(GROUPS[group].host) });
+  const vars = { ref, group, folder: `${arm.flowsDir}/${group}/`, files: `${shown.join('\n')}${more}`, fileCount: files.length, hostRules: hostRules(GROUPS[group].host) };
+  if (intent) Object.assign(vars, { intentTitle: intent.view.title, intentBody: intent.view.body.trim() || '(The description is empty.)' });
+  return renderPrompt(template, vars);
+}
+
+// ---------- the intent ----------
+
+/**
+ * The stored intent of a group, cut of late lines, with its leak hits. { view, file, status, pr, source, leaks } or { error }.
+ * The file is read (or fetched once) before any tree is built, so a missing intent costs nothing. `row` is the leak row of the group.
+ */
+function intentFor(group, opts, deps, git, row) {
+  const g = GROUPS[group];
+  const loaded = loadIntent(group, g.range, { root: opts.root, git, gh: deps.gh, now: deps.now ?? Date.now, refetch: Boolean(opts.refetchIntent) });
+  if (loaded.error) return { error: loaded.error };
+  const facts = intentFacts(git, { end: rangeEnd(g.range), fix: g.fix });
+  const view = stripLate(loaded.intent, loaded.intent.pr ?? facts.endPr);
+  const text = `${view.title}\n${view.body}`;
+  const hits = [...leakScanText(text, [row], 'intent.md'), ...intentLeakHits(text, { pr: loaded.intent.pr, facts, title: view.title })];
+  const leaks = hits.map((why) => `${INTENT_DIR}/${group}.json: ${why}`);
+  return { view, file: `${INTENT_DIR}/${group}.json`, status: loaded.status, pr: loaded.intent.pr, source: loaded.intent.source, leaks };
 }
 
 // ---------- the tree ----------
@@ -527,26 +559,28 @@ function checkRun(group, opts) {
 /** Builds and checks the tree and the prompt. { prep, prompt, leaks } or { exit, problems }. The tree is cleaned up on a refusal. */
 async function stage(group, opts, deps, ref, arm) {
   const git = deps.git ?? benchGit(opts.root);
+  const rows = benchRows(git);
+  const intent = arm.intent ? intentFor(group, opts, deps, git, rows.find((r) => r.id === group)) : null;
+  if (intent?.error) return { exit: EXIT.FAILED, problems: [intent.error] };
   let prep;
   try { prep = await (deps.prepare ?? prepareReview)({ root: opts.root, input: { range: GROUPS[group].range } }); } catch (err) {
     return { exit: err.code === 'BAD_INPUT' ? EXIT.REFUSED : EXIT.FAILED, problems: [err.message] };
   }
   sanitizeTree(prep.dir);
-  const rows = benchRows(git);
-  const leaks = leakScan(prep.dir, rows.filter((r) => r.id === group));
+  const leaks = [...leakScan(prep.dir, rows.filter((r) => r.id === group)), ...(intent?.leaks ?? [])];
   const crossGroup = leakScan(prep.dir, rows.filter((r) => r.id !== group));
-  const template = deps.template ?? readFileSync(PROMPT_FILE, 'utf8');
-  const prompt = promptFor(template, group, prep.files, ref, arm);
+  const template = deps.template ?? readFileSync(promptFile(arm), 'utf8');
+  const prompt = promptFor(template, group, prep.files, ref, arm, intent);
   const refuse = (problems) => { if (!opts.keepTree) prep.cleanup(); return { exit: EXIT.REFUSED, problems }; };
   if (!opts.dryRun && leaks.length > 0) return refuse([`leak scan found ${leaks.length} hit(s) before the agent started`, ...leaks]);
   if (!opts.dryRun && prompt.length > MAX_PROMPT_CHARS) return refuse([`the prompt is ${prompt.length} chars, over the limit of ${MAX_PROMPT_CHARS}`]);
-  return { prep, prompt, leaks, crossGroup, git, group };
+  return { prep, prompt, leaks, crossGroup, git, group, intent };
 }
 
 function dryRunResult(group, opts, ledgerPath, now, st, plan) {
   const { used } = benchRuns(ledgerPath, plan.arm.name);
   const weekly = countRuns(readLedger(ledgerPath).entries, { now });
-  const info = { group, arm: plan.arm.name, model: plan.model, flows: `${plan.arm.flowsDir}/${group}`, range: GROUPS[group].range, tree: st.prep.dir, changedFiles: st.prep.files.length, promptChars: st.prompt.length, leaks: st.leaks, crossGroup: st.crossGroup.length, benchRuns: used, benchCap: opts.maxRuns ?? plan.arm.cap, weekly, weeklyCap: WEEKLY_CAP };
+  const info = { group, arm: plan.arm.name, model: plan.model, flows: `${plan.arm.flowsDir}/${group}`, range: GROUPS[group].range, tree: st.prep.dir, changedFiles: st.prep.files.length, promptChars: st.prompt.length, leaks: st.leaks, crossGroup: st.crossGroup.length, intent: st.intent ? { title: st.intent.view.title, pr: st.intent.pr, source: st.intent.source, file: st.intent.file, status: st.intent.status, stripped: st.intent.view.stripped } : null, benchRuns: used, benchCap: opts.maxRuns ?? plan.arm.cap, weekly, weeklyCap: WEEKLY_CAP };
   if (!opts.keepTree) st.prep.cleanup();
   const bad = st.leaks.length > 0 || st.prompt.length > MAX_PROMPT_CHARS;
   return { exit: bad ? EXIT.REFUSED : EXIT.OK, dryRun: true, info, files: [], manifest: null, usage: null, problems: st.leaks };
@@ -628,7 +662,7 @@ async function reservedRun(c) {
   const written = exit === EXIT.OK && !probe ? writeFlows(folder, out.files) : [];
   const retries = (benchRuns(ledgerPath, arm.name).byRef[ref] ?? 1) - 1;
   finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, durationMs: run.durationMs ?? null, exit, timedOut: Boolean(run.timedOut), usage: parsed?.usage ?? null, ...(problems.length ? { error: problems[0].slice(0, 300) } : {}) }, { now });
-  const rec = { group, arm: arm.name, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
+  const rec = { group, arm: arm.name, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, ...(st.intent ? { intent: { pr: st.intent.pr, source: st.intent.source, title: st.intent.view.title, file: st.intent.file, status: st.intent.status, stripped: st.intent.view.stripped.length } } : {}), crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
   saveArtifacts({ opts, now, group, probe, rec, run, arm });
   return { exit, runId: reserved.id, files: written, manifest: out.manifest, usage: rec.usage, problems };
 }
@@ -963,6 +997,7 @@ export function parseArgs(argv) {
     else if (a === '--group') { out.group = next(); out.actions.push('group'); } else if (a === '--sha') out.sha = next();
     else if (a === '--reparse') { out.reparse = next(); out.actions.push('reparse'); }
     else if (a === '--dry-run') out.dryRun = true;
+    else if (a === '--refetch-intent') out.refetchIntent = true;
     else if (a === '--keep-tree') out.keepTree = true;
     else if (a === '--retry') out.retry = out.retry ?? true;
     else if (a === '--retry-harness') out.retry = 'harness';
@@ -974,6 +1009,7 @@ export function parseArgs(argv) {
     else return { error: `unknown argument ${JSON.stringify(a)}` };
   }
   out.arm ??= 'grok';
+  if (out.refetchIntent && !ARMS[out.arm].intent) return { error: '--refetch-intent applies to the intent arm only: pass --arm intent' };
   const acts = [...new Set(out.actions)];
   if (out.actions.includes('reparse')) return reparseArgs(out, acts);
   if (out.actions.includes('probe') && acts.length === 2 && acts.includes('group')) out.action = 'probe';
@@ -987,6 +1023,13 @@ function repoRoot() {
   return benchGit(process.cwd())(['rev-parse', '--show-toplevel']).stdout.trim() || process.cwd();
 }
 
+function printIntent(i, say) {
+  say(`intent: ${i.pr === null ? 'commit message' : `PR #${i.pr}`} "${i.title}" from ${i.file} (${i.status})`);
+  if (i.stripped.length === 0) return;
+  say(`intent: stripped ${i.stripped.length} line(s) that look written after the merge (the file keeps them):`);
+  for (const l of i.stripped.slice(0, 10)) say(`  - ${l.length > 160 ? `${l.slice(0, 160)}...` : l}`);
+}
+
 function printDryRun(info, say) {
   say(`dry run: ${info.group} (range ${info.range})`);
   say(`arm: ${info.arm} (${info.model})`);
@@ -994,6 +1037,7 @@ function printDryRun(info, say) {
   say(`tree: ${info.tree} (removed after the dry run; pass --keep-tree to keep it)`);
   say(`changed files: ${info.changedFiles}`);
   say(`prompt: ${info.promptChars} chars (limit ${MAX_PROMPT_CHARS})`);
+  if (info.intent) printIntent(info.intent, say);
   say(info.leaks.length === 0 ? 'leak scan: clean' : `leak scan: ${info.leaks.length} hit(s)`);
   for (const l of info.leaks) say(`  - ${l}`);
   say(`other-group hits (not blocking): ${info.crossGroup}`);
@@ -1059,7 +1103,7 @@ export async function main(argv, deps = {}) {
   const root = deps.root ?? repoRoot();
   if (args.action === 'reparse') return await runReparse(args, root, deps, say);
   const ledgerPath = deps.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
-  const base = { root, ledgerPath, arm: args.arm, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree };
+  const base = { root, ledgerPath, arm: args.arm, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree, refetchIntent: args.refetchIntent };
   try {
     if (['group', 'all', 'probe'].includes(args.action)) return await runGroups(args, base, deps, say);
     const git = deps.git ?? benchGit(root);
