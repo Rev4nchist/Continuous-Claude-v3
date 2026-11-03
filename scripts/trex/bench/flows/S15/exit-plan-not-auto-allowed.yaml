@@ -1,0 +1,24 @@
+id: exit-plan-not-auto-allowed
+title: ExitPlanMode is not auto-approved by the permission hook
+description: Plan exit and user questions must surface a dialog, while other tools stay auto-allowed.
+goal: The running permission hook returns an empty decision for ExitPlanMode and AskUserQuestion, and allow for Bash.
+paths: [.claude/hooks/src/permission-auto-allow.ts]
+driver: hook
+mode: scripted
+profile: container
+steps:
+  - action: {hook: .claude/hooks/dist/permission-auto-allow.mjs, payload: fixtures/exit-plan-mode.json}
+    checks:
+      - {text: plan exit is not auto-allowed, exit: 0}
+      - {text: plan exit returns an empty decision, stdout: "^\\{\\}\\s*$"}
+      - {text: plan exit has no allow behavior, "!stdout": "\"behavior\":\"allow\""}
+  - action: {hook: .claude/hooks/dist/permission-auto-allow.mjs, payload: fixtures/ask-user-question.json}
+    checks:
+      - {text: user question is not auto-allowed, exit: 0}
+      - {text: user question returns an empty decision, stdout: "^\\{\\}\\s*$"}
+  - action: {hook: .claude/hooks/dist/permission-auto-allow.mjs, payload: fixtures/bash-permission.json}
+    checks:
+      - {text: other tools stay allowed, exit: 0}
+      - {text: bash is auto-allowed, stdout: "\"behavior\":\"allow\""}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

@@ -1,0 +1,17 @@
+id: pathway-grant-parse
+title: pathway grant accepts only a pr and a round of at least 1
+description: A typed grant with two real numbers is stored by the command, and any other grant text is usage.
+goal: Dave's grant is recognized only as grant, a pr, and a round, so a typo records nothing.
+paths: [.claude/plugins/ccv3-mods/hooks/pr-checkpoint/model.ts, .claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx]
+symbols: [parseGrantArgs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [node, --experimental-strip-types, scripts/trex/bench/flows/S10/check-grant.mjs]}
+    checks:
+      - {text: grant parsing exits clean, exit: 0}
+      - {text: grant 7 4 is pr 7 round 4, stdout: "grant-7-4"}
+      - {text: a short or zero grant is usage and a pathway is not a grant, stdout: "grant-usage"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 5}
+severity: P1

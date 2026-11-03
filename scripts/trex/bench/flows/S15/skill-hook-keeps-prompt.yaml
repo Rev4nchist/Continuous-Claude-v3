@@ -1,0 +1,16 @@
+id: skill-hook-keeps-prompt
+title: Skill activation hook continues an ordinary user prompt
+description: A UserPromptSubmit payload with no router task must not be rejected by the bundled skill-router CLI.
+goal: The skill-activation hook exits 0 and emits a continue result for an ordinary prompt.
+paths: [.claude/hooks/dist/skill-activation-prompt.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [sh, scripts/trex/bench/flows/S15/fixtures/run-skill-hook.sh], cwd: .}
+    checks:
+      - {text: hook accepts the prompt, exit: 0}
+      - {text: turn continues, stdout: "\"result\":\"continue\""}
+      - {text: router cli did not claim the hook, "!stdout": "skill-router:"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P0

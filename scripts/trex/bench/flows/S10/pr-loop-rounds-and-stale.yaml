@@ -1,0 +1,22 @@
+id: pr-loop-rounds-and-stale
+title: Finished CodeRabbit reviews set the round line, and a changed PR drops it
+description: A rate-limited request is not a finished round, and a merged, moved, or fixed PR does not keep its model line.
+goal: The watcher tells Dave the round the finished reviews support, and drops a line whose problem is gone.
+paths: [scripts/github/review-status.mjs, .claude/plugins/ccv3-mods/hooks/pr-loop/model.ts]
+symbols: [coderabbitFinishedOf, checkpointOf, reportLine, askFor, refreshAlert, alertKey]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [node, --experimental-strip-types, scripts/trex/bench/flows/S10/check-rounds.mjs]}
+    checks:
+      - {text: the round and stale checks exit clean, exit: 0}
+      - {text: two bought rounds with one finished review say round 1 of 1+0, stdout: "limited-round-1"}
+      - {text: a skipped request asks Dave for round 2, stdout: "ask-round-2"}
+      - {text: round 0 tells the model to post the opening review, stdout: "opening-review"}
+      - {text: a request still in flight counts as a round, stdout: "flight-round-2"}
+      - {text: a proof line is dropped when the PR changed and kept when the problem changed, stdout: "stale-dropped"}
+      - {text: a stall that is still pending is kept and a merged stall is dropped, stdout: "stall-held"}
+      - {text: a CI reason does not make a new model line, stdout: "ci-key-stable"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 5}
+severity: P1
