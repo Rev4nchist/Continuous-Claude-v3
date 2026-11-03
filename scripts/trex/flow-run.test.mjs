@@ -11,6 +11,8 @@ import { runFlow } from './flow-run.mjs';
 
 const PS1 = ['pwsh', '-NoProfile', '-File', 'scripts/ok.ps1'];
 const ok = { code: 0, stdout: 'fine', stderr: '', timedOut: false };
+// A container flow without start.git gets the default git setup first (rm, git ...). These fakes answer the steps only.
+const gitSetup = (argv) => argv[0] === 'rm' || argv[0] === 'git';
 
 function makeTree() {
   const dir = mkdtempSync(path.join(tmpdir(), 'trex-host-'));
@@ -100,14 +102,14 @@ test('H3: a container cli flow still goes to exec with the argv unchanged and ne
   const ctx = { now: () => new Date('2026-11-02T12:00:00Z'), exec, spawn, writeStep: () => [], readFixture: () => null };
   const out = await runFlow(flow, ctx);
   assert.equal(out.state, 'pass');
-  assert.deepEqual(execCalls[0].argv, ['node', '-e', '1']);
+  assert.deepEqual(execCalls.find((c) => !gitSetup(c.argv)).argv, ['node', '-e', '1']);
 });
 
 // ---------- exit 137 / out of memory ----------
 
 const containerCtx = (answer) => ({
   now: () => new Date('2026-11-02T12:00:00Z'), writeStep: () => [], readFixture: () => null,
-  exec: async () => answer,
+  exec: async (argv) => (gitSetup(argv) ? ok : answer),
 });
 const containerFlow = (checks) => ({
   id: 'oom-demo', profile: 'container', driver: 'cli', severity: 'P1', limits: { timeoutMs: 60_000, retries: 1 },
@@ -118,7 +120,7 @@ const containerFlow = (checks) => ({
 test('OOM: a real classifyExec early-137 result blocks the flow at stage start and is not retried', async () => {
   let runs = 0;
   const ctx = containerCtx(null);
-  ctx.exec = async () => { runs += 1; return classifyExec({ code: 137, stdout: '', stderr: '', timedOut: false }, 60, 5000); };
+  ctx.exec = async (argv) => { if (gitSetup(argv)) return ok; runs += 1; return classifyExec({ code: 137, stdout: '', stderr: '', timedOut: false }, 60, 5000); };
   const out = await runFlow(containerFlow([{ exit: 137 }]), ctx);
   assert.equal(out.state, 'blocked');
   assert.equal(out.reason, 'start');

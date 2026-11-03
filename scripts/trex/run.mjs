@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveBase } from './base.mjs';
 import { ensureImage, prepareHost, removeByLabel, startEnv, stopEnv } from './env.mjs';
 import { loadFlows } from './flow.mjs';
-import { runFlows, strictExec } from './flow-run.mjs';
+import { DEFAULT_REMOTE, runFlows, strictExec } from './flow-run.mjs';
 import { acquireLock, lockPathFor, primaryRootOf, unlockRun } from './lock.mjs';
 import { makeTrexGit } from './lib/git.mjs';
 import { makePidRecorder, processStartMs, runChild } from './lib/proc.mjs';
@@ -145,7 +145,7 @@ function fixtureReader(d, run) {
 }
 
 function flowDeps(d, run) {
-  return { evidenceDir: run.evidenceDir, now: d.now, readFixture: fixtureReader(d, run), noteError: d.noteError, ...run.host };
+  return { evidenceDir: run.evidenceDir, now: d.now, readFixture: fixtureReader(d, run), noteError: d.noteError, defaultRemote: run.defaultRemote ?? undefined, ...run.host };
 }
 
 async function runContainer(d, run) {
@@ -208,7 +208,7 @@ async function executeRun(d, run) {
 function reportOf(d, run, startedAt) {
   return buildReport({
     pr: null, base: null, head: run.head, configSha: run.flowsSha, envDigest: run.envDigest, envAttempts: run.envAttempts || null,
-    imageTag: run.imageTag, composeProject: run.composeProject, startedAt, finishedAt: d.now().toISOString(), envSeconds: run.envSeconds ?? null,
+    imageTag: run.imageTag, composeProject: run.composeProject, envDefaults: run.defaultRemote ? { git: 'commit', remote: run.defaultRemote } : null, startedAt, finishedAt: d.now().toISOString(), envSeconds: run.envSeconds ?? null,
     pids: d.pids, flows: run.flows, blockers: run.blockers, skipped: run.skipped ?? (run.flows.length === 0 ? { reason: 'no_config' } : null),
   });
 }
@@ -262,11 +262,27 @@ async function doUnlock(d, opts) {
 
 // ---------- main ----------
 
+const CONFIG_FILE = '.trex/config.json';
+const REMOTE_OK = /^[^\s\x00-\x1f-]\S*$/;
+
+/** The origin for a default container checkout: "remote" of .trex/config.json at the config SHA, else DEFAULT_REMOTE. A bad config is an input error. */
+export function readDefaultRemote(git, flowsSha) {
+  const r = git(['show', `${flowsSha}:${CONFIG_FILE}`]);
+  if (r.status !== 0) return DEFAULT_REMOTE;
+  let remote;
+  try { ({ remote } = JSON.parse(r.stdout)); } catch { throw new UsageError(`${CONFIG_FILE} at the config SHA is not valid JSON`); }
+  if (remote === undefined) return DEFAULT_REMOTE;
+  if (typeof remote !== 'string' || !REMOTE_OK.test(remote)) throw new UsageError(`${CONFIG_FILE} "remote" must be one word that does not start with "-"`);
+  return remote;
+}
+
 function resolveInputs(d, opts) {
   const head = resolveHead(d.git, opts);
   const { flowsSha, imageSha } = resolveShas(d.git, opts, head);
   const evidence = path.resolve(opts.evidence ?? path.join(d.root, '.claude', 'cache', 'e2e', 'trex', 'sim', head.slice(0, 8)));
-  return { head, flowsSha, imageSha, flowsDir: opts.flowsDir, flows: selectFlows(d.git, flowsSha, opts), evidenceDir: evidence };
+  const flows = selectFlows(d.git, flowsSha, opts);
+  const defaultRemote = flows.some((f) => f.profile !== 'host') ? readDefaultRemote(d.git, flowsSha) : null;
+  return { head, flowsSha, imageSha, flowsDir: opts.flowsDir, flows, defaultRemote, evidenceDir: evidence };
 }
 
 function sidecarFields(d, argv, run, startedAt, exit, finished) {

@@ -59,7 +59,7 @@ test('buildReport fills defaults, keeps the spec key order and does not change i
   const copy = structuredClone(input);
   const r = buildReport(input);
   assert.deepEqual(input, copy);
-  assert.deepEqual(Object.keys(r), ['pr', 'base', 'head', 'configSha', 'envDigest', 'envAttempts', 'imageTag', 'composeProject',
+  assert.deepEqual(Object.keys(r), ['pr', 'base', 'head', 'configSha', 'envDigest', 'envAttempts', 'imageTag', 'composeProject', 'envDefaults',
     'startedAt', 'finishedAt', 'envSeconds', 'pids', 'summary', 'flows', 'findings', 'blockers', 'skipped', 'ephemeral']);
   assert.deepEqual(r.flows[0], { id: 'f-min', state: 'pass', severity: 'P1', attempts: 0, seconds: 0, tokens: 0,
     checks: [{ text: 't', state: 'passed', evidence: [] }] });
@@ -287,4 +287,21 @@ test('writeStepOutput refuses a flow id or number that could leave the folder (b
   assert.throws(bad({ flowId: '../../x' }), /id/);
   assert.throws(bad({ attempt: 0 }), /attempt/);
   assert.throws(bad({ step: '1/../..' }), /step/);
+});
+
+// ---------- env source and defaults ----------
+
+test('buildReport keeps flows[].env and the envDefaults field; both are absent for a run without them', () => {
+  // Breaks when buildFlow drops env, when envDefaults is not a top-level key, or when a host flow gains an env key.
+  const r = build([flow('aaa', 'pass', { env: { git: 'default', remote: 'default' } }), flow('bbb', 'pass', { env: { git: 'flow', remote: 'flow' } }), flow('hhh', 'pass')], { envDefaults: { git: 'commit', remote: 'https://example.test/r.git' } });
+  assert.deepEqual(r.envDefaults, { git: 'commit', remote: 'https://example.test/r.git' });
+  assert.deepEqual(r.flows.map((f) => f.env), [{ git: 'default', remote: 'default' }, { git: 'flow', remote: 'flow' }, undefined]);
+  assert.equal('env' in r.flows[2], false);
+  assert.equal(build([flow('aaa', 'pass')]).envDefaults, null);
+});
+
+test('buildReport refuses an env.git or env.remote that is not flow or default', () => {
+  // Breaks when the env source is copied through without a check.
+  assert.throws(() => build([flow('aaa', 'pass', { env: { git: 'maybe', remote: 'flow' } })]), /env git/);
+  assert.throws(() => build([flow('aaa', 'pass', { env: { git: 'flow', remote: 'maybe' } })]), /env remote/);
 });

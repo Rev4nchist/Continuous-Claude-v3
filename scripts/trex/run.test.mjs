@@ -8,7 +8,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { classifyRun } from '../checks/prove-check.mjs';
 import { EnvError, classifyExec } from './env.mjs';
-import { applyStart, foldAttempts, runFlows } from './flow-run.mjs';
+import { applyStart, fillStamp, foldAttempts, runFlows } from './flow-run.mjs';
 import { acquireLock, lockPathFor, unlockRun } from './lock.mjs';
 import { UsageError, main, parseArgs, resolveHead, withDefaults } from './run.mjs';
 
@@ -320,10 +320,10 @@ test('applyStart: git commit, then remote, then the stamp with the in-container 
   assert.equal(out.head, 'f'.repeat(40));
 });
 
-test('a stamp that needs {{HEAD}} without start.git is a start failure', async () => {
+test('fillStamp refuses {{HEAD}} when no head is known', async () => {
   // Breaks when the placeholder is replaced with an empty head (the gate would then deny for the wrong reason).
   const ctx = { readFixture: () => '{{HEAD}}', now: () => new Date() };
-  await assert.rejects(applyStart({ start: { stamp: 'x.json' } }, fakeExec(() => done()), ctx), /needs \{\{HEAD\}\}/);
+  assert.throws(() => fillStamp(ctx.readFixture(), null, ctx.now()), /needs \{\{HEAD\}\}/);
 });
 
 // ---------- the dev S18 flow ----------
@@ -579,4 +579,129 @@ test('F4: the lock holds TREX_BENCH_RUN as benchRun, so a bench knows its own ru
   h2.deps.startEnv = async () => { seen = JSON.parse(readFileSync(h2.lockFile, 'utf8')); return { project: 'trex-sim-aaaaaaaa', digest: {}, exec: fakeExec(() => done('deny')) }; };
   await main(SIM(path.join(h2.root, 'ev')), h2.deps);
   assert.equal(seen.benchRun, null, 'a run outside a bench writes null');
+});
+
+// ---------- default git checkout (spec 4 start.git: commit, 5.8 startEnv) ----------
+
+const DEFAULT_REMOTE = 'https://github.com/Rev4nchist/Continuous-Claude-v3.git';
+const NO_GIT_FLOW = DEMO_FLOW().replace(/^needs: .*\n/m, '').replace(/^start: .*\n/m, '');
+const remoteAdds = (log) => log.filter((c) => c.argv[0] === 'git' && c.argv[1] === 'remote').map((c) => c.argv.join(' '));
+const CTX = { readFixture: () => null, now: () => new Date() };
+
+test('applyStart: a flow without start.git gets git init, add, commit and the default remote', async () => {
+  // Breaks when applyStart skips the git setup for a flow with no start.git (the bench S18 false fail: /app was not a checkout).
+  const log = [];
+  const out = await applyStart({ start: {} }, fakeExec(() => done(), log), CTX);
+  const verbs = log.map((c) => c.argv.filter((a) => !a.startsWith('-') && !a.includes('=')).slice(0, 2).join(' '));
+  assert.deepEqual(verbs.slice(0, 3), ['rm .git', 'git init', 'git add']);
+  assert.ok(verbs.includes('git commit'));
+  assert.deepEqual(remoteAdds(log), [`git remote add origin ${DEFAULT_REMOTE}`]);
+  assert.equal(out.head, 'f'.repeat(40));
+});
+
+test('applyStart: a flow with no start block at all also gets the default checkout', async () => {
+  // Breaks when the default only applies to a flow that has a `start` object (flow.start ?? {} lost).
+  const log = [];
+  await applyStart({}, fakeExec(() => done(), log), CTX);
+  assert.deepEqual(remoteAdds(log), [`git remote add origin ${DEFAULT_REMOTE}`]);
+});
+
+test('applyStart: ctx.defaultRemote replaces the built-in default remote', async () => {
+  // Breaks when the config remote is read but the built-in constant is still used.
+  const log = [];
+  await applyStart({ start: {} }, fakeExec(() => done(), log), { ...CTX, defaultRemote: 'https://example.test/cfg.git' });
+  assert.deepEqual(remoteAdds(log), ['git remote add origin https://example.test/cfg.git']);
+});
+
+test('applyStart: an explicit start.git keeps its own remote, and takes the default remote when it has none', async () => {
+  // Breaks when the default remote overrides the flow remote, or a flow with start.git and no remote is left without origin (the S18 flows: the gate needs a CCv3 origin).
+  const ctx = { ...CTX, defaultRemote: 'https://example.test/cfg.git' };
+  const own = [];
+  await applyStart({ start: { git: 'commit', remote: 'https://example.test/own.git' } }, fakeExec(() => done(), own), ctx);
+  assert.deepEqual(remoteAdds(own), ['git remote add origin https://example.test/own.git']);
+  const none = [];
+  await applyStart({ start: { git: 'commit' } }, fakeExec(() => done(), none), ctx);
+  assert.deepEqual(remoteAdds(none), ['git remote add origin https://example.test/cfg.git']);
+});
+
+test('applyStart: the git setup runs once, before the start.run command', async () => {
+  // Breaks when the default git setup runs after start.run (the command would see no checkout) or twice.
+  const log = [];
+  await applyStart({ start: { run: ['touch', 'x'] } }, fakeExec(() => done(), log), CTX);
+  assert.equal(log.filter((c) => c.argv[0] === 'git' && c.argv.includes('init')).length, 1);
+  assert.ok(log.findIndex((c) => c.argv[0] === 'touch') > log.findIndex((c) => c.argv.includes('commit')));
+});
+
+test('a stamp with {{HEAD}} and no start.git now gets the default checkout HEAD', async () => {
+  // Breaks when the stamp is filled before the default commit exists (the placeholder would be empty or throw).
+  const log = [];
+  await applyStart({ start: { stamp: 'x.json' } }, fakeExec(() => done(), log), { ...CTX, readFixture: () => '{{HEAD}}' });
+  assert.equal(log.find((c) => c.argv[0] === 'sh').opts.stdin, 'f'.repeat(40));
+});
+
+test('main: a flow without start.git runs the default git setup and report.json records default', async () => {
+  // Breaks when run.mjs does not pass the default remote, or report.json loses envDefaults or flows[].env.
+  const h = harness({ files: DEMO_FILES(NO_GIT_FLOW) });
+  const evidence = path.join(h.root, 'ev');
+  assert.equal(await main(SIM(evidence), h.deps), 0);
+  assert.deepEqual(remoteAdds(h.execLog), [`git remote add origin ${DEFAULT_REMOTE}`]);
+  const report = JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8'));
+  assert.deepEqual(report.envDefaults, { git: 'commit', remote: DEFAULT_REMOTE });
+  assert.deepEqual(report.flows[0].env, { git: 'default', remote: 'default' });
+});
+
+test('main: a flow with its own start.git keeps its remote and report.json records flow', async () => {
+  // Breaks when the default remote is also added, or the source is recorded as default for an explicit checkout.
+  const h = harness();
+  const evidence = path.join(h.root, 'ev');
+  assert.equal(await main(SIM(evidence), h.deps), 0);
+  assert.deepEqual(remoteAdds(h.execLog), ['git remote add origin https://example.test/r.git']);
+  const report = JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8'));
+  assert.deepEqual(report.flows[0].env, { git: 'flow', remote: 'flow' });
+  assert.equal(report.envDefaults.remote, DEFAULT_REMOTE);
+});
+
+test('main: a flow with start.git and no remote gets the default remote and report.json records flow/default', async () => {
+  // Breaks when an explicit start.git without a remote leaves /app without origin: the pre-pr-gate then denies "not a CCv3 checkout" (bench S18).
+  const h = harness({ files: DEMO_FILES(DEMO_FLOW().replace("start: {git: commit, remote: 'https://example.test/r.git', stamp: fixtures/stamp.json}", 'start: {git: commit, stamp: fixtures/stamp.json}')) });
+  const evidence = path.join(h.root, 'ev');
+  assert.equal(await main(SIM(evidence), h.deps), 0);
+  assert.deepEqual(remoteAdds(h.execLog), [`git remote add origin ${DEFAULT_REMOTE}`]);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8')).flows[0].env, { git: 'flow', remote: 'default' });
+});
+
+test('main: .trex/config.json "remote" at the config SHA replaces the default, in the setup and in the report', async () => {
+  // Breaks when run.mjs reads the config from the working tree or ignores "remote".
+  const files = { ...DEMO_FILES(NO_GIT_FLOW), '.trex/config.json': '{"post":"off","remote":"https://example.test/cfg.git"}' };
+  const h = harness({ files });
+  const evidence = path.join(h.root, 'ev');
+  assert.equal(await main(SIM(evidence), h.deps), 0);
+  assert.deepEqual(remoteAdds(h.execLog), ['git remote add origin https://example.test/cfg.git']);
+  assert.equal(JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8')).envDefaults.remote, 'https://example.test/cfg.git');
+});
+
+test('main: a config.json without "remote" keeps the default; an unusable "remote" exits 2 and starts nothing', async () => {
+  // Breaks when a missing key breaks the run, or a remote that starts with "-" reaches `git remote add` as an option.
+  const ok = harness({ files: { ...DEMO_FILES(NO_GIT_FLOW), '.trex/config.json': '{"post":"off"}' } });
+  assert.equal(await main(SIM(path.join(ok.root, 'ev')), ok.deps), 0);
+  assert.deepEqual(remoteAdds(ok.execLog), [`git remote add origin ${DEFAULT_REMOTE}`]);
+  for (const bad of ['{"remote":"--upload-pack=x"}', '{"remote":7}', '{"remote":"a b"}', '{not json']) {
+    const h = harness({ files: { ...DEMO_FILES(NO_GIT_FLOW), '.trex/config.json': bad } });
+    assert.equal(await main(SIM(path.join(h.root, 'ev')), h.deps), 2, bad);
+    assert.equal(h.calls.startEnv, 0);
+  }
+});
+
+test('main: a host-only run has no flows[].env and no envDefaults', async () => {
+  // Breaks when the env default leaks into host flows, which run on the host tree with no container.
+  const hostFlow = 'id: host-demo\ntitle: t\ndescription: d\ngoal: g\npaths: [a/b.ts]\ndriver: mod-event\nprofile: host\nsteps:\n  - action: {test: demo}\n    checks: [{text: ok, exit: 0}]\n';
+  const h = harness({ files: { '.trex/flows/host.yaml': hostFlow } });
+  h.deps.prepareHost = async () => ({ treeDir: h.root, env: {} });
+  h.deps.hostSpawn = () => async () => done('', 0);
+  const evidence = path.join(h.root, 'ev');
+  await main(SIM(evidence), h.deps);
+  const report = JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8'));
+  assert.equal(report.flows[0].id, 'host-demo');
+  assert.equal('env' in report.flows[0], false);
+  assert.equal(report.envDefaults, null);
 });

@@ -11,6 +11,8 @@ import { run as runModEvent } from './drivers/mod-event.mjs';
 import { writeStepOutput } from './report.mjs';
 
 const START_SEC = 300;
+/** The origin of a container checkout when the flow sets none: the repo the code under review lives in. .trex/config.json "remote" at the config SHA may replace it. */
+export const DEFAULT_REMOTE = 'https://github.com/Rev4nchist/Continuous-Claude-v3.git';
 const STAMP_DEST = '.claude/cache/pre-pr/stamp.json';
 const HOST_DRIVERS = new Set(['cli', 'mod-event']);
 const DRIVER_RUNNERS = Object.freeze({ cli: runCli, hook: runHook, 'mod-event': runModEvent });
@@ -66,7 +68,7 @@ async function must(exec, argv, opts = {}) {
   return res;
 }
 
-/** A fresh git repo of the head tree, with one commit. Returns the in-container HEAD. */
+/** A fresh git repo of the head tree, with one commit. Returns the in-container HEAD. Used by start.git: commit and by the default checkout. */
 async function gitCommit(exec, remote) {
   await must(exec, ['rm', '-rf', '--', '.git']);
   await must(exec, ['git', 'init', '-q']);
@@ -89,11 +91,20 @@ async function writeStamp(exec, flow, ctx, head) {
   await must(exec, ['sh', '-c', `mkdir -p ${path.posix.dirname(STAMP_DEST)} && cat > ${STAMP_DEST}`], { stdin: body });
 }
 
-/** Runs the start block of a flow in the container. Throws StartError. db is loaded by env.mjs, not here. */
+/** Where the git checkout of a container flow comes from: the flow's own start.git, or the env default (real code always runs in a checkout). */
+export const gitSource = (flow) => (flow.start?.git === 'commit' ? 'flow' : 'default');
+/** Where the origin remote comes from: the flow's start.remote, or the env default. */
+export const remoteSource = (flow) => (flow.start?.remote ? 'flow' : 'default');
+
+/**
+ * Runs the start block of a flow in the container. Throws StartError. db is loaded by env.mjs, not here.
+ * A flow without start.git gets the same git setup as start.git: commit. A flow without start.remote gets ctx.defaultRemote (or DEFAULT_REMOTE) as origin.
+ */
 export async function applyStart(flow, exec, ctx) {
   const start = flow.start ?? {};
   if (start.serve) throw new StartError('start.serve is not built in P0');
-  const head = start.git === 'commit' ? await gitCommit(exec, start.remote) : null;
+  const remote = start.remote ?? ctx.defaultRemote ?? DEFAULT_REMOTE;
+  const head = await gitCommit(exec, remote);
   if (start.stamp) await writeStamp(exec, flow, ctx, head);
   if (start.run) await must(exec, start.run, { cwd: start.cwd ?? '.' });
   return { head };
@@ -191,7 +202,7 @@ export async function runFlow(flow, ctx) {
   }
   const folded = foldAttempts(attempts);
   return {
-    id: flow.id, ...folded, severity: flow.severity, attempts: attempts.length,
+    id: flow.id, ...folded, ...(flow.profile === 'host' ? {} : { env: { git: gitSource(flow), remote: remoteSource(flow) } }), severity: flow.severity, attempts: attempts.length,
     seconds: Math.round((ctx.now().getTime() - t0) / 1000), tokens: 0, checks: checksFor(folded, attempts),
   };
 }

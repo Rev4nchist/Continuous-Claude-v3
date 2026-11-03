@@ -8,6 +8,7 @@ import { ID_RE, SEVERITIES } from './flow.mjs';
 
 const FLOW_STATES = Object.freeze(['pass', 'fail', 'flaky', 'blocked', 'incomplete']);
 const CHECK_STATES = Object.freeze(['passed', 'failed', 'blocked', 'not_attempted']);
+const ENV_SOURCES = Object.freeze(['flow', 'default']);
 const TESTED_STATES = new Set(['pass', 'fail', 'flaky']);
 const SIDECAR_KEYS = Object.freeze(['project', 'command', 'exit', 'started', 'finished', 'artifact', 'head']);
 
@@ -40,6 +41,7 @@ function buildFlow(f, blockers) {
     seconds: f.seconds ?? 0,
     tokens: f.tokens ?? 0,
     checks: (f.checks ?? []).map(buildCheck),
+    ...(f.env ? { env: { git: oneOf(ENV_SOURCES, f.env.git, 'env git'), remote: oneOf(ENV_SOURCES, f.env.remote, 'env remote') } } : {}),
   };
 }
 
@@ -70,7 +72,7 @@ function blockersOf(run) {
 
 /**
  * @param {object} run  {pr, base, head, configSha, envDigest, envAttempts, imageTag, composeProject, startedAt, finishedAt,
- *   envSeconds, pids, flows, blockers, skipped, ephemeral}. `summary` and `findings` are derived, never passed in.
+ *   envSeconds, envDefaults, pids, flows, blockers, skipped, ephemeral}. `summary` and `findings` are derived, never passed in.
  *   flows[]: {id, state: pass|fail|flaky|blocked|incomplete, incomplete?, reason?, blocker?: {stage, text}, severity?, attempts?, seconds?, tokens?,
  *   checks?: [{text, state, step?, check?, reason?, evidence?}]}. A blocked flow without a reason takes blockers[0].stage.
  * @returns the report.json object, with the keys in the order of spec section 4.
@@ -84,6 +86,7 @@ export function buildReport(run) {
   return {
     pr: pick('pr'), base: pick('base'), head: pick('head'), configSha: pick('configSha'), envDigest: pick('envDigest'),
     envAttempts: pick('envAttempts'), imageTag: pick('imageTag'), composeProject: pick('composeProject'),
+    envDefaults: pick('envDefaults'),
     startedAt: pick('startedAt'), finishedAt: pick('finishedAt'), envSeconds: pick('envSeconds'),
     pids: [...(run.pids ?? [])],
     summary: { tested, findings: findings.length, blockers: blockers.length },
