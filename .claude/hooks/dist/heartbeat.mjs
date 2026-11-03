@@ -5422,8 +5422,9 @@ var FILE_LEASE_MS = 10 * 60 * 1e3;
 var HARNESS_LEASE_MS = 60 * 60 * 1e3;
 
 // src/shared/db-utils-pg.ts
-async function registerSession(sessionId, project, workingOn = "") {
+async function registerSession(sessionId, project, workingOn = "", opts) {
   try {
+    let live;
     await withPgClient(async (client) => {
       await client.query(`
         CREATE TABLE IF NOT EXISTS sessions (
@@ -5442,10 +5443,30 @@ async function registerSession(sessionId, project, workingOn = "") {
              last_heartbeat = NOW()`,
         [sessionId, project, workingOn]
       );
+      if (opts) live = await selectLiveSessions(client, sessionId, opts.previousId ?? null);
     });
-    return { success: true };
+    return live ? { success: true, live } : { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+var LIVE_SELECT_TIMEOUT_MS = 1500;
+async function selectLiveSessions(client, selfId, previousId) {
+  try {
+    const config = {
+      text: `SELECT id,
+                    GREATEST(last_heartbeat, last_activity_at) > now() - interval '5 minutes' AS alive
+               FROM sessions
+              WHERE id <> $1
+                AND (GREATEST(last_heartbeat, last_activity_at) > now() - interval '2 hours' OR id = $2::text)
+              LIMIT 500`,
+      values: [selfId, previousId],
+      query_timeout: LIVE_SELECT_TIMEOUT_MS
+    };
+    const res = await client.query(config);
+    return res.rows.map((r) => ({ id: r.id, alive: r.alive === true }));
+  } catch {
+    return void 0;
   }
 }
 

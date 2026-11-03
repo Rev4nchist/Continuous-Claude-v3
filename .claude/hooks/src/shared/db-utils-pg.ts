@@ -12,6 +12,7 @@
  * - queryPipelineArtifacts(): Query pipeline artifacts for upstream context
  */
 
+import type { Client, QueryConfig } from 'pg';
 import { spawnSync } from 'child_process';
 import type { QueryResult } from './types.js';
 import { requireOpcDir } from './opc-path.js';
@@ -386,14 +387,17 @@ export interface PipelineArtifact {
  * @param sessionId - Unique session identifier
  * @param project - Project directory path
  * @param workingOn - Description of current task
- * @returns Object with success boolean and any error message
+ * @param opts - When set, run one SELECT on the same client for the automatic-name pick (see below)
+ * @returns Object with success boolean, any error message, and the live-session snapshot when asked for
  */
 export async function registerSession(
   sessionId: string,
   project: string,
-  workingOn: string = ''
-): Promise<{ success: boolean; error?: string }> {
+  workingOn: string = '',
+  opts?: { previousId?: string | null }
+): Promise<{ success: boolean; error?: string; live?: LiveSession[] }> {
   try {
+    let live: LiveSession[] | undefined;
     await withPgClient(async (client) => {
       await client.query(`
         CREATE TABLE IF NOT EXISTS sessions (
@@ -413,10 +417,51 @@ export async function registerSession(
              last_heartbeat = NOW()`,
         [sessionId, project, workingOn]
       );
+
+      if (opts) live = await selectLiveSessions(client, sessionId, opts.previousId ?? null);
     });
-    return { success: true };
+    return live ? { success: true, live } : { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** One other session, for the automatic-name pick. `alive`: active in the last 5 minutes (STALE_MINUTES). */
+export interface LiveSession {
+  id: string;
+  alive: boolean;
+}
+
+/** The query cap for the live-session SELECT. The whole SessionStart hook has a 10 s budget. */
+const LIVE_SELECT_TIMEOUT_MS = 1500;
+
+/**
+ * Sessions seen in the last 2 hours (the `say --to` window), plus the fork parent whatever its age.
+ * Same liveness predicate as everywhere else: GREATEST(last_heartbeat, last_activity_at).
+ * A failed or slow SELECT returns undefined: the caller falls back to the identity folder.
+ * It never makes the registration itself fail.
+ */
+async function selectLiveSessions(
+  client: Client,
+  selfId: string,
+  previousId: string | null
+): Promise<LiveSession[] | undefined> {
+  try {
+    // pg reads a per-query query_timeout; its QueryConfig type does not list it.
+    const config: QueryConfig & { query_timeout: number } = {
+      text: `SELECT id,
+                    GREATEST(last_heartbeat, last_activity_at) > now() - interval '5 minutes' AS alive
+               FROM sessions
+              WHERE id <> $1
+                AND (GREATEST(last_heartbeat, last_activity_at) > now() - interval '2 hours' OR id = $2::text)
+              LIMIT 500`,
+      values: [selfId, previousId],
+      query_timeout: LIVE_SELECT_TIMEOUT_MS,
+    };
+    const res = await client.query(config);
+    return res.rows.map((r: { id: string; alive: boolean }) => ({ id: r.id, alive: r.alive === true }));
+  } catch {
+    return undefined;
   }
 }
 

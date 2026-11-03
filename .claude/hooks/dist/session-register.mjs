@@ -5420,8 +5420,9 @@ var FILE_LEASE_MS = 10 * 60 * 1e3;
 var HARNESS_LEASE_MS = 60 * 60 * 1e3;
 
 // src/shared/db-utils-pg.ts
-async function registerSession(sessionId, project, workingOn = "") {
+async function registerSession(sessionId, project, workingOn = "", opts) {
   try {
+    let live;
     await withPgClient(async (client) => {
       await client.query(`
         CREATE TABLE IF NOT EXISTS sessions (
@@ -5440,10 +5441,30 @@ async function registerSession(sessionId, project, workingOn = "") {
              last_heartbeat = NOW()`,
         [sessionId, project, workingOn]
       );
+      if (opts) live = await selectLiveSessions(client, sessionId, opts.previousId ?? null);
     });
-    return { success: true };
+    return live ? { success: true, live } : { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+var LIVE_SELECT_TIMEOUT_MS = 1500;
+async function selectLiveSessions(client, selfId, previousId) {
+  try {
+    const config = {
+      text: `SELECT id,
+                    GREATEST(last_heartbeat, last_activity_at) > now() - interval '5 minutes' AS alive
+               FROM sessions
+              WHERE id <> $1
+                AND (GREATEST(last_heartbeat, last_activity_at) > now() - interval '2 hours' OR id = $2::text)
+              LIMIT 500`,
+      values: [selfId, previousId],
+      query_timeout: LIVE_SELECT_TIMEOUT_MS
+    };
+    const res = await client.query(config);
+    return res.rows.map((r) => ({ id: r.id, alive: r.alive === true }));
+  } catch {
+    return void 0;
   }
 }
 
@@ -5838,7 +5859,111 @@ function runAdopt(newUuid, oldUuid, spawnFn = spawnDetachedHidden) {
   }
 }
 
+// src/shared/session-names.ts
+import { readdirSync as readdirSync2, statSync as statSync4 } from "fs";
+import { join as join7 } from "path";
+var WORDS = "otter heron lynx puffin marten osprey ibex koala lemur bison crane egret finch gecko hyena kestrel llama moose narwhal ocelot panda quail stoat tapir walrus yak zebra badger beaver dingo ermine ferret gibbon impala jaguar kiwi magpie newt orca pika robin shrew sloth tern toad wombat wren vole".split(" ");
+var DEGRADED_WINDOW_MS = 7 * 24 * 36e5;
+var HINT_WINDOW_MS = 6 * 36e5;
+var lc = (s) => s.trim().toLowerCase();
+var WORD_RE = new RegExp(`^(?:${WORDS.join("|")})2?$`);
+function isAutoName(name) {
+  return typeof name === "string" && WORD_RE.test(lc(name));
+}
+function startIndex(uuid) {
+  let h = 2166136261;
+  for (let i = 0; i < uuid.length; i++) {
+    h ^= uuid.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h % WORDS.length;
+}
+function pickName(uuid, held) {
+  const start = startIndex(uuid);
+  for (let i = 0; i < WORDS.length; i++) {
+    const w = WORDS[(start + i) % WORDS.length];
+    if (!held.has(w)) return w;
+  }
+  return `${WORDS[start]}2`;
+}
+function autoNameAllowed(env = process.env) {
+  if (env.CCV3_AUTONAME === "0") return false;
+  if (env.CCV3_AUTONAME === "1") return true;
+  return !String(env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
+}
+function addHeld(map, id, uuid) {
+  if (!id?.name || id.endedAt) return;
+  const k = lc(id.name);
+  map.set(k, [...map.get(k) ?? [], uuid]);
+}
+function heldFromLive(ids, read = readIdentity) {
+  const map = /* @__PURE__ */ new Map();
+  for (const uuid of ids) {
+    try {
+      addHeld(map, read(uuid), uuid);
+    } catch {
+    }
+  }
+  return map;
+}
+function heldDegraded(now = Date.now(), exclude = []) {
+  const map = /* @__PURE__ */ new Map();
+  try {
+    const dir = identityDir();
+    for (const f of readdirSync2(dir)) {
+      if (!f.endsWith(".json")) continue;
+      const uuid = f.slice(0, -5);
+      if (exclude.includes(uuid)) continue;
+      try {
+        if (now - statSync4(join7(dir, f)).mtimeMs > DEGRADED_WINDOW_MS) continue;
+        addHeld(map, readIdentity(uuid), uuid);
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return map;
+}
+function namesHeld(map, except) {
+  const out = /* @__PURE__ */ new Set();
+  for (const [name, holders] of map) if (holders.some((h) => h !== except)) out.add(name);
+  return out;
+}
+function chooseName(c) {
+  if (c.named || c.source === "compact") return null;
+  if (c.ownName) return c.ownName;
+  const carries = c.source === "resume" || c.source === "clear" || c.source === "fork" && c.previousQuiet;
+  if (carries && c.previousName && !namesHeld(c.held, c.previousId).has(lc(c.previousName))) return c.previousName;
+  return pickName(c.uuid, namesHeld(c.held));
+}
+function sameNameHint(uuid, name, cwd, now = Date.now()) {
+  if (!name || !cwd || isAutoName(name)) return null;
+  const want = lc(name);
+  const twins = [];
+  try {
+    const dir = identityDir();
+    for (const f of readdirSync2(dir)) {
+      if (!f.endsWith(".json") || f.slice(0, -5) === uuid) continue;
+      try {
+        if (Math.abs(now - statSync4(join7(dir, f)).mtimeMs) > HINT_WINDOW_MS) continue;
+        const id = readIdentity(f.slice(0, -5));
+        if (!id || id.endedAt || !id.name || lc(id.name) !== want) continue;
+        if (!id.cwd || normCwd(id.cwd) !== normCwd(cwd)) continue;
+        const at = Date.parse(id.updatedAt);
+        if (!Number.isFinite(at) || Math.abs(now - at) > HINT_WINDOW_MS) continue;
+        twins.push(id);
+      } catch {
+      }
+    }
+  } catch {
+  }
+  if (twins.length !== 1) return null;
+  const t = twins[0];
+  return `${label(t.uuid, t.name)} in this cwd never ended. If it crashed, run: node scripts/coordination/lane.mjs adopt --from ${t.uuid} once it is quiet 5 min.`;
+}
+
 // src/session-register.ts
+var DB_DEADLINE_MS = 7e3;
 function recordEnd(input) {
   if (!input.session_id) return;
   writeIdentity(input.session_id, {
@@ -5847,20 +5972,64 @@ function recordEnd(input) {
     cwd: input.cwd
   });
 }
-function recordStart(input) {
+function planStart(input) {
   const uuid = input.session_id;
-  if (!uuid) return "#--------";
+  if (!uuid) return { name: null, previous: null, autoOn: false, needLive: false };
   const name = resolveName(input.session_title, input.transcript_path);
   const previous = resolvePrevious(input.source, uuid, input.transcript_path, input.cwd, Date.now(), name);
+  const autoOn = autoNameAllowed();
+  const needLive = autoOn && !name && input.source !== "compact" && !readIdentity(uuid)?.name;
+  return { name, previous, autoOn, needLive };
+}
+async function registerWithDeadline(sessionId, project, plan) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ success: false, error: `no answer in ${DB_DEADLINE_MS} ms` }), DB_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([
+      registerSession(sessionId, project, "", plan.needLive ? { previousId: plan.previous } : void 0),
+      deadline
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function autoName(input, plan, live) {
+  const uuid = input.session_id;
+  if (!plan.autoOn || !uuid) return null;
+  const ownName = readIdentity(uuid)?.name ?? null;
+  let held = /* @__PURE__ */ new Map();
+  if (plan.needLive) held = live ? heldFromLive(live.map((l) => l.id)) : heldDegraded(Date.now(), [uuid]);
+  const parentEnded = !!(plan.previous && readIdentity(plan.previous)?.endedAt);
+  const parentQuiet = !!plan.previous && (parentEnded || live !== void 0 && !live.some((l) => l.id === plan.previous && l.alive));
+  const picked = chooseName({
+    uuid,
+    source: input.source,
+    named: !!plan.name,
+    ownName,
+    previousId: plan.previous,
+    previousName: plan.previous ? readIdentity(plan.previous)?.name ?? null : null,
+    previousQuiet: parentQuiet,
+    held
+  });
+  return picked && picked.trim() ? picked.trim() : null;
+}
+function recordStart(input, plan, live) {
+  const uuid = input.session_id;
+  if (!uuid) return { me: "#--------", title: null, hint: null };
+  const title = autoName(input, plan, live);
+  const name = plan.name ?? title;
   const id = writeIdentity(uuid, {
     ...name ? { name } : {},
-    ...previous ? { previous } : {},
+    ...plan.previous ? { previous: plan.previous } : {},
     cwd: input.cwd,
     endedAt: null,
     endReason: null
   });
-  if (previous) runAdopt(uuid, previous);
-  return label(uuid, id?.name ?? name);
+  if (plan.previous && input.source !== "fork") runAdopt(uuid, plan.previous);
+  const hint = input.source === "startup" && input.session_title ? sameNameHint(uuid, plan.name, input.cwd) : null;
+  return { me: label(uuid, id?.name ?? name), title, hint };
 }
 async function main() {
   let input;
@@ -5879,9 +6048,9 @@ async function main() {
     console.log(JSON.stringify({}));
     return;
   }
-  let me = "#--------";
+  let plan = { name: null, previous: null, autoOn: false, needLive: false };
   try {
-    me = recordStart(input);
+    plan = planStart(input);
   } catch {
   }
   const sessionId = resolveSessionId(input.session_id);
@@ -5896,9 +6065,16 @@ async function main() {
     initActivity(activitySessionId);
   } catch {
   }
-  const registerResult = await registerSession(sessionId, project, "");
+  const registerResult = await registerWithDeadline(sessionId, project, plan);
   if (!registerResult.success) {
     console.error(`[session-register] registration failed: ${registerResult.error}`);
+  }
+  let me = "#--------";
+  let title = null;
+  let hint = null;
+  try {
+    ({ me, title, hint } = recordStart(input, plan, registerResult.live));
+  } catch {
   }
   const awarenessMessage = `
 <system-reminder>
@@ -5906,16 +6082,22 @@ MULTI-SESSION COORDINATION ACTIVE
 
 You are ${me}.
 Project: ${projectName}
-
+${hint ? `${hint}
+` : ""}
 Coordination features:
 - File edits are tracked to prevent conflicts
 - Research findings are shared automatically
 - Use Task tool normally - coordination happens via hooks
 </system-reminder>`;
   const output = {
-    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: awarenessMessage }
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: awarenessMessage,
+      ...title ? { sessionTitle: title } : {}
+    }
   };
-  console.log(JSON.stringify(output));
+  process.stdout.write(`${JSON.stringify(output)}
+`, () => process.exit(0));
 }
 main().catch((err) => {
   console.error("[session-register] unexpected error:", err);

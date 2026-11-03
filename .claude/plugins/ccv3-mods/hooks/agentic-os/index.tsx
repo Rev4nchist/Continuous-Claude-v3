@@ -155,6 +155,25 @@ const noteName = async ($: EngineInterface, title: unknown): Promise<void> => {
   }
 }
 
+/**
+ * classic.SessionStart: run the settings hooks first (next(e)), then read the name. session-register hands an auto-name back as
+ * hookSpecificOutput.sessionTitle, which the engine folds into the result's top-level sessionTitle (ClassicResult), and that only exists after next(e). The read sits in try/catch and the result is returned
+ * as it came: a throw after next(e) would reach the outer .catch, which runs the settings hooks a second time.
+ */
+const readNameAfter = async <E extends { session_title?: unknown }, R extends { sessionTitle?: string } | undefined>(
+  $: EngineInterface,
+  e: E,
+  next: (e: E) => Promise<R>,
+): Promise<R> => {
+  const result = await next(e)
+  try {
+    if (!(await isOff($))) await noteName($, e.session_title ?? result?.sessionTitle)
+  } catch {
+    // Observer only: the band reads the name at the next prompt.
+  }
+  return result
+}
+
 const BAND_LOG = '.claude/state/agentic-os/band-debug.log'
 const BAND_LOG_LINES = 200
 
@@ -738,22 +757,17 @@ export const agenticOs = (on: On) => {
     try {
       // A resume can return to an id that ended earlier in this process: it is live again, so its file takes writes again.
       endedIds.delete(await $.session.id())
-      if (!(await isOff($))) {
-        await refreshGit($)
-        await noteName($, e.session_title)
-      }
+      if (!(await isOff($))) await refreshGit($)
     } catch {
       // Observer only.
     }
-    return next(e)
+    return readNameAfter($, e, next)
   }).catch(($, e, next) => next(e))
 
   // The session name, from every SessionStart (the resume and clear handler above reads it too) and every prompt: a /rename shows at the next prompt.
   // The hud module holds the unmatched classic.SessionStart, so these sources are matched.
-  on('classic.SessionStart', { source: ['startup', 'compact', 'fork'] }, async ($, e, next) => {
-    if (!(await isOff($))) await noteName($, e.session_title)
-    return next(e)
-  }).catch(($, e, next) => next(e))
+  on('classic.SessionStart', { source: ['startup', 'compact', 'fork'] }, ($, e, next) => readNameAfter($, e, next))
+    .catch(($, e, next) => next(e))
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
     if (!(await isOff($))) await noteName($, e.session_title)
