@@ -3,6 +3,7 @@ import type { SessionCard } from '@/server/queries/mission-control';
 import { cn } from '@/lib/utils';
 
 import { chipTone, chipWord, formatAgo } from './format';
+import { SessionLabel } from './SessionLabel';
 
 /** A state file older than this is shown as stale on the card. */
 const STATE_STALE_SECONDS = 15 * 60;
@@ -138,6 +139,9 @@ function SessionCardItem({
           className={cn('size-2 shrink-0 rounded-full', card.liveColour === 'green' ? 'bg-done' : 'bg-warn')}
         />
         <span className="shrink-0 text-xs text-muted-foreground">{formatAgo(card.liveSecondsAgo)}</span>
+      </span>{' '}
+      <span className="block min-w-0">
+        <SessionLabel name={card.sessionName} shortId={card.shortId} />
       </span>{' '}
       <span
         data-testid="session-card-name"
