@@ -59,7 +59,7 @@ test('Z3: exit 14 is ignored; the line has counts by severity and the top 3 file
   const r = zizmorAdvisory({ root, paths: ['.github/workflows/a.yml', '.github/workflows/b.yaml', 'README.md'], bin: 'ZBIN', run: (bin, args, opts) => { calls.push({ bin, args, opts }); return { status: 14, stdout: out, stderr: 'INFO log' }; } });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].bin, 'ZBIN');
-  assert.deepEqual(calls[0].args, ['--offline', '--format', 'json', '.github/workflows/a.yml', '.github/workflows/b.yaml']);
+  assert.deepEqual(calls[0].args, ['--offline', '--strict-collection', '--format', 'json', '.github/workflows/a.yml', '.github/workflows/b.yaml']);
   assert.equal(calls[0].opts.cwd, root);
   assert.equal(r.status, 'NOTE');
   assert.match(r.detail, /5 finding/);
@@ -112,4 +112,25 @@ test('Z6: a workflow the branch deleted is not passed to zizmor; if none is left
   let ran = 0;
   assert.equal(zizmorAdvisory({ root, paths: ['.github/workflows/gone.yml'], bin: 'Z', run: () => { ran += 1; return {}; } }), null);
   assert.equal(ran, 0);
+});
+
+test('Z7: zizmor runs with --strict-collection, and a workflow it cannot read makes the NOTE say the scan was incomplete and name the file', () => {
+  // Breaks when: --strict-collection is dropped (zizmor only warns and gives findings for the rest), or the failure text is not shown.
+  const root = repoWith(['.github/workflows/bad.yml', '.github/workflows/ok.yml']);
+  const stderr = 'INFO zizmor\nfatal: no audit was performed\nfailed to load file://.github/workflows/bad.yml as workflow\n\nCaused by:\n    0: invalid YAML syntax';
+  const calls = [];
+  const r = zizmorAdvisory({ root, paths: ['.github/workflows/bad.yml', '.github/workflows/ok.yml'], bin: 'Z', run: (bin, args) => { calls.push(args); return { status: 1, stdout: '', stderr }; } });
+  assert.ok(calls[0].includes('--strict-collection'));
+  assert.equal(r.status, 'NOTE');
+  assert.match(r.detail, /incomplete/i);
+  assert.match(r.detail, /\.github\/workflows\/bad\.yml/);
+});
+
+test('Z7b: a findings array together with a parse warning on stderr is still reported as incomplete', () => {
+  // Breaks when: the warning on stderr is ignored whenever the findings list parses.
+  const root = repoWith(['.github/workflows/a.yml']);
+  const stderr = ' WARN collect_inputs: zizmor::registry::input: failed to parse input: did not find expected key';
+  const r = zizmorAdvisory({ root, paths: ['.github/workflows/a.yml'], bin: 'Z', run: () => ({ status: 14, stdout: '[]', stderr }) });
+  assert.equal(r.status, 'NOTE');
+  assert.match(r.detail, /incomplete/i);
 });

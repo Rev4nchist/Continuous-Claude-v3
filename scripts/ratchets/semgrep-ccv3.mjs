@@ -62,7 +62,8 @@ const newer = (a, b) => { const [x, y] = [versionKey(a), versionKey(b)]; for (le
 
 /** The opengrep binary: CCV3_OPENGREP when it names a file, else the newest version folder under <home>/tools/review-scanners/opengrep. Or null. */
 export function findOpengrep({ env = process.env, home = homedir() } = {}) {
-  if (env.CCV3_OPENGREP && existsSync(env.CCV3_OPENGREP)) return env.CCV3_OPENGREP;
+  const own = env.CCV3_OPENGREP ? path.resolve(env.CCV3_OPENGREP) : null;
+  if (own && existsSync(own)) return own;
   const base = path.join(home, 'tools', 'review-scanners', 'opengrep');
   let versions = [];
   try { versions = readdirSync(base); } catch { return null; }

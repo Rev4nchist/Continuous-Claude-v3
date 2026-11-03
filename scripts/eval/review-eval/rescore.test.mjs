@@ -94,3 +94,16 @@ test('treeCheck accepts a blob and rejects a tree (CodeRabbit #275)', async () =
   assert.equal(check(SHA, 'dir/a.ts'), true);
   assert.equal(check(SHA, 'dir'), false);
 });
+
+test('CR3: rescore refuses an --out folder that exists and is not empty, and writes nothing; a missing or empty folder is fine', async () => {
+  // Breaks when: rescore writes into a used folder, so old files mix with the new run.
+  const dir = makeArchive();
+  const used = tmp();
+  writeFileSync(path.join(used, 'old.txt'), 'keep');
+  const io = quiet();
+  assert.equal(await main(['rescore', '--archive', dir, '--out', used], io), 2);
+  assert.match(io.out.join('\n'), /not empty/);
+  assert.equal(existsSync(path.join(used, 'runs.jsonl')), false, 'nothing was written');
+  assert.equal(await main(['rescore', '--archive', dir, '--out', tmp()], quiet()), 0, 'an empty folder is fine');
+  assert.equal(await main(['rescore', '--archive', dir, '--out', path.join(tmp(), 'fresh')], quiet()), 0, 'a missing folder is fine');
+});

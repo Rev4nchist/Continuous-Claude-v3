@@ -235,12 +235,15 @@ function jsonBlock(text) {
   return itemsFromJson(body) ?? itemsFromJson(repairJsonText(body), true);
 }
 
-/** { items } from findings JSON text, or null. repaired marks text that findings-repair fixed. */
+/**
+ * { items } from findings JSON text, or null. repaired marks text that findings-repair fixed. A repaired block with no item is not a
+ * findings block: an answer cut off at {"findings":[ would otherwise read as a clean pass.
+ */
 function itemsFromJson(text, repaired = false) {
   try {
     const v = JSON.parse(text);
-    if (Array.isArray(v)) return { items: v, repaired };
-    if (v && Array.isArray(v.findings)) return { items: v.findings, repaired };
+    const items = Array.isArray(v) ? v : v && Array.isArray(v.findings) ? v.findings : null;
+    if (items && !(repaired && items.length === 0)) return { items, repaired };
   } catch { /* not a findings block */ }
   return null;
 }
@@ -304,7 +307,8 @@ export function parseReviewOutput(stdout, { expectModel, exists } = {}) {
   if (!exists || !p.ok) return p;
   const { kept, dropped } = filterFindingPaths(p.findings, exists);
   const notes = dropped.map((d) => `dropped a finding on a file that is not in the reviewed tree: ${d.file} (${clip(d.title, 60)})`);
-  return { ...p, findings: kept, problems: [...p.problems, ...notes] };
+  // The not-run check runs again: dropping every finding must not turn a "review did not run" answer into an ok round.
+  return voidIfNotRun({ ...p, findings: kept, problems: [...p.problems, ...notes] });
 }
 
 /** exists(path) for parseReviewOutput: is the file in the head commit's tree? A head this repo does not hold cannot judge, so it keeps every file. */

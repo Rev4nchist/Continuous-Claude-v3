@@ -97,3 +97,13 @@ test('OG6: a new finding through opengrep still fails the ratchet, and a clean r
   assert.equal(main([], dirty.deps), 1);
   assert.ok(dirty.lines.some((l) => l.startsWith('NEW ') && l.includes(`rules.${ID}`)), dirty.lines.join('\n'));
 });
+
+test('OG7: a relative CCV3_OPENGREP is resolved to an absolute path', () => {
+  // Breaks when: findOpengrep returns the env value as written, so a later spawn with another cwd cannot find the file.
+  const home = temp();
+  const abs = path.join(home, 'mine.exe');
+  writeFileSync(abs, '');
+  const rel = path.relative(process.cwd(), abs);
+  assert.ok(!path.isAbsolute(rel), 'the test needs a relative path');
+  assert.equal(findOpengrep({ env: { CCV3_OPENGREP: rel }, home }), abs);
+});

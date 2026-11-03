@@ -13,6 +13,9 @@ const SEVERITIES = ['High', 'Medium', 'Low', 'Informational', 'Unknown'];
 const WORKFLOW = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 const TOP = 3;
 const note = (detail) => ({ step: 'zizmor', status: 'NOTE', detail, notes: [] });
+// What zizmor prints when it cannot read an input: --strict-collection stops with 'failed to load file://<path> as workflow'; without it a WARN says 'failed to parse input'.
+const LOAD_FAILURE = /failed to load (?:file:\/\/)?(\S+) as /;
+const COLLECT_WARNING = /WARN.*failed to (?:parse|load|collect)/i;
 
 const versionKey = (name) => (/\d+(?:\.\d+)*/.exec(name)?.[0] ?? '0').split('.').map(Number);
 const newer = (a, b) => { const [x, y] = [versionKey(a), versionKey(b)]; for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (y[i] ?? 0) - (x[i] ?? 0); return 0; };
@@ -56,11 +59,14 @@ export function zizmorAdvisory({ root, paths, bin, run = defaultRun }) {
   const tag = 'advisory only (one-week trial, never fails pre-pr)';
   if (!bin) return note(`skipped: zizmor not found (set CCV3_ZIZMOR or install under ~/tools/review-scanners/zizmor); ${tag}`);
   try {
-    const r = run(bin, ['--offline', '--format', 'json', ...files], { cwd: root });
+    const r = run(bin, ['--offline', '--strict-collection', '--format', 'json', ...files], { cwd: root });
     if (r.error || r.timedOut) return note(`skipped: zizmor could not run (${r.timedOut ? 'timed out' : r.error}); ${tag}`);
+    const bad = LOAD_FAILURE.exec(String(r.stderr ?? ''));
+    if (bad) return note(`incomplete scan: zizmor could not read ${bad[1].replace(/\\/g, '/')}, so no workflow was audited; ${tag}`);
     const parsed = JSON.parse(String(r.stdout ?? ''));
     if (!Array.isArray(parsed)) throw new Error('output is not a findings list');
-    return note(`${summary(parsed.map(describe))} in ${files.length} workflow file(s); ${tag}`);
+    const partial = COLLECT_WARNING.test(String(r.stderr ?? '')) ? 'incomplete scan (zizmor could not parse an input): ' : '';
+    return note(`${partial}${summary(parsed.map(describe))} in ${files.length} workflow file(s); ${tag}`);
   } catch (err) {
     return note(`skipped: zizmor output could not be read (${String(err.message).split('\n')[0]}); ${tag}`);
   }

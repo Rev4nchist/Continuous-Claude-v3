@@ -1974,7 +1974,7 @@ test('Z-PP1: a workflow change adds one NOTE zizmor line with the counts, and ex
   const calls = [];
   const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findZizmor: () => 'ZBIN', zizmorRun: (bin, args) => { calls.push([bin, ...args]); return { status: 14, stdout: ZIZMOR_OUT, stderr: '' }; } });
   assert.equal(result.ok, true, result.lines.join('\n'));
-  assert.deepEqual(calls, [['ZBIN', '--offline', '--format', 'json', '.github/workflows/a.yml']]);
+  assert.deepEqual(calls, [['ZBIN', '--offline', '--strict-collection', '--format', 'json', '.github/workflows/a.yml']]);
   const step = result.results.find((r) => r.step === 'zizmor');
   assert.equal(step.status, 'NOTE');
   assert.match(step.detail, /1 High/);

@@ -96,3 +96,28 @@ test('headHasFile keeps a file in the head tree and drops a directory path (Code
     assert.equal(has('src/missing.ts'), false);
   } finally { rmSync(repo, { recursive: true, force: true }); }
 });
+
+// ---------- CodeRabbit round 2 on #275 ----------
+
+test('CR1: an answer cut off at {"findings":[ is not a clean pass', () => {
+  // Breaks when: the repair of a block with zero items is accepted, so a truncated answer reads as an empty findings list.
+  for (const cut of ['{"findings":[', '{"findings":[\n', '[']) {
+    const p = parseReviewOutput(resultLine('Notes\n```json\n' + cut + '\n```'));
+    assert.equal(p.ok, false, JSON.stringify(cut));
+    assert.equal(p.clean, false, JSON.stringify(cut));
+  }
+  const full = parseReviewOutput(resultLine(block({ findings: [] })));
+  assert.equal(full.ok, true, 'a list written in full stays clean');
+  assert.equal(full.clean, true);
+});
+
+test('CR2: a "review did not run" answer whose only findings are on missing files stays void after the path filter', () => {
+  // Breaks when: voidIfNotRun runs before the path filter only, so dropping every finding leaves an ok round with no findings.
+  const text = 'The review could not read the diff, so these are guesses.\n' + block({ findings: [{ file: 'ghost.ts', line: 3, severity: 'major', title: 'Ghost', body: 'b' }] });
+  const p = parseReviewOutput(resultLine(text), { exists: () => false });
+  assert.equal(p.ok, false);
+  assert.equal(p.notRun, true);
+  assert.deepEqual(p.findings, []);
+  const ordinary = parseReviewOutput(resultLine(block({ findings: [{ file: 'ghost.ts', line: 3, severity: 'major', title: 'Ghost', body: 'b' }] })), { exists: () => false });
+  assert.equal(ordinary.ok, true, 'an ordinary answer whose findings are all dropped stays ok');
+});
