@@ -962,6 +962,19 @@ describe('agentic-os session identity', () => {
     expect(await line1($)).toContain('trex #test-ses')
   })
 
+  test('I6 a /clear or resume drops the old name: an unnamed new conversation does not show it', async ($, on) => {
+    world2(on)
+    on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+    await start($)
+    await $.classic.SessionStart({ source: 'startup', session_title: 'trex' } as never)
+    expect(await line1($)).toContain('trex #test-ses')
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
+    await $.classic.SessionStart({ source: 'clear' } as never)
+    const got = await line1($)
+    expect(got).toContain('unnamed #test-ses')
+    expect(got).not.toContain('trex')
+  })
+
   test('I5 the off switch reads no identity file', async ($, on) => {
     const seen = world2(on, { [FILE]: JSON.stringify({ name: 'fromfile' }) }, { CCV3_MODS_OFF: '1' })
     await start($)

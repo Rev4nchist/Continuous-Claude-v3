@@ -721,6 +721,8 @@ export const agenticOs = (on: On) => {
         await update($, steward, () => FRESH_STEWARD)
         await update($, refused, () => false)
         await update($, osTab, () => 'overview')
+        // The next conversation reads its own name at its SessionStart; the old one must not show meanwhile.
+        await update($, sessionName, () => null)
         // The keeper's records belong to the conversation they watched: the new one has had no compaction.
         await update($, compactions, () => [])
       }

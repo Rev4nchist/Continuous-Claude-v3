@@ -96,7 +96,6 @@ export function writeIdentity(uuid, patch = {}, dir = identityDir()) {
   if (!isSafeId(uuid)) throw new Error(`bad session id "${uuid}"`);
   const set = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
   const next = {
-    uuid: String(uuid), short: short(uuid),
     name: null, previous: null, cwd: null, endedAt: null, endReason: null,
     ...(readIdentity(uuid, dir) || {}),
     ...set,
