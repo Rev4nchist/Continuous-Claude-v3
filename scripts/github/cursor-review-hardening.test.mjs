@@ -111,6 +111,17 @@ test('CR1: an answer cut off at {"findings":[ is not a clean pass', () => {
   assert.equal(full.clean, true);
 });
 
+test('CR4: "Review failed" and "Review skipped" notices void an answer with no surviving findings (CodeRabbit #275 round 4)', () => {
+  // Breaks when: NOT_RUN does not match these notices, so the round counts as a complete review.
+  for (const notice of ['Review failed: the diff was too large.', 'Review skipped.']) {
+    const dropped = parseReviewOutput(resultLine(`${notice}\n` + block({ findings: [{ file: 'ghost.ts', line: 3, severity: 'major', title: 'G', body: 'b' }] })), { exists: () => false });
+    assert.equal(dropped.ok, false, notice);
+    assert.equal(dropped.notRun, true, notice);
+    const empty = parseReviewOutput(resultLine(`${notice}\n` + block({ findings: [] })));
+    assert.equal(empty.ok, false, notice);
+  }
+});
+
 test('CR2: a "review did not run" answer whose only findings are on missing files stays void after the path filter', () => {
   // Breaks when: voidIfNotRun runs before the path filter only, so dropping every finding leaves an ok round with no findings.
   const text = 'The review could not read the diff, so these are guesses.\n' + block({ findings: [{ file: 'ghost.ts', line: 3, severity: 'major', title: 'Ghost', body: 'b' }] });

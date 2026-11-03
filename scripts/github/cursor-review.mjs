@@ -352,7 +352,7 @@ function parseAnswer(stdout, expectModel) {
 }
 
 /** The model says it could not read the diff. */
-const NOT_RUN = /\b(?:review (?:did not|didn't|could not|couldn't) run|(?:was|were) blocked|blocked by (?:a|the) hook|could(?: not|n't) (?:read|access|open)|unable to (?:read|access|open)|no basis for)/i;
+const NOT_RUN = /\b(?:review (?:did not|didn't|could not|couldn't) run|review (?:failed|skipped)\b|(?:was|were) blocked|blocked by (?:a|the) hook|could(?: not|n't) (?:read|access|open)|unable to (?:read|access|open)|no basis for)/i;
 
 /**
  * An empty findings list is a pass only when the model read the change. On 2026-11-01 the user's global Claude hooks (Cursor runs

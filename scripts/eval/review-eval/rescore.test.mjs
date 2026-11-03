@@ -95,6 +95,14 @@ test('treeCheck accepts a blob and rejects a tree (CodeRabbit #275)', async () =
   assert.equal(check(SHA, 'dir'), false);
 });
 
+test('CR5: rescore refuses an --out that is an existing file with exit 2 (CodeRabbit #275 round 4)', async () => {
+  // Breaks when: the --out check calls readdirSync on a file, which throws ENOTDIR and exits 1.
+  const dir = makeArchive();
+  const file = path.join(tmp(), 'out.txt');
+  writeFileSync(file, 'x');
+  assert.equal(await main(['rescore', '--archive', dir, '--out', file], quiet()), 2);
+});
+
 test('CR3: rescore refuses an --out folder that exists and is not empty, and writes nothing; a missing or empty folder is fine', async () => {
   // Breaks when: rescore writes into a used folder, so old files mix with the new run.
   const dir = makeArchive();

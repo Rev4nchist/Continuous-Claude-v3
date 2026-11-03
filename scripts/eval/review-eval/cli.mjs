@@ -9,7 +9,7 @@
 //   score --dir D [--out F] [--rebase A]      scorecard from runs.jsonl and the dataset; --rebase A reads the findings files from archive A
 //   rescore --archive A --out D [--root R]    re-apply the parser and the path filter to archived raw answers (no model call); then `score --dir D`
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG_PATH, loadConfig } from './config.mjs';
@@ -96,7 +96,7 @@ function rescoreCmd(argv, io, root) {
   const out = flag(argv, '--out', null);
   if (!archive || !out) { io.stderr('rescore: --archive <review-eval folder> and --out <new folder> are required'); return 2; }
   if (canonical(out) === canonical(archive)) { io.stderr('rescore: --out must be a new folder, never the archive'); return 2; }
-  if (existsSync(out) && readdirSync(out).length > 0) { io.stderr(`rescore: --out ${out} exists and is not empty; use a new or empty folder`); return 2; }
+  if (existsSync(out) && (!statSync(out).isDirectory() || readdirSync(out).length > 0)) { io.stderr(`rescore: --out ${out} exists and is not empty; use a new or empty folder`); return 2; }
   const exists = io.exists ?? treeCheck(makeGit(flag(argv, '--root', root)));
   io.stdout(JSON.stringify(rescoreArchive({ archive, out, exists }), null, 1));
   return 0;
