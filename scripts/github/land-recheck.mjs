@@ -33,9 +33,11 @@ const iso = (t) => new Date(t).toISOString();
 /**
  * Pure decision. { readyHead, readyAt (ISO), pull, reviews, comments, commentEdits, statuses } in, { ok, refusals } out.
  * `pull` is the PR read now; `statuses` are the commit statuses of its current head. `commentEdits` maps a comment id to its
- * edit history (readIssueComments); without it no summary is trusted.
+ * edit history (readIssueComments); without it no summary is trusted. `commits` is the PR's commit list, oldest first, as
+ * [{ sha }] (readPrCommits): the newest CodeRabbit round is the one on the newest commit, not the latest submitted_at. [] means
+ * unreadable: with rounds on two or more commits the order is unknown and it refuses.
  */
-export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments = [], commentEdits, statuses = [] }) {
+export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments = [], commentEdits, statuses = [], commits = [] }) {
   const refusals = [];
   const readyMs = ms(readyAt);
   const head = pull?.head?.sha;
@@ -54,7 +56,14 @@ export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments
   // A request is answered by the newest review with a body, or by a clean summary-only round: the TRUSTED summary covers the
   // head and is no notice (live PR 211 got no review object for its on-demand round, only a summary edit).
   const trusted = trustedCodeRabbitSummary(comments, commentEdits);
-  const bodyReview = newestCodeRabbitReview(reviews);
+  // newestCodeRabbitReview ranks by commit only when the list holds EVERY reviewed commit (ranksFor: all or none), else it
+  // falls back to submitted_at. A round on a commit no longer in the PR (amend, rebase) reviewed code that is gone, so it
+  // answers no request: drop it, then rank the rest. Dropping a round can only lower answeredAt, so the gate gets stricter.
+  const listed = new Set((commits ?? []).map((c) => String(c?.sha ?? '').toLowerCase()));
+  const onPr = listed.size ? reviews.filter((r) => listed.has(String(r?.commit_id ?? '').toLowerCase())) : reviews;
+  const bodyReview = newestCodeRabbitReview(onPr, commits);
+  const roundCommits = new Set(crReviews.filter((r) => String(r.body ?? '').trim() !== '').map((r) => String(r.commit_id ?? '').toLowerCase()));
+  if (!listed.size && roundCommits.size >= 2) refusals.push('could not read the PR commit list to order CodeRabbit rounds');
   const coversHead = trusted && !codeRabbitNotice(trusted.body) && summaryCoversHead(trusted.body, head);
   const answeredAt = Math.max(bodyReview ? ms(bodyReview.submitted_at) : 0, coversHead ? ms(trusted.updated_at || trusted.created_at) : 0);
   const open = coderabbitRequestComments(comments).filter((c) => ms(c.created_at) > answeredAt);
@@ -66,6 +75,19 @@ export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments
 
 const flatPages = (pages) => [pages].flat(2);
 
+/** The PR's commits, oldest first, as [{ sha }]. Throws when the read fails or returns no commit (a PR always has one). */
+function readCommitList(gh, base, pr) {
+  let list;
+  try {
+    list = flatPages(gh(['--paginate', '--slurp', `${base}/pulls/${pr}/commits?per_page=100`]));
+  } catch (err) {
+    throw new Error(`the PR commit list is unreadable (${String(err?.message ?? err).split('\n')[0]})`);
+  }
+  const commits = list.map((c) => ({ sha: String(c?.sha ?? '').toLowerCase() })).filter((c) => /^[0-9a-f]{40}$/.test(c.sha));
+  if (!commits.length) throw new Error('the PR commit list is empty');
+  return commits;
+}
+
 /** Re-read the PR through `gh(args)` (parsed JSON) and decide. Any read error is a refusal. */
 export function recheckPr({ pr, repo, head, readyAt }, gh) {
   try {
@@ -75,9 +97,12 @@ export function recheckPr({ pr, repo, head, readyAt }, gh) {
     // The shared reader READY uses: all REST pages, each comment paired with its GraphQL body and edit history.
     const [owner, name] = repo.split('/');
     const { comments, commentEdits } = readIssueComments(gh, owner, name, pr);
+    // The PR's commit order ranks the CodeRabbit rounds (as cr-fix and cr-paid do). Read directly, not through readPrCommits:
+    // that helper returns [] on a read error, and a failed read must refuse (fail closed).
+    const commits = readCommitList(gh, base, pr);
     // The combined status lists 30 statuses a page: read every page (100 each), so a pending CodeRabbit status on a later page counts.
     const statuses = flatPages(gh(['--paginate', '--slurp', `${base}/commits/${pull.head.sha}/status?per_page=100`])).flatMap((page) => page?.statuses ?? []);
-    return decideRecheck({ readyHead: head, readyAt, pull, reviews, comments, commentEdits, statuses });
+    return decideRecheck({ readyHead: head, readyAt, pull, reviews, comments, commentEdits, statuses, commits });
   } catch (err) {
     return { ok: false, refusals: [`could not re-read PR #${pr}: ${String(err?.message ?? err).split('\n')[0]}`] };
   }
