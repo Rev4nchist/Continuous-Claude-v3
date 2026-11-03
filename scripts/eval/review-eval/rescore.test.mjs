@@ -1,0 +1,73 @@
+// Tests for `rescore --archive` (rescore.mjs, wired in cli.mjs). Run: node --test scripts/eval/review-eval/rescore.test.mjs
+// Each test names the source change that would break it.
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { main } from './cli.mjs';
+
+const tmp = () => mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'rescore-'));
+const quiet = () => { const out = []; return { out, stdout: (s) => out.push(String(s)), stderr: (s) => out.push(String(s)) }; };
+const SHA = 'a'.repeat(40);
+const GONE = 'C:\\gone\\worktree\\review-eval';
+const answer = (text) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, result: text, session_id: 's', usage: {} });
+const BAD = '{"findings":[{"file":"real.ts","line":4,"severity":"major","title":"T","body":"b"},{"file":"ghost.ts","line":9,"severity":"minor","title":"G","body":"b"]}';
+const jsonl = (file) => readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+
+/** An archive with three rows. Every findingsPath names a folder that is gone, as in the real archive. */
+function makeArchive() {
+  const dir = tmp();
+  const rows = [];
+  const add = (pr, stem, raw, patch) => {
+    const folder = path.join(dir, String(pr), SHA.slice(0, 8));
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(path.join(folder, `${stem}.raw.json`), raw);
+    writeFileSync(path.join(folder, `${stem}.findings.json`), JSON.stringify({ schema: 1, status: 'failed', error: 'old', findings: [], problems: ['old'] }));
+    rows.push({ schema: 1, set: 'holdout', pr, round: 1, sha40: SHA, status: 'failed', reason: 'no findings block and no recognisable headings: the answer is not a pass', findingCount: 0, ts: '2026-11-03T10:00:00.000Z', promptSha256: 'f53fa6b8', findingsPath: `${GONE}\\${pr}\\${SHA.slice(0, 8)}\\${stem}.findings.json`, ...patch });
+  };
+  add(1, 'bad', answer(`Notes\n\`\`\`json\n${BAD}\n\`\`\``), {});
+  add(2, 'empty', answer(''), {});
+  add(3, 'timeout', '', { reason: 'TIMED OUT after 1500 s' });
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [], zeroMajorPrs: [] }));
+  return dir;
+}
+
+test('rescore re-parses the archived raw output with the repair and the path filter, and never touches the archive', async () => {
+  // Breaks when: rescore is missing, overwrites the archive, skips the path filter, or turns an empty answer or a timeout into a pass.
+  const dir = makeArchive();
+  const out = path.join(tmp(), 'rescored');
+  const before = readFileSync(path.join(dir, 'runs.jsonl'), 'utf8');
+  const io = { ...quiet(), exists: (sha, file) => sha === SHA && file === 'real.ts' };
+  assert.equal(await main(['rescore', '--archive', dir, '--out', out], io), 0, io.out.join('\n'));
+  assert.equal(readFileSync(path.join(dir, 'runs.jsonl'), 'utf8'), before, 'the archive is unchanged');
+  const rows = jsonl(path.join(out, 'runs.jsonl'));
+  assert.deepEqual(rows.map((r) => r.status), ['ok', 'failed', 'failed']);
+  assert.equal(rows[0].findingCount, 1, 'the ghost.ts finding is dropped');
+  assert.equal(rows[0].ts, '2026-11-03T10:00:00.000Z', 'ts stays, so the same row wins in score');
+  assert.equal(rows[2].reason, 'TIMED OUT after 1500 s', 'a row with no raw output keeps its reason');
+  assert.ok(existsSync(rows[0].findingsPath) && rows[0].findingsPath.startsWith(out));
+  const rec = JSON.parse(readFileSync(rows[0].findingsPath, 'utf8'));
+  assert.deepEqual(rec.findings.map((f) => f.file), ['real.ts']);
+  assert.match(rec.problems.join(' '), /repaired malformed findings JSON/);
+  assert.equal(await main(['score', '--dir', out], quiet()), 0, 'score runs on the output');
+});
+
+test('rescore refuses to write into the archive, and needs --archive', async () => {
+  // Breaks when: --out may equal the archive, or the command runs without an archive.
+  const dir = makeArchive();
+  assert.equal(await main(['rescore', '--archive', dir, '--out', dir], quiet()), 2);
+  assert.equal(await main(['rescore'], quiet()), 2);
+});
+
+test('score --rebase reads the findings files from the archive folder, not from the stored findingsPath', async () => {
+  // Breaks when: scoreCmd trusts the stored findingsPath only.
+  const dir = makeArchive();
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${JSON.stringify({ schema: 1, set: 'holdout', pr: 4, round: 1, sha40: SHA, status: 'ok', ts: 't', promptSha256: 'f53fa6b8', findingsPath: `${GONE}\\4\\${SHA.slice(0, 8)}\\x.findings.json` })}\n`);
+  mkdirSync(path.join(dir, '4', SHA.slice(0, 8)), { recursive: true });
+  writeFileSync(path.join(dir, '4', SHA.slice(0, 8), 'x.findings.json'), JSON.stringify({ findings: [] }));
+  const io = quiet();
+  assert.equal(await main(['score', '--dir', dir], io), 1, 'without --rebase the gone folder fails');
+  assert.equal(await main(['score', '--dir', dir, '--rebase', dir], quiet()), 0);
+});
