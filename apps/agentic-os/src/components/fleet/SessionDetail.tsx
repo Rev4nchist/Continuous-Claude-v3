@@ -5,6 +5,7 @@ import type { DetailUnavailable, SessionDetail as Detail } from '@/server/querie
 import { cn } from '@/lib/utils';
 
 import { chipTone, chipWord, formatAgo } from './format';
+import { SessionLabel } from './SessionLabel';
 
 const WRAP = '[overflow-wrap:anywhere]';
 
@@ -66,7 +67,8 @@ export function SessionDetail({ detail, onClose }: { detail: Detail; onClose: ()
     >
       <div data-testid="detail-header" className="flex flex-wrap items-center justify-between gap-2">
         <h2 className={cn('min-w-0 text-sm font-medium', WRAP)}>
-          {`Session \u00b7 ${project} / ${detail.id.slice(0, 4)}`}
+          {`Session \u00b7 ${project} / ${detail.id.slice(0, 4)}`}{' '}
+          <SessionLabel name={detail.sessionName} shortId={detail.shortId} />
         </h2>
         <div className="flex shrink-0 items-center gap-2">
           {detail.chip !== null && (

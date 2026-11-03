@@ -30,6 +30,7 @@ const READY: ReadyItem = {
   sessionId: SESSION.id,
   shortId: SESSION.shortId,
   name: 'unmapped/-/aaaa',
+  sessionName: null,
   kind: 'question',
   text: 'E2E first open ask',
   openAsks: 2,

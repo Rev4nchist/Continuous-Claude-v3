@@ -1,6 +1,7 @@
 import type { ReadyItem } from '@/server/queries/mission-control';
 
 import { formatAge } from './format';
+import { SessionLabel } from './SessionLabel';
 
 /**
  * Ready for Dave: one row per session that waits on Dave. The row shows the session's FIRST open,
@@ -54,6 +55,8 @@ export function ReadyForDave({
                     <span className="text-warn">{item.kind}</span> {item.text}
                   </p>
                   <p className="text-xs text-muted-foreground">
+                    <SessionLabel name={item.sessionName} shortId={item.shortId} />
+                    {' · '}
                     <button
                       type="button"
                       onClick={() => onSelect(item.sessionId)}

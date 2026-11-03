@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 
 import { chipWord, formatAgo } from './format';
 import type { SessionFilter } from './SessionCards';
+import { SessionLabel } from './SessionLabel';
 
 const COLUMNS = ['State', 'Name', 'Title', 'Lane', 'Plan', 'Ask', 'Ctx', 'Last seen'] as const;
 
@@ -104,6 +105,9 @@ function Row({
         </span>
       </td>
       <td className="px-3 py-2 align-top">
+        <span className="mb-0.5 block">
+          <SessionLabel name={card.sessionName} shortId={card.shortId} />
+        </span>
         <button
           type="button"
           data-testid="session-row-select"

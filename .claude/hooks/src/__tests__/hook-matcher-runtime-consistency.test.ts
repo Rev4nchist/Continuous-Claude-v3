@@ -189,4 +189,12 @@ describe('shell guards cover every shell-running tool (F07)', () => {
       expect(source, g).not.toMatch(/COMMAND_TOOLS\s*=\s*new Set/);
     }
   });
+
+  // dc-config-guard (2026-11-03): set_config_value can widen what the shell tools above may do.
+  it('every CONFIG_TOOLS name reaches dc-config-guard through a PreToolUse matcher', async () => {
+    const { CONFIG_TOOLS } = await import('../dc-config-guard.js');
+    expect(CONFIG_TOOLS.size).toBeGreaterThan(0);
+    const missing = [...CONFIG_TOOLS].filter((tool) => !guardsMatching(tool).has('dc-config-guard'));
+    expect(missing).toEqual([]);
+  });
 });

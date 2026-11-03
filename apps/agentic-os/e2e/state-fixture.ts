@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Client } from 'pg';
 
-import { E2E_STATE_DIR } from '../playwright.config';
+import { E2E_IDENTITY_DIR, E2E_STATE_DIR } from '../playwright.config';
 
 /**
  * Fixture state files for e2e/fleet.spec.ts.
@@ -21,6 +21,8 @@ import { E2E_STATE_DIR } from '../playwright.config';
  */
 
 export const STATE_DIR = E2E_STATE_DIR;
+/** The E2E server's identity folder (AGENTIC_OS_IDENTITY_DIR). Never the real ~/.claude/state/identity. */
+export const IDENTITY_DIR = E2E_IDENTITY_DIR;
 
 export type FixtureAsk = {
   kind: 'question' | 'approval' | 'decision' | 'block';
@@ -270,6 +272,64 @@ export function clearStateDir(): void {
   for (const name of readdirSync(STATE_DIR)) {
     rmSync(join(STATE_DIR, name), { recursive: true, force: true });
   }
+}
+
+// --- Identity files (the session name) ------------------------------------------------------------
+
+export type IdentityOptions = {
+  /** Any JSON value: the reader must accept only a non-empty string. */
+  name?: unknown;
+  /** The uuid INSIDE the file. The reader must ignore it: the file name is the identity. */
+  uuid?: string;
+  previous?: string | null;
+  cwd?: string;
+};
+
+/**
+ * Write `<sessionId>.json` into the E2E identity dir in the shape the hooks write
+ * (.claude/hooks/src/shared/session-identity.ts): {uuid, short, name, previous, cwd, endedAt,
+ * endReason, updatedAt}. Returns the path.
+ */
+export function writeIdentity(sessionId: string, options: IdentityOptions = {}): string {
+  const body = {
+    uuid: options.uuid ?? sessionId,
+    short: sessionId.slice(0, 8),
+    name: options.name === undefined ? null : options.name,
+    previous: options.previous ?? null,
+    cwd: options.cwd ?? 'C:\\Users\\e2e\\repo',
+    endedAt: null,
+    endReason: null,
+    updatedAt: new Date().toISOString(),
+  };
+  return writeIdentityRaw(`${sessionId}.json`, JSON.stringify(body, null, 2));
+}
+
+/** Write any text under any name in the E2E identity dir (corrupt JSON, an oversize file). */
+export function writeIdentityRaw(fileName: string, text: string): string {
+  mkdirSync(IDENTITY_DIR, { recursive: true });
+  const path = join(IDENTITY_DIR, fileName);
+  writeFileSync(path, text);
+  return path;
+}
+
+/** Make a DIRECTORY named `fileName` in the E2E identity dir (the reader must not read it as a file). */
+export function writeIdentityDir(fileName: string): string {
+  const path = join(IDENTITY_DIR, fileName);
+  mkdirSync(path, { recursive: true });
+  return path;
+}
+
+/** Remove EVERY entry in the E2E identity dir. The dir is private to the E2E server. */
+export function clearIdentityDir(): void {
+  mkdirSync(IDENTITY_DIR, { recursive: true });
+  for (const name of readdirSync(IDENTITY_DIR)) {
+    rmSync(join(IDENTITY_DIR, name), { recursive: true, force: true });
+  }
+}
+
+/** Remove the identity dir itself (the "no identity folder" case). clearIdentityDir() makes it again. */
+export function removeIdentityDir(): void {
+  rmSync(IDENTITY_DIR, { recursive: true, force: true });
 }
 
 /**
