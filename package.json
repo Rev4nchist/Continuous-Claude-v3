@@ -2,6 +2,7 @@
   "private": true,
   "scripts": {
     "test:scripts": "node --test scripts/harness-doctor.test.mjs scripts/scheduled/scheduled-health-check.test.mjs",
+    "test:trex": "node --test scripts/trex/**/*.test.mjs",
     "test:e2e": "npx playwright test",
     "test:e2e:headed": "npx playwright test --headed",
     "test:e2e:debug": "npx playwright test --debug",
@@ -11,6 +12,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
-    "playwright": "^1.58.2"
+    "playwright": "^1.58.2",
+    "yaml": "^2.9.1"
   }
 }
