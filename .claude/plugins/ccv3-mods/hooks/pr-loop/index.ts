@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { CheckpointAsk, PrWatch } from '../../types'
+import type { CheckpointAsk, PrWatch, SlotRow } from '../../types'
 import { SLASH } from '../pr-checkpoint/model'
 import {
   BACKOFF_MS,
@@ -40,6 +40,8 @@ import {
   watchLine,
 } from './model'
 import type { Alert, AlertCheckpoint, Probe, PrStatus, WatchDoc } from './model'
+import { queueHolds, registerSlot, slotCommand, slotFor, slotTick, withSlot } from './slot'
+import type { Streak } from './slot'
 
 /**
  * The same atom the Agentic OS module declares (same plugin and key, same default): the engine
@@ -116,8 +118,8 @@ const probe = async ($: EngineInterface, pr: number): Promise<Probe> => {
   }
 }
 
-const probeText = (pr: number, result: Probe): string =>
-  result.kind === 'ok' ? statusText(result.status) : `PR #${pr}: could not read the status (${result.text}).`
+const probeText = (pr: number, result: Probe, slot?: SlotRow | null): string =>
+  result.kind === 'ok' ? statusText(result.status, slot) : `PR #${pr}: could not read the status (${result.text}).`
 
 /**
  * Whether the PR author posted a waiver comment (isWaived): one `gh pr view` of its author and comments, kept per head after a hit.
@@ -250,9 +252,10 @@ const keepPending = async ($: EngineInterface, prior: PrWatch): Promise<void> =>
 const liveAlert = async ($: EngineInterface, alert: Alert, prior: PrWatch): Promise<Alert | null> => {
   const result = await probe($, alert.pr)
   if (result.kind !== 'ok') return alert
-  const live = refreshAlert(alert, result.status, await checkpointFor($, result.status))
-  if (!live) await resync($, prior, result.status)
-  return live
+  const fresh = refreshAlert(alert, result.status, await checkpointFor($, result.status))
+  if (!fresh) await resync($, prior, result.status)
+  // refreshAlert rebuilds the alert without its queue state: put it back, or the line tells the model to post.
+  return fresh ? withSlot($, fresh) : null
 }
 
 /**
@@ -348,7 +351,7 @@ const asking = async ($: EngineInterface, status: PrStatus, now: number): Promis
   const kept = queue.filter(one => one.pr !== status.pr || one.head === status.head)
   if (kept.length !== queue.length) await saveAsks($, kept)
   const record = readRecord(await $.store.get(`${RECORD_PREFIX}${status.pr}`))
-  const ask = askFor(record, status, now, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)))
+  const ask = askFor(record, status, now, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)), await queueHolds($, status.pr))
   if (!ask || kept.some(one => one.pr === ask.pr && one.kind === ask.kind && one.head === ask.head)) return
   // A waiver comment by the PR author quiets only the opening question. Round and Greptile questions still reach Dave.
   if (ask.kind !== 'opening' || !(await waivedFor($, status.pr, status.head))) await queueAsk($, ask)
@@ -395,7 +398,7 @@ const check = async ($: EngineInterface): Promise<void> => {
     }
     const settled = settle(watch, result.status, now, await checkpointFor($, result.status))
     results.set(watch.pr, settled.watch)
-    if (settled.alert) alerts.push({ alert: settled.alert, prior: watch })
+    if (settled.alert) alerts.push({ alert: await withSlot($, settled.alert), prior: watch })
     await asking($, result.status, now).catch(() => undefined)
   }
   const fresh = await loadDoc($)
@@ -417,12 +420,16 @@ const check = async ($: EngineInterface): Promise<void> => {
 }
 
 const arm = ($: EngineInterface): void => {
-  // One check at a time: a Land/No dialog can stay open longer than a period.
+  // One check at a time: a Land/No dialog can stay open longer than a period. The queue tick runs first, under the same flag, so the check
+  // reads the rows it just wrote. It runs before check() because check() returns at once on an empty watch list.
   let busy = false
+  const streak: Streak = { fails: 0 }
   $.clock.every(TICK_MS, () => {
     if (busy) return
     busy = true
-    void check($)
+    void slotTick($, streak)
+      .catch(() => undefined)
+      .then(() => check($))
       .catch(() => undefined)
       .finally(() => {
         busy = false
@@ -447,12 +454,13 @@ const watchCommand = async ($: EngineInterface, args: string): Promise<{ text: s
   const { pr, once } = parseArgs(args)
   if (args.trim() === '') {
     const list = (await loadDoc($)).prs
-    return { text: list.length ? `Watching:\n${list.map(one => `  ${watchLine(one)}`).join('\n')}` : 'No PRs watched.' }
+    const rows = await Promise.all(list.map(async one => `  ${watchLine(one, await slotFor($, one.pr))}`))
+    return { text: list.length ? `Watching:\n${rows.join('\n')}` : 'No PRs watched.' }
   }
   if (pr === null) return { text: USAGE }
   if (once || !(await interactive($))) {
     const note = once ? '' : 'This session is headless: checked once, nothing is watched.\n'
-    return { text: note + probeText(pr, await probe($, pr)) }
+    return { text: note + probeText(pr, await probe($, pr), await slotFor($, pr)) }
   }
   const refused = await addChecked($, pr)
   if (refused) return { text: refused }
@@ -605,6 +613,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
       description: 'Show the status of a PR; press Land to merge it when READY. Several numbers, or "ready", land the READY PRs in turn',
       argumentHint: '<pr> [<pr> ...] [--when-ready]  |  ready',
     })
+    await registerSlot($)
     await $.tool.register({
       name: 'pr_status',
       description:
@@ -661,6 +670,8 @@ export const prLoop = (on: On) => {
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'watch' }, ($, e) => watchCommand($, e.args)).catch(() => ({ text: '/watch failed.' }))
+
+  on('command.run', { command: 'slot' }, async ($, e) => slotCommand($, e, await interactive($))).catch(() => ({ text: '/slot failed. Nothing was changed.' }))
 
   on('command.run', { command: 'land' }, ($, e) => landCommandRun($, e.args)).catch(() => ({
     text: '/land failed. Nothing was landed.',

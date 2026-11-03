@@ -3,6 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { CheckpointAsk, CheckpointRecord, CheckpointResult, CheckpointView } from '../../types'
 import { isPrNumber, readRecord } from '../pr-loop/model'
+import { QUEUE_BANDS, slotAdd } from '../pr-loop/slot'
 import { DIAG_DIR } from '../shared/diag'
 import {
   APPLY_TIMEOUT_MS,
@@ -346,7 +347,25 @@ const applyRecord = async ($: EngineInterface, root: string, record: CheckpointR
   if (ran.code !== 0) return { stage: 'apply', text: lastLine(ran.err || ran.out) || `--apply exited ${ran.code}` }
   const applied: CheckpointRecord = { ...record, state: 'applied', appliedAt: await $.clock.now() }
   await $.store.set(`${RECORD_PREFIX}${record.pr}`, applied)
+  await enqueueApplied($, applied)
   return { stage: 'done', record: applied }
+}
+
+const isQueueBand = (band: unknown): band is string => typeof band === 'string' && QUEUE_BANDS.includes(band)
+
+/** A coderabbit or both record in band HIGH or CRITICAL joins the free-slot queue, which posts its review. A failed add never fails the apply. */
+const enqueueApplied = async ($: EngineInterface, record: CheckpointRecord): Promise<void> => {
+  if ((record.pathway !== 'coderabbit' && record.pathway !== 'both') || !isQueueBand(record.band)) return
+  await slotAdd($, { pr: record.pr, band: record.band, head: record.head, round: 1 }).catch(() => false)
+}
+
+/**
+ * A round Dave allowed puts the PR back in the queue (awaiting the fix push). True only when the add exited 0: then the notice says the queue
+ * posts. A record with no HIGH or CRITICAL band (an older record) is not queued and keeps the old notice. The head is the one the grant stores.
+ */
+const enqueueRound = async ($: EngineInterface, record: CheckpointRecord | null, round: number, head: string): Promise<boolean> => {
+  if (!record || !isQueueBand(record.band)) return false
+  return slotAdd($, { pr: record.pr, band: record.band, head, round }).catch(() => false)
 }
 
 /** --confirm then --apply, as the engine's two steps. Nothing is stored when --confirm refuses. */
@@ -372,6 +391,8 @@ const recordPathway = async (
     budget: printed.budget ?? a.result.budget,
     head: printed.head ?? a.result.head,
     decided_by: printed.decided_by ?? by,
+    // The router band, so the apply (and the retry of a refused apply) can queue the PR for the free CodeRabbit slot.
+    band: a.result.auto?.band ?? null,
     pr: a.pr,
     state: 'confirmed',
     session: await sessionId($),
@@ -538,9 +559,10 @@ const allowedRound = async ($: EngineInterface, pr: number, round: number): Prom
 const keptNotice = (pr: number, round: number, retained: string): string =>
   `PR checkpoint: Dave allowed round ${round} for #${pr}, but his decline of ${retained} stays. Do not request that review.`
 
-const askNotice = (ask: CheckpointAsk, answer: 'yes' | 'no'): string => {
+const askNotice = (ask: CheckpointAsk, answer: 'yes' | 'no', queued = false): string => {
   const round = ask.round ?? 1
   if (ask.kind === 'round') {
+    if (answer === 'yes' && queued) return `PR checkpoint: Dave allowed round ${round} for #${ask.pr}: the free-slot queue posts @coderabbitai review after the fix push. Do not post it.`
     return answer === 'yes'
       ? `PR checkpoint: Dave allowed round ${round} for #${ask.pr}: after the fix push, post one @coderabbitai review.`
       : `PR checkpoint: Dave declined round ${round} for #${ask.pr}. Do not request a review. Report the open findings to Dave.`
@@ -609,6 +631,7 @@ const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> =
     }
   }
   let retained: string | null = null
+  let queued = false
   if (ask.kind === 'round' && answer === 'yes') {
     // The same rule as the typed grant (D-a, Dave 11-01): only a round decline this Yes covers goes.
     const allowed = await allowedRound($, ask.pr, ask.round ?? 1)
@@ -619,6 +642,7 @@ const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> =
       const { declined: _declined, ...rest } = next
       next = rest as CheckpointRecord
     }
+    queued = retained === null && (await enqueueRound($, stored, allowed, ask.head))
   } else if (next) {
     if (ask.kind === 'opening') next = answer === 'yes' ? { ...next, opened: { head: ask.head, at: now } } : { ...next, declined: { kind: 'opening', round: 1, head: ask.head } }
     else if (ask.kind === 'round') next = { ...next, declined: { kind: 'round', round: ask.round ?? 1, head: ask.head } }
@@ -626,7 +650,7 @@ const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> =
   }
   if (next && next !== stored) await $.store.set(key, next)
   await saveAsks($, queue.slice(1))
-  await tellModel($, retained ? keptNotice(ask.pr, ask.round ?? 1, retained) : askNotice(ask, answer))
+  await tellModel($, retained ? keptNotice(ask.pr, ask.round ?? 1, retained) : askNotice(ask, answer, queued))
   await closeIfIdle($)
 }
 
@@ -691,8 +715,10 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
     await tellModel($, keptNotice(grant.pr, grant.round, retained))
     return { text: `PR #${grant.pr}: round ${grant.round} allowed. His decline of ${retained} stays.` }
   }
-  await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: stored.head, text: '', round: grant.round }, 'yes'))
-  return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, post one @coderabbitai review.` }
+  const queued = await enqueueRound($, stored, allowed, stored.head)
+  await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: stored.head, text: '', round: grant.round }, 'yes', queued))
+  const next = queued ? 'the free-slot queue posts @coderabbitai review' : 'post one @coderabbitai review'
+  return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, ${next}.` }
 }
 
 type CommandEvent = { args: string; origin: { kind: string } }

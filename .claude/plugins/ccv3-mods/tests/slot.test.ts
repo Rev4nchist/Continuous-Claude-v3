@@ -1,9 +1,11 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
+import type { On, RenderElement } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 
 import { TICKS } from './fixtures/slot-queue-ticks'
 import { askFor, reportLine, statusText, watchLine } from '../hooks/pr-loop/model'
 import type { Alert, PrStatus } from '../hooks/pr-loop/model'
-import { alertSlot, parseSlotArgs, parseTick, rowsText, slotLine, slotOf } from '../hooks/pr-loop/slot-model'
+import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotLine, slotOf } from '../hooks/pr-loop/slot-model'
 import type { CheckpointRecord, SlotRow } from '../types'
 
 // The free-slot queue, the pure part (W3). The model lines, the ask and the tick parser run on real inputs; no engine world is needed
@@ -15,6 +17,17 @@ import type { CheckpointRecord, SlotRow } from '../types'
 // P1  parseTick differs from what the CLI prints (the shared fixtures scripts/github/fixtures/slot-queue/tick-*.json)
 // P2  a /slot argument is read wrong: a typo posts or pays for the wrong PR
 // P3  the queue row text is wrong or hides the state
+// P4  the list parser reads what `list --json` prints
+// W4 (the wiring, one engine world per test):
+// M1  an idle session starts a slot-queue process every 5 minutes
+// M2  the tick's toasts are not delivered, or the mod rows are lost
+// M3  a /slot write from another origin, or a headless session
+// M4  a /slot verb is not wired to its CLI call
+// M5  a failing tick spams a toast every 5 minutes
+// F17 the tick keeps its clock in memory, so a late session misses the time-out
+// A1  the alert loses the queue after the re-probe, so the line tells the model to post
+// A2  the opening ask fires for a PR the queue holds
+// A3  a timed-out STALLED line is lost because the plain STALLED line went out first
 
 const fixture = (name: keyof typeof TICKS): string => TICKS[name]
 
@@ -224,5 +237,300 @@ describe('slot: the row text (P3)', () => {
     const watch = { pr: 31, state: 'LIMITED' as const, whenReady: false }
     expect(watchLine(watch)).toBe('#31 LIMITED')
     expect(watchLine(watch, row({ pr: 31 }))).toContain(slotLine(row({ pr: 31 })))
+  })
+})
+
+describe('slot: the list parser (P4)', () => {
+  const list = (rows: unknown[]) => JSON.stringify({ ok: true, rows, nextSlotInMin: 12 })
+  test('P4 a good list parses; finished rows are left out', () => {
+    const parsed = parseList(list([row({ pr: 1, state: 'done' }), row({ pr: 2 })]))
+    expect(parsed && parsed.ok ? parsed.rows.map(r => r.pr) : null).toEqual([2])
+  })
+  test('P4 a failure parses with its reason; any other text is null, never a throw', () => {
+    expect(parseList('{"ok":false,"reason":"slot-queue: bad state file"}')).toEqual({ ok: false, reason: 'slot-queue: bad state file' })
+    for (const text of ['', 'not json', '[]', '{"ok":true}', list([{ pr: 'x' }])]) expect(parseList(text), text).toBeNull()
+  })
+})
+
+// ---- the mod wiring: one engine world per test --------------------------------------------------------------------------------
+
+const SESSION = 'test-session'
+const KEY = `pr-watch:${SESSION}`
+const TICK = 300_000
+const NOW = 1_000_000
+const HOME = 'C:/home'
+const SCRIPT = `${HOME}/continuous-claude/scripts/github/slot-queue.mjs`
+const STATE_FILE = `${HOME}/.claude/state/coderabbit-slot.json`
+const ACTIVE = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'queued' }] })
+const DONE = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'done' }, { pr: 901, state: 'dropped' }] })
+
+type Reply = { code?: number; out: string }
+type LoopOpts = {
+  /** The state file text. null: the file is missing. undefined: the world has no fs.read handler at all. */
+  file?: string | null
+  /** What `tick` prints, in order; the last one repeats. */
+  ticks?: Reply[]
+  cli?: Partial<Record<'list' | 'decide' | 'drop', Reply>>
+  statuses?: Record<number, Record<string, unknown>>
+  store?: Record<string, unknown>
+}
+
+const loopWorld = (on: On, opts: LoopOpts = {}) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.env(on, { USERPROFILE: HOME })
+  const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, JSON.parse(JSON.stringify(e.value)))
+    return { value: undefined }
+  })
+  on('store.delete', (_$, e) => {
+    store.delete(e.key)
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }))
+  const seen = { slot: [] as { argv: string[]; script: string; cwd?: string }[], status: [] as number[], toasts: [] as string[], submits: [] as string[] }
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
+  on('session.id', () => ({ value: SESSION }))
+  on('session.root', () => ({ value: 'C:/r' }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.write', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('tool.register', (_$, e) => ({ value: { tool: `mcp__ccv3-mods__${e.name}` } }))
+  on('tool.list', () => ({ value: [] as never }))
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.toast', (_$, e) => {
+    seen.toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('prompt.submit', (_$, e) => {
+    seen.submits.push(e.text)
+    return { text: e.text }
+  })
+  const file = opts.file
+  if (file !== undefined) {
+    on('fs.read', (_$, e) => {
+      if (file === null || e.path.replace(/\\/g, '/') !== STATE_FILE) throw new Error(`ENOENT ${e.path}`)
+      return { value: file }
+    })
+  }
+  const ticks = [...(opts.ticks ?? [{ out: TICKS.queued }])]
+  const result = (reply: Reply) => ({ value: { exitCode: reply.code ?? 0, stdout: reply.out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  on('process.run', (_$, e) => {
+    const argv = [...e.argv]
+    if (argv.some(part => part.includes('slot-queue.mjs'))) {
+      seen.slot.push({ argv: argv.slice(2), script: argv[1] ?? '', cwd: (e.init as { cwd?: string } | undefined)?.cwd })
+      const verb = argv[2] ?? ''
+      if (verb === 'tick') return result((ticks.length > 1 ? ticks.shift() : ticks[0]) ?? { out: '' })
+      return result(opts.cli?.[verb as 'list' | 'decide' | 'drop'] ?? { out: '{"ok":true}' })
+    }
+    if (argv.some(part => part.includes('review-status.mjs'))) {
+      const pr = Number(argv.find(part => /^\d+$/.test(part)))
+      seen.status.push(pr)
+      const one = { ...STATUS, pr, ...(opts.statuses?.[pr] ?? {}) }
+      return result({ code: 1, out: JSON.stringify(one) })
+    }
+    return result({ out: '[]' })
+  })
+  return { clock, seen, store }
+}
+
+const startLoop = ($: Engine, isInteractive = true) => $.session.start({ cwd: 'C:/r', surface: isInteractive ? 'terminal' : null, isInteractive })
+const watched = (...prs: number[]) => ({ [KEY]: { prs: prs.map(pr => ({ pr, state: null, whenReady: false })), backoffUntil: 0, touched: NOW } })
+const command = ($: Engine, name: string, args: string, origin: { kind: string } = { kind: 'composer' }) =>
+  $.command.run({ command: name, args, origin: (origin.kind === 'plugin' ? { kind: 'plugin', name: 'other-mod' } : origin) as never, presentation: { isFullscreen: false, columns: 100 } })
+const ticksOf = (w: { seen: { slot: { argv: string[] }[] } }) => w.seen.slot.filter(run => run.argv[0] === 'tick')
+const FAIL: Reply = { code: 2, out: '{"ok":false,"reason":"slot-queue: bad state file"}' }
+const NO_ACTIONS: Reply = { out: JSON.stringify({ ...JSON.parse(TICKS.queued), actions: [] }) }
+
+describe('slot: the tick runs only for a live queue (M1)', () => {
+  for (const [name, file] of [['no state file', null], ['only finished items', DONE], ['an empty item list', '{"version":1,"items":[]}'], ['no fs.read handler at all', undefined]] as const) {
+    test(`M1 ${name}: three timer ticks start no slot-queue process, and the watcher still runs`, async ($, on) => {
+      const w = loopWorld(on, { file, store: watched(900) })
+      await startLoop($)
+      for (let i = 0; i < 3; i += 1) await w.clock.advance(TICK)
+      expect(w.seen.slot).toEqual([])
+      expect(w.seen.status.length).toBe(3)
+    })
+  }
+
+  test('M1 a live item runs `tick` from the home checkout, each period, even with an empty watch list', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    await w.clock.advance(TICK)
+    expect(ticksOf(w).map(run => run.argv)).toEqual([['tick', '--session', SESSION, '--json'], ['tick', '--session', SESSION, '--json']])
+    expect(w.seen.slot[0]!.script).toBe(SCRIPT)
+    expect(w.seen.slot[0]!.cwd).toBe(`${HOME}/continuous-claude`)
+    expect(w.seen.status).toEqual([])
+  })
+
+  test('M1 a state file that is not JSON still ticks, so the failure reaches Dave', async ($, on) => {
+    const w = loopWorld(on, { file: '{broken', ticks: [FAIL] })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(ticksOf(w).length).toBe(1)
+  })
+})
+
+describe('slot: the tick delivers (M2, M5, F17)', () => {
+  test('M2 each action of the tick is one toast with the CLI text', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }] })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.toasts).toEqual([JSON.parse(TICKS.ask).actions[0].text])
+  })
+
+  test('M2 a tick with no action gives no toast, and the rows reach /watch', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [NO_ACTIONS], store: watched(900) })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.toasts).toEqual([])
+    const listed = await command($, 'watch', '')
+    expect(listed.text ?? '').toContain('[queue: queued 1 of 1')
+  })
+
+  test('F17 a session that starts after the time-out toasts it at its first tick', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.timeout }] })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.toasts).toEqual([JSON.parse(TICKS.timeout).actions[0].text])
+    expect(w.seen.toasts[0]).toMatch(/\/slot pay 900/)
+  })
+
+  test('M5 two failed ticks in a row give one toast; a good tick between them resets the count', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [FAIL, NO_ACTIONS, FAIL, FAIL] })
+    await startLoop($)
+    for (let i = 0; i < 3; i += 1) await w.clock.advance(TICK)
+    expect(w.seen.toasts).toEqual([])
+    await w.clock.advance(TICK)
+    await w.clock.advance(TICK)
+    await w.clock.advance(TICK)
+    expect(w.seen.toasts.length).toBe(1)
+    expect(w.seen.toasts[0]).toContain('slot-queue: bad state file')
+    expect(w.seen.toasts[0]).toContain('/slot')
+  })
+
+  test('M5 a tick with no output at all is a failure too', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ code: 1, out: '' }] })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    await w.clock.advance(TICK)
+    expect(w.seen.toasts.length).toBe(1)
+  })
+})
+
+const LIST_OUT = JSON.stringify({ ok: true, rows: [row({ pr: 900 })], nextSlotInMin: 12 })
+
+describe('slot: /slot (M3, M4)', () => {
+  test('M4 list runs `list --json` and prints the rows; a bridge origin may list', async ($, on) => {
+    const w = loopWorld(on, { cli: { list: { out: LIST_OUT } } })
+    await startLoop($)
+    const ran = await command($, 'slot', '', { kind: 'bridge' })
+    expect(w.seen.slot.map(run => run.argv)).toEqual([['list', '--json']])
+    expect(ran.text ?? '').toContain('#900')
+  })
+
+  test('M4 a list the CLI cannot give says so', async ($, on) => {
+    loopWorld(on, { cli: { list: { code: 2, out: '' } } })
+    await startLoop($)
+    expect((await command($, 'slot', 'list')).text ?? '').toMatch(/could not/i)
+  })
+
+  test('M4 pay runs decide --kind pay and shows that it posted', async ($, on) => {
+    const w = loopWorld(on, { cli: { decide: { out: '{"ok":true,"verdict":"ALLOW","cost":2.75,"files":3,"posted":true}' } } })
+    await startLoop($)
+    const ran = await command($, 'slot', 'pay 5')
+    expect(w.seen.slot.map(run => run.argv)).toEqual([['decide', '--pr', '5', '--kind', 'pay', '--json']])
+    expect(ran.text ?? '').toMatch(/#5.*posted/i)
+  })
+
+  test('M4 pay answered ESCALATE shows the reasons and says nothing was posted', async ($, on) => {
+    loopWorld(on, { cli: { decide: { code: 3, out: '{"ok":false,"verdict":"ESCALATE","reasons":["over the day cap"],"posted":false}' } } })
+    await startLoop($)
+    const text = (await command($, 'slot', 'pay 5')).text ?? ''
+    expect(text).toContain('ESCALATE')
+    expect(text).toContain('over the day cap')
+    expect(text).toMatch(/nothing posted/i)
+  })
+
+  test('M4 wait, first and drop each run their CLI verb', async ($, on) => {
+    const w = loopWorld(on)
+    await startLoop($)
+    for (const args of ['wait #6', 'FIRST 7', 'drop 9']) await command($, 'slot', args)
+    expect(w.seen.slot.map(run => run.argv)).toEqual([
+      ['decide', '--pr', '6', '--kind', 'wait', '--json'],
+      ['decide', '--pr', '7', '--kind', 'first', '--json'],
+      ['drop', '--pr', '9', '--reason', 'dave', '--json'],
+    ])
+  })
+
+  test('M4 a typo runs nothing and shows the usage', async ($, on) => {
+    const w = loopWorld(on)
+    await startLoop($)
+    expect((await command($, 'slot', 'pya 5')).text ?? '').toMatch(/usage/i)
+    expect(w.seen.slot).toEqual([])
+  })
+
+  for (const origin of [{ kind: 'bridge' }, { kind: 'plugin' }]) {
+    test(`M3 a ${origin.kind} origin writes nothing`, async ($, on) => {
+      const w = loopWorld(on)
+      await startLoop($)
+      for (const args of ['pay 5', 'wait 5', 'first 5', 'drop 5']) expect((await command($, 'slot', args, origin)).text ?? '', args).toMatch(/Dave/)
+      expect(w.seen.slot).toEqual([])
+    })
+  }
+
+  test('M3 a headless session writes nothing even from a composer origin', async ($, on) => {
+    const w = loopWorld(on)
+    await startLoop($, false)
+    expect((await command($, 'slot', 'pay 5')).text ?? '').toMatch(/interactive|Dave/)
+    expect(w.seen.slot).toEqual([])
+  })
+})
+
+describe('slot: the alert and the ask see the queue (A1, A2)', () => {
+  const HEAD_A = 'a'.repeat(40)
+  const LIMITED = {
+    routedReviewed: false, coderabbitLimited: true, coderabbitRateLimited: true, coderabbitRetryMinutes: 40, coderabbitRounds: 1,
+    reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)'],
+  }
+  const seeded = { [KEY]: { prs: [{ pr: 900, state: 'PENDING', whenReady: false, head: HEAD_A, since: NOW - 60_000 }], backoffUntil: 0, touched: NOW } }
+
+  test('A1 without the queue the rate-limit line tells the model to post (control)', async ($, on) => {
+    const w = loopWorld(on, { file: null, store: seeded, statuses: { 900: LIMITED } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.submits.length).toBe(1)
+    expect(w.seen.submits[0]).toMatch(FORBIDDEN)
+  })
+
+  test('A1 a queued PR keeps the queue after the re-probe: the line says do not post', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [NO_ACTIONS], store: seeded, statuses: { 900: LIMITED } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.submits.length).toBe(1)
+    expect(w.seen.submits[0]).toMatch(NO_POST)
+    expect(w.seen.submits[0]).not.toMatch(FORBIDDEN)
+  })
+
+  const record = { pr: 900, state: 'applied', head: HEAD_A, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], decided_by: 'default', session: SESSION, appliedAt: NOW - 31 * 60_000 }
+  const QUIET = { routedReviewed: false, coderabbitRounds: 0, coderabbitRequests: 0, reasons: ['no CodeRabbit PR-bot review of the head commit'] }
+  const asksIn = (store: Map<string, unknown>) => ((store.get(`checkpoint:asks:${SESSION}`) ?? []) as { kind: string }[]).map(ask => ask.kind)
+
+  test('A2 without the queue the opening ask is queued 31 minutes after the apply (control)', async ($, on) => {
+    const w = loopWorld(on, { file: null, store: { ...seeded, 'checkpoint:pr:900': record }, statuses: { 900: QUIET } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(asksIn(w.store)).toEqual(['opening'])
+  })
+
+  test('A2 a PR the queue holds gets no opening ask', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [NO_ACTIONS], store: { ...seeded, 'checkpoint:pr:900': record }, statuses: { 900: QUIET } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(asksIn(w.store)).toEqual([])
   })
 })

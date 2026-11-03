@@ -48,6 +48,21 @@ export const parseTick = (stdout: string): SlotTick | null => {
   }
 }
 
+export type SlotList = { ok: true; rows: SlotRow[] } | { ok: false; reason: string }
+
+/** The `list --json` output: its live rows, or `{ ok: false, reason }`. Null when the text has not the shape. Never throws. */
+export const parseList = (stdout: string): SlotList | null => {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    if (!isObject(parsed)) return null
+    if (parsed.ok === false) return typeof parsed.reason === 'string' ? { ok: false, reason: parsed.reason } : null
+    if (parsed.ok !== true || !Array.isArray(parsed.rows) || !parsed.rows.every(isRow)) return null
+    return { ok: true, rows: parsed.rows.filter(row => !FINISHED.has(row.state)) }
+  } catch {
+    return null
+  }
+}
+
 export const slotOf = (rows: SlotRow[], pr: number): SlotRow | null => rows.find(row => row.pr === pr) ?? null
 
 /** The position and state a model line needs, or undefined when the queue does not hold the PR. */

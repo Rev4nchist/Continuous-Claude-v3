@@ -149,6 +149,8 @@ type Opts = {
   headAt?: Record<string, string>
   /** Replies for the first `gh pr view` calls, in order; later calls answer by `view` or the default. */
   viewSeq?: Reply[]
+  /** What slot-queue.mjs prints. Unset: a good `add`. */
+  slot?: Reply
 }
 
 type Run = { argv: string[]; stdin?: string; cwd?: string }
@@ -310,6 +312,9 @@ const world = (on: On, opts: Opts = {}) => {
       }
       if (argv.includes('--apply')) return done(opts.apply ?? OK)
       return done({ stdout: `PR checkpoint for ${HEAD.slice(0, 7)}: class infra, 7 file(s), 212 line(s)\nRecommended: coderabbit  budget 1+2\n` })
+    }
+    if (line.includes('slot-queue.mjs')) {
+      return done(opts.slot ?? { stdout: JSON.stringify({ ok: true, item: { state: argv.includes('--round') ? 'awaiting-fix' : 'opening' }, position: null, total: 0, nextSlotInMin: 0 }) })
     }
     return done(OK)
   })
@@ -1818,6 +1823,72 @@ describe('pr-checkpoint: asks from the watcher', () => {
     const pane = await mountPane($)
     expect(await keys(pane)).toEqual(['ask-no', 'ask-yes'])
   })
+
+  // T3: the round grants (the pane Yes, `/pathway grant`) put the PR back in the free-slot queue; the queue posts, so the notice says not to.
+  describe('the free-slot queue after a round grant (T3, F12)', () => {
+    const slotRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
+    const ADD_R4 = ['add', '--pr', '7', '--band', 'HIGH', '--head', HEAD, '--round', '4', '--escalated', '--session', SESSION, '--json']
+    const told = (w: { session: { appended: () => readonly { message: unknown }[] } }) => JSON.stringify(w.session.appended().map(row => row.message))
+    const QUEUE_NOTICE = 'the free-slot queue posts @coderabbitai review after the fix push. Do not post it.'
+    const OLD_NOTICE = 'after the fix push, post one @coderabbitai review.'
+    const banded = (over: Rec = {}) => ({ ...watchDoc(), 'checkpoint:pr:7': record({ band: 'HIGH', ...over }) })
+
+    test('T3 the pane Yes on a round ask runs add --round 4 --escalated on the record head, and the notice says the queue posts', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      await w.clock.advance(TICK)
+      const pane = await mountPane($)
+      await pane.press({ key: 'ask-yes' })
+      expect(slotRuns(w.seen)).toEqual([ADD_R4])
+      expect(told(w)).toContain(QUEUE_NOTICE)
+      expect(told(w)).not.toContain(OLD_NOTICE)
+      expect(counts(w.seen).comments).toEqual([])
+    })
+
+    test('T3 /pathway grant 7 4 runs the same add; the reply and the notice say the queue posts', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([ADD_R4])
+      expect(ran.text ?? '').toContain('the free-slot queue posts')
+      expect(ran.text ?? '').not.toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(QUEUE_NOTICE)
+    })
+
+    test('T3 a grant raised by a plugin runs no add', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      await slash($, 'grant 7 4', 'plugin')
+      expect(slotRuns(w.seen)).toEqual([])
+    })
+
+    test('T3 a record with no band (an older record) runs no add and keeps the old notice', async ($, on) => {
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([])
+      expect(ran.text ?? '').toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(OLD_NOTICE)
+    })
+
+    test('T3 a failed add gives one toast, keeps the old notice, and the grant stays stored', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, slot: { exitCode: 2, stdout: '{"ok":false,"reason":"slot-queue: bad state file"}' } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+      expect(w.seen.toasts.filter(text => text.includes('slot-queue: bad state file')).length).toBe(1)
+      expect(ran.text ?? '').toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(OLD_NOTICE)
+    })
+
+    test('T3 a grant that keeps an earlier decline runs no add', async ($, on) => {
+      const declined = { kind: 'opening', round: 1, head: HEAD }
+      const w = world(on, { store: banded({ declined }), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([])
+    })
+  })
 })
 
 // ---- review factory step A: auto-confirm and the mobile /pathway gap (Dave 2026-11-01) ------------------------------------------------
@@ -2193,5 +2264,60 @@ describe('pr-checkpoint: every /pathway leaves one log line', () => {
     const lines = logLines(written)
     expect(lines.length).toBe(1)
     expect(lines[0]!.outcome).toBe('error')
+  })
+})
+
+describe('pr-checkpoint: the apply puts the PR in the free-slot queue (T1)', () => {
+  const slotRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
+  const withBand = (band: string | null) => ({ json: { stdout: JSON.stringify(engineJson({ auto: { eligible: false, band, reason: 'a person decides' } })) } })
+  const ADD_HIGH = ['add', '--pr', '7', '--band', 'HIGH', '--head', HEAD, '--session', SESSION, '--json']
+
+  test('T1 a HIGH coderabbit apply runs add --band HIGH on the record head, stores the band, and toasts the queue line', async ($, on) => {
+    const { seen, store } = world(on, withBand('HIGH'))
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(slotRuns(seen)).toEqual([ADD_HIGH])
+    expect((store.get('checkpoint:pr:7') as Rec).band).toBe('HIGH')
+    expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(seen.toasts.some(text => text.includes('#7') && text.includes('free CodeRabbit slot') && text.includes('label review'))).toBe(true)
+  })
+
+  test('T1 a CRITICAL apply runs add --band CRITICAL', async ($, on) => {
+    const { seen } = world(on, withBand('CRITICAL'))
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(slotRuns(seen)).toEqual([[...ADD_HIGH.slice(0, 4), 'CRITICAL', ...ADD_HIGH.slice(5)]])
+  })
+
+  for (const [name, band] of [['MID', 'MID'], ['no band', null]] as const) {
+    test(`T1 a coderabbit apply in band ${name} runs no add`, async ($, on) => {
+      const { seen, store } = world(on, withBand(band))
+      const { pane } = await openPane($)
+      await pane.press({ key: 'opt-coderabbit' })
+      expect(slotRuns(seen)).toEqual([])
+      expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    })
+  }
+
+  test('T1 a none apply in a HIGH band runs no add', async ($, on) => {
+    const { seen } = world(on, withBand('HIGH'))
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-none' })
+    expect(slotRuns(seen)).toEqual([])
+  })
+
+  test('T1 an engine apply that refuses runs no add', async ($, on) => {
+    const { seen } = world(on, { ...withBand('HIGH'), apply: { exitCode: 1, stderr: 'the head moved' } })
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(slotRuns(seen)).toEqual([])
+  })
+
+  test('T1 a failed add never fails the apply: the record is applied and Dave gets one toast with the reason', async ($, on) => {
+    const { seen, store } = world(on, { ...withBand('HIGH'), slot: { exitCode: 2, stdout: '{"ok":false,"reason":"slot-queue: bad state file"}' } })
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(seen.toasts.filter(text => text.includes('slot-queue: bad state file')).length).toBe(1)
   })
 })
