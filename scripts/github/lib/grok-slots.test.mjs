@@ -286,6 +286,23 @@ test('release keeps the slot of an agent pid that still runs, and frees it when 
   assert.equal(freed.ok, true, 'it frees when the agent is gone');
 });
 
+// CodeRabbit CLI Minor on 5adf6c0. Breaks if the orphan release does not write childPid: an attach that never
+// reached the file leaves an entry with pid 0 and no childPid, which the next take prunes while the agent runs.
+test('an orphan release writes the agent pid even when attach did not persist it', async () => {
+  const file = tmpFile();
+  const c = clock();
+  const slot = await acquireGrokSlot({ file, max: 1, ttlMs: 1e9 }, { now: c.now, pidAlive: alive });
+  slot.attach(9003);
+  const [entry] = readActive(file);
+  const { childPid: _lost, ...withoutChild } = entry;
+  writeFileSync(file, JSON.stringify({ active: [withoutChild] })); // the attach write was lost
+  await slot.release();
+  const [e] = readActive(file);
+  assert.equal(e.childPid, 9003);
+  const next = await acquireGrokSlot({ file, max: 1, waitMs: 0 }, { now: c.now, sleep: c.sleep, pidAlive: (p) => p === 9003 || p === process.pid });
+  assert.equal(next.reason, 'busy', 'the running agent keeps its slot');
+});
+
 test('release removes the entry when the agent pid is gone', async () => {
   const file = tmpFile();
   const slot = await acquireGrokSlot({ file, max: 1 }, { pidAlive: (p) => p !== 9003 });

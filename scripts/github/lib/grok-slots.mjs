@@ -180,7 +180,7 @@ function makeSlot({ file, key, lockOpts, log, sleep, pidAlive, readFile, opts })
       try {
         const r = withLock(file, lockOpts, () => {
           const st = readState(file, readFile);
-          const active = orphan ? st.active.map((e) => (e.key === key ? { ...e, pid: 0 } : e)) : st.active.filter((e) => e.key !== key);
+          const active = orphan ? st.active.map((e) => (e.key === key ? { ...e, pid: 0, childPid } : e)) : st.active.filter((e) => e.key !== key);
           writeState(file, { ...st, active });
         });
         if (r?.ok !== false) return;

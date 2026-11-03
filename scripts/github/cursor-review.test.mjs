@@ -438,6 +438,14 @@ test('a good run exits 0, writes findings JSON and a summary, and logs start and
   assert.equal(h.cleaned.length, 1, 'the temp tree is removed');
 });
 
+// 2026-11-02: grok output speed halved under load (same ~40k output tokens at ~26 tok/s = ~1600 s), so 1500 s killed
+// healthy runs. Breaks if the default drops back below 2400 s.
+test('with no timeoutMs the agent gets the 2400 s default', async () => {
+  const h = harness({ opts: { timeoutMs: undefined } });
+  await runReview(h.opts, h.deps);
+  assert.equal(h.calls[0].timeoutMs, 2_400_000);
+});
+
 test('the agent gets --mode ask, --trust, json output and an explicit allowed model, never force or a key', async () => {
   const h = harness({ opts: { band: 'CRITICAL' } });
   await runReview(h.opts, h.deps);

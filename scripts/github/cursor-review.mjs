@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/github/cursor-review.mjs (--pr <n> | --range <base>..<head>) (--band MID|ELEVATED|HIGH|CRITICAL | --model <id>)
- *        [--timeout-sec 1500] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--remote fork] [--dry-run] [--keep-tree]
+ *        [--timeout-sec 2400] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--remote fork] [--dry-run] [--keep-tree]
  *
  * What it does:
  *   1. Checks the model. Only grok-4.7-high and grok-4.7-xhigh run. Auto, any id with "fast", an unknown id and a missing
@@ -14,7 +14,7 @@
  *   3. Builds a clean review tree: `git archive` of the head (no .git, no review docs, no old artifacts) plus PR.diff.
  *   4. Runs `cursor-agent -p --mode ask --trust --output-format json --model <m>` in that tree. On Windows it runs the agent's
  *      own node.exe on index.js (the way cursor-agent.ps1 does), not the .cmd or .ps1 wrapper, so the pid it holds is the agent.
- *      A time-out (default 1500 s: the bake-off max for grok-4.7-high was 904 s) stops that pid and its whole process tree.
+ *      A time-out (default 2400 s: grok output speed halved under load on 2026-11-02, so a ~40k-token answer took ~1600 s) stops that pid and its whole process tree.
  *      A machine-wide gate (lib/grok-slots.mjs) lets at most 2 runs go at once across all sessions; a run waits up to 60 min for a
  *      slot, and the time-out starts after it. CCV3_GROK_GATE=off skips the gate; CCV3_GROK_MAX_CONCURRENT changes the 2.
  *   5. Parses the answer (a final ```json block, else the Markdown headings Cursor writes) and writes, in .claude/cache/e2e/:
@@ -50,7 +50,7 @@ export const BAND_MODEL = { MID: 'grok-4.7-high', ELEVATED: 'grok-4.7-high', HIG
 export const WEEKLY_CAP = 300;
 export const WEEK_MS = 7 * 86_400_000;
 export const PER_REF_CAP = 8;
-export const DEFAULT_TIMEOUT_SEC = 1500;
+export const DEFAULT_TIMEOUT_SEC = 2400;
 export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const SEVERITIES = ['critical', 'major', 'minor', 'info'];
 /** Folders left out of the review tree: answers and old review output the model must not see. */
