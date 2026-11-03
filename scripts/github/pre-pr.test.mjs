@@ -1962,3 +1962,41 @@ test('P8: runPrePr reads the cap from the config, stamps cli-cap, and the built 
   assert.equal(hookVerdict(repo.dir).allow, true);
   assert.notEqual(cliCapOf(CONFIG), null, 'the shipped config sets a cap');
 });
+
+// ---------- zizmor advisory (one-week trial: it never fails pre-pr) ----------
+
+const harnessBody = (head) => `## Evidence\n\nProof type: harness\n\nRED: \`x\` @ ${'b'.repeat(40)}\n\`\`\`text\nred\n\`\`\`\n\nGREEN: \`x\` @ ${head}\n\`\`\`text\ngreen\n\`\`\`\n`;
+const ZIZMOR_OUT = JSON.stringify([{ ident: 'unpinned-uses', determinations: { severity: 'High' }, locations: [{ symbolic: { kind: 'Primary', key: { Local: { verbatim_path: '.github/workflows/a.yml' } } }, concrete: { location: { start_point: { row: 6, column: 0 } } } }] }]);
+
+test('Z-PP1: a workflow change adds one NOTE zizmor line with the counts, and exit 14 from zizmor does not fail the run', async () => {
+  // Breaks when: the advisory is not wired into runPrePr, or its exit code or findings are turned into a FAIL.
+  const repo = makeRepo({ files: { '.github/workflows/a.yml': 'name: a\n' } });
+  const calls = [];
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findZizmor: () => 'ZBIN', zizmorRun: (bin, args) => { calls.push([bin, ...args]); return { status: 14, stdout: ZIZMOR_OUT, stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.deepEqual(calls, [['ZBIN', '--offline', '--format', 'json', '.github/workflows/a.yml']]);
+  const step = result.results.find((r) => r.step === 'zizmor');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /1 High/);
+  assert.match(step.detail, /a\.yml:7/);
+});
+
+test('Z-PP2: no workflow change means no zizmor step and no zizmor run', async () => {
+  // Breaks when: the advisory runs on every branch.
+  const repo = makeRepo();
+  let ran = 0;
+  const { result } = await prePr(repo, { findZizmor: () => 'ZBIN', zizmorRun: () => { ran += 1; return { status: 0, stdout: '[]', stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(ran, 0);
+  assert.equal(result.results.some((r) => r.step === 'zizmor'), false);
+});
+
+test('Z-PP3: a workflow change with no zizmor binary passes with a skip note', async () => {
+  // Breaks when: a missing binary fails the run.
+  const repo = makeRepo({ files: { '.github/workflows/a.yml': 'name: a\n' } });
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findZizmor: () => null, zizmorRun: () => { throw new Error('must not run'); } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  const step = result.results.find((r) => r.step === 'zizmor');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /skipped/);
+});
