@@ -17,6 +17,7 @@ node_modules/
 *.log
 .env
 .env.local
+**/.trex/.env.build
 stats-cache.json
 
 # Session artifacts (per-session, not shareable)
