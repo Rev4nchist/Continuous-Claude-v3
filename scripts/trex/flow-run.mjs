@@ -1,5 +1,5 @@
 // Run flows against a started environment: start steps, step drivers, grading, retries, folding.
-// Attempt: { state: 'pass'|'fail'|'incomplete', reason?, incomplete?, checks, seconds }.
+// Attempt: { state: 'pass'|'fail'|'incomplete'|'blocked', reason?, blocker?, incomplete?, checks, seconds }.
 // Nothing here prints. Child output goes to files (writeStepOutput) and never into a reason code.
 
 import path from 'node:path';
@@ -12,6 +12,7 @@ import { writeStepOutput } from './report.mjs';
 
 const START_SEC = 300;
 const STAMP_DEST = '.claude/cache/pre-pr/stamp.json';
+const HOST_DRIVERS = new Set(['cli', 'mod-event']);
 const DRIVER_RUNNERS = Object.freeze({ cli: runCli, hook: runHook, 'mod-event': runModEvent });
 
 /** A start step failed. The attempt is Incomplete start_unreached, never a Fail. */
@@ -24,7 +25,8 @@ export class StartError extends Error {
 /**
  * Folds the attempts of one flow into { state, incomplete?, reason? }.
  * A pass beside any other attempt is Flaky. All pass is Pass. Any fail, with no pass, is Fail
- * (incomplete:true when a check was not attempted). Only incomplete attempts give Incomplete with the last reason.
+ * (incomplete:true when a check was not attempted). A blocked attempt, with no pass or fail, gives Blocked with its blocker.
+ * Only incomplete attempts give Incomplete with the last reason.
  */
 export function foldAttempts(attempts) {
   if (!Array.isArray(attempts) || attempts.length === 0) throw new TypeError('foldAttempts needs at least one attempt');
@@ -33,6 +35,8 @@ export function foldAttempts(attempts) {
   if (states.includes('fail')) {
     return attempts.some((a) => a.incomplete || a.state === 'incomplete') ? { state: 'fail', incomplete: true } : { state: 'fail' };
   }
+  const blocked = attempts.findLast((a) => a.state === 'blocked');
+  if (blocked) return { state: 'blocked', reason: blocked.reason, blocker: blocked.blocker };
   return { state: 'incomplete', reason: attempts.at(-1).reason ?? 'unknown' };
 }
 
@@ -112,8 +116,9 @@ async function runStep(flow, step, ctx, startedMs) {
   const left = secondsLeft(flow, startedMs, ctx.now().getTime());
   if (left <= 0) return { code: null, stdout: '', stderr: '', timedOut: true, files: {} };
   const runner = DRIVER_RUNNERS[flow.driver];
-  const hostCli = flow.profile === 'host' && flow.driver !== 'mod-event';
-  if (!runner || hostCli) return refused('driver_unsupported');
+  // A host flow may use only cli and mod-event; the driver checks the argv with hostActionOk before it spawns.
+  const hostHook = flow.profile === 'host' && !HOST_DRIVERS.has(flow.driver);
+  if (!runner || hostHook) return refused('driver_unsupported');
   return runner(step.action, driverCtx(flow, step, ctx, left));
 }
 
@@ -131,9 +136,11 @@ function skippedChecks(step, stepNo) {
   });
 }
 
+/** Runs the steps. Returns { checks, blocker }. A step result with a blocker ends the attempt: the rest are not attempted. */
 async function runSteps(flow, attemptNo, ctx) {
   const startedMs = ctx.now().getTime();
   const checks = [];
+  let blocker = null;
   let stopped = false;
   for (const [i, step] of flow.steps.entries()) {
     if (stopped) { checks.push(...skippedChecks(step, i + 1)); continue; }
@@ -141,9 +148,10 @@ async function runSteps(flow, attemptNo, ctx) {
     const files = ctx.writeStep({ flowId: flow.id, attempt: attemptNo, step: i + 1, result });
     const graded = gradeStep(step, i + 1, result, files);
     checks.push(...graded);
+    blocker ??= result.blocker ?? null;
     stopped = graded.some((c) => c.state !== 'passed');
   }
-  return checks;
+  return { checks, blocker };
 }
 
 // ---------- attempts and flows ----------
@@ -154,7 +162,8 @@ export async function runAttempt(flow, attemptNo, ctx) {
   const seconds = () => Math.round((ctx.now().getTime() - t0) / 1000);
   try {
     if (flow.profile !== 'host') await applyStart(flow, ctx.exec, ctx);
-    const checks = await runSteps(flow, attemptNo, ctx);
+    const { checks, blocker } = await runSteps(flow, attemptNo, ctx);
+    if (blocker) return { state: 'blocked', reason: blocker.stage, blocker, checks, seconds: seconds() };
     return { ...stateOfChecks(checks), checks, seconds: seconds() };
   } catch (err) {
     ctx.noteError?.({ flowId: flow.id, attempt: attemptNo, err });

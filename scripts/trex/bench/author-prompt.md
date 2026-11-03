@@ -23,6 +23,8 @@ Aim at the riskiest behaviour. Use the schema below with `mode: scripted`.
 
 {hostRules}
 
+A host flow may run only a `.ps1` that is already in this folder. Never write a `.ps1` file in your output.
+
 ## Schema
 
 ```yaml

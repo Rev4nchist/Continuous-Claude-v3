@@ -4,9 +4,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
+import { gradeCheck } from './checks.mjs';
+import { toStepResult } from './drivers/common.mjs';
 import {
-  archiveArgs, composeArgv, ensureImage, envDigests, isMerged, loopbackOffenders, lockHash, main, parseDigests,
-  planBuilds, prepareHost, projectName, removeByLabel, resolveDeps, startEnv, stopEnv, withEnv,
+  archiveArgs, composeArgv, ensureImage, envDigests, imageExists, imageTagsFor, isMerged, loopbackOffenders, lockHash, main,
+  parseDigests, planBuilds, prepareHost, projectName, removeByLabel, resolveDeps, startEnv, stopEnv, withEnv,
 } from './env.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,7 +30,8 @@ function makeGit({ blobs = {}, trees = {}, ancestor = 0 } = {}) {
     if (cmd === 'rev-parse') return revParse(rest.at(-1), blobs);
     if (cmd === 'show') return rest[0] in blobs ? ok(blobs[rest[0]]) : fail(`missing ${rest[0]}`);
     if (cmd === 'ls-tree') return lsTree(args, trees);
-    if (cmd === 'merge-base') return { status: ancestor, stdout: '', stderr: '' };
+    // `ancestor` is one exit status, or a function of the sha being checked.
+    if (cmd === 'merge-base') return { status: typeof ancestor === 'function' ? ancestor(rest[1]) : ancestor, stdout: '', stderr: '' };
     return fail('unexpected git call');
   };
   git.calls = calls;
@@ -179,7 +182,7 @@ function harness({ gitOpts = {}, dockerReply = () => null } = {}) {
     return { codeA: 0, codeB: 0, timedOut: false, stdoutB: '', stderrA: '', stderrB: '' };
   };
   const git = makeGit(gitOpts);
-  const deps = { git, docker, pipe, cwd: 'C:\\repo', sleep: async () => {}, mkdir: () => {}, exit: () => {} };
+  const deps = { git, docker, pipe, cwd: 'C:\\repo', sleep: async () => {}, mkdir: () => {}, exit: () => {}, exists: () => true, readdir: () => ['x'] };
   return { events, deps, git, dockerArgs: () => events.filter((e) => e.kind === 'docker').map((e) => e.args) };
 }
 
@@ -509,4 +512,153 @@ test('main: without --plan it refuses to run', async () => {
   const lines = [];
   const code = await main([], { ...h.deps, out: (l) => lines.push(l) });
   assert.equal(code, 2);
+});
+
+// ---------- Env.exec kill codes (H2) ----------
+
+/** Starts an env whose fake docker advances the clock by `seconds` on every exec and answers `reply`. */
+async function execAfter(seconds, reply, opts = {}) {
+  let now = 0;
+  const dockerReply = (args) => {
+    if (!args.includes('timeout')) return null;
+    now += seconds * 1000;
+    return reply;
+  };
+  const h = harness({ gitOpts: { trees: TREE, blobs: BLOBS }, dockerReply });
+  const env = await startEnv({ ...START, flows: [PLAIN_FLOW] }, { ...h.deps, clock: () => now });
+  return { env, res: await env.exec(['x'], { timeoutSec: 30, ...opts }) };
+}
+
+const KILLED = { code: 137, timedOut: false, stdout: '', stderr: '' };
+
+test('Env.exec: exit 137 after the full budget grades not_attempted/timeout, not a failed check', async () => {
+  // Breaks when exec returns the raw 137: the in-container `timeout -s KILL` fires before the CLI timer.
+  const { res } = await execAfter(30, KILLED);
+  assert.equal(res.timedOut, true);
+  assert.deepEqual(gradeCheck({ text: 'ok', exit: 0 }, toStepResult(res)), { state: 'not_attempted', reason: 'timeout' });
+});
+
+test('Env.exec: exit 124 after the full budget is a time-out too', async () => {
+  // Breaks when only 137 is mapped.
+  const { res } = await execAfter(31, { ...KILLED, code: 124 });
+  assert.equal(res.timedOut, true);
+});
+
+test('Env.exec: exit 137 before the budget is an OOM kill, counted on the env and reasoned oom_killed', async () => {
+  // Breaks when an early 137 is graded as an ordinary failed check or loses its reason.
+  const { env, res } = await execAfter(5, KILLED);
+  assert.equal(res.timedOut, false);
+  assert.equal(res.reason, 'oom_killed');
+  assert.equal(res.code, 137);
+  assert.equal(env.oomHits, 1);
+});
+
+test('Env.exec: an ordinary non-zero exit passes through untouched', async () => {
+  // Breaks when the kill mapping catches every non-zero code.
+  const { env, res } = await execAfter(40, { ...KILLED, code: 1 });
+  assert.deepEqual([res.code, res.timedOut, res.reason, env.oomHits], [1, false, undefined, 0]);
+});
+
+// ---------- tar in cpOut (H1) ----------
+
+test('Env.cpOut: extracts with the resolved tar and reports ok:false when nothing landed', async () => {
+  // Breaks when cpOut spawns bare tar again, or trusts exit codes when tar extracted nothing.
+  const h = harness({ gitOpts: { trees: TREE, blobs: BLOBS } });
+  const env = await startEnv({ ...START, flows: [PLAIN_FLOW] }, { ...h.deps, env: { TAR_BIN: 'Z:\\tar.exe' } });
+  assert.deepEqual(await env.cpOut('/trex-out', 'C:\\ev\\out'), { ok: true });
+  assert.equal(h.events.filter((e) => e.kind === 'pipe').at(-1).b.cmd, 'Z:\\tar.exe');
+  const empty = await startEnv({ ...START, flows: [PLAIN_FLOW] }, { ...h.deps, readdir: () => [] });
+  assert.deepEqual(await empty.cpOut('/trex-out', 'C:\\ev\\out'), { ok: false });
+});
+
+// ---------- host flows must be merged (M-host-flows) ----------
+
+test('prepareHost: an unmerged flowsSha is skipped host_unmerged and nothing is extracted', async () => {
+  // Breaks when only head is checked: a PR could then run host commands from flows it wrote.
+  const h = harness({ gitOpts: { ancestor: (sha) => (sha === FLOWS ? 1 : 0), trees: TREE } });
+  const r = await prepareHost({ head: HEAD, flowsSha: FLOWS, imageSha: IMAGE_SHA, evidenceDir: 'C:\\ev' }, h.deps);
+  assert.deepEqual(r.skipped, { reason: 'host_unmerged' });
+  assert.equal(h.events.length, 0);
+});
+
+test('prepareHost: an unmerged imageSha is skipped host_unmerged', async () => {
+  // Breaks when imageSha is not checked.
+  const h = harness({ gitOpts: { ancestor: (sha) => (sha === IMAGE_SHA ? 1 : 0), trees: TREE } });
+  const r = await prepareHost({ head: HEAD, flowsSha: FLOWS, imageSha: IMAGE_SHA, evidenceDir: 'C:\\ev' }, h.deps);
+  assert.deepEqual(r.skipped, { reason: 'host_unmerged' });
+  assert.equal(h.events.length, 0);
+});
+
+test('prepareHost: head, flowsSha and imageSha all merged proceeds', async () => {
+  // Breaks when the new check rejects a fully merged set.
+  const h = harness({ gitOpts: { ancestor: 0, trees: TREE } });
+  const r = await prepareHost({ head: HEAD, flowsSha: FLOWS, imageSha: IMAGE_SHA, evidenceDir: 'C:\\ev' }, h.deps);
+  assert.equal(r.skipped, undefined);
+  const asked = h.git.calls.filter((c) => c[0] === 'merge-base').map((c) => c[2]);
+  assert.deepEqual(asked, [HEAD, FLOWS, IMAGE_SHA]);
+});
+
+// ---------- build command (M-build) ----------
+
+const NO_IMAGE = (args) => (args[0] === 'image' ? { code: 1, stdout: '', stderr: 'none', timedOut: false } : null);
+const buildHarness = () => harness({ gitOpts: { blobs: IMG_BLOBS, trees: IMG_TREES }, dockerReply: NO_IMAGE });
+const BUILD_ARGS = ['--build', '--heads', HEAD, '--image-sha', IMAGE_SHA];
+
+test('imageTagsFor: gives the tag ensureImage would use, one per head', () => {
+  // Breaks when the tag formula differs from ensureImage, so bench preflight checks the wrong tag.
+  const h = buildHarness();
+  assert.deepEqual(imageTagsFor(h.git, [HEAD, HEAD], IMAGE_SHA), Array(2).fill(`trex:${lockHash(h.git, HEAD, IMAGE_SHA)}`));
+});
+
+test('imageExists: true only when docker image inspect exits 0', async () => {
+  // Breaks when the exit code is ignored.
+  const yes = harness();
+  assert.equal(await imageExists('trex:abc', yes.deps), true);
+  assert.deepEqual(yes.dockerArgs(), [['image', 'inspect', 'trex:abc']]);
+  assert.equal(await imageExists('trex:abc', buildHarness().deps), false);
+});
+
+test('main --build alone prints the plan, refuses, and builds nothing', async () => {
+  // Breaks when --build runs without a plan or --yes.
+  const h = buildHarness();
+  const lines = [];
+  const code = await main(BUILD_ARGS, { ...h.deps, out: (l) => lines.push(l) });
+  assert.equal(code, 2);
+  assert.match(lines.join('\n'), /1 of 1 images? to build/);
+  assert.ok(!h.dockerArgs().some((a) => a[0] === 'build'));
+});
+
+test('main --plan --build prints the plan first, then builds and prints each tag with seconds', async () => {
+  // Breaks when the build runs before the plan is printed, or when no tag line is printed.
+  const h = buildHarness();
+  const lines = [];
+  const code = await main([...BUILD_ARGS, '--plan'], { ...h.deps, out: (l) => lines.push(l) });
+  assert.equal(code, 0);
+  assert.ok(h.dockerArgs().some((a) => a[0] === 'build'));
+  const plan = lines.findIndex((l) => l.startsWith('trex plan:'));
+  const built = lines.findIndex((l) => /^trex:[0-9a-f]{12} (built|present) \d+ s$/.test(l));
+  assert.ok(plan >= 0 && built > plan, lines.join('\n'));
+});
+
+test('main --build --yes builds without --plan', async () => {
+  // Breaks when --yes is not accepted.
+  const h = buildHarness();
+  const code = await main([...BUILD_ARGS, '--yes'], { ...h.deps, out: () => {} });
+  assert.equal(code, 0);
+  assert.ok(h.dockerArgs().some((a) => a[0] === 'build'));
+});
+
+// ---------- git child env (L-git-env) ----------
+
+test('resolveDeps: the default git does not pass ANTHROPIC_API_KEY to the git child', () => {
+  // Breaks when resolveDeps goes back to the pre-pr makeGit, which passes the whole env.
+  process.env.ANTHROPIC_API_KEY = 'sk-test-secret-xyz';
+  try {
+    const root = path.resolve(here, '..', '..');
+    const r = resolveDeps({ cwd: root }).git(['-c', 'alias.showkey=!echo key=$ANTHROPIC_API_KEY', 'showkey']);
+    assert.equal(r.status, 0);
+    assert.ok(!r.stdout.includes('sk-test-secret-xyz'));
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
 });

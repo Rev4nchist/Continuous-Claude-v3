@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { dockerBin, makePidRecorder, pipeChildren, runChild } from './proc.mjs';
+import { dockerBin, makePidRecorder, pipeChildren, processStartMs, runChild } from './proc.mjs';
 
 const NODE = 'node'; // resolveSpawn maps "node" to the running binary
 const killChild = (child) => child.kill(); // the real killTree runs a 5 s PowerShell query on Windows, so tests inject this
@@ -131,7 +131,7 @@ test('makePidRecorder: records pids and live() keeps only the running ones', () 
   const rec = makePidRecorder(file, { alive: (pid) => pid === 22 });
   rec.onSpawn(11);
   rec.onSpawn(22);
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).pids, [11, 22]);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).pids.map((e) => e.pid), [11, 22]);
   assert.deepEqual(rec.live(), [22]);
 });
 
@@ -139,4 +139,41 @@ test('makePidRecorder: live() is empty when the file is missing', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'trex-pids-'));
   const rec = makePidRecorder(path.join(dir, 'none.json'), { alive: () => true });
   assert.deepEqual(rec.live(), []);
+});
+
+test('makePidRecorder: a child that exits is removed from the file (M-pids; break: never remove on close)', async () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'trex-pids-')), 'pids.json');
+  const rec = makePidRecorder(file, { alive: () => true });
+  const seen = [];
+  const onSpawn = (pid) => { rec.onSpawn(pid); seen.push(readFileSync(file, 'utf8')); };
+  await runChild(NODE, ['-e', 'process.exit(0)'], { onSpawn, onExit: rec.onExit }, { killer: killChild });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).pids, []);
+  assert.equal(JSON.parse(seen[0]).pids.length, 1, 'the pid was recorded while the child ran');
+});
+
+test('makePidRecorder: liveOwned drops a live pid whose start time does not match the record (pid reuse)', () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'trex-pids-')), 'pids.json');
+  const starts = { 11: 1_000_000, 22: 9_000_000 };
+  const rec = makePidRecorder(file, { alive: () => true, processStart: (pid) => starts[pid], now: () => 1_000_500 });
+  rec.onSpawn(11);
+  rec.onSpawn(22);
+  assert.deepEqual(rec.liveOwned(), [11]);
+  assert.deepEqual(rec.live(), [11, 22], 'live() only checks that the pid runs');
+});
+
+test('makePidRecorder: liveOwned drops a pid whose start time is unknown, and one that is dead', () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'trex-pids-')), 'pids.json');
+  const rec = makePidRecorder(file, { alive: (pid) => pid !== 33, processStart: (pid) => (pid === 44 ? null : 1_000_000), now: () => 1_000_000 });
+  rec.onSpawn(33);
+  rec.onSpawn(44);
+  rec.onSpawn(55);
+  assert.deepEqual(rec.liveOwned(), [55]);
+});
+
+test('processStartMs reads the PowerShell ISO time on win32 and the ps time elsewhere, and gives null on failure', () => {
+  const ok = (stdout) => () => ({ status: 0, stdout });
+  assert.equal(processStartMs(7, { platform: 'win32', run: ok('2026-11-02T12:00:00.0000000Z') }), Date.UTC(2026, 10, 2, 12));
+  assert.equal(processStartMs(7, { platform: 'linux', run: ok('Mon Nov  2 12:00:00 2026') }), new Date(2026, 10, 2, 12).getTime());
+  assert.equal(processStartMs(7, { platform: 'win32', run: () => ({ status: 1, stdout: '' }) }), null);
+  assert.equal(processStartMs(0, { run: ok('x') }), null);
 });

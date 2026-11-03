@@ -6,8 +6,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import os from 'node:os';
 import path from 'node:path';
 import {
-  BENCH_CAP, GROUPS, authorGroup, benchRuns, freeze, hostFlowDigest, leakScan, lintFlow, main, mapNegatives, parseAuthorOutput,
+  BENCH_CAP, GROUPS, authorGroup, benchRuns, blobAt, freeze, hostFlowDigest, leakScan, lintFlow, main, mapNegatives, parseAuthorOutput,
 } from './author.mjs';
+import { makeGit } from '../../github/pre-pr.mjs';
 
 const FIX = 'f0b67364aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const CHANGED = ['scripts/github/pre-pr.mjs', '.claude/hooks/src/pre-pr-gate.ts'];
@@ -159,9 +160,19 @@ test('lintFlow rejects a fixture the group folder does not hold', () => {
   assert.deepEqual(lintFlow(flowYaml(), CHANGED, { files: ['gate.yaml', 'fixtures/payload.json'] }), []);
 });
 
+const treeHas = { treeHas: (p) => p === 'scripts/land-pr.ps1' || p === 'scripts/x.ps1' };
+
 test('lintFlow allows the two host shapes only', () => {
   assert.deepEqual(lintFlow(hostYaml('mod-event', '{test: brief-hook}'), CHANGED), []);
-  assert.deepEqual(lintFlow(hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/land-pr.ps1]}'), CHANGED), []);
+  assert.deepEqual(lintFlow(hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/land-pr.ps1]}'), CHANGED, treeHas), []);
+});
+
+test('lintFlow refuses a host .ps1 that is not in the tree at the group head, or lives under the flows dir', () => {
+  const yaml = hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/land-pr.ps1]}');
+  assert.ok(lintFlow(yaml, CHANGED).some((m) => /host/i.test(m) && /does not exist/.test(m)), 'no treeHas given');
+  assert.ok(lintFlow(yaml, CHANGED, { treeHas: () => false }).some((m) => /does not exist/.test(m)));
+  const own = hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/trex/bench/flows/S15/run.ps1]}');
+  assert.ok(lintFlow(own, CHANGED, { treeHas: () => true }).some((m) => /host/i.test(m) && /flows/.test(m)));
 });
 
 test('lintFlow rejects every other host argv', () => {
@@ -175,7 +186,7 @@ test('lintFlow rejects every other host argv', () => {
     '{cmd: [pwsh, -NoProfile, -File, scripts/x.ps1], env: {A: b}}',
     '{cmd: [pwsh, -NoProfile, -File, scripts/x.ps1], stdin: hi}',
   ];
-  for (const action of bad) assert.ok(lintFlow(hostYaml('cli', action), CHANGED).some((m) => /host/i.test(m)), `host argv passed: ${action}`);
+  for (const action of bad) assert.ok(lintFlow(hostYaml('cli', action), CHANGED, treeHas).some((m) => /host/i.test(m)), `host argv passed: ${action}`);
   assert.ok(lintFlow(hostYaml('mod-event', '{test: -rf}'), CHANGED).some((m) => /host/i.test(m)));
 });
 
@@ -241,10 +252,15 @@ test('mapNegatives throws when git cannot diff the negative', () => {
 // ---------- freeze ----------
 
 const TREE = 'treehash1111';
+// git ls-tree -z <head> -- <path>: a blob line when blobs holds "<head>:<path>", else nothing.
+const lsBlob = (args, blobs) => {
+  const blob = blobs[`${args[2]}:${args[4]}`];
+  return { status: 0, stdout: blob ? `100644 blob ${blob}\t${args[4]}\0` : '', stderr: '' };
+};
 const FLOWS_DIR = 'scripts/trex/bench/flows';
 function freezeSetup(t, over = {}) {
   const root = tmp(t);
-  const files = { [`${FLOWS_DIR}/S1/a.yaml`]: hostYaml('mod-event', '{test: brief-hook}'), [`${FLOWS_DIR}/S8/b.yaml`]: flowYaml().replace('gate-blocks-inline-body', 'second-flow-here') };
+  const files = { [`${FLOWS_DIR}/S1/a.yaml`]: over.s1Flow ?? hostYaml('mod-event', '{test: brief-hook}'), [`${FLOWS_DIR}/S8/b.yaml`]: flowYaml().replace('gate-blocks-inline-body', 'second-flow-here') };
   const calls = [];
   const git = (args) => {
     calls.push(args.join(' '));
@@ -253,6 +269,7 @@ function freezeSetup(t, over = {}) {
     if (k.startsWith('rev-parse --verify')) return { status: 0, stdout: 'abc123\n', stderr: '' };
     if (k === `rev-parse abc123:${FLOWS_DIR}`) return { status: 0, stdout: `${TREE}\n`, stderr: '' };
     if (k === `rev-parse HEAD:${FLOWS_DIR}`) return { status: 0, stdout: `${over.headTree ?? TREE}\n`, stderr: '' };
+    if (args[0] === 'ls-tree' && !args.includes('-r')) return lsBlob(args, over.blobs ?? {});
     if (args[0] === 'ls-tree') return { status: 0, stdout: Object.keys(files).filter((f) => f.startsWith(`${args.at(-1)}/`)).join('\0'), stderr: '' };
     if (args[0] === 'show') return { status: 0, stdout: files[args[1].split(':')[1]] ?? '', stderr: '' };
     if (args[0] === 'diff') return { status: 0, stdout: 'x.md\n', stderr: '' };
@@ -275,6 +292,32 @@ test('hostFlowDigest changes when a host flow changes and ignores container flow
   const edit = (re, from, to) => (args) => { const r = s.git(args); return args[0] === 'show' && re.test(args[1]) ? { ...r, stdout: r.stdout.replace(from, to) } : r; };
   assert.notEqual(hostFlowDigest(edit(/a\.yaml/, 'brief-hook', 'other-hook'), 'abc123', o), s.digest);
   assert.equal(hostFlowDigest(edit(/b\.yaml/, 'gate blocks the call', 'renamed check'), 'abc123', o), s.digest);
+});
+
+const PS1_FLOW = hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/land.ps1]}');
+const BLOB_A = 'a'.repeat(40);
+const BLOB_B = 'b'.repeat(40);
+
+test('hostFlowDigest covers the blob id of a host .ps1 at the group head', (t) => {
+  const o = { flowsDir: FLOWS_DIR, groups: ['S1', 'S8'] };
+  const a = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: { '23b62e5d:scripts/land.ps1': BLOB_A } });
+  const b = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: { '23b62e5d:scripts/land.ps1': BLOB_B } });
+  assert.notEqual(hostFlowDigest(a.git, 'abc123', o), hostFlowDigest(b.git, 'abc123', o));
+  assert.equal(hostFlowDigest(a.git, 'abc123', o), hostFlowDigest(a.git, 'abc123', o));
+});
+
+test('hostFlowDigest throws when a referenced .ps1 is not a file at the group head', (t) => {
+  const s = freezeSetup(t, { s1Flow: PS1_FLOW, digest: 'f'.repeat(64) });
+  assert.throws(() => hostFlowDigest(s.git, 'abc123', { flowsDir: FLOWS_DIR, groups: ['S1'] }), /scripts\/land\.ps1/);
+});
+
+const MARKER_ERR = 'host-flow review marker missing or stale; ask Dave to review with --host-digest';
+
+test('freeze names neither the digest nor the marker JSON when the marker is missing or stale', (t) => {
+  for (const over of [{ noMarker: true }, { digest: 'f'.repeat(64) }]) {
+    const s = freezeSetup(t, over);
+    assert.throws(() => freeze('abc123', s.opts, { git: s.git }), (e) => e.message === MARKER_ERR, JSON.stringify(Object.keys(over)));
+  }
 });
 
 test('freeze refuses a dirty flows dir', (t) => {
@@ -555,6 +598,55 @@ test('the group table matches the spec', () => {
   assert.equal(GROUPS.S1.range, 'beb9d5ef..23b62e5d');
 });
 
+// ---------- host .ps1 at the group head ----------
+
+const HOST_ANSWER = answer([['host.yaml', hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/land.ps1]}')]], { flows: [{ id: 'host-flow-one', file: 'host.yaml', risk: 'r' }], cannotVerify: [] });
+const headGit = (present) => gitFrom([
+  [/^log -1 --format=%s/, () => ({ status: 0, stdout: 'fix: something unrelated to any file\n' })],
+  [/^ls-tree -z h -- (.+)$/, (m) => ({ status: 0, stdout: present ? `100644 blob ${BLOB_A}\t${m[1]}\0` : '' })],
+]);
+
+test('authorGroup accepts a host .ps1 that exists at the group head and refuses one that does not', async (t) => {
+  const run = () => ({ status: 0, stdout: resultLine(HOST_ANSWER), stderr: '', timedOut: false });
+  const yes = authorSetup(t, { run, deps: { git: headGit(true) } });
+  const ok = await authorGroup('S15', yes.opts, yes.deps);
+  assert.equal(ok.exit, 0, ok.problems.join('; '));
+  const no = authorSetup(t, { run, deps: { git: headGit(false) } });
+  const refused = await authorGroup('S15', no.opts, no.deps);
+  assert.equal(refused.exit, 1);
+  assert.ok(refused.problems.some((p) => /scripts\/land\.ps1/.test(p) && /does not exist/.test(p)));
+  assert.ok(!existsSync(path.join(no.root, 'scripts/trex/bench/flows/S15')));
+});
+
+// ---------- budget race ----------
+
+test('two concurrent authorGroup calls at 17 bench runs: exactly one reserves', async (t) => {
+  const s = authorSetup(t, { ledger: `${startLines(17, 'trex-S1')}\n` });
+  const [a, b] = await Promise.all([authorGroup('S18', s.opts, s.deps), authorGroup('S2', s.opts, s.deps)]);
+  assert.deepEqual([a.exit, b.exit].sort(), [0, 3], `${a.problems.join(';')} | ${b.problems.join(';')}`);
+  assert.equal(s.state.runs.length, 1);
+  assert.equal(benchRuns(s.ledger).used, BENCH_CAP);
+  assert.ok(!existsSync(`${s.ledger}.trex-bench.lock`), 'the bench lock is released');
+});
+
+test('two concurrent authorGroup calls for one group: exactly one reserves (2-per-group rule)', async (t) => {
+  const s = authorSetup(t);
+  const [a, b] = await Promise.all([authorGroup('S18', s.opts, s.deps), authorGroup('S18', s.opts, s.deps)]);
+  assert.deepEqual([a.exit, b.exit].sort(), [0, 2]);
+  assert.equal(s.state.runs.length, 1);
+  assert.equal(ledgerLines(s.ledger).filter((l) => l.phase === 'start').length, 1);
+});
+
+test('authorGroup fails without a ledger line when another session holds the bench lock', async (t) => {
+  const s = authorSetup(t);
+  writeFileSync(`${s.ledger}.trex-bench.lock`, `${process.pid} held-by-test`);
+  const r = await authorGroup('S18', { ...s.opts, lockWaitMs: 50 }, s.deps);
+  assert.equal(r.exit, 1);
+  assert.match(r.problems.join(' '), /lock/);
+  assert.equal(s.state.runs.length, 0);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+});
+
 // ---------- CLI ----------
 
 const cli = (s, argv) => {
@@ -587,4 +679,31 @@ test('main refuses a command line with no action or an unknown flag', async (t) 
   const s = authorSetup(t);
   assert.equal((await cli(s, [])).code, 2);
   assert.equal((await cli(s, ['--group', 'S18', '--bogus'])).code, 2);
+});
+
+test('main refuses the --ledger flag and writes nothing to that path', async (t) => {
+  const s = authorSetup(t);
+  const other = path.join(s.root, 'other-ledger.jsonl');
+  const r = await cli(s, ['--group', 'S18', '--dry-run', '--ledger', other]);
+  assert.equal(r.code, 2, r.text);
+  assert.match(r.text, /--ledger/);
+  assert.equal(s.state.prepared, 0, 'nothing ran');
+  assert.ok(!existsSync(other));
+});
+
+// ---------- blobAt against real git ----------
+
+test('blobAt reads the blob id of a file at a commit with real git, and null for a folder or a missing path', (t) => {
+  const dir = tmp(t);
+  const git = makeGit(dir);
+  const run = (...args) => assert.equal(git(args).status, 0, args.join(' '));
+  run('init', '-q');
+  put(dir, 'scripts/land.ps1', 'Write-Output hi\n');
+  run('add', '.');
+  run('-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'one');
+  const expected = git(['hash-object', 'scripts/land.ps1']).stdout.trim();
+  assert.equal(blobAt(git, 'HEAD', 'scripts/land.ps1'), expected);
+  assert.equal(blobAt(git, 'HEAD', 'scripts'), null);
+  assert.equal(blobAt(git, 'HEAD', 'scripts/gone.ps1'), null);
+  assert.equal(blobAt(git, 'nosuchrev', 'scripts/land.ps1'), null);
 });

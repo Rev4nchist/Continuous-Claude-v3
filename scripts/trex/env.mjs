@@ -7,16 +7,18 @@
 // Every docker, git and tar call goes through `deps`, so tests run without Docker.
 //
 // CLI: node scripts/trex/env.mjs --plan [--heads a,b] [--image-sha X] [--est-sec N]
+//      node scripts/trex/env.mjs --build [--plan|--yes] [--heads a,b] [--image-sha X] [--evidence dir]
 // --plan prints how many images would be built and the estimated seconds. It never builds.
+// --build prints that plan, then builds the image of each head. It refuses without --plan or --yes.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { makeGit } from '../github/pre-pr.mjs';
 import {
-  DEFAULT_FLOWS_DIR, FLOW_SETS, IMAGE_SETS, archiveArgs, archiveInto, extractGrading, listGrading,
+  DEFAULT_FLOWS_DIR, FLOW_SETS, IMAGE_SETS, archiveArgs, archiveInto, extractGrading, listGrading, tarBin,
 } from './base.mjs';
+import { makeTrexGit } from './lib/git.mjs';
 import { dockerBin, pipeChildren, runChild } from './lib/proc.mjs';
 import { stripEnv } from './lib/strip-env.mjs';
 
@@ -52,11 +54,12 @@ export function resolveDeps(deps = {}) {
   return {
     cwd,
     bin,
-    git: makeGit(cwd),
+    git: makeTrexGit(cwd),
     docker: (args, opts = {}) => runChild(bin, args, { onSpawn: deps.onSpawn, ...opts }),
     pipe: (a, b, opts = {}) => pipeChildren(a, b, { onSpawn: deps.onSpawn, ...opts }),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     mkdir: mkdirSync,
+    clock: () => Date.now(),
     out: console.log,
     exit: process.exit,
     onSigint: (fn) => { process.once('SIGINT', fn); return () => process.off('SIGINT', fn); },
@@ -165,6 +168,17 @@ export async function ensureImage({ head, imageSha, evidenceDir }, deps = {}) {
   const res = await d.docker(['build', '-t', tag, '-f', dockerfile, ctxDir], { logPath: path.join(evidenceDir, 'build.log'), timeoutMs: BUILD_MS });
   must(res, 'build', `docker build ${tag}`);
   return { tag, built: true };
+}
+
+/** The image tag of each head, in order (repeats stay). Bench preflight checks these tags exist before a run. */
+export function imageTagsFor(git, heads, imageSha) {
+  return heads.map((head) => `trex:${lockHash(git, head, imageSha)}`);
+}
+
+/** True when docker has the image. deps: the same as resolveDeps. */
+export async function imageExists(tag, deps = {}) {
+  const d = resolveDeps(deps);
+  return (await d.docker(['image', 'inspect', tag])).code === 0;
 }
 
 /** What an image build would cost, without building. */
@@ -284,21 +298,48 @@ async function cpOut(ctx, src, dest) {
   const { d } = ctx;
   d.mkdir(dest, { recursive: true });
   const a = { cmd: d.bin, args: ['cp', `${ctx.app}:${src}`, '-'] };
-  const b = { cmd: 'tar', args: ['-xf', '-', '-C', dest] };
+  const b = { cmd: d.tar ?? tarBin(d.env ?? process.env), args: ['-xf', '-', '-C', dest] };
   const r = await d.pipe(a, b, { cwd: d.cwd, timeoutMs: COPY_MS });
-  return { ok: r.codeA === 0 && r.codeB === 0 };
+  return { ok: r.codeA === 0 && r.codeB === 0 && hasEntries(d, dest) };
+}
+
+/** True when tar put something in dest. A tar can exit 0 and extract nothing. */
+function hasEntries(d, dest) {
+  try { return (d.readdir ?? readdirSync)(dest).length > 0; } catch { return false; }
+}
+
+/**
+ * Reads a docker exec result against its budget. `timeout -s KILL` inside the container fires before the
+ * docker CLI timer, so a hang comes back as 137 (or 124) with timedOut false. After the full budget that is
+ * a time-out. An earlier 137 is the kernel OOM killer, marked reason 'oom_killed'.
+ */
+export function classifyExec(res, timeoutSec, elapsedMs) {
+  if (res.timedOut || (res.code !== 137 && res.code !== 124)) return res;
+  if (elapsedMs >= timeoutSec * 1000) return { ...res, timedOut: true };
+  return res.code === 137 ? { ...res, reason: 'oom_killed' } : res;
+}
+
+/** One exec in the app container. It counts OOM kills on the env, so the runner can report a blocker. */
+async function execIn(ctx, env, argv, o) {
+  const t0 = ctx.d.clock();
+  const res = await ctx.d.docker(execArgs(ctx, argv, o), {
+    env: ctx.needsDb ? { ...ctx.childEnv, AGENTIC_OS_DATABASE_URL: appDbUrl(ctx) } : ctx.childEnv,
+    stdin: o.stdin, timeoutMs: ((o.timeoutSec ?? 60) + 15) * 1000,
+  });
+  const out = classifyExec(res, o.timeoutSec ?? 60, ctx.d.clock() - t0);
+  if (out.reason === 'oom_killed') env.oomHits += 1;
+  return out;
 }
 
 function makeEnv(ctx, opts) {
-  return {
+  const env = {
     project: ctx.project, app: ctx.app, runId: ctx.runId, composeFile: ctx.composeFile, childEnv: ctx.childEnv,
     dbUrl: ctx.needsDb ? appDbUrl(ctx) : null, dbPort: null, digest: envDigests(ctx.d.git, opts.imageSha), d: ctx.d,
-    exec: (argv, o = {}) => ctx.d.docker(execArgs(ctx, argv, o), {
-      env: ctx.needsDb ? { ...ctx.childEnv, AGENTIC_OS_DATABASE_URL: appDbUrl(ctx) } : ctx.childEnv,
-      stdin: o.stdin, timeoutMs: ((o.timeoutSec ?? 60) + 15) * 1000,
-    }),
+    oomHits: 0, // exec results killed early with 137; run.mjs turns a non-zero count into an OOM blocker
     cpOut: (src, dest) => cpOut(ctx, src, dest),
   };
+  env.exec = (argv, o = {}) => execIn(ctx, env, argv, o);
+  return env;
 }
 
 /** Takes down this run's project only. It never throws. */
@@ -371,13 +412,15 @@ export function isMerged(git, head, ref = 'fork/main') {
 }
 
 /**
- * Prepares a host-profile run. An unmerged head is skipped host_unmerged: host flows never run PR code.
+ * Prepares a host-profile run. Host flows never run PR code or PR flows: head, flowsSha and imageSha
+ * (when given) must all be merged, or the run is skipped host_unmerged.
  * Otherwise it unpacks the head tree and the flowsSha overlay under <evidenceDir>/host-tree.
  * Returns { treeDir, env } with a stripped env, or { skipped }.
  */
-export async function prepareHost({ head, flowsSha, evidenceDir, flowsDir, ref }, deps = {}) {
+export async function prepareHost({ head, flowsSha, imageSha, evidenceDir, flowsDir, ref }, deps = {}) {
   const d = resolveDeps(deps);
-  if (!isMerged(d.git, head, ref)) return { skipped: { reason: 'host_unmerged' } };
+  const shas = new Set([head, flowsSha, imageSha].filter(Boolean));
+  if (![...shas].every((sha) => isMerged(d.git, sha, ref))) return { skipped: { reason: 'host_unmerged' } };
   const treeDir = path.join(evidenceDir, 'host-tree');
   await archiveInto(head, [], treeDir, d);
   const grading = await extractGrading(d.git, flowsSha, treeDir, flowsDir ?? DEFAULT_FLOWS_DIR, { ...d, sets: FLOW_SETS });
@@ -388,11 +431,14 @@ export async function prepareHost({ head, flowsSha, evidenceDir, flowsDir, ref }
 // ---------- CLI ----------
 
 function parseArgs(argv) {
-  const opts = { plan: false, heads: ['HEAD'], imageSha: 'HEAD', estSec: EST_BUILD_SEC };
+  const opts = { plan: false, build: false, yes: false, heads: ['HEAD'], imageSha: 'HEAD', estSec: EST_BUILD_SEC, evidence: null };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--plan') opts.plan = true;
+    else if (argv[i] === '--build') opts.build = true;
+    else if (argv[i] === '--yes') opts.yes = true;
     else if (argv[i] === '--heads') opts.heads = String(argv[++i]).split(',').filter(Boolean);
     else if (argv[i] === '--image-sha') opts.imageSha = argv[++i];
+    else if (argv[i] === '--evidence') opts.evidence = argv[++i];
     else if (argv[i] === '--est-sec') opts.estSec = Number(argv[++i]);
   }
   return opts;
@@ -404,22 +450,42 @@ export function planLines(plan) {
   return [head, ...plan.images.map((i) => `  ${i.tag} ${i.exists ? 'present' : 'to build'} (${i.heads.length} head${i.heads.length === 1 ? '' : 's'})`)];
 }
 
-/** Returns an exit code. 0 plan printed, 2 bad usage or input. */
+async function printPlan(d, opts) {
+  const hasImage = (tag) => imageExists(tag, d);
+  const plan = await planBuilds({ git: d.git, heads: opts.heads, imageSha: opts.imageSha, hasImage, estSec: opts.estSec });
+  for (const line of planLines(plan)) d.out(line);
+}
+
+/** Builds the image of each head outside any run. The plan is already printed; the build needs --plan or --yes. */
+async function doBuild(d, opts) {
+  if (!opts.plan && !opts.yes) {
+    d.out('trex build: refused, pass --plan with --build or pass --yes');
+    return 2;
+  }
+  const root = opts.evidence ?? path.join(d.cwd, '.claude', 'cache', 'e2e', 'trex', 'build');
+  for (const head of opts.heads) {
+    const t0 = d.clock();
+    const evidenceDir = path.join(root, head.replace(/[^\w.-]/g, '_').slice(0, 12));
+    const r = await ensureImage({ head, imageSha: opts.imageSha, evidenceDir }, d);
+    d.out(`${r.tag} ${r.built ? 'built' : 'present'} ${Math.round((d.clock() - t0) / 1000)} s`);
+  }
+  return 0;
+}
+
+/** Returns an exit code. 0 done, 1 a build failed, 2 bad usage, bad input or a refused build. */
 export async function main(argv, deps = {}) {
   const d = resolveDeps(deps);
   const opts = parseArgs(argv);
-  if (!opts.plan || !Number.isFinite(opts.estSec)) {
-    d.out('usage: node scripts/trex/env.mjs --plan [--heads a,b] [--image-sha X] [--est-sec N]');
+  if (!(opts.plan || opts.build) || !Number.isFinite(opts.estSec)) {
+    d.out('usage: node scripts/trex/env.mjs --plan|--build [--yes] [--heads a,b] [--image-sha X] [--est-sec N] [--evidence dir]');
     return 2;
   }
-  const hasImage = async (tag) => (await d.docker(['image', 'inspect', tag])).code === 0;
   try {
-    const plan = await planBuilds({ git: d.git, heads: opts.heads, imageSha: opts.imageSha, hasImage, estSec: opts.estSec });
-    for (const line of planLines(plan)) d.out(line);
-    return 0;
+    await printPlan(d, opts);
+    return opts.build ? await doBuild(d, opts) : 0;
   } catch (err) {
-    d.out(`trex plan: stopped (${firstLine(err.message)})`);
-    return 2;
+    d.out(`trex ${opts.build ? 'build' : 'plan'}: stopped (${firstLine(err.message)})`);
+    return err instanceof EnvError ? 1 : 2;
   }
 }
 

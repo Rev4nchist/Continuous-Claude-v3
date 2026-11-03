@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { archiveArgs, extractGrading, listGrading, resolveBase } from './base.mjs';
+import { archiveArgs, archiveInto, extractGrading, listGrading, resolveBase, tarBin } from './base.mjs';
 
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const FULL = 'a'.repeat(40);
@@ -74,7 +74,7 @@ test('extractGrading: archives the listed files from the given sha with autocrlf
   const seen = [];
   const pipe = async (a, b) => { seen.push({ a, b }); return { codeA: 0, codeB: 0 }; };
   const dest = mkdtempSync(path.join(tmpdir(), 'trex-base-'));
-  const r = await extractGrading(fakeGit(['.trex/flows/a.yaml']), 'abc123', dest, '.trex/flows', { pipe });
+  const r = await extractGrading(fakeGit(['.trex/flows/a.yaml']), 'abc123', dest, '.trex/flows', { pipe, exists: () => true });
   assert.deepEqual(r.files, ['.trex/flows/a.yaml']);
   assert.equal(r.configSha, FULL);
   assert.equal(r.skipped, undefined);
@@ -124,4 +124,50 @@ test('resolveBase: a missing merge-base throws', () => {
 
 test('archiveArgs: sets autocrlf=false and eol=lf before archive', () => {
   assert.deepEqual(archiveArgs('abc', ['x', 'y']), ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', 'archive', '--format=tar', 'abc', '--', 'x', 'y']);
+});
+
+// ---------- tarBin and extraction checks (H1) ----------
+
+const SYS_TAR = 'C:\\Windows\\System32\\tar.exe';
+const noMkdir = () => {};
+const okPipe = async () => ({ codeA: 0, codeB: 0 });
+
+test('tarBin: TAR_BIN wins, then System32 tar on win32, then bare tar', () => {
+  // Breaks when tarBin is removed or the order changes: Git MSYS tar then comes first on PATH.
+  assert.equal(tarBin({ TAR_BIN: 'X:\\my\\tar.exe' }, { platform: 'win32', exists: () => true }), 'X:\\my\\tar.exe');
+  assert.equal(tarBin({ SystemRoot: 'C:\\Windows' }, { platform: 'win32', exists: (p) => p === SYS_TAR }), SYS_TAR);
+  assert.equal(tarBin({}, { platform: 'win32', exists: () => false }), 'tar');
+  assert.equal(tarBin({}, { platform: 'linux', exists: () => true }), 'tar');
+});
+
+test('archiveInto: runs the resolved tar, not a bare tar', async () => {
+  // Breaks when archiveInto spawns the literal "tar" again.
+  let seen;
+  const pipe = async (a, b) => { seen = b; return { codeA: 0, codeB: 0 }; };
+  await archiveInto('abc', ['a'], 'dest', { pipe, mkdir: noMkdir, exists: () => true, env: { TAR_BIN: 'Z:\\tar.exe' } });
+  assert.equal(seen.cmd, 'Z:\\tar.exe');
+});
+
+test('archiveInto: both exit 0 but a listed file is missing throws and names the file', async () => {
+  // Breaks when the post-extraction check is removed (MSYS tar prints names, exits 0, extracts nothing).
+  await assert.rejects(
+    archiveInto('abc', ['a.txt', 'b.txt'], 'dest', { pipe: okPipe, mkdir: noMkdir, exists: (p) => p.endsWith('a.txt') }),
+    /b\.txt/,
+  );
+});
+
+test('archiveInto: an empty file list still throws when nothing was extracted', async () => {
+  // Breaks when the whole-tree case skips the check (the host tree comes through this path).
+  await assert.rejects(archiveInto('abc', [], 'dest', { pipe: okPipe, mkdir: noMkdir, readdir: () => [] }), /nothing/);
+  await archiveInto('abc', [], 'dest', { pipe: okPipe, mkdir: noMkdir, readdir: () => ['package.json'] });
+});
+
+test('archiveInto: real git archive and real tar extract two files into a backslash temp path', async () => {
+  // Breaks when the tar binary cannot read the destination path or extracts nothing. No Docker.
+  const root = path.resolve(import.meta.dirname, '..', '..');
+  const dest = mkdtempSync(path.join(tmpdir(), 'trex-tar-'));
+  await archiveInto('HEAD', ['package.json', 'scripts/trex/base.mjs'], dest, { cwd: root });
+  assert.ok(existsSync(path.join(dest, 'package.json')));
+  const text = readFileSync(path.join(dest, 'scripts', 'trex', 'base.mjs'), 'utf8');
+  assert.ok(text.includes('archiveInto') && !text.includes('\r'));
 });

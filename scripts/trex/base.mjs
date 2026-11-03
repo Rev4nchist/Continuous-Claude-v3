@@ -1,7 +1,8 @@
 // The grading files of a TREX run. They come from the base side (the flows SHA), never from the head under test.
 // A PR therefore cannot edit its own flows, specs or image config. Git is injected as (args) => {status, stdout, stderr}.
 
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { pipeChildren } from './lib/proc.mjs';
 
 export const DEFAULT_FLOWS_DIR = '.trex/flows';
@@ -60,17 +61,43 @@ function fullSha(git, sha) {
 }
 
 /**
+ * The tar to run. TAR_BIN first, then the Windows system tar, then `tar` on the PATH.
+ * Git's MSYS tar comes first on PATH here: with a backslash -C path it exits 0 and extracts nothing.
+ */
+export function tarBin(env = process.env, { platform = process.platform, exists = existsSync } = {}) {
+  if (env.TAR_BIN) return env.TAR_BIN;
+  if (platform !== 'win32') return 'tar';
+  const sys = path.win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'tar.exe');
+  return exists(sys) ? sys : 'tar';
+}
+
+/**
  * Unpacks `files` of `sha` (all files when the list is empty) into destDir with `git archive | tar -xf -`.
  * deps: { pipe, cwd, mkdir } for tests. Throws when either side fails.
  */
 export async function archiveInto(sha, files, destDir, deps = {}) {
-  const { pipe = pipeChildren, cwd = process.cwd(), mkdir = mkdirSync } = deps;
+  const { pipe = pipeChildren, cwd = process.cwd(), mkdir = mkdirSync, env = process.env } = deps;
   mkdir(destDir, { recursive: true });
   const a = { cmd: 'git', args: archiveArgs(sha, files), cwd };
-  const b = { cmd: 'tar', args: ['-xf', '-', '-C', destDir], cwd };
+  const b = { cmd: deps.tar ?? tarBin(env), args: ['-xf', '-', '-C', destDir], cwd };
   const r = await pipe(a, b, { cwd });
-  if (r.codeA === 0 && r.codeB === 0) return;
-  throw new Error(`git archive ${sha} | tar failed (archive ${r.codeA}, tar ${r.codeB}): ${r.stderrA ?? ''}${r.stderrB ?? ''}`.trim());
+  if (r.codeA !== 0 || r.codeB !== 0) {
+    throw new Error(`git archive ${sha} | tar failed (archive ${r.codeA}, tar ${r.codeB}): ${r.stderrA ?? ''}${r.stderrB ?? ''}`.trim());
+  }
+  assertExtracted(destDir, files, deps);
+}
+
+/**
+ * Throws unless every listed file is under destDir. An empty list needs at least one entry.
+ * A tar can exit 0 and extract nothing, so the exit codes alone prove nothing.
+ */
+export function assertExtracted(destDir, files, { exists = existsSync, readdir = readdirSync } = {}) {
+  if (files.length === 0) {
+    if (readdir(destDir).length === 0) throw new Error(`tar extracted nothing into ${destDir}`);
+    return;
+  }
+  const missing = files.filter((f) => !exists(path.join(destDir, f)));
+  if (missing.length > 0) throw new Error(`tar extracted nothing for ${missing.length} file(s), first ${missing[0]}`);
 }
 
 /**

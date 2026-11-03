@@ -158,6 +158,27 @@ test('exitCodeFor gives 5 for any blocker, even beside passes or a Fail (13.1: 5
   assert.equal(code([flow('f-a', 'pass'), flow('f-b', 'fail')], { blockers }), 5);
 });
 
+test('exitCodeFor gives 5 when any selected flow is incomplete or blocked, even beside passes (M-exit)', () => {
+  assert.equal(code([flow('f-a', 'pass'), flow('f-b', 'incomplete', { reason: 'timeout' })]), 5);
+  assert.equal(code([flow('f-a', 'pass'), flow('f-b', 'blocked', { reason: 'start' })]), 5);
+  assert.equal(code([flow('f-a', 'pass'), flow('f-b', 'flaky')]), 0); // flaky is graded from report.json by the bench
+});
+
+test('exitCodeFor keeps 0 for a skipped run with nothing tested, so a bench negative is not read as broken (M-exit)', () => {
+  assert.equal(code([], { skipped: { reason: 'no_match' } }), 0);
+  assert.equal(code([], { skipped: { reason: 'no_config' } }), 5); // no grading files at all: nothing to trust
+  assert.equal(code([], { skipped: { reason: 'no_match' }, blockers: [{ stage: 'start', text: 'x' }] }), 5);
+});
+
+test('a blocked flow that carries its own blocker counts in summary.blockers and gives exit 5 once per distinct blocker', () => {
+  const blocker = { stage: 'start', text: 'out of memory (exit 137)' };
+  const report = build([flow('f-a', 'pass'), flow('f-b', 'blocked', { reason: 'start', blocker }), flow('f-c', 'blocked', { reason: 'start', blocker })]);
+  assert.deepEqual(report.blockers, [blocker]);
+  assert.equal(report.summary.blockers, 1);
+  assert.equal(exitCodeFor(report), 5);
+  assert.equal('blocker' in report.flows[1], false, 'the flow entry keeps its documented keys');
+});
+
 // ---------- the prove-check contract (13.1) ----------
 
 const verdictOf = (report) => classifyRun({ fireMatch: '^not ok ' }, { code: exitCodeFor(report), stdout: formatLines(report).join('\n'), stderr: '' }).verdict;
@@ -174,8 +195,8 @@ test('prove-check still reads a Fail beside a blocker as fire, so exit 5 loses n
   assert.equal(verdictOf(report), 'fire');
 });
 
-test('prove-check reads flaky, blocked and incomplete lines as no-fire when the run exits 0 (break: print them without the # prefix)', () => {
-  const report = build([flow('f-a', 'pass'), flow('f-b', 'flaky'), flow('f-c', 'incomplete', { reason: 'timeout' })]);
+test('prove-check reads flaky lines as no-fire when the run exits 0 (break: print them without the # prefix)', () => {
+  const report = build([flow('f-a', 'pass'), flow('f-b', 'flaky')]);
   assert.equal(exitCodeFor(report), 0);
   assert.equal(verdictOf(report), 'no-fire');
 });

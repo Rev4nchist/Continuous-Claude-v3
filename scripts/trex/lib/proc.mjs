@@ -2,12 +2,12 @@
 // Every child is non-detached, hidden, shell-free and piped. A time-out stops the whole process tree.
 // The shape follows defaultCrRunner in scripts/github/pre-pr.mjs.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-// TODO: import from scripts/github/lib/proc.mjs when review-engine-c0 lands.
 // Importing pre-pr.mjs is safe: its main() runs only behind the isDirectRun guard.
-import { killTree, resolveSpawn } from '../../github/pre-pr.mjs';
+import { resolveSpawn } from '../../github/pre-pr.mjs';
+import { killTree } from '../../github/lib/proc.mjs';
 import { pidAlive, withLock } from '../../github/lib/file-lock.mjs';
 import { stripEnv } from './strip-env.mjs';
 
@@ -54,12 +54,12 @@ function launch(cmd, args, o, d, { stdio, capture = true, log = null }) {
     settle({ ...out, error: String(err.message) });
     return { child: null, done, force };
   }
-  wire(child, out, settle, { capture, log });
+  wire(child, out, settle, { capture, log, onExit: () => { try { o.onExit?.(child.pid); } catch { /* a sidecar failure must not stop the run */ } } });
   try { o.onSpawn?.(child.pid); } catch { /* a sidecar failure must not stop the run */ }
   return { child, done, force };
 }
 
-function wire(child, out, settle, { capture, log }) {
+function wire(child, out, settle, { capture, log, onExit }) {
   const take = (key) => (chunk) => { out[key] = keep(out[key], chunk); log?.write(chunk); };
   if (capture) {
     child.stdout.setEncoding('utf8');
@@ -67,8 +67,8 @@ function wire(child, out, settle, { capture, log }) {
   }
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', take('stderr'));
-  child.on('error', (err) => { out.error = String(err.message); settle({ ...out }); });
-  child.on('close', (code) => { out.code = code; settle({ ...out }); });
+  child.on('error', (err) => { out.error = String(err.message); onExit(); settle({ ...out }); });
+  child.on('close', (code) => { out.code = code; onExit(); settle({ ...out }); });
 }
 
 /** Arms one timer for all children. On expiry it kills each tree, then forces the wait after a grace time. */
@@ -105,7 +105,7 @@ function openLog(o, d) {
 
 /**
  * Runs one command and resolves { code, timedOut, stdout, stderr, error? }. It never throws.
- * opts: { cwd, env (default stripEnv), stdin, timeoutMs, logPath, onSpawn(pid) }.
+ * opts: { cwd, env (default stripEnv), stdin, timeoutMs, logPath, onSpawn(pid), onExit(pid) }.
  * deps: { spawnFn, resolve, killer(child), openStream, killGraceMs } for tests.
  */
 export async function runChild(cmd, args, opts = {}, deps = {}) {
@@ -149,22 +149,53 @@ function joinPipe(pa, pb) {
 
 // ---------- pid sidecar ----------
 
-const readPids = (file) => {
-  try { return JSON.parse(readFileSync(file, 'utf8')).pids ?? []; } catch { return []; }
+const START_TOLERANCE_MS = 5000;
+
+/** The start time of a process in ms since the epoch, or null when it cannot be read. Slow on Windows (PowerShell). */
+export function processStartMs(pid, { platform = process.platform, run = spawnSync } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const win = platform === 'win32';
+  const cmd = win ? 'powershell.exe' : 'ps';
+  const args = win
+    ? ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`]
+    : ['-o', 'lstart=', '-p', String(pid)];
+  const r = run(cmd, args, { encoding: 'utf8', windowsHide: true, timeout: 15_000 });
+  // ps prints local time, which Date.parse reads as local time.
+  const ms = r.status === 0 ? Date.parse(String(r.stdout).trim()) : NaN;
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// An entry is { pid, started }. A bare number (older file) reads as { pid, started: null }, which is never owned.
+const asEntry = (e) => (Number.isInteger(e) ? { pid: e, started: null } : e);
+const readEntries = (file) => {
+  try { return (JSON.parse(readFileSync(file, 'utf8')).pids ?? []).map(asEntry); } catch { return []; }
 };
 
 /**
  * Records child pids in a JSON file at spawn time, so a later run can stop leftovers (spec 13.3).
- * Use `onSpawn` as the runChild option. `live()` returns the recorded pids that still run.
+ * Use `onSpawn` and `onExit` as runChild options: a child that exits is removed from the file.
+ * `live()` returns the recorded pids that still run. A pid can be reused by an unrelated process,
+ * so `liveOwned()` also needs the process start time to match the recorded spawn time.
+ * Cleanup rule for the bench: kill only the run.mjs tree (the pid in run.lock, with its recorded start),
+ * and remove containers by the label trex.run=<runId>. Never kill a pid from `live()` alone.
+ * deps: { alive, processStart(pid) -> ms | null, now() -> ms } for tests.
  */
-export function makePidRecorder(file, { alive = pidAlive } = {}) {
-  const append = (pid) => writeFileSync(file, JSON.stringify({ pids: [...readPids(file), pid] }));
+export function makePidRecorder(file, { alive = pidAlive, processStart = processStartMs, now = Date.now } = {}) {
+  const write = (edit) => {
+    mkdirSync(path.dirname(file), { recursive: true });
+    const save = () => writeFileSync(file, JSON.stringify({ pids: edit(readEntries(file)) }));
+    const r = withLock(file, {}, save);
+    if (r?.ok === false) save(); // a lost pid is worse than a racy write
+  };
+  const owned = ({ pid, started }) => {
+    if (!Number.isFinite(started) || !alive(pid)) return false;
+    const began = processStart(pid);
+    return Number.isFinite(began) && Math.abs(began - started) <= START_TOLERANCE_MS;
+  };
   return {
-    onSpawn(pid) {
-      mkdirSync(path.dirname(file), { recursive: true });
-      const r = withLock(file, {}, () => append(pid));
-      if (r?.ok === false) append(pid); // a lost pid is worse than a racy write
-    },
-    live: () => readPids(file).filter((pid) => alive(pid)),
+    onSpawn: (pid) => write((all) => [...all.filter((e) => e.pid !== pid), { pid, started: now() }]),
+    onExit: (pid) => write((all) => all.filter((e) => e.pid !== pid)),
+    live: () => readEntries(file).filter((e) => alive(e.pid)).map((e) => e.pid),
+    liveOwned: () => readEntries(file).filter(owned).map((e) => e.pid),
   };
 }

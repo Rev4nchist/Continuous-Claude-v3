@@ -2,7 +2,7 @@
 /**
  * author.mjs: blind flow authoring for the TREX P0 replay bench (spec 5.13 with 13.1, 13.2 and 13.4).
  *
- * Usage:
+ * Usage (the ledger path is fixed; only tests pass another one):
  *   node scripts/trex/bench/author.mjs --group S18 [--dry-run] [--keep-tree] [--retry | --retry-harness]
  *   node scripts/trex/bench/author.mjs --all
  *   node scripts/trex/bench/author.mjs --probe [--group S18]       one stream-json run that shows whether tool calls are visible
@@ -25,8 +25,10 @@ import {
   EXIT, WEEKLY_CAP, buildAgentEnv, countRuns, defaultLedgerPath, finishRun, parseReviewOutput, prepareReview, readLedger, reserveRun,
   resolveAgent, resolveModel, runAgent,
 } from '../../github/cursor-review.mjs';
+import { withLock } from '../../github/lib/file-lock.mjs';
 import { matchGlob } from '../../github/review-router.mjs';
 import { loadFlows, validateFlow } from '../flow.mjs';
+import { hostActionOk, hostPs1Path } from '../host-allow.mjs';
 import { stripEnv } from '../lib/strip-env.mjs';
 
 export const BENCH_CAP = 18;
@@ -65,11 +67,12 @@ export const GROUPS = Object.freeze({
 });
 
 const HOST_NONE = 'Write container flows only. Do not write `profile: host` flows.';
-const HOST_SHAPES = 'A flow with `profile: host` runs on the real Windows machine. It may use only two action shapes. '
+const HOST_TEXT = 'A flow with `profile: host` runs on the real Windows machine. It may use only two action shapes. '
   + 'Shape 1: driver mod-event with `{test: <name>}`, which runs `claude plugin test`. '
   + 'Shape 2: driver cli with `{cmd: [pwsh, -NoProfile, -File, <tree-relative path>.ps1]}` and no other key. '
+  + 'The .ps1 must already exist in the code after the change. Never write a .ps1 in your output: it is not allowed under `scripts/trex/bench/flows/`. '
   + 'A host flow has no hook, api or browser driver, no `start.run` and no `start.serve`. Any other host argv fails the lint.';
-const hostRules = (host) => (host ? HOST_SHAPES : HOST_NONE);
+const hostRules = (host) => (host ? HOST_TEXT : HOST_NONE);
 
 const two = (n) => String(n).padStart(2, '0');
 const dayOf = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
@@ -278,23 +281,14 @@ function policyErrors(flow) {
   return errors;
 }
 
-const relPs1 = (p) => typeof p === 'string' && /\.ps1$/i.test(p) && !pathProblem(p);
-
-function hostShapeOk(driver, action) {
-  const keys = isObj(action) ? Object.keys(action) : [];
-  if (driver === 'mod-event') return keys.length === 1 && keys[0] === 'test' && typeof action.test === 'string' && !action.test.startsWith('-');
-  if (driver !== 'cli' || keys.length !== 1 || keys[0] !== 'cmd') return false;
-  const c = action.cmd;
-  return Array.isArray(c) && c.length === 4 && c[0] === 'pwsh' && c[1] === '-NoProfile' && c[2] === '-File' && relPs1(c[3]);
-}
-
-/** Spec 13.2: a host flow may run only `claude plugin test` and `pwsh -NoProfile -File <tree-relative .ps1>`. */
-function hostErrors(flow) {
+/** Spec 13.2: a host flow may run only what host-allow.mjs allows. treeHas(path) says whether a .ps1 exists at the group head. */
+function hostErrors(flow, treeHas) {
   if (flow.profile !== 'host') return [];
   const errors = [];
   if (flow.start?.run || flow.start?.serve) errors.push('host flow: start.run and start.serve are not allowed');
   stepsOf(flow).forEach((s, i) => {
-    if (!hostShapeOk(flow.driver, s.action)) errors.push(`host flow: steps[${i}].action is not an allowed host shape (only {test} and pwsh -NoProfile -File <tree .ps1>)`);
+    const why = hostActionOk(flow.driver, s.action, { treeHas });
+    if (why) errors.push(`host flow: steps[${i}].action is not allowed: ${why}`);
   });
   return errors;
 }
@@ -308,6 +302,7 @@ function fixtureRefs(flow) {
 /**
  * Errors for one authored flow file. validateFlow plus the bench rules: scripted only, no judge, no start.note, `paths` hit a changed
  * file, every fixture exists in the group output (when opts.files is given), and the host argv allowlist of spec 13.2.
+ * opts.treeHas(path) tells whether a file exists at the group head. Without it, no host .ps1 passes.
  */
 export function lintFlow(yamlText, changedFiles = [], opts = {}) {
   let flow;
@@ -316,7 +311,7 @@ export function lintFlow(yamlText, changedFiles = [], opts = {}) {
   const errors = [...schema, ...policyErrors(flow)];
   if (schema.length === 0) {
     if (!flow.paths.some((g) => changedFiles.some((f) => matchGlob(g, f)))) errors.push('paths hit no changed file');
-    errors.push(...hostErrors(flow));
+    errors.push(...hostErrors(flow, opts.treeHas));
     if (opts.files) for (const r of fixtureRefs(flow)) if (!opts.files.includes(r)) errors.push(`fixture ${r} is not in the group output`);
   }
   return [...new Set(errors)];
@@ -403,9 +398,23 @@ function runError(run, parsed, model) {
   return null;
 }
 
-function lintAll(files, changedFiles) {
+function lintAll(files, changedFiles, treeHas) {
   const names = files.map((f) => f.path);
-  return files.filter((f) => isFlowFile(f.path)).flatMap((f) => lintFlow(f.text, changedFiles, { files: names }).map((e) => `${f.path}: ${e}`));
+  return files.filter((f) => isFlowFile(f.path)).flatMap((f) => lintFlow(f.text, changedFiles, { files: names, treeHas }).map((e) => `${f.path}: ${e}`));
+}
+
+/**
+ * The blob id of a file at a commit, or null when the path is not a regular file there (a folder, a symlink or nothing).
+ * `git ls-tree` only reads: it never touches the work tree.
+ */
+export function blobAt(git, head, file) {
+  const r = git(['ls-tree', '-z', head, '--', file]);
+  if (r.status !== 0) return null;
+  for (const entry of String(r.stdout).split('\0')) {
+    const m = /^(?:100644|100755) blob ([0-9a-f]{40,64})\t(.+)$/.exec(entry);
+    if (m && m[2] === file) return m[1];
+  }
+  return null;
 }
 
 function writeFlows(folder, files) {
@@ -445,7 +454,7 @@ async function stage(group, opts, deps, ref) {
   const refuse = (problems) => { if (!opts.keepTree) prep.cleanup(); return { exit: EXIT.REFUSED, problems }; };
   if (!opts.dryRun && leaks.length > 0) return refuse([`leak scan found ${leaks.length} hit(s) before the agent started`, ...leaks]);
   if (!opts.dryRun && prompt.length > MAX_PROMPT_CHARS) return refuse([`the prompt is ${prompt.length} chars, over the limit of ${MAX_PROMPT_CHARS}`]);
-  return { prep, prompt, leaks, crossGroup };
+  return { prep, prompt, leaks, crossGroup, git };
 }
 
 function dryRunResult(group, opts, ledgerPath, now, st) {
@@ -482,7 +491,8 @@ export async function authorGroup(group, opts = {}, deps = {}) {
   const probe = Boolean(opts.probe);
   const ref = probe ? 'trex-probe' : `trex-${group}`;
   const ledgerPath = opts.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
-  const gate = opts.dryRun ? null : budgetGate({ ledgerPath, ref, probe, retry: opts.retry, now: now(), maxRuns: opts.maxRuns ?? BENCH_CAP });
+  // A first look, so a refused run builds no tree. The real check runs again under the lock, just before the reservation.
+  const gate = opts.dryRun ? null : budgetGate(gateArgs({ ledgerPath, ref, probe, opts, now }));
   if (gate) return fail(gate.exit, [gate.reason]);
   const folder = path.join(opts.root, ...FLOWS_DIR.split('/'), group);
   if (!opts.dryRun && !probe && !opts.retry && existsSync(folder) && readdirSync(folder).length > 0) return fail(EXIT.REFUSED, [`${folder} is not empty: pass --retry to replace it`]);
@@ -492,15 +502,38 @@ export async function authorGroup(group, opts = {}, deps = {}) {
   try { return await reservedRun({ group, opts, deps, st, ref, probe, ledgerPath, folder, now }); } finally { if (!opts.keepTree) st.prep.cleanup(); }
 }
 
+const gateArgs = ({ ledgerPath, ref, probe, opts, now }) => ({ ledgerPath, ref, probe, retry: opts.retry, now: now(), maxRuns: opts.maxRuns ?? BENCH_CAP });
+const BENCH_LOCK_WAIT_MS = 10_000;
+
+/**
+ * Checks the caps and reserves the run in one step under a lock beside the ledger, so two sessions cannot both pass the check at 17 of 18.
+ * Returns { reserved } or { refusal: { exit, problems } }.
+ */
+function reserveUnderLock(c) {
+  const { opts, ref, probe, ledgerPath, now } = c;
+  const model = opts.model ?? DEFAULT_MODEL;
+  const sessionId = (c.deps.env ?? process.env).CLAUDE_CODE_SESSION_ID || null;
+  mkdirSync(path.dirname(ledgerPath), { recursive: true });
+  const locked = withLock(`${ledgerPath}.trex-bench`, { lockWaitMs: opts.lockWaitMs ?? BENCH_LOCK_WAIT_MS }, () => {
+    const gate = budgetGate(gateArgs({ ledgerPath, ref, probe, opts, now }));
+    if (gate) return { refusal: { exit: gate.exit, problems: [gate.reason] } };
+    return { reserved: reserveRun(ledgerPath, { ref, model, band: 'MID', sessionId }, { now }) };
+  });
+  if (locked.ok === false) return { refusal: { exit: EXIT.FAILED, problems: [locked.detail] } };
+  const r = locked.reserved;
+  if (r && !r.ok) return { refusal: { exit: r.reason === 'lock' ? EXIT.FAILED : EXIT.CAP, problems: [r.detail ?? `${r.reason} reached (${r.count})`] } };
+  return locked;
+}
+
 async function reservedRun(c) {
   const { group, opts, deps, st, ref, probe, ledgerPath, folder, now } = c;
   const model = opts.model ?? DEFAULT_MODEL;
   const sessionId = (deps.env ?? process.env).CLAUDE_CODE_SESSION_ID || null;
-  const reserved = reserveRun(ledgerPath, { ref, model, band: 'MID', sessionId }, { now });
-  if (!reserved.ok) return { exit: reserved.reason === 'lock' ? EXIT.FAILED : EXIT.CAP, runId: null, files: [], manifest: null, usage: null, problems: [reserved.detail ?? `${reserved.reason} reached (${reserved.count})`] };
+  const { reserved, refusal } = reserveUnderLock(c);
+  if (refusal) return { exit: refusal.exit, runId: null, files: [], manifest: null, usage: null, problems: refusal.problems };
   const { run, parsed } = await callAgent({ group, opts, deps, st, reserved, model, fmt: probe ? 'stream-json' : 'json' });
   const error = parsed ? runError(run, parsed, model) : run.error;
-  const out = parsed && !error ? readAnswer(parsed.text, st.prep.files, deps) : { files: [], manifest: null, problems: [] };
+  const out = parsed && !error ? readAnswer(parsed.text, st, deps) : { files: [], manifest: null, problems: [] };
   const problems = [...(error ? [error] : []), ...out.problems];
   const exit = (error || (!probe && problems.length > 0)) ? EXIT.FAILED : EXIT.OK;
   const written = exit === EXIT.OK && !probe ? writeFlows(folder, out.files) : [];
@@ -511,10 +544,11 @@ async function reservedRun(c) {
   return { exit, runId: reserved.id, files: written, manifest: out.manifest, usage: rec.usage, problems };
 }
 
-function readAnswer(text, changedFiles, deps) {
-  const out = parseAuthorOutput(text, changedFiles);
+function readAnswer(text, st, deps) {
+  const out = parseAuthorOutput(text, st.prep.files);
   if (out.files.length === 0 && notRunText(text, deps)) out.problems.unshift('the answer says the agent could not read the change: the run is void');
-  return { ...out, problems: [...out.problems, ...lintAll(out.files, changedFiles)] };
+  const treeHas = (p) => blobAt(st.git, st.prep.head, p) !== null;
+  return { ...out, problems: [...out.problems, ...lintAll(out.files, st.prep.files, treeHas)] };
 }
 
 function saveArtifacts({ opts, now, group, probe, rec, run, st }) {
@@ -568,14 +602,38 @@ export function mapNegatives(negatives, ctx, git) {
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 
+/** The commit a group's authoring tree was cut from: the right side of its range. */
+function groupHead(g) {
+  const head = GROUPS[g]?.range.split('..')[1];
+  if (!head) throw new Error(`group ${g} has no range head`);
+  return head;
+}
+
+/** { path: blobId } for every .ps1 that a host flow runs, read at the group head. Throws when one is not a regular file there. */
+function ps1Blobs(git, g, flow) {
+  const head = groupHead(g);
+  const blobs = {};
+  for (const step of flow.steps ?? []) {
+    const file = hostPs1Path(flow.driver, step.action);
+    if (file === null) continue;
+    const id = blobAt(git, head, file);
+    if (id === null) throw new Error(`host flow ${flow.id} runs ${file}, which is not a file at ${head} (group ${g})`);
+    blobs[file] = id;
+  }
+  return Object.fromEntries(Object.entries(blobs).sort(([a], [b]) => (a < b ? -1 : 1)));
+}
+
 /**
  * The digest a human review covers: sha256 over the normalized host flows (profile host) of the committed groups, read through git
- * at `sha`. Container flows do not change it. A reviewer reads the host flows, then writes this digest to host-review.json.
+ * at `sha`, plus the git blob id (at the group head) of every .ps1 those flows run. Container flows do not change it.
+ * A reviewer reads the host flows and those scripts, then writes this digest to host-review.json.
  */
 export function hostFlowDigest(git, sha, { flowsDir = FLOWS_DIR, groups = Object.keys(GROUPS) } = {}) {
   const parts = [];
   for (const g of [...groups].sort()) {
-    for (const flow of loadFlows(git, sha, `${flowsDir}/${g}`)) if (flow.profile === 'host') parts.push(JSON.stringify({ group: g, flow }));
+    for (const flow of loadFlows(git, sha, `${flowsDir}/${g}`)) {
+      if (flow.profile === 'host') parts.push(JSON.stringify({ group: g, flow, scripts: ps1Blobs(git, g, flow) }));
+    }
   }
   return sha256(parts.join('\n'));
 }
@@ -593,10 +651,13 @@ function latestManifest(cacheDir, group) {
   return found.length ? JSON.parse(readFileSync(path.join(cacheDir, found.at(-1).n), 'utf8')) : null;
 }
 
+// The text names no digest and no marker JSON: an agent that reads it must not be able to forge the marker.
+const MARKER_ERROR = 'host-flow review marker missing or stale; ask Dave to review with --host-digest';
+
 function checkMarker(markerPath, digest) {
   let marker;
-  try { marker = JSON.parse(readFileSync(markerPath, 'utf8')); } catch { throw new Error(`no host review marker at ${markerPath}: review the host flows, then write {"sha256": "${digest}"} there`); }
-  if (marker.sha256 !== digest) throw new Error(`the host review marker does not match the current host-flow diff (digest ${digest}): review it again`);
+  try { marker = JSON.parse(readFileSync(markerPath, 'utf8')); } catch { throw new Error(MARKER_ERROR); }
+  if (marker?.sha256 !== digest) throw new Error(MARKER_ERROR);
 }
 
 function groupRecords(cacheDir, groups) {
@@ -651,7 +712,7 @@ export function parseArgs(argv) {
     else if (a === '--keep-tree') out.keepTree = true;
     else if (a === '--retry') out.retry = out.retry ?? true;
     else if (a === '--retry-harness') out.retry = 'harness';
-    else if (a === '--ledger') out.ledgerPath = next();
+    else if (a === '--ledger') return { error: '--ledger is not a command line option' };
     else if (a === '--negatives') out.negativesFile = next();
     else if (a === '--model') out.model = next();
     else if (a === '--timeout-sec') out.timeoutMs = Number(next()) * 1000;
@@ -710,7 +771,7 @@ export async function main(argv, deps = {}) {
   const args = parseArgs(argv);
   if (args.error) { err(`author: ${args.error}`); return EXIT.REFUSED; }
   const root = deps.root ?? repoRoot();
-  const ledgerPath = args.ledgerPath ?? deps.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
+  const ledgerPath = deps.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
   const base = { root, ledgerPath, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree };
   try {
     if (['group', 'all', 'probe'].includes(args.action)) return await runGroups(args, base, deps, say);

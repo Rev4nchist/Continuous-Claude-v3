@@ -10,7 +10,7 @@ import { classifyRun } from '../checks/prove-check.mjs';
 import { EnvError } from './env.mjs';
 import { applyStart, foldAttempts, runFlows } from './flow-run.mjs';
 import { acquireLock, lockPathFor, unlockRun } from './lock.mjs';
-import { UsageError, main, parseArgs, resolveHead } from './run.mjs';
+import { UsageError, main, parseArgs, resolveHead, withDefaults } from './run.mjs';
 
 const REAL_FLOWS = path.resolve(import.meta.dirname, '..', '..', '.trex', 'flows');
 const DEAD_PID = 999_999;
@@ -442,5 +442,59 @@ test('child pids reach the report and the pids.json sidecar at spawn time', asyn
   const evidence = path.join(h.root, 'ev');
   assert.equal(await main(SIM(evidence), h.deps), 0);
   assert.deepEqual(JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8')).pids, [4242]);
-  assert.deepEqual(JSON.parse(readFileSync(path.join(evidence, 'pids.json'), 'utf8')).pids, [4242]);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(evidence, 'pids.json'), 'utf8')).pids.map((e) => e.pid ?? e), [4242]); // an entry is a bare pid or { pid, started }
+});
+
+// ---------- review fixes F1 ----------
+
+test('--flows-dir allows only .trex/flows and scripts/trex/bench/flows/<S|N|K group>', () => {
+  // Breaks when the allow-list is removed: a PR-chosen directory then supplies the flows that grade it.
+  const dir = (v) => parseArgs(['--simulate', 'a', '--flows-dir', v]).flowsDir;
+  assert.equal(dir('.trex/flows'), '.trex/flows');
+  assert.equal(dir('.trex\\flows\\'), '.trex/flows');
+  for (const ok of ['S1', 'S18', 'N2', 'N12', 'K3']) assert.equal(dir(`scripts/trex/bench/flows/${ok}`), `scripts/trex/bench/flows/${ok}`);
+  for (const bad of ['x/y', 'scripts/trex/bench/flows/K10', 'scripts/trex/bench/flows/S100', 'scripts/trex/bench/flows/s1', '../.trex/flows', '.trex/flows/../x', 'scripts/trex/bench/flows', '.trex']) {
+    assert.throws(() => dir(bad), UsageError, bad);
+  }
+});
+
+test('main: a --flows-dir outside the allow-list exits 2 and starts nothing', async () => {
+  // Breaks when the check runs after the environment starts.
+  const h = harness();
+  assert.equal(await main(SIM(path.join(h.root, 'ev'), '--flows-dir', 'x/y'), h.deps), 2);
+  assert.equal(h.calls.startEnv, 0);
+});
+
+test('a host flow run passes imageSha to prepareHost, so it can be checked for merge', async () => {
+  // Breaks when runHost drops imageSha: an unmerged image config would then pass the host check.
+  const hostFlow = 'id: host-demo\ntitle: t\ndescription: d\ngoal: g\npaths: [a/b.ts]\ndriver: mod-event\nprofile: host\nsteps:\n  - action: {test: demo}\n    checks: [{text: ok, exit: 0}]\n';
+  const h = harness({ files: { '.trex/flows/host.yaml': hostFlow } });
+  let seen;
+  h.deps.prepareHost = async (opts) => { seen = opts; return { skipped: { reason: 'host_unmerged' } }; };
+  const rc = await main(['--simulate', 'aaaaaaaa', '--flows-sha', 'f1f1f1f1', '--image-sha', 'e2e2e2e2', '--evidence', path.join(h.root, 'ev')], h.deps);
+  assert.ok(seen, `exit ${rc}: ${h.lines.join(' / ')}`);
+  assert.equal(seen.imageSha, sha('e2e2e2e2'));
+  assert.equal(seen.flowsSha, sha('f1f1f1f1'));
+});
+
+test('an env that saw an OOM kill (exit 137 before the budget) gives an oom blocker and exit 5', async () => {
+  // Breaks when run.mjs ignores env.oomHits: a killed process would grade as a plain failed check.
+  const h = harness();
+  const evidence = path.join(h.root, 'ev');
+  h.deps.startEnv = async () => ({ project: 'p', digest: {}, oomHits: 1, exec: fakeExec(() => done('deny'), []) });
+  assert.equal(await main(SIM(evidence), h.deps), 5);
+  const report = JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8'));
+  assert.equal(report.blockers[0].stage, 'oom');
+});
+
+test('withDefaults: the default git does not pass ANTHROPIC_API_KEY to the git child', () => {
+  // Breaks when run.mjs goes back to the pre-pr makeGit, which passes the whole env.
+  process.env.ANTHROPIC_API_KEY = 'sk-test-secret-xyz';
+  try {
+    const r = withDefaults({}).git(['-c', 'alias.showkey=!echo key=$ANTHROPIC_API_KEY', 'showkey']);
+    assert.equal(r.status, 0);
+    assert.ok(!r.stdout.includes('sk-test-secret-xyz'));
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
 });

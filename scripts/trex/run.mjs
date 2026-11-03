@@ -2,6 +2,7 @@
 // TREX runner. P0 builds simulate mode; PR mode (--pr, --base) is P1.
 //   run.mjs --simulate <sha|tree> [--config <sha>] [--flows-sha <sha>] [--image-sha <sha>] [--flows-dir <dir>]
 //           [--flows a,b] [--tree <dir>] [--evidence <dir>] [--json]
+//   --flows-dir is .trex/flows or scripts/trex/bench/flows/<S1|N1|K1 group>; any other value exits 2.
 //   run.mjs --unlock
 // Exit codes: 0 no Fail, 1 Fail, 2 input error, 3 lock held, 4 internal error, 5 no evidence (nothing tested, or a blocker).
 // Child output never reaches stdout or stderr: prove-check scans both for broken markers. It stays in the evidence files.
@@ -10,12 +11,12 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { makeGit } from '../github/pre-pr.mjs';
 import { resolveBase } from './base.mjs';
 import { ensureImage, prepareHost, removeByLabel, startEnv, stopEnv } from './env.mjs';
 import { loadFlows } from './flow.mjs';
 import { runFlows, strictExec } from './flow-run.mjs';
 import { acquireLock, lockPathFor, primaryRootOf, unlockRun } from './lock.mjs';
+import { makeTrexGit } from './lib/git.mjs';
 import { makePidRecorder, runChild } from './lib/proc.mjs';
 import { buildReport, exitCodeFor, formatLines, writeAll, writeSidecar } from './report.mjs';
 
@@ -25,6 +26,7 @@ export { foldAttempts, runFlows } from './flow-run.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const VALUE_FLAGS = ['--simulate', '--config', '--flows-sha', '--image-sha', '--flows-dir', '--flows', '--tree', '--evidence', '--pr', '--head', '--base'];
 const BOOL_FLAGS = ['--json', '--unlock', '--rerun', '--advisory', '--select-only'];
+const FLOWS_DIR_OK = /^(?:\.trex\/flows|scripts\/trex\/bench\/flows\/(?:S\d{1,2}|N\d{1,2}|K\d))$/;
 const TREE_SHA8 = /[\\/]proof[\\/]([0-9a-f]{8})(?:[\\/]|$)/i;
 const VERDICTS = Object.freeze({ 0: 'pass', 1: 'fail', 2: 'input_error', 3: 'locked', 4: 'internal_error', 5: 'no_evidence' });
 const ENV_TRIES = 2;
@@ -50,8 +52,16 @@ export function parseArgs(argv) {
     } else throw new UsageError('unknown argument');
   }
   if (typeof opts.flows === 'string') opts.flows = opts.flows.split(',').map((s) => s.trim()).filter(Boolean);
+  opts.flowsDir = checkFlowsDir(opts.flowsDir);
   opts.mode = modeOf(opts);
   return opts;
+}
+
+/** The flows dir with forward slashes and no trailing slash. Only the two flow roots are allowed. */
+function checkFlowsDir(dir) {
+  const norm = slash(dir).replace(/\/+$/, '');
+  if (!FLOWS_DIR_OK.test(norm)) throw new UsageError('--flows-dir must be .trex/flows or scripts/trex/bench/flows/<group>');
+  return norm;
 }
 
 const camel = (flag) => flag.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase());
@@ -147,15 +157,21 @@ async function runContainer(d, run) {
   run.live = env;
   try {
     run.flows.push(...await runFlows(run.container, env, flowDeps(d, run)));
+    noteOom(run, env);
   } finally {
     run.live = null;
     await d.stopEnv(env, d.envDeps);
   }
 }
 
+/** A process killed with 137 before its budget is a memory problem of the environment, not a failed check. */
+function noteOom(run, env) {
+  if (env.oomHits > 0) run.blockers.push({ stage: 'oom', text: `${env.oomHits} step(s) killed with exit 137 before the time limit` });
+}
+
 async function runHost(d, run) {
   let prep;
-  try { prep = await d.prepareHost({ head: run.head, flowsSha: run.flowsSha, evidenceDir: run.evidenceDir, flowsDir: run.flowsDir }, d.envDeps); } catch (err) {
+  try { prep = await d.prepareHost({ head: run.head, flowsSha: run.flowsSha, imageSha: run.imageSha, evidenceDir: run.evidenceDir, flowsDir: run.flowsDir }, d.envDeps); } catch (err) {
     d.noteError({ flowId: 'host', attempt: 1, err });
     const blocker = { stage: err.stage ?? 'start', text: firstLine(err.message) };
     run.blockers.push(blocker);
@@ -203,9 +219,9 @@ const detailFile = (dir, name, text) => {
 
 // ---------- defaults ----------
 
-function withDefaults(deps) {
+export function withDefaults(deps) {
   const root = deps.root ?? ROOT;
-  const git = deps.git ?? makeGit(root);
+  const git = deps.git ?? makeTrexGit(root);
   const pids = [];
   const recorder = { onSpawn: (pid) => { pids.push(pid); d.recorder?.onSpawn(pid); deps.onSpawn?.(pid); } };
   const d = {

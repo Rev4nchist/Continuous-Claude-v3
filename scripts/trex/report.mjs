@@ -58,15 +58,25 @@ function skippedOf(skipped) {
   return { reason: skipped.reason };
 }
 
+/** The run blockers, then the blocker of each blocked flow (for example out of memory). Equal blockers count once. */
+function blockersOf(run) {
+  const all = [...(run.blockers ?? []), ...(run.flows ?? []).map((f) => f.blocker).filter(Boolean)];
+  const seen = new Set();
+  return all.map((b) => ({ stage: b.stage, text: b.text })).filter((b) => {
+    const key = JSON.stringify([b.stage, b.text]);
+    return seen.has(key) ? false : seen.add(key);
+  });
+}
+
 /**
  * @param {object} run  {pr, base, head, configSha, envDigest, envAttempts, imageTag, composeProject, startedAt, finishedAt,
  *   envSeconds, pids, flows, blockers, skipped, ephemeral}. `summary` and `findings` are derived, never passed in.
- *   flows[]: {id, state: pass|fail|flaky|blocked|incomplete, incomplete?, reason?, severity?, attempts?, seconds?, tokens?,
+ *   flows[]: {id, state: pass|fail|flaky|blocked|incomplete, incomplete?, reason?, blocker?: {stage, text}, severity?, attempts?, seconds?, tokens?,
  *   checks?: [{text, state, step?, check?, reason?, evidence?}]}. A blocked flow without a reason takes blockers[0].stage.
  * @returns the report.json object, with the keys in the order of spec section 4.
  */
 export function buildReport(run) {
-  const blockers = (run.blockers ?? []).map((b) => ({ stage: b.stage, text: b.text }));
+  const blockers = blockersOf(run);
   const flows = (run.flows ?? []).map((f) => buildFlow(f, blockers));
   const findings = flows.flatMap(findingsOf);
   const tested = flows.filter((f) => TESTED_STATES.has(f.state)).length;
@@ -85,15 +95,24 @@ export function buildReport(run) {
 
 // ---------- exit code ----------
 
+// A skipped run with this reason is not clean: nothing was configured to grade.
+const SKIP_IS_BROKEN = new Set(['no_config']);
+const OPEN_STATES = new Set(['incomplete', 'blocked']);
+
 /**
  * Exit code of a run, from the report alone. Codes 2, 3 and 4 belong to run.mjs.
- * 5: no flow was tested, or any blocker exists. There is no evidence, so prove-check must read it as broken (13.1).
- * 1: a Fail, and no blocker. 0: everything else.
+ * 5: any blocker, no flow tested, or any selected flow incomplete or blocked. There is no evidence, so prove-check reads it as broken (13.1).
+ * 0: a skipped run with nothing tested, such as "# skipped no_match" (bench negatives K1 and K2). Not broken: no flow applied.
+ *    The exception is skipped no_config (no grading files), which stays 5.
+ * 1: a Fail, and none of the above.
+ * Flaky stays 0 when nothing failed. The bench grades flakiness from report.json, not from the exit code.
  * A Fail beside a blocker gives 5, as 13.1 says. This loses nothing: prove-check reads the `not ok` line as a fire
  * whatever the exit code is, as long as a failing line exists (prove-check.mjs classifyRun).
  */
 export function exitCodeFor(report) {
-  if (report.summary.tested === 0 || report.blockers.length > 0) return 5;
+  if (report.blockers.length > 0) return 5;
+  if (report.summary.tested === 0) return report.skipped && !SKIP_IS_BROKEN.has(report.skipped.reason) ? 0 : 5;
+  if (report.flows.some((f) => OPEN_STATES.has(f.state))) return 5;
   return report.flows.some((f) => f.state === 'fail') ? 1 : 0;
 }
 
@@ -113,7 +132,7 @@ const FLOW_LINES = {
 
 /** GREEN needs a PR number and a hex head. Simulate runs have no PR, so they print no GREEN line. */
 function greenLine(report) {
-  const allPass = report.flows.every((f) => f.state === 'pass'); // exit 0 below already means tested > 0
+  const allPass = report.summary.tested > 0 && report.flows.every((f) => f.state === 'pass'); // a skipped run exits 0 with tested 0: no GREEN
   const prOk = Number.isInteger(report.pr) && report.pr > 0;
   const headOk = typeof report.head === 'string' && /^[0-9a-f]{8,40}$/i.test(report.head);
   if (!allPass || !prOk || !headOk || exitCodeFor(report) !== 0) return [];
