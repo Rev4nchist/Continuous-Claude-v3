@@ -91,8 +91,12 @@ test('S1: every node script and cwd named in the surface table exists', async ()
       assert.ok(existsSync(path.join(cwd, a)), `${g.id}: ${a} is missing`);
     }
     if (g.args.some((x) => x.includes('*'))) {
-      const dir = path.join(cwd, path.dirname(g.args.find((x) => x.includes('*'))));
-      assert.ok(readdirSync(dir).some((n) => /\.test\.mjs$/.test(n)), `${g.id}: the glob matches no test file`);
+      // The folder is the part before the first wildcard segment, so `scripts/trex/**/*.test.mjs` is checked in scripts/trex.
+      const glob = g.args.find((x) => x.includes('*'));
+      const dir = path.join(cwd, glob.split('/').slice(0, glob.split('/').findIndex((seg) => seg.includes('*'))).join('/'));
+      // TREX lands from its own branch: until scripts/trex exists here, its glob has nothing to match (Node 22 exits 0 on that).
+      if (g.id === 'trex-tests' && !existsSync(dir)) continue;
+      assert.ok(readdirSync(dir, { recursive: glob.includes('**') }).some((n) => /\.test\.mjs$/.test(n)), `${g.id}: the glob matches no test file`);
     }
   }
 });
@@ -226,6 +230,15 @@ test('GW4: a change under scripts/checks runs the checks helper tests, and the f
   assert.ok(g);
   assert.deepEqual(g.args, ['--test', 'scripts/checks/prove-check.test.mjs', 'scripts/checks/state-table.test.mjs']);
   for (const a of g.args.slice(1)) assert.ok(existsSync(path.join(REPO_ROOT, a)), a);
+});
+
+test('GW4b: a change under scripts/trex, or to the shared selector test-map.mjs, runs the TREX node tests', async () => {
+  for (const p of ['scripts/trex/run.mjs', '.trex/flows/x.yaml', 'docker/trex/Dockerfile', 'scripts/checks/test-map.mjs']) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'trex-tests');
+    assert.ok(g, p);
+    assert.deepEqual([g.cmd, g.args], ['node', ['--test', 'scripts/trex/**/*.test.mjs']]);
+  }
+  assert.equal(gatesFor(['scripts/github/lib/proc.mjs'], REPO_ROOT).some((x) => x.id === 'trex-tests'), false);
 });
 
 test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {

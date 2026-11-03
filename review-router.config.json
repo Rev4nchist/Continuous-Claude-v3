@@ -136,7 +136,9 @@
       ".claude/hooks/src/shared/scoped-cleanup.ts",
       ".claude/hooks/src/shared/typosquat-detect.ts",
       ".claude/hooks/src/shared/guard-log.ts",
-      ".claude/hooks/src/shared/malicious-packages.json"
+      ".claude/hooks/src/shared/malicious-packages.json",
+      "scripts/github/local-review/prompt.mjs",
+      "scripts/github/local-review/context.mjs"
     ],
     "security_tier": [
       ".claude/hooks/src/*-guard.ts",
