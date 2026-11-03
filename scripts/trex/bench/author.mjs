@@ -12,7 +12,9 @@
  *   node scripts/trex/bench/author.mjs --host-digest [--sha <sha>]  the digest a human review writes to host-review.json
  *   node scripts/trex/bench/author.mjs --freeze --sha <sha>         the sha is a commit that holds the flows; this script never commits
  *
- * Exit codes follow cursor-review.mjs: 0 ran, 1 run failure, 2 bad input or refused by a rule, 3 cap reached.
+ * Exit codes follow cursor-review.mjs: 0 ran, 1 run failure, 2 bad input or refused by a rule, 3 cap reached or the run did not start.
+ * Exit 3 for a run that did not start: runAgent found no free grok slot (grok-busy) and never spawned. The ledger end line has notStarted: true,
+ * so neither BENCH_CAP, GROUP_CAP nor the weekly cap counts the run, and the next attempt needs no --retry. --all stops at the first exit 3.
  * Blindness on Windows: the agent has no sandbox. Every run uses stream-json, so analyzeStream audits the reads of the run. A read outside the
  * tree fails the run (blind: violated). A stream with no visible tool calls keeps the label "best-effort (no read audit)" (spec 13.4).
  */
@@ -94,24 +96,30 @@ const dayOf = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${two
 
 // ---------- budget ----------
 
+/** The ids of runs whose end line says notStarted (no grok slot, no spawn). The same rule as countRuns in cursor-review.mjs. */
+const notStartedIds = (entries) => new Set(entries.filter((e) => e.notStarted === true && e.id).map((e) => e.id));
+
 /**
  * Bench authoring runs in the ledger. Spec 13.4: a run counts when its ref starts with "trex-". One run is one id, so a start
- * and an end line count once. There is no time window: the cap of 18 is for the whole bench.
+ * and an end line count once. A run that never started (end line notStarted) does not count. There is no time window: the cap is for the whole bench.
  */
 export function benchRuns(ledgerPath) {
+  const { entries } = readLedger(ledgerPath);
+  const unstarted = notStartedIds(entries);
   const byId = new Map();
-  for (const e of readLedger(ledgerPath).entries) {
-    if (typeof e.ref === 'string' && e.ref.startsWith('trex-') && !byId.has(e.id)) byId.set(e.id, e.ref);
+  for (const e of entries) {
+    if (typeof e.ref === 'string' && e.ref.startsWith('trex-') && !unstarted.has(e.id) && !byId.has(e.id)) byId.set(e.id, e.ref);
   }
   const byRef = {};
   for (const ref of byId.values()) byRef[ref] = (byRef[ref] ?? 0) + 1;
   return { used: byId.size, byRef };
 }
 
-/** The outcome of the latest earlier run for a ref: 'ok', 'failed' or null (no earlier run). A run with no end line failed. */
+/** The outcome of the latest earlier run for a ref: 'ok', 'failed' or null (no earlier run). A run with no end line failed. A run that never started is no run. */
 function lastOutcome(ledgerPath, ref) {
   const { entries } = readLedger(ledgerPath);
-  const starts = entries.filter((e) => e.ref === ref && e.phase === 'start');
+  const unstarted = notStartedIds(entries);
+  const starts = entries.filter((e) => e.ref === ref && e.phase === 'start' && !unstarted.has(e.id));
   const last = starts.at(-1);
   if (!last) return null;
   const end = entries.find((e) => e.id === last.id && e.phase === 'end');
@@ -563,6 +571,7 @@ async function reservedRun(c) {
   const { reserved, refusal } = reserveUnderLock(c);
   if (refusal) return { exit: refusal.exit, runId: null, files: [], manifest: null, usage: null, problems: refusal.problems };
   const { run, parsed } = await callAgent({ group, opts, deps, st, reserved, model, fmt: 'stream-json' });
+  if (run.notStarted) return notStartedRun({ group, opts, ref, probe, reserved, model, sessionId, run, now, ledgerPath });
   const error = parsed ? runError(run, parsed, model) : run.error;
   const out = parsed && !error ? readAnswer(parsed.text, st, deps) : { files: [], manifest: null, problems: [] };
   const audit = analyzeStream(run.stdout, st.prep.dir);
@@ -575,6 +584,22 @@ async function reservedRun(c) {
   const rec = { group, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
   saveArtifacts({ opts, now, group, probe, rec, run });
   return { exit, runId: reserved.id, files: written, manifest: out.manifest, usage: rec.usage, problems };
+}
+
+/**
+ * runAgent found no free grok slot and never spawned the agent. The end line carries notStarted: true (the field countRuns in
+ * cursor-review.mjs skips), so the run uses no bench run, no group run and no weekly run. No flows, no raw file. The manifest has its
+ * own file name: it never replaces the manifest of an earlier run and latestManifest (freeze) never reads it. The ledger exit is 1,
+ * as in cursor-review.mjs; the returned exit is 3.
+ */
+function notStartedRun({ group, opts, ref, probe, reserved, model, sessionId, run, now, ledgerPath }) {
+  const waitMin = Math.round((run.waitedMs ?? 0) / 60_000);
+  const reason = `not started: ${run.error ?? 'no grok slot'} (waited ${waitMin} min); the agent did not run and the run is not counted against the caps`;
+  finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, durationMs: 0, exit: EXIT.FAILED, timedOut: false, waitedMs: run.waitedMs ?? 0, notStarted: true, error: reason.slice(0, 300) }, { now });
+  const dir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
+  const stem = `${dayOf(now())}-trex-author-${probe ? 'probe' : slug(group)}-not-started-${reserved.id.slice(0, 8)}`;
+  writeJson(path.join(dir, `${stem}.manifest.json`), { group, ref, runId: reserved.id, model, status: 'not-started', exit: EXIT.CAP, error: reason, waitedMs: run.waitedMs ?? 0, notStarted: true });
+  return { exit: EXIT.CAP, runId: reserved.id, files: [], manifest: null, usage: null, problems: [reason], notStarted: true };
 }
 
 /** The blind label of a run: violated after a read outside the tree, audited when tool calls were visible, else best-effort. */
@@ -790,7 +815,7 @@ function groupRecords(cacheDir, groups) {
   const out = {};
   for (const g of groups) {
     const m = latestManifest(cacheDir, g);
-    if (!m || m.status === 'failed') throw new Error(`group ${g} has no successful author manifest in ${cacheDir}`);
+    if (!m || m.status === 'failed' || m.status === 'not-started') throw new Error(`group ${g} has no successful author manifest in ${cacheDir}`);
     out[g] = { runId: m.runId, model: m.model, usage: m.usage ?? null, retries: m.retries ?? 0, blind: m.blind ?? BLIND };
   }
   return out;

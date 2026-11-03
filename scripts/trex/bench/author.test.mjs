@@ -11,6 +11,7 @@ import {
   lintFlow, main, mapNegatives, parseArgs, parseAuthorOutput,
 } from './author.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
+import { runAgent } from '../../github/cursor-review.mjs';
 
 const FIX = 'f0b67364aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const CHANGED = ['scripts/github/pre-pr.mjs', '.claude/hooks/src/pre-pr-gate.ts'];
@@ -1102,4 +1103,96 @@ test('freeze reads the reparse manifest of a group whose live run failed', (t) =
   put(cacheDir, '2026-11-03-trex-author-S1-reparse.manifest.json', JSON.stringify({ group: 'S1', runId: 'run-S1', status: 'ok', usage: { in: 1 }, reparsedFrom: 'x', blind: 'audited (stream-json reads in tree)' }));
   const frozen = freeze('abc123', s.opts, { git: s.git });
   assert.equal(frozen.groups.S1.blind, 'audited (stream-json reads in tree)');
+});
+
+// ---------- not-started runs (the grok gate returns no slot: the agent never spawned) ----------
+
+/** The result runAgent gives when it did not spawn: cursor-review.mjs runAgent, grok-busy branch (other errors share the shape). */
+const busyRun = (error = 'grok-busy') => () => ({ status: null, stdout: '', stderr: `grok gate: ${error}`, timedOut: false, error, notStarted: true, durationMs: 0, waitedMs: 120_000 });
+const timedOutRun = () => ({ status: null, stdout: '', stderr: '', timedOut: true, durationMs: 9 });
+/** n runs that never started: a start line and an end line with notStarted, as finishRun writes them. */
+const notStartedLines = (n, ref = 'trex-S18') => Array.from({ length: n }, (_, i) => [
+  { ts: '2026-11-01T00:00:00.000Z', phase: 'start', id: `ns-${ref}-${i}`, ref, model: 'grok-4.7-high' },
+  { ts: '2026-11-01T00:00:01.000Z', phase: 'end', id: `ns-${ref}-${i}`, ref, exit: 1, notStarted: true, error: 'grok-busy' },
+].map((l) => JSON.stringify(l)).join('\n')).join('\n');
+const manifestOf = (s, re) => JSON.parse(readFileSync(path.join(s.root, '.claude/cache/e2e', cacheFiles(s.root).find((f) => re.test(f))), 'utf8'));
+
+for (const [error, viaRealRunAgent] of [['grok-busy', true], ['hook-bash-hang', false], ['cli-config-race', false], ['bash-hang', false]]) {
+  test(`authorGroup ends a not-started run (${error}) with notStarted, writes no flows and a not-started manifest, and exits 3`, async (t) => {
+    const run = viaRealRunAgent ? (spec) => runAgent(spec, { gate: async () => ({ ok: false, reason: 'busy', waitedMs: 120_000 }), gateEnv: {}, spawnFn: () => { throw new Error('spawn forbidden in test'); } }) : busyRun(error);
+    const s = authorSetup(t, { run });
+    const r = await authorGroup('S18', s.opts, s.deps);
+    assert.equal(r.exit, 3, r.problems.join('; '));
+    assert.equal(r.notStarted, true);
+    assert.match(r.problems[0], new RegExp(`^not started: .*${error}`));
+    assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S18')), 'no flows');
+    const lines = ledgerLines(s.ledger);
+    assert.deepEqual(lines.map((l) => l.phase), ['start', 'end']);
+    assert.equal(lines[1].id, lines[0].id);
+    assert.equal(lines[1].notStarted, true);
+    assert.match(lines[1].error, new RegExp(error));
+    const m = manifestOf(s, /not-started/);
+    assert.equal(m.status, 'not-started');
+    assert.equal(m.error.includes(error), true);
+    assert.equal(m.runId, lines[0].id);
+    assert.equal(s.state.cleaned, 1);
+    assert.deepEqual(benchRuns(s.ledger), { used: 0, byRef: {} });
+  });
+}
+
+test('benchRuns skips a run whose end line says notStarted, by id and by ref', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'trex-author-test-'));
+  try {
+    const ledger = path.join(dir, 'l.jsonl');
+    writeFileSync(ledger, `${notStartedLines(2, 'trex-S18')}\n${startLines(1, 'trex-S18')}\n`);
+    assert.deepEqual(benchRuns(ledger), { used: 1, byRef: { 'trex-S18': 1 } });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('not-started runs use neither a bench run nor a group run: BENCH_CAP of them and GROUP_CAP for one group still allow a run', async (t) => {
+  const s = authorSetup(t, { ledger: `${notStartedLines(BENCH_CAP, 'trex-S1')}\n${notStartedLines(GROUP_CAP, 'trex-S18')}\n` });
+  const r = await authorGroup('S18', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(s.state.runs.length, 1);
+});
+
+test('a not-started run needs no --retry for the next attempt, but a run that ran still does', async (t) => {
+  const s = authorSetup(t, { ledger: `${notStartedLines(1, 'trex-S18')}\n` });
+  assert.equal((await authorGroup('S18', s.opts, s.deps)).exit, 0, 'never ran: no retry flag');
+  const f = authorSetup(t, { ledger: `${startLines(1, 'trex-S18')}\n${notStartedLines(1, 'trex-S18')}\n` });
+  assert.equal((await authorGroup('S18', f.opts, f.deps)).exit, 2, 'an earlier run did run: --retry is still needed');
+  assert.equal(f.state.runs.length, 0);
+});
+
+test('a not-started retry does not hide the outcome of the run before it', async (t) => {
+  const ok = JSON.stringify({ ts: '2026-11-01T00:00:01.000Z', phase: 'end', id: 'id-trex-S18-0', ref: 'trex-S18', exit: 0 });
+  const s = authorSetup(t, { ledger: `${startLines(1, 'trex-S18')}\n${ok}\n${notStartedLines(1, 'trex-S18')}\n` });
+  assert.equal((await authorGroup('S18', { ...s.opts, retry: true }, s.deps)).exit, 2, 'the last run that ran succeeded: --retry-harness only');
+});
+
+test('a not-started retry keeps the manifest of the failed run, and the next real retry is numbered r1', async (t) => {
+  let busy = false;
+  const s = authorSetup(t, { run: (spec) => (busy ? busyRun()(spec) : timedOutRun()) });
+  assert.equal((await authorGroup('S18', s.opts, s.deps)).exit, 1);
+  const first = manifestOf(s, /S18\.manifest\.json$/);
+  busy = true;
+  assert.equal((await authorGroup('S18', { ...s.opts, retry: true }, s.deps)).exit, 3);
+  assert.deepEqual(manifestOf(s, /S18\.manifest\.json$/), first, 'the failed run manifest is untouched');
+  busy = false;
+  assert.equal((await authorGroup('S18', { ...s.opts, retry: true }, s.deps)).exit, 1);
+  assert.equal(manifestOf(s, /S18-r1\.manifest\.json$/).retries, 1);
+});
+
+test('main --group prints one line for a not-started run and exits 3', async (t) => {
+  const s = authorSetup(t, { run: busyRun() });
+  const { code, text } = await cli(s, ['--group', 'S18']);
+  assert.equal(code, 3);
+  assert.equal(text.split('\n').length, 1, text);
+  assert.match(text, /^S18: exit 3 \(not started: /);
+});
+
+test('freeze refuses a group whose latest manifest is a not-started record', (t) => {
+  const s = freezeSetup(t);
+  put(s.opts.cacheDir, '2026-11-03-trex-author-S1.manifest.json', JSON.stringify({ group: 'S1', runId: 'run-S1', status: 'not-started', error: 'grok-busy' }));
+  assert.throws(() => freeze('abc123', s.opts, { git: s.git }), /S1/);
 });
