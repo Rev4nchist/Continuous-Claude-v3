@@ -608,8 +608,8 @@ function runError(run, parsed, timeoutMs, model) {
   return null;
 }
 
-/** Retry only on a spawn error or a non-zero exit. Never on a time-out; a model mismatch or notRun has exit 0, so it never matches. */
-const retryable = (cur) => !cur.run.timedOut && !cur.parsed.modelMismatch && !cur.parsed.notRun && Boolean(cur.run.error || cur.run.status !== 0);
+/** Retry only on a spawn error (Dave 2026-11-02, main spec). Never on a non-zero exit, a time-out, a model mismatch or notRun. */
+const retryable = (cur) => !cur.run.timedOut && !cur.parsed.modelMismatch && !cur.parsed.notRun && Boolean(cur.run.error);
 
 async function runOnce(s, prep, plan, runId, attempt) {
   const { d, route } = s;

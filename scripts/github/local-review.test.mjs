@@ -170,8 +170,19 @@ test('the reserve entry carries ref branch-<slug> and perRefCap from per_branch_
 
 // ---------- rows 2 and 3: retry ----------
 
-test('retry-reserves-again: a non-zero exit runs a second, separately reserved attempt (breaks if attempt 2 skips reserveRun)', async () => {
+const spawnErrRun = () => ({ status: null, stdout: '', stderr: '', timedOut: false, error: 'spawn ENOENT', durationMs: 1 });
+
+test('no retry on a non-zero exit: one attempt, record failed (breaks if a non-zero exit is retried again)', async () => {
   const w = world({ runs: [failRun(1), agentRun([finding()])] });
+  const r = await run(w);
+  assert.equal(r.exit, EXIT.FAILED);
+  assert.equal(w.agentCalls.length, 1);
+  assert.equal(w.reserveCalls.length, 1);
+  assert.equal(readRecord(r).status, 'failed');
+});
+
+test('retry-reserves-again: a spawn error runs a second, separately reserved attempt (breaks if attempt 2 skips reserveRun)', async () => {
+  const w = world({ runs: [spawnErrRun(), agentRun([finding()])] });
   const r = await run(w);
   assert.equal(r.exit, EXIT.OK);
   assert.equal(w.agentCalls.length, 2);
@@ -188,7 +199,7 @@ test('retry-reserves-again: a non-zero exit runs a second, separately reserved a
 });
 
 test('a spawn error retries once, and a second failure ends the run as failed after exactly 2 attempts (breaks if retry_max is ignored)', async () => {
-  const w = world({ runs: [{ status: null, stdout: '', stderr: '', timedOut: false, error: 'spawn ENOENT', durationMs: 1 }, failRun(1)] });
+  const w = world({ runs: [spawnErrRun(), spawnErrRun()] });
   const r = await run(w);
   assert.equal(r.exit, EXIT.FAILED);
   assert.equal(w.agentCalls.length, 2);
@@ -911,7 +922,7 @@ test('main with a pin runs reviewHead with the gates text and prints the result 
 });
 
 test('a retry that the cap refuses leaves the first failed attempt as the record and exits 1 (breaks if a refused retry discards the run)', async () => {
-  const w = world({ runs: [failRun(1), agentRun()] });
+  const w = world({ runs: [spawnErrRun(), agentRun()] });
   w.configPath = tempConfig(w, (c) => { c.local_review.per_branch_cap = 1; });
   const r = await run(w);
   assert.equal(r.exit, EXIT.FAILED);
