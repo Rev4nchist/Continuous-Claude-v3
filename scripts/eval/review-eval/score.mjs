@@ -39,9 +39,12 @@ function recallOf(rows, labelBy = new Map()) {
 }
 
 export function scorecard({ runs = [], matches = [], labels = [], sets = {}, frozenPromptSha256 = null, escapes = {}, bakeoff = {}, headless = {}, pairsSent = [] } = {}) {
-  const valid = runs.filter((r) => !(r.set === 'holdout' && frozenPromptSha256 && r.promptSha256 !== frozenPromptSha256));
+  // A holdout run (or match row) with another prompt hash leaves every holdout number: recall, precision, false alarms, cost.
+  const stale = (r) => r.set === 'holdout' && Boolean(frozenPromptSha256) && r.promptSha256 !== frozenPromptSha256;
+  const valid = runs.filter((r) => !stale(r));
   const labelBy = labelMap(labels);
-  const holdout = recallOf(matches.filter((m) => m.set === 'holdout'), labelBy);
+  // evaluateRuns always sets promptSha256 on a match row (null when the run had none); a row with no such field carries no hash.
+  const holdout = recallOf(matches.filter((m) => m.set === 'holdout' && !(m.promptSha256 !== undefined && stale(m))), labelBy);
   const dev = recallOf(matches.filter((m) => m.set === 'dev'), labelBy);
 
   const zero = new Set(sets.zeroMajorPrs ?? []);
@@ -87,6 +90,21 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
 }
 
 /**
+ * runs.jsonl is append-only, so a re-run adds a second row for the same round. The newest row per (pr, round, sha40) wins,
+ * by ts, and on a tie (or an unreadable ts) the later line wins. A newest row that is not ok makes the round a failure.
+ */
+function newestPerRound(runs) {
+  const best = new Map();
+  runs.forEach((r, i) => {
+    const key = `${r.pr}|${r.round}|${r.sha40}`;
+    const t = Date.parse(r.ts);
+    const prev = best.get(key);
+    if (!prev || !(t < prev.t)) best.set(key, { t, i, r }); // NaN on either side compares false: the later line wins
+  });
+  return [...best.values()].sort((a, b) => a.i - b.i).map((x) => x.r);
+}
+
+/**
  * Glue: match each replayed run against the dataset findings of its (pr, sha40).
  * runs: run records (with findingsPath). dataset: resolved findings. readFindings(path) => { findings: [{ file, line, lineEnd, severity, title }] }.
  * Returns { runs: [{ ...run, findings: [{ id, sev, matchedKey }] }], matches: [...] } ready for scorecard().
@@ -94,13 +112,13 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
 export function evaluateRuns({ runs, dataset, readFindings, tol = 3 }) {
   const outRuns = [];
   const matches = [];
-  for (const run of runs.filter((r) => r.status === 'ok')) {
+  for (const run of newestPerRound(runs).filter((r) => r.status === 'ok')) {
     // pairId is the key ingestLabels writes; it must use the same fields as the exported pair (pr, sha40, file, raw line, title).
     const eng = (readFindings(run.findingsPath).findings ?? []).map((f, i) => ({ src: 'engine', id: `${run.pr}-${run.round}-${i}`, pairId: pairId({ pr: run.pr, sha: run.sha40, file: f.file, line: f.line, engineTitle: f.title }), file: f.file, start: Number.isFinite(f.line) ? f.line : null, end: Number.isFinite(f.lineEnd) ? f.lineEnd : (Number.isFinite(f.line) ? f.line : null), sev: lc(f.severity) }));
     const cr = dataset.filter((d) => d.pr === run.pr && d.sha40 === run.sha40).map((d) => ({ src: 'cr', id: d.key, file: d.path, start: d.startLine, end: d.endLine, sev: foldSev(d.severity), d }));
     const res = matchFindings(cr, eng, { tol });
     const hit = new Map(res.matches.map((m) => [m.cr.id, m.eng]));
-    for (const c of cr) matches.push({ key: c.id, pr: run.pr, set: run.set, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null, engPairId: hit.get(c.id)?.pairId ?? null });
+    for (const c of cr) matches.push({ key: c.id, pr: run.pr, set: run.set, promptSha256: run.promptSha256 ?? null, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null, engPairId: hit.get(c.id)?.pairId ?? null });
     const byEng = new Map(res.matches.map((m) => [m.eng.id, m.cr.id]));
     outRuns.push({ ...run, findings: eng.map((e) => ({ id: e.id, pairId: e.pairId, sev: e.sev, matchedKey: byEng.get(e.id) ?? null })) });
   }

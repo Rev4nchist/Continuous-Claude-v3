@@ -7,23 +7,28 @@ import { chicagoDay } from '../../lib/headless.mjs';
 export const EVAL_SESSION = 'review-eval';
 export const SHADOW_SESSION = 'review-shadow';
 
-const starts = (entries, session) => {
+// keep(e) narrows the rows further (the shadow day filter). A row with no id counts on its own.
+const starts = (entries, session, keep = () => true) => {
   const ids = new Set();
   let anon = 0;
   for (const e of entries) {
-    if (e.phase !== 'start' || e.sessionId !== session) continue;
+    if (e.phase !== 'start' || e.sessionId !== session || !keep(e)) continue;
     ids.add(e.id ?? `anon-${anon++}`);
   }
   return ids;
+};
+
+// An unreadable time counts as today, the same safe-side rule as countRuns.
+const onDay = (day) => (e) => {
+  const t = Date.parse(e.ts);
+  return Number.isNaN(t) || chicagoDay(t) === day;
 };
 
 /** { ok, evalUsed, globalUsed, shadowUsedToday, reason?: 'eval-budget' | 'headroom' | 'shadow-daily' }. */
 export function cursorBudget(entries, cfg, { now = Date.now(), kind = 'eval' } = {}) {
   const evalUsed = starts(entries, EVAL_SESSION).size;
   const globalUsed = countRuns(entries, { now });
-  const today = chicagoDay(now);
-  const shadowToday = entries.filter((e) => e.phase === 'start' && e.sessionId === SHADOW_SESSION && chicagoDay(Date.parse(e.ts)) === today);
-  const shadowUsedToday = new Set(shadowToday.map((e) => e.id)).size;
+  const shadowUsedToday = starts(entries, SHADOW_SESSION, onDay(chicagoDay(now))).size;
   const out = { ok: true, evalUsed, globalUsed, shadowUsedToday };
   const headroomCap = WEEKLY_CAP - (cfg.cursorHeadroom ?? 60);
   if (kind === 'eval' && evalUsed >= cfg.cursorEvalBudget) return { ...out, ok: false, reason: 'eval-budget' };

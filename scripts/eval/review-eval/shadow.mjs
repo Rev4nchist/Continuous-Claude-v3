@@ -13,6 +13,7 @@ import { defaultGh, ghList, inlineComments, roundData, roundsFrom } from './gith
 import { isoWeek } from './labels.mjs';
 import { judgeSameIssue, resolveJudged } from './judge.mjs';
 import { foldSev, isMajor, matchFindings } from './match.mjs';
+import { makeGit, replayRun as realReplayRun } from './replay.mjs';
 
 export { judgeSameIssue, matchFindings };
 export const SHADOW_ROOT = process.env.CCV3_SHADOW_ROOT || path.join(os.homedir(), '.claude', 'state', 'local-review-shadow');
@@ -200,7 +201,9 @@ async function pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kin
     if (git && !has()) git(['fetch', '--quiet', 'fork', `pull/${pr}/head`]); // a sha that is still missing after the fetch is gone
     const shaGone = git ? !has() : false;
     let eng = null;
-    if (!dryRun && !round.notice && engine && budget.left > 0) { budget.left -= 1; eng = await engine({ pr, round: i + 1, sha40: round.sha40, base }); }
+    // rank: the round's place among the non-notice rounds, the numbering fetchPr and replayRun use.
+    const rank = rounds.slice(0, i + 1).filter((r) => !r.notice).length;
+    if (!dryRun && !round.notice && engine && budget.left > 0) { budget.left -= 1; eng = await engine({ pr, round: i + 1, rank, sha40: round.sha40, base }); }
     const prInfo = { author: pull.user?.login, merged: Boolean(pull.merged_at), closed: pull.state === 'closed', shaGone };
     const st = pairState({ round, engine: eng, pr: prInfo, now, ttlMs: (cfg.shadow?.ttlHours ?? 12) * 3_600_000 });
     const row = { v: 1, ts: new Date(now).toISOString(), pr, sha40: round.sha40, round: i + 1, kind, band, crBase: base, engineSource: eng ? 'shadow' : null, engineVersion: version, state: st.state, reason: st.reason, paid: false, cr: cr.map(({ id, sev, inDiff, file, start, end }) => ({ id, sev, inDiff, file, start, end })), eng: [], matches: [], crOnly: [], engOnly: [], disputed: [] };
@@ -224,6 +227,27 @@ async function pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kin
 }
 
 const rootOf = (argv, deps) => deps.root ?? flag(argv, '--root', SHADOW_ROOT);
+// The checkout this file sits in (scripts/eval/review-eval/ is three levels down). The scheduled task's cwd is not the repo.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/**
+ * The engine a direct CLI run uses: replayRun with kind 'shadow', output under the shadow root.
+ * ok -> { sha40, timedOut, failed: false, findings }; failed or tree_unbuildable -> { failed: true }; cap, frozen or refused -> null
+ * (no engine record: the round stays engine_pending and a later sync retries it).
+ */
+export function defaultShadowEngine({ cfg, gh, root, repoRoot = REPO_ROOT, replayRun = realReplayRun }) {
+  return async ({ pr, rank, sha40 }) => {
+    const res = await replayRun({ pr, round: rank, set: 'shadow', kind: 'shadow' }, { root: repoRoot, cfg, gh, outRoot: path.join(root, 'replay'), runsPath: path.join(root, 'runs.jsonl') });
+    const at = res.record?.sha40 ?? sha40;
+    if (res.status === 'ok') {
+      let found = {};
+      try { found = JSON.parse(readFileSync(res.findingsPath, 'utf8')); } catch { return { sha40: at, failed: true }; }
+      return { sha40: at, timedOut: Boolean(found.timedOut), failed: false, findings: (found.findings ?? []).map(toEngineFinding) };
+    }
+    if (res.status === 'failed' || res.status === 'tree_unbuildable') return { sha40: at, failed: true, timedOut: /timed out/i.test(String(res.reason ?? '')) };
+    return null;
+  };
+}
 
 export async function main(argv, deps = {}) {
   const [cmd] = argv;
@@ -255,11 +279,16 @@ export async function main(argv, deps = {}) {
     const dryRun = argv.includes('--dry-run');
     const version = deps.engineVersion ?? engineVersion({ model: 'grok-4.7-high', promptSha256: cfg.freeze?.promptSha256 ?? promptSha256() });
     const budget = { left: max };
+    // Injected deps win (tests, callers); a direct CLI run gets the real replay engine, git in this checkout, and the headless judge.
+    const repoRoot = deps.repoRoot ?? REPO_ROOT;
+    const engine = deps.engine ?? defaultShadowEngine({ cfg, gh, root, repoRoot, replayRun: deps.replayRun });
+    const git = deps.git ?? makeGit(repoRoot);
+    const runJudge = deps.runJudge ?? (await import('../../lib/headless.mjs')).runJudge;
     const all = [];
     const failures = [];
     for (let pr = from; pr <= to; pr += 1) {
       try {
-        const { rows } = await pairsForPr(pr, { gh, git: deps.git, engine: deps.engine, runJudge: deps.runJudge, cfg, now, dryRun, kind: 'retro', band: deps.band ?? 'MID', version, budget });
+        const { rows } = await pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kind: 'retro', band: deps.band ?? 'MID', version, budget });
         all.push(...rows);
       } catch (e) { failures.push({ pr, error: String(e.message).slice(0, 200) }); }
     }

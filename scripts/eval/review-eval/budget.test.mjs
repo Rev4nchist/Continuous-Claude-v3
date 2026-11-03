@@ -64,6 +64,22 @@ test('shadow replays stop at dailyMax per Chicago day', () => {
   assert.equal(r.reason, 'shadow-daily');
 });
 
+test('a shadow start row with an unreadable ts counts as used today and does not throw', () => {
+  // Breaks when: chicagoDay(NaN) is called (RangeError) or an unreadable time is not counted.
+  const bad = { ts: 'not a time', phase: 'start', id: 'bad-1', sessionId: 'review-shadow' };
+  const r = cursorBudget([bad, ...many(5, 'review-shadow', NOW - 60_000)], cfg, { now: NOW, kind: 'shadow' });
+  assert.equal(r.shadowUsedToday, 6);
+  assert.equal(r.reason, 'shadow-daily');
+});
+
+test('shadow start rows with no id each count once', () => {
+  // Breaks when: rows with no id collapse into one undefined Set entry.
+  const anon = Array.from({ length: 6 }, () => ({ ts: new Date(NOW - 60_000).toISOString(), phase: 'start', sessionId: 'review-shadow' }));
+  const r = cursorBudget(anon, cfg, { now: NOW, kind: 'shadow' });
+  assert.equal(r.shadowUsedToday, 6);
+  assert.equal(r.ok, false);
+});
+
 test('F13 budgetFromFile skips a damaged line and counts the rest', () => {
   // Breaks when: budgetFromFile parses the file itself with no try/catch instead of the shared readLedger.
   const dir = mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'budget-'));

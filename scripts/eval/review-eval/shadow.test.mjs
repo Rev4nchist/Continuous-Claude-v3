@@ -245,3 +245,50 @@ test('sF10 decide writes band-state.json under the shadow root, never under loca
   assert.equal(underLocalReview(file), false);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).MID.mode, 'full');
 });
+
+test('retro with no injected engine replays through replayRun (kind shadow, the non-notice rank) and writes under the shadow root', async () => {
+  // Breaks when: main forwards deps.engine/git/runJudge as undefined (every round stays engine_pending, crBase null),
+  // the default engine passes the raw round index (a notice round shifts it), or replay output leaves the shadow root.
+  const root = mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'shadow-default-'));
+  const A = sha('a');
+  const X = sha('c');
+  const B = sha('b');
+  const gh = async (args) => {
+    const route = args[args.length - 1];
+    if (route.includes('/reviews')) return [[
+      { id: 10, user: CR, body: '> ## Review skipped\n> too many files', commit_id: X, submitted_at: '2026-11-01T00:00:00Z' },
+      { id: 11, user: CR, body: '**Actionable comments posted: 1**', commit_id: A, submitted_at: '2026-11-01T01:00:00Z' },
+    ]];
+    if (route.includes('/issues/300/comments')) return [[]];
+    if (route.includes('/commits')) return [[{ sha: X }, { sha: A }]];
+    if (route.includes('/pulls/300/comments')) return [[{ id: 99, user: CR, in_reply_to_id: null, original_commit_id: A, original_line: 10, path: 'a.mjs', body: '**Bug**' }]];
+    return { user: { login: 'dave' }, state: 'open', merged_at: null };
+  };
+  const git = (args) => (args[0] === 'merge-base' ? { status: 0, stdout: `${B}\n` } : { status: 0, stdout: '' });
+  const findingsPath = path.join(root, 'f.json');
+  writeFileSync(findingsPath, JSON.stringify({ timedOut: false, findings: [{ file: 'a.mjs', line: 10, lineEnd: null, severity: 'major', title: 't' }] }));
+  const calls = [];
+  const replayRun = async (args, deps) => { calls.push({ args, deps }); return { exit: 0, status: 'ok', pr: args.pr, round: args.round, record: { sha40: A }, findingsPath }; };
+  const code = await main(['retro', '--from', '300', '--to', '300'], { root, cfg: { shadow: {}, freeze: { promptSha256: 'P' } }, gh, git, replayRun, engineVersion: 'v1', now: () => 1_700_000_000_000, stdout: () => {}, stderr: () => {} });
+  assert.equal(code, 0);
+  assert.equal(calls.length, 1);
+  assert.deepEqual([calls[0].args.pr, calls[0].args.round, calls[0].args.kind, calls[0].args.set], [300, 1, 'shadow', 'shadow']);
+  for (const p of [calls[0].deps.outRoot, calls[0].deps.runsPath]) assert.ok(path.resolve(p).startsWith(path.resolve(root)), p);
+  const rows = readFileSync(path.join(root, 'pairs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const row = rows.find((r) => r.sha40 === A);
+  // crBase is round k-1 (here the notice round X): crRange's rule. Before the fix it was null (no git).
+  assert.deepEqual([row.state, row.engineSource, row.crBase, row.matches.length], ['paired', 'shadow', X, 1]);
+  const first = rows.find((r) => r.sha40 === X);
+  assert.equal(first.crBase, B);
+});
+
+test('the default shadow engine maps a failed replay to void_partial and a cap refusal to engine_pending', async () => {
+  // Breaks when: a failed replay is read as paired, or a cap/frozen refusal is read as a failed run.
+  const { defaultShadowEngine } = await import('./shadow.mjs');
+  const A = sha('a');
+  const mk = (res) => defaultShadowEngine({ cfg: {}, gh: null, root: os.tmpdir(), repoRoot: os.tmpdir(), replayRun: async () => res });
+  const failed = await mk({ exit: 1, status: 'failed', reason: 'TIMED OUT after 1500 s', record: { sha40: A } })({ pr: 1, rank: 1, sha40: A });
+  assert.equal(pairState({ round: { sha40: A }, engine: failed, pr: {}, now: 0, ttlMs: HOUR }).state, 'void_partial');
+  const cap = await mk({ exit: 3, status: 'cap', reason: 'headroom' })({ pr: 1, rank: 1, sha40: A });
+  assert.equal(pairState({ round: { sha40: A }, engine: cap, pr: {}, now: 0, ttlMs: HOUR }).state, 'engine_pending');
+});

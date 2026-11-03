@@ -44,6 +44,45 @@ test('a holdout run with another promptSha256 leaves the holdout score', () => {
   assert.equal(s.excludedRuns, 1);
 });
 
+test('a holdout run with another promptSha256 leaves the holdout recall too', () => {
+  // Breaks when: recall reads every match row and ignores the run's prompt hash (only precision filtered).
+  const sha40 = 'd'.repeat(40);
+  const dataset = [{ key: '5:1', pr: 5, sha40, path: 'a.mjs', startLine: 10, endLine: 10, severity: 'Major', verdict: 'real', source: 'inline' }];
+  const runs = [
+    { status: 'ok', set: 'holdout', pr: 5, round: 1, sha40, promptSha256: 'P0', findingsPath: 'none', ts: '2026-11-03T01:00:00Z' },
+    { status: 'ok', set: 'holdout', pr: 5, round: 2, sha40, promptSha256: 'P1', findingsPath: 'hit', ts: '2026-11-03T02:00:00Z' },
+  ];
+  const read = (p) => ({ findings: p === 'hit' ? [{ file: 'a.mjs', line: 10, severity: 'major', title: 't' }] : [] });
+  const ev = evaluateRuns({ runs, dataset, readFindings: read });
+  const s = scorecard({ ...base, runs: ev.runs, matches: ev.matches, labels: [] });
+  assert.deepEqual([s.perMajorRecall.strict.found, s.perMajorRecall.strict.total], [0, 1]);
+  assert.deepEqual([s.perPrRecall.found, s.perPrRecall.total], [0, 1]);
+});
+
+test('evaluateRuns keeps only the newest row per (pr, round, sha40): a later ok replaces an earlier failure', () => {
+  // Breaks when: repeat rows are not removed (two ok rows double the Major total) or the oldest row wins.
+  const sha40 = 'e'.repeat(40);
+  const dataset = [{ key: '6:1', pr: 6, sha40, path: 'a.mjs', startLine: 3, endLine: 3, severity: 'Major', verdict: 'real', source: 'inline' }];
+  const row = (status, ts, findingsPath) => ({ status, set: 'holdout', pr: 6, round: 1, sha40, promptSha256: 'P0', findingsPath, ts });
+  const read = (p) => ({ findings: p === 'hit' ? [{ file: 'a.mjs', line: 3, severity: 'major', title: 't' }] : [] });
+  const twoOk = evaluateRuns({ runs: [row('ok', '2026-11-03T01:00:00Z', 'miss'), row('ok', '2026-11-03T02:00:00Z', 'hit')], dataset, readFindings: read });
+  assert.equal(twoOk.runs.length, 1);
+  assert.deepEqual(twoOk.matches.map((x) => x.engSev), ['major']);
+  const failedThenOk = evaluateRuns({ runs: [row('failed', '2026-11-03T01:00:00Z', null), row('ok', '2026-11-03T02:00:00Z', 'hit')], dataset, readFindings: read });
+  assert.deepEqual(failedThenOk.matches.map((x) => x.engSev), ['major']);
+});
+
+test('evaluateRuns: a failed newest row makes the round count as failed, even after an earlier ok', () => {
+  // Breaks when: the ok filter runs before the newest-row pick, so a stale ok row survives a later failure.
+  const sha40 = 'f'.repeat(40);
+  const dataset = [{ key: '4:1', pr: 4, sha40, path: 'a.mjs', startLine: 3, endLine: 3, severity: 'Major', verdict: 'real', source: 'inline' }];
+  const row = (status, ts) => ({ status, set: 'holdout', pr: 4, round: 1, sha40, promptSha256: 'P0', findingsPath: 'hit', ts });
+  const read = () => ({ findings: [{ file: 'a.mjs', line: 3, severity: 'major', title: 't' }] });
+  const ev = evaluateRuns({ runs: [row('ok', '2026-11-03T01:00:00Z'), row('failed', '2026-11-03T02:00:00Z')], dataset, readFindings: read });
+  assert.equal(ev.runs.length, 0);
+  assert.equal(ev.matches.length, 0);
+});
+
 test('p0-F18 the precision numerator excludes unverified findings; the range shows both bounds', () => {
   // Breaks when: an unlabelled finding, or a judge verdict, is counted as real.
   const runs = [run(1, 'holdout', [{ id: 'a', sev: 'major', matchedKey: 'k1' }, { id: 'b', sev: 'minor' }, { id: 'c', sev: 'minor' }, { id: 'd', sev: 'minor', judgeVerdict: 'real' }])];

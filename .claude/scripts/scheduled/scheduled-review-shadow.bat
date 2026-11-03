@@ -15,8 +15,10 @@ REM finding and not a task failure: it is logged and the task exits 0.
 
 set "REPO=%CCV3_REPO%"
 if not defined REPO set "REPO=%USERPROFILE%\continuous-claude"
-set "LOG=%USERPROFILE%\continuous-claude\.claude\logs\review-shadow.log"
+set "LOG=%REPO%\.claude\logs\review-shadow.log"
 if defined REVIEW_SHADOW_LOG set "LOG=%REVIEW_SHADOW_LOG%"
+REM cmd cannot open the redirect target in a missing folder, and then it skips the call: make the folder first.
+for %%I in ("%LOG%") do if not exist "%%~dpI" mkdir "%%~dpI"
 
 if defined CCV3_SHADOW_LOGGED goto :BODY
 set "CCV3_SHADOW_LOGGED=1"

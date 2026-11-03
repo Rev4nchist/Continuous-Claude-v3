@@ -7,7 +7,7 @@
 //   judge [--probe]                           one judge call (spends a headless run: the probe is the only caller)
 //   labels export --pairs F --dir D | labels ingest --dir D [--out F]
 //   score --dir D [--out F]                   scorecard from runs.jsonl and the dataset
-//   report --dir D [--out F]                  the scorecard as a short Markdown table
+//   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
