@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { codeRabbitNotice, coderabbitRequestComments, isCodeRabbitUser, latestCodeRabbitSummary, newestCodeRabbitReview, readIssueComments, readPrCommits, summaryCoversHead, trustedCodeRabbitSummary } from './review-status.mjs';
+import { codeRabbitNotice, coderabbitRequestComments, isCodeRabbitUser, latestCodeRabbitSummary, newestCodeRabbitReview, readIssueComments, summaryCoversHead, trustedCodeRabbitSummary } from './review-status.mjs';
 
 const ms = (iso) => Date.parse(iso || '') || 0;
 const iso = (t) => new Date(t).toISOString();
@@ -57,8 +57,16 @@ export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments
   // head and is no notice (live PR 211 got no review object for its on-demand round, only a summary edit).
   const trusted = trustedCodeRabbitSummary(comments, commentEdits);
   const bodyReview = newestCodeRabbitReview(reviews, commits);
+  // newestCodeRabbitReview falls back to submitted_at unless the list holds EVERY reviewed commit (ranksFor: all or none).
+  // With rounds on two or more commits that fallback can pick the wrong round, so a missing commit refuses.
   const roundCommits = new Set(crReviews.filter((r) => String(r.body ?? '').trim() !== '').map((r) => String(r.commit_id ?? '').toLowerCase()));
-  if (!commits?.length && roundCommits.size >= 2) refusals.push('could not read the PR commit list to order CodeRabbit rounds');
+  const listed = new Set((commits ?? []).map((c) => String(c?.sha ?? '').toLowerCase()));
+  const unlisted = [...roundCommits].filter((sha) => !listed.has(sha));
+  if (roundCommits.size >= 2 && unlisted.length) {
+    refusals.push(listed.size
+      ? `could not order CodeRabbit rounds: reviewed commit ${unlisted[0].slice(0, 7)} is not in the PR commit list (history rewritten?)`
+      : 'could not read the PR commit list to order CodeRabbit rounds');
+  }
   const coversHead = trusted && !codeRabbitNotice(trusted.body) && summaryCoversHead(trusted.body, head);
   const answeredAt = Math.max(bodyReview ? ms(bodyReview.submitted_at) : 0, coversHead ? ms(trusted.updated_at || trusted.created_at) : 0);
   const open = coderabbitRequestComments(comments).filter((c) => ms(c.created_at) > answeredAt);
@@ -70,6 +78,19 @@ export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments
 
 const flatPages = (pages) => [pages].flat(2);
 
+/** The PR's commits, oldest first, as [{ sha }]. Throws when the read fails or returns no commit (a PR always has one). */
+function readCommitList(gh, base, pr) {
+  let list;
+  try {
+    list = flatPages(gh(['--paginate', '--slurp', `${base}/pulls/${pr}/commits?per_page=100`]));
+  } catch (err) {
+    throw new Error(`the PR commit list is unreadable (${String(err?.message ?? err).split('\n')[0]})`);
+  }
+  const commits = list.map((c) => ({ sha: String(c?.sha ?? '').toLowerCase() })).filter((c) => /^[0-9a-f]{40}$/.test(c.sha));
+  if (!commits.length) throw new Error('the PR commit list is empty');
+  return commits;
+}
+
 /** Re-read the PR through `gh(args)` (parsed JSON) and decide. Any read error is a refusal. */
 export function recheckPr({ pr, repo, head, readyAt }, gh) {
   try {
@@ -79,8 +100,9 @@ export function recheckPr({ pr, repo, head, readyAt }, gh) {
     // The shared reader READY uses: all REST pages, each comment paired with its GraphQL body and edit history.
     const [owner, name] = repo.split('/');
     const { comments, commentEdits } = readIssueComments(gh, owner, name, pr);
-    // The PR's commit order ranks the CodeRabbit rounds (as cr-fix and cr-paid do); [] when unreadable.
-    const commits = readPrCommits(gh, owner, name, pr);
+    // The PR's commit order ranks the CodeRabbit rounds (as cr-fix and cr-paid do). Read directly, not through readPrCommits:
+    // that helper returns [] on a read error, and a failed read must refuse (fail closed).
+    const commits = readCommitList(gh, base, pr);
     // The combined status lists 30 statuses a page: read every page (100 each), so a pending CodeRabbit status on a later page counts.
     const statuses = flatPages(gh(['--paginate', '--slurp', `${base}/commits/${pull.head.sha}/status?per_page=100`])).flatMap((page) => page?.statuses ?? []);
     return decideRecheck({ readyHead: head, readyAt, pull, reviews, comments, commentEdits, statuses, commits });

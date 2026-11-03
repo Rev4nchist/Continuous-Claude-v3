@@ -234,6 +234,13 @@ test('RC15d: an empty-body reply or a person review on another commit is no seco
   assert.deepEqual(decideRecheck(quiet({ reviews, commits: [] })), { ok: true, refusals: [] });
 });
 
+test('RC15f: a commit list that misses a reviewed commit cannot order the rounds and refuses', () => {
+  // ranksFor ranks only when the list holds every reviewed commit; otherwise the order falls back to submitted_at.
+  const r = decideRecheck(quiet({ reviews: lateRounds(), comments: [summary(BEFORE)], commits: [{ sha: HEAD }] }));
+  assert.equal(r.ok, false);
+  assert.match(r.refusals.join(' '), /not in the PR commit list/);
+});
+
 // ---- recheckPr: the reads ----
 
 /** A fake gh keyed on the endpoint. `fail` makes the matching call throw. */
@@ -336,6 +343,15 @@ test('RC15e: recheckPr reads the PR commit list and orders the rounds by it; an 
   assert.ok(fake.calls.some((u) => /\/pulls\/7\/commits/.test(u)));
   const unreadable = await recheckPr(asked, fakeGh({ reviews: lateRounds(), comments: request1120(), fail: /\/pulls\/7\/commits/ }).gh);
   assert.match(unreadable.refusals.join(' '), /commit list/i);
+});
+
+test('RC15g: a failed or empty commit-list read refuses even with rounds on one commit (fail closed)', async () => {
+  const failed = await recheckPr(asked, fakeGh({ fail: /\/pulls\/7\/commits/ }).gh);
+  assert.equal(failed.ok, false);
+  assert.match(failed.refusals.join(' '), /commit list is unreadable/);
+  const empty = await recheckPr(asked, fakeGh({ commits: [] }).gh);
+  assert.equal(empty.ok, false);
+  assert.match(empty.refusals.join(' '), /commit list is empty/);
 });
 
 test('RC11: an unreadable READY time refuses', async () => {
