@@ -26,7 +26,7 @@
   select, textarea, button { font: inherit; }
   textarea { width: 100%; box-sizing: border-box; min-height: 48px; }
   button { padding: 6px 14px; min-height: 36px; }
-  .saved { color: var(--ok); } .failed { color: var(--crit); }
+  .saved { color: var(--ok); } .warn { color: var(--warn); } .failed { color: var(--crit); }
   .judge { margin-top: 8px; padding: 8px; border: 1px dashed var(--line); border-radius: 6px; }
   @media (max-width: 480px) { main { padding: 8px; } }
 </style>
@@ -101,13 +101,16 @@
   }
   function start(claude) {
     var p;
+    // No answer from the viewer in 10 s: say so, so the page never sits on "Loading" for ever.
+    var timer = setTimeout(function () { setStatus('Pairs not loaded: no answer from the viewer. Reload the page.', 'failed'); }, 10000);
     try { p = Promise.resolve(claude.use('db')); } catch (e) { p = Promise.reject(e); }
     p.then(function (handle) {
+      clearTimeout(timer);
       if (!handle) { setStatus('Read-only: sign in to label pairs.', 'failed'); return; }
       db = handle;
       db.collection('labels').onSnapshot(function (snap) { labels = {}; docsOf(snap).forEach(function (d) { labels[d.id] = d.data; }); paint(); });
       db.collection('pairs').onSnapshot(function (snap) { pairs = {}; docsOf(snap).forEach(function (d) { pairs[d.id] = d.data; }); paint(); });
-    }).catch(function (e) { setStatus('Pairs not loaded: ' + (e && e.message || e), 'failed'); });
+    }).catch(function (e) { clearTimeout(timer); setStatus('Pairs not loaded: ' + (e && e.message || e), 'failed'); });
   }
   if (typeof claude !== 'undefined' && claude && claude.use) start(claude); else setStatus('Read-only: the artifact db is not available here.', 'failed');
 })();
