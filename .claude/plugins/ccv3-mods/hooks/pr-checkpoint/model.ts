@@ -289,8 +289,10 @@ export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/
  * `coderabbit-slot.*`, `coderabbit-sl*`, `coderabbit-s?ot.json`, `coderabbit-*`, `coderabbit-slot.{json,lock}`, `[c]oderabbit-slot.json`,
  * `?oderabbit-slot.json`, `*slot.json`. Tested on text with quotes and escapes stripped. Not a `g` regex: `.test()` keeps no state.
  * A glob must sit right after `coderabbit-` or after `coderabbit-s`, so the other `coderabbit-*` files (the paid ledger, the guard runs) stay open.
+ * A glob anywhere in a `.claude/state` path (`~/.claude/state/*.json`, `.claude\state\*`) and the `.claude/state` folder itself also count:
+ * they can delete or replace the file. The text is tested with backslashes stripped, so the separator is optional.
  */
-const SLOT_STATE_LIKE = /coderabbit-slot\.json|coderabbit[-_]{0,2}(?:s[\w.-]{0,30})?[*?[{]|[*?[{][\w.*?[\]{},-]{0,30}(?:rabbit[-_]{1,2}s|slot[.*?[{])/i
+const SLOT_STATE_LIKE = /coderabbit-slot\.json|coderabbit[-_]{0,2}(?:s[\w.-]{0,30})?[*?[{]|[*?[{][\w.*?[\]{},-]{0,30}(?:rabbit[-_]{1,2}s|slot[.*?[{])|\.claude[\\/]{0,2}state(?:[\\/]{0,2}[\w.*?[\]{},-]{0,60}[*?[{]|[\\/]{0,2}(?=\s|$))/i
 /** A redirect: a read command with one writes the file it names. */
 const REDIRECT = />/
 /** git verbs that delete, move or restore a file; the other git commands only read or commit. */
@@ -315,7 +317,7 @@ const ENV_PREFIX = /^(?:\w{1,60}=\S{0,200}\s{1,10}){0,5}/
 const GIT_READ_OR_COMMIT = /^git(?:\.exe)?(?:\s{1,10}-C\s{1,10}(?:"[^"]{1,300}"|'[^']{1,300}'|\S{1,300}))?\s{1,10}(?:add|commit|log|diff|show|status|grep|blame|ls-files|rev-parse|rev-list|cat-file|check-ignore|restore|mv|rm)\b/i
 /** git options that run other code: -c (an alias with `!`), --exec, an external diff or textconv, a pager for grep. */
 const GIT_RUNS_CODE = /(?:^|\s)-c(?:\s|=)|--config|--exec\b|--ext-diff|--textconv|--open-files-in-pager|\s-O\S/
-const SEARCH_OR_READ = /^(?:grep|egrep|fgrep|rg|Select-String|sls|Get-Content|gc|cat|type)(?:\.exe)?\s/i
+const SEARCH_OR_READ = /^(?:grep|egrep|fgrep|rg|Select-String|sls|Get-Content|gc|cat|type|ls|dir|Get-ChildItem|gci)(?:\.exe)?\s/i
 /** rg runs a command on each file with --pre. */
 const SEARCH_RUNS_CODE = /--pre\b|--pre-glob\b|--hostname-bin\b/
 const NODE_TEST_OR_CHECK = /^node(?:\.exe)?\s{1,10}(?:--[a-z-]{1,30}(?:=\S{1,100})?\s{1,10}){0,6}--(?:test|check)\b/i
