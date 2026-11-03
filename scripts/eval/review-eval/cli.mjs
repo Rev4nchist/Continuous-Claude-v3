@@ -72,7 +72,7 @@ function scoreCmd(argv, io, cfg) {
   const datasetFile = path.join(dir, 'dataset-resolved.json');
   if (!existsSync(datasetFile)) { io.stderr(`score: ${datasetFile} is missing: run \`resolve --out\` first`); return 2; }
   const resolved = JSON.parse(readFileSync(datasetFile, 'utf8'));
-  const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => JSON.parse(readFileSync(p, 'utf8')) });
+  const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => (p ? JSON.parse(readFileSync(p, 'utf8')) : { findings: [] }) });
   const labels = readJsonl(path.join(dir, 'labels.jsonl'));
   const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, frozenPromptSha256: cfg.freeze?.promptSha256 ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
   const out = flag(argv, '--out', null);

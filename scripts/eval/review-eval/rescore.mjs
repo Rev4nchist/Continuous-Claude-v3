@@ -13,9 +13,11 @@ const COPIED = ['dataset-resolved.json', 'labels.jsonl', 'pairs-sent.jsonl'];
 
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 
-/** <dir>/<pr>/<sha8>/<file> for a stored findingsPath, whatever folder it named. */
+/** <dir>/<pr>/<sha8>/<file> for a stored findingsPath, whatever folder it named. null when a kept part is '..', '.' or empty: it could leave the archive. */
 export function archiveFile(dir, storedPath) {
-  return path.join(dir, ...String(storedPath).split(/[\\/]/).slice(-3));
+  const parts = String(storedPath).split(/[\\/]/).slice(-3);
+  if (parts.length < 3 || parts.some((p) => p === '' || p === '.' || p === '..')) return null;
+  return path.join(dir, ...parts);
 }
 
 /** exists(sha40, file): is the file in the commit's tree? A commit this repo does not hold cannot judge, so it keeps every file. */
@@ -37,6 +39,7 @@ function findingsRecord(prior, parsed, model) {
 /** { row, rec, dropped } for one archived row. rec is null when the row is carried over unchanged. */
 function rescoreRow(row, { archive, exists }) {
   const stored = archiveFile(archive, row.findingsPath);
+  if (stored === null) return { row: { ...row, findingsPath: null }, rec: null, stored: null, prior: {}, dropped: 0 };
   const prior = readJson(stored) ?? {};
   const rawFile = stored.replace(/\.findings\.json$/, '.raw.json');
   const raw = existsSync(rawFile) ? readFileSync(rawFile, 'utf8') : '';
@@ -50,6 +53,7 @@ function rescoreRow(row, { archive, exists }) {
 }
 
 function writeRow(res, out) {
+  if (res.stored === null) return res.row;
   const target = path.join(out, ...res.stored.split(path.sep).slice(-3));
   mkdirSync(path.dirname(target), { recursive: true });
   if (res.rec) writeFileSync(target, `${JSON.stringify(res.rec, null, 2)}\n`);

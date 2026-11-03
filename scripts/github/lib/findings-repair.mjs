@@ -41,7 +41,9 @@ function rebalance(text) {
   }
   if (inString) return null;
   const tail = stack.reverse().map((o) => CLOSER[o]).join('');
-  return tail ? dropTrailingComma(out) + tail : out;
+  if (!tail) return out;
+  // A comma at the cut means an item was lost: adding closers would hide it.
+  return out.trimEnd().endsWith(',') ? null : out + tail;
 }
 
 export function repairJsonText(text) {

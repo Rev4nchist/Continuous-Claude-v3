@@ -50,3 +50,12 @@ test('filterFindingPaths looks up ./ and backslash paths in the normal form but 
   assert.deepEqual(seen, ['a/b.ts', 'c/d.ts']);
   assert.deepEqual(kept.map((x) => x.file), ['./a/b.ts', 'c\\d.ts']);
 });
+
+test('a cut-off list that ends in a comma is not repaired (CodeRabbit #275 round 4)', async () => {
+  // Breaks when: rebalance drops a terminal comma and adds closers, so a truncated list loses its last finding but parses.
+  const { repairJsonText } = await import('./findings-repair.mjs');
+  assert.equal(repairJsonText('{"findings":[{"file":"a.ts","title":"A","body":"B"},'), null);
+  assert.equal(repairJsonText('{"findings":[{"file":"a.ts","title":"A","body":"B"}, \n '), null);
+  // A comma before a closer the model wrote itself is still repaired.
+  assert.equal(repairJsonText('{"findings":[{"file":"a.ts","title":"A","body":"B"},]}'), '{"findings":[{"file":"a.ts","title":"A","body":"B"}]}');
+});

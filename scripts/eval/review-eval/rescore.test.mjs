@@ -107,3 +107,11 @@ test('CR3: rescore refuses an --out folder that exists and is not empty, and wri
   assert.equal(await main(['rescore', '--archive', dir, '--out', tmp()], quiet()), 0, 'an empty folder is fine');
   assert.equal(await main(['rescore', '--archive', dir, '--out', path.join(tmp(), 'fresh')], quiet()), 0, 'a missing folder is fine');
 });
+
+test('archiveFile refuses a stored path with .. or . segments (CodeRabbit #275 round 4)', async () => {
+  // Breaks when: archiveFile joins the last three segments unchecked, so "../.env" resolves outside the archive.
+  const { archiveFile } = await import('./rescore.mjs');
+  assert.equal(archiveFile('/a', '../.env'), null);
+  assert.equal(archiveFile('/a', 'x/../../secret'), null);
+  assert.equal(archiveFile('/a', String.raw`C:\gone\211\2aabe283\r.findings.json`), path.join('/a', '211', '2aabe283', 'r.findings.json'));
+});
