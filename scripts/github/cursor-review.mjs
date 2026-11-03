@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/github/cursor-review.mjs (--pr <n> | --range <base>..<head>) (--band MID|ELEVATED|HIGH|CRITICAL | --model <id>)
- *        [--timeout-sec 2400] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--remote fork] [--dry-run] [--keep-tree]
+ *        [--timeout-sec 1800] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--purpose review|bench|eval|other] [--remote fork] [--dry-run] [--keep-tree]
  *
  * What it does:
  *   1. Checks the model. Only grok-4.7-high and grok-4.7-xhigh run. Auto, any id with "fast", an unknown id and a missing
@@ -14,7 +14,10 @@
  *   3. Builds a clean review tree: `git archive` of the head (no .git, no review docs, no old artifacts) plus PR.diff.
  *   4. Runs `cursor-agent -p --mode ask --trust --output-format stream-json --model <m>` in that tree. On Windows it runs the agent's
  *      own node.exe on index.js (the way cursor-agent.ps1 does), not the .cmd or .ps1 wrapper, so the pid it holds is the agent.
- *      A time-out (default 2400 s: grok output speed halved under load on 2026-11-02, so a ~40k-token answer took ~1600 s) stops that pid and its whole process tree.
+ *      A time-out (default 1800 s) stops that pid and its whole process tree. 1800 s is a backstop, not the stall guard (tool-stall is). Why 1800:
+ *      post-fix ledger runs (start 2026-11-03 14:00Z or later, no Azure hook stall) ran 449 to 1410 s with a median near 880 s, so 1800 s is about 2x the median and
+ *      about 1.3x the slowest (1410 s, CRITICAL/xhigh). The old 2400 s came from a wrong diagnosis ("output speed halves under load"); the slowdown was a Cursor
+ *      Azure hook that stalled ~61 s per tool call through a frozen WSL (.claudedocs/2026-11-03-grok-slowdown-investigation.md). Grok itself ran 65-83 tok/s.
  *      A machine-wide gate (lib/grok-slots.mjs) lets at most 2 runs go at once across all sessions; a run waits up to 60 min for a
  *      slot, and the time-out starts after it. CCV3_GROK_GATE=off skips the gate; CCV3_GROK_MAX_CONCURRENT changes the 2.
  *      On Windows it also (a) puts Git Bash first on the agent PATH (buildAgentEnv: hooks get that PATH, so a hook's `bash` is not the
@@ -54,7 +57,7 @@ export const BAND_MODEL = { MID: 'grok-4.7-high', ELEVATED: 'grok-4.7-high', HIG
 export const WEEKLY_CAP = 300;
 export const WEEK_MS = 7 * 86_400_000;
 export const PER_REF_CAP = 8;
-export const DEFAULT_TIMEOUT_SEC = 2400;
+export const DEFAULT_TIMEOUT_SEC = 1800;
 export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const SEVERITIES = ['critical', 'major', 'minor', 'info'];
 /** Folders left out of the review tree: answers and old review output the model must not see. */
@@ -91,6 +94,12 @@ export function resolveModel({ model, band } = {}) {
 }
 
 // ---------- usage ledger ----------
+
+/** What a run is for. Every new ledger line carries one; a missing or unknown value is 'other'. */
+export const PURPOSES = Object.freeze(['review', 'bench', 'eval', 'other']);
+export const normalizePurpose = (p) => (PURPOSES.includes(p) ? p : 'other');
+/** The repo tag of a run: owner/name, else the local folder name, else null. */
+export const repoTag = (repo, root) => (typeof repo === 'string' && repo !== '' ? repo : root ? path.basename(root) : null);
 
 export const defaultLedgerPath = (env = process.env) => env.CURSOR_REVIEW_LEDGER || path.join(os.homedir(), '.claude', 'state', 'cursor-review-ledger.jsonl');
 
@@ -145,15 +154,15 @@ export function reserveRun(file, entry, { now = Date.now, cap = WEEKLY_CAP, perR
     const forRef = countRuns(entries, { now: t, ref: entry.ref });
     if (forRef >= perRefCap) return { ok: false, reason: 'ref-cap', count: forRef };
     const id = randomUUID();
-    const line = { ts: new Date(t).toISOString(), phase: 'start', id, ref: entry.ref, model: entry.model, band: entry.band ?? null, sessionId: entry.sessionId ?? null };
+    const line = { ts: new Date(t).toISOString(), phase: 'start', id, ref: entry.ref, model: entry.model, band: entry.band ?? null, sessionId: entry.sessionId ?? null, repo: entry.repo ?? null, purpose: normalizePurpose(entry.purpose) };
     appendFileSync(file, `${JSON.stringify(line)}\n`);
     return { ok: true, id, count: total + 1 };
   });
 }
 
-/** Appends the end line of a run. */
+/** Appends the end line of a run. It carries repo (null when unknown) and purpose (other when unknown), like the start line. */
 export function finishRun(file, id, patch, { now = Date.now } = {}) {
-  appendFileSync(file, `${JSON.stringify({ ts: new Date(now()).toISOString(), phase: 'end', id, ...patch })}\n`);
+  appendFileSync(file, `${JSON.stringify({ ts: new Date(now()).toISOString(), phase: 'end', id, ...patch, repo: patch.repo ?? null, purpose: normalizePurpose(patch.purpose) })}\n`);
 }
 
 // ---------- prompt ----------
@@ -984,7 +993,8 @@ export async function runReview(opts, deps = {}) {
   }
 
   const sessionId = env.CLAUDE_CODE_SESSION_ID || null;
-  const reserved = reserveRun(opts.ledgerPath, { ref: prep.ref, model: m.model, band: m.band, sessionId }, { now });
+  const tags = { repo: repoTag(opts.repo ?? (opts.input?.pr !== undefined ? DEFAULT_REPO : undefined), opts.root), purpose: normalizePurpose(opts.purpose) };
+  const reserved = reserveRun(opts.ledgerPath, { ref: prep.ref, model: m.model, band: m.band, sessionId, ...tags }, { now });
   if (!reserved.ok) {
     prep.cleanup();
     return refuse(reserved.reason === 'lock' ? EXIT.FAILED : EXIT.CAP, reserved.detail ?? `${reserved.reason} reached (${reserved.count})`);
@@ -1026,7 +1036,7 @@ export async function runReview(opts, deps = {}) {
   writeFileSync(`${stem}.findings.json`, `${JSON.stringify(rec, null, 2)}\n`);
   writeFileSync(`${stem}.summary.txt`, summaryText(rec));
   finishRun(opts.ledgerPath, reserved.id, {
-    ref: prep.ref, model: m.model, band: m.band, sessionId, durationMs: rec.durationMs, exit: failed ? EXIT.FAILED : EXIT.OK, timedOut: rec.timedOut,
+    ref: prep.ref, model: m.model, band: m.band, sessionId, ...tags, durationMs: rec.durationMs, exit: failed ? EXIT.FAILED : EXIT.OK, timedOut: rec.timedOut,
     modelVerified: rec.modelVerified, findingCount: rec.findings.length, usage: parsed.usage,
     waitedMs: rec.waitedMs, spawnedAt: run.spawnedAt ? new Date(run.spawnedAt).toISOString() : null, ...(run.notStarted ? { notStarted: true } : {}), ...(failed ? { error: clip(error, 300) } : {}),
     ...(run.toolStats ? { toolCalls: run.toolStats.toolCalls, toolWaitMs: run.toolStats.toolWaitMs, maxToolMs: run.toolStats.maxToolMs } : {}),
@@ -1053,6 +1063,7 @@ export function parseArgs(argv) {
       case '--ledger': out.ledgerPath = next(); break;
       case '--out-dir': out.outDir = next(); break;
       case '--repo': out.repo = next(); break;
+      case '--purpose': { const v = next(); if (!PURPOSES.includes(v)) return bad(`--purpose needs one of ${PURPOSES.join(', ')}, got ${JSON.stringify(v)}`); out.purpose = v; break; }
       case '--remote': out.remote = next(); break;
       case '--dry-run': out.dryRun = true; break;
       case '--keep-tree': out.keepTree = true; break;

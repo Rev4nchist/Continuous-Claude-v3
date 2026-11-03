@@ -500,6 +500,43 @@ test('a busy slot polls every 15 s until it frees or slot_wait_min passes (break
   assert.deepEqual(sleeps, [15_000, 15_000, 10_000]);
 });
 
+test('with the shipped config a review waits 10 min for a busy slot and then runs, instead of exiting 3 (breaks if slot_wait_min drops below 10)', async () => {
+  const w = world();
+  const slots = path.join(w.aux, 'local-review-slots.json');
+  seedSlots(slots, [entry('a', 1), entry('b', 2)]);
+  let clock = NOW;
+  const sleep = async (ms) => { clock += ms; if (clock - NOW >= 10 * 60_000) seedSlots(slots, [entry('a', 1)]); };
+  const r = await run(w, {}, { now: () => clock, sleep });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(w.agentCalls.length, 1);
+});
+
+test('a review that waits for a slot logs the busy slots and the time waited about once a minute, then refuses with exit 3 (breaks if the wait log is removed or unthrottled)', async () => {
+  const w = world();
+  w.configPath = tempConfig(w, (c) => { c.local_review.slot_wait_min = 3; });
+  seedSlots(path.join(w.aux, 'local-review-slots.json'), [entry('a', 1, 0), entry('b', 2, 0)]);
+  let clock = NOW;
+  const logs = [];
+  const r = await run(w, {}, { now: () => clock, sleep: async (ms) => { clock += ms; }, stderr: (m) => logs.push(m) });
+  assert.equal(r.exit, EXIT.CAP);
+  const waits = logs.filter((m) => /waiting for a review slot/.test(m));
+  assert.equal(waits.length, 3, 'waited 0, 60 and 120 s of 180 s');
+  assert.match(waits[0], /2 of 2 slots busy.*waited 0 s of 180 s/);
+  assert.match(waits[2], /waited 120 s of 180 s/);
+  assert.equal(w.agentCalls.length, 0);
+});
+
+test('the engine tags its ledger lines purpose review and the repo it reviews (breaks if reserveRun or finishRun lose the tags)', async () => {
+  const w = world();
+  const r = await run(w, { repo: 'Rev4nchist/Minions' });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(w.reserveCalls[0][1].purpose, 'review');
+  assert.equal(w.reserveCalls[0][1].repo, 'Rev4nchist/Minions');
+  const end = w.finishCalls.at(-1)[2];
+  assert.equal(end.purpose, 'review');
+  assert.equal(end.repo, 'Rev4nchist/Minions');
+});
+
 test('releaseSlot removes only its own runKey (breaks if release clears every entry)', () => {
   const file = slotFile();
   seedSlots(file, [entry('a', 1), entry('me', 2)]);
@@ -933,7 +970,7 @@ test('main without a pin pins the engine and starts that copy with LOCAL_REVIEW_
   assert.deepEqual(spec.args.slice(1), ['--pr', '9', '--json']);
   assert.equal(spec.env.LOCAL_REVIEW_PINNED, SHA);
   assert.equal(spec.cwd, 'C:\\repo');
-  assert.equal(spec.timeoutMs, (5 + 40 * 2 + 5) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5
+  assert.equal(spec.timeoutMs, (60 + 40 * 2 + 5 + 60 * 2) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5 + the default 60 min grok wait x (1 + retry_max)
   assert.deepEqual(out, ['{"exit":3}']);
   assert.deepEqual(err, ['busy']);
 });
@@ -1205,4 +1242,32 @@ test('pathspecDiffArgv runs on real git: listed names only, taken literally, a d
 test('pathspecDiffArgv refuses a name list over the command-line limit (breaks if the length check is removed)', () => {
   const many = Array.from({ length: 2000 }, (_, i) => `src/some/long/folder/file-${i}.mjs`);
   assert.throws(() => pathspecDiffArgv(['A', 'B'], many), /command line/);
+});
+
+// Finding (CodeRabbit PR 271): the grok gate wait runs inside the engine slot, but the slot lifetime had no term for it, so another engine
+// could take the slot while this one still waited for grok. Breaks if takeSlot's timeoutMs drops the grok wait: slot 'a' is 100 min old,
+// over the 90 min of 2 x 40 min + 10 min, but inside 2 x (40 + 60 min) + 10 min.
+test('the engine slot stays live through the grok gate wait (breaks if the slot lifetime leaves out CCV3_GROK_WAIT_MIN)', async () => {
+  const w = world();
+  w.configPath = tempConfig(w, (c) => { c.local_review.slot_wait_min = 0; });
+  seedSlots(path.join(w.aux, 'local-review-slots.json'), [entry('a', 1, 100 * 60_000), entry('b', 2)]);
+  const r = await run(w);
+  assert.equal(r.exit, EXIT.CAP);
+  assert.equal(w.agentCalls.length, 0);
+});
+
+// Finding (CodeRabbit PR 271): the relaunch time-out had no term for the grok gate wait, so the engine was killed while its child waited.
+// Breaks if relaunch drops the grok wait of each attempt from its budget.
+test('the relaunch time-out adds the grok gate wait of every attempt (breaks if CCV3_GROK_WAIT_MIN is left out of the budget)', async () => {
+  const dir = tmp('relaunch-grok-wait');
+  copyFileSync(REAL_CONFIG, path.join(dir, 'review-router.config.json'));
+  const specs = [];
+  const go = (env) => main(['--pr', '9'], {
+    root: 'C:\repo', env, stdout: () => {}, stderr: () => {}, pinEngine: () => ({ ok: true, engineSha: SHA, dir }),
+    runAgent: async (s) => { specs.push(s); return { status: 0, stdout: '', stderr: '', timedOut: false }; },
+  });
+  await go({ PATH: 'p', CCV3_GROK_WAIT_MIN: '180' });
+  assert.equal(specs[0].timeoutMs, (60 + 40 * 2 + 5 + 180 * 2) * 60_000);
+  await go({ PATH: 'p', CCV3_GROK_WAIT_MIN: '9'.repeat(400) });
+  assert.equal(specs[1].timeoutMs, (60 + 40 * 2 + 5 + 60 * 2) * 60_000, 'a wait that overflows means the default');
 });
