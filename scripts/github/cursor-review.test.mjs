@@ -3,9 +3,11 @@
 // The parser samples in fixtures/cursor-review/ are the raw JSON outputs of the 2026-11-01 Cursor runs (PR 217, 222, 225, 238).
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -20,6 +22,8 @@ const madeDirs = [];
 const tmp = (label) => { const d = mkdtempSync(path.join(os.tmpdir(), `cursor-review-test-${label}-`)); madeDirs.push(d); return d; };
 // Remove only the folders this file made, so a run leaves nothing behind in %TEMP%.
 after(() => { for (const d of madeDirs) rmSync(d, { recursive: true, force: true }); });
+// runAgent takes a machine-wide grok slot before it spawns. Tests that spawn stubs pass this no-op gate, so they never touch ~/.claude/state.
+const noGate = async () => ({ ok: true, release() {} });
 const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 const DAY = 86_400_000;
 
@@ -570,7 +574,7 @@ test('runAgent time-out stops the agent AND the process it started', { timeout: 
     'setInterval(() => {}, 1000);',
   ].join('\n'));
   const started = Date.now();
-  const r = await runAgent({ command: process.execPath, args: [fake], cwd: dir, timeoutMs: 2500 });
+  const r = await runAgent({ command: process.execPath, args: [fake], cwd: dir, timeoutMs: 2500 }, { gate: noGate });
   assert.equal(r.timedOut, true);
   assert.ok(Date.now() - started < 60_000, 'the run returns after the time-out');
   assert.ok(existsSync(pidFile), 'the fake agent started its child');
@@ -584,14 +588,207 @@ test('runAgent time-out stops the agent AND the process it started', { timeout: 
 
 test('runAgent returns stdout and the exit status of a normal child, and does not hang on a spawn error', async () => {
   const dir = tmp('ok');
-  const ok = await runAgent({ command: process.execPath, args: ['-e', "process.stdout.write('hi'); process.exit(4)"], cwd: dir, timeoutMs: 20_000 });
+  const ok = await runAgent({ command: process.execPath, args: ['-e', "process.stdout.write('hi'); process.exit(4)"], cwd: dir, timeoutMs: 20_000 }, { gate: noGate });
   assert.equal(ok.stdout, 'hi');
   assert.equal(ok.status, 4);
   assert.equal(ok.timedOut, false);
   assert.ok(ok.durationMs >= 0);
-  const missing = await runAgent({ command: path.join(dir, 'no-such-binary'), args: [], cwd: dir, timeoutMs: 20_000 });
+  const missing = await runAgent({ command: path.join(dir, 'no-such-binary'), args: [], cwd: dir, timeoutMs: 20_000 }, { gate: noGate });
   assert.equal(missing.status, null);
   assert.ok(missing.error);
+});
+
+// ---------- the grok gate in runAgent ----------
+
+/** A gate that records its calls. `waitMs` delays the grant, like a real wait for a free slot. */
+function spyGate({ waitMs = 0, deny } = {}) {
+  const log = { calls: 0, releases: 0 };
+  const gate = async () => {
+    log.calls += 1;
+    if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
+    if (deny) return { ok: false, reason: 'busy', detail: 'test', waitedMs: deny.waitedMs };
+    return { ok: true, release() { log.releases += 1; } };
+  };
+  return { gate, log };
+}
+/** A fake child process: stdout and stderr are streams; the test closes it. */
+function fakeChild() {
+  const child = new EventEmitter();
+  child.pid = 4242;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => {};
+  return child;
+}
+const spec = (timeoutMs) => ({ command: 'x', args: [], cwd: '.', timeoutMs, env: {} });
+
+// Breaks if runAgent stops taking a slot before the spawn, or lets the slot go before the child ends.
+test('runAgent takes a slot before it spawns and releases it when the child exits', async () => {
+  const { gate, log } = spyGate();
+  let releasedAtSpawn = -1;
+  const child = fakeChild();
+  const spawnFn = () => { releasedAtSpawn = log.releases; setTimeout(() => { child.stdout.end('hi'); child.emit('close', 0); }, 20); return child; };
+  const r = await runAgent(spec(5000), { gate, spawnFn, gateEnv: {} });
+  assert.equal(log.calls, 1);
+  assert.equal(releasedAtSpawn, 0, 'the slot was held while the child ran');
+  assert.equal(log.releases, 1, 'released after the exit');
+  assert.equal(r.status, 0);
+});
+
+// Breaks if the timeout path skips the release (a killed run would hold its slot until the stale time).
+test('runAgent releases the slot when the child is killed on timeout', async () => {
+  const { gate, log } = spyGate();
+  const child = fakeChild();
+  const killer = () => { setTimeout(() => child.emit('close', null), 10); };
+  const r = await runAgent(spec(100), { gate, spawnFn: () => child, killer, killGraceMs: 2000, gateEnv: {} });
+  assert.equal(r.timedOut, true);
+  assert.equal(log.releases, 1);
+});
+
+// Breaks if the release is not on the spawn-error paths: a missing binary would leak a slot per run.
+test('runAgent releases the slot when the spawn throws and when the child emits error', async () => {
+  const a = spyGate();
+  const thrown = await runAgent(spec(5000), { gate: a.gate, spawnFn: () => { throw new Error('boom'); }, gateEnv: {} });
+  assert.equal(thrown.error, 'boom');
+  assert.equal(a.log.releases, 1);
+  const b = spyGate();
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => child.emit('error', new Error('ENOENT')), 10); return child; };
+  const errored = await runAgent(spec(5000), { gate: b.gate, spawnFn, gateEnv: {} });
+  assert.equal(errored.error, 'ENOENT');
+  assert.equal(b.log.releases, 1);
+});
+
+// Breaks if a busy gate still spawns, or reports the wait as a run time-out (callers retry on timedOut).
+test('runAgent with no free slot does not spawn and is not timedOut', async () => {
+  const { gate, log } = spyGate({ deny: { waitedMs: 3_600_000 } });
+  let spawned = 0;
+  const r = await runAgent(spec(5000), { gate, spawnFn: () => { spawned += 1; return fakeChild(); }, gateEnv: {} });
+  assert.equal(spawned, 0);
+  assert.equal(r.status, null);
+  assert.equal(r.timedOut, false);
+  assert.equal(r.error, 'grok-busy');
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, 'grok gate: no slot in 60 min');
+  assert.equal(r.durationMs, 0, 'the wait is not agent time');
+  assert.equal(r.waitedMs, 3_600_000);
+  assert.equal(r.notStarted, true);
+  assert.equal(log.releases, 0);
+});
+
+// Breaks if the timeout clock starts before the slot is taken: the wait would eat the run's time.
+test('the agent timeout starts after the wait for a slot', async () => {
+  const { gate, log } = spyGate({ waitMs: 600 });
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => { child.stdout.end('done'); child.emit('close', 0); }, 150); return child; };
+  const r = await runAgent(spec(400), { gate, spawnFn, killer: () => { throw new Error('must not kill'); }, gateEnv: {} });
+  assert.equal(r.timedOut, false, 'a 600 ms wait did not use up the 400 ms timeout');
+  assert.equal(r.status, 0);
+  assert.ok(r.durationMs < 400, `durationMs counts the run only, got ${r.durationMs}`);
+  assert.equal(log.releases, 1);
+});
+
+// Breaks if CCV3_GROK_GATE=off stops skipping the gate (the emergency opt-out).
+test('CCV3_GROK_GATE=off skips the gate', async () => {
+  const gate = async () => { throw new Error('the gate must not be asked'); };
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => child.emit('close', 0), 10); return child; };
+  const r = await runAgent(spec(5000), { gate, spawnFn, gateEnv: { CCV3_GROK_GATE: 'off' } });
+  assert.equal(r.status, 0);
+});
+
+// Breaks if a gate that cannot reach its state file blocks every review: runAgent runs without a slot and says so.
+test('a gate that fails with reason lock or throws does not stop the run', async () => {
+  for (const gate of [async () => ({ ok: false, reason: 'lock', detail: 'held' }), async () => { throw new Error('disk'); }]) {
+    const child = fakeChild();
+    const spawnFn = () => { setTimeout(() => child.emit('close', 0), 10); return child; };
+    const r = await runAgent(spec(5000), { gate, spawnFn, gateEnv: {}, gateLog: () => {} });
+    assert.equal(r.status, 0);
+  }
+});
+
+// Finding: the entry expiry ignored the run's own time-out. Breaks if runAgent stops passing the time-out + kill grace to the gate.
+test('runAgent asks the gate for a slot that lives past the run time-out and the kill grace', async () => {
+  let seen;
+  const gate = async (o) => { seen = o; return { ok: true, release() {} }; };
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => child.emit('close', 0), 5); return child; };
+  await runAgent(spec(14_400_000), { gate, spawnFn, killGraceMs: 8000, gateEnv: {} });
+  assert.ok(seen.ttlMs > 14_400_000 + 8000, `ttlMs ${seen.ttlMs} must exceed a 4 h time-out plus the grace`);
+});
+
+// Finding: the slot followed the node parent only. Breaks if the agent pid is not handed to the slot after the spawn.
+test('runAgent hands the agent pid to the slot after the spawn, and awaits the release', async () => {
+  const events = [];
+  const gate = async () => ({ ok: true, attach: (pid) => events.push(`attach ${pid}`), release: async () => { await new Promise((r) => setTimeout(r, 20)); events.push('released'); } });
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => child.emit('close', 0), 5); return child; };
+  await runAgent(spec(5000), { gate, spawnFn, gateEnv: {} });
+  assert.deepEqual(events, ['attach 4242', 'released'], 'the release finished before runAgent resolved');
+});
+
+// Finding: busy rows and pre-wait stamps distorted the ledger. Breaks if waitedMs or spawnedAt is missing from a run result.
+test('runAgent reports the wait and the spawn time apart from the agent time', async () => {
+  const gate = async () => ({ ok: true, release() {}, waitedMs: 777 });
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => child.emit('close', 0), 5); return child; };
+  const before = Date.now();
+  const r = await runAgent(spec(5000), { gate, spawnFn, gateEnv: {} });
+  assert.equal(r.waitedMs, 777);
+  assert.ok(r.spawnedAt >= before && r.spawnedAt <= Date.now());
+  assert.ok(r.durationMs < 777 + 1000);
+});
+
+// Finding: a grok-busy result used up PER_REF_CAP and WEEKLY_CAP with no spawn. Breaks if countRuns counts a run whose end line says notStarted.
+test('a run that never started (notStarted) is not counted against any cap', () => {
+  const file = ledgerWith([]);
+  const a = reserveRun(file, { ref: 'pr-9', model: 'grok-4.7-high', band: 'MID' }, { now: () => NOW });
+  assert.equal(countRuns(readLedger(file).entries, { now: NOW + 5 }), 1, 'reserved: counts while it waits');
+  finishRun(file, a.id, { ref: 'pr-9', model: 'grok-4.7-high', band: 'MID', durationMs: 0, exit: 1, notStarted: true, waitedMs: 3_600_000 }, { now: () => NOW + 10 });
+  assert.equal(countRuns(readLedger(file).entries, { now: NOW + 20 }), 0);
+  assert.equal(countRuns(readLedger(file).entries, { now: NOW + 20, ref: 'pr-9' }), 0);
+  for (let i = 0; i < 9; i += 1) {
+    const r = reserveRun(file, { ref: 'pr-9', model: 'grok-4.7-high', band: 'MID' }, { now: () => NOW + 30 + i });
+    assert.equal(r.ok, true, `reservation ${i} is not blocked by the unstarted run`);
+    finishRun(file, r.id, { ref: 'pr-9', exit: 1, notStarted: true }, { now: () => NOW + 40 + i });
+  }
+});
+
+test('runReview with a grok-busy runner fails, says the agent did not start, and leaves the ledger uncounted', async () => {
+  const busy = { status: null, stdout: '', stderr: 'grok gate: no slot in 60 min', timedOut: false, error: 'grok-busy', notStarted: true, durationMs: 0, waitedMs: 3_600_000 };
+  const h = harness({ runner: async () => busy });
+  const r = await runReview(h.opts, h.deps);
+  assert.equal(r.exit, EXIT.FAILED);
+  assert.match(r.error, /no grok slot came free in 60 min; the agent did not start/);
+  const lines = readFileSync(h.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(lines[1].notStarted, true);
+  assert.equal(lines[1].waitedMs, 3_600_000);
+  assert.equal(lines[1].durationMs, 0);
+  assert.equal(countRuns(readLedger(h.opts.ledgerPath).entries, { now: NOW + 1 }), 0);
+  const ok = harness({ runner: async () => ({ status: 0, stdout: GOOD, stderr: '', timedOut: false, durationMs: 50, waitedMs: 900, spawnedAt: NOW }) });
+  await runReview(ok.opts, ok.deps);
+  const end = readFileSync(ok.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
+  assert.equal(end.waitedMs, 900);
+  assert.equal(end.spawnedAt, new Date(NOW).toISOString());
+  assert.equal(end.notStarted, undefined);
+});
+
+// Breaks if runAgent stops using acquireGrokSlot by default: the real gate must hold a slot in the shared file while the child runs.
+test('the default gate records the run in the slot file while the child runs, and clears it after', { timeout: 30_000 }, async () => {
+  const file = path.join(tmp('slots'), 'grok-slots.json');
+  const saved = process.env.CCV3_GROK_SLOTS_FILE;
+  process.env.CCV3_GROK_SLOTS_FILE = file;
+  try {
+    const script = `process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(file)}, 'utf8'))`;
+    const r = await runAgent({ command: process.execPath, args: ['-e', script], cwd: tmp('cwd'), timeoutMs: 20_000 });
+    assert.equal(r.status, 0, r.stderr);
+    const during = JSON.parse(r.stdout).active;
+    assert.equal(during.length, 1);
+    assert.equal(during[0].pid, process.pid);
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).active, []);
+  } finally {
+    if (saved === undefined) delete process.env.CCV3_GROK_SLOTS_FILE; else process.env.CCV3_GROK_SLOTS_FILE = saved;
+  }
 });
 
 // ---------- clean tree from real git ----------

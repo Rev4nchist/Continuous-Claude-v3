@@ -15,6 +15,8 @@
  *   4. Runs `cursor-agent -p --mode ask --trust --output-format json --model <m>` in that tree. On Windows it runs the agent's
  *      own node.exe on index.js (the way cursor-agent.ps1 does), not the .cmd or .ps1 wrapper, so the pid it holds is the agent.
  *      A time-out (default 1500 s: the bake-off max for grok-4.7-high was 904 s) stops that pid and its whole process tree.
+ *      A machine-wide gate (lib/grok-slots.mjs) lets at most 2 runs go at once across all sessions; a run waits up to 60 min for a
+ *      slot, and the time-out starts after it. CCV3_GROK_GATE=off skips the gate; CCV3_GROK_MAX_CONCURRENT changes the 2.
  *   5. Parses the answer (a final ```json block, else the Markdown headings Cursor writes) and writes, in .claude/cache/e2e/:
  *        <date>-cursor-review-<ref>-<time>.findings.json   the structured findings
  *        <date>-cursor-review-<ref>-<time>.summary.txt     a short text summary
@@ -39,6 +41,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withLock } from './lib/file-lock.mjs';
+import { acquireGrokSlot } from './lib/grok-slots.mjs';
 import { killTree } from './lib/proc.mjs';
 
 export const EXIT = { OK: 0, FAILED: 1, REFUSED: 2, CAP: 3 };
@@ -103,11 +106,14 @@ export function readLedger(file) {
   return { entries, damaged };
 }
 
-/** The number of distinct runs inside the rolling window (optionally for one ref). A run counts by its earliest line. */
+/** The number of distinct runs inside the rolling window (optionally for one ref). A run counts by its earliest line. Runs that never started are skipped. */
 export function countRuns(entries, { now, ref, windowMs = WEEK_MS }) {
   const first = new Map();
+  // A run whose end line says notStarted (no grok slot came free, the agent never spawned) used no Cursor run: it is not counted.
+  const unstarted = new Set(entries.filter((e) => e.notStarted === true && e.id).map((e) => e.id));
   entries.forEach((e, i) => {
     const key = e.id ?? `line-${i}`;
+    if (unstarted.has(key)) return;
     const t = Date.parse(e.ts);
     const prev = first.get(key);
     if (!prev || t < prev.t) first.set(key, { t, ref: e.ref });
@@ -362,16 +368,48 @@ export function buildAgentEnv(base = process.env, platform = process.platform) {
   return env;
 }
 
+/** How long a time-out waits for the agent to die before it gives up. The grok gate adds it to the slot's lifetime. */
+const KILL_GRACE_MS = 8000;
+/** Extra life for a slot entry beyond the run time-out and the kill grace. */
+const SLOT_MARGIN_MS = 60_000;
+
 function defaultKiller(pid) {
   killTree(pid);
 }
 
 /**
- * Runs the agent and resolves when it ends. A time-out stops the agent pid and its whole process tree (killTree from lib/proc.mjs:
+ * Runs the agent behind the machine-wide grok gate (lib/grok-slots.mjs): at most 2 cursor-agent runs at once across all sessions
+ * (2026-11-02 ledger: solo runs 0 time-outs, overlapping runs 5 of 6). It waits for a slot, spawns, and frees the slot on every exit
+ * path. The agent time-out starts after the slot is taken. With no slot after the wait it resolves without a spawn:
+ * { status: null, error: 'grok-busy', timedOut: false, notStarted: true, durationMs: 0, waitedMs }. Every result has waitedMs (the
+ * wait for the slot) and, when the agent started, spawnedAt (epoch ms); durationMs counts the agent only. CCV3_GROK_GATE=off skips the gate. A gate that cannot reach its state file
+ * (reason 'lock', or a throw) is logged and the run goes ahead without a slot: a broken state file must not stop every review.
+ * deps: { spawnFn, killer, killGraceMs, gate = acquireGrokSlot, gateOpts, gateEnv = process.env, gateLog }. The slot lives until the
+ * run time-out + killGraceMs + 60 s (gateOpts.ttlMs overrides) and records the agent pid. Never throws.
+ */
+export async function runAgent(spec, deps = {}) {
+  const { gate = acquireGrokSlot, gateOpts = {}, gateEnv = process.env, gateLog = (m) => process.stderr.write(`${m}\n`), ...spawnDeps } = deps;
+  if (String(gateEnv.CCV3_GROK_GATE ?? '').trim().toLowerCase() === 'off') return { waitedMs: 0, ...(await spawnAgent(spec, spawnDeps)) };
+  let slot;
+  const ttlMs = spec.timeoutMs + (spawnDeps.killGraceMs ?? KILL_GRACE_MS) + SLOT_MARGIN_MS;
+  try { slot = await gate({ ttlMs, ...gateOpts }); } catch (err) { slot = { ok: false, reason: 'lock', detail: String(err?.message ?? err) }; }
+  if (!slot.ok && slot.reason === 'busy') {
+    const waited = slot.waitedMs ?? 0;
+    return { status: null, stdout: '', stderr: `grok gate: no slot in ${Math.round(waited / 60_000)} min`, timedOut: false, error: 'grok-busy', notStarted: true, durationMs: 0, waitedMs: waited };
+  }
+  if (!slot.ok) gateLog(`grok gate: not usable (${slot.reason}: ${slot.detail}); running without a slot`);
+  const onSpawn = (pid) => { try { slot.attach?.(pid); } catch { /* the entry then follows this process only, and expires */ } };
+  try { return { waitedMs: slot.waitedMs ?? 0, ...(await spawnAgent(spec, { ...spawnDeps, onSpawn })) }; } finally {
+    if (slot.ok) { try { await slot.release(); } catch { /* release never rejects; a failure here must not hide the result */ } }
+  }
+}
+
+/**
+ * Spawns the agent and resolves when it ends. A time-out stops the agent pid and its whole process tree (killTree from lib/proc.mjs:
  * the Windows tree-kill switch is forbidden here, so it walks the process table). Never throws; a spawn error is a result.
  * { status, stdout, stderr, timedOut, error, durationMs }
  */
-export function runAgent({ command, args, cwd, timeoutMs, env = process.env }, { spawnFn = spawn, killer = defaultKiller, killGraceMs = 8000 } = {}) {
+function spawnAgent({ command, args, cwd, timeoutMs, env = process.env }, { spawnFn = spawn, killer = defaultKiller, killGraceMs = KILL_GRACE_MS, onSpawn } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';
@@ -384,7 +422,7 @@ export function runAgent({ command, args, cwd, timeoutMs, env = process.env }, {
       if (settled) return;
       settled = true;
       clearTimeout(limit);
-      resolve({ status, stdout, stderr, timedOut, error, durationMs: Date.now() - started });
+      resolve({ status, stdout, stderr, timedOut, error, spawnedAt: started, durationMs: Date.now() - started });
     };
     const limit = setTimeout(async () => {
       timedOut = true;
@@ -399,6 +437,7 @@ export function runAgent({ command, args, cwd, timeoutMs, env = process.env }, {
       finish(null);
       return;
     }
+    try { onSpawn?.(child.pid); } catch { /* a slot note must not stop the run */ }
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (c) => { if (!settled) stdout += c; });
@@ -640,7 +679,8 @@ export async function runReview(opts, deps = {}) {
   const parsed = parseReviewOutput(run.stdout, { expectModel: m.model });
 
   let error = null;
-  if (run.timedOut) error = `TIMED OUT after ${Math.round(timeoutMs / 1000)} s: the agent and its process tree were stopped; no findings were read`;
+  if (run.notStarted) error = `no grok slot came free in ${Math.round((run.waitedMs ?? 0) / 60_000)} min; the agent did not start (not counted against the caps)`;
+  else if (run.timedOut) error = `TIMED OUT after ${Math.round(timeoutMs / 1000)} s: the agent and its process tree were stopped; no findings were read`;
   else if (run.error) error = `the agent did not start or crashed: ${run.error}`;
   else if (run.status !== 0) error = `the agent exited with status ${run.status}${run.stderr ? `: ${clip(run.stderr.trim(), 200)}` : ''}`;
   else if (parsed.modelMismatch) error = `model check failed: the output names a model other than ${m.model}; the run is void`;
@@ -653,6 +693,7 @@ export async function runReview(opts, deps = {}) {
     schema: 1, status: failed ? 'failed' : 'ok', runId: reserved.id, ref: prep.ref, base: prep.base, head: prep.head, model: m.model, band: m.band,
     ts: new Date(now()).toISOString(), durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), error, format: parsed.format, clean: parsed.clean,
     modelVerified: parsed.modelVerified, usage: parsed.usage, cursorSessionId: parsed.sessionId, problems: parsed.problems,
+    waitedMs: run.waitedMs ?? 0, notStarted: Boolean(run.notStarted),
     counts, findings: failed ? [] : parsed.findings,
   };
   const when = stamp(new Date(now()));
@@ -663,7 +704,8 @@ export async function runReview(opts, deps = {}) {
   writeFileSync(`${stem}.summary.txt`, summaryText(rec));
   finishRun(opts.ledgerPath, reserved.id, {
     ref: prep.ref, model: m.model, band: m.band, sessionId, durationMs: rec.durationMs, exit: failed ? EXIT.FAILED : EXIT.OK, timedOut: rec.timedOut,
-    modelVerified: rec.modelVerified, findingCount: rec.findings.length, usage: parsed.usage, ...(failed ? { error: clip(error, 300) } : {}),
+    modelVerified: rec.modelVerified, findingCount: rec.findings.length, usage: parsed.usage,
+    waitedMs: rec.waitedMs, spawnedAt: run.spawnedAt ? new Date(run.spawnedAt).toISOString() : null, ...(run.notStarted ? { notStarted: true } : {}), ...(failed ? { error: clip(error, 300) } : {}),
   }, { now });
   if (!opts.keepTree) prep.cleanup();
   return { exit: failed ? EXIT.FAILED : EXIT.OK, runId: reserved.id, findingsPath: `${stem}.findings.json`, summaryPath: `${stem}.summary.txt`, rawPath: `${stem}.raw.json`, error };
