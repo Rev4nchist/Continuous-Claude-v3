@@ -32,7 +32,7 @@
     "lib/skill-router.ts": "2233707bc9ebec2bd6cc917263cba20a90fe33885f394d0d6474f3f96bf3d63e",
     "lib/skill-validation-prompt.ts": "418211d39d35d9955b4e6eaea3bacc1b209f7b28038427623c76ee8d1494f386",
     "lib/spawn-hidden.ts": "d948c649f15a486a6da5e5807ed5e9cee18aac9bf4c04098080a371d19aa5610",
-    "lib/transcript-parser.ts": "32ec03d945a6301f5d3890bee7768653a6969d86e7dfa49177ac189621ceebdd",
+    "lib/transcript-parser.ts": "00ae17a264ea9e45da65c2aac0a5fa484e98b5be64b726b3fcfcf6882035dad3",
     "linear-branch-context.ts": "2606d2b4673e20578e60bda30bd1f973fa0f53f0572ca9c1bca71fa103eb9346",
     "mcp-activity-tracker.ts": "0ca80468de7242925b84036eee99e62fc531a78f860d7050fee1ba896eb246ed",
     "memory-awareness.ts": "aa5c8d56a6436d8fb21e43111c186cf1c88d9f6f53fb97a7a03e50ef752b885d",
