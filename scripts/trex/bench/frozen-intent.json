@@ -1,0 +1,118 @@
+{
+  "sha": "303bea5f",
+  "arm": "intent",
+  "flowsTree": "bc09553210e872539b930caecabd3f6ad235ebca",
+  "groups": {
+    "S1": {
+      "runId": "e95b861b-1093-4abc-a680-e08e41240734",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 99455,
+        "outputTokens": 43715,
+        "cacheReadTokens": 335872,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S8": {
+      "runId": "4ea89359-f1cd-49a4-8bc6-477321f775fe",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 81934,
+        "outputTokens": 41738,
+        "cacheReadTokens": 844544,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S14": {
+      "runId": "f93734e5-6e3d-4642-b4db-ea7edfcc1c4b",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 192383,
+        "outputTokens": 55488,
+        "cacheReadTokens": 1433984,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S18": {
+      "runId": "fb01aeea-3e57-4759-b886-49f97afd03e6",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 130545,
+        "outputTokens": 61079,
+        "cacheReadTokens": 1318528,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    }
+  },
+  "negatives": {
+    "N2": [],
+    "N3": [
+      "S18"
+    ],
+    "N6": [],
+    "N7": [],
+    "N8": [],
+    "N9": [],
+    "K1": [],
+    "K2": [],
+    "N10": [
+      "S14"
+    ],
+    "N11": [],
+    "N12": [],
+    "N13": [],
+    "N14": [],
+    "N15": [
+      "S8"
+    ],
+    "N16": []
+  },
+  "skipped": {
+    "N2": "no_match",
+    "N6": "no_match",
+    "N7": "no_match",
+    "N8": "no_match",
+    "N9": "no_match",
+    "K1": "no_match",
+    "K2": "no_match",
+    "N11": "no_match",
+    "N12": "no_match",
+    "N13": "no_match",
+    "N14": "no_match",
+    "N16": "no_match"
+  },
+  "hostFlows": 0,
+  "hostReview": null,
+  "blind": "audited (stream-json reads in tree)",
+  "pins": {
+    "negatives": {
+      "N2": "b928c1f1",
+      "N3": "a3946cac",
+      "N6": "d57c7859",
+      "N7": "4ff7dc66",
+      "N8": "016fcdf1",
+      "N9": "77c9bad4",
+      "K1": "3cb2bd65",
+      "K2": "6d77dacc",
+      "N10": "41d77f56",
+      "N11": "86167153",
+      "N12": "2df7de63",
+      "N13": "4b516798",
+      "N14": "1253d750",
+      "N15": "930400bc",
+      "N16": "52d8c594"
+    },
+    "files": {
+      "negatives": "97232be390a28edb943b664ead4738535480a177",
+      "proofs": "da5afad5e411369e3c6af4920862946ee832a649"
+    }
+  }
+}
