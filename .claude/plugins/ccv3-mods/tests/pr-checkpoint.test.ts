@@ -1446,25 +1446,27 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     expect(r.deny).toMatch(/git commit -F/)
   })
 
-  // Minor 5. Breaks if any pattern is quadratic on a long line (an unbounded quantifier beside a repeated prefix): 100k characters in under 50 ms.
+  // Minor 5. Breaks if any pattern is quadratic on a long line (an unbounded quantifier beside a repeated prefix).
+  // 400k characters in under 500 ms: linear work plus the harness call stays far under it, while a quadratic
+  // pattern grows 16x from 100k (the old guard took 199 ms at 100k, so about 3 s here). A 50 ms limit at 100k flaked under load.
   const LONG: [string, string][] = [
-    ['no module', 'x '.repeat(50_000)],
-    ['module repeated, all tick', 'node scripts/github/slot-queue.mjs tick '.repeat(2_500)],
-    ['module repeated, no verb', 'scripts/github/slot-queue.mjs '.repeat(3_400)],
-    ['slot- prefix repeated', 'slot-'.repeat(20_000)],
-    ['separators and a module at the end', `git commit -m "${'x;'.repeat(50_000)} slot-queue.mjs"`],
-    ['quotes and carets', `${"'^`".repeat(30_000)} slot-queue.mjs tick`],
-    ['one long token before the module', `${'a'.repeat(100_000)}slot-queue.mjs tick`],
-    ['glob chars', `node ${'*?['.repeat(30_000)}slot-queue`],
+    ['no module', 'x '.repeat(200_000)],
+    ['module repeated, all tick', 'node scripts/github/slot-queue.mjs tick '.repeat(10_000)],
+    ['module repeated, no verb', 'scripts/github/slot-queue.mjs '.repeat(13_600)],
+    ['slot- prefix repeated', 'slot-'.repeat(80_000)],
+    ['separators and a module at the end', `git commit -m "${'x;'.repeat(200_000)} slot-queue.mjs"`],
+    ['quotes and carets', `${"'^`".repeat(120_000)} slot-queue.mjs tick`],
+    ['one long token before the module', `${'a'.repeat(400_000)}slot-queue.mjs tick`],
+    ['glob chars', `node ${'*?['.repeat(120_000)}slot-queue`],
   ]
   for (const [label, command] of LONG) {
-    test(`F13 a 100k-character line (${label}) is judged in under 50 ms`, async ($, on) => {
+    test(`F13 a 400k-character line (${label}) is judged in under 500 ms`, async ($, on) => {
       world(on)
       await start($)
       await shell($, 'git status')
       const t0 = performance.now()
       await shell($, command)
-      expect(performance.now() - t0).toBeLessThan(50)
+      expect(performance.now() - t0).toBeLessThan(500)
     })
   }
 
