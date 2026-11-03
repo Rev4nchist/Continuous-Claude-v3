@@ -254,8 +254,8 @@ slot and posts `@coderabbitai review`. The state file is `~/.claude/state/codera
   says ALLOW.
 - A timed-out PR is still not READY. READY needs a CodeRabbit review of the head. On the STALLED line,
   run the principal-reviewer agent on the head (not in fast mode) and report its findings. Do not post.
-- You cannot run `slot-queue.mjs add`, `decide` or `drop`, and you cannot write the state file. Read the
-  state with `/slot` or `slot-queue.mjs list --json`. Only Dave moves the queue.
+- The `pr-checkpoint` mod (Lock A, Lock B) denies `slot-queue.mjs add`, `decide` and `drop`, and any write
+  of the state file. Read the state with `/slot` or `slot-queue.mjs list --json`. Only Dave moves the queue.
 - A request comment on the head from a person or model counts as the post, so the queue does not post
   twice. A post that makes no review in 20 minutes counts once. A second one marks the item `stuck`.
 

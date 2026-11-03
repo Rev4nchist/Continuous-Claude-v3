@@ -599,6 +599,20 @@ const staleness = async ($: EngineInterface, root: string, ask: CheckpointAsk): 
   return { kind: 'open' }
 }
 
+/** The PR's head now, or null when it cannot be read (no checkout, gh failed, no JSON). */
+const currentHead = async ($: EngineInterface, pr: number): Promise<string | null> => {
+  const root = await rootOf($)
+  if (!root) return null
+  const ran = await run($, stateArgv(pr), root, VIEW_TIMEOUT_MS)
+  if (!ran.ok || ran.code !== 0) return null
+  try {
+    const head = (JSON.parse(ran.out) as { headRefOid?: unknown }).headRefOid
+    return typeof head === 'string' && head !== '' ? head : null
+  } catch {
+    return null
+  }
+}
+
 /** Dave's Yes or No on the first question. A Yes that posts a comment and fails leaves the question queued. */
 const pressAsk = ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> => exclusive(() => runAsk($, answer))
 
@@ -715,8 +729,10 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
     await tellModel($, keptNotice(grant.pr, grant.round, retained))
     return { text: `PR #${grant.pr}: round ${grant.round} allowed. His decline of ${retained} stays.` }
   }
-  const queued = await enqueueRound($, stored, allowed, stored.head)
-  await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: stored.head, text: '', round: grant.round }, 'yes', queued))
+  // The grant comes after fix pushes, so the record head is stale. The add carries the PR's head now; an unreadable head queues nothing.
+  const head = await currentHead($, grant.pr)
+  const queued = head !== null && (await enqueueRound($, stored, allowed, head))
+  await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: head ?? stored.head, text: '', round: grant.round }, 'yes', queued))
   const next = queued ? 'the free-slot queue posts @coderabbitai review' : 'post one @coderabbitai review'
   return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, ${next}.` }
 }

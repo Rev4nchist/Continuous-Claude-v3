@@ -1976,6 +1976,25 @@ describe('pr-checkpoint: asks from the watcher', () => {
       expect(told(w)).toContain(QUEUE_NOTICE)
     })
 
+    // F13: /pathway grant comes after fix pushes, so the record head is stale. The add carries the PR's current head, or no add runs.
+    test('T3 /pathway grant 7 4 after a fix push queues the round on the PR current head, not the record head', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, viewHead: OTHER_HEAD })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([ADD_R4.map(arg => (arg === HEAD ? OTHER_HEAD : arg))])
+      expect(ran.text ?? '').toContain('the free-slot queue posts')
+    })
+
+    test('T3 /pathway grant 7 4 with an unreadable PR head runs no add and keeps the old notice', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, view: { exitCode: 1, stderr: 'gh: network down' } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(slotRuns(w.seen)).toEqual([])
+      expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+      expect(ran.text ?? '').toContain('post one @coderabbitai review')
+      expect(told(w)).toContain(OLD_NOTICE)
+    })
+
     test('T3 a grant raised by a plugin runs no add', async ($, on) => {
       const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
       await start($)

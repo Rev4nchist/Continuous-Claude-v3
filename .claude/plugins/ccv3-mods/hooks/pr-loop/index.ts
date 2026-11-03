@@ -613,7 +613,8 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
       description: 'Show the status of a PR; press Land to merge it when READY. Several numbers, or "ready", land the READY PRs in turn',
       argumentHint: '<pr> [<pr> ...] [--when-ready]  |  ready',
     })
-    await registerSlot($)
+    // Its own catch: a refused /slot must not skip pr_status and pr_watch.
+    await registerSlot($).catch(() => undefined)
     await $.tool.register({
       name: 'pr_status',
       description:
