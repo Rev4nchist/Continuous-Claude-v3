@@ -61,6 +61,7 @@ var CHANGING_VERBS = /* @__PURE__ */ new Set([
   "say",
   "add",
   "apply-kanban",
+  "adopt",
   "state",
   "seed"
 ]);

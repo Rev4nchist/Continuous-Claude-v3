@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { registerSession } from './shared/db-utils-pg.js';
 import { resolveSessionId, canonicalProject, normalizeProjectKey } from './shared/session-id.js';
+import { readIdentity, resolveName, writeIdentity } from './shared/session-identity.js';
 
 // Cache heartbeat to avoid DB update on every prompt
 const CACHE_TTL_MS = 30000;  // 30 seconds
@@ -41,6 +42,25 @@ interface HookInput {
   session_id?: string;
   cwd?: string;
   prompt?: string;
+  session_title?: string;
+  transcript_path?: string;
+}
+
+/**
+ * Keep the identity file's name current. Runs before the 30 s cache check so a
+ * /rename shows at the very next prompt. Writes only when the name changed, and
+ * never writes a name away: no title and no custom-title line means no write.
+ */
+function syncIdentityName(input: HookInput): void {
+  try {
+    if (!input.session_id) return;
+    const name = resolveName(input.session_title, input.transcript_path);
+    if (!name) return;
+    if (readIdentity(input.session_id)?.name === name) return;
+    writeIdentity(input.session_id, { name, cwd: input.cwd });
+  } catch {
+    // Identity is display only: never fail the heartbeat for it.
+  }
 }
 
 /**
@@ -67,6 +87,9 @@ async function heartbeatJob(raw: string): Promise<object> {
   } catch {
     // Ignore parse errors
   }
+
+  // Before the ~/.claude guard and the cache check: every session gets a label.
+  syncIdentityName(input);
 
   // heartbeat was already payload-first and therefore already correct; it is the
   // other two hooks that were moved onto its identity. The project key, though,

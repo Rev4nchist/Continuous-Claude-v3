@@ -2,7 +2,7 @@
 // claude-hud launcher — resolves latest installed version at runtime
 // so statusLine survives plugin updates without re-running setup.
 // Includes Harry Potter spell name mapping for tool verbs.
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -96,10 +96,40 @@ if (versions.length === 0) {
 const latest = versions[versions.length - 1];
 const entrypoint = join(pluginDir, latest, 'dist', 'index.js');
 
+// ============================================================
+// Session identity: label "<name> #<sid8>" in the statusline
+// ============================================================
+// Read only. The identity file is written by the heartbeat and session-register hooks;
+// this launcher takes the name from stdin.session_name and rewrites it as the label.
+const NAME_CLIP = 16;
+const SAFE_ID = /^[0-9a-fA-F-]{8,64}$/;
+
+// Returns the stdin JSON text with session_name set to the label. Raw text on any error.
+function labelStdin(raw) {
+  try {
+    const data = JSON.parse(raw);
+    const uuid = data && data.session_id;
+    if (typeof uuid !== 'string' || !SAFE_ID.test(uuid)) return raw;
+    const name = typeof data.session_name === 'string'
+      ? data.session_name.replace(/\s+/g, ' ').trim().slice(0, NAME_CLIP)
+      : '';
+    const sid8 = '#' + uuid.slice(0, 8);
+    data.session_name = name ? name + ' ' + sid8 : sid8;
+    return JSON.stringify(data);
+  } catch {
+    return raw;
+  }
+}
+
+let stdinText = '';
+try { stdinText = readFileSync(0, 'utf8'); } catch { /* no stdin: pass empty */ }
+const hudInput = labelStdin(stdinText);
+
 // Capture stdout from HUD, apply spell mapping, then output
 try {
   const output = execFileSync(process.execPath, [entrypoint, ...process.argv.slice(2)], {
-    stdio: ['inherit', 'pipe', 'inherit'],
+    stdio: ['pipe', 'pipe', 'inherit'],
+    input: hudInput,
     timeout: 5000,
     encoding: 'utf8',
   });

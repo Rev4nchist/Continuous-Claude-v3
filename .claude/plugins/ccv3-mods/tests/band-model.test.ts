@@ -15,7 +15,7 @@ const compactLine = (bandModel as unknown as { compactLine: (state: BandState, w
 // Ways the two core band lines (PRD 5.3) can fail, one test each. Every check reads the drawn text and tones.
 // L1 a chip word is wrong, shortened, or two states share a tone
 // L2 line 1 loses a field, or shows a field the state does not have as if it were set
-// L3 GOAL not set is hidden, or the dim fallback shows when the state has none (or replaces the warning)
+// L3 GOAL not set is hidden, or loses the warning tone
 // L4 a parsed goal looks like a brief_set goal, or a blank goal reads as set
 // L5 an answered ask is counted, or a stale ask looks fresh
 // L6 UNPROVEN misses a done step with no proof, counts a proven one, or lets a proof for another subject count
@@ -29,7 +29,7 @@ const compactLine = (bandModel as unknown as { compactLine: (state: BandState, w
 // (/os redesign, Band reliability item 2). Contract: chip, repo, ctx, cost, helpers running, in that order; BandState gains
 // an optional `helpers` (the number of running helpers; absent or 0 draws no helper text); helper text reads "N helpers running"
 // ("1 helper running" for one). Pure. Ways it can fail, one test each:
-// CL1 a field is missing or out of order, or the line carries a core-line field (branch, lane, GOAL, PLAN, ASK, UNPROVEN)
+// CL1 a field is missing or out of order, or the line carries a core-line field (lane, GOAL, PLAN, ASK, UNPROVEN)
 // CL2 the line is wider than the width at some width from 20 to 200
 // CL3 the chip is cut, shortened or loses its tone at some width
 // CL4 below 40 columns more than the chip and ctx is drawn; from 40 columns the repo shows
@@ -62,11 +62,9 @@ const state = (over: Partial<BandState> = {}): BandState => ({
   brief: null,
   tasks: [],
   repo: 'continuous-claude',
-  branch: 'feat/dash-header',
   lane: 'dash-header',
   ctx: 41,
   costUsd: 1.84,
-  fallback: null,
   now: 1_000,
   activeAt: 1_000,
   ...over,
@@ -104,15 +102,16 @@ describe('band line 1', () => {
     expect(TONE.chipWarn.backgroundColor).toBe('warning')
   })
 
-  test('L2 line 1 holds chip, project dot, repo, branch, lane, ctx and cost, in that order', () => {
+  test('L2 line 1 holds chip, lane, ctx and cost, in that order, and no repo or branch (the statusline shows them)', () => {
     const line = text(bandLines(state(), 120)[0])
-    const at = ['WORKING', '● continuous-claude', 'feat/dash-header', 'lane dash-header', 'ctx 41%', '$1.84'].map(part => line.indexOf(part))
+    const at = ['WORKING', 'lane dash-header', 'ctx 41%', '$1.84'].map(part => line.indexOf(part))
     expect(at.every(n => n >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
+    expect(line).not.toContain('continuous-claude')
   })
 
   test('L2 a field the state does not have reads as a dash, not as a value and not as a gap', () => {
-    const line = text(bandLines(state({ repo: null, branch: null, lane: null, ctx: null, costUsd: null }), 120)[0])
+    const line = text(bandLines(state({ repo: null, lane: null, ctx: null, costUsd: null }), 120)[0])
     expect(line).toContain('lane -')
     expect(line).toContain('ctx -')
     expect(line).toContain('$-')
@@ -127,21 +126,6 @@ describe('band line 2: goal', () => {
     expect(text(line)).toContain('GOAL not set')
     expect(line.find(span => span.text.includes('not set'))?.tone).toBe('warn')
     expect(text(line)).toMatch(/GOAL not set\s+PLAN/)
-  })
-
-  test('L3 a fallback (working_on) shows dim after GOAL not set, only when the state has one', () => {
-    const line = bandLines(state({ fallback: 'fix the login redirect' }), 120)[1] ?? []
-    expect(text(line)).toMatch(/GOAL not set\s+fix the login redirect/)
-    expect(line.find(span => span.text.includes('fix the login'))?.tone).toBe('dim')
-    expect(text(bandLines(state({ fallback: '   ' }), 120)[1])).toMatch(/GOAL not set\s+PLAN/)
-  })
-
-  test('L3 a fallback never hides a set goal', () => {
-    const brief = briefWith({ goal: 'Add session header' })
-    const got = lineOf({ brief, fallback: 'old working_on' })
-    expect(got).toContain('GOAL Add session header')
-    expect(got).not.toContain('old working_on')
-    expect(got).not.toContain('not set')
   })
 
   test('L4 a brief_set goal has no marker; a parsed goal is marked parsed', () => {
@@ -315,7 +299,6 @@ describe('band width', () => {
   const full = (): BandState =>
     state({
       brief: briefWith({ goal: long.slice(0, 240), ask: [{ kind: 'question', text: 'q?' }], plan: [{ id: 'a', text: 'x', status: 'done' }] }),
-      branch: 'feature/' + 'b'.repeat(60),
       lane: 'lane-' + 'l'.repeat(40),
     })
 
@@ -356,28 +339,10 @@ describe('band width', () => {
     expect(mid).not.toContain('lane ')
     expect(mid).toContain('WORKING')
     expect(mid).toContain('ctx 41%')
+    expect(mid).toContain('$1.84')
     const small = text(bandLines(full(), 45)[0])
     expect(small).toContain('WORKING')
-    expect(small).toContain('continuous-claude')
-  })
-
-  test('L8 the drop order: the branch is cut first, then lane, cost, ctx, branch, repo', () => {
-    // full(): width 58 holds chip + repo + a cut branch + ctx, but not the lane or the cost.
-    const at58 = text(bandLines(full(), 58)[0])
-    expect(at58).toContain('ctx 41%')
-    expect(at58).not.toContain('$1.84')
-    expect(at58).not.toContain('lane ')
-    expect(at58).toMatch(/feature\/b+…/)
-    expect(at58.length).toBeLessThanOrEqual(58)
-    // At 120 the branch is cut (to make room) and nothing else drops: the cut comes before any drop.
-    const cut = text(bandLines(full(), 120)[0])
-    expect(cut).toMatch(/feature\/b+…/)
-    expect(cut).toContain('lane ')
-    expect(cut).toContain('$1.84')
-    // Narrower: ctx goes only after cost, and the branch only after ctx.
-    const at46 = text(bandLines(full(), 46)[0])
-    expect(at46).not.toContain('ctx')
-    expect(at46).toMatch(/feature\/b+/)
+    expect(small).toContain('ctx 41%')
   })
 
   test('L9 below 40 columns only the chip and the goal are drawn, on one line', () => {
@@ -399,17 +364,15 @@ describe('band width', () => {
 })
 
 describe('band redaction', () => {
-  test('L10 a secret in the goal, fallback, repo, branch or lane never reaches the drawn text', () => {
+  test('L10 a secret in the goal, repo or lane never reaches the drawn text', () => {
     const secret = 'sk-' + 'ant-' + 'a'.repeat(40)
     const unredacted: Brief = { ...emptyBrief(1_000), goal: `ship ${secret}` }
     const lines = bandLines(
-      state({ brief: unredacted, fallback: `fix ${secret}`, repo: `r-${secret}`, branch: `b-${secret}`, lane: `l-${secret}` }),
+      state({ brief: unredacted, repo: `r-${secret}`, lane: `l-${secret}` }),
       200,
     )
     expect(all(lines)).not.toContain(secret)
     expect(all(lines)).not.toContain('a'.repeat(40))
-    const noGoal = bandLines(state({ fallback: `fix ${secret}` }), 200)
-    expect(all(noGoal)).not.toContain(secret)
   })
 })
 
@@ -427,7 +390,7 @@ describe('band compact line', () => {
   })
 
   test('CL2 no compact line is wider than the width, for every width from 20 to 200', () => {
-    const long = state({ repo: 'r'.repeat(80), branch: 'b'.repeat(80), lane: 'l'.repeat(80) }) as BandState
+    const long = state({ repo: 'r'.repeat(80), lane: 'l'.repeat(80) }) as BandState
     for (const given of [{ helpers: 2 }, { helpers: 12, repo: 'r'.repeat(80), costUsd: 1234.5 }, { chip: 'waiting-on-dave' as const, helpers: 3 }]) {
       for (let width = 20; width <= 200; width++) {
         expect(text(compactLine({ ...long, ...given } as BandState, width)).length).toBeLessThanOrEqual(width)

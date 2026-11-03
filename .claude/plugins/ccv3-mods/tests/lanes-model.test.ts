@@ -137,6 +137,36 @@ describe('parseBoard', () => {
   })
 })
 
+describe('parseBoard: who I am (me, me_short, me_name)', () => {
+  const lanes = [row('mine-active', { owner_session_id: ME })]
+
+  test('L10 me stays a plain id string; me_short and me_name are read when the board has them', () => {
+    const out = parseBoard(board(lanes, { me_short: 'aaaaaaaa', me_name: 'trex' }), 'other', NOW)
+    expect(out?.mine.map(one => one.id)).toEqual(['mine-active'])
+    expect(out?.meShort).toBe('aaaaaaaa')
+    expect(out?.meName).toBe('trex')
+  })
+
+  test('L11 an old board with no me_short or me_name has neither key; null me_name reads null', () => {
+    const old = parseBoard(board(lanes), 'other', NOW)
+    expect(old?.mine).toHaveLength(1)
+    expect(old).not.toHaveProperty('meShort')
+    expect(old).not.toHaveProperty('meName')
+    expect(parseBoard(board(lanes, { me_name: null }), 'other', NOW)?.meName).toBeNull()
+  })
+
+  test('L12 a me_short that is not a safe id is dropped; a name is collapsed, trimmed and clipped to 16', () => {
+    expect(parseBoard(board(lanes, { me_short: '../../etc' }), 'other', NOW)?.meShort).toBeNull()
+    expect(parseBoard(board(lanes, { me_short: 'zzzzzzzz' }), 'other', NOW)?.meShort).toBeNull()
+    expect(parseBoard(board(lanes, { me_name: '  a   very\n long   session name here ' }), 'other', NOW)?.meName).toBe('a very long ses…')
+  })
+
+  test('L13 owner_name is clipped to 16 like every other name display', () => {
+    const out = parseBoard(board([row('peer-live', { owner_session_id: PEER, owner_name: 'a-very-long-session-name' })]), 'other', NOW)
+    expect(out?.lanes[0]?.ownerName).toBe('a-very-long-ses…')
+  })
+})
+
 describe('laneOverlap', () => {
   test('L8 an empty, blank or missing scope overlaps nothing', () => {
     const files = [file('edited', 'hooks/agentic-os/digest.ts')]
