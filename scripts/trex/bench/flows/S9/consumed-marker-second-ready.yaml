@@ -1,0 +1,29 @@
+id: consumed-marker-second-ready
+title: A consumed pathway marker does not confirm the next ready
+description: On the same head, a marker at or below the saved consumed id must keep the class-raised note, and a newer marker must clear it.
+goal: The router binds each pathway-confirmed marker to one ready event.
+paths: [scripts/github/review-router.mjs]
+symbols: [confirmedMarkers]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, scripts/github/review-router.mjs, "221", --fixture, scripts/trex/bench/flows/S9/fixtures/stale-ready.json, --event, ready_for_review]
+      cwd: .
+      env: {GITHUB_EVENT_PATH: ""}
+    checks:
+      - {text: the stale ready still routes, exit: 0}
+      - {text: the class-raised note stays, stdout: "Class raised from docs to normal"}
+      - {text: the checkpoint class stays docs, stdout: "pclass=docs"}
+      - {text: the raised class is not saved as the checkpoint, "!stdout": "pclass=normal"}
+  - action:
+      cmd: [node, scripts/github/review-router.mjs, "221", --fixture, scripts/trex/bench/flows/S9/fixtures/fresh-ready.json, --event, ready_for_review]
+      cwd: .
+      env: {GITHUB_EVENT_PATH: ""}
+    checks:
+      - {text: the new marker still routes, exit: 0}
+      - {text: the new marker saves the current class, stdout: "pclass=normal"}
+      - {text: the class-raised note is cleared, "!stdout": "Class raised from docs to normal"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

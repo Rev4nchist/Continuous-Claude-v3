@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "cwd": "scripts/trex/bench/flows/S6/gate-repo",
+  "tool_input": {
+    "command": "gh pr ready 201 --undo --repo rev4nchist/continuous-claude-v3"
+  }
+}

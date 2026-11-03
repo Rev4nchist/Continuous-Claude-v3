@@ -1,0 +1,29 @@
+{
+  "pull": {
+    "number": 111,
+    "state": "open",
+    "draft": false,
+    "merged": false,
+    "mergeable_state": "clean",
+    "body": "",
+    "user": {"login": "someone", "type": "User"},
+    "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ref": "feat/x"},
+    "labels": [{"name": "review:none"}, {"name": "risk:normal"}]
+  },
+  "combined": {"statuses": []},
+  "checkRuns": [],
+  "threads": [],
+  "bodyEdits": [],
+  "reviews": [],
+  "comments": [
+    {
+      "id": 31,
+      "user": {"login": "github-actions[bot]", "type": "Bot"},
+      "body": "<!-- review-router -->\n<!-- review-router-state class=normal head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pathway=none pclass=normal -->\nNo open router notes."
+    }
+  ],
+  "commentEdits": {},
+  "greptileAuto": true,
+  "commits": [],
+  "proofGate": false
+}

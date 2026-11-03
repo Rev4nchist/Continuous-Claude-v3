@@ -1,0 +1,25 @@
+{
+  "pull": {
+    "number": 221,
+    "draft": false,
+    "state": "open",
+    "changed_files": 1,
+    "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ref": "feat"},
+    "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ref": "main"},
+    "labels": [{"name": "review:none"}, {"name": "risk:docs"}, {"name": "builder:claude"}]
+  },
+  "files": [{"filename": "src/app.js", "additions": 2, "deletions": 0}],
+  "comments": [
+    {
+      "id": 1,
+      "user": {"login": "github-actions[bot]", "type": "Bot"},
+      "body": "<!-- review-router -->\n<!-- review-router-state class=docs head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pathway=none pclass=docs -->\n<!-- review-router-consumed id=10 -->\nNo open router notes.\n"
+    },
+    {
+      "id": 10,
+      "author_association": "OWNER",
+      "user": {"login": "owner", "type": "User"},
+      "body": "<!-- pathway-confirmed head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pathway=none -->"
+    }
+  ]
+}

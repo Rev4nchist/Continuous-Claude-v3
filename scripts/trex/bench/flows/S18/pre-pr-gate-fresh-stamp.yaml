@@ -1,0 +1,53 @@
+id: pre-pr-gate-fresh-stamp
+title: A stamp for HEAD allows that PR and rejects another head
+description: With a fresh stamp for HEAD, gh pr create is allowed, and gh pr create --head of a different commit is denied.
+goal: Catch a stamp check that rejects the stamped HEAD or that accepts a different head.
+paths:
+  - .claude/hooks/dist/pre-pr-gate.mjs
+  - .claude/hooks/src/pre-pr-gate.ts
+symbols:
+  - handle
+driver: hook
+mode: scripted
+profile: container
+needs: [git]
+start:
+  git: commit
+  cwd: .
+  run:
+    - node
+    - -e
+    - |
+      const {execSync} = require('node:child_process');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const root = execSync('git rev-parse --show-toplevel', {encoding: 'utf8'}).trim();
+      const head = execSync('git rev-parse HEAD', {encoding: 'utf8', cwd: root}).trim();
+      const tree = execSync("git rev-parse 'HEAD^{tree}'", {encoding: 'utf8', cwd: root}).trim();
+      const env = Object.assign({}, process.env, {
+        GIT_AUTHOR_NAME: 'trex', GIT_AUTHOR_EMAIL: 'trex@example.com',
+        GIT_COMMITTER_NAME: 'trex', GIT_COMMITTER_EMAIL: 'trex@example.com'
+      });
+      const other = execSync('git commit-tree ' + tree + ' -m other', {encoding: 'utf8', cwd: root, env}).trim();
+      execSync('git branch other ' + other, {cwd: root});
+      const dir = path.join(root, '.claude', 'cache', 'pre-pr');
+      fs.mkdirSync(dir, {recursive: true});
+      fs.writeFileSync(path.join(dir, 'stamp.json'), JSON.stringify({
+        head: head, branch: 'x', at: new Date().toISOString(),
+        cr_skipped: false, cr_skip_reason: null, results: []
+      }));
+steps:
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/pr-create-other.json}
+    checks:
+      - {text: a different head is blocked, stdout: "BLOCKED \\(pre-pr-gate\\)"}
+      - {text: the stamp names the other commit, stdout: "the stamp is for commit"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/pr-create.json}
+    checks:
+      - {text: the stamped HEAD is allowed, stdout: "\\{\\}"}
+      - {text: the stamped HEAD is not blocked, "!stdout": "BLOCKED \\(pre-pr-gate\\)"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/continued-create.json}
+    checks:
+      - {text: the continued create is allowed once stamped, stdout: "\\{\\}"}
+      - {text: the continued create is not blocked, "!stdout": "BLOCKED \\(pre-pr-gate\\)"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

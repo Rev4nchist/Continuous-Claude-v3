@@ -1,0 +1,29 @@
+{
+  "pull": {
+    "number": 111,
+    "state": "open",
+    "draft": false,
+    "merged": false,
+    "mergeable_state": "clean",
+    "body": "",
+    "user": {"login": "someone", "type": "User"},
+    "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ref": "feat/x"},
+    "labels": [{"name": "review:none"}, {"name": "risk:infra"}]
+  },
+  "combined": {"statuses": []},
+  "checkRuns": [],
+  "threads": [],
+  "bodyEdits": [],
+  "reviews": [],
+  "comments": [
+    {
+      "id": 31,
+      "user": {"login": "github-actions[bot]", "type": "Bot"},
+      "body": "<!-- review-router -->\n<!-- review-router-state class=infra head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pathway=none pclass=normal -->\nClass raised from normal to infra after the checkpoint. Run /checkpoint again."
+    }
+  ],
+  "commentEdits": {},
+  "greptileAuto": true,
+  "commits": [],
+  "proofGate": false
+}

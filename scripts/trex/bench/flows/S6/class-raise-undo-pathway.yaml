@@ -1,0 +1,22 @@
+id: class-raise-undo-pathway
+title: A review:none class raise says to undo ready, then run /pathway
+description: A ready review:none PR whose class rose must tell Dave to return it to draft before /pathway.
+goal: The router comment and the status reason name gh pr ready --undo and /pathway, and neither names /checkpoint.
+paths: [scripts/github/review-router.mjs, scripts/github/review-status.mjs]
+symbols: [decide, verifiedBots, CLASS_RAISED_NOTE]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [node, scripts/github/review-router.mjs, "7", "--event", "synchronize", "--fixture", "scripts/trex/bench/flows/S6/fixtures/raise-none.json", "--config", "review-router.config.json"], cwd: ., env: {GITHUB_STEP_SUMMARY: "", RUNNER_TEMP: ""}}
+    checks:
+      - {text: the dry run exits, exit: 0}
+      - {text: the comment says to undo ready then run /pathway, stdout: "Return the PR to draft \\(gh pr ready --undo\\), then run /pathway again"}
+      - {text: the comment does not name the built-in /checkpoint, "!stdout": "/checkpoint"}
+  - action: {cmd: [node, scripts/trex/bench/flows/S6/print-raised.mjs], cwd: .}
+    checks:
+      - {text: the status helper exits, exit: 0}
+      - {text: the status reason says to undo ready then run /pathway, stdout: "Return the PR to draft \\(gh pr ready --undo\\), then run /pathway again"}
+      - {text: the status reason does not name the built-in /checkpoint, "!stdout": "/checkpoint"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

@@ -1,0 +1,26 @@
+id: gate-allows-ready-undo
+title: The gate denies gh pr ready, names /pathway, and allows --undo
+description: Marking a CCv3 PR ready from the shell is denied, and the prescribed return to draft is allowed.
+goal: gh pr ready is denied with /pathway and gh pr ready --undo, and gh pr ready --undo is not denied.
+paths: [.claude/hooks/dist/pre-pr-gate.mjs, .claude/hooks/src/pre-pr-gate.ts]
+symbols: [checkpointDeny]
+driver: hook
+mode: scripted
+profile: container
+needs: [git]
+start:
+  run: [node, scripts/trex/bench/flows/S6/enforce-checkpoint.mjs]
+  cwd: .
+steps:
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/gh-pr-ready.json}
+    checks:
+      - {text: gh pr ready is denied, stdout: "\"permissionDecision\":\"deny\""}
+      - {text: the deny tells Dave to run /pathway, stdout: "Run /pathway"}
+      - {text: the deny names gh pr ready --undo, stdout: "gh pr ready --undo"}
+      - {text: the deny does not name the built-in /checkpoint, "!stdout": "/checkpoint"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/gh-pr-ready-undo.json}
+    checks:
+      - {text: gh pr ready --undo is allowed, stdout: "^\\{\\}\\s*$"}
+      - {text: the undo command is not blocked, "!stdout": "BLOCKED \\(pre-pr-gate\\)"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

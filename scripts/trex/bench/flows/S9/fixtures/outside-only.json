@@ -1,0 +1,39 @@
+{
+  "pull": {
+    "number": 205,
+    "draft": false,
+    "merged": false,
+    "state": "open",
+    "mergeable_state": "clean",
+    "body": "A small change.\n",
+    "user": {"login": "dev", "type": "User"},
+    "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ref": "feat"},
+    "base": {"ref": "main", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "labels": [{"name": "review:none"}, {"name": "risk:docs"}]
+  },
+  "combined": {"statuses": []},
+  "checkRuns": [],
+  "threads": [],
+  "bodyEdits": [],
+  "commentEdits": {},
+  "commits": [],
+  "greptileAuto": true,
+  "proofGate": false,
+  "comments": [
+    {
+      "id": 1,
+      "user": {"login": "github-actions[bot]", "type": "Bot"},
+      "body": "<!-- review-router -->\n<!-- review-router-state class=docs head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pathway=none pclass=docs -->\nNo open router notes.\n"
+    }
+  ],
+  "reviews": [
+    {
+      "id": 5691905341,
+      "state": "COMMENTED",
+      "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "submitted_at": "2026-10-30T08:00:00Z",
+      "user": {"login": "coderabbitai[bot]", "type": "Bot"},
+      "body": "> [!CAUTION]\n> Some comments are outside the diff and can't be posted inline due to GitHub limitations.\n>\n> **⚠️ Outside diff range comments (1)**\n>\n> 🟡 Minor | a finding on a line the diff does not touch\n"
+    }
+  ]
+}

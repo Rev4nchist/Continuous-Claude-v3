@@ -1,0 +1,20 @@
+id: outside-diff-no-sentence
+title: An outside-diff review with no review sentence still blocks READY
+description: A CodeRabbit review that only lists outside-diff findings must keep the PR not ready until each one is handled.
+goal: coderabbitOutsideDiff counts that heading and READY stays false when the body has no Actionable comments posted sentence.
+paths: [scripts/github/review-status.mjs]
+symbols: [codeRabbitOutsideDiff]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, scripts/github/review-status.mjs, --fixture, scripts/trex/bench/flows/S9/fixtures/outside-only.json, --json]
+      cwd: .
+    checks:
+      - {text: the gate exits not ready, exit: 1}
+      - {text: the heading counts without a review sentence, stdout: '"coderabbitOutsideDiff":1,'}
+      - {text: READY is false, stdout: '"ready":false'}
+      - {text: the reason names the unhandled outside-diff finding, stdout: "outside-diff finding"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P0

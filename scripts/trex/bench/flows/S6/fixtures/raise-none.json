@@ -1,0 +1,22 @@
+{
+  "pull": {
+    "number": 7,
+    "state": "open",
+    "draft": false,
+    "changed_files": 1,
+    "head": { "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    "labels": [
+      { "name": "review:none" },
+      { "name": "risk:normal" },
+      { "name": "builder:claude" }
+    ]
+  },
+  "files": [{ "filename": ".github/workflows/x.yml" }],
+  "comments": [
+    {
+      "id": 42,
+      "user": { "login": "github-actions[bot]", "type": "Bot" },
+      "body": "<!-- review-router -->\n<!-- review-router-state class=normal head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pathway=none pclass=normal -->\nNo open router notes."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+id: none-raise-blocks-ready
+title: A review:none PR whose class rose after the checkpoint is not READY and asks for no bot
+description: evaluate() on a review:none head that matches the checkpoint, then on the same head after the class rises above pclass.
+goal: A matched none pathway is READY with no bot, and a raised class stays not READY without asking Greptile or CodeRabbit.
+paths: [scripts/github/review-status.mjs]
+symbols: [evaluate, verifiedBots]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [node, scripts/trex/bench/flows/S11/run-status.mjs, scripts/trex/bench/flows/S11/fixtures/none-matched.json]}
+    checks:
+      - {text: a none pathway at the checkpoint class is ready, exit: 0}
+      - {text: the result says ready, stdout: "\"ready\":true"}
+      - {text: no bot is required, stdout: "\"required\":\\[\\]"}
+  - action: {cmd: [node, scripts/trex/bench/flows/S11/run-status.mjs, scripts/trex/bench/flows/S11/fixtures/none-raised.json]}
+    checks:
+      - {text: a class above the checkpoint class is not ready, exit: 1}
+      - {text: the result says not ready, stdout: "\"ready\":false"}
+      - {text: still no bot is required, stdout: "\"required\":\\[\\]"}
+      - {text: the raise is the blocking reason, stdout: "class raised after the checkpoint"}
+      - {text: Greptile is not pulled back in, "!stdout": "no Greptile check|Greptile is required"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P0

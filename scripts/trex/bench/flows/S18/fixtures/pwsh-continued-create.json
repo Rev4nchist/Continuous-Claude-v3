@@ -1,0 +1,6 @@
+{
+  "tool_name": "PowerShell",
+  "tool_input": {
+    "command": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls `\r\n  -X POST `\r\n  -f title=t"
+  }
+}

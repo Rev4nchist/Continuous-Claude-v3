@@ -1,0 +1,6 @@
+{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "gh pr create -R Rev4nchist/Continuous-Claude-v3 --fill"
+  }
+}

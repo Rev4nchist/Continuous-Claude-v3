@@ -1,0 +1,6 @@
+{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls\n-X POST -f title=t"
+  }
+}

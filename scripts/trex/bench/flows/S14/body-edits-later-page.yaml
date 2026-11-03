@@ -1,0 +1,16 @@
+id: body-edits-later-page
+title: A person on a later PR body edit page keeps the PR not ready
+description: review-status walks every body-edit page, names a person between the newest bot edit and Greptile, and stays ready when only bots follow.
+goal: Skipping the middle page or dropping pageInfo fails; a full bot-only history still passes.
+paths: [scripts/github/review-status.mjs]
+symbols: [readBodyEdits, evaluate, bodyEditsPageReader]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [node, scripts/trex/bench/flows/S14/fixtures/body-edits.mjs], cwd: .}
+    checks:
+      - {text: a hidden person blocks READY and a bot-only history does not, exit: 0}
+      - {text: the body-edit gate reports the contract holds, stdout: "BODY_EDITS_OK"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

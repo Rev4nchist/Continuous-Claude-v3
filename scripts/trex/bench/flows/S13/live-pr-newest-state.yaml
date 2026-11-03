@@ -1,0 +1,28 @@
+id: live-pr-newest-state
+title: Live PR rows use the newest state and one leaf per repo
+description: State files for five sessions are joined through the real reader and fleet query.
+goal: The overview PR list matches the newest watch, hides READY and CLOSED, and never shows a path segment.
+paths:
+  - apps/agentic-os/src/server/queries/fleet-sessions.ts
+  - apps/agentic-os/src/server/sources/state-files.ts
+symbols:
+  - getFleetSessions
+  - buildPrRows
+  - readStateFiles
+  - strLeaf
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, --experimental-strip-types, scripts/trex/bench/flows/S13/check-prs.mjs]
+      cwd: .
+    checks:
+      - {text: the join finishes, exit: 0}
+      - {text: newer REVIEWED wins even though that file is older on disk and both live sessions stay, stdout: '"key":"continuous-claude#200","repo":"continuous-claude","pr":200,"state":"REVIEWED","sessions":\["bbbb2222","aaaa1111"\]'}
+      - {text: newer PENDING keeps the row and the session that said READY is gone, stdout: '"key":"continuous-claude#77","repo":"continuous-claude","pr":77,"state":"PENDING","sessions":\["bbbb2222"\]'}
+      - {text: a home path and a windows path keep only the leaf so the same number is two repos, stdout: '"key":"widget#12","repo":"widget".*"key":"app#200","repo":"app","pr":200,"state":"PENDING","sessions":\["cccc3333"\]'}
+      - {text: person states then pending then unchecked by descending number, stdout: 'continuous-claude#200.*continuous-claude#30.*widget#12.*app#200.*continuous-claude#77.*"pr":55,"state":null,"sessions":\["bbbb2222"\]'}
+      - {text: ready closed quiet sessions and path segments stay out of the list, "!stdout": 'acme-client-x|Rev4nchist|quiet-repo|\$HOME|#88|#61|#999'}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 20}
+severity: P1

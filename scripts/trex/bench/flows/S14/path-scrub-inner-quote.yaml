@@ -1,0 +1,16 @@
+id: path-scrub-inner-quote
+title: Text Dave reads must not keep a home path that contains a quote
+description: Free text and error text drop paths with an inner quote or an apostrophe before a space, and keep a relative proof link.
+goal: A leaked file name or a swallowed proof link fails; the sentences in the new scrubber contract pass.
+paths: [apps/agentic-os/src/server/sources/safe-message.ts]
+symbols: [scrubPathsInText, safeMessage]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [node, --experimental-strip-types, scripts/trex/bench/flows/S14/fixtures/scrub-paths.mjs], cwd: .}
+    checks:
+      - {text: quoted and apostrophe paths are scrubbed and the proof link stays, exit: 0}
+      - {text: the scrubber reports the contract holds, stdout: "PATH_SCRUB_OK"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P0

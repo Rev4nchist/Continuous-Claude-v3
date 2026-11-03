@@ -1,0 +1,32 @@
+id: raise-skips-second-coderabbit
+title: A class-raising push adds only the risk label and keeps a saved none pathway
+description: Dry-run the router on a synchronize that raises normal to infra, once for review:none and once for review:coderabbit.
+goal: The push adds risk:infra only, rewrites pathway=none onto the new head, and does not add review:deep-held.
+paths: [scripts/github/review-router.mjs, review-router.config.json]
+symbols: [decide]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, scripts/github/review-router.mjs, "7", --dry-run, --fixture, scripts/trex/bench/flows/S11/fixtures/raise-none.json, --event, synchronize]
+      env: {GITHUB_STEP_SUMMARY: "", RUNNER_TEMP: ""}
+    checks:
+      - {text: the router decides, exit: 0}
+      - {text: the push is a raise, stdout: "\"decision\":\"raised\""}
+      - {text: only risk:infra is added, stdout: "\"labels_added\":\\[\"risk:infra\"\\]"}
+      - {text: the existing bot comment is updated, stdout: "update router comment 31"}
+      - {text: pathway none and pclass stay on the new head, stdout: "class=infra head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pathway=none pclass=normal"}
+      - {text: the comment tells the person to run checkpoint again, stdout: "Class raised from normal to infra after the checkpoint"}
+      - {text: no CodeRabbit review label is added, "!stdout": "review:deep|review:coderabbit"}
+      - {text: a none pathway does not save a hold, "!stdout": "apex_d3"}
+  - action:
+      cmd: [node, scripts/github/review-router.mjs, "7", --dry-run, --fixture, scripts/trex/bench/flows/S11/fixtures/raise-coderabbit.json, --event, synchronize]
+      env: {GITHUB_STEP_SUMMARY: "", RUNNER_TEMP: ""}
+    checks:
+      - {text: the router decides, exit: 0}
+      - {text: the push is a raise, stdout: "\"decision\":\"raised\""}
+      - {text: only risk:infra is added, stdout: "\"labels_added\":\\[\"risk:infra\"\\]"}
+      - {text: review:deep-held is not added beside review:coderabbit, "!stdout": "review:deep-held"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P0

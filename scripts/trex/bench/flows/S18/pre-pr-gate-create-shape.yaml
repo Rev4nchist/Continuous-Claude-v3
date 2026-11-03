@@ -1,0 +1,44 @@
+id: pre-pr-gate-create-shape
+title: Unstamped CCv3 PR creates are blocked and a pulls mention is not
+description: A CCv3 gh pr create, including a line-continued gh api POST, is denied with no stamp, and a comment that only mentions /pulls is allowed.
+goal: Catch a gate that lets an unstamped PR open, or that blocks a command which is not a PR create.
+paths:
+  - .claude/hooks/dist/pre-pr-gate.mjs
+  - .claude/hooks/src/pre-pr-gate.ts
+  - .claude/hooks/src/pr-opened-review-loop.ts
+  - .claude/hooks/dist/pr-opened-review-loop.mjs
+symbols:
+  - isPrOpenCommand
+  - joinContinuations
+driver: hook
+mode: scripted
+profile: container
+needs: [git]
+start:
+  git: commit
+  cwd: .
+steps:
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/pr-create.json}
+    checks:
+      - {text: gh pr create is blocked, stdout: "BLOCKED \\(pre-pr-gate\\)"}
+      - {text: the block is a missing stamp, stdout: "no stamp"}
+      - {text: the decision denies, stdout: "\"permissionDecision\":\"deny\""}
+      - {text: the deny does not teach the skip, "!stdout": "SKIP_PRE_PR_GATE"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/continued-create.json}
+    checks:
+      - {text: a backslash-continued PR create is blocked, stdout: "BLOCKED \\(pre-pr-gate\\)"}
+      - {text: the block is a missing stamp, stdout: "no stamp"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/pwsh-continued-create.json}
+    checks:
+      - {text: a backtick-continued PR create is blocked, stdout: "BLOCKED \\(pre-pr-gate\\)"}
+      - {text: the block is a missing stamp, stdout: "no stamp"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/comment-mentions-pulls.json}
+    checks:
+      - {text: a comment that mentions /pulls is allowed, stdout: "\\{\\}"}
+      - {text: that comment is not blocked, "!stdout": "BLOCKED \\(pre-pr-gate\\)"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/bare-newline.json}
+    checks:
+      - {text: a bare newline does not join into a PR create, stdout: "\\{\\}"}
+      - {text: the split command is not blocked, "!stdout": "BLOCKED \\(pre-pr-gate\\)"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1
