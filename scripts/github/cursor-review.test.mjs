@@ -11,7 +11,7 @@ import { PassThrough } from 'node:stream';
 import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  AGENT_FILES, BAND_MODEL, EXIT, MODEL_ALLOWLIST, PER_REF_CAP, TREE_EXCLUDES, WEEKLY_CAP, WEEK_MS,
+  AGENT_FILES, BAND_MODEL, DEFAULT_REPO, EXIT, MODEL_ALLOWLIST, PER_REF_CAP, TREE_EXCLUDES, WEEKLY_CAP, WEEK_MS,
   buildAgentEnv, buildPrompt, countRuns, defaultExtract, finishRun, isAgentFile, isExcluded, main, parseArgs, parseReviewOutput, prepareReview, readLedger, reserveRun,
   resolveAgent, resolveModel, runAgent as runAgentReal, runReview,
 } from './cursor-review.mjs';
@@ -149,7 +149,7 @@ test('ledger line shape: start line then end line, with every field Dave asked f
   const a = reserveRun(file, { ref: 'pr-7', model: 'grok-4.7-high', band: 'ELEVATED', sessionId: 'sess-1' }, { now: () => NOW });
   finishRun(file, a.id, { ref: 'pr-7', model: 'grok-4.7-high', band: 'ELEVATED', sessionId: 'sess-1', durationMs: 4321, exit: 0, timedOut: false, usage: { inputTokens: 5 } }, { now: () => NOW + 4321 });
   const [start, end] = readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.deepEqual(Object.keys(start).sort(), ['band', 'id', 'model', 'phase', 'ref', 'sessionId', 'ts']);
+  assert.deepEqual(Object.keys(start).sort(), ['band', 'id', 'model', 'phase', 'purpose', 'ref', 'repo', 'sessionId', 'ts']);
   assert.equal(start.phase, 'start');
   assert.equal(start.ts, new Date(NOW).toISOString());
   assert.equal(end.phase, 'end');
@@ -157,6 +157,31 @@ test('ledger line shape: start line then end line, with every field Dave asked f
   for (const k of ['ts', 'ref', 'model', 'band', 'durationMs', 'exit', 'timedOut', 'sessionId', 'usage']) assert.ok(k in end, `end line has ${k}`);
   assert.equal(end.durationMs, 4321);
   assert.equal(end.sessionId, 'sess-1');
+});
+
+test('start and end lines carry repo and purpose; a missing or unknown purpose is other and a missing repo is null', () => {
+  const file = ledgerWith([]);
+  const a = reserveRun(file, { ref: 'pr-1', model: 'grok-4.7-high', band: 'MID', repo: 'Rev4nchist/Minions', purpose: 'bench' }, { now: () => NOW });
+  finishRun(file, a.id, { ref: 'pr-1', exit: 0, repo: 'Rev4nchist/Minions', purpose: 'bench' }, { now: () => NOW + 1 });
+  const b = reserveRun(file, { ref: 'pr-2', model: 'grok-4.7-high', band: 'MID' }, { now: () => NOW });
+  finishRun(file, b.id, { ref: 'pr-2', exit: 0 }, { now: () => NOW + 1 });
+  const c = reserveRun(file, { ref: 'pr-3', model: 'grok-4.7-high', band: 'MID', purpose: 'Review!' }, { now: () => NOW });
+  finishRun(file, c.id, { ref: 'pr-3', exit: 0, purpose: 'nope' }, { now: () => NOW + 1 });
+  const rows = readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(rows.slice(0, 2).map((r) => [r.repo, r.purpose]), [['Rev4nchist/Minions', 'bench'], ['Rev4nchist/Minions', 'bench']]);
+  assert.deepEqual(rows.slice(2, 4).map((r) => [r.repo, r.purpose]), [[null, 'other'], [null, 'other']]);
+  assert.deepEqual(rows.slice(4).map((r) => r.purpose), ['other', 'other']);
+});
+
+test('old rows without repo or purpose still read, and tagged rows count the same as untagged ones', () => {
+  const old = { ts: new Date(NOW).toISOString(), phase: 'start', id: 'o1', ref: 'pr-9', model: 'grok-4.7-high', band: 'MID', sessionId: null };
+  const tagged = { ...old, id: 't1', ref: 'pr-9', repo: 'x/y', purpose: 'eval' };
+  const file = ledgerWith([JSON.stringify(old), JSON.stringify(tagged)]);
+  const { entries, damaged } = readLedger(file);
+  assert.equal(damaged, 0);
+  assert.equal(entries.length, 2);
+  assert.equal(countRuns(entries, { now: NOW }), 2);
+  assert.equal(countRuns(entries, { now: NOW, ref: 'pr-9' }), 2);
 });
 
 test('a fresh lock held by another session makes reserve fail, and a stale lock is taken over', () => {
@@ -560,6 +585,26 @@ test('parseArgs reads --pr, --range, --band, --model and refuses both or neither
   assert.ok(parseArgs(['--pr', 'abc', '--band', 'MID']).error);
   assert.ok(parseArgs(['--range', 'nodots', '--band', 'MID']).error);
   assert.ok(parseArgs(['--pr', '1', '--band', 'MID', '--bogus']).error);
+});
+
+test('parseArgs reads --purpose (review, bench, eval, other), leaves it unset when absent and refuses any other value', () => {
+  for (const p of ['review', 'bench', 'eval', 'other']) assert.equal(parseArgs(['--pr', '1', '--band', 'MID', '--purpose', p]).purpose, p);
+  assert.equal(parseArgs(['--pr', '1', '--band', 'MID']).purpose, undefined);
+  assert.match(parseArgs(['--pr', '1', '--band', 'MID', '--purpose', 'prod']).error, /--purpose/);
+  assert.match(parseArgs(['--pr', '1', '--band', 'MID', '--purpose']).error, /--purpose/);
+});
+
+test('runReview writes repo and purpose on both ledger lines: --repo or the default repo for a PR, the folder name for a range, other when no purpose is given', async () => {
+  const rowsOf = (h) => readFileSync(h.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const pr = harness({ opts: { purpose: 'review' } });
+  await runReview(pr.opts, pr.deps);
+  assert.deepEqual(rowsOf(pr).map((r) => [r.repo, r.purpose]), [[DEFAULT_REPO, 'review'], [DEFAULT_REPO, 'review']]);
+  const other = harness({ opts: { repo: 'Rev4nchist/Minions' } });
+  await runReview(other.opts, other.deps);
+  assert.deepEqual(rowsOf(other).map((r) => [r.repo, r.purpose]), [['Rev4nchist/Minions', 'other'], ['Rev4nchist/Minions', 'other']]);
+  const range = harness({ opts: { input: { range: 'aaa..bbb' }, root: path.join('C:', 'work', 'my-project'), purpose: 'bench' } });
+  await runReview(range.opts, range.deps);
+  assert.deepEqual(rowsOf(range).map((r) => [r.repo, r.purpose]), [['my-project', 'bench'], ['my-project', 'bench']]);
 });
 
 test('main maps a bad argument to exit 2 without touching the ledger or the agent', async () => {

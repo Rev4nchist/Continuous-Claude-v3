@@ -526,6 +526,17 @@ test('a review that waits for a slot logs the busy slots and the time waited abo
   assert.equal(w.agentCalls.length, 0);
 });
 
+test('the engine tags its ledger lines purpose review and the repo it reviews (breaks if reserveRun or finishRun lose the tags)', async () => {
+  const w = world();
+  const r = await run(w, { repo: 'Rev4nchist/Minions' });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(w.reserveCalls[0][1].purpose, 'review');
+  assert.equal(w.reserveCalls[0][1].repo, 'Rev4nchist/Minions');
+  const end = w.finishCalls.at(-1)[2];
+  assert.equal(end.purpose, 'review');
+  assert.equal(end.repo, 'Rev4nchist/Minions');
+});
+
 test('releaseSlot removes only its own runKey (breaks if release clears every entry)', () => {
   const file = slotFile();
   seedSlots(file, [entry('a', 1), entry('me', 2)]);

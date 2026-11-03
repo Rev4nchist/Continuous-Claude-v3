@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/github/cursor-review.mjs (--pr <n> | --range <base>..<head>) (--band MID|ELEVATED|HIGH|CRITICAL | --model <id>)
- *        [--timeout-sec 1800] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--remote fork] [--dry-run] [--keep-tree]
+ *        [--timeout-sec 1800] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--purpose review|bench|eval|other] [--remote fork] [--dry-run] [--keep-tree]
  *
  * What it does:
  *   1. Checks the model. Only grok-4.7-high and grok-4.7-xhigh run. Auto, any id with "fast", an unknown id and a missing
@@ -95,6 +95,12 @@ export function resolveModel({ model, band } = {}) {
 
 // ---------- usage ledger ----------
 
+/** What a run is for. Every new ledger line carries one; a missing or unknown value is 'other'. */
+export const PURPOSES = Object.freeze(['review', 'bench', 'eval', 'other']);
+export const normalizePurpose = (p) => (PURPOSES.includes(p) ? p : 'other');
+/** The repo tag of a run: owner/name, else the local folder name, else null. */
+export const repoTag = (repo, root) => (typeof repo === 'string' && repo !== '' ? repo : root ? path.basename(root) : null);
+
 export const defaultLedgerPath = (env = process.env) => env.CURSOR_REVIEW_LEDGER || path.join(os.homedir(), '.claude', 'state', 'cursor-review-ledger.jsonl');
 
 /** { entries, damaged }. A missing file is empty. A line that is not a JSON object is skipped and counted. */
@@ -148,15 +154,15 @@ export function reserveRun(file, entry, { now = Date.now, cap = WEEKLY_CAP, perR
     const forRef = countRuns(entries, { now: t, ref: entry.ref });
     if (forRef >= perRefCap) return { ok: false, reason: 'ref-cap', count: forRef };
     const id = randomUUID();
-    const line = { ts: new Date(t).toISOString(), phase: 'start', id, ref: entry.ref, model: entry.model, band: entry.band ?? null, sessionId: entry.sessionId ?? null };
+    const line = { ts: new Date(t).toISOString(), phase: 'start', id, ref: entry.ref, model: entry.model, band: entry.band ?? null, sessionId: entry.sessionId ?? null, repo: entry.repo ?? null, purpose: normalizePurpose(entry.purpose) };
     appendFileSync(file, `${JSON.stringify(line)}\n`);
     return { ok: true, id, count: total + 1 };
   });
 }
 
-/** Appends the end line of a run. */
+/** Appends the end line of a run. It carries repo (null when unknown) and purpose (other when unknown), like the start line. */
 export function finishRun(file, id, patch, { now = Date.now } = {}) {
-  appendFileSync(file, `${JSON.stringify({ ts: new Date(now()).toISOString(), phase: 'end', id, ...patch })}\n`);
+  appendFileSync(file, `${JSON.stringify({ ts: new Date(now()).toISOString(), phase: 'end', id, ...patch, repo: patch.repo ?? null, purpose: normalizePurpose(patch.purpose) })}\n`);
 }
 
 // ---------- prompt ----------
@@ -987,7 +993,8 @@ export async function runReview(opts, deps = {}) {
   }
 
   const sessionId = env.CLAUDE_CODE_SESSION_ID || null;
-  const reserved = reserveRun(opts.ledgerPath, { ref: prep.ref, model: m.model, band: m.band, sessionId }, { now });
+  const tags = { repo: repoTag(opts.repo ?? (opts.input?.pr !== undefined ? DEFAULT_REPO : undefined), opts.root), purpose: normalizePurpose(opts.purpose) };
+  const reserved = reserveRun(opts.ledgerPath, { ref: prep.ref, model: m.model, band: m.band, sessionId, ...tags }, { now });
   if (!reserved.ok) {
     prep.cleanup();
     return refuse(reserved.reason === 'lock' ? EXIT.FAILED : EXIT.CAP, reserved.detail ?? `${reserved.reason} reached (${reserved.count})`);
@@ -1029,7 +1036,7 @@ export async function runReview(opts, deps = {}) {
   writeFileSync(`${stem}.findings.json`, `${JSON.stringify(rec, null, 2)}\n`);
   writeFileSync(`${stem}.summary.txt`, summaryText(rec));
   finishRun(opts.ledgerPath, reserved.id, {
-    ref: prep.ref, model: m.model, band: m.band, sessionId, durationMs: rec.durationMs, exit: failed ? EXIT.FAILED : EXIT.OK, timedOut: rec.timedOut,
+    ref: prep.ref, model: m.model, band: m.band, sessionId, ...tags, durationMs: rec.durationMs, exit: failed ? EXIT.FAILED : EXIT.OK, timedOut: rec.timedOut,
     modelVerified: rec.modelVerified, findingCount: rec.findings.length, usage: parsed.usage,
     waitedMs: rec.waitedMs, spawnedAt: run.spawnedAt ? new Date(run.spawnedAt).toISOString() : null, ...(run.notStarted ? { notStarted: true } : {}), ...(failed ? { error: clip(error, 300) } : {}),
     ...(run.toolStats ? { toolCalls: run.toolStats.toolCalls, toolWaitMs: run.toolStats.toolWaitMs, maxToolMs: run.toolStats.maxToolMs } : {}),
@@ -1056,6 +1063,7 @@ export function parseArgs(argv) {
       case '--ledger': out.ledgerPath = next(); break;
       case '--out-dir': out.outDir = next(); break;
       case '--repo': out.repo = next(); break;
+      case '--purpose': { const v = next(); if (!PURPOSES.includes(v)) return bad(`--purpose needs one of ${PURPOSES.join(', ')}, got ${JSON.stringify(v)}`); out.purpose = v; break; }
       case '--remote': out.remote = next(); break;
       case '--dry-run': out.dryRun = true; break;
       case '--keep-tree': out.keepTree = true; break;

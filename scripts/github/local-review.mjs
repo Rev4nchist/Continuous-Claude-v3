@@ -652,7 +652,7 @@ function endLine(s, cur, extra = {}) {
   d.finishRun(d.P.cursorLedger, cur.runId, {
     ref: s.ref, model: route.model, band: route.band, sessionId: d.env.CLAUDE_CODE_SESSION_ID || null, durationMs: cur.run.durationMs ?? null,
     exit: cur.error ? EXIT.FAILED : EXIT.OK, timedOut: Boolean(cur.run.timedOut), modelVerified: cur.parsed.modelVerified, usage: cur.parsed.usage,
-    ...(cur.error ? { error: clip(cur.error, 300) } : {}), pr: s.target.pr, head: s.target.head, mode: s.range.mode, engineSha: s.pin.engineSha, ...extra,
+    ...(cur.error ? { error: clip(cur.error, 300) } : {}), repo: d.repo, purpose: 'review', pr: s.target.pr, head: s.target.head, mode: s.range.mode, engineSha: s.pin.engineSha, ...extra,
   }, { now: d.now });
 }
 
@@ -662,7 +662,7 @@ async function runAttempts(s, prep, plan) {
   const runs = [];
   let prev = null;
   for (let n = 1; n <= 1 + cfg.retry_max; n += 1) {
-    const entry = { ref: s.ref, model: route.model, band: route.band, sessionId: d.env.CLAUDE_CODE_SESSION_ID || null };
+    const entry = { ref: s.ref, model: route.model, band: route.band, sessionId: d.env.CLAUDE_CODE_SESSION_ID || null, repo: d.repo, purpose: 'review' };
     const reserved = d.reserveRun(d.P.cursorLedger, entry, { now: d.now, perRefCap: cfg.per_branch_cap });
     if (!reserved.ok) return { stopped: reserved, prev, runs };
     if (prev) endLine(s, prev);
