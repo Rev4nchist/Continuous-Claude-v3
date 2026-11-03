@@ -29,8 +29,9 @@
 #   it, unlinking junctions of other sessions' worktrees            -> W4
 #
 # An unremovable link cannot be made reliably: Windows ignores FILE_ATTRIBUTE_READONLY on directories.
-# So the failure is injected: F5 passes -Delete a scriptblock that throws; W2 sets the test-only env var
-# LAND_PR_TEST_FAIL_UNLINK, which makes land-pr.ps1 inject the same throwing unlink.
+# So the failure is injected: F5 passes -Delete a scriptblock that throws; W2 passes the test-only switch
+# -TestFailUnlink, which makes land-pr.ps1 inject the same throwing unlink. W5 passes -TestSwitchPrimary.
+# W6: the old env vars LAND_PR_TEST_FAIL_UNLINK and LAND_PR_TEST_SWITCH_PRIMARY must no longer do anything.
 # Links are created only under the OS temp folder, never in the repo.
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
@@ -206,8 +207,8 @@ try {
   $ghFound = (Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
   if ($ghFound -ne (Join-Path $stub 'gh.cmd')) { throw "harness: gh resolves to '$ghFound', not the stub '$stub\gh.cmd'; stopping before any real gh call" }
 
-  function Invoke-Land([string]$repo) {
-    $out = & pwsh -NoProfile -File $script -Pr 7 -CleanupOnly -NoSync -RepoPath $repo 2>&1
+  function Invoke-Land([string]$repo, [string[]]$Extra = @()) {
+    $out = & pwsh -NoProfile -File $script -Pr 7 -CleanupOnly -NoSync -RepoPath $repo @Extra 2>&1
     [pscustomobject]@{ Code = $LASTEXITCODE; Text = ($out | Out-String) }
   }
 
@@ -223,8 +224,7 @@ try {
 
   # W2: a link that cannot be unlinked keeps the worktree and is named.
   $fx2 = New-Fixture 'w2'
-  $env:LAND_PR_TEST_FAIL_UNLINK = '1'   # test-only: land-pr.ps1 injects an unlink that throws
-  try { $run2 = Invoke-Land $fx2.Repo } finally { Remove-Item Env:\LAND_PR_TEST_FAIL_UNLINK -ErrorAction SilentlyContinue }
+  $run2 = Invoke-Land $fx2.Repo @('-TestFailUnlink')   # test-only switch: land-pr.ps1 injects an unlink that throws
   Check 'W2 wiring: land-pr exits 0' ($run2.Code -eq 0)
   Check 'W2 wiring: the worktree is KEPT' (Test-Path -LiteralPath $fx2.Worktree)
   Check 'W2 wiring: the target and its file survive' (Test-Path -LiteralPath $fx2.TargetFile)
@@ -282,12 +282,22 @@ try {
   New-Item -ItemType Directory -Force -Path (Join-Path $fx5.Repo 'scripts') | Out-Null
   Copy-Item -LiteralPath (Join-Path $here '..\git-safe.ps1') -Destination (Join-Path $fx5.Repo 'scripts\git-safe.ps1')
   Check 'W5 harness: the primary is on main and the PR branch exists on the remote' (((git -C $fx5.Repo branch --show-current) -eq 'main') -and [bool](git -C $fx5.Repo ls-remote --heads fork $branch))
-  $env:LAND_PR_TEST_SWITCH_PRIMARY = '1'   # test-only: land-pr.ps1 switches the primary to the branch after the worktree step
-  try { $run5 = Invoke-Land $fx5.Repo } finally { Remove-Item Env:\LAND_PR_TEST_SWITCH_PRIMARY -ErrorAction SilentlyContinue }
+  $run5 = Invoke-Land $fx5.Repo @('-TestSwitchPrimary')   # test-only switch: land-pr.ps1 switches the primary to the branch after the worktree step
   Check 'W5 wiring: land-pr exits 0 and the primary was switched to the PR branch' ($run5.Code -eq 0 -and ((git -C $fx5.Repo branch --show-current) -eq $branch))
   Check 'W5 wiring: the remote branch still exists' ([bool](git -C $fx5.Repo ls-remote --heads fork $branch))
   Check 'W5 wiring: output says the remote branch is kept and no remote delete is reported' ($run5.Text -match "kept fork/$([regex]::Escape($branch))" -and $run5.Text -notmatch 'deleted fork/')
   if ($fail) { Write-Host '---- w5 land-pr output ----'; Write-Host $run5.Text; Write-Host '---- end ----' }
+
+  # W6: the old test-only env vars have no effect. A user's shell that still sets them must not change a real land.
+  $fx6 = New-Fixture 'w6'
+  git -C $fx6.Repo push -q fork $branch 2>&1 | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $fx6.Repo 'scripts') | Out-Null
+  Copy-Item -LiteralPath (Join-Path $here '..\git-safe.ps1') -Destination (Join-Path $fx6.Repo 'scripts\git-safe.ps1')
+  $env:LAND_PR_TEST_FAIL_UNLINK = '1'; $env:LAND_PR_TEST_SWITCH_PRIMARY = '1'
+  try { $run6 = Invoke-Land $fx6.Repo } finally { Remove-Item Env:\LAND_PR_TEST_FAIL_UNLINK, Env:\LAND_PR_TEST_SWITCH_PRIMARY -ErrorAction SilentlyContinue }
+  Check 'W6 wiring: land-pr exits 0 and the old FAIL_UNLINK env var injects no failure (the worktree is removed)' ($run6.Code -eq 0 -and -not (Test-Path -LiteralPath $fx6.Worktree) -and $run6.Text -notmatch 'link not removed')
+  Check 'W6 wiring: the old SWITCH_PRIMARY env var does not switch the primary (still on main)' ((git -C $fx6.Repo branch --show-current) -eq 'main')
+  if ($fail) { Write-Host '---- w6 land-pr output ----'; Write-Host $run6.Text; Write-Host '---- end ----' }
 }
 finally {
   $env:PATH = $oldPath
