@@ -762,14 +762,41 @@ function scopedCleanupKind(command, input, deps = {}) {
   }
 }
 
+// src/shared/shell-tools.ts
+var BOTH = ["Bash", "PowerShell"];
+var SHELL_TOOLS = /* @__PURE__ */ new Map([
+  ["Bash", { field: "command", dialects: ["Bash"], failClosed: false }],
+  ["PowerShell", { field: "command", dialects: ["PowerShell"], failClosed: false }],
+  ["mcp__plugin_desktop-commander_desktop-commander__start_process", { field: "command", dialects: BOTH, failClosed: true }],
+  ["mcp__plugin_desktop-commander_desktop-commander__interact_with_process", { field: "input", dialects: BOTH, failClosed: true }]
+]);
+function readShellCommand(input) {
+  const tool = input.tool_name || input.tool;
+  const spec = tool ? SHELL_TOOLS.get(tool) : void 0;
+  if (!tool || !spec) return { kind: "not-shell" };
+  const toolInput = input.tool_input;
+  const text = toolInput && typeof toolInput === "object" ? toolInput[spec.field] : void 0;
+  if (typeof text !== "string") {
+    return spec.failClosed ? { kind: "unreadable", tool, field: spec.field } : { kind: "command", tool, text: "", dialects: spec.dialects };
+  }
+  return { kind: "command", tool, text, dialects: spec.dialects };
+}
+function dialectsFor(tool) {
+  return tool && SHELL_TOOLS.get(tool)?.dialects || ["Bash"];
+}
+
 // src/destructive-command-guard.ts
-var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var HOOK = "destructive-command-guard";
+var UNREADABLE_PATTERN = "unreadable command text";
 var SCOPED_CLEANUP_REASON = "scoped-cleanup";
 var SCOPED_PATTERNS = /* @__PURE__ */ new Set(["recursive rm", "PowerShell recursive delete (Remove-Item -Recurse)"]);
 function decide(command, input, env = process.env, scopedDeps) {
   const overridden = env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
-  const pattern = classifyDestructive(command, 0, input.tool_name || input.tool || "Bash");
+  let pattern = null;
+  for (const dialect of dialectsFor(input.tool_name || input.tool)) {
+    pattern = classifyDestructive(command, 0, dialect);
+    if (pattern) break;
+  }
   if (overridden) return pattern ? { decision: "allow", pattern, override: true } : { decision: "allow" };
   if (!pattern) return { decision: "allow" };
   const scoped = SCOPED_PATTERNS.has(pattern) ? scopedCleanupKind(command, input, scopedDeps) : null;
@@ -797,13 +824,17 @@ async function main() {
     console.log("{}");
     return;
   }
-  const tool = input.tool || input.tool_name;
-  if (!tool || !COMMAND_TOOLS.has(tool)) {
+  const shell = readShellCommand(input);
+  if (shell.kind === "not-shell") {
     console.log("{}");
     return;
   }
-  const command = input.tool_input?.command;
-  if (typeof command !== "string" || !command.trim()) {
+  if (shell.kind === "unreadable") {
+    emit(input, isUnattended(input) ? "deny" : "ask", UNREADABLE_PATTERN, `${shell.tool} with no string field "${shell.field}"`);
+    return;
+  }
+  const command = shell.text;
+  if (!command.trim()) {
     console.log("{}");
     return;
   }
@@ -814,6 +845,9 @@ async function main() {
     console.log("{}");
     return;
   }
+  emit(input, decision, pattern, command);
+}
+function emit(input, decision, pattern, command) {
   logGuardDecision(HOOK, input, decision, pattern, { command });
   const output = {
     hookSpecificOutput: {
@@ -832,6 +866,7 @@ if (!process.env.VITEST) {
 }
 export {
   SCOPED_CLEANUP_REASON,
+  UNREADABLE_PATTERN,
   classifyDestructive,
   decide,
   extractShellWrapperPayloads,
