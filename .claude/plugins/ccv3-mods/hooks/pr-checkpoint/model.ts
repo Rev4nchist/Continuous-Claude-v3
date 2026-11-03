@@ -284,6 +284,18 @@ export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)
 
+export const SLOT_DENY = "The free-slot queue file and its write verbs (add, decide, drop) belong to Dave's /slot command and the mod. A tool or a shell command may not name them. Read the queue with the Read or Grep tool, or run slot-queue.mjs tick, list or probe."
+
+/** A tool write (file_path or notebook_path) that lands on the free-slot queue file, or its temp copy, in any checkout or home. */
+export const isSlotStateFile = (path: string): boolean => /\/\.claude\/state\/coderabbit-slot\.json(?:\.tmp-[^/]*)?$/.test(`/${normalizePath(path)}`)
+
+/**
+ * Shell text that names the queue file in any form and case, or a queue write verb (add, decide, drop) right after the script path.
+ * The script reads its verb only at argv[0], so the adjacency check is complete. tick, list, probe, `git add` of the files and
+ * `node --test` stay open. Raw text, no lexer: a doubt reads as a deny.
+ */
+export const namesSlotWrite = (command: string): boolean => /coderabbit-slot\.json/i.test(command) || /slot-queue(?:-model)?\.mjs["']?\s+["']?(?:add|decide|drop)\b/i.test(command)
+
 /** The gh write shapes: a comment, a pr or issue edit or create with a body, and an api call that is a POST, PATCH or PUT, sets a body field, runs a GraphQL mutation or sends --input. */
 const GH = String.raw`\bgh(?:\.exe)?\s+`
 const GH_WRITE_SHAPES: RegExp[] = [

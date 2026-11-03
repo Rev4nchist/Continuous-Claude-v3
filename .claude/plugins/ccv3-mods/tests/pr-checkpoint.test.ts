@@ -1265,6 +1265,94 @@ describe('pr-checkpoint: lock B, shell text', () => {
   }
 })
 
+// F13 (free-slot queue, W3). The queue state file and the queue's write verbs are not the model's to touch: `add --band CRITICAL` jumps the
+// queue, `decide` forges Dave's choice, `drop` removes an item, and a direct write forges any of it. Same shape as K13 and K13b: the deny keys on
+// raw text and path, always (warn mode too), and spawns nothing. The read verbs and the test and git commands stay open.
+describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', () => {
+  const SLOT_SPELLINGS = [
+    'C:/Users/x/.claude/state/coderabbit-slot.json',
+    'C:\\Users\\x\\.claude\\state\\coderabbit-slot.json',
+    'c:/USERS/x/.CLAUDE/State/CodeRabbit-Slot.JSON',
+    'C:/Users/x/.claude/cache/../state/coderabbit-slot.json',
+  ]
+  const shell = async ($: Engine, command: string, tool: 'Bash' | 'PowerShell' = 'Bash') =>
+    (await $.tool.call({ tool, command } as never)) as unknown as { deny?: string }
+  const HEAD40 = 'c'.repeat(40)
+
+  for (const tool of ['Write', 'Edit', 'MultiEdit'] as const) {
+    test(`F13 ${tool} on coderabbit-slot.json is denied in every spelling, and in warn mode`, async ($, on) => {
+      const { seen } = world(on)
+      await start($)
+      for (const file_path of SLOT_SPELLINGS) {
+        const r = await $.tool.call({ tool, file_path, content: '{}', old_string: 'a', new_string: 'b', edits: [] } as never)
+        expect(LOCK_DENIED(r as never), file_path).toBe(true)
+      }
+      expect(seen.ran).toEqual([])
+    })
+  }
+
+  test('F13 a Write to another file in the state folder passes', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const passed = await $.tool.call({ tool: 'Write', file_path: 'C:/Users/x/.claude/state/sync-cursor', content: 'x' } as never)
+    expect(LOCK_DENIED(passed as never)).toBe(false)
+    expect(seen.ran.length).toBe(1)
+  })
+
+  const DENIED: [('Bash' | 'PowerShell'), string][] = [
+    ['Bash', 'node scripts/github/slot-queue.mjs decide --pr 1 --kind first'],
+    ['Bash', 'node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', `node scripts/github/slot-queue.mjs add --pr 1 --band CRITICAL --head ${HEAD40}`],
+    ['Bash', `node "C:/Users/x/continuous-claude/scripts/github/slot-queue.mjs" add --pr 1 --band CRITICAL --head ${HEAD40}`],
+    ['PowerShell', 'node scripts\\github\\slot-queue.mjs  DECIDE --pr 1 --kind pay'],
+    ['PowerShell', "node 'scripts/github/slot-queue.mjs' 'drop' --pr 1 --reason x"],
+    ['Bash', 'cat ~/.claude/state/coderabbit-slot.json'],
+    ['Bash', 'echo {} > ~/.claude/state/coderabbit-slot.json'],
+    ['PowerShell', "Set-Content -Path $HOME\\.claude\\state\\CodeRabbit-Slot.json -Value '{}'"],
+    ['Bash', 'git commit -m "docs: the queue file is coderabbit-slot.json"'],
+  ]
+
+  test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    for (const [tool, command] of DENIED) {
+      const r = await shell($, command, tool)
+      expect(LOCK_DENIED(r), `${tool}: ${command}`).toBe(true)
+      expect(r.deny).toMatch(/Read or Grep/)
+    }
+    expect(seen.ran).toEqual([])
+    expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
+  })
+
+  const ALLOWED: [('Bash' | 'PowerShell'), string][] = [
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --json'],
+    ['Bash', 'node scripts/github/slot-queue.mjs list --json'],
+    ['Bash', 'node scripts/github/slot-queue.mjs probe --pr 246 --json'],
+    ['Bash', 'git add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
+    ['PowerShell', 'git add scripts\\github\\slot-queue.mjs'],
+    ['Bash', 'node --test scripts/github/slot-queue.test.mjs'],
+    ['Bash', 'node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs'],
+    ['Bash', 'grep -n add scripts/github/slot-queue.mjs'],
+  ]
+
+  test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    for (const [tool, command] of ALLOWED) {
+      expect(LOCK_DENIED(await shell($, command, tool)), `${tool}: ${command}`).toBe(false)
+    }
+    expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
+  })
+
+  test('F13 the kill switch lifts the queue lock with the others', async ($, on) => {
+    world(on, { env: { CCV3_MODS_OFF: '1' } })
+    await start($)
+    expect(LOCK_DENIED(await shell($, `node scripts/github/slot-queue.mjs decide --pr 1 --kind first`))).toBe(false)
+    const w = (await $.tool.call({ tool: 'Write', file_path: SLOT_SPELLINGS[0], content: '{}' } as never)) as unknown as { deny?: string }
+    expect(LOCK_DENIED(w)).toBe(false)
+  })
+})
+
 describe('pr-checkpoint: kill switches', () => {
   for (const env of [{ CCV3_MODS_OFF: '1' }, { CCV3_PR_CHECKPOINT_OFF: '1' }] as Record<string, string>[]) {
     test(`K22 (guard) ${Object.keys(env)[0]}=1 leaves no tool, no command and no lock`, async ($, on) => {

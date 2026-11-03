@@ -16,6 +16,7 @@ import {
   NEED_PR,
   PANE,
   PATHWAY_DENY,
+  SLOT_DENY,
   SHAPES_CLI_REL,
   SHAPES_TIMEOUT_MS,
   SLASH,
@@ -34,6 +35,7 @@ import {
   firstLine,
   headerRows,
   isPathwayFile,
+  isSlotStateFile,
   isStalePending,
   labelNeedsRecord,
   lastLine,
@@ -42,6 +44,7 @@ import {
   mayBeGated,
   namesMarker,
   namesPathway,
+  namesSlotWrite,
   optionLabel,
   optionsInOrder,
   parseCheckpointArgs,
@@ -910,6 +913,7 @@ const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh
     if (await isOff($)) return null
     const command = typeof e.command === 'string' ? e.command : ''
     if (namesPathway(command)) return { deny: PATHWAY_DENY }
+    if (namesSlotWrite(command)) return { deny: SLOT_DENY }
     if (namesMarker(command)) return { deny: MARKER_DENY }
     if (!mayBeGated(command)) return null
     // The root lookup is not rootOf(): that one answers "no checkout" for a lookup that threw. Here only a clean `false` means "not CCv3";
@@ -936,7 +940,9 @@ const writeLock = async ($: EngineInterface, e: WriteCall): Promise<{ deny: stri
   try {
     if (await isOff($)) return null
     const path = typeof e.file_path === 'string' ? e.file_path : typeof e.notebook_path === 'string' ? e.notebook_path : null
-    return path !== null && isPathwayFile(path) ? { deny: PATHWAY_DENY } : null
+    if (path === null) return null
+    if (isPathwayFile(path)) return { deny: PATHWAY_DENY }
+    return isSlotStateFile(path) ? { deny: SLOT_DENY } : null
   } catch {
     return { deny: LOCK_FAILED }
   }
