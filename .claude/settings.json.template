@@ -212,6 +212,27 @@
         ]
       },
       {
+        "matcher": "mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
