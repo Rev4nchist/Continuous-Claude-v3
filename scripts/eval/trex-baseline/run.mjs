@@ -64,7 +64,7 @@ export async function main(argv) {
   let runs = planRuns(rows);
   if (only) runs = runs.filter((r) => only.includes(r.runId) || r.rowIds.some((id) => only.includes(id)));
   mkdirSync(out, { recursive: true });
-  writeFileSync(path.join(out, 'plan.json'), `${JSON.stringify({ rows: rows.map(({ fixHunk, ...r }) => r), runs }, null, 1)}\n`);
+  writeFileSync(path.join(out, 'plan.json'), `${JSON.stringify({ rows, runs }, null, 1)}\n`);
 
   const stateDir = path.join(out, dry ? '_state-dry' : '_state');
   mkdirSync(stateDir, { recursive: true });

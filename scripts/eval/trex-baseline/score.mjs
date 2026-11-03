@@ -8,11 +8,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { runJudge } from '../../lib/headless.mjs';
 import { judgeSameIssue } from '../review-eval/judge.mjs';
 import { foldSev, matchFindings } from '../review-eval/match.mjs';
 import { evaluateRuns, scorecard } from '../review-eval/score.mjs';
 import { datasetFindings, findingsFile, majorFindings, normPath, runRow } from './adapter.mjs';
+import { buildRows } from './rows.mjs';
 
 const flag = (argv, name, d) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : d; };
 const readJson = (f) => JSON.parse(readFileSync(f, 'utf8'));
@@ -36,11 +38,12 @@ async function judgeRow({ row, cands, out, maxJudge, judge }) {
   const cached = existsSync(cacheFile) ? readJson(cacheFile) : { calls: [] };
   for (const f of cands.slice(0, maxJudge)) {
     const key = `${f.file}:${f.line}:${f.title}`;
-    if (cached.calls.some((c) => c.key === key && !c.error)) continue;
+    if (cached.calls.some((c) => c.key === key && !c.error && (c.withHunk || (c.same && c.confidence >= 4)))) continue; // a first pass ran without the fix hunk (plan.json dropped it): only its yes >= 4 stands
+    cached.calls = cached.calls.filter((c) => c.key !== key || (c.same && c.confidence >= 4 && !c.withHunk) || c.withHunk === true);
     if (cached.calls.some((c) => !c.error && c.same && c.confidence >= 4)) break;
     const cr = { severity: 'major', title: row.fixSubject, body: `${row.fixBody}\n\n(The fix commit above is the ground truth for the seeded defect. The defect is in: ${row.defectFiles.join(', ')}.)` };
     const res = judge ? await judgeSameIssue({ cr, eng: { severity: f.severity, title: f.title, body: f.body }, hunk: row.fixHunk }, { runJudge }) : { error: 'skipped' };
-    cached.calls.push({ key, file: f.file, line: f.line, severity: f.severity, title: f.title, ...res });
+    cached.calls.push({ key, withHunk: Boolean(row.fixHunk), file: f.file, line: f.line, severity: f.severity, title: f.title, ...res });
     mkdirSync(path.dirname(cacheFile), { recursive: true });
     writeFileSync(cacheFile, `${JSON.stringify(cached, null, 1)}\n`);
     if (res.error === 'cap') break;
@@ -49,11 +52,16 @@ async function judgeRow({ row, cands, out, maxJudge, judge }) {
 }
 
 export async function main(argv) {
+  // runJudge starts `claude -p` through the grok slot gate. The judge is not a grok run, and the engine runs hold the slots, so the gate is off for the judge.
+  process.env.CCV3_GROK_GATE = 'off';
   const out = path.resolve(flag(argv, '--out', ''));
   const judge = !argv.includes('--no-judge');
   const maxJudge = Number(flag(argv, '--max-judge', 3));
   const plan = readJson(path.join(out, 'plan.json'));
-  const { rows, runs } = plan;
+  const { runs } = plan;
+  const git = (a) => spawnSync('git', a, { cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'), encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 }).stdout ?? '';
+  const fresh = buildRows({ benchDir: flag(argv, '--bench-dir', 'C:/Users/dkhay/continuous-claude/.claude/worktrees/trex/scripts/trex/bench'), git });
+  const rows = plan.rows.map((r) => ({ ...r, fixHunk: r.fixHunk ?? fresh.find((x) => x.id === r.id)?.fixHunk }));
   mkdirSync(path.join(out, 'findings'), { recursive: true });
 
   // Harness shapes: findings files, runs.jsonl, dataset-resolved.json.
