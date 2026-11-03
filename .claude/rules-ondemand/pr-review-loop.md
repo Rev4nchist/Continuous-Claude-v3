@@ -236,6 +236,29 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 - Batch fixes into one push. Every review uses a bot allowance or credit. At the PR's budget, stop.
   `pr_watch` asks Dave in the checkpoint pane. Report the open findings to Dave.
 
+### Free-slot queue (HIGH and CRITICAL, Dave 2026-11-02)
+
+CodeRabbit's included slot is scarce: about one review an hour. For a HIGH or CRITICAL PR with a
+CodeRabbit review owed, `scripts/github/slot-queue.mjs` owns the post. One process at a time takes the
+slot and posts `@coderabbitai review`. The state file is `~/.claude/state/coderabbit-slot.json`.
+
+- The queue adds a PR when `/pathway` applies a `coderabbit` or `both` record in band HIGH or CRITICAL.
+  A PR whose label review has not started waits in `opening`. A round-2 grant waits in `awaiting-fix`
+  until the fix push, then moves to `queued`.
+- Order: Dave's pin, CRITICAL, escalated HIGH, HIGH. The oldest `queuedAt` wins a tie. SAMPLE items
+  (shadow sync only) go last.
+- If a `pr_watch` line says the free-slot queue holds the PR, do not post `@coderabbitai review`. Not for
+  a rate limit, not at 30 minutes, not after a fix push. A second post only burns a slot.
+- A CRITICAL PR queued 30 minutes gets a paid ask. A queued PR 60 minutes old is `timed-out`. Both toasts
+  name `/slot pay N` and `/slot wait N`. Only Dave runs them. `/slot pay N` posts only when `cr-paid.mjs`
+  says ALLOW.
+- A timed-out PR is still not READY. READY needs a CodeRabbit review of the head. On the STALLED line,
+  run the principal-reviewer agent on the head (not in fast mode) and report its findings. Do not post.
+- You cannot run `slot-queue.mjs add`, `decide` or `drop`, and you cannot write the state file. Read the
+  state with `/slot` or `slot-queue.mjs list --json`. Only Dave moves the queue.
+- A request comment on the head from a person or model counts as the post, so the queue does not post
+  twice. A post that makes no review in 20 minutes counts once. A second one marks the item `stuck`.
+
 ## No review on the head
 
 Never request a review on a draft or on a `review:none` PR. A draft waits on `/pathway`. A
@@ -243,6 +266,8 @@ Never request a review on a draft or on a `review:none` PR. A draft waits on `/p
 
 On a coderabbit or both PR with no CodeRabbit review 30 minutes after ready, `pr_watch` asks Dave in
 the pane. The mod posts one `@coderabbitai review` only when he presses Yes. Do not post it yourself.
+A HIGH or CRITICAL PR that the free-slot queue holds gets no such ask: the queue posts (see
+"Free-slot queue").
 Never post a review request while the CodeRabbit commit status is pending: a review is running. The
 mod asks nothing in that state.
 
@@ -256,6 +281,7 @@ On a PR with no checkpoint record (opened before the checkpoint, or by another r
 Case one: no review from a required bot appears on the head after 30 minutes.
 Case two: the last review was cancelled, failed or skipped.
 In either case, post ONE review request for that bot (`@coderabbitai review`), then wait again.
+Skip this when the free-slot queue holds the PR.
 
 After a CodeRabbit "Review rate limited" or "Review limit reached" notice, do not post
 a plain request. When the next slot is over 15 minutes away, follow "Paid PR reviews (Dave, 2026-10-30)".
