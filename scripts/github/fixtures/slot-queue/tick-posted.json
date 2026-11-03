@@ -1,0 +1,47 @@
+{
+  "ok": true,
+  "effective": true,
+  "locked": false,
+  "actions": [
+    {
+      "kind": "toast",
+      "pr": 901,
+      "text": "PR #901: free slot taken, @coderabbitai review posted."
+    }
+  ],
+  "rows": [
+    {
+      "pr": 900,
+      "band": "HIGH",
+      "state": "queued",
+      "position": 1,
+      "total": 1,
+      "head7": "0000000",
+      "queuedMin": 10,
+      "timeoutInMin": 50,
+      "nextSlotInMin": 60,
+      "posts": 0,
+      "asked": {
+        "paid30": false,
+        "timeout60": false
+      }
+    },
+    {
+      "pr": 901,
+      "band": "CRITICAL",
+      "state": "posted",
+      "position": null,
+      "total": 1,
+      "head7": "0000000",
+      "queuedMin": 20,
+      "timeoutInMin": null,
+      "nextSlotInMin": 60,
+      "posts": 0,
+      "asked": {
+        "paid30": false,
+        "timeout60": false
+      }
+    }
+  ],
+  "nextSlotInMin": 60
+}
