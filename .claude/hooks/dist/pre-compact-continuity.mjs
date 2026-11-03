@@ -261,7 +261,7 @@ function generateAutoHandoff(summary, sessionName) {
   }
   return lines.join("\n");
 }
-var isMainModule = /transcript-parser\.[cm]?[jt]s$/.test(process.argv[1] ?? "");
+var isMainModule = /(^|[\\/])transcript-parser\.[cm]?[jt]s$/.test(process.argv[1] ?? "");
 if (isMainModule) {
   const args = process.argv.slice(2);
   if (args.length === 0) {

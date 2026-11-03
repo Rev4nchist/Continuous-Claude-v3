@@ -416,7 +416,7 @@ export function generateAutoHandoff(summary: TranscriptSummary, sessionName: str
 // Match the script name, not import.meta.url: esbuild inlines this file into
 // hooks such as pre-compact-continuity.mjs, where import.meta.url is the hook's
 // own URL. The old check matched there and exited 1 before the hook ran.
-const isMainModule = /transcript-parser\.[cm]?[jt]s$/.test(process.argv[1] ?? '');
+const isMainModule = /(^|[\\/])transcript-parser\.[cm]?[jt]s$/.test(process.argv[1] ?? '');
 
 if (isMainModule) {
   const args = process.argv.slice(2);
