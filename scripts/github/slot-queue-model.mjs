@@ -13,8 +13,7 @@
  * @property {boolean} reviewedHead  CodeRabbit finished a review of `head` (codeRabbitHeadReview.reviewedHead)
  * @property {boolean} pending       the CodeRabbit status on `head` is pending (a review may be running)
  * @property {boolean} limited       a CodeRabbit limit notice applies to `head`
- * @property {number|null} retryMinutes  minutes the notice says, counted from `noticeAt` (codeRabbitRetryMinutes)
- * @property {number} noticeAt       epoch ms the notice was written; 0 when unknown
+ * @property {number|null} retryMinutes  minutes LEFT at the time of the read (codeRabbitHeadReview.retryMinutes already subtracts the notice age)
  * @property {number[]} reviewAts    epoch ms of every CodeRabbit review seen on the PR
  * @property {number[]} requestAts   epoch ms of every "@coderabbitai review" request comment seen on the PR
  * @property {boolean} carryHolds    the earlier review carries to `head` (CARRY_REASON_PREFIX), so no post is needed
@@ -180,11 +179,11 @@ export function noteSeenPosts(state, factsByPr = {}) {
   return { ...state, slot: { ...state.slot, lastPostAt: newest.at, lastPostPr: newest.pr, source: 'seen' } };
 }
 
-/** A limit notice sets nextAt to its own time plus its figure. A later nextAt wins; a smaller figure never lowers it. */
+/** A limit notice sets nextAt to now plus the minutes left it names. A later nextAt wins; a smaller figure never lowers it. */
 export function noteNotices(state, factsByPr = {}, now = 0) {
   const ends = Object.values(factsByPr)
     .filter((f) => f.limited && f.retryMinutes > 0)
-    .map((f) => (f.noticeAt || now) + f.retryMinutes * MIN);
+    .map((f) => now + f.retryMinutes * MIN);
   const latest = Math.max(0, ...ends);
   if (latest <= (state.slot.nextAt ?? 0)) return state;
   return { ...state, slot: { ...state.slot, nextAt: latest, source: 'notice' } };

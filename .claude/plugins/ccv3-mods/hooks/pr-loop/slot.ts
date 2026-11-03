@@ -134,9 +134,13 @@ export async function withSlot($: EngineInterface, alert: Alert): Promise<Alert>
   return slot ? { ...alert, slot } : alert
 }
 
-/** Whether the queue holds the PR and so posts its review. */
+/**
+ * Whether the queue holds the PR and so posts its review. An `opening` item counts: it waits in the queue for the label review and then
+ * queues itself, so the opening ask would be a second post path beside the queue lock. `alertSlot` still leaves `opening` out of the model lines.
+ */
 export async function queueHolds($: EngineInterface, pr: number): Promise<boolean> {
-  return alertSlot(await slotFor($, pr)) !== undefined
+  const row = await slotFor($, pr)
+  return row?.state === 'opening' || alertSlot(row) !== undefined
 }
 
 // ---- add (the apply and the round grants) -------------------------------------------------------------------------------------
@@ -219,7 +223,8 @@ const resultText = (verb: SlotVerb, pr: number, ran: Ran): string => {
   if (!ran.ok) return `PR #${pr}: /slot ${verb} could not run (${ran.text}). Nothing was changed.`
   const body = jsonOf(ran.out)
   if (ran.code === 3) return `PR #${pr}: cr-paid says ESCALATE (${Array.isArray(body.reasons) ? body.reasons.join('; ') : 'no reason given'}). Nothing posted.`
-  if (ran.code !== 0) return `PR #${pr}: /slot ${verb} failed (${whyFailed(ran)}). Nothing was changed.`
+  // A failed paid post leaves a ledger row and a posted item, and its reason says so: no "Nothing was changed" there.
+  if (ran.code !== 0) return `PR #${pr}: /slot ${verb} failed (${whyFailed(ran)}).${verb === 'pay' ? '' : ' Nothing was changed.'}`
   if (verb === 'pay' && body.posted !== true) return `PR #${pr}: nothing posted.`
   if (verb === 'drop' && body.dropped === false) return `PR #${pr}: is not in the queue.`
   return `PR #${pr}: ${DONE_TEXT[verb]}`

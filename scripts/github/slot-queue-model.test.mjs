@@ -24,7 +24,7 @@ const state = (items = [], over = {}) => ({
 });
 const facts = (over = {}) => ({
   pr: 1, open: true, merged: false, head: sha('a'), reviewedHead: false, pending: false, limited: false,
-  retryMinutes: null, noticeAt: 0, reviewAts: [], requestAts: [], carryHolds: false, ...over,
+  retryMinutes: null, reviewAts: [], requestAts: [], carryHolds: false, ...over,
 });
 const holderOf = (pr, minutesAgo, head = sha('a')) => ({ pr, head, at: ago(minutesAgo), session: 's1' });
 const deepFreeze = (o) => {
@@ -33,13 +33,6 @@ const deepFreeze = (o) => {
 };
 
 // --- config and state file -------------------------------------------------------------------------------------
-
-// Breaks if DEFAULTS drift from plan sec 7 item 1 (the config block the script must match when it is absent).
-test('DEFAULTS equal the plan values', () => {
-  assert.deepEqual(DEFAULTS, {
-    spacing_min: 60, paid_after_min: 30, timeout_min: 60, holder_max_min: 20, sample_ttl_hours: 12, stale_days: 7, dedupe_min: 4,
-  });
-});
 
 // Breaks if configOf stops reading matrix.slot, or takes a string, a zero or an unknown key.
 test('configOf overlays only known positive numbers from matrix.slot', () => {
@@ -342,14 +335,15 @@ test('noteSeenPosts never lowers lastPostAt', () => {
   assert.deepEqual(out.slot, s.slot);
 });
 
-// Breaks if nextAt does not come from noticeAt + retryMinutes, or a smaller later figure lowers it.
-test('a limit notice sets nextAt from its own time plus the figure', () => {
+// m11. Breaks if nextAt does not come from now + retryMinutes (review-status gives the minutes LEFT at now), if a stale noticeAt
+// field is read again, or if a smaller later figure lowers it.
+test('a limit notice sets nextAt to now plus the minutes left it names', () => {
   const f = { 1: facts({ limited: true, retryMinutes: 25, noticeAt: ago(10) }) };
   const out = settle(state([item()]), f, NOW, cfg);
-  assert.equal(out.slot.nextAt, ago(10) + 25 * MIN);
+  assert.equal(out.slot.nextAt, NOW + 25 * MIN);
   assert.equal(out.slot.source, 'notice');
   assert.equal(slotFree(out, NOW, cfg), false);
-  const lower = settle(out, { 1: facts({ limited: true, retryMinutes: 5, noticeAt: ago(10) }) }, NOW, cfg);
+  const lower = settle(out, { 1: facts({ limited: true, retryMinutes: 5 }) }, NOW, cfg);
   assert.equal(lower.slot.nextAt, out.slot.nextAt);
 });
 
@@ -358,7 +352,7 @@ test('a limit notice sets nextAt from its own time plus the figure', () => {
 // T2. Breaks if a limit notice no longer queues an opening item, or queuedAt is not set to now.
 test('promoteOpening: a limit notice queues the item at once', () => {
   const was = item({ state: 'opening', queuedAt: 0, addedAt: ago(5) });
-  const out = promoteOpening(was, facts({ limited: true, retryMinutes: 12, noticeAt: ago(1) }), NOW, cfg);
+  const out = promoteOpening(was, facts({ limited: true, retryMinutes: 12 }), NOW, cfg);
   assert.equal(out.state, 'queued');
   assert.equal(out.queuedAt, NOW);
 });

@@ -287,14 +287,32 @@ export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/
 export const SLOT_DENY = "The free-slot queue file and its write verbs (add, decide, drop) belong to Dave's /slot command and the mod. A tool or a shell command may not name them. Read the queue with the Read or Grep tool, or run slot-queue.mjs tick, list or probe."
 
 /** A tool write (file_path or notebook_path) that lands on the free-slot queue file, or its temp copy, in any checkout or home. */
-export const isSlotStateFile = (path: string): boolean => /\/\.claude\/state\/coderabbit-slot\.json(?:\.tmp-[^/]*)?$/.test(`/${normalizePath(path)}`)
+export const isSlotStateFile = (path: string): boolean => /\/\.claude\/state\/coderabbit-slot\.json(?:\.tmp-[^/]*|\.lock)?$/.test(`/${normalizePath(path)}`)
+
+const SLOT_MODULE = String.raw`slot-queue(?:-model)?\.mjs`
+/** A write verb as a literal word right after the script path. */
+const SLOT_VERB_LITERAL = new RegExp(String.raw`${SLOT_MODULE}["']?\s+["']?(?:add|decide|drop)\b`, 'i')
+/** A verb that is built at run time: a variable, a subexpression, an array, a backtick or a quote inside the word. */
+const SLOT_VERB_DYNAMIC = new RegExp(String.raw`${SLOT_MODULE}["']?\s+["']?[^\s;|&]*(?:[$@(\`%]|[A-Za-z]["']+[A-Za-z])`, 'i')
+/** The script path held in a variable, so the verb follows a name and not the path: `s=.../slot-queue.mjs` or `$s = '...slot-queue.mjs'`. */
+const SLOT_PATH_VARIABLE = new RegExp(String.raw`(?:^|[;&|\s])\$?\w+\s*=\s*["']?[^\s;&|"']*${SLOT_MODULE}`, 'i')
+/** Code that loads a module: node -e or -p (also -pe), --eval, --print, --input-type, a stdin script, import(), require(), import ... from, main(. */
+const SLOT_CODE_LOADER = /\bimport\s*\(|\brequire\s*\(|\bimport\b[^\n]*\bfrom\b|\bmain\s*\(|--input-type|--eval\b|--print\b|\bnode(?:\.exe)?\s+(?:[^\n;|&]*\s)?-[a-z]*[ep]\b|\bnode(?:\.exe)?\s+-(?:\s|$)/i
 
 /**
- * Shell text that names the queue file in any form and case, or a queue write verb (add, decide, drop) right after the script path.
- * The script reads its verb only at argv[0], so the adjacency check is complete. tick, list, probe, `git add` of the files and
+ * Shell text that names the queue file in any form and case, or reaches a queue write verb (add, decide, drop) by any of these ways:
+ * the literal verb right after the script path (the script reads its verb only at argv[0]); a verb built at run time (`$v`, `@(...)`, `$(...)`,
+ * a backtick or quote inside the word); the script path held in a variable; or the script named beside code that loads a module
+ * (`node -e`, `--eval`, `import(`, `require(`, `import ... from`, a stdin script). tick, list, probe, `git add` of the files and
  * `node --test` stay open. Raw text, no lexer: a doubt reads as a deny.
+ * Not covered, accepted: a helper script written to disk that imports `main`, and a path built by string concatenation.
  */
-export const namesSlotWrite = (command: string): boolean => /coderabbit-slot\.json/i.test(command) || /slot-queue(?:-model)?\.mjs["']?\s+["']?(?:add|decide|drop)\b/i.test(command)
+export const namesSlotWrite = (command: string): boolean =>
+  /coderabbit-slot\.json/i.test(command) ||
+  SLOT_VERB_LITERAL.test(command) ||
+  SLOT_VERB_DYNAMIC.test(command) ||
+  SLOT_PATH_VARIABLE.test(command) ||
+  (new RegExp(SLOT_MODULE, 'i').test(command) && SLOT_CODE_LOADER.test(command))
 
 /** The gh write shapes: a comment, a pr or issue edit or create with a body, and an api call that is a POST, PATCH or PUT, sets a body field, runs a GraphQL mutation or sends --input. */
 const GH = String.raw`\bgh(?:\.exe)?\s+`

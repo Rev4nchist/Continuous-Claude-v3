@@ -1279,6 +1279,9 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     'C:\\Users\\x\\.claude\\state\\coderabbit-slot.json',
     'c:/USERS/x/.CLAUDE/State/CodeRabbit-Slot.JSON',
     'C:/Users/x/.claude/cache/../state/coderabbit-slot.json',
+    // m12: the lock file next to the state file. A tool write of a live pid there would freeze every queue write.
+    'C:/Users/x/.claude/state/coderabbit-slot.json.lock',
+    'C:\\Users\\x\\.claude\\state\\CodeRabbit-Slot.json.LOCK',
   ]
   const shell = async ($: Engine, command: string, tool: 'Bash' | 'PowerShell' = 'Bash') =>
     (await $.tool.call({ tool, command } as never)) as unknown as { deny?: string }
@@ -1315,6 +1318,24 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'echo {} > ~/.claude/state/coderabbit-slot.json'],
     ['PowerShell', "Set-Content -Path $HOME\\.claude\\state\\CodeRabbit-Slot.json -Value '{}'"],
     ['Bash', 'git commit -m "docs: the queue file is coderabbit-slot.json"'],
+    // M4: the verb is not a literal token right after the script path.
+    ['PowerShell', "$v='decide'; node scripts/github/slot-queue.mjs $v --pr 1 --kind first"],
+    ['Bash', 'v=drop; node scripts/github/slot-queue.mjs $v --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue.mjs "$VERB" --pr 1 --reason x'],
+    ['PowerShell', "node scripts/github/slot-queue.mjs @('drop','--pr','1','--reason','x')"],
+    ['PowerShell', 'node scripts/github/slot-queue.mjs $(Get-Verb) --pr 1'],
+    ['PowerShell', 'node scripts/github/slot-queue.mjs a`dd --pr 1 --band HIGH --head x'],
+    ['Bash', "node scripts/github/slot-queue.mjs ad''d --pr 1 --band HIGH --head x"],
+    // M4: the script as a variable, so the verb follows a name that is not the script path.
+    ['PowerShell', "$s='scripts/github/slot-queue.mjs'; node $s add --pr 1 --band HIGH --head x"],
+    ['Bash', 's="scripts/github/slot-queue.mjs"; node "$s" drop --pr 1 --reason x'],
+    // M4: node loads the module as code.
+    ['Bash', `node -e "import('./scripts/github/slot-queue.mjs').then(m=>m.main(['add','--pr','1']))"`],
+    ['Bash', `node --eval "import('./scripts/github/slot-queue.mjs').then(m=>m.main(['drop']))"`],
+    ['Bash', `node -pe "require('./scripts/github/slot-queue.mjs')"`],
+    ['PowerShell', `node --input-type=module -e "import { main } from './scripts/github/slot-queue.mjs'; main(['drop'])"`],
+    ['Bash', "node - <<'EOF'\nimport { main } from './scripts/github/slot-queue.mjs'\nmain(['drop', '--pr', '1', '--reason', 'x'])\nEOF"],
+    ['Bash', `node -e "import('file:///C:/r/scripts/github/slot-queue-model.mjs')"`],
   ]
 
   test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
@@ -1338,6 +1359,16 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node --test scripts/github/slot-queue.test.mjs'],
     ['Bash', 'node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs'],
     ['Bash', 'grep -n add scripts/github/slot-queue.mjs'],
+    // M4: the stricter checks must not catch these.
+    ['Bash', 'grep -e add scripts/github/slot-queue.mjs'],
+    ['Bash', 'node scripts/github/slot-queue.mjs list --json | jq .'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --session $SESSION_ID --json'],
+    ['PowerShell', 'node scripts/github/slot-queue.mjs tick --session $env:CLAUDE_SESSION_ID --json'],
+    ['Bash', 'CCV3_X=1 node scripts/github/slot-queue.mjs tick --json'],
+    ['Bash', 'node --check scripts/github/slot-queue.mjs'],
+    ['Bash', 'node -e "console.log(1)"'],
+    ['Bash', 'node scripts/github/slot-queue.mjs tick --json && git add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
+    ['Bash', 'node --test --test-name-pattern="add" scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs'],
   ]
 
   test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {

@@ -533,4 +533,34 @@ describe('slot: the alert and the ask see the queue (A1, A2)', () => {
     await w.clock.advance(TICK)
     expect(asksIn(w.store)).toEqual([])
   })
+
+  // M1. Breaks if queueHolds counts only the HELD states: an `opening` row (the item waits in the queue for the label review) then gives
+  // askFor inQueue false, the 30-minute opening ask fires, and a Yes posts outside the queue lock beside a tick in another session.
+  test('M1 a PR whose queue row is `opening` gets no opening ask (the wiring, not the boolean)', async ($, on) => {
+    const opening = JSON.stringify({ ...JSON.parse(TICKS.queued), actions: [], rows: [row({ pr: 900, state: 'opening', position: null, total: 0 })] })
+    const file = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'opening' }] })
+    const w = loopWorld(on, { file, ticks: [{ out: opening }], store: { ...seeded, 'checkpoint:pr:900': record }, statuses: { 900: QUIET } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(asksIn(w.store)).toEqual([])
+  })
+})
+
+describe('slot: /slot pay failures tell the truth (M3)', () => {
+  const PAID_FAIL = '{"ok":false,"reason":"the paid post failed (HTTP 502); the round is counted and the item is marked posted"}'
+
+  // Breaks if the failure text always ends "Nothing was changed.": a failed paid POST leaves a ledger row and a posted item.
+  test('M3 a pay that fails after the round was counted does not say nothing was changed', async ($, on) => {
+    loopWorld(on, { cli: { decide: { code: 2, out: PAID_FAIL } } })
+    await startLoop($)
+    const text = (await command($, 'slot', 'pay 5')).text ?? ''
+    expect(text).toContain('the round is counted')
+    expect(text).not.toMatch(/Nothing was changed/)
+  })
+
+  test('M3 a refused wait still says nothing was changed', async ($, on) => {
+    loopWorld(on, { cli: { decide: { code: 2, out: '{"ok":false,"reason":"PR 5 is posted"}' } } })
+    await startLoop($)
+    expect((await command($, 'slot', 'wait 5')).text ?? '').toMatch(/Nothing was changed/)
+  })
 })

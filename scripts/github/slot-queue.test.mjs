@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
@@ -150,7 +150,8 @@ test('F6: a merged PR is dropped with the reason merged, and gets no post', () =
 });
 
 // Breaks if a failed post leaves the holder, marks the item posted, or moves lastPostAt.
-test('a failed post clears the holder and changes nothing else about the item or the slot', () => {
+// m9: breaks if a failed post sets no nextAt (a persistent POST error then retries and toasts on every effective tick).
+test('a failed post clears the holder, keeps the item queued and backs the slot off 10 minutes', () => {
   const e = setup('failpost');
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5)]);
@@ -160,7 +161,23 @@ test('a failed post clears the holder and changes nothing else about the item or
   assert.equal(s.holder, null);
   assert.equal(s.items[0].state, 'queued');
   assert.equal(s.slot.lastPostAt, 0);
+  assert.equal(s.slot.nextAt, at(10));
   assert.match(toasts(r.json)[0].text, /PR #5: the free-slot post failed/);
+});
+
+// m9. Breaks if the backoff is lost: with the dedupe off, a tick 6 minutes later must not try the post (it would toast again), and 11 minutes later must.
+test('m9: after a failed post no post is tried before the backoff ends, then it is tried again', () => {
+  const e = setup('backoff');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)]);
+  const cfg = { dedupe_min: 0 };
+  run(e, ['tick', '--json'], { gh: { failPost: true }, cfg });
+  const early = run(e, ['tick', '--json'], { gh: { failPost: true }, cfg, now: at(6) });
+  assert.deepEqual(toasts(early.json), []);
+  assert.deepEqual(posts(e), []);
+  const later = run(e, ['tick', '--json'], { cfg, now: at(11) });
+  assert.equal(posts(e).length, 1);
+  assert.match(toasts(later.json)[0].text, /free slot taken/);
 });
 
 // F1. Breaks if the holder is written after the post, or the apply runs outside withLock: two processes then both post.
@@ -371,6 +388,47 @@ test('an item whose second post made no review becomes stuck and toasts /slot dr
   assert.match(toasts(r.json)[0].text, /PR #5: .*no review.*\/slot drop 5/);
 });
 
+// m6. Breaks if the cr-paid verdict is read inside tickLocked: about 6 gh reads would then run while the lock file exists,
+// and an add from another session could time out on lockWaitMs.
+test('m6: the cr-paid verdict is read before the lock is taken, and only for an item that is due its ask', () => {
+  const e = setup('m6');
+  setWorld(e, { 7: prOf(7), 8: prOf(8) });
+  setState(e, [itemOf(7, { band: 'CRITICAL', queuedAt: at(-31) }), itemOf(8, { band: 'CRITICAL', queuedAt: at(-5) })], BUSY());
+  const seen = [];
+  const checkPr = (pr) => { seen.push([pr, existsSync(`${e.statePath}.lock`)]); return ALLOW(pr); };
+  const r = run(e, ['tick', '--json'], { checkPr });
+  assert.deepEqual(seen, [[7, false]]);
+  assert.equal(toasts(r.json).length, 1);
+  assert.equal(itemIn(e, 7).asked.paid30, true);
+});
+
+// m7. Breaks if a verdict read error is retried without a limit: the third failed read must give one toast and set asked.paid30; a fourth tick reads nothing.
+test('m7: three failed cr-paid reads give one toast and stop reading', () => {
+  const e = setup('m7');
+  setWorld(e, { 7: prOf(7) });
+  setState(e, [itemOf(7, { band: 'CRITICAL', queuedAt: at(-31) })], BUSY());
+  let reads = 0;
+  const checkPr = () => { reads += 1; return { exitCode: 2, verdict: null, reason: 'gh failed' }; };
+  const ticks = [0, 5, 10, 15].map((m) => run(e, ['tick', '--json'], { checkPr, now: at(m) }));
+  assert.deepEqual(ticks.map((t) => toasts(t.json).length), [0, 0, 1, 0]);
+  assert.equal(reads, 3);
+  assert.equal(itemIn(e, 7).asked.paid30, true);
+  assert.match(toasts(ticks[2].json)[0].text, /PR #7: .*30 minutes.*could not be read.*gh failed.*\/slot pay 7/);
+  assert.deepEqual(Object.keys(ticks[2].json.rows[0].asked).sort(), ['paid30', 'timeout60']);
+});
+
+// m8. Breaks if one PR whose read fails stops every tick: item 7 has no PR in the world (a 404), item 5 must still be posted.
+test('m8: one item whose GitHub read fails is skipped; the others are still processed', () => {
+  const e = setup('m8');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5), itemOf(7, { queuedAt: at(-4) })]);
+  const gone = itemIn(e, 7);
+  const r = run(e, ['tick', '--json']);
+  assert.equal(r.code, 0);
+  assert.deepEqual(posts(e), [{ pr: 5, body: '@coderabbitai review' }]);
+  assert.deepEqual(itemIn(e, 7), gone);
+});
+
 // --- probe and list --------------------------------------------------------------------------------------------
 
 // F28. Breaks if probe takes the lock, writes, or posts: bytes, lock file and post log must stay as they were.
@@ -381,7 +439,7 @@ test('F28: probe prints the facts and writes, locks and posts nothing', () => {
   const before = digest(e.statePath);
   const r = run(e, ['probe', '--pr', '5', '--json']);
   assert.equal(r.code, 0);
-  assert.deepEqual(Object.keys(r.json.facts).sort(), ['carryHolds', 'head', 'limited', 'merged', 'noticeAt', 'open', 'pending', 'pr', 'requestAts', 'retryMinutes', 'reviewAts', 'reviewedHead']);
+  assert.deepEqual(Object.keys(r.json.facts).sort(), ['carryHolds', 'head', 'limited', 'merged', 'open', 'pending', 'pr', 'requestAts', 'retryMinutes', 'reviewAts', 'reviewedHead']);
   assert.equal(r.json.facts.limited, true);
   assert.equal(r.json.facts.retryMinutes, 12);
   assert.equal(digest(e.statePath), before);
@@ -481,6 +539,23 @@ test('decide --kind wait restarts the clock, resets asked and returns a timed-ou
   assert.equal(run(e, ['decide', '--pr', '99', '--kind', 'wait', '--json']).code, 2);
 });
 
+// m10. Breaks if wait resets queuedAt on an item that is posted, awaiting a fix or opening: the reply would say the clock restarted when it did not.
+test('m10: decide --kind wait is refused unless the item is queued, timed-out or stuck, and changes nothing', () => {
+  const e = setup('m10');
+  const states = ['posted', 'awaiting-fix', 'opening'];
+  setState(e, states.map((state, i) => itemOf(5 + i, { state, queuedAt: at(-30) })));
+  const before = digest(e.statePath);
+  for (let i = 0; i < states.length; i += 1) {
+    const r = run(e, ['decide', '--pr', String(5 + i), '--kind', 'wait', '--json']);
+    assert.equal(r.code, 2, states[i]);
+    assert.match(r.json.reason, /queued, timed-out or stuck/);
+  }
+  assert.equal(digest(e.statePath), before);
+  setState(e, [itemOf(5, { state: 'stuck', posts: 2 })]);
+  assert.equal(run(e, ['decide', '--pr', '5', '--kind', 'wait', '--json']).code, 0);
+  assert.deepEqual([itemIn(e, 5).state, itemIn(e, 5).posts], ['queued', 0]);
+});
+
 // F14. Breaks if decide pay skips the verdict: an ESCALATE (exit 3) posts nothing and writes no ledger row.
 test('F14: decide pay with an ESCALATE verdict exits 3, posts nothing and writes no ledger row', () => {
   const e = setup('f14');
@@ -510,6 +585,81 @@ test('F14: decide pay with an ALLOW posts the paid comment once, records the rou
   assert.deepEqual([itemIn(e, 5).state, itemIn(e, 5).decision.kind], ['posted', 'pay']);
   assert.equal(run(e, ['tick', '--json'], { now: at(5) }).code, 0);
   assert.equal(posts(e).length, 1);
+});
+
+const payArgv = (pr) => ['decide', '--pr', String(pr), '--kind', 'pay', '--json'];
+const ledgerRows = (e) => (existsSync(e.ledgerPath) && !statSync(e.ledgerPath).isDirectory() ? readFileSync(e.ledgerPath, 'utf8').trim().split('\n').filter(Boolean) : []);
+
+// M5. Breaks if payLocked sets no holder and no lastPostAt: the paid post then spends no spacing, and no path ever requeues it.
+test('M5: a paid post takes the holder and lastPostAt, and a paid post that made no review is requeued after 20 minutes', () => {
+  const e = setup('m5');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)]);
+  run(e, payArgv(5), { checkPr: () => ALLOW(5) });
+  const s = stateOf(e);
+  assert.deepEqual([s.holder.pr, s.holder.head, s.holder.at], [5, headOf(5), T0]);
+  assert.deepEqual([s.slot.lastPostAt, s.slot.lastPostPr, s.slot.source], [T0, 5, 'post']);
+  const late = run(e, ['tick', '--json'], { now: at(25) });
+  assert.equal(late.code, 0);
+  assert.deepEqual([itemIn(e, 5).state, itemIn(e, 5).posts, stateOf(e).holder], ['queued', 1, null]);
+  assert.equal(posts(e).length, 1);
+});
+
+// M2. Breaks if payLocked checks neither the state, the holder nor an earlier pay decision: cr-paid would ALLOW a second round on the head.
+const PAY_REFUSALS = [
+  ['an item that is already posted', (e) => setState(e, [itemOf(5, { state: 'posted' })]), /already posted/],
+  ['the PR holds the slot', (e) => setState(e, [itemOf(5)], { holder: { pr: 5, head: headOf(5), at: at(-1), session: 's1' } }), /PR 5 holds the free slot/],
+  ['a pay decision exists for this head', (e) => setState(e, [itemOf(5, { decision: { kind: 'pay', head: headOf(5), at: at(-30), by: 'dave' } })]), /already paid for this head/],
+  ['another PR holds the slot', (e) => setState(e, [itemOf(5), itemOf(6)], { holder: { pr: 6, head: headOf(6), at: at(-1), session: 's1' } }), /PR 6 holds the free slot/],
+];
+for (const [label, seed, why] of PAY_REFUSALS) {
+  test(`M2: decide pay is refused when ${label}: exit 2, no verdict read, no post, no ledger row, same bytes`, () => {
+    const e = setup('m2');
+    setWorld(e, { 5: prOf(5), 6: prOf(6) });
+    seed(e);
+    const before = digest(e.statePath);
+    let reads = 0;
+    const r = run(e, payArgv(5), { checkPr: () => { reads += 1; return ALLOW(5); } });
+    assert.equal(r.code, 2);
+    assert.match(r.json.reason, why);
+    assert.deepEqual([reads, posts(e).length, ledgerRows(e).length], [0, 0, 0]);
+    assert.equal(digest(e.statePath), before);
+  });
+}
+
+// M2. Breaks if the second pay on one head is allowed: only one paid post and one ledger row may exist.
+test('M2: a second /slot pay on the same head posts nothing', () => {
+  const e = setup('m2b');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)]);
+  assert.equal(run(e, payArgv(5), { checkPr: () => ALLOW(5) }).code, 0);
+  assert.equal(run(e, payArgv(5), { checkPr: () => ALLOW(5), now: at(1) }).code, 2);
+  assert.deepEqual([posts(e).length, ledgerRows(e).length], [1, 1]);
+});
+
+// M3. Breaks if the POST runs before the ledger write: with a ledger that cannot be written, a post must not be made.
+test('M3: when the ledger row cannot be written no paid post is made and the item is unchanged', () => {
+  const e = setup('m3');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)]);
+  mkdirSync(e.ledgerPath);
+  const before = digest(e.statePath);
+  const r = run(e, payArgv(5), { checkPr: () => ALLOW(5) });
+  assert.equal(r.code, 2);
+  assert.deepEqual(posts(e), []);
+  assert.equal(digest(e.statePath), before);
+});
+
+// M3. Breaks if the ledger row and the posted state are written after the POST: a failed POST (maybe landed) must leave both, so the count errs high.
+test('M3: when the paid POST fails the round stays counted and the item stays posted with the holder', () => {
+  const e = setup('m3b');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)]);
+  const r = run(e, payArgv(5), { checkPr: () => ALLOW(5), gh: { failPost: true } });
+  assert.equal(r.code, 2);
+  assert.match(r.json.reason, /paid post failed.*counted.*20 minutes/);
+  assert.equal(ledgerRows(e).length, 1);
+  assert.deepEqual([itemIn(e, 5).state, stateOf(e).holder.pr], ['posted', 5]);
 });
 
 // Breaks if a verdict read error (exit 2 from checkPr) is treated as ALLOW or ESCALATE.

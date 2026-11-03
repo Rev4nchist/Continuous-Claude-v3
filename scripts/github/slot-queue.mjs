@@ -41,6 +41,8 @@ const isDone = (it) => it.state === 'done' || it.state === 'dropped';
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0];
 const bad = (why) => new Error(`slot-queue: ${why}`);
 const toast = (pr, text) => ({ kind: 'toast', pr, text });
+const POST_BACKOFF_MIN = 10;
+const WAITABLE = ['queued', 'timed-out', 'stuck'];
 
 // ---- command line ----
 
@@ -146,7 +148,7 @@ const stampsOf = (list, field) => list.map((x) => Date.parse(x?.[field] ?? '')).
 function lightFacts(pr, pull) {
   return {
     pr, open: pull.state === 'open', merged: pull.merged === true, head: String(pull.head?.sha ?? '').toLowerCase(), reviewedHead: false,
-    pending: false, limited: false, retryMinutes: null, noticeAt: 0, reviewAts: [], requestAts: [], carryHolds: false,
+    pending: false, limited: false, retryMinutes: null, reviewAts: [], requestAts: [], carryHolds: false,
   };
 }
 
@@ -173,10 +175,31 @@ export function readFacts(pr, d, item = null) {
   return base.open && !waiting ? fullFacts(base, d) : base;
 }
 
+/**
+ * The facts of every live item. An item whose read fails (a 404, say) gets none: settle and claim leave it as it is, so it cannot stop
+ * the others. When every read fails the first error is thrown: that is an outage, and a tick must then write nothing (F16).
+ */
 function readAllFacts(state, d) {
   const facts = {};
-  for (const it of state.items.filter((x) => !isDone(x))) facts[it.pr] = readFacts(it.pr, d, it);
+  const failures = [];
+  for (const it of state.items.filter((x) => !isDone(x))) {
+    try { facts[it.pr] = readFacts(it.pr, d, it); } catch (err) { failures.push(err); }
+  }
+  if (failures.length > 0 && Object.keys(facts).length === 0) throw failures[0];
   return facts;
+}
+
+const PAID_TRIES = 3;
+
+const safeVerdict = (d, pr) => {
+  try { return d.checkPr(pr) ?? { verdict: null, reason: 'no answer' }; } catch (err) { return { verdict: null, reason: firstLine(err) }; }
+};
+
+/** The cr-paid verdicts of the items due their 30-minute ask, read before the lock: each read is about 6 gh calls (m6). */
+function readVerdicts(state, d) {
+  const now = d.now();
+  const due = state.items.filter((it) => timers(it, now, d.cfg, state.holder).askPaid);
+  return Object.fromEntries(due.map((it) => [it.pr, safeVerdict(d, it.pr)]));
 }
 
 // ---- tick ----
@@ -225,31 +248,42 @@ function tryPost(item, d) {
   } catch (err) { return { ok: false, reason: firstLine(err) }; }
 }
 
-/** The state after a post try, and its toast. A failed post clears the holder and changes nothing else. */
+/** The state after a post try, and its toast. A failed post clears the holder and backs the slot off, so a standing error does not retry every tick. */
 function afterPost(state, item, res, now) {
-  if (!res.ok) return { state: { ...state, holder: null }, actions: [toast(item.pr, `PR #${item.pr}: the free-slot post failed (${res.reason}). It stays queued.`)] };
+  if (!res.ok) {
+    const slot = { ...state.slot, nextAt: Math.max(state.slot.nextAt ?? 0, now + POST_BACKOFF_MIN * MIN) };
+    return { state: { ...state, holder: null, slot }, actions: [toast(item.pr, `PR #${item.pr}: the free-slot post failed (${res.reason}). It stays queued; the next try is in ${POST_BACKOFF_MIN} minutes.`)] };
+  }
   const items = state.items.map((it) => (it.pr === item.pr ? { ...it, state: 'posted' } : it));
   const slot = { ...state.slot, lastPostAt: now, lastPostPr: item.pr, source: 'post' };
   return { state: { ...state, items, slot }, actions: [toast(item.pr, `PR #${item.pr}: free slot taken, ${REVIEW_COMMENT} posted.`)] };
 }
 
-function askOne(it, t, d) {
-  if (t.askPaid) {
-    const v = d.checkPr(it.pr);
-    if (!v?.verdict) return { item: it, actions: [] };
-    return { item: { ...it, asked: { ...it.asked, paid30: true } }, actions: [toast(it.pr, paidText(it.pr, v))] };
-  }
+const readFailText = (pr, v) => `PR #${pr}: no free slot for 30 minutes. The paid-round check could not be read (${v.reason ?? 'no reason'}). Type /slot pay ${pr} to try it again, or /slot wait ${pr} to keep waiting.`;
+
+/** The paid ask from a verdict read before the lock. No verdict counts as a failed read (item.verdictFails); the third one gives up with one toast. */
+function askPaid(it, v) {
+  if (v === undefined) return { item: it, actions: [] };
+  const asked = { ...it.asked, paid30: true };
+  if (v.verdict) return { item: { ...it, asked }, actions: [toast(it.pr, paidText(it.pr, v))] };
+  const fails = (it.verdictFails ?? 0) + 1;
+  if (fails < PAID_TRIES) return { item: { ...it, verdictFails: fails }, actions: [] };
+  return { item: { ...it, verdictFails: fails, asked }, actions: [toast(it.pr, readFailText(it.pr, v))] };
+}
+
+function askOne(it, t, verdicts) {
+  if (t.askPaid) return askPaid(it, verdicts[it.pr]);
   if (it.state === 'timed-out' && !it.asked?.timeout60) return { item: { ...it, asked: { ...it.asked, timeout60: true } }, actions: [toast(it.pr, timeoutText(it.pr))] };
   return { item: it, actions: [] };
 }
 
-/** The 30-minute paid ask (CRITICAL) and the 60-minute time-out toast, each once per item (asked.*). */
-function askTimers(state, now, d) {
-  const steps = state.items.map((it) => askOne(it, timers(it, now, d.cfg, state.holder), d));
+/** The 30-minute paid ask (CRITICAL) and the 60-minute time-out toast, each once per item (asked.*). Reads nothing: verdicts come in. */
+function askTimers(state, now, d, verdicts) {
+  const steps = state.items.map((it) => askOne(it, timers(it, now, d.cfg, state.holder), verdicts));
   return { state: { ...state, items: steps.map((s) => s.item) }, actions: steps.flatMap((s) => s.actions) };
 }
 
-function tickLocked(a, d, facts) {
+function tickLocked(a, d, facts, verdicts) {
   const before = readState(d.statePath);
   if (recent(before, d)) return { code: 0, body: { ok: true, effective: false, locked: false, actions: [], ...viewOf(before, d) } };
   const now = d.now();
@@ -257,7 +291,7 @@ function tickLocked(a, d, facts) {
   const claimed = claim(settled, facts, now, d, sessionOf(a, d));
   if (claimed.item) writeState(d.statePath, { ...claimed.state, lastTickAt: now });
   const posted = claimed.item ? afterPost(claimed.state, claimed.item, tryPost(claimed.item, d), now) : { state: claimed.state, actions: [] };
-  const asked = askTimers(posted.state, now, d);
+  const asked = askTimers(posted.state, now, d, verdicts);
   const final = { ...asked.state, lastTickAt: now };
   writeState(d.statePath, final);
   const actions = [...changeActions(before, final, d), ...posted.actions, ...asked.actions];
@@ -268,7 +302,8 @@ function tickVerb(a, d) {
   const first = readState(d.statePath);
   if (recent(first, d) || !first.items.some((it) => !isDone(it))) return { code: 0, body: { ok: true, effective: false, locked: false, actions: [], ...viewOf(first, d) } };
   const facts = readAllFacts(first, d);
-  const r = locked(d, () => tickLocked(a, d, facts));
+  const verdicts = readVerdicts(first, d);
+  const r = locked(d, () => tickLocked(a, d, facts, verdicts));
   return r === LOCK_BUSY ? { code: 0, body: { ok: true, effective: false, locked: true, actions: [], ...viewOf(first, d) } } : r;
 }
 
@@ -317,18 +352,46 @@ const replaceItem = (state, item) => ({ ...state, items: state.items.map((it) =>
 function waitItem(it, now) {
   const reopen = it.state === 'timed-out' || it.state === 'stuck';
   return {
-    ...it, queuedAt: now, asked: { paid30: false, timeout60: false }, state: reopen ? 'queued' : it.state,
+    ...it, queuedAt: now, asked: { paid30: false, timeout60: false }, verdictFails: 0, state: reopen ? 'queued' : it.state,
     posts: it.state === 'stuck' ? 0 : it.posts, decision: decision('wait', it, now),
   };
 }
 
+/** Why a paid round may not go out now, or null. Checked before any verdict is read. */
+function payRefusal(a, state, it, d) {
+  if (it.state === 'posted') return `PR ${a.pr} is already posted: a review was requested for this head. Wait for CodeRabbit, or type /slot drop ${a.pr}.`;
+  if (state.holder) return `PR ${state.holder.pr} holds the free slot (it expires ${d.cfg.holder_max_min} minutes after its post). Type /slot pay ${a.pr} again after that.`;
+  if (it.decision?.kind === 'pay' && it.decision.head === it.head) return `PR ${a.pr}: Dave already paid for this head; a second paid round needs a new head.`;
+  return null;
+}
+
+/** The file after a paid post: the item is posted on the head cr-paid read, and the paid post takes the holder and the spacing like a free one (C10). */
+function paidState(state, it, a, d, v) {
+  const now = d.now();
+  const head = v.head ?? it.head;
+  const item = { ...it, head, state: 'posted', decision: decision('pay', { head }, now) };
+  const slot = { ...state.slot, lastPostAt: now, lastPostPr: a.pr, source: 'post' };
+  return { ...replaceItem(state, item), holder: { pr: a.pr, head, at: now, session: sessionOf(a, d) }, slot };
+}
+
+const paidFailure = (d, err) => refuse(
+  `the paid post failed (${firstLine(err)}); the round is counted and the item is marked posted. If no review comes in ${d.cfg.holder_max_min} minutes it returns to the queue.`,
+  { posted: false },
+);
+
+/**
+ * Order: the ledger row and the posted state first, the POST last. Every failure then errs toward counting a round that was not bought,
+ * never toward a paid post that is not counted. A ledger error posts nothing and leaves the file as it was.
+ */
 function payLocked(a, d, state, it) {
+  const refused = payRefusal(a, state, it, d);
+  if (refused) return refuse(refused, { posted: false });
   const v = d.checkPr(a.pr);
   if (!v?.verdict) return refuse(`no cr-paid verdict (${v?.reason ?? 'unknown'})`, { posted: false });
   if (v.verdict !== 'ALLOW') return { code: 3, body: { ok: false, verdict: v.verdict, reasons: v.reasons ?? [], posted: false } };
-  d.gh(['-X', 'POST', `repos/${d.repo}/issues/${a.pr}/comments`, '-f', `body=${v.comment}`]);
   recordPaid({ pr: a.pr, head: v.head, files: v.files }, crDeps(d));
-  writeState(d.statePath, replaceItem(state, { ...it, state: 'posted', decision: decision('pay', it, d.now()) }));
+  writeState(d.statePath, paidState(state, it, a, d, v));
+  try { d.gh(['-X', 'POST', `repos/${d.repo}/issues/${a.pr}/comments`, '-f', `body=${v.comment}`]); } catch (err) { return paidFailure(d, err); }
   return { code: 0, body: { ok: true, verdict: 'ALLOW', cost: v.cost, files: v.files, posted: true } };
 }
 
@@ -337,6 +400,7 @@ function decideLocked(a, d) {
   const it = state.items.find((x) => x.pr === a.pr);
   if (!it || isDone(it)) return refuse(`no live queue item for PR ${a.pr}`);
   if (a.kind === 'pay') return payLocked(a, d, state, it);
+  if (a.kind === 'wait' && !WAITABLE.includes(it.state)) return refuse(`PR ${a.pr} is ${it.state}; /slot wait restarts the clock of a queued, timed-out or stuck item only`);
   const next = a.kind === 'first' ? { ...it, pin: true, decision: decision('first', it, d.now()) } : waitItem(it, d.now());
   writeState(d.statePath, replaceItem(state, next));
   return { code: 0, body: { ok: true, item: next, posted: false } };
