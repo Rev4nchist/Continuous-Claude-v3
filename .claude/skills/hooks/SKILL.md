@@ -54,6 +54,8 @@ Test hooks manually:
 echo '{"type": "resume"}' | .claude/hooks/session-start-continuity.sh
 ```
 
+In a git worktree, link `.claude/hooks/node_modules` to the primary checkout's copy with a junction (`New-Item -ItemType Junction`). Do not run `npm install` there. The build uses `--preserve-symlinks`, so the link does not change any `dist/*.mjs` file.
+
 ## Registration
 Add hooks to `.claude/settings.json`:
 ```json
