@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  BENCH_CAP, BENCH_TIMEOUT_SEC, GROUPS, P0_CHECKS, P0_DRIVERS, analyzeStream, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan,
+  BENCH_CAP, BENCH_TIMEOUT_SEC, GROUP_CAP, GROUPS, P0_CHECKS, P0_DRIVERS, analyzeStream, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan,
   lintFlow, main, mapNegatives, parseArgs, parseAuthorOutput,
 } from './author.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
@@ -546,9 +546,9 @@ test('authorGroup passes --mode ask, the model, the stripped env, and writes the
   assert.equal(s.state.cleaned, 1);
 });
 
-test('authorGroup refuses at 18 bench runs, counted by ref prefix and run id, before it prepares a tree', async (t) => {
+test('authorGroup refuses at BENCH_CAP bench runs, counted by ref prefix and run id, before it prepares a tree', async (t) => {
   const end = JSON.stringify({ ts: '2026-11-01T00:00:01.000Z', phase: 'end', id: 'id-trex-S1-0', ref: 'trex-S1' });
-  const s = authorSetup(t, { ledger: `${startLines(17, 'trex-S1')}\n${startLines(1, 'trex-probe')}\n${end}\n` });
+  const s = authorSetup(t, { ledger: `${startLines(BENCH_CAP - 1, 'trex-S1')}\n${startLines(1, 'trex-probe')}\n${end}\n` });
   assert.equal(benchRuns(s.ledger).used, BENCH_CAP);
   const r = await authorGroup('S18', s.opts, s.deps);
   assert.equal(r.exit, 3);
@@ -639,13 +639,14 @@ test('authorGroup returns exit 1 for an agent error result', async (t) => {
   assert.equal((await authorGroup('S18', s.opts, s.deps)).exit, 1);
 });
 
-test('authorGroup allows one retry per group, and only after a failed run', async (t) => {
+test('authorGroup allows GROUP_CAP - 1 retries per group, and only after a failed run', async (t) => {
   const s = authorSetup(t, { run: () => ({ status: null, stdout: '', stderr: '', timedOut: true }) });
   assert.equal((await authorGroup('S18', s.opts, s.deps)).exit, 1);
   assert.equal((await authorGroup('S18', s.opts, s.deps)).exit, 2, 'a second run without a retry flag');
   assert.equal((await authorGroup('S18', { ...s.opts, retry: true }, s.deps)).exit, 1);
-  assert.equal((await authorGroup('S18', { ...s.opts, retry: true }, s.deps)).exit, 3, 'a third run is over the retry limit');
-  assert.equal(s.state.runs.length, 2);
+  for (let i = 2; i < GROUP_CAP; i++) assert.equal((await authorGroup('S18', { ...s.opts, retry: true }, s.deps)).exit, 1);
+  assert.equal((await authorGroup('S18', { ...s.opts, retry: true }, s.deps)).exit, 3, 'a run past GROUP_CAP is over the retry limit');
+  assert.equal(s.state.runs.length, GROUP_CAP);
 });
 
 test('authorGroup refuses a retry of a run that succeeded, unless the harness failed', async (t) => {
@@ -838,7 +839,7 @@ test('the probe run counts toward the 18 and leaves S1 its first group run', asy
   assert.equal(benchRuns(s.ledger).used, 1);
   const dry = await cli(s, ['--group', 'S1', '--dry-run']);
   assert.equal(dry.code, 0, dry.text);
-  assert.match(dry.text, /bench runs: 1 of 18/);
+  assert.match(dry.text, new RegExp(`bench runs: 1 of ${BENCH_CAP}`));
   const r = await authorGroup('S1', s.opts, s.deps);
   assert.equal(r.exit, 0, r.problems.join('; '));
   assert.deepEqual(benchRuns(s.ledger).byRef, { 'trex-probe': 1, 'trex-S1': 1 });
@@ -870,8 +871,8 @@ test('authorGroup accepts a host .ps1 that exists at the group pre and fix and r
 
 // ---------- budget race ----------
 
-test('two concurrent authorGroup calls at 17 bench runs: exactly one reserves', async (t) => {
-  const s = authorSetup(t, { ledger: `${startLines(17, 'trex-S1')}\n` });
+test('two concurrent authorGroup calls at BENCH_CAP - 1 bench runs: exactly one reserves', async (t) => {
+  const s = authorSetup(t, { ledger: `${startLines(BENCH_CAP - 1, 'trex-S1')}\n` });
   const [a, b] = await Promise.all([authorGroup('S18', s.opts, s.deps), authorGroup('S2', s.opts, s.deps)]);
   assert.deepEqual([a.exit, b.exit].sort(), [0, 3], `${a.problems.join(';')} | ${b.problems.join(';')}`);
   assert.equal(s.state.runs.length, 1);
@@ -912,7 +913,7 @@ test('main --dry-run prints prompt size, tree path, leak scan and budget, and st
   assert.match(text, /prompt: \d+ chars/);
   assert.match(text, /tree: /);
   assert.match(text, /leak scan: clean/);
-  assert.match(text, /bench runs: 3 of 18/);
+  assert.match(text, new RegExp(`bench runs: 3 of ${BENCH_CAP}`));
   assert.equal(s.state.runs.length, 0);
   assert.equal(ledgerLines(s.ledger).length, 3);
   assert.equal(s.state.cleaned, 1);

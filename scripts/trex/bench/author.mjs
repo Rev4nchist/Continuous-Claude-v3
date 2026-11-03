@@ -36,7 +36,10 @@ import { stripEnv } from '../lib/strip-env.mjs';
 /** The git function of every command here. The child env is stripped, so no Anthropic key reaches a git hook or alias. */
 export const benchGit = (root) => makeTrexGit(root);
 
-export const BENCH_CAP = 18;
+/** Dave decision 7 held 18 runs; on 2026-11-03 he approved 6 more for S8, S10, S12, S15 and 2 spares. */
+export const BENCH_CAP = 24;
+/** Runs one group may use: the first run plus up to two retries (the 2026-11-03 spares). */
+export const GROUP_CAP = 3;
 /** The bench timeout. The P0 probe timed out at the cursor-review default of 1500 s. */
 export const BENCH_TIMEOUT_SEC = 2400;
 /** What the P0 runtime can run. The prompt and lintFlow share these lists. */
@@ -122,7 +125,7 @@ function budgetGate({ ledgerPath, ref, probe, retry, now, maxRuns }) {
   const weekly = countRuns(readLedger(ledgerPath).entries, { now });
   if (weekly >= WEEKLY_CAP) return { exit: EXIT.CAP, reason: `weekly cap reached: ${weekly} of ${WEEKLY_CAP} runs in the last 7 days` };
   const prior = byRef[ref] ?? 0;
-  if (prior >= (probe ? 1 : 2)) return { exit: EXIT.CAP, reason: `${ref} has ${prior} earlier run(s): no more are allowed (one retry per group, one probe)` };
+  if (prior >= (probe ? 1 : GROUP_CAP)) return { exit: EXIT.CAP, reason: `${ref} has ${prior} earlier run(s): no more are allowed (${GROUP_CAP - 1} retries per group, one probe)` };
   if (prior === 0) return null;
   if (!retry) return { exit: EXIT.REFUSED, reason: `${ref} already ran: pass --retry after a failed run, or --retry-harness after a harness fault` };
   if (retry !== 'harness' && lastOutcome(ledgerPath, ref) === 'ok') return { exit: EXIT.REFUSED, reason: `${ref} succeeded: a retry needs --retry-harness` };
