@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { acquireGrokSlot } from './grok-slots.mjs';
+import { DEFAULT_WAIT_MS, acquireGrokSlot } from './grok-slots.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const made = [];
@@ -432,4 +432,44 @@ test('three real processes with max 2 never hold more than 2 at once, and the th
   assert.ok(byAcquire[2].acquired >= firstRelease, 'the third took its slot only after a release');
   assert.ok(byAcquire[2].acquired - byAcquire[2].asked >= 500, 'the third waited');
   assert.equal(existsSync(file) ? readActive(file).length : 0, 0, 'every slot was released');
+});
+
+// Breaks if the wait loop logs nothing (a 60 min wait looks like a hang) or logs every poll (240 lines for 60 min).
+test('a waiting caller logs when it starts to wait and about once a minute after, with the slots busy and the time waited', async () => {
+  const file = tmpFile();
+  const holder = await acquireGrokSlot({ file, max: 1 }, { pidAlive: alive });
+  assert.equal(holder.ok, true);
+  const c = clock();
+  const logs = [];
+  const r = await acquireGrokSlot({ file, max: 1, waitMs: 300_000, pollMs: 15_000 }, { now: c.now, sleep: c.sleep, pidAlive: alive, log: (m) => logs.push(m) });
+  assert.equal(r.reason, 'busy');
+  assert.equal(logs.length, 5, 'waited 0, 60, 120, 180 and 240 s of 300 s');
+  assert.match(logs[0], /1 of 1 slots busy.*waited 0 s of 300 s/);
+  assert.match(logs[4], /waited 240 s of 300 s/);
+  holder.release();
+});
+
+// Breaks if the log is written before the first take: a free slot must stay silent.
+test('a caller that gets a slot at once logs nothing', async () => {
+  const logs = [];
+  const r = await acquireGrokSlot({ file: tmpFile(), max: 1, waitMs: 60_000 }, { pidAlive: alive, log: (m) => logs.push(m) });
+  assert.equal(r.ok, true);
+  assert.deepEqual(logs, []);
+  r.release();
+});
+
+// Breaks if CCV3_GROK_WAIT_MIN is not read, a bad value is not replaced by the default, or opts.waitMs stops winning over the env.
+test('the max wait comes from CCV3_GROK_WAIT_MIN; a bad value means the default; opts.waitMs wins', async () => {
+  const waitedWith = async (env, opts = {}) => {
+    const file = tmpFile();
+    const holder = await acquireGrokSlot({ file, max: 1 }, { pidAlive: alive });
+    const c = clock();
+    const r = await acquireGrokSlot({ file, max: 1, pollMs: 60_000, ...opts }, { now: c.now, sleep: c.sleep, pidAlive: alive, env, log: () => {} });
+    holder.release();
+    assert.equal(r.reason, 'busy');
+    return r.waitedMs;
+  };
+  assert.equal(await waitedWith({ CCV3_GROK_WAIT_MIN: '2' }), 120_000);
+  assert.equal(await waitedWith({ CCV3_GROK_WAIT_MIN: '2' }, { waitMs: 60_000 }), 60_000);
+  for (const bad of ['abc', '-1', '1.5', '', '0x10']) assert.equal(await waitedWith({ CCV3_GROK_WAIT_MIN: bad }), DEFAULT_WAIT_MS, bad);
 });

@@ -500,6 +500,32 @@ test('a busy slot polls every 15 s until it frees or slot_wait_min passes (break
   assert.deepEqual(sleeps, [15_000, 15_000, 10_000]);
 });
 
+test('with the shipped config a review waits 10 min for a busy slot and then runs, instead of exiting 3 (breaks if slot_wait_min drops below 10)', async () => {
+  const w = world();
+  const slots = path.join(w.aux, 'local-review-slots.json');
+  seedSlots(slots, [entry('a', 1), entry('b', 2)]);
+  let clock = NOW;
+  const sleep = async (ms) => { clock += ms; if (clock - NOW >= 10 * 60_000) seedSlots(slots, [entry('a', 1)]); };
+  const r = await run(w, {}, { now: () => clock, sleep });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(w.agentCalls.length, 1);
+});
+
+test('a review that waits for a slot logs the busy slots and the time waited about once a minute, then refuses with exit 3 (breaks if the wait log is removed or unthrottled)', async () => {
+  const w = world();
+  w.configPath = tempConfig(w, (c) => { c.local_review.slot_wait_min = 3; });
+  seedSlots(path.join(w.aux, 'local-review-slots.json'), [entry('a', 1, 0), entry('b', 2, 0)]);
+  let clock = NOW;
+  const logs = [];
+  const r = await run(w, {}, { now: () => clock, sleep: async (ms) => { clock += ms; }, stderr: (m) => logs.push(m) });
+  assert.equal(r.exit, EXIT.CAP);
+  const waits = logs.filter((m) => /waiting for a review slot/.test(m));
+  assert.equal(waits.length, 3, 'waited 0, 60 and 120 s of 180 s');
+  assert.match(waits[0], /2 of 2 slots busy.*waited 0 s of 180 s/);
+  assert.match(waits[2], /waited 120 s of 180 s/);
+  assert.equal(w.agentCalls.length, 0);
+});
+
 test('releaseSlot removes only its own runKey (breaks if release clears every entry)', () => {
   const file = slotFile();
   seedSlots(file, [entry('a', 1), entry('me', 2)]);
@@ -933,7 +959,7 @@ test('main without a pin pins the engine and starts that copy with LOCAL_REVIEW_
   assert.deepEqual(spec.args.slice(1), ['--pr', '9', '--json']);
   assert.equal(spec.env.LOCAL_REVIEW_PINNED, SHA);
   assert.equal(spec.cwd, 'C:\\repo');
-  assert.equal(spec.timeoutMs, (5 + 40 * 2 + 5) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5
+  assert.equal(spec.timeoutMs, (60 + 40 * 2 + 5) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5
   assert.deepEqual(out, ['{"exit":3}']);
   assert.deepEqual(err, ['busy']);
 });
