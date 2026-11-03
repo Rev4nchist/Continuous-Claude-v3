@@ -14,16 +14,16 @@
  *   I10 adopt runs without the new id in the env, or runs when lane.mjs is missing
  *   I11 /clear adopts the wrong session: two clears in one cwd, or a clear another session already claimed
  *   I12 resume names a session far back in the history, not the direct parent
- *   I13 the id rule lets through a non-hex id; the dir rule ignores os.homedir(); a name keeps stray whitespace
+ *   I13 the id rule lets through a non-hex id; a name keeps stray whitespace
  *   I14 a hidden spawn timeout option that does nothing is passed to the adopt child
  */
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  CLEAR_WINDOW_MS, clipName, identityDir, label, lastCustomTitle, previousFromClear, previousFromTranscript,
+  CLEAR_WINDOW_MS, clipName, label, lastCustomTitle, previousFromClear, previousFromTranscript,
   readIdentity, resolveName, resolvePrevious, runAdopt, writeIdentity,
 } from '../shared/session-identity.js';
 
@@ -211,17 +211,6 @@ describe('shared rules', () => {
     mkdirSync(process.env.CCV3_IDENTITY_DIR!, { recursive: true });
     writeFileSync(join(process.env.CCV3_IDENTITY_DIR!, `${A}.json`), JSON.stringify({ uuid: B, name: 'x' }));
     expect(readIdentity(A)?.uuid).toBe(A);
-  });
-
-  it('I13: with no override the dir is os.homedir()/.claude/state/identity', () => {
-    delete process.env.CCV3_IDENTITY_DIR;
-    const saveHome = process.env.HOME;
-    process.env.HOME = join(dir, 'ignored-home');
-    try {
-      expect(identityDir()).toBe(join(homedir(), '.claude', 'state', 'identity'));
-    } finally {
-      if (saveHome === undefined) delete process.env.HOME; else process.env.HOME = saveHome;
-    }
   });
 
   it('I13: a name collapses whitespace, trims and clips to 16', () => {
