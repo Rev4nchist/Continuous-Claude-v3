@@ -25,10 +25,12 @@ const tmp = (label) => { const d = mkdtempSync(path.join(os.tmpdir(), `cursor-re
 after(() => { for (const d of madeDirs) rmSync(d, { recursive: true, force: true }); });
 // runAgent takes a machine-wide grok slot before it spawns. Tests that spawn stubs pass this no-op gate, so they never touch ~/.claude/state.
 const noGate = async () => ({ ok: true, release() {} });
-// runAgent runs a bash preflight on win32 before it spawns. The stub-spawn tests pass this no-op so they never start the machine's real bash
-// (it is WSL when WSL is frozen). Only the E2E test at the end of the file runs the real preflight.
+// runAgent runs a hook-shell preflight and a start spacer on win32 before it spawns. The stub-spawn tests pass these no-ops so they never
+// start the machine's real PowerShell and bash (WSL when WSL is frozen) or write the real start stamp in ~/.claude/state. Only the E2E test
+// at the end of the file runs the real preflight.
 const noPreflight = () => ({ ok: true, skipped: 'test stub' });
-const runAgent = (spec, deps = {}) => runAgentReal(spec, { preflight: noPreflight, ...deps });
+const noSpacer = async () => ({ waitedMs: 0 });
+const runAgent = (spec, deps = {}) => runAgentReal(spec, { preflight: noPreflight, spacer: noSpacer, ...deps });
 const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 const DAY = 86_400_000;
 
@@ -1198,9 +1200,12 @@ test('cursor-review.mjs takes killTree from lib/proc.mjs and does not import pre
   assert.doesNotMatch(src, /import\([^)]*pre-pr|from '[^']*pre-pr/);
 });
 
-// ---------- stall guards: bash on PATH, bash preflight, tool-stall stop, tool timing ----------
-// 2026-11-03: the Cursor Azure plugin runs `bash track-telemetry.sh` after every tool call. On this PC the first `bash` on PATH is
-// C:\Windows\system32\bash.exe (WSL). With WSL frozen each hook waited 60 s, so every successful tool call took 61 s.
+// ---------- stall guards: hook shell preflight, start spacing, cli-config race, tool-stall stop, tool timing ----------
+// 2026-11-03: the Cursor Azure plugin runs `bash track-telemetry.sh` after every tool call. cursor-agent runs a hook as
+// `powershell.exe -ExecutionPolicy Bypass -NonInteractive -File %TEMP%\ps-script-<uuid>.ps1`. That PowerShell gets {...process.env, ...hook env}
+// of cursor-agent, so it gets the PATH we pass (live test 2026-11-03: Git Bash first -> hook ran MINGW64 bash, tool call 4.3 s; normal PATH,
+// System32 WSL bash first and frozen -> hook killed at its 20 s time-out, tool call 21.2 s). So: Git Bash goes first on the agent PATH, and
+// the preflight tests bash in PowerShell with the agent env.
 // Report: .claudedocs/2026-11-03-grok-slowdown-investigation.md
 
 const GB = 'C:\\Program Files\\Git\\bin';
@@ -1260,101 +1265,230 @@ test('guard: off Windows the PATH is not touched and no flag is set', () => {
   assert.ok(!('CCV3_BASH_GUARD' in env));
 });
 
-// ---- bash preflight ----
 
-// Breaks if the preflight stops running `bash -c "exit 0"` as hidden, bounded by 10 s, with the agent's env, on the FIRST bash of that PATH.
-test('preflightBash spawns the first bash on the env PATH with -c "exit 0", hidden, 10 s cap, the given env', () => {
-  const seen = [];
-  const spawnSyncFn = (file, args, opts) => { seen.push({ file, args, opts }); return { status: 0 }; };
-  const env = { Path: 'C:\\a;C:\\b;C:\\c' };
-  const r = cr.preflightBash(env, { spawnSyncFn, exists: has('C:\\b\\bash.exe', 'C:\\c\\bash.exe'), platform: 'win32' });
+// Breaks if the dead agent-PATH preflight (preflightBash) comes back next to preflightHooks.
+test('preflightBash is gone, preflightHooks and resolveGitBashDir are exported', () => {
+  assert.equal(cr.preflightBash, undefined);
+  assert.equal(typeof cr.preflightHooks, 'function');
+  assert.equal(typeof cr.resolveGitBashDir, 'function');
+});
+
+// ---- hook scan and hook-shell preflight ----
+
+const HOME = 'C:\\Users\\t';
+const PLUG = `${HOME}\\.cursor\\plugins\\cache\\mk\\azure\\abc123`;
+const HOOK_FILE = `${PLUG}\\hooks\\cursor-hooks.json`;
+const hooksJson = (...commands) => JSON.stringify({ version: 1, hooks: { postToolUse: commands.map((command) => ({ type: 'command', command })) } });
+const BASH_HOOK = 'bash ${CURSOR_PLUGIN_ROOT}/hooks/scripts/track-telemetry.sh';
+const manifest = (hooks) => JSON.stringify({ name: 'azure', ...(hooks === undefined ? {} : { hooks }) });
+
+/** A fake fs over a { path: content } map: case-insensitive, and readdir lists the names one level down. */
+function fakeFs(files) {
+  const norm = (p) => path.win32.normalize(p).replace(/\\+$/, '').toLowerCase();
+  const entriesOf = Object.entries(files).map(([p, c]) => ({ p, k: norm(p), c }));
+  const enoent = (p) => Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+  const reads = [];
+  return {
+    reads,
+    readFileSync: (p) => { reads.push(p); const e = entriesOf.find((x) => x.k === norm(p)); if (!e) throw enoent(p); return e.c; },
+    readdirSync: (dir) => {
+      const d = `${norm(dir)}\\`;
+      const names = new Set(entriesOf.filter((x) => x.k.startsWith(d)).map((x) => x.p.slice(d.length).split('\\')[0]));
+      if (names.size === 0) throw enoent(dir);
+      return [...names];
+    },
+  };
+}
+const spawnSpy = (res = { status: 0 }) => {
+  const calls = [];
+  return { calls, spawnSyncFn: (file, args, opts) => { calls.push({ file, args, opts }); return res; } };
+};
+const azureOn = () => fakeFs({ [`${PLUG}\\.cursor-plugin\\plugin.json`]: manifest('./hooks/cursor-hooks.json'), [HOOK_FILE]: hooksJson(BASH_HOOK) });
+const timedOut = { status: null, error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
+
+// Breaks if the scan stops following plugin.json "hooks" -> file under cache/<market>/<plugin>/<hash>, or the first-word test misses bash.
+test('preflightHooks finds the bash hook an enabled plugin names, and probes the shell once', () => {
+  const { calls, spawnSyncFn } = spawnSpy();
+  const r = cr.preflightHooks({ env: { Path: 'orig' }, home: HOME, platform: 'win32', fs: azureOn(), spawnSyncFn });
   assert.equal(r.ok, true);
-  assert.equal(r.bash, 'C:\\b\\bash.exe');
-  assert.equal(seen.length, 1);
-  assert.equal(seen[0].file, 'C:\\b\\bash.exe');
-  assert.deepEqual(seen[0].args, ['-c', 'exit 0']);
-  assert.equal(seen[0].opts.windowsHide, true);
-  assert.equal(seen[0].opts.timeout, 10_000);
-  assert.equal(seen[0].opts.env, env);
-  assert.equal(seen[0].opts.stdio, 'ignore', 'no pipe that a stuck grandchild could hold open past the timeout');
+  assert.equal(r.hooks.length, 1);
+  assert.equal(r.hooks[0].file.toLowerCase(), HOOK_FILE.toLowerCase());
+  assert.equal(r.hooks[0].command, BASH_HOOK);
+  assert.equal(calls.length, 1);
 });
 
-// Breaks if a timeout, a non-zero exit or a spawn error is read as healthy.
-test('preflightBash fails on a time-out, a non-zero exit and a spawn error, and names the reason', () => {
-  const run = (res) => cr.preflightBash({ Path: 'C:\\b' }, { spawnSyncFn: () => res, exists: has('C:\\b\\bash.exe'), platform: 'win32' });
-  const timeout = run({ status: null, error: Object.assign(new Error('spawnSync C:\\b\\bash.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
-  assert.equal(timeout.ok, false);
-  assert.match(timeout.reason, /timed out after 10 s/);
-  const bad = run({ status: 1 });
-  assert.equal(bad.ok, false);
-  assert.match(bad.reason, /exit 1/);
-  const err = run({ status: null, error: Object.assign(new Error('boom'), { code: 'EACCES' }) });
-  assert.equal(err.ok, false);
+// Breaks if the probe runs bash outside PowerShell (the hook's shell), or loses the hidden window, the 10 s cap or the no-pipe stdio.
+test('the probe is Windows PowerShell running bash -c "exit 0", hidden, 10 s cap, with the given (agent) env and no pipes', () => {
+  const { calls, spawnSyncFn } = spawnSpy();
+  const env = { Path: 'agent' };
+  cr.preflightHooks({ env, home: HOME, platform: 'win32', fs: azureOn(), spawnSyncFn });
+  assert.equal(calls[0].file, 'powershell.exe');
+  assert.deepEqual(calls[0].args, ['-NoProfile', '-NonInteractive', '-Command', 'bash -c "exit 0"']);
+  assert.equal(calls[0].opts.env, env, 'the env passed in, which runAgent sets to the agent env');
+  assert.equal(calls[0].opts.windowsHide, true);
+  assert.equal(calls[0].opts.timeout, 10_000);
+  assert.equal(calls[0].opts.stdio, 'ignore', 'a stuck wsl.exe grandchild must not hold a pipe open past the time-out');
 });
 
-// Breaks if a PC with no bash at all is called hung: a missing bash fails fast, it cannot stall a hook.
-test('preflightBash passes (skipped) when no bash is on the PATH, and spawns nothing', () => {
-  let spawned = 0;
-  const r = cr.preflightBash({ Path: 'C:\\a' }, { spawnSyncFn: () => { spawned += 1; return { status: 0 }; }, exists: () => false, platform: 'win32' });
+// Breaks if a renamed or deleted hook file is still counted: Dave disables the Azure hook by renaming it, and the run must then start.
+test('with the hook file renamed away there are 0 bash hooks, the shell is not probed, and it passes', () => {
+  const fs = fakeFs({ [`${PLUG}\\.cursor-plugin\\plugin.json`]: manifest('./hooks/cursor-hooks.json'), [`${HOOK_FILE}.disabled`]: hooksJson(BASH_HOOK) });
+  const { calls, spawnSyncFn } = spawnSpy(timedOut);
+  const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs, spawnSyncFn });
   assert.equal(r.ok, true);
-  assert.equal(spawned, 0);
+  assert.equal(r.hooks.length, 0);
+  assert.match(r.skipped, /0 bash hooks found/);
+  assert.equal(calls.length, 0);
 });
 
-// Breaks if runAgent spawns the agent, or takes a grok slot, after a failed preflight; or if the result is not the busy-gate shape.
-test('runAgent on win32 with a hung bash does not take a slot or spawn, and returns the not-started shape', async () => {
+// Breaks if the scan reads every json in a plugin's hooks folder: only the file plugin.json names is run by Cursor.
+test('only the hooks file that plugin.json names is read, not its neighbours', () => {
+  const fs = fakeFs({
+    [`${PLUG}\\.cursor-plugin\\plugin.json`]: manifest('./hooks/cursor-hooks.json'),
+    [`${PLUG}\\hooks\\hooks.json`]: hooksJson('bash ${CLAUDE_PLUGIN_ROOT}/x.sh'),
+    [`${PLUG}\\hooks\\copilot-hooks.json`]: JSON.stringify({ hooks: { PostToolUse: [{ bash: 'x.sh' }] } }),
+  });
+  const { calls, spawnSyncFn } = spawnSpy();
+  const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs, spawnSyncFn });
+  assert.equal(r.hooks.length, 0);
+  assert.equal(calls.length, 0);
+});
+
+// Breaks if a plugin with no hooks key, a broken manifest, a broken hooks file, or a missing cache folder throws or counts as a hook.
+test('no hooks key, bad JSON in either file and a missing cache all mean no hooks, and nothing throws', () => {
+  const none = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs: fakeFs({}), spawnSyncFn: () => { throw new Error('no spawn'); } });
+  assert.equal(none.ok, true);
+  const fs = fakeFs({
+    [`${PLUG}\\.cursor-plugin\\plugin.json`]: manifest(undefined),
+    [`${HOME}\\.cursor\\plugins\\cache\\mk\\bad\\h1\\.cursor-plugin\\plugin.json`]: '{ not json',
+    [`${HOME}\\.cursor\\plugins\\cache\\mk\\bad2\\h2\\.cursor-plugin\\plugin.json`]: manifest('./hooks/h.json'),
+    [`${HOME}\\.cursor\\plugins\\cache\\mk\\bad2\\h2\\hooks\\h.json`]: '[[[',
+    [`${HOME}\\.cursor\\plugins\\cache\\mk\\loose-file`]: 'x',
+  });
+  const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs, spawnSyncFn: () => { throw new Error('no spawn'); } });
+  assert.equal(r.ok, true);
+  assert.equal(r.hooks.length, 0);
+});
+
+// Breaks if %USERPROFILE%\.cursor\hooks.json (the user's own hooks) is not scanned.
+test('the user hooks.json in .cursor is scanned too', () => {
+  const fs = fakeFs({ [`${HOME}\\.cursor\\hooks.json`]: hooksJson('node a.js', 'bash ~/x.sh') });
+  const { calls, spawnSyncFn } = spawnSpy();
+  const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs, spawnSyncFn });
+  assert.deepEqual(r.hooks.map((h) => h.command), ['bash ~/x.sh']);
+  assert.equal(calls.length, 1);
+});
+
+// Breaks if a hook that is not bash (node, python, powershell, look-alike names) starts a probe, or a bash hook in any form is missed.
+test('which commands count as bash hooks', () => {
+  const yes = ['bash x.sh', 'sh x.sh', 'bash.exe x.sh', 'BASH -c "x"', 'wsl bash x.sh', 'wsl.exe -e x', 'C:\\Windows\\system32\\bash.exe -c x',
+    '"C:\\Program Files\\Git\\bin\\bash.exe" x.sh', 'cat in.json | bash x.sh', 'cd a && bash x.sh', '/bin/sh x'];
+  const no = ['node x.js', 'powershell -File x.ps1', './bash-helper.sh', 'python bash.py', 'echo bash', 'mybash x', 'dash x.sh', ''];
+  for (const c of yes) assert.equal(cr.isBashCommand(c), true, c);
+  for (const c of no) assert.equal(cr.isBashCommand(c), false, JSON.stringify(c));
+});
+
+// Breaks if only non-bash hooks still start a probe (a wasted 10 s, or a false stop on a PC with node hooks).
+test('hooks that are not bash pass without a probe', () => {
+  const fs = fakeFs({ [`${HOME}\\.cursor\\hooks.json`]: hooksJson('node a.js', 'powershell -File b.ps1') });
+  const { calls, spawnSyncFn } = spawnSpy(timedOut);
+  const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs, spawnSyncFn });
+  assert.equal(r.ok, true);
+  assert.equal(calls.length, 0);
+});
+
+// Breaks if a time-out, a non-zero exit or a spawn error is read as healthy, or the reason loses the hook file or the report.
+test('a time-out, a non-zero exit and a spawn error fail the preflight and name the hook file and the report', () => {
+  for (const [res, want] of [[timedOut, /timed out after 10 s/], [{ status: 1 }, /exit 1/], [{ status: null, error: Object.assign(new Error('boom'), { code: 'ENOENT' }) }, /boom/]]) {
+    const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs: azureOn(), spawnSyncFn: () => res });
+    assert.equal(r.ok, false);
+    assert.match(r.reason, want);
+    assert.ok(r.reason.toLowerCase().includes(HOOK_FILE.toLowerCase()), r.reason);
+    assert.match(r.reason, /2026-11-03-grok-slowdown-investigation\.md/);
+    assert.match(r.reason, /PowerShell/);
+    assert.match(r.reason, /agent PATH/);
+  }
+});
+
+// Breaks if two bash hooks cause two probes (each can wait 10 s).
+test('several bash hooks cause one probe', () => {
+  const fs = fakeFs({ [`${HOME}\\.cursor\\hooks.json`]: hooksJson('bash a.sh', 'bash b.sh', 'sh c.sh') });
+  const { calls, spawnSyncFn } = spawnSpy();
+  const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'win32', fs, spawnSyncFn });
+  assert.equal(r.hooks.length, 3);
+  assert.equal(calls.length, 1);
+});
+
+// Breaks if the preflight scans or spawns powershell.exe off Windows (it does not exist there).
+test('off win32 the preflight passes at once and touches neither the disk nor a process', () => {
+  const fs = azureOn();
+  const { calls, spawnSyncFn } = spawnSpy();
+  const r = cr.preflightHooks({ env: {}, home: HOME, platform: 'linux', fs, spawnSyncFn });
+  assert.equal(r.ok, true);
+  assert.equal(fs.reads.length, 0);
+  assert.equal(calls.length, 0);
+});
+
+// ---- hook preflight in runAgent ----
+
+// Breaks if runAgent spawns the agent, or takes a grok slot, after a failed preflight; or if the result is not the not-started shape.
+test('runAgent on win32 with a hanging hook shell does not take a slot or spawn, and returns hook-bash-hang', async () => {
   const { gate, log } = spyGate();
   let spawned = 0;
-  const preflight = () => ({ ok: false, bash: 'C:\\Windows\\system32\\bash.exe', ms: 10_000, reason: 'bash -c "exit 0" timed out after 10 s' });
+  const preflight = () => ({ ok: false, hooks: [], reason: `bash -c "exit 0" in Windows PowerShell timed out after 10 s; hook ${HOOK_FILE}` });
   const r = await runAgentReal(spec(5000), { gate, preflight, platform: 'win32', spawnFn: () => { spawned += 1; return fakeChild(); }, gateEnv: {} });
   assert.equal(spawned, 0);
   assert.equal(log.calls, 0, 'no slot wait for a run that cannot work');
   assert.equal(r.status, null);
-  assert.equal(r.error, 'bash-hang');
+  assert.equal(r.error, 'hook-bash-hang');
   assert.equal(r.notStarted, true);
   assert.equal(r.timedOut, false);
   assert.equal(r.durationMs, 0);
   assert.equal(r.stdout, '');
-  assert.match(r.stderr, /bash on the agent PATH hangs/);
-  assert.match(r.stderr, /2026-11-03-grok-slowdown-investigation\.md/);
+  assert.match(r.stderr, /bash hangs/);
+  assert.ok(r.stderr.includes(HOOK_FILE));
   assert.match(r.stderr, /timed out after 10 s/);
 });
 
 // Breaks if CCV3_GROK_GATE=off skips the preflight (the preflight guards the run, not the gate).
-test('the bash preflight also runs when CCV3_GROK_GATE=off', async () => {
+test('the hook preflight also runs when CCV3_GROK_GATE=off', async () => {
   const r = await runAgentReal(spec(5000), { preflight: () => ({ ok: false, reason: 'x' }), platform: 'win32', spawnFn: () => { throw new Error('must not spawn'); }, gateEnv: { CCV3_GROK_GATE: 'off' } });
-  assert.equal(r.error, 'bash-hang');
+  assert.equal(r.error, 'hook-bash-hang');
 });
 
-// Breaks if the preflight runs off Windows (there is no WSL shim) or gets the wrong env.
-test('runAgent runs the preflight only on win32, with the spec env', async () => {
+// Breaks if the preflight gets another env than the one cursor-agent gets (spec.env): hooks get the PATH we pass to cursor-agent, so
+// a probe with the caller env would test a bash the hook never runs. Also breaks if it runs off Windows.
+test('runAgent runs the preflight only on win32, with the agent env (spec.env)', async () => {
   const calls = [];
-  const preflight = (env) => { calls.push(env); return { ok: true }; };
+  const preflight = (arg) => { calls.push(arg); return { ok: true }; };
+  const agentEnv = { Path: 'agent' };
   const run = async (platform) => {
     const child = fakeChild();
     const spawnFn = () => { setTimeout(() => child.emit('close', 0), 5); return child; };
-    return runAgentReal({ ...spec(5000), env: { Path: 'x' } }, { gate: noGate, preflight, platform, spawnFn, gateEnv: {} });
+    return runAgentReal({ ...spec(5000), env: agentEnv }, { gate: noGate, spacer: noSpacer, preflight, platform, spawnFn, gateEnv: {} });
   };
   assert.equal((await run('linux')).status, 0);
   assert.equal(calls.length, 0);
   assert.equal((await run('win32')).status, 0);
-  assert.deepEqual(calls, [{ Path: 'x' }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].env, agentEnv);
 });
 
 // Breaks if a throwing preflight stops every review (it is a guard, not a gate).
 test('a preflight that throws does not stop the run', async () => {
   const child = fakeChild();
   const spawnFn = () => { setTimeout(() => child.emit('close', 0), 5); return child; };
-  const r = await runAgentReal(spec(5000), { gate: noGate, preflight: () => { throw new Error('bug'); }, platform: 'win32', spawnFn, gateEnv: {}, gateLog: () => {} });
+  const r = await runAgentReal(spec(5000), { gate: noGate, spacer: noSpacer, preflight: () => { throw new Error('bug'); }, platform: 'win32', spawnFn, gateEnv: {}, gateLog: () => {} });
   assert.equal(r.status, 0);
 });
 
-// Breaks if runReview words a bash-hang as a missing grok slot, or counts it against the caps.
-test('runReview with a bash-hang runner says bash hangs, and leaves the ledger uncounted', async () => {
-  const hung = { status: null, stdout: '', stderr: 'x', timedOut: false, error: 'bash-hang', notStarted: true, durationMs: 0, waitedMs: 0 };
+// Breaks if runReview words a hook-bash-hang as a missing grok slot, or counts it against the caps.
+test('runReview with a hook-bash-hang runner says bash hangs in the hook shell, and leaves the ledger uncounted', async () => {
+  const hung = { status: null, stdout: '', stderr: `HOOKMSG hook ${HOOK_FILE}`, timedOut: false, error: 'hook-bash-hang', notStarted: true, durationMs: 0, waitedMs: 0 };
   const h = harness({ runner: async () => hung });
   const r = await runReview(h.opts, h.deps);
   assert.equal(r.exit, EXIT.FAILED);
-  assert.match(r.error, /bash on the agent PATH hangs/);
+  assert.match(r.error, /bash hangs in the PowerShell that cursor-agent uses/);
   assert.match(r.error, /2026-11-03-grok-slowdown-investigation\.md/);
   assert.doesNotMatch(r.error, /grok slot/);
   const end = readFileSync(h.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
@@ -1362,6 +1496,169 @@ test('runReview with a bash-hang runner says bash hangs, and leaves the ledger u
   assert.equal(end.exit, 1);
   assert.equal(countRuns(readLedger(h.opts.ledgerPath).entries, { now: NOW + 1 }), 0);
 });
+
+// ---- start spacing: two cursor-agent starts in one second race on ~/.cursor/cli-config.json ----
+
+/** A fake clock: sleep(ms) moves it forward. */
+const fakeClock = (t0 = 1_000_000) => { const c = { t: t0, sleeps: [] }; c.now = () => c.t; c.sleep = async (ms) => { c.sleeps.push(ms); c.t += ms; }; return c; };
+const stampFile = () => path.join(tmp('stamp'), 'cursor-agent-start.json');
+
+// Breaks if the first start waits, or a start after the gap has passed waits.
+test('spaceAgentStart: the first start is immediate, a start after 10 s is immediate', async () => {
+  const file = stampFile();
+  const c = fakeClock();
+  assert.equal((await cr.spaceAgentStart({ file, now: c.now, sleep: c.sleep })).waitedMs, 0);
+  c.t += 10_000;
+  assert.equal((await cr.spaceAgentStart({ file, now: c.now, sleep: c.sleep })).waitedMs, 0);
+  assert.deepEqual(c.sleeps, []);
+});
+
+// Breaks if the gap is not enforced, or is measured from the wrong time: a start 4 s after the last waits the other 6 s.
+test('spaceAgentStart: a start 4 s after the last waits the remaining 6 s', async () => {
+  const file = stampFile();
+  const c = fakeClock();
+  await cr.spaceAgentStart({ file, now: c.now, sleep: c.sleep });
+  c.t += 4000;
+  const r = await cr.spaceAgentStart({ file, now: c.now, sleep: c.sleep });
+  assert.equal(r.waitedMs, 6000);
+  assert.deepEqual(c.sleeps, [6000]);
+});
+
+// Breaks if the stamp is only read after the wait (two callers in the same second would both see "free" and start together).
+test('spaceAgentStart: three starts in the same instant leave 10 s between each', async () => {
+  const file = stampFile();
+  const c = fakeClock();
+  const starts = await Promise.all([1, 2, 3].map(async () => (await cr.spaceAgentStart({ file, now: c.now, sleep: c.sleep })).startAt));
+  starts.sort((a, b) => a - b);
+  assert.deepEqual(starts.map((s) => s - starts[0]), [0, 10_000, 20_000]);
+});
+
+// Breaks if a corrupt stamp, a stamp far in the future, or a held lock throws or blocks every review for hours.
+test('spaceAgentStart: a corrupt stamp, a far-future stamp and a held lock never throw and never wait long', async () => {
+  const c = fakeClock();
+  const bad = stampFile();
+  writeFileSync(bad, '{{{ not json');
+  assert.equal((await cr.spaceAgentStart({ file: bad, now: c.now, sleep: c.sleep })).waitedMs, 0);
+  const future = stampFile();
+  writeFileSync(future, JSON.stringify({ lastStartAt: c.t + 86_400_000 }));
+  assert.equal((await cr.spaceAgentStart({ file: future, now: c.now, sleep: c.sleep })).waitedMs, 0);
+  const held = stampFile();
+  writeFileSync(`${held}.lock`, `${process.pid} held`);
+  const r = await cr.spaceAgentStart({ file: held, now: c.now, sleep: c.sleep, lockOpts: { lockWaitMs: 50 } });
+  assert.equal(r.waitedMs, 0);
+  assert.equal(r.lock, false);
+});
+
+// Breaks if the stamp moves away from the grok slot state (both are machine-wide state in one folder), or ignores the slot file override.
+test('startStampPath sits next to the grok slot state file', () => {
+  assert.equal(cr.startStampPath({ file: 'D:\\s\\grok-slots.json' }, {}), path.join('D:\\s', 'cursor-agent-start.json'));
+  assert.equal(cr.startStampPath({}, { CCV3_GROK_SLOTS_FILE: 'D:\\e\\slots.json' }), path.join('D:\\e', 'cursor-agent-start.json'));
+  assert.equal(cr.startStampPath({}, {}), path.join(os.homedir(), '.claude', 'state', 'cursor-agent-start.json'));
+});
+
+// Breaks if runAgent spawns before it spaces, spaces before it holds the slot (a long slot wait would then void the gap), or skips it with the gate off.
+test('runAgent on win32 takes the slot, then spaces the start, then spawns; the gate off still spaces', async () => {
+  for (const gateEnv of [{}, { CCV3_GROK_GATE: 'off' }]) {
+    const order = [];
+    const gate = async () => { order.push('slot'); return { ok: true, release() { order.push('release'); } }; };
+    const spacer = async () => { order.push('space'); return { waitedMs: 0 }; };
+    const child = fakeChild();
+    const spawnFn = () => { order.push('spawn'); setTimeout(() => child.emit('close', 0), 5); return child; };
+    await runAgentReal(spec(5000), { gate, spacer, preflight: () => ({ ok: true }), platform: 'win32', spawnFn, gateEnv });
+    assert.deepEqual(order, gateEnv.CCV3_GROK_GATE === 'off' ? ['space', 'spawn'] : ['slot', 'space', 'spawn', 'release']);
+  }
+});
+
+// Breaks if the spacing runs off Windows (the cli-config.json rename race is a Windows file-system error) or a throwing spacer stops the run.
+test('runAgent does not space off win32, and a spacer that throws does not stop the run', async () => {
+  let spaced = 0;
+  const run = async (platform, spacer) => {
+    const child = fakeChild();
+    return runAgentReal(spec(5000), { gate: noGate, spacer, preflight: () => ({ ok: true }), platform, spawnFn: () => { setTimeout(() => child.emit('close', 0), 5); return child; }, gateEnv: {}, gateLog: () => {} });
+  };
+  assert.equal((await run('linux', async () => { spaced += 1; return {}; })).status, 0);
+  assert.equal(spaced, 0);
+  assert.equal((await run('win32', async () => { throw new Error('bug'); })).status, 0);
+});
+
+// Breaks if two runAgent calls in one second spawn their agents less than the gap apart (real clock, 80 ms gap, real lock and stamp file).
+test('two runAgent calls at the same instant spawn their agents at least one gap apart', async () => {
+  const file = stampFile();
+  const spacer = (o) => cr.spaceAgentStart({ ...o, file, gapMs: 80 });
+  const spawnAt = [];
+  const run = () => {
+    const child = fakeChild();
+    const spawnFn = () => { spawnAt.push(Date.now()); setTimeout(() => child.emit('close', 0), 5); return child; };
+    return runAgentReal(spec(5000), { gate: noGate, spacer, preflight: () => ({ ok: true }), platform: 'win32', spawnFn, gateEnv: {} });
+  };
+  await Promise.all([run(), run()]);
+  spawnAt.sort((a, b) => a - b);
+  assert.equal(spawnAt.length, 2);
+  assert.ok(spawnAt[1] - spawnAt[0] >= 70, `${spawnAt[1] - spawnAt[0]} ms apart`);
+});
+
+// ---- cli-config.json rename race ----
+
+const EPERM = "EPERM: operation not permitted, rename 'C:\\Users\\dkhay\\.cursor\\cli-config.json.31924.0d2f.tmp' -> 'C:\\Users\\dkhay\\.cursor\\cli-config.json'";
+/** runAgent over a fake child that writes `out`/`err`, then closes with `code` after `afterMs`. */
+async function raceRun({ err = '', out = '', code = 1, afterMs = 5, deps = {} } = {}) {
+  const { gate, log } = spyGate();
+  const child = fakeChild();
+  const spawnFn = () => { setTimeout(() => { if (out) child.stdout.write(out); if (err) child.stderr.write(err); setTimeout(() => child.emit('close', code), 5); }, afterMs); return child; };
+  const r = await runAgentReal(spec(5000), { gate, spacer: noSpacer, preflight: () => ({ ok: true }), platform: 'win32', spawnFn, gateEnv: {}, ...deps });
+  return { r, log };
+}
+
+// Breaks if the early EPERM death is counted as a run: it used no tokens and would eat the weekly cap.
+test('an early non-zero exit with the cli-config.json EPERM rename error is notStarted cli-config-race, and the slot is released', async () => {
+  const { r, log } = await raceRun({ err: `${EPERM}\n` });
+  assert.equal(r.notStarted, true);
+  assert.equal(r.error, 'cli-config-race');
+  assert.equal(r.timedOut, false);
+  assert.equal(log.releases, 1);
+  assert.match(r.stderr, /EPERM/, 'the original text is kept for the report');
+});
+
+test('the EPERM text on stdout counts too', async () => {
+  assert.equal((await raceRun({ out: EPERM })).r.error, 'cli-config-race');
+});
+
+// Breaks if any early failure is called a race: only this error is safe to treat as "never started".
+test('an early failure with another error, or exit 0 with that text, is a normal result', async () => {
+  const other = await raceRun({ err: 'Error: model not available' });
+  assert.equal(other.r.notStarted, undefined);
+  assert.equal(other.r.error, undefined);
+  assert.equal(other.r.status, 1);
+  const ok = await raceRun({ err: EPERM, code: 0 });
+  assert.equal(ok.r.error, undefined);
+  assert.equal(ok.r.status, 0);
+  const otherFile = await raceRun({ err: "EPERM: operation not permitted, rename 'C:\\x\\settings.json.1.tmp' -> 'C:\\x\\settings.json'" });
+  assert.equal(otherFile.r.error, undefined);
+});
+
+// Breaks if the 15 s window is dropped: a run that worked for minutes and then hit the same text really consumed tokens.
+test('the same error after the 15 s window is a normal failure (the window is 15 s)', async () => {
+  assert.equal(cr.CLI_CONFIG_RACE_MS, 15_000);
+  const late = await raceRun({ err: EPERM, afterMs: 60, deps: { raceWindowMs: 20 } });
+  assert.equal(late.r.error, undefined);
+  assert.equal(late.r.status, 1);
+  assert.equal(late.r.notStarted, undefined);
+});
+
+// Breaks if runReview words the race as a crash or counts it against the caps.
+test('runReview with a cli-config-race runner says retry and leaves the ledger uncounted', async () => {
+  const raced = { status: 1, stdout: '', stderr: EPERM, timedOut: false, error: 'cli-config-race', notStarted: true, durationMs: 4000, waitedMs: 0 };
+  const h = harness({ runner: async () => raced });
+  const r = await runReview(h.opts, h.deps);
+  assert.equal(r.exit, EXIT.FAILED);
+  assert.match(r.error, /cli-config-race/);
+  assert.match(r.error, /not counted against the caps/);
+  assert.doesNotMatch(r.error, /grok slot/);
+  const end = readFileSync(h.opts.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))[1];
+  assert.equal(end.notStarted, true);
+  assert.equal(countRuns(readLedger(h.opts.ledgerPath).entries, { now: NOW + 1 }), 0);
+});
+
 
 // ---- tool-stall stop (stream-json) ----
 // Event shape (S18 raw stream, .claude/cache/e2e/2026-11-03-trex-author-S18.raw.json): {"type":"tool_call","subtype":"completed",
@@ -1554,21 +1851,31 @@ test('runReview logs when the bash guard found no Git Bash, and hands the agent 
   assert.equal(h.calls[0].env.CCV3_BASH_GUARD, 'unresolved');
 });
 
-// ---- E2E, no model: the real preflight against the real PATH that buildAgentEnv builds on this machine ----
+// ---- E2E, no model: the real hook scan against the real %USERPROFILE%\.cursor ----
 
-test('E2E: real preflightBash on the real agent PATH exits 0 in under 10 s, and bash is not System32 / WSL', { timeout: 60_000 }, (t) => {
-  if (process.platform !== 'win32') { t.skip('not win32: the System32 WSL bash shim does not exist here'); return; }
+test('E2E: real preflightHooks on the real .cursor passes; it spawns powershell only when a bash hook is enabled', { timeout: 60_000 }, (t) => {
+  if (process.platform !== 'win32') { t.skip('not win32: cursor-agent hooks run in Windows PowerShell only on Windows'); return; }
+  let spawned = 0;
+  const spawnSyncFn = (...a) => { spawned += 1; return spawnSync(...a); };
+  const t0 = Date.now();
+  const r = cr.preflightHooks({ env: buildAgentEnv(process.env, 'win32'), spawnSyncFn });
+  console.log(`E2E hooks: ${r.hooks.length} bash hooks found, ok=${r.ok}, spawned=${spawned}, ${Date.now() - t0} ms${r.skipped ? `, ${r.skipped}` : ''}${r.reason ? `, ${r.reason}` : ''}`);
+  for (const h of r.hooks) console.log(`E2E hook: ${h.file}: ${h.command}`);
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(spawned, r.hooks.length === 0 ? 0 : 1, 'no bash hook: no spawn; any bash hook: exactly one probe');
+  if (r.hooks.length === 0) assert.match(r.skipped, /0 bash hooks found/);
+});
+
+// Breaks if buildAgentEnv stops putting Git Bash first: a hook's PowerShell then finds System32 WSL bash again (uname says Linux, or it hangs).
+test('E2E: PowerShell with buildAgentEnv(process.env) runs bash -c "uname -s" as Git Bash (MINGW) within 10 s', { timeout: 60_000 }, (t) => {
+  if (process.platform !== 'win32') { t.skip('not win32: the hook shell is Windows PowerShell'); return; }
   if (cr.resolveGitBashDir(process.env) === null) { t.skip('no Git for Windows found on this PC: nothing to put first on PATH'); return; }
   const env = buildAgentEnv(process.env, 'win32');
   const t0 = Date.now();
-  const r = cr.preflightBash(env);
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'bash -c "uname -s"'], { env, encoding: 'utf8', windowsHide: true, timeout: 10_000, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'ignore'] });
   const ms = Date.now() - t0;
-  console.log(`E2E preflight: bash=${r.bash} ok=${r.ok} ${ms} ms`);
-  assert.equal(r.ok, true, r.reason);
+  console.log(`E2E uname -s in PowerShell: "${String(r.stdout).trim()}" status=${r.status} ${ms} ms`);
+  assert.equal(r.error, undefined, 'no time-out: ' + r.error?.message);
+  assert.match(String(r.stdout), /MINGW/);
   assert.ok(ms < 10_000, `took ${ms} ms`);
-  assert.doesNotMatch(r.bash.toLowerCase(), /\\system32\\|\\sysnative\\|\\windowsapps\\/, `bash resolved to ${r.bash}`);
-  // What a hook runs is bare `bash`; WSL says Linux, Git Bash says MINGW64_NT or MSYS_NT.
-  const u = spawnSync('bash', ['-c', 'uname -s'], { env, encoding: 'utf8', windowsHide: true, timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] });
-  console.log(`E2E uname -s: ${String(u.stdout).trim()}`);
-  assert.match(String(u.stdout), /^(MINGW|MSYS)/);
 });

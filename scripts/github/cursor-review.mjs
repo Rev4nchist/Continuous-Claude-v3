@@ -17,6 +17,10 @@
  *      A time-out (default 2400 s: grok output speed halved under load on 2026-11-02, so a ~40k-token answer took ~1600 s) stops that pid and its whole process tree.
  *      A machine-wide gate (lib/grok-slots.mjs) lets at most 2 runs go at once across all sessions; a run waits up to 60 min for a
  *      slot, and the time-out starts after it. CCV3_GROK_GATE=off skips the gate; CCV3_GROK_MAX_CONCURRENT changes the 2.
+ *      On Windows it also (a) puts Git Bash first on the agent PATH (buildAgentEnv: hooks get that PATH, so a hook's `bash` is not the
+ *      System32 WSL shim) and tests, before it starts, that `bash` runs in PowerShell with that env when an enabled hook uses bash (preflightHooks), (b) keeps 10 s between cursor-agent starts
+ *      machine-wide (spaceAgentStart: two starts in one second race on ~/.cursor/cli-config.json) and (c) stops a run whose first 3 tool
+ *      calls each take 30 s or more (tool-stall).
  *   5. Parses the answer (a final ```json block, else the Markdown headings Cursor writes) and writes, in .claude/cache/e2e/:
  *        <date>-cursor-review-<ref>-<time>.findings.json   the structured findings
  *        <date>-cursor-review-<ref>-<time>.summary.txt     a short text summary
@@ -387,6 +391,7 @@ const samePathEntry = (a, b) => {
  * PATH guard (Windows only): the Git Bash folder (resolveGitBashDir) becomes the FIRST PATH entry, so a plugin hook that runs `bash`
  * gets Git Bash and not C:\Windows\system32\bash.exe, the WSL shim (2026-11-03: with WSL frozen every hook waited 60 s and every tool
  * call took 61 s; .claudedocs/2026-11-03-grok-slowdown-investigation.md). The PATH key keeps its casing and the folder is listed once.
+ * Live test 2026-11-03 (hook `command -v bash`, one composer-2.5 run): Git Bash first on PATH -> the hook ran /usr/bin/bash (MINGW64), glob tool call 4.3 s; System32 WSL bash first and frozen -> hook killed at its 20 s time-out, tool call 21.2 s. So hooks get the PATH given to cursor-agent.
  * CCV3_BASH_GUARD in the result is that folder, or 'unresolved' when no Git Bash exists (PATH is then unchanged; the caller can log it).
  * Does not change `base`. `exists` is injected for tests.
  */
@@ -411,30 +416,149 @@ export function buildAgentEnv(base = process.env, platform = process.platform, {
   return env;
 }
 
-/** The text of a run that did not start because `bash` on the agent PATH hangs. */
-export const BASH_HANG_MSG = 'bash on the agent PATH hangs (WSL?); see .claudedocs/2026-11-03-grok-slowdown-investigation.md';
-export const BASH_PREFLIGHT_MS = 10_000;
+// ---------- hook-shell preflight ----------
+
+const GROK_REPORT = '.claudedocs/2026-11-03-grok-slowdown-investigation.md';
+/** The text of a run that did not start because a Cursor hook runs `bash` and bash hangs where the hook runs. */
+export const HOOK_BASH_MSG = `a Cursor hook runs bash and bash hangs in the PowerShell that cursor-agent uses, with the PATH given to the agent (WSL?); see ${GROK_REPORT}`;
+export const HOOK_PROBE_MS = 10_000;
+
+/** The first word of a command line; a quoted first word may hold spaces ("C:\Program Files\Git\bin\bash.exe" x.sh). */
+function firstWord(segment) {
+  const m = segment.trim().match(/^"([^"]*)"|^'([^']*)'|^(\S+)/);
+  return m ? (m[1] ?? m[2] ?? m[3]) : '';
+}
+
+/** True when a hook command line runs bash, sh or wsl: the first word of the line or of any part after `|`, `&&`, `||`, `;`. */
+export function isBashCommand(command) {
+  if (typeof command !== 'string') return false;
+  return command.split(/&&|\|\||[|;&]/).some((seg) => {
+    const name = firstWord(seg).split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+    return name === 'bash' || name === 'sh' || name === 'wsl';
+  });
+}
+
+const readJson = (fs, file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+const listDir = (fs, dir) => { try { return fs.readdirSync(dir).map(String); } catch { return []; } };
+
+/** Every string `command` in a hooks JSON, at any depth (Cursor and Claude layouts nest it differently). */
+function commandsIn(node, out = []) {
+  if (Array.isArray(node)) node.forEach((n) => commandsIn(n, out));
+  else if (node && typeof node === 'object') {
+    if (typeof node.command === 'string') out.push(node.command);
+    Object.values(node).forEach((n) => commandsIn(n, out));
+  }
+  return out;
+}
 
 /**
- * Runs the first `bash` on the env's PATH as `bash -c "exit 0"`: hidden, SIGKILL after 10 s, no pipes (a stuck grandchild cannot hold
- * one open past the time-out). A Cursor plugin hook runs bare `bash` with this PATH, so this is what the hook would get. A hung WSL
- * shim times out; Git Bash exits at once. No bash on the PATH is ok (skipped): a missing bash fails fast and cannot stall a hook.
- * { ok, bash, ms, reason? | skipped? }. deps are for tests.
+ * The bash hook commands cursor-agent would run: [{ file, command }]. Sources: <home>\.cursor\hooks.json, and for each plugin folder
+ * <home>\.cursor\plugins\cache\<market>\<plugin>\<hash>\ the file that .cursor-plugin\plugin.json names under "hooks" (a string path, or
+ * an inline object). Only that file is read. A renamed or deleted hooks file reads as no hooks. Reads only; `fs` = { readdirSync, readFileSync }.
  */
-export function preflightBash(env = process.env, { spawnSyncFn = spawnSync, exists = existsSync, platform = process.platform, timeoutMs = BASH_PREFLIGHT_MS } = {}) {
-  const win = platform === 'win32';
-  const join = win ? path.win32.join : path.join;
-  const key = pathKey(env);
-  const dirs = (key ? String(env[key]).split(win ? ';' : path.delimiter) : []).map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean);
-  const bash = dirs.map((d) => join(d, win ? 'bash.exe' : 'bash')).find((f) => exists(f));
-  if (!bash) return { ok: true, bash: null, ms: 0, skipped: 'no bash on the PATH' };
+export function findBashHooks({ home, fs = { readdirSync, readFileSync } }) {
+  const w = path.win32;
+  const cursor = w.join(home, '.cursor');
+  const sources = [{ file: w.join(cursor, 'hooks.json'), json: undefined }];
+  const cache = w.join(cursor, 'plugins', 'cache');
+  for (const market of listDir(fs, cache)) {
+    for (const plugin of listDir(fs, w.join(cache, market))) {
+      for (const hash of listDir(fs, w.join(cache, market, plugin))) {
+        const dir = w.join(cache, market, plugin, hash);
+        const manifestFile = w.join(dir, '.cursor-plugin', 'plugin.json');
+        const hooks = readJson(fs, manifestFile)?.hooks;
+        if (typeof hooks === 'string') sources.push({ file: w.resolve(dir, hooks), json: undefined });
+        else if (hooks && typeof hooks === 'object') sources.push({ file: manifestFile, json: hooks });
+      }
+    }
+  }
+  const found = [];
+  for (const { file, json } of sources) {
+    for (const command of commandsIn(json ?? readJson(fs, file))) if (isBashCommand(command)) found.push({ file, command });
+  }
+  return found;
+}
+
+/**
+ * Tests the shell a Cursor hook really gets. cursor-agent runs a hook through `powershell.exe -ExecutionPolicy Bypass -NonInteractive -File
+ * %TEMP%\ps-script-<uuid>.ps1`, and that PowerShell gets cursor-agent's own env (its process.env plus hook variables), so a hook's `bash` is
+ * the first bash on the PATH we pass to cursor-agent (live test 2026-11-03, see buildAgentEnv). With Git Bash first it is Git Bash; if no
+ * Git Bash was found, it can be C:\Windows\system32\bash.exe, which starts wsl.exe and hangs when WSL is frozen. This runs that case
+ * before the agent starts. `env` must be the AGENT env (the env after buildAgentEnv that is passed to cursor-agent). (a) findBashHooks;
+ * (b) none: ok at once, nothing spawned; (c) some: `powershell.exe -NoProfile -NonInteractive -Command 'bash -c "exit 0"'` with `env`,
+ * hidden, SIGKILL after 10 s, no pipes (a stuck wsl.exe grandchild cannot hold one open). A time-out, a non-zero exit or a spawn error
+ * fails. win32 only; other platforms pass.
+ * { ok, hooks, ms, skipped? | reason? }; the reason names the first hook file and the report. deps are for tests.
+ */
+export function preflightHooks({ env = process.env, home, platform = process.platform, fs, spawnSyncFn = spawnSync, timeoutMs = HOOK_PROBE_MS } = {}) {
+  if (platform !== 'win32') return { ok: true, hooks: [], ms: 0, skipped: 'not win32' };
+  const hooks = findBashHooks({ home: home ?? env.USERPROFILE ?? os.homedir(), fs });
+  if (hooks.length === 0) return { ok: true, hooks, ms: 0, skipped: '0 bash hooks found' };
   const t0 = Date.now();
-  const r = spawnSyncFn(bash, ['-c', 'exit 0'], { env, windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL', stdio: 'ignore' });
+  const r = spawnSyncFn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'bash -c "exit 0"'], { env, windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL', stdio: 'ignore' });
   const ms = Date.now() - t0;
-  if (r.error?.code === 'ETIMEDOUT') return { ok: false, bash, ms, reason: `bash -c "exit 0" timed out after ${Math.round(timeoutMs / 1000)} s (${bash})` };
-  if (r.error) return { ok: false, bash, ms, reason: `bash -c "exit 0" failed to run: ${r.error.message} (${bash})` };
-  if (r.status !== 0) return { ok: false, bash, ms, reason: `bash -c "exit 0" ended with exit ${r.status} (${bash})` };
-  return { ok: true, bash, ms };
+  const fail = (why) => ({ ok: false, hooks, ms, reason: `bash -c "exit 0" in Windows PowerShell with the agent PATH ${why}; hook ${hooks[0].file}${hooks.length > 1 ? ` (+${hooks.length - 1} more)` : ''}: ${hooks[0].command}; report ${GROK_REPORT}` });
+  if (r.error?.code === 'ETIMEDOUT') return fail(`timed out after ${Math.round(timeoutMs / 1000)} s`);
+  if (r.error) return fail(`failed to run: ${r.error.message}`);
+  if (r.status !== 0) return fail(`ended with exit ${r.status}`);
+  return { ok: true, hooks, ms };
+}
+
+// ---------- start spacing and the cli-config race ----------
+
+/** Least time between two cursor-agent starts, machine-wide. */
+export const START_GAP_MS = 10_000;
+/** An agent that dies this fast with the cli-config.json rename error never ran. */
+export const CLI_CONFIG_RACE_MS = 15_000;
+const CLI_CONFIG_RACE_RE = /EPERM: operation not permitted, rename .*cli-config\.json/;
+/** A stamp this far ahead of the clock is junk (a bad clock or file), not a queue. */
+const STAMP_FUTURE_LIMIT_MS = 10 * 60_000;
+
+const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The start stamp file: next to the grok slot state (opts.file, CCV3_GROK_SLOTS_FILE, else ~/.claude/state), so both are machine-wide state in one folder. */
+export function startStampPath(gateOpts = {}, env = process.env) {
+  const slots = gateOpts.file || env.CCV3_GROK_SLOTS_FILE || path.join(os.homedir(), '.claude', 'state', 'grok-slots.json');
+  return path.join(path.dirname(slots), 'cursor-agent-start.json');
+}
+
+/**
+ * Two cursor-agent processes started in the same second both rewrite ~/.cursor/cli-config.json; one dies at once with EPERM on the rename
+ * (session 5cbfb659). So starts are queued: under withLock (lib/file-lock.mjs) on the stamp file the caller books the first start time at
+ * least `gapMs` after the last booked one, then sleeps the rest OUTSIDE the lock. Each caller books a later time, so starts in one instant
+ * leave gapMs between them. Never throws: a lock miss or a file error returns { waitedMs: 0, lock: false } (a broken stamp must not stop
+ * reviews). { waitedMs, startAt, lock? }. deps (tests): now, sleep, lockOpts.
+ */
+export async function spaceAgentStart({ file, gapMs = START_GAP_MS, now = Date.now, sleep = realSleep, lockOpts } = {}) {
+  let booked;
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    booked = withLock(file, lockOpts ?? {}, () => {
+      const t = now();
+      let last = -Infinity;
+      try {
+        const v = Number(JSON.parse(readFileSync(file, 'utf8')).lastStartAt);
+        if (Number.isFinite(v) && v <= t + STAMP_FUTURE_LIMIT_MS) last = v;
+      } catch { /* a missing or corrupt stamp means no earlier start */ }
+      const startAt = Math.max(t, last + gapMs);
+      writeFileSync(file, JSON.stringify({ lastStartAt: startAt }));
+      return { t, startAt };
+    });
+  } catch (err) { return { waitedMs: 0, lock: false, detail: String(err?.message ?? err) }; }
+  if (booked?.ok === false) return { waitedMs: 0, lock: false, detail: booked.detail };
+  const waitedMs = booked.startAt - booked.t;
+  if (waitedMs > 0) await sleep(waitedMs);
+  return { waitedMs, startAt: booked.startAt };
+}
+
+/**
+ * An agent that exits non-zero within `windowMs` with the cli-config.json rename error lost the start race: it never ran, so it is a
+ * not-started result (error 'cli-config-race'), like a missing slot, and the ledger does not count it.
+ */
+function markCliConfigRace(run, windowMs) {
+  if (typeof run.status !== 'number' || run.status === 0 || run.timedOut || !(run.durationMs <= windowMs)) return run;
+  if (!CLI_CONFIG_RACE_RE.test(`${run.stderr}\n${run.stdout}`)) return run;
+  return { ...run, notStarted: true, error: 'cli-config-race', toolStats: null };
 }
 
 // ---------- tool-stall detector (stream-json) ----------
@@ -523,23 +647,34 @@ function defaultKiller(pid) {
  * { status: null, error: 'grok-busy', timedOut: false, notStarted: true, durationMs: 0, waitedMs }. Every result has waitedMs (the
  * wait for the slot) and, when the agent started, spawnedAt (epoch ms); durationMs counts the agent only. CCV3_GROK_GATE=off skips the gate. A gate that cannot reach its state file
  * (reason 'lock', or a throw) is logged and the run goes ahead without a slot: a broken state file must not stop every review.
- * On win32 it first runs preflightBash with the spec env, before the gate and before any spawn (also with the gate off). When bash hangs
- * it resolves at once, with no slot and no spawn, like the busy result: { status: null, error: 'bash-hang', notStarted: true,
- * timedOut: false, durationMs: 0, waitedMs: 0, stderr: BASH_HANG_MSG + reason }. A preflight that throws is logged and skipped.
+ * On win32 it first runs preflightHooks({ env: spec.env }) with the agent env (hooks get the PATH we pass to cursor-agent), before
+ * the gate and before any spawn (also with the gate off). When a hook's bash hangs it resolves at once, with no slot and no spawn, like the
+ * busy result: { status: null, error: 'hook-bash-hang', notStarted: true, timedOut: false, durationMs: 0, waitedMs: 0, stderr: HOOK_BASH_MSG
+ * + reason }. A preflight that throws is logged and skipped.
+ * On win32, after the slot is taken and just before the spawn (also with the gate off), it books a start time at least START_GAP_MS after
+ * the last cursor-agent start on the machine (spaceAgentStart) and waits for it; the run time-out starts after. Two agents that start in one
+ * second race on ~/.cursor/cli-config.json. A spacer that throws is logged and skipped. An agent that exits non-zero within
+ * CLI_CONFIG_RACE_MS with that rename error (EPERM) is returned as { notStarted: true, error: 'cli-config-race' } after the slot is released.
  * In stream-json mode a stall (see spawnAgent) ends the run with status 1, error 'tool-stall' and stallMs. The result has toolStats
  * ({ toolCalls, toolWaitMs, maxToolMs }; null in json mode).
- * deps: { spawnFn, killer, killGraceMs, gate = acquireGrokSlot, gateOpts, gateEnv = process.env, gateLog, preflight = preflightBash,
- * platform = process.platform }. The slot lives until the run time-out + killGraceMs + 60 s (gateOpts.ttlMs overrides) and records
+ * deps: { spawnFn, killer, killGraceMs, gate = acquireGrokSlot, gateOpts, gateEnv = process.env, gateLog, preflight = preflightHooks,
+ * spacer = spaceAgentStart, raceWindowMs = CLI_CONFIG_RACE_MS, platform = process.platform }. The slot lives until the run time-out + killGraceMs + 60 s (gateOpts.ttlMs overrides) and records
  * the agent pid. Never throws.
  */
 export async function runAgent(spec, deps = {}) {
-  const { gate = acquireGrokSlot, gateOpts = {}, gateEnv = process.env, gateLog = (m) => process.stderr.write(`${m}\n`), preflight = preflightBash, platform = process.platform, ...spawnDeps } = deps;
+  const { gate = acquireGrokSlot, gateOpts = {}, gateEnv = process.env, gateLog = (m) => process.stderr.write(`${m}\n`), preflight = preflightHooks, spacer = spaceAgentStart, raceWindowMs = CLI_CONFIG_RACE_MS, platform = process.platform, ...spawnDeps } = deps;
   if (platform === 'win32') {
     let pf = { ok: true };
-    try { pf = await preflight(spec.env ?? process.env); } catch (err) { gateLog(`bash preflight: not usable (${err?.message ?? err}); running without it`); }
-    if (!pf.ok) return { status: null, stdout: '', stderr: `${BASH_HANG_MSG}: ${pf.reason ?? 'preflight failed'}`, timedOut: false, error: 'bash-hang', notStarted: true, durationMs: 0, waitedMs: 0, toolStats: null };
+    try { pf = await preflight({ env: spec.env ?? process.env }); } catch (err) { gateLog(`hook preflight: not usable (${err?.message ?? err}); running without it`); }
+    if (!pf.ok) return { status: null, stdout: '', stderr: `${HOOK_BASH_MSG}: ${pf.reason ?? 'preflight failed'}`, timedOut: false, error: 'hook-bash-hang', notStarted: true, durationMs: 0, waitedMs: 0, toolStats: null };
   }
-  if (String(gateEnv.CCV3_GROK_GATE ?? '').trim().toLowerCase() === 'off') return { waitedMs: 0, ...(await spawnAgent(spec, spawnDeps)) };
+  const launch = async (extra = {}) => {
+    if (platform === 'win32') {
+      try { await spacer({ file: startStampPath(gateOpts, gateEnv) }); } catch (err) { gateLog(`start spacing: not usable (${err?.message ?? err}); starting now`); }
+    }
+    return markCliConfigRace(await spawnAgent(spec, { ...spawnDeps, ...extra }), raceWindowMs);
+  };
+  if (String(gateEnv.CCV3_GROK_GATE ?? '').trim().toLowerCase() === 'off') return { waitedMs: 0, ...(await launch()) };
   let slot;
   const ttlMs = spec.timeoutMs + (spawnDeps.killGraceMs ?? KILL_GRACE_MS) + SLOT_MARGIN_MS;
   try { slot = await gate({ ttlMs, ...gateOpts }); } catch (err) { slot = { ok: false, reason: 'lock', detail: String(err?.message ?? err) }; }
@@ -549,7 +684,7 @@ export async function runAgent(spec, deps = {}) {
   }
   if (!slot.ok) gateLog(`grok gate: not usable (${slot.reason}: ${slot.detail}); running without a slot`);
   const onSpawn = (pid) => { try { slot.attach?.(pid); } catch { /* the entry then follows this process only, and expires */ } };
-  try { return { waitedMs: slot.waitedMs ?? 0, ...(await spawnAgent(spec, { ...spawnDeps, onSpawn })) }; } finally {
+  try { return { waitedMs: slot.waitedMs ?? 0, ...(await launch({ onSpawn })) }; } finally {
     if (slot.ok) { try { await slot.release(); } catch { /* release never rejects; a failure here must not hide the result */ } }
   }
 }
@@ -853,7 +988,8 @@ export async function runReview(opts, deps = {}) {
   const parsed = parseReviewOutput(run.stdout, { expectModel: m.model });
 
   let error = null;
-  if (run.notStarted && run.error === 'bash-hang') error = `${run.stderr?.startsWith(BASH_HANG_MSG) ? run.stderr.trim() : BASH_HANG_MSG}; the agent did not start (not counted against the caps)`;
+  if (run.notStarted && run.error === 'hook-bash-hang') error = `${run.stderr?.startsWith(HOOK_BASH_MSG) ? run.stderr.trim() : HOOK_BASH_MSG}; the agent did not start (not counted against the caps)`;
+  else if (run.notStarted && run.error === 'cli-config-race') error = `cli-config-race: cursor-agent died after ${Math.round((run.durationMs ?? 0) / 1000)} s on the ~/.cursor/cli-config.json rename (EPERM) because another cursor-agent started in the same second; the agent did not run (not counted against the caps); start it again`;
   else if (run.notStarted) error = `no grok slot came free in ${Math.round((run.waitedMs ?? 0) / 60_000)} min; the agent did not start (not counted against the caps)`;
   else if (run.timedOut) error = `TIMED OUT after ${Math.round(timeoutMs / 1000)} s: the agent and its process tree were stopped; no findings were read`;
   else if (run.error === 'tool-stall') error = `tool-stall: the first ${STALL_CALLS} successful tool calls each took ${STALL_MS / 1000} s or more (${(run.stallMs ?? []).join(', ')} ms); the agent and its process tree were stopped. See .claudedocs/2026-11-03-grok-slowdown-investigation.md`;
