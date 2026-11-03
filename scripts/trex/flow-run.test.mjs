@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { classifyExec } from './env.mjs';
 import { runFlow } from './flow-run.mjs';
 
 const PS1 = ['pwsh', '-NoProfile', '-File', 'scripts/ok.ps1'];
@@ -114,10 +115,10 @@ const containerFlow = (checks) => ({
 });
 
 // Breaks if: an OOM kill (exec result oom:true, code 137) reads as a Fail, which would make a bench row look like a fire.
-test('OOM: an exec result with oom:true blocks the flow at stage start and is not retried', async () => {
+test('OOM: a real classifyExec early-137 result blocks the flow at stage start and is not retried', async () => {
   let runs = 0;
   const ctx = containerCtx(null);
-  ctx.exec = async () => { runs += 1; return { code: 137, stdout: '', stderr: '', timedOut: false, oom: true }; };
+  ctx.exec = async () => { runs += 1; return classifyExec({ code: 137, stdout: '', stderr: '', timedOut: false }, 60, 5000); };
   const out = await runFlow(containerFlow([{ exit: 137 }]), ctx);
   assert.equal(out.state, 'blocked');
   assert.equal(out.reason, 'start');

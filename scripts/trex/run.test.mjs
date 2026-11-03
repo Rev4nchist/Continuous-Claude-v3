@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { classifyRun } from '../checks/prove-check.mjs';
-import { EnvError } from './env.mjs';
+import { EnvError, classifyExec } from './env.mjs';
 import { applyStart, foldAttempts, runFlows } from './flow-run.mjs';
 import { acquireLock, lockPathFor, unlockRun } from './lock.mjs';
 import { UsageError, main, parseArgs, resolveHead, withDefaults } from './run.mjs';
@@ -445,6 +445,58 @@ test('child pids reach the report and the pids.json sidecar at spawn time', asyn
   assert.deepEqual(JSON.parse(readFileSync(path.join(evidence, 'pids.json'), 'utf8')).pids.map((e) => e.pid ?? e), [4242]); // an entry is a bare pid or { pid, started }
 });
 
+test('pids.json is pruned: a pid reported by envDeps.onExit leaves the sidecar but stays in the report', async () => {
+  // Breaks when onExit is not wired next to onSpawn in withDefaults: the sidecar keeps every exited pid.
+  const h = harness();
+  const startInner = h.deps.startEnv;
+  h.deps.startEnv = async (o, envDeps) => { envDeps.onSpawn(4242); envDeps.onSpawn(4343); envDeps.onExit(4242); return startInner(o, envDeps); };
+  const evidence = path.join(h.root, 'ev');
+  assert.equal(await main(SIM(evidence), h.deps), 0);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(evidence, 'pids.json'), 'utf8')).pids.map((e) => e.pid), [4343]);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8')).pids, [4242, 4343]);
+});
+
+test('withDefaults: the host spawn and the docker deps hand onExit to the child runner', async () => {
+  // Breaks when hostSpawn drops onExit: a host child that exits stays in pids.json.
+  const seen = [];
+  const d = withDefaults({ runChild: async (cmd, args, o) => { o.onSpawn(77); o.onExit(77); seen.push(o); return { code: 0 }; } });
+  const exited = [];
+  d.recorder = { onSpawn: () => {}, onExit: (pid) => exited.push(pid) };
+  await d.hostSpawn({})(['x'], {});
+  assert.deepEqual(exited, [77]);
+  assert.equal(typeof d.envDeps.onExit, 'function');
+});
+
+test('main: a lock whose pid is alive but started after the lock was written is stale and the run proceeds', async () => {
+  // Breaks when run.mjs does not pass processStart to acquireLock: a reused pid then holds the lock for good.
+  const h = harness({ alive: () => true });
+  mkdirSync(path.dirname(h.lockFile), { recursive: true });
+  writeFileSync(h.lockFile, JSON.stringify({ pid: 4242, started: '2026-11-02T10:00:00.000Z', argv: [] }));
+  h.deps.processStart = () => Date.parse('2026-11-02T11:00:00.000Z');
+  assert.equal(await main(SIM(path.join(h.root, 'ev')), h.deps), 0);
+});
+
+test('main --unlock: a lock whose pid was reused is removed', async () => {
+  // Breaks when run.mjs does not pass processStart to unlockRun.
+  const h = harness({ alive: () => true });
+  mkdirSync(path.dirname(h.lockFile), { recursive: true });
+  writeFileSync(h.lockFile, JSON.stringify({ pid: 4242, started: '2026-11-02T10:00:00.000Z', runId: 'old' }));
+  h.deps.processStart = () => Date.parse('2026-11-02T11:00:00.000Z');
+  assert.equal(await main(['--unlock'], h.deps), 0);
+  assert.equal(existsSync(h.lockFile), false);
+});
+
+test('main: the lock records a real ISO start time of this run', async () => {
+  // Breaks when the lock info `started` is not an ISO time: ownerRuns then cannot compare it with the process start.
+  const h = harness();
+  const startInner = h.deps.startEnv;
+  let body;
+  h.deps.startEnv = async (o, e) => { body = JSON.parse(readFileSync(h.lockFile, 'utf8')); return startInner(o, e); };
+  assert.equal(await main(SIM(path.join(h.root, 'ev')), h.deps), 0);
+  assert.equal(new Date(body.started).toISOString(), body.started);
+  assert.equal(body.pid, process.pid);
+});
+
 // ---------- review fixes F1 ----------
 
 test('--flows-dir allows only .trex/flows and scripts/trex/bench/flows/<S|N|K group>', () => {
@@ -465,18 +517,6 @@ test('main: a --flows-dir outside the allow-list exits 2 and starts nothing', as
   assert.equal(h.calls.startEnv, 0);
 });
 
-test('a host flow run passes imageSha to prepareHost, so it can be checked for merge', async () => {
-  // Breaks when runHost drops imageSha: an unmerged image config would then pass the host check.
-  const hostFlow = 'id: host-demo\ntitle: t\ndescription: d\ngoal: g\npaths: [a/b.ts]\ndriver: mod-event\nprofile: host\nsteps:\n  - action: {test: demo}\n    checks: [{text: ok, exit: 0}]\n';
-  const h = harness({ files: { '.trex/flows/host.yaml': hostFlow } });
-  let seen;
-  h.deps.prepareHost = async (opts) => { seen = opts; return { skipped: { reason: 'host_unmerged' } }; };
-  const rc = await main(['--simulate', 'aaaaaaaa', '--flows-sha', 'f1f1f1f1', '--image-sha', 'e2e2e2e2', '--evidence', path.join(h.root, 'ev')], h.deps);
-  assert.ok(seen, `exit ${rc}: ${h.lines.join(' / ')}`);
-  assert.equal(seen.imageSha, sha('e2e2e2e2'));
-  assert.equal(seen.flowsSha, sha('f1f1f1f1'));
-});
-
 test('an env that saw an OOM kill (exit 137 before the budget) gives an oom blocker and exit 5', async () => {
   // Breaks when run.mjs ignores env.oomHits: a killed process would grade as a plain failed check.
   const h = harness();
@@ -485,6 +525,22 @@ test('an env that saw an OOM kill (exit 137 before the budget) gives an oom bloc
   assert.equal(await main(SIM(evidence), h.deps), 5);
   const report = JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8'));
   assert.equal(report.blockers[0].stage, 'oom');
+});
+
+test('OOM end to end: an early exit 137 from the real classifyExec is Blocked, never `not ok`, and exits 5', async () => {
+  // Breaks when classifyExec and toStepResult disagree on the OOM shape: the step then grades failed/exit_mismatch and prints `not ok`.
+  const h = harness();
+  const evidence = path.join(h.root, 'ev');
+  h.deps.startEnv = async () => {
+    const env = { project: 'p', digest: {}, oomHits: 0 };
+    const raw = fakeExec(() => classifyExec(done('', 137), 60, 5000), []);
+    env.exec = async (argv, o) => { const res = await raw(argv, o); if (res.oom === true) env.oomHits += 1; return res; };
+    return env;
+  };
+  assert.equal(await main(SIM(evidence), h.deps), 5);
+  assert.ok(!h.lines.some((l) => l.includes('not ok')), h.lines.join(' / '));
+  const flow = JSON.parse(readFileSync(path.join(evidence, 'report.json'), 'utf8')).flows[0];
+  assert.equal(flow.state, 'blocked');
 });
 
 test('withDefaults: the default git does not pass ANTHROPIC_API_KEY to the git child', () => {

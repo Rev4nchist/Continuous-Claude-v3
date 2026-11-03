@@ -47,7 +47,7 @@ export class EnvError extends Error {
   }
 }
 
-/** The default deps. `onSpawn(pid)` reaches every docker and pipe child, so a caller can keep a pid sidecar (spec 13.3). */
+/** The default deps. `onSpawn(pid)` and `onExit(pid)` reach every docker and pipe child, so a caller can keep a pid sidecar (spec 13.3). */
 export function resolveDeps(deps = {}) {
   const cwd = deps.cwd ?? process.cwd();
   const bin = deps.bin ?? dockerBin();
@@ -55,8 +55,8 @@ export function resolveDeps(deps = {}) {
     cwd,
     bin,
     git: makeTrexGit(cwd),
-    docker: (args, opts = {}) => runChild(bin, args, { onSpawn: deps.onSpawn, ...opts }),
-    pipe: (a, b, opts = {}) => pipeChildren(a, b, { onSpawn: deps.onSpawn, ...opts }),
+    docker: (args, opts = {}) => runChild(bin, args, { onSpawn: deps.onSpawn, onExit: deps.onExit, ...opts }),
+    pipe: (a, b, opts = {}) => pipeChildren(a, b, { onSpawn: deps.onSpawn, onExit: deps.onExit, ...opts }),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     mkdir: mkdirSync,
     clock: () => Date.now(),
@@ -311,12 +311,12 @@ function hasEntries(d, dest) {
 /**
  * Reads a docker exec result against its budget. `timeout -s KILL` inside the container fires before the
  * docker CLI timer, so a hang comes back as 137 (or 124) with timedOut false. After the full budget that is
- * a time-out. An earlier 137 is the kernel OOM killer, marked reason 'oom_killed'.
+ * a time-out. An earlier 137 is the kernel OOM killer, marked oom:true (the field toStepResult reads) and reason 'oom_killed'.
  */
 export function classifyExec(res, timeoutSec, elapsedMs) {
   if (res.timedOut || (res.code !== 137 && res.code !== 124)) return res;
   if (elapsedMs >= timeoutSec * 1000) return { ...res, timedOut: true };
-  return res.code === 137 ? { ...res, reason: 'oom_killed' } : res;
+  return res.code === 137 ? { ...res, oom: true, reason: 'oom_killed' } : res;
 }
 
 /** One exec in the app container. It counts OOM kills on the env, so the runner can report a blocker. */
@@ -327,7 +327,7 @@ async function execIn(ctx, env, argv, o) {
     stdin: o.stdin, timeoutMs: ((o.timeoutSec ?? 60) + 15) * 1000,
   });
   const out = classifyExec(res, o.timeoutSec ?? 60, ctx.d.clock() - t0);
-  if (out.reason === 'oom_killed') env.oomHits += 1;
+  if (out.oom === true) env.oomHits += 1;
   return out;
 }
 
@@ -412,14 +412,15 @@ export function isMerged(git, head, ref = 'fork/main') {
 }
 
 /**
- * Prepares a host-profile run. Host flows never run PR code or PR flows: head, flowsSha and imageSha
- * (when given) must all be merged, or the run is skipped host_unmerged.
+ * Prepares a host-profile run. Host flows never run PR code or PR flows: head and flowsSha must both be merged,
+ * or the run is skipped host_unmerged. imageSha is not checked: host flows never use the image, and spec 13.3 lets
+ * --image-sha carry an unmerged post-freeze T1 fix.
  * Otherwise it unpacks the head tree and the flowsSha overlay under <evidenceDir>/host-tree.
  * Returns { treeDir, env } with a stripped env, or { skipped }.
  */
-export async function prepareHost({ head, flowsSha, imageSha, evidenceDir, flowsDir, ref }, deps = {}) {
+export async function prepareHost({ head, flowsSha, evidenceDir, flowsDir, ref }, deps = {}) {
   const d = resolveDeps(deps);
-  const shas = new Set([head, flowsSha, imageSha].filter(Boolean));
+  const shas = new Set([head, flowsSha]);
   if (![...shas].every((sha) => isMerged(d.git, sha, ref))) return { skipped: { reason: 'host_unmerged' } };
   const treeDir = path.join(evidenceDir, 'host-tree');
   await archiveInto(head, [], treeDir, d);

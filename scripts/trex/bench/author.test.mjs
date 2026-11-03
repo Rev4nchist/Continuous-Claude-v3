@@ -6,9 +6,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import os from 'node:os';
 import path from 'node:path';
 import {
-  BENCH_CAP, GROUPS, authorGroup, benchRuns, blobAt, freeze, hostFlowDigest, leakScan, lintFlow, main, mapNegatives, parseAuthorOutput,
+  BENCH_CAP, GROUPS, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan, lintFlow, main, mapNegatives, parseAuthorOutput,
 } from './author.mjs';
-import { makeGit } from '../../github/pre-pr.mjs';
+import { makeTrexGit } from '../lib/git.mjs';
 
 const FIX = 'f0b67364aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const CHANGED = ['scripts/github/pre-pr.mjs', '.claude/hooks/src/pre-pr-gate.ts'];
@@ -272,13 +272,13 @@ function freezeSetup(t, over = {}) {
     if (args[0] === 'ls-tree' && !args.includes('-r')) return lsBlob(args, over.blobs ?? {});
     if (args[0] === 'ls-tree') return { status: 0, stdout: Object.keys(files).filter((f) => f.startsWith(`${args.at(-1)}/`)).join('\0'), stderr: '' };
     if (args[0] === 'show') return { status: 0, stdout: files[args[1].split(':')[1]] ?? '', stderr: '' };
-    if (args[0] === 'diff') return { status: 0, stdout: 'x.md\n', stderr: '' };
+    if (args[0] === 'diff') return { status: 0, stdout: over.diff ?? 'x.md\n', stderr: '' };
     if (k.startsWith('merge-base --is-ancestor')) return { status: 0, stdout: '', stderr: '' };
     return { status: 1, stdout: '', stderr: `unhandled ${k}` };
   };
   const cacheDir = path.join(root, '.claude/cache/e2e');
   for (const g of ['S1', 'S8']) put(cacheDir, `2026-11-02-trex-author-${g}.manifest.json`, JSON.stringify({ group: g, runId: `run-${g}`, model: 'grok-4.7-high', usage: { in: 1 }, retries: 0 }));
-  const digest = over.digest ?? hostFlowDigest(git, 'abc123', { flowsDir: FLOWS_DIR, groups: ['S1', 'S8'] });
+  const digest = over.digest ?? hostFlowDigest(git, 'abc123', { flowsDir: FLOWS_DIR, groups: ['S1', 'S8'], negativeHeads: over.negativeHeads });
   if (!over.noMarker) put(root, 'scripts/trex/bench/host-review.json', JSON.stringify({ sha256: digest }));
   const opts = { root, flowsDir: FLOWS_DIR, groups: ['S1', 'S8'], fixes: { S1: 'f1', S8: 'f8' }, cacheDir, negatives: [{ id: 'N2', head: 'nnn' }], ...over.opts };
   return { root, git, calls, opts, digest };
@@ -298,17 +298,67 @@ const PS1_FLOW = hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/land.p
 const BLOB_A = 'a'.repeat(40);
 const BLOB_B = 'b'.repeat(40);
 
-test('hostFlowDigest covers the blob id of a host .ps1 at the group head', (t) => {
-  const o = { flowsDir: FLOWS_DIR, groups: ['S1', 'S8'] };
-  const a = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: { '23b62e5d:scripts/land.ps1': BLOB_A } });
-  const b = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: { '23b62e5d:scripts/land.ps1': BLOB_B } });
-  assert.notEqual(hostFlowDigest(a.git, 'abc123', o), hostFlowDigest(b.git, 'abc123', o));
-  assert.equal(hostFlowDigest(a.git, 'abc123', o), hostFlowDigest(a.git, 'abc123', o));
+const PS1 = 'scripts/land.ps1';
+const O2 = { flowsDir: FLOWS_DIR, groups: ['S1', 'S8'] };
+const NOSET = 'f'.repeat(64); // skips the digest freezeSetup would compute from incomplete blobs
+// S1 runs at pre 23b62e5d and fix f0b67364 (spec section 7).
+const at = (pre, fix, extra = {}) => ({ [`23b62e5d:${PS1}`]: pre, [`f0b67364:${PS1}`]: fix, ...extra });
+
+test('hostFlowDigest covers the blob id of a host .ps1 at the group pre', (t) => {
+  // Breaks when the digest drops the blob at pre.
+  const a = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: at(BLOB_A, BLOB_A) });
+  const b = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: at(BLOB_B, BLOB_A) });
+  assert.notEqual(hostFlowDigest(a.git, 'abc123', O2), hostFlowDigest(b.git, 'abc123', O2));
+  assert.equal(hostFlowDigest(a.git, 'abc123', O2), hostFlowDigest(a.git, 'abc123', O2));
 });
 
-test('hostFlowDigest throws when a referenced .ps1 is not a file at the group head', (t) => {
-  const s = freezeSetup(t, { s1Flow: PS1_FLOW, digest: 'f'.repeat(64) });
-  assert.throws(() => hostFlowDigest(s.git, 'abc123', { flowsDir: FLOWS_DIR, groups: ['S1'] }), /scripts\/land\.ps1/);
+test('hostFlowDigest covers the blob id of a host .ps1 at the group fix, not only at one sha', (t) => {
+  // Breaks when the .ps1 is pinned at one sha: a script that differs between pre and fix then escapes the human review.
+  const a = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: at(BLOB_A, BLOB_A) });
+  const b = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: at(BLOB_A, BLOB_B) });
+  assert.notEqual(hostFlowDigest(a.git, 'abc123', O2), hostFlowDigest(b.git, 'abc123', O2));
+});
+
+test('hostFlowDigest throws, naming the sha, when a referenced .ps1 is missing at the pre or at the fix', (t) => {
+  // Breaks when a missing script at one run sha is tolerated.
+  const onlyPre = freezeSetup(t, { s1Flow: PS1_FLOW, digest: NOSET, blobs: { [`23b62e5d:${PS1}`]: BLOB_A } });
+  assert.throws(() => hostFlowDigest(onlyPre.git, 'abc123', O2), /scripts\/land\.ps1.*f0b67364/);
+  const onlyFix = freezeSetup(t, { s1Flow: PS1_FLOW, digest: NOSET, blobs: { [`f0b67364:${PS1}`]: BLOB_A } });
+  assert.throws(() => hostFlowDigest(onlyFix.git, 'abc123', O2), /scripts\/land\.ps1.*23b62e5d/);
+});
+
+test('hostFlowDigest covers a negative head mapped to the group, and throws when the .ps1 is missing there', (t) => {
+  // Breaks when negative heads are left out: the runner runs the .ps1 at every graded negative head.
+  const negativeHeads = { S1: ['nnn'] };
+  const without = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: at(BLOB_A, BLOB_A) });
+  assert.throws(() => hostFlowDigest(without.git, 'abc123', { ...O2, negativeHeads }), /nnn/);
+  const a = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: at(BLOB_A, BLOB_A, { [`nnn:${PS1}`]: BLOB_A }) });
+  const b = freezeSetup(t, { s1Flow: PS1_FLOW, blobs: at(BLOB_A, BLOB_A, { [`nnn:${PS1}`]: BLOB_B }) });
+  assert.notEqual(hostFlowDigest(a.git, 'abc123', { ...O2, negativeHeads }), hostFlowDigest(b.git, 'abc123', { ...O2, negativeHeads }));
+});
+
+test('hostFlowDigest pins an honest-skip group (S17, no fix) at its pre and skipAt shas', () => {
+  // Breaks when a group without a fix is pinned at a null fix sha or at no sha.
+  const asked = [];
+  const git = (args) => {
+    if (args[0] === 'ls-tree' && args.includes('-r')) return { status: 0, stdout: `${FLOWS_DIR}/S17/a.yaml\0`, stderr: '' };
+    if (args[0] === 'show') return { status: 0, stdout: PS1_FLOW, stderr: '' };
+    asked.push(args[2]);
+    return { status: 0, stdout: `100644 blob ${BLOB_A}\t${args[4]}\0`, stderr: '' };
+  };
+  hostFlowDigest(git, 'abc123', { flowsDir: FLOWS_DIR, groups: ['S17'] });
+  assert.deepEqual(asked.sort(), ['6f36d24f', '73040918']);
+});
+
+test('freeze covers the graded negative heads: a head without the .ps1 refuses the freeze', (t) => {
+  // Breaks when freeze computes the digest before the negatives are mapped.
+  const diff = 'scripts/github/pre-pr.mjs\n';
+  const opts = { negatives: [{ id: 'N2', head: 'nnn' }] };
+  const bad = freezeSetup(t, { s1Flow: PS1_FLOW, diff, digest: NOSET, blobs: at(BLOB_A, BLOB_A), opts });
+  assert.throws(() => freeze('abc123', bad.opts, { git: bad.git }), /nnn/);
+  const blobs = at(BLOB_A, BLOB_A, { [`nnn:${PS1}`]: BLOB_B });
+  const good = freezeSetup(t, { s1Flow: PS1_FLOW, diff, blobs, opts, negativeHeads: { S1: ['nnn'] } });
+  assert.ok(freeze('abc123', good.opts, { git: good.git }).negatives.N2.includes('S1'));
 });
 
 const MARKER_ERR = 'host-flow review marker missing or stale; ask Dave to review with --host-digest';
@@ -598,24 +648,28 @@ test('the group table matches the spec', () => {
   assert.equal(GROUPS.S1.range, 'beb9d5ef..23b62e5d');
 });
 
-// ---------- host .ps1 at the group head ----------
+// ---------- host .ps1 at every sha the group's flows run at ----------
 
 const HOST_ANSWER = answer([['host.yaml', hostYaml('cli', '{cmd: [pwsh, -NoProfile, -File, scripts/land.ps1]}')]], { flows: [{ id: 'host-flow-one', file: 'host.yaml', risk: 'r' }], cannotVerify: [] });
-const headGit = (present) => gitFrom([
+// S15 runs at pre 73040918 and fix 6f36d24f (spec section 7). `shas` lists where the .ps1 exists. The range end is 'h' in these tests.
+const headGit = (shas) => gitFrom([
   [/^log -1 --format=%s/, () => ({ status: 0, stdout: 'fix: something unrelated to any file\n' })],
-  [/^ls-tree -z h -- (.+)$/, (m) => ({ status: 0, stdout: present ? `100644 blob ${BLOB_A}\t${m[1]}\0` : '' })],
+  [/^ls-tree -z (\S+) -- (.+)$/, (m) => ({ status: 0, stdout: shas.includes(m[1]) ? `100644 blob ${BLOB_A}\t${m[2]}\0` : '' })],
 ]);
 
-test('authorGroup accepts a host .ps1 that exists at the group head and refuses one that does not', async (t) => {
+test('authorGroup accepts a host .ps1 that exists at the group pre and fix and refuses one that is missing at either', async (t) => {
+  // Breaks when the lint checks only the range end: the runner runs the .ps1 at pre and at fix, not at the range end.
   const run = () => ({ status: 0, stdout: resultLine(HOST_ANSWER), stderr: '', timedOut: false });
-  const yes = authorSetup(t, { run, deps: { git: headGit(true) } });
+  const yes = authorSetup(t, { run, deps: { git: headGit(['73040918', '6f36d24f']) } });
   const ok = await authorGroup('S15', yes.opts, yes.deps);
   assert.equal(ok.exit, 0, ok.problems.join('; '));
-  const no = authorSetup(t, { run, deps: { git: headGit(false) } });
-  const refused = await authorGroup('S15', no.opts, no.deps);
-  assert.equal(refused.exit, 1);
-  assert.ok(refused.problems.some((p) => /scripts\/land\.ps1/.test(p) && /does not exist/.test(p)));
-  assert.ok(!existsSync(path.join(no.root, 'scripts/trex/bench/flows/S15')));
+  for (const shas of [['73040918'], ['6f36d24f'], ['h'], []]) {
+    const no = authorSetup(t, { run, deps: { git: headGit(shas) } });
+    const refused = await authorGroup('S15', no.opts, no.deps);
+    assert.equal(refused.exit, 1, shas.join());
+    assert.ok(refused.problems.some((p) => /scripts\/land\.ps1/.test(p) && /does not exist/.test(p)));
+    assert.ok(!existsSync(path.join(no.root, 'scripts/trex/bench/flows/S15')));
+  }
 });
 
 // ---------- budget race ----------
@@ -691,11 +745,54 @@ test('main refuses the --ledger flag and writes nothing to that path', async (t)
   assert.ok(!existsSync(other));
 });
 
+test('main refuses a live run when CURSOR_REVIEW_LEDGER is set, and runs a dry run', async (t) => {
+  // Breaks when the env var is allowed to redirect the ledger and both caps of a live run.
+  const env = { PATH: '/bin', CURSOR_REVIEW_LEDGER: 'C:/elsewhere/ledger.jsonl' };
+  const s = authorSetup(t, { deps: { env } });
+  for (const argv of [['--group', 'S18'], ['--all'], ['--probe']]) {
+    const r = await cli(s, argv);
+    assert.equal(r.code, 2, argv.join(' '));
+    assert.match(r.text, /CURSOR_REVIEW_LEDGER/);
+    assert.equal(r.text.trim().split('\n').length, 1, 'one line');
+  }
+  assert.equal(s.state.prepared, 0, 'nothing ran');
+  assert.equal(s.state.runs.length, 0);
+  assert.equal(ledgerLines(s.ledger).length, 0);
+  assert.equal((await cli(s, ['--group', 'S18', '--dry-run'])).code, 0);
+});
+
+test('benchGit does not pass ANTHROPIC_API_KEY to the git child', () => {
+  // Breaks when author.mjs goes back to the pre-pr makeGit, which passes the whole env to git hooks and aliases.
+  process.env.ANTHROPIC_API_KEY = 'sk-test-secret-xyz';
+  try {
+    const r = benchGit(process.cwd())(['-c', 'alias.showkey=!echo key=$ANTHROPIC_API_KEY', 'showkey']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stdout.includes('key='));
+    assert.ok(!r.stdout.includes('sk-test-secret-xyz'));
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test('main --host-digest covers the graded negative heads from the negatives file', async (t) => {
+  // Breaks when --host-digest ignores the negatives: it would print a digest that freeze later rejects.
+  const run = async (blobs) => {
+    const s = freezeSetup(t, { s1Flow: PS1_FLOW, diff: 'scripts/github/pre-pr.mjs\n', blobs, digest: NOSET });
+    const file = put(s.root, 'negs.json', JSON.stringify([{ id: 'N2', head: 'nnn' }]));
+    return cli({ deps: { git: s.git }, root: s.root, ledger: path.join(s.root, 'l.jsonl') }, ['--host-digest', '--sha', 'abc123', '--negatives', file]);
+  };
+  const a = await run(at(BLOB_A, BLOB_A, { [`nnn:${PS1}`]: BLOB_A }));
+  const b = await run(at(BLOB_A, BLOB_A, { [`nnn:${PS1}`]: BLOB_B }));
+  assert.equal(a.code, 0, a.text);
+  assert.match(a.text, /^[0-9a-f]{64}$/);
+  assert.notEqual(a.text, b.text);
+});
+
 // ---------- blobAt against real git ----------
 
 test('blobAt reads the blob id of a file at a commit with real git, and null for a folder or a missing path', (t) => {
   const dir = tmp(t);
-  const git = makeGit(dir);
+  const git = makeTrexGit(dir);
   const run = (...args) => assert.equal(git(args).status, 0, args.join(' '));
   run('init', '-q');
   put(dir, 'scripts/land.ps1', 'Write-Output hi\n');

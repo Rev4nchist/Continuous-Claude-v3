@@ -17,7 +17,7 @@ import { loadFlows } from './flow.mjs';
 import { runFlows, strictExec } from './flow-run.mjs';
 import { acquireLock, lockPathFor, primaryRootOf, unlockRun } from './lock.mjs';
 import { makeTrexGit } from './lib/git.mjs';
-import { makePidRecorder, runChild } from './lib/proc.mjs';
+import { makePidRecorder, processStartMs, runChild } from './lib/proc.mjs';
 import { buildReport, exitCodeFor, formatLines, writeAll, writeSidecar } from './report.mjs';
 
 export { acquireLock } from './lock.mjs';
@@ -171,7 +171,7 @@ function noteOom(run, env) {
 
 async function runHost(d, run) {
   let prep;
-  try { prep = await d.prepareHost({ head: run.head, flowsSha: run.flowsSha, imageSha: run.imageSha, evidenceDir: run.evidenceDir, flowsDir: run.flowsDir }, d.envDeps); } catch (err) {
+  try { prep = await d.prepareHost({ head: run.head, flowsSha: run.flowsSha, evidenceDir: run.evidenceDir, flowsDir: run.flowsDir }, d.envDeps); } catch (err) {
     d.noteError({ flowId: 'host', attempt: 1, err });
     const blocker = { stage: err.stage ?? 'start', text: firstLine(err.message) };
     run.blockers.push(blocker);
@@ -223,16 +223,19 @@ export function withDefaults(deps) {
   const root = deps.root ?? ROOT;
   const git = deps.git ?? makeTrexGit(root);
   const pids = [];
-  const recorder = { onSpawn: (pid) => { pids.push(pid); d.recorder?.onSpawn(pid); deps.onSpawn?.(pid); } };
+  const recorder = {
+    onSpawn: (pid) => { pids.push(pid); d.recorder?.onSpawn(pid); deps.onSpawn?.(pid); },
+    onExit: (pid) => { d.recorder?.onExit(pid); deps.onExit?.(pid); },
+  };
   const d = {
     root, git, pids, ensureImage, startEnv, stopEnv, prepareHost, removeByLabel, runChild,
     now: () => new Date(), out: console.log, alive: undefined, runId: randomBytes(4).toString('hex'),
     onSigint: (fn) => { process.once('SIGINT', fn); return () => process.off('SIGINT', fn); }, exit: process.exit,
-    noteError: () => {}, ...deps,
+    noteError: () => {}, processStart: processStartMs, ...deps,
   };
   // The env module must not install its own SIGINT handler: this file owns lock release and the sidecar.
-  d.envDeps = { cwd: root, git, onSpawn: recorder.onSpawn, onSigint: () => () => {}, ...deps.envDeps };
-  d.hostSpawn = deps.hostSpawn ?? (() => (argv, o) => d.runChild(argv[0], argv.slice(1), { ...o, onSpawn: recorder.onSpawn }));
+  d.envDeps = { cwd: root, git, onSpawn: recorder.onSpawn, onExit: recorder.onExit, onSigint: () => () => {}, ...deps.envDeps };
+  d.hostSpawn = deps.hostSpawn ?? (() => (argv, o) => d.runChild(argv[0], argv.slice(1), { ...o, onSpawn: recorder.onSpawn, onExit: recorder.onExit }));
   return d;
 }
 
@@ -250,7 +253,7 @@ function finish(d, opts, code, run = null, report = null, evidenceDir = null) {
 
 async function doUnlock(d, opts) {
   const lockFile = lockPathFor(primaryRootOf(d.git, d.root));
-  const res = unlockRun(lockFile, { alive: d.alive });
+  const res = unlockRun(lockFile, { alive: d.alive, processStart: d.processStart });
   if (res.state === 'held') { d.out('# trex: lock held by a live run'); return finish(d, opts, 3); }
   if (res.state === 'removed' && res.info?.runId) await d.removeByLabel(res.info.runId, d.envDeps).catch(() => {});
   d.out(`# trex: unlock ${res.state}`);
@@ -333,7 +336,7 @@ export async function main(argv, deps = {}) {
     if (opts.mode === 'unlock') return await doUnlock(d, opts);
     const inputs = resolveInputs(d, opts);
     const info = { pid: process.pid, started: d.now().toISOString(), argv, runId: d.runId };
-    const lock = acquireLock(lockPathFor(primaryRootOf(d.git, d.root)), info, { alive: d.alive });
+    const lock = acquireLock(lockPathFor(primaryRootOf(d.git, d.root)), info, { alive: d.alive, processStart: d.processStart });
     if (!lock.ok) { d.out('# trex: another run holds the lock'); return finish(d, opts, 3); }
     return await guardedRun(d, opts, argv, inputs, lock);
   } catch (err) {

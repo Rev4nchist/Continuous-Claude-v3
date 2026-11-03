@@ -2,7 +2,8 @@
 /**
  * author.mjs: blind flow authoring for the TREX P0 replay bench (spec 5.13 with 13.1, 13.2 and 13.4).
  *
- * Usage (the ledger path is fixed; only tests pass another one):
+ * Usage (the ledger path is fixed: a live run exits 2 when CURSOR_REVIEW_LEDGER is set, because it would redirect the ledger and both caps;
+ * only tests pass another path):
  *   node scripts/trex/bench/author.mjs --group S18 [--dry-run] [--keep-tree] [--retry | --retry-harness]
  *   node scripts/trex/bench/author.mjs --all
  *   node scripts/trex/bench/author.mjs --probe [--group S18]       one stream-json run that shows whether tool calls are visible
@@ -18,8 +19,6 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-// TODO: import from scripts/github/lib/proc.mjs when review-engine-c0 lands. makeGit has no home in lib/ yet.
-import { makeGit } from '../../github/pre-pr.mjs';
 import * as cursor from '../../github/cursor-review.mjs';
 import {
   EXIT, WEEKLY_CAP, buildAgentEnv, countRuns, defaultLedgerPath, finishRun, parseReviewOutput, prepareReview, readLedger, reserveRun,
@@ -29,7 +28,11 @@ import { withLock } from '../../github/lib/file-lock.mjs';
 import { matchGlob } from '../../github/review-router.mjs';
 import { loadFlows, validateFlow } from '../flow.mjs';
 import { hostActionOk, hostPs1Path } from '../host-allow.mjs';
+import { makeTrexGit } from '../lib/git.mjs';
 import { stripEnv } from '../lib/strip-env.mjs';
+
+/** The git function of every command here. The child env is stripped, so no Anthropic key reaches a git hook or alias. */
+export const benchGit = (root) => makeTrexGit(root);
 
 export const BENCH_CAP = 18;
 export const MAX_PROMPT_CHARS = 24_000;
@@ -440,7 +443,7 @@ function validate(group, opts) {
 
 /** Builds and checks the tree and the prompt. { prep, prompt, leaks } or { exit, problems }. The tree is cleaned up on a refusal. */
 async function stage(group, opts, deps, ref) {
-  const git = deps.git ?? makeGit(opts.root);
+  const git = deps.git ?? benchGit(opts.root);
   let prep;
   try { prep = await (deps.prepare ?? prepareReview)({ root: opts.root, input: { range: GROUPS[group].range } }); } catch (err) {
     return { exit: err.code === 'BAD_INPUT' ? EXIT.REFUSED : EXIT.FAILED, problems: [err.message] };
@@ -454,7 +457,7 @@ async function stage(group, opts, deps, ref) {
   const refuse = (problems) => { if (!opts.keepTree) prep.cleanup(); return { exit: EXIT.REFUSED, problems }; };
   if (!opts.dryRun && leaks.length > 0) return refuse([`leak scan found ${leaks.length} hit(s) before the agent started`, ...leaks]);
   if (!opts.dryRun && prompt.length > MAX_PROMPT_CHARS) return refuse([`the prompt is ${prompt.length} chars, over the limit of ${MAX_PROMPT_CHARS}`]);
-  return { prep, prompt, leaks, crossGroup, git };
+  return { prep, prompt, leaks, crossGroup, git, group };
 }
 
 function dryRunResult(group, opts, ledgerPath, now, st) {
@@ -547,7 +550,8 @@ async function reservedRun(c) {
 function readAnswer(text, st, deps) {
   const out = parseAuthorOutput(text, st.prep.files);
   if (out.files.length === 0 && notRunText(text, deps)) out.problems.unshift('the answer says the agent could not read the change: the run is void');
-  const treeHas = (p) => blobAt(st.git, st.prep.head, p) !== null;
+  const shas = runShas(st.group);
+  const treeHas = (p) => shas.every((sha) => blobAt(st.git, sha, p) !== null);
   return { ...out, problems: [...out.problems, ...lintAll(out.files, st.prep.files, treeHas)] };
 }
 
@@ -602,37 +606,52 @@ export function mapNegatives(negatives, ctx, git) {
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 
-/** The commit a group's authoring tree was cut from: the right side of its range. */
-function groupHead(g) {
-  const head = GROUPS[g]?.range.split('..')[1];
-  if (!head) throw new Error(`group ${g} has no range head`);
-  return head;
+/**
+ * The shas a group's flows run at: its pre, its fix and, for a group with no fix (S17), its skipAt sha (spec section 7).
+ * The author range end is not a run sha.
+ */
+export function runShas(g) {
+  const row = GROUPS[g];
+  if (!row) throw new Error(`unknown group ${g}`);
+  return [...new Set([row.pre, row.fix ?? row.skipAt].filter(Boolean))];
 }
 
-/** { path: blobId } for every .ps1 that a host flow runs, read at the group head. Throws when one is not a regular file there. */
-function ps1Blobs(git, g, flow) {
-  const head = groupHead(g);
+/** { <group>: [head] } from mapNegatives().negatives ({ N2: ['S1'] }) and the negatives list [{ id, head }]. Graded pairs only. */
+export function negativeHeadsOf(negatives, mapped) {
+  const out = {};
+  for (const neg of negatives) {
+    for (const g of mapped[neg.id] ?? []) (out[g] ??= []).push(neg.head);
+  }
+  return out;
+}
+
+/** { "<path>@<sha>": blobId } for every .ps1 that a host flow runs, at every sha. Throws when one is not a regular file at a sha. */
+function ps1Blobs(git, g, flow, shas) {
   const blobs = {};
   for (const step of flow.steps ?? []) {
     const file = hostPs1Path(flow.driver, step.action);
     if (file === null) continue;
-    const id = blobAt(git, head, file);
-    if (id === null) throw new Error(`host flow ${flow.id} runs ${file}, which is not a file at ${head} (group ${g})`);
-    blobs[file] = id;
+    for (const sha of shas) {
+      const id = blobAt(git, sha, file);
+      if (id === null) throw new Error(`host flow ${flow.id} runs ${file}, which is not a file at ${sha} (group ${g})`);
+      blobs[`${file}@${sha}`] = id;
+    }
   }
-  return Object.fromEntries(Object.entries(blobs).sort(([a], [b]) => (a < b ? -1 : 1)));
+  return Object.fromEntries(Object.entries(blobs).sort(([x], [y]) => (x < y ? -1 : 1)));
 }
 
 /**
  * The digest a human review covers: sha256 over the normalized host flows (profile host) of the committed groups, read through git
- * at `sha`, plus the git blob id (at the group head) of every .ps1 those flows run. Container flows do not change it.
+ * at `sha`, plus the git blob id of every .ps1 those flows run, at every sha the group's flows run at: its pre, its fix (skipAt for S17)
+ * and each graded negative head in opts.negativeHeads ({ <group>: [sha] }, see negativeHeadsOf). Container flows do not change it.
  * A reviewer reads the host flows and those scripts, then writes this digest to host-review.json.
  */
-export function hostFlowDigest(git, sha, { flowsDir = FLOWS_DIR, groups = Object.keys(GROUPS) } = {}) {
+export function hostFlowDigest(git, sha, { flowsDir = FLOWS_DIR, groups = Object.keys(GROUPS), negativeHeads = {} } = {}) {
   const parts = [];
   for (const g of [...groups].sort()) {
+    const shas = [...new Set([...runShas(g), ...(negativeHeads[g] ?? [])])];
     for (const flow of loadFlows(git, sha, `${flowsDir}/${g}`)) {
-      if (flow.profile === 'host') parts.push(JSON.stringify({ group: g, flow, scripts: ps1Blobs(git, g, flow) }));
+      if (flow.profile === 'host') parts.push(JSON.stringify({ group: g, flow, scripts: ps1Blobs(git, g, flow, shas) }));
     }
   }
   return sha256(parts.join('\n'));
@@ -651,7 +670,8 @@ function latestManifest(cacheDir, group) {
   return found.length ? JSON.parse(readFileSync(path.join(cacheDir, found.at(-1).n), 'utf8')) : null;
 }
 
-// The text names no digest and no marker JSON: an agent that reads it must not be able to forge the marker.
+// --host-digest prints the digest, so anyone who can run this script can write a matching marker.
+// The marker is a human-process gate, not a security boundary. The text names no digest and no marker JSON so it is not a recipe.
 const MARKER_ERROR = 'host-flow review marker missing or stale; ask Dave to review with --host-digest';
 
 function checkMarker(markerPath, digest) {
@@ -676,7 +696,7 @@ function groupRecords(cacheDir, groups) {
  * opts: { root, flowsDir, groups, fixes, cacheDir, markerPath, negatives, outFile }. Returns the frozen record.
  */
 export function freeze(sha, opts, deps = {}) {
-  const git = deps.git ?? makeGit(opts.root);
+  const git = deps.git ?? benchGit(opts.root);
   const flowsDir = opts.flowsDir ?? FLOWS_DIR;
   const groups = opts.groups ?? Object.keys(GROUPS);
   const cacheDir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
@@ -684,13 +704,14 @@ export function freeze(sha, opts, deps = {}) {
   gitText(git, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], `commit ${sha}`);
   const flowsTree = gitText(git, ['rev-parse', `${sha}:${flowsDir}`], `rev-parse ${sha}:${flowsDir}`);
   if (flowsTree !== gitText(git, ['rev-parse', `HEAD:${flowsDir}`], `rev-parse HEAD:${flowsDir}`)) throw new Error(`the flows tree at ${sha} differs from HEAD: freeze the commit that is checked out`);
-  const digest = hostFlowDigest(git, sha, { flowsDir, groups });
-  checkMarker(opts.markerPath ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'host-review.json'), digest);
-  const records = groupRecords(cacheDir, groups);
   const flows = Object.fromEntries(groups.map((g) => [g, loadFlows(git, sha, `${flowsDir}/${g}`).map((f) => ({ id: f.id, paths: f.paths }))]));
   const fixes = opts.fixes ?? Object.fromEntries(Object.entries(GROUPS).map(([g, v]) => [g, v.fix]));
   const map = mapNegatives(opts.negatives ?? [], { groups: flows, fixes }, git);
   if (map.problems.length) throw new Error(`negative mapping problems: ${map.problems.join('; ')}`);
+  const negativeHeads = negativeHeadsOf(opts.negatives ?? [], map.negatives);
+  const digest = hostFlowDigest(git, sha, { flowsDir, groups, negativeHeads });
+  checkMarker(opts.markerPath ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'host-review.json'), digest);
+  const records = groupRecords(cacheDir, groups);
   const frozen = { sha, flowsTree, groups: records, negatives: map.negatives, skipped: map.skipped, hostReview: digest, blind: BLIND };
   writeJson(opts.outFile ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'frozen.json'), frozen);
   return frozen;
@@ -727,7 +748,7 @@ export function parseArgs(argv) {
 }
 
 function repoRoot() {
-  return makeGit(process.cwd())(['rev-parse', '--show-toplevel']).stdout.trim() || process.cwd();
+  return benchGit(process.cwd())(['rev-parse', '--show-toplevel']).stdout.trim() || process.cwd();
 }
 
 function printDryRun(info, say) {
@@ -751,6 +772,15 @@ function groupFlows(git, sha, flowsDir) {
   return Object.fromEntries(Object.keys(GROUPS).map((g) => [g, loadFlows(git, sha, `${flowsDir}/${g}`).map((f) => ({ id: f.id, paths: f.paths }))]));
 }
 
+const allFixes = () => Object.fromEntries(Object.entries(GROUPS).map(([g, v]) => [g, v.fix]));
+const mapAll = (git, sha, negatives) => mapNegatives(negatives, { groups: groupFlows(git, sha, FLOWS_DIR), fixes: allFixes() }, git);
+
+/** The digest for a human host review: the same one freeze computes, with the negative heads mapped to each group. */
+function hostDigestOf(git, sha, negatives) {
+  const negativeHeads = negativeHeadsOf(negatives, mapAll(git, sha, negatives).negatives);
+  return hostFlowDigest(git, sha, { negativeHeads });
+}
+
 async function runGroups(args, base, deps, say) {
   const groups = args.action === 'all' ? Object.keys(GROUPS) : [args.group ?? 'S18'];
   let worst = EXIT.OK;
@@ -764,25 +794,31 @@ async function runGroups(args, base, deps, say) {
   return worst;
 }
 
+/** True for a live run (not --dry-run) while CURSOR_REVIEW_LEDGER moves the ledger and so both caps. */
+const redirectsLedger = (args, deps) => ['group', 'all', 'probe'].includes(args.action) && !args.dryRun && Boolean((deps.env ?? process.env).CURSOR_REVIEW_LEDGER);
+
 /** Returns the exit code. deps (tests): authorGroup deps plus root, ledgerPath, stdout, stderr. */
 export async function main(argv, deps = {}) {
   const say = deps.stdout ?? ((s) => process.stdout.write(`${s}\n`));
   const err = deps.stderr ?? ((s) => process.stderr.write(`${s}\n`));
   const args = parseArgs(argv);
   if (args.error) { err(`author: ${args.error}`); return EXIT.REFUSED; }
+  if (redirectsLedger(args, deps)) {
+    err('author: a live run refuses when CURSOR_REVIEW_LEDGER is set: it would redirect the ledger and both caps');
+    return EXIT.REFUSED;
+  }
   const root = deps.root ?? repoRoot();
   const ledgerPath = deps.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
   const base = { root, ledgerPath, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree };
   try {
     if (['group', 'all', 'probe'].includes(args.action)) return await runGroups(args, base, deps, say);
-    const git = deps.git ?? makeGit(root);
+    const git = deps.git ?? benchGit(root);
     const sha = args.sha ?? 'HEAD';
-    if (args.action === 'host-digest') { say(hostFlowDigest(git, sha)); return EXIT.OK; }
     const negFile = args.negativesFile ?? path.join(root, 'scripts', 'trex', 'bench', 'negatives.json');
     const negatives = loadNegatives(negFile);
+    if (args.action === 'host-digest') { say(hostDigestOf(git, sha, negatives)); return EXIT.OK; }
     if (args.action === 'map-negatives') {
-      const fixes = Object.fromEntries(Object.entries(GROUPS).map(([g, v]) => [g, v.fix]));
-      say(JSON.stringify(mapNegatives(negatives, { groups: groupFlows(git, sha, FLOWS_DIR), fixes }, git), null, 2));
+      say(JSON.stringify(mapAll(git, sha, negatives), null, 2));
       return EXIT.OK;
     }
     say(JSON.stringify(freeze(args.sha, { root, negatives }, { git }), null, 2));

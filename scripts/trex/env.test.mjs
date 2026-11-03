@@ -549,6 +549,7 @@ test('Env.exec: exit 137 before the budget is an OOM kill, counted on the env an
   const { env, res } = await execAfter(5, KILLED);
   assert.equal(res.timedOut, false);
   assert.equal(res.reason, 'oom_killed');
+  assert.equal(res.oom, true, 'toStepResult reads oom, not reason');
   assert.equal(res.code, 137);
   assert.equal(env.oomHits, 1);
 });
@@ -581,21 +582,31 @@ test('prepareHost: an unmerged flowsSha is skipped host_unmerged and nothing is 
   assert.equal(h.events.length, 0);
 });
 
-test('prepareHost: an unmerged imageSha is skipped host_unmerged', async () => {
-  // Breaks when imageSha is not checked.
+test('prepareHost: an unmerged imageSha does not block a host run (spec 13.3: it may carry a post-freeze T1 fix)', async () => {
+  // Breaks when imageSha is checked for merge again: host flows never use the image.
   const h = harness({ gitOpts: { ancestor: (sha) => (sha === IMAGE_SHA ? 1 : 0), trees: TREE } });
-  const r = await prepareHost({ head: HEAD, flowsSha: FLOWS, imageSha: IMAGE_SHA, evidenceDir: 'C:\\ev' }, h.deps);
-  assert.deepEqual(r.skipped, { reason: 'host_unmerged' });
-  assert.equal(h.events.length, 0);
+  const r = await prepareHost({ head: HEAD, flowsSha: FLOWS, imageSha: IMAGE_SHA, evidenceDir: 'C:\ev' }, h.deps);
+  assert.equal(r.skipped, undefined);
+  assert.ok(h.events.length > 0, 'the tree is still extracted');
 });
 
-test('prepareHost: head, flowsSha and imageSha all merged proceeds', async () => {
-  // Breaks when the new check rejects a fully merged set.
+test('prepareHost: head and flowsSha merged proceeds, and only those two are checked for merge', async () => {
+  // Breaks when the merge check rejects a merged set or asks about any other sha.
   const h = harness({ gitOpts: { ancestor: 0, trees: TREE } });
-  const r = await prepareHost({ head: HEAD, flowsSha: FLOWS, imageSha: IMAGE_SHA, evidenceDir: 'C:\\ev' }, h.deps);
+  const r = await prepareHost({ head: HEAD, flowsSha: FLOWS, imageSha: IMAGE_SHA, evidenceDir: 'C:\ev' }, h.deps);
   assert.equal(r.skipped, undefined);
   const asked = h.git.calls.filter((c) => c[0] === 'merge-base').map((c) => c[2]);
-  assert.deepEqual(asked, [HEAD, FLOWS, IMAGE_SHA]);
+  assert.deepEqual(asked, [HEAD, FLOWS]);
+});
+
+test('resolveDeps: onSpawn and onExit both reach the docker child, so a pid sidecar can drop an exited pid', async () => {
+  // Breaks when resolveDeps passes onSpawn but not onExit to runChild.
+  const seen = [];
+  const d = resolveDeps({ bin: process.execPath, onSpawn: (pid) => seen.push(['spawn', pid]), onExit: (pid) => seen.push(['exit', pid]) });
+  const res = await d.docker(['-e', '0'], { timeoutMs: 30_000 });
+  assert.equal(res.code, 0);
+  assert.deepEqual(seen.map((e) => e[0]), ['spawn', 'exit']);
+  assert.equal(seen[0][1], seen[1][1]);
 });
 
 // ---------- build command (M-build) ----------
