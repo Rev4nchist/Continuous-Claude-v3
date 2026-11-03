@@ -1,6 +1,9 @@
 {
   "tool": "semgrep",
-  "reason": "Zero rule findings on the tree. The 2 Semgrep PartialParsing scan-error keys (.claude/skills/impeccable/scripts/live-accept.mjs, scripts/github/review-status.mjs) are removed: opengrep 1.33.1 parses both files fully. Dave approved the opengrep switch on 2026-11-03.",
-  "total": 0,
-  "counts": {}
+  "reason": "Zero rule findings on 5812f64b plus the PR A fixes. The 2 scan-error keys are Semgrep PartialParsing on files its JavaScript grammar cannot fully parse (same two files as in semgrep-baseline.json, semgrep 1.179.0). Rules run on those files in part only; the regex rule is unaffected. Dave accepted both keys on 2026-11-01 (D-c). Kept on 2026-11-03 when the local ratchet moved to opengrep: opengrep parses both files fully and reports them as FIXED (not a failure), while CI still runs Docker Semgrep, which reports them.",
+  "total": 2,
+  "counts": {
+    "scan-error|.claude/skills/impeccable/scripts/live-accept.mjs": 1,
+    "scan-error|scripts/github/review-status.mjs": 1
+  }
 }
