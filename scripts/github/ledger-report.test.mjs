@@ -142,3 +142,41 @@ test('main reads the ledger file, prints the report and leaves the ledger as it 
   assert.equal(readFileSync(file, 'utf8'), text);
   assert.equal(await main(['--ledger', file], { stdout: () => {}, stderr: () => {} }), 2);
 });
+
+// Finding (CodeRabbit PR 271): the end line is written after the agent ends (parsing, files). Breaks if the interval ends at the end-line time
+// instead of spawnedAt + durationMs: 'a' would run to minute 30 and overlap 'b', which starts at minute 26.
+test('a run ends when the agent ends (spawnedAt + durationMs), not when its end line was written', () => {
+  const entries = [...run('a', 0, 30, {}, { spawnedAt: iso(T0), durationMs: 25 * MIN }), ...run('b', 26, 40)];
+  const a = analyze(entries, { sinceMs: SINCE });
+  assert.equal(bucket(a, 1).runs, 2);
+  assert.equal(bucket(a, 2).runs, 0);
+});
+
+// Finding (CodeRabbit PR 271): a start line from before the cutoff with no end line was dropped. Breaks if analyze stops counting it, or stops
+// marking the runs it may have overlapped as a lower bound, or marks runs it cannot have overlapped (it began over 3 h before them).
+test('a start line before the cutoff with no end line is counted and marks the runs it may overlap as a lower bound', () => {
+  const entries = [
+    { ts: iso(T0 - 10 * MIN), phase: 'start', id: 'orphan', ref: 'r', model: 'm', band: 'MID' },
+    ...run('during', 0, 20), ...run('later', 400, 420),
+    { ts: iso(T0 - 600 * MIN), phase: 'start', id: 'ancient', ref: 'r', model: 'm', band: 'MID' },
+  ];
+  const a = analyze(entries, { sinceMs: SINCE });
+  assert.equal(a.preCutoffUnresolved, 2);
+  assert.equal(a.unfinished, 0);
+  assert.equal(bucket(a, 1).lowerBound, 1, 'only "during" may have overlapped the orphan');
+  const text = formatReport(a, META);
+  assert.match(text, /before the cutoff, no end line: 2/);
+  assert.match(text, /1 may be higher/);
+});
+
+// Finding (CodeRabbit PR 271): an unreadable ledger printed "No runs" and exited 0. Breaks if main treats any read error as empty.
+test('main exits 1 on a ledger it cannot read, and 0 on a ledger that does not exist', async () => {
+  const dir = tmpDir();
+  const err = [];
+  const out = [];
+  assert.equal(await main(['--since', iso(SINCE), '--ledger', dir], { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }), 1);
+  assert.match(err.join('\n'), /cannot read the ledger/);
+  assert.deepEqual(out, []);
+  assert.equal(await main(['--since', iso(SINCE), '--ledger', path.join(dir, 'missing.jsonl')], { stdout: (s) => out.push(s), stderr: () => {} }), 0);
+  assert.match(out.join('\n'), /No runs since/);
+});

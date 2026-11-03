@@ -34,11 +34,15 @@ const held = new Set();
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** The max wait in ms: opts.waitMs, else CCV3_GROK_WAIT_MIN (whole minutes, 0 allowed), else DEFAULT_WAIT_MS. */
-function resolveWaitMs(opts, env) {
+/** An env wait above this means the default: callers add the wait to a process time-out, and a Node timer cannot hold more than 2^31 ms. */
+export const MAX_ENV_WAIT_MS = 24 * 3_600_000;
+
+/** The max wait in ms: opts.waitMs, else CCV3_GROK_WAIT_MIN (whole minutes, 0 allowed, up to 24 h), else DEFAULT_WAIT_MS. */
+export function resolveWaitMs(opts, env) {
   if (Number.isFinite(opts.waitMs)) return opts.waitMs;
   const raw = env.CCV3_GROK_WAIT_MIN;
-  return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) * 60_000 : DEFAULT_WAIT_MS;
+  const ms = typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) * 60_000 : NaN;
+  return Number.isFinite(ms) && ms <= MAX_ENV_WAIT_MS ? ms : DEFAULT_WAIT_MS;
 }
 
 /** Positive integer from an env string, else the default. */

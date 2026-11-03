@@ -29,6 +29,7 @@ import {
   resolveAgent, runAgent,
 } from './cursor-review.mjs';
 import { pidAlive, withLock } from './lib/file-lock.mjs';
+import { resolveWaitMs as grokWaitMs } from './lib/grok-slots.mjs';
 import { buildContext, readAtSha } from './local-review/context.mjs';
 import { buildEnginePrompt, lastJsonBlock, PROMPT_PATH } from './local-review/prompt.mjs';
 import {
@@ -650,7 +651,7 @@ async function runOnce(s, prep, plan, runId, attempt) {
 function endLine(s, cur, extra = {}) {
   const { d, route } = s;
   d.finishRun(d.P.cursorLedger, cur.runId, {
-    ref: s.ref, model: route.model, band: route.band, sessionId: d.env.CLAUDE_CODE_SESSION_ID || null, durationMs: cur.run.durationMs ?? null,
+    ref: s.ref, model: route.model, band: route.band, sessionId: d.env.CLAUDE_CODE_SESSION_ID || null, durationMs: cur.run.durationMs ?? null, spawnedAt: cur.run.spawnedAt ? new Date(cur.run.spawnedAt).toISOString() : null,
     exit: cur.error ? EXIT.FAILED : EXIT.OK, timedOut: Boolean(cur.run.timedOut), modelVerified: cur.parsed.modelVerified, usage: cur.parsed.usage,
     ...(cur.error ? { error: clip(cur.error, 300) } : {}), repo: d.repo, purpose: 'review', pr: s.target.pr, head: s.target.head, mode: s.range.mode, engineSha: s.pin.engineSha, ...extra,
   }, { now: d.now });
@@ -760,7 +761,7 @@ async function stepRun(s) {
 async function withSlot(s) {
   const { d, cfg } = s;
   const runKey = `${s.ref}@${s.target.head.slice(0, 12)}-${d.slotDeps.pid ?? process.pid}-${randomUUID().slice(0, 8)}`;
-  const slot = await takeSlot({ runKey, max: cfg.max_concurrent, timeoutMs: s.timeoutMs * (1 + cfg.retry_max), waitMs: cfg.slot_wait_min * MIN, file: d.P.slots }, d.slotDeps);
+  const slot = await takeSlot({ runKey, max: cfg.max_concurrent, timeoutMs: (s.timeoutMs + grokWaitMs({}, d.env)) * (1 + cfg.retry_max), waitMs: cfg.slot_wait_min * MIN, file: d.P.slots }, d.slotDeps);
   if (!slot.ok) return refuse(d, EXIT.CAP, slot.reason === 'busy' ? `all ${cfg.max_concurrent} review slots are busy after ${cfg.slot_wait_min} min` : slot.detail ?? 'the slot lock is held');
   try { return await stepRun(s); } finally { releaseSlot({ runKey, file: d.P.slots }, d.slotDeps); }
 }
@@ -833,7 +834,7 @@ async function relaunch(argv, ctx) {
   if (pin.warning) err(`local-review: ${pin.warning}`);
   const conf = loadConfig(path.join(pin.dir, 'review-router.config.json'));
   const cfg = conf.ok ? conf.cfg : LOCAL_REVIEW_DEFAULTS;
-  const timeoutMs = (cfg.slot_wait_min + cfg.timeout_min * (1 + cfg.retry_max) + 5) * MIN;
+  const timeoutMs = (cfg.slot_wait_min + cfg.timeout_min * (1 + cfg.retry_max) + 5) * MIN + grokWaitMs({}, env) * (1 + cfg.retry_max); // each attempt may also wait for the grok gate
   const script = path.join(pin.dir, 'scripts', 'github', 'local-review.mjs');
   // The engine process is not a grok run: only its cursor-agent child takes a gate slot. gateEnv is not passed to the child.
   const spec = { command: process.execPath, args: [script, ...argv], cwd: root, timeoutMs, env: { ...env, LOCAL_REVIEW_PINNED: pin.engineSha } };

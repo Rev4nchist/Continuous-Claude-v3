@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { DEFAULT_WAIT_MS, acquireGrokSlot } from './grok-slots.mjs';
+import { DEFAULT_WAIT_MS, acquireGrokSlot, resolveWaitMs } from './grok-slots.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const made = [];
@@ -472,4 +472,12 @@ test('the max wait comes from CCV3_GROK_WAIT_MIN; a bad value means the default;
   assert.equal(await waitedWith({ CCV3_GROK_WAIT_MIN: '2' }), 120_000);
   assert.equal(await waitedWith({ CCV3_GROK_WAIT_MIN: '2' }, { waitMs: 60_000 }), 60_000);
   for (const bad of ['abc', '-1', '1.5', '', '0x10']) assert.equal(await waitedWith({ CCV3_GROK_WAIT_MIN: bad }), DEFAULT_WAIT_MS, bad);
+});
+
+// Finding (CodeRabbit PR 271): a CCV3_GROK_WAIT_MIN with enough digits to overflow Number gave Infinity, so the wait never ended.
+// Breaks if resolveWaitMs lets a non-finite or timer-breaking value through.
+test('an env wait that overflows or is too long for a timer means the default', () => {
+  assert.equal(resolveWaitMs({}, { CCV3_GROK_WAIT_MIN: '9'.repeat(400) }), DEFAULT_WAIT_MS);
+  assert.equal(resolveWaitMs({}, { CCV3_GROK_WAIT_MIN: '99999999' }), DEFAULT_WAIT_MS);
+  assert.equal(resolveWaitMs({}, { CCV3_GROK_WAIT_MIN: '180' }), 180 * 60_000);
 });

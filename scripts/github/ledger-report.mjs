@@ -11,9 +11,11 @@
  * runs that started since the cutoff: run count, median and p90 duration, time-outs, tool-stall stops, tok/s of the clean runs
  * (output tokens / duration) and the longest single tool call (maxToolMs, only on runs from after the stall guards).
  * Runs that never started (notStarted) and start lines with no end line are counted apart and never timed.
- * It never writes to the ledger. Exit 0 ok, 2 bad arguments.
+ * A start line with no end line (a crash, or a run still going) is of unknown length. Those from before the cutoff are counted apart, and a run
+ * one of them may have overlapped (it started up to 3 h before) is marked as a lower bound: its true concurrency may be higher.
+ * It never writes to the ledger. Exit 0 ok, 1 ledger unreadable, 2 bad arguments.
  */
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultLedgerPath, readLedger } from './cursor-review.mjs';
@@ -49,6 +51,9 @@ function pairRuns(entries) {
   return [...runs.values()];
 }
 
+/** An unresolved start line this much older than a run cannot have overlapped it. */
+const UNRESOLVED_MAX_MS = 3 * 3_600_000;
+
 /** { startMs, endMs } of the time the agent ran, or null when the run has no end line or never started. */
 function intervalOf(run) {
   const e = run.end;
@@ -57,7 +62,8 @@ function intervalOf(run) {
   const dur = Number(e.durationMs);
   if (!Number.isFinite(endMs) || !Number.isFinite(dur) || dur < 0) return null;
   const spawned = e.spawnedAt ? Date.parse(e.spawnedAt) : NaN;
-  return { startMs: Number.isFinite(spawned) ? spawned : endMs - dur, endMs };
+  // The end line is written after the agent ends (parsing, files): with spawnedAt the agent ended at spawnedAt + durationMs.
+  return Number.isFinite(spawned) ? { startMs: spawned, endMs: spawned + dur } : { startMs: endMs - dur, endMs };
 }
 
 /** The most runs (this one included) active at once at any moment of this run. Intervals are [start, end). */
@@ -75,7 +81,7 @@ function summarize(concurrency, rows) {
   const rates = rows.filter((r) => isClean(r.end) && r.durMs > 0 && Number(r.end.usage?.outputTokens) > 0).map((r) => r.end.usage.outputTokens / (r.durMs / 1000));
   const tools = rows.map((r) => r.end.maxToolMs).filter((n) => Number.isFinite(n));
   return {
-    concurrency, runs: rows.length, medianMs: median(durations), p90Ms: percentile(durations, 0.9),
+    concurrency, runs: rows.length, lowerBound: rows.filter((r) => r.lb).length, medianMs: median(durations), p90Ms: percentile(durations, 0.9),
     timeouts: rows.filter((r) => r.end.timedOut === true).length,
     toolStalls: rows.filter((r) => typeof r.end.error === 'string' && r.end.error.startsWith('tool-stall')).length,
     tokPerSec: { n: rates.length, median: median(rates) },
@@ -86,15 +92,16 @@ function summarize(concurrency, rows) {
 /** { total, notStarted, unfinished, buckets: [{ concurrency, runs, medianMs, p90Ms, timeouts, toolStalls, tokPerSec, maxToolMs }] } for the runs that started at or after sinceMs. */
 export function analyze(entries, { sinceMs }) {
   const runs = pairRuns(entries);
+  const open = runs.filter((r) => !r.end && Number.isFinite(r.startRowMs)).map((r) => r.startRowMs);
   const timed = runs.map((run) => ({ run, iv: intervalOf(run) })).filter((x) => x.iv);
   const all = timed.map((x) => x.iv);
-  const mine = timed.filter((x) => x.iv.startMs >= sinceMs).map(({ run, iv }) => ({ end: run.end, durMs: iv.endMs - iv.startMs, c: peakOverlap(iv, all) }));
+  const mine = timed.filter((x) => x.iv.startMs >= sinceMs).map(({ run, iv }) => ({ end: run.end, durMs: iv.endMs - iv.startMs, c: peakOverlap(iv, all), lb: open.some((s) => s <= iv.endMs && iv.startMs - s < UNRESOLVED_MAX_MS) }));
   const sinceRow = (r) => (r.startRowMs ?? Date.parse(r.end?.ts)) >= sinceMs;
   const notStarted = runs.filter((r) => r.end?.notStarted === true && sinceRow(r)).length;
   const unfinished = runs.filter((r) => !r.end && sinceRow(r)).length;
   const levels = Math.max(MIN_LEVELS, ...mine.map((r) => r.c));
   const buckets = Array.from({ length: levels }, (_, i) => summarize(i + 1, mine.filter((r) => r.c === i + 1)));
-  return { total: mine.length, notStarted, unfinished, buckets };
+  return { total: mine.length, notStarted, unfinished, preCutoffUnresolved: open.filter((s) => s < sinceMs).length, buckets };
 }
 
 const minutes = (ms) => (ms === null ? '-' : `${(ms / 60_000).toFixed(1)} min`);
@@ -115,9 +122,11 @@ export function formatReport(a, meta) {
     if (a.notStarted || a.unfinished) lines.push(`(${a.notStarted} run(s) never started, ${a.unfinished} start line(s) without an end line.)`);
     return `${lines.join('\n')}\n`;
   }
-  lines.push(`runs started since: ${a.total}   never started: ${a.notStarted}   no end line: ${a.unfinished}`, '');
+  lines.push(`runs started since: ${a.total}   never started: ${a.notStarted}   no end line: ${a.unfinished}`);
+  if (a.preCutoffUnresolved) lines.push(`started before the cutoff, no end line: ${a.preCutoffUnresolved} (not counted as running; see "may be higher")`);
+  lines.push('');
   for (const b of a.buckets) {
-    lines.push(`c=${b.concurrency}   runs ${b.runs}`);
+    lines.push(`c=${b.concurrency}   runs ${b.runs}${b.lowerBound ? `   (${b.lowerBound} may be higher: a run with no end line may have overlapped)` : ''}`);
     if (b.runs === 0) { lines.push('  no runs', ''); continue; }
     lines.push(
       `  duration       median ${minutes(b.medianMs)}   p90 ${minutes(b.p90Ms)}`,
@@ -156,6 +165,9 @@ export async function main(argv, deps = {}) {
   const args = parseArgs(argv);
   if (args.error) { stderr(`ledger-report: ${args.error}`); return 2; }
   const ledger = args.ledger ?? defaultLedgerPath(deps.env ?? process.env);
+  try { readFileSync(ledger); } catch (e) { // readLedger reads any error as empty: only a missing file is a valid empty ledger
+    if (e?.code !== 'ENOENT') { stderr(`ledger-report: cannot read the ledger ${ledger}: ${e?.message ?? e}`); return 1; }
+  }
   const { entries, damaged } = readLedger(ledger);
   stdout(formatReport(analyze(entries, { sinceMs: args.sinceMs }), { since: new Date(args.sinceMs).toISOString(), ledger, damaged }).trimEnd());
   return 0;

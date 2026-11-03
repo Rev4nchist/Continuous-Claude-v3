@@ -970,7 +970,7 @@ test('main without a pin pins the engine and starts that copy with LOCAL_REVIEW_
   assert.deepEqual(spec.args.slice(1), ['--pr', '9', '--json']);
   assert.equal(spec.env.LOCAL_REVIEW_PINNED, SHA);
   assert.equal(spec.cwd, 'C:\\repo');
-  assert.equal(spec.timeoutMs, (60 + 40 * 2 + 5) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5
+  assert.equal(spec.timeoutMs, (60 + 40 * 2 + 5 + 60 * 2) * 60_000); // slot_wait_min + timeout_min x (1 + retry_max) + 5 + the default 60 min grok wait x (1 + retry_max)
   assert.deepEqual(out, ['{"exit":3}']);
   assert.deepEqual(err, ['busy']);
 });
@@ -1242,4 +1242,32 @@ test('pathspecDiffArgv runs on real git: listed names only, taken literally, a d
 test('pathspecDiffArgv refuses a name list over the command-line limit (breaks if the length check is removed)', () => {
   const many = Array.from({ length: 2000 }, (_, i) => `src/some/long/folder/file-${i}.mjs`);
   assert.throws(() => pathspecDiffArgv(['A', 'B'], many), /command line/);
+});
+
+// Finding (CodeRabbit PR 271): the grok gate wait runs inside the engine slot, but the slot lifetime had no term for it, so another engine
+// could take the slot while this one still waited for grok. Breaks if takeSlot's timeoutMs drops the grok wait: slot 'a' is 100 min old,
+// over the 90 min of 2 x 40 min + 10 min, but inside 2 x (40 + 60 min) + 10 min.
+test('the engine slot stays live through the grok gate wait (breaks if the slot lifetime leaves out CCV3_GROK_WAIT_MIN)', async () => {
+  const w = world();
+  w.configPath = tempConfig(w, (c) => { c.local_review.slot_wait_min = 0; });
+  seedSlots(path.join(w.aux, 'local-review-slots.json'), [entry('a', 1, 100 * 60_000), entry('b', 2)]);
+  const r = await run(w);
+  assert.equal(r.exit, EXIT.CAP);
+  assert.equal(w.agentCalls.length, 0);
+});
+
+// Finding (CodeRabbit PR 271): the relaunch time-out had no term for the grok gate wait, so the engine was killed while its child waited.
+// Breaks if relaunch drops the grok wait of each attempt from its budget.
+test('the relaunch time-out adds the grok gate wait of every attempt (breaks if CCV3_GROK_WAIT_MIN is left out of the budget)', async () => {
+  const dir = tmp('relaunch-grok-wait');
+  copyFileSync(REAL_CONFIG, path.join(dir, 'review-router.config.json'));
+  const specs = [];
+  const go = (env) => main(['--pr', '9'], {
+    root: 'C:\repo', env, stdout: () => {}, stderr: () => {}, pinEngine: () => ({ ok: true, engineSha: SHA, dir }),
+    runAgent: async (s) => { specs.push(s); return { status: 0, stdout: '', stderr: '', timedOut: false }; },
+  });
+  await go({ PATH: 'p', CCV3_GROK_WAIT_MIN: '180' });
+  assert.equal(specs[0].timeoutMs, (60 + 40 * 2 + 5 + 180 * 2) * 60_000);
+  await go({ PATH: 'p', CCV3_GROK_WAIT_MIN: '9'.repeat(400) });
+  assert.equal(specs[1].timeoutMs, (60 + 40 * 2 + 5 + 60 * 2) * 60_000, 'a wait that overflows means the default');
 });
