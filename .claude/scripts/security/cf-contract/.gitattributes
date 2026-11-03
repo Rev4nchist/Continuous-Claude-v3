@@ -1,0 +1,5 @@
+# Vendored files stay byte-exact so vendor.lock.json hashes hold on every clone.
+* -text
+.gitattributes text eol=lf
+PROVENANCE.md text eol=lf
+vendor.lock.json text eol=lf
