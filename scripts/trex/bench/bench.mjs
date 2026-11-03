@@ -5,7 +5,7 @@
  *   node scripts/trex/bench/bench.mjs --rows S18,S8,S3 --repeats 1          smoke: positives only, no negatives
  *   node scripts/trex/bench/bench.mjs [--repeats 3]                          full: every row, the negatives and S17
  *   node scripts/trex/bench/bench.mjs --plan [--rows ...]                    print rows, hours and image tags; run nothing
- *   options: [--arm grok|composer|xhigh|grok2] [--frozen <file>] [--image-sha <ref>] [--negatives] [--proofs <file>] [--out <dir>]
+ *   options: [--arm grok|composer|composer2|xhigh|grok2] [--frozen <file>] [--image-sha <ref>] [--negatives] [--proofs <file>] [--out <dir>]
  *
  * Exit codes: 0 the bench ran (the verdict is data), 2 refused by preflight or bad input, 4 internal error.
  * Every world call (git, Docker, prove-check, run.mjs, the process table) goes through `deps`, so tests run with fakes.
@@ -19,19 +19,18 @@ import { pidAlive } from '../../github/lib/file-lock.mjs';
 import { killTree, processChildren } from '../../github/lib/proc.mjs';
 import { EST_BUILD_SEC, imageExists, imageTagsFor, isMerged, projectName, removeByLabel } from '../env.mjs';
 import { loadFlows } from '../flow.mjs';
-import { lockPathFor, primaryRootOf } from '../lock.mjs';
+import { acquireLock, lockPathFor, primaryRootOf } from '../lock.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
-import { dockerBin, processStartMs, runChild } from '../lib/proc.mjs';
+import { dockerBin, makePidRecorder, processStartMs, runChild } from '../lib/proc.mjs';
 import { stripEnv } from '../lib/strip-env.mjs';
 import { writeSidecar } from '../report.mjs';
 import { matchGlob } from '../../github/review-router.mjs';
-import { AUDITED, BLIND, GROUPS } from './author.mjs';
+import { ARMS, ARM_NAMES, AUDITED, BLIND, GROUPS, inputBlob } from './author.mjs';
 import { isFlaky, pct, rowCaught, s17Grade, stopRule, wilson } from './metrics.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const BENCH_DIR = 'scripts/trex/bench';
 const REF = 'fork/main';
-const ARMS = Object.freeze(['grok', 'composer', 'xhigh', 'grok2']);
 /** ~130 side-runs take ~15 h (spec 7): about 7 minutes for each. */
 export const EST_SIDE_MIN = 7;
 export const FULL_N = 15;
@@ -45,7 +44,6 @@ const HAND_NOTE = 'The hand rule was written after reading the S17 answer, whose
 
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const slash = (p) => p.replaceAll('\\', '/');
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 
 // ---------- env ----------
@@ -160,6 +158,17 @@ function ancestryProblems(deps, shas) {
   return out;
 }
 
+/** Host flows run only at a commit merged into fork/main (env.mjs prepareHost): the frozen flows commit must be an ancestor too, or every host row grades broken. */
+function hostShaProblems(deps, sha) {
+  if (!sha) return [];
+  try {
+    if (deps.isMerged(deps.git, sha, REF)) return [];
+  } catch (e) {
+    return [`the frozen flows commit ${sha}: ${String(e.message).split('\n')[0]}`];
+  }
+  return [`the frozen flows commit ${sha} is not an ancestor of ${REF}: merge it first, because the frozen host flows need a merged commit`];
+}
+
 async function dockerProblem(deps) {
   try {
     const r = await deps.docker(['info'], { timeoutMs: 60_000 });
@@ -189,10 +198,10 @@ async function imageProblems(deps, { heads, imageSha }) {
 
 /**
  * Spec 5.14 preflight. input: { frozen, flowsDir, shas, heads, imageSha }. Returns { problems: string[] }.
- * Frozen hash and clean dir, every sha an ancestor of fork/main, Docker up, every image tag present. Nothing is built.
+ * Frozen hash and clean dir, every sha an ancestor of fork/main (input.hostSha, the frozen flows commit, too when it holds host flows), Docker up, every image tag present. Nothing is built.
  */
 export async function preflight(input, deps) {
-  const problems = [...frozenProblems(deps.git, input), ...ancestryProblems(deps, input.shas)];
+  const problems = [...frozenProblems(deps.git, input), ...ancestryProblems(deps, input.shas), ...hostShaProblems(deps, input.hostSha)];
   const down = await dockerProblem(deps);
   if (down) return { problems: [...problems, down] };
   return { problems: [...problems, ...await imageProblems(deps, input)] };
@@ -214,6 +223,14 @@ function ownsLock(info, deps) {
   return Number.isFinite(began) && Number.isFinite(wrote) && began <= wrote + 2000 && wrote - began <= 60_000;
 }
 
+/** A live holder as acquireLock sees it: the pid runs and did not start after the lock was written (a reused pid holds nothing). */
+function lockHeld(info, deps) {
+  if (!deps.pidAlive(info.pid)) return false;
+  const wrote = Date.parse(info.started);
+  const began = deps.processStart(info.pid);
+  return !(Number.isFinite(began) && Number.isFinite(wrote) && began > wrote + 2000);
+}
+
 function killOwner(info, deps) {
   if (!ownsLock(info, deps)) return false;
   deps.killTree(info.pid, { children: deps.processChildren() });
@@ -225,22 +242,55 @@ function runUnlock(ctx) {
   return ctx.deps.spawn(process.execPath, args, spawnOpts(ctx, 120_000));
 }
 
+/** Kills each pid listed in the pids.json files whose live process started when it was recorded (liveOwned: a reused pid is spared). */
+function killRecorded(files, deps) {
+  const recorder = deps.pidRecorder ?? ((file) => makePidRecorder(file, { alive: deps.pidAlive, processStart: deps.processStart }));
+  const killed = [];
+  for (const file of files) {
+    for (const pid of recorder(file).liveOwned()) {
+      deps.killTree(pid, { children: deps.processChildren() });
+      killed.push(pid);
+    }
+  }
+  return killed;
+}
+
+/** Removes every container and network that carries this bench's own label trex.bench=<runId>. Never throws. */
+async function sweepBench(ctx) {
+  try { await (ctx.deps.removeByLabel ?? removeByLabel)(ctx.runId, { docker: ctx.deps.docker }, 'trex.bench'); } catch { /* best effort */ }
+}
+
 /**
- * After every row (spec 5.14 step 3, 13.3): when the run lock names this row (`match` over its argv), kill the run.mjs tree whose
- * pid is in the lock file (only if the start time fits), call `run.mjs --unlock`, remove containers by label trex.run=<runId>.
+ * After every row (spec 5.14 step 3, 13.3): when the run lock was written by this bench run (lock.benchRun is TREX_BENCH_RUN, the ctx.runId),
+ * kill the run.mjs tree whose pid is in the lock file (only if the start time fits), call `run.mjs --unlock`, remove containers by label trex.run=<runId>.
+ * After a timeout it also kills the pids recorded in each side's pids.json (pidFiles, start time checked) and sweeps the label trex.bench=<runId>.
  * Then always `docker compose -p <project> down -v` for the row's projects: prove-check kills a slow side without a tree kill, and
  * the next side replaces the dead lock, so the first side's containers can outlive a lock that is already gone.
- * A lock of another run is left alone, projects included (a rival run may use the same sha).
+ * A lock of another bench, or one with no benchRun, is left alone, projects included (a rival run may use the same sha).
  */
-export async function cleanupRun(ctx, { match, projects = [], timedOut = false }) {
+export async function cleanupRun(ctx, { projects = [], timedOut = false, pidFiles = [] }) {
   const { deps } = ctx;
   const lock = readLock(deps);
-  if (lock && !match.test((lock.argv ?? []).join(' '))) return { state: 'foreign', killed: false };
+  if (lock && lock.benchRun !== ctx.runId) return { state: 'foreign', killed: false, pids: [] };
   const killed = lock ? killOwner(lock, deps) : false;
+  const pids = timedOut ? killRecorded(pidFiles, deps) : [];
   if (lock) runUnlock(ctx);
   if (lock?.runId) await (deps.removeByLabel ?? removeByLabel)(lock.runId, { docker: deps.docker });
+  if (timedOut) await sweepBench(ctx);
   for (const p of projects) await deps.docker(['compose', '-p', p, 'down', '-v', '--remove-orphans'], { timeoutMs: CLEAN_MS });
-  return { state: lock || timedOut ? 'cleaned' : 'none', killed };
+  return { state: lock || timedOut ? 'cleaned' : 'none', killed, pids };
+}
+
+const LOCK_POLL_MS = 30_000;
+const LOCK_POLLS = 60;
+
+/** A run exited 3 because another run holds the lock. Waits (up to 30 min) until that holder is gone, so the one retry can start. */
+async function waitForLock(ctx) {
+  for (let i = 0; i < LOCK_POLLS; i += 1) {
+    const lock = readLock(ctx.deps);
+    if (!lock || !lockHeld(lock, ctx.deps)) return;
+    await ctx.deps.sleep(LOCK_POLL_MS);
+  }
 }
 
 // ---------- spawning ----------
@@ -254,7 +304,6 @@ function spawnOpts(ctx, rowMs = ROW_TIMEOUT_MS) {
 
 const timedOutOf = (r) => r?.error?.code === 'ETIMEDOUT';
 const groupOf = (row) => row.bench?.group ?? row.major;
-const rowMatch = (id) => new RegExp(`trex-${escapeRe(id)}(?![\\w])`);
 
 function projectFor(sha) {
   try { return projectName({ sha }); } catch { return null; }
@@ -280,9 +329,11 @@ function readProve(dir, date, major) {
   return j?.rows?.find((r) => r.major === major) ?? null;
 }
 
+/** The proof tree prove-check builds for a side: .claude/cache/proof/<sha8>/trex-<major>. It is the way to the sides when a timeout lost the JSON. */
+const predictedTree = (ctx, row, side) => (row[side] ? path.join(ctx.repo, '.claude', 'cache', 'proof', String(row[side]).slice(0, 8), `trex-${row.major}`) : null);
+
 /** Copies one .trex-out to <dir>/<side> (without the big rebuildable folders) and returns its report.json, or null. */
-function copySide(result, side, dir) {
-  const tree = result?.[side]?.tree;
+function copyTree(tree, side, dir) {
   const src = tree ? path.join(tree, '.trex-out') : null;
   if (!src || !existsSync(src)) return null;
   cpSync(src, path.join(dir, side), { recursive: true, filter: (s) => !SKIP_COPY.has(path.basename(s)) });
@@ -292,6 +343,7 @@ function copySide(result, side, dir) {
 const minutesOf = (reports) => reports.filter((r) => r?.startedAt && r?.finishedAt)
   .map((r) => (Date.parse(r.finishedAt) - Date.parse(r.startedAt)) / 60_000).filter(Number.isFinite);
 
+/** The verdict of one row from a prove-check run. Rows of one group (S6 and S7) are graded from the same run, each with its own defect files. */
 function rowVerdict(ctx, row, { timedOut, result, sides }) {
   if (timedOut) return gradePositive(null, null, null, row, []);
   return gradePositive(result, sides.pre, sides.fix, row, flowsOf(ctx, groupOf(row)));
@@ -301,15 +353,30 @@ function flowsOf(ctx, group) {
   return (ctx.flowCache[group] ??= ctx.deps.loadFlows(ctx.deps.git, ctx.frozen.sha, `${ctx.flowsDir}/${group}`));
 }
 
-async function runRow(ctx, row, n) {
+/** One prove-check run of a row, its copies and its cleanup. Returns { timedOut, result, sides, minutes }. */
+async function attemptRow(ctx, row, n) {
   const dir = path.join(ctx.runDir, `r${n}`, row.major);
   mkdirSync(dir, { recursive: true });
   const r = ctx.deps.spawn(process.execPath, proveArgs(ctx, row, dir), spawnOpts(ctx, row.timeoutMs));
   const timedOut = timedOutOf(r);
   const result = readProve(dir, ctx.date, row.major);
-  const sides = { pre: copySide(result, 'pre', dir), fix: copySide(result, 'fix', dir) };
-  await cleanupRun(ctx, { match: rowMatch(row.major), projects: projectsOf(row, result, sides), timedOut });
-  return { verdict: rowVerdict(ctx, row, { timedOut, result, sides }), minutes: minutesOf([sides.pre, sides.fix]), timedOut };
+  const tree = (side) => result?.[side]?.tree ?? (timedOut ? predictedTree(ctx, row, side) : null);
+  const trees = [tree('pre'), tree('fix')];
+  const sides = { pre: copyTree(trees[0], 'pre', dir), fix: copyTree(trees[1], 'fix', dir) };
+  const pidFiles = trees.filter(Boolean).map((t) => path.join(t, '.trex-out', 'pids.json'));
+  await cleanupRun(ctx, { projects: projectsOf(row, result, sides), timedOut, pidFiles });
+  return { timedOut, result, sides, minutes: minutesOf([sides.pre, sides.fix]) };
+}
+
+/** True when a side of the run exited 3: another run held the lock. */
+const lockWasHeld = (a) => !a.timedOut && (a.result?.pre?.code === 3 || a.result?.fix?.code === 3);
+
+/** A row that met a held lock waits for it and runs once more. A second exit 3 grades as it falls (broken). */
+async function runRow(ctx, row, n) {
+  const first = await attemptRow(ctx, row, n);
+  if (!lockWasHeld(first)) return first;
+  await waitForLock(ctx);
+  return attemptRow(ctx, row, n);
 }
 
 // ---------- negatives and S17 ----------
@@ -321,15 +388,21 @@ function simulateArgs(ctx, head, group, dir) {
   ];
 }
 
-/** Runs one (head, group) through run.mjs --simulate. Returns { run: {stdout, code}, report, timedOut, minutes }. */
-async function simulate(ctx, { head, group, dir }) {
+async function simulateOnce(ctx, { head, group, dir }) {
   mkdirSync(dir, { recursive: true });
   const r = ctx.deps.spawn(process.execPath, simulateArgs(ctx, head, group, dir), spawnOpts(ctx));
   const timedOut = timedOutOf(r);
   const report = readJson(path.join(dir, 'report.json'));
-  const match = new RegExp(escapeRe(dir));
-  await cleanupRun(ctx, { match, projects: [projectFor(head)].filter(Boolean), timedOut });
+  await cleanupRun(ctx, { projects: [projectFor(head)].filter(Boolean), timedOut, pidFiles: [path.join(dir, 'pids.json')] });
   return { run: { stdout: r.stdout ?? '', code: timedOut ? null : r.status }, report, timedOut, minutes: minutesOf([report]) };
+}
+
+/** Runs one (head, group) through run.mjs --simulate; exit 3 (lock held) waits and runs once more. Returns { run: {stdout, code}, report, timedOut, minutes }. */
+async function simulate(ctx, spec) {
+  const first = await simulateOnce(ctx, spec);
+  if (first.timedOut || first.run.code !== 3) return first;
+  await waitForLock(ctx);
+  return simulateOnce(ctx, spec);
 }
 
 const SKIP_RUN = { stdout: '# skipped no_match\n', code: 0 };
@@ -367,10 +440,12 @@ async function runHonest(ctx, neg, n) {
 
 const worst = (list, bad) => (list.includes(bad) ? bad : list[0]);
 const countBy = (list, fn) => list.filter(fn).length;
+/** Flaky prove-check runs: rows graded from one run (S6 and S7) count once. */
+const flakyRuns = (info) => new Set(info.filter((r) => r.flaky).map((r) => r.run)).size;
 
 function summarizeRows(rows) {
   const info = rows.map((r) => ({
-    id: r.id, verdicts: r.verdicts, caught: rowCaught(r.verdicts), flaky: isFlaky(r.verdicts), minutes: r.minutes,
+    id: r.id, run: r.run ?? r.id, verdicts: r.verdicts, caught: rowCaught(r.verdicts), flaky: isFlaky(r.verdicts), minutes: r.minutes,
     broken: countBy(r.verdicts, (v) => HARNESS_VERDICTS.has(v)) >= Math.ceil((2 * r.verdicts.length) / 3),
     falseFix: r.verdicts.includes('false-fail'),
   }));
@@ -405,7 +480,7 @@ function minutesStats(values) {
 }
 
 function buildBars({ rows, negs, honest }) {
-  const bars = { fixFalseFails: countBy(rows.info, (r) => r.falseFix) === 0, flake: countBy(rows.info, (r) => r.flaky) <= 1 };
+  const bars = { fixFalseFails: countBy(rows.info, (r) => r.falseFix) === 0, flake: flakyRuns(rows.info) <= 1 };
   if (negs) bars.negatives = negs.counts.tested >= 10 && negs.counts.falseFails <= 1 && negs.counts.skipWrong === 0;
   if (honest) bars.honest = honest.reached && honest.regex === 'honest';
   return bars;
@@ -422,9 +497,9 @@ function summarize(data, ctx) {
   const all = [...data.rows.flatMap((r) => r.minutes), ...data.negatives.flatMap((x) => x.minutes), ...data.honest.flatMap((x) => x.minutes)];
   const brokenRows = countBy(rows.info, (r) => r.broken);
   return {
-    scope: { n: rows.n, fullN: FULL_N, partial: !ctx.full, repeats: ctx.repeats },
+    scope: { n: rows.n, fullN: ctx.armN, partial: !ctx.full, repeats: ctx.repeats },
     catch: { k: rows.caught, n: rows.n, ...wilson(rows.caught, rows.n), outside: rows.outside },
-    rows: rows.info, brokenRows, falseFixRows: countBy(rows.info, (r) => r.falseFix), flakes: countBy(rows.info, (r) => r.flaky),
+    rows: rows.info, brokenRows, falseFixRows: countBy(rows.info, (r) => r.falseFix), flakes: flakyRuns(rows.info),
     negatives: negs?.info ?? [], negativeCounts: negs?.counts ?? null, honestSkip: honest,
     minutes: minutesStats(all), tokens: tokensOf(ctx.frozen), bars,
     stop: stopRule({ broken: brokenRows, caught: rows.caught, n: rows.n, bars }),
@@ -455,7 +530,10 @@ const pctText = (k, n) => (n > 0 ? `${((100 * k) / n).toFixed(1)}%` : 'n/a');
 
 function headLines(r) {
   const m = r.metrics;
-  const note = m.scope.partial ? ` (smoke: ${m.scope.n} of ${m.scope.fullN} rows, not a stop-rule result)` : '';
+  const s = m.scope;
+  let note = '';
+  if (s.partial) note = ` (smoke: ${s.n} of ${s.fullN} rows, not a stop-rule result)`;
+  else if (s.fullN < FULL_N) note = ` (arm ${r.arm}: ${s.n} of ${s.fullN} rows; compare rows caught across arms, the stop rule is for ${FULL_N} rows)`;
   return [
     `VERDICT: ${r.verdict}${note}`,
     `catch ${m.catch.k}/${m.catch.n} (${pctText(m.catch.k, m.catch.n)}), Wilson 95% ${f2(m.catch.lo)}-${f2(m.catch.hi)}; broken rows ${m.brokenRows}`,
@@ -498,7 +576,7 @@ export function renderBenchText(r) {
 }
 
 function writeArtifacts(ctx, report, started) {
-  const stem = path.join(ctx.outDir, `${ctx.date}-trex-bench${ctx.full ? '' : '-smoke'}`);
+  const stem = path.join(ctx.outDir, `${ctx.date}-trex-bench${ctx.arm === 'grok' ? '' : `-${ctx.arm}`}${ctx.full ? '' : '-smoke'}`);
   mkdirSync(ctx.outDir, { recursive: true });
   writeFileSync(`${stem}.json`, `${JSON.stringify(report, null, 2)}\n`);
   writeFileSync(`${stem}.txt`, renderBenchText(report));
@@ -511,26 +589,29 @@ function writeArtifacts(ctx, report, started) {
 
 // ---------- planning ----------
 
-/** The row list for --plan, from the author groups (no rows.mjs, no Docker). S7 belongs to group S6. S17 is not a row. */
-export function planRows(ids) {
-  const all = Object.entries(GROUPS).filter(([, v]) => v.kind !== 'honest-skip')
-    .flatMap(([g, v]) => (v.rows ?? [g]).map((id) => ({ id, group: g, pre: v.pre, fix: v.fix })));
+/** The groups that make no row of their own (S17 is the honest-skip group). */
+const rowGroups = (groups) => Object.entries(GROUPS).filter(([g, v]) => v.kind !== 'honest-skip' && groups.includes(g));
+
+/** The row list for --plan, from the author groups (no rows.mjs, no Docker). S7 belongs to group S6. S17 is not a row. `groups` limits it to an arm. */
+export function planRows(ids, groups = Object.keys(GROUPS)) {
+  const all = rowGroups(groups).flatMap(([g, v]) => (v.rows ?? [g]).map((id) => ({ id, group: g, pre: v.pre, fix: v.fix })));
   if (!ids) return all;
   return ids.map((id) => {
     const found = all.find((r) => r.id === id);
-    if (!found) throw new Error(`unknown row ${id}`);
+    if (!found) throw new Error(`unknown row ${id}${groups.length < Object.keys(GROUPS).length ? ' (not in this arm)' : ''}`);
     return found;
   });
 }
 
 const hoursText = (h) => h.toFixed(1);
 
-/** Rows, side-runs, estimated hours and image tags. Reads git only. deps: { tagsFor, extraHeads? }. */
-export async function planBench({ rowIds, repeats, imageSha, extra = 0 }, deps) {
-  const rows = planRows(rowIds);
+/** Rows, side-runs, estimated hours and image tags. Reads git only. A group runs once however many rows it grades (S6 and S7). deps: { tagsFor, extraHeads? }. */
+export async function planBench({ rowIds, repeats, imageSha, extra = 0, arm = 'grok' }, deps) {
+  const rows = planRows(rowIds, ARMS[arm].groups);
   const heads = [...new Set(rows.flatMap((r) => [r.pre, r.fix]).concat(deps.extraHeads ?? []))];
   const byTag = tagMap(deps, heads, imageSha);
-  const sideRuns = (rows.length * 2 + extra) * repeats;
+  const runs = new Set(rows.map((r) => r.group)).size;
+  const sideRuns = (runs * 2 + extra) * repeats;
   const buildHours = (byTag.size * EST_BUILD_SEC) / 3600;
   const hours = (sideRuns * EST_SIDE_MIN) / 60;
   return { rows, sideRuns, tags: [...byTag.keys()], byTag, hours, buildHours };
@@ -539,7 +620,7 @@ export async function planBench({ rowIds, repeats, imageSha, extra = 0 }, deps) 
 function planLines(plan, o) {
   return [
     `bench plan (arm ${o.arm})`, `rows: ${plan.rows.map((r) => r.id).join(', ')}`, `repeats: ${o.repeats}`,
-    `side runs: ${plan.sideRuns} (rows x 2 sides x repeats${o.extra ? `, plus ${o.extra} negative run(s) per repeat` : ''})`,
+    `side runs: ${plan.sideRuns} (groups x 2 sides x repeats${o.extra ? `, plus ${o.extra} negative run(s) per repeat` : ''}; S7 shares the S6 run)`,
     `estimated hours: ${hoursText(plan.hours)} at ${EST_SIDE_MIN} min per side-run, plus up to ${hoursText(plan.buildHours)} if every image tag needs a build`,
     `image tags needed (${plan.tags.length}):`,
     ...[...plan.byTag].map(([tag, hs]) => `  ${tag} (${hs.length} head${hs.length === 1 ? '' : 's'})`),
@@ -549,30 +630,51 @@ function planLines(plan, o) {
 
 // ---------- the bench ----------
 
-function armFiles(arm) {
-  return arm === 'grok' ? { frozen: 'frozen.json', dir: 'flows' } : { frozen: `frozen-${arm}.json`, dir: `flows-${arm}` };
-}
+const armGroupsOf = (arm) => ARMS[arm].groups;
+/** An arm that holds every author group can run the negatives and S17 by default. The four-group arms cannot reach the 10 tested negatives. */
+const armIsFull = (arm) => Object.keys(GROUPS).every((g) => armGroupsOf(arm).includes(g));
+/** The arm's own catch rows (S1-S15): the denominator its report shows. */
+const armCatchN = (arm) => planRows(null, armGroupsOf(arm)).filter((r) => CATCH_ID.test(r.id)).length;
+const wantsNegatives = (o) => o.negatives ?? (!o.rowIds && armIsFull(o.arm));
+const inArm = (arm, row) => armGroupsOf(arm).includes(groupOf(row));
 
 export function withDefaults(deps = {}, repo = ROOT) {
   const git = deps.git ?? makeTrexGit(repo);
   const rows = () => import('./rows.mjs');
   return {
     spawn: spawnSync, now: () => new Date(), out: (l) => console.log(l), pidAlive, processStart: processStartMs, processChildren, killTree,
-    isMerged, removeByLabel, loadFlows, hasImage: (tag) => imageExists(tag, { cwd: repo }),
+    isMerged, removeByLabel, loadFlows, hasImage: (tag) => imageExists(tag, { cwd: repo }), acquireLock,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     tagsFor: (heads, sha) => imageTagsFor(git, heads, sha),
     docker: (args, o) => runChild(dockerBin(), args, o),
     lockPath: () => lockPathFor(primaryRootOf(git, repo)),
+    benchLockPath: () => path.join(path.dirname(lockPathFor(primaryRootOf(git, repo))), 'bench.lock'),
     loadRows: async (f) => (await rows()).loadRows(f), loadNegatives: async (f) => (await rows()).loadNegatives(f),
     validateRows: async (g, r, o) => (await rows()).validateRows(g, r, o),
+    validateNegatives: async (g, n, o) => (await rows()).validateNegatives(g, n, o),
     ...deps, git,
   };
 }
 
-function selectRows(all, ids) {
-  const catchRows = all.filter((r) => r.check === 'trex' && (r.bench?.kind ?? 'catch') === 'catch');
+function selectRows(all, ids, arm) {
+  const catchRows = all.filter((r) => r.check === 'trex' && (r.bench?.kind ?? 'catch') === 'catch' && inArm(arm, r));
   if (!ids) return { rows: catchRows, problems: [] };
-  const problems = ids.filter((id) => !catchRows.some((r) => r.major === id)).map((id) => `unknown row ${id} (not a catch row in the proofs file)`);
+  const problems = ids.filter((id) => !catchRows.some((r) => r.major === id)).map((id) => `unknown row ${id} (not a catch row of arm ${arm} in the proofs file)`);
   return { rows: ids.map((id) => catchRows.find((r) => r.major === id)).filter(Boolean), problems };
+}
+
+/**
+ * The prove-check runs of a selection: one for each group. S7 is graded from the S6 run (same flows, pre and fix), with its own defect files.
+ * [{ group, run (the row prove-check runs), graded (the selected rows graded from that run) }].
+ */
+function runUnits(all, rows) {
+  const units = new Map();
+  for (const row of rows) {
+    const g = groupOf(row);
+    if (!units.has(g)) units.set(g, { group: g, graded: [] });
+    units.get(g).graded.push(row);
+  }
+  return [...units.values()].map((u) => ({ ...u, run: all.find((r) => r.major === u.group && r.check === 'trex') ?? u.graded[0] }));
 }
 
 /** The S17 entry: from negatives.json when it names one, else from the S17 author group (skipAt, claimMatch). */
@@ -582,29 +684,68 @@ function honestEntry(negatives) {
 }
 
 async function loadInputs(o, deps) {
-  const files = armFiles(o.arm);
-  const frozenFile = path.resolve(o.repo, o.frozenFile ?? path.join(BENCH_DIR, files.frozen));
-  const all = await deps.loadRows(path.resolve(o.repo, o.proofs ?? path.join(BENCH_DIR, 'proofs-trex.json')));
-  const withNeg = o.negatives ?? !o.rowIds;
-  const allNeg = withNeg ? await deps.loadNegatives(path.join(o.repo, BENCH_DIR, 'negatives.json')) : [];
+  const arm = ARMS[o.arm];
+  const frozenFile = path.resolve(o.repo, o.frozenFile ?? path.join(BENCH_DIR, arm.frozen));
+  const proofsFile = path.resolve(o.repo, o.proofs ?? path.join(BENCH_DIR, 'proofs-trex.json'));
+  const negativesFile = path.join(o.repo, BENCH_DIR, 'negatives.json');
+  const all = await deps.loadRows(proofsFile);
+  const withNeg = wantsNegatives(o);
+  const allNeg = withNeg ? await deps.loadNegatives(negativesFile) : [];
+  const sel = selectRows(all, o.rowIds, o.arm);
   return {
-    files, frozenFile, frozen: readJson(frozenFile), all, sel: selectRows(all, o.rowIds), withNeg,
-    negatives: allNeg.filter((n) => n.kind !== 'honest-skip'), honest: withNeg ? honestEntry(allNeg) : null, flowsDir: `${BENCH_DIR}/${files.dir}`,
+    arm: o.arm, frozenFile, proofsFile, negativesFile, frozen: readJson(frozenFile), all, sel, units: runUnits(all, sel.rows), withNeg,
+    negatives: allNeg.filter((n) => n.kind !== 'honest-skip'), honest: withNeg && arm.groups.includes('S17') ? honestEntry(allNeg) : null, flowsDir: arm.flowsDir,
   };
+}
+
+/** Spec 13.1: the negatives must be clean for the groups they touch, and enough of them graded. Reads the flows of the arm's groups at the frozen sha. */
+async function negativeProblems(deps, inp) {
+  const flows = {};
+  try {
+    for (const g of armGroupsOf(inp.arm)) flows[g] = deps.loadFlows(deps.git, inp.frozen.sha, `${inp.flowsDir}/${g}`).map((f) => ({ id: f.id, paths: f.paths }));
+  } catch (e) {
+    return [`cannot read the flows of arm ${inp.arm} at ${shortId(inp.frozen.sha)}: ${String(e.message).split('\n')[0]}`];
+  }
+  return deps.validateNegatives(deps.git, inp.negatives, { sha: inp.frozen.sha, ref: REF, flows });
+}
+
+function headPins(pinned, negatives) {
+  const out = negatives.filter((n) => pinned[n.id] !== n.head)
+    .map((n) => `negative ${n.id}: head ${shortId(n.head)} differs from the frozen head ${pinned[n.id] ? shortId(pinned[n.id]) : 'none'}`);
+  for (const id of Object.keys(pinned)) if (!negatives.some((n) => n.id === id)) out.push(`negative ${id} was frozen but is no longer in negatives.json`);
+  return out;
+}
+
+/** The freeze pins (author.mjs freeze): the negative heads and the blob ids of the answer key (proofs-trex.json) and negatives.json must not change after the freeze. */
+function pinProblems(deps, inp) {
+  const pins = inp.frozen.pins;
+  if (!pins?.files || !pins.negatives) return ['the frozen file has no input pins: run author.mjs --freeze again'];
+  const out = [];
+  const blob = (label, file, want) => {
+    const got = inputBlob(deps.git, file);
+    if (got !== want) out.push(`${label} changed since the freeze (blob ${shortId(got)}, frozen ${shortId(want)}): freeze again`);
+  };
+  blob('proofs-trex.json', inp.proofsFile, pins.files.proofs);
+  if (!inp.withNeg) return out;
+  blob('negatives.json', inp.negativesFile, pins.files.negatives);
+  return [...out, ...headPins(pins.negatives, inp.negatives)];
 }
 
 async function inputProblems(inp, o, deps) {
   if (!inp.frozen) return [`cannot read the frozen file ${inp.frozenFile}: run author.mjs --freeze first`];
   const out = [...inp.sel.problems];
   if (inp.sel.rows.length === 0) out.push('no rows to run');
-  if (o.arm === 'grok') out.push(...await deps.validateRows(deps.git, inp.all, { ref: REF, root: o.repo }));
+  const armRows = inp.all.filter((r) => r.check === 'trex' && inArm(inp.arm, r));
+  out.push(...await deps.validateRows(deps.git, armRows, { ref: REF, root: o.repo, flowsDir: inp.flowsDir, groups: armGroupsOf(inp.arm) }));
+  out.push(...pinProblems(deps, inp));
+  if (inp.withNeg) out.push(...await negativeProblems(deps, inp));
   return out;
 }
 
 const headsOf = (inp) => {
   const mapped = new Set(Object.entries(inp.frozen.negatives ?? {}).filter(([, g]) => g.length > 0).map(([id]) => id));
   const negHeads = inp.negatives.filter((n) => mapped.has(n.id)).map((n) => n.head);
-  return [...inp.sel.rows.flatMap((r) => [r.pre, r.fix]), ...negHeads, inp.honest?.head].filter(Boolean);
+  return [...inp.units.flatMap((u) => [u.run.pre, u.run.fix]), ...negHeads, inp.honest?.head].filter(Boolean);
 };
 
 function makeCtx(o, deps, inp, runId) {
@@ -612,7 +753,7 @@ function makeCtx(o, deps, inp, runId) {
   const outBase = path.join(o.repo, '.claude', 'cache', 'e2e');
   return {
     repo: o.repo, deps, runId, date, env: o.env ?? process.env, arm: o.arm, repeats: o.repeats, frozen: inp.frozen, frozenFile: inp.frozenFile,
-    flowsDir: inp.flowsDir, imageSha: o.imageSha, full: !o.rowIds, flowCache: {}, argvText: o.argvText ?? '',
+    flowsDir: inp.flowsDir, imageSha: o.imageSha, full: !o.rowIds, armN: armCatchN(o.arm), flowCache: {}, argvText: o.argvText ?? '',
     runDir: path.join(outBase, 'trex', 'bench', runId), outDir: o.outDir ?? outBase, head: deps.git(['rev-parse', 'HEAD']).stdout.trim(),
   };
 }
@@ -632,11 +773,13 @@ function slotFor(list, id, extra = {}) {
 }
 
 async function repeatOnce(ctx, inp, n, data) {
-  for (const row of inp.sel.rows) {
-    const r = await runRow(ctx, row, n);
-    const slot = slotFor(data.rows, row.major);
-    slot.verdicts.push(r.verdict);
-    slot.minutes.push(...r.minutes);
+  for (const unit of inp.units) {
+    const r = await runRow(ctx, unit.run, n);
+    unit.graded.forEach((row, i) => {
+      const slot = slotFor(data.rows, row.major, { run: unit.group });
+      slot.verdicts.push(rowVerdict(ctx, row, r));
+      if (i === 0) slot.minutes.push(...r.minutes);
+    });
   }
   if (!inp.withNeg) return;
   for (const neg of inp.negatives) {
@@ -645,41 +788,66 @@ async function repeatOnce(ctx, inp, n, data) {
     slot.verdicts.push(...r.verdicts);
     slot.minutes.push(...r.minutes);
   }
-  data.honest.push(await runHonest(ctx, inp.honest, n));
+  if (inp.honest) data.honest.push(await runHonest(ctx, inp.honest, n));
 }
 
 function normalize(opts) {
-  return { repeats: 3, arm: 'grok', ...opts, repo: path.resolve(opts.repo ?? ROOT) };
+  const o = { repeats: 3, arm: 'grok', ...opts, repo: path.resolve(opts.repo ?? ROOT) };
+  if (!Object.hasOwn(ARMS, o.arm)) throw new Error(`unknown arm ${JSON.stringify(o.arm)}`);
+  return o;
+}
+
+const refused = (problems) => ({ exit: 2, problems, metrics: null, verdict: null, artifact: null });
+
+/** One bench at a time on this machine: two benches share the row ids and the run lock, and would clean up each other's containers. */
+function takeBenchLock(deps, runId) {
+  const file = typeof deps.benchLockPath === 'function' ? deps.benchLockPath() : deps.benchLockPath;
+  const info = { pid: process.pid, started: deps.now().toISOString(), argv: process.argv.slice(2), runId };
+  return { ...deps.acquireLock(file, info, { alive: deps.pidAlive, processStart: deps.processStart }), file };
+}
+
+async function runAll(ctx, inp, o) {
+  writeProofs(ctx, inp.units.map((u) => u.run));
+  const started = ctx.deps.now().toISOString();
+  const data = { rows: [], negatives: [], honest: [] };
+  for (let n = 1; n <= o.repeats; n += 1) await repeatOnce(ctx, inp, n, data);
+  const metrics = summarize(data, ctx);
+  const report = buildBenchReport(ctx, metrics);
+  const artifact = writeArtifacts(ctx, report, started);
+  ctx.deps.out(`VERDICT: ${report.verdict}${ctx.full ? '' : ' (smoke)'}  ${artifact}`);
+  return { exit: 0, problems: [], metrics, verdict: report.verdict, artifact };
 }
 
 /**
  * runBench({ repo, repeats, rowIds, runId, arm, frozenFile, negatives, imageSha, outDir, env }, deps) -> { exit, metrics, verdict, artifact, problems }.
- * Preflight first (nothing runs on a problem: exit 2). Then each repeat runs every positive row, and in a full run every negative and S17.
+ * Preflight first (nothing runs on a problem: exit 2). Then the bench lock (one bench at a time: exit 2 when held).
+ * Each repeat runs every positive row once for each group, and in a full run of an arm that holds them, every negative and S17.
  */
 export async function runBench(opts, deps0 = {}) {
   const o = normalize(opts);
   const deps = withDefaults(deps0, o.repo);
   o.imageSha ??= deps.git(['rev-parse', 'HEAD']).stdout.trim();
   const inp = await loadInputs(o, deps);
-  const refusal = await refuse(o, deps, inp);
-  if (refusal) return { exit: 2, problems: refusal, metrics: null, verdict: null, artifact: null };
-  const ctx = makeCtx(o, deps, inp, o.runId ?? `bench-${localDate(deps.now())}-${randomBytes(3).toString('hex')}`);
-  writeProofs(ctx, inp.sel.rows);
-  const started = deps.now().toISOString();
-  const data = { rows: [], negatives: [], honest: [] };
-  for (let n = 1; n <= o.repeats; n += 1) await repeatOnce(ctx, inp, n, data);
-  const metrics = summarize(data, ctx);
-  const report = buildBenchReport(ctx, metrics);
-  const artifact = writeArtifacts(ctx, report, started);
-  deps.out(`VERDICT: ${report.verdict}${ctx.full ? '' : ' (smoke)'}  ${artifact}`);
-  return { exit: 0, problems: [], metrics, verdict: report.verdict, artifact };
+  const problems = await refuse(o, deps, inp);
+  if (problems) return refused(problems);
+  const runId = o.runId ?? `bench-${localDate(deps.now())}-${randomBytes(3).toString('hex')}`;
+  const lock = takeBenchLock(deps, runId);
+  if (!lock.ok) return refused([`another bench run holds ${slash(lock.file)} (pid ${lock.pid ?? 'unknown'}): wait for it to finish`]);
+  const ctx = makeCtx(o, deps, inp, runId);
+  try {
+    return await runAll(ctx, inp, o);
+  } finally {
+    await sweepBench(ctx);
+    lock.release();
+  }
 }
 
 async function refuse(o, deps, inp) {
   const problems = await inputProblems(inp, o, deps);
   if (problems.length > 0) return problems;
   const heads = headsOf(inp);
-  const pre = await preflight({ frozen: inp.frozen, flowsDir: inp.flowsDir, shas: heads, heads, imageSha: o.imageSha }, deps);
+  const hostSha = inp.frozen.hostFlows > 0 ? inp.frozen.sha : null;
+  const pre = await preflight({ frozen: inp.frozen, flowsDir: inp.flowsDir, shas: heads, hostSha, heads, imageSha: o.imageSha }, deps);
   return pre.problems.length > 0 ? pre.problems : null;
 }
 
@@ -704,14 +872,14 @@ function finishArgs(o) {
   delete o.rows;
   o.repeats = Number(o.repeats);
   if (!Number.isInteger(o.repeats) || o.repeats < 1) return { error: '--repeats must be a whole number of 1 or more' };
-  if (!ARMS.includes(o.arm)) return { error: `--arm must be one of ${ARMS.join(', ')}` };
+  if (!ARM_NAMES.includes(o.arm)) return { error: `--arm must be one of ${ARM_NAMES.join(', ')}` };
   return o;
 }
 
 async function planMain(o, deps) {
-  const negs = o.rowIds ? [] : await safeNegatives(deps);
-  const extra = negs.length > 0 ? negs.length + 1 : 0;
-  const plan = await planBench({ rowIds: o.rowIds, repeats: o.repeats, imageSha: o.imageSha ?? 'HEAD', extra }, { ...deps, extraHeads: negs.map((n) => n.head) });
+  const negs = wantsNegatives(o) ? await safeNegatives(deps) : [];
+  const extra = negs.length > 0 ? negs.length + (ARMS[o.arm].groups.includes('S17') ? 1 : 0) : 0;
+  const plan = await planBench({ rowIds: o.rowIds, repeats: o.repeats, imageSha: o.imageSha ?? 'HEAD', extra, arm: o.arm }, { ...deps, extraHeads: negs.map((n) => n.head) });
   planLines(plan, { arm: o.arm, repeats: o.repeats, extra }).forEach((l) => deps.out(l));
   return 0;
 }

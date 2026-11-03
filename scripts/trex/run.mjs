@@ -26,7 +26,7 @@ export { foldAttempts, runFlows } from './flow-run.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const VALUE_FLAGS = ['--simulate', '--config', '--flows-sha', '--image-sha', '--flows-dir', '--flows', '--tree', '--evidence', '--pr', '--head', '--base'];
 const BOOL_FLAGS = ['--json', '--unlock', '--rerun', '--advisory', '--select-only'];
-const FLOWS_DIR_OK = /^(?:\.trex\/flows|scripts\/trex\/bench\/flows(?:-composer|-xhigh|-grok2)?\/(?:S\d{1,2}|N\d{1,2}|K\d))$/;
+const FLOWS_DIR_OK = /^(?:\.trex\/flows|scripts\/trex\/bench\/flows(?:-composer2|-composer|-xhigh|-grok2)?\/(?:S\d{1,2}|N\d{1,2}|K\d))$/;
 const TREE_SHA8 = /[\\/]proof[\\/]([0-9a-f]{8})(?:[\\/]|$)/i;
 const VERDICTS = Object.freeze({ 0: 'pass', 1: 'fail', 2: 'input_error', 3: 'locked', 4: 'internal_error', 5: 'no_evidence' });
 const ENV_TRIES = 2;
@@ -57,10 +57,10 @@ export function parseArgs(argv) {
   return opts;
 }
 
-/** The flows dir with forward slashes and no trailing slash. Only the project flows and the bench flow roots (grok and the three model arms) are allowed. */
+/** The flows dir with forward slashes and no trailing slash. Only the project flows and the bench flow roots (grok and the four model arms) are allowed. */
 function checkFlowsDir(dir) {
   const norm = slash(dir).replace(/\/+$/, '');
-  if (!FLOWS_DIR_OK.test(norm)) throw new UsageError('--flows-dir must be .trex/flows or scripts/trex/bench/flows[-composer|-xhigh|-grok2]/<group>');
+  if (!FLOWS_DIR_OK.test(norm)) throw new UsageError('--flows-dir must be .trex/flows or scripts/trex/bench/flows[-composer|-composer2|-xhigh|-grok2]/<group>');
   return norm;
 }
 
@@ -335,7 +335,7 @@ export async function main(argv, deps = {}) {
     if (opts.mode === 'pr' || opts.mode === 'base') throw new UsageError('P1: not built');
     if (opts.mode === 'unlock') return await doUnlock(d, opts);
     const inputs = resolveInputs(d, opts);
-    const info = { pid: process.pid, started: d.now().toISOString(), argv, runId: d.runId };
+    const info = { pid: process.pid, started: d.now().toISOString(), argv, runId: d.runId, benchRun: (d.env ?? process.env).TREX_BENCH_RUN ?? null };
     const lock = acquireLock(lockPathFor(primaryRootOf(d.git, d.root)), info, { alive: d.alive, processStart: d.processStart });
     if (!lock.ok) { d.out('# trex: another run holds the lock'); return finish(d, opts, 3); }
     return await guardedRun(d, opts, argv, inputs, lock);

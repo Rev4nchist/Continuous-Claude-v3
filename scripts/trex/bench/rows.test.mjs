@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GROUPS } from './author.mjs';
-import { loadNegatives, loadRows, validateNegatives, validateRows } from './rows.mjs';
+import { ROW_IDS, loadNegatives, loadRows, rowIdsFor, validateNegatives, validateRows } from './rows.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -247,4 +247,29 @@ test('negatives.json drops N1/N4/N5, keeps K1/K2 as skip and explains every entr
 
 test('the committed negatives are clean and at least 10 are graded (real git, real flows)', { skip: !hasFork && 'fork/main is not fetched' }, () => {
   assert.deepEqual(validateNegatives(realGit, loadNegatives(NEG_FILE), { sha: 'HEAD', ref: 'fork/main', minTested: 10 }), []);
+});
+
+// ---------- arms (principal review 2026-11-03, finding 3 and the validateRows gap) ----------
+
+test('F10: validateRows checks that the flows dir of the given arm exists, while the row keeps the grok --flows-dir literal', () => {
+  // Breaks when the existence check is hardcoded to the grok folder: a composer, xhigh or grok2 run then skips the check for its own folder.
+  assert.deepEqual(check([goodRow('S1')], fakeGit(), { flowsDir: 'scripts/trex/bench/flows' }), []);
+  const bad = check([goodRow('S1')], fakeGit(), { flowsDir: 'scripts/trex/bench/flows-nope' });
+  assert.ok(has(bad, /flows-nope\/S1 does not exist/), bad.join('\n'));
+  assert.ok(!has(bad, /--flows-dir must be/), 'the stored literal is still the grok one: effectiveCmd rewrites it');
+});
+
+test('F10: rowIdsFor gives the rows an arm must hold: S7 follows S6, S17 has no row', () => {
+  assert.deepEqual(rowIdsFor(['S1', 'S8', 'S14', 'S18']), ['S1', 'S8', 'S14', 'S18']);
+  assert.deepEqual(rowIdsFor(Object.keys(GROUPS)), ROW_IDS);
+  assert.ok(rowIdsFor(['S6']).includes('S7'));
+});
+
+test('F10: validateRows given the arm groups expects only those rows, and still flags one that is missing', () => {
+  // Breaks when expect stays the 16 row ids: an xhigh or grok2 run is refused for "row missing" on twelve rows it never runs.
+  const four = ['S1', 'S8', 'S14', 'S18'].map((m) => goodRow(m));
+  assert.deepEqual(validateRows(fakeGit(), four, { root: ROOT, groups: ['S1', 'S8', 'S14', 'S18'] }), []);
+  const short = validateRows(fakeGit(), four.slice(1), { root: ROOT, groups: ['S1', 'S8', 'S14', 'S18'] });
+  assert.ok(has(short, /S1: row missing/), short.join('\n'));
+  assert.ok(has(validateRows(fakeGit(), four, { root: ROOT }), /S2: row missing/), 'the default arm still needs all 16 rows');
 });

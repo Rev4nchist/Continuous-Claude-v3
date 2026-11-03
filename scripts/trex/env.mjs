@@ -12,7 +12,7 @@
 // --build prints that plan, then builds the image of each head. It refuses without --plan or --yes.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -59,6 +59,7 @@ export function resolveDeps(deps = {}) {
     pipe: (a, b, opts = {}) => pipeChildren(a, b, { onSpawn: deps.onSpawn, onExit: deps.onExit, ...opts }),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     mkdir: mkdirSync,
+    writeFile: writeFileSync,
     clock: () => Date.now(),
     out: console.log,
     exit: process.exit,
@@ -115,10 +116,23 @@ export function loopbackOffenders(configJson) {
   return offenders;
 }
 
-/** The argv after the docker binary for one compose call. Every call names its project, so no call can touch another. */
+/** The argv after the docker binary for one compose call. Every call names its project, so no call can touch another. `file` may be a list (the base file, then an override). */
 export function composeArgv(project, file, ...rest) {
   if (!project) throw new Error('composeArgv needs a project name');
-  return ['compose', '-p', project, '-f', file, ...rest];
+  return ['compose', '-p', project, ...[file].flat().flatMap((f) => ['-f', f]), ...rest];
+}
+
+const BENCH_ID = /^[A-Za-z0-9][\w.-]{0,63}$/;
+
+/**
+ * The compose override that adds the label trex.bench=<id> to every object of the base file (postgres, app and the network with a database;
+ * the app alone without one). The base files carry only trex.run, so a bench-wide sweep needs this (spec 5.14 step 4, 13.3).
+ */
+export function benchOverride(benchRun, needsDb) {
+  if (!BENCH_ID.test(benchRun)) throw new EnvError('start', 'TREX_BENCH_RUN is not a plain label value (letters, digits, dot, dash, underscore)');
+  const labels = `    labels:\n      trex.bench: ${JSON.stringify(benchRun)}\n`;
+  const services = needsDb ? `  postgres:\n${labels}  app:\n${labels}` : `  app:\n${labels}`;
+  return `services:\n${services}${needsDb ? `networks:\n  trexnet:\n${labels}` : ''}`;
 }
 
 /** { "node:22": "sha256:...", ... } from every `name:tag@sha256:digest` in a Dockerfile or compose text. */
@@ -202,9 +216,11 @@ function makeCtx(opts, d) {
   const project = projectName({ pr, sha: head });
   const dbPw = randomBytes(16).toString('hex');
   const file = path.join(evidenceDir, 'cfg', 'docker', 'trex', needsDb ? 'compose.yml' : 'compose.none.yml');
+  const benchRun = opts.benchRun ?? process.env.TREX_BENCH_RUN;
+  const benchFile = benchRun ? path.join(evidenceDir, 'cfg', 'docker', 'trex', 'compose.bench.yml') : null;
   const childEnv = { ...stripEnv(process.env), TREX_RUN_ID: runId, TREX_IMAGE: image, TREX_DB_PW: dbPw };
   return {
-    project, runId, needsDb, dbPw, childEnv, composeFile: file,
+    project, runId, needsDb, dbPw, childEnv, composeFile: benchFile ? [file, benchFile] : file, benchFile, benchRun,
     app: `${project}-app-1`, pg: `${project}-postgres-1`,
     appPw: randomBytes(16).toString('hex'), indexerPw: randomBytes(16).toString('hex'),
     d,
@@ -363,6 +379,7 @@ export async function startEnv(opts, deps = {}) {
   const cfgDir = path.join(opts.evidenceDir, 'cfg');
   const cfg = await extractGrading(d.git, opts.imageSha, cfgDir, null, { ...d, sets: IMAGE_SETS });
   if (cfg.skipped) throw new EnvError('start', `docker/trex is missing at ${opts.imageSha}`);
+  if (ctx.benchFile) d.writeFile(ctx.benchFile, benchOverride(ctx.benchRun, ctx.needsDb));
   await checkLoopback(ctx);
   await compose(ctx, 'down', '-v', '--remove-orphans');
   try {
@@ -388,11 +405,11 @@ export async function withEnv(opts, deps, fn) {
   }
 }
 
-/** Removes containers and networks that carry trex.run=<runId>. Used after a bench time-out (spec 13.3). */
-export async function removeByLabel(runId, deps = {}) {
+/** Removes containers and networks that carry <key>=<id>: trex.run=<runId> (default, after a bench time-out: spec 13.3) or trex.bench=<benchRun> (bench-wide sweep). */
+export async function removeByLabel(runId, deps = {}, key = 'trex.run') {
   if (!runId) throw new Error('removeByLabel needs a runId');
   const d = resolveDeps(deps);
-  const filter = ['--filter', `label=trex.run=${runId}`];
+  const filter = ['--filter', `label=${key}=${runId}`];
   const ids = async (args) => (await d.docker(args, { timeoutMs: 60_000 })).stdout.split(/\s+/).filter(Boolean);
   const containers = await ids(['ps', '-aq', ...filter]);
   if (containers.length > 0) await d.docker(['rm', '-f', ...containers], { timeoutMs: 120_000 });

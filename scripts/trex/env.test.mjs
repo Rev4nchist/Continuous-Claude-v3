@@ -673,3 +673,70 @@ test('resolveDeps: the default git does not pass ANTHROPIC_API_KEY to the git ch
     delete process.env.ANTHROPIC_API_KEY;
   }
 });
+
+// ---------- bench label (principal review 2026-11-03, finding 8) ----------
+
+test('composeArgv: a list of files gives one -f for each, in order', () => {
+  assert.deepEqual(composeArgv('p', ['/a.yml', '/b.yml'], 'down'), ['compose', '-p', 'p', '-f', '/a.yml', '-f', '/b.yml', 'down']);
+});
+
+test('removeByLabel: a key argument sweeps by that label (trex.bench), and the default stays trex.run', async () => {
+  // Breaks when the key is ignored: a bench-wide sweep would remove nothing.
+  const h = harness({ dockerReply: (args) => (args[0] === 'ps' ? { code: 0, timedOut: false, stdout: 'c1\n', stderr: '' } : null) });
+  await removeByLabel('bench-1', h.deps, 'trex.bench');
+  assert.ok(h.dockerArgs().some((a) => a[0] === 'ps' && a.includes('label=trex.bench=bench-1')));
+  assert.ok(h.dockerArgs().some((a) => a[0] === 'network' && a.includes('label=trex.bench=bench-1')));
+  await removeByLabel('run9', h.deps);
+  assert.ok(h.dockerArgs().some((a) => a[0] === 'ps' && a.includes('label=trex.run=run9')));
+});
+
+function benchStart(flows, benchRun = 'bench-2026-11-03-ab12cd') {
+  const written = [];
+  const h = harness({ gitOpts: { trees: TREE, blobs: BLOBS } });
+  h.deps.writeFile = (file, text) => written.push({ file, text, at: h.events.length });
+  return { h, written, run: () => startEnv({ ...START, benchRun, flows }, h.deps) };
+}
+
+test('startEnv: a bench run adds a label override so every compose object carries trex.bench=<runId>', async () => {
+  // Breaks when no override is written: containers of a timed-out row carry no bench label and a bench-wide sweep misses them.
+  const s = benchStart([DB_FLOW]);
+  const env = await s.run();
+  assert.equal(s.written.length, 1);
+  const { file, text, at } = s.written[0];
+  assert.ok(file.startsWith(path.join('C:\\ev', 'cfg')) && file.endsWith('compose.bench.yml'), file);
+  assert.ok(at >= 1 && s.h.events.slice(0, at).every((e) => e.kind === 'pipe'), 'written after the config extract and before the first docker call');
+  assert.equal((text.match(/trex\.bench: "bench-2026-11-03-ab12cd"/g) ?? []).length, 3, 'postgres, app and the network');
+  for (const args of s.h.dockerArgs().filter(isCompose)) {
+    assert.deepEqual(args.filter((a, i) => args[i - 1] === '-f').map((f) => path.basename(f)), ['compose.yml', 'compose.bench.yml']);
+  }
+  await stopEnv(env, s.h.deps);
+  assert.ok(s.h.dockerArgs().filter(isCompose).at(-1).filter((a, i, all) => all[i - 1] === '-f').length === 2, 'stopEnv takes the same files down');
+});
+
+test('startEnv: a bench run without a database labels the app only', async () => {
+  const s = benchStart([PLAIN_FLOW]);
+  await s.run();
+  assert.equal((s.written[0].text.match(/trex\.bench:/g) ?? []).length, 1);
+  assert.doesNotMatch(s.written[0].text, /postgres|trexnet/);
+});
+
+test('startEnv: no bench id writes no override and keeps one -f', async () => {
+  const written = [];
+  const h = harness({ gitOpts: { trees: TREE, blobs: BLOBS } });
+  h.deps.writeFile = (f) => written.push(f);
+  const saved = process.env.TREX_BENCH_RUN;
+  delete process.env.TREX_BENCH_RUN;
+  try { await startEnv({ ...START, flows: [PLAIN_FLOW] }, h.deps); } finally { if (saved !== undefined) process.env.TREX_BENCH_RUN = saved; }
+  assert.deepEqual(written, []);
+  for (const args of h.dockerArgs().filter(isCompose)) assert.equal(args.filter((a) => a === '-f').length, 1);
+});
+
+test('startEnv: a bench id that is not a plain label value is refused before any docker call', async () => {
+  // Breaks when the id goes into the override unchecked: a quote or a newline would change the YAML.
+  for (const bad of ['a b', 'x"y', 'a\nb', '', '-lead']) {
+    const s = benchStart([PLAIN_FLOW], bad);
+    if (bad === '') { await s.run(); assert.equal(s.written.length, 0, 'empty means no bench'); continue; }
+    await assert.rejects(s.run(), (e) => e.stage === 'start', JSON.stringify(bad));
+    assert.equal(s.h.dockerArgs().length, 0);
+  }
+});

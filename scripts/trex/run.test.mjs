@@ -558,10 +558,25 @@ test('withDefaults: the default git does not pass ANTHROPIC_API_KEY to the git c
 test('--flows-dir allows the three model-arm flow folders and no look-alike', () => {
   // Breaks when the allow-list drops an arm folder (its flows cannot run) or widens to any "flows-*" folder.
   const dir = (v) => parseArgs(['--simulate', 'a', '--flows-dir', v]).flowsDir;
-  for (const arm of ['flows-composer', 'flows-xhigh', 'flows-grok2']) {
+  for (const arm of ['flows-composer', 'flows-composer2', 'flows-xhigh', 'flows-grok2']) {
     for (const g of ['S1', 'S18']) assert.equal(dir(`scripts/trex/bench/${arm}/${g}`), `scripts/trex/bench/${arm}/${g}`);
   }
-  for (const bad of ['flows-foo/S1', 'flows-composer', 'flows-composer/s1', 'flows-composer/S100', 'flows-composer/S1/x', 'flows-/S1', 'flows--xhigh/S1']) {
+  for (const bad of ['flows-foo/S1', 'flows-composer', 'flows-composer/s1', 'flows-composer/S100', 'flows-composer22/S1', 'flows-composer2x/S1', 'flows-composer/S1/x', 'flows-/S1', 'flows--xhigh/S1']) {
     assert.throws(() => dir(`scripts/trex/bench/${bad}`), UsageError, bad);
   }
+});
+
+test('F4: the lock holds TREX_BENCH_RUN as benchRun, so a bench knows its own run', async () => {
+  // Breaks when run.mjs leaves the bench run id out of the lock: the bench then matches a lock by a ref name and can kill another bench's run.
+  let seen = null;
+  const h = harness({});
+  h.deps.env = { TREX_BENCH_RUN: 'bench-2026-11-03-abc123' };
+  h.deps.startEnv = async () => { seen = JSON.parse(readFileSync(h.lockFile, 'utf8')); return { project: 'trex-sim-aaaaaaaa', digest: {}, exec: fakeExec(() => done('deny')) }; };
+  await main(SIM(path.join(h.root, 'ev')), h.deps);
+  assert.equal(seen.benchRun, 'bench-2026-11-03-abc123');
+  const h2 = harness({});
+  h2.deps.env = {};
+  h2.deps.startEnv = async () => { seen = JSON.parse(readFileSync(h2.lockFile, 'utf8')); return { project: 'trex-sim-aaaaaaaa', digest: {}, exec: fakeExec(() => done('deny')) }; };
+  await main(SIM(path.join(h2.root, 'ev')), h2.deps);
+  assert.equal(seen.benchRun, null, 'a run outside a bench writes null');
 });

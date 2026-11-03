@@ -314,6 +314,7 @@ function freezeSetup(t, over = {}) {
     if (args[0] === 'show') return { status: 0, stdout: files[args[1].split(':')[1]] ?? '', stderr: '' };
     if (args[0] === 'diff') return { status: 0, stdout: over.diff ?? 'x.md\n', stderr: '' };
     if (k.startsWith('merge-base --is-ancestor')) return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'hash-object') return over.noHash ? { status: 1, stdout: '', stderr: 'no such file' } : { status: 0, stdout: `blob:${path.basename(args.at(-1))}\n`, stderr: '' };
     return { status: 1, stdout: '', stderr: `unhandled ${k}` };
   };
   const cacheDir = path.join(root, '.claude/cache/e2e');
@@ -1300,8 +1301,8 @@ test('authorGroup allows the authoring models and refuses fast, auto and a model
   // Breaks when the allow-list is wrong: a -fast or Auto run would be billed, or an arm would run the wrong model.
   const s = authorSetup(t, { run: streamRun() });
   const exit = async (arm, model) => (await authorGroup('S18', { ...s.opts, arm, model, dryRun: true }, s.deps)).exit;
-  for (const [arm, model] of [['grok', 'grok-4.7-high'], ['grok', 'grok-4.7-xhigh'], ['composer', 'composer-2.5'], ['xhigh', 'grok-4.7-xhigh'], ['grok2', 'grok-4.7-high']]) assert.equal(await exit(arm, model), 0, `${arm} ${model}`);
-  for (const [arm, model] of [['grok', 'grok-4.7-fast'], ['grok', 'auto'], ['grok', 'Auto'], ['composer', 'composer-2.5-fast'], ['composer', 'auto'], ['composer', 'grok-4.7-high'], ['grok', 'composer-2.5'], ['xhigh', 'grok-4.7-high'], ['grok2', 'grok-4.7-xhigh'], ['grok', 'grok-4.7-low']]) assert.equal(await exit(arm, model), 2, `${arm} ${model}`);
+  for (const [arm, model] of [['grok', 'grok-4.7-high'], ['composer', 'composer-2.5'], ['xhigh', 'grok-4.7-xhigh'], ['grok2', 'grok-4.7-high'], ['composer2', 'composer-2.5']]) assert.equal(await exit(arm, model), 0, `${arm} ${model}`);
+  for (const [arm, model] of [['grok', 'grok-4.7-fast'], ['grok', 'auto'], ['grok', 'Auto'], ['composer', 'composer-2.5-fast'], ['composer', 'auto'], ['composer', 'grok-4.7-high'], ['grok', 'composer-2.5'], ['grok', 'grok-4.7-xhigh'], ['composer2', 'grok-4.7-high'], ['xhigh', 'grok-4.7-high'], ['grok2', 'grok-4.7-xhigh'], ['grok', 'grok-4.7-low']]) assert.equal(await exit(arm, model), 2, `${arm} ${model}`);
 });
 
 test('authorGroup refuses an unknown arm', async (t) => {
@@ -1355,7 +1356,7 @@ test('main --arm: the dry run names the arm, model and folder and shows the arm 
   assert.equal(c.code, 0, c.text);
   assert.match(c.text, /arm: composer \(composer-2\.5\)/);
   assert.match(c.text, /flows: scripts\/trex\/bench\/flows-composer\/S1/);
-  assert.match(c.text, /bench runs: 1 of 24/);
+  assert.match(c.text, /bench runs: 1 of 20/);
   const x = await cli(s, ['--group', 'S8', '--arm', 'xhigh', '--dry-run']);
   assert.match(x.text, /arm: xhigh \(grok-4\.7-xhigh\)/);
   assert.match(x.text, /bench runs: 1 of 4/);
@@ -1417,4 +1418,92 @@ test('--reparse --arm composer writes to the composer folder and refuses a raw f
   assert.ok(existsSync(path.join(s.root, ARM_DIR('composer'), 'S18', 'gate.yaml')));
   assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S18')));
   assert.ok(existsSync(path.join(s.root, `.claude/cache/e2e/${RAW_DAY}-trex-author-composer-S18-reparse.manifest.json`)));
+});
+
+// ---------- principal review fixes (2026-11-03): findings 5, 6, 7 and 13 ----------
+
+const ranOk = (ref) => `${JSON.stringify({ ts: '2026-11-01T00:00:00.000Z', phase: 'start', id: `id-${ref}`, ref, model: 'composer-2.5' })}\n${JSON.stringify({ ts: '2026-11-01T00:01:00.000Z', phase: 'end', id: `id-${ref}`, ref, exit: 0 })}\n`;
+
+test('F7: the default arm refuses grok-4.7-xhigh before a run, a ledger line or a folder change', async (t) => {
+  // Breaks when ARMS.grok.models lists grok-4.7-xhigh: it spends the grok cap and replaces the control flows with xhigh flows.
+  const s = authorSetup(t, { run: streamRun() });
+  const r = await authorGroup('S8', { ...s.opts, retry: true, model: 'grok-4.7-xhigh' }, s.deps);
+  assert.equal(r.exit, 2);
+  assert.equal(runsOf(s), 0);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+  assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S8')));
+});
+
+test('F6: --arm composer2 runs composer-2.5 under its own ref, folder and stem, and composer runs are not its runs', async (t) => {
+  // Breaks when composer2 is missing from ARMS: the second composer run cannot be stored apart from the first.
+  const s = authorSetup(t, { run: streamRun(), ledger: ranOk('trex-composer-S1') });
+  const r = await authorGroup('S1', { ...s.opts, arm: 'composer2' }, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(modelOf(s.state.runs[0]), 'composer-2.5');
+  assert.deepEqual(ledgerLines(s.ledger).slice(-2).map((l) => [l.phase, l.ref]), [['start', 'trex-composer2-S1'], ['end', 'trex-composer2-S1']]);
+  assert.ok(existsSync(path.join(s.root, ARM_DIR('composer2'), 'S1', 'gate.yaml')));
+  assert.ok(!existsSync(path.join(s.root, ARM_DIR('composer'), 'S1')), 'the composer folder is untouched');
+  assert.ok(cacheFiles(s.root).some((f) => /-trex-author-composer2-S1\.manifest\.json$/.test(f)));
+  assert.equal(benchRuns(s.ledger, 'composer').used, 1);
+  assert.equal(benchRuns(s.ledger, 'composer2').used, 1);
+  assert.equal(benchRuns(s.ledger).used, 0);
+});
+
+test('F6: composer2 has a cap of 4 and runs the four variance groups only', async (t) => {
+  const full = authorSetup(t, { ledger: armLedger('composer2', 4), run: streamRun() });
+  assert.equal((await authorGroup('S1', { ...full.opts, arm: 'composer2' }, full.deps)).exit, 3);
+  assert.equal(runsOf(full), 0);
+  assert.equal(benchRuns(full.ledger).used, 0, 'composer2 runs are not grok runs');
+  assert.equal((await authorGroup('S3', { ...authorSetup(t).opts, arm: 'composer2' }, authorSetup(t).deps)).exit, 2);
+  assert.equal(parseArgs(['--all', '--arm', 'composer2']).arm, 'composer2');
+});
+
+test('F6: a second composer success on a variance group is refused, with every retry flag, and composer2 takes it', async (t) => {
+  // Breaks when --retry-harness may rerun a composer variance group that succeeded: it replaces the first answer the variance run compares.
+  const s = authorSetup(t, { run: streamRun(), ledger: ranOk('trex-composer-S1') });
+  for (const retry of [undefined, true, 'harness']) {
+    const r = await authorGroup('S1', { ...s.opts, arm: 'composer', retry }, s.deps);
+    assert.equal(r.exit, 2, String(retry));
+    assert.match(r.problems.join(' '), /composer2/);
+  }
+  assert.equal(runsOf(s), 0);
+  assert.ok(!existsSync(path.join(s.root, ARM_DIR('composer'), 'S1')));
+  assert.equal((await authorGroup('S1', { ...s.opts, arm: 'composer2' }, s.deps)).exit, 0);
+  const other = authorSetup(t, { run: streamRun(), ledger: ranOk('trex-composer-S2') });
+  assert.equal((await authorGroup('S2', { ...other.opts, arm: 'composer', retry: 'harness' }, other.deps)).exit, 0, 'a group outside the variance set keeps the harness retry');
+});
+
+test('F6: freeze --arm composer2 writes frozen-composer2.json', (t) => {
+  const s = freezeSetup(t, {
+    flowsDir: ARM_DIR('composer2'), stem: 'trex-author-composer2', s1Flow: flowYaml().replace('gate-blocks-inline-body', 'first-flow-here'), noMarker: true,
+    opts: { arm: 'composer2', groups: ['S1', 'S8'], fixes: { S1: 'f1', S8: 'f8' } },
+  });
+  const r = freeze('abc123', s.opts, { git: s.git });
+  assert.equal(r.arm, 'composer2');
+  assert.equal(JSON.parse(readFileSync(path.join(s.root, 'scripts/trex/bench/frozen-composer2.json'), 'utf8')).arm, 'composer2');
+});
+
+test('F13: the host review marker is per arm: composer reads host-review-composer.json, grok keeps host-review.json', (t) => {
+  // Breaks when every arm reads host-review.json: a marker for one arm then fails or passes the freeze of another.
+  const c = freezeSetup(t, { flowsDir: ARM_DIR('composer'), stem: 'trex-author-composer', noMarker: true, opts: { arm: 'composer', groups: ['S1', 'S8'], fixes: { S1: 'f1', S8: 'f8' } } });
+  put(c.root, 'scripts/trex/bench/host-review.json', JSON.stringify({ sha256: c.digest }));
+  assert.throws(() => freeze('abc123', c.opts, { git: c.git }), /review/i, 'the grok marker does not cover composer');
+  put(c.root, 'scripts/trex/bench/host-review-composer.json', JSON.stringify({ sha256: c.digest }));
+  assert.equal(freeze('abc123', c.opts, { git: c.git }).hostFlows, 1);
+  const g = freezeSetup(t);
+  assert.equal(freeze('abc123', g.opts, { git: g.git }).hostFlows, 1, 'grok still reads host-review.json');
+});
+
+test('F5: freeze pins the negative heads and the blob ids of negatives.json and proofs-trex.json', (t) => {
+  // Breaks when the freeze records no pins: a head or a defectFiles edit after the freeze then goes unseen by the bench preflight.
+  const s = freezeSetup(t);
+  const r = freeze('abc123', s.opts, { git: s.git });
+  assert.deepEqual(r.pins, { negatives: { N2: 'nnn' }, files: { negatives: 'blob:negatives.json', proofs: 'blob:proofs-trex.json' } });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(s.root, 'scripts/trex/bench/frozen.json'), 'utf8')).pins, r.pins);
+});
+
+test('F5: freeze refuses when an input cannot be hashed, and writes no frozen file', (t) => {
+  const s = freezeSetup(t, { noHash: true });
+  assert.throws(() => freeze('abc123', s.opts, { git: s.git }), /negatives\.json/);
+  assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/frozen.json')));
 });

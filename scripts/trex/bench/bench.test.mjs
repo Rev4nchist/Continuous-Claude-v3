@@ -1,11 +1,11 @@
 // Tests for bench.mjs. Docker, prove-check, run.mjs and the process table are fakes. One test runs --plan for real.
 // Each test names the change in bench.mjs that would break it.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { AUDITED, BLIND } from './author.mjs';
+import { ARMS, AUDITED, BLIND } from './author.mjs';
 import {
   attributeFire, childEnv, cleanupRun, effectiveCmd, gradeHonestSkip, gradeNegative, gradePositive, main, parseArgs, planBench,
   preflight, runBench,
@@ -158,6 +158,7 @@ test('effectiveCmd: keeps a --image-sha the row already has', () => {
 const goodGit = (tree = 'tree1', status = '') => (args) => {
   if (args[0] === 'status') return { status: 0, stdout: status, stderr: '' };
   if (args[0] === 'rev-parse') return { status: 0, stdout: `${tree}\n`, stderr: '' };
+  if (args[0] === 'hash-object') return { status: 0, stdout: `blob:${path.basename(args.at(-1))}\n`, stderr: '' };
   return { status: 0, stdout: '', stderr: '' };
 };
 const dockerOk = async (args) => ({ code: args[0] === 'info' ? 0 : 1, stdout: '', stderr: '' });
@@ -209,7 +210,7 @@ function cleanupWorld({ lock, processStartDelta = 0, alive = true } = {}) {
   const lockPath = path.join(dir, 'run.lock');
   const wrote = Date.parse('2026-11-03T10:00:00Z');
   if (lock !== null) {
-    writeFileSync(lockPath, JSON.stringify({ pid: 4242, started: new Date(wrote).toISOString(), runId: 'abcd1234', argv: ['--simulate', 'tree', '--tree', 'C:\\r\\.claude\\cache\\proof\\aaaaaaaa\\trex-S8', '--evidence', 'x'], ...lock }));
+    writeFileSync(lockPath, JSON.stringify({ pid: 4242, started: new Date(wrote).toISOString(), runId: 'abcd1234', benchRun: 'bench1', argv: ['--simulate', 'tree', '--tree', 'C:\\r\\.claude\\cache\\proof\\aaaaaaaa\\trex-S8', '--evidence', 'x'], ...lock }));
   }
   const calls = { spawn: [], docker: [], killed: [] };
   const deps = {
@@ -224,13 +225,12 @@ function cleanupWorld({ lock, processStartDelta = 0, alive = true } = {}) {
       return { code: 0, stdout: args[0] === 'ps' ? 'c1\nc2\n' : '', stderr: '' };
     },
   };
-  return { ctx: { repo: dir, deps }, calls, lockPath };
+  return { ctx: { repo: dir, deps, runId: 'bench1' }, calls, lockPath };
 }
-const MATCH_S8 = /trex-S8(?![\w])/;
 
 test('cleanupRun: kills the owned run.mjs tree, calls --unlock, removes containers by label, then compose down -v', async () => {
   const w = cleanupWorld();
-  const r = await cleanupRun(w.ctx, { match: MATCH_S8, projects: ['trex-sim-aaaaaaaa'], timedOut: true });
+  const r = await cleanupRun(w.ctx, { projects: ['trex-sim-aaaaaaaa'], timedOut: true });
   assert.equal(r.state, 'cleaned');
   assert.deepEqual(w.calls.killed, [4242]);
   assert.ok(w.calls.spawn.some((a) => a.at(-1) === '--unlock' && a.some((x) => x.endsWith('run.mjs'))));
@@ -243,19 +243,20 @@ test('cleanupRun: kills the owned run.mjs tree, calls --unlock, removes containe
 // Breaks if the start-time check is removed: a reused pid would be killed.
 test('cleanupRun: does not kill a pid whose start time does not match the lock', async () => {
   const w = cleanupWorld({ processStartDelta: 10 * 60_000 });
-  await cleanupRun(w.ctx, { match: MATCH_S8, projects: [], timedOut: true });
+  await cleanupRun(w.ctx, { projects: [], timedOut: true });
   assert.deepEqual(w.calls.killed, []);
 });
 
 test('cleanupRun: does not kill a dead pid', async () => {
   const w = cleanupWorld({ alive: false });
-  await cleanupRun(w.ctx, { match: MATCH_S8, projects: [], timedOut: true });
+  await cleanupRun(w.ctx, { projects: [], timedOut: true });
   assert.deepEqual(w.calls.killed, []);
 });
 
-test('cleanupRun: a lock of another run is left alone', async () => {
-  const w = cleanupWorld();
-  const r = await cleanupRun(w.ctx, { match: /trex-S1(?![\w])/, projects: ['p'], timedOut: true });
+test('cleanupRun: a lock of another bench is left alone, even when its argv names the same row', async () => {
+  // Breaks when ownership is a ref-name match on argv: a bench in another checkout that runs the same row would be killed.
+  const w = cleanupWorld({ lock: { benchRun: 'other-bench' } });
+  const r = await cleanupRun(w.ctx, { projects: ['p'], timedOut: true });
   assert.equal(r.state, 'foreign');
   assert.deepEqual([w.calls.killed, w.calls.spawn, w.calls.docker], [[], [], []]);
 });
@@ -264,7 +265,7 @@ test('cleanupRun: a lock of another run is left alone', async () => {
 // compose down runs only for a held lock or a bench-level timeout.
 test('cleanupRun: no lock and no timeout still takes the row projects down, and kills nothing', async () => {
   const w = cleanupWorld({ lock: null });
-  const r = await cleanupRun(w.ctx, { match: MATCH_S8, projects: ['trex-sim-aaaaaaaa'], timedOut: false });
+  const r = await cleanupRun(w.ctx, { projects: ['trex-sim-aaaaaaaa'], timedOut: false });
   assert.equal(r.state, 'none');
   assert.ok(w.calls.docker.some((a) => a[0] === 'compose' && a.includes('trex-sim-aaaaaaaa') && a.includes('down') && a.includes('-v')));
   assert.deepEqual([w.calls.killed, w.calls.spawn], [[], []]);
@@ -272,7 +273,7 @@ test('cleanupRun: no lock and no timeout still takes the row projects down, and 
 
 test('cleanupRun: after a timeout with no lock it still takes the project down', async () => {
   const w = cleanupWorld({ lock: null });
-  await cleanupRun(w.ctx, { match: MATCH_S8, projects: ['trex-sim-aaaaaaaa'], timedOut: true });
+  await cleanupRun(w.ctx, { projects: ['trex-sim-aaaaaaaa'], timedOut: true });
   assert.ok(w.calls.docker.some((a) => a[0] === 'compose' && a.includes('down')));
   assert.deepEqual(w.calls.killed, []);
 });
@@ -282,30 +283,45 @@ test('cleanupRun: after a timeout with no lock it still takes the project down',
 const NOW = new Date(2026, 10, 3, 12, 0, 0);
 const iso = (min) => new Date(NOW.getTime() + min * 60_000).toISOString();
 
-/** Builds a temp repo with frozen.json and a fake spawn that plays prove-check and run.mjs. */
+/**
+ * Builds a temp repo with the frozen file of an arm and a fake spawn that plays prove-check and run.mjs.
+ * behave[<major>] is an object, or a function of the call number (0, 1, ...): { pre: [verdict, failIds], fix: [...], timeout, noJson, preCode, fixCode, prePids, fixPids }.
+ * behave['neg:<group>'] is the same for run.mjs --simulate: { stdout, code, report }.
+ * over: { arm, rows, flowPaths, frozen, negatives, negProblems, onSleep }.
+ */
 function benchWorld(behave = {}, over = {}) {
   const repo = mkdtempSync(path.join(tmpdir(), 'trex-bench-'));
   mkdirSync(path.join(repo, 'scripts', 'trex', 'bench'), { recursive: true });
+  const arm = over.arm ?? 'grok';
   const groups = Object.fromEntries(['S1', 'S8', 'S17'].map((g) => [g, { runId: `r${g}`, model: 'grok-4.7-high', usage: { inputTokens: 100, outputTokens: 7 }, retries: 0, blind: AUDITED }]));
-  const frozen = { sha: SHA_A, flowsTree: 'tree1', groups, negatives: { N2: ['S1'], K1: [] }, skipped: { K1: 'no_match' }, blind: AUDITED, ...over.frozen };
-  writeFileSync(path.join(repo, 'scripts', 'trex', 'bench', 'frozen.json'), JSON.stringify(frozen));
-  const calls = { spawn: [], docker: [], killed: [] };
-  const writeSide = (tree, rep) => {
+  const pins = { negatives: { N2: 'neg22222', K1: 'kkk11111' }, files: { negatives: 'blob:negatives.json', proofs: 'blob:proofs-trex.json' } };
+  const frozen = { sha: SHA_A, flowsTree: 'tree1', groups, negatives: { N2: ['S1'], K1: [] }, skipped: { K1: 'no_match' }, blind: AUDITED, pins, ...over.frozen };
+  writeFileSync(path.join(repo, 'scripts', 'trex', 'bench', ARMS[arm].frozen), JSON.stringify(frozen));
+  const calls = { spawn: [], docker: [], killed: [], slept: [], validatedNeg: [], validatedRows: [], tagHeads: [] };
+  const rowsList = over.rows ?? [row({ major: 'S8', pre: 'pre88888', fix: 'fix88888' }), row({ major: 'S1', pre: 'pre11111', fix: 'fix11111', bench: { kind: 'catch', group: 'S1', defectFiles: ['src/defect.ts'] } })];
+  const shaOf = (id, side) => rowsList.find((r) => r.major === id)?.[side] ?? `${side}${id}`;
+  const writeSide = (tree, rep, pids) => {
     mkdirSync(path.join(tree, '.trex-out', 'host-tree'), { recursive: true });
     writeFileSync(path.join(tree, '.trex-out', 'report.json'), JSON.stringify(rep));
     writeFileSync(path.join(tree, '.trex-out', 'host-tree', 'big.txt'), 'x');
+    if (pids) writeFileSync(path.join(tree, '.trex-out', 'pids.json'), JSON.stringify({ pids }));
+  };
+  const seen = {};
+  const pick = (key) => {
+    const n = (seen[key] = (seen[key] ?? -1) + 1);
+    return typeof behave[key] === 'function' ? behave[key](n) : behave[key];
   };
   const fakeProve = (args, opts) => {
     const val = (k) => args[args.indexOf(k) + 1];
     const id = val('--major');
-    const b = { pre: ['fire', ['flow-a']], fix: ['no-fire', []], ...behave[id] };
-    const tree = (side) => path.join(repo, '.claude', 'cache', 'proof', `${side}${id}`, `trex-${id}`);
+    const b = { pre: ['fire', ['flow-a']], fix: ['no-fire', []], ...pick(id) };
+    const tree = (side) => path.join(repo, '.claude', 'cache', 'proof', shaOf(id, side), `trex-${id}`);
     const rep = (fails, min) => report([{ id: 'flow-a', state: fails.length ? 'fail' : 'pass' }], { startedAt: iso(0), finishedAt: iso(min) });
-    writeSide(tree('pre'), rep(b.pre[1], 4));
-    writeSide(tree('fix'), rep(b.fix[1], 2));
+    writeSide(tree('pre'), rep(b.pre[1], 4), b.prePids);
+    writeSide(tree('fix'), rep(b.fix[1], 2), b.fixPids);
     mkdirSync(val('--out'), { recursive: true });
-    const row0 = { major: id, ok: true, pre: { verdict: b.pre[0], tree: tree('pre') }, fix: { verdict: b.fix[0], tree: tree('fix') } };
-    writeFileSync(path.join(val('--out'), `${val('--date')}-prove-trex.json`), JSON.stringify({ rows: [row0] }));
+    const row0 = { major: id, ok: true, pre: { verdict: b.pre[0], tree: tree('pre'), code: b.preCode ?? 0 }, fix: { verdict: b.fix[0], tree: tree('fix'), code: b.fixCode ?? 0 } };
+    if (!b.noJson) writeFileSync(path.join(val('--out'), `${val('--date')}-prove-trex.json`), JSON.stringify({ rows: [row0] }));
     calls.proveOpts = opts;
     return { status: b.timeout ? null : 0, error: b.timeout ? Object.assign(new Error('t'), { code: 'ETIMEDOUT' }) : undefined, stdout: '', stderr: '' };
   };
@@ -313,29 +329,33 @@ function benchWorld(behave = {}, over = {}) {
     const val = (k) => args[args.indexOf(k) + 1];
     const dir = val('--evidence');
     const group = val('--flows-dir').split('/').at(-1);
-    const b = behave[`neg:${group}`] ?? { stdout: 'ok flow-a\n# trex: tested 1 findings 0 blockers 0\n', code: 0, report: PASS };
+    const b = pick(`neg:${group}`) ?? { stdout: 'ok flow-a\n# trex: tested 1 findings 0 blockers 0\n', code: 0, report: PASS };
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, 'report.json'), JSON.stringify(b.report ?? report([])));
     return { status: b.code, stdout: b.stdout, stderr: '' };
   };
+  const flowPaths = over.flowPaths ?? ['src/defect.ts'];
   const deps = {
-    git: goodGit(), isMerged: () => true, validateRows: async () => [], docker: async (args) => { calls.docker.push(args); return { code: 0, stdout: '', stderr: '' }; },
-    tagsFor: (heads) => heads.map((h) => `trex:${h.slice(0, 4)}`), hasImage: async () => true,
-    loadRows: async () => over.rows ?? [row({ major: 'S8', pre: 'pre88888', fix: 'fix88888' }), row({ major: 'S1', pre: 'pre11111', fix: 'fix11111', bench: { kind: 'catch', group: 'S1', defectFiles: ['src/defect.ts'] } })],
+    git: goodGit(), isMerged: () => true, docker: async (args) => { calls.docker.push(args); return { code: 0, stdout: '', stderr: '' }; },
+    validateRows: async (_g, rows, o) => { calls.validatedRows.push({ rows, opts: o }); return []; },
+    validateNegatives: async (_g, negatives, o) => { calls.validatedNeg.push({ negatives, opts: o }); return over.negProblems ?? []; },
+    tagsFor: (heads) => { calls.tagHeads.push(heads); return heads.map((h) => `trex:${h.slice(0, 4)}`); }, hasImage: async () => true,
+    loadRows: async () => rowsList,
     loadNegatives: async () => over.negatives ?? [
       { id: 'N2', head: 'neg22222' }, { id: 'K1', kind: 'skip', head: 'kkk11111' },
       { id: 'S17', kind: 'honest-skip', group: 'S17', head: 's1717171', claimMatch: 'handle|0x10000|16384|16k' },
     ],
     loadFlows: (_g, _sha, dir) => (dir.endsWith('S17')
       ? [{ id: 's17-flow', title: 'Handles', goal: 'clears inheritable pipe handles', paths: ['x'], steps: [] }]
-      : [flow('flow-a', ['src/defect.ts'])]),
+      : [flow('flow-a', flowPaths)]),
     spawn: (cmd, args, opts) => {
       calls.spawn.push({ cmd, args, opts });
       if (args.some((a) => String(a).endsWith('prove-check.mjs'))) return fakeProve(args, opts);
       if (args.at(-1) === '--unlock') return { status: 0, stdout: '', stderr: '' };
       return fakeRun(args);
     },
-    lockPath: path.join(repo, 'no.lock'), pidAlive: () => false, processStart: () => null, processChildren: () => () => [],
+    lockPath: path.join(repo, 'no.lock'), benchLockPath: path.join(repo, 'bench.lock'), pidAlive: () => false, processStart: () => null, processChildren: () => () => [],
+    sleep: async (ms) => { calls.slept.push(ms); over.onSleep?.(); },
     killTree: (pid) => calls.killed.push(pid), now: () => NOW, out: () => {},
   };
   return { repo, calls, deps };
@@ -380,7 +400,7 @@ test('runBench: a caught row, a miss and a false fail are graded from the copied
 
 test('runBench: a timeout runs the cleanup and grades the row broken', async () => {
   const w = benchWorld({ S8: { timeout: true } });
-  const lock = { pid: 77, started: new Date(NOW).toISOString(), runId: 'dead0001', argv: ['--tree', 'C:\\x\\proof\\pre88888\\trex-S8'] };
+  const lock = { pid: 77, started: new Date(NOW).toISOString(), runId: 'dead0001', benchRun: 'bench1', argv: ['--tree', 'C:\\x\\proof\\pre88888\\trex-S8'] };
   writeFileSync(w.deps.lockPath, JSON.stringify(lock));
   w.deps.pidAlive = () => true;
   w.deps.processStart = () => NOW.getTime();
@@ -537,4 +557,269 @@ test('planBench: counts side-runs as rows x repeats x 2 and lists a tag once', a
   assert.equal(plan.sideRuns, 12);
   assert.deepEqual(plan.tags, ['trex:aaaaaaaaaaaa', 'trex:bbbbbbbbbbbb']);
   assert.ok(plan.hours > 1);
+});
+
+// ---------- principal review fixes (2026-11-03) ----------
+
+const S6 = row({ major: 'S6', pre: 'pre66666', fix: 'fix66666', bench: { kind: 'catch', group: 'S6', defectFiles: ['src/s6.ts'] } });
+const S7 = row({ major: 'S7', pre: 'pre66666', fix: 'fix66666', bench: { kind: 'catch', group: 'S6', defectFiles: ['hooks/pr-checkpoint/index.tsx'] } });
+const proves = (w) => w.calls.spawn.filter((c) => c.args.some((a) => String(a).endsWith('prove-check.mjs')));
+const majorOf = (c) => c.args[c.args.indexOf('--major') + 1];
+const byId = (r) => Object.fromEntries(r.metrics.rows.map((x) => [x.id, x.verdicts]));
+const provedRows = (c) => JSON.parse(readFileSync(c.args[c.args.indexOf('--proofs') + 1], 'utf8')).rows.map((x) => x.major);
+
+// ----- finding 1: S7 shares S6's run -----
+
+test('F1: S7 is graded from the S6 run: one prove-check, S6 caught, S7 graded with its own defect files', async () => {
+  // Breaks when S7 runs as its own prove-check row: one nondeterministic S6 run then counts as two flaky rows and adds side-runs.
+  const w = benchWorld({}, { rows: [S6, S7], flowPaths: ['src/s6.ts'] });
+  const r = await runBench(base(w, { rowIds: ['S6', 'S7'] }), w.deps);
+  assert.deepEqual(proves(w).map(majorOf), ['S6']);
+  assert.deepEqual(provedRows(proves(w)[0]), ['S6']);
+  assert.deepEqual(byId(r), { S6: ['caught'], S7: ['fire-unattributed'] });
+  assert.equal(r.metrics.minutes.sides, 2, 'the S6 run counts its two side-runs once');
+});
+
+test('F1: --rows S7 alone still runs the S6 prove-check and reports S7 only', async () => {
+  const w = benchWorld({}, { rows: [S6, S7], flowPaths: ['hooks/pr-checkpoint/index.tsx'] });
+  const r = await runBench(base(w, { rowIds: ['S7'] }), w.deps);
+  assert.deepEqual(proves(w).map(majorOf), ['S6']);
+  assert.deepEqual(byId(r), { S7: ['caught'] });
+});
+
+test('F1: a flake counts once for each prove-check run, so S6 and S7 flipping together are one flaky run', async () => {
+  // Breaks when the flake bar counts rows: the same S6 flip would give 2 flaky rows, a FAIL on the flake bar, and "rework" instead of "continue".
+  const w = benchWorld({ S6: (n) => (n < 2 ? {} : { pre: ['no-fire', []] }) }, { rows: [S6, S7], flowPaths: ['src/s6.ts'] });
+  const r = await runBench(base(w, { rowIds: ['S6', 'S7'], repeats: 3 }), w.deps);
+  assert.equal(proves(w).length, 3, 'S6 runs once for each repeat, not twice');
+  assert.deepEqual(byId(r), { S6: ['caught', 'caught', 'miss'], S7: ['fire-unattributed', 'fire-unattributed', 'miss'] });
+  assert.ok(r.metrics.rows.every((x) => x.flaky));
+  assert.equal(r.metrics.flakes, 1);
+  assert.equal(r.metrics.bars.flake, true);
+});
+
+test('F1: the plan counts the S6 and S7 pair as one run', async () => {
+  const plan = await planBench({ rowIds: ['S6', 'S7'], repeats: 3, imageSha: 'IMG' }, { tagsFor: (heads) => heads.map(() => 'trex:aaaaaaaaaaaa') });
+  assert.deepEqual(plan.rows.map((x) => x.id), ['S6', 'S7']);
+  assert.equal(plan.sideRuns, 6);
+});
+
+// ----- finding 2: negatives checked at preflight -----
+
+test('F2: a full run asks validateNegatives with the frozen sha and the arm flows, and refuses on a problem before any row runs', async () => {
+  // Breaks when validateNegatives is not called: a not_clean or too-few-tested set is found only after 15 hours.
+  const w = benchWorld({}, { negProblems: ['only 4 negatives are tested (graded for at least one group); the bench needs 10'] });
+  const r = await runBench(base(w), w.deps);
+  assert.equal(r.exit, 2);
+  assert.equal(w.calls.spawn.length, 0);
+  assert.match(r.problems.join('\n'), /only 4 negatives are tested/);
+  const call = w.calls.validatedNeg[0];
+  assert.equal(call.opts.sha, SHA_A);
+  assert.equal(call.opts.ref, 'fork/main');
+  assert.deepEqual(Object.keys(call.opts.flows), ARMS.grok.groups);
+  assert.deepEqual(call.negatives.map((n) => n.id), ['N2', 'K1']);
+});
+
+test('F2: a smoke run (rows given) never asks validateNegatives', async () => {
+  const w = benchWorld({}, { negProblems: ['x'] });
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(r.exit, 0);
+  assert.equal(w.calls.validatedNeg.length, 0);
+});
+
+// ----- finding 3: the arm row filter -----
+
+const XROWS = [
+  row({ major: 'S8', pre: 'pre88888', fix: 'fix88888' }),
+  row({ major: 'S1', pre: 'pre11111', fix: 'fix11111', bench: { kind: 'catch', group: 'S1', defectFiles: ['src/defect.ts'] } }),
+  row({ major: 'S3', pre: 'pre33333', fix: 'fix33333', bench: { kind: 'catch', group: 'S3', defectFiles: ['x'] } }),
+  row({ major: 'S18', pre: 'pre18181', fix: 'fix18181', bench: { kind: 'catch', group: 'S18', defectFiles: ['src/defect.ts'] } }),
+];
+
+test('F3: a full run of the xhigh arm keeps the rows of its four groups, skips S17 and the negatives, and reports the arm row count', async () => {
+  // Breaks when selectRows ignores the arm: 12 rows go to folders that do not exist, grade broken, and the verdict is "invalid".
+  const w = benchWorld({}, { arm: 'xhigh', rows: XROWS });
+  const outDir = path.join(w.repo, 'out');
+  const r = await runBench(base(w, { arm: 'xhigh', outDir }), w.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.deepEqual(proves(w).map(majorOf).sort(), ['S1', 'S18', 'S8']);
+  assert.equal(w.calls.spawn.filter((c) => c.args.includes('--simulate')).length, 0, 'no S17 run and no negative run');
+  assert.equal(r.metrics.honestSkip, null);
+  assert.deepEqual(r.metrics.negatives, []);
+  assert.deepEqual(r.metrics.scope, { n: 2, fullN: 3, partial: false, repeats: 1 });
+  assert.ok(w.calls.tagHeads.flat().every((h) => !h.includes('33333')), 'no image check for the S3 heads');
+  assert.match(r.artifact, /2026-11-03-trex-bench-xhigh\.json$/);
+  assert.doesNotMatch(readFileSync(r.artifact.replace('.json', '.txt'), 'utf8').split('\n')[0], /smoke/i);
+  const v = w.calls.validatedRows[0];
+  assert.deepEqual(v.rows.map((x) => x.major).sort(), ['S1', 'S18', 'S8']);
+  assert.equal(v.opts.flowsDir, 'scripts/trex/bench/flows-xhigh');
+  assert.deepEqual(v.opts.groups, ARMS.xhigh.groups);
+});
+
+test('F3: --rows with a row outside the arm is refused, and --negatives on a four-group arm still asks validateNegatives with the arm groups', async () => {
+  const w = benchWorld({}, { arm: 'xhigh', rows: XROWS });
+  const r = await runBench(base(w, { arm: 'xhigh', rowIds: ['S3'] }), w.deps);
+  assert.equal(r.exit, 2);
+  assert.match(r.problems.join('\n'), /S3/);
+  assert.equal(w.calls.spawn.length, 0);
+  const n = benchWorld({}, { arm: 'xhigh', rows: XROWS });
+  await runBench(base(n, { arm: 'xhigh', negatives: true }), n.deps);
+  assert.deepEqual(Object.keys(n.calls.validatedNeg[0].opts.flows), ARMS.xhigh.groups);
+});
+
+test('F3: --plan for the xhigh arm lists its four groups only, with no negative or S17 run', async () => {
+  const lines = [];
+  const boom = () => { throw new Error('--plan must not reach this'); };
+  const code = await main(['--arm', 'xhigh', '--repeats', '1', '--plan'], { out: (l) => lines.push(l), spawn: boom, docker: boom, hasImage: boom, loadRows: boom, loadNegatives: boom });
+  const text = lines.join('\n');
+  assert.equal(code, 0);
+  assert.match(text, /rows: S1, S8, S14, S18\n/);
+  assert.match(text, /side runs: 8 /);
+  assert.doesNotMatch(text, /negative run/);
+  assert.equal(await main(['--arm', 'xhigh', '--rows', 'S3', '--plan'], { out: () => {}, loadNegatives: boom }), 2);
+});
+
+test('parseArgs: the composer2 arm is accepted', () => {
+  assert.equal(parseArgs(['--arm', 'composer2']).arm, 'composer2');
+});
+
+// ----- finding 4: lock ownership, the bench lock, the exit 3 retry -----
+
+const rivalLock = (w, extra = {}) => writeFileSync(w.deps.lockPath, JSON.stringify({ pid: 99, started: new Date(NOW).toISOString(), runId: 'rival', benchRun: 'rival-bench', argv: ['--tree', 'x/trex-S8'], ...extra }));
+
+test('F4: a row whose run exits 3 (lock held) is retried once and graded from the retry, not broken', async () => {
+  // Breaks when exit 3 is not retried: a rival run at the same moment grades the row broken and too many give "invalid".
+  const w = benchWorld({ S8: (n) => (n === 0 ? { preCode: 3, pre: ['broken', []] } : {}) });
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(proves(w).length, 2);
+  assert.deepEqual(byId(r), { S8: ['caught'] });
+});
+
+test('F4: a row that exits 3 twice is graded broken after one retry only', async () => {
+  const w = benchWorld({ S8: { preCode: 3, pre: ['broken', []] } });
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(proves(w).length, 2, 'one retry, not a loop');
+  assert.deepEqual(byId(r), { S8: ['broken'] });
+});
+
+test('F4: the retry waits while a live rival run holds the lock, and starts when it is gone', async () => {
+  const w = benchWorld({ S8: (n) => (n === 0 ? { preCode: 3, pre: ['broken', []] } : {}) }, { onSleep: () => rmSync(w.deps.lockPath, { force: true }) });
+  rivalLock(w);
+  w.deps.pidAlive = (pid) => pid === 99;
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(w.calls.slept.length, 1);
+  assert.equal(w.calls.killed.length, 0, 'the rival is never killed');
+  assert.deepEqual(byId(r), { S8: ['caught'] });
+});
+
+test('F4: a negative whose run exits 3 is retried once', async () => {
+  const w = benchWorld({ 'neg:S1': (n) => (n === 0 ? { stdout: '# trex: another run holds the lock\n', code: 3 } : undefined) });
+  const r = await runBench(base(w), w.deps);
+  assert.equal(r.metrics.negatives.find((x) => x.id === 'N2').verdict, 'clean');
+  assert.equal(w.calls.spawn.filter((c) => c.args.includes('neg22222')).length, 2);
+});
+
+test('F4: a bench lock held by a live bench refuses with exit 2 and runs nothing; a finished bench frees it', async () => {
+  // Breaks when there is no bench-level lock: two benches share the row ids and clean up each other.
+  const w = benchWorld();
+  writeFileSync(w.deps.benchLockPath, JSON.stringify({ pid: 4242, started: new Date(NOW).toISOString(), argv: [], runId: 'other-bench' }));
+  w.deps.pidAlive = (pid) => pid === 4242;
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(r.exit, 2);
+  assert.match(r.problems.join('\n'), /another bench/);
+  assert.equal(w.calls.spawn.length, 0);
+  rmSync(w.deps.benchLockPath);
+  const ok = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(ok.exit, 0);
+  assert.equal(existsSync(w.deps.benchLockPath), false, 'released at the end');
+});
+
+test('F4: the bench lock is released when a row throws', async () => {
+  const w = benchWorld();
+  const spawn = w.deps.spawn;
+  w.deps.spawn = (cmd, args, opts) => { if (args.some((a) => String(a).endsWith('prove-check.mjs'))) throw new Error('boom'); return spawn(cmd, args, opts); };
+  await assert.rejects(runBench(base(w, { rowIds: ['S8'] }), w.deps), /boom/);
+  assert.equal(existsSync(w.deps.benchLockPath), false);
+});
+
+test('F4: the bench sweeps its own trex.bench label at the end, and only its own id', async () => {
+  const w = benchWorld();
+  await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.ok(w.calls.docker.some((a) => a[0] === 'ps' && a.includes('label=trex.bench=bench1')));
+});
+
+// ----- finding 5: the freeze pins -----
+
+test('F5: preflight refuses a negative head, negatives.json or proofs-trex.json that differs from the freeze pins', async () => {
+  // Breaks when the pins are not compared: an edit after the freeze changes the answer key or the heads and the run goes on.
+  const head = benchWorld({}, { negatives: [{ id: 'N2', head: 'other999' }, { id: 'K1', kind: 'skip', head: 'kkk11111' }] });
+  let r = await runBench(base(head), head.deps);
+  assert.equal(r.exit, 2);
+  assert.match(r.problems.join('\n'), /N2.*other999|N2.*head/);
+  const edited = (file) => (w) => {
+    const inner = w.deps.git;
+    w.deps.git = (args) => (args[0] === 'hash-object' && args.at(-1).endsWith(file) ? { status: 0, stdout: 'blob:EDITED\n', stderr: '' } : inner(args));
+  };
+  const neg = benchWorld();
+  edited('negatives.json')(neg);
+  r = await runBench(base(neg), neg.deps);
+  assert.match(r.problems.join('\n'), /negatives\.json changed/);
+  const proofs = benchWorld();
+  edited('proofs-trex.json')(proofs);
+  r = await runBench(base(proofs, { rowIds: ['S8'] }), proofs.deps);
+  assert.equal(r.exit, 2);
+  assert.match(r.problems.join('\n'), /proofs-trex\.json changed/);
+  assert.equal(proofs.calls.spawn.length, 0);
+});
+
+test('F5: a frozen file with no pins is refused with a re-freeze message', async () => {
+  const w = benchWorld({}, { frozen: { pins: undefined } });
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(r.exit, 2);
+  assert.match(r.problems.join('\n'), /no input pins.*freeze/);
+});
+
+// ----- LOW findings: pids.json, the predictable tree, the frozen sha -----
+
+const T0 = NOW.getTime();
+
+test('F8: after a timeout the pids in each side .trex-out/pids.json are killed when their start time fits, and no other', async () => {
+  // Breaks when only the lock owner is killed: a host child (pwsh, claude plugin test) that outlives its run.mjs stays orphaned.
+  const w = benchWorld({ S8: { timeout: true, prePids: [{ pid: 555, started: T0 }, { pid: 556, started: T0 + 99_999 }], fixPids: [{ pid: 557, started: T0 }] } });
+  w.deps.pidAlive = () => true;
+  w.deps.processStart = () => T0;
+  await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.deepEqual([...w.calls.killed].sort(), [555, 557]);
+});
+
+test('F8: a healthy row reads no pids.json and kills nothing', async () => {
+  const w = benchWorld({ S8: { prePids: [{ pid: 555, started: T0 }] } });
+  w.deps.pidAlive = () => true;
+  w.deps.processStart = () => T0;
+  await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.deepEqual(w.calls.killed, []);
+});
+
+test('F8: when the prove-check JSON is lost in a timeout, the sides still copy and die from the predictable proof tree', async () => {
+  // Breaks when copySide needs the prove-check JSON: a row that hangs past the bench limit leaves no report.json or pids.json for the post-mortem.
+  const w = benchWorld({ S8: { timeout: true, noJson: true, prePids: [{ pid: 555, started: T0 }] } });
+  w.deps.pidAlive = () => true;
+  w.deps.processStart = () => T0;
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.deepEqual(w.calls.killed, [555]);
+  assert.ok(existsSync(path.join(w.repo, '.claude', 'cache', 'e2e', 'trex', 'bench', 'bench1', 'r1', 'S8', 'pre', 'report.json')));
+  assert.equal(r.metrics.rows[0].verdicts[0], 'broken');
+});
+
+test('F9: with host flows frozen, preflight also needs the frozen sha merged into fork/main', async () => {
+  // Breaks when only the row heads are checked: every host row grades broken after hours when prepareHost finds the flows commit unmerged.
+  const merged = (_g, sha) => sha !== SHA_A;
+  const host = await preflight({ ...pfInput, hostSha: SHA_A }, pfDeps({ isMerged: merged }));
+  assert.match(host.problems.join('\n'), /frozen flows commit.*merge/i);
+  assert.deepEqual((await preflight(pfInput, pfDeps({ isMerged: merged }))).problems, [], 'container flows only: no need');
+  const w = benchWorld({}, { frozen: { hostFlows: 1 } });
+  w.deps.isMerged = merged;
+  const r = await runBench(base(w, { rowIds: ['S8'] }), w.deps);
+  assert.equal(r.exit, 2);
+  assert.match(r.problems.join('\n'), /frozen flows commit/);
 });

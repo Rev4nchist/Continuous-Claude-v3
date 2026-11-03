@@ -47,6 +47,9 @@ export function loadNegatives(file) {
 // ---------- rows ----------
 
 const groupOf = (major) => (major === 'S7' ? 'S6' : major);
+
+/** The row ids an arm must hold, from its author groups: S7 follows S6, and S17 has no row. */
+export const rowIdsFor = (groups) => ROW_IDS.filter((id) => groups.includes(groupOf(id)));
 const flagValue = (cmd, flag) => (Array.isArray(cmd) && cmd.includes(flag) ? cmd[cmd.indexOf(flag) + 1] : undefined);
 const isFrozenRef = (v) => v === PLACEHOLDER || /^[0-9a-f]{7,40}$/.test(String(v));
 
@@ -72,13 +75,13 @@ function shaProblems(git, label, field, sha, ref, needAncestor) {
 
 const rangeEnds = (range) => String(range).split('..').map((s) => s.replace(/\^\d*$/, '')).filter(Boolean);
 
-function cmdProblems(row, group, root) {
+function cmdProblems(row, group, root, flowsDir) {
   const out = [];
   const L = row.major;
   const dir = `${FLOWS_DIR}/${group}`;
   if (!isFrozenRef(flagValue(row.cmd, '--config'))) out.push(`${L}: --config must be the literal "${PLACEHOLDER}" or a frozen sha`);
   if (flagValue(row.cmd, '--flows-dir') !== dir) out.push(`${L}: --flows-dir must be ${dir}`);
-  else if (!existsSync(path.join(root, dir))) out.push(`${L}: flows dir ${dir} does not exist`);
+  else if (!existsSync(path.join(root, flowsDir, group))) out.push(`${L}: flows dir ${flowsDir}/${group} does not exist`);
   if (flagValue(row.cmd, '--simulate') !== 'tree') out.push(`${L}: cmd must run --simulate tree`);
   if (flagValue(row.cmd, '--tree') !== '{tree}') out.push(`${L}: cmd must pass --tree {tree}`);
   if (flagValue(row.cmd, '--evidence') !== '{tree}/.trex-out') out.push(`${L}: cmd must pass --evidence {tree}/.trex-out`);
@@ -116,7 +119,7 @@ function rowProblems(git, row, o) {
   const group = groupOf(row.major);
   const g = GROUPS[group];
   if (!g) return [`${row.major}: no author group ${group}`];
-  const out = [...fieldProblems(row, g), ...benchProblems(row, group, g), ...cmdProblems(row, group, o.root)];
+  const out = [...fieldProblems(row, g), ...benchProblems(row, group, g), ...cmdProblems(row, group, o.root, o.flowsDir)];
   for (const f of ['pre', 'fix']) out.push(...shaProblems(git, row.major, f, row[f] ?? g[f], o.ref, true));
   for (const sha of rangeEnds(g.range)) out.push(...shaProblems(git, row.major, 'range end', sha, o.ref, false));
   return out;
@@ -124,11 +127,13 @@ function rowProblems(git, row, o) {
 
 /**
  * Problems in the positive rows, as strings. [] means all good.
- * opts: { root (repo), ref ('fork/main'), expect (the row ids that must exist) }.
+ * opts: { root (repo), ref ('fork/main'), groups (the arm's author groups: the rows that must exist are theirs), expect (those row ids, when given), flowsDir (the arm's flows folder, where each group's folder must exist) }.
+ * The stored --flows-dir stays the grok literal for every arm: bench.mjs effectiveCmd rewrites it per arm.
  * The --config value may still be the placeholder, or already a frozen sha.
  */
 export function validateRows(git, rows, opts = {}) {
-  const o = { root: REPO, ref: 'fork/main', expect: ROW_IDS, ...opts };
+  const o = { root: REPO, ref: 'fork/main', flowsDir: FLOWS_DIR, ...opts };
+  o.expect ??= rowIdsFor(o.groups ?? Object.keys(GROUPS));
   const out = idProblems(rows, o.expect);
   for (const row of rows) out.push(...rowProblems(git, row, o));
   return out;

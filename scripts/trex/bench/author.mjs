@@ -86,7 +86,7 @@ export const GROUPS = Object.freeze({
 });
 
 const GROUP_IDS = Object.freeze(Object.keys(GROUPS));
-/** The four groups with short container ranges: the xhigh and grok2 arms run them, and composer runs them a second time. */
+/** The four groups with short container ranges: the xhigh, grok2 and composer2 arms run them (composer2 is the second composer run). */
 const VARIANCE_GROUPS = Object.freeze(['S1', 'S8', 'S14', 'S18']);
 const BENCH_DIR = 'scripts/trex/bench';
 /** The authoring models (arms spec section 4). This list is not the review allowlist of cursor-review.mjs. -fast and auto are refused before it is read. */
@@ -96,8 +96,9 @@ export const AUTHOR_MODELS = Object.freeze(['grok-4.7-high', 'grok-4.7-xhigh', '
  * `stem` is the cache file prefix (empty for grok, so the old grok manifests keep their names) and `cap` is the arm's own run cap.
  */
 export const ARMS = Object.freeze({
-  grok: { name: 'grok', models: ['grok-4.7-high', 'grok-4.7-xhigh'], flowsDir: FLOWS_DIR, refPrefix: 'trex-', stem: '', cap: BENCH_CAP, groups: GROUP_IDS, frozen: 'frozen.json' },
-  composer: { name: 'composer', models: ['composer-2.5'], flowsDir: `${BENCH_DIR}/flows-composer`, refPrefix: 'trex-composer-', stem: 'composer-', cap: 24, groups: GROUP_IDS, frozen: 'frozen-composer.json' },
+  grok: { name: 'grok', models: ['grok-4.7-high'], flowsDir: FLOWS_DIR, refPrefix: 'trex-', stem: '', cap: BENCH_CAP, groups: GROUP_IDS, frozen: 'frozen.json' },
+  composer: { name: 'composer', models: ['composer-2.5'], flowsDir: `${BENCH_DIR}/flows-composer`, refPrefix: 'trex-composer-', stem: 'composer-', cap: 20 /* Dave 11-02: 24 composer runs in all; composer2 owns 4 */, groups: GROUP_IDS, frozen: 'frozen-composer.json' },
+  composer2: { name: 'composer2', models: ['composer-2.5'], flowsDir: `${BENCH_DIR}/flows-composer2`, refPrefix: 'trex-composer2-', stem: 'composer2-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-composer2.json' },
   xhigh: { name: 'xhigh', models: ['grok-4.7-xhigh'], flowsDir: `${BENCH_DIR}/flows-xhigh`, refPrefix: 'trex-xhigh-', stem: 'xhigh-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-xhigh.json' },
   grok2: { name: 'grok2', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-grok2`, refPrefix: 'trex-grok2-', stem: 'grok2-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-grok2.json' },
 });
@@ -176,6 +177,9 @@ function budgetGate({ ledgerPath, ref, probe, retry, now, maxRuns, arm }) {
   const prior = byRef[ref] ?? 0;
   if (prior >= (probe ? 1 : GROUP_CAP)) return { exit: EXIT.CAP, reason: `${ref} has ${prior} earlier run(s): no more are allowed (${GROUP_CAP - 1} retries per group, one probe)` };
   if (prior === 0) return null;
+  if (arm.name === 'composer' && VARIANCE_GROUPS.includes(ref.slice(arm.refPrefix.length)) && lastOutcome(ledgerPath, ref) === 'ok') {
+    return { exit: EXIT.REFUSED, reason: `${ref} succeeded: its second run is the composer2 arm (--arm composer2), because a rerun here replaces the first answer` };
+  }
   if (!retry) return { exit: EXIT.REFUSED, reason: `${ref} already ran: pass --retry after a failed run, or --retry-harness after a harness fault` };
   if (retry !== 'harness' && lastOutcome(ledgerPath, ref) === 'ok') return { exit: EXIT.REFUSED, reason: `${ref} succeeded: a retry needs --retry-harness` };
   return null;
@@ -870,6 +874,25 @@ function hostFlowCount(git, sha, flowsDir, groups) {
   return groups.flatMap((g) => loadFlows(git, sha, `${flowsDir}/${g}`)).filter((f) => f.profile === 'host').length;
 }
 
+/** The git blob id of a working-copy file (clean filters applied, so it equals the committed blob), or null when git cannot hash it. */
+export function inputBlob(git, file) {
+  const r = git(['hash-object', file]);
+  const id = r.status === 0 ? r.stdout.trim() : '';
+  return id === '' ? null : id;
+}
+
+/** What the bench must find unchanged after the freeze: each negative head and the blob ids of negatives.json and proofs-trex.json (finding 5). */
+function pinInputs(git, negatives, opts) {
+  const dir = path.join(opts.root, 'scripts', 'trex', 'bench');
+  const file = (key, p) => {
+    const id = inputBlob(git, p);
+    if (id === null) throw new Error(`cannot hash ${key} (${p}) for the freeze pins`);
+    return id;
+  };
+  const files = { negatives: file('negatives.json', opts.negativesFile ?? path.join(dir, 'negatives.json')), proofs: file('proofs-trex.json', opts.proofsFile ?? path.join(dir, 'proofs-trex.json')) };
+  return { negatives: Object.fromEntries(negatives.filter((n) => n.kind !== 'honest-skip').map((n) => [n.id, n.head])), files };
+}
+
 /** The flows tree id at a commit. Refuses a dirty flows dir and a commit whose flows tree differs from HEAD. */
 function checkedFlowsTree(git, sha, flowsDir) {
   if (gitText(git, ['status', '--porcelain', '--', flowsDir], 'git status') !== '') throw new Error(`${flowsDir} is dirty: commit or discard the changes before the freeze`);
@@ -891,7 +914,9 @@ function reviewDigest(git, sha, c) {
  * Writes frozen.json (frozen-<arm>.json for another arm) for a commit `sha` that already holds the flows. It never runs git commit: the orchestrator commits.
  * Refuses a dirty flows dir, a sha whose flows tree differs from HEAD, and, when the arm has host flows, a missing or stale host review marker.
  * An arm with no host flow needs no marker and records hostFlows: 0.
- * opts: { root, arm, flowsDir, groups, fixes, cacheDir, markerPath, negatives, outFile }. Returns the frozen record.
+ * It also records `pins`: each negative head and the blob ids of negatives.json and proofs-trex.json, so the bench preflight can refuse an edit made after the freeze.
+ * The host review marker is host-review.json for the grok arm and host-review-<arm>.json for the others.
+ * opts: { root, arm, flowsDir, groups, fixes, cacheDir, markerPath, negatives, negativesFile, proofsFile, outFile }. Returns the frozen record.
  */
 export function freeze(sha, opts, deps = {}) {
   const git = deps.git ?? benchGit(opts.root);
@@ -907,11 +932,12 @@ export function freeze(sha, opts, deps = {}) {
   const map = mapNegatives(opts.negatives ?? [], { groups: flows, fixes }, git);
   if (map.problems.length) throw new Error(`negative mapping problems: ${map.problems.join('; ')}`);
   const hostFlows = hostFlowCount(git, sha, flowsDir, groups);
-  const markerPath = opts.markerPath ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'host-review.json');
+  const markerPath = opts.markerPath ?? path.join(opts.root, 'scripts', 'trex', 'bench', arm.name === 'grok' ? 'host-review.json' : `host-review-${arm.name}.json`);
   const hostReview = reviewDigest(git, sha, { hostFlows, flowsDir, groups, markerPath, negativeHeads: negativeHeadsOf(opts.negatives ?? [], map.negatives) });
+  const pins = pinInputs(git, opts.negatives ?? [], opts);
   const records = groupRecords(cacheDir, groups, arm);
   const blind = Object.values(records).every((r) => r.blind === AUDITED) ? AUDITED : BLIND;
-  const frozen = { sha, arm: arm.name, flowsTree, groups: records, negatives: map.negatives, skipped: map.skipped, hostFlows, hostReview, blind };
+  const frozen = { sha, arm: arm.name, flowsTree, groups: records, negatives: map.negatives, skipped: map.skipped, hostFlows, hostReview, blind, pins };
   writeJson(opts.outFile ?? path.join(opts.root, 'scripts', 'trex', 'bench', arm.frozen), frozen);
   return frozen;
 }
@@ -1045,7 +1071,7 @@ export async function main(argv, deps = {}) {
       say(JSON.stringify(mapAll(git, sha, negatives, ARMS[args.arm]), null, 2));
       return EXIT.OK;
     }
-    say(JSON.stringify(freeze(args.sha, { root, negatives, arm: args.arm }, { git }), null, 2));
+    say(JSON.stringify(freeze(args.sha, { root, negatives, negativesFile: negFile, arm: args.arm }, { git }), null, 2));
     return EXIT.OK;
   } catch (e) {
     err(`author: ${e.message}`);
