@@ -2,22 +2,24 @@
 /**
  * semgrep-ccv3.mjs - run the repo's own Semgrep rules (scripts/ratchets/semgrep-ccv3/) and ratchet the result.
  *
- * One Docker scan with the pack only, on the pinned Semgrep image, then scan-ratchet.mjs against
- * semgrep-ccv3-baseline.json. A finding in a file the change did not touch is DRIFT: printed, not blocking.
+ * One scan with the pack only, then scan-ratchet.mjs against semgrep-ccv3-baseline.json. The engine is opengrep when
+ * the binary is found (CCV3_OPENGREP, else the newest ~/tools/review-scanners/opengrep/<ver>/), else Docker on the
+ * pinned Semgrep image. The engine that ran is printed. A finding in a file the change did not touch is DRIFT: printed, not blocking.
  * It does not run p/default (that needs a registry fetch; the CI semgrep job runs it).
  *
  * Usage:
  *   node scripts/ratchets/semgrep-ccv3.mjs [--changed <file>] [--report <file>] [--root <dir>]
  *   node scripts/ratchets/semgrep-ccv3.mjs --update --reason "<why>"   (rewrite the baseline)
- * Env: SEMGREP_IMAGE (default: the digest CI pins), DOCKER_BIN.
- * The rule folder is always mounted at /rules, so the check ids (rules.<id>) match on every machine.
+ * Env: CCV3_OPENGREP, SEMGREP_IMAGE (default: the digest CI pins), DOCKER_BIN.
+ * Docker mounts the rule folder at /rules, so its check ids are rules.<id>. The opengrep report is rewritten to the same
+ * form (and to forward slashes), so one baseline serves both engines.
  *
  * Exit: 0 no new finding, 1 new finding or Docker is not running, 2 bad input or a scan that did not return JSON.
  * Node builtins only.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { InputError, run as runRatchet } from './scan-ratchet.mjs';
@@ -48,6 +50,36 @@ export function dockerArgs({ root, rulesDir = RULES_DIR, image }) {
   ];
 }
 
+export const OPENGREP_EXE = 'opengrep_windows_x86.exe';
+
+/** opengrep flags: the Docker scan without --metrics=off (opengrep rejects it), plus .git. The run starts in the repo root. */
+export function opengrepArgs({ rulesDir = RULES_DIR } = {}) {
+  return ['scan', '--config', rulesDir, '--json', '--quiet', '--timeout', '30', ...[...EXCLUDES, '.git'].flatMap((e) => ['--exclude', e]), '.'];
+}
+
+const versionKey = (name) => (/\d+(?:\.\d+)*/.exec(name)?.[0] ?? '0').split('.').map(Number);
+const newer = (a, b) => { const [x, y] = [versionKey(a), versionKey(b)]; for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (y[i] ?? 0) - (x[i] ?? 0); return 0; };
+
+/** The opengrep binary: CCV3_OPENGREP when it names a file, else the newest version folder under <home>/tools/review-scanners/opengrep. Or null. */
+export function findOpengrep({ env = process.env, home = homedir() } = {}) {
+  if (env.CCV3_OPENGREP && existsSync(env.CCV3_OPENGREP)) return env.CCV3_OPENGREP;
+  const base = path.join(home, 'tools', 'review-scanners', 'opengrep');
+  let versions = [];
+  try { versions = readdirSync(base); } catch { return null; }
+  const exe = versions.sort(newer).map((v) => path.join(base, v, OPENGREP_EXE)).find((p) => existsSync(p));
+  return exe ?? null;
+}
+
+const slash = (p) => (typeof p === 'string' ? p.replace(/\\/g, '/') : p);
+
+/** Rewrites an opengrep report to the Docker form: check_id rules.<last part>, forward slashes. Rule ids hold no dot (OG5). */
+export function normaliseOpengrepReport(report) {
+  if (!report || !Array.isArray(report.results)) return report;
+  const results = report.results.map((r) => ({ ...r, check_id: `rules.${String(r.check_id).split('.').pop()}`, path: slash(r.path) }));
+  const errors = (report.errors ?? []).map((e) => ({ ...e, path: slash(e.path) }));
+  return { ...report, results, errors };
+}
+
 function parseArgs(argv) {
   const o = { update: false };
   for (let i = 0; i < argv.length; i++) {
@@ -61,9 +93,21 @@ function parseArgs(argv) {
   return o;
 }
 
-const realSpawn = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1 << 28, windowsHide: true });
+const realSpawn = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1 << 28, windowsHide: true, ...opts });
 
-/** deps: { spawn(cmd, args) -> { status, stdout, stderr, error }, ratchet(argv, log) -> code, env, log, tmp() -> dir } */
+/** Starts the scan. { engine, r }: opengrep when found, else Docker. */
+function scan({ root, env, spawn, log, find }) {
+  const og = find();
+  if (og) {
+    log(`semgrep-ccv3: engine: opengrep (${og})`);
+    return { engine: 'opengrep', r: spawn(og, opengrepArgs(), { cwd: root }) };
+  }
+  const docker = env.DOCKER_BIN ?? (existsSync(DOCKER_WIN) ? DOCKER_WIN : 'docker');
+  log('semgrep-ccv3: engine: docker (no opengrep binary found)');
+  return { engine: 'docker', r: spawn(docker, dockerArgs({ root, image: env.SEMGREP_IMAGE ?? DEFAULT_IMAGE })) };
+}
+
+/** deps: { spawn(cmd, args, opts) -> { status, stdout, stderr, error }, findOpengrep() -> path|null, ratchet(argv, log) -> code, env, log, tmp() -> dir } */
 export function main(argv, deps = {}) {
   const log = deps.log ?? ((s) => process.stdout.write(`${s}\n`));
   const env = deps.env ?? process.env;
@@ -77,15 +121,14 @@ export function main(argv, deps = {}) {
     return 2;
   }
   const root = path.resolve(o.root ?? path.join(here, '..', '..'));
-  const docker = env.DOCKER_BIN ?? (existsSync(DOCKER_WIN) ? DOCKER_WIN : 'docker');
-  const image = env.SEMGREP_IMAGE ?? DEFAULT_IMAGE;
-  const r = spawn(docker, dockerArgs({ root, image }));
+  const find = deps.findOpengrep ?? (() => findOpengrep({ env }));
+  const { engine, r } = scan({ root, env, spawn, log, find });
   if (r.error) {
-    // No docker binary at all (ENOENT) or it could not start.
-    log(DOCKER_DOWN_MESSAGE);
+    // No binary at all (ENOENT) or it could not start.
+    log(engine === 'docker' ? DOCKER_DOWN_MESSAGE : `semgrep-ccv3: opengrep did not start: ${r.error.message}`);
     return 1;
   }
-  if (r.status !== 0 && DAEMON_DOWN.test(String(r.stderr))) {
+  if (engine === 'docker' && r.status !== 0 && DAEMON_DOWN.test(String(r.stderr))) {
     log(DOCKER_DOWN_MESSAGE);
     return 1;
   }
@@ -100,6 +143,7 @@ export function main(argv, deps = {}) {
     log('semgrep-ccv3: the scan output is not JSON, so nothing was checked.');
     return 2;
   }
+  if (engine === 'opengrep') report = normaliseOpengrepReport(report);
   const reportFile = o.report ?? path.join((deps.tmp ?? (() => mkdtempSync(path.join(tmpdir(), 'semgrep-ccv3-'))))(), 'report.json');
   writeFileSync(reportFile, JSON.stringify(report));
   const args = ['--tool', 'semgrep', '--report', reportFile, '--baseline', deps.baseline ?? BASELINE];

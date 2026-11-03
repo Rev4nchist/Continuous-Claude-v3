@@ -255,6 +255,10 @@ test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not avail
   const gate = SURFACES.flatMap((s) => s.gates ?? []).find((g) => g.id === 'semgrep-ccv3');
   const saved = process.env.DOCKER_BIN;
   process.env.DOCKER_BIN = path.join(os.tmpdir(), 'no-such-docker-binary');
+  // The wrapper uses opengrep when it finds the binary under the home folder. An empty home forces the Docker path.
+  const home = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME, CCV3_OPENGREP: process.env.CCV3_OPENGREP };
+  process.env.USERPROFILE = process.env.HOME = mkdtempSync(path.join(os.tmpdir(), 'gw5-home-'));
+  delete process.env.CCV3_OPENGREP;
   try {
     const r = runGate({ ...gate, timeoutMs: 60_000 }, { root: REPO_ROOT, exec: PRE.defaultExec, git: () => ({ status: 0, stdout: '', stderr: '' }) });
     assert.equal(r.status, 'FAIL');
@@ -262,6 +266,7 @@ test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not avail
   } finally {
     if (saved === undefined) delete process.env.DOCKER_BIN;
     else process.env.DOCKER_BIN = saved;
+    for (const [k, v] of Object.entries(home)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
 
