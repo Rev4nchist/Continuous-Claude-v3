@@ -1,0 +1,6 @@
+{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cd /tmp/trex-s18-bad && gh api -X POST repos/rev4nchist/continuous-claude-v3/issues/3/comments -f body=\"see /pulls\""
+  }
+}

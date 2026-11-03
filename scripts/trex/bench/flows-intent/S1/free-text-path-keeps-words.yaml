@@ -1,0 +1,34 @@
+id: free-text-path-keeps-words
+title: Free text keeps words and sentence marks around a scrubbed path
+description: Goal, plan, ask, and decision keep the words after a path, and an error still scrubs a spaced path to the end of the line.
+goal: Dave still sees the words around a path, while an error message does not leak the tail of a path that contains a space.
+paths:
+  - apps/agentic-os/src/server/sources/safe-message.ts
+  - apps/agentic-os/src/server/sources/state-files.ts
+symbols:
+  - scrubPathsInText
+  - scrubPaths
+  - safeMessage
+  - readStateFiles
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --import
+        - scripts/trex/bench/flows-intent/S1/fixtures/register.mjs
+        - scripts/trex/bench/flows-intent/S1/fixtures/read-free-text.mjs
+    checks:
+      - {text: state reader and error scrub both run, exit: 0}
+      - {text: goal keeps the words after a posix path, stdout: "from <path> to S3 and add tests"}
+      - {text: plan keeps the comma that ended a posix path, stdout: "Copy <path>, then verify"}
+      - {text: ask keeps the question mark on the path and the words after it, stdout: "delete <path>\\? or keep it\\?"}
+      - {text: recommendation keeps the comma that was glued to the path, stdout: "Keep <path>, then stop"}
+      - {text: decision keeps the period that ended the path, stdout: "<path>\\. After review"}
+      - {text: a spaced path in an error does not leave its tail, "!stdout": "Lovelace|zzsecret99|please retry"}
+      - {text: free-text path bodies stay hidden, "!stdout": "zzgoal99|zzplan99|zzask99|zzrec99|zzdec99"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

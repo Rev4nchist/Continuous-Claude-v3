@@ -1,0 +1,114 @@
+{
+  "cleanupPeriodDays": 180,
+  "env": {
+    "CONTINUOUS_CLAUDE_COORDINATION": "true"
+  },
+  "permissions": {
+    "allow": ["Bash(git status)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/task-router.mjs"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/maestro-enforcer.mjs"]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/heartbeat.mjs"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/maestro-state-manager.mjs"]
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 15,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/session-start-init-check.mjs"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/session-start-recovery.mjs"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/session-start-continuity.mjs"]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/maestro-cleanup.mjs"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/session-outcome.mjs"]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/maestro-enforcer.mjs"]
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": ["{{CLAUDE_HOME}}/hooks/dist/maestro-detector.mjs"]
+          }
+        ]
+      }
+    ]
+  }
+}

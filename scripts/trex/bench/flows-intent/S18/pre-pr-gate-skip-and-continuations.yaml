@@ -1,0 +1,52 @@
+id: pre-pr-open-stamp-rules
+title: PR opens need a matching stamp; a comment that only mentions /pulls stays allowed
+description: Continued gh pr create and POST /pulls are denied unless the stamp, body file, pushed head, and CodeRabbit skip all qualify.
+goal: Catch a gate that lets an unchecked PR open, or that blocks a comment whose text merely names /pulls.
+paths:
+  - .claude/hooks/dist/pre-pr-gate.mjs
+  - .claude/hooks/src/pre-pr-gate.ts
+  - .claude/hooks/src/pr-opened-review-loop.ts
+symbols:
+  - isPrOpenCommand
+  - joinContinuations
+  - stampProblem
+  - decide
+driver: hook
+mode: scripted
+profile: container
+needs: [git]
+start:
+  git: commit
+  cwd: .
+  run: [node, scripts/setup.mjs]
+steps:
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/allow-matching-body.json}
+    checks:
+      - {text: hook exits cleanly, exit: 0}
+      - {text: matching body and a cli-missing skip allow the PR create, "!stdout": "permissionDecision"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/deny-other-body.json}
+    checks:
+      - {text: hook exits cleanly, exit: 0}
+      - {text: a different body file is denied, stdout: "\"permissionDecision\":\"deny\""}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/deny-pushed-head.json}
+    checks:
+      - {text: hook exits cleanly, exit: 0}
+      - {text: a pushed head other than the stamp is denied, stdout: "\"permissionDecision\":\"deny\""}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/deny-cap-continued.json}
+    checks:
+      - {text: hook exits cleanly, exit: 0}
+      - {text: a continued PR create with a cap skip and no PASS run is denied, stdout: "\"permissionDecision\":\"deny\""}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/deny-api-continued.json}
+    checks:
+      - {text: hook exits cleanly, exit: 0}
+      - {text: a continued POST to the pulls collection is denied, stdout: "\"permissionDecision\":\"deny\""}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/allow-comment-mentions-pulls.json}
+    checks:
+      - {text: hook exits cleanly, exit: 0}
+      - {text: a comment whose body only names /pulls is not a PR create, "!stdout": "permissionDecision"}
+  - action: {hook: .claude/hooks/dist/pre-pr-gate.mjs, payload: fixtures/allow-pull-comment-endpoint.json}
+    checks:
+      - {text: hook exits cleanly, exit: 0}
+      - {text: POST to a pull comment path is not a PR create, "!stdout": "permissionDecision"}
+limits: {timeoutMs: 90000, retries: 1, maxSteps: 10}
+severity: P1

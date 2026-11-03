@@ -1,0 +1,22 @@
+id: proof-fail-closed
+title: A proof passes only when the fix removes the bug text
+description: An import error or a Semgrep run with no JSON is not a pass, and a hit still fires when the bug text is on a different line.
+goal: The harness fails closed, and moving the buggy source line does not make the fix look clean.
+paths: [scripts/checks/prove-check.mjs]
+symbols: [classifyRun, judge]
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+steps:
+  - action: {cmd: [node, scripts/trex/bench/flows-intent/S14/fixtures/proof-verdict.mjs], cwd: .}
+    checks:
+      - {text: harness command exits 0 only when every verdict matches, exit: 0}
+      - {text: the bug source line fires, stdout: "bugLine=fire"}
+      - {text: a hit on a line without the bug text does not fire, stdout: "innocent=no-fire"}
+      - {text: the same bug text on a later line still fails the proof, stdout: "movedPasses=no"}
+      - {text: a Semgrep run that prints no JSON does not pass as a clean fix, stdout: "noJsonPasses=no"}
+      - {text: an import error does not pass as a fire at the pre-fix tree, stdout: "importPasses=no"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

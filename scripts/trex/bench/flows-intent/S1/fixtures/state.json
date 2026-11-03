@@ -1,0 +1,19 @@
+{
+  "sessionId": "s1pathwords",
+  "at": 1700000000000,
+  "brief": {
+    "goal": "Move logs from /var/log/zzgoal99 to S3 and add tests",
+    "plan": [{ "id": "p1", "text": "Copy /tmp/zzplan99, then verify", "status": "doing" }],
+    "ask": [
+      {
+        "kind": "question",
+        "text": "Should I delete C:\\Users\\zzask99\\cache? or keep it?",
+        "recommend": "Keep C:\\tmp\\zzrec99.txt, then stop.",
+        "answered": false
+      }
+    ],
+    "decisions": [
+      { "text": "Ship C:\\tmp\\zzdec99. After review", "by": "dave", "at": 1700000000000 }
+    ]
+  }
+}

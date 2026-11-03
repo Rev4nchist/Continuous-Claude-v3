@@ -1,0 +1,24 @@
+id: body-edit-unread-page
+title: PR body edit history stays not ready unless every page was read
+description: A person edit on a later page, a missing pageInfo, or a history past the page cap stays not ready, and a complete history longer than one page can still be ready.
+goal: The ready decision follows the whole body-edit history, and an unread page cannot hide a person edit.
+paths: [scripts/github/review-status.mjs]
+symbols: [readBodyEdits, bodyEditedAfterGreptile, bodyEditsPageReader, evaluate]
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+steps:
+  - action: {cmd: [node, scripts/trex/bench/flows-intent/S14/fixtures/body-edit-gate.mjs], cwd: .}
+    checks:
+      - {text: gate command exits 0 only when every history decision matches, exit: 0}
+      - {text: a connection with no pageInfo stays not ready, stdout: "noPageInfo=blocked"}
+      - {text: a person edit newer than Greptile on the next page stays not ready, stdout: "newerPerson=blocked"}
+      - {text: a person edit on the second page ahead of Greptile stays not ready, stdout: "buriedPerson=blocked"}
+      - {text: twenty bot edits plus Greptile on the next page stays ready, stdout: "longClean=ready"}
+      - {text: a history that still has another page past the cap stays not ready, stdout: "overCap=blocked"}
+      - {text: one complete page whose only editor is Greptile stays ready, stdout: "onePage=ready"}
+      - {text: the follow-up read asks for pageInfo and sends the cursor, stdout: "followUp=yes"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P0

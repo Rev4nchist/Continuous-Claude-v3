@@ -1,0 +1,34 @@
+id: maestro-settings-apply
+title: Documented apply removes only the four Maestro hook registrations
+description: The documented --apply command must strip the four retired hooks from ~/.claude/settings.json, keep neighbouring hooks and other settings, and save the pre-image as settings.json.bak-maestro.
+goal: Live settings no longer register the Maestro recon gate, and the rest of the file stays in place.
+paths: [scripts/settings/remove-maestro-registrations.mjs]
+driver: cli
+mode: scripted
+profile: container
+start:
+  cwd: .
+  run: [node, scripts/trex/bench/flows-intent/S8/fixtures/install-live-settings.mjs]
+steps:
+  - action: {cmd: [node, scripts/settings/remove-maestro-registrations.mjs, --apply], cwd: .}
+    checks:
+      - {text: documented apply command exits 0, exit: 0}
+  - action: {cmd: [node, scripts/trex/bench/flows-intent/S8/fixtures/snapshot-live-settings.mjs], cwd: .}
+    checks:
+      - {text: home settings snapshot exits 0, exit: 0}
+      - {text: four retired hook files are gone, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "!~": "maestro-enforcer\\.mjs|maestro-state-manager\\.mjs|maestro-cleanup\\.mjs|session-start-recovery\\.mjs"}
+      - {text: task router stays in the Task group, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "task-router\\.mjs"}
+      - {text: Task matcher stays on that group, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "\"matcher\":\\s*\"Task\""}
+      - {text: heartbeat stays on prompt submit, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "heartbeat\\.mjs"}
+      - {text: session-start init check stays, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "session-start-init-check\\.mjs"}
+      - {text: session-start continuity stays, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "session-start-continuity\\.mjs"}
+      - {text: session outcome stays on session end, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "session-outcome\\.mjs"}
+      - {text: lookalike maestro-detector hook stays, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "maestro-detector\\.mjs"}
+      - {text: non-hook env key stays, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "CONTINUOUS_CLAUDE_COORDINATION"}
+      - {text: permission allow list stays, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, "~": "Bash\\(git status\\)"}
+      - {text: settings still parse and keep cleanupPeriodDays, json: {file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json, path: cleanupPeriodDays, equals: 180}}
+      - {text: backup still contains the enforcer, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json.bak-maestro, "~": "maestro-enforcer\\.mjs"}
+      - {text: backup still contains session-start recovery, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json.bak-maestro, "~": "session-start-recovery\\.mjs"}
+      - {text: backup is the pre-image, file: scripts/trex/bench/flows-intent/S8/fixtures/out/settings.json.bak-maestro, "~": "task-router\\.mjs"}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P1

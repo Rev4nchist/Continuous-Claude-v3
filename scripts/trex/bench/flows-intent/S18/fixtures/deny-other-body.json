@@ -1,0 +1,6 @@
+{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cd /tmp/trex-s18-ok && gh pr create -R rev4nchist/continuous-claude-v3 --title t --body-file other.md"
+  }
+}
