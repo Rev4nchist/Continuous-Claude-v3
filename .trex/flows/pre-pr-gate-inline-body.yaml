@@ -1,0 +1,37 @@
+# Dev flow for the S18 end-to-end check. Hand-written, never a bench flow.
+# Defect: the pre-pr gate let a PR create with an inline body through when the stamp was valid, because it could not hash the body.
+# Fixed in 82a06d63 (bodyFileOf / singleBodyFile). The flow FAILS at a309dd66 and PASSES at 82a06d63.
+id: pre-pr-gate-inline-body
+title: pre-pr-gate denies a PR create with an inline body
+description: A gh pr create call passes the body inline, with a valid stamp for the head. The gate cannot hash an inline body.
+goal: The hook denies the call because the body is not a file, and for no other reason.
+paths:
+  - .claude/hooks/src/pre-pr-gate.ts
+  - .claude/hooks/dist/pre-pr-gate.mjs
+symbols:
+  - bodyFileOf
+driver: hook
+mode: scripted
+profile: container
+needs:
+  - git
+start:
+  git: commit
+  remote: https://github.com/Rev4nchist/Continuous-Claude-v3.git
+  stamp: fixtures/pre-pr-stamp.json
+steps:
+  - action:
+      hook: .claude/hooks/dist/pre-pr-gate.mjs
+      payload: fixtures/pr-create-inline-body.json
+    checks:
+      - text: the hook exits 0 (a deny is output, not a crash)
+        exit: 0
+      - text: the gate denies because the body is not a file
+        stdout: 'pre-pr-gate\): the PR body is not a file'
+      - text: no stamp, checkout or git problem causes the deny
+        '!stdout': 'could not verify|no stamp|the stamp |cannot resolve the head|is not a git checkout|is not a CCv3 checkout'
+limits:
+  timeoutMs: 60000
+  retries: 1
+  maxSteps: 5
+severity: P1

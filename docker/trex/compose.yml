@@ -1,0 +1,40 @@
+# TREX environment with a database. Flows without needs: [db] use compose.none.yml.
+# No ports, no volumes. Trees and seeds go in with docker cp and docker exec.
+# The network has no route out and no route to the host. Every object carries the run label.
+# Variables: TREX_RUN_ID, TREX_IMAGE, TREX_DB_PW (set by env.mjs for each run).
+# The pgvector digest is the image already on this machine. Update it together with the Dockerfile.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+    environment:
+      POSTGRES_USER: claude
+      POSTGRES_DB: continuous_claude
+      POSTGRES_PASSWORD: ${TREX_DB_PW:?TREX_DB_PW is required}
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claude -d continuous_claude"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [trexnet]
+    labels:
+      trex.run: ${TREX_RUN_ID}
+
+  app:
+    image: ${TREX_IMAGE:?TREX_IMAGE is required}
+    command: ["sleep", "infinity"]
+    init: true
+    mem_limit: 6g
+    working_dir: /app
+    networks: [trexnet]
+    labels:
+      trex.run: ${TREX_RUN_ID}
+
+networks:
+  trexnet:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    labels:
+      trex.run: ${TREX_RUN_ID}

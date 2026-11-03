@@ -1,0 +1,12 @@
+# TREX environment without a database or a network. Used by flows that do not list db in needs.
+# Variables: TREX_RUN_ID, TREX_IMAGE (set by env.mjs for each run).
+services:
+  app:
+    image: ${TREX_IMAGE:?TREX_IMAGE is required}
+    command: ["sleep", "infinity"]
+    init: true
+    mem_limit: 6g
+    working_dir: /app
+    network_mode: none
+    labels:
+      trex.run: ${TREX_RUN_ID}
