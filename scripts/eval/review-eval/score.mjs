@@ -3,6 +3,7 @@
 //  matches: [{ key, pr, set, crSev, crVerdict, crSource, engSev|null }]   one per dataset finding of a replayed round
 //  labels:  [{ findingId|pairId, verdict, by }]   only by 'dave' counts
 //  sets:    { zeroMajorPrs: [pr] }     pairsSent: [{ pairId, judge: { verdict } }]
+import { pairId } from './labels.mjs';
 import { foldSev, isMajor, matchFindings } from './match.mjs';
 
 const ratio = (found, total) => ({ found, total, value: total > 0 ? found / total : null });
@@ -42,7 +43,7 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
   let noise = 0;
   let unverified = 0;
   for (const f of valid.flatMap((r) => r.findings ?? [])) {
-    const verdict = daveLabel.get(f.id) ?? (f.matchedKey ? crVerdict.get(f.matchedKey) : undefined);
+    const verdict = (f.pairId ? daveLabel.get(f.pairId) : undefined) ?? daveLabel.get(f.id) ?? (f.matchedKey ? crVerdict.get(f.matchedKey) : undefined);
     if (verdict === 'real') real += 1; else if (verdict === 'noise') noise += 1; else unverified += 1;
   }
   const posted = real + noise + unverified;
@@ -80,13 +81,14 @@ export function evaluateRuns({ runs, dataset, readFindings, tol = 3 }) {
   const outRuns = [];
   const matches = [];
   for (const run of runs.filter((r) => r.status === 'ok')) {
-    const eng = (readFindings(run.findingsPath).findings ?? []).map((f, i) => ({ src: 'engine', id: `${run.pr}-${run.round}-${i}`, file: f.file, start: Number.isFinite(f.line) ? f.line : null, end: Number.isFinite(f.lineEnd) ? f.lineEnd : (Number.isFinite(f.line) ? f.line : null), sev: lc(f.severity) }));
+    // pairId is the key ingestLabels writes; it must use the same fields as the exported pair (pr, sha40, file, raw line, title).
+    const eng = (readFindings(run.findingsPath).findings ?? []).map((f, i) => ({ src: 'engine', id: `${run.pr}-${run.round}-${i}`, pairId: pairId({ pr: run.pr, sha: run.sha40, file: f.file, line: f.line, engineTitle: f.title }), file: f.file, start: Number.isFinite(f.line) ? f.line : null, end: Number.isFinite(f.lineEnd) ? f.lineEnd : (Number.isFinite(f.line) ? f.line : null), sev: lc(f.severity) }));
     const cr = dataset.filter((d) => d.pr === run.pr && d.sha40 === run.sha40).map((d) => ({ src: 'cr', id: d.key, file: d.path, start: d.startLine, end: d.endLine, sev: foldSev(d.severity), d }));
     const res = matchFindings(cr, eng, { tol });
     const hit = new Map(res.matches.map((m) => [m.cr.id, m.eng]));
     for (const c of cr) matches.push({ key: c.id, pr: run.pr, set: run.set, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null });
     const byEng = new Map(res.matches.map((m) => [m.eng.id, m.cr.id]));
-    outRuns.push({ ...run, findings: eng.map((e) => ({ id: e.id, sev: e.sev, matchedKey: byEng.get(e.id) ?? null })) });
+    outRuns.push({ ...run, findings: eng.map((e) => ({ id: e.id, pairId: e.pairId, sev: e.sev, matchedKey: byEng.get(e.id) ?? null })) });
   }
   return { runs: outRuns, matches };
 }

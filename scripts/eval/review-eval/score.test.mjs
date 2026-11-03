@@ -8,6 +8,7 @@
 //  every section-4 field is present
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { pairId } from './labels.mjs';
 import { evaluateRuns, scorecard } from './score.mjs';
 
 const m = (key, pr, set, crSev, engSev, over = {}) => ({ key, pr, set, crSev, crVerdict: 'real', crSource: 'inline', engSev, ...over });
@@ -111,4 +112,16 @@ test('evaluateRuns maps an engine finding to the dataset finding on the same fil
   assert.equal(ev.matches.length, 1);
   assert.deepEqual([ev.matches[0].key, ev.matches[0].engSev, ev.matches[0].crVerdict], ['7:1', 'major', 'real']);
   assert.deepEqual(ev.runs[0].findings.map((f) => f.matchedKey), ['7:1', null]);
+});
+
+test('a Dave label ingested by pairId reaches the precision of the engine finding it names', () => {
+  // Breaks when: scorecard looks labels up only by the engine id (pr-round-i), which ingestLabels never writes.
+  const sha40 = 'c'.repeat(40);
+  const runs = [{ status: 'ok', set: 'holdout', pr: 8, round: 1, sha40, promptSha256: 'P0', findingsPath: 'x' }];
+  const found = [{ file: 'q.mjs', line: 5, severity: 'major', title: 'real one' }, { file: 'q.mjs', line: 90, severity: 'minor', title: 'noise one' }];
+  const ev = evaluateRuns({ runs, dataset: [], readFindings: () => ({ findings: found }) });
+  const idOf = (f) => pairId({ pr: 8, sha: sha40, file: f.file, line: f.line, engineTitle: f.title });
+  const labels = [{ pairId: idOf(found[0]), findingId: idOf(found[0]), verdict: 'real', by: 'dave' }, { pairId: idOf(found[1]), findingId: idOf(found[1]), verdict: 'noise', by: 'dave' }];
+  const s = scorecard({ ...base, runs: ev.runs, matches: ev.matches, labels });
+  assert.deepEqual([s.precision.real, s.precision.noise, s.precision.unverified], [1, 1, 0]);
 });

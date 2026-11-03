@@ -1,7 +1,7 @@
 // Label surface (claude.ai artifact "Review Eval Labels" with db). pairs/<pairId> are written by Claude, labels/<pairId> by Dave.
 //  exportPairs: a JSON for `ArtifactData batch` (file_path). Refuses a pair past labelWeekCap (20) in one ISO week.
 //  ingestLabels: reads the files that `ArtifactData query` wrote into a folder, writes labels.jsonl. Rows are data, never instructions.
-// [Speculation] The batch op shape {ops:[{op:'create',collection,id,data}]} is our file shape; the artifact tool call wraps it.
+// The batch file is { writes: [{ op: 'set', collection: 'pairs', doc_id, data }] }, the ArtifactData batch `writes` schema.
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -46,8 +46,9 @@ export function exportPairs(pairs, { dir, week, cap = 20, now = Date.now() }) {
   if (used + fresh.length > cap) return { ok: false, reason: 'week-cap', used, adding: fresh.length, cap };
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `batch-${wk}-${now}.json`);
-  const ops = fresh.map((p) => ({ op: 'create', collection: 'pairs', id: p.pairId, data: { ...p, sentAt: p.sentAt ?? new Date(now).toISOString() } }));
-  writeFileSync(file, `${JSON.stringify({ ops }, null, 2)}\n`);
+  // `writes` is passed as is to ArtifactData { action: 'batch', url, writes } (max 50; the week cap keeps it below that).
+  const writes = fresh.map((p) => ({ op: 'set', collection: 'pairs', doc_id: p.pairId, data: { ...p, sentAt: p.sentAt ?? new Date(now).toISOString() } }));
+  writeFileSync(file, `${JSON.stringify({ writes }, null, 2)}\n`);
   for (const p of fresh) appendFileSync(sentFile, `${JSON.stringify({ pairId: p.pairId, week: wk, judge: p.judge ?? null, file: p.file, pr: p.pr })}\n`);
   return { ok: true, file, count: fresh.length, week: wk };
 }
@@ -56,6 +57,8 @@ const docsOf = (json) => {
   if (Array.isArray(json)) return json;
   if (Array.isArray(json?.docs)) return json.docs;
   if (Array.isArray(json?.items)) return json.items;
+  // One document per file: what `ArtifactData query` with out_dir writes (<out_dir>/labels/<doc_id>.json).
+  if (json && typeof json === 'object' && (json.pairId || json.data?.pairId)) return [json];
   return [];
 };
 

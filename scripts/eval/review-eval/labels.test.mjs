@@ -70,24 +70,37 @@ test('re-exporting a pair already sent adds nothing and does not use the cap', (
   assert.equal(again.count, 0);
 });
 
-test('the batch file is shaped for ArtifactData batch and keeps the judge for the page to hide', () => {
-  // Breaks when: the op shape or the pairs collection name changes.
+test('the batch file is the ArtifactData batch `writes` array and keeps the judge for the page to hide', () => {
+  // Breaks when: the entry shape drifts from the tool schema ({op:set|update|delete, collection, doc_id, data}) or the collection name changes.
   const dir = tmp();
   const r = exportPairs([pair(1)], { dir, now: NOW });
   const batch = JSON.parse(readFileSync(r.file, 'utf8'));
-  assert.equal(batch.ops.length, 1);
-  assert.equal(batch.ops[0].op, 'create');
-  assert.equal(batch.ops[0].collection, 'pairs');
-  assert.equal(batch.ops[0].id, batch.ops[0].data.pairId);
-  assert.equal(batch.ops[0].data.week, '2026-W45');
-  assert.equal(batch.ops[0].data.judge.verdict, 'real');
+  assert.equal(batch.writes.length, 1);
+  assert.deepEqual(Object.keys(batch.writes[0]).sort(), ['collection', 'data', 'doc_id', 'op']);
+  assert.equal(batch.writes[0].op, 'set');
+  assert.equal(batch.writes[0].collection, 'pairs');
+  assert.equal(batch.writes[0].doc_id, batch.writes[0].data.pairId);
+  assert.equal(batch.writes[0].data.week, '2026-W45');
+  assert.equal(batch.writes[0].data.judge.verdict, 'real');
+});
+
+test('ingest reads the one-document files that ArtifactData query out_dir writes', () => {
+  // Breaks when: docsOf accepts only arrays or {docs|items}, so <out_dir>/labels/<doc_id>.json gives zero rows.
+  const dir = tmp();
+  const pageWrite = { pairId: 'p9', verdict: 'noise', sameIssue: null, severity: 'minor', note: '', labeledAt: '2026-11-03T13:00:00Z' };
+  writeFileSync(path.join(dir, 'p9.json'), JSON.stringify(pageWrite, null, 2));
+  writeFileSync(path.join(dir, 'p8.json'), JSON.stringify({ id: 'p8', version: 3, data: { ...pageWrite, pairId: 'p8' } }, null, 2));
+  writeFileSync(path.join(dir, 'unrelated.json'), JSON.stringify({ findings: [], counts: {} }));
+  const res = ingestLabels(dir, { out: path.join(dir, 'labels.jsonl') });
+  assert.deepEqual(res.rows.map((x) => x.pairId).sort(), ['p8', 'p9']);
+  assert.equal(res.rejected, 0);
 });
 
 test('round trip: the ingested row equals what the page wrote', () => {
   // Breaks when: ingestLabels renames or drops a field the page writes.
   const dir = tmp();
   const r = exportPairs([pair(1)], { dir, now: NOW });
-  const { id } = JSON.parse(readFileSync(r.file, 'utf8')).ops[0];
+  const { doc_id: id } = JSON.parse(readFileSync(r.file, 'utf8')).writes[0];
   const pageWrite = { pairId: id, verdict: 'real', sameIssue: true, severity: 'major', note: 'confirmed by hand', labeledAt: '2026-11-03T13:00:00Z' };
   writeFileSync(path.join(dir, 'labels-query.json'), JSON.stringify({ docs: [{ id, version: 2, data: pageWrite }] }));
   const out = path.join(dir, 'labels.jsonl');
