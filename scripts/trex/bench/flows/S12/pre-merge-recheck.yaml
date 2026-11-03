@@ -1,0 +1,22 @@
+id: pre-merge-recheck-gap
+title: A review that arrives after READY blocks the merge
+description: The pre-merge re-check refuses a moved head, a new CodeRabbit review, an unanswered request, a person-edited summary, and a pending status past page one.
+goal: A quiet PR and a trusted summary-only round may merge, and every in-flight or post-READY CodeRabbit change may not.
+paths: [scripts/github/land-recheck.mjs, scripts/github/review-status.mjs]
+symbols: [decideRecheck, recheckPr]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action: {cmd: [node, scripts/trex/bench/flows/S12/pre-merge-recheck.mjs]}
+    checks:
+      - {text: a quiet PR is unchanged, stdout: "quiet: ALLOW"}
+      - {text: a CodeRabbit review after READY refuses, stdout: "review-after: REFUSE"}
+      - {text: an unanswered review request refuses, stdout: "in-flight: REFUSE"}
+      - {text: a moved head refuses, stdout: "head-moved: REFUSE"}
+      - {text: a trusted clean summary that covers the head answers the request, stdout: "summary-only: ALLOW"}
+      - {text: a summary a person edited does not answer the request, stdout: "person-edit: REFUSE"}
+      - {text: a pending CodeRabbit status on the second status page refuses, stdout: "pending-page: REFUSE"}
+      - {text: the re-check exits 0, exit: 0}
+limits: {timeoutMs: 60000, retries: 1, maxSteps: 20}
+severity: P0
