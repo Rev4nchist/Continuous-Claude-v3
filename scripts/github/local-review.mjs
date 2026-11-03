@@ -46,6 +46,8 @@ const TMP_GRACE_MS = 30 * MIN;
 const KEEP_ENGINES = 3;
 const SHA40 = /^[0-9a-f]{40}$/;
 const RESERVED_SLUGS = new Set(['engine']);
+/** Windows folds case and drops trailing dots from a folder name, so Engine and engine. are the engine/ folder there. */
+const foldSlug = (slug) => slug.toLowerCase().replace(/\.+$/, '');
 const ENV_DROP = Object.freeze(['ANTHROPIC_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN', 'CLAUDE_CODE_MESSAGING_TOKEN']);
 
 /** Engine files whose blob must equal fork/main:<path> for trusted:true (13.3). Paths are relative to the engine root. */
@@ -202,10 +204,14 @@ function extractEngine({ git, sha, dir, engineRoot }) {
   }
 }
 
-/** Keeps the newest `keep` engine folders (and `current`). Folders are named by sha; temp folders start with a dot. */
+/**
+ * Keeps the newest `keep` engine folders (and `current`). Folders are named by sha; temp folders start with a dot.
+ * Only a folder that holds an engine copy is a candidate: a record head folder can share this directory on a case-folding disk.
+ */
 function pruneEngines(engineRoot, keep, current) {
   let names = [];
-  try { names = readdirSync(engineRoot).filter((n) => SHA40.test(n)); } catch { return; }
+  const isCopy = (n) => existsSync(path.join(engineRoot, n, ENGINE_FILES[0]));
+  try { names = readdirSync(engineRoot).filter((n) => SHA40.test(n) && isCopy(n)); } catch { return; }
   const aged = names.map((n) => ({ n, t: statSync(path.join(engineRoot, n)).mtimeMs })).sort((a, b) => b.t - a.t);
   const keepSet = new Set([current, ...aged.slice(0, keep).map((x) => x.n)]);
   for (const { n } of aged) if (!keepSet.has(n)) rmSync(path.join(engineRoot, n), { recursive: true, force: true });
@@ -489,7 +495,7 @@ async function stepTarget(s) {
   } catch (err) {
     return refuse(d, err.code === 'BAD_INPUT' || /branch name/.test(err.message) ? EXIT.REFUSED : EXIT.FAILED, err.message);
   }
-  if (RESERVED_SLUGS.has(s.slug)) return refuse(d, EXIT.REFUSED, `branch name "${s.target.branch}" collides with the engine folder`);
+  if (RESERVED_SLUGS.has(foldSlug(s.slug))) return refuse(d, EXIT.REFUSED, `branch name "${s.target.branch}" collides with the engine folder`);
   s.ref = `branch-${s.slug}`;
   const { pull } = s.target;
   if (pull.draft === true) return skipRow(s, 'draft');
@@ -651,6 +657,8 @@ async function runAttempts(s, prep, plan) {
 
 const runComplete = (run, parsed, answer) => run.status === 0 && !run.timedOut && parsed.ok && !parsed.notRun && !parsed.modelMismatch && answer !== null;
 
+const normPath = (p) => String(p).replaceAll('\\', '/').replace(/^\.\//, '');
+
 const rankOf = (f) => SEVERITY_RANK[f.severity] ?? 0;
 
 /** A new finding with the id of a still-open prior finding: the prior stays open, with the higher severity. The model cannot close or downgrade it (13.3). */
@@ -680,9 +688,12 @@ function buildRecord(s, plan, out, answer, filtered, error) {
   const { band, score, G, C, K, L, securityTier } = route.detail;
   const problems = [...s.problems, ...final.parsed.problems, ...filtered.problems, ...(error ? [error] : [])];
   if (out.stopped) problems.push(`the retry was not reserved (${out.stopped.reason}): the first failed attempt stands`);
-  const selected = s.range.mode === 'delta' ? s.deltaFiles.length : target.files.length;
-  const claimedReviewed = answer?.reviewed?.length ?? 0;
-  // An answer that claims no file reviewed is not complete when files were selected: a hidden or unreadable tree gives that answer.
+  const selectedFiles = s.range.mode === 'delta' ? s.deltaFiles : target.files;
+  const selected = selectedFiles.length;
+  // Only a claimed path that is in the selected set counts: the prompt's example path, echoed back, reviews nothing.
+  const inSet = new Set(selectedFiles.map((f) => normPath(f.filename)));
+  const claimedReviewed = (answer?.reviewed ?? []).filter((p) => inSet.has(normPath(p))).length;
+  // An answer that claims no selected file reviewed is not complete when files were selected: a hidden or unreadable tree gives that answer.
   const complete = runComplete(final.run, final.parsed, answer) && (selected === 0 || claimedReviewed > 0);
   return {
     schema: 1, runId: final.runId, pr: target.pr, branch: target.branch, head: target.head, mergeBase: target.mergeBase, pullBaseSha: target.pullBaseSha,

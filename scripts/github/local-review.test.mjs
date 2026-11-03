@@ -664,6 +664,25 @@ test('pinEngine follows a new fork/main commit and keeps 3 folders, the current 
   assert.deepEqual(readdirSync(engine).sort(), [shas[2], shas[3], shas[4]].sort());
 });
 
+// Breaks if pruneEngines deletes every sha-named folder: a record head folder in the same directory (Windows folds Engine to engine) would be lost.
+test('prune-engines-only: a 40-hex folder that holds no engine copy survives the prune (breaks if pruneEngines drops the engine-copy check)', () => {
+  const p = pinRepos();
+  const engine = path.join(p.stateRoot, 'engine');
+  pinEngine({ root: p.clone }, { stateRoot: p.stateRoot });
+  const foreign = path.join(engine, 'f'.repeat(40));
+  mkdirSync(foreign);
+  writeFileSync(path.join(foreign, 'run-1.json'), '{"findings":[]}\n');
+  utimesSync(foreign, new Date(NOW - 900_000), new Date(NOW - 900_000));
+  for (let n = 2; n <= 5; n += 1) {
+    p.commit(n);
+    const r = pinEngine({ root: p.clone }, { stateRoot: p.stateRoot });
+    const t = new Date(NOW - (6 - n) * 10_000);
+    utimesSync(r.dir, t, t);
+  }
+  assert.equal(existsSync(path.join(foreign, 'run-1.json')), true);
+  assert.equal(readdirSync(engine).filter((n) => n !== 'f'.repeat(40)).length, 3);
+});
+
 test('pinEngine refuses a fork/main without the engine, and a pin leaves no temp folder (breaks if the engine check is removed)', () => {
   const p = pinRepos(false);
   const r = pinEngine({ root: p.clone }, { stateRoot: p.stateRoot });
@@ -850,6 +869,17 @@ test('a branch name with .. is refused with exit 2 and a branch named engine is 
   const eng = world({ pull: pullOf({ head: { sha: HEAD, ref: 'engine' } }) });
   assert.equal((await run(eng)).exit, EXIT.REFUSED);
   assert.equal(dots.agentCalls.length + eng.agentCalls.length, 0);
+});
+
+// Breaks if the reserved-slug check is exact-case: on Windows 'Engine' and 'engine.' are the engine/ pin folder, so a branch with that name shares it.
+test('reserved-slug-folded: Engine, ENGINE and engine. are refused like engine, and a similar name is not (breaks if the slug is not folded)', async () => {
+  for (const ref of ['Engine', 'ENGINE', 'engine.', 'engine..']) {
+    const w = world({ pull: pullOf({ head: { sha: HEAD, ref } }) });
+    assert.equal((await run(w)).exit, EXIT.REFUSED, ref);
+    assert.equal(w.agentCalls.length, 0, ref);
+  }
+  const w = world({ pull: pullOf({ head: { sha: HEAD, ref: 'engine2' } }) });
+  assert.notEqual((await run(w)).exit, EXIT.REFUSED);
 });
 
 test('the pull body is quoted as untrusted data in CONTEXT.md (breaks if the PR text is not fenced)', async () => {
@@ -1087,6 +1117,20 @@ test('empty-review-incomplete: reviewed [] with files selected is not complete a
   assert.equal(rec.coverage.claimedReviewed, 0);
   assert.equal(rec.coverage.complete, false);
   assert.notEqual((await run(w)).skipReason, 'range done: a complete record exists at this head');
+});
+
+// Breaks if complete counts reviewed.length alone: the prompt's own example answer ("path/in/repo") would end the range with no file read.
+test('echoed-example-incomplete: a reviewed list that names no selected file is not complete, and a ./ or backslash spelling of a selected file is (breaks if complete ignores which paths were claimed)', async () => {
+  const echoed = world({ runs: [agentRun([], { reviewed: ['path/in/repo'] })] });
+  const rec = readRecord(await run(echoed));
+  assert.equal(rec.status, 'ok');
+  assert.equal(rec.coverage.claimedReviewed, 0);
+  assert.equal(rec.coverage.complete, false);
+  assert.notEqual((await run(echoed)).skipReason, 'range done: a complete record exists at this head');
+  const spelled = world({ runs: [agentRun([], { reviewed: ['path/in/repo', './src\\app.mjs'] })] });
+  const ok = readRecord(await run(spelled));
+  assert.equal(ok.coverage.claimedReviewed, 1);
+  assert.equal(ok.coverage.complete, true);
 });
 
 // Breaks if pinEngine reuses a folder on its config file alone: an edited, trimmed or padded engine copy must be replaced from the fork/main blobs.

@@ -241,6 +241,16 @@ test('GW4b: a change under scripts/trex, or to the shared selector test-map.mjs,
   assert.equal(gatesFor(['scripts/github/lib/proc.mjs'], REPO_ROOT).some((x) => x.id === 'trex-tests'), false);
 });
 
+test('GW4c: a change to test-map.mjs runs test-map.test.mjs, and one under scripts/github/local-review runs the tests in that folder (breaks if either test file is left out of every gate)', async () => {
+  const tm = gatesFor(['scripts/checks/test-map.mjs'], REPO_ROOT).find((x) => x.id === 'test-map-tests');
+  assert.ok(tm);
+  assert.deepEqual([tm.cmd, tm.args], ['node', ['--test', 'scripts/checks/test-map.test.mjs']]);
+  assert.ok(existsSync(path.join(REPO_ROOT, tm.args[1])));
+  const lr = gatesFor(['scripts/github/local-review/record.mjs'], REPO_ROOT).find((x) => x.id === 'local-review-tests');
+  assert.ok(lr);
+  assert.deepEqual([lr.cmd, lr.args], ['node', ['--test', 'scripts/github/local-review/*.test.mjs']]);
+});
+
 test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {
   const gate = SURFACES.flatMap((s) => s.gates ?? []).find((g) => g.id === 'semgrep-ccv3');
   const saved = process.env.DOCKER_BIN;
