@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { EXIT, finishRun, reserveRun, runAgent as realRunAgent } from './cursor-review.mjs';
 import {
   ENGINE_FILES, buildEngineEnv, checkPin, computeTrust, loadConfig, main, parseArgs, parseNameStatus, pinEngine, releaseSlot, resolveRange,
-  resolveTarget, reviewHead, routeBand, sweepTmp, takeSlot,
+  pathspecDiffArgv, resolveTarget, reviewHead, routeBand, sweepTmp, takeSlot,
 } from './local-review.mjs';
 import { writeRecord } from './local-review/record.mjs';
 import { findingId } from './review-filter.mjs';
@@ -30,6 +30,7 @@ const SHA = 'e'.repeat(40);
 const FENCE = '`'.repeat(3);
 
 const madeDirs = [];
+const namesAfterDashes = (args) => args.slice(args.indexOf('--') + 1);
 const tmp = (label) => { const d = mkdtempSync(path.join(os.tmpdir(), `lr-test-${label}-`)); madeDirs.push(d); return d; };
 after(() => { for (const d of madeDirs) rmSync(d, { recursive: true, force: true }); });
 
@@ -771,7 +772,7 @@ test('delta-excludes-main-merge: the delta files are from..head intersect mergeB
   assert.equal(rec.from, FROM);
   assert.equal(rec.coverage.selected, 1);
   const spec = w.gitCalls.find((c) => c.args[0] === '--literal-pathspecs' && c.args.includes(FROM));
-  assert.equal(spec.input, 'src/app.mjs');
+  assert.deepEqual(namesAfterDashes(spec.args), ['src/app.mjs']);
   assert.match(w.agentCalls[0].delta, /L5/);
   assert.match(w.agentCalls[0].prompt, /DELTA\.diff/);
   assert.ok(!w.agentCalls[0].prompt.includes('from-main.mjs'));
@@ -1093,7 +1094,7 @@ test('rename-keeps-major: a pure rename moves the open Major to the new path and
   assert.equal(got.file, 'src/b.mjs');
   assert.equal(readRecord(r).majorsOpen, 1);
   const call = w.gitCalls.find((c) => c.args[0] === '--literal-pathspecs' && c.args.includes('-M'));
-  assert.deepEqual(call.input.split('\0').sort(), ['src/b.mjs', 'src/old.mjs'], 'the rename-aware diff names both paths');
+  assert.deepEqual(namesAfterDashes(call.args).sort(), ['src/b.mjs', 'src/old.mjs'], 'the rename-aware diff names both paths');
 });
 
 // Breaks if a true delete is no longer stale.
@@ -1181,4 +1182,27 @@ test('pin-reuse-verified: a pre-created engine folder with only the config is no
   const r = pinEngine({ root: p.clone }, { stateRoot: p.stateRoot });
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(readFileSync(path.join(dir, 'scripts', 'github', 'local-review.mjs'), 'utf8'), '// v1\nexport const v = 1;\n');
+});
+
+// ---------- pathspec diff on real git ----------
+
+test('pathspecDiffArgv runs on real git: listed names only, taken literally, a dash-led name kept (breaks if --pathspec-from-file comes back or --literal-pathspecs goes)', () => {
+  const dir = tmp('pathspec');
+  const g = (...a) => spawnSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+  g('init', '-q'); g('config', 'user.email', 't@t'); g('config', 'user.name', 't');
+  const names = ['a.mjs', 'b.mjs', 'x[1].mjs', 'x1.mjs', '-dash.mjs'];
+  for (const n of names) writeFileSync(path.join(dir, n), 'one\n');
+  g('add', '-A'); g('commit', '-q', '-m', 'one');
+  const from = g('rev-parse', 'HEAD').stdout.trim();
+  for (const n of names) writeFileSync(path.join(dir, n), 'two\n');
+  g('add', '-A'); g('commit', '-q', '-m', 'two');
+  const r = g(...pathspecDiffArgv([from, 'HEAD'], ['a.mjs', 'x[1].mjs', '-dash.mjs']));
+  assert.equal(r.status, 0, r.stderr);
+  const files = [...r.stdout.matchAll(/^diff --git a\/(\S+)/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(files, ['-dash.mjs', 'a.mjs', 'x[1].mjs']);
+});
+
+test('pathspecDiffArgv refuses a name list over the command-line limit (breaks if the length check is removed)', () => {
+  const many = Array.from({ length: 2000 }, (_, i) => `src/some/long/folder/file-${i}.mjs`);
+  assert.throws(() => pathspecDiffArgv(['A', 'B'], many), /command line/);
 });

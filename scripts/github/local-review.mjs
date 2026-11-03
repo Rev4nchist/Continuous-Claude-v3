@@ -536,7 +536,14 @@ function relinePrior(prior, hunks) {
   return { relined, touchedIds };
 }
 
-const pathspecDiff = (d, args, names) => gitOut(d.git, ['--literal-pathspecs', 'diff', '--no-color', '--no-ext-diff', ...args, '--pathspec-from-file=-', '--pathspec-file-nul'], { input: names.join('\0') });
+// git diff has no --pathspec-from-file, so the names go after '--'. --literal-pathspecs keeps '*' and ':' literal.
+const ARGV_MAX = 30000; // Windows caps a command line at 32767 characters.
+export function pathspecDiffArgv(args, names) {
+  const argv = ['--literal-pathspecs', 'diff', '--no-color', '--no-ext-diff', ...args, '--', ...names];
+  if (argv.join(' ').length > ARGV_MAX) throw new Error(`pathspec diff: ${names.length} names exceed the ${ARGV_MAX}-character command line`);
+  return argv;
+}
+const pathspecDiff = (d, args, names) => gitOut(d.git, pathspecDiffArgv(args, names));
 
 /** Map<old name, new name> of the files the delta from..head renamed. */
 function deltaRenames(d, from, head) {
