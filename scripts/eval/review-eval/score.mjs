@@ -1,7 +1,8 @@
 // The P0 scorecard (spec section 4). Pure: it takes records and returns the numbers.
 //  runs:    [{ set, pr, round, status, promptSha256, durationMs, usage, findings: [{ id, sev, matchedKey?, judgeVerdict? }] }]
-//  matches: [{ key, pr, set, crSev, crVerdict, crSource, engSev|null }]   one per dataset finding of a replayed round
-//  labels:  [{ findingId|pairId, verdict, by }]   only by 'dave' counts
+//  matches: [{ key, pr, set, crSev, crVerdict, crSource, engSev|null, engPairId|null }]   one per dataset finding of a replayed round
+//  labels:  [{ findingId|pairId, verdict, sameIssue?, by }]   precision and strictSameIssue read by 'dave' and 'claude' (Dave wins);
+//           judge agreement reads by 'dave' only, so model labels never grade the judge
 //  sets:    { zeroMajorPrs: [pr] }     pairsSent: [{ pairId, judge: { verdict } }]
 import { pairId } from './labels.mjs';
 import { foldSev, isMajor, matchFindings } from './match.mjs';
@@ -15,35 +16,48 @@ function sumUsage(runs) {
   return total;
 }
 
-function recallOf(rows) {
+/** One label per finding id from labels by dave or claude; a Dave label replaces a claude one. */
+function labelMap(labels) {
+  const map = new Map();
+  for (const by of ['claude', 'dave']) for (const l of labels.filter((x) => x.by === by)) map.set(l.findingId ?? l.pairId, l);
+  return map;
+}
+
+function recallOf(rows, labelBy = new Map()) {
   const majors = rows.filter((m) => isMajor(lc(m.crSev)) && lc(m.crVerdict) === 'real');
   const strict = majors.filter((m) => isMajor(lc(m.engSev)));
+  // A strict line match whose pair a label calls a different issue (sameIssue === false) is not a recall. null does not exclude.
+  const sameIssue = strict.filter((m) => !(m.engPairId && labelBy.get(m.engPairId)?.sameIssue === false));
   const lenient = majors.filter((m) => m.engSev);
   const prs = new Set(majors.map((m) => m.pr));
   const prHit = new Set(strict.map((m) => m.pr));
   const inline = majors.filter((m) => m.crSource === 'inline');
   return {
-    strict: ratio(strict.length, majors.length), lenient: ratio(lenient.length, majors.length), perPr: ratio(prHit.size, prs.size),
+    strict: ratio(strict.length, majors.length), strictSameIssue: ratio(sameIssue.length, majors.length), lenient: ratio(lenient.length, majors.length), perPr: ratio(prHit.size, prs.size),
     inDiff: ratio(inline.filter((m) => isMajor(lc(m.engSev))).length, inline.length), overall: ratio(strict.length, majors.length),
   };
 }
 
 export function scorecard({ runs = [], matches = [], labels = [], sets = {}, frozenPromptSha256 = null, escapes = {}, bakeoff = {}, headless = {}, pairsSent = [] } = {}) {
   const valid = runs.filter((r) => !(r.set === 'holdout' && frozenPromptSha256 && r.promptSha256 !== frozenPromptSha256));
-  const holdout = recallOf(matches.filter((m) => m.set === 'holdout'));
-  const dev = recallOf(matches.filter((m) => m.set === 'dev'));
+  const labelBy = labelMap(labels);
+  const holdout = recallOf(matches.filter((m) => m.set === 'holdout'), labelBy);
+  const dev = recallOf(matches.filter((m) => m.set === 'dev'), labelBy);
 
   const zero = new Set(sets.zeroMajorPrs ?? []);
   const zeroRuns = valid.filter((r) => zero.has(r.pr));
   const alarmed = new Set(zeroRuns.filter((r) => (r.findings ?? []).some((f) => isMajor(lc(f.sev)))).map((r) => r.pr));
 
-  const daveLabel = new Map(labels.filter((l) => l.by === 'dave').map((l) => [l.findingId ?? l.pairId, lc(l.verdict)]));
   const crVerdict = new Map(matches.map((m) => [m.key, lc(m.crVerdict)]));
   let real = 0;
   let noise = 0;
   let unverified = 0;
+  // labelers: posted findings whose verdict came from a label, by who wrote that label.
+  const labelers = { dave: 0, claude: 0 };
   for (const f of valid.flatMap((r) => r.findings ?? [])) {
-    const verdict = (f.pairId ? daveLabel.get(f.pairId) : undefined) ?? daveLabel.get(f.id) ?? (f.matchedKey ? crVerdict.get(f.matchedKey) : undefined);
+    const label = (f.pairId ? labelBy.get(f.pairId) : undefined) ?? labelBy.get(f.id);
+    if (label) labelers[label.by] += 1;
+    const verdict = label ? lc(label.verdict) : (f.matchedKey ? crVerdict.get(f.matchedKey) : undefined);
     if (verdict === 'real') real += 1; else if (verdict === 'noise') noise += 1; else unverified += 1;
   }
   const posted = real + noise + unverified;
@@ -55,10 +69,10 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
 
   return {
     schema: 1,
-    perMajorRecall: { strict: holdout.strict, lenient: holdout.lenient },
+    perMajorRecall: { strict: holdout.strict, lenient: holdout.lenient, strictSameIssue: holdout.strictSameIssue },
     perPrRecall: holdout.perPr,
     prFalseAlarm: { count: alarmed.size, total: new Set(zeroRuns.map((r) => r.pr)).size, prs: [...alarmed] },
-    precision: { real, noise, unverified, posted, value: posted > 0 ? real / posted : null, range: posted > 0 ? [real / posted, (real + unverified) / posted] : null },
+    precision: { real, noise, unverified, posted, value: posted > 0 ? real / posted : null, range: posted > 0 ? [real / posted, (real + unverified) / posted] : null, labelers },
     recall: { inDiff: holdout.inDiff, overall: holdout.overall },
     devRecall: { strict: dev.strict, lenient: dev.lenient },
     escapeBaseline: { laterRound: escapes.laterRound ?? null, postMerge: escapes.postMerge ?? null },
@@ -86,7 +100,7 @@ export function evaluateRuns({ runs, dataset, readFindings, tol = 3 }) {
     const cr = dataset.filter((d) => d.pr === run.pr && d.sha40 === run.sha40).map((d) => ({ src: 'cr', id: d.key, file: d.path, start: d.startLine, end: d.endLine, sev: foldSev(d.severity), d }));
     const res = matchFindings(cr, eng, { tol });
     const hit = new Map(res.matches.map((m) => [m.cr.id, m.eng]));
-    for (const c of cr) matches.push({ key: c.id, pr: run.pr, set: run.set, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null });
+    for (const c of cr) matches.push({ key: c.id, pr: run.pr, set: run.set, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null, engPairId: hit.get(c.id)?.pairId ?? null });
     const byEng = new Map(res.matches.map((m) => [m.eng.id, m.cr.id]));
     outRuns.push({ ...run, findings: eng.map((e) => ({ id: e.id, pairId: e.pairId, sev: e.sev, matchedKey: byEng.get(e.id) ?? null })) });
   }

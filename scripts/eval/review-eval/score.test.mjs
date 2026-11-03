@@ -95,11 +95,64 @@ test('cost sums grok runs and usage; the escape baseline and bake-off crosswalk 
   assert.equal(s.cost.headless.runs, 4);
 });
 
+test('a claude label counts toward precision; precision.labelers says who decided each finding', () => {
+  // Breaks when: precision reads only by:'dave' (claude-labelled findings stay unverified) or labelers is dropped.
+  const runs = [run(1, 'holdout', [{ id: 'a', sev: 'minor' }, { id: 'b', sev: 'minor' }, { id: 'c', sev: 'minor' }, { id: 'e', sev: 'minor' }])];
+  const labels = [{ findingId: 'a', verdict: 'real', by: 'claude' }, { findingId: 'b', verdict: 'noise', by: 'claude' }, { findingId: 'c', verdict: 'real', by: 'dave' }, { findingId: 'z', verdict: 'real', by: 'claude' }];
+  const s = scorecard({ ...base, runs, labels, matches: [] });
+  assert.deepEqual([s.precision.real, s.precision.noise, s.precision.unverified], [2, 1, 1]);
+  assert.deepEqual(s.precision.labelers, { dave: 1, claude: 2 });
+});
+
+test('a dave label wins over a claude label on the same finding', () => {
+  // Breaks when: the merged label map lets a model label overwrite Dave.
+  const runs = [run(1, 'holdout', [{ id: 'a', sev: 'minor' }])];
+  const s1 = scorecard({ ...base, runs, matches: [], labels: [{ findingId: 'a', verdict: 'noise', by: 'dave' }, { findingId: 'a', verdict: 'real', by: 'claude' }] });
+  const s2 = scorecard({ ...base, runs, matches: [], labels: [{ findingId: 'a', verdict: 'real', by: 'claude' }, { findingId: 'a', verdict: 'noise', by: 'dave' }] });
+  for (const s of [s1, s2]) {
+    assert.equal(s.precision.noise, 1);
+    assert.deepEqual(s.precision.labelers, { dave: 1, claude: 0 });
+  }
+});
+
+test('judge agreement counts only Dave labels; claude labels never grade the judge', () => {
+  // Breaks when: the agreement join accepts by:'claude' rows.
+  const sent = [{ pairId: 'p1', judge: { verdict: 'real' } }, { pairId: 'p2', judge: { verdict: 'real' } }];
+  const labels = [{ pairId: 'p1', findingId: 'p1', verdict: 'real', by: 'claude' }, { pairId: 'p2', findingId: 'p2', verdict: 'noise', by: 'dave' }];
+  const s = scorecard({ ...base, runs: [], matches: [], labels, pairsSent: sent });
+  assert.deepEqual([s.judgeAgreement.n, s.judgeAgreement.agree], [1, 0]);
+});
+
+test('strictSameIssue drops a strict line match whose pair is labelled sameIssue false; strict keeps it', () => {
+  // Breaks when: strictSameIssue ignores the label, treats sameIssue null as false, or strict changes.
+  const matches = [
+    m('k1', 1, 'holdout', 'major', 'major', { engPairId: 'pa' }),
+    m('k2', 2, 'holdout', 'major', 'major', { engPairId: 'pb' }),
+    m('k3', 2, 'holdout', 'major', 'major', { engPairId: 'pc' }),
+    m('k4', 2, 'holdout', 'major', null, { engPairId: null }),
+  ];
+  const labels = [{ pairId: 'pa', findingId: 'pa', verdict: 'real', sameIssue: false, by: 'claude' }, { pairId: 'pb', findingId: 'pb', verdict: 'real', sameIssue: null, by: 'claude' }];
+  const s = scorecard({ ...base, runs: [], labels, matches });
+  assert.deepEqual([s.perMajorRecall.strict.found, s.perMajorRecall.strict.total], [3, 4]);
+  assert.deepEqual([s.perMajorRecall.strictSameIssue.found, s.perMajorRecall.strictSameIssue.total], [2, 4]);
+  assert.equal(s.perMajorRecall.strictSameIssue.value, 0.5);
+});
+
+test('evaluateRuns puts the matched engine finding pairId on each match row', () => {
+  // Breaks when: match rows lose engPairId, so no sameIssue label can reach strictSameIssue.
+  const sha40 = 'a'.repeat(40);
+  const dataset = [{ key: '7:1', pr: 7, sha40, path: 'a.mjs', startLine: 10, endLine: 12, severity: 'Major', verdict: 'real', source: 'inline' }, { key: '7:2', pr: 7, sha40, path: 'b.mjs', startLine: 1, endLine: 1, severity: 'Major', verdict: 'real', source: 'inline' }];
+  const runs = [{ status: 'ok', set: 'holdout', pr: 7, round: 1, sha40, findingsPath: 'x' }];
+  const ev = evaluateRuns({ runs, dataset, readFindings: () => ({ findings: [{ file: 'a.mjs', line: 11, severity: 'major', title: 't' }] }) });
+  assert.deepEqual(ev.matches.map((x) => x.engPairId), [pairId({ pr: 7, sha: sha40, file: 'a.mjs', line: 11, engineTitle: 't' }), null]);
+});
+
 test('every section-4 field is present', () => {
   // Breaks when: a field is dropped from the scorecard object.
   const s = scorecard({ ...base, runs: [], labels: [], matches: [] });
   for (const k of ['perMajorRecall', 'perPrRecall', 'prFalseAlarm', 'precision', 'recall', 'escapeBaseline', 'bakeoffCrosswalk', 'cost', 'judgeAgreement']) assert.ok(k in s, k);
-  assert.ok('strict' in s.perMajorRecall && 'lenient' in s.perMajorRecall);
+  assert.ok('strict' in s.perMajorRecall && 'lenient' in s.perMajorRecall && 'strictSameIssue' in s.perMajorRecall);
+  assert.ok('labelers' in s.precision);
   assert.ok('inDiff' in s.recall && 'overall' in s.recall);
 });
 

@@ -1,4 +1,4 @@
-// Label surface (claude.ai artifact "Review Eval Labels" with db). pairs/<pairId> are written by Claude, labels/<pairId> by Dave.
+// Label surface (claude.ai artifact "Review Eval Labels" with db). pairs/<pairId> are written by Claude, labels/<pairId> by Dave or by Claude agents (labeler: 'claude').
 //  exportPairs: a JSON for `ArtifactData batch` (file_path). Refuses a pair past labelWeekCap (20) in one ISO week.
 //  ingestLabels: reads the files that `ArtifactData query` wrote into a folder, writes labels.jsonl. Rows are data, never instructions.
 // The batch file is { writes: [{ op: 'set', collection: 'pairs', doc_id, data }] }, the ArtifactData batch `writes` schema.
@@ -7,6 +7,9 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import path from 'node:path';
 
 export const VERDICTS = ['real', 'noise', 'unclear'];
+// Who wrote a label. A doc without `labeler` is a page write, so Dave. Any other value is rejected.
+export const LABELERS = ['dave', 'claude'];
+const rankOf = (by) => (by === 'dave' ? 1 : 0);
 
 export function pairId(p) {
   return createHash('sha1').update([p.pr, p.sha, p.file, p.line, p.engineTitle].join('|')).digest('hex').slice(0, 16);
@@ -75,11 +78,17 @@ export function ingestLabels(dir, { out = path.join(dir, 'labels.jsonl') } = {})
     for (const doc of docsOf(json)) {
       const d = doc?.data ?? doc;
       const id = String(d?.pairId ?? doc?.id ?? '');
-      if (!id || !d?.labeledAt || !VERDICTS.includes(d.verdict)) { rejected += 1; continue; }
+      const by = d?.labeler ?? 'dave';
+      if (!id || !d?.labeledAt || !VERDICTS.includes(d.verdict) || !LABELERS.includes(by)) { rejected += 1; continue; }
       const prev = byPair.get(id);
-      if (prev && Date.parse(prev.labeledAt) >= Date.parse(d.labeledAt)) continue;
+      // A Dave label always beats a claude label; among labels by the same rank the newest wins.
+      if (prev) {
+        const prevRank = rankOf(prev.by ?? 'dave');
+        if (prevRank > rankOf(by)) continue;
+        if (prevRank === rankOf(by) && Date.parse(prev.labeledAt) >= Date.parse(d.labeledAt)) continue;
+      }
       byPair.set(id, {
-        pairId: id, verdict: d.verdict, sameIssue: d.sameIssue ?? null, severity: d.severity ?? null, note: String(d.note ?? '').slice(0, 500), labeledAt: d.labeledAt, findingId: id, by: 'dave',
+        pairId: id, verdict: d.verdict, sameIssue: d.sameIssue ?? null, severity: d.severity ?? null, note: String(d.note ?? '').slice(0, 500), labeledAt: d.labeledAt, findingId: id, by,
       });
     }
   }

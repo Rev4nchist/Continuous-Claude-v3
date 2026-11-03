@@ -125,6 +125,40 @@ test('ingest skips unlabelled rows and unknown verdicts, and keeps the newest la
   assert.equal(res.rejected, 2);
 });
 
+test('ingest takes the labeler from the doc: claude stays claude, absent means dave', () => {
+  // Breaks when: ingestLabels hard-codes by:'dave', so model labels pass as Dave labels.
+  const dir = tmp();
+  const docs = [
+    { id: 'm1', data: { pairId: 'm1', verdict: 'real', sameIssue: false, severity: 'minor', labeler: 'claude', note: 'model', labeledAt: '2026-11-03T18:30:00Z' } },
+    { id: 'd1', data: { pairId: 'd1', verdict: 'noise', sameIssue: null, severity: 'minor', note: '', labeledAt: '2026-11-03T18:30:00Z' } },
+    { id: 'd2', data: { pairId: 'd2', verdict: 'real', sameIssue: true, severity: 'major', labeler: 'dave', note: '', labeledAt: '2026-11-03T18:30:00Z' } },
+  ];
+  writeFileSync(path.join(dir, 'q.json'), JSON.stringify(docs));
+  const res = ingestLabels(dir, { out: path.join(dir, 'labels.jsonl') });
+  assert.deepEqual(Object.fromEntries(res.rows.map((r) => [r.pairId, r.by])), { m1: 'claude', d1: 'dave', d2: 'dave' });
+});
+
+test('a newer claude label never replaces a Dave label; a Dave label replaces a claude one', () => {
+  // Breaks when: newest-wins ignores the labeler, so a model label overwrites Dave's call.
+  const dir = tmp();
+  const row = (id, verdict, labeler, at) => ({ id, data: { pairId: id, verdict, sameIssue: null, severity: 'minor', ...(labeler ? { labeler } : {}), note: '', labeledAt: at } });
+  writeFileSync(path.join(dir, 'q.json'), JSON.stringify([
+    row('a', 'noise', null, '2026-11-03T10:00:00Z'), row('a', 'real', 'claude', '2026-11-03T12:00:00Z'),
+    row('b', 'real', 'claude', '2026-11-03T12:00:00Z'), row('b', 'noise', 'dave', '2026-11-03T10:00:00Z'),
+  ]));
+  const res = ingestLabels(dir, { out: path.join(dir, 'labels.jsonl') });
+  assert.deepEqual(Object.fromEntries(res.rows.map((r) => [r.pairId, [r.verdict, r.by]])), { a: ['noise', 'dave'], b: ['noise', 'dave'] });
+});
+
+test('ingest rejects a doc whose labeler is not dave or claude', () => {
+  // Breaks when: any labeler string is accepted, so a 'judge' row could grade the judge.
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'q.json'), JSON.stringify([{ id: 'j1', data: { pairId: 'j1', verdict: 'real', sameIssue: true, severity: 'major', labeler: 'judge', note: '', labeledAt: '2026-11-03T18:30:00Z' } }]));
+  const res = ingestLabels(dir, { out: path.join(dir, 'labels.jsonl') });
+  assert.equal(res.rows.length, 0);
+  assert.equal(res.rejected, 1);
+});
+
 test('a label note is stored as text and clipped; it is never run', () => {
   // Breaks when: the note is not clipped (a huge note would bloat labels.jsonl) or is evaluated.
   const dir = tmp();
