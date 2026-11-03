@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/github/cursor-review.mjs (--pr <n> | --range <base>..<head>) (--band MID|ELEVATED|HIGH|CRITICAL | --model <id>)
- *        [--timeout-sec 2400] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--remote fork] [--dry-run] [--keep-tree]
+ *        [--timeout-sec 1800] [--ledger <file>] [--out-dir <dir>] [--repo owner/name] [--remote fork] [--dry-run] [--keep-tree]
  *
  * What it does:
  *   1. Checks the model. Only grok-4.7-high and grok-4.7-xhigh run. Auto, any id with "fast", an unknown id and a missing
@@ -14,7 +14,10 @@
  *   3. Builds a clean review tree: `git archive` of the head (no .git, no review docs, no old artifacts) plus PR.diff.
  *   4. Runs `cursor-agent -p --mode ask --trust --output-format stream-json --model <m>` in that tree. On Windows it runs the agent's
  *      own node.exe on index.js (the way cursor-agent.ps1 does), not the .cmd or .ps1 wrapper, so the pid it holds is the agent.
- *      A time-out (default 2400 s: grok output speed halved under load on 2026-11-02, so a ~40k-token answer took ~1600 s) stops that pid and its whole process tree.
+ *      A time-out (default 1800 s) stops that pid and its whole process tree. 1800 s is a backstop, not the stall guard (tool-stall is). Why 1800:
+ *      post-fix ledger runs (start 2026-11-03 14:00Z or later, no Azure hook stall) ran 449 to 1410 s with a median near 880 s, so 1800 s is about 2x the median and
+ *      about 1.3x the slowest (1410 s, CRITICAL/xhigh). The old 2400 s came from a wrong diagnosis ("output speed halves under load"); the slowdown was a Cursor
+ *      Azure hook that stalled ~61 s per tool call through a frozen WSL (.claudedocs/2026-11-03-grok-slowdown-investigation.md). Grok itself ran 65-83 tok/s.
  *      A machine-wide gate (lib/grok-slots.mjs) lets at most 2 runs go at once across all sessions; a run waits up to 60 min for a
  *      slot, and the time-out starts after it. CCV3_GROK_GATE=off skips the gate; CCV3_GROK_MAX_CONCURRENT changes the 2.
  *      On Windows it also (a) puts Git Bash first on the agent PATH (buildAgentEnv: hooks get that PATH, so a hook's `bash` is not the
@@ -54,7 +57,7 @@ export const BAND_MODEL = { MID: 'grok-4.7-high', ELEVATED: 'grok-4.7-high', HIG
 export const WEEKLY_CAP = 300;
 export const WEEK_MS = 7 * 86_400_000;
 export const PER_REF_CAP = 8;
-export const DEFAULT_TIMEOUT_SEC = 2400;
+export const DEFAULT_TIMEOUT_SEC = 1800;
 export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const SEVERITIES = ['critical', 'major', 'minor', 'info'];
 /** Folders left out of the review tree: answers and old review output the model must not see. */
