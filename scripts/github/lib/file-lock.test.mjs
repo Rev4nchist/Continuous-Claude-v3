@@ -115,27 +115,32 @@ const plantDeadLock = (file) => {
   utimesSync(`${file}.lock`, old, old);
 };
 
-// The child holds the lock for holdMs and logs "in/out <label>". Its mode hooks the FIRST fs call that removes or
-// moves the lock path (the unlink of the old code, the rename of the new code), which runs right after the stale check:
-//   pause: wait until <ctl>/go exists, so another process takes the lock first.   swap: put a live lock in place.
+// The child holds the lock for holdMs and logs "in/out <label>". Its mode hooks the FIRST fs call that starts a takeover:
+// the unlink or rename of the lock path (earlier designs) or the create of `<lock>.takeover` (the mutex design). That call
+// runs right after the stale judgement, so a pause there lets another process take the lock first.
+//   pause: wait for <ctl>/go (any child writes it on entering fn).   swap: put a live lock in place.
+//   gap: pause, and also pause at the rename design's restore (linkSync back to the lock) until <ctl>/go2.
 const CHILD = `
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 const [url, file, mode, ctl, log, holdMs, livePid, waitMs, label, start] = process.argv.slice(1);
 const lock = file + '.lock';
+const mutex = lock + '.takeover';
 const nap = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const mark = (name) => fs.writeFileSync(ctl + '/' + name, '1');
+const waitFor = (name) => { for (let end = Date.now() + 8000; !fs.existsSync(ctl + '/' + name) && Date.now() < end;) nap(10); };
 let fired = false;
-function hook() {
-  if (mode === 'pause') {
-    fs.writeFileSync(ctl + '/paused', '1');
-    for (let end = Date.now() + 8000; !fs.existsSync(ctl + '/go') && Date.now() < end;) nap(10);
-  }
+let gapFired = false;
+const wrap = (name, hits, run) => { const real = fs[name]; fs[name] = (...a) => { if (hits(a)) run(); return real(...a); }; };
+const atTakeover = (target) => (a) => !fired && mode !== 'plain' && a[0] === target;
+const firstHook = () => {
+  fired = true;
+  if (mode === 'pause' || mode === 'gap') { mark('paused'); waitFor('go'); }
   if (mode === 'swap') { fs.unlinkSync(lock); fs.writeFileSync(lock, livePid + ' live-token'); }
-}
-for (const name of ['unlinkSync', 'renameSync']) {
-  const real = fs[name];
-  fs[name] = (p, ...rest) => { if (!fired && p === lock && mode !== 'plain') { fired = true; hook(); } return real(p, ...rest); };
-}
+};
+for (const name of ['unlinkSync', 'renameSync']) wrap(name, atTakeover(lock), firstHook);
+wrap('openSync', atTakeover(mutex), firstHook); // the lock's own create is not a takeover step
+wrap('linkSync', (a) => mode === 'gap' && !gapFired && a[1] === lock, () => { gapFired = true; mark('paused2'); waitFor('go2'); });
 syncBuiltinESMExports();
 const { withLock } = await import(url);
 for (let end = Date.now() + 8000; start !== '-' && !fs.existsSync(start) && Date.now() < end;) nap(1);
@@ -143,7 +148,7 @@ let ran = false;
 const out = withLock(file, { lockWaitMs: Number(waitMs), lockStaleMs: 30000 }, () => {
   ran = true;
   fs.appendFileSync(log, 'in ' + label + '\\n');
-  fs.writeFileSync(ctl + '/go', '1');
+  mark('go');
   nap(Number(holdMs));
   fs.appendFileSync(log, 'out ' + label + '\\n');
   return 'done';
@@ -216,14 +221,85 @@ test('a live lock that replaces the stale one before the takeover step is kept',
   assert.equal(run.result.ran, false, 'fn must not run beside the live holder');
   assert.equal(run.result.out.reason, 'lock');
   assert.equal(readFileSync(`${file}.lock`, 'utf8'), `${process.pid} live-token`, 'the live lock is back in place');
-  assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.stale')), [], 'the tombstone is removed after the restore');
+  assert.deepEqual(readdirSync(dir).filter((n) => /\.(stale|takeover)$/.test(n)), [], 'no tombstone or takeover mutex is left');
 });
 
-// Breaks if the winning taker leaves its tombstone behind.
-test('a takeover leaves no tombstone file', () => {
+// Breaks if the winning taker leaves its tombstone or its takeover mutex behind.
+test('a takeover leaves no tombstone or mutex file', () => {
   const dir = tmp();
   const file = path.join(dir, 'state.json');
   plantDeadLock(file);
-  assert.equal(withLock(file, {}, () => readdirSync(dir).filter((n) => n.endsWith('.stale'))).length, 0);
+  assert.deepEqual(withLock(file, {}, () => readdirSync(dir).filter((n) => /\.(stale|takeover)$/.test(n))), []);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+const waitUntil = async (pred, ms) => { for (const end = Date.now() + ms; !pred() && Date.now() < end;) await sleep(20); return pred(); };
+const logHas = (dir, text) => existsSync(path.join(dir, 'log.txt')) && readFileSync(path.join(dir, 'log.txt'), 'utf8').includes(text);
+
+// CodeRabbit Major on e7eacce: taker B judged the lock stale, taker A replaced it and holds it, then B acts. Interleaving 1.
+// Breaks if B moves or removes A's live lock: the path is absent, so a third process C enters fn beside A.
+test('a taker that acts after another process took the lock never exposes the live lock to a third process', async () => {
+  const dir = tmp();
+  const file = path.join(dir, 'state.json');
+  plantDeadLock(file);
+  const b = startChild(dir, file, { mode: 'gap', holdMs: 50, waitMs: 3000, label: 'B' });
+  assert.ok(await waitUntil(() => existsSync(path.join(dir, 'paused')), 10_000), 'B reached its takeover step');
+  const a = startChild(dir, file, { holdMs: 1200, label: 'A' });
+  assert.ok(await waitUntil(() => existsSync(path.join(dir, 'go')), 10_000), 'A entered fn');
+  const gap = await waitUntil(() => existsSync(path.join(dir, 'paused2')), 500); // reached only by a design that moves the lock
+  const c = startChild(dir, file, { holdMs: 50, label: 'C' });
+  if (gap) { await sleep(400); writeFileSync(path.join(dir, 'go2'), '1'); }
+  const results = await Promise.all([a.done, b.done, c.done]);
+  for (const r of results) assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(overlapped(dir), { worst: 1, entries: 3 }, 'A, B and C each ran, one at a time');
+});
+
+// CodeRabbit Major on e7eacce, interleaving 2: the live holder A releases while taker B is between its judgement and its action.
+// Breaks if B puts back a lock that A has already released: an orphan lock stays and nobody can acquire the file.
+test('a holder that releases while a taker is mid-takeover leaves no orphan lock', async () => {
+  const dir = tmp();
+  const file = path.join(dir, 'state.json');
+  plantDeadLock(file);
+  const b = startChild(dir, file, { mode: 'gap', holdMs: 50, waitMs: 1500, label: 'B' });
+  assert.ok(await waitUntil(() => existsSync(path.join(dir, 'paused')), 10_000), 'B reached its takeover step');
+  const a = startChild(dir, file, { holdMs: 300, label: 'A' });
+  assert.ok(await waitUntil(() => existsSync(path.join(dir, 'go')), 10_000), 'A entered fn');
+  if (await waitUntil(() => existsSync(path.join(dir, 'paused2')), 500)) {
+    assert.ok(await waitUntil(() => logHas(dir, 'out A'), 3000), 'A left fn while B was mid-takeover');
+    await sleep(200); // A's release has run
+    writeFileSync(path.join(dir, 'go2'), '1');
+  }
+  const [ra, rb] = await Promise.all([a.done, b.done]);
+  assert.equal(ra.code, 0, ra.stderr);
+  assert.equal(rb.code, 0, rb.stderr);
+  const d = await startChild(dir, file, { holdMs: 10, waitMs: 400, label: 'D' }).done;
+  assert.equal(d.result.ran, true, 'the lock is acquirable after A released');
+  assert.equal(overlapped(dir).worst, 1);
+  assert.equal(existsSync(`${file}.lock`), false, 'no orphan lock remains');
+});
+
+// Breaks if a taker removes the lock without holding the takeover mutex: another taker is mid-takeover, so the lock must stay.
+test('a taker that cannot get the takeover mutex leaves the stale lock untouched', () => {
+  const file = path.join(tmp(), 'state.json');
+  plantDeadLock(file);
+  const before = readFileSync(`${file}.lock`, 'utf8');
+  writeFileSync(`${file}.lock.takeover`, `${process.pid} other-taker`);
+  let ran = false;
+  const out = withLock(file, { lockWaitMs: 150, lockStaleMs: 30_000 }, () => { ran = true; });
+  assert.equal(ran, false);
+  assert.equal(out.reason, 'lock');
+  assert.equal(readFileSync(`${file}.lock`, 'utf8'), before, 'the stale lock is untouched');
+  assert.equal(readFileSync(`${file}.lock.takeover`, 'utf8'), `${process.pid} other-taker`, 'the live taker keeps its mutex');
+});
+
+// Breaks if a takeover mutex left by a crashed taker is never cleared: every later taker would time out.
+test('a takeover mutex whose owner is dead does not block the lock forever', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'state.json');
+  plantDeadLock(file);
+  writeFileSync(`${file}.lock.takeover`, `${deadPid()} crashed-taker`);
+  const old = new Date(Date.now() - 120_000);
+  utimesSync(`${file}.lock.takeover`, old, old);
+  assert.equal(withLock(file, { lockWaitMs: 2000, lockStaleMs: 30_000 }, () => 'mine'), 'mine');
   assert.deepEqual(readdirSync(dir), []);
 });
