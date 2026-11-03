@@ -35,7 +35,7 @@ import {
   branchSlug, listRecords, lastReviewedSha, settlePrior, stateRoot as recordsRoot, writeRecord,
 } from './local-review/record.mjs';
 import {
-  SEVERITY_RANK, filterFindings, isIgnoreFile, isStrippedFile, mapLine, parseHunks, rangeTouched, stripIgnoreFiles,
+  SEVERITY_RANK, filterFindings, findingId, isIgnoreFile, isStrippedFile, mapLine, parseHunks, rangeTouched, stripIgnoreFiles,
 } from './review-filter.mjs';
 import { bandOf } from './review-router.mjs';
 
@@ -664,9 +664,13 @@ function settleAndFilter(s, prep, plan, answer) {
   const kept = r.kept.map((f) => ({ ...f, firstSeenSha: f.firstSeenSha ?? s.target.head }));
   const exists = (rel) => existsSync(path.join(prep.dir, rel)) || isStrippedFile(rel);
   const settled = s.range.mode === 'delta' ? settlePrior(s.priorRelined, answer.prior, { touches: (f) => s.touchedIds.has(f.id), exists }) : [];
-  const open = new Map(settled.filter((f) => f.status === 'open').map((f) => [f.id, f]));
-  const ids = new Set(kept.map((f) => f.id));
-  const merged = kept.map((f) => (open.has(f.id) ? mergeSame(open.get(f.id), f) : f));
+  const openPrior = settled.filter((f) => f.status === 'open');
+  const open = new Map(openPrior.map((f) => [f.id, f]));
+  // A re-lined prior keeps its old id; a re-report at the new line gets a new id. Match on the re-lined location too.
+  const atLine = new Map(openPrior.map((f) => [findingId(f), f]));
+  const priorFor = (f) => open.get(f.id) ?? atLine.get(f.id);
+  const merged = kept.map((f) => (priorFor(f) ? mergeSame(priorFor(f), f) : f));
+  const ids = new Set(merged.map((f) => f.id));
   return { findings: [...settled.filter((f) => !ids.has(f.id)), ...merged], dropped: r.dropped, problems: r.problems };
 }
 

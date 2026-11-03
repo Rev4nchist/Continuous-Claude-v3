@@ -791,6 +791,20 @@ test('prior closed only on touched lines: a fixed answer closes a touched findin
   assert.equal(rec.majorsOpen, 3);
 });
 
+test('a re-lined prior Major re-reported at its new line stays one finding with its first-seen sha (breaks if the merge keys only on the stored id)', async () => {
+  const w = world();
+  w.deltaDiff = ['diff --git a/src/app.mjs b/src/app.mjs', '--- a/src/app.mjs', '+++ b/src/app.mjs', '@@ -3,2 +3,3 @@', ' l3', '+NEW', ' l4', ''].join('\n');
+  oldRecord(w, { findings: [{ id: 'shifted', file: 'src/app.mjs', startLine: 8, endLine: 8, severity: 'major', category: 'correctness', title: 'Off by one', body: 'b', status: 'open', confidence: 4, firstSeenSha: FROM }] });
+  w.runs = [agentRun([finding({ startLine: 9, endLine: 9, evidence: ['src/app.mjs:9'] })])];
+  const rec = readRecord(await run(w));
+  const open = rec.findings.filter((f) => f.status === 'open');
+  assert.equal(open.length, 1, JSON.stringify(rec.findings));
+  assert.equal(open[0].id, 'shifted');
+  assert.equal(open[0].startLine, 9);
+  assert.equal(open[0].firstSeenSha, FROM);
+  assert.equal(rec.majorsOpen, 1);
+});
+
 // ---------- findings, filter and records ----------
 
 test('findings pass the S5 filter: a finding on a missing file is dropped and kept in dropped[]; the rest get firstSeenSha, thread and an id (breaks if the filter is skipped)', async () => {
