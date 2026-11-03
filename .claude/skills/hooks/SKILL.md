@@ -54,6 +54,12 @@ Test hooks manually:
 echo '{"type": "resume"}' | .claude/hooks/session-start-continuity.sh
 ```
 
+In a git worktree, link `.claude/hooks/node_modules` to the primary checkout's copy. Do not run `npm install` there. Run the command from the worktree root and replace `<primary>` with the primary checkout path:
+- Windows: `New-Item -ItemType Junction -Path .claude\hooks\node_modules -Target <primary>\.claude\hooks\node_modules`
+- macOS or Linux: `ln -s <primary>/.claude/hooks/node_modules .claude/hooks/node_modules`
+
+The build uses `--preserve-symlinks`. With a Windows junction and this repo's flat npm `node_modules`, the link changes no `dist/*.mjs` file. The POSIX symlink case is untested. After a worktree build, check `git status` for `dist/` changes.
+
 ## Registration
 Add hooks to `.claude/settings.json`:
 ```json

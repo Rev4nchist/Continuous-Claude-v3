@@ -6,7 +6,6 @@
  */
 
 import * as fs from 'fs';
-import { pathToFileURL } from 'url';
 
 // ============================================================================
 // Type Definitions
@@ -414,13 +413,10 @@ export function generateAutoHandoff(summary: TranscriptSummary, sessionName: str
 // ============================================================================
 
 // Allow running as CLI for testing: npx tsx transcript-parser.ts /path/to/transcript.jsonl
-// ES module compatible entry point check. Build the comparison via
-// pathToFileURL() so platform-specific quirks (Windows drive letters,
-// percent-encoded spaces) don't make a hand-built `file://...` string
-// silently fail to match.
-const isMainModule =
-  Boolean(process.argv[1]) &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+// Match the script name, not import.meta.url: esbuild inlines this file into
+// hooks such as pre-compact-continuity.mjs, where import.meta.url is the hook's
+// own URL. The old check matched there and exited 1 before the hook ran.
+const isMainModule = /(^|[\\/])transcript-parser\.[cm]?[jt]s$/.test(process.argv[1] ?? '');
 
 if (isMainModule) {
   const args = process.argv.slice(2);
