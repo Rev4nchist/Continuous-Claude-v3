@@ -165,6 +165,18 @@ test('an entry of this process whose key it does not hold is dropped at the next
   assert.equal(readActive(file).some((e) => e.key === 'leaked'), false);
 });
 
+// CodeRabbit CLI Minor on af3eb43. Breaks if the own-leak prune ignores a live agent pid: a failed release would let
+// this process start a run above max while the orphaned agent still runs.
+test('an entry of this process whose key it does not hold stays while its agent pid runs', async () => {
+  const file = tmpFile();
+  const c = clock();
+  writeFileSync(file, JSON.stringify({ active: [{ key: 'leaked', pid: process.pid, childPid: 9004, startedAt: c.now(), expiresAt: c.now() + 10_000 }] }));
+  const r = await acquireGrokSlot({ file, max: 1, waitMs: 0 }, { now: c.now, sleep: c.sleep, pidAlive: (p) => p === process.pid || p === 9004 });
+  assert.equal(r.reason, 'busy');
+  const freed = await acquireGrokSlot({ file, max: 1, waitMs: 0 }, { now: c.now, sleep: c.sleep, pidAlive: (p) => p === process.pid });
+  assert.equal(freed.ok, true, 'it frees once the agent is gone');
+});
+
 // Breaks if release does not mark the key as not held before it touches the file: a failed removal would then keep a ghost slot for this process.
 test('after a release whose removal failed, this process can take the slot again', async () => {
   const file = tmpFile();

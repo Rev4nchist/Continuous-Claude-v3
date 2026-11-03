@@ -96,10 +96,12 @@ export async function acquireGrokSlot(opts = {}, deps = {}) {
   const began = now();
 
   const isLive = (e, t) => {
-    if (e.pid === process.pid && !held.has(e.key)) return false; // this process released it (or never held it): a failed release left it behind
     const limit = Number.isFinite(e.expiresAt) ? e.expiresAt : e.startedAt + staleMs;
     if (!(t <= limit)) return false;
-    return pidAlive(e.pid) || (Number.isInteger(e.childPid) && pidAlive(e.childPid));
+    const childLive = Number.isInteger(e.childPid) && pidAlive(e.childPid);
+    // This process released it (or never held it) and a failed release left it behind: drop it, unless its agent still runs.
+    if (e.pid === process.pid && !held.has(e.key)) return childLive;
+    return pidAlive(e.pid) || childLive;
   };
   const isWaiting = (w, t) => w.key !== key && pidAlive(w.pid) && t <= w.expiresAt;
 
