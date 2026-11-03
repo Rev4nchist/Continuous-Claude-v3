@@ -1,0 +1,283 @@
+{
+  "sha": "6ca0d89e",
+  "arm": "grok",
+  "flowsTree": "29c0c735e055416a9e1b86e3385ab065480fae81",
+  "groups": {
+    "S1": {
+      "runId": "456c3365-661f-4959-b30e-476fa62e3e5b",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 36951,
+        "outputTokens": 38980,
+        "cacheReadTokens": 238720,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S2": {
+      "runId": "54e93fbd-16fe-4ed1-b230-1681f449ad40",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 129370,
+        "outputTokens": 44313,
+        "cacheReadTokens": 401664,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S3": {
+      "runId": "4e357dd1-891a-4505-910d-e21a81230510",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 163845,
+        "outputTokens": 39305,
+        "cacheReadTokens": 313216,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S4": {
+      "runId": "a27310d3-e467-4c39-9c59-03fa1a5d9426",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 118510,
+        "outputTokens": 45266,
+        "cacheReadTokens": 851968,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S5": {
+      "runId": "dfb853e2-b2d4-4961-95e5-357b608e4273",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 228854,
+        "outputTokens": 42675,
+        "cacheReadTokens": 984320,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S6": {
+      "runId": "14349ba4-2c43-4458-b706-29ba0c5f8295",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 130008,
+        "outputTokens": 36138,
+        "cacheReadTokens": 1482880,
+        "cacheWriteTokens": 0
+      },
+      "retries": 1,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S8": {
+      "runId": "fde2e12f-a084-4fd9-b68d-ce30257dfad3",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 43921,
+        "outputTokens": 27742,
+        "cacheReadTokens": 999040,
+        "cacheWriteTokens": 0
+      },
+      "retries": 1,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S9": {
+      "runId": "f4e278a4-f657-4f65-a2eb-16ec39c36fcd",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 118256,
+        "outputTokens": 30463,
+        "cacheReadTokens": 1115904,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S10": {
+      "runId": "eb90f2aa-60e8-40ca-bc8a-947eb6c4633b",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 110790,
+        "outputTokens": 50610,
+        "cacheReadTokens": 1635584,
+        "cacheWriteTokens": 0
+      },
+      "retries": 2,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S11": {
+      "runId": "5b8158cd-e3d6-4b1f-995b-2caa79dd4e39",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 159491,
+        "outputTokens": 38195,
+        "cacheReadTokens": 967936,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S12": {
+      "runId": "43cfac6b-8ef0-42a1-a302-4b73c5fb2b2e",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 211191,
+        "outputTokens": 28947,
+        "cacheReadTokens": 1627648,
+        "cacheWriteTokens": 0
+      },
+      "retries": 1,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S13": {
+      "runId": "4699c773-35e0-40a1-8589-67507b11d7b2",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 196161,
+        "outputTokens": 50638,
+        "cacheReadTokens": 651264,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S14": {
+      "runId": "e060ce40-de58-466c-8251-971de6431c22",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 215583,
+        "outputTokens": 46973,
+        "cacheReadTokens": 1807360,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S15": {
+      "runId": "cd8910a4-fbdc-4b9e-ab69-2e1acce3f7b1",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 115243,
+        "outputTokens": 36070,
+        "cacheReadTokens": 1265152,
+        "cacheWriteTokens": 0
+      },
+      "retries": 1,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S17": {
+      "runId": "fc067151-5e48-41c0-8ec1-f3e013c54751",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 127400,
+        "outputTokens": 42177,
+        "cacheReadTokens": 636928,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    },
+    "S18": {
+      "runId": "18f21680-decf-4d20-a9ce-6a286f8672f8",
+      "model": "grok-4.7-high",
+      "usage": {
+        "inputTokens": 170314,
+        "outputTokens": 47974,
+        "cacheReadTokens": 841728,
+        "cacheWriteTokens": 0
+      },
+      "retries": 0,
+      "blind": "audited (stream-json reads in tree)"
+    }
+  },
+  "negatives": {
+    "N2": [],
+    "N3": [
+      "S6",
+      "S18"
+    ],
+    "N6": [],
+    "N7": [
+      "S4",
+      "S5"
+    ],
+    "N8": [
+      "S4",
+      "S5"
+    ],
+    "N9": [
+      "S6",
+      "S9",
+      "S11"
+    ],
+    "K1": [],
+    "K2": [],
+    "N10": [
+      "S6",
+      "S9",
+      "S10",
+      "S11",
+      "S12",
+      "S14"
+    ],
+    "N11": [
+      "S8"
+    ],
+    "N12": [
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "N13": [
+      "S11"
+    ],
+    "N14": [
+      "S10",
+      "S11"
+    ],
+    "N15": [
+      "S8"
+    ],
+    "N16": [
+      "S10"
+    ]
+  },
+  "skipped": {
+    "N2": "no_match",
+    "N6": "no_match",
+    "K1": "no_match",
+    "K2": "no_match"
+  },
+  "hostFlows": 0,
+  "hostReview": null,
+  "blind": "audited (stream-json reads in tree)",
+  "pins": {
+    "negatives": {
+      "N2": "b928c1f1",
+      "N3": "a3946cac",
+      "N6": "d57c7859",
+      "N7": "4ff7dc66",
+      "N8": "016fcdf1",
+      "N9": "77c9bad4",
+      "K1": "3cb2bd65",
+      "K2": "6d77dacc",
+      "N10": "41d77f56",
+      "N11": "86167153",
+      "N12": "2df7de63",
+      "N13": "4b516798",
+      "N14": "1253d750",
+      "N15": "930400bc",
+      "N16": "52d8c594"
+    },
+    "files": {
+      "negatives": "97232be390a28edb943b664ead4738535480a177",
+      "proofs": "da5afad5e411369e3c6af4920862946ee832a649"
+    }
+  }
+}
