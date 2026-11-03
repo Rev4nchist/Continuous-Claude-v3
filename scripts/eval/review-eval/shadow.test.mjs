@@ -282,6 +282,55 @@ test('retro with no injected engine replays through replayRun (kind shadow, the 
   assert.equal(first.crBase, B);
 });
 
+// PR 300 with two CR rounds, X then A. Each test gets a fresh root.
+function twoRoundPr() {
+  const X = sha('c');
+  const A = sha('a');
+  const gh = async (args) => {
+    const route = args[args.length - 1];
+    if (route.includes('/reviews')) return [[
+      { id: 10, user: CR, body: '**Actionable comments posted: 0**', commit_id: X, submitted_at: '2026-11-01T00:00:00Z' },
+      { id: 11, user: CR, body: '**Actionable comments posted: 0**', commit_id: A, submitted_at: '2026-11-01T01:00:00Z' },
+    ]];
+    if (route.includes('/issues/300/comments')) return [[]];
+    if (route.includes('/commits')) return [[{ sha: X }, { sha: A }]];
+    if (route.includes('/pulls/300/comments')) return [[]];
+    return { user: { login: 'dave' }, state: 'open', merged_at: null };
+  };
+  const git = (args) => (args[0] === 'merge-base' ? { status: 0, stdout: `${sha('b')}\n` } : { status: 0, stdout: '' });
+  const root = mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'shadow-sync-'));
+  const readRows = () => readFileSync(path.join(root, 'pairs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  return { X, A, gh, git, root, readRows };
+}
+
+test('sync skips a round with a final stored row: no engine call, no budget spent, the stored row kept', async () => {
+  // Breaks when: pairsForPr stops reading pairs.jsonl (the budget goes to old round X, the cap refusal
+  // turns its stored paired row into engine_pending, and new round A gets no engine call).
+  const { X, A, gh, git, root, readRows } = twoRoundPr();
+  const stored = { v: 1, ts: '2026-10-01T00:00:00.000Z', pr: 300, sha40: X, round: 1, kind: 'retro', band: 'MID', crBase: sha('b'), engineSource: 'shadow', engineVersion: 'v1', state: 'paired', reason: 'stored-marker', paid: false, cr: [], eng: [], matches: [], crOnly: [], engOnly: [], disputed: [] };
+  writeFileSync(path.join(root, 'pairs.jsonl'), `${JSON.stringify(stored)}\n`);
+  const calls = [];
+  const engine = async ({ sha40 }) => { calls.push(sha40); return null; }; // a cap refusal
+  const code = await main(['sync', '--force', '--from', '300', '--to', '300', '--max', '1'], { root, cfg: { shadow: {} }, gh, git, engine, runJudge: async () => null, engineVersion: 'v1', now: () => 1_700_000_000_000, stdout: () => {}, stderr: () => {} });
+  assert.equal(code, 0);
+  assert.deepEqual(calls, [A]);
+  const rows = readRows();
+  assert.deepEqual(rows.filter((r) => r.sha40 === X), [stored]);
+  assert.equal(rows.find((r) => r.sha40 === A).state, 'engine_pending');
+});
+
+test('sync writes kind sample and retro writes kind retro', async () => {
+  // Breaks when: sync rows are written as retro (scoreBand's re-promotion window reads kind sample only).
+  for (const [cmd, kind] of [['sync', 'sample'], ['retro', 'retro']]) {
+    const { A, gh, git, root, readRows } = twoRoundPr();
+    const engine = async ({ sha40 }) => ({ sha40, timedOut: false, failed: false, findings: [] });
+    const code = await main([cmd, '--force', '--from', '300', '--to', '300'], { root, cfg: { shadow: {} }, gh, git, engine, runJudge: async () => null, engineVersion: 'v1', now: () => 1_700_000_000_000, stdout: () => {}, stderr: () => {} });
+    assert.equal(code, 0);
+    const row = readRows().find((r) => r.sha40 === A);
+    assert.deepEqual([cmd, row.state, row.kind], [cmd, 'paired', kind]);
+  }
+});
+
 test('the default shadow engine maps a failed replay to void_partial and a cap refusal to engine_pending', async () => {
   // Breaks when: a failed replay is read as paired, or a cap/frozen refusal is read as a failed run.
   const { defaultShadowEngine } = await import('./shadow.mjs');

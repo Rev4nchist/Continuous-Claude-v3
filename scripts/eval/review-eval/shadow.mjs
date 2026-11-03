@@ -18,6 +18,8 @@ import { makeGit, replayRun as realReplayRun } from './replay.mjs';
 export { judgeSameIssue, matchFindings };
 export const SHADOW_ROOT = process.env.CCV3_SHADOW_ROOT || path.join(os.homedir(), '.claude', 'state', 'local-review-shadow');
 export const PAIR_STATES = ['cr_pending', 'engine_pending', 'paired', 'void_sha', 'void_partial', 'excluded', 'skipped'];
+// Final states: a stored row in one of these is never re-run or replaced (spec section 3).
+const FINAL_STATES = new Set(PAIR_STATES.filter((s) => s !== 'cr_pending' && s !== 'engine_pending'));
 export const crRounds = roundsFrom;
 
 const lc = (s) => String(s ?? '').toLowerCase();
@@ -189,11 +191,13 @@ function toEngineFinding(f, i) {
 export { toEngineFinding };
 
 /** One PR: its rounds, their CR findings, pair state, and (when an engine record exists) the match. */
-async function pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kind, band, version, budget }) {
+async function pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kind, band, version, budget, finalKeys = new Set() }) {
   const [pull, data, inline] = await Promise.all([gh(['api', `repos/${REPO}/pulls/${pr}`]), roundData(pr, { gh, repo: REPO }), inlineComments(pr, { gh, repo: REPO })]);
   const rounds = roundsFrom({ ...data, commentEdits: {} });
   const rows = [];
   for (const [i, round] of rounds.entries()) {
+    // A final stored row for (pr, sha40, version): no engine call, and no new row, so the write keeps the stored one.
+    if (finalKeys.has(`${pr}|${round.sha40}`)) continue;
     const review = data.reviews.find((r) => r.id === round.reviewId);
     const cr = crFindings({ round, review, inline });
     const base = git ? crRange(rounds, i, { git }).base : null;
@@ -284,11 +288,14 @@ export async function main(argv, deps = {}) {
     const engine = deps.engine ?? defaultShadowEngine({ cfg, gh, root, repoRoot, replayRun: deps.replayRun });
     const git = deps.git ?? makeGit(repoRoot);
     const runJudge = deps.runJudge ?? (await import('../../lib/headless.mjs')).runJudge;
+    const finalKeys = new Set(readJsonl(path.join(root, 'pairs.jsonl')).filter((p) => p.engineVersion === version && FINAL_STATES.has(p.state)).map((p) => `${p.pr}|${p.sha40}`));
+    // Spec section 2: sync is live L2, the MID/ELEVATED sample. [Follow-up] L1 kind 'required' (HIGH/CRITICAL or labelled PRs) is not built yet.
+    const kind = cmd === 'retro' ? 'retro' : 'sample';
     const all = [];
     const failures = [];
     for (let pr = from; pr <= to; pr += 1) {
       try {
-        const { rows } = await pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kind: 'retro', band: deps.band ?? 'MID', version, budget });
+        const { rows } = await pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kind, band: deps.band ?? 'MID', version, budget, finalKeys });
         all.push(...rows);
       } catch (e) { failures.push({ pr, error: String(e.message).slice(0, 200) }); }
     }
