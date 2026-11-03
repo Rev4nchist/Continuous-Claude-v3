@@ -78,3 +78,21 @@ test('runReview drops a finding on a file the head does not hold, records the dr
     assert.match(rec.problems.join(' '), /ghost.ts/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('headHasFile keeps a file in the head tree and drops a directory path (CodeRabbit #275)', async () => {
+  // Breaks when: headHasFile accepts any git object (cat-file -e) instead of only a blob, so a finding that names a folder survives.
+  const { headHasFile } = await import('./cursor-review.mjs');
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync: wf, mkdirSync: md } = await import('node:fs');
+  const repo = mkdtempSync(path.join(os.tmpdir(), 'hhf-'));
+  const git = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+  try {
+    git('init', '-q'); md(path.join(repo, 'src'));
+    wf(path.join(repo, 'src', 'a.ts'), 'x\n');
+    git('add', '.'); git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'c');
+    const has = headHasFile(repo, git('rev-parse', 'HEAD'));
+    assert.equal(has('src/a.ts'), true);
+    assert.equal(has('src'), false);
+    assert.equal(has('src/missing.ts'), false);
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});

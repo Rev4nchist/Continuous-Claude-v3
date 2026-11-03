@@ -9,7 +9,7 @@
 //   score --dir D [--out F] [--rebase A]      scorecard from runs.jsonl and the dataset; --rebase A reads the findings files from archive A
 //   rescore --archive A --out D [--root R]    re-apply the parser and the path filter to archived raw answers (no model call); then `score --dir D`
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG_PATH, loadConfig } from './config.mjs';
@@ -81,11 +81,21 @@ function scoreCmd(argv, io, cfg) {
   return 0;
 }
 
+/** The real path: follows symlinks and junctions in the nearest existing ancestor, then appends the missing segments. */
+function canonical(p) {
+  let head = path.resolve(p);
+  const rest = [];
+  while (!existsSync(head) && path.dirname(head) !== head) { rest.unshift(path.basename(head)); head = path.dirname(head); }
+  const real = existsSync(head) ? realpathSync.native(head) : head;
+  const full = path.join(real, ...rest);
+  return process.platform === 'win32' ? full.toLowerCase() : full;
+}
+
 function rescoreCmd(argv, io, root) {
   const archive = flag(argv, '--archive', null);
   const out = flag(argv, '--out', null);
   if (!archive || !out) { io.stderr('rescore: --archive <review-eval folder> and --out <new folder> are required'); return 2; }
-  if (path.resolve(out) === path.resolve(archive)) { io.stderr('rescore: --out must be a new folder, never the archive'); return 2; }
+  if (canonical(out) === canonical(archive)) { io.stderr('rescore: --out must be a new folder, never the archive'); return 2; }
   const exists = io.exists ?? treeCheck(makeGit(flag(argv, '--root', root)));
   io.stdout(JSON.stringify(rescoreArchive({ archive, out, exists }), null, 1));
   return 0;

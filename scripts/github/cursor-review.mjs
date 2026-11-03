@@ -308,10 +308,11 @@ export function parseReviewOutput(stdout, { expectModel, exists } = {}) {
 }
 
 /** exists(path) for parseReviewOutput: is the file in the head commit's tree? A head this repo does not hold cannot judge, so it keeps every file. */
-function headHasFile(root, head) {
-  const has = (spec) => gitOut(root, ['cat-file', '-e', spec], { allowFail: true }) !== null;
-  const known = has(`${head}^{commit}`);
-  return (file) => !known || has(`${head}:${file}`);
+export function headHasFile(root, head) {
+  const type = (spec) => (gitOut(root, ['cat-file', '-t', spec], { allowFail: true }) ?? '').trim();
+  const known = type(`${head}^{commit}`) === 'commit';
+  // Only a blob is a file; a folder path names a tree and has nothing to review.
+  return (file) => !known || type(`${head}:${file}`) === 'blob';
 }
 
 function parseAnswer(stdout, expectModel) {

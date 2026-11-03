@@ -71,3 +71,26 @@ test('score --rebase reads the findings files from the archive folder, not from 
   assert.equal(await main(['score', '--dir', dir], io), 1, 'without --rebase the gone folder fails');
   assert.equal(await main(['score', '--dir', dir, '--rebase', dir], quiet()), 0);
 });
+
+test('rescore refuses an --out junction that points at the archive (CodeRabbit #275)', async () => {
+  // Breaks when: the --out check compares path.resolve strings, so a junction or symlink to the archive passes and the archive is overwritten.
+  const { symlinkSync } = await import('node:fs');
+  const dir = makeArchive();
+  const link = path.join(tmp(), 'alias');
+  symlinkSync(dir, link, 'junction');
+  assert.equal(await main(['rescore', '--archive', dir, '--out', link], quiet()), 2);
+  assert.equal(await main(['rescore', '--archive', dir, '--out', path.join(link, 'nested')], quiet()), 0);
+});
+
+test('treeCheck accepts a blob and rejects a tree (CodeRabbit #275)', async () => {
+  // Breaks when: treeCheck uses cat-file -e, which accepts a directory path.
+  const { treeCheck } = await import('./rescore.mjs');
+  const git = (args) => {
+    if (args[0] === 'cat-file' && args[1] === '-e') return { status: 0, stdout: '' };
+    if (args[0] === 'cat-file' && args[1] === '-t') return { status: 0, stdout: args[2].endsWith(':dir') ? 'tree\n' : 'blob\n' };
+    return { status: 1, stdout: '' };
+  };
+  const check = treeCheck(git);
+  assert.equal(check(SHA, 'dir/a.ts'), true);
+  assert.equal(check(SHA, 'dir'), false);
+});

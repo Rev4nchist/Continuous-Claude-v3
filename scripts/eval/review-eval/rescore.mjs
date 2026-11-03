@@ -22,7 +22,9 @@ export function archiveFile(dir, storedPath) {
 export function treeCheck(git) {
   const known = new Map();
   const has = (sha) => { if (!known.has(sha)) known.set(sha, git(['cat-file', '-e', `${sha}^{commit}`]).status === 0); return known.get(sha); };
-  return (sha, file) => !has(sha) || git(['cat-file', '-e', `${sha}:${file}`]).status === 0;
+  // Only a blob is a file; a folder path names a tree.
+  const isBlob = (spec) => { const r = git(['cat-file', '-t', spec]); return r.status === 0 && String(r.stdout ?? '').trim() === 'blob'; };
+  return (sha, file) => !has(sha) || isBlob(`${sha}:${file}`);
 }
 
 function findingsRecord(prior, parsed, model) {
