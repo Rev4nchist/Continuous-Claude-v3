@@ -554,3 +554,14 @@ test('withDefaults: the default git does not pass ANTHROPIC_API_KEY to the git c
     delete process.env.ANTHROPIC_API_KEY;
   }
 });
+
+test('--flows-dir allows the three model-arm flow folders and no look-alike', () => {
+  // Breaks when the allow-list drops an arm folder (its flows cannot run) or widens to any "flows-*" folder.
+  const dir = (v) => parseArgs(['--simulate', 'a', '--flows-dir', v]).flowsDir;
+  for (const arm of ['flows-composer', 'flows-xhigh', 'flows-grok2']) {
+    for (const g of ['S1', 'S18']) assert.equal(dir(`scripts/trex/bench/${arm}/${g}`), `scripts/trex/bench/${arm}/${g}`);
+  }
+  for (const bad of ['flows-foo/S1', 'flows-composer', 'flows-composer/s1', 'flows-composer/S100', 'flows-composer/S1/x', 'flows-/S1', 'flows--xhigh/S1']) {
+    assert.throws(() => dir(`scripts/trex/bench/${bad}`), UsageError, bad);
+  }
+});

@@ -1,0 +1,555 @@
+{
+  "rows": [
+    {
+      "major": "S1",
+      "check": "trex",
+      "pre": "23b62e5d",
+      "fix": "f0b67364",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S1",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S1",
+        "authorRange": "beb9d5ef..23b62e5d",
+        "defectFiles": [
+          "apps/agentic-os/src/server/sources/safe-message.ts"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S2",
+      "check": "trex",
+      "pre": "f0b67364",
+      "fix": "16b8f382",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S2",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S2",
+        "authorRange": "beb9d5ef..f0b67364",
+        "defectFiles": [
+          "apps/agentic-os/src/server/sources/safe-message.ts"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S3",
+      "check": "trex",
+      "pre": "91b0b4c8",
+      "fix": "61f94d52",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S3",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S3",
+        "authorRange": "dce71cdc..91b0b4c8",
+        "defectFiles": [
+          ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S4",
+      "check": "trex",
+      "pre": "d1ae74d6",
+      "fix": "42e1fbf5",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S4",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S4",
+        "authorRange": "226182d4..d1ae74d6",
+        "defectFiles": [
+          ".claude/plugins/ccv3-mods/hooks/agentic-os/index.tsx"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S5",
+      "check": "trex",
+      "pre": "ab76d406",
+      "fix": "e9579469",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S5",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S5",
+        "authorRange": "226182d4..ab76d406",
+        "defectFiles": [
+          ".claude/plugins/ccv3-mods/hooks/agentic-os/index.tsx"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S6",
+      "check": "trex",
+      "pre": "2b51c197",
+      "fix": "1ec6ab3c",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S6",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S6",
+        "authorRange": "89fc749c..2b51c197",
+        "defectFiles": [
+          "scripts/github/review-router.mjs"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S7",
+      "check": "trex",
+      "pre": "2b51c197",
+      "fix": "1ec6ab3c",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S6",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "note": "Same run and flows as S6 (spec 7); graded on the pr-checkpoint hook defect.",
+      "bench": {
+        "kind": "catch",
+        "group": "S6",
+        "authorRange": "89fc749c..2b51c197",
+        "defectFiles": [
+          ".claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S8",
+      "check": "trex",
+      "pre": "2aabe283",
+      "fix": "574eb221",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S8",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S8",
+        "authorRange": "4ff7dc66..2aabe283",
+        "defectFiles": [
+          "scripts/settings/remove-maestro-registrations.mjs"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S9",
+      "check": "trex",
+      "pre": "8b69c3e1",
+      "fix": "74962d04",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S9",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S9",
+        "authorRange": "d4270286..8b69c3e1",
+        "defectFiles": [
+          "scripts/github/review-status.mjs"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S10",
+      "check": "trex",
+      "pre": "ec949669",
+      "fix": "9bcb694d",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S10",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S10",
+        "authorRange": "d981b2de..ec949669",
+        "defectFiles": [
+          ".claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx",
+          ".claude/plugins/ccv3-mods/hooks/pr-checkpoint/model.ts"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S11",
+      "check": "trex",
+      "pre": "0237674f",
+      "fix": "e0a5ac45",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S11",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S11",
+        "authorRange": "18962377..0237674f",
+        "defectFiles": [
+          "scripts/github/review-status.mjs"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S12",
+      "check": "trex",
+      "pre": "707612bd",
+      "fix": "a4952ff5",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S12",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S12",
+        "authorRange": "ac03ec78^1..ac03ec78",
+        "defectFiles": [
+          "scripts/github/land-pr.ps1"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S13",
+      "check": "trex",
+      "pre": "18962377",
+      "fix": "3b5a6018",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S13",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "note": "Needs the P2 api and browser drivers: expected to miss in P0. It stays in n=15. The bench spec table labels it phase P2.",
+      "bench": {
+        "kind": "catch",
+        "group": "S13",
+        "authorRange": "82a06d63..18962377",
+        "defectFiles": [
+          "apps/agentic-os/src/server/queries/sessions.ts",
+          "apps/agentic-os/src/server/sources/project-label.ts"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S14",
+      "check": "trex",
+      "pre": "707612bd",
+      "fix": "1e285069",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S14",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S14",
+        "authorRange": "707612bd^1..707612bd",
+        "defectFiles": [
+          "scripts/github/review-status.mjs",
+          "scripts/github/cr-paid.mjs"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S15",
+      "check": "trex",
+      "pre": "73040918",
+      "fix": "6f36d24f",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S15",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "bench": {
+        "kind": "catch",
+        "group": "S15",
+        "authorRange": "d47b9709^1..d47b9709",
+        "defectFiles": [
+          "scripts/start-embedding-daemon.ps1"
+        ],
+        "phase": "P0"
+      }
+    },
+    {
+      "major": "S18",
+      "check": "trex",
+      "pre": "a309dd66",
+      "fix": "82a06d63",
+      "paths": [
+        "."
+      ],
+      "cmd": [
+        "{node}",
+        "{repo}/scripts/trex/run.mjs",
+        "--simulate",
+        "tree",
+        "--tree",
+        "{tree}",
+        "--config",
+        "<frozen sha>",
+        "--flows-dir",
+        "scripts/trex/bench/flows/S18",
+        "--evidence",
+        "{tree}/.trex-out"
+      ],
+      "fireMatch": "^not ok ",
+      "timeoutMs": 900000,
+      "note": "Reported outside n (n is S1-S15).",
+      "bench": {
+        "kind": "catch",
+        "group": "S18",
+        "authorRange": "6bc94082^1..6bc94082",
+        "defectFiles": [
+          ".claude/hooks/src/pre-pr-gate.ts",
+          "scripts/github/pre-pr.mjs"
+        ],
+        "phase": "P0"
+      }
+    }
+  ]
+}

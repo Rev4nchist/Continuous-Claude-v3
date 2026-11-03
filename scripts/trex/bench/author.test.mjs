@@ -298,15 +298,17 @@ const lsBlob = (args, blobs) => {
 const FLOWS_DIR = 'scripts/trex/bench/flows';
 function freezeSetup(t, over = {}) {
   const root = tmp(t);
-  const files = { [`${FLOWS_DIR}/S1/a.yaml`]: over.s1Flow ?? hostYaml('mod-event', '{test: brief-hook}'), [`${FLOWS_DIR}/S8/b.yaml`]: flowYaml().replace('gate-blocks-inline-body', 'second-flow-here') };
+  const FD = over.flowsDir ?? FLOWS_DIR;
+  const stem = over.stem ?? 'trex-author';
+  const files = { [`${FD}/S1/a.yaml`]: over.s1Flow ?? hostYaml('mod-event', '{test: brief-hook}'), [`${FD}/S8/b.yaml`]: flowYaml().replace('gate-blocks-inline-body', 'second-flow-here') };
   const calls = [];
   const git = (args) => {
     calls.push(args.join(' '));
     const k = args.join(' ');
     if (k.startsWith('status --porcelain')) return { status: 0, stdout: over.dirty ?? '', stderr: '' };
     if (k.startsWith('rev-parse --verify')) return { status: 0, stdout: 'abc123\n', stderr: '' };
-    if (k === `rev-parse abc123:${FLOWS_DIR}`) return { status: 0, stdout: `${TREE}\n`, stderr: '' };
-    if (k === `rev-parse HEAD:${FLOWS_DIR}`) return { status: 0, stdout: `${over.headTree ?? TREE}\n`, stderr: '' };
+    if (k === `rev-parse abc123:${FD}`) return { status: 0, stdout: `${TREE}\n`, stderr: '' };
+    if (k === `rev-parse HEAD:${FD}`) return { status: 0, stdout: `${over.headTree ?? TREE}\n`, stderr: '' };
     if (args[0] === 'ls-tree' && !args.includes('-r')) return lsBlob(args, over.blobs ?? {});
     if (args[0] === 'ls-tree') return { status: 0, stdout: Object.keys(files).filter((f) => f.startsWith(`${args.at(-1)}/`)).join('\0'), stderr: '' };
     if (args[0] === 'show') return { status: 0, stdout: files[args[1].split(':')[1]] ?? '', stderr: '' };
@@ -315,10 +317,10 @@ function freezeSetup(t, over = {}) {
     return { status: 1, stdout: '', stderr: `unhandled ${k}` };
   };
   const cacheDir = path.join(root, '.claude/cache/e2e');
-  for (const g of ['S1', 'S8']) put(cacheDir, `2026-11-02-trex-author-${g}.manifest.json`, JSON.stringify({ group: g, runId: `run-${g}`, model: 'grok-4.7-high', usage: { in: 1 }, retries: 0 }));
-  const digest = over.digest ?? hostFlowDigest(git, 'abc123', { flowsDir: FLOWS_DIR, groups: ['S1', 'S8'], negativeHeads: over.negativeHeads });
+  for (const g of ['S1', 'S8']) put(cacheDir, `2026-11-02-${stem}-${g}.manifest.json`, JSON.stringify({ group: g, runId: `run-${g}`, model: 'grok-4.7-high', usage: { in: 1 }, retries: 0 }));
+  const digest = over.digest ?? hostFlowDigest(git, 'abc123', { flowsDir: FD, groups: ['S1', 'S8'], negativeHeads: over.negativeHeads });
   if (!over.noMarker) put(root, 'scripts/trex/bench/host-review.json', JSON.stringify({ sha256: digest }));
-  const opts = { root, flowsDir: FLOWS_DIR, groups: ['S1', 'S8'], fixes: { S1: 'f1', S8: 'f8' }, cacheDir, negatives: [{ id: 'N2', head: 'nnn' }], ...over.opts };
+  const opts = { root, flowsDir: FD, groups: ['S1', 'S8'], fixes: { S1: 'f1', S8: 'f8' }, cacheDir, negatives: [{ id: 'N2', head: 'nnn' }], ...over.opts };
   return { root, git, calls, opts, digest };
 }
 
@@ -1195,4 +1197,224 @@ test('freeze refuses a group whose latest manifest is a not-started record', (t)
   const s = freezeSetup(t);
   put(s.opts.cacheDir, '2026-11-03-trex-author-S1.manifest.json', JSON.stringify({ group: 'S1', runId: 'run-S1', status: 'not-started', error: 'grok-busy' }));
   assert.throws(() => freeze('abc123', s.opts, { git: s.git }), /S1/);
+});
+
+// ---------- model arms (arms spec section 4) ----------
+
+const otherArmLines = () => ['trex-composer-S1', 'trex-xhigh-S8', 'trex-grok2-S14'].map((ref) => startLines(1, ref)).join('\n');
+
+test('benchRuns for the grok arm does not count the composer, xhigh or grok2 prefixes', (t) => {
+  // Breaks when benchRuns goes back to counting every "trex-" ref: the grok cap of 24 would be spent by other arms.
+  const s = authorSetup(t, { ledger: `${startLines(2, 'trex-S1')}\n${otherArmLines()}\n` });
+  assert.equal(benchRuns(s.ledger).used, 2);
+  assert.deepEqual(Object.keys(benchRuns(s.ledger).byRef), ['trex-S1']);
+});
+
+test('freeze with zero host flows needs no marker and records hostFlows: 0', (t) => {
+  // Breaks when freeze checks the marker for an arm that has only container flows.
+  const s = freezeSetup(t, { s1Flow: flowYaml().replace('gate-blocks-inline-body', 'first-flow-here'), noMarker: true });
+  const r = freeze('abc123', s.opts, { git: s.git });
+  assert.equal(r.hostFlows, 0);
+  assert.equal(JSON.parse(readFileSync(path.join(s.root, 'scripts/trex/bench/frozen.json'), 'utf8')).hostFlows, 0);
+});
+
+test('freeze with a host flow still needs the marker, and records the host flow count', (t) => {
+  // Breaks when the zero-host shortcut also skips the marker for an arm that has a host flow.
+  assert.throws(() => freeze('abc123', freezeSetup(t, { noMarker: true }).opts, { git: freezeSetup(t).git }), /review/i);
+  const s = freezeSetup(t);
+  assert.equal(freeze('abc123', s.opts, { git: s.git }).hostFlows, 1);
+});
+
+test('parseArgs reads --arm for a run, a freeze and a reparse, and refuses an unknown arm', () => {
+  // Breaks when --arm is not parsed: every arm would write to the grok flows dir and count against the grok cap.
+  assert.equal(parseArgs(['--group', 'S1', '--arm', 'composer']).arm, 'composer');
+  assert.equal(parseArgs(['--group', 'S1']).arm, 'grok');
+  assert.equal(parseArgs(['--freeze', '--sha', 'abc', '--arm', 'xhigh']).arm, 'xhigh');
+  assert.equal(parseArgs(['--reparse', 'a.raw.json', '--group', 'S1', '--arm', 'grok2']).arm, 'grok2');
+  assert.match(parseArgs(['--group', 'S1', '--arm', 'opus']).error, /arm/);
+  assert.match(parseArgs(['--group', 'S1', '--arm']).error, /arm/);
+});
+
+const ARM_DIR = (arm) => `scripts/trex/bench/flows-${arm}`;
+const runsOf = (s) => s.state.runs.length;
+const modelOf = (spec) => spec.args[spec.args.indexOf('--model') + 1];
+const armLedger = (arm, n) => `${Array.from({ length: n }, (_, i) => JSON.stringify({ ts: '2026-11-01T00:00:00.000Z', phase: 'start', id: `id-${arm}-${i}`, ref: `trex-${arm}-S${i + 100}`, model: 'x' })).join('\n')}\n`;
+
+test('authorGroup --arm composer: composer-2.5, its own ref, flows folder and cache stem', async (t) => {
+  // Breaks when an arm run writes to the grok folder or stem: it would clobber the grok flows and manifest of the same group.
+  const s = authorSetup(t, { run: streamRun() });
+  const r = await authorGroup('S18', { ...s.opts, arm: 'composer' }, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(modelOf(s.state.runs[0]), 'composer-2.5');
+  assert.deepEqual(ledgerLines(s.ledger).map((l) => [l.phase, l.ref, l.model]), [['start', 'trex-composer-S18', 'composer-2.5'], ['end', 'trex-composer-S18', 'composer-2.5']]);
+  assert.ok(existsSync(path.join(s.root, ARM_DIR('composer'), 'S18', 'gate.yaml')));
+  assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S18')));
+  assert.ok(cacheFiles(s.root).some((f) => /-trex-author-composer-S18\.manifest\.json$/.test(f)));
+  assert.ok(!cacheFiles(s.root).some((f) => /-trex-author-S18\./.test(f)), 'no grok-stem file');
+  const m = manifestOf(s, /-trex-author-composer-S18\.manifest\.json$/);
+  assert.equal(m.model, 'composer-2.5');
+  assert.equal(m.ref, 'trex-composer-S18');
+});
+
+test('authorGroup --arm xhigh and grok2 use their model, ref and folder', async (t) => {
+  // Breaks when an arm table row is wrong: grok2 would run xhigh or xhigh would run high.
+  for (const [arm, model] of [['xhigh', 'grok-4.7-xhigh'], ['grok2', 'grok-4.7-high']]) {
+    const s = authorSetup(t, { run: streamRun() });
+    const r = await authorGroup('S8', { ...s.opts, arm }, s.deps);
+    assert.equal(r.exit, 0, `${arm}: ${r.problems.join('; ')}`);
+    assert.equal(modelOf(s.state.runs[0]), model, arm);
+    assert.equal(ledgerLines(s.ledger)[0].ref, `trex-${arm}-S8`);
+    assert.ok(existsSync(path.join(s.root, ARM_DIR(arm), 'S8', 'gate.yaml')), arm);
+  }
+});
+
+test('each arm has its own cap: 24 composer, 4 xhigh, 4 grok2, and other arms never spend the grok 24', async (t) => {
+  // Breaks when the cap or the count is shared between arms.
+  for (const [arm, cap] of [['composer', 24], ['xhigh', 4], ['grok2', 4]]) {
+    const full = authorSetup(t, { ledger: armLedger(arm, cap), run: streamRun() });
+    assert.equal(benchRuns(full.ledger, arm).used, cap, arm);
+    assert.equal((await authorGroup('S1', { ...full.opts, arm }, full.deps)).exit, 3, `${arm} is full`);
+    assert.equal(runsOf(full), 0, `${arm} starts no agent`);
+    assert.equal(benchRuns(full.ledger).used, 0, `${arm} runs are not grok runs`);
+    assert.equal((await authorGroup('S1', full.opts, full.deps)).exit, 0, `grok still runs when ${arm} is full`);
+  }
+});
+
+test('an arm run one below its cap passes', async (t) => {
+  // Breaks when the arm cap is off by one.
+  const s = authorSetup(t, { ledger: armLedger('xhigh', 3), run: streamRun() });
+  assert.equal((await authorGroup('S1', { ...s.opts, arm: 'xhigh' }, s.deps)).exit, 0);
+});
+
+test('authorGroup refuses a group outside the arm: xhigh and grok2 run S1, S8, S14 and S18 only', async (t) => {
+  // Breaks when the groups of an arm are not enforced: a 4-run arm would spend its cap on the wrong rows.
+  const s = authorSetup(t);
+  for (const arm of ['xhigh', 'grok2']) {
+    assert.equal((await authorGroup('S3', { ...s.opts, arm }, s.deps)).exit, 2, arm);
+    assert.equal((await authorGroup('S1', { ...s.opts, arm, dryRun: true }, s.deps)).exit, 0, `${arm} S1`);
+  }
+  assert.equal(runsOf(s), 0);
+});
+
+test('authorGroup allows the authoring models and refuses fast, auto and a model of another arm', async (t) => {
+  // Breaks when the allow-list is wrong: a -fast or Auto run would be billed, or an arm would run the wrong model.
+  const s = authorSetup(t, { run: streamRun() });
+  const exit = async (arm, model) => (await authorGroup('S18', { ...s.opts, arm, model, dryRun: true }, s.deps)).exit;
+  for (const [arm, model] of [['grok', 'grok-4.7-high'], ['grok', 'grok-4.7-xhigh'], ['composer', 'composer-2.5'], ['xhigh', 'grok-4.7-xhigh'], ['grok2', 'grok-4.7-high']]) assert.equal(await exit(arm, model), 0, `${arm} ${model}`);
+  for (const [arm, model] of [['grok', 'grok-4.7-fast'], ['grok', 'auto'], ['grok', 'Auto'], ['composer', 'composer-2.5-fast'], ['composer', 'auto'], ['composer', 'grok-4.7-high'], ['grok', 'composer-2.5'], ['xhigh', 'grok-4.7-high'], ['grok2', 'grok-4.7-xhigh'], ['grok', 'grok-4.7-low']]) assert.equal(await exit(arm, model), 2, `${arm} ${model}`);
+});
+
+test('authorGroup refuses an unknown arm', async (t) => {
+  const s = authorSetup(t);
+  assert.equal((await authorGroup('S18', { ...s.opts, arm: 'opus' }, s.deps)).exit, 2);
+  assert.equal(runsOf(s), 0);
+});
+
+test('an arm run that never starts exits 3, is not counted, and writes a not-started manifest with the arm stem', async (t) => {
+  // Breaks when the not-started path ignores the arm: a busy slot would write a grok-stem file or spend an arm run.
+  const s = authorSetup(t, { run: busyRun() });
+  const r = await authorGroup('S18', { ...s.opts, arm: 'composer' }, s.deps);
+  assert.equal(r.exit, 3);
+  assert.equal(benchRuns(s.ledger, 'composer').used, 0);
+  assert.ok(cacheFiles(s.root).some((f) => /-trex-author-composer-S18-not-started-[0-9a-f]{8}\.manifest\.json$/.test(f)), cacheFiles(s.root).join(','));
+  assert.ok(!existsSync(path.join(s.root, ARM_DIR('composer'), 'S18')));
+});
+
+test('an arm run keeps the stream-json audit: a read outside the tree fails the run and writes no flow', async (t) => {
+  const outside = { type: 'tool_call', subtype: 'started', tool_call: { readToolCall: { args: { path: 'C:/Users/someone/continuous-claude/.claudedocs/answers.md' } } } };
+  const s = authorSetup(t, { run: streamRun({ extra: [outside] }) });
+  const r = await authorGroup('S18', { ...s.opts, arm: 'composer' }, s.deps);
+  assert.equal(r.exit, 1);
+  assert.match(r.problems[0], /blind violated/);
+  assert.ok(!existsSync(path.join(s.root, ARM_DIR('composer'), 'S18')));
+});
+
+test('an arm probe uses the arm ref and counts for that arm only', async (t) => {
+  const s = authorSetup(t, { run: streamRun() });
+  await authorGroup('S18', { ...s.opts, arm: 'composer', probe: true }, s.deps);
+  assert.equal(ledgerLines(s.ledger)[0].ref, 'trex-composer-probe');
+  assert.equal(benchRuns(s.ledger, 'composer').used, 1);
+  assert.equal(benchRuns(s.ledger).used, 0);
+});
+
+test('a composer retry after a failed run is numbered and keeps the group cap', async (t) => {
+  // The second composer run on S1, S8, S14 and S18 and its retries share the group cap, as in the grok arm.
+  const s = authorSetup(t, { run: () => timedOutRun() });
+  const o = { ...s.opts, arm: 'composer' };
+  assert.equal((await authorGroup('S18', o, s.deps)).exit, 1);
+  assert.equal((await authorGroup('S18', o, s.deps)).exit, 2, 'a second run needs a retry flag');
+  for (let i = 1; i < GROUP_CAP; i++) assert.equal((await authorGroup('S18', { ...o, retry: true }, s.deps)).exit, 1);
+  assert.equal((await authorGroup('S18', { ...o, retry: true }, s.deps)).exit, 3);
+  assert.ok(cacheFiles(s.root).some((f) => /-trex-author-composer-S18-r1\.manifest\.json$/.test(f)));
+});
+
+test('main --arm: the dry run names the arm, model and folder and shows the arm count and cap', async (t) => {
+  // Breaks when the dry run prints the grok count or cap for another arm.
+  const s = authorSetup(t, { ledger: `${startLines(3, 'trex-S1')}\n${armLedger('composer', 1)}${armLedger('xhigh', 1)}` });
+  const c = await cli(s, ['--group', 'S1', '--arm', 'composer', '--dry-run']);
+  assert.equal(c.code, 0, c.text);
+  assert.match(c.text, /arm: composer \(composer-2\.5\)/);
+  assert.match(c.text, /flows: scripts\/trex\/bench\/flows-composer\/S1/);
+  assert.match(c.text, /bench runs: 1 of 24/);
+  const x = await cli(s, ['--group', 'S8', '--arm', 'xhigh', '--dry-run']);
+  assert.match(x.text, /arm: xhigh \(grok-4\.7-xhigh\)/);
+  assert.match(x.text, /bench runs: 1 of 4/);
+  const g = await cli(s, ['--group', 'S1', '--dry-run']);
+  assert.match(g.text, /bench runs: 3 of 24/);
+  assert.match(g.text, /arm: grok \(grok-4\.7-high\)/);
+  assert.equal(runsOf(s), 0);
+});
+
+test('main --all --arm xhigh runs the four variance groups and no others', async (t) => {
+  // Breaks when --all walks all 16 groups for an arm with a cap of 4.
+  const s = authorSetup(t, { run: streamRun() });
+  const r = await cli(s, ['--all', '--arm', 'xhigh']);
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(ledgerLines(s.ledger).filter((l) => l.phase === 'start').map((l) => l.ref), ['S1', 'S8', 'S14', 'S18'].map((g) => `trex-xhigh-${g}`));
+});
+
+test('main --all --arm composer --dry-run walks all 16 groups', async (t) => {
+  const s = authorSetup(t);
+  const r = await cli(s, ['--all', '--arm', 'composer', '--dry-run']);
+  assert.equal(r.code, 0, r.text);
+  assert.equal(r.text.split('\n').filter((l) => l.startsWith('dry run: ')).length, 16);
+});
+
+test('freeze --arm xhigh reads the arm manifests and flows dir and writes frozen-xhigh.json, not frozen.json', (t) => {
+  // Breaks when an arm freeze reads grok manifests or overwrites frozen.json.
+  const s = freezeSetup(t, { flowsDir: ARM_DIR('xhigh'), stem: 'trex-author-xhigh', s1Flow: flowYaml().replace('gate-blocks-inline-body', 'first-flow-here'), noMarker: true, opts: { groups: undefined, fixes: undefined, arm: 'xhigh' } });
+  for (const g of ['S14', 'S18']) put(s.opts.cacheDir, `2026-11-02-trex-author-xhigh-${g}.manifest.json`, JSON.stringify({ group: g, runId: `run-${g}`, model: 'grok-4.7-xhigh', retries: 0 }));
+  put(s.opts.cacheDir, '2026-11-02-trex-author-S1.manifest.json', JSON.stringify({ group: 'S1', runId: 'grok-run', model: 'grok-4.7-high', retries: 0 }));
+  const r = freeze('abc123', s.opts, { git: s.git });
+  assert.deepEqual(Object.keys(r.groups), ['S1', 'S8', 'S14', 'S18']);
+  assert.equal(r.groups.S1.runId, 'run-S1', 'the xhigh manifest, not the grok one');
+  assert.equal(r.hostFlows, 0);
+  const file = JSON.parse(readFileSync(path.join(s.root, 'scripts/trex/bench/frozen-xhigh.json'), 'utf8'));
+  assert.equal(file.arm, 'xhigh');
+  assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/frozen.json')));
+});
+
+test('freeze --arm composer with a host flow keeps the marker rule', (t) => {
+  const s = freezeSetup(t, { flowsDir: ARM_DIR('composer'), stem: 'trex-author-composer', noMarker: true, opts: { arm: 'composer', groups: ['S1', 'S8'], fixes: { S1: 'f1', S8: 'f8' } } });
+  assert.throws(() => freeze('abc123', s.opts, { git: s.git }), /review/i);
+});
+
+test('freeze for the grok arm still writes frozen.json and records the arm', (t) => {
+  const s = freezeSetup(t);
+  const file = freeze('abc123', s.opts, { git: s.git });
+  assert.equal(file.arm, 'grok');
+  assert.ok(existsSync(path.join(s.root, 'scripts/trex/bench/frozen.json')));
+});
+
+test('--reparse --arm composer writes to the composer folder and refuses a raw file of another arm', async (t) => {
+  // Breaks when reparse ignores the arm: composer flows would land in the grok folder.
+  const s = reparseSetup(t);
+  const composerRaw = put(s.root, `.claude/cache/e2e/${RAW_DAY}-trex-author-composer-S18.raw.json`, streamFor(path.join(s.root, 'old-tree')));
+  assert.equal((await cli(s, ['--reparse', s.raw, '--group', 'S18', '--arm', 'composer'])).code, 2, 'a grok raw file is not a composer raw file');
+  assert.equal((await cli(s, ['--reparse', composerRaw, '--group', 'S18'])).code, 2, 'a composer raw file is not a grok raw file');
+  const ok = await cli(s, ['--reparse', composerRaw, '--group', 'S18', '--arm', 'composer']);
+  assert.equal(ok.code, 0, ok.text);
+  assert.ok(existsSync(path.join(s.root, ARM_DIR('composer'), 'S18', 'gate.yaml')));
+  assert.ok(!existsSync(path.join(s.root, 'scripts/trex/bench/flows/S18')));
+  assert.ok(existsSync(path.join(s.root, `.claude/cache/e2e/${RAW_DAY}-trex-author-composer-S18-reparse.manifest.json`)));
 });

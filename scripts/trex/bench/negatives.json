@@ -1,0 +1,81 @@
+{
+  "negatives": [
+    {
+      "id": "N2",
+      "head": "b928c1f1",
+      "why": "Spec 7 and 13.1 clean negative (PR #251, pre-pr.mjs). At the freeze no group flow has paths on pre-pr.mjs, so it maps no_match and is not counted as tested."
+    },
+    {
+      "id": "N3",
+      "head": "a3946cac",
+      "why": "Spec 7 and 13.1 clean negative (PR #237, guard-log v2). Maps to S6 and S18, and both fixes are ancestors."
+    },
+    {
+      "id": "N6",
+      "head": "d57c7859",
+      "why": "Spec 7 and 13.1 clean negative (PR #224, land-pr e2e copy, host-win). At the freeze no group flow has paths on land-pr.ps1 or its test, so it maps no_match and is not counted as tested."
+    },
+    {
+      "id": "N7",
+      "head": "4ff7dc66",
+      "why": "Spec 7 and 13.1 clean negative (PR #210). Maps to S4 and S5, and both fixes are ancestors. It is also the S8 author range start. Spec 7 names it, so it stays. Later commits on the matched mod files include one fix (03bc9777, effort after reload) and three feat commits, so it is the weakest of the clean negatives."
+    },
+    {
+      "id": "N8",
+      "head": "016fcdf1",
+      "why": "Spec 7 and 13.1 clean negative (PR #226, os resume fields). Maps to S4 and S5, and both fixes are ancestors. Only a later feat commit (29eeb2f8) touches the matched file."
+    },
+    {
+      "id": "N9",
+      "head": "77c9bad4",
+      "why": "Spec 7 and 13.1 clean negative (PR #247, review matrix bands), checked against 3f333f30 as spec 7 asks. 3f333f30 is not an ancestor of 77c9bad4 (it arrived in PR #249), and the autoOf and autoConfirm code it fixes does not exist at 77c9bad4, so it is not a follow-up fix to #247. Maps to S6, S9 and S11; all fixes are ancestors. Later commits on the matched review-router.config.json: feat commits, an unrelated grok timeout fix (af3eb43c) and 3f333f30 from PR #249."
+    },
+    {
+      "id": "K1",
+      "head": "3cb2bd65",
+      "kind": "skip",
+      "why": "Spec 7 skip-class (PR #201, trivy baseline bank). Expect \"# skipped no_match\": no frozen flow has paths on its changed files."
+    },
+    {
+      "id": "K2",
+      "head": "6d77dacc",
+      "kind": "skip",
+      "why": "Spec 7 skip-class (PR #228, artifacts lane board). Expect \"# skipped no_match\": no frozen flow has paths on its changed files."
+    },
+    {
+      "id": "N10",
+      "head": "41d77f56",
+      "why": "First-parent merge on fork/main, 2026-11-02 (PR #254, review-status severity). Changed scripts/github/review-status.mjs meets flow paths of S6, S9, S10, S11, S12 and S14; the fix of each is an ancestor. No later commit cites #254, and no later commit touches the matched file."
+    },
+    {
+      "id": "N11",
+      "head": "86167153",
+      "why": "First-parent merge on fork/main, 2026-11-02 (PR #255, lane board republish reminder). Changed .claude/settings.json.template meets an S8 flow path; the S8 fix is an ancestor. No later commit cites #255, and no later commit touches the matched file."
+    },
+    {
+      "id": "N12",
+      "head": "2df7de63",
+      "why": "First-parent merge on fork/main, 2026-10-30 (PR #222, os ask parser). Changed agentic-os/brief.ts meets flow paths of S3, S4 and S5; all three fixes are ancestors. No later commit touches the matched file. One later test commit (437b5033) names #222 when it keeps the parser bugs found in its review as a corpus; it is not a fix to the covered file."
+    },
+    {
+      "id": "N13",
+      "head": "4b516798",
+      "why": "First-parent merge on fork/main, 2026-11-03 (PR #265, slot queue limits). Changed review-router.config.json meets an S11 flow path; the S11 fix is an ancestor. The only later commit on the matched file is the feat b7b64505, which also names #265 in a note about concurrent edits."
+    },
+    {
+      "id": "N14",
+      "head": "1253d750",
+      "why": "First-parent merge on fork/main, 2026-11-03 (PR #266, free slot queue; the fork/main tip when chosen). Four changed files meet flow paths of S10 and S11; both fixes are ancestors. No later commit exists to cite it or to touch the matched files."
+    },
+    {
+      "id": "N15",
+      "head": "930400bc",
+      "why": "First-parent merge on fork/main, 2026-10-29 (PR #211, remove maestro). It carries the S8 fix 574eb221, so the S8 fix is an ancestor and the head is the repaired state. Five changed files meet S8 flow paths. Later commits on the matched files are feat and perf only (dc8646c9, ba37fc03). One later land-pr fix (5e264068) names #211 only as an example in prose."
+    },
+    {
+      "id": "N16",
+      "head": "52d8c594",
+      "why": "First-parent merge on fork/main, 2026-11-01 (PR #242, pr-flow quickfixes). Changed pr-loop/model.ts meets an S10 flow path; the S10 fix is an ancestor. Later commits on it are feat commits only. One later test commit (b6436cae) names #242 to explain a hook-test expectation; it is not a fix to the covered file."
+    }
+  ]
+}

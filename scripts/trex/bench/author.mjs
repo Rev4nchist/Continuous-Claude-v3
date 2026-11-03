@@ -11,6 +11,8 @@
  *   node scripts/trex/bench/author.mjs --map-negatives [--sha <sha>] [--negatives <file>]
  *   node scripts/trex/bench/author.mjs --host-digest [--sha <sha>]  the digest a human review writes to host-review.json
  *   node scripts/trex/bench/author.mjs --freeze --sha <sha>         the sha is a commit that holds the flows; this script never commits
+ * Model arms (arms spec section 4): add `--arm <grok|composer|xhigh|grok2>` to any of these. The default arm is grok, the original bench.
+ * An arm has its own model, flows folder, ledger ref prefix, run cap, groups and frozen file (see ARMS). `--model` must be a model of the arm.
  *
  * Exit codes follow cursor-review.mjs: 0 ran, 1 run failure, 2 bad input or refused by a rule, 3 cap reached or the run did not start.
  * Exit 3 for a run that did not start: runAgent found no free grok slot (grok-busy) and never spawned. The ledger end line has notStarted: true,
@@ -26,7 +28,7 @@ import { parse } from 'yaml';
 import * as cursor from '../../github/cursor-review.mjs';
 import {
   EXIT, WEEKLY_CAP, buildAgentEnv, countRuns, defaultLedgerPath, finishRun, parseReviewOutput, prepareReview, readLedger, reserveRun,
-  resolveAgent, resolveModel, runAgent,
+  resolveAgent, runAgent,
 } from '../../github/cursor-review.mjs';
 import { withLock } from '../../github/lib/file-lock.mjs';
 import { matchGlob } from '../../github/review-router.mjs';
@@ -83,6 +85,37 @@ export const GROUPS = Object.freeze({
   S18: { range: '6bc94082^1..6bc94082', pre: 'a309dd66', fix: '82a06d63', host: null },
 });
 
+const GROUP_IDS = Object.freeze(Object.keys(GROUPS));
+/** The four groups with short container ranges: the xhigh and grok2 arms run them, and composer runs them a second time. */
+const VARIANCE_GROUPS = Object.freeze(['S1', 'S8', 'S14', 'S18']);
+const BENCH_DIR = 'scripts/trex/bench';
+/** The authoring models (arms spec section 4). This list is not the review allowlist of cursor-review.mjs. -fast and auto are refused before it is read. */
+export const AUTHOR_MODELS = Object.freeze(['grok-4.7-high', 'grok-4.7-xhigh', 'composer-2.5']);
+/**
+ * The model arms (arms spec sections 2 and 4). `models` is what the arm may run (the first is its default), `refPrefix` is the ledger ref prefix,
+ * `stem` is the cache file prefix (empty for grok, so the old grok manifests keep their names) and `cap` is the arm's own run cap.
+ */
+export const ARMS = Object.freeze({
+  grok: { name: 'grok', models: ['grok-4.7-high', 'grok-4.7-xhigh'], flowsDir: FLOWS_DIR, refPrefix: 'trex-', stem: '', cap: BENCH_CAP, groups: GROUP_IDS, frozen: 'frozen.json' },
+  composer: { name: 'composer', models: ['composer-2.5'], flowsDir: `${BENCH_DIR}/flows-composer`, refPrefix: 'trex-composer-', stem: 'composer-', cap: 24, groups: GROUP_IDS, frozen: 'frozen-composer.json' },
+  xhigh: { name: 'xhigh', models: ['grok-4.7-xhigh'], flowsDir: `${BENCH_DIR}/flows-xhigh`, refPrefix: 'trex-xhigh-', stem: 'xhigh-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-xhigh.json' },
+  grok2: { name: 'grok2', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-grok2`, refPrefix: 'trex-grok2-', stem: 'grok2-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-grok2.json' },
+});
+export const ARM_NAMES = Object.freeze(Object.keys(ARMS));
+const OTHER_PREFIXES = Object.freeze(ARM_NAMES.filter((n) => n !== 'grok').map((n) => ARMS[n].refPrefix));
+
+/** The arm and model of a run, or { error }. opts: { arm?, model? }. A model must be an authoring model, never -fast or auto, and one the arm runs. */
+export function planRun(opts = {}) {
+  const arm = Object.hasOwn(ARMS, opts.arm ?? 'grok') ? ARMS[opts.arm ?? 'grok'] : null;
+  if (!arm) return { error: `unknown arm ${JSON.stringify(opts.arm)}: use ${ARM_NAMES.join(', ')}` };
+  const model = opts.model === undefined || opts.model === null ? arm.models[0] : String(opts.model);
+  if (/fast/i.test(model)) return { error: `model ${JSON.stringify(model)} is a fast variant: authoring never runs in fast mode` };
+  if (model.trim().toLowerCase() === 'auto') return { error: 'model auto is refused: pass an explicit authoring model' };
+  if (!AUTHOR_MODELS.includes(model)) return { error: `model ${JSON.stringify(model)} is not allowed: use ${AUTHOR_MODELS.join(', ')}` };
+  if (!arm.models.includes(model)) return { error: `arm ${arm.name} runs ${arm.models.join(' or ')}, not ${model}` };
+  return { arm, model };
+}
+
 const HOST_NONE = 'Write container flows only. Do not write `profile: host` flows.';
 const HOST_TEXT = 'A flow with `profile: host` runs on the real Windows machine. It may use only two action shapes. '
   + 'Shape 1: driver mod-event with `{test: <name>}`, which runs `claude plugin test`. '
@@ -99,16 +132,24 @@ const dayOf = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${two
 /** The ids of runs whose end line says notStarted (no grok slot, no spawn). The same rule as countRuns in cursor-review.mjs. */
 const notStartedIds = (entries) => new Set(entries.filter((e) => e.notStarted === true && e.id).map((e) => e.id));
 
+/** True when a ledger ref belongs to the arm. The grok arm owns "trex-" except the refs of the other arms. */
+function refInArm(ref, arm) {
+  if (typeof ref !== 'string' || !ref.startsWith(arm.refPrefix)) return false;
+  return arm.name !== 'grok' || !OTHER_PREFIXES.some((p) => ref.startsWith(p));
+}
+
 /**
- * Bench authoring runs in the ledger. Spec 13.4: a run counts when its ref starts with "trex-". One run is one id, so a start
- * and an end line count once. A run that never started (end line notStarted) does not count. There is no time window: the cap is for the whole bench.
+ * Bench authoring runs of one arm in the ledger (default grok). Spec 13.4: a run counts when its ref belongs to the arm (grok: "trex-" without
+ * the other arm prefixes). One run is one id, so a start and an end line count once. A run that never started (end line notStarted) does not count.
+ * There is no time window: the cap is for the whole arm.
  */
-export function benchRuns(ledgerPath) {
+export function benchRuns(ledgerPath, armName = 'grok') {
+  const arm = ARMS[armName];
   const { entries } = readLedger(ledgerPath);
   const unstarted = notStartedIds(entries);
   const byId = new Map();
   for (const e of entries) {
-    if (typeof e.ref === 'string' && e.ref.startsWith('trex-') && !unstarted.has(e.id) && !byId.has(e.id)) byId.set(e.id, e.ref);
+    if (refInArm(e.ref, arm) && !unstarted.has(e.id) && !byId.has(e.id)) byId.set(e.id, e.ref);
   }
   const byRef = {};
   for (const ref of byId.values()) byRef[ref] = (byRef[ref] ?? 0) + 1;
@@ -127,9 +168,9 @@ function lastOutcome(ledgerPath, ref) {
 }
 
 /** Refuses a run that would break a rule. { exit, reason } or null. Runs before reserveRun and before any tree is built. */
-function budgetGate({ ledgerPath, ref, probe, retry, now, maxRuns }) {
-  const { used, byRef } = benchRuns(ledgerPath);
-  if (used >= maxRuns) return { exit: EXIT.CAP, reason: `bench cap reached: ${used} of ${maxRuns} runs (ref prefix trex-)` };
+function budgetGate({ ledgerPath, ref, probe, retry, now, maxRuns, arm }) {
+  const { used, byRef } = benchRuns(ledgerPath, arm.name);
+  if (used >= maxRuns) return { exit: EXIT.CAP, reason: `bench cap reached: ${used} of ${maxRuns} runs (arm ${arm.name}, ref prefix ${arm.refPrefix})` };
   const weekly = countRuns(readLedger(ledgerPath).entries, { now });
   if (weekly >= WEEKLY_CAP) return { exit: EXIT.CAP, reason: `weekly cap reached: ${weekly} of ${WEEKLY_CAP} runs in the last 7 days` };
   const prior = byRef[ref] ?? 0;
@@ -362,10 +403,10 @@ export function renderPrompt(template, vars) {
   return template.replace(/\{(ref|group|folder|files|fileCount|hostRules)\}/g, (_, k) => String(vars[k]));
 }
 
-function promptFor(template, group, files, ref) {
+function promptFor(template, group, files, ref, arm) {
   const shown = files.slice(0, FILES_SHOWN);
   const more = files.length > shown.length ? `\n... and ${files.length - shown.length} more` : '';
-  return renderPrompt(template, { ref, group, folder: `${FLOWS_DIR}/${group}/`, files: `${shown.join('\n')}${more}`, fileCount: files.length, hostRules: hostRules(GROUPS[group].host) });
+  return renderPrompt(template, { ref, group, folder: `${arm.flowsDir}/${group}/`, files: `${shown.join('\n')}${more}`, fileCount: files.length, hostRules: hostRules(GROUPS[group].host) });
 }
 
 // ---------- the tree ----------
@@ -470,14 +511,17 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function validate(group, opts) {
-  if (!Object.hasOwn(GROUPS, group)) return `unknown group ${JSON.stringify(group)}: use one of ${Object.keys(GROUPS).join(', ')}`;
-  const m = resolveModel({ model: opts.model ?? DEFAULT_MODEL });
-  return m.ok ? null : m.reason;
+/** { arm, model } for a run, or { error }. Checks the arm, the model (planRun) and that the group is one of the arm's groups. */
+function checkRun(group, opts) {
+  const plan = planRun(opts);
+  if (plan.error) return plan;
+  if (!Object.hasOwn(GROUPS, group)) return { error: `unknown group ${JSON.stringify(group)}: use one of ${plan.arm.groups.join(', ')}` };
+  if (!plan.arm.groups.includes(group)) return { error: `group ${group} is not in arm ${plan.arm.name}: use one of ${plan.arm.groups.join(', ')}` };
+  return plan;
 }
 
 /** Builds and checks the tree and the prompt. { prep, prompt, leaks } or { exit, problems }. The tree is cleaned up on a refusal. */
-async function stage(group, opts, deps, ref) {
+async function stage(group, opts, deps, ref, arm) {
   const git = deps.git ?? benchGit(opts.root);
   let prep;
   try { prep = await (deps.prepare ?? prepareReview)({ root: opts.root, input: { range: GROUPS[group].range } }); } catch (err) {
@@ -488,17 +532,17 @@ async function stage(group, opts, deps, ref) {
   const leaks = leakScan(prep.dir, rows.filter((r) => r.id === group));
   const crossGroup = leakScan(prep.dir, rows.filter((r) => r.id !== group));
   const template = deps.template ?? readFileSync(PROMPT_FILE, 'utf8');
-  const prompt = promptFor(template, group, prep.files, ref);
+  const prompt = promptFor(template, group, prep.files, ref, arm);
   const refuse = (problems) => { if (!opts.keepTree) prep.cleanup(); return { exit: EXIT.REFUSED, problems }; };
   if (!opts.dryRun && leaks.length > 0) return refuse([`leak scan found ${leaks.length} hit(s) before the agent started`, ...leaks]);
   if (!opts.dryRun && prompt.length > MAX_PROMPT_CHARS) return refuse([`the prompt is ${prompt.length} chars, over the limit of ${MAX_PROMPT_CHARS}`]);
   return { prep, prompt, leaks, crossGroup, git, group };
 }
 
-function dryRunResult(group, opts, ledgerPath, now, st) {
-  const { used } = benchRuns(ledgerPath);
+function dryRunResult(group, opts, ledgerPath, now, st, plan) {
+  const { used } = benchRuns(ledgerPath, plan.arm.name);
   const weekly = countRuns(readLedger(ledgerPath).entries, { now });
-  const info = { group, range: GROUPS[group].range, tree: st.prep.dir, changedFiles: st.prep.files.length, promptChars: st.prompt.length, leaks: st.leaks, crossGroup: st.crossGroup.length, benchRuns: used, benchCap: BENCH_CAP, weekly, weeklyCap: WEEKLY_CAP };
+  const info = { group, arm: plan.arm.name, model: plan.model, flows: `${plan.arm.flowsDir}/${group}`, range: GROUPS[group].range, tree: st.prep.dir, changedFiles: st.prep.files.length, promptChars: st.prompt.length, leaks: st.leaks, crossGroup: st.crossGroup.length, benchRuns: used, benchCap: opts.maxRuns ?? plan.arm.cap, weekly, weeklyCap: WEEKLY_CAP };
   if (!opts.keepTree) st.prep.cleanup();
   const bad = st.leaks.length > 0 || st.prompt.length > MAX_PROMPT_CHARS;
   return { exit: bad ? EXIT.REFUSED : EXIT.OK, dryRun: true, info, files: [], manifest: null, usage: null, problems: st.leaks };
@@ -525,23 +569,24 @@ async function callAgent({ group, opts, deps, st, reserved, model, fmt }) {
 export async function authorGroup(group, opts = {}, deps = {}) {
   const now = deps.now ?? Date.now;
   const fail = (exit, problems) => ({ exit, runId: null, files: [], manifest: null, usage: null, problems });
-  const bad = validate(group, opts);
-  if (bad) return fail(EXIT.REFUSED, [bad]);
+  const plan = checkRun(group, opts);
+  if (plan.error) return fail(EXIT.REFUSED, [plan.error]);
+  const { arm, model } = plan;
   const probe = Boolean(opts.probe);
-  const ref = probe ? 'trex-probe' : `trex-${group}`;
+  const ref = `${arm.refPrefix}${probe ? 'probe' : group}`;
   const ledgerPath = opts.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
   // A first look, so a refused run builds no tree. The real check runs again under the lock, just before the reservation.
-  const gate = opts.dryRun ? null : budgetGate(gateArgs({ ledgerPath, ref, probe, opts, now }));
+  const gate = opts.dryRun ? null : budgetGate(gateArgs({ ledgerPath, ref, probe, opts, now, arm }));
   if (gate) return fail(gate.exit, [gate.reason]);
-  const folder = path.join(opts.root, ...FLOWS_DIR.split('/'), group);
+  const folder = path.join(opts.root, ...arm.flowsDir.split('/'), group);
   if (!opts.dryRun && !probe && !opts.retry && existsSync(folder) && readdirSync(folder).length > 0) return fail(EXIT.REFUSED, [`${folder} is not empty: pass --retry to replace it`]);
-  const st = await stage(group, opts, deps, ref);
+  const st = await stage(group, opts, deps, ref, arm);
   if (!st.prep) return fail(st.exit, st.problems);
-  if (opts.dryRun) return dryRunResult(group, opts, ledgerPath, now(), st);
-  try { return await reservedRun({ group, opts, deps, st, ref, probe, ledgerPath, folder, now }); } finally { if (!opts.keepTree) st.prep.cleanup(); }
+  if (opts.dryRun) return dryRunResult(group, opts, ledgerPath, now(), st, plan);
+  try { return await reservedRun({ group, opts, deps, st, ref, probe, ledgerPath, folder, now, arm, model }); } finally { if (!opts.keepTree) st.prep.cleanup(); }
 }
 
-const gateArgs = ({ ledgerPath, ref, probe, opts, now }) => ({ ledgerPath, ref, probe, retry: opts.retry, now: now(), maxRuns: opts.maxRuns ?? BENCH_CAP });
+const gateArgs = ({ ledgerPath, ref, probe, opts, now, arm }) => ({ ledgerPath, ref, probe, retry: opts.retry, now: now(), maxRuns: opts.maxRuns ?? arm.cap, arm });
 const BENCH_LOCK_WAIT_MS = 10_000;
 
 /**
@@ -549,12 +594,11 @@ const BENCH_LOCK_WAIT_MS = 10_000;
  * Returns { reserved } or { refusal: { exit, problems } }.
  */
 function reserveUnderLock(c) {
-  const { opts, ref, probe, ledgerPath, now } = c;
-  const model = opts.model ?? DEFAULT_MODEL;
+  const { opts, ref, probe, ledgerPath, now, arm, model } = c;
   const sessionId = (c.deps.env ?? process.env).CLAUDE_CODE_SESSION_ID || null;
   mkdirSync(path.dirname(ledgerPath), { recursive: true });
   const locked = withLock(`${ledgerPath}.trex-bench`, { lockWaitMs: opts.lockWaitMs ?? BENCH_LOCK_WAIT_MS }, () => {
-    const gate = budgetGate(gateArgs({ ledgerPath, ref, probe, opts, now }));
+    const gate = budgetGate(gateArgs({ ledgerPath, ref, probe, opts, now, arm }));
     if (gate) return { refusal: { exit: gate.exit, problems: [gate.reason] } };
     return { reserved: reserveRun(ledgerPath, { ref, model, band: 'MID', sessionId }, { now }) };
   });
@@ -565,13 +609,12 @@ function reserveUnderLock(c) {
 }
 
 async function reservedRun(c) {
-  const { group, opts, deps, st, ref, probe, ledgerPath, folder, now } = c;
-  const model = opts.model ?? DEFAULT_MODEL;
+  const { group, opts, deps, st, ref, probe, ledgerPath, folder, now, arm, model } = c;
   const sessionId = (deps.env ?? process.env).CLAUDE_CODE_SESSION_ID || null;
   const { reserved, refusal } = reserveUnderLock(c);
   if (refusal) return { exit: refusal.exit, runId: null, files: [], manifest: null, usage: null, problems: refusal.problems };
   const { run, parsed } = await callAgent({ group, opts, deps, st, reserved, model, fmt: 'stream-json' });
-  if (run.notStarted) return notStartedRun({ group, opts, ref, probe, reserved, model, sessionId, run, now, ledgerPath });
+  if (run.notStarted) return notStartedRun({ group, opts, ref, probe, reserved, model, sessionId, run, now, ledgerPath, arm });
   const error = parsed ? runError(run, parsed, model) : run.error;
   const out = parsed && !error ? readAnswer(parsed.text, st, deps) : { files: [], manifest: null, problems: [] };
   const audit = analyzeStream(run.stdout, st.prep.dir);
@@ -579,10 +622,10 @@ async function reservedRun(c) {
   const problems = [...(violated ? [outsideProblem(audit.outsideTree)] : []), ...(error ? [error] : []), ...out.problems];
   const exit = (error || violated || (!probe && problems.length > 0)) ? EXIT.FAILED : EXIT.OK;
   const written = exit === EXIT.OK && !probe ? writeFlows(folder, out.files) : [];
-  const retries = (benchRuns(ledgerPath).byRef[ref] ?? 1) - 1;
+  const retries = (benchRuns(ledgerPath, arm.name).byRef[ref] ?? 1) - 1;
   finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, durationMs: run.durationMs ?? null, exit, timedOut: Boolean(run.timedOut), usage: parsed?.usage ?? null, ...(problems.length ? { error: problems[0].slice(0, 300) } : {}) }, { now });
-  const rec = { group, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
-  saveArtifacts({ opts, now, group, probe, rec, run });
+  const rec = { group, arm: arm.name, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
+  saveArtifacts({ opts, now, group, probe, rec, run, arm });
   return { exit, runId: reserved.id, files: written, manifest: out.manifest, usage: rec.usage, problems };
 }
 
@@ -592,13 +635,13 @@ async function reservedRun(c) {
  * own file name: it never replaces the manifest of an earlier run and latestManifest (freeze) never reads it. The ledger exit is 1,
  * as in cursor-review.mjs; the returned exit is 3.
  */
-function notStartedRun({ group, opts, ref, probe, reserved, model, sessionId, run, now, ledgerPath }) {
+function notStartedRun({ group, opts, ref, probe, reserved, model, sessionId, run, now, ledgerPath, arm }) {
   const waitMin = Math.round((run.waitedMs ?? 0) / 60_000);
   const reason = `not started: ${run.error ?? 'no grok slot'} (waited ${waitMin} min); the agent did not run and the run is not counted against the caps`;
   finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, durationMs: 0, exit: EXIT.FAILED, timedOut: false, waitedMs: run.waitedMs ?? 0, notStarted: true, error: reason.slice(0, 300) }, { now });
   const dir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
-  const stem = `${dayOf(now())}-trex-author-${probe ? 'probe' : slug(group)}-not-started-${reserved.id.slice(0, 8)}`;
-  writeJson(path.join(dir, `${stem}.manifest.json`), { group, ref, runId: reserved.id, model, status: 'not-started', exit: EXIT.CAP, error: reason, waitedMs: run.waitedMs ?? 0, notStarted: true });
+  const stem = `${dayOf(now())}-trex-author-${arm.stem}${probe ? 'probe' : slug(group)}-not-started-${reserved.id.slice(0, 8)}`;
+  writeJson(path.join(dir, `${stem}.manifest.json`), { group, arm: arm.name, ref, runId: reserved.id, model, status: 'not-started', exit: EXIT.CAP, error: reason, waitedMs: run.waitedMs ?? 0, notStarted: true });
   return { exit: EXIT.CAP, runId: reserved.id, files: [], manifest: null, usage: null, problems: [reason], notStarted: true };
 }
 
@@ -618,9 +661,9 @@ function readAnswer(text, st, deps) {
   return { ...out, problems: [...out.problems, ...lintAll(out.files, st.prep.files, treeHas)] };
 }
 
-function saveArtifacts({ opts, now, group, probe, rec, run }) {
+function saveArtifacts({ opts, now, group, probe, rec, run, arm }) {
   const dir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
-  const stem = path.join(dir, `${dayOf(now())}-trex-author-${probe ? 'probe' : slug(group)}${!probe && rec.retries > 0 ? `-r${rec.retries}` : ''}`);
+  const stem = path.join(dir, `${dayOf(now())}-trex-author-${arm.stem}${probe ? 'probe' : slug(group)}${!probe && rec.retries > 0 ? `-r${rec.retries}` : ''}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${stem}.raw.json`, run.stdout ?? '');
   writeJson(probe ? `${stem}.json` : `${stem}.manifest.json`, rec);
@@ -651,8 +694,8 @@ function readJsonOrNull(file) {
 }
 
 /** Refuses a reparse that would break a rule. A problem text, or null. */
-function reparseRefusal(raw, group, folder) {
-  if (!new RegExp(`-${group}(?:-r\\d+)?\\.raw\\.json$`).test(path.basename(raw))) return `${path.basename(raw)} is not a raw file of group ${group}`;
+function reparseRefusal(raw, group, folder, arm) {
+  if (!new RegExp(`-trex-author-${arm.stem}${group}(?:-r\\d+)?\\.raw\\.json$`).test(path.basename(raw))) return `${path.basename(raw)} is not a raw file of group ${group} in arm ${arm.name}`;
   if (!existsSync(raw)) return `${raw} does not exist`;
   if (existsSync(folder) && readdirSync(folder).length > 0) return `${folder} is not empty: a reparse never replaces flows`;
   return null;
@@ -666,11 +709,12 @@ function reparseRefusal(raw, group, folder) {
  */
 export async function reparseGroup(rawFile, group, opts = {}, deps = {}) {
   const fail = (exit, problems) => ({ exit, runId: null, files: [], manifest: null, usage: null, problems, manifestFile: null });
-  const bad = validate(group, opts);
-  if (bad) return fail(EXIT.REFUSED, [bad]);
+  const plan = checkRun(group, opts);
+  if (plan.error) return fail(EXIT.REFUSED, [plan.error]);
+  const { arm } = plan;
   const raw = path.resolve(String(rawFile ?? ''));
-  const folder = path.join(opts.root, ...FLOWS_DIR.split('/'), group);
-  const refusal = reparseRefusal(raw, group, folder);
+  const folder = path.join(opts.root, ...arm.flowsDir.split('/'), group);
+  const refusal = reparseRefusal(raw, group, folder, arm);
   if (refusal) return fail(EXIT.REFUSED, [refusal]);
   const stdout = readFileSync(raw, 'utf8');
   const treeDir = streamCwd(stdout);
@@ -687,7 +731,7 @@ export async function reparseGroup(rawFile, group, opts = {}, deps = {}) {
   const exit = problems.length > 0 ? EXIT.FAILED : EXIT.OK;
   const written = exit === EXIT.OK ? writeFlows(folder, out.files) : [];
   const orig = readJsonOrNull(raw.replace(/\.raw\.json$/, '.manifest.json'));
-  const rec = { group, ref: `trex-${group}`, runId: orig?.runId ?? null, model: orig?.model ?? opts.model ?? DEFAULT_MODEL, usage: parsed.usage ?? null, retries: orig?.retries ?? 0, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', reparsedFrom: raw, ...audit, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
+  const rec = { group, arm: arm.name, ref: `${arm.refPrefix}${group}`, runId: orig?.runId ?? null, model: orig?.model ?? plan.model, usage: parsed.usage ?? null, retries: orig?.retries ?? 0, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', reparsedFrom: raw, ...audit, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
   const manifestFile = raw.replace(/\.raw\.json$/, '-reparse.manifest.json');
   writeJson(manifestFile, rec);
   return { exit, runId: rec.runId, files: written, manifest: out.manifest, usage: rec.usage, problems, manifestFile };
@@ -793,8 +837,8 @@ const gitText = (git, args, what) => {
   return r.stdout.trim();
 };
 
-function latestManifest(cacheDir, group) {
-  const re = new RegExp(`^(\\d{4}-\\d{2}-\\d{2})-trex-author-${group}(?:-r(\\d+))?(-reparse)?\\.manifest\\.json$`);
+function latestManifest(cacheDir, group, arm) {
+  const re = new RegExp(`^(\\d{4}-\\d{2}-\\d{2})-trex-author-${arm.stem}${group}(?:-r(\\d+))?(-reparse)?\\.manifest\\.json$`);
   const found = existsSync(cacheDir) ? readdirSync(cacheDir).map((n) => ({ n, m: re.exec(n) })).filter((x) => x.m) : [];
   const rank = (x) => Number(x.m[2] ?? 0) * 2 + (x.m[3] ? 1 : 0);
   found.sort((a, b) => (a.m[1] === b.m[1] ? rank(a) - rank(b) : a.m[1] < b.m[1] ? -1 : 1));
@@ -811,40 +855,64 @@ function checkMarker(markerPath, digest) {
   if (marker?.sha256 !== digest) throw new Error(MARKER_ERROR);
 }
 
-function groupRecords(cacheDir, groups) {
+function groupRecords(cacheDir, groups, arm) {
   const out = {};
   for (const g of groups) {
-    const m = latestManifest(cacheDir, g);
+    const m = latestManifest(cacheDir, g, arm);
     if (!m || m.status === 'failed' || m.status === 'not-started') throw new Error(`group ${g} has no successful author manifest in ${cacheDir}`);
     out[g] = { runId: m.runId, model: m.model, usage: m.usage ?? null, retries: m.retries ?? 0, blind: m.blind ?? BLIND };
   }
   return out;
 }
 
-/**
- * Writes frozen.json for a commit `sha` that already holds the flows. It never runs git commit: the orchestrator commits.
- * Refuses a dirty flows dir, a sha whose flows tree differs from HEAD, and a missing or stale host review marker.
- * opts: { root, flowsDir, groups, fixes, cacheDir, markerPath, negatives, outFile }. Returns the frozen record.
- */
-export function freeze(sha, opts, deps = {}) {
-  const git = deps.git ?? benchGit(opts.root);
-  const flowsDir = opts.flowsDir ?? FLOWS_DIR;
-  const groups = opts.groups ?? Object.keys(GROUPS);
-  const cacheDir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
+/** The number of host flows (profile host) in the arm's groups at a commit. */
+function hostFlowCount(git, sha, flowsDir, groups) {
+  return groups.flatMap((g) => loadFlows(git, sha, `${flowsDir}/${g}`)).filter((f) => f.profile === 'host').length;
+}
+
+/** The flows tree id at a commit. Refuses a dirty flows dir and a commit whose flows tree differs from HEAD. */
+function checkedFlowsTree(git, sha, flowsDir) {
   if (gitText(git, ['status', '--porcelain', '--', flowsDir], 'git status') !== '') throw new Error(`${flowsDir} is dirty: commit or discard the changes before the freeze`);
   gitText(git, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], `commit ${sha}`);
   const flowsTree = gitText(git, ['rev-parse', `${sha}:${flowsDir}`], `rev-parse ${sha}:${flowsDir}`);
   if (flowsTree !== gitText(git, ['rev-parse', `HEAD:${flowsDir}`], `rev-parse HEAD:${flowsDir}`)) throw new Error(`the flows tree at ${sha} differs from HEAD: freeze the commit that is checked out`);
+  return flowsTree;
+}
+
+/** The host review digest, or null when the arm has no host flow: nothing needs a human review, so no marker is read. */
+function reviewDigest(git, sha, c) {
+  if (c.hostFlows === 0) return null;
+  const digest = hostFlowDigest(git, sha, { flowsDir: c.flowsDir, groups: c.groups, negativeHeads: c.negativeHeads });
+  checkMarker(c.markerPath, digest);
+  return digest;
+}
+
+/**
+ * Writes frozen.json (frozen-<arm>.json for another arm) for a commit `sha` that already holds the flows. It never runs git commit: the orchestrator commits.
+ * Refuses a dirty flows dir, a sha whose flows tree differs from HEAD, and, when the arm has host flows, a missing or stale host review marker.
+ * An arm with no host flow needs no marker and records hostFlows: 0.
+ * opts: { root, arm, flowsDir, groups, fixes, cacheDir, markerPath, negatives, outFile }. Returns the frozen record.
+ */
+export function freeze(sha, opts, deps = {}) {
+  const git = deps.git ?? benchGit(opts.root);
+  const plan = planRun({ arm: opts.arm });
+  if (plan.error) throw new Error(plan.error);
+  const { arm } = plan;
+  const flowsDir = opts.flowsDir ?? arm.flowsDir;
+  const groups = opts.groups ?? arm.groups;
+  const cacheDir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
+  const flowsTree = checkedFlowsTree(git, sha, flowsDir);
   const flows = Object.fromEntries(groups.map((g) => [g, loadFlows(git, sha, `${flowsDir}/${g}`).map((f) => ({ id: f.id, paths: f.paths }))]));
   const fixes = opts.fixes ?? Object.fromEntries(Object.entries(GROUPS).map(([g, v]) => [g, v.fix]));
   const map = mapNegatives(opts.negatives ?? [], { groups: flows, fixes }, git);
   if (map.problems.length) throw new Error(`negative mapping problems: ${map.problems.join('; ')}`);
-  const negativeHeads = negativeHeadsOf(opts.negatives ?? [], map.negatives);
-  const digest = hostFlowDigest(git, sha, { flowsDir, groups, negativeHeads });
-  checkMarker(opts.markerPath ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'host-review.json'), digest);
-  const records = groupRecords(cacheDir, groups);
-  const frozen = { sha, flowsTree, groups: records, negatives: map.negatives, skipped: map.skipped, hostReview: digest, blind: Object.values(records).every((r) => r.blind === AUDITED) ? AUDITED : BLIND };
-  writeJson(opts.outFile ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'frozen.json'), frozen);
+  const hostFlows = hostFlowCount(git, sha, flowsDir, groups);
+  const markerPath = opts.markerPath ?? path.join(opts.root, 'scripts', 'trex', 'bench', 'host-review.json');
+  const hostReview = reviewDigest(git, sha, { hostFlows, flowsDir, groups, markerPath, negativeHeads: negativeHeadsOf(opts.negatives ?? [], map.negatives) });
+  const records = groupRecords(cacheDir, groups, arm);
+  const blind = Object.values(records).every((r) => r.blind === AUDITED) ? AUDITED : BLIND;
+  const frozen = { sha, arm: arm.name, flowsTree, groups: records, negatives: map.negatives, skipped: map.skipped, hostFlows, hostReview, blind };
+  writeJson(opts.outFile ?? path.join(opts.root, 'scripts', 'trex', 'bench', arm.frozen), frozen);
   return frozen;
 }
 
@@ -875,9 +943,11 @@ export function parseArgs(argv) {
     else if (a === '--ledger') return { error: '--ledger is not a command line option' };
     else if (a === '--negatives') out.negativesFile = next();
     else if (a === '--model') out.model = next();
+    else if (a === '--arm') { out.arm = next(); if (!Object.hasOwn(ARMS, out.arm)) return { error: `--arm needs one of ${ARM_NAMES.join(', ')}` }; }
     else if (a === '--timeout-sec') out.timeoutMs = Number(next()) * 1000;
     else return { error: `unknown argument ${JSON.stringify(a)}` };
   }
+  out.arm ??= 'grok';
   const acts = [...new Set(out.actions)];
   if (out.actions.includes('reparse')) return reparseArgs(out, acts);
   if (out.actions.includes('probe') && acts.length === 2 && acts.includes('group')) out.action = 'probe';
@@ -893,6 +963,8 @@ function repoRoot() {
 
 function printDryRun(info, say) {
   say(`dry run: ${info.group} (range ${info.range})`);
+  say(`arm: ${info.arm} (${info.model})`);
+  say(`flows: ${info.flows}`);
   say(`tree: ${info.tree} (removed after the dry run; pass --keep-tree to keep it)`);
   say(`changed files: ${info.changedFiles}`);
   say(`prompt: ${info.promptChars} chars (limit ${MAX_PROMPT_CHARS})`);
@@ -904,7 +976,7 @@ function printDryRun(info, say) {
 }
 
 async function runReparse(args, root, deps, say) {
-  const r = await reparseGroup(args.reparse, args.group, { root, model: args.model }, deps);
+  const r = await reparseGroup(args.reparse, args.group, { root, model: args.model, arm: args.arm }, deps);
   say(`${args.group}: reparse exit ${r.exit}${r.problems.length ? ` (${r.problems[0]})` : ''}`);
   for (const p of r.problems.slice(1)) say(`  - ${p}`);
   say(`reparsed from: ${path.resolve(args.reparse)}`);
@@ -919,21 +991,21 @@ function loadNegatives(file) {
   return Array.isArray(v) ? v : v.negatives;
 }
 
-function groupFlows(git, sha, flowsDir) {
-  return Object.fromEntries(Object.keys(GROUPS).map((g) => [g, loadFlows(git, sha, `${flowsDir}/${g}`).map((f) => ({ id: f.id, paths: f.paths }))]));
+function groupFlows(git, sha, arm) {
+  return Object.fromEntries(arm.groups.map((g) => [g, loadFlows(git, sha, `${arm.flowsDir}/${g}`).map((f) => ({ id: f.id, paths: f.paths }))]));
 }
 
 const allFixes = () => Object.fromEntries(Object.entries(GROUPS).map(([g, v]) => [g, v.fix]));
-const mapAll = (git, sha, negatives) => mapNegatives(negatives, { groups: groupFlows(git, sha, FLOWS_DIR), fixes: allFixes() }, git);
+const mapAll = (git, sha, negatives, arm) => mapNegatives(negatives, { groups: groupFlows(git, sha, arm), fixes: allFixes() }, git);
 
 /** The digest for a human host review: the same one freeze computes, with the negative heads mapped to each group. */
-function hostDigestOf(git, sha, negatives) {
-  const negativeHeads = negativeHeadsOf(negatives, mapAll(git, sha, negatives).negatives);
-  return hostFlowDigest(git, sha, { negativeHeads });
+function hostDigestOf(git, sha, negatives, arm) {
+  const negativeHeads = negativeHeadsOf(negatives, mapAll(git, sha, negatives, arm).negatives);
+  return hostFlowDigest(git, sha, { flowsDir: arm.flowsDir, groups: arm.groups, negativeHeads });
 }
 
 async function runGroups(args, base, deps, say) {
-  const groups = args.action === 'all' ? Object.keys(GROUPS) : [args.group ?? 'S18'];
+  const groups = args.action === 'all' ? ARMS[args.arm].groups : [args.group ?? 'S18'];
   let worst = EXIT.OK;
   for (const g of groups) {
     const r = await authorGroup(g, { ...base, probe: args.action === 'probe' }, deps);
@@ -961,19 +1033,19 @@ export async function main(argv, deps = {}) {
   const root = deps.root ?? repoRoot();
   if (args.action === 'reparse') return await runReparse(args, root, deps, say);
   const ledgerPath = deps.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
-  const base = { root, ledgerPath, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree };
+  const base = { root, ledgerPath, arm: args.arm, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree };
   try {
     if (['group', 'all', 'probe'].includes(args.action)) return await runGroups(args, base, deps, say);
     const git = deps.git ?? benchGit(root);
     const sha = args.sha ?? 'HEAD';
     const negFile = args.negativesFile ?? path.join(root, 'scripts', 'trex', 'bench', 'negatives.json');
     const negatives = loadNegatives(negFile);
-    if (args.action === 'host-digest') { say(hostDigestOf(git, sha, negatives)); return EXIT.OK; }
+    if (args.action === 'host-digest') { say(hostDigestOf(git, sha, negatives, ARMS[args.arm])); return EXIT.OK; }
     if (args.action === 'map-negatives') {
-      say(JSON.stringify(mapAll(git, sha, negatives), null, 2));
+      say(JSON.stringify(mapAll(git, sha, negatives, ARMS[args.arm]), null, 2));
       return EXIT.OK;
     }
-    say(JSON.stringify(freeze(args.sha, { root, negatives }, { git }), null, 2));
+    say(JSON.stringify(freeze(args.sha, { root, negatives, arm: args.arm }, { git }), null, 2));
     return EXIT.OK;
   } catch (e) {
     err(`author: ${e.message}`);
