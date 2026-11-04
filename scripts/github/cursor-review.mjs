@@ -48,6 +48,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withLock } from './lib/file-lock.mjs';
+import { filterFindingPaths, repairJsonText } from './lib/findings-repair.mjs';
 import { acquireGrokSlot } from './lib/grok-slots.mjs';
 import { killTree } from './lib/proc.mjs';
 
@@ -230,10 +231,19 @@ function jsonBlock(text) {
   let open = lines.length - 2;
   while (open >= 0 && !lines[open].trim().startsWith('```')) open -= 1;
   if (open < 0 || !/^```(?:json)?\s*$/.test(lines[open].trim())) return null;
+  const body = lines.slice(open + 1, -1).join('\n');
+  return itemsFromJson(body) ?? itemsFromJson(repairJsonText(body), true);
+}
+
+/**
+ * { items } from findings JSON text, or null. repaired marks text that findings-repair fixed. A repaired block with no item is not a
+ * findings block: an answer cut off at {"findings":[ would otherwise read as a clean pass.
+ */
+function itemsFromJson(text, repaired = false) {
   try {
-    const v = JSON.parse(lines.slice(open + 1, -1).join('\n'));
-    if (Array.isArray(v)) return { items: v };
-    if (v && Array.isArray(v.findings)) return { items: v.findings };
+    const v = JSON.parse(text);
+    const items = Array.isArray(v) ? v : v && Array.isArray(v.findings) ? v.findings : null;
+    if (items && !(repaired && items.length === 0)) return { items, repaired };
   } catch { /* not a findings block */ }
   return null;
 }
@@ -290,9 +300,26 @@ export function resultFromStream(stdout) {
  * Parses the stdout of `cursor-agent --output-format json` or `stream-json` (resultFromStream finds the result line). Pure.
  * { ok, isError, format: 'json' | 'markdown' | 'none', findings, clean, problems, usage, sessionId, durationMs, modelVerified, modelMismatch, text }
  * ok is false for an error result and for an answer with no findings block and no recognisable headings: "no major bugs" in
- * prose is not a pass.
+ * prose is not a pass. exists(path), when given, drops findings on files that are not in the reviewed tree (the round stays ok).
  */
-export function parseReviewOutput(stdout, { expectModel } = {}) {
+export function parseReviewOutput(stdout, { expectModel, exists } = {}) {
+  const p = parseAnswer(stdout, expectModel);
+  if (!exists || !p.ok) return p;
+  const { kept, dropped } = filterFindingPaths(p.findings, exists);
+  const notes = dropped.map((d) => `dropped a finding on a file that is not in the reviewed tree: ${d.file} (${clip(d.title, 60)})`);
+  // The not-run check runs again: dropping every finding must not turn a "review did not run" answer into an ok round.
+  return voidIfNotRun({ ...p, findings: kept, problems: [...p.problems, ...notes] });
+}
+
+/** exists(path) for parseReviewOutput: is the file in the head commit's tree? A head this repo does not hold cannot judge, so it keeps every file. */
+export function headHasFile(root, head) {
+  const type = (spec) => (gitOut(root, ['cat-file', '-t', spec], { allowFail: true }) ?? '').trim();
+  const known = type(`${head}^{commit}`) === 'commit';
+  // Only a blob is a file; a folder path names a tree and has nothing to review.
+  return (file) => !known || type(`${head}:${file}`) === 'blob';
+}
+
+function parseAnswer(stdout, expectModel) {
   const base = { ok: false, isError: false, format: 'none', findings: [], clean: false, problems: [], usage: null, sessionId: null, durationMs: null, modelVerified: false, modelMismatch: false, text: '' };
   const line = resultFromStream(stdout);
   const result = line === null ? null : JSON.parse(line);
@@ -308,6 +335,7 @@ export function parseReviewOutput(stdout, { expectModel } = {}) {
   if (block) {
     const { findings, dropped } = fromJsonItems(block.items);
     if (dropped > 0) p.problems.push(`dropped ${dropped} unusable finding item(s)`);
+    if (block.repaired) p.problems.push('repaired malformed findings JSON');
     p.format = 'json';
     p.findings = findings;
     p.clean = block.items.length === 0;
@@ -324,7 +352,7 @@ export function parseReviewOutput(stdout, { expectModel } = {}) {
 }
 
 /** The model says it could not read the diff. */
-const NOT_RUN = /\b(?:review (?:did not|didn't|could not|couldn't) run|(?:was|were) blocked|blocked by (?:a|the) hook|could(?: not|n't) (?:read|access|open)|unable to (?:read|access|open)|no basis for)/i;
+const NOT_RUN = /\b(?:review (?:did not|didn't|could not|couldn't) run|review (?:failed|skipped)\b|(?:was|were) blocked|blocked by (?:a|the) hook|could(?: not|n't) (?:read|access|open)|unable to (?:read|access|open)|no basis for)/i;
 
 /**
  * An empty findings list is a pass only when the model read the change. On 2026-11-01 the user's global Claude hooks (Cursor runs
@@ -1006,7 +1034,7 @@ export async function runReview(opts, deps = {}) {
   const startedAt = now();
   let run;
   try { run = await (deps.runner ?? runAgent)(spec); } catch (err) { run = { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message), durationMs: now() - startedAt }; }
-  const parsed = parseReviewOutput(run.stdout, { expectModel: m.model });
+  const parsed = parseReviewOutput(run.stdout, { expectModel: m.model, exists: deps.treeHas ?? headHasFile(opts.root, prep.head) });
 
   let error = null;
   if (run.notStarted && run.error === 'hook-bash-hang') error = `${run.stderr?.startsWith(HOOK_BASH_MSG) ? run.stderr.trim() : HOOK_BASH_MSG}; the agent did not start (not counted against the caps)`;

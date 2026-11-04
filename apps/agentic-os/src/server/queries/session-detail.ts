@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 
+import { readSessionNames } from '@/server/sources/identity-names';
 import type { StateFiles, StateSnapshot } from '@/server/sources/state-files';
 
 import {
@@ -49,6 +50,8 @@ export type SessionDetail = {
   id: string;
   shortId: string;
   name: string;
+  /** The session name from its identity file (cleaned, 16 code points at most), or null: shown as "unnamed". */
+  sessionName: string | null;
   projectKey: string | null;
   projectDisplayName: string | null;
   chip: Chip | null;
@@ -220,6 +223,7 @@ function buildDetail(
   snapshot: StateSnapshot,
   laneIds: string[],
   nowMs: number,
+  sessionName: string | null,
 ): SessionDetail {
   const brief = snapshot.brief;
   const plan = planOf(snapshot);
@@ -247,6 +251,7 @@ function buildDetail(
     id,
     shortId: id.slice(0, 8),
     name: cardName(row.projectKey, id, snapshot),
+    sessionName,
     projectKey: row.projectKey,
     projectDisplayName: row.projectDisplayName,
     chip: chipOf(snapshot.chip),
@@ -329,8 +334,10 @@ export async function getSessionDetail(
   const snapshot = files.snapshots.find((s) => s.sessionId === id);
   if (snapshot === undefined) return unavailable('no state file');
 
+  // Read only after the session passed every check above: an unknown id never touches the folder.
+  const sessionName = (await readSessionNames([id])).get(id) ?? null;
   return {
-    detail: buildDetail(id, row, Math.max(0, row.quietSeconds), snapshot, lanes.get(id) ?? [], nowMs),
+    detail: buildDetail(id, row, Math.max(0, row.quietSeconds), snapshot, lanes.get(id) ?? [], nowMs, sessionName),
     unavailable: null,
   };
 }

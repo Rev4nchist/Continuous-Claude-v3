@@ -36,6 +36,7 @@
 - **Session name**: the `/rename` (or `claude -n`) name, e.g. `trex`. It is the address peers use (`say --to trex`).
   **Session handle**: `#` + the first 8 hex of the session id, e.g. `#0d40499c`. **Label**: `name #sid8`.
   Write a session as `trex #0d40499c` or `#0d40499c`, never as bare hex. Identity file: `~/.claude/state/identity/<uuid>.json`.
+- **Session name**: the Claude Code session title, shown as `name #sid8`. Dave sets it with `--name` or `/rename`. A session with no name gets an animal word from session-register at SessionStart (not headless `claude -p`). The identity file holds it.
 - **Handoff**: a row in the Notion 📬 Handoffs database (YAML copy in `thoughts/shared/handoffs/`) that lets a new session resume work.
   Outcome is one of `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS`, `FAILED`.
 - **Bridge / Notion Bridge**: the HQ page and queues Eve and Code exchange work through.

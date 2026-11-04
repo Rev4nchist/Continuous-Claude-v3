@@ -28,6 +28,9 @@
  * gate:<id> (the gates of every surface the diff touches, SURFACES below), coderabbit, git:stable (the last step: HEAD
  * and the tracked files are unchanged since the start; a failed git call is a FAIL). NOTE lines follow the
  * gates: a surface with no automatic gate, a changed file no surface owns, an opc source change with no test.
+ * A NOTE zizmor line follows when the diff touches .github/workflows/*.yml: counts by severity and the top 3 file:line items from
+ * `zizmor --offline --format json` (CCV3_ZIZMOR or ~/tools/review-scanners/zizmor/<ver>/bin/zizmor.exe; config .github/zizmor.yml).
+ * It is advisory in a one-week trial and never fails the run; a missing binary is a skip note (scripts/github/lib/zizmor-advisory.mjs).
  * A step FAILs when:
  *   - the branch is main, the base or detached; the tree has an edited, staged or untracked file;
  *     HEAD is behind the local base or behind fork/<base> (fetched first; the last-fetched ref if the fetch fails);
@@ -75,6 +78,7 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync,
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findZizmor as defaultFindZizmor, zizmorAdvisory } from './lib/zizmor-advisory.mjs';
 import { killTree, processChildren } from './lib/proc.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
@@ -1036,7 +1040,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const headRun = git(['rev-parse', 'HEAD']);
@@ -1058,6 +1062,9 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     log(`pre-pr: ${green.note.detail}`);
   }
   results.push(...notesFor(changes.paths, cfg));
+  // Advisory only (one-week trial): a NOTE line when the diff touches .github/workflows/*, never a FAIL.
+  const zizmor = zizmorAdvisory({ root, paths: changes.paths, bin: findZizmor(), run: zizmorRun });
+  if (zizmor) results.push(zizmor);
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, and a CLI review run is limited to 2 per branch')

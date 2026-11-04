@@ -20,6 +20,7 @@
  *  10. adopt steps the cursor back when the new session already read past a moved DM
  *  11. say/note --agent store detail.agent, inbox shows "name/agent #sid8"; a bad agent is ignored
  *  12. a uuid inside an identity file does not redirect say --to <name>
+ *  13. D3: adopt refuses a same-name adopt by a shared auto word; the `previous` link still works
  *
  * Every row and file it writes is removed, including on failure. Lane ids start
  * with `zz-sid-probe-`; session ids are random uuids tracked in SESSIONS.
@@ -347,6 +348,28 @@ try {
   check('a uuid inside an identity file does not redirect say --to <name>', () => {
     must(forged.code === 0, `exit ${forged.code}: ${forged.all}`);
     must(forged.out.includes(`#${s8(F)}`), forged.out);
+  });
+
+  // 13. D3: a shared auto word proves nothing; only the `previous` link lets an auto-named session adopt
+  const AW1 = sid(); const AW2 = sid(); const AW3 = sid();
+  for (const u of [AW1, AW2, AW3]) {
+    await c.query(`INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES ($1,'zz-sid-probe','x',now() - interval '1 hour')`, [u]);
+  }
+  writeId(AW1, { name: 'otter', endedAt: new Date().toISOString(), endReason: 'other' });
+  writeId(AW2, { name: 'otter' });
+  writeId(AW3, { name: 'otter', previous: AW1 });
+  await mk(`${PREFIX}auto`, AW1);
+  const autoRefused = lane(AW2, 'adopt', '--from', AW1);
+  const autoStill = (await c.query(`SELECT owner_session_id FROM agentic_os.lane WHERE id=$1`, [`${PREFIX}auto`])).rows[0];
+  check('adopt refuses a same-name adopt when the shared name is an auto word (exit 3, lane stays)', () => {
+    must(autoRefused.code === 3, `exit ${autoRefused.code}: ${autoRefused.all}`);
+    must(autoStill.owner_session_id === AW1, 'lane moved by a shared auto word');
+  });
+  const autoPrev = lane(AW3, 'adopt', '--from', AW1);
+  const autoMoved = (await c.query(`SELECT owner_session_id FROM agentic_os.lane WHERE id=$1`, [`${PREFIX}auto`])).rows[0];
+  check('adopt through the previous link still works for an auto-named session', () => {
+    must(autoPrev.code === 0, `exit ${autoPrev.code}: ${autoPrev.all}`);
+    must(autoMoved.owner_session_id === AW3, 'lane not moved');
   });
 } finally {
   await cleanup(c).catch((e) => process.stderr.write(`cleanup failed: ${e.message}\n`));

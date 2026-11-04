@@ -133,14 +133,31 @@ export function resolveName(name, ids, liveUuids) {
 }
 
 /**
+ * The animal words session-register hands to a session that has no name (Session identity
+ * Phase 1). Canonical list; .claude/hooks/src/shared/session-names.ts holds a copy and a
+ * vitest asserts the two are equal. Words are reused by unrelated sessions.
+ */
+export const AUTO_WORDS = Object.freeze((
+  'otter heron lynx puffin marten osprey ibex koala lemur bison crane egret finch gecko hyena kestrel ' +
+  'llama moose narwhal ocelot panda quail stoat tapir walrus yak zebra badger beaver dingo ermine ferret ' +
+  'gibbon impala jaguar kiwi magpie newt orca pika robin shrew sloth tern toad wombat wren vole'
+).split(' '));
+
+const AUTO_NAME_RE = new RegExp('^(?:' + AUTO_WORDS.join('|') + ')2?$');
+/** A list word, or "<word>2" (the pick when all 48 are held), in any case. */
+export const isAutoName = (n) => typeof n === 'string' && AUTO_NAME_RE.test(n.trim().toLowerCase());
+
+/**
  * May `newUuid` take over what `oldUuid` held? Yes when both identity files carry
  * the same non-empty name, or when the new file names the old uuid as `previous`.
  * No otherwise: adopt moves another session's lanes, so a stranger gets nothing.
+ * A shared auto word proves nothing (unrelated sessions reuse words), so for an
+ * auto-named session only the `previous` link counts.
  */
 export function adoptAllowed(oldUuid, newUuid, oldId, newId) {
   if (!oldUuid || !newUuid || oldUuid === newUuid) return false;
   if (newId && newId.previous === oldUuid) return true;
   const a = oldId && typeof oldId.name === 'string' ? oldId.name.trim().toLowerCase() : '';
   const b = newId && typeof newId.name === 'string' ? newId.name.trim().toLowerCase() : '';
-  return a !== '' && a === b;
+  return a !== '' && a === b && !isAutoName(a);
 }

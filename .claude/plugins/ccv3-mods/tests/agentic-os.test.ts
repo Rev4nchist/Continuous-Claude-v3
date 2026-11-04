@@ -927,6 +927,44 @@ describe('agentic-os session identity', () => {
     })
   }
 
+  // I7 an auto-name comes back from the settings hooks (ClassicResult.sessionTitle, folded from hookSpecificOutput.sessionTitle), which run inside next(e):
+  // the handler has to read it after next(e), or the band reads `unnamed` until the first prompt.
+  const titled = (on: On, title: string | undefined): void => {
+    gitWorld(on, {})
+    on('classic.SessionStart', () => (title ? { sessionTitle: title } : {}))
+    on('classic.UserPromptSubmit', () => ({}))
+  }
+  for (const source of ['startup', 'compact', 'fork', 'resume', 'clear']) {
+    test(`I7 a sessionTitle from the hooks shows on line 1 at SessionStart (${source})`, async ($, on) => {
+      titled(on, 'otter')
+      await start($)
+      await $.classic.SessionStart({ source } as never)
+      expect(await line1($)).toContain('otter #test-ses')
+    })
+  }
+
+  test('I7 a hook output with no sessionTitle leaves the band unnamed and the result intact', async ($, on) => {
+    titled(on, undefined)
+    await start($)
+    const r = await $.classic.SessionStart({ source: 'startup' } as never)
+    expect(await line1($)).toContain('unnamed #test-ses')
+    expect(r).toEqual({})
+  })
+
+  test('I7 the result of next(e) is returned unchanged', async ($, on) => {
+    titled(on, 'otter')
+    await start($)
+    const r = await $.classic.SessionStart({ source: 'startup' } as never)
+    expect(r).toEqual({ sessionTitle: 'otter' })
+  })
+
+  test('I7 a given session_title beats a sessionTitle from the hooks', async ($, on) => {
+    titled(on, 'otter')
+    await start($)
+    await $.classic.SessionStart({ source: 'startup', session_title: 'trex' } as never)
+    expect(await line1($)).toContain('trex #test-ses')
+  })
+
   test('I2 session_title on UserPromptSubmit updates the name (a /rename)', async ($, on) => {
     world2(on)
     await start($)

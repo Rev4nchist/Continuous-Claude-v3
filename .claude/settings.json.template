@@ -233,6 +233,19 @@
         ]
       },
       {
+        "matcher": "mcp__plugin_desktop-commander_desktop-commander__set_config_value",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/dc-config-guard.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {

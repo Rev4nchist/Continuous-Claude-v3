@@ -6,9 +6,10 @@
 //   shadow retro|sync|scorecard|decide ...    the shadow protocol (shadow.mjs)
 //   judge [--probe]                           one judge call (spends a headless run: the probe is the only caller)
 //   labels export --pairs F --dir D | labels ingest --dir D [--out F]
-//   score --dir D [--out F]                   scorecard from runs.jsonl and the dataset
+//   score --dir D [--out F] [--rebase A]      scorecard from runs.jsonl and the dataset; --rebase A reads the findings files from archive A
+//   rescore --archive A --out D [--root R]    re-apply the parser and the path filter to archived raw answers (no model call); then `score --dir D`
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG_PATH, loadConfig } from './config.mjs';
@@ -16,6 +17,7 @@ import { loadDataset, realMajors, resolveFindings, splitSets, zeroMajorPrs } fro
 import { recordFreeze } from './freeze.mjs';
 import { exportPairs, ingestLabels } from './labels.mjs';
 import { makeGit, replayRun as realReplayRun } from './replay.mjs';
+import { archiveFile, rescoreArchive, treeCheck } from './rescore.mjs';
 import { evaluateRuns, scorecard } from './score.mjs';
 import { main as shadowMain } from './shadow.mjs';
 
@@ -65,16 +67,38 @@ async function replayCmd(argv, io, cfg, root) {
 function scoreCmd(argv, io, cfg) {
   const dir = flag(argv, '--dir', null);
   if (!dir) { io.stderr('score: --dir <review-eval folder> is required'); return 2; }
-  const runs = readJsonl(path.join(dir, 'runs.jsonl'));
+  const rebase = flag(argv, '--rebase', null);
+  const runs = readJsonl(path.join(dir, 'runs.jsonl')).map((r) => (rebase && r.findingsPath ? { ...r, findingsPath: archiveFile(rebase, r.findingsPath) } : r));
   const datasetFile = path.join(dir, 'dataset-resolved.json');
   if (!existsSync(datasetFile)) { io.stderr(`score: ${datasetFile} is missing: run \`resolve --out\` first`); return 2; }
   const resolved = JSON.parse(readFileSync(datasetFile, 'utf8'));
-  const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => JSON.parse(readFileSync(p, 'utf8')) });
+  const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => (p ? JSON.parse(readFileSync(p, 'utf8')) : { findings: [] }) });
   const labels = readJsonl(path.join(dir, 'labels.jsonl'));
   const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, frozenPromptSha256: cfg.freeze?.promptSha256 ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
   const out = flag(argv, '--out', null);
   if (out) { mkdirSync(path.dirname(out), { recursive: true }); writeFileSync(out, `${JSON.stringify(card, null, 2)}\n`); }
   io.stdout(JSON.stringify(card, null, 1));
+  return 0;
+}
+
+/** The real path: follows symlinks and junctions in the nearest existing ancestor, then appends the missing segments. */
+function canonical(p) {
+  let head = path.resolve(p);
+  const rest = [];
+  while (!existsSync(head) && path.dirname(head) !== head) { rest.unshift(path.basename(head)); head = path.dirname(head); }
+  const real = existsSync(head) ? realpathSync.native(head) : head;
+  const full = path.join(real, ...rest);
+  return process.platform === 'win32' ? full.toLowerCase() : full;
+}
+
+function rescoreCmd(argv, io, root) {
+  const archive = flag(argv, '--archive', null);
+  const out = flag(argv, '--out', null);
+  if (!archive || !out) { io.stderr('rescore: --archive <review-eval folder> and --out <new folder> are required'); return 2; }
+  if (canonical(out) === canonical(archive)) { io.stderr('rescore: --out must be a new folder, never the archive'); return 2; }
+  if (existsSync(out) && (!statSync(out).isDirectory() || readdirSync(out).length > 0)) { io.stderr(`rescore: --out ${out} exists and is not empty; use a new or empty folder`); return 2; }
+  const exists = io.exists ?? treeCheck(makeGit(flag(argv, '--root', root)));
+  io.stdout(JSON.stringify(rescoreArchive({ archive, out, exists }), null, 1));
   return 0;
 }
 
@@ -128,6 +152,7 @@ export async function main(argv, io = {}) {
         return 1;
       }
       case 'score': return scoreCmd(argv, io, cfg);
+      case 'rescore': return rescoreCmd(argv, io, root);
       case 'report': {
         let text = '';
         const sink = { ...io, stdout: (s) => { text = s; } };
@@ -142,7 +167,7 @@ export async function main(argv, io = {}) {
         return 0;
       }
       default:
-        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | report`);
+        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | rescore | report`);
         return 1;
     }
   } catch (e) {
