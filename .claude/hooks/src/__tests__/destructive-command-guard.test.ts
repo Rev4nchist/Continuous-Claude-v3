@@ -16,6 +16,7 @@ import {
   extractShellWrapperPayloads,
   reasonFor,
 } from '../destructive-command-guard.js';
+import { installSegments } from '../package-install-guard.js';
 
 describe('deny text does not teach the agent to override the guard', () => {
   // 59 of 59 agent overrides in the mods usage review followed the old advice in this text.
@@ -992,4 +993,122 @@ describe('shell-running MCP tools (F07)', () => {
       expect(await run({ tool_name: 'mcp__plugin_desktop-commander_desktop-commander__read_file', tool_input: { path: 'C:\\x' } })).toEqual({});
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// Eval bypasses F01-F06, F14, F16 and the quoted-option wrapper (spec 2026-11-04).
+// Every row below is `allow` on fork/main 9af5e0e5 and must become ask/deny.
+// ---------------------------------------------------------------------------
+const interactiveFor = (tool: 'Bash' | 'PowerShell') => ({ tool_name: tool, permission_mode: 'default' });
+
+describe('eval bypasses: the guard must not allow these (F01-F06, F14, wrapper quote)', () => {
+  const bash: Array<[string, string]> = [
+    ['F01 bash: lone double quote inside single quotes hides rm', `echo '"'; rm -rf x; echo '"'`],
+    ['F01 git: lone double quote inside single quotes hides git reset', `echo '"'; git reset --hard; echo '"'`],
+    ['F01 sq-escape: backslash is literal inside single quotes', String.raw`echo 'a\'; rm -rf x; echo '`],
+    ['F02: sh -c with single-quoted payload and trailing args', `sh -c 'rm -rf "$1"' _ /some/path`],
+    ['F03 /bin/bash path prefix', `/bin/bash -c "rm -rf /"`],
+    ['F03 wsl leader', `wsl bash -c "rm -rf ~"`],
+    ['F03 exec leader', `exec bash -c "rm -rf x"`],
+    ['F03 timeout leader', `timeout 5 bash -c "rm -rf x"`],
+    ['F03 xargs sh', `find . | xargs sh -c 'rm -rf "$@"' _`],
+    ['F03 sudo -u value', `sudo -u root bash -c "rm -rf x"`],
+    ['F03 powershell.exe full path', String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command "Remove-Item -Recurse x"`],
+    ['F03 cmd.exe full path', String.raw`C:\Windows\System32\cmd.exe /c "rd /s /q x"`],
+    ['F04: flag after the operand (rm build -rf)', `rm build -rf`],
+    ['F04: flag after the operand (rm -f path -r)', `rm -f path -r`],
+    ['F05: git push origin +main', `git push origin +main`],
+    ['F05: git push origin +HEAD:main', `git push origin +HEAD:main`],
+    ['F05: git push -uf', `git push -uf origin main`],
+    ['F05: git push -fu', `git push -fu origin main`],
+    ['F05: git reset HEAD~3 --hard', `git reset HEAD~3 --hard`],
+    ['F05: git reset -q --hard', `git reset -q --hard`],
+    ['F05: git checkout HEAD -- .', `git checkout HEAD -- .`],
+    ['F05: git checkout main -- src', `git checkout main -- src`],
+    ['F05: git branch -f main abc123', `git branch -f main abc123`],
+    ['F05: docker compose down -v', `docker compose down -v`],
+    ['F05: docker-compose down --volumes', `docker-compose down --volumes`],
+    ['F14: quote opened before a heredoc line keeps the body in the view', `echo "x\ncat <<'EOF'\ny"\nbash -c "rm -rf /"\nEOF`],
+    ['WR bash: quoted --rcfile value before -c', `bash --rcfile "/zz x" -c "rm -rf x"`],
+    ['WR pwsh via Bash tool: quoted -wd value before -c', `pwsh -wd "C:/zz" -c "Remove-Item -Recurse x"`],
+  ];
+  for (const [name, cmd] of bash) {
+    it(`Bash ${name}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+
+  const ps: Array<[string, string]> = [
+    ['F01 ps: lone double quote inside single quotes hides Remove-Item', `Write-Output '"'; Remove-Item -Recurse x; Write-Output '"'`],
+    ['F06: splatted Remove-Item', `$p=@{Path='C:\\data';Recurse=$true;Force=$true}; Remove-Item @p`],
+    ['F06: pipe into Remove-Item', `Get-ChildItem C:\\data -Recurse -File | Remove-Item -Force`],
+    ['F06: [IO.Directory]::Delete with variable recurse flag', `$r=$true; [IO.Directory]::Delete($p,$r)`],
+    ['WR pwsh: quoted -wd value before -c', `pwsh -wd "C:/zz" -c "Remove-Item -Recurse x"`],
+  ];
+  for (const [name, cmd] of ps) {
+    it(`PowerShell ${name}`, () => {
+      expect(decide(cmd, interactiveFor('PowerShell'), {}).decision).not.toBe('allow');
+    });
+  }
+});
+
+describe('F16: decide() stays fast on adversarial option runs', () => {
+  it('rm with 28 repeated long options finishes in under 1000 ms', () => {
+    const cmd = 'rm ' + '--a '.repeat(28) + 'x';
+    const t0 = performance.now();
+    decide(cmd, interactiveFor('Bash'), {});
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+  it('git clean with 28 repeated long options finishes in under 1000 ms', () => {
+    const cmd = 'git clean ' + '--a '.repeat(28) + 'x';
+    const t0 = performance.now();
+    decide(cmd, interactiveFor('Bash'), {});
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+});
+
+describe('package guard: shared WRAPPER_RES reaches the install inside a wrapper', () => {
+  it('pwsh -wd "<dir>" -c "npm install ..." yields an install segment', () => {
+    expect(installSegments(`pwsh -wd "C:/zz" -c "npm install zz-fake-pkg-a1"`, 'Bash').length).toBeGreaterThanOrEqual(1);
+  });
+  it('bash --rcfile "<file>" -c "npm install ..." yields an install segment', () => {
+    expect(installSegments(`bash --rcfile "/zz x" -c "npm install zz-fake-pkg-a1"`, 'Bash').length).toBeGreaterThanOrEqual(1);
+  });
+  it(`sh -c 'npm install evil' _ x yields an install segment`, () => {
+    expect(installSegments(`sh -c 'npm install evil' _ x`, 'Bash').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('guard-prompt-text-fp control', () => {
+  const bashControls: Array<[string, string]> = [
+    ['commit message that names rm -rf', `git commit -m "docs: explain when rm -rf is blocked"`],
+    ['claude -p prompt that names git rebase', `claude -p "explain why git rebase rewrites history"`],
+    ['echo of a destructive warning', `echo "never run git reset --hard here"`],
+    ['ls -la', `ls -la`],
+    ['git push to a feature branch', `git push origin fix/x`],
+    ['rm of a single file', `rm build.log`],
+    ['git push -u origin feat', `git push -u origin feat`],
+    ['git checkout -b', `git checkout -b new-branch`],
+    ['git branch -d', `git branch -d old`],
+    ['docker run --rm', `docker run --rm -it node:20 node -v`],
+    ['git clean -n (dry run)', `git clean -n`],
+    ['git reset --soft', `git reset --soft HEAD~1`],
+    ['heredoc doc body that names a destructive az command', `cat <<'EOF' > doc.md\nHow to stop it: az fabric capacity suspend --name x\nEOF`],
+  ];
+  for (const [name, cmd] of bashControls) {
+    it(`Bash allows: ${name}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
+    });
+  }
+
+  const psControls: Array<[string, string]> = [
+    ['Get-ChildItem piped to Select-Object', String.raw`Get-ChildItem C:\data | Select-Object Name`],
+    ['Remove-Item of a single file', `Remove-Item build.log`],
+    ['[IO.Directory]::Delete with literal $false', `[IO.Directory]::Delete($p,$false)`],
+  ];
+  for (const [name, cmd] of psControls) {
+    it(`PowerShell allows: ${name}`, () => {
+      expect(decide(cmd, interactiveFor('PowerShell'), {}).decision).toBe('allow');
+    });
+  }
 });
