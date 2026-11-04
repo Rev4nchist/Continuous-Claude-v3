@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: Finds the root cause of a bug before any fix, then fixes it with a failing test first. Use before proposing or making any fix when something is broken, even if the user asks for a quick fix. Covers "debug", "fix this bug", "why is X broken", "find the root cause", failing test, CI failure, flaky test, crash, repeated failure. Not for new features.
+description: Finds the root cause of a bug before any fix, then fixes it with a failing test first. Use before proposing or making any fix when something is broken, even if the user asks for a quick fix. Covers "debug", "fix this bug", "why is X broken", "find the root cause", failing test, CI failure, flaky test, crash, a failure that keeps coming back or reverting. Not for new features.
 ---
 
 # Systematic Debugging
@@ -41,7 +41,9 @@ Mark every temporary log line with `DEBUG-TMP`. Never commit temporary logging. 
 
 Phase 1 is done when you can say what is wrong and why, backed by something you observed and not something you assumed.
 
-**Recurring identical failures point to infrastructure.** If the same defect returns after each "fix", something regenerates it. Suspect loops, syncs, daemons and stale baselines before you suspect a person or a session. Incident: the 2026-05-24 hook regression. Match the time of each recurrence to a log entry of a scheduled or background process.
+Dave may say "no fix yet, just tell me". Then do not fix. Still give one confirming step that would prove the cause, and put it first in your Next steps.
+
+**Recurring identical failures point to infrastructure.** Before you read any log, count the recurrences and compare the gaps. If the outcome is the same each time and the gaps are regular, suspect an automatic process first. A person usually varies the outcome and the timing. Treat it as your leading hypothesis, not a verdict: the logs must confirm it. Write two sentences in the root-cause paragraph, before any log match. First, what repeats. Second, what the repetition rules in (a loop, sync, daemon, scheduled task or stale baseline) and what it rules out (a one-off edit, a stray session). Then use the logs to find which process, and clear the nearest rival process with its log. Incident: the 2026-05-24 hook regression.
 
 ### Find the commit that broke it
 

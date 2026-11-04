@@ -1,0 +1,3 @@
+# Other jobs that can write under ~/.claude/rules or ~/continuous-claude/.claude/rules-src, from the job log.
+2026-09-27T09:14:55 sync-claude.sh --to-repo   direction=active->repo   aborted: repo has uncommitted changes in rules-src/   files_written=0
+2026-09-29T15:48:02 sync-claude.sh --to-repo   direction=active->repo   aborted: repo has uncommitted changes in rules-src/   files_written=0
