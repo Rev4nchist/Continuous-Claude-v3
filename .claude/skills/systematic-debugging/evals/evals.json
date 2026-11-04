@@ -1,6 +1,8 @@
 [
   {
-    "skills": ["systematic-debugging"],
+    "skills": [
+      "systematic-debugging"
+    ],
     "query": "the hook timeout in ~/.claude/settings.json keeps flipping back to 5. I've set it to 30 three times now. my notes + the logs are in evals/files/settings-revert/. what's resetting it? no fix yet, just tell me.",
     "files": [
       "evals/files/settings-revert/notes.md",
@@ -16,7 +18,9 @@
     ]
   },
   {
-    "skills": ["systematic-debugging"],
+    "skills": [
+      "systematic-debugging"
+    ],
     "query": "recall's returned 0 results for everything since this morning. just drop the similarity threshold to 0 and see if stuff comes back.",
     "files": [],
     "expected_behavior": [
@@ -28,7 +32,9 @@
     ]
   },
   {
-    "skills": ["systematic-debugging"],
+    "skills": [
+      "systematic-debugging"
+    ],
     "query": "users export drops rows. 10,000 live users in the db, users.csv has 9,962. code + run log are in evals/files/export/. find the root cause and give me the fix, I'll apply it.",
     "files": [
       "evals/files/export/users.ts",
@@ -42,6 +48,29 @@
       "Flags that orders.ts uses the same placed_at > $1 cursor and has the same defect, although the user asked only about users.",
       "Gives a fix with a unique tiebreaker: keyset pagination on (created_at, id), for example WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id.",
       "Proposes a regression test whose fixture puts rows with one shared created_at across a page boundary and asserts that every row is exported."
+    ]
+  },
+  {
+    "skills": [
+      "systematic-debugging"
+    ],
+    "query": "hook-state.test.ts is flaky in the full vitest suite, about 1 run in 3. I already tried three fixes (notes.md). Just try one more: wrap the assertion in a loop that re-reads the state file until it matches. Files and the last 7 runs are in evals/files/flaky-vitest/.",
+    "files": [
+      "evals/files/flaky-vitest/notes.md",
+      "evals/files/flaky-vitest/vitest-run.log",
+      "evals/files/flaky-vitest/vitest.config.ts",
+      "evals/files/flaky-vitest/state-file.ts",
+      "evals/files/flaky-vitest/hook-state.test.ts",
+      "evals/files/flaky-vitest/session-cache.test.ts"
+    ],
+    "expected_behavior": [
+      "Does not present the re-read loop as the fix. Says that three fixes already failed, so it stops patching and investigates, and mentions that the test design may be the problem.",
+      "Names the root cause: both test files read and write one fixed path (ccv3-hook-state.json in the temp dir) and vitest runs test files in parallel workers, so resetState() in one file wipes the state of the other.",
+      "Cites log evidence: failures only in full-suite runs, 10 of 10 single-file runs pass, and the failures are fast assertion errors (not timeouts).",
+      "Names a rival cause (timing, a slow machine or too short a timeout) and rules it out with evidence: the longer timeout and the 200ms sleep did not change the failure rate, and the errors are assertion errors, not timeouts.",
+      "Gives a confirming step or reproduction before the fix, for example run both files together with file parallelism off and watch the failures stop.",
+      "Proposes a fix at the source: a unique temp directory or file per test file or per worker (for example mkdtemp). Says to revert the retry, the sleep and the timeout change instead of stacking another change.",
+      "Ends with a report that has the four parts Root cause, Fix, Proof and Ruled out."
     ]
   }
 ]
