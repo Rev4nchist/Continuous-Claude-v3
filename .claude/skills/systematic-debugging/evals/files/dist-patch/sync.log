@@ -1,0 +1,9 @@
+2026-10-12T07:41:20 forward-sync main@c3a91b0 changed=2 copied: .claude/rules-src/git.md docs/self-improvement/audits/rule-router-2026-10-12.md
+2026-10-13T10:19:02 forward-sync main@e07d5f2 changed=1 copied: .claude/skills/premortem/SKILL.md
+2026-10-14T16:05:37 forward-sync main@5b2c8aa changed=3 copied: .claude/hooks/dist/rule-router.mjs .claude/hooks/dist/lane-context.mjs ROADMAP.md
+2026-10-15T08:55:12 forward-sync main@5b2c8aa changed=0 copied:
+2026-10-16T12:30:48 forward-sync main@91f3d07 changed=1 copied: docs/harness-strategy/README.md
+2026-10-17T13:48:09 forward-sync main@a4e6619 changed=2 copied: .claude/hooks/dist/rule-router.mjs .claude/agents/scout.md
+2026-10-18T09:12:51 forward-sync main@a4e6619 changed=0 copied:
+2026-10-19T15:02:33 forward-sync main@2d80cbe changed=1 copied: .claude/skills/fix/SKILL.md
+2026-10-20T11:22:16 forward-sync main@f19b7e3 changed=3 copied: .claude/hooks/dist/rule-router.mjs .claude/rules-src/agent-limits.md .claude/skills/debug/SKILL.md

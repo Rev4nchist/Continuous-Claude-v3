@@ -1,0 +1,4 @@
+# Other jobs that can write ~/.claude/hooks/dist, from the job log.
+2026-10-13T09:00:04 hooks-dist-freshness   target=~/.claude/hooks/dist   dist newer than src: skipped   files_written=0
+2026-10-16T09:00:03 hooks-dist-freshness   target=~/.claude/hooks/dist   dist newer than src: skipped   files_written=0
+2026-10-19T09:00:05 hooks-dist-freshness   target=~/.claude/hooks/dist   dist newer than src: skipped   files_written=0
