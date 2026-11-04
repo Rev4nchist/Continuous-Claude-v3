@@ -547,6 +547,8 @@ function analyzeInstall(command: string): InstallAnalysis | null {
       const value = inline ?? (takesValue(table, name) ? words[++i] : undefined);
       unknownFlag = value === undefined && !table.bare.has(name) ? word : undefined;
       if (isIndexFlag(table, name)) out.customIndex.push(`${name} ${value ?? ''}`.trim());
+      // npx -c / npm exec --call: npm runs the value as a shell command. The checks cannot read it.
+      else if (pattern.flags === 'node' && (name === '-c' || name === '--call')) out.ambiguous.push(`${name} ${value ?? ''}`.trim());
       else if (table.pkg.has(name) && value !== undefined) { pkgFlagSeen = true; add(value); }
       else if (table.extra.has(name) && value !== undefined) add(value);
       else if (table.source.has(name) && value !== undefined && isRemoteSource(value)) out.unparsed.push(value);

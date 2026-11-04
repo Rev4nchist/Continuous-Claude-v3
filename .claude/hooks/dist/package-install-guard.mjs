@@ -19186,6 +19186,7 @@ function analyzeInstall(command) {
       const value = inline ?? (takesValue(table, name) ? words[++i] : void 0);
       unknownFlag = value === void 0 && !table.bare.has(name) ? word2 : void 0;
       if (isIndexFlag(table, name)) out.customIndex.push(`${name} ${value ?? ""}`.trim());
+      else if (pattern.flags === "node" && (name === "-c" || name === "--call")) out.ambiguous.push(`${name} ${value ?? ""}`.trim());
       else if (table.pkg.has(name) && value !== void 0) {
         pkgFlagSeen = true;
         add(value);

@@ -1307,6 +1307,14 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       writeFileSync(join(child, 'package.json'), '{}');
       expect(await runHook('npx zz-local-bin-a1 run', { stub: FRESH, cwd: child })).toBe('deny');
     });
+    it.each([
+      'npx -c "npm install zz-fake-pkg-a1"',
+      'npx -c "npx zz-fake-pkg-a1"',
+      'npm exec --call "npm install zz-fake-pkg-a1"',
+      'npm exec --call="npm install zz-fake-pkg-a1"',
+    ])('CodeRabbit #285: a command string in -c/--call is not hidden: %j asks or denies', async (cmd) => {
+      expect(['ask', 'deny']).toContain(await runHook(cmd, { stub: FRESH, cwd: await emptyDir() }));
+    });
     it('PowerShell: local bin present: npx zz-local-bin-a1 run allows', async () => {
       expect(await runHook('npx zz-local-bin-a1 run', { tool: 'PowerShell', stub: FRESH, cwd: await binFixture(BINS) })).toBeUndefined();
     });
