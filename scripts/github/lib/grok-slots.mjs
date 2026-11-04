@@ -22,6 +22,8 @@ import { pidAlive as defaultPidAlive, withLock } from './file-lock.mjs';
 export const DEFAULT_MAX = 2;
 export const DEFAULT_WAIT_MS = 60 * 60_000;
 export const DEFAULT_POLL_MS = 15_000;
+/** A waiting caller logs when it starts to wait, then at most once per this many ms. */
+export const WAIT_LOG_EVERY_MS = 60_000;
 export const DEFAULT_STALE_MS = 3 * 3_600_000;
 export const DEFAULT_RELEASE_ATTEMPTS = 4;
 export const DEFAULT_RELEASE_BACKOFF_MS = 250;
@@ -31,6 +33,17 @@ const WAITER_MARGIN_MS = 60_000;
 const held = new Set();
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** An env wait above this means the default: callers add the wait to a process time-out, and a Node timer cannot hold more than 2^31 ms. */
+export const MAX_ENV_WAIT_MS = 24 * 3_600_000;
+
+/** The max wait in ms: opts.waitMs, else CCV3_GROK_WAIT_MIN (whole minutes, 0 allowed, up to 24 h), else DEFAULT_WAIT_MS. */
+export function resolveWaitMs(opts, env) {
+  if (Number.isFinite(opts.waitMs)) return opts.waitMs;
+  const raw = env.CCV3_GROK_WAIT_MIN;
+  const ms = typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) * 60_000 : NaN;
+  return Number.isFinite(ms) && ms <= MAX_ENV_WAIT_MS ? ms : DEFAULT_WAIT_MS;
+}
 
 /** Positive integer from an env string, else the default. */
 function resolveMax(opts, env) {
@@ -73,7 +86,7 @@ const before = (a, b) => a.enqueuedAt < b.enqueuedAt || (a.enqueuedAt === b.enqu
 
 /**
  * Takes a free slot or waits for one.
- * opts: { file, max, waitMs = 60 min, pollMs = 15 s, staleMs = 3 h, ttlMs, lockWaitMs, releaseAttempts, releaseBackoffMs }
+ * opts: { file, max, waitMs = CCV3_GROK_WAIT_MIN or 60 min, pollMs = 15 s, staleMs = 3 h, ttlMs, lockWaitMs, releaseAttempts, releaseBackoffMs }
  *   ttlMs: how long the entry may live (the run's time-out plus the kill grace). Default: staleMs.
  * deps: { now, sleep, pidAlive, env, log, readFile }  (all injectable for tests)
  * Resolves { ok: true, release(), attach(childPid), waitedMs } or { ok: false, reason: 'busy' | 'lock', detail, waitedMs }. Never rejects.
@@ -87,7 +100,7 @@ export async function acquireGrokSlot(opts = {}, deps = {}) {
   const log = deps.log ?? ((m) => process.stderr.write(`${m}\n`));
   const file = resolveFile(opts, env);
   const max = resolveMax(opts, env);
-  const waitMs = opts.waitMs ?? DEFAULT_WAIT_MS;
+  const waitMs = resolveWaitMs(opts, env);
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
   const ttlMs = opts.ttlMs ?? staleMs;
@@ -118,7 +131,7 @@ export async function acquireGrokSlot(opts = {}, deps = {}) {
       return { took: true };
     }
     writeState(file, { active, waiting: [...queue, me] });
-    return { took: false };
+    return { took: false, active: active.length };
   });
 
   /** Best effort: the waiting entry also ends with its pid or its expiresAt. */
@@ -129,6 +142,8 @@ export async function acquireGrokSlot(opts = {}, deps = {}) {
   const slot = makeSlot({ file, key, lockOpts, log, sleep, pidAlive, readFile, opts });
   let sawState = false;
   let detail = '';
+  let lastLogAt = -Infinity;
+  let busyNow = 0;
   for (;;) {
     let r;
     try {
@@ -141,11 +156,16 @@ export async function acquireGrokSlot(opts = {}, deps = {}) {
     } else {
       sawState = true;
       if (r.took) return { ok: true, release: slot.release, attach: slot.attach, waitedMs: now() - began };
+      busyNow = r.active;
     }
     const waited = now() - began;
     if (waited >= waitMs) {
       dequeue();
       return { ok: false, reason: 'busy', detail: `no slot of ${max} free after ${waited} ms${detail ? `; last state error: ${detail}` : ''}`, waitedMs: waited };
+    }
+    if (waited - lastLogAt >= WAIT_LOG_EVERY_MS) {
+      lastLogAt = waited;
+      log(`grok gate: ${busyNow} of ${max} slots busy; waited ${Math.round(waited / 1000)} s of ${Math.round(waitMs / 1000)} s`);
     }
     await sleep(Math.min(pollMs, waitMs - waited));
   }

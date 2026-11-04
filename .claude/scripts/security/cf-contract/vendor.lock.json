@@ -1,0 +1,22 @@
+{
+  "source": "https://github.com/cloudflare/security-audit-skill",
+  "commit": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8",
+  "license": "MIT",
+  "files": {
+    "report-schema.json": {
+      "upstream_path": "skills/security-audit/report-schema.json",
+      "git_blob": "55815a3687a45fff63d8ebf20068611bd6ad6d9a",
+      "sha256": "7bea150f30dcef07df1859d33d01406953cf600f6a08250e1e59e10f252e2c4c"
+    },
+    "validate-findings.cjs": {
+      "upstream_path": "skills/security-audit/validate-findings.cjs",
+      "git_blob": "2843feceddb7e30bf10d6e4f7bbe6640e4c57799",
+      "sha256": "31dabfb5ed2454e4bfa5000fe0f2600df0df9f7ad1781a2fdb9a98a50f507963"
+    },
+    "LICENSE": {
+      "upstream_path": "LICENSE",
+      "git_blob": "6dbc9ecb3a5b9080e95b962869e8c7ab16cfdc20",
+      "sha256": "c007a58f958f8a5b2870aa35d8a17aa72a546447aecee6d2b72e19fea530890b"
+    }
+  }
+}

@@ -5347,7 +5347,7 @@ var require_lib2 = __commonJS({
 });
 
 // src/session-register.ts
-import { readFileSync as readFileSync3 } from "fs";
+import { readFileSync as readFileSync5 } from "fs";
 
 // node_modules/pg/esm/index.mjs
 var import_lib = __toESM(require_lib2(), 1);
@@ -5414,49 +5414,15 @@ async function withPgClient(fn) {
     }
   }
 }
-function describeError(err) {
-  if (!(err instanceof Error)) return String(err);
-  const parts = [];
-  if (err.message) parts.push(err.message);
-  const code = err.code;
-  if (code) parts.push(`code=${code}`);
-  const nested = err.errors;
-  if (Array.isArray(nested) && nested.length > 0) {
-    parts.push(
-      nested.slice(0, 3).map((e) => e instanceof Error ? e.message || e.code : String(e)).filter(Boolean).join("; ")
-    );
-  }
-  return parts.filter(Boolean).join(" ") || err.constructor.name;
-}
-async function withPgClientOrFallback(fn, fallback, context) {
-  try {
-    return { value: await withPgClient(fn), degraded: false };
-  } catch (err) {
-    if (err instanceof MissingDbUrlError) {
-      return { value: fallback, degraded: true, error: err.message };
-    }
-    const message = describeError(err);
-    const code = err?.code;
-    const schemaFault = code === "42703" || code === "42P01" || code === "42883";
-    if (schemaFault) {
-      console.error(
-        `[coordination] ${context} SCHEMA OUT OF DATE (${code}): ${message}
-[coordination] the database is reachable -- it is missing objects this code needs. Apply scripts/coordination/migrations/001-file-claims-leases.sql`
-      );
-    } else {
-      console.error(`[coordination] ${context} degraded: ${message}`);
-    }
-    return { value: fallback, degraded: true, error: message };
-  }
-}
 
 // src/shared/leases.ts
 var FILE_LEASE_MS = 10 * 60 * 1e3;
 var HARNESS_LEASE_MS = 60 * 60 * 1e3;
 
 // src/shared/db-utils-pg.ts
-async function registerSession(sessionId, project, workingOn = "") {
+async function registerSession(sessionId, project, workingOn = "", opts) {
   try {
+    let live;
     await withPgClient(async (client) => {
       await client.query(`
         CREATE TABLE IF NOT EXISTS sessions (
@@ -5475,37 +5441,31 @@ async function registerSession(sessionId, project, workingOn = "") {
              last_heartbeat = NOW()`,
         [sessionId, project, workingOn]
       );
+      if (opts) live = await selectLiveSessions(client, sessionId, opts.previousId ?? null);
     });
-    return { success: true };
+    return live ? { success: true, live } : { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
-async function getActiveSessions(project) {
-  const { value, degraded } = await withPgClientOrFallback(
-    async (client) => {
-      const sql = `
-        SELECT id, project, working_on,
-               started_at     AT TIME ZONE 'UTC' AS started_at,
-               last_heartbeat AT TIME ZONE 'UTC' AS last_heartbeat
-        FROM sessions
-        WHERE GREATEST(last_heartbeat, last_activity_at) > NOW() - INTERVAL '5 minutes'
-        ${project ? "AND project = $1" : ""}
-        ORDER BY started_at DESC
-      `;
-      const res = await client.query(sql, project ? [project] : []);
-      return res.rows.map((row) => ({
-        id: row.id,
-        project: row.project,
-        working_on: row.working_on,
-        started_at: row.started_at ? row.started_at.toISOString() : null,
-        last_heartbeat: row.last_heartbeat ? row.last_heartbeat.toISOString() : null
-      }));
-    },
-    [],
-    "getActiveSessions"
-  );
-  return { success: !degraded, sessions: value };
+var LIVE_SELECT_TIMEOUT_MS = 1500;
+async function selectLiveSessions(client, selfId, previousId) {
+  try {
+    const config = {
+      text: `SELECT id,
+                    GREATEST(last_heartbeat, last_activity_at) > now() - interval '5 minutes' AS alive
+               FROM sessions
+              WHERE id <> $1
+                AND (GREATEST(last_heartbeat, last_activity_at) > now() - interval '2 hours' OR id = $2::text)
+              LIMIT 500`,
+      values: [selfId, previousId],
+      query_timeout: LIVE_SELECT_TIMEOUT_MS
+    };
+    const res = await client.query(config);
+    return res.rows.map((r) => ({ id: r.id, alive: r.alive === true }));
+  } catch {
+    return void 0;
+  }
 }
 
 // src/shared/session-id.ts
@@ -5606,15 +5566,492 @@ function initActivity(sessionId) {
   writeFileSync2(filePath, JSON.stringify(activity), { encoding: "utf-8" });
 }
 
+// src/shared/session-identity.ts
+import { closeSync as closeSync2, existsSync as existsSync4, mkdirSync as mkdirSync4, openSync as openSync2, readFileSync as readFileSync4, readSync, readdirSync, statSync as statSync3 } from "fs";
+import { homedir as homedir3 } from "os";
+import { join as join6 } from "path";
+
+// src/shared/atomic-write.ts
+import {
+  writeFileSync as writeFileSync3,
+  renameSync as renameSync2,
+  unlinkSync,
+  existsSync as existsSync3,
+  openSync,
+  closeSync,
+  readFileSync as readFileSync3,
+  statSync as statSync2,
+  constants
+} from "fs";
+import { dirname as dirname2, basename, join as join4 } from "path";
+
+// src/shared/logger.ts
+import { appendFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, statSync, renameSync } from "fs";
+import { dirname, join as join3 } from "path";
+import { homedir as homedir2 } from "os";
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join3(homedir2(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
+var MAX_LOG_SIZE = 5 * 1024 * 1024;
+var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
+var LEVEL_ORDER = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function shouldLog(level) {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
+}
+function ensureLogDir() {
+  if (!existsSync2(LOG_DIR)) {
+    mkdirSync3(LOG_DIR, { recursive: true });
+  }
+}
+function rotateIfNeeded() {
+  try {
+    if (existsSync2(LOG_FILE)) {
+      const stat = statSync(LOG_FILE);
+      if (stat.size > MAX_LOG_SIZE) {
+        const rotated = LOG_FILE + ".1";
+        renameSync(LOG_FILE, rotated);
+      }
+    }
+  } catch {
+  }
+}
+function getSessionId() {
+  return process.env.CLAUDE_SESSION_ID || void 0;
+}
+function writeLog(entry) {
+  try {
+    ensureLogDir();
+    rotateIfNeeded();
+    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch {
+  }
+}
+function createLogger(hookName) {
+  function log2(level, msg, data) {
+    if (!shouldLog(level)) return;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      level,
+      hook: hookName,
+      msg,
+      sessionId: getSessionId()
+    };
+    if (data && Object.keys(data).length > 0) {
+      entry.data = data;
+    }
+    writeLog(entry);
+    if (level === "error" || level === "warn") {
+      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
+    }
+  }
+  return {
+    debug: (msg, data) => log2("debug", msg, data),
+    info: (msg, data) => log2("info", msg, data),
+    warn: (msg, data) => log2("warn", msg, data),
+    error: (msg, data) => log2("error", msg, data)
+  };
+}
+
+// src/shared/atomic-write.ts
+var log = createLogger("atomic-write");
+function atomicWriteSync(filePath, content) {
+  const dir = dirname2(filePath);
+  const tmpFile = join4(dir, `.${basename(filePath)}.tmp.${process.pid}`);
+  try {
+    writeFileSync3(tmpFile, content, "utf-8");
+    renameSync2(tmpFile, filePath);
+  } catch (err) {
+    try {
+      if (existsSync3(tmpFile)) unlinkSync(tmpFile);
+    } catch {
+    }
+    throw err;
+  }
+}
+
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+import { tmpdir } from "os";
+import { join as join5 } from "path";
+var RELAY_ERROR_LOG = join5(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/shared/session-identity.ts
+var NAME_CLIP = 16;
+var CLEAR_WINDOW_MS = 12e4;
+var TAIL_BYTES = 256 * 1024;
+var HEAD_BYTES = 512 * 1024;
+var HEAD_LINES = 200;
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var SAFE_ID_RE = /^[0-9a-fA-F-]{8,64}$/;
+function identityDir() {
+  return process.env.CCV3_IDENTITY_DIR || join6(homedir3(), ".claude", "state", "identity");
+}
+var shortId = (uuid) => uuid.slice(0, 8);
+function identityPath(uuid) {
+  return SAFE_ID_RE.test(uuid) ? join6(identityDir(), `${uuid}.json`) : null;
+}
+function asString(v) {
+  return typeof v === "string" && v ? v : null;
+}
+function readIdentity(uuid) {
+  if (!uuid) return null;
+  const file = identityPath(uuid);
+  if (!file) return null;
+  try {
+    const o = JSON.parse(readFileSync4(file, "utf8"));
+    if (!o || typeof o !== "object" || typeof o.uuid !== "string") return null;
+    return {
+      uuid,
+      short: shortId(uuid),
+      name: asString(o.name),
+      previous: asString(o.previous),
+      cwd: asString(o.cwd),
+      endedAt: asString(o.endedAt),
+      endReason: asString(o.endReason),
+      updatedAt: asString(o.updatedAt) ?? ""
+    };
+  } catch {
+    return null;
+  }
+}
+function writeIdentity(uuid, patch) {
+  const file = identityPath(uuid);
+  if (!file) return null;
+  const cur = readIdentity(uuid);
+  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] : null;
+  const next = {
+    uuid,
+    short: shortId(uuid),
+    name: pick("name"),
+    previous: pick("previous"),
+    cwd: pick("cwd"),
+    endedAt: pick("endedAt"),
+    endReason: pick("endReason"),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  try {
+    mkdirSync4(identityDir(), { recursive: true });
+    atomicWriteSync(file, JSON.stringify(next, null, 2));
+    return next;
+  } catch {
+    return null;
+  }
+}
+function clipName(name) {
+  const one = (name ?? "").replace(/\s+/g, " ").trim();
+  if (!one) return null;
+  return one.length > NAME_CLIP ? one.slice(0, NAME_CLIP) : one;
+}
+function label(uuid, name) {
+  const n = clipName(name === void 0 ? readIdentity(uuid)?.name : name);
+  return n ? `${n} #${shortId(uuid)}` : `#${shortId(uuid)}`;
+}
+function fileOffset(path, size, start, len) {
+  const fd = openSync2(path, "r");
+  try {
+    const buf = Buffer.alloc(Math.min(len, size - start));
+    readSync(fd, buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally {
+    closeSync2(fd);
+  }
+}
+function lastCustomTitle(transcriptPath) {
+  if (!transcriptPath) return null;
+  try {
+    const size = statSync3(transcriptPath).size;
+    const start = Math.max(0, size - TAIL_BYTES);
+    const lines = fileOffset(transcriptPath, size, start, TAIL_BYTES).split("\n");
+    if (start > 0) lines.shift();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"custom-title"')) continue;
+      try {
+        const o = JSON.parse(lines[i]);
+        if (o.type === "custom-title" && asString(o.customTitle)) return String(o.customTitle);
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveName(sessionTitle, transcriptPath) {
+  return asString(sessionTitle) ?? lastCustomTitle(transcriptPath);
+}
+function previousFromTranscript(transcriptPath, current) {
+  if (!transcriptPath) return null;
+  let parent = null;
+  try {
+    const size = statSync3(transcriptPath).size;
+    const lines = fileOffset(transcriptPath, size, 0, HEAD_BYTES).split("\n").slice(0, HEAD_LINES);
+    for (const line of lines) {
+      try {
+        const id = JSON.parse(line).sessionId;
+        if (typeof id !== "string" || !UUID_RE.test(id)) continue;
+        if (id === current) return parent;
+        parent = id;
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return parent;
+}
+var normCwd = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+function previousFromClear(current, cwd, now = Date.now(), name) {
+  if (!cwd) return null;
+  let cands = [];
+  const claimed = /* @__PURE__ */ new Set();
+  try {
+    for (const f of readdirSync(identityDir())) {
+      if (!f.endsWith(".json")) continue;
+      const id = readIdentity(f.slice(0, -5));
+      if (!id) continue;
+      if (id.uuid !== current && id.previous) claimed.add(id.previous);
+      if (id.uuid === current || id.endReason !== "clear" || !id.endedAt || !id.cwd) continue;
+      const at = Date.parse(id.endedAt);
+      if (!Number.isFinite(at) || now - at > CLEAR_WINDOW_MS || at > now + 5e3) continue;
+      if (normCwd(id.cwd) !== normCwd(cwd)) continue;
+      cands.push(id);
+    }
+  } catch {
+  }
+  cands = cands.filter((c) => !claimed.has(c.uuid));
+  const want = clipName(name)?.toLowerCase();
+  if (want) {
+    const same = cands.filter((c) => clipName(c.name)?.toLowerCase() === want);
+    if (same.length) cands = same;
+  }
+  return cands.length === 1 ? cands[0].uuid : null;
+}
+function resolvePrevious(source, current, transcriptPath, cwd, now = Date.now(), name) {
+  if (source === "resume" || source === "fork") return previousFromTranscript(transcriptPath, current);
+  if (source === "clear") return previousFromClear(current, cwd, now, name);
+  return null;
+}
+function runAdopt(newUuid, oldUuid, spawnFn = spawnDetachedHidden) {
+  try {
+    const repo = process.env.CCV3_REPO || join6(homedir3(), "continuous-claude");
+    const lane = join6(repo, "scripts", "coordination", "lane.mjs");
+    if (!existsSync4(lane)) return false;
+    const child = spawnFn(process.execPath, [lane, "adopt", "--from", oldUuid], {
+      env: { ...process.env, CLAUDE_CODE_SESSION_ID: newUuid },
+      // No spawn `timeout`: it does not bound a detached child. The pg timeouts in lane.mjs do.
+      stdio: "ignore"
+    });
+    child.on?.("error", () => {
+    });
+    child.unref?.();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/shared/session-names.ts
+import { readdirSync as readdirSync2, statSync as statSync4 } from "fs";
+import { join as join7 } from "path";
+var WORDS = "otter heron lynx puffin marten osprey ibex koala lemur bison crane egret finch gecko hyena kestrel llama moose narwhal ocelot panda quail stoat tapir walrus yak zebra badger beaver dingo ermine ferret gibbon impala jaguar kiwi magpie newt orca pika robin shrew sloth tern toad wombat wren vole".split(" ");
+var DEGRADED_WINDOW_MS = 7 * 24 * 36e5;
+var HINT_WINDOW_MS = 6 * 36e5;
+var lc = (s) => s.trim().toLowerCase();
+var WORD_RE = new RegExp(`^(?:${WORDS.join("|")})2?$`);
+function isAutoName(name) {
+  return typeof name === "string" && WORD_RE.test(lc(name));
+}
+function startIndex(uuid) {
+  let h = 2166136261;
+  for (let i = 0; i < uuid.length; i++) {
+    h ^= uuid.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h % WORDS.length;
+}
+function pickName(uuid, held) {
+  const start = startIndex(uuid);
+  for (let i = 0; i < WORDS.length; i++) {
+    const w = WORDS[(start + i) % WORDS.length];
+    if (!held.has(w)) return w;
+  }
+  return `${WORDS[start]}2`;
+}
+function autoNameAllowed(env = process.env) {
+  if (env.CCV3_AUTONAME === "0") return false;
+  if (env.CCV3_AUTONAME === "1") return true;
+  return !String(env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
+}
+function addHeld(map, id, uuid) {
+  if (!id?.name || id.endedAt) return;
+  const k = lc(id.name);
+  map.set(k, [...map.get(k) ?? [], uuid]);
+}
+function heldFromLive(ids, read = readIdentity) {
+  const map = /* @__PURE__ */ new Map();
+  for (const uuid of ids) {
+    try {
+      addHeld(map, read(uuid), uuid);
+    } catch {
+    }
+  }
+  return map;
+}
+function heldDegraded(now = Date.now(), exclude = []) {
+  const map = /* @__PURE__ */ new Map();
+  try {
+    const dir = identityDir();
+    for (const f of readdirSync2(dir)) {
+      if (!f.endsWith(".json")) continue;
+      const uuid = f.slice(0, -5);
+      if (exclude.includes(uuid)) continue;
+      try {
+        if (now - statSync4(join7(dir, f)).mtimeMs > DEGRADED_WINDOW_MS) continue;
+        addHeld(map, readIdentity(uuid), uuid);
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return map;
+}
+function namesHeld(map, except) {
+  const out = /* @__PURE__ */ new Set();
+  for (const [name, holders] of map) if (holders.some((h) => h !== except)) out.add(name);
+  return out;
+}
+function chooseName(c) {
+  if (c.named || c.source === "compact") return null;
+  if (c.ownName) return c.ownName;
+  const carries = c.source === "resume" || c.source === "clear" || c.source === "fork" && c.previousQuiet;
+  if (carries && c.previousName && !namesHeld(c.held, c.previousId).has(lc(c.previousName))) return c.previousName;
+  return pickName(c.uuid, namesHeld(c.held));
+}
+function sameNameHint(uuid, name, cwd, now = Date.now()) {
+  if (!name || !cwd || isAutoName(name)) return null;
+  const want = lc(name);
+  const twins = [];
+  try {
+    const dir = identityDir();
+    for (const f of readdirSync2(dir)) {
+      if (!f.endsWith(".json") || f.slice(0, -5) === uuid) continue;
+      try {
+        if (Math.abs(now - statSync4(join7(dir, f)).mtimeMs) > HINT_WINDOW_MS) continue;
+        const id = readIdentity(f.slice(0, -5));
+        if (!id || id.endedAt || !id.name || lc(id.name) !== want) continue;
+        if (!id.cwd || normCwd(id.cwd) !== normCwd(cwd)) continue;
+        const at = Date.parse(id.updatedAt);
+        if (!Number.isFinite(at) || Math.abs(now - at) > HINT_WINDOW_MS) continue;
+        twins.push(id);
+      } catch {
+      }
+    }
+  } catch {
+  }
+  if (twins.length !== 1) return null;
+  const t = twins[0];
+  return `${label(t.uuid, t.name)} in this cwd never ended. If it crashed, run: node scripts/coordination/lane.mjs adopt --from ${t.uuid} once it is quiet 5 min.`;
+}
+
 // src/session-register.ts
+var DB_DEADLINE_MS = 7e3;
+function recordEnd(input) {
+  if (!input.session_id) return;
+  writeIdentity(input.session_id, {
+    endedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    endReason: input.reason || "other",
+    cwd: input.cwd
+  });
+}
+function planStart(input) {
+  const uuid = input.session_id;
+  if (!uuid) return { name: null, previous: null, autoOn: false, needLive: false };
+  const name = resolveName(input.session_title, input.transcript_path);
+  const previous = resolvePrevious(input.source, uuid, input.transcript_path, input.cwd, Date.now(), name);
+  const autoOn = autoNameAllowed();
+  const needLive = autoOn && !name && input.source !== "compact" && !readIdentity(uuid)?.name;
+  return { name, previous, autoOn, needLive };
+}
+async function registerWithDeadline(sessionId, project, plan) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ success: false, error: `no answer in ${DB_DEADLINE_MS} ms` }), DB_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([
+      registerSession(sessionId, project, "", plan.needLive ? { previousId: plan.previous } : void 0),
+      deadline
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function autoName(input, plan, live) {
+  const uuid = input.session_id;
+  if (!plan.autoOn || !uuid) return null;
+  const ownName = readIdentity(uuid)?.name ?? null;
+  let held = /* @__PURE__ */ new Map();
+  if (plan.needLive) held = live ? heldFromLive(live.map((l) => l.id)) : heldDegraded(Date.now(), [uuid]);
+  const parentEnded = !!(plan.previous && readIdentity(plan.previous)?.endedAt);
+  const parentQuiet = !!plan.previous && (parentEnded || live !== void 0 && !live.some((l) => l.id === plan.previous && l.alive));
+  const picked = chooseName({
+    uuid,
+    source: input.source,
+    named: !!plan.name,
+    ownName,
+    previousId: plan.previous,
+    previousName: plan.previous ? readIdentity(plan.previous)?.name ?? null : null,
+    previousQuiet: parentQuiet,
+    held
+  });
+  return picked && picked.trim() ? picked.trim() : null;
+}
+function recordStart(input, plan, live) {
+  const uuid = input.session_id;
+  if (!uuid) return { me: "#--------", title: null, hint: null };
+  const title = autoName(input, plan, live);
+  const name = plan.name ?? title;
+  const id = writeIdentity(uuid, {
+    ...name ? { name } : {},
+    ...plan.previous ? { previous: plan.previous } : {},
+    cwd: input.cwd,
+    endedAt: null,
+    endReason: null
+  });
+  if (plan.previous && input.source !== "fork") runAdopt(uuid, plan.previous);
+  const hint = input.source === "startup" && input.session_title ? sameNameHint(uuid, plan.name, input.cwd) : null;
+  return { me: label(uuid, id?.name ?? name), title, hint };
+}
 async function main() {
   let input;
   try {
-    const stdinContent = readFileSync3(0, "utf-8");
+    const stdinContent = readFileSync5(0, "utf-8");
     input = JSON.parse(stdinContent);
   } catch {
     console.log(JSON.stringify({ result: "continue" }));
     return;
+  }
+  if (input.hook_event_name === "SessionEnd") {
+    try {
+      recordEnd(input);
+    } catch {
+    }
+    console.log(JSON.stringify({}));
+    return;
+  }
+  let plan = { name: null, previous: null, autoOn: false, needLive: false };
+  try {
+    plan = planStart(input);
+  } catch {
   }
   const sessionId = resolveSessionId(input.session_id);
   const project = canonicalProject(input.cwd);
@@ -5628,40 +6065,39 @@ async function main() {
     initActivity(activitySessionId);
   } catch {
   }
-  const registerResult = await registerSession(sessionId, project, "");
+  const registerResult = await registerWithDeadline(sessionId, project, plan);
   if (!registerResult.success) {
     console.error(`[session-register] registration failed: ${registerResult.error}`);
   }
-  const sessionsResult = await getActiveSessions(project);
-  const otherSessions = sessionsResult.sessions.filter((s) => s.id !== sessionId);
-  let awarenessMessage = `
+  let me = "#--------";
+  let title = null;
+  let hint = null;
+  try {
+    ({ me, title, hint } = recordStart(input, plan, registerResult.live));
+  } catch {
+  }
+  const awarenessMessage = `
 <system-reminder>
 MULTI-SESSION COORDINATION ACTIVE
 
-Session: ${sessionId}
+You are ${me}.
 Project: ${projectName}
-`;
-  if (otherSessions.length > 0) {
-    awarenessMessage += `
-Active peer sessions (${otherSessions.length}):
-${otherSessions.map((s) => `  - ${s.id}: ${s.working_on || "working..."}`).join("\n")}
-
+${hint ? `${hint}
+` : ""}
 Coordination features:
 - File edits are tracked to prevent conflicts
 - Research findings are shared automatically
 - Use Task tool normally - coordination happens via hooks
-`;
-  } else {
-    awarenessMessage += `
-No other sessions active on this project.
-You are the only session currently working here.
-`;
-  }
-  awarenessMessage += `</system-reminder>`;
+</system-reminder>`;
   const output = {
-    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: awarenessMessage }
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: awarenessMessage,
+      ...title ? { sessionTitle: title } : {}
+    }
   };
-  console.log(JSON.stringify(output));
+  process.stdout.write(`${JSON.stringify(output)}
+`, () => process.exit(0));
 }
 main().catch((err) => {
   console.error("[session-register] unexpected error:", err);

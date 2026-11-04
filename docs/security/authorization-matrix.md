@@ -14,6 +14,8 @@ what stops a destructive operation on each. Keep it current when a guard or surf
 |---|---|
 | Claude Code, Bash tool | `destructive-command-guard` (PreToolUse, matcher `Bash`) |
 | Claude Code, PowerShell tool | `destructive-command-guard` (PreToolUse, matcher `PowerShell`, since this change). Also Claude Code's own built-in PowerShell path guard, which blocks `Remove-Item` and `rmdir` on system paths, even inside quoted strings. |
+| desktop-commander `start_process`, `interact_with_process` (MCP) | `destructive-command-guard` and `package-install-guard` (PreToolUse, own matcher block, since 2026-11-03, F07). The text is checked as Bash and as PowerShell. Text sent into a REPL that is not shell (Python `shutil.rmtree`) is not caught. |
+| desktop-commander `set_config_value` (MCP) | `dc-config-guard` (since 2026-11-03): ask on any key except `telemetryEnabled`, `fileReadLineLimit`, `fileWriteLineLimit`. These keys decide what the tools above may do (`blockedCommands`, `allowedDirectories`, `defaultShell`). |
 | Headless `claude -p` (scheduled jobs) | Same hooks; `permission_mode` is bypass or the run has no human, so the guard **denies** |
 | Subagents / workflow agents | Same hooks; `CLAUDE_AGENT_ID` marks them unattended, so the guard **denies** |
 | Removed cross-model CLI | Not installed. Do not route work through it. |

@@ -27,6 +27,7 @@ const HOOKS = [
   'no-haiku-enforcer',
   'rule-router',
   'scan-scope-guard',
+  'dc-config-guard',
 ] as const;
 
 let dir: string;

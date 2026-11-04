@@ -127,8 +127,8 @@ describe('agentic-os band', () => {
 const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
 const SECRET = 'sk-' + 'ant-' + 'a'.repeat(40)
 
-const core = async ($: Engine, columns = 120) => {
-  const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, bodyColumns: columns } })
+const core = async ($: Engine, columns = 120, maxRows = BAND_PROPS.maxRows) => {
+  const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, bodyColumns: columns, maxRows } })
   const rows = (await band.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-'))
   const texts = (await band.findAll({ type: 'Text' })).map(found => found.text)
   await band.unmount()
@@ -262,9 +262,9 @@ describe('agentic-os git info', () => {
     seen.files['C:/main/repo-x/.git/worktrees/w1/HEAD'] = 'ref: refs/heads/feat/two\n'
     await $.turn.start({ turnId: 't1' } as never)
     expect(lastSnapshot(seen).branch).toBe('feat/two')
-    const line1 = (await core($)).line1
-    expect(line1).toContain('feat/two')
-    expect(line1).toContain('repo-x')
+    // Line 1 of the two-line band no longer carries repo or branch (the statusline does); the one-line compact band keeps the repo.
+    expect((await core($, 120, 1)).line1).toContain('repo-x')
+    expect((await core($)).line1).not.toContain('repo-x')
   })
 
   test('C4 a primary checkout has worktree null', async ($, on) => {
@@ -282,7 +282,7 @@ describe('agentic-os git info', () => {
     expect(snapshot.brief.goal).toBe('g')
     expect(snapshot).toMatchObject({ repo: null, branch: null, worktree: null })
     expect(snapshot).toHaveProperty('hud', null)
-    expect((await core($)).line1).toContain('● -')
+    expect((await core($, 120, 1)).line1).toContain('unnamed - ctx')
   })
 
   test('C5 a cwd that cannot be read leaves the fields null and the session alone', async ($, on) => {
@@ -326,21 +326,18 @@ describe('agentic-os git info', () => {
       on('classic.SessionStart', () => ({}))
       const held = heldGit(on)
       await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
-      const before = (await core($)).line1
+      const before = (await core($, 120, 1)).line1
       expect(before).toContain('repo-x')
-      expect(before).toContain('feat/one')
 
       await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
       held.value = null // the engine's reset
-      const gap = (await core($)).line1
-      expect(gap).toContain('● - · - ·')
+      const gap = (await core($, 120, 1)).line1
+      expect(gap).toContain('unnamed - ctx')
       expect(gap).not.toContain('repo-x')
-      expect(gap).not.toContain('feat/one')
 
       await $.classic.SessionStart({ source: reason } as never)
-      const after = (await core($)).line1
+      const after = (await core($, 120, 1)).line1
       expect(after).toContain('repo-x')
-      expect(after).toContain('feat/one')
       expect(seen.reads.length).toBeGreaterThan(0)
     })
   }
@@ -351,10 +348,11 @@ describe('agentic-os git info', () => {
     on('classic.SessionStart', () => ({}))
     heldGit(on)
     await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
-    const reads = seen.reads.length
+    const reads = seen.reads.filter(path => path.includes('.git')).length
     expect(reads).toBeGreaterThan(0)
     await $.classic.SessionStart({ source: 'compact' } as never)
-    expect(seen.reads.length).toBe(reads)
+    // The session name may read the identity file; no .git file is read again.
+    expect(seen.reads.filter(path => path.includes('.git')).length).toBe(reads)
   })
 
   // C10 the off switch (CCV3_MODS_OFF) also covers the refill: classic.SessionStart for resume and clear reads nothing
@@ -893,5 +891,138 @@ describe('agentic-os final snapshot at session end', () => {
     await startEnd($, true)
     await endWith($, 'other')
     expect(seen.writes).toEqual([])
+  })
+})
+
+// Session identity: the band draws `name #sid8`. The name is the Claude Code session name. Ways it can fail:
+// I1 a session_title on classic.SessionStart (startup, and resume or clear) does not reach line 1
+// I2 a /rename shows only at the next SessionStart: session_title on classic.UserPromptSubmit does not update the band
+// I3 the identity file is not the fallback, or it beats a session_title, or a bad file crashes the hook
+// I4 no name anywhere reads anything but `unnamed`; a prompt with no title wipes a known name
+// I5 the off switch still reads the identity file
+describe('agentic-os session identity', () => {
+  const FILE = 'C:/home/.claude/state/identity/test-session.json'
+  const world2 = (on: On, files: Record<string, string> = {}, env: Record<string, string> = {}): Git => {
+    const seen = gitWorld(on, { ...files }, { env })
+    on('classic.SessionStart', () => ({}))
+    on('classic.UserPromptSubmit', () => ({}))
+    return seen
+  }
+  const start = ($: Engine) => $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+  const line1 = async ($: Engine) => (await core($)).line1
+
+  test('I1 session_title on SessionStart (startup) shows as name #sid8 on line 1', async ($, on) => {
+    world2(on)
+    await start($)
+    await $.classic.SessionStart({ source: 'startup', session_title: 'trex' } as never)
+    expect(await line1($)).toContain('trex #test-ses')
+  })
+
+  for (const source of ['resume', 'clear']) {
+    test(`I1 session_title on SessionStart (${source}) shows on line 1`, async ($, on) => {
+      world2(on)
+      await start($)
+      await $.classic.SessionStart({ source, session_title: 'trex' } as never)
+      expect(await line1($)).toContain('trex #test-ses')
+    })
+  }
+
+  // I7 an auto-name comes back from the settings hooks (ClassicResult.sessionTitle, folded from hookSpecificOutput.sessionTitle), which run inside next(e):
+  // the handler has to read it after next(e), or the band reads `unnamed` until the first prompt.
+  const titled = (on: On, title: string | undefined): void => {
+    gitWorld(on, {})
+    on('classic.SessionStart', () => (title ? { sessionTitle: title } : {}))
+    on('classic.UserPromptSubmit', () => ({}))
+  }
+  for (const source of ['startup', 'compact', 'fork', 'resume', 'clear']) {
+    test(`I7 a sessionTitle from the hooks shows on line 1 at SessionStart (${source})`, async ($, on) => {
+      titled(on, 'otter')
+      await start($)
+      await $.classic.SessionStart({ source } as never)
+      expect(await line1($)).toContain('otter #test-ses')
+    })
+  }
+
+  test('I7 a hook output with no sessionTitle leaves the band unnamed and the result intact', async ($, on) => {
+    titled(on, undefined)
+    await start($)
+    const r = await $.classic.SessionStart({ source: 'startup' } as never)
+    expect(await line1($)).toContain('unnamed #test-ses')
+    expect(r).toEqual({})
+  })
+
+  test('I7 the result of next(e) is returned unchanged', async ($, on) => {
+    titled(on, 'otter')
+    await start($)
+    const r = await $.classic.SessionStart({ source: 'startup' } as never)
+    expect(r).toEqual({ sessionTitle: 'otter' })
+  })
+
+  test('I7 a given session_title beats a sessionTitle from the hooks', async ($, on) => {
+    titled(on, 'otter')
+    await start($)
+    await $.classic.SessionStart({ source: 'startup', session_title: 'trex' } as never)
+    expect(await line1($)).toContain('trex #test-ses')
+  })
+
+  test('I2 session_title on UserPromptSubmit updates the name (a /rename)', async ($, on) => {
+    world2(on)
+    await start($)
+    await $.classic.SessionStart({ source: 'startup', session_title: 'trex' } as never)
+    await $.classic.UserPromptSubmit({ prompt: 'hi', session_title: 'renamed' } as never)
+    const got = await line1($)
+    expect(got).toContain('renamed #test-ses')
+    expect(got).not.toContain('trex')
+  })
+
+  test('I3 with no session_title the identity file names the session; a session_title beats the file', async ($, on) => {
+    world2(on, { [FILE]: JSON.stringify({ uuid: 'test-session', name: 'fromfile' }) })
+    await start($)
+    await $.classic.UserPromptSubmit({ prompt: 'hi' } as never)
+    expect(await line1($)).toContain('fromfile #test-ses')
+    await $.classic.UserPromptSubmit({ prompt: 'hi', session_title: 'fromhook' } as never)
+    expect(await line1($)).toContain('fromhook #test-ses')
+  })
+
+  test('I3 a corrupt identity file reads unnamed and does not throw', async ($, on) => {
+    world2(on, { [FILE]: '{not json' })
+    await start($)
+    await $.classic.UserPromptSubmit({ prompt: 'hi' } as never)
+    expect(await line1($)).toContain('unnamed #test-ses')
+  })
+
+  test('I4 no name anywhere reads unnamed; a later prompt with no title keeps a known name', async ($, on) => {
+    world2(on)
+    await start($)
+    expect(await line1($)).toContain('unnamed #test-ses')
+    await $.classic.UserPromptSubmit({ prompt: 'hi', session_title: 'trex' } as never)
+    await $.classic.UserPromptSubmit({ prompt: 'again' } as never)
+    expect(await line1($)).toContain('trex #test-ses')
+  })
+
+  test('I6 a /clear or resume drops the old name: an unnamed new conversation does not show it', async ($, on) => {
+    world2(on)
+    on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+    await start($)
+    await $.classic.SessionStart({ source: 'startup', session_title: 'trex' } as never)
+    expect(await line1($)).toContain('trex #test-ses')
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
+    await $.classic.SessionStart({ source: 'clear' } as never)
+    const got = await line1($)
+    expect(got).toContain('unnamed #test-ses')
+    expect(got).not.toContain('trex')
+  })
+
+  test('I7 a start with no hook event yet (a /reload-plugins) reads the name from the identity file', async ($, on) => {
+    world2(on, { [FILE]: JSON.stringify({ uuid: 'test-session', name: 'trex' }) })
+    await start($)
+    expect(await line1($)).toContain('trex #test-ses')
+  })
+
+  test('I5 the off switch reads no identity file', async ($, on) => {
+    const seen = world2(on, { [FILE]: JSON.stringify({ name: 'fromfile' }) }, { CCV3_MODS_OFF: '1' })
+    await start($)
+    await $.classic.UserPromptSubmit({ prompt: 'hi' } as never)
+    expect(seen.reads.filter(path => path.includes('identity'))).toEqual([])
   })
 })

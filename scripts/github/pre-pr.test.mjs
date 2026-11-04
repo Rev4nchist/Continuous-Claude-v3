@@ -91,8 +91,12 @@ test('S1: every node script and cwd named in the surface table exists', async ()
       assert.ok(existsSync(path.join(cwd, a)), `${g.id}: ${a} is missing`);
     }
     if (g.args.some((x) => x.includes('*'))) {
-      const dir = path.join(cwd, path.dirname(g.args.find((x) => x.includes('*'))));
-      assert.ok(readdirSync(dir).some((n) => /\.test\.mjs$/.test(n)), `${g.id}: the glob matches no test file`);
+      // The folder is the part before the first wildcard segment, so `scripts/trex/**/*.test.mjs` is checked in scripts/trex.
+      const glob = g.args.find((x) => x.includes('*'));
+      const dir = path.join(cwd, glob.split('/').slice(0, glob.split('/').findIndex((seg) => seg.includes('*'))).join('/'));
+      // TREX lands from its own branch: until scripts/trex exists here, its glob has nothing to match (Node 22 exits 0 on that).
+      if (g.id === 'trex-tests' && !existsSync(dir)) continue;
+      assert.ok(readdirSync(dir, { recursive: glob.includes('**') }).some((n) => /\.test\.mjs$/.test(n)), `${g.id}: the glob matches no test file`);
     }
   }
 });
@@ -228,10 +232,33 @@ test('GW4: a change under scripts/checks runs the checks helper tests, and the f
   for (const a of g.args.slice(1)) assert.ok(existsSync(path.join(REPO_ROOT, a)), a);
 });
 
+test('GW4b: a change under scripts/trex, or to the shared selector test-map.mjs, runs the TREX node tests', async () => {
+  for (const p of ['scripts/trex/run.mjs', '.trex/flows/x.yaml', 'docker/trex/Dockerfile', 'scripts/checks/test-map.mjs']) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'trex-tests');
+    assert.ok(g, p);
+    assert.deepEqual([g.cmd, g.args], ['node', ['--test', 'scripts/trex/**/*.test.mjs']]);
+  }
+  assert.equal(gatesFor(['scripts/github/lib/proc.mjs'], REPO_ROOT).some((x) => x.id === 'trex-tests'), false);
+});
+
+test('GW4c: a change to test-map.mjs runs test-map.test.mjs, and one under scripts/github/local-review runs the tests in that folder (breaks if either test file is left out of every gate)', async () => {
+  const tm = gatesFor(['scripts/checks/test-map.mjs'], REPO_ROOT).find((x) => x.id === 'test-map-tests');
+  assert.ok(tm);
+  assert.deepEqual([tm.cmd, tm.args], ['node', ['--test', 'scripts/checks/test-map.test.mjs']]);
+  assert.ok(existsSync(path.join(REPO_ROOT, tm.args[1])));
+  const lr = gatesFor(['scripts/github/local-review/record.mjs'], REPO_ROOT).find((x) => x.id === 'local-review-tests');
+  assert.ok(lr);
+  assert.deepEqual([lr.cmd, lr.args], ['node', ['--test', 'scripts/github/local-review/*.test.mjs']]);
+});
+
 test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {
   const gate = SURFACES.flatMap((s) => s.gates ?? []).find((g) => g.id === 'semgrep-ccv3');
   const saved = process.env.DOCKER_BIN;
   process.env.DOCKER_BIN = path.join(os.tmpdir(), 'no-such-docker-binary');
+  // The wrapper uses opengrep when it finds the binary under the home folder. An empty home forces the Docker path.
+  const home = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME, CCV3_OPENGREP: process.env.CCV3_OPENGREP };
+  process.env.USERPROFILE = process.env.HOME = mkdtempSync(path.join(os.tmpdir(), 'gw5-home-'));
+  delete process.env.CCV3_OPENGREP;
   try {
     const r = runGate({ ...gate, timeoutMs: 60_000 }, { root: REPO_ROOT, exec: PRE.defaultExec, git: () => ({ status: 0, stdout: '', stderr: '' }) });
     assert.equal(r.status, 'FAIL');
@@ -239,6 +266,7 @@ test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not avail
   } finally {
     if (saved === undefined) delete process.env.DOCKER_BIN;
     else process.env.DOCKER_BIN = saved;
+    for (const [k, v] of Object.entries(home)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
 
@@ -1933,4 +1961,42 @@ test('P8: runPrePr reads the cap from the config, stamps cli-cap, and the built 
   assert.equal(JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8')).cr_skip_reason, 'cli-cap');
   assert.equal(hookVerdict(repo.dir).allow, true);
   assert.notEqual(cliCapOf(CONFIG), null, 'the shipped config sets a cap');
+});
+
+// ---------- zizmor advisory (one-week trial: it never fails pre-pr) ----------
+
+const harnessBody = (head) => `## Evidence\n\nProof type: harness\n\nRED: \`x\` @ ${'b'.repeat(40)}\n\`\`\`text\nred\n\`\`\`\n\nGREEN: \`x\` @ ${head}\n\`\`\`text\ngreen\n\`\`\`\n`;
+const ZIZMOR_OUT = JSON.stringify([{ ident: 'unpinned-uses', determinations: { severity: 'High' }, locations: [{ symbolic: { kind: 'Primary', key: { Local: { verbatim_path: '.github/workflows/a.yml' } } }, concrete: { location: { start_point: { row: 6, column: 0 } } } }] }]);
+
+test('Z-PP1: a workflow change adds one NOTE zizmor line with the counts, and exit 14 from zizmor does not fail the run', async () => {
+  // Breaks when: the advisory is not wired into runPrePr, or its exit code or findings are turned into a FAIL.
+  const repo = makeRepo({ files: { '.github/workflows/a.yml': 'name: a\n' } });
+  const calls = [];
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findZizmor: () => 'ZBIN', zizmorRun: (bin, args) => { calls.push([bin, ...args]); return { status: 14, stdout: ZIZMOR_OUT, stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.deepEqual(calls, [['ZBIN', '--offline', '--strict-collection', '--format', 'json', '.github/workflows/a.yml']]);
+  const step = result.results.find((r) => r.step === 'zizmor');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /1 High/);
+  assert.match(step.detail, /a\.yml:7/);
+});
+
+test('Z-PP2: no workflow change means no zizmor step and no zizmor run', async () => {
+  // Breaks when: the advisory runs on every branch.
+  const repo = makeRepo();
+  let ran = 0;
+  const { result } = await prePr(repo, { findZizmor: () => 'ZBIN', zizmorRun: () => { ran += 1; return { status: 0, stdout: '[]', stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(ran, 0);
+  assert.equal(result.results.some((r) => r.step === 'zizmor'), false);
+});
+
+test('Z-PP3: a workflow change with no zizmor binary passes with a skip note', async () => {
+  // Breaks when: a missing binary fails the run.
+  const repo = makeRepo({ files: { '.github/workflows/a.yml': 'name: a\n' } });
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findZizmor: () => null, zizmorRun: () => { throw new Error('must not run'); } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  const step = result.results.find((r) => r.step === 'zizmor');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /skipped/);
 });

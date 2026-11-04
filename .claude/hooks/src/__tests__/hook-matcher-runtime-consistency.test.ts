@@ -138,3 +138,63 @@ describe('hook matcher / runtime tool-check consistency', () => {
     expect(violations).toEqual([]);
   });
 });
+
+/**
+ * F07 (2026-11-03): both shell guards gated only Bash and PowerShell, so a shell-running MCP tool
+ * (desktop-commander start_process) ran with no guard. SHELL_TOOLS is the runtime gate. Every name
+ * in it must also pass a PreToolUse matcher that runs each guard.
+ */
+describe('shell guards cover every shell-running tool (F07)', () => {
+  const SHELL_GUARDS = ['destructive-command-guard', 'package-install-guard'];
+
+  /** Claude Code matcher rule: only letters, digits, _ and | is an exact name or list; else a regex. */
+  function matcherMatches(matcher: string, tool: string): boolean {
+    if (matcher === '' || matcher === '*') return true;
+    if (/^[A-Za-z0-9_|]+$/.test(matcher)) return matcher.split('|').includes(tool);
+    return new RegExp(matcher).test(tool);
+  }
+
+  function guardsMatching(tool: string): Set<string> {
+    const settings = JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+    const found = new Set<string>();
+    for (const block of settings.hooks?.PreToolUse ?? []) {
+      if (!matcherMatches(block.matcher ?? '', tool)) continue;
+      for (const hook of block.hooks ?? []) {
+        const m = [hook.command ?? '', ...(hook.args ?? [])].join(' ').match(/([a-zA-Z0-9-]+)\.mjs/);
+        if (m) found.add(m[1]);
+      }
+    }
+    return found;
+  }
+
+  it('lists at least one MCP shell tool (guard is not vacuous)', async () => {
+    const { SHELL_TOOLS } = await import('../shared/shell-tools.js');
+    expect([...SHELL_TOOLS.keys()].filter((t) => t.startsWith('mcp__')).length).toBeGreaterThan(0);
+  });
+
+  it('every SHELL_TOOLS name reaches both guards through a PreToolUse matcher', async () => {
+    const { SHELL_TOOLS } = await import('../shared/shell-tools.js');
+    const missing: string[] = [];
+    for (const tool of SHELL_TOOLS.keys()) {
+      const guards = guardsMatching(tool);
+      for (const g of SHELL_GUARDS) if (!guards.has(g)) missing.push(`${g} has no PreToolUse matcher for ${tool}`);
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it('both guards gate at runtime on SHELL_TOOLS, not a private tool set', () => {
+    for (const g of SHELL_GUARDS) {
+      const source = readFileSync(join(SRC_DIR, `${g}.ts`), 'utf-8');
+      expect(source, g).toMatch(/import\s*\{[^}]*\breadShellCommand\b[^}]*\}\s*from\s*'\.\/shared\/shell-tools\.js'/);
+      expect(source, g).not.toMatch(/COMMAND_TOOLS\s*=\s*new Set/);
+    }
+  });
+
+  // dc-config-guard (2026-11-03): set_config_value can widen what the shell tools above may do.
+  it('every CONFIG_TOOLS name reaches dc-config-guard through a PreToolUse matcher', async () => {
+    const { CONFIG_TOOLS } = await import('../dc-config-guard.js');
+    expect(CONFIG_TOOLS.size).toBeGreaterThan(0);
+    const missing = [...CONFIG_TOOLS].filter((tool) => !guardsMatching(tool).has('dc-config-guard'));
+    expect(missing).toEqual([]);
+  });
+});

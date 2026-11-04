@@ -41,11 +41,14 @@
  *   node scripts/coordination/lane.mjs release <id> [--note "why"]
  *   node scripts/coordination/lane.mjs done <id> [--note "evidence"]
  *   node scripts/coordination/lane.mjs renew            # push my leases out
- *   node scripts/coordination/lane.mjs say "message" [--to <sid-prefix>] [--lane <id>]
+ *   node scripts/coordination/lane.mjs say "message" [--to <name|sid-prefix>] [--lane <id>]
  *   node scripts/coordination/lane.mjs inbox [--peek]   # unread; advances watermark unless --peek
  *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--priority N]
  *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add
  *   node scripts/coordination/lane.mjs peers            # who else is live right now
+ *   node scripts/coordination/lane.mjs whoami           # my label, uuid and lanes
+ *   node scripts/coordination/lane.mjs adopt --from <old-uuid>
+ *                                                       # take over lanes + unread DMs after /clear, resume, fork
  *   node scripts/coordination/lane.mjs apply-kanban <file.json> [--dry-run] [--json]
  *                                                       # carry Dave's kanban changes into the lanes
  *
@@ -57,6 +60,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { planKanban } from './kanban-apply.mjs';
+import {
+  adoptAllowed, isSafeId, label, labelWithAgent, listIdentities, readIdentity, resolveName, short, validAgent,
+} from './session-label.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -125,7 +131,23 @@ function me() {
   }
   return id;
 }
-const short = (s) => (s ? String(s).slice(0, 8) : '--------');
+
+// Session names live in identity files (session-label.mjs). Read once per run.
+let IDS = null;
+const ids = () => (IDS ??= listIdentities());
+const L = (uuid) => label(uuid, ids());
+const nameOf = (uuid) => ids().get(uuid)?.name || null;
+/** --agent <type> tags a subagent's say/note. An invalid value is ignored. */
+const agentDetail = () => { const a = validAgent(flags.agent); return a ? { agent: a } : {}; };
+
+/** Inbox times: America/Chicago, with the zone abbreviation that is in force (CST or CDT). */
+function chicagoTime(d) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+  }).formatToParts(new Date(d));
+  const p = (t) => parts.find((x) => x.type === t)?.value;
+  return `${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+}
 
 // ---------------------------------------------------------------- db
 
@@ -205,14 +227,14 @@ const STATE_MARK = {
 
 function laneLine(l, myId) {
   const mine = l.owner_session_id === myId;
-  const who = l.owner_session_id ? (mine ? 'YOU' : short(l.owner_session_id)) : '';
+  const who = l.owner_session_id ? (mine ? 'YOU' : L(l.owner_session_id)) : '';
   const lease = l.lease_expires_at
     ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000)
     : null;
   const leaseTag = l.owner_session_id
     ? (lease === null ? '' : lease > 0 ? ` ${lease}m` : ` LAPSED`)
     : '';
-  const head = `${STATE_MARK[l.state] || '·'} ${l.id.padEnd(26)} ${String(l.state).padEnd(8)} ${(who + leaseTag).padEnd(14)}`;
+  const head = `${STATE_MARK[l.state] || '·'} ${l.id.padEnd(26)} ${String(l.state).padEnd(8)} ${(who + leaseTag).padEnd(30)}`;
   const lines = [`${head} ${l.title}`];
   if (l.note) lines.push(`${' '.repeat(30)}${l.note}`);
   if (l.scope) lines.push(`${' '.repeat(30)}scope: ${l.scope}`);
@@ -236,10 +258,18 @@ const commands = {
        ORDER BY ${ALIVE_AT()} DESC`,
     )).rows;
 
-    if (JSON_OUT) return { lanes: rows, peers, me: myId };
+    if (JSON_OUT) {
+      return {
+        lanes: rows.map((l) => ({ ...l, owner_name: l.owner_session_id ? nameOf(l.owner_session_id) : null })),
+        peers,
+        me: myId,
+        me_short: short(myId),
+        me_name: nameOf(myId),
+      };
+    }
 
     const out = [];
-    out.push(`LANE BOARD   me=${short(myId)}   ${rows.length} open lane(s)   ${peers.length} live session(s)`);
+    out.push(`LANE BOARD   me=${L(myId)}   ${rows.length} open lane(s)   ${peers.length} live session(s)`);
     let track = null;
     for (const l of rows) {
       if (l.track !== track) { track = l.track; out.push(``, `-- ${track} ${'-'.repeat(Math.max(0, 60 - track.length))}`); }
@@ -265,11 +295,108 @@ const commands = {
        WHERE ${ALIVE_AT('s.')} > now() - interval '${STALE_MINUTES} minutes'
        ORDER BY ${ALIVE_AT('s.')} DESC`,
     );
-    if (JSON_OUT) return rows;
-    return rows.map((r) =>
-      `${r.id === myId ? '*' : ' '} ${short(r.id)}  lanes: ${r.lanes || '(none)'}\n` +
-      `             on: ${String(r.working_on || '').replace(/\s+/g, ' ').slice(0, 90)}`,
-    ).join('\n') || 'no live sessions';
+    if (JSON_OUT) return rows.map((r) => ({ ...r, name: nameOf(r.id), label: L(r.id) }));
+    return rows.map((r) => {
+      const held = r.lanes ? r.lanes.split(', ') : [];
+      const lanes = held.length ? `${held[0]}${held.length > 1 ? ` +${held.length - 1}` : ''}` : '(none)';
+      return `${r.id === myId ? '*' : ' '} ${L(r.id)}  lanes: ${lanes}`;
+    }).join('\n') || 'no live sessions';
+  },
+
+  /** Who am I: the label, the full uuid and the lanes I hold. */
+  async whoami(c) {
+    const myId = me();
+    const held = (await c.query(
+      `SELECT id FROM agentic_os.lane WHERE owner_session_id=$1 AND state <> 'done' ORDER BY id`, [myId],
+    )).rows.map((r) => r.id);
+    if (JSON_OUT) return { label: L(myId), uuid: myId, short: short(myId), name: nameOf(myId), lanes: held };
+    return [L(myId), `uuid: ${myId}`, `lanes: ${held.join(', ') || '(none)'}`].join('\n');
+  },
+
+  /**
+   * Take over the open lanes, unread direct messages and inbox cursor of a session
+   * that /clear, resume or fork replaced. Hooks call this at SessionStart.
+   *
+   * Refused unless the two identity files agree it is the same session (see
+   * adoptAllowed) AND the old session has ended (endedAt, or quiet for STALE_MINUTES):
+   * this moves another session's lanes, so a stranger or a live session gets nothing.
+   * One transaction. A second run finds nothing left to move. The cursor is carried
+   * only when the new session has none, so an adopt cannot rewind a live inbox; if
+   * the new session already read past a moved message, the cursor steps back to it.
+   */
+  async adopt(c) {
+    const newId = me();
+    const oldId = flags.from;
+    if (typeof oldId !== 'string') throw new Error('usage: lane.mjs adopt --from <old-session-uuid>');
+    if (oldId === newId) throw new Error('adopt --from must be a different session than me');
+    if (!isSafeId(oldId)) throw new Error(`adopt --from "${oldId}" is not a session id`);
+    const oldIdentity = readIdentity(oldId);
+    if (!adoptAllowed(oldId, newId, oldIdentity, readIdentity(newId))) {
+      const e = new Error(
+        `REFUSED adopt from ${L(oldId)}: ${L(newId)} does not share its name and does not name it as previous.\n` +
+        `  Identity files: ${nameOf(oldId) || '(no name)'} / ${nameOf(newId) || '(no name)'}`);
+      e.soft = true; throw e;
+    }
+    // A live session keeps its lanes. The old one must have ended: its identity file says so,
+    // or its sessions row has been quiet for STALE_MINUTES (same liveness predicate as claim).
+    if (!oldIdentity?.endedAt) {
+      const live = (await c.query(
+        `SELECT 1 FROM sessions WHERE id=$1 AND ${ALIVE_AT()} > now() - interval '${STALE_MINUTES} minutes'`, [oldId],
+      )).rows.length > 0;
+      if (live) {
+        const e = new Error(
+          `REFUSED adopt from ${L(oldId)}: it has not ended (no endedAt, alive in the last ${STALE_MINUTES}m).\n` +
+          `  Retry after it ends or goes quiet.`);
+        e.soft = true; throw e;
+      }
+    }
+    await c.query('BEGIN');
+    let moved;
+    try {
+      const lanes = (await c.query(
+        `UPDATE agentic_os.lane SET owner_session_id=$2, updated_at=now()
+         WHERE owner_session_id=$1 AND state <> 'done' RETURNING id`, [oldId, newId],
+      )).rows.map((r) => r.id).sort();
+      const wm = async (sid) => (await c.query(
+        `SELECT last_event_id::bigint AS n FROM agentic_os.lane_watermark WHERE session_id=$1`, [sid],
+      )).rows[0]?.n;
+      const oldWm = await wm(oldId);
+      const newWm = await wm(newId);
+      const dms = (await c.query(
+        `UPDATE agentic_os.lane_event
+            SET to_session_id=$2, detail = detail || jsonb_build_object('adoptedFrom', $1::text)
+          WHERE to_session_id=$1 AND id > $3::bigint RETURNING id`, [oldId, newId, oldWm ?? 0],
+      )).rows.map((r) => Number(r.id));
+      let cursor = 'unchanged';
+      if (newWm === undefined && oldWm !== undefined) {
+        await c.query(
+          // lane-context can write this row at SessionStart while adopt runs; a key clash must not roll back the adopt.
+          `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at) VALUES ($1,$2,now())
+           ON CONFLICT (session_id) DO NOTHING`, [newId, oldWm]);
+        cursor = 'carried';
+      } else if (newWm !== undefined && dms.length && Math.min(...dms) <= Number(newWm)) {
+        await c.query(
+          `UPDATE agentic_os.lane_watermark SET last_event_id=$2, updated_at=now() WHERE session_id=$1`, [newId, Math.min(...dms) - 1]);
+        cursor = 'stepped back';
+      }
+      await c.query('COMMIT');
+      moved = { from: oldId, to: newId, lanes, messages: dms.length, cursor };
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw e;
+    }
+    // Addressed to the new session itself: inbox and the DM hook skip a session's own events,
+    // so this is an audit row nobody gets paged for.
+    if (moved.lanes.length || moved.messages) {
+      await logEvent(c, {
+        kind: 'note', sessionId: newId, to: newId,
+        body: `${L(newId)} adopted ${moved.lanes.length} lane(s) and ${moved.messages} message(s) from ${L(oldId)}`,
+        detail: { adopted: true, from: oldId },
+      });
+    }
+    if (JSON_OUT) return moved;
+    if (!moved.lanes.length && !moved.messages && moved.cursor === 'unchanged') return `adopt from ${L(oldId)}: nothing to move`;
+    return `adopted from ${L(oldId)}: ${moved.lanes.length} lane(s) [${moved.lanes.join(', ')}], ${moved.messages} message(s), cursor ${moved.cursor}`;
   },
 
   async next(c) {
@@ -354,7 +481,7 @@ const commands = {
       detail: { denied: true },
     });
     const err = [
-      `DENIED ${id} -- held by session ${short(cur.owner_session_id)}`,
+      `DENIED ${id} -- held by ${L(cur.owner_session_id)}`,
       `  their note: ${cur.note || '(none)'}`,
       `  lease: ${cur.lease_expires_at ? new Date(cur.lease_expires_at).toISOString() : 'none'}`,
       `  they were last alive: ${holder?.last_alive ? new Date(holder.last_alive).toISOString() : 'never seen'}`,
@@ -385,7 +512,7 @@ const commands = {
        WHERE id=$1 RETURNING *`, [id, body, myId],
     );
     if (!rows.length) throw new Error(`no lane "${id}"`);
-    await logEvent(c, { laneId: id, kind: 'note', sessionId: myId, body });
+    await logEvent(c, { laneId: id, kind: 'note', sessionId: myId, body, detail: agentDetail() });
     return JSON_OUT ? rows[0] : `noted on ${id}: ${body}`;
   },
 
@@ -442,23 +569,37 @@ const commands = {
   async say(c) {
     const myId = me();
     const body = positional.slice(1).join(' ');
-    if (!body) throw new Error('usage: lane.mjs say "message" [--to <sid-prefix>] [--lane <id>]');
+    if (!body) throw new Error('usage: lane.mjs say "message" [--to <name|sid-prefix>] [--lane <id>]');
     let to = null;
     if (typeof flags.to === 'string') {
-      const m = await c.query(
-        `SELECT id FROM sessions WHERE id LIKE $1 || '%'
-         AND ${ALIVE_AT()} > now() - interval '2 hours'
-         ORDER BY ${ALIVE_AT()} DESC LIMIT 2`, [flags.to],
-      );
-      if (m.rows.length === 0) throw new Error(`no recent session matching "${flags.to}"`);
-      if (m.rows.length > 1) throw new Error(`"${flags.to}" is ambiguous -- give more characters`);
-      to = m.rows[0].id;
+      // 1. An exact session name among recent sessions. The old half of a /clear is skipped.
+      const named = [...ids()].filter(([, i]) => typeof i.name === 'string').map(([u]) => u);
+      const recent = named.length ? new Set((await c.query(
+        `SELECT id FROM sessions WHERE id = ANY($1) AND ${ALIVE_AT()} > now() - interval '2 hours'`, [named],
+      )).rows.map((r) => r.id)) : new Set();
+      const byName = resolveName(flags.to, ids(), recent);
+      if (byName.length > 1) {
+        throw new Error(`"${flags.to}" names ${byName.length} live sessions: ${byName.map(L).join(', ')}. Use #sid8 or the uuid prefix.`);
+      }
+      if (byName.length === 1) to = byName[0];
+      else {
+        // 2. Fall back to a uuid prefix. % _ \ are literal characters, not wildcards.
+        const prefix = flags.to.replace(/^#/, '').replace(/[\\%_]/g, '\\$&');
+        const m = await c.query(
+          `SELECT id FROM sessions WHERE id LIKE $1 || '%' ESCAPE '\\'
+           AND ${ALIVE_AT()} > now() - interval '2 hours'
+           ORDER BY ${ALIVE_AT()} DESC LIMIT 2`, [prefix],
+        );
+        if (m.rows.length === 0) throw new Error(`no recent session matching "${flags.to}"`);
+        if (m.rows.length > 1) throw new Error(`"${flags.to}" is ambiguous -- give more characters`);
+        to = m.rows[0].id;
+      }
     }
     await logEvent(c, {
       laneId: typeof flags.lane === 'string' ? flags.lane : null,
-      kind: 'note', sessionId: myId, to, body,
+      kind: 'note', sessionId: myId, to, body, detail: agentDetail(),
     });
-    return `sent to ${to ? short(to) : 'the branch'}${flags.lane ? ` re ${flags.lane}` : ''}`;
+    return `sent to ${to ? L(to) : 'the branch'}${flags.lane ? ` re ${flags.lane}` : ''}`;
   },
 
   /**
@@ -487,9 +628,9 @@ const commands = {
     if (JSON_OUT) return rows;
     if (!rows.length) return 'inbox empty';
     return rows.map((e) => {
-      const t = new Date(e.occurred_at).toISOString().slice(11, 16);
-      const dm = e.to_session_id ? ' (direct)' : '';
-      return `${t} ${short(e.session_id)} ${e.kind}${e.lane_id ? ` [${e.lane_id}]` : ''}${dm}\n     ${e.body || ''}`;
+      const to = e.to_session_id ? L(e.to_session_id) : 'all';
+      const kind = e.kind === 'note' ? '' : ` (${e.kind})`;
+      return `${chicagoTime(e.occurred_at)}  ${labelWithAgent(e.session_id, ids(), e.detail?.agent)} -> ${to}${e.lane_id ? ` [${e.lane_id}]` : ''}${kind}\n     ${e.body || ''}`;
     }).join('\n');
   },
 

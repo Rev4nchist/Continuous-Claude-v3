@@ -31,6 +31,7 @@ function harness({ spawn, baselineCounts = {} }) {
     spawn: (cmd, args) => { calls.push({ cmd, args }); return spawn(cmd, args); },
     log: (s) => lines.push(String(s)),
     env: { DOCKER_BIN: 'docker-test' },
+    findOpengrep: () => null, // these tests cover the Docker path; semgrep-ccv3-opengrep.test.mjs covers opengrep
     baseline,
     tmp: () => dir,
   };

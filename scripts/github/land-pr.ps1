@@ -29,6 +29,8 @@
   checkout is on the PR branch, it keeps the primary AND the remote branch, and prints what to do.
   Every step is idempotent: re-running after a partial failure picks up where it stopped.
   -CleanupOnly skips steps 1-2 for a PR that is already merged.
+  -TestFailUnlink and -TestSwitchPrimary are TEST-ONLY switches (land-pr-worktree-links.test.ps1).
+  Never use them in a real land. They replace the old LAND_PR_TEST_* env vars, which are no longer read.
 
 .EXAMPLE
   pwsh -File scripts/github/land-pr.ps1 -Pr 45
@@ -44,7 +46,9 @@ param(
   [string]$Remote = 'fork',
   [switch]$IgnoreReview,
   [switch]$CleanupOnly,
-  [switch]$NoSync
+  [switch]$NoSync,
+  [switch]$TestFailUnlink,      # TEST-ONLY: every worktree unlink fails, so a test reaches the "link not removed" branch
+  [switch]$TestSwitchPrimary    # TEST-ONLY: switch the primary checkout to the PR branch after the worktree step
 )
 $ErrorActionPreference = 'Stop'
 # gh-personal routes the Rev4nchist account on machines with two GitHub logins
@@ -326,12 +330,12 @@ if ($wtPath) {
       Write-Host "  kept worktree $wtPath`: e2e artifacts not saved ($saveProblem)"
     } else {
       # Unlink every junction and symlink first; git would delete through them (see Remove-WorktreeLinks).
-      # Tracked symlinks are left to git (it removes them as files). LAND_PR_TEST_FAIL_UNLINK is
+      # Tracked symlinks are left to git (it removes them as files). -TestFailUnlink is
       # TEST-ONLY: when set, every unlink fails, so a test can reach the "link not removed" branch.
       $tracked = Get-TrackedSymlinkPaths -Worktree $wtPath
-      $failUnlink = { param($info) throw 'unlink failure injected by LAND_PR_TEST_FAIL_UNLINK' }
+      $failUnlink = { param($info) throw 'unlink failure injected by -TestFailUnlink' }
       $links = if ($tracked.Error) { [pscustomobject]@{ Removed = @(); Remaining = @(); Error = "cannot list tracked symlinks: $($tracked.Error)" } }
-        elseif ($env:LAND_PR_TEST_FAIL_UNLINK) { Remove-WorktreeLinks -Path $wtPath -SkipPaths $tracked.Paths -Delete $failUnlink }
+        elseif ($TestFailUnlink) { Remove-WorktreeLinks -Path $wtPath -SkipPaths $tracked.Paths -Delete $failUnlink }
         else { Remove-WorktreeLinks -Path $wtPath -SkipPaths $tracked.Paths }
       if ($links.Remaining.Count -or $links.Error) {
         $named = if ($links.Remaining.Count) { $links.Remaining -join ', ' } else { $links.Error }
@@ -344,7 +348,7 @@ if ($wtPath) {
     }
   }
 }
-if ($env:LAND_PR_TEST_SWITCH_PRIMARY) { git -C $RepoPath checkout -q $branch 2>&1 | Out-Null }   # TEST-ONLY: another session switches the primary here
+if ($TestSwitchPrimary) { git -C $RepoPath checkout -q $branch 2>&1 | Out-Null }   # TEST-ONLY: another session switches the primary here
 if (git -C $RepoPath branch --list $branch) {
   git -C $RepoPath branch -d $branch 2>&1 | Out-Host
   if ($LASTEXITCODE -eq 0) { $done.Add("deleted local $branch") } else { Write-Host "  kept local $branch (git branch -d refused)" }

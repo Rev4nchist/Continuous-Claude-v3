@@ -71,6 +71,12 @@ const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as
 /** Repo, branch and worktree of the session folder: read from the .git files at the session start and at each turn start. */
 const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | null)
 
+/**
+ * The Claude Code session name (`/rename`, `--name`): the band draws it before `#sid8`. Set from `session_title` of classic.SessionStart and
+ * classic.UserPromptSubmit, else from the identity file (`~/.claude/state/identity/<uuid>.json`, written by the heartbeat hook). Null: unnamed.
+ */
+const sessionName = atom({ plugin: 'ccv3-mods', key: 'sessionName' } as const, null as string | null)
+
 /** The tab the /os pane shows. Only a live tab is ever stored (a Comms or Resources tab has no Button); reset at /clear and resume. */
 const osTab = atom({ plugin: 'ccv3-mods', key: 'osTab' } as const, 'overview' as TabId)
 
@@ -124,6 +130,49 @@ const touch = async ($: EngineInterface): Promise<void> => {
 const isOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MODS_OFF')) === '1'
 
 const homeDir = async ($: EngineInterface) => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+
+/** The name in this session's identity file, or null (no file, no name, bad JSON). `CCV3_IDENTITY_DIR` moves the folder (tests). */
+const identityName = async ($: EngineInterface, id: string): Promise<string | null> => {
+  try {
+    const home = await homeDir($)
+    const dir = (await $.env.get('CCV3_IDENTITY_DIR')) ?? (home ? `${home}/.claude/state/identity` : null)
+    if (dir === null) return null
+    const name = (JSON.parse(await $.fs.read(`${dir}/${id}.json`)) as { name?: unknown } | null)?.name
+    return typeof name === 'string' && name.trim() !== '' ? name.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** Keeps the session name from a hook's `session_title`, else from the identity file. Finds none: the last name stays. Never throws. */
+const noteName = async ($: EngineInterface, title: unknown): Promise<void> => {
+  try {
+    const given = typeof title === 'string' && title.trim() !== '' ? title.trim() : null
+    const name = given ?? (await identityName($, await $.session.id()))
+    if (name !== null) await update($, sessionName, () => name)
+  } catch {
+    // Observer only: the band reads unnamed.
+  }
+}
+
+/**
+ * classic.SessionStart: run the settings hooks first (next(e)), then read the name. session-register hands an auto-name back as
+ * hookSpecificOutput.sessionTitle, which the engine folds into the result's top-level sessionTitle (ClassicResult), and that only exists after next(e). The read sits in try/catch and the result is returned
+ * as it came: a throw after next(e) would reach the outer .catch, which runs the settings hooks a second time.
+ */
+const readNameAfter = async <E extends { session_title?: unknown }, R extends { sessionTitle?: string } | undefined>(
+  $: EngineInterface,
+  e: E,
+  next: (e: E) => Promise<R>,
+): Promise<R> => {
+  const result = await next(e)
+  try {
+    if (!(await isOff($))) await noteName($, e.session_title ?? result?.sessionTitle)
+  } catch {
+    // Observer only: the band reads the name at the next prompt.
+  }
+  return result
+}
 
 const BAND_LOG = '.claude/state/agentic-os/band-debug.log'
 const BAND_LOG_LINES = 200
@@ -670,6 +719,8 @@ export const agenticOs = (on: On) => {
       // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
       await registerBrief($)
       await refreshGit($)
+      // A /reload-plugins runs this start but no classic SessionStart or prompt: read the name from the identity file now.
+      await noteName($, undefined)
       if (e.isInteractive) await startUi($)
       return next(e)
     } catch (err) {
@@ -691,6 +742,8 @@ export const agenticOs = (on: On) => {
         await update($, steward, () => FRESH_STEWARD)
         await update($, refused, () => false)
         await update($, osTab, () => 'overview')
+        // The next conversation reads its own name at its SessionStart; the old one must not show meanwhile.
+        await update($, sessionName, () => null)
         // The keeper's records belong to the conversation they watched: the new one has had no compaction.
         await update($, compactions, () => [])
       }
@@ -708,6 +761,16 @@ export const agenticOs = (on: On) => {
     } catch {
       // Observer only.
     }
+    return readNameAfter($, e, next)
+  }).catch(($, e, next) => next(e))
+
+  // The session name, from every SessionStart (the resume and clear handler above reads it too) and every prompt: a /rename shows at the next prompt.
+  // The hud module holds the unmatched classic.SessionStart, so these sources are matched.
+  on('classic.SessionStart', { source: ['startup', 'compact', 'fork'] }, ($, e, next) => readNameAfter($, e, next))
+    .catch(($, e, next) => next(e))
+
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    if (!(await isOff($))) await noteName($, e.session_title)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -863,12 +926,11 @@ export const agenticOs = (on: On) => {
       brief: await read($, brief),
       tasks: now.tasks,
       repo: (await read($, git))?.repo ?? null,
-      branch: (await read($, git))?.branch ?? null,
+      who: { name: await read($, sessionName), short: (await $.session.id().catch(() => null))?.slice(0, 8) ?? null },
       lane: now.lanes?.[0]?.id ?? null,
+      laneCount: now.lanes?.length ?? 0,
       ctx: now.ctx,
       costUsd: hudNow?.costUsd ?? null,
-      // public.sessions.working_on would go here. Nothing reads it in the terminal yet.
-      fallback: null,
       now: at,
       activeAt: await read($, activeAt),
       helpers: runs.filter(run => run.status === 'running').length,

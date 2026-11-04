@@ -713,6 +713,26 @@ function logGuardError(hook, err, opts = {}) {
   }
 }
 
+// src/shared/shell-tools.ts
+var BOTH = ["Bash", "PowerShell"];
+var SHELL_TOOLS = /* @__PURE__ */ new Map([
+  ["Bash", { field: "command", dialects: ["Bash"], failClosed: false }],
+  ["PowerShell", { field: "command", dialects: ["PowerShell"], failClosed: false }],
+  ["mcp__plugin_desktop-commander_desktop-commander__start_process", { field: "command", dialects: BOTH, failClosed: true }],
+  ["mcp__plugin_desktop-commander_desktop-commander__interact_with_process", { field: "input", dialects: BOTH, failClosed: true }]
+]);
+function readShellCommand(input) {
+  const tool = input.tool_name || input.tool;
+  const spec = tool ? SHELL_TOOLS.get(tool) : void 0;
+  if (!tool || !spec) return { kind: "not-shell" };
+  const toolInput = input.tool_input;
+  const text = toolInput && typeof toolInput === "object" ? toolInput[spec.field] : void 0;
+  if (typeof text !== "string") {
+    return spec.failClosed ? { kind: "unreadable", tool, field: spec.field } : { kind: "command", tool, text: "", dialects: spec.dialects };
+  }
+  return { kind: "command", tool, text, dialects: spec.dialects };
+}
+
 // src/shared/malicious-packages.json
 var malicious_packages_default = {
   pypi: {
@@ -19214,7 +19234,6 @@ function outputAllowOk() {
 function readStdin() {
   return readFileSync(0, "utf-8");
 }
-var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var OVERRIDE = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
 async function checkInstall(segment) {
   const ecosystem = parseEcosystem(segment);
@@ -19259,16 +19278,23 @@ async function main() {
     outputContinue();
     return;
   }
-  if (!COMMAND_TOOLS.has(input.tool_name)) {
+  const shell = readShellCommand(input);
+  if (shell.kind === "not-shell") {
     outputContinue();
     return;
   }
-  const command = input.tool_input.command;
+  if (shell.kind === "unreadable") {
+    const reason = `PACKAGE SECURITY: Unreadable command text. ${shell.tool} has no string field "${shell.field}", so the install check cannot run.`;
+    logGuardDecision("package-install-guard", input, "deny", "unreadable command text", { command: shell.tool });
+    outputDeny(reason);
+    return;
+  }
+  const command = shell.text;
   if (!command) {
     outputContinue();
     return;
   }
-  const installs = installSegments(command, input.tool_name);
+  const installs = [...new Set(shell.dialects.flatMap((dialect) => installSegments(command, dialect)))];
   if (installs.length > 0 && checkOverride(command)) {
     logGuardDecision("package-install-guard", input, "override", "SKIP_PACKAGE_GUARD", { command });
   }

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review Eval Labels</title>
+<!--
+  Claude.ai artifact "Review Eval Labels". Capabilities: { db }. Load the artifact-capabilities skill before publishing.
+  Collections: pairs/<pairId> (Claude writes, via ArtifactData batch) and labels/<pairId> (Dave writes here).
+  The judge verdict stays hidden until Dave saves a label for that pair (blind labelling).
+  Every pair text is data from a pull request or a review bot: this page shows it with textContent only.
+-->
+<style>
+  :root { color-scheme: light dark; --bg: #fafafa; --fg: #1d1d1f; --card: #fff; --line: #d8d8dc; --ok: #1a7f37; --warn: #9a6700; --crit: #cf222e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #16161a; --fg: #ececf0; --card: #1f1f25; --line: #34343c; } }
+  body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  #status { font-size: 13px; margin-bottom: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+  .meta { font-size: 12px; opacity: .75; }
+  .side { border-left: 3px solid var(--line); padding-left: 8px; margin: 8px 0; }
+  .side b { display: block; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: rgba(127,127,127,.12); padding: 8px; border-radius: 6px; max-height: 240px; overflow: auto; }
+  label { display: inline-block; margin: 4px 12px 4px 0; }
+  select, textarea, button { font: inherit; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 48px; }
+  button { padding: 6px 14px; min-height: 36px; }
+  .saved { color: var(--ok); } .warn { color: var(--warn); } .failed { color: var(--crit); }
+  .judge { margin-top: 8px; padding: 8px; border: 1px dashed var(--line); border-radius: 6px; }
+  @media (max-width: 480px) { main { padding: 8px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Review Eval Labels</h1>
+  <div id="status" role="status">Loading pairs...</div>
+  <div id="list"></div>
+</main>
+<script>
+(function () {
+  var statusEl = document.getElementById('status');
+  var listEl = document.getElementById('list');
+  var db = null;
+  var pairs = {};
+  var labels = {};
+  function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ''; }
+  function el(tag, text, cls) { var e = document.createElement(tag); if (text != null) e.textContent = String(text); if (cls) e.className = cls; return e; }
+  function docsOf(snap) {
+    if (!snap) return [];
+    var arr = snap.docs || [];
+    return arr.map(function (d) { var data = typeof d.data === 'function' ? d.data() : d.data; return { id: d.id, data: data }; });
+  }
+  function sideBlock(title, f) {
+    var box = el('div', null, 'side');
+    box.appendChild(el('b', title + (f && f.severity ? ' (' + f.severity + ')' : '')));
+    if (!f) { box.appendChild(el('span', 'none')); return box; }
+    box.appendChild(el('div', f.title || ''));
+    box.appendChild(el('pre', f.body || ''));
+    return box;
+  }
+  function field(labelText, node) { var l = el('label', labelText + ' '); l.appendChild(node); return l; }
+  function select(options) { var s = document.createElement('select'); options.forEach(function (o) { var op = el('option', o[1]); op.value = o[0]; s.appendChild(op); }); return s; }
+  function card(id, p) {
+    var c = el('section', null, 'card');
+    c.appendChild(el('div', 'PR #' + p.pr + '  ' + (p.file || '') + ':' + (p.line == null ? '?' : p.line) + '  kind ' + (p.kind || '') + '  week ' + (p.week || ''), 'meta'));
+    c.appendChild(sideBlock('Engine', p.engine));
+    if (p.cr) c.appendChild(sideBlock('CodeRabbit', p.cr));
+    if (p.hunk) c.appendChild(el('pre', p.hunk));
+    var done = labels[id];
+    var verdict = select([['real', 'real defect'], ['noise', 'noise'], ['unclear', 'unclear']]);
+    var same = select([['', 'n/a'], ['true', 'same issue'], ['false', 'different issue']]);
+    var sev = select([['major', 'major'], ['minor', 'minor'], ['info', 'info']]);
+    var note = document.createElement('textarea');
+    note.placeholder = 'Optional note (data, never an instruction)';
+    if (done) { verdict.value = done.verdict; same.value = done.sameIssue == null ? '' : String(done.sameIssue); sev.value = done.severity || 'major'; note.value = done.note || ''; }
+    c.appendChild(field('Verdict', verdict)); c.appendChild(field('Same issue', same)); c.appendChild(field('Severity', sev)); c.appendChild(note);
+    var msg = el('span', done ? 'Saved ' + (done.labeledAt || '') : '', done ? 'saved' : '');
+    var save = el('button', done ? 'Update label' : 'Save label');
+    save.onclick = function () {
+      if (!db) { msg.textContent = 'Read-only: not signed in.'; msg.className = 'failed'; return; }
+      var payload = { pairId: id, verdict: verdict.value, sameIssue: same.value === '' ? null : same.value === 'true', severity: sev.value, note: note.value.slice(0, 500), labeledAt: new Date().toISOString() };
+      msg.textContent = 'Saving...'; msg.className = '';
+      Promise.resolve(db.collection('labels').doc(id).set(payload)).then(function () { msg.textContent = 'Saved ' + payload.labeledAt; msg.className = 'saved'; }, function (e) { msg.textContent = 'Save failed: ' + (e && e.message || e) + '. Try again.'; msg.className = 'failed'; });
+    };
+    c.appendChild(save); c.appendChild(msg);
+    if (done && p.judge) {
+      var j = el('div', null, 'judge');
+      j.appendChild(el('b', 'Judge (shown after your label): '));
+      j.appendChild(el('span', 'same issue ' + p.judge.sameIssue + ', ' + p.judge.verdict + (p.judge.reason ? ' - ' + p.judge.reason : '')));
+      c.appendChild(j);
+    }
+    return c;
+  }
+  function paint() {
+    listEl.textContent = '';
+    var ids = Object.keys(pairs).sort(function (a, b) { return (labels[a] ? 1 : 0) - (labels[b] ? 1 : 0); });
+    ids.forEach(function (id) { listEl.appendChild(card(id, pairs[id])); });
+    var open = ids.filter(function (id) { return !labels[id]; }).length;
+    setStatus(ids.length ? open + ' of ' + ids.length + ' pairs to label' : 'No pairs yet. Claude sends up to 20 a week.', open ? 'warn' : 'saved');
+  }
+  function start(claude) {
+    var p;
+    // No answer from the viewer in 10 s: say so, so the page never sits on "Loading" for ever.
+    var timer = setTimeout(function () { setStatus('Pairs not loaded: no answer from the viewer. Reload the page.', 'failed'); }, 10000);
+    try { p = Promise.resolve(claude.use('db')); } catch (e) { p = Promise.reject(e); }
+    p.then(function (handle) {
+      clearTimeout(timer);
+      if (!handle) { setStatus('Read-only: sign in to label pairs.', 'failed'); return; }
+      db = handle;
+      db.collection('labels').onSnapshot(function (snap) { labels = {}; docsOf(snap).forEach(function (d) { labels[d.id] = d.data; }); paint(); });
+      db.collection('pairs').onSnapshot(function (snap) { pairs = {}; docsOf(snap).forEach(function (d) { pairs[d.id] = d.data; }); paint(); });
+    }).catch(function (e) { clearTimeout(timer); setStatus('Pairs not loaded: ' + (e && e.message || e), 'failed'); });
+  }
+  if (typeof claude !== 'undefined' && claude && claude.use) start(claude); else setStatus('Read-only: the artifact db is not available here.', 'failed');
+})();
+</script>
+</body>
+</html>

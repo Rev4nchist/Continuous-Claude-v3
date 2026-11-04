@@ -17,6 +17,8 @@
 //   a review just before the READY time slips through (decision side of the 120 s clock margin)  -> RC2c
 //   a summary a person (or another app) edited, or one with no edit history, answers a request  -> RC14 to RC14d
 //   the comments are read without the edit history, or a read error there goes through          -> RC14e to RC14g, RC10e
+//   the newest round is picked by submitted_at, not by the PR's commit order, and hides a request   -> RC15, RC15e
+//   the commit list is unreadable and rounds on two commits cannot be ordered                       -> RC15b to RC15e
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -203,10 +205,63 @@ test('RC8: every gate that fires is listed', () => {
   for (const word of [/head changed/i, /review.*after the ready check/i, /summary/i, /in flight/i, /pending/i]) assert.match(text, word);
 });
 
+// RC15 shape: the review of the NEWER commit (HEAD) landed first; a review of the OLDER commit was re-posted later.
+const OLDER = 'c'.repeat(40);
+const lateRounds = () => [review(1, BEFORE), review(2, '2026-10-30T11:40:00Z', { commit_id: OLDER })];
+const request1120 = () => [summary(BEFORE), request('2026-10-30T11:20:00Z')];
+
+test('RC15: a re-posted review of an OLDER commit, newer by time, does not answer a request after the newest round', () => {
+  const commits = [{ sha: OLDER }, { sha: HEAD }];
+  const r = decideRecheck(quiet({ reviews: lateRounds(), comments: request1120(), commits }));
+  assert.equal(r.ok, false);
+  assert.match(r.refusals.join(' '), /in flight/i);
+  assert.doesNotMatch(r.refusals.join(' '), /commit list/i);
+});
+
+test('RC15b: with no commit list and rounds on two commits, the order is unknown and it refuses', () => {
+  const r = decideRecheck(quiet({ reviews: lateRounds(), commits: [] }));
+  assert.equal(r.ok, false);
+  assert.match(r.refusals.join(' '), /commit list/i);
+});
+
+test('RC15c: with no commit list and rounds on one commit, the order does not matter and it proceeds', () => {
+  const reviews = [review(1, '2026-10-30T10:30:00Z'), review(2, BEFORE)];
+  assert.deepEqual(decideRecheck(quiet({ reviews, commits: [] })), { ok: true, refusals: [] });
+  assert.deepEqual(decideRecheck(quiet({ reviews, commits: undefined })), { ok: true, refusals: [] });
+});
+
+test('RC15d: an empty-body reply or a person review on another commit is no second round', () => {
+  const reviews = [review(1, BEFORE), review(2, BEFORE, { commit_id: OLDER, body: '' }), review(3, BEFORE, { commit_id: MOVED, user: PERSON })];
+  assert.deepEqual(decideRecheck(quiet({ reviews, commits: [] })), { ok: true, refusals: [] });
+});
+
+test('RC15f: after an amend, a round on a commit no longer in the PR answers nothing, and a quiet PR still lands', () => {
+  // OLDER was rewritten away (only HEAD is listed). Its late round must not answer the 11:20 request; the HEAD round (11:00) is newest.
+  const asked = decideRecheck(quiet({ reviews: lateRounds(), comments: request1120(), commits: [{ sha: HEAD }] }));
+  assert.equal(asked.ok, false);
+  assert.match(asked.refusals.join(' '), /in flight/i);
+  assert.doesNotMatch(asked.refusals.join(' '), /commit list/i);
+  // No request: the dropped round blocks nothing, so the land goes on.
+  assert.deepEqual(decideRecheck(quiet({ reviews: lateRounds(), comments: [summary(BEFORE)], commits: [{ sha: HEAD }] })), { ok: true, refusals: [] });
+});
+
+test('RC15h: a complete commit list with rounds on two commits and an answered request lets the PR land', () => {
+  const comments = [summary(BEFORE), request('2026-10-30T10:30:00Z')];
+  assert.deepEqual(decideRecheck(quiet({ reviews: lateRounds(), comments, commits: [{ sha: OLDER }, { sha: HEAD }] })), { ok: true, refusals: [] });
+});
+
+test('RC15i: sha case does not matter when matching rounds to the commit list', () => {
+  const reviews = [review(1, BEFORE, { commit_id: HEAD.toUpperCase() }), review(2, '2026-10-30T11:40:00Z', { commit_id: OLDER })];
+  const r = decideRecheck(quiet({ reviews, comments: request1120(), commits: [{ sha: OLDER.toUpperCase() }, { sha: HEAD }] }));
+  assert.equal(r.ok, false);
+  assert.match(r.refusals.join(' '), /in flight/i);
+  assert.doesNotMatch(r.refusals.join(' '), /commit list/i);
+});
+
 // ---- recheckPr: the reads ----
 
 /** A fake gh keyed on the endpoint. `fail` makes the matching call throw. */
-function fakeGh({ pull = { head: { sha: HEAD } }, reviews = [review(1, BEFORE)], comments = [summary(BEFORE)], edits = { 900: [] }, combined = { statuses: [status('success')] }, combinedPages = null, fail = null } = {}) {
+function fakeGh({ pull = { head: { sha: HEAD } }, reviews = [review(1, BEFORE)], commits = [HEAD], comments = [summary(BEFORE)], edits = { 900: [] }, combined = { statuses: [status('success')] }, combinedPages = null, fail = null } = {}) {
   const calls = [];
   // The GraphQL node of a REST comment (what readIssueComments pairs it with): same body, author and the edit history.
   const node = (c) => ({
@@ -224,6 +279,7 @@ function fakeGh({ pull = { head: { sha: HEAD } }, reviews = [review(1, BEFORE)],
     if (url === 'graphql') return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: comments.map(node) } } } } };
     if (/\/pulls\/7$/.test(url)) return pull;
     if (/\/pulls\/7\/reviews/.test(url)) return [reviews];
+    if (/\/pulls\/7\/commits/.test(url)) return [commits.map((sha) => ({ sha }))];
     if (/\/issues\/7\/comments/.test(url)) return [comments];
     // A paginated read (--paginate --slurp) gets every page as an array; a plain read gets page 1 only, as the real API does.
     if (/\/commits\/[^/]+\/status/.test(url)) return combinedPages ? (args.includes('--paginate') ? combinedPages : combinedPages[0]) : combined;
@@ -294,6 +350,25 @@ test('RC14g: recheckPr refuses when the edit history cannot be paired (summary m
   const r = await recheckPr(asked211, gh211({ 900: [CR_EDIT] }, dropNodes));
   assert.equal(r.ok, false);
   assert.match(r.refusals.join(' '), /in flight/i);
+});
+
+test('RC15e: recheckPr reads the PR commit list and orders the rounds by it; an unreadable list refuses', async () => {
+  const fake = fakeGh({ reviews: lateRounds(), comments: request1120(), commits: [OLDER, HEAD] });
+  const r = await recheckPr(asked, fake.gh);
+  assert.equal(r.ok, false);
+  assert.match(r.refusals.join(' '), /in flight/i);
+  assert.ok(fake.calls.some((u) => /\/pulls\/7\/commits/.test(u)));
+  const unreadable = await recheckPr(asked, fakeGh({ reviews: lateRounds(), comments: request1120(), fail: /\/pulls\/7\/commits/ }).gh);
+  assert.match(unreadable.refusals.join(' '), /commit list/i);
+});
+
+test('RC15g: a failed or empty commit-list read refuses even with rounds on one commit (fail closed)', async () => {
+  const failed = await recheckPr(asked, fakeGh({ fail: /\/pulls\/7\/commits/ }).gh);
+  assert.equal(failed.ok, false);
+  assert.match(failed.refusals.join(' '), /commit list is unreadable/);
+  const empty = await recheckPr(asked, fakeGh({ commits: [] }).gh);
+  assert.equal(empty.ok, false);
+  assert.match(empty.refusals.join(' '), /commit list is empty/);
 });
 
 test('RC11: an unreadable READY time refuses', async () => {

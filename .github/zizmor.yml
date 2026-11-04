@@ -1,0 +1,8 @@
+# zizmor config (https://docs.zizmor.sh/configuration/). zizmor finds this file from any input under the repo.
+rules:
+  dangerous-triggers:
+    ignore:
+      # review-router.yml:11 is the `on:` block, which holds pull_request_target and issue_comment. zizmor flags both.
+      # The router runs no PR code: it checks out the default ref (the base commit) with persist-credentials false,
+      # reads the PR's changed files through the GitHub API only, and takes its workflow and config from the base branch.
+      - review-router.yml:11

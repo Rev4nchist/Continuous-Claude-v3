@@ -925,3 +925,71 @@ describe('Fabric guard round 3: substitutions inside text blocks, PowerShell bac
     }
   });
 });
+
+// F07 (2026-11-03 Cloudflare paper eval): shell-running MCP tools skipped this guard.
+describe('shell-running MCP tools (F07)', () => {
+  const START = 'mcp__plugin_desktop-commander_desktop-commander__start_process';
+  const INTERACT = 'mcp__plugin_desktop-commander_desktop-commander__interact_with_process';
+  const PS_DELETE = 'Remove-Item -Recurse -Force C:\\Users\\dkhay\\important';
+  const BASH_DELETE = 'rm -rf /c/Users/dkhay/important';
+
+  it('decide() classifies a start_process command as PowerShell too (its default shell)', () => {
+    expect(decide(PS_DELETE, { tool_name: START }, {}).decision).toBe('ask');
+  });
+
+  it('decide() still classifies a start_process command as Bash', () => {
+    expect(decide(BASH_DELETE, { tool_name: START }, {}).decision).toBe('ask');
+  });
+
+  describe('built hook, subprocess', () => {
+    async function run(payload: object): Promise<Record<string, any>> {
+      const { spawnSync } = await import('node:child_process');
+      const { existsSync, mkdtempSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const { fileURLToPath } = await import('node:url');
+      const dist = fileURLToPath(new URL('../../dist/destructive-command-guard.mjs', import.meta.url));
+      expect(existsSync(dist)).toBe(true);
+      // The built hook runs without VITEST, so its guard log goes to a temp file.
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        CCV3_GUARD_DECISIONS_LOG: join(mkdtempSync(join(tmpdir(), 'dcg-f07-')), 'guard-decisions.jsonl'),
+      };
+      for (const k of ['VITEST', 'VITEST_WORKER_ID', 'CI', 'CLAUDE_AGENT_ID']) delete env[k];
+      const res = spawnSync(process.execPath, [dist], {
+        input: JSON.stringify({ session_id: 'test-session', permission_mode: 'default', ...payload }),
+        encoding: 'utf8',
+        timeout: 20_000,
+        env,
+      });
+      expect(res.status).toBe(0);
+      return JSON.parse(res.stdout.trim().split('\n').pop()!);
+    }
+    const verdict = (out: Record<string, any>) => out.hookSpecificOutput?.permissionDecision;
+
+    it('asks on a recursive delete sent through start_process', async () => {
+      expect(verdict(await run({ tool_name: START, tool_input: { command: PS_DELETE, timeout_ms: 5000 } }))).toBe('ask');
+      expect(verdict(await run({ tool_name: START, tool_input: { command: BASH_DELETE, timeout_ms: 5000 } }))).toBe('ask');
+    });
+
+    it('denies the same delete in bypassPermissions mode', async () => {
+      const out = await run({ tool_name: START, permission_mode: 'bypassPermissions', tool_input: { command: PS_DELETE, timeout_ms: 5000 } });
+      expect(verdict(out)).toBe('deny');
+    });
+
+    it('reads interact_with_process text from its input field', async () => {
+      expect(verdict(await run({ tool_name: INTERACT, tool_input: { pid: 4242, input: BASH_DELETE } }))).toBe('ask');
+    });
+
+    it('fails closed when a listed MCP tool has no readable command text', async () => {
+      const out = await run({ tool_name: START, tool_input: { cmd: BASH_DELETE, timeout_ms: 5000 } });
+      expect(verdict(out)).toBe('ask');
+      expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/unreadable/i);
+    });
+
+    it('passes a routine start_process command and an unlisted MCP tool', async () => {
+      expect(await run({ tool_name: START, tool_input: { command: 'git status', timeout_ms: 5000 } })).toEqual({});
+      expect(await run({ tool_name: 'mcp__plugin_desktop-commander_desktop-commander__read_file', tool_input: { path: 'C:\\x' } })).toEqual({});
+    });
+  });
+});

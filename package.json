@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "test:scripts": "node --test scripts/harness-doctor.test.mjs scripts/scheduled/scheduled-health-check.test.mjs",
+    "test:scripts": "node --test scripts/harness-doctor.test.mjs scripts/scheduled/scheduled-health-check.test.mjs .claude/scripts/security/cf-validate.test.mjs",
     "test:trex": "node --test scripts/trex/**/*.test.mjs",
     "test:e2e": "npx playwright test",
     "test:e2e:headed": "npx playwright test --headed",

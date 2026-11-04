@@ -5348,8 +5348,8 @@ var require_lib2 = __commonJS({
 });
 
 // src/heartbeat.ts
-import { existsSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2 } from "fs";
-import { join as join2 } from "path";
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync3, mkdirSync as mkdirSync4 } from "fs";
+import { join as join6 } from "path";
 
 // node_modules/pg/esm/index.mjs
 var import_lib = __toESM(require_lib2(), 1);
@@ -5422,8 +5422,9 @@ var FILE_LEASE_MS = 10 * 60 * 1e3;
 var HARNESS_LEASE_MS = 60 * 60 * 1e3;
 
 // src/shared/db-utils-pg.ts
-async function registerSession(sessionId, project, workingOn = "") {
+async function registerSession(sessionId, project, workingOn = "", opts) {
   try {
+    let live;
     await withPgClient(async (client) => {
       await client.query(`
         CREATE TABLE IF NOT EXISTS sessions (
@@ -5442,10 +5443,30 @@ async function registerSession(sessionId, project, workingOn = "") {
              last_heartbeat = NOW()`,
         [sessionId, project, workingOn]
       );
+      if (opts) live = await selectLiveSessions(client, sessionId, opts.previousId ?? null);
     });
-    return { success: true };
+    return live ? { success: true, live } : { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+var LIVE_SELECT_TIMEOUT_MS = 1500;
+async function selectLiveSessions(client, selfId, previousId) {
+  try {
+    const config = {
+      text: `SELECT id,
+                    GREATEST(last_heartbeat, last_activity_at) > now() - interval '5 minutes' AS alive
+               FROM sessions
+              WHERE id <> $1
+                AND (GREATEST(last_heartbeat, last_activity_at) > now() - interval '2 hours' OR id = $2::text)
+              LIMIT 500`,
+      values: [selfId, previousId],
+      query_timeout: LIVE_SELECT_TIMEOUT_MS
+    };
+    const res = await client.query(config);
+    return res.rows.map((r) => ({ id: r.id, alive: r.alive === true }));
+  } catch {
+    return void 0;
   }
 }
 
@@ -5508,14 +5529,219 @@ function normalizeProjectKey(p) {
   return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+// src/shared/session-identity.ts
+import { closeSync as closeSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync3, readSync, readdirSync, statSync as statSync3 } from "fs";
+import { homedir as homedir3 } from "os";
+import { join as join5 } from "path";
+
+// src/shared/atomic-write.ts
+import {
+  writeFileSync as writeFileSync2,
+  renameSync as renameSync2,
+  unlinkSync,
+  existsSync as existsSync2,
+  openSync,
+  closeSync,
+  readFileSync as readFileSync2,
+  statSync as statSync2,
+  constants
+} from "fs";
+import { dirname as dirname2, basename, join as join3 } from "path";
+
+// src/shared/logger.ts
+import { appendFileSync, existsSync, mkdirSync as mkdirSync2, statSync, renameSync } from "fs";
+import { dirname, join as join2 } from "path";
+import { homedir as homedir2 } from "os";
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join2(homedir2(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
+var MAX_LOG_SIZE = 5 * 1024 * 1024;
+var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
+var LEVEL_ORDER = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function shouldLog(level) {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
+}
+function ensureLogDir() {
+  if (!existsSync(LOG_DIR)) {
+    mkdirSync2(LOG_DIR, { recursive: true });
+  }
+}
+function rotateIfNeeded() {
+  try {
+    if (existsSync(LOG_FILE)) {
+      const stat = statSync(LOG_FILE);
+      if (stat.size > MAX_LOG_SIZE) {
+        const rotated = LOG_FILE + ".1";
+        renameSync(LOG_FILE, rotated);
+      }
+    }
+  } catch {
+  }
+}
+function getSessionId() {
+  return process.env.CLAUDE_SESSION_ID || void 0;
+}
+function writeLog(entry) {
+  try {
+    ensureLogDir();
+    rotateIfNeeded();
+    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch {
+  }
+}
+function createLogger(hookName) {
+  function log2(level, msg, data) {
+    if (!shouldLog(level)) return;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      level,
+      hook: hookName,
+      msg,
+      sessionId: getSessionId()
+    };
+    if (data && Object.keys(data).length > 0) {
+      entry.data = data;
+    }
+    writeLog(entry);
+    if (level === "error" || level === "warn") {
+      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
+    }
+  }
+  return {
+    debug: (msg, data) => log2("debug", msg, data),
+    info: (msg, data) => log2("info", msg, data),
+    warn: (msg, data) => log2("warn", msg, data),
+    error: (msg, data) => log2("error", msg, data)
+  };
+}
+
+// src/shared/atomic-write.ts
+var log = createLogger("atomic-write");
+function atomicWriteSync(filePath, content) {
+  const dir = dirname2(filePath);
+  const tmpFile = join3(dir, `.${basename(filePath)}.tmp.${process.pid}`);
+  try {
+    writeFileSync2(tmpFile, content, "utf-8");
+    renameSync2(tmpFile, filePath);
+  } catch (err) {
+    try {
+      if (existsSync2(tmpFile)) unlinkSync(tmpFile);
+    } catch {
+    }
+    throw err;
+  }
+}
+
+// src/lib/spawn-hidden.ts
+import { tmpdir } from "os";
+import { join as join4 } from "path";
+var RELAY_ERROR_LOG = join4(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
+
+// src/shared/session-identity.ts
+var TAIL_BYTES = 256 * 1024;
+var HEAD_BYTES = 512 * 1024;
+var SAFE_ID_RE = /^[0-9a-fA-F-]{8,64}$/;
+function identityDir() {
+  return process.env.CCV3_IDENTITY_DIR || join5(homedir3(), ".claude", "state", "identity");
+}
+var shortId = (uuid) => uuid.slice(0, 8);
+function identityPath(uuid) {
+  return SAFE_ID_RE.test(uuid) ? join5(identityDir(), `${uuid}.json`) : null;
+}
+function asString(v) {
+  return typeof v === "string" && v ? v : null;
+}
+function readIdentity(uuid) {
+  if (!uuid) return null;
+  const file = identityPath(uuid);
+  if (!file) return null;
+  try {
+    const o = JSON.parse(readFileSync3(file, "utf8"));
+    if (!o || typeof o !== "object" || typeof o.uuid !== "string") return null;
+    return {
+      uuid,
+      short: shortId(uuid),
+      name: asString(o.name),
+      previous: asString(o.previous),
+      cwd: asString(o.cwd),
+      endedAt: asString(o.endedAt),
+      endReason: asString(o.endReason),
+      updatedAt: asString(o.updatedAt) ?? ""
+    };
+  } catch {
+    return null;
+  }
+}
+function writeIdentity(uuid, patch) {
+  const file = identityPath(uuid);
+  if (!file) return null;
+  const cur = readIdentity(uuid);
+  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] : null;
+  const next = {
+    uuid,
+    short: shortId(uuid),
+    name: pick("name"),
+    previous: pick("previous"),
+    cwd: pick("cwd"),
+    endedAt: pick("endedAt"),
+    endReason: pick("endReason"),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  try {
+    mkdirSync3(identityDir(), { recursive: true });
+    atomicWriteSync(file, JSON.stringify(next, null, 2));
+    return next;
+  } catch {
+    return null;
+  }
+}
+function fileOffset(path, size, start, len) {
+  const fd = openSync2(path, "r");
+  try {
+    const buf = Buffer.alloc(Math.min(len, size - start));
+    readSync(fd, buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally {
+    closeSync2(fd);
+  }
+}
+function lastCustomTitle(transcriptPath) {
+  if (!transcriptPath) return null;
+  try {
+    const size = statSync3(transcriptPath).size;
+    const start = Math.max(0, size - TAIL_BYTES);
+    const lines = fileOffset(transcriptPath, size, start, TAIL_BYTES).split("\n");
+    if (start > 0) lines.shift();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"custom-title"')) continue;
+      try {
+        const o = JSON.parse(lines[i]);
+        if (o.type === "custom-title" && asString(o.customTitle)) return String(o.customTitle);
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveName(sessionTitle, transcriptPath) {
+  return asString(sessionTitle) ?? lastCustomTitle(transcriptPath);
+}
+
 // src/heartbeat.ts
 var CACHE_TTL_MS = 3e4;
-var CACHE_DIR = join2(process.env.HOME || process.env.USERPROFILE || "", ".claude", "cache");
-var CACHE_FILE = join2(CACHE_DIR, "heartbeat-last.json");
+var CACHE_DIR = join6(process.env.HOME || process.env.USERPROFILE || "", ".claude", "cache");
+var CACHE_FILE = join6(CACHE_DIR, "heartbeat-last.json");
 function shouldUpdateHeartbeat(sessionId) {
   try {
-    if (!existsSync(CACHE_FILE)) return true;
-    const cache = JSON.parse(readFileSync2(CACHE_FILE, "utf-8"));
+    if (!existsSync4(CACHE_FILE)) return true;
+    const cache = JSON.parse(readFileSync4(CACHE_FILE, "utf-8"));
     if (cache.sessionId !== sessionId) return true;
     const elapsed = Date.now() - cache.timestamp;
     return elapsed >= CACHE_TTL_MS;
@@ -5525,8 +5751,18 @@ function shouldUpdateHeartbeat(sessionId) {
 }
 function updateCache(sessionId) {
   try {
-    mkdirSync2(CACHE_DIR, { recursive: true });
-    writeFileSync2(CACHE_FILE, JSON.stringify({ sessionId, timestamp: Date.now() }));
+    mkdirSync4(CACHE_DIR, { recursive: true });
+    writeFileSync3(CACHE_FILE, JSON.stringify({ sessionId, timestamp: Date.now() }));
+  } catch {
+  }
+}
+function syncIdentityName(input) {
+  try {
+    if (!input.session_id) return;
+    const name = resolveName(input.session_title, input.transcript_path);
+    if (!name) return;
+    if (readIdentity(input.session_id)?.name === name) return;
+    writeIdentity(input.session_id, { name, cwd: input.cwd });
   } catch {
   }
 }
@@ -5547,6 +5783,7 @@ async function heartbeatJob(raw) {
     }
   } catch {
   }
+  syncIdentityName(input);
   const sessionId = resolveSessionId(input.session_id);
   const project = canonicalProject(input.cwd);
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
@@ -5572,7 +5809,7 @@ async function heartbeatJob(raw) {
 async function main() {
   let raw = "";
   try {
-    raw = readFileSync2(0, "utf-8");
+    raw = readFileSync4(0, "utf-8");
   } catch {
   }
   console.log(JSON.stringify(await runHeartbeat(raw)));

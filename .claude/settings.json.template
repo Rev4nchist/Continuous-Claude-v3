@@ -22,6 +22,19 @@
         ]
       },
       {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 3,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/lane-agent-tag.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "Task",
         "hooks": [
           {
@@ -195,6 +208,40 @@
               "{{CLAUDE_HOME}}/hooks/dist/commit-preflight.mjs"
             ],
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_desktop-commander_desktop-commander__set_config_value",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/dc-config-guard.mjs"
+            ]
           }
         ]
       },
@@ -396,6 +443,14 @@
     "SessionEnd": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/session-register.mjs"
+            ]
+          },
           {
             "type": "command",
             "command": "node",

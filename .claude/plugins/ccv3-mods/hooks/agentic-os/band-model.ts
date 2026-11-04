@@ -6,25 +6,29 @@ import { gaugeTone } from './pane-model'
 import type { Span, Tone } from './pane-model'
 
 // The two core lines of the band (PRD 5.3), as plain data. Pure: no engine, no clock. The caller passes `now`.
-//   line 1  chip, project dot and repo, branch, lane, ctx, cost
+//   line 1  chip, session (`name #sid8`), lane (`lane <first> +N`), ctx, cost
 //   line 2  goal, plan bar, ASK count, UNPROVEN count
 // Observer only. Every string is redacted again here (idempotent), so a caller that forgets cannot leak one.
 // Below 40 columns the band is one line: the chip and the goal.
-// compactLine (below) is the one-row form: chip, repo, ctx, 5h, 7d, cost, helpers.
+// compactLine (below) is the one-row form: chip, name, repo, ctx, 5h, 7d, cost, helpers.
 
 export type BandState = {
   chip: Chip
   brief: OsBrief | null
   tasks: OsTask[]
   repo: string | null
-  branch: string | null
+  /**
+   * Who this session is. `name` is the Claude Code session name (null: unnamed, drawn amber); `short` is the first 8 characters of
+   * the session id, drawn dim as `#sid8` (null: not drawn). Absent: line 1 has no session item.
+   */
+  who?: { name: string | null; short: string | null }
   /** The first lane this session holds. */
   lane: string | null
+  /** How many lanes this session holds; more than 1 draws `+N` after the lane (N = count - 1). */
+  laneCount?: number
   /** Context used, 0-100. */
   ctx: number | null
   costUsd: number | null
-  /** `public.sessions.working_on`, shown dim after GOAL not set. Nothing feeds it yet. */
-  fallback: string | null
   now: number
   /** When the session last did anything: an ask stays fresh 24 hours from it. */
   activeAt: number | null
@@ -46,7 +50,10 @@ export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
 const NARROW = 40
 /** Less than this and the chip cannot sit whole with anything else; the line is drawn as wide as the chip needs. */
 const MIN_WIDTH = 20
-const MIN_BRANCH = 12
+/** The session name is cut to this on line 1, and to MIN_NAME when the line is too wide; compactLine cuts it to COMPACT_NAME. */
+const NAME_MAX = 16
+const MIN_NAME = 8
+const COMPACT_NAME = 8
 const MIN_GOAL = 12
 const BAR_CELLS = 10
 const SEP = '  '
@@ -55,6 +62,8 @@ const DOT = ' · '
 const sp = (text: string, tone: Tone): Span => ({ text, tone })
 const len = (spans: Span[]): number => spans.reduce((n, one) => n + one.text.length, 0)
 const clean = (value: string | null | undefined): string => redact((value ?? '').trim()).text
+/** A name for display: redacted, whitespace collapsed to single spaces, trimmed. The caller clips it to 16 (NAME_MAX) or less. */
+const nameOf = (value: string | null | undefined): string => clean(value).replace(/\s+/g, ' ').trim()
 const clip = (value: string, max: number): string => (value.length <= max ? value : max <= 1 ? '…'.slice(0, Math.max(0, max)) : `${value.slice(0, max - 1)}…`)
 
 /** Cuts a run of spans to `max` characters, with an ellipsis on the span it cuts. */
@@ -117,50 +126,68 @@ const barSpans = (steps: Step[], cells: number): Span[] => {
 
 // --- Line 1 ---
 
-type Item = { key: 'repo' | 'branch' | 'lane' | 'ctx' | 'cost'; spans: Span[] }
+type Item = { key: 'who' | 'lane' | 'ctx' | 'cost'; spans: Span[] }
 
-const items = (s: BandState): Item[] => {
+/** What line 1 still draws. Cut order under width pressure: `#sid8`, the lane, the name to MIN_NAME, cost, the name to the room beside ctx (gone below 3), then ctx last of all. */
+type Shape = { sid: boolean; lane: boolean; nameMax: number; cost: boolean; ctx: boolean }
+
+/** `name #sid8`: the name in the accent tone, `#sid8` dim; no name reads `unnamed` in amber. */
+const whoSpans = (who: NonNullable<BandState['who']>, nameMax: number, sid: boolean): Span[] => {
+  const name = nameOf(who.name)
+  const short = clean(who.short)
+  return [name === '' ? sp('unnamed', 'warn') : sp(clip(name, nameMax), 'title'), ...(sid && short !== '' ? [sp(` #${short}`, 'dim')] : [])]
+}
+
+const laneText = (s: BandState): string => {
+  const more = typeof s.laneCount === 'number' && Number.isFinite(s.laneCount) && s.laneCount > 1 ? ` +${Math.floor(s.laneCount) - 1}` : ''
+  return `lane ${clean(s.lane) || '-'}${more}`
+}
+
+const items = (s: BandState, shape: Shape): Item[] => {
   const ctx = typeof s.ctx === 'number' && Number.isFinite(s.ctx) ? s.ctx : null
   const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
-  return [
-    { key: 'repo', spans: [sp('● ', 'title'), sp(clean(s.repo) || '-', 'todo')] },
-    { key: 'branch', spans: [sp(clean(s.branch) || '-', 'todo')] },
-    { key: 'lane', spans: [sp(`lane ${clean(s.lane) || '-'}`, 'dim')] },
-    { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] },
-    { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] },
+  const all: (Item | null)[] = [
+    s.who === undefined ? null : { key: 'who', spans: whoSpans(s.who, shape.nameMax, shape.sid) },
+    shape.lane ? { key: 'lane', spans: [sp(laneText(s), 'dim')] } : null,
+    shape.ctx ? { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] } : null,
+    shape.cost ? { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] } : null,
   ]
+  return all.filter((one): one is Item => one !== null)
 }
 
 const chipSpan = (chip: Chip): Span => sp(` ${(CHIP[chip] ?? CHIP.idle).word} `, (CHIP[chip] ?? CHIP.idle).tone)
 
-const lineOne = (s: BandState, width: number): Span[] => {
+/** Line 1 for a drawing `width` wide (the core band calls it from 40 columns; exported for the narrow-width test). */
+export const lineOne = (s: BandState, width: number): Span[] => {
   const chip = chipSpan(s.chip)
-  let rest = items(s)
-  const total = () => chip.text.length + (rest.length > 0 ? SEP.length + len(join(rest.map(one => one.spans), sp(DOT, 'track'))) : 0)
-  const shrink = (key: Item['key'], to: (current: string) => string) => {
-    rest = rest.map(one => (one.key === key ? { ...one, spans: one.spans.map(span => ({ ...span, text: to(span.text) })) } : one))
+  const shape: Shape = { sid: true, lane: true, nameMax: NAME_MAX, cost: true, ctx: true }
+  const rest = () => items(s, shape)
+  const widthOf = (list: Item[]) => chip.text.length + (list.length > 0 ? SEP.length + len(join(list.map(one => one.spans), sp(DOT, 'track'))) : 0)
+  const total = () => widthOf(rest())
+  const withoutName = () => rest().filter(one => one.key !== 'who')
+  const cuts: (() => void)[] = [
+    () => { shape.sid = false },
+    () => { shape.lane = false },
+    () => { shape.nameMax = MIN_NAME },
+    () => { shape.cost = false },
+  ]
+  for (const cut of cuts) {
+    if (total() <= width) break
+    cut()
   }
-  const textOf = (key: Item['key']) => len(rest.find(one => one.key === key)?.spans ?? [])
-  const drop = (key: Item['key']) => {
-    rest = rest.filter(one => one.key !== key)
+  // Only the chip, the name and ctx are left. ctx goes last of all: the name is cut to the room beside it, and goes (under 3 cells) before ctx does.
+  // Even chip and ctx too wide: ctx and the name go together, and the chip stands alone.
+  if (total() > width) {
+    if (widthOf(withoutName()) > width) {
+      shape.ctx = false
+      shape.nameMax = 0
+    } else {
+      const base = widthOf(withoutName())
+      shape.nameMax = width - base - (base > chip.text.length ? DOT.length : SEP.length)
+    }
   }
-  // Cut in this order: the branch down to its minimum, then lane, cost, ctx, then the branch, then the repo.
-  for (const key of ['lane', 'cost', 'ctx', 'branch'] as const) {
-    const excess = total() - width
-    if (excess <= 0) break
-    if (key === 'lane' && textOf('branch') > MIN_BRANCH) shrink('branch', text => clip(text, Math.max(MIN_BRANCH, text.length - excess)))
-    if (total() > width) drop(key)
-  }
-  if (total() > width && rest.length > 0) {
-    const room = width - chip.text.length - SEP.length - 2
-    if (room >= 4) shrink('repo', text => clip(text, room))
-    else drop('repo')
-  }
-  // A field dropped after the branch was cut leaves room: give it back to the branch.
-  const spare = width - total()
-  const branch = items(s).find(one => one.key === 'branch')?.spans[0]?.text ?? ''
-  if (spare > 0 && textOf('branch') > 0 && textOf('branch') < branch.length) shrink('branch', () => clip(branch, textOf('branch') + spare))
-  return rest.length === 0 ? [chip] : [chip, sp(SEP, 'dim'), ...join(rest.map(one => one.spans), sp(DOT, 'track'))]
+  const list = (shape.nameMax >= 3 || s.who === undefined) && total() <= width ? rest() : withoutName()
+  return list.length === 0 ? [chip] : [chip, sp(SEP, 'dim'), ...join(list.map(one => one.spans), sp(DOT, 'track'))]
 }
 
 // --- Line 2 ---
@@ -171,10 +198,7 @@ type Goal = { label: Span; fixed: Span[]; clippable: string; clippableTone: Tone
 const goalOf = (s: BandState): Goal => {
   const label = sp('GOAL ', 'dim')
   const goal = clean(s.brief?.goal)
-  if (goal === '') {
-    const fallback = clean(s.fallback)
-    return { label, fixed: [sp('not set', 'warn')], clippable: fallback === '' ? '' : `  ${fallback}`, clippableTone: 'dim', tail: [] }
-  }
+  if (goal === '') return { label, fixed: [sp('not set', 'warn')], clippable: '', clippableTone: 'dim', tail: [] }
   const parsed = s.brief?.sources.goal === 'parsed'
   return { label, fixed: [], clippable: goal, clippableTone: 'todo', tail: parsed ? [sp(' [parsed]', 'dim')] : [] }
 }
@@ -244,10 +268,10 @@ const narrow = (s: BandState, width: number): Span[] => {
 
 // --- Compact line ---
 // The one line the band draws when the row budget leaves no room for two core lines plus the HUD row (and under 40 columns
-// with the HUD up). Chip, repo, ctx, 5h, 7d, cost, helpers. Cut order when the width is short: helpers, cost, repo, 7d, 5h.
-// The chip and ctx stay; a chip too wide for ctx at 20 columns keeps the line inside the width and drops ctx last of all.
+// with the HUD up). Chip, name (cut to 8), repo, ctx, 5h, 7d, cost, helpers. Cut order when the width is short: helpers, cost, repo,
+// 7d, 5h, name. The chip and ctx stay; a chip too wide for ctx at 20 columns keeps the line inside the width and drops ctx last of all.
 
-type CompactKey = 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
+type CompactKey = 'name' | 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
 type CompactField = { key: CompactKey; spans: Span[] }
 
 const MIN_REPO = 4
@@ -272,6 +296,7 @@ const compactFields = (s: BandState, roomy: boolean): CompactField[] => {
   const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
   const helpers = typeof s.helpers === 'number' && Number.isFinite(s.helpers) ? Math.floor(s.helpers) : 0
   const fields: (CompactField | null)[] = [
+    s.who === undefined ? null : { key: 'name', spans: whoSpans(s.who, COMPACT_NAME, false) },
     roomy ? { key: 'repo', spans: [sp(clean(s.repo) || '-', 'todo')] } : null,
     { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] },
     windowField('five', s.limits),
@@ -298,7 +323,7 @@ export const compactLine = (state: BandState, width: number): Span[] => {
     if (room >= MIN_REPO) fields = fields.map(one => (one.key === 'repo' ? { ...one, spans: clipSpans(one.spans, room) } : one))
     else drop('repo')
   }
-  for (const key of ['seven', 'five', 'ctx'] as const) if (total() > wide) drop(key)
+  for (const key of ['seven', 'five', 'name', 'ctx'] as const) if (total() > wide) drop(key)
   return [chip, ...fields.flatMap(one => [sp(' ', 'dim'), ...one.spans])]
 }
 
