@@ -37,7 +37,7 @@ node -e "console.log('NODE_ENV =', process.env.NODE_ENV)"
 
 In bash, the same secret check is `[ -n "${API_TOKEN:-}" ] && echo SET || echo UNSET`.
 
-Mark every temporary log line with `DEBUG-TMP`. Never commit temporary logging. Before a commit, run `git diff | Select-String DEBUG-TMP` and remove every hit.
+Mark every temporary log line with `DEBUG-TMP`. Never commit temporary logging. Before a commit, run `git diff HEAD | Select-String DEBUG-TMP` (staged and unstaged changes) and remove every hit.
 
 Phase 1 is done when you can say what is wrong and why, backed by something you observed and not something you assumed.
 
