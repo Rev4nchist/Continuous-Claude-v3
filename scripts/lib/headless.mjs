@@ -67,8 +67,9 @@ export function finishHeadless(file, id, patch, { now = Date.now } = {}) {
 const fwd = (p) => p.replace(/\\/g, '/');
 
 /** The claude argv. The prompt is NOT in it. */
-export function buildArgs({ model = 'sonnet', effort = 'high', mcpConfig, settings } = {}) {
-  const args = ['-p', '--output-format', 'json', '--tools', '', '--max-turns', '1', '--strict-mcp-config'];
+export function buildArgs({ model = 'sonnet', effort = 'high', mcpConfig, settings, maxTurns = 1 } = {}) {
+  // maxTurns > 1 only for --json-schema callers: the structured answer can need a second turn (rerate smoke 2026-11-04: error_max_turns).
+  const args = ['-p', '--output-format', 'json', '--tools', '', '--max-turns', String(maxTurns), '--strict-mcp-config'];
   if (mcpConfig) args.push('--mcp-config', fwd(mcpConfig));
   if (settings) args.push('--settings', fwd(settings));
   args.push('--no-session-persistence', '--model', model);
@@ -98,7 +99,7 @@ export function readResult(stdout) {
  * Returns { ok, id, exit, stdout, stderr, result, costUsd, usage, timedOut, durationMs } or { ok: false, reason: 'cap' | 'lock' | 'no-claude' }.
  * It never throws for a failed run.
  */
-export async function runClaude({ prompt, model = 'sonnet', timeoutMs = 180_000, purpose = 'headless', effort = 'high' }, deps = {}) {
+export async function runClaude({ prompt, model = 'sonnet', timeoutMs = 180_000, purpose = 'headless', effort = 'high', maxTurns = 1 }, deps = {}) {
   const ledgerPath = deps.ledgerPath ?? defaultHeadlessLedger();
   const now = deps.now ?? Date.now;
   const sessionId = deps.sessionId ?? process.env.CLAUDE_CODE_SESSION_ID ?? null;
@@ -124,7 +125,7 @@ export async function runClaude({ prompt, model = 'sonnet', timeoutMs = 180_000,
     return { ok: false, reason: 'no-claude', id: reserved.id, error: String(err.message) };
   }
 
-  const args = [...(deps.prefixArgs ?? []), ...buildArgs({ model, effort, mcpConfig, settings })];
+  const args = [...(deps.prefixArgs ?? []), ...buildArgs({ model, effort, mcpConfig, settings, maxTurns })];
   const cwd = deps.cwd ?? mkdtempSync(path.join(os.tmpdir(), 'headless-run-')); // a temp cwd: no repo CLAUDE.md or settings load
   const spawnFn = deps.spawnFn ?? spawn;
   const withStdin = (cmd, a, opts) => {

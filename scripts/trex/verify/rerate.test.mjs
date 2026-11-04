@@ -222,6 +222,15 @@ test('Fix 1: buildVerdicts says dryRun, partial and which scored pids got a usab
   assert.deepEqual([done.partial, done.attemptedPids.length], [false, 3]);
 });
 
+// Smoke 2026-11-04 bug. Breaks if: a failed call (ok false, no answer) reads as rerate_keep, i.e. "model 2 agreed".
+test('a failed rerate call gives not_attempted with the error, never rerate_keep', () => {
+  const rows = [mk(1, 'A', 'S1')];
+  const v = buildVerdicts(rows, new Map([['p01', { ok: false, answer: null, error: 'no JSON object in the model reply', path: 'r/p01.json' }]]), { max: 16, live: true });
+  assert.equal(v.rows[0].verdict, 'not_attempted');
+  assert.match(v.rows[0].reason, /no JSON object/);
+  assert.equal(v.rows[0].newSeverity, v.rows[0].originalSeverity);
+});
+
 // Fix 1. Breaks if: a dry run writes verdicts.json (it then replaces or imitates a live control file).
 test('Fix 1: a dry run writes verdicts.dry-run.json with dryRun true and never touches verdicts.json', async () => {
   const w = world();
@@ -275,8 +284,8 @@ test('F10 buildVerdicts: one row per probe-set pid, blocked and out-of-scope row
   assert.deepEqual([by.p01.verdict, by.p01.newSeverity, by.p01.newConfidence, by.p01.evidencePath], ['rerate_down', 'minor', 2, 'raw/p01.json']);
   assert.equal(by.p02.verdict, 'blocked:mods-host');
   assert.equal(by.p02.newSeverity, 'major');
-  assert.equal(by.p03.verdict, 'rerate_keep');
-  assert.match(by.p03.reason, /unusable/);
+  assert.equal(by.p03.verdict, 'not_attempted', 'a failed call is no second opinion (smoke 2026-11-04)');
+  assert.match(by.p03.reason, /call failed/);
   assert.equal(by.p04.verdict, 'not_attempted');
   assert.match(by.p04.reason, /in scope, not asked yet/);
   for (const r of v.rows) assert.deepEqual(Object.keys(r).sort(), ['evidencePath', 'falseConfirm', 'group', 'newConfidence', 'newSeverity', 'originalConfidence', 'originalSeverity', 'pid', 'reason', 'row', 'verdict']);
@@ -418,7 +427,7 @@ test('a run stops after 2 failed calls in a row, and the failed pid is kept in r
   const raws = loadRaws(path.join(w.outDir, 'rerate', 'raw'));
   assert.deepEqual([...raws.values()].map((x) => [x.ok, x.attempts]), [[false, 1], [false, 1]]);
   const v = JSON.parse(readFileSync(path.join(w.outDir, 'rerate', 'verdicts.json'), 'utf8'));
-  assert.equal(v.rows.find((r) => r.pid === 'p00').verdict, 'rerate_keep');
+  assert.equal(v.rows.find((r) => r.pid === 'p00').verdict, 'not_attempted', 'a failed call is no second opinion (smoke 2026-11-04)');
 });
 
 test('a cap refusal from the runner stops the run with exit 3 and keeps the earlier answers', async () => {
@@ -461,7 +470,7 @@ let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', () => {
-  const answer = { severity: 'minor', concreteFailingInput: null, reason: JSON.stringify({ hasKey: 'ANTHROPIC_API_KEY' in process.env, argv: process.argv.slice(2).filter((a) => a.startsWith('--json-schema') || a.startsWith('--setting-sources') || a === 'project' || a.startsWith('{')), stdinLen: input.length }) };
+  const answer = { severity: 'minor', concreteFailingInput: null, reason: JSON.stringify({ hasKey: 'ANTHROPIC_API_KEY' in process.env, argv: process.argv.slice(2).filter((a, i, all) => a.startsWith('--json-schema') || a.startsWith('--setting-sources') || a === 'project' || a.startsWith('{') || a === '--max-turns' || all[i - 1] === '--max-turns'), stdinLen: input.length }) };
   process.stdout.write(JSON.stringify({ type: 'result', is_error: false, result: '', structured_output: answer, total_cost_usd: 0.01 }) + '\\n');
 });
 `);
@@ -484,6 +493,8 @@ process.stdin.on('end', () => {
   // Coordinator item: user-level settings, rules and lane notes must not reach the rerate model.
   const at = seen.argv.indexOf('--setting-sources');
   assert.ok(at >= 0 && seen.argv[at + 1] === 'project', `argv holds --setting-sources project: ${JSON.stringify(seen.argv)}`);
+  // Breaks when: rerate leaves --max-turns at 1, where --json-schema answers hit error_max_turns (2 of 4 live calls, 2026-11-04).
+  assert.equal(seen.argv[seen.argv.indexOf('--max-turns') + 1], '3');
   assert.ok(seen.stdinLen > 500, 'the prompt arrived on stdin');
 });
 

@@ -52,6 +52,15 @@ test('buildArgs: no tools, one turn, strict MCP, subscription model, never --bar
   assert.equal(a[a.indexOf('--model') + 1], 'sonnet');
 });
 
+test('buildArgs: maxTurns raises --max-turns for a --json-schema caller; the default stays 1', () => {
+  // Breaks when: maxTurns is ignored (rerate hit error_max_turns on 2 of 4 calls, 2026-11-04), or the default changes.
+  const a = buildArgs({ model: 'sonnet', maxTurns: 3 });
+  assert.equal(a[a.indexOf('--max-turns') + 1], '3');
+  assert.equal(a.filter((x) => x === '--max-turns').length, 1);
+  const d = buildArgs({ model: 'sonnet' });
+  assert.equal(d[d.indexOf('--max-turns') + 1], '1');
+});
+
 test('F12 the day cap counts the America/Chicago day, not the UTC day', () => {
   // Breaks when: chicagoDay uses toISOString().slice(0,10) (the UTC day).
   const dir = tmp();

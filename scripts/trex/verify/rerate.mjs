@@ -241,6 +241,8 @@ export function buildVerdicts(rows, raws, { max = MAX_CALLS, generatedFrom = 'sc
       if (r.blocked) return keep(`blocked:${r.blocked}`, `classify blocked this finding (${r.blocked}); rerate not run on it`);
       const raw = raws.get(r.pid);
       if (!raw) return keep('not_attempted', scope.has(r.pid) ? 'in scope, not asked yet' : `outside the first ${max} unblocked findings (call cap)`);
+      // A failed call is no second opinion: it must not read as "model 2 agreed" (smoke 2026-11-04 counted one as rerate_keep).
+      if (raw.ok !== true) return keep('not_attempted', `call failed, no usable answer: ${raw.error ?? 'unknown error'}`, { evidencePath: raw.path ?? null });
       const d = rerateDecision({ severity: r.severity, confidence: r.confidence ?? null }, raw.ok ? raw.answer : null);
       return { ...base, verdict: d.verdict, reason: d.reason, newSeverity: d.newSeverity, newConfidence: d.newConfidence, evidencePath: raw.path ?? null };
     }),
@@ -439,7 +441,7 @@ export async function main(argv, deps = {}) {
     const prompt = prompts.get(r.pid);
     const prev = raws.get(r.pid);
     const res = await runClaudeFn(
-      { prompt, model: MODEL, timeoutMs: TIMEOUT_MS, purpose: PURPOSE },
+      { prompt, model: MODEL, timeoutMs: TIMEOUT_MS, purpose: PURPOSE, maxTurns: 3 },
       { ...headlessDeps, sessionId: headlessDeps.sessionId ?? SESSION_ID, prefixArgs: [...(headlessDeps.prefixArgs ?? []), ...SETTING_SOURCES, '--json-schema', JSON.stringify(SCHEMA)] },
     );
     if (!res.ok && (res.reason === 'cap' || res.reason === 'lock' || res.reason === 'no-claude')) {
@@ -454,6 +456,7 @@ export async function main(argv, deps = {}) {
       error: okAnswer ? null : (res.error ? String(res.error) : parsed.error), promptSha256: sha(prompt), ledgerId: res.id ?? null,
       costUsd: res.costUsd ?? null, durationMs: res.durationMs ?? null, exit: res.exit ?? null, timedOut: Boolean(res.timedOut),
       ts: new Date(now()).toISOString(), resultText: String(res.result ?? '').slice(0, 2000),
+      ...(okAnswer ? {} : { stdoutTail: String(res.stdout ?? '').slice(-4000), stderrTail: String(res.stderr ?? '').slice(-2000) }),
     };
     writeFileSync(path.join(rawDir, `${r.pid}.json`), `${JSON.stringify(rec, null, 2)}\n`);
     out(`${r.row} ${r.pid}: ${okAnswer ? `${parsed.value.severity}, failing input ${hasInput(parsed.value) ? 'yes' : 'no'}` : `FAILED ${rec.error}`}`);
