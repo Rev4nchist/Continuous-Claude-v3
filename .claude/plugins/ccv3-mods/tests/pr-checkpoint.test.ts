@@ -3068,6 +3068,8 @@ describe('pr-checkpoint: via, and the plugin store lock', () => {
       ['PowerShell', "'{}' | Out-File $HOME/.claude/plugins/store/ccv3-mods_x.json"],
       ['PowerShell', 'Remove-Item $HOME/.claude/plugins/store/ccv3-mods_x.json'],
       ['PowerShell', 'Get-Content a.json | Set-Content $HOME/.claude/plugins/store/ccv3-mods_x.json'],
+      // A PowerShell backtick escape splits the name across two pieces, so no single piece names the file (CodeRabbit, #286).
+      ['PowerShell', "cd $HOME\\.claude\\plugins\\store; Set-Content ccv3-mods`_x.json '{}'"],
     ]
     for (const [tool, command] of WRITES) {
       const r = await shell($, tool, command)
