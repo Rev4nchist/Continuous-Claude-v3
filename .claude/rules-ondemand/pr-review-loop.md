@@ -202,7 +202,7 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 
 - `bandOf()` in `review-router.mjs` computes the band from the changed files. The numbers live in the `matrix` block of `review-router.config.json`.
 - Bands: LOW, MID, ELEVATED, HIGH, CRITICAL. HIGH is 5 or more control-plane files (`matrix.control_plane`). CRITICAL is a `risk:high` label or an r3 path.
-- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget`, or `both` when a critical file meets an available Greptile (rules R3 and R4 stay).
+- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget`, or `both` when a critical file meets an available Greptile (rules R3 and R4 stay). Every band also offers the last option "No review, land on CI ($0)" (`none`): only Dave's pick or typed `/pathway <pr> none` records it for HIGH and CRITICAL (`--by dave`), it is never the recommendation there, and it adds `review:none`, so the router adds no review label when the PR leaves draft.
 - Dave can still press CodeRabbit on a lower band. That is an escalation.
 - A parser file in a HIGH PR keeps rule R2: one review, no loop.
 - A config without a `matrix` block keeps the rules R1 to R5 and RS.
