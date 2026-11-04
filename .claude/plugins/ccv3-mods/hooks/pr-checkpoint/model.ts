@@ -339,6 +339,7 @@ export const SHAPES_CLI_REL = '.claude/hooks/dist/checkpoint-shapes-cli.mjs'
 export const SHAPES_TIMEOUT_MS = 10_000
 export const CONFIG_REL = 'review-router.config.json'
 export const PATHWAY_DENY = "pathway.json is written only by the mod, after Dave answers the checkpoint question. A tool or a shell command may not name it. Read it with the Read tool."
+export const STORE_DENY = "The plugin store file holds the checkpoint records that the land gate reads. Only the mod writes it. A tool or a shell command may not name it. Ask Dave to run /pathway."
 export const LOCK_FAILED = 'pr-checkpoint lock failed; nothing ran'
 
 /** Resolves `.` and `..`, turns backslashes into slashes and lower-cases: the spellings of one path compare equal. */
@@ -354,6 +355,43 @@ export const normalizePath = (path: string): string => {
 
 /** A tool write (file_path or notebook_path) that lands on a pre-pr pathway.json in any checkout. */
 export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}`.endsWith('/.claude/cache/pre-pr/pathway.json')
+
+/** A tool write (file_path or notebook_path) that lands on a ccv3-mods plugin store file, or its temp or lock copy, in any home. */
+export const isStoreFile = (path: string): boolean => /\/plugins\/store\/ccv3-mods_[^/]*$/.test(`/${normalizePath(path)}`)
+
+/**
+ * Text that names a ccv3-mods store file: its name (`ccv3-mods_x.json`, `ccv3-mods_*`), or the plugin store folder followed by that name or a glob.
+ * `rg "plugins/store"`, another plugin's store file and a bare folder listing do not match. Tested on text with quotes and carets stripped.
+ */
+const STORE_NAME_LIKE = /ccv3-mods[_*?[]|plugins[\\/]+(?:\.[\\/]+)*store[\\/]+(?:\.[\\/]+)*(?:ccv3|c\*|[*?[])/i
+const STORE_NAME_ALL = new RegExp(STORE_NAME_LIKE.source, 'gi')
+/** land-none-check.mjs only reads the store, so a run of it that names a store file (--store) is open. */
+const LAND_CHECK_RUN = /^node(?:\.exe)?\s{1,10}\S{0,300}land-none-check\.mjs(?:\s|$)/i
+
+/** A segment that names a store file is open only as a read: cat, Get-Content, rg, ls and the like, a git commit or log, or a run of land-none-check.mjs. */
+const readsStore = (segment: string): boolean => {
+  if (readsStateFile(segment)) return true
+  const text = segment.trim().replace(ENV_PREFIX, '')
+  return LAND_CHECK_RUN.test(text) && !REDIRECT.test(segment) && !SLOT_CODE_LOADER.test(segment)
+}
+
+/**
+ * Shell text that could write, move, delete or build a ccv3-mods store file. The land gate (land-none-check.mjs) trusts the `via` of the record in
+ * that file, so the file is the mod's alone. An allow list on raw text, no lexer: the text splits on `; & | newline`, a backtick and `$(`, and every
+ * piece that names a store file must be a pure read (the same test as the queue state file). A write verb, a redirect, `node -e`, `cp`, `mv`, `rm`,
+ * `tee` and `Set-Content` deny. A doubt reads as a deny. A commit message that holds `;` or `>` next to the name is denied too.
+ * Not covered, accepted: a path built in code or by a glob that never names `ccv3-mods`, and an `ls` of the folder (it is a read).
+ */
+export const namesStore = (command: string): boolean => {
+  const bare = (text: string) => text.replace(/['"`^]/g, '')
+  if (!STORE_NAME_LIKE.test(bare(command))) return false
+  const count = (text: string) => (bare(text).match(STORE_NAME_ALL) ?? []).length
+  const pieces = command.split(SLOT_SEPARATORS)
+  // A name split across pieces (a PowerShell backtick escape) is lost from the pieces: fewer piece hits than whole-text hits denies,
+  // even when another piece is a permitted read.
+  if (pieces.reduce((n, segment) => n + count(segment), 0) < count(command)) return true
+  return pieces.some(segment => STORE_NAME_LIKE.test(bare(segment)) && !readsStore(segment))
+}
 
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)

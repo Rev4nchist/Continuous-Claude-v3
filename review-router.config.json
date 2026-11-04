@@ -97,6 +97,7 @@
       "scripts/github/cr-paid.mjs",
       "scripts/github/land-pr.ps1",
       "scripts/github/land-recheck.mjs",
+      "scripts/github/land-none-check.mjs",
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",
       "apps/agentic-os/src/server/sources/safe-message.ts",
@@ -119,6 +120,7 @@
       "scripts/github/cr-paid.mjs",
       "scripts/github/land-pr.ps1",
       "scripts/github/land-recheck.mjs",
+      "scripts/github/land-none-check.mjs",
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",
       "apps/agentic-os/src/server/sources/safe-message.ts",
@@ -144,6 +146,7 @@
     "security_tier": [
       ".claude/hooks/src/*-guard.ts",
       ".claude/hooks/src/pre-pr-gate.ts",
+      "scripts/github/land-none-check.mjs",
       ".claude/plugins/*/hooks/pr-checkpoint/index.tsx",
       "apps/agentic-os/src/server/sources/safe-message.ts",
       "apps/agentic-os/src/server/sources/prompt-text.ts",
