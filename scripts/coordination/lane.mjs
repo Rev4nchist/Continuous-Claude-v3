@@ -1,16 +1,29 @@
 #!/usr/bin/env node
 /**
- * lane -- the coordination surface for concurrent sessions on one branch.
+ * lane -- the coordination surface for concurrent sessions, one board per project.
  *
  * WHY THIS EXISTS
  * ---------------
- * Two or more Claude Code sessions run on this branch at once and cannot see
+ * Two or more Claude Code sessions run on one project at once and cannot see
  * each other's conversation. This is how they see each other: a lane is a
  * durable, human-named work thread with a declared scope, and a session claims
  * one before it starts. The claim is atomic, so two sessions racing produce
  * exactly one winner and one loser that is TOLD it lost, by name.
  *
  * Schema and the full design rationale: apps/agentic-os/src/db/schema/lane.ts.
+ *
+ * BOARDS
+ * ------
+ * Every lane and event belongs to a board (`project_key`). The board comes from the
+ * project registry (scripts/coordination/lane-board.mjs): `--project <key>`, then
+ * LANE_PROJECT, then the longest registry root that holds the cwd. A directory with no
+ * board exits 1 and prints how to register it. The board key is cooperative: it picks
+ * what a session sees and is never a security boundary. Broadcasts stay on their board;
+ * a direct message may cross boards. Migration 0004 adds the columns and a trigger that
+ * refuses a write to a foreign-board lane unless the client says `lane.client_version`.
+ * Every verb that opens the database checks first that migration 0004 is applied, and exits 1 if not (no degraded mode).
+ * A directory that can never be registered (home, ~/.claude, the OS temp dir) is told to pass `--project continuous-claude`.
+ * note, state, release and done are keyed on the lane owner: with no board from the cwd they use the board of a lane the caller owns.
  *
  * IDENTITY -- READ THIS BEFORE CHANGING IT
  * ----------------------------------------
@@ -32,7 +45,7 @@
  * one that errors, because the caller would proceed believing it had the lane.
  *
  * USAGE
- *   node scripts/coordination/lane.mjs board            # everything, grouped by track
+ *   node scripts/coordination/lane.mjs board [--all]    # this board, grouped by track; --all = every board, read-only
  *   node scripts/coordination/lane.mjs next             # highest-priority claimable lane
  *   node scripts/coordination/lane.mjs mine             # my lanes + lease time left
  *   node scripts/coordination/lane.mjs claim <id> [--note "..."]
@@ -45,21 +58,31 @@
  *   node scripts/coordination/lane.mjs inbox [--peek]   # unread; advances watermark unless --peek
  *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--priority N]
  *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add
- *   node scripts/coordination/lane.mjs peers            # who else is live right now
+ *   node scripts/coordination/lane.mjs peers [--all]    # who else is live on this board (--all: on the machine)
  *   node scripts/coordination/lane.mjs whoami           # my label, uuid and lanes
  *   node scripts/coordination/lane.mjs adopt --from <old-uuid>
  *                                                       # take over lanes + unread DMs after /clear, resume, fork
  *   node scripts/coordination/lane.mjs apply-kanban <file.json> [--dry-run] [--json]
  *                                                       # carry Dave's kanban changes into the lanes
+ *   node scripts/coordination/lane.mjs project which    # the resolved board, the rule that won, the registry entry
+ *   node scripts/coordination/lane.mjs project register <path> [--key k] [--board parent]
+ *                                                       # edits the PRIMARY checkout's registry and ~/.claude's; refuses when they differ;
+ *                                                       # a board other than continuous-claude needs the PR2 hook build live
+ *   node scripts/coordination/lane.mjs project unregister <key>   # not continuous-claude
  *
- * Global flags: --as <session-id>, --json
+ * Global flags: --as <session-id>, --json, --project <board-key>
  */
 
 import { createRequire } from 'node:module';
+import * as fs from 'node:fs';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import * as os from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { repoPath } from './canon-home.mjs';
+import { boardRoots, loadRegistry, normalizeRoot, resolveBoard } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
+import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
   adoptAllowed, isSafeId, label, labelWithAgent, listIdentities, readIdentity, resolveName, short, validAgent,
 } from './session-label.mjs';
@@ -132,6 +155,82 @@ function me() {
   return id;
 }
 
+/** The board every lane and event belongs to until a command says otherwise. */
+const DEFAULT_BOARD = 'continuous-claude';
+/** What this CLI tells the DB trigger (migration 0004): "I know about boards". */
+const CLIENT_VERSION = '2';
+const BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
+let BOARD = null;
+const fwd = (p) => String(p).replace(/[\\]/g, '/');
+/** The primary checkout (`~/continuous-claude`, or CCV3_USER_HOME/continuous-claude). Registry edits and the
+ *  hints name this one, never the worktree this script may run from: a worktree has its own copy of the registry. */
+const PRIMARY = repoPath();
+const LANE_CLI = fwd(resolve(PRIMARY, 'scripts', 'coordination', 'lane.mjs'));
+
+/** The resolver's answer for this cwd, or null. Throws only for an unknown --project / LANE_PROJECT. */
+function softBoard() {
+  if (BOARD === null) {
+    BOARD = resolveBoard(process.cwd(), { cli: true, projectFlag: typeof flags.project === 'string' ? flags.project : undefined }) ?? false;
+    if (BOARD) warnIfMirrorStale();
+  }
+  return BOARD || null;
+}
+
+/**
+ * The board came from the home mirror (~/.claude/project-registry.json). Until the post-merge sync, a stale mirror can give a
+ * nested app the wrong board, and `add` then writes lanes with that project_key (PR 297). Say so on stderr, once per run. Never blocks.
+ * An explicit LANE_REGISTRY_PATH is a deliberate override (tests, probes): no warning.
+ */
+function warnIfMirrorStale() {
+  if (process.env.LANE_REGISTRY_PATH) return;
+  try {
+    const repoFile = registryRepoFile();
+    const mirror = mirrorRegistryPath(process.env);
+    if (resolve(repoFile) === resolve(mirror)) return;
+    const d = registryDrift(repoFile, mirror);
+    if (d.state !== 'differ') return;
+    const shown = d.diffs.slice(0, 3).join('; ') + (d.diffs.length > 3 ? `; and ${d.diffs.length - 3} more` : '');
+    console.error(`WARNING: board '${BOARD.key}' came from ${fwd(mirror)}, which differs from the repo copy ${fwd(repoFile)}: ${shown}. ` +
+      'The board may be wrong. Fix: on main, run scripts/sync-to-active.sh --changed (or run lane.mjs with LANE_REGISTRY_PATH set to the repo copy).');
+  } catch { /* a warning must never break a lane command */ }
+}
+
+/** The board for this run. A cwd with no board is an error that says how to register it. */
+function projectOf() {
+  const b = softBoard();
+  if (!b) {
+    const cwd = fwd(process.cwd());
+    const never = unsafeRootReason(realOrSelf(process.cwd()));
+    // A directory register would refuse (home, ~/.claude, the OS temp dir) can never get a board: do not send the caller there.
+    if (never) {
+      throw new Error(`no lane board for ${cwd}; this directory cannot be registered (${never}). ` +
+        `Pass --project ${DEFAULT_BOARD} or set LANE_PROJECT=${DEFAULT_BOARD} (or the key of another registered board).`);
+    }
+    throw new Error(`no lane board for ${cwd}; register it: node ${LANE_CLI} project register ${cwd}`);
+  }
+  return b;
+}
+
+/**
+ * The board for a verb keyed on the lane owner (note, state, release, done). A cwd that resolves to no board
+ * (a session started in the home dir, T7) falls back to the board of the lane row, but only for the session that
+ * owns the lane -- the way `renew` is keyed on the owner. An explicit --project / LANE_PROJECT never reaches the
+ * fallback: softBoard() already answered (or threw) for it.
+ */
+async function projectForOwnedLane(c, id, myId) {
+  const b = softBoard();
+  if (b || !id) return projectOf();
+  const row = (await c.query(`SELECT project_key FROM agentic_os.lane WHERE id=$1 AND owner_session_id=$2`, [id, myId])).rows[0];
+  if (!row) return projectOf();
+  BOARD = { key: row.project_key, root: null, source: 'lane-owner', via: id };
+  return BOARD;
+}
+/** Board key for an event row: the resolved board, else the default board. */
+const eventBoard = () => (BOARD ? BOARD.key : DEFAULT_BOARD);
+
+/** Watermark row key: the bare session id on the default board, `<id>@<board>` on any other. */
+const wmKey = (sid, board) => (board === DEFAULT_BOARD ? sid : `${sid}@${board}`);
+
 // Session names live in identity files (session-label.mjs). Read once per run.
 let IDS = null;
 const ids = () => (IDS ??= listIdentities());
@@ -159,19 +258,33 @@ async function withDb(fn) {
     query_timeout: 8000,
   });
   await client.connect();
-  try { return await fn(client); } finally { await client.end().catch(() => {}); }
+  try {
+    // Session level: most writes here are single statements outside a transaction. The
+    // 0004 trigger reads this setting to tell a board-aware client from an old copy.
+    await client.query(`SELECT set_config('lane.client_version', $1, false)`, [CLIENT_VERSION]);
+    // One check before any verb runs. Without it a database that lacks migration 0004 fails halfway:
+    // `adopt` commits its moves and then throws, `mine` prints [undefined]. Strict on purpose: no degraded mode.
+    await assertMigrated(client);
+    return await fn(client);
+  } finally { await client.end().catch(() => {}); }
 }
 
-/** Record a lane event. Never throws into the caller's result path -- a failed
- *  log line must not make a successful claim look like a failure. */
+/** SQLSTATE 42703 on project_key: the database has not had migration 0004 applied. */
+const isMissingMigration = (e) => e?.code === '42703' && /project_key/.test(e.message || '');
+
+/** Record a lane event on the current board. Never throws into the caller's result path --
+ *  a failed log line must not make a successful claim look like a failure. The one
+ *  exception is a database without migration 0004: that is a setup error, and a `say`
+ *  that reports "sent" while recording nothing would be worse than a loud failure. */
 async function logEvent(c, { laneId = null, kind, sessionId, to = null, body = null, detail = {} }) {
   try {
     await c.query(
-      `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [laneId, kind, sessionId, to, body, JSON.stringify(detail)],
+      `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail, project_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [laneId, kind, sessionId, to, body, JSON.stringify(detail), eventBoard()],
     );
   } catch (e) {
+    if (isMissingMigration(e)) throw e;
     process.stderr.write(`[lane] warn: event not recorded (${e.message})\n`);
   }
 }
@@ -225,7 +338,7 @@ const STATE_MARK = {
   backlog: '·', ready: 'o', active: '>', blocked: '!', review: '?', done: 'x',
 };
 
-function laneLine(l, myId) {
+function laneLine(l, myId, showBoard = false) {
   const mine = l.owner_session_id === myId;
   const who = l.owner_session_id ? (mine ? 'YOU' : L(l.owner_session_id)) : '';
   const lease = l.lease_expires_at
@@ -235,10 +348,142 @@ function laneLine(l, myId) {
     ? (lease === null ? '' : lease > 0 ? ` ${lease}m` : ` LAPSED`)
     : '';
   const head = `${STATE_MARK[l.state] || '·'} ${l.id.padEnd(26)} ${String(l.state).padEnd(8)} ${(who + leaseTag).padEnd(30)}`;
-  const lines = [`${head} ${l.title}`];
+  const lines = [`${head} ${showBoard ? `[${l.project_key}] ` : ''}${l.title}`];
   if (l.note) lines.push(`${' '.repeat(30)}${l.note}`);
   if (l.scope) lines.push(`${' '.repeat(30)}scope: ${l.scope}`);
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------- board helpers
+
+/** `sessions.project` folded the way normalizeRoot folds a path (the SQL twin, steps in the same order): forward
+ *  slashes (chr(92) is a backslash), the `//?/` or `//./` extended-length prefix dropped, lower case, a leading
+ *  /c/ becomes c:/, runs of slashes collapse to one (not at the very start), no trailing slash. */
+const FOLDED_PROJECT = (alias = 's.') =>
+  `rtrim(regexp_replace(regexp_replace(lower(regexp_replace(replace(${alias}project, chr(92), '/'), '^//[?.]/', '')), ` +
+  `'^/([a-z])(/|$)', '\\1:\\2'), '(?<=.)/{2,}', '/', 'g'), '/')`;
+
+/** SQL: the session's project is a root of the board, or under one. starts_with, never LIKE: paths hold `_`. */
+const underRootsSql = (rootsParam) => `EXISTS (SELECT 1 FROM unnest(${rootsParam}::text[]) r
+           WHERE ${FOLDED_PROJECT()} = r OR starts_with(${FOLDED_PROJECT()}, r || '/'))`;
+
+/** SQL: a peer of the board = under its roots, or it owns a lane there (T7: a session started in the home dir). */
+const peerOfBoardSql = (rootsParam, boardParam) => `(
+  ${underRootsSql(rootsParam)}
+  OR EXISTS (SELECT 1 FROM agentic_os.lane bl
+              WHERE bl.owner_session_id = s.id AND bl.project_key = ${boardParam}::text))`;
+
+/**
+ * The events a session has not read. $1 = me, $2 = board, $3 = this board's cursor row key.
+ * Broadcasts use this board's cursor. A direct message uses ONE cursor, the highest across all
+ * of my rows (`<id>` and every `<id>@<board>`), so a DM never shows twice across boards (T4).
+ */
+const UNREAD_SQL = `e.session_id <> $1::text AND (
+  (e.to_session_id IS NULL AND e.project_key = $2::text
+     AND e.id > COALESCE((SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id = $3::text), 0))
+  OR (e.to_session_id = $1::text
+     AND e.id > COALESCE((SELECT MAX(last_event_id) FROM agentic_os.lane_watermark
+                           WHERE session_id = $1::text OR starts_with(session_id, $1::text || '@')), 0)))`;
+const unreadParams = (myId, board) => [myId, board, wmKey(myId, board)];
+
+/** Live sessions on a board (ALIVE_AT as everywhere), or on the whole machine when `all`. */
+async function livePeers(c, board, all) {
+  const roots = board ? boardRoots(board.key) : [];
+  return (await c.query(
+    `SELECT s.id, s.working_on, ${ALIVE_AT('s.')} AS last_alive,
+            (SELECT string_agg(l.id, ', ' ORDER BY l.id) FROM agentic_os.lane l
+              WHERE l.owner_session_id = s.id AND l.state <> 'done'
+                AND ($1::boolean OR l.project_key = $2::text)) AS lanes
+     FROM sessions s
+     WHERE ${ALIVE_AT('s.')} > now() - interval '${STALE_MINUTES} minutes'
+       AND ($1::boolean OR ${peerOfBoardSql('$3', '$2')})
+     ORDER BY ${ALIVE_AT('s.')} DESC`,
+    [all, board ? board.key : null, roots],
+  )).rows;
+}
+
+/** The error for a lane id that is not on this board; names the board that has it. */
+async function noLane(c, id, board) {
+  const other = (await c.query(`SELECT project_key FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
+  const hint = other
+    ? `; it exists on board ${other.project_key} (run with --project ${other.project_key})`
+    : `. Run: lane.mjs board`;
+  return new Error(`no lane ${id} on board ${board.key}${hint}`);
+}
+
+/** The error for an add/seed that hit a lane id owned by another board. */
+async function foreignId(c, id) {
+  const other = (await c.query(`SELECT project_key FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
+  return new Error(`lane id '${id}' belongs to board '${other ? other.project_key : '?'}'`);
+}
+
+const badId = (id) => `lane id '${id}' is not valid: use lower case letters, digits and '-', starting with a letter or digit`;
+
+/** Which of these sessions sit on the board (their project is under a board root)? Keeps the order.
+ *  Roots only: owning a lane there does not count, so adopting a lane does not decide who a name means. */
+async function sessionsOnBoard(c, uuids, boardKey) {
+  if (!uuids.length) return [];
+  const rows = (await c.query(
+    `SELECT s.id FROM sessions s WHERE s.id = ANY($1::text[]) AND ${underRootsSql('$2')}`,
+    [uuids, boardRoots(boardKey)],
+  )).rows.map((r) => r.id);
+  return uuids.filter((u) => rows.includes(u));
+}
+
+/**
+ * Who does `--to <want>` mean? A name first (exact, recent sessions), then a uuid prefix.
+ * Several sessions with the name: prefer the one on this board; otherwise ask for `name@board`.
+ * `name@board` picks the session on that board. A DM may cross boards, so a unique name
+ * anywhere on the machine is fine.
+ */
+async function resolveRecipient(c, want, board) {
+  const at = /^(.*\S)@([a-z0-9][a-z0-9-]*)$/.exec(want);
+  const wantBoard = at && boardRoots(at[2]).length ? at[2] : null;
+  const name = wantBoard ? at[1] : want;
+  // 1. An exact session name among recent sessions. The old half of a /clear is skipped.
+  const named = [...ids()].filter(([, i]) => typeof i.name === 'string').map(([u]) => u);
+  const recent = named.length ? new Set((await c.query(
+    `SELECT id FROM sessions WHERE id = ANY($1) AND ${ALIVE_AT()} > now() - interval '2 hours'`, [named],
+  )).rows.map((r) => r.id)) : new Set();
+  const byName = resolveName(name, ids(), recent);
+  if (wantBoard) {
+    const there = await sessionsOnBoard(c, byName, wantBoard);
+    if (there.length === 1) return there[0];
+    throw new Error(there.length ? `"${want}" still names ${there.length} sessions: ${there.map(L).join(', ')}. Use #sid8 or the uuid prefix.`
+      : `no live session named "${name}" on board ${wantBoard}`);
+  }
+  if (byName.length > 1) {
+    const here = await sessionsOnBoard(c, byName, board.key);
+    if (here.length === 1) return here[0];
+    throw new Error(`"${want}" names ${byName.length} live sessions: ${byName.map(L).join(', ')}. Use name@board, #sid8 or the uuid prefix.`);
+  }
+  if (byName.length === 1) return byName[0];
+  // 2. Fall back to a uuid prefix. % _ \ are literal characters, not wildcards.
+  const prefix = want.replace(/^#/, '').replace(/[\\%_]/g, '\\$&');
+  const m = await c.query(
+    `SELECT id FROM sessions WHERE id LIKE $1 || '%' ESCAPE '\\'
+     AND ${ALIVE_AT()} > now() - interval '2 hours'
+     ORDER BY ${ALIVE_AT()} DESC LIMIT 2`, [prefix],
+  );
+  if (m.rows.length === 0) throw new Error(`no recent session matching "${want}"`);
+  if (m.rows.length > 1) throw new Error(`"${want}" is ambiguous -- give more characters`);
+  return m.rows[0].id;
+}
+
+/** Validate a seed file before any write: id rule, item project, and ids owned by another board. */
+async function checkSeedItems(c, items, board) {
+  if (!Array.isArray(items)) throw new Error('seed file must hold a JSON array of lanes');
+  for (const it of items) {
+    if (!it || typeof it.id !== 'string' || !BOARD_KEY_RE.test(it.id)) throw new Error(badId(it?.id));
+    if (it.project !== undefined && it.project !== board.key) {
+      throw new Error(`seed item '${it.id}' names project '${it.project}' but this run resolved board '${board.key}'`);
+    }
+  }
+  const foreign = (await c.query(
+    `SELECT id, project_key FROM agentic_os.lane WHERE id = ANY($1::text[]) AND project_key <> $2`,
+    [items.map((i) => i.id), board.key],
+  )).rows[0];
+  if (foreign) throw new Error(`lane id '${foreign.id}' belongs to board '${foreign.project_key}'`);
 }
 
 // ---------------------------------------------------------------- commands
@@ -246,20 +491,19 @@ function laneLine(l, myId) {
 const commands = {
   async board(c) {
     const myId = me();
+    const all = flags.all === true;
+    const board = all ? softBoard() : projectOf();
     const { rows } = await c.query(
       `SELECT l.* FROM agentic_os.lane l
-       WHERE ($1::boolean OR l.state <> 'done')
-       ORDER BY l.track, l.priority, l.id`,
-      [flags.all === true],
+       WHERE $1::boolean OR (l.project_key = $2::text AND l.state <> 'done')
+       ORDER BY l.project_key, l.track, l.priority, l.id`,
+      [all, board ? board.key : null],
     );
-    const peers = (await c.query(
-      `SELECT id, working_on FROM sessions
-       WHERE ${ALIVE_AT()} > now() - interval '${STALE_MINUTES} minutes'
-       ORDER BY ${ALIVE_AT()} DESC`,
-    )).rows;
+    const peers = (await livePeers(c, board, all)).map((r) => ({ id: r.id, working_on: r.working_on }));
 
     if (JSON_OUT) {
       return {
+        board: all ? '*' : board.key,
         lanes: rows.map((l) => ({ ...l, owner_name: l.owner_session_id ? nameOf(l.owner_session_id) : null })),
         peers,
         me: myId,
@@ -269,32 +513,24 @@ const commands = {
     }
 
     const out = [];
-    out.push(`LANE BOARD   me=${L(myId)}   ${rows.length} open lane(s)   ${peers.length} live session(s)`);
-    let track = null;
+    out.push(`LANE BOARD   ${all ? 'board (all boards, read-only)' : `board ${board.key}`}   me=${L(myId)}   ${rows.length} ${all ? '' : 'open '}lane(s)   ${peers.length} live session(s)`);
+    let group = null;
     for (const l of rows) {
-      if (l.track !== track) { track = l.track; out.push(``, `-- ${track} ${'-'.repeat(Math.max(0, 60 - track.length))}`); }
-      out.push(laneLine(l, myId));
+      const g = all ? `${l.project_key}/${l.track}` : l.track;
+      if (g !== group) { group = g; out.push(``, `-- ${g} ${'-'.repeat(Math.max(0, 60 - g.length))}`); }
+      out.push(laneLine(l, myId, all));
     }
-    const unread = (await c.query(
-      `SELECT count(*)::int AS n FROM agentic_os.lane_event e
-       WHERE e.id > COALESCE((SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id=$1),0)
-         AND e.session_id <> $1
-         AND (e.to_session_id IS NULL OR e.to_session_id = $1)`, [myId],
-    )).rows[0].n;
+    const unread = board ? (await c.query(
+      `SELECT count(*)::int AS n FROM agentic_os.lane_event e WHERE ${UNREAD_SQL}`, unreadParams(myId, board.key),
+    )).rows[0].n : 0;
     out.push(``, unread > 0 ? `${unread} unread -- run: lane.mjs inbox` : `inbox empty`);
     return out.join('\n');
   },
 
   async peers(c) {
     const myId = me();
-    const { rows } = await c.query(
-      `SELECT s.id, s.working_on, ${ALIVE_AT('s.')} AS last_alive,
-              (SELECT string_agg(l.id, ', ' ORDER BY l.id) FROM agentic_os.lane l
-                WHERE l.owner_session_id = s.id AND l.state <> 'done') AS lanes
-       FROM sessions s
-       WHERE ${ALIVE_AT('s.')} > now() - interval '${STALE_MINUTES} minutes'
-       ORDER BY ${ALIVE_AT('s.')} DESC`,
-    );
+    const all = flags.all === true;
+    const rows = await livePeers(c, all ? softBoard() : projectOf(), all);
     if (JSON_OUT) return rows.map((r) => ({ ...r, name: nameOf(r.id), label: L(r.id) }));
     return rows.map((r) => {
       const held = r.lanes ? r.lanes.split(', ') : [];
@@ -303,14 +539,17 @@ const commands = {
     }).join('\n') || 'no live sessions';
   },
 
-  /** Who am I: the label, the full uuid and the lanes I hold. */
+  /** Who am I: the label, the full uuid and the lanes I hold (with their boards). Keyed on the owner, not the cwd. */
   async whoami(c) {
     const myId = me();
     const held = (await c.query(
-      `SELECT id FROM agentic_os.lane WHERE owner_session_id=$1 AND state <> 'done' ORDER BY id`, [myId],
-    )).rows.map((r) => r.id);
-    if (JSON_OUT) return { label: L(myId), uuid: myId, short: short(myId), name: nameOf(myId), lanes: held };
-    return [L(myId), `uuid: ${myId}`, `lanes: ${held.join(', ') || '(none)'}`].join('\n');
+      `SELECT id, project_key FROM agentic_os.lane WHERE owner_session_id=$1 AND state <> 'done' ORDER BY id`, [myId],
+    )).rows;
+    const ids = held.map((r) => r.id);
+    if (JSON_OUT) {
+      return { label: L(myId), uuid: myId, short: short(myId), name: nameOf(myId), lanes: ids, boards: Object.fromEntries(held.map((r) => [r.id, r.project_key])) };
+    }
+    return [L(myId), `uuid: ${myId}`, `lanes: ${held.map((r) => `${r.id} [${r.project_key}]`).join(', ') || '(none)'}`].join('\n');
   },
 
   /**
@@ -323,6 +562,10 @@ const commands = {
    * One transaction. A second run finds nothing left to move. The cursor is carried
    * only when the new session has none, so an adopt cannot rewind a live inbox; if
    * the new session already read past a moved message, the cursor steps back to it.
+   *
+   * Boards: a /clear successor is the same thread, so lanes, DMs and cursors move across
+   * every board. Cursor rows are `<id>` and `<id>@<board>`; each old row is carried to the
+   * new id's equivalent. The DM cursor is the highest of a session's rows (see UNREAD_SQL).
    */
   async adopt(c) {
     const newId = me();
@@ -350,6 +593,10 @@ const commands = {
         e.soft = true; throw e;
       }
     }
+    // Resolve the board BEFORE anything moves. It can throw (unknown --project / LANE_PROJECT), and a throw after
+    // the COMMIT would report failure for an adopt that succeeded. A cwd with no board returns null: the audit
+    // event then goes to the default board.
+    softBoard();
     await c.query('BEGIN');
     let moved;
     try {
@@ -357,26 +604,36 @@ const commands = {
         `UPDATE agentic_os.lane SET owner_session_id=$2, updated_at=now()
          WHERE owner_session_id=$1 AND state <> 'done' RETURNING id`, [oldId, newId],
       )).rows.map((r) => r.id).sort();
-      const wm = async (sid) => (await c.query(
-        `SELECT last_event_id::bigint AS n FROM agentic_os.lane_watermark WHERE session_id=$1`, [sid],
-      )).rows[0]?.n;
-      const oldWm = await wm(oldId);
-      const newWm = await wm(newId);
+      const wmRows = async (sid) => (await c.query(
+        `SELECT session_id, last_event_id::bigint AS n FROM agentic_os.lane_watermark
+          WHERE session_id=$1::text OR starts_with(session_id, $1::text || '@')`, [sid],
+      )).rows;
+      const top = (rows) => (rows.length ? rows.reduce((m, r) => Math.max(m, Number(r.n)), 0) : undefined);
+      const oldRows = await wmRows(oldId);
+      const newRows = await wmRows(newId);
+      const oldWm = top(oldRows);
+      const newWm = top(newRows);
       const dms = (await c.query(
         `UPDATE agentic_os.lane_event
             SET to_session_id=$2, detail = detail || jsonb_build_object('adoptedFrom', $1::text)
           WHERE to_session_id=$1 AND id > $3::bigint RETURNING id`, [oldId, newId, oldWm ?? 0],
       )).rows.map((r) => Number(r.id));
       let cursor = 'unchanged';
-      if (newWm === undefined && oldWm !== undefined) {
+      const have = new Set(newRows.map((r) => r.session_id));
+      for (const r of oldRows) {
+        const target = newId + r.session_id.slice(oldId.length);
+        if (have.has(target)) continue;
         await c.query(
           // lane-context can write this row at SessionStart while adopt runs; a key clash must not roll back the adopt.
           `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at) VALUES ($1,$2,now())
-           ON CONFLICT (session_id) DO NOTHING`, [newId, oldWm]);
+           ON CONFLICT (session_id) DO NOTHING`, [target, r.n]);
         cursor = 'carried';
-      } else if (newWm !== undefined && dms.length && Math.min(...dms) <= Number(newWm)) {
+      }
+      if (newWm !== undefined && dms.length && Math.min(...dms) <= Number(newWm)) {
         await c.query(
-          `UPDATE agentic_os.lane_watermark SET last_event_id=$2, updated_at=now() WHERE session_id=$1`, [newId, Math.min(...dms) - 1]);
+          `UPDATE agentic_os.lane_watermark SET last_event_id=$2, updated_at=now()
+            WHERE (session_id=$1::text OR starts_with(session_id, $1::text || '@')) AND last_event_id >= $2 + 1`,
+          [newId, Math.min(...dms) - 1]);
         cursor = 'stepped back';
       }
       await c.query('COMMIT');
@@ -401,10 +658,12 @@ const commands = {
 
   async next(c) {
     const myId = me();
+    const board = projectOf();
     const { rows } = await c.query(
       `SELECT l.* FROM agentic_os.lane l
-       WHERE l.state IN ('ready','backlog') AND ${RECLAIMABLE}
+       WHERE l.project_key = $1 AND l.state IN ('ready','backlog') AND ${RECLAIMABLE}
        ORDER BY l.priority, l.id LIMIT ${Number(flags.n) > 0 ? Number(flags.n) : 5}`,
+      [board.key],
     );
     if (JSON_OUT) return rows;
     if (!rows.length) return 'nothing claimable';
@@ -417,7 +676,7 @@ const commands = {
       `SELECT l.* FROM agentic_os.lane l WHERE l.owner_session_id=$1 ORDER BY l.priority, l.id`, [myId],
     );
     if (JSON_OUT) return rows;
-    return rows.length ? rows.map((l) => laneLine(l, myId)).join('\n') : 'you hold no lanes';
+    return rows.length ? rows.map((l) => laneLine(l, myId, true)).join('\n') : 'you hold no lanes';
   },
 
   /**
@@ -431,6 +690,7 @@ const commands = {
    */
   async claim(c) {
     const myId = me();
+    const board = projectOf();
     const id = positional[1];
     if (!id) throw new Error('usage: lane.mjs claim <lane-id> [--note "..."]');
 
@@ -443,9 +703,9 @@ const commands = {
          state            = CASE WHEN l.state IN ('backlog','ready') THEN 'active' ELSE l.state END,
          note             = COALESCE($3, l.note),
          updated_at       = now()
-       WHERE l.id = $1 AND ${RECLAIMABLE}
+       WHERE l.id = $1 AND l.project_key = $4 AND ${RECLAIMABLE}
        RETURNING l.*`,
-      [id, myId, typeof flags.note === 'string' ? flags.note : null],
+      [id, myId, typeof flags.note === 'string' ? flags.note : null, board.key],
     );
 
     if (rows.length) {
@@ -459,8 +719,8 @@ const commands = {
         : `CLAIMED ${id} (fence ${l.fence}, lease ${LEASE_MINUTES}m)\n  ${l.title}\n  scope: ${l.scope || '(undeclared -- set one)'}`;
     }
 
-    const cur = (await c.query(`SELECT * FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
-    if (!cur) throw new Error(`no lane "${id}". Run: lane.mjs board`);
+    const cur = (await c.query(`SELECT * FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [id, board.key])).rows[0];
+    if (!cur) throw await noLane(c, id, board);
     if (cur.owner_session_id === myId) {
       return JSON_OUT ? cur : `you already hold ${id} -- use "renew" to extend, "note" to update it`;
     }
@@ -495,23 +755,25 @@ const commands = {
     const myId = me();
     const { rows } = await c.query(
       `UPDATE agentic_os.lane SET lease_expires_at = now() + interval '${LEASE_MINUTES} minutes', updated_at = now()
-       WHERE owner_session_id=$1 AND state <> 'done' RETURNING id`, [myId],
+       WHERE owner_session_id=$1 AND state <> 'done' RETURNING id, project_key`, [myId],
     );
-    return JSON_OUT ? rows : `renewed ${rows.length} lane(s): ${rows.map((r) => r.id).join(', ') || '(none)'}`;
+    // Keyed on the owner, on every board: a lane held on another board must not lapse because I ran this elsewhere.
+    return JSON_OUT ? rows : `renewed ${rows.length} lane(s): ${rows.map((r) => `${r.id} [${r.project_key}]`).join(', ') || '(none)'}`;
   },
 
   async note(c) {
     const myId = me();
     const id = positional[1];
+    const board = await projectForOwnedLane(c, id, myId);
     const body = positional.slice(2).join(' ') || (typeof flags.note === 'string' ? flags.note : '');
     if (!id || !body) throw new Error('usage: lane.mjs note <lane-id> "status line"');
     const { rows } = await c.query(
       `UPDATE agentic_os.lane SET note=$2, updated_at=now(),
          lease_expires_at = CASE WHEN owner_session_id=$3
            THEN now() + interval '${LEASE_MINUTES} minutes' ELSE lease_expires_at END
-       WHERE id=$1 RETURNING *`, [id, body, myId],
+       WHERE id=$1 AND project_key=$4 RETURNING *`, [id, body, myId, board.key],
     );
-    if (!rows.length) throw new Error(`no lane "${id}"`);
+    if (!rows.length) throw await noLane(c, id, board);
     await logEvent(c, { laneId: id, kind: 'note', sessionId: myId, body, detail: agentDetail() });
     return JSON_OUT ? rows[0] : `noted on ${id}: ${body}`;
   },
@@ -519,6 +781,7 @@ const commands = {
   async state(c) {
     const myId = me();
     const id = positional[1];
+    const board = await projectForOwnedLane(c, id, myId);
     const to = positional[2];
     if (!id || !LANE_STATES.includes(to)) {
       throw new Error(`usage: lane.mjs state <lane-id> <${LANE_STATES.join('|')}>`);
@@ -543,10 +806,10 @@ const commands = {
          note = COALESCE($3, note),
          owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE owner_session_id END,
          lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE lease_expires_at END
-       WHERE id=$1 RETURNING *`,
-      [id, to, typeof flags.note === 'string' ? flags.note : null],
+       WHERE id=$1 AND project_key=$4 RETURNING *`,
+      [id, to, typeof flags.note === 'string' ? flags.note : null, board.key],
     );
-    if (!rows.length) throw new Error(`no lane "${id}"`);
+    if (!rows.length) throw await noLane(c, id, board);
     await logEvent(c, {
       laneId: id, kind: to === 'done' ? 'done' : 'state_changed', sessionId: myId,
       body: `${id} -> ${to}${typeof flags.note === 'string' ? ` (${flags.note})` : ''}`,
@@ -565,64 +828,42 @@ const commands = {
     return commands.state(c);
   },
 
-  /** Message the branch, or one peer. This is the bus; `inbox` is the reader. */
+  /** Message the board, or one peer (who may be on another board). This is the bus; `inbox` is the reader. */
   async say(c) {
     const myId = me();
+    const board = projectOf();
     const body = positional.slice(1).join(' ');
-    if (!body) throw new Error('usage: lane.mjs say "message" [--to <name|sid-prefix>] [--lane <id>]');
-    let to = null;
-    if (typeof flags.to === 'string') {
-      // 1. An exact session name among recent sessions. The old half of a /clear is skipped.
-      const named = [...ids()].filter(([, i]) => typeof i.name === 'string').map(([u]) => u);
-      const recent = named.length ? new Set((await c.query(
-        `SELECT id FROM sessions WHERE id = ANY($1) AND ${ALIVE_AT()} > now() - interval '2 hours'`, [named],
-      )).rows.map((r) => r.id)) : new Set();
-      const byName = resolveName(flags.to, ids(), recent);
-      if (byName.length > 1) {
-        throw new Error(`"${flags.to}" names ${byName.length} live sessions: ${byName.map(L).join(', ')}. Use #sid8 or the uuid prefix.`);
-      }
-      if (byName.length === 1) to = byName[0];
-      else {
-        // 2. Fall back to a uuid prefix. % _ \ are literal characters, not wildcards.
-        const prefix = flags.to.replace(/^#/, '').replace(/[\\%_]/g, '\\$&');
-        const m = await c.query(
-          `SELECT id FROM sessions WHERE id LIKE $1 || '%' ESCAPE '\\'
-           AND ${ALIVE_AT()} > now() - interval '2 hours'
-           ORDER BY ${ALIVE_AT()} DESC LIMIT 2`, [prefix],
-        );
-        if (m.rows.length === 0) throw new Error(`no recent session matching "${flags.to}"`);
-        if (m.rows.length > 1) throw new Error(`"${flags.to}" is ambiguous -- give more characters`);
-        to = m.rows[0].id;
-      }
+    if (!body) throw new Error('usage: lane.mjs say "message" [--to <name|name@board|sid-prefix>] [--lane <id>]');
+    const to = typeof flags.to === 'string' ? await resolveRecipient(c, flags.to, board) : null;
+    const laneId = typeof flags.lane === 'string' ? flags.lane : null;
+    // A tag must name a lane of this board: an event tagged with another board's lane would show up in that lane's history.
+    if (laneId && !(await c.query(`SELECT 1 FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [laneId, board.key])).rowCount) {
+      throw await noLane(c, laneId, board);
     }
-    await logEvent(c, {
-      laneId: typeof flags.lane === 'string' ? flags.lane : null,
-      kind: 'note', sessionId: myId, to, body, detail: agentDetail(),
-    });
-    return `sent to ${to ? L(to) : 'the branch'}${flags.lane ? ` re ${flags.lane}` : ''}`;
+    await logEvent(c, { laneId, kind: 'note', sessionId: myId, to, body, detail: agentDetail() });
+    return `sent to ${to ? L(to) : `board ${board.key}`}${laneId ? ` re ${laneId}` : ''}`;
   },
 
   /**
-   * Unread events for me, then advance the watermark.
+   * Unread events for me, then advance the watermark of THIS board.
    *
    * Excludes my own events -- a session does not need to be told what it just
    * did, and including them would make every action generate its own noise.
+   * Broadcasts are this board's; direct messages come from any board and are
+   * tagged [from <board>] when they crossed. See UNREAD_SQL for the cursors.
    */
   async inbox(c) {
     const myId = me();
+    const board = projectOf();
     const { rows } = await c.query(
-      `SELECT e.* FROM agentic_os.lane_event e
-       WHERE e.id > COALESCE((SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id=$1),0)
-         AND e.session_id <> $1
-         AND (e.to_session_id IS NULL OR e.to_session_id = $1)
-       ORDER BY e.id`, [myId],
+      `SELECT e.* FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`, unreadParams(myId, board.key),
     );
     if (rows.length && flags.peek !== true) {
       await c.query(
         `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at)
          VALUES ($1,$2,now())
          ON CONFLICT (session_id) DO UPDATE SET last_event_id=EXCLUDED.last_event_id, updated_at=now()`,
-        [myId, rows[rows.length - 1].id],
+        [wmKey(myId, board.key), rows[rows.length - 1].id],
       );
     }
     if (JSON_OUT) return rows;
@@ -630,39 +871,49 @@ const commands = {
     return rows.map((e) => {
       const to = e.to_session_id ? L(e.to_session_id) : 'all';
       const kind = e.kind === 'note' ? '' : ` (${e.kind})`;
-      return `${chicagoTime(e.occurred_at)}  ${labelWithAgent(e.session_id, ids(), e.detail?.agent)} -> ${to}${e.lane_id ? ` [${e.lane_id}]` : ''}${kind}\n     ${e.body || ''}`;
+      const from = e.to_session_id && e.project_key !== board.key ? ` [from ${e.project_key}]` : '';
+      return `${chicagoTime(e.occurred_at)}  ${labelWithAgent(e.session_id, ids(), e.detail?.agent)}${from} -> ${to}${e.lane_id ? ` [${e.lane_id}]` : ''}${kind}\n     ${e.body || ''}`;
     }).join('\n');
   },
 
   async add(c) {
     const myId = me();
+    const board = projectOf();
     const id = positional[1];
     if (!id || typeof flags.title !== 'string') {
       throw new Error('usage: lane.mjs add <lane-id> --title "..." [--track t] [--scope "..."] [--priority N]');
     }
+    if (!BOARD_KEY_RE.test(id)) throw new Error(badId(id));
+    // The WHERE keeps an add from rewriting a lane that belongs to another board: no row back means a foreign id.
     const { rows } = await c.query(
-      `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,project_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (id) DO UPDATE SET
          title=EXCLUDED.title, track=EXCLUDED.track,
          scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
          priority=EXCLUDED.priority, updated_at=now()
+       WHERE agentic_os.lane.project_key = EXCLUDED.project_key
        RETURNING *`,
       [id, flags.title, flags.track || 'unsorted', flags.scope || null, flags.branch || null,
        LANE_STATES.includes(flags.state) ? flags.state : 'backlog',
-       Number(flags.priority) || 50, typeof flags.note === 'string' ? flags.note : null],
+       Number(flags.priority) || 50, typeof flags.note === 'string' ? flags.note : null, board.key],
     );
+    if (!rows.length) throw await foreignId(c, id);
     await logEvent(c, { laneId: id, kind: 'seeded', sessionId: myId, body: flags.title });
-    return JSON_OUT ? rows[0] : `lane ${id} upserted`;
+    return JSON_OUT ? rows[0] : `lane ${id} upserted on board ${board.key}`;
   },
 
   /** Bulk idempotent add from JSON. Re-running never clobbers live claims,
-   *  because it only ever touches the descriptive columns. */
+   *  because it only ever touches the descriptive columns. Every item lands on the
+   *  resolved board; an item that names another board, or an id that another board
+   *  owns, stops the run before anything is written. */
   async seed(c) {
     const myId = me();
+    const board = projectOf();
     const file = positional[1];
     if (!file) throw new Error('usage: lane.mjs seed <file.json>');
     const items = JSON.parse(readFileSync(file, 'utf8'));
+    await checkSeedItems(c, items, board);
     let n = 0;
     for (const it of items) {
       // Deliberately asymmetric on conflict: descriptive columns are refreshed
@@ -670,9 +921,9 @@ const commands = {
       // Re-seeding must never revert a live claim or overwrite the status line
       // the holder is currently maintaining -- the seed knows the shape of the
       // work, the session knows what is happening to it right now.
-      await c.query(
-        `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,rationale,done_when)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      const res = await c.query(
+        `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,rationale,done_when,project_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (id) DO UPDATE SET
            title=EXCLUDED.title, track=EXCLUDED.track,
            scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
@@ -681,15 +932,17 @@ const commands = {
            note=COALESCE(agentic_os.lane.note, EXCLUDED.note),
            rationale=COALESCE(EXCLUDED.rationale, agentic_os.lane.rationale),
            done_when=COALESCE(EXCLUDED.done_when, agentic_os.lane.done_when),
-           updated_at=now()`,
+           updated_at=now()
+         WHERE agentic_os.lane.project_key = EXCLUDED.project_key`,
         [it.id, it.title, it.track || 'unsorted', it.scope || null, it.branch || null,
          LANE_STATES.includes(it.state) ? it.state : 'backlog', it.priority ?? 50, it.note || null,
-         it.rationale || null, it.doneWhen || null],
+         it.rationale || null, it.doneWhen || null, board.key],
       );
+      if (res.rowCount === 0) throw await foreignId(c, it.id);
       n++;
     }
     await logEvent(c, { kind: 'seeded', sessionId: myId, body: `seeded ${n} lanes from ${file}` });
-    return `seeded ${n} lane(s)`;
+    return `seeded ${n} lane(s) on board ${board.key}`;
   },
 
   /**
@@ -710,6 +963,7 @@ const commands = {
     // `--dry-run <file>` makes the flag parser swallow the file name as the flag value.
     const file = positional[1] ?? (typeof flags['dry-run'] === 'string' ? flags['dry-run'] : undefined);
     if (!file) throw new Error('usage: lane.mjs apply-kanban <file.json> [--dry-run] [--json]');
+    const board = projectOf();
     let input;
     try { input = JSON.parse(readFileSync(file, 'utf8')); } catch (e) {
       throw new Error(`cannot read kanban file "${file}": ${e.message}`);
@@ -718,19 +972,23 @@ const commands = {
     if (!input?.board?.columns && !(Array.isArray(input?.cards) && input.cards.length)) {
       throw new Error(`"${file}" has no board.columns and no cards. Expected { board: {columns, updatedAt}, cards: [...] }`);
     }
+    const declared = kanbanFileBoard(input);
+    if (declared !== null && declared !== board.key) {
+      throw new Error(`"${file}" is for board '${declared}' but this run resolved board '${board.key}'. Nothing was applied.`);
+    }
     const myId = dry ? null : me();
     const readAt = Date.parse(input?.readAt);
     const syncedAt = new Date(Number.isNaN(readAt) ? Date.now() : readAt).toISOString();
 
     let plan;
     if (dry) {
-      plan = planKanban(input, (await c.query(KANBAN_LANES)).rows);
+      plan = planKanban(input, (await c.query(KANBAN_LANES, [board.key])).rows);
     } else {
       await c.query('BEGIN');
       try {
-        const lanes = (await c.query(`${KANBAN_LANES} FOR UPDATE OF l`)).rows;
+        const lanes = (await c.query(`${KANBAN_LANES} FOR UPDATE OF l`, [board.key])).rows;
         plan = planKanban(input, lanes);
-        for (const a of plan.actions) await applyKanbanAction(c, a);
+        for (const a of plan.actions) await applyKanbanAction(c, a, board.key);
         await c.query('COMMIT');
       } catch (e) {
         await c.query('ROLLBACK').catch(() => {});
@@ -759,28 +1017,294 @@ const commands = {
       ...plan.skipped.map((k) => `  ${k.laneId.padEnd(28)} skipped  ${k.reason}`),
     ].join('\n');
   },
+
+  /** project which | register <path> | unregister <key>. `which` needs no database. */
+  async project(c) {
+    const sub = positional[1];
+    if (sub === 'which') return projectWhich();
+    if (sub === 'register') return projectRegister(c);
+    if (sub === 'unregister') return projectUnregister(c);
+    throw new Error('usage: lane.mjs project which | register <path> [--key k] [--board parent] | unregister <key>');
+  },
 };
 
 /**
  * The lanes the kanban planner sees. `held` is NOT RECLAIMABLE: a live session owns the
  * lane, so a card or column must not change its state. Same predicate as claim and next.
  */
-const KANBAN_LANES = `SELECT l.id, l.state, l.priority, l.note, NOT ${RECLAIMABLE} AS held FROM agentic_os.lane l`;
+const KANBAN_LANES = `SELECT l.id, l.state, l.priority, l.note, NOT ${RECLAIMABLE} AS held FROM agentic_os.lane l WHERE l.project_key = $1`;
+
+/** The board a kanban file says it is for: a string `board`, a top-level `project`, or `board.project`. null = it does not say. */
+function kanbanFileBoard(input) {
+  const b = input?.board;
+  const v = typeof b === 'string' ? b : typeof input?.project === 'string' ? input.project : b?.project;
+  return typeof v === 'string' && v ? v : null;
+}
 
 /** One planned action as one UPDATE. The state SQL mirrors the `state` command: done and ready release the lane. */
-async function applyKanbanAction(c, a) {
+async function applyKanbanAction(c, a, boardKey) {
   const sql = {
-    priority: `UPDATE agentic_os.lane SET priority=$2, updated_at=now() WHERE id=$1`,
-    note: `UPDATE agentic_os.lane SET note=$2, updated_at=now() WHERE id=$1`,
+    priority: `UPDATE agentic_os.lane SET priority=$2, updated_at=now() WHERE id=$1 AND project_key=$3`,
+    note: `UPDATE agentic_os.lane SET note=$2, updated_at=now() WHERE id=$1 AND project_key=$3`,
     state: `UPDATE agentic_os.lane SET state=$2, updated_at=now(),
               owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE owner_session_id END,
               lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE lease_expires_at END
-            WHERE id=$1`,
+            WHERE id=$1 AND project_key=$3`,
   }[a.kind];
   if (!sql) throw new Error(`unknown kanban action kind "${a.kind}"`);
-  const { rowCount } = await c.query(sql, [a.laneId, a.to]);
+  const { rowCount } = await c.query(sql, [a.laneId, a.to, boardKey]);
   if (rowCount !== 1) throw new Error(`kanban action on "${a.laneId}" matched ${rowCount} rows`);
 }
+
+// ---------------------------------------------------------------- project verbs
+
+const MIGRATION_MSG = 'migration 0004 is not applied to this database';
+const slugOf = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const isUnder = (child, root) => child === root || child.startsWith(root + '/');
+const homeDir = () => process.env.USERPROFILE || process.env.HOME || os.homedir();
+// The repo registry is the PRIMARY checkout's copy, never the one beside this script: a worktree has its own copy,
+// and editing it would then overwrite the live copy with the worktree's bytes.
+// LANE_REGISTRY_REPO and LANE_REGISTRY_ACTIVE are overrides for tests.
+const registryRepoFile = () => process.env.LANE_REGISTRY_REPO || join(PRIMARY, '.claude', 'project-registry.json');
+const registryActiveFile = () => process.env.LANE_REGISTRY_ACTIVE || join(homeDir(), '.claude', 'project-registry.json');
+const PRIMARY_NOTE = 'This edits the repo registry in the primary checkout (an uncommitted change on main) and the live copy. ' +
+  'The next sync removes the live copy unless the change is committed to main.';
+
+function realOrSelf(p) {
+  try { return fs.realpathSync.native(p); } catch { return p; }
+}
+
+/** The real path of a directory the user named; throws if it is missing or not a directory. */
+function existingDir(arg) {
+  const abs = resolve(arg);
+  let st;
+  try { st = fs.statSync(abs); } catch { throw new Error(`refusing ${fwd(abs)}: the path does not exist`); }
+  if (!st.isDirectory()) throw new Error(`refusing ${fwd(abs)}: it is not a directory`);
+  return fs.realpathSync.native(abs);
+}
+
+/** Why a board root must not be this path, or null. Not the home dir (or one that holds it), ~/.claude, or the OS temp dir (or in it, or around it). */
+function unsafeRootReason(real) {
+  const norm = normalizeRoot(real);
+  const home = normalizeRoot(realOrSelf(homeDir()));
+  const tmp = normalizeRoot(realOrSelf(os.tmpdir()));
+  return isUnder(home, norm) ? 'it is the home directory or holds it'
+    : isUnder(norm, `${home}/.claude`) ? 'it is ~/.claude or inside it'
+      : (isUnder(norm, tmp) || isUnder(tmp, norm)) ? 'it is the OS temp directory, or inside or around it'
+        : null;
+}
+
+function refuseUnsafeRoot(real) {
+  const why = unsafeRootReason(real);
+  if (why) throw new Error(`refusing ${fwd(real)}: ${why}`);
+}
+
+// ---- registry files
+
+const readIfExists = (file) => {
+  try { return fs.readFileSync(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+};
+const foldEol = (buf) => buf.toString('utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n');
+
+/**
+ * Both registry copies must agree (beyond line endings) before a write. Otherwise the write would replace
+ * the live copy with bytes built from a repo copy that is behind it, or the other way round, and lose an edit.
+ * A missing live copy is allowed: there is nothing to overwrite.
+ */
+function assertRegistriesAgree() {
+  const repoFile = registryRepoFile();
+  const activeFile = registryActiveFile();
+  const repo = readIfExists(repoFile);
+  if (repo === null) throw new Error(`refusing: the repo registry ${fwd(repoFile)} does not exist`);
+  const active = readIfExists(activeFile);
+  if (active !== null && foldEol(repo) !== foldEol(active)) {
+    throw new Error(
+      'refusing: the repo registry and the live registry differ beyond line endings, so a write would lose one of them.\n' +
+      `  repo:   ${fwd(repoFile)}\n  active: ${fwd(activeFile)}\n` +
+      '  Compare the two files, make them equal, then run this again.');
+  }
+}
+
+/**
+ * Plan an edit of the registry. The repo copy is the base: its line endings, BOM, indent and key order survive.
+ * `mutate(doc)` edits the parsed document. Returns the new text and the original bytes of both copies.
+ */
+function planRegistry(mutate) {
+  const repoFile = registryRepoFile();
+  const activeFile = registryActiveFile();
+  const originalRepo = fs.readFileSync(repoFile);
+  const raw = originalRepo.toString('utf8');
+  const text = raw.replace(/^﻿/, '');
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const indent = (/\n([ \t]+)"/.exec(text) || [])[1] || '  ';
+  const doc = JSON.parse(text);
+  if (!Array.isArray(doc.projects)) throw new Error(`${fwd(repoFile)} has no "projects" array`);
+  mutate(doc);
+  const body = JSON.stringify(doc, null, indent).replace(/\n/g, eol) + (/\n$/.test(text) ? eol : '');
+  const out = (raw.startsWith('﻿') ? '﻿' : '') + body;
+  return { repoFile, activeFile, out, originalRepo, originalActive: readIfExists(activeFile) };
+}
+
+/**
+ * Write both copies (the same bytes), then run `afterFiles` (the database step). Files go FIRST: a database
+ * step that fails then has something to undo, and a file step that fails never leaves a database row without
+ * its registry entry. On ANY failure both copies go back to their original bytes and every temp file is removed,
+ * so a retry starts clean.
+ */
+async function writeRegistries(plan, afterFiles) {
+  const temps = [];
+  const done = { repo: false, active: false };
+  const stage = (file) => {
+    fs.mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    temps.push(tmp);
+    fs.writeFileSync(tmp, plan.out);
+    return tmp;
+  };
+  try {
+    const repoTmp = stage(plan.repoFile);
+    const activeTmp = stage(plan.activeFile);
+    fs.renameSync(repoTmp, plan.repoFile); done.repo = true;
+    fs.renameSync(activeTmp, plan.activeFile); done.active = true;
+    await afterFiles();
+  } catch (e) {
+    try {
+      if (done.repo) fs.writeFileSync(plan.repoFile, plan.originalRepo);
+      if (done.active) {
+        if (plan.originalActive === null) fs.rmSync(plan.activeFile, { force: true });
+        else fs.writeFileSync(plan.activeFile, plan.originalActive);
+      }
+    } catch (undoErr) {
+      e.message += `\n  and the registry files could not be put back (${undoErr.message}): restore ${fwd(plan.repoFile)} and ${fwd(plan.activeFile)} by hand`;
+    }
+    for (const t of temps) fs.rmSync(t, { force: true });
+    throw e;
+  }
+  return { repoFile: plan.repoFile, activeFile: plan.activeFile };
+}
+
+const rawIndex = (doc, key) => doc.projects.findIndex(
+  (p) => p && typeof p === 'object' && (p.key === key || (!p.key && slugOf(p.name || '') === key)),
+);
+
+async function assertMigrated(c) {
+  const n = (await c.query(
+    `SELECT count(*)::int AS n FROM information_schema.columns
+      WHERE table_schema='agentic_os' AND table_name IN ('lane','lane_event') AND column_name='project_key'`,
+  )).rows[0].n;
+  if (n !== 2) throw new Error(MIGRATION_MSG);
+}
+
+async function projectWhich() {
+  const b = projectOf();
+  const entries = loadRegistry();
+  const e = entries.find((x) => x.key === b.via) ?? entries.find((x) => x.root === b.root && x.status.toLowerCase() !== 'inactive');
+  if (JSON_OUT) return { board: b.key, source: b.source, via: b.via, root: b.root, entry: e ?? null };
+  const lines = [`board: ${b.key}`, `source: ${b.source}`, `via: ${b.via}`, `root: ${b.root}`];
+  if (e) lines.push(`entry: ${e.key} (${e.name}) ${e.path} [${e.status}]${e.board !== e.key ? ` laneBoard=${e.board}` : ''}`);
+  return lines.join('\n');
+}
+
+/**
+ * Refuse a root that equals, holds or sits inside a live root, unless --board names that root's board.
+ * An entry that sits on the board of the key being registered is that board's own nested entry, not a clash:
+ * it is how a board comes back after an unregister that left a nested entry behind.
+ */
+function checkOverlap(norm, key, live, board) {
+  const joining = board !== undefined && board !== key;
+  if (joining && !live.some((e) => e.board === board)) {
+    throw new Error(`unknown board '${board}'; registered boards: ${[...new Set(live.map((e) => e.board))].join(', ') || '(none)'}`);
+  }
+  const hit = live.filter((e) => e.key !== key && e.board !== key && (isUnder(norm, e.root) || isUnder(e.root, norm)));
+  if (hit.length && !(joining && hit.every((e) => e.board === board))) {
+    const names = hit.map((e) => `${e.key} (board ${e.board}, ${e.root})`).join('; ');
+    throw new Error(`refusing: the root overlaps ${names}. To join one of those boards: --board <board>`);
+  }
+}
+
+/**
+ * A second board is only safe once the live lane-context hook sets lane.client_version (PR2): without it a session
+ * that owns a lane on that board fails its lease renew at the database fence and the hook goes silent.
+ * LANE_SKIP_HOOK_PRECHECK=1 skips the check. It exists for tests and probes only; never set it by hand.
+ */
+function requireLiveHook(board) {
+  if (board === DEFAULT_BOARD || process.env.LANE_SKIP_HOOK_PRECHECK === '1') return;
+  const file = join(homeDir(), '.claude', 'hooks', 'dist', 'lane-context.mjs');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { /* a missing hook fails the check below */ }
+  if (!text.includes('lane.client_version')) {
+    throw new Error(
+      `refusing to register board '${board}': the live lane-context hook (${fwd(file)}) does not set lane.client_version.\n` +
+      '  A session that owns a lane on a second board would fail its lease renew, and the hook would go silent.\n' +
+      "  PR2's hook build must be live first: build the hooks, sync them to ~/.claude, then run this again.");
+  }
+}
+
+async function upsertProjectRow(c, e) {
+  await c.query(
+    `INSERT INTO agentic_os.project (key, display_name, root_path, root_path_norm, status, registry_source, first_seen_at, last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,'lane.mjs project register', now(), now())
+     ON CONFLICT (key) DO UPDATE SET display_name=EXCLUDED.display_name, root_path=EXCLUDED.root_path,
+       root_path_norm=EXCLUDED.root_path_norm, status=EXCLUDED.status, registry_source=EXCLUDED.registry_source, last_seen_at=now()`,
+    [e.key, e.name, e.path, normalizeRoot(e.path), e.status],
+  );
+}
+
+async function projectRegister(c) {
+  const arg = positional[2];
+  if (!arg) throw new Error('usage: lane.mjs project register <path> [--key k] [--board parent]');
+  const real = existingDir(arg);
+  refuseUnsafeRoot(real);
+  const norm = normalizeRoot(real);
+  const name = real.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  const key = typeof flags.key === 'string' ? flags.key : slugOf(name);
+  if (!BOARD_KEY_RE.test(key)) throw new Error(`key '${key}' is not valid: use lower case letters, digits and '-' (pass --key)`);
+  const board = typeof flags.board === 'string' ? flags.board : undefined;
+  const target = board ?? key;
+  assertRegistriesAgree();
+  const entries = loadRegistry({ registryPath: registryRepoFile(), env: {} });
+  const live = entries.filter((e) => e.status.toLowerCase() !== 'inactive' && e.root);
+  const same = entries.find((e) => e.key === key);
+  const active = same && same.status.toLowerCase() !== 'inactive';
+  // The same key, path and board again is a repeat (a retry after a failure): it rewrites both files and the row.
+  const repeat = active && normalizeRoot(same.path) === norm && same.board === target;
+  if (active && !repeat) throw new Error(`key '${key}' is already registered (${same.path}); unregister it first or pass --key`);
+  checkOverlap(norm, key, live, board);
+  requireLiveHook(target);
+
+  const entry = { name, key, path: fwd(real), status: 'active' };
+  if (board !== undefined && board !== key) entry.laneBoard = board;
+  const plan = planRegistry((doc) => {
+    const i = rawIndex(doc, key);
+    if (i < 0) { doc.projects.push(entry); return; }
+    // Re-registering an inactive entry: reactivate it in place, keep its other fields and its position.
+    const old = doc.projects[i];
+    Object.assign(old, { path: entry.path, status: 'active' });
+    if (entry.laneBoard !== undefined) old.laneBoard = entry.laneBoard; else delete old.laneBoard;
+  });
+  const files = await writeRegistries(plan, () => upsertProjectRow(c, { ...entry, name: same?.name || name }));
+  return `registered ${key} (board ${target}) at ${entry.path}\n` +
+    `  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n` +
+    `  ${PRIMARY_NOTE}`;
+}
+
+async function projectUnregister(c) {
+  const key = positional[2];
+  if (!key) throw new Error('usage: lane.mjs project unregister <key>');
+  // The default board is where every old row and every old lane.mjs lives. No path registers it again.
+  if (key === DEFAULT_BOARD) throw new Error(`refusing: '${DEFAULT_BOARD}' is the default board; if it were unregistered, no command could register it again`);
+  assertRegistriesAgree();
+  const e = loadRegistry({ registryPath: registryRepoFile(), env: {} }).find((x) => x.key === key);
+  if (!e) throw new Error(`no registry entry with key '${key}'`);
+  const plan = planRegistry((doc) => { doc.projects[rawIndex(doc, key)].status = 'inactive'; });
+  const files = await writeRegistries(plan, () => c.query(`UPDATE agentic_os.project SET status='inactive', last_seen_at=now() WHERE key=$1`, [key]));
+  // A nested entry (laneBoard) shares its parent's board: that board's lanes are not this entry's to report.
+  const head = e.board !== e.key
+    ? `unregistered ${key} (it joined board ${e.board}, which stays registered; its lanes are untouched)`
+    : `unregistered ${key} (board ${e.board}); ${(await c.query(`SELECT count(*)::int AS n FROM agentic_os.lane WHERE project_key=$1`, [e.board])).rows[0].n} lane row(s) kept on that board`;
+  return `${head}\n  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n  ${PRIMARY_NOTE}`;
+}
+
 // ---------------------------------------------------------------- main
 
 const cmd = positional[0] || 'board';
@@ -790,10 +1314,11 @@ if (!commands[cmd]) {
 }
 
 try {
-  const result = await withDb((c) => commands[cmd](c));
+  const needsDb = !(cmd === 'project' && positional[1] === 'which');
+  const result = needsDb ? await withDb((c) => commands[cmd](c)) : await commands[cmd](null);
   process.stdout.write((JSON_OUT ? JSON.stringify(result, null, 2) : String(result)) + '\n');
 } catch (e) {
-  process.stderr.write(`${e.message}\n`);
+  process.stderr.write(`${isMissingMigration(e) ? MIGRATION_MSG : e.message}\n`);
   // A denied claim is a correct, expected answer -- exit 3 so a caller can tell
   // "someone else has it" apart from "the tool broke" (exit 1).
   process.exit(e.soft ? 3 : 1);

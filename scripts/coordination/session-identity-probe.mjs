@@ -21,6 +21,8 @@
  *  11. say/note --agent store detail.agent, inbox shows "name/agent #sid8"; a bad agent is ignored
  *  12. a uuid inside an identity file does not redirect say --to <name>
  *  13. D3: adopt refuses a same-name adopt by a shared auto word; the `previous` link still works
+ *  14. two live sessions with one name on different boards: say --to <name> picks the one on
+ *      my board; from a board with neither it errors and asks for name@board, which works
  *
  * Every row and file it writes is removed, including on failure. Lane ids start
  * with `zz-sid-probe-`; session ids are random uuids tracked in SESSIONS.
@@ -33,6 +35,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { laneEnv, makeBoards } from './probe-boards.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -55,6 +58,7 @@ const CONN = process.env.CONTINUOUS_CLAUDE_DB_URL
 const DIR = mkdtempSync(join(tmpdir(), 'ccv3-identity-probe-'));
 const PREFIX = 'zz-sid-probe-';
 const SESSIONS = [];
+let XB = null; // temp boards for check 14, made when that check runs
 const sid = () => { const u = randomUUID(); SESSIONS.push(u); return u; };
 const s8 = (u) => u.slice(0, 8);
 
@@ -109,10 +113,12 @@ async function connect() {
 
 async function cleanup(c) {
   await c.query(`DELETE FROM agentic_os.lane_event WHERE session_id = ANY($1) OR to_session_id = ANY($1) OR lane_id LIKE $2`, [SESSIONS, `${PREFIX}%`]);
-  await c.query(`DELETE FROM agentic_os.lane_watermark WHERE session_id = ANY($1)`, [SESSIONS]);
+  // A board other than continuous-claude keeps its cursor under `<id>@<board>`.
+  await c.query(`DELETE FROM agentic_os.lane_watermark WHERE session_id = ANY($1) OR split_part(session_id, '@', 1) = ANY($1)`, [SESSIONS]);
   await c.query(`DELETE FROM agentic_os.lane WHERE id LIKE $1`, [`${PREFIX}%`]);
   await c.query(`DELETE FROM sessions WHERE id = ANY($1)`, [SESSIONS]);
   rmSync(DIR, { recursive: true, force: true });
+  XB?.cleanup();
 }
 
 const c = await connect();
@@ -370,6 +376,33 @@ try {
   check('adopt through the previous link still works for an auto-named session', () => {
     must(autoPrev.code === 0, `exit ${autoPrev.code}: ${autoPrev.all}`);
     must(autoMoved.owner_session_id === AW3, 'lane not moved');
+  });
+
+  // 14. one name, two boards. The twins sit under the roots of two temp boards; the third context is
+  // the repo itself (board continuous-claude), where neither twin lives.
+  XB = makeBoards('zz-sid', ['x', 'y'], [{ name: 'continuous-claude', key: 'continuous-claude', path: REPO.replace(/\\/g, '/'), status: 'active' }]);
+  const { x, y } = XB.boards;
+  const T1 = sid(); const T2 = sid(); const TS = sid();
+  for (const [u, dir] of [[T1, x.norm], [T2, y.norm], [TS, x.norm]]) {
+    await c.query(`INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES ($1,$2,'x',now())`, [u, dir]);
+  }
+  writeId(T1, { name: 'probe-twin' });
+  writeId(T2, { name: 'probe-twin' });
+  const laneAt = (cwd, ...args) => {
+    const r = spawnSync(process.execPath, [LANE, ...args], {
+      cwd, encoding: 'utf8', env: laneEnv(CONN, XB, { CLAUDE_CODE_SESSION_ID: TS, CCV3_IDENTITY_DIR: DIR }),
+    });
+    return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}` };
+  };
+  const onX = laneAt(x.dir, 'say', 'twin hello', '--to', 'probe-twin');
+  const onY = laneAt(y.dir, 'say', 'twin hello', '--to', 'probe-twin');
+  const onRepo = laneAt(REPO, 'say', 'twin hello', '--to', 'probe-twin');
+  const viaBoard = laneAt(REPO, 'say', 'twin hello', '--to', `probe-twin@${y.key}`);
+  check('a name on two boards: my board wins; neither board asks for name@board; name@board picks', () => {
+    must(onX.code === 0 && onX.out.includes(`sent to probe-twin #${s8(T1)}`), `from X: ${onX.all}`);
+    must(onY.code === 0 && onY.out.includes(`sent to probe-twin #${s8(T2)}`), `from Y: ${onY.all}`);
+    must(onRepo.code === 1 && onRepo.err.includes('name@board'), `from a board with neither: exit ${onRepo.code} ${onRepo.all}`);
+    must(viaBoard.code === 0 && viaBoard.out.includes(`sent to probe-twin #${s8(T2)}`), `name@board: ${viaBoard.all}`);
   });
 } finally {
   await cleanup(c).catch((e) => process.stderr.write(`cleanup failed: ${e.message}\n`));
