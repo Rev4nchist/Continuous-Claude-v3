@@ -1390,9 +1390,13 @@ describe('B1: pwsh/powershell/cmd run the arguments after the quoted payload', (
       expect(decide(cmd, interactiveFor('PowerShell'), {}).decision).not.toBe('allow');
     });
   }
-  it('Bash allows: bash -c "echo" "; rm -rf x" (the second string is $0)', () => {
-    expect(decide(`bash -c "echo" "; rm -rf x"`, interactiveFor('Bash'), {}).decision).toBe('allow');
-  });
+  // F1 flips this row: accepted fail-closed false positive. The trailing args of a POSIX wrapper are read
+  // with the payload, because the payload can run them ($1, $@, eval). Here the second string is only $0.
+  for (const cmd of [`bash -c "echo" "; rm -rf x"`, `sh -c "echo" "; rm -rf x"`]) {
+    it(`Bash asks (accepted FP): ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
   const installs: Array<[string, string]> = [
     [`pwsh -c "echo" "; npm install zz-fake-pkg-a1"`, 'Bash'],
     [`pwsh -c "echo" "; npm install zz-fake-pkg-a1"`, 'PowerShell'],
@@ -1456,6 +1460,60 @@ describe('B3: time/nohup take flags; the interpreter fallback runs SEGMENT_PATTE
   for (const cmd of installs) {
     it(`installSegments finds the install in: ${cmd}`, () => {
       expect(installSegments(cmd, 'Bash').length).toBeGreaterThanOrEqual(1);
+    });
+  }
+});
+
+// F1: a POSIX wrapper payload can run its trailing args (`bash -c 'eval "$1"' _ 'rm -rf x'`). The payload
+// and the trailing args (quote characters deleted) are classified as one text, for every shell.
+describe('F1: a wrapper payload can run its trailing args, for every shell', () => {
+  const bash = [
+    `bash -c 'eval "$1"' _ 'rm -rf x'`,
+    `bash -c '$1' _ 'git reset --hard'`,
+    `bash -c 'eval "$1"' _ 'git push --force'`,
+  ];
+  for (const cmd of bash) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  it(`PowerShell asks: bash -c 'eval "$1"' _ 'rm -rf x'`, () => {
+    expect(decide(`bash -c 'eval "$1"' _ 'rm -rf x'`, interactiveFor('PowerShell'), {}).decision).not.toBe('allow');
+  });
+  it(`installSegments finds the install in: bash -c 'eval "$1"' _ 'npm install zz-fake-pkg-a1'`, () => {
+    expect(installSegments(`bash -c 'eval "$1"' _ 'npm install zz-fake-pkg-a1'`, 'Bash').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// F2: only the switches git rejects together with a pathspec stay allowed. Every other long option before a
+// pathspec (`--guess main src`) restores files.
+describe('F2: git checkout switch allowlist holds only switches that reject a pathspec', () => {
+  const ask = [
+    'git checkout --recurse-submodules main src',
+    'git checkout --no-recurse-submodules main src',
+    'git checkout --overwrite-ignore main src',
+    'git checkout --ignore-other-worktrees main src',
+    'git checkout --guess main src',
+    'git checkout --no-guess main src',
+    String.raw`git -C C:\repo checkout --recurse-submodules main src`,
+  ];
+  for (const cmd of ask) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  const allow = [
+    'git checkout --track origin/x',
+    'git checkout --detach',
+    'git checkout --orphan x',
+    'git checkout --no-track main',
+    'git checkout -b new-branch',
+    'git checkout main',
+    'git checkout fix/x',
+  ];
+  for (const cmd of allow) {
+    it(`Bash allows: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
     });
   }
 });
