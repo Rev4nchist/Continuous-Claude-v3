@@ -1,0 +1,12 @@
+$ npx vitest run
+run 1  2026-10-30T09:14:02  PASS  hook-state.test.ts (1) 212ms | session-cache.test.ts (2) 9ms
+run 2  2026-10-30T09:15:40  FAIL  hook-state.test.ts (1) 231ms | session-cache.test.ts (2) 8ms
+  AssertionError: expected undefined to be 'pre-pr'  (hook-state.test.ts:13, retry 2 of 2 failed)
+run 3  2026-10-30T09:17:21  PASS  hook-state.test.ts (1) 209ms | session-cache.test.ts (2) 7ms
+run 4  2026-10-30T09:18:55  PASS  hook-state.test.ts (1) 214ms | session-cache.test.ts (2) 10ms
+run 5  2026-10-30T09:20:30  FAIL  session-cache.test.ts (1 of 2) 11ms
+  AssertionError: expected undefined to be 3  (session-cache.test.ts:10)
+run 6  2026-10-30T09:22:03  PASS  hook-state.test.ts (1) 210ms | session-cache.test.ts (2) 8ms
+run 7  2026-10-30T09:23:44  PASS  hook-state.test.ts (1) 213ms | session-cache.test.ts (2) 9ms
+$ npx vitest run hook-state.test.ts      (10 runs in a row)   PASS x10
+$ npx vitest run session-cache.test.ts   (10 runs in a row)   PASS x10
