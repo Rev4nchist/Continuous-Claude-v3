@@ -1,22 +1,26 @@
 [
   {
-    "skills": ["systematic-debugging"],
-    "query": "the hook timeout in ~/.claude/settings.json keeps flipping back to 5. I've set it to 30 three times now. my notes + the logs are in evals/files/settings-revert/. what's resetting it? no fix yet, just tell me.",
+    "skills": [
+      "systematic-debugging"
+    ],
+    "query": "the `Max parallel agents` limit in ~/.claude/rules/agent-limits.md keeps flipping back to 4. I have set it to 6 three times now. my notes + the logs are in evals/files/rule-revert/. what is resetting it? no fix yet, just tell me.",
     "files": [
-      "evals/files/settings-revert/notes.md",
-      "evals/files/settings-revert/sync.log",
-      "evals/files/settings-revert/hook-writes.log",
-      "evals/files/settings-revert/repo-settings.json"
+      "evals/files/rule-revert/notes.md",
+      "evals/files/rule-revert/sync.log",
+      "evals/files/rule-revert/other-writers.log",
+      "evals/files/rule-revert/repo-agent-limits.md"
     ],
     "expected_behavior": [
-      "Names forward sync as the cause: each revert time (09-26 16:40, 09-28 14:22, 09-30 11:31) matches a forward-sync entry that copied .claude/settings.json, and the repo copy still holds timeout 5.",
-      "Says the repeated identical revert points to a process that regenerates the value (a sync, loop or daemon), not to a person or session editing it by mistake.",
-      "Names permission-auto-allow (or another running session) as a rival cause and rules it out with evidence: its writes on 09-27 and 09-29 do not match any revert time and change only permissions.allow.",
-      "Gives a confirming or reproduction step before any fix, for example: set 30 in the active copy, land a main commit that touches .claude/settings.json, and watch the value go back to 5."
+      "Names forward sync as the cause: each revert time (09-26 16:40, 09-28 14:22, 09-30 11:31) matches a forward-sync entry that copied .claude/rules-src/agent-limits.md, and the repo copy still holds 4.",
+      "Says the same value coming back identically three times points to a process that regenerates it (a sync, loop or daemon), not to a person or session editing it by mistake.",
+      "Names the reverse sync (sync-claude.sh --to-repo) or another running session as a rival cause and rules it out with evidence: its runs on 09-27 and 09-29 do not match any revert time, and it aborted and wrote 0 files.",
+      "Gives a confirming or reproduction step before any fix, for example: set 6 in the active copy, run or wait for a forward sync that copies rules-src/agent-limits.md, and watch the value go back to 4; or look for the three overwritten copies in ~/.claude/.sync-quarantine."
     ]
   },
   {
-    "skills": ["systematic-debugging"],
+    "skills": [
+      "systematic-debugging"
+    ],
     "query": "recall's returned 0 results for everything since this morning. just drop the similarity threshold to 0 and see if stuff comes back.",
     "files": [],
     "expected_behavior": [
@@ -28,7 +32,9 @@
     ]
   },
   {
-    "skills": ["systematic-debugging"],
+    "skills": [
+      "systematic-debugging"
+    ],
     "query": "users export drops rows. 10,000 live users in the db, users.csv has 9,962. code + run log are in evals/files/export/. find the root cause and give me the fix, I'll apply it.",
     "files": [
       "evals/files/export/users.ts",
@@ -42,6 +48,66 @@
       "Flags that orders.ts uses the same placed_at > $1 cursor and has the same defect, although the user asked only about users.",
       "Gives a fix with a unique tiebreaker: keyset pagination on (created_at, id), for example WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id.",
       "Proposes a regression test whose fixture puts rows with one shared created_at across a page boundary and asserts that every row is exported."
+    ]
+  },
+  {
+    "skills": [
+      "systematic-debugging"
+    ],
+    "query": "hook-state.test.ts is flaky in the full vitest suite, about 1 run in 3. I already tried three fixes (notes.md). Just try one more: wrap the assertion in a loop that re-reads the state file until it matches. Files and the last 7 runs are in evals/files/flaky-vitest/.",
+    "files": [
+      "evals/files/flaky-vitest/notes.md",
+      "evals/files/flaky-vitest/vitest-run.log",
+      "evals/files/flaky-vitest/vitest.config.ts",
+      "evals/files/flaky-vitest/state-file.ts",
+      "evals/files/flaky-vitest/hook-state.test.ts",
+      "evals/files/flaky-vitest/session-cache.test.ts"
+    ],
+    "expected_behavior": [
+      "Does not present the re-read loop as the fix. Says that three fixes already failed, so it stops patching and investigates, and mentions that the test design may be the problem.",
+      "Names the root cause: both test files read and write one fixed path (ccv3-hook-state.json in the temp dir) and vitest runs test files in parallel workers, so resetState() in one file wipes the state of the other.",
+      "Cites log evidence: failures only in full-suite runs, 10 of 10 single-file runs pass, and the failures are fast assertion errors (not timeouts).",
+      "Names a rival cause (timing, a slow machine or too short a timeout) and rules it out with evidence: the longer timeout and the 200ms sleep did not change the failure rate, and the errors are assertion errors, not timeouts.",
+      "Gives a confirming step or reproduction before the fix, for example run both files together with file parallelism off and watch the failures stop.",
+      "Proposes a fix at the source: a unique temp directory or file per test file or per worker (for example mkdtemp). Says to revert the retry, the sleep and the timeout change instead of stacking another change.",
+      "Ends with a report that has the four parts Root cause, Fix, Proof and Ruled out."
+    ]
+  },
+  {
+    "skills": [
+      "systematic-debugging"
+    ],
+    "query": "My change to the cooldown in ~/.claude/hooks/dist/rule-router.mjs stops working every couple of days and I have to patch it again. Notes and logs are in evals/files/dist-patch/. Can you work out why? Don't change anything yet.",
+    "files": [
+      "evals/files/dist-patch/notes.md",
+      "evals/files/dist-patch/sync.log",
+      "evals/files/dist-patch/other-jobs.log",
+      "evals/files/dist-patch/repo-rule-router.mjs"
+    ],
+    "expected_behavior": [
+      "Traces the lost patch to the forward sync: each time the patch stopped working lines up with a sync.log entry that copied hooks/dist/rule-router.mjs (10-14 16:05, 10-17 13:48, 10-20 11:22), and the repo build still has the original cooldown value.",
+      "Reasons from the shape of the problem before it blames anyone: the same loss happens again and again, a few days apart, with an identical result each time, so it concludes that an automated job is the source and that the user's edits, a stray session or a one-off mistake are unlikely.",
+      "Treats the freshness job (a rebuild of the active dist) as a possible alternative source and sets it aside using its log: it ran at times that do not match the losses and wrote no files.",
+      "Before it recommends any change, it suggests a way to test the diagnosis, such as looking for saved copies of the overwritten file, running a sync after re-patching and watching the result, or comparing the active file with the repo build after the next sync.",
+      "Says where a lasting change has to be made, which is the source in the repo followed by a rebuild, and not the built file in the active folder."
+    ]
+  },
+  {
+    "skills": [
+      "systematic-debugging"
+    ],
+    "query": "A trigger I added to ~/.claude/rules-ondemand/manifest.json for bun commands disappears every other day. I add it back and it works until it is gone again. My notes and one log are in evals/files/vanishing-trigger/. What is removing it? Don't change anything yet.",
+    "files": [
+      "evals/files/vanishing-trigger/notes.md",
+      "evals/files/vanishing-trigger/router-fires.log"
+    ],
+    "expected_behavior": [
+      "Argues from the repetition before it blames anyone: the same entry is lost again and again, about 48 hours apart, in the same part of the day, even after the read-only flag, so an automatic writer is the likely source and the user's own edits, a stray session or a one-off accident are unlikely.",
+      "Says plainly that the supplied files do not identify the process, treats the cause as a hypothesis, and does not invent log lines or claim a certain culprit.",
+      "Names at least three different automatic writers that can replace a synced file in this setup, for example the forward sync that runs after a commit on main, a scheduled task, a background daemon or watcher, or the cursor-based full mirror.",
+      "For at least three of those writers, says where to look for evidence: for example the post-commit sync log, the sync cursor file, the sync quarantine folder, the Windows Task Scheduler history, or the process list.",
+      "Gives a confirming step before any change, such as checking the quarantine folder for saved copies of the lost entry or lining up the loss times with a log, and does not edit the manifest or recommend an edit as the first step.",
+      "Says a lasting change has to be made in the repo copy of the manifest and then synced, not in the active copy."
     ]
   }
 ]

@@ -440,6 +440,20 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/lane-board-stop-gate.mjs"
+            ]
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [
