@@ -11,7 +11,8 @@
 //   (it writes verdicts.only.json then). The file says dryRun (true only for a dry run), partial (true for a --only run, and while a run is
 //   unfinished) and attemptedPids (the pids a live run judged). score-arms scores only a live, complete file. verdicts.json is rewritten
 //   after every record (partial true until the run ends), so a crash keeps the finished verdicts. A group A row has falseConfirm (a boolean
-//   when the fix env ran) or, when the fix env failed, falseConfirm null and fixError.
+//   when the fix env ran) or, when the fix env failed, falseConfirm null and fixError. fixOtherFail true: the fix run failed on a line other
+//   than head's (falseConfirm is then false; a probe defect, listed by score-arms).
 //
 // Per record (all findings of one row share head, merge-base and fix), one env at a time, under the global TREX lock:
 //   head env: every flow x2 (retries 0, coverage on for the cited file), then G9 (the cited file put back to base) when base is not reachable
@@ -170,11 +171,13 @@ const fires = (run, re) => run?.exitClass === 'assert-fail' && re.test(String(ru
 const pre = (v, rule, reason) => ({ verdict: v, rule, reason, false_confirm: false, priorOpen: false });
 
 function c2Row(row, result, { evidencePath = null, control = false, fixError = null } = {}) {
+  // fixOtherFail: the fix run failed on a line other than head's. A probe defect, reported beside falseConfirm false.
+  const fixOtherFail = control && result.fix_other_fail === true;
   const next = applyVerdict({ severity: row.severity, confidence: row.confidence }, result);
   return {
     pid: row.pid, row: row.row, group: row.group, verdict: result.verdict, reason: result.reason,
     originalSeverity: row.severity, originalConfidence: row.confidence, newSeverity: next.severity, newConfidence: next.confidence,
-    falseConfirm: control ? result.false_confirm : null, evidencePath, ...(fixError ? { fixError } : {}),
+    falseConfirm: control ? result.false_confirm : null, evidencePath, ...(fixError ? { fixError } : {}), ...(fixOtherFail ? { fixOtherFail: true } : {}),
   };
 }
 

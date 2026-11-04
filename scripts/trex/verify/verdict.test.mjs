@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isMajorOpen } from '../../github/local-review/record.mjs';
 import { SEVERITY_RANK } from '../../github/review-filter.mjs';
+import { normalizeOutput } from './evidence.mjs';
 import { BLOCK_REASONS, REFUTED_SEVERITY, VERDICTS, applyVerdict, buildFireMatch, verdict } from './verdict.mjs';
 
 // ---- fixtures -------------------------------------------------------------------------------------------------
@@ -499,4 +500,66 @@ test('REFUTED_SEVERITY is a severity of the review schema (review-filter SEVERIT
   assert.ok(Object.hasOwn(SEVERITY_RANK, REFUTED_SEVERITY), `${REFUTED_SEVERITY} is not in SEVERITY_RANK`);
   assert.ok(SEVERITY_RANK[REFUTED_SEVERITY] > SEVERITY_RANK.unknown, 'refuted must not rank as unknown');
   assert.equal(applyVerdict(finding(), vr({ verdict: 'refuted' })).severity, REFUTED_SEVERITY);
+});
+
+// ---- same-line rule (S11 live smoke): base and fix count as "the same" only on the head's normalized fail line -------------
+
+// The exact lines of the first live smoke (finding dd440119c9b87d61, row S11). The model added a second assertion; its
+// not-ok line shares the declared fireMatch text but is a different assertion from the head's.
+const S11_DECLARE = { fireMatch: '"coderabbit":false,"held":null,"source":"labels"', correct: 'Keep CodeRabbit required when the saved pathway is both.' };
+const S11_HEAD_LINE = 'not ok 1 - {"greptile":false,"coderabbit":false,"held":null,"source":"labels","blockers":[]}';
+const S11_OTHER_LINE = 'not ok 1 - {"greptile":true,"coderabbit":false,"held":null,"source":"labels"}';
+const s11 = (line) => ({ exitClass: 'assert-fail', failLine: line, normalizedOutput: normalizeOutput(line) });
+const S11 = (over) => verdict(input({ declare: S11_DECLARE, head: [s11(S11_HEAD_LINE), s11(S11_HEAD_LINE)], observedValue: true, ...over }));
+
+// Breaks if: refutedByBase only checks that the base line matches fireMatch (the live S11 bug: major -> trivial on a real hit).
+test('same-line: S11 base fails on a different assertion that also matches fireMatch: blocked:broken-probe, not refuted', () => {
+  assert.equal(buildFireMatch(S11_DECLARE).re.test(S11_OTHER_LINE), true, 'precondition: the other line matches fireMatch');
+  const r = S11({ base: s11(S11_OTHER_LINE) });
+  assert.equal(r.verdict, 'blocked:broken-probe');
+  assert.match(r.reason, /different line/);
+});
+
+// Breaks if: the same-line comparison rejects a base line that differs from head only in volatile tokens.
+test('same-line: base fires the head line with only a volatile token different: still refuted', () => {
+  const head = 'not ok 1 - took 12 ms {"coderabbit":false,"held":null,"source":"labels"}';
+  const base = 'not ok 1 - took 340 ms {"coderabbit":false,"held":null,"source":"labels"}';
+  const r = S11({ head: [s11(head), s11(head)], base: s11(base) });
+  assert.equal(r.verdict, 'refuted');
+});
+
+test('same-line: base fires the identical head line with cited lines and observed value: still refuted', () => {
+  assert.equal(S11({ base: s11(S11_HEAD_LINE) }).verdict, 'refuted');
+});
+
+test('same-line: a base line that differs and does not match fireMatch keeps the existing blocked:broken-probe', () => {
+  assert.equal(S11({ base: s11('not ok 9 - elsewhere') }).verdict, 'blocked:broken-probe');
+});
+
+// Breaks if: false_confirm is set from the fireMatch alone (S11 fix run f1 failed on the other assertion).
+test('same-line: S11 fix fails on another assertion that matches fireMatch: false_confirm false, fix_other_fail true', () => {
+  const r = S11({ base: pass(), fix: s11(S11_OTHER_LINE) });
+  assert.equal(r.verdict, 'reproduced');
+  assert.equal(r.false_confirm, false);
+  assert.equal(r.fix_other_fail, true);
+});
+
+test('same-line: fix fails on the head line: false_confirm true, fix_other_fail false', () => {
+  const r = S11({ base: pass(), fix: s11(S11_HEAD_LINE) });
+  assert.equal(r.false_confirm, true);
+  assert.equal(r.fix_other_fail, false);
+});
+
+test('same-line: fix passes: neither flag is set', () => {
+  const r = S11({ base: pass(), fix: pass() });
+  assert.deepEqual([r.false_confirm, r.fix_other_fail], [false, false]);
+});
+
+test('same-line: no fix run: fix_other_fail is false', () => {
+  assert.equal(S11({ base: pass() }).fix_other_fail, false);
+});
+
+// Breaks if: a broken fix run (docker, import) is reported as a probe defect.
+test('same-line: a broken fix run is not fix_other_fail', () => {
+  assert.equal(S11({ base: pass(), fix: broken('timeout') }).fix_other_fail, false);
 });

@@ -645,3 +645,33 @@ test('makeLiveRunner: a held lock throws "lock is held"', async () => {
   const runner = makeLiveRunner({ git: () => ({ status: 0, stdout: '', stderr: '' }), acquireLock: () => ({ ok: false, pid: 7 }), lockFile: 'x', cwd: '.' });
   await assert.rejects(runner.withLock(async () => 1), /lock is held by pid 7/);
 });
+
+// ---------- same-line rule (S11 live smoke) ----------
+
+const OTHER_LINE = 'not ok 1 - another assertion counts 7 outside-diff finding(s), want 0';
+const OTHER_FIRE = { state: 'fail', steps: [{ code: 1, stdout: `${OTHER_LINE}\n`, stderr: '' }] };
+
+// Breaks if: base is judged by fireMatch alone. Base fails on a different assertion whose line also matches fireMatch.
+test('same-line: base fails on another line that matches fireMatch: blocked:broken-probe, severity kept', async () => {
+  const a = baseRow({ group: 'A' });
+  const res = await drive([a], { flows: makeFlows([a]), plan: (s) => (s === a.head ? FIRE : OTHER_FIRE) });
+  const r = rowOf(res, a.pid);
+  assert.equal(r.verdict, 'blocked:broken-probe');
+  assert.equal(r.newSeverity, 'major');
+});
+
+// Breaks if: the row has no fixOtherFail flag, or a fix failure on another line is reported as falseConfirm.
+test('same-line: fix fails on another line that matches fireMatch: falseConfirm false and fixOtherFail true in the row', async () => {
+  const a = baseRow({ group: 'A' });
+  const res = await drive([a], { flows: makeFlows([a]), plan: (s) => (s === a.head ? FIRE : s === a.mergeBase ? PASS : OTHER_FIRE) });
+  const r = rowOf(res, a.pid);
+  assert.equal(r.verdict, 'reproduced');
+  assert.equal(r.falseConfirm, false);
+  assert.equal(r.fixOtherFail, true);
+});
+
+test('same-line: a clean fix run has no fixOtherFail key', async () => {
+  const a = baseRow({ group: 'A' });
+  const res = await drive([a], { flows: makeFlows([a]), plan: (s) => (s === a.head ? FIRE : PASS) });
+  assert.equal('fixOtherFail' in rowOf(res, a.pid), false);
+});

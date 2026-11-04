@@ -534,3 +534,26 @@ test('score-arms numbers equal the numbers counted from the apply-verdicts recor
     } finally { rmSync(out, { recursive: true, force: true }); }
   }
 });
+
+// ---------- fixOtherFail: the fix run failed on another line ----------
+
+// Breaks if: a fix run that failed on another line (falseConfirm false, fixOtherFail true) is not counted as a seen fix run, or is not listed.
+test('fixOtherFail: counts as a tested hit for (b), is not a false_confirm, and is listed in the metrics and the gate reason', () => {
+  const v = hitFile({ [HITS[0]]: { verdict: 'reproduced', falseConfirm: false, fixOtherFail: true } });
+  const rep = score({ verify: v });
+  const n = rep.arms.verify.narrowed;
+  assert.equal(n.hitsTested, 3);
+  assert.equal(n.falseConfirm, 0);
+  assert.equal(n.fixOtherFail.length, 1);
+  assert.ok(n.fixOtherFail[0].includes(HITS[0]));
+  assert.equal(status(rep, 'b'), 'PASS');
+  assert.match(bReason(rep), /fix failed on another line/);
+  assert.ok(bReason(rep).includes(HITS[0]));
+});
+
+// Breaks if: the reason mentions fixOtherFail on a clean run.
+test('fixOtherFail: a clean run lists none and the gate reason does not mention it', () => {
+  const rep = score({ verify: hitFile() });
+  assert.deepEqual(rep.arms.verify.narrowed.fixOtherFail, []);
+  assert.doesNotMatch(bReason(rep), /another line/);
+});

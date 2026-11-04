@@ -27,7 +27,7 @@
  * @property {Run|null} [fix]       Eval control: the probe at the fix SHA (group A). Firing there is a false_confirm.
  * @property {boolean} [priorOpen]  The finding was already open at an earlier head. Echoed to applyVerdict (trust rule).
  *
- * @typedef {{ verdict: string, reason: string, rule: string, false_confirm: boolean, priorOpen: boolean }} VerdictResult
+ * @typedef {{ verdict: string, reason: string, rule: string, false_confirm: boolean, fix_other_fail: boolean, priorOpen: boolean }} VerdictResult
  *
  * Precedence, first match wins. This order is part of the contract:
  *   1. classifyBlock            -> blocked:<reason>          (pre-run filter; needs no run, no docker)
@@ -47,7 +47,8 @@
  *      reproduced and reproduced_new need G8 too (design: "G1-G8 pass"): unless coverage.citedLinesExecuted is true,
  *      either becomes blocked:no-coverage. unverified and a refute from a missing cited path do not depend on coverage.
  *  11. all head pass: cited lines ran -> not_reproduced; otherwise (false or null) -> blocked:no-coverage (G8)
- * Then, on any result: a fix run that fires the same fireMatch sets false_confirm. It never changes the verdict.
+ * "Base fires the same line" and "fix fires" both mean: the run fails on the head's normalized fail line (a fireMatch hit on another line does not count).
+ * Then, on any result: a fix run that fails on that line sets false_confirm. A fix run that fails on another line sets fix_other_fail. Neither changes the verdict.
  */
 
 export const VERDICTS = Object.freeze([
@@ -189,6 +190,18 @@ function runKind(run, re) {
   return { kind: 'broken', why: `unknown exit class ${JSON.stringify(c)}` };
 }
 
+/**
+ * The normalized fail line of a run: normalizedOutput when both runs carry one (G6 uses the same field), else the trimmed failLine.
+ * "The same line" in G4 and in the control arm means this value is equal on head and on the other side. A fireMatch hit alone is not enough:
+ * a probe with a second assertion fails on a different line that can still carry the declared text.
+ */
+function sameFailLine(a, b) {
+  if (a?.exitClass !== 'assert-fail' || b?.exitClass !== 'assert-fail') return false;
+  const key = (r) => (typeof r.normalizedOutput === 'string' && r.normalizedOutput !== '' ? r.normalizedOutput : null);
+  if (key(a) !== null && key(b) !== null) return key(a) === key(b);
+  return String(a.failLine ?? '').trim() === String(b.failLine ?? '').trim();
+}
+
 function normalizeBlock(raw) {
   const reason = String(raw).replace(/^blocked:/, '');
   if (!BLOCK_REASONS.includes(reason)) throw new RangeError(`classifyBlock "${raw}" is not in the blocked enum`);
@@ -245,7 +258,7 @@ function stepHeadFires(x, ctx) {
   const base = x.base;
   if (!base) return out('unverified', 'G4', 'base reachable but no base run');
   const k = runKind(base, ctx.re);
-  if (k.kind === 'fire') return refutedByBase(x);
+  if (k.kind === 'fire' && sameFailLine(base, x.head[0])) return refutedByBase(x);
   if (k.kind === 'pass') return out('reproduced', 'G4', 'head fires on every run, base passes');
   const why = k.kind === 'broken' ? `base run broken: ${k.why}` : 'base fails on a different line';
   return blocked('broken-probe', 'G4', why);
@@ -294,6 +307,18 @@ function decide(x, ctx) {
 }
 
 /**
+ * The eval control. false_confirm only when the fix run fails on the head's own normalized fail line. A fix run that fails on any other
+ * line is a probe defect (it asserts something the finding does not claim): false_confirm stays false and fix_other_fail is true.
+ */
+function fixControl(x, ctx) {
+  const fix = x.fix;
+  if (!ctx.re || fix?.exitClass !== 'assert-fail') return { falseConfirm: false, otherFail: false };
+  const head = Array.isArray(x.head) ? x.head[0] : null;
+  const same = runKind(fix, ctx.re).kind === 'fire' && sameFailLine(fix, head);
+  return { falseConfirm: same, otherFail: !same };
+}
+
+/**
  * Map evidence to one verdict. Throws only on a classifyBlock reason outside the enum.
  * @param {VerdictInput} [input]
  * @returns {VerdictResult}
@@ -302,8 +327,8 @@ export function verdict(input) {
   const x = input && typeof input === 'object' ? input : {};
   const ctx = { re: null, kinds: [] };
   const r = decide(x, ctx);
-  const falseConfirm = Boolean(ctx.re && x.fix && runKind(x.fix, ctx.re).kind === 'fire');
-  return { ...r, false_confirm: falseConfirm, priorOpen: x.priorOpen === true };
+  const control = fixControl(x, ctx);
+  return { ...r, false_confirm: control.falseConfirm, fix_other_fail: control.otherFail, priorOpen: x.priorOpen === true };
 }
 
 // ---- applyVerdict ---------------------------------------------------------------------------------------------

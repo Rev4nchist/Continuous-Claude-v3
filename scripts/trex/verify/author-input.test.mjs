@@ -336,3 +336,22 @@ test('Fix 6: record-level problems (stray file, manifest) are recorded, not fata
   assert.ok(r.lint.record.some((p) => p.includes('x.yaml')));
   assert.deepEqual(r.lint.clean, [P1]);
 });
+
+// ---------- one claim per probe (S11 live smoke) ----------
+
+const TWO_SITES = "const m = await import('/app/src/a.mjs'); const out = m.scrub('a b'); if (out !== '') { console.log('not ok 1 - scrub left ' + out); process.exit(1); } const o2 = m.scrub('c'); if (o2 !== '') { console.log('not ok 1 - scrub left again ' + o2); process.exit(1); } console.log('ok 1');";
+const ONE_SITE_TWICE_USED = "const m = await import('/app/src/a.mjs'); const bad = (v) => { console.log('not ok 1 - scrub left ' + v); process.exit(1); }; for (const s of ['a b', 'c d']) { const out = m.scrub(s); if (out !== '') bad(out); } console.log('ok 1');";
+
+// Breaks if: a probe with two "not ok" print sites passes lint. dd440119c9b87d61 had two (the claim and a neighbouring assertion), so base
+// and fix failed on the second one and the first live smoke lost a real hit.
+test('checkVerifyAnswer rejects a probe with more than one not-ok print site', () => {
+  const yaml = YAML().replace(/"const m = await import[^\n]*"\]/, JSON.stringify(TWO_SITES) + ']');
+  const r = check({ yaml });
+  assert.ok(r.problems.some((p) => /not ok/.test(p) && /one/.test(p) && p.startsWith(`${PID}.yaml`)), r.problems.join('|'));
+});
+
+// Breaks if: the lint counts the "not ok 1" text of the checks block, or a helper used twice, as a second print site.
+test('checkVerifyAnswer accepts one not-ok print site, including a helper called from a loop, and the checks line that names "not ok 1"', () => {
+  const yaml = YAML().replace(/"const m = await import[^\n]*"\]/, JSON.stringify(ONE_SITE_TWICE_USED) + ']').replace('checks:\n', 'checks:\n      - {text: no failing line, "!stdout": "not ok 1"}\n');
+  assert.deepEqual(check({ yaml }).problems, []);
+});

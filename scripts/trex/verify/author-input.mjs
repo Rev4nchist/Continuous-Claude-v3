@@ -208,10 +208,22 @@ function stepProblems(doc) {
   return out;
 }
 
+/**
+ * One probe tests ONE claim, so its script has one "not ok" print site. Two sites mean a second assertion about a neighbouring behaviour:
+ * base and fix can then fail on that other line, which carries the declared text too (first live smoke, S11). Only the step commands are
+ * counted; the "not ok 1" text of a checks block is not.
+ */
+function printSiteProblems(doc) {
+  const steps = isObj(doc) && Array.isArray(doc.steps) ? doc.steps : [];
+  const cmds = steps.flatMap((s) => (Array.isArray(s?.action?.cmd) ? s.action.cmd : [s?.action?.cmd])).filter((c) => typeof c === 'string');
+  const sites = cmds.join(' ').match(/\bnot ok\b/g)?.length ?? 0;
+  return sites > 1 ? [`the probe has ${sites} "not ok" print sites: test exactly one claim (the one in the finding title) and print one "not ok" line`] : [];
+}
+
 function flowProblems(file, finding) {
   let doc;
   try { doc = parse(file.text); } catch (err) { return [`${file.path}: YAML error: ${String(err.message).split('\n')[0]}`]; }
-  const out = stepProblems(doc);
+  const out = [...stepProblems(doc), ...printSiteProblems(doc)];
   if (isObj(doc) && doc.id !== finding.pid) out.push(`flow id ${JSON.stringify(doc.id)} must be the finding pid ${finding.pid}`);
   const paths = isObj(doc) && Array.isArray(doc.paths) ? doc.paths : [];
   if (!paths.some((g) => typeof g === 'string' && matchGlob(g, finding.file))) out.push(`paths must name the cited file ${finding.file}`);

@@ -178,7 +178,7 @@ export function applyArm(armFile, probeRows) {
   const warnings = [];
   const rows = probeRows.map((p) => {
     const r = by.get(p.pid);
-    return { pid: p.pid, row: p.row, group: p.group, blocked: p.blocked, verdict: r.verdict, reason: r.reason ?? '', falseConfirm: r.falseConfirm === true, falseConfirmSeen: typeof r.falseConfirm === 'boolean', evidencePath: r.evidencePath ?? null, finding: applyRow(name, r, p, warnings) };
+    return { pid: p.pid, row: p.row, group: p.group, blocked: p.blocked, verdict: r.verdict, reason: r.reason ?? '', falseConfirm: r.falseConfirm === true, falseConfirmSeen: typeof r.falseConfirm === 'boolean', fixOtherFail: r.fixOtherFail === true, evidencePath: r.evidencePath ?? null, finding: applyRow(name, r, p, warnings) };
   });
   return { name, rows, warnings };
 }
@@ -246,6 +246,8 @@ function metricsOf(rows, readEvidence) {
     refutedB: bs.filter((r) => r.verdict === 'refuted').length,
     hitsTested: hits.filter((r) => r.falseConfirmSeen && RAN(r.verdict)).length,
     hitsUntested: hits.filter((r) => !(r.falseConfirmSeen && RAN(r.verdict))).map((r) => `${r.pid} ${r.row} ${r.falseConfirmSeen ? r.verdict : `no fix run, ${r.verdict}`}`),
+    // The fix run failed on a line other than head's: a probe defect. It still counts as a seen fix run (falseConfirm is a boolean), but is listed.
+    fixOtherFail: rows.filter((r) => r.fixOtherFail).map((r) => `${r.pid} ${r.row}`),
     blockedUnverified: blocked.length,
     blockedBreakdown: countBy(blocked, (r) => r.verdict),
     blockedShare: ratio(blocked.length, live.length),
@@ -305,7 +307,8 @@ function gateB(v, view) {
   const n = v.narrowed;
   const fc = n.falseConfirm;
   const tested = `${n.hitsTested} of ${n.hits} hits tested at fix`;
-  const text = `${m.hitsLost} of ${n.hits} hits lost, ${fc} false_confirm, ${tested} (PASS 0 and 0 with all tested, KILL >= ${GATE_LIMITS.bLostKill} lost)`;
+  const other = n.fixOtherFail.length ? `, fix failed on another line (probe defect, counted as tested): ${n.fixOtherFail.join('; ')}` : '';
+  const text = `${m.hitsLost} of ${n.hits} hits lost, ${fc} false_confirm, ${tested}${other} (PASS 0 and 0 with all tested, KILL >= ${GATE_LIMITS.bLostKill} lost)`;
   if (m.hitsLost >= GATE_LIMITS.bLostKill) return gate('b', 'KILL', text);
   if (n.hitsTested < n.hits) return gate('b', 'NO-DATA', `not evaluable: ${tested}; untested: ${n.hitsUntested.join('; ')}. ${text}`);
   return gate('b', m.hitsLost === 0 && fc === 0 ? 'PASS' : 'WATCH', text);
