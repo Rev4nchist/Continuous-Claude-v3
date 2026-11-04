@@ -73,7 +73,7 @@ afterEach(() => {
 describe('twin drift', () => {
   it('both copies export the same names', () => {
     expect(Object.keys(mjsTwin).sort()).toEqual(Object.keys(tsTwin).sort());
-    expect(Object.keys(tsTwin).sort()).toEqual(['isHeadless', 'loadRegistry', 'normalizeRoot', 'resolveBoard']);
+    expect(Object.keys(tsTwin).sort()).toEqual(['boardRoots', 'isHeadless', 'loadRegistry', 'normalizeRoot', 'resolveBoard']);
   });
 
   it('normalizeRoot agrees on awkward inputs', () => {
@@ -337,6 +337,56 @@ describe('worktree gitdir fallback', () => {
       if (saved.d === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved.d;
       if (saved.c === undefined) delete process.env.GIT_COMMON_DIR; else process.env.GIT_COMMON_DIR = saved.c;
     }
+  });
+});
+
+describe('boardRoots', () => {
+  /** Same call on both twins, equal output. */
+  const bothRoots = (key: string, opts: Opts = {}): string[] => {
+    const a = tsTwin.boardRoots(key, opts);
+    expect(mjsTwin.boardRoots(key, opts)).toEqual(a);
+    return a;
+  };
+
+  it('returns the root of the entry and of every nested entry mapped to the board', () => {
+    const parent = mk('ccv3');
+    const app = mk('ccv3', 'apps', 'os');
+    const other = mk('other');
+    const registry = writeRegistry([
+      entry('continuous-claude', parent),
+      entry('Agentic OS', app, { laneBoard: 'continuous-claude' }),
+      entry('Other', other),
+    ]);
+    const roots = bothRoots('continuous-claude', { registryPath: registry });
+    expect(roots).toEqual([tsTwin.normalizeRoot(parent), tsTwin.normalizeRoot(app)]);
+    expect(bothRoots('other', { registryPath: registry })).toEqual([tsTwin.normalizeRoot(other)]);
+  });
+
+  it('skips inactive entries and entries with an unusable path', () => {
+    const live = mk('live');
+    const dead = mk('dead');
+    const registry = writeRegistry([
+      entry('Live', live, { key: 'b' }),
+      entry('Dead', dead, { key: 'b', status: 'inactive' }),
+      entry('Rel', 'relative/path', { key: 'b' }),
+      entry('Empty', '', { key: 'b' }),
+    ]);
+    expect(bothRoots('b', { registryPath: registry })).toEqual([tsTwin.normalizeRoot(live)]);
+  });
+
+  it('an unknown board, a missing registry and a board named by entry key (not board) give []', () => {
+    const p = mk('p');
+    const registry = writeRegistry([entry('App', p, { key: 'app', laneBoard: 'parent' })]);
+    expect(bothRoots('nope', { registryPath: registry })).toEqual([]);
+    expect(bothRoots('app', { registryPath: registry })).toEqual([]);
+    expect(bothRoots('parent', { registryPath: registry })).toEqual([tsTwin.normalizeRoot(p)]);
+    expect(bothRoots('p', { registryPath: path.join(tmp, 'nope.json') })).toEqual([]);
+  });
+
+  it('does not repeat a root and reads LANE_REGISTRY_PATH from opts.env', () => {
+    const p = mk('p');
+    const registry = writeRegistry([entry('P1', p, { key: 'x', laneBoard: 'b' }), entry('P2', p, { key: 'y', laneBoard: 'b' })]);
+    expect(bothRoots('b', { env: { LANE_REGISTRY_PATH: registry } })).toEqual([tsTwin.normalizeRoot(p)]);
   });
 });
 

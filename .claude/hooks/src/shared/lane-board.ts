@@ -24,6 +24,10 @@
  *
  * `sessions.project`, `project_alias` and `canonicalProject` are never used.
  *
+ * boardRoots(key, opts): the normalised roots of every non-inactive entry on board `key`
+ * (a nested entry with `laneBoard` adds its own root to its parent board). lane.mjs uses it
+ * to decide which sessions belong to a board.
+ *
  * Result: { key, root, source, via }
  *   key    the board key
  *   root   the normalised registry root of the matched entry
@@ -122,6 +126,15 @@ export function loadRegistry(opts: BoardOptions = {}): RegistryEntry[] {
     });
   }
   return out;
+}
+
+/** Normalised roots of every non-inactive registry entry whose board is `key`. No repeats, registry order. */
+export function boardRoots(key: string, opts: BoardOptions = {}): string[] {
+  const env: Env = opts.env ?? process.env;
+  const roots = loadRegistry({ ...opts, env })
+    .filter((e) => e.status.toLowerCase() !== 'inactive' && e.board === key && e.root)
+    .map((e) => e.root);
+  return [...new Set(roots)];
 }
 
 /** True for a headless (SDK) session that has not opted back in. */
