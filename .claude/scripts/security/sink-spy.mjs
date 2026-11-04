@@ -13,6 +13,14 @@
 // Buffers and typed arrays become {"buffer":"<utf8 text>"}.
 // A write stream also records each chunk as sink "fs.createWriteStream.write",
 // with args [path, chunk].
+// fs.open / openSync / fs/promises.open with a write flag (w, a, x, + or a numeric flag with
+// O_WRONLY, O_RDWR, O_CREAT, O_APPEND or O_TRUNC) is recorded, args [path, flags, mode?]. It returns
+// a fake fd (above 2**30) or a stub FileHandle. A write, writev or FileHandle method on it records
+// [path, data] (sinks fs.write, fs.writeSync, fs.writev, fs/promises.FileHandle.write ...), one record
+// per buffer for writev. ftruncate records [path, length]. writeFile and appendFile record the path
+// in place of a fake fd or a stub FileHandle. close and fsync on a fake fd are no-ops. read and fstat
+// on it give an empty file (0 bytes), so a w+ target can read back. Read-only opens and real fds go
+// to the real functions.
 //
 // Fail closed: any patch problem throws, so node exits non-zero before the probe runs.
 // Needs read access only: no child process, no file write, no worker.
@@ -127,6 +135,17 @@ const makers = {
     return { pid: 0, status: 0, signal: null, output: [null, stdout, stderr], stdout, stderr };
   },
   spawn: (sink) => (...a) => (record(sink, a), stubChild()),
+  fork: (sink) => (...a) => {
+    record(sink, a);
+    const c = stubChild(); // connected stays false: there is no channel
+    c.send = (_msg, ...rest) => {
+      const cb = lastFn(rest);
+      if (cb) setImmediate(() => cb(null));
+      return true;
+    };
+    c.disconnect = () => {};
+    return c;
+  },
   exec: (sink) => withCallback(sink),
   execFile: (sink) => withCallback(sink),
 };
@@ -150,16 +169,198 @@ function withCallback(sink) {
   return fn;
 }
 
-const fsCallbackForm = (sink) => (...a) => {
-  record(sink, a);
+const same = (a) => a;
+const fsCallbackForm = (sink, view = same) => (...a) => {
+  record(sink, view(a));
   const cb = lastFn(a);
   if (cb) setImmediate(() => cb(null));
 };
-const fsSyncForm = (sink) => (...a) => {
-  record(sink, a);
+const fsSyncForm = (sink, view = same) => (...a) => {
+  record(sink, view(a));
 };
-const fspForm = (sink) => async (...a) => {
+const fspForm = (sink, view = same) => async (...a) => {
+  record(sink, view(a));
+};
+
+// ---------- file descriptors and open ----------
+
+// Fake fds sit far above any real one but are still valid int32 values.
+let nextFd = 0x40000000;
+const fakeFds = new Map(); // fd -> path as recorded
+const isFake = (fd) => typeof fd === 'number' && fakeFds.has(fd);
+const newFd = (path) => {
+  fakeFds.set(++nextFd, ser(path));
+  return nextFd;
+};
+
+const C = fs.constants;
+const WRITE_BITS = C.O_WRONLY | C.O_RDWR | C.O_CREAT | C.O_APPEND | C.O_TRUNC;
+function isWriteFlag(flags) {
+  if (typeof flags === 'string') return /[wax+]/.test(flags);
+  return typeof flags === 'number' && (flags & WRITE_BITS) !== 0;
+}
+const flagsOf = (a) => (typeof a[1] === 'function' ? undefined : a[1]);
+
+// The bytes a write really sends: a Buffer is cut by offset and length (or an options object).
+function written(data, rest) {
+  if (!ArrayBuffer.isView(data)) return data;
+  const o = isPlain(rest[0]) ? rest[0] : { offset: rest[0], length: rest[1] };
+  const off = Number.isInteger(o.offset) && o.offset > 0 ? Math.min(o.offset, data.byteLength) : 0;
+  const len = Number.isInteger(o.length) && o.length >= 0 ? Math.min(o.length, data.byteLength - off) : data.byteLength - off;
+  return new Uint8Array(data.buffer, data.byteOffset + off, len);
+}
+const sizeOf = (d) => (typeof d === 'string' ? Buffer.byteLength(d) : (d?.byteLength ?? 0));
+const bufList = (v) => (Array.isArray(v) ? v : []);
+const sumLen = (bufs) => bufs.reduce((n, b) => n + sizeOf(b), 0);
+
+// writeFile and appendFile take a path, an fd or a FileHandle: record the path for a fake one.
+const fhPath = new WeakMap(); // stub FileHandle -> path
+function pathFirst(a) {
+  const p = isFake(a[0]) ? fakeFds.get(a[0]) : fhPath.get(a[0]);
+  return p === undefined ? a : [p, ...a.slice(1)];
+}
+
+// What a read or a stat on a fake fd gives: an empty file.
+const readTarget = (x) => (ArrayBuffer.isView(x) ? x : isPlain(x) && ArrayBuffer.isView(x.buffer) ? x.buffer : Buffer.alloc(0));
+const readOut = (o) => emptyOut([typeof o === 'string' ? { encoding: o } : o]);
+const fakeStats = () => ({
+  size: 0,
+  mode: 0o100644,
+  isFile: () => true,
+  isDirectory: () => false,
+  isSymbolicLink: () => false,
+});
+
+// util.promisify(fs.write) resolves { bytesWritten, buffer }; read and writev do the same with their own names.
+// A fake fd resolves here. A real fd keeps the real semantics through promisify(orig).
+function withResult(fn, orig, names) {
+  fn[promisify.custom] = (...a) =>
+    isFake(a[0])
+      ? new Promise((resolve, reject) =>
+          fn(...a, (err, ...vals) => (err ? reject(err) : resolve(Object.fromEntries(names.map((k, i) => [k, vals[i]]))))),
+        )
+      : promisify(orig)(...a);
+  return fn;
+}
+
+// open and openSync: a read-only open is real, a write open returns a fake fd.
+const openForm = (sink, orig) => (...a) => {
+  if (!isWriteFlag(flagsOf(a))) return orig(...a);
   record(sink, a);
+  const fd = newFd(a[0]);
+  const cb = lastFn(a);
+  if (!cb) return fd;
+  setImmediate(() => cb(null, fd));
+};
+
+// write and writeSync
+const fdWriteForm = (sink, orig) =>
+  withResult(
+    (...a) => {
+      if (!isFake(a[0])) return orig(...a);
+      const d = written(a[1], a.slice(2));
+      record(sink, [fakeFds.get(a[0]), d]);
+      const cb = lastFn(a);
+      if (cb) setImmediate(() => cb(null, sizeOf(d), a[1]));
+      return sizeOf(d);
+    },
+    orig,
+    ['bytesWritten', 'buffer'],
+  );
+
+// writev and writevSync: one record per buffer
+const fdWritevForm = (sink, orig) =>
+  withResult(
+    (...a) => {
+      if (!isFake(a[0])) return orig(...a);
+      const bufs = bufList(a[1]);
+      for (const b of bufs) record(sink, [fakeFds.get(a[0]), b]);
+      const cb = lastFn(a);
+      if (cb) setImmediate(() => cb(null, sumLen(bufs), a[1]));
+      return sumLen(bufs);
+    },
+    orig,
+    ['bytesWritten', 'buffers'],
+  );
+
+// read and readSync: 0 bytes
+const fdReadForm = (_sink, orig) =>
+  withResult(
+    (...a) => {
+      if (!isFake(a[0])) return orig(...a);
+      const cb = lastFn(a);
+      if (!cb) return 0;
+      setImmediate(() => cb(null, 0, readTarget(a[1])));
+    },
+    orig,
+    ['bytesRead', 'buffer'],
+  );
+
+// fstat and fstatSync: empty stats
+const fdStatForm = (_sink, orig) => (...a) => {
+  if (!isFake(a[0])) return orig(...a);
+  const cb = lastFn(a);
+  if (!cb) return fakeStats();
+  setImmediate(() => cb(null, fakeStats()));
+};
+
+// close, ftruncate, fsync, fdatasync (and the Sync forms): act runs for a fake fd only.
+const fdForm = (act) => (sink, orig) => (...a) => {
+  if (!isFake(a[0])) return orig(...a);
+  act?.(sink, a);
+  const cb = lastFn(a);
+  if (cb) setImmediate(() => cb(null));
+};
+const onClose = (_sink, a) => fakeFds.delete(a[0]);
+const onTruncate = (sink, a) => record(sink, [fakeFds.get(a[0]), Number.isInteger(a[1]) ? a[1] : 0]);
+
+function stubFileHandle(path, fd) {
+  const base = 'fs/promises.FileHandle.';
+  const fh = {
+    fd,
+    async write(data, ...rest) {
+      const d = written(data, rest);
+      record(base + 'write', [path, d]);
+      return { bytesWritten: sizeOf(d), buffer: data };
+    },
+    async writeFile(data) {
+      record(base + 'writeFile', [path, data]);
+    },
+    async appendFile(data) {
+      record(base + 'appendFile', [path, data]);
+    },
+    async writev(bufs) {
+      for (const b of bufList(bufs)) record(base + 'writev', [path, b]);
+      return { bytesWritten: sumLen(bufList(bufs)), buffers: bufs };
+    },
+    async read(buf) {
+      return { bytesRead: 0, buffer: readTarget(buf) };
+    },
+    async readFile(opts) {
+      return readOut(opts);
+    },
+    async stat() {
+      return fakeStats();
+    },
+    async truncate(len = 0) {
+      record(base + 'truncate', [path, len]);
+    },
+    async sync() {},
+    async datasync() {},
+    async close() {
+      fakeFds.delete(fd);
+    },
+  };
+  fh[Symbol.asyncDispose] = fh.close;
+  fhPath.set(fh, path);
+  return fh;
+}
+
+const fspOpenForm = (sink, orig) => async (...a) => {
+  if (!isWriteFlag(flagsOf(a))) return orig(...a);
+  record(sink, a);
+  const fd = newFd(a[0]);
+  return stubFileHandle(fakeFds.get(fd), fd);
 };
 
 function createWriteStreamForm(sink) {
@@ -190,30 +391,59 @@ function createWriteStreamForm(sink) {
 
 // ---------- patching ----------
 
+// make(sink, original) returns the replacement. Most recorders ignore the original.
 function patch(obj, modName, name, make) {
   if (typeof obj[name] !== 'function') throw new Error(`sink-spy: ${modName}.${name} is not a function`);
-  obj[name] = make(`${modName}.${name}`);
+  obj[name] = make(`${modName}.${name}`, obj[name]);
 }
 
-for (const n of ['exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync']) {
-  patch(cp, 'child_process', n, makers[n]);
+const CP_NAMES = ['exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync', 'fork'];
+// Calls that only record. The Sync and fs/promises forms share these names.
+const SIMPLE = ['writeFile', 'appendFile', 'mkdir', 'rm', 'rename', 'unlink', 'rmdir', 'copyFile', 'cp', 'truncate', 'symlink', 'link'];
+const FS_SPECIAL = {
+  createWriteStream: createWriteStreamForm,
+  open: openForm,
+  openSync: openForm,
+  write: fdWriteForm,
+  writeSync: fdWriteForm,
+  writev: fdWritevForm,
+  writevSync: fdWritevForm,
+  read: fdReadForm,
+  readSync: fdReadForm,
+  fstat: fdStatForm,
+  fstatSync: fdStatForm,
+  close: fdForm(onClose),
+  closeSync: fdForm(onClose),
+  ftruncate: fdForm(onTruncate),
+  ftruncateSync: fdForm(onTruncate),
+  fsync: fdForm(),
+  fsyncSync: fdForm(),
+  fdatasync: fdForm(),
+  fdatasyncSync: fdForm(),
+};
+
+for (const n of CP_NAMES) patch(cp, 'child_process', n, makers[n]);
+const FD_FIRST = new Set(['writeFile', 'appendFile']); // the first argument may be a fake fd or FileHandle
+const viewOf = (n) => (FD_FIRST.has(n) ? pathFirst : same);
+for (const n of SIMPLE) {
+  patch(fs, 'fs', n, (sink) => fsCallbackForm(sink, viewOf(n)));
+  patch(fs, 'fs', n + 'Sync', (sink) => fsSyncForm(sink, viewOf(n)));
 }
-for (const n of ['writeFile', 'appendFile', 'mkdir', 'rm', 'rename']) patch(fs, 'fs', n, fsCallbackForm);
-for (const n of ['writeFileSync', 'appendFileSync', 'mkdirSync', 'rmSync', 'renameSync']) patch(fs, 'fs', n, fsSyncForm);
-patch(fs, 'fs', 'createWriteStream', createWriteStreamForm);
+for (const [n, make] of Object.entries(FS_SPECIAL)) patch(fs, 'fs', n, make);
 
 // fs.promises and require('fs/promises') are one object; patch whichever objects exist.
 for (const target of new Set([fsp, fs.promises])) {
-  for (const n of ['writeFile', 'appendFile', 'mkdir', 'rm', 'rename']) patch(target, 'fs/promises', n, fspForm);
+  for (const n of SIMPLE) patch(target, 'fs/promises', n, (sink) => fspForm(sink, viewOf(n)));
+  patch(target, 'fs/promises', 'open', fspOpenForm);
 }
 
 syncBuiltinESMExports();
 
 // Self-check: ESM views of the builtins must now see the recorders.
 const unpatched = [
-  ['child_process', cpNs, cp, ['exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync']],
-  ['fs', fsNs, fs, ['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'createWriteStream', 'mkdir', 'mkdirSync', 'rm', 'rmSync', 'rename', 'renameSync']],
-  ['fs/promises', fspNs, fsp, ['writeFile', 'appendFile', 'mkdir', 'rm', 'rename']],
+  ['child_process', cpNs, cp, CP_NAMES],
+  ['fs', fsNs, fs, [...SIMPLE, ...SIMPLE.map((n) => n + 'Sync'), ...Object.keys(FS_SPECIAL)]],
+  ['fs/promises', fspNs, fsp, [...SIMPLE, 'open']],
 ].flatMap(([mod, ns, cjs, names]) => names.filter((n) => ns[n] !== cjs[n]).map((n) => `${mod}.${n}`));
 if (unpatched.length > 0) throw new Error('sink-spy: ESM exports not synced: ' + unpatched.join(', '));
 if (fsNs.promises.writeFile !== fspNs.writeFile) throw new Error('sink-spy: fs.promises is not patched');
