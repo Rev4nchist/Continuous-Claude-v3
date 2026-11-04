@@ -3070,6 +3070,9 @@ describe('pr-checkpoint: via, and the plugin store lock', () => {
       ['PowerShell', 'Get-Content a.json | Set-Content $HOME/.claude/plugins/store/ccv3-mods_x.json'],
       // A PowerShell backtick escape splits the name across two pieces, so no single piece names the file (CodeRabbit, #286).
       ['PowerShell', "cd $HOME\\.claude\\plugins\\store; Set-Content ccv3-mods`_x.json '{}'"],
+      // A permitted read in one piece must not hide a split-name write in another (CodeRabbit round 2, #286).
+      ['PowerShell', `Get-Content "$HOME/.claude/plugins/store/ccv3-mods_x.json"; Set-Content "$HOME/.claude/plugins/store/ccv3-mods\`_x.json" '{}'`],
+      ['PowerShell', "cd $HOME\\.claude\\plugins\\store; Get-Content ccv3-mods_x.json; Set-Content ccv3-mods`_x.json '{}'"],
     ]
     for (const [tool, command] of WRITES) {
       const r = await shell($, tool, command)
