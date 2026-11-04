@@ -273,6 +273,8 @@ type LoopOpts = {
   cli?: Partial<Record<'list' | 'decide' | 'drop', Reply>>
   statuses?: Record<number, Record<string, unknown>>
   store?: Record<string, unknown>
+  /** How Dave answers the dialog the mod raises ($.ui.ask). Unset: no one answers, and the engine has no AskUserQuestion bottom (the dialog fails closed). */
+  answer?: string | RegExp | 'dismiss'
 }
 
 const loopWorld = (on: On, opts: LoopOpts = {}) => {
@@ -289,7 +291,19 @@ const loopWorld = (on: On, opts: LoopOpts = {}) => {
     return { value: undefined }
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
-  const seen = { slot: [] as { argv: string[]; script: string; cwd?: string }[], status: [] as number[], toasts: [] as string[], submits: [] as string[] }
+  const seen = { slot: [] as { argv: string[]; script: string; cwd?: string }[], status: [] as number[], toasts: [] as string[], submits: [] as string[], dialogs: [] as { question: string; labels: string[] }[], comments: [] as string[][] }
+  if (opts.answer !== undefined) {
+    const answer = opts.answer
+    on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+      const q = (e as unknown as { questions: { question: string; options: ({ label: string } | string)[] }[] }).questions[0]!
+      const labels = q.options.map(one => (typeof one === 'string' ? one : one.label))
+      seen.dialogs.push({ question: q.question, labels })
+      if (answer === 'dismiss') return { deny: 'dismissed' }
+      const text = answer instanceof RegExp ? labels.find(l => answer.test(l)) : answer
+      if (text === undefined) throw new Error(`no label matches in ${JSON.stringify(labels)}`)
+      return { result: { questions: [], answers: { [q.question]: text } } } as never
+    })
+  }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.id', () => ({ value: SESSION }))
@@ -332,6 +346,7 @@ const loopWorld = (on: On, opts: LoopOpts = {}) => {
       const one = { ...STATUS, pr, ...(opts.statuses?.[pr] ?? {}) }
       return result({ code: 1, out: JSON.stringify(one) })
     }
+    if (argv[0] === 'gh') seen.comments.push(argv)
     return result({ out: '[]' })
   })
   return { clock, seen, store }
@@ -609,5 +624,93 @@ describe('slot: /slot pay failures tell the truth (M3)', () => {
     loopWorld(on, { cli: { decide: { code: 2, out: '{"ok":false,"reason":"PR 5 is posted"}' } } })
     await startLoop($)
     expect((await command($, 'slot', 'wait 5')).text ?? '').toMatch(/Nothing was changed/)
+  })
+})
+
+// T17 and the time-out: the free-slot queue asks in the session (design 3.3). The CLI decides: it posts a paid round only on ALLOW.
+// S1  a paid ask or a time-out is only a toast Dave cannot answer from the phone
+// S2  Pay posts without cr-paid ALLOW (the mod posts itself, or ignores the CLI's ESCALATE)
+// S3  Esc, a wrong label or text typed under Other pays, waits or drops
+// S4  the answer runs another verb than its label says
+describe('slot: the paid ask and the time-out are dialogs (T17)', () => {
+  const WAIT_OUT = JSON.stringify({ ...JSON.parse(TICKS.timeout) })
+
+  test('S1 the 30 minute paid ask raises one dialog: the recommendation first, the dollar figure of cr-paid in the Pay label, the toast stays', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: 'dismiss' })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.toasts).toEqual([JSON.parse(TICKS.ask).actions[0].text])
+    expect(w.seen.dialogs.length).toBe(1)
+    const [dialog] = w.seen.dialogs
+    expect(dialog!.question).toContain('#901')
+    expect(dialog!.labels.length).toBeGreaterThanOrEqual(2)
+    expect(dialog!.labels.length).toBeLessThanOrEqual(4)
+    expect(dialog!.labels.find(label => /^Pay/.test(label))).toContain('$2.75')
+    expect(dialog!.labels.filter(label => /\(Recommended\)$/.test(label)).length).toBe(1)
+    expect(dialog!.labels[0]).toMatch(/\(Recommended\)$/)
+    expect(dialog!.labels.some(label => /^Keep waiting/.test(label))).toBe(true)
+    expect(dialog!.labels.some(label => /^Drop from queue/.test(label))).toBe(true)
+  })
+
+  test('S2 Pay runs the same decide verb as /slot pay; an ESCALATE from the CLI posts nothing and says so', async ($, on) => {
+    const w = loopWorld(on, {
+      file: ACTIVE,
+      ticks: [{ out: TICKS.ask }],
+      answer: /^Pay/,
+      cli: { decide: { code: 3, out: '{"ok":false,"verdict":"ESCALATE","reasons":["over the day cap"],"posted":false}' } },
+    })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--json']])
+    expect(w.seen.toasts.some(text => /ESCALATE/.test(text) && /Nothing posted/.test(text))).toBe(true)
+    expect(w.seen.comments).toEqual([])
+  })
+
+  test('S2b Pay on an ALLOW says the paid review is posted', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: /^Pay/, cli: { decide: { out: '{"ok":true,"verdict":"ALLOW","posted":true}' } } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.toasts.some(text => /PR #901: the paid review is posted\./.test(text))).toBe(true)
+  })
+
+  for (const answer of ['dismiss', 'pay 901', 'Pay']) {
+    test(`S3 the answer ${JSON.stringify(answer)} (Esc, or text that is not a label) runs no verb`, async ($, on) => {
+      const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer })
+      await startLoop($)
+      await w.clock.advance(TICK)
+      expect(w.seen.slot.filter(run => run.argv[0] !== 'tick')).toEqual([])
+    })
+  }
+
+  test('S4 Keep waiting runs decide --kind wait and Drop from queue runs drop --reason dave', async ($, on) => {
+    const wait = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: /^Keep waiting/ })
+    await startLoop($)
+    await wait.clock.advance(TICK)
+    expect(wait.seen.slot.filter(run => run.argv[0] !== 'tick').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'wait', '--json']])
+  })
+
+  test('S4b Drop from queue runs drop --reason dave', async ($, on) => {
+    const drop = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: /^Drop from queue/ })
+    await startLoop($)
+    await drop.clock.advance(TICK)
+    expect(drop.seen.slot.filter(run => run.argv[0] !== 'tick').map(run => run.argv)).toEqual([['drop', '--pr', '901', '--reason', 'dave', '--json']])
+  })
+
+  test('S5 the 60 minute time-out is a dialog too: Pay and Keep waiting, no figure when the toast names none', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: WAIT_OUT }], answer: 'dismiss' })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.seen.dialogs[0]!.question).toContain('#900')
+    expect(w.seen.dialogs[0]!.question).toMatch(/60 minutes/)
+    expect(w.seen.dialogs[0]!.labels.some(label => /^Pay/.test(label))).toBe(true)
+    expect(w.seen.dialogs[0]!.labels.some(label => /^Keep waiting/.test(label))).toBe(true)
+  })
+
+  test('S6 a tick with no ask raises no dialog', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.queued }], answer: /^Pay/ })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs).toEqual([])
   })
 })

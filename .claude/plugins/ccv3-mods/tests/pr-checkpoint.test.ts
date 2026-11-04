@@ -151,7 +151,20 @@ type Opts = {
   viewSeq?: Reply[]
   /** What slot-queue.mjs prints. Unset: a good `add`. */
   slot?: Reply
+  /** Replies for the first `--apply` calls, in order; later calls answer by `apply`. */
+  applySeq?: Reply[]
+  /** How Dave answers the dialog the mod raises ($.ui.ask). Unset: he closes it (Esc). 'manual': the test answers it through `seen.dialogs[n].answer(...)`. */
+  answer?: Answer
+  /** One answer per dialog, in order; later dialogs use `answer`. */
+  answers?: Answer[]
 }
+
+/** A label (RegExp: the first label that matches; string: that text), Esc, an empty answer, text typed under Other, or a function of the labels. */
+type Answer = string | RegExp | { other: string } | 'dismiss' | 'empty' | 'manual' | ((labels: string[], question: string) => Answer)
+type Dialog = { question: string; header: string | undefined; labels: string[]; answer: (a: Answer) => void }
+
+/** Set by `openPane` (the old pane tests): a dialog waits for the test to press. Reset by every `world`. */
+let manualDefault = false
 
 type Run = { argv: string[]; stdin?: string; cwd?: string }
 
@@ -192,6 +205,8 @@ const world = (on: On, opts: Opts = {}) => {
     toasts: [] as string[],
     submits: [] as string[],
     asks: [] as string[],
+    dialogs: [] as Dialog[],
+    descriptions: [] as string[],
     opens: [] as Rec[],
     closes: 0,
     registered: [] as string[],
@@ -199,6 +214,7 @@ const world = (on: On, opts: Opts = {}) => {
     ran: [] as { tool: string; text: string }[],
     writes: [] as string[],
   }
+  manualDefault = false
   const root = opts.root ?? ROOT
   const files: Record<string, string> = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false } }), ...(opts.files ?? {}) }
   const statuses = opts.statuses ?? {}
@@ -248,10 +264,12 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('command.register', (_$, e) => {
     seen.registered.push(e.name)
+    seen.descriptions.push(String((e as unknown as { description?: string }).description))
     return { value: { command: e.name } }
   })
   on('tool.register', (_$, e) => {
     seen.tools.push(e.name)
+    seen.descriptions.push(String((e as unknown as { description?: string }).description))
     return { value: { tool: `mcp__ccv3-mods__${e.name}` } }
   })
   on('ui.toast', (_$, e) => {
@@ -310,7 +328,7 @@ const world = (on: On, opts: Opts = {}) => {
         const reply = done(opts.confirm ?? { stdout: JSON.stringify(record) })
         return opts.gate ? (opts.gate.then(() => reply) as never) : reply
       }
-      if (argv.includes('--apply')) return done(opts.apply ?? OK)
+      if (argv.includes('--apply')) return done(opts.applySeq?.shift() ?? opts.apply ?? OK)
       return done({ stdout: `PR checkpoint for ${HEAD.slice(0, 7)}: class infra, 7 file(s), 212 line(s)\nRecommended: coderabbit  budget 1+2\n` })
     }
     if (line.includes('slot-queue.mjs')) {
@@ -333,9 +351,29 @@ const world = (on: On, opts: Opts = {}) => {
       return { result: { type: 'update', filePath: String(e.file_path ?? e.notebook_path), content: '', structuredPatch: [], originalFile: null } } as never
     })
   }
+  // The engine draws $.ui.ask as a tool.call of AskUserQuestion; this is its bottom. A call by the model (the test) lands here too.
+  const sequence = [...(opts.answers ?? [])]
   on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
-    seen.asks.push(String((e as unknown as { questions: { question: string }[] }).questions[0]?.question))
-    return { deny: 'no chat prompt in the checkpoint flows' }
+    const input = e as unknown as { questions: { question: string; header?: string; options: ({ label: string } | string)[] }[] }
+    const q = input.questions[0]!
+    const labels = q.options.map(one => (typeof one === 'string' ? one : one.label))
+    seen.asks.push(String(q.question))
+    const record: Dialog = { question: q.question, header: q.header, labels, answer: () => undefined }
+    seen.dialogs.push(record)
+    const shape = (spec: Answer): never => {
+      const picked = typeof spec === 'function' ? spec(labels, q.question) : spec
+      if (picked === 'dismiss') return { deny: 'dismissed' } as never
+      if (picked === 'empty') return { result: { questions: [], answers: {} } } as never
+      const text = typeof picked === 'object' && 'other' in picked ? picked.other : picked instanceof RegExp ? labels.find(l => picked.test(l)) : picked
+      if (text === undefined) throw new Error(`no label matches in ${JSON.stringify(labels)}`)
+      return { result: { questions: [], answers: { [q.question]: text } } } as never
+    }
+    const spec = sequence.shift() ?? opts.answer ?? (manualDefault ? 'manual' : 'dismiss')
+    const resolved = typeof spec === 'function' ? spec(labels, q.question) : spec
+    if (resolved !== 'manual') return shape(resolved)
+    return new Promise(resolve => {
+      record.answer = a => resolve(shape(a) as never)
+    }) as never
   })
   return { clock, seen, store, session, fail, written }
 }
@@ -2522,5 +2560,418 @@ describe('pr-checkpoint: the apply puts the PR in the free-slot queue (T1)', () 
     await pane.press({ key: 'opt-coderabbit' })
     expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
     expect(seen.toasts.filter(text => text.includes('slot-queue: bad state file')).length).toBe(1)
+  })
+})
+
+// ---- the checkpoint asks Dave in the session (design 2026-11-03, spike S2: $.ui.ask only) ----------------------------------------------
+// The mod raises the dialog itself ($.ui.ask) and waits for the answer inside the tool call. Only an exact match of one of its own
+// labels records. How it can fail, and the test that catches it:
+// T1  the recommended label does not record, or records --by dave          T2  another label records --by default
+// T3  Esc records                  T4  words typed under Other record      T5  an empty answer records
+// T6  a model AskUserQuestion with the same labels and its own answers records
+// T7  a head that moved during the wait records                            T8  a headless run or a subagent raises a dialog
+// T9  two calls raise two dialogs  T10 the pane survives (an open, or a model-facing word "pane")
+// T14 a refused --apply has no Retry dialog                                T15 a bare bridge /pathway does not ask
+// T18 a plan with no recommendation raises an invalid dialog               P1  a ccv3-mods hook answers AskUserQuestion
+// T11 to T13 and T19 (the tick asks) sit in 'asks from the watcher' below.
+describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
+  const REC = /\(Recommended\)$/
+  const call = ($: Engine, extra: Rec = {}) => callTool($, { pr: 7, body: 'pr-body.md', ...extra })
+
+  test('T1 the recommended label records --by default, with its cost in the label; the tool text names the pathway', async ($, on) => {
+    const w = world(on, { answer: REC })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    const [dialog] = w.seen.dialogs
+    expect(dialog!.labels[0]).toMatch(/^CodeRabbit review \(up to \$1\.75\)/)
+    expect(dialog!.labels[0]).toMatch(REC)
+    expect(dialog!.labels.filter(label => REC.test(label)).length).toBe(1)
+    expect(dialog!.labels.length).toBeGreaterThanOrEqual(2)
+    expect(dialog!.labels.length).toBeLessThanOrEqual(4)
+    expect(dialog!.header!.length).toBeLessThanOrEqual(12)
+    expect(dialog!.question).toContain('#7')
+    expect(dialog!.question).toMatch(/7 files/)
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by default /)])
+    expect(counts(w.seen).apply).toBe(1)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(told.text).toMatch(/Dave chose coderabbit for #7/)
+    expect(told.text).toMatch(/Do not merge/)
+    expect(w.store.get(PENDING)).toBeUndefined()
+  })
+
+  test('T2 another label records --by dave', async ($, on) => {
+    const w = world(on, { answer: /^No bot review/ })
+    await start($)
+    const told = await call($)
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    expect((w.store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+    expect(told.text).toMatch(/Dave chose none for #7/)
+  })
+
+  test('T2b Keep as draft records nothing, clears the pending checkpoint and tells the model not to ask again', async ($, on) => {
+    const w = world(on, { answer: /^Keep as draft/ })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(w.store.get(PENDING)).toBeUndefined()
+    expect(told.text).toMatch(/kept #7 as a draft/i)
+    expect(told.text).toMatch(/Do not ask him again/i)
+  })
+
+  test('T3 Esc records nothing, keeps the pending checkpoint and leaves the PR a draft', async ($, on) => {
+    const w = world(on, { answer: 'dismiss' })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(w.store.get(PENDING)).toBeDefined()
+    expect(told.text).toMatch(/closed the question/i)
+    expect(told.text).toMatch(/Nothing recorded/i)
+  })
+
+  test('T4 words typed under Other record nothing and reach the model', async ($, on) => {
+    const w = world(on, { answer: { other: 'please wait for the weekend' } })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toContain('please wait for the weekend')
+    expect(told.text).toMatch(/Nothing recorded/i)
+    expect(w.store.get(PENDING)).toBeDefined()
+  })
+
+  test('T4b Other text that equals a label exactly is Dave\'s own choice and records, as a typed /pathway does', async ($, on) => {
+    const w = world(on, { answer: labels => ({ other: labels.find(l => /^No bot review/.test(l))! }) })
+    await start($)
+    await call($)
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+  })
+
+  for (const text of ['CodeRabbit review (up to $1.75) (Recommended), No bot review ($0)', 'coderabbit review (up to $1.75) (Recommended)', 'CodeRabbit review (up to $1.75)', 'CodeRabbit review (up to $1.75) (Recommended) ']) {
+    test(`T4c a comma-joined or near-miss answer records nothing: ${JSON.stringify(text)}`, async ($, on) => {
+      const w = world(on, { answer: { other: text } })
+      await start($)
+      await call($)
+      expect(counts(w.seen).confirm).toBe(0)
+    })
+  }
+
+  test('T5 an empty answer records nothing', async ($, on) => {
+    const w = world(on, { answer: 'empty' })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/No valid answer/i)
+    expect(w.store.get(PENDING)).toBeDefined()
+  })
+
+  test('T6 a model AskUserQuestion with the checkpoint labels and its own answers records nothing', async ($, on) => {
+    const w = world(on, { answer: 'dismiss' })
+    await start($)
+    const question = 'PR #7: which review?'
+    const options = ['CodeRabbit review (up to $1.75) (Recommended)', 'No bot review ($0)'].map(label => ({ label, description: label }))
+    await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question, header: 'PR #7', options, multiSelect: false }], answers: { [question]: options[0]!.label } } as never).catch(() => undefined)
+    await settle()
+    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(w.seen.run.filter(r => r.argv[0] === 'gh' && r.argv[2] === 'ready').length).toBe(0)
+  })
+
+  test('T7 a head that moved while Dave answered records nothing', async ($, on) => {
+    const opts: Opts = { answer: REC }
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.viewHead = OTHER_HEAD
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/changed while Dave answered/i)
+    expect(told.text).toMatch(/head moved/i)
+  })
+
+  test('T7b a PR that left draft while Dave answered records nothing', async ($, on) => {
+    const opts: Opts = {}
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.isDraft = false
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/no longer a draft/i)
+  })
+
+  test('T8 a headless session raises no dialog and gets the text plan', async ($, on) => {
+    const w = world(on, { answer: REC })
+    await start($, false)
+    const told = await call($)
+    expect(w.seen.dialogs).toEqual([])
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/Nothing was recorded/)
+  })
+
+  test('T8b a subagent call raises no dialog, records nothing and gets the text plan', async ($, on) => {
+    const w = world(on, { answer: REC })
+    await start($)
+    const told = await call($, { agentId: 'sub-1' })
+    expect(w.seen.dialogs).toEqual([])
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/Nothing was recorded/)
+    expect(told.text).toMatch(/subagent/i)
+    expect(w.store.get(PENDING)).toBeUndefined()
+  })
+
+  test('T9 two calls at once raise one dialog; the second says a question is open', async ($, on) => {
+    const w = world(on, { answer: 'manual' })
+    await start($)
+    const first = call($)
+    await settle()
+    const second = await call($)
+    expect(second.text).toMatch(/question is open/i)
+    expect(w.seen.dialogs.length).toBe(1)
+    w.seen.dialogs[0]!.answer(/Recommended/)
+    await first
+    await settle()
+    expect(counts(w.seen).confirm).toBe(1)
+    expect(w.seen.dialogs.length).toBe(1)
+  })
+
+  test('T10 no pane opens, and no word the model reads says pane', async ($, on) => {
+    const opts: Opts = { answers: [REC, 'dismiss', 'empty', { other: 'x' }, /^Keep as draft/] }
+    const w = world(on, opts)
+    await start($)
+    const outcomes: string[] = [...w.seen.descriptions]
+    for (let i = 0; i < 5; i += 1) outcomes.push((await call($)).text)
+    opts.json = { stdout: JSON.stringify(engineJson({ recommended: null, options: [], why: ['Run pre-pr.mjs: no stamp for this head.'] })) }
+    outcomes.push((await call($)).text)
+    const target = ['C:/r/.claude/cache/pre-pr', 'pathway.json'].join('/')
+    outcomes.push(JSON.stringify(await $.tool.call({ tool: 'Write', file_path: target, content: '{}' } as never)))
+    expect(w.seen.opens).toEqual([])
+    for (const text of outcomes) expect(text).not.toMatch(/\bpane\b/i)
+    expect(outcomes.length).toBeGreaterThan(8)
+    expect(w.seen.descriptions.length).toBeGreaterThanOrEqual(2)
+  })
+
+  test('T14 a refused --apply raises a Retry dialog; Retry runs --apply again', async ($, on) => {
+    const w = world(on, { answers: [REC, /^Retry/], applySeq: [{ exitCode: 1, stderr: 'pr-checkpoint: refused: The head of PR #7 moved.\n' }] })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs[1]!.question).toMatch(/Retry/)
+    expect(w.seen.dialogs[1]!.question).toContain('The head of PR #7 moved.')
+    expect(counts(w.seen).confirm).toBe(1)
+    expect(counts(w.seen).apply).toBe(2)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(told.text).toMatch(/Dave chose/)
+  })
+
+  test('T14b Leave as draft after a refused --apply keeps the record confirmed and runs --apply once', async ($, on) => {
+    const w = world(on, { answers: [REC, /^Leave as draft/], apply: { exitCode: 1, stderr: 'pr-checkpoint: refused: nope.\n' } })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).apply).toBe(1)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('confirmed')
+    expect(told.text).toMatch(/confirmed, but --apply was refused/)
+  })
+
+  test('T15 a bare bridge /pathway with a pending checkpoint raises the dialog, and Dave\'s answer on the phone records', async ($, on) => {
+    const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    const w = world(on, { store: { [PENDING]: pending }, answer: REC })
+    await start($)
+    const ran = await slash($, '', 'bridge')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.seen.opens).toEqual([])
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by default /)])
+    expect(ran.text ?? '').toMatch(/coderabbit/)
+  })
+
+  test('T15b a bare /pathway whose dialog is closed records nothing and keeps the pending checkpoint', async ($, on) => {
+    const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    const w = world(on, { store: { [PENDING]: pending }, answer: 'dismiss' })
+    await start($)
+    await slash($, '')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(w.store.get(PENDING)).toBeDefined()
+  })
+
+  for (const [name, json] of [
+    ['no recommendation', engineJson({ recommended: null, options: [], why: ['Run pre-pr.mjs: no stamp for this head.'], budget: [0, 0] })],
+    ['a recommendation and no open option', engineJson({ options: [option('coderabbit', { available: false, reason: 'held' })] })],
+  ] as const) {
+    test(`T18 ${name}: no dialog, the tool text holds the engine reason, the PR stays a draft`, async ($, on) => {
+      const w = world(on, { json: { stdout: JSON.stringify(json) }, answer: REC })
+      await start($)
+      const told = await call($)
+      expect(w.seen.dialogs).toEqual([])
+      expect(counts(w.seen).confirm).toBe(0)
+      expect(told.text).toMatch(name === 'no recommendation' ? /Run pre-pr\.mjs/ : /held|no option|Nothing recorded/i)
+      expect(told.text).toMatch(/stays a draft/i)
+    })
+  }
+
+  test('T20 an engine option list of four open pathways plus wait still gives at most four labels, one Keep as draft', async ($, on) => {
+    const four = engineJson({ recommended: 'both', options: [option('wait'), option('none'), option('coderabbit'), option('both')] })
+    const w = world(on, { json: { stdout: JSON.stringify(four) }, answer: 'dismiss' })
+    await start($)
+    await call($)
+    const labels = w.seen.dialogs[0]!.labels
+    expect(labels.length).toBeLessThanOrEqual(4)
+    expect(labels.filter(l => /^Keep as draft/.test(l)).length).toBe(1)
+    expect(labels[0]).toMatch(/^CodeRabbit \+ Greptile .*\(Recommended\)$/)
+  })
+
+  test('P1 no ccv3-mods hook answers a model AskUserQuestion: the call reaches the engine bottom unchanged', async ($, on) => {
+    const w = world(on, { answer: 'dismiss' })
+    await start($)
+    const question = 'Spike?'
+    const raw = await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question, header: 'x', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] } as never).catch(() => 'rejected')
+    expect(w.seen.asks).toEqual([question])
+    expect(JSON.stringify(raw)).toMatch(/dismissed|rejected/)
+  })
+})
+
+// T11 a tick ask is answered after the queue changed: the answer lands on the wrong ask
+// T12 a closed tick ask nags: none at the next tick, one after 30 minutes, none after the second close
+// T13 a round Yes does not store the grant, or a No does not store the decline
+// T19 two watching sessions both ask, or none does (one lease per PR)
+describe('pr-checkpoint: the watcher raises its asks as dialogs', () => {
+  const watchDoc = (extra: Rec = {}) => ({ [WATCH]: { prs: [{ pr: 7, state: null, whenReady: false, ...extra }], backoffUntil: 0, touched: NOW } })
+  const record = (over: Rec = {}) => ({
+    pr: 7, state: 'applied', head: HEAD, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], decided_by: 'default',
+    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 26 * MIN, ...over,
+  })
+  const REVIEWED = (rounds: number) => status(7, {
+    reasons: ['1 review thread(s) unresolved'], unresolved: 1, coderabbitReviewedHead: true, routedReviewed: true, coderabbitRounds: rounds, coderabbitRequests: Math.max(0, rounds - 1),
+  })
+  const asksOf = (store: Map<string, unknown>) => (store.get(ASKS) ?? []) as Rec[]
+  const LEASE = 'checkpoint:asking:7'
+  const setup = (opts: Opts = {}) => ({ store: { ...watchDoc(), 'checkpoint:pr:7': record(), ...(opts.store ?? {}) }, statuses: { 7: REVIEWED(3) }, ...opts })
+
+  test('A1 the round ask is one dialog: No is first and marked Recommended, the cost is in each label, the text names the round and the 7d count', async ($, on) => {
+    const w = world(on, setup({ answer: 'dismiss' }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    const [dialog] = w.seen.dialogs
+    expect(dialog!.question).toContain('Round 4 of 1+2 for #7')
+    expect(dialog!.question).toMatch(/7d.*38/)
+    expect(dialog!.labels.length).toBe(2)
+    expect(dialog!.labels[0]).toMatch(/^No, stay in budget .*\(Recommended\)$/)
+    expect(dialog!.labels[1]).toMatch(/^Yes, one more review .*\$/)
+    expect(dialog!.labels.every(label => /\$/.test(label))).toBe(true)
+    expect(w.seen.opens).toEqual([])
+    expect(counts(w.seen).comments).toEqual([])
+  })
+
+  test('T13 round Yes stores the grant for round 4 on this head, tells the model, and posts nothing', async ($, on) => {
+    const w = world(on, setup({ answer: /^Yes/ }))
+    await start($)
+    await w.clock.advance(TICK)
+    const grant = w.store.get('checkpoint:grant:7') as Rec
+    expect(grant.round).toBe(4)
+    expect(grant.head).toBe(HEAD)
+    expect(asksOf(w.store)).toEqual([])
+    expect(counts(w.seen).comments).toEqual([])
+    expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave allowed round 4 for #7')
+  })
+
+  test('T13 round No stores the decline on the record, no grant, and the model is told', async ($, on) => {
+    const w = world(on, setup({ answer: /^No/ }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    const declined = (w.store.get('checkpoint:pr:7') as Rec).declined as Rec
+    expect(declined.kind).toBe('round')
+    expect(declined.round).toBe(4)
+    expect(asksOf(w.store)).toEqual([])
+    expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave declined round 4 for #7')
+  })
+
+  test('T13 an answer that is not one of the two labels stores nothing and keeps the ask queued', async ($, on) => {
+    const w = world(on, setup({ answer: { other: 'yes please' } }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    expect((w.store.get('checkpoint:pr:7') as Rec).declined).toBeUndefined()
+    expect(asksOf(w.store).length).toBe(1)
+  })
+
+  test('T11 the ask left the queue while the dialog was open: the answer is dropped, nothing is stored, Dave gets a toast', async ($, on) => {
+    const opts = setup()
+    const w = world(on, opts)
+    opts.answer = () => {
+      w.store.delete(ASKS)
+      return /^Yes/
+    }
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    expect((w.store.get('checkpoint:pr:7') as Rec).declined).toBeUndefined()
+    expect(w.seen.toasts.some(text => /#7 changed; nothing posted/.test(text))).toBe(true)
+  })
+
+  test('T11b an opening Yes whose ask moved to another head while the dialog was open posts nothing', async ($, on) => {
+    const opts = setup({ store: { 'checkpoint:pr:7': record({ appliedAt: NOW - 40 * MIN }) }, statuses: { 7: status(7, { coderabbitRounds: 0, coderabbitRequests: 0 }) } })
+    const w = world(on, opts)
+    opts.answer = () => {
+      w.store.set(ASKS, [{ ...asksOf(w.store)[0]!, head: OTHER_HEAD }])
+      return /^Yes/
+    }
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).comments).toEqual([])
+  })
+
+  test('T12 a closed ask is quiet at the next tick, comes back once after 30 minutes, and not after the second close', async ($, on) => {
+    const w = world(on, setup({ answer: 'dismiss' }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    for (let i = 0; i < 5; i += 1) await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(2)
+    for (let i = 0; i < 12; i += 1) await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(2)
+    const left = asksOf(w.store)
+    expect(left.length).toBe(1)
+    expect(left[0]!.dismissed).toBe(2)
+  })
+
+  test('T12b a bare /pathway raises a closed ask again, deferred or not', async ($, on) => {
+    const w = world(on, setup({ answers: ['dismiss', /^Yes/] }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    const ran = await slash($, '')
+    expect(w.seen.dialogs.length).toBe(2)
+    expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+    expect(ran.text ?? '').toMatch(/round 4/i)
+  })
+
+  test('T19 a live lease of another session keeps this one quiet; when it lapses this session asks and holds the lease', async ($, on) => {
+    const w = world(on, setup({ answer: 'dismiss', store: { [LEASE]: { session: 'other-session', until: NOW + 12 * MIN } } }))
+    await start($)
+    await w.clock.advance(TICK)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(0)
+    expect(asksOf(w.store).length).toBe(1)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect((w.store.get(LEASE) as Rec).session).toBe(SESSION)
+  })
+
+  test('T19b the holder keeps the lease while its ask is queued and drops it when the answer is stored', async ($, on) => {
+    const w = world(on, setup({ answer: /^Yes/ }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.store.get(LEASE)).toBeUndefined()
   })
 })
