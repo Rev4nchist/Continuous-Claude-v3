@@ -125,7 +125,8 @@ test('AC6: a recommendation other than none (wait on a high count, a paid pathwa
   const r = await recommendFor(MID, {}, { coderabbit: { reviews_7d_manual: 55, reviews_7d_manual_date: null } });
   assert.equal(r.recommended, 'none', 'a band below HIGH buys no review whatever the count');
   assert.equal(r.auto.eligible, true);
-  const high = await recommendFor(GATE, {}, { coderabbit: { reviews_7d_manual: 55, reviews_7d_manual_date: null } });
+  // Since the interim CodeRabbit rule (2026-11-04) a HIGH PR gets a paid pathway only with the risk:high label (or CRITICAL plus a trust file).
+  const high = await recommendFor(GATE, { labels: ['risk:high'] }, { coderabbit: { reviews_7d_manual: 55, reviews_7d_manual_date: null } });
   assert.notEqual(high.recommended, 'none');
   assert.equal(high.auto.eligible, false);
 });

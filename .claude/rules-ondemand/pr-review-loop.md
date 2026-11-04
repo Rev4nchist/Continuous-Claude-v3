@@ -206,14 +206,24 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 
 - `bandOf()` in `review-router.mjs` computes the band from the changed files. The numbers live in the `matrix` block of `review-router.config.json`.
 - Bands: LOW, MID, ELEVATED, HIGH, CRITICAL. HIGH is 5 or more control-plane files (`matrix.control_plane`). CRITICAL is a `risk:high` label or an r3 path.
-- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget`, or `both` when a critical file meets an available Greptile (rules R3 and R4 stay). Every band also offers the last option "No review, land on CI ($0)" (`none`): only Dave's pick or typed `/pathway <pr> none` records it for HIGH and CRITICAL (`--by dave`), it is never the recommendation there, and it adds `review:none`, so the router adds no review label when the PR leaves draft.
-- Dave can still press CodeRabbit on a lower band. That is an escalation.
+- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget` only under the interim CodeRabbit rule below. Every band also offers "No review, land on CI ($0)" (`none`). At HIGH and CRITICAL only Dave's pick or typed `/pathway <pr> none` records it (`--by dave`, also when `none` is the recommendation). It adds `review:none`, so the router adds no review label when the PR leaves draft.
+- Dave can still press CodeRabbit on any band. That is an escalation.
+- **Interim CodeRabbit rule (Dave, 2026-11-04).** CodeRabbit is scarce: $0.25 a file, $50 a month. `/pathway` recommends the CodeRabbit PR bot only when one of these holds:
+  - The PR has the `risk:high` label.
+  - The band is CRITICAL and a changed file is on `CRITICAL_TRUST_BOUNDARY` (`review-router.mjs`) or on `matrix.security_tier`.
+  Everything else recommends `none`: HIGH by gate files alone, CRITICAL from an r3 path alone, CRITICAL with only a `checkpoint.critical` file, ELEVATED, MID and LOW.
+- A docs-only PR never gets a CodeRabbit recommendation, even with `risk:high`. Docs-only wins.
+- Month cap: `coderabbit.monthly_file_cap` is 160 files. When the month-to-date files plus the reviewable files of this PR are over the cap, `/pathway` recommends `none` and says why. Dave can still press CodeRabbit by hand.
+  The count comes from the paid ledger (`node scripts/github/cr-paid.mjs month`, America/Chicago month, PR rows only). The ledger records paid rounds only, so it undercounts reviews that used a free slot.
+  An unreadable ledger also stops the recommendation.
+- Unread PR labels stop the checkpoint at every band. A hidden `risk:high` label would change the answer.
+- This rule is interim. Rule 2 (an UNCERTAIN Major after a verifier) is not part of it.
 - At HIGH and CRITICAL a `review:none` label alone is not a pick. The router saves `pathway=none` there only when a fresh `pathway-confirmed` marker for the head names `none`.
   Without it the router writes a note, saves no checkpoint, and READY says `review:none has no saved checkpoint`. Below HIGH the label still counts.
   A `none` saved with no marker at a lower band stays when a push raises the band to HIGH or CRITICAL. The router writes a note and leaves the pathway alone.
   After a gated first run, the recovery is: return the PR to draft, run `/pathway`. A fresh `none` marker then saves the checkpoint.
 - A lone `risk:docs` label asks for no bot only when the router classed the head as `docs`. On a higher class READY keeps a bot required and says why.
-- A parser file in a HIGH PR keeps rule R2: one review, no loop.
+- A parser file keeps rule R2 (one review, no loop) only when the interim rule recommends CodeRabbit. A critical file (R3) and an r3 path (R4) follow the same gate. The floor (aegis + critic) stays.
 - A config without a `matrix` block keeps the rules R1 to R5 and RS.
 - The router ledger line names the band. The state comment and the labels do not carry it yet.
 
@@ -364,6 +374,8 @@ read the newest round in full, the fix push is verified (`review-status.mjs` on 
 line or a review names that head.
 
 ## Paid PR reviews (Dave, 2026-10-30)
+
+Interim rule (Dave, 2026-11-04): `/pathway` recommends CodeRabbit only for the `risk:high` label, or for band CRITICAL with a trust-boundary or security-tier file. See "Review band". A docs-only PR gets none. Over 160 files a month, it recommends none. Check the count with `node scripts/github/cr-paid.mjs month`. It counts paid rounds only.
 
 Billing facts (CodeRabbit docs, measured on PR #221):
 

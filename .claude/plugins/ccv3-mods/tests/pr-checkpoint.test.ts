@@ -2966,6 +2966,29 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     await pane.press({ key: 'opt-none' })
     expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
   })
+
+  // N-M9  the interim CodeRabbit rule makes none the recommendation at HIGH and CRITICAL. The first label is then Recommended, but the engine
+  //       refuses --by default for none there and land-none-check.mjs reads decided_by dave, so its pick and `accept` must record --by dave.
+  for (const band of ['HIGH', 'CRITICAL'] as const) {
+    const noneRecommended = () => highJson(band, { recommended: 'none', options: [option('none'), option('coderabbit')] })
+
+    test(`N-M9 ${band}: none is the recommendation: it is first and Recommended, and its pick records --by dave, never --by default`, async ($, on) => {
+      const { seen, store } = world(on, { json: noneRecommended(), answer: /^No review, land on CI/ })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      expect(seen.dialogs[0]!.labels[0]).toBe(`${NO_REVIEW} (Recommended)`)
+      expect(engineCalls(seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+      expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+    })
+
+    test(`N-M9b ${band}: a typed /pathway 7 accept of a recommended none records --by dave`, async ($, on) => {
+      const { seen } = world(on, { json: noneRecommended(), answer: 'dismiss' })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      await slash($, '7 accept')
+      expect(engineCalls(seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    })
+  }
 })
 
 // ---- self-approve: the record says how Dave chose, and the store file is locked (lane agent-self-approve-hole, Dave 2026-11-03: DETECT) ----------

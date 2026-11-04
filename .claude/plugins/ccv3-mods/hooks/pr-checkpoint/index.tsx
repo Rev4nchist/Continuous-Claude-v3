@@ -55,6 +55,7 @@ import {
   namesSlotWrite,
   namesStore,
   noQuestionText,
+  onlyDaveRecordsNone,
   otherText,
   parseCheckpointArgs,
   parseGrantArgs,
@@ -633,7 +634,7 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   // At HIGH and CRITICAL "no review" records only from Dave's own composer. A bridge command (the phone, a relay) raises the dialog instead,
   // so only his tap on the exact label records.
   if (pathway === 'none' && e.origin.kind !== 'composer' && isQueueBand(result.auto.band)) return askPending($, next, trace)
-  const by = parsed.word === 'accept' ? 'default' : 'dave'
+  const by = parsed.word === 'accept' && !onlyDaveRecordsNone(pathway, result.auto.band) ? 'default' : 'dave'
   // Only a composer command or a bridge command for the pending PR gets here (the check above). The bridge is Remote Control, not Dave's keyboard.
   const via = e.origin.kind === 'bridge' ? 'bridge' : 'composer'
   const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by, via)

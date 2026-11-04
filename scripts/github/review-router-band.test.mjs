@@ -181,11 +181,11 @@ test('B15: LOW, MID and ELEVATED PRs are recommended none (no CodeRabbit PR bot 
   }
 });
 
-test('B16: HIGH (G = 5) is recommended CodeRabbit with the HIGH budget', async () => {
+test('B16: HIGH (G = 5) without the risk:high label or a trust file is recommended none (interim CodeRabbit rule, Dave 2026-11-04)', async () => {
   const r = await recommendFor(GATE);
   assert.equal(r.band.band, 'HIGH');
-  assert.equal(r.recommended, 'coderabbit');
-  assert.deepEqual(r.budget, [1, 1]);
+  assert.equal(r.recommended, 'none');
+  assert.deepEqual(r.budget, [0, 0]);
 });
 
 test('B17: G = 4 in one PR is still none (was CodeRabbit under R3)', async () => {
@@ -194,20 +194,27 @@ test('B17: G = 4 in one PR is still none (was CodeRabbit under R3)', async () =>
   assert.equal(r.recommended, 'none');
 });
 
-test('B18: CRITICAL (risk:high in the facts, or an r3 path) is recommended CodeRabbit', async () => {
-  const byLabel = await recommendFor(['docs/a.md'], { labels: ['risk:high'] });
+test('B18: CRITICAL by risk:high is recommended CodeRabbit unless docs-only; CRITICAL by an r3 path alone is none (interim rule)', async () => {
+  const byLabel = await recommendFor(['scripts/a.mjs'], { labels: ['risk:high'] });
   assert.equal(byLabel.band.band, 'CRITICAL');
   assert.equal(byLabel.recommended, 'coderabbit');
+  const docsOnly = await recommendFor(['docs/a.md'], { labels: ['risk:high'] });
+  assert.equal(docsOnly.band.band, 'CRITICAL');
+  assert.equal(docsOnly.recommended, 'none', 'docs-only wins over risk:high');
   const byPath = await recommendFor(['db/migrations/001_init.sql']);
   assert.equal(byPath.band.band, 'CRITICAL');
-  assert.equal(byPath.recommended, 'coderabbit');
+  assert.equal(byPath.recommended, 'none', 'an r3 path alone does not earn CodeRabbit');
 });
 
-test('B19: a Dependabot PR still gets none, and a HIGH PR with a parser file keeps the R2 budget 1+0', async () => {
+test('B19: a Dependabot PR still gets none, and a parser file (R2) keeps its 1+0 budget only when the CodeRabbit trigger fires', async () => {
   const dep = await recommendFor(GATE, { dependabot: true });
   assert.equal(dep.recommended, 'none');
-  const parser = await recommendFor([...GATE.slice(0, 4), '.claude/hooks/src/coderabbit-guard.ts']);
-  assert.equal(parser.band.band, 'HIGH');
+  const files = [...GATE.slice(0, 4), '.claude/hooks/src/coderabbit-guard.ts'];
+  const noTrigger = await recommendFor(files);
+  assert.equal(noTrigger.band.band, 'HIGH');
+  assert.equal(noTrigger.recommended, 'none', 'R2 cannot lift a none');
+  const parser = await recommendFor(files, { labels: ['risk:high'] });
+  assert.equal(parser.band.band, 'CRITICAL');
   assert.equal(parser.recommended, 'coderabbit');
   assert.deepEqual(parser.budget, [1, 0]);
 });
@@ -264,7 +271,7 @@ test('B26: unreadable labels (facts.labels null) below HIGH stop the checkpoint:
   assert.equal(stop.recommended, null);
   assert.deepEqual(stop.options, []);
   assert.match(stop.why[0], /labels/i);
-  assert.equal((await recommendFor(GATE, { labels: null })).recommended, 'coderabbit', 'a path-HIGH PR cannot be lowered by a label');
+  assert.equal((await recommendFor(GATE, { labels: null })).recommended, null, 'a HIGH PR stops too: a hidden risk:high would turn its none into CodeRabbit (interim rule)');
   assert.equal((await recommendFor(['docs/guide.md'], { labels: null, dependabot: true })).recommended, 'none');
   assert.equal((await recommendFor(['docs/guide.md'], { labels: [] })).recommended, 'none', 'read, and no risk:high: none');
 });
@@ -298,18 +305,21 @@ function liveCheckpoint({ labels, ghFails = false, pinnedFails = false, url = 'h
   ].join('\n'));
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', cfg], {
     cwd: repo, encoding: 'utf8',
-    env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify({ url, labels: (labels ?? []).map((name) => ({ name })) }), ...(ghFails ? { FAKE_GH_FAIL: '1' } : {}), ...(pinnedFails ? { FAKE_GH_PINNED_FAIL: '1' } : {}) },
+    env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify({ url, labels: (labels ?? []).map((name) => ({ name })) }), ...(ghFails ? { FAKE_GH_FAIL: '1' } : {}), ...(pinnedFails ? { FAKE_GH_PINNED_FAIL: '1' } : {}) },
   });
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
   return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null, calls };
 }
 
-test('B27: the live-facts path reads the PR labels: a risk:high docs-only PR is CRITICAL and coderabbit', () => {
+test('B27: the live-facts path reads the PR labels: a risk:high PR is CRITICAL; docs-only is none, anything else coderabbit (interim rule)', () => {
   const { r, out, calls } = liveCheckpoint({ labels: ['risk:high', 'builder:claude'] });
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
   assert.equal(out.band.band, 'CRITICAL');
-  assert.equal(out.recommended, 'coderabbit');
+  assert.equal(out.recommended, 'none', 'docs-only wins over risk:high');
   assert.deepEqual(calls, [['pr', 'view', 'feat/x', '--json', 'labels', '-R', 'Rev4nchist/Continuous-Claude-v3']]);
+  const code = liveCheckpoint({ labels: ['risk:high'], file: 'scripts/guide.mjs' });
+  assert.equal(code.out.band.band, 'CRITICAL');
+  assert.equal(code.out.recommended, 'coderabbit');
 });
 
 test('B28: the live-facts path with no risk:high label keeps a docs-only PR LOW and none', () => {
@@ -376,12 +386,16 @@ test('B32: a critical file below HIGH gets the floor; a plain logic PR does not'
   assert.equal(plain.options.find((o) => o.pathway === 'none').reason, 'No bot review. READY needs CI and proof only.', 'no floor: the none text is unchanged');
 });
 
-test('B33: a HIGH PR with a security-tier file still gets CodeRabbit and keeps R3 (Greptile line)', async () => {
-  const r = await recommendFor([...GATE.slice(0, 4), SECURITY]);
-  assert.equal(r.band.band, 'HIGH');
+test('B33: a HIGH PR with a security-tier file is none without risk:high (the floor stays); with risk:high it gets CodeRabbit and keeps R3', async () => {
+  const none = await recommendFor([...GATE.slice(0, 4), SECURITY]);
+  assert.equal(none.band.band, 'HIGH');
+  assert.equal(none.recommended, 'none', 'HIGH is not CRITICAL, so a security-tier file alone does not earn CodeRabbit');
+  assert.ok(none.why.some((w) => w.startsWith('Security-tier floor')), none.why.join(' | '));
+  const r = await recommendFor([...GATE.slice(0, 4), SECURITY], { labels: ['risk:high'] });
+  assert.equal(r.band.band, 'CRITICAL');
   assert.equal(r.recommended, 'coderabbit');
   assert.deepEqual(r.budget, [1, 1]);
-  assert.ok(r.why.some((w) => w.startsWith('Critical file')), 'R3 stays beside RB at HIGH');
+  assert.ok(r.why.some((w) => w.startsWith('Critical file')), 'R3 stays beside RB when the trigger fires');
 });
 
 test('B40: an engine trust-boundary file forces CRITICAL; prompt.mjs, context.mjs and test files do not', () => {
