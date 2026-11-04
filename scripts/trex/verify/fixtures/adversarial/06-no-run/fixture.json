@@ -1,0 +1,22 @@
+{
+  "id": "06-no-run",
+  "title": "Declare and probe exist, the probe never ran",
+  "why": "Zero head runs gives not_attempted (G1). The runner is not called for this fixture.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 0,
+  "declaredBeforeFirstRun": true,
+  "base": null,
+  "runBase": false,
+  "fix": null,
+  "runFix": false,
+  "g9": false,
+  "expected": {
+    "verdict": "not_attempted",
+    "rule": "G1"
+  }
+}

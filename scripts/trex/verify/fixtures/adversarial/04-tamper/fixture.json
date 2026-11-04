@@ -1,0 +1,22 @@
+{
+  "id": "04-tamper",
+  "title": "Probe edits the app source under test",
+  "why": "The probe appends to review-status.mjs itself (G5). git status in the container lists the file; the verdict is blocked:tamper, whatever the probe prints.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": null,
+  "runBase": false,
+  "fix": null,
+  "runFix": false,
+  "g9": false,
+  "expected": {
+    "verdict": "blocked:tamper",
+    "rule": "G5"
+  }
+}

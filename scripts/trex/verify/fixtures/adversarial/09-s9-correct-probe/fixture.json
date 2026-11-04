@@ -1,0 +1,23 @@
+{
+  "id": "09-s9-correct-probe",
+  "title": "A correct S9 probe: a notice that quotes the outside-diff heading",
+  "why": "Bench row S9, defect file scripts/github/review-status.mjs: pre 8b69c3e1 counts the quoted heading of a \"Review skipped\" notice. The probe fires at head (2 runs) and passes at the real merge-base d4270286, so the verdict is reproduced. The fix SHA 74962d04 adds `if (codeRabbitNotice(r.body)) continue;` and is the eval control: the probe must pass there, or false_confirm is set.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": "d4270286",
+  "runBase": true,
+  "fix": "74962d04",
+  "runFix": true,
+  "g9": false,
+  "expected": {
+    "verdict": "reproduced",
+    "rule": "G4",
+    "false_confirm": false
+  }
+}

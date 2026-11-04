@@ -1,0 +1,22 @@
+{
+  "id": "02-fails-both",
+  "title": "Probe fails the same way at head and at the base",
+  "why": "The probe expects codeRabbitNotice to return \"skipped\" for plain text. It returns null on both sides, so base fires the same line: pre-existing or a bad probe (G4).",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": "d4270286",
+  "runBase": true,
+  "fix": null,
+  "runFix": false,
+  "g9": false,
+  "expected": {
+    "verdict": "refuted",
+    "rule": "G4"
+  }
+}

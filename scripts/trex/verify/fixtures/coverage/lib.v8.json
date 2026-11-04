@@ -1,0 +1,6 @@
+{"result":[
+{"scriptId":"3","url":"node:internal/per_context/primordials","functions":[{"functionName":"SafeIterator","ranges":[{"startOffset":9212,"endOffset":9283,"count":3}],"isBlockCoverage":false}]},
+{"scriptId":"86","url":"file:///app/m.mjs","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":70,"count":1}],"isBlockCoverage":true}]},
+{"scriptId":"88","url":"file:///app/lib.mjs","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":120,"count":1}],"isBlockCoverage":true},{"functionName":"f","ranges":[{"startOffset":7,"endOffset":79,"count":1},{"startOffset":36,"endOffset":59,"count":0}],"isBlockCoverage":true},{"functionName":"never","ranges":[{"startOffset":87,"endOffset":119,"count":0}],"isBlockCoverage":false}]},
+{"scriptId":"90","url":"file:///app/u.mjs","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":82,"count":1}],"isBlockCoverage":true},{"functionName":"a","ranges":[{"startOffset":19,"endOffset":45,"count":1}],"isBlockCoverage":true},{"functionName":"b","ranges":[{"startOffset":53,"endOffset":81,"count":0}],"isBlockCoverage":false}]}
+]}

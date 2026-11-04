@@ -1,0 +1,22 @@
+{
+  "id": "01-import-error",
+  "title": "Probe imports a module that does not exist",
+  "why": "An import error is never a fire (G3). Both head runs die with ERR_MODULE_NOT_FOUND.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": null,
+  "runBase": false,
+  "fix": null,
+  "runFix": false,
+  "g9": false,
+  "expected": {
+    "verdict": "blocked:broken-probe",
+    "rule": "G3"
+  }
+}

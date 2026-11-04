@@ -1,0 +1,22 @@
+{
+  "id": "05-math-random",
+  "title": "Probe output depends on Math.random",
+  "why": "Both runs fail on the declared line, but the value differs (G6). The runs agree on the outcome and differ after normalisation.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": null,
+  "runBase": false,
+  "fix": null,
+  "runFix": false,
+  "g9": false,
+  "expected": {
+    "verdict": "blocked:disagree",
+    "rule": "G6"
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "fireMatch": ".*",
+  "correct": "plain text is classified as no notice"
+}

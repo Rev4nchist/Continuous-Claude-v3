@@ -9,6 +9,7 @@ import { refused } from './drivers/common.mjs';
 import { run as runHook } from './drivers/hook.mjs';
 import { run as runModEvent } from './drivers/mod-event.mjs';
 import { writeStepOutput } from './report.mjs';
+import { coverageWanted, wrapAction } from './verify/coverage.mjs';
 
 const START_SEC = 300;
 /** The origin of a container checkout when the flow sets none: the repo the code under review lives in. .trex/config.json "remote" at the config SHA may replace it. */
@@ -130,7 +131,9 @@ async function runStep(flow, step, ctx, startedMs) {
   // A host flow may use only cli and mod-event; the driver checks the argv with hostActionOk before it spawns.
   const hostHook = flow.profile === 'host' && !HOST_DRIVERS.has(flow.driver);
   if (!runner || hostHook) return refused('driver_unsupported');
-  return runner(step.action, driverCtx(flow, step, ctx, left));
+  // Opt-in coverage (verify G8): ctx.coverage is true or a list of flow ids. Off, the action is passed on unchanged.
+  const action = coverageWanted(ctx.coverage, flow) ? wrapAction(step.action, flow.id) : step.action;
+  return runner(action, driverCtx(flow, step, ctx, left));
 }
 
 function gradeStep(step, stepNo, result, files) {

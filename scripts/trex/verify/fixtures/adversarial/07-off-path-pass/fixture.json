@@ -1,0 +1,22 @@
+{
+  "id": "07-off-path-pass",
+  "title": "Probe passes but never reaches the cited lines",
+  "why": "The probe loads review-status.mjs and calls codeRabbitNotice only. codeRabbitOutsideDiff (lines 801-802) never runs. Real V8 coverage from the container shows it, so the pass is blocked:no-coverage (G8), not not_reproduced.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": null,
+  "runBase": false,
+  "fix": null,
+  "runFix": false,
+  "g9": false,
+  "expected": {
+    "verdict": "blocked:no-coverage",
+    "rule": "G8"
+  }
+}

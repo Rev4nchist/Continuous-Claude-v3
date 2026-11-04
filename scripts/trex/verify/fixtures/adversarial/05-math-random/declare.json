@@ -1,0 +1,4 @@
+{
+  "fireMatch": "counts [0-9.]+ outside-diff",
+  "correct": "a CodeRabbit notice that quotes an outside-diff heading adds 0 to the outside-diff count"
+}

@@ -1,0 +1,22 @@
+{
+  "id": "03-dot-star",
+  "title": "Declared match is \".*\"",
+  "why": "The probe fails on every run, but the declared match would match anything (G2). The harness rejects it.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": null,
+  "runBase": false,
+  "fix": null,
+  "runFix": false,
+  "g9": false,
+  "expected": {
+    "verdict": "blocked:lint",
+    "rule": "G2"
+  }
+}

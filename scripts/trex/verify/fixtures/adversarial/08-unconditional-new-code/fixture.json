@@ -1,0 +1,22 @@
+{
+  "id": "08-unconditional-new-code",
+  "title": "Unconditional failing assertion with a declared literal, on new code",
+  "why": "The cited file does not exist at the base ref, so no base run is possible and G9 decides. The failing text is a literal of the probe source (no observed value), and reverting the hunk does not make the probe pass. The verdict is unverified.",
+  "head": "8b69c3e1",
+  "cited": {
+    "file": "scripts/github/review-status.mjs",
+    "start": 801,
+    "end": 802
+  },
+  "headRuns": 2,
+  "declaredBeforeFirstRun": true,
+  "base": "d8afdd52",
+  "runBase": false,
+  "fix": null,
+  "runFix": false,
+  "g9": true,
+  "expected": {
+    "verdict": "unverified",
+    "rule": "G9"
+  }
+}

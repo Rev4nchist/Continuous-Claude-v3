@@ -566,6 +566,20 @@ test('--flows-dir allows the model-arm and intent-arm flow folders and no look-a
   }
 });
 
+test('--flows-dir allows the verify-arm flow folder and no look-alike', () => {
+  // Breaks when '-verify' leaves the allow-list (verify flows cannot run) or the list widens to any suffix.
+  const dir = (v) => parseArgs(['--simulate', 'a', '--flows-dir', v]).flowsDir;
+  for (const g of ['S1', 'S9', 'N12']) assert.equal(dir(`scripts/trex/bench/flows-verify/${g}`), `scripts/trex/bench/flows-verify/${g}`);
+  for (const bad of ['flows-verify', 'flows-verify/s1', 'flows-verify/S100', 'flows-verifyx/S1', 'flows-verify2/S1', 'flows-verify/S1/x', 'flows--verify/S1', 'flows-verify-intent/S1']) {
+    assert.throws(() => dir(`scripts/trex/bench/${bad}`), UsageError, bad);
+  }
+});
+
+test('--flows-dir error text names the verify arm', () => {
+  // Breaks when the UsageError text is not updated with the allow-list: the operator is told a folder is not allowed that is.
+  assert.throws(() => parseArgs(['--simulate', 'a', '--flows-dir', 'x/y']), (e) => e instanceof UsageError && e.message.includes('-verify'));
+});
+
 test('F4: the lock holds TREX_BENCH_RUN as benchRun, so a bench knows its own run', async () => {
   // Breaks when run.mjs leaves the bench run id out of the lock: the bench then matches a lock by a ref name and can kill another bench's run.
   let seen = null;
@@ -579,6 +593,24 @@ test('F4: the lock holds TREX_BENCH_RUN as benchRun, so a bench knows its own ru
   h2.deps.startEnv = async () => { seen = JSON.parse(readFileSync(h2.lockFile, 'utf8')); return { project: 'trex-sim-aaaaaaaa', digest: {}, exec: fakeExec(() => done('deny')) }; };
   await main(SIM(path.join(h2.root, 'ev')), h2.deps);
   assert.equal(seen.benchRun, null, 'a run outside a bench writes null');
+});
+
+test('TREX_COVERAGE=1 turns verify coverage on for container cli flows; unset leaves the exec options as they were', async () => {
+  // Breaks when run.mjs stops passing the flag to the flow deps (coverage then never runs), or passes it when the variable is unset (every flow argv changes).
+  const CLI_FLOW = [
+    'id: cli-flow', 'title: t', 'description: d', 'goal: g', 'paths: [a/b.ts]', 'driver: cli',
+    "start: {git: commit, remote: 'https://example.test/r.git'}", 'steps:', '  - action: {cmd: [node, a.mjs]}',
+    '    checks: [{text: out, stdout: deny}]', 'limits: {timeoutMs: 60000, retries: 0}', '',
+  ].join('\n');
+  const envOf = async (env) => {
+    const h = harness({ files: { '.trex/flows/cli.yaml': CLI_FLOW } });
+    h.deps.env = env;
+    await main(SIM(path.join(h.root, 'ev')), h.deps);
+    return h.execLog.find((c) => c.argv[0] === 'node')?.opts.env;
+  };
+  assert.equal((await envOf({ TREX_COVERAGE: '1' })).NODE_V8_COVERAGE, '/app/.verify/cli-flow/cov');
+  assert.equal(await envOf({}), undefined);
+  assert.equal(await envOf({ TREX_COVERAGE: '0' }), undefined);
 });
 
 // ---------- default git checkout (spec 4 start.git: commit, 5.8 startEnv) ----------
