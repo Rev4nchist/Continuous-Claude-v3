@@ -27,7 +27,7 @@ const check = (name, ok, detail = '') => { results.push([name, ok]); log(`${ok ?
 const tool = (...args) => execFileSync('node', [TOOL, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 
 const live = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
-let url, name;
+let url, name, c;
 try {
   log('# Migration 0004 scratch-database proof, 2026-11-04');
   log('# Live database: NOT touched. Only the scratch database below receives writes.');
@@ -39,7 +39,7 @@ try {
   if (!name.startsWith('lanes_pr1_') || new URL(url).pathname.slice(1) === 'continuous_claude') throw new Error('guard: not a scratch db');
   if (live && new URL(live).pathname === new URL(url).pathname) throw new Error('scratch url equals live url');
 
-  const c = new pg.Client({ connectionString: url });
+  c = new pg.Client({ connectionString: url });
   await c.connect();
   const q = (sql, p) => c.query(sql, p);
   const tryq = async (sql, p) => { try { const r = await c.query(sql, p); return { r }; } catch (e) { return { e }; } };
@@ -252,6 +252,7 @@ try {
   log(`ERROR: ${e.stack || e.message}`);
   results.push(['driver error', false]);
 } finally {
+  if (c) await c.end().catch(() => {}); // the failure path must not leave the client open: it can hang the script and block the drop
   if (url) {
     log('\n## Final step: drop scratch database');
     try { log(tool('drop', url).trim()); } catch (e) { log('drop failed: ' + e.message); results.push(['drop', false]); }
