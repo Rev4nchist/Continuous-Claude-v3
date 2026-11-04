@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { trivyCounts, semgrepCounts, compare, run, InputError } from './scan-ratchet.mjs';
+import { trivyCounts, semgrepCounts, osvCounts, osvReport, remapOsvKeys, relativeTo, keyFile, compare, run, InputError } from './scan-ratchet.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./scan-ratchet.mjs', import.meta.url));
 
@@ -143,4 +143,165 @@ test('update: refuses without a reason, and records the reason and total', () =>
   assert.equal(b.reason, 'pre-existing');
   assert.equal(b.total, 2);
   assert.deepEqual(b.counts, { 'r.a|x.js': 2 });
+});
+
+// ---------- osv (scanner trial: advisory groups per lockfile; version is left out of the key) ----------
+// Shape: real osv-scanner v2.7.0 `scan source --format json` (source.path absolute with forward slashes, groups[].ids and max_severity).
+
+const OSV_ROOT = 'C:\\Users\\dkhay\\continuous-claude';
+const osvPkg = (name, groups, ecosystem = 'npm', version = '1.0.0') => ({ package: { name, version, ecosystem }, groups });
+const osvGroup = (ids, max_severity) => (max_severity === undefined ? { ids, aliases: [] } : { ids, aliases: [], max_severity });
+const osvRep = (path, packages) => ({ results: [{ source: { path, type: 'lockfile' }, packages }] });
+const LOCK = 'C:/Users/dkhay/continuous-claude/.claude/hooks/package-lock.json';
+const LOCK_KEY = '.claude/hooks/package-lock.json';
+
+test('osv: a string severity 7.5 is counted and 6.9 is not (the field is a string in the report)', () => {
+  const c = osvCounts(osvRep(LOCK, [osvPkg('vite', [osvGroup(['GHSA-hi'], '7.5'), osvGroup(['GHSA-lo'], '6.9')])]), OSV_ROOT);
+  assert.deepEqual(c, { [`osv|${LOCK_KEY}|GHSA-hi|npm/vite`]: 1 });
+});
+
+test('osv: severity exactly 7 is counted', () => {
+  assert.equal(Object.keys(osvCounts(osvRep(LOCK, [osvPkg('a', [osvGroup(['X'], '7.0')])]), OSV_ROOT)).length, 1);
+});
+
+test('osv: an empty, missing or non-numeric severity is counted (unscored fails safe, not read as 0)', () => {
+  const groups = [osvGroup(['E'], ''), osvGroup(['M']), osvGroup(['N'], 'n/a')];
+  const c = osvCounts(osvRep(LOCK, [osvPkg('a', groups)]), OSV_ROOT);
+  assert.deepEqual(Object.keys(c).map((k) => k.split('|')[2]).sort(), ['E', 'M', 'N']);
+});
+
+test('osv: the id order inside a group does not change the key (sorted, first id)', () => {
+  const a = osvCounts(osvRep(LOCK, [osvPkg('p', [osvGroup(['B', 'A'], '9')])]), OSV_ROOT);
+  const b = osvCounts(osvRep(LOCK, [osvPkg('p', [osvGroup(['A', 'B'], '9')])]), OSV_ROOT);
+  assert.deepEqual(a, b);
+  assert.deepEqual(Object.keys(a), [`osv|${LOCK_KEY}|A|npm/p`]);
+});
+
+test('osv: the version is not in the key, so a bump that does not fix the advisory keeps the key', () => {
+  const a = osvCounts(osvRep(LOCK, [osvPkg('p', [osvGroup(['A'], '9')], 'npm', '1.0.0')]), OSV_ROOT);
+  const b = osvCounts(osvRep(LOCK, [osvPkg('p', [osvGroup(['A'], '9')], 'npm', '1.0.1')]), OSV_ROOT);
+  assert.deepEqual(a, b);
+});
+
+// Pure functions on purpose: the Windows spellings and case are tested without path.resolve, so they run on Linux too.
+test('osv: two path spellings (worktree root with backslashes, other drive-letter case) give the same relative key', () => {
+  const g = [osvPkg('p', [osvGroup(['A'], '9')])];
+  const wt = osvCounts(osvRep('C:/Users/dkhay/continuous-claude/.claude/worktrees/x/.claude/hooks/package-lock.json', g), 'C:\\Users\\dkhay\\continuous-claude\\.claude\\worktrees\\x');
+  const main = osvCounts(osvRep('c:\\users\\dkhay\\continuous-claude\\.claude\\hooks\\package-lock.json', g), 'C:/Users/dkhay/continuous-claude');
+  assert.deepEqual(Object.keys(wt), [`osv|${LOCK_KEY}|A|npm/p`]);
+  assert.deepEqual(wt, main);
+});
+
+test('osv: a source path outside the root throws InputError (a key never holds an absolute path)', () => {
+  const g = [osvPkg('p', [osvGroup(['A'], '9')])];
+  assert.throws(() => osvCounts(osvRep('D:/other/package-lock.json', g), OSV_ROOT), InputError);
+  // a sibling folder that only shares a name prefix is outside too
+  assert.throws(() => osvCounts(osvRep('C:/Users/dkhay/continuous-claude-old/package-lock.json', g), OSV_ROOT), InputError);
+});
+
+test('osv: relativeTo strips the root only at a folder boundary and returns null outside it', () => {
+  assert.equal(relativeTo('C:/a/b/c.txt', 'C:\\a\\b\\'), 'c.txt');
+  assert.equal(relativeTo('C:/a/bc/c.txt', 'C:/a/b'), null);
+});
+
+test('osv: a report without a results array is rejected, not read as clean', () => {
+  assert.throws(() => osvCounts({ SchemaVersion: 2 }, OSV_ROOT), InputError);
+  assert.throws(() => osvCounts(null, OSV_ROOT), InputError);
+});
+
+test('osv: an empty results array is a clean report', () => {
+  assert.deepEqual(osvCounts({ results: [] }, OSV_ROOT), {});
+});
+
+test('osv: keyFile returns the lockfile, so --changed drift works as for the other tools', () => {
+  assert.equal(keyFile(`osv|${LOCK_KEY}|A|npm/p`), LOCK_KEY);
+});
+
+test('osv: a regression on a lockfile the PR did not change is drift, on a changed one it blocks', () => {
+  const cur = { [`osv|${LOCK_KEY}|A|npm/p`]: 1, 'osv|opc/uv.lock|B|PyPI/q': 1 };
+  const r = compare(cur, {}, new Set(['opc/uv.lock']));
+  assert.deepEqual(r.regressions.map((x) => x.key), ['osv|opc/uv.lock|B|PyPI/q']);
+  assert.deepEqual(r.drift.map((x) => x.key), [`osv|${LOCK_KEY}|A|npm/p`]);
+});
+
+// A real folder as --root, so the CLI tests behave the same on Windows and on ubuntu-latest (CI): a drive-letter root would be resolved against the cwd on Linux.
+const forward = (p) => p.replace(/\\/g, '/');
+
+test('osv cli: --update then a plain run is OK; --root makes relative keys; the baseline keeps every id per key; a trivy baseline is rejected for --tool osv', () => {
+  const dir = tmp({ 'tb.json': { tool: 'trivy', total: 0, counts: {} } });
+  writeFileSync(join(dir, 'r.json'), JSON.stringify(osvRep(`${forward(dir)}/.claude/hooks/package-lock.json`, [osvPkg('p', [{ ids: ['A', 'Z'], aliases: ['CVE-1'], max_severity: '9' }])])));
+  const base = join(dir, 'b.json');
+  const common = ['--tool', 'osv', '--report', join(dir, 'r.json'), '--baseline', base, '--root', dir];
+  assert.equal(cli([...common, '--update', '--reason', 't']).status, 0);
+  const written = JSON.parse(readFileSync(base, 'utf8'));
+  assert.deepEqual(written.counts, { [`osv|${LOCK_KEY}|A|npm/p`]: 1 });
+  assert.deepEqual(written.ids, { [`osv|${LOCK_KEY}|A|npm/p`]: ['A', 'CVE-1', 'Z'] });
+  const ok = cli(common);
+  assert.equal(ok.status, 0);
+  assert.match(ok.stdout, /osv ratchet OK: 1 high-severity findings, baseline 1, new 0/);
+  const bad = cli(['--tool', 'osv', '--report', join(dir, 'r.json'), '--baseline', join(dir, 'tb.json'), '--root', dir]);
+  assert.equal(bad.status, 2);
+});
+
+test('osv cli: a report path outside --root exits 2', () => {
+  const dir = tmp({ 'b.json': { tool: 'osv', total: 0, counts: {} } });
+  const outside = tmp({});
+  writeFileSync(join(dir, 'r.json'), JSON.stringify(osvRep(`${forward(outside)}/package-lock.json`, [osvPkg('p', [osvGroup(['A'], '9')])])));
+  assert.equal(cli(['--tool', 'osv', '--report', join(dir, 'r.json'), '--baseline', join(dir, 'b.json'), '--root', dir]).status, 2);
+});
+
+// ---------- osv key stability: osv.dev adds ids to a group; the key (first sorted id) can change while the advisory does not ----------
+
+const keyOf = (id, pkgName = 'p', lock = LOCK_KEY) => `osv|${lock}|${id}|npm/${pkgName}`;
+const grpWith = (ids, aliases = [], max_severity = '9') => ({ ids, aliases, max_severity });
+
+test('osv ids: osvReport lists every id and alias of a key, sorted and without duplicates', () => {
+  const rep = osvReport(osvRep(LOCK, [osvPkg('p', [grpWith(['B', 'A'], ['CVE-2', 'A'])])]), OSV_ROOT);
+  assert.deepEqual(rep.counts, { [keyOf('A')]: 1 });
+  assert.deepEqual(rep.ids, { [keyOf('A')]: ['A', 'B', 'CVE-2'] });
+});
+
+test('osv ids: a group that gains a smaller id still matches its baseline key (no new, no fixed)', () => {
+  const baseline = { counts: { [keyOf('GHSA-b')]: 1 }, ids: { [keyOf('GHSA-b')]: ['CVE-1', 'GHSA-b'] } };
+  const now = osvReport(osvRep(LOCK, [osvPkg('p', [grpWith(['GHSA-b', 'GHSA-a'], ['CVE-1'])])]), OSV_ROOT);
+  assert.deepEqual(Object.keys(now.counts), [keyOf('GHSA-a')], 'the raw key did change');
+  const mapped = remapOsvKeys(now.counts, now.ids, baseline);
+  assert.deepEqual(mapped, { [keyOf('GHSA-b')]: 1 });
+  const r = compare(mapped, baseline.counts);
+  assert.deepEqual([r.regressions.length, r.drift.length, r.fixed.length], [0, 0, 0]);
+});
+
+test('osv ids: a truly new advisory on the same package stays new; an id shared with another package or lockfile does not match', () => {
+  const baseline = { counts: { [keyOf('GHSA-b')]: 1 }, ids: { [keyOf('GHSA-b')]: ['CVE-1', 'GHSA-b'] } };
+  const fresh = osvReport(osvRep(LOCK, [osvPkg('p', [grpWith(['GHSA-b'], ['CVE-1']), grpWith(['GHSA-new'], ['CVE-9'])])]), OSV_ROOT);
+  const r = compare(remapOsvKeys(fresh.counts, fresh.ids, baseline), baseline.counts);
+  assert.deepEqual(r.regressions.map((x) => x.key), [keyOf('GHSA-new')]);
+  const other = osvReport(osvRep(LOCK, [osvPkg('q', [grpWith(['GHSA-a'], ['CVE-1'])])]), OSV_ROOT);
+  assert.deepEqual(Object.keys(remapOsvKeys(other.counts, other.ids, baseline)), [keyOf('GHSA-a', 'q')]);
+  const elsewhere = osvReport(osvRep('C:/Users/dkhay/continuous-claude/opc/uv.lock', [osvPkg('p', [grpWith(['GHSA-a'], ['CVE-1'])])]), OSV_ROOT);
+  assert.deepEqual(Object.keys(remapOsvKeys(elsewhere.counts, elsewhere.ids, baseline)), [keyOf('GHSA-a', 'p', 'opc/uv.lock')]);
+});
+
+test('osv ids: a baseline written before ids were stored (no ids field) is used as it is', () => {
+  const baseline = { counts: { [keyOf('GHSA-b')]: 1 } };
+  const now = osvReport(osvRep(LOCK, [osvPkg('p', [grpWith(['GHSA-b', 'GHSA-a'])])]), OSV_ROOT);
+  assert.deepEqual(remapOsvKeys(now.counts, now.ids, baseline), now.counts);
+});
+
+test('osv cli: a group that gains a smaller id after --update is still OK (new 0, fixed 0); a new advisory on the same package fails', () => {
+  const dir = tmp({});
+  const lock = `${forward(dir)}/.claude/hooks/package-lock.json`;
+  const put = (name, groups) => writeFileSync(join(dir, name), JSON.stringify(osvRep(lock, [osvPkg('p', groups)])));
+  put('old.json', [grpWith(['GHSA-b'], ['CVE-1'])]);
+  put('gained.json', [grpWith(['GHSA-b', 'GHSA-a'], ['CVE-1'])]);
+  put('fresh.json', [grpWith(['GHSA-b'], ['CVE-1']), grpWith(['GHSA-new'], ['CVE-9'])]);
+  const base = join(dir, 'b.json');
+  const args = (report) => ['--tool', 'osv', '--report', join(dir, report), '--baseline', base, '--root', dir];
+  assert.equal(cli([...args('old.json'), '--update', '--reason', 't']).status, 0);
+  const same = cli(args('gained.json'));
+  assert.equal(same.status, 0, same.stdout);
+  assert.match(same.stdout, /new 0, drift 0, fixed 0/);
+  const bad = cli(args('fresh.json'));
+  assert.equal(bad.status, 1);
+  assert.match(bad.stdout, /NEW {2}osv\|\.claude\/hooks\/package-lock\.json\|GHSA-new\|npm\/p/);
 });
