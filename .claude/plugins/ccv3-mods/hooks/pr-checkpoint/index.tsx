@@ -624,6 +624,9 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   if (!pathway) return say('refused', `There is no recommendation: ${result.why[0] ?? 'run pre-pr.mjs'}. Nothing was recorded.`)
   const option = result.options.find(one => one.pathway === pathway)
   if (!option || !option.available) return say('refused', `Pathway ${pathway} is not available${option ? `: ${option.reason}` : ''}. Nothing was recorded.`)
+  // At HIGH and CRITICAL "no review" records only from Dave's own composer. A bridge command (the phone, a relay) raises the dialog instead,
+  // so only his tap on the exact label records.
+  if (pathway === 'none' && e.origin.kind !== 'composer' && isQueueBand(result.auto.band)) return askPending($, next, trace)
   const by = parsed.word === 'accept' ? 'default' : 'dave'
   const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by)
   if (out.stage !== 'done') {

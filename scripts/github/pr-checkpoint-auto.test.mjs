@@ -165,8 +165,9 @@ test('AC7: --confirm --by auto refuses (exit 1, nothing written) for HIGH, kill 
   ];
   for (const [label, r] of cases) {
     assert.equal(r.status, 1, `${label}: ${r.stdout} ${r.stderr}`);
-    // Two cases are refused before the auto rule: none is not offered on a HIGH PR, and unread labels stop the whole checkpoint.
-    const why = { HIGH: /not offered/, 'unread labels': /Could not read the PR labels/ }[label] ?? /auto/i;
+    // One case is refused before the auto rule: unread labels stop the whole checkpoint. HIGH offers none since 2026-11-04 (a person may pick it),
+    // so --by auto reaches the auto rule there and is refused by band.
+    const why = { 'unread labels': /Could not read the PR labels/ }[label] ?? /auto/i;
     assert.match(r.stderr, why, label);
     assert.ok(!existsSync(r.pathwayFile), `${label}: no pathway.json`);
   }
