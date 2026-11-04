@@ -109,3 +109,33 @@ export const parseSlotArgs = (args: string): SlotArgs => {
   const pr = Number(num.replace('#', ''))
   return Number.isSafeInteger(pr) && pr > 0 ? { kind: verb as SlotVerb, pr } : { kind: 'usage' }
 }
+
+// ---- the questions of the queue (design 3.3) ---------------------------------------------------------------------------------------
+// The tick emits a toast when it asks Dave to pay (30 minutes without a free slot) or reports the time-out (60 minutes). The mod also puts
+// the question as a dialog. The CLI stays the decider: Pay runs `decide --kind pay`, which posts only when cr-paid says ALLOW.
+
+export type SlotAsk = { pr: number; kind: 'paid' | 'timeout'; canPay: boolean; cost: string | null }
+
+/** The ask a tick action carries, or null for any other toast (queued, stuck, posted). The text is the CLI's; an unknown text raises no dialog. */
+export const slotAskOf = (action: SlotAction): SlotAsk | null => {
+  const text = action.text
+  const kind = /no free slot for 60 minutes/.test(text) ? 'timeout' : /no free slot for 30 minutes/.test(text) ? 'paid' : null
+  if (kind === null) return null
+  const cost = /Paid round \$(\d+(?:\.\d+)?)/.exec(text)
+  return { pr: action.pr, kind, canPay: new RegExp(`/slot pay ${action.pr}(?!\\d)`).test(text), cost: cost ? `$${cost[1]}` : null }
+}
+
+export type SlotChoice = { label: string; verb: 'pay' | 'wait' | 'drop' }
+export type SlotAskSpec = { header: string; question: string; choices: SlotChoice[] }
+
+/** The dialog: Keep waiting first (it costs nothing) and marked Recommended, then Pay with its figure, then Drop. No Pay when the CLI did not offer one. */
+export const slotAskSpec = (ask: SlotAsk): SlotAskSpec => {
+  const pay = ask.cost ? `Pay about ${ask.cost}` : 'Pay (cost unknown, cr-paid checks it)'
+  const choices: SlotChoice[] = [
+    { label: 'Keep waiting ($0) (Recommended)', verb: 'wait' },
+    ...(ask.canPay ? [{ label: pay, verb: 'pay' as const }] : []),
+    { label: 'Drop from queue ($0)', verb: 'drop' },
+  ]
+  const when = ask.kind === 'paid' ? 'no free CodeRabbit slot for 30 minutes' : 'no free CodeRabbit slot for 60 minutes; READY still needs a CodeRabbit review'
+  return { header: `PR #${ask.pr}`, question: `PR #${ask.pr}: ${when}. ${ask.canPay ? 'Pay for the round, keep waiting, or drop it?' : 'A paid round is not allowed now. Keep waiting or drop it?'}`, choices }
+}

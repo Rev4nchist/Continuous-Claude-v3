@@ -1279,7 +1279,7 @@ describe('pr-loop outside-diff findings', () => {
 // CW1  a draft PR is DRAFT: one toast "waiting on /<command>", no STALLED model line after 60 minutes
 // CW2  review:none with no router state: the STALLED line names the router re-run, never "No review on the head"
 // CW3  a PR that leaves draft restarts the 60 minute clock (it is not STALLED at its first ready check)
-// CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says Dave decides in the pane
+// CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says the mod asks Dave in the session
 // CW5  the opening ask is queued 30 minutes after ready on a coderabbit record with 0 rounds: none at 29 minutes, none while the CodeRabbit status is pending
 // CW6  a draft's pr_status text never tells the model to post @coderabbitai review
 // CW7  a round grant changes the REVIEWED line to "Dave allowed round 4"
@@ -1435,7 +1435,7 @@ describe('pr-loop checkpoint states', () => {
   test('CW4h a rate limit with the budget used up offers no paid review', async ($, on) => {
     const line = await limitedLine($, on, record({ budget: [1, 1] }), RATE_LIMITED({ coderabbitRounds: 2 }))
     noPaid(line)
-    expect(line).toContain('Dave decides round 3')
+    expect(line).toContain('The mod asks Dave about round 3 in the session')
   })
 
   test('CW4i a rate limit with rounds unknown (older status script) offers no paid review', async ($, on) => {
@@ -1751,7 +1751,7 @@ describe('pr-loop stale prompts', () => {
     await clock.advance(TICK)
     expect(seen.submits.length).toBe(1)
     expect(seen.submits[0]).toContain('Rounds used 1 of 1+0')
-    expect(seen.submits[0]).toContain('Dave decides round 2')
+    expect(seen.submits[0]).toContain('The mod asks Dave about round 2 in the session')
     expect(seen.submits[0]).not.toContain('round 3')
   })
 
