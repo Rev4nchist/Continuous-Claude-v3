@@ -1,0 +1,446 @@
+/**
+ * Lane board resolver: drift test plus behaviour.
+ *
+ * The resolver lives in two copies (a hook module and a plain-JS twin for lane.mjs).
+ * Every case runs against BOTH and asserts equal output, so a change to one copy
+ * that is not mirrored in the other fails here.
+ *
+ * Fixtures are real folders under os.tmpdir(). The resolver never stats registry
+ * roots, so some registry roots deliberately point at folders that do not exist.
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+import * as tsTwin from '../shared/lane-board.js';
+
+// The .mjs twin sits outside tsc's rootDir, so load it by URL at run time.
+const mjsUrl = pathToFileURL(path.resolve(__dirname, '../../../../scripts/coordination/lane-board.mjs')).href;
+const mjsTwin: typeof tsTwin = await import(/* @vite-ignore */ mjsUrl);
+
+type Opts = Parameters<typeof tsTwin.resolveBoard>[1];
+type Result = ReturnType<typeof tsTwin.resolveBoard>;
+
+let tmp: string;
+const mk = (...parts: string[]): string => {
+  const p = path.join(tmp, ...parts);
+  fs.mkdirSync(p, { recursive: true });
+  return p;
+};
+const writeRegistry = (projects: Array<Record<string, unknown>>): string => {
+  const file = path.join(tmp, 'registry.json');
+  fs.writeFileSync(file, JSON.stringify({ version: '1.0', projects }));
+  return file;
+};
+const entry = (name: string, p: string, extra: Record<string, unknown> = {}) => ({
+  name,
+  path: p,
+  status: 'active',
+  ...extra,
+});
+
+/** Run one resolver call on both twins, assert equal output, return it. */
+const both = (cwd: string, opts: Opts = {}): Result => {
+  const a = tsTwin.resolveBoard(cwd, opts);
+  const b = mjsTwin.resolveBoard(cwd, opts);
+  expect(b).toEqual(a);
+  return a;
+};
+/** Same for a call that must throw: both twins throw the same message. */
+const bothThrow = (cwd: string, opts: Opts): string => {
+  const msgs = [tsTwin, mjsTwin].map((t) => {
+    try {
+      t.resolveBoard(cwd, opts);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    return '<no throw>';
+  });
+  expect(msgs[1]).toBe(msgs[0]);
+  return msgs[0];
+};
+
+beforeEach(() => {
+  // realpath: os.tmpdir() can be an 8.3 short name on Windows; the resolver realpaths the cwd.
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lane-board-')));
+});
+afterEach(() => {
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('twin drift', () => {
+  it('both copies export the same names', () => {
+    expect(Object.keys(mjsTwin).sort()).toEqual(Object.keys(tsTwin).sort());
+    expect(Object.keys(tsTwin).sort()).toEqual(['isHeadless', 'loadRegistry', 'normalizeRoot', 'resolveBoard']);
+  });
+
+  it('normalizeRoot agrees on awkward inputs', () => {
+    for (const p of ['C:\\Users\\Dave\\Proj\\', '/c/Users/Dave', '/C/Users', 'c:/a//b/', '\\\\?\\C:\\x\\y', 'rel/path', '']) {
+      expect(mjsTwin.normalizeRoot(p)).toBe(tsTwin.normalizeRoot(p));
+    }
+  });
+});
+
+describe('normalizeRoot', () => {
+  it('folds backslashes, case and trailing slash', () => {
+    expect(tsTwin.normalizeRoot('C:\\Users\\Dave\\Proj\\')).toBe('c:/users/dave/proj');
+  });
+  it('folds a leading /c/ to c:/', () => {
+    expect(tsTwin.normalizeRoot('/c/Users/Dave')).toBe('c:/users/dave');
+    expect(tsTwin.normalizeRoot('/C/Users/')).toBe('c:/users');
+  });
+  it('strips the extended-length prefix', () => {
+    expect(tsTwin.normalizeRoot('\\\\?\\C:\\x\\y')).toBe('c:/x/y');
+  });
+});
+
+describe('registry matching', () => {
+  it('matches a subfolder and the root itself', () => {
+    const foo = mk('a', 'foo');
+    const sub = mk('a', 'foo', 'sub', 'deep');
+    const registry = writeRegistry([entry('Foo', foo)]);
+    expect(both(foo, { registryPath: registry })).toMatchObject({ key: 'foo', source: 'registry' });
+    expect(both(sub, { registryPath: registry })).toMatchObject({ key: 'foo', source: 'registry' });
+  });
+
+  it('matches across slash style and case', () => {
+    const foo = mk('a', 'foo');
+    const sub = mk('a', 'foo', 'sub');
+    // Registry root written with backslashes and upper case; cwd in the native form.
+    const registry = writeRegistry([entry('Foo', foo.replace(/\//g, '\\').toUpperCase())]);
+    expect(both(sub, { registryPath: registry })).toMatchObject({ key: 'foo' });
+  });
+
+  it.skipIf(process.platform !== 'win32')('matches a Git Bash style /c/ root', () => {
+    const foo = mk('a', 'foo');
+    const gitBash = '/' + foo[0].toLowerCase() + foo.slice(2).replace(/\\/g, '/');
+    const registry = writeRegistry([entry('Foo', gitBash)]);
+    expect(both(foo, { registryPath: registry })).toMatchObject({ key: 'foo' });
+  });
+
+  it('respects the path-segment boundary: foo does not match foobar', () => {
+    const foo = mk('a', 'foo');
+    const foobar = mk('a', 'foobar');
+    const registry = writeRegistry([entry('Foo', foo)]);
+    expect(both(foobar, { registryPath: registry })).toBeNull();
+    expect(both(path.join(foobar, 'x'), { registryPath: registry })).toBeNull();
+  });
+
+  it('longest matching root wins', () => {
+    const outer = mk('p');
+    const inner = mk('p', 'inner');
+    const registry = writeRegistry([entry('Outer', outer), entry('Inner', inner)]);
+    expect(both(path.join(inner, 'x'), { registryPath: registry })).toMatchObject({ key: 'inner' });
+    expect(both(mk('p', 'other'), { registryPath: registry })).toMatchObject({ key: 'outer' });
+  });
+
+  it('a nested entry with laneBoard maps to the parent board', () => {
+    const parent = mk('ccv3');
+    const app = mk('ccv3', 'apps', 'os');
+    const registry = writeRegistry([
+      entry('continuous-claude', parent),
+      entry('Agentic OS', app, { laneBoard: 'continuous-claude' }),
+    ]);
+    const r = both(path.join(app, 'src'), { registryPath: registry });
+    expect(r).toMatchObject({ key: 'continuous-claude', source: 'registry', via: 'agentic-os' });
+  });
+
+  it('uses the explicit key field instead of the slugified name', () => {
+    const d = mk('k');
+    const registry = writeRegistry([entry('Some Name!', d, { key: 'custom-key' })]);
+    expect(both(d, { registryPath: registry })).toMatchObject({ key: 'custom-key' });
+  });
+
+  it('slugifies a name without a key', () => {
+    const d = mk('k');
+    const registry = writeRegistry([entry('ECG  Lead_Reactivation Engine!', d)]);
+    expect(both(d, { registryPath: registry })).toMatchObject({ key: 'ecg-lead-reactivation-engine' });
+  });
+
+  it('skips inactive entries', () => {
+    const d = mk('gone');
+    const registry = writeRegistry([entry('Gone', d, { status: 'inactive' })]);
+    expect(both(d, { registryPath: registry })).toBeNull();
+  });
+
+  it('an inactive inner entry falls through to the active parent', () => {
+    const outer = mk('p');
+    const inner = mk('p', 'inner');
+    const registry = writeRegistry([entry('Outer', outer), entry('Inner', inner, { status: 'inactive' })]);
+    expect(both(inner, { registryPath: registry })).toMatchObject({ key: 'outer' });
+  });
+
+  it('accepts in-development entries', () => {
+    const d = mk('dev');
+    const registry = writeRegistry([entry('Dev', d, { status: 'in-development' })]);
+    expect(both(d, { registryPath: registry })).toMatchObject({ key: 'dev' });
+  });
+
+  it('resolves under an active root that does not exist on disk (no stat of roots)', () => {
+    const dead = path.join(tmp, 'dead-root');
+    const registry = writeRegistry([entry('Dead', dead)]);
+    expect(both(path.join(dead, 'sub'), { registryPath: registry })).toMatchObject({ key: 'dead' });
+  });
+
+  it('falls back to the normalised string when the cwd was deleted', () => {
+    const foo = mk('a', 'foo');
+    const registry = writeRegistry([entry('Foo', foo)]);
+    const gone = path.join(foo, 'deleted', 'child');
+    expect(fs.existsSync(gone)).toBe(false);
+    expect(both(gone, { registryPath: registry })).toMatchObject({ key: 'foo' });
+  });
+
+  it('returns null for an unregistered scratch dir and for the home dir', () => {
+    const foo = mk('a', 'foo');
+    const registry = writeRegistry([entry('Foo', foo)]);
+    expect(both(mk('scratch'), { registryPath: registry })).toBeNull();
+    expect(both(os.homedir(), { registryPath: registry })).toBeNull();
+  });
+
+  it('returns null for a missing, empty or corrupt registry (fail open)', () => {
+    const d = mk('d');
+    expect(both(d, { registryPath: path.join(tmp, 'nope.json') })).toBeNull();
+    const corrupt = path.join(tmp, 'corrupt.json');
+    fs.writeFileSync(corrupt, '{ not json');
+    expect(both(d, { registryPath: corrupt })).toBeNull();
+    fs.writeFileSync(corrupt, JSON.stringify({ projects: 'nope' }));
+    expect(both(d, { registryPath: corrupt })).toBeNull();
+  });
+
+  it('reads a registry that starts with a BOM', () => {
+    const d = mk('d');
+    const file = path.join(tmp, 'bom.json');
+    fs.writeFileSync(file, '\uFEFF' + JSON.stringify({ projects: [entry('Bom', d)] }));
+    expect(both(d, { registryPath: file })).toMatchObject({ key: 'bom' });
+  });
+
+  it('ignores entries with an empty or relative path', () => {
+    const d = mk('d');
+    const registry = writeRegistry([entry('Empty', ''), entry('Slash', '/'), entry('Rel', 'd')]);
+    expect(both(d, { registryPath: registry })).toBeNull();
+  });
+
+  it('finds the registry from LANE_REGISTRY_PATH and from HOME', () => {
+    const d = mk('d');
+    const registry = writeRegistry([entry('Env', d)]);
+    expect(both(d, { env: { LANE_REGISTRY_PATH: registry } })).toMatchObject({ key: 'env' });
+    const home = mk('home', '.claude');
+    fs.copyFileSync(registry, path.join(home, 'project-registry.json'));
+    expect(both(d, { env: { HOME: path.dirname(home), USERPROFILE: path.dirname(home) } })).toMatchObject({ key: 'env' });
+  });
+
+  it('prefers opts.registryPath over LANE_REGISTRY_PATH', () => {
+    const d = mk('d');
+    const good = writeRegistry([entry('Good', d)]);
+    expect(both(d, { registryPath: good, env: { LANE_REGISTRY_PATH: path.join(tmp, 'nope.json') } })).toMatchObject({ key: 'good' });
+  });
+});
+
+describe('worktree gitdir fallback', () => {
+  const addWorktree = (root: string, name: string, worktreeDir: string, content?: string) => {
+    const d = path.join(root, '.git', 'worktrees', name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'gitdir'), content ?? path.join(worktreeDir, '.git') + '\n');
+  };
+
+  it('finds a worktree outside the root through its gitdir file', () => {
+    const root = mk('repo');
+    const wt = mk('elsewhere', 'wt1');
+    addWorktree(root, 'wt1', wt);
+    const registry = writeRegistry([entry('Repo', root)]);
+    const r = both(path.join(mk('elsewhere', 'wt1', 'src')), { registryPath: registry });
+    expect(r).toMatchObject({ key: 'repo', source: 'worktree-gitdir' });
+    expect(both(wt, { registryPath: registry })).toMatchObject({ key: 'repo', source: 'worktree-gitdir' });
+  });
+
+  it('applies the segment boundary to the worktree dir', () => {
+    const root = mk('repo');
+    const wt = mk('elsewhere', 'wt1');
+    mk('elsewhere', 'wt1x');
+    addWorktree(root, 'wt1', wt);
+    const registry = writeRegistry([entry('Repo', root)]);
+    expect(both(path.join(tmp, 'elsewhere', 'wt1x'), { registryPath: registry })).toBeNull();
+  });
+
+  it('honours CRLF in the gitdir file', () => {
+    const root = mk('repo');
+    const wt = mk('elsewhere', 'wt1');
+    addWorktree(root, 'wt1', wt, path.join(wt, '.git') + '\r\n');
+    const registry = writeRegistry([entry('Repo', root)]);
+    expect(both(wt, { registryPath: registry })).toMatchObject({ key: 'repo' });
+  });
+
+  it('does not read worktrees of an inactive root', () => {
+    const root = mk('repo');
+    const wt = mk('elsewhere', 'wt1');
+    addWorktree(root, 'wt1', wt);
+    const registry = writeRegistry([entry('Repo', root, { status: 'inactive' })]);
+    expect(both(wt, { registryPath: registry })).toBeNull();
+  });
+
+  it('prefers the registry prefix match over a worktree match', () => {
+    const root = mk('repo');
+    const other = mk('other');
+    const wt = mk('other', 'wt1');
+    addWorktree(root, 'wt1', wt);
+    const registry = writeRegistry([entry('Repo', root), entry('Other', other)]);
+    expect(both(wt, { registryPath: registry })).toMatchObject({ key: 'other', source: 'registry' });
+  });
+
+  it('ignores a gitdir file that names no worktree dir', () => {
+    const root = mk('repo');
+    addWorktree(root, 'bad', tmp, '/.git\n');
+    addWorktree(root, 'bad2', tmp, 'not-absolute/.git\n');
+    addWorktree(root, 'bad3', tmp, 'C:/somewhere/else\n');
+    const registry = writeRegistry([entry('Repo', root)]);
+    expect(both(mk('scratch'), { registryPath: registry })).toBeNull();
+  });
+
+  it('reads at most 100 gitdir files per root', () => {
+    const root = mk('repo');
+    for (let i = 0; i < 100; i++) addWorktree(root, 'a' + String(i).padStart(3, '0'), path.join(tmp, 'filler', String(i)));
+    const wt = mk('elsewhere', 'late');
+    addWorktree(root, 'z-late', wt);
+    const registry = writeRegistry([entry('Repo', root)]);
+    expect(both(wt, { registryPath: registry })).toBeNull();
+  });
+
+  it('never trusts a .git file planted in the cwd', () => {
+    const root = mk('repo');
+    addWorktree(root, 'real', mk('elsewhere', 'real'));
+    const registry = writeRegistry([entry('Repo', root)]);
+    const planted = mk('planted');
+    fs.writeFileSync(path.join(planted, '.git'), `gitdir: ${path.join(root, '.git', 'worktrees', 'real')}\n`);
+    expect(both(planted, { registryPath: registry })).toBeNull();
+    // A planted .git directory with its own gitdir/worktrees layout is ignored too.
+    const plantedDir = mk('planted2');
+    fs.mkdirSync(path.join(plantedDir, '.git', 'worktrees', 'x'), { recursive: true });
+    fs.writeFileSync(path.join(plantedDir, '.git', 'worktrees', 'x', 'gitdir'), path.join(plantedDir, '.git') + '\n');
+    expect(both(plantedDir, { registryPath: registry })).toBeNull();
+  });
+
+  it('ignores GIT_DIR and GIT_COMMON_DIR, in opts.env and in process.env', () => {
+    const root = mk('repo');
+    const registry = writeRegistry([entry('Repo', root)]);
+    const scratch = mk('scratch');
+    const git = { GIT_DIR: path.join(root, '.git'), GIT_COMMON_DIR: path.join(root, '.git'), GIT_WORK_TREE: root };
+    expect(both(scratch, { registryPath: registry, env: git })).toBeNull();
+    expect(both(root, { registryPath: registry, env: git })).toMatchObject({ key: 'repo' });
+    const saved = { d: process.env.GIT_DIR, c: process.env.GIT_COMMON_DIR };
+    process.env.GIT_DIR = git.GIT_DIR;
+    process.env.GIT_COMMON_DIR = git.GIT_COMMON_DIR;
+    try {
+      expect(both(scratch, { registryPath: registry })).toBeNull();
+    } finally {
+      if (saved.d === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved.d;
+      if (saved.c === undefined) delete process.env.GIT_COMMON_DIR; else process.env.GIT_COMMON_DIR = saved.c;
+    }
+  });
+});
+
+describe('headless rule', () => {
+  it('isHeadless: sdk entrypoint is headless unless LANE_CONTEXT_HEADLESS=1', () => {
+    for (const t of [tsTwin, mjsTwin]) {
+      expect(t.isHeadless({ CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' })).toBe(true);
+      expect(t.isHeadless({ CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' })).toBe(true);
+      expect(t.isHeadless({ CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', LANE_CONTEXT_HEADLESS: '1' })).toBe(false);
+      expect(t.isHeadless({ CLAUDE_CODE_ENTRYPOINT: 'cli' })).toBe(false);
+      expect(t.isHeadless({})).toBe(false);
+    }
+  });
+
+  it('a headless hook gets no board', () => {
+    const d = mk('d');
+    const registry = writeRegistry([entry('D', d)]);
+    expect(both(d, { registryPath: registry, env: { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' } })).toBeNull();
+  });
+
+  it('LANE_CONTEXT_HEADLESS=1 opts a headless hook back in', () => {
+    const d = mk('d');
+    const registry = writeRegistry([entry('D', d)]);
+    const env = { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', LANE_CONTEXT_HEADLESS: '1' };
+    expect(both(d, { registryPath: registry, env })).toMatchObject({ key: 'd' });
+  });
+
+  it('cli=true ignores the headless rule; so does headlessOk', () => {
+    const d = mk('d');
+    const registry = writeRegistry([entry('D', d)]);
+    const env = { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' };
+    expect(both(d, { registryPath: registry, env, cli: true })).toMatchObject({ key: 'd' });
+    expect(both(d, { registryPath: registry, env, headlessOk: true })).toMatchObject({ key: 'd' });
+  });
+});
+
+describe('CLI board selection (--project / LANE_PROJECT)', () => {
+  it('--project selects a registered board from any cwd', () => {
+    const a = mk('a');
+    const b = mk('b');
+    const registry = writeRegistry([entry('A', a), entry('B', b)]);
+    const r = both(a, { registryPath: registry, cli: true, projectFlag: 'b' });
+    expect(r).toMatchObject({ key: 'b', source: 'flag' });
+  });
+
+  it('LANE_PROJECT is used when there is no flag', () => {
+    const a = mk('a');
+    const b = mk('b');
+    const registry = writeRegistry([entry('A', a), entry('B', b)]);
+    const r = both(a, { registryPath: registry, cli: true, env: { LANE_PROJECT: 'b' } });
+    expect(r).toMatchObject({ key: 'b', source: 'env' });
+  });
+
+  it('the flag beats LANE_PROJECT, and both beat the cwd', () => {
+    const a = mk('a');
+    const b = mk('b');
+    const c = mk('c');
+    const registry = writeRegistry([entry('A', a), entry('B', b), entry('C', c)]);
+    const r = both(a, { registryPath: registry, cli: true, projectFlag: 'c', env: { LANE_PROJECT: 'b' } });
+    expect(r).toMatchObject({ key: 'c', source: 'flag' });
+  });
+
+  it('an entry with laneBoard returns its board, and its board name is accepted too', () => {
+    const p = mk('p');
+    const app = mk('p', 'app');
+    const registry = writeRegistry([entry('P', p), entry('App', app, { laneBoard: 'p' })]);
+    expect(both(mk('x'), { registryPath: registry, cli: true, projectFlag: 'app' })).toMatchObject({ key: 'p', via: 'app' });
+    expect(both(mk('x'), { registryPath: registry, cli: true, projectFlag: 'p' })).toMatchObject({ key: 'p' });
+  });
+
+  it('an unknown board throws and lists the registered keys', () => {
+    const a = mk('a');
+    const b = mk('b');
+    const registry = writeRegistry([entry('A', a), entry('B', b)]);
+    expect(bothThrow(a, { registryPath: registry, cli: true, projectFlag: 'zzz' })).toBe("unknown board 'zzz'; registered: a, b");
+    expect(bothThrow(a, { registryPath: registry, cli: true, env: { LANE_PROJECT: 'nope' } })).toBe(
+      "unknown board 'nope'; registered: a, b",
+    );
+  });
+
+  it('an inactive entry is not a valid board', () => {
+    const a = mk('a');
+    const b = mk('b');
+    const registry = writeRegistry([entry('A', a), entry('B', b, { status: 'inactive' })]);
+    expect(bothThrow(a, { registryPath: registry, cli: true, projectFlag: 'b' })).toBe("unknown board 'b'; registered: a");
+  });
+
+  it('an empty registry still throws with a readable list', () => {
+    expect(bothThrow(tmp, { registryPath: path.join(tmp, 'nope.json'), cli: true, projectFlag: 'a' })).toBe(
+      "unknown board 'a'; registered: (none)",
+    );
+  });
+
+  it('hooks (cli not set) ignore the flag and LANE_PROJECT', () => {
+    const a = mk('a');
+    const b = mk('b');
+    const registry = writeRegistry([entry('A', a), entry('B', b)]);
+    const r = both(a, { registryPath: registry, projectFlag: 'b', env: { LANE_PROJECT: 'b' } });
+    expect(r).toMatchObject({ key: 'a', source: 'registry' });
+  });
+
+  it('a headless hook with LANE_PROJECT set still gets nothing', () => {
+    const a = mk('a');
+    const registry = writeRegistry([entry('A', a)]);
+    expect(both(a, { registryPath: registry, env: { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', LANE_PROJECT: 'a' } })).toBeNull();
+  });
+});
