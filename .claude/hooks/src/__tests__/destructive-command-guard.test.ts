@@ -1363,3 +1363,121 @@ describe('R5: docker compose down must be the verb, not a file name', () => {
     expect(decide('docker compose -f x.yml down -v', interactiveFor('Bash'), {}).decision).not.toBe('allow');
   });
 });
+
+// pwsh, powershell and cmd join every argument after -c / -Command / /c into the command they run
+// (`pwsh -c echo '; Write-Output INJECTED'` prints INJECTED). A POSIX shell takes the next word as $0.
+describe('B1: pwsh/powershell/cmd run the arguments after the quoted payload', () => {
+  const bash = [
+    `pwsh -c "echo" "; git reset --hard"`,
+    `pwsh -c "echo" "; rm -rf x"`,
+    `pwsh -c 'echo' '; git push --force'`,
+    `cmd /c "echo A" "& rd /s /q C:\\data"`,
+    `cmd /c "echo A" "& git reset --hard"`,
+    // Bare form: the first payload word is unquoted, the rest is a quoted argument.
+    `pwsh -c echo '; git reset --hard'`,
+  ];
+  for (const cmd of bash) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  const ps = [
+    `pwsh -c "echo" "; git reset --hard"`,
+    `pwsh -c "echo" "; Remove-Item -Recurse x"`,
+    `cmd /c "echo A" "& rd /s /q C:\\data"`,
+    `powershell -Command "echo" "; Remove-Item -Recurse C:\\data"`,
+  ];
+  for (const cmd of ps) {
+    it(`PowerShell asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('PowerShell'), {}).decision).not.toBe('allow');
+    });
+  }
+  it('Bash allows: bash -c "echo" "; rm -rf x" (the second string is $0)', () => {
+    expect(decide(`bash -c "echo" "; rm -rf x"`, interactiveFor('Bash'), {}).decision).toBe('allow');
+  });
+  const installs: Array<[string, string]> = [
+    [`pwsh -c "echo" "; npm install zz-fake-pkg-a1"`, 'Bash'],
+    [`pwsh -c "echo" "; npm install zz-fake-pkg-a1"`, 'PowerShell'],
+    [`cmd /c "echo A" "& npm install zz-fake-pkg-a1"`, 'Bash'],
+  ];
+  for (const [cmd, tool] of installs) {
+    it(`installSegments (${tool}) finds the install in: ${cmd}`, () => {
+      expect(installSegments(cmd, tool).length).toBeGreaterThanOrEqual(1);
+    });
+  }
+});
+
+describe('B2: git checkout asks on a long option outside the branch-switch set', () => {
+  const ask = [
+    'git checkout --no-overlay main src/',
+    'git checkout --no-overlay HEAD~3 src/a.ts',
+    'git checkout --quiet src/a.ts',
+    'git checkout --progress main src/a.ts',
+    'git checkout --merge src/a.ts',
+    'git checkout --conflict=merge src/a.ts',
+  ];
+  for (const cmd of ask) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  const allow = [
+    'git checkout --track origin/x',
+    'git checkout --detach',
+    'git checkout --orphan x',
+    'git checkout -b new-branch',
+    'git checkout main',
+    'git checkout fix/x',
+    'git checkout --no-track main',
+  ];
+  for (const cmd of allow) {
+    it(`Bash allows: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
+    });
+  }
+});
+
+describe('B3: time/nohup take flags; the interpreter fallback runs SEGMENT_PATTERNS', () => {
+  const fabric = 'az fabric capacity suspend -n cap -g rg';
+  const bash = [
+    `time -p bash -c "${fabric}"`,
+    `nohup -- bash -c "${fabric}"`,
+    `time -p sh -c '${fabric}'`,
+    // A launcher shape the wrapper regex does not parse (`nice -n 5`): only the fallback sees it.
+    `nice -n 5 bash -c "${fabric}"`,
+  ];
+  for (const cmd of bash) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  it(`PowerShell asks: time -p bash -c "${fabric}"`, () => {
+    expect(decide(`time -p bash -c "${fabric}"`, interactiveFor('PowerShell'), {}).decision).not.toBe('allow');
+  });
+  const installs = [`time -p bash -c "npm install zz-fake-pkg-a1"`, `nohup -- bash -c "npm install zz-fake-pkg-a1"`];
+  for (const cmd of installs) {
+    it(`installSegments finds the install in: ${cmd}`, () => {
+      expect(installSegments(cmd, 'Bash').length).toBeGreaterThanOrEqual(1);
+    });
+  }
+});
+
+describe('B3: time/nohup flag runs stay linear (x200)', () => {
+  const timeIt = childTimer();
+  const cases: Array<[string, string]> = [
+    ['time -p run', 'time ' + '-p '.repeat(200) + 'x'],
+    ['nohup -- run', 'nohup ' + '-- '.repeat(200) + 'x'],
+    // A flag that is also a VAR=x item, and a flag that is also a path-prefixed launcher.
+    ['time flag that is also a VAR=x item', 'time ' + '-x=y '.repeat(200) + 'z'],
+    ['time flag that is also a path-prefixed launcher', 'time ' + '-x/time '.repeat(200) + 'z'],
+    ['nohup flag that is also a path-prefixed launcher', 'nohup ' + '-x/nohup '.repeat(200) + 'z'],
+  ];
+  for (const [name, cmd] of cases) {
+    it(`decide(): ${name} finishes in under 1000 ms`, async () => {
+      expect(await timeIt('decide', cmd)).toBeLessThan(1000);
+    }, 20_000);
+    it(`installSegments(): ${name} finishes in under 1000 ms`, async () => {
+      expect(await timeIt('install', cmd)).toBeLessThan(1000);
+    }, 20_000);
+  }
+});
