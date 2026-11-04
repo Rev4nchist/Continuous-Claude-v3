@@ -53,6 +53,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as PRE from './pre-pr.mjs';
+import { MARKER } from './lib/pssa-advisory.mjs';
 import { cliCapOf } from './cr-paid.mjs';
 import {
   SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
@@ -1290,6 +1291,8 @@ async function prePr(repo, extra = {}) {
     fetch: () => null,
     guardLog: () => {},
     ledgerPath: tempLedger(),
+    // The osv and pssa advisories never start a scanner or touch the network here: no lockfile, no binary. The OSV-PP / PSSA-PP tests inject their own.
+    osvLockfiles: [], findOsv: () => null, findPssa: () => null,
     bodyText: 'Proof type: docs\n', ...extra,
   };
   return { result: await runPrePr(opts), gateRuns, crCalls };
@@ -1999,4 +2002,73 @@ test('Z-PP3: a workflow change with no zizmor binary passes with a skip note', a
   const step = result.results.find((r) => r.step === 'zizmor');
   assert.equal(step.status, 'NOTE');
   assert.match(step.detail, /skipped/);
+});
+
+// ---------- osv and pssa advisories (one-week trial: they never fail pre-pr) ----------
+
+const osvBaseline = JSON.stringify({ tool: 'osv', reason: 't', total: 0, counts: {} });
+const osvOut = (root) => JSON.stringify({ results: [{ source: { path: `${root.replace(/\\/g, '/')}/package-lock.json`, type: 'lockfile' }, packages: [{ package: { name: 'vite', version: '1', ecosystem: 'npm' }, groups: [{ ids: ['GHSA-x'], aliases: [], max_severity: '8.1' }] }] }] });
+
+test('OSV-PP1: a tracked lockfile adds one NOTE osv line on any change, and an osv exit 1 does not fail the run', async () => {
+  // Breaks when: the advisory is not wired into runPrePr, runs only when a lockfile changed, or turns exit 1 or a finding into a FAIL.
+  const repo = makeRepo({ files: { 'package-lock.json': '{}\n', 'scripts/ratchets/osv-baseline.json': osvBaseline } });
+  const calls = [];
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, osvLockfiles: ['package-lock.json'], findOsv: () => 'OBIN', osvRun: (bin, args, opts) => { calls.push([bin, ...args]); return { status: 1, stdout: osvOut(opts.cwd), stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.deepEqual(calls, [['OBIN', 'scan', 'source', '--format', 'json', '-L', 'package-lock.json']]);
+  const step = result.results.find((r) => r.step === 'osv');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /1 high\/unscored advisory group\(s\) in 1 lockfile\(s\), baseline 0, new 1, drift 0/);
+});
+
+test('OSV-PP2: with the default lockfile lookup (git ls-files), no tracked lockfile means no osv step and no osv run; a tracked one is found', async () => {
+  // Breaks when: osv runs (or prints a line) for a repo with no lockfile, which would add a line to every pre-pr, or the default lookup finds nothing.
+  const repo = makeRepo();
+  let ran = 0;
+  const { result } = await prePr(repo, { osvLockfiles: undefined, findOsv: () => 'OBIN', osvRun: () => { ran += 1; return { status: 0, stdout: '{"results":[]}', stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(ran, 0);
+  assert.equal(result.results.some((r) => r.step === 'osv'), false);
+  // The lookup does see a tracked lockfile: no binary, so the step is a skip note and nothing starts.
+  const locked = makeRepo({ files: { 'package-lock.json': '{}\n' } });
+  const second = await prePr(locked, { osvLockfiles: undefined, findOsv: () => null, osvRun: () => { ran += 1; return {}; } });
+  assert.match(second.result.results.find((r) => r.step === 'osv').detail, /^skipped: osv-scanner not found/);
+  assert.equal(ran, 0);
+});
+
+test('OSV-PP3: a network failure (osv exit 127) or a missing binary passes with a skip note', async () => {
+  // Breaks when: osv-scanner failing to reach osv.dev, or not being installed, fails the run.
+  const repo = makeRepo({ files: { 'package-lock.json': '{}\n', 'scripts/ratchets/osv-baseline.json': osvBaseline } });
+  const net = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, osvLockfiles: ['package-lock.json'], findOsv: () => 'OBIN', osvRun: () => ({ status: 127, stdout: '', stderr: 'failed to fetch api.osv.dev' }) });
+  assert.equal(net.result.ok, true, net.result.lines.join('\n'));
+  assert.match(net.result.results.find((r) => r.step === 'osv').detail, /^skipped: osv-scanner could not run/);
+  const none = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, osvLockfiles: ['package-lock.json'], findOsv: () => null, osvRun: () => { throw new Error('must not run'); } });
+  assert.equal(none.result.ok, true, none.result.lines.join('\n'));
+  assert.match(none.result.results.find((r) => r.step === 'osv').detail, /^skipped: osv-scanner not found/);
+});
+
+test('PSSA-PP1: a changed .ps1 adds one NOTE pssa line with the counts, and findings do not fail the run', async () => {
+  // Breaks when: the advisory is not wired into runPrePr, or its findings or exit code become a FAIL.
+  const repo = makeRepo({ files: { 'scripts/x.ps1': 'Write-Output 1\n', 'PSScriptAnalyzerSettings.psd1': '@{}\n' } });
+  const calls = [];
+  const out = (root) => JSON.stringify([{ RuleName: 'PSAvoidUsingEmptyCatchBlock', Severity: 'Warning', ScriptPath: path.join(root, 'scripts', 'x.ps1'), Line: 3 }]);
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findPssa: () => 'MOD', pssaRun: (bin, args, opts) => { calls.push(bin); return { status: 0, stdout: [MARKER, out(opts.cwd)].join('\n'), stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.deepEqual(calls, ['pwsh']);
+  const step = result.results.find((r) => r.step === 'pssa');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /1 finding\(s\): 1 Warning; top: scripts\/x\.ps1:3 PSAvoidUsingEmptyCatchBlock/);
+});
+
+test('PSSA-PP2: no .ps1 change means no pssa step and no pwsh run; a missing module passes with a skip note', async () => {
+  // Breaks when: pssa runs on every branch, or a missing module fails the run.
+  let ran = 0;
+  const plain = await prePr(makeRepo(), { findPssa: () => 'MOD', pssaRun: () => { ran += 1; return { status: 0, stdout: '[]', stderr: '' }; } });
+  assert.equal(plain.result.ok, true, plain.result.lines.join('\n'));
+  assert.equal(ran, 0);
+  assert.equal(plain.result.results.some((r) => r.step === 'pssa'), false);
+  const repo = makeRepo({ files: { 'scripts/x.ps1': 'Write-Output 1\n' } });
+  const miss = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findPssa: () => null, pssaRun: () => { throw new Error('must not run'); } });
+  assert.equal(miss.result.ok, true, miss.result.lines.join('\n'));
+  assert.match(miss.result.results.find((r) => r.step === 'pssa').detail, /^skipped: PSScriptAnalyzer not found/);
 });

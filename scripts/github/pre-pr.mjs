@@ -31,6 +31,11 @@
  * A NOTE zizmor line follows when the diff touches .github/workflows/*.yml: counts by severity and the top 3 file:line items from
  * `zizmor --offline --format json` (CCV3_ZIZMOR or ~/tools/review-scanners/zizmor/<ver>/bin/zizmor.exe; config .github/zizmor.yml).
  * It is advisory in a one-week trial and never fails the run; a missing binary is a skip note (scripts/github/lib/zizmor-advisory.mjs).
+ * A NOTE osv line follows on every run that has a tracked lockfile (package-lock.json, uv.lock, requirements.txt): the high/unscored
+ * advisory groups of `osv-scanner scan source --format json` against scripts/ratchets/osv-baseline.json (new, drift, fixed). It needs the
+ * network; a network failure, a missing binary or a missing baseline is a skip note (CCV3_OSV; scripts/github/lib/osv-advisory.mjs).
+ * A NOTE pssa line follows when the diff touches an existing .ps1: PSScriptAnalyzer findings with PSScriptAnalyzerSettings.psd1
+ * (CCV3_PSSA; scripts/github/lib/pssa-advisory.mjs). Both are advisory in the same trial and never fail the run.
  * A step FAILs when:
  *   - the branch is main, the base or detached; the tree has an edited, staged or untracked file;
  *     HEAD is behind the local base or behind fork/<base> (fetched first; the last-fetched ref if the fetch fails);
@@ -78,6 +83,8 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync,
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findOsv as defaultFindOsv, osvAdvisory } from './lib/osv-advisory.mjs';
+import { findPssa as defaultFindPssa, pssaAdvisory } from './lib/pssa-advisory.mjs';
 import { findZizmor as defaultFindZizmor, zizmorAdvisory } from './lib/zizmor-advisory.mjs';
 import { killTree, processChildren } from './lib/proc.mjs';
 import { classify, matchGlob } from './review-router.mjs';
@@ -1040,7 +1047,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const headRun = git(['rev-parse', 'HEAD']);
@@ -1065,6 +1072,11 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   // Advisory only (one-week trial): a NOTE line when the diff touches .github/workflows/*, never a FAIL.
   const zizmor = zizmorAdvisory({ root, paths: changes.paths, bin: findZizmor(), run: zizmorRun });
   if (zizmor) results.push(zizmor);
+  // Same trial rule. osv runs on every pre-pr that has a tracked lockfile (network); pssa only when an existing .ps1 changed.
+  const osv = osvAdvisory({ root, paths: changes.paths, bin: findOsv(), run: osvRun, lockfiles: osvLockfiles });
+  if (osv) results.push(osv);
+  const pssa = pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun });
+  if (pssa) results.push(pssa);
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, and a CLI review run is limited to 2 per branch')
