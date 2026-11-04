@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { CheckpointAsk, PrWatch, SlotRow } from '../../types'
-import { SLASH } from '../pr-checkpoint/model'
+import type { PrWatch, SlotRow } from '../../types'
+import { drainAsks, isAnswered, loadAsks, queueAsk, saveAsks } from '../pr-checkpoint/tick-asks'
 import {
   BACKOFF_MS,
   BACKOFF_SLACK_MS,
@@ -52,21 +52,16 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
 /** This session's watched PRs, mirrored from $.store so the band and pane redraw. */
 const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
 
-/** Questions for Dave in the checkpoint pane. The pr-checkpoint module declares the same atom and answers them. */
-const checkpointAsks = atom({ plugin: 'ccv3-mods', key: 'checkpointAsks' } as const, [] as CheckpointAsk[])
-
 const STATUS_SCRIPT = 'scripts/github/review-status.mjs'
 const REPO = 'Rev4nchist/Continuous-Claude-v3'
 const KEY_PREFIX = 'pr-watch:'
 const WATCH_TOOL = 'mcp__ccv3-mods__pr_watch'
 const STATUS_TOOL = 'mcp__ccv3-mods__pr_status'
 
-const ASKS_PREFIX = 'checkpoint:asks:'
 const RECORD_PREFIX = 'checkpoint:pr:'
 const GRANT_PREFIX = 'checkpoint:grant:'
 /** The head for which the PR author's waiver comment was seen. A PR with a waiver is read once per head, not once per tick. */
 const WAIVED_PREFIX = 'checkpoint:waived:'
-const CHECKPOINT_PANE = 'pr-checkpoint'
 
 const prSchema = {
   type: 'object',
@@ -295,48 +290,11 @@ const deliver = async ($: EngineInterface, alert: Alert, prior: PrWatch): Promis
   if (!(await isQuiet($))) await submitLine($, live)
 }
 
-const isAsk = (value: unknown): value is CheckpointAsk => {
-  const ask = value as Partial<CheckpointAsk> | null
-  return !!ask && Number.isInteger(ask.pr) && typeof ask.head === 'string' && typeof ask.text === 'string' && (ask.kind === 'opening' || ask.kind === 'round' || ask.kind === 'greptile')
-}
-
-const loadAsks = async ($: EngineInterface): Promise<CheckpointAsk[]> => {
-  const value = await $.store.get(`${ASKS_PREFIX}${await $.session.id()}`)
-  return Array.isArray(value) ? value.filter(isAsk) : []
-}
-
-/** An empty queue deletes the key. The atom mirrors the queue so the pane redraws. */
-const saveAsks = async ($: EngineInterface, list: CheckpointAsk[]): Promise<void> => {
-  const key = `${ASKS_PREFIX}${await $.session.id()}`
-  if (list.length === 0) await $.store.delete(key)
-  else await $.store.set(key, list)
-  await update($, checkpointAsks, () => list)
-}
-
-/** Opens the checkpoint pane with the keys. A pane that waits undrawn gets a toast: Dave types the checkpoint command. */
-const openAskPane = async ($: EngineInterface, ask: CheckpointAsk): Promise<void> => {
-  try {
-    const opened = await $.ui.open({ id: CHECKPOINT_PANE, title: 'PR checkpoint', focus: true, closeOnEscape: true })
-    if (!opened.isPlaced) {
-      $.ui.toast(`PR #${ask.pr}: a question waits in the checkpoint pane (${opened.reason}); type ${SLASH} to open it`, { timeoutMs: 15_000 })
-    }
-  } catch {
-    // The question stays queued: the checkpoint command draws it.
-  }
-}
-
-/** One ask per PR, kind and head. The pane opens when the queue was empty. */
-const queueAsk = async ($: EngineInterface, ask: CheckpointAsk): Promise<void> => {
-  const list = await loadAsks($)
-  if (list.some(one => one.pr === ask.pr && one.kind === ask.kind && one.head === ask.head)) return
-  await saveAsks($, [...list, ask])
-  if (list.length === 0) await openAskPane($, ask)
-}
-
 /**
- * The checkpoint part of one PR's check: a closed PR drops its record, grant and asks; an ask whose head moved leaves the
- * queue; a record that has run out of its budget, or waited 30 minutes for CodeRabbit, queues one question for Dave.
- * The watcher never posts a review request: the mod posts only on Dave's press.
+ * The checkpoint part of one PR's check: a closed PR drops its record, grant and asks; an ask whose head moved, or whose answer the record
+ * already holds (another session asked him), leaves the queue; a record that has run out of its budget, or waited 30 minutes for CodeRabbit,
+ * queues one question for Dave. The tick then raises it as a dialog (drainAsks). The watcher never posts a review request: the mod posts only
+ * on Dave's answer.
  */
 const asking = async ($: EngineInterface, status: PrStatus, now: number): Promise<void> => {
   if ((await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1') return
@@ -348,10 +306,11 @@ const asking = async ($: EngineInterface, status: PrStatus, now: number): Promis
     if (queue.some(one => one.pr === status.pr)) await saveAsks($, queue.filter(one => one.pr !== status.pr))
     return
   }
-  const kept = queue.filter(one => one.pr !== status.pr || one.head === status.head)
-  if (kept.length !== queue.length) await saveAsks($, kept)
   const record = readRecord(await $.store.get(`${RECORD_PREFIX}${status.pr}`))
-  const ask = askFor(record, status, now, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)), await queueHolds($, status.pr))
+  const granted = grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`))
+  const kept = queue.filter(one => one.pr !== status.pr || (one.head === status.head && !isAnswered(one, record, granted)))
+  if (kept.length !== queue.length) await saveAsks($, kept)
+  const ask = askFor(record, status, now, granted, await queueHolds($, status.pr))
   if (!ask || kept.some(one => one.pr === ask.pr && one.kind === ask.kind && one.head === ask.head)) return
   // A waiver comment by the PR author quiets only the opening question. Round and Greptile questions still reach Dave.
   if (ask.kind !== 'opening' || !(await waivedFor($, status.pr, status.head))) await queueAsk($, ask)
@@ -417,6 +376,8 @@ const check = async ($: EngineInterface): Promise<void> => {
       await keepPending($, prior).catch(() => undefined)
     }
   }
+  // The questions this check queued: one dialog, after the alerts, so a Land dialog and a checkpoint dialog never meet in one tick.
+  if (!((await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1')) await drainAsks($).catch(() => undefined)
 }
 
 const arm = ($: EngineInterface): void => {

@@ -586,7 +586,7 @@ describe('pr-loop watcher', () => {
     expect(line).toContain('over 15 minutes')
     expect(line).toContain('@coderabbitai review --use-credits')
     expect(line).toContain('cr-paid.mjs record')
-    expect(line).toMatch(/ESCALATE, ask Dave/)
+    expect(line).toMatch(/On ESCALATE, ask Dave with AskUserQuestion/)
   })
 
   test('W31 the general LIMITED line (skipped or failed) has no paid-review step', async ($, on) => {
@@ -1275,11 +1275,11 @@ describe('pr-loop outside-diff findings', () => {
   })
 })
 
-// PR C (checkpoint states). The module under test is pr-loop plus the pr-checkpoint pane; every check reads the engine's calls.
+// PR C (checkpoint states). The module under test is pr-loop plus the pr-checkpoint questions; every check reads the engine's calls.
 // CW1  a draft PR is DRAFT: one toast "waiting on /<command>", no STALLED model line after 60 minutes
 // CW2  review:none with no router state: the STALLED line names the router re-run, never "No review on the head"
 // CW3  a PR that leaves draft restarts the 60 minute clock (it is not STALLED at its first ready check)
-// CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says Dave decides in the pane
+// CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says the mod asks Dave in the session
 // CW5  the opening ask is queued 30 minutes after ready on a coderabbit record with 0 rounds: none at 29 minutes, none while the CodeRabbit status is pending
 // CW6  a draft's pr_status text never tells the model to post @coderabbitai review
 // CW7  a round grant changes the REVIEWED line to "Dave allowed round 4"
@@ -1311,7 +1311,7 @@ describe('pr-loop checkpoint states', () => {
   const ticks = async (clock: { advance: (ms: number) => Promise<unknown> }, n: number) => {
     for (let i = 0; i < n; i += 1) await clock.advance(TICK)
   }
-  /** Every `gh pr comment` the mod ran. A review request is posted only on Dave's press in the pane, never by the watcher. */
+  /** Every `gh pr comment` the mod ran. A review request is posted only on Dave's answer to the mod's question, never by the watcher. */
   const comments = (seen: { calls: string[][] }) => seen.calls.filter(argv => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'comment')
   const asks = (store: Map<string, unknown>) => (store.get(`checkpoint:asks:${SESSION}`) ?? []) as { kind: string; text: string }[]
   const REVIEWED_AT = (rounds: number, over: Partial<Status> = {}) =>
@@ -1347,14 +1347,14 @@ describe('pr-loop checkpoint states', () => {
     expect(seen.submits).toEqual([])
   })
 
-  test('CW4 the round ask fires at budget + 1: rounds 3 of 1+2 ask "Round 4 of 1+2", and the line sends the decision to the pane', async ($, on) => {
+  test('CW4 the round ask fires at budget + 1: rounds 3 of 1+2 ask "Round 4 of 1+2", and the line says the mod asks Dave in the session', async ($, on) => {
     const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [REVIEWED_AT(3)] } })
     await start($)
     await clock.advance(TICK)
     expect(asks(store).map(ask => ask.kind)).toEqual(['round'])
     expect(asks(store)[0]!.text).toContain('Round 4 of 1+2 for #7')
     expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain('Dave decides round 4 in the checkpoint pane')
+    expect(seen.submits[0]).toContain('The mod asks Dave about round 4 in the session. Do not ask him yourself.')
     expect(seen.submits[0]).not.toMatch(/post one @coderabbitai review/i)
     expect(comments(seen)).toEqual([])
   })
@@ -1435,7 +1435,7 @@ describe('pr-loop checkpoint states', () => {
   test('CW4h a rate limit with the budget used up offers no paid review', async ($, on) => {
     const line = await limitedLine($, on, record({ budget: [1, 1] }), RATE_LIMITED({ coderabbitRounds: 2 }))
     noPaid(line)
-    expect(line).toContain('Dave decides round 3')
+    expect(line).toContain('The mod asks Dave about round 3 in the session')
   })
 
   test('CW4i a rate limit with rounds unknown (older status script) offers no paid review', async ($, on) => {
@@ -1453,7 +1453,7 @@ describe('pr-loop checkpoint states', () => {
     expect(line).toContain('node scripts/github/cr-paid.mjs check --pr 7')
     expect(line).toContain('@coderabbitai review --use-credits')
     expect(line).toContain('over 15 minutes')
-    expect(line).toMatch(/ESCALATE, ask Dave/)
+    expect(line).toMatch(/On ESCALATE, ask Dave with AskUserQuestion/)
     expect(line).toMatch(/round 2 or later/)
     expect(line).toMatch(/every finding of the last round is fixed/)
     expect(line).toMatch(/threads are resolved/)
@@ -1588,7 +1588,7 @@ describe('pr-loop checkpoint states', () => {
     await clock.advance(TICK)
     expect(asks(store).map(ask => ask.kind)).toEqual(['round'])
     expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain('Dave decides round 4 in the checkpoint pane')
+    expect(seen.submits[0]).toContain('The mod asks Dave about round 4 in the session. Do not ask him yourself.')
     expect(seen.submits[0]).not.toMatch(/No review on the head/)
     expect(comments(seen)).toEqual([])
   })
@@ -1751,7 +1751,7 @@ describe('pr-loop stale prompts', () => {
     await clock.advance(TICK)
     expect(seen.submits.length).toBe(1)
     expect(seen.submits[0]).toContain('Rounds used 1 of 1+0')
-    expect(seen.submits[0]).toContain('Dave decides round 2')
+    expect(seen.submits[0]).toContain('The mod asks Dave about round 2 in the session')
     expect(seen.submits[0]).not.toContain('round 3')
   })
 

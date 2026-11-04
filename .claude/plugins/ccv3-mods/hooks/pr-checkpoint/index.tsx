@@ -1,12 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { CheckpointAsk, CheckpointRecord, CheckpointResult, CheckpointView } from '../../types'
+import type { CheckpointRecord, CheckpointResult } from '../../types'
 import { isPrNumber, readRecord } from '../pr-loop/model'
 import { QUEUE_BANDS, slotAdd } from '../pr-loop/slot'
 import { DIAG_DIR } from '../shared/diag'
+import { askDave, freeDialog, message, run, takeDialog, tellModel } from './ask'
 import {
   APPLY_TIMEOUT_MS,
+  BUSY_TEXT,
   COMMAND,
   CONFIG_REL,
   ENGINE_REL,
@@ -15,45 +17,48 @@ import {
   LOCK_FAILED,
   MARKER_DENY,
   NEED_PR,
-  PANE,
   PATHWAY_DENY,
+  RETRY_LABELS,
   SLOT_DENY,
   SHAPES_CLI_REL,
   SHAPES_TIMEOUT_MS,
   SLASH,
+  SUBAGENT_WHY,
   TOOL_NAME,
   USAGE,
-  askButtonLabel,
-  askOrder,
+  ageText,
   autoNotice,
   autoToast,
+  buildPathwayAsk,
   clip,
-  commentArgv,
+  closedText,
   costText,
   coversRows,
   editedPr,
+  emptyText,
   engineArgv,
   firstLine,
-  headerRows,
   isPathwayFile,
   isSlotStateFile,
   isStalePending,
+  keptDraftText,
   labelNeedsRecord,
   lastLine,
   lockDeny,
   lockWarn,
   mayBeGated,
+  movedText,
   namesMarker,
   namesPathway,
   namesSlotWrite,
-  optionLabel,
-  optionsInOrder,
+  noQuestionText,
+  otherText,
   parseCheckpointArgs,
   parseGrantArgs,
   parseResult,
   parseShapes,
+  pathwayOfAnswer,
   pressNotice,
-  recommendRows,
   recordAllowsLabel,
   resolveBody,
   stateArgv,
@@ -62,23 +67,19 @@ import {
   samePath,
   worktreeFor,
 } from './model'
-import type { LockPattern, LockShapes } from './model'
+import type { LockPattern, LockShapes, PathwayChoice } from './model'
+import { GRANT_PREFIX, RECORD_PREFIX, allowedRound, askNotice, coverDecline, currentHead, enqueueRound, keptNotice, loadAsks, raiseQueued, rootOf, saveAsks } from './tick-asks'
 
-/** The same atoms the other modules declare (same plugin and key, same default): an atom is read only where it is declared. */
+/** The same atom the other modules declare (same plugin and key, same default): an atom is read only where it is declared. */
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
-const checkpoint = atom({ plugin: 'ccv3-mods', key: 'checkpoint' } as const, null as CheckpointView | null)
-const checkpointAsks = atom({ plugin: 'ccv3-mods', key: 'checkpointAsks' } as const, [] as CheckpointAsk[])
 /** The lock patterns already shown in a warn toast this session. */
 const lockWarned = atom({ plugin: 'ccv3-mods', key: 'lockWarned' } as const, [] as string[])
 
 const TOOL = `mcp__ccv3-mods__${TOOL_NAME}`
 const PENDING_PREFIX = 'checkpoint:pending:'
-const ASKS_PREFIX = 'checkpoint:asks:'
-const RECORD_PREFIX = 'checkpoint:pr:'
-const GRANT_PREFIX = 'checkpoint:grant:'
 const VIEW_TIMEOUT_MS = 30_000
-const WAIT_FOR_PRESS =
-  "Wait for Dave's press. Do not run gh pr ready, add a review: label, or run pr-checkpoint --confirm or --apply."
+/** A refused --apply offers Retry at most this many times in one call. */
+const MAX_RETRIES = 3
 
 /** A mod-served MCP tool answers with a list of content blocks (see pr-loop). */
 const textResult = (text: string) => ({ result: [{ type: 'text', text }] })
@@ -88,30 +89,6 @@ const isOff = async ($: EngineInterface): Promise<boolean> =>
   (await $.env.get('CCV3_MODS_OFF')) === '1' || (await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1'
 
 const interactive = async ($: EngineInterface): Promise<boolean> => (await read($, mode)) === 'interactive'
-
-const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-
-/** The session root, and only when it holds the engine: the engine reads the facts of the checkout it runs in. */
-const rootOf = async ($: EngineInterface): Promise<string | null> => {
-  try {
-    const root = await $.session.root()
-    return (await $.fs.exists(`${root}/${ENGINE_REL}`)) ? root : null
-  } catch {
-    return null
-  }
-}
-
-type Ran = { ok: true; code: number; out: string; err: string } | { ok: false; text: string }
-
-/** A process that did not start or timed out is `ok: false` with its message; any exit code is `ok: true`. */
-const run = async ($: EngineInterface, argv: string[], cwd: string, timeoutMs: number): Promise<Ran> => {
-  try {
-    const ran = await $.process.run(argv, { cwd, timeoutMs })
-    return { ok: true, code: ran.exitCode, out: ran.stdout, err: ran.stderr }
-  } catch (err) {
-    return { ok: false, text: message(err) }
-  }
-}
 
 const sessionId = async ($: EngineInterface): Promise<string> => $.session.id()
 
@@ -129,52 +106,15 @@ const loadPending = async ($: EngineInterface): Promise<Pending | null> => {
   return isPending(value) ? value : null
 }
 
-const viewOf = (p: Pending): CheckpointView => ({
-  pr: p.pr, body: p.body, root: p.root, result: p.result, covers: p.covers, stamp: p.stamp, prHead: p.prHead, running: null, error: null, retry: null,
-})
-
 const clearPending = async ($: EngineInterface): Promise<void> => {
   await $.store.delete(`${PENDING_PREFIX}${await sessionId($)}`)
-  await update($, checkpoint, () => null)
 }
 
-const isAsk = (value: unknown): value is CheckpointAsk => {
-  const ask = value as Partial<CheckpointAsk> | null
-  return !!ask && Number.isInteger(ask.pr) && typeof ask.head === 'string' && typeof ask.text === 'string' && (ask.kind === 'opening' || ask.kind === 'round' || ask.kind === 'greptile')
-}
-
-const loadAsks = async ($: EngineInterface): Promise<CheckpointAsk[]> => {
-  const value = await $.store.get(`${ASKS_PREFIX}${await sessionId($)}`)
-  return Array.isArray(value) ? value.filter(isAsk) : []
-}
-
-const saveAsks = async ($: EngineInterface, list: CheckpointAsk[]): Promise<void> => {
-  const key = `${ASKS_PREFIX}${await sessionId($)}`
-  if (list.length === 0) await $.store.delete(key)
-  else await $.store.set(key, list)
-  await update($, checkpointAsks, () => list)
-}
-
-/** Reads this session's pending checkpoint and questions into the atoms; drops a pending one that nobody touched for a week. */
+/** Drops a pending checkpoint that nobody touched for a week. */
 const restore = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   for (const key of await $.store.keys()) {
     if (key.startsWith(PENDING_PREFIX) && isStalePending(await $.store.get(key), now)) await $.store.delete(key)
-  }
-  const pending = await loadPending($)
-  await update($, checkpoint, () => (pending ? viewOf(pending) : null))
-  const asks = await loadAsks($)
-  await update($, checkpointAsks, () => asks)
-}
-
-// ---- the model's view of a press ---------------------------------------------------------------------------------------------
-
-/** Tells the model what Dave decided: a user row it reads at its next request. It starts no turn. A refusal is only a missed note. */
-const tellModel = async ($: EngineInterface, text: string): Promise<void> => {
-  try {
-    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
-  } catch {
-    // The next pr_watch line carries the state.
   }
 }
 
@@ -190,12 +130,13 @@ const fail = (text: string): Failure => ({ ok: false, text })
  * `checkout` is the cwd the engine reads its facts in (the PR worktree holds the pre-pr stamp; the session root may not).
  * `via` names a live session's non-composer origin (the bridge is mobile remote control); null is a headless session. The plan says
  * why nothing was recorded. `waiting` is the PR of this session's pending checkpoint, the one PR a bridge command may record.
+ * `why` replaces that sentence (a subagent call).
  */
-const textPlan = async ($: EngineInterface, root: string, checkout: string = root, via: string | null = null, waiting: number | null = null): Promise<string> => {
+const textPlan = async ($: EngineInterface, root: string, checkout: string = root, via: string | null = null, waiting: number | null = null, why?: string): Promise<string> => {
   const ran = await run($, engineArgv(root), checkout, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return `pr-checkpoint could not run (${ran.text}). Nothing was recorded. The PR stays a draft.`
   const out = (ran.out || ran.err).trim()
-  return `${out}\nNothing was recorded. The PR stays a draft. ${whyTextOnly(via, waiting)}`
+  return `${out}\nNothing was recorded. The PR stays a draft. ${why ?? whyTextOnly(via, waiting)}`
 }
 
 const whyTextOnly = (via: string | null, waiting: number | null): string => {
@@ -203,21 +144,6 @@ const whyTextOnly = (via: string | null, waiting: number | null): string => {
   const where = `This ${SLASH} came from ${via}, not Dave's terminal composer, so it only shows the plan. Dave types ${SLASH} in the composer to record it.`
   if (via !== 'bridge') return where
   return `${where} From the bridge, ${SLASH} records only the PR whose checkpoint waits in this session (${waiting === null ? 'none waits now' : `#${waiting}`}).`
-}
-
-/**
- * A bridge (phone) /pathway for the pending PR with no pathway word: a phone has no side pane. It answers with the PR, its plan read in
- * the PR checkout, and the exact command to type. It records nothing.
- */
-const bridgePrompt = async ($: EngineInterface, pending: Pending): Promise<string> => {
-  const ran = await run($, engineArgv(await engineRoot($, pending.root)), pending.root, ENGINE_TIMEOUT_MS)
-  const plan = ran.ok ? (ran.out || ran.err).trim() : `pr-checkpoint could not run (${ran.text}).`
-  const { recommended, options } = pending.result
-  const words = options.filter(one => one.available && one.pathway !== 'wait').map(one => one.pathway)
-  const lead = recommended && words.includes(recommended) ? `To record the recommendation, type: ${SLASH} ${pending.pr} ${recommended}.` : 'The recommendation cannot be recorded now.'
-  const others = words.filter(word => word !== recommended).map(word => `${SLASH} ${pending.pr} ${word}`)
-  const more = others.length > 0 ? ` Other choices: ${others.join(', ')}.` : ''
-  return `PR #${pending.pr} waits for its checkpoint. Nothing was recorded.\n${plan}\n${lead}${more} ${SLASH} ${pending.pr} wait keeps it a draft.`
 }
 
 const gitLines = async ($: EngineInterface, root: string, argv: string[]): Promise<string | null> => {
@@ -317,25 +243,6 @@ const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawB
   }
 }
 
-/** Opens the pane. The pending pair stays in the store when the pane waits undrawn, so the command can open it later. */
-const openPane = async ($: EngineInterface): Promise<{ isPlaced: boolean; reason?: string }> => {
-  try {
-    const opened = await $.ui.open({ id: PANE, title: 'PR checkpoint', focus: true, closeOnEscape: true })
-    return opened.isPlaced ? { isPlaced: true } : { isPlaced: false, reason: opened.reason }
-  } catch (err) {
-    return { isPlaced: false, reason: message(err) }
-  }
-}
-
-/** Stores the pending checkpoint, mirrors it to the pane atom and opens the pane. An unplaced pane gets a toast. */
-const show = async ($: EngineInterface, pending: Pending): Promise<{ isPlaced: boolean; reason?: string }> => {
-  await $.store.set(`${PENDING_PREFIX}${await sessionId($)}`, pending)
-  await update($, checkpoint, () => viewOf(pending))
-  const placed = await openPane($)
-  if (!placed.isPlaced) $.ui.toast(`PR #${pending.pr}: checkpoint ready, but the pane waits (${placed.reason}); type ${SLASH} to open it`, { timeoutMs: 15_000 })
-  return placed
-}
-
 type Outcome =
   | { stage: 'confirm' | 'apply'; text: string }
   | { stage: 'done'; record: CheckpointRecord }
@@ -357,15 +264,6 @@ const isQueueBand = (band: unknown): band is string => typeof band === 'string' 
 const enqueueApplied = async ($: EngineInterface, record: CheckpointRecord): Promise<void> => {
   if ((record.pathway !== 'coderabbit' && record.pathway !== 'both') || !isQueueBand(record.band)) return
   await slotAdd($, { pr: record.pr, band: record.band, head: record.head, round: 1 }).catch(() => false)
-}
-
-/**
- * A round Dave allowed puts the PR back in the queue (awaiting the fix push). True only when the add exited 0: then the notice says the queue
- * posts. A record with no HIGH or CRITICAL band (an older record) is not queued and keeps the old notice. The head is the one the grant stores.
- */
-const enqueueRound = async ($: EngineInterface, record: CheckpointRecord | null, round: number, head: string): Promise<boolean> => {
-  if (!record || !isQueueBand(record.band)) return false
-  return slotAdd($, { pr: record.pr, band: record.band, head, round }).catch(() => false)
 }
 
 /** --confirm then --apply, as the engine's two steps. Nothing is stored when --confirm refuses. */
@@ -393,6 +291,8 @@ const recordPathway = async (
     decided_by: printed.decided_by ?? by,
     // The router band, so the apply (and the retry of a refused apply) can queue the PR for the free CodeRabbit slot.
     band: a.result.auto?.band ?? null,
+    // The changed-file count prices the "up to $X" of a later question.
+    files: a.result.size.files,
     pr: a.pr,
     state: 'confirmed',
     session: await sessionId($),
@@ -404,57 +304,10 @@ const recordPathway = async (
   // The queued asks of the old record go too: an old Yes would recreate the grant just deleted.
   const queued = await loadAsks($)
   const live = queued.filter(ask => ask.pr !== a.pr)
-  if (live.length !== queued.length) {
-    await saveAsks($, live)
-    await closeIfIdle($)
-  }
+  if (live.length !== queued.length) await saveAsks($, live)
   await $.store.set(`${RECORD_PREFIX}${a.pr}`, stored)
   return applyRecord($, a.root, stored)
 }
-
-// ---- the pane ---------------------------------------------------------------------------------------------------------------
-
-/** Closes the pane when no question and no checkpoint is left in it. */
-const closeIfIdle = async ($: EngineInterface): Promise<void> => {
-  if ((await read($, checkpointAsks)).length === 0 && (await read($, checkpoint)) === null) await $.ui.close({ id: PANE })
-}
-
-/** A checkpoint that Dave answered in the pane: toast, the note for the model, and the pane closes unless a question is left. */
-const finishPress = async ($: EngineInterface, record: CheckpointRecord): Promise<void> => {
-  $.ui.toast(`PR #${record.pr}: ${record.pathway} recorded, the PR is ready`, { timeoutMs: 10_000 })
-  await clearPending($)
-  await tellModel($, pressNotice({ pr: record.pr, pathway: record.pathway, label: record.label, budget: record.budget, by: record.decided_by }))
-  await closeIfIdle($)
-}
-
-/** A press that threw after it set `running`: the pane must not stay on "Running" with its Buttons hidden. */
-const freePane = async ($: EngineInterface, err: unknown, retry: { pathway: string } | null = null): Promise<void> => {
-  await update($, checkpoint, v => (v ? { ...v, running: null, error: message(err), retry } : v))
-}
-
-/**
- * One pane press at a time (the module loads once per session). The `running` flag lives in the store, so two presses that land before the first write both read
- * "idle" and run the engine, or post a review request, twice. This flag is set before the first await and cleared in `finally`.
- */
-let pressing = false
-const exclusive = async (press: () => Promise<void>): Promise<void> => {
-  if (pressing) return
-  pressing = true
-  try {
-    await press()
-  } finally {
-    pressing = false
-  }
-}
-
-// ---- auto-confirm (review factory step A, Dave 2026-11-01) --------------------------------------------------------------------
-// The engine says a PR may be confirmed without a press (`result.auto.eligible`: band LOW, MID or ELEVATED, recommended none, config equal
-// to main, labels read, kill switch checkpoint.autoConfirm on). The engine refuses a PR that touches a security-tier or critical file (the
-// spec 3.1 floor: aegis + critic run before READY, so Dave presses). The kill switch ships false, so every checkpoint waits for Dave until
-// he sets it true. The mod then records exactly what a press of `none` records, with decided_by
-// "auto". Anything short of a clean record falls back to the pane ask. Interactive sessions only (a headless run gets the text plan).
-
-type AutoOutcome = { kind: 'done'; record: CheckpointRecord } | { kind: 'failed'; why: string; stage: 'confirm' | 'apply' | 'check' }
 
 /** Why the PR is no longer what the checkpoint read, or null: a second read right before the record (the first read was before the engine ran). */
 const driftSince = async ($: EngineInterface, root: string, pending: Pending): Promise<string | null> => {
@@ -472,13 +325,20 @@ const driftSince = async ($: EngineInterface, root: string, pending: Pending): P
   return null
 }
 
-/** null: the engine did not allow it, so nothing was tried. Otherwise the record, or why the pane must ask. Never throws. */
+// ---- auto-confirm (review factory step A, Dave 2026-11-01) --------------------------------------------------------------------
+// The engine says a PR may be confirmed without an answer (`result.auto.eligible`: band LOW, MID or ELEVATED, recommended none, config equal
+// to main, labels read, kill switch checkpoint.autoConfirm on). The engine refuses a PR that touches a security-tier or critical file (the
+// spec 3.1 floor: aegis + critic run before READY, so Dave answers). The kill switch ships false, so every checkpoint waits for Dave until
+// he sets it true. The mod then records exactly what an answer of `none` records, with decided_by "auto". Anything short of a clean
+// record falls back to the question. Interactive sessions only (a headless run gets the text plan). The caller holds the dialog flag.
+
+type AutoOutcome = { kind: 'done'; record: CheckpointRecord } | { kind: 'failed'; why: string; stage: 'confirm' | 'apply' | 'check' }
+
+/** null: the engine did not allow it, so nothing was tried. Otherwise the record, or why the question must ask. Never throws. */
 const autoConfirm = async ($: EngineInterface, pending: Pending): Promise<AutoOutcome | null> => {
   const { result } = pending
   // Both the engine's flag and the recommendation: a flag alone never records a pathway the engine does not recommend.
   if (result.auto.eligible !== true || result.recommended !== 'none') return null
-  if (pressing) return { kind: 'failed', why: 'a pane press is running', stage: 'check' }
-  pressing = true
   try {
     const drift = await driftSince($, pending.root, pending)
     if (drift) return { kind: 'failed', why: drift, stage: 'check' }
@@ -487,214 +347,111 @@ const autoConfirm = async ($: EngineInterface, pending: Pending): Promise<AutoOu
     return { kind: 'done', record: out.record }
   } catch (err) {
     return { kind: 'failed', why: message(err), stage: 'check' }
-  } finally {
-    pressing = false
   }
 }
 
-/** The visible line to Dave and the note for the model. The pane is not opened, so an older pending checkpoint of this PR goes. */
+/** The visible line to Dave and the note for the model. An older pending checkpoint of this PR goes. */
 const finishAuto = async ($: EngineInterface, record: CheckpointRecord, band: string | null): Promise<void> => {
   $.ui.toast(autoToast({ pr: record.pr, band }), { timeoutMs: 15_000 })
   const old = await loadPending($)
   if (old && old.pr === record.pr) await clearPending($)
   await tellModel($, autoNotice({ pr: record.pr, band, label: record.label, budget: record.budget }))
-  await closeIfIdle($)
 }
 
-const pressOption = ($: EngineInterface, pathway: string, isRecommended: boolean): Promise<void> => exclusive(() => runOption($, pathway, isRecommended))
+// ---- the question -------------------------------------------------------------------------------------------------------------------
+// The mod raises the dialog itself ($.ui.ask) and waits for the answer inside the call. Only an exact match of one of its own labels records.
+// Esc, free text, an empty answer, a moved head or a refusal records nothing, and the PR stays a draft.
 
-const runOption = async ($: EngineInterface, pathway: string, isRecommended: boolean): Promise<void> => {
-  const view = await read($, checkpoint)
-  if (!view || view.running !== null) return
-  if (pathway === 'wait') {
-    $.ui.toast(`PR #${view.pr} stays a draft`, { timeoutMs: 10_000 })
-    await clearPending($)
-    await closeIfIdle($)
-    return
-  }
-  await update($, checkpoint, v => (v ? { ...v, running: pathway, error: null, retry: null } : v))
+/** A checkpoint that Dave answered: toast and the pending checkpoint goes. */
+const finishPress = async ($: EngineInterface, record: CheckpointRecord): Promise<void> => {
+  $.ui.toast(`PR #${record.pr}: ${record.pathway} recorded, the PR is ready`, { timeoutMs: 10_000 })
+  await clearPending($)
+}
+
+type Asked = { text: string; recorded: CheckpointRecord | null }
+
+const refusedText = (pr: number, pathway: string, out: Exclude<Outcome, { stage: 'done' }>): string =>
+  out.stage === 'apply'
+    ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}. The PR stays a draft.`
+    : `PR #${pr}: ${pathway} was not recorded: ${out.text}.`
+
+/** Records Dave's pick. A refused --apply raises one Retry dialog per refusal. Nothing is recorded when the PR moved while he answered. */
+const recordChoice = async ($: EngineInterface, pending: Pending, choice: PathwayChoice): Promise<Asked> => {
+  const { pr } = pending
+  const drift = await driftSince($, pending.root, pending)
+  if (drift) return { text: movedText(pr, drift), recorded: null }
   try {
-    const out = await recordPathway($, { pr: view.pr, root: view.root, body: view.body, result: view.result }, pathway, isRecommended ? 'default' : 'dave')
-    if (out.stage === 'done') return await finishPress($, out.record)
-    await update($, checkpoint, v => (v ? { ...v, running: null, error: out.text, retry: out.stage === 'apply' ? { pathway } : null } : v))
+    let out = await recordPathway($, { pr, root: pending.root, body: pending.body, result: pending.result }, choice.pathway, choice.by)
+    for (let tries = 0; out.stage === 'apply' && tries < MAX_RETRIES; tries += 1) {
+      const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pr}`))
+      if (!record) break
+      const retry = await askDave($, `${refusedText(pr, choice.pathway, out)} Retry the apply?`, RETRY_LABELS, clip(`PR #${pr}`, 12))
+      if (retry.kind !== 'text' || retry.text !== RETRY_LABELS[0]) break
+      out = await applyRecord($, pending.root, record)
+    }
+    if (out.stage !== 'done') return { text: refusedText(pr, choice.pathway, out), recorded: null }
+    await finishPress($, out.record)
+    return { text: pressNotice({ pr, pathway: out.record.pathway, label: out.record.label, budget: out.record.budget, by: out.record.decided_by }), recorded: out.record }
   } catch (err) {
-    await freePane($, err)
+    return { text: `PR #${pr}: ${choice.pathway} was not recorded (${message(err)}). The PR stays a draft.`, recorded: null }
   }
 }
-
-const pressRetry = ($: EngineInterface): Promise<void> => exclusive(() => runRetry($))
-
-const runRetry = async ($: EngineInterface): Promise<void> => {
-  const view = await read($, checkpoint)
-  if (!view || view.running !== null || view.retry === null) return
-  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${view.pr}`))
-  if (!record) return
-  await update($, checkpoint, v => (v ? { ...v, running: 'apply', error: null } : v))
-  try {
-    const out = await applyRecord($, view.root, record)
-    if (out.stage === 'done') return await finishPress($, out.record)
-    await update($, checkpoint, v => (v ? { ...v, running: null, error: out.text, retry: { pathway: record.pathway } } : v))
-  } catch (err) {
-    await freePane($, err, { pathway: record.pathway })
-  }
-}
-
-const pressDismiss = async ($: EngineInterface): Promise<void> => {
-  await $.ui.close({ id: PANE })
-}
-
-/** A round allowed up to `allowed` clears only a round decline at or below it. An opening decline or a later round decline stays. */
-const coverDecline = (stored: CheckpointRecord | null, allowed: number): { covered: boolean; retained: string | null } => {
-  const covered = stored?.declined?.kind === 'round' && stored.declined.round <= allowed
-  const retained = stored?.declined && !covered ? (stored.declined.kind === 'opening' ? 'the opening review' : `round ${stored.declined.round}`) : null
-  return { covered, retained }
-}
-
-/** A lower grant never lowers a round Dave already allowed, whichever head that grant carries. */
-const allowedRound = async ($: EngineInterface, pr: number, round: number): Promise<number> => {
-  const prior = (await $.store.get(`${GRANT_PREFIX}${pr}`)) as { round?: unknown } | null | undefined
-  return prior && typeof prior.round === 'number' ? Math.max(prior.round, round) : round
-}
-
-const keptNotice = (pr: number, round: number, retained: string): string =>
-  `PR checkpoint: Dave allowed round ${round} for #${pr}, but his decline of ${retained} stays. Do not request that review.`
-
-const askNotice = (ask: CheckpointAsk, answer: 'yes' | 'no', queued = false): string => {
-  const round = ask.round ?? 1
-  if (ask.kind === 'round') {
-    if (answer === 'yes' && queued) return `PR checkpoint: Dave allowed round ${round} for #${ask.pr}: the free-slot queue posts @coderabbitai review after the fix push. Do not post it.`
-    return answer === 'yes'
-      ? `PR checkpoint: Dave allowed round ${round} for #${ask.pr}: after the fix push, post one @coderabbitai review.`
-      : `PR checkpoint: Dave declined round ${round} for #${ask.pr}. Do not request a review. Report the open findings to Dave.`
-  }
-  if (ask.kind === 'opening') {
-    return answer === 'yes'
-      ? `PR checkpoint: Dave asked for the opening CodeRabbit review of #${ask.pr}. The mod posted @coderabbitai review. Do not post another.`
-      : `PR checkpoint: Dave declined the opening CodeRabbit review. Do not request a review on #${ask.pr}. Report to Dave.`
-  }
-  return answer === 'yes'
-    ? `PR checkpoint: Dave asked for Greptile on #${ask.pr}. The mod posted @greptileai. Do not post another.`
-    : `PR checkpoint: Dave declined Greptile for #${ask.pr}. Do not request a Greptile review.`
-}
-
-type Staleness = { kind: 'open' } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 
 /**
- * Whether a Yes may post: the PR must be open at the asked head. A post spends a review, so a state that cannot be read fails closed
- * (the question stays queued), as the post failure below does.
+ * Raises the checkpoint question for a pending checkpoint and acts on the answer. The caller holds the dialog flag. The pending checkpoint is
+ * stored first, so a closed question comes back with a bare /pathway. With no recommendation or no open pathway nothing is asked.
  */
-const staleness = async ($: EngineInterface, root: string, ask: CheckpointAsk): Promise<Staleness> => {
-  const ran = await run($, stateArgv(ask.pr), root, VIEW_TIMEOUT_MS)
-  if (!ran.ok) return { kind: 'unreadable', why: ran.text }
-  if (ran.code !== 0) return { kind: 'unreadable', why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}` }
-  let info: { state?: unknown; headRefOid?: unknown }
-  try {
-    info = JSON.parse(ran.out)
-  } catch {
-    return { kind: 'unreadable', why: 'gh printed no JSON' }
+const askCheckpoint = async ($: EngineInterface, pending: Pending): Promise<Asked> => {
+  const { pr } = pending
+  const ask = buildPathwayAsk(pr, pending.result, ageText(pending.stamp, await $.clock.now()))
+  if (!ask) return { text: noQuestionText(pr, pending.result.why[0]), recorded: null }
+  await $.store.set(`${PENDING_PREFIX}${await sessionId($)}`, pending)
+  const got = await askDave($, ask.question, ask.choices.map(one => one.label), ask.header)
+  if (got.kind === 'closed') return { text: closedText(pr), recorded: null }
+  if (got.kind === 'empty') return { text: emptyText(pr), recorded: null }
+  const choice = pathwayOfAnswer(got.text, ask)
+  if (!choice) return { text: otherText(pr, got.text), recorded: null }
+  if (choice.pathway === 'wait') {
+    $.ui.toast(`PR #${pr} stays a draft`, { timeoutMs: 10_000 })
+    await clearPending($)
+    return { text: keptDraftText(pr), recorded: null }
   }
-  if (typeof info.state !== 'string' || typeof info.headRefOid !== 'string') return { kind: 'unreadable', why: 'gh printed no state or head' }
-  if (info.state.toUpperCase() !== 'OPEN') return { kind: 'gone', why: `the PR is ${info.state.toLowerCase()}` }
-  if (info.headRefOid !== ask.head) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
-  return { kind: 'open' }
+  return recordChoice($, pending, choice)
 }
 
-/** The PR's head now, or null when it cannot be read (no checkout, gh failed, no JSON). */
-const currentHead = async ($: EngineInterface, pr: number): Promise<string | null> => {
-  const root = await rootOf($)
-  if (!root) return null
-  const ran = await run($, stateArgv(pr), root, VIEW_TIMEOUT_MS)
-  if (!ran.ok || ran.code !== 0) return null
-  try {
-    const head = (JSON.parse(ran.out) as { headRefOid?: unknown }).headRefOid
-    return typeof head === 'string' && head !== '' ? head : null
-  } catch {
-    return null
-  }
-}
+// ---- the tool -----------------------------------------------------------------------------------------------------------------------
 
-/** Dave's Yes or No on the first question. A Yes that posts a comment and fails leaves the question queued. */
-const pressAsk = ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> => exclusive(() => runAsk($, answer))
-
-const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> => {
-  const queue = await read($, checkpointAsks)
-  const ask = queue[0]
-  if (!ask) return
-  const now = await $.clock.now()
-  const key = `${RECORD_PREFIX}${ask.pr}`
-  const stored = readRecord(await $.store.get(key))
-  let next: CheckpointRecord | null = stored
-  if (ask.kind !== 'round' && answer === 'yes') {
-    const root = await rootOf($)
-    // A question can wait for days (restore keeps it): a late Yes spends a review only on a PR that is still open at the asked head.
-    const seen = root ? await staleness($, root, ask) : null
-    if (seen && seen.kind === 'unreadable') {
-      $.ui.toast(`PR #${ask.pr}: could not read the PR state (${seen.why}); nothing posted, the question stays queued`, { timeoutMs: 10_000 })
-      return
-    }
-    if (seen && seen.kind === 'gone') {
-      await saveAsks($, queue.slice(1))
-      $.ui.toast(`PR #${ask.pr}: question dropped, nothing posted (${seen.why})`, { timeoutMs: 10_000 })
-      await closeIfIdle($)
-      return
-    }
-    const ran = root ? await run($, commentArgv(ask.pr, ask.kind === 'opening' ? '@coderabbitai review' : '@greptileai'), root, VIEW_TIMEOUT_MS) : null
-    if (!ran || !ran.ok || ran.code !== 0) {
-      $.ui.toast(`PR #${ask.pr}: could not post the request (${ran ? (ran.ok ? firstLine(ran.err) : ran.text) : 'no checkout'}); it stays queued`, { timeoutMs: 10_000 })
-      return
-    }
-  }
-  let retained: string | null = null
-  let queued = false
-  if (ask.kind === 'round' && answer === 'yes') {
-    // The same rule as the typed grant (D-a, Dave 11-01): only a round decline this Yes covers goes.
-    const allowed = await allowedRound($, ask.pr, ask.round ?? 1)
-    await $.store.set(`${GRANT_PREFIX}${ask.pr}`, { round: allowed, head: ask.head, at: now })
-    const cover = coverDecline(next, allowed)
-    retained = cover.retained
-    if (next && cover.covered) {
-      const { declined: _declined, ...rest } = next
-      next = rest as CheckpointRecord
-    }
-    queued = retained === null && (await enqueueRound($, stored, allowed, ask.head))
-  } else if (next) {
-    if (ask.kind === 'opening') next = answer === 'yes' ? { ...next, opened: { head: ask.head, at: now } } : { ...next, declined: { kind: 'opening', round: 1, head: ask.head } }
-    else if (ask.kind === 'round') next = { ...next, declined: { kind: 'round', round: ask.round ?? 1, head: ask.head } }
-    else next = { ...next, greptile: answer === 'yes' ? { head: ask.head, at: now } : { declined: true } }
-  }
-  if (next && next !== stored) await $.store.set(key, next)
-  await saveAsks($, queue.slice(1))
-  await tellModel($, retained ? keptNotice(ask.pr, ask.round ?? 1, retained) : askNotice(ask, answer, queued))
-  await closeIfIdle($)
-}
-
-// ---- the tool and the command -------------------------------------------------------------------------------------------------
-
-/** The tool: headless gets the text plan; an interactive session gets the pane. Returns the text for the model. */
-const toolText = async ($: EngineInterface, pr: number, body: string): Promise<string> => {
+/**
+ * The tool. Headless and a subagent get the text plan. The main session of an interactive run gets Dave's question, and the call
+ * waits for his answer. Returns the text for the model.
+ */
+const toolText = async ($: EngineInterface, pr: number, body: string, isSubagent: boolean): Promise<string> => {
   const root = await rootOf($)
   if (!root) return `pr_checkpoint runs in a CCv3 checkout (it needs ${ENGINE_REL} in the session root). Nothing was recorded.`
-  if (!(await interactive($))) {
+  const live = await interactive($)
+  if (!live || isSubagent) {
     if (!(await $.fs.exists(resolveBody(root, body)))) return missingBody(body, root)
-    return textPlan($, root)
+    return textPlan($, root, root, null, null, isSubagent && live ? SUBAGENT_WHY : undefined)
   }
-  const prepared = await prepare($, root, pr, body)
-  if (!prepared.ok) return prepared.text
-  const auto = await autoConfirm($, prepared.pending)
-  if (auto?.kind === 'done') {
-    await finishAuto($, auto.record, prepared.pending.result.auto.band)
-    return `The checkpoint for #${pr} was auto-confirmed: band ${prepared.pending.result.auto.band ?? 'unknown'}, none (${auto.record.label ?? 'no label'}). The mod added the label and marked the PR ready. No press is needed. pr_watch continues. Do not merge.`
+  // Taken before the first await below: a second call that finds it taken asks nothing.
+  if (!takeDialog()) return BUSY_TEXT
+  try {
+    const prepared = await prepare($, root, pr, body)
+    if (!prepared.ok) return prepared.text
+    const auto = await autoConfirm($, prepared.pending)
+    if (auto?.kind === 'done') {
+      await finishAuto($, auto.record, prepared.pending.result.auto.band)
+      return `The checkpoint for #${pr} was auto-confirmed: band ${prepared.pending.result.auto.band ?? 'unknown'}, none (${auto.record.label ?? 'no label'}). The mod added the label and marked the PR ready. No answer is needed. pr_watch continues. Do not merge.`
+    }
+    const lead = auto ? `Auto-confirm was not possible (${auto.why}), so the checkpoint for #${pr} waits for Dave. ` : ''
+    return `${lead}${(await askCheckpoint($, prepared.pending)).text}`
+  } finally {
+    freeDialog()
   }
-  const placed = await show($, prepared.pending)
-  const lead = auto ? `Auto-confirm was not possible (${auto.why}), so the checkpoint for #${pr} waits for Dave. ` : ''
-  if (auto?.stage === 'apply') await update($, checkpoint, v => (v ? { ...v, error: auto.why, retry: { pathway: 'none' } } : v))
-  if (placed.isPlaced) return `${lead}The checkpoint for #${pr} is in Dave's side pane. ${WAIT_FOR_PRESS}`
-  return `${lead}The checkpoint for #${pr} is ready, but the pane could not be placed (${placed.reason}). Dave types ${SLASH} to open it. ${WAIT_FOR_PRESS}`
 }
 
-
 /**
- * `/pathway grant <pr> <round>`: Dave allows a review round the pane did not ask about, or one he declined. It stores the grant
+ * `/pathway grant <pr> <round>`: Dave allows a review round the watcher did not ask about, or one he declined. It stores the grant
  * (`checkpoint:grant:<pr>`) on the record's head and clears a round decline it covers. Only his own composer command writes. It posts nothing.
  */
 const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: number; round: number }): Promise<{ text: string }> => {
@@ -702,7 +459,7 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   const key = `${RECORD_PREFIX}${grant.pr}`
   const stored = readRecord(await $.store.get(key))
   if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. Run ${SLASH} on it first. Nothing was recorded.` }
-  // A lower grant never lowers a round Dave already allowed, whichever head that grant carries (the pane stores the PR head at ask time).
+  // A lower grant never lowers a round Dave already allowed, whichever head that grant carries (a dialog stores the PR head at ask time).
   // A grant never outlives its checkpoint record: recordPathway deletes it, so a stored grant belongs to this record.
   const allowed = await allowedRound($, grant.pr, grant.round)
   await $.store.set(`${GRANT_PREFIX}${grant.pr}`, { round: allowed, head: stored.head, at: await $.clock.now() })
@@ -713,12 +470,11 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
       const { declined: _declined, ...rest } = stored
       await $.store.set(key, rest as CheckpointRecord)
     }
-    // A queued round ask this grant covers is answered: a later No in the pane would write `declined`, which the model line reads before the grant.
+    // A queued round ask this grant covers is answered: a later No in a dialog would write `declined`, which the model line reads before the grant.
     const queue = await loadAsks($)
     const kept = queue.filter(ask => !(ask.kind === 'round' && ask.pr === grant.pr && (ask.round ?? 1) <= allowed))
     if (kept.length !== queue.length) {
       await saveAsks($, kept)
-      await closeIfIdle($)
     }
   } catch (err) {
     // The grant is already stored and the watcher reads it, so say so. The decline or the queued ask may still be there.
@@ -789,23 +545,41 @@ const sayer = (trace: Trace) => (outcome: string, text: string, context?: string
   return context ? { text, context } : { text }
 }
 
-/** A bare /pathway: the pane in Dave's terminal; on the bridge (a phone, no pane) the pending PR and the command to type. */
+/** The checkpoint question for a pending checkpoint, from a command. The reply carries what was recorded; the model gets the same line as hidden context. */
+const askPending = async ($: EngineInterface, pending: Pending, trace: Trace): Promise<CommandReply> => {
+  const say = sayer(trace)
+  if (!takeDialog()) return say('busy', BUSY_TEXT)
+  try {
+    const asked = await askCheckpoint($, pending)
+    return asked.recorded ? say('recorded', asked.text, [asked.text]) : say('asked', asked.text)
+  } finally {
+    freeDialog()
+  }
+}
+
+/**
+ * A bare /pathway raises the question again: the pending checkpoint of this session, else the first queued watcher question, deferred or
+ * not. It works from Dave's composer and from the bridge (his phone); the dialog is drawn where he is, and only his answer records.
+ */
 const bareCommand = async ($: EngineInterface, e: CommandEvent, live: boolean, pending: Pending | null, trace: Trace): Promise<CommandReply> => {
   const say = sayer(trace)
   if (!live) return say('need-pr', NEED_PR)
-  if (e.origin.kind === 'bridge') {
-    if (!pending) return say('need-pr', NEED_PR)
+  if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') {
+    return say('refused', `This ${SLASH} came from ${e.origin.kind}, not Dave's composer or phone, so it raises no question. Nothing was recorded.`)
+  }
+  if (pending) {
     trace.root = await rootOf($)
     trace.checkout = pending.root
-    return say('bridge-prompt', await bridgePrompt($, pending))
+    return askPending($, pending, trace)
   }
-  const queued = await loadAsks($)
-  if (!pending && queued.length === 0) return say('need-pr', NEED_PR)
-  if (pending && (await read($, checkpoint)) === null) await update($, checkpoint, () => viewOf(pending))
-  if (queued.length > 0 && (await read($, checkpointAsks)).length === 0) await update($, checkpointAsks, () => queued)
-  const placed = await openPane($)
-  if (placed.isPlaced) return say('pane', 'The checkpoint is in the side pane.')
-  return say('pane-unplaced', `The pane could not be placed (${placed.reason}). Widen the terminal, then type ${SLASH} again.`)
+  if ((await loadAsks($)).length === 0) return say('need-pr', NEED_PR)
+  if (!takeDialog()) return say('busy', BUSY_TEXT)
+  try {
+    const text = await raiseQueued($)
+    return text === null ? say('need-pr', NEED_PR) : say('asked', text)
+  } finally {
+    freeDialog()
+  }
 }
 
 const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): Promise<CommandReply> => {
@@ -837,17 +611,13 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   }
   if (phone && parsed.word === null) {
     trace.checkout = phone.root
-    return say('bridge-prompt', await bridgePrompt($, phone))
+    return askPending($, phone, trace)
   }
   const prepared = await prepare($, root, pr, body)
   if (!prepared.ok) return say('refused', prepared.text)
   const next = prepared.pending
   trace.checkout = next.root
-  if (parsed.word === null) {
-    const placed = await show($, next)
-    if (placed.isPlaced) return say('pane', `The checkpoint for #${pr} is in the side pane.`)
-    return say('pane-unplaced', `The pane could not be placed (${placed.reason}). Widen the terminal, then type ${SLASH} again.`)
-  }
+  if (parsed.word === null) return askPending($, next, trace)
   if (parsed.word === 'wait') return say('wait', `PR #${pr} stays a draft. Nothing was recorded.`)
   const result = next.result
   const pathway = parsed.word === 'accept' ? result.recommended : parsed.word
@@ -860,10 +630,7 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
     return say('not-recorded', out.stage === 'apply' ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}` : `PR #${pr}: ${pathway} was not recorded: ${out.text}`)
   }
   const record = out.record
-  if (pending && pending.pr === pr) {
-    await clearPending($)
-    await closeIfIdle($)
-  }
+  if (pending && pending.pr === pr) await clearPending($)
   $.ui.toast(`PR #${pr}: ${pathway} recorded, the PR is ready`, { timeoutMs: 10_000 })
   return say(
     'recorded',
@@ -990,7 +757,7 @@ const writeLock = async ($: EngineInterface, e: WriteCall): Promise<{ deny: stri
   }
 }
 
-/** One module's part of session.start, on either trigger. The tool and the command register in both modes; the pane is interactive only. */
+/** One module's part of session.start, on either trigger. The tool and the command register in both modes; the question is interactive only. */
 const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> => {
   // The mode first: a throw below must not leave the default ('interactive') in place for a headless run.
   await update($, mode, () => (isInteractive ? 'interactive' : 'headless'))
@@ -1000,7 +767,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
     await $.tool.register({
       name: TOOL_NAME,
       description:
-        "Opens the PR checkpoint for a DRAFT pull request in Rev4nchist/Continuous-Claude-v3 in Dave's side pane: the review pathways with their cost, and the recommended one first. Dave presses an option; the mod then records it, adds the review label and marks the PR ready. Call it after pre-pr.mjs passed, with the PR number and the path of the body file that pre-pr.mjs --body checked. It returns at once. Never run gh pr ready, add a review: label or run pr-checkpoint --confirm yourself. A headless session gets the text plan only and nothing is recorded.",
+        "Asks Dave the PR checkpoint question for a DRAFT pull request in Rev4nchist/Continuous-Claude-v3, in this session: the review pathways with their cost in dollars, and the recommended one first. The call waits for his answer. The mod then records the pathway he picked, adds the review label and marks the PR ready, and the result tells you what he chose. Call it after pre-pr.mjs passed, with the PR number and the path of the body file that pre-pr.mjs --body checked. Do not ask Dave the question yourself, and never run gh pr ready, add a review: label or run pr-checkpoint --confirm yourself. A headless session or a subagent gets the text plan only and nothing is recorded.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1011,16 +778,16 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
       },
     })
   } catch {
-    // The command and the pane still load.
+    // The command still loads.
   }
   try {
     await $.command.register({
       name: COMMAND,
-      description: 'Open the PR checkpoint pane, or record a pathway',
+      description: 'Ask the PR checkpoint question again, or record a pathway',
       argumentHint: '[pr] [accept|coderabbit|both|none|wait] [--body <file>]',
     })
   } catch {
-    // The tool and the pane still load.
+    // The tool still loads.
   }
   if (!isInteractive) return
   try {
@@ -1043,11 +810,11 @@ export const prCheckpoint = (on: On) => {
 
   on('tool.call', { tool: TOOL }, async ($, e, next) => {
     if (await isOff($)) return next(e)
-    const input = e as unknown as { pr?: unknown; body?: unknown }
+    const input = e as unknown as { pr?: unknown; body?: unknown; agentId?: unknown }
     if (!isPrNumber(input.pr) || typeof input.body !== 'string' || input.body.trim() === '') {
       return { deny: 'pr_checkpoint needs "pr" (a positive whole number) and "body" (the PR body file).' }
     }
-    return textResult(await toolText($, input.pr, input.body.trim()))
+    return textResult(await toolText($, input.pr, input.body.trim(), input.agentId !== undefined))
   }).catch(($, e, next) => (next.called ? next(e) : textResult('pr_checkpoint failed. Nothing was recorded. The PR stays a draft.')))
 
   // Lock A: no tool writes pathway.json. Always enforced, warn mode included.
@@ -1061,76 +828,4 @@ export const prCheckpoint = (on: On) => {
   on('command.run', { command: COMMAND }, ($, e) => checkpointCommand($, e)).catch(() => ({
     text: `${SLASH} failed. Nothing was recorded.`,
   }))
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const view = await read($, checkpoint)
-    const asks = await read($, checkpointAsks)
-    const now = await $.clock.now()
-    const width = Math.max(20, e.props.bodyColumns - 2)
-    const row = (key: string, text: string, dim = false) => (
-      <Text key={key} wrap="truncate-end" {...(dim ? { dimColor: true } : {})}>
-        {clip(text, width)}
-      </Text>
-    )
-    if (view) {
-      const { buttons, held, recommendedFirst } = optionsInOrder(view.result)
-      const rows = [...headerRows(view, now), ...recommendRows(view.result)]
-      return (
-        <Box flexDirection="column" paddingX={1}>
-          {rows.map((text, i) => row(`row-${i}`, text))}
-          {held.map(one => row(`held-${one.pathway}`, `${one.pathway} held: ${one.reason}`, true))}
-          {view.error ? <Text key="error">{view.error}</Text> : null}
-          {view.running ? row('running', `Running ${view.running}...`, true) : null}
-          {view.running === null &&
-            buttons.map((one, i) => (
-              <Button
-                key={`opt-${one.pathway}`}
-                hotkey={String(i + 1)}
-                {...(i === 0 && recommendedFirst ? { autoFocus: true as const, variant: 'primary' as const } : {})}
-                onPress={() => void pressOption($, one.pathway, i === 0 && recommendedFirst).catch(() => undefined)}
-              >
-                {optionLabel(one, i === 0 && recommendedFirst)}
-              </Button>
-            ))}
-          {view.running === null && view.retry ? (
-            <Button key="retry-apply" hotkey="r" onPress={() => void pressRetry($).catch(() => undefined)}>
-              Retry --apply
-            </Button>
-          ) : null}
-          <Button key="dismiss" hotkey="0" role="dismiss" onPress={() => void pressDismiss($).catch(() => undefined)}>
-            Dismiss (nothing is recorded)
-          </Button>
-        </Box>
-      )
-    }
-    const ask = asks[0]
-    if (!ask) {
-      return (
-        <Box flexDirection="column" paddingX={1}>
-          {row('none', 'No checkpoint or question waits for you.', true)}
-          <Button key="dismiss" hotkey="0" role="dismiss" onPress={() => void pressDismiss($).catch(() => undefined)}>
-            Dismiss
-          </Button>
-        </Box>
-      )
-    }
-    return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text key="ask">{ask.text}</Text>
-        {asks.length > 1 ? row('more', `${asks.length - 1} more question(s) wait.`, true) : null}
-        {askOrder(ask.kind).map((answer, i) => (
-          <Button
-            key={`ask-${answer}`}
-            hotkey={String(i + 1)}
-            {...(i === 0 ? { autoFocus: true as const, variant: 'primary' as const } : {})}
-            onPress={() => void pressAsk($, answer).catch(() => undefined)}
-          >
-            {askButtonLabel(ask.kind, answer) + (i === 0 ? '  (Recommended)' : '')}
-          </Button>
-        ))}
-      </Box>
-    )
-  }).catch(($, e, next) => next(e))
 }

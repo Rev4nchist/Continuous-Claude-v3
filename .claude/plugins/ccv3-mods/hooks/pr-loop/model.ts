@@ -428,7 +428,7 @@ const classRaisedLine = (pr: number): string => `Return the PR to draft (gh pr r
 
 /**
  * What the model may do about a CodeRabbit review on a PR with a checkpoint record. `when` starts the clause that allows a post.
- * Dave's decline wins, then an unknown count, then the budget: at the budget the decision is Dave's, in the pane.
+ * Dave's decline wins, then an unknown count, then the budget: at the budget the decision is Dave's, asked by the mod in the session.
  */
 const budgetSentence = (cp: AlertCheckpoint, pr: number, when: string): string => {
   const [opening, extra] = cp.budget
@@ -438,7 +438,7 @@ const budgetSentence = (cp: AlertCheckpoint, pr: number, when: string): string =
   const next = cp.rounds + 1
   if (cp.granted !== null && cp.granted >= next) return `Dave allowed round ${next}. ${when}, post one @coderabbitai review.`
   if (cp.rounds >= opening + extra) {
-    return `Rounds used ${cp.rounds} of ${opening}+${extra}. Do not post @coderabbitai review. Dave decides round ${next} in the checkpoint pane.`
+    return `Rounds used ${cp.rounds} of ${opening}+${extra}. Do not post @coderabbitai review. The mod asks Dave about round ${next} in the session. Do not ask him yourself.`
   }
   // Round 0: no review has run, so the advice is the opening review, not a carry of an earlier one.
   if (cp.rounds === 0) return `Rounds used 0 of ${opening}+${extra}. No CodeRabbit review has run on #${pr} yet. ${when}, post one @coderabbitai review: it is the opening review.`
@@ -465,7 +465,7 @@ const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpoint
  * cr-paid.mjs check does not read the carry, the budget or the fixed findings, so the line states the round 2 condition.
  */
 const paidReview = (pr: number): string =>
-  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post the comment it prints (@coderabbitai review --use-credits), then run cr-paid.mjs record. On ESCALATE, ask Dave.`
+  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post the comment it prints (@coderabbitai review --use-credits), then run cr-paid.mjs record. On ESCALATE, ask Dave with AskUserQuestion: one recommended option first, the cost in dollars, and the reason.`
 
 /**
  * A paid review replaces the capacity post while it runs. The retry depends on the paid review finishing or still running, not on the
@@ -663,7 +663,7 @@ const askAt = (status: PrStatus, kind: CheckpointAsk['kind'], text: string, roun
 })
 
 /**
- * The one question the checkpoint pane asks Dave about this PR now, or null. Pure; the caller queues it once.
+ * The one question the mod asks Dave about this PR now, or null. Pure; the caller queues it once.
  * - round: CodeRabbit reviewed the head (REVIEWED) or skipped it (LIMITED, not a rate limit) and the rounds bought reach the budget.
  *   A grant for that round, or a No on it, ends the ask.
  * - opening: a coderabbit or both PR with no CodeRabbit round 30 minutes after the mod's --apply (the PR left draft), not rate limited, and
