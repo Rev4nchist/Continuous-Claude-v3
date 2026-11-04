@@ -326,6 +326,19 @@ function combine(hits) {
 
 function orderFor(c, picked) {
   if (c.dependabot) return ['none']; // bots refuse bot PRs: no paid option is offered (Dave decision 3)
+  // A result with no review band (a config with no matrix block) keeps the old lists: none only where a rule or a clean CLI gave it.
+  return c.band ? withNone(paidOrder(c, picked)) : paidOrder(c, picked);
+}
+
+/**
+ * "No review, land on CI" is an option at every review band (Dave 2026-11-04): a PR that a person will land on CI alone must not need a hand press
+ * of GitHub's "Ready for review". It is last, so the recommendation stays first, and it is never the recommendation of a HIGH or CRITICAL PR.
+ * Only a person records it there: --by default needs the recommendation, and --by auto needs autoOf (band LOW, MID or ELEVATED).
+ * A list that has it already (R5 with a clean CLI, a LOW to ELEVATED band) keeps its own place.
+ */
+const withNone = (order) => (order.includes('none') ? order : [...order, 'none']);
+
+function paidOrder(c, picked) {
   const only = (rule) => picked.rules.length === 1 && picked.rules[0] === rule;
   const band = picked.rules[0] === 'RB' && picked.rules.every((r) => r === 'RB' || r === 'RF');
   if (only('R1') || band) return picked.pathway === 'none' ? ['none', 'coderabbit'] : ['coderabbit', 'both'];
@@ -353,7 +366,7 @@ function costOf(c, picked, pathway) {
 function optionOf(c, picked, pathway) {
   const cost = costOf(c, picked, pathway);
   // RF: the none option must not contradict the floor line, which asks for aegis + critic before READY.
-  const floor = picked.rules.includes('RF');
+  const floor = picked.rules.includes('RF') || floorApplies(c);
   const reason = {
     none: floor ? 'No bot review. READY needs CI, proof and the internal pass (aegis + critic).' : 'No bot review. READY needs CI and proof only.',
     wait: 'Stay a draft and spend nothing until the CodeRabbit 7-day count drops.',

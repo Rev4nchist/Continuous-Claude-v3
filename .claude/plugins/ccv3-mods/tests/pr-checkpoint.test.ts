@@ -400,7 +400,7 @@ const slash = ($: Engine, args: string, kind = 'composer') =>
 // dialog in manual mode, `pane.press({ key })` answers it with the label that key stood for and waits for the call to end.
 const PRESS: Record<string, Answer> = {
   'opt-coderabbit': /^CodeRabbit review/,
-  'opt-none': /^No bot review/,
+  'opt-none': /^No review, land on CI/,
   'opt-both': /^CodeRabbit \+ Greptile/,
   'opt-wait': /^Keep as draft/,
   dismiss: 'dismiss',
@@ -464,7 +464,7 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     const { dialog, pane } = await openPane($)
     expect(engineCalls(seen)[0]).toBe('--json')
     expect(seen.opens).toEqual([])
-    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'No bot review', 'Keep as draft'])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
     expect(dialog!.labels[0]).toMatch(/\(Recommended\)$/)
     expect(dialog!.labels.slice(1).some(label => label.includes('(Recommended)'))).toBe(false)
     expect(dialog!.header).toBe('PR #7')
@@ -624,7 +624,7 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     const held = engineJson({ recommended: 'both', options: [option('none'), option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' })] })
     const { seen } = world(on, { json: { stdout: JSON.stringify(held) } })
     const { dialog, pane } = await openPane($)
-    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No bot review', 'CodeRabbit review', 'Keep as draft'])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
     expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
     expect(dialog!.question).toContain('Greptile held: credits unknown')
     await pane.press({ key: 'opt-none' })
@@ -668,7 +668,7 @@ describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
     expect(cwdOf(seen, 'log').filter(cwd => cwd !== undefined)).toEqual([WT])
     expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('diff'))?.cwd).toBe(WT)
     expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('worktree'))?.cwd).toBe(ROOT)
-    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'No bot review', 'Keep as draft'])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
     await pane.press({ key: 'dismiss' })
   })
 
@@ -2083,7 +2083,7 @@ describe('pr-checkpoint: auto-confirm', () => {
     expect(store.get(PENDING)).toBeDefined()
     expect(told.text).toMatch(/auto-confirm/i)
     expect(told.text).toMatch(/waits for Dave/)
-    expect(seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No bot review', 'CodeRabbit review', 'Keep as draft'])
+    expect(seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'CodeRabbit review', 'Keep as draft'])
   })
 
   test('AU3 a refused apply raises the question with the error in the tool text; the record stays confirmed', async ($, on) => {
@@ -2455,7 +2455,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
   })
 
   test('T2 another label records --by dave', async ($, on) => {
-    const w = world(on, { answer: /^No bot review/ })
+    const w = world(on, { answer: /^No review, land on CI/ })
     await start($)
     const told = await call($)
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
@@ -2496,13 +2496,13 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
   })
 
   test('T4b Other text that equals a label exactly is Dave\'s own choice and records, as a typed /pathway does', async ($, on) => {
-    const w = world(on, { answer: labels => ({ other: labels.find(l => /^No bot review/.test(l))! }) })
+    const w = world(on, { answer: labels => ({ other: labels.find(l => /^No review, land on CI/.test(l))! }) })
     await start($)
     await call($)
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
   })
 
-  for (const text of ['CodeRabbit review (up to $1.75) (Recommended), No bot review ($0)', 'coderabbit review (up to $1.75) (Recommended)', 'CodeRabbit review (up to $1.75)', 'CodeRabbit review (up to $1.75) (Recommended) ']) {
+  for (const text of ['CodeRabbit review (up to $1.75) (Recommended), No review, land on CI ($0)', 'coderabbit review (up to $1.75) (Recommended)', 'CodeRabbit review (up to $1.75)', 'CodeRabbit review (up to $1.75) (Recommended) ']) {
     test(`T4c a comma-joined or near-miss answer records nothing: ${JSON.stringify(text)}`, async ($, on) => {
       const w = world(on, { answer: { other: text } })
       await start($)
@@ -2524,7 +2524,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     const w = world(on, { answer: 'dismiss' })
     await start($)
     const question = 'PR #7: which review?'
-    const options = ['CodeRabbit review (up to $1.75) (Recommended)', 'No bot review ($0)'].map(label => ({ label, description: label }))
+    const options = ['CodeRabbit review (up to $1.75) (Recommended)', 'No review, land on CI ($0)'].map(label => ({ label, description: label }))
     await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question, header: 'PR #7', options, multiSelect: false }], answers: { [question]: options[0]!.label } } as never).catch(() => undefined)
     await settle()
     expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
@@ -2827,5 +2827,143 @@ describe('pr-checkpoint: the watcher raises its asks as dialogs', () => {
     await w.clock.advance(TICK)
     expect(w.seen.dialogs.length).toBe(1)
     expect(w.store.get(LEASE)).toBeUndefined()
+  })
+})
+
+// ---- "No review, land on CI" at every band (Dave 2026-11-04) -----------------------------------------------------------------------------
+// N-M1  the option is missing, first or marked Recommended for HIGH or CRITICAL
+// N-M2  picking it does not record none --by dave, or adds a bot label or a queue entry
+// N-M3  a typed /pathway 7 none is refused for HIGH            N-M4  a near miss of the label records
+// N-M5  a HIGH checkpoint that the engine calls auto-eligible records anything but Dave's pick
+describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
+  const NO_REVIEW = 'No review, land on CI ($0)'
+  const highJson = (band: 'HIGH' | 'CRITICAL', over: Rec = {}) => ({
+    stdout: JSON.stringify(
+      engineJson({
+        recommended: 'coderabbit',
+        options: [option('coderabbit'), option('both'), option('none')],
+        band: { band },
+        auto: { eligible: false, band, reason: `Band ${band}: Dave presses.` },
+        ...over,
+      }),
+    ),
+  })
+  const queueRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
+
+  for (const band of ['HIGH', 'CRITICAL'] as const) {
+    test(`N-M1 ${band}: the last label is the no-review one; the recommendation stays first; none is never first or Recommended`, async ($, on) => {
+      world(on, { json: highJson(band) })
+      const { dialog, pane } = await openPane($)
+      expect(dialog!.labels.at(-1)).toBe(NO_REVIEW)
+      expect(dialog!.labels[0]).toMatch(/^CodeRabbit review .*\(Recommended\)$/)
+      expect(dialog!.labels.filter(label => label.includes('(Recommended)')).length).toBe(1)
+      expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'CodeRabbit + Greptile', 'Keep as draft', 'No review, land on CI'])
+      await pane.press({ key: 'dismiss' })
+    })
+
+    test(`N-M2 ${band}: picking it records none --by dave, applies once, adds no bot label and no queue entry`, async ($, on) => {
+      const { seen, store } = world(on, { json: highJson(band), answer: /^No review, land on CI/ })
+      await start($)
+      const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+      const confirms = engineCalls(seen).filter(call => call.startsWith('--confirm'))
+      expect(confirms).toEqual([expect.stringMatching(/^--confirm none --by dave --body \S*pr-body\.md$/)])
+      expect(counts(seen).apply).toBe(1)
+      const record = store.get('checkpoint:pr:7') as Rec
+      expect(record.pathway).toBe('none')
+      expect(record.decided_by).toBe('dave')
+      expect(record.state).toBe('applied')
+      expect(record.label).toBe('review:none')
+      expect(queueRuns(seen)).toEqual([])
+      expect(seen.run.filter(r => r.argv[0] === 'gh' && r.argv.some(a => /review:(coderabbit|deep)/.test(a))).length).toBe(0)
+      expect(told.text).toMatch(/Dave chose none for #7/)
+      expect(store.get(PENDING)).toBeUndefined()
+    })
+  }
+
+  test('N-M3 a typed /pathway 7 none records --by dave for a HIGH PR', async ($, on) => {
+    const { seen, store } = world(on, { json: highJson('HIGH') })
+    await start($)
+    const ran = await slash($, '7 none --body pr-body.md')
+    expect(engineCalls(seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    expect(ran.text ?? '').toMatch(/none recorded/)
+    expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+  })
+
+  for (const text of ['No review, land on CI', 'no review, land on CI ($0)', `CodeRabbit review (up to $1.75) (Recommended), ${NO_REVIEW}`]) {
+    test(`N-M4 a near miss of the label, or a comma-joined pair that holds it, records nothing: ${JSON.stringify(text)}`, async ($, on) => {
+      const w = world(on, { json: highJson('HIGH'), answer: { other: text } })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      expect(counts(w.seen).confirm).toBe(0)
+    })
+  }
+
+  test('N-M5 an engine that calls a HIGH checkpoint auto-eligible while it recommends coderabbit still waits for Dave: no --by auto', async ($, on) => {
+    const lying = highJson('HIGH', { auto: { eligible: true, band: 'HIGH', reason: 'x' } })
+    const w = world(on, { json: lying, answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(engineCalls(w.seen).some(call => call.includes('--by auto'))).toBe(false)
+    expect(counts(w.seen).confirm).toBe(0)
+  })
+
+  // N-M6  a typed none from the bridge at HIGH or CRITICAL records with no dialog      N-M7  the dialog gate also holds a LOW PR back (it must not)
+  // N-M8  a held recommendation at HIGH marks a label Recommended, or puts none first
+  for (const band of ['HIGH', 'CRITICAL'] as const) {
+    test(`N-M6 ${band}: a bridge /pathway 7 none raises the dialog and records nothing until the exact label`, async ($, on) => {
+      const w = world(on, { json: highJson(band), answers: ['dismiss', 'dismiss'] })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      const ran = await slash($, '7 none', 'bridge')
+      expect(w.seen.dialogs.length).toBe(2)
+      expect(w.seen.dialogs[1]!.labels.at(-1)).toBe(NO_REVIEW)
+      expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+      expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+      expect(w.store.get(PENDING)).toBeDefined()
+      expect(ran.text ?? '').not.toMatch(/none recorded/)
+    })
+
+    test(`N-M6b ${band}: the exact label in that bridge dialog records none --by dave`, async ($, on) => {
+      const w = world(on, { json: highJson(band), answers: ['dismiss', /^No review, land on CI/] })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      await slash($, '7 none', 'bridge')
+      expect(w.seen.dialogs.length).toBe(2)
+      expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+      expect((w.store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+    })
+  }
+
+  test('N-M6c a composer /pathway 7 none at CRITICAL records --by dave with no second dialog', async ($, on) => {
+    const w = world(on, { json: highJson('CRITICAL'), answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+  })
+
+  test('N-M7 a bridge /pathway 7 none at LOW still records --by dave with no dialog', async ($, on) => {
+    const low = { stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], band: { band: 'LOW' }, auto: { eligible: false, band: 'LOW', reason: 'a person decides' } })) }
+    const w = world(on, { json: low, answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none', 'bridge')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+  })
+
+  test('N-M8 a held recommendation at HIGH: coderabbit, Keep as draft, then no review; nothing is Recommended; the none pick is --by dave', async ($, on) => {
+    const held = highJson('HIGH', {
+      recommended: 'both',
+      options: [option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' }), option('none')],
+    })
+    const { seen } = world(on, { json: held })
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
+    await pane.press({ key: 'opt-none' })
+    expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
   })
 })

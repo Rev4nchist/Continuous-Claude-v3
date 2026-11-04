@@ -1,8 +1,6 @@
 import type { CheckpointAsk, CheckpointOption, CheckpointResult } from '../../types'
 
-/** Pure helpers of the PR checkpoint mod. Nothing here takes `import type { CheckpointAsk, CheckpointOption, CheckpointResult } from '../../types'
-
-. */
+/** Pure helpers of the PR checkpoint mod. Nothing here takes `$`: a `$` and an atom cannot cross an import (README). */
 
 export const TOOL_NAME = 'pr_checkpoint'
 /**
@@ -216,7 +214,7 @@ export const upTo = (files: number | null): string => (files === null ? `up to $
 export type PathwayChoice = { label: string; pathway: string; by: 'default' | 'dave' }
 export type PathwayAsk = { header: string; question: string; choices: PathwayChoice[] }
 
-const NAMES: Record<string, string> = { none: 'No bot review', coderabbit: 'CodeRabbit review', both: 'CodeRabbit + Greptile', wait: 'Keep as draft' }
+const NAMES: Record<string, string> = { none: 'No review, land on CI', coderabbit: 'CodeRabbit review', both: 'CodeRabbit + Greptile', wait: 'Keep as draft' }
 const nameOf = (pathway: string): string => NAMES[pathway] ?? pathway
 
 const labelFor = (one: CheckpointOption, files: number): string => {
@@ -234,7 +232,7 @@ const overview = (pr: number, result: CheckpointResult): string => {
 
 /**
  * The checkpoint question, or null when there is nothing to choose: no recommendation (R0), or no open pathway. The labels are 2 to 4:
- * the open pathways (at most 3) and one "Keep as draft". When the recommendation is open it is first, with " (Recommended)", and is the only
+ * the open pathways (at most 3), one "Keep as draft", and "No review, land on CI" last when the engine offers it and it is not the recommendation. When the recommendation is open it is first, with " (Recommended)", and is the only
  * one a `--by default` may record. When it is held, no label is marked and every pick is `--by dave`.
  */
 export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, stampAge: string | null = null): PathwayAsk | null => {
@@ -242,7 +240,11 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, s
   const open = buttons.filter(one => one.pathway !== 'wait')
   if (result.recommended === null || open.length === 0) return null
   const keepFirst = recommendedFirst && buttons[0]?.pathway === 'wait'
-  const ordered = keepFirst ? [WAIT_OPTION, ...open.slice(0, 3)] : [...open.slice(0, 3), WAIT_OPTION]
+  // "No review, land on CI" is the last label at every band, unless it IS the recommendation (a LOW to ELEVATED PR), and then it is first.
+  const noneIsRecommended = recommendedFirst && result.recommended === 'none'
+  const noReview = noneIsRecommended ? [] : open.filter(one => one.pathway === 'none')
+  const paid = open.filter(one => noneIsRecommended || one.pathway !== 'none').slice(0, 3 - noReview.length)
+  const ordered = keepFirst ? [WAIT_OPTION, ...paid, ...noReview] : [...paid, WAIT_OPTION, ...noReview]
   const files = result.size.files
   const choices: PathwayChoice[] = ordered.map((one, i) => ({
     label: `${labelFor(one, files)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
