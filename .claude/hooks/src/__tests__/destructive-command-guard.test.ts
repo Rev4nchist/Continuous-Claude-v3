@@ -1164,6 +1164,8 @@ describe('C1: launcher regexes stay linear (x200 of each overlapping token)', ()
     ['env -u run with a substitution after it (critic repro shape)', 'env ' + '-u '.repeat(200) + 'x; echo "$(rm -rf y)"'],
     ['timeout flag run (flag vs duration)', 'timeout ' + '-k '.repeat(200) + 'x'],
     ['xargs flag run', 'xargs ' + '-a '.repeat(200) + 'x'],
+    // Audit find: `x=/nohup` matched both the VAR=x item and a path-prefixed launcher.
+    ['VAR=x item that is also a path-prefixed launcher', 'x=/nohup '.repeat(200) + 'y'],
   ];
   for (const [name, cmd] of cases) {
     it(`decide(): ${name} finishes in under 1000 ms`, async () => {

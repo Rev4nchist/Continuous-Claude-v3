@@ -95,7 +95,9 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
 // raw command SEGMENTS (quotes kept, split on ; & | and newlines). Each must START with the command, after
 // zero or more lead-ins, so an echo, a commit message or a grep that only names the URL never matches.
 // Lead-ins: VAR=x, `$x =`, `[void]`, `(`, `{`, `try {`, `if (...) {`, `ForEach-Object {`, `&`, sudo.
-const LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+// A VAR=x value runs to the next whitespace: if it could stop early, `x=/nohup` also split into `x=/` and
+// the `nohup` item, and a run of those took exponential time (found in the round-2 C1 audit).
+const LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*(?=\s|$)|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
 const SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
 const HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
 // The HTTP method, any spelling: --method x, --request x, -X x, -m x, -Method x, -Method:x, -CustomMethod x, -Meth x.
@@ -160,11 +162,14 @@ export const POWERSHELL_PATTERNS: DPattern[] = [
 // PowerShell quoting: backslash is NOT an escape (`"C:\repo\"` is a complete string);
 // the escape character is the backtick, and '' is a literal quote inside '...'.
 // Using bash rules here let `"C:\repo\" reset --hard` swallow the rest of the command.
-const PS_QUOTED = /"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
-const BASH_QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g;
+// The first alternative is a TOP-LEVEL escape (`\'` in Bash, `` `' `` in PowerShell): it is kept as
+// is, so an escaped quote never opens a string (H1: `echo \'; rm -rf x; echo \'` hid the rm).
+const PS_QUOTED = /`.|"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
+const BASH_QUOTED = /\\.|"(?:[^"\\]|\\.)*"|'[^']*'/g;
+const ESCAPE_CHARS = '\\`';
 
 export function stripQuotedStrings(command: string, tool: string = 'Bash'): string {
-  return command.replace(tool === 'PowerShell' ? PS_QUOTED : BASH_QUOTED, (m) => m[0] + m[0]);
+  return command.replace(tool === 'PowerShell' ? PS_QUOTED : BASH_QUOTED, (m) => (ESCAPE_CHARS.includes(m[0]) ? m : m[0] + m[0]));
 }
 
 /** True when `text` leaves a quote open after the one-pass strip (a lone `"` or `'`). */
@@ -284,8 +289,14 @@ function readBacktick(s: string, start: number): { inner: string; end: number } 
 // (`pwsh -wd "C:/zz" -c ...`, `bash --rcfile "/a b" -c ...`). Every name may carry a path
 // prefix (`/bin/bash`, `C:\Windows\System32\cmd.exe`, F03). Each launcher takes optional flags;
 // sudo -u/-g, env -u and timeout take one value (timeout: the duration).
+// The alternatives under each `*` are DISJOINT (C1): a value form takes `-u`/`-g` and a value that is not
+// a flag; the flag form excludes a bare `-u`/`-g`; the timeout duration is not a flag. Overlapping
+// alternatives (`-u` matched both) split `-u -u -u ...` every way and hung on 38 repeats.
+// A launcher's path prefix has no `=`, so `x=/nohup` is only ever a VAR=x item, never also a path.
 const PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
-const LAUNCHER = String.raw`(?:${PATH_PREFIX}(?:sudo(?:\s+-[ug]\s+\S+|\s+-\S+)*|env(?:\s+-u\s+\S+|\s+-\S+)*|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+\S+)\s+|[^\s=]+=\S+\s+)*`;
+const LAUNCHER_PATH = String.raw`(?:[^\s=]*[\\/])?`;
+const valueFlags = (letters: string): string => String.raw`(?:\s+-[${letters}]\s+(?!-)\S+|\s+-(?![${letters}](?:\s|$))\S+)*`;
+const LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags('ug')}|env${valueFlags('u')}|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
 const OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
 const PAYLOAD = String.raw`\s*("(?:[^"\\]|\\.)*"(?=\s|$)|'[^']*'(?=\s|$)|\S.*)(?:\s.*)?$`;
 const wrapper = (interp: string, flag: string): RegExp =>
@@ -306,16 +317,18 @@ function unwrapPayload(raw: string): string {
   return s.replace(/\\(["'`$\\])/g, '$1');
 }
 
+/** The payload of a segment that is a shell-wrapper invocation, tagged with its interpreter; else null. */
+function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | null {
+  for (const { shell, re } of WRAPPER_RES) {
+    const m = seg.match(re);
+    if (m && m[1]) return { payload: unwrapPayload(m[1]), shell };
+  }
+  return null;
+}
+
 /** Wrapper payloads tagged with the interpreter that runs them. */
 function taggedWrapperPayloads(segments: string[]): Array<{ payload: string; shell: WrapperShell }> {
-  const out: Array<{ payload: string; shell: WrapperShell }> = [];
-  for (const seg of segments) {
-    for (const { shell, re } of WRAPPER_RES) {
-      const m = seg.match(re);
-      if (m && m[1]) { out.push({ payload: unwrapPayload(m[1]), shell }); break; }
-    }
-  }
-  return out;
+  return segments.map(matchWrapper).filter((w): w is { payload: string; shell: WrapperShell } => w !== null);
 }
 
 export function wrapperPayloadsFromSegments(segments: string[]): string[] {
@@ -447,15 +460,26 @@ function classifySegments(view: string, tool: string): string | null {
 // Layer 2, fail-closed: an interpreter word (any path prefix, optional .exe) with an exec flag later in
 // the segment. The wrapper regexes above miss launchers and option shapes they do not list; this
 // does not try to parse them. It deletes every quote char from the raw segment and tests the patterns.
-const INTERPRETER_RE = /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash|pwsh|powershell|cmd)(?:\.exe)?\b/i;
-const EXEC_FLAG_RE = /\s(?:-[a-z]*c|-command|\/[ck])\b/i;
+// It runs only on segments the wrapper regexes did NOT match: a matched wrapper's payload is classified
+// already. Each interpreter has its own exec flag (H2): POSIX `-c` is lowercase only (git's `-C` is a
+// folder), and `/c` `/k` count only for cmd and only before whitespace or a quote (not `/c/Users/...`).
+const INTERPRETERS: Array<{ word: RegExp; flag: RegExp }> = [
+  { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: /\s-[a-z]*c\b/ },
+  { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: /\s-c(?:ommand)?\b/i },
+  { word: /(?<![\w.-])cmd(?:\.exe)?\b/i, flag: /\s\/[ck](?=\s|["']|$)/i },
+];
+
+function runsInterpreter(stripped: string): boolean {
+  // Any later word of the same family sits after the first one, so testing from the first is enough.
+  return INTERPRETERS.some(({ word, flag }) => {
+    const at = stripped.search(word);
+    return at >= 0 && flag.test(stripped.slice(at));
+  });
+}
 
 function classifyInterpreterSegments(segments: string[], tool: string): string | null {
   for (const seg of segments) {
-    const stripped = stripQuotedStrings(seg, tool);
-    const at = stripped.search(INTERPRETER_RE);
-    // Any later interpreter word sits after the first one, so testing from the first is enough.
-    if (at < 0 || !EXEC_FLAG_RE.test(stripped.slice(at))) continue;
+    if (!runsInterpreter(stripQuotedStrings(seg, tool))) continue;
     const dequoted = normalizeGitGlobalOptions(seg.replace(/["']/g, ''));
     for (const p of [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS]) if (p.re.test(dequoted)) return p.name;
   }
@@ -464,14 +488,15 @@ function classifyInterpreterSegments(segments: string[], tool: string): string |
 
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
   if (!command || typeof command !== 'string') return null;
-  let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  // M1: scan what the shell would execute. A literal cat/tee heredoc body is prose, not a command.
+  const view = executableView(command, tool);
+  let scan = normalizeGitGlobalOptions(stripQuotedStrings(view, tool));
   // PowerShell: `` res`et `` runs as reset. Quotes are already stripped, so the escaped letter can go.
   if (tool === 'PowerShell') scan = scan.replace(/`([A-Za-z0-9])/g, '$1');
   const patterns = tool === 'PowerShell' ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
-  const view = executableView(command, tool);
   const segHit = classifySegments(view, tool);
   if (segHit) return segHit;
   if (depth < 4) {
@@ -481,11 +506,12 @@ export function classifyDestructive(command: string, depth = 0, tool: string = '
       // (normalizeEscapes), or an escaped quote in a message ("say `"git reset --hard`"")
       // parses as a command.
       const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
-      const interpHit = classifyInterpreterSegments(segments, tool);
+      const wrapped = segments.map(matchWrapper);
+      const interpHit = classifyInterpreterSegments(segments.filter((_, i) => wrapped[i] === null), tool);
       if (interpHit) return interpHit;
       // A powershell/pwsh payload runs as PowerShell, whichever tool launched it.
       const payloads = [
-        ...taggedWrapperPayloads(segments).map((w) => ({ text: w.payload, tool: w.shell === 'powershell' ? 'PowerShell' : tool })),
+        ...wrapped.flatMap((w) => (w ? [{ text: w.payload, tool: w.shell === 'powershell' ? 'PowerShell' : tool }] : [])),
         ...substitutions.map((s) => ({ text: s, tool })),
       ];
       for (const payload of payloads) {

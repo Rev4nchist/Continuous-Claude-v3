@@ -21,7 +21,7 @@ function outputDeny(reason, decision = "deny") {
 }
 
 // src/shared/destructive-classifier.ts
-var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*(?=\s|$)|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
 var SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
 var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
 var methodIs = (verbs) => String.raw`(?=.*(?:(?:--method|--request|-(?:Custom)?Meth\w*)[\s=:]+["']?(?:${verbs})\b|\s-[Xm]\s*["']?(?:${verbs})\b))`;
@@ -41,10 +41,11 @@ var SEGMENT_PATTERNS = [
   // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
   { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: seg(HTTP_CLIENT + methodIs("put") + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) }
 ];
-var PS_QUOTED = /"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
-var BASH_QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g;
+var PS_QUOTED = /`.|"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
+var BASH_QUOTED = /\\.|"(?:[^"\\]|\\.)*"|'[^']*'/g;
+var ESCAPE_CHARS = "\\`";
 function stripQuotedStrings(command, tool = "Bash") {
-  return command.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, (m) => m[0] + m[0]);
+  return command.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, (m) => ESCAPE_CHARS.includes(m[0]) ? m : m[0] + m[0]);
 }
 function hasOpenQuote(text, tool) {
   return /["']/.test(text.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, ""));
@@ -217,7 +218,9 @@ function readBacktick(s, start) {
   return { inner: s.slice(start), end: s.length };
 }
 var PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
-var LAUNCHER = String.raw`(?:${PATH_PREFIX}(?:sudo(?:\s+-[ug]\s+\S+|\s+-\S+)*|env(?:\s+-u\s+\S+|\s+-\S+)*|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+\S+)\s+|[^\s=]+=\S+\s+)*`;
+var LAUNCHER_PATH = String.raw`(?:[^\s=]*[\\/])?`;
+var valueFlags = (letters) => String.raw`(?:\s+-[${letters}]\s+(?!-)\S+|\s+-(?![${letters}](?:\s|$))\S+)*`;
+var LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags("ug")}|env${valueFlags("u")}|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
 var OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
 var PAYLOAD = String.raw`\s*("(?:[^"\\]|\\.)*"(?=\s|$)|'[^']*'(?=\s|$)|\S.*)(?:\s.*)?$`;
 var wrapper = (interp, flag) => new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, "i");
@@ -233,18 +236,15 @@ function unwrapPayload(raw) {
   }
   return s.replace(/\\(["'`$\\])/g, "$1");
 }
-function taggedWrapperPayloads(segments) {
-  const out = [];
-  for (const seg2 of segments) {
-    for (const { shell, re } of WRAPPER_RES) {
-      const m = seg2.match(re);
-      if (m && m[1]) {
-        out.push({ payload: unwrapPayload(m[1]), shell });
-        break;
-      }
-    }
+function matchWrapper(seg2) {
+  for (const { shell, re } of WRAPPER_RES) {
+    const m = seg2.match(re);
+    if (m && m[1]) return { payload: unwrapPayload(m[1]), shell };
   }
-  return out;
+  return null;
+}
+function taggedWrapperPayloads(segments) {
+  return segments.map(matchWrapper).filter((w) => w !== null);
 }
 function wrapperPayloadsFromSegments(segments) {
   return taggedWrapperPayloads(segments).map((w) => w.payload);

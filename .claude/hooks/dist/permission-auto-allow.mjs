@@ -81,7 +81,7 @@ var DESTRUCTIVE_PATTERNS = [
   // `docker compose down -v` deletes the project's named volumes (F05).
   { name: "docker compose down --volumes", re: /\bdocker(?:-compose|\s+compose)\b[^;&|\n]*\bdown\b[^;&|\n]*\s(?:-v|--volumes)\b/i }
 ];
-var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*(?=\s|$)|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
 var SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
 var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
 var methodIs = (verbs) => String.raw`(?=.*(?:(?:--method|--request|-(?:Custom)?Meth\w*)[\s=:]+["']?(?:${verbs})\b|\s-[Xm]\s*["']?(?:${verbs})\b))`;
@@ -111,10 +111,11 @@ var POWERSHELL_PATTERNS = [
   // F06. A pipe into a delete removes every item the left side yields (parity with `xargs rm`).
   { name: "PowerShell pipe into delete (| Remove-Item)", re: /\|\s*(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b/i }
 ];
-var PS_QUOTED = /"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
-var BASH_QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g;
+var PS_QUOTED = /`.|"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
+var BASH_QUOTED = /\\.|"(?:[^"\\]|\\.)*"|'[^']*'/g;
+var ESCAPE_CHARS = "\\`";
 function stripQuotedStrings(command, tool = "Bash") {
-  return command.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, (m) => m[0] + m[0]);
+  return command.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, (m) => ESCAPE_CHARS.includes(m[0]) ? m : m[0] + m[0]);
 }
 function hasOpenQuote(text, tool) {
   return /["']/.test(text.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, ""));
@@ -287,7 +288,9 @@ function readBacktick(s, start) {
   return { inner: s.slice(start), end: s.length };
 }
 var PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
-var LAUNCHER = String.raw`(?:${PATH_PREFIX}(?:sudo(?:\s+-[ug]\s+\S+|\s+-\S+)*|env(?:\s+-u\s+\S+|\s+-\S+)*|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+\S+)\s+|[^\s=]+=\S+\s+)*`;
+var LAUNCHER_PATH = String.raw`(?:[^\s=]*[\\/])?`;
+var valueFlags = (letters) => String.raw`(?:\s+-[${letters}]\s+(?!-)\S+|\s+-(?![${letters}](?:\s|$))\S+)*`;
+var LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags("ug")}|env${valueFlags("u")}|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
 var OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
 var PAYLOAD = String.raw`\s*("(?:[^"\\]|\\.)*"(?=\s|$)|'[^']*'(?=\s|$)|\S.*)(?:\s.*)?$`;
 var wrapper = (interp, flag) => new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, "i");
@@ -303,18 +306,12 @@ function unwrapPayload(raw) {
   }
   return s.replace(/\\(["'`$\\])/g, "$1");
 }
-function taggedWrapperPayloads(segments) {
-  const out = [];
-  for (const seg2 of segments) {
-    for (const { shell, re } of WRAPPER_RES) {
-      const m = seg2.match(re);
-      if (m && m[1]) {
-        out.push({ payload: unwrapPayload(m[1]), shell });
-        break;
-      }
-    }
+function matchWrapper(seg2) {
+  for (const { shell, re } of WRAPPER_RES) {
+    const m = seg2.match(re);
+    if (m && m[1]) return { payload: unwrapPayload(m[1]), shell };
   }
-  return out;
+  return null;
 }
 function normalizeGitGlobalOptions(scan) {
   return scan.replace(
@@ -400,13 +397,20 @@ function classifySegments(view, tool) {
   }
   return null;
 }
-var INTERPRETER_RE = /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash|pwsh|powershell|cmd)(?:\.exe)?\b/i;
-var EXEC_FLAG_RE = /\s(?:-[a-z]*c|-command|\/[ck])\b/i;
+var INTERPRETERS = [
+  { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: /\s-[a-z]*c\b/ },
+  { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: /\s-c(?:ommand)?\b/i },
+  { word: /(?<![\w.-])cmd(?:\.exe)?\b/i, flag: /\s\/[ck](?=\s|["']|$)/i }
+];
+function runsInterpreter(stripped) {
+  return INTERPRETERS.some(({ word, flag }) => {
+    const at = stripped.search(word);
+    return at >= 0 && flag.test(stripped.slice(at));
+  });
+}
 function classifyInterpreterSegments(segments, tool) {
   for (const seg2 of segments) {
-    const stripped = stripQuotedStrings(seg2, tool);
-    const at = stripped.search(INTERPRETER_RE);
-    if (at < 0 || !EXEC_FLAG_RE.test(stripped.slice(at))) continue;
+    if (!runsInterpreter(stripQuotedStrings(seg2, tool))) continue;
     const dequoted = normalizeGitGlobalOptions(seg2.replace(/["']/g, ""));
     for (const p of [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS]) if (p.re.test(dequoted)) return p.name;
   }
@@ -414,22 +418,23 @@ function classifyInterpreterSegments(segments, tool) {
 }
 function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (!command || typeof command !== "string") return null;
-  let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  const view = executableView(command, tool);
+  let scan = normalizeGitGlobalOptions(stripQuotedStrings(view, tool));
   if (tool === "PowerShell") scan = scan.replace(/`([A-Za-z0-9])/g, "$1");
   const patterns = tool === "PowerShell" ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
-  const view = executableView(command, tool);
   const segHit = classifySegments(view, tool);
   if (segHit) return segHit;
   if (depth < 4) {
     try {
       const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
-      const interpHit = classifyInterpreterSegments(segments, tool);
+      const wrapped = segments.map(matchWrapper);
+      const interpHit = classifyInterpreterSegments(segments.filter((_, i) => wrapped[i] === null), tool);
       if (interpHit) return interpHit;
       const payloads = [
-        ...taggedWrapperPayloads(segments).map((w) => ({ text: w.payload, tool: w.shell === "powershell" ? "PowerShell" : tool })),
+        ...wrapped.flatMap((w) => w ? [{ text: w.payload, tool: w.shell === "powershell" ? "PowerShell" : tool }] : []),
         ...substitutions.map((s) => ({ text: s, tool }))
       ];
       for (const payload of payloads) {
