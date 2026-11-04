@@ -35,7 +35,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { laneEnv, makeBoards } from './probe-boards.mjs';
+import { jsonArrayOf, laneEnv, makeBoards } from './probe-boards.mjs';
 
 const run = promisify(execFile);
 
@@ -183,12 +183,13 @@ async function main() {
       const sent = await lane(boards, a.dir, SENDER, ['say', body, '--to', RECEIVER]);
       const readB = await lane(boards, b.dir, RECEIVER, ['inbox', '--json']);
       const readA = await lane(boards, a.dir, RECEIVER, ['inbox', '--json']);
-      const rowsOf = (r) => { try { return JSON.parse(r.out).filter((e) => e.body === body); } catch { return []; } };
+      // A read that failed or returned junk is null, never []: an empty A read proves "absent" only when it ran.
+      const rowsOf = (r) => jsonArrayOf(r)?.filter((e) => e.body === body) ?? null;
       const inB = rowsOf(readB);
       const inA = rowsOf(readA);
       check('ONCE-ACROSS-BOARDS: a DM from board A shows once across a read on B then on A',
-        sent.code === 0 && inB.length === 1 && inB[0].project_key === a.key && inA.length === 0,
-        `say exit ${sent.code}; read on B saw ${inB.length}, read on A saw ${inA.length} (want 1 then 0)${sent.code ? `: ${sent.err.trim().split(/\r?\n/)[0]}` : ''}`);
+        sent.code === 0 && !!inB && !!inA && inB.length === 1 && inB[0].project_key === a.key && inA.length === 0,
+        `say exit ${sent.code}; read on B exit ${readB.code} saw ${inB ? inB.length : 'invalid output'}, read on A exit ${readA.code} saw ${inA ? inA.length : 'invalid output'} (want 1 then 0)${sent.code ? `: ${sent.err.trim().split(/\r?\n/)[0]}` : ''}`);
     }
   } finally {
     await c.query('DELETE FROM agentic_os.lane_event WHERE session_id=$1', [SENDER]).catch(() => {});

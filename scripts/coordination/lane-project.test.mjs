@@ -1000,6 +1000,38 @@ describe('project which / register / unregister', () => {
     assert.ok(hint.err.includes(`${fwd(fakeHome)}/continuous-claude/scripts/coordination/lane.mjs`), hint.err);
   });
 
+  it('PR 297 F1: a board resolved from a home mirror that differs from the primary repo copy prints one WARNING and still works; equal copies and an explicit LANE_REGISTRY_PATH print none', () => {
+    const fakeHome = dir('mirror-primary');
+    const fakeUser = dir('mirror-live');
+    const repoReg = path.join(fakeHome, 'continuous-claude', '.claude', 'project-registry.json');
+    const mirrorReg = path.join(fakeUser, '.claude', 'project-registry.json');
+    fs.mkdirSync(path.dirname(repoReg), { recursive: true });
+    fs.mkdirSync(path.dirname(mirrorReg), { recursive: true });
+    const entryA = (extra = {}) => ({ name: 'pb-a', key: 'pb-a', path: fwd(state.dirs.A), status: 'active', ...extra });
+    const put = (f, projects) => fs.writeFileSync(f, JSON.stringify({ version: '1.0', projects }));
+    const mirrorEnv = { LANE_REGISTRY_PATH: '', LANE_REGISTRY_REPO: '', LANE_REGISTRY_ACTIVE: '', CCV3_USER_HOME: fakeHome, USERPROFILE: fakeUser, HOME: fakeUser };
+    const warnings = (r) => r.err.split(/\r?\n/).filter((l) => /WARNING/.test(l));
+
+    put(repoReg, [entryA({ laneBoard: 'continuous-claude' })]);
+    put(mirrorReg, [entryA()]); // the stale mirror: no laneBoard, so the board is 'pb-a'
+    const stale = lane(state.dirs.A, SA, ['board', '--json'], mirrorEnv);
+    assert.equal(stale.code, 0, stale.all);
+    assert.equal(JSON.parse(stale.out).board, 'pb-a', 'the stale mirror still decides the board: the warning does not block');
+    assert.equal(warnings(stale).length, 1, stale.err);
+    assert.ok(warnings(stale)[0].includes('pb-a: board repo=continuous-claude mirror=pb-a'), stale.err);
+    assert.ok(stale.err.includes(fwd(mirrorReg)) && stale.err.includes(fwd(repoReg)), stale.err);
+
+    put(mirrorReg, [entryA({ laneBoard: 'continuous-claude' })]);
+    const same = lane(state.dirs.A, SA, ['board', '--json'], mirrorEnv);
+    assert.equal(same.code, 0, same.all);
+    assert.deepEqual(warnings(same), [], same.err);
+
+    put(mirrorReg, [entryA()]);
+    const explicit = lane(state.dirs.A, SA, ['board', '--json'], { ...mirrorEnv, LANE_REGISTRY_PATH: state.registry });
+    assert.equal(explicit.code, 0, explicit.all);
+    assert.deepEqual(warnings(explicit), [], 'an explicit LANE_REGISTRY_PATH is a deliberate override, not a stale mirror');
+  });
+
   it('MEDIUM 4: a database failure after the files are written restores both copies byte for byte and leaves no temp file, and a retry works', async () => {
     const before = files();
     await q(`ALTER TABLE agentic_os.project RENAME TO project_off`);

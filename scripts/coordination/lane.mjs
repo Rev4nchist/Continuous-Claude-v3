@@ -82,6 +82,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { repoPath } from './canon-home.mjs';
 import { boardRoots, loadRegistry, normalizeRoot, resolveBoard } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
+import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
   adoptAllowed, isSafeId, label, labelWithAgent, listIdentities, readIdentity, resolveName, short, validAgent,
 } from './session-label.mjs';
@@ -170,8 +171,28 @@ const LANE_CLI = fwd(resolve(PRIMARY, 'scripts', 'coordination', 'lane.mjs'));
 function softBoard() {
   if (BOARD === null) {
     BOARD = resolveBoard(process.cwd(), { cli: true, projectFlag: typeof flags.project === 'string' ? flags.project : undefined }) ?? false;
+    if (BOARD) warnIfMirrorStale();
   }
   return BOARD || null;
+}
+
+/**
+ * The board came from the home mirror (~/.claude/project-registry.json). Until the post-merge sync, a stale mirror can give a
+ * nested app the wrong board, and `add` then writes lanes with that project_key (PR 297). Say so on stderr, once per run. Never blocks.
+ * An explicit LANE_REGISTRY_PATH is a deliberate override (tests, probes): no warning.
+ */
+function warnIfMirrorStale() {
+  if (process.env.LANE_REGISTRY_PATH) return;
+  try {
+    const repoFile = registryRepoFile();
+    const mirror = mirrorRegistryPath(process.env);
+    if (resolve(repoFile) === resolve(mirror)) return;
+    const d = registryDrift(repoFile, mirror);
+    if (d.state !== 'differ') return;
+    const shown = d.diffs.slice(0, 3).join('; ') + (d.diffs.length > 3 ? `; and ${d.diffs.length - 3} more` : '');
+    console.error(`WARNING: board '${BOARD.key}' came from ${fwd(mirror)}, which differs from the repo copy ${fwd(repoFile)}: ${shown}. ` +
+      'The board may be wrong. Fix: on main, run scripts/sync-to-active.sh --changed (or run lane.mjs with LANE_REGISTRY_PATH set to the repo copy).');
+  } catch { /* a warning must never break a lane command */ }
 }
 
 /** The board for this run. A cwd with no board is an error that says how to register it. */

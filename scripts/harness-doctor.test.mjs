@@ -18,6 +18,8 @@
 //   blocklist:age: 1 day (PASS), 3 days exactly (PASS), 4 days (WARN), 14 days exactly (WARN), 15 days (FAIL), never committed (WARN)
 //   registry:roots-exist: an active entry with a missing path (FAIL, names it), an inactive one (ignored), in-development counts as active,
 //          a present path (PASS), no registry file (PASS absent), a registry that is not JSON (WARN)
+//   registry:mirror-drift: the home mirror lacks a laneBoard (FAIL, names the key), a status change and a key in one copy only (FAIL),
+//          the same fields spelled differently or a notes-only change (PASS), a missing copy (PASS absent), a copy that is not JSON (WARN)
 //   registry:project-rows: no row (WARN), another root (WARN), the same root spelled with capitals (PASS), inactive entry (ignored),
 //          database skipped / no URL / unreadable (PASS / WARN / WARN); against a real scratch database: WARN, then PASS once the row exists
 //   lanes:board-columns: both columns (PASS), none (WARN, never FAIL: 0004 is not applied live yet), one of two (FAIL), no URL or unreadable (WARN);
@@ -641,6 +643,64 @@ test('registry:roots-exist is a PASS that says absent without a registry file, a
   assert.match(c.detail, /^absent: /);
   put(join(fx.home, '.claude', 'project-registry.json'), '{ not json');
   const bad = run(fx).checks['registry:roots-exist'];
+  assert.equal(bad.status, 'WARN');
+  assert.match(bad.detail, /not valid JSON/);
+});
+
+// registry:mirror-drift. CodeRabbit PR 297: a stale home mirror gives a nested app the wrong lane board. Each test breaks one thing
+// and reads this one line; each fails if the check stops comparing that field or stops reading the repo copy.
+const writeRepoRegistry = (fx, projects) => put(join(fx.repo, '.claude', 'project-registry.json'), JSON.stringify({ version: '1.0', projects }));
+const board = (key, path, laneBoard, status = 'active') => ({ ...entry(key, path, status), ...(laneBoard ? { laneBoard } : {}) });
+
+test('registry:mirror-drift is a FAIL naming the key when the home mirror lacks a laneBoard the repo copy has, and exits 1', () => {
+  const fx = fixture();
+  const real = fwd(join(fx.root, 'real'));
+  mkdirSync(real);
+  writeRepoRegistry(fx, [board('main', real, 'main'), board('nested', real + '/apps/nested', 'main')]);
+  writeRegistry(fx, [board('main', real, 'main'), board('nested', real + '/apps/nested')]);
+  const r = run(fx);
+  const c = r.checks['registry:mirror-drift'];
+  assert.equal(c.status, 'FAIL', r.stdout);
+  assert.ok(c.detail.includes('nested: board repo=main mirror=nested'), c.detail);
+  assert.ok(!c.detail.includes('main: '), 'a matching key is not named');
+  assert.match(c.detail, /sync-to-active/);
+  assert.equal(r.code, 1);
+});
+
+test('registry:mirror-drift is a FAIL for a status change and for a key in only one copy', () => {
+  const fx = fixture();
+  const real = fwd(join(fx.root, 'real'));
+  mkdirSync(real);
+  writeRepoRegistry(fx, [board('dead', real, null, 'inactive'), board('fresh', real)]);
+  writeRegistry(fx, [board('dead', real), board('stale-only', real)]);
+  const c = run(fx).checks['registry:mirror-drift'];
+  assert.equal(c.status, 'FAIL');
+  assert.ok(c.detail.includes('dead: status repo=inactive mirror=active'), c.detail);
+  assert.ok(c.detail.includes('fresh: only in the repo copy') && c.detail.includes('stale-only: only in the mirror'), c.detail);
+});
+
+test('registry:mirror-drift is a PASS when the board fields agree, even if a path is spelled differently or notes differ', () => {
+  const fx = fixture();
+  const real = fwd(join(fx.root, 'real'));
+  mkdirSync(real);
+  writeRepoRegistry(fx, [board('main', real, 'main')]);
+  writeRegistry(fx, [{ ...board('main', real.toUpperCase().replace(/\//g, '\\'), 'main'), notes: 'mirror only' }]);
+  const c = run(fx).checks['registry:mirror-drift'];
+  assert.equal(c.status, 'PASS', c.detail);
+});
+
+test('registry:mirror-drift is a PASS that says absent when a copy is missing, and a WARN when one is not JSON', () => {
+  const fx = fixture();
+  const real = fwd(join(fx.root, 'real'));
+  mkdirSync(real);
+  const none = run(fx).checks['registry:mirror-drift'];
+  assert.equal(none.status, 'PASS');
+  assert.match(none.detail, /^absent: /);
+  writeRepoRegistry(fx, [board('main', real, 'main')]);
+  assert.match(run(fx).checks['registry:mirror-drift'].detail, /^absent: /, 'the home mirror is missing: roots-exist reports that');
+  writeRegistry(fx, [board('main', real, 'main')]);
+  put(join(fx.repo, '.claude', 'project-registry.json'), '{ not json');
+  const bad = run(fx).checks['registry:mirror-drift'];
   assert.equal(bad.status, 'WARN');
   assert.match(bad.detail, /not valid JSON/);
 });

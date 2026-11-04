@@ -12,6 +12,7 @@
  * schedule:* reads scripts/scheduled/tasks.json and runs `schtasks /query /v /fo csv` (read-only, Windows only).
  * blocklist:age reads git history. Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds fake <task>.csv schtasks output.
  * registry:* and lanes:* read <home>/.claude/project-registry.json (the copy lane.mjs reads), the worktree lane.mjs files, and,
+ * for registry:mirror-drift, <repo>/.claude/project-registry.json too (FAIL when the two differ in keys, roots, status or laneBoard),
  * for registry:project-rows, lanes:board-columns and lanes:schema (agentic_os.__migrations rows vs apps/agentic-os/drizzle/meta/_journal.json,
  * plus the lane_guard_foreign_board trigger), the database named by CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL or OPC_POSTGRES_URL
  * (first one set; no default). That read is one READ ONLY transaction in a child process. No URL is a WARN, an unreachable database is a WARN.
@@ -36,6 +37,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
+import { registryDrift } from './coordination/registry-drift.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR = 3600 * 1000;
@@ -438,6 +440,23 @@ export function registryRootsExist(o) {
   return result('FAIL', 'registry', 'roots-exist', `${missing.length} non-inactive registry root(s) missing on disk in ${reg.file}: ${names}; fix the path or set status inactive`);
 }
 
+/**
+ * The home mirror (the copy lane.mjs reads) and the repo copy must agree on what picks a lane board: keys, roots, status, laneBoard.
+ * A stale mirror gives a nested app the board of its own key, and `lane add` then writes lanes with that project_key (PR 297).
+ * FAIL on drift: it is silent and writes wrong rows. A missing copy is a PASS that says absent (roots-exist reports a missing mirror).
+ */
+export function registryMirrorDrift(o) {
+  const repoFile = join(o.repo, ...REGISTRY_REL);
+  const mirror = join(o.home, ...REGISTRY_REL);
+  const r = registryDrift(repoFile, mirror);
+  if (r.state === 'repo-absent') return absent('registry', 'mirror-drift', repoFile);
+  if (r.state === 'mirror-absent') return absent('registry', 'mirror-drift', mirror);
+  if (r.state === 'unreadable') return result('WARN', 'registry', 'mirror-drift', `${repoFile} or ${mirror} is not valid JSON with a projects array`);
+  if (r.state === 'same') return result('PASS', 'registry', 'mirror-drift', `${mirror} matches ${repoFile} on keys, roots, status and laneBoard`);
+  const shown = r.diffs.slice(0, 8).join('; ') + (r.diffs.length > 8 ? `; and ${r.diffs.length - 8} more` : '');
+  return result('FAIL', 'registry', 'mirror-drift', `${r.diffs.length} difference(s) between the repo copy ${repoFile} and the mirror ${mirror} that lane.mjs reads: ${shown}; run scripts/sync-to-active.sh --changed on main`);
+}
+
 // ---- lanes ----
 const DB_CHILD_TIMEOUT_MS = 20000;
 /** The pg module lives in the hooks bundle or apps/agentic-os, not at the repo root. Same lookup as lane.mjs. */
@@ -578,7 +597,7 @@ export function worktreeLaneMjs(o) {
   return result('PASS', 'lanes', 'worktree-lane-mjs', copies.length ? `all ${copies.length} worktree lane.mjs copies match ${primary}` : `no worktree under ${dir} holds a lane.mjs`);
 }
 
-const registrySection = (o) => [registryRootsExist(o), registryProjectRows(o)];
+const registrySection = (o) => [registryRootsExist(o), registryMirrorDrift(o), registryProjectRows(o)];
 const lanesSection = (o) => [laneBoardColumns(o), laneSchema(o), worktreeLaneMjs(o)];
 
 // ---- run ----

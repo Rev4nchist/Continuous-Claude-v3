@@ -58,6 +58,7 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { maskUrl } from './scratch-db.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..');
@@ -170,7 +171,7 @@ async function main() {
 
   console.log('session lifecycle probe');
   console.log(`  hook      ${HOOK}`);
-  console.log(DB_URL ? `  database  ${DB_URL.replace(/(\/\/[^:/@]+:)[^@]*@/, '$1***@')} (pg module)` : `  container ${CONTAINER}`);
+  console.log(DB_URL ? `  database  ${maskUrl(DB_URL)} (pg module)` : `  container ${CONTAINER}`);
   console.log(`  probe id  ${PROBE_ID}\n`);
 
   try {

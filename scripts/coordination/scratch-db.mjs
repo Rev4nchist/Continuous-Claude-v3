@@ -78,8 +78,32 @@ export function assertScratchUrl(url) {
   return name;
 }
 
-/** Hide the password in a URL before it goes to a log. The stdout JSON of `create` keeps the real URL by contract. */
-export const maskUrl = (url) => String(url).replace(/(\/\/[^:/@]+:)[^@]*@/, '$1***@');
+/** Query parameters of a libpq URL that hold a secret or the path of one. pg-connection-string reads them like userinfo. */
+const SENSITIVE_QUERY_KEYS = new Set(['password', 'passfile', 'sslpassword', 'sslkey', 'sslcert']);
+const queryKey = (raw) => {
+  try { return decodeURIComponent(raw.replace(/\+/g, ' ')).toLowerCase(); } catch { return raw.toLowerCase(); }
+};
+
+/**
+ * Hide secrets in a URL before it goes to a log: the userinfo password and the sensitive query parameters
+ * (password, passfile, sslpassword, sslkey, sslcert; key match ignores case and percent-encoding).
+ * Text based, not `new URL`, so an unparseable string still masks. The stdout JSON of `create` keeps the real URL by contract.
+ */
+export function maskUrl(url) {
+  const s = String(url);
+  const q = s.indexOf('?');
+  let out = s;
+  if (q >= 0) {
+    const h = s.indexOf('#', q);
+    const end = h < 0 ? s.length : h;
+    const query = s.slice(q + 1, end).split('&').map((kv) => {
+      const eq = kv.indexOf('=');
+      return eq > 0 && SENSITIVE_QUERY_KEYS.has(queryKey(kv.slice(0, eq))) ? `${kv.slice(0, eq)}=***` : kv;
+    }).join('&');
+    out = `${s.slice(0, q + 1)}${query}${s.slice(end)}`;
+  }
+  return out.replace(/(\/\/[^:/@]+:)[^@]*@/, '$1***@');
+}
 
 const urlWithDb = (url, db) => {
   const u = new URL(url);

@@ -56,3 +56,18 @@ export function laneEnv(url, b, extra = {}) {
     ...extra,
   };
 }
+
+/**
+ * The parsed array of a `lane.mjs ... --json` read, or null. `r` is { code, out }.
+ * A probe that asserts "this message is absent" must get an array from a read that exited 0:
+ * a failed read or a body that is not a JSON array proves nothing, so it gives null and not [].
+ */
+export function jsonArrayOf(r) {
+  if (!r || r.code !== 0) return null;
+  try {
+    const v = JSON.parse(r.out);
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}

@@ -216,12 +216,17 @@ async function main() {
       `exit ${ad.code}, project_key=${b1b.k}, title=${JSON.stringify(b1b.title)}; ${ad.err.split('\n')[0]}`);
 
     // 5. messages. sa broadcasts and sends a DM from A; sb reads on B.
-    lane(dirA, SA, ['say', 'PBPROBE-BROADCAST from A']);
+    const bc = lane(dirA, SA, ['say', 'PBPROBE-BROADCAST from A']);
+    // Absence on B proves isolation only if the broadcast exists on A. Query the table: an inbox read as SB would move A's watermark, which (6) checks.
+    const bcRow = await one(
+      `SELECT count(*)::int AS n FROM agentic_os.lane_event
+        WHERE session_id=$1 AND to_session_id IS NULL AND project_key=$2 AND body=$3`, [SA, KEY_A, 'PBPROBE-BROADCAST from A']);
     const dm = lane(dirA, SA, ['say', 'PBPROBE-DM from sa', '--to', SB]);
     const inB = json(lane(dirB, SB, ['inbox', '--json'])) ?? [];
     const bodiesB = inB.map((e) => e.body);
-    check('(5a) a broadcast from A is absent from B\'s inbox', bodiesB.length > 0 && !bodiesB.includes('PBPROBE-BROADCAST from A'),
-      `B inbox: ${bodiesB.join(' | ') || '(empty)'}`);
+    check('(5a) a broadcast from A exists on board A and is absent from B\'s inbox',
+      bc.code === 0 && bcRow.n === 1 && bodiesB.length > 0 && !bodiesB.includes('PBPROBE-BROADCAST from A'),
+      `say exit ${bc.code}, ${bcRow.n} broadcast row(s) on A; B inbox: ${bodiesB.join(' | ') || '(empty)'}`);
     const dmRow = inB.find((e) => e.body === 'PBPROBE-DM from sa');
     check('(5b) a DM from sa to sb shows in sb\'s inbox from B, from board A', !!dmRow && dmRow.project_key === KEY_A && dm.code === 0,
       dmRow ? `from board ${dmRow.project_key}` : `say exit ${dm.code}: ${dm.all.trim().split('\n')[0]}`);
