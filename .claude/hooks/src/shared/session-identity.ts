@@ -177,7 +177,7 @@ export function previousFromTranscript(transcriptPath: string | null | undefined
   return parent;
 }
 
-const normCwd = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+export const normCwd = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
 /**
  * clear: the one identity that ended with endReason "clear" in the last 120 s in this cwd.

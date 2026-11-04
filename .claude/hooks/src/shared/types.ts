@@ -108,6 +108,22 @@ export interface ContextInjectionHookOutput {
 }
 
 /**
+ * SessionStart only. Same as ContextInjectionHookOutput plus `sessionTitle`, which sets the
+ * Claude Code session name (proven for interactive sessions, spike S1 2026-11-03). Keep it a
+ * non-empty string or leave the key out: a field of the wrong shape makes the engine skip the
+ * whole hook output, greeting included. PostToolUse shares ContextInjectionHookOutput, so the
+ * key lives on its own type.
+ */
+export interface SessionStartHookOutput {
+  hookSpecificOutput: {
+    hookEventName: 'SessionStart';
+    additionalContext: string;
+    sessionTitle?: string;
+  };
+  systemMessage?: string;
+}
+
+/**
  * DISCARDED BY THE HARNESS. Not "legacy" in the sense of older-but-working --
  * `result`/`message`/`reason` are read by nothing, so a hook returning this
  * exits 0, looks healthy, and says nothing at all.
@@ -131,6 +147,7 @@ export interface LegacyHookOutput {
 export type HookOutput =
   | PreToolUseHookOutput
   | ContextInjectionHookOutput
+  | SessionStartHookOutput
   | LegacyHookOutput;
 
 // =============================================================================

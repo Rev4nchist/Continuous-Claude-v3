@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  adoptAllowed, clipName, isSafeId, label, labelWithAgent, listIdentities, readIdentity, resolveName, validAgent,
+  AUTO_WORDS, adoptAllowed, clipName, isSafeId, label, labelWithAgent, listIdentities, readIdentity, resolveName, validAgent,
   writeIdentity,
 } from './session-label.mjs';
 
@@ -163,4 +163,17 @@ test('adoptAllowed refuses a stranger, two unnamed sessions, and itself', () => 
   assert.equal(adoptAllowed(U1, U2, null, null), false);
   assert.equal(adoptAllowed(U1, U1, { name: 'trex' }, { name: 'trex' }), false);
   assert.equal(adoptAllowed(U1, U2, { name: 'trex' }, { name: 'x', previous: U3 }), false);
+});
+
+test('adoptAllowed refuses a same-name adopt when the shared name is an auto word (D3)', () => {
+  assert.equal(adoptAllowed(U1, U2, { name: 'otter' }, { name: 'Otter' }), false, 'shared list word');
+  assert.equal(adoptAllowed(U1, U2, { name: 'otter2' }, { name: 'otter2' }), false, 'shared <word>2');
+  assert.equal(adoptAllowed(U1, U2, { name: 'otter' }, { name: 'otter', previous: U1 }), true, 'the previous link still counts');
+  assert.equal(adoptAllowed(U1, U2, { name: 'trex' }, { name: 'trex' }), true, 'a chosen name still adopts');
+});
+
+test('AUTO_WORDS is 48 distinct lowercase words', () => {
+  assert.equal(AUTO_WORDS.length, 48);
+  assert.equal(new Set(AUTO_WORDS).size, 48);
+  assert.ok(AUTO_WORDS.every((w) => /^[a-z]+$/.test(w)));
 });
