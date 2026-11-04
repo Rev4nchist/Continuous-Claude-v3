@@ -159,3 +159,17 @@ test('report prints the body-mode counts and the excluded runs (breaks if the re
   assert.match(io.out.join('\n'), /Runs, 3 \(1 excluded\) \| body mode: withheld 1, full 1, unknown 1/);
 });
 
+
+test('score checks each run against the freeze of its own reviewer: engine and cursor-review rows in one archive both count (breaks if one freeze judges every row)', async () => {
+  const dir = tmp();
+  const find = path.join(dir, 'findings.json');
+  writeFileSync(find, JSON.stringify({ findings: [] }));
+  const row = (pr, extra) => ({ set: 'holdout', pr, round: 1, sha40: String(pr).repeat(40).slice(0, 40), status: 'ok', ts: '2026-11-04T00:00:00Z', findingsPath: find, ...extra });
+  const runs = [row(5, { reviewer: 'engine', promptSha256: 'E1' }), row(6, { reviewer: 'cursor-review', promptSha256: 'OLD' }), row(7, { promptSha256: 'E1' }), row(8, { reviewer: 'engine', promptSha256: 'STALE' })];
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${runs.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [], zeroMajorPrs: [] }));
+  const cfg = { freeze: { promptSha256: 'OLD' }, engineFreeze: { promptSha256: { full: 'E1', delta: 'D1' } } };
+  const io = quiet();
+  assert.equal(await main(['score', '--dir', dir, '--linktype', path.join(dir, 'none.json')], { ...io, cfg }), 0);
+  assert.equal(JSON.parse(io.out.join('\n')).excludedRuns, 1, 'only the engine row with a stale hash leaves; the row with no reviewer uses the fallback freeze');
+});

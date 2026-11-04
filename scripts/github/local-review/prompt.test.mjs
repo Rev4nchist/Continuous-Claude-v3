@@ -165,6 +165,12 @@ test('lastJsonBlock: withdrawn is [] when absent or the wrong type, bad items ar
   assert.deepEqual(got, [{ id: 'k', path: 'a.mjs', line: 12, severity: 'minor', reason: '5' }]);
 });
 
+test('lastJsonBlock: a withdrawn item without a path and a line is dropped, so withdrawn:[{}] adds nothing to the funnel (breaks if asWithdrawn keeps an empty item)', () => {
+  const ok = { id: 'w1', path: 'a.mjs', line: 9, severity: 'major', reason: 'guarded' };
+  const bad = [{}, { id: 'x', reason: 'no place' }, { path: 'a.mjs', reason: 'no line' }, { line: 4, reason: 'no path' }];
+  assert.deepEqual(lastJsonBlock(block({ findings: [], reviewed: [], prior: {}, withdrawn: [...bad, ok] })).withdrawn, [ok]);
+  assert.deepEqual(lastJsonBlock(block({ findings: [], reviewed: [], prior: {}, withdrawn: [{}] })).withdrawn, []);
+});
 test('the prompt asks for withdrawn, keeps the disprove step, and its example round-trips with a withdrawn item (breaks if the prompt stops asking for the list or phase 1 removes disprove early)', () => {
   const text = buildEnginePrompt({ files: [] }).promptText;
   assert.match(text, /"withdrawn"/);

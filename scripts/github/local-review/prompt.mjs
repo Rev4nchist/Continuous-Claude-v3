@@ -154,7 +154,9 @@ function asWithdrawn(item) {
   if (!isObject(item)) return null;
   const itemPath = textOf(item.path);
   if (itemPath?.startsWith('<REPLACE')) return null;
-  return { id: textOf(item.id), path: itemPath, line: lineOf(item.line), severity: textOf(item.severity), reason: String(item.reason ?? '').slice(0, REASON_MAX) };
+  const line = lineOf(item.line);
+  if (itemPath === null || line === null) return null; // the prompt asks for path and line: an item without them is not a withdrawn finding
+  return { id: textOf(item.id), path: itemPath, line, severity: textOf(item.severity), reason: String(item.reason ?? '').slice(0, REASON_MAX) };
 }
 
 function asAnswer(value) {

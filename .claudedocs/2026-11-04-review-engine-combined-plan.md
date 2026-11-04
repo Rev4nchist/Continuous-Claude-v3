@@ -7,7 +7,7 @@ Inputs:
 
 ## 1. Answer first
 
-- The engine misses most real bugs. Same-issue recall is 1 of 10 on the holdout and 0 of 12 on the dev set.
+- The prior cursor-review baseline misses most real bugs. Its same-issue recall was 1 of 10 on the holdout and 0 of 12 on the dev set. These runs came from `cursor-review.mjs`. The harness had not yet run the engine itself (phase 1 adds that run).
 - Most misses are not cross-file. 17 of 22 real Majors sit in the changed hunk or the same file, and 0 needed a call graph (team 2 §1). So the first build aims at in-file logic, not at a code graph.
 - The engine deletes its own findings before we see them (`scripts\github\local-review\prompt.mjs:61`, "disprove each finding"). We cannot see where the misses go until we log the funnel (team 1 R0).
 - The plan:

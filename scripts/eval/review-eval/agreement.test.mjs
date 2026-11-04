@@ -30,3 +30,9 @@ test('agreementOf gives n, agree, raw and kappa, and lists the keys the raters s
   assert.equal(typeof got.kappa, 'number');
   assert.deepEqual(agreementOf({}, {}), { n: 0, agree: 0, raw: null, kappa: null, disputed: [] });
 });
+
+test('kappa is exactly 0.6 for 141 yes/yes, 19 yes/no, 9 no/yes, 31 no/no, so the kappa >= 0.6 gate accepts it (breaks if kappa is computed from float shares: that gives 0.5999999999999998)', () => {
+  const k = cohenKappa([...rep('yes', 'yes', 141), ...rep('yes', 'no', 19), ...rep('no', 'yes', 9), ...rep('no', 'no', 31)]);
+  assert.equal(k, 0.6);
+  assert.ok(k >= 0.6);
+});

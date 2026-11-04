@@ -27,6 +27,18 @@ test('toEvalFindings maps startLine to line, keeps open findings only, and carri
   assert.deepEqual([got.durationMs, got.usage, got.modelVerified, got.trusted, got.promptSha256], [900, { inputTokens: 5 }, true, false, 'P']);
 });
 
+test('toEvalFindings sums duration and numeric usage over every attempt and takes modelVerified from the final one (breaks if only the last attempt is costed)', () => {
+  const runs = [
+    { runId: 'a1', durationMs: 900, usage: { inputTokens: 5, outputTokens: 2 }, modelVerified: true },
+    { runId: 'a2', durationMs: 400, usage: { inputTokens: 7, cacheReadTokens: 3 }, modelVerified: false },
+  ];
+  const got = toEvalFindings(record({ runs }));
+  assert.equal(got.durationMs, 1300);
+  assert.deepEqual(got.usage, { inputTokens: 12, outputTokens: 2, cacheReadTokens: 3 });
+  assert.equal(got.modelVerified, false);
+  const none = toEvalFindings(record({ runs: [] }));
+  assert.deepEqual([none.durationMs, none.usage, none.modelVerified], [null, null, false]);
+});
 function harness(over = {}) {
   const seen = { gh: [], readAt: [] };
   const reviewHead = async (opts, deps) => {

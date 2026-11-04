@@ -16,9 +16,11 @@ export function cohenKappa(pairs) {
     countB.set(b, (countB.get(b) ?? 0) + 1);
     if (a === b) agree += 1;
   }
-  let pe = 0;
-  for (const [cls, ca] of countA) pe += (ca / n) * ((countB.get(cls) ?? 0) / n);
-  return pe === 1 ? null : (agree / n - pe) / (1 - pe);
+  // Integer form: kappa = (n*agree - S) / (n*n - S), S = the sum of the two raters' counts per class multiplied. One division, so a table
+  // whose kappa is exactly 0.6 gives 0.6 (the share form gives 0.5999999999999998 and fails a `>= 0.6` gate).
+  let marginProducts = 0;
+  for (const [cls, ca] of countA) marginProducts += ca * (countB.get(cls) ?? 0);
+  return marginProducts === n * n ? null : (n * agree - marginProducts) / (n * n - marginProducts);
 }
 
 /**

@@ -14,15 +14,26 @@ import { defaultGh } from './github.mjs';
 
 const CONFIG_FILE = 'review-router.config.json';
 
+/** Duration and numeric usage summed over every attempt of a record (a retry costs too), or null when no attempt has one. */
+function costOf(attempts) {
+  const durations = attempts.map((a) => a.durationMs).filter((d) => typeof d === 'number');
+  const usage = {};
+  let any = false;
+  for (const a of attempts) for (const [k, v] of Object.entries(a.usage ?? {})) if (typeof v === 'number') { usage[k] = (usage[k] ?? 0) + v; any = true; }
+  return { durationMs: durations.length > 0 ? durations.reduce((x, y) => x + y, 0) : null, usage: any ? usage : null };
+}
+
 /**
  * The engine record as eval findings: { findings, funnel, withdrawn, tracePath, runId, model, cursorAgentVersion, promptSha256, durationMs, usage }.
  * Only open findings count. line is the engine's startLine (the shape evaluateRuns and the cursor-review findings file use).
  */
 export function toEvalFindings(record, { tracePath = null } = {}) {
-  const last = (record.runs ?? []).at(-1) ?? {};
+  const attempts = record.runs ?? [];
+  const last = attempts.at(-1) ?? {};
+  const { durationMs, usage } = costOf(attempts);
   return {
     runId: record.runId, model: record.model ?? null, cursorAgentVersion: record.cursorAgentVersion ?? null, promptSha256: record.promptSha256 ?? null,
-    durationMs: last.durationMs ?? null, usage: last.usage ?? null, modelVerified: Boolean(last.modelVerified), trusted: record.trusted === true,
+    durationMs, usage, modelVerified: Boolean(last.modelVerified), trusted: record.trusted === true,
     funnel: record.funnel ?? null, withdrawn: record.withdrawn ?? [], tracePath,
     findings: (record.findings ?? []).filter((f) => (f.status ?? 'open') === 'open').map((f) => ({
       id: f.id, file: f.file, line: f.startLine ?? null, lineEnd: f.endLine ?? f.startLine ?? null, severity: f.severity, title: f.title, confidence: f.confidence ?? null,
