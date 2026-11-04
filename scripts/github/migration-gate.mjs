@@ -74,10 +74,16 @@ export function readPrFacts({ head, repoPath, base = 'main', remote }) {
     if (!has()) throw new Error(`head ${head} is not in ${repoPath}${remote ? ` and could not be fetched from ${remote}` : ''}; fetch it and run again`);
   }
   const mergeBase = git(repoPath, ['merge-base', base, head]).trim();
-  const added = git(repoPath, ['diff', '--name-only', '--diff-filter=A', mergeBase, head, '--', DRIZZLE_REL])
+  // --no-renames: a deleted migration plus a similar new one is a rename to git, and --diff-filter=A would drop the new file.
+  const added = git(repoPath, ['diff', '--no-renames', '--name-only', '--diff-filter=A', mergeBase, head, '--', DRIZZLE_REL])
     .split(/\r?\n/).filter((f) => new RegExp(`^${DRIZZLE_REL}/\\d{4}_[^/]+\\.sql$`).test(f));
   let tags = [];
-  try { tags = JSON.parse(git(repoPath, ['show', `${head}:${JOURNAL_REL}`])).entries.map((e) => e.tag); } catch { /* no journal at the head */ }
+  try {
+    tags = JSON.parse(git(repoPath, ['show', `${head}:${JOURNAL_REL}`])).entries.map((e) => e.tag);
+  } catch {
+    // Fail closed: a PR that adds a numbered .sql file and has no readable journal cannot be told from a migration.
+    if (added.length) throw new Error(`the PR adds ${added.map((f) => f.split('/').pop()).join(', ')} but the journal at the head (${JOURNAL_REL}) cannot be read`);
+  }
   // Only files the journal lists are migrations: 0004_down.sql is documentation.
   const newMigrations = added.map((f) => f.slice(DRIZZLE_REL.length + 1, -4)).filter((tag) => tags.includes(tag));
   return { newMigrations, journalCount: tags.length };

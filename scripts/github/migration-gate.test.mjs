@@ -111,6 +111,23 @@ describe('the script against a git repo and a scratch database', () => {
     git('add', '-A');
     git('commit', '-q', '--no-verify', '-m', 'down only');
     heads.down = git('rev-parse', 'HEAD');
+    // A PR that adds a migration and breaks the journal at the head.
+    git('switch', '-q', 'main');
+    git('switch', '-q', '-c', 'pr-bad-journal');
+    put('apps/agentic-os/drizzle/0004_per_project_lanes.sql', '-- 0004\n');
+    put('apps/agentic-os/drizzle/meta/_journal.json', '{ not json');
+    git('add', '-A');
+    git('commit', '-q', '--no-verify', '-m', 'add 0004 with a broken journal');
+    heads.badJournal = git('rev-parse', 'HEAD');
+    // A PR that deletes 0000 and adds 0004 with the same text: git reports the pair as a rename, not an add.
+    git('switch', '-q', 'main');
+    git('switch', '-q', '-c', 'pr-rename');
+    fs.rmSync(path.join(st.repo, 'apps/agentic-os/drizzle/0000_m.sql'));
+    put('apps/agentic-os/drizzle/0004_per_project_lanes.sql', '-- m0\n');
+    put('apps/agentic-os/drizzle/meta/_journal.json', journal(5));
+    git('add', '-A');
+    git('commit', '-q', '--no-verify', '-m', 'rename 0000 to 0004');
+    heads.rename = git('rev-parse', 'HEAD');
   });
 
   after(async () => {
@@ -162,6 +179,19 @@ describe('the script against a git repo and a scratch database', () => {
     const r = gate(heads.down, { CONTINUOUS_CLAUDE_DB_URL: unreachable, DATABASE_URL: unreachable, OPC_POSTGRES_URL: unreachable });
     assert.equal(r.code, 0, r.all);
     assert.match(r.out, /adds no migration/);
+  });
+
+  it('refuses a PR that adds a .sql file when the journal at the head cannot be read', () => {
+    const r = gate(heads.badJournal);
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.out, /refusing/);
+    assert.match(r.out, /journal/);
+  });
+
+  it('a migration that git reports as a rename still counts as added (an unreachable database refuses it)', () => {
+    const r = gate(heads.rename, { CONTINUOUS_CLAUDE_DB_URL: unreachable, DATABASE_URL: unreachable, OPC_POSTGRES_URL: unreachable });
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.out, /cannot verify migrations; refusing/);
   });
 
   it('refuses a head that is not in the repo', () => {
