@@ -27,6 +27,7 @@
     "import-validator.ts": "724da5c18691434c7ac41ee8f6b94abda2c0dfc2e43c6b63415fa2fb8b5dcc85",
     "lane-agent-tag.ts": "d744170a34639ff8c3d80e38cffef749fa288dab6348db1b8a6cbae5391302eb",
     "lane-board-republish-reminder.ts": "5669bbf3499b05b3529c358f5c1089555ab1d8fd51c4a01a9854ab50434a9ea0",
+    "lane-board-stop-gate.ts": "3d0946204f48c566fa5d7855e5c387f170346b7d1c1de48534672c06817f0a92",
     "lane-context.ts": "14cc8a496788efa68fe6ac14587732c6c21273d2372f448a056b0522633f150c",
     "lib/daemon-client.ts": "5a042c2a36fd8cd249f3e32d9ef6ae4fbeed04216df3d546f76adc898314cbe2",
     "lib/hook-trace.ts": "952444338793fa5c1b17150c4ce11042f66d5d85daa2bd564d0d75cfc5be6813",
