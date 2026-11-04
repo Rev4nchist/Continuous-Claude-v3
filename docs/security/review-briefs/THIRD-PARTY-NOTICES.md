@@ -39,6 +39,8 @@ SOFTWARE.<!-- port-end -->
 - `skills/security-audit/ATTACK-CLASSES.md` — blob `18a2beb4dbb554fb52b0a0293b8bd9108207f8fa` — lines 111–130 ported into `r4-security-axis.md`; lines 1–130 ported into `r5-high-tier.md`.
 - `skills/security-audit/DATA-ISOLATION-AND-LIFECYCLE.md` — blob `0cba1fa463b62c9b0caba710a201e29c1eecd0ec` — lines 1–84 ported into `r4-security-axis.md`.
 - `skills/security-audit/AI-AND-LLM.md` — blob `02ba9039eca4cec811fefc77bce0d7349b379aae` — lines 1–83 ported into `r5-high-tier.md`.
+- Method adapted, no verbatim text: the hunt facts from `HUNTING.md` (blob `377d4dcfbe88a049379448cd7892717185401597`) and the fresh-refuter verdicts from `VALIDATION-AND-REPORTING.md` (blob `5e200d7387e665e53e0e4190fa4a5814c334c507`), restated in `.claude/agents/aegis.md`, `.claude/agents/security-refuter.md` and `.claude/skills/security/SKILL.md`.
+- Vendored verbatim with their own notice: `report-schema.json` and `validate-findings.cjs` in `.claude/scripts/security/cf-contract/` (see its `PROVENANCE.md`).
 - `LICENSE` — blob `6dbc9ecb3a5b9080e95b962869e8c7ab16cfdc20` — whole file below.
 
 <!-- port-begin src=cloudflare/security-audit-skill@c1c8a8c1471069fb0e188eeaff69b8e8db6564a8 path=LICENSE lines=1-21 blob=6dbc9ecb3a5b9080e95b962869e8c7ab16cfdc20 -->

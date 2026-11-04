@@ -44,7 +44,8 @@ that runner. The `plan-exit-premortem-prompt` hook offers `/premortem` after
 | Code review | critic | opus | Read, Grep |
 | Cross-model review | grok-adversary | sonnet | Read-only Grok review |
 | Validate a plan | plan-reviewer | sonnet | Read, Grep, Glob |
-| Security audit | aegis | opus | Read, Bash, Grep |
+| Security audit | aegis | opus | Read, Bash, Grep, Glob, Write |
+| Refute security candidates | security-refuter | opus | Read, Grep, Glob, Bash |
 | Docs/handoffs | scribe | sonnet | Read, Write, Glob, Grep |
 
 ## Spawning Agents
