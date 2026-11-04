@@ -1119,7 +1119,8 @@ describe('guard-prompt-text-fp control', () => {
 
 // C1: a catastrophic regex is synchronous, so vitest cannot time it out in-process. Each case runs the
 // real src (bundled with esbuild) in a child process with a hard kill, so a hang fails instead of stalling the file.
-describe('C1: launcher regexes stay linear (x200 of each overlapping token)', () => {
+// Call inside a describe: it registers the bundle build and returns the timer.
+function childTimer(): (fn: 'decide' | 'install', cmd: string) => Promise<number> {
   let bundle = '';
   beforeAll(async () => {
     const { buildSync } = await import('esbuild');
@@ -1148,15 +1149,18 @@ describe('C1: launcher regexes stay linear (x200 of each overlapping token)', ()
     writeFileSync(bundle, out.outputFiles[0].text);
   });
 
-  async function timeIt(fn: 'decide' | 'install', cmd: string): Promise<number> {
+  return async (fn, cmd) => {
     const { spawnSync } = await import('node:child_process');
     // VITEST keeps the bundled hooks' main() from running in the child.
     const res = spawnSync(process.execPath, [bundle, fn], { input: cmd, encoding: 'utf8', timeout: 5000, env: { ...process.env, VITEST: 'true' } });
     expect(res.signal, `${fn} killed after 5000 ms`).toBeNull();
     expect(res.status).toBe(0);
     return JSON.parse(res.stdout.trim().split('\n').pop()!).ms;
-  }
+  };
+}
 
+describe('C1: launcher regexes stay linear (x200 of each overlapping token)', () => {
+  const timeIt = childTimer();
   const cases: Array<[string, string]> = [
     ['sudo -u run', 'sudo ' + '-u '.repeat(200) + 'x'],
     ['sudo -g run', 'sudo ' + '-g '.repeat(200) + 'x'],
@@ -1231,10 +1235,12 @@ describe('H2: git -C and a Git Bash /c/ path are not exec flags', () => {
   }
 });
 
-describe('M1: the top-level scan skips literal cat/tee heredoc prose', () => {
-  it('Bash allows: a literal heredoc PR body that names rm build -rf', () => {
+describe('heredoc bodies: the top-level scan reads them, as on fork/main (R2 reverts M1)', () => {
+  // Accepted false positive (same as fork/main): a literal heredoc body that names a destructive
+  // command asks. Dropping the body let a written script run unseen (R2: write-then-run).
+  it('Bash asks (accepted FP): a literal heredoc PR body that names rm build -rf', () => {
     const cmd = `cat <<'EOF' > PR.md\n- rm build -rf now asks (F04)\nEOF`;
-    expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
+    expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
   });
   const askRows: Array<[string, string]> = [
     ['heredoc piped into bash', `cat <<'EOF' | bash\nrm -rf x\nEOF`],
@@ -1247,4 +1253,113 @@ describe('M1: the top-level scan skips literal cat/tee heredoc prose', () => {
       expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Round 3: regressions vs fork/main 9af5e0e5 (R1-R5). Each row asked (or ran fast) on fork/main.
+// ---------------------------------------------------------------------------
+
+// R1: the wrapper payload tail `\S.*)(?:\s.*)?$` cannot cross a `\r` (JS `.` excludes it), so every exec
+// flag position retried every split of the tail: cubic. 10 KB of ' -c x' then '\r' runs.
+describe('R1: the wrapper payload tail stays linear on a mid-line CR', () => {
+  const timeIt = childTimer();
+  const tail = '\ry\rz\nbash -c "rm -rf ~/x"';
+  const cases: Array<[string, string]> = [
+    ['bash -c run', 'bash' + ' -c x'.repeat(2000) + tail],
+    ['pwsh -c run', 'pwsh' + ' -c x'.repeat(2000) + tail],
+    ['cmd /c run', 'cmd' + ' /c x'.repeat(2000) + tail],
+  ];
+  for (const [name, cmd] of cases) {
+    it(`decide(): ${name} finishes in under 1000 ms`, async () => {
+      expect(await timeIt('decide', cmd)).toBeLessThan(1000);
+    }, 20_000);
+    it(`installSegments(): ${name} finishes in under 1000 ms`, async () => {
+      expect(await timeIt('install', cmd)).toBeLessThan(1000);
+    }, 20_000);
+  }
+  it('decide(): docker compose down x500 finishes in under 200 ms', async () => {
+    expect(await timeIt('decide', 'docker compose down '.repeat(500))).toBeLessThan(200);
+  }, 20_000);
+  it('the critic repro still asks (the wrapper on the last line is classified)', () => {
+    const cmd = 'bash' + ' -c x'.repeat(5) + tail;
+    expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+  });
+  it('a wrapper payload with a CR inside still yields the payload', () => {
+    expect(extractShellWrapperPayloads('bash -c x\ry').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('R2: a heredoc that writes a script which then runs asks', () => {
+  const rows: Array<[string, string]> = [
+    ['cat <<EOF > x.sh, then bash x.sh', `cat <<'EOF' > x.sh\nrm -rf /\nEOF\nbash x.sh`],
+    ['cat > x.sh <<EOF, then sh x.sh', `cat > x.sh <<'EOF'\nrm -rf ~\nEOF\nsh x.sh`],
+    ['tee x.sh <<EOF with git reset --hard, then bash x.sh', `tee x.sh <<'EOF'\ngit reset --hard\nEOF\nbash x.sh`],
+    ['cat <<EOF > x.sh, then chmod +x and ./x.sh', `cat <<'EOF' > x.sh\nrm -rf /\nEOF\nchmod +x x.sh; ./x.sh`],
+  ];
+  for (const [name, cmd] of rows) {
+    it(`Bash asks: ${name}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+});
+
+describe('R3: git checkout with a pathspec discards changes', () => {
+  const ask = [
+    'git checkout ./src',
+    'git checkout ./',
+    'git checkout --pathspec-from-file=list.txt',
+    'git checkout --theirs src/a.ts',
+    'git checkout --ours src/a.ts',
+  ];
+  for (const cmd of ask) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  const allow = ['git checkout -b new-branch', 'git checkout main', 'git checkout fix/x', 'git checkout --track origin/x'];
+  for (const cmd of allow) {
+    it(`Bash allows: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
+    });
+  }
+});
+
+// git parse-options accepts any unique prefix of a long option.
+describe('R4: an abbreviated long option is the option', () => {
+  const ask = [
+    'git clean --fo',
+    'git clean --forc -d',
+    'git clean -d --f',
+    'git checkout --forc main',
+    'git push --forc origin main',
+    'git reset --har',
+    'git branch --forc main abc',
+  ];
+  for (const cmd of ask) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  // --follow-tags shares `--fo` with --force (push); --format shares `--for` with --force (branch).
+  const allow = [
+    'git clean -n',
+    'git clean --dry-run',
+    'git reset --soft HEAD~1',
+    'git push --follow-tags',
+    `git branch --format='%(refname)' --list`,
+  ];
+  for (const cmd of allow) {
+    it(`Bash allows: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
+    });
+  }
+});
+
+describe('R5: docker compose down must be the verb, not a file name', () => {
+  it('Bash allows: docker compose -f down.yml up -v', () => {
+    expect(decide('docker compose -f down.yml up -v', interactiveFor('Bash'), {}).decision).toBe('allow');
+  });
+  it('Bash asks: docker compose -f x.yml down -v', () => {
+    expect(decide('docker compose -f x.yml down -v', interactiveFor('Bash'), {}).decision).not.toBe('allow');
+  });
 });
