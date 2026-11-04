@@ -1449,7 +1449,7 @@ describe('pr-loop checkpoint states', () => {
   })
 
   test('CW4k a rate limit with a round left offers the paid review, for round 2 or later only after every finding is fixed', async ($, on) => {
-    const line = await limitedLine($, on, record({ budget: [1, 2] }), RATE_LIMITED({ coderabbitRounds: 1 }))
+    const line = await limitedLine($, on, record({ budget: [1, 2], band: 'CRITICAL' }), RATE_LIMITED({ coderabbitRounds: 1 }))
     expect(line).toContain('node scripts/github/cr-paid.mjs check --pr 7')
     expect(line).toContain('@coderabbitai review --use-credits')
     expect(line).toContain('over 15 minutes')
@@ -1473,13 +1473,52 @@ describe('pr-loop checkpoint states', () => {
     expect(line).toContain('--use-credits')
   })
 
+  // Review matrix (2026-11-01, Dave 2026-11-04): a round past the opening is paid only for a CRITICAL PR or on Dave's grant. HIGH waits for the free slot.
+  const paidText = (line: string) => expect(line).toContain('cr-paid.mjs check --pr 7')
+
+  test('P1 a HIGH PR, budget 1+1, round 2 not granted: a rate limit offers no paid review', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 1], band: 'HIGH' }), RATE_LIMITED({ coderabbitRounds: 1 }))
+    noPaid(line)
+    expect(line).toContain('Rounds used 1 of 1+1')
+  })
+
+  test('P2 a CRITICAL PR, budget 1+1, round 2: a rate limit offers the paid review', async ($, on) => {
+    paidText(await limitedLine($, on, record({ budget: [1, 1], band: 'CRITICAL' }), RATE_LIMITED({ coderabbitRounds: 1 })))
+  })
+
+  test('P2b the band compares without case: critical offers the paid review', async ($, on) => {
+    paidText(await limitedLine($, on, record({ budget: [1, 1], band: 'critical' }), RATE_LIMITED({ coderabbitRounds: 1 })))
+  })
+
+  test('P3 a HIGH PR where Dave allowed round 2: a rate limit offers the paid review', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 1], band: 'HIGH' }), RATE_LIMITED({ coderabbitRounds: 1 }), { 'checkpoint:grant:7': { round: 2, head: HEAD_A, at: NOW } })
+    expect(line).toContain('Dave allowed round 2')
+    paidText(line)
+  })
+
+  test('P4 a HIGH PR at the opening round (0 rounds): a rate limit still offers the paid review', async ($, on) => {
+    paidText(await limitedLine($, on, record({ budget: [1, 1], band: 'HIGH' }), RATE_LIMITED({ coderabbitRounds: 0 })))
+  })
+
+  test('P5 a record with no band (older record) at round 2: fail closed, no paid review', async ($, on) => {
+    noPaid(await limitedLine($, on, record({ budget: [1, 1] }), RATE_LIMITED({ coderabbitRounds: 1 })))
+  })
+
+  test('P5b a record with band null at round 2: fail closed, no paid review', async ($, on) => {
+    noPaid(await limitedLine($, on, record({ budget: [1, 1], band: null }), RATE_LIMITED({ coderabbitRounds: 1 })))
+  })
+
+  test('P6 a grant for an earlier round does not open a paid review for the next one on a HIGH PR', async ($, on) => {
+    noPaid(await limitedLine($, on, record({ budget: [1, 1], band: 'HIGH' }), RATE_LIMITED({ coderabbitRounds: 1 }), { 'checkpoint:grant:7': { round: 1, head: HEAD_A, at: NOW } }))
+  })
+
   // PR #225 round 3: after the paid-review step, the later "post @coderabbitai review" must not wait on a paid review that was only posted.
   // CodeRabbit round 1 (PR #227): the fallback depends on the paid review finishing or still running, not on the request having been posted.
   // CodeRabbit round 2 (PR #227): the retry is an "otherwise" branch, so a paid review that still runs after 30 minutes cannot overlap it.
   const PAID_GATE = /Otherwise, if no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back/
 
   test('CW4n a paid-eligible rate limit makes the later post conditional on no paid review for this head, with and without a record', async ($, on) => {
-    const withRecord = await limitedLine($, on, record({ budget: [1, 2] }), RATE_LIMITED({ coderabbitRounds: 1 }))
+    const withRecord = await limitedLine($, on, record({ budget: [1, 2], band: 'CRITICAL' }), RATE_LIMITED({ coderabbitRounds: 1 }))
     expect(withRecord).toMatch(PAID_GATE)
     expect(withRecord.indexOf('cr-paid.mjs check')).toBeLessThan(withRecord.search(PAID_GATE))
     expect(withRecord.search(PAID_GATE)).toBeLessThan(withRecord.indexOf('When capacity is back, post one @coderabbitai review'))

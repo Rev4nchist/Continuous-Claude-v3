@@ -44,7 +44,8 @@
 //       Writes pathway.json { head, body_sha256, pathway, label, class, recommended, decided_by, at, budget } and prints the same JSON, exit 0.
 //       head, body_sha256: from the stamp; class: result.class; recommended: result.recommended (may be "wait");
 //       at: facts.now; label: review:none | review:coderabbit | review:deep.
-//       budget = the RULE budget (result.budget), [0,0] for none, and never below [1,0] for coderabbit or both. Never option.cost.
+//       budget = option.budget (Dave 11-04): coderabbit the price its option shows (option.cost), both max(rule budget, class budget) and never
+//       the display-only 1+1 floor of both.cost, none and wait [0,0]; never below [1,0] for coderabbit or both.
 //       --body is required: a --confirm with no --body (or --body with no value) is bad usage, exit 2, nothing written (T22).
 //       Stamp source: facts.stamp when the facts carry a `stamp` key (the fixture seam, TB1-TB7); when the facts have NO `stamp` key,
 //       <state-dir>/stamp.json is read (the production path, TB8). A missing or unreadable stamp.json is the R0 refusal.
@@ -111,7 +112,7 @@
 //   confirm records a body that is not the stamped body                           -> TB1 (spec 16)
 //   confirm records for a missing stamp, another head or a failed stamp row       -> TB2 (spec 16)
 //   the record loses a field, or stdout differs from the file                     -> TB3
-//   the record budget is option.cost, not the rule budget                         -> TB4
+//   both records the display-only 1+1 floor, or coderabbit loses its option price -> TB4, TB4b, TB4c (Dave 11-04, TREX N9)
 //   none is recorded with a budget, or its label is wrong                         -> TB5
 //   confirm records a pathway that was not offered, is held, or is wait           -> TB6
 //   coderabbit over a docs recommendation gets budget 0, or "wait" is lost        -> TB7
@@ -903,17 +904,48 @@ test('TB3: --confirm writes the nine-field record and prints the same JSON', () 
   assert.deepEqual(JSON.parse(r.stdout), rec, 'stdout is the record');
 });
 
-test('TB4: the record budget is the RULE budget, not the option cost (R2 parser file, both chosen: rule 1+0, option cost 1+1)', async () => {
-  const { recommend } = await load();
+// Dave 11-04 (lane pr-checkpoint-cost-record-split): coderabbit records the price its option showed; none records 0+0; both records
+// max(rule budget, class budget) floored at 1+0 and never the display-only 1+1 floor (costOf), so pr_watch allows the rounds Dave chose.
+// The R2 parser file is class normal, whose live budget is 1+1, so the rule (1+0) and class budgets differ only in the live case (TB4c).
+// TB4 pins the class budget to 1+0 to separate the recorded budget from the option cost 1+1.
+test('TB4: both on the R2 parser file records max(rule, class) = 1+0, not the display-only 1+1 floor the option shows', async () => {
+  const { recommend, confirmRecord } = await load();
   const f = facts([file(PARSER, 80)], { stamp: BSTAMP });
-  const both = recommend(f, await policy({ deep: true, used: 10 })).options.find((o) => o.pathway === 'both');
-  assert.deepEqual(both.cost, [1, 1], 'the option cost differs from the rule budget, so this test can tell them apart');
-  const r = confirm('both', 'dave', { files: [file(PARSER, 80)], pol: { deep: true, used: 10 } });
-  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
-  const rec = recordOf(r);
+  const pol = await policy({ deep: true, used: 10 });
+  const result = recommend(f, { ...pol, budget: { ...pol.budget, normal: [1, 0] } });
+  const both = result.options.find((o) => o.pathway === 'both');
+  assert.deepEqual(result.budget, [1, 0], 'the rule budget is 1+0');
+  assert.deepEqual(both.cost, [1, 1], 'the option still shows the 1+1 floor so it never looks free');
+  const rec = confirmRecord({ result, facts: f, pathway: 'both', by: 'dave' });
   assert.equal(rec.pathway, 'both');
   assert.equal(rec.label, 'review:deep');
   assert.deepEqual(rec.budget, [1, 0]);
+  assert.deepEqual(confirmRecord({ result, facts: f, pathway: 'coderabbit', by: 'dave' }).budget, [1, 0], 'coderabbit records its option price');
+});
+
+test('TB4c: both records the CLASS budget when it is higher than the rule budget (R2 parser file, live class normal 1+1; r3 1+2)', async () => {
+  const { recommend, confirmRecord } = await load();
+  const pol = await policy({ deep: true, used: 10 });
+  const f = facts([file(PARSER, 80)], { stamp: BSTAMP });
+  const result = recommend(f, pol);
+  assert.deepEqual(result.budget, [1, 0], 'the rule budget is lower than the class budget');
+  assert.deepEqual(confirmRecord({ result, facts: f, pathway: 'both', by: 'dave' }).budget, LIVE.budget.normal);
+  // A class budget of 1+2 is above the 1+1 floor, so the record and the option agree on it.
+  const r3 = recommend(f, { ...pol, budget: { ...pol.budget, normal: [1, 2] } });
+  assert.deepEqual(confirmRecord({ result: r3, facts: f, pathway: 'both', by: 'dave' }).budget, [1, 2]);
+});
+
+// TREX verify N9 (evidence .claude/cache/e2e/trex-verify-p1/verify/evidence/bf4162aaea8e36f8/): with the live review matrix, a MID
+// PR's CodeRabbit option is an escalation priced at the HIGH budget (review-matrix.md:24). confirmRecord stored 1+0.
+test('TB4b (N9): with the live matrix, a CodeRabbit escalation below HIGH records the price the option showed', async () => {
+  const { recommend, confirmRecord } = await load();
+  const f = facts([file('apps/x/src/a.ts', 10)]);
+  const result = recommend(f, LIVE);
+  const option = result.options.find((o) => o.pathway === 'coderabbit');
+  assert.ok(option, `coderabbit is offered: ${result.options.map((o) => o.pathway).join(', ')}`);
+  assert.notDeepEqual(option.cost, result.budget, 'the price differs from the rule budget, so this test can tell them apart');
+  assert.deepEqual(confirmRecord({ result, facts: f, pathway: 'coderabbit', by: 'dave' }).budget, option.cost);
+  assert.deepEqual(confirmRecord({ result, facts: f, pathway: 'none', by: 'dave' }).budget, [0, 0], 'none never records a budget');
 });
 
 test('TB5: none (option 2 of R5 on a clean CLI) records label review:none, budget 0+0, decided_by dave, recommended coderabbit', () => {
@@ -936,11 +968,13 @@ test('TB6: --confirm records only an offered, available pathway; --by default mu
   refused(confirm('wait', 'dave', { pol: { count: 55 }, facts: { cli: { bySeverity: { major: 1 } } } }), /wait/i, 'wait writes no pathway');
 });
 
-test('TB7: coderabbit chosen over a docs "none" gets budget 1+0 at least; chosen at count 55 it keeps recommended wait', () => {
+test('TB7: coderabbit chosen over a docs "none" records its option price (1+0 at least); chosen at count 55 it keeps recommended wait', async () => {
   const docs = confirm('coderabbit', 'dave', { files: [file('docs/guide.md', 40)] });
   assert.equal(docs.status, 0, `${docs.stdout} ${docs.stderr}`);
   assert.equal(recordOf(docs).recommended, 'none');
-  assert.deepEqual(recordOf(docs).budget, [1, 0], 'a chosen CodeRabbit review is never budget 0+0');
+  const price = optionOf(await run([file('docs/guide.md', 40)]), 'coderabbit').cost;
+  assert.ok(price[0] >= 1, 'a chosen CodeRabbit review is never budget 0+0');
+  assert.deepEqual(recordOf(docs).budget, price, 'the record is the price the option showed (Dave 11-04)');
   const high = confirm('coderabbit', 'dave', { pol: { count: 55 }, facts: { cli: { bySeverity: { major: 1 } } } });
   assert.equal(high.status, 0, `${high.stdout} ${high.stderr}`);
   assert.equal(recordOf(high).recommended, 'wait');

@@ -268,18 +268,37 @@ export function minutesLeft(minutes, writtenMs, nowMs) {
   return left > 0 ? left : null;
 }
 
-/** Summary comment on the PR naming the reviewed head (from legacy coderabbit-status.mjs). */
+// Case-insensitive and whitespace-tolerant, so a wording or spacing change by CodeRabbit does not expose the block. The start pattern
+// refuses a comment that says "end of", so it never matches the end marker.
+const IN_PROGRESS_START = /<!--(?![^>]*\bend\s+of\b)[^>]*?review\s+in\s+progress\s+by\s+coderabbit[^>]*?-->/i;
+const IN_PROGRESS_END = /<!--[^>]*?\bend\s+of\b[^>]*?review\s+in\s+progress\s+by\s+coderabbit[^>]*?-->/i;
+
+/**
+ * The summary text without its in-progress blocks. CodeRabbit writes "between <base> and <head>" at review START, inside
+ * `review in progress` ... `end of auto-generated comment: review in progress`, so that range is no proof a review finished.
+ * A start marker with no end marker drops the rest of the text (fail closed).
+ */
+function withoutInProgress(text) {
+  let rest = String(text ?? '');
+  let kept = '';
+  for (let start = IN_PROGRESS_START.exec(rest); start !== null; start = IN_PROGRESS_START.exec(rest)) {
+    kept += rest.slice(0, start.index);
+    const after = rest.slice(start.index + start[0].length);
+    const end = IN_PROGRESS_END.exec(after);
+    if (end === null) return kept;
+    rest = after.slice(end.index + end[0].length);
+  }
+  return kept + rest;
+}
+
+/**
+ * Summary comment on the PR naming the reviewed head. The commit comes from summaryCoveredCommit (the coverage marker of kind
+ * reviewed wins, the last "between" is the fallback), read outside any in-progress block.
+ */
 export function summaryCoversHead(body, head) {
   const text = String(body ?? '');
   if (codeRabbitNotice(text)) return false;
-  for (const m of text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)) if (m[1] === head) return true;
-  for (const m of text.matchAll(/final_review_risk_coverage:(\{[^}]*\})/g)) {
-    try {
-      const c = JSON.parse(m[1]);
-      if (c.coveredCommitId === head && c.kind === 'reviewed') return true;
-    } catch { /* not a marker */ }
-  }
-  return false;
+  return summaryCoveredCommit(text) === head;
 }
 
 /** GraphQL login of the CodeRabbit app as a comment editor (no "[bot]" suffix there). */
@@ -1245,10 +1264,11 @@ function reviewedCoverage(text) {
 
 /**
  * The commit a clean, reviewed summary covers: the coverage marker of kind reviewed. With no marker at all, the last "between <sha> and <sha>".
+ * Text inside an in-progress block is ignored (see withoutInProgress).
  * A marker that exists but does not say reviewed (or cannot be read) gives null: the "between" line must not override it. 40 hex or null.
  */
 function summaryCoveredCommit(body) {
-  const text = String(body ?? '');
+  const text = withoutInProgress(body);
   if (text.includes('final_review_risk_coverage:')) return reviewedCoverage(text);
   const between = [...text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)].pop();
   return between ? between[1] : null;
@@ -1502,6 +1522,13 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     coderabbitRateLimited = cr.rateLimited;
     coderabbitRetryMinutes = cr.retryMinutes;
     coderabbitNotice = cr.notice;
+    // A summary can name the head while the review still runs; CodeRabbit's own status stays pending until it ends. Success, failure and
+    // error add nothing here (the rate-limit text has its own reason). A rate-limited head already has a reason, so it is not doubled.
+    if (!cr.rateLimited) {
+      for (const s of (combined.statuses || []).filter((x) => isCodeRabbitStatus(x) && x.state === 'pending')) {
+        reasons.push(`CodeRabbit status "${s.context}" is pending: the review of the head is still running`);
+      }
+    }
     if (cr.rateLimited) {
       reasons.push('CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)');
     } else if (!cr.reviewedHead) {

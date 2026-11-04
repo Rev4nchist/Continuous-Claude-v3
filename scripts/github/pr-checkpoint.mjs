@@ -354,12 +354,20 @@ const atLeast = (a, b) => [Math.max(a[0], b[0]), Math.max(a[1], b[1])];
  * What an option costs, from its own pathway and not from the recommendation. The pair stays CodeRabbit opening+extra.
  * coderabbit: the rule budget when a rule picked CodeRabbit or more, else the class budget, never below 1+0.
  *   When RS is the only rule, a chosen CodeRabbit review costs 1+0, not the class budget.
- * both: max(rule budget, class budget, 1+1), so a both option never looks free. Do not copy it into pathway.json.budget.
+ * both: max(rule budget, class budget, 1+1), so a both option never looks free. This 1+1 floor is display only: optionOf.budget
+ *   (what confirmRecord stores as pathway.json.budget) is max(rule budget, class budget) floored at 1+0 (Dave 11-04).
  */
 function costOf(c, picked, pathway) {
   if (pathway === 'coderabbit' && picked.rules.length === 1 && picked.rules[0] === 'RS') return [1, 0];
   if (pathway === 'coderabbit') return atLeast(picked.pathway === 'none' ? c.classBudget : picked.budget, [1, 0]);
   if (pathway === 'both') return atLeast(atLeast(picked.budget, c.classBudget), [1, 1]);
+  return [0, 0];
+}
+
+/** The pair confirmRecord stores for an option: coderabbit its price, both max(rule, class) floored 1+0 (not the 1+1 display floor), none and wait 0+0. */
+function budgetOf(c, picked, pathway, cost) {
+  if (pathway === 'coderabbit') return cost;
+  if (pathway === 'both') return atLeast(atLeast(picked.budget, c.classBudget), [1, 0]);
   return [0, 0];
 }
 
@@ -373,7 +381,7 @@ function optionOf(c, picked, pathway) {
     coderabbit: `CodeRabbit ${cost[0]}+${cost[1]}.`,
     both: c.greptile.reason,
   }[pathway];
-  return { pathway, label: LABELS[pathway], available: pathway === 'both' ? c.greptile.available : true, cost, reason };
+  return { pathway, label: LABELS[pathway], available: pathway === 'both' ? c.greptile.available : true, cost, budget: budgetOf(c, picked, pathway, cost), reason };
 }
 
 function waitWhy(c, picked) {
@@ -574,8 +582,12 @@ function gatherFacts(configText, stateDir) {
 
 const bodyHash = (text) => createHash('sha256').update(String(text ?? '')).digest('hex');
 
-/** The rule budget, never below 1+0 for a chosen review and 0+0 for none. option.cost is a price, not the budget. */
-const recordBudget = (pathway, rule) => (pathway === 'none' ? [0, 0] : atLeast(rule, [1, 0]));
+/**
+ * The budget the record stores (Dave 11-04): option.budget, never below 1+0 for a chosen review, 0+0 for none. coderabbit records the
+ * price its option shows (option.cost); both records max(rule budget, class budget), not the display-only 1+1 floor of both.cost.
+ * No offered option for the pathway: fall back to the rule budget.
+ */
+const recordBudget = (pathway, option, rule) => (pathway === 'none' ? [0, 0] : atLeast(option?.budget ?? rule, [1, 0]));
 
 /** The first reason --confirm must refuse, or null. Order: stamp (R0), body, wait, offered, held, --by default. */
 export function confirmProblem({ result, facts, pathway, by, bodySha }) {
@@ -595,7 +607,8 @@ export function confirmProblem({ result, facts, pathway, by, bodySha }) {
 export function confirmRecord({ result, facts, pathway, by }) {
   return {
     head: facts.stamp.head, body_sha256: facts.stamp.body_sha256, pathway, label: LABELS[pathway], class: result.class,
-    recommended: result.recommended, decided_by: by, at: facts.now, budget: recordBudget(pathway, result.budget),
+    recommended: result.recommended, decided_by: by, at: facts.now,
+    budget: recordBudget(pathway, result.options.find((o) => o.pathway === pathway), result.budget),
   };
 }
 
