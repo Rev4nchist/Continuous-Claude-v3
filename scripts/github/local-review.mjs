@@ -511,7 +511,8 @@ async function stepTarget(s) {
     return refuse(d, err.code === 'BAD_INPUT' || /branch name/.test(err.message) ? EXIT.REFUSED : EXIT.FAILED, err.message);
   }
   if (RESERVED_SLUGS.has(foldSlug(s.slug))) return refuse(d, EXIT.REFUSED, `branch name "${s.target.branch}" collides with the engine folder`);
-  s.ref = `branch-${s.slug}`;
+  // An eval run (evalRun) has its own ref, so it neither eats the live per-branch cap nor meets it. The eval budget caps it (review-eval/budget.mjs).
+  s.ref = opts.evalRun ? `eval-${opts.pr}-${s.target.head.slice(0, 8)}` : `branch-${s.slug}`;
   const { pull } = s.target;
   if (pull.draft === true) return skipRow(s, 'draft');
   if (s.cfg.skip_authors.includes(pull.user?.login)) return skipRow(s, `author ${pull.user.login} is on the skip list`);
@@ -815,7 +816,7 @@ async function runHead(opts, d) {
 }
 
 /**
- * One review of one PR head. opts: { pr, fresh, gatesText, engineHere, withholdBody (eval runs only), root, repo }.
+ * One review of one PR head. opts: { pr, fresh, gatesText, engineHere, withholdBody (eval runs only), evalRun (eval runs: own cap ref), root, repo }.
  * deps (tests): { git, gh, runAgent, reserveRun, finishRun, writeRecord, prepareReview, readAtSha, agent, now, pidAlive, sleep, env, stateRoot,
  *   stateDir, cursorLedger, selfPath, selfRoot, configPath, tmpRoot, grep, stderr }.
  * -> { exit, recordPath|null, skipReason|null, ... }

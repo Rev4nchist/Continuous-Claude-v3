@@ -116,8 +116,10 @@ test('in-diff recall counts inline CR findings only; overall counts all', () => 
 test('judge agreement gate: 80% on 30 or more pairs; fewer pairs never pass', () => {
   // Breaks when: the n >= 30 check is dropped.
   const mk = (n, agreeCount) => {
-    const sent = Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, judge: { verdict: 'real' } }));
-    const labels = Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, findingId: `p${i}`, verdict: i < agreeCount ? 'real' : 'noise', by: 'dave' }));
+    // A varying judge: a constant one has kappa 0 and cannot pass the gate (kappa test at the end).
+    const judge = (i) => (i % 2 ? 'real' : 'noise');
+    const sent = Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, judge: { verdict: judge(i) } }));
+    const labels = Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, findingId: `p${i}`, verdict: i < agreeCount ? judge(i) : (judge(i) === 'real' ? 'noise' : 'real'), by: 'dave' }));
     return scorecard({ ...base, runs: [], matches: [], labels, pairsSent: sent });
   };
   assert.deepEqual([mk(30, 24).judgeAgreement.pass, mk(30, 23).judgeAgreement.pass, mk(10, 10).judgeAgreement.pass], [true, false, false]);
@@ -231,8 +233,10 @@ test('judge agreement prints n, raw agreement and kappa, and is a NOTE (never FA
 });
 
 test('judge agreement at 30 or more pairs is PASS at 80% raw agreement and FAIL below it (breaks if the gate stops deciding at n=30)', () => {
-  const sent = Array.from({ length: 30 }, (_, i) => ({ pairId: `p${i}`, judge: { verdict: 'real' } }));
-  const labels = (agree) => Array.from({ length: 30 }, (_, i) => ({ pairId: `p${i}`, verdict: i < agree ? 'real' : 'noise', by: 'dave' }));
+  // A judge that varies (kappa 0.6 at 24 of 30): a constant judge has kappa 0 and no longer passes (see the kappa test at the end).
+  const judge = (i) => (i % 2 ? 'real' : 'noise');
+  const sent = Array.from({ length: 30 }, (_, i) => ({ pairId: `p${i}`, judge: { verdict: judge(i) } }));
+  const labels = (agree) => Array.from({ length: 30 }, (_, i) => ({ pairId: `p${i}`, verdict: i < agree ? judge(i) : (judge(i) === 'real' ? 'noise' : 'real'), by: 'dave' }));
   assert.equal(scorecard({ ...base, runs: [], matches: [], labels: labels(24), pairsSent: sent }).judgeAgreement.status, 'PASS');
   assert.equal(scorecard({ ...base, runs: [], matches: [], labels: labels(23), pairsSent: sent }).judgeAgreement.status, 'FAIL');
 });
@@ -284,3 +288,70 @@ test('scorecard sums the funnel of the valid runs and counts the holdout misses 
   assert.deepEqual(s.funnel, { runs: 2, raw: 4, withdrawn: 6, dropped: { total: 4, byReason: { 'no-file': 3, duplicate: 1 } }, posted: 2 });
   assert.deepEqual(s.withdrawnMisses, { misses: 4, inWithdrawn: 2, noData: 1 });
 });
+
+// ---------- review-engine p1 fixes ----------
+
+const SHA = 'a'.repeat(40);
+const majorAt = (key, file = 'a.mjs', line = 10) => ({ key, pr: 7, sha40: SHA, path: file, startLine: line, endLine: line, severity: 'Major', verdict: 'real', source: 'inline' });
+const okRun = (over = {}) => ({ status: 'ok', set: 'holdout', pr: 7, round: 1, sha40: SHA, promptSha256: 'P0', findingsPath: 'x', ...over });
+
+test('a run with coverageComplete false is excluded from recall and counted in excludedRuns; coverageComplete true or absent still scores (breaks if an incomplete run turns its Majors into misses)', () => {
+  const dataset = [majorAt('7:1')];
+  const hit = () => ({ findings: [{ file: 'a.mjs', line: 10, severity: 'major', title: 't' }] });
+  const score = (over) => {
+    const ev = evaluateRuns({ runs: [okRun(over)], dataset, readFindings: hit });
+    return scorecard({ ...base, runs: ev.runs, matches: ev.matches, labels: [] });
+  };
+  const incomplete = score({ coverageComplete: false });
+  assert.equal(incomplete.perMajorRecall.strict.total, 0);
+  assert.equal(incomplete.excludedRuns, 1);
+  // A new row from engine-run says status incomplete, and replay writes coverageComplete null when the record has no coverage object.
+  const fresh = score({ status: 'incomplete', coverageComplete: null });
+  assert.deepEqual([fresh.perMajorRecall.strict.total, fresh.excludedRuns], [0, 1]);
+  for (const coverageComplete of [true, null, undefined]) {
+    const card = score({ coverageComplete });
+    assert.deepEqual([card.perMajorRecall.strict.found, card.perMajorRecall.strict.total, card.excludedRuns], [1, 1, 0], String(coverageComplete));
+  }
+});
+
+test('nearWithdrawn compares normalised paths: ./a.mjs and a\\b.mjs match a.mjs and a/b.mjs (breaks if the withdrawn path is compared raw)', () => {
+  const dataset = [majorAt('7:1', 'a.mjs', 10), majorAt('7:2', 'a/b.mjs', 20)];
+  const withdrawn = [{ id: 'w1', path: './a.mjs', line: 10 }, { id: 'w2', path: 'a\\b.mjs', line: 20 }];
+  const ev = evaluateRuns({ runs: [okRun()], dataset, readFindings: () => ({ findings: [], withdrawn }) });
+  assert.deepEqual(ev.matches.map((x) => [x.key, x.inWithdrawn]), [['7:1', true], ['7:2', true]]);
+});
+
+test('a holdout run with bodyMode full leaves the holdout score and counts as excluded; dev, withheld and no-bodyMode rows keep scoring; bodyModes counts every run (breaks if the PR-body leak scores as recall)', () => {
+  const dataset = [majorAt('7:1')];
+  const hit = () => ({ findings: [{ file: 'a.mjs', line: 10, severity: 'major', title: 't' }] });
+  const score = (runs) => {
+    const ev = evaluateRuns({ runs, dataset, readFindings: hit });
+    return scorecard({ ...base, runs: ev.runs, matches: ev.matches, labels: [] });
+  };
+  const full = score([okRun({ bodyMode: 'full' })]);
+  assert.equal(full.perMajorRecall.strict.total, 0);
+  assert.equal(full.excludedRuns, 1);
+  assert.deepEqual(full.bodyModes, { withheld: 0, full: 1, unknown: 0 });
+  assert.equal(score([okRun({ bodyMode: 'withheld' })]).perMajorRecall.strict.found, 1);
+  const old = score([okRun()]);
+  assert.equal(old.perMajorRecall.strict.found, 1);
+  assert.deepEqual(old.bodyModes, { withheld: 0, full: 0, unknown: 1 });
+  const dev = score([okRun({ set: 'dev', bodyMode: 'full' })]);
+  assert.equal(dev.devRecall.strict.found, 1);
+});
+
+test('the judge gate needs kappa of 0.6 or more as well as 80% raw agreement; null kappa never passes; below 30 pairs it stays a NOTE (breaks if raw agreement alone passes)', () => {
+  const gate = (n, judgeOf, labelOf) => {
+    const sent = Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, judge: { verdict: judgeOf(i) } }));
+    const labels = Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, verdict: labelOf(i), by: 'dave' }));
+    return scorecard({ ...base, runs: [], matches: [], labels, pairsSent: sent }).judgeAgreement;
+  };
+  const constant = gate(30, () => 'real', (i) => (i < 24 ? 'real' : 'noise'));
+  assert.deepEqual([constant.value, constant.kappa, constant.status, constant.pass], [0.8, 0, 'FAIL', false], 'a judge that always says real has 80% raw agreement and kappa 0');
+  const nullKappa = gate(30, () => 'real', () => 'real');
+  assert.deepEqual([nullKappa.value, nullKappa.kappa, nullKappa.status], [1, null, 'FAIL'], 'both raters use one class: kappa is undefined, no PASS');
+  const good = gate(30, (i) => (i % 2 ? 'real' : 'noise'), (i) => (i < 27 ? (i % 2 ? 'real' : 'noise') : (i % 2 ? 'noise' : 'real')));
+  assert.equal(good.status, 'PASS');
+  assert.equal(gate(10, () => 'real', () => 'real').status, 'NOTE');
+});
+

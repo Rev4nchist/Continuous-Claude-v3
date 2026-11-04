@@ -45,7 +45,7 @@ function roundGh({ gh, repo, pr, sha40, base40 }) {
  * args: { pr, sha40, base40, root, stateRoot, stateDir, ledgerPath, env, configText, repo, gh, log, bodyMode }
  * bodyMode 'withheld' (the default) keeps the PR body out of CONTEXT.md: the body of a merged PR holds the findings and their fixes. 'full' keeps it.
  * deps (tests): { reviewHead, readAtSha, readFile }
- * -> { status: 'ok' | 'failed' | 'cap', reason?, record|null, recordPath|null, tracePath|null, baseConfig: { source, sha256 } }
+ * -> { status: 'ok' | 'incomplete' | 'failed' | 'cap', reason?, record|null, recordPath|null, tracePath|null, baseConfig: { source, sha256 } }
  */
 export async function runEngine(args, deps = {}) {
   const { pr, sha40, base40, root, stateRoot, stateDir, ledgerPath, env, configText, repo = DEFAULT_REPO, log = () => {}, bodyMode = 'withheld' } = args;
@@ -56,7 +56,7 @@ export async function runEngine(args, deps = {}) {
   const gh = roundGh({ gh: args.gh ?? defaultGh, repo, pr, sha40, base40 });
   let res;
   try {
-    res = await reviewHead({ pr, fresh: true, engineHere: true, withholdBody: bodyMode !== 'full', root, repo }, { env, gh, readAtSha, stateRoot, stateDir, cursorLedger: ledgerPath, stderr: log });
+    res = await reviewHead({ pr, fresh: true, engineHere: true, withholdBody: bodyMode !== 'full', evalRun: true, root, repo }, { env, gh, readAtSha, stateRoot, stateDir, cursorLedger: ledgerPath, stderr: log });
   } catch (err) {
     return { status: 'failed', reason: `reviewHead threw: ${err.message}`, record: null, recordPath: null, tracePath: null, baseConfig };
   }
@@ -67,7 +67,10 @@ export async function runEngine(args, deps = {}) {
     return { status: 'failed', reason: `cannot read the record: ${err.message}`, record: null, recordPath: res.recordPath, tracePath: null, baseConfig };
   }
   const tracePath = res.recordPath.replace(/\.json$/, '.trace.json');
-  const ok = res.exit === 0 && record.status === 'ok';
-  const why = record.problems?.length ? record.problems.join('; ').slice(0, 300) : (res.reason ?? `record status ${record.status}`);
-  return { status: ok ? 'ok' : 'failed', ...(ok ? {} : { reason: why }), record, recordPath: res.recordPath, tracePath, baseConfig };
+  // Same rule as isComplete in local-review.mjs: an ok record that did not cover every file is 'incomplete', never ok (its Majors would score as misses).
+  const done = res.exit === 0 && record.status === 'ok';
+  const ok = done && record.coverage?.complete === true;
+  const status = ok ? 'ok' : done ? 'incomplete' : 'failed';
+  const why = record.problems?.length ? record.problems.join('; ').slice(0, 300) : (res.reason ?? (done ? 'coverage incomplete' : `record status ${record.status}`));
+  return { status, ...(ok ? {} : { reason: why }), record, recordPath: res.recordPath, tracePath, baseConfig };
 }

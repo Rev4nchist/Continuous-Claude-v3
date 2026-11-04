@@ -130,3 +130,32 @@ test('replay --body full reaches replayRun as bodyMode; with no flag bodyMode is
   await main(['replay', '--pr', '207', '--round', '1'], io);
   assert.deepEqual(calls.map((c) => c.bodyMode), ['full', undefined]);
 });
+
+test('replay --all-majors goes on past a per-ref cap and stops on the eval budget or headroom; the end exit is 1 for a skipped ref-cap round, 3 for a budget stop (breaks if any exit 3 stops the batch)', async () => {
+  const majors = [{ pr: 1, round: 1, set: 'holdout' }, { pr: 2, round: 1, set: 'holdout' }, { pr: 3, round: 1, set: 'holdout' }];
+  const batch = async (answer) => {
+    const calls = [];
+    const io = { ...quiet(), loadFindings: async () => majors, replayRun: async (a) => { calls.push(a.pr); return answer(a.pr); } };
+    const code = await main(['replay', '--all-majors'], io);
+    return { calls, code };
+  };
+  const refCap = await batch((pr) => (pr === 1 ? { exit: 3, status: 'cap', reason: 'ref-cap reached (8)' } : { exit: 0, status: 'ok' }));
+  assert.deepEqual([refCap.calls, refCap.code], [[1, 2, 3], 1]);
+  for (const reason of ['eval-budget (eval 120, global 5)', 'headroom (eval 3, global 240)']) {
+    const stopped = await batch((pr) => (pr === 2 ? { exit: 3, status: 'cap', reason } : { exit: 0, status: 'ok' }));
+    assert.deepEqual([stopped.calls, stopped.code], [[1, 2], 3], reason);
+  }
+});
+
+test('report prints the body-mode counts and the excluded runs (breaks if the report drops the line)', async () => {
+  const dir = tmp();
+  const sha40 = 'a'.repeat(40);
+  const row = (pr, over) => JSON.stringify({ set: 'holdout', pr, round: 1, sha40, status: 'ok', ts: '2026-11-04T00:00:00Z', promptSha256: 'P', findingsPath: path.join(dir, 'findings.json'), ...over });
+  writeFileSync(path.join(dir, 'findings.json'), JSON.stringify({ findings: [] }));
+  writeFileSync(path.join(dir, 'runs.jsonl'), [row(5, { bodyMode: 'withheld' }), row(6, { bodyMode: 'full' }), row(7, {})].join('\n'));
+  writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [], zeroMajorPrs: [] }));
+  const io = quiet();
+  assert.equal(await main(['report', '--dir', dir], { ...io, cfg: { freeze: { promptSha256: 'P' } } }), 0);
+  assert.match(io.out.join('\n'), /Runs, 3 \(1 excluded\) \| body mode: withheld 1, full 1, unknown 1/);
+});
+

@@ -24,6 +24,9 @@ import { evaluateRuns, scorecard } from './score.mjs';
 import { main as shadowMain } from './shadow.mjs';
 
 const flag = (argv, name, d) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : d; };
+// A per-ref cap (one ref has used its share of the week) skips that round only; the eval budget and the headroom stop the batch.
+const isRefCap = (r) => r.exit === 3 && /^ref-cap\b/.test(String(r.reason ?? ''));
+const stopsBatch = (r) => r.exit === 2 || (r.exit === 3 && !isRefCap(r));
 const readJsonl = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : []);
 
 async function loadMajors(argv, io, cfg) {
@@ -52,13 +55,13 @@ async function replayCmd(argv, io, cfg, root) {
     for (const r of rounds.values()) {
       const res = await run({ ...r, buildOnly, reviewer, bodyMode }, deps);
       results.push({ pr: r.pr, round: r.round, set: r.set, status: res.status, exit: res.exit, reason: res.reason, files: res.files, range: res.range, base40: res.base40, sha40: res.sha40 });
-      if (res.exit === 2 || res.exit === 3) { io.stderr(`replay stopped: ${res.status}: ${res.reason}`); break; }
+      if (stopsBatch(res)) { io.stderr(`replay stopped: ${res.status}: ${res.reason}`); break; }
     }
     const okKey = new Set(results.filter((r) => r.exit === 0).map((r) => `${r.pr}:${r.round}`));
     const majorsBuilt = majors.filter((m) => okKey.has(`${m.pr}:${m.roundRank ?? m.round}`)).length;
     const summary = { buildOnly, majors: { total: majors.length, ok: majorsBuilt }, rounds: { total: rounds.size, ok: okKey.size }, results };
     io.stdout(JSON.stringify(summary, null, 1));
-    const refused = results.find((r) => r.exit === 2 || r.exit === 3);
+    const refused = results.find(stopsBatch);
     if (refused) return refused.exit;
     return results.every((r) => r.exit === 0) ? 0 : 1;
   }
@@ -171,7 +174,7 @@ export async function main(argv, io = {}) {
         const dropReasons = (by) => (Object.keys(by).length > 0 ? ` (${Object.entries(by).map(([k, n]) => `${k} ${n}`).join(', ')})` : '');
         const ja = c.judgeAgreement;
         const classRows = (set) => Object.entries(c.perClassRecall?.[set] ?? {}).map(([cls, r]) => `| Same-issue recall, ${set}, ${cls} | ${pct(r)} |`);
-        const md = ['# Review eval scorecard', '', '| Metric | Value |', '|---|---|', `| Strict Major recall | ${pct(c.perMajorRecall.strict)} |`, `| Lenient Major recall | ${pct(c.perMajorRecall.lenient)} |`, `| Per-PR recall | ${pct(c.perPrRecall)} |`, `| PR false alarms | ${c.prFalseAlarm.count} of ${c.prFalseAlarm.total} |`, `| Precision real/posted | ${c.precision.value == null ? 'n/a' : c.precision.value.toFixed(2)} |`, `| Same-issue recall, holdout (overall) | ${pct(c.perMajorRecall.strictSameIssue)} |`, ...classRows('holdout'), ...classRows('dev'), `| Funnel, ${c.funnel.runs} run(s) | raw ${c.funnel.raw}, withdrawn ${c.funnel.withdrawn}, dropped ${c.funnel.dropped.total}${dropReasons(c.funnel.dropped.byReason)}, posted ${c.funnel.posted} |`, `| Holdout misses the reviewer withdrew | ${c.withdrawnMisses.inWithdrawn} of ${c.withdrawnMisses.misses} (no data: ${c.withdrawnMisses.noData}) |`, `| Judge agreement | n=${ja.n}, raw ${num(ja.value)}, kappa ${num(ja.kappa)}, ${ja.status} |`, ''].join('\n');
+        const md = ['# Review eval scorecard', '', '| Metric | Value |', '|---|---|', `| Strict Major recall | ${pct(c.perMajorRecall.strict)} |`, `| Lenient Major recall | ${pct(c.perMajorRecall.lenient)} |`, `| Per-PR recall | ${pct(c.perPrRecall)} |`, `| PR false alarms | ${c.prFalseAlarm.count} of ${c.prFalseAlarm.total} |`, `| Precision real/posted | ${c.precision.value == null ? 'n/a' : c.precision.value.toFixed(2)} |`, `| Same-issue recall, holdout (overall) | ${pct(c.perMajorRecall.strictSameIssue)} |`, ...classRows('holdout'), ...classRows('dev'), `| Funnel, ${c.funnel.runs} run(s) | raw ${c.funnel.raw}, withdrawn ${c.funnel.withdrawn}, dropped ${c.funnel.dropped.total}${dropReasons(c.funnel.dropped.byReason)}, posted ${c.funnel.posted} |`, `| Holdout misses the reviewer withdrew | ${c.withdrawnMisses.inWithdrawn} of ${c.withdrawnMisses.misses} (no data: ${c.withdrawnMisses.noData}) |`, `| Judge agreement | n=${ja.n}, raw ${num(ja.value)}, kappa ${num(ja.kappa)}, ${ja.status} |`, `| Runs, ${c.cost.grok.runs + c.excludedRuns} (${c.excludedRuns} excluded) | body mode: withheld ${c.bodyModes.withheld}, full ${c.bodyModes.full}, unknown ${c.bodyModes.unknown} |`, ''].join('\n');
         const out = flag(argv, '--report', null);
         if (out) writeFileSync(out, md);
         io.stdout(md);

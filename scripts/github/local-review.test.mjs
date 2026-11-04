@@ -170,6 +170,18 @@ test('the reserve entry carries ref branch-<slug> and perRefCap from per_branch_
   assert.equal(opts.perRefCap, 5);
 });
 
+test('an eval run reserves under eval-<pr>-<sha8>, not branch-<slug>: it neither eats nor meets the live branch cap (breaks if evalRun is ignored)', async () => {
+  const w = world();
+  seedCap(w, 'branch-feat-x', 8);
+  const r = await run(w, { evalRun: true });
+  assert.equal(r.exit, EXIT.OK);
+  const ref = w.reserveCalls[0][1].ref;
+  assert.match(ref, /^eval-7-[0-9a-f]{8}$/);
+  const live = world();
+  await run(live);
+  assert.equal(live.reserveCalls[0][1].ref, 'branch-feat-x', 'a live run keeps the branch key');
+});
+
 // ---------- rows 2 and 3: retry ----------
 
 const spawnErrRun = () => ({ status: null, stdout: '', stderr: '', timedOut: false, error: 'spawn ENOENT', durationMs: 1 });

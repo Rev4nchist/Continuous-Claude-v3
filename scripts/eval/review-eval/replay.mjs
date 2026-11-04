@@ -7,7 +7,9 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defaultLedgerPath, prepareReview, runReview } from '../../github/cursor-review.mjs';
+import { LOCAL_REVIEW_DEFAULTS, loadConfig as loadEngineConfig } from '../../github/local-review.mjs';
 import { budgetFromFile, EVAL_SESSION, SHADOW_SESSION } from './budget.mjs';
 import { underLocalReview } from './config.mjs';
 import { runEngine, toEvalFindings } from './engine-run.mjs';
@@ -68,6 +70,15 @@ export function ensureCommits(git, shas, pr, remote = 'fork') {
 
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
+/** The config file the engine itself loads: review-router.config.json beside the local-review.mjs this checkout runs (engine-here). */
+const ENGINE_CONFIG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'review-router.config.json');
+
+/** retry_max of the engine config, so a replay knows how many runs one engine call may reserve (1 + retry_max). An unreadable config gives the engine default. */
+function engineRetryMax(file) {
+  const loaded = loadEngineConfig(file);
+  return loaded.ok ? loaded.cfg.retry_max : LOCAL_REVIEW_DEFAULTS.retry_max;
+}
+
 /**
  * One replay. args: { pr, round, buildOnly, set, kind: 'eval' | 'shadow', reviewer?: 'engine' | 'cursor-review', bodyMode?: 'withheld' | 'full' }.
  * bodyMode (engine only): 'withheld' (the default) keeps the PR body out of the reviewer's CONTEXT.md; the body of a merged PR holds the findings and their fixes.
@@ -95,7 +106,9 @@ export async function replayRun({ pr, round, buildOnly = false, set = 'holdout',
     const frozen = reviewer === 'engine' ? (deps.checkEngineFreeze ?? checkEngineFreeze)(cfg) : (deps.checkFreeze ?? checkFreeze)(cfg);
     if (!frozen.ok) return refuse(2, 'frozen', frozen.reason);
     promptSha = frozen.promptSha256;
-    const budget = budgetFromFile(ledgerPath, cfg, { now: now(), kind });
+    // One engine call reserves 1 + retry_max runs, so the budget must hold all of them, not just the first.
+    const need = reviewer === 'engine' ? 1 + engineRetryMax(deps.engineConfigPath ?? ENGINE_CONFIG) : 1;
+    const budget = budgetFromFile(ledgerPath, cfg, { now: now(), kind, need });
     if (!budget.ok) return refuse(3, 'cap', `${budget.reason} (eval ${budget.evalUsed}, global ${budget.globalUsed})`);
   }
 
@@ -178,5 +191,5 @@ async function replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDi
     ...(res.record ? { promptSha256: res.record.promptSha256 ?? null } : {}), ...(res.reason ? { reason: res.reason } : {}),
   });
   appendRun(runsPath, rec);
-  return { exit: res.status === 'ok' ? 0 : res.status === 'cap' ? 3 : 1, status: res.status, pr, round, record: rec, findingsPath };
+  return { exit: res.status === 'ok' ? 0 : res.status === 'cap' ? 3 : 1, status: res.status, ...(res.reason ? { reason: res.reason } : {}), pr, round, record: rec, findingsPath };
 }

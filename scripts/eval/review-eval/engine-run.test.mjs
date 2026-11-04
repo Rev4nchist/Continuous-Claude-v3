@@ -7,7 +7,7 @@ const SHA = 'c'.repeat(40);
 const BASE = '1'.repeat(40);
 const CFG = '{"matrix":{}}';
 const record = (over = {}) => ({
-  runId: 'r1', status: 'ok', trusted: false, model: 'grok-4.7-high', cursorAgentVersion: '2026.10.22-x', promptSha256: 'P', problems: [],
+  runId: 'r1', status: 'ok', coverage: { complete: true }, trusted: false, model: 'grok-4.7-high', cursorAgentVersion: '2026.10.22-x', promptSha256: 'P', problems: [],
   funnel: { raw: 3, withdrawn: 2, dropped: { byReason: { 'no-file': 1 } }, posted: 2 }, withdrawn: [{ id: 'w1', path: 'a.mjs', line: 4, severity: 'major', reason: 'x' }],
   runs: [{ runId: 'r1', durationMs: 900, usage: { inputTokens: 5 }, modelVerified: true }],
   findings: [
@@ -50,7 +50,7 @@ test('runEngine reviews the round sha and base, fresh, untrusted, with the run s
   assert.deepEqual([seen.opts.pr, seen.opts.fresh, seen.opts.engineHere], [5, true, true]);
   assert.equal(seen.pull.head.sha, SHA);
   assert.equal(seen.pull.base.sha, BASE);
-  assert.equal(seen.pull.head.ref, 'feat/x', 'the branch name stays: the record folder and the branch cap key on it');
+  assert.equal(seen.pull.head.ref, 'feat/x', 'the branch name stays: the record folder keys on it');
   assert.deepEqual([seen.pull.draft, seen.pull.labels], [false, []]);
   assert.deepEqual(seen.other, { other: true }, 'a gh call that is not the PR read passes through');
   assert.deepEqual([seen.deps.stateRoot, seen.deps.stateDir, seen.deps.cursorLedger], ['/run/state', '/run', '/led.jsonl']);
@@ -89,3 +89,21 @@ test('runEngine withholds the PR body by default and keeps it only when bodyMode
   await runEngine({ ...b.args, bodyMode: 'full' }, b.deps);
   assert.equal(b.seen.opts.withholdBody, false);
 });
+
+test('runEngine marks the engine run as an eval run, so reviewHead keys its cap on eval-<pr>-<sha8> (breaks if evalRun is dropped)', async () => {
+  const a = harness();
+  await runEngine(a.args, a.deps);
+  assert.equal(a.seen.opts.evalRun, true);
+});
+
+test('runEngine: a record with coverage.complete not true is not ok, even with record status ok and exit 0 (breaks if only record.status is read)', async () => {
+  for (const coverage of [{ complete: false }, {}, undefined]) {
+    const h = harness({ record: record({ status: 'ok', coverage, problems: ['2 files not covered'] }) });
+    const r = await runEngine(h.args, h.deps);
+    assert.equal(r.status, 'incomplete', JSON.stringify(coverage));
+    assert.match(r.reason, /not covered/);
+  }
+  const full = harness({ record: record({ coverage: { complete: true } }) });
+  assert.equal((await runEngine(full.args, full.deps)).status, 'ok');
+});
+

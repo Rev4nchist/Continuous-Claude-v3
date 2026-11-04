@@ -309,3 +309,32 @@ test('an engine replay withholds the PR body by default, passes bodyMode through
   const c = engineDeps(tmp());
   assert.equal((await replayRun({ pr: 207, round: 1, bodyMode: 'half' }, c.deps)).exit, 2);
 });
+
+test('an engine replay refuses when one run could reserve 1 + retry_max slots past the eval budget; retry_max comes from the engine config (breaks if only one slot is checked or retry_max is fixed)', async () => {
+  const withEvalUsed = (n, retryMax) => {
+    const dir = tmp();
+    const ledger = path.join(dir, 'cursor-ledger.jsonl');
+    writeFileSync(ledger, `${Array.from({ length: n }, (_, i) => JSON.stringify({ ts: '2026-11-02T10:00:00.000Z', phase: 'start', id: `i${i}`, ref: `eval-${i}`, sessionId: 'review-eval' })).join('\n')}\n`);
+    const engineConfigPath = path.join(dir, 'engine-config.json');
+    writeFileSync(engineConfigPath, JSON.stringify(retryMax === undefined ? {} : { local_review: { retry_max: retryMax } }));
+    return engineDeps(dir, { ledgerPath: ledger, engineConfigPath });
+  };
+  const go = async (n, retryMax) => {
+    const { deps, calls } = withEvalUsed(n, retryMax);
+    const r = await replayRun({ pr: 207, round: 1 }, deps);
+    return [r.exit, r.status, calls.engine.length];
+  };
+  assert.deepEqual(await go(38, 1), [0, 'ok', 1], '38 used + 2 = 40, within the budget of 40');
+  assert.deepEqual(await go(39, 1), [3, 'cap', 0], '39 used + 2 = 41, over');
+  assert.deepEqual(await go(39, undefined), [3, 'cap', 0], 'no local_review block: the engine default retry_max of 1 applies');
+  assert.deepEqual(await go(36, 3), [0, 'ok', 1], '36 used + 4 = 40');
+  assert.deepEqual(await go(37, 3), [3, 'cap', 0], '37 used + 4 = 41');
+});
+
+test('an engine cap carries its reason to the replay result, so the batch can tell a per-ref cap from the budget (breaks if the reason is dropped)', async () => {
+  const c = engineDeps(tmp(), {});
+  c.deps.runEngine = async () => ({ status: 'cap', reason: 'ref-cap reached (8)', record: null, recordPath: null, tracePath: null, baseConfig: {} });
+  const r = await replayRun({ pr: 207, round: 1 }, c.deps);
+  assert.deepEqual([r.exit, r.reason], [3, 'ref-cap reached (8)']);
+});
+
