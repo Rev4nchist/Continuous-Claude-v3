@@ -11,7 +11,7 @@
  *
  *   node scripts/coordination/dm-delivery-probe.mjs
  *
- * Five assertions, in the order they can fail:
+ * Six assertions, in the order they can fail:
  *   1. DELIVERED   — a direct message reaches a PostToolUse invocation
  *   2. LABELLED    — the injection echoes hookEventName PostToolUse, or the
  *                    harness has no reason to honour it
@@ -20,6 +20,10 @@
  *                    protects against silent loss via a subagent
  *   4. THROTTLED   — an immediate second call is silent and costs no query
  *   5. NOT-BROADCAST — a branch-wide note is NOT delivered on this path
+ *   6. ONCE-ACROSS-BOARDS — a DM sent from board A to a session that reads its inbox
+ *                    on board B and then on board A shows exactly once (premortem T4).
+ *                    This one runs the real `lane.mjs inbox`, not the hook. It needs
+ *                    migration 0004; a database without it gets a SKIP line.
  *
  * It cleans up every row it writes, including on failure.
  */
@@ -31,6 +35,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { laneEnv, makeBoards } from './probe-boards.mjs';
 
 const run = promisify(execFile);
 
@@ -52,6 +57,7 @@ const pg = loadPg();
 const dmFile = (sid) => join(tmpdir(), `claude-lane-dm-${sid}.json`);
 const clearThrottle = (sid) => { try { rmSync(dmFile(sid), { force: true }); } catch { /* fine */ } };
 
+const LANE = join(REPO, 'scripts', 'coordination', 'lane.mjs');
 const HOOK = process.env.DM_PROBE_HOOK
   || join(homedir(), '.claude', 'hooks', 'dist', 'lane-context.mjs');
 
@@ -80,6 +86,19 @@ async function fireHook(event, sessionId) {
   return stdout.trim();
 }
 
+const skip = (name, why) => process.stdout.write(`SKIP  ${name} — ${why}
+`);
+
+/** Run the real lane.mjs as `as` from `cwd`, against the probe's own database and temp registry. */
+async function lane(bx, cwd, as, args) {
+  try {
+    const { stdout } = await run(process.execPath, [LANE, ...args], { cwd, env: laneEnv(CONN, bx, { CLAUDE_CODE_SESSION_ID: as }), timeout: 30_000 });
+    return { code: 0, out: stdout, err: '' };
+  } catch (e) {
+    return { code: e.code ?? 1, out: String(e.stdout ?? ''), err: String(e.stderr ?? e.message) };
+  }
+}
+
 const injected = (out) => {
   try {
     const j = JSON.parse(out || '{}');
@@ -97,6 +116,7 @@ async function main() {
   await c.connect();
 
   let dmId = null;
+  let boards = null;
   try {
     // A direct message from SENDER to RECEIVER. `to_session_id` is what makes it
     // eligible for this path at all.
@@ -145,9 +165,37 @@ async function main() {
     check('NOT-BROADCAST: a branch-wide note is not delivered mid-turn',
       !inj3 || !inj3.additionalContext.includes('PROBE-BROADCAST'),
       inj3 ? 'broadcast leaked into the mid-turn path' : '');
+
+    // 6 — T4. Last on purpose: the board reads write `<id>@<board>` watermark rows, which
+    // cases 1 to 5 must not see.
+    const migrated = Number((await c.query(
+      `SELECT count(*) AS n FROM information_schema.columns
+        WHERE table_schema='agentic_os' AND table_name='lane_event' AND column_name='project_key'`)).rows[0].n) === 1;
+    if (!migrated) {
+      skip('ONCE-ACROSS-BOARDS: a DM shows once across two boards', 'migration 0004 is not applied to this database');
+    } else {
+      boards = makeBoards('zz-dmprobe', ['a', 'b']);
+      const { a, b } = boards.boards;
+      await c.query(
+        `INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES ($1, $2, 'dm-delivery-probe fixture', now())`,
+        [RECEIVER, b.norm]);
+      const body = 'PROBE-XBOARD-DM: shows once';
+      const sent = await lane(boards, a.dir, SENDER, ['say', body, '--to', RECEIVER]);
+      const readB = await lane(boards, b.dir, RECEIVER, ['inbox', '--json']);
+      const readA = await lane(boards, a.dir, RECEIVER, ['inbox', '--json']);
+      const rowsOf = (r) => { try { return JSON.parse(r.out).filter((e) => e.body === body); } catch { return []; } };
+      const inB = rowsOf(readB);
+      const inA = rowsOf(readA);
+      check('ONCE-ACROSS-BOARDS: a DM from board A shows once across a read on B then on A',
+        sent.code === 0 && inB.length === 1 && inB[0].project_key === a.key && inA.length === 0,
+        `say exit ${sent.code}; read on B saw ${inB.length}, read on A saw ${inA.length} (want 1 then 0)${sent.code ? `: ${sent.err.trim().split(/\r?\n/)[0]}` : ''}`);
+    }
   } finally {
     await c.query('DELETE FROM agentic_os.lane_event WHERE session_id=$1', [SENDER]).catch(() => {});
-    await c.query('DELETE FROM agentic_os.lane_watermark WHERE session_id=$1', [RECEIVER]).catch(() => {});
+    await c.query(
+      `DELETE FROM agentic_os.lane_watermark WHERE session_id=$1 OR starts_with(session_id, $1 || '@')`, [RECEIVER]).catch(() => {});
+    await c.query('DELETE FROM sessions WHERE id=$1', [RECEIVER]).catch(() => {});
+    boards?.cleanup();
     await c.end().catch(() => {});
     clearThrottle(RECEIVER);
   }

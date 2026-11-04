@@ -16,6 +16,13 @@
 //          last result outside allowedExit (FAIL), last run older than maxAgeHours (WARN), never run (WARN),
 //          schtasks columns not found (WARN), columns in another order and quoted commas (parsed by name), skipped off Windows
 //   blocklist:age: 1 day (PASS), 3 days exactly (PASS), 4 days (WARN), 14 days exactly (WARN), 15 days (FAIL), never committed (WARN)
+//   registry:roots-exist: an active entry with a missing path (FAIL, names it), an inactive one (ignored), in-development counts as active,
+//          a present path (PASS), no registry file (PASS absent), a registry that is not JSON (WARN)
+//   registry:project-rows: no row (WARN), another root (WARN), the same root spelled with capitals (PASS), inactive entry (ignored),
+//          database skipped / no URL / unreadable (PASS / WARN / WARN); against a real scratch database: WARN, then PASS once the row exists
+//   lanes:board-columns: both columns (PASS), none (WARN, never FAIL: 0004 is not applied live yet), one of two (FAIL), no URL or unreadable (WARN);
+//          against real scratch databases with and without migration 0004
+//   lanes:worktree-lane-mjs: no worktrees dir (PASS absent), same file with CRLF (PASS), a different file (WARN, names the worktree)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -23,7 +30,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimes
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs, parseCsv, scheduleChecks, blocklistAge } from './harness-doctor.mjs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns } from './harness-doctor.mjs';
+import { assertScratchUrl } from './coordination/scratch-db.mjs';
 
 const DOCTOR = join(dirname(fileURLToPath(import.meta.url)), 'harness-doctor.mjs');
 const HOUR = 3600 * 1000;
@@ -89,9 +99,10 @@ function commitBlocklist(repo, days) {
   execFileSync('git', [...base, 'commit', '-q', '--no-verify', '-m', 'blocklist'], { env, windowsHide: true });
 }
 
-function run(fx, extra = []) {
+function run(fx, extra = [], envExtra = {}) {
   // HARNESS_DOCTOR_SCHTASKS_DIR points the doctor at fake schtasks output, so a test never reads the real Task Scheduler.
-  const env = { ...process.env, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks };
+  // HARNESS_DOCTOR_NO_DB=1 keeps a test from reading whatever database the shell points at.
+  const env = { ...process.env, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks, HARNESS_DOCTOR_NO_DB: '1', ...envExtra };
   const r = spawnSync(process.execPath, [DOCTOR, '--home', fx.home, '--repo', fx.repo, ...extra], { encoding: 'utf8', windowsHide: true, timeout: 60000, env });
   const lines = (r.stdout ?? '').split(/\r?\n/).filter(Boolean);
   const checks = {};
@@ -584,4 +595,167 @@ test('a file under the home is never changed by a run', () => {
   run(fx, ['--json']);
   assert.equal(readFileSync(f, 'utf8'), before);
   assert.equal(Math.round(new Date(execFileSync(process.execPath, ['-e', `console.log(require('fs').statSync(${JSON.stringify(f)}).mtime.toISOString())`], { encoding: 'utf8' }).trim()).getTime() / 1000), Math.round(old.getTime() / 1000));
+});
+
+// ---- registry and lanes ----
+const writeRegistry = (fx, projects) => put(join(fx.home, '.claude', 'project-registry.json'), JSON.stringify({ version: '1.0', projects }));
+const entry = (key, path, status = 'active') => ({ name: key, key, path, status });
+const fwd = (p) => p.replace(/\\/g, '/');
+const goneDir = (fx, name) => fwd(join(fx.root, 'no-such-folder', name));
+const HERE_TEST = dirname(fileURLToPath(import.meta.url));
+
+test('registry:roots-exist is a FAIL naming each active entry whose path is missing, and exits 1', () => {
+  const fx = fixture();
+  const real = join(fx.root, 'real');
+  mkdirSync(real);
+  writeRegistry(fx, [entry('here', fwd(real)), entry('gone-one', goneDir(fx, 'one')), entry('gone-two', goneDir(fx, 'two'))]);
+  const r = run(fx);
+  const c = r.checks['registry:roots-exist'];
+  assert.equal(c.status, 'FAIL', r.stdout);
+  assert.match(c.detail, /2 non-inactive registry root\(s\) missing/);
+  assert.ok(c.detail.includes('gone-one (') && c.detail.includes('gone-two ('), c.detail);
+  assert.ok(!c.detail.includes('here ('), 'an existing root must not be named');
+  assert.ok(c.detail.includes(join(fx.home, '.claude', 'project-registry.json')), 'the detail names the registry file');
+  assert.equal(r.code, 1);
+});
+
+test('registry:roots-exist ignores an inactive entry and counts in-development as active', () => {
+  const fx = fixture();
+  const real = join(fx.root, 'real');
+  mkdirSync(real);
+  writeRegistry(fx, [entry('here', fwd(real)), entry('old', goneDir(fx, 'old'), 'inactive')]);
+  assert.equal(run(fx).checks['registry:roots-exist'].status, 'PASS');
+  writeRegistry(fx, [entry('here', fwd(real)), entry('dev', goneDir(fx, 'dev'), 'in-development')]);
+  const c = run(fx).checks['registry:roots-exist'];
+  assert.equal(c.status, 'FAIL');
+  assert.ok(c.detail.includes('dev ('), c.detail);
+});
+
+test('registry:roots-exist is a PASS that says absent without a registry file, and a WARN for one that is not JSON', () => {
+  const fx = fixture();
+  const c = run(fx).checks['registry:roots-exist'];
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /^absent: /);
+  put(join(fx.home, '.claude', 'project-registry.json'), '{ not json');
+  const bad = run(fx).checks['registry:roots-exist'];
+  assert.equal(bad.status, 'WARN');
+  assert.match(bad.detail, /not valid JSON/);
+});
+
+test('registry:project-rows: a missing row and a different root are WARNs naming the key; the same root in another spelling is a PASS', () => {
+  const fx = fixture();
+  const dir = fwd(join(fx.root, 'Proj Dir'));
+  mkdirSync(dir);
+  writeRegistry(fx, [entry('same', dir), entry('moved', dir), entry('nowhere', dir), entry('old', dir, 'inactive')]);
+  const o = { home: fx.home };
+  const same = { key: 'same', root_path: dir.toUpperCase().replace(/\//g, '\\'), status: 'active' }; // capitals and backslashes: one root once folded
+  const moved = { key: 'moved', root_path: 'c:/somewhere/else', status: 'active' };
+  const c = registryProjectRows(o, { facts: { columns: 2, projects: [same, moved] } });
+  assert.equal(c.status, 'WARN');
+  assert.match(c.detail, /2 registry key\(s\) differ/);
+  assert.ok(c.detail.includes('moved: row has c:/somewhere/else'), c.detail);
+  assert.ok(c.detail.includes('nowhere: no project row'), c.detail);
+  assert.ok(!c.detail.includes('same:') && !c.detail.includes('old:'), 'a matching key and an inactive key are not drift');
+  const ok = registryProjectRows(o, { facts: { columns: 2, projects: [same, { ...same, key: 'moved' }, { ...same, key: 'nowhere' }] } });
+  assert.equal(ok.status, 'PASS', ok.detail);
+});
+
+test('registry:project-rows and lanes:board-columns: skipped, no URL and an unreadable database', () => {
+  const fx = fixture();
+  writeRegistry(fx, [entry('a', fwd(fx.root))]);
+  const o = { home: fx.home };
+  assert.equal(registryProjectRows(o, { facts: { skipped: true } }).status, 'PASS');
+  assert.equal(laneBoardColumns(o, { facts: { skipped: true } }).status, 'PASS');
+  for (const facts of [{ noUrl: true }, { error: 'connect ECONNREFUSED' }]) {
+    assert.equal(registryProjectRows(o, { facts }).status, 'WARN');
+    assert.equal(laneBoardColumns(o, { facts }).status, 'WARN');
+  }
+  assert.match(laneBoardColumns(o, { facts: { error: 'connect ECONNREFUSED' } }).detail, /ECONNREFUSED/);
+  assert.equal(registryProjectRows(o, { facts: { columns: 2, projectsError: 'relation does not exist' } }).status, 'WARN');
+});
+
+test('lanes:board-columns: both columns PASS, none is a WARN that never fails the doctor, one of two is a FAIL', () => {
+  assert.equal(laneBoardColumns({}, { facts: { columns: 2 } }).status, 'PASS');
+  const none = laneBoardColumns({}, { facts: { columns: 0 } });
+  assert.equal(none.status, 'WARN');
+  assert.match(none.detail, /migration 0004 not applied/);
+  const half = laneBoardColumns({}, { facts: { columns: 1 } });
+  assert.equal(half.status, 'FAIL');
+  assert.match(half.detail, /half applied/);
+});
+
+test('end to end: with no database URL in the environment the two database checks are WARNs, not a crash and not a PASS', () => {
+  const fx = fixture();
+  writeRegistry(fx, [entry('a', fwd(fx.root))]);
+  const r = run(fx, [], { HARNESS_DOCTOR_NO_DB: '', CONTINUOUS_CLAUDE_DB_URL: '', DATABASE_URL: '', OPC_POSTGRES_URL: '' });
+  assert.equal(r.checks['lanes:board-columns'].status, 'WARN', r.stdout);
+  assert.match(r.checks['lanes:board-columns'].detail, /no database URL/);
+  assert.equal(r.checks['registry:project-rows'].status, 'WARN');
+  assert.equal(r.code, 0, 'a WARN never exits 1');
+});
+
+test('lanes:worktree-lane-mjs: no worktrees dir is a PASS that says absent; the same file with CRLF matches; a different file is a WARN naming the worktree', () => {
+  const fx = fixture();
+  const rel = ['scripts', 'coordination', 'lane.mjs'];
+  put(join(fx.repo, ...rel), 'console.log(1);\nconsole.log(2);\n');
+  const absentLine = run(fx).checks['lanes:worktree-lane-mjs'];
+  assert.equal(absentLine.status, 'PASS');
+  assert.match(absentLine.detail, /^absent: /);
+  const wt = join(fx.repo, '.claude', 'worktrees');
+  put(join(wt, 'same-crlf', ...rel), 'console.log(1);\r\nconsole.log(2);\r\n');
+  const same = run(fx).checks['lanes:worktree-lane-mjs'];
+  assert.equal(same.status, 'PASS', same.detail);
+  assert.match(same.detail, /all 1 worktree lane\.mjs copies match/);
+  put(join(wt, 'old-copy', ...rel), 'console.log(1);\n');
+  put(join(wt, 'no-lane-file', 'README.md'), 'x');
+  const differ = run(fx).checks['lanes:worktree-lane-mjs'];
+  assert.equal(differ.status, 'WARN');
+  assert.match(differ.detail, /1 worktree\(s\)/);
+  assert.ok(differ.detail.includes('old-copy') && !differ.detail.includes('same-crlf') && !differ.detail.includes('no-lane-file'), differ.detail);
+});
+
+// ---- the database checks against real scratch databases (skipped when none can be made) ----
+const SCRATCH = join(HERE_TEST, 'coordination', 'scratch-db.mjs');
+function scratchDb(through) {
+  const r = spawnSync(process.execPath, [SCRATCH, 'create', '--through', String(through)], { encoding: 'utf8', windowsHide: true, timeout: 120000 });
+  if (r.status !== 0) return null;
+  const { url } = JSON.parse(r.stdout);
+  assertScratchUrl(url);
+  return url;
+}
+const dropScratch = (url) => { assertScratchUrl(url); spawnSync(process.execPath, [SCRATCH, 'drop', url], { encoding: 'utf8', windowsHide: true }); };
+const dbEnv = (url) => { assertScratchUrl(url); return { HARNESS_DOCTOR_NO_DB: '', CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url }; };
+
+test('end to end against scratch databases: board-columns and project-rows read the real tables', async (t) => {
+  const url4 = scratchDb(4);
+  const url3 = scratchDb(3);
+  try {
+    if (!url4 || !url3) { t.skip('no scratch database could be created'); return; }
+    const fx = fixture();
+    const dir = fwd(join(fx.root, 'boardroot'));
+    mkdirSync(dir);
+    writeRegistry(fx, [entry('zz-doctor-a', dir)]);
+    const before = run(fx, [], dbEnv(url4)).checks;
+    assert.equal(before['lanes:board-columns'].status, 'PASS', before['lanes:board-columns'].detail);
+    assert.equal(before['registry:project-rows'].status, 'WARN');
+    assert.match(before['registry:project-rows'].detail, /zz-doctor-a: no project row/);
+
+    const { Client } = createRequire(pathToFileURL(join(HERE_TEST, '..', '.claude', 'hooks', 'package.json')))('pg');
+    const c = new Client({ connectionString: url4 });
+    await c.connect();
+    try {
+      await c.query(`INSERT INTO agentic_os.project (key, display_name, root_path, root_path_norm, status) VALUES ($1,$1,$2,$3,'active')`,
+        ['zz-doctor-a', dir, dir.toLowerCase()]);
+    } finally { await c.end(); }
+    const after = run(fx, [], dbEnv(url4)).checks;
+    assert.equal(after['registry:project-rows'].status, 'PASS', after['registry:project-rows'].detail);
+
+    const old = run(fx, [], dbEnv(url3));
+    assert.equal(old.checks['lanes:board-columns'].status, 'WARN');
+    assert.match(old.checks['lanes:board-columns'].detail, /migration 0004 not applied/);
+    assert.equal(old.code, 0, 'an unmigrated database must not fail the doctor');
+  } finally {
+    if (url4) dropScratch(url4);
+    if (url3) dropScratch(url3);
+  }
 });

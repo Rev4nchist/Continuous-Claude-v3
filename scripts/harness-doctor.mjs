@@ -11,6 +11,10 @@
  * It runs no Docker, no network and no paid call. It writes only the --json and --out artifacts.
  * schedule:* reads scripts/scheduled/tasks.json and runs `schtasks /query /v /fo csv` (read-only, Windows only).
  * blocklist:age reads git history. Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds fake <task>.csv schtasks output.
+ * registry:* and lanes:* read <home>/.claude/project-registry.json (the copy lane.mjs reads), the worktree lane.mjs files, and,
+ * for registry:project-rows and lanes:board-columns, the database named by CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL or OPC_POSTGRES_URL
+ * (first one set; no default). That read is one READ ONLY transaction in a child process. No URL is a WARN, an unreachable database is a WARN.
+ * Test seam: HARNESS_DOCTOR_NO_DB=1 skips the database read (a PASS that says skipped).
  * One line per check: PASS|WARN|FAIL  <section>:<check>  <detail>. Last line: harness: N pass / N warn / N fail.
  * Exit 1 on any FAIL, else 0.
  *
@@ -24,11 +28,13 @@
  *   state/coderabbit-paid.jsonl {date,cost}                             scripts/github/cr-paid.mjs
  *   review-router.config.json coderabbit.reviews_7d_manual_date         scripts/github/pr-checkpoint.mjs
  */
+import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR = 3600 * 1000;
@@ -408,9 +414,136 @@ export function blocklistAge(o, deps = {}) {
 
 const blocklistSection = (o) => [blocklistAge(o)];
 
+// ---- registry ----
+const REGISTRY_REL = ['.claude', 'project-registry.json'];
+const DB_VARS = ['CONTINUOUS_CLAUDE_DB_URL', 'DATABASE_URL', 'OPC_POSTGRES_URL'];
+const isLiveEntry = (e) => e.status.toLowerCase() !== 'inactive';
+
+/** The non-inactive entries of the registry copy lane.mjs reads, or { result } when the file cannot be judged. */
+function liveRegistry(o, check) {
+  const file = join(o.home, ...REGISTRY_REL);
+  if (!existsSync(file)) return { result: absent('registry', check, file) };
+  try { JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch (err) { return { result: result('WARN', 'registry', check, `${file} is not valid JSON: ${msg(err)}`) }; }
+  return { file, entries: loadRegistry({ registryPath: file, env: {} }).filter(isLiveEntry) };
+}
+
+/** Premortem T1: six of eight registry roots did not exist, and a board root that is gone gives a board no session can reach. */
+export function registryRootsExist(o) {
+  const reg = liveRegistry(o, 'roots-exist');
+  if (reg.result) return reg.result;
+  const missing = reg.entries.filter((e) => !e.path || !existsSync(e.path));
+  if (!missing.length) return result('PASS', 'registry', 'roots-exist', `all ${reg.entries.length} non-inactive registry root(s) exist on disk in ${reg.file}`);
+  const names = missing.map((e) => `${e.key} (${e.path || 'no path'})`).join(', ');
+  return result('FAIL', 'registry', 'roots-exist', `${missing.length} non-inactive registry root(s) missing on disk in ${reg.file}: ${names}; fix the path or set status inactive`);
+}
+
+// ---- lanes ----
+const DB_CHILD_TIMEOUT_MS = 20000;
+/** The pg module lives in the hooks bundle or apps/agentic-os, not at the repo root. Same lookup as lane.mjs. */
+const PG_ANCHORS = [join(HERE, '..', '.claude', 'hooks', 'package.json'), join(HERE, '..', 'apps', 'agentic-os', 'package.json')];
+
+/** One READ ONLY transaction, in a child process so the doctor stays synchronous. Prints one JSON object. */
+const DB_READER = `
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+const out = {};
+let pg = null;
+for (const a of ${JSON.stringify(PG_ANCHORS)}) { try { pg = createRequire(pathToFileURL(a)).call(null, 'pg'); break; } catch { /* next */ } }
+if (!pg) out.error = 'cannot resolve the pg module';
+else {
+  const c = new pg.Client({ connectionString: process.env.HARNESS_DOCTOR_DB_URL, connectionTimeoutMillis: 4000, query_timeout: 8000 });
+  try {
+    await c.connect();
+    await c.query('BEGIN READ ONLY');
+    out.columns = Number((await c.query("SELECT count(*) AS n FROM information_schema.columns WHERE table_schema='agentic_os' AND table_name IN ('lane','lane_event') AND column_name='project_key'")).rows[0].n);
+    try { out.projects = (await c.query('SELECT key, root_path, status FROM agentic_os.project')).rows; } catch (e) { out.projectsError = e.message; }
+    await c.query('ROLLBACK').catch(() => {});
+  } catch (e) { out.error = e.message; }
+  await c.end().catch(() => {});
+}
+process.stdout.write(JSON.stringify(out));
+`;
+
+const dbUrl = (env = process.env) => DB_VARS.map((n) => env[n]).find((v) => typeof v === 'string' && v.trim())?.trim() ?? null;
+const dbFactsCache = new WeakMap();
+
+/** What the doctor reads from the database: { skipped } | { noUrl } | { error } | { columns, projects?, projectsError? }. Read once per run. */
+function dbFacts(o) {
+  if (dbFactsCache.has(o)) return dbFactsCache.get(o);
+  let facts;
+  const url = dbUrl();
+  if (process.env.HARNESS_DOCTOR_NO_DB === '1') facts = { skipped: true };
+  else if (!url) facts = { noUrl: true };
+  else {
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', DB_READER], {
+      env: { ...process.env, HARNESS_DOCTOR_DB_URL: url }, encoding: 'utf8', windowsHide: true, timeout: DB_CHILD_TIMEOUT_MS,
+    });
+    try { facts = r.error ? { error: msg(r.error) } : JSON.parse(r.stdout); } catch { facts = { error: `the database reader printed no JSON (exit ${r.status}): ${String(r.stderr).trim().split('\n')[0]}` }; }
+  }
+  dbFactsCache.set(o, facts);
+  return facts;
+}
+
+/** The WARN or PASS a check gives when the database cannot be read, or null when `facts` holds the answer. */
+function dbUnavailable(section, check, facts, what) {
+  if (facts.skipped) return result('PASS', section, check, 'skipped: HARNESS_DOCTOR_NO_DB is set');
+  if (facts.noUrl) return result('WARN', section, check, `no database URL in ${DB_VARS.join(', ')}: ${what} not checked`);
+  if (facts.error) return result('WARN', section, check, `cannot read the database: ${facts.error}`);
+  return null;
+}
+
+/** Every non-inactive registry key needs an agentic_os.project row with the same normalised root. A drift is a WARN: nothing breaks, the Agentic OS pane shows the wrong project. */
+export function registryProjectRows(o, deps = {}) {
+  const reg = liveRegistry(o, 'project-rows');
+  if (reg.result) return reg.result;
+  const facts = deps.facts ?? dbFacts(o);
+  const gone = dbUnavailable('registry', 'project-rows', facts, 'agentic_os.project rows');
+  if (gone) return gone;
+  if (!facts.projects) return result('WARN', 'registry', 'project-rows', `agentic_os.project cannot be read: ${facts.projectsError}`);
+  const byKey = new Map(facts.projects.map((r) => [r.key, r]));
+  const drift = reg.entries.filter((e) => e.root).flatMap((e) => {
+    const row = byKey.get(e.key);
+    if (!row) return [`${e.key}: no project row`];
+    const have = normalizeRoot(row.root_path);
+    return have === e.root ? [] : [`${e.key}: row has ${have}, registry has ${e.root}`];
+  });
+  return drift.length ? result('WARN', 'registry', 'project-rows', `${drift.length} registry key(s) differ from agentic_os.project: ${drift.join('; ')}`)
+    : result('PASS', 'registry', 'project-rows', `every non-inactive registry key in ${reg.file} has a project row with the same root`);
+}
+
+/** Migration 0004 is not applied to the live database yet, so a missing column is a WARN today. Only one of the two columns is a FAIL: that is a half-applied migration. */
+export function laneBoardColumns(o, deps = {}) {
+  const facts = deps.facts ?? dbFacts(o);
+  const gone = dbUnavailable('lanes', 'board-columns', facts, 'agentic_os.lane.project_key');
+  if (gone) return gone;
+  if (facts.columns === 2) return result('PASS', 'lanes', 'board-columns', 'agentic_os.lane and agentic_os.lane_event both have project_key (migration 0004 applied)');
+  if (facts.columns === 0) return result('WARN', 'lanes', 'board-columns', 'migration 0004 not applied: agentic_os.lane has no project_key, so no board can be registered yet');
+  return result('FAIL', 'lanes', 'board-columns', `project_key is on ${facts.columns} of 2 tables (agentic_os.lane, agentic_os.lane_event): migration 0004 is half applied`);
+}
+
+/** The hash of a file with CRLF folded to LF: the tree mixes line endings, and a checkout must not look like a code change. */
+const laneHash = (file) => createHash('sha256').update(readFileSync(file, 'utf8').replace(/\r\n/g, '\n')).digest('hex');
+
+/** Premortem T3: a worktree that carries an older lane.mjs cannot see boards. The DB trigger stops it on a foreign lane; this names the worktree. */
+export function worktreeLaneMjs(o) {
+  const rel = ['scripts', 'coordination', 'lane.mjs'];
+  const dir = join(o.repo, '.claude', 'worktrees');
+  if (!existsSync(dir)) return absent('lanes', 'worktree-lane-mjs', dir);
+  const primary = join(o.repo, ...rel);
+  if (!existsSync(primary)) return result('WARN', 'lanes', 'worktree-lane-mjs', `missing ${primary}: worktree copies cannot be compared`);
+  const want = laneHash(primary);
+  const copies = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => ({ name: d.name, file: join(dir, d.name, ...rel) })).filter((c) => existsSync(c.file));
+  const differ = copies.filter((c) => laneHash(c.file) !== want).map((c) => c.name);
+  if (differ.length) return result('WARN', 'lanes', 'worktree-lane-mjs', `${differ.length} worktree(s) under ${dir} have a lane.mjs that differs from ${primary}: ${differ.join(', ')}; a stale copy cannot see boards (rebase that worktree), a newer copy is not on main yet (merge it)`);
+  return result('PASS', 'lanes', 'worktree-lane-mjs', copies.length ? `all ${copies.length} worktree lane.mjs copies match ${primary}` : `no worktree under ${dir} holds a lane.mjs`);
+}
+
+const registrySection = (o) => [registryRootsExist(o), registryProjectRows(o)];
+const lanesSection = (o) => [laneBoardColumns(o), worktreeLaneMjs(o)];
+
 // ---- run ----
 const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],
-  ['schedule', scheduleSection], ['blocklist', blocklistSection]];
+  ['schedule', scheduleSection], ['blocklist', blocklistSection], ['registry', registrySection], ['lanes', lanesSection]];
 
 /** Runs every section. A section that throws becomes one WARN, so one bad input never hides the rest. */
 export function collect(o) {

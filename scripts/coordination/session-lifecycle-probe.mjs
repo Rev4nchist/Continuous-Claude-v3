@@ -43,14 +43,21 @@
  *   node scripts/coordination/session-lifecycle-probe.mjs
  *     [--hook <path/to/coordination-release.mjs>]   default: .claude/hooks/dist/
  *     [--container <name>]                          default: continuous-claude-postgres
+ *     [--db-url <postgres url>]                     run through the pg module against this
+ *                                                   database instead of docker exec. The
+ *                                                   hook gets the same URL in its env.
+ *                                                   Use it with a scratch database
+ *                                                   (scratch-db.mjs create); no flag keeps
+ *                                                   the docker exec behaviour exactly.
  *
  * Exit codes: 0 all checks passed | 1 a check failed | 2 usage/environment error
  */
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..');
@@ -61,13 +68,37 @@ function arg(name, fallback) {
 }
 
 const CONTAINER = arg('container', 'continuous-claude-postgres');
+const DB_URL = arg('db-url', null);
 const HOOK = resolve(arg('hook', join(REPO, '.claude', 'hooks', 'dist', 'coordination-release.mjs')));
 const PROBE_ID = `probe-lifecycle-${process.pid}-1`;
 const ABSENT_ID = `probe-lifecycle-${process.pid}-absent`;
 const REASON = 'probe_exit_reason';
 
+/** Same lookup as lane.mjs: `pg` lives in the hooks bundle or in apps/agentic-os. */
+function loadPg() {
+  for (const anchor of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
+    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
+  }
+  throw new Error('cannot resolve the `pg` module. Looked in .claude/hooks and apps/agentic-os.');
+}
+
+/** The one connection of a --db-url run. */
+let pgClient = null;
+
+/** The text psql -At -F '|' prints: cells joined by '|', rows by newlines, booleans as t/f, NULL as ''. */
+function psqlText(result) {
+  const cell = (v) => (v === null || v === undefined ? '' : typeof v === 'boolean' ? (v ? 't' : 'f') : String(v));
+  return result.rows.map((r) => r.map(cell).join('|')).join('\n');
+}
+
+/** Run SQL and return the text psql would print: through the pg module with --db-url, else docker exec psql. */
+async function psql(sql) {
+  if (DB_URL) return psqlText(await pgClient.query({ text: sql, rowMode: 'array' }));
+  return dockerPsql(sql);
+}
+
 /** Run SQL through docker exec psql, unaligned and tuple-only. Returns stdout. */
-function psql(sql) {
+function dockerPsql(sql) {
   const res = spawnSync(
     'docker',
     ['exec', CONTAINER, 'psql', '-U', 'claude', '-d', 'continuous_claude', '-At', '-F', '|', '-c', sql],
@@ -83,8 +114,8 @@ function psql(sql) {
  * apps/agentic-os/src/server/queries/sessions.ts. If these two ever disagree the
  * probe is worthless, so it is quoted here in full rather than approximated.
  */
-function readState(id) {
-  const row = psql(`
+async function readState(id) {
+  const row = await psql(`
     SELECT
       (ended_at IS NOT NULL
         AND ended_at >= GREATEST(last_heartbeat, last_activity_at)) AS is_ended,
@@ -115,12 +146,14 @@ function runHook(sessionId) {
     }),
     encoding: 'utf-8',
     timeout: 30_000,
+    // The hook resolves its own database from env. With --db-url it must be the same one.
+    ...(DB_URL ? { env: { ...process.env, CONTINUOUS_CLAUDE_DB_URL: DB_URL, DATABASE_URL: DB_URL, OPC_POSTGRES_URL: DB_URL } } : {}),
   });
   return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
 }
 
-function sweep() {
-  psql(`DELETE FROM public.sessions WHERE id LIKE 'probe-lifecycle-%'`);
+async function sweep() {
+  await psql(`DELETE FROM public.sessions WHERE id LIKE 'probe-lifecycle-%'`);
 }
 
 const results = [];
@@ -137,11 +170,16 @@ async function main() {
 
   console.log('session lifecycle probe');
   console.log(`  hook      ${HOOK}`);
-  console.log(`  container ${CONTAINER}`);
+  console.log(DB_URL ? `  database  ${DB_URL.replace(/(\/\/[^:/@]+:)[^@]*@/, '$1***@')} (pg module)` : `  container ${CONTAINER}`);
   console.log(`  probe id  ${PROBE_ID}\n`);
 
   try {
-    psql('SELECT 1');
+    if (DB_URL) {
+      const { Client } = loadPg();
+      pgClient = new Client({ connectionString: DB_URL, connectionTimeoutMillis: 5000 });
+      await pgClient.connect();
+    }
+    await psql('SELECT 1');
   } catch (err) {
     console.error(`Cannot reach Postgres: ${err.message}`);
     process.exit(2);
@@ -149,7 +187,7 @@ async function main() {
 
   // Schema gate first. Without it every later check fails for the wrong reason
   // and the operator goes looking at the hook instead of the migration.
-  const cols = psql(`
+  const cols = await psql(`
     SELECT count(*) FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = 'sessions'
        AND column_name IN ('ended_at', 'end_reason')
@@ -163,22 +201,22 @@ async function main() {
   }
 
   try {
-    sweep();
+    await sweep();
 
     // --- 1. LIVE -----------------------------------------------------------
-    psql(`
+    await psql(`
       INSERT INTO public.sessions (id, project, working_on, started_at, last_heartbeat)
       VALUES ('${PROBE_ID}', '${REPO.replace(/\\/g, '/')}', 'session lifecycle probe',
               NOW(), NOW())
     `);
-    const live = readState(PROBE_ID);
+    const live = await readState(PROBE_ID);
     check('1 LIVE      registered session reads not-ended',
       live !== null && live.isEnded === false && live.inWindow === true,
       live === null ? 'row missing' : `is_ended=${live.isEnded} in_window=${live.inWindow}`);
 
     // --- 2. ENDED ----------------------------------------------------------
     const ran = runHook(PROBE_ID);
-    const ended = readState(PROBE_ID);
+    const ended = await readState(PROBE_ID);
     check('2 ENDED     real SessionEnd hook records the end',
       ran.status === 0 && ended !== null && ended.isEnded === true,
       `hook exit=${ran.status} is_ended=${ended?.isEnded}`);
@@ -193,21 +231,21 @@ async function main() {
     // What heartbeat.ts does on the next UserPromptSubmit after `claude --resume`.
     // Note it does NOT clear ended_at -- that is the whole point of the relative
     // predicate. If this check fails, someone made "ended" absolute.
-    psql(`UPDATE public.sessions SET last_heartbeat = NOW() WHERE id = '${PROBE_ID}'`);
-    const resumed = readState(PROBE_ID);
+    await psql(`UPDATE public.sessions SET last_heartbeat = NOW() WHERE id = '${PROBE_ID}'`);
+    const resumed = await readState(PROBE_ID);
     check('3 RESUMED   a later heartbeat un-ends it with no clearing write',
       resumed?.isEnded === false && resumed?.hasEndedAt === true,
       `is_ended=${resumed?.isEnded} ended_at still set=${resumed?.hasEndedAt}`);
 
     // --- 4. UPDATE-ONLY ----------------------------------------------------
     const absentRan = runHook(ABSENT_ID);
-    const absent = psql(`SELECT count(*) FROM public.sessions WHERE id = '${ABSENT_ID}'`);
+    const absent = await psql(`SELECT count(*) FROM public.sessions WHERE id = '${ABSENT_ID}'`);
     check('4 UPDATE    ending an unregistered id creates nothing',
       absentRan.status === 0 && absent === '0',
       `hook exit=${absentRan.status} rows=${absent}`);
 
     // --- 5. INDEXED --------------------------------------------------------
-    const plan = psql(`
+    const plan = await psql(`
       EXPLAIN SELECT s.id FROM public.sessions s
        WHERE s.id NOT LIKE 's-%' AND s.last_heartbeat IS NOT NULL
          AND GREATEST(s.last_heartbeat, s.last_activity_at, s.ended_at)
@@ -222,11 +260,12 @@ async function main() {
     // Always, on every path. A probe row left behind would appear on the live
     // dashboard as an unmapped session for fifteen minutes.
     try {
-      sweep();
+      await sweep();
     } catch (err) {
       console.error(`\nWARNING: cleanup failed, remove by hand: ${err.message}`);
       console.error(`  DELETE FROM public.sessions WHERE id LIKE 'probe-lifecycle-%';`);
     }
+    await pgClient?.end().catch(() => {});
   }
 
   const failed = results.filter((r) => !r.passed);
