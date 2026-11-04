@@ -149,6 +149,7 @@ Every record has `verdict`, `fingerprint`, `title`, `description`, `trace` and `
 The schema allows no extra fields: drop every field the table does not name.
 
 `confirmed` needs a probe that the refuter re-ran. With no probe, the best verdict is `needs_validation`.
+For an exec or write sink, `confirmed` also needs `SINK_SPY_READY` plus a `SINK_SPY` line for that sink. Exec sink: the payload appears inside the recorded command string. File-write sink: the recorded path (`args[0]`) is already normalized, so it resolves outside the intended base directory, and the data argument holds the payload where the attacker controls it.
 Then validate:
 
 ```
