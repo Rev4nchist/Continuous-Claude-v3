@@ -1,0 +1,60 @@
+id: f4f43534b9ed77b6
+title: --apply is read as the settings path
+description: A lone apply flag must update the home settings file.
+goal: flag arguments are skipped and the home settings file is the target
+paths: [scripts/settings/remove-maestro-registrations.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const flag = ['--', 'apply'].join('');
+          const home = fs.mkdtempSync('/tmp/trex-home-XXXXXX');
+          process.env.HOME = home;
+          delete process.env.USERPROFILE;
+          const settingsDir = path.join(home, '.claude');
+          fs.mkdirSync(settingsDir);
+          const settingsPath = path.join(settingsDir, 'settings.json');
+          const keeper = 'keep-me.mjs';
+          const fixture = {
+            hooks: {
+              PreToolUse: [{
+                hooks: [
+                  { type: 'command', command: 'node maestro-enforcer.mjs' },
+                  { type: 'command', command: `node ${keeper}` },
+                ],
+              }],
+            },
+          };
+          fs.writeFileSync(settingsPath, JSON.stringify(fixture));
+          process.argv = [process.execPath, 'remove-maestro-registrations.mjs', flag];
+          let caught = null;
+          try {
+            await import('/app/scripts/settings/remove-maestro-registrations.mjs');
+          } catch (e) {
+            caught = e;
+          }
+          let usedHome = false;
+          if (!caught) {
+            const blob = fs.readFileSync(settingsPath, 'utf8');
+            usedHome = blob.includes(keeper) && !blob.includes('maestro-enforcer');
+          }
+          if (!usedHome) {
+            const observed = caught?.path ?? '';
+            console.log(`not ok 1 - settings path resolved to ${JSON.stringify(observed)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - flag arguments are skipped and the home settings file is updated');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

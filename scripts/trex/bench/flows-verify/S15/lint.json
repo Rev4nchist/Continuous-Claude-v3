@@ -1,0 +1,22 @@
+{
+  "row": "S15",
+  "findings": 10,
+  "clean": [
+    "f65ee84cd32ff2ef",
+    "e161d45bf0bbef63",
+    "aa577bfa0fa89cb9",
+    "99ba19b7e0a3abef",
+    "56e4699c8d481199",
+    "74614ce2c3020313",
+    "42aa1a522e623570",
+    "e39e2f317d3a5fb2",
+    "a20be411bc8fd865"
+  ],
+  "failed": {
+    "f6ffe754921eff4c": [
+      "f6ffe754921eff4c.yaml: steps[0].action: cwd must be a relative posix path"
+    ]
+  },
+  "cannotVerify": [],
+  "record": []
+}

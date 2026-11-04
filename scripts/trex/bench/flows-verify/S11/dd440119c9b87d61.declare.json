@@ -1,0 +1,10 @@
+{
+  "pid": "dd440119c9b87d61",
+  "row": "S11",
+  "fireMatch": "greptile=false coderabbit=false blockers=\\[\\]",
+  "correct": "Require pathway=none before clearing both bots.",
+  "citedFile": "scripts/github/review-status.mjs",
+  "startLine": 182,
+  "endLine": 197,
+  "newCode": false
+}

@@ -1,0 +1,10 @@
+{
+  "pid": "42aa1a522e623570",
+  "row": "S15",
+  "fireMatch": "sync left gone",
+  "correct": "Delete destination files that have no source counterpart, with the existing pid, lock, cache, and dist excludes.",
+  "citedFile": ".claude/scripts/sync-to-active.sh",
+  "startLine": 52,
+  "endLine": 70,
+  "newCode": false
+}

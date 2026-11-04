@@ -1,0 +1,10 @@
+{
+  "pid": "1bef52b89ec86b2c",
+  "row": "N14",
+  "fireMatch": "model line was \"[^\\\"]*it is the opening review",
+  "correct": "Treat opening as held and give it a do-not-post line.",
+  "citedFile": ".claude/plugins/ccv3-mods/hooks/pr-loop/slot-model.ts",
+  "startLine": 9,
+  "endLine": 10,
+  "newCode": true
+}

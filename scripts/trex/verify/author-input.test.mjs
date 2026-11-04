@@ -5,10 +5,38 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  FLOW_TIMEOUT_MAX_MS, MAX_BODY_CHARS, buildAuthorInput, checkVerifyAnswer, lintVerifyAnswer, renderFindings, selectHunks, verifyRowIds,
+  FLOW_TIMEOUT_MAX_MS, MAX_BODY_CHARS, buildAuthorInput, checkVerifyAnswer, lintVerifyAnswer, normalizeVerifyCwd, renderFindings, selectHunks, verifyRowIds,
 } from './author-input.mjs';
 
 const PROBE_SET = JSON.parse(readFileSync(new URL('./probe-set.json', import.meta.url), 'utf8'));
+
+// ---------- cwd: /tmp rewrite (8 of 16 live answers, 2026-11-04) ----------
+
+test('normalizeVerifyCwd rewrites a cwd: /tmp line in a yaml to cwd: . and lists it', () => {
+  const y = { path: 'a.yaml', text: 'steps:\n  - action:\n      cwd: /tmp\n      cmd: [node, -e, "1"]\n' };
+  const r = normalizeVerifyCwd([y]);
+  assert.match(r.files[0].text, /^ {6}cwd: \.$/m);
+  assert.doesNotMatch(r.files[0].text, /\/tmp/);
+  assert.deepEqual(r.rewritten, ['a.yaml']);
+});
+
+test('normalizeVerifyCwd maps /app to . and /app/<rel> to <rel> (S13, N12, N14 live answers)', () => {
+  const r = normalizeVerifyCwd([{ path: 'a.yaml', text: '      cwd: /app\n' }, { path: 'b.yaml', text: '      cwd: /app/apps/agentic-os\n' }]);
+  assert.match(r.files[0].text, /^ {6}cwd: \.$/m);
+  assert.match(r.files[1].text, /^ {6}cwd: apps\/agentic-os$/m);
+  assert.deepEqual(r.rewritten, ['a.yaml', 'b.yaml']);
+});
+
+test('normalizeVerifyCwd leaves other absolute cwds, declare files and /tmp inside code alone', () => {
+  const files = [
+    { path: 'b.yaml', text: '      cwd: /etc/x\n' },
+    { path: 'c.yaml', text: '      cmd: [node, -e, "writeFileSync(\'/tmp/x\')"]\n      cwd: .\n' },
+    { path: 'b.declare.json', text: '{"cwd": "/tmp"}' },
+  ];
+  const r = normalizeVerifyCwd(files);
+  assert.deepEqual(r.files, files);
+  assert.deepEqual(r.rewritten, []);
+});
 
 // ---------- the committed probe set ----------
 

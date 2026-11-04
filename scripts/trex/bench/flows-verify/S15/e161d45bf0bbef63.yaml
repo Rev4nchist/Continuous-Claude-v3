@@ -1,0 +1,72 @@
+id: e161d45bf0bbef63
+title: Local memory hit skips archival recall
+description: A local memory row must not hide archival recall
+goal: the prompt context includes the archival row when the local index also hits
+paths: [.claude/hooks/src/memory-awareness.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      stdin: '{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"remember the deployment rollback procedure","cwd":"/tmp/trex2/proj"}'
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { mkdirSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const home = '/tmp/trex2/home';
+          const bin = '/tmp/trex2/bin';
+          mkdirSync(`${home}/.claude/scripts/core`, { recursive: true });
+          mkdirSync('/tmp/trex2/opc', { recursive: true });
+          mkdirSync('/tmp/trex2/proj', { recursive: true });
+          mkdirSync(bin, { recursive: true });
+          writeFileSync(`${home}/.claude/scripts/core/project_memory.py`, '# fixture\n');
+          writeFileSync(`${bin}/uv`, `#!/usr/bin/env node
+          const args = process.argv.join(' ');
+          if (args.includes('recall_learnings.py')) {
+            process.stdout.write(JSON.stringify({results:[{id:'archival',content:'archival recall row',score:0.2,learning_type:'NOTE'}]}));
+            process.exit(0);
+          }
+          if (args.includes('project_memory.py')) {
+            process.stdout.write(JSON.stringify({count:1,results:[{task_id:'locrow',summary:'local handoff row'}]}));
+            process.exit(0);
+          }
+          process.exit(0);
+          `);
+          chmodSync(`${bin}/uv`, 0o755);
+          process.env.PATH = `${bin}:${process.env.PATH || ''}`;
+          process.env.HOME = home;
+          process.env.CLAUDE_OPC_DIR = '/tmp/trex2/opc';
+          process.env.CLAUDE_PROJECT_DIR = '/tmp/trex2/proj';
+          delete process.env.CLAUDE_AGENT_ID;
+          const orig = console.log.bind(console);
+          let logged = null;
+          console.log = (...a) => { logged = a.map(String).join(' '); };
+          await import('/app/.claude/hooks/src/memory-awareness.ts');
+          const start = Date.now();
+          while (logged === null && Date.now() - start < 15000) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          const text = logged || '';
+          if (!text.includes('archival recall row')) {
+            orig(`not ok 1 - memory context returned ${text}`);
+            process.exit(1);
+          }
+          orig('ok 1 - local and archival memory are both queried');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

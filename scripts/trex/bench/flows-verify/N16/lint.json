@@ -1,0 +1,13 @@
+{
+  "row": "N16",
+  "findings": 4,
+  "clean": [
+    "e74e5e1357bffd3f",
+    "eb10f2e10ff5d7d9",
+    "a2d6a7eb32ef2a5d",
+    "5990c81b8db2acd1"
+  ],
+  "failed": {},
+  "cannotVerify": [],
+  "record": []
+}

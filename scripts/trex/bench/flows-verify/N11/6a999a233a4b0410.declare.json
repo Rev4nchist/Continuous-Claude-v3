@@ -1,0 +1,10 @@
+{
+  "pid": "6a999a233a4b0410",
+  "row": "N11",
+  "fireMatch": "renew action none",
+  "correct": "A session that only renews is reminded, because renew changes the lane lease.",
+  "citedFile": ".claude/hooks/src/lane-board-republish-reminder.ts",
+  "startLine": 33,
+  "endLine": 43,
+  "newCode": true
+}

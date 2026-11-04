@@ -1,0 +1,45 @@
+id: 64fac2ebfee8cd87
+title: Single-line location matches a wider range
+description: A one-line outside-diff location must stay open when the handled bullet cites a wider range.
+goal: outsideDiffOpen still lists the single-line finding after a path:331-340 bullet
+paths: [scripts/github/review-status.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          const RS = await import('/app/scripts/github/review-status.mjs');
+          const id = 'abcdef'.repeat(4);
+          const file = 'src/wid.mjs';
+          const line = 331;
+          const location = `${file}:${line}`;
+          const reviewBody = [
+            'Outside diff range comments (1)',
+            `> \`${location}\``,
+            `> <!-- cr-comment:v1:${id} -->`,
+          ].join('\n');
+          const body = `## Outside-diff: handled\n\n- ${file}:${line}-340 noted\n`;
+          const reviews = [{
+            id: 7,
+            user: { login: 'coderabbitai[bot]', type: 'Bot' },
+            body: reviewBody,
+          }];
+          const parsed = RS.codeRabbitOutsideFindings({ reviews });
+          if (parsed.findings[0]?.location !== location) throw new Error(`setup ${JSON.stringify(parsed)}`);
+          const open = RS.outsideDiffOpen({ reviews, body });
+          if (!open.missing.some((f) => f.location === location)) {
+            console.log(`not ok 1 - wider range named the single line, outsideDiffOpen returned ${JSON.stringify(open)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - a one-line location stays open when the bullet cites a wider range');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

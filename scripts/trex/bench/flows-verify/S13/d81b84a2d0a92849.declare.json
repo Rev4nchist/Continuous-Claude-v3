@@ -1,0 +1,10 @@
+{
+  "pid": "d81b84a2d0a92849",
+  "row": "S13",
+  "fireMatch": "over 24h returned \"quiet\"",
+  "correct": "Keep quiet only while quiet_seconds is at most 24 hours; past that, return ended or unknown.",
+  "citedFile": "apps/agentic-os/src/server/queries/lane-board.ts",
+  "startLine": 129,
+  "endLine": 136,
+  "newCode": true
+}

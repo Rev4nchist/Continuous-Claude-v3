@@ -1,0 +1,72 @@
+id: 33bf35cacfb8469c
+title: Changed sync deletes maestro hooks that settings still run
+description: --changed sync must drop maestro hook registrations before it deletes their dist bundles
+goal: live settings no longer invoke maestro dist hooks that the changed sync deletes
+paths: [scripts/sync-to-active.sh]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - bash
+        - -c
+        - |
+          home=/tmp/trex-home
+          rm -rf "$home" /tmp/trex-bin /tmp/trex-hooknames
+          mkdir -p "$home/.claude/hooks/dist" "$home/.claude/state" /tmp/trex-bin
+          a=maestro
+          b=enforcer
+          c=state-manager
+          d=cleanup
+          e=session-start-recovery
+          names="$a-$b.mjs $a-$c.mjs $a-$d.mjs $e.mjs"
+          : > /tmp/trex-hooknames
+          for n in $names; do
+            printf 'x\n' > "$home/.claude/hooks/dist/$n"
+            printf '%s\n' "$n" >> /tmp/trex-hooknames
+          done
+          cat > "$home/.claude/settings.json" <<EOF
+          {"hooks":{"PreToolUse":[{"matcher":"Task","hooks":[{"type":"command","command":"node","args":["$home/.claude/hooks/dist/$a-$b.mjs"]}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"node","args":["$home/.claude/hooks/dist/$a-$c.mjs"]}]}],"SessionStart":[{"hooks":[{"type":"command","command":"node","args":["$home/.claude/hooks/dist/$e.mjs"]}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"node","args":["$home/.claude/hooks/dist/$a-$d.mjs"]}]}]}}
+          EOF
+          cat > /tmp/trex-bin/git <<'EOS'
+          #!/bin/bash
+          if [[ "$1" == "-C" ]]; then shift 2; fi
+          cmd="$1"
+          shift
+          case "$cmd" in
+            rev-parse)
+              for arg in "$@"; do
+                case "$arg" in
+                  --git-dir|--git-common-dir) printf '%s\n' .git; exit 0 ;;
+                  --abbrev-ref) printf '%s\n' main; exit 0 ;;
+                  HEAD) printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; exit 0 ;;
+                esac
+              done
+              printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+              ;;
+            diff-tree)
+              while IFS= read -r bundle; do printf 'D\t.claude/hooks/dist/%s\n' "$bundle"; done < /tmp/trex-hooknames
+              ;;
+            *) exit 0 ;;
+          esac
+          EOS
+          chmod +x /tmp/trex-bin/git
+          PATH="/tmp/trex-bin:${PATH}" HOME="$home" CCV3_MACHINE_PROFILE= bash /app/scripts/sync-to-active.sh --changed >/tmp/trex-sync.out 2>&1
+          rc=$?
+          if [[ "$rc" -ne 0 ]]; then printf '%s\n' "sync exit $rc"; exit 1; fi
+          gone=0
+          for n in $names; do
+            if [[ ! -e "$home/.claude/hooks/dist/$n" ]]; then gone=$((gone+1)); fi
+          done
+          if [[ "$gone" -ne 4 ]]; then printf '%s\n' "sync left $((4-gone)) dist bundles"; exit 1; fi
+          if [[ ! -f "$home/.claude/settings.json" ]]; then printf '%s\n' "settings.json missing"; exit 1; fi
+          left=$(grep -o -F -e "$a-$b.mjs" -e "$a-$c.mjs" -e "$a-$d.mjs" -e "$e.mjs" "$home/.claude/settings.json" | paste -sd, - || true)
+          if [[ -n "$left" ]]; then printf '%s\n' "not ok 1 - settings still invoke $left"; exit 1; fi
+          printf '%s\n' "ok 1 - maestro hooks are deregistered before the dist delete"
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

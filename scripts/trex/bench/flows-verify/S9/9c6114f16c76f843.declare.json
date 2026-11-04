@@ -1,0 +1,10 @@
+{
+  "pid": "9c6114f16c76f843",
+  "row": "S9",
+  "fireMatch": "added 17 to the outside-diff total",
+  "correct": "Skip a review when codeRabbitNotice(r.body) is set, and keep counting every other CodeRabbit body.",
+  "citedFile": "scripts/github/review-status.mjs",
+  "startLine": 798,
+  "endLine": 803,
+  "newCode": false
+}

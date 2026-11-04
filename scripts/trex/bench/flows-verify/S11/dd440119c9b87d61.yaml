@@ -1,0 +1,35 @@
+id: dd440119c9b87d61
+title: review:none is READY without a saved none pathway
+description: review:none must not drop Greptile and CodeRabbit unless the router saved pathway=none for this head
+goal: a review:none label with no saved none pathway still requires a bot or a blocker
+paths: [scripts/github/review-status.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { verifiedBots } from '/app/scripts/github/review-status.mjs';
+          const head = 'a'.repeat(40);
+          const comments = [{
+            id: 1,
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+            body: `<!-- review-router -->\n<!-- review-router-state class=normal head=${head} -->\nNo open router notes.`,
+          }];
+          const need = verifiedBots(['review:none'], comments, head);
+          const blockers = need.blockers ?? [];
+          if (need.greptile === false && need.coderabbit === false && blockers.length === 0) {
+            console.log(`not ok 1 - verifiedBots cleared both bots greptile=${need.greptile} coderabbit=${need.coderabbit} blockers=${JSON.stringify(blockers)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - review:none keeps a bot unless the saved pathway is none');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

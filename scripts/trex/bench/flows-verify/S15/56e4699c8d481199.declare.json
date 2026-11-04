@@ -1,0 +1,10 @@
+{
+  "pid": "56e4699c8d481199",
+  "row": "S15",
+  "fireMatch": "Intent pattern match",
+  "correct": "Reject empty patterns, patterns longer than 200 characters, and the catastrophic-backtracking shapes this file used to reject before compiling.",
+  "citedFile": ".claude/hooks/src/skill-router.ts",
+  "startLine": 577,
+  "endLine": 586,
+  "newCode": false
+}

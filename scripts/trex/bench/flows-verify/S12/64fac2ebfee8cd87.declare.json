@@ -1,0 +1,10 @@
+{
+  "pid": "64fac2ebfee8cd87",
+  "row": "S12",
+  "fireMatch": "returned \\{\"missing\":\\[\\]",
+  "correct": "Reject a following dash for a single-line location and keep the digit check for a real range.",
+  "citedFile": "scripts/github/review-status.mjs",
+  "startLine": 914,
+  "endLine": 919,
+  "newCode": false
+}

@@ -1,0 +1,52 @@
+id: 56e4699c8d481199
+title: Skill intent regexes are compiled unchecked
+description: A nested-quantifier intent pattern must be rejected before compile
+goal: an ordinary task does not match a catastrophic intent pattern
+paths: [.claude/hooks/src/skill-router.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const home = '/tmp/trex5/home';
+          mkdirSync(`${home}/.claude/skills`, { recursive: true });
+          writeFileSync(`${home}/.claude/skills/skill-rules.json`, JSON.stringify({
+            skills: {
+              nested: {
+                enforcement: 'suggest',
+                priority: 'medium',
+                promptTriggers: { intentPatterns: ['(.*)+'] }
+              }
+            }
+          }));
+          process.env.HOME = home;
+          const { route } = await import('/app/.claude/hooks/src/skill-router.ts');
+          const result = route({ task: 'ordinary task string', context: '', files: [], cwd: '/tmp' });
+          const skills = result.skills || [];
+          if (skills.length > 0) {
+            console.log(`not ok 1 - route returned ${JSON.stringify(skills)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - unsafe intent patterns are rejected before compile');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

@@ -298,6 +298,29 @@ export function checkVerifyAnswer({ files, manifest, input }) {
   return { files: files.map((f) => (stored.has(f.path) ? { ...f, text: stored.get(f.path) } : f)), problems };
 }
 
+// ---------- cwd normalization (P1 smoke 2026-11-04) ----------
+
+const ABS_CWD = /^(\s*)cwd:\s*["']?(\/tmp|\/app)((?:\/[A-Za-z0-9._-]+)*)\/?["']?\s*$/m;
+
+/** The relative cwd for one absolute container cwd: /tmp -> '.', /app -> '.', /app/<rel> -> '<rel>'. */
+const relCwd = (root, rest) => (root === '/app' && rest ? rest.slice(1) : '.');
+
+/**
+ * 8 of 16 live answers (2026-11-04) set an absolute cwd (`/tmp`, `/app` or `/app/<dir>`), which the flow schema rejects (cwd is
+ * relative to the tree root, which is /app in the container). Rewrite exactly that line: /app[/<rel>] maps to the same directory;
+ * /tmp maps to '.'. Safe: a probe that then writes relative files lands under /app, which the G5 tamper check reports as
+ * blocked:tamper, never as a verdict. Returns { files, rewritten: [path] }.
+ */
+export function normalizeVerifyCwd(files) {
+  const rewritten = [];
+  const out = files.map((f) => {
+    if (!f.path.endsWith('.yaml') || typeof f.text !== 'string' || !ABS_CWD.test(f.text)) return f;
+    rewritten.push(f.path);
+    return { ...f, text: f.text.replace(new RegExp(ABS_CWD.source, 'gm'), (_, ind, root, rest) => `${ind}cwd: ${relCwd(root, rest)}`) };
+  });
+  return { files: out, rewritten };
+}
+
 // ---------- per-finding lint (critic major 6) ----------
 
 /** The pid a lint line is about: "<pid>.yaml: ...", "<pid>.declare.json: ..." or "finding <pid>: ...". */

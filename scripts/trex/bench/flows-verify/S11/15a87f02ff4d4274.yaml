@@ -1,0 +1,35 @@
+id: 15a87f02ff4d4274
+title: Class raise drops the label that later releases Greptile
+description: after a raise skips review:deep-held, turning deep review on must still add review:deep
+goal: the saved hold still releases review:deep once deep_enabled is on
+paths: [scripts/github/review-router.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { readFileSync } from 'node:fs';
+          import { decide } from '/app/scripts/github/review-router.mjs';
+          const config = JSON.parse(readFileSync('/app/review-router.config.json', 'utf8'));
+          const now = new Date('2026-10-26T12:00:00Z');
+          const pr = { number: 7, head: 'd'.repeat(40), draft: false, state: 'open', paths: ['.github/workflows/x.yml'] };
+          const labels = ['risk:normal', 'review:coderabbit', 'builder:claude'];
+          const raise = decide('synchronize', pr, labels, 'normal', config, { now });
+          const flipLabels = ['risk:normal', 'risk:infra', 'review:coderabbit', 'builder:claude'];
+          const flip = decide('synchronize', pr, flipLabels, raise.effective, { ...config, deep_enabled: true }, { now, previousHeld: raise.held });
+          if (!flip.add.includes('review:deep')) {
+            console.log(`not ok 1 - flip held ${flip.held} added ${JSON.stringify(flip.add)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - turning deep review on releases review:deep');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

@@ -1,0 +1,10 @@
+{
+  "pid": "f65ee84cd32ff2ef",
+  "row": "S15",
+  "fireMatch": "Command failed",
+  "correct": "Send the JSON on stdin with spawnSync and a fixed argv.",
+  "citedFile": ".claude/hooks/src/daemon-client.ts",
+  "startLine": 570,
+  "endLine": 591,
+  "newCode": false
+}

@@ -1,0 +1,37 @@
+id: e74e5e1357bffd3f
+title: Fetch timeout can hang on a live helper
+description: fetchBase must return when its timeout fires even if a child still holds stderr
+goal: the fetch call returns within the timeout while a helper keeps the stderr pipe open
+paths: [scripts/github/pre-pr.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+          const { fetchBase } = await import('/app/scripts/github/pre-pr.mjs');
+          mkdirSync('/tmp/bin', { recursive: true });
+          mkdirSync('/tmp/empty-repo', { recursive: true });
+          writeFileSync('/tmp/bin/git', '#!/bin/bash\nif [ "$1" = remote ]; then printf "%s\\n" "https://example.invalid/fork.git"; exit 0; fi\nif [ "$1" = config ]; then exit 1; fi\n(trap \'\' HUP; sleep 7) &\nexec sleep 20\n');
+          chmodSync('/tmp/bin/git', 0o755);
+          process.env.PATH = '/tmp/bin:' + (process.env.PATH || '');
+          const timeoutMs = 2000;
+          const started = Date.now();
+          const out = fetchBase('/tmp/empty-repo', 'main', { timeoutMs });
+          const elapsed = Date.now() - started;
+          if (elapsed > timeoutMs + 3000) {
+            console.log('not ok 1 - fetchBase returned ' + JSON.stringify(out) + ' after ' + elapsed + 'ms');
+            process.exit(1);
+          }
+          console.log('ok 1 - fetchBase returned when the timeout fired');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

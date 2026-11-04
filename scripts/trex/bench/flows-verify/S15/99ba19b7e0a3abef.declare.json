@@ -1,0 +1,10 @@
+{
+  "pid": "99ba19b7e0a3abef",
+  "row": "S15",
+  "fireMatch": "plan-approved-[A-Za-z0-9]+\\.json",
+  "correct": "Return only the project-scoped path.",
+  "citedFile": ".claude/hooks/src/shared/session-isolation.ts",
+  "startLine": 135,
+  "endLine": 139,
+  "newCode": false
+}

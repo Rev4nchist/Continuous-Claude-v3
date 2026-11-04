@@ -1,0 +1,10 @@
+{
+  "pid": "f4f43534b9ed77b6",
+  "row": "S8",
+  "fireMatch": "resolved to \"--apply\"",
+  "correct": "Skip flag arguments, then default the path to os.homedir() joined with .claude/settings.json.",
+  "citedFile": "scripts/settings/remove-maestro-registrations.mjs",
+  "startLine": 2,
+  "endLine": 3,
+  "newCode": true
+}

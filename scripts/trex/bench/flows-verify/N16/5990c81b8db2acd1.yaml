@@ -1,0 +1,57 @@
+id: 5990c81b8db2acd1
+title: GREEN sha rewritten without a new run
+description: updateGreen must re-run the GREEN command or leave its sha unchanged
+goal: a clean merge does not keep the ancestor output under HEAD's sha
+paths: [scripts/github/pre-pr.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const { updateGreen, checkEvidence, makeGit } = await import('/app/scripts/github/pre-pr.mjs');
+          const { parseProof } = await import('/app/scripts/github/review-status.mjs');
+          const dir = '/tmp/green-repo';
+          mkdirSync(dir, { recursive: true });
+          const g = (args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' });
+          const run = (args) => { const r = g(args); if (r.status !== 0) throw new Error(String(r.stderr || r.stdout)); return (r.stdout || '').trim(); };
+          run(['init', '-q', '-b', 'main']);
+          writeFileSync(dir + '/README.md', 'root\n');
+          run(['add', '.']); run(['commit', '-q', '-m', 'base']);
+          run(['checkout', '-q', '-b', 'feat']);
+          writeFileSync(dir + '/feat.txt', 'x\n');
+          run(['add', '.']); run(['commit', '-q', '-m', 'work']);
+          const old = run(['rev-parse', 'HEAD']);
+          run(['checkout', '-q', 'main']);
+          writeFileSync(dir + '/NEW.md', 'main moved\n');
+          run(['add', '.']); run(['commit', '-q', '-m', 'main moves']);
+          run(['checkout', '-q', 'feat']);
+          run(['merge', '-q', '--no-edit', 'main']);
+          const head = run(['rev-parse', 'HEAD']);
+          const body = 'Proof type: feature\n\nRED: `git status --porcelain` @ ' + old + '\n```text\nclean\n```\n\nGREEN: `git rev-parse HEAD` @ ' + old + '\n```text\n' + old + '\n```\n';
+          const bodyPath = '/tmp/green-body.md';
+          writeFileSync(bodyPath, body);
+          const config = { classes: {} };
+          const evidence = checkEvidence({ body, head, paths: [], config });
+          updateGreen({ git: makeGit(dir), base: 'main', bodyPath, bodyText: body, head, paths: [], config, results: [evidence], evidence });
+          const green = parseProof(readFileSync(bodyPath, 'utf8')).fields.GREEN[0];
+          const stored = (green.output || '').trim();
+          const sha = green.sha || '';
+          if (sha === old || stored === run(['rev-parse', 'HEAD'])) {
+            console.log('ok 1 - GREEN output matches a run on HEAD or the sha was left unchanged');
+          } else {
+            console.log('not ok 1 - GREEN sha is ' + sha + ' and stored output is ' + JSON.stringify(stored));
+            process.exit(1);
+          }
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

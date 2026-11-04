@@ -1,0 +1,45 @@
+id: 463168ce555f8540
+title: Waiting lines that still ask Dave are cleared
+description: A waiting object that names Dave must stay an ask instead of an empty list.
+goal: parseTurnEnd keeps a waiting line that names Dave as an ask
+paths: [.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            if (/^\.{1,2}\//.test(spec) && !/\.[cm]?[jt]s$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec + '.ts', ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const brief = await import('/app/.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts');
+          const answer = ['## Next steps', '- Waiting on approval from Dave'].join('\n');
+          const ask = brief.parseTurnEnd(answer).ask;
+          const texts = Array.isArray(ask) ? ask.map(one => one.text) : Array.of();
+          if (!texts.some(text => String(text).includes('approval from Dave'))) {
+            console.log('not ok 1 - dave wait ask ' + JSON.stringify(ask));
+            process.exit(1);
+          }
+          console.log('ok 1 - a waiting line that names Dave stays an ask');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

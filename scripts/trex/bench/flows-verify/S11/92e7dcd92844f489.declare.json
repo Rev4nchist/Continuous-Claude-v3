@@ -1,0 +1,10 @@
+{
+  "pid": "92e7dcd92844f489",
+  "row": "S11",
+  "fireMatch": "recommended none for 0 lines",
+  "correct": "Treat the file as reviewable when either the new path or the previous path is reviewable, and keep its line counts.",
+  "citedFile": "scripts/github/pr-checkpoint.mjs",
+  "startLine": 99,
+  "endLine": 166,
+  "newCode": true
+}

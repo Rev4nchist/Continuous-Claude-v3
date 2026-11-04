@@ -1,0 +1,10 @@
+{
+  "pid": "e161d45bf0bbef63",
+  "row": "S15",
+  "fireMatch": "LOCAL_HANDOFF",
+  "correct": "Query both sources, merge by id, and drop rows under the text-only score floor.",
+  "citedFile": ".claude/hooks/src/memory-awareness.ts",
+  "startLine": 199,
+  "endLine": 203,
+  "newCode": false
+}

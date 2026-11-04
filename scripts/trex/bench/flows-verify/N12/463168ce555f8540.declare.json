@@ -1,0 +1,10 @@
+{
+  "pid": "463168ce555f8540",
+  "row": "N12",
+  "fireMatch": "dave wait ask \\[\\]",
+  "correct": "Reject a waiting object that contains you or Dave.",
+  "citedFile": ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts",
+  "startLine": 432,
+  "endLine": 438,
+  "newCode": false
+}

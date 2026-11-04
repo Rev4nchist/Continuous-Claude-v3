@@ -1,0 +1,11 @@
+{
+  "row": "S9",
+  "findings": 2,
+  "clean": [
+    "9c6114f16c76f843",
+    "467607a80362274c"
+  ],
+  "failed": {},
+  "cannotVerify": [],
+  "record": []
+}

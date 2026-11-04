@@ -1,0 +1,10 @@
+{
+  "pid": "271edb30fed181a9",
+  "row": "N9",
+  "fireMatch": "securityTier \\[\\] kept \\[\"\\.claude/hooks/src/shared/guard-log\\.ts\"\\]",
+  "correct": "Match matrix.security_tier against every non-test name on the entry.",
+  "citedFile": "scripts/github/review-router.mjs",
+  "startLine": 128,
+  "endLine": 129,
+  "newCode": true
+}

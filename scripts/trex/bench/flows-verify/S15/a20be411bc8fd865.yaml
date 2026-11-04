@@ -1,0 +1,56 @@
+id: a20be411bc8fd865
+title: Settings merge aborts the sync when jq fails
+description: A malformed settings file must not stop the sync
+goal: sync exits 0 when the settings merge fails
+paths: [.claude/scripts/sync-to-active.sh]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - bash
+        - -c
+        - |
+          bin=/tmp/trex10/bin
+          repo=/tmp/trex10/repo
+          home=/tmp/trex10/home
+          mkdir -p "$bin" "$repo/.claude" "$home/.claude"
+          printf '%s\n' 'enable -n pwd' > /tmp/trex10/bashenv
+          printf '%s\n' '{"mcpServers":{"demo":{"command":"echo"}}}' > "$repo/.claude/settings.json"
+          printf '%s\n' '{bad' > "$home/.claude/settings.json"
+          cat > "$bin/pwd" << 'EOF'
+          #!/bin/sh
+          echo /tmp/trex10/repo/scripts
+          EOF
+          cat > "$bin/jq" << 'EOF'
+          #!/bin/sh
+          n=0
+          if [ -f /tmp/trex10/jqcount ]; then n=$(cat /tmp/trex10/jqcount); fi
+          n=$((n+1))
+          echo "$n" > /tmp/trex10/jqcount
+          if [ "$n" -eq 1 ]; then
+            printf '%s\n' '{"srv":1}'
+            exit 0
+          fi
+          echo jq-parse-error >&2
+          exit 4
+          EOF
+          chmod +x "$bin/pwd" "$bin/jq"
+          export PATH="$bin:$PATH"
+          export HOME="$home"
+          export BASH_ENV=/tmp/trex10/bashenv
+          set +e
+          bash /app/.claude/scripts/sync-to-active.sh --skip-build >/tmp/trex10/out 2>/tmp/trex10/err
+          code=$?
+          if [[ "$code" -ne 0 ]]; then
+            printf 'not ok 1 - sync exited %s\n' "$code"
+            exit 1
+          fi
+          printf 'ok 1 - a settings merge failure skips the update and the sync continues\n'
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

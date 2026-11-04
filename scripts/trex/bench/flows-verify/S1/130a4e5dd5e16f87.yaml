@@ -1,0 +1,47 @@
+id: 130a4e5dd5e16f87
+title: Spaced paths leak after the first space
+description: A spaced path tail that still contains a slash must be consumed, and the words after it must stay
+goal: scrubPathsInText replaces C:\Program Files\Git and leaves the following words
+paths: [apps/agentic-os/src/server/sources/safe-message.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (ctx.parentURL?.endsWith('.ts')) {
+              const rels = [];
+              if (/^\.{1,2}\/.*\.js$/.test(spec)) rels.push(spec.replace(/\.js$/, '.ts'));
+              else if (/^\.{1,2}\//.test(spec) && !/\.[a-z]+$/i.test(spec)) rels.push(`${spec}.ts`);
+              for (const rel of rels) {
+                const t = new URL(rel, ctx.parentURL);
+                if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+              }
+            }
+            return next(spec, ctx);
+          } });
+          const { scrubPathsInText } = await import('/app/apps/agentic-os/src/server/sources/safe-message.ts');
+          const slash = String.fromCharCode(92);
+          const input = `See C:${slash}Program Files${slash}Git today`;
+          const out = scrubPathsInText(input);
+          const want = 'See <path> today';
+          if (out !== want) {
+            console.log(`not ok 1 - scrubPathsInText returned ${JSON.stringify(out)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - words after a path stay and later slash pieces are consumed');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

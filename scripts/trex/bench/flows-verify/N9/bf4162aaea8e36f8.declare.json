@@ -1,0 +1,10 @@
+{
+  "pid": "bf4162aaea8e36f8",
+  "row": "N9",
+  "fireMatch": "priced 1\\+1 but recordBudget stored 1\\+0",
+  "correct": "Price that option at 1+0, as RS does, or record the class budget the button shows.",
+  "citedFile": "scripts/github/pr-checkpoint.mjs",
+  "startLine": 345,
+  "endLine": 349,
+  "newCode": false
+}

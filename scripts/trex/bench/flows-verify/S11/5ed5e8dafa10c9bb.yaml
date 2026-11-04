@@ -1,0 +1,33 @@
+id: 5ed5e8dafa10c9bb
+title: Re-checkpoint never clears a review:none class raise
+description: a later re-checkpoint that keeps review:none must save pclass as the current class
+goal: pclass moves to the current class so a review:none raise does not stick
+paths: [scripts/github/review-router.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { readFileSync } from 'node:fs';
+          import { decide } from '/app/scripts/github/review-router.mjs';
+          const config = JSON.parse(readFileSync('/app/review-router.config.json', 'utf8'));
+          const now = new Date('2026-10-26T12:00:00Z');
+          const pr = { number: 7, head: 'b'.repeat(40), draft: false, state: 'open', paths: ['.github/workflows/x.yml'] };
+          const labels = ['review:none', 'risk:infra', 'builder:claude'];
+          const d = decide('synchronize', pr, labels, 'infra', config, { now, previousPathway: 'none', previousPclass: 'normal' });
+          if (d.pclass !== 'infra') {
+            console.log(`not ok 1 - re-checkpoint saved pclass ${d.pclass}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - a re-checkpoint of the current class refreshes pclass');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

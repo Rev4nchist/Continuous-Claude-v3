@@ -1,0 +1,49 @@
+id: 74614ce2c3020313
+title: Auto-handoff YAML is built from raw transcript text
+description: A newline inside a todo must stay inside the now scalar
+goal: the line after now is still the test field
+paths: [.claude/hooks/src/transcript-parser.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const { generateAutoHandoff } = await import('/app/.claude/hooks/src/transcript-parser.ts');
+          const summary = {
+            lastTodos: [{ id: '1', content: 'alpha\nomega', status: 'in_progress' }],
+            recentToolCalls: [],
+            lastAssistantMessage: '',
+            filesModified: [],
+            errorsEncountered: [],
+          };
+          const yaml = generateAutoHandoff(summary, 'sess');
+          const lines = yaml.split('\n');
+          const i = lines.findIndex((l) => l.startsWith('now:'));
+          const now = lines[i] || '';
+          if (lines[i + 1] !== 'test: # No test command captured' || !now.includes('omega')) {
+            console.log(`not ok 1 - handoff yaml ${JSON.stringify(yaml)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - todo text with a newline stays one YAML scalar');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

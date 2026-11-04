@@ -1,0 +1,10 @@
+{
+  "pid": "74614ce2c3020313",
+  "row": "S15",
+  "fireMatch": "now: alpha\\\\nomega",
+  "correct": "Escape dynamic values for YAML and truncate before escaping.",
+  "citedFile": ".claude/hooks/src/transcript-parser.ts",
+  "startLine": 235,
+  "endLine": 265,
+  "newCode": false
+}

@@ -1,0 +1,50 @@
+id: a2d6a7eb32ef2a5d
+title: Base reachability hides later own commits
+description: an own commit after GREEN still counts after it lands on the base
+goal: onlyBaseMergedSince is false when an own commit sits between GREEN and a later clean merge
+paths: [scripts/github/pre-pr.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const { onlyBaseMergedSince, makeGit } = await import('/app/scripts/github/pre-pr.mjs');
+          const dir = '/tmp/own-repo';
+          mkdirSync(dir, { recursive: true });
+          const g = (args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' });
+          g(['init', '-q', '-b', 'main']);
+          writeFileSync(dir + '/g.txt', 'g\n');
+          g(['add', '.']);
+          g(['commit', '-q', '-m', 'green']);
+          const old = g(['rev-parse', 'HEAD']).stdout.trim();
+          g(['checkout', '-q', '-b', 'feature']);
+          writeFileSync(dir + '/c.txt', 'own\n');
+          g(['add', '.']);
+          g(['commit', '-q', '-m', 'own']);
+          g(['checkout', '-q', 'main']);
+          g(['merge', '-q', '--ff-only', 'feature']);
+          writeFileSync(dir + '/u.txt', 'u\n');
+          g(['add', '.']);
+          g(['commit', '-q', '-m', 'upstream']);
+          g(['checkout', '-q', 'feature']);
+          g(['merge', '-q', '--no-ff', '--no-edit', 'main']);
+          const head = g(['rev-parse', 'HEAD']).stdout.trim();
+          const got = onlyBaseMergedSince(makeGit(dir), 'main', old, head);
+          if (got !== false) {
+            console.log('not ok 1 - onlyBaseMergedSince returned ' + got);
+            process.exit(1);
+          }
+          console.log('ok 1 - an own commit after GREEN still counts once it is on the base');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

@@ -1,0 +1,10 @@
+{
+  "pid": "e74e5e1357bffd3f",
+  "row": "N16",
+  "fireMatch": "timed out after 2 s\"} after [0-9]{4,}ms",
+  "correct": "Close stderr, or kill the child tree and drop the pipe when the timer fires.",
+  "citedFile": "scripts/github/pre-pr.mjs",
+  "startLine": 290,
+  "endLine": 301,
+  "newCode": false
+}

@@ -1,0 +1,33 @@
+id: 271edb30fed181a9
+title: Rename into another gate file drops the security floor
+description: Renaming a security-tier file onto another control-plane path stays in securityTier.
+goal: securityTier matches every non-test name of the rename
+paths: [scripts/github/review-router.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { readFileSync } from 'node:fs';
+          const { bandOf } = await import('/app/scripts/github/review-router.mjs');
+          const config = JSON.parse(readFileSync('/app/review-router.config.json', 'utf8'));
+          const oldPath = '.claude/hooks/src/shared/destructive-classifier.ts';
+          const newPath = '.claude/hooks/src/shared/guard-log.ts';
+          const band = bandOf([{ filename: newPath, previous_filename: oldPath }], config);
+          const tier = band.securityTier;
+          if (!tier.includes(oldPath)) {
+            console.log(`not ok 1 - securityTier ${JSON.stringify(tier)} kept ${JSON.stringify(band.gateFiles)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - security tier matches every non-test name of the rename');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

@@ -1,0 +1,10 @@
+{
+  "pid": "15a87f02ff4d4274",
+  "row": "S11",
+  "fireMatch": "held null added \\[\\]",
+  "correct": "Record a distinct hold when the router skips review:deep-held, and release review:deep from that marker.",
+  "citedFile": "scripts/github/review-router.mjs",
+  "startLine": 215,
+  "endLine": 309,
+  "newCode": false
+}

@@ -1,0 +1,44 @@
+id: 6a999a233a4b0410
+title: a lane.mjs renew reminds the session
+description: decide() on node scripts/coordination/lane.mjs renew returns remind
+goal: a session that only renews is reminded
+paths: [.claude/hooks/src/lane-board-republish-reminder.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          process.env.VITEST = '1';
+          const m = await import('/app/.claude/hooks/src/lane-board-republish-reminder.ts');
+          const d = m.decide({
+            session_id: 's1',
+            tool_name: 'Bash',
+            tool_input: { command: 'node scripts/coordination/lane.mjs renew' },
+          }, false);
+          if (d.action !== 'remind') {
+            console.log(`not ok 1 - renew action ${d.action}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - a renew command reminds');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

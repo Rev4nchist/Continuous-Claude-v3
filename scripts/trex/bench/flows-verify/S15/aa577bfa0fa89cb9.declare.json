@@ -1,0 +1,10 @@
+{
+  "pid": "aa577bfa0fa89cb9",
+  "row": "S15",
+  "fireMatch": "\"result\":\"continue\"",
+  "correct": "Use a timeout that covers cold uv startup.",
+  "citedFile": ".claude/hooks/src/memory-awareness.ts",
+  "startLine": 215,
+  "endLine": 230,
+  "newCode": false
+}

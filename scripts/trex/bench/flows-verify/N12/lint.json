@@ -1,0 +1,11 @@
+{
+  "row": "N12",
+  "findings": 2,
+  "clean": [
+    "fced1249ce3f4e26",
+    "463168ce555f8540"
+  ],
+  "failed": {},
+  "cannotVerify": [],
+  "record": []
+}

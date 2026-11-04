@@ -1,0 +1,42 @@
+id: bf4162aaea8e36f8
+title: CodeRabbit escalation price and recorded budget differ
+description: Below HIGH, the CodeRabbit option price and the budget confirm records are the same pair.
+goal: the CodeRabbit escalation price matches the recorded budget
+paths: [scripts/github/pr-checkpoint.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { readFileSync } from 'node:fs';
+          const { recommend, confirmRecord } = await import('/app/scripts/github/pr-checkpoint.mjs');
+          const policy = JSON.parse(readFileSync('/app/review-router.config.json', 'utf8'));
+          const head = 'a'.repeat(40);
+          const facts = {
+            head,
+            now: '2026-10-28T12:00:00.000Z',
+            stamp: { head, body_sha256: 'f'.repeat(64), results: [{ step: 'git:branch', status: 'PASS', detail: 'ok' }] },
+            files: [{ filename: 'apps/x/src/a.ts', additions: 10, deletions: 0 }],
+            cli: { bySeverity: { minor: 1 } },
+            dependabot: false,
+            labels: [],
+          };
+          const result = recommend(facts, policy);
+          const price = result.options.find((o) => o.pathway === 'coderabbit').cost;
+          const recorded = confirmRecord({ result, facts, pathway: 'coderabbit', by: 'dave' }).budget;
+          if (price[0] !== recorded[0] || price[1] !== recorded[1]) {
+            console.log(`not ok 1 - CodeRabbit option priced ${price[0]}+${price[1]} but recordBudget stored ${recorded[0]}+${recorded[1]}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - the CodeRabbit escalation price matches the recorded budget');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

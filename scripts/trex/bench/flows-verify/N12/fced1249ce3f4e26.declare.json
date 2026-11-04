@@ -1,0 +1,10 @@
+{
+  "pid": "fced1249ce3f4e26",
+  "row": "N12",
+  "fireMatch": "plus action ask \\[\\]",
+  "correct": "A plus-marked action stays an ask.",
+  "citedFile": ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts",
+  "startLine": 419,
+  "endLine": 456,
+  "newCode": false
+}

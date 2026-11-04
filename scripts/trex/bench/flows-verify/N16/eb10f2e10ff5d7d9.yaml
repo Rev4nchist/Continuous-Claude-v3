@@ -1,0 +1,38 @@
+id: eb10f2e10ff5d7d9
+title: Missing fork fetch still passes behind
+description: the behind check must fail when fork/base was not updated
+goal: checkBehind does not pass when a failed fetch left no fork ref
+paths: [scripts/github/pre-pr.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const { checkGit, makeGit } = await import('/app/scripts/github/pre-pr.mjs');
+          const dir = '/tmp/behind-repo';
+          mkdirSync(dir, { recursive: true });
+          const g = (args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' });
+          g(['init', '-q', '-b', 'main']);
+          writeFileSync(dir + '/a.txt', 'a\n');
+          g(['add', 'a.txt']);
+          g(['commit', '-q', '-m', 'base']);
+          g(['checkout', '-q', '-b', 'feat']);
+          const behind = checkGit(makeGit(dir), 'main', { state: 'failed', detail: 'timed out after 30 s' }).find((r) => r.step === 'git:behind');
+          if (behind.status !== 'FAIL') {
+            console.log('not ok 1 - checkBehind returned ' + behind.status + ' ' + JSON.stringify(behind.detail));
+            process.exit(1);
+          }
+          console.log('ok 1 - behind fails when fork/main was not updated');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

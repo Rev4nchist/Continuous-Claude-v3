@@ -1,0 +1,10 @@
+{
+  "pid": "a20be411bc8fd865",
+  "row": "S15",
+  "fireMatch": "sync exited [1-9]",
+  "correct": "Run jq in the if condition so a merge failure skips the update and the sync continues.",
+  "citedFile": ".claude/scripts/sync-to-active.sh",
+  "startLine": 189,
+  "endLine": 190,
+  "newCode": false
+}

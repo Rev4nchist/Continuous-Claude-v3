@@ -1,0 +1,10 @@
+{
+  "pid": "044245b09e347dca",
+  "row": "N3",
+  "fireMatch": "classified as \"worktree\"",
+  "correct": "If the .git file git opens has a missing or mismatched gitdir back-pointer, worktreesRoot returns null and the delete is not allowed.",
+  "citedFile": ".claude/hooks/src/shared/scoped-cleanup.ts",
+  "startLine": 230,
+  "endLine": 234,
+  "newCode": true
+}

@@ -41,7 +41,7 @@ import { matchGlob } from '../../github/review-router.mjs';
 import { CHECK_KINDS, DRIVERS, loadFlows, validateFlow } from '../flow.mjs';
 import { hostActionOk, hostPs1Path } from '../host-allow.mjs';
 import { INTENT_DIR, intentFacts, intentLeakHits, loadIntent, rangeEnd, stripLate } from './intent.mjs';
-import { lintVerifyAnswer, loadAuthorInput, renderFindings } from '../verify/author-input.mjs';
+import { lintVerifyAnswer, loadAuthorInput, normalizeVerifyCwd, renderFindings } from '../verify/author-input.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 import { stripEnv } from '../lib/strip-env.mjs';
 
@@ -787,6 +787,7 @@ function outsideProblem(paths) {
 function readAnswer(text, st, deps) {
   const changed = [...new Set([...st.prep.files, ...(st.verify?.citedFiles ?? [])])];
   const out = parseAuthorOutput(text, changed);
+  if (st.verify) out.files = normalizeVerifyCwd(out.files).files;
   if (out.files.length === 0 && notRunText(text, deps)) out.problems.unshift('the answer says the agent could not read the change: the run is void');
   const treeHas = st.verify ? () => false : (p) => runShas(st.group).every((sha) => blobAt(st.git, sha, p) !== null);
   const done = { ...out, problems: [...out.problems, ...lintAll(out.files, changed, treeHas)] };

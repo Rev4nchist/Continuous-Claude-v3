@@ -1,0 +1,42 @@
+id: 42aa1a522e623570
+title: Sync leaves removed files installed
+description: A destination file with no source counterpart must be removed
+goal: sync deletes the extra agent file
+paths: [.claude/scripts/sync-to-active.sh]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - bash
+        - -c
+        - |
+          bin=/tmp/trex7/bin
+          repo=/tmp/trex7/repo
+          home=/tmp/trex7/home
+          mkdir -p "$bin" "$repo/.claude/agents" "$home/.claude/agents"
+          printf '%s\n' 'enable -n pwd' > /tmp/trex7/bashenv
+          cat > "$bin/pwd" << 'EOF'
+          #!/bin/sh
+          echo /tmp/trex7/repo/scripts
+          EOF
+          chmod +x "$bin/pwd"
+          echo keep > "$repo/.claude/agents/keep.md"
+          name="gone${RANDOM}.md"
+          echo leftover > "$home/.claude/agents/$name"
+          export PATH="$bin:$PATH"
+          export HOME="$home"
+          export BASH_ENV=/tmp/trex7/bashenv
+          bash /app/.claude/scripts/sync-to-active.sh --skip-build
+          if [[ -f "$home/.claude/agents/$name" ]]; then
+            printf 'not ok 1 - sync left %s\n' "$name"
+            exit 1
+          fi
+          printf 'ok 1 - destination files with no source counterpart are deleted\n'
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

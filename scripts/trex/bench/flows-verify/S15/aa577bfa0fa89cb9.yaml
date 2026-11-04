@@ -1,0 +1,62 @@
+id: aa577bfa0fa89cb9
+title: Memory recall timeout kills uv startup
+description: Recall must wait long enough for a cold uv process to print JSON
+goal: a three second uv startup still returns memory context
+paths: [.claude/hooks/src/memory-awareness.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      stdin: '{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"remember the deployment rollback procedure","cwd":"/tmp/trex3/proj"}'
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { mkdirSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const bin = '/tmp/trex3/bin';
+          mkdirSync(bin, { recursive: true });
+          mkdirSync('/tmp/trex3/opc', { recursive: true });
+          mkdirSync('/tmp/trex3/proj', { recursive: true });
+          writeFileSync(`${bin}/uv`, `#!/bin/sh
+          sleep 3
+          printf '%s' '{"results":[{"id":"cold1234","content":"coldrecall marker","score":0.2,"learning_type":"NOTE"}]}'
+          `);
+          chmodSync(`${bin}/uv`, 0o755);
+          process.env.PATH = `${bin}:${process.env.PATH || ''}`;
+          process.env.HOME = '/tmp/trex3/home';
+          mkdirSync(process.env.HOME, { recursive: true });
+          process.env.CLAUDE_OPC_DIR = '/tmp/trex3/opc';
+          process.env.CLAUDE_PROJECT_DIR = '/tmp/trex3/proj';
+          delete process.env.CLAUDE_AGENT_ID;
+          const orig = console.log.bind(console);
+          let logged = null;
+          console.log = (...a) => { logged = a.map(String).join(' '); };
+          await import('/app/.claude/hooks/src/memory-awareness.ts');
+          const start = Date.now();
+          while (logged === null && Date.now() - start < 20000) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          const text = logged || '';
+          if (!text.includes('coldrecall marker')) {
+            orig(`not ok 1 - memory hook returned ${text}`);
+            process.exit(1);
+          }
+          orig('ok 1 - recall survives a cold uv startup');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

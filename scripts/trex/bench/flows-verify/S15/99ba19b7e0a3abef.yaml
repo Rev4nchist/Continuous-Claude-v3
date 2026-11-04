@@ -1,0 +1,44 @@
+id: 99ba19b7e0a3abef
+title: Plan approval falls back across projects
+description: A fresh session-only approval must not be returned for another project
+goal: migration returns only the project-scoped plan-approved path
+paths: [.claude/hooks/src/shared/session-isolation.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { writeFileSync, existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const m = await import('/app/.claude/hooks/src/shared/session-isolation.ts');
+          const sessionId = `s${process.pid}`;
+          const projectId = 'bbbbbbbbbbbbbbbb';
+          const legacy = m.getSessionStatePath('plan-approved', sessionId);
+          writeFileSync(legacy, JSON.stringify({ approved: true }));
+          const scoped = m.getProjectScopedStatePath('plan-approved', projectId, sessionId);
+          const got = m.getProjectScopedStatePathWithMigration('plan-approved', projectId, sessionId);
+          if (got !== scoped) {
+            console.log(`not ok 1 - getProjectScopedStatePathWithMigration returned ${JSON.stringify(got)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - migration returns only the project-scoped path');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

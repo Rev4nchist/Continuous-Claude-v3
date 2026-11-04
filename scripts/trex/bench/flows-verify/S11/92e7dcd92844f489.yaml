@@ -1,0 +1,43 @@
+id: 92e7dcd92844f489
+title: Rename into a filtered path recommends no review
+description: a source file renamed into a CodeRabbit-filtered path stays reviewable and keeps its line counts
+goal: the checkpoint does not recommend none for a rename whose previous path is reviewable
+paths: [scripts/github/pr-checkpoint.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { readFileSync } from 'node:fs';
+          import { pathFiltersFrom, recommend } from '/app/scripts/github/pr-checkpoint.mjs';
+          const head = 'c'.repeat(40);
+          const policy = {
+            ...JSON.parse(readFileSync('/app/review-router.config.json', 'utf8')),
+            path_filters: pathFiltersFrom(readFileSync('/app/.coderabbit.yaml', 'utf8')),
+          };
+          const result = recommend({
+            head,
+            now: '2026-11-03T18:00:00.000Z',
+            stamp: { head, results: [{ step: 'git:clean', status: 'PASS' }] },
+            files: [{ filename: 'dist/feature.mjs', previous_filename: 'src/feature.mjs', additions: 20, deletions: 5 }],
+            cli: null,
+            dependabot: false,
+          }, policy);
+          const rec = result.recommended;
+          const lines = result.size.lines;
+          if (rec === 'none' || lines === 0) {
+            console.log(`not ok 1 - checkpoint recommended ${rec} for ${lines} lines`);
+            process.exit(1);
+          }
+          console.log('ok 1 - a rename into a filtered path stays reviewable and keeps its line counts');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

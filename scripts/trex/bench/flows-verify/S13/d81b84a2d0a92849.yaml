@@ -1,0 +1,76 @@
+id: d81b84a2d0a92849
+title: Owners silent over 24h show as quiet
+description: An owner with no signal for over 24 hours and no recorded end must not be quiet
+goal: getLaneBoard returns ended or unknown for that owner
+paths: [apps/agentic-os/src/server/queries/lane-board.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: apps/agentic-os
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --conditions=react-server
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks, createRequire } from 'node:module';
+          import { existsSync, writeFileSync } from 'node:fs';
+          import { fileURLToPath, pathToFileURL } from 'node:url';
+          writeFileSync('/tmp/empty-mod.mjs', 'export {}\n');
+          const root = '/app/apps/agentic-os/src/';
+          const empty = pathToFileURL('/tmp/empty-mod.mjs').href;
+          registerHooks({ resolve(spec, ctx, next) {
+            if (spec === 'server-only') return { url: empty, shortCircuit: true };
+            if (spec.startsWith('@/')) {
+              for (const c of ['.ts', '.tsx', '/index.ts']) {
+                const p = root + spec.slice(2) + c;
+                if (existsSync(p)) return { url: pathToFileURL(p).href, shortCircuit: true };
+              }
+            }
+            if (ctx.parentURL?.endsWith('.ts') && /^\.{1,2}\//.test(spec)) {
+              const base = spec.replace(/\.js$/, '');
+              for (const suf of ['.ts', '.tsx', '/index.ts']) {
+                const u = new URL(base + suf, ctx.parentURL);
+                if (existsSync(fileURLToPath(u))) return { url: u.href, shortCircuit: true };
+              }
+            }
+            return next(spec, ctx);
+          }});
+          const { Client } = createRequire('/app/apps/agentic-os/package.json')('pg');
+          const urls = [process.env.AGENTIC_OS_DATABASE_URL, process.env.DATABASE_URL, process.env.OPC_POSTGRES_URL, 'postgresql://postgres@127.0.0.1:5432/postgres', 'postgresql://postgres:postgres@127.0.0.1:5432/postgres', 'postgresql://claude:claude_dev@127.0.0.1:5432/continuous_claude', 'postgresql://claude:claude_dev@127.0.0.1:5432/postgres'].filter(Boolean);
+          const sid = 'lane-d81b84a2';
+          const ddl = "CREATE SCHEMA IF NOT EXISTS agentic_os; CREATE TABLE IF NOT EXISTS public.sessions (id text PRIMARY KEY, project text NOT NULL DEFAULT 'p', last_heartbeat timestamp, last_activity_at timestamp, ended_at timestamp); CREATE TABLE IF NOT EXISTS agentic_os.lane (id text PRIMARY KEY, title text NOT NULL, branch text, track text NOT NULL DEFAULT 'unsorted', state text NOT NULL DEFAULT 'backlog', owner_session_id text, lease_expires_at timestamptz, priority integer NOT NULL DEFAULT 50, updated_at timestamptz NOT NULL DEFAULT now())";
+          let seeded = false;
+          for (const u of urls) {
+            const c = new Client({ connectionString: u, connectionTimeoutMillis: 1500 });
+            try {
+              await c.connect();
+              await c.query(ddl);
+              await c.query("INSERT INTO public.sessions (id, project, last_heartbeat, last_activity_at, ended_at) VALUES ($1, 'p', (now() AT TIME ZONE 'UTC') - interval '48 hours', (now() AT TIME ZONE 'UTC') - interval '48 hours', NULL) ON CONFLICT (id) DO UPDATE SET last_heartbeat = EXCLUDED.last_heartbeat, last_activity_at = EXCLUDED.last_activity_at, ended_at = NULL", [sid]);
+              await c.query("INSERT INTO agentic_os.lane (id, title, state, owner_session_id, priority) VALUES ($1, 'probe', 'active', $1, -1000000) ON CONFLICT (id) DO UPDATE SET owner_session_id = EXCLUDED.owner_session_id, priority = EXCLUDED.priority, state = 'active'", [sid]);
+              await c.end();
+              process.env.AGENTIC_OS_DATABASE_URL = u;
+              seeded = true;
+              break;
+            } catch { try { await c.end(); } catch {} }
+          }
+          if (!seeded) throw new Error('no postgres');
+          const { getLaneBoard } = await import('/app/apps/agentic-os/src/server/queries/lane-board.ts');
+          const board = await getLaneBoard();
+          const lane = board.columns.flatMap((col) => col.lanes).find((row) => row.id === sid);
+          if (!lane) throw new Error(String(board.error ?? board.status));
+          const owner = lane.owner;
+          if (owner !== 'ended' && owner !== 'unknown') {
+            console.log(`not ok 1 - owner silent over 24h returned ${JSON.stringify(owner)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - silent over 24h is ended or unknown');
+          process.exit(0);
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

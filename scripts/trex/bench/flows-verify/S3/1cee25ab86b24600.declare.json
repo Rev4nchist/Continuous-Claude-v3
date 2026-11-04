@@ -1,0 +1,10 @@
+{
+  "pid": "1cee25ab86b24600",
+  "row": "S3",
+  "fireMatch": "kept waiting asks \\[\\]",
+  "correct": "Keep a waiting line when Dave, an approval, a decision, or a confirmation appears anywhere in it.",
+  "citedFile": ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts",
+  "startLine": 421,
+  "endLine": 423,
+  "newCode": false
+}

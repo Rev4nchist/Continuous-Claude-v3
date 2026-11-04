@@ -1,0 +1,10 @@
+{
+  "pid": "33bf35cacfb8469c",
+  "row": "N15",
+  "fireMatch": "settings still invoke [^\\n]*maestro-enforcer\\.mjs",
+  "correct": "Deregister those hooks before the dist delete.",
+  "citedFile": "scripts/sync-to-active.sh",
+  "startLine": 813,
+  "endLine": 838,
+  "newCode": false
+}

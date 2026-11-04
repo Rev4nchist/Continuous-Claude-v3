@@ -1,0 +1,10 @@
+{
+  "pid": "e39e2f317d3a5fb2",
+  "row": "S15",
+  "fireMatch": "sync exited 0",
+  "correct": "Fail the script when the build fails and show the build output.",
+  "citedFile": ".claude/scripts/sync-to-active.sh",
+  "startLine": 172,
+  "endLine": 172,
+  "newCode": false
+}

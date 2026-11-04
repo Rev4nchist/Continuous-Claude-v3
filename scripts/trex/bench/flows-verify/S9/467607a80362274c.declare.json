@@ -1,0 +1,10 @@
+{
+  "pid": "467607a80362274c",
+  "row": "S9",
+  "fireMatch": "stored body \"\" summaryOnly true",
+  "correct": "Reject the summary when codeRabbitSeverity(summary.body) is major or critical, or when the outside-diff heading count is greater than zero, and keep the review object.",
+  "citedFile": "scripts/github/review-status.mjs",
+  "startLine": 937,
+  "endLine": 942,
+  "newCode": true
+}

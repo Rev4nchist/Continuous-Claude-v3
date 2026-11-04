@@ -1,0 +1,41 @@
+id: e39e2f317d3a5fb2
+title: Hook build failure is treated as success
+description: A failing npm hook build must fail the sync and show its output
+goal: sync exits non-zero and the build marker is visible
+paths: [.claude/scripts/sync-to-active.sh]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - bash
+        - -c
+        - |
+          bin=/tmp/trex9/bin
+          home=/tmp/trex9/home
+          mkdir -p "$bin" "$home/.claude/hooks"
+          printf '%s\n' '{}' > "$home/.claude/hooks/package.json"
+          cat > "$bin/npm" << 'EOF'
+          #!/bin/sh
+          echo BUILDFAILMARKER >&2
+          exit 1
+          EOF
+          chmod +x "$bin/npm"
+          export PATH="$bin:$PATH"
+          export HOME="$home"
+          set +e
+          output=$(bash /app/.claude/scripts/sync-to-active.sh 2>&1)
+          code=$?
+          flat=$(printf '%s' "$output" | tr '\n' ' ')
+          if [[ "$code" -eq 0 || "$flat" != *BUILDFAILMARKER* ]]; then
+            printf 'not ok 1 - sync exited %s output %s\n' "$code" "$flat"
+            exit 1
+          fi
+          printf 'ok 1 - a failed hook build fails the sync and shows the build output\n'
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

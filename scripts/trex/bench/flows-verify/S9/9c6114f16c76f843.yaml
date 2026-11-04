@@ -1,0 +1,32 @@
+id: 9c6114f16c76f843
+title: Notice reviews inflate the outside-diff total
+description: A notice review that quotes an outside-diff heading must not raise the total
+goal: codeRabbitOutsideDiff skips a review when codeRabbitNotice is set
+paths: [scripts/github/review-status.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          const { codeRabbitOutsideDiff, CODERABBIT_LOGIN } = await import('/app/scripts/github/review-status.mjs');
+          const n = 8 + 9;
+          const body = `> ## Review skipped\n\nOutside diff range comments (${n})`;
+          const total = codeRabbitOutsideDiff({
+            reviews: [{ id: 1, user: { login: CODERABBIT_LOGIN, type: 'Bot' }, body }],
+          });
+          if (total !== 0) {
+            console.log(`not ok 1 - notice review added ${total} to the outside-diff total`);
+            process.exit(1);
+          }
+          console.log('ok 1 - a notice review is skipped from the outside-diff total');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

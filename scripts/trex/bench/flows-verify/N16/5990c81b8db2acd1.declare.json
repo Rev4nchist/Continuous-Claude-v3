@@ -1,0 +1,10 @@
+{
+  "pid": "5990c81b8db2acd1",
+  "row": "N16",
+  "fireMatch": "stored output is \"[0-9a-f]{40}\"",
+  "correct": "Re-run the GREEN command on HEAD and store its output, or leave the sha unchanged.",
+  "citedFile": "scripts/github/pre-pr.mjs",
+  "startLine": 443,
+  "endLine": 460,
+  "newCode": false
+}

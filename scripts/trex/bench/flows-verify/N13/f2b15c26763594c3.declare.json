@@ -1,0 +1,10 @@
+{
+  "pid": "f2b15c26763594c3",
+  "row": "N13",
+  "fireMatch": "returned \"lock\"",
+  "correct": "A first lock miss or state error is handled by the existing wait and returns busy, and runAgent does not spawn unless slot.ok is true.",
+  "citedFile": "scripts/github/lib/grok-slots.mjs",
+  "startLine": 138,
+  "endLine": 140,
+  "newCode": true
+}

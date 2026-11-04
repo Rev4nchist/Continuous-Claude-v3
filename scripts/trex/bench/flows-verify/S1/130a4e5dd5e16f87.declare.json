@@ -1,0 +1,10 @@
+{
+  "pid": "130a4e5dd5e16f87",
+  "row": "S1",
+  "fireMatch": "returned \"See <path> Files\\\\\\\\Git today\"",
+  "correct": "Keep the words after a path, and keep consuming space-separated pieces while a later piece still contains \\ or /.",
+  "citedFile": "apps/agentic-os/src/server/sources/safe-message.ts",
+  "startLine": 36,
+  "endLine": 51,
+  "newCode": false
+}

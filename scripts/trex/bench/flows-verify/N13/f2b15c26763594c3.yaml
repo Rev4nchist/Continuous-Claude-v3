@@ -1,0 +1,40 @@
+id: f2b15c26763594c3
+title: First gate failure starts an ungated agent
+description: A first state error must stay in the wait and return busy
+goal: acquireGrokSlot returns busy after the wait when the first read fails
+paths: [scripts/github/lib/grok-slots.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import { mkdtempSync } from 'node:fs';
+          import path from 'node:path';
+          const { acquireGrokSlot } = await import('/app/scripts/github/lib/grok-slots.mjs');
+          const file = path.join(mkdtempSync('/tmp/grok-gate-'), 'grok-slots.json');
+          let t = 1000000;
+          const readFile = () => {
+            const err = new Error('scanner busy');
+            err.code = 'EBUSY';
+            throw err;
+          };
+          const slot = await acquireGrokSlot(
+            { file, max: 2, waitMs: 40, pollMs: 10, lockWaitMs: 1 },
+            { readFile, now: () => t, sleep: async (ms) => { t += ms; }, pidAlive: () => true, log: () => {}, env: {} },
+          );
+          if (slot.reason !== 'busy') {
+            console.log('not ok 1 - first gate failure returned ' + JSON.stringify(slot.reason) + ' waitedMs ' + slot.waitedMs);
+            process.exit(1);
+          }
+          console.log('ok 1 - a first state error waits and returns busy');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

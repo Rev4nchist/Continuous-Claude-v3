@@ -1,0 +1,58 @@
+id: f65ee84cd32ff2ef
+title: Sync daemon query is passed through a shell
+description: A single quote in a daemon query must be data, not shell syntax
+goal: queryDaemonSync delivers the JSON payload unchanged
+paths: [.claude/hooks/src/daemon-client.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          import { createHash } from 'node:crypto';
+          import { resolve } from 'node:path';
+          import { tmpdir } from 'node:os';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const bin = '/tmp/trex1/bin';
+          mkdirSync(bin, { recursive: true });
+          writeFileSync(`${bin}/nc`, `#!/bin/sh
+          payload=$(cat)
+          export TREX_PAYLOAD="$payload"
+          exec ${process.execPath} -e 'process.stdout.write(JSON.stringify({status:"ok",payload:process.env.TREX_PAYLOAD||""}))'
+          `);
+          chmodSync(`${bin}/nc`, 0o755);
+          process.env.PATH = `${bin}:${process.env.PATH || ''}`;
+          const projectDir = '/tmp/trex1/proj';
+          mkdirSync(projectDir, { recursive: true });
+          const hash = createHash('md5').update(resolve(projectDir)).digest('hex').substring(0, 8);
+          writeFileSync(`${tmpdir()}/tldr-${hash}.pid`, String(process.pid));
+          const m = await import('/app/.claude/hooks/src/daemon-client.ts');
+          const pattern = "o'brien";
+          const res = m.queryDaemonSync({ cmd: 'search', pattern }, projectDir);
+          const payload = typeof res?.payload === 'string' ? res.payload : '';
+          if (!payload.includes(pattern)) {
+            console.log(`not ok 1 - queryDaemonSync returned ${JSON.stringify(res)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - a quoted query is passed to the daemon as data');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P0

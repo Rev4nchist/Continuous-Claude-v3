@@ -1,0 +1,46 @@
+id: 678a9071ee7962da
+title: Settings rewrite truncates the live file
+description: Applying the rewrite must replace the live settings file without truncating it.
+goal: an open descriptor of the live file still holds the pre-write bytes
+paths: [scripts/settings/remove-maestro-registrations.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --input-type=module
+        - -e
+        - |
+          import fs from 'node:fs';
+          const flag = ['--', 'apply'].join('');
+          const dir = fs.mkdtempSync('/tmp/trex-settings-XXXXXX');
+          const settingsPath = dir + '/settings.json';
+          const before = '{"keep":true,"hooks":{}}';
+          fs.writeFileSync(settingsPath, before);
+          const fd = fs.openSync(settingsPath, 'r');
+          process.argv = [process.execPath, 'remove-maestro-registrations.mjs', settingsPath, flag];
+          let caught = null;
+          try {
+            await import('/app/scripts/settings/remove-maestro-registrations.mjs');
+          } catch (e) {
+            caught = e;
+          }
+          const viaFd = fs.readFileSync(fd, 'utf8');
+          const viaPath = fs.readFileSync(settingsPath, 'utf8');
+          fs.closeSync(fd);
+          const preserved = viaFd === before;
+          const replaced = viaPath !== before;
+          if (!preserved || !replaced || caught) {
+            const shown = viaFd.replaceAll('\n', ' ');
+            console.log(`not ok 1 - held descriptor saw ${shown}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - the open descriptor still holds the pre-write bytes');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

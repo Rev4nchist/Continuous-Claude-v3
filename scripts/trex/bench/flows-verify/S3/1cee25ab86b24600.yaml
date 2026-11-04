@@ -1,0 +1,53 @@
+id: 1cee25ab86b24600
+title: Waiting lines drop a real ask
+description: A waiting line that names Dave, an approval, a decision, or a confirmation stays an ask.
+goal: The parsed ask list still holds that waiting line
+paths: [.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            if (/^\.{1,2}\//.test(spec) && !/\.[a-z]+$/i.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(`${spec}.ts`, ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          }});
+          const { parseTurnEnd } = await import('/app/.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts');
+          const lines = [
+            'Waiting for approval.',
+            'Waiting for a decision: one row or two rows.',
+            'Waiting on approval from you.',
+            'Waiting for confirmation from Dave.',
+          ];
+          const body = ['## Next steps', ...lines.map((line, i) => `${i + 1}. ${line}`)].join('\n');
+          const asks = parseTurnEnd(body).ask;
+          const texts = Array.isArray(asks) ? asks.map((item) => item.text) : null;
+          const needle = (line) => line.replace(/[.\s]+$/, '');
+          const missing = lines.filter((line) => !Array.isArray(texts) || !texts.some((text) => text.includes(needle(line))));
+          if (missing.length > 0) {
+            console.log(`not ok 1 - kept waiting asks ${JSON.stringify(asks)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - a waiting line that names Dave, an approval, a decision, or a confirmation stays an ask');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

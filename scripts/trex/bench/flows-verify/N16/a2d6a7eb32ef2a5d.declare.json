@@ -1,0 +1,10 @@
+{
+  "pid": "a2d6a7eb32ef2a5d",
+  "row": "N16",
+  "fireMatch": "onlyBaseMergedSince returned true",
+  "correct": "Count a commit after the GREEN sha as own work unless it is the incoming side of a merge of the base.",
+  "citedFile": "scripts/github/pre-pr.mjs",
+  "startLine": 411,
+  "endLine": 419,
+  "newCode": false
+}

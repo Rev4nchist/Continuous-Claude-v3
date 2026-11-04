@@ -1,0 +1,52 @@
+id: 1bef52b89ec86b2c
+title: Opening rows still tell the model to post
+description: An opening queue row must be held and the model line must say not to post
+goal: a LIMITED opening row gets a do-not-post line
+paths: [.claude/plugins/ccv3-mods/hooks/pr-loop/slot-model.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\//.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '') + '.ts', ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const slots = await import('/app/.claude/plugins/ccv3-mods/hooks/pr-loop/slot-model.ts');
+          const model = await import('/app/.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts');
+          const row = {
+            pr: 900, band: 'HIGH', state: 'opening', position: null, total: 0, head7: 'abc1234',
+            queuedMin: null, timeoutInMin: null, nextSlotInMin: 0, posts: 0,
+            asked: { paid30: false, timeout60: false },
+          };
+          const slot = slots.alertSlot(row);
+          const alert = {
+            pr: 900, state: 'LIMITED', head: 'abc1234567890abcdef', headShort: 'abc1234',
+            merged: false, whenReady: false, reasons: ['CodeRabbit review skipped'],
+            checkpoint: { budget: [1, 1], rounds: 0, granted: null, declined: null },
+            ...(slot ? { slot } : {}),
+          };
+          const line = model.reportLine(alert);
+          if (!line.includes('Do not post @coderabbitai review')) {
+            console.log(`not ok 1 - model line was ${JSON.stringify(line)}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - an opening row is held and the model line says not to post');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+      - {text: no failing line, "!stdout": "not ok 1"}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1
