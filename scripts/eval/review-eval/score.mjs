@@ -4,11 +4,14 @@
 //  labels:  [{ findingId|pairId, verdict, sameIssue?, by }]   precision and strictSameIssue read by 'dave' and 'claude' (Dave wins);
 //           judge agreement reads by 'dave' only, so model labels never grade the judge
 //  sets:    { zeroMajorPrs: [pr] }     pairsSent: [{ pairId, judge: { verdict } }]
+import { cohenKappa } from './agreement.mjs';
 import { pairId } from './labels.mjs';
 import { foldSev, isMajor, matchFindings } from './match.mjs';
 
 const ratio = (found, total) => ({ found, total, value: total > 0 ? found / total : null });
 const lc = (s) => String(s ?? '').toLowerCase();
+/** Judge agreement is a NOTE below this many Dave-labelled pairs: too few to pass or fail a judge. */
+export const JUDGE_GATE_MIN_N = 30;
 
 function sumUsage(runs) {
   const total = {};
@@ -38,14 +41,27 @@ function recallOf(rows, labelBy = new Map()) {
   };
 }
 
-export function scorecard({ runs = [], matches = [], labels = [], sets = {}, frozenPromptSha256 = null, escapes = {}, bakeoff = {}, headless = {}, pairsSent = [] } = {}) {
+/** Same-issue recall for each link class (linkTypes: { key: class }). A key with no class is 'unlabelled'. Only classes that have a real Major appear. */
+function perClass(rows, linkTypes, labelBy) {
+  const groups = new Map();
+  for (const row of rows) {
+    const cls = linkTypes[row.key] ?? 'unlabelled';
+    groups.set(cls, [...(groups.get(cls) ?? []), row]);
+  }
+  const recalls = [...groups].map(([cls, group]) => [cls, recallOf(group, labelBy).strictSameIssue]);
+  return Object.fromEntries(recalls.filter(([, r]) => r.total > 0)); // a class with no real Major (only minor findings) adds no row
+}
+
+export function scorecard({ runs = [], matches = [], labels = [], sets = {}, linkTypes = {}, frozenPromptSha256 = null, escapes = {}, bakeoff = {}, headless = {}, pairsSent = [] } = {}) {
   // A holdout run (or match row) with another prompt hash leaves every holdout number: recall, precision, false alarms, cost.
   const stale = (r) => r.set === 'holdout' && Boolean(frozenPromptSha256) && r.promptSha256 !== frozenPromptSha256;
   const valid = runs.filter((r) => !stale(r));
   const labelBy = labelMap(labels);
   // evaluateRuns always sets promptSha256 on a match row (null when the run had none); a row with no such field carries no hash.
-  const holdout = recallOf(matches.filter((m) => m.set === 'holdout' && !(m.promptSha256 !== undefined && stale(m))), labelBy);
-  const dev = recallOf(matches.filter((m) => m.set === 'dev'), labelBy);
+  const holdoutRows = matches.filter((m) => m.set === 'holdout' && !(m.promptSha256 !== undefined && stale(m)));
+  const devRows = matches.filter((m) => m.set === 'dev');
+  const holdout = recallOf(holdoutRows, labelBy);
+  const dev = recallOf(devRows, labelBy);
 
   const zero = new Set(sets.zeroMajorPrs ?? []);
   const zeroRuns = valid.filter((r) => zero.has(r.pr));
@@ -69,11 +85,15 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
   const joined = labels.filter((l) => l.by === 'dave' && sent.has(l.pairId ?? l.findingId));
   const agree = joined.filter((l) => lc(sent.get(l.pairId ?? l.findingId).judge?.verdict) === lc(l.verdict)).length;
   const agreement = joined.length > 0 ? agree / joined.length : null;
+  const kappa = cohenKappa(joined.map((l) => [lc(sent.get(l.pairId ?? l.findingId).judge?.verdict), lc(l.verdict)]));
+  const gateMet = agreement !== null && agreement >= 0.8;
+  const judgeStatus = joined.length < JUDGE_GATE_MIN_N ? 'NOTE' : (gateMet ? 'PASS' : 'FAIL');
 
   return {
     schema: 1,
     perMajorRecall: { strict: holdout.strict, lenient: holdout.lenient, strictSameIssue: holdout.strictSameIssue },
     perPrRecall: holdout.perPr,
+    perClassRecall: { holdout: perClass(holdoutRows, linkTypes, labelBy), dev: perClass(devRows, linkTypes, labelBy) },
     prFalseAlarm: { count: alarmed.size, total: new Set(zeroRuns.map((r) => r.pr)).size, prs: [...alarmed] },
     precision: { real, noise, unverified, posted, value: posted > 0 ? real / posted : null, range: posted > 0 ? [real / posted, (real + unverified) / posted] : null, labelers },
     recall: { inDiff: holdout.inDiff, overall: holdout.overall },
@@ -84,7 +104,7 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
       grok: { runs: valid.length, durationMs: valid.reduce((a, r) => a + (r.durationMs ?? 0), 0), usage: sumUsage(valid) },
       headless: { runs: headless.runs ?? 0, costUsd: headless.costUsd ?? 0, usage: headless.usage ?? null },
     },
-    judgeAgreement: { n: joined.length, agree, value: agreement, gate: 0.8, pass: joined.length >= 30 && agreement !== null && agreement >= 0.8 },
+    judgeAgreement: { n: joined.length, agree, value: agreement, kappa, gate: 0.8, status: judgeStatus, pass: judgeStatus === 'PASS' },
     excludedRuns: runs.length - valid.length,
   };
 }

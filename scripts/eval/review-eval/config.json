@@ -7,7 +7,7 @@
   ],
   "shadowFromPr": 250,
   "shadowDays": 21,
-  "cursorEvalBudget": 80,
+  "cursorEvalBudget": 120,
   "cursorHeadroom": 60,
   "headlessDailyCap": 30,
   "judgeModel": "sonnet",

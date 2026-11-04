@@ -7,7 +7,7 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import { createHash } from 'node:crypto';
 import {
-  branchSlug, confidenceOf, findRecord, lastReviewedSha, listRecords, majorsOpen, settlePrior, writeRecord,
+  branchSlug, buildFunnel, confidenceOf, findRecord, lastReviewedSha, listRecords, majorsOpen, settlePrior, writeRecord,
 } from './record.mjs';
 
 const made = [];
@@ -188,4 +188,24 @@ test('settlePrior fails closed without a touches function (breaks if touches def
 test('a fixed prior does not count in majorsOpen of the next run (breaks if settled statuses are ignored)', () => {
   const settled = settlePrior([major('p1'), major('p3')], { p1: 'fixed' }, { touches: () => true });
   assert.deepEqual(majorsOpen(rec('r1', H2, settled)).map((f) => f.id), ['p3']);
+});
+
+// ---------- the funnel and the trace files (phase 1) ----------
+
+test('buildFunnel counts raw, withdrawn, drops by reason and posted; no answer gives zeros (breaks if a count reads the wrong list)', () => {
+  const answer = { findings: [{}, {}, {}], withdrawn: [{ id: 'w1' }, { id: 'w2' }] };
+  const dropped = [{ reason: 'no-file' }, { reason: 'duplicate' }, { reason: 'no-file' }];
+  assert.deepEqual(buildFunnel({ answer, dropped, kept: [{}] }), { raw: 3, withdrawn: 2, dropped: { byReason: { 'no-file': 2, duplicate: 1 } }, posted: 1 });
+  assert.deepEqual(buildFunnel({ answer: null, dropped: [], kept: [] }), { raw: 0, withdrawn: 0, dropped: { byReason: {} }, posted: 0 });
+  assert.equal(buildFunnel({ answer: { findings: [] }, dropped: [], kept: [] }).withdrawn, 0, 'an answer without a withdrawn list counts 0');
+});
+
+test('listRecords skips <runId>.trace.json beside a record: the trace is not a record (breaks if every .json file is read as a record)', () => {
+  const root = tmp('trace');
+  const written = writeRecord(rec('r1', H1, [major('a')]), { stateRoot: root });
+  writeFileSync(written.path.replace(/.json$/, '.trace.json'), JSON.stringify({ runId: 'r1', filesRead: [] }));
+  const got = listRecords({ branch: 'feat/x', head: H1 }, { stateRoot: root });
+  assert.equal(got.records.length, 1);
+  assert.deepEqual(got.unreadable, []);
+  assert.equal(got.records[0].record.runId, 'r1');
 });

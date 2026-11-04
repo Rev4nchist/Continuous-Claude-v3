@@ -217,3 +217,40 @@ test('a Dave label ingested by pairId reaches the precision of the engine findin
   const s = scorecard({ ...base, runs: ev.runs, matches: ev.matches, labels });
   assert.deepEqual([s.precision.real, s.precision.noise, s.precision.unverified], [1, 1, 0]);
 });
+
+// ---------- phase 1: kappa note and per-class recall ----------
+
+test('judge agreement prints n, raw agreement and kappa, and is a NOTE (never FAIL) below 30 labelled pairs, even at n=0 (breaks if a small n fails the run)', () => {
+  const none = scorecard({ ...base, runs: [], matches: [], labels: [], pairsSent: [] }).judgeAgreement;
+  assert.deepEqual([none.n, none.value, none.kappa, none.status, none.pass], [0, null, null, 'NOTE', false]);
+  const sent = (n, judge) => Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, judge: { verdict: judge(i) } }));
+  const lab = (n, verdict) => Array.from({ length: n }, (_, i) => ({ pairId: `p${i}`, verdict: verdict(i), by: 'dave' }));
+  const verdicts = (i) => (i % 2 ? 'real' : 'noise');
+  const small = scorecard({ ...base, runs: [], matches: [], labels: lab(10, verdicts), pairsSent: sent(10, verdicts) }).judgeAgreement;
+  assert.deepEqual([small.n, small.value, small.kappa, small.status], [10, 1, 1, 'NOTE']);
+});
+
+test('judge agreement at 30 or more pairs is PASS at 80% raw agreement and FAIL below it (breaks if the gate stops deciding at n=30)', () => {
+  const sent = Array.from({ length: 30 }, (_, i) => ({ pairId: `p${i}`, judge: { verdict: 'real' } }));
+  const labels = (agree) => Array.from({ length: 30 }, (_, i) => ({ pairId: `p${i}`, verdict: i < agree ? 'real' : 'noise', by: 'dave' }));
+  assert.equal(scorecard({ ...base, runs: [], matches: [], labels: labels(24), pairsSent: sent }).judgeAgreement.status, 'PASS');
+  assert.equal(scorecard({ ...base, runs: [], matches: [], labels: labels(23), pairsSent: sent }).judgeAgreement.status, 'FAIL');
+});
+
+test('perClassRecall gives same-issue recall for each link class from linkTypes, and counts a key with no class as unlabelled (breaks if the class lookup or the same-issue rule is skipped)', () => {
+  const matches = [
+    m('k1', 1, 'holdout', 'major', 'major', { engPairId: 'pa' }), m('k2', 1, 'holdout', 'major', null),
+    m('k3', 2, 'holdout', 'major', 'major', { engPairId: 'pb' }), m('k4', 2, 'holdout', 'major', 'major', { engPairId: 'pc' }),
+    m('d1', 9, 'dev', 'major', null), m('d2', 9, 'dev', 'minor', 'minor'),
+  ];
+  const labels = [{ findingId: 'pb', pairId: 'pb', verdict: 'real', sameIssue: false, by: 'claude' }];
+  const linkTypes = { k1: 'within-hunk', k2: 'within-hunk', k3: 'same-file', d1: 'cross-file-dynamic' };
+  const s = scorecard({ ...base, runs: [], matches, labels, linkTypes });
+  const h = s.perClassRecall.holdout;
+  assert.deepEqual([h['within-hunk'].found, h['within-hunk'].total], [1, 2]);
+  assert.deepEqual([h['same-file'].found, h['same-file'].total], [0, 1], 'k3 is a line match the label calls a different issue');
+  assert.deepEqual([h.unlabelled.found, h.unlabelled.total], [1, 1]);
+  assert.deepEqual([s.perClassRecall.dev['cross-file-dynamic'].found, s.perClassRecall.dev['cross-file-dynamic'].total], [0, 1]);
+  assert.deepEqual(Object.keys(h).sort(), ['same-file', 'unlabelled', 'within-hunk']);
+  assert.deepEqual(Object.keys(s.perClassRecall.dev), ['cross-file-dynamic'], 'a minor CodeRabbit finding with no class is not a Major: it adds no row');
+});

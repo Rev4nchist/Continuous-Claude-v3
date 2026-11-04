@@ -6,7 +6,8 @@
 //   shadow retro|sync|scorecard|decide ...    the shadow protocol (shadow.mjs)
 //   judge [--probe]                           one judge call (spends a headless run: the probe is the only caller)
 //   labels export --pairs F --dir D | labels ingest --dir D [--out F]
-//   score --dir D [--out F] [--rebase A]      scorecard from runs.jsonl and the dataset; --rebase A reads the findings files from archive A
+//   score --dir D [--out F] [--rebase A] [--linktype F]   scorecard from runs.jsonl and the dataset; --rebase A reads the findings files from archive A;
+//                                             --linktype F reads the linkType labels (default linktype-labels.json beside this file)
 //   rescore --archive A --out D [--root R]    re-apply the parser and the path filter to archived raw answers (no model call); then `score --dir D`
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
@@ -16,6 +17,7 @@ import { CONFIG_PATH, loadConfig } from './config.mjs';
 import { loadDataset, realMajors, resolveFindings, splitSets, zeroMajorPrs } from './dataset.mjs';
 import { recordFreeze } from './freeze.mjs';
 import { exportPairs, ingestLabels } from './labels.mjs';
+import { LINKTYPE_PATH, loadLinkTypes } from './linktype.mjs';
 import { makeGit, replayRun as realReplayRun } from './replay.mjs';
 import { archiveFile, rescoreArchive, treeCheck } from './rescore.mjs';
 import { evaluateRuns, scorecard } from './score.mjs';
@@ -74,7 +76,7 @@ function scoreCmd(argv, io, cfg) {
   const resolved = JSON.parse(readFileSync(datasetFile, 'utf8'));
   const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => (p ? JSON.parse(readFileSync(p, 'utf8')) : { findings: [] }) });
   const labels = readJsonl(path.join(dir, 'labels.jsonl'));
-  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, frozenPromptSha256: cfg.freeze?.promptSha256 ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
+  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, linkTypes: loadLinkTypes(flag(argv, '--linktype', LINKTYPE_PATH)), frozenPromptSha256: cfg.freeze?.promptSha256 ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
   const out = flag(argv, '--out', null);
   if (out) { mkdirSync(path.dirname(out), { recursive: true }); writeFileSync(out, `${JSON.stringify(card, null, 2)}\n`); }
   io.stdout(JSON.stringify(card, null, 1));
@@ -160,7 +162,10 @@ export async function main(argv, io = {}) {
         if (code !== 0) return code;
         const c = JSON.parse(text);
         const pct = (r) => (r?.value == null ? 'n/a' : `${(r.value * 100).toFixed(0)}% (${r.found}/${r.total})`);
-        const md = ['# Review eval scorecard', '', '| Metric | Value |', '|---|---|', `| Strict Major recall | ${pct(c.perMajorRecall.strict)} |`, `| Lenient Major recall | ${pct(c.perMajorRecall.lenient)} |`, `| Per-PR recall | ${pct(c.perPrRecall)} |`, `| PR false alarms | ${c.prFalseAlarm.count} of ${c.prFalseAlarm.total} |`, `| Precision real/posted | ${c.precision.value == null ? 'n/a' : c.precision.value.toFixed(2)} |`, `| Judge agreement | ${c.judgeAgreement.n} pairs, gate ${c.judgeAgreement.pass ? 'passed' : 'not passed'} |`, ''].join('\n');
+        const num = (v) => (v == null ? 'n/a' : v.toFixed(2));
+        const ja = c.judgeAgreement;
+        const classRows = (set) => Object.entries(c.perClassRecall?.[set] ?? {}).map(([cls, r]) => `| Same-issue recall, ${set}, ${cls} | ${pct(r)} |`);
+        const md = ['# Review eval scorecard', '', '| Metric | Value |', '|---|---|', `| Strict Major recall | ${pct(c.perMajorRecall.strict)} |`, `| Lenient Major recall | ${pct(c.perMajorRecall.lenient)} |`, `| Per-PR recall | ${pct(c.perPrRecall)} |`, `| PR false alarms | ${c.prFalseAlarm.count} of ${c.prFalseAlarm.total} |`, `| Precision real/posted | ${c.precision.value == null ? 'n/a' : c.precision.value.toFixed(2)} |`, `| Same-issue recall, holdout (overall) | ${pct(c.perMajorRecall.strictSameIssue)} |`, ...classRows('holdout'), ...classRows('dev'), `| Judge agreement | n=${ja.n}, raw ${num(ja.value)}, kappa ${num(ja.kappa)}, ${ja.status} |`, ''].join('\n');
         const out = flag(argv, '--report', null);
         if (out) writeFileSync(out, md);
         io.stdout(md);

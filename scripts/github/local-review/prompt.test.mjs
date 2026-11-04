@@ -148,3 +148,26 @@ test('the answer shape the prompt asks for passes the landed parseReviewOutput a
   assert.equal(parsed.findings.length, 1);
   assert.equal(lastJsonBlock(parsed.text).findings[0].confidence, 4);
 });
+
+// ---------- the withdrawn list (phase 1, funnel) ----------
+
+test('lastJsonBlock returns withdrawn as {id, path, line, severity, reason} items (breaks if withdrawn is dropped from the answer)', () => {
+  const w = { id: 'w1', path: 'a.mjs', line: 9, severity: 'major', reason: 'the caller guards it' };
+  const got = lastJsonBlock(block({ findings: [], reviewed: [], prior: {}, withdrawn: [w] }));
+  assert.deepEqual(got.withdrawn, [w]);
+});
+
+test('lastJsonBlock: withdrawn is [] when absent or the wrong type, bad items are dropped, and the prompt example echo is not counted (breaks if the normaliser trusts the model)', () => {
+  assert.deepEqual(lastJsonBlock(block({ findings: [], reviewed: [], prior: {} })).withdrawn, []);
+  assert.deepEqual(lastJsonBlock(block({ findings: [], reviewed: [], prior: {}, withdrawn: 'x' })).withdrawn, []);
+  const mixed = [null, 'str', 7, { id: 'k', path: 'a.mjs', line: '12', severity: 'minor', reason: 5 }, { id: 'ex', path: '<REPLACE: path>', line: 12, severity: 'major', reason: 'echo' }];
+  const got = lastJsonBlock(block({ findings: [], reviewed: [], prior: {}, withdrawn: mixed })).withdrawn;
+  assert.deepEqual(got, [{ id: 'k', path: 'a.mjs', line: 12, severity: 'minor', reason: '5' }]);
+});
+
+test('the prompt asks for withdrawn, keeps the disprove step, and its example round-trips with a withdrawn item (breaks if the prompt stops asking for the list or phase 1 removes disprove early)', () => {
+  const text = buildEnginePrompt({ files: [] }).promptText;
+  assert.match(text, /"withdrawn"/);
+  assert.match(text, /Disprove each finding/);
+  assert.equal(lastJsonBlock(text).withdrawn.length, 0, 'the example item holds a <REPLACE: ...> path, so it is not counted');
+});

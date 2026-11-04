@@ -9,6 +9,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readF
 import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { EXIT, finishRun, reserveRun, runAgent as realRunAgent } from './cursor-review.mjs';
 import {
@@ -122,7 +123,7 @@ function deps(w, over = {}) {
     git: fakeGit(w), gh: async (args) => { w.ghCalls.push(args); return w.pull; }, runAgent: fakeRunAgent(w), prepareReview: fakePrepare(w),
     readAtSha: (root, sha, rel) => { w.readAtCalls.push({ sha, rel }); return rel === 'review-router.config.json' ? w.configText : null; },
     agent: { cmd: 'fake-node', prefixArgs: ['fake-index.js'] }, now: () => NOW, stateRoot: w.stateRoot, cursorLedger: w.cursorLedger, tmpRoot: w.tmpRoot,
-    configPath: w.configPath, tldr: null, pidAlive: () => true, sleep: async () => {}, stderr: () => {},
+    configPath: w.configPath, agentVersion: () => '2026.10.22-test', pidAlive: () => true, sleep: async () => {}, stderr: () => {},
     reserveRun: (...a) => { w.reserveCalls.push(a); return reserveRun(...a); },
     finishRun: (...a) => { w.finishCalls.push(a); return finishRun(...a); },
     ...over,
@@ -312,7 +313,7 @@ test('the prompt goes to .review/PROMPT.md and the argument is short; a PR-plant
   assert.equal(call.evil, null);
   assert.equal(call.delta, null);
   const args = call.spec.args;
-  assert.deepEqual(args.slice(0, 8), ['fake-index.js', '-p', '--mode', 'ask', '--trust', '--output-format', 'json', '--model']);
+  assert.deepEqual(args.slice(0, 8), ['fake-index.js', '-p', '--mode', 'ask', '--trust', '--output-format', 'stream-json', '--model']);
   assert.equal(args[8], 'grok-4.7-high');
   assert.equal(args.length, 10);
   assert.ok(args[9].length < 400);
@@ -1270,4 +1271,122 @@ test('the relaunch time-out adds the grok gate wait of every attempt (breaks if 
   assert.equal(specs[0].timeoutMs, (60 + 40 * 2 + 5 + 180 * 2) * 60_000);
   await go({ PATH: 'p', CCV3_GROK_WAIT_MIN: '9'.repeat(400) });
   assert.equal(specs[1].timeoutMs, (60 + 40 * 2 + 5 + 60 * 2) * 60_000, 'a wait that overflows means the default');
+});
+
+test('parseArgs refuses --tldr: the flag is gone from the review path (breaks if --tldr is accepted again)', () => {
+  assert.match(parseArgs(['--pr', '7', '--tldr']).error, /unknown argument "--tldr"/);
+});
+
+// ---------- phase 1: the funnel ----------
+
+test('funnel: the record counts raw, withdrawn, drops by reason and posted; a low-confidence finding is posted, not dropped (breaks if a count reads the wrong list or thread-min becomes a drop)', async () => {
+  const withdrawn = [{ id: 'w1', path: 'src/app.mjs', line: 5, severity: 'major', reason: 'the caller guards it' }];
+  const w = world({ runs: [agentRun([finding(), finding({ file: 'nope.mjs', startLine: 1 }), finding({ startLine: 8, endLine: 8, title: 'Other', confidence: 1 })], { withdrawn })] });
+  const r = await run(w);
+  const rec = readRecord(r);
+  assert.deepEqual(rec.funnel, { raw: 3, withdrawn: 1, dropped: { byReason: { 'no-file': 1 } }, posted: 2 });
+  assert.equal(rec.findings.length, 2);
+  assert.equal(rec.findings.find((f) => f.confidence === 1).thread, false);
+  assert.deepEqual(rec.withdrawn, withdrawn);
+});
+
+test('funnel: a failed run still carries zero counts (breaks if the funnel is written only on success)', async () => {
+  const w = world({ runs: [failRun(1)] });
+  const rec = readRecord(await run(w));
+  assert.deepEqual(rec.funnel, { raw: 0, withdrawn: 0, dropped: { byReason: {} }, posted: 0 });
+});
+
+test('funnel: every raw finding is logged before the filter, one line each (breaks if the log moves after the filter)', async () => {
+  const w = world({ runs: [agentRun([finding(), finding({ file: 'nope.mjs', startLine: 1, title: 'Gone' })])] });
+  const logged = [];
+  await run(w, {}, { stderr: (m) => logged.push(m) });
+  const raw = logged.filter((m) => /raw finding/.test(m));
+  assert.equal(raw.length, 2);
+  assert.match(raw[1], /nope\.mjs:1/);
+});
+
+// ---------- phase 1: the trace ----------
+
+const VERDICT = { findings: [], reviewed: ['src/app.mjs'], prior: {} };
+/** A stream-json run that reads src/app.mjs (lines 1-10) and globs, then answers. The paths sit under the review tree the engine made. */
+function streamRun(findings = []) {
+  return (spec) => {
+    const read = path.join(spec.cwd, 'src', 'app.mjs');
+    const ev = (subtype, id, kind, body) => JSON.stringify({ type: 'tool_call', subtype, call_id: id, tool_call: { [kind]: body, startedAtMs: '1000', ...(subtype === 'completed' ? { completedAtMs: '1400' } : {}) } });
+    const answer = `Reviewed.
+${FENCE}json
+${JSON.stringify({ ...VERDICT, findings })}
+${FENCE}`;
+    const lines = [
+      JSON.stringify({ type: 'system', subtype: 'init', cwd: spec.cwd, model: 'Grok 4.7 256K High' }),
+      ev('started', 'c1', 'readToolCall', { args: { path: read } }),
+      ev('completed', 'c1', 'readToolCall', { args: { path: read }, result: { success: { totalLines: 10, readRange: { startLine: 1, endLine: 10 } } } }),
+      ev('completed', 'c2', 'globToolCall', { args: { globPattern: '**/*.mjs' }, result: { success: { files: ['src/app.mjs'] } } }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Looking at the loop.' }] } }),
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: answer, usage: { inputTokens: 1 }, duration_ms: 5 }),
+    ];
+    return { status: 0, stdout: `${lines.join('\n')}\n`, stderr: '', timedOut: false, durationMs: 5 };
+  };
+}
+const besideRecord = (r, suffix) => r.recordPath.replace(/\.json$/, suffix);
+
+test('trace: a run writes <runId>.trace.json, .condensed.md and a gzipped raw stream beside the record (breaks if a file is not written or is written after the tree is removed)', async () => {
+  const w = world({ runs: [streamRun([finding()])] });
+  const r = await run(w);
+  assert.equal(r.exit, EXIT.OK);
+  const rec = readRecord(r);
+  const trace = JSON.parse(readFileSync(besideRecord(r, '.trace.json'), 'utf8'));
+  assert.deepEqual(trace.filesRead, [{ path: 'src/app.mjs', ranges: [[1, 10]] }]);
+  assert.deepEqual(trace.globs, [{ glob: '**/*.mjs' }]);
+  assert.equal(trace.runId, rec.runId);
+  assert.equal(trace.pr, 7);
+  assert.equal(trace.headSha, HEAD);
+  assert.equal(trace.model, 'grok-4.7-high');
+  assert.equal(trace.cursorAgentVersion, '2026.10.22-test');
+  assert.equal(trace.promptSha256, rec.promptSha256);
+  assert.match(trace.contextSha, /^[0-9a-f]{64}$/);
+  assert.deepEqual(trace.funnel, rec.funnel);
+  assert.deepEqual(trace.findings.map((f) => [f.path, f.line, f.sev]), [['src/app.mjs', 3, 'major']]);
+  assert.deepEqual(trace.diffFiles, ['src/app.mjs', 'src/b.mjs']);
+  assert.ok(!JSON.stringify(trace).includes(w.T), 'the temp tree path must not stay in the trace');
+  assert.match(readFileSync(besideRecord(r, '.condensed.md'), 'utf8'), /TOOL read src\/app\.mjs/);
+  const raw = gunzipSync(readFileSync(besideRecord(r, '.stream.jsonl.gz'))).toString('utf8');
+  assert.match(raw, /"type":"result"/);
+});
+
+test('trace: the record names the model, the cursor-agent version and the context sha, and a trace file is not read as a record (breaks if a field is missing or listRecords reads the trace)', async () => {
+  const w = world({ runs: [streamRun()] });
+  const r = await run(w);
+  const rec = readRecord(r);
+  assert.equal(rec.model, 'grok-4.7-high');
+  assert.equal(rec.cursorAgentVersion, '2026.10.22-test');
+  assert.match(rec.contextSha, /^[0-9a-f]{64}$/);
+  const again = await run(w, { fresh: true });
+  assert.equal(again.exit, EXIT.OK, 'a second review of the same head still lists exactly the records');
+});
+
+test('trace: the version is read once per run, not once per attempt (breaks if the version lookup moves into the retry loop)', async () => {
+  const w = world({ runs: [spawnErrRun(), streamRun()] });
+  let n = 0;
+  const r = await run(w, {}, { agentVersion: () => { n += 1; return 'v'; } });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(w.agentCalls.length, 2);
+  assert.equal(n, 1);
+});
+
+test('trace: a failed trace write never changes the result of the review (breaks if the write error escapes)', async () => {
+  const w = world({ runs: [streamRun([finding()])] });
+  const logged = [];
+  const r = await run(w, {}, { writeTraceFiles: () => { throw new Error('disk full'); }, stderr: (m) => logged.push(m) });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(readRecord(r).status, 'ok');
+  assert.ok(logged.some((m) => /trace not written: disk full/.test(m)));
+});
+
+test('trace: a run whose agent crashed still writes a trace with empty lists (breaks if the trace is written only on success)', async () => {
+  const w = world({ runs: [failRun(1)] });
+  const r = await run(w);
+  const trace = JSON.parse(readFileSync(besideRecord(r, '.trace.json'), 'utf8'));
+  assert.deepEqual([trace.filesRead, trace.greps, trace.toolErrors], [[], [], []]);
+  assert.equal(existsSync(besideRecord(r, '.stream.jsonl.gz')), false);
 });

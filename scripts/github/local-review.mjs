@@ -3,7 +3,7 @@
  * local-review.mjs: the local review engine core (spec .claudedocs/2026-11-02-review-engine-p1-engine-core-spec.md, sections 1 and 2,
  * with section 13 of .claudedocs/2026-11-02-local-review-engine-spec.md overriding it).
  *
- * Usage: node scripts/github/local-review.mjs --pr <n> [--fresh] [--gates <pre-pr log>] [--json] [--engine-here] [--tldr] [--repo owner/name]
+ * Usage: node scripts/github/local-review.mjs --pr <n> [--fresh] [--gates <pre-pr log>] [--json] [--engine-here] [--repo owner/name]
  *
  * Run without LOCAL_REVIEW_PINNED, it pins the engine first: it extracts scripts/ and review-router.config.json at fork/main to
  * <state>/local-review/engine/<sha>/ and starts that copy as a child process. The pinned process refuses (exit 2) when its own file is
@@ -32,8 +32,9 @@ import { pidAlive, withLock } from './lib/file-lock.mjs';
 import { resolveWaitMs as grokWaitMs } from './lib/grok-slots.mjs';
 import { buildContext, readAtSha } from './local-review/context.mjs';
 import { buildEnginePrompt, lastJsonBlock, PROMPT_PATH } from './local-review/prompt.mjs';
+import { buildTrace, condense, contextSha, cursorAgentVersion, writeTraceFiles } from './local-review/trace.mjs';
 import {
-  branchSlug, listRecords, lastReviewedSha, settlePrior, stateRoot as recordsRoot, writeRecord,
+  branchSlug, buildFunnel, listRecords, lastReviewedSha, settlePrior, stateRoot as recordsRoot, writeRecord,
 } from './local-review/record.mjs';
 import {
   SEVERITY_RANK, filterFindings, findingId, isIgnoreFile, isStrippedFile, mapLine, parseHunks, rangeTouched, stripIgnoreFiles,
@@ -59,7 +60,7 @@ const ENV_DROP = Object.freeze(['ANTHROPIC_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN',
 export const ENGINE_FILES = Object.freeze([
   'scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/review-router.mjs',
   'scripts/github/review-status.mjs', 'scripts/github/local-review/context.mjs', 'scripts/github/local-review/prompt.mjs',
-  'scripts/github/local-review/record.mjs', 'scripts/github/lib/file-lock.mjs', 'scripts/github/lib/proc.mjs',
+  'scripts/github/local-review/record.mjs', 'scripts/github/local-review/trace.mjs', 'scripts/github/lib/file-lock.mjs', 'scripts/github/lib/proc.mjs',
   'scripts/ratchets/review-skip-sync.mjs', 'review-router.config.json',
 ]);
 
@@ -466,9 +467,9 @@ function makeDeps(opts, deps) {
     withLock: deps.withLock ?? withLock, fetchLock: P.fetchLock, remote: deps.remote ?? 'fork',
     runAgent: deps.runAgent ?? runAgent, reserveRun: deps.reserveRun ?? reserveRun, finishRun: deps.finishRun ?? finishRun,
     writeRecord: deps.writeRecord ?? writeRecord, prepareReview: deps.prepareReview ?? prepareReview,
-    readAtSha: deps.readAtSha ?? ((r, s, p) => readAtSha(r, s, p)), agent: deps.agent,
+    readAtSha: deps.readAtSha ?? ((r, s, p) => readAtSha(r, s, p)), agent: deps.agent, agentVersion: deps.agentVersion ?? cursorAgentVersion, writeTraceFiles: deps.writeTraceFiles ?? writeTraceFiles,
     slotDeps: { now: deps.now, pidAlive: deps.pidAlive, pid: deps.pid, sleep: deps.sleep, lockWaitMs: deps.lockWaitMs, pollMs: deps.pollMs, log: deps.stderr ? (m) => deps.stderr(`local-review: ${m}`) : undefined },
-    tmpRoot: deps.tmpRoot ?? os.tmpdir(), tldr: 'tldr' in deps ? deps.tldr : (opts.tldr ? undefined : null),
+    tmpRoot: deps.tmpRoot ?? os.tmpdir(),
     log: deps.stderr ?? (() => {}),
   };
 }
@@ -606,8 +607,8 @@ function writeReviewDir(s, prep) {
   stripIgnoreFiles(prep.dir, d.platform);
   const agentFiles = [...new Set([...(prep.agentFiles ?? []), ...prep.files.filter((f) => isIgnoreFile(f, d.platform))])];
   const diffText = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
-  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: target.pull, files: target.files, gates: s.opts.gatesText, treeDir: prep.dir, diffText, capKb: cfg.context_cap_kb };
-  const ctx = buildContext(input, { readAtSha: d.readAtSha, tldr: d.tldr });
+  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: target.pull, files: target.files, gates: s.opts.gatesText, capKb: cfg.context_cap_kb };
+  const ctx = buildContext(input, { readAtSha: d.readAtSha });
   writeFileSync(path.join(dir, 'CONTEXT.md'), ctx.text);
   const delta = s.range.mode === 'delta';
   const files = delta ? s.deltaFiles.map((f) => f.filename) : prep.files;
@@ -639,7 +640,7 @@ const retryable = (cur) => !cur.run.timedOut && !cur.parsed.modelMismatch && !cu
 async function runOnce(s, prep, plan, runId, attempt) {
   const { d, route } = s;
   const agent = s.agent;
-  const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', 'json', '--model', route.model, ...plan.prompt.argv];
+  const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', 'stream-json', '--model', route.model, ...plan.prompt.argv];
   const spec = { command: agent.cmd, args, cwd: prep.dir, timeoutMs: s.timeoutMs, env: buildEngineEnv(d.env, d.platform) };
   const t0 = d.now();
   let run;
@@ -680,6 +681,11 @@ const normPath = (p) => String(p).replaceAll('\\', '/').replace(/^\.\//, '');
 
 const rankOf = (f) => SEVERITY_RANK[f.severity] ?? 0;
 
+/** One log line per raw answer finding, before the S5 filter, so a dropped finding can still be found in the run log. */
+function logRaw(d, findings) {
+  for (const f of findings) d.log(`local-review: raw finding ${f?.file}:${f?.startLine} ${f?.severity} ${clip(f?.title ?? '', 80)}`);
+}
+
 /** A new finding with the id of a still-open prior finding: the prior stays open, with the higher severity. The model cannot close or downgrade it (13.3). */
 function mergeSame(old, f) {
   const top = rankOf(f) > rankOf(old) ? f : old;
@@ -687,6 +693,7 @@ function mergeSame(old, f) {
 }
 
 function settleAndFilter(s, prep, plan, answer) {
+  logRaw(s.d, answer.findings);
   const r = filterFindings(answer.findings, { treeDir: prep.dir, hunks: parseHunks(plan.diffText), prior: s.priorRelined, threadMin: s.cfg.thread_min_confidence, ...(s.d.grep ? { grep: s.d.grep } : {}) });
   const kept = r.kept.map((f) => ({ ...f, firstSeenSha: f.firstSeenSha ?? s.target.head }));
   const exists = (rel) => existsSync(path.join(prep.dir, rel)) || isStrippedFile(rel);
@@ -698,7 +705,7 @@ function settleAndFilter(s, prep, plan, answer) {
   const priorFor = (f) => open.get(f.id) ?? atLine.get(f.id);
   const merged = kept.map((f) => (priorFor(f) ? mergeSame(priorFor(f), f) : f));
   const ids = new Set(merged.map((f) => f.id));
-  return { findings: [...settled.filter((f) => !ids.has(f.id)), ...merged], dropped: r.dropped, problems: r.problems };
+  return { findings: [...settled.filter((f) => !ids.has(f.id)), ...merged], kept, dropped: r.dropped, problems: r.problems };
 }
 
 function buildRecord(s, plan, out, answer, filtered, error) {
@@ -716,11 +723,12 @@ function buildRecord(s, plan, out, answer, filtered, error) {
   const complete = runComplete(final.run, final.parsed, answer) && (selected === 0 || claimedReviewed > 0);
   return {
     schema: 1, runId: final.runId, pr: target.pr, branch: target.branch, head: target.head, mergeBase: target.mergeBase, pullBaseSha: target.pullBaseSha,
-    engineSha: s.pin.engineSha, trusted: s.trust.trusted, promptVersion: plan.prompt.promptVersion, promptSha256: plan.prompt.promptSha256,
+    engineSha: s.pin.engineSha, trusted: s.trust.trusted, model: route.model, cursorAgentVersion: s.agentVersion, contextSha: contextSha(plan.ctx.text), promptVersion: plan.prompt.promptVersion, promptSha256: plan.prompt.promptSha256,
     mode: s.range.mode, from: s.range.from, band: { band, score, G, C, K, L, securityTier }, status: error ? 'failed' : 'ok', skipReason: null,
     escalate: route.escalate, runs: out.runs,
     coverage: { selected, ignoredByFilter: filtered.dropped.length, claimedReviewed, complete },
-    contextMissing: plan.ctx.contextMissing, findings: filtered.findings, dropped: filtered.dropped, problems, ts: new Date(s.d.now()).toISOString(),
+    contextMissing: plan.ctx.contextMissing, findings: filtered.findings, dropped: filtered.dropped, problems,
+    funnel: buildFunnel({ answer: error ? null : answer, dropped: filtered.dropped, kept: filtered.kept }), withdrawn: error ? [] : (answer?.withdrawn ?? []), ts: new Date(s.d.now()).toISOString(),
   };
 }
 
@@ -739,6 +747,22 @@ function persist(s, final, record, error) {
   return { exit: error ? EXIT.FAILED : EXIT.OK, recordPath: written.path, skipReason: null, runId: final.runId, status: record.status, findingCount: record.findings.length, mode: record.mode, trusted: record.trusted, ...(error ? { reason: error } : {}) };
 }
 
+/** Writes the trace files beside the record, while the review tree still exists. A write error is logged: it never changes the review. */
+function saveTrace(s, { prep, final, record, dir }) {
+  const { d, target } = s;
+  const raw = final.run.stdout ?? '';
+  try {
+    const trace = buildTrace({
+      raw, treeDir: prep.dir, runId: record.runId, pr: target.pr, headSha: target.head, engineSha: record.engineSha, promptSha256: record.promptSha256,
+      contextSha: record.contextSha, model: record.model, cursorAgentVersion: record.cursorAgentVersion, durationMs: final.run.durationMs, toolStats: final.run.toolStats ?? undefined,
+      funnel: record.funnel, findings: record.findings, diffFiles: (s.range.mode === 'delta' ? s.deltaFiles : target.files).map((f) => f.filename),
+    });
+    d.writeTraceFiles({ dir, runId: record.runId, trace, raw, condensed: condense(raw, { treeDir: prep.dir }) });
+  } catch (err) {
+    d.log(`local-review: trace not written: ${err.message}`);
+  }
+}
+
 async function stepRun(s) {
   const { d, target } = s;
   const prep = await d.prepareReview({ root: d.root, input: { range: `${target.pullBaseSha}..${target.head}` }, tmpRoot: d.tmpRoot, platform: d.platform });
@@ -752,7 +776,10 @@ async function stepRun(s) {
     const error = final.error ?? (answer ? null : 'the answer has no final json block with findings, reviewed and prior');
     const filtered = error ? { findings: [], dropped: [], problems: [] } : settleAndFilter(s, prep, plan, answer);
     if (error && !final.error) final.error = error;
-    return persist(s, final, buildRecord(s, plan, out, answer, filtered, error), error);
+    const record = buildRecord(s, plan, out, answer, filtered, error);
+    const result = persist(s, final, record, error);
+    if (result.recordPath) saveTrace(s, { prep, final, record, dir: path.dirname(result.recordPath) });
+    return result;
   } finally {
     prep.cleanup();
   }
@@ -780,13 +807,14 @@ async function runHead(opts, d) {
   if (early) return early;
   s.agent = d.agent ?? resolveAgent({ env: d.env });
   if (s.agent.error) return refuse(d, EXIT.FAILED, s.agent.error);
+  s.agentVersion = d.agentVersion(s.agent);
   return withSlot(s);
 }
 
 /**
- * One review of one PR head. opts: { pr, fresh, gatesText, engineHere, tldr, root, repo }.
+ * One review of one PR head. opts: { pr, fresh, gatesText, engineHere, root, repo }.
  * deps (tests): { git, gh, runAgent, reserveRun, finishRun, writeRecord, prepareReview, readAtSha, agent, now, pidAlive, sleep, env, stateRoot,
- *   stateDir, cursorLedger, selfPath, selfRoot, configPath, tmpRoot, tldr, grep, stderr }.
+ *   stateDir, cursorLedger, selfPath, selfRoot, configPath, tmpRoot, grep, stderr }.
  * -> { exit, recordPath|null, skipReason|null, ... }
  */
 export async function reviewHead(opts, deps = {}) {
@@ -813,7 +841,6 @@ export function parseArgs(argv) {
       case '--fresh': out.fresh = true; break;
       case '--json': out.json = true; break;
       case '--engine-here': out.engineHere = true; break;
-      case '--tldr': out.tldr = true; break;
       default: return { error: `unknown argument ${JSON.stringify(a)}` };
     }
   }

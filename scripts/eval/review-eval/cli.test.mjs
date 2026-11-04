@@ -55,3 +55,22 @@ test('labels export over the week cap exits 2', async () => {
   writeFileSync(file, JSON.stringify(pairs));
   assert.equal(await main(['labels', 'export', '--pairs', file, '--dir', dir], quiet()), 2);
 });
+
+test('score reads --linktype and report prints n, raw agreement, kappa, the NOTE status and per-class recall (breaks if the labels file is not passed to the scorecard or report drops a line)', async () => {
+  // Breaks when: scoreCmd stops passing linkTypes, or the report table leaves out the agreement or per-class rows.
+  const dir = tmp();
+  const sha40 = 'a'.repeat(40);
+  writeFileSync(path.join(dir, 'findings.json'), JSON.stringify({ findings: [{ file: 'src/a.mjs', line: 10, severity: 'major', title: 'bug' }] }));
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${JSON.stringify({ set: 'holdout', pr: 5, round: 1, sha40, status: 'ok', ts: '2026-11-04T00:00:00Z', promptSha256: 'P', findingsPath: path.join(dir, 'findings.json') })}\n`);
+  const dataset = { findings: [{ key: '5:1', pr: 5, sha40, path: 'src/a.mjs', startLine: 10, endLine: 10, severity: 'Major', verdict: 'real', source: 'inline' }], zeroMajorPrs: [] };
+  writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify(dataset));
+  const lt = path.join(dir, 'lt.json');
+  writeFileSync(lt, JSON.stringify({ labels: { '5:1': { final: 'same-file' } } }));
+  const cfg = { freeze: { promptSha256: 'P' } };
+  const io = quiet();
+  assert.equal(await main(['report', '--dir', dir, '--linktype', lt], { ...io, cfg }), 0);
+  const text = io.out.join('\n');
+  assert.match(text, /Judge agreement \| n=0, raw n\/a, kappa n\/a, NOTE/);
+  assert.match(text, /same-issue recall.*1\/1/i);
+  assert.match(text, /same-file \| 100% \(1\/1\)/);
+});
