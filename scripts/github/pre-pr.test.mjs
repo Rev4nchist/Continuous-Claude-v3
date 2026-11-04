@@ -255,6 +255,10 @@ test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not avail
   const gate = SURFACES.flatMap((s) => s.gates ?? []).find((g) => g.id === 'semgrep-ccv3');
   const saved = process.env.DOCKER_BIN;
   process.env.DOCKER_BIN = path.join(os.tmpdir(), 'no-such-docker-binary');
+  // The wrapper uses opengrep when it finds the binary under the home folder. An empty home forces the Docker path.
+  const home = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME, CCV3_OPENGREP: process.env.CCV3_OPENGREP };
+  process.env.USERPROFILE = process.env.HOME = mkdtempSync(path.join(os.tmpdir(), 'gw5-home-'));
+  delete process.env.CCV3_OPENGREP;
   try {
     const r = runGate({ ...gate, timeoutMs: 60_000 }, { root: REPO_ROOT, exec: PRE.defaultExec, git: () => ({ status: 0, stdout: '', stderr: '' }) });
     assert.equal(r.status, 'FAIL');
@@ -262,6 +266,7 @@ test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not avail
   } finally {
     if (saved === undefined) delete process.env.DOCKER_BIN;
     else process.env.DOCKER_BIN = saved;
+    for (const [k, v] of Object.entries(home)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
 
@@ -1956,4 +1961,42 @@ test('P8: runPrePr reads the cap from the config, stamps cli-cap, and the built 
   assert.equal(JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8')).cr_skip_reason, 'cli-cap');
   assert.equal(hookVerdict(repo.dir).allow, true);
   assert.notEqual(cliCapOf(CONFIG), null, 'the shipped config sets a cap');
+});
+
+// ---------- zizmor advisory (one-week trial: it never fails pre-pr) ----------
+
+const harnessBody = (head) => `## Evidence\n\nProof type: harness\n\nRED: \`x\` @ ${'b'.repeat(40)}\n\`\`\`text\nred\n\`\`\`\n\nGREEN: \`x\` @ ${head}\n\`\`\`text\ngreen\n\`\`\`\n`;
+const ZIZMOR_OUT = JSON.stringify([{ ident: 'unpinned-uses', determinations: { severity: 'High' }, locations: [{ symbolic: { kind: 'Primary', key: { Local: { verbatim_path: '.github/workflows/a.yml' } } }, concrete: { location: { start_point: { row: 6, column: 0 } } } }] }]);
+
+test('Z-PP1: a workflow change adds one NOTE zizmor line with the counts, and exit 14 from zizmor does not fail the run', async () => {
+  // Breaks when: the advisory is not wired into runPrePr, or its exit code or findings are turned into a FAIL.
+  const repo = makeRepo({ files: { '.github/workflows/a.yml': 'name: a\n' } });
+  const calls = [];
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findZizmor: () => 'ZBIN', zizmorRun: (bin, args) => { calls.push([bin, ...args]); return { status: 14, stdout: ZIZMOR_OUT, stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.deepEqual(calls, [['ZBIN', '--offline', '--strict-collection', '--format', 'json', '.github/workflows/a.yml']]);
+  const step = result.results.find((r) => r.step === 'zizmor');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /1 High/);
+  assert.match(step.detail, /a\.yml:7/);
+});
+
+test('Z-PP2: no workflow change means no zizmor step and no zizmor run', async () => {
+  // Breaks when: the advisory runs on every branch.
+  const repo = makeRepo();
+  let ran = 0;
+  const { result } = await prePr(repo, { findZizmor: () => 'ZBIN', zizmorRun: () => { ran += 1; return { status: 0, stdout: '[]', stderr: '' }; } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(ran, 0);
+  assert.equal(result.results.some((r) => r.step === 'zizmor'), false);
+});
+
+test('Z-PP3: a workflow change with no zizmor binary passes with a skip note', async () => {
+  // Breaks when: a missing binary fails the run.
+  const repo = makeRepo({ files: { '.github/workflows/a.yml': 'name: a\n' } });
+  const { result } = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findZizmor: () => null, zizmorRun: () => { throw new Error('must not run'); } });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  const step = result.results.find((r) => r.step === 'zizmor');
+  assert.equal(step.status, 'NOTE');
+  assert.match(step.detail, /skipped/);
 });
