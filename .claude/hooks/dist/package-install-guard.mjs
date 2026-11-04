@@ -19753,12 +19753,15 @@ function registrySet(segment) {
   const key = words.find((w) => REGISTRY_KEY.test(w));
   return /^(?:npm|pnpm|yarn)$/.test(manager) && words.includes("set") && key ? [`${manager} set ${key.split("=")[0]}`] : [];
 }
-var RAW_CONFIG_WORD = /(?<![a-z0-9])(?:registry|registries|npmRegistryServer|npmScopes|(?:extra-)?index-url|trusted-host|find[-_]links|userconfig|globalconfig|UV_INDEX|UV_DEFAULT_INDEX|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_CONFIG_FILE|UV_CONFIG_FILE|npm_config_registry)|\.npmrc|\.yarnrc|bunfig\.toml|pip\.ini|pip\.conf|uv\.toml|\.pypirc/gi;
+var RAW_CONFIG_WORD = /(?<![a-z0-9]|[a-z0-9]-)(?:registry|registries|npmRegistryServer|npmScopes|(?:extra-)?index-url|trusted-host|find[-_]links|userconfig|globalconfig|UV_INDEX|UV_DEFAULT_INDEX|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_CONFIG_FILE|UV_CONFIG_FILE|npm_config_registry)|\.npmrc|\.yarnrc|bunfig\.toml|pip\.ini|pip\.conf|uv\.toml|\.pypirc/gi;
 var RAW_MANAGER = /\b(?:npm|pnpm|yarn|bun|pip\d*|uv|poetry|pdm|conda)\b/i;
 var RAW_SET_MANAGER = /\b(?:npm|pnpm)\b/i;
 function rawConfigMarkers(command) {
   const text = command.replace(/[\\'"`]/g, "");
-  const writes = text.split(/[;&|\r\n]/).filter((seg2) => RAW_MANAGER.test(seg2) && /\bconfig\b/i.test(seg2) || RAW_SET_MANAGER.test(seg2) && /\bset\b/i.test(seg2));
+  const writes = text.split(/[;&|\r\n]/).filter((seg2) => (
+    // Whole shell words only: eslint-config-prettier, set-value and lodash.set are package names, not config writes.
+    RAW_MANAGER.test(seg2) && /(?:^|\s)(?:config|c)(?=\s|$)/i.test(seg2) || RAW_SET_MANAGER.test(seg2) && /(?:^|\s)set(?=\s|$)/i.test(seg2)
+  ));
   return [.../* @__PURE__ */ new Set([...writes.map((seg2) => seg2.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0])])];
 }
 function persistentConfigMarkers(command, tool, depth = 0) {
@@ -19939,7 +19942,8 @@ async function checkOsvAdvisory(name, version, ecosystem) {
     });
     if (critical) {
       return {
-        blocked: true,
+        blocked: known,
+        ask: !known,
         advisoryId: critical.id,
         warning: `OSV.dev reports CRITICAL vulnerability: ${critical.id}. ${critical.summary || "No summary"}.${scope}`
       };
@@ -20268,7 +20272,8 @@ async function checkInstall(segment, cwd, tool) {
     if (osvResult.blocked) {
       return { asks, advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
     }
-    if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
+    if (osvResult.ask) asks.push(`${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. Pin an exact version to check it, or confirm.`);
+    else if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
     const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version ?? install.tag);
     if (ageResult.blocked) {
       return { asks, advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };

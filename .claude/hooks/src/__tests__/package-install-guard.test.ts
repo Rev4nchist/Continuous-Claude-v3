@@ -819,7 +819,7 @@ describe('shell-running MCP tools (F07), built hook, subprocess', () => {
 // A decision is "gated" when permissionDecision is ask or deny. "Allowed" is no permissionDecision.
 // ---------------------------------------------------------------------------
 describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
-  type Stub = { ageHours?: number; nextHours?: number; osvMal?: boolean };
+  type Stub = { ageHours?: number; nextHours?: number; osvMal?: boolean; osvCrit?: boolean };
 
   async function runHook(
     command: string,
@@ -847,6 +847,7 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       PIG_STUB_AGE_HOURS: String(opts.stub?.ageHours ?? 2400),
       PIG_STUB_NEXT_HOURS: String(opts.stub?.nextHours ?? 2400),
       PIG_STUB_OSV_MAL: opts.stub?.osvMal ? '1' : '',
+      PIG_STUB_OSV_CRIT: opts.stub?.osvCrit ? '1' : '',
     };
     delete env.CDPATH;
     Object.assign(env, opts.env);
@@ -1593,6 +1594,37 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
         expect(r.reason).toMatch(/MAL-2026-0001/);
         expect(r.reason).not.toMatch(/unknown/i);
       });
+      // CodeRabbit #291 (Major), Dave 11-04: a CRITICAL advisory for an unknown version asks; an exact version still denies.
+      const CRIT: Stub = { ageHours: 2400, osvCrit: true };
+      it.each(['npm install zz-fake-pkg-a1', 'npm install zz-fake-pkg-a1@latest', 'npm install zz-fake-pkg-a1@^1.0.0', 'npx zz-fake-pkg-a1'])(
+        'CRITICAL with no exact version: %j asks and says the version is unknown', async (cmd) => {
+          const r = await runHookFull(cmd, { stub: CRIT, cwd: await emptyDir() });
+          expect(r.decision).toBe('ask');
+          expect(r.reason).toMatch(/GHSA-zzzz-crit-0001/);
+          expect(r.reason).toMatch(/version[^.]*unknown|unknown[^.]*version/i);
+        });
+      it('CRITICAL with an exact version: npm install zz-fake-pkg-a1@1.0.0 still denies', async () => {
+        const r = await runHookFull('npm install zz-fake-pkg-a1@1.0.0', { stub: CRIT, cwd: await emptyDir() });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/GHSA-zzzz-crit-0001/);
+      });
+    });
+    // CodeRabbit #291 (Minor): config, set and registry inside a package name are not a config write.
+    it.each([
+      'npm install eslint-config-prettier@9.0.0',
+      'npm install set-value@4.1.0',
+      'npm install lodash.set@4.3.2',
+      'npm install npm-registry-fetch@17.0.0',
+    ])('G2 regression: %j (a word inside a package name) allows', async (cmd) => {
+      expect(await runHook(cmd, { stub: { ageHours: 2400 }, cwd: await emptyDir() })).toBeUndefined();
+    });
+    it.each([
+      'npm config set registry https://zz-fake-host.example && npm install',
+      'npm c set registry https://zz-fake-host.example && npm install',
+      'npm set registry https://zz-fake-host.example && npm install',
+      'npm config set reg\\istry https://zz-fake-host.example && npm install',
+    ])('G2 still gated after the whole-word fix: %j', async (cmd) => {
+      expect(['ask', 'deny']).toContain(await runHook(cmd, { stub: { ageHours: 2400 }, cwd: await emptyDir() }));
     });
     it.each([
       'npx zz-local-bin-a1@1.0.0',

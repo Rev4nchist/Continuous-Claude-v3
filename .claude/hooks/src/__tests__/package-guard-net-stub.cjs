@@ -9,6 +9,7 @@
  *   PIG_STUB_AGE_HOURS   age of the `latest` npm release and of the PyPI release (default 2400 = 100 days)
  *   PIG_STUB_NEXT_HOURS  age of the `next` and `beta` npm dist-tags (default 2400)
  *   PIG_STUB_OSV_MAL     "1": OSV answers every query with one MAL- advisory (default: no advisories)
+ *   PIG_STUB_OSV_CRIT    "1": OSV answers every query with one CRITICAL GHSA advisory (wins over PIG_STUB_OSV_MAL)
  */
 'use strict';
 const https = require('https');
@@ -20,6 +21,7 @@ const iso = (hours) => new Date(Date.now() - hours * HOUR).toISOString();
 
 function documentFor(host) {
   if (host.includes('api.osv.dev')) {
+    if (process.env.PIG_STUB_OSV_CRIT === '1') return { vulns: [{ id: 'GHSA-zzzz-crit-0001', summary: 'stub critical advisory', database_specific: { severity: 'CRITICAL' } }] };
     return { vulns: process.env.PIG_STUB_OSV_MAL === '1' ? [{ id: 'MAL-2026-0001', summary: 'stub malware advisory' }] : [] };
   }
   if (host.includes('pypi.org')) {

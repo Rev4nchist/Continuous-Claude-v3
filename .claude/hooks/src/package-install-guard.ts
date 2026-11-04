@@ -602,7 +602,8 @@ function registrySet(segment: string): string[] {
 
 // G2 raw rule (round 4): the raw text, never parsed, with backslashes, quotes and backticks removed (reg\istry, r'e'gistry).
 // A registry or index key word, or a package-manager or pip config file name, anywhere in the text.
-const RAW_CONFIG_WORD = /(?<![a-z0-9])(?:registry|registries|npmRegistryServer|npmScopes|(?:extra-)?index-url|trusted-host|find[-_]links|userconfig|globalconfig|UV_INDEX|UV_DEFAULT_INDEX|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_CONFIG_FILE|UV_CONFIG_FILE|npm_config_registry)|\.npmrc|\.yarnrc|bunfig\.toml|pip\.ini|pip\.conf|uv\.toml|\.pypirc/gi;
+// A hyphen after a letter or digit is inside a name (npm-registry-fetch); a flag dash (--registry) still counts.
+const RAW_CONFIG_WORD = /(?<![a-z0-9]|[a-z0-9]-)(?:registry|registries|npmRegistryServer|npmScopes|(?:extra-)?index-url|trusted-host|find[-_]links|userconfig|globalconfig|UV_INDEX|UV_DEFAULT_INDEX|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_CONFIG_FILE|UV_CONFIG_FILE|npm_config_registry)|\.npmrc|\.yarnrc|bunfig\.toml|pip\.ini|pip\.conf|uv\.toml|\.pypirc/gi;
 const RAW_MANAGER = /\b(?:npm|pnpm|yarn|bun|pip\d*|uv|poetry|pdm|conda)\b/i;
 const RAW_SET_MANAGER = /\b(?:npm|pnpm)\b/i;
 
@@ -615,7 +616,8 @@ const RAW_SET_MANAGER = /\b(?:npm|pnpm)\b/i;
 function rawConfigMarkers(command: string): string[] {
   const text = command.replace(/[\\'"`]/g, '');
   const writes = text.split(/[;&|\r\n]/).filter((seg) =>
-    (RAW_MANAGER.test(seg) && /\bconfig\b/i.test(seg)) || (RAW_SET_MANAGER.test(seg) && /\bset\b/i.test(seg)));
+    // Whole shell words only: eslint-config-prettier, set-value and lodash.set are package names, not config writes.
+    (RAW_MANAGER.test(seg) && /(?:^|\s)(?:config|c)(?=\s|$)/i.test(seg)) || (RAW_SET_MANAGER.test(seg) && /(?:^|\s)set(?=\s|$)/i.test(seg)));
   return [...new Set([...writes.map((seg) => seg.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0])])];
 }
 
@@ -850,6 +852,8 @@ const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 
 interface OsvResult {
   blocked: boolean;
+  /** A CRITICAL advisory for an unknown version: ask (deny when unattended), do not hard-deny. */
+  ask?: boolean;
   warning?: string;
   advisoryId?: string;
 }
@@ -892,8 +896,10 @@ export async function checkOsvAdvisory(
       return false;
     });
     if (critical) {
+      // Dave 11-04 (CodeRabbit #291): with no exact version the advisory may not apply, so ask; an exact version denies.
       return {
-        blocked: true,
+        blocked: known,
+        ask: !known,
         advisoryId: critical.id,
         warning: `OSV.dev reports CRITICAL vulnerability: ${critical.id}. ${critical.summary || 'No summary'}.${scope}`,
       };
@@ -1360,7 +1366,8 @@ async function checkInstall(segment: string, cwd: string | null, tool: string): 
     if (osvResult.blocked) {
       return { asks, advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. ${OVERRIDE}` };
     }
-    if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
+    if (osvResult.ask) asks.push(`${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. Pin an exact version to check it, or confirm.`);
+    else if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
 
     // F15 repair: npm install --tag next x installs the next tag, so age that one.
     const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version ?? install!.tag);
