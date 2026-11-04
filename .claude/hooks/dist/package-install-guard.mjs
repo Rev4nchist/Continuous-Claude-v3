@@ -2,7 +2,8 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/package-install-guard.ts
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { dirname as dirname2, join as join2, resolve } from "path";
 import https from "https";
 
 // src/shared/output.ts
@@ -40,6 +41,12 @@ var SEGMENT_PATTERNS = [
   // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
   { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: seg(HTTP_CLIENT + methodIs("put") + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) }
 ];
+function stripQuotedStrings(command, tool = "Bash") {
+  if (tool === "PowerShell") {
+    return command.replace(/"(?:[^"`]|`.)*"/g, '""').replace(/'(?:[^']|'')*'/g, "''");
+  }
+  return command.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
+}
 function parseExecutable(command) {
   const segments = [];
   const substitutions = [];
@@ -301,6 +308,14 @@ function executableView(command, tool) {
 function normalizeEscapes(s, tool) {
   if (tool !== "PowerShell") return s.replace(/\\\r?\n/g, " ");
   return s.replace(/`\r?\n/g, " ").replace(/`([A-Za-z0-9])/g, "$1").replace(/`./g, "").replace(/\\(\r?\n)/g, "\\ $1");
+}
+
+// src/shared/unattended.ts
+function isUnattended(input, env = process.env) {
+  if (input.permission_mode === "bypassPermissions") return true;
+  if (env.CLAUDE_AGENT_ID) return true;
+  if (env.CI === "true" || env.CI === "1") return true;
+  return false;
 }
 
 // src/shared/typosquat-detect.ts
@@ -18804,43 +18819,69 @@ var malicious_packages_default = {
 var DIR = String.raw`(?:&\s*)?(?:"[^"]*[\\/]|'[^']*[\\/]|[^\s"']*[\\/])?`;
 var PIP_OPTS = String.raw`(?:\s+(?:--(?:proxy|log|cache-dir|timeout|retries|cert|client-cert|exists-action|trusted-host|python|use-feature|keyring-provider)\s+\S+|-[-\w]+(?:=\S+)?))*`;
 var PY_OPTS = String.raw`(?:\s+(?:-[XW]\s*\S+|-[IuBEsSOqbdv]+|-\d(?:\.\d+)?))*`;
+function installPattern(body, ecosystem, opts = {}) {
+  const f = opts.ignoreCase ? "i" : "";
+  return {
+    regex: new RegExp(`^${body}`, f),
+    loose: new RegExp(String.raw`(?:^|[\s;&|({])${body}`, f),
+    ecosystem,
+    requirePin: opts.requirePin,
+    kind: opts.kind ?? "list",
+    flags: opts.flags ?? "other",
+    remoteOnly: opts.remoteOnly,
+    preferLocal: opts.preferLocal
+  };
+}
+var END = String.raw`(?=\s|$)`;
+var bin = (name) => String.raw`${DIR}${name}(?:\.cmd|\.exe|\.ps1)?["']?`;
+var NODE_OPTS = String.raw`(?:\s+(?:--(?:prefix|registry|cache|userconfig|globalconfig|loglevel|workspace|cwd|dir|filter|modules-folder)\s+\S+|-C\s+\S+|-\S+))*`;
+var NPM_INSTALL = "(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|install-test|it)";
+var NPM_CI = "(?:ci|clean-install|ic|install-clean|isntall-clean|install-ci-test|cit|clean-install-test|sit)";
+var NPM_UPDATE = "(?:update|up|upgrade|udpate)";
+var PIP_VERBS = "(?:install|download|wheel)";
 var INSTALL_PATTERNS = [
   // Python (Windows runs Python.exe and PIP the same as python and pip, so these ignore case)
-  { regex: new RegExp(String.raw`^${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?${PIP_OPTS}\s+install\b`, "i"), ecosystem: "pypi", requirePin: true },
-  { regex: new RegExp(String.raw`^${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?${PY_OPTS}\s+-m\s+pip${PIP_OPTS}\s+install\b`, "i"), ecosystem: "pypi", requirePin: true },
-  { regex: /^uv\s+pip\s+install\b/, ecosystem: "pypi", requirePin: true },
-  { regex: /^uv\s+add\b/, ecosystem: "pypi" },
-  { regex: /^poetry\s+add\b/, ecosystem: "pypi" },
+  installPattern(String.raw`${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?${PIP_OPTS}\s+${PIP_VERBS}${END}`, "pypi", { requirePin: true, flags: "pip", ignoreCase: true }),
+  // -m and its module may be one word: python -mpip install x.
+  installPattern(String.raw`${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?${PY_OPTS}\s+-m\s*pip${PIP_OPTS}\s+${PIP_VERBS}${END}`, "pypi", { requirePin: true, flags: "pip", ignoreCase: true }),
+  installPattern(String.raw`uv\s+pip\s+install${END}`, "pypi", { requirePin: true, flags: "pip" }),
+  installPattern(String.raw`uv\s+add${END}`, "pypi", { flags: "pip" }),
+  installPattern(String.raw`poetry\s+add${END}`, "pypi", { flags: "pip" }),
+  installPattern(String.raw`pipenv\s+install${END}`, "pypi", { flags: "pip" }),
+  // Python runners and tool installs (F13): the first token is the package, the rest is its argv.
+  installPattern(String.raw`(?:uvx|uv\s+tool\s+(?:run|install)|pipx\s+(?:run|install))${END}`, "pypi", { kind: "first", flags: "pyrunner" }),
+  installPattern(String.raw`uv\s+run${END}`, "pypi", { kind: "run", flags: "pyrunner" }),
   // JavaScript / Node
-  { regex: /^npm\s+install\b/, ecosystem: "npm" },
-  { regex: /^npm\s+i\b/, ecosystem: "npm" },
-  { regex: /^yarn\s+add\b/, ecosystem: "npm" },
-  { regex: /^pnpm\s+(add|install)\b/, ecosystem: "npm" },
-  { regex: /^bun\s+(add|install)\b/, ecosystem: "npm" },
-  // Rust
-  { regex: /^cargo\s+(add|install)\b/, ecosystem: "cargo" },
-  // Go
-  { regex: /^go\s+get\b/, ecosystem: "go" },
-  // Ruby
-  { regex: /^gem\s+install\b/, ecosystem: "gem" },
-  // PHP
-  { regex: /^composer\s+require\b/, ecosystem: "composer" }
+  installPattern(String.raw`${bin("npm")}${NODE_OPTS}\s+${NPM_INSTALL}${END}`, "npm", { flags: "node" }),
+  installPattern(String.raw`${bin("npm")}${NODE_OPTS}\s+${NPM_UPDATE}${END}`, "npm", { flags: "node" }),
+  installPattern(String.raw`${bin("npm")}${NODE_OPTS}\s+${NPM_CI}${END}`, "npm", { kind: "lockfile", flags: "node" }),
+  installPattern(String.raw`${bin("npm")}${NODE_OPTS}\s+(?:exec|x)${END}`, "npm", { kind: "first", flags: "node", preferLocal: true }),
+  installPattern(String.raw`(?:${bin("npm")}${NODE_OPTS}\s+(?:create|init|innit)|${bin("(?:yarn|pnpm|bun)")}${NODE_OPTS}\s+create)${END}`, "npm", { kind: "create", flags: "node" }),
+  installPattern(String.raw`${bin("yarn")}${NODE_OPTS}\s+(?:global\s+)?(?:add|up|upgrade)${END}`, "npm", { flags: "node" }),
+  installPattern(String.raw`${bin("pnpm")}${NODE_OPTS}\s+(?:add|install|i|update|up|upgrade)${END}`, "npm", { flags: "node" }),
+  installPattern(String.raw`${bin("bun")}${NODE_OPTS}\s+(?:add|a|install|i|update)${END}`, "npm", { flags: "node" }),
+  installPattern(String.raw`(?:${bin("npx")}|${bin("bunx")}|${bin("bun")}${NODE_OPTS}\s+x)${END}`, "npm", { kind: "first", flags: "node", preferLocal: true }),
+  // pnpx is pnpm dlx. These always fetch, even when a local bin of that name exists.
+  installPattern(String.raw`(?:${bin("pnpx")}|${bin("yarn")}${NODE_OPTS}\s+dlx|${bin("pnpm")}${NODE_OPTS}\s+dlx)${END}`, "npm", { kind: "first", flags: "node" }),
+  // deno names its sources npm:x, jsr:x or a URL; the classifier asks on each of them.
+  installPattern(String.raw`${bin("deno")}\s+(?:install|i|add)${END}`, "npm", { flags: "node" }),
+  // Rust, Go, Ruby, PHP: matched so the guard can ask. It has no blocklist or age check for them.
+  installPattern(String.raw`cargo\s+(?:add|install)${END}`, "cargo"),
+  installPattern(String.raw`go\s+(?:get|install)${END}`, "go"),
+  installPattern(String.raw`go\s+run${END}`, "go", { remoteOnly: true }),
+  installPattern(String.raw`gem\s+install${END}`, "gem"),
+  installPattern(String.raw`composer\s+require${END}`, "composer")
 ];
 var EXACT_PIN = /^[A-Za-z0-9_.-]+(?:\[[^\]]*\])?===?[^=<>~!*,;\s]+$/;
-var FLAGS_WITH_VALUE = /* @__PURE__ */ new Set([
-  "-r",
-  "--requirement",
-  "-c",
-  "--constraint",
-  "-e",
-  "--editable",
+var PIP_VALUE = [
+  // uv global options (uvx --directory DIR tool, uvx --color never tool)
+  "--directory",
+  "--project",
+  "--color",
+  "--python-preference",
+  "--allow-insecure-host",
   "-t",
   "--target",
-  "-f",
-  "--find-links",
-  "-i",
-  "--index-url",
-  "--extra-index-url",
   "--prefix",
   "--root",
   "--src",
@@ -18865,17 +18906,100 @@ var FLAGS_WITH_VALUE = /* @__PURE__ */ new Set([
   "--report",
   "-C",
   "--config-settings",
-  "--index",
-  "--default-index",
   "--index-strategy",
   "--resolution",
   "--prerelease",
   "--keyring-provider",
-  "--root-user-action",
-  // npm/yarn
-  "--registry"
-]);
-var STANDALONE_FLAGS = /^-/;
+  "--root-user-action"
+];
+var PIP_SOURCE = ["-r", "--requirement", "-c", "--constraint", "-e", "--editable", "--with-requirements", "--with-editable"];
+var PIP_INDEX = ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--source", "--config-file"];
+var PY_BARE = [
+  "--",
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "-n",
+  "--no-cache",
+  "--offline",
+  "--isolated",
+  "--refresh",
+  "-U",
+  "--upgrade",
+  "--force",
+  "--native-tls",
+  "--no-config",
+  "--no-progress",
+  "--preview",
+  "-e",
+  "--editable",
+  "--include-deps"
+];
+var none = () => /* @__PURE__ */ new Set();
+var FLAG_TABLES = {
+  pip: { value: new Set(PIP_VALUE), pkg: none(), source: new Set(PIP_SOURCE), index: new Set(PIP_INDEX), extra: none(), bare: none() },
+  // Only --from and --spec name the package that runs; --with adds one more (F11/F13 repair).
+  pyrunner: {
+    value: new Set(PIP_VALUE),
+    pkg: /* @__PURE__ */ new Set(["--from", "--spec"]),
+    source: new Set(PIP_SOURCE.filter((f) => f !== "-e" && f !== "--editable")),
+    index: new Set(PIP_INDEX),
+    extra: /* @__PURE__ */ new Set(["--with", "-w"]),
+    bare: new Set(PY_BARE)
+  },
+  node: {
+    value: /* @__PURE__ */ new Set([
+      "--prefix",
+      "--cache",
+      "--tag",
+      "--workspace",
+      "-w",
+      "--filter",
+      "--dir",
+      "--cwd",
+      "--loglevel",
+      "--omit",
+      "--include",
+      "--save-prefix",
+      "--modules-folder",
+      "--network-concurrency",
+      "-C",
+      "--call",
+      "-c",
+      "--node-options",
+      "--shell",
+      "--script-shell"
+    ]),
+    pkg: /* @__PURE__ */ new Set(["-p", "--package"]),
+    source: none(),
+    // A user or global config file can set the registry (F11 repair).
+    index: /* @__PURE__ */ new Set(["--registry", "--userconfig", "--globalconfig"]),
+    extra: none(),
+    bare: /* @__PURE__ */ new Set([
+      "--",
+      "-y",
+      "--yes",
+      "--no",
+      "-q",
+      "--quiet",
+      "-s",
+      "--silent",
+      "--ignore-existing",
+      "--no-install",
+      "--prefer-offline",
+      "--prefer-online",
+      "--offline",
+      "-g",
+      "--global",
+      "-D",
+      "--dev",
+      "-E",
+      "--exact"
+    ])
+  },
+  other: { value: none(), pkg: none(), source: none(), index: none(), extra: none(), bare: none() }
+};
 function isPackageInstallCommand(command) {
   return extractPackageNames(command).length > 0;
 }
@@ -18883,70 +19007,250 @@ function parseEcosystem(command) {
   return matchInstall(command)?.pattern.ecosystem ?? null;
 }
 function extractPackageNames(command) {
-  const install = matchInstall(command);
-  if (!install) return [];
-  const { ecosystem } = install.pattern;
-  return packageTokens(install.args).map((token) => parsePackageToken(token, ecosystem)).filter((p) => p !== null);
+  return analyzeInstall(command)?.packages ?? [];
 }
 function unpinnedPipPackages(command) {
-  const install = matchInstall(command);
+  const install = analyzeInstall(command);
   if (!install?.pattern.requirePin) return [];
-  return packageTokens(install.args).filter((token) => parsePackageToken(token, "pypi") !== null && !EXACT_PIN.test(pipSpec(token))).map((token) => parsePackageToken(token, "pypi").name);
+  return install.named.filter(({ raw }) => !EXACT_PIN.test(pipSpec(raw))).map(({ pkg }) => pkg.name);
 }
 function pipSpec(token) {
   return token.split(";")[0].replace(/\s+/g, "");
 }
+var LEADER = new RegExp(String.raw`^(?:(?:${[
+  String.raw`sudo(?:\s+(?:-[ugCDhpRrTt]\s+(?!-)\S+|-\S+))*`,
+  String.raw`doas(?:\s+-u\s+\S+)?`,
+  String.raw`env(?:\s+(?:-[uCS]\s+(?!-)\S+|-\S+))*`,
+  String.raw`timeout(?:\s+(?:-[sk]\s+(?!-)\S+|-\S+))*\s+\d+(?:\.\d+)?[smhd]?`,
+  String.raw`nice(?:\s+-n\s+-?\d+|\s+-\d+)?`,
+  String.raw`exec(?:\s+-a\s+\S+|\s+-[cl]+)*`,
+  "time",
+  "nohup",
+  "command",
+  "builtin"
+].join("|")})\s+|[{(]\s*)+`);
 function stripLeaders(segment) {
-  return segment.trim().replace(/^(?:(?:sudo|time|nohup|command)\s+|[{(]\s*)+/, "").replace(/\s*[})]\s*$/, "");
+  return segment.trim().replace(LEADER, "").replace(/\s*[})]\s*$/, "");
+}
+function stripPrefixes(command) {
+  let s = command.trim();
+  for (let prev = ""; s !== prev; ) {
+    prev = s;
+    s = stripLeaders(stripEnvPrefix(s)).trim();
+  }
+  return s;
 }
 function installSegments(command, tool = "Bash", depth = 0) {
   try {
     const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
-    const found = segments.map(stripLeaders).filter(isPackageInstallCommand);
+    const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool));
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
     return [...found, ...nested.flatMap((inner) => installSegments(inner, tool, depth + 1))];
   } catch {
-    return isPackageInstallCommand(command) ? [command.trim()] : [];
+    return needsCheck(command, tool) ? [command.trim()] : [];
   }
 }
+function needsCheck(segment, tool) {
+  const a = analyzeInstall(segment);
+  if (!a) return hiddenInstall(segment, tool);
+  return a.packages.length > 0 || a.unparsed.length > 0 || a.customIndex.length > 0 || a.ambiguous.length > 0 || a.pattern.kind === "lockfile";
+}
+var ANY_WORD = /./;
+var word = (alts) => new RegExp(`^${alts}$`);
+var MANAGER_VERBS = [
+  [/^npm$/, new RegExp(`^(?:${NPM_INSTALL.slice(3, -1)}|${NPM_CI.slice(3, -1)}|${NPM_UPDATE.slice(3, -1)}|exec|x|create|init|innit)$`)],
+  [/^pnpm$/, /^(?:add|install|i|dlx|create|update|up|upgrade)$/],
+  [/^yarn$/, /^(?:add|dlx|create|up|upgrade)$/],
+  [/^bun$/, /^(?:add|a|install|i|x|create|update)$/],
+  [/^(?:pip\d*(?:\.\d+)?|uv|pipx|pipenv)$/, word(PIP_VERBS)],
+  [/^(?:uv|poetry)$/, /^add$/],
+  [/^cargo$/, /^(?:add|install)$/],
+  [/^go$/, /^(?:get|install)$/],
+  [/^gem$/, /^install$/],
+  [/^composer$/, /^require$/],
+  [/^deno$/, /^(?:install|i|add)$/],
+  [/^(?:npx|pnpx|bunx|uvx)$/, ANY_WORD]
+];
+function commandName(word2) {
+  return (word2.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.(?:cmd|exe|ps1)$/, "");
+}
+function managerVerbs(word2) {
+  const names = [commandName(word2), commandName(word2.replace(/\\/g, ""))];
+  return MANAGER_VERBS.find(([manager]) => names.some((n) => manager.test(n)))?.[1];
+}
+function verbOrHidden(word2, verbs) {
+  return /^[$`]/.test(word2) || verbs.test(word2) || verbs.test(word2.replace(/\\/g, ""));
+}
+var ANY_VERB = new RegExp(`^(?:${MANAGER_VERBS.filter(([, v]) => v !== ANY_WORD).map(([, v]) => v.source.replace(/^\^|\$$/g, "")).join("|")})$`);
+var START_PROCESS = /^(?:start-process|saps|start)$/i;
+var NOT_INSTALL = /^(?:test|t|tst|run|run-script|start|stop|restart|build|exec)$/;
+function anyManagerInstall(words) {
+  return words.some((w, i) => {
+    const verbs = managerVerbs(w);
+    if (verbs === void 0) return false;
+    let subcommandSeen = false;
+    for (let j = i + 1; j < words.length; j++) {
+      const v = words[j];
+      if (verbs.test(v)) return true;
+      if (v === "--" && subcommandSeen) return false;
+      if (v.startsWith("-") || words[j - 1].startsWith("-")) continue;
+      if (NOT_INSTALL.test(v)) return false;
+      subcommandSeen = true;
+    }
+    return false;
+  });
+}
+function hiddenInstall(segment, tool) {
+  const scan = stripQuotedStrings(segment, tool).replace(/\$\([^)]*\)?|`[^`]*`?/g, "");
+  if (INSTALL_PATTERNS.some((p) => p.loose.test(scan))) return true;
+  if (anyManagerInstall(tokenize(scan))) return true;
+  return commandWordInstall(segment);
+}
+function commandWordInstall(segment) {
+  const words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(",")).filter(Boolean);
+  if (words[0] === "&") words.shift();
+  if (words.length < 2) return false;
+  if (START_PROCESS.test(words[0])) return anyManagerInstall(words);
+  const next = words.slice(1).find((w) => !w.startsWith("-"));
+  if (next === void 0) return false;
+  if (/^[$`]/.test(words[0])) return ANY_VERB.test(next);
+  const verbs = managerVerbs(words[0]);
+  return verbs !== void 0 && verbOrHidden(next, verbs);
+}
+var QUOTED_WORD = /(^|\s)(["'])([^"'\s]+)\2(?=\s|$)/g;
 function matchInstall(command) {
-  const trimmed = stripEnvPrefix(command).trim();
-  for (const pattern of INSTALL_PATTERNS) {
-    const m = trimmed.match(pattern.regex);
-    if (m) return { pattern, args: trimmed.slice(m[0].length) };
+  const trimmed = stripPrefixes(command);
+  const unquoted = stripPrefixes(command.replace(QUOTED_WORD, "$1$3"));
+  for (const text of trimmed === unquoted ? [trimmed] : [trimmed, unquoted]) {
+    for (const pattern of INSTALL_PATTERNS) {
+      const m = text.match(pattern.regex);
+      if (m) return { pattern, head: m[0], args: text.slice(m[0].length) };
+    }
   }
   return null;
 }
-function packageTokens(args) {
-  const out = [];
-  let skipNext = false;
-  for (const token of tokenize(args)) {
-    if (skipNext) {
-      skipNext = false;
+var takesValue = (t, n) => t.value.has(n) || t.pkg.has(n) || t.source.has(n) || t.index.has(n) || t.extra.has(n);
+var isIndexFlag = (t, n) => t.index.has(n) || /^--@[^:\s]+:registry$/.test(n);
+function splitFlag(token, table) {
+  const eq = token.indexOf("=");
+  if (token.startsWith("--") && eq > 2) return { name: token.slice(0, eq), inline: token.slice(eq + 1) };
+  const short = token.slice(0, 2);
+  if (/^-[A-Za-z]./.test(token) && takesValue(table, short)) return { name: short, inline: token.slice(2) };
+  return { name: token };
+}
+function createPackage(token) {
+  if (NPM_NON_REGISTRY.test(token)) return token;
+  const scoped = token.match(/^(@[^/@]+)(?:\/([^@]+))?(@.*)?$/);
+  if (scoped) return `${scoped[1]}/create${scoped[2] ? `-${scoped[2]}` : ""}${scoped[3] ?? ""}`;
+  return `create-${token}`;
+}
+var INDEX_ENV = /(?:^|\s)(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|UV_(?:EXTRA_|DEFAULT_)?INDEX(?:_URL)?|UV_FIND_LINKS|npm_config_registry|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY)=\S*/gi;
+var INDEX_CONFIG = [
+  /\b(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|PIP_CONFIG_FILE|UV_(?:EXTRA_|DEFAULT_)?INDEX(?:_URL)?|UV_FIND_LINKS|UV_CONFIG_FILE|npm_config_(?:registry|userconfig|globalconfig)|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|YARN_RC_FILENAME|BUN_CONFIG_REGISTRY)\s*=/gi,
+  /\bconfig\s+set\s+\S*(?:registry|userconfig|globalconfig|index|find-links)\S*/gi,
+  /--(?:userconfig|globalconfig)\b/g,
+  /--@[^\s=:]+:registry\b/g
+];
+function indexConfigMarkers(command) {
+  return [...new Set(INDEX_CONFIG.flatMap((re) => [...command.matchAll(re)].map((m) => m[0].replace(/\s*=$/, ""))))];
+}
+function analyzeInstall(command) {
+  const install = matchInstall(command);
+  if (!install) return null;
+  const { pattern } = install;
+  const table = FLAG_TABLES[pattern.flags];
+  const out = { pattern, named: [], packages: [], unparsed: [], customIndex: [], ambiguous: [] };
+  const add = (raw) => {
+    const t = classifyToken(raw, pattern);
+    if (t.pkg) {
+      out.named.push({ raw, pkg: t.pkg });
+      out.packages.push(t.pkg);
+    }
+    if (t.unparsed) out.unparsed.push(raw);
+  };
+  for (const m of command.matchAll(INDEX_ENV)) out.customIndex.push(m[0].trim());
+  const headWords = tokenize(install.head);
+  headWords.forEach((word2, i) => {
+    const { name, inline } = splitFlag(word2, table);
+    if (isIndexFlag(table, name)) out.customIndex.push(`${name} ${inline ?? headWords[i + 1] ?? ""}`.trim());
+  });
+  const words = tokenize(install.args);
+  const runner = pattern.kind === "first" || pattern.kind === "create";
+  let pkgFlagSeen = false;
+  let unknownFlag;
+  for (let i = 0; i < words.length; i++) {
+    const word2 = words[i];
+    if (word2.startsWith("-")) {
+      const { name, inline } = splitFlag(word2, table);
+      const value = inline ?? (takesValue(table, name) ? words[++i] : void 0);
+      unknownFlag = value === void 0 && !table.bare.has(name) ? word2 : void 0;
+      if (isIndexFlag(table, name)) out.customIndex.push(`${name} ${value ?? ""}`.trim());
+      else if (pattern.flags === "node" && (name === "-c" || name === "--call")) out.ambiguous.push(`${name} ${value ?? ""}`.trim());
+      else if (table.pkg.has(name) && value !== void 0) {
+        pkgFlagSeen = true;
+        add(value);
+      } else if (table.extra.has(name) && value !== void 0) add(value);
+      else if (table.source.has(name) && value !== void 0 && isRemoteSource(value)) out.unparsed.push(value);
+      else if (`${word2} ${value ?? ""}`.includes("://")) out.customIndex.push(`${word2} ${value ?? ""}`.trim());
+      if (name === "--tag" && value !== void 0) out.tag = value;
       continue;
     }
-    if (FLAGS_WITH_VALUE.has(token)) {
-      skipNext = true;
-      continue;
+    if (pattern.kind === "run") break;
+    if (runner) {
+      if (unknownFlag !== void 0) out.ambiguous.push(`${unknownFlag} ${word2}`);
+      else if (!pkgFlagSeen) {
+        const before = out.packages.length;
+        add(pattern.kind === "create" ? createPackage(word2) : word2);
+        const pkg = out.packages[before];
+        if (pattern.preferLocal && pkg && !pkg.version && !out.tag && !pkg.name.startsWith("@")) out.localBin = pkg;
+      }
+      break;
     }
-    if (STANDALONE_FLAGS.test(token)) continue;
-    out.push(token);
+    add(word2);
   }
   return out;
 }
+function isRemoteSource(token) {
+  return /:\/\/|^(?:git|hg|svn|bzr)\+|@|^(?:\\\\|\/\/)/i.test(token);
+}
+var NPM_NON_REGISTRY = /[:\\]|^[.~/]|\.(?:tgz|tar|tar\.gz)$|^[^@][^/]*\//i;
+var NPM_NAME = /^(?:@[\w.~-]+\/)?[\w.~-]+$/;
+var ARCHIVE = /\.(?:whl|zip|tgz|tar|tar\.gz|tar\.bz2|tar\.xz)$/i;
+function classifyToken(token, pattern) {
+  const { ecosystem } = pattern;
+  if (ecosystem === "npm") {
+    if (NPM_NON_REGISTRY.test(token)) return { unparsed: true };
+    const pkg2 = parsePackageToken(token, ecosystem);
+    if (pkg2?.version && NPM_NON_REGISTRY.test(pkg2.version)) return { unparsed: true };
+    return pkg2 && NPM_NAME.test(pkg2.name) ? { pkg: pkg2 } : { unparsed: true };
+  }
+  if (ecosystem === "pypi") {
+    const spec = pipSpec(token);
+    const at = pattern.kind === "first" ? spec.match(/^([A-Za-z0-9_.-]+)@([^:/@]+)$/) : null;
+    if (at) return { pkg: { name: at[1], version: at[2] === "latest" ? void 0 : at[2] } };
+    if (isRemoteSource(spec) || ARCHIVE.test(spec)) return { unparsed: true };
+    if (/^[.~/]|[\\/]/.test(token)) return {};
+    const pkg2 = parsePackageToken(token, ecosystem);
+    return pkg2 ? { pkg: pkg2 } : { unparsed: true };
+  }
+  if (pattern.remoteOnly && !token.includes("@")) return {};
+  const pkg = parsePackageToken(token, ecosystem);
+  return pkg ? { pkg } : { unparsed: true };
+}
+var BASH_OVERRIDE = /^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*SKIP_PACKAGE_GUARD=1(?=[ \t]|$)/;
+var PS_OVERRIDE = /^\s*\$(?:env|Env|ENV):SKIP_PACKAGE_GUARD=1\s*(?:;|\r?\n)/;
 function checkOverride(command) {
-  return /\bSKIP_PACKAGE_GUARD=1\b/.test(command);
+  return BASH_OVERRIDE.test(command) || PS_OVERRIDE.test(command);
 }
 function checkMaliciousPackage(name, version, ecosystem) {
   const ecosystemKey = ecosystem === "pypi" ? "pypi" : "npm";
   if (ecosystemKey !== "pypi" && ecosystemKey !== "npm") {
     return { blocked: false };
   }
-  const registry = malicious_packages_default[ecosystemKey];
-  if (!registry) return { blocked: false };
-  const entry = registry[name.toLowerCase()];
+  const entry = blocklistIndex(ecosystemKey).get(normalizeName(name, ecosystemKey));
   if (!entry) return { blocked: false };
+  version = canonicalVersion(version, ecosystemKey);
   if (entry.blocked_all === true) {
     return {
       blocked: true,
@@ -18954,7 +19258,7 @@ function checkMaliciousPackage(name, version, ecosystem) {
     };
   }
   if (entry.blocked_versions && Array.isArray(entry.blocked_versions)) {
-    if (version && entry.blocked_versions.includes(version)) {
+    if (version && entry.blocked_versions.some((v) => canonicalVersion(v, ecosystemKey) === version)) {
       return {
         blocked: true,
         reason: entry.reason || `Version ${version} of "${name}" is known malicious`
@@ -18968,6 +19272,29 @@ function checkMaliciousPackage(name, version, ecosystem) {
     }
   }
   return { blocked: false };
+}
+function normalizeName(name, ecosystem) {
+  const lower = name.toLowerCase();
+  return ecosystem === "pypi" ? lower.replace(/[-_.]+/g, "-") : lower;
+}
+var blocklistCache = /* @__PURE__ */ new Map();
+function blocklistIndex(ecosystem) {
+  let index = blocklistCache.get(ecosystem);
+  if (!index) {
+    const registry = malicious_packages_default[ecosystem] ?? {};
+    index = new Map(Object.entries(registry).map(([k, v]) => [normalizeName(k, ecosystem), v]));
+    blocklistCache.set(ecosystem, index);
+  }
+  return index;
+}
+function pep440Key(v) {
+  return v.toLowerCase().replace(/^v/, "").replace(/^(\d+(?:\.\d+)*)/, (rel) => rel.split(".").map((n) => n.replace(/^0+(?=\d)/, "")).join(".").replace(/(\.0+)+$/, ""));
+}
+function canonicalVersion(version, ecosystem) {
+  if (!version) return void 0;
+  if (ecosystem === "pypi") return pep440Key(version);
+  const v = version.trim().replace(/^=+/, "").replace(/^v/i, "").replace(/\+.*$/, "");
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v) ? v : void 0;
 }
 async function checkOsvAdvisory(name, version, ecosystem) {
   if (ecosystem !== "pypi" && ecosystem !== "npm") {
@@ -19016,7 +19343,7 @@ async function checkOsvAdvisory(name, version, ecosystem) {
   }
 }
 function queryOsv(name, version, ecosystem) {
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     const body = {
       package: { name, ecosystem }
     };
@@ -19024,7 +19351,7 @@ function queryOsv(name, version, ecosystem) {
       body.version = version;
     }
     const postData = JSON.stringify(body);
-    const timer = setTimeout(() => resolve([]), 5e3);
+    const timer = setTimeout(() => resolve2([]), 5e3);
     const req = https.request(
       {
         hostname: "api.osv.dev",
@@ -19045,21 +19372,21 @@ function queryOsv(name, version, ecosystem) {
           clearTimeout(timer);
           try {
             const json = JSON.parse(data);
-            resolve(json.vulns || []);
+            resolve2(json.vulns || []);
           } catch {
-            resolve([]);
+            resolve2([]);
           }
         });
       }
     );
     req.on("error", () => {
       clearTimeout(timer);
-      resolve([]);
+      resolve2([]);
     });
     req.on("timeout", () => {
       req.destroy();
       clearTimeout(timer);
-      resolve([]);
+      resolve2([]);
     });
     req.write(postData);
     req.end();
@@ -19101,7 +19428,7 @@ function publishDateFromRegistryJson(json, ecosystem, requestedVersion) {
   if (!doc) return null;
   if (ecosystem === "pypi") {
     const exact2 = requestedVersion && /^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$/i.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
-    const norm = (v) => v.toLowerCase().replace(/^v/, "").replace(/^(\d+(?:\.\d+)*)/, (rel) => rel.replace(/(\.0+)+$/, ""));
+    const norm = pep440Key;
     const releaseKey = exact2 ? doc.releases?.[exact2] ? exact2 : Object.keys(doc.releases ?? {}).find((k) => norm(k) === norm(exact2)) : void 0;
     const version2 = releaseKey ?? doc.info?.version;
     let newest = null;
@@ -19112,15 +19439,28 @@ function publishDateFromRegistryJson(json, ecosystem, requestedVersion) {
     return newest;
   }
   const exact = requestedVersion && /^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
-  const version = exact && doc.time?.[exact] ? exact : doc["dist-tags"]?.latest;
+  const tags = doc["dist-tags"] ?? {};
+  const tagged = requestedVersion && Object.prototype.hasOwnProperty.call(tags, requestedVersion) ? tags[requestedVersion] : void 0;
+  let version = exact && doc.time?.[exact] ? exact : tagged ?? tags.latest;
+  if (!exact && tagged === void 0 && requestedVersion && /\d/.test(requestedVersion) && requestedVersion.includes("-")) {
+    version = newestNpmVersion(doc.time) ?? version;
+  }
   const timeEntry = doc.time?.[version];
   return timeEntry ? new Date(timeEntry) : null;
 }
+function newestNpmVersion(time) {
+  let best;
+  for (const [v, t] of Object.entries(time ?? {})) {
+    if (v === "created" || v === "modified" || Number.isNaN(Date.parse(t))) continue;
+    if (!best || Date.parse(t) > Date.parse(time[best])) best = v;
+  }
+  return best;
+}
 function fetchPublishDate(name, ecosystem, requestedVersion) {
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     const url = ecosystem === "pypi" ? `https://pypi.org/pypi/${encodeURIComponent(name)}/json` : `https://registry.npmjs.org/${encodeURIComponent(name)}`;
     const timer = setTimeout(() => {
-      resolve(null);
+      resolve2(null);
     }, 5e3);
     const req = https.get(url, { timeout: 5e3 }, (res) => {
       let data = "";
@@ -19130,20 +19470,20 @@ function fetchPublishDate(name, ecosystem, requestedVersion) {
       res.on("end", () => {
         clearTimeout(timer);
         try {
-          resolve(publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion));
+          resolve2(publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion));
         } catch {
-          resolve(null);
+          resolve2(null);
         }
       });
     });
     req.on("error", () => {
       clearTimeout(timer);
-      resolve(null);
+      resolve2(null);
     });
     req.on("timeout", () => {
       req.destroy();
       clearTimeout(timer);
-      resolve(null);
+      resolve2(null);
     });
   });
 }
@@ -19176,11 +19516,7 @@ function tokenize(command) {
   return tokens;
 }
 function parsePackageToken(token, ecosystem) {
-  if (token.includes("/") && !token.startsWith("@") && ecosystem !== "go" && ecosystem !== "composer") {
-    return null;
-  }
   if (ecosystem === "pypi") {
-    if (/^\.|\\|\.(?:whl|zip|tgz|tar\.gz)$/i.test(token)) return null;
     const match = pipSpec(token).match(/^([a-zA-Z0-9_.-]+)(?:\[.*?\])?(?:[=<>~!]+(.+))?$/);
     if (match) {
       return { name: match[1], version: match[2] || void 0 };
@@ -19235,39 +19571,79 @@ function readStdin() {
   return readFileSync(0, "utf-8");
 }
 var OVERRIDE = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
-async function checkInstall(segment) {
-  const ecosystem = parseEcosystem(segment);
+function asksFor(segment, install, cwd) {
+  if (!install) {
+    return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
+  }
+  const asks = [];
+  const { pattern } = install;
+  if (pattern.kind === "lockfile" && !["package-lock.json", "npm-shrinkwrap.json"].some((f) => existsSync(join2(cwd, f)))) {
+    asks.push(`Lockfile install with no package-lock.json in ${cwd}. Nothing pinned to check.`);
+  }
+  if (install.unparsed.length > 0) {
+    asks.push(`Non-registry source: ${install.unparsed.join(", ")}. A URL, VCS, github:, user/repo, path or tarball install skips the blocklist, OSV and age checks.`);
+  }
+  if (install.customIndex.length > 0) {
+    asks.push(`Custom package index: ${install.customIndex.join(", ")}. The checks read the public PyPI or npm registry, not this index.`);
+  }
+  if (install.ambiguous.length > 0) {
+    asks.push(`Runner flag the guard cannot read: ${install.ambiguous.join(", ")}. The flag may take the next word as its value, so the package that runs is not known.`);
+  }
+  if (pattern.ecosystem !== "pypi" && pattern.ecosystem !== "npm") {
+    const names = install.packages.map((p) => p.name).join(", ") || segment.slice(0, 200);
+    asks.push(`No blocklist, OSV or age check exists for ${pattern.ecosystem} packages: ${names}.`);
+  }
+  return asks;
+}
+var LOCAL_BIN_MAX_LEVELS = 10;
+function hasLocalBin(name, cwd) {
+  let dir = resolve(cwd);
+  for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
+    if (existsSync(join2(dir, "package.json")) || existsSync(join2(dir, "node_modules"))) {
+      const binDir = join2(dir, "node_modules", ".bin");
+      return ["", ".cmd", ".ps1"].some((ext) => existsSync(join2(binDir, name + ext)));
+    }
+    const parent = dirname2(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+  return false;
+}
+async function checkInstall(segment, cwd) {
+  const install = analyzeInstall(segment);
+  const asks = asksFor(segment, install, cwd);
   const advisories = [];
-  if (ecosystem !== "pypi" && ecosystem !== "npm") return { advisories };
-  const packages = extractPackageNames(segment);
+  const ecosystem = install?.pattern.ecosystem;
+  if (ecosystem !== "pypi" && ecosystem !== "npm") return { asks, advisories };
+  const packages = install.packages.filter((p) => p !== install.localBin || !hasLocalBin(p.name, cwd));
   for (const pkg of packages) {
     const typo = checkTyposquat(pkg.name, ecosystem);
     if (typo.isTyposquat) {
-      return { advisories, deny: `PACKAGE SECURITY: Suspected typosquat. "${pkg.name}" looks like "${typo.similarTo}". ${typo.reason}. Package: ${pkg.name}. ${OVERRIDE}` };
+      return { asks, advisories, deny: `PACKAGE SECURITY: Suspected typosquat. "${pkg.name}" looks like "${typo.similarTo}". ${typo.reason}. Package: ${pkg.name}. ${OVERRIDE}` };
     }
     const malCheck = checkMaliciousPackage(pkg.name, pkg.version, ecosystem);
     if (malCheck.blocked) {
-      return { advisories, deny: `PACKAGE SECURITY: Known malicious package/version. ${malCheck.reason}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
+      return { asks, advisories, deny: `PACKAGE SECURITY: Known malicious package/version. ${malCheck.reason}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
     }
     if (malCheck.warning) advisories.push(malCheck.warning);
   }
   const unpinned = unpinnedPipPackages(segment);
   if (unpinned.length > 0) {
-    return { advisories, deny: `PACKAGE SECURITY: Unpinned pip install. Every pip install needs an exact == pin. Unpinned: ${unpinned.join(", ")}. Pin each one, for example ${unpinned[0]}==<version>, with a version at least 7 days old on PyPI.` };
+    return { asks, advisories, deny: `PACKAGE SECURITY: Unpinned pip install. Every pip install needs an exact == pin. Unpinned: ${unpinned.join(", ")}. Pin each one, for example ${unpinned[0]}==<version>, with a version at least 7 days old on PyPI.` };
   }
   for (const pkg of packages) {
     const osvResult = await checkOsvAdvisory(pkg.name, pkg.version, ecosystem);
     if (osvResult.blocked) {
-      return { advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
+      return { asks, advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
     }
     if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
-    const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version);
+    const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version ?? install.tag);
     if (ageResult.blocked) {
-      return { advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };
+      return { asks, advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };
     }
     if (ageResult.warning) advisories.push(`PACKAGE ADVISORY: ${ageResult.warning}`);
   }
-  return { advisories };
+  return { asks, advisories };
 }
 async function main() {
   let input;
@@ -19295,22 +19671,37 @@ async function main() {
     return;
   }
   const installs = [...new Set(shell.dialects.flatMap((dialect) => installSegments(command, dialect)))];
-  if (installs.length > 0 && checkOverride(command)) {
+  const wholeOverride = PS_OVERRIDE.test(command);
+  const checked = installs.filter((segment) => !wholeOverride && !checkOverride(segment));
+  if (checked.length < installs.length) {
     logGuardDecision("package-install-guard", input, "override", "SKIP_PACKAGE_GUARD", { command });
   }
-  if (installs.length === 0 || checkOverride(command)) {
+  if (checked.length === 0) {
     outputContinue();
     return;
   }
+  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const advisories = [];
-  for (const segment of installs) {
-    const result = await checkInstall(segment);
+  const asks = [];
+  for (const segment of checked) {
+    const result = await checkInstall(segment, cwd);
     if (result.deny) {
       logGuardDecision("package-install-guard", input, "deny", result.deny.replace(/^PACKAGE SECURITY:\s*/, "").split(/\.\s/)[0], { command });
       outputDeny(result.deny);
       return;
     }
+    asks.push(...result.asks);
     advisories.push(...result.advisories);
+  }
+  const config = indexConfigMarkers(command);
+  if (config.length > 0 && !asks.some((a) => a.startsWith("Custom package index"))) {
+    asks.push(`Custom package index or config in the command: ${config.join(", ")}. The checks read the public PyPI or npm registry, not this index.`);
+  }
+  if (asks.length > 0) {
+    const decision = isUnattended(input) ? "deny" : "ask";
+    logGuardDecision("package-install-guard", input, decision, asks[0].split(/\.\s/)[0], { command });
+    outputDeny(`PACKAGE SECURITY: ${asks.join(" ")} ${OVERRIDE}`, decision);
+    return;
   }
   if (advisories.length > 0) {
     outputAllowWithAdvisory(advisories.join("\n"));
