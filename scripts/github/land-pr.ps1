@@ -186,8 +186,14 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     Write-Host "  -IgnoreReview: skipping the READY check and the pre-merge re-check"
     # Dave's own yes. The none-pick check still runs, as a warning only, so the yes is informed. It never blocks.
     Step "none-pick check for #$Pr (warning only)"
-    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --warn
-    $noneCode = $LASTEXITCODE
+    # A launch failure (node missing) must not stop the merge under -IgnoreReview: catch it and warn below.
+    try {
+      $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --warn
+      $noneCode = $LASTEXITCODE
+    } catch {
+      $noneOut = @()
+      $noneCode = 127
+    }
     Show-NoneOutput $noneOut
     if (-not (Add-NoneLine $noneOut) -and $noneCode) {
       # --warn exits 0 on every path it reaches. A non-zero exit with no line means the helper did not run (node missing, crash).

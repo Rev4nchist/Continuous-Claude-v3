@@ -382,8 +382,11 @@ const readsStore = (segment: string): boolean => {
  * Not covered, accepted: a path built in code or by a glob that never names `ccv3-mods`, and an `ls` of the folder (it is a read).
  */
 export const namesStore = (command: string): boolean => {
-  if (!STORE_NAME_LIKE.test(command.replace(/['"`^]/g, ''))) return false
-  return command.split(SLOT_SEPARATORS).some(segment => STORE_NAME_LIKE.test(segment.replace(/['"`^]/g, '')) && !readsStore(segment))
+  const bare = (text: string) => text.replace(/['"`^]/g, '')
+  if (!STORE_NAME_LIKE.test(bare(command))) return false
+  const hits = command.split(SLOT_SEPARATORS).filter(segment => STORE_NAME_LIKE.test(bare(segment)))
+  // A name split across pieces (a PowerShell backtick escape) matches no single piece: deny.
+  return hits.length === 0 || hits.some(segment => !readsStore(segment))
 }
 
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
