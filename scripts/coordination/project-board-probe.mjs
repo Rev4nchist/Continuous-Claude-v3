@@ -238,7 +238,9 @@ async function main() {
 
     // 7. a dir with no board
     const noBoard = lane(dirC, SA, ['board']);
-    check('(7) cwd C (planted .git file) exits 1 and names the register command', noBoard.code === 1 && /project register/.test(noBoard.err),
+    // C sits in the OS temp dir, which register refuses, so the hint is the --project escape and not the register command.
+    check('(7) cwd C (planted .git file, in the temp dir) exits 1 and names --project continuous-claude',
+      noBoard.code === 1 && /no lane board for/.test(noBoard.err) && /--project continuous-claude/.test(noBoard.err),
       `exit ${noBoard.code}; ${noBoard.err.trim().split('\n')[0]}`);
     skip('(7b) the lane-context hook returns {} for cwd C', 'the hooks change in the next PR');
 

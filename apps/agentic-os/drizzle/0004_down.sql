@@ -14,9 +14,8 @@ SET LOCAL lock_timeout = '3s';--> statement-breakpoint
 DROP TRIGGER IF EXISTS lane_guard_foreign_board ON agentic_os.lane;--> statement-breakpoint
 DROP FUNCTION IF EXISTS agentic_os.lane_guard_foreign_board();--> statement-breakpoint
 DROP INDEX IF EXISTS agentic_os.lane_event_project_id_idx;--> statement-breakpoint
-DROP INDEX IF EXISTS agentic_os.lane_project_id_uniq;--> statement-breakpoint
 DROP INDEX IF EXISTS agentic_os.lane_project_state_priority_idx;--> statement-breakpoint
-DROP INDEX IF EXISTS agentic_os.lane_track_priority_idx;--> statement-breakpoint
+DROP INDEX IF EXISTS agentic_os.lane_project_track_priority_idx;--> statement-breakpoint
 ALTER TABLE agentic_os.lane_event DROP COLUMN IF EXISTS project_key;--> statement-breakpoint
 ALTER TABLE agentic_os.lane DROP COLUMN IF EXISTS project_key;--> statement-breakpoint
 CREATE INDEX lane_track_priority_idx ON agentic_os.lane USING btree (track, priority);

@@ -51,6 +51,8 @@ export function laneEnv(url, b, extra = {}) {
     ...env,
     CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
     LANE_REGISTRY_PATH: b.registry, CCV3_IDENTITY_DIR: b.identityDir,
+    // `project register` refuses a second board until the live hook sets lane.client_version (PR2). Probes only.
+    LANE_SKIP_HOOK_PRECHECK: '1',
     ...extra,
   };
 }

@@ -1,5 +1,5 @@
 {
-  "id": "97b3d945-83bd-4716-b3fa-6f7a1c640860",
+  "id": "691afa4d-847c-404b-9dd4-2e20bd4c4b9d",
   "prevId": "d8ef9785-231a-4de0-bf43-ced104f4066c",
   "version": "7",
   "dialect": "postgresql",
@@ -264,8 +264,8 @@
           "method": "btree",
           "with": {}
         },
-        "lane_track_priority_idx": {
-          "name": "lane_track_priority_idx",
+        "lane_project_track_priority_idx": {
+          "name": "lane_project_track_priority_idx",
           "columns": [
             {
               "expression": "project_key",
@@ -320,27 +320,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "lane_project_id_uniq": {
-          "name": "lane_project_id_uniq",
-          "columns": [
-            {
-              "expression": "project_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}

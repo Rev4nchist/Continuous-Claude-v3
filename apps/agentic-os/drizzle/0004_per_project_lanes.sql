@@ -2,18 +2,18 @@ SET LOCAL lock_timeout = '3s';--> statement-breakpoint
 DROP INDEX "agentic_os"."lane_track_priority_idx";--> statement-breakpoint
 ALTER TABLE "agentic_os"."lane" ADD COLUMN "project_key" text DEFAULT 'continuous-claude' NOT NULL;--> statement-breakpoint
 ALTER TABLE "agentic_os"."lane_event" ADD COLUMN "project_key" text DEFAULT 'continuous-claude' NOT NULL;--> statement-breakpoint
+CREATE INDEX "lane_project_track_priority_idx" ON "agentic_os"."lane" USING btree ("project_key","track","priority");--> statement-breakpoint
 CREATE INDEX "lane_project_state_priority_idx" ON "agentic_os"."lane" USING btree ("project_key","state","priority","id");--> statement-breakpoint
-CREATE UNIQUE INDEX "lane_project_id_uniq" ON "agentic_os"."lane" USING btree ("project_key","id");--> statement-breakpoint
 CREATE INDEX "lane_event_project_id_idx" ON "agentic_os"."lane_event" USING btree ("project_key","id");--> statement-breakpoint
-CREATE INDEX "lane_track_priority_idx" ON "agentic_os"."lane" USING btree ("project_key","track","priority");--> statement-breakpoint
--- Everything above is drizzle-kit output. Everything below is added by hand.
--- Re-apply this block if 0004 is regenerated.
+-- Everything above is drizzle-kit output (plus the SET LOCAL lock_timeout on line 1).
+-- Everything below is added by hand. Re-apply both if 0004 is regenerated.
 --
 -- T3 fence. A lane.mjs copy that predates per-project boards never sets
 -- lane.client_version. It keeps working on CCv3 lanes, but it cannot change or
 -- delete a lane that belongs to another board. The setting is a cooperative flag,
 -- not a security boundary: any writer can set it. New lane.mjs runs
--- SET LOCAL lane.client_version = '2' in every write transaction.
+-- SELECT set_config('lane.client_version', '2', false) once per connection
+-- (session level, not SET LOCAL), so it covers every statement on that connection.
 -- OLD.project_key is checked: a DELETE has no NEW row.
 CREATE OR REPLACE FUNCTION agentic_os.lane_guard_foreign_board() RETURNS trigger
 LANGUAGE plpgsql AS $$

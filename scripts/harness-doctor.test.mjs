@@ -22,6 +22,9 @@
 //          database skipped / no URL / unreadable (PASS / WARN / WARN); against a real scratch database: WARN, then PASS once the row exists
 //   lanes:board-columns: both columns (PASS), none (WARN, never FAIL: 0004 is not applied live yet), one of two (FAIL), no URL or unreadable (WARN);
 //          against real scratch databases with and without migration 0004
+//   lanes:schema: agentic_os.__migrations rows vs the journal. Skipped (PASS), no URL / unreachable / no journal / no table (WARN),
+//          equal with the trigger (PASS), behind by exactly 0004 (WARN "migration 0004 not applied"), behind by more (FAIL),
+//          ahead (WARN), equal but the trigger is gone (FAIL); against real scratch databases with a filled __migrations table
 //   lanes:worktree-lane-mjs: no worktrees dir (PASS absent), same file with CRLF (PASS), a different file (WARN, names the worktree)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,7 +35,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns } from './harness-doctor.mjs';
+import { parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns, laneSchema } from './harness-doctor.mjs';
 import { assertScratchUrl } from './coordination/scratch-db.mjs';
 
 const DOCTOR = join(dirname(fileURLToPath(import.meta.url)), 'harness-doctor.mjs');
@@ -688,10 +691,89 @@ test('end to end: with no database URL in the environment the two database check
   const fx = fixture();
   writeRegistry(fx, [entry('a', fwd(fx.root))]);
   const r = run(fx, [], { HARNESS_DOCTOR_NO_DB: '', CONTINUOUS_CLAUDE_DB_URL: '', DATABASE_URL: '', OPC_POSTGRES_URL: '' });
+  assert.equal(r.checks['lanes:schema'].status, 'WARN', r.stdout);
+  assert.match(r.checks['lanes:schema'].detail, /no database URL/);
   assert.equal(r.checks['lanes:board-columns'].status, 'WARN', r.stdout);
   assert.match(r.checks['lanes:board-columns'].detail, /no database URL/);
   assert.equal(r.checks['registry:project-rows'].status, 'WARN');
   assert.equal(r.code, 0, 'a WARN never exits 1');
+});
+
+const TAGS4 = ['0000_a', '0001_b', '0002_c', '0003_d'];
+const TAGS5 = [...TAGS4, '0004_per_project_lanes'];
+const journal = (tags) => ({ tags });
+
+test('lanes:schema: skipped is a PASS; no URL, an unreachable database, a missing journal and a missing table are WARNs, never FAILs', () => {
+  assert.equal(laneSchema({}, { facts: { skipped: true } }).status, 'PASS');
+  assert.equal(laneSchema({}, { facts: { noUrl: true } }).status, 'WARN');
+  const down = laneSchema({}, { facts: { error: 'connect ECONNREFUSED' } });
+  assert.equal(down.status, 'WARN');
+  assert.match(down.detail, /ECONNREFUSED/);
+  const noJournal = laneSchema({ repo: join(tmpdir(), 'hdoc-no-such-repo') }, { facts: { columns: 2, migrations: 5, trigger: 1 } });
+  assert.equal(noJournal.status, 'WARN');
+  assert.match(noJournal.detail, /_journal\.json/);
+  const noTable = laneSchema({}, { facts: { migrationsError: 'agentic_os.__migrations does not exist' }, journal: journal(TAGS5) });
+  assert.equal(noTable.status, 'WARN');
+  assert.match(noTable.detail, /__migrations/);
+});
+
+test('lanes:schema: equal with the trigger is a PASS; behind by exactly 0004 is a WARN that says so; behind by more is a FAIL', () => {
+  const ok = laneSchema({}, { facts: { migrations: 5, trigger: 1 }, journal: journal(TAGS5) });
+  assert.equal(ok.status, 'PASS', ok.detail);
+  assert.match(ok.detail, /5 of 5/);
+  const just0004 = laneSchema({}, { facts: { migrations: 4, trigger: 0 }, journal: journal(TAGS5) });
+  assert.equal(just0004.status, 'WARN');
+  assert.match(just0004.detail, /migration 0004 not applied/);
+  const more = laneSchema({}, { facts: { migrations: 3, trigger: 0 }, journal: journal(TAGS5) });
+  assert.equal(more.status, 'FAIL');
+  assert.match(more.detail, /3 migrations applied, the journal lists 5/);
+  const otherGap = laneSchema({}, { facts: { migrations: 5, trigger: 1 }, journal: journal([...TAGS5, '0005_next']) });
+  assert.equal(otherGap.status, 'FAIL', 'a gap of one that is not 0004 is a FAIL');
+});
+
+test('lanes:schema: the trigger is required once the journal lists 0004; without 0004 in the journal it is not', () => {
+  const gone = laneSchema({}, { facts: { migrations: 5, trigger: 0 }, journal: journal(TAGS5) });
+  assert.equal(gone.status, 'FAIL');
+  assert.match(gone.detail, /lane_guard_foreign_board/);
+  const main = laneSchema({}, { facts: { migrations: 4, trigger: 0 }, journal: journal(TAGS4) });
+  assert.equal(main.status, 'PASS', main.detail);
+  const ahead = laneSchema({}, { facts: { migrations: 5, trigger: 1 }, journal: journal(TAGS4) });
+  assert.equal(ahead.status, 'WARN');
+  assert.match(ahead.detail, /behind the database/);
+});
+
+test('lanes:schema end to end against scratch databases: 5 rows and the trigger PASS; 4 rows without 0004 WARN and exit 0; no table WARN', async (t) => {
+  const url4 = scratchDb(4);
+  const url3 = scratchDb(3);
+  try {
+    if (!url4 || !url3) { t.skip('no scratch database could be created'); return; }
+    const fx = fixture();
+    put(join(fx.repo, 'apps', 'agentic-os', 'drizzle', 'meta', '_journal.json'), JSON.stringify({ entries: TAGS5.map((tag) => ({ tag })) }));
+    const { Client } = createRequire(pathToFileURL(join(HERE_TEST, '..', '.claude', 'hooks', 'package.json')))('pg');
+    const fill = async (url, rows) => {
+      const c = new Client({ connectionString: assertScratchUrl(url) && url });
+      await c.connect();
+      try {
+        await c.query('CREATE TABLE agentic_os.__migrations (id serial primary key, hash text, created_at bigint)');
+        for (let i = 0; i < rows; i++) await c.query('INSERT INTO agentic_os.__migrations (hash, created_at) VALUES ($1, $2)', [`h${i}`, i]);
+      } finally { await c.end(); }
+    };
+    const noTable = run(fx, [], dbEnv(url4));
+    assert.equal(noTable.checks['lanes:schema'].status, 'WARN', noTable.stdout);
+    assert.match(noTable.checks['lanes:schema'].detail, /__migrations/);
+    await fill(url4, 5);
+    await fill(url3, 4);
+    const ok = run(fx, [], dbEnv(url4));
+    assert.equal(ok.checks['lanes:schema'].status, 'PASS', ok.checks['lanes:schema'].detail);
+    assert.match(ok.checks['lanes:schema'].detail, /trigger lane_guard_foreign_board present/);
+    const behind = run(fx, [], dbEnv(url3));
+    assert.equal(behind.checks['lanes:schema'].status, 'WARN', behind.checks['lanes:schema'].detail);
+    assert.match(behind.checks['lanes:schema'].detail, /migration 0004 not applied/);
+    assert.equal(behind.code, 0, 'a database that lacks 0004 must not fail the doctor');
+  } finally {
+    if (url4) dropScratch(url4);
+    if (url3) dropScratch(url3);
+  }
 });
 
 test('lanes:worktree-lane-mjs: no worktrees dir is a PASS that says absent; the same file with CRLF matches; a different file is a WARN naming the worktree', () => {

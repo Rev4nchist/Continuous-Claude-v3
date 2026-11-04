@@ -21,6 +21,9 @@
  * what a session sees and is never a security boundary. Broadcasts stay on their board;
  * a direct message may cross boards. Migration 0004 adds the columns and a trigger that
  * refuses a write to a foreign-board lane unless the client says `lane.client_version`.
+ * Every verb that opens the database checks first that migration 0004 is applied, and exits 1 if not (no degraded mode).
+ * A directory that can never be registered (home, ~/.claude, the OS temp dir) is told to pass `--project continuous-claude`.
+ * note, state, release and done are keyed on the lane owner: with no board from the cwd they use the board of a lane the caller owns.
  *
  * IDENTITY -- READ THIS BEFORE CHANGING IT
  * ----------------------------------------
@@ -63,7 +66,9 @@
  *                                                       # carry Dave's kanban changes into the lanes
  *   node scripts/coordination/lane.mjs project which    # the resolved board, the rule that won, the registry entry
  *   node scripts/coordination/lane.mjs project register <path> [--key k] [--board parent]
- *   node scripts/coordination/lane.mjs project unregister <key>
+ *                                                       # edits the PRIMARY checkout's registry and ~/.claude's; refuses when they differ;
+ *                                                       # a board other than continuous-claude needs the PR2 hook build live
+ *   node scripts/coordination/lane.mjs project unregister <key>   # not continuous-claude
  *
  * Global flags: --as <session-id>, --json, --project <board-key>
  */
@@ -74,6 +79,7 @@ import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { repoPath } from './canon-home.mjs';
 import { boardRoots, loadRegistry, normalizeRoot, resolveBoard } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
 import {
@@ -155,7 +161,10 @@ const CLIENT_VERSION = '2';
 const BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
 let BOARD = null;
 const fwd = (p) => String(p).replace(/[\\]/g, '/');
-const LANE_CLI = fwd(resolve(REPO, 'scripts', 'coordination', 'lane.mjs'));
+/** The primary checkout (`~/continuous-claude`, or CCV3_USER_HOME/continuous-claude). Registry edits and the
+ *  hints name this one, never the worktree this script may run from: a worktree has its own copy of the registry. */
+const PRIMARY = repoPath();
+const LANE_CLI = fwd(resolve(PRIMARY, 'scripts', 'coordination', 'lane.mjs'));
 
 /** The resolver's answer for this cwd, or null. Throws only for an unknown --project / LANE_PROJECT. */
 function softBoard() {
@@ -170,9 +179,30 @@ function projectOf() {
   const b = softBoard();
   if (!b) {
     const cwd = fwd(process.cwd());
+    const never = unsafeRootReason(realOrSelf(process.cwd()));
+    // A directory register would refuse (home, ~/.claude, the OS temp dir) can never get a board: do not send the caller there.
+    if (never) {
+      throw new Error(`no lane board for ${cwd}; this directory cannot be registered (${never}). ` +
+        `Pass --project ${DEFAULT_BOARD} or set LANE_PROJECT=${DEFAULT_BOARD} (or the key of another registered board).`);
+    }
     throw new Error(`no lane board for ${cwd}; register it: node ${LANE_CLI} project register ${cwd}`);
   }
   return b;
+}
+
+/**
+ * The board for a verb keyed on the lane owner (note, state, release, done). A cwd that resolves to no board
+ * (a session started in the home dir, T7) falls back to the board of the lane row, but only for the session that
+ * owns the lane -- the way `renew` is keyed on the owner. An explicit --project / LANE_PROJECT never reaches the
+ * fallback: softBoard() already answered (or threw) for it.
+ */
+async function projectForOwnedLane(c, id, myId) {
+  const b = softBoard();
+  if (b || !id) return projectOf();
+  const row = (await c.query(`SELECT project_key FROM agentic_os.lane WHERE id=$1 AND owner_session_id=$2`, [id, myId])).rows[0];
+  if (!row) return projectOf();
+  BOARD = { key: row.project_key, root: null, source: 'lane-owner', via: id };
+  return BOARD;
 }
 /** Board key for an event row: the resolved board, else the default board. */
 const eventBoard = () => (BOARD ? BOARD.key : DEFAULT_BOARD);
@@ -211,6 +241,9 @@ async function withDb(fn) {
     // Session level: most writes here are single statements outside a transaction. The
     // 0004 trigger reads this setting to tell a board-aware client from an old copy.
     await client.query(`SELECT set_config('lane.client_version', $1, false)`, [CLIENT_VERSION]);
+    // One check before any verb runs. Without it a database that lacks migration 0004 fails halfway:
+    // `adopt` commits its moves and then throws, `mine` prints [undefined]. Strict on purpose: no degraded mode.
+    await assertMigrated(client);
     return await fn(client);
   } finally { await client.end().catch(() => {}); }
 }
@@ -302,10 +335,12 @@ function laneLine(l, myId, showBoard = false) {
 
 // ---------------------------------------------------------------- board helpers
 
-/** `sessions.project` folded the way normalizeRoot folds a path (the SQL twin): lower case,
- *  forward slashes, a leading /c/ becomes c:/, no trailing slash. chr(92) is a backslash. */
+/** `sessions.project` folded the way normalizeRoot folds a path (the SQL twin, steps in the same order): forward
+ *  slashes (chr(92) is a backslash), the `//?/` or `//./` extended-length prefix dropped, lower case, a leading
+ *  /c/ becomes c:/, runs of slashes collapse to one (not at the very start), no trailing slash. */
 const FOLDED_PROJECT = (alias = 's.') =>
-  `rtrim(regexp_replace(lower(replace(${alias}project, chr(92), '/')), '^/([a-z])(/|$)', '\\1:\\2'), '/')`;
+  `rtrim(regexp_replace(regexp_replace(lower(regexp_replace(replace(${alias}project, chr(92), '/'), '^//[?.]/', '')), ` +
+  `'^/([a-z])(/|$)', '\\1:\\2'), '(?<=.)/{2,}', '/', 'g'), '/')`;
 
 /** SQL: the session's project is a root of the board, or under one. starts_with, never LIKE: paths hold `_`. */
 const underRootsSql = (rootsParam) => `EXISTS (SELECT 1 FROM unnest(${rootsParam}::text[]) r
@@ -537,6 +572,10 @@ const commands = {
         e.soft = true; throw e;
       }
     }
+    // Resolve the board BEFORE anything moves. It can throw (unknown --project / LANE_PROJECT), and a throw after
+    // the COMMIT would report failure for an adopt that succeeded. A cwd with no board returns null: the audit
+    // event then goes to the default board.
+    softBoard();
     await c.query('BEGIN');
     let moved;
     try {
@@ -585,7 +624,6 @@ const commands = {
     // Addressed to the new session itself: inbox and the DM hook skip a session's own events,
     // so this is an audit row nobody gets paged for.
     if (moved.lanes.length || moved.messages) {
-      softBoard();
       await logEvent(c, {
         kind: 'note', sessionId: newId, to: newId,
         body: `${L(newId)} adopted ${moved.lanes.length} lane(s) and ${moved.messages} message(s) from ${L(oldId)}`,
@@ -704,8 +742,8 @@ const commands = {
 
   async note(c) {
     const myId = me();
-    const board = projectOf();
     const id = positional[1];
+    const board = await projectForOwnedLane(c, id, myId);
     const body = positional.slice(2).join(' ') || (typeof flags.note === 'string' ? flags.note : '');
     if (!id || !body) throw new Error('usage: lane.mjs note <lane-id> "status line"');
     const { rows } = await c.query(
@@ -721,8 +759,8 @@ const commands = {
 
   async state(c) {
     const myId = me();
-    const board = projectOf();
     const id = positional[1];
+    const board = await projectForOwnedLane(c, id, myId);
     const to = positional[2];
     if (!id || !LANE_STATES.includes(to)) {
       throw new Error(`usage: lane.mjs state <lane-id> <${LANE_STATES.join('|')}>`);
@@ -776,11 +814,13 @@ const commands = {
     const body = positional.slice(1).join(' ');
     if (!body) throw new Error('usage: lane.mjs say "message" [--to <name|name@board|sid-prefix>] [--lane <id>]');
     const to = typeof flags.to === 'string' ? await resolveRecipient(c, flags.to, board) : null;
-    await logEvent(c, {
-      laneId: typeof flags.lane === 'string' ? flags.lane : null,
-      kind: 'note', sessionId: myId, to, body, detail: agentDetail(),
-    });
-    return `sent to ${to ? L(to) : `board ${board.key}`}${flags.lane ? ` re ${flags.lane}` : ''}`;
+    const laneId = typeof flags.lane === 'string' ? flags.lane : null;
+    // A tag must name a lane of this board: an event tagged with another board's lane would show up in that lane's history.
+    if (laneId && !(await c.query(`SELECT 1 FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [laneId, board.key])).rowCount) {
+      throw await noLane(c, laneId, board);
+    }
+    await logEvent(c, { laneId, kind: 'note', sessionId: myId, to, body, detail: agentDetail() });
+    return `sent to ${to ? L(to) : `board ${board.key}`}${laneId ? ` re ${laneId}` : ''}`;
   },
 
   /**
@@ -1001,8 +1041,13 @@ const MIGRATION_MSG = 'migration 0004 is not applied to this database';
 const slugOf = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const isUnder = (child, root) => child === root || child.startsWith(root + '/');
 const homeDir = () => process.env.USERPROFILE || process.env.HOME || os.homedir();
-const registryRepoFile = () => process.env.LANE_REGISTRY_REPO || join(REPO, '.claude', 'project-registry.json');
+// The repo registry is the PRIMARY checkout's copy, never the one beside this script: a worktree has its own copy,
+// and editing it would then overwrite the live copy with the worktree's bytes.
+// LANE_REGISTRY_REPO and LANE_REGISTRY_ACTIVE are overrides for tests.
+const registryRepoFile = () => process.env.LANE_REGISTRY_REPO || join(PRIMARY, '.claude', 'project-registry.json');
 const registryActiveFile = () => process.env.LANE_REGISTRY_ACTIVE || join(homeDir(), '.claude', 'project-registry.json');
+const PRIMARY_NOTE = 'This edits the repo registry in the primary checkout (an uncommitted change on main) and the live copy. ' +
+  'The next sync removes the live copy unless the change is committed to main.';
 
 function realOrSelf(p) {
   try { return fs.realpathSync.native(p); } catch { return p; }
@@ -1017,34 +1062,57 @@ function existingDir(arg) {
   return fs.realpathSync.native(abs);
 }
 
-/** A board root must not be the home dir (or hold it), ~/.claude, or the OS temp dir (or sit in it or hold it). */
-function refuseUnsafeRoot(real) {
+/** Why a board root must not be this path, or null. Not the home dir (or one that holds it), ~/.claude, or the OS temp dir (or in it, or around it). */
+function unsafeRootReason(real) {
   const norm = normalizeRoot(real);
   const home = normalizeRoot(realOrSelf(homeDir()));
   const tmp = normalizeRoot(realOrSelf(os.tmpdir()));
-  const why = isUnder(home, norm) ? 'it is the home directory or holds it'
+  return isUnder(home, norm) ? 'it is the home directory or holds it'
     : isUnder(norm, `${home}/.claude`) ? 'it is ~/.claude or inside it'
       : (isUnder(norm, tmp) || isUnder(tmp, norm)) ? 'it is the OS temp directory, or inside or around it'
         : null;
+}
+
+function refuseUnsafeRoot(real) {
+  const why = unsafeRootReason(real);
   if (why) throw new Error(`refusing ${fwd(real)}: ${why}`);
 }
 
-/** Write a file by temp file + rename, so a reader never sees half of it. */
-function stageAtomic(file, data) {
-  fs.mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  fs.writeFileSync(tmp, data);
-  return () => fs.renameSync(tmp, file);
+// ---- registry files
+
+const readIfExists = (file) => {
+  try { return fs.readFileSync(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+};
+const foldEol = (buf) => buf.toString('utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n');
+
+/**
+ * Both registry copies must agree (beyond line endings) before a write. Otherwise the write would replace
+ * the live copy with bytes built from a repo copy that is behind it, or the other way round, and lose an edit.
+ * A missing live copy is allowed: there is nothing to overwrite.
+ */
+function assertRegistriesAgree() {
+  const repoFile = registryRepoFile();
+  const activeFile = registryActiveFile();
+  const repo = readIfExists(repoFile);
+  if (repo === null) throw new Error(`refusing: the repo registry ${fwd(repoFile)} does not exist`);
+  const active = readIfExists(activeFile);
+  if (active !== null && foldEol(repo) !== foldEol(active)) {
+    throw new Error(
+      'refusing: the repo registry and the live registry differ beyond line endings, so a write would lose one of them.\n' +
+      `  repo:   ${fwd(repoFile)}\n  active: ${fwd(activeFile)}\n` +
+      '  Compare the two files, make them equal, then run this again.');
+  }
 }
 
 /**
- * Edit the registry and write BOTH copies (repo, then active) with the same bytes. The repo
- * copy is the base: its line endings, BOM, indent and key order survive. `mutate(doc)` edits
- * the parsed document. Both temp files are written before either rename.
+ * Plan an edit of the registry. The repo copy is the base: its line endings, BOM, indent and key order survive.
+ * `mutate(doc)` edits the parsed document. Returns the new text and the original bytes of both copies.
  */
-function editRegistry(mutate) {
+function planRegistry(mutate) {
   const repoFile = registryRepoFile();
-  const raw = fs.readFileSync(repoFile, 'utf8');
+  const activeFile = registryActiveFile();
+  const originalRepo = fs.readFileSync(repoFile);
+  const raw = originalRepo.toString('utf8');
   const text = raw.replace(/^﻿/, '');
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const indent = (/\n([ \t]+)"/.exec(text) || [])[1] || '  ';
@@ -1053,9 +1121,45 @@ function editRegistry(mutate) {
   mutate(doc);
   const body = JSON.stringify(doc, null, indent).replace(/\n/g, eol) + (/\n$/.test(text) ? eol : '');
   const out = (raw.startsWith('﻿') ? '﻿' : '') + body;
-  const commits = [stageAtomic(repoFile, out), stageAtomic(registryActiveFile(), out)];
-  for (const commit of commits) commit();
-  return { repoFile, activeFile: registryActiveFile() };
+  return { repoFile, activeFile, out, originalRepo, originalActive: readIfExists(activeFile) };
+}
+
+/**
+ * Write both copies (the same bytes), then run `afterFiles` (the database step). Files go FIRST: a database
+ * step that fails then has something to undo, and a file step that fails never leaves a database row without
+ * its registry entry. On ANY failure both copies go back to their original bytes and every temp file is removed,
+ * so a retry starts clean.
+ */
+async function writeRegistries(plan, afterFiles) {
+  const temps = [];
+  const done = { repo: false, active: false };
+  const stage = (file) => {
+    fs.mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    temps.push(tmp);
+    fs.writeFileSync(tmp, plan.out);
+    return tmp;
+  };
+  try {
+    const repoTmp = stage(plan.repoFile);
+    const activeTmp = stage(plan.activeFile);
+    fs.renameSync(repoTmp, plan.repoFile); done.repo = true;
+    fs.renameSync(activeTmp, plan.activeFile); done.active = true;
+    await afterFiles();
+  } catch (e) {
+    try {
+      if (done.repo) fs.writeFileSync(plan.repoFile, plan.originalRepo);
+      if (done.active) {
+        if (plan.originalActive === null) fs.rmSync(plan.activeFile, { force: true });
+        else fs.writeFileSync(plan.activeFile, plan.originalActive);
+      }
+    } catch (undoErr) {
+      e.message += `\n  and the registry files could not be put back (${undoErr.message}): restore ${fwd(plan.repoFile)} and ${fwd(plan.activeFile)} by hand`;
+    }
+    for (const t of temps) fs.rmSync(t, { force: true });
+    throw e;
+  }
+  return { repoFile: plan.repoFile, activeFile: plan.activeFile };
 }
 
 const rawIndex = (doc, key) => doc.projects.findIndex(
@@ -1080,15 +1184,38 @@ async function projectWhich() {
   return lines.join('\n');
 }
 
-/** Refuse a root that equals, holds or sits inside a live root, unless --board names that root's board. */
+/**
+ * Refuse a root that equals, holds or sits inside a live root, unless --board names that root's board.
+ * An entry that sits on the board of the key being registered is that board's own nested entry, not a clash:
+ * it is how a board comes back after an unregister that left a nested entry behind.
+ */
 function checkOverlap(norm, key, live, board) {
-  if (board !== undefined && !live.some((e) => e.board === board)) {
+  const joining = board !== undefined && board !== key;
+  if (joining && !live.some((e) => e.board === board)) {
     throw new Error(`unknown board '${board}'; registered boards: ${[...new Set(live.map((e) => e.board))].join(', ') || '(none)'}`);
   }
-  const hit = live.filter((e) => e.key !== key && (isUnder(norm, e.root) || isUnder(e.root, norm)));
-  if (hit.length && !(board !== undefined && hit.every((e) => e.board === board))) {
+  const hit = live.filter((e) => e.key !== key && e.board !== key && (isUnder(norm, e.root) || isUnder(e.root, norm)));
+  if (hit.length && !(joining && hit.every((e) => e.board === board))) {
     const names = hit.map((e) => `${e.key} (board ${e.board}, ${e.root})`).join('; ');
     throw new Error(`refusing: the root overlaps ${names}. To join one of those boards: --board <board>`);
+  }
+}
+
+/**
+ * A second board is only safe once the live lane-context hook sets lane.client_version (PR2): without it a session
+ * that owns a lane on that board fails its lease renew at the database fence and the hook goes silent.
+ * LANE_SKIP_HOOK_PRECHECK=1 skips the check. It exists for tests and probes only; never set it by hand.
+ */
+function requireLiveHook(board) {
+  if (board === DEFAULT_BOARD || process.env.LANE_SKIP_HOOK_PRECHECK === '1') return;
+  const file = join(homeDir(), '.claude', 'hooks', 'dist', 'lane-context.mjs');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { /* a missing hook fails the check below */ }
+  if (!text.includes('lane.client_version')) {
+    throw new Error(
+      `refusing to register board '${board}': the live lane-context hook (${fwd(file)}) does not set lane.client_version.\n` +
+      '  A session that owns a lane on a second board would fail its lease renew, and the hook would go silent.\n' +
+      "  PR2's hook build must be live first: build the hooks, sync them to ~/.claude, then run this again.");
   }
 }
 
@@ -1111,43 +1238,50 @@ async function projectRegister(c) {
   const name = real.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
   const key = typeof flags.key === 'string' ? flags.key : slugOf(name);
   if (!BOARD_KEY_RE.test(key)) throw new Error(`key '${key}' is not valid: use lower case letters, digits and '-' (pass --key)`);
-  const board = typeof flags.board === 'string' && flags.board !== key ? flags.board : undefined;
+  const board = typeof flags.board === 'string' ? flags.board : undefined;
+  const target = board ?? key;
+  assertRegistriesAgree();
   const entries = loadRegistry({ registryPath: registryRepoFile(), env: {} });
   const live = entries.filter((e) => e.status.toLowerCase() !== 'inactive' && e.root);
   const same = entries.find((e) => e.key === key);
-  if (same && same.status.toLowerCase() !== 'inactive') throw new Error(`key '${key}' is already registered (${same.path}); unregister it first or pass --key`);
+  const active = same && same.status.toLowerCase() !== 'inactive';
+  // The same key, path and board again is a repeat (a retry after a failure): it rewrites both files and the row.
+  const repeat = active && normalizeRoot(same.path) === norm && same.board === target;
+  if (active && !repeat) throw new Error(`key '${key}' is already registered (${same.path}); unregister it first or pass --key`);
   checkOverlap(norm, key, live, board);
-  await assertMigrated(c);
+  requireLiveHook(target);
 
   const entry = { name, key, path: fwd(real), status: 'active' };
-  if (board !== undefined) entry.laneBoard = board;
-  await upsertProjectRow(c, entry);
-  const files = editRegistry((doc) => {
+  if (board !== undefined && board !== key) entry.laneBoard = board;
+  const plan = planRegistry((doc) => {
     const i = rawIndex(doc, key);
     if (i < 0) { doc.projects.push(entry); return; }
     // Re-registering an inactive entry: reactivate it in place, keep its other fields and its position.
     const old = doc.projects[i];
     Object.assign(old, { path: entry.path, status: 'active' });
-    if (board !== undefined) old.laneBoard = board; else delete old.laneBoard;
+    if (entry.laneBoard !== undefined) old.laneBoard = entry.laneBoard; else delete old.laneBoard;
   });
-  const shown = board ?? key;
-  return `registered ${key} (board ${shown}) at ${entry.path}\n` +
+  const files = await writeRegistries(plan, () => upsertProjectRow(c, { ...entry, name: same?.name || name }));
+  return `registered ${key} (board ${target}) at ${entry.path}\n` +
     `  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n` +
-    `  the repo copy is a working-tree edit: commit it so the registration survives a sync`;
+    `  ${PRIMARY_NOTE}`;
 }
 
 async function projectUnregister(c) {
   const key = positional[2];
   if (!key) throw new Error('usage: lane.mjs project unregister <key>');
+  // The default board is where every old row and every old lane.mjs lives. No path registers it again.
+  if (key === DEFAULT_BOARD) throw new Error(`refusing: '${DEFAULT_BOARD}' is the default board; if it were unregistered, no command could register it again`);
+  assertRegistriesAgree();
   const e = loadRegistry({ registryPath: registryRepoFile(), env: {} }).find((x) => x.key === key);
   if (!e) throw new Error(`no registry entry with key '${key}'`);
-  await assertMigrated(c);
-  const files = editRegistry((doc) => { doc.projects[rawIndex(doc, key)].status = 'inactive'; });
-  await c.query(`UPDATE agentic_os.project SET status='inactive', last_seen_at=now() WHERE key=$1`, [key]);
-  const kept = (await c.query(`SELECT count(*)::int AS n FROM agentic_os.lane WHERE project_key=$1`, [e.board])).rows[0].n;
-  return `unregistered ${key} (board ${e.board}); ${kept} lane row(s) kept on that board\n` +
-    `  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n` +
-    `  the repo copy is a working-tree edit: commit it`;
+  const plan = planRegistry((doc) => { doc.projects[rawIndex(doc, key)].status = 'inactive'; });
+  const files = await writeRegistries(plan, () => c.query(`UPDATE agentic_os.project SET status='inactive', last_seen_at=now() WHERE key=$1`, [key]));
+  // A nested entry (laneBoard) shares its parent's board: that board's lanes are not this entry's to report.
+  const head = e.board !== e.key
+    ? `unregistered ${key} (it joined board ${e.board}, which stays registered; its lanes are untouched)`
+    : `unregistered ${key} (board ${e.board}); ${(await c.query(`SELECT count(*)::int AS n FROM agentic_os.lane WHERE project_key=$1`, [e.board])).rows[0].n} lane row(s) kept on that board`;
+  return `${head}\n  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n  ${PRIMARY_NOTE}`;
 }
 
 // ---------------------------------------------------------------- main

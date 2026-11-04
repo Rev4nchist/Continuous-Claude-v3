@@ -15,7 +15,7 @@
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
@@ -63,6 +63,7 @@ function baseEnv(url = state.url) {
   delete env.LANE_PROJECT;
   delete env.CLAUDE_CODE_SESSION_ID;
   delete env.CLAUDE_CODE_ENTRYPOINT;
+  delete env.LANE_SKIP_HOOK_PRECHECK;
   return {
     ...env,
     CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
@@ -80,6 +81,8 @@ function lane(cwd, as, args, extra = {}) {
   return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}` };
 }
 const q = (sql, params) => state.db.query(sql, params);
+/** A directory outside every registry root that register would accept (not home, not ~/.claude, not the OS temp dir). */
+const noBoardDir = () => { const d = path.join(state.cacheRoot, 'no-board'); fs.mkdirSync(d, { recursive: true }); return d; };
 const one = async (sql, params) => (await q(sql, params)).rows[0];
 
 before(async () => {
@@ -143,6 +146,7 @@ describe('board scoping', () => {
     assert.match(a.out, /zz-pbprobe-a1/);
     assert.doesNotMatch(a.out, /zz-pbprobe-b1|zz-pbprobe-c1/);
     const b = lane(state.dirs.B, SB, ['board']);
+    assert.equal(b.code, 0, b.all);
     assert.match(b.out, /board pb-b/);
     assert.match(b.out, /zz-pbprobe-b1/);
     assert.doesNotMatch(b.out, /zz-pbprobe-a1|zz-pbprobe-c1/);
@@ -174,12 +178,27 @@ describe('board scoping', () => {
     assert.ok(!ids.includes('zz-pbprobe-b1') && !ids.includes('zz-pbprobe-c1'), ids.join());
   });
 
-  it('a cwd with no board exits 1 with the register hint', () => {
-    const r = lane(state.dirs.N, SA, ['board']);
+  it('a registrable cwd with no board exits 1 with the register hint', () => {
+    const r = lane(noBoardDir(), SA, ['board']);
     assert.equal(r.code, 1, r.all);
     assert.match(r.err, /no lane board for /);
     assert.match(r.err, /register it: node .*lane\.mjs project register /);
     assert.ok(path.isAbsolute(/node (\S+lane\.mjs)/.exec(r.err)[1].replace(/\//g, path.sep)), r.err);
+  });
+
+  it('M1: a cwd that can never be registered (the OS temp dir) is told to pass --project continuous-claude or set LANE_PROJECT', () => {
+    const r = lane(state.dirs.N, SA, ['board']);
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.err, /no lane board for /);
+    assert.match(r.err, /cannot be registered/);
+    assert.match(r.err, /--project continuous-claude/);
+    assert.match(r.err, /LANE_PROJECT/);
+    assert.doesNotMatch(r.err, /register it: node/);
+    const viaFlag = lane(state.dirs.N, SA, ['board', '--project', 'continuous-claude']);
+    assert.equal(viaFlag.code, 0, viaFlag.all);
+    assert.match(viaFlag.out, /board continuous-claude/);
+    const viaEnv = lane(state.dirs.N, SA, ['board'], { LANE_PROJECT: 'continuous-claude' });
+    assert.equal(viaEnv.code, 0, viaEnv.all);
   });
 
   it('an unknown --project is an error that lists the registered keys', () => {
@@ -292,6 +311,8 @@ describe('messages: broadcast per board, DM across boards, cursors', () => {
     const ev = await one(`SELECT project_key, to_session_id FROM agentic_os.lane_event WHERE body='bcast-A'`);
     assert.deepEqual(ev, { project_key: 'pb-a', to_session_id: null });
     const b = lane(state.dirs.B, SB, ['inbox', '--peek']);
+    assert.equal(b.code, 0, b.all);
+    assert.match(b.out, /inbox empty/);
     assert.doesNotMatch(b.out, /bcast-A/);
   });
 
@@ -312,6 +333,7 @@ describe('messages: broadcast per board, DM across boards, cursors', () => {
 
   it('the same DM is not shown again on A (T4), but the A broadcast is', async () => {
     const r = lane(state.dirs.A, SB, ['inbox']);
+    assert.equal(r.code, 0, r.all);
     assert.doesNotMatch(r.out, /dm-1/);
     assert.match(r.out, /bcast-A/);
     assert.deepEqual(await inboxRows(SB), [`${SB}@pb-a`, `${SB}@pb-b`]);
@@ -320,8 +342,10 @@ describe('messages: broadcast per board, DM across boards, cursors', () => {
   it('a DM read first on A is not shown on B', () => {
     lane(state.dirs.A, SA, ['say', 'dm-2', '--to', SB]);
     const onA = lane(state.dirs.A, SB, ['inbox']);
+    assert.equal(onA.code, 0, onA.all);
     assert.match(onA.out, /dm-2/);
     const onB = lane(state.dirs.B, SB, ['inbox']);
+    assert.equal(onB.code, 0, onB.all);
     assert.doesNotMatch(onB.out, /dm-2/);
     assert.match(onB.out, /inbox empty/);
   });
@@ -336,7 +360,9 @@ describe('messages: broadcast per board, DM across boards, cursors', () => {
 
   it('own events are never shown', () => {
     const r = lane(state.dirs.A, SA, ['inbox', '--peek']);
-    assert.doesNotMatch(r.out, /bcast-A/);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /inbox empty|-> /);
+    assert.doesNotMatch(r.out, /bcast-A\b/);
   });
 
   it('the unread count on board uses the same cursor rules', () => {
@@ -421,29 +447,212 @@ describe('mine, whoami, renew stay keyed on the owner and show the board', () =>
 });
 
 describe('adopt moves lanes, DMs and every cursor row across boards', () => {
-  it('copies <old> and <old>@<board> to the new id, moves a foreign-board lane and an unread DM', async () => {
+  // Distinct cursor values on purpose (offsets from the highest event id now): a copy that mixed up the
+  // bare row and the @board row, or compared the DM against the wrong cursor, would show a wrong number.
+  const idFile = (u, o) => fs.writeFileSync(path.join(state.idDir, `${u}.json`), JSON.stringify({ uuid: u, name: 'pb-adopt', updatedAt: new Date().toISOString(), ...o }));
+  const pair = async () => {
     const oldId = randomUUID();
     const newId = randomUUID();
-    const idFile = (u, o) => fs.writeFileSync(path.join(state.idDir, `${u}.json`), JSON.stringify({ uuid: u, name: 'pb-adopt', updatedAt: new Date().toISOString(), ...o }));
     idFile(oldId, { endedAt: new Date().toISOString(), endReason: 'clear' });
     idFile(newId, { previous: oldId });
     await q(`INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES ($1,'x',NULL, now() - interval '1 hour'), ($2,'x',NULL, now())`, [oldId, newId]);
-    await q(`INSERT INTO agentic_os.lane (id,title,track,state,project_key,owner_session_id,lease_expires_at)
-             VALUES ('zz-pbprobe-ad1','held on B','zz','active','pb-b',$1, now() + interval '30 minutes')`, [oldId]);
-    const last = (await one(`SELECT COALESCE(max(id),0)::int AS n FROM agentic_os.lane_event`)).n;
-    await q(`INSERT INTO agentic_os.lane_watermark (session_id,last_event_id) VALUES ($1,$3),($2,$3)`, [oldId, `${oldId}@pb-b`, last]);
-    await q(`INSERT INTO agentic_os.lane_event (kind,session_id,to_session_id,body,project_key) VALUES ('note',$1,$2,'adopt-dm','pb-a')`, [SA, oldId]);
+    return { oldId, newId };
+  };
+  const heldOnB = (id, owner) => q(`INSERT INTO agentic_os.lane (id,title,track,state,project_key,owner_session_id,lease_expires_at)
+    VALUES ($1,'held on B','zz','active','pb-b',$2, now() + interval '30 minutes')`, [id, owner]);
+  /** The highest event id now; explicit ids go above it and the sequence is moved past them. */
+  const baseId = async () => Number((await one(`SELECT COALESCE(max(id),0) AS n FROM agentic_os.lane_event`)).n);
+  const reserve = (hi) => q(`SELECT setval(pg_get_serial_sequence('agentic_os.lane_event','id'), $1::bigint)`, [hi]);
+  const dm = (id, to, body) => q(`INSERT INTO agentic_os.lane_event (id,kind,session_id,to_session_id,body,project_key) VALUES ($1,'note',$2,$3,$4,'pb-a')`, [id, SA, to, body]);
+  const wm = async (sid) => (await q(`SELECT session_id, last_event_id::int AS n FROM agentic_os.lane_watermark WHERE session_id = $1 OR starts_with(session_id, $1 || '@') ORDER BY 1`, [sid])).rows;
 
-    const r = lane(state.dirs.N, newId, ['adopt', '--from', oldId]);
+  it('carries <old>=10 and <old>@pb-b=100 to the new id, moves the foreign-board lane, and leaves a DM at 50 (below the old cursor) where it is', async () => {
+    const { oldId, newId } = await pair();
+    await heldOnB('zz-pbprobe-ad1', oldId);
+    const base = await baseId();
+    await reserve(base + 200);
+    await q(`INSERT INTO agentic_os.lane_watermark (session_id,last_event_id) VALUES ($1,$3),($2,$4)`, [oldId, `${oldId}@pb-b`, base + 10, base + 100]);
+    await dm(base + 50, oldId, 'adopt-dm-old');
+
+    const r = lane(state.dirs.N, newId, ['adopt', '--from', oldId, '--project', 'pb-a']);
     assert.equal(r.code, 0, r.all);
     assert.match(r.out, /1 lane/);
-    assert.match(r.out, /1 message/);
+    assert.match(r.out, /0 message/);
+    assert.match(r.out, /cursor carried/);
     assert.equal((await one(`SELECT owner_session_id FROM agentic_os.lane WHERE id='zz-pbprobe-ad1'`)).owner_session_id, newId);
-    assert.equal((await one(`SELECT to_session_id FROM agentic_os.lane_event WHERE body='adopt-dm'`)).to_session_id, newId);
-    const rows = (await q(`SELECT session_id FROM agentic_os.lane_watermark WHERE session_id = ANY($1) ORDER BY 1`, [[newId, `${newId}@pb-b`]])).rows.map((x) => x.session_id);
-    assert.deepEqual(rows, [newId, `${newId}@pb-b`].sort());
-    const again = lane(state.dirs.N, newId, ['adopt', '--from', oldId]);
-    assert.match(again.out, /nothing to move/);
+    assert.equal((await one(`SELECT to_session_id FROM agentic_os.lane_event WHERE body='adopt-dm-old'`)).to_session_id, oldId, 'the DM is older than the old cursor: it was already read and must stay');
+    assert.deepEqual(await wm(newId), [
+      { session_id: newId, n: base + 10 },
+      { session_id: `${newId}@pb-b`, n: base + 100 },
+    ].sort((a, b) => a.session_id.localeCompare(b.session_id)));
+    assert.match(lane(state.dirs.N, newId, ['adopt', '--from', oldId, '--project', 'pb-a']).out, /nothing to move/);
+  });
+
+  it('moves a DM above the old cursor (id 50 over cursor 20) to the new id and carries both cursor rows', async () => {
+    const { oldId, newId } = await pair();
+    const base = await baseId();
+    await reserve(base + 200);
+    await q(`INSERT INTO agentic_os.lane_watermark (session_id,last_event_id) VALUES ($1,$3),($2,$4)`, [oldId, `${oldId}@pb-b`, base + 10, base + 20]);
+    await dm(base + 50, oldId, 'adopt-dm-new');
+    const r = lane(state.dirs.N, newId, ['adopt', '--from', oldId, '--project', 'pb-a']);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /1 message/);
+    assert.equal((await one(`SELECT to_session_id FROM agentic_os.lane_event WHERE body='adopt-dm-new'`)).to_session_id, newId);
+    assert.deepEqual((await wm(newId)).map((x) => x.n), [base + 10, base + 20]);
+  });
+
+  it('steps the new cursor back when it already read past a moved DM: new bare 80 and new@pb-b 90 become 49, a row at 20 stays', async () => {
+    const { oldId, newId } = await pair();
+    const base = await baseId();
+    await reserve(base + 200);
+    await q(`INSERT INTO agentic_os.lane_watermark (session_id,last_event_id) VALUES ($1,$4),($2,$5),($3,$6)`,
+      [oldId, newId, `${newId}@pb-b`, base + 10, base + 80, base + 90]);
+    await q(`INSERT INTO agentic_os.lane_watermark (session_id,last_event_id) VALUES ($1,$2)`, [`${newId}@pb-a`, base + 20]);
+    await dm(base + 50, oldId, 'adopt-dm-stepback');
+    const r = lane(state.dirs.N, newId, ['adopt', '--from', oldId, '--project', 'pb-a']);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /1 message/);
+    assert.match(r.out, /cursor stepped back/);
+    assert.equal((await one(`SELECT to_session_id FROM agentic_os.lane_event WHERE body='adopt-dm-stepback'`)).to_session_id, newId);
+    const got = Object.fromEntries((await wm(newId)).map((x) => [x.session_id, x.n]));
+    assert.deepEqual(got, { [newId]: base + 49, [`${newId}@pb-b`]: base + 49, [`${newId}@pb-a`]: base + 20 });
+  });
+
+  it('LOW: a board that cannot be resolved is found BEFORE the move, so a failed adopt moves nothing', async () => {
+    const { oldId, newId } = await pair();
+    await heldOnB('zz-pbprobe-ad2', oldId);
+    const r = lane(state.dirs.N, newId, ['adopt', '--from', oldId], { LANE_PROJECT: 'no-such-board' });
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.err, /unknown board 'no-such-board'/);
+    assert.equal((await one(`SELECT owner_session_id FROM agentic_os.lane WHERE id='zz-pbprobe-ad2'`)).owner_session_id, oldId, 'the lane moved although the command failed');
+  });
+
+  it('adopt from a directory with no board still works and writes its audit event on continuous-claude', async () => {
+    const { oldId, newId } = await pair();
+    await heldOnB('zz-pbprobe-ad3', oldId);
+    const r = lane(state.dirs.N, newId, ['adopt', '--from', oldId]);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /adopted from .*1 lane/);
+    assert.equal((await one(`SELECT project_key FROM agentic_os.lane_event WHERE kind='note' AND to_session_id=$1 AND detail->>'adopted'='true'`, [newId])).project_key, 'continuous-claude');
+  });
+});
+
+describe('M1: owner-keyed verbs from a directory with no board', () => {
+  const held = (id, owner = SD) => q(`INSERT INTO agentic_os.lane (id,title,track,state,project_key,owner_session_id,lease_expires_at)
+    VALUES ($1,'owned on A','zz','active','pb-a',$2, now() + interval '30 minutes')`, [id, owner]);
+
+  it('note, state, release and done work for the owner and log on the lane board', async () => {
+    for (const id of ['zz-pbprobe-o1', 'zz-pbprobe-o2', 'zz-pbprobe-o3', 'zz-pbprobe-o4']) await held(id);
+    const note = lane(state.dirs.N, SD, ['note', 'zz-pbprobe-o1', 'from-nowhere']);
+    assert.equal(note.code, 0, note.all);
+    assert.match(note.out, /noted on zz-pbprobe-o1/);
+    const st = lane(state.dirs.N, SD, ['state', 'zz-pbprobe-o4', 'review']);
+    assert.equal(st.code, 0, st.all);
+    assert.match(st.out, /zz-pbprobe-o4 -> review/);
+    const rel = lane(state.dirs.N, SD, ['release', 'zz-pbprobe-o2']);
+    assert.equal(rel.code, 0, rel.all);
+    assert.match(rel.out, /-> ready \(released\)/);
+    const done = lane(state.dirs.N, SD, ['done', 'zz-pbprobe-o3', '--note', 'finished']);
+    assert.equal(done.code, 0, done.all);
+    assert.match(done.out, /-> done \(released\)/);
+    assert.equal((await one(`SELECT state, owner_session_id FROM agentic_os.lane WHERE id='zz-pbprobe-o3'`)).state, 'done');
+    const evs = (await q(`SELECT lane_id, project_key FROM agentic_os.lane_event WHERE lane_id LIKE 'zz-pbprobe-o_' AND session_id=$1 ORDER BY lane_id`, [SD])).rows;
+    assert.deepEqual(evs.map((e) => e.lane_id), ['zz-pbprobe-o1', 'zz-pbprobe-o2', 'zz-pbprobe-o3', 'zz-pbprobe-o4']);
+    assert.ok(evs.every((e) => e.project_key === 'pb-a'), JSON.stringify(evs));
+  });
+
+  it('a session that does NOT own the lane still gets the hint, and the lane is unchanged', async () => {
+    await held('zz-pbprobe-o5');
+    const r = lane(state.dirs.N, SA, ['note', 'zz-pbprobe-o5', 'not mine']);
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.err, /no lane board for /);
+    assert.match(r.err, /--project continuous-claude/);
+    assert.equal((await one(`SELECT note FROM agentic_os.lane WHERE id='zz-pbprobe-o5'`)).note, null);
+    const s = lane(state.dirs.N, SA, ['done', 'zz-pbprobe-o5']);
+    assert.equal(s.code, 1, s.all);
+    assert.equal((await one(`SELECT state FROM agentic_os.lane WHERE id='zz-pbprobe-o5'`)).state, 'active');
+  });
+
+  it('an explicit --project still wins over the owner lookup (a lane of another board is refused)', () => {
+    const r = lane(state.dirs.N, SD, ['note', 'zz-pbprobe-o5', 'wrong board', '--project', 'pb-b']);
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.err, /no lane zz-pbprobe-o5 on board pb-b/);
+  });
+});
+
+describe('say --lane names a lane of this board only', () => {
+  it('a lane id from another board is refused and nothing is sent', async () => {
+    const r = lane(state.dirs.A, SA, ['say', 'tagged-foreign', '--lane', 'zz-pbprobe-b1']);
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.err, /no lane zz-pbprobe-b1 on board pb-a/);
+    assert.equal((await q(`SELECT 1 FROM agentic_os.lane_event WHERE body='tagged-foreign'`)).rowCount, 0);
+  });
+
+  it('a lane id of this board is tagged', async () => {
+    const r = lane(state.dirs.A, SA, ['say', 'tagged-own', '--lane', 'zz-pbprobe-a1']);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /re zz-pbprobe-a1/);
+    assert.equal((await one(`SELECT lane_id FROM agentic_os.lane_event WHERE body='tagged-own'`)).lane_id, 'zz-pbprobe-a1');
+  });
+});
+
+describe('peers: sessions.project in odd spellings still folds to the board root', () => {
+  it('doubled slashes, capitals and the extended-length prefix all match; a lookalike root does not', async () => {
+    const root = normalizeRoot(state.dirs.A);
+    const spell = {
+      'zz-pbprobe-sp-dbl': `${root.toUpperCase().replace(/\//g, '//')}//deep//`,
+      'zz-pbprobe-sp-ext': `\\\\?\\${root.replace(/\//g, '\\').toUpperCase()}`,
+      'zz-pbprobe-sp-bad': `${root}x//deep`,
+    };
+    for (const [id, project] of Object.entries(spell)) {
+      await q(`INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES ($1,$2,'fixture',now())`, [id, project]);
+    }
+    const r = lane(state.dirs.A, SA, ['peers', '--json']);
+    assert.equal(r.code, 0, r.all);
+    const ids = JSON.parse(r.out).map((p) => p.id);
+    assert.ok(ids.includes('zz-pbprobe-sp-dbl'), 'doubled slashes');
+    assert.ok(ids.includes('zz-pbprobe-sp-ext'), 'extended-length prefix');
+    assert.ok(!ids.includes('zz-pbprobe-sp-bad'), 'a root that only starts with the same letters is another project');
+  });
+});
+
+describe('item 1: a database without migration 0004 fails first, loud, and writes nothing', () => {
+  const noMig = (cwd, as, args) => lane(cwd, as, args, { CONTINUOUS_CLAUDE_DB_URL: state.url3, DATABASE_URL: state.url3, OPC_POSTGRES_URL: state.url3 });
+
+  it('every verb that opens the database exits 1 with the one clear message', () => {
+    const verbs = [['mine'], ['renew'], ['whoami'], ['board'], ['peers'], ['next'], ['inbox'], ['say', 'hi'], ['note', 'x', 'y'],
+      ['claim', 'x'], ['add', 'x', '--title', 't'], ['adopt', '--from', randomUUID()], ['project', 'unregister', 'nope']];
+    for (const args of verbs) {
+      const r = noMig(state.dirs.A, SA, args);
+      assert.equal(r.code, 1, `${args.join(' ')}: ${r.all}`);
+      assert.match(r.err, /migration 0004 is not applied to this database/, args.join(' '));
+      assert.doesNotMatch(r.all, /undefined/, args.join(' '));
+    }
+  });
+
+  it('adopt moves nothing: the lanes of the old session stay with it', async () => {
+    const c3 = new Client({ connectionString: state.url3 });
+    await c3.connect();
+    const oldId = randomUUID();
+    const newId = randomUUID();
+    try {
+      for (const [u, o] of [[oldId, { endedAt: new Date().toISOString() }], [newId, { previous: oldId }]]) {
+        fs.writeFileSync(path.join(state.idDir, `${u}.json`), JSON.stringify({ uuid: u, name: 'pb-nomig', updatedAt: new Date().toISOString(), ...o }));
+      }
+      await c3.query(`INSERT INTO agentic_os.lane (id,title,track,state,owner_session_id,lease_expires_at)
+                      VALUES ('zz-nomig-1','x','zz','active',$1, now() + interval '30 minutes')`, [oldId]);
+      const r = noMig(state.dirs.A, newId, ['adopt', '--from', oldId]);
+      assert.equal(r.code, 1, r.all);
+      assert.match(r.err, /migration 0004 is not applied/);
+      assert.equal((await c3.query(`SELECT owner_session_id FROM agentic_os.lane WHERE id='zz-nomig-1'`)).rows[0].owner_session_id, oldId);
+    } finally { await c3.end(); }
+  });
+
+  it('project which needs no database: it answers with an unreachable URL', () => {
+    const dead = 'postgresql://claude:x@127.0.0.1:1/lanes_pr1_unreachable';
+    const r = lane(state.dirs.A, SA, ['project', 'which'], { CONTINUOUS_CLAUDE_DB_URL: dead, DATABASE_URL: dead, OPC_POSTGRES_URL: dead });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /board: pb-a/);
   });
 });
 
@@ -499,6 +708,57 @@ describe('the migration fence and the missing migration', () => {
     } finally { await old.end(); }
   });
 
+  // The last commit before per-project boards. Pinned, not `main`: once PR1 merges, main's lane.mjs is the new one.
+  const OLD_COMMIT = 'ec0417fe';
+
+  it('T3: a REAL old lane.mjs is refused (42501, with the rebase hint) on a foreign-board lane and still claims a continuous-claude lane', async (t) => {
+    const oldDir = fs.mkdtempSync(path.join(state.tmp, 'oldlane-'));
+    const dest = path.join(oldDir, 'scripts', 'coordination');
+    fs.mkdirSync(dest, { recursive: true });
+    try {
+      // Every relative module the old lane.mjs imports, taken from git, so the copy is the real old program.
+      const queue = ['lane.mjs'];
+      const seen = new Set();
+      while (queue.length) {
+        const f = queue.pop();
+        if (seen.has(f)) continue;
+        seen.add(f);
+        const text = execFileSync('git', ['-C', REPO, 'show', `${OLD_COMMIT}:scripts/coordination/${f}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        fs.writeFileSync(path.join(dest, f), text);
+        for (const m of text.matchAll(/from '\.\/([\w.-]+\.mjs)'/g)) queue.push(m[1]);
+      }
+    } catch (e) {
+      t.skip(`cannot read ${OLD_COMMIT} from git (shallow clone?): ${e.message.split('\n')[0]}`);
+      return;
+    }
+    assert.ok(['lane.mjs', 'kanban-apply.mjs', 'session-label.mjs'].every((f) => fs.existsSync(path.join(dest, f))), 'the old program and its modules were copied');
+    assert.doesNotMatch(fs.readFileSync(path.join(dest, 'lane.mjs'), 'utf8'), /client_version/, 'this is not the old program');
+    assertScratchUrl(state.url);
+    const old = (args) => {
+      const r = spawnSync(process.execPath, [path.join(dest, 'lane.mjs'), ...args], {
+        cwd: oldDir, encoding: 'utf8',
+        env: {
+          ...baseEnv(), CLAUDE_CODE_SESSION_ID: SA,
+          // The old file looks for `pg` beside itself; it is not in the temp folder.
+          NODE_PATH: path.join(REPO, '.claude', 'hooks', 'node_modules'),
+        },
+      });
+      return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}` };
+    };
+    const before = await one(`SELECT title, note, owner_session_id, state FROM agentic_os.lane WHERE id='zz-pbprobe-b1'`);
+    const claim = old(['claim', 'zz-pbprobe-b1']);
+    assert.equal(claim.code, 1, claim.all);
+    assert.match(claim.err, /lane zz-pbprobe-b1 belongs to board pb-b: this lane\.mjs predates per-project boards; rebase the worktree onto main/);
+    const add = old(['add', 'zz-pbprobe-b1', '--title', 'old copy overwrite']);
+    assert.equal(add.code, 1, add.all);
+    assert.match(add.err, /predates per-project boards/);
+    assert.deepEqual(await one(`SELECT title, note, owner_session_id, state FROM agentic_os.lane WHERE id='zz-pbprobe-b1'`), before, 'the foreign lane changed');
+    const own = old(['claim', 'zz-pbprobe-c1']);
+    assert.equal(own.code, 0, own.all);
+    assert.match(own.out, /CLAIMED zz-pbprobe-c1/);
+    assert.equal((await one(`SELECT owner_session_id FROM agentic_os.lane WHERE id='zz-pbprobe-c1'`)).owner_session_id, SA);
+  });
+
   it('a database without migration 0004 gets a clear message and exit 1', () => {
     const r = lane(state.dirs.A, SA, ['board'], { CONTINUOUS_CLAUDE_DB_URL: state.url3, DATABASE_URL: state.url3, OPC_POSTGRES_URL: state.url3 });
     assert.equal(r.code, 1, r.all);
@@ -510,7 +770,8 @@ describe('project which / register / unregister', () => {
   const R = () => path.join(state.cacheRoot, 'repo-registry.json');
   const ACT = () => path.join(state.cacheRoot, 'active-registry.json');
   const dir = (n) => { const d = path.join(state.cacheRoot, n); fs.mkdirSync(d, { recursive: true }); return d; };
-  const regEnv = (extra = {}) => ({ LANE_REGISTRY_REPO: R(), LANE_REGISTRY_ACTIVE: ACT(), LANE_REGISTRY_PATH: R(), ...extra });
+  // LANE_SKIP_HOOK_PRECHECK: the live lane-context hook does not set lane.client_version yet (PR2); tests that are not about that check skip it.
+  const regEnv = (extra = {}) => ({ LANE_REGISTRY_REPO: R(), LANE_REGISTRY_ACTIVE: ACT(), LANE_REGISTRY_PATH: R(), LANE_SKIP_HOOK_PRECHECK: '1', ...extra });
   const reg = (args, extra) => lane(state.cacheRoot, SA, ['project', ...args], regEnv(extra));
   const read = (f) => fs.readFileSync(f, 'utf8');
   const entries = () => JSON.parse(read(R())).projects;
@@ -521,9 +782,11 @@ describe('project which / register / unregister', () => {
     const seedEntries = [
       { name: 'old-one', key: 'old-one', path: 'C:/nowhere/old-one', status: 'inactive', stack: ['x', 'y'] },
       { name: 'zeta', key: 'zeta', path: fwd(dir('zeta')), status: 'active', laneBoard: 'zeta' },
+      { name: 'continuous-claude', key: 'continuous-claude', path: fwd(dir('ccroot')), status: 'active' },
     ];
-    fs.writeFileSync(R(), JSON.stringify({ version: '1.0', projects: seedEntries }, null, 2).replace(/\n/g, '\r\n') + '\r\n');
-    fs.writeFileSync(ACT(), '{ "stale": true }\n');
+    const seed = JSON.stringify({ version: '1.0', projects: seedEntries }, null, 2).replace(/\n/g, '\r\n') + '\r\n';
+    fs.writeFileSync(R(), seed);
+    fs.writeFileSync(ACT(), seed.replace(/\r\n/g, '\n')); // equal beyond line endings: register may start
     P1 = dir('proj1');
   });
 
@@ -533,7 +796,7 @@ describe('project which / register / unregister', () => {
     assert.match(r.out, /board: pb-a/);
     assert.match(r.out, /source: registry/);
     assert.match(r.out, /entry: pb-a/);
-    const none = lane(state.dirs.N, SA, ['project', 'which']);
+    const none = lane(noBoardDir(), SA, ['project', 'which']);
     assert.equal(none.code, 1);
     assert.match(none.all, /no lane board for .*project register/);
     const flag = lane(state.dirs.N, SA, ['project', 'which', '--project', 'pb-b']);
@@ -645,5 +908,144 @@ describe('project which / register / unregister', () => {
     assert.match(w.out, /board: proj1/);
     const parent = reg(['register', state.cacheRoot, '--key', 'bigger']);
     assert.equal(parent.code, 1, 'a root that contains an existing root is refused too');
+  });
+
+  const files = () => ({ repo: read(R()), act: read(ACT()) });
+  const tmpLeft = () => fs.readdirSync(state.cacheRoot).filter((f) => f.endsWith('.tmp'));
+
+  it('MEDIUM 2: continuous-claude cannot be unregistered, because no path could register it again', () => {
+    const before = files();
+    const r = reg(['unregister', 'continuous-claude']);
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.err, /default board/);
+    assert.deepEqual(files(), before);
+    assert.equal(entries().find((e) => e.key === 'continuous-claude').status, 'active');
+  });
+
+  it('MEDIUM 10: unregister of a nested entry says it joined a board and does not report that board\'s lane count', () => {
+    const r = reg(['unregister', 'inner']);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /unregistered inner/);
+    assert.match(r.out, /joined board proj1/);
+    assert.doesNotMatch(r.out, /lane row/);
+    assert.equal(entries().find((e) => e.key === 'inner').status, 'inactive');
+  });
+
+  it('MEDIUM 2: after proj1 is unregistered, registering it again is not blocked by its own nested entry; --board <own key> is accepted and writes no laneBoard', async () => {
+    const innerAgain = reg(['register', path.join(P1, 'inner'), '--key', 'inner', '--board', 'proj1']);
+    assert.equal(innerAgain.code, 0, innerAgain.all);
+    const off = reg(['unregister', 'proj1']);
+    assert.equal(off.code, 0, off.all);
+    assert.match(off.out, /lane row/, 'the entry that owns the board reports its lanes');
+    const on = reg(['register', P1]);
+    assert.equal(on.code, 0, on.all);
+    const self = reg(['register', P1, '--board', 'proj1']);
+    assert.equal(self.code, 0, self.all);
+    assert.equal(entries().filter((e) => e.key === 'proj1').length, 1);
+    assert.equal('laneBoard' in entries().find((e) => e.key === 'proj1'), false);
+    assert.equal(read(R()), read(ACT()));
+    assert.equal((await one(`SELECT status FROM agentic_os.project WHERE key='proj1'`)).status, 'active');
+  });
+
+  it('MEDIUM 4: registering the same key, path and board again is idempotent and rewrites both copies', () => {
+    const a = reg(['register', P1]);
+    assert.equal(a.code, 0, a.all);
+    const before = read(R());
+    const b = reg(['register', P1]);
+    assert.equal(b.code, 0, b.all);
+    assert.equal(read(R()), before);
+    assert.equal(read(R()), read(ACT()));
+    assert.deepEqual(tmpLeft(), []);
+  });
+
+  it('MEDIUM 3: register and unregister refuse when the repo and live registry copies differ, name both files, and change nothing', () => {
+    const repoFile = path.join(state.cacheRoot, 'diff-repo.json');
+    const actFile = path.join(state.cacheRoot, 'diff-active.json');
+    fs.writeFileSync(repoFile, read(R()));
+    fs.writeFileSync(actFile, '{ "projects": [] }\n');
+    const env = { LANE_REGISTRY_REPO: repoFile, LANE_REGISTRY_ACTIVE: actFile };
+    const before = { repo: read(repoFile), act: read(actFile) };
+    for (const args of [['register', dir('proj-diff')], ['unregister', 'zeta']]) {
+      const r = reg(args, env);
+      assert.equal(r.code, 1, r.all);
+      assert.match(r.err, /differ/);
+      assert.ok(r.err.includes(fwd(repoFile)) && r.err.includes(fwd(actFile)), r.err);
+      assert.deepEqual({ repo: read(repoFile), act: read(actFile) }, before);
+    }
+    assert.deepEqual(tmpLeft(), []);
+  });
+
+  it('MEDIUM 3: the default repo registry is the PRIMARY checkout (CCV3_USER_HOME), never the copy beside the running script; the hint names the primary too', () => {
+    const fakeHome = dir('primary-home');
+    const fakeUser = dir('live-home');
+    const primaryReg = path.join(fakeHome, 'continuous-claude', '.claude', 'project-registry.json');
+    const liveReg = path.join(fakeUser, '.claude', 'project-registry.json');
+    fs.mkdirSync(path.dirname(primaryReg), { recursive: true });
+    fs.mkdirSync(path.dirname(liveReg), { recursive: true });
+    fs.writeFileSync(primaryReg, '{\n  "projects": []\n}\n');
+    fs.writeFileSync(liveReg, '{\n  "projects": []\n}\n');
+    const own = path.join(REPO, '.claude', 'project-registry.json');
+    const ownBefore = fs.readFileSync(own);
+    const env = { LANE_REGISTRY_REPO: '', LANE_REGISTRY_ACTIVE: '', CCV3_USER_HOME: fakeHome, USERPROFILE: fakeUser, HOME: fakeUser };
+    const r = reg(['register', dir('proj-primary')], env);
+    assert.equal(r.code, 0, r.all);
+    assert.ok(JSON.parse(read(primaryReg)).projects.some((e) => e.key === 'proj-primary'), 'the primary copy was not edited');
+    assert.equal(read(primaryReg), read(liveReg));
+    assert.deepEqual(fs.readFileSync(own), ownBefore, 'the copy beside the script was edited');
+    assert.ok(r.out.includes(fwd(primaryReg)), r.out);
+    assert.ok(!r.out.includes(fwd(own)) || fwd(own) === fwd(primaryReg), r.out);
+    assert.match(r.out, /This edits the repo registry in the primary checkout \(an uncommitted change on main\) and the live copy\. The next sync removes the live copy unless the change is committed to main\./);
+    const hint = lane(noBoardDir(), SA, ['board'], { CCV3_USER_HOME: fakeHome });
+    assert.equal(hint.code, 1, hint.all);
+    assert.ok(hint.err.includes(`${fwd(fakeHome)}/continuous-claude/scripts/coordination/lane.mjs`), hint.err);
+  });
+
+  it('MEDIUM 4: a database failure after the files are written restores both copies byte for byte and leaves no temp file, and a retry works', async () => {
+    const before = files();
+    await q(`ALTER TABLE agentic_os.project RENAME TO project_off`);
+    let r;
+    try { r = reg(['register', dir('proj-dbfail')]); } finally { await q(`ALTER TABLE agentic_os.project_off RENAME TO project`); }
+    assert.equal(r.code, 1, r.all);
+    assert.deepEqual(files(), before);
+    assert.deepEqual(tmpLeft(), []);
+    const retry = reg(['register', dir('proj-dbfail')]);
+    assert.equal(retry.code, 0, retry.all);
+    assert.equal(read(R()), read(ACT()));
+  });
+
+  it('MEDIUM 4: when the second rename fails the repo copy is put back and no temp file stays', { skip: process.platform !== 'win32' && 'a read-only target blocks a rename only on Windows' }, () => {
+    const before = files();
+    fs.chmodSync(ACT(), 0o444);
+    let r;
+    try { r = reg(['register', dir('proj-renamefail')]); } finally { fs.chmodSync(ACT(), 0o666); }
+    assert.equal(r.code, 1, r.all);
+    assert.deepEqual(files(), before);
+    assert.deepEqual(tmpLeft(), []);
+    assert.equal(entries().some((e) => e.key === 'proj-renamefail'), false);
+    const retry = reg(['register', dir('proj-renamefail')]);
+    assert.equal(retry.code, 0, retry.all);
+  });
+
+  it('M3: a board other than continuous-claude is refused while the live lane-context hook lacks lane.client_version; a joined continuous-claude entry is not', async () => {
+    const userHome = dir('hook-home');
+    const hookFile = path.join(userHome, '.claude', 'hooks', 'dist', 'lane-context.mjs');
+    fs.mkdirSync(path.dirname(hookFile), { recursive: true });
+    fs.writeFileSync(hookFile, "// an old build\nawait client.query('SELECT 1');\n");
+    const env = { USERPROFILE: userHome, HOME: userHome, LANE_SKIP_HOOK_PRECHECK: '' };
+    const before = files();
+    const refused = reg(['register', dir('proj-hook')], env);
+    assert.equal(refused.code, 1, refused.all);
+    assert.match(refused.err, /lane\.client_version/);
+    assert.match(refused.err, /PR2/);
+    assert.deepEqual(files(), before);
+    assert.equal((await q(`SELECT 1 FROM agentic_os.project WHERE key='proj-hook'`)).rowCount, 0);
+    const joined = reg(['register', dir('ccroot/sub'), '--key', 'ccsub', '--board', 'continuous-claude'], env);
+    assert.equal(joined.code, 0, joined.all);
+    fs.writeFileSync(hookFile, "await c.query(\"SELECT set_config('lane.client_version', '2', false)\");\n");
+    const ok = reg(['register', dir('proj-hook')], env);
+    assert.equal(ok.code, 0, ok.all);
+    const missing = reg(['register', dir('proj-hook2')], { ...env, USERPROFILE: dir('no-hook-home'), HOME: dir('no-hook-home') });
+    assert.equal(missing.code, 1, missing.all);
+    assert.match(missing.err, /lane-context\.mjs/);
   });
 });

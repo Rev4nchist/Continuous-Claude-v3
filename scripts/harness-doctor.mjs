@@ -12,7 +12,8 @@
  * schedule:* reads scripts/scheduled/tasks.json and runs `schtasks /query /v /fo csv` (read-only, Windows only).
  * blocklist:age reads git history. Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds fake <task>.csv schtasks output.
  * registry:* and lanes:* read <home>/.claude/project-registry.json (the copy lane.mjs reads), the worktree lane.mjs files, and,
- * for registry:project-rows and lanes:board-columns, the database named by CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL or OPC_POSTGRES_URL
+ * for registry:project-rows, lanes:board-columns and lanes:schema (agentic_os.__migrations rows vs apps/agentic-os/drizzle/meta/_journal.json,
+ * plus the lane_guard_foreign_board trigger), the database named by CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL or OPC_POSTGRES_URL
  * (first one set; no default). That read is one READ ONLY transaction in a child process. No URL is a WARN, an unreachable database is a WARN.
  * Test seam: HARNESS_DOCTOR_NO_DB=1 skips the database read (a PASS that says skipped).
  * One line per check: PASS|WARN|FAIL  <section>:<check>  <detail>. Last line: harness: N pass / N warn / N fail.
@@ -456,6 +457,10 @@ else {
     await c.connect();
     await c.query('BEGIN READ ONLY');
     out.columns = Number((await c.query("SELECT count(*) AS n FROM information_schema.columns WHERE table_schema='agentic_os' AND table_name IN ('lane','lane_event') AND column_name='project_key'")).rows[0].n);
+    out.trigger = Number((await c.query("SELECT count(*) AS n FROM pg_trigger WHERE tgname='lane_guard_foreign_board' AND NOT tgisinternal")).rows[0].n);
+    // to_regclass: a missing table must not abort the read-only transaction.
+    if ((await c.query("SELECT to_regclass('agentic_os.__migrations') AS t")).rows[0].t) out.migrations = Number((await c.query('SELECT count(*) AS n FROM agentic_os.__migrations')).rows[0].n);
+    else out.migrationsError = 'agentic_os.__migrations does not exist';
     try { out.projects = (await c.query('SELECT key, root_path, status FROM agentic_os.project')).rows; } catch (e) { out.projectsError = e.message; }
     await c.query('ROLLBACK').catch(() => {});
   } catch (e) { out.error = e.message; }
@@ -521,6 +526,41 @@ export function laneBoardColumns(o, deps = {}) {
   return result('FAIL', 'lanes', 'board-columns', `project_key is on ${facts.columns} of 2 tables (agentic_os.lane, agentic_os.lane_event): migration 0004 is half applied`);
 }
 
+/** The migration tags the repo's drizzle journal lists, or { result } (a WARN) when the journal cannot be read. */
+function journalTags(o, deps) {
+  if (deps.journal) return deps.journal;
+  const file = join(o.repo, 'apps', 'agentic-os', 'drizzle', 'meta', '_journal.json');
+  if (!existsSync(file)) return { result: result('WARN', 'lanes', 'schema', `missing ${file}: migrations cannot be compared`) };
+  try { return { file, tags: readJson(file).entries.map((e) => e.tag) }; } catch (err) { return { result: result('WARN', 'lanes', 'schema', `${file} cannot be read: ${msg(err)}`) }; }
+}
+
+/**
+ * The database has every migration the repo journal lists, and the lane fence trigger exists. Read only.
+ * Unreachable is a WARN, never a FAIL. Behind by exactly migration 0004 is a WARN today: 0004 is not applied live yet
+ * (apply it first, then merge). Behind by anything else is a FAIL. Ahead of the journal is a WARN: this checkout is behind the database.
+ * The trigger is required only when the journal lists 0004.
+ */
+export function laneSchema(o, deps = {}) {
+  const facts = deps.facts ?? dbFacts(o);
+  const gone = dbUnavailable('lanes', 'schema', facts, 'agentic_os.__migrations');
+  if (gone) return gone;
+  const journal = journalTags(o, deps);
+  if (journal.result) return journal.result;
+  if (facts.migrationsError) return result('WARN', 'lanes', 'schema', `cannot count agentic_os.__migrations: ${facts.migrationsError}`);
+  const want = journal.tags.length;
+  const have = facts.migrations;
+  const last = journal.tags[want - 1] ?? '';
+  if (have < want) {
+    if (want - have === 1 && last.startsWith('0004')) return result('WARN', 'lanes', 'schema', `migration 0004 not applied: the database has ${have} of the ${want} migrations in the journal (${last} is missing)`);
+    return result('FAIL', 'lanes', 'schema', `the database is behind the repo: ${have} migrations applied, the journal lists ${want} (last: ${last}); apply them with drizzle-kit migrate before the code that needs them`);
+  }
+  if (have > want) return result('WARN', 'lanes', 'schema', `the database has ${have} migrations, this checkout's journal lists ${want}: this checkout is behind the database`);
+  if (journal.tags.some((t) => t.startsWith('0004')) && facts.trigger !== 1) {
+    return result('FAIL', 'lanes', 'schema', `all ${want} migrations are applied but the trigger lane_guard_foreign_board is missing (found ${facts.trigger}): the foreign-board fence is off`);
+  }
+  return result('PASS', 'lanes', 'schema', `${have} of ${want} migrations applied${journal.tags.some((t) => t.startsWith('0004')) ? ', trigger lane_guard_foreign_board present' : ''}`);
+}
+
 /** The hash of a file with CRLF folded to LF: the tree mixes line endings, and a checkout must not look like a code change. */
 const laneHash = (file) => createHash('sha256').update(readFileSync(file, 'utf8').replace(/\r\n/g, '\n')).digest('hex');
 
@@ -539,7 +579,7 @@ export function worktreeLaneMjs(o) {
 }
 
 const registrySection = (o) => [registryRootsExist(o), registryProjectRows(o)];
-const lanesSection = (o) => [laneBoardColumns(o), worktreeLaneMjs(o)];
+const lanesSection = (o) => [laneBoardColumns(o), laneSchema(o), worktreeLaneMjs(o)];
 
 // ---- run ----
 const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],

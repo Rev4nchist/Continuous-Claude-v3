@@ -1,4 +1,4 @@
-import { bigint, bigserial, index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, index, integer, jsonb, text, timestamp } from 'drizzle-orm/pg-core';
 import { agenticOs } from './project';
 
 /**
@@ -152,12 +152,10 @@ export const lane = agenticOs.table(
   (t) => [
     index('lane_state_idx').on(t.state),
     index('lane_owner_idx').on(t.ownerSessionId),
-    index('lane_track_priority_idx').on(t.projectKey, t.track, t.priority),
+    index('lane_project_track_priority_idx').on(t.projectKey, t.track, t.priority),
     index('lane_project_state_priority_idx').on(t.projectKey, t.state, t.priority, t.id),
-    // id stays the primary key, so this index never rejects a row the PK did not
-    // already reject. It exists for the board-scoped lookup shape and as a
-    // future composite FK target.
-    uniqueIndex('lane_project_id_uniq').on(t.projectKey, t.id),
+    // No unique index on (project_key, id): id is the primary key, so such an index
+    // could never reject a row the primary key had not already rejected.
   ],
 );
 
