@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertScratchUrl } from './scratch-db.mjs';
 
 const U = (db) => `postgresql://claude:x@localhost:5432/${db}`;
@@ -25,7 +27,7 @@ test('refuses an unparseable URL', () => {
   assert.throws(() => assertScratchUrl('not a url'), /refusing/);
 });
 
-import { maskUrl } from './scratch-db.mjs';
+import { createDatabase, dropDatabase, maskUrl } from './scratch-db.mjs';
 
 test('maskUrl hides the password and keeps host and database', () => {
   assert.equal(maskUrl('postgresql://claude:s3cret@localhost:5432/lanes_pr1_ab'), 'postgresql://claude:***@localhost:5432/lanes_pr1_ab');
@@ -60,4 +62,50 @@ test('session-lifecycle-probe does not print a password from --db-url, in userin
   assert.match(all, /database\s+postgresql:\/\/u:\*\*\*@127\.0\.0\.1:1\/lanes_pr1_x/, all);
   assert.ok(!all.includes('querysecret'), all);
   assert.ok(!all.includes('userinfosecret'), all);
+});
+
+// CodeRabbit PR 297 round 3, scratch-db.mjs:105. WHATWG and pg split userinfo at the LAST '@' of the authority.
+// Each test fails if maskUrl goes back to a regex that stops at the first '@' or reads past the authority.
+test('maskUrl hides all of a password that holds an unencoded @', () => {
+  assert.equal(maskUrl('postgres://u:p@ss@host:5432/lanes_pr1_ab'), 'postgres://u:***@host:5432/lanes_pr1_ab');
+});
+
+test('maskUrl does not rewrite a port, path or query when the authority has no userinfo', () => {
+  const u = 'postgres://host:5432/db?user=a@b';
+  assert.equal(maskUrl(u), u);
+});
+
+// CodeRabbit PR 297 round 3, scratch-db.mjs:196. A failed create must not leave lanes_pr1_* on the shared server.
+// Fails if createDatabase stops dropping on failure. It uses the server of the env chain, never the live database.
+const adminUrl = () => {
+  const u = new URL(process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL
+    || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude');
+  u.pathname = '/postgres';
+  return u.toString();
+};
+const dbExists = async (name) => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { Client } = createRequire(pathToFileURL(join(here, '..', '..', '.claude', 'hooks', 'package.json'))).call(null, 'pg');
+  const c = new Client({ connectionString: adminUrl(), connectionTimeoutMillis: 5000 });
+  await c.connect();
+  try { return (await c.query('SELECT 1 FROM pg_database WHERE datname=$1', [name])).rowCount === 1; } finally { await c.end(); }
+};
+
+test('createDatabase drops the new database and rethrows when the build step fails', async () => {
+  const name = `lanes_pr1_${randomBytes(4).toString('hex')}`;
+  await assert.rejects(createDatabase(adminUrl(), name, async () => {
+    assert.equal(await dbExists(name), true, 'the database exists while the build step runs');
+    throw new Error('build step failed');
+  }), /build step failed/);
+  assert.equal(await dbExists(name), false, `orphan database ${name} left behind`);
+});
+
+test('createDatabase keeps the database when the build step succeeds', async () => {
+  const name = `lanes_pr1_${randomBytes(4).toString('hex')}`;
+  try {
+    await createDatabase(adminUrl(), name, async () => {});
+    assert.equal(await dbExists(name), true);
+  } finally {
+    await dropDatabase(adminUrl(), name);
+  }
 });

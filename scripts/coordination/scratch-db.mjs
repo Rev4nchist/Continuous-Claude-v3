@@ -102,7 +102,12 @@ export function maskUrl(url) {
     }).join('&');
     out = `${s.slice(0, q + 1)}${query}${s.slice(end)}`;
   }
-  return out.replace(/(\/\/[^:/@]+:)[^@]*@/, '$1***@');
+  // Userinfo ends at the LAST '@' of the authority (WHATWG URL and pg do the same). Never read past the authority.
+  return out.replace(/^([^:/?#]+:\/\/)([^/?#]*)/, (m, scheme, auth) => {
+    const at = auth.lastIndexOf('@');
+    const colon = at < 0 ? -1 : auth.slice(0, at).indexOf(':');
+    return colon < 0 ? m : `${scheme}${auth.slice(0, colon)}:***${auth.slice(at)}`;
+  });
 }
 
 const urlWithDb = (url, db) => {
@@ -179,13 +184,30 @@ async function applyInitSchema(c) {
   }
 }
 
+/** Drop a scratch database. `adminUrl` points at the `postgres` maintenance database. */
+export async function dropDatabase(adminUrl, name) {
+  if (!NAME_RE.test(name)) throw new Error(`refusing: database name '${name}' does not start with '${PREFIX}'`);
+  await withClient(adminUrl, (c) => c.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`));
+}
+
+/** CREATE DATABASE, then `build()`. If `build` throws, drop the new database (drop errors are swallowed) and rethrow. */
+export async function createDatabase(adminUrl, name, build) {
+  if (!NAME_RE.test(name)) throw new Error(`refusing: database name '${name}' does not start with '${PREFIX}'`);
+  await withClient(adminUrl, (c) => c.query(`CREATE DATABASE "${name}"`));
+  try {
+    await build();
+  } catch (e) {
+    await dropDatabase(adminUrl, name).catch(() => {});
+    throw e;
+  }
+}
+
 async function cmdCreate(through) {
   const name = `${PREFIX}${randomBytes(4).toString('hex')}`;
   assertScratchUrl(urlWithDb(baseConnString(), name));
   const url = urlWithDb(baseConnString(), name);
   console.error(`creating scratch database ${name} on ${new URL(url).host}`);
-  await withClient(urlWithDb(baseConnString(), 'postgres'), (c) => c.query(`CREATE DATABASE "${name}"`));
-  await withClient(url, async (c) => {
+  await createDatabase(urlWithDb(baseConnString(), 'postgres'), name, () => withClient(url, async (c) => {
     await applyInitSchema(c);
     for (const f of ['001-file-claims-leases.sql', '002-g5-drop-orphan-sessions.sql', '003-sessions-lifecycle.sql']) {
       await runWholeFile(c, `coordination/migrations/${f}`, join(HERE, 'migrations', f));
@@ -193,7 +215,7 @@ async function cmdCreate(through) {
     for (const tag of journalTags()) {
       if (Number(tag.slice(0, 4)) <= through) await runDrizzleFile(c, `drizzle/${tag}.sql`, join(DRIZZLE_DIR, `${tag}.sql`));
     }
-  });
+  }));
   console.log(JSON.stringify({ url, name }));
 }
 
@@ -260,7 +282,7 @@ async function cmdSeed(url) {
 async function cmdDrop(url) {
   const name = assertScratchUrl(url);
   console.error(`dropping ${name}`);
-  await withClient(urlWithDb(url, 'postgres'), (c) => c.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`));
+  await dropDatabase(urlWithDb(url, 'postgres'), name);
   console.log(JSON.stringify({ dropped: name }));
 }
 
