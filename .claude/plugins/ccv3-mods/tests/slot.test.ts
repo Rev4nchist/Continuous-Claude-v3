@@ -42,7 +42,7 @@ const alert = (extra: Partial<Alert>): Alert => ({
   reasons: ['CodeRabbit rate limited: next included review in 12 minutes'],
   bots: ['coderabbit'],
   reviewedBy: [],
-  checkpoint: { budget: [1, 1], rounds: 0, granted: null, declined: null },
+  checkpoint: { budget: [1, 1], rounds: 0, granted: null, declined: null, band: null },
   ...extra,
 })
 
@@ -84,7 +84,7 @@ describe('slot: the model lines for a queued PR (F12)', () => {
   })
 
   test('F12 a carry that holds still says run cr-fix and do not post, queued or not', () => {
-    const carry = alert({ rateLimit: { minutes: 12 }, reasons: ['no CodeRabbit PR-bot review of the head commit; the earlier review carries once cr-fix is pasted'], checkpoint: { budget: [1, 1], rounds: 1, granted: null, declined: null }, slot: QUEUED })
+    const carry = alert({ rateLimit: { minutes: 12 }, reasons: ['no CodeRabbit PR-bot review of the head commit; the earlier review carries once cr-fix is pasted'], checkpoint: { budget: [1, 1], rounds: 1, granted: null, declined: null, band: null }, slot: QUEUED })
     const line = reportLine(carry)
     expect(line).toContain('cr-fix.mjs --pr 31')
     expect(line).toMatch(NO_POST)
