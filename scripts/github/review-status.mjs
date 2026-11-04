@@ -153,6 +153,7 @@ const ROUTER_COMMENT_MARKER = '<!-- review-router -->';
 const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})((?:\s+\w+=\w+)*)\s*-->/;
 export const ROUTER_UNVERIFIED_NOTE = 'the review router has not classified this head; Greptile stays required';
 export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow';
+export const DOCS_NOT_ROUTED_NOTE = 'risk:docs is the only risk label, but the review router classed this head above docs; Greptile stays required';
 export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again';
 const PATHWAYS = new Set(['none', 'coderabbit', 'both']);
 
@@ -219,6 +220,9 @@ export function verifiedBots(labels, comments, head, greptileAuto = true) {
   if (!state || state.head !== head) return keep(ROUTER_UNVERIFIED_NOTE);
   const top = Math.max(-1, ...(labels || []).filter((n) => n.startsWith('risk:')).map((n) => RISK_RANK[n.slice(5)] ?? -1));
   if (top > (RISK_RANK[state.class] ?? -1)) return keep(ROUTER_BEHIND_LABEL_NOTE);
+  // No bot asked and no review:none (the none path returned above): a lone risk:docs. It relaxes review only for a head the router classed docs.
+  // A label swap to risk:docs on a higher class would otherwise land with no review (aegis M1, 2026-11-03).
+  if (!need.coderabbit && state.class !== 'docs') return keep(DOCS_NOT_ROUTED_NOTE);
   return need;
 }
 

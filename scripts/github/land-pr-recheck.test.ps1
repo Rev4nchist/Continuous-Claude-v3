@@ -3,7 +3,7 @@
 #
 # The decision logic is tested in land-recheck.test.mjs. This file proves land-pr.ps1 calls it and obeys it.
 # land-pr.ps1 runs as a child process with stub gh.cmd and node.cmd first on PATH. No real gh or review call.
-#   stub node: review-status.mjs answers READY for the head; land-recheck.mjs answers what the case sets.
+#   stub node: review-status.mjs answers READY for the head; land-recheck.mjs and land-none-check.mjs answer what the case sets.
 #   stub gh:   serves the PR; a PUT to .../merge writes merge.flag, so "no merge" is checkable.
 # Failure modes:
 #   the re-check is skipped or runs after the merge                 -> W1 (refusal must leave no merge.flag)
@@ -12,6 +12,9 @@
 #   a passing re-check blocks the merge                             -> W3
 #   a local clock ahead of GitHub hides a review just before the READY time -> W3b (READY time backed off 120 s, margin printed)
 #   -IgnoreReview runs the re-check, or does not say it is skipped  -> W4
+#   land-none-check refuses (exit 1) or errs (exit 2) and the PR still merges -> W5
+#   the provenance line is not printed, or is missing from the LANDED line    -> W6
+#   -IgnoreReview skips the helper, or runs it without --warn, or it blocks   -> W7
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot 'land-pr.ps1'
 $fail = 0; $pass = 0
@@ -27,7 +30,7 @@ $sha = '0123456789abcdef0123456789abcdef01234567'
 $branch = 'fix/recheck-wiring'
 $prUrl = 'repos/Rev4nchist/Continuous-Claude-v3/pulls/7'
 
-function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut) {
+function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$noneExit = 0, [string]$noneOut = '') {
   # A stub dir plus a throwaway repo with a bare remote `fork`, so a merge that goes through can finish.
   $dir = Join-Path $work $name; $stub = Join-Path $dir 'stub'; $repo = Join-Path $dir 'repo'; $remote = Join-Path $dir 'fork.git'
   New-Item -ItemType Directory -Force -Path $stub, $repo | Out-Null
@@ -44,6 +47,8 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut) {
   Set-Content -LiteralPath (Join-Path $stub 'status.json') -Value (@{ ready = $true; head = $sha; mergeable_state = 'clean'; reasons = @() } | ConvertTo-Json -Compress)
   Set-Content -LiteralPath (Join-Path $stub 'recheck-exit.txt') -Value $recheckExit
   Set-Content -LiteralPath (Join-Path $stub 'recheck-out.txt') -Value $recheckOut
+  Set-Content -LiteralPath (Join-Path $stub 'none-exit.txt') -Value $noneExit
+  Set-Content -LiteralPath (Join-Path $stub 'none-out.txt') -Value $noneOut
   Set-Content -LiteralPath (Join-Path $stub 'gh.cmd') -Encoding ascii -Value @(
     '@echo off',
     "if `"%~1`"==`"api`" if `"%~2`"==`"$prUrl/merge`" goto merge",
@@ -61,6 +66,7 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut) {
     '@echo off',
     'echo %~1| findstr /c:"review-status" >nul && goto rs',
     'echo %~1| findstr /c:"land-recheck" >nul && goto lr',
+    'echo %~1| findstr /c:"land-none-check" >nul && goto ln',
     'echo stub node: unexpected arguments: %* 1>&2',
     'exit /b 9',
     ':rs',
@@ -70,8 +76,13 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut) {
     'echo %*> "%~dp0recheck-args.txt"',
     'type "%~dp0recheck-out.txt"',
     'set /p code=<"%~dp0recheck-exit.txt"',
-    'exit /b %code%')
-  [pscustomobject]@{ Stub = $stub; Repo = $repo; Merge = (Join-Path $stub 'merge.flag'); Args = (Join-Path $stub 'recheck-args.txt') }
+    'exit /b %code%',
+    ':ln',
+    'echo %*> "%~dp0none-args.txt"',
+    'type "%~dp0none-out.txt"',
+    'set /p ncode=<"%~dp0none-exit.txt"',
+    'exit /b %ncode%')
+  [pscustomobject]@{ Stub = $stub; Repo = $repo; Merge = (Join-Path $stub 'merge.flag'); Args = (Join-Path $stub 'recheck-args.txt'); NoneArgs = (Join-Path $stub 'none-args.txt') }
 }
 
 function Invoke-Land($case, [string[]]$extra = @()) {
@@ -121,6 +132,44 @@ try {
   Check 'W4 -IgnoreReview: the re-check did not run' (-not (Test-Path $c4.Args))
   Check 'W4 -IgnoreReview: the merge call was made' (Test-Path $c4.Merge)
   Check 'W4 -IgnoreReview: output says the review checks are skipped' ($r4.Text -match '-IgnoreReview: skipping the READY check and the pre-merge re-check')
+
+  # W5: land-none-check refuses (exit 1) or cannot decide (exit 2): nothing merges
+  foreach ($code in 1, 2) {
+    $c5 = New-Case "w5-$code" 0 '  re-check: PR #7 is unchanged' $code '  REFUSED: no record for this head'
+    $r5 = Invoke-Land $c5
+    Check "W5 none-check exit ${code}: land-pr exits non-zero and makes no merge call" ($r5.Code -ne 0 -and -not (Test-Path $c5.Merge))
+    Check "W5 none-check exit ${code}: output shows the reason and says nothing was merged" ($r5.Text -match 'no record for this head' -and $r5.Text -match 'Nothing was merged')
+  }
+  # W5b: exit 1 tells Dave to pick again; exit 2 says it could not decide and tells him to read the output, not to pick again
+  $c5a = New-Case 'w5a' 0 '  re-check: PR #7 is unchanged' 1 'REFUSED: no record'
+  $c5b = New-Case 'w5b' 0 '  re-check: PR #7 is unchanged' 2 'land-none-check: could not determine (boom)'
+  $t5a = (Invoke-Land $c5a).Text
+  $t5b = (Invoke-Land $c5b).Text
+  Check 'W5b exit 1: the message tells Dave to pick again in /pathway' ($t5a -match 'picks again')
+  Check 'W5b exit 2: the message says could not determine, read the output above, then re-run' ($t5b -match 'could not determine; read the output above, then re-run' -and $t5b -notmatch 'picks again')
+
+  # W6: a passing helper prints its line, and the line is in the LANDED summary
+  $line6 = 'Dave chose none at 2026-11-03 21:42 CST via dialog, head 0123456 (band HIGH, store x.json)'
+  $c6 = New-Case 'w6' 0 '  re-check: PR #7 is unchanged' 0 $line6
+  $r6 = Invoke-Land $c6
+  $args6 = if (Test-Path $c6.NoneArgs) { Get-Content -LiteralPath $c6.NoneArgs -Raw } else { '' }
+  Check 'W6 provenance: the merge call was made and land-pr exits 0' ((Test-Path $c6.Merge) -and $r6.Code -eq 0)
+  Check 'W6 provenance: the helper got the PR, --head <sha> and no --warn' ($args6 -match "--head $sha" -and $args6 -notmatch '--warn')
+  Check 'W6 provenance: the line is printed' ($r6.Text -match [regex]::Escape($line6))
+  Check 'W6 provenance: the line is in the LANDED summary' ($r6.Text -match 'LANDED #7:[^
+]*Dave chose none at 2026-11-03 21:42 CST')
+
+  # W7: -IgnoreReview runs the helper with --warn and still merges, even when the helper refuses
+  $c7 = New-Case 'w7' 1 '  re-check: must not run' 1 'WARNING: no record for this head'
+  $r7 = Invoke-Land $c7 @('-IgnoreReview')
+  $args7 = if (Test-Path $c7.NoneArgs) { Get-Content -LiteralPath $c7.NoneArgs -Raw } else { '' }
+  Check 'W7 -IgnoreReview: the helper ran with --warn' ($args7 -match '--warn')
+  Check 'W7 -IgnoreReview: the merge call was made even though the helper exited 1' ((Test-Path $c7.Merge) -and $r7.Code -eq 0)
+  Check 'W7 -IgnoreReview: the warning is printed and is in the LANDED summary' ($r7.Text -match 'WARNING: no record for this head' -and $r7.Text -match 'LANDED #7:[^\r\n]*WARNING: no record for this head')
+  # W7b: -IgnoreReview and the helper printed nothing and failed (it did not run): the LANDED line says so
+  $c7b = New-Case 'w7b' 1 '  re-check: must not run' 3 ''
+  $r7b = Invoke-Land $c7b @('-IgnoreReview')
+  Check 'W7b -IgnoreReview, helper failed silently: the merge still goes and the LANDED line names the failure' ((Test-Path $c7b.Merge) -and $r7b.Text -match 'LANDED #7:[^\r\n]*WARNING: none-pick check did not run \(exit 3\)')
 }
 finally {
   $env:PATH = $oldPath

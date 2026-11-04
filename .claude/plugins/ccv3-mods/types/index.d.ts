@@ -254,6 +254,8 @@ export type CheckpointRecord = {
   label: string | null
   budget: [number, number]
   decided_by: string
+  /** How the pick arrived: Dave's dialog or composer, a bridge /pathway word (Remote Control), or auto-confirm. Absent from older records. land-none-check.mjs reads it. */
+  via?: 'dialog' | 'composer' | 'bridge' | 'auto'
   session: string
   capacity?: CheckpointResult['capacity']
   appliedAt?: number
