@@ -63,9 +63,16 @@ $gitSafe = Join-Path $RepoPath 'scripts\git-safe.ps1'
 $done = [System.Collections.Generic.List[string]]::new()
 function Step($msg) { Write-Host "-> $msg" }
 # The one line land-none-check.mjs prints (the provenance line, or a WARNING under -IgnoreReview) goes into the LANDED summary.
+# Add-NoneLine returns $true when it found that line. Show-NoneOutput prints the output; a WARNING line is red.
 function Add-NoneLine($out) {
   $line = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match '^(Dave chose none at|WARNING:)' }) | Select-Object -First 1
   if ($line) { $done.Add($line) }
+  return [bool]$line
+}
+function Show-NoneOutput($out) {
+  foreach ($l in @($out | Where-Object { $null -ne $_ })) {
+    if ("$l" -match '^WARNING:') { Write-Host "$l" -ForegroundColor Red } else { Write-Host "$l" }
+  }
 }
 function Fail($msg) { Write-Host "STOPPED: $msg" -ForegroundColor Red; if ($done.Count) { Write-Host "Done before stopping: $($done -join '; ')" }; exit 1 }
 
@@ -169,18 +176,25 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     if ($LASTEXITCODE) { Fail "pre-merge re-check refused #$Pr (exit $LASTEXITCODE). Nothing was merged. Read what changed, then re-run." }
     # None-pick check: a review:none PR at HIGH or CRITICAL needs Dave's own pick on record for this head. Fails closed.
     Step "none-pick check for #$Pr"
-    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head 2>&1
+    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head
     $noneCode = $LASTEXITCODE
-    $noneOut | Out-Host
-    if ($noneCode) { Fail "none-pick check refused #$Pr (exit $noneCode). Nothing was merged. Dave picks again in /pathway for this head, then re-run." }
-    Add-NoneLine $noneOut
+    Show-NoneOutput $noneOut
+    if ($noneCode -eq 1) { Fail "none-pick check refused #$Pr (exit 1). Nothing was merged. Dave picks again in /pathway for this head, then re-run." }
+    if ($noneCode) { Fail "none-pick check: could not determine; read the output above, then re-run. Nothing was merged (exit $noneCode)." }
+    [void](Add-NoneLine $noneOut)
   } else {
     Write-Host "  -IgnoreReview: skipping the READY check and the pre-merge re-check"
     # Dave's own yes. The none-pick check still runs, as a warning only, so the yes is informed. It never blocks.
     Step "none-pick check for #$Pr (warning only)"
-    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --warn 2>&1
-    $noneOut | Out-Host
-    Add-NoneLine $noneOut
+    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --warn
+    $noneCode = $LASTEXITCODE
+    Show-NoneOutput $noneOut
+    if (-not (Add-NoneLine $noneOut) -and $noneCode) {
+      # --warn exits 0 on every path it reaches. A non-zero exit with no line means the helper did not run (node missing, crash).
+      $notRun = "WARNING: none-pick check did not run (exit $noneCode)"
+      Write-Host $notRun -ForegroundColor Red
+      $done.Add($notRun)
+    }
   }
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1

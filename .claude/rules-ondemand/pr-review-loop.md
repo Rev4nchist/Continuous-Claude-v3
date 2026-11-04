@@ -206,6 +206,9 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 - Dave can still press CodeRabbit on a lower band. That is an escalation.
 - At HIGH and CRITICAL a `review:none` label alone is not a pick. The router saves `pathway=none` there only when a fresh `pathway-confirmed` marker for the head names `none`.
   Without it the router writes a note, saves no checkpoint, and READY says `review:none has no saved checkpoint`. Below HIGH the label still counts.
+  A `none` saved with no marker at a lower band stays when a push raises the band to HIGH or CRITICAL. The router writes a note and leaves the pathway alone.
+  After a gated first run, the recovery is: return the PR to draft, run `/pathway`. A fresh `none` marker then saves the checkpoint.
+- A lone `risk:docs` label asks for no bot only when the router classed the head as `docs`. On a higher class READY keeps a bot required and says why.
 - A parser file in a HIGH PR keeps rule R2: one review, no loop.
 - A config without a `matrix` block keeps the rules R1 to R5 and RS.
 - The router ledger line names the band. The state comment and the labels do not carry it yet.
@@ -582,13 +585,14 @@ So at HIGH and CRITICAL the label and the router state do not show that Dave cho
 The `pr-checkpoint` mod stores how each pick arrived (`via`: `dialog`, `composer`, `bridge` or `auto`) in its `checkpoint:pr:<n>` record.
 After Gate C, `land-pr.ps1` runs `node scripts/github/land-none-check.mjs <pr> --repo <repo> --head <sha>`.
 
-- It needs a record only for a PR with `review:none` at band HIGH or CRITICAL. The band comes from the live files and the base-branch config.
-  A `review:none` PR whose band cannot be computed (a config with no `matrix` block) is refused.
+- It needs a record only for a PR whose labels ask for no bot (`review:none`, or a lone `risk:docs`) at band HIGH or CRITICAL. The band comes from the live files and the base-branch config.
+  `review:none` next to `review:coderabbit` asks for a CodeRabbit review, so it needs no record. A no-bot PR whose band cannot be computed (a config with no `matrix` block) is refused.
 - The record must be Dave's: `pathway none`, `label review:none`, `decided_by dave`, and `via` `dialog` or `composer`.
   A `bridge` pick (a typed word from Remote Control), an `auto` pick and an old record with no `via` are refused.
 - The record's head must equal the PR head. A push after the pick makes it stale: Dave picks again for the new head (return the PR to draft, run `/pathway`).
 - The live band must not be above the band at the pick.
-- It reads `~/.claude/plugins/store/ccv3-mods_*.json` on the machine that lands. No store file, or a file that is not JSON, is a refusal that names the file.
+- It reads the `ccv3-mods_*.json` files in the plugin store folder of `~/.claude` on the machine that lands. No store file is a refusal.
+  Two files that both hold a record for the PR are a refusal that names both. A file that is not JSON is ignored when another file holds a good record, and the provenance line names it. With no good record it is named in the refusal.
 - Exit 1 is a refusal. Exit 2 means it could not decide. `land-pr.ps1` treats both as a refusal and prints "Nothing was merged".
 - A pass prints one provenance line, for example `Dave chose none at 2026-11-03 21:42 CST via dialog, head 507f9d3 (band HIGH, store <file>)`. The line goes into the `LANDED` summary.
 - With `-IgnoreReview` the check still runs with `--warn`. It prints the line or a `WARNING`, and the merge goes on. The line is in the `LANDED` summary.
@@ -607,6 +611,7 @@ Probe: `node scripts/github/land-none-probe.mjs` (fixtures only, no GitHub write
 - `pr_watch` still toasts READY for a forged HIGH `none` PR. `review-status.mjs` does not read the store. `land-pr.ps1` is the gate.
 - The store lives on one machine. Landing from another machine, or after the store was reset, refuses until Dave picks again.
 - A forgery now touches three places (label, marker comment, store record), and each one is visible.
+- `land-none-check.mjs` is a control-plane gate file, a security-tier file and a `checkpoint.critical` file (`review-router.config.json`). The band thresholds did not change.
 
 ## Repos still on CodeRabbit
 

@@ -360,10 +360,31 @@ export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}
 export const isStoreFile = (path: string): boolean => /\/plugins\/store\/ccv3-mods_[^/]*$/.test(`/${normalizePath(path)}`)
 
 /**
- * Shell text that names the plugin store folder or one of the ccv3-mods store files, in any form and any case: denied with no lexer, so a doubt
- * reads as a deny. The land gate (land-none-check.mjs) trusts the `via` of the record in that file. A path built in code is not covered, accepted.
+ * Text that names a ccv3-mods store file: its name (`ccv3-mods_x.json`, `ccv3-mods_*`), or the plugin store folder followed by that name or a glob.
+ * `rg "plugins/store"`, another plugin's store file and a bare folder listing do not match. Tested on text with quotes and carets stripped.
  */
-export const namesStore = (command: string): boolean => /plugins[\\/]+(?:\.[\\/]+)*store\b|ccv3-mods_/i.test(command)
+const STORE_NAME_LIKE = /ccv3-mods[_*?[]|plugins[\\/]+(?:\.[\\/]+)*store[\\/]+(?:\.[\\/]+)*(?:ccv3|c\*|[*?[])/i
+/** land-none-check.mjs only reads the store, so a run of it that names a store file (--store) is open. */
+const LAND_CHECK_RUN = /^node(?:\.exe)?\s{1,10}\S{0,300}land-none-check\.mjs(?:\s|$)/i
+
+/** A segment that names a store file is open only as a read: cat, Get-Content, rg, ls and the like, a git commit or log, or a run of land-none-check.mjs. */
+const readsStore = (segment: string): boolean => {
+  if (readsStateFile(segment)) return true
+  const text = segment.trim().replace(ENV_PREFIX, '')
+  return LAND_CHECK_RUN.test(text) && !REDIRECT.test(segment) && !SLOT_CODE_LOADER.test(segment)
+}
+
+/**
+ * Shell text that could write, move, delete or build a ccv3-mods store file. The land gate (land-none-check.mjs) trusts the `via` of the record in
+ * that file, so the file is the mod's alone. An allow list on raw text, no lexer: the text splits on `; & | newline`, a backtick and `$(`, and every
+ * piece that names a store file must be a pure read (the same test as the queue state file). A write verb, a redirect, `node -e`, `cp`, `mv`, `rm`,
+ * `tee` and `Set-Content` deny. A doubt reads as a deny. A commit message that holds `;` or `>` next to the name is denied too.
+ * Not covered, accepted: a path built in code or by a glob that never names `ccv3-mods`, and an `ls` of the folder (it is a read).
+ */
+export const namesStore = (command: string): boolean => {
+  if (!STORE_NAME_LIKE.test(command.replace(/['"`^]/g, ''))) return false
+  return command.split(SLOT_SEPARATORS).some(segment => STORE_NAME_LIKE.test(segment.replace(/['"`^]/g, '')) && !readsStore(segment))
+}
 
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)

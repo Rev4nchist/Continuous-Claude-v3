@@ -931,14 +931,15 @@ test('mergeGraphqlComments keeps the REST fields and takes the body, stamp and e
 const HELD_NOTE = 'deep review held (Apex billing, D3)';
 // The review router's own comment for a head (P3c). `routed` adds one for HEAD unless `router: false`
 // or `router: <sha>`, so the routing tests describe a PR the router has classified.
-const routerComment = (sha, { id = 900, user = { login: 'github-actions[bot]', type: 'Bot' } } = {}) => ({
-  id, user, body: `<!-- review-router -->\n<!-- review-router-state class=infra head=${sha} -->\nNo open router notes.`,
+// cls: the class the router saved. A lone risk:docs relaxes review only when it is docs (aegis M1, 2026-11-03).
+const routerComment = (sha, { id = 900, user = { login: 'github-actions[bot]', type: 'Bot' }, cls = 'infra' } = {}) => ({
+  id, user, body: `<!-- review-router -->\n<!-- review-router-state class=${cls} head=${sha} -->\nNo open router notes.`,
 });
 const routed = (labels, over = {}) => {
   const i = input(over.input);
   i.pull.labels = labels.map((name) => ({ name }));
   if (over.draft !== undefined) i.pull.draft = over.draft;
-  const router = over.router === false ? [] : [routerComment(over.router ?? HEAD)];
+  const router = over.router === false ? [] : [routerComment(over.router ?? HEAD, { cls: over.cls })];
   const { comments = [], ...rest } = over.eval ?? {};
   return { ...i, reviews: [], ...rest, comments: [...router, ...comments] };
 };
@@ -1065,12 +1066,18 @@ test('routing: review:coderabbit alone needs CodeRabbit; a cancelled Greptile do
 });
 
 test('routing: risk:docs with no review label needs no bot review', () => {
-  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE }));
+  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE, cls: 'docs' }));
   assert.equal(r.ready, true, r.reasons.join('; '));
   assert.equal(r.coderabbit, null);
   assert.deepEqual(r.routing, { required: [], held: null, source: 'labels' });
-  const failing = evaluate(routed(['risk:docs'], { input: { runs: [], threads: [{ isResolved: false }] } }));
+  const failing = evaluate(routed(['risk:docs'], { input: { runs: [], threads: [{ isResolved: false }] }, cls: 'docs' }));
   assert.equal(failing.ready, false, 'threads still block');
+});
+
+test('routing: a lone risk:docs on a head the router classed above docs keeps a bot required (the label swap)', () => {
+  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE }));
+  assert.equal(r.ready, false);
+  assert.match(r.routing.unverified, /risk:docs/);
 });
 
 test('routing: no review or risk label is the old rule (Greptile required, CodeRabbit not)', () => {
@@ -1253,7 +1260,7 @@ test('routedReviewed: review:deep needs both bots', () => {
 });
 
 test('routedReviewed: risk:docs alone requires no bot, so it is true', () => {
-  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE }));
+  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE, cls: 'docs' }));
   assert.equal(r.routedReviewed, true);
   assert.equal(r.reviewedHead, false);
 });
@@ -1378,7 +1385,7 @@ test('Greptile off: every path that needed Greptile needs CodeRabbit instead', (
 });
 
 test('Greptile off: a docs PR the router classified on this head needs no bot', () => {
-  const r = evaluate(OFF(['risk:docs']));
+  const r = evaluate(OFF(['risk:docs'], { cls: 'docs' }));
   assert.deepEqual(r.routing.required, []);
   assert.equal(r.ready, true, r.reasons.join('; '));
 });

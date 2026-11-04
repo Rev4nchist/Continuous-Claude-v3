@@ -2,9 +2,9 @@
 /**
  * land-none-check.mjs - the land gate for a review:none PR at band HIGH or CRITICAL (lane agent-self-approve-hole, Dave 2026-11-03: DETECT).
  *
- * Anyone with write access can add the review:none label, and the pr-checkpoint engine takes `--by dave` at every band. So the label and the
- * router state alone do not show that Dave chose "no review". The pr-checkpoint mod stores how he chose (`via`) in its plugin store. This check
- * reads that record before land-pr.ps1 merges. It passes only for Dave's own pick (dialog or composer) on this exact head, at a band that did
+ * Anyone with write access can add the review:none label (or swap the labels to a lone risk:docs), and the pr-checkpoint engine takes `--by dave`
+ * at every band. So the labels and the router state alone do not show that Dave chose "no review". The pr-checkpoint mod stores how he chose
+ * (`via`) in its plugin store. This check reads that record before land-pr.ps1 merges. It passes only for Dave's own pick (dialog or composer) on this exact head, at a band that did
  * not rise since. It prints one provenance line, so Dave sees who chose what before he says land.
  *
  * Usage: node scripts/github/land-none-check.mjs <pr> --repo <o/r> --head <sha> [--store <file>] [--fixture <file>] [--warn] [--json]
@@ -20,13 +20,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bandOf, changedPaths, DEFAULT_REPO, loadLive, makeGh } from './review-router.mjs';
-import { pullLabelNames } from './review-status.mjs';
+import { pullLabelNames, requiredBots } from './review-status.mjs';
 
 const RANK = { LOW: 0, MID: 1, ELEVATED: 2, HIGH: 3, CRITICAL: 4 };
 const NEEDS_RECORD = new Set(['HIGH', 'CRITICAL']);
 const PICKED_BY_DAVE = new Set(['dialog', 'composer']);
 const rankOf = (band) => RANK[band] ?? -1;
-const sha7 = (sha) => String(sha ?? '').slice(0, 7) || 'none';
+const sha7 = (sha) => String(sha ?? '').slice(0, 7).toLowerCase() || 'none';
+/** Two shas are the same commit when they match in lower case: a hand-typed upper-case sha must not refuse a good record. */
+const sameSha = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
 
 const ZONE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', timeZoneName: 'short', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 /** `2026-11-03 21:42 CST`, or null when `at` is not a date. Dave's zone is America/Chicago: CST in winter, CDT in summer. */
@@ -45,7 +47,7 @@ function recordProblem(v, { pr, head, band }) {
   if (v.pathway !== 'none' || v.label !== 'review:none') return `the record holds ${v.pathway}/${v.label}, not none/review:none`;
   if (v.decided_by !== 'dave') return `decided_by is ${v.decided_by}, not dave`;
   if (!PICKED_BY_DAVE.has(v.via)) return `via is ${v.via ?? 'missing'}; only a pick in Dave's dialog or composer counts`;
-  if (v.head !== head) return `the record is for head ${sha7(v.head)}, the PR head is ${sha7(head)}; a push after the pick makes it stale`;
+  if (!sameSha(v.head, head)) return `the record is for head ${sha7(v.head)}, the PR head is ${sha7(head)}; a push after the pick makes it stale`;
   if (rankOf(v.band) < 0) return 'the record has no band';
   if (rankOf(band) > rankOf(v.band)) return `the band is ${band} now and was ${v.band} at the pick`;
   if (localTime(v.at) === null) return `the record's at is not a date (${JSON.stringify(v.at)})`;
@@ -61,23 +63,36 @@ const storeProblems = (found) => [
   ...found.bad.map((b) => `store file ${b.file} is not valid JSON (${b.error})`),
 ];
 
+/** READY's own reading of the labels: true when neither Greptile nor CodeRabbit is asked to review (review:none, or a lone risk:docs). */
+function asksNoBot(labels) {
+  const need = requiredBots(labels);
+  return !need.greptile && !need.coderabbit;
+}
+
 /**
  * nonePick({ pr, head, labels, band, read }) -> { needed, ok, line, problem, undetermined?, reason? }
  *   band: the live band name (bandOf(...)?.band) or null. head: the PR head sha.
  *   read: () => { glob, files, records: [{ file, value }], bad: [{ file, error }] }. Called only when a record is needed.
- * Not needed: no review:none label, or band LOW, MID or ELEVATED. A null band with review:none is undetermined (fail closed).
+ * Not needed: the labels ask for a bot review (requiredBots), or band LOW, MID or ELEVATED. "No bot" is review:none, or a lone risk:docs.
+ * A null band with a no-bot label set is undetermined (fail closed).
  */
 export function nonePick({ pr, head, labels = [], band = null, read }) {
-  if (!labels.includes('review:none')) return skip('the PR has no review:none label');
+  if (!asksNoBot(labels)) return skip('the labels ask for a bot review');
   if (band === null || band === undefined || rankOf(band) < 0) return refuse('the review band could not be computed from the base config, so the none pick cannot be checked', true);
   if (!NEEDS_RECORD.has(band)) return skip(`band ${band} needs no record`);
   const found = read();
+  // One record, one file. Two files that hold a record for the PR are ambiguous (a stale one, or a forged one): refuse and name both.
+  const held = found.records.filter((r) => r.value !== undefined);
+  if (held.length > 1) return refuse(`more than one store file holds checkpoint:pr:${pr} (${held.map((r) => r.file).join(', ')}); keep one`);
   const checked = found.records.map((r) => ({ ...r, problem: recordProblem(r.value, { pr, head, band }) }));
   const good = checked.find((r) => r.problem === null);
-  if (good) return { needed: true, ok: true, problem: null, line: `Dave chose none at ${localTime(good.value.at)} via ${good.value.via}, head ${sha7(head)} (band ${band}, store ${good.file})` };
+  if (good) return { needed: true, ok: true, problem: null, line: `Dave chose none at ${localTime(good.value.at)} via ${good.value.via}, head ${sha7(head)} (band ${band}, store ${good.file}${brokenNote(found)})` };
   const problems = [...storeProblems(found), ...checked.map((r) => `${r.file}: ${r.problem}`)];
   return refuse(problems.join('; '));
 }
+
+/** A store file that could not be read, next to a good record, goes on the provenance line: Dave sees it. */
+const brokenNote = (found) => (found.bad.length ? `; ignored: ${found.bad.map((b) => `${b.file} is not valid JSON`).join(', ')}` : '');
 
 // ---------- the store ----------
 
@@ -92,9 +107,9 @@ export function storeFiles(storeArg, dir = defaultStoreDir()) {
 }
 
 /** A reader for nonePick. Each file is parsed alone; a file that is not JSON goes to `bad`. */
-export function makeReader(pr, storeArg) {
+export function makeReader(pr, storeArg, dir = defaultStoreDir()) {
   return () => {
-    const { glob, files } = storeFiles(storeArg);
+    const { glob, files } = storeFiles(storeArg, dir);
     const records = [];
     const bad = [];
     for (const file of files) {
@@ -143,12 +158,13 @@ function main() {
   const pr = Number(args.find((a) => /^\d+$/.test(a)));
   const warn = flag(args, '--warn');
   try {
-    const head = opt(args, '--head');
+    let head = opt(args, '--head');
     if (!pr || !head) throw new Error('usage: land-none-check.mjs <pr> --repo <o/r> --head <sha> [--store f] [--fixture f] [--warn] [--json]');
     const { pull, files, config } = load(args, opt(args, '--repo') ?? DEFAULT_REPO, pr);
-    if (pull.head.sha !== head) throw new Error(`--head ${sha7(head)} is not the PR head ${sha7(pull.head.sha)}`);
+    if (!sameSha(pull.head.sha, head)) throw new Error(`--head ${sha7(head)} is not the PR head ${sha7(pull.head.sha)}`);
     changedPaths(files, pull);
     const labels = pullLabelNames(pull);
+    head = pull.head.sha;
     const band = bandOf(files, config, { labels })?.band ?? null;
     process.exit(report(nonePick({ pr, head, labels, band, read: makeReader(pr, opt(args, '--store')) }), { pr, warn, json: flag(args, '--json') }));
   } catch (err) {

@@ -275,9 +275,14 @@ const highest = (usedId, top) => (usedId === null && top < 0 ? null : Math.max(u
 // (a label event, a config with no matrix block) keeps the old behaviour.
 const NONE_GATED = new Set(['HIGH', 'CRITICAL']);
 export const NONE_UNCONFIRMED_NOTE = 'review:none at band HIGH or CRITICAL has no /pathway confirmation for this head, so the router saved no checkpoint. Return the PR to draft, then run /pathway.';
+// A none saved with no marker (consumed null) at a band below HIGH stays when a push raises the band. The state keeps no band, so this
+// is the signal: a pick made at HIGH or above needs a marker, and a marker sets consumed. Detect only: the pathway is not changed.
+export const NONE_BAND_RAISED_NOTE = 'review:none was saved with no /pathway confirmation, and the band is HIGH or CRITICAL now. The pathway is unchanged. Return the PR to draft, then run /pathway. land-pr.ps1 refuses until Dave picks again for this head.';
 const namesNone = (confirmed) => confirmed.some((c) => (typeof c === 'string' ? c : c?.pathway) === 'none');
 /** True when `wanted` is a change to none at HIGH or CRITICAL that no fresh none marker for the head backs. */
 const noneGated = (wanted, saved, confirmed, band) => NONE_GATED.has(band) && wanted === 'none' && saved.pathway !== 'none' && !namesNone(confirmed);
+/** True when a saved none, made with no marker, is kept at HIGH or CRITICAL with no fresh none marker. */
+const noneBandRaised = (pathway, saved, confirmed, band) => NONE_GATED.has(band) && pathway === 'none' && saved.pathway === 'none' && saved.consumed === null && !namesNone(confirmed);
 
 /**
  * The pathway and pclass this run saves. First run: only a person_override writes them (pclass = the class then).
@@ -289,7 +294,7 @@ const noneGated = (wanted, saved, confirmed, band) => NONE_GATED.has(band) && wa
  * opened and reopened happen without one. A comment saved before the checkpoint existed (no pclass) stays without them.
  */
 function checkpointOf({ event, reason, previousClass, labelsNow, effective, saved, confirmed = [], band = null }) {
-  const none = { pathway: null, pclass: null, consumed: null, noneUnconfirmed: false };
+  const none = { pathway: null, pclass: null, consumed: null, noneUnconfirmed: false, noneBandRaised: false };
   // The highest fresh marker for the head, whatever its pathway: an unused one above the used marker must not stay live.
   const top = confirmed.reduce((best, c) => (Number.isFinite(c?.id) && c.id > best ? c.id : best), -1);
   // The newest marker that names the label's pathway: the one this ready event uses up.
@@ -300,7 +305,7 @@ function checkpointOf({ event, reason, previousClass, labelsNow, effective, save
     const wanted = reason === 'person_override' ? pathwayFrom(labelsNow) : null;
     const gated = noneGated(wanted, saved, confirmed, band);
     const pathway = gated ? null : wanted;
-    return pathway ? { pathway, pclass: effective, consumed: used ? highest(used.id, top) : null, noneUnconfirmed: false } : { ...none, noneUnconfirmed: gated };
+    return pathway ? { pathway, pclass: effective, consumed: used ? highest(used.id, top) : null, noneUnconfirmed: false, noneBandRaised: false } : { ...none, noneUnconfirmed: gated };
   }
   // A confirmed ready_for_review is a new checkpoint, also when it is a raise run (a draft run saves no class).
   const redone = used !== null;
@@ -308,8 +313,9 @@ function checkpointOf({ event, reason, previousClass, labelsNow, effective, save
   const wanted = (reread ? pathwayFrom(labelsNow) : null) ?? saved.pathway;
   const gated = noneGated(wanted, saved, confirmed, band);
   const pathway = gated ? saved.pathway : wanted;
-  if (saved.pclass === null || pathway === null) return { ...none, noneUnconfirmed: gated };
-  return { pathway, pclass: redone ? effective : saved.pclass, consumed: (redone ? highest(used.id, top) : null) ?? saved.consumed, noneUnconfirmed: gated };
+  // A saved class with no pclass (a gated first run) saves a pathway only when a confirmed ready event makes the checkpoint now.
+  if (pathway === null || (saved.pclass === null && !redone)) return { ...none, noneUnconfirmed: gated };
+  return { pathway, pclass: redone ? effective : saved.pclass, consumed: (redone ? highest(used.id, top) : null) ?? saved.consumed, noneUnconfirmed: gated, noneBandRaised: noneBandRaised(pathway, saved, confirmed, band) };
 }
 
 const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Return the PR to draft (gh pr ready --undo), then run /pathway again.`;
@@ -354,7 +360,7 @@ const releasable = (previousHeld, r, labelsNow, credits) => Boolean(previousHeld
  *   previousHeld: the hold saved in the router comment (apex_d3, credits_u2) or null.
  *   previousPathway, previousPclass: the checkpoint attributes saved in the router comment, or null. confirmed: pathways /pathway confirmed for this head (confirmedMarkers; a plain pathway string has no id). previousConsumed: the marker id saved in the router comment.
  *   pr: { number, head, draft, state, paths, files?, codeRabbitRateLimited }  (files: the raw file objects; the band counts a rename once)
- *   -> { reason, class, effective, matched, previousClass, add, comment, held, pathway, pclass, noneUnconfirmed, builder, credits, band, noop }
+ *   -> { reason, class, effective, matched, previousClass, add, comment, held, pathway, pclass, noneUnconfirmed, noneBandRaised, builder, credits, band, noop }
  * band: bandOf() of the PR paths and labels (the review band), or null on a label event or a config without a matrix block.
  * reason: draft | not_open | event_ignored | person_label | routed | raised | released | person_override | no_change.
  * noop true = touch nothing, not even the comment. The decision never has a "remove".
@@ -364,7 +370,7 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const { class: cls, matched } = classify(pr.paths ?? [], config);
   const builder = builderOf(labelsNow);
   const band = LABEL_EVENTS.has(event) ? null : bandOf(pr.files ?? pr.paths ?? [], config, { labels: labelsNow });
-  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, pathway: null, pclass: null, consumed: null, noneUnconfirmed: false, builder, credits, band, noop: true };
+  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, pathway: null, pclass: null, consumed: null, noneUnconfirmed: false, noneBandRaised: false, builder, credits, band, noop: true };
   const stop = (reason) => ({ ...out, reason });
   // A label event reads no files, so it reports no class, on any PR state.
   if (LABEL_EVENTS.has(event)) return { ...stop('person_label'), class: null, effective: null, matched: {} };
@@ -411,6 +417,7 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const raisedNone = cp.pathway === 'none' && rank(effective) > rank(cp.pclass);
   const notes = [
     ...(cp.noneUnconfirmed ? [NONE_UNCONFIRMED_NOTE] : []),
+    ...(cp.noneBandRaised ? [NONE_BAND_RAISED_NOTE] : []),
     ...(raisedNone ? [raiseNote(cp.pclass, effective)] : []),
     ...(quiet ? [] : [r.comment].filter(Boolean)),
     ...sideNotes({ builder, labelsNow, wanted: r.wanted, pr }),
@@ -507,6 +514,7 @@ export function ledgerLine({ d, pr, event, ops = [], now = new Date() }) {
     ...(pr.filesSource ? { files_source: pr.filesSource } : {}),
     ...(pr.assumedReady ? { assumed_ready: true } : {}),
     ...(d.noneUnconfirmed ? { none_unconfirmed: true } : {}),
+    ...(d.noneBandRaised ? { none_band_raised: true } : {}),
   });
 }
 
