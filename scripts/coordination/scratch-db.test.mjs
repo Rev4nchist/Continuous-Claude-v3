@@ -96,7 +96,9 @@ test('loadPg falls back to the next location when pg is missing from the first, 
   const here = dirname(fileURLToPath(import.meta.url));
   const real = [join(here, '..', '..', '.claude', 'hooks', 'package.json'), join(here, '..', '..', 'apps', 'agentic-os', 'package.json')];
   const nowhere = join(tmpdir(), 'no-such-dir-for-pg', 'package.json');
-  for (const found of real) assert.equal(typeof loadPg([nowhere, found]).Client, 'function', found);
+  // pg is installed under at least one real anchor, not necessarily both: a missing first anchor must fall through to the rest.
+  assert.equal(typeof loadPg([nowhere, ...real]).Client, 'function');
+  assert.equal(typeof loadPg([nowhere, nowhere, ...real.reverse()]).Client, 'function');
   assert.throws(() => loadPg([nowhere, nowhere]), /cannot resolve the `pg` module/);
 });
 
