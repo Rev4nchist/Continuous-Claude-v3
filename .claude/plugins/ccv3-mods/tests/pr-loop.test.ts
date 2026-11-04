@@ -1275,7 +1275,7 @@ describe('pr-loop outside-diff findings', () => {
   })
 })
 
-// PR C (checkpoint states). The module under test is pr-loop plus the pr-checkpoint pane; every check reads the engine's calls.
+// PR C (checkpoint states). The module under test is pr-loop plus the pr-checkpoint questions; every check reads the engine's calls.
 // CW1  a draft PR is DRAFT: one toast "waiting on /<command>", no STALLED model line after 60 minutes
 // CW2  review:none with no router state: the STALLED line names the router re-run, never "No review on the head"
 // CW3  a PR that leaves draft restarts the 60 minute clock (it is not STALLED at its first ready check)
@@ -1311,7 +1311,7 @@ describe('pr-loop checkpoint states', () => {
   const ticks = async (clock: { advance: (ms: number) => Promise<unknown> }, n: number) => {
     for (let i = 0; i < n; i += 1) await clock.advance(TICK)
   }
-  /** Every `gh pr comment` the mod ran. A review request is posted only on Dave's press in the pane, never by the watcher. */
+  /** Every `gh pr comment` the mod ran. A review request is posted only on Dave's answer to the mod's question, never by the watcher. */
   const comments = (seen: { calls: string[][] }) => seen.calls.filter(argv => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'comment')
   const asks = (store: Map<string, unknown>) => (store.get(`checkpoint:asks:${SESSION}`) ?? []) as { kind: string; text: string }[]
   const REVIEWED_AT = (rounds: number, over: Partial<Status> = {}) =>
@@ -1347,7 +1347,7 @@ describe('pr-loop checkpoint states', () => {
     expect(seen.submits).toEqual([])
   })
 
-  test('CW4 the round ask fires at budget + 1: rounds 3 of 1+2 ask "Round 4 of 1+2", and the line sends the decision to the pane', async ($, on) => {
+  test('CW4 the round ask fires at budget + 1: rounds 3 of 1+2 ask "Round 4 of 1+2", and the line says the mod asks Dave in the session', async ($, on) => {
     const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [REVIEWED_AT(3)] } })
     await start($)
     await clock.advance(TICK)

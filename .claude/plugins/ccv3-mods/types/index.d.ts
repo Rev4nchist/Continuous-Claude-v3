@@ -226,7 +226,7 @@ export type CheckpointOption = {
   reason: string
 }
 
-/** What `pr-checkpoint.mjs --json` prints (the T21 key set of scripts/github/pr-checkpoint.test.mjs). Only the fields the pane reads. */
+/** What `pr-checkpoint.mjs --json` prints (the T21 key set of scripts/github/pr-checkpoint.test.mjs). Only the fields the mod reads. */
 export type CheckpointResult = {
   head: string
   class: string

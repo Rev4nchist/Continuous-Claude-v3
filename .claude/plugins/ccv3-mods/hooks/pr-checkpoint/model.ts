@@ -125,7 +125,7 @@ const autoOf = (value: unknown): CheckpointResult['auto'] => {
 /** The result plus the engine's drift text (`config_drift_why`: null or absent without drift, or from an old engine). */
 export type CheckpointResultWithDrift = CheckpointResult & { config_drift_why?: string | null }
 
-/** The engine's `--json` output, or null when it lacks the fields the pane reads. */
+/** The engine's `--json` output, or null when it lacks the fields the mod reads. */
 export const parseResult = (stdout: string): CheckpointResultWithDrift | null => {
   try {
     const parsed: unknown = JSON.parse(stdout)
