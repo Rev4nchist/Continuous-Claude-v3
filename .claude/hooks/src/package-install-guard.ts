@@ -19,7 +19,7 @@
  * Override: prefix command with SKIP_PACKAGE_GUARD=1
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import https from 'https';
 import http from 'http';
@@ -53,7 +53,7 @@ interface PackageInfo {
   version: string | undefined;
 }
 
-type Ecosystem = 'pypi' | 'npm' | 'cargo' | 'go' | 'gem' | 'composer' | null;
+type Ecosystem = 'pypi' | 'npm' | 'cargo' | 'go' | 'gem' | 'composer' | 'nuget' | 'brew' | null;
 
 interface MaliciousCheckResult {
   blocked: boolean;
@@ -82,9 +82,17 @@ interface InstallPattern {
 }
 
 // pip global options before `install` (-q, --disable-pip-version-check, --proxy URL).
-const PIP_OPTS = String.raw`(?:\s+(?:--(?:proxy|log|cache-dir|timeout|retries|cert|client-cert|exists-action|trusted-host|python|use-feature|keyring-provider)\s+\S+|-[-\w]+(?:=\S+)?))*`;
+// The value is never a word the flag arm also reads, so "--proxy --proxy" parses one way only: no backtracking blow-up.
+const PIP_OPTS = String.raw`(?:\s+(?:--(?:proxy|log|cache-dir|timeout|retries|cert|client-cert|exists-action|trusted-host|python|use-feature|keyring-provider)\s+(?!-[-\w]+(?:=\S+)?(?!\S))\S+|-[-\w]+(?:=\S+)?))*`;
 // Interpreter flags before `-m` (-I, -u, -X utf8, -W ignore) and the py launcher version (-3.12).
 const PY_OPTS = String.raw`(?:\s+(?:-[XW]\s*\S+|-[IuBEsSOqbdv]+|-\d(?:\.\d+)?))*`;
+// uv global options before the verb (G1): uv --directory DIR run, uv --project DIR pip install.
+// Only the listed options: an unknown one may take a value (uv --preview-features run pip install x), so it asks.
+// A value never starts with "-" ((?!-)), so "--directory --directory" parses one way only: no backtracking blow-up.
+const UV_OPTS = String.raw`(?:\s+(?:--(?:directory|project|config-file|cache-dir|python|color|python-preference|allow-insecure-host|index-strategy)(?:=|\s+(?!-))\S+|(?:-[qv]+|-n|--(?:quiet|verbose|offline|no-cache|no-progress|no-config|native-tls))(?=\s|$)))*`;
+// A variable as the interpreter (G3): $PYTHON, ${PY}, $env:PYTHON, "$PYTHON". A path that holds a variable ("$VENV/bin/python") is a DIR.
+// ${PY:-python3} and other parameter expansions are one braced word too.
+const PY_VAR = String.raw`["']?\$(?:\{[^}\s]+\}|(?:env:)?\w+)`;
 
 /**
  * How the tokens after the verb are read.
@@ -138,7 +146,8 @@ const END = String.raw`(?=\s|$)`;
 // A Node launcher, with an optional folder and Windows suffix: npm, C:\nodejs\npm.cmd, pnpm.ps1.
 const bin = (name: string) => String.raw`${DIR}${name}(?:\.cmd|\.exe|\.ps1)?["']?`;
 // Node global options before the verb (F10): npm --prefix DIR install, npm -g install, yarn --cwd DIR add.
-const NODE_OPTS = String.raw`(?:\s+(?:--(?:prefix|registry|cache|userconfig|globalconfig|loglevel|workspace|cwd|dir|filter|modules-folder)\s+\S+|-C\s+\S+|-\S+))*`;
+// A value never starts with "-" (the -\S+ arm reads it), so "--prefix --prefix" parses one way only.
+const NODE_OPTS = String.raw`(?:\s+(?:--(?:prefix|registry|cache|userconfig|globalconfig|loglevel|workspace|cwd|dir|filter|modules-folder)\s+(?!-)\S+|-C\s+(?!-)\S+|-\S+))*`;
 // npm's own aliases (npm help install / ci / exec).
 const NPM_INSTALL = '(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|install-test|it)';
 const NPM_CI = '(?:ci|clean-install|ic|install-clean|isntall-clean|install-ci-test|cit|clean-install-test|sit)';
@@ -151,14 +160,14 @@ const INSTALL_PATTERNS: InstallPattern[] = [
   // Python (Windows runs Python.exe and PIP the same as python and pip, so these ignore case)
   installPattern(String.raw`${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?${PIP_OPTS}\s+${PIP_VERBS}${END}`, 'pypi', { requirePin: true, flags: 'pip', ignoreCase: true }),
   // -m and its module may be one word: python -mpip install x.
-  installPattern(String.raw`${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?${PY_OPTS}\s+-m\s*pip${PIP_OPTS}\s+${PIP_VERBS}${END}`, 'pypi', { requirePin: true, flags: 'pip', ignoreCase: true }),
-  installPattern(String.raw`uv\s+pip\s+install${END}`, 'pypi', { requirePin: true, flags: 'pip' }),
-  installPattern(String.raw`uv\s+add${END}`, 'pypi', { flags: 'pip' }),
+  installPattern(String.raw`${DIR}(?:python(?:3(?:\.\d+)?)?|py|${PY_VAR})(?:\.exe)?["']?${PY_OPTS}\s+-m\s*pip${PIP_OPTS}\s+${PIP_VERBS}${END}`, 'pypi', { requirePin: true, flags: 'pip', ignoreCase: true }),
+  installPattern(String.raw`uv${UV_OPTS}\s+pip\s+install${END}`, 'pypi', { requirePin: true, flags: 'pip' }),
+  installPattern(String.raw`uv${UV_OPTS}\s+add${END}`, 'pypi', { flags: 'pip' }),
   installPattern(String.raw`poetry\s+add${END}`, 'pypi', { flags: 'pip' }),
   installPattern(String.raw`pipenv\s+install${END}`, 'pypi', { flags: 'pip' }),
   // Python runners and tool installs (F13): the first token is the package, the rest is its argv.
-  installPattern(String.raw`(?:uvx|uv\s+tool\s+(?:run|install)|pipx\s+(?:run|install))${END}`, 'pypi', { kind: 'first', flags: 'pyrunner' }),
-  installPattern(String.raw`uv\s+run${END}`, 'pypi', { kind: 'run', flags: 'pyrunner' }),
+  installPattern(String.raw`(?:uvx|uv${UV_OPTS}\s+tool\s+(?:run|install)|pipx\s+(?:run|install))${END}`, 'pypi', { kind: 'first', flags: 'pyrunner' }),
+  installPattern(String.raw`uv${UV_OPTS}\s+run${END}`, 'pypi', { kind: 'run', flags: 'pyrunner' }),
 
   // JavaScript / Node
   installPattern(String.raw`${bin('npm')}${NODE_OPTS}\s+${NPM_INSTALL}${END}`, 'npm', { flags: 'node' }),
@@ -167,6 +176,9 @@ const INSTALL_PATTERNS: InstallPattern[] = [
   installPattern(String.raw`${bin('npm')}${NODE_OPTS}\s+(?:exec|x)${END}`, 'npm', { kind: 'first', flags: 'node', preferLocal: true }),
   installPattern(String.raw`(?:${bin('npm')}${NODE_OPTS}\s+(?:create|init|innit)|${bin('(?:yarn|pnpm|bun)')}${NODE_OPTS}\s+create)${END}`, 'npm', { kind: 'create', flags: 'node' }),
   installPattern(String.raw`${bin('yarn')}${NODE_OPTS}\s+(?:global\s+)?(?:add|up|upgrade)${END}`, 'npm', { flags: 'node' }),
+  // A bare `yarn` / `yarn install` names no package. needsCheck counts it only when the command sets a registry (G2).
+  // Its loose form never matches: `which yarn` and `echo yarn install` are not installs.
+  { ...installPattern(String.raw`${bin('yarn')}${NODE_OPTS}(?:\s+install${END}|\s*$)`, 'npm', { flags: 'node' }), loose: /(?!)/ },
   installPattern(String.raw`${bin('pnpm')}${NODE_OPTS}\s+(?:add|install|i|update|up|upgrade)${END}`, 'npm', { flags: 'node' }),
   installPattern(String.raw`${bin('bun')}${NODE_OPTS}\s+(?:add|a|install|i|update)${END}`, 'npm', { flags: 'node' }),
   installPattern(String.raw`(?:${bin('npx')}|${bin('bunx')}|${bin('bun')}${NODE_OPTS}\s+x)${END}`, 'npm', { kind: 'first', flags: 'node', preferLocal: true }),
@@ -176,7 +188,13 @@ const INSTALL_PATTERNS: InstallPattern[] = [
   installPattern(String.raw`${bin('deno')}\s+(?:install|i|add)${END}`, 'npm', { flags: 'node' }),
 
   // Rust, Go, Ruby, PHP: matched so the guard can ask. It has no blocklist or age check for them.
-  installPattern(String.raw`cargo\s+(?:add|install)${END}`, 'cargo'),
+  installPattern(String.raw`cargo\s+(?:add|install|binstall)${END}`, 'cargo'),
+  // NuGet and Homebrew (G4): same policy as cargo, the guard has no blocklist, OSV or age check for them.
+  // Up to 8 option words may come first (dotnet -d add package X), and up to 8 project words after add.
+  // Both loops are bounded, so the loose scan stays linear: 1500 "dotnet add" words must not stall the hook.
+  installPattern(String.raw`${bin('dotnet')}(?:\s+\S+){0,8}?\s+(?:add(?:\s+\S+){0,8}?\s+package|package\s+add|tool\s+(?:install|update|exec|run)|dnx)${END}`, 'nuget'),
+  installPattern(String.raw`${bin('dnx')}${END}`, 'nuget', { kind: 'first' }),
+  installPattern(String.raw`brew\s+(?:install|reinstall|upgrade)${END}`, 'brew'),
   installPattern(String.raw`go\s+(?:get|install)${END}`, 'go'),
   installPattern(String.raw`go\s+run${END}`, 'go', { remoteOnly: true }),
   installPattern(String.raw`gem\s+install${END}`, 'gem'),
@@ -317,6 +335,9 @@ function stripPrefixes(command: string): string {
   return s;
 }
 
+/** One install segment to check, and the folder it runs in (null: the guard cannot tell). */
+export interface InstallPlan { segment: string; cwd: string | null; tool: string }
+
 /**
  * The executed segments of a Bash or PowerShell command that the guard must check. Text blocks that
  * only write text (a literal heredoc, a PowerShell here-string) are dropped and escapes resolved
@@ -324,27 +345,60 @@ function stripPrefixes(command: string): string {
  * (bash -c "...", powershell -Command "..."). Fails open to the whole command on a parser error.
  */
 export function installSegments(command: string, tool = 'Bash', depth = 0): string[] {
+  return installPlans(command, tool, null, depth).map((p) => p.segment);
+}
+
+/**
+ * installSegments, with the folder every segment runs in (`cwd`, from localBinCwd; null: not known).
+ * When the whole command sets a registry or index (npm config set registry, export npm_config_registry=),
+ * a bare install is a segment too: it installs from that registry (G2).
+ */
+export function installPlans(command: string, tool = 'Bash', cwd: string | null = null, depth = 0, configured?: boolean): InstallPlan[] {
+  const config = configured ?? (indexConfigMarkers(command).length > 0 || persistentConfigMarkers(command, tool).length > 0 || rawConfigMarkers(command).length > 0);
   try {
     const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
-    const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool));
+    const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool, config)).map((segment) => ({ segment, cwd, tool }));
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
-    return [...found, ...nested.flatMap((inner) => installSegments(inner, tool, depth + 1))];
+    return [...found, ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config))];
   } catch {
-    return needsCheck(command, tool) ? [command.trim()] : [];
+    return needsCheck(command, tool, config) ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+
+// The guard follows no cd (round 4: two verify rounds found a cd-follow bypass each, e.g. PowerShell Set-Location @zz splats).
+// Text that may move the folder, read raw and with quotes and escapes removed (c''d, c\d, "cd"), makes the folder unknown.
+const MAY_MOVE_WORD = /\b(?:cd|pushd|popd|chdir|sl|set-location|push-location|pop-location|source|eval|iex|invoke-expression)\b|(?:^|\s)\.\s|(?:^|\s)-(?:wd|wo\w*)(?=[\s:=]|$)/i;
+// pwsh -WorkingDirectory / -wd (any case, any prefix from -wo) is in MAY_MOVE_WORD.
+// A folder option (env -C, git -C, sudo -D, npm --prefix, yarn --cwd, pnpm --dir), npm's prefix setting, or an expansion ($X, ${X}, `x`).
+// Case-sensitive: bash -c and npx -c take a command, not a folder.
+const MAY_MOVE_OTHER = /(?:^|\s)(?:-[CD]|--chdir|--prefix|--cwd|--dir|--directory)(?=[\s=]|$)|(?:^|\s)-[CD]\S|[$`]/;
+
+function mayMoveFolder(text: string): boolean {
+  // A line continuation (backslash, newline) joins words: c\<LF>d runs cd.
+  const plain = text.replace(/\\\r?\n/g, '').replace(/[\\'"`^]/g, '');
+  return MAY_MOVE_WORD.test(text) || MAY_MOVE_WORD.test(plain) || MAY_MOVE_OTHER.test(text) || /npm_config_prefix/i.test(text);
+}
+
+// npm global mode looks in the global .bin, not node_modules/.bin, so the local bin does not count.
+const GLOBAL_MODE = /(?:^|\s)(?:-g|--global|--location[=\s]+global)(?=\s|$)|npm_config_global|npm_config_location/i;
+
+/** The folder the local-bin skip and the lockfile read may trust: the payload cwd, or null (every check runs) when the text may move it. */
+function localBinCwd(command: string, cwd: string | null): string | null {
+  return cwd === null || mayMoveFolder(command) || GLOBAL_MODE.test(command) ? null : cwd;
 }
 
 /**
  * A segment needs a check when it names a package, a source or index the checks cannot read, or
- * is a lockfile install. A bare install (npm install, pip install -r file) does not.
+ * is a lockfile install. A bare install (npm install, pip install -r file) does not, unless the
+ * command sets a registry or index (`configured`): then it installs from that registry.
  * A segment no pattern parses, but that holds an install outside quotes, also needs one:
  * an unknown leader (nice -n 5, xargs, a full path) must not hide the install (F10).
  */
-function needsCheck(segment: string, tool: string): boolean {
+function needsCheck(segment: string, tool: string, configured = false): boolean {
   const a = analyzeInstall(segment);
   if (!a) return hiddenInstall(segment, tool);
-  return a.packages.length > 0 || a.unparsed.length > 0 || a.customIndex.length > 0 || a.ambiguous.length > 0 || a.pattern.kind === 'lockfile';
+  return configured || a.packages.length > 0 || a.unparsed.length > 0 || a.customIndex.length > 0 || a.ambiguous.length > 0 || a.pattern.kind === 'lockfile';
 }
 
 // Manager words and the verbs that install with them. A runner (npx, uvx) installs with any word after it.
@@ -357,9 +411,12 @@ const MANAGER_VERBS: [RegExp, RegExp][] = [
   [/^pnpm$/, /^(?:add|install|i|dlx|create|update|up|upgrade)$/],
   [/^yarn$/, /^(?:add|dlx|create|up|upgrade)$/],
   [/^bun$/, /^(?:add|a|install|i|x|create|update)$/],
-  [/^(?:pip\d*(?:\.\d+)?|uv|pipx|pipenv)$/, word(PIP_VERBS)],
-  [/^(?:uv|poetry)$/, /^add$/],
-  [/^cargo$/, /^(?:add|install)$/],
+  [/^(?:pip\d*(?:\.\d+)?|pipx|pipenv)$/, word(PIP_VERBS)],
+  // uv with an option the patterns do not know (uv --foo X run --with y) still asks. managerVerbs takes the first entry, so uv has one.
+  [/^uv$/, /^(?:install|download|wheel|add|run|tool)$/],
+  [/^poetry$/, /^add$/],
+  [/^cargo$/, /^(?:add|install|binstall)$/],
+  [/^brew$/, /^(?:install|reinstall|upgrade)$/],
   [/^go$/, /^(?:get|install)$/],
   [/^gem$/, /^install$/],
   [/^composer$/, /^require$/],
@@ -507,15 +564,77 @@ const INDEX_ENV = /(?:^|\s)(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|UV_(?:EXTR
 // Index, registry and config settings in any form or position of the whole command (F11 repair):
 // export PIP_INDEX_URL=..., $env:PIP_INDEX_URL='...', npm config set registry, pip config set
 // global.index-url, --@scope:registry=, --userconfig, NPM_CONFIG_USERCONFIG=, PIP_CONFIG_FILE=.
+// Variables that point an installer at another index, registry or config file.
+const INDEX_VARS = String.raw`(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|PIP_CONFIG_FILE|UV_(?:EXTRA_|DEFAULT_)?INDEX(?:_URL)?|UV_FIND_LINKS|UV_CONFIG_FILE|npm_config_(?:registry|userconfig|globalconfig)|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|YARN_RC_FILENAME|BUN_CONFIG_REGISTRY)`;
+// Config files that can set a registry or index.
+const RC_FILE = String.raw`(?:\.npmrc|\.yarnrc(?:\.yml)?|bunfig\.toml|pip\.ini|pip\.conf)\b`;
+// Settings that outlive the command (G2): a config set or an rc file write persists for every later install.
+const PERSISTENT_CONFIG: RegExp[] = [
+  /\b(?:(?:config|c)\s+set|npm\s+set|pnpm\s+set)\s+\S*(?:registry|userconfig|globalconfig|index|find-links)\S*/gi,
+  // A write into an npm, yarn, bun or pip config file: echo registry=URL > .npmrc, tee -a .yarnrc.yml.
+  new RegExp(String.raw`(?:>>?|\btee(?:\s+-a)?)\s*["']?\S*${RC_FILE}`, 'gi'),
+  // The same through a PowerShell or copy command, up to 8 words before the file: Set-Content -Path '.npmrc', cp x .npmrc.
+  new RegExp(String.raw`(?:^|[\s;&|({])(?:set-content|add-content|out-file|sc|ac|cp|copy|copy-item|cpi|mv|move|move-item|mi)(?:\s+[^\s;&|]+){0,8}?\s+["']?[^\s;&|"']*${RC_FILE}`, 'gi'),
+  // A registry variable set through the Env: drive or .NET: Set-Item Env:npm_config_registry, SetEnvironmentVariable('npm_config_registry'.
+  new RegExp(String.raw`(?:(?<!\$)\benv:[\\/]?|SetEnvironmentVariable\(\s*["'])${INDEX_VARS}\b`, 'gi'),
+];
 const INDEX_CONFIG: RegExp[] = [
-  /\b(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|PIP_CONFIG_FILE|UV_(?:EXTRA_|DEFAULT_)?INDEX(?:_URL)?|UV_FIND_LINKS|UV_CONFIG_FILE|npm_config_(?:registry|userconfig|globalconfig)|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|YARN_RC_FILENAME|BUN_CONFIG_REGISTRY)\s*=/gi,
-  /\bconfig\s+set\s+\S*(?:registry|userconfig|globalconfig|index|find-links)\S*/gi,
+  new RegExp(String.raw`\b${INDEX_VARS}\s*=`, 'gi'),
+  ...PERSISTENT_CONFIG,
   /--(?:userconfig|globalconfig)\b/g,
   /--@[^\s=:]+:registry\b/g,
 ];
 
-function indexConfigMarkers(command: string): string[] {
-  return [...new Set(INDEX_CONFIG.flatMap((re) => [...command.matchAll(re)].map((m) => m[0].replace(/\s*=$/, ''))))];
+function indexConfigMarkers(command: string, patterns: RegExp[] = INDEX_CONFIG): string[] {
+  return [...new Set(patterns.flatMap((re) => [...command.matchAll(re)].map((m) => m[0].replace(/\s*=$/, ''))))];
+}
+
+// A registry key in an npm, pnpm or yarn set command: registry, @scope:registry, npmRegistryServer, npmScopes.
+const REGISTRY_KEY = /^(?:--?)?(?:@[^:\s]+:)?(?:registry|npmRegistryServer|npmScopes|registries)\b/i;
+
+/** npm config set -g registry U, npm set a=b registry=U, yarn config set -H npmRegistryServer U: words in any order. */
+function registrySet(segment: string): string[] {
+  const words = tokenize(stripPrefixes(segment));
+  const manager = commandName(words[0] ?? '');
+  const key = words.find((w) => REGISTRY_KEY.test(w));
+  return /^(?:npm|pnpm|yarn)$/.test(manager) && words.includes('set') && key ? [`${manager} set ${key.split("=")[0]}`] : [];
+}
+
+// G2 raw rule (round 4): the raw text, never parsed, with backslashes, quotes and backticks removed (reg\istry, r'e'gistry).
+// A registry or index key word, or a package-manager or pip config file name, anywhere in the text.
+// A hyphen after a letter or digit is inside a name (npm-registry-fetch); a flag dash (--registry) still counts.
+const RAW_CONFIG_WORD = /(?<![a-z0-9]|[a-z0-9]-)(?:registry|registries|npmRegistryServer|npmScopes|(?:extra-)?index-url|trusted-host|find[-_]links|userconfig|globalconfig|UV_INDEX|UV_DEFAULT_INDEX|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_CONFIG_FILE|UV_CONFIG_FILE|npm_config_registry)|\.npmrc|\.yarnrc|bunfig\.toml|pip\.ini|pip\.conf|uv\.toml|\.pypirc/gi;
+const RAW_MANAGER = /\b(?:npm|pnpm|yarn|bun|pip\d*|uv|poetry|pdm|conda)\b/i;
+const RAW_SET_MANAGER = /\b(?:npm|pnpm)\b/i;
+
+/**
+ * Registry, index or config text in the command, read raw (G2). It makes a chained install, even a bare
+ * one, ask. Fail closed: quoted text, a read (cat .npmrc) or any config command (npm config get) counts.
+ * A segment with a package manager and the word config (or npm/pnpm with set) is a config write; a $ or
+ * backtick key there (npm config set $K) is one too.
+ */
+function rawConfigMarkers(command: string): string[] {
+  const text = command.replace(/[\\'"`]/g, '');
+  const writes = text.split(/[;&|\r\n]/).filter((seg) =>
+    // Whole shell words only: eslint-config-prettier, set-value and lodash.set are package names, not config writes.
+    (RAW_MANAGER.test(seg) && /(?:^|\s)(?:config|c)(?=\s|$)/i.test(seg)) || (RAW_SET_MANAGER.test(seg) && /(?:^|\s)set(?=\s|$)/i.test(seg)));
+  return [...new Set([...writes.map((seg) => seg.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0])])];
+}
+
+/**
+ * Persistent registry or index settings the command executes (config set, a write into an rc file),
+ * read outside quoted text, so `git commit -m "npm config set registry"` is not one. Wrapper payloads count.
+ */
+function persistentConfigMarkers(command: string, tool: string, depth = 0): string[] {
+  try {
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
+    const own = segments.flatMap((seg) => [...indexConfigMarkers(stripQuotedStrings(seg, tool), PERSISTENT_CONFIG), ...registrySet(seg)]);
+    if (depth >= 3) return own;
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
+    return [...own, ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1))];
+  } catch {
+    return [...indexConfigMarkers(command, PERSISTENT_CONFIG), ...registrySet(command)];
+  }
 }
 
 /** Read an install command: its pattern, registry packages, unreadable sources and custom indexes. */
@@ -728,8 +847,13 @@ function canonicalVersion(version: string | undefined, ecosystem: 'pypi' | 'npm'
 // OSV.dev real-time vulnerability check
 // ---------------------------------------------------------------------------
 
+// An exact npm version. checkInstall passes a pypi version only for an exact == or === pin.
+const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
+
 interface OsvResult {
   blocked: boolean;
+  /** A CRITICAL advisory for an unknown version: ask (deny when unattended), do not hard-deny. */
+  ask?: boolean;
   warning?: string;
   advisoryId?: string;
 }
@@ -747,15 +871,19 @@ export async function checkOsvAdvisory(
   const osvEcosystem = ecosystem === 'pypi' ? 'PyPI' : 'npm';
 
   try {
-    const vulns = await queryOsv(name, version, osvEcosystem);
+    // G6b: an npm tag or range (latest, next, ^1.0.0) is not a version. Query every version, as with no version.
+    const known = version !== undefined && (ecosystem === 'pypi' || EXACT_SEMVER.test(version));
+    const vulns = await queryOsv(name, known ? version : undefined, osvEcosystem);
 
     // Check for MAL- prefixed IDs (confirmed malware from OSSF)
+    // No version: OSV lists the advisories of every version. Say so; the advisory may not apply to what installs.
+    const scope = known ? '' : ' The version to install is unknown (no exact version in the command), so this advisory may not apply to it.';
     const malware = vulns.find((v: any) => v.id?.startsWith('MAL-'));
     if (malware) {
       return {
         blocked: true,
         advisoryId: malware.id,
-        warning: `OSV.dev reports malware: ${malware.id}. ${malware.summary || malware.details?.slice(0, 200) || 'No details available'}.`,
+        warning: `OSV.dev reports malware: ${malware.id}. ${malware.summary || malware.details?.slice(0, 200) || 'No details available'}.${scope}`,
       };
     }
 
@@ -768,10 +896,12 @@ export async function checkOsvAdvisory(
       return false;
     });
     if (critical) {
+      // Dave 11-04 (CodeRabbit #291): with no exact version the advisory may not apply, so ask; an exact version denies.
       return {
-        blocked: true,
+        blocked: known,
+        ask: !known,
         advisoryId: critical.id,
-        warning: `OSV.dev reports CRITICAL vulnerability: ${critical.id}. ${critical.summary || 'No summary'}.`,
+        warning: `OSV.dev reports CRITICAL vulnerability: ${critical.id}. ${critical.summary || 'No summary'}.${scope}`,
       };
     }
 
@@ -787,7 +917,7 @@ export async function checkOsvAdvisory(
       return {
         blocked: false,
         advisoryId: high.id,
-        warning: `OSV.dev reports HIGH severity vulnerability: ${high.id}. ${high.summary || 'No summary'}.`,
+        warning: `OSV.dev reports HIGH severity vulnerability: ${high.id}. ${high.summary || 'No summary'}.${scope}`,
       };
     }
 
@@ -1145,13 +1275,21 @@ interface InstallVerdict { deny?: string; asks: string[]; advisories: string[] }
  * The reasons a segment must ask: the checks cannot vouch for what it installs (fail closed).
  * A deny from the package checks still wins over these.
  */
-function asksFor(segment: string, install: InstallAnalysis | null, cwd: string): string[] {
+function asksFor(segment: string, install: InstallAnalysis | null, cwd: string | null, tool: string): string[] {
   if (!install) {
     return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
   }
   const asks: string[] = [];
   const { pattern } = install;
-  if (pattern.kind === 'lockfile' && !['package-lock.json', 'npm-shrinkwrap.json'].some((f) => existsSync(join(cwd, f)))) {
+  // Bash splits an unquoted $VAR into words: PY='npx y'; $PY -m pip install x runs npx. "$PY" is one word.
+  // PowerShell does not split a variable (& $python), and a desktop-commander command is also read as Bash.
+  const commandWord = stripPrefixes(segment).split(/\s/)[0];
+  if (tool !== 'PowerShell' && commandWord.startsWith('$')) {
+    asks.push(`The command word is an unquoted variable (${commandWord}). Bash splits its value into words, so it may run another program. Quote it ("$VAR") or confirm it.`);
+  }
+  if (pattern.kind === 'lockfile' && cwd === null) {
+    asks.push('Lockfile install in a folder the guard cannot vouch for (a cd, a folder option or an expansion in the command). Nothing pinned to check.');
+  } else if (pattern.kind === 'lockfile' && cwd !== null && !['package-lock.json', 'npm-shrinkwrap.json'].some((f) => existsSync(join(cwd, f)))) {
     asks.push(`Lockfile install with no package-lock.json in ${cwd}. Nothing pinned to check.`);
   }
   if (install.unparsed.length > 0) {
@@ -1173,7 +1311,7 @@ function asksFor(segment: string, install: InstallAnalysis | null, cwd: string):
 const LOCAL_BIN_MAX_LEVELS = 10;
 
 /**
- * A node_modules/.bin/<name> file (or name.cmd, name.ps1) in npm's local prefix: the nearest
+ * A node_modules/.bin/<name> file (a symlink to a file counts) in npm's local prefix: the nearest
  * folder, cwd or an ancestor up to 10 levels, that holds package.json or node_modules.
  * Only that folder counts. npx fetches when the bin is missing there, even if a higher folder has it.
  */
@@ -1181,8 +1319,8 @@ function hasLocalBin(name: string, cwd: string): boolean {
   let dir = resolve(cwd);
   for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
     if (existsSync(join(dir, 'package.json')) || existsSync(join(dir, 'node_modules'))) {
-      const binDir = join(dir, 'node_modules', '.bin');
-      return ['', '.cmd', '.ps1'].some((ext) => existsSync(join(binDir, name + ext)));
+      // npm (libnpmexec) runs only a file with the exact name. A folder, or a lone .cmd or .ps1, is not one.
+      try { return statSync(join(dir, 'node_modules', '.bin', name)).isFile(); } catch { return false; }
     }
     const parent = dirname(dir);
     if (parent === dir) return false;
@@ -1191,14 +1329,17 @@ function hasLocalBin(name: string, cwd: string): boolean {
   return false;
 }
 
-async function checkInstall(segment: string, cwd: string): Promise<InstallVerdict> {
+async function checkInstall(segment: string, cwd: string | null, tool: string): Promise<InstallVerdict> {
   const install = analyzeInstall(segment);
-  const asks = asksFor(segment, install, cwd);
+  const asks = asksFor(segment, install, cwd, tool);
   const advisories: string[] = [];
   const ecosystem = install?.pattern.ecosystem;
   if (ecosystem !== 'pypi' && ecosystem !== 'npm') return { asks, advisories };
   // A runner that finds node_modules/.bin/<name> runs that file: nothing is fetched, so nothing to check.
-  const packages = install!.packages.filter((p) => p !== install!.localBin || !hasLocalBin(p.name, cwd));
+  // cwd comes from localBinCwd; null (not known) never skips.
+  // A trailing @ (npx name@) asks for name@*, which npx fetches even when the bin exists.
+  const trailingAt = /\S@(?=\s|$)/.test(segment);
+  const packages = install!.packages.filter((p) => p !== install!.localBin || cwd === null || trailingAt || !hasLocalBin(p.name, cwd));
 
   for (const pkg of packages) {
     const typo = checkTyposquat(pkg.name, ecosystem);
@@ -1218,11 +1359,15 @@ async function checkInstall(segment: string, cwd: string): Promise<InstallVerdic
   }
 
   for (const pkg of packages) {
-    const osvResult = await checkOsvAdvisory(pkg.name, pkg.version, ecosystem);
+    // A pypi version is known only with an exact == or === pin: x>=1.0 may install any later version.
+    const raw = install!.named.find((n) => n.pkg === pkg)?.raw ?? '';
+    const osvVersion = ecosystem === 'pypi' && !EXACT_PIN.test(pipSpec(raw)) ? undefined : pkg.version;
+    const osvResult = await checkOsvAdvisory(pkg.name, osvVersion, ecosystem);
     if (osvResult.blocked) {
       return { asks, advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. ${OVERRIDE}` };
     }
-    if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
+    if (osvResult.ask) asks.push(`${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. Pin an exact version to check it, or confirm.`);
+    else if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
 
     // F15 repair: npm install --tag next x installs the next tag, so age that one.
     const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version ?? install!.tag);
@@ -1267,24 +1412,36 @@ async function main() {
 
   // Fast path: no segment installs a package -> passthrough immediately.
   // A desktop-commander shell is chosen at run time, so its text is read as Bash and PowerShell.
-  const installs = [...new Set(shell.dialects.flatMap((dialect) => installSegments(command, dialect)))];
+  // A desktop-commander shell keeps its own folder, not the session folder: the local-bin skip and the lockfile read cannot use it.
+  const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
+  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(command, payloadCwd)));
+  const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   // F08: the override applies to the segment it prefixes, as a shell env assignment does.
   // A PowerShell `$env:SKIP_PACKAGE_GUARD=1;` first statement sets it for the whole command.
   const wholeOverride = PS_OVERRIDE.test(command);
-  const checked = installs.filter((segment) => !wholeOverride && !checkOverride(segment));
+  const checked = installs.filter(({ segment }) => !wholeOverride && !checkOverride(segment));
   if (checked.length < installs.length) {
     logGuardDecision('package-install-guard', input, 'override', 'SKIP_PACKAGE_GUARD', { command });
   }
   if (checked.length === 0) {
-    outputContinue();
+    // A registry change on its own persists: the next install, in another command, reads from it (G2).
+    const persistent = installs.length === 0 && !wholeOverride && !checkOverride(command)
+      ? [...new Set(shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)))]
+      : [];
+    if (persistent.length === 0) {
+      outputContinue();
+      return;
+    }
+    const decision = isUnattended(input) ? 'deny' : 'ask';
+    logGuardDecision('package-install-guard', input, decision, 'persistent registry config', { command });
+    outputDeny(`PACKAGE SECURITY: Registry or index change that persists for later installs: ${persistent.join(', ')}. The checks read the public PyPI or npm registry, not this one. ${OVERRIDE}`, decision);
     return;
   }
 
-  const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
   const advisories: string[] = [];
   const asks: string[] = [];
-  for (const segment of checked) {
-    const result = await checkInstall(segment, cwd);
+  for (const { segment, cwd, tool } of checked) {
+    const result = await checkInstall(segment, cwd, tool);
     if (result.deny) {
       logGuardDecision('package-install-guard', input, 'deny', result.deny.replace(/^PACKAGE SECURITY:\s*/, '').split(/\.\s/)[0], { command });
       outputDeny(result.deny);
@@ -1296,7 +1453,7 @@ async function main() {
 
   // F11 repair: an index or config set anywhere in the command (an earlier export, $env:, npm config
   // set) applies to the install segment too. A segment-level ask already names an inline one.
-  const config = indexConfigMarkers(command);
+  const config = [...new Set([...indexConfigMarkers(command), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(command)])];
   if (config.length > 0 && !asks.some((a) => a.startsWith('Custom package index'))) {
     asks.push(`Custom package index or config in the command: ${config.join(', ')}. The checks read the public PyPI or npm registry, not this index.`);
   }
