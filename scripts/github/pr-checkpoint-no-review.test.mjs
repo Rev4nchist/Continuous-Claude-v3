@@ -11,6 +11,8 @@
 //   the router adds a bot label to a PR that holds a recorded `none` for the head (label + marker)        -> R1
 //   the router stops adding labels when there is no record, or the marker names an older head             -> R2
 //   READY does not accept review:none with the router state pathway=none, or accepts it without the state -> S1
+//   a bare review:none label (no /pathway marker for the head) saves pathway=none at HIGH or CRITICAL        -> G1, G2, G3, G4, G7
+//   the gate blocks a legit pick (marker for the head), a PR below HIGH, or the workflow re-run               -> G5, G6, G8
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -203,4 +205,79 @@ test('S1: READY accepts review:none when the router saved pathway=none for the h
   assert.deepEqual(unsaved.blockers, [NONE_NO_CHECKPOINT_NOTE], 'a bare review:none label is not a record');
   const older = verifiedBots(labels, [routerComment(`class=steering head=${OLD_HEAD} pathway=none pclass=steering`)], HEAD);
   assert.equal(older.blockers.length, 1, 'a record for an older head does not count');
+});
+
+// ---------- self-approve: a bare review:none label at HIGH or CRITICAL saves no checkpoint ----------
+// Dave's lane agent-self-approve-hole (2026-11-03): DETECT. At HIGH and CRITICAL the router saves pathway none only when a fresh
+// pathway-confirmed marker for the head names none. READY then gives NONE_NO_CHECKPOINT_NOTE for a bare label.
+
+const NONE_LABELS = ['review:none', 'builder:claude'];
+const run = async (event, labels, over = {}, opts = {}) => {
+  const { decide } = await router();
+  return decide(event, { ...pr(), ...over }, labels, over.previousClass ?? null, LIVE, { now: new Date(NOW), ...opts });
+};
+const markers = async (...cs) => (await router()).confirmedMarkers(cs, HEAD, null);
+
+test('G1: HIGH first run with review:none and no marker saves no pathway and writes the unconfirmed note', async () => {
+  const { NONE_UNCONFIRMED_NOTE } = await router();
+  assert.equal(typeof NONE_UNCONFIRMED_NOTE, 'string', 'the router exports the note');
+  const d = await run('ready_for_review', NONE_LABELS);
+  assert.equal(d.band.band, 'HIGH');
+  assert.equal(d.pathway, null);
+  assert.equal(d.pclass, null);
+  assert.ok(d.comment?.includes(NONE_UNCONFIRMED_NOTE), `comment: ${d.comment}`);
+});
+
+test('G2: CRITICAL (risk:high) first run with review:none and no marker saves no pathway', async () => {
+  const { NONE_UNCONFIRMED_NOTE } = await router();
+  const d = await run('ready_for_review', [...NONE_LABELS, 'risk:high']);
+  assert.equal(d.band.band, 'CRITICAL');
+  assert.equal(d.pathway, null);
+  assert.ok(d.comment?.includes(NONE_UNCONFIRMED_NOTE), `comment: ${d.comment}`);
+});
+
+test('G3: a swap from review:coderabbit to review:none at HIGH on synchronize keeps pathway coderabbit', async () => {
+  const d = await run('synchronize', NONE_LABELS, { previousClass: 'infra' }, { previousPathway: 'coderabbit', previousPclass: 'infra' });
+  assert.equal(d.band.band, 'HIGH');
+  assert.equal(d.pathway, 'coderabbit');
+  assert.equal(d.pclass, 'infra');
+});
+
+test('G4: a marker that names coderabbit does not let review:none save at HIGH', async () => {
+  const confirmed = await markers(comment(11, MARKER(HEAD, 'coderabbit')));
+  assert.deepEqual(confirmed.map((m) => m.pathway), ['coderabbit']);
+  const d = await run('ready_for_review', NONE_LABELS, {}, { confirmed });
+  assert.equal(d.pathway, null);
+});
+
+test('G5: HIGH ready_for_review with a fresh none marker for the head saves pathway none and consumes the marker', async () => {
+  const confirmed = await markers(comment(11, MARKER(HEAD)));
+  const d = await run('ready_for_review', NONE_LABELS, {}, { confirmed });
+  assert.equal(d.band.band, 'HIGH');
+  assert.equal(d.pathway, 'none');
+  assert.ok(d.pclass);
+  assert.equal(d.consumed, 11);
+  assert.ok(!(d.comment ?? '').includes('no /pathway confirmation'), 'no unconfirmed note for a legit pick');
+});
+
+test('G6: ELEVATED first run with review:none and no marker still saves pathway none', async () => {
+  const d = await run('ready_for_review', NONE_LABELS, { paths: ELEVATED, files: ELEVATED.map((p) => file(p)) });
+  assert.equal(d.band.band, 'ELEVATED');
+  assert.equal(d.pathway, 'none');
+});
+
+test('G8: HIGH first run on synchronize (the workflow re-run) with a fresh none marker for the head saves pathway none', async () => {
+  const confirmed = await markers(comment(11, MARKER(HEAD)));
+  const d = await run('synchronize', NONE_LABELS, {}, { confirmed });
+  assert.equal(d.band.band, 'HIGH');
+  assert.equal(d.pathway, 'none');
+});
+
+test('G7: verifiedBots gives NONE_NO_CHECKPOINT_NOTE for the comment a gated run renders', async () => {
+  const { renderComment } = await router();
+  const { verifiedBots, NONE_NO_CHECKPOINT_NOTE } = await status();
+  const d = await run('ready_for_review', NONE_LABELS);
+  const body = renderComment(d.comment ?? 'No open router notes.', d.effective, d.head, d.held, { pathway: d.pathway, pclass: d.pclass, consumed: d.consumed });
+  const bot = { id: 5, user: { login: 'github-actions[bot]', type: 'Bot' }, body };
+  assert.deepEqual(verifiedBots(['review:none'], [bot], HEAD).blockers, [NONE_NO_CHECKPOINT_NOTE]);
 });

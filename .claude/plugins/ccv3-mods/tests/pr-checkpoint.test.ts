@@ -2967,3 +2967,109 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
   })
 })
+
+// ---- self-approve: the record says how Dave chose, and the store file is locked (lane agent-self-approve-hole, Dave 2026-11-03: DETECT) ----------
+// land-pr.ps1 (land-none-check.mjs) reads `via` from checkpoint:pr:<n> and refuses a HIGH or CRITICAL review:none pick that did not come from Dave's dialog or composer.
+// V1  a dialog pick stores no `via`, or the wrong one       V2  a composer word stores no `via`, or the wrong one
+// V3  a bridge-typed word stores `dialog` or nothing; a bridge none at HIGH that Dave answers in the dialog stores anything but `dialog`
+// V4  auto-confirm stores no `via`, or one that is not `auto`
+// V5  Lock A lets a tool write reach the plugin store file          V6  Lock B lets shell text that names the plugin store file run (warn mode included)
+describe('pr-checkpoint: via, and the plugin store lock', () => {
+  const bandJson = (band: 'LOW' | 'HIGH' | 'CRITICAL') => ({
+    stdout: JSON.stringify(
+      engineJson({
+        recommended: band === 'LOW' ? 'none' : 'coderabbit',
+        options: band === 'LOW' ? [option('none'), option('coderabbit')] : [option('coderabbit'), option('both'), option('none')],
+        band: { band },
+        auto: { eligible: false, band, reason: `Band ${band}: Dave presses.` },
+      }),
+    ),
+  })
+  const viaOf = (store: Map<string, unknown>) => (store.get('checkpoint:pr:7') as Rec).via
+
+  test('V1: a dialog pick of none at HIGH stores via dialog', async ($, on) => {
+    const { store } = world(on, { json: bandJson('HIGH'), answer: /^No review, land on CI/ })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(viaOf(store)).toBe('dialog')
+    expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+  })
+
+  test('V2: /pathway <pr> none from the composer stores via composer', async ($, on) => {
+    const { store } = world(on, { json: bandJson('HIGH') })
+    await start($)
+    await slash($, '7 none --body pr-body.md')
+    expect(viaOf(store)).toBe('composer')
+  })
+
+  test('V3: a bridge /pathway <pr> none at LOW stores via bridge', async ($, on) => {
+    const low = world(on, { json: bandJson('LOW'), answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none', 'bridge')
+    expect(viaOf(low.store)).toBe('bridge')
+  })
+
+  test('V3b: a bridge none at HIGH raises the dialog, and the exact label stores via dialog', async ($, on) => {
+    const w = world(on, { json: bandJson('HIGH'), answers: ['dismiss', /^No review, land on CI/] })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none', 'bridge')
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(viaOf(w.store)).toBe('dialog')
+  })
+
+  test('V4: auto-confirm stores via auto', async ($, on) => {
+    const { store } = world(on, { json: autoJson() })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(viaOf(store)).toBe('auto')
+  })
+
+  const STORE_FILES = [
+    'C:/home/.claude/plugins/store/ccv3-mods_ccv3-c4cd07c751a8.json',
+    'C:\home\.claude\plugins\store\ccv3-mods_ccv3-c4cd07c751a8.json',
+    'c:/HOME/.CLAUDE/Plugins/Store/CCV3-Mods_x.JSON',
+    'C:/home/.claude/plugins/store/./../store/ccv3-mods_x.json',
+    'C:/home/.claude/plugins/store/ccv3-mods_x.json.tmp-123',
+  ]
+
+  for (const tool of ['Write', 'Edit', 'MultiEdit'] as const) {
+    test(`V5: a ${tool} of the plugin store file is denied in every spelling; a neighbour file passes`, async ($, on) => {
+      const { seen } = world(on)
+      await start($)
+      for (const file_path of STORE_FILES) {
+        const r = (await $.tool.call({ tool, file_path, content: '{}', old_string: 'a', new_string: 'b', edits: [] } as never)) as unknown as { deny?: string }
+        expect(LOCK_DENIED(r), file_path).toBe(true)
+        expect(r.deny).toMatch(/plugin store/i)
+      }
+      expect(seen.ran).toEqual([])
+      const passed = await $.tool.call({ tool, file_path: 'C:/home/.claude/plugins/ccv3-mods/README.md', content: 'x', old_string: 'a', new_string: 'b', edits: [] } as never)
+      expect(LOCK_DENIED(passed as never)).toBe(false)
+    })
+  }
+
+  test('V6: shell text that names the plugin store file is denied in every form, in warn mode, and spawns no CLI', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const shell = async (tool: 'Bash' | 'PowerShell', command: string) => (await $.tool.call({ tool, command } as never)) as unknown as { deny?: string }
+    const NAMES: [('Bash' | 'PowerShell'), string][] = [
+      ['Bash', 'cat ~/.claude/plugins/store/ccv3-mods_ccv3-c4cd07c751a8.json'],
+      ['Bash', `node -e "require('fs').writeFileSync(process.env.HOME+'/.claude/plugins/store/ccv3-mods_x.json','{}')"`],
+      ['Bash', 'cp /tmp/x.json ~/.claude/plugins/store/ccv3-mods_x.json'],
+      ['Bash', 'cd ~/.claude/plugins/store && echo {} > ccv3-mods_x.json'],
+      ['PowerShell', "Set-Content -Path $HOME\.claude\plugins\store\ccv3-mods_x.json -Value '{}'"],
+      ['PowerShell', 'Get-Content $HOME/.claude/plugins/store/ccv3-mods_x.json'],
+      ['PowerShell', 'git commit -m "docs: the land gate reads ~/.claude/plugins/store/ccv3-mods_x.json"'],
+    ]
+    for (const [tool, command] of NAMES) {
+      const r = await shell(tool, command)
+      expect(LOCK_DENIED(r), `${tool}: ${command}`).toBe(true)
+      expect(r.deny).toMatch(/plugin store/i)
+    }
+    expect(seen.ran).toEqual([])
+    expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
+    expect(LOCK_DENIED(await shell('Bash', 'ls ~/.claude/plugins/ccv3-mods'))).toBe(false)
+    expect(LOCK_DENIED(await shell('Bash', 'git status'))).toBe(false)
+  })
+})
