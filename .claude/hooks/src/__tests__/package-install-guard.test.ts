@@ -1315,6 +1315,10 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     ])('CodeRabbit #285: a command string in -c/--call is not hidden: %j asks or denies', async (cmd) => {
       expect(['ask', 'deny']).toContain(await runHook(cmd, { stub: FRESH, cwd: await emptyDir() }));
     });
+    it.each(['timeout', 'sudo', 'env'])('CodeRabbit #285 round 2: %s with 40 repeated -s flags does not stall the leader regex', async (leader) => {
+      const cmd = `${leader} ${Array(40).fill('-s').join(' ')} x; npm install zz-fake-pkg-a1`;
+      expect(['ask', 'deny']).toContain(await runHook(cmd, { stub: FRESH, cwd: await emptyDir() }));
+    }, 8000);
     it('PowerShell: local bin present: npx zz-local-bin-a1 run allows', async () => {
       expect(await runHook('npx zz-local-bin-a1 run', { tool: 'PowerShell', stub: FRESH, cwd: await binFixture(BINS) })).toBeUndefined();
     });

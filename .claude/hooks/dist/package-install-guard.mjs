@@ -19018,10 +19018,10 @@ function pipSpec(token) {
   return token.split(";")[0].replace(/\s+/g, "");
 }
 var LEADER = new RegExp(String.raw`^(?:(?:${[
-  String.raw`sudo(?:\s+(?:-[ugCDhpRrTt]\s+\S+|-\S+))*`,
+  String.raw`sudo(?:\s+(?:-[ugCDhpRrTt]\s+(?!-)\S+|-\S+))*`,
   String.raw`doas(?:\s+-u\s+\S+)?`,
-  String.raw`env(?:\s+(?:-[uCS]\s+\S+|-\S+))*`,
-  String.raw`timeout(?:\s+(?:-[sk]\s+\S+|-\S+))*\s+\d+(?:\.\d+)?[smhd]?`,
+  String.raw`env(?:\s+(?:-[uCS]\s+(?!-)\S+|-\S+))*`,
+  String.raw`timeout(?:\s+(?:-[sk]\s+(?!-)\S+|-\S+))*\s+\d+(?:\.\d+)?[smhd]?`,
   String.raw`nice(?:\s+-n\s+-?\d+|\s+-\d+)?`,
   String.raw`exec(?:\s+-a\s+\S+|\s+-[cl]+)*`,
   "time",
