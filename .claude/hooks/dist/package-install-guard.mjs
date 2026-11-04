@@ -41,11 +41,13 @@ var SEGMENT_PATTERNS = [
   // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
   { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: seg(HTTP_CLIENT + methodIs("put") + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) }
 ];
+var PS_QUOTED = /"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
+var BASH_QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g;
 function stripQuotedStrings(command, tool = "Bash") {
-  if (tool === "PowerShell") {
-    return command.replace(/"(?:[^"`]|`.)*"/g, '""').replace(/'(?:[^']|'')*'/g, "''");
-  }
-  return command.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
+  return command.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, (m) => m[0] + m[0]);
+}
+function hasOpenQuote(text, tool) {
+  return /["']/.test(text.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, ""));
 }
 function parseExecutable(command) {
   const segments = [];
@@ -214,14 +216,15 @@ function readBacktick(s, start) {
   }
   return { inner: s.slice(start), end: s.length };
 }
+var PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
+var LAUNCHER = String.raw`(?:${PATH_PREFIX}(?:sudo(?:\s+-[ug]\s+\S+|\s+-\S+)*|env(?:\s+-u\s+\S+|\s+-\S+)*|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+\S+)\s+|[^\s=]+=\S+\s+)*`;
+var OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
+var PAYLOAD = String.raw`\s*("(?:[^"\\]|\\.)*"(?=\s|$)|'[^']*'(?=\s|$)|\S.*)(?:\s.*)?$`;
+var wrapper = (interp, flag) => new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, "i");
 var WRAPPER_RES = [
-  // POSIX shells: bash|sh|zsh|dash|ksh|ash ... -c|-...c "<payload>". The launcher
-  // prefix allows flags (env -i, sudo -E) before the interpreter (round-2 fix).
-  /^(?:(?:sudo|env|nohup|time)(?:\s+-\S+)*\s+|[^\s=]+=\S+\s+)*(?:bash|sh|zsh|dash|ksh|ash)\b[^'"]*?\s-[a-z]*c\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
-  // PowerShell: powershell|pwsh ... -c|-Command "<payload>"
-  /^(?:(?:sudo|env)\s+)?(?:powershell|pwsh)(?:\.exe)?\b[^'"]*?\s-c(?:ommand)?\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
-  // cmd: cmd[.exe] /c|/k "<payload>"
-  /^(?:(?:sudo|env)\s+)?cmd(?:\.exe)?\b[^'"]*?\s\/[ck]\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i
+  { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", String.raw`\s-[a-z]*c\b`) },
+  { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", String.raw`\s-c(?:ommand)?\b`) },
+  { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) }
 ];
 function unwrapPayload(raw) {
   let s = raw.trim();
@@ -230,18 +233,21 @@ function unwrapPayload(raw) {
   }
   return s.replace(/\\(["'`$\\])/g, "$1");
 }
-function wrapperPayloadsFromSegments(segments) {
+function taggedWrapperPayloads(segments) {
   const out = [];
   for (const seg2 of segments) {
-    for (const re of WRAPPER_RES) {
+    for (const { shell, re } of WRAPPER_RES) {
       const m = seg2.match(re);
       if (m && m[1]) {
-        out.push(unwrapPayload(m[1]));
+        out.push({ payload: unwrapPayload(m[1]), shell });
         break;
       }
     }
   }
   return out;
+}
+function wrapperPayloadsFromSegments(segments) {
+  return taggedWrapperPayloads(segments).map((w) => w.payload);
 }
 function bodySubstitutions(body, tool) {
   const out = [];
@@ -271,6 +277,7 @@ function bodySubstitutions(body, tool) {
 }
 function executableView(command, tool) {
   const out = [];
+  const seen = [];
   let end = null;
   let expands = false;
   let body = [];
@@ -297,7 +304,9 @@ function executableView(command, tool) {
     }
     out.push(line);
     const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
-    if (m) {
+    const before = m ? [...seen, line.slice(0, line.indexOf("<<"))].join("\n") : "";
+    seen.push(line);
+    if (m && !hasOpenQuote(before, tool)) {
       end = new RegExp(`^\\s*${m[2]}\\s*$`);
       expands = m[1] === "";
     }

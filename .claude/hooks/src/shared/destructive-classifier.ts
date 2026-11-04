@@ -13,12 +13,13 @@
 export interface DPattern { name: string; re: RegExp; }
 export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
-  // Scans across SPLIT flag tokens so `rm -f -r x` / `rm --force --recursive x`
-  // are caught, not just `rm -rf`. The terminal flag must be a SHORT cluster
-  // containing r/R (-r, -rf, -fr) OR the long --recursive — NOT any long flag that
+  // The flag may sit ANYWHERE after rm (`rm -f -r x`, `rm build -rf`, F04). It must be a SHORT
+  // cluster containing r/R (-r, -rf, -fr) OR the long --recursive — NOT any long flag that
   // merely contains the letter r (round-2 FP fix: `rm --force` / `--verbose` /
-  // `--interactive` are single-file deletes and must stay allowed).
-  { name: 'recursive rm', re: /\brm(?:\s+-{1,2}[^\s]+)*\s+(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive\b)/i },
+  // `--interactive` are single-file deletes and must stay allowed). `(?<![-\w])` keeps
+  // `docker run --rm -it` out; `(?=\s)` keeps `$(echo rm) -rf` an accepted gap. One bounded scan:
+  // the old `(?:\s+-{1,2}[^\s]+)*` split `--a` two ways and took 4 s on 28 repeats (F16).
+  { name: 'recursive rm', re: /(?<![-\w])rm(?=\s)[^;&|\n]*?\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b/i },
   { name: 'find -delete', re: /\bfind\b[^&|;]*-delete\b/i },
   { name: 'find -exec(dir) rm', re: /\bfind\b[^&|;]*-exec(?:dir)?\s+rm\b/i },
   // bulk delete via xargs — e.g. `find … | xargs rm`. Catches the non-recursive
@@ -43,15 +44,19 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   { name: 'rd/rmdir /s (recursive)', re: /\b(?:rd|rmdir)\b[^&|;]*\s\/s\b/i },
   { name: 'del /f|/s (force/recursive)', re: /\bdel\b[^&|;]*\s\/[fs]\b/i },
   // git — history rewrite / working-tree or remote destruction
-  { name: 'git reset --hard', re: /\bgit\s+reset\s+--hard\b/i },
-  { name: 'git push --force', re: /\bgit\s+push\b[^&|;]*(--force(-with-lease)?|\s-f\b)/i },
+  // --hard anywhere after reset (`git reset HEAD~3 --hard`, `git reset -q --hard`, F05).
+  { name: 'git reset --hard', re: /\bgit\s+reset\b[^;&|\n]*\s--hard\b/i },
+  // Force push: --force, a short cluster with f (-f, -uf, -fu), or a +refspec (`origin +main`, F05).
+  { name: 'git push --force', re: /\bgit\s+push\b[^&|;]*(?:--force(?:-with-lease)?|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+\S)/i },
   { name: 'git push --delete', re: /\bgit\s+push\b[^&|;]*(--delete|\s-d\b)/i },
   { name: 'git push --mirror', re: /\bgit\s+push\b[^&|;]*--mirror\b/i },
   // colon-refspec remote delete: `git push origin :branch`. The leading SPACE before
   // the colon distinguishes it from `src:dst` (a normal push to a remote branch).
   { name: 'git push :refspec delete', re: /\bgit\s+push\b[^&|;]*\s:[^\s]/i },
-  { name: 'git clean -f', re: /\bgit\s+clean(?:\s+-{1,2}[^\s]+)*\s+-{1,2}[^\s]*f[^\s]*/i },
-  { name: 'git checkout discard', re: /\bgit\s+checkout\s+(--|\.)/i },
+  // One bounded scan (F16: the old `(?:\s+-{1,2}[^\s]+)*` backtracked exponentially on `--a` runs).
+  { name: 'git clean -f', re: /\bgit\s+clean\b[^;&|\n]*\s(?:--force\b|-[a-zA-Z]*f)/i },
+  // A bare `--` or `.` path, or -f/--force, anywhere after checkout (`git checkout main -- src`, F05).
+  { name: 'git checkout discard', re: /\bgit\s+checkout\b[^;&|\n]*\s(?:--(?=\s|$)|\.(?=\s|$)|-f\b|--force\b)/i },
   // git restore discarding the WORKTREE (parity with `git checkout .`/`--`). `--staged`-only
   // (reversible unstage) and single-file `git restore file` are NOT gated (accepted).
   { name: 'git restore discard', re: /\bgit\s+restore\b[^&|;]*(--worktree\b|\s\.(?:\s|$))/i },
@@ -59,6 +64,8 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // case-SENSITIVE on the force letter so `git branch -d` (lowercase, merged-only,
   // safe) is NOT flagged — only `-D` / `-fD` / `--delete --force` (round-2 FP fix).
   { name: 'git branch -D', re: /\bgit\s+branch\s+(-D\b|--delete\s+--force|--force\s+--delete|-[a-zA-Z]*D[a-zA-Z]*\s)/ },
+  // `git branch -f main abc123` moves a branch and drops the commits it pointed at (F05).
+  { name: 'git branch -f (force move)', re: /\bgit\s+branch\b[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b/i },
   { name: 'git worktree remove --force', re: /\bgit\s+worktree\s+remove\b[^&|;]*(--force|\s-f\b)/i },
   { name: 'git submodule deinit -f', re: /\bgit\s+submodule\s+deinit\b[^&|;]*(--force|\s-f\b)/i },
   // bare `git rebase` rewrites history, but the recovery subcommands UNDO / continue an
@@ -78,6 +85,8 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   { name: 'docker prune', re: /\bdocker\s+(system|volume|network|container|image)\s+prune\b/i },
   { name: 'docker volume rm', re: /\bdocker\s+volume\s+rm\b/i },
   { name: 'docker force rm', re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
+  // `docker compose down -v` deletes the project's named volumes (F05).
+  { name: 'docker compose down --volumes', re: /\bdocker(?:-compose|\s+compose)\b[^;&|\n]*\bdown\b[^;&|\n]*\s(?:-v|--volumes)\b/i },
 ];
 
 // Fabric guards (skill-intake-fabric Phase 1). Suspend, resume, resize or delete of a capacity stops,
@@ -116,10 +125,17 @@ export const SEGMENT_PATTERNS: DPattern[] = [
 export const POWERSHELL_PATTERNS: DPattern[] = [
   { name: 'PowerShell recursive delete (Remove-Item -Recurse)', re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
   { name: 'PowerShell recursive delete ([IO.Directory]::Delete $true)', re: /\[(?:System\.)?IO\.Directory\]::Delete\([^)]*,\s*\$true\s*\)/i },
+  // F06. A second argument that is not literally $false ($r, 1, (1 -eq 1)) can be true.
+  { name: 'PowerShell [IO.Directory]::Delete with a recurse argument', re: /\[(?:System\.)?IO\.Directory\]::Delete\([^),;\n]*,\s*(?!\$false\s*\))[^\s)]/i },
+  // F06. A splat (`Remove-Item @p`) hides -Recurse inside a hashtable; the guard cannot see it.
+  { name: 'PowerShell splatted delete (Remove-Item @args)', re: /(?<![\w-])(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s@\w/i },
+  // F06. A pipe into a delete removes every item the left side yields (parity with `xargs rm`).
+  { name: 'PowerShell pipe into delete (| Remove-Item)', re: /\|\s*(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b/i },
 ];
 
 // NOTE: DB drops (psql/sqlite3 -c "DROP TABLE …") and, on the BASH tool, PowerShell
-// Remove-Item are intentionally NOT gated here. Their payload is inherently inside quotes, which
+// Remove-Item TEXT are intentionally NOT gated here. A real `powershell -Command "..."` call on the
+// Bash tool is: its payload is classified as PowerShell (2026-11-04). Their payload is inherently inside quotes, which
 // stripQuotedStrings() removes, and the same keywords appear constantly in
 // migration commit messages — gating them produces more false-positives than
 // value. Those destructive paths stay covered by: the settings deny rule
@@ -130,7 +146,9 @@ export const POWERSHELL_PATTERNS: DPattern[] = [
  * Strip quoted-string CONTENTS so destructive keywords that live inside a
  * commit message, echo arg, or other string literal don't false-trigger
  * (e.g. `git commit -m "... git reset --hard ..."`). Best-effort, non-nested:
- * handles "..." and '...' with backslash escapes. Real destructive commands
+ * ONE pass over both quote styles, so a quote char inside the other style (`'"'`) is plain text
+ * (F01: two passes let `echo '"'; rm -rf x; echo '"'` hide the rm). Bash: backslash escapes
+ * inside "...", none inside '...'. Real destructive commands
  * are unquoted (`rm -rf build`, `git push --force`) so they still match.
  * NOTE: this strip is for the TOP-LEVEL scan only. A destructive op WRAPPED in
  * `bash -c "rm -rf /"` or hidden in a command substitution `"$(rm -rf x)"` /
@@ -139,18 +157,19 @@ export const POWERSHELL_PATTERNS: DPattern[] = [
  * match too — while quoted MESSAGE text (not at a command position, or in single
  * quotes) still does not false-trigger.
  */
+// PowerShell quoting: backslash is NOT an escape (`"C:\repo\"` is a complete string);
+// the escape character is the backtick, and '' is a literal quote inside '...'.
+// Using bash rules here let `"C:\repo\" reset --hard` swallow the rest of the command.
+const PS_QUOTED = /"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
+const BASH_QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g;
+
 export function stripQuotedStrings(command: string, tool: string = 'Bash'): string {
-  if (tool === 'PowerShell') {
-    // PowerShell quoting: backslash is NOT an escape (`"C:\repo\"` is a complete string);
-    // the escape character is the backtick, and '' is a literal quote inside '...'.
-    // Using bash rules here let `"C:\repo\" reset --hard` swallow the rest of the command.
-    return command
-      .replace(/"(?:[^"`]|`.)*"/g, '""')
-      .replace(/'(?:[^']|'')*'/g, "''");
-  }
-  return command
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+  return command.replace(tool === 'PowerShell' ? PS_QUOTED : BASH_QUOTED, (m) => m[0] + m[0]);
+}
+
+/** True when `text` leaves a quote open after the one-pass strip (a lone `"` or `'`). */
+function hasOpenQuote(text: string, tool: string): boolean {
+  return /["']/.test(text.replace(tool === 'PowerShell' ? PS_QUOTED : BASH_QUOTED, ''));
 }
 
 /**
@@ -257,19 +276,26 @@ function readBacktick(s: string, start: number): { inner: string; end: number } 
   return { inner: s.slice(start), end: s.length };
 }
 
-// A shell-wrapper at a COMMAND POSITION: a segment that, after optional
-// sudo/env/VAR= prefixes, begins with a shell interpreter invoked with an exec
+// A shell-wrapper at a COMMAND POSITION: a segment that, after optional launchers and
+// VAR= prefixes, begins with a shell interpreter invoked with an exec
 // flag whose flag-cluster ends in the exec letter (-c / -lc / -Command / /c).
-// The payload is the following quoted string (or rest-of-segment). [^'"]*? skips
-// intermediate flags but stops before the payload's opening quote.
-const WRAPPER_RES: RegExp[] = [
-  // POSIX shells: bash|sh|zsh|dash|ksh|ash ... -c|-...c "<payload>". The launcher
-  // prefix allows flags (env -i, sudo -E) before the interpreter (round-2 fix).
-  /^(?:(?:sudo|env|nohup|time)(?:\s+-\S+)*\s+|[^\s=]+=\S+\s+)*(?:bash|sh|zsh|dash|ksh|ash)\b[^'"]*?\s-[a-z]*c\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
-  // PowerShell: powershell|pwsh ... -c|-Command "<payload>"
-  /^(?:(?:sudo|env)\s+)?(?:powershell|pwsh)(?:\.exe)?\b[^'"]*?\s-c(?:ommand)?\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
-  // cmd: cmd[.exe] /c|/k "<payload>"
-  /^(?:(?:sudo|env)\s+)?cmd(?:\.exe)?\b[^'"]*?\s\/[ck]\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
+// The payload is the following quoted string (trailing args after it allowed, `sh -c '...' _ x`),
+// or the rest of the segment. The option area skips flags and their QUOTED values
+// (`pwsh -wd "C:/zz" -c ...`, `bash --rcfile "/a b" -c ...`). Every name may carry a path
+// prefix (`/bin/bash`, `C:\Windows\System32\cmd.exe`, F03). Each launcher takes optional flags;
+// sudo -u/-g, env -u and timeout take one value (timeout: the duration).
+const PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
+const LAUNCHER = String.raw`(?:${PATH_PREFIX}(?:sudo(?:\s+-[ug]\s+\S+|\s+-\S+)*|env(?:\s+-u\s+\S+|\s+-\S+)*|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+\S+)\s+|[^\s=]+=\S+\s+)*`;
+const OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
+const PAYLOAD = String.raw`\s*("(?:[^"\\]|\\.)*"(?=\s|$)|'[^']*'(?=\s|$)|\S.*)(?:\s.*)?$`;
+const wrapper = (interp: string, flag: string): RegExp =>
+  new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, 'i');
+
+type WrapperShell = 'posix' | 'powershell' | 'cmd';
+const WRAPPER_RES: Array<{ shell: WrapperShell; re: RegExp }> = [
+  { shell: 'posix', re: wrapper('(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?', String.raw`\s-[a-z]*c\b`) },
+  { shell: 'powershell', re: wrapper('(?:powershell|pwsh)(?:\\.exe)?', String.raw`\s-c(?:ommand)?\b`) },
+  { shell: 'cmd', re: wrapper('cmd(?:\\.exe)?', String.raw`\s\/[ck]\b`) },
 ];
 
 function unwrapPayload(raw: string): string {
@@ -280,15 +306,20 @@ function unwrapPayload(raw: string): string {
   return s.replace(/\\(["'`$\\])/g, '$1');
 }
 
-export function wrapperPayloadsFromSegments(segments: string[]): string[] {
-  const out: string[] = [];
+/** Wrapper payloads tagged with the interpreter that runs them. */
+function taggedWrapperPayloads(segments: string[]): Array<{ payload: string; shell: WrapperShell }> {
+  const out: Array<{ payload: string; shell: WrapperShell }> = [];
   for (const seg of segments) {
-    for (const re of WRAPPER_RES) {
+    for (const { shell, re } of WRAPPER_RES) {
       const m = seg.match(re);
-      if (m && m[1]) { out.push(unwrapPayload(m[1])); break; }
+      if (m && m[1]) { out.push({ payload: unwrapPayload(m[1]), shell }); break; }
     }
   }
   return out;
+}
+
+export function wrapperPayloadsFromSegments(segments: string[]): string[] {
+  return taggedWrapperPayloads(segments).map((w) => w.payload);
 }
 
 /**
@@ -353,9 +384,12 @@ function bodySubstitutions(body: string, tool: string): string[] {
  * pipe, `;` or `&`, so `cat <<EOF | bash` and `bash <<EOF` keep their body: those lines run).
  * PowerShell: `$x = @'` / `$x = @"` assignments (accepted gap: `iex $x` can still run one).
  * An unterminated block ends at the end of the command. Anything unrecognised is left alone.
+ * A Bash opener inside an open quote (`echo "x` on an earlier line) is text, not an opener, so the
+ * lines after it stay in the view (F14).
  */
 export function executableView(command: string, tool: string): string {
   const out: string[] = [];
+  const seen: string[] = []; // command lines outside any block, to test for an open quote
   let end: RegExp | null = null;
   let expands = false;
   let body: string[] = [];
@@ -374,7 +408,9 @@ export function executableView(command: string, tool: string): string {
     }
     out.push(line);
     const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
-    if (m) { end = new RegExp(`^\\s*${m[2]}\\s*$`); expands = m[1] === ''; }
+    const before = m ? [...seen, line.slice(0, line.indexOf('<<'))].join('\n') : '';
+    seen.push(line);
+    if (m && !hasOpenQuote(before, tool)) { end = new RegExp(`^\\s*${m[2]}\\s*$`); expands = m[1] === ''; }
   }
   if (end) flush();
   return out.join('\n');
@@ -408,6 +444,24 @@ function classifySegments(view: string, tool: string): string | null {
   return null;
 }
 
+// Layer 2, fail-closed: an interpreter word (any path prefix, optional .exe) with an exec flag later in
+// the segment. The wrapper regexes above miss launchers and option shapes they do not list; this
+// does not try to parse them. It deletes every quote char from the raw segment and tests the patterns.
+const INTERPRETER_RE = /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash|pwsh|powershell|cmd)(?:\.exe)?\b/i;
+const EXEC_FLAG_RE = /\s(?:-[a-z]*c|-command|\/[ck])\b/i;
+
+function classifyInterpreterSegments(segments: string[], tool: string): string | null {
+  for (const seg of segments) {
+    const stripped = stripQuotedStrings(seg, tool);
+    const at = stripped.search(INTERPRETER_RE);
+    // Any later interpreter word sits after the first one, so testing from the first is enough.
+    if (at < 0 || !EXEC_FLAG_RE.test(stripped.slice(at))) continue;
+    const dequoted = normalizeGitGlobalOptions(seg.replace(/["']/g, ''));
+    for (const p of [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS]) if (p.re.test(dequoted)) return p.name;
+  }
+  return null;
+}
+
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
   if (!command || typeof command !== 'string') return null;
   let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
@@ -427,9 +481,15 @@ export function classifyDestructive(command: string, depth = 0, tool: string = '
       // (normalizeEscapes), or an escaped quote in a message ("say `"git reset --hard`"")
       // parses as a command.
       const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
-      const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
+      const interpHit = classifyInterpreterSegments(segments, tool);
+      if (interpHit) return interpHit;
+      // A powershell/pwsh payload runs as PowerShell, whichever tool launched it.
+      const payloads = [
+        ...taggedWrapperPayloads(segments).map((w) => ({ text: w.payload, tool: w.shell === 'powershell' ? 'PowerShell' : tool })),
+        ...substitutions.map((s) => ({ text: s, tool })),
+      ];
       for (const payload of payloads) {
-        const inner = classifyDestructive(payload, depth + 1, tool);
+        const inner = classifyDestructive(payload.text, depth + 1, payload.tool);
         if (inner) return inner;
       }
     } catch {

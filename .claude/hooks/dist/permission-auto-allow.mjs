@@ -6,12 +6,13 @@ import { readFileSync } from "node:fs";
 // src/shared/destructive-classifier.ts
 var DESTRUCTIVE_PATTERNS = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
-  // Scans across SPLIT flag tokens so `rm -f -r x` / `rm --force --recursive x`
-  // are caught, not just `rm -rf`. The terminal flag must be a SHORT cluster
-  // containing r/R (-r, -rf, -fr) OR the long --recursive — NOT any long flag that
+  // The flag may sit ANYWHERE after rm (`rm -f -r x`, `rm build -rf`, F04). It must be a SHORT
+  // cluster containing r/R (-r, -rf, -fr) OR the long --recursive — NOT any long flag that
   // merely contains the letter r (round-2 FP fix: `rm --force` / `--verbose` /
-  // `--interactive` are single-file deletes and must stay allowed).
-  { name: "recursive rm", re: /\brm(?:\s+-{1,2}[^\s]+)*\s+(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive\b)/i },
+  // `--interactive` are single-file deletes and must stay allowed). `(?<![-\w])` keeps
+  // `docker run --rm -it` out; `(?=\s)` keeps `$(echo rm) -rf` an accepted gap. One bounded scan:
+  // the old `(?:\s+-{1,2}[^\s]+)*` split `--a` two ways and took 4 s on 28 repeats (F16).
+  { name: "recursive rm", re: /(?<![-\w])rm(?=\s)[^;&|\n]*?\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b/i },
   { name: "find -delete", re: /\bfind\b[^&|;]*-delete\b/i },
   { name: "find -exec(dir) rm", re: /\bfind\b[^&|;]*-exec(?:dir)?\s+rm\b/i },
   // bulk delete via xargs — e.g. `find … | xargs rm`. Catches the non-recursive
@@ -36,15 +37,19 @@ var DESTRUCTIVE_PATTERNS = [
   { name: "rd/rmdir /s (recursive)", re: /\b(?:rd|rmdir)\b[^&|;]*\s\/s\b/i },
   { name: "del /f|/s (force/recursive)", re: /\bdel\b[^&|;]*\s\/[fs]\b/i },
   // git — history rewrite / working-tree or remote destruction
-  { name: "git reset --hard", re: /\bgit\s+reset\s+--hard\b/i },
-  { name: "git push --force", re: /\bgit\s+push\b[^&|;]*(--force(-with-lease)?|\s-f\b)/i },
+  // --hard anywhere after reset (`git reset HEAD~3 --hard`, `git reset -q --hard`, F05).
+  { name: "git reset --hard", re: /\bgit\s+reset\b[^;&|\n]*\s--hard\b/i },
+  // Force push: --force, a short cluster with f (-f, -uf, -fu), or a +refspec (`origin +main`, F05).
+  { name: "git push --force", re: /\bgit\s+push\b[^&|;]*(?:--force(?:-with-lease)?|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+\S)/i },
   { name: "git push --delete", re: /\bgit\s+push\b[^&|;]*(--delete|\s-d\b)/i },
   { name: "git push --mirror", re: /\bgit\s+push\b[^&|;]*--mirror\b/i },
   // colon-refspec remote delete: `git push origin :branch`. The leading SPACE before
   // the colon distinguishes it from `src:dst` (a normal push to a remote branch).
   { name: "git push :refspec delete", re: /\bgit\s+push\b[^&|;]*\s:[^\s]/i },
-  { name: "git clean -f", re: /\bgit\s+clean(?:\s+-{1,2}[^\s]+)*\s+-{1,2}[^\s]*f[^\s]*/i },
-  { name: "git checkout discard", re: /\bgit\s+checkout\s+(--|\.)/i },
+  // One bounded scan (F16: the old `(?:\s+-{1,2}[^\s]+)*` backtracked exponentially on `--a` runs).
+  { name: "git clean -f", re: /\bgit\s+clean\b[^;&|\n]*\s(?:--force\b|-[a-zA-Z]*f)/i },
+  // A bare `--` or `.` path, or -f/--force, anywhere after checkout (`git checkout main -- src`, F05).
+  { name: "git checkout discard", re: /\bgit\s+checkout\b[^;&|\n]*\s(?:--(?=\s|$)|\.(?=\s|$)|-f\b|--force\b)/i },
   // git restore discarding the WORKTREE (parity with `git checkout .`/`--`). `--staged`-only
   // (reversible unstage) and single-file `git restore file` are NOT gated (accepted).
   { name: "git restore discard", re: /\bgit\s+restore\b[^&|;]*(--worktree\b|\s\.(?:\s|$))/i },
@@ -52,6 +57,8 @@ var DESTRUCTIVE_PATTERNS = [
   // case-SENSITIVE on the force letter so `git branch -d` (lowercase, merged-only,
   // safe) is NOT flagged — only `-D` / `-fD` / `--delete --force` (round-2 FP fix).
   { name: "git branch -D", re: /\bgit\s+branch\s+(-D\b|--delete\s+--force|--force\s+--delete|-[a-zA-Z]*D[a-zA-Z]*\s)/ },
+  // `git branch -f main abc123` moves a branch and drops the commits it pointed at (F05).
+  { name: "git branch -f (force move)", re: /\bgit\s+branch\b[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b/i },
   { name: "git worktree remove --force", re: /\bgit\s+worktree\s+remove\b[^&|;]*(--force|\s-f\b)/i },
   { name: "git submodule deinit -f", re: /\bgit\s+submodule\s+deinit\b[^&|;]*(--force|\s-f\b)/i },
   // bare `git rebase` rewrites history, but the recovery subcommands UNDO / continue an
@@ -70,7 +77,9 @@ var DESTRUCTIVE_PATTERNS = [
   // docker — volume/image/system destruction
   { name: "docker prune", re: /\bdocker\s+(system|volume|network|container|image)\s+prune\b/i },
   { name: "docker volume rm", re: /\bdocker\s+volume\s+rm\b/i },
-  { name: "docker force rm", re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i }
+  { name: "docker force rm", re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
+  // `docker compose down -v` deletes the project's named volumes (F05).
+  { name: "docker compose down --volumes", re: /\bdocker(?:-compose|\s+compose)\b[^;&|\n]*\bdown\b[^;&|\n]*\s(?:-v|--volumes)\b/i }
 ];
 var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
 var SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
@@ -94,13 +103,21 @@ var SEGMENT_PATTERNS = [
 ];
 var POWERSHELL_PATTERNS = [
   { name: "PowerShell recursive delete (Remove-Item -Recurse)", re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
-  { name: "PowerShell recursive delete ([IO.Directory]::Delete $true)", re: /\[(?:System\.)?IO\.Directory\]::Delete\([^)]*,\s*\$true\s*\)/i }
+  { name: "PowerShell recursive delete ([IO.Directory]::Delete $true)", re: /\[(?:System\.)?IO\.Directory\]::Delete\([^)]*,\s*\$true\s*\)/i },
+  // F06. A second argument that is not literally $false ($r, 1, (1 -eq 1)) can be true.
+  { name: "PowerShell [IO.Directory]::Delete with a recurse argument", re: /\[(?:System\.)?IO\.Directory\]::Delete\([^),;\n]*,\s*(?!\$false\s*\))[^\s)]/i },
+  // F06. A splat (`Remove-Item @p`) hides -Recurse inside a hashtable; the guard cannot see it.
+  { name: "PowerShell splatted delete (Remove-Item @args)", re: /(?<![\w-])(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s@\w/i },
+  // F06. A pipe into a delete removes every item the left side yields (parity with `xargs rm`).
+  { name: "PowerShell pipe into delete (| Remove-Item)", re: /\|\s*(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b/i }
 ];
+var PS_QUOTED = /"(?:[^"`]|`.)*"|'(?:[^']|'')*'/g;
+var BASH_QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g;
 function stripQuotedStrings(command, tool = "Bash") {
-  if (tool === "PowerShell") {
-    return command.replace(/"(?:[^"`]|`.)*"/g, '""').replace(/'(?:[^']|'')*'/g, "''");
-  }
-  return command.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
+  return command.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, (m) => m[0] + m[0]);
+}
+function hasOpenQuote(text, tool) {
+  return /["']/.test(text.replace(tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED, ""));
 }
 function parseExecutable(command) {
   const segments = [];
@@ -269,14 +286,15 @@ function readBacktick(s, start) {
   }
   return { inner: s.slice(start), end: s.length };
 }
+var PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
+var LAUNCHER = String.raw`(?:${PATH_PREFIX}(?:sudo(?:\s+-[ug]\s+\S+|\s+-\S+)*|env(?:\s+-u\s+\S+|\s+-\S+)*|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+\S+)\s+|[^\s=]+=\S+\s+)*`;
+var OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
+var PAYLOAD = String.raw`\s*("(?:[^"\\]|\\.)*"(?=\s|$)|'[^']*'(?=\s|$)|\S.*)(?:\s.*)?$`;
+var wrapper = (interp, flag) => new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, "i");
 var WRAPPER_RES = [
-  // POSIX shells: bash|sh|zsh|dash|ksh|ash ... -c|-...c "<payload>". The launcher
-  // prefix allows flags (env -i, sudo -E) before the interpreter (round-2 fix).
-  /^(?:(?:sudo|env|nohup|time)(?:\s+-\S+)*\s+|[^\s=]+=\S+\s+)*(?:bash|sh|zsh|dash|ksh|ash)\b[^'"]*?\s-[a-z]*c\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
-  // PowerShell: powershell|pwsh ... -c|-Command "<payload>"
-  /^(?:(?:sudo|env)\s+)?(?:powershell|pwsh)(?:\.exe)?\b[^'"]*?\s-c(?:ommand)?\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
-  // cmd: cmd[.exe] /c|/k "<payload>"
-  /^(?:(?:sudo|env)\s+)?cmd(?:\.exe)?\b[^'"]*?\s\/[ck]\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i
+  { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", String.raw`\s-[a-z]*c\b`) },
+  { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", String.raw`\s-c(?:ommand)?\b`) },
+  { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) }
 ];
 function unwrapPayload(raw) {
   let s = raw.trim();
@@ -285,13 +303,13 @@ function unwrapPayload(raw) {
   }
   return s.replace(/\\(["'`$\\])/g, "$1");
 }
-function wrapperPayloadsFromSegments(segments) {
+function taggedWrapperPayloads(segments) {
   const out = [];
   for (const seg2 of segments) {
-    for (const re of WRAPPER_RES) {
+    for (const { shell, re } of WRAPPER_RES) {
       const m = seg2.match(re);
       if (m && m[1]) {
-        out.push(unwrapPayload(m[1]));
+        out.push({ payload: unwrapPayload(m[1]), shell });
         break;
       }
     }
@@ -332,6 +350,7 @@ function bodySubstitutions(body, tool) {
 }
 function executableView(command, tool) {
   const out = [];
+  const seen = [];
   let end = null;
   let expands = false;
   let body = [];
@@ -358,7 +377,9 @@ function executableView(command, tool) {
     }
     out.push(line);
     const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
-    if (m) {
+    const before = m ? [...seen, line.slice(0, line.indexOf("<<"))].join("\n") : "";
+    seen.push(line);
+    if (m && !hasOpenQuote(before, tool)) {
       end = new RegExp(`^\\s*${m[2]}\\s*$`);
       expands = m[1] === "";
     }
@@ -379,6 +400,18 @@ function classifySegments(view, tool) {
   }
   return null;
 }
+var INTERPRETER_RE = /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash|pwsh|powershell|cmd)(?:\.exe)?\b/i;
+var EXEC_FLAG_RE = /\s(?:-[a-z]*c|-command|\/[ck])\b/i;
+function classifyInterpreterSegments(segments, tool) {
+  for (const seg2 of segments) {
+    const stripped = stripQuotedStrings(seg2, tool);
+    const at = stripped.search(INTERPRETER_RE);
+    if (at < 0 || !EXEC_FLAG_RE.test(stripped.slice(at))) continue;
+    const dequoted = normalizeGitGlobalOptions(seg2.replace(/["']/g, ""));
+    for (const p of [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS]) if (p.re.test(dequoted)) return p.name;
+  }
+  return null;
+}
 function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (!command || typeof command !== "string") return null;
   let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
@@ -393,9 +426,14 @@ function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (depth < 4) {
     try {
       const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
-      const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
+      const interpHit = classifyInterpreterSegments(segments, tool);
+      if (interpHit) return interpHit;
+      const payloads = [
+        ...taggedWrapperPayloads(segments).map((w) => ({ text: w.payload, tool: w.shell === "powershell" ? "PowerShell" : tool })),
+        ...substitutions.map((s) => ({ text: s, tool }))
+      ];
       for (const payload of payloads) {
-        const inner = classifyDestructive(payload, depth + 1, tool);
+        const inner = classifyDestructive(payload.text, depth + 1, payload.tool);
         if (inner) return inner;
       }
     } catch {
