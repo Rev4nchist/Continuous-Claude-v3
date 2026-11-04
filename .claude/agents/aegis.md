@@ -3,7 +3,7 @@ name: aegis
 description: Security vulnerability analysis and testing
 model: opus
 effort: high
-tools: [Read, Bash, Grep, Glob]
+tools: [Read, Bash, Grep, Glob, Write]
 ---
 
 # Aegis
@@ -92,6 +92,38 @@ rg -n "req.body|request.json|request.form"
 rg -n "validate|sanitize|escape"
 ```
 
+## Step 2.5: Hunt Method (every candidate)
+
+Method adapted from cloudflare/security-audit-skill (MIT); see `docs/security/review-briefs/THIRD-PARTY-NOTICES.md`.
+For each suspected issue, write down five facts before you call it a candidate:
+
+1. **Principal:** who attacks, and what access they start with.
+2. **Input:** what they control (argument, header, file, prompt text, env value).
+3. **Control:** the check meant to stop it, with `file:line`. Read it. Say why it fails.
+4. **Trace:** entrypoint to sink, each step `file:line`. The first step is where the principal's input enters. The last is the sink. Every step between them is a propagation step.
+5. **Boundary result:** what crosses a trust boundary (data read, command run, file written, privilege gained).
+
+A suspected issue with no principal, no failing control or no boundary result is **hardening**, not a candidate. List it under Recommendations.
+Do not report: denial of service with no amplification, a missing best practice with no affected principal, or issues only in test files.
+Severity never exceeds the impact your evidence shows. `overall_severity` is never higher than the impact score.
+
+For agent, tool, MCP and prompt-injection code, also read the attack classes in `~/.claude/docs/security/review-briefs/r5-high-tier.md`.
+
+### Replay probe (optional, own repo only)
+
+When the code under review is in this repo and a small script can show the result, write a probe:
+`.claude/cache/security/<run-id>/probes/<n>.mjs`, where `<n>` is a number. With no run id in the prompt, use today's date plus `-adhoc`.
+The probe imports the real function at the trace sink, feeds it dummy input, and prints the observed result.
+It uses no network, installs nothing and writes no files.
+Run it from the repo root in Bash with this exact form. The shell redirect, not the probe, saves the output:
+
+```bash
+timeout 15 env -i PATH="$PATH" SYSTEMROOT="$SYSTEMROOT" node --permission --allow-fs-read="$PWD" .claude/cache/security/<run-id>/probes/<n>.mjs > .claude/cache/security/<run-id>/probes/<n>.out.txt 2>&1
+```
+
+This strips the environment (no API keys), blocks child processes and gives the probe read-only file access. It does not block the network, so the probe itself must not use it.
+No probe is allowed for deployed services, real accounts, or code from outside this repo.
+
 ## Step 3: CVE Lookup (if applicable)
 
 ```bash
@@ -158,7 +190,29 @@ Generated: [timestamp]
 
 ### Long-term (Hardening)
 1. [Security improvement]
+
+## Candidates (JSON)
 ```
+
+End the report with one fenced `json` block under `## Candidates (JSON)`: an array with one object per finding above.
+Each object has these fields:
+
+| Field | Shape |
+|---|---|
+| `fingerprint` | `<class>:<file>:<scope>`, e.g. `command-injection:src/run.ts:run`. Starts with a letter. Only letters, digits and `._:/@+-`. Unique: add `:<line>` when two would match |
+| `title`, `description`, `root_cause`, `intended_behavior` | text |
+| `principal`, `control`, `boundary_result` | text; `control` includes `file:line` |
+| `trace` | `[{kind, file, line, scope, description}]`: first `entrypoint`, last `sink`, middle `propagation` |
+| `evidence` | `[{file, line, description}]` |
+| `conditions` | `[{kind, description}]`, kind one of `authentication_level`, `authorization_role`, `user_interaction`, `system_configuration`, `network_routing`, `environmental_dependency`, `data_state`, `timing_dependency`, `third_party_dependency` |
+| `attacker_perspective` | text |
+| `payloads` | array of the dummy inputs used (at least 1) |
+| `remediation_strategy` | text |
+| `severity` | `{likelihood: {score, reason}, impact: {score, reason}, overall_severity}`; scores `informational`, `low`, `medium`, `high`, `critical`; overall never above impact |
+| `probe` | probe path, or null |
+
+Use repo-relative paths with forward slashes. The /security workflow sends this block to security-refuter. It is not the final verdict.
+Also write the same array to `.claude/cache/security/<run-id>/candidates.json`, adding each candidate as soon as it is ready, so a stopped run keeps its work.
 
 ## Rules
 
@@ -169,3 +223,5 @@ Generated: [timestamp]
 5. **Check dependencies** - supply chain matters
 6. **Never expose secrets** - redact in reports
 7. **Write to output file** - don't just return text
+8. **Name the control** - every finding says which check fails and why
+9. **Write only to cache** - the Write tool and probes write only under `.claude/cache/agents/aegis/` and `.claude/cache/security/<run-id>/`. Never edit source, hooks, settings or tests

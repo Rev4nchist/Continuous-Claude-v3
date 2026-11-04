@@ -19,7 +19,8 @@ Active agents are `.claude/agents/*.md` excluding `_archived/`. The `session-ana
 
 | Name | Model | Purpose | Key Tools | Companion Skill | Surfaced By |
 |------|-------|---------|-----------|-----------------|-------------|
-| aegis | opus | Security vulnerability audit | Read, Bash, Grep, Glob | — | release, security |
+| aegis | opus | Security vulnerability audit | Read, Bash, Grep, Glob, Write | — | release, security |
+| security-refuter | opus | Independent check of aegis candidates | Read, Grep, Glob, Bash | — | security |
 | agent-factory | opus | Scaffold new agent .md files (validate frontmatter, draft, hand off for review) | Read, Write, Glob, Grep, Bash | sub-agents / agent-development (optional) | — |
 | agentica-agent | sonnet | Build Python agents with Agentica SDK | Bash, Read, Write, Edit, Glob, Grep | `agentica-sdk/SKILL.md` | — |
 | arbiter | (inherit) | Test execution and validation | Bash, Read, Glob, Grep | — | fix, build, refactor, release, tdd |

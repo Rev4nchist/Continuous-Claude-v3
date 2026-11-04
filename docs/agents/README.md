@@ -436,8 +436,15 @@ critic:
   - Dependency vulnerabilities (npm audit, pip-audit)
   - Input validation
   - Hardcoded credentials
-- **Output:** `.claude/cache/agents/aegis/latest-output.md`
-- **Produces:** Risk-prioritized findings with remediation steps
+- **Output:** `.claude/cache/agents/aegis/output-{timestamp}.md`, ending in a `## Candidates (JSON)` block
+- **Produces:** Risk-prioritized findings with remediation steps. In `/security`, `security-refuter` checks each candidate before it is reported.
+
+#### security-refuter
+- **Model:** Opus
+- **Purpose:** Independent check of aegis candidates inside `/security`. It did not hunt them and tries to refute each one.
+- **When to use:** Only from the `/security` workflow, Phase 2
+- **Output:** JSON verdicts (`confirmed`, `needs_validation`, `rejected`), one per candidate. `confirmed` needs a replay probe it re-ran.
+- **Tools:** Read, Grep, Glob, and Bash for `node <probe>` only
 
 #### herald
 - **Model:** Sonnet
@@ -602,7 +609,7 @@ What needs validation?
 
 Tiering is by **judgment density**, not task size (canonical: `.claude/rules/agent-model-selection.md`; live source of truth: each agent's `model:` frontmatter, verified by `scripts/check-agent-model-drift.mjs`).
 
-- **Opus agents** (11 — judgment-dense planning/review/forensics): aegis, architect, critic, debug-agent, phoenix, plan-agent, plan-reviewer, principal-reviewer, review-agent, sleuth, wizard
+- **Opus agents** (12 — judgment-dense planning/review/forensics): aegis, architect, critic, debug-agent, phoenix, plan-agent, plan-reviewer, principal-reviewer, review-agent, security-refuter, sleuth, wizard
 - **Sonnet agents** (25 — execution/exploration/tests/docs): everything else, including kraken, scout, oracle, spark, arbiter, atlas
 
 **Rule:** Sonnet executes, Opus judges. Never haiku, never omit/inherit.
