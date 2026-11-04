@@ -8,6 +8,7 @@
  * Knobs (environment variables, hours before now):
  *   PIG_STUB_AGE_HOURS   age of the `latest` npm release and of the PyPI release (default 2400 = 100 days)
  *   PIG_STUB_NEXT_HOURS  age of the `next` and `beta` npm dist-tags (default 2400)
+ *   PIG_STUB_OSV_MAL     "1": OSV answers every query with one MAL- advisory (default: no advisories)
  */
 'use strict';
 const https = require('https');
@@ -18,7 +19,9 @@ const hoursFromEnv = (name) => Number(process.env[name] ?? 2400);
 const iso = (hours) => new Date(Date.now() - hours * HOUR).toISOString();
 
 function documentFor(host) {
-  if (host.includes('api.osv.dev')) return { vulns: [] };
+  if (host.includes('api.osv.dev')) {
+    return { vulns: process.env.PIG_STUB_OSV_MAL === '1' ? [{ id: 'MAL-2026-0001', summary: 'stub malware advisory' }] : [] };
+  }
   if (host.includes('pypi.org')) {
     return { info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: iso(hoursFromEnv('PIG_STUB_AGE_HOURS')) }] } };
   }

