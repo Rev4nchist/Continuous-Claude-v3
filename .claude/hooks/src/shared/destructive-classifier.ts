@@ -21,8 +21,10 @@ const abbrev = (word: string, min: number): string =>
   word.slice(0, min) + [...word.slice(min)].reduceRight((rest, c) => `(?:${c}${rest})?`, '');
 // Each git subcommand has its own `[^;&|\n]*` scan, so the flag may sit anywhere after the subcommand.
 const gitFlag = (sub: string, flags: string): RegExp => new RegExp(String.raw`\bgit\s+${sub}\b[^;&|\n]*\s(?:${flags})`, 'i');
-// `git checkout` long options that only switch or create a branch and never overwrite a file (B2).
-const CHECKOUT_SWITCH_OPTIONS = String.raw`(?:track|no-track|detach|orphan|recurse-submodules|no-recurse-submodules|overwrite-ignore|ignore-other-worktrees|guess|no-guess|patch)`;
+// `git checkout` long options git rejects together with a pathspec, so they can only switch or create a
+// branch (B2, F2). -b/-B are short options and never reach this list. Every other long option
+// (--guess, --recurse-submodules, --overwrite-ignore, --patch ...) is accepted before a path and asks.
+const CHECKOUT_SWITCH_OPTIONS = String.raw`(?:track|no-track|detach|orphan)`;
 
 export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
@@ -351,17 +353,19 @@ const dropQuotes = (s: string): string => s.replace(/["']/g, '');
 
 /**
  * The payload of a segment that is a shell-wrapper invocation, tagged with its interpreter; else null.
- * A POSIX shell takes the word after the payload as $0, so trailing args are dropped. pwsh, powershell and
- * cmd join EVERY argument into the command they run (B1), so their trailing args after a quoted payload
- * are part of it. Their quote characters are deleted, not parsed (fail closed). The bare form keeps its
- * quotes: `pwsh -File x.ps1 -C C:\repo commit -m "..."` reads `-C` as -Command (H2) and must stay allowed.
+ * The trailing args after a quoted payload are part of it, for every shell. pwsh, powershell and cmd join
+ * EVERY argument into the command they run (B1). A POSIX payload can run its args too (`bash -c 'eval "$1"'
+ * _ 'rm -rf x'`, F1). Their quote characters are deleted, not parsed (fail closed; no reading of $1 or eval).
+ * Accepted false positive: `bash -c "echo" "; rm -rf x"` asks, though there the second string is only $0.
+ * The bare form keeps its quotes: `pwsh -File x.ps1 -C C:\repo commit -m "..."` reads `-C` as -Command (H2)
+ * and must stay allowed.
  */
 function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | null {
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg.match(re);
     if (!m || !(m[1] || m[3])) continue;
     if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
-    const tail = shell !== 'posix' && m[2]?.trim() ? ' ' + dropQuotes(m[2]) : '';
+    const tail = m[2]?.trim() ? ' ' + dropQuotes(m[2]) : '';
     return { payload: unwrapPayload(m[1]) + tail, shell };
   }
   return null;

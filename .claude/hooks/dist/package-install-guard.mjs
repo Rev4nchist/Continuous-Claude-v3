@@ -23,7 +23,7 @@ function outputDeny(reason, decision = "deny") {
 // src/shared/destructive-classifier.ts
 var abbrev = (word2, min) => word2.slice(0, min) + [...word2.slice(min)].reduceRight((rest, c) => `(?:${c}${rest})?`, "");
 var gitFlag = (sub, flags) => new RegExp(String.raw`\bgit\s+${sub}\b[^;&|\n]*\s(?:${flags})`, "i");
-var CHECKOUT_SWITCH_OPTIONS = String.raw`(?:track|no-track|detach|orphan|recurse-submodules|no-recurse-submodules|overwrite-ignore|ignore-other-worktrees|guess|no-guess|patch)`;
+var CHECKOUT_SWITCH_OPTIONS = String.raw`(?:track|no-track|detach|orphan)`;
 var DESTRUCTIVE_PATTERNS = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
   // The flag may sit ANYWHERE after rm (`rm -f -r x`, `rm build -rf`, F04). It must be a SHORT
@@ -333,7 +333,7 @@ function matchWrapper(seg2) {
     const m = seg2.match(re);
     if (!m || !(m[1] || m[3])) continue;
     if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
-    const tail = shell !== "posix" && m[2]?.trim() ? " " + dropQuotes(m[2]) : "";
+    const tail = m[2]?.trim() ? " " + dropQuotes(m[2]) : "";
     return { payload: unwrapPayload(m[1]) + tail, shell };
   }
   return null;
