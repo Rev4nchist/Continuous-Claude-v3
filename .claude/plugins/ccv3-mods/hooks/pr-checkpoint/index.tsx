@@ -20,6 +20,7 @@ import {
   PATHWAY_DENY,
   RETRY_LABELS,
   SLOT_DENY,
+  STORE_DENY,
   SHAPES_CLI_REL,
   SHAPES_TIMEOUT_MS,
   SLASH,
@@ -40,6 +41,7 @@ import {
   firstLine,
   isPathwayFile,
   isSlotStateFile,
+  isStoreFile,
   isStalePending,
   keptDraftText,
   labelNeedsRecord,
@@ -51,6 +53,7 @@ import {
   namesMarker,
   namesPathway,
   namesSlotWrite,
+  namesStore,
   noQuestionText,
   otherText,
   parseCheckpointArgs,
@@ -272,6 +275,7 @@ const recordPathway = async (
   a: { pr: number; root: string; body: string; result: CheckpointResult },
   pathway: string,
   by: string,
+  via: NonNullable<CheckpointRecord['via']>,
 ): Promise<Outcome> => {
   const ran = await run($, engineArgv(await engineRoot($, a.root), '--confirm', pathway, '--by', by, '--body', a.body), a.root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return { stage: 'confirm', text: `--confirm could not run (${ran.text})` }
@@ -289,6 +293,8 @@ const recordPathway = async (
     budget: printed.budget ?? a.result.budget,
     head: printed.head ?? a.result.head,
     decided_by: printed.decided_by ?? by,
+    // How the pick arrived. land-none-check.mjs refuses a HIGH or CRITICAL none that did not come from Dave's dialog or composer.
+    via,
     // The router band, so the apply (and the retry of a refused apply) can queue the PR for the free CodeRabbit slot.
     band: a.result.auto?.band ?? null,
     // The changed-file count prices the "up to $X" of a later question.
@@ -342,7 +348,7 @@ const autoConfirm = async ($: EngineInterface, pending: Pending): Promise<AutoOu
   try {
     const drift = await driftSince($, pending.root, pending)
     if (drift) return { kind: 'failed', why: drift, stage: 'check' }
-    const out = await recordPathway($, { pr: pending.pr, root: pending.root, body: pending.body, result }, 'none', 'auto')
+    const out = await recordPathway($, { pr: pending.pr, root: pending.root, body: pending.body, result }, 'none', 'auto', 'auto')
     if (out.stage !== 'done') return { kind: 'failed', why: out.text, stage: out.stage }
     return { kind: 'done', record: out.record }
   } catch (err) {
@@ -381,7 +387,7 @@ const recordChoice = async ($: EngineInterface, pending: Pending, choice: Pathwa
   const drift = await driftSince($, pending.root, pending)
   if (drift) return { text: movedText(pr, drift), recorded: null }
   try {
-    let out = await recordPathway($, { pr, root: pending.root, body: pending.body, result: pending.result }, choice.pathway, choice.by)
+    let out = await recordPathway($, { pr, root: pending.root, body: pending.body, result: pending.result }, choice.pathway, choice.by, 'dialog')
     for (let tries = 0; out.stage === 'apply' && tries < MAX_RETRIES; tries += 1) {
       const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pr}`))
       if (!record) break
@@ -628,7 +634,9 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   // so only his tap on the exact label records.
   if (pathway === 'none' && e.origin.kind !== 'composer' && isQueueBand(result.auto.band)) return askPending($, next, trace)
   const by = parsed.word === 'accept' ? 'default' : 'dave'
-  const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by)
+  // Only a composer command or a bridge command for the pending PR gets here (the check above). The bridge is Remote Control, not Dave's keyboard.
+  const via = e.origin.kind === 'bridge' ? 'bridge' : 'composer'
+  const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by, via)
   if (out.stage !== 'done') {
     return say('not-recorded', out.stage === 'apply' ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}` : `PR #${pr}: ${pathway} was not recorded: ${out.text}`)
   }
@@ -725,6 +733,7 @@ const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh
     if (await isOff($)) return null
     const command = typeof e.command === 'string' ? e.command : ''
     if (namesPathway(command)) return { deny: PATHWAY_DENY }
+    if (namesStore(command)) return { deny: STORE_DENY }
     if (namesSlotWrite(command)) return { deny: SLOT_DENY }
     if (namesMarker(command)) return { deny: MARKER_DENY }
     if (!mayBeGated(command)) return null
@@ -754,6 +763,7 @@ const writeLock = async ($: EngineInterface, e: WriteCall): Promise<{ deny: stri
     const path = typeof e.file_path === 'string' ? e.file_path : typeof e.notebook_path === 'string' ? e.notebook_path : null
     if (path === null) return null
     if (isPathwayFile(path)) return { deny: PATHWAY_DENY }
+    if (isStoreFile(path)) return { deny: STORE_DENY }
     return isSlotStateFile(path) ? { deny: SLOT_DENY } : null
   } catch {
     return { deny: LOCK_FAILED }

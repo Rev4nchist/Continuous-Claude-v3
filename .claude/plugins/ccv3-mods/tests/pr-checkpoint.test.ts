@@ -3028,7 +3028,7 @@ describe('pr-checkpoint: via, and the plugin store lock', () => {
 
   const STORE_FILES = [
     'C:/home/.claude/plugins/store/ccv3-mods_ccv3-c4cd07c751a8.json',
-    'C:\home\.claude\plugins\store\ccv3-mods_ccv3-c4cd07c751a8.json',
+    'C:\\home\\.claude\\plugins\\store\\ccv3-mods_ccv3-c4cd07c751a8.json',
     'c:/HOME/.CLAUDE/Plugins/Store/CCV3-Mods_x.JSON',
     'C:/home/.claude/plugins/store/./../store/ccv3-mods_x.json',
     'C:/home/.claude/plugins/store/ccv3-mods_x.json.tmp-123',
@@ -3058,7 +3058,7 @@ describe('pr-checkpoint: via, and the plugin store lock', () => {
       ['Bash', `node -e "require('fs').writeFileSync(process.env.HOME+'/.claude/plugins/store/ccv3-mods_x.json','{}')"`],
       ['Bash', 'cp /tmp/x.json ~/.claude/plugins/store/ccv3-mods_x.json'],
       ['Bash', 'cd ~/.claude/plugins/store && echo {} > ccv3-mods_x.json'],
-      ['PowerShell', "Set-Content -Path $HOME\.claude\plugins\store\ccv3-mods_x.json -Value '{}'"],
+      ['PowerShell', "Set-Content -Path $HOME\\.claude\\plugins\\store\\ccv3-mods_x.json -Value '{}'"],
       ['PowerShell', 'Get-Content $HOME/.claude/plugins/store/ccv3-mods_x.json'],
       ['PowerShell', 'git commit -m "docs: the land gate reads ~/.claude/plugins/store/ccv3-mods_x.json"'],
     ]

@@ -15,6 +15,10 @@
      PR and refuse (nothing merged) when the head changed, a CodeRabbit review or summary-comment edit
      is newer than the READY check, an "@coderabbitai review" request has no review after it, or the
      CodeRabbit commit status on the head is pending. A read error refuses. -IgnoreReview skips it too.
+  1c. None-pick check (scripts/github/land-none-check.mjs): a review:none PR at band HIGH or CRITICAL lands only when
+     Dave's own pick (his dialog or composer, not the bridge or auto-confirm) is on record for this exact head. A missing,
+     stale or foreign record refuses (nothing merged). The provenance line goes into the LANDED summary. With
+     -IgnoreReview the check still runs as a warning only: it prints the line or a WARNING, and the merge goes on.
   2. Merge through the REST API with sha=<head>: GitHub refuses the merge if the head moved after
      the check, so nothing unreviewed can land between check and merge (review note P35).
   3. fetch fork --prune; fast-forward local main (never a reset; refuses if main diverged).
@@ -58,6 +62,11 @@ if (-not $env:GH_CONFIG_DIR -and (Test-Path $ghPersonal)) { $env:GH_CONFIG_DIR =
 $gitSafe = Join-Path $RepoPath 'scripts\git-safe.ps1'
 $done = [System.Collections.Generic.List[string]]::new()
 function Step($msg) { Write-Host "-> $msg" }
+# The one line land-none-check.mjs prints (the provenance line, or a WARNING under -IgnoreReview) goes into the LANDED summary.
+function Add-NoneLine($out) {
+  $line = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match '^(Dave chose none at|WARNING:)' }) | Select-Object -First 1
+  if ($line) { $done.Add($line) }
+}
 function Fail($msg) { Write-Host "STOPPED: $msg" -ForegroundColor Red; if ($done.Count) { Write-Host "Done before stopping: $($done -join '; ')" }; exit 1 }
 
 # `git worktree remove` follows a junction or symlink inside the worktree and deletes the TARGET's
@@ -158,8 +167,20 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     Step "pre-merge re-check for #$Pr"
     node (Join-Path $PSScriptRoot 'land-recheck.mjs') $Pr --repo $Repo --head $head --ready-at $readyAt | Out-Host
     if ($LASTEXITCODE) { Fail "pre-merge re-check refused #$Pr (exit $LASTEXITCODE). Nothing was merged. Read what changed, then re-run." }
+    # None-pick check: a review:none PR at HIGH or CRITICAL needs Dave's own pick on record for this head. Fails closed.
+    Step "none-pick check for #$Pr"
+    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head 2>&1
+    $noneCode = $LASTEXITCODE
+    $noneOut | Out-Host
+    if ($noneCode) { Fail "none-pick check refused #$Pr (exit $noneCode). Nothing was merged. Dave picks again in /pathway for this head, then re-run." }
+    Add-NoneLine $noneOut
   } else {
     Write-Host "  -IgnoreReview: skipping the READY check and the pre-merge re-check"
+    # Dave's own yes. The none-pick check still runs, as a warning only, so the yes is informed. It never blocks.
+    Step "none-pick check for #$Pr (warning only)"
+    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --warn 2>&1
+    $noneOut | Out-Host
+    Add-NoneLine $noneOut
   }
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1

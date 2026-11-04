@@ -339,6 +339,7 @@ export const SHAPES_CLI_REL = '.claude/hooks/dist/checkpoint-shapes-cli.mjs'
 export const SHAPES_TIMEOUT_MS = 10_000
 export const CONFIG_REL = 'review-router.config.json'
 export const PATHWAY_DENY = "pathway.json is written only by the mod, after Dave answers the checkpoint question. A tool or a shell command may not name it. Read it with the Read tool."
+export const STORE_DENY = "The plugin store file holds the checkpoint records that the land gate reads. Only the mod writes it. A tool or a shell command may not name it. Ask Dave to run /pathway."
 export const LOCK_FAILED = 'pr-checkpoint lock failed; nothing ran'
 
 /** Resolves `.` and `..`, turns backslashes into slashes and lower-cases: the spellings of one path compare equal. */
@@ -354,6 +355,15 @@ export const normalizePath = (path: string): string => {
 
 /** A tool write (file_path or notebook_path) that lands on a pre-pr pathway.json in any checkout. */
 export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}`.endsWith('/.claude/cache/pre-pr/pathway.json')
+
+/** A tool write (file_path or notebook_path) that lands on a ccv3-mods plugin store file, or its temp or lock copy, in any home. */
+export const isStoreFile = (path: string): boolean => /\/plugins\/store\/ccv3-mods_[^/]*$/.test(`/${normalizePath(path)}`)
+
+/**
+ * Shell text that names the plugin store folder or one of the ccv3-mods store files, in any form and any case: denied with no lexer, so a doubt
+ * reads as a deny. The land gate (land-none-check.mjs) trusts the `via` of the record in that file. A path built in code is not covered, accepted.
+ */
+export const namesStore = (command: string): boolean => /plugins[\\/]+(?:\.[\\/]+)*store\b|ccv3-mods_/i.test(command)
 
 /** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
 export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)

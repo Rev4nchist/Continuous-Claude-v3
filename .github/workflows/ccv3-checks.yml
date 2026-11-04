@@ -91,6 +91,9 @@ jobs:
       - name: router checkpoint state x event table (C5 T2)
         timeout-minutes: 5
         run: node --test scripts/github/review-router-checkpoint-table.test.mjs
+      - name: self-approve gate (router none gate, land-none-check)
+        timeout-minutes: 5
+        run: node --test scripts/github/pr-checkpoint-no-review.test.mjs scripts/github/land-none-check.test.mjs
       - name: Install root dev dependencies (Playwright test runner, no scripts, no browser download)
         timeout-minutes: 5
         run: npm ci --ignore-scripts

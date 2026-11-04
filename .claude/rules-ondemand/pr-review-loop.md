@@ -204,6 +204,8 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 - Bands: LOW, MID, ELEVATED, HIGH, CRITICAL. HIGH is 5 or more control-plane files (`matrix.control_plane`). CRITICAL is a `risk:high` label or an r3 path.
 - LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget`, or `both` when a critical file meets an available Greptile (rules R3 and R4 stay). Every band also offers the last option "No review, land on CI ($0)" (`none`): only Dave's pick or typed `/pathway <pr> none` records it for HIGH and CRITICAL (`--by dave`), it is never the recommendation there, and it adds `review:none`, so the router adds no review label when the PR leaves draft.
 - Dave can still press CodeRabbit on a lower band. That is an escalation.
+- At HIGH and CRITICAL a `review:none` label alone is not a pick. The router saves `pathway=none` there only when a fresh `pathway-confirmed` marker for the head names `none`.
+  Without it the router writes a note, saves no checkpoint, and READY says `review:none has no saved checkpoint`. Below HIGH the label still counts.
 - A parser file in a HIGH PR keeps rule R2: one review, no loop.
 - A config without a `matrix` block keeps the rules R1 to R5 and RS.
 - The router ledger line names the band. The state comment and the labels do not carry it yet.
@@ -572,6 +574,39 @@ Exit 1 is a refusal. Exit 2 is a read error or a bad payload. `land-pr.ps1` trea
 A review that landed in the 120 seconds before the READY check counts as new, so a local clock that runs ahead of GitHub cannot hide it.
 A clock skew can still refuse a PR by seconds. The check fails closed.
 `-IgnoreReview` still bypasses the READY check and the re-check. It prints a skip line. Post the reason on the PR.
+
+### Gate D, the none-pick check (self-approved `review:none`, Dave 2026-11-03)
+
+Anyone with write access can add the `review:none` label. The checkpoint engine takes `--by dave` at every band.
+So at HIGH and CRITICAL the label and the router state do not show that Dave chose "no review".
+The `pr-checkpoint` mod stores how each pick arrived (`via`: `dialog`, `composer`, `bridge` or `auto`) in its `checkpoint:pr:<n>` record.
+After Gate C, `land-pr.ps1` runs `node scripts/github/land-none-check.mjs <pr> --repo <repo> --head <sha>`.
+
+- It needs a record only for a PR with `review:none` at band HIGH or CRITICAL. The band comes from the live files and the base-branch config.
+  A `review:none` PR whose band cannot be computed (a config with no `matrix` block) is refused.
+- The record must be Dave's: `pathway none`, `label review:none`, `decided_by dave`, and `via` `dialog` or `composer`.
+  A `bridge` pick (a typed word from Remote Control), an `auto` pick and an old record with no `via` are refused.
+- The record's head must equal the PR head. A push after the pick makes it stale: Dave picks again for the new head (return the PR to draft, run `/pathway`).
+- The live band must not be above the band at the pick.
+- It reads `~/.claude/plugins/store/ccv3-mods_*.json` on the machine that lands. No store file, or a file that is not JSON, is a refusal that names the file.
+- Exit 1 is a refusal. Exit 2 means it could not decide. `land-pr.ps1` treats both as a refusal and prints "Nothing was merged".
+- A pass prints one provenance line, for example `Dave chose none at 2026-11-03 21:42 CST via dialog, head 507f9d3 (band HIGH, store <file>)`. The line goes into the `LANDED` summary.
+- With `-IgnoreReview` the check still runs with `--warn`. It prints the line or a `WARNING`, and the merge goes on. The line is in the `LANDED` summary.
+  A HIGH or CRITICAL `review:none` PR with no record lands under `-IgnoreReview` with that loud warning. There is no second flag.
+
+The merge is Dave's "land" yes. The provenance line makes that yes informed: a missing or odd line is the signal.
+Probe: `node scripts/github/land-none-probe.mjs` (fixtures only, no GitHub write). Tests: `node --test scripts/github/land-none-check.test.mjs scripts/github/pr-checkpoint-no-review.test.mjs`.
+
+**Residual, stated plainly.** Gate D detects. It does not prevent.
+
+- An agent with Dave's token can still post a `pathway-confirmed` marker through a GraphQL query file (`gh api graphql -F query=@file`) or a node script.
+  The text locks do not see it, and the router then saves `none`. Closing this needs a change to `checkpoint-shapes.ts` and a hook rebuild. Dave chose to keep it residual.
+- The same agent can write a forged `checkpoint:pr:<n>` record into the store file from a node script that builds the path in code.
+  The mod's Lock A and Lock B deny a tool write and shell text that name the store file. They do not see a path built in code.
+- The same agent can merge with `gh api .../merge` and skip `land-pr.ps1`. Fork `main` has no branch protection.
+- `pr_watch` still toasts READY for a forged HIGH `none` PR. `review-status.mjs` does not read the store. `land-pr.ps1` is the gate.
+- The store lives on one machine. Landing from another machine, or after the store was reset, refuses until Dave picks again.
+- A forgery now touches three places (label, marker comment, store record), and each one is visible.
 
 ## Repos still on CodeRabbit
 
