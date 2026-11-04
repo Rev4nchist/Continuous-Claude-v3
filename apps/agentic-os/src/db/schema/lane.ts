@@ -1,4 +1,4 @@
-import { bigint, bigserial, index, integer, jsonb, text, timestamp } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, index, integer, jsonb, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { agenticOs } from './project';
 
 /**
@@ -64,6 +64,16 @@ export const lane = agenticOs.table(
     /** Human-typed slug (`coord-claim-degraded`). The id IS the handle two humans
      *  and two agents use to mean the same thing, so it is not a uuid. */
     id: text('id').primaryKey(),
+
+    /**
+     * Which project board the lane belongs to (see the per-project lanes plan).
+     * The board key is cooperative, never a security boundary: no allow or deny
+     * decision may rest on it. The default keeps every pre-0004 row, and every
+     * writer that has never heard of boards, on the CCv3 board. On Postgres 16 a
+     * constant default is metadata-only, so adding the column rewrites nothing.
+     * No FK to agentic_os.project: a constraint error must not abort a lane write.
+     */
+    projectKey: text('project_key').notNull().default('continuous-claude'),
 
     title: text('title').notNull(),
 
@@ -142,7 +152,12 @@ export const lane = agenticOs.table(
   (t) => [
     index('lane_state_idx').on(t.state),
     index('lane_owner_idx').on(t.ownerSessionId),
-    index('lane_track_priority_idx').on(t.track, t.priority),
+    index('lane_track_priority_idx').on(t.projectKey, t.track, t.priority),
+    index('lane_project_state_priority_idx').on(t.projectKey, t.state, t.priority, t.id),
+    // id stays the primary key, so this index never rejects a row the PK did not
+    // already reject. It exists for the board-scoped lookup shape and as a
+    // future composite FK target.
+    uniqueIndex('lane_project_id_uniq').on(t.projectKey, t.id),
   ],
 );
 
@@ -167,6 +182,9 @@ export const laneEvent = agenticOs.table(
   {
     id: bigserial('id', { mode: 'number' }).primaryKey(),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+
+    /** Board the event belongs to. Broadcasts are read per board through this column. */
+    projectKey: text('project_key').notNull().default('continuous-claude'),
 
     /**
      * Which lane. NULL is legal and meaningful: a broadcast note addressed to
@@ -202,6 +220,7 @@ export const laneEvent = agenticOs.table(
     index('lane_event_occurred_at_idx').on(t.occurredAt),
     index('lane_event_lane_idx').on(t.laneId),
     index('lane_event_to_session_idx').on(t.toSessionId),
+    index('lane_event_project_id_idx').on(t.projectKey, t.id),
   ],
 );
 
