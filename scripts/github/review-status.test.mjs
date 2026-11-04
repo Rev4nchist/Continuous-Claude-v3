@@ -654,6 +654,152 @@ test('CodeRabbit: an unlabelled PR reports coderabbitLimited null', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// In-progress summary (live PR #285, head 7e84114, 2026-11-04 06:37Z). CodeRabbit writes "between <A> and <HEAD>" at
+// review START, inside its in-progress block, so that line is no proof the head was reviewed. Trimmed from the live body.
+// ---------------------------------------------------------------------------------------------
+const HEAD285 = '7e8411488c61a426993cf91285edeff121cb02ee';
+const PREV285 = '26ad0afe6d2a04bc729bf9a0a9e3f6266a656a0c';
+const IN_PROGRESS_START = '<!-- This is an auto-generated comment: review in progress by coderabbit.ai -->';
+const IN_PROGRESS_END = '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->';
+const coverageMark285 = (covered, kind = 'reviewed') =>
+  `<!-- final_review_risk_coverage:{"sourceCommitId":"${covered}","coveredCommitId":"${covered}","kind":"${kind}"} -->`;
+const betweenLine = `Reviewing files that changed from the base of the PR and between ${PREV285} and ${HEAD285}.`;
+const IN_PROGRESS_BLOCK = [
+  IN_PROGRESS_START,
+  '',
+  '> [!NOTE]',
+  '> Currently processing new changes in this PR. This may take a few minutes, please wait...',
+  '',
+  '<details>',
+  '<summary><strong>Commits</strong></summary>',
+  '',
+  betweenLine,
+  '',
+  '</details>',
+  '',
+  IN_PROGRESS_END,
+].join('\n');
+const LIVE_0637 = [
+  '<!-- coderabbit-ai-generated:v1 -->',
+  '',
+  SUMMARY_MARKER,
+  IN_PROGRESS_BLOCK,
+  '',
+  '<!-- walkthrough_start -->',
+  'Walkthrough text.',
+  '<!-- walkthrough_end -->',
+  '<!-- final_review_risk_start -->',
+  coverageMark285(PREV285),
+  'The guard still allows an install hidden inside `npx -c`.',
+  '<!-- final_review_risk_end -->',
+].join('\n');
+
+test('summaryCoversHead: an in-progress block that names the head is no review, whatever the coverage marker names (live #285 06:37)', () => {
+  assert.equal(summaryCoversHead(LIVE_0637, HEAD285), false);
+  assert.equal(summaryCoversHead(LIVE_0637, PREV285), true, 'the marker still covers the previous commit');
+});
+
+test('summaryCoversHead: an in-progress block with no coverage marker is no review of the head', () => {
+  const text = [SUMMARY_MARKER, IN_PROGRESS_BLOCK, '<!-- walkthrough_start -->'].join('\n');
+  assert.equal(summaryCoversHead(text, HEAD285), false);
+});
+
+test('summaryCoversHead: the coverage marker wins over a "between" line (marker names an older commit)', () => {
+  const text = [SUMMARY_MARKER, 'No actionable comments were generated in the recent review.', betweenLine, coverageMark285(PREV285)].join('\n');
+  assert.equal(summaryCoversHead(text, HEAD285), false);
+});
+
+test('summaryCoversHead: a coverage marker of kind reviewed that names the head covers it', () => {
+  const text = [SUMMARY_MARKER, betweenLine, coverageMark285(HEAD285)].join('\n');
+  assert.equal(summaryCoversHead(text, HEAD285), true);
+  assert.equal(summaryCoversHead([SUMMARY_MARKER, coverageMark285(HEAD285, 'incremental')].join('\n'), HEAD285), false, 'kind must be reviewed');
+});
+
+test('summaryCoversHead: with no in-progress block and no marker, the last "between" still covers the head', () => {
+  assert.equal(summaryCoversHead([SUMMARY_MARKER, betweenLine].join('\n'), HEAD285), true);
+});
+
+test('summaryCoversHead: an in-progress start marker with no end marker fails closed', () => {
+  const text = [SUMMARY_MARKER, IN_PROGRESS_START, '> Currently processing new changes in this PR.', betweenLine].join('\n');
+  assert.equal(summaryCoversHead(text, HEAD285), false);
+});
+
+test('summaryCoversHead: a finished review after an in-progress block still counts', () => {
+  const text = [SUMMARY_MARKER, IN_PROGRESS_BLOCK, '', 'Reviewed.', coverageMark285(HEAD285)].join('\n');
+  assert.equal(summaryCoversHead(text, HEAD285), true);
+});
+
+test('summaryCoversHead: the in-progress markers match in any case and with other spacing (B2)', () => {
+  const upper = IN_PROGRESS_BLOCK.replace(IN_PROGRESS_START, IN_PROGRESS_START.toUpperCase()).replace(IN_PROGRESS_END, IN_PROGRESS_END.toUpperCase());
+  const spaced = IN_PROGRESS_BLOCK.replace(IN_PROGRESS_START, '<!--   This is an auto-generated comment:  review  in progress by CodeRabbit.ai   -->')
+    .replace(IN_PROGRESS_END, '<!--end of auto-generated comment:   review in   progress by coderabbit.ai-->');
+  for (const [name, block] of [['upper-cased', upper], ['re-spaced', spaced]]) {
+    const text = [SUMMARY_MARKER, block, '<!-- walkthrough_start -->'].join('\n');
+    assert.equal(summaryCoversHead(text, HEAD285), false, `${name}: the between line inside the block is hidden`);
+    const done = [SUMMARY_MARKER, block, 'Reviewed.', coverageMark285(HEAD285)].join('\n');
+    assert.equal(summaryCoversHead(done, HEAD285), true, `${name}: the end marker closes the block, so a later marker counts`);
+  }
+  const noEnd = [SUMMARY_MARKER, '<!-- THIS IS AN AUTO-GENERATED COMMENT: REVIEW IN PROGRESS BY CODERABBIT.AI -->', betweenLine].join('\n');
+  assert.equal(summaryCoversHead(noEnd, HEAD285), false, 'an upper-cased start with no end still fails closed');
+});
+
+test('summaryCoversHead: the start pattern does not match the end marker (B2)', () => {
+  const onlyEnd = [SUMMARY_MARKER, IN_PROGRESS_END, betweenLine].join('\n');
+  assert.equal(summaryCoversHead(onlyEnd, HEAD285), true, 'a lone end marker opens no block, so the later between line stands');
+});
+
+test('CodeRabbit: the live #285 in-progress summary on a head with no review is NOT READY, with the no-review reason', () => {
+  const summary = { id: 285, updated_at: '2026-11-04T06:37:01Z', user: CR_BOT, body: LIVE_0637 };
+  const prevReview = { id: 901, user: CR_BOT, commit_id: PREV285, submitted_at: '2026-11-04T03:21:00Z', body: 'Actionable comments posted: 1' };
+  const i = crInput(HEAD285, [summary], [prevReview], { headCommittedAt: '2026-11-04T06:25:08Z' });
+  assert.equal(codeRabbitHeadReview({ head: HEAD285, reviews: [prevReview], comments: [summary], commentEdits: i.commentEdits, headCommittedAt: i.headCommittedAt }).reviewedHead, false);
+  const r = evaluate(i);
+  assert.equal(r.coderabbitReviewedHead, false);
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.some((x) => /no CodeRabbit PR-bot review of the head commit/.test(x)), r.reasons.join('; '));
+});
+
+// B1: evaluate() drops every CodeRabbit commit status from badStatuses. A summary that names the head can still be a review in
+// progress, and CodeRabbit's own status is pending while it runs. A pending CodeRabbit status on a routed PR blocks READY.
+const FINISHED_285 = { id: 286, updated_at: '2026-11-04T06:40:00Z', user: CR_BOT, body: [SUMMARY_MARKER, 'No actionable comments were generated in the recent review.', betweenLine, coverageMark285(HEAD285)].join('\n') };
+const finished285 = (statuses) => {
+  const i = crInput(HEAD285, [FINISHED_285], [], { headCommittedAt: '2026-11-04T06:25:08Z' });
+  return evaluate({ ...i, combined: { statuses } });
+};
+
+test('CodeRabbit (B1): a summary that names the head with a PENDING CodeRabbit status is NOT READY; the same with success is READY', () => {
+  const pending = finished285([{ context: 'CodeRabbit', state: 'pending', description: 'Review in progress' }]);
+  assert.equal(pending.coderabbitReviewedHead, true, 'the summary names the head');
+  assert.equal(pending.ready, false);
+  assert.ok(pending.reasons.includes('CodeRabbit status "CodeRabbit" is pending: the review of the head is still running'), pending.reasons.join('; '));
+  const done = finished285([{ context: 'CodeRabbit', state: 'success', description: 'Review completed' }]);
+  assert.equal(done.ready, true, done.reasons.join('; '));
+  for (const state of ['failure', 'error']) {
+    const r = finished285([{ context: 'CodeRabbit', state, description: 'x' }]);
+    assert.ok(!r.reasons.some((x) => /CodeRabbit status/.test(x)), `${state} adds no pending reason`);
+  }
+});
+
+test('CodeRabbit (B1): a pending CodeRabbit status on a PR that does not need CodeRabbit does not block', () => {
+  const i = crInput(HEAD285, [FINISHED_285], [], { headCommittedAt: '2026-11-04T06:25:08Z' });
+  i.pull.labels = [];
+  assert.ok(!evaluate({ ...i, combined: { statuses: [{ context: 'CodeRabbit', state: 'pending' }] } }).reasons.some((x) => /CodeRabbit status/.test(x)));
+});
+
+// B3: an in-progress block that names the head, beside a clean earlier round, must not look like a clean round of the head.
+test('CodeRabbit (B3): the carry path does not read an in-progress head as a clean reviewed round', () => {
+  const inProgress = { id: 287, updated_at: '2026-11-04T06:37:01Z', user: CR_BOT, body: [SUMMARY_MARKER, IN_PROGRESS_BLOCK, 'No actionable comments were generated in the recent review.'].join('\n') };
+  const edits = { 287: [] };
+  assert.equal(RS.cleanSummaryCommit([inProgress], edits), null, 'the between line inside the block names the head but is no covered commit');
+  assert.equal(RS.newestCodeRabbitRound({ reviews: [], comments: [inProgress], commentEdits: edits, head: HEAD285 }), null, 'no round to carry');
+  const earlier = { id: 901, user: CR_BOT, commit_id: PREV285, submitted_at: '2026-11-04T03:21:00Z', body: 'No actionable comments were generated in the recent review.' };
+  const round = RS.newestCodeRabbitRound({ reviews: [earlier], comments: [inProgress], commentEdits: edits, head: HEAD285 });
+  assert.equal(round?.commit_id, PREV285, 'the clean earlier round stays the newest round');
+  assert.notEqual(round?.commit_id, HEAD285);
+  assert.equal(evaluate(crInput(HEAD285, [inProgress], [earlier], { headCommittedAt: '2026-11-04T06:25:08Z' })).coderabbitReviewedHead, false);
+});
+
+// ---------------------------------------------------------------------------------------------
 // Review round: the notice and the coverage marker come only from the newest CodeRabbit SUMMARY
 // comment (marker "summarize by coderabbit.ai"), the notice only when newer than the head commit,
 // and the coverage only when nobody but an app edited the comment.

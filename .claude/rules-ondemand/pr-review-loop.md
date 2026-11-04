@@ -25,6 +25,10 @@ When a PR opens (`gh pr create` or `POST .../pulls`), call the `pr_watch` tool w
 (`pr: <N>`) in the same turn. Do not wait to be asked. Only if that tool does not exist, or the PR is
 not in `Rev4nchist/Continuous-Claude-v3`, start a `/loop` instead. Interval 5 minutes.
 
+A session keeps the mod code it loaded at start. After a sync that changed `plugins/ccv3-mods/`,
+ask Dave to run `/reload-plugins` before you trust `pr_watch` text (on #285 an old copy said "decide
+in the checkpoint pane" after the mod had moved round questions into the session).
+
 `pr_watch` is a ccv3-mods tool. The session checks the PR every 5 minutes with
 `scripts/github/review-status.mjs` and tells Dave with a toast at READY, merged or closed. Those three
 give you no line. You get one report line only when a reviewed head has findings, a confidence below
@@ -378,6 +382,8 @@ Post a paid round without asking only when ALL six conditions hold:
 4. The round costs $5 or less.
 5. The paid spend of all sessions today (America/Chicago date) plus this round is $15 or less.
 6. For round 2 or later: every finding of the last round is fixed, its threads are resolved, and the `cr-fix` line is clean.
+   A round past the opening is paid only on a CRITICAL PR or after Dave granted that round. A HIGH PR's extra round
+   waits for the free slot (review matrix, Dave 2026-11-04). `pr_watch` leaves the paid line out otherwise.
 
 Stop and ask Dave when any of these is true:
 

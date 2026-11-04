@@ -85,6 +85,8 @@ export type AlertCheckpoint = {
   rounds: number | null
   granted: number | null
   declined: { round: number } | null
+  /** The router band from the record (HIGH, CRITICAL, ...). Null for an older record. */
+  band: string | null
 }
 
 /** `sent` is the ledger of model lines delivered (alertKey): each head and reason pair goes out once. */
@@ -457,8 +459,20 @@ const checkpointAllowsPost = (cp: AlertCheckpoint | undefined): boolean => {
   return (cp.granted !== null && cp.granted >= cp.rounds + 1) || cp.rounds < opening + extra
 }
 
-/** A paid review is offered only where a post is allowed: not while the carry holds (run cr-fix, post nothing), not against the budget. */
-const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpointAllowsPost(alert.checkpoint)
+/**
+ * Review matrix (2026-11-01, Dave 2026-11-04): a round past the opening is bought only for a CRITICAL PR or on Dave's grant of that round.
+ * A HIGH PR's extra round comes from the free slot. No record: no limit. An unknown band (older record) fails closed.
+ */
+const paidAllowedForRound = (cp: AlertCheckpoint | undefined): boolean => {
+  if (!cp) return true
+  const [opening] = cp.budget
+  if (cp.rounds !== null && cp.rounds < opening) return true
+  if (cp.granted !== null && cp.rounds !== null && cp.granted >= cp.rounds + 1) return true
+  return cp.band?.toUpperCase() === 'CRITICAL'
+}
+
+/** A paid review is offered only where a post is allowed: not while the carry holds (run cr-fix, post nothing), not against the budget, not for an unpaid extra round. */
+const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpointAllowsPost(alert.checkpoint) && paidAllowedForRound(alert.checkpoint)
 
 /**
  * Dave's paid-review policy (2026-10-30, pr-review-loop.md "Paid PR reviews"). The cap check runs before every review request.
@@ -712,5 +726,6 @@ export const checkpointOf = (record: CheckpointRecord | null, status: PrStatus, 
         rounds: roundsOf(status) ?? null,
         granted,
         declined: record.declined ? { round: record.declined.round } : null,
+        band: typeof record.band === 'string' ? record.band : null,
       }
     : null
