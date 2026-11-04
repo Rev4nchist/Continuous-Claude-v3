@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { assertScratchUrl } from './scratch-db.mjs';
 
 const U = (db) => `postgresql://claude:x@localhost:5432/${db}`;
@@ -27,7 +27,7 @@ test('refuses an unparseable URL', () => {
   assert.throws(() => assertScratchUrl('not a url'), /refusing/);
 });
 
-import { createDatabase, dropDatabase, maskUrl } from './scratch-db.mjs';
+import { createDatabase, dropDatabase, loadPg, maskUrl } from './scratch-db.mjs';
 
 test('maskUrl hides the password and keeps host and database', () => {
   assert.equal(maskUrl('postgresql://claude:s3cret@localhost:5432/lanes_pr1_ab'), 'postgresql://claude:***@localhost:5432/lanes_pr1_ab');
@@ -84,12 +84,21 @@ const adminUrl = () => {
   return u.toString();
 };
 const dbExists = async (name) => {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const { Client } = createRequire(pathToFileURL(join(here, '..', '..', '.claude', 'hooks', 'package.json'))).call(null, 'pg');
+  const { Client } = loadPg();
   const c = new Client({ connectionString: adminUrl(), connectionTimeoutMillis: 5000 });
   await c.connect();
   try { return (await c.query('SELECT 1 FROM pg_database WHERE datname=$1', [name])).rowCount === 1; } finally { await c.end(); }
 };
+
+// CodeRabbit PR 297 round 4: pg may live under only one of .claude/hooks and apps/agentic-os. The tests must find it in either.
+// Fails if loadPg stops trying the next anchor, or if the test goes back to one hard-coded location.
+test('loadPg falls back to the next location when pg is missing from the first, and throws when it is in none', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const real = [join(here, '..', '..', '.claude', 'hooks', 'package.json'), join(here, '..', '..', 'apps', 'agentic-os', 'package.json')];
+  const nowhere = join(tmpdir(), 'no-such-dir-for-pg', 'package.json');
+  for (const found of real) assert.equal(typeof loadPg([nowhere, found]).Client, 'function', found);
+  assert.throws(() => loadPg([nowhere, nowhere]), /cannot resolve the `pg` module/);
+});
 
 test('createDatabase drops the new database and rethrows when the build step fails', async () => {
   const name = `lanes_pr1_${randomBytes(4).toString('hex')}`;

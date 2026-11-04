@@ -39,11 +39,10 @@ const PREFIX = 'lanes_pr1_';
 const NAME_RE = /^lanes_pr1_[a-z0-9_]+$/;
 
 /** Same lookup as lane.mjs: `pg` lives in the hooks bundle or apps/agentic-os. */
-function loadPg() {
-  const anchors = [
-    join(REPO, '.claude', 'hooks', 'package.json'),
-    join(REPO, 'apps', 'agentic-os', 'package.json'),
-  ];
+export function loadPg(anchors = [
+  join(REPO, '.claude', 'hooks', 'package.json'),
+  join(REPO, 'apps', 'agentic-os', 'package.json'),
+]) {
   for (const anchor of anchors) {
     try {
       return createRequire(pathToFileURL(anchor)).call(null, 'pg');
