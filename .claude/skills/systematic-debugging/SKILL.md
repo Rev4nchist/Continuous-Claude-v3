@@ -43,7 +43,7 @@ Phase 1 is done when you can say what is wrong and why, backed by something you 
 
 Dave may say "no fix yet, just tell me". Then do not fix. Still give one confirming step that would prove the cause, and put it first in your Next steps.
 
-**Recurring identical failures point to infrastructure.** Before you read any log, count the recurrences and compare the gaps. If the outcome is the same each time and the gaps are regular, an automatic process caused it. A person changes the outcome and the timing. Write two sentences in the root-cause paragraph, before any log match. First, what repeats. Second, what the repetition rules in (a loop, sync, daemon, scheduled task or stale baseline) and what it rules out (a one-off edit, a stray session). Then use the logs to find which process, and clear the nearest rival process with its log. Incident: the 2026-05-24 hook regression.
+**Recurring identical failures point to infrastructure.** Before you read any log, count the recurrences and compare the gaps. If the outcome is the same each time and the gaps are regular, suspect an automatic process first. A person usually varies the outcome and the timing. Treat it as your leading hypothesis, not a verdict: the logs must confirm it. Write two sentences in the root-cause paragraph, before any log match. First, what repeats. Second, what the repetition rules in (a loop, sync, daemon, scheduled task or stale baseline) and what it rules out (a one-off edit, a stray session). Then use the logs to find which process, and clear the nearest rival process with its log. Incident: the 2026-05-24 hook regression.
 
 ### Find the commit that broke it
 
