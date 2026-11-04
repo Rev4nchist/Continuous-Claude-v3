@@ -80,10 +80,10 @@ test('L5: decided_by default refuses', async () => {
   assert.match(r.problem, /decided_by/);
 });
 
-function cli(args, { fixture, store, storeText } = {}) {
+function cli(args, { fixture, store, storeText, head = HEAD } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'land-none-'));
   try {
-    const argv = [path.join(HERE, 'land-none-check.mjs'), '900', '--repo', 'o/r', '--head', HEAD, ...args];
+    const argv = [path.join(HERE, 'land-none-check.mjs'), '900', '--repo', 'o/r', '--head', head, ...args];
     if (fixture) {
       const f = path.join(dir, 'land.json');
       writeFileSync(f, JSON.stringify(fixture));
@@ -139,7 +139,9 @@ test('L10: record band HIGH with live band CRITICAL refuses; a record with no ba
   const rose = await pick({ band: 'CRITICAL' }, record({ band: 'HIGH' }));
   assert.equal(rose.ok, false);
   assert.match(rose.problem, /CRITICAL/);
-  assert.equal((await pick({}, record({ band: null }))).ok, false);
+  const noBand = await pick({}, record({ band: null }));
+  assert.equal(noBand.ok, false);
+  assert.match(noBand.problem, /no band/);
 });
 
 test('L11: review:none with a null live band exits 2; with --warn it exits 0', () => {
@@ -151,10 +153,13 @@ test('L11: review:none with a null live band exits 2; with --warn it exits 0', (
   assert.match(soft.out, /band/i);
 });
 
-test('L11b: record band HIGH with live band ELEVATED (the base moved) does not refuse on the band', async () => {
-  const r = await pick({ band: 'ELEVATED', read: NO_READ }, record({ band: 'HIGH' }));
-  assert.equal(r.needed, false);
-  assert.equal(r.ok, true);
+test('L11b: record band CRITICAL with live band HIGH (the base moved) does not refuse on the band; one below HIGH needs no record', async () => {
+  const lower = await pick({ band: 'HIGH' }, record({ band: 'CRITICAL' }));
+  assert.equal(lower.needed, true);
+  assert.equal(lower.ok, true, lower.problem);
+  const below = await pick({ band: 'ELEVATED', read: NO_READ }, record({ band: 'HIGH' }));
+  assert.equal(below.needed, false);
+  assert.equal(below.ok, true);
 });
 
 test('L12: a PR without review:none needs no record and reads no store', async () => {
@@ -198,4 +203,75 @@ test('L17: an `at` that is not a date refuses', async () => {
   const r = await pick({}, record({ at: 'yesterday-ish' }));
   assert.equal(r.ok, false);
   assert.match(r.problem, /at/);
+});
+
+// ---------- fix round 2 (aegis M1, m1, m2; critic follow-ups) ----------
+// L18  risk:docs alone (no bot) at HIGH lands with no record; review:none plus review:coderabbit is wrongly refused  -> L18, L19
+// L20  two store files hold a record for the PR and one of them wins                                                -> L20, L22
+// L21  a broken store file next to a good record is not named                                                       -> L21
+// L23  the default store folder reads a .tmp file or another plugin's file                                           -> L23
+// L24  an upper-case sha makes a good record refuse                                                                  -> L24
+
+test('L18: a lone risk:docs (no bot asked) at HIGH or CRITICAL needs a record; with none it refuses', async () => {
+  for (const labels of [['risk:docs'], ['risk:docs', 'builder:claude'], ['review:none', 'risk:docs']]) {
+    const r = await pick({ labels, read: () => ({ glob: GLOB, files: [], records: [], bad: [] }) });
+    assert.equal(r.needed, true, labels.join());
+    assert.equal(r.ok, false, labels.join());
+  }
+  assert.equal((await pick({ labels: ['risk:docs'] })).ok, true, 'a valid Dave pick still passes');
+  const low = await pick({ labels: ['risk:docs'], band: 'ELEVATED', read: NO_READ });
+  assert.equal(low.needed, false);
+});
+
+test('L19: review:none next to review:coderabbit asks for a CodeRabbit review, so it needs no record', async () => {
+  for (const labels of [['review:none', 'review:coderabbit'], ['review:none', 'review:deep'], ['risk:docs', 'risk:infra']]) {
+    const r = await pick({ labels, band: 'HIGH', read: NO_READ });
+    assert.equal(r.needed, false, labels.join());
+    assert.equal(r.ok, true, labels.join());
+  }
+});
+
+test('L20: two store files that both hold a record for the PR refuse and name both files', async () => {
+  const { nonePick } = await load();
+  const r = nonePick({ pr: 7, head: HEAD, labels: ['review:none'], band: 'HIGH', read: () => ({ glob: GLOB, files: ['/s/a.json', '/s/b.json'], records: [{ file: '/s/a.json', value: record() }, { file: '/s/b.json', value: record() }], bad: [] }) });
+  assert.equal(r.ok, false);
+  assert.ok(r.problem.includes('/s/a.json') && r.problem.includes('/s/b.json'), r.problem);
+});
+
+test('L21: a broken store file next to a good record still passes, and the line names the broken file', async () => {
+  const { nonePick } = await load();
+  const r = nonePick({ pr: 7, head: HEAD, labels: ['review:none'], band: 'HIGH', read: () => ({ glob: GLOB, files: ['/s/a.json', '/s/bad.json'], records: [{ file: '/s/a.json', value: record() }], bad: [{ file: '/s/bad.json', error: 'Unexpected token' }] }) });
+  assert.equal(r.ok, true, r.problem);
+  assert.ok(r.line.includes('/s/bad.json'), r.line);
+  assert.match(r.line, /not valid JSON|unreadable/);
+});
+
+test('L22: a stale record in one file and a good record in another refuse, and name both files (the default store folder)', async () => {
+  const { makeReader, nonePick } = await load();
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'land-none-dir-'));
+  try {
+    writeFileSync(path.join(dir, 'ccv3-mods_old.json'), JSON.stringify({ 'checkpoint:pr:7': record({ head: OLD }) }));
+    writeFileSync(path.join(dir, 'ccv3-mods_new.json'), JSON.stringify({ 'checkpoint:pr:7': record() }));
+    const r = nonePick({ pr: 7, head: HEAD, labels: ['review:none'], band: 'HIGH', read: makeReader(7, undefined, dir) });
+    assert.equal(r.ok, false);
+    assert.ok(r.problem.includes('ccv3-mods_old.json') && r.problem.includes('ccv3-mods_new.json'), r.problem);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('L23: the default store folder reads only ccv3-mods_*.json: not a .tmp copy, not another plugin file', async () => {
+  const { storeFiles } = await load();
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'land-none-dir-'));
+  try {
+    for (const name of ['ccv3-mods_a.json', 'ccv3-mods_b.json', 'ccv3-mods_a.json.tmp-123', 'cc-plugin-diff_builtin-1.json', 'notes.txt']) writeFileSync(path.join(dir, name), '{}');
+    const found = storeFiles(undefined, dir);
+    assert.deepEqual(found.files.map((f) => path.basename(f)).sort(), ['ccv3-mods_a.json', 'ccv3-mods_b.json']);
+    assert.equal(found.glob, path.join(dir, 'ccv3-mods_*.json'));
+    assert.deepEqual(storeFiles(undefined, path.join(dir, 'missing')).files, []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('L24: an upper-case sha in the record or in --head still matches the lower-case PR head', async () => {
+  assert.equal((await pick({}, record({ head: HEAD.toUpperCase() }))).ok, true);
+  const r = cli([], { fixture: fixture(), store: storeWith(record({ pr: 900 })), head: HEAD.toUpperCase() });
+  assert.equal(r.code, 0, r.out);
 });

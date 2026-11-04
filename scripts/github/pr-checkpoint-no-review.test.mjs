@@ -271,6 +271,7 @@ test('G8: HIGH first run on synchronize (the workflow re-run) with a fresh none 
   const d = await run('synchronize', NONE_LABELS, {}, { confirmed });
   assert.equal(d.band.band, 'HIGH');
   assert.equal(d.pathway, 'none');
+  assert.equal(d.consumed, null, 'only a ready_for_review uses the marker up');
 });
 
 test('G7: verifiedBots gives NONE_NO_CHECKPOINT_NOTE for the comment a gated run renders', async () => {
@@ -280,4 +281,65 @@ test('G7: verifiedBots gives NONE_NO_CHECKPOINT_NOTE for the comment a gated run
   const body = renderComment(d.comment ?? 'No open router notes.', d.effective, d.head, d.held, { pathway: d.pathway, pclass: d.pclass, consumed: d.consumed });
   const bot = { id: 5, user: { login: 'github-actions[bot]', type: 'Bot' }, body };
   assert.deepEqual(verifiedBots(['review:none'], [bot], HEAD).blockers, [NONE_NO_CHECKPOINT_NOTE]);
+});
+
+// ---------- fix round 2 (aegis M1, M2, m4; critic major) ----------
+
+test('G9: after a gated first run (class saved, no pclass), the draft-then-/pathway recovery saves pathway none with a fresh none marker', async () => {
+  const first = await run('ready_for_review', NONE_LABELS);
+  assert.equal(first.pathway, null);
+  const confirmed = await markers(comment(11, MARKER(HEAD)));
+  const d = await run('ready_for_review', NONE_LABELS, { previousClass: first.class }, { confirmed, previousPathway: null, previousPclass: null });
+  assert.equal(d.band.band, 'HIGH');
+  assert.equal(d.pathway, 'none');
+  assert.equal(d.pclass, d.effective, 'a confirmed ready event is a new checkpoint at the current class');
+  assert.equal(d.consumed, 11);
+  const bare = await run('synchronize', NONE_LABELS, { previousClass: first.class }, { previousPathway: null, previousPclass: null });
+  assert.equal(bare.pathway, null, 'without the marker the same state still saves nothing');
+});
+
+test('G10: pathway none saved bare at ELEVATED, then a push makes the band HIGH: the pathway stays and the router says the band rose', async () => {
+  const { NONE_BAND_RAISED_NOTE } = await router();
+  assert.equal(typeof NONE_BAND_RAISED_NOTE, 'string', 'the router exports the note');
+  const first = await run('ready_for_review', NONE_LABELS, { paths: ELEVATED, files: ELEVATED.map((p) => file(p)) });
+  assert.equal(first.band.band, 'ELEVATED');
+  assert.equal(first.pathway, 'none');
+  assert.equal(first.consumed, null);
+  const later = await run('synchronize', NONE_LABELS, { previousClass: first.class }, { previousPathway: 'none', previousPclass: first.pclass, previousConsumed: null });
+  assert.equal(later.band.band, 'HIGH');
+  assert.equal(later.pathway, 'none', 'no auto-change of the saved pathway');
+  assert.ok(later.comment?.includes(NONE_BAND_RAISED_NOTE), `comment: ${later.comment}`);
+});
+
+test('G11: a none that was confirmed by a marker at HIGH raises no band note on a later push', async () => {
+  const { NONE_BAND_RAISED_NOTE } = await router();
+  const confirmed = await markers(comment(11, MARKER(HEAD)));
+  const first = await run('ready_for_review', NONE_LABELS, {}, { confirmed });
+  assert.equal(first.consumed, 11);
+  const later = await run('synchronize', NONE_LABELS, { previousClass: first.class }, { previousPathway: 'none', previousPclass: first.pclass, previousConsumed: 11 });
+  assert.equal(later.pathway, 'none');
+  assert.ok(!(later.comment ?? '').includes(NONE_BAND_RAISED_NOTE));
+});
+
+test('G12: land-none-check.mjs is a control-plane gate file, a security-tier file and a checkpoint.critical file, beside land-recheck.mjs', async () => {
+  const { bandOf } = await router();
+  const gate = 'scripts/github/land-none-check.mjs';
+  const b = bandOf([gate], LIVE);
+  assert.deepEqual(b.gateFiles, [gate]);
+  assert.deepEqual(b.securityTier, [gate]);
+  assert.ok(LIVE.checkpoint.critical.includes(gate));
+  assert.ok(LIVE.matrix.control_plane.includes('scripts/github/land-recheck.mjs'));
+});
+
+test('S2: a lone risk:docs is no-bot only when the router classed this head as docs; a higher saved class keeps a bot required with a reason', async () => {
+  const { verifiedBots } = await status();
+  const docs = verifiedBots(['risk:docs'], [routerComment(`class=docs head=${HEAD}`)], HEAD);
+  assert.equal(docs.greptile, false);
+  assert.equal(docs.coderabbit, false);
+  assert.equal(docs.unverified, undefined);
+  const swapped = verifiedBots(['risk:docs'], [routerComment(`class=infra head=${HEAD}`)], HEAD);
+  assert.ok(swapped.greptile || swapped.coderabbit, 'a bot is required again');
+  assert.match(swapped.unverified, /risk:docs/);
+  const off = verifiedBots(['risk:docs'], [routerComment(`class=infra head=${HEAD}`)], HEAD, false);
+  assert.equal(off.coderabbit, true, 'with Greptile off the fallback is CodeRabbit');
 });

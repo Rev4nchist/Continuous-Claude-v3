@@ -140,6 +140,13 @@ try {
     Check "W5 none-check exit ${code}: land-pr exits non-zero and makes no merge call" ($r5.Code -ne 0 -and -not (Test-Path $c5.Merge))
     Check "W5 none-check exit ${code}: output shows the reason and says nothing was merged" ($r5.Text -match 'no record for this head' -and $r5.Text -match 'Nothing was merged')
   }
+  # W5b: exit 1 tells Dave to pick again; exit 2 says it could not decide and tells him to read the output, not to pick again
+  $c5a = New-Case 'w5a' 0 '  re-check: PR #7 is unchanged' 1 'REFUSED: no record'
+  $c5b = New-Case 'w5b' 0 '  re-check: PR #7 is unchanged' 2 'land-none-check: could not determine (boom)'
+  $t5a = (Invoke-Land $c5a).Text
+  $t5b = (Invoke-Land $c5b).Text
+  Check 'W5b exit 1: the message tells Dave to pick again in /pathway' ($t5a -match 'picks again')
+  Check 'W5b exit 2: the message says could not determine, read the output above, then re-run' ($t5b -match 'could not determine; read the output above, then re-run' -and $t5b -notmatch 'picks again')
 
   # W6: a passing helper prints its line, and the line is in the LANDED summary
   $line6 = 'Dave chose none at 2026-11-03 21:42 CST via dialog, head 0123456 (band HIGH, store x.json)'
@@ -158,8 +165,11 @@ try {
   $args7 = if (Test-Path $c7.NoneArgs) { Get-Content -LiteralPath $c7.NoneArgs -Raw } else { '' }
   Check 'W7 -IgnoreReview: the helper ran with --warn' ($args7 -match '--warn')
   Check 'W7 -IgnoreReview: the merge call was made even though the helper exited 1' ((Test-Path $c7.Merge) -and $r7.Code -eq 0)
-  Check 'W7 -IgnoreReview: the warning is printed and is in the LANDED summary' ($r7.Text -match 'WARNING: no record for this head' -and $r7.Text -match 'LANDED #7:[^
-]*WARNING: no record for this head')
+  Check 'W7 -IgnoreReview: the warning is printed and is in the LANDED summary' ($r7.Text -match 'WARNING: no record for this head' -and $r7.Text -match 'LANDED #7:[^\r\n]*WARNING: no record for this head')
+  # W7b: -IgnoreReview and the helper printed nothing and failed (it did not run): the LANDED line says so
+  $c7b = New-Case 'w7b' 1 '  re-check: must not run' 3 ''
+  $r7b = Invoke-Land $c7b @('-IgnoreReview')
+  Check 'W7b -IgnoreReview, helper failed silently: the merge still goes and the LANDED line names the failure' ((Test-Path $c7b.Merge) -and $r7b.Text -match 'LANDED #7:[^\r\n]*WARNING: none-pick check did not run \(exit 3\)')
 }
 finally {
   $env:PATH = $oldPath

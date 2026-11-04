@@ -2973,7 +2973,8 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
 // V1  a dialog pick stores no `via`, or the wrong one       V2  a composer word stores no `via`, or the wrong one
 // V3  a bridge-typed word stores `dialog` or nothing; a bridge none at HIGH that Dave answers in the dialog stores anything but `dialog`
 // V4  auto-confirm stores no `via`, or one that is not `auto`
-// V5  Lock A lets a tool write reach the plugin store file          V6  Lock B lets shell text that names the plugin store file run (warn mode included)
+// V5  Lock A lets a tool write reach the plugin store file          V6  Lock B lets shell text that WRITES the plugin store file run (warn mode included)
+// V7  Lock B denies a pure read, a search, a commit message, another plugin's store, or a test run with --store (false positives)
 describe('pr-checkpoint: via, and the plugin store lock', () => {
   const bandJson = (band: 'LOW' | 'HIGH' | 'CRITICAL') => ({
     stdout: JSON.stringify(
@@ -3049,27 +3050,52 @@ describe('pr-checkpoint: via, and the plugin store lock', () => {
     })
   }
 
-  test('V6: shell text that names the plugin store file is denied in every form, in warn mode, and spawns no CLI', async ($, on) => {
+  const shell = async ($: Engine, tool: 'Bash' | 'PowerShell', command: string) => (await $.tool.call({ tool, command } as never)) as unknown as { deny?: string }
+
+  test('V6: shell text that WRITES, moves, deletes or builds the real plugin store file is denied in every form, in warn mode, and spawns no CLI', async ($, on) => {
     const { seen } = world(on)
     await start($)
-    const shell = async (tool: 'Bash' | 'PowerShell', command: string) => (await $.tool.call({ tool, command } as never)) as unknown as { deny?: string }
-    const NAMES: [('Bash' | 'PowerShell'), string][] = [
-      ['Bash', 'cat ~/.claude/plugins/store/ccv3-mods_ccv3-c4cd07c751a8.json'],
+    const WRITES: [('Bash' | 'PowerShell'), string][] = [
       ['Bash', `node -e "require('fs').writeFileSync(process.env.HOME+'/.claude/plugins/store/ccv3-mods_x.json','{}')"`],
       ['Bash', 'cp /tmp/x.json ~/.claude/plugins/store/ccv3-mods_x.json'],
+      ['Bash', 'mv /tmp/x.json ~/.claude/plugins/store/ccv3-mods_x.json'],
+      ['Bash', 'rm ~/.claude/plugins/store/ccv3-mods_ccv3-c4cd07c751a8.json'],
       ['Bash', 'cd ~/.claude/plugins/store && echo {} > ccv3-mods_x.json'],
+      ['Bash', 'cat /tmp/x.json > ~/.claude/plugins/store/ccv3-mods_x.json'],
+      ['Bash', 'echo {} | tee ~/.claude/plugins/store/ccv3-mods_x.json'],
+      ['Bash', 'git rm ~/.claude/plugins/store/ccv3-mods_x.json'],
       ['PowerShell', "Set-Content -Path $HOME\\.claude\\plugins\\store\\ccv3-mods_x.json -Value '{}'"],
-      ['PowerShell', 'Get-Content $HOME/.claude/plugins/store/ccv3-mods_x.json'],
-      ['PowerShell', 'git commit -m "docs: the land gate reads ~/.claude/plugins/store/ccv3-mods_x.json"'],
+      ['PowerShell', "'{}' | Out-File $HOME/.claude/plugins/store/ccv3-mods_x.json"],
+      ['PowerShell', 'Remove-Item $HOME/.claude/plugins/store/ccv3-mods_x.json'],
+      ['PowerShell', 'Get-Content a.json | Set-Content $HOME/.claude/plugins/store/ccv3-mods_x.json'],
     ]
-    for (const [tool, command] of NAMES) {
-      const r = await shell(tool, command)
+    for (const [tool, command] of WRITES) {
+      const r = await shell($, tool, command)
       expect(LOCK_DENIED(r), `${tool}: ${command}`).toBe(true)
       expect(r.deny).toMatch(/plugin store/i)
     }
     expect(seen.ran).toEqual([])
     expect(argvOf(seen, 'checkpoint-shapes-cli')).toEqual([])
-    expect(LOCK_DENIED(await shell('Bash', 'ls ~/.claude/plugins/ccv3-mods'))).toBe(false)
-    expect(LOCK_DENIED(await shell('Bash', 'git status'))).toBe(false)
+  })
+
+  test('V7: a pure read of the store, a search that names the folder, a commit message, another plugin store and a --store test run all pass', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const PASSES: [('Bash' | 'PowerShell'), string][] = [
+      ['Bash', 'cat ~/.claude/plugins/store/ccv3-mods_ccv3-c4cd07c751a8.json'],
+      ['Bash', 'ls ~/.claude/plugins/store'],
+      ['Bash', 'rg -n "plugins/store" scripts/'],
+      ['Bash', 'git commit -m "docs: the land gate reads ~/.claude/plugins/store/ccv3-mods_x.json"'],
+      ['Bash', 'cat ~/.claude/plugins/store/cc-plugin-diff_builtin-3903e77c01b1.json'],
+      ['Bash', 'cp /tmp/x.json ~/.claude/plugins/store/checkpoint-spike_inline-1cd1e6356cdf.json'],
+      ['Bash', 'node scripts/github/land-none-check.mjs 900 --repo o/r --head abc --store C:/tmp/ccv3-mods_ok.json'],
+      ['Bash', 'ls ~/.claude/plugins/ccv3-mods'],
+      ['PowerShell', 'Get-Content $HOME/.claude/plugins/store/ccv3-mods_x.json'],
+      ['PowerShell', 'git commit -m "docs: the land gate reads ~/.claude/plugins/store/ccv3-mods_x.json"'],
+    ]
+    for (const [tool, command] of PASSES) {
+      expect(LOCK_DENIED(await shell($, tool, command)), `${tool}: ${command}`).toBe(false)
+    }
+    expect(seen.ran.length).toBe(PASSES.length)
   })
 })
