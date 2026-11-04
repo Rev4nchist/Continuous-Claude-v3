@@ -67,9 +67,22 @@ test('wiring: an import error in both runs is blocked:broken-probe', () => {
   assert.equal(run('01-', ev({ headRuns: [broken, broken], cited: null })).verdict, 'blocked:broken-probe');
 });
 
-test('wiring: base that fires the same line refutes, base that passes reproduces', () => {
-  assert.equal(run('02-', ev({ baseRun: { ...fire, failLine: 'not ok 1 - notice kind is null, want skipped' }, headRuns: [{ ...fire, failLine: 'not ok 1 - notice kind is null, want skipped' }, { ...fire, failLine: 'not ok 1 - notice kind is null, want skipped' }] })).verdict, 'refuted');
+test('wiring: base that fires the same line refutes (cited lines ran, value observed), base that passes reproduces', () => {
+  const line = 'not ok 1 - notice kind is null, want skipped';
+  const heads = [{ ...fire, failLine: line }, { ...fire, failLine: line }];
+  assert.equal(run('02-', ev({ baseRun: { ...fire, failLine: line }, headRuns: heads, observedValue: true })).verdict, 'refuted');
   assert.equal(run('09-', ev({ baseRun: pass })).verdict, 'reproduced');
+});
+
+// Fix 4. Breaks if: verdictInputFor drops observedValue, or a base fire refutes without G8 or without an observed value.
+test('wiring: a base fire with no observed value or no cited-line coverage is blocked:broken-probe, not refuted', () => {
+  const line = 'not ok 1 - notice kind is null, want skipped';
+  const base = { baseRun: { ...fire, failLine: line }, headRuns: [{ ...fire, failLine: line }, { ...fire, failLine: line }] };
+  assert.equal(verdictInputFor(byPrefix('02-'), ev({ observedValue: true })).observedValue, true);
+  assert.equal(run('02-', ev({ ...base })).verdict, 'blocked:broken-probe');
+  assert.equal(run('02-', ev({ ...base, observedValue: false })).verdict, 'blocked:broken-probe');
+  assert.equal(run('02-', ev({ ...base, observedValue: true, cited: false })).verdict, 'blocked:broken-probe');
+  assert.equal(run('02-', ev({ ...base, observedValue: true, cited: null })).verdict, 'blocked:broken-probe');
 });
 
 // Breaks if: the fix-side run never reaches verdict(), so a probe that also fires on the fixed code is not flagged.

@@ -221,10 +221,33 @@ test('reproduced: head fires on every run and base passes', () => {
   assert.equal(r.false_confirm, false);
 });
 
-test('refuted: base fires the same fireMatch (pre-existing or bad probe)', () => {
-  const r = V({ base: fire() });
+test('refuted: base fires the same fireMatch, the cited lines ran and the fail line carries an observed value', () => {
+  const r = V({ base: fire(), observedValue: true });
   assert.equal(r.verdict, 'refuted');
   assert.match(r.reason, /base/);
+});
+
+// Fix 4 (critic major 4). Breaks if: refuted from a base fire needs no G8 at head, or no G9(a) observed value on the fail line.
+// A bad probe (off the cited path, or an unconditional fail line) fires the same line on both sides; it must not read as a refute.
+test('Fix 4: base fires the same line but the cited lines are not shown as executed at head: blocked:broken-probe, not refuted', () => {
+  for (const coverage of [{ citedLinesExecuted: false }, { citedLinesExecuted: null }, {}, undefined]) {
+    const r = V({ base: fire(), observedValue: true, coverage });
+    assert.equal(r.verdict, 'blocked:broken-probe', JSON.stringify(coverage));
+    assert.equal(r.rule, 'G4');
+  }
+});
+
+test('Fix 4: base fires the same line but the fail line carries no observed value: blocked:broken-probe, not refuted', () => {
+  for (const observedValue of [false, undefined, null]) {
+    const r = V({ base: fire(), observedValue });
+    assert.equal(r.verdict, 'blocked:broken-probe', String(observedValue));
+    assert.equal(r.rule, 'G4');
+  }
+});
+
+// Breaks if: the new refuted guard is applied to the no-base-fire paths (reproduced needs no observedValue input).
+test('Fix 4: reproduced does not need the observedValue input', () => {
+  assert.equal(V({ base: pass() }).verdict, 'reproduced');
 });
 
 test('G4: a base that fails on a different line is not "base passes": blocked:broken-probe', () => {
@@ -466,8 +489,8 @@ test('G8: new code that passes G9 but has no coverage is blocked:no-coverage, no
 });
 
 // Breaks if: the coverage gate is moved ahead of G4/G9 so refuted and unverified lose their verdict.
-test('G8: refuted and unverified do not need coverage', () => {
-  assert.equal(V({ base: fire(), coverage: { citedLinesExecuted: false } }).verdict, 'refuted');
+test('G8: a missing cited path (refuted) and unverified do not need coverage', () => {
+  assert.equal(V({ citedPathExists: false, coverage: { citedLinesExecuted: false } }).verdict, 'refuted');
   assert.equal(V({ baseReachable: false, base: null, g9: { observedValue: false, hunkRevertChanged: false }, coverage: { citedLinesExecuted: null } }).verdict, 'unverified');
 });
 

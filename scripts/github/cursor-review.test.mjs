@@ -173,6 +173,17 @@ test('start and end lines carry repo and purpose; a missing or unknown purpose i
   assert.deepEqual(rows.slice(4).map((r) => r.purpose), ['other', 'other']);
 });
 
+// Critic fix 7. Breaks if: 'verify' is missing from PURPOSES, so the TREX verify arm's spend is stored as 'other' in the ledger.
+test('verify is a ledger purpose: a verify run is stored as verify, an unknown word still as other', () => {
+  assert.ok(cr.PURPOSES.includes('verify'));
+  assert.equal(cr.normalizePurpose('verify'), 'verify');
+  assert.equal(cr.normalizePurpose('verifyx'), 'other');
+  const file = path.join(tmp('purpose-verify'), 'ledger.jsonl');
+  const a = reserveRun(file, { ref: 'trex-verify-N16', model: 'grok-4.7-high', band: 'MID', purpose: 'verify' }, { now: () => NOW });
+  finishRun(file, a.id, { ref: 'trex-verify-N16', exit: 0, purpose: 'verify' }, { now: () => NOW + 1 });
+  assert.deepEqual(readLedger(file).entries.map((r) => r.purpose), ['verify', 'verify']);
+});
+
 test('old rows without repo or purpose still read, and tagged rows count the same as untagged ones', () => {
   const old = { ts: new Date(NOW).toISOString(), phase: 'start', id: 'o1', ref: 'pr-9', model: 'grok-4.7-high', band: 'MID', sessionId: null };
   const tagged = { ...old, id: 't1', ref: 'pr-9', repo: 'x/y', purpose: 'eval' };

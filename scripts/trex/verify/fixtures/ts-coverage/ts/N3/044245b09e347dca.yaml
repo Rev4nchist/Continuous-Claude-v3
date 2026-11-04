@@ -1,0 +1,41 @@
+id: 044245b09e347dca
+title: worktree root from the git common dir (cited .ts imported directly)
+description: ts coverage proof, imports scoped-cleanup.ts with type stripping
+goal: a delete inside the worktrees folder is classed as worktree
+paths: [.claude/hooks/src/shared/scoped-cleanup.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          import { mkdirSync } from 'node:fs';
+          mkdirSync('/tmp/repo3/.git', { recursive: true });
+          mkdirSync('/tmp/repo3/.claude/worktrees/wt1', { recursive: true });
+          const m = await import('/app/.claude/hooks/src/shared/scoped-cleanup.ts');
+          const kind = m.scopedCleanupKind('rm -rf /tmp/repo3/.claude/worktrees/wt1', { tool_name: 'Bash', session_id: 's1', cwd: '/tmp/repo3/.claude/worktrees/wt1' }, { gitCommonDir: () => '/tmp/repo3/.git' });
+          if (kind !== 'worktree') {
+            console.log(`not ok 1 - the delete is classed ${JSON.stringify(kind)}, not worktree`);
+            process.exit(1);
+          }
+          console.log('ok 1 - the delete is classed worktree');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

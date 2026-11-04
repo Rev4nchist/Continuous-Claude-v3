@@ -1,0 +1,38 @@
+id: 6a999a233a4b0410
+title: renew is missing from the changing verbs (cited .ts imported directly)
+description: ts coverage proof, imports the cited .ts file with type stripping
+goal: renew is a lane verb that changes the lane DB
+paths: [.claude/hooks/src/lane-board-republish-reminder.ts]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - node
+        - --experimental-strip-types
+        - --input-type=module
+        - -e
+        - |
+          import { registerHooks } from 'node:module';
+          import { existsSync } from 'node:fs';
+          import { fileURLToPath } from 'node:url';
+          registerHooks({ resolve(spec, ctx, next) {
+            if (/^\.{1,2}\/.*\.js$/.test(spec) && ctx.parentURL?.endsWith('.ts')) {
+              const t = new URL(spec.replace(/\.js$/, '.ts'), ctx.parentURL);
+              if (existsSync(fileURLToPath(t))) return { url: t.href, shortCircuit: true };
+            }
+            return next(spec, ctx);
+          } });
+          const m = await import('/app/.claude/hooks/src/lane-board-republish-reminder.ts');
+          const verbs = [...m.CHANGING_VERBS].join(',');
+          if (!m.CHANGING_VERBS.has('renew')) {
+            console.log(`not ok 1 - renew is not a changing verb, the set holds ${verbs}`);
+            process.exit(1);
+          }
+          console.log('ok 1 - renew is a changing verb');
+    checks:
+      - {text: the probe exits 0, exit: 0}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

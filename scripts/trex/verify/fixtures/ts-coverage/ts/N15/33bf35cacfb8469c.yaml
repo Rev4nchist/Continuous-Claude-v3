@@ -1,0 +1,23 @@
+id: 33bf35cacfb8469c
+title: changed sync range runs under bash (cited .sh run with bash)
+description: ts coverage proof for a shell target
+goal: the changed sync reads the changed paths
+paths: [scripts/sync-to-active.sh]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cwd: .
+      cmd:
+        - bash
+        - -c
+        - |
+          export HOME=/tmp/h15; mkdir -p $HOME/.claude
+          out=$(bash /app/scripts/sync-to-active.sh --changed --dry-run 2>&1); rc=$?
+          if [ "$rc" -ne 0 ]; then echo "not ok 1 - sync exited $rc: $(echo "$out" | tail -1)"; exit 1; fi
+          echo "ok 1 - sync dry run exited 0"
+    checks:
+      - {text: the probe exits 0, exit: 0}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1

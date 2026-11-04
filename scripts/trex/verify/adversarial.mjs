@@ -96,6 +96,7 @@ export function verdictInputFor(fx, ev) {
     fix: ev.fixRun ?? null,
     baseReachable: ev.baseReachable,
     coverage: { citedLinesExecuted: ev.cited },
+    observedValue: ev.observedValue === true,
     g9: ev.baseReachable ? undefined : ev.g9,
     tamper: ev.tamper,
     citedPathExists: ev.citedPathExists,
@@ -114,7 +115,7 @@ const shortId = (fx) => fx.id.slice(0, 2);
 const probeDir = (fx) => `/app/.verify/${fx.id}`;
 const execOk = (r) => r?.code === 0 && r.timedOut !== true;
 
-async function writeText(env, target, text) {
+export async function writeText(env, target, text) {
   const r = await env.exec(['sh', '-c', 'mkdir -p "$(dirname "$1")" && cat > "$1"', 'sh', target], { cwd: '.', stdin: text, timeoutSec: 30 });
   if (!execOk(r)) throw new Error(`write ${target} failed (exit ${r?.code})`);
 }
@@ -127,7 +128,7 @@ function flowFor(fx, flowId) {
   };
 }
 
-async function restoreTree(env) {
+export async function restoreTree(env) {
   await env.exec(['sh', '-c', 'git checkout -- . && git clean -fdq -e .verify'], { cwd: '.', timeoutSec: 60 });
 }
 
@@ -166,8 +167,8 @@ async function withSide(deps, head, root, tag, fn) {
   try { return await fn(side); } finally { await deps.stopEnv(side.env, { cwd: deps.cwd }).catch(() => {}); }
 }
 
-const mergeCov = (list) => ({ v8: list.flatMap((c) => c.v8), trace: list.map((c) => c.trace).filter(Boolean).join('\n') || null, sources: Object.assign({}, ...list.map((c) => c.sources)) });
-const refHas = (git, ref, file) => git(['ls-tree', ref, '--', file]).stdout.trim() !== '';
+export const mergeCov = (list) => ({ v8: list.flatMap((c) => c.v8), trace: list.map((c) => c.trace).filter(Boolean).join('\n') || null, sources: Object.assign({}, ...list.map((c) => c.sources)) });
+export const refHas = (git, ref, file) => git(['ls-tree', ref, '--', file]).stdout.trim() !== '';
 
 /** G9 for new code: observed value, plus the cited file put back to its base content (or removed) and the probe run again. */
 async function g9Evidence(side, fx, git, headRun, probeSource) {
@@ -194,8 +195,10 @@ async function headEvidence(side, fx, git, raw) {
   const cited = runs.length > 0 ? makeCoverage(mergeCov(runs.map((r) => r.cov))).citedLinesExecuted(fx.cited.file, fx.cited.start, fx.cited.end) : null;
   const first = runs[0]?.run;
   const g9 = fx.g9 && first ? await g9Evidence(side, fx, git, first, fx.probe) : null;
+  // G9(a) at head for every fired item (a refute from "base fires the same line" needs it too), not only for new code.
+  const observed = first ? observedValue(first.failLine, fx.declare?.fireMatch, fx.probe) : false;
   return {
-    headRuns: runs.map((r) => r.run), cited, baseReachable, g9, tamper: runs.some((r) => r.tampered.length > 0), tamperedFiles: uniqueTampered(runs),
+    headRuns: runs.map((r) => r.run), cited, baseReachable, g9, observedValue: observed, tamper: runs.some((r) => r.tampered.length > 0), tamperedFiles: uniqueTampered(runs),
     citedPathExists: refHas(git, fx.head, fx.cited.file), dockerOk: true, wallMs: runs.map((r) => r.ms),
   };
 }
@@ -206,7 +209,7 @@ function rowOf(fx, ev, got) {
   return {
     id: fx.id, title: fx.title, expected: fx.expected, got: { verdict: got.verdict, rule: got.rule, reason: got.reason, false_confirm: got.false_confirm }, ok: matchesExpected(got, fx.expected),
     headRuns: ev.headRuns.map(brief), baseRun: brief(ev.baseRun), fixRun: brief(ev.fixRun), baseReachable: ev.baseReachable, citedLinesExecuted: ev.cited, cited: fx.cited,
-    tamper: ev.tamper, tamperedFiles: ev.tamperedFiles, g9: ev.g9 ? { observedValue: ev.g9.observedValue, hunkRevertChanged: ev.g9.hunkRevertChanged } : null,
+    tamper: ev.tamper, tamperedFiles: ev.tamperedFiles, observedValue: ev.observedValue, g9: ev.g9 ? { observedValue: ev.g9.observedValue, hunkRevertChanged: ev.g9.hunkRevertChanged } : null,
     wallMs: ev.wallMs,
   };
 }
@@ -266,7 +269,7 @@ async function overhead(side, git, imageSha) {
 
 // ---------- run ----------
 
-async function dockerUp(deps) {
+export async function dockerUp(deps) {
   const d = resolveDeps({ cwd: deps.cwd });
   const r = await d.docker(['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 20_000 });
   return r.code === 0 && !r.timedOut ? r.stdout.trim() : null;

@@ -1,0 +1,1 @@
+{"pid": "33bf35cacfb8469c", "row": "N15", "fireMatch": "sync exited [1-9]", "correct": "the dry run of the changed sync exits 0.", "citedFile": "scripts/sync-to-active.sh", "startLine": 813, "endLine": 838, "newCode": false}

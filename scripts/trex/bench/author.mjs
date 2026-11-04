@@ -13,6 +13,10 @@
  *   node scripts/trex/bench/author.mjs --freeze --sha <sha>         the sha is a commit that holds the flows; this script never commits
  * Model arms (arms spec section 4): add `--arm <grok|composer|composer2|xhigh|grok2|intent>` to any of these. The default arm is grok, the original bench.
  * An arm has its own model, flows folder, ledger ref prefix, run cap, groups and frozen file (see ARMS). `--model` must be a model of the arm.
+ * The verify arm (`--arm verify`) authors one flow per review finding of a baseline record (groups S1 ... N16, see VERIFY_GROUPS). It starts a
+ * model only with `--live`; `--dry-run` needs no flag, starts nothing, and `--dry-run --prompt-out <file>` writes the exact prompt (`--print-prompt` prints it).
+ *   node scripts/trex/bench/author.mjs --arm verify --group S11 --live      one record
+ *   node scripts/trex/bench/author.mjs --arm verify --all --live            all 16 records, one after another
  * The intent arm also reads scripts/trex/bench/intent/<group>.json (the PR title and body, fetched once with gh, see intent.mjs).
  *   `--refetch-intent` fetches it again. A leak hit in the intent text refuses the run (exit 2): edit that file, then run again.
  *
@@ -37,6 +41,7 @@ import { matchGlob } from '../../github/review-router.mjs';
 import { CHECK_KINDS, DRIVERS, loadFlows, validateFlow } from '../flow.mjs';
 import { hostActionOk, hostPs1Path } from '../host-allow.mjs';
 import { INTENT_DIR, intentFacts, intentLeakHits, loadIntent, rangeEnd, stripLate } from './intent.mjs';
+import { lintVerifyAnswer, loadAuthorInput, renderFindings } from '../verify/author-input.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 import { stripEnv } from '../lib/strip-env.mjs';
 
@@ -92,6 +97,12 @@ const GROUP_IDS = Object.freeze(Object.keys(GROUPS));
 /** The four groups with short container ranges: the xhigh, grok2 and composer2 arms run them (composer2 is the second composer run). */
 const VARIANCE_GROUPS = Object.freeze(['S1', 'S8', 'S14', 'S18']);
 const BENCH_DIR = 'scripts/trex/bench';
+/**
+ * The records the verify arm authors: each record of scripts/trex/verify/probe-set.json with a finding that classify does not block.
+ * A test pins this list to verifyRowIds(probe-set.json). The ledger `purpose` of this arm is "verify"; PURPOSES in cursor-review.mjs
+ * is in PURPOSES of cursor-review.mjs (critic fix 7), so the ledger shows this spend as "verify". The cap binds through the ref prefix (trex-verify-).
+ */
+const VERIFY_GROUPS = Object.freeze(['S1', 'S3', 'S8', 'S9', 'S11', 'S12', 'S13', 'S15', 'N3', 'N9', 'N11', 'N12', 'N13', 'N14', 'N15', 'N16']);
 /** The authoring models (arms spec section 4). This list is not the review allowlist of cursor-review.mjs. -fast and auto are refused before it is read. */
 export const AUTHOR_MODELS = Object.freeze(['grok-4.7-high', 'grok-4.7-xhigh', 'composer-2.5']);
 /**
@@ -108,6 +119,13 @@ export const ARMS = Object.freeze({
   grok2: { name: 'grok2', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-grok2`, refPrefix: 'trex-grok2-', stem: 'grok2-', cap: 0 /* Dave 11-03: grok2's 4 runs moved to the intent probe */, groups: VARIANCE_GROUPS, frozen: 'frozen-grok2.json' },
   // The intent arm: grok-4.7-high, told what the PR says the change is meant to do (intent.mjs). Its prompt is author-prompt-intent.md.
   intent: { name: 'intent', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-intent`, refPrefix: 'trex-intent-', stem: 'intent-', cap: 4, groups: VARIANCE_GROUPS, frozen: 'frozen-intent.json', prompt: 'author-prompt-intent.md', intent: true },
+  // The verify arm (verify design, P1): one run per baseline record, one flow per review finding the container can run.
+  // `verify: true` makes the groups the record ids of probe-set.json (not GROUPS) and gives the prompt the findings of the record.
+  // `requiresLive` refuses a model run unless --live is given. `purpose` goes to the ledger lines (see the note at VERIFY_GROUPS).
+  verify: {
+    name: 'verify', models: ['grok-4.7-high'], flowsDir: `${BENCH_DIR}/flows-verify`, refPrefix: 'trex-verify-', stem: 'verify-', cap: 21 /* Dave 11-03: 16 records + 5 repair or tuning runs */,
+    groups: VERIFY_GROUPS, frozen: 'frozen-verify.json', prompt: 'author-prompt-verify.md', verify: true, requiresLive: true, purpose: 'verify', filesShown: 20,
+  },
 });
 export const ARM_NAMES = Object.freeze(Object.keys(ARMS));
 const OTHER_PREFIXES = Object.freeze(ARM_NAMES.filter((n) => n !== 'grok').map((n) => ARMS[n].refPrefix));
@@ -416,15 +434,60 @@ export function lintFlow(yamlText, changedFiles = [], opts = {}) {
 
 /** Fills the template in one pass, so a value that holds "{files}" is never filled again. */
 export function renderPrompt(template, vars) {
-  return template.replace(/\{(ref|group|folder|files|fileCount|hostRules|intentTitle|intentBody)\}/g, (_, k) => String(vars[k]));
+  return template.replace(/\{(ref|group|folder|files|fileCount|hostRules|intentTitle|intentBody|findings|findingCount|flowFormat)\}/g, (_, k) => String(vars[k]));
 }
 
-function promptFor(template, group, files, ref, arm, intent) {
-  const shown = files.slice(0, FILES_SHOWN);
+/** The "## Schema" section of author-prompt.md (the flow format). The verify prompt reads it from there, so the two prompts cannot drift. */
+export function flowFormatSection() {
+  const text = readFileSync(fileURLToPath(new URL('./author-prompt.md', import.meta.url)), 'utf8');
+  const from = text.indexOf('## Schema');
+  const to = text.indexOf('## Output format');
+  if (from < 0 || to < from) throw new Error('author-prompt.md has no "## Schema" section before "## Output format"');
+  return text.slice(from, to).trimEnd();
+}
+
+/**
+ * The flow format for the verify prompt: the shared Schema section without the parts a verify answer may not use. A verify answer is
+ * <pid>.yaml and <pid>.declare.json only (author-input.mjs rejects any other file), so the start block (stamp, db seed, run), needs,
+ * symbols, the hook and mod-event drivers and the fixture sentence are cut, and the example step is a cli step.
+ */
+export function verifyFlowFormat(section) {
+  const out = [];
+  let inStart = false;
+  for (const line of section.split(LF_RE)) {
+    if (/^start:/.test(line)) { inStart = true; continue; }
+    if (inStart && /^\s+\S/.test(line)) continue;
+    inStart = false;
+    if (/^(needs|symbols):/.test(line) || /^- (hook|mod-event):/.test(line) || /^- `(json|file)/.test(line) || /^Fixture paths are relative/.test(line)) continue;
+    out.push(line
+      .replace(/^driver: hook .*$/, 'driver: cli')
+      .replace(/^profile: container .*$/, 'profile: container')
+      .replace(/^  - action: \{hook:.*$/, '  - action: {cmd: [node, --input-type=module, -e, "<probe script>"]}')
+      .replace(/stdout: "BLOCKED[^"]*"/, 'exit: 0')
+      .replace(/retries: 1, maxSteps: 20/, 'retries: 0, maxSteps: 5'));
+  }
+  return out.join('\n');
+}
+const LF_RE = /\r?\n/;
+
+/** A stable opaque name for a record, so the prompt does not show S11 or N16 (the name tells a seeded-bug record from a negative). */
+export const recordAlias = (group) => createHash('sha256').update(`trex-verify-prompt:${group}`).digest('hex').slice(0, 8);
+
+/** The verify prompt. The findings block is cut so that the whole prompt stays under MAX_PROMPT_CHARS. */
+function renderVerifyPrompt(template, vars, verify) {
+  const base = { ...vars, findingCount: verify.findings.length, flowFormat: renderPrompt(verifyFlowFormat(flowFormatSection()), vars) };
+  const room = MAX_PROMPT_CHARS - renderPrompt(template, { ...base, findings: '' }).length - 100;
+  return renderPrompt(template, { ...base, findings: renderFindings(verify, { maxChars: Math.max(room, 0) }) });
+}
+
+function promptFor(template, group, files, ref, arm, intent, verify) {
+  const shown = files.slice(0, arm.filesShown ?? FILES_SHOWN);
   const more = files.length > shown.length ? `\n... and ${files.length - shown.length} more` : '';
-  const vars = { ref, group, folder: `${arm.flowsDir}/${group}/`, files: `${shown.join('\n')}${more}`, fileCount: files.length, hostRules: hostRules(GROUPS[group].host) };
+  // A verify prompt shows an opaque alias, never the record id, the ref prefix or the flows folder (critic minor: S11 / N16 name the group).
+  const alias = verify ? recordAlias(group) : null;
+  const vars = { ref: verify ? `record-${alias}` : ref, group: verify ? alias : group, folder: verify ? './' : `${arm.flowsDir}/${group}/`, files: `${shown.join('\n')}${more}`, fileCount: files.length, hostRules: hostRules(verify ? null : GROUPS[group].host) };
   if (intent) Object.assign(vars, { intentTitle: intent.view.title, intentBody: intent.view.body.trim() || '(The description is empty.)' });
-  return renderPrompt(template, vars);
+  return verify ? renderVerifyPrompt(template, vars, verify) : renderPrompt(template, vars);
 }
 
 // ---------- the intent ----------
@@ -532,6 +595,9 @@ export function blobAt(git, head, file) {
   return null;
 }
 
+/** The per-finding lint record of a verify run, as a file of the row folder. The driver ignores it (it reads <pid>.yaml only). */
+const lintFile = (lint) => (lint ? [{ path: 'lint.json', text: `${JSON.stringify(lint, null, 2)}\n` }] : []);
+
 function writeFlows(folder, files) {
   rmSync(folder, { recursive: true, force: true });
   return files.map((f) => {
@@ -551,9 +617,19 @@ function writeJson(file, value) {
 function checkRun(group, opts) {
   const plan = planRun(opts);
   if (plan.error) return plan;
-  if (!Object.hasOwn(GROUPS, group)) return { error: `unknown group ${JSON.stringify(group)}: use one of ${plan.arm.groups.join(', ')}` };
+  if (!plan.arm.verify && !Object.hasOwn(GROUPS, group)) return { error: `unknown group ${JSON.stringify(group)}: use one of ${plan.arm.groups.join(', ')}` };
   if (!plan.arm.groups.includes(group)) return { error: `group ${group} is not in arm ${plan.arm.name}: use one of ${plan.arm.groups.join(', ')}` };
   return plan;
+}
+
+/**
+ * The author input of one verify record (range, findings, cited files): deps.verifyInput (tests) or probe-set.json plus the trex-baseline
+ * records. The range is the one the review ran on (merge base to head), which differs from GROUPS for S12 and S15.
+ */
+function verifyRecord(group, opts, deps, git) {
+  const input = deps.verifyInput ?? loadAuthorInput(opts.root, { git, only: group });
+  if (!input[group]) throw new Error(`no verify input for record ${group}`);
+  return input[group];
 }
 
 /** Builds and checks the tree and the prompt. { prep, prompt, leaks } or { exit, problems }. The tree is cleaned up on a refusal. */
@@ -562,25 +638,30 @@ async function stage(group, opts, deps, ref, arm) {
   const rows = benchRows(git);
   const intent = arm.intent ? intentFor(group, opts, deps, git, rows.find((r) => r.id === group)) : null;
   if (intent?.error) return { exit: EXIT.FAILED, problems: [intent.error] };
+  let verify = null;
+  if (arm.verify) {
+    try { verify = verifyRecord(group, opts, deps, git); } catch (err) { return { exit: EXIT.FAILED, problems: [err.message] }; }
+  }
+  const range = verify ? verify.range : GROUPS[group].range;
   let prep;
-  try { prep = await (deps.prepare ?? prepareReview)({ root: opts.root, input: { range: GROUPS[group].range } }); } catch (err) {
+  try { prep = await (deps.prepare ?? prepareReview)({ root: opts.root, input: { range } }); } catch (err) {
     return { exit: err.code === 'BAD_INPUT' ? EXIT.REFUSED : EXIT.FAILED, problems: [err.message] };
   }
   sanitizeTree(prep.dir);
   const leaks = [...leakScan(prep.dir, rows.filter((r) => r.id === group)), ...(intent?.leaks ?? [])];
   const crossGroup = leakScan(prep.dir, rows.filter((r) => r.id !== group));
   const template = deps.template ?? readFileSync(promptFile(arm), 'utf8');
-  const prompt = promptFor(template, group, prep.files, ref, arm, intent);
+  const prompt = promptFor(template, group, prep.files, ref, arm, intent, verify);
   const refuse = (problems) => { if (!opts.keepTree) prep.cleanup(); return { exit: EXIT.REFUSED, problems }; };
   if (!opts.dryRun && leaks.length > 0) return refuse([`leak scan found ${leaks.length} hit(s) before the agent started`, ...leaks]);
   if (!opts.dryRun && prompt.length > MAX_PROMPT_CHARS) return refuse([`the prompt is ${prompt.length} chars, over the limit of ${MAX_PROMPT_CHARS}`]);
-  return { prep, prompt, leaks, crossGroup, git, group, intent };
+  return { prep, prompt, leaks, crossGroup, git, group, intent, verify, range };
 }
 
 function dryRunResult(group, opts, ledgerPath, now, st, plan) {
   const { used } = benchRuns(ledgerPath, plan.arm.name);
   const weekly = countRuns(readLedger(ledgerPath).entries, { now });
-  const info = { group, arm: plan.arm.name, model: plan.model, flows: `${plan.arm.flowsDir}/${group}`, range: GROUPS[group].range, tree: st.prep.dir, changedFiles: st.prep.files.length, promptChars: st.prompt.length, leaks: st.leaks, crossGroup: st.crossGroup.length, intent: st.intent ? { title: st.intent.view.title, pr: st.intent.pr, source: st.intent.source, file: st.intent.file, status: st.intent.status, stripped: st.intent.view.stripped } : null, benchRuns: used, benchCap: opts.maxRuns ?? plan.arm.cap, weekly, weeklyCap: WEEKLY_CAP };
+  const info = { group, arm: plan.arm.name, model: plan.model, flows: `${plan.arm.flowsDir}/${group}`, range: st.range, tree: st.prep.dir, changedFiles: st.prep.files.length, promptChars: st.prompt.length, prompt: st.prompt, findings: st.verify ? st.verify.findings.length : null, leaks: st.leaks, crossGroup: st.crossGroup.length, intent: st.intent ? { title: st.intent.view.title, pr: st.intent.pr, source: st.intent.source, file: st.intent.file, status: st.intent.status, stripped: st.intent.view.stripped } : null, benchRuns: used, benchCap: opts.maxRuns ?? plan.arm.cap, weekly, weeklyCap: WEEKLY_CAP };
   if (!opts.keepTree) st.prep.cleanup();
   const bad = st.leaks.length > 0 || st.prompt.length > MAX_PROMPT_CHARS;
   return { exit: bad ? EXIT.REFUSED : EXIT.OK, dryRun: true, info, files: [], manifest: null, usage: null, problems: st.leaks };
@@ -610,6 +691,9 @@ export async function authorGroup(group, opts = {}, deps = {}) {
   const plan = checkRun(group, opts);
   if (plan.error) return fail(EXIT.REFUSED, [plan.error]);
   const { arm, model } = plan;
+  // A verify run starts a model. It needs an explicit --live; a dry run needs none. This check runs before any tree, ledger line or runner.
+  if (arm.requiresLive && !opts.live && !opts.dryRun) return fail(EXIT.REFUSED, [`arm ${arm.name} starts a model: pass --live to run it (--dry-run shows the prompt and starts nothing)`]);
+  if (arm.verify && opts.probe) return fail(EXIT.REFUSED, [`arm ${arm.name} has no --probe run`]);
   const probe = Boolean(opts.probe);
   const ref = `${arm.refPrefix}${probe ? 'probe' : group}`;
   const ledgerPath = opts.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
@@ -638,7 +722,7 @@ function reserveUnderLock(c) {
   const locked = withLock(`${ledgerPath}.trex-bench`, { lockWaitMs: opts.lockWaitMs ?? BENCH_LOCK_WAIT_MS }, () => {
     const gate = budgetGate(gateArgs({ ledgerPath, ref, probe, opts, now, arm }));
     if (gate) return { refusal: { exit: gate.exit, problems: [gate.reason] } };
-    return { reserved: reserveRun(ledgerPath, { ref, model, band: 'MID', sessionId }, { now }) };
+    return { reserved: reserveRun(ledgerPath, { ref, model, band: 'MID', sessionId, purpose: arm.purpose }, { now }) };
   });
   if (locked.ok === false) return { refusal: { exit: EXIT.FAILED, problems: [locked.detail] } };
   const r = locked.reserved;
@@ -659,10 +743,12 @@ async function reservedRun(c) {
   const violated = audit.outsideTree.length > 0;
   const problems = [...(violated ? [outsideProblem(audit.outsideTree)] : []), ...(error ? [error] : []), ...out.problems];
   const exit = (error || violated || (!probe && problems.length > 0)) ? EXIT.FAILED : EXIT.OK;
-  const written = exit === EXIT.OK && !probe ? writeFlows(folder, out.files) : [];
+  // A verify run keeps its row folder and lint.json even when no pair is clean, so the driver reports blocked:no_flow, not not_attempted.
+  const keepLint = !probe && out.lint && !violated && !error;
+  const written = (exit === EXIT.OK && !probe) || keepLint ? writeFlows(folder, [...out.files, ...lintFile(out.lint)]) : [];
   const retries = (benchRuns(ledgerPath, arm.name).byRef[ref] ?? 1) - 1;
-  finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, durationMs: run.durationMs ?? null, exit, timedOut: Boolean(run.timedOut), usage: parsed?.usage ?? null, ...(problems.length ? { error: problems[0].slice(0, 300) } : {}) }, { now });
-  const rec = { group, arm: arm.name, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, ...(st.intent ? { intent: { pr: st.intent.pr, source: st.intent.source, title: st.intent.view.title, file: st.intent.file, status: st.intent.status, stripped: st.intent.view.stripped.length } } : {}), crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
+  finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, purpose: arm.purpose, durationMs: run.durationMs ?? null, exit, timedOut: Boolean(run.timedOut), usage: parsed?.usage ?? null, ...(problems.length ? { error: problems[0].slice(0, 300) } : {}) }, { now });
+  const rec = { group, arm: arm.name, ref, runId: reserved.id, model, usage: parsed?.usage ?? null, retries, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', ...audit, durationMs: run.durationMs ?? null, timedOut: Boolean(run.timedOut), promptChars: st.prompt.length, ...(st.intent ? { intent: { pr: st.intent.pr, source: st.intent.source, title: st.intent.view.title, file: st.intent.file, status: st.intent.status, stripped: st.intent.view.stripped.length } } : {}), crossGroupHits: st.crossGroup, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [], ...(out.lint ? { lint: out.lint } : {}) };
   saveArtifacts({ opts, now, group, probe, rec, run, arm });
   return { exit, runId: reserved.id, files: written, manifest: out.manifest, usage: rec.usage, problems };
 }
@@ -676,7 +762,7 @@ async function reservedRun(c) {
 function notStartedRun({ group, opts, ref, probe, reserved, model, sessionId, run, now, ledgerPath, arm }) {
   const waitMin = Math.round((run.waitedMs ?? 0) / 60_000);
   const reason = `not started: ${run.error ?? 'no grok slot'} (waited ${waitMin} min); the agent did not run and the run is not counted against the caps`;
-  finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, durationMs: 0, exit: EXIT.FAILED, timedOut: false, waitedMs: run.waitedMs ?? 0, notStarted: true, error: reason.slice(0, 300) }, { now });
+  finishRun(ledgerPath, reserved.id, { ref, model, band: 'MID', sessionId, purpose: arm.purpose, durationMs: 0, exit: EXIT.FAILED, timedOut: false, waitedMs: run.waitedMs ?? 0, notStarted: true, error: reason.slice(0, 300) }, { now });
   const dir = opts.cacheDir ?? path.join(opts.root, '.claude', 'cache', 'e2e');
   const stem = `${dayOf(now())}-trex-author-${arm.stem}${probe ? 'probe' : slug(group)}-not-started-${reserved.id.slice(0, 8)}`;
   writeJson(path.join(dir, `${stem}.manifest.json`), { group, arm: arm.name, ref, runId: reserved.id, model, status: 'not-started', exit: EXIT.CAP, error: reason, waitedMs: run.waitedMs ?? 0, notStarted: true });
@@ -691,12 +777,23 @@ function outsideProblem(paths) {
   return `blind violated: the agent read ${paths.length} path(s) outside the tree (${shown}${paths.length > 3 ? ', ...' : ''}): its flows are not used`;
 }
 
+/**
+ * Parses and lints an answer. A verify answer is checked against its findings too (lintVerifyAnswer): one flow and one declare per
+ * finding, a declare that buildFireMatch accepts, and the stored declare rewritten with the harness values. A verify flow may cite a
+ * file that the diff does not change, so the cited files count as changed files for the `paths` rule.
+ * Per finding (critic fix 6): `files` holds every clean pair, `lint` the per-pid problems, and `problems` only what fails the run
+ * (a void run, or no clean pair at all). A bad finding costs only itself.
+ */
 function readAnswer(text, st, deps) {
-  const out = parseAuthorOutput(text, st.prep.files);
+  const changed = [...new Set([...st.prep.files, ...(st.verify?.citedFiles ?? [])])];
+  const out = parseAuthorOutput(text, changed);
   if (out.files.length === 0 && notRunText(text, deps)) out.problems.unshift('the answer says the agent could not read the change: the run is void');
-  const shas = runShas(st.group);
-  const treeHas = (p) => shas.every((sha) => blobAt(st.git, sha, p) !== null);
-  return { ...out, problems: [...out.problems, ...lintAll(out.files, st.prep.files, treeHas)] };
+  const treeHas = st.verify ? () => false : (p) => runShas(st.group).every((sha) => blobAt(st.git, sha, p) !== null);
+  const done = { ...out, problems: [...out.problems, ...lintAll(out.files, changed, treeHas)] };
+  if (!st.verify) return done;
+  const v = lintVerifyAnswer({ files: out.files, manifest: out.manifest, input: st.verify, extraProblems: done.problems });
+  const voided = done.problems.filter((p) => p.includes('the run is void'));
+  return { ...done, files: voided.length > 0 ? [] : v.files, problems: [...voided, ...v.fatal], lint: v.lint };
 }
 
 function saveArtifacts({ opts, now, group, probe, rec, run, arm }) {
@@ -761,15 +858,20 @@ export async function reparseGroup(rawFile, group, opts = {}, deps = {}) {
   if (audit.outsideTree.length > 0) return fail(EXIT.REFUSED, [outsideProblem(audit.outsideTree)]);
   const git = deps.git ?? benchGit(opts.root);
   let files;
-  try { files = groupChangedFiles(git, GROUPS[group].range); } catch (err) { return fail(EXIT.FAILED, [err.message]); }
+  let verify = null;
+  try {
+    if (arm.verify) verify = verifyRecord(group, opts, deps, git);
+    files = groupChangedFiles(git, verify ? verify.range : GROUPS[group].range);
+  } catch (err) { return fail(EXIT.FAILED, [err.message]); }
   const parsed = parseReviewOutput(stdout, {});
   const error = runError({ status: 0 }, parsed, null);
-  const out = error ? { files: [], manifest: null, problems: [] } : readAnswer(parsed.text, { prep: { files }, git, group }, deps);
+  const out = error ? { files: [], manifest: null, problems: [] } : readAnswer(parsed.text, { prep: { files }, git, group, verify }, deps);
   const problems = [...(error ? [error] : []), ...out.problems];
   const exit = problems.length > 0 ? EXIT.FAILED : EXIT.OK;
-  const written = exit === EXIT.OK ? writeFlows(folder, out.files) : [];
+  const keepLint = out.lint && !error;
+  const written = exit === EXIT.OK || keepLint ? writeFlows(folder, [...out.files, ...lintFile(out.lint)]) : [];
   const orig = readJsonOrNull(raw.replace(/\.raw\.json$/, '.manifest.json'));
-  const rec = { group, arm: arm.name, ref: `${arm.refPrefix}${group}`, runId: orig?.runId ?? null, model: orig?.model ?? plan.model, usage: parsed.usage ?? null, retries: orig?.retries ?? 0, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', reparsedFrom: raw, ...audit, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [] };
+  const rec = { group, arm: arm.name, ref: `${arm.refPrefix}${group}`, runId: orig?.runId ?? null, model: orig?.model ?? plan.model, usage: parsed.usage ?? null, retries: orig?.retries ?? 0, status: exit === EXIT.OK ? 'ok' : 'failed', exit, problems, blind: blindLabel(audit), outputFormat: 'stream-json', reparsedFrom: raw, ...audit, files: out.files.map((f) => f.path), flows: out.manifest?.flows ?? [], cannotVerify: out.manifest?.cannotVerify ?? [], ...(out.lint ? { lint: out.lint } : {}) };
   const manifestFile = raw.replace(/\.raw\.json$/, '-reparse.manifest.json');
   writeJson(manifestFile, rec);
   return { exit, runId: rec.runId, files: written, manifest: out.manifest, usage: rec.usage, problems, manifestFile };
@@ -998,6 +1100,9 @@ export function parseArgs(argv) {
     else if (a === '--reparse') { out.reparse = next(); out.actions.push('reparse'); }
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--refetch-intent') out.refetchIntent = true;
+    else if (a === '--live') out.live = true;
+    else if (a === '--print-prompt') out.printPrompt = true;
+    else if (a === '--prompt-out') out.promptOut = next();
     else if (a === '--keep-tree') out.keepTree = true;
     else if (a === '--retry') out.retry = out.retry ?? true;
     else if (a === '--retry-harness') out.retry = 'harness';
@@ -1010,6 +1115,8 @@ export function parseArgs(argv) {
   }
   out.arm ??= 'grok';
   if (out.refetchIntent && !ARMS[out.arm].intent) return { error: '--refetch-intent applies to the intent arm only: pass --arm intent' };
+  if (out.live && out.dryRun) return { error: '--live and --dry-run exclude each other' };
+  if ((out.printPrompt || out.promptOut) && !out.dryRun) return { error: '--print-prompt and --prompt-out need --dry-run' };
   const acts = [...new Set(out.actions)];
   if (out.actions.includes('reparse')) return reparseArgs(out, acts);
   if (out.actions.includes('probe') && acts.length === 2 && acts.includes('group')) out.action = 'probe';
@@ -1079,8 +1186,11 @@ async function runGroups(args, base, deps, say) {
   let worst = EXIT.OK;
   for (const g of groups) {
     const r = await authorGroup(g, { ...base, probe: args.action === 'probe' }, deps);
-    if (r.dryRun) printDryRun(r.info, say);
-    else say(`${g}: exit ${r.exit}${r.problems.length ? ` (${r.problems[0]})` : ''}`);
+    if (r.dryRun) {
+      printDryRun(r.info, say);
+      if (args.printPrompt) say(r.info.prompt);
+      if (args.promptOut) writeFileSync(path.resolve(args.promptOut), r.info.prompt);
+    } else say(`${g}: exit ${r.exit}${r.problems.length ? ` (${r.problems[0]})` : ''}`);
     worst = Math.max(worst, args.action === 'all' && r.exit === EXIT.REFUSED && /already ran/.test(r.problems[0] ?? '') ? EXIT.OK : r.exit);
     if (r.exit === EXIT.CAP) break;
   }
@@ -1100,10 +1210,21 @@ export async function main(argv, deps = {}) {
     err('author: a live run refuses when CURSOR_REVIEW_LEDGER is set: it would redirect the ledger and both caps');
     return EXIT.REFUSED;
   }
+  const spec = ARMS[args.arm];
+  const runs = ['group', 'all', 'probe'].includes(args.action);
+  if (spec.requiresLive && runs && !args.dryRun && !args.live) {
+    err(`author: arm ${spec.name} starts a model: pass --live to run it (--dry-run shows the prompt and starts nothing)`);
+    return EXIT.REFUSED;
+  }
+  if (spec.verify && ['freeze', 'map-negatives', 'host-digest'].includes(args.action)) {
+    err(`author: ${args.action} does not apply to the ${spec.name} arm: its flows are read straight from ${spec.flowsDir}`);
+    return EXIT.REFUSED;
+  }
+  if (args.promptOut && args.action === 'all') { err('author: --prompt-out writes one prompt: pass --group <id>, not --all'); return EXIT.REFUSED; }
   const root = deps.root ?? repoRoot();
   if (args.action === 'reparse') return await runReparse(args, root, deps, say);
   const ledgerPath = deps.ledgerPath ?? defaultLedgerPath(deps.env ?? process.env);
-  const base = { root, ledgerPath, arm: args.arm, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree, refetchIntent: args.refetchIntent };
+  const base = { root, ledgerPath, arm: args.arm, model: args.model, timeoutMs: args.timeoutMs, retry: args.retry, dryRun: args.dryRun, keepTree: args.keepTree, refetchIntent: args.refetchIntent, live: args.live };
   try {
     if (['group', 'all', 'probe'].includes(args.action)) return await runGroups(args, base, deps, say);
     const git = deps.git ?? benchGit(root);

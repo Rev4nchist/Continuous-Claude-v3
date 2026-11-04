@@ -1,0 +1,10 @@
+{
+  "pid": "467607a80362274c",
+  "row": "S9",
+  "fireMatch": "counts [1-9]\\d* outside-diff",
+  "correct": "a CodeRabbit notice that quotes an outside-diff heading adds 0 to the outside-diff count",
+  "citedFile": "scripts/github/review-status.mjs",
+  "startLine": 937,
+  "endLine": 942,
+  "newCode": false
+}

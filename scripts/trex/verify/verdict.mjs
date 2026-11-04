@@ -21,6 +21,8 @@
  * @property {string|null} [classifyBlock]  Pre-run block reason from classify.mjs (a BLOCK_REASONS entry, with or
  *   without the "blocked:" prefix). A reason outside the enum throws: that is a caller bug.
  * @property {boolean} [dockerOk]   false only when `docker info` failed or timed out. Missing counts as up.
+ * @property {boolean} [observedValue]  G9(a) at head for every fired item: the matched failing text is not a literal of the probe source.
+ *   A refute from "base fires the same line" needs it true (and G8). Missing counts as false.
  * @property {boolean} [citedPathExists]  false when the cited file does not exist at head (git ls-tree): refuted.
  * @property {Run|null} [fix]       Eval control: the probe at the fix SHA (group A). Firing there is a false_confirm.
  * @property {boolean} [priorOpen]  The finding was already open at an earlier head. Echoed to applyVerdict (trust rule).
@@ -38,11 +40,12 @@
  *   7. G3  any broken head run  -> blocked:broken-probe
  *   8. G6  head runs disagree   -> blocked:disagree
  *   9. head fail line that misses fireMatch -> blocked:broken-probe (G3: not a fire, not a pass)
- *  10. all head fire: base broken or fails elsewhere -> blocked:broken-probe; base fires -> refuted;
+ *  10. all head fire: base broken or fails elsewhere -> blocked:broken-probe; base fires -> refuted ONLY with G8 at head and
+ *      observedValue true (else blocked:broken-probe: a bad probe fires on both sides);
  *      base passes -> reproduced; base unreachable: G9 ok -> reproduced_new, else unverified;
  *      base reachable but no base run -> unverified.
  *      reproduced and reproduced_new need G8 too (design: "G1-G8 pass"): unless coverage.citedLinesExecuted is true,
- *      either becomes blocked:no-coverage. refuted and unverified do not depend on coverage.
+ *      either becomes blocked:no-coverage. unverified and a refute from a missing cited path do not depend on coverage.
  *  11. all head pass: cited lines ran -> not_reproduced; otherwise (false or null) -> blocked:no-coverage (G8)
  * Then, on any result: a fix run that fires the same fireMatch sets false_confirm. It never changes the verdict.
  */
@@ -242,10 +245,25 @@ function stepHeadFires(x, ctx) {
   const base = x.base;
   if (!base) return out('unverified', 'G4', 'base reachable but no base run');
   const k = runKind(base, ctx.re);
-  if (k.kind === 'fire') return out('refuted', 'G4', 'base fires the same fireMatch: pre-existing or a bad probe');
+  if (k.kind === 'fire') return refutedByBase(x);
   if (k.kind === 'pass') return out('reproduced', 'G4', 'head fires on every run, base passes');
   const why = k.kind === 'broken' ? `base run broken: ${k.why}` : 'base fails on a different line';
   return blocked('broken-probe', 'G4', why);
+}
+
+/**
+ * Base fires the same line as head. That is a refute only when the probe is shown to be good: the cited lines ran at head (G8) and the
+ * failing line carries a value the app returned (G9(a), x.observedValue). A probe that fails off the cited path, or fails by itself,
+ * fires the same line on both sides too, so without these two it is blocked:broken-probe, never a cut of the finding.
+ */
+function refutedByBase(x) {
+  if (x.coverage?.citedLinesExecuted !== true) {
+    return blocked('broken-probe', 'G4', 'base fires the same line, but the cited lines are not shown as executed at head: a probe that is off the cited path');
+  }
+  if (x.observedValue !== true) {
+    return blocked('broken-probe', 'G4', 'base fires the same line, but the failing line carries no value the app returned (G9 a): a probe that fails by itself');
+  }
+  return out('refuted', 'G4', 'base fires the same fireMatch, the cited lines ran and the fail line carries an observed value: pre-existing');
 }
 
 function g9Verdict(g9) {

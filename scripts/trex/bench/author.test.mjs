@@ -7,9 +7,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  BENCH_CAP, BENCH_TIMEOUT_SEC, GROUP_CAP, GROUPS, P0_CHECKS, P0_DRIVERS, analyzeStream, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan,
+  ARMS, BENCH_CAP, BENCH_TIMEOUT_SEC, GROUP_CAP, GROUPS, P0_CHECKS, P0_DRIVERS, analyzeStream, authorGroup, benchGit, benchRuns, blobAt, freeze, hostFlowDigest, leakScan,
   lintFlow, main, mapNegatives, parseArgs, parseAuthorOutput, renderPrompt,
 } from './author.mjs';
+import { buildAuthorInput, verifyRowIds } from '../verify/author-input.mjs';
 import { makeTrexGit } from '../lib/git.mjs';
 import { runAgent } from '../../github/cursor-review.mjs';
 
@@ -1691,4 +1692,297 @@ test('author-prompt-intent.md keeps the rules, schema and output format of autho
 test('the plain template has no intent variable, and renderPrompt never fills a value again', () => {
   assert.ok(!/intentTitle|intentBody/.test(benchFile('author-prompt.md')));
   assert.equal(renderPrompt('{ref} {intentTitle}|{intentBody}', { ref: 'r', intentTitle: 'T', intentBody: '{ref}' }), 'r T|{ref}');
+});
+
+// ---------- the verify arm (P1 authoring) ----------
+// Breaks when ARMS.verify is missing, when a verify run starts a model without --live, or when a verify answer skips the declare lint.
+
+const VPROBE_SET = JSON.parse(readFileSync(new URL('../verify/probe-set.json', import.meta.url), 'utf8'));
+const V1 = 'aaaa000000000001';
+const V2 = 'aaaa000000000002';
+const VFILE = 'scripts/github/pre-pr.mjs';
+const vRow = (pid, over = {}) => ({
+  pid, row: 'N16', group: 'B', file: VFILE, startLine: 9, endLine: 10, title: `Finding ${pid.slice(-1)}`, severity: 'major', confidence: 4,
+  head: 'h'.repeat(40), mergeBase: 'b'.repeat(40), pre: null, fix: null, blocked: null, surface: 'node', ...over,
+});
+const vDiff = ['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1,1 +1,20 @@', ...Array.from({ length: 20 }, (_, i) => `+code ${i + 1}`), ''].join('\n');
+const vGit = (args) => (args[0] === 'diff' ? { status: 0, stdout: vDiff, stderr: '' } : { status: 0, stdout: `100644 blob ${'c'.repeat(40)}\t${VFILE}\0`, stderr: '' });
+function verifyInputFor(pids = [V1, V2], body = 'The scrub leaks. A correct scrub keeps nothing.') {
+  const rows = pids.map((p) => vRow(p));
+  const findings = rows.map((r) => ({ id: r.pid, file: r.file, startLine: r.startLine, endLine: r.endLine, severity: 'major', confidence: 4, title: r.title, body }));
+  return buildAuthorInput({ probeSet: { rows }, records: [{ id: 'N16', record: { findings } }], git: vGit });
+}
+const vFlow = (pid) => `id: ${pid}
+title: scrub keeps nothing
+description: d
+goal: g
+paths: [${VFILE}]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, --input-type=module, -e, "const m = await import('/app/${VFILE}'); const o = m.scrub('a b'); if (o) { console.log('not ok 1 - scrub left ' + o); process.exit(1); } console.log('ok 1');"]
+    checks:
+      - {text: the probe exits 0, exit: 0}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+`;
+const vDeclare = (pid, over = {}) => JSON.stringify({ pid, fireMatch: 'scrub left [a-z]+', correct: 'A correct scrub keeps nothing.', newCode: false, ...over });
+const vAnswer = (pids = [V1, V2], over = {}) => answer(
+  pids.flatMap((p) => [[`${p}.yaml`, vFlow(p)], [`${p}.declare.json`, over.declare ? over.declare(p) : vDeclare(p)]]),
+  { flows: pids.map((p) => ({ id: p, file: `${p}.yaml`, risk: 'r' })), cannotVerify: [] },
+);
+function verifySetup(t, { pids = [V1, V2], reply, live = true, ...over } = {}) {
+  const s = authorSetup(t, { run: streamRun({ answer: reply ?? vAnswer(pids) }), ...over, deps: { verifyInput: verifyInputFor(pids), ...over.deps } });
+  s.opts = { ...s.opts, arm: 'verify', ...(live ? { live: true } : {}) };
+  return s;
+}
+
+test('ARMS.verify: grok-4.7-high, flows-verify, ref prefix trex-verify-, cap 21, purpose verify, and the 16 records of the probe set', () => {
+  const a = ARMS.verify;
+  assert.deepEqual([a.name, a.models, a.flowsDir, a.refPrefix, a.stem, a.cap, a.prompt, a.purpose], ['verify', ['grok-4.7-high'], 'scripts/trex/bench/flows-verify', 'trex-verify-', 'verify-', 21, 'author-prompt-verify.md', 'verify']);
+  assert.deepEqual([...a.groups], verifyRowIds(VPROBE_SET), 'a record added to or blocked in probe-set.json must change the arm groups too');
+  assert.equal(a.groups.length, 16);
+  assert.equal(a.requiresLive, true);
+});
+
+test('verify: without --live no model starts, no tree is built and no ledger line is written', async (t) => {
+  const s = verifySetup(t, { live: false });
+  s.deps.runner = async () => { throw new Error('the live runner must not be called without --live'); };
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 2);
+  assert.match(r.problems.join(' '), /--live/);
+  assert.equal(s.state.prepared, 0);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+  const viaMain = await cli(s, ['--arm', 'verify', '--group', 'N16']);
+  assert.equal(viaMain.code, 2, viaMain.text);
+  assert.match(viaMain.text, /--live/);
+  const all = await cli(s, ['--arm', 'verify', '--all']);
+  assert.equal(all.code, 2, all.text);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+});
+
+test('verify: --dry-run needs no --live, starts no model and writes no ledger line, and the prompt holds the findings', async (t) => {
+  const s = verifySetup(t, { live: false });
+  s.deps.runner = async () => { throw new Error('a dry run must not start a model'); };
+  const r = await authorGroup('N16', { ...s.opts, dryRun: true }, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(r.dryRun, true);
+  for (const pid of [V1, V2]) assert.ok(r.info.prompt.includes(`${pid}.declare.json`));
+  assert.match(r.info.prompt, /A correct scrub keeps nothing\./);
+  assert.deepEqual(ledgerLines(s.ledger), []);
+  assert.equal(r.info.flows, 'scripts/trex/bench/flows-verify/N16');
+});
+
+test('verify: --dry-run --prompt-out writes the exact prompt a live run would send', async (t) => {
+  const s = verifySetup(t, { live: false });
+  const out = path.join(s.root, 'prompt.md');
+  const r = await cli(s, ['--arm', 'verify', '--group', 'N16', '--dry-run', '--prompt-out', out]);
+  assert.equal(r.code, 0, r.text);
+  const sent = verifySetup(t);
+  await authorGroup('N16', sent.opts, sent.deps);
+  assert.equal(readFileSync(out, 'utf8'), promptOf(sent.state.runs[0]));
+});
+
+test('verify: a live run uses the verify ref, writes one flow and one stored declare per finding, and counts apart from the grok arm', async (t) => {
+  const s = verifySetup(t);
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.equal(modelOf(s.state.runs[0]), 'grok-4.7-high');
+  assert.deepEqual(ledgerLines(s.ledger).map((l) => [l.phase, l.ref]), [['start', 'trex-verify-N16'], ['end', 'trex-verify-N16']]);
+  const folder = path.join(s.root, 'scripts/trex/bench/flows-verify/N16');
+  assert.deepEqual(readdirSync(folder).sort(), [`${V1}.declare.json`, `${V1}.yaml`, `${V2}.declare.json`, `${V2}.yaml`, 'lint.json']);
+  const declare = JSON.parse(readFileSync(path.join(folder, `${V1}.declare.json`), 'utf8'));
+  assert.deepEqual(declare, { pid: V1, row: 'N16', fireMatch: 'scrub left [a-z]+', correct: 'A correct scrub keeps nothing.', citedFile: VFILE, startLine: 9, endLine: 10, newCode: false });
+  assert.equal(benchRuns(s.ledger, 'verify').used, 1);
+  assert.equal(benchRuns(s.ledger).used, 0, 'a verify run is not a grok run');
+  assert.ok(cacheFiles(s.root).some((f) => /-trex-author-verify-N16\.manifest\.json$/.test(f)));
+});
+
+test('verify: every declare .* fails the run (zero clean pairs), writes no flow, keeps a lint.json, and a repair run is allowed', async (t) => {
+  const s = verifySetup(t, { reply: vAnswer([V1, V2], { declare: (p) => vDeclare(p, { fireMatch: '.*' }) }) });
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 1);
+  assert.ok(r.problems.some((p) => /no finding passed lint/.test(p) && p.includes(V1)), r.problems.join(' | '));
+  const folder = path.join(s.root, 'scripts/trex/bench/flows-verify/N16');
+  assert.deepEqual(readdirSync(folder), ['lint.json'], 'no flow is written, but the row folder and its lint record are');
+  const lint = JSON.parse(readFileSync(path.join(folder, 'lint.json'), 'utf8'));
+  assert.ok(lint.failed[V1].some((p) => p.includes('matches-empty')), JSON.stringify(lint.failed));
+  const repair = await authorGroup('N16', { ...s.opts, retry: true }, s.deps);
+  assert.equal(repair.exit, 1, 'the stub still answers .*; the retry flag is accepted');
+  assert.equal(benchRuns(s.ledger, 'verify').byRef['trex-verify-N16'], 2);
+});
+
+test('verify: a finding with no flow and no cannotVerify entry is recorded in lint.json; the clean pair is still written', async (t) => {
+  const s = verifySetup(t, { reply: vAnswer([V1]) });
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  const folder = path.join(s.root, 'scripts/trex/bench/flows-verify/N16');
+  assert.deepEqual(readdirSync(folder).sort(), [`${V1}.declare.json`, `${V1}.yaml`, 'lint.json']);
+  const lint = JSON.parse(readFileSync(path.join(folder, 'lint.json'), 'utf8'));
+  assert.deepEqual(lint.clean, [V1]);
+  assert.ok(lint.failed[V2].some((p) => /no flow/.test(p)), JSON.stringify(lint.failed));
+});
+
+// Fix 6 (critic major 6). Breaks if: one bad fireMatch voids the whole record again (the run fails and no flow is written).
+test('Fix 6: one bad declare of two: exit 0, the clean pair is written, lint.json holds the bad pid, the driver sees no file for it', async (t) => {
+  const s = verifySetup(t, { reply: vAnswer([V1, V2], { declare: (p) => vDeclare(p, p === V2 ? { fireMatch: '.*' } : {}) }) });
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  const folder = path.join(s.root, 'scripts/trex/bench/flows-verify/N16');
+  assert.deepEqual(readdirSync(folder).sort(), [`${V1}.declare.json`, `${V1}.yaml`, 'lint.json']);
+  const lint = JSON.parse(readFileSync(path.join(folder, 'lint.json'), 'utf8'));
+  assert.deepEqual(lint.clean, [V1]);
+  assert.deepEqual(Object.keys(lint.failed), [V2]);
+  assert.ok(lint.failed[V2].some((p) => p.includes('matches-empty')));
+  const rec = JSON.parse(readFileSync(path.join(s.root, '.claude/cache/e2e', cacheFiles(s.root).find((f) => /-trex-author-verify-N16\.manifest\.json$/.test(f))), 'utf8'));
+  assert.deepEqual(rec.lint.clean, [V1]);
+});
+
+// Critic minor: an answer that lists every finding under cannotVerify must leave the row folder, so the driver says blocked:no_flow.
+test('Fix 6: every finding under cannotVerify: exit 0 and the row folder exists with lint.json only', async (t) => {
+  const reply = answer([], { flows: [], cannotVerify: [V1, V2].map((pid) => ({ pid, risk: 'r', why: 'needs a network' })) });
+  const s = verifySetup(t, { reply });
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  const folder = path.join(s.root, 'scripts/trex/bench/flows-verify/N16');
+  assert.deepEqual(readdirSync(folder), ['lint.json']);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(folder, 'lint.json'), 'utf8')).cannotVerify, [V1, V2]);
+});
+
+test('verify: the arm cap is 21 runs and is its own: 21 verify starts stop run 22 with exit 3', async (t) => {
+  const lines = Array.from({ length: 21 }, (_, i) => JSON.stringify({ ts: '2026-11-01T00:00:00.000Z', phase: 'start', id: `v-${i}`, ref: `trex-verify-X${i}`, model: 'grok-4.7-high' })).join('\n');
+  const s = verifySetup(t, { ledger: `${lines}\n` });
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 3);
+  assert.equal(runsOf(s), 0);
+  const grok = authorSetup(t, { ledger: `${lines}\n`, run: streamRun() });
+  assert.equal((await authorGroup('S18', grok.opts, grok.deps)).exit, 0, 'verify runs do not spend the grok cap');
+});
+
+test('verify: a group that is not one of the 16 records is refused, and N16 is refused outside the verify arm', async (t) => {
+  const s = verifySetup(t);
+  assert.equal((await authorGroup('S4', s.opts, s.deps)).exit, 2, 'S4 holds only mods-host findings');
+  assert.equal((await authorGroup('N16', { ...s.opts, arm: 'grok' }, s.deps)).exit, 2);
+  assert.equal(runsOf(s), 0);
+});
+
+test('verify: --probe is refused (the verify arm has no probe run)', async (t) => {
+  const s = verifySetup(t);
+  const r = await authorGroup('N16', { ...s.opts, probe: true }, s.deps);
+  assert.equal(r.exit, 2);
+  assert.equal(runsOf(s), 0);
+});
+
+test('verify: the prompt holds the flow format of author-prompt.md, fills every placeholder and never refills a finding body', async (t) => {
+  const s = verifySetup(t, { pids: [V1], deps: { verifyInput: verifyInputFor([V1], 'Body with {files} and {findings} and {ref}.') } });
+  await authorGroup('N16', s.opts, s.deps);
+  const prompt = promptOf(s.state.runs[0]);
+  assert.ok(prompt.includes('Check kinds (one per check, plus `text`):'), 'the shared Schema section is in the prompt');
+  assert.ok(prompt.includes('Actions by driver:'));
+  assert.ok(prompt.includes('Body with {files} and {findings} and {ref}.'), 'a finding body is not filled again');
+  assert.ok(!/\{(findingCount|flowFormat|hostRules|fileCount|group)\}/.test(prompt));
+  assert.ok(!prompt.includes('{{HEAD}}'), 'the stamp token is part of the fixture text, which the verify prompt drops');
+});
+
+// Minor fix: the imported Schema section told the model about fixtures, db seeds and hook actions, but the two-file rule rejects any extra file.
+test('verify: the flow format in the prompt holds no fixture, stamp, db seed, hook or mod-event text', async (t) => {
+  const s = verifySetup(t, { pids: [V1] });
+  const r = await authorGroup('N16', { ...s.opts, dryRun: true }, s.deps);
+  const p = r.info.prompt;
+  for (const word of ['fixtures/', 'stamp', 'seed.sql', 'db:', 'needs:', 'hook:', 'mod-event', 'Fixture paths', 'symbols:']) assert.ok(!p.includes(word), `the prompt still holds "${word}"`);
+  assert.ok(p.includes('Check kinds') && p.includes('driver: cli'), 'the rest of the flow format stays');
+  assert.match(p, /Write exactly two files per finding/);
+});
+
+// Fix 5 (critic major 5). Breaks if: the prompt sends the model to the built dist file (V8 then covers dist, the cited .ts is not covered and
+// every .ts finding blocks as no-coverage) or leaves out the bash rule for a cited .sh file.
+test('verify: the prompt tells the probe to import the cited .ts itself with type stripping, never dist, and to run a .sh with bash', () => {
+  const md = readFileSync(new URL('./author-prompt-verify.md', import.meta.url), 'utf8');
+  assert.match(md, /--experimental-strip-types/);
+  assert.match(md, /registerHooks/);
+  assert.ok(md.includes(".js$/, '.ts')"), 'the resolve hook maps ./x.js to ./x.ts');
+  assert.doesNotMatch(md, /built file under/i);
+  assert.match(md, /never .*dist/i);
+  assert.match(md, /\.sh/);
+  assert.match(md, /cmd\[0\].*bash|bash.*cmd\[0\]/s);
+});
+
+// Minor fix: opaque record ids. Breaks if: {ref}, {group} or {folder} reach the prompt (S11 / N16 / trex-verify-S11 tell a seeded-bug record from a negative).
+test('verify: no prompt of the 16 records holds a record id, the ref prefix or the flows folder', async (t) => {
+  const s = verifySetup(t, { pids: [V1] });
+  const one = verifyInputFor([V1]).N16;
+  for (const group of ARMS.verify.groups) {
+    const r = await authorGroup(group, { ...s.opts, dryRun: true }, { ...s.deps, verifyInput: { [group]: one } });
+    assert.equal(r.exit, 0, `${group}: ${(r.problems ?? []).join('; ')}`);
+    const p = r.info.prompt;
+    assert.doesNotMatch(p, /\b[SN]\d{1,2}\b/, `${group} prompt names a record id`);
+    assert.doesNotMatch(p, /trex-verify|flows-verify/, `${group} prompt names the ref or the folder`);
+  }
+});
+
+test('verify: the opaque alias of a record is stable and differs between records', async (t) => {
+  const s = verifySetup(t, { pids: [V1] });
+  const one = verifyInputFor([V1]).N16;
+  const prompts = [];
+  for (const group of ['S11', 'S11', 'N16']) {
+    const r = await authorGroup(group, { ...s.opts, dryRun: true }, { ...s.deps, verifyInput: { [group]: one } });
+    prompts.push(r.info.prompt);
+  }
+  assert.equal(prompts[0], prompts[1]);
+  assert.notEqual(prompts[0], prompts[2]);
+});
+
+test('verify: a record with ten findings still gives a prompt under 24000 chars, with every pid in it', async (t) => {
+  const pids = Array.from({ length: 10 }, (_, i) => `aaaa00000000000${i}`);
+  const body = `${'The scrub drops text after a space. '.repeat(20)}A correct scrub keeps nothing.`;
+  const s = verifySetup(t, { pids, deps: { verifyInput: verifyInputFor(pids, body) } });
+  const r = await authorGroup('N16', { ...s.opts, dryRun: true }, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+  assert.ok(r.info.promptChars <= 24_000, `got ${r.info.promptChars}`);
+  for (const p of pids) assert.ok(r.info.prompt.includes(`${p}.yaml`));
+});
+
+test('verify: a flow may cite a file that the diff does not change: the cited file counts as a path to hit', async (t) => {
+  const s = verifySetup(t, { files: ['docs/x.md'] });
+  const r = await authorGroup('N16', s.opts, s.deps);
+  assert.equal(r.exit, 0, r.problems.join('; '));
+});
+
+// Fix 7 (critic major 7). Breaks if: PURPOSES in cursor-review.mjs has no 'verify', so normalizePurpose stores the arm's purpose as 'other'.
+test('verify: the ledger lines of a real run carry purpose verify, not other', async (t) => {
+  const s = verifySetup(t);
+  await authorGroup('N16', s.opts, s.deps);
+  const lines = ledgerLines(s.ledger);
+  assert.equal(lines.length, 2);
+  assert.deepEqual(lines.map((l) => l.purpose), ['verify', 'verify']);
+});
+
+test('verify: parseArgs reads --live, --print-prompt and --prompt-out, and refuses --live with --dry-run', () => {
+  assert.equal(parseArgs(['--arm', 'verify', '--group', 'S11', '--live']).live, true);
+  assert.equal(parseArgs(['--arm', 'verify', '--group', 'S11']).live, undefined);
+  assert.equal(parseArgs(['--arm', 'verify', '--group', 'S11', '--dry-run', '--prompt-out', 'x.md']).promptOut, 'x.md');
+  assert.ok(parseArgs(['--arm', 'verify', '--group', 'S11', '--live', '--dry-run']).error);
+});
+
+test('verify: --freeze, --map-negatives and --host-digest are refused for the verify arm', async (t) => {
+  const s = verifySetup(t);
+  for (const argv of [['--freeze', '--sha', 'abc'], ['--map-negatives'], ['--host-digest']]) {
+    const r = await cli(s, ['--arm', 'verify', ...argv]);
+    assert.equal(r.code, 2, `${argv[0]}: ${r.text}`);
+  }
+});
+
+test('verify: --reparse reads a saved verify stream with no model, no ledger line, and writes the flows and declares', async (t) => {
+  const git = gitFrom([
+    [/^merge-base /, () => ({ status: 0, stdout: 'mergebase\n' })],
+    [/^diff --name-only --no-renames -z mergebase /, () => ({ status: 0, stdout: `${VFILE}\0` })],
+  ]);
+  const s = verifySetup(t, { deps: { git } });
+  s.deps.runner = async () => { throw new Error('reparse must not start an agent'); };
+  const raw = put(s.root, `.claude/cache/e2e/${RAW_DAY}-trex-author-verify-N16.raw.json`, streamFor(path.join(s.root, 'old-tree'), { answer: vAnswer() }));
+  const r = await cli(s, ['--reparse', raw, '--group', 'N16', '--arm', 'verify']);
+  assert.equal(r.code, 0, r.text);
+  assert.ok(existsSync(path.join(s.root, 'scripts/trex/bench/flows-verify/N16', `${V1}.declare.json`)));
+  assert.deepEqual(ledgerLines(s.ledger), []);
 });

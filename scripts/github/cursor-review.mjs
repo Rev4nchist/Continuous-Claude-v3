@@ -97,7 +97,7 @@ export function resolveModel({ model, band } = {}) {
 // ---------- usage ledger ----------
 
 /** What a run is for. Every new ledger line carries one; a missing or unknown value is 'other'. */
-export const PURPOSES = Object.freeze(['review', 'bench', 'eval', 'other']);
+export const PURPOSES = Object.freeze(['review', 'bench', 'eval', 'verify', 'other']);
 export const normalizePurpose = (p) => (PURPOSES.includes(p) ? p : 'other');
 /** The repo tag of a run: owner/name, else the local folder name, else null. */
 export const repoTag = (repo, root) => (typeof repo === 'string' && repo !== '' ? repo : root ? path.basename(root) : null);

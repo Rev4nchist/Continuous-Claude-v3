@@ -1,7 +1,7 @@
 {
   "id": "02-fails-both",
-  "title": "Probe fails the same way at head and at the base",
-  "why": "The probe expects codeRabbitNotice to return \"skipped\" for plain text. It returns null on both sides, so base fires the same line: pre-existing or a bad probe (G4).",
+  "title": "Probe fails the same way at head and at the base, off the cited path",
+  "why": "The probe expects codeRabbitNotice to return \"skipped\" for plain text. It returns null on both sides, so base fires the same line. The probe never runs the cited lines 801-802 (a different function), so G8 is false at head: a bad probe, not a pre-existing bug. 2026-11-03 critic fix 4: before this change the expectation was refuted (G4); a base fire now refutes only with G8 at head and an observed value on the fail line, so this fixture expects blocked:broken-probe (G4).",
   "head": "8b69c3e1",
   "cited": {
     "file": "scripts/github/review-status.mjs",
@@ -16,7 +16,7 @@
   "runFix": false,
   "g9": false,
   "expected": {
-    "verdict": "refuted",
+    "verdict": "blocked:broken-probe",
     "rule": "G4"
   }
 }

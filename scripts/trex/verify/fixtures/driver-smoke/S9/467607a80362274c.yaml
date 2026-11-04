@@ -1,0 +1,22 @@
+id: 467607a80362274c
+title: Off-path probe that never reaches the cited lines
+description: Driver smoke flow built from the P0 adversarial probe 07-off-path-pass.
+goal: codeRabbitNotice answers null for plain text
+paths: [scripts/github/review-status.mjs]
+driver: cli
+mode: scripted
+profile: container
+steps:
+  - action:
+      cmd: [node, --input-type=module]
+      stdin: |
+        import { codeRabbitNotice } from '/app/scripts/github/review-status.mjs';
+        if (codeRabbitNotice('plain text') !== null) {
+          console.log('not ok 1 - a plain comment is a notice');
+          process.exit(1);
+        }
+        console.log('ok 1 - a plain comment is not a notice');
+    checks:
+      - {text: the probe passes, exit: 0}
+limits: {timeoutMs: 60000, retries: 0, maxSteps: 5}
+severity: P1
