@@ -6,7 +6,7 @@
  * contexts (deny, never an interactive ask that would hang); (4) ask in
  * interactive; (5) SKIP_DESTRUCTIVE_GUARD override.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
   classifyDestructive,
   isUnattended,
@@ -1109,6 +1109,140 @@ describe('guard-prompt-text-fp control', () => {
   for (const [name, cmd] of psControls) {
     it(`PowerShell allows: ${name}`, () => {
       expect(decide(cmd, interactiveFor('PowerShell'), {}).decision).toBe('allow');
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 critic findings on 5f89c87f (C1, H1, H2, M1).
+// ---------------------------------------------------------------------------
+
+// C1: a catastrophic regex is synchronous, so vitest cannot time it out in-process. Each case runs the
+// real src (bundled with esbuild) in a child process with a hard kill, so a hang fails instead of stalling the file.
+describe('C1: launcher regexes stay linear (x200 of each overlapping token)', () => {
+  let bundle = '';
+  beforeAll(async () => {
+    const { buildSync } = await import('esbuild');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const hooksDir = fileURLToPath(new URL('../../', import.meta.url));
+    const entry = [
+      `import { decide } from './src/destructive-command-guard.ts';`,
+      `import { installSegments } from './src/package-install-guard.ts';`,
+      `import { readFileSync } from 'node:fs';`,
+      `const cmd = readFileSync(0, 'utf8');`,
+      `const t0 = performance.now();`,
+      `if (process.argv[2] === 'decide') decide(cmd, { tool_name: 'Bash', permission_mode: 'default' }, {});`,
+      `else installSegments(cmd, 'Bash');`,
+      `console.log(JSON.stringify({ ms: performance.now() - t0 }));`,
+    ].join('\n');
+    const out = buildSync({
+      stdin: { contents: entry, resolveDir: hooksDir, loader: 'ts', sourcefile: 'c1-entry.ts' },
+      bundle: true, platform: 'node', format: 'esm', write: false, preserveSymlinks: true,
+      external: ['better-sqlite3'],
+      banner: { js: "import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);" },
+    });
+    bundle = join(mkdtempSync(join(tmpdir(), 'dcg-c1-')), 'c1.mjs');
+    writeFileSync(bundle, out.outputFiles[0].text);
+  });
+
+  async function timeIt(fn: 'decide' | 'install', cmd: string): Promise<number> {
+    const { spawnSync } = await import('node:child_process');
+    // VITEST keeps the bundled hooks' main() from running in the child.
+    const res = spawnSync(process.execPath, [bundle, fn], { input: cmd, encoding: 'utf8', timeout: 5000, env: { ...process.env, VITEST: 'true' } });
+    expect(res.signal, `${fn} killed after 5000 ms`).toBeNull();
+    expect(res.status).toBe(0);
+    return JSON.parse(res.stdout.trim().split('\n').pop()!).ms;
+  }
+
+  const cases: Array<[string, string]> = [
+    ['sudo -u run', 'sudo ' + '-u '.repeat(200) + 'x'],
+    ['sudo -g run', 'sudo ' + '-g '.repeat(200) + 'x'],
+    ['env -u run', 'env ' + '-u '.repeat(200) + 'x'],
+    ['env -u run with a substitution after it (critic repro shape)', 'env ' + '-u '.repeat(200) + 'x; echo "$(rm -rf y)"'],
+    ['timeout flag run (flag vs duration)', 'timeout ' + '-k '.repeat(200) + 'x'],
+    ['xargs flag run', 'xargs ' + '-a '.repeat(200) + 'x'],
+  ];
+  for (const [name, cmd] of cases) {
+    it(`decide(): ${name} finishes in under 1000 ms`, async () => {
+      expect(await timeIt('decide', cmd)).toBeLessThan(1000);
+    }, 20_000);
+    it(`installSegments(): ${name} finishes in under 1000 ms`, async () => {
+      expect(await timeIt('install', cmd)).toBeLessThan(1000);
+    }, 20_000);
+  }
+
+  it('the critic repro still asks (the substitution after the env run is classified)', () => {
+    expect(decide('env ' + '-u '.repeat(5) + 'x; echo "$(rm -rf y)"', interactiveFor('Bash'), {}).decision).not.toBe('allow');
+  });
+});
+
+describe('H1: a top-level escaped quote does not open a string', () => {
+  const bash: Array<[string, string]> = [
+    ['escaped single quotes around rm -rf', String.raw`echo \'; rm -rf x; echo \'`],
+    ['escaped single quotes around git reset --hard', String.raw`echo \'; git reset --hard; echo \'`],
+    ['F01 sq-escape still asks (backslash is literal inside single quotes)', String.raw`echo 'a\'; rm -rf x; echo '`],
+  ];
+  for (const [name, cmd] of bash) {
+    it(`Bash asks: ${name}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  it('PowerShell asks: backtick-escaped single quotes around Remove-Item -Recurse', () => {
+    const cmd = "Write-Output `'; Remove-Item -Recurse x; Write-Output `'";
+    expect(decide(cmd, interactiveFor('PowerShell'), {}).decision).not.toBe('allow');
+  });
+});
+
+describe('H2: git -C and a Git Bash /c/ path are not exec flags', () => {
+  const allowRows: Array<['Bash' | 'PowerShell', string, string]> = [
+    ['PowerShell', 'git-safe -C with a commit message naming rm -rf', String.raw`pwsh -File scripts/git-safe.ps1 -C C:\repo commit -m "fix(guard): ask on rm -rf build"`],
+    ['Bash', 'git-safe -C with a commit message naming git reset --hard', String.raw`pwsh -File scripts/git-safe.ps1 -C C:\repo commit -m "fix: git reset --hard now asks"`],
+    ['Bash', 'pwsh -File with a /c/ path', `pwsh -File /c/Users/dkhay/continuous-claude/scripts/git-safe.ps1 commit -m "fix: rm -rf build now asks"`],
+    ['Bash', 'bash running a script under /c/', `bash /c/Users/dkhay/x/run.sh "git reset --hard"`],
+  ];
+  for (const [tool, name, cmd] of allowRows) {
+    it(`${tool} allows: ${name}`, () => {
+      expect(decide(cmd, interactiveFor(tool), {}).decision).toBe('allow');
+    });
+  }
+
+  // Layer 2 no longer runs on a segment the wrapper regex matched, so layer 1 must reach every F03/WR row.
+  const layer1Rows = [
+    `/bin/bash -c "rm -rf /"`,
+    `wsl bash -c "rm -rf ~"`,
+    `exec bash -c "rm -rf x"`,
+    `timeout 5 bash -c "rm -rf x"`,
+    `find . | xargs sh -c 'rm -rf "$@"' _`,
+    `sudo -u root bash -c "rm -rf x"`,
+    String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command "Remove-Item -Recurse x"`,
+    String.raw`C:\Windows\System32\cmd.exe /c "rd /s /q x"`,
+    `bash --rcfile "/zz x" -c "rm -rf x"`,
+    `pwsh -wd "C:/zz" -c "Remove-Item -Recurse x"`,
+  ];
+  for (const cmd of layer1Rows) {
+    it(`layer 1 extracts a payload: ${cmd}`, () => {
+      expect(extractShellWrapperPayloads(cmd).length).toBeGreaterThanOrEqual(1);
+    });
+  }
+});
+
+describe('M1: the top-level scan skips literal cat/tee heredoc prose', () => {
+  it('Bash allows: a literal heredoc PR body that names rm build -rf', () => {
+    const cmd = `cat <<'EOF' > PR.md\n- rm build -rf now asks (F04)\nEOF`;
+    expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
+  });
+  const askRows: Array<[string, string]> = [
+    ['heredoc piped into bash', `cat <<'EOF' | bash\nrm -rf x\nEOF`],
+    ['bash reading a heredoc', `bash <<'EOF'\nrm -rf x\nEOF`],
+    ['expanding heredoc body with a substitution', `cat <<EOF > x\n$(rm -rf y)\nEOF`],
+    ['F14: quote opened before a heredoc line', `echo "x\ncat <<'EOF'\ny"\nbash -c "rm -rf /"\nEOF`],
+  ];
+  for (const [name, cmd] of askRows) {
+    it(`Bash asks: ${name}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
     });
   }
 });
