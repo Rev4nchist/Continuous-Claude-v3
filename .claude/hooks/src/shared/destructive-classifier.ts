@@ -11,6 +11,17 @@
 // avoid matching the safe everyday form (e.g. recursive rm only, not `rm -f file`;
 // force-push only, not plain push; DB drops only inside a DB-CLI invocation).
 export interface DPattern { name: string; re: RegExp; }
+
+/**
+ * A long option and every prefix of it down to `min` chars, as a regex source: abbrev('force', 3) is
+ * `for(?:c(?:e)?)?`. git parse-options accepts any unique prefix (`git clean --fo` is --force, R4).
+ * `min` is the shortest prefix no other option of that subcommand shares.
+ */
+const abbrev = (word: string, min: number): string =>
+  word.slice(0, min) + [...word.slice(min)].reduceRight((rest, c) => `(?:${c}${rest})?`, '');
+// Each git subcommand has its own `[^;&|\n]*` scan, so the flag may sit anywhere after the subcommand.
+const gitFlag = (sub: string, flags: string): RegExp => new RegExp(String.raw`\bgit\s+${sub}\b[^;&|\n]*\s(?:${flags})`, 'i');
+
 export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
   // The flag may sit ANYWHERE after rm (`rm -f -r x`, `rm build -rf`, F04). It must be a SHORT
@@ -45,18 +56,24 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   { name: 'del /f|/s (force/recursive)', re: /\bdel\b[^&|;]*\s\/[fs]\b/i },
   // git — history rewrite / working-tree or remote destruction
   // --hard anywhere after reset (`git reset HEAD~3 --hard`, `git reset -q --hard`, F05).
-  { name: 'git reset --hard', re: /\bgit\s+reset\b[^;&|\n]*\s--hard\b/i },
+  // Abbreviations count (`--har`, R4).
+  { name: 'git reset --hard', re: gitFlag('reset', String.raw`--${abbrev('hard', 1)}\b`) },
   // Force push: --force, a short cluster with f (-f, -uf, -fu), or a +refspec (`origin +main`, F05).
-  { name: 'git push --force', re: /\bgit\s+push\b[^&|;]*(?:--force(?:-with-lease)?|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+\S)/i },
+  // `--for` and longer (R4): --follow-tags shares `--fo`. --force-with-lease matches at the `-` boundary.
+  { name: 'git push --force', re: new RegExp(String.raw`\bgit\s+push\b[^&|;]*(?:--${abbrev('force', 3)}\b|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+\S)`, 'i') },
   { name: 'git push --delete', re: /\bgit\s+push\b[^&|;]*(--delete|\s-d\b)/i },
   { name: 'git push --mirror', re: /\bgit\s+push\b[^&|;]*--mirror\b/i },
   // colon-refspec remote delete: `git push origin :branch`. The leading SPACE before
   // the colon distinguishes it from `src:dst` (a normal push to a remote branch).
   { name: 'git push :refspec delete', re: /\bgit\s+push\b[^&|;]*\s:[^\s]/i },
   // One bounded scan (F16: the old `(?:\s+-{1,2}[^\s]+)*` backtracked exponentially on `--a` runs).
-  { name: 'git clean -f', re: /\bgit\s+clean\b[^;&|\n]*\s(?:--force\b|-[a-zA-Z]*f)/i },
-  // A bare `--` or `.` path, or -f/--force, anywhere after checkout (`git checkout main -- src`, F05).
-  { name: 'git checkout discard', re: /\bgit\s+checkout\b[^;&|\n]*\s(?:--(?=\s|$)|\.(?=\s|$)|-f\b|--force\b)/i },
+  // `--f` and longer (R4): --force is the only clean option that starts with f.
+  { name: 'git clean -f', re: gitFlag('clean', String.raw`--${abbrev('force', 1)}\b|-[a-zA-Z]*f`) },
+  // Anywhere after checkout (`git checkout main -- src`, F05): a bare `--`; a path that starts with `.`
+  // (`.`, `./src`, `../x`: a ref name cannot start with a dot, R3); -f; and, abbreviated (R4), --force
+  // (the only f option), --theirs, --ours (--orphan shares `--o`), --pathspec-from-file (--pathspec-file-nul
+  // shares `--pathspec-f`). Plain branch switches (-b, --track, main) stay allowed.
+  { name: 'git checkout discard', re: gitFlag('checkout', String.raw`--(?=\s|$)|\.|-f\b|--(?:${abbrev('force', 1)}|${abbrev('theirs', 2)}|${abbrev('ours', 2)}|${abbrev('pathspec-from-file', 11)})\b`) },
   // git restore discarding the WORKTREE (parity with `git checkout .`/`--`). `--staged`-only
   // (reversible unstage) and single-file `git restore file` are NOT gated (accepted).
   { name: 'git restore discard', re: /\bgit\s+restore\b[^&|;]*(--worktree\b|\s\.(?:\s|$))/i },
@@ -65,7 +82,8 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // safe) is NOT flagged — only `-D` / `-fD` / `--delete --force` (round-2 FP fix).
   { name: 'git branch -D', re: /\bgit\s+branch\s+(-D\b|--delete\s+--force|--force\s+--delete|-[a-zA-Z]*D[a-zA-Z]*\s)/ },
   // `git branch -f main abc123` moves a branch and drops the commits it pointed at (F05).
-  { name: 'git branch -f (force move)', re: /\bgit\s+branch\b[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b/i },
+  // `--forc` and longer (R4): --format shares `--for`.
+  { name: 'git branch -f (force move)', re: gitFlag('branch', String.raw`(?:-[a-zA-Z]*f[a-zA-Z]*|--${abbrev('force', 4)})\b`) },
   { name: 'git worktree remove --force', re: /\bgit\s+worktree\s+remove\b[^&|;]*(--force|\s-f\b)/i },
   { name: 'git submodule deinit -f', re: /\bgit\s+submodule\s+deinit\b[^&|;]*(--force|\s-f\b)/i },
   // bare `git rebase` rewrites history, but the recovery subcommands UNDO / continue an
@@ -86,7 +104,10 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   { name: 'docker volume rm', re: /\bdocker\s+volume\s+rm\b/i },
   { name: 'docker force rm', re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
   // `docker compose down -v` deletes the project's named volumes (F05).
-  { name: 'docker compose down --volumes', re: /\bdocker(?:-compose|\s+compose)\b[^;&|\n]*\bdown\b[^;&|\n]*\s(?:-v|--volumes)\b/i },
+  // `down` is a whole word (`-f down.yml` is a file, R5). The lookahead takes the FIRST down and the
+  // backreference consumes it atomically, so a failed `-v` scan never retries a later down (two greedy
+  // scans around down were cubic on `docker compose down` x500). A -v after any down is after the first.
+  { name: 'docker compose down --volumes', re: /\bdocker(?:-compose|\s+compose)\b(?=([^;&|\n]*?\sdown(?=\s|$)))\1[^;&|\n]*\s(?:-v|--volumes)\b/i },
 ];
 
 // Fabric guards (skill-intake-fabric Phase 1). Suspend, resume, resize or delete of a capacity stops,
@@ -298,7 +319,10 @@ const LAUNCHER_PATH = String.raw`(?:[^\s=]*[\\/])?`;
 const valueFlags = (letters: string): string => String.raw`(?:\s+-[${letters}]\s+(?!-)\S+|\s+-(?![${letters}](?:\s|$))\S+)*`;
 const LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags('ug')}|env${valueFlags('u')}|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
 const OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
-const PAYLOAD = String.raw`\s*("(?:[^"\\]|\\.)*"(?=\s|$)|'[^']*'(?=\s|$)|\S.*)(?:\s.*)?$`;
+// R1: the tail is `[\s\S]*`, not `.*`. JS `.` stops at `\r`, so `\S.*)(?:\s.*)?$` failed on a mid-line CR
+// and the engine retried every exec-flag position and every tail split (cubic: 10.6 s on 10 KB). Now, once
+// the exec flag has a non-space after it, the payload cannot fail, and the bare form has no second tail.
+const PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s[\s\S]*)?|(\S[\s\S]*))$`;
 const wrapper = (interp: string, flag: string): RegExp =>
   new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, 'i');
 
@@ -321,7 +345,8 @@ function unwrapPayload(raw: string): string {
 function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | null {
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg.match(re);
-    if (m && m[1]) return { payload: unwrapPayload(m[1]), shell };
+    const raw = m && (m[1] ?? m[2]); // group 1: a quoted payload; group 2: the bare rest of the segment
+    if (raw) return { payload: unwrapPayload(raw), shell };
   }
   return null;
 }
@@ -488,15 +513,16 @@ function classifyInterpreterSegments(segments: string[], tool: string): string |
 
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
   if (!command || typeof command !== 'string') return null;
-  // M1: scan what the shell would execute. A literal cat/tee heredoc body is prose, not a command.
-  const view = executableView(command, tool);
-  let scan = normalizeGitGlobalOptions(stripQuotedStrings(view, tool));
+  // R2: the top-level scan reads the RAW command, heredoc bodies included, as on fork/main. A body that
+  // `cat > x.sh` writes can run on the next line (`bash x.sh`), so prose that names a destructive command asks.
+  let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
   // PowerShell: `` res`et `` runs as reset. Quotes are already stripped, so the escaped letter can go.
   if (tool === 'PowerShell') scan = scan.replace(/`([A-Za-z0-9])/g, '$1');
   const patterns = tool === 'PowerShell' ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
+  const view = executableView(command, tool);
   const segHit = classifySegments(view, tool);
   if (segHit) return segHit;
   if (depth < 4) {
