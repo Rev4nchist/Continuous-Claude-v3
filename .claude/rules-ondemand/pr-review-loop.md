@@ -37,7 +37,7 @@ and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 `pr_watch` also reports a draft as "waiting on /pathway" (a toast, no line to you) and a
 `review:none` PR with no router state as "has no router state for this head. Re-run the
 review-router workflow for this head. Do not request a bot review." Before a CodeRabbit round past
-the PR's budget, it asks Dave in the checkpoint pane. Read its line before you post any review request.
+the PR's budget, the mod asks Dave in the session. Read its line before you post any review request.
 
 ## Before you open a PR
 
@@ -47,7 +47,7 @@ costs one. Aim for 1 review per PR. Warn at a 7-day count of 30. Wait at 40. Fac
 `.claudedocs/2026-10-27-coderabbit-review-budget.md`.
 
 A small PR needs no bot review when its CLI run is clean. Small means 3 files or fewer and 30 added
-lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recommends `none`, at any
+lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint question then recommends `none`, at any
 7-day count. A Major, a Critical or a missing CLI result on a small PR recommends CodeRabbit 1+0.
 
 A change that adds a state or an event needs a state x event table (`scripts/checks/state-table.mjs`).
@@ -93,9 +93,10 @@ name an event that runs it, or give `na` with the reason.
    the first holds the lock. The run count is keyed on the branch name and its first own commit.
    A merge of main keeps the count. A rebase rewrites that commit and starts a new count.
 2. Open the PR as a draft (`gh pr create --draft`), then call `pr_watch`. Call `pr_checkpoint` with
-   `pr` and `body` (the file that `pre-pr.mjs --body` checked). The tool opens the checkpoint pane
-   and returns at once. Wait for Dave's press in the pane. Then the mod adds the `review:` label and
-   marks the PR ready. A headless run gets a text plan and records nothing. Never run `gh pr ready`,
+   `pr` and `body` (the file that `pre-pr.mjs --body` checked). The mod asks Dave the
+   question itself, in this session, and the call waits for his answer. Do not ask him yourself. Then the
+   mod adds the `review:` label and marks the PR ready, and the result tells you what he chose. A closed
+   question records nothing: the PR stays a draft, and Dave answers later with `/pathway`. A headless run gets a text plan and records nothing. Never run `gh pr ready`,
    never add a `review:` label by hand, and never run `pr-checkpoint.mjs --confirm` or `--apply` from a
    shell. Lock A of the ccv3-mods `pr-checkpoint` hook denies a Write-tool edit of `pathway.json`.
    Lock B of the same hook denies any shell text that names it.
@@ -127,13 +128,13 @@ The review router sets the class. This budget counts CodeRabbit PR reviews: the 
 - A Minor-only round needs no extra review when the fix is 30 lines or fewer: READY carries the review.
 - A PR outside the risk list gets at most 2 cloud rounds. The risk list is the critical and parser globs and class r3.
   The budget gives this: normal, steering and infra are 1+1, and the extra round follows a Major. Only r3 (1+2) and
-  Dave's press in the pane ("Dave allowed round N") go past 2. A saved `pathway.json` keeps its old budget.
+  Dave's answer to the mod's question ("Dave allowed round N") go past 2. A saved `pathway.json` keeps its old budget.
   Rounds 3 and later on such PRs found no real defect in the 2026-10-30 study.
 - Put all fixes of a round in one push. Then post one `@coderabbitai review`, if a round is left.
 - Do not click GitHub "Update branch" unless the merge needs it. Each click makes a new head and a new review.
-- `pr_watch` counts the rounds used. At budget + 1 it asks Dave in the checkpoint pane. A PR at its
+- `pr_watch` counts the rounds used. At budget + 1 the mod asks Dave in the session. A PR at its
   budget gets no more `@coderabbitai review` until the line says "Dave allowed round N". Wait for his
-  press in the pane. Do not ask him in chat.
+  answer. Do not ask him in chat.
 
 The `pre-pr-gate` PreToolUse hook enforces step 1. It denies `gh pr create` and `gh api .../pulls` with
 POST in `Rev4nchist/Continuous-Claude-v3`. It allows the call only when `.claude/cache/pre-pr/stamp.json`
@@ -201,7 +202,7 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 
 - `bandOf()` in `review-router.mjs` computes the band from the changed files. The numbers live in the `matrix` block of `review-router.config.json`.
 - Bands: LOW, MID, ELEVATED, HIGH, CRITICAL. HIGH is 5 or more control-plane files (`matrix.control_plane`). CRITICAL is a `risk:high` label or an r3 path.
-- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget`, or `both` when a critical file meets an available Greptile (rules R3 and R4 stay).
+- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget`, or `both` when a critical file meets an available Greptile (rules R3 and R4 stay). Every band also offers the last option "No review, land on CI ($0)" (`none`): only Dave's pick or typed `/pathway <pr> none` records it for HIGH and CRITICAL (`--by dave`), it is never the recommendation there, and it adds `review:none`, so the router adds no review label when the PR leaves draft.
 - Dave can still press CodeRabbit on a lower band. That is an escalation.
 - A parser file in a HIGH PR keeps rule R2: one review, no loop.
 - A config without a `matrix` block keeps the rules R1 to R5 and RS.
@@ -234,7 +235,7 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
   for byte. An edit by a person after a body summary makes the gate report UNAVAILABLE until
   Greptile rewrites it. Edits by apps are fine.
 - Batch fixes into one push. Every review uses a bot allowance or credit. At the PR's budget, stop.
-  `pr_watch` asks Dave in the checkpoint pane. Report the open findings to Dave.
+  The mod asks Dave in the session. Report the open findings to Dave.
 
 ### Free-slot queue (HIGH and CRITICAL, Dave 2026-11-02)
 
@@ -264,8 +265,8 @@ slot and posts `@coderabbitai review`. The state file is `~/.claude/state/codera
 Never request a review on a draft or on a `review:none` PR. A draft waits on `/pathway`. A
 `review:none` PR with no router state needs the review-router workflow re-run for that head.
 
-On a coderabbit or both PR with no CodeRabbit review 30 minutes after ready, `pr_watch` asks Dave in
-the pane. The mod posts one `@coderabbitai review` only when he presses Yes. Do not post it yourself.
+On a coderabbit or both PR with no CodeRabbit review 30 minutes after ready, the mod asks Dave
+in the session. It posts one `@coderabbitai review` only when he answers Yes. Do not post it yourself.
 A HIGH or CRITICAL PR that the free-slot queue holds gets no such ask: the queue posts (see
 "Free-slot queue").
 Never post a review request while the CodeRabbit commit status is pending: a review is running. The
@@ -294,7 +295,7 @@ opening-review question for that PR. The comment is not proof of Dave's yes (the
 account), so it hides no alert and changes no status text. Do not word it any other way: the watcher
 matches the exact phrase.
 
-On a both PR, `pr_watch` asks Dave once in the pane for Greptile on the final head. Post `@greptileai`
+On a both PR, the mod asks Dave once in the session for Greptile on the final head. Post `@greptileai`
 only when he asks: each review bills a credit. Do not raise the review tier (`@greptileai review this at apex`, 10 credits) without Dave's
 yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 
@@ -341,7 +342,7 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    `gh api repos/<O>/<R>/pulls/comments/<comment_id>/reactions -f content='+1'` (`-1` for 👎).
 5. Never resolve a thread you did not act on.
 6. Request the review of the new head (`@coderabbitai review`; a push does not start one) only when the
-   `pr_watch` line says a round is left, or after the pane shows "Dave allowed round N". After a
+   `pr_watch` line says a round is left, or after the line says "Dave allowed round N". After a
    Minor-only round with a fix of 30 lines or fewer, post nothing: READY carries the earlier review.
    Never post while the CodeRabbit status is pending. Before any request, run the cap check in
    "Paid PR reviews (Dave, 2026-10-30)". Then wait.

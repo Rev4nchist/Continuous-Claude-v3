@@ -2,7 +2,6 @@ import type { CheckpointAsk, CheckpointOption, CheckpointResult } from '../../ty
 
 /** Pure helpers of the PR checkpoint mod. Nothing here takes `$`: a `$` and an atom cannot cross an import (README). */
 
-export const PANE = 'pr-checkpoint'
 export const TOOL_NAME = 'pr_checkpoint'
 /**
  * The command Dave types. One constant: the registration, the matcher, the usage text and every "type /..." line read it.
@@ -124,7 +123,7 @@ const autoOf = (value: unknown): CheckpointResult['auto'] => {
 /** The result plus the engine's drift text (`config_drift_why`: null or absent without drift, or from an old engine). */
 export type CheckpointResultWithDrift = CheckpointResult & { config_drift_why?: string | null }
 
-/** The engine's `--json` output, or null when it lacks the fields the pane reads. */
+/** The engine's `--json` output, or null when it lacks the fields the mod reads. */
 export const parseResult = (stdout: string): CheckpointResultWithDrift | null => {
   try {
     const parsed: unknown = JSON.parse(stdout)
@@ -168,9 +167,6 @@ export const optionsInOrder = (result: CheckpointResult): { buttons: CheckpointO
 
 export const costText = (cost: [number, number]): string => (cost[0] + cost[1] === 0 ? 'no review' : `budget ${cost[0]}+${cost[1]}`)
 
-export const optionLabel = (one: CheckpointOption, isFirst: boolean): string =>
-  `${one.pathway}${one.label ? ` ${one.label}` : ''}  ${costText(one.cost)}${isFirst ? '  (Recommended)' : ''}`
-
 /** `12m`, `3h`, `2d`: the age of the pre-PR stamp. Null when the stamp has no readable time. */
 export const ageText = (iso: string | null | undefined, now: number): string | null => {
   if (!iso) return null
@@ -203,46 +199,124 @@ export const coversRows = (subjects: string | null, numstat: string | null): str
 
 export const clip = (text: string, width: number): string => (width > 3 && text.length > width ? `${text.slice(0, width - 1)}…` : text)
 
-/** Text rows above the buttons. Each is one line; the pane cuts a long row with an ellipsis. */
-export const headerRows = (
-  view: { pr: number; result: CheckpointResultWithDrift; covers: string[]; stamp: string | null; prHead: string },
-  now: number,
-): string[] => {
-  const r = view.result
-  const age = ageText(view.stamp, now)
-  const rows = [
-    `#${view.pr}  head ${r.head.slice(0, 7)}  stamp ${age ?? 'unknown'}  class ${r.class} (matched ${r.matched})  ${r.size.files} files  ${r.size.lines} lines`,
-    ...view.covers,
-  ]
-  for (const check of r.checks) rows.push(`Check ${check.step}: ${check.status}${check.detail ? ` (${check.detail})` : ''}`)
-  const severities = r.cli ? Object.entries(r.cli.bySeverity).map(([name, count]) => `${name} ${count}`) : []
-  rows.push(severities.length ? `CLI: ${severities.join(', ')}` : 'CLI: none')
-  const cap = r.capacity
-  const crab =
-    typeof cap.count === 'number'
-      ? `CodeRabbit 7d ${cap.count}${cap.source || cap.date ? ` (${[cap.source, cap.date].filter(Boolean).join(' ')})` : ''}${cap.band ? ` ${cap.band}` : ''}`
-      : 'CodeRabbit 7d unknown'
-  const grep = typeof r.credits.used === 'number' && typeof r.credits.monthly === 'number' ? `Greptile ${r.credits.used} of ${r.credits.monthly}` : 'Greptile credits unknown'
-  rows.push(`${crab}  ${grep}`)
-  if (r.config_drift) rows.push(`Warning: ${r.config_drift_why ?? 'branch config differs from main'}`)
-  if (cap.warning) rows.push(`Warning: ${cap.warning}`)
-  return rows
+// ---- the questions ----------------------------------------------------------------------------------------------------------------
+// Spike S2 (2026-11-04): a mod may only use $.ui.ask, which takes labels and no descriptions. So the cost sits in each label, the
+// recommendation is first with " (Recommended)", and a short overview sits in the question. Only an exact match of a label records.
+
+/** The marker the first label carries when it is the recommendation. */
+export const RECOMMENDED = ' (Recommended)'
+/** A paid CodeRabbit round costs about this much per changed file (pr-review-loop.md "Billing facts"); path_filters are ignored, so it is "up to". */
+export const PAID_PER_FILE = 0.25
+export const FIGURE = (dollars: number): string => `$${dollars.toFixed(2)}`
+/** The cost part of a label for `files` changed files. Unknown files: the per-file price. */
+export const upTo = (files: number | null): string => (files === null ? `up to ${FIGURE(PAID_PER_FILE)} per changed file` : `up to ${FIGURE(files * PAID_PER_FILE)}`)
+
+export type PathwayChoice = { label: string; pathway: string; by: 'default' | 'dave' }
+export type PathwayAsk = { header: string; question: string; choices: PathwayChoice[] }
+
+const NAMES: Record<string, string> = { none: 'No review, land on CI', coderabbit: 'CodeRabbit review', both: 'CodeRabbit + Greptile', wait: 'Keep as draft' }
+const nameOf = (pathway: string): string => NAMES[pathway] ?? pathway
+
+const labelFor = (one: CheckpointOption, files: number): string => {
+  if (one.pathway === 'none' || one.pathway === 'wait') return `${nameOf(one.pathway)} ($0)`
+  return `${nameOf(one.pathway)} (${files > 0 || one.cost[0] + one.cost[1] > 0 ? upTo(files) : '$0'})`
 }
 
-export const recommendRows = (result: CheckpointResult): string[] => {
-  if (result.recommended === null) return [result.why[0] ?? 'Run pre-pr.mjs: no stamp for this head.']
-  return [`Recommended: ${result.recommended}`, ...result.why.slice(0, 4).map(line => `  ${line}`)]
+const WAIT_OPTION: CheckpointOption = { pathway: 'wait', label: null, available: true, cost: [0, 0], reason: '' }
+
+/** The overview line: class, size, CLI findings. */
+const overview = (pr: number, result: CheckpointResult): string => {
+  const severities = result.cli ? Object.entries(result.cli.bySeverity).map(([name, count]) => `${count} ${name}`) : []
+  return `PR #${pr} (${result.class}, ${result.size.files} files, ${result.size.lines} lines, CLI ${severities.length ? severities.join(', ') : 'none'}): which review?`
 }
 
-/** The order of an ask's two buttons. The first is the recommendation. Rounds and Greptile spend, so No is first; the opening is inside the budget, so Yes is first. */
+/**
+ * The checkpoint question, or null when there is nothing to choose: no recommendation (R0), or no open pathway. The labels are 2 to 4:
+ * the open pathways (at most 3), one "Keep as draft", and "No review, land on CI" last when the engine offers it and it is not the recommendation. When the recommendation is open it is first, with " (Recommended)", and is the only
+ * one a `--by default` may record. When it is held, no label is marked and every pick is `--by dave`.
+ */
+export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, stampAge: string | null = null): PathwayAsk | null => {
+  const { buttons, held, recommendedFirst } = optionsInOrder(result)
+  const open = buttons.filter(one => one.pathway !== 'wait')
+  if (result.recommended === null || open.length === 0) return null
+  const keepFirst = recommendedFirst && buttons[0]?.pathway === 'wait'
+  // "No review, land on CI" is the last label at every band, unless it IS the recommendation (a LOW to ELEVATED PR), and then it is first.
+  const noneIsRecommended = recommendedFirst && result.recommended === 'none'
+  const noReview = noneIsRecommended ? [] : open.filter(one => one.pathway === 'none')
+  const paid = open.filter(one => noneIsRecommended || one.pathway !== 'none').slice(0, 3 - noReview.length)
+  const ordered = keepFirst ? [WAIT_OPTION, ...paid, ...noReview] : [...paid, WAIT_OPTION, ...noReview]
+  const files = result.size.files
+  const choices: PathwayChoice[] = ordered.map((one, i) => ({
+    label: `${labelFor(one, files)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
+    pathway: one.pathway,
+    by: recommendedFirst && i === 0 ? 'default' : 'dave',
+  }))
+  const lines = [overview(pr, result)]
+  const why = result.why[0]
+  if (recommendedFirst) lines.push(`Recommended: ${nameOf(result.recommended)}${why ? `, because ${why}` : ''}.`)
+  else lines.push(`The engine recommends ${result.recommended}, but it is held. Nothing is marked.`)
+  const cap = result.capacity
+  const crab = typeof cap.count === 'number' ? `CodeRabbit 7d ${cap.count}${cap.band ? ` ${cap.band}` : ''}` : 'CodeRabbit 7d unknown'
+  const grep = typeof result.credits.used === 'number' && typeof result.credits.monthly === 'number' ? `Greptile ${result.credits.used} of ${result.credits.monthly}` : 'Greptile credits unknown'
+  lines.push(`${crab}. ${grep}.${stampAge ? ` Stamp ${stampAge} old.` : ''}`)
+  if (held.length > 0) lines.push(`Held: ${held.map(one => `${nameOf(one.pathway)} (${one.reason})`).join('; ')}.`)
+  if (result.config_drift) lines.push(`Warning: ${result.config_drift_why ?? 'branch config differs from main'}`)
+  if (cap.warning) lines.push(`Warning: ${cap.warning}.`)
+  return { header: clip(`PR #${pr}`, 12), question: lines.join('\n'), choices }
+}
+
+/** What Dave's answer maps to: an exact label of the ask, or null (free text, a comma-joined pair, a near miss, nothing). */
+export const pathwayOfAnswer = (answer: unknown, ask: PathwayAsk): PathwayChoice | null =>
+  typeof answer === 'string' ? (ask.choices.find(one => one.label === answer) ?? null) : null
+
+/** The tool text for each outcome that records nothing. The model reads it; Dave's words reach the model through `otherText`. */
+export const keptDraftText = (pr: number): string => `Dave kept #${pr} as a draft. Nothing recorded. Do not ask him again. He answers with ${SLASH}.`
+export const closedText = (pr: number): string => `Dave closed the question for #${pr}. Nothing recorded. The PR stays a draft. He can answer later with ${SLASH}.`
+export const otherText = (pr: number, text: string): string =>
+  `Dave wrote: ${clip(text.replace(/\s+/g, ' '), 400)}. Nothing recorded. The PR stays a draft. Reply to him. He answers with ${SLASH} ${pr} <word>.`
+export const emptyText = (pr: number): string => `No valid answer came back for #${pr}. Nothing recorded. The PR stays a draft. Dave answers with ${SLASH}.`
+export const movedText = (pr: number, why: string): string =>
+  `#${pr} changed while Dave answered (${why}). Nothing recorded. Run pre-pr.mjs at the new head, then call pr_checkpoint again.`
+export const BUSY_TEXT = 'A checkpoint question is open. Wait for Dave. Nothing was asked and nothing was recorded.'
+export const noQuestionText = (pr: number, why: string | undefined): string =>
+  `${(why ?? 'No pathway is open for #' + pr).replace(/[.\s]+$/, '')}. Nothing recorded. The PR stays a draft.`
+export const SUBAGENT_WHY = `A subagent may not raise Dave's question. Only the main session calls pr_checkpoint.`
+
+// ---- the questions of the watcher -----------------------------------------------------------------------------------------------
+
+export type AskChoice = { label: string; answer: 'yes' | 'no' }
+export type AskSpec = { header: string; question: string; choices: AskChoice[] }
+
+/** The order of an ask's two labels. The first is the recommendation. Rounds and Greptile spend, so No is first; the opening is inside the budget, so Yes is first. */
 export const askOrder = (kind: CheckpointAsk['kind']): ['yes' | 'no', 'yes' | 'no'] => (kind === 'opening' ? ['yes', 'no'] : ['no', 'yes'])
 
-export const askButtonLabel = (kind: CheckpointAsk['kind'], answer: 'yes' | 'no'): string => {
-  if (answer === 'yes') return kind === 'opening' ? 'Yes: post @coderabbitai review' : kind === 'round' ? 'Yes: spend 1 more' : 'Yes: ask Greptile (3 credits)'
-  return kind === 'opening' ? 'No: do not post' : kind === 'round' ? 'No: stay in budget' : 'No: skip Greptile'
+const askLabel = (kind: CheckpointAsk['kind'], answer: 'yes' | 'no', files: number | null): string => {
+  if (kind === 'greptile') return answer === 'yes' ? 'Yes, ask Greptile (3 credits)' : 'No, skip Greptile ($0)'
+  if (kind === 'opening') return answer === 'yes' ? `Yes, post the review (free slot $0, or ${upTo(files)})` : 'No, do not post ($0)'
+  return answer === 'yes' ? `Yes, one more review (free slot $0, or ${upTo(files)})` : 'No, stay in budget ($0)'
 }
 
-/** What the model reads after Dave presses an option of the checkpoint. */
+/** One watcher ask as a dialog. `files` is the changed-file count of the checkpoint record, or null when the record has none. */
+export const askSpec = (ask: CheckpointAsk, files: number | null): AskSpec => {
+  const choices = askOrder(ask.kind).map((answer, i) => ({ answer, label: `${askLabel(ask.kind, answer, files)}${i === 0 ? RECOMMENDED : ''}` }))
+  const cost = ask.kind === 'greptile' ? 'A Greptile pass costs 3 credits.' : `A review in the free slot costs $0. A paid round costs ${upTo(files)}.`
+  return { header: clip(`PR #${ask.pr}`, 12), question: `${ask.text}\n${cost}`, choices }
+}
+
+/** The ask's answer for an exact label of the spec, else null. */
+export const answerOfLabel = (spec: AskSpec, answer: unknown): 'yes' | 'no' | null =>
+  typeof answer === 'string' ? (spec.choices.find(one => one.label === answer)?.answer ?? null) : null
+
+/** The Retry dialog after --apply refused. */
+export const RETRY_LABELS = ['Retry', 'Leave as draft'] as const
+
+/** A watcher ask Dave closed three ways: the quiet time before it may come back, and how often it comes back at all. */
+export const ASK_DEFER_MS = 30 * 60_000
+export const ASK_MAX_DISMISSED = 2
+/** The lease of one PR's question: one watching session asks. A holder that stops renewing lapses after this long. */
+export const ASK_LEASE_MS = 10 * 60_000
+
+/** What the model reads after Dave answers the checkpoint question. */
 export const pressNotice = (a: { pr: number; pathway: string; label: string | null; budget: [number, number]; by: string }): string =>
   `PR checkpoint: Dave chose ${a.pathway} for #${a.pr} (${a.label ?? 'no label'}, ${costText(a.budget)}, by ${a.by}). The mod added the label and marked the PR ready. pr_watch continues. Do not merge.`
 
@@ -264,7 +338,7 @@ export const isStalePending = (value: unknown, now: number): boolean => {
 export const SHAPES_CLI_REL = '.claude/hooks/dist/checkpoint-shapes-cli.mjs'
 export const SHAPES_TIMEOUT_MS = 10_000
 export const CONFIG_REL = 'review-router.config.json'
-export const PATHWAY_DENY = "pathway.json is written by Dave's press in the checkpoint pane only. A tool or a shell command may not name it. Read it with the Read tool."
+export const PATHWAY_DENY = "pathway.json is written only by the mod, after Dave answers the checkpoint question. A tool or a shell command may not name it. Read it with the Read tool."
 export const LOCK_FAILED = 'pr-checkpoint lock failed; nothing ran'
 
 /** Resolves `.` and `..`, turns backslashes into slashes and lower-cases: the spellings of one path compare equal. */
@@ -405,7 +479,7 @@ const GH_WRITE_SHAPES: RegExp[] = [
  * Not covered, accepted: a node or PowerShell script, or a body file, that builds the marker apart from this text.
  */
 export const namesMarker = (command: string): boolean => /pathway-confirmed/i.test(command) && GH_WRITE_SHAPES.some(shape => shape.test(command))
-export const MARKER_DENY = 'The pathway-confirmed comment is posted by /pathway when Dave presses a pathway. A shell command may not post it.'
+export const MARKER_DENY = 'The pathway-confirmed comment is posted by /pathway after Dave answers the checkpoint question. A shell command may not post it.'
 
 /** A cheap test on the raw text. A miss spawns nothing; a hit asks the shapes CLI. */
 export const mayBeGated = (command: string): boolean =>
@@ -447,9 +521,9 @@ export const recordAllowsLabel = (value: unknown, pr: number, head: string, labe
 }
 
 export const LOCK_WHY: Record<LockPattern, string> = {
-  'self-confirm': "pr-checkpoint --confirm and --apply run only from Dave's press in the checkpoint pane.",
-  ready: "Only the checkpoint's --apply marks a PR ready. Call pr_checkpoint and wait for Dave's press.",
-  'review-label': "A review: label is added only by the checkpoint's --apply after Dave's press. Call pr_checkpoint and wait.",
+  'self-confirm': "pr-checkpoint --confirm and --apply run only after Dave's answer to the checkpoint question.",
+  ready: "Only the checkpoint's --apply marks a PR ready. Call pr_checkpoint and wait for Dave's answer.",
+  'review-label': "A review: label is added only by the checkpoint's --apply after Dave's answer. Call pr_checkpoint and wait.",
 }
 
 export const lockDeny = (patterns: LockPattern[]): string => `Denied by the PR checkpoint lock (${patterns.join(', ')}). ${patterns.map(one => LOCK_WHY[one]).join(' ')}`

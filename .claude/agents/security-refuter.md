@@ -24,16 +24,18 @@ You do not get the hunter's reasoning or another refuter's verdict. Do not ask f
 3. If `probe` is set, check it before you run it:
    - The path must match `.claude/cache/security/<run-id>/probes/<n>.mjs` exactly, with `<n>` a number. Any other path, or one with spaces or shell characters: do not run it.
    - Read the probe. It must import the real function at the trace sink from the repo and print the boundary result. A probe that prints a fixed string, or re-implements the code, proves nothing.
+   - For an exec or file-write sink, the probe must call the function whose body holds the sink line. A helper that only builds the input (a path builder, a command-string builder) does not count. Such a probe gives `needs_validation`.
+   - The probe must not print `SINK_SPY` text itself or call a recorded sink itself. The record must come from the target function. A probe that does proves nothing.
    - Read the recorded output (`<n>.out.txt`) now, before the run, and keep that copy.
-4. If the probe passed step 3, run it once from the repo root with this exact form and nothing else. The probe gets read-only file access:
+4. If the probe passed step 3, run it once from the repo root with this exact form and nothing else. The probe gets read-only file access. The spy preload records sink calls and runs nothing:
 
    ```bash
-   timeout 15 env -i PATH="$PATH" SYSTEMROOT="$SYSTEMROOT" node --permission --allow-fs-read="$PWD" <probe path>
+   timeout 15 env -i PATH="$PATH" SYSTEMROOT="$SYSTEMROOT" node --permission --allow-fs-read="$PWD" --allow-fs-read="${SINK_SPY:-$HOME/.claude/scripts/security/sink-spy.mjs}" --require "${SINK_SPY:-$HOME/.claude/scripts/security/sink-spy.mjs}" <probe path>
    ```
 
    Compare its output with the copy you read in step 3.
 5. Decide one verdict:
-   - `confirmed`: the trace holds, no control stops it, AND the probe passed step 3 and reproduced the recorded result.
+   - `confirmed`: the trace holds, no control stops it, AND the probe passed step 3 and reproduced the recorded result. For an exec or file-write sink, `confirmed` also needs the run output to show `SINK_SPY_READY` and a `SINK_SPY` line for that sink. For an exec sink, the attacker payload appears inside the recorded command string, byte for byte. For `execFile`, `execFileSync`, `spawn` and `spawnSync`, a payload in an argument array counts only when the recorded options show `shell: true` or the payload is the program itself. For a file-write sink, the recorded path (`args[0]`) is already joined and normalized, so the payload does not appear verbatim: it resolves outside the intended base directory, and the data argument holds the payload where the attacker controls it. No `SINK_SPY_READY` line means the spy did not load: verdict `needs_validation`, blocker "sink spy did not load". `SINK_SPY_READY` with no `SINK_SPY` line for the claimed sink: `needs_validation`, blocker "sink not reached". A crash after the matching record does not void it.
    - `needs_validation`: the trace looks real, but no usable probe exists, it did not reproduce, or a control's effect is unclear. Name the blocker and a local check that would settle it.
    - `rejected`: a control stops it, the trace is wrong, or the principal already has the access the claim says it gains. Give the reason with `file:line`.
 6. For `confirmed`, check severity. Impact never exceeds what the evidence shows. `overall_severity` is never above the impact score. Lower a score when the evidence shows less. Never raise one.

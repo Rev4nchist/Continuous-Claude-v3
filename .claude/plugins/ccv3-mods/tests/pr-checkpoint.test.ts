@@ -151,7 +151,22 @@ type Opts = {
   viewSeq?: Reply[]
   /** What slot-queue.mjs prints. Unset: a good `add`. */
   slot?: Reply
+  /** Replies for the first `--apply` calls, in order; later calls answer by `apply`. */
+  applySeq?: Reply[]
+  /** How Dave answers the dialog the mod raises ($.ui.ask). Unset: he closes it (Esc). 'manual': the test answers it through `seen.dialogs[n].answer(...)`. */
+  answer?: Answer
+  /** One answer per dialog, in order; later dialogs use `answer`. */
+  answers?: Answer[]
 }
+
+/** A label (RegExp: the first label that matches; string: that text), Esc, an empty answer, text typed under Other, or a function of the labels. */
+type Answer = string | RegExp | { other: string } | 'dismiss' | 'empty' | 'manual' | ((labels: string[], question: string) => Answer)
+type Dialog = { question: string; header: string | undefined; labels: string[]; answer: (a: Answer) => void }
+
+/** Set by `openPane` (the old pane tests): a dialog waits for the test to press. Reset by every `world`. */
+let manualDefault = false
+/** The `seen` of the newest world, for the helpers that take no world. */
+let lastSeen: { dialogs: Dialog[] } | null = null
 
 type Run = { argv: string[]; stdin?: string; cwd?: string }
 
@@ -179,6 +194,7 @@ const shapesFor = (command: string) => {
 
 const world = (on: On, opts: Opts = {}) => {
   const clock = mock.clock(on, { now: NOW })
+  lastSeen = null
   // What mock.env does (a variable not listed is unset), plus a throw a test arms after `start`: this module's own kill-switch read, the first step of each of its lock hooks. No other module reads this name.
   const variables: Record<string, string> = { USERPROFILE: 'C:/home', ...(opts.env ?? {}) }
   on('env.get', (_$, e) => {
@@ -192,6 +208,8 @@ const world = (on: On, opts: Opts = {}) => {
     toasts: [] as string[],
     submits: [] as string[],
     asks: [] as string[],
+    dialogs: [] as Dialog[],
+    descriptions: [] as string[],
     opens: [] as Rec[],
     closes: 0,
     registered: [] as string[],
@@ -199,6 +217,8 @@ const world = (on: On, opts: Opts = {}) => {
     ran: [] as { tool: string; text: string }[],
     writes: [] as string[],
   }
+  manualDefault = false
+  lastSeen = seen
   const root = opts.root ?? ROOT
   const files: Record<string, string> = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false } }), ...(opts.files ?? {}) }
   const statuses = opts.statuses ?? {}
@@ -248,10 +268,12 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('command.register', (_$, e) => {
     seen.registered.push(e.name)
+    if (e.name === 'pathway') seen.descriptions.push(String((e as unknown as { description?: string }).description))
     return { value: { command: e.name } }
   })
   on('tool.register', (_$, e) => {
     seen.tools.push(e.name)
+    if (e.name === 'pr_checkpoint') seen.descriptions.push(String((e as unknown as { description?: string }).description))
     return { value: { tool: `mcp__ccv3-mods__${e.name}` } }
   })
   on('ui.toast', (_$, e) => {
@@ -310,7 +332,7 @@ const world = (on: On, opts: Opts = {}) => {
         const reply = done(opts.confirm ?? { stdout: JSON.stringify(record) })
         return opts.gate ? (opts.gate.then(() => reply) as never) : reply
       }
-      if (argv.includes('--apply')) return done(opts.apply ?? OK)
+      if (argv.includes('--apply')) return done(opts.applySeq?.shift() ?? opts.apply ?? OK)
       return done({ stdout: `PR checkpoint for ${HEAD.slice(0, 7)}: class infra, 7 file(s), 212 line(s)\nRecommended: coderabbit  budget 1+2\n` })
     }
     if (line.includes('slot-queue.mjs')) {
@@ -333,9 +355,29 @@ const world = (on: On, opts: Opts = {}) => {
       return { result: { type: 'update', filePath: String(e.file_path ?? e.notebook_path), content: '', structuredPatch: [], originalFile: null } } as never
     })
   }
+  // The engine draws $.ui.ask as a tool.call of AskUserQuestion; this is its bottom. A call by the model (the test) lands here too.
+  const sequence = [...(opts.answers ?? [])]
   on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
-    seen.asks.push(String((e as unknown as { questions: { question: string }[] }).questions[0]?.question))
-    return { deny: 'no chat prompt in the checkpoint flows' }
+    const input = e as unknown as { questions: { question: string; header?: string; options: ({ label: string } | string)[] }[] }
+    const q = input.questions[0]!
+    const labels = q.options.map(one => (typeof one === 'string' ? one : one.label))
+    seen.asks.push(String(q.question))
+    const record: Dialog = { question: q.question, header: q.header, labels, answer: () => undefined }
+    seen.dialogs.push(record)
+    const shape = (spec: Answer): never => {
+      const picked = typeof spec === 'function' ? spec(labels, q.question) : spec
+      if (picked === 'dismiss') return { deny: 'dismissed' } as never
+      if (picked === 'empty') return { result: { questions: [], answers: {} } } as never
+      const text = typeof picked === 'object' && 'other' in picked ? picked.other : picked instanceof RegExp ? labels.find(l => picked.test(l)) : picked
+      if (text === undefined) throw new Error(`no label matches in ${JSON.stringify(labels)}`)
+      return { result: { questions: [], answers: { [q.question]: text } } } as never
+    }
+    const spec = sequence.shift() ?? opts.answer ?? (manualDefault ? 'manual' : 'dismiss')
+    const resolved = typeof spec === 'function' ? spec(labels, q.question) : spec
+    if (resolved !== 'manual') return shape(resolved)
+    return new Promise(resolve => {
+      record.answer = a => resolve(shape(a) as never)
+    }) as never
   })
   return { clock, seen, store, session, fail, written }
 }
@@ -354,20 +396,24 @@ const callTool = async ($: Engine, input: Rec) => {
 const slash = ($: Engine, args: string, kind = 'composer') =>
   $.command.run({ command: COMMAND, args, origin: (kind === 'plugin' ? { kind, name: 'other-mod' } : { kind }) as never, presentation: { isFullscreen: false, columns: 100 } })
 
-const PANE_PROPS = { title: 'PR checkpoint', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} }
-const mountPane = ($: Engine) =>
-  $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'Pane', requestId: 'pr-checkpoint', props: PANE_PROPS, viewport: { columns: 100, rows: 40 } })
-type Pane = Awaited<ReturnType<typeof mountPane>>
-
-const buttons = async (pane: Pane) => await pane.findAll({ type: 'Button' })
-const keys = async (pane: Pane) => (await buttons(pane)).map(found => found.key ?? '')
-const paneText = async (pane: Pane) =>
-  [...(await pane.findAll({ type: 'Text' })), ...(await buttons(pane))].map(found => found.text).join('\n')
+// The tool call waits for Dave's answer, so the old pane tests press a key in a dialog the test holds open: `openPane` starts the call with the
+// dialog in manual mode, `pane.press({ key })` answers it with the label that key stood for and waits for the call to end.
+const PRESS: Record<string, Answer> = {
+  'opt-coderabbit': /^CodeRabbit review/,
+  'opt-none': /^No review, land on CI/,
+  'opt-both': /^CodeRabbit \+ Greptile/,
+  'opt-wait': /^Keep as draft/,
+  dismiss: 'dismiss',
+}
 const argvOf = (seen: { run: Run[] }, part: string) => seen.run.filter(r => r.argv.some(a => a.includes(part))).map(r => r.argv)
 const engineCalls = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('pr-checkpoint.mjs'))).map(r => r.argv.slice(2).join(' '))
 /** A press returns before its handler ends, so a test waits for the work a press started. */
 const settle = async () => {
   for (let turn = 0; turn < 500; turn += 1) await Promise.resolve()
+}
+/** Waits (real time, a few milliseconds a turn) until `pred` holds: the tool call runs real async work before it raises its dialog. */
+const waitFor = async (pred: () => boolean) => {
+  for (let turn = 0; turn < 400 && !pred(); turn += 1) await new Promise(resolve => (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => unknown }).setTimeout(() => resolve(undefined), 5))
 }
 const counts = (seen: { run: Run[] }) => ({
   confirm: seen.run.filter(r => r.argv.includes('--confirm')).length,
@@ -375,17 +421,30 @@ const counts = (seen: { run: Run[] }) => ({
   comments: seen.run.filter(r => r.argv[0] === 'gh' && r.argv[2] === 'comment').map(r => r.argv),
 })
 
-/** Opens the pane the way the model does (the tool call) and mounts it. */
+/** Calls the tool the way the model does and leaves the dialog open for the test to answer. `told` settles when the call ends. */
 const openPane = async ($: Engine) => {
+  manualDefault = true
   await start($)
-  const told = await callTool($, { pr: 7, body: 'pr-body.md' })
-  return { told, pane: await mountPane($) }
+  const told = callTool($, { pr: 7, body: 'pr-body.md' })
+  await waitFor(() => lastSeen!.dialogs.length > 0)
+  const dialog = lastSeen!.dialogs[0]
+  return {
+    told,
+    dialog,
+    pane: {
+      press: async ({ key }: { key: string }) => {
+        dialog!.answer(PRESS[key]!)
+        await told
+        await settle()
+      },
+    },
+  }
 }
 
 const CONFIG_ENFORCE = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: true } }) }
 const LOCK_DENIED = (r: { deny?: string }) => typeof r.deny === 'string' && r.deny.length > 0
 
-describe('pr-checkpoint: registration and the checkpoint pane', () => {
+describe('pr-checkpoint: registration and the checkpoint question', () => {
   test('K0 the tool and the command are registered in an interactive and in a headless session', async ($, on) => {
     const a = world(on)
     await start($)
@@ -400,83 +459,76 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     expect(a.seen.registered).toContain(COMMAND)
   })
 
-  test('K1 the first option is the recommendation, not the engine order; hotkeys, autoFocus, primary look; pane opened with focus', async ($, on) => {
+  test('K1 the first label is the recommendation, not the engine order; the question holds the overview; no pane opens', async ($, on) => {
     const { seen } = world(on)
-    const { told, pane } = await openPane($)
-    expect(told.text).toMatch(/side pane/i)
-    expect(told.text).toMatch(/do not run gh pr ready/i)
+    const { dialog, pane } = await openPane($)
     expect(engineCalls(seen)[0]).toBe('--json')
-    expect(seen.opens.length).toBe(1)
-    expect(seen.opens[0]!.id).toBe('pr-checkpoint')
-    expect(seen.opens[0]!.focus).toBe(true)
-    expect(seen.opens[0]!.closeOnEscape).toBe(true)
-    expect(seen.opens[0]!.holdToasts).not.toBe(true)
-    expect(await keys(pane)).toEqual(['opt-coderabbit', 'opt-none', 'dismiss'])
-    const [first, second, dismiss] = await buttons(pane)
-    expect(first!.props.hotkey).toBe('1')
-    expect(first!.props.autoFocus).toBe(true)
-    expect(first!.props.variant).toBe('primary')
-    expect(first!.text).toContain('(Recommended)')
-    expect(second!.props.hotkey).toBe('2')
-    expect(second!.text).not.toContain('(Recommended)')
-    expect(dismiss!.props.hotkey).toBe('0')
-    expect(dismiss!.props.role).toBe('dismiss')
-    const text = await paneText(pane)
-    expect(text).toContain('#7')
-    expect(text).toMatch(/infra/)
-    expect(text).toMatch(/7 files/)
-    expect(text).toMatch(/Major/)
-    expect(text).toMatch(/38/)
+    expect(seen.opens).toEqual([])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels[0]).toMatch(/\(Recommended\)$/)
+    expect(dialog!.labels.slice(1).some(label => label.includes('(Recommended)'))).toBe(false)
+    expect(dialog!.header).toBe('PR #7')
+    expect(dialog!.question).toContain('#7')
+    expect(dialog!.question).toMatch(/infra/)
+    expect(dialog!.question).toMatch(/7 files/)
+    expect(dialog!.question).toMatch(/Major/)
+    expect(dialog!.question).toMatch(/38/)
+    await pane.press({ key: 'dismiss' })
   })
 
   test('K1b a Dependabot author is passed to the engine as --dependabot', async ($, on) => {
     const { seen } = world(on, { author: 'dependabot[bot]' })
-    await openPane($)
-    expect(engineCalls(seen)[0]).toBe('--json --dependabot')
-  })
-
-  test('K12 a held option is dim text with its reason, not a Button', async ($, on) => {
-    world(on)
     const { pane } = await openPane($)
-    expect((await keys(pane)).includes('opt-both')).toBe(false)
-    const text = await paneText(pane)
-    expect(text).toContain('Greptile held: credits unknown')
-    expect(text).toMatch(/both/)
+    expect(engineCalls(seen)[0]).toBe('--json --dependabot')
+    await pane.press({ key: 'dismiss' })
   })
 
-  // Config drift row: the engine's own text (config_drift_why) shows in the pane. An engine without it (old) keeps the generic warning; no drift shows none.
-  test('K1d config drift: the pane shows the engine reason (main config unread), not the generic warning', async ($, on) => {
+  test('K12 a held pathway is text in the question with its reason, and has no label', async ($, on) => {
+    world(on)
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.labels.some(label => label.startsWith('CodeRabbit + Greptile'))).toBe(false)
+    expect(dialog!.question).toContain('Greptile held: credits unknown')
+    await pane.press({ key: 'dismiss' })
+  })
+
+  // Config drift row: the engine's own text (config_drift_why) shows in the question. An engine without it (old) keeps the generic warning; no drift shows none.
+  test('K1d config drift: the question shows the engine reason (main config unread), not the generic warning', async ($, on) => {
     const why = "Main's review-router.config.json is missing or not JSON, so it counts as drift"
     world(on, { json: { stdout: JSON.stringify(engineJson({ config_drift: true, config_drift_why: why })) } })
-    const unread = await paneText((await openPane($)).pane)
-    expect(unread).toContain(why)
-    expect(unread).not.toContain('branch config differs from main')
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.question).toContain(why)
+    expect(dialog!.question).not.toContain('branch config differs from main')
+    await pane.press({ key: 'dismiss' })
   })
 
-  test('K1e config drift with no reason keeps the generic warning; no drift shows no warning', async ($, on) => {
+  test('K1e config drift with no reason keeps the generic warning', async ($, on) => {
     world(on, { json: { stdout: JSON.stringify(engineJson({ config_drift: true })) } })
-    expect(await paneText((await openPane($)).pane)).toContain('Warning: branch config differs from main')
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.question).toContain('Warning: branch config differs from main')
+    await pane.press({ key: 'dismiss' })
   })
 
   test('K1f no config drift shows no config warning even when a reason string is present', async ($, on) => {
     world(on, { json: { stdout: JSON.stringify(engineJson({ config_drift: false, config_drift_why: 'stale reason' })) } })
-    const text = await paneText((await openPane($)).pane)
-    expect(text).not.toContain('stale reason')
-    expect(text).not.toMatch(/branch config differs/i)
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.question).not.toContain('stale reason')
+    expect(dialog!.question).not.toMatch(/branch config differs/i)
+    await pane.press({ key: 'dismiss' })
   })
 
-  test('K10 an R0 result (no stamp) shows no option Buttons and the reason', async ($, on) => {
-    world(on, { json: { stdout: JSON.stringify(engineJson({ recommended: null, options: [], why: ['Run pre-pr.mjs: no stamp for this head.'], budget: [0, 0] })) } })
-    const { pane } = await openPane($)
-    expect((await keys(pane)).filter(key => key.startsWith('opt-'))).toEqual([])
-    expect(await paneText(pane)).toContain('Run pre-pr.mjs')
+  test('K10 an R0 result (no stamp) raises no dialog and the tool text holds the reason', async ($, on) => {
+    const w = world(on, { json: { stdout: JSON.stringify(engineJson({ recommended: null, options: [], why: ['Run pre-pr.mjs: no stamp for this head.'], budget: [0, 0] })) } })
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(w.seen.dialogs).toEqual([])
+    expect(told.text).toContain('Run pre-pr.mjs')
   })
 
-  test('K2 Accept runs --confirm <recommended> --by default then --apply, inline (no timer), and records the store', async ($, on) => {
+  test('K2 the recommended label runs --confirm <recommended> --by default then --apply, inline (no timer), and records the store', async ($, on) => {
     const { seen, store } = world(on)
     const { pane } = await openPane($)
     await pane.press({ key: 'opt-coderabbit' })
-    // No clock.advance here on purpose. Decision (plan review 7): press work runs inside the press handler.
+    // No clock.advance here on purpose. Decision (plan review 7): the answer's work runs inside the call.
     const calls = engineCalls(seen).filter(call => !call.startsWith('--json'))
     expect(calls.length).toBe(2)
     expect(calls[0]).toMatch(/^--confirm coderabbit --by default --body \S*pr-body\.md$/)
@@ -490,17 +542,17 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     expect(record.budget).toEqual([1, 2])
     expect(record.decided_by).toBe('default')
     expect(record.pr).toBe(7)
+    expect(record.files).toBe(7)
     expect(record.session).toBe(SESSION)
     expect((record.capacity as Rec).count).toBe(38)
     expect(record.appliedAt).toBe(NOW)
     expect(store.get(PENDING)).toBeUndefined()
-    expect(seen.closes).toBe(1)
     expect(seen.writes.filter(path => path.includes('review-ledger'))).toEqual([])
-    expect(seen.asks).toEqual([])
+    expect(seen.asks.length).toBe(1)
     expect(seen.toasts.some(text => /#7/.test(text))).toBe(true)
   })
 
-  test('K3 another option runs --by dave', async ($, on) => {
+  test('K3 another label runs --by dave', async ($, on) => {
     const { seen, store } = world(on)
     const { pane } = await openPane($)
     await pane.press({ key: 'opt-none' })
@@ -511,98 +563,70 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     expect((store.get('checkpoint:pr:7') as Rec).budget).toEqual([0, 0])
   })
 
-  test('K2b two overlapping presses of an option run the engine once: one --confirm and one --apply', async ($, on) => {
+  test('K2b a second call while the first still records runs the engine once: one --confirm and one --apply', async ($, on) => {
     let release: () => void = () => undefined
     const gate = new Promise<void>(resolve => (release = resolve))
-    const { seen } = world(on, { gate })
-    const { pane } = await openPane($)
-    const first = pane.press({ key: 'opt-coderabbit' })
-    const second = pane.press({ key: 'opt-coderabbit' })
-    await settle()
+    const { seen } = world(on, { gate, answer: /Recommended/ })
+    await start($)
+    const first = callTool($, { pr: 7, body: 'pr-body.md' })
+    await waitFor(() => seen.dialogs.length > 0)
+    const second = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(second.text).toMatch(/question is open/i)
     release()
-    await Promise.all([first, second])
+    await first
     await settle()
     expect(counts(seen).confirm).toBe(1)
     expect(counts(seen).apply).toBe(1)
   })
 
-  test('K6 dismiss records nothing and closes the pane', async ($, on) => {
-    const { seen, store } = world(on)
-    const { pane } = await openPane($)
-    await pane.press({ key: 'dismiss' })
-    expect(counts(seen).confirm).toBe(0)
-    expect(counts(seen).apply).toBe(0)
-    expect(store.get('checkpoint:pr:7')).toBeUndefined()
-    expect(seen.closes).toBe(1)
-  })
-
-  test('K7 wait records nothing, closes the pane and says the PR stays a draft', async ($, on) => {
+  test('K7 Keep as draft when it is the recommendation: it comes first, records nothing and says the PR stays a draft', async ($, on) => {
     const wait = engineJson({
       recommended: 'wait',
       capacity: { count: 55, band: 'high', warning: 'CodeRabbit 7-day count is 55', source: 'manual', date: '2026-10-25' },
       options: [option('wait'), option('coderabbit'), option('none')],
     })
     const { seen, store } = world(on, { json: { stdout: JSON.stringify(wait) } })
-    const { pane } = await openPane($)
-    expect((await keys(pane))[0]).toBe('opt-wait')
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.labels[0]).toMatch(/^Keep as draft .*\(Recommended\)$/)
+    expect(dialog!.question).toContain('CodeRabbit 7-day count is 55')
     await pane.press({ key: 'opt-wait' })
     expect(counts(seen).confirm).toBe(0)
     expect(store.get('checkpoint:pr:7')).toBeUndefined()
     expect(seen.toasts.some(text => /stays a draft/i.test(text))).toBe(true)
   })
 
-  test('K8 a refused --confirm shows its stderr line in the pane and never applies', async ($, on) => {
-    const { seen, store } = world(on, { confirm: { exitCode: 1, stderr: 'pr-checkpoint: refused: The PR body is not the body pre-pr.mjs checked.\n' } })
-    const { pane } = await openPane($)
-    await pane.press({ key: 'opt-coderabbit' })
+  test('K8 a refused --confirm gives the engine line to the model and never applies', async ($, on) => {
+    const { seen, store } = world(on, { confirm: { exitCode: 1, stderr: 'pr-checkpoint: refused: The PR body is not the body pre-pr.mjs checked.\n' }, answer: /Recommended/ })
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(seen).apply).toBe(0)
     expect(store.get('checkpoint:pr:7')).toBeUndefined()
-    expect(await paneText(pane)).toContain('The PR body is not the body pre-pr.mjs checked.')
+    expect(told.text).toContain('The PR body is not the body pre-pr.mjs checked.')
+    expect(told.text).toMatch(/not recorded/)
   })
 
-  test('K9 a refused --apply keeps the record confirmed, shows the engine text, and retry-apply runs --apply only', async ($, on) => {
-    const moved = 'pr-checkpoint: refused: The head of PR #7 moved since the pathway was confirmed (PR bbbbbbb, record aaaaaaa). Run /pathway again.\n'
-    const w = world(on, { apply: { exitCode: 1, stderr: moved } })
-    const { pane } = await openPane($)
-    await pane.press({ key: 'opt-coderabbit' })
-    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('confirmed')
-    expect(await paneText(pane)).toContain('Run /pathway again.')
-    expect(await paneText(pane)).not.toContain('/checkpoint')
-    expect(await keys(pane)).toContain('retry-apply')
-    await pane.press({ key: 'retry-apply' })
-    expect(counts(w.seen).confirm).toBe(1)
-    expect(counts(w.seen).apply).toBe(2)
-  })
-
-  test('K9b a throw after --confirm (the store write fails) frees the pane: the error shows, the option Buttons return, and a second press works', async ($, on) => {
-    const w = world(on)
-    const { pane } = await openPane($)
+  test('K9b a throw after --confirm (the store write fails) is told to the model, frees the flag, and a second call works', async ($, on) => {
+    const w = world(on, { answer: /Recommended/ })
+    await start($)
     w.fail.set = true
-    await pane.press({ key: 'opt-coderabbit' })
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(w.seen).confirm).toBe(1)
     expect(counts(w.seen).apply).toBe(0)
-    const text = await paneText(pane)
-    expect(text).toMatch(/store\.set/) // the kit skips a throwing hook and reports 'no implementation for store.set'
-    expect(text).not.toMatch(/Running/)
-    expect(await keys(pane)).toEqual(['opt-coderabbit', 'opt-none', 'dismiss'])
+    expect(told.text).toMatch(/store\.set/) // the kit skips a throwing hook and reports 'no implementation for store.set'
+    expect(told.text).toMatch(/was not recorded/)
     w.fail.set = false
-    await pane.press({ key: 'opt-coderabbit' })
+    await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(w.seen).confirm).toBe(2)
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
   })
 
-  test('K1c a recommendation that is held marks no Button Recommended, gives none the focus or the primary look, and every press is --by dave', async ($, on) => {
+  test('K1c a recommendation that is held marks no label Recommended, and every pick is --by dave', async ($, on) => {
     const held = engineJson({ recommended: 'both', options: [option('none'), option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' })] })
     const { seen } = world(on, { json: { stdout: JSON.stringify(held) } })
-    const { pane } = await openPane($)
-    expect(await keys(pane)).toEqual(['opt-none', 'opt-coderabbit', 'dismiss'])
-    const [first, second] = await buttons(pane)
-    for (const one of [first!, second!]) {
-      expect(one.text).not.toContain('(Recommended)')
-      expect(one.props.autoFocus).not.toBe(true)
-      expect(one.props.variant).not.toBe('primary')
-    }
-    expect(await paneText(pane)).toContain('Greptile held: credits unknown')
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
+    expect(dialog!.question).toContain('Greptile held: credits unknown')
     await pane.press({ key: 'opt-none' })
     const confirm = engineCalls(seen).find(call => call.startsWith('--confirm'))
     expect(confirm).toMatch(/^--confirm none --by dave /)
@@ -635,8 +659,7 @@ const cwdOf = (seen: { run: Run[] }, part: string) => seen.run.filter(r => r.arg
 describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
   test('W1 the engine, the stamp and the git facts run in the worktree that holds the PR branch', async ($, on) => {
     const { seen, store } = world(on, wtOpts({ files: { [`${WT}/.claude/cache/pre-pr/stamp.json`]: JSON.stringify({ at: '2026-10-30T20:00:00.000Z' }) } }))
-    const { told, pane } = await openPane($)
-    expect(told.text).toMatch(/side pane/i)
+    const { dialog, pane } = await openPane($)
     expect((store.get(PENDING) as Rec).stamp).toBe('2026-10-30T20:00:00.000Z')
     expect((store.get(PENDING) as Rec).root).toBe(WT)
     const json = seen.run.find(r => r.argv.includes('--json') && r.argv.some(a => a.includes('pr-checkpoint.mjs')))!
@@ -645,7 +668,8 @@ describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
     expect(cwdOf(seen, 'log').filter(cwd => cwd !== undefined)).toEqual([WT])
     expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('diff'))?.cwd).toBe(WT)
     expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('worktree'))?.cwd).toBe(ROOT)
-    expect(await keys(pane)).toEqual(['opt-coderabbit', 'opt-none', 'dismiss'])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    await pane.press({ key: 'dismiss' })
   })
 
   test('W2 a press runs --confirm and --apply in the worktree, with the body file resolved there', async ($, on) => {
@@ -665,8 +689,7 @@ describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
 
   test('W3 a body file that only the session root holds is still found there', async ($, on) => {
     const { seen } = world(on, wtOpts({ missing: [`${WT}/pr-body.md`] }))
-    const { told, pane } = await openPane($)
-    expect(told.text).toMatch(/side pane/i)
+    const { pane } = await openPane($)
     await pane.press({ key: 'opt-none' })
     const confirm = seen.run.find(r => r.argv.includes('--confirm'))!
     expect(confirm.argv[confirm.argv.indexOf('--body') + 1]).toBe(`${ROOT}/pr-body.md`)
@@ -675,10 +698,11 @@ describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
 
   test('W4 a worktree with no engine in it is not used: the session root runs the engine', async ($, on) => {
     const { seen } = world(on, wtOpts({ missing: [`${WT}/scripts/github/pr-checkpoint.mjs`] }))
-    await openPane($)
+    const { pane } = await openPane($)
     const json = seen.run.find(r => r.argv.includes('--json') && r.argv.some(a => a.includes('pr-checkpoint.mjs')))!
     expect(json.argv[1]).toBe(ENGINE)
     expect(json.cwd).toBe(ROOT)
+    await pane.press({ key: 'dismiss' })
   })
 
   test('W5 /pathway <pr> none --body from the main checkout records in the worktree', async ($, on) => {
@@ -700,10 +724,11 @@ describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
     expect(seen.opens).toEqual([])
   })
 
-  test('W7 a failing git worktree list falls back to the session root and the pane still opens', async ($, on) => {
+  test('W7 a failing git worktree list falls back to the session root and the question still opens', async ($, on) => {
     const { seen } = world(on, { worktrees: { exitCode: 128, stderr: 'fatal: not a git repository' } })
-    const { told } = await openPane($)
-    expect(told.text).toMatch(/side pane/i)
+    const { dialog, pane } = await openPane($)
+    expect(dialog).toBeDefined()
+    await pane.press({ key: 'dismiss' })
     expect(seen.run.find(r => r.argv.includes('--json') && r.argv.some(a => a.includes('pr-checkpoint.mjs')))?.cwd).toBe(ROOT)
   })
 
@@ -796,22 +821,6 @@ describe('pr-checkpoint: the tool refuses before it opens anything', () => {
     expect(seen.opens).toEqual([])
   })
 
-  test('K12d the pane is not placed (isPlaced false): a toast with the engine reason, and "type /<command>"', async ($, on) => {
-    const { seen, store } = world(on, { open: { isPlaced: false, reason: 'the terminal is 100 columns wide; a pane waits below 144' } })
-    await start($)
-    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
-    expect(told.text).toContain(`/${COMMAND}`)
-    expect(told.text).not.toContain('/checkpoint')
-    expect(told.text).toContain('the terminal is 100 columns wide')
-    expect(seen.toasts.some(text => text.includes(`type /${COMMAND}`))).toBe(true)
-    expect(seen.toasts.some(text => text.includes('100 columns'))).toBe(true)
-    expect(seen.toasts.some(text => text.includes('/checkpoint'))).toBe(false)
-    expect(store.get(PENDING)).toBeDefined()
-    const before = seen.opens.length
-    const ran = await slash($, '')
-    expect(seen.opens.length).toBe(before + 1)
-    expect(ran.text ?? '').toMatch(/pane/i)
-  })
 })
 
 describe('pr-checkpoint: /pathway', () => {
@@ -865,16 +874,24 @@ describe('pr-checkpoint: /pathway', () => {
     expect(store.get('checkpoint:pr:7')).toBeUndefined()
   })
 
-  test('K21 the model learns the outcome from one meta row, with no turn', async ($, on) => {
-    const { seen, session } = world(on)
-    const { pane } = await openPane($)
-    await pane.press({ key: 'opt-coderabbit' })
-    const rows = session.appended().filter(row => JSON.stringify(row.message).includes('PR checkpoint:'))
-    expect(rows.length).toBe(1)
-    const text = JSON.stringify(rows[0]!.message)
-    expect(text).toContain('#7')
-    expect(text).toContain('review:coderabbit')
-    expect(text).toMatch(/do not merge/i)
+  test('K21 the model learns the outcome from the tool result, with no extra row and no turn', async ($, on) => {
+    const { seen, session } = world(on, { answer: /Recommended/ })
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(told.text).toContain('#7')
+    expect(told.text).toContain('review:coderabbit')
+    expect(told.text).toMatch(/do not merge/i)
+    expect(session.appended().filter(row => JSON.stringify(row.message).includes('PR checkpoint:'))).toEqual([])
+    expect(seen.submits).toEqual([])
+  })
+
+  test('K21b a bare /pathway that records gives the model one hidden context line, with no turn', async ($, on) => {
+    const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    const { seen } = world(on, { store: { [PENDING]: pending }, answer: /Recommended/ })
+    await start($)
+    const ran = (await slash($, '')) as unknown as { text?: string; context?: string[] }
+    expect(ran.context?.length).toBe(1)
+    expect(ran.context![0]).toMatch(/Dave chose coderabbit for #7/)
     expect(seen.submits).toEqual([])
   })
 })
@@ -1569,71 +1586,6 @@ describe('pr-checkpoint: asks from the watcher', () => {
   const asksOf = (store: Map<string, unknown>) => (store.get(ASKS) ?? []) as Rec[]
   // Clock anchor (critic finding 14): the 30 minutes of the opening ask run from `appliedAt`, the moment the mod's --apply succeeded.
   // That is when the engine marked the PR ready, so it is "since the PR left draft" (plan 4.2). A2 and A2b move `appliedAt`, not a PR field.
-  /** The first button of an ask pane is the recommendation: same look as the first option in K1. */
-  const expectRecommendedFirst = async (pane: Pane, order: [string, string]) => {
-    expect(await keys(pane)).toEqual(order)
-    const [first, second] = await buttons(pane)
-    expect(first!.props.hotkey).toBe('1')
-    expect(first!.props.autoFocus).toBe(true)
-    expect(first!.props.variant).toBe('primary')
-    expect(first!.text).toContain('(Recommended)')
-    expect(second!.props.hotkey).toBe('2')
-    expect(second!.props.autoFocus).not.toBe(true)
-    expect(second!.text).not.toContain('(Recommended)')
-  }
-
-  test('A1 a round ask at budget + 1: No is first, the text names the round and the 7d count, and nothing is posted', async ($, on) => {
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
-    await start($)
-    await w.clock.advance(TICK)
-    const asks = asksOf(w.store)
-    expect(asks.length).toBe(1)
-    expect(asks[0]!.kind).toBe('round')
-    expect(asks[0]!.pr).toBe(7)
-    expect(asks[0]!.head).toBe(HEAD)
-    expect(String(asks[0]!.text)).toContain('Round 4 of 1+2 for #7')
-    expect(String(asks[0]!.text)).toMatch(/7d.*38/)
-    expect(w.seen.opens.length).toBe(1)
-    expect(w.seen.opens[0]!.focus).toBe(true)
-    const pane = await mountPane($)
-    await expectRecommendedFirst(pane, ['ask-no', 'ask-yes'])
-    expect(await paneText(pane)).toContain('Round 4 of 1+2 for #7')
-    expect(counts(w.seen).comments).toEqual([])
-    expect(w.seen.asks).toEqual([])
-  })
-
-  test('A1b round ask, Yes: a grant for round 4 on this head, the model is told, and the mod posts nothing', async ($, on) => {
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
-    await start($)
-    await w.clock.advance(TICK)
-    const pane = await mountPane($)
-    const submitted = w.seen.submits.length
-    await pane.press({ key: 'ask-yes' })
-    const grant = w.store.get('checkpoint:grant:7') as Rec
-    expect(grant.round).toBe(4)
-    expect(grant.head).toBe(HEAD)
-    expect(asksOf(w.store)).toEqual([])
-    expect(counts(w.seen).comments).toEqual([])
-    const rows = JSON.stringify(w.session.appended().map(row => row.message))
-    expect(rows).toContain('Dave allowed round 4 for #7')
-    expect(w.seen.submits.length).toBe(submitted)
-  })
-
-  test('A1c round ask, No: the ask is declined on the record, the model is told, no grant, nothing posted', async ($, on) => {
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) } })
-    await start($)
-    await w.clock.advance(TICK)
-    const pane = await mountPane($)
-    await pane.press({ key: 'ask-no' })
-    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
-    const declined = (w.store.get('checkpoint:pr:7') as Rec).declined as Rec
-    expect(declined.kind).toBe('round')
-    expect(declined.round).toBe(4)
-    expect(declined.head).toBe(HEAD)
-    expect(counts(w.seen).comments).toEqual([])
-    expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave declined round 4 for #7')
-  })
-
   // G1 to G4: /pathway grant <pr> <round> is Dave's typed Yes, for a round the pane never asked about (or asked about and he declined).
   test('G1 /pathway grant 7 4 after a No: a grant for round 4 on the record head, the decline is cleared, the model is told, nothing posted', async ($, on) => {
     const declined = { kind: 'round', round: 4, head: HEAD }
@@ -1768,42 +1720,40 @@ describe('pr-checkpoint: asks from the watcher', () => {
     })
   }
 
-  test('A2 an opening ask 30 minutes after ready: Yes is first (the recommendation) and posts exactly one @coderabbitai review', async ($, on) => {
-    const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet } })
+  const QUIET = () => status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
+  const GREP_CLEAN = () => status(7, {
+    routing: { required: ['greptile', 'coderabbit'], held: null, source: 'labels' }, coderabbitReviewedHead: true, routedReviewed: false, reviewedHead: false,
+    coderabbitRounds: 1, reasons: ['no Greptile check on the head commit yet (review pending)'],
+  })
+  const OPENING_POST = ['gh', 'pr', 'comment', '7', '-R', REPO, '--body', '@coderabbitai review']
+
+  test('A2 the opening ask 30 minutes after ready is a dialog: Yes is first (the recommendation) with its cost, and Yes posts exactly one @coderabbitai review', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: QUIET() }, answer: /^Yes/ })
     await start($)
     await w.clock.advance(TICK)
-    const asks = asksOf(w.store)
-    expect(asks.length).toBe(1)
-    expect(asks[0]!.kind).toBe('opening')
-    expect(String(asks[0]!.text)).toContain('CodeRabbit has not started on #7 30 minutes after ready')
-    const pane = await mountPane($)
-    await expectRecommendedFirst(pane, ['ask-yes', 'ask-no'])
-    await pane.press({ key: 'ask-yes' })
+    expect(w.seen.dialogs.length).toBe(1)
+    const [dialog] = w.seen.dialogs
+    expect(dialog!.question).toContain('CodeRabbit has not started on #7 30 minutes after ready')
+    expect(dialog!.labels[0]).toMatch(/^Yes, post the review .*\$.*\(Recommended\)$/)
+    expect(dialog!.labels[1]).toMatch(/^No, do not post/)
     const posts = counts(w.seen).comments
-    expect(posts.length).toBe(1)
-    expect(posts[0]).toEqual(['gh', 'pr', 'comment', '7', '-R', REPO, '--body', '@coderabbitai review'])
+    expect(posts).toEqual([OPENING_POST])
     expect(asksOf(w.store)).toEqual([])
-    expect(w.seen.asks).toEqual([])
+    expect(((w.store.get('checkpoint:pr:7') as Rec).opened as Rec).head).toBe(HEAD)
   })
 
   test('A2d opening ask, No: nothing is posted, the record is declined, the model is told, and the ask does not come back', async ($, on) => {
-    const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet } })
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: QUIET() }, answer: /^No/ })
     await start($)
     await w.clock.advance(TICK)
-    const pane = await mountPane($)
-    await pane.press({ key: 'ask-no' })
     expect(counts(w.seen).comments).toEqual([])
     expect(asksOf(w.store)).toEqual([])
     expect(((w.store.get('checkpoint:pr:7') as Rec).declined as Rec).kind).toBe('opening')
     expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Do not request a review on #7')
-    await w.clock.advance(TICK)
-    await w.clock.advance(TICK)
-    await w.clock.advance(TICK)
+    for (let i = 0; i < 3; i += 1) await w.clock.advance(TICK)
     expect(asksOf(w.store)).toEqual([])
     expect(counts(w.seen).comments).toEqual([])
-    expect(w.seen.opens.length).toBe(1)
+    expect(w.seen.dialogs.length).toBe(1)
   })
 
   for (const [name, view] of [
@@ -1812,13 +1762,10 @@ describe('pr-checkpoint: asks from the watcher', () => {
     ['the head moved', { state: 'OPEN', headRefOid: OTHER_HEAD }],
   ] as const) {
     test(`A2e a late Yes on the opening ask posts nothing when ${name}: the ask is dropped and Dave gets a toast`, async ($, on) => {
-      const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
-      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet }, view: { stdout: JSON.stringify(view) } })
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: QUIET() }, view: { stdout: JSON.stringify(view) }, answer: /^Yes/ })
       await start($)
       await w.clock.advance(TICK)
-      expect(asksOf(w.store).length).toBe(1)
-      const pane = await mountPane($)
-      await pane.press({ key: 'ask-yes' })
+      expect(w.seen.dialogs.length).toBe(1)
       expect(counts(w.seen).comments).toEqual([])
       expect(asksOf(w.store)).toEqual([])
       expect(w.seen.toasts.some(text => /#7/.test(text) && /no longer|merged|closed|moved/i.test(text))).toBe(true)
@@ -1832,17 +1779,77 @@ describe('pr-checkpoint: asks from the watcher', () => {
     ['gh prints no JSON', { stdout: 'not json' }],
   ] as [string, Reply][]) {
     test(`A2f a Yes posts nothing when the PR state cannot be read (${name}): the ask stays queued and Dave gets a toast`, async ($, on) => {
-      const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
-      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet }, view })
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: QUIET() }, view, answer: /^Yes/ })
       await start($)
       await w.clock.advance(TICK)
-      const pane = await mountPane($)
-      await pane.press({ key: 'ask-yes' })
       expect(counts(w.seen).comments).toEqual([])
       expect(asksOf(w.store).length).toBe(1)
       expect(w.seen.toasts.some(text => /#7/.test(text) && /could not read/i.test(text))).toBe(true)
     })
   }
+
+  test('A3 the Greptile ask on a both PR: No is first with the credits in the other label, Yes posts one @greptileai, and a No ends it', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ pathway: 'both', label: 'review:deep' }) }, statuses: { 7: GREP_CLEAN() }, answer: /^No/ })
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    const [dialog] = w.seen.dialogs
+    expect(dialog!.question).toContain('Ask Greptile to review the final head aaaaaaa of #7? 3 credits (Plus)')
+    expect(dialog!.labels[0]).toMatch(/^No, skip Greptile .*\(Recommended\)$/)
+    expect(dialog!.labels[1]).toMatch(/^Yes, ask Greptile \(3 credits\)$/)
+    expect(counts(w.seen).comments).toEqual([])
+    for (let i = 0; i < 2; i += 1) await w.clock.advance(TICK)
+    expect(asksOf(w.store)).toEqual([])
+    expect(w.seen.dialogs.length).toBe(1)
+  })
+
+  test('A3b Greptile ask, Yes: exactly one @greptileai comment and the ask leaves the queue', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ pathway: 'both', label: 'review:deep' }) }, statuses: { 7: GREP_CLEAN() }, answer: /^Yes/ })
+    await start($)
+    await w.clock.advance(TICK)
+    expect(counts(w.seen).comments).toEqual([['gh', 'pr', 'comment', '7', '-R', REPO, '--body', '@greptileai']])
+    expect(asksOf(w.store)).toEqual([])
+  })
+
+  test('A5 a tick finds the checkpoint question open: it raises nothing and asks at a later tick, after the answer', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) }, answers: ['manual'], answer: 'dismiss' })
+    await start($)
+    const tool = callTool($, { pr: 7, body: 'pr-body.md' })
+    await waitFor(() => w.seen.dialogs.length > 0)
+    expect(w.seen.dialogs.length).toBe(1)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(asksOf(w.store).length).toBe(1)
+    w.seen.dialogs[0]!.answer('dismiss')
+    await tool
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs[1]!.question).toContain('Round 4 of 1+2 for #7')
+  })
+
+  test('A5b a failed post keeps the ask queued with no quiet time; the next tick asks again and a second Yes posts', async ($, on) => {
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: QUIET() }, comments: [{ exitCode: 1, stderr: 'HTTP 502' }, OK], answer: /^Yes/ })
+    await start($)
+    await w.clock.advance(TICK)
+    expect(counts(w.seen).comments.length).toBe(1)
+    expect(asksOf(w.store).length).toBe(1)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(counts(w.seen).comments.length).toBe(2)
+    expect(asksOf(w.store)).toEqual([])
+  })
+
+  test('T19c a queued ask whose answer another session already stored leaves the queue and raises no dialog', async ($, on) => {
+    const w = world(on, {
+      store: { ...watchDoc(), 'checkpoint:pr:7': record(), 'checkpoint:grant:7': { round: 4, head: HEAD, at: NOW }, [ASKS]: [{ kind: 'round', pr: 7, head: HEAD, text: 'Round 4 of 1+2 for #7', round: 4 }] },
+      statuses: { 7: REVIEWED(3) },
+      answer: /^Yes/,
+    })
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs).toEqual([])
+    expect(asksOf(w.store)).toEqual([])
+  })
 
   test('A2b the opening ask waits for 30 minutes after ready: none at 29 minutes, the ask at 30', async ($, on) => {
     const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit'] })
@@ -1893,92 +1900,6 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(w.seen.opens).toEqual([])
   })
 
-  test('A3 the Greptile ask on a both PR: once, No first, Yes posts one @greptileai, and a No ends it', async ($, on) => {
-    const both = record({ pathway: 'both', label: 'review:deep' })
-    const clean = status(7, {
-      routing: { required: ['greptile', 'coderabbit'], held: null, source: 'labels' }, coderabbitReviewedHead: true, routedReviewed: false, reviewedHead: false,
-      coderabbitRounds: 1, reasons: ['no Greptile check on the head commit yet (review pending)'],
-    })
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': both }, statuses: { 7: clean } })
-    await start($)
-    await w.clock.advance(TICK)
-    const asks = asksOf(w.store)
-    expect(asks.length).toBe(1)
-    expect(asks[0]!.kind).toBe('greptile')
-    expect(String(asks[0]!.text)).toContain('Ask Greptile to review the final head aaaaaaa of #7? 3 credits (Plus)')
-    const pane = await mountPane($)
-    await expectRecommendedFirst(pane, ['ask-no', 'ask-yes'])
-    await pane.press({ key: 'ask-no' })
-    expect(counts(w.seen).comments).toEqual([])
-    await w.clock.advance(TICK)
-    await w.clock.advance(TICK)
-    expect(asksOf(w.store)).toEqual([])
-    expect(w.seen.opens.length).toBe(1)
-  })
-
-  test('A3b Greptile ask, Yes: exactly one @greptileai comment and the ask leaves the queue', async ($, on) => {
-    const clean = status(7, {
-      routing: { required: ['greptile', 'coderabbit'], held: null, source: 'labels' }, coderabbitReviewedHead: true, reviewedHead: false, coderabbitRounds: 1,
-      reasons: ['no Greptile check on the head commit yet (review pending)'],
-    })
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ pathway: 'both', label: 'review:deep' }) }, statuses: { 7: clean } })
-    await start($)
-    await w.clock.advance(TICK)
-    const pane = await mountPane($)
-    await pane.press({ key: 'ask-yes' })
-    const posts = counts(w.seen).comments
-    expect(posts.length).toBe(1)
-    expect(posts[0]).toEqual(['gh', 'pr', 'comment', '7', '-R', REPO, '--body', '@greptileai'])
-    expect(asksOf(w.store)).toEqual([])
-  })
-
-  for (const [name, pathway, body] of [
-    ['opening', 'coderabbit', '@coderabbitai review'],
-    ['greptile', 'both', '@greptileai'],
-  ] as const) {
-    test(`A5 two overlapping Yes presses on the ${name} ask post exactly one comment`, async ($, on) => {
-      const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
-      const clean = status(7, {
-        routing: { required: ['greptile', 'coderabbit'], held: null, source: 'labels' }, coderabbitReviewedHead: true, reviewedHead: false, coderabbitRounds: 1,
-        reasons: ['no Greptile check on the head commit yet (review pending)'],
-      })
-      let release: () => void = () => undefined
-      const gate = new Promise<void>(resolve => (release = resolve))
-      const w = world(on, {
-        store: { ...watchDoc(), 'checkpoint:pr:7': record(pathway === 'both' ? { pathway: 'both', label: 'review:deep' } : {}) },
-        statuses: { 7: pathway === 'both' ? clean : quiet },
-        gate,
-      })
-      await start($)
-      await w.clock.advance(TICK)
-      const pane = await mountPane($)
-      const first = pane.press({ key: 'ask-yes' })
-      const second = pane.press({ key: 'ask-yes' })
-      await settle()
-      release()
-      await Promise.all([first, second])
-      await settle()
-      const posts = counts(w.seen).comments
-      expect(posts.length).toBe(1)
-      expect(posts[0]).toEqual(['gh', 'pr', 'comment', '7', '-R', REPO, '--body', body])
-      expect(asksOf(w.store)).toEqual([])
-    })
-  }
-
-  test('A5b a failed post frees the press: the ask stays queued and a second Yes posts', async ($, on) => {
-    const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
-    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet }, comments: [{ exitCode: 1, stderr: 'HTTP 502' }, OK] })
-    await start($)
-    await w.clock.advance(TICK)
-    const pane = await mountPane($)
-    await pane.press({ key: 'ask-yes' })
-    expect(counts(w.seen).comments.length).toBe(1)
-    expect(asksOf(w.store).length).toBe(1)
-    await pane.press({ key: 'ask-yes' })
-    expect(counts(w.seen).comments.length).toBe(2)
-    expect(asksOf(w.store)).toEqual([])
-  })
-
   test('A3c (guard) a coderabbit-pathway PR is never asked for Greptile', async ($, on) => {
     const clean = status(7, {
       routing: { required: ['greptile', 'coderabbit'], held: null, source: 'labels' }, coderabbitReviewedHead: true, reviewedHead: false, coderabbitRounds: 1,
@@ -1991,24 +1912,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(only.seen.opens).toEqual([])
   })
 
-  test('A4 an ask with isPlaced false gives a toast with the reason and "type /<command>"; the command then draws the ask', async ($, on) => {
-    const w = world(on, {
-      store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) },
-      open: { isPlaced: false, reason: 'the terminal is 100 columns wide; a pane waits below 144' },
-    })
-    await start($)
-    await w.clock.advance(TICK)
-    expect(asksOf(w.store).length).toBe(1)
-    expect(w.seen.toasts.some(text => text.includes(`type /${COMMAND}`) && text.includes('#7'))).toBe(true)
-    expect(w.seen.toasts.some(text => text.includes('100 columns wide'))).toBe(true)
-    const before = w.seen.opens.length
-    await slash($, '')
-    expect(w.seen.opens.length).toBe(before + 1)
-    const pane = await mountPane($)
-    expect(await keys(pane)).toEqual(['ask-no', 'ask-yes'])
-  })
-
-  // T3: the round grants (the pane Yes, `/pathway grant`) put the PR back in the free-slot queue; the queue posts, so the notice says not to.
+  // T3: the round grants (the dialog Yes, `/pathway grant`) put the PR back in the free-slot queue; the queue posts, so the notice says not to.
   describe('the free-slot queue after a round grant (T3, F12)', () => {
     const slotRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
     const ADD_R4 = ['add', '--pr', '7', '--band', 'HIGH', '--head', HEAD, '--round', '4', '--escalated', '--session', SESSION, '--json']
@@ -2017,12 +1921,10 @@ describe('pr-checkpoint: asks from the watcher', () => {
     const OLD_NOTICE = 'after the fix push, post one @coderabbitai review.'
     const banded = (over: Rec = {}) => ({ ...watchDoc(), 'checkpoint:pr:7': record({ band: 'HIGH', ...over }) })
 
-    test('T3 the pane Yes on a round ask runs add --round 4 --escalated on the record head, and the notice says the queue posts', async ($, on) => {
-      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+    test('T3 the Yes on a round ask runs add --round 4 --escalated on the record head, and the notice says the queue posts', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, answer: /^Yes/ })
       await start($)
       await w.clock.advance(TICK)
-      const pane = await mountPane($)
-      await pane.press({ key: 'ask-yes' })
       expect(slotRuns(w.seen)).toEqual([ADD_R4])
       expect(told(w)).toContain(QUEUE_NOTICE)
       expect(told(w)).not.toContain(OLD_NOTICE)
@@ -2098,20 +2000,20 @@ describe('pr-checkpoint: asks from the watcher', () => {
 // How it can fail, and the test that catches it:
 // AU1  an eligible checkpoint (engine `auto.eligible`, recommended none) waits for a press, or records differently from a press (same record, apply, label)
 // AU1b the visible line to Dave (toast) does not name the band, or the model is told "Dave chose" instead of "auto-confirmed"
-// AU2  a refused record still applies, or leaves the pane closed (the fallback is the pane ask)
+// AU2  a refused record still applies, or raises no question (the fallback is the question)
 // AU3  a refused apply leaves no way to retry
 // AU4  an engine result with no `auto` block (an old engine), or eligible false, auto-confirms
 // AU5  eligible true with a recommendation other than none auto-confirms
 // AU6  a head that moved between the first read and the record still records
 // AU7  a headless session records
-// AU8  a throw while recording (store.set) loses the checkpoint instead of falling back to the pane
+// AU8  a throw while recording (store.set) loses the checkpoint instead of falling back to the question
 // AU9  an unreadable PR state at the second read records
 // AU10 a stale pending checkpoint of the same PR survives an auto-confirm
 // M1   /pathway from a non-composer origin (the bridge, i.e. mobile remote control) shows a plan read in the session root, where no stamp lives
 // M1c  a headless /pathway does not say the session is headless (Dave 2026-11-02, C)
 // M2   a bare composer /pathway with a pending checkpoint does not draw it again, or runs the engine
-// M2b  a bare bridge /pathway opens a pane on a phone, or does not name the PR, its plan and the command to type (Dave 2026-11-02, B)
-// M2c  a bare bridge /pathway with no pending checkpoint opens a pane or runs the engine
+// M2b  a bare bridge /pathway raises no dialog on the phone, or runs the engine or gh
+// M2c  a bare bridge /pathway with no pending checkpoint raises a dialog or runs the engine
 // M3   a bridge /pathway <pending pr> <word> does not record, records outside the PR worktree, or not as dave (Dave 2026-11-02, A)
 // M3b  a bridge accept for the pending PR is not --by default
 // M4   a bridge /pathway for a PR that is not this session's pending checkpoint records
@@ -2171,32 +2073,27 @@ describe('pr-checkpoint: auto-confirm', () => {
     expect(seen.run.find(r => r.argv.includes('--apply'))?.cwd).toBe(WT)
   })
 
-  test('AU2 a refused record opens the pane (the ask), applies nothing, and the tool says why', async ($, on) => {
+  test('AU2 a refused record raises the question, applies nothing, and the tool says why', async ($, on) => {
     const { seen, store } = world(on, { json: autoJson(), confirm: { exitCode: 1, stderr: 'pr-checkpoint: refused: --by auto is not allowed here: x' } })
     await start($)
     const told = await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(seen).apply).toBe(0)
-    expect(seen.opens.length).toBe(1)
+    expect(seen.dialogs.length).toBe(1)
     expect(store.get('checkpoint:pr:7')).toBeUndefined()
     expect(store.get(PENDING)).toBeDefined()
-    expect(told.text).toMatch(/side pane/i)
     expect(told.text).toMatch(/auto-confirm/i)
-    expect(told.text).toMatch(/wait for dave/i)
-    const pane = await mountPane($)
-    expect(await keys(pane)).toEqual(['opt-none', 'opt-coderabbit', 'dismiss'])
+    expect(told.text).toMatch(/waits for Dave/)
+    expect(seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'CodeRabbit review', 'Keep as draft'])
   })
 
-  test('AU3 a refused apply opens the pane with the error and a Retry button; the record stays confirmed', async ($, on) => {
+  test('AU3 a refused apply raises the question with the error in the tool text; the record stays confirmed', async ($, on) => {
     const { seen, store } = world(on, { json: autoJson(), apply: { exitCode: 1, stderr: 'pr-checkpoint: refused: PR #7 is not a draft' } })
     await start($)
     const told = await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(seen).apply).toBe(1)
-    expect(seen.opens.length).toBe(1)
+    expect(seen.dialogs.length).toBe(1)
     expect((store.get('checkpoint:pr:7') as Rec).state).toBe('confirmed')
-    expect(told.text).toMatch(/side pane/i)
-    const pane = await mountPane($)
-    expect(await keys(pane)).toContain('retry-apply')
-    expect(await paneText(pane)).toContain('not a draft')
+    expect(told.text).toContain('not a draft')
   })
 
   const NOT_AUTO: [string, Reply][] = [
@@ -2211,8 +2108,7 @@ describe('pr-checkpoint: auto-confirm', () => {
       await start($)
       const told = await callTool($, { pr: 7, body: 'pr-body.md' })
       expect(counts(seen).confirm + counts(seen).apply).toBe(0)
-      expect(seen.opens.length).toBe(1)
-      expect(told.text).toMatch(/wait for dave/i)
+      expect(seen.dialogs.length).toBe(1)
     })
   }
 
@@ -2221,7 +2117,7 @@ describe('pr-checkpoint: auto-confirm', () => {
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(seen).confirm).toBe(0)
-    expect(seen.opens.length).toBe(1)
+    expect(seen.dialogs.length).toBe(1)
   })
 
   test('AU6 a head that moved between the first read and the record waits for the press', async ($, on) => {
@@ -2229,7 +2125,7 @@ describe('pr-checkpoint: auto-confirm', () => {
     await start($)
     const told = await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(seen).confirm).toBe(0)
-    expect(seen.opens.length).toBe(1)
+    expect(seen.dialogs.length).toBe(1)
     expect(store.get('checkpoint:pr:7')).toBeUndefined()
     expect(told.text).toMatch(/moved/i)
   })
@@ -2246,7 +2142,7 @@ describe('pr-checkpoint: auto-confirm', () => {
       await start($)
       await callTool($, { pr: 7, body: 'pr-body.md' })
       expect(counts(seen).confirm).toBe(0)
-      expect(seen.opens.length).toBe(1)
+      expect(seen.dialogs.length).toBe(1)
     })
   }
 
@@ -2259,13 +2155,12 @@ describe('pr-checkpoint: auto-confirm', () => {
     expect([...store.keys()].filter(key => key.startsWith('checkpoint:'))).toEqual([])
   })
 
-  test('AU8 a throw while recording falls back to the pane and leaves no record behind', async ($, on) => {
+  test('AU8 a throw while recording falls back to the question and leaves no record behind', async ($, on) => {
     const w = world(on, { json: autoJson() })
     await start($)
     w.fail.set = true
     const told = await callTool($, { pr: 7, body: 'pr-body.md' })
-    expect(w.seen.opens.length).toBe(1)
-    expect(told.text).toMatch(/side pane/i)
+    expect(w.seen.dialogs.length).toBe(1)
     expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
     expect(w.store.get(PENDING)).toBeDefined()
   })
@@ -2297,16 +2192,17 @@ describe('pr-checkpoint: /pathway from a surface that is not the composer (mobil
     expect(ran.text ?? '').toMatch(/composer/)
   })
 
-  test('M1b with a pending checkpoint the plan runs in its checkout without a gh call', async ($, on) => {
+  test('M1b a bridge /pathway <pending pr> without a word asks the question again, with no gh call and no engine call', async ($, on) => {
     const { seen } = world(on, wtOpts())
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
     const before = seen.run.length
+    const dialogsBefore = seen.dialogs.length
     await slash($, '7', 'bridge')
     const after = seen.run.slice(before)
-    const plan = after.find(r => r.argv.some(a => a.includes('pr-checkpoint.mjs')) && !r.argv.includes('--json'))!
-    expect(plan.cwd).toBe(WT)
+    expect(seen.dialogs.length).toBe(dialogsBefore + 1)
     expect(after.filter(r => r.argv[0] === 'gh')).toEqual([])
+    expect(after.filter(r => r.argv.some(a => a.includes('pr-checkpoint.mjs')))).toEqual([])
   })
 
   test('M1c a headless /pathway makes no gh call to find the worktree (K4b)', async ($, on) => {
@@ -2320,37 +2216,33 @@ describe('pr-checkpoint: /pathway from a surface that is not the composer (mobil
     expect(counts(seen).confirm + counts(seen).apply).toBe(0)
   })
 
-  test('M2 a bare composer /pathway with a pending checkpoint draws it again and runs no engine call', async ($, on) => {
+  test('M2 a bare composer /pathway with a pending checkpoint asks again and runs no engine call', async ($, on) => {
     const { seen } = world(on)
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
     const engineBefore = engineCalls(seen).length
-    const opensBefore = seen.opens.length
+    const dialogsBefore = seen.dialogs.length
     const ran = await slash($, '')
-    expect(ran.text ?? '').toMatch(/side pane/i)
-    expect(seen.opens.length).toBe(opensBefore + 1)
+    expect(ran.text ?? '').toMatch(/closed the question/i)
+    expect(seen.dialogs.length).toBe(dialogsBefore + 1)
+    expect(seen.opens).toEqual([])
     expect(engineCalls(seen).length).toBe(engineBefore)
   })
 
-  test('M2b a bare bridge /pathway opens no pane: it names the pending PR, its plan read in the PR worktree, and the command to type', async ($, on) => {
+  test('M2b a bare bridge /pathway asks the pending PR in a dialog (no pane, no engine call, no gh call)', async ($, on) => {
     const { seen, store } = world(on, wtOpts())
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
-    const opensBefore = seen.opens.length
+    const dialogsBefore = seen.dialogs.length
     const before = seen.run.length
     const ran = await slash($, '', 'bridge')
-    const text = ran.text ?? ''
-    expect(seen.opens.length).toBe(opensBefore)
-    expect(text).toContain('#7')
-    expect(text).toContain('PR checkpoint for')
-    expect(text).toContain('/pathway 7 coderabbit')
-    expect(text).toContain('/pathway 7 none')
-    expect(text).not.toMatch(/side pane/i)
+    expect(seen.dialogs.length).toBe(dialogsBefore + 1)
+    expect(seen.dialogs.at(-1)!.question).toContain('#7')
+    expect(seen.opens).toEqual([])
+    expect(ran.text ?? '').toMatch(/closed the question/i)
     const after = seen.run.slice(before)
-    const plan = after.find(r => r.argv.some(a => a.includes('pr-checkpoint.mjs')))!
-    expect(plan.argv).not.toContain('--json')
-    expect(plan.cwd).toBe(WT)
     expect(after.filter(r => r.argv[0] === 'gh')).toEqual([])
+    expect(after.filter(r => r.argv.some(a => a.includes('pr-checkpoint.mjs')))).toEqual([])
     expect(counts(seen).confirm + counts(seen).apply).toBe(0)
     expect(store.get('checkpoint:pr:7')).toBeUndefined()
   })
@@ -2510,9 +2402,9 @@ describe('pr-checkpoint: the apply puts the PR in the free-slot queue (T1)', () 
   })
 
   test('T1 an engine apply that refuses runs no add', async ($, on) => {
-    const { seen } = world(on, { ...withBand('HIGH'), apply: { exitCode: 1, stderr: 'the head moved' } })
-    const { pane } = await openPane($)
-    await pane.press({ key: 'opt-coderabbit' })
+    const { seen } = world(on, { ...withBand('HIGH'), apply: { exitCode: 1, stderr: 'the head moved' }, answers: [/Recommended/, /^Leave as draft/] })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(slotRuns(seen)).toEqual([])
   })
 
@@ -2522,5 +2414,556 @@ describe('pr-checkpoint: the apply puts the PR in the free-slot queue (T1)', () 
     await pane.press({ key: 'opt-coderabbit' })
     expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
     expect(seen.toasts.filter(text => text.includes('slot-queue: bad state file')).length).toBe(1)
+  })
+})
+
+// ---- the checkpoint asks Dave in the session (design 2026-11-03, spike S2: $.ui.ask only) ----------------------------------------------
+// The mod raises the dialog itself ($.ui.ask) and waits for the answer inside the tool call. Only an exact match of one of its own
+// labels records. How it can fail, and the test that catches it:
+// T1  the recommended label does not record, or records --by dave          T2  another label records --by default
+// T3  Esc records                  T4  words typed under Other record      T5  an empty answer records
+// T6  a model AskUserQuestion with the same labels and its own answers records
+// T7  a head that moved during the wait records                            T8  a headless run or a subagent raises a dialog
+// T9  two calls raise two dialogs  T10 the pane survives (an open, or a model-facing word "pane")
+// T14 a refused --apply has no Retry dialog                                T15 a bare bridge /pathway does not ask
+// T18 a plan with no recommendation raises an invalid dialog               P1  a ccv3-mods hook answers AskUserQuestion
+// T11 to T13 and T19 (the tick asks) sit in 'asks from the watcher' below.
+describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
+  const REC = /\(Recommended\)$/
+  const call = ($: Engine, extra: Rec = {}) => callTool($, { pr: 7, body: 'pr-body.md', ...extra })
+
+  test('T1 the recommended label records --by default, with its cost in the label; the tool text names the pathway', async ($, on) => {
+    const w = world(on, { answer: REC })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    const [dialog] = w.seen.dialogs
+    expect(dialog!.labels[0]).toMatch(/^CodeRabbit review \(up to \$1\.75\)/)
+    expect(dialog!.labels[0]).toMatch(REC)
+    expect(dialog!.labels.filter(label => REC.test(label)).length).toBe(1)
+    expect(dialog!.labels.length).toBeGreaterThanOrEqual(2)
+    expect(dialog!.labels.length).toBeLessThanOrEqual(4)
+    expect(dialog!.header!.length).toBeLessThanOrEqual(12)
+    expect(dialog!.question).toContain('#7')
+    expect(dialog!.question).toMatch(/7 files/)
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by default /)])
+    expect(counts(w.seen).apply).toBe(1)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(told.text).toMatch(/Dave chose coderabbit for #7/)
+    expect(told.text).toMatch(/Do not merge/)
+    expect(w.store.get(PENDING)).toBeUndefined()
+  })
+
+  test('T2 another label records --by dave', async ($, on) => {
+    const w = world(on, { answer: /^No review, land on CI/ })
+    await start($)
+    const told = await call($)
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    expect((w.store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+    expect(told.text).toMatch(/Dave chose none for #7/)
+  })
+
+  test('T2b Keep as draft records nothing, clears the pending checkpoint and tells the model not to ask again', async ($, on) => {
+    const w = world(on, { answer: /^Keep as draft/ })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(w.store.get(PENDING)).toBeUndefined()
+    expect(told.text).toMatch(/kept #7 as a draft/i)
+    expect(told.text).toMatch(/Do not ask him again/i)
+  })
+
+  test('T3 Esc records nothing, keeps the pending checkpoint and leaves the PR a draft', async ($, on) => {
+    const w = world(on, { answer: 'dismiss' })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(w.store.get(PENDING)).toBeDefined()
+    expect(told.text).toMatch(/closed the question/i)
+    expect(told.text).toMatch(/Nothing recorded/i)
+  })
+
+  test('T4 words typed under Other record nothing and reach the model', async ($, on) => {
+    const w = world(on, { answer: { other: 'please wait for the weekend' } })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toContain('please wait for the weekend')
+    expect(told.text).toMatch(/Nothing recorded/i)
+    expect(w.store.get(PENDING)).toBeDefined()
+  })
+
+  test('T4b Other text that equals a label exactly is Dave\'s own choice and records, as a typed /pathway does', async ($, on) => {
+    const w = world(on, { answer: labels => ({ other: labels.find(l => /^No review, land on CI/.test(l))! }) })
+    await start($)
+    await call($)
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+  })
+
+  for (const text of ['CodeRabbit review (up to $1.75) (Recommended), No review, land on CI ($0)', 'coderabbit review (up to $1.75) (Recommended)', 'CodeRabbit review (up to $1.75)', 'CodeRabbit review (up to $1.75) (Recommended) ']) {
+    test(`T4c a comma-joined or near-miss answer records nothing: ${JSON.stringify(text)}`, async ($, on) => {
+      const w = world(on, { answer: { other: text } })
+      await start($)
+      await call($)
+      expect(counts(w.seen).confirm).toBe(0)
+    })
+  }
+
+  test('T5 an empty answer records nothing', async ($, on) => {
+    const w = world(on, { answer: 'empty' })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/No valid answer|closed the question/i)
+    expect(w.store.get(PENDING)).toBeDefined()
+  })
+
+  test('T6 a model AskUserQuestion with the checkpoint labels and its own answers records nothing', async ($, on) => {
+    const w = world(on, { answer: 'dismiss' })
+    await start($)
+    const question = 'PR #7: which review?'
+    const options = ['CodeRabbit review (up to $1.75) (Recommended)', 'No review, land on CI ($0)'].map(label => ({ label, description: label }))
+    await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question, header: 'PR #7', options, multiSelect: false }], answers: { [question]: options[0]!.label } } as never).catch(() => undefined)
+    await settle()
+    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(w.seen.run.filter(r => r.argv[0] === 'gh' && r.argv[2] === 'ready').length).toBe(0)
+  })
+
+  test('T7 a head that moved while Dave answered records nothing', async ($, on) => {
+    const opts: Opts = { answer: REC }
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.viewHead = OTHER_HEAD
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/changed while Dave answered/i)
+    expect(told.text).toMatch(/head moved/i)
+  })
+
+  test('T7b a PR that left draft while Dave answered records nothing', async ($, on) => {
+    const opts: Opts = {}
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.isDraft = false
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/no longer a draft/i)
+  })
+
+  test('T8 a headless session raises no dialog and gets the text plan', async ($, on) => {
+    const w = world(on, { answer: REC })
+    await start($, false)
+    const told = await call($)
+    expect(w.seen.dialogs).toEqual([])
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/Nothing was recorded/)
+  })
+
+  test('T8b a subagent call raises no dialog, records nothing and gets the text plan', async ($, on) => {
+    const w = world(on, { answer: REC })
+    await start($)
+    const told = await call($, { agentId: 'sub-1' })
+    expect(w.seen.dialogs).toEqual([])
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/Nothing was recorded/)
+    expect(told.text).toMatch(/subagent/i)
+    expect(w.store.get(PENDING)).toBeUndefined()
+  })
+
+  test('T9 two calls at once raise one dialog; the second says a question is open', async ($, on) => {
+    const w = world(on, { answer: 'manual' })
+    await start($)
+    const first = call($)
+    await waitFor(() => w.seen.dialogs.length > 0)
+    const second = await call($)
+    expect(second.text).toMatch(/question is open/i)
+    expect(w.seen.dialogs.length).toBe(1)
+    w.seen.dialogs[0]!.answer(/Recommended/)
+    await first
+    await settle()
+    expect(counts(w.seen).confirm).toBe(1)
+    expect(w.seen.dialogs.length).toBe(1)
+  })
+
+  test('T10 no pane opens, and no word the model reads says pane', async ($, on) => {
+    const opts: Opts = { answers: [REC, 'dismiss', 'empty', { other: 'x' }, /^Keep as draft/] }
+    const w = world(on, opts)
+    await start($)
+    const outcomes: string[] = [...w.seen.descriptions]
+    for (let i = 0; i < 5; i += 1) outcomes.push((await call($)).text)
+    opts.json = { stdout: JSON.stringify(engineJson({ recommended: null, options: [], why: ['Run pre-pr.mjs: no stamp for this head.'] })) }
+    outcomes.push((await call($)).text)
+    const target = ['C:/r/.claude/cache/pre-pr', 'pathway.json'].join('/')
+    outcomes.push(JSON.stringify(await $.tool.call({ tool: 'Write', file_path: target, content: '{}' } as never)))
+    expect(w.seen.opens).toEqual([])
+    for (const text of outcomes) expect(text).not.toMatch(/\bpane\b/i)
+    expect(outcomes.length).toBeGreaterThan(8)
+    expect(w.seen.descriptions.length).toBeGreaterThanOrEqual(2)
+  })
+
+  test('T14 a refused --apply raises a Retry dialog; Retry runs --apply again', async ($, on) => {
+    const w = world(on, { answers: [REC, /^Retry/], applySeq: [{ exitCode: 1, stderr: 'pr-checkpoint: refused: The head of PR #7 moved.\n' }] })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs[1]!.question).toMatch(/Retry/)
+    expect(w.seen.dialogs[1]!.question).toContain('The head of PR #7 moved.')
+    expect(counts(w.seen).confirm).toBe(1)
+    expect(counts(w.seen).apply).toBe(2)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(told.text).toMatch(/Dave chose/)
+  })
+
+  test('T14b Leave as draft after a refused --apply keeps the record confirmed and runs --apply once', async ($, on) => {
+    const w = world(on, { answers: [REC, /^Leave as draft/], apply: { exitCode: 1, stderr: 'pr-checkpoint: refused: nope.\n' } })
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).apply).toBe(1)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('confirmed')
+    expect(told.text).toMatch(/confirmed, but --apply was refused/)
+  })
+
+  test('T15 a bare bridge /pathway with a pending checkpoint raises the dialog, and Dave\'s answer on the phone records', async ($, on) => {
+    const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    const w = world(on, { store: { [PENDING]: pending }, answer: REC })
+    await start($)
+    const ran = await slash($, '', 'bridge')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.seen.opens).toEqual([])
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by default /)])
+    expect(ran.text ?? '').toMatch(/coderabbit/)
+  })
+
+  test('T15b a bare /pathway whose dialog is closed records nothing and keeps the pending checkpoint', async ($, on) => {
+    const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    const w = world(on, { store: { [PENDING]: pending }, answer: 'dismiss' })
+    await start($)
+    await slash($, '')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(w.store.get(PENDING)).toBeDefined()
+  })
+
+  for (const [name, json] of [
+    ['no recommendation', engineJson({ recommended: null, options: [], why: ['Run pre-pr.mjs: no stamp for this head.'], budget: [0, 0] })],
+    ['a recommendation and no open option', engineJson({ options: [option('coderabbit', { available: false, reason: 'held' })] })],
+  ] as const) {
+    test(`T18 ${name}: no dialog, the tool text holds the engine reason, the PR stays a draft`, async ($, on) => {
+      const w = world(on, { json: { stdout: JSON.stringify(json) }, answer: REC })
+      await start($)
+      const told = await call($)
+      expect(w.seen.dialogs).toEqual([])
+      expect(counts(w.seen).confirm).toBe(0)
+      expect(told.text).toMatch(name === 'no recommendation' ? /Run pre-pr\.mjs/ : /held|no option|Nothing recorded/i)
+      expect(told.text).toMatch(/stays a draft/i)
+    })
+  }
+
+  test('T20 an engine option list of four open pathways plus wait still gives at most four labels, one Keep as draft', async ($, on) => {
+    const four = engineJson({ recommended: 'both', options: [option('wait'), option('none'), option('coderabbit'), option('both')] })
+    const w = world(on, { json: { stdout: JSON.stringify(four) }, answer: 'dismiss' })
+    await start($)
+    await call($)
+    const labels = w.seen.dialogs[0]!.labels
+    expect(labels.length).toBeLessThanOrEqual(4)
+    expect(labels.filter(l => /^Keep as draft/.test(l)).length).toBe(1)
+    expect(labels[0]).toMatch(/^CodeRabbit \+ Greptile .*\(Recommended\)$/)
+  })
+
+  test('P1 no ccv3-mods hook answers a model AskUserQuestion: the call reaches the engine bottom unchanged', async ($, on) => {
+    const w = world(on, { answer: 'dismiss' })
+    await start($)
+    const question = 'Spike?'
+    const raw = await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question, header: 'x', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] } as never).catch(() => 'rejected')
+    expect(w.seen.asks).toEqual([question])
+    expect(JSON.stringify(raw)).toMatch(/dismissed|rejected/)
+  })
+})
+
+// T11 a tick ask is answered after the queue changed: the answer lands on the wrong ask
+// T12 a closed tick ask nags: none at the next tick, one after 30 minutes, none after the second close
+// T13 a round Yes does not store the grant, or a No does not store the decline
+// T19 two watching sessions both ask, or none does (one lease per PR)
+describe('pr-checkpoint: the watcher raises its asks as dialogs', () => {
+  const watchDoc = (extra: Rec = {}) => ({ [WATCH]: { prs: [{ pr: 7, state: null, whenReady: false, ...extra }], backoffUntil: 0, touched: NOW } })
+  const record = (over: Rec = {}) => ({
+    pr: 7, state: 'applied', head: HEAD, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], decided_by: 'default',
+    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 26 * MIN, ...over,
+  })
+  const REVIEWED = (rounds: number) => status(7, {
+    reasons: ['1 review thread(s) unresolved'], unresolved: 1, coderabbitReviewedHead: true, routedReviewed: true, coderabbitRounds: rounds, coderabbitRequests: Math.max(0, rounds - 1),
+  })
+  const asksOf = (store: Map<string, unknown>) => (store.get(ASKS) ?? []) as Rec[]
+  const LEASE = 'checkpoint:asking:7'
+  const setup = (opts: Opts = {}) => ({ statuses: { 7: REVIEWED(3) }, ...opts, store: { ...watchDoc(), 'checkpoint:pr:7': record(), ...(opts.store ?? {}) } })
+
+  test('A1 the round ask is one dialog: No is first and marked Recommended, the cost is in each label, the text names the round and the 7d count', async ($, on) => {
+    const w = world(on, setup({ answer: 'dismiss' }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    const [dialog] = w.seen.dialogs
+    expect(dialog!.question).toContain('Round 4 of 1+2 for #7')
+    expect(dialog!.question).toMatch(/7d.*38/)
+    expect(dialog!.labels.length).toBe(2)
+    expect(dialog!.labels[0]).toMatch(/^No, stay in budget .*\(Recommended\)$/)
+    expect(dialog!.labels[1]).toMatch(/^Yes, one more review .*\$/)
+    expect(dialog!.labels.every(label => /\$/.test(label))).toBe(true)
+    expect(w.seen.opens).toEqual([])
+    expect(counts(w.seen).comments).toEqual([])
+  })
+
+  test('T13 round Yes stores the grant for round 4 on this head, tells the model, and posts nothing', async ($, on) => {
+    const w = world(on, setup({ answer: /^Yes/ }))
+    await start($)
+    await w.clock.advance(TICK)
+    const grant = w.store.get('checkpoint:grant:7') as Rec
+    expect(grant.round).toBe(4)
+    expect(grant.head).toBe(HEAD)
+    expect(asksOf(w.store)).toEqual([])
+    expect(counts(w.seen).comments).toEqual([])
+    expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave allowed round 4 for #7')
+  })
+
+  test('T13 round No stores the decline on the record, no grant, and the model is told', async ($, on) => {
+    const w = world(on, setup({ answer: /^No/ }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    const declined = (w.store.get('checkpoint:pr:7') as Rec).declined as Rec
+    expect(declined.kind).toBe('round')
+    expect(declined.round).toBe(4)
+    expect(asksOf(w.store)).toEqual([])
+    expect(JSON.stringify(w.session.appended().map(row => row.message))).toContain('Dave declined round 4 for #7')
+  })
+
+  test('T13 an answer that is not one of the two labels stores nothing and keeps the ask queued', async ($, on) => {
+    const w = world(on, setup({ answer: { other: 'yes please' } }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    expect((w.store.get('checkpoint:pr:7') as Rec).declined).toBeUndefined()
+    expect(asksOf(w.store).length).toBe(1)
+  })
+
+  test('T11 the ask left the queue while the dialog was open: the answer is dropped, nothing is stored, Dave gets a toast', async ($, on) => {
+    const opts = setup()
+    const w = world(on, opts)
+    opts.answer = () => {
+      w.store.delete(ASKS)
+      return /^Yes/
+    }
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    expect((w.store.get('checkpoint:pr:7') as Rec).declined).toBeUndefined()
+    expect(w.seen.toasts.some(text => /#7 changed; nothing posted/.test(text))).toBe(true)
+  })
+
+  test('T11b an opening Yes whose ask moved to another head while the dialog was open posts nothing', async ($, on) => {
+    const opts = setup({ store: { 'checkpoint:pr:7': record({ appliedAt: NOW - 40 * MIN }) }, statuses: { 7: status(7, { coderabbitRounds: 0, coderabbitRequests: 0 }) } })
+    const w = world(on, opts)
+    opts.answer = () => {
+      w.store.set(ASKS, [{ ...asksOf(w.store)[0]!, head: OTHER_HEAD }])
+      return /^Yes/
+    }
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).comments).toEqual([])
+  })
+
+  test('T12 a closed ask is quiet at the next tick, comes back once after 30 minutes, and not after the second close', async ($, on) => {
+    const w = world(on, setup({ answer: 'dismiss' }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    for (let i = 0; i < 5; i += 1) await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(2)
+    for (let i = 0; i < 12; i += 1) await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(2)
+    const left = asksOf(w.store)
+    expect(left.length).toBe(1)
+    expect(left[0]!.dismissed).toBe(2)
+  })
+
+  test('T12b a bare /pathway raises a closed ask again, deferred or not', async ($, on) => {
+    const w = world(on, setup({ answers: ['dismiss', /^Yes/] }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    const ran = await slash($, '')
+    expect(w.seen.dialogs.length).toBe(2)
+    expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
+    expect(ran.text ?? '').toMatch(/round 4/i)
+  })
+
+  test('T19 a live lease of another session keeps this one quiet; when it lapses this session asks and holds the lease', async ($, on) => {
+    const w = world(on, setup({ answer: 'dismiss', store: { [LEASE]: { session: 'other-session', until: NOW + 12 * MIN } } }))
+    await start($)
+    await w.clock.advance(TICK)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(0)
+    expect(asksOf(w.store).length).toBe(1)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect((w.store.get(LEASE) as Rec).session).toBe(SESSION)
+  })
+
+  test('T19b the holder keeps the lease while its ask is queued and drops it when the answer is stored', async ($, on) => {
+    const w = world(on, setup({ answer: /^Yes/ }))
+    await start($)
+    await w.clock.advance(TICK)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.store.get(LEASE)).toBeUndefined()
+  })
+})
+
+// ---- "No review, land on CI" at every band (Dave 2026-11-04) -----------------------------------------------------------------------------
+// N-M1  the option is missing, first or marked Recommended for HIGH or CRITICAL
+// N-M2  picking it does not record none --by dave, or adds a bot label or a queue entry
+// N-M3  a typed /pathway 7 none is refused for HIGH            N-M4  a near miss of the label records
+// N-M5  a HIGH checkpoint that the engine calls auto-eligible records anything but Dave's pick
+describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
+  const NO_REVIEW = 'No review, land on CI ($0)'
+  const highJson = (band: 'HIGH' | 'CRITICAL', over: Rec = {}) => ({
+    stdout: JSON.stringify(
+      engineJson({
+        recommended: 'coderabbit',
+        options: [option('coderabbit'), option('both'), option('none')],
+        band: { band },
+        auto: { eligible: false, band, reason: `Band ${band}: Dave presses.` },
+        ...over,
+      }),
+    ),
+  })
+  const queueRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
+
+  for (const band of ['HIGH', 'CRITICAL'] as const) {
+    test(`N-M1 ${band}: the last label is the no-review one; the recommendation stays first; none is never first or Recommended`, async ($, on) => {
+      world(on, { json: highJson(band) })
+      const { dialog, pane } = await openPane($)
+      expect(dialog!.labels.at(-1)).toBe(NO_REVIEW)
+      expect(dialog!.labels[0]).toMatch(/^CodeRabbit review .*\(Recommended\)$/)
+      expect(dialog!.labels.filter(label => label.includes('(Recommended)')).length).toBe(1)
+      expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'CodeRabbit + Greptile', 'Keep as draft', 'No review, land on CI'])
+      await pane.press({ key: 'dismiss' })
+    })
+
+    test(`N-M2 ${band}: picking it records none --by dave, applies once, adds no bot label and no queue entry`, async ($, on) => {
+      const { seen, store } = world(on, { json: highJson(band), answer: /^No review, land on CI/ })
+      await start($)
+      const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+      const confirms = engineCalls(seen).filter(call => call.startsWith('--confirm'))
+      expect(confirms).toEqual([expect.stringMatching(/^--confirm none --by dave --body \S*pr-body\.md$/)])
+      expect(counts(seen).apply).toBe(1)
+      const record = store.get('checkpoint:pr:7') as Rec
+      expect(record.pathway).toBe('none')
+      expect(record.decided_by).toBe('dave')
+      expect(record.state).toBe('applied')
+      expect(record.label).toBe('review:none')
+      expect(queueRuns(seen)).toEqual([])
+      expect(seen.run.filter(r => r.argv[0] === 'gh' && r.argv.some(a => /review:(coderabbit|deep)/.test(a))).length).toBe(0)
+      expect(told.text).toMatch(/Dave chose none for #7/)
+      expect(store.get(PENDING)).toBeUndefined()
+    })
+  }
+
+  test('N-M3 a typed /pathway 7 none records --by dave for a HIGH PR', async ($, on) => {
+    const { seen, store } = world(on, { json: highJson('HIGH') })
+    await start($)
+    const ran = await slash($, '7 none --body pr-body.md')
+    expect(engineCalls(seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    expect(ran.text ?? '').toMatch(/none recorded/)
+    expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+  })
+
+  for (const text of ['No review, land on CI', 'no review, land on CI ($0)', `CodeRabbit review (up to $1.75) (Recommended), ${NO_REVIEW}`]) {
+    test(`N-M4 a near miss of the label, or a comma-joined pair that holds it, records nothing: ${JSON.stringify(text)}`, async ($, on) => {
+      const w = world(on, { json: highJson('HIGH'), answer: { other: text } })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      expect(counts(w.seen).confirm).toBe(0)
+    })
+  }
+
+  test('N-M5 an engine that calls a HIGH checkpoint auto-eligible while it recommends coderabbit still waits for Dave: no --by auto', async ($, on) => {
+    const lying = highJson('HIGH', { auto: { eligible: true, band: 'HIGH', reason: 'x' } })
+    const w = world(on, { json: lying, answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(engineCalls(w.seen).some(call => call.includes('--by auto'))).toBe(false)
+    expect(counts(w.seen).confirm).toBe(0)
+  })
+
+  // N-M6  a typed none from the bridge at HIGH or CRITICAL records with no dialog      N-M7  the dialog gate also holds a LOW PR back (it must not)
+  // N-M8  a held recommendation at HIGH marks a label Recommended, or puts none first
+  for (const band of ['HIGH', 'CRITICAL'] as const) {
+    test(`N-M6 ${band}: a bridge /pathway 7 none raises the dialog and records nothing until the exact label`, async ($, on) => {
+      const w = world(on, { json: highJson(band), answers: ['dismiss', 'dismiss'] })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      const ran = await slash($, '7 none', 'bridge')
+      expect(w.seen.dialogs.length).toBe(2)
+      expect(w.seen.dialogs[1]!.labels.at(-1)).toBe(NO_REVIEW)
+      expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+      expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+      expect(w.store.get(PENDING)).toBeDefined()
+      expect(ran.text ?? '').not.toMatch(/none recorded/)
+    })
+
+    test(`N-M6b ${band}: the exact label in that bridge dialog records none --by dave`, async ($, on) => {
+      const w = world(on, { json: highJson(band), answers: ['dismiss', /^No review, land on CI/] })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      await slash($, '7 none', 'bridge')
+      expect(w.seen.dialogs.length).toBe(2)
+      expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+      expect((w.store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+    })
+  }
+
+  test('N-M6c a composer /pathway 7 none at CRITICAL records --by dave with no second dialog', async ($, on) => {
+    const w = world(on, { json: highJson('CRITICAL'), answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+  })
+
+  test('N-M7 a bridge /pathway 7 none at LOW still records --by dave with no dialog', async ($, on) => {
+    const low = { stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], band: { band: 'LOW' }, auto: { eligible: false, band: 'LOW', reason: 'a person decides' } })) }
+    const w = world(on, { json: low, answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none', 'bridge')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+  })
+
+  test('N-M8 a held recommendation at HIGH: coderabbit, Keep as draft, then no review; nothing is Recommended; the none pick is --by dave', async ($, on) => {
+    const held = highJson('HIGH', {
+      recommended: 'both',
+      options: [option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' }), option('none')],
+    })
+    const { seen } = world(on, { json: held })
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
+    await pane.press({ key: 'opt-none' })
+    expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
   })
 })

@@ -3,7 +3,8 @@ import type { EngineInterface } from 'claude-code'
 
 import type { SlotAction, SlotRow, SlotTick } from '../../types'
 import type { Alert } from './model'
-import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotOf } from './slot-model'
+import { askDave, freeDialog, takeDialog } from '../pr-checkpoint/ask'
+import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotAskOf, slotAskSpec, slotOf } from './slot-model'
 import type { SlotVerb } from './slot-model'
 
 // The mod side of the free-slot queue. The queue is scripts/github/slot-queue.mjs; this file runs it and shows what it says.
@@ -131,6 +132,29 @@ export async function slotTick($: EngineInterface, streak: Streak): Promise<void
   streak.fails = 0
   await setRows($, tick.rows)
   deliverActions($, tick.actions)
+  await slotQuestions($, found, tick.actions).catch(() => undefined)
+}
+
+/**
+ * The 30 minute paid ask and the 60 minute time-out as dialogs (the toast stays as a second signal). The answer runs the same verb as
+ * `/slot pay|wait|drop`; the CLI still posts a paid round only on cr-paid ALLOW. Esc, text under Other or a busy dialog flag runs nothing:
+ * the toast names the typed command. A tick that finds a question open skips its dialogs; the CLI asks once, so the toast is the fallback.
+ */
+async function slotQuestions($: EngineInterface, found: Found, actions: SlotAction[]): Promise<void> {
+  const asks = actions.flatMap(action => slotAskOf(action) ?? [])
+  if (asks.length === 0 || !takeDialog()) return
+  try {
+    for (const ask of asks) {
+      const spec = slotAskSpec(ask)
+      const got = await askDave($, spec.question, spec.choices.map(one => one.label), spec.header)
+      const choice = got.kind === 'text' ? spec.choices.find(one => one.label === got.text) : undefined
+      if (!choice) continue
+      const ran = await runCli($, found, verbArgv(choice.verb, ask.pr), VERB_TIMEOUT_MS)
+      $.ui.toast(resultText(choice.verb, ask.pr, ran), { timeoutMs: TOAST_MS })
+    }
+  } finally {
+    freeDialog()
+  }
 }
 
 /** The queue row of a PR from the last tick. */

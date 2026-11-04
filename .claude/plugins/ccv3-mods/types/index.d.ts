@@ -226,7 +226,7 @@ export type CheckpointOption = {
   reason: string
 }
 
-/** What `pr-checkpoint.mjs --json` prints (the T21 key set of scripts/github/pr-checkpoint.test.mjs). Only the fields the pane reads. */
+/** What `pr-checkpoint.mjs --json` prints (the T21 key set of scripts/github/pr-checkpoint.test.mjs). Only the fields the mod reads. */
 export type CheckpointResult = {
   head: string
   class: string
@@ -263,6 +263,8 @@ export type CheckpointRecord = {
   band?: string | null
   /** Set when Dave said No to an ask. A grant or a new checkpoint clears it. */
   declined?: { kind: 'opening' | 'round' | 'greptile'; round: number; head: string }
+  /** The changed-file count of the checkpoint the record came from. It prices the "up to $X" of a later question. Absent from older records. */
+  files?: number
   /** Set when the mod posted the opening review request on Dave's Yes. */
   opened?: { head: string; at: number }
   /** Set when Dave answered the Greptile ask: no later ask for this PR. */
@@ -298,22 +300,11 @@ export type SlotTick =
   | { ok: true; effective: boolean; locked: boolean; actions: SlotAction[]; rows: SlotRow[]; nextSlotInMin: number | null }
   | { ok: false; reason: string }
 
-/** A question for Dave, drawn in the checkpoint pane. `round` is the round it asks about (the opening is round 1). */
-export type CheckpointAsk = { kind: 'opening' | 'round' | 'greptile'; pr: number; head: string; text: string; round?: number }
-
-/** The checkpoint the pane shows: the engine result of a draft PR, until Dave presses an option. `error` is the last refusal line; `retry` offers --apply again. */
-export type CheckpointView = {
-  pr: number
-  body: string
-  root: string
-  result: CheckpointResult
-  covers: string[]
-  stamp: string | null
-  prHead: string
-  running: string | null
-  error: string | null
-  retry: { pathway: string } | null
-}
+/**
+ * A question for Dave, raised as a dialog ($.ui.ask) by the watcher. `round` is the round it asks about (the opening is round 1).
+ * `dismissed` counts the times he closed it; `deferredUntil` (epoch ms) is when it may come back. After the second close only a bare /pathway raises it.
+ */
+export type CheckpointAsk = { kind: 'opening' | 'round' | 'greptile'; pr: number; head: string; text: string; round?: number; deferredUntil?: number; dismissed?: number }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -367,10 +358,6 @@ declare module 'claude-code' {
       workflows: WorkflowFeed[]
       /** The steward's counts since the last brief_set (agentic-os, steward.ts). Reset at session.start, /clear and resume. */
       steward: OsSteward
-      /** The checkpoint a draft PR waits on (hooks/pr-checkpoint); null when none is open. */
-      checkpoint: CheckpointView | null
-      /** Questions for Dave in the checkpoint pane, oldest first (written by pr-loop, answered by pr-checkpoint). Mirrors $.store checkpoint:asks:<session>. */
-      checkpointAsks: CheckpointAsk[]
       /** Lock patterns already shown in a warn toast this session. */
       lockWarned: string[]
       /** The free-slot queue rows at the last tick (hooks/pr-loop/slot.ts); mirrors what the tick printed, so the band and /watch can show the queue. */

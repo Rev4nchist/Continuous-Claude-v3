@@ -8,14 +8,14 @@ import type { Cell } from './state-table'
 // T3: Dave's Yes to a review round against a decline that is kept, as a state x event table (check C5).
 //
 // The PR Checkpoint mod records a decline (the opening review, or a round) and a queue of asks. Dave answers a round ask in two
-// ways: the typed grant command (a grant of round 4 for PR 7) and a Yes in the pane. CodeRabbit found Major #84 on PR 238: with a
+// ways: the typed grant command (a grant of round 4 for PR 7) and a Yes in the dialog the mod raises. CodeRabbit found Major #84 on PR 238: with a
 // decline the grant does not cover (the opening review, or a later round), the model was still told to post a review. This table
 // pairs every decline with every queued ask and every way Dave answers, so the next pair that is missing fails a test.
 //
 // States are "<decline>/<queued ask>":
 //   decline:    none, opening (the opening review), round-3 (covered by a grant of 4), round-5 (not covered)
 //   queued ask: none, covered (a round 4 ask), uncovered (a round 5 ask)
-// Events: grant (the typed grant 7 4), grant-twice (the same grant typed again), pane-yes (Yes on the first queued ask).
+// Events: grant (the typed grant 7 4), grant-twice (the same grant typed again), dialog-yes (a bare /pathway raises the first queued ask; Dave answers Yes).
 //
 // Each cell asserts: the stored grant round, the decline left on the record, the rounds still queued, and what the model is told
 // (an allowed line; "decline of X stays" for a kept decline; "post one @coderabbitai review" only when no decline is kept).
@@ -26,7 +26,7 @@ import type { Cell } from './state-table'
 //   a grant keeps a decline it covers (round-3):                               round-3/none + grant
 //   a grant leaves a covered queued ask in the queue:                          none/covered + grant
 //   a grant removes an uncovered queued ask:                                   none/uncovered + grant
-//   the pane Yes clears a decline it does not cover (D-a):                    opening/covered + pane-yes, round-5/covered + pane-yes
+//   the dialog Yes clears a decline it does not cover (D-a):                  opening/covered + dialog-yes, round-5/covered + dialog-yes
 //   the table loses a cell or a kind:                                          T3 table is complete
 
 const SESSION = 'test-session'
@@ -83,6 +83,12 @@ const world = (on: On, store: Rec) => {
   on('ui.toast', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: true } }) as never)
   on('ui.close', () => ({ value: undefined }))
+  // The dialog the mod raises ($.ui.ask): Dave answers Yes.
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+    const q = (e as unknown as { questions: { question: string; options: ({ label: string } | string)[] }[] }).questions[0]!
+    const labels = q.options.map(one => (typeof one === 'string' ? one : one.label))
+    return { result: { questions: [], answers: { [q.question]: labels.find(label => label.startsWith('Yes'))! } } } as never
+  })
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('process.run', (_$, e) => {
     const line = [...e.argv].join(' ')
@@ -95,9 +101,6 @@ const world = (on: On, store: Rec) => {
 const start = ($: Engine) => $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
 const slash = ($: Engine, args: string) =>
   $.command.run({ command: COMMAND, args, origin: { kind: 'composer' } as never, presentation: { isFullscreen: false, columns: 100 } })
-const PANE_PROPS = { title: 'PR checkpoint', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} }
-const mountPane = ($: Engine) =>
-  $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'Pane', requestId: 'pr-checkpoint', props: PANE_PROPS, viewport: { columns: 100, rows: 40 } })
 const settle = async () => {
   for (let turn = 0; turn < 500; turn += 1) await Promise.resolve()
 }
@@ -124,9 +127,8 @@ const EVENTS: Record<string, ($: Engine, kv: Map<string, unknown>) => Promise<st
     await slash($, 'grant 7 4')
     return String((await slash($, 'grant 7 4')).text ?? '')
   },
-  'pane-yes': async $ => {
-    const pane = await mountPane($)
-    await pane.press({ key: 'ask-yes' })
+  'dialog-yes': async $ => {
+    await slash($, '')
     await settle()
     return ''
   },
@@ -159,7 +161,7 @@ const QUEUE_AFTER_GRANT: Record<string, number[]> = { none: [], covered: [], unc
 
 type Want = { declined: Rec | undefined; queued: number[]; kept: string | null }
 const grantWant = (decline: string, queue: string): Want => ({ declined: DECLINE_AFTER_GRANT[decline], queued: QUEUE_AFTER_GRANT[queue]!, kept: KEPT_WORDS[decline]! })
-// A Yes in the pane on a round 4 ask is the typed grant of 4: it clears only a round decline it covers (D-a, Dave 11-01).
+// A Yes in the dialog on a round 4 ask is the typed grant of 4: it clears only a round decline it covers (D-a, Dave 11-01).
 
 const declineIds = Object.keys(DECLINES)
 const queueIds = Object.keys(QUEUES)
@@ -173,12 +175,12 @@ for (const state of states) {
   const [decline, queue] = state.split('/') as [string, string]
   for (const event of ['grant', 'grant-twice']) cells.push({ state, event, expect: label(grantWant(decline, queue)), want: grantWant(decline, queue) })
   if (queue === 'covered') {
-    cells.push({ state, event: 'pane-yes', expect: label(grantWant(decline, queue)), want: grantWant(decline, queue) })
+    cells.push({ state, event: 'dialog-yes', expect: label(grantWant(decline, queue)), want: grantWant(decline, queue) })
   } else {
     cells.push({
       state,
-      event: 'pane-yes',
-      na: queue === 'none' ? 'no ask is queued, so the pane has no Yes button to press' : 'the queued ask is round 5: its Yes grants round 5, a different event from the typed grant of 4',
+      event: 'dialog-yes',
+      na: queue === 'none' ? 'no ask is queued, so no dialog is raised to answer' : 'the queued ask is round 5: its Yes grants round 5, a different event from the typed grant of 4',
     })
   }
 }
@@ -186,7 +188,7 @@ for (const state of states) {
 const kinds = {
   'stale-read': { na: 'the grant reads the record and the queue inside one call; a grant after the record was replaced is the #87 shape, which no cell here credits' },
   duplicate: ['grant-twice'],
-  'second-entry': ['pane-yes'],
+  'second-entry': ['dialog-yes'],
   'timer-overlap': { na: 'a grant is one typed command; the watcher tick only reads the grant afterwards' },
   'retained-flag': ['grant'],
 }
@@ -208,7 +210,7 @@ describe('T3 grant against a kept decline', () => {
       if (want.kept) {
         expect(got.rows, `${where}: the model hears the kept decline`).toContain(`decline of ${want.kept} stays`)
         expect(got.rows, `${where}: the model is not told to post a review`).not.toContain('post one @coderabbitai review')
-        if (cell.event !== 'pane-yes') expect(got.text, `${where}: Dave's reply names the kept decline`).toContain(`decline of ${want.kept} stays`)
+        if (cell.event !== 'dialog-yes') expect(got.text, `${where}: Dave's reply names the kept decline`).toContain(`decline of ${want.kept} stays`)
       } else {
         expect(got.rows, `${where}: the model is told to post one review`).toContain('post one @coderabbitai review')
         expect(got.rows, `${where}: no kept decline is named`).not.toContain('stays')

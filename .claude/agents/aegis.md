@@ -114,13 +114,15 @@ For agent, tool, MCP and prompt-injection code, also read the attack classes in 
 When the code under review is in this repo and a small script can show the result, write a probe:
 `.claude/cache/security/<run-id>/probes/<n>.mjs`, where `<n>` is a number. With no run id in the prompt, use today's date plus `-adhoc`.
 The probe imports the real function at the trace sink, feeds it dummy input, and prints the observed result.
-It uses no network, installs nothing and writes no files.
+It uses no network, installs nothing and writes no files itself. Sink calls are recorded, not run.
 Run it from the repo root in Bash with this exact form. The shell redirect, not the probe, saves the output:
 
 ```bash
-timeout 15 env -i PATH="$PATH" SYSTEMROOT="$SYSTEMROOT" node --permission --allow-fs-read="$PWD" .claude/cache/security/<run-id>/probes/<n>.mjs > .claude/cache/security/<run-id>/probes/<n>.out.txt 2>&1
+timeout 15 env -i PATH="$PATH" SYSTEMROOT="$SYSTEMROOT" node --permission --allow-fs-read="$PWD" --allow-fs-read="${SINK_SPY:-$HOME/.claude/scripts/security/sink-spy.mjs}" --require "${SINK_SPY:-$HOME/.claude/scripts/security/sink-spy.mjs}" .claude/cache/security/<run-id>/probes/<n>.mjs > .claude/cache/security/<run-id>/probes/<n>.out.txt 2>&1
 ```
 
+The spy preload replaces the `child_process` and `fs` write functions with recorders. For a command-injection or file-write sink, the probe calls the function whose body holds the sink line, with the attacker payload.
+The spy prints `SINK_SPY_READY` at load. It prints one `SINK_SPY` line per call, with the arguments. Nothing runs and nothing is written.
 This strips the environment (no API keys), blocks child processes and gives the probe read-only file access. It does not block the network, so the probe itself must not use it.
 No probe is allowed for deployed services, real accounts, or code from outside this repo.
 
