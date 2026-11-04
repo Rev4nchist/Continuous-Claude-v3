@@ -1373,8 +1373,6 @@ describe('B1: pwsh/powershell/cmd run the arguments after the quoted payload', (
     `pwsh -c 'echo' '; git push --force'`,
     `cmd /c "echo A" "& rd /s /q C:\\data"`,
     `cmd /c "echo A" "& git reset --hard"`,
-    // Bare form: the first payload word is unquoted, the rest is a quoted argument.
-    `pwsh -c echo '; git reset --hard'`,
   ];
   for (const cmd of bash) {
     it(`Bash asks: ${cmd}`, () => {

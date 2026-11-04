@@ -23,6 +23,7 @@ function outputDeny(reason, decision = "deny") {
 // src/shared/destructive-classifier.ts
 var abbrev = (word2, min) => word2.slice(0, min) + [...word2.slice(min)].reduceRight((rest, c) => `(?:${c}${rest})?`, "");
 var gitFlag = (sub, flags) => new RegExp(String.raw`\bgit\s+${sub}\b[^;&|\n]*\s(?:${flags})`, "i");
+var CHECKOUT_SWITCH_OPTIONS = String.raw`(?:track|no-track|detach|orphan|recurse-submodules|no-recurse-submodules|overwrite-ignore|ignore-other-worktrees|guess|no-guess|patch)`;
 var DESTRUCTIVE_PATTERNS = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
   // The flag may sit ANYWHERE after rm (`rm -f -r x`, `rm build -rf`, F04). It must be a SHORT
@@ -71,10 +72,10 @@ var DESTRUCTIVE_PATTERNS = [
   // `--f` and longer (R4): --force is the only clean option that starts with f.
   { name: "git clean -f", re: gitFlag("clean", String.raw`--${abbrev("force", 1)}\b|-[a-zA-Z]*f`) },
   // Anywhere after checkout (`git checkout main -- src`, F05): a bare `--`; a path that starts with `.`
-  // (`.`, `./src`, `../x`: a ref name cannot start with a dot, R3); -f; and, abbreviated (R4), --force
-  // (the only f option), --theirs, --ours (--orphan shares `--o`), --pathspec-from-file (--pathspec-file-nul
-  // shares `--pathspec-f`). Plain branch switches (-b, --track, main) stay allowed.
-  { name: "git checkout discard", re: gitFlag("checkout", String.raw`--(?=\s|$)|\.|-f\b|--(?:${abbrev("force", 1)}|${abbrev("theirs", 2)}|${abbrev("ours", 2)}|${abbrev("pathspec-from-file", 11)})\b`) },
+  // (`.`, `./src`, `../x`: a ref name cannot start with a dot, R3); -f; and ANY long option outside the
+  // branch-switch set (B2: --no-overlay, --quiet, --merge, --conflict=x restore files). This covers every
+  // abbreviation too (R4: `--forc`, `--theirs`, `--pathspec-from-file`). An abbreviated switch (`--det`) asks.
+  { name: "git checkout discard", re: gitFlag("checkout", String.raw`--(?=\s|$)|\.|-f\b|--(?!${CHECKOUT_SWITCH_OPTIONS}(?=[\s=]|$))\w`) },
   // git restore discarding the WORKTREE (parity with `git checkout .`/`--`). `--staged`-only
   // (reversible unstage) and single-file `git restore file` are NOT gated (accepted).
   { name: "git restore discard", re: /\bgit\s+restore\b[^&|;]*(--worktree\b|\s\.(?:\s|$))/i },
@@ -309,9 +310,10 @@ function readBacktick(s, start) {
 var PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
 var LAUNCHER_PATH = String.raw`(?:[^\s=]*[\\/])?`;
 var valueFlags = (letters) => String.raw`(?:\s+-[${letters}]\s+(?!-)\S+|\s+-(?![${letters}](?:\s|$))\S+)*`;
-var LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags("ug")}|env${valueFlags("u")}|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
+var SIMPLE_FLAGS = String.raw`(?:\s+-[^\s=\\/]*)*`;
+var LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags("ug")}|env${valueFlags("u")}|nohup${SIMPLE_FLAGS}|time${SIMPLE_FLAGS}|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
 var OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
-var PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s[\s\S]*)?|(\S[\s\S]*))$`;
+var PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s([\s\S]*))?|(\S[\s\S]*))$`;
 var wrapper = (interp, flag) => new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, "i");
 var WRAPPER_RES = [
   { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", String.raw`\s-[a-z]*c\b`) },
@@ -325,11 +327,14 @@ function unwrapPayload(raw) {
   }
   return s.replace(/\\(["'`$\\])/g, "$1");
 }
+var dropQuotes = (s) => s.replace(/["']/g, "");
 function matchWrapper(seg2) {
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg2.match(re);
-    const raw = m && (m[1] ?? m[2]);
-    if (raw) return { payload: unwrapPayload(raw), shell };
+    if (!m || !(m[1] || m[3])) continue;
+    if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
+    const tail = shell !== "posix" && m[2]?.trim() ? " " + dropQuotes(m[2]) : "";
+    return { payload: unwrapPayload(m[1]) + tail, shell };
   }
   return null;
 }

@@ -21,6 +21,8 @@ const abbrev = (word: string, min: number): string =>
   word.slice(0, min) + [...word.slice(min)].reduceRight((rest, c) => `(?:${c}${rest})?`, '');
 // Each git subcommand has its own `[^;&|\n]*` scan, so the flag may sit anywhere after the subcommand.
 const gitFlag = (sub: string, flags: string): RegExp => new RegExp(String.raw`\bgit\s+${sub}\b[^;&|\n]*\s(?:${flags})`, 'i');
+// `git checkout` long options that only switch or create a branch and never overwrite a file (B2).
+const CHECKOUT_SWITCH_OPTIONS = String.raw`(?:track|no-track|detach|orphan|recurse-submodules|no-recurse-submodules|overwrite-ignore|ignore-other-worktrees|guess|no-guess|patch)`;
 
 export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
@@ -70,10 +72,10 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // `--f` and longer (R4): --force is the only clean option that starts with f.
   { name: 'git clean -f', re: gitFlag('clean', String.raw`--${abbrev('force', 1)}\b|-[a-zA-Z]*f`) },
   // Anywhere after checkout (`git checkout main -- src`, F05): a bare `--`; a path that starts with `.`
-  // (`.`, `./src`, `../x`: a ref name cannot start with a dot, R3); -f; and, abbreviated (R4), --force
-  // (the only f option), --theirs, --ours (--orphan shares `--o`), --pathspec-from-file (--pathspec-file-nul
-  // shares `--pathspec-f`). Plain branch switches (-b, --track, main) stay allowed.
-  { name: 'git checkout discard', re: gitFlag('checkout', String.raw`--(?=\s|$)|\.|-f\b|--(?:${abbrev('force', 1)}|${abbrev('theirs', 2)}|${abbrev('ours', 2)}|${abbrev('pathspec-from-file', 11)})\b`) },
+  // (`.`, `./src`, `../x`: a ref name cannot start with a dot, R3); -f; and ANY long option outside the
+  // branch-switch set (B2: --no-overlay, --quiet, --merge, --conflict=x restore files). This covers every
+  // abbreviation too (R4: `--forc`, `--theirs`, `--pathspec-from-file`). An abbreviated switch (`--det`) asks.
+  { name: 'git checkout discard', re: gitFlag('checkout', String.raw`--(?=\s|$)|\.|-f\b|--(?!${CHECKOUT_SWITCH_OPTIONS}(?=[\s=]|$))\w`) },
   // git restore discarding the WORKTREE (parity with `git checkout .`/`--`). `--staged`-only
   // (reversible unstage) and single-file `git restore file` are NOT gated (accepted).
   { name: 'git restore discard', re: /\bgit\s+restore\b[^&|;]*(--worktree\b|\s\.(?:\s|$))/i },
@@ -317,12 +319,16 @@ function readBacktick(s: string, start: number): { inner: string; end: number } 
 const PATH_PREFIX = String.raw`(?:\S*[\\/])?`;
 const LAUNCHER_PATH = String.raw`(?:[^\s=]*[\\/])?`;
 const valueFlags = (letters: string): string => String.raw`(?:\s+-[${letters}]\s+(?!-)\S+|\s+-(?![${letters}](?:\s|$))\S+)*`;
-const LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags('ug')}|env${valueFlags('u')}|nohup|time|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
+// time/nohup flags (`time -p`, `nohup --`, B3) hold no `=`, `/` or `\`, so a flag is never also a VAR=x item
+// or a path-prefixed launcher (`-x/time`): the alternatives stay disjoint (C1).
+const SIMPLE_FLAGS = String.raw`(?:\s+-[^\s=\\/]*)*`;
+const LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags('ug')}|env${valueFlags('u')}|nohup${SIMPLE_FLAGS}|time${SIMPLE_FLAGS}|exec|command|nice(?:\s+-\S+)*|wsl(?:\s+-\S+)*|xargs(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+(?!-)\S+)\s+|[^\s=]+=\S+\s+)*`;
 const OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
 // R1: the tail is `[\s\S]*`, not `.*`. JS `.` stops at `\r`, so `\S.*)(?:\s.*)?$` failed on a mid-line CR
 // and the engine retried every exec-flag position and every tail split (cubic: 10.6 s on 10 KB). Now, once
 // the exec flag has a non-space after it, the payload cannot fail, and the bare form has no second tail.
-const PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s[\s\S]*)?|(\S[\s\S]*))$`;
+// Groups: 1 a quoted payload, 2 the trailing args after it, 3 the bare rest of the segment.
+const PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s([\s\S]*))?|(\S[\s\S]*))$`;
 const wrapper = (interp: string, flag: string): RegExp =>
   new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, 'i');
 
@@ -341,12 +347,22 @@ function unwrapPayload(raw: string): string {
   return s.replace(/\\(["'`$\\])/g, '$1');
 }
 
-/** The payload of a segment that is a shell-wrapper invocation, tagged with its interpreter; else null. */
+const dropQuotes = (s: string): string => s.replace(/["']/g, '');
+
+/**
+ * The payload of a segment that is a shell-wrapper invocation, tagged with its interpreter; else null.
+ * A POSIX shell takes the word after the payload as $0, so trailing args are dropped. pwsh, powershell and
+ * cmd join EVERY argument into the command they run (B1), so their trailing args after a quoted payload
+ * are part of it. Their quote characters are deleted, not parsed (fail closed). The bare form keeps its
+ * quotes: `pwsh -File x.ps1 -C C:\repo commit -m "..."` reads `-C` as -Command (H2) and must stay allowed.
+ */
 function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | null {
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg.match(re);
-    const raw = m && (m[1] ?? m[2]); // group 1: a quoted payload; group 2: the bare rest of the segment
-    if (raw) return { payload: unwrapPayload(raw), shell };
+    if (!m || !(m[1] || m[3])) continue;
+    if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
+    const tail = shell !== 'posix' && m[2]?.trim() ? ' ' + dropQuotes(m[2]) : '';
+    return { payload: unwrapPayload(m[1]) + tail, shell };
   }
   return null;
 }
@@ -502,11 +518,24 @@ function runsInterpreter(stripped: string): boolean {
   });
 }
 
+/** The text after the first interpreter's exec flag, or null. SEGMENT_PATTERNS anchor at a command start. */
+function afterExecFlag(text: string): string | null {
+  for (const { word, flag } of INTERPRETERS) {
+    const at = text.search(word);
+    const m = at >= 0 ? flag.exec(text.slice(at)) : null;
+    if (m) return text.slice(at + m.index + m[0].length);
+  }
+  return null;
+}
+
 function classifyInterpreterSegments(segments: string[], tool: string): string | null {
   for (const seg of segments) {
     if (!runsInterpreter(stripQuotedStrings(seg, tool))) continue;
-    const dequoted = normalizeGitGlobalOptions(seg.replace(/["']/g, ''));
+    const dequoted = normalizeGitGlobalOptions(dropQuotes(seg));
     for (const p of [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS]) if (p.re.test(dequoted)) return p.name;
+    // B3: a Fabric call after the exec flag (`nice -n 5 bash -c "az fabric capacity suspend ..."`).
+    const payload = afterExecFlag(dequoted);
+    if (payload !== null) for (const p of SEGMENT_PATTERNS) if (p.re.test(payload)) return p.name;
   }
   return null;
 }

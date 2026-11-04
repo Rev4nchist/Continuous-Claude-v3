@@ -92,7 +92,7 @@
     "shared/coordination-events.ts": "6947b42589253cdc6437e1bb70048c536564ce50721dfe0de14a916eddd3aff0",
     "shared/db-utils-pg.ts": "ae305ba3b9ea0b738c16410c8cf2e86feb5a1ff388262b5477748c967184d066",
     "shared/db-utils.ts": "84cc10b397f44fd3ab2782463de896ea2f2ce0b232995be7b0c6a2a0ebb10a48",
-    "shared/destructive-classifier.ts": "b3bb8fc052dcdf0a893f79e0f303c9b78d4316ec034fc7c118af93f34ecb1f91",
+    "shared/destructive-classifier.ts": "2c49c207742a42a27858abae0ac835a6333754bbbe9fe939e431cdaf4b182d1e",
     "shared/dist-freshness.ts": "00301aa6b74014da7e80412f976ea28f85ed2f5bbaa861997829ff20c5de2df6",
     "shared/done-proof.ts": "cd8fbdb11a5b63ff68c44765fbf0272e2f2a7b85234827908a71c96f3b0b081c",
     "shared/embedding-client.ts": "20cd09a12e5745f9e1453a7b2566180e0acaa4813e89e2386dca8923cec2ddf2",
