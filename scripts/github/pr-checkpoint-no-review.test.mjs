@@ -73,6 +73,7 @@ test('N1: every band offers `none` as an open option; at HIGH and CRITICAL it is
     assert.equal(r.band.band, band, name);
     const at = r.options.findIndex((o) => o.pathway === 'none');
     assert.ok(at > 0, `${name}: none is offered and is not first (options: ${r.options.map((o) => o.pathway).join(', ')})`);
+    assert.equal(at, r.options.length - 1, `${name}: none is last`);
     assert.equal(r.options[at].available, true, name);
     assert.deepEqual(r.options[at].cost, [0, 0], name);
     assert.equal(r.options[at].label, 'review:none', name);

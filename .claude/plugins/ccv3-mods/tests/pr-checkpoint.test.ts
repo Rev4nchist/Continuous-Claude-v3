@@ -2906,4 +2906,64 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     expect(engineCalls(w.seen).some(call => call.includes('--by auto'))).toBe(false)
     expect(counts(w.seen).confirm).toBe(0)
   })
+
+  // N-M6  a typed none from the bridge at HIGH or CRITICAL records with no dialog      N-M7  the dialog gate also holds a LOW PR back (it must not)
+  // N-M8  a held recommendation at HIGH marks a label Recommended, or puts none first
+  for (const band of ['HIGH', 'CRITICAL'] as const) {
+    test(`N-M6 ${band}: a bridge /pathway 7 none raises the dialog and records nothing until the exact label`, async ($, on) => {
+      const w = world(on, { json: highJson(band), answers: ['dismiss', 'dismiss'] })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      const ran = await slash($, '7 none', 'bridge')
+      expect(w.seen.dialogs.length).toBe(2)
+      expect(w.seen.dialogs[1]!.labels.at(-1)).toBe(NO_REVIEW)
+      expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+      expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+      expect(w.store.get(PENDING)).toBeDefined()
+      expect(ran.text ?? '').not.toMatch(/none recorded/)
+    })
+
+    test(`N-M6b ${band}: the exact label in that bridge dialog records none --by dave`, async ($, on) => {
+      const w = world(on, { json: highJson(band), answers: ['dismiss', /^No review, land on CI/] })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      await slash($, '7 none', 'bridge')
+      expect(w.seen.dialogs.length).toBe(2)
+      expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+      expect((w.store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+    })
+  }
+
+  test('N-M6c a composer /pathway 7 none at CRITICAL records --by dave with no second dialog', async ($, on) => {
+    const w = world(on, { json: highJson('CRITICAL'), answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+  })
+
+  test('N-M7 a bridge /pathway 7 none at LOW still records --by dave with no dialog', async ($, on) => {
+    const low = { stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], band: { band: 'LOW' }, auto: { eligible: false, band: 'LOW', reason: 'a person decides' } })) }
+    const w = world(on, { json: low, answer: 'dismiss' })
+    await start($)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await slash($, '7 none', 'bridge')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(engineCalls(w.seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+  })
+
+  test('N-M8 a held recommendation at HIGH: coderabbit, Keep as draft, then no review; nothing is Recommended; the none pick is --by dave', async ($, on) => {
+    const held = highJson('HIGH', {
+      recommended: 'both',
+      options: [option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' }), option('none')],
+    })
+    const { seen } = world(on, { json: held })
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
+    await pane.press({ key: 'opt-none' })
+    expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
+  })
 })

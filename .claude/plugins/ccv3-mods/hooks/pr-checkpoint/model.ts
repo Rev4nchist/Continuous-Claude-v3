@@ -1,8 +1,6 @@
 import type { CheckpointAsk, CheckpointOption, CheckpointResult } from '../../types'
 
-/** Pure helpers of the PR checkpoint mod. Nothing here takes `import type { CheckpointAsk, CheckpointOption, CheckpointResult } from '../../types'
-
-. */
+/** Pure helpers of the PR checkpoint mod. Nothing here takes `$`: a `$` and an atom cannot cross an import (README). */
 
 export const TOOL_NAME = 'pr_checkpoint'
 /**
