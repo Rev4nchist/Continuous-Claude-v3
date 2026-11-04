@@ -1190,6 +1190,9 @@ describe('H1: a top-level escaped quote does not open a string', () => {
     ['escaped single quotes around rm -rf', String.raw`echo \'; rm -rf x; echo \'`],
     ['escaped single quotes around git reset --hard', String.raw`echo \'; git reset --hard; echo \'`],
     ['F01 sq-escape still asks (backslash is literal inside single quotes)', String.raw`echo 'a\'; rm -rf x; echo '`],
+    // CodeRabbit CLI on 24d6dba1: inside "...", bash keeps \' as \', so the inner shell reads an escaped quote.
+    ['escaped single quotes inside a double-quoted wrapper payload', String.raw`bash -c "echo \'; rm -rf x; echo \'"`],
+    ['escaped single quotes inside a double-quoted wrapper payload (git)', String.raw`sh -c "echo \'; git reset --hard; echo \'"`],
   ];
   for (const [name, cmd] of bash) {
     it(`Bash asks: ${name}`, () => {
