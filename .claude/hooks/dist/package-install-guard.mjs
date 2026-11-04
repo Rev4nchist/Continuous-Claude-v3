@@ -2,7 +2,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/package-install-guard.ts
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { dirname as dirname2, join as join2, resolve } from "path";
 import https from "https";
 
@@ -19369,8 +19369,10 @@ var malicious_packages_default = {
 
 // src/package-install-guard.ts
 var DIR = String.raw`(?:&\s*)?(?:"[^"]*[\\/]|'[^']*[\\/]|[^\s"']*[\\/])?`;
-var PIP_OPTS = String.raw`(?:\s+(?:--(?:proxy|log|cache-dir|timeout|retries|cert|client-cert|exists-action|trusted-host|python|use-feature|keyring-provider)\s+\S+|-[-\w]+(?:=\S+)?))*`;
+var PIP_OPTS = String.raw`(?:\s+(?:--(?:proxy|log|cache-dir|timeout|retries|cert|client-cert|exists-action|trusted-host|python|use-feature|keyring-provider)\s+(?!-[-\w]+(?:=\S+)?(?!\S))\S+|-[-\w]+(?:=\S+)?))*`;
 var PY_OPTS = String.raw`(?:\s+(?:-[XW]\s*\S+|-[IuBEsSOqbdv]+|-\d(?:\.\d+)?))*`;
+var UV_OPTS = String.raw`(?:\s+(?:--(?:directory|project|config-file|cache-dir|python|color|python-preference|allow-insecure-host|index-strategy)(?:=|\s+(?!-))\S+|(?:-[qv]+|-n|--(?:quiet|verbose|offline|no-cache|no-progress|no-config|native-tls))(?=\s|$)))*`;
+var PY_VAR = String.raw`["']?\$(?:\{[^}\s]+\}|(?:env:)?\w+)`;
 function installPattern(body, ecosystem, opts = {}) {
   const f = opts.ignoreCase ? "i" : "";
   return {
@@ -19386,7 +19388,7 @@ function installPattern(body, ecosystem, opts = {}) {
 }
 var END = String.raw`(?=\s|$)`;
 var bin = (name) => String.raw`${DIR}${name}(?:\.cmd|\.exe|\.ps1)?["']?`;
-var NODE_OPTS = String.raw`(?:\s+(?:--(?:prefix|registry|cache|userconfig|globalconfig|loglevel|workspace|cwd|dir|filter|modules-folder)\s+\S+|-C\s+\S+|-\S+))*`;
+var NODE_OPTS = String.raw`(?:\s+(?:--(?:prefix|registry|cache|userconfig|globalconfig|loglevel|workspace|cwd|dir|filter|modules-folder)\s+(?!-)\S+|-C\s+(?!-)\S+|-\S+))*`;
 var NPM_INSTALL = "(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|install-test|it)";
 var NPM_CI = "(?:ci|clean-install|ic|install-clean|isntall-clean|install-ci-test|cit|clean-install-test|sit)";
 var NPM_UPDATE = "(?:update|up|upgrade|udpate)";
@@ -19395,14 +19397,14 @@ var INSTALL_PATTERNS = [
   // Python (Windows runs Python.exe and PIP the same as python and pip, so these ignore case)
   installPattern(String.raw`${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?${PIP_OPTS}\s+${PIP_VERBS}${END}`, "pypi", { requirePin: true, flags: "pip", ignoreCase: true }),
   // -m and its module may be one word: python -mpip install x.
-  installPattern(String.raw`${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?${PY_OPTS}\s+-m\s*pip${PIP_OPTS}\s+${PIP_VERBS}${END}`, "pypi", { requirePin: true, flags: "pip", ignoreCase: true }),
-  installPattern(String.raw`uv\s+pip\s+install${END}`, "pypi", { requirePin: true, flags: "pip" }),
-  installPattern(String.raw`uv\s+add${END}`, "pypi", { flags: "pip" }),
+  installPattern(String.raw`${DIR}(?:python(?:3(?:\.\d+)?)?|py|${PY_VAR})(?:\.exe)?["']?${PY_OPTS}\s+-m\s*pip${PIP_OPTS}\s+${PIP_VERBS}${END}`, "pypi", { requirePin: true, flags: "pip", ignoreCase: true }),
+  installPattern(String.raw`uv${UV_OPTS}\s+pip\s+install${END}`, "pypi", { requirePin: true, flags: "pip" }),
+  installPattern(String.raw`uv${UV_OPTS}\s+add${END}`, "pypi", { flags: "pip" }),
   installPattern(String.raw`poetry\s+add${END}`, "pypi", { flags: "pip" }),
   installPattern(String.raw`pipenv\s+install${END}`, "pypi", { flags: "pip" }),
   // Python runners and tool installs (F13): the first token is the package, the rest is its argv.
-  installPattern(String.raw`(?:uvx|uv\s+tool\s+(?:run|install)|pipx\s+(?:run|install))${END}`, "pypi", { kind: "first", flags: "pyrunner" }),
-  installPattern(String.raw`uv\s+run${END}`, "pypi", { kind: "run", flags: "pyrunner" }),
+  installPattern(String.raw`(?:uvx|uv${UV_OPTS}\s+tool\s+(?:run|install)|pipx\s+(?:run|install))${END}`, "pypi", { kind: "first", flags: "pyrunner" }),
+  installPattern(String.raw`uv${UV_OPTS}\s+run${END}`, "pypi", { kind: "run", flags: "pyrunner" }),
   // JavaScript / Node
   installPattern(String.raw`${bin("npm")}${NODE_OPTS}\s+${NPM_INSTALL}${END}`, "npm", { flags: "node" }),
   installPattern(String.raw`${bin("npm")}${NODE_OPTS}\s+${NPM_UPDATE}${END}`, "npm", { flags: "node" }),
@@ -19410,6 +19412,9 @@ var INSTALL_PATTERNS = [
   installPattern(String.raw`${bin("npm")}${NODE_OPTS}\s+(?:exec|x)${END}`, "npm", { kind: "first", flags: "node", preferLocal: true }),
   installPattern(String.raw`(?:${bin("npm")}${NODE_OPTS}\s+(?:create|init|innit)|${bin("(?:yarn|pnpm|bun)")}${NODE_OPTS}\s+create)${END}`, "npm", { kind: "create", flags: "node" }),
   installPattern(String.raw`${bin("yarn")}${NODE_OPTS}\s+(?:global\s+)?(?:add|up|upgrade)${END}`, "npm", { flags: "node" }),
+  // A bare `yarn` / `yarn install` names no package. needsCheck counts it only when the command sets a registry (G2).
+  // Its loose form never matches: `which yarn` and `echo yarn install` are not installs.
+  { ...installPattern(String.raw`${bin("yarn")}${NODE_OPTS}(?:\s+install${END}|\s*$)`, "npm", { flags: "node" }), loose: /(?!)/ },
   installPattern(String.raw`${bin("pnpm")}${NODE_OPTS}\s+(?:add|install|i|update|up|upgrade)${END}`, "npm", { flags: "node" }),
   installPattern(String.raw`${bin("bun")}${NODE_OPTS}\s+(?:add|a|install|i|update)${END}`, "npm", { flags: "node" }),
   installPattern(String.raw`(?:${bin("npx")}|${bin("bunx")}|${bin("bun")}${NODE_OPTS}\s+x)${END}`, "npm", { kind: "first", flags: "node", preferLocal: true }),
@@ -19418,7 +19423,13 @@ var INSTALL_PATTERNS = [
   // deno names its sources npm:x, jsr:x or a URL; the classifier asks on each of them.
   installPattern(String.raw`${bin("deno")}\s+(?:install|i|add)${END}`, "npm", { flags: "node" }),
   // Rust, Go, Ruby, PHP: matched so the guard can ask. It has no blocklist or age check for them.
-  installPattern(String.raw`cargo\s+(?:add|install)${END}`, "cargo"),
+  installPattern(String.raw`cargo\s+(?:add|install|binstall)${END}`, "cargo"),
+  // NuGet and Homebrew (G4): same policy as cargo, the guard has no blocklist, OSV or age check for them.
+  // Up to 8 option words may come first (dotnet -d add package X), and up to 8 project words after add.
+  // Both loops are bounded, so the loose scan stays linear: 1500 "dotnet add" words must not stall the hook.
+  installPattern(String.raw`${bin("dotnet")}(?:\s+\S+){0,8}?\s+(?:add(?:\s+\S+){0,8}?\s+package|package\s+add|tool\s+(?:install|update|exec|run)|dnx)${END}`, "nuget"),
+  installPattern(String.raw`${bin("dnx")}${END}`, "nuget", { kind: "first" }),
+  installPattern(String.raw`brew\s+(?:install|reinstall|upgrade)${END}`, "brew"),
   installPattern(String.raw`go\s+(?:get|install)${END}`, "go"),
   installPattern(String.raw`go\s+run${END}`, "go", { remoteOnly: true }),
   installPattern(String.raw`gem\s+install${END}`, "gem"),
@@ -19593,20 +19604,34 @@ function stripPrefixes(command) {
   return s;
 }
 function installSegments(command, tool = "Bash", depth = 0) {
+  return installPlans(command, tool, null, depth).map((p) => p.segment);
+}
+function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured) {
+  const config = configured ?? (indexConfigMarkers(command).length > 0 || persistentConfigMarkers(command, tool).length > 0 || rawConfigMarkers(command).length > 0);
   try {
     const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
-    const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool));
+    const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool, config)).map((segment) => ({ segment, cwd, tool }));
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
-    return [...found, ...nested.flatMap((inner) => installSegments(inner, tool, depth + 1))];
+    return [...found, ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config))];
   } catch {
-    return needsCheck(command, tool) ? [command.trim()] : [];
+    return needsCheck(command, tool, config) ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
 }
-function needsCheck(segment, tool) {
+var MAY_MOVE_WORD = /\b(?:cd|pushd|popd|chdir|sl|set-location|push-location|pop-location|source|eval|iex|invoke-expression)\b|(?:^|\s)\.\s|(?:^|\s)-(?:wd|wo\w*)(?=[\s:=]|$)/i;
+var MAY_MOVE_OTHER = /(?:^|\s)(?:-[CD]|--chdir|--prefix|--cwd|--dir|--directory)(?=[\s=]|$)|(?:^|\s)-[CD]\S|[$`]/;
+function mayMoveFolder(text) {
+  const plain = text.replace(/\\\r?\n/g, "").replace(/[\\'"`^]/g, "");
+  return MAY_MOVE_WORD.test(text) || MAY_MOVE_WORD.test(plain) || MAY_MOVE_OTHER.test(text) || /npm_config_prefix/i.test(text);
+}
+var GLOBAL_MODE = /(?:^|\s)(?:-g|--global|--location[=\s]+global)(?=\s|$)|npm_config_global|npm_config_location/i;
+function localBinCwd(command, cwd) {
+  return cwd === null || mayMoveFolder(command) || GLOBAL_MODE.test(command) ? null : cwd;
+}
+function needsCheck(segment, tool, configured = false) {
   const a = analyzeInstall(segment);
   if (!a) return hiddenInstall(segment, tool);
-  return a.packages.length > 0 || a.unparsed.length > 0 || a.customIndex.length > 0 || a.ambiguous.length > 0 || a.pattern.kind === "lockfile";
+  return configured || a.packages.length > 0 || a.unparsed.length > 0 || a.customIndex.length > 0 || a.ambiguous.length > 0 || a.pattern.kind === "lockfile";
 }
 var ANY_WORD = /./;
 var word = (alts) => new RegExp(`^${alts}$`);
@@ -19615,9 +19640,12 @@ var MANAGER_VERBS = [
   [/^pnpm$/, /^(?:add|install|i|dlx|create|update|up|upgrade)$/],
   [/^yarn$/, /^(?:add|dlx|create|up|upgrade)$/],
   [/^bun$/, /^(?:add|a|install|i|x|create|update)$/],
-  [/^(?:pip\d*(?:\.\d+)?|uv|pipx|pipenv)$/, word(PIP_VERBS)],
-  [/^(?:uv|poetry)$/, /^add$/],
-  [/^cargo$/, /^(?:add|install)$/],
+  [/^(?:pip\d*(?:\.\d+)?|pipx|pipenv)$/, word(PIP_VERBS)],
+  // uv with an option the patterns do not know (uv --foo X run --with y) still asks. managerVerbs takes the first entry, so uv has one.
+  [/^uv$/, /^(?:install|download|wheel|add|run|tool)$/],
+  [/^poetry$/, /^add$/],
+  [/^cargo$/, /^(?:add|install|binstall)$/],
+  [/^brew$/, /^(?:install|reinstall|upgrade)$/],
   [/^go$/, /^(?:get|install)$/],
   [/^gem$/, /^install$/],
   [/^composer$/, /^require$/],
@@ -19698,14 +19726,54 @@ function createPackage(token) {
   return `create-${token}`;
 }
 var INDEX_ENV = /(?:^|\s)(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|UV_(?:EXTRA_|DEFAULT_)?INDEX(?:_URL)?|UV_FIND_LINKS|npm_config_registry|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY)=\S*/gi;
+var INDEX_VARS = String.raw`(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|PIP_CONFIG_FILE|UV_(?:EXTRA_|DEFAULT_)?INDEX(?:_URL)?|UV_FIND_LINKS|UV_CONFIG_FILE|npm_config_(?:registry|userconfig|globalconfig)|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|YARN_RC_FILENAME|BUN_CONFIG_REGISTRY)`;
+var RC_FILE = String.raw`(?:\.npmrc|\.yarnrc(?:\.yml)?|bunfig\.toml|pip\.ini|pip\.conf)\b`;
+var PERSISTENT_CONFIG = [
+  /\b(?:(?:config|c)\s+set|npm\s+set|pnpm\s+set)\s+\S*(?:registry|userconfig|globalconfig|index|find-links)\S*/gi,
+  // A write into an npm, yarn, bun or pip config file: echo registry=URL > .npmrc, tee -a .yarnrc.yml.
+  new RegExp(String.raw`(?:>>?|\btee(?:\s+-a)?)\s*["']?\S*${RC_FILE}`, "gi"),
+  // The same through a PowerShell or copy command, up to 8 words before the file: Set-Content -Path '.npmrc', cp x .npmrc.
+  new RegExp(String.raw`(?:^|[\s;&|({])(?:set-content|add-content|out-file|sc|ac|cp|copy|copy-item|cpi|mv|move|move-item|mi)(?:\s+[^\s;&|]+){0,8}?\s+["']?[^\s;&|"']*${RC_FILE}`, "gi"),
+  // A registry variable set through the Env: drive or .NET: Set-Item Env:npm_config_registry, SetEnvironmentVariable('npm_config_registry'.
+  new RegExp(String.raw`(?:(?<!\$)\benv:[\\/]?|SetEnvironmentVariable\(\s*["'])${INDEX_VARS}\b`, "gi")
+];
 var INDEX_CONFIG = [
-  /\b(?:PIP_(?:EXTRA_)?INDEX_URL|PIP_FIND_LINKS|PIP_CONFIG_FILE|UV_(?:EXTRA_|DEFAULT_)?INDEX(?:_URL)?|UV_FIND_LINKS|UV_CONFIG_FILE|npm_config_(?:registry|userconfig|globalconfig)|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|YARN_RC_FILENAME|BUN_CONFIG_REGISTRY)\s*=/gi,
-  /\bconfig\s+set\s+\S*(?:registry|userconfig|globalconfig|index|find-links)\S*/gi,
+  new RegExp(String.raw`\b${INDEX_VARS}\s*=`, "gi"),
+  ...PERSISTENT_CONFIG,
   /--(?:userconfig|globalconfig)\b/g,
   /--@[^\s=:]+:registry\b/g
 ];
-function indexConfigMarkers(command) {
-  return [...new Set(INDEX_CONFIG.flatMap((re) => [...command.matchAll(re)].map((m) => m[0].replace(/\s*=$/, ""))))];
+function indexConfigMarkers(command, patterns = INDEX_CONFIG) {
+  return [...new Set(patterns.flatMap((re) => [...command.matchAll(re)].map((m) => m[0].replace(/\s*=$/, ""))))];
+}
+var REGISTRY_KEY = /^(?:--?)?(?:@[^:\s]+:)?(?:registry|npmRegistryServer|npmScopes|registries)\b/i;
+function registrySet(segment) {
+  const words = tokenize(stripPrefixes(segment));
+  const manager = commandName(words[0] ?? "");
+  const key = words.find((w) => REGISTRY_KEY.test(w));
+  return /^(?:npm|pnpm|yarn)$/.test(manager) && words.includes("set") && key ? [`${manager} set ${key.split("=")[0]}`] : [];
+}
+var RAW_CONFIG_WORD = /(?<![a-z0-9]|[a-z0-9]-)(?:registry|registries|npmRegistryServer|npmScopes|(?:extra-)?index-url|trusted-host|find[-_]links|userconfig|globalconfig|UV_INDEX|UV_DEFAULT_INDEX|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_CONFIG_FILE|UV_CONFIG_FILE|npm_config_registry)|\.npmrc|\.yarnrc|bunfig\.toml|pip\.ini|pip\.conf|uv\.toml|\.pypirc/gi;
+var RAW_MANAGER = /\b(?:npm|pnpm|yarn|bun|pip\d*|uv|poetry|pdm|conda)\b/i;
+var RAW_SET_MANAGER = /\b(?:npm|pnpm)\b/i;
+function rawConfigMarkers(command) {
+  const text = command.replace(/[\\'"`]/g, "");
+  const writes = text.split(/[;&|\r\n]/).filter((seg2) => (
+    // Whole shell words only: eslint-config-prettier, set-value and lodash.set are package names, not config writes.
+    RAW_MANAGER.test(seg2) && /(?:^|\s)(?:config|c)(?=\s|$)/i.test(seg2) || RAW_SET_MANAGER.test(seg2) && /(?:^|\s)set(?=\s|$)/i.test(seg2)
+  ));
+  return [.../* @__PURE__ */ new Set([...writes.map((seg2) => seg2.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0])])];
+}
+function persistentConfigMarkers(command, tool, depth = 0) {
+  try {
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
+    const own = segments.flatMap((seg2) => [...indexConfigMarkers(stripQuotedStrings(seg2, tool), PERSISTENT_CONFIG), ...registrySet(seg2)]);
+    if (depth >= 3) return own;
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
+    return [...own, ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1))];
+  } catch {
+    return [...indexConfigMarkers(command, PERSISTENT_CONFIG), ...registrySet(command)];
+  }
 }
 function analyzeInstall(command) {
   const install = matchInstall(command);
@@ -19848,19 +19916,22 @@ function canonicalVersion(version, ecosystem) {
   const v = version.trim().replace(/^=+/, "").replace(/^v/i, "").replace(/\+.*$/, "");
   return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v) ? v : void 0;
 }
+var EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 async function checkOsvAdvisory(name, version, ecosystem) {
   if (ecosystem !== "pypi" && ecosystem !== "npm") {
     return { blocked: false };
   }
   const osvEcosystem = ecosystem === "pypi" ? "PyPI" : "npm";
   try {
-    const vulns = await queryOsv(name, version, osvEcosystem);
+    const known = version !== void 0 && (ecosystem === "pypi" || EXACT_SEMVER.test(version));
+    const vulns = await queryOsv(name, known ? version : void 0, osvEcosystem);
+    const scope = known ? "" : " The version to install is unknown (no exact version in the command), so this advisory may not apply to it.";
     const malware = vulns.find((v) => v.id?.startsWith("MAL-"));
     if (malware) {
       return {
         blocked: true,
         advisoryId: malware.id,
-        warning: `OSV.dev reports malware: ${malware.id}. ${malware.summary || malware.details?.slice(0, 200) || "No details available"}.`
+        warning: `OSV.dev reports malware: ${malware.id}. ${malware.summary || malware.details?.slice(0, 200) || "No details available"}.${scope}`
       };
     }
     const critical = vulns.find((v) => {
@@ -19871,9 +19942,10 @@ async function checkOsvAdvisory(name, version, ecosystem) {
     });
     if (critical) {
       return {
-        blocked: true,
+        blocked: known,
+        ask: !known,
         advisoryId: critical.id,
-        warning: `OSV.dev reports CRITICAL vulnerability: ${critical.id}. ${critical.summary || "No summary"}.`
+        warning: `OSV.dev reports CRITICAL vulnerability: ${critical.id}. ${critical.summary || "No summary"}.${scope}`
       };
     }
     const high = vulns.find((v) => {
@@ -19886,7 +19958,7 @@ async function checkOsvAdvisory(name, version, ecosystem) {
       return {
         blocked: false,
         advisoryId: high.id,
-        warning: `OSV.dev reports HIGH severity vulnerability: ${high.id}. ${high.summary || "No summary"}.`
+        warning: `OSV.dev reports HIGH severity vulnerability: ${high.id}. ${high.summary || "No summary"}.${scope}`
       };
     }
     return { blocked: false };
@@ -20123,13 +20195,19 @@ function readStdin() {
   return readFileSync(0, "utf-8");
 }
 var OVERRIDE = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
-function asksFor(segment, install, cwd) {
+function asksFor(segment, install, cwd, tool) {
   if (!install) {
     return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
   }
   const asks = [];
   const { pattern } = install;
-  if (pattern.kind === "lockfile" && !["package-lock.json", "npm-shrinkwrap.json"].some((f) => existsSync(join2(cwd, f)))) {
+  const commandWord = stripPrefixes(segment).split(/\s/)[0];
+  if (tool !== "PowerShell" && commandWord.startsWith("$")) {
+    asks.push(`The command word is an unquoted variable (${commandWord}). Bash splits its value into words, so it may run another program. Quote it ("$VAR") or confirm it.`);
+  }
+  if (pattern.kind === "lockfile" && cwd === null) {
+    asks.push("Lockfile install in a folder the guard cannot vouch for (a cd, a folder option or an expansion in the command). Nothing pinned to check.");
+  } else if (pattern.kind === "lockfile" && cwd !== null && !["package-lock.json", "npm-shrinkwrap.json"].some((f) => existsSync(join2(cwd, f)))) {
     asks.push(`Lockfile install with no package-lock.json in ${cwd}. Nothing pinned to check.`);
   }
   if (install.unparsed.length > 0) {
@@ -20152,8 +20230,11 @@ function hasLocalBin(name, cwd) {
   let dir = resolve(cwd);
   for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
     if (existsSync(join2(dir, "package.json")) || existsSync(join2(dir, "node_modules"))) {
-      const binDir = join2(dir, "node_modules", ".bin");
-      return ["", ".cmd", ".ps1"].some((ext) => existsSync(join2(binDir, name + ext)));
+      try {
+        return statSync(join2(dir, "node_modules", ".bin", name)).isFile();
+      } catch {
+        return false;
+      }
     }
     const parent = dirname2(dir);
     if (parent === dir) return false;
@@ -20161,13 +20242,14 @@ function hasLocalBin(name, cwd) {
   }
   return false;
 }
-async function checkInstall(segment, cwd) {
+async function checkInstall(segment, cwd, tool) {
   const install = analyzeInstall(segment);
-  const asks = asksFor(segment, install, cwd);
+  const asks = asksFor(segment, install, cwd, tool);
   const advisories = [];
   const ecosystem = install?.pattern.ecosystem;
   if (ecosystem !== "pypi" && ecosystem !== "npm") return { asks, advisories };
-  const packages = install.packages.filter((p) => p !== install.localBin || !hasLocalBin(p.name, cwd));
+  const trailingAt = /\S@(?=\s|$)/.test(segment);
+  const packages = install.packages.filter((p) => p !== install.localBin || cwd === null || trailingAt || !hasLocalBin(p.name, cwd));
   for (const pkg of packages) {
     const typo = checkTyposquat(pkg.name, ecosystem);
     if (typo.isTyposquat) {
@@ -20184,11 +20266,14 @@ async function checkInstall(segment, cwd) {
     return { asks, advisories, deny: `PACKAGE SECURITY: Unpinned pip install. Every pip install needs an exact == pin. Unpinned: ${unpinned.join(", ")}. Pin each one, for example ${unpinned[0]}==<version>, with a version at least 7 days old on PyPI.` };
   }
   for (const pkg of packages) {
-    const osvResult = await checkOsvAdvisory(pkg.name, pkg.version, ecosystem);
+    const raw = install.named.find((n) => n.pkg === pkg)?.raw ?? "";
+    const osvVersion = ecosystem === "pypi" && !EXACT_PIN.test(pipSpec(raw)) ? void 0 : pkg.version;
+    const osvResult = await checkOsvAdvisory(pkg.name, osvVersion, ecosystem);
     if (osvResult.blocked) {
       return { asks, advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
     }
-    if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
+    if (osvResult.ask) asks.push(`${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. Pin an exact version to check it, or confirm.`);
+    else if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
     const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version ?? install.tag);
     if (ageResult.blocked) {
       return { asks, advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };
@@ -20222,21 +20307,29 @@ async function main() {
     outputContinue();
     return;
   }
-  const installs = [...new Set(shell.dialects.flatMap((dialect) => installSegments(command, dialect)))];
+  const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(command, payloadCwd)));
+  const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   const wholeOverride = PS_OVERRIDE.test(command);
-  const checked = installs.filter((segment) => !wholeOverride && !checkOverride(segment));
+  const checked = installs.filter(({ segment }) => !wholeOverride && !checkOverride(segment));
   if (checked.length < installs.length) {
     logGuardDecision("package-install-guard", input, "override", "SKIP_PACKAGE_GUARD", { command });
   }
   if (checked.length === 0) {
-    outputContinue();
+    const persistent = installs.length === 0 && !wholeOverride && !checkOverride(command) ? [...new Set(shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)))] : [];
+    if (persistent.length === 0) {
+      outputContinue();
+      return;
+    }
+    const decision = isUnattended(input) ? "deny" : "ask";
+    logGuardDecision("package-install-guard", input, decision, "persistent registry config", { command });
+    outputDeny(`PACKAGE SECURITY: Registry or index change that persists for later installs: ${persistent.join(", ")}. The checks read the public PyPI or npm registry, not this one. ${OVERRIDE}`, decision);
     return;
   }
-  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const advisories = [];
   const asks = [];
-  for (const segment of checked) {
-    const result = await checkInstall(segment, cwd);
+  for (const { segment, cwd, tool } of checked) {
+    const result = await checkInstall(segment, cwd, tool);
     if (result.deny) {
       logGuardDecision("package-install-guard", input, "deny", result.deny.replace(/^PACKAGE SECURITY:\s*/, "").split(/\.\s/)[0], { command });
       outputDeny(result.deny);
@@ -20245,7 +20338,7 @@ async function main() {
     asks.push(...result.asks);
     advisories.push(...result.advisories);
   }
-  const config = indexConfigMarkers(command);
+  const config = [.../* @__PURE__ */ new Set([...indexConfigMarkers(command), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(command)])];
   if (config.length > 0 && !asks.some((a) => a.startsWith("Custom package index"))) {
     asks.push(`Custom package index or config in the command: ${config.join(", ")}. The checks read the public PyPI or npm registry, not this index.`);
   }
@@ -20273,6 +20366,7 @@ export {
   checkOverride,
   checkPackageAge,
   extractPackageNames,
+  installPlans,
   installSegments,
   isPackageInstallCommand,
   parseEcosystem,
