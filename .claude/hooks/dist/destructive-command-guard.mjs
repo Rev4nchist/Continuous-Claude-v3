@@ -312,11 +312,10 @@ var WRAPPER_RES = [
   { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) }
 ];
 function unwrapPayload(raw) {
-  let s = raw.trim();
-  if (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'")) {
-    s = s.slice(1, -1);
-  }
-  return s.replace(/\\(["'`$\\])/g, "$1");
+  const s = raw.trim();
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\(["`$\\])/g, "$1");
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1);
+  return s;
 }
 var dropQuotes = (s) => s.replace(/["']/g, "");
 function matchWrapper(seg2) {

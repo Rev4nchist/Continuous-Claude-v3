@@ -342,11 +342,12 @@ const WRAPPER_RES: Array<{ shell: WrapperShell; re: RegExp }> = [
 ];
 
 function unwrapPayload(raw: string): string {
-  let s = raw.trim();
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    s = s.slice(1, -1);
-  }
-  return s.replace(/\\(["'`$\\])/g, '$1');
+  const s = raw.trim();
+  // Inside "...", a backslash is removed only before " ` $ \ ; a \' stays \' (an escaped quote to the inner shell).
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\(["`$\\])/g, '$1');
+  // Inside '...', a backslash is literal. A bare payload has no quotes to remove.
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1);
+  return s;
 }
 
 const dropQuotes = (s: string): string => s.replace(/["']/g, '');
