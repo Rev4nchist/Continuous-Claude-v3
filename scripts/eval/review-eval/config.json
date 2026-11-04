@@ -31,5 +31,14 @@
       "minMajors": 20,
       "minLabels": 30
     }
+  },
+  "engineFreeze": {
+    "commit": "8f3ad079d387854f2838160f1ab9643a7514e2ca",
+    "blob": "ab47abf7e3742165fa1668d60d3403f899b408db",
+    "promptSha256": {
+      "full": "23bcd1d05fac1dc1f36494446100649c9d51e71ca6f1ed2659b6727199f42650",
+      "delta": "32f81c130408b298f19ce8af823807dc933b05d8a99b64e6ce5ba9708c0f20ee"
+    },
+    "at": "2026-11-04T14:15:17.923Z"
   }
 }

@@ -18,7 +18,8 @@ import { promptSha256 } from './freeze.mjs';
 
 const sha = (c) => c.repeat(40);
 const tmp = () => mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'replay-'));
-const cfg = { cursorEvalBudget: 40, cursorHeadroom: 60, shadow: { dailyMax: 6 }, freeze: { promptSha256: 'frozen' } };
+// replayReviewer pins the tests of the old path (runReview). The default, with no key, is the engine (see the engine tests at the end).
+const cfg = { cursorEvalBudget: 40, cursorHeadroom: 60, shadow: { dailyMax: 6 }, freeze: { promptSha256: 'frozen' }, replayReviewer: 'cursor-review' };
 const okFreeze = () => ({ ok: true, promptSha256: 'frozen' });
 
 // A scripted git: records each call, answers merge-base with `base`.
@@ -206,4 +207,105 @@ test('a prepare failure in build-only gives tree_unbuildable with the reason', a
 test('promptSha256 of the stubbed prompt is stable (guards the frozen compare used above)', () => {
   // Breaks when: promptSha256 stops being a pure hash of the build output.
   assert.equal(promptSha256({ build: () => 'a' }), promptSha256({ build: () => 'a' }));
+});
+
+// ---------- the engine as the replayed reviewer (phase 1, bridge) ----------
+const engineRecord = (over = {}) => ({
+  runId: 'eng-1', status: 'ok', trusted: false, model: 'grok-4.7-high', promptSha256: 'ENG', problems: [], coverage: { complete: true },
+  funnel: { raw: 2, withdrawn: 3, dropped: { byReason: {} }, posted: 2 }, withdrawn: [{ id: 'w1', path: 'a.mjs', line: 5, severity: 'major', reason: 'x' }],
+  runs: [{ durationMs: 777, usage: { inputTokens: 9 }, modelVerified: true }], findings: [{ id: 'f1', file: 'a.mjs', startLine: 5, endLine: 6, severity: 'major', title: 'T', status: 'open' }], ...over,
+});
+
+function engineDeps(dir, over = {}) {
+  const { deps, calls } = baseDeps(dir, { checkEngineFreeze: () => ({ ok: true, promptSha256: 'ENG' }), readConfigText: () => '{"matrix":{}}', ...over });
+  calls.engine = [];
+  deps.cfg = { cursorEvalBudget: 40, cursorHeadroom: 60, shadow: { dailyMax: 6 }, freeze: { promptSha256: 'frozen' } };
+  deps.runEngine = async (a) => {
+    calls.engine.push(a);
+    return { status: 'ok', record: engineRecord(), recordPath: '/s/b/h/eng-1.json', tracePath: path.join(dir, 'no-trace.json'), baseConfig: { source: 'current checkout', sha256: 'abc' } };
+  };
+  Object.assign(deps, over);
+  return { deps, calls };
+}
+
+test('the default reviewer is the engine: runEngine gets the round sha and base, runReview is not called, and the run row says so (breaks if the default stays runReview)', async () => {
+  const dir = tmp();
+  const { deps, calls } = engineDeps(dir);
+  const r = await replayRun({ pr: 207, round: 1 }, deps);
+  assert.equal(r.status, 'ok');
+  assert.equal(calls.runReview.length, 0);
+  assert.equal(calls.engine.length, 1);
+  const a = calls.engine[0];
+  assert.deepEqual([a.pr, a.sha40, a.base40, a.configText], [207, sha('c'), sha('1'), '{"matrix":{}}']);
+  assert.equal(a.env.CLAUDE_CODE_SESSION_ID, 'review-eval');
+  assert.equal(a.ledgerPath, deps.ledgerPath);
+  assert.ok(a.stateRoot.startsWith(deps.outRoot) && !/local-review/.test(a.stateRoot), a.stateRoot);
+  const row = JSON.parse(readFileSync(deps.runsPath, 'utf8').trim());
+  assert.deepEqual([row.reviewer, row.status, row.trusted, row.promptSha256, row.cursorRunId, row.findingCount, row.durationMs], ['engine', 'ok', false, 'ENG', 'eng-1', 1, 777]);
+  assert.deepEqual(row.baseConfig, { source: 'current checkout', sha256: 'abc' });
+  assert.deepEqual(row.funnel, engineRecord().funnel);
+  assert.equal(row.withdrawnCount, 1);
+  assert.equal(row.recordPath, '/s/b/h/eng-1.json');
+  assert.equal(row.modelVerified, true);
+});
+
+test('the engine run writes a findings file in the shape evaluateRuns reads and the row points at it (breaks if line is not the engine startLine)', async () => {
+  const dir = tmp();
+  const { deps } = engineDeps(dir);
+  await replayRun({ pr: 207, round: 1 }, deps);
+  const row = JSON.parse(readFileSync(deps.runsPath, 'utf8').trim());
+  assert.ok(existsSync(row.findingsPath));
+  assert.ok(row.findingsPath.startsWith(path.join(deps.outRoot, '207', sha('c').slice(0, 8))));
+  const found = JSON.parse(readFileSync(row.findingsPath, 'utf8'));
+  assert.deepEqual(found.findings.map((f) => [f.file, f.line, f.lineEnd, f.severity]), [['a.mjs', 5, 6, 'major']]);
+  assert.equal(found.withdrawn.length, 1);
+});
+
+test('the old reviewer stays selectable by argument and by config, and the row says cursor-review (breaks if the selector is ignored)', async () => {
+  const dir = tmp();
+  const a = engineDeps(dir);
+  await replayRun({ pr: 207, round: 1, reviewer: 'cursor-review' }, a.deps);
+  assert.deepEqual([a.calls.runReview.length, a.calls.engine.length], [1, 0]);
+  assert.equal(JSON.parse(readFileSync(a.deps.runsPath, 'utf8').trim()).reviewer, 'cursor-review');
+  const b = engineDeps(tmp());
+  b.deps.cfg = { ...b.deps.cfg, replayReviewer: 'cursor-review' };
+  await replayRun({ pr: 207, round: 1 }, b.deps);
+  assert.deepEqual([b.calls.runReview.length, b.calls.engine.length], [1, 0]);
+});
+
+test('an engine replay checks the engine freeze, not the cursor-review freeze (breaks if checkFreeze guards the engine path or the engine check is skipped)', async () => {
+  const dir = tmp();
+  const stale = engineDeps(dir, { checkEngineFreeze: () => ({ ok: false, reason: 'the engine prompt changed since the freeze' }), checkFreeze: okFreeze });
+  const r = await replayRun({ pr: 207, round: 1 }, stale.deps);
+  assert.deepEqual([r.exit, r.status], [2, 'frozen']);
+  assert.equal(stale.calls.engine.length, 0);
+  const wrongFreeze = engineDeps(tmp(), { checkFreeze: () => ({ ok: false, reason: 'old prompt' }) });
+  assert.equal((await replayRun({ pr: 207, round: 1 }, wrongFreeze.deps)).status, 'ok');
+});
+
+test('an engine failure is a failed row with the reason and no findings file; a cap stops with exit 3 (breaks if a failed run counts as ok)', async () => {
+  const dir = tmp();
+  const f = engineDeps(dir, {});
+  f.deps.runEngine = async () => ({ status: 'failed', reason: 'TIMED OUT after 1200 s', record: null, recordPath: null, tracePath: null, baseConfig: { source: 'current checkout', sha256: 'abc' } });
+  const r = await replayRun({ pr: 207, round: 1 }, f.deps);
+  assert.deepEqual([r.exit, r.status], [1, 'failed']);
+  const row = JSON.parse(readFileSync(f.deps.runsPath, 'utf8').trim());
+  assert.deepEqual([row.status, row.reason, row.findingsPath, row.reviewer], ['failed', 'TIMED OUT after 1200 s', null, 'engine']);
+  const c = engineDeps(tmp(), {});
+  c.deps.runEngine = async () => ({ status: 'cap', reason: '8 reached', record: null, recordPath: null, tracePath: null, baseConfig: {} });
+  assert.deepEqual([(await replayRun({ pr: 207, round: 1 }, c.deps)).exit], [3]);
+});
+
+test('an engine replay withholds the PR body by default, passes bodyMode through, and records it in the row (breaks if the default is full or the row omits bodyMode)', async () => {
+  const dir = tmp();
+  const a = engineDeps(dir);
+  await replayRun({ pr: 207, round: 1 }, a.deps);
+  assert.equal(a.calls.engine[0].bodyMode, 'withheld');
+  assert.equal(JSON.parse(readFileSync(a.deps.runsPath, 'utf8').trim()).bodyMode, 'withheld');
+  const b = engineDeps(tmp());
+  await replayRun({ pr: 207, round: 1, bodyMode: 'full' }, b.deps);
+  assert.equal(b.calls.engine[0].bodyMode, 'full');
+  assert.equal(JSON.parse(readFileSync(b.deps.runsPath, 'utf8').trim()).bodyMode, 'full');
+  const c = engineDeps(tmp());
+  assert.equal((await replayRun({ pr: 207, round: 1, bodyMode: 'half' }, c.deps)).exit, 2);
 });

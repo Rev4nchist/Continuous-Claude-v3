@@ -254,3 +254,33 @@ test('perClassRecall gives same-issue recall for each link class from linkTypes,
   assert.deepEqual(Object.keys(h).sort(), ['same-file', 'unlabelled', 'within-hunk']);
   assert.deepEqual(Object.keys(s.perClassRecall.dev), ['cross-file-dynamic'], 'a minor CodeRabbit finding with no class is not a Major: it adds no row');
 });
+
+// ---------- phase 1 bridge: funnel totals and the withdrawn list ----------
+
+test('evaluateRuns marks a missed Major as inWithdrawn when the reviewer withdrew a finding near it in the same file; a run with no withdrawn data gives null (breaks if the file or the line slack is ignored)', () => {
+  const sha40 = 'a'.repeat(40);
+  const ds = (key, file, start, end) => ({ key, pr: 7, sha40, path: file, startLine: start, endLine: end, severity: 'Major', verdict: 'real', source: 'inline' });
+  const dataset = [ds('7:1', 'a.mjs', 10, 12), ds('7:2', 'b.mjs', 50, 50), ds('7:3', 'c.mjs', null, null), ds('7:4', 'd.mjs', 5, 5)];
+  const runs = [{ status: 'ok', set: 'holdout', pr: 7, round: 1, sha40, findingsPath: 'x' }];
+  const withdrawn = [{ id: 'w1', path: 'a.mjs', line: 14, severity: 'major' }, { id: 'w2', path: 'b.mjs', line: 90, severity: 'major' }, { id: 'w3', path: 'c.mjs', line: 7, severity: 'minor' }];
+  const ev = evaluateRuns({ runs, dataset, readFindings: () => ({ findings: [], withdrawn }) });
+  const by = Object.fromEntries(ev.matches.map((m) => [m.key, m.inWithdrawn]));
+  assert.deepEqual(by, { '7:1': true, '7:2': false, '7:3': true, '7:4': false });
+  const old = evaluateRuns({ runs, dataset, readFindings: () => ({ findings: [] }) });
+  assert.ok(old.matches.every((x) => x.inWithdrawn === null));
+});
+
+test('scorecard sums the funnel of the valid runs and counts the holdout misses that the reviewer withdrew (breaks if a count reads the wrong field or a run with another prompt hash is summed)', () => {
+  const f = (raw, withdrawn, byReason, posted) => ({ raw, withdrawn, dropped: { byReason }, posted });
+  const runs = [
+    run(1, 'holdout', [], { funnel: f(3, 2, { 'no-file': 1 }, 2) }), run(2, 'holdout', [], { funnel: f(1, 4, { duplicate: 1, 'no-file': 2 }, 0) }),
+    run(2, 'holdout', [], { promptSha256: 'OTHER', funnel: f(99, 99, {}, 99) }), run(9, 'dev', []),
+  ];
+  const matches = [
+    m('k1', 1, 'holdout', 'major', 'major', { inWithdrawn: null }), m('k2', 1, 'holdout', 'major', null, { inWithdrawn: true }),
+    m('k3', 2, 'holdout', 'major', null, { inWithdrawn: false }), m('k4', 2, 'holdout', 'major', null, { inWithdrawn: true }), m('k5', 2, 'holdout', 'major', null, { inWithdrawn: null }),
+  ];
+  const s = scorecard({ ...base, runs, matches, labels: [] });
+  assert.deepEqual(s.funnel, { runs: 2, raw: 4, withdrawn: 6, dropped: { total: 4, byReason: { 'no-file': 3, duplicate: 1 } }, posted: 2 });
+  assert.deepEqual(s.withdrawnMisses, { misses: 4, inWithdrawn: 2, noData: 1 });
+});

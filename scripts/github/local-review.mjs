@@ -51,6 +51,8 @@ const SLOT_GRACE_MS = 10 * MIN;
 const TMP_GRACE_MS = 30 * MIN;
 const KEEP_ENGINES = 3;
 const SHA40 = /^[0-9a-f]{40}$/;
+/** An eval run withholds the PR body: the body of a merged PR now holds the review findings and their fixes. A live review never does. */
+export const BODY_WITHHELD = '(PR body withheld for evaluation)';
 const RESERVED_SLUGS = new Set(['engine']);
 /** Windows folds case and drops trailing dots from a folder name, so Engine and engine. are the engine/ folder there. */
 const foldSlug = (slug) => slug.toLowerCase().replace(/\.+$/, '');
@@ -607,7 +609,7 @@ function writeReviewDir(s, prep) {
   stripIgnoreFiles(prep.dir, d.platform);
   const agentFiles = [...new Set([...(prep.agentFiles ?? []), ...prep.files.filter((f) => isIgnoreFile(f, d.platform))])];
   const diffText = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
-  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: target.pull, files: target.files, gates: s.opts.gatesText, capKb: cfg.context_cap_kb };
+  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: s.opts.withholdBody ? { ...target.pull, body: BODY_WITHHELD } : target.pull, files: target.files, gates: s.opts.gatesText, capKb: cfg.context_cap_kb };
   const ctx = buildContext(input, { readAtSha: d.readAtSha });
   writeFileSync(path.join(dir, 'CONTEXT.md'), ctx.text);
   const delta = s.range.mode === 'delta';
@@ -669,7 +671,7 @@ async function runAttempts(s, prep, plan) {
     if (!reserved.ok) return { stopped: reserved, prev, runs };
     if (prev) endLine(s, prev);
     prev = await runOnce(s, prep, plan, reserved.id, n);
-    runs.push({ runId: prev.runId, attempt: n, model: route.model, exit: prev.run.status, timedOut: Boolean(prev.run.timedOut), durationMs: prev.run.durationMs ?? null, usage: prev.parsed.usage });
+    runs.push({ runId: prev.runId, attempt: n, model: route.model, exit: prev.run.status, timedOut: Boolean(prev.run.timedOut), durationMs: prev.run.durationMs ?? null, usage: prev.parsed.usage, modelVerified: Boolean(prev.parsed.modelVerified) });
     if (!retryable(prev)) break;
   }
   return { stopped: null, prev, runs };
@@ -728,6 +730,7 @@ function buildRecord(s, plan, out, answer, filtered, error) {
     escalate: route.escalate, runs: out.runs,
     coverage: { selected, ignoredByFilter: filtered.dropped.length, claimedReviewed, complete },
     contextMissing: plan.ctx.contextMissing, findings: filtered.findings, dropped: filtered.dropped, problems,
+    bodyMode: s.opts.withholdBody ? 'withheld' : 'full',
     funnel: buildFunnel({ answer: error ? null : answer, dropped: filtered.dropped, kept: filtered.kept }), withdrawn: error ? [] : (answer?.withdrawn ?? []), ts: new Date(s.d.now()).toISOString(),
   };
 }
@@ -812,7 +815,7 @@ async function runHead(opts, d) {
 }
 
 /**
- * One review of one PR head. opts: { pr, fresh, gatesText, engineHere, root, repo }.
+ * One review of one PR head. opts: { pr, fresh, gatesText, engineHere, withholdBody (eval runs only), root, repo }.
  * deps (tests): { git, gh, runAgent, reserveRun, finishRun, writeRecord, prepareReview, readAtSha, agent, now, pidAlive, sleep, env, stateRoot,
  *   stateDir, cursorLedger, selfPath, selfRoot, configPath, tmpRoot, grep, stderr }.
  * -> { exit, recordPath|null, skipReason|null, ... }

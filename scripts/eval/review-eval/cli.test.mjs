@@ -5,7 +5,8 @@
 //  replay needs --pr and --round (or --all-majors) -> missing args start a run
 //  labels export over the week cap exits 2      -> main maps the refusal to 0
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -73,4 +74,59 @@ test('score reads --linktype and report prints n, raw agreement, kappa, the NOTE
   assert.match(text, /Judge agreement \| n=0, raw n\/a, kappa n\/a, NOTE/);
   assert.match(text, /same-issue recall.*1\/1/i);
   assert.match(text, /same-file \| 100% \(1\/1\)/);
+});
+
+// ---------- phase 1 bridge: engine reviewer, run sets, engine freeze ----------
+
+test('replay --only keeps one set, and --reviewer reaches replayRun; with no flag the reviewer is left to replayRun (breaks if --only is ignored or the reviewer is dropped)', async () => {
+  const calls = [];
+  const io = {
+    ...quiet(),
+    loadFindings: async () => [{ pr: 1, round: 1, set: 'holdout' }, { pr: 2, round: 1, set: 'dev' }, { pr: 3, round: 2, set: 'holdout' }],
+    replayRun: async (a) => { calls.push(a); return { exit: 0, status: 'ok' }; },
+  };
+  assert.equal(await main(['replay', '--all-majors', '--only', 'holdout', '--reviewer', 'cursor-review'], io), 0);
+  assert.deepEqual(calls.map((c) => [c.pr, c.set, c.reviewer]), [[1, 'holdout', 'cursor-review'], [3, 'holdout', 'cursor-review']]);
+  calls.length = 0;
+  await main(['replay', '--all-majors'], io);
+  assert.equal(calls.length, 3);
+  assert.equal(calls.every((c) => c.reviewer === undefined), true);
+  assert.equal(await main(['replay', '--all-majors', '--only', 'nope'], io), 2);
+});
+
+test('freeze --engine records the engine prompt hashes in the config and leaves the old freeze (breaks if freeze --engine writes the cursor-review hash)', async () => {
+  const file = path.join(tmp(), 'config.json');
+  writeFileSync(file, JSON.stringify({ freeze: { promptSha256: 'old' } }));
+  const io = quiet();
+  assert.equal(await main(['freeze', '--engine', '--config', file, '--root', fileURLToPath(new URL('../../..', import.meta.url))], io), 0);
+  const { buildEnginePrompt } = await import('../../github/local-review/prompt.mjs');
+  const cfg = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(cfg.engineFreeze.promptSha256.full, buildEnginePrompt({ mode: 'full' }).promptSha256);
+  assert.equal(cfg.freeze.promptSha256, 'old');
+});
+
+test('score judges engine runs against the engine freeze, and report prints the funnel and the withdrawn misses (breaks if engine rows are checked against the old freeze or a line is missing)', async () => {
+  const dir = tmp();
+  const sha40 = 'b'.repeat(40);
+  writeFileSync(path.join(dir, 'findings.json'), JSON.stringify({ findings: [{ file: 'src/other.mjs', line: 3, severity: 'minor', title: 'x' }], withdrawn: [{ id: 'w1', path: 'src/a.mjs', line: 11, severity: 'major', reason: 'r' }] }));
+  const funnel = { raw: 1, withdrawn: 1, dropped: { byReason: { 'no-file': 1 } }, posted: 1 };
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${JSON.stringify({ reviewer: 'engine', set: 'holdout', pr: 5, round: 1, sha40, status: 'ok', ts: '2026-11-04T00:00:00Z', promptSha256: 'E1', funnel, findingsPath: path.join(dir, 'findings.json') })}\n`);
+  writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [{ key: '5:1', pr: 5, sha40, path: 'src/a.mjs', startLine: 10, endLine: 10, severity: 'Major', verdict: 'real', source: 'inline' }], zeroMajorPrs: [] }));
+  const lt = path.join(dir, 'lt.json');
+  writeFileSync(lt, JSON.stringify({ labels: { '5:1': { final: 'within-hunk' } } }));
+  const cfg = { freeze: { promptSha256: 'OLD' }, engineFreeze: { promptSha256: { full: 'E1', delta: 'D1' } } };
+  const io = quiet();
+  assert.equal(await main(['report', '--dir', dir, '--linktype', lt], { ...io, cfg }), 0);
+  const text = io.out.join('\n');
+  assert.match(text, /Strict Major recall \| 0% \(0\/1\)/);
+  assert.match(text, /Funnel, 1 run\(s\) \| raw 1, withdrawn 1, dropped 1 \(no-file 1\), posted 1/);
+  assert.match(text, /Holdout misses the reviewer withdrew \| 1 of 1 \(no data: 0\)/);
+});
+
+test('replay --body full reaches replayRun as bodyMode; with no flag bodyMode is left to replayRun (breaks if the flag is dropped)', async () => {
+  const calls = [];
+  const io = { ...quiet(), replayRun: async (a) => { calls.push(a); return { exit: 0, status: 'ok' }; } };
+  await main(['replay', '--pr', '207', '--round', '1', '--body', 'full'], io);
+  await main(['replay', '--pr', '207', '--round', '1'], io);
+  assert.deepEqual(calls.map((c) => c.bodyMode), ['full', undefined]);
 });

@@ -319,14 +319,35 @@ export function headHasFile(root, head) {
   return (file) => !known || type(`${head}:${file}`) === 'blob';
 }
 
+/** 'Grok 4.7 256K High' -> 'grok-4.7-high'. The stream names the model as a display name; a model id passes through. */
+export function normalizeModelName(name) {
+  const words = String(name ?? '').toLowerCase().replace(/\bextra[\s-]*high\b/g, 'xhigh').split(/\s+/).filter((w) => w !== '' && !/^\d+k$/.test(w));
+  return words.join('-');
+}
+
+/** The model the stream's system/init event names, as a model id, or null. A line that is not JSON is skipped. */
+function initModel(stdout) {
+  for (const line of String(stdout ?? '').split(/\r?\n/)) {
+    if (!line.includes('"init"')) continue;
+    try {
+      const o = JSON.parse(line);
+      if (o?.type === 'system' && o.subtype === 'init' && typeof o.model === 'string' && o.model !== '') return normalizeModelName(o.model);
+    } catch { /* not a JSON line */ }
+  }
+  return null;
+}
+
 function parseAnswer(stdout, expectModel) {
   const base = { ok: false, isError: false, format: 'none', findings: [], clean: false, problems: [], usage: null, sessionId: null, durationMs: null, modelVerified: false, modelMismatch: false, text: '' };
   const line = resultFromStream(stdout);
   const result = line === null ? null : JSON.parse(line);
   if (!result) return { ...base, problems: ['no result JSON in the agent output'] };
   const p = { ...base, usage: result.usage ?? null, sessionId: result.session_id ?? null, durationMs: result.duration_ms ?? null, text: String(result.result ?? '') };
-  const echo = typeof result.model === 'string' ? result.model : null;
-  p.modelMismatch = Boolean(echo && expectModel && echo !== expectModel);
+  // The result line of a stream-json run has no model; the init event names it. A model on the result line wins.
+  const echo = typeof result.model === 'string' ? result.model : initModel(stdout);
+  // An init name with no effort word ('Grok 4.7' for grok-4.7-high) is less specific, not another model: it verifies nothing and voids nothing.
+  const lessSpecific = typeof result.model !== 'string' && Boolean(echo && expectModel && expectModel.startsWith(`${echo}-`));
+  p.modelMismatch = Boolean(echo && expectModel && echo !== expectModel && !lessSpecific);
   p.modelVerified = Boolean(echo && expectModel && echo === expectModel);
   if (result.is_error === true || (result.subtype && result.subtype !== 'success')) {
     return { ...p, isError: true, problems: [`the agent reported an error: ${clip(p.text || String(result.subtype), 200)}`] };

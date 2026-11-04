@@ -1390,3 +1390,32 @@ test('trace: a run whose agent crashed still writes a trace with empty lists (br
   assert.deepEqual([trace.filesRead, trace.greps, trace.toolErrors], [[], [], []]);
   assert.equal(existsSync(besideRecord(r, '.stream.jsonl.gz')), false);
 });
+
+test('model check: the init model of the stream sets modelVerified on the run, and a run that names another model is void (breaks if the engine reads only the result line)', async () => {
+  const w = world({ runs: [streamRun([finding()])] });
+  const rec = readRecord(await run(w));
+  assert.equal(rec.runs[0].modelVerified, true);
+  const other = (spec) => {
+    const r = streamRun()(spec);
+    return { ...r, stdout: r.stdout.replace('Grok 4.7 256K High', 'Grok 4.7 256K Extra High') };
+  };
+  const bad = await run(world({ runs: [other] }));
+  assert.equal(bad.exit, EXIT.FAILED);
+  assert.match(readRecord(bad).problems.join('\n'), /model check failed/);
+});
+
+// ---------- eval runs: the PR body is withheld (the current body of a merged PR holds the findings and their fixes) ----------
+
+test('withholdBody: CONTEXT.md carries the title and a placeholder, never the body, and the record says bodyMode withheld; a live review keeps the body (breaks if the body reaches the reviewer in eval mode or the default changes)', async () => {
+  const w = world({ pull: pullOf({ title: 'Fix the parser', body: 'SECRET-BODY: CodeRabbit found X and it was fixed in abc123' }), runs: [agentRun()] });
+  const r = await run(w, { withholdBody: true });
+  const ctx = w.agentCalls[0].context;
+  assert.match(ctx, /Fix the parser/);
+  assert.match(ctx, /\(PR body withheld for evaluation\)/);
+  assert.doesNotMatch(ctx, /SECRET-BODY/);
+  assert.equal(readRecord(r).bodyMode, 'withheld');
+  const live = world({ pull: pullOf({ title: 'Fix the parser', body: 'SECRET-BODY: live' }), runs: [agentRun()] });
+  const lr = await run(live);
+  assert.match(live.agentCalls[0].context, /SECRET-BODY: live/);
+  assert.equal(readRecord(lr).bodyMode, 'full');
+});

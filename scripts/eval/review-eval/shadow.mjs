@@ -241,7 +241,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
  */
 export function defaultShadowEngine({ cfg, gh, root, repoRoot = REPO_ROOT, replayRun = realReplayRun }) {
   return async ({ pr, rank, sha40 }) => {
-    const res = await replayRun({ pr, round: rank, set: 'shadow', kind: 'shadow' }, { root: repoRoot, cfg, gh, outRoot: path.join(root, 'replay'), runsPath: path.join(root, 'runs.jsonl') });
+    // The shadow version hashes the old freeze (cursor-review's prompt), so the shadow replay stays on that reviewer.
+    const res = await replayRun({ pr, round: rank, set: 'shadow', kind: 'shadow', reviewer: 'cursor-review' }, { root: repoRoot, cfg, gh, outRoot: path.join(root, 'replay'), runsPath: path.join(root, 'runs.jsonl') });
     const at = res.record?.sha40 ?? sha40;
     if (res.status === 'ok') {
       let found = {};
