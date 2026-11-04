@@ -5,9 +5,10 @@
 // zizmor exits 14 on a High finding in json mode, so the exit code is ignored. Only the JSON is read.
 // The repo config is .github/zizmor.yml; zizmor finds it from the input files.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { scannerBase, versionFoldersNewestFirst } from './scanner-bin.mjs';
 
 const SEVERITIES = ['High', 'Medium', 'Low', 'Informational', 'Unknown'];
 const WORKFLOW = /^\.github\/workflows\/[^/]+\.ya?ml$/;
@@ -17,15 +18,10 @@ const note = (detail) => ({ step: 'zizmor', status: 'NOTE', detail, notes: [] })
 const LOAD_FAILURE = /failed to load (?:file:\/\/)?(\S+) as /;
 const COLLECT_WARNING = /WARN.*failed to (?:parse|load|collect)/i;
 
-const versionKey = (name) => (/\d+(?:\.\d+)*/.exec(name)?.[0] ?? '0').split('.').map(Number);
-const newer = (a, b) => { const [x, y] = [versionKey(a), versionKey(b)]; for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (y[i] ?? 0) - (x[i] ?? 0); return 0; };
-
 export function findZizmor({ env = process.env, home = homedir() } = {}) {
   if (env.CCV3_ZIZMOR && existsSync(env.CCV3_ZIZMOR)) return env.CCV3_ZIZMOR;
-  const base = path.join(home, 'tools', 'review-scanners', 'zizmor');
-  let versions = [];
-  try { versions = readdirSync(base); } catch { return null; }
-  return versions.sort(newer).map((v) => path.join(base, v, 'bin', 'zizmor.exe')).find((p) => existsSync(p)) ?? null;
+  const base = scannerBase('zizmor', home);
+  return versionFoldersNewestFirst(base).map((v) => path.join(base, v, 'bin', 'zizmor.exe')).find((p) => existsSync(p)) ?? null;
 }
 
 export function workflowFiles(paths, root) {
