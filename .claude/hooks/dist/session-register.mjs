@@ -6174,7 +6174,8 @@ function recordStart(input, plan, live) {
     endedAt: null,
     endReason: null,
     // Every start rewrites the pid: a resumed session has the same uuid and a new process.
-    pid: claudePidFromEnv()
+    // No usable CLAUDE_PID: clear it. The stored one belongs to an earlier process of this session.
+    pid: claudePidFromEnv() ?? null
   });
   if (plan.previous && input.source !== "fork") runAdopt(uuid, plan.previous);
   const hint = input.source === "startup" && input.session_title ? sameNameHint(uuid, plan.name, input.cwd) : null;

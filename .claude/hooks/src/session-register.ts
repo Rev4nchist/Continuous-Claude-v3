@@ -130,7 +130,8 @@ function recordStart(
     endedAt: null,
     endReason: null,
     // Every start rewrites the pid: a resumed session has the same uuid and a new process.
-    pid: claudePidFromEnv(),
+    // No usable CLAUDE_PID: clear it. The stored one belongs to an earlier process of this session.
+    pid: claudePidFromEnv() ?? null,
   });
   if (plan.previous && input.source !== 'fork') runAdopt(uuid, plan.previous);
   // Report only, never move lanes (D6): a session Dave named, started while an unended twin holds the name.
