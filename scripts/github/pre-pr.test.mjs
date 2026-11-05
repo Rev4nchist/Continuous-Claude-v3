@@ -53,10 +53,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as PRE from './pre-pr.mjs';
+import { REGISTRY } from '../checks/parser-fixtures/registry.mjs';
 import { MARKER } from './lib/pssa-advisory.mjs';
 import { cliCapOf } from './cr-paid.mjs';
 import {
-  SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
+  SURFACES, ALWAYS_GATES, CATCHER_PARSER_FILES, BASE_TOKEN, withBase, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
   parseAgentStream, parseUsage, usageCostOf, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
   killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn, acquireLock,
@@ -229,8 +230,33 @@ test('GW7: a Markdown-only change under scripts/ or a hook folder needs no Docke
 test('GW4: a change under scripts/checks runs the checks helper tests, and the files named exist', async () => {
   const g = gatesFor(['scripts/checks/proofs.json'], REPO_ROOT).find((x) => x.id === 'checks-tests');
   assert.ok(g);
-  assert.deepEqual(g.args, ['--test', 'scripts/checks/prove-check.test.mjs', 'scripts/checks/state-table.test.mjs']);
+  for (const n of ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers']) {
+    assert.ok(g.args.includes(`scripts/checks/${n}.test.mjs`), `${n}.test.mjs is left out of the checks-tests gate`);
+  }
   for (const a of g.args.slice(1)) assert.ok(existsSync(path.join(REPO_ROOT, a)), a);
+});
+
+test('CW1: a changed scripts/**/*.mjs or a registered parser file runs the catchers gate; docs and other code do not (breaks if a glob is dropped)', async () => {
+  for (const p of ['scripts/github/pre-pr.mjs', 'scripts/settings/remove-maestro-registrations.mjs', ...CATCHER_PARSER_FILES]) {
+    assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('catchers'), p);
+  }
+  for (const p of ['docs/x.md', '.claude/hooks/src/a.ts', 'scripts/github/README.md']) assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('catchers'), false, p);
+  const g = gatesFor(['scripts/a.mjs'], REPO_ROOT).find((x) => x.id === 'catchers');
+  assert.deepEqual(g.args.slice(0, 5), ['scripts/checks/catchers.mjs', '--base', BASE_TOKEN, '--head', 'HEAD']);
+  assert.ok(existsSync(path.join(REPO_ROOT, g.args[0])));
+});
+
+test('CW2: every file in the parser-fixtures registry triggers the catchers gate (breaks if a registry entry names a file the surface does not own)', async () => {
+  assert.ok(REGISTRY.length >= 10, 'the registry is not empty');
+  for (const file of new Set(REGISTRY.map((e) => e.file))) assert.ok(ids(gatesFor([file], REPO_ROOT)).includes('catchers'), file);
+});
+
+test('CW3: withBase replaces only the base token and leaves other gates alone (breaks if the token reaches the command line)', async () => {
+  const g = gatesFor(['scripts/a.mjs'], REPO_ROOT).find((x) => x.id === 'catchers');
+  assert.deepEqual(withBase(g, 'release').args.slice(0, 5), ['scripts/checks/catchers.mjs', '--base', 'release', '--head', 'HEAD']);
+  assert.ok(g.args.includes(BASE_TOKEN), 'the table row is not changed');
+  const other = gatesFor(['docs/x.md'], REPO_ROOT)[0];
+  assert.equal(withBase(other, 'release'), other);
 });
 
 test('GW4b: a change under scripts/trex, or to the shared selector test-map.mjs, runs the TREX node tests', async () => {
@@ -1334,6 +1360,24 @@ test('R2: a failing step writes no stamp, deletes an old one, and does not run t
   assert.equal(second.crCalls.length, 0, 'no review slot spent');
   assert.ok(second.result.lines.some((l) => /^FAIL git:clean/.test(l)), second.result.lines.join('\n'));
   assert.ok(second.result.lines.some((l) => /^SKIP coderabbit/.test(l)), second.result.lines.join('\n'));
+});
+
+test('CW4: runPrePr gives the catchers gate the real base, and a failing catchers gate blocks the stamp (breaks if the token is not replaced or a catchers FAIL is ignored)', async () => {
+  const repo = makeRepo({ files: { 'scripts/a.mjs': 'export const a = 1;\n' } });
+  const specs = [];
+  const exec = (spec) => {
+    specs.push(spec);
+    return spec.id === 'catchers' ? { status: 1, stdout: 'cli-smoke GATE: 1 failed of 1 script(s) run\ncatchers: FAIL: smoke 1 failed of 1\n', stderr: '' } : { status: 0, stdout: 'ok\n', stderr: '' };
+  };
+  // keepGoing: this repo has no PR body, so the evidence step fails first and fail-fast would skip the gate.
+  const { result, crCalls } = await prePr(repo, { exec, keepGoing: true });
+  const gate = specs.find((x) => x.id === 'catchers');
+  assert.ok(gate, specs.map((x) => x.id).join(',') + '\n' + result.lines.join('\n'));
+  assert.deepEqual(gate.args.slice(0, 5), ['scripts/checks/catchers.mjs', '--base', 'main', '--head', 'HEAD']);
+  assert.equal(result.ok, false);
+  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
+  assert.ok(result.lines.some((l) => /^FAIL gate:catchers.*catchers: FAIL/.test(l)), result.lines.join('\n'));
+  assert.equal(crCalls.length, 0);
 });
 
 test('R2b: a failing gate fails the run, and the gate summary is in its line', async () => {

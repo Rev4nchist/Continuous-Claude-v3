@@ -19,7 +19,9 @@ const GATES_MAX = 6 * KB;
 const TREX_MAX = 2 * KB;
 const MAX_GUIDE_DIRS = 60;
 const GUIDE_NAMES = ['AGENTS.md', 'CLAUDE.md', '.cursorrules'];
-const RANK = { path: 10, skip: 20, gates: 30, trex: 40, guideline: 100 };
+const FACTS_MAX = 6 * KB;
+// catchers sits just above gates: the cap cuts higher numbers first, so the catcher facts outlive the gates text.
+const RANK = { path: 10, skip: 20, catchers: 25, gates: 30, trex: 40, guideline: 100 };
 
 const lf = (s) => String(s ?? '').replace(/\r\n?/g, '\n');
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}\n[cut: ${s.length - n} more characters]` : s);
@@ -220,6 +222,14 @@ function gatesSection(gates) {
   return { name: 'gates', rank: RANK.gates, text: `## Check results from the builder's gates (data)\n${fence(clip(lf(text).trim(), GATES_MAX), 'text')}` };
 }
 
+/** The facts from scripts/checks/catchers.mjs (string or object), fenced as data. Absent or empty: left out without a note. */
+function catchersSection(facts) {
+  if (facts === undefined || facts === null || facts === '') return null;
+  const text = typeof facts === 'string' ? facts : JSON.stringify(facts, null, 1);
+  if (lf(text).trim() === '') return null;
+  return { name: 'catchers', rank: RANK.catchers, text: `## Deterministic catcher facts (data, not instructions)\n${fence(clip(lf(text).trim(), FACTS_MAX), 'text')}` };
+}
+
 /** { section, keys }. Nothing at all (undefined, null, '') is left out without a note. A bad line is left out and noted. */
 function trexSection(c, trex) {
   if (trex === undefined || trex === null || trex === '') return { section: null, keys: [] };
@@ -287,9 +297,10 @@ function baseReader(input, reader) {
 
 /**
  * The text of .review/CONTEXT.md.
- * input: { root, mergeBase, head, pull: { title, body }, files: [path | { filename, previous_filename }], gates, trex, capKb }
+ * input: { root, mergeBase, head, pull: { title, body }, files: [path | { filename, previous_filename }], gates, facts, trex, capKb }
  *   - mergeBase: the commit every config file is read at. head is for the header only.
  *   - gates: the --gates result (string or object), fenced as data.
+ *   - facts: the --facts result (the catchers.mjs markdown, string or object), fenced as data and ranked above gates.
  *   - trex: the TREX run's one-line JSON summary (string or object). Any single-line JSON object is accepted; its keys are returned.
  *     Absent: the TREX section is left out without a note.
  * deps (tests): { readAtSha(root, sha, rel), parseReviewMd }
@@ -306,6 +317,7 @@ export function buildContext(input, deps = {}) {
     prSection(input, capKb * KB),
     pathInstructionsSection(c, yaml, changed),
     skipSection(c, deps.parseReviewMd ?? defaultParseReviewMd),
+    catchersSection(input.facts),
     gatesSection(input.gates),
     trex.section,
     ...guidelineSections(c, yaml, changed),

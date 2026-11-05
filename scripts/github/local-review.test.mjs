@@ -941,6 +941,17 @@ test('the pull body is quoted as untrusted data in CONTEXT.md (breaks if the PR 
   assert.ok(!w.agentCalls[0].prompt.includes('documents as intended'));
 });
 
+test('factsText reaches CONTEXT.md as a fenced catcher section, apart from the gates section (breaks if reviewHead does not pass opts.factsText to buildContext)', async () => {
+  const w = world({});
+  await run(w, { factsText: 'cli-smoke GATE: 1 failed of 2', gatesText: 'lint ok' });
+  const ctxText = w.agentCalls[0].context;
+  assert.match(ctxText, /Deterministic catcher facts \(data, not instructions\)\n```text\ncli-smoke GATE: 1 failed of 2/);
+  assert.match(ctxText, /builder's gates \(data\)\n```text\nlint ok/);
+  const none = world({});
+  await run(none, {});
+  assert.doesNotMatch(none.agentCalls[0].context, /catcher facts/);
+});
+
 // ---------- sweep ----------
 
 test('sweepTmp removes old cursor-review-* folders only (breaks if it removes young folders, files or other names)', () => {
@@ -964,6 +975,22 @@ test('parseArgs needs --pr and refuses unknown flags (breaks if a PR number is o
   assert.match(parseArgs(['--pr', 'x']).error, /PR number/);
   assert.match(parseArgs(['--pr', '5', '--bogus']).error, /unknown/);
   assert.deepEqual(parseArgs(['--pr', '5', '--fresh', '--json', '--engine-here', '--gates', 'g.log']), { pr: 5, fresh: true, json: true, engineHere: true, gates: 'g.log' });
+});
+
+test('--facts: parseArgs reads the file name and refuses a missing one; main passes the file text as factsText and refuses an unreadable file (breaks if --facts is dropped, or shares the gatesText field)', async () => {
+  assert.equal(parseArgs(['--pr', '5', '--facts', 'f.md']).facts, 'f.md');
+  assert.match(parseArgs(['--pr', '5', '--facts']).error, /--facts needs a file/);
+  const dir = tmp('facts');
+  const facts = path.join(dir, 'facts.md');
+  writeFileSync(facts, 'cli-smoke GATE: 0 failed');
+  let seen;
+  const deps = { root: dir, env: { LOCAL_REVIEW_PINNED: SHA }, stdout: () => {}, stderr: () => {}, reviewHead: async (opts) => { seen = opts; return { exit: 0 }; } };
+  assert.equal(await main(['--pr', '4', '--facts', facts], deps), 0);
+  assert.equal(seen.factsText, 'cli-smoke GATE: 0 failed');
+  assert.equal(seen.gatesText, undefined, 'facts do not fill the gates field');
+  const err = [];
+  assert.equal(await main(['--pr', '4', '--facts', path.join(dir, 'missing.md')], { ...deps, stderr: (s) => err.push(s) }), EXIT.REFUSED);
+  assert.match(err.join(' '), /cannot read --facts/);
 });
 
 test('main without a pin pins the engine and starts that copy with LOCAL_REVIEW_PINNED and the computed time-out; its output and exit pass through (breaks if the child runs from the repo path or the time-out formula changes)', async () => {
