@@ -384,3 +384,57 @@ test('CP24: `today` lists a cli row as CLI with its branch, not as PR #undefined
   assert.match(text, /PR #225/);
   h.done();
 });
+
+// ---------- the month counter (interim CodeRabbit rule, Dave 2026-11-04) ----------
+// How it can fail: a CLI row counts; a row of another month counts; October counts in November (a prefix slip, "2026-1" matches "2026-10");
+// a bad ledger gives a count instead of throwing; `month` asks for --pr like `check`; the day roll uses UTC and not Chicago.
+
+const filesRow = (pr, files, date) => ({ ts: `${date}T10:00:00.000Z`, date, pr, head: HEAD, files, cost: files * 0.25, session: 's' });
+
+test('CP25: monthToDateFiles sums the files of PR rows of that month only: no cli rows, no other month, no prefix slip', () => {
+  const rows = [
+    filesRow(1, 10, '2026-11-01'), filesRow(2, 5, '2026-11-04'),
+    { ...cliRow(2, '2026-11-02'), files: 40 },
+    filesRow(3, 100, '2026-10-31'), filesRow(4, 100, '2025-11-04'),
+    { ts: '2026-11-03T10:00:00.000Z', date: '2026-11-03', kind: 'pr', pr: 5, head: HEAD, files: 7, cost: 1.75, session: 's' },
+  ];
+  assert.equal(PAID.monthToDateFiles(rows, '2026-11'), 22);
+  assert.equal(PAID.monthToDateFiles(rows, '2026-10'), 100);
+  assert.equal(PAID.monthToDateFiles(rows, '2026-1'.slice(0, 7)), 0, 'a short prefix is not a month');
+  assert.equal(PAID.monthToDateFiles([], '2026-11'), 0);
+});
+
+test('CP25b: a counted PR row with a missing, fractional, negative or non-number files throws; a row outside the month or a cli row is not checked', () => {
+  const good = filesRow(1, 10, '2026-11-01');
+  for (const bad of [undefined, null, -5, 2.5, '7', NaN]) {
+    assert.throws(() => PAID.monthToDateFiles([good, { ...filesRow(2, 1, '2026-11-02'), files: bad }], '2026-11'), /files/, `files ${String(bad)}`);
+  }
+  const outside = [good, { ...filesRow(3, 1, '2026-10-30'), files: -1 }, { ...cliRow(2, '2026-11-02'), files: undefined }];
+  assert.equal(PAID.monthToDateFiles(outside, '2026-11'), 10);
+});
+
+test('CP26: monthOf reads the Chicago month of now (a UTC roll does not move it), and a bad ledger throws', () => {
+  const h = harness({ rows: [filesRow(1, 12, '2026-10-31'), filesRow(2, 3, '2026-11-01')], now: new Date('2026-11-01T03:00:00Z') });
+  // 2026-11-01T03:00Z is 2026-10-31 22:00 CDT: still October in Chicago.
+  assert.deepEqual([PAID.monthOf(h.deps).month, PAID.monthOf(h.deps).files], ['2026-10', 12]);
+  h.done();
+  const nov = harness({ rows: [filesRow(1, 12, '2026-10-31'), filesRow(2, 3, '2026-11-01')], now: new Date('2026-11-04T15:00:00Z') });
+  assert.deepEqual([PAID.monthOf(nov.deps).month, PAID.monthOf(nov.deps).files], ['2026-11', 3]);
+  nov.done();
+  const bad = harness({ raw: 'not json\n' });
+  assert.throws(() => PAID.monthOf(bad.deps), /ledger line 1/);
+  bad.done();
+  assert.equal(PAID.monthOf(harness().deps).files, 0, 'a missing ledger is an empty month');
+});
+
+test('CP27: the `month` subcommand needs no --pr, and its line says the count undercounts free-slot reviews', () => {
+  assert.equal(PAID.parseArgs(['month']).cmd, 'month');
+  assert.equal(PAID.parseArgs(['month', '--json']).json, true);
+  const h = harness({ rows: [filesRow(1, 12, '2026-10-30')] });
+  const text = PAID.monthLines(PAID.monthOf(h.deps)).join('\n');
+  assert.match(text, /2026-10/);
+  assert.match(text, /12 file/);
+  assert.match(text, /paid rounds only/i);
+  assert.match(text, /free/i);
+  h.done();
+});

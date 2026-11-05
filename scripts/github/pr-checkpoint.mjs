@@ -36,6 +36,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
+import { monthOf } from './cr-paid.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -227,11 +228,17 @@ function greptileRule(rule, label, c) {
 const criticalRule = (c) => (c.critical.length ? greptileRule('R3', `Critical file ${list(c.critical)}`, c) : null);
 const r3Rule = (c) => (c.cls === 'r3' ? greptileRule('R4', 'Class r3', c) : null);
 
-function noneReason(c) {
+/** Why a PR is docs-only (class docs, or only thoughts/, artifacts/ and .claudedocs/ paths), or null. Only these skip the CodeRabbit trigger. */
+function docsOnlyReason(c) {
   if (c.cls === 'docs' || c.budgetClass === 'docs') return 'Class docs: no bot review.';
-  if (c.size.lines === 0) return 'No reviewable lines: every path is filtered or a build output.';
   const quiet = c.paths.every((p) => QUIET_DIRS.some((d) => p.startsWith(d)));
   return quiet ? 'Only thoughts/, artifacts/ or .claudedocs/ paths: no bot review.' : null;
+}
+
+function noneReason(c) {
+  const docs = docsOnlyReason(c);
+  if (docs) return docs;
+  return c.size.lines === 0 ? 'No reviewable lines: every path is filtered or a build output.' : null;
 }
 
 function noneRule(c) {
@@ -263,19 +270,59 @@ function smallRule(c) {
 }
 
 /**
- * RB (review matrix, option A): the band decides. LOW, MID and ELEVATED get no CodeRabbit PR bot; HIGH and CRITICAL get it at the
- * matrix.bot_budget. Dave can still press CodeRabbit on a lower band (an escalation); this is only the recommendation.
+ * The CodeRabbit PR bot is scarce ($0.25 a file, $50 a month). Interim rule (Dave 2026-11-04): a HIGH or CRITICAL PR earns it only through
+ * (a) the risk:high label, or (b) band CRITICAL plus a changed matrix.security_tier or CRITICAL_TRUST_BOUNDARY file. Returns the cause text, or null.
+ * Band CRITICAL from an r3 path alone, or from a checkpoint.critical file, earns nothing. Docs-only PRs are cut before this (docsOnlyReason); a zero-line code PR is not.
+ */
+function crTrigger(b) {
+  if (b.labelHigh) return 'the risk:high label';
+  const named = [...new Set([...(b.securityTier ?? []), ...(b.trustFiles ?? [])])];
+  return b.band === 'CRITICAL' && named.length ? `band CRITICAL with ${list(named)} (security-tier or trust-boundary file)` : null;
+}
+
+/** The cap in files from coderabbit.monthly_file_cap, or null (no cap) when the key is missing or not a whole number of 0 or more. */
+const monthCapOf = (policy) => {
+  const cap = policy.coderabbit?.monthly_file_cap;
+  return Number.isInteger(cap) && cap >= 0 ? cap : null;
+};
+
+const LEDGER_NOTE = 'ledger month-to-date counts paid rounds only, so it undercounts reviews that used a free slot';
+
+/**
+ * Why the month cap stops a CodeRabbit recommendation, or null. facts.ledger_month_files: a number (the ledger count), null (the ledger
+ * could not be read: fail closed, no spend recommended) or absent (a fixture: not checked). Over the cap means count + this PR's files > cap.
+ */
+function monthCapProblem(c) {
+  if (c.monthCap === null || c.monthFiles === undefined) return null;
+  if (c.monthFiles === null) return `The CodeRabbit ledger could not be read, so the month cap of ${c.monthCap} file(s) cannot be checked. No CodeRabbit recommendation; press CodeRabbit by hand if you want it.`;
+  if (c.monthFiles + c.size.files <= c.monthCap) return null;
+  return `Month cap: ${c.monthFiles} file(s) reviewed this month (${LEDGER_NOTE}) plus ${c.size.files} reviewable file(s) in this PR is over the cap of ${c.monthCap} (coderabbit.monthly_file_cap). No CodeRabbit recommendation; press CodeRabbit by hand if you want it.`;
+}
+
+/**
+ * RB (review matrix, option A, interim CodeRabbit rule 2026-11-04): the band decides. LOW, MID and ELEVATED get no CodeRabbit PR bot. HIGH and
+ * CRITICAL get it at the matrix.bot_budget only when crTrigger names a cause, the PR is not docs-only and the month cap is not over.
+ * Everything else is none. Dave can still press CodeRabbit (an escalation); this is only the recommendation.
  */
 function bandRule(c) {
   const b = c.band;
   const tier = b.securityTier?.length ? `, security-tier file(s) ${list(b.securityTier)}` : '';
   const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}${tier}`;
+  const head = `Band ${b.band} (${facts})`;
   if (!['HIGH', 'CRITICAL'].includes(b.band)) {
-    return hit('RB', 'none', [0, 0], [`Band ${b.band} (${facts}): no CodeRabbit PR bot below HIGH. The internal review stack covers it.`]);
+    return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot below HIGH. The internal review stack covers it.`]);
   }
+  const docs = docsOnlyReason(c);
+  if (docs) return hit('RB', 'none', [0, 0], [`${head}: ${docs} A docs-only PR gets no CodeRabbit PR bot, even with risk:high (interim rule).`]);
+  const cause = crTrigger(b);
+  if (!cause) {
+    return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot under the interim rule. It needs the risk:high label, or band CRITICAL with a trust-boundary or security-tier file. The internal review stack covers it.`]);
+  }
+  const capped = monthCapProblem(c);
+  if (capped) return hit('RB', 'none', [0, 0], [`${head}: ${capped}`]);
   const budget = budgetPair(c.botBudget[b.band] ?? [1, 1]);
-  const why = b.L ? 'risk:high or an r3 path' : `${b.G} gate files (${list(b.gateFiles)})`;
-  return hit('RB', 'coderabbit', budget, [`Band ${b.band} (${facts}): CodeRabbit ${budget[0]}+${budget[1]}. Cause: ${why}.`]);
+  const month = typeof c.monthFiles === 'number' ? ` Month-to-date ${c.monthFiles} of ${c.monthCap ?? 'no cap'} file(s) (${LEDGER_NOTE}).` : '';
+  return hit('RB', 'coderabbit', budget, [`${head}: CodeRabbit ${budget[0]}+${budget[1]}. Cause: ${cause}.${month}`]);
 }
 
 const fallbackRule = (c) => hit('R5', 'coderabbit', c.classBudget, [`Class ${c.budgetClass} (reviewable paths): CodeRabbit ${c.classBudget[0]}+${c.classBudget[1]}.`]);
@@ -426,13 +473,13 @@ function driftWhy(drift) {
 }
 
 /**
- * Fail closed: the PR labels could not be read (facts.labels is null), so a risk:high label may be hiding. Below HIGH that could
- * turn a CRITICAL PR into `none`, so the checkpoint stops (recommended null, like R0). A HIGH or CRITICAL band by paths already
- * recommends CodeRabbit whatever a label says, and a Dependabot PR gets none whatever its labels. facts.labels absent means a caller
- * that supplies no labels (a fixture); only null means "tried and failed".
+ * Fail closed: the PR labels could not be read (facts.labels is null), so a risk:high label may be hiding. At any band that could
+ * turn a PR that earns CodeRabbit into `none` (the interim rule reads the label at HIGH too), so the checkpoint stops (recommended null,
+ * like R0). A Dependabot PR gets none whatever its labels. facts.labels absent means a caller that supplies no labels (a fixture);
+ * only null means "tried and failed".
  */
 function labelsProblem(c, facts) {
-  if (!c.band || facts.labels !== null || c.dependabot || ['HIGH', 'CRITICAL'].includes(c.band.band)) return null;
+  if (!c.band || facts.labels !== null || c.dependabot) return null;
   return 'Could not read the PR labels (gh pr view failed, or there is no PR for this branch). The band needs the risk:high label, so no pathway is recommended. Open the draft PR, check gh, and run /pathway again.';
 }
 
@@ -453,6 +500,7 @@ function contextOf(facts, policy) {
     cls, matched, paths, credits, cli: facts.cli ?? null, dependabot: Boolean(facts.dependabot),
     band: bandOf(facts.files, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
+    monthFiles: facts.ledger_month_files, monthCap: monthCapOf(policy),
     size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: capacityOf(policy, facts.now),
   };
 }
@@ -567,7 +615,17 @@ function readLabels() {
 
 const hasMatrix = (configText) => { try { return Boolean(JSON.parse(configText).matrix); } catch { return false; } };
 
-function gatherFacts(configText, stateDir) {
+/**
+ * The files CodeRabbit reviewed this Chicago month, from the paid ledger (cr-paid.mjs monthOf), or null when the ledger cannot be read.
+ * Test seams: `deps.ledgerPath`, and the env var PR_CHECKPOINT_LEDGER (a ledger file for a spawned engine, like PR_CHECKPOINT_GH). The
+ * checkpoint tests feed facts.ledger_month_files or the env var and never read ~/.claude/state.
+ */
+export function ledgerMonthFiles(now, deps = {}, env = process.env) {
+  const seam = env.PR_CHECKPOINT_LEDGER ? { ledgerPath: env.PR_CHECKPOINT_LEDGER } : {};
+  try { return monthOf({ ...seam, ...deps, now: () => new Date(now) }).files; } catch { return null; }
+}
+
+function gatherFacts(configText, stateDir, readMonth = ledgerMonthFiles) {
   const { ref: base, notes } = baseRef();
   const head = git(['rev-parse', 'HEAD']).trim();
   // Fallback only: the PR author is the authoritative source, and the mod passes it with --dependabot.
@@ -575,7 +633,8 @@ function gatherFacts(configText, stateDir) {
   const stamp = readStamp(stateDir);
   // The band needs the labels (risk:high). Read them only when a band is computed and the stamp lets the checkpoint go on.
   const labels = hasMatrix(configText) && stamp ? { labels: readLabels() } : {};
-  return { head, now: new Date().toISOString(), stamp, files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), ...labels, notes };
+  const now = new Date().toISOString();
+  return { head, now, stamp, files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), ledger_month_files: readMonth(now), ...labels, notes };
 }
 
 // ---------- PR B: --confirm (record a pathway) and --apply (label, then ready) ----------
@@ -598,6 +657,8 @@ export function confirmProblem({ result, facts, pathway, by, bodySha }) {
   if (!option) return `${pathway} is not offered. Offered: ${result.options.map((o) => o.pathway).join(', ')}.`;
   if (!option.available) return `${pathway} is held: ${option.reason}`;
   if (by === 'default' && pathway !== result.recommended) return `--by default needs the recommended pathway (${result.recommended}), not ${pathway}.`;
+  // none is the recommendation at HIGH and CRITICAL without the CodeRabbit trigger (interim rule), but only a person records it there: the land gate reads decided_by dave.
+  if (by === 'default' && pathway === 'none' && ['HIGH', 'CRITICAL'].includes(result.auto?.band)) return `--by default cannot record none at ${result.auto.band}: only Dave's own pick records it (--by dave).`;
   if (by === 'auto' && pathway !== 'none') return `--by auto records none only, not ${pathway}.`;
   if (by === 'auto' && !result.auto?.eligible) return `--by auto is not allowed here: ${result.auto?.reason ?? 'no auto-confirm answer'}`;
   return null;
