@@ -3,6 +3,7 @@
   "projects": [
     {
       "name": "continuous-claude",
+      "key": "continuous-claude",
       "path": "C:/Users/dkhay/continuous-claude",
       "stack": [
         "TypeScript",
@@ -25,6 +26,7 @@
     },
     {
       "name": "agent-factory",
+      "key": "agent-factory",
       "path": "C:/Users/dkhay/Projects/agent-factory",
       "stack": [
         "Python",
@@ -38,13 +40,14 @@
       "port": 3001,
       "url": null,
       "devCommand": "npm run dev",
-      "status": "active",
+      "status": "inactive",
       "notes": "Registry copies previously disagreed on stack (Next.js/AI SDK vs Python/Agentica); the repo hosts BOTH. Reconciled 2026-07-15.",
       "sentryProject": "",
       "linearTeam": "the-lab"
     },
     {
       "name": "ECG Lead Reactivation Engine",
+      "key": "ecg-lead-reactivation-engine",
       "path": "C:/Users/dkhay/Projects/ECG Lead Reactivation Engine",
       "stack": [
         "Next.js",
@@ -58,12 +61,13 @@
       "port": 3003,
       "url": "https://ecg.localhost/",
       "devCommand": "npm run dev",
-      "status": "active",
+      "status": "inactive",
       "sentryProject": "",
       "linearTeam": "the-lab"
     },
     {
       "name": "LinkMap",
+      "key": "linkmap",
       "path": "C:/Users/dkhay/Projects/linkmap",
       "stack": [
         "React",
@@ -79,6 +83,7 @@
     },
     {
       "name": "vibe-trading",
+      "key": "vibe-trading",
       "path": "C:/Users/dkhay/Projects/vibe-trading",
       "stack": [
         "Python 3.12",
@@ -91,7 +96,7 @@
       "port": 3005,
       "url": "http://localhost:3005",
       "devCommand": "uv run python -m src.cli",
-      "status": "active",
+      "status": "inactive",
       "github": "Rev4nchist/vibe-trading",
       "deploy": "Win Task Scheduler (Phase 0) -> VPS (Phase 1)",
       "kind": "agent-system",
@@ -101,6 +106,7 @@
     },
     {
       "name": "Agentic OS",
+      "key": "agentic-os",
       "path": "C:/Users/dkhay/continuous-claude/apps/agentic-os",
       "stack": [
         "Next.js",
@@ -119,10 +125,12 @@
       "e2e": {
         "command": "npm run typecheck && npm run db:check && npm run e2e",
         "artifact": ".claude/cache/e2e/<stamp>-verify-agentic-os.log"
-      }
+      },
+      "laneBoard": "continuous-claude"
     },
     {
       "name": "buzz",
+      "key": "buzz",
       "path": "C:/Users/dkhay/Projects/buzz",
       "stack": [
         "Rust",
@@ -135,10 +143,11 @@
       "port": 3011,
       "url": "ws://localhost:3011",
       "devCommand": "BUZZ_HTTP_PORT=3011 docker compose -f deploy/compose/compose.yml up -d",
-      "status": "active"
+      "status": "inactive"
     },
     {
       "name": "FlatClicker",
+      "key": "flatclicker",
       "path": "C:/Users/dkhay/Projects/FlatClicker",
       "stack": [
         "Tauri v2",
@@ -151,7 +160,7 @@
       "port": 3006,
       "url": "http://localhost:3006",
       "devCommand": "npm run tauri dev",
-      "status": "active",
+      "status": "inactive",
       "sentryProject": "",
       "linearTeam": ""
     }

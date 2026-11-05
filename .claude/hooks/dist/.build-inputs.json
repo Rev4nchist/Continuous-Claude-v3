@@ -106,6 +106,7 @@
     "shared/index.ts": "dd86e7f187f6523aca98b0b67039c026f91e5905f7c87af193c8b63071c5af75",
     "shared/intel-bus.ts": "262f87ae8fb08479b7e4399878a9232ede646d0285f0e041e7bbdf7244695e0b",
     "shared/intent-extractor.ts": "1d7ed84bfac02a69eb4dd236f34f190fa8912852df8a1999f71dd21929a21ce9",
+    "shared/lane-board.ts": "a3c949fde2d15a29aad25b5915b02c502bff0a26acf91f9f1951e2c156364a5d",
     "shared/leases.ts": "0a09471c1a94817ebcb0928043f5cdfefc3049ea2fde93d799414a92c9f6abb4",
     "shared/logger.ts": "2528411bf160a449a06c998329a25f4fdcb8e56845cbcef3d4a36afbf42b6b0c",
     "shared/mask-quotes.ts": "6060dc3e1f20a6e10f2eee489d41534b36b47f819db596f7d505f0ca884c0273",

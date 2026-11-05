@@ -1,4 +1,5 @@
 import type { EngineInterface } from 'claude-code'
+import { DIAG_DIR } from '../shared/diag'
 
 /**
  * The dialog primitives of the PR checkpoint. Every question the mod puts to Dave goes through `askDave` (the engine's own AskUserQuestion
@@ -53,17 +54,63 @@ export const freeDialog = (): void => {
 /** `text` is what came back: a label, or the words typed under Other. Match it against the mod's labels, exactly. */
 export type Answered = { kind: 'text'; text: string } | { kind: 'empty' } | { kind: 'closed' }
 
+const ASK_LOG = `${DIAG_DIR}/ask-dialogs.jsonl`
+const ASK_LOG_LINES = 500
+
+/** The engine clock, or null. A failing clock never changes a dialog. A function declaration: the engine follows `$` only into those. */
+async function nowOf($: EngineInterface): Promise<number | null> {
+  try {
+    return await $.clock.now()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * One JSON line per dialog in ~/.claude/state/ccv3-mods/ask-dialogs.jsonl, the newest 500 kept (lane checkpoint-ask-self-answer: a dialog
+ * once came back with the first label and Dave saw no question; the line shows how long it took). Sizes and timing only: no question
+ * text, no label text, nothing Dave typed. The fs API has no append, so two sessions that write at the same moment can lose one line:
+ * accepted. A failed write never touches the dialog.
+ */
+async function logAsk($: EngineInterface, entry: Record<string, unknown>): Promise<void> {
+  try {
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+    if (!home) return
+    const path = `${home}/${ASK_LOG}`
+    const old = await $.fs.read(path).then(text => (typeof text === 'string' ? text : ''), () => '')
+    const kept = old.split('\n').filter(line => line.trim() !== '').slice(-(ASK_LOG_LINES - 1))
+    await $.fs.write(path, `${[...kept, JSON.stringify({ ...entry, session: await $.session.id() })].join('\n')}\n`)
+  } catch {
+    // Diagnostics only.
+  }
+}
+
 /**
  * Raises one dialog and waits for Dave. Never throws and never guesses: Esc, a headless run, a failed call or a refusal is `closed`;
- * an answer with no text is `empty`. 2 to 4 labels (the dialog's limit). `header` is at most 12 characters.
+ * an answer with no text is `empty`. 2 to 4 labels (the dialog's limit). `header` is at most 12 characters. Every call leaves one log line.
  */
 export async function askDave($: EngineInterface, question: string, labels: readonly string[], header?: string): Promise<Answered> {
+  const startedAt = await nowOf($)
+  let answered: Answered
   try {
     const text: unknown = await $.ui.ask(question, header ? { options: labels, header: header.slice(0, 12) } : { options: labels })
-    return typeof text === 'string' && text.trim() !== '' ? { kind: 'text', text } : { kind: 'empty' }
+    answered = typeof text === 'string' && text.trim() !== '' ? { kind: 'text', text } : { kind: 'empty' }
   } catch {
-    return { kind: 'closed' }
+    answered = { kind: 'closed' }
   }
+  const endedAt = await nowOf($)
+  const index = answered.kind === 'text' ? labels.indexOf(answered.text) : -1
+  await logAsk($, {
+    ts: startedAt === null ? null : new Date(startedAt).toISOString(),
+    header: header ? header.slice(0, 12) : null,
+    labels: labels.length,
+    questionChars: question.length,
+    outcome: answered.kind,
+    matched: index >= 0 ? index : null,
+    answerChars: answered.kind === 'text' ? answered.text.length : 0,
+    elapsedMs: startedAt === null || endedAt === null ? null : endedAt - startedAt,
+  })
+  return answered
 }
 
 /** The label Dave chose: an exact match of one of the mod's own labels, nothing looser. */

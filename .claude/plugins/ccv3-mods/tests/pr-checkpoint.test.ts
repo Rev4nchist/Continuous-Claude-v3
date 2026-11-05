@@ -137,6 +137,8 @@ type Opts = {
   isDraft?: boolean
   viewHead?: string
   throwStore?: string
+  /** A file write whose path contains this text throws (a full disk, a locked file). */
+  throwWrite?: string
   /** A pending promise: the fake `gh pr comment` and the engine `--confirm` answer only after it settles (a slow call, so two presses overlap). */
   gate?: Promise<void>
   /** Replies for the first `gh pr comment` calls, in order; later calls succeed. */
@@ -262,6 +264,7 @@ const world = (on: On, opts: Opts = {}) => {
     return { value: text }
   })
   on('fs.write', (_$, e) => {
+    if (opts.throwWrite && slash(e.path).includes(opts.throwWrite)) throw new Error('write failed')
     seen.writes.push(e.path)
     written[slash(e.path)] = e.text
     return { value: undefined }
@@ -2359,6 +2362,92 @@ describe('pr-checkpoint: every /pathway leaves one log line', () => {
     const lines = logLines(written)
     expect(lines.length).toBe(1)
     expect(lines[0]!.outcome).toBe('error')
+  })
+})
+
+// ---- every dialog leaves one log line (lane checkpoint-ask-self-answer) ---------------------------------------------------------------
+// Dave saw `pr_checkpoint` record "none by default" with no question shown (PRs 289 to 291) and the cause did not reproduce in a fresh session.
+// The mod cannot tell a person's pick from any other source, so each dialog leaves one line with its timing. The next real occurrence then
+// shows whether the answer came back in milliseconds or after minutes. How it can fail, and the test that catches it:
+// D1 an answered dialog leaves no line, or a line without ts, session, header, label count, question length, outcome, matched label or elapsed ms
+// D2 the line holds the question text, a label text or the words Dave typed under Other
+// D3 Esc or typed words are logged as a pick of a label (matched is not null)
+// D4 a failing log write changes what the call records or says
+// D5 the log grows without bound
+const ASK_LOG = 'C:/home/.claude/state/ccv3-mods/ask-dialogs.jsonl'
+const askLines = (written: Record<string, string>) =>
+  (written[ASK_LOG] ?? '')
+    .split('\n')
+    .filter(line => line.trim() !== '')
+    .map(line => JSON.parse(line) as Rec)
+
+describe('pr-checkpoint: every dialog leaves one log line', () => {
+  const call = ($: Engine) => callTool($, { pr: 7, body: 'pr-body.md' })
+
+  test('D1 an answered dialog writes one line with its timing, header, sizes, outcome and matched label', async ($, on) => {
+    const w = world(on, { answer: 'manual' })
+    await start($)
+    const running = call($)
+    await waitFor(() => w.seen.dialogs.length > 0)
+    await w.clock.advance(7000)
+    const dialog = w.seen.dialogs[0]!
+    dialog.answer(/Recommended/)
+    await running
+    const lines = askLines(w.written)
+    expect(lines.length).toBe(1)
+    expect(lines[0]).toMatchObject({
+      session: SESSION,
+      header: 'PR #7',
+      labels: dialog.labels.length,
+      questionChars: dialog.question.length,
+      outcome: 'text',
+      matched: 0,
+      elapsedMs: 7000,
+    })
+    expect(Number.isNaN(Date.parse(String(lines[0]!.ts)))).toBe(false)
+  })
+
+  test('D2 the line holds no question text, no label text and no words typed under Other', async ($, on) => {
+    const typed = 'please wait for the weekend'
+    const w = world(on, { answer: { other: typed } })
+    await start($)
+    await call($)
+    expect(askLines(w.written).length).toBe(1)
+    const text = w.written[ASK_LOG]!
+    expect(text).not.toContain(typed)
+    expect(text).not.toContain(w.seen.dialogs[0]!.question)
+    for (const label of w.seen.dialogs[0]!.labels) expect(text).not.toContain(label)
+  })
+
+  test('D3 Esc is logged closed and typed words are logged as no label; neither matches a label', async ($, on) => {
+    const w = world(on, { answers: ['dismiss', { other: 'something else' }] })
+    await start($)
+    await call($)
+    await call($)
+    const lines = askLines(w.written)
+    expect(lines.map(line => line.outcome)).toEqual(['closed', 'text'])
+    expect(lines.map(line => line.matched)).toEqual([null, null])
+  })
+
+  test('D4 a log write that throws changes nothing the call records or says', async ($, on) => {
+    const w = world(on, { answer: /Recommended/, throwWrite: 'ask-dialogs' })
+    await start($)
+    const told = await call($)
+    expect(told.thrown).toBeNull()
+    expect(told.text).toMatch(/Dave chose coderabbit for #7/)
+    expect(counts(w.seen).confirm).toBe(1)
+    expect(w.written[ASK_LOG]).toBeUndefined()
+  })
+
+  test('D5 only the newest 500 lines are kept', async ($, on) => {
+    const seeded = Array.from({ length: 600 }, (_, n) => JSON.stringify({ n })).join('\n')
+    const w = world(on, { answer: /Recommended/, files: { [ASK_LOG]: seeded } })
+    await start($)
+    await call($)
+    const lines = askLines(w.written)
+    expect(lines.length).toBe(500)
+    expect(lines[0]!.n).toBe(101)
+    expect(lines[499]!.session).toBe(SESSION)
   })
 })
 

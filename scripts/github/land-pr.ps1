@@ -19,6 +19,9 @@
      Dave's own pick (his dialog or composer, not the bridge or auto-confirm) is on record for this exact head. A missing,
      stale or foreign record refuses (nothing merged). The provenance line goes into the LANDED summary. With
      -IgnoreReview the check still runs as a warning only: it prints the line or a WARNING, and the merge goes on.
+  1d. Migration gate (scripts/github/migration-gate.mjs): when the PR adds a drizzle migration, the live database
+     (agentic_os.__migrations) must already have it applied. A database that is behind, or cannot be read, refuses
+     (nothing merged). A PR without a new migration never needs the database. Runs under -IgnoreReview too: there is no bypass.
   2. Merge through the REST API with sha=<head>: GitHub refuses the merge if the head moved after
      the check, so nothing unreviewed can land between check and merge (review note P35).
   3. fetch fork --prune; fast-forward local main (never a reset; refuses if main diverged).
@@ -202,6 +205,12 @@ if (-not $pull.merged -and -not $CleanupOnly) {
       $done.Add($notRun)
     }
   }
+  # Migration gate (scripts/github/migration-gate.mjs): a PR that adds a drizzle migration lands only after the live database
+  # has applied it (apply first, then merge). It runs in BOTH branches above and has no bypass: -IgnoreReview skips the review
+  # checks, not this one. It reads the database read-only; with no new migration in the PR it never needs the database.
+  Step "migration gate for #$Pr"
+  node (Join-Path $PSScriptRoot 'migration-gate.mjs') $head --repo-path $RepoPath --remote $Remote | Out-Host
+  if ($LASTEXITCODE) { Fail "migration gate refused #$Pr (exit $LASTEXITCODE). Nothing was merged. Apply the migration to the live database (drizzle-kit migrate, after reading the SQL), then re-run." }
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1
   if ($LASTEXITCODE) {
