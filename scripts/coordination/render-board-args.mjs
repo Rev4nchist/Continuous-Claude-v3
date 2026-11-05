@@ -1,7 +1,7 @@
 /**
  * render-board-args -- the pure parts of render-board.mjs, kept apart so a test can import them without a database.
  *
- *   parseRenderArgs(argv)        --project <key>, --out <file>, and the old positional [out.html]
+ *   parseRenderArgs(argv)        --project <key>, --out <file>, --interactive, and the old positional [out.html]
  *   defaultOut(repo, board)      <repo>/lane-board.html for continuous-claude, <repo>/lane-board-<key>.html for any other board
  *   boardStamp / parseBoardStamp the <meta name="lane-board"> tag a page carries: board, template hash, generated time
  *   writeAtomic(file, text)      temp file in the same folder, then rename: a reader never sees half a page
@@ -12,9 +12,10 @@ import { join } from 'node:path';
 const DEFAULT_BOARD = 'continuous-claude';
 const BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
 
-/** Reads the command line. An unknown flag, a flag with no value or a second output file is an error: `--project x` once became a file name. */
+/** Reads the command line. An unknown flag, a flag with no value or a second output file is an error: `--project x` once became a file name.
+ *  `--interactive` is a switch: it gives a board other than continuous-claude the interactive kanban (for a page that will be published). */
 export function parseRenderArgs(argv) {
-  const out = { project: null, out: null };
+  const out = { project: null, out: null, interactive: false };
   const setOut = (value) => {
     if (out.out !== null) throw new Error('give one output file only (--out <file> or a positional file, not both)');
     out.out = value;
@@ -23,7 +24,10 @@ export function parseRenderArgs(argv) {
     const a = String(argv[i]);
     const eq = /^(--[a-z-]+)=(.*)$/.exec(a);
     const name = eq ? eq[1] : a;
-    if (name === '--project' || name === '--out') {
+    if (name === '--interactive') {
+      if (eq) throw new Error('--interactive takes no value');
+      out.interactive = true;
+    } else if (name === '--project' || name === '--out') {
       const value = eq ? eq[2] : argv[++i];
       if (value === undefined || value === '' || String(value).startsWith('--')) throw new Error(`${name} needs a value`);
       if (name === '--project') out.project = String(value);
