@@ -143,7 +143,7 @@ Executive Assistants and leaders currently face significant manual overhead:
 
 **Integration:**
 - Claude Agent SDK - Core AI interaction layer
-- Anthropic API - Model access (claude-sonnet-4)
+- Anthropic API - Model access (claude-sonnet-5-5)
 
 ---
 
@@ -416,7 +416,7 @@ Executive Assistants and leaders currently face significant manual overhead:
 import { Agent } from '@anthropic-ai/agent-sdk';
 
 const agent = new Agent({
-  model: "claude-sonnet-4-20250514",
+  model: "claude-sonnet-5-5",
   tools: platformTools,
   systemPrompt: buildSystemPrompt(mode, context),
 });

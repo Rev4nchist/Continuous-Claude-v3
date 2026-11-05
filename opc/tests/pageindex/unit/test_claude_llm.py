@@ -168,3 +168,13 @@ class TestClaudeLLMAdapter:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.unit
+def test_first_text_raises_on_max_tokens():
+    from types import SimpleNamespace
+    from scripts.pageindex.claude_llm import _first_text
+
+    msg = SimpleNamespace(content=[], stop_reason="max_tokens")
+    with pytest.raises(RuntimeError, match="max_tokens"):
+        _first_text(msg)
