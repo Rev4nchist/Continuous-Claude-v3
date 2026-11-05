@@ -2,7 +2,7 @@
 Claude LLM wrapper for PageIndex.
 
 Routes LLM calls through Claude Code CLI (preferred) or Anthropic SDK (fallback).
-CLI uses sonnet-4.5, API uses haiku-4.5 for cost efficiency.
+CLI uses sonnet-5.5, API uses haiku-4.5 for cost efficiency.
 """
 import subprocess
 import json
@@ -16,20 +16,28 @@ logger = logging.getLogger(__name__)
 # Model IDs for Anthropic API (used when CLI not available)
 API_MODEL_MAP = {
     "haiku": "claude-haiku-4-5-20251001",    # Claude Haiku 4.5
-    "sonnet": "claude-sonnet-4-5-20250929",  # Claude Sonnet 4.5
-    "opus": "claude-opus-4-20250514",        # Claude Opus 4
+    "sonnet": "claude-sonnet-5-5",           # Claude Sonnet 5.5
+    "opus": "claude-opus-5-5",               # Claude Opus 5.5
 }
 
 # Model names for Claude CLI
 CLI_MODEL_MAP = {
     "haiku": "haiku",    # Maps to latest haiku
-    "sonnet": "sonnet",  # Maps to sonnet-4.5
+    "sonnet": "sonnet",  # Maps to sonnet-5.5
     "opus": "opus",      # Maps to latest opus
 }
 
 # Default models for each backend
-CLI_DEFAULT_MODEL = "sonnet"   # CLI uses sonnet-4.5 (better quality)
+CLI_DEFAULT_MODEL = "sonnet"   # CLI uses sonnet-5.5 (better quality)
 API_DEFAULT_MODEL = "haiku"    # API uses haiku-4.5 (cost efficient)
+
+
+def _first_text(message) -> str:
+    """Return the text of the first text block (content[0] may be a thinking block)."""
+    for block in message.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    raise RuntimeError("Anthropic response has no text block")
 
 
 def _anthropic_sdk_call(prompt: str, model: str, api_key: str) -> str:
@@ -41,11 +49,11 @@ def _anthropic_sdk_call(prompt: str, model: str, api_key: str) -> str:
 
     message = client.messages.create(
         model=model_id,
-        max_tokens=1024,
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return message.content[0].text
+    return _first_text(message)
 
 
 async def _anthropic_sdk_call_async(prompt: str, model: str, api_key: str) -> str:
@@ -57,11 +65,11 @@ async def _anthropic_sdk_call_async(prompt: str, model: str, api_key: str) -> st
 
     message = await client.messages.create(
         model=model_id,
-        max_tokens=1024,
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return message.content[0].text
+    return _first_text(message)
 
 
 def _cli_call(prompt: str, model: str) -> str:
@@ -131,7 +139,7 @@ def _cli_available() -> bool:
 
 def claude_complete(prompt: str, model: str = "sonnet", prefer_api: bool = False) -> str:
     """
-    Call Claude - CLI first (sonnet-4.5), API fallback (haiku-4.5).
+    Call Claude - CLI first (sonnet-5.5), API fallback (haiku-4.5).
 
     Args:
         prompt: The prompt to send to Claude
@@ -161,7 +169,7 @@ def claude_complete(prompt: str, model: str = "sonnet", prefer_api: bool = False
 
 async def claude_complete_async(prompt: str, model: str = "sonnet", prefer_api: bool = False) -> str:
     """
-    Async version - CLI first (sonnet-4.5), API fallback (haiku-4.5).
+    Async version - CLI first (sonnet-5.5), API fallback (haiku-4.5).
 
     Args:
         prompt: The prompt to send to Claude
@@ -200,7 +208,7 @@ class ClaudeLLMAdapter:
     """
     Drop-in replacement for OpenAI client that routes to Claude.
 
-    Uses Claude CLI (sonnet-4.5) by default, falls back to API (haiku-4.5).
+    Uses Claude CLI (sonnet-5.5) by default, falls back to API (haiku-4.5).
 
     Usage:
         adapter = ClaudeLLMAdapter()

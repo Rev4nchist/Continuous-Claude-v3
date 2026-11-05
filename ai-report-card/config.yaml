@@ -49,8 +49,8 @@ memory:
   recall_script: C:\Users\david.hayes\continuous-claude\opc\scripts\core\recall_learnings.py
 
 ai:
-  model: claude-sonnet-4-5-20250929
-  max_tokens: 2000
+  model: claude-sonnet-5-5
+  max_tokens: 4000
   budget_cap_usd: 0.50
 
 vocabulary:
