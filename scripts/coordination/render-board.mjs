@@ -33,7 +33,7 @@ import {
   placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
   boardMismatch, boardWriteKind, mergeUnknownColumns,
 } from './kanban-place.mjs';
-import { DEFAULT_BOARD, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
+import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -64,10 +64,11 @@ if (!BOARD) {
   process.exit(1);
 }
 const KEY = BOARD.key;
-/** The interactive kanban: the default board always, any other board with --interactive. The page saves into its own artifact
- *  db, so --interactive is for a page that will be published as that board's own artifact. A board without the flag keeps the
- *  static, read-only Priorities section. Interactivity and identity are separate: the title and masthead test KEY, not KANBAN. */
-const KANBAN = KEY === DEFAULT_BOARD || args.interactive;
+/** The interactive kanban: the default board always, any other board when its registry entry carries a valid `laneArtifact`
+ *  (boardArtifact, the resolver twin) or when --interactive is passed. The page saves into its own artifact db, so only a page
+ *  that is published as that board's own artifact should be interactive. A board with none of these keeps the static, read-only
+ *  Priorities section. Interactivity and identity are separate: the title and masthead test KEY, not KANBAN. */
+const KANBAN = KEY === DEFAULT_BOARD || args.interactive || boardArtifact(KEY) !== null;
 const OUT = args.out || defaultOut(REPO, KEY);
 const BOARD_ROOTS = boardRoots(KEY);
 const GENERATED_AT = new Date();
