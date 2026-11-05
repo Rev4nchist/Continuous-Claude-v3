@@ -27,3 +27,6 @@ b9bf6e35ac80fbfdf0dc0d28e648311294a42066:docs/fastmcp-connector-playbook.md:gene
 
 # DW-84 CI canary, non-functional, removed in next commit
 699d488832ba59c319d1e75026c3bf1fcb56c6c5:scripts/.ci-seed-gitleaks.txt:aws-access-token:1
+
+# Phase 2 parser-fixture fake token. Commit on feat/review-engine-p2 (PR 309); later heads build it from parts.
+fa2035dee4893715b0f7c7bb0de5701c1bf5dd0e:scripts/checks/parser-fixtures/inputs.mjs:generic-api-key:255
