@@ -5778,7 +5778,7 @@ function publishedBoard(input, boards, env) {
   if (!boards.includes(DEFAULT_BOARD)) return null;
   const a = boardArtifact(DEFAULT_BOARD, { env });
   if (!a) return null;
-  if (url && url.includes(a.id)) return DEFAULT_BOARD;
+  if (url && (urlId !== null ? urlId === a.id : url.includes(a.id))) return DEFAULT_BOARD;
   const file = typeof input.file_path === "string" ? input.file_path.replace(/\\/g, "/").toLowerCase() : "";
   const base = file.slice(file.lastIndexOf("/") + 1);
   return base && base === a.publishFrom.toLowerCase() ? DEFAULT_BOARD : null;

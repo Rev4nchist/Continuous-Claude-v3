@@ -349,6 +349,17 @@ describe('R2..R8: handle() against a real pending dir', () => {
     expect(files()).toEqual([]);
   });
 
+  it('R12: a publish to a non-default page whose id contains the default id leaves the default file when that board has no pending file', () => {
+    const LONG_URL = 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzidX';
+    fs.writeFileSync(path.join(tmp, 'registry.json'), JSON.stringify({ projects: [
+      { name: 'CCv3', key: 'continuous-claude', path: cwd, status: 'active' },
+      { name: 'LONG', key: 'long-board', path: path.join(tmp, 'long'), status: 'active', laneArtifact: LONG_URL },
+    ] }));
+    run('node lane.mjs claim x');
+    publish({ url: LONG_URL, file_path: 'whatever.html' });
+    expect(files()).toEqual([`${SID}.json`]);
+  });
+
   it('R8: an unrelated publish clears nothing', () => {
     run('node lane.mjs claim x');
     publish({ url: 'https://claude.ai/artifact/other', file_path: 'o.html' });
