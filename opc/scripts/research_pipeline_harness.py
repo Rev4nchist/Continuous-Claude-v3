@@ -6,16 +6,16 @@ and verifies results. Designed to test graceful degradation when tools are unava
 
 USAGE:
     # Run full test suite
-    uv run python -m runtime.harness scripts/test_research_pipeline.py
+    uv run python -m runtime.harness scripts/research_pipeline_harness.py
 
     # Run specific test
-    uv run python -m runtime.harness scripts/test_research_pipeline.py --test async
+    uv run python -m runtime.harness scripts/research_pipeline_harness.py --test async
 
     # Keep sandbox after test (for inspection)
-    uv run python -m runtime.harness scripts/test_research_pipeline.py --keep-sandbox
+    uv run python -m runtime.harness scripts/research_pipeline_harness.py --keep-sandbox
 
     # Verbose output
-    uv run python -m runtime.harness scripts/test_research_pipeline.py --verbose
+    uv run python -m runtime.harness scripts/research_pipeline_harness.py --verbose
 
 Test Cases:
     1. async_patterns - Research async error handling patterns

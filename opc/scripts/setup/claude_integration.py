@@ -387,7 +387,7 @@ ROOT_SCRIPTS = [
     "ast_grep_find.py",          # /ast-grep-find skill
     "qlty_check.py",             # /qlty-check skill
     "research_implement_pipeline.py",  # /mcp-chaining skill
-    "test_research_pipeline.py", # /mcp-chaining skill
+    "research_pipeline_harness.py", # /mcp-chaining skill
     "multi_tool_pipeline.py",    # /skill-developer example
     "recall_temporal_facts.py",  # /system_overview skill
 ]
