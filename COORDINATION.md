@@ -67,7 +67,9 @@ session start and any unread updates on every prompt, and renews your leases whi
 The old triage artifact `9eb25020-1959-47b9-b51f-6589e0c0515a` is retired. It holds saved
 triage decisions. Never publish the lane board over it.
 
-Only the `continuous-claude` board has a phone page. To refresh it, run from the primary checkout:
+Each board can have its own phone page. `continuous-claude` has the one above. Another board has a page when its entry in
+`.claude/project-registry.json` carries `laneArtifact` (the page url). Dave starts one with `/publish-board <key>`; `project register`
+only prints that hint. To refresh the `continuous-claude` page, run from the primary checkout:
 
 ```
 node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project continuous-claude
@@ -75,7 +77,8 @@ node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --pr
 
 Then publish `lane-board.html` with the Artifact tool, passing
 `url=https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`. The URL keeps the same link instead of
-minting a second board. Other boards render to `lane-board-<key>.html` and have no artifact. They show a read-only Priorities section drawn from lane state and priority.
+minting a second board. For another board, render with `--project <key>`, publish `lane-board-<key>.html` to that board's `laneArtifact`
+url and pass no `capabilities`. A board with no `laneArtifact` renders `lane-board-<key>.html` with no artifact. It shows a read-only Priorities section drawn from lane state and priority.
 
 Before trusting the claim path after any change to it:
 

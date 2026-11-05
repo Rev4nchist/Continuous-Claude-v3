@@ -25,5 +25,7 @@ Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-projec
 
 ## Phone page
 
-- Only `continuous-claude` has a phone page (artifact `RtrTNVfAq9uowmb2tfbzid`). Other boards render to `lane-board-<key>.html` and are not published. They show a read-only Priorities section drawn from lane state and priority.
-- After a lane change on any board, the hooks render its page. Publish only the `continuous-claude` page.
+- `continuous-claude` has the page `RtrTNVfAq9uowmb2tfbzid` (`.claude/artifacts.json`). Any other board has a published, interactive page only when its registry entry carries `laneArtifact` (a `https://claude.ai/artifact/<id>` url). Dave starts one with `/publish-board <key>`. `project register` only prints a hint.
+- A board with no `laneArtifact` renders `lane-board-<key>.html` on this machine, read-only (a Priorities section from lane state and priority). Never publish it.
+- After a lane change on any board, the hooks render its page. Publish a board's page only to its own url, with no `capabilities`. Never to another board's url: each page keeps its own db.
+- `kanban-sync` reads one board's page at a time and passes `--project <key>`.
