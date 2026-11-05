@@ -5406,7 +5406,8 @@ function loadRegistry(opts = {}) {
       board: typeof e.laneBoard === "string" && e.laneBoard ? e.laneBoard : key,
       status: typeof e.status === "string" ? e.status : "active",
       path: typeof e.path === "string" ? e.path : "",
-      root: root && isAbsoluteNorm(root) ? root : ""
+      root: root && isAbsoluteNorm(root) ? root : "",
+      artifact: typeof e.laneArtifact === "string" && e.laneArtifact ? e.laneArtifact : null
     });
   }
   return out;

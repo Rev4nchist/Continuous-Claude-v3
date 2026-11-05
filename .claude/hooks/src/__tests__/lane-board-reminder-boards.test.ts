@@ -10,6 +10,8 @@
  *   R6  the seams LANE_BOARD_AUTORENDER and LANE_RENDER_SCRIPT are missing; the default is a relative path
  *   R7  a failed or read-only command renders
  *   R8  a publish clears the wrong board's file, or none
+ *   R12 a board's page is its registry laneArtifact: its change writes <sid>@<board>.json; a publish clears that
+ *       file only on a url-id match, never by file name; a publish to another board's url clears the other file
  *
  * Every handle() call gets an explicit env with LANE_RENDER_SCRIPT set and a spy for spawn: the default render
  * script on main (before PR2 merges) takes --project as an output file name.
@@ -24,6 +26,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DELAYED_RENDER_SRC, RENDER_DEBOUNCE_MS, boardPageFile, handle, laneChange, ownedLaneBoard } from '../lane-board-republish-reminder.js';
 import { renderBoardCmd } from '../shared/lane-board.js';
 import { listPending, pendingFile } from '../shared/lane-board-pending.js';
+
+const PH_URL = 'https://claude.ai/artifact/KaD7X6HnLKHKjzz7cecUVF';
+const GM_URL = 'https://claude.ai/artifact/UcUbP216jcKLNQLb18TL7Y';
 
 const bash = (command: string, extra: Record<string, unknown> = {}) => ({
   session_id: 's1',
@@ -94,7 +99,8 @@ describe('R2..R8: handle() against a real pending dir', () => {
     fs.writeFileSync(path.join(tmp, 'registry.json'), JSON.stringify({ projects: [
       { name: 'CCv3', key: 'continuous-claude', path: cwd, status: 'active' },
       { name: 'ZZ', key: 'zz-board', path: zz, status: 'active' },
-      { name: 'PH', key: 'ph-board', path: path.join(tmp, 'ph'), status: 'active' },
+      { name: 'PH', key: 'ph-board', path: path.join(tmp, 'ph'), status: 'active', laneArtifact: PH_URL },
+      { name: 'GM', key: 'gm-board', path: path.join(tmp, 'gm'), status: 'active', laneArtifact: GM_URL },
     ] }));
     fs.writeFileSync(path.join(home, 'continuous-claude', '.claude', 'artifacts.json'), JSON.stringify({ artifacts: [
       { id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid', publish_from: 'lane-board.html' },
@@ -129,11 +135,24 @@ describe('R2..R8: handle() against a real pending dir', () => {
     expect(unref).toHaveBeenCalled();
   });
 
-  it('R3: only the default board has a phone page: another board never writes a pending file, even if artifacts.json names it', () => {
+  it('R3: a board whose registry entry has a laneArtifact writes its own <sid>@<board>.json, not <sid>.json', () => {
+    const r = run('node lane.mjs --project ph-board claim x');
+    expect(files()).toEqual([`${SID}@ph-board.json`]);
+    expect(pendingFile(SID, 'ph-board', env)).toBe(path.join(dir, `${SID}@ph-board.json`));
+    expect(listPending(SID, env).map((e) => e.board)).toEqual(['ph-board']);
+    const text = JSON.stringify(r.output);
+    expect(text).toContain(PH_URL);
+    expect(text).toContain('lane-board-ph-board.html');
+    expect(text).not.toContain('RtrTNVfAq9uowmb2tfbzid');
+  });
+
+  it('R3: an artifacts.json entry that names a board does not give it a page', () => {
+    fs.writeFileSync(path.join(tmp, 'registry.json'), JSON.stringify({ projects: [
+      { name: 'CCv3', key: 'continuous-claude', path: cwd, status: 'active' },
+      { name: 'PH', key: 'ph-board', path: path.join(tmp, 'ph'), status: 'active' },
+    ] }));
     run('node lane.mjs --project ph-board claim x');
     expect(files()).toEqual([]);
-    expect(pendingFile(SID, 'ph-board', env)).toBe(path.join(dir, `${SID}@ph-board.json`));
-    expect(listPending(SID, env)).toEqual([]);
   });
 
   it('R4: a board with NO artifact writes no pending file, says render-only, and still renders', () => {
@@ -279,6 +298,40 @@ describe('R2..R8: handle() against a real pending dir', () => {
     fs.writeFileSync(path.join(dir, `${SID}@ph-board.json`), JSON.stringify({ board: 'ph-board', verbs: ['claim'] }));
     publish({ file_path: '/r/lane-board.html' });
     expect(listPending(SID, env).map((e) => e.board)).toEqual(['ph-board']);
+  });
+
+  it('R12: two boards with different artifacts: a publish to one url clears only that board file', () => {
+    run('node lane.mjs claim x');
+    run('node lane.mjs --project ph-board claim x');
+    run('node lane.mjs --project gm-board claim x');
+    expect(files().sort()).toEqual([`${SID}.json`, `${SID}@gm-board.json`, `${SID}@ph-board.json`]);
+    publish({ url: GM_URL, file_path: 'whatever.html' });
+    expect(files().sort()).toEqual([`${SID}.json`, `${SID}@ph-board.json`]);
+    publish({ url: PH_URL, file_path: 'whatever.html' });
+    expect(files()).toEqual([`${SID}.json`]);
+    publish({ url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid', file_path: 'whatever.html' });
+    expect(files()).toEqual([]);
+  });
+
+  it('R12: lane-board-<key>.html published to the DEFAULT url clears only the default board file', () => {
+    run('node lane.mjs claim x');
+    run('node lane.mjs --project ph-board claim x');
+    publish({ url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid', file_path: '/r/lane-board-ph-board.html' });
+    expect(files()).toEqual([`${SID}@ph-board.json`]);
+  });
+
+  it('R12: a non-default file name with no url, or with a wrong url, clears nothing (no basename match off the default board)', () => {
+    run('node lane.mjs --project ph-board claim x');
+    publish({ file_path: '/r/lane-board-ph-board.html' });
+    publish({ url: 'https://claude.ai/artifact/SomethingElse1', file_path: '/r/lane-board-ph-board.html' });
+    publish({ url: 'https://claude.ai/artifact/KaD7X6HnLKHKjzz7cecUVF/extra', file_path: 'x.html' });
+    expect(files()).toEqual([`${SID}@ph-board.json`]);
+  });
+
+  it('R12: a publish whose url merely contains the artifact id elsewhere clears nothing', () => {
+    run('node lane.mjs --project ph-board claim x');
+    publish({ url: 'https://evil.example/?u=https://claude.ai/artifact/KaD7X6HnLKHKjzz7cecUVF', file_path: 'x.html' });
+    expect(files()).toEqual([`${SID}@ph-board.json`]);
   });
 
   it('R8: an unrelated publish clears nothing', () => {

@@ -43,7 +43,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
-import { DEFAULT_BOARD, boardArtifact, pendingKey, primaryRepo, renderBoardCmd, resolveBoard } from './shared/lane-board.js';
+import { DEFAULT_BOARD, artifactIdOf, boardArtifact, pendingKey, primaryRepo, renderBoardCmd, resolveBoard } from './shared/lane-board.js';
 import { listPending, pendingDir, pendingFile, readPending } from './shared/lane-board-pending.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { detectToolError, exitCodeOf } from './shared/tool-error.js';
@@ -224,17 +224,31 @@ function boardOfChange(payload: Record<string, unknown>, lc: LaneChange, env: En
   return cwdBoard(payload, env) ?? (OWNER_KEYED_VERBS.has(lc.verb) ? ownedBoard : null);
 }
 
-/** The board whose page this Artifact call published, or null. Matches the artifact id/url or the publish_from file. */
+/**
+ * The board whose page this Artifact call published, or null.
+ *
+ * The default board matches the artifact id/url or the publish_from file name (unchanged). Any other board
+ * matches ONLY on its artifact id in a strict `https://claude.ai/artifact/<id>` url: its file name
+ * (`lane-board-<key>.html`) says nothing, because a publish of that file to the wrong url must not clear it.
+ * A url-id match wins over the default board's file-name match, so the answer does not depend on `boards` order.
+ */
 function publishedBoard(input: Record<string, unknown>, boards: string[], env: Env): string | null {
   const url = typeof input.url === 'string' ? input.url : '';
+  const urlId = artifactIdOf(url);
   const file = typeof input.file_path === 'string' ? input.file_path.replace(/\\/g, '/').toLowerCase() : '';
   const base = file.slice(file.lastIndexOf('/') + 1);
+  let byFile: string | null = null;
   for (const b of boards) {
     const a = boardArtifact(b, { env });
     if (!a) continue;
-    if ((url && url.includes(a.id)) || (base && base === a.publishFrom.toLowerCase())) return b;
+    if (b !== DEFAULT_BOARD) {
+      if (urlId !== null && urlId === a.id) return b;
+      continue;
+    }
+    if (url && url.includes(a.id)) return b;
+    if (base && base === a.publishFrom.toLowerCase()) byFile = b;
   }
-  return null;
+  return byFile;
 }
 
 /**

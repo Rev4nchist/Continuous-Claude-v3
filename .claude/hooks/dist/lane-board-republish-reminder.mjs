@@ -5452,7 +5452,8 @@ function loadRegistry(opts = {}) {
       board: typeof e.laneBoard === "string" && e.laneBoard ? e.laneBoard : key,
       status: typeof e.status === "string" ? e.status : "active",
       path: typeof e.path === "string" ? e.path : "",
-      root: root && isAbsoluteNorm(root) ? root : ""
+      root: root && isAbsoluteNorm(root) ? root : "",
+      artifact: typeof e.laneArtifact === "string" && e.laneArtifact ? e.laneArtifact : null
     });
   }
   return out;
@@ -5544,9 +5545,26 @@ var FALLBACK_ARTIFACT = {
   url: "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
   publishFrom: "lane-board.html"
 };
+var LANE_ARTIFACT_RE = /^https:\/\/claude\.ai\/artifact\/([A-Za-z0-9_-]+)$/;
+var BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
+function artifactIdOf(raw) {
+  return (typeof raw === "string" ? LANE_ARTIFACT_RE.exec(raw)?.[1] : void 0) ?? null;
+}
+function registryBoardArtifact(board, opts, env) {
+  if (!BOARD_KEY_RE.test(board)) return null;
+  const owners = loadRegistry({ ...opts, env }).filter(
+    (e) => e.status.toLowerCase() !== "inactive" && e.key !== DEFAULT_BOARD && e.board === e.key && e.artifact !== null
+  );
+  const mine = owners.filter((e) => e.key === board);
+  const id = mine.length === 1 ? artifactIdOf(mine[0].artifact) : null;
+  if (!id) return null;
+  if (owners.some((e) => e !== mine[0] && artifactIdOf(e.artifact) === id)) return null;
+  if (boardArtifact(DEFAULT_BOARD, { ...opts, env })?.id === id) return null;
+  return { id, url: `https://claude.ai/artifact/${id}`, publishFrom: `lane-board-${board}.html` };
+}
 function boardArtifact(board, opts = {}) {
   const env = opts.env ?? process.env;
-  if (board !== DEFAULT_BOARD) return null;
+  if (board !== DEFAULT_BOARD) return registryBoardArtifact(board, opts, env);
   const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
   try {
     const text = fs.readFileSync(file, "utf8").replace(/^﻿/, "");
@@ -5751,14 +5769,21 @@ function boardOfChange(payload, lc, env, ownedBoard) {
 }
 function publishedBoard(input, boards, env) {
   const url = typeof input.url === "string" ? input.url : "";
+  const urlId = artifactIdOf(url);
   const file = typeof input.file_path === "string" ? input.file_path.replace(/\\/g, "/").toLowerCase() : "";
   const base = file.slice(file.lastIndexOf("/") + 1);
+  let byFile = null;
   for (const b of boards) {
     const a = boardArtifact(b, { env });
     if (!a) continue;
-    if (url && url.includes(a.id) || base && base === a.publishFrom.toLowerCase()) return b;
+    if (b !== DEFAULT_BOARD) {
+      if (urlId !== null && urlId === a.id) return b;
+      continue;
+    }
+    if (url && url.includes(a.id)) return b;
+    if (base && base === a.publishFrom.toLowerCase()) byFile = b;
   }
-  return null;
+  return byFile;
 }
 function decide(payload, pending, env = process.env, candidates = [DEFAULT_BOARD], ownedBoard = null) {
   if (!isObj2(payload)) return NONE;
@@ -5782,9 +5807,9 @@ function decide(payload, pending, env = process.env, candidates = [DEFAULT_BOARD
   return isPending ? { action: "mark", verb: lc.verb, board } : { action: "remind", verb: lc.verb, board, message: reminder(lc.verb, board, env, artifact) };
 }
 var safeFile = (s) => s.replace(/[^A-Za-z0-9_-]/g, "_");
-var BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
+var BOARD_KEY_RE2 = /^[a-z0-9][a-z0-9-]*$/;
 function boardPageFile(board, env = process.env) {
-  if (!BOARD_KEY_RE.test(board)) return null;
+  if (!BOARD_KEY_RE2.test(board)) return null;
   return `${primaryRepo(env)}/${board === DEFAULT_BOARD ? "lane-board.html" : `lane-board-${board}.html`}`;
 }
 var DELAYED_RENDER_SRC = "const{spawnSync}=require('child_process');const a=process.argv.slice(1);setTimeout(()=>{try{spawnSync(process.execPath,a.slice(1),{stdio:'ignore',windowsHide:true})}catch{}},Number(a[0])||0);";
@@ -5877,7 +5902,7 @@ async function ownedLaneBoard(payload, env = process.env, run = defaultOwnedRun)
     const me = lc.as ?? (typeof payload.session_id === "string" ? payload.session_id : "");
     if (!me) return null;
     const key = (await run(OWNED_BOARD_SQL, [lc.laneId, me]))[0]?.project_key;
-    return typeof key === "string" && BOARD_KEY_RE.test(key) ? key : null;
+    return typeof key === "string" && BOARD_KEY_RE2.test(key) ? key : null;
   } catch {
     return null;
   }
