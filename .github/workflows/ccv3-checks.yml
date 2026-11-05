@@ -129,6 +129,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false   # this job never pushes; keep the git token off disk (zizmor artipacked)
+          fetch-depth: 0               # lane-project T3 reads an old lane.mjs from git history; a shallow clone silently skips it
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
