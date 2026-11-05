@@ -49,6 +49,8 @@ export interface RegistryEntry {
   path: string;
   /** The normalised path (see normalizeRoot). Empty when the path is unusable. */
   root: string;
+  /** The raw `laneArtifact` string, or null. Not validated here: boardArtifact checks it. */
+  artifact: string | null;
 }
 
 export interface BoardOptions {
@@ -123,6 +125,7 @@ export function loadRegistry(opts: BoardOptions = {}): RegistryEntry[] {
       status: typeof e.status === 'string' ? e.status : 'active',
       path: typeof e.path === 'string' ? e.path : '',
       root: root && isAbsoluteNorm(root) ? root : '',
+      artifact: typeof e.laneArtifact === 'string' && e.laneArtifact ? e.laneArtifact : null,
     });
   }
   return out;
@@ -270,21 +273,54 @@ const FALLBACK_ARTIFACT: BoardArtifact = {
   publishFrom: 'lane-board.html',
 };
 
+const LANE_ARTIFACT_RE = /^https:\/\/claude\.ai\/artifact\/([A-Za-z0-9_-]+)$/;
+const BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/** The artifact id of a strict `https://claude.ai/artifact/<id>` url, else null. */
+export function artifactIdOf(raw: string | null | undefined): string | null {
+  return (typeof raw === 'string' ? LANE_ARTIFACT_RE.exec(raw)?.[1] : undefined) ?? null;
+}
+
+/**
+ * The phone page of a non-default board: the `laneArtifact` of the active registry entry where
+ * `board === key === <board>` and key is not the default board. A nested entry (its `laneBoard` names another
+ * board) and the default board's entry are ignored. The url is rebuilt from the id, never echoed. Null when the
+ * key or url is malformed, or the id is also the default board's page or another board's.
+ */
+function registryBoardArtifact(
+  board: string,
+  opts: { artifactsPath?: string; registryPath?: string },
+  env: Env,
+): BoardArtifact | null {
+  if (!BOARD_KEY_RE.test(board)) return null;
+  const owners = loadRegistry({ ...opts, env }).filter(
+    (e) => e.status.toLowerCase() !== 'inactive' && e.key !== DEFAULT_BOARD && e.board === e.key && e.artifact !== null,
+  );
+  const mine = owners.filter((e) => e.key === board);
+  const id = mine.length === 1 ? artifactIdOf(mine[0].artifact) : null;
+  if (!id) return null;
+  if (owners.some((e) => e !== mine[0] && artifactIdOf(e.artifact) === id)) return null;
+  if (boardArtifact(DEFAULT_BOARD, { ...opts, env })?.id === id) return null;
+  return { id, url: `https://claude.ai/artifact/${id}`, publishFrom: `lane-board-${board}.html` };
+}
+
 /**
  * The published artifact of a board, or null when the board has none.
  *
- * Only the default board (continuous-claude) has a phone page. It is the existing registry entry whose id is
- * ARTIFACT_ID in `<primaryRepo>/.claude/artifacts.json`; its url and publish_from come from that entry, and the
- * known fallback applies when the file or the entry is missing. Every other board is render-only (null).
- * artifacts.json gains NO new field: the primary checkout edits that file too, and a PR2 hunk made land-pr's
- * ff-merge refuse. A later per-board phone page would add a `board` field to its entry and match on it here.
+ * The default board (continuous-claude) is the existing registry entry whose id is ARTIFACT_ID in
+ * `<primaryRepo>/.claude/artifacts.json`; its url and publish_from come from that entry, and the known fallback
+ * applies when the file or the entry is missing. artifacts.json gains NO new field: the primary checkout edits
+ * that file too, and a PR2 hunk made land-pr's ff-merge refuse.
+ *
+ * Any other board has a page only when its own project-registry entry carries `laneArtifact` (see
+ * registryBoardArtifact). There is no fallback: no field, no page (null, render-only).
  */
 export function boardArtifact(
   board: string,
-  opts: { env?: Env; artifactsPath?: string } = {},
+  opts: { env?: Env; artifactsPath?: string; registryPath?: string } = {},
 ): BoardArtifact | null {
   const env: Env = opts.env ?? process.env;
-  if (board !== DEFAULT_BOARD) return null;
+  if (board !== DEFAULT_BOARD) return registryBoardArtifact(board, opts, env);
   const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
   try {
     const text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');

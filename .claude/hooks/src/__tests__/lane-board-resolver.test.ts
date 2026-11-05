@@ -74,7 +74,7 @@ describe('twin drift', () => {
   it('both copies export the same names', () => {
     expect(Object.keys(mjsTwin).sort()).toEqual(Object.keys(tsTwin).sort());
     expect(Object.keys(tsTwin).sort()).toEqual([
-      'DEFAULT_BOARD', 'boardArtifact', 'boardRoots', 'isHeadless', 'laneCliCmd', 'laneShimPath', 'loadRegistry',
+      'DEFAULT_BOARD', 'artifactIdOf', 'boardArtifact', 'boardRoots', 'isHeadless', 'laneCliCmd', 'laneShimPath', 'loadRegistry',
       'normalizeRoot', 'pendingKey', 'primaryRepo', 'renderBoardCmd', 'resolveBoard', 'wmKey',
     ]);
   });
@@ -135,9 +135,23 @@ describe('derived helpers (PR2 exports), both twins', () => {
       fs.writeFileSync(f, typeof body === 'string' ? body : JSON.stringify(body));
       return f;
     };
-    const run = (board: string, opts: Parameters<typeof tsTwin.boardArtifact>[1]) => {
-      const a = tsTwin.boardArtifact(board, opts);
-      expect(mjsTwin.boardArtifact(board, opts)).toEqual(a);
+    // Hermetic: a call that names no registry reads an empty one, never ~/.claude/project-registry.json.
+    // A call that names no artifacts.json or home reads a temp home that holds the fallback id, never
+    // <real home>/continuous-claude/.claude/artifacts.json (the default-id check of a non-default board reads it).
+    const hermeticHome = (): string => {
+      const home = path.join(tmp, 'hermetic-home');
+      fs.mkdirSync(path.join(home, 'continuous-claude', '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'continuous-claude', '.claude', 'artifacts.json'), JSON.stringify({ artifacts: [
+        { id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid', publish_from: 'lane-board.html' },
+      ] }));
+      return home;
+    };
+    const run = (board: string, opts: Parameters<typeof tsTwin.boardArtifact>[1] = {}) => {
+      const empty = path.join(tmp, 'empty-registry.json');
+      fs.writeFileSync(empty, JSON.stringify({ projects: [] }));
+      const o = { registryPath: empty, ...opts, env: { CCV3_USER_HOME: hermeticHome(), ...opts.env } };
+      const a = tsTwin.boardArtifact(board, o);
+      expect(mjsTwin.boardArtifact(board, o)).toEqual(a);
       return a;
     };
 
@@ -189,6 +203,112 @@ describe('derived helpers (PR2 exports), both twins', () => {
       fs.writeFileSync(path.join(home, 'continuous-claude', '.claude', 'artifacts.json'),
         JSON.stringify({ artifacts: [{ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/ZZ1', publish_from: 'z.html' }] }));
       expect(run('continuous-claude', { env: { CCV3_USER_HOME: home } })?.id).toBe('ZZ1');
+    });
+
+    describe('laneArtifact on a non-default board (Option B)', () => {
+      const URL_A = 'https://claude.ai/artifact/KaD7X6HnLKHKjzz7cecUVF';
+      const URL_B = 'https://claude.ai/artifact/UcUbP216jcKLNQLb18TL7Y';
+      const URL_C = 'https://claude.ai/artifact/Zq3mW8rTnV5xHb2yPd4LsA';
+      const reg = (projects: Array<Record<string, unknown>>) => ({ registryPath: writeRegistry(projects) });
+      const gm = (extra: Record<string, unknown> = {}) => entry('GreyMatter Design', 'D:/GreyMatter.Design', { key: 'greymatter-design', ...extra });
+
+      it('an active entry with board === key and a laneArtifact gives id, rebuilt url and lane-board-<key>.html', () => {
+        expect(run('greymatter-design', reg([gm({ laneArtifact: URL_A })]))).toEqual({
+          id: 'KaD7X6HnLKHKjzz7cecUVF', url: URL_A, publishFrom: 'lane-board-greymatter-design.html',
+        });
+      });
+
+      it('no laneArtifact, or an inactive entry, or an unknown board gives null (no fallback)', () => {
+        expect(run('greymatter-design', reg([gm()]))).toBeNull();
+        expect(run('greymatter-design', reg([gm({ laneArtifact: URL_A, status: 'inactive' })]))).toBeNull();
+        expect(run('nope', reg([gm({ laneArtifact: URL_A })]))).toBeNull();
+      });
+
+      it('a url that fails the strict check gives null', () => {
+        for (const bad of [
+          'https://evil.example/artifact/x', 'http://claude.ai/artifact/abc', 'https://claude.ai/artifact/abc/extra',
+          'https://claude.ai/artifact/abc?x=1', 'https://claude.ai/artifact/', 'https://claude.ai.evil.example/artifact/abc',
+          ' https://claude.ai/artifact/abc', 'https://claude.ai/artifact/abc\n', 'https://Claude.ai/artifact/abc', 42,
+        ]) {
+          expect(run('greymatter-design', reg([gm({ laneArtifact: bad })]))).toBeNull();
+        }
+      });
+
+      it('a board key that is not a plain board key gives null', () => {
+        for (const bad of ['A', '-x', 'a b', '../x', '']) {
+          expect(run(bad, reg([entry('Bad', 'D:/bad', { key: bad, laneArtifact: URL_A })]))).toBeNull();
+        }
+      });
+
+      it('an id used by two boards, or equal to the default board id, gives null', () => {
+        const two = reg([gm({ laneArtifact: URL_A }), entry('Other', 'D:/other', { key: 'other', laneArtifact: URL_A })]);
+        expect(run('greymatter-design', two)).toBeNull();
+        expect(run('other', two)).toBeNull();
+        const own = reg([gm({ laneArtifact: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid' })]);
+        expect(run('greymatter-design', own)).toBeNull();
+        const distinct = reg([gm({ laneArtifact: URL_A }), entry('Other', 'D:/other', { key: 'other', laneArtifact: URL_B })]);
+        expect(run('greymatter-design', distinct)?.id).toBe('KaD7X6HnLKHKjzz7cecUVF');
+        expect(run('other', distinct)?.id).toBe('UcUbP216jcKLNQLb18TL7Y');
+      });
+
+      it('an id equal to the default board id from artifacts.json also gives null', () => {
+        const f = write({ artifacts: [{ id: 'agentic-os-lane-board', url: URL_A, publish_from: 'lane-board.html' }] });
+        expect(run('greymatter-design', { ...reg([gm({ laneArtifact: URL_A })]), artifactsPath: f })).toBeNull();
+      });
+
+      it('a nested entry (laneBoard set) never gives its own key a page, and cannot lend one to its parent board', () => {
+        // Three DISTINCT urls: no duplicate-id rule can hide a missing `e.board === e.key` filter.
+        const projects = [
+          gm({ laneArtifact: URL_A }),
+          entry('Agentic OS', 'D:/os', { key: 'agentic-os', laneBoard: 'continuous-claude', laneArtifact: URL_B }),
+          entry('Sub', 'D:/gm/sub', { key: 'gm-sub', laneBoard: 'greymatter-design', laneArtifact: URL_C }),
+        ];
+        expect(run('agentic-os', reg(projects))).toBeNull();
+        expect(run('gm-sub', reg(projects))).toBeNull();
+        expect(run('greymatter-design', reg(projects))?.id).toBe('KaD7X6HnLKHKjzz7cecUVF');
+        expect(run('continuous-claude', reg(projects))?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+      });
+
+      it('a nested entry that repeats a real board id does not void that board', () => {
+        const projects = [
+          gm({ laneArtifact: URL_A }),
+          entry('Sub', 'D:/gm/sub', { key: 'gm-sub', laneBoard: 'greymatter-design', laneArtifact: URL_A }),
+        ];
+        expect(run('greymatter-design', reg(projects))?.id).toBe('KaD7X6HnLKHKjzz7cecUVF');
+      });
+
+      it('two registry entries with the same key give null (no first-wins guess)', () => {
+        const twice = reg([gm({ laneArtifact: URL_A }), entry('GreyMatter Again', 'D:/gm2', { key: 'greymatter-design', laneArtifact: URL_B })]);
+        expect(run('greymatter-design', twice)).toBeNull();
+      });
+
+      it('a stray laneArtifact on the continuous-claude entry is not another board\'s duplicate', () => {
+        const stray = entry('CCv3', 'D:/ccv3', { key: 'continuous-claude', laneArtifact: URL_A });
+        expect(run('greymatter-design', reg([stray, gm({ laneArtifact: URL_A })]))?.id).toBe('KaD7X6HnLKHKjzz7cecUVF');
+      });
+
+      it('laneArtifact on the continuous-claude entry is ignored: artifacts.json and the fallback still win', () => {
+        const projects = [entry('CCv3', 'D:/ccv3', { key: 'continuous-claude', laneArtifact: URL_B })];
+        expect(run('continuous-claude', reg(projects))?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+        const f = write({ artifacts: [{ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/GGG111', publish_from: 'page.html' }] });
+        expect(run('continuous-claude', { ...reg(projects), artifactsPath: f })).toEqual({
+          id: 'GGG111', url: 'https://claude.ai/artifact/GGG111', publishFrom: 'page.html',
+        });
+      });
+
+      it('reads the registry from opts.env.LANE_REGISTRY_PATH when registryPath is absent, and loadRegistry exposes the raw string', () => {
+        const file = writeRegistry([gm({ laneArtifact: URL_A })]);
+        // CCV3_USER_HOME keeps the default-id check off the real <home>/continuous-claude/.claude/artifacts.json.
+        const env = { LANE_REGISTRY_PATH: file, CCV3_USER_HOME: hermeticHome() };
+        const a = tsTwin.boardArtifact('greymatter-design', { env });
+        expect(mjsTwin.boardArtifact('greymatter-design', { env })).toEqual(a);
+        expect(a?.id).toBe('KaD7X6HnLKHKjzz7cecUVF');
+        const rows = tsTwin.loadRegistry({ registryPath: file });
+        expect(mjsTwin.loadRegistry({ registryPath: file })).toEqual(rows);
+        expect(rows[0].artifact).toBe(URL_A);
+        const none = tsTwin.loadRegistry({ registryPath: writeRegistry([gm()]) });
+        expect(none[0].artifact).toBeNull();
+      });
     });
   });
 });
