@@ -109,12 +109,13 @@ export const CRITICAL_TRUST_BOUNDARY = ['scripts/github/local-review.mjs', 'scri
 const anyGlob = (globs = []) => { const res = globs.map(globToRegExp); return (p) => res.some((re) => re.test(p)); };
 
 /**
- * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, gateFiles, securityTier } | null
+ * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, labelHigh, trustFiles, gateFiles, securityTier } | null
  *   files: path strings or { filename, previous_filename? } objects. A rename is ONE changed file with two names: it counts once,
  *   and a gate / config / logic test looks at both names (a rename into or out of the control plane counts).
  *   G gate files: non-test files on matrix.control_plane, any extension. C: a non-test review, merge or reviewer config file changed.
  *   K: one logic file outside dist/ and test files. L: a risk:high label, an r3 path or a non-test CRITICAL_TRUST_BOUNDARY file (forces CRITICAL). r: confirmed internal Majors, already
- *   weighted (+7 each); nothing posts that record yet, so callers pass 0. Score S = gate score + 3C + K + r. No matrix block: null.
+ *   weighted (+7 each); nothing posts that record yet, so callers pass 0. labelHigh: the risk:high label alone. trustFiles: the non-test
+ *   CRITICAL_TRUST_BOUNDARY files. The interim CodeRabbit rule (pr-checkpoint.mjs bandRule) reads both. Score S = gate score + 3C + K + r. No matrix block: null.
  * Left out on purpose: H (needs both versions of settings.json.template), the split guard (reads other PRs) and the ratchet (needs saved state).
  */
 export function bandOf(files, config, { labels = [], r = 0 } = {}) {
@@ -133,15 +134,19 @@ export function bandOf(files, config, { labels = [], r = 0 } = {}) {
   const inPlane = anyGlob(m.control_plane);
   const inTrust = anyGlob(CRITICAL_TRUST_BOUNDARY);
   const gateFiles = entries.map((names) => hit(names, inPlane)).filter(Boolean);
-  const securityTier = gateFiles.filter(anyGlob(m.security_tier));
+  // Every name of a rename is checked, as for gateFiles: old path on the tier and new path off it (or the reverse) still counts.
+  const inTier = anyGlob(m.security_tier);
+  const securityTier = entries.map((names) => hit(names, (p) => inPlane(p) && inTier(p))).filter(Boolean);
   const G = gateFiles.length;
   const C = entries.some((names) => hit(names, anyGlob(m.config_files))) ? 1 : 0;
   const K = entries.some((names) => hit(names, isLogic)) ? 1 : 0;
-  const L = labels.includes('risk:high') || classify(entries.flat(), config).class === 'r3' || entries.some((names) => hit(names, inTrust));
+  const labelHigh = labels.includes('risk:high');
+  const trustFiles = entries.map((names) => hit(names, inTrust)).filter(Boolean);
+  const L = labelHigh || classify(entries.flat(), config).class === 'r3' || trustFiles.length > 0;
   const gate = m.gate_score.reduce((best, [min, score]) => (G >= min && score > best ? score : best), 0);
   const score = gate + m.weights.config * C + m.weights.code * K + (Number.isFinite(r) && r > 0 ? r : 0);
   const band = L ? 'CRITICAL' : score >= m.bands.high ? 'HIGH' : score >= m.bands.elevated ? 'ELEVATED' : score >= m.bands.mid ? 'MID' : 'LOW';
-  return { band, score, G, C, K, L, gateFiles, securityTier };
+  return { band, score, G, C, K, L, labelHigh, trustFiles, gateFiles, securityTier };
 }
 
 // ---------- credits ----------

@@ -55,6 +55,7 @@ import {
   namesSlotWrite,
   namesStore,
   noQuestionText,
+  onlyDaveRecordsNone,
   otherText,
   parseCheckpointArgs,
   parseGrantArgs,
@@ -64,6 +65,7 @@ import {
   pressNotice,
   recordAllowsLabel,
   resolveBody,
+  riskHighOf,
   stateArgv,
   viewArgv,
   WORKTREE_ARGV,
@@ -97,7 +99,8 @@ const sessionId = async ($: EngineInterface): Promise<string> => $.session.id()
 
 // ---- store -----------------------------------------------------------------------------------------------------------------
 
-type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number }
+/** riskHigh: whether the PR carried risk:high when the checkpoint read it (null: unread; absent: a pending stored by an older mod). A flip makes the recommendation stale. */
+type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number; riskHigh?: boolean | null }
 
 const isPending = (value: unknown): value is Pending => {
   const p = value as Partial<Pending> | null | undefined
@@ -214,7 +217,7 @@ const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawB
   const viewed = await run($, viewArgv(pr), sessionRoot, VIEW_TIMEOUT_MS)
   if (!viewed.ok) return fail(`Could not read PR #${pr} (${viewed.text}). Nothing was recorded.`)
   if (viewed.code !== 0) return fail(`Could not read PR #${pr}: ${firstLine(viewed.err || viewed.out)}. Nothing was recorded.`)
-  let info: { isDraft?: unknown; headRefOid?: unknown; headRefName?: unknown; author?: { login?: unknown } }
+  let info: { isDraft?: unknown; headRefOid?: unknown; headRefName?: unknown; author?: { login?: unknown }; labels?: unknown }
   try {
     info = JSON.parse(viewed.out)
   } catch {
@@ -242,7 +245,7 @@ const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawB
   const numstat = await gitLines($, root, ['git', 'diff', '--numstat', 'fork/main...HEAD'])
   return {
     ok: true,
-    pending: { pr, body, root, result, covers: coversRows(subjects, numstat), stamp: await stampAt($, root), prHead, at: await $.clock.now() },
+    pending: { pr, body, root, result, covers: coversRows(subjects, numstat), stamp: await stampAt($, root), prHead, at: await $.clock.now(), riskHigh: riskHighOf(info.labels) },
   }
 }
 
@@ -320,7 +323,7 @@ const driftSince = async ($: EngineInterface, root: string, pending: Pending): P
   const ran = await run($, viewArgv(pending.pr), root, VIEW_TIMEOUT_MS)
   if (!ran.ok) return `could not read the PR again (${ran.text})`
   if (ran.code !== 0) return `could not read the PR again (${firstLine(ran.err || ran.out) || `gh exited ${ran.code}`})`
-  let info: { isDraft?: unknown; headRefOid?: unknown }
+  let info: { isDraft?: unknown; headRefOid?: unknown; labels?: unknown }
   try {
     info = JSON.parse(ran.out)
   } catch {
@@ -328,6 +331,12 @@ const driftSince = async ($: EngineInterface, root: string, pending: Pending): P
   }
   if (info.isDraft !== true) return 'the PR is no longer a draft'
   if (info.headRefOid !== pending.prHead) return `the head moved to ${typeof info.headRefOid === 'string' ? info.headRefOid.slice(0, 7) : 'an unknown commit'}`
+  // The band reads risk:high, so a flip changes the recommendation Dave answered. The engine re-reads the labels but cannot know what he saw.
+  if (typeof pending.riskHigh === 'boolean') {
+    const now = riskHighOf(info.labels)
+    if (now === null) return 'the PR labels could not be read again'
+    if (now !== pending.riskHigh) return `the risk:high label was ${now ? 'added' : 'removed'}, so the recommendation changed`
+  }
   return null
 }
 
@@ -633,7 +642,7 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   // At HIGH and CRITICAL "no review" records only from Dave's own composer. A bridge command (the phone, a relay) raises the dialog instead,
   // so only his tap on the exact label records.
   if (pathway === 'none' && e.origin.kind !== 'composer' && isQueueBand(result.auto.band)) return askPending($, next, trace)
-  const by = parsed.word === 'accept' ? 'default' : 'dave'
+  const by = parsed.word === 'accept' && !onlyDaveRecordsNone(pathway, result.auto.band) ? 'default' : 'dave'
   // Only a composer command or a bridge command for the pending PR gets here (the check above). The bridge is Remote Control, not Dave's keyboard.
   const via = e.origin.kind === 'bridge' ? 'bridge' : 'composer'
   const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by, via)

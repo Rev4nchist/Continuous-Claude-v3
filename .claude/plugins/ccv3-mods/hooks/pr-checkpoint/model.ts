@@ -71,7 +71,11 @@ export const resolveBody = (root: string, body: string): string => (ABSOLUTE.tes
 
 export const engineArgv = (root: string, ...flags: string[]): string[] => ['node', `${root}/${ENGINE_REL}`, ...flags]
 
-export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,number', '-R', REPO]
+export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,labels,number', '-R', REPO]
+
+/** Whether the `labels` of a gh pr view carry risk:high (the one label the band reads), or null when the list is absent or malformed. */
+export const riskHighOf = (labels: unknown): boolean | null =>
+  Array.isArray(labels) ? labels.some(one => typeof one === 'object' && one !== null && (one as { name?: unknown }).name === 'risk:high') : null
 
 export const WORKTREE_ARGV = ['git', 'worktree', 'list', '--porcelain']
 
@@ -212,6 +216,13 @@ export const FIGURE = (dollars: number): string => `$${dollars.toFixed(2)}`
 export const upTo = (files: number | null): string => (files === null ? `up to ${FIGURE(PAID_PER_FILE)} per changed file` : `up to ${FIGURE(files * PAID_PER_FILE)}`)
 
 export type PathwayChoice = { label: string; pathway: string; by: 'default' | 'dave' }
+
+/**
+ * At HIGH and CRITICAL a `none` is always Dave's own pick (`--by dave`), even when it is the recommendation (the interim CodeRabbit rule,
+ * 2026-11-04: HIGH without the risk:high trigger is recommended none). The engine refuses `--by default` for it, and land-none-check.mjs
+ * reads decided_by dave. Same bands as QUEUE_BANDS in pr-loop/slot.ts (not imported: this file takes types only).
+ */
+export const onlyDaveRecordsNone = (pathway: string, band: unknown): boolean => pathway === 'none' && (band === 'HIGH' || band === 'CRITICAL')
 export type PathwayAsk = { header: string; question: string; choices: PathwayChoice[] }
 
 const NAMES: Record<string, string> = { none: 'No review, land on CI', coderabbit: 'CodeRabbit review', both: 'CodeRabbit + Greptile', wait: 'Keep as draft' }
@@ -240,7 +251,8 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, s
   const open = buttons.filter(one => one.pathway !== 'wait')
   if (result.recommended === null || open.length === 0) return null
   const keepFirst = recommendedFirst && buttons[0]?.pathway === 'wait'
-  // "No review, land on CI" is the last label at every band, unless it IS the recommendation (a LOW to ELEVATED PR), and then it is first.
+  // "No review, land on CI" is the last label at every band, unless it IS the recommendation (a LOW to ELEVATED PR, or a HIGH or CRITICAL PR that
+  // earns no CodeRabbit under the interim rule), and then it is first.
   const noneIsRecommended = recommendedFirst && result.recommended === 'none'
   const noReview = noneIsRecommended ? [] : open.filter(one => one.pathway === 'none')
   const paid = open.filter(one => noneIsRecommended || one.pathway !== 'none').slice(0, 3 - noReview.length)
@@ -249,11 +261,12 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, s
   const choices: PathwayChoice[] = ordered.map((one, i) => ({
     label: `${labelFor(one, files)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
     pathway: one.pathway,
-    by: recommendedFirst && i === 0 ? 'default' : 'dave',
+    by: recommendedFirst && i === 0 && !onlyDaveRecordsNone(one.pathway, result.auto?.band) ? 'default' : 'dave',
   }))
   const lines = [overview(pr, result)]
-  const why = result.why[0]
-  if (recommendedFirst) lines.push(`Recommended: ${nameOf(result.recommended)}${why ? `, because ${why}` : ''}.`)
+  // Every reason shows: the RF floor (aegis + critic) is a second reason, and Dave must see it before he picks none.
+  const [why, ...also] = result.why.map(one => one.replace(/[.\s]+$/, '')).filter(one => one !== '')
+  if (recommendedFirst) lines.push(`Recommended: ${nameOf(result.recommended)}${why ? `, because ${why}` : ''}.`, ...also.map(one => `Also: ${one}.`))
   else lines.push(`The engine recommends ${result.recommended}, but it is held. Nothing is marked.`)
   const cap = result.capacity
   const crab = typeof cap.count === 'number' ? `CodeRabbit 7d ${cap.count}${cap.band ? ` ${cap.band}` : ''}` : 'CodeRabbit 7d unknown'
