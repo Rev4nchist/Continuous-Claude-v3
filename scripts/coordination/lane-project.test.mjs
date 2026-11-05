@@ -454,6 +454,29 @@ describe('board header: claude.exe processes matched to sessions by start time',
     }
   });
 
+  it('a resumed session (old start time, new process) matches by the pid in its identity file, and stays unmatched without it', async () => {
+    // Identity files are named by uuid, and session-label.mjs accepts hex and dashes only, so this id is hex.
+    const RS = 'deadbeef-0000-4000-8000-0000000000a1';
+    const idDir = fs.mkdtempSync(path.join(state.cacheRoot, 'idpid-'));
+    // 2 h ago: far from every other fixture session, which started a moment ago, so only the pid can match it.
+    const procs = JSON.stringify([{ pid: 5555, startMs: Date.now() - 2 * 3_600_000 }]);
+    try {
+      await q(`INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat, last_activity_at)
+               VALUES ($1,$2,'fixture resumed', now() - interval '5 hours', now(), now())`, [RS, normalizeRoot(state.dirs.C)]);
+      const env = { LANE_CLAUDE_PROCESSES: procs, CCV3_IDENTITY_DIR: idDir };
+      const before = lane(state.dirs.C, SA, ['board'], env);
+      assert.equal(before.code, 0, before.all);
+      assert.match(before.out, /0\/1 claude\.exe matched \(no session for pid 5555\)/, 'no identity file: the start times are hours apart');
+      fs.writeFileSync(path.join(idDir, `${RS}.json`), JSON.stringify({ uuid: RS, pid: 5555, updatedAt: new Date().toISOString() }));
+      const after = lane(state.dirs.C, SA, ['board'], env);
+      assert.match(after.out, /1\/1 claude\.exe matched(?! \(no session)/);
+      assert.deepEqual(JSON.parse(lane(state.dirs.C, SA, ['board', '--json'], env).out).processes, { total: 1, matched: 1, unmatchedPids: [] });
+    } finally {
+      await q(`DELETE FROM sessions WHERE id = $1`, [RS]).catch(() => {});
+      fs.rmSync(idDir, { recursive: true, force: true });
+    }
+  });
+
   it('an unknown process list prints nothing and the JSON field is null', () => {
     const text = lane(state.dirs.C, SA, ['board'], { LANE_CLAUDE_PROCESSES: 'not json' });
     assert.equal(text.code, 0, text.all);

@@ -87,6 +87,7 @@
   var inflight = false;
   var locked = false;
   var cardsSubscribed = false;
+  var cardsUnsub = null;
   var again = false;
   var dragId = null;
   var placeholder = null;
@@ -310,6 +311,7 @@
 
   board.addEventListener('drop', function (e) {
     if (!dragId) return;
+    if (!editable) { clearDrag(); return; }
     var col = dropTarget(e);
     if (!col) { clearDrag(); return; }
     e.preventDefault();
@@ -351,6 +353,8 @@
   // update when the doc exists (it keeps appliedColumns and syncedAt, which only the sync writes); set only to create it.
   // A page that saw no doc reads again before it writes: another device may have created it, and set would replace it.
   // The fresh read also checks the board stamp, so a doc that turned foreign since the load is never written.
+  // Columns are last-writer-wins by design: ids another tab added after this page loaded can be lost.
+  // Known trade-off. Dave decided 2026-11-05 not to re-read the board before each save.
   function writeBoard(sent) {
     var ref = db.doc(DOC_PATH);
     function viaRead() {
@@ -500,6 +504,7 @@
   }
 
   function applyCards(snap) {
+    if (locked) return;
     var next = {};
     (snap.docs || []).forEach(function (d) { next[d.id] = typeof d.data === 'function' ? d.data() : d.data; });
     Object.keys(cards).forEach(function (id) {
@@ -529,12 +534,13 @@
       cardsOff('Card notes not loaded: ' + errText(err) + '. Editing is off.');
     }
     try {
-      db.collection(CARDS).onSnapshot(function (snap) {
+      var unsub = db.collection(CARDS).onSnapshot(function (snap) {
         clearTimeout(timer);
         // The first snapshot failing would leave editing stuck on "Loading": turn editing off with the reason.
         // After a good snapshot, a bad one is swallowed so the page stays alive.
         try { applyCards(snap); } catch (e) { if (cardsState === 'wait') fail(e); }
       }, fail);
+      if (typeof unsub === 'function') cardsUnsub = unsub;
     } catch (e) { fail(e); }
   }
 
@@ -547,6 +553,8 @@
   function writeCard(ref, payload, known) {
     function viaRead() {
       return attempt(function () { return ref.get(); }).then(function (snap) {
+        // The page may have locked while the read was waiting: this card belongs to another board now.
+        if (locked) return undefined;
         return docOf(snap) ? ref.update(payload) : ref.set(payload);
       });
     }
@@ -570,6 +578,7 @@
     paintEdit(id);
     attempt(function () { return writeCard(db.collection(CARDS).doc(id), payload, known); }).then(function () {
       saving[id] = false;
+      if (locked) return;
       var merged = {};
       var old = cardDocs[id] || {};
       Object.keys(old).forEach(function (k) { merged[k] = old[k]; });
@@ -689,6 +698,19 @@
     return typeof snap.data === 'function' ? snap.data() : snap.data;
   }
 
+  // Stop listening to the card notes and take down what they painted: they belong to the other board.
+  function dropCards() {
+    if (cardsUnsub) { try { cardsUnsub(); } catch (e) { /* already gone */ } cardsUnsub = null; }
+    cardDocs = {};
+    cardsState = 'off';
+    cardsWhy = dbWhy;
+    Object.keys(cards).forEach(function (id) {
+      fillForm(id, {});
+      paintSync(id);
+      setSaved(id, '', 'idle');
+    });
+  }
+
   // The saved order belongs to another board. Nothing from this page may write, and the card notes of that board are not shown.
   function lockForeign(other) {
     locked = true;
@@ -699,7 +721,9 @@
     answered = true;
     clearTimeout(loadTimer);
     setEditable(false);
+    clearDrag();
     setStatus('This page belongs to board ' + PAGE_BOARD + ', but the saved order is for board ' + String(other) + '. Nothing is saved from this page.', 'crit');
+    dropCards();
     paintAll();
   }
 

@@ -16,14 +16,20 @@
  *   I12 resume names a session far back in the history, not the direct parent
  *   I13 the id rule lets through a non-hex id; a name keeps stray whitespace
  *   I14 a hidden spawn timeout option that does nothing is passed to the adopt child
+ *   I15 a pid does not survive a write and read
+ *   I16 an old file without a pid breaks the read, or a write leaves pid missing instead of null
+ *   I17 a write that names no pid (SessionEnd) clears the stored pid
+ *   I18 a resume keeps the old process pid
+ *   I19 a bad pid inside a file is trusted
+ *   I20 CLAUDE_PID accepts a non-integer, a padded string, zero, a negative or an unsafe number
  */
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  CLEAR_WINDOW_MS, clipName, label, lastCustomTitle, previousFromClear, previousFromTranscript,
+  CLEAR_WINDOW_MS, claudePidFromEnv, clipName, label, lastCustomTitle, previousFromClear, previousFromTranscript,
   readIdentity, resolveName, resolvePrevious, runAdopt, writeIdentity,
 } from '../shared/session-identity.js';
 
@@ -195,6 +201,51 @@ describe('runAdopt', () => {
     expect(runAdopt(B, A, fake)).toBe(true);
     expect(calls[0].args.slice(1)).toEqual(['adopt', '--from', A]);
     expect(calls[0].env.CLAUDE_CODE_SESSION_ID).toBe(B);
+  });
+});
+
+describe('claude pid', () => {
+  it('I15: a pid round-trips through the identity file', () => {
+    expect(writeIdentity(A, { pid: 113964 })?.pid).toBe(113964);
+    expect(readIdentity(A)?.pid).toBe(113964);
+  });
+
+  it('I16: an old file without a pid reads as null, and a write with no pid patch stores null', () => {
+    mkdirSync(process.env.CCV3_IDENTITY_DIR!, { recursive: true });
+    const file = join(process.env.CCV3_IDENTITY_DIR!, `${A}.json`);
+    writeFileSync(file, JSON.stringify({ uuid: A, name: 'old', cwd: 'C:/x' }));
+    expect(readIdentity(A)?.pid).toBeNull();
+    writeIdentity(A, { name: 'new' });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toHaveProperty('pid', null);
+  });
+
+  it('I17: a write that names no pid keeps the stored pid', () => {
+    writeIdentity(A, { pid: 4242 });
+    writeIdentity(A, { endedAt: '2026-11-03T10:00:00.000Z', endReason: 'other' });
+    expect(readIdentity(A)?.pid).toBe(4242);
+  });
+
+  it('I18: a resume replaces the old pid with the new process pid', () => {
+    writeIdentity(A, { pid: 4242 });
+    writeIdentity(A, { pid: 5151 });
+    expect(readIdentity(A)?.pid).toBe(5151);
+  });
+
+  it('I19: a bad pid inside a file reads as null', () => {
+    mkdirSync(process.env.CCV3_IDENTITY_DIR!, { recursive: true });
+    const file = join(process.env.CCV3_IDENTITY_DIR!, `${A}.json`);
+    for (const bad of ['12', 0, -5, 12.5, null]) {
+      writeFileSync(file, JSON.stringify({ uuid: A, pid: bad }));
+      expect(readIdentity(A)?.pid).toBeNull();
+    }
+  });
+
+  it('I20: CLAUDE_PID parses only a positive safe integer', () => {
+    expect(claudePidFromEnv({ CLAUDE_PID: '113964' })).toBe(113964);
+    const bad = ['', 'abc', '0', '-5', '12.5', ' 12', '12 ', '1e3', '+7', '9007199254740993', '99999999999999999999'];
+    for (const v of bad) expect(claudePidFromEnv({ CLAUDE_PID: v }), JSON.stringify(v)).toBeUndefined();
+    expect(claudePidFromEnv({})).toBeUndefined();
+    expect(claudePidFromEnv({ CLAUDE_PID: String(Number.MAX_SAFE_INTEGER) })).toBe(Number.MAX_SAFE_INTEGER);
   });
 });
 
