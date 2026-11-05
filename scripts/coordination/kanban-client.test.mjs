@@ -53,11 +53,18 @@ function fakeDb(initial = {}, { liveDoc = true, getFails = null } = {}) {
   const listeners = new Map();
   const log = [];
   let cardSubs = 0;
+  let cardUnsubs = 0;
+  const cardListeners = [];
+  let heldGets = null;
   const snap = (p) => ({ id: p.split('/').pop(), exists: store.has(p), data: () => clone(store.get(p)), metadata: { fromCache: false, hasPendingWrites: false } });
   const notify = (p) => { for (const next of listeners.get(p) || []) next(snap(p)); };
   const ref = (p) => ({
     path: p,
-    get: () => (getFails ? Promise.reject(getFails) : Promise.resolve(snap(p))),
+    get: () => {
+      if (getFails) return Promise.reject(getFails);
+      if (heldGets) return new Promise((resolve) => heldGets.push(() => resolve(snap(p))));
+      return Promise.resolve(snap(p));
+    },
     set(data) {
       log.push({ op: 'set', path: p, data: clone(data) });
       store.set(p, clone(data));
@@ -81,17 +88,34 @@ function fakeDb(initial = {}, { liveDoc = true, getFails = null } = {}) {
       return () => {};
     },
   });
+  const cardSnap = (docs) => ({ docs: Object.entries(docs).map(([id, data]) => ({ id, data: () => clone(data) })) });
   return {
     api: {
       doc: ref,
       collection: () => ({
         doc: (id) => ref(`cards/${id}`),
-        onSnapshot(next) { cardSubs += 1; Promise.resolve().then(() => next({ docs: [] })); return () => {}; },
+        onSnapshot(next) {
+          cardSubs += 1;
+          const sub = { next, live: true };
+          cardListeners.push(sub);
+          Promise.resolve().then(() => next({ docs: [] }));
+          return () => { if (sub.live) cardUnsubs += 1; sub.live = false; };
+        },
       }),
     },
     log,
     /** How many times the page subscribed to the card notes. */
     cardSubs: () => cardSubs,
+    /** How many times the page cancelled its card-notes subscription. */
+    cardUnsubs: () => cardUnsubs,
+    /** The card docs change; only a subscription that was not cancelled hears it. */
+    pushCards(docs) { for (const l of cardListeners) if (l.live) l.next(cardSnap(docs)); },
+    /** A card snapshot already queued when the subscription was cancelled: it still reaches the page. */
+    pushCardsLate(docs) { for (const l of cardListeners) l.next(cardSnap(docs)); },
+    /** From now on a read waits until releaseGets(): a lock can then land while the page waits for it. */
+    holdGets() { heldGets = []; },
+    /** The waiting reads answer with the doc as it is now. */
+    releaseGets() { const waiting = heldGets || []; heldGets = null; for (const r of waiting) r(); },
     /** A write by another device that this page has not been told about (no snapshot). */
     seed: (p, data) => store.set(p, clone(data)),
     remove: (p) => store.delete(p),
@@ -139,9 +163,16 @@ const LANES = [
 async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null } = {}) {
   const db = fakeDb(doc ? { [DOC]: doc } : {}, { liveDoc, getFails });
   const timers = [];
+  const parts = new Map();
+  /** One element per card and selector, so a test can read what the page painted into a field. */
+  const partOf = (id, sel) => {
+    const key = id + ' ' + sel;
+    if (!parts.has(key)) parts.set(key, stub());
+    return parts.get(key);
+  };
   const cardEls = new Map(lanes.filter((l) => l.state !== 'done').map((l) => [l.id, stub({
     attrs: { 'data-id': l.id, 'data-hash': 'h' },
-    querySelector: () => stub(),
+    querySelector: (sel) => partOf(l.id, sel),
   })]));
   const colEls = ['now', 'next', 'later', 'waiting', 'progress'].map((name) => stub({
     attrs: { 'data-col': name },
@@ -174,6 +205,28 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     async move(id, col) {
       const target = { classList: { contains: (c) => c === 'kb-to' }, closest: () => cardEls.get(id), value: col };
       for (const f of els['kb-board'].handlers.change || []) f({ target });
+      await settle();
+    },
+    /** A card field (.kb-note, .kb-q, .kb-sync, ...) as the page painted it. */
+    part: partOf,
+    /** The Save button of a card's notes form, like a click on it. */
+    async clickSave(id) {
+      const target = { closest: (sel) => (sel === '.kb-save' ? { closest: () => cardEls.get(id) } : null) };
+      for (const f of els['kb-board'].handlers.click || []) f({ target });
+      await settle();
+    },
+    /** The start of a drag on the grip of a card, like a dragstart event. */
+    dragStart(id) {
+      const grip = { closest: () => cardEls.get(id) };
+      const target = { closest: (sel) => (sel === '.kb-grip' ? grip : null) };
+      const dataTransfer = { setData() {}, setDragImage() {} };
+      for (const f of els['kb-board'].handlers.dragstart || []) f({ target, dataTransfer, preventDefault() {} });
+    },
+    /** A drop on a column, like a drop event. */
+    async drop(colName) {
+      const col = colEls.find((c) => c.attrs['data-col'] === colName);
+      const target = { closest: (sel) => (sel === '.kcol' ? col : null) };
+      for (const f of els['kb-board'].handlers.drop || []) f({ target, clientY: 0, preventDefault() {} });
       await settle();
     },
     /** Lets the 800 ms save debounce run. */
@@ -325,4 +378,113 @@ test('after a save the order is pending again: the chip shows and syncedAt is st
   assert.equal(page.chipHidden(), true, 'a synced order shows no chip');
   await page.moveAndSave('a2', 'now');
   assert.equal(page.chipHidden(), false, 'a saved move is not yet synced');
+});
+
+// Card notes after the page locks. Not shown on a foreign board: the lock must also stop what a card snapshot paints.
+const CARD = { note: 'note of board A', question: 'q of board A', updatedAt: '2026-11-04T09:30:00.000Z', syncedAt: SYNCED };
+
+async function lockedAfterLoad() {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.db.pushCards({ a1: CARD });
+  assert.equal(page.part('a1', '.kb-note').value, CARD.note, 'setup: the matching board paints its card notes');
+  page.db.push(DOC, board({ board: 'zz-other', syncedAt: SYNCED }));
+  await settle();
+  assert.match(page.status(), /belongs to board zz-a, but the saved order is for board zz-other/, 'setup: the page locked');
+  return page;
+}
+
+test('positive control: on a matching board a card note edit saves to the card doc', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.db.pushCards({ a1: CARD });
+  page.part('a1', '.kb-note').value = 'edited';
+  await page.clickSave('a1');
+  assert.deepEqual(page.db.writes().map((e) => e.path), ['cards/a1']);
+});
+
+test('the lock clears the card notes already shown, the sync chip and the card state', async () => {
+  const page = await lockedAfterLoad();
+  assert.equal(page.part('a1', '.kb-note').value, '', 'a foreign page still shows the note');
+  assert.equal(page.part('a1', '.kb-q').value, '', 'a foreign page still shows the question');
+  assert.equal(page.part('a1', '.kb-sync').hidden, true, 'a foreign page still shows the sync chip');
+});
+
+test('after the lock a card snapshot paints nothing: not the notes, not the sync chip', async () => {
+  const page = await lockedAfterLoad();
+  page.db.pushCardsLate({ a1: { ...CARD, note: 'late note' }, a2: { note: 'a2 note', syncedAt: SYNCED } });
+  await settle();
+  assert.equal(page.part('a1', '.kb-note').value, '', 'a card snapshot painted a note after the lock');
+  assert.equal(page.part('a2', '.kb-note').value, '');
+  assert.equal(page.part('a1', '.kb-sync').hidden, true, 'a card snapshot painted the sync chip after the lock');
+});
+
+test('the lock cancels the card-notes subscription', async () => {
+  const page = await lockedAfterLoad();
+  assert.equal(page.db.cardUnsubs(), 1, 'the page kept listening to the card notes of another board');
+  page.db.pushCards({ a1: { ...CARD, note: 'live note' } });
+  await settle();
+  assert.equal(page.part('a1', '.kb-note').value, '');
+});
+
+test('after the lock the card fields are off and a card save writes nothing', async () => {
+  const page = await lockedAfterLoad();
+  assert.equal(page.part('a1', '.kb-note').disabled, true, 'the note field is still editable');
+  assert.equal(page.part('a1', '.kb-q').disabled, true, 'the question field is still editable');
+  assert.equal(page.part('a1', '.kb-save').disabled, true, 'the Save button is still on');
+  page.part('a1', '.kb-note').value = 'typed after the lock';
+  await page.clickSave('a1');
+  await page.moveAndSave('a2', 'now');
+  assert.deepEqual(page.db.log, [], 'a locked page wrote');
+});
+
+test('a card save in flight when the page locks does not bring the card state back', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.db.pushCards({ a1: CARD });
+  page.part('a1', '.kb-note').value = 'edited';
+  const saving = page.clickSave('a1');
+  page.db.push(DOC, board({ board: 'zz-other', syncedAt: SYNCED }));
+  await saving;
+  await settle();
+  assert.equal(page.part('a1', '.kb-sync').hidden, true, 'the finished save repainted the sync chip of a locked page');
+});
+
+test('a card note whose read is still waiting when the page locks is not written to the other board', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.part('a1', '.kb-note').value = 'note for a card with no doc';
+  page.db.holdGets();
+  await page.clickSave('a1');
+  page.db.push(DOC, board({ board: 'zz-other', syncedAt: SYNCED }));
+  await settle();
+  const lockText = page.status();
+  assert.match(lockText, /saved order is for board zz-other/, 'setup: the page locked');
+  page.db.releaseGets();
+  await settle();
+  assert.deepEqual(page.db.writes().filter((w) => w.path.startsWith('cards/')), [], 'a locked page wrote a card note into the other board');
+  assert.equal(page.status(), lockText, 'the lock message changed');
+});
+
+test('a card note rejected as invalid_argument, then read while the page locks, is not written either', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.db.pushCards({ a1: CARD });
+  page.part('a1', '.kb-note').value = 'edited';
+  page.db.holdGets();
+  await page.clickSave('a1');
+  assert.equal(page.db.log.filter((w) => w.rejected).length, 1, 'setup: the update was rejected and the read is waiting');
+  page.db.push(DOC, board({ board: 'zz-other', syncedAt: SYNCED }));
+  await settle();
+  page.db.releaseGets();
+  await settle();
+  assert.deepEqual(page.db.writes().filter((w) => w.path.startsWith('cards/')), [], 'a locked page wrote a card note into the other board');
+});
+
+test('a drop that arrives after the lock moves nothing and keeps the lock message', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.dragStart('a2');
+  page.db.push(DOC, board({ board: 'zz-other', syncedAt: SYNCED }));
+  await settle();
+  const lockText = page.status();
+  assert.match(lockText, /saved order is for board zz-other/, 'setup: the page locked');
+  await page.drop('now');
+  assert.equal(page.status(), lockText, 'the drop replaced the lock message');
+  await page.debounce();
+  assert.deepEqual(page.db.log, [], 'a locked page wrote after a drop');
 });
