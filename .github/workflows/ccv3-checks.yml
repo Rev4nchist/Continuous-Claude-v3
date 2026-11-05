@@ -142,6 +142,21 @@ jobs:
       - name: lane board DB tests (render-board, lane-project, scratch-db)
         timeout-minutes: 5
         run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/scratch-db.test.mjs
+      # These 8 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
+      # They sit in this job because it already has the checkout with full history and the hooks install.
+      - name: lane board tests without a database (kanban, lane-shim, path guard, registry drift, session label, probe boards)
+        if: ${{ !cancelled() }}   # run even when the DB step failed, so one red step does not hide the other
+        timeout-minutes: 5
+        run: >-
+          node --test
+          scripts/coordination/kanban-apply.test.mjs
+          scripts/coordination/kanban-card.test.mjs
+          scripts/coordination/kanban-place.test.mjs
+          scripts/coordination/lane-path-guard.test.mjs
+          scripts/coordination/lane-shim.test.mjs
+          scripts/coordination/registry-drift.test.mjs
+          scripts/coordination/session-label.test.mjs
+          scripts/coordination/probe-boards.test.mjs
 
   trivy:
     runs-on: ubuntu-latest
