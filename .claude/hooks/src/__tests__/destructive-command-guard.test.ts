@@ -1581,7 +1581,8 @@ describe('CR 299: nested Delete args, exec-flag forms, POSIX payload alone', () 
     ['git checkout -fq main', 'git checkout -fq main'],
     ['quoted payload glued to a suffix', 'bash -c "rm -rf /"x'],
     ['quoted payload glued to a redirect', 'bash -c "rm -rf x">/dev/null'],
-    ['single-quoted payload glued to a suffix', "sh -c 'git reset --hard'x"],
+    // `'git reset --hard'x` would run `--hardx` (git rejects it); a space inside the quotes keeps --hard a word.
+    ['single-quoted payload glued to a suffix', "sh -c 'git reset --hard 'x"],
   ];
   for (const [name, cmd] of asks2) {
     it(`Bash asks: ${name}`, () => {

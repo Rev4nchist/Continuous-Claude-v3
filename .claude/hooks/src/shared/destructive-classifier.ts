@@ -77,7 +77,7 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   // (`.`, `./src`, `../x`: a ref name cannot start with a dot, R3); -f; and ANY long option outside the
   // branch-switch set (B2: --no-overlay, --quiet, --merge, --conflict=x restore files). This covers every
   // abbreviation too (R4: `--forc`, `--theirs`, `--pathspec-from-file`). An abbreviated switch (`--det`) asks.
-  { name: 'git checkout discard', re: gitFlag('checkout', String.raw`--(?=\s|$)|\.|-f\b|--(?!${CHECKOUT_SWITCH_OPTIONS}(?=[\s=]|$))\w`) },
+  { name: 'git checkout discard', re: gitFlag('checkout', String.raw`--(?=\s|$)|\.|-[a-zA-Z]*f[a-zA-Z]*\b|--(?!${CHECKOUT_SWITCH_OPTIONS}(?=[\s=]|$))\w`) },
   // git restore discarding the WORKTREE (parity with `git checkout .`/`--`). `--staged`-only
   // (reversible unstage) and single-file `git restore file` are NOT gated (accepted).
   { name: 'git restore discard', re: /\bgit\s+restore\b[^&|;]*(--worktree\b|\s\.(?:\s|$))/i },
@@ -370,7 +370,10 @@ function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | n
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg.match(re);
     if (!m || !(m[1] || m[3])) continue;
-    if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
+    // A bare payload that starts with a quote is a quoted payload glued to more text (`"rm -rf x">f`,
+    // `'...'x`): its quotes would blank the command, so delete them (fail closed; CR 299). A bare payload
+    // that starts with a word keeps its quotes (H2: `pwsh -File x.ps1 -C C:\repo commit -m "..."`).
+    if (!m[1]) return { payload: /^["']/.test(m[3]) ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
     if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
     // pwsh and cmd join their args into one command. A POSIX tail is $0, $1, ...: it runs only through
     // the payload ($1, eval), so it is scanned as its own command after a `;`, never as an argument of

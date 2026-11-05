@@ -203,7 +203,7 @@ var DESTRUCTIVE_PATTERNS = [
   // (`.`, `./src`, `../x`: a ref name cannot start with a dot, R3); -f; and ANY long option outside the
   // branch-switch set (B2: --no-overlay, --quiet, --merge, --conflict=x restore files). This covers every
   // abbreviation too (R4: `--forc`, `--theirs`, `--pathspec-from-file`). An abbreviated switch (`--det`) asks.
-  { name: "git checkout discard", re: gitFlag("checkout", String.raw`--(?=\s|$)|\.|-f\b|--(?!${CHECKOUT_SWITCH_OPTIONS}(?=[\s=]|$))\w`) },
+  { name: "git checkout discard", re: gitFlag("checkout", String.raw`--(?=\s|$)|\.|-[a-zA-Z]*f[a-zA-Z]*\b|--(?!${CHECKOUT_SWITCH_OPTIONS}(?=[\s=]|$))\w`) },
   // git restore discarding the WORKTREE (parity with `git checkout .`/`--`). `--staged`-only
   // (reversible unstage) and single-file `git restore file` are NOT gated (accepted).
   { name: "git restore discard", re: /\bgit\s+restore\b[^&|;]*(--worktree\b|\s\.(?:\s|$))/i },
@@ -458,7 +458,7 @@ function matchWrapper(seg2) {
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg2.match(re);
     if (!m || !(m[1] || m[3])) continue;
-    if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
+    if (!m[1]) return { payload: /^["']/.test(m[3]) ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
     if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
     const join3 = shell === "posix" ? " ; " : " ";
     return { payload: unwrapPayload(m[1]) + join3 + dropQuotes(m[2]), shell };
