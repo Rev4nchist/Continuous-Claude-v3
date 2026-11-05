@@ -26,6 +26,8 @@ $tmpRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $work = Join-Path $tmpRoot ('land-pr-recheck-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
 $oldPath = $env:PATH
+# land-pr.ps1 takes a lock before the merge: point it, its log and the sync cursor at the temp folder, never at ~/.claude.
+$env:CCV3_LAND_LOCK = Join-Path $work 'land.lock'; $env:CCV3_LAND_LOCK_LOG = Join-Path $work 'land-lock.log'; $env:CCV3_SYNC_CURSOR = Join-Path $work 'sync-cursor'
 $sha = '0123456789abcdef0123456789abcdef01234567'
 $branch = 'fix/recheck-wiring'
 $prUrl = 'repos/Rev4nchist/Continuous-Claude-v3/pulls/7'
@@ -196,6 +198,7 @@ try {
 }
 finally {
   $env:PATH = $oldPath
+  Remove-Item Env:\CCV3_LAND_LOCK, Env:\CCV3_LAND_LOCK_LOG, Env:\CCV3_SYNC_CURSOR -ErrorAction SilentlyContinue
   $full = [System.IO.Path]::GetFullPath($work)
   if ($full.StartsWith($tmpRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path $full -Leaf).StartsWith('land-pr-recheck-test-')) {
     Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue
