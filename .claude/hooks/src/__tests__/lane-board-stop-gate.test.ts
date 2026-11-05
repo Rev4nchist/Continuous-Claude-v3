@@ -3,7 +3,8 @@
  *
  * Failure list, one test (or group) each:
  *   S1  a pending file for a board with a phone page does not block (or a board with none does)
- *       Only the default board has a phone page (no `board` field in artifacts.json), so a file for any other board never blocks.
+ *       The default board's page comes from artifacts.json. Another board has a page only when its own registry
+ *       entry carries `laneArtifact` (Option B); with none, a file for that board never blocks.
  *   S2  <sid>@<board>.json is not seen (only the bare <sid>.json is read)
  *   S3  the block repeats inside one batch (stopBlocked not written), or a second board's batch is hidden by the first
  *   S4  a headless run, a stop_hook_active continuation, or no session id blocks
@@ -25,18 +26,31 @@ const ENV_HEADLESS = { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' };
 const payload = (extra: Record<string, unknown> = {}) => ({ session_id: 'sess-1', hook_event_name: 'Stop', ...extra });
 const CCV3 = { board: 'continuous-claude', pending: {} };
 const PH = { board: 'ph-board', pending: {} };
+const ZZ = { board: 'zz-board', pending: {} };
+const PH_URL = 'https://claude.ai/artifact/KaD7X6HnLKHKjzz7cecUVF';
 
 let tmp = '';
 let dir = '';
 let home = '';
+let registry = '';
 const baseEnv = (extra: Record<string, string> = {}): Record<string, string> => ({
-  ...ENV_INTERACTIVE, LANE_BOARD_PENDING_DIR: dir, CCV3_USER_HOME: home, ...extra,
+  ...ENV_INTERACTIVE, LANE_BOARD_PENDING_DIR: dir, CCV3_USER_HOME: home, LANE_REGISTRY_PATH: registry, ...extra,
 });
+/** Write the temp registry: ph-board gets the given extra fields (a laneArtifact by default), zz-board has none. */
+const writeRegistry = (ph: Record<string, unknown> = { laneArtifact: PH_URL }): void => {
+  fs.writeFileSync(registry, JSON.stringify({ projects: [
+    { name: 'CCv3', key: 'continuous-claude', path: path.join(tmp, 'ccv3'), status: 'active' },
+    { name: 'PH', key: 'ph-board', path: path.join(tmp, 'ph'), status: 'active', ...ph },
+    { name: 'ZZ', key: 'zz-board', path: path.join(tmp, 'zz'), status: 'active' },
+  ] }));
+};
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stopgate-'));
   dir = path.join(tmp, 'pending');
   home = path.join(tmp, 'home');
+  registry = path.join(tmp, 'registry.json');
+  writeRegistry();
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(path.join(home, 'continuous-claude', '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, 'continuous-claude', '.claude', 'artifacts.json'), JSON.stringify({ artifacts: [
@@ -78,23 +92,46 @@ describe('decideStop (pure)', () => {
   });
 
   it('S1: approves a pending file whose board has no phone page', () => {
-    expect(gate.decideStop(payload(), baseEnv(), [{ board: 'zz-board', pending: {} }]).action).toBe('approve');
+    expect(gate.decideStop(payload(), baseEnv(), [ZZ]).action).toBe('approve');
   });
 
-  it('S3: skips a blocked batch and every other board, blocks the default board batch', () => {
+  it('S3: skips a blocked batch and a board with no page, blocks the next batch that has a page', () => {
     const none = gate.decideStop(payload(), baseEnv(), [
       { board: 'continuous-claude', pending: { stopBlocked: true } },
-      { board: 'zz-board', pending: {} },
-      PH,
+      ZZ,
+      { board: 'ph-board', pending: { stopBlocked: true } },
     ]);
     expect(none.action).toBe('approve');
-    const d = gate.decideStop(payload(), baseEnv(), [{ board: 'zz-board', pending: {} }, PH, CCV3]);
+    const d = gate.decideStop(payload(), baseEnv(), [ZZ, PH, CCV3]);
     expect(d.action).toBe('block');
-    if (d.action === 'block') expect(d.board).toBe('continuous-claude');
+    if (d.action === 'block') expect(d.board).toBe('ph-board');
+    const d2 = gate.decideStop(payload(), baseEnv(), [ZZ, { board: 'ph-board', pending: { stopBlocked: true } }, CCV3]);
+    expect(d2.action).toBe('block');
+    if (d2.action === 'block') expect(d2.board).toBe('continuous-claude');
   });
 
-  it('S1: a board other than the default has no phone page, whatever artifacts.json holds', () => {
+  it('S1: a board with a laneArtifact blocks and names its own page file and its rebuilt url', () => {
+    const d = gate.decideStop(payload(), baseEnv(), [PH]);
+    expect(d.action).toBe('block');
+    if (d.action === 'block') {
+      expect(d.board).toBe('ph-board');
+      expect(d.reason).toContain('lane-board-ph-board.html');
+      expect(d.reason).toContain(PH_URL);
+      expect(d.reason).toContain(renderBoardCmd('ph-board', baseEnv()));
+      expect(d.reason).not.toContain('RtrTNVfAq9uowmb2tfbzid');
+    }
+  });
+
+  it('S1: the same board without a laneArtifact approves', () => {
+    writeRegistry({});
     expect(gate.decideStop(payload(), baseEnv(), [PH]).action).toBe('approve');
+  });
+
+  it('S1: a laneArtifact with a bad url, or the default board id, approves', () => {
+    for (const bad of ['https://evil.example/artifact/x', 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid']) {
+      writeRegistry({ laneArtifact: bad });
+      expect(gate.decideStop(payload(), baseEnv(), [PH]).action).toBe('approve');
+    }
   });
 
   it('S5: the reason names the CCv3 url and the absolute render command', () => {
@@ -126,7 +163,17 @@ describe('stopGate (reads and writes the pending dir)', () => {
     expect(gate.stopGate(payload(), baseEnv()).output).toBeNull();
   });
 
-  it('S1: a <sid>@<board>.json file never blocks (no phone page) and is not marked', () => {
+  it('S1: a <sid>@<board>.json file for a board with a laneArtifact blocks once and is marked', () => {
+    put('sess-1@ph-board.json', { since: 'x', verbs: ['claim'], board: 'ph-board' });
+    const first = gate.stopGate(payload(), baseEnv());
+    expect(JSON.stringify(first.output)).toContain('lane-board-ph-board.html');
+    expect(JSON.stringify(first.output)).toContain(PH_URL);
+    expect(read('sess-1@ph-board.json').stopBlocked).toBe(true);
+    expect(gate.stopGate(payload(), baseEnv()).output).toBeNull();
+  });
+
+  it('S1: a <sid>@<board>.json file never blocks when the registry gives that board no page, and is not marked', () => {
+    writeRegistry({});
     put('sess-1@ph-board.json', { since: 'x', verbs: ['claim'], board: 'ph-board' });
     expect(gate.stopGate(payload(), baseEnv()).output).toBeNull();
     expect(read('sess-1@ph-board.json').stopBlocked).toBeUndefined();
@@ -144,12 +191,20 @@ describe('stopGate (reads and writes the pending dir)', () => {
     expect(JSON.stringify(r.output)).toContain('RtrTNVfAq9uowmb2tfbzid');
   });
 
-  it('S3: two boards pending: only the default board batch blocks, once', () => {
+  it('S3: two boards with pages pending: each blocks once (file-name order), then the gate approves', () => {
     put('sess-1.json', { since: 'x', verbs: ['note'], board: 'continuous-claude' });
     put('sess-1@ph-board.json', { since: 'x', verbs: ['note'], board: 'ph-board' });
     expect(JSON.stringify(gate.stopGate(payload(), baseEnv()).output)).toContain('RtrTNVfAq9uowmb2tfbzid');
+    expect(JSON.stringify(gate.stopGate(payload(), baseEnv()).output)).toContain('lane-board-ph-board.html');
     expect(gate.stopGate(payload(), baseEnv()).output).toBeNull();
-    expect(read('sess-1@ph-board.json').stopBlocked).toBeUndefined();
+  });
+
+  it('S3: a board with no page never blocks next to the default board batch', () => {
+    put('sess-1.json', { since: 'x', verbs: ['note'], board: 'continuous-claude' });
+    put('sess-1@zz-board.json', { since: 'x', verbs: ['note'], board: 'zz-board' });
+    expect(JSON.stringify(gate.stopGate(payload(), baseEnv()).output)).toContain('RtrTNVfAq9uowmb2tfbzid');
+    expect(gate.stopGate(payload(), baseEnv()).output).toBeNull();
+    expect(read('sess-1@zz-board.json').stopBlocked).toBeUndefined();
   });
 
   it('S4: a headless run approves and does not mark the batch', () => {
