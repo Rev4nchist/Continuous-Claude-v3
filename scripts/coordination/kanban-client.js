@@ -761,9 +761,12 @@
       });
     }).catch(function (err) {
       if (locked) return;
-      if (db && !cardsSubscribed) subscribeCards();
-      if (!db) { dbWhy = 'Read-only: card notes not loaded.'; paintAll(); }
+      // The board doc could not be read, so the page cannot tell whose artifact this is. Show no card notes and write nothing.
+      dbWhy = db ? 'Read-only: the board of the saved order could not be verified.' : 'Read-only: card notes not loaded.';
+      db = null;
+      setEditable(false);
       readOnly('Board order not loaded: ' + errText(err), 'warn');
+      paintAll();
     });
   }
 
