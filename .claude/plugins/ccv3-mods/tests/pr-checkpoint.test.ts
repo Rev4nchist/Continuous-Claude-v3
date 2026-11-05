@@ -2844,6 +2844,99 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
   })
 })
 
+// ---- a paid pick that is not the recommendation asks again (Dave 2026-11-05; PRs 315 and 316 recorded coderabbit 7 s and 20 s after the dialog opened) ----
+// With none recommended the labels are [none (Recommended), paid, Keep as draft]: a mis-tap on the paid row spends money.
+// How it can fail, and the test that catches it:
+// C1 the paid pick records with no second question, or the confirm asks the wrong thing   C2 No on the confirm records, or loses the pending checkpoint
+// C3 Esc on the confirm records                                                         C4 words typed on the confirm record, or reach the log
+// C5 the Recommended row asks again   C6 none asks again when a paid pathway is recommended   C7 Keep as draft asks again
+describe('pr-checkpoint: a paid pick that is not the recommendation asks again', () => {
+  const noneRecommended = { stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], budget: [0, 0] })) }
+  const PAID = /^CodeRabbit review/
+  const YES = 'Yes, record coderabbit'
+  const NO = 'No, keep the PR a draft'
+  const call = ($: Engine) => callTool($, { pr: 7, body: 'pr-body.md' })
+  const confirms = (seen: { run: Run[] }) => engineCalls(seen).filter(c => c.startsWith('--confirm'))
+  const nothingRecorded = (w: ReturnType<typeof world>) => {
+    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(w.seen.run.some(r => r.argv[0] === 'gh' && (r.argv[2] === 'edit' || r.argv[2] === 'ready'))).toBe(false)
+    expect(w.store.get(PENDING)).toBeDefined()
+  }
+
+  test('C1 none recommended, the paid row picked, Yes on the confirm: two dialogs, the paid pathway is recorded', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: [PAID, YES] })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'CodeRabbit review', 'Keep as draft'])
+    const second = w.seen.dialogs[1]!
+    expect(second.labels).toEqual([YES, NO])
+    expect(second.header).toBe('PR #7')
+    expect(second.question).toContain('CodeRabbit review (up to $1.75)')
+    expect(confirms(w.seen)).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(told.text).toMatch(/Dave chose coderabbit for #7/)
+  })
+
+  test('C2 No on the confirm: two dialogs, nothing recorded, no label, the pending checkpoint stays, the text says draft', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: [PAID, NO] })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(2)
+    nothingRecorded(w)
+    expect(told.text).toMatch(/stays a draft/i)
+    expect(told.text).toMatch(/Nothing recorded/i)
+    expect(told.text).toContain('/pathway')
+  })
+
+  test('C3 Esc on the confirm records nothing', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: [PAID, 'dismiss'] })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(2)
+    nothingRecorded(w)
+    expect(told.text).toMatch(/stays a draft/i)
+  })
+
+  test('C4 words typed on the confirm record nothing and the log keeps no typed word', async ($, on) => {
+    const typed = 'yes go ahead and spend it'
+    const w = world(on, { json: noneRecommended, answers: [PAID, { other: typed }] })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(2)
+    nothingRecorded(w)
+    expect(told.text).toMatch(/Nothing recorded/i)
+    const lines = askLines(w.written)
+    expect(lines.map(line => line.matched)).toEqual([1, null])
+    expect(w.written[ASK_LOG]).not.toContain(typed)
+  })
+
+  test('C5 picking the Recommended row asks once', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: [/\(Recommended\)$/] })
+    await start($)
+    await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(confirms(w.seen)).toEqual([expect.stringMatching(/^--confirm none --by default /)])
+  })
+
+  test('C6 picking none when a paid pathway is recommended asks once', async ($, on) => {
+    const w = world(on, { answers: [/^No review, land on CI/] })
+    await start($)
+    await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(confirms(w.seen)).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+  })
+
+  test('C7 picking Keep as draft asks once', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: [/^Keep as draft/] })
+    await start($)
+    await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).confirm).toBe(0)
+  })
+})
+
 // T11 a tick ask is answered after the queue changed: the answer lands on the wrong ask
 // T12 a closed tick ask nags: none at the next tick, one after 30 minutes, none after the second close
 // T13 a round Yes does not store the grant, or a No does not store the decline

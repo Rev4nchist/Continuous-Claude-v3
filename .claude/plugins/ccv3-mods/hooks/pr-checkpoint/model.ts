@@ -323,6 +323,30 @@ export const answerOfLabel = (spec: AskSpec, answer: unknown): 'yes' | 'no' | nu
 /** The Retry dialog after --apply refused. */
 export const RETRY_LABELS = ['Retry', 'Leave as draft'] as const
 
+/**
+ * True for a paid pick that is not the recommended row: Dave's own press (`by` dave) of a pathway that is neither none nor wait.
+ * A mis-tap on the row under the default row spends money (PRs 315 and 316), so this pick asks a second time.
+ */
+export const needsPaidConfirm = (choice: PathwayChoice): boolean => choice.by === 'dave' && choice.pathway !== 'none' && choice.pathway !== 'wait'
+
+/** The two labels of the paid confirm. Only the first records. */
+export const paidConfirmLabels = (choice: PathwayChoice): readonly [string, string] => [`Yes, record ${choice.pathway}`, 'No, keep the PR a draft']
+
+/** The paid confirm question. `choice.label` holds the pathway name and its cost. */
+export const paidConfirmQuestion = (pr: number, choice: PathwayChoice): string =>
+  `PR #${pr}: you picked ${choice.label}. It is not the recommendation and it can cost money. Record it?`
+
+/** The tool text when the paid confirm records nothing. `typed` is what Dave wrote under Other, shown to the model like `otherText`. */
+export const paidUnconfirmedText = (pr: number, pathway: string, how: 'no' | 'closed' | 'empty' | 'other', typed = ''): string => {
+  const said = {
+    no: `Dave answered No to ${pathway} for #${pr}`,
+    closed: `Dave closed the confirm for ${pathway} on #${pr}`,
+    empty: `No valid answer came back to the confirm for ${pathway} on #${pr}`,
+    other: `Dave wrote: ${clip(typed.replace(/\s+/g, ' '), 400)}`,
+  }[how]
+  return `${said}. Nothing recorded. The PR stays a draft. He answers with ${SLASH} ${pr} <word>.`
+}
+
 /** A watcher ask Dave closed three ways: the quiet time before it may come back, and how often it comes back at all. */
 export const ASK_DEFER_MS = 30 * 60_000
 export const ASK_MAX_DISMISSED = 2

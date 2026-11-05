@@ -54,9 +54,13 @@ import {
   namesPathway,
   namesSlotWrite,
   namesStore,
+  needsPaidConfirm,
   noQuestionText,
   onlyDaveRecordsNone,
   otherText,
+  paidConfirmLabels,
+  paidConfirmQuestion,
+  paidUnconfirmedText,
   parseCheckpointArgs,
   parseGrantArgs,
   parseResult,
@@ -413,6 +417,18 @@ const recordChoice = async ($: EngineInterface, pending: Pending, choice: Pathwa
 }
 
 /**
+ * The second question for a paid pick that is not the recommended row. Null when Dave confirmed (the exact Yes label); otherwise the
+ * answer that records nothing. The pending checkpoint stays, so a bare /pathway still works. The caller holds the dialog flag.
+ */
+async function confirmPaid($: EngineInterface, pr: number, choice: PathwayChoice): Promise<Asked | null> {
+  const labels = paidConfirmLabels(choice)
+  const got = await askDave($, paidConfirmQuestion(pr, choice), labels, clip(`PR #${pr}`, 12))
+  if (got.kind === 'text' && got.text === labels[0]) return null
+  const how = got.kind === 'text' ? (got.text === labels[1] ? 'no' : 'other') : got.kind
+  return { text: paidUnconfirmedText(pr, choice.pathway, how, got.kind === 'text' ? got.text : ''), recorded: null }
+}
+
+/**
  * Raises the checkpoint question for a pending checkpoint and acts on the answer. The caller holds the dialog flag. The pending checkpoint is
  * stored first, so a closed question comes back with a bare /pathway. With no recommendation or no open pathway nothing is asked.
  */
@@ -430,6 +446,10 @@ const askCheckpoint = async ($: EngineInterface, pending: Pending): Promise<Aske
     $.ui.toast(`PR #${pr} stays a draft`, { timeoutMs: 10_000 })
     await clearPending($)
     return { text: keptDraftText(pr), recorded: null }
+  }
+  if (needsPaidConfirm(choice)) {
+    const refused = await confirmPaid($, pr, choice)
+    if (refused) return refused
   }
   return recordChoice($, pending, choice)
 }
