@@ -96,3 +96,13 @@ test('C11: a diff with hunks but no "diff --git" header throws; a diff with no h
   assert.throws(() => changedLines(plain), /no "diff --git" header/);
   assert.deepEqual(changedLines(''), []);
 });
+
+// Breaks if the header check looks at the whole input: a plain section next to a Git section would be dropped silently.
+test('C12: a plain section before or after a Git section throws; an added line that starts with "++" does not', () => {
+  const plain = ['--- a/plain.mjs', '+++ b/plain.mjs', '@@ -1 +1 @@', '-old', '+new'];
+  const git = ['diff --git a/git.mjs b/git.mjs', 'index 1111111..2222222 100644', '--- a/git.mjs', '+++ b/git.mjs', '@@ -1 +1 @@', '-old', '+new'];
+  assert.throws(() => changedLines([...plain, ...git, ''].join('\n')), /outside a "diff --git" section/);
+  assert.throws(() => changedLines([...git, ...plain, ''].join('\n')), /outside a "diff --git" section/);
+  const plusPlus = ['diff --git a/g.mjs b/g.mjs', '--- a/g.mjs', '+++ b/g.mjs', '@@ -1,1 +1,2 @@', ' keep', '+++ added text', ''].join('\n');
+  assert.deepEqual(changedLines(plusPlus), [{ path: 'g.mjs', ranges: [[2, 2]] }]);
+});

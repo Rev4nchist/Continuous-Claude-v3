@@ -32,13 +32,36 @@ function addedLines(entry) {
   return [...new Set(nums)].sort((a, b) => a - b);
 }
 
-/** diffText: unified diff. Returns [{ path, ranges }] in diff order. */
-export function changedLines(diffText) {
-  const text = String(diffText ?? '');
-  // parseHunks starts a file only at "diff --git", so a plain unified diff would give no files at all.
-  if (/^@@ /m.test(text) && !/^diff --git /m.test(text)) {
-    throw new Error('changed-lines: diff has hunks but no "diff --git" header. Pass a Git-format diff.');
+const HUNK_RE = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+const SECTION_ERROR = 'changed-lines: a hunk or file header sits outside a "diff --git" section (no "diff --git" header). Pass a Git-format diff.';
+
+/**
+ * parseHunks starts a file only at "diff --git", so a plain section would be dropped with no sign.
+ * Throws when a "+++ " file header has no "diff --git" line before it, or a hunk comes before any section.
+ * Hunk bodies are skipped by their line counts, so an added line that starts with "++" is content, not a header.
+ */
+function assertGitSections(text) {
+  let inGit = false, fresh = false, oldLeft = 0, newLeft = 0;
+  for (const raw of text.split('\n')) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if ((oldLeft > 0 || newLeft > 0) && /^[ +\-\\]/.test(line)) {
+      if (line[0] !== '+' && line[0] !== '\\') oldLeft -= 1;
+      if (line[0] !== '-' && line[0] !== '\\') newLeft -= 1;
+      continue;
+    }
+    oldLeft = 0; newLeft = 0;
+    if (line.startsWith('diff --git ')) { inGit = true; fresh = true; continue; }
+    if (line.startsWith('+++ ')) { if (!fresh) throw new Error(SECTION_ERROR); fresh = false; continue; }
+    const hunk = HUNK_RE.exec(line);
+    if (!hunk) continue;
+    if (!inGit) throw new Error(SECTION_ERROR);
+    oldLeft = Number(hunk[1] ?? 1); newLeft = Number(hunk[2] ?? 1);
   }
+}
+
+/** diffText: unified diff. Returns [{ path, ranges }] in diff order. Throws on a section outside "diff --git". */
+export function changedLines(diffText) {
+  assertGitSections(String(diffText ?? ''));
   const out = [];
   for (const entry of parseHunks(diffText).values()) {
     if (!entry.file) continue; // deleted file
