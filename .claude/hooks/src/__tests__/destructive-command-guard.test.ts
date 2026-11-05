@@ -1540,3 +1540,42 @@ describe('B3: time/nohup flag runs stay linear (x200)', () => {
     }, 20_000);
   }
 });
+
+// CodeRabbit PR review of eeab94c2 (PR 299): three threads.
+describe('CR 299: nested Delete args, exec-flag forms, POSIX payload alone', () => {
+  const asks: Array<[string, 'Bash' | 'PowerShell', string]> = [
+    // Thread 1: a subexpression as the first Delete argument.
+    ['Delete with a (Join-Path ...) first arg and $true', 'PowerShell', '[IO.Directory]::Delete((Join-Path $env:TEMP x), $true)'],
+    ['Delete with a (Join-Path ...) first arg and $r', 'PowerShell', '$r=$true; [IO.Directory]::Delete((Join-Path $env:TEMP x), $r)'],
+    // Thread 2: bash runs -c anywhere in a short flag cluster; PowerShell accepts prefixes of -Command.
+    ['bash -cx', 'Bash', 'bash -cx "rm -rf /tmp/zz"'],
+    ['bash -ce', 'Bash', "bash -ce 'git reset --hard'"],
+    ['pwsh -com', 'Bash', 'pwsh -com "Remove-Item -Recurse x"'],
+    ['powershell -comm', 'Bash', 'powershell -comm "Remove-Item -Recurse x"'],
+    ['pwsh -CommandWithArgs', 'Bash', 'pwsh -CommandWithArgs "Remove-Item -Recurse $args[0]" x'],
+    ['nice bash -cx (fallback layer)', 'Bash', 'nice -n 5 bash -cx "rm -rf /tmp/zz"'],
+    // Thread 3: the quoted payload runs alone; the tail is $0, so it must not reach the rebase exemption.
+    ['bash -c git rebase with --abort as $0', 'Bash', "bash -c 'git rebase' '--abort'"],
+    ['bash -c git rebase with _ then --abort', 'Bash', "bash -c 'git rebase' _ '--abort'"],
+    ['sh -c git rebase with --continue as $0', 'Bash', 'sh -c "git rebase" "--continue"'],
+  ];
+  for (const [name, tool, cmd] of asks) {
+    it(`${tool} asks: ${name}`, () => {
+      expect(decide(cmd, interactiveFor(tool), {}).decision).not.toBe('allow');
+    });
+  }
+  const allows: Array<[string, 'Bash' | 'PowerShell', string]> = [
+    ['Delete with a nested first arg and $false', 'PowerShell', '[IO.Directory]::Delete((Join-Path $env:TEMP x), $false)'],
+    ['bash -cx with a harmless payload', 'Bash', 'bash -cx "echo hi"'],
+    ['pwsh -com with a harmless payload', 'Bash', 'pwsh -com "Get-ChildItem"'],
+    ['the rebase recovery itself inside a wrapper', 'Bash', "bash -c 'git rebase --abort'"],
+  ];
+  for (const [name, tool, cmd] of allows) {
+    it(`${tool} allows: ${name}`, () => {
+      expect(decide(cmd, interactiveFor(tool), {}).decision).toBe('allow');
+    });
+  }
+  it('installSegments still sees an eval "$1" install (payload + tail kept)', () => {
+    expect(installSegments(`bash -c 'eval "$1"' _ 'npm install zz-fake-pkg-a1'`, 'Bash').length).toBeGreaterThanOrEqual(1);
+  });
+});
