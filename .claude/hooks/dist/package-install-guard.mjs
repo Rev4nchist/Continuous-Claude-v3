@@ -20973,7 +20973,7 @@ async function main() {
     outputAllowOk();
   }
 }
-if (!process.env.VITEST) {
+if (!process.env.VITEST && /(^|[\\/])package-install-guard\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
   main().catch((err) => {
     logGuardError("package-install-guard", err);
     outputContinue();
