@@ -15,7 +15,7 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
 
 - The lane CLI path is the shim: `node C:/Users/dkhay/.claude/scripts/lane.mjs`. It works from any folder. Never use a relative path to lane.mjs: it fails outside this repo and runs a stale copy inside a worktree.
 - `<key>` is the board key. The kanban page belongs to the board `continuous-claude`, so `<key>` is `continuous-claude` here. `apply-kanban` refuses a file that declares another board.
-- Only `continuous-claude` has a phone artifact. Any other board renders a read-only `lane-board-<key>.html` on this machine with no kanban. Never publish it to the artifact above.
+- Only `continuous-claude` has a phone artifact. Any other board renders `lane-board-<key>.html` on this machine. Its kanban is read-only: it has no saved order and nothing for `apply-kanban` to read. Never publish it to the artifact above.
 
 ## Safety
 
