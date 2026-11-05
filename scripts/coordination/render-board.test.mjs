@@ -18,10 +18,7 @@
  *   - `--interactive` on a foreign board leaks CCv3 lanes into kb-data, drops a kanban marker, or hides the board name
  *   - a page cannot tell which board owns it (the board guard has nothing to compare), or a helper the page calls is not inlined
  *   - the default page changes in any byte outside the kanban script (golden, opt-in against a git ref)
- *   - `--interactive` is not a flag, takes a value, or changes the continuous-claude page
- *   - `--interactive` on a foreign board leaks CCv3 lanes into kb-data, drops a kanban marker, or hides the board name
- *   - a page cannot tell which board owns it (the board guard has nothing to compare), or the helpers the page calls are not inlined
- *   - the default page changes in any byte outside the kanban script (golden, opt-in against a git ref)
+ *   - a board whose registry entry has a valid laneArtifact renders read-only without the flag, or one with no or a bad laneArtifact renders interactive
  *   - the page has no stamp, or the stamp names the wrong board
  *   - an unknown key, or a cwd with no board, writes a page instead of exiting 1
  *   - a half-written page is left at the target (the write must be temp + rename)
@@ -167,7 +164,7 @@ function loadPg() {
   throw new Error('cannot resolve `pg`');
 }
 
-const E2E = { url: '', tmp: '', registry: '', rootA: '', rootC: '', noBoard: '' };
+const E2E = { url: '', tmp: '', registry: '', home: '', rootA: '', rootC: '', rootArt: '', rootBad: '', noBoard: '' };
 const fwd = (p) => p.replace(/\\/g, '/');
 
 function renderPage(args, { cwd = E2E.rootC, env = {}, script = RENDER, nodeArgs = [] } = {}) {
@@ -182,6 +179,7 @@ function renderPage(args, { cwd = E2E.rootC, env = {}, script = RENDER, nodeArgs
       DATABASE_URL: E2E.url,
       OPC_POSTGRES_URL: E2E.url,
       LANE_REGISTRY_PATH: E2E.registry,
+      CCV3_USER_HOME: E2E.home,
       LANE_PROJECT: '',
       CLAUDE_CODE_ENTRYPOINT: '',
       ...env,
@@ -219,16 +217,20 @@ describe('render-board.mjs against a scratch database', () => {
     E2E.url = JSON.parse(created.stdout).url;
     assertScratchUrl(E2E.url);
     E2E.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rb-e2e-'));
-    for (const n of ['rootA', 'rootC', 'noBoard']) {
+    for (const n of ['rootA', 'rootC', 'rootArt', 'rootBad', 'noBoard']) {
       E2E[n] = path.join(E2E.tmp, n);
       fs.mkdirSync(E2E[n]);
     }
     E2E.registry = path.join(E2E.tmp, 'registry.json');
+    E2E.home = path.join(E2E.tmp, 'home'); // the resolver reads <home>/continuous-claude/.claude/artifacts.json; never the live one
+    fs.mkdirSync(E2E.home);
     fs.writeFileSync(E2E.registry, JSON.stringify({
       version: '1.0',
       projects: [
         { name: 'rb-c', key: 'continuous-claude', path: fwd(E2E.rootC), status: 'active' },
         { name: 'rb-a', key: 'zz-rb-a', path: fwd(E2E.rootA), status: 'active' },
+        { name: 'rb-art', key: 'zz-rb-art', path: fwd(E2E.rootArt), status: 'active', laneArtifact: 'https://claude.ai/artifact/ZzRbArtifact0001' },
+        { name: 'rb-bad', key: 'zz-rb-bad', path: fwd(E2E.rootBad), status: 'active', laneArtifact: 'http://claude.ai/artifact/ZzRbArtifact0002' },
         { name: 'rb-gone', key: 'zz-rb-gone', path: fwd(path.join(E2E.tmp, 'gone')), status: 'inactive' },
       ],
     }));
@@ -254,6 +256,8 @@ describe('render-board.mjs against a scratch database', () => {
       await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, project_key, owner_session_id, lease_expires_at) VALUES
         ('zz-rb-ccv3-lane', 'ccv3 lane title', 'zz', 'ready', 'continuous-claude', NULL, NULL),
         ('zz-rb-ccv3-held', 'ccv3 held title', 'zz', 'active', 'continuous-claude', 'zz-rb-s-c', now() + interval '30 minutes'),
+        ('zz-rb-art-lane', 'board art lane title', 'zz', 'ready', 'zz-rb-art', NULL, NULL),
+        ('zz-rb-bad-lane', 'board bad lane title', 'zz', 'ready', 'zz-rb-bad', NULL, NULL),
         ('zz-rb-a-lane', 'board a lane title', 'zz', 'ready', 'zz-rb-a', NULL, NULL),
         ('zz-rb-a-held', 'board a held title', 'zz', 'active', 'zz-rb-a', 'zz-rb-s-a', now() + interval '30 minutes')`);
       // Priority 1 and 2 ready lanes, and one lane in each other state, to pin column placement and order on the read-only page.
@@ -432,6 +436,35 @@ describe('render-board.mjs against a scratch database', () => {
     assert.match(html, /<title>[^<]*zz-rb-a[^<]*<\/title>/);
     assert.match(html, /<b>Lane Board &middot; zz-rb-a<\/b>/);
     assert.equal(parseBoardStamp(html).board, 'zz-rb-a');
+  });
+
+  it('a board whose registry entry has a laneArtifact renders the interactive kanban with no --interactive flag, and keeps its own identity', () => {
+    const out = path.join(E2E.tmp, 'art-noflag.html');
+    const r = renderPage(['--project', 'zz-rb-art', '--out', out]);
+    assert.equal(r.code, 0, r.all);
+    const html = fs.readFileSync(out, 'utf8');
+    for (const marker of ['id="kb-data"', 'id="kb-order"', 'function placeLanes', 'claude.use', 'kanban/board', 'class="kb-to"', 'class="kb-btn kb-save"']) {
+      assert.ok(html.includes(marker), `a board with a laneArtifact must render ${marker} without the flag`);
+    }
+    for (const marker of ['class="kb-ro"', 'Read-only snapshot', 'class="kb-empty"']) {
+      assert.ok(!html.includes(marker), `the read-only marker ${marker} is on a page whose board has a laneArtifact`);
+    }
+    const data = JSON.parse(/<script type="application\/json" id="kb-data">([\s\S]*?)<\/script>/.exec(html)[1].replace(/\\u003c/g, '<'));
+    assert.deepEqual(data.map((l) => l.id), ['zz-rb-art-lane']);
+    assert.ok(!html.includes('zz-rb-ccv3') && !html.includes('zz-rb-a-lane'), 'another board leaked into the page');
+    assert.match(html, /<title>[^<]*zz-rb-art[^<]*<\/title>/);
+    assert.ok(KB_SCRIPT_RE.exec(html)?.[0].includes('var KB_BOARD = "zz-rb-art";'));
+    assert.equal(parseBoardStamp(html).board, 'zz-rb-art');
+  });
+
+  it('a board with no laneArtifact, or a malformed one, stays read-only without the flag', () => {
+    for (const board of ['zz-rb-a', 'zz-rb-bad']) {
+      const out = path.join(E2E.tmp, `ro-${board}.html`);
+      assert.equal(renderPage(['--project', board, '--out', out]).code, 0);
+      const html = fs.readFileSync(out, 'utf8');
+      assert.ok(!html.includes('id="kb-data"') && !html.includes('function placeLanes'), `${board}: the interactive kanban leaked into a board with no valid laneArtifact`);
+      assert.ok(html.includes('<section id="priorities"'), `${board}: the read-only Priorities section is missing`);
+    }
   });
 
   it('the page knows its own board, so the client can refuse another board\'s saved order, and every helper it calls is inlined', () => {
