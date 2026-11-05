@@ -24,7 +24,8 @@ import { REGISTRY } from '../../checks/parser-fixtures/registry.mjs';
 import { defaultExtract } from '../../github/cursor-review.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-export const DEFAULT_BASELINE = 'C:/Users/dkhay/continuous-claude/.claude/cache/e2e/trex-baseline';
+// The TREX baseline records are gitignored cache files. CATCHERS_EVAL_BASELINE points at them from a worktree.
+export const DEFAULT_BASELINE = process.env.CATCHERS_EVAL_BASELINE || path.join(REPO_ROOT, '.claude', 'cache', 'e2e', 'trex-baseline');
 export const DEFAULT_OUT = path.join(REPO_ROOT, '.claude', 'cache', 'e2e', '2026-11-04-p2-catchers-eval');
 const GIT_BUFFER = 256 * 1024 * 1024;
 const REASONS_MAX = 8;
@@ -264,7 +265,7 @@ export async function evaluateRow(row, { root = REPO_ROOT, run = runCatchers, ex
 
 // ---------- command line ----------
 
-const USAGE = 'usage: node scripts/eval/review-eval/catchers-eval.mjs --run [--out <prefix>] [--only <id,id>] [--baseline <dir>] | --list [--only <id,id>] | --help';
+const USAGE = 'usage: node scripts/eval/review-eval/catchers-eval.mjs --run [--out <prefix>] [--only <id,id>] [--baseline <dir>, default $CATCHERS_EVAL_BASELINE or .claude/cache/e2e/trex-baseline] | --list [--only <id,id>] | --help';
 
 export function parseCli(argv) {
   const out = { list: false, run: false, help: false };
