@@ -13,7 +13,7 @@
  * The database is a stub: it answers by query text. The live SQL is covered by
  * scripts/coordination probes, not here.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,18 +49,29 @@ import { runLaneContext } from '../lane-context.js';
 import { writeIdentity } from '../shared/session-identity.js';
 
 let dir: string;
-const saved = { id: process.env.CCV3_IDENTITY_DIR, db: process.env.DATABASE_URL };
+const saved = {
+  id: process.env.CCV3_IDENTITY_DIR, db: process.env.DATABASE_URL,
+  reg: process.env.LANE_REGISTRY_PATH, cache: process.env.LANE_BOARD_CACHE, ep: process.env.CLAUDE_CODE_ENTRYPOINT,
+};
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'lc-ident-'));
   process.env.CCV3_IDENTITY_DIR = dir;
   process.env.DATABASE_URL = 'postgres://stub@127.0.0.1:1/stub';
+  // Hermetic board: the hook resolves its board from the registry, so give it one that covers the test cwd.
+  writeFileSync(join(dir, 'registry.json'), JSON.stringify({ projects: [{ name: 'CCv3', key: 'continuous-claude', path: process.cwd(), status: 'active' }] }));
+  process.env.LANE_REGISTRY_PATH = join(dir, 'registry.json');
+  process.env.LANE_BOARD_CACHE = '0';
+  delete process.env.CLAUDE_CODE_ENTRYPOINT;
   queries.length = 0;
   peerTotal = undefined;
 });
 afterEach(() => {
   if (saved.id === undefined) delete process.env.CCV3_IDENTITY_DIR; else process.env.CCV3_IDENTITY_DIR = saved.id;
   if (saved.db === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = saved.db;
+  if (saved.reg === undefined) delete process.env.LANE_REGISTRY_PATH; else process.env.LANE_REGISTRY_PATH = saved.reg;
+  if (saved.cache === undefined) delete process.env.LANE_BOARD_CACHE; else process.env.LANE_BOARD_CACHE = saved.cache;
+  if (saved.ep === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT; else process.env.CLAUDE_CODE_ENTRYPOINT = saved.ep;
   rmSync(dir, { recursive: true, force: true });
 });
 

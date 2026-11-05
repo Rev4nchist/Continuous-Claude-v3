@@ -11,6 +11,7 @@
 
 import { readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { isHeadless, laneCliCmd, resolveBoard } from './lane-board.js';
 import { identityDir, label, normCwd, readIdentity, type Identity } from './session-identity.js';
 
 export const WORDS: readonly string[] = (
@@ -170,5 +171,22 @@ export function sameNameHint(
   } catch { /* no identity folder yet */ }
   if (twins.length !== 1) return null;
   const t = twins[0];
-  return `${label(t.uuid, t.name)} in this cwd never ended. If it crashed, run: node scripts/coordination/lane.mjs adopt --from ${t.uuid} once it is quiet 5 min.`;
+  return `${label(t.uuid, t.name)} in this cwd never ended. If it crashed, run: ${laneCliCmd()} adopt --from ${t.uuid} once it is quiet 5 min.`;
+}
+
+/**
+ * One line for the SessionStart banner: which lane board this folder uses. Headless sessions get no line (they get no
+ * board). Reads the registry only; no database call. Fails to an empty string.
+ */
+export function laneBoardLine(
+  cwd: string | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  try {
+    if (isHeadless(env)) return '';
+    const b = resolveBoard(cwd || process.cwd(), { env });
+    return b ? `lane board: ${b.key}` : 'no lane board (unregistered dir)';
+  } catch {
+    return '';
+  }
 }

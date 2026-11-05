@@ -9,6 +9,9 @@
  * pg is mocked here because the real Client has no seam for a slow end().
  * [Source change that turns this red: `void client.end()` back to `await client.end()`.]
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fake = vi.hoisted(() => ({
@@ -42,13 +45,25 @@ const PAYLOAD = JSON.stringify({ session_id: 'me-session', hook_event_name: 'Use
 
 describe('lane-context: a slow client.end() after the watermark write', () => {
   const saved = process.env.CONTINUOUS_CLAUDE_DB_URL;
+  const savedEnv = { reg: process.env.LANE_REGISTRY_PATH, cache: process.env.LANE_BOARD_CACHE, ep: process.env.CLAUDE_CODE_ENTRYPOINT };
+  let dir = '';
   beforeEach(() => {
+    // Hermetic board: a registry whose root covers the test cwd, no session cache.
+    dir = mkdtempSync(join(tmpdir(), 'lc-end-'));
+    writeFileSync(join(dir, 'registry.json'), JSON.stringify({ projects: [{ name: 'CCv3', key: 'continuous-claude', path: process.cwd(), status: 'active' }] }));
+    process.env.LANE_REGISTRY_PATH = join(dir, 'registry.json');
+    process.env.LANE_BOARD_CACHE = '0';
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
     fake.queries.length = 0;
     fake.endCalled = false;
     process.env.CONTINUOUS_CLAUDE_DB_URL = 'postgres://fake@localhost:1/fake';
   });
   afterEach(() => {
     if (saved === undefined) delete process.env.CONTINUOUS_CLAUDE_DB_URL; else process.env.CONTINUOUS_CLAUDE_DB_URL = saved;
+    if (savedEnv.reg === undefined) delete process.env.LANE_REGISTRY_PATH; else process.env.LANE_REGISTRY_PATH = savedEnv.reg;
+    if (savedEnv.cache === undefined) delete process.env.LANE_BOARD_CACHE; else process.env.LANE_BOARD_CACHE = savedEnv.cache;
+    if (savedEnv.ep === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT; else process.env.CLAUDE_CODE_ENTRYPOINT = savedEnv.ep;
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('returns the output without waiting for end()', async () => {

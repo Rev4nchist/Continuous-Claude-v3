@@ -184,3 +184,85 @@ export function resolveBoard(cwd, opts = {}) {
   if (wt) return { key: wt.entry.board, root: wt.entry.root, source: 'worktree-gitdir', via: wt.file };
   return null;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Derived helpers (PR2). Pure: no cache, no DB. Hooks, lane.mjs and render-board all read these.
+// ---------------------------------------------------------------------------------------------
+
+/** The board every lane and event belongs to until a command says otherwise. */
+export const DEFAULT_BOARD = 'continuous-claude';
+
+/** Watermark row key: the bare session id on the default board, `<id>@<board>` on any other. */
+export function wmKey(sid, board) {
+  return board === DEFAULT_BOARD ? sid : `${sid}@${board}`;
+}
+
+const fwd = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '');
+const userHome = (env) => fwd(env.CCV3_USER_HOME || os.homedir());
+
+/** The primary checkout: `<CCV3_USER_HOME or home>/continuous-claude`, forward slashes, no literal `~`. */
+export function primaryRepo(env = process.env) {
+  return `${userHome(env)}/continuous-claude`;
+}
+
+/** The lane CLI shim that model-run text names: `<home>/.claude/scripts/lane.mjs`. */
+export function laneShimPath(env = process.env) {
+  return `${userHome(env)}/.claude/scripts/lane.mjs`;
+}
+
+/** The command a hint prints to run the lane CLI. */
+export function laneCliCmd(env = process.env) {
+  return `node ${laneShimPath(env)}`;
+}
+
+/** The command that renders one board's page. Absolute path to the primary checkout, never relative. */
+export function renderBoardCmd(board, env = process.env) {
+  return `node ${primaryRepo(env)}/scripts/coordination/render-board.mjs --project ${board}`;
+}
+
+/** The artifacts.json entry that holds the default board's phone page. */
+const ARTIFACT_ID = 'agentic-os-lane-board';
+
+/** The phone page of the default board when `.claude/artifacts.json` cannot be read. */
+const FALLBACK_ARTIFACT = {
+  id: 'RtrTNVfAq9uowmb2tfbzid',
+  url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid',
+  publishFrom: 'lane-board.html',
+};
+
+/**
+ * The published artifact of a board, or null when the board has none.
+ *
+ * Only the default board (continuous-claude) has a phone page. It is the existing registry entry whose id is
+ * ARTIFACT_ID in `<primaryRepo>/.claude/artifacts.json`; its url and publish_from come from that entry, and the
+ * known fallback applies when the file or the entry is missing. Every other board is render-only (null).
+ * artifacts.json gains NO new field: the primary checkout edits that file too, and a PR2 hunk made land-pr's
+ * ff-merge refuse. A later per-board phone page would add a `board` field to its entry and match on it here.
+ */
+export function boardArtifact(board, opts = {}) {
+  const env = opts.env ?? process.env;
+  if (board !== DEFAULT_BOARD) return null;
+  const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
+  try {
+    const text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+    const list = JSON.parse(text).artifacts;
+    if (Array.isArray(list)) {
+      for (const a of list) {
+        if (!a || typeof a !== 'object') continue;
+        const e = a;
+        if (e.id !== ARTIFACT_ID || typeof e.url !== 'string') continue;
+        const id = /\/artifact\/([A-Za-z0-9_-]+)/.exec(e.url)?.[1];
+        if (!id) continue;
+        return { id, url: e.url, publishFrom: typeof e.publish_from === 'string' && e.publish_from ? e.publish_from : 'lane-board.html' };
+      }
+    }
+  } catch {
+    // missing or corrupt file: fall through to the known artifact
+  }
+  return { ...FALLBACK_ARTIFACT };
+}
+
+/** File name stem of a pending-publish file: the watermark key, sanitised for a file name. */
+export function pendingKey(sid, board) {
+  return wmKey(sid, board).replace(/[^A-Za-z0-9@_-]/g, '_');
+}

@@ -61,6 +61,37 @@ describe('lane-agent-tag', () => {
     expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
     expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse');
   });
+  it('T9: global flags between lane.mjs and the verb do not hide it (--project, --as, --json, =form)', () => {
+    expect(tagLaneCommand('node lane.mjs --project zz say "x"', 'kraken')).toBe('node lane.mjs --project zz say --agent kraken "x"');
+    expect(tagLaneCommand('node lane.mjs --as abc-1 --json note l "x"', 'kraken')).toBe('node lane.mjs --as abc-1 --json note --agent kraken l "x"');
+    expect(tagLaneCommand('node lane.mjs --project=zz say "x"', 'kraken')).toBe('node lane.mjs --project=zz say --agent kraken "x"');
+  });
+
+  it('T9: a value-taking global flag never makes its value the verb; other verbs stay untouched', () => {
+    expect(tagLaneCommand('node lane.mjs --project say claim x', 'kraken')).toBeNull();
+    expect(tagLaneCommand('node lane.mjs --project zz claim x', 'kraken')).toBeNull();
+    expect(tagLaneCommand('node lane.mjs --json board', 'kraken')).toBeNull();
+  });
+
+  it('T9: --agent given before the verb counts as tagged', () => {
+    expect(tagLaneCommand('node lane.mjs --agent kraken say "x"', 'kraken')).toBeNull();
+  });
+
+  it('T10: the shim path (forward slashes, quoted or not) is matched', () => {
+    expect(tagLaneCommand('node C:/Users/dkhay/.claude/scripts/lane.mjs say "x"', 'scout'))
+      .toBe('node C:/Users/dkhay/.claude/scripts/lane.mjs say --agent scout "x"');
+    expect(tagLaneCommand('node "C:/Users/dkhay/.claude/scripts/lane.mjs" --project zz note l "x"', 'scout'))
+      .toBe('node "C:/Users/dkhay/.claude/scripts/lane.mjs" --project zz note --agent scout l "x"');
+  });
+
+  it('T9: the whole hook rewrites a flagged command in a subagent payload', () => {
+    const out = run(pay({
+      tool_name: 'Bash', agent_id: 'a1', agent_type: 'kraken',
+      tool_input: { command: 'node ~/x/lane.mjs --project zz say "y" && git status' },
+    }));
+    expect(upd(out).command).toBe('node ~/x/lane.mjs --project zz say --agent kraken "y" && git status');
+  });
+
   it('T8: agent_type without agent_id (main thread under --agent) is not tagged; the live subagent payload is', () => {
     const command = 'node scripts/coordination/lane.mjs say "x"';
     expect(run(pay({ tool_name: 'Bash', agent_type: 'kraken', tool_input: { command } }))).toEqual({});

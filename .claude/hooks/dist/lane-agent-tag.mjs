@@ -4,15 +4,16 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/lane-agent-tag.ts
 import { readFileSync } from "fs";
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
-var LANE_VERB_RE = /(\bnode(?:\.exe)?["']?\s+["']?[^\s"'|;&]*lane\.mjs["']?\s+)(say|note)(?=\s|$)/g;
+var LANE_VERB_RE = /(\bnode(?:\.exe)?["']?\s+["']?[^\s"'|;&]*lane\.mjs["']?\s+)((?:(?:--(?:project|as|agent)=\S+|--(?:project|as|agent)\s+[^\s"'|;&]+|--(?!(?:project|as|agent)\b)[\w-]+)\s+)*)(say|note)(?=\s|$)/g;
 var AGENT_TYPE_RE = /^[A-Za-z0-9_-]{1,40}$/;
 function tagLaneCommand(command, agentType) {
   if (!AGENT_TYPE_RE.test(agentType)) return null;
   let changed = false;
-  const out = command.replace(LANE_VERB_RE, (m, head, verb, offset, whole) => {
+  const out = command.replace(LANE_VERB_RE, (m, head, flags, verb, offset, whole) => {
+    if (/(^|\s)--agent\b/.test(flags)) return m;
     if (/^\s+--agent\b/.test(whole.slice(offset + m.length))) return m;
     changed = true;
-    return `${head}${verb} --agent ${agentType}`;
+    return `${head}${flags}${verb} --agent ${agentType}`;
   });
   return changed ? out : null;
 }

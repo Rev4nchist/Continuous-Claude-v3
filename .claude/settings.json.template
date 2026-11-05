@@ -760,7 +760,7 @@
         ]
       },
       {
-        "matcher": "Edit|Write|Bash|PowerShell|Task",
+        "matcher": "Edit|Write|Bash|PowerShell|Task|Agent",
         "hooks": [
           {
             "type": "command",
