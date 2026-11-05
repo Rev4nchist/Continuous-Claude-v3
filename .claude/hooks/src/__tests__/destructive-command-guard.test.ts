@@ -1575,6 +1575,24 @@ describe('CR 299: nested Delete args, exec-flag forms, POSIX payload alone', () 
       expect(decide(cmd, interactiveFor(tool), {}).decision).toBe('allow');
     });
   }
+  // Round 2 of the CodeRabbit PR review (eedcd7e7).
+  const asks2: Array<[string, string]> = [
+    ['git checkout -qf main (force flag later in the cluster)', 'git checkout -qf main'],
+    ['git checkout -fq main', 'git checkout -fq main'],
+    ['quoted payload glued to a suffix', 'bash -c "rm -rf /"x'],
+    ['quoted payload glued to a redirect', 'bash -c "rm -rf x">/dev/null'],
+    ['single-quoted payload glued to a suffix', "sh -c 'git reset --hard'x"],
+  ];
+  for (const [name, cmd] of asks2) {
+    it(`Bash asks: ${name}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  for (const cmd of ['git checkout -b feature-x', 'git checkout -B fix/y main', 'git checkout -q main']) {
+    it(`Bash allows: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
+    });
+  }
   it('installSegments still sees an eval "$1" install (payload + tail kept)', () => {
     expect(installSegments(`bash -c 'eval "$1"' _ 'npm install zz-fake-pkg-a1'`, 'Bash').length).toBeGreaterThanOrEqual(1);
   });
