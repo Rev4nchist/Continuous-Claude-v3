@@ -5,46 +5,85 @@
 // sessions.started_at is `timestamp without time zone` and holds UTC. Read it with extract(epoch ...), never as a JS Date:
 // node-pg parses a naive timestamp as local time and shifts it by the machine's offset.
 //
-// Known limit: a resumed session keeps its old started_at but runs in a new process. It shows as an unmatched process.
+// A resumed session keeps its old started_at but runs in a new process, so the start-time join misses it. The SessionStart hook
+// therefore writes CLAUDE_PID (set by Claude Code, the claude.exe pid) into the identity file on every start, resume included.
+// The board joins on that pid first and on start time second.
 // Windows only for the process list. Elsewhere listClaudeProcesses() returns null, and callers print nothing.
 import { spawnSync } from 'node:child_process';
+import { listIdentities } from './session-label.mjs';
 
 /** A process and a session count as the same when their start times are within this many ms. Measured gap on 5 live pairs: under 3 s. */
 export const MATCH_TOLERANCE_MS = 10_000;
+
+/**
+ * An identity file is written by SessionStart, after the process exists. One written more than this long before the process
+ * started belongs to an older process that had the same pid (Windows reuses pids). The slack covers clock rounding.
+ */
+export const IDENTITY_SKEW_MS = 2_000;
 
 /** Sessions not ended, seen inside this window. Older unended rows are crash leftovers, not live processes. */
 export const SESSION_WINDOW_HOURS = 48;
 
 /**
- * Greedy nearest-start join. Every (process, session) pair inside the tolerance is a candidate; the smallest gap is taken
- * first, so two processes near one session give the session to the closer one.
+ * Two passes. Pass 1, by pid: a live session whose identity file names the process pid, written no earlier than the process
+ * started. Pass 2, by start time, for what is left: every (process, session) pair inside the tolerance is a candidate; the
+ * smallest gap is taken first, so two processes near one session give the session to the closer one.
  * @param {{pid:number,startMs:number}[]} procs
- * @param {{id:string,startMs:number}[]} sessions
+ * @param {{id:string,startMs:number}[]} sessions live sessions only (an ended session never matches)
+ * @param {{toleranceMs?:number, identities?:{id:string,pid:number,updatedMs:number}[]}} [opts]
  */
-export function matchProcesses(procs, sessions, { toleranceMs = MATCH_TOLERANCE_MS } = {}) {
+export function matchProcesses(procs, sessions, { toleranceMs = MATCH_TOLERANCE_MS, identities = [] } = {}) {
+  const usedPids = new Set();
+  const usedIds = new Set();
+  const matched = [];
+  const sessionById = new Map(sessions.map((s) => [s.id, s]));
+  const take = (pid, id, gapMs, by) => {
+    usedPids.add(pid);
+    usedIds.add(id);
+    matched.push({ pid, id, gapMs, by });
+  };
+
+  // Newest identity first: two live sessions that claim one pid give it to the newer file.
+  const claims = [...identities].sort((x, y) => y.updatedMs - x.updatedMs);
+  for (const p of procs) {
+    const c = claims.find((i) => i.pid === p.pid && i.updatedMs >= p.startMs - IDENTITY_SKEW_MS && sessionById.has(i.id) && !usedIds.has(i.id));
+    if (c) take(p.pid, c.id, Math.abs(p.startMs - sessionById.get(c.id).startMs), 'pid');
+  }
+
   const pairs = [];
   for (const p of procs) {
+    if (usedPids.has(p.pid)) continue;
     for (const s of sessions) {
+      if (usedIds.has(s.id)) continue;
       const gapMs = Math.abs(p.startMs - s.startMs);
       if (gapMs <= toleranceMs) pairs.push({ pid: p.pid, id: s.id, gapMs });
     }
   }
-  pairs.sort((a, b) => a.gapMs - b.gapMs || a.pid - b.pid);
-  const usedPids = new Set();
-  const usedIds = new Set();
-  const matched = [];
+  pairs.sort((x, y) => x.gapMs - y.gapMs || x.pid - y.pid);
   for (const pr of pairs) {
     if (usedPids.has(pr.pid) || usedIds.has(pr.id)) continue;
-    usedPids.add(pr.pid);
-    usedIds.add(pr.id);
-    matched.push(pr);
+    take(pr.pid, pr.id, pr.gapMs, 'start');
   }
-  matched.sort((a, b) => a.pid - b.pid);
+  matched.sort((x, y) => x.pid - y.pid);
   return {
     matched,
     unmatchedProcs: procs.filter((p) => !usedPids.has(p.pid)),
     unmatchedSessions: sessions.filter((s) => !usedIds.has(s.id)),
   };
+}
+
+/**
+ * Rows for the pid join from the identity files (session-label.mjs listIdentities: a Map keyed by uuid).
+ * Keeps a file with an integer pid above 0 and a readable updatedAt. Older files have no pid and drop out.
+ * @returns {{id:string,pid:number,updatedMs:number}[]}
+ */
+export function identityPids(identities) {
+  const out = [];
+  for (const [id, v] of identities) {
+    const updatedMs = Date.parse(v?.updatedAt);
+    if (Number.isSafeInteger(v?.pid) && v.pid > 0 && Number.isFinite(updatedMs)) out.push({ id, pid: v.pid, updatedMs });
+  }
+  return out;
 }
 
 /** @returns {{total:number, matched:number, unmatchedPids:number[]}} */
@@ -116,5 +155,5 @@ export async function liveSessions(c) {
 export async function processMatchSummary(c) {
   const procs = listClaudeProcesses();
   if (procs === null) return null;
-  return summarize(matchProcesses(procs, await liveSessions(c)));
+  return summarize(matchProcesses(procs, await liveSessions(c), { identities: identityPids(listIdentities()) }));
 }
