@@ -116,8 +116,12 @@ export function isCcv3Remote(url: string): boolean {
 }
 
 const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
+/** Git Bash writes C:\x as /c/x. Node on Windows reads /c/x as \c\x, so turn the one-letter drive prefix back into C:. Other platforms keep the path. */
+export const fromGitBashPath = (p: string, platform: string = process.platform): string =>
+  platform === 'win32' ? p.replace(/^\/([A-Za-z])(?=\/|$)/, '$1:') : p;
+
 const resolveIn = (cwd: string, target: string): string => {
-  const t = target.replace(/^["']|["']$/g, '');
+  const t = fromGitBashPath(target.replace(/^["']|["']$/g, ''));
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
 };
 
@@ -237,7 +241,7 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
     return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || 'none'}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
-    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~, $env: or /c/ paths`;
+    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~ or $env: paths. A Git Bash /c/ path is turned into C:/ on Windows`;
     if (o.body_sha256 !== body.sha) return `the body file ${body.path} is not the body pre-pr.mjs checked (its hash differs from the stamp). Run pre-pr.mjs on this file`;
   }
   return null;
@@ -334,7 +338,7 @@ function stampDeny(command: string, deps: Deps, ctx: Ctx): Decision | null {
   const headRun = deps.git(top, ['rev-parse', branch ? `${branch}^{commit}` : 'HEAD']);
   if (headRun.status !== 0) return deny('head-unresolved', `cannot resolve the head ${branch ?? 'HEAD'} in ${top}`);
   const head = headRun.stdout.trim();
-  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, bodyPath))) };
+  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, fromGitBashPath(bodyPath)))) };
   const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join(r, STAMP_REL)), head, deps.now(), body));
   if (!problems.some((p) => p === null)) return deny('stamp', problems[0] ?? 'no stamp');
   const pushed = pushedProblem(deps, top, branch, head);

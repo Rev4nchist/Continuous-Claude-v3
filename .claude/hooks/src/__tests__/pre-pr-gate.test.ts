@@ -2164,3 +2164,30 @@ describe('B: the checkpoint gate (PR B)', () => {
     expect(gate.PATHWAY_REL).toBe(STAMP_REL.replace(/stamp\.json$/, 'pathway.json'));
   });
 });
+
+// A Git Bash style /c/... path is a real Windows path to Dave's shell, but node on Windows treats /c/x as
+// \c\x on the current drive. Before the fix the gate used it as the git cwd and failed with "directory not found".
+describe.skipIf(process.platform !== 'win32')('pre-pr-gate: Git Bash /c/ paths', () => {
+  const POST = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t -F body=@';
+  it('a cd to /c/Users/... resolves to C:/Users/... before the stamp and the checkout are read', () => {
+    const seen: string[] = [];
+    const d = deps({ stamp: stampJson() });
+    const spy: Deps = { ...d, readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; if (p.endsWith('review-router.config.json')) return WARN_CONFIG[join(ROOT, 'review-router.config.json')]; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
+    decide(input(`cd /c/Users/dkhay/work && ${CREATE[0]}`), spy);
+    // A Windows drive letter is case-insensitive: compare lower case.
+    expect(seen.map((p) => p.toLowerCase())).toEqual([`c:/users/dkhay/work/${STAMP_REL}`]);
+  });
+  it('a cd to a multi-letter first folder such as /other/ is left alone', () => {
+    const seen: string[] = [];
+    const spy: Deps = { ...deps({ stamp: stampJson() }), readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; if (p.endsWith('review-router.config.json')) return WARN_CONFIG[join(ROOT, 'review-router.config.json')]; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
+    decide(input(`cd /other/checkout && ${CREATE[0]}`), spy);
+    expect(seen).toEqual([`/other/checkout/${STAMP_REL}`]);
+  });
+  it('a body file named with a /c/ path is read from C:/', () => {
+    const read: string[] = [];
+    const spy: Deps = { ...deps({ stamp: stampJson() }), readFile: (p) => { read.push(p.replace(/\\/g, '/')); return null; } };
+    decide(input(`${POST}/c/Users/dkhay/body.md`), spy);
+    expect(read.map((p) => p.toLowerCase())).toContain('c:/users/dkhay/body.md');
+    expect(read.some((p) => /^\/c\//.test(p))).toBe(false);
+  });
+});
