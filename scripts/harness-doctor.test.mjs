@@ -1156,3 +1156,70 @@ test('lanes:hook-client-version: a missing bundle with a second active board sta
   assert.doesNotMatch(r.detail, /fine while only/);
   assert.match(r.detail, /zz-second/);
 });
+
+// registry:artifact-url (PR C). A board's phone page is the laneArtifact url on its own registry entry. The hooks nag for that
+// page, so a bad url nags for nothing, and one url on two boards lets one publish clear both boards' pending files.
+// Each test breaks one rule and reads this one line; each fails if the check stops judging that rule.
+const PAGE_A = 'https://claude.ai/artifact/PageA_1-x';
+const PAGE_B = 'https://claude.ai/artifact/PageB_2-y';
+const DEFAULT_PAGE = 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid';
+const withPage = (key, laneArtifact, extra = {}) => ({ ...entry(key, fwd(join(tmpdir(), `hdoc-no-${key}`))), laneArtifact, ...extra });
+const artifactCheck = (projects) => {
+  const fx = fixture();
+  writeRegistry(fx, projects);
+  const r = run(fx);
+  return { c: r.checks['registry:artifact-url'], r };
+};
+
+test('registry:artifact-url with no laneArtifact anywhere is a PASS that reports 0 boards, so it is not vacuous', () => {
+  const { c } = artifactCheck([entry('a', fwd(tmpdir())), entry('b', fwd(tmpdir()))]);
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /\b0 boards with a phone page/);
+});
+
+test('registry:artifact-url with two boards on different good urls is a PASS that counts 2', () => {
+  const { c } = artifactCheck([withPage('one', PAGE_A), withPage('two', PAGE_B)]);
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /\b2 boards with a phone page/);
+});
+
+test('registry:artifact-url is a FAIL when two boards share one url, and exits 1', () => {
+  const { c, r } = artifactCheck([withPage('one', PAGE_A), withPage('two', PAGE_A)]);
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.ok(c.detail.includes('one') && c.detail.includes('two'), c.detail);
+  assert.match(c.detail, /duplicate|same/i);
+  assert.equal(r.code, 1);
+});
+
+test('registry:artifact-url is a FAIL for a url that is not the strict claude.ai artifact shape, naming the key', () => {
+  for (const bad of ['http://claude.ai/artifact/x1', 'https://claude.ai/artifact/x1/extra', 'https://claude.ai/artifact/x1?y=1', 'https://evil.example/artifact/x1', 'https://claude.ai/artifact/']) {
+    const { c } = artifactCheck([withPage('one', bad)]);
+    assert.equal(c.status, 'FAIL', `${bad}: ${c.detail}`);
+    assert.ok(c.detail.includes('one'), c.detail);
+  }
+});
+
+test('registry:artifact-url is a FAIL when a board uses the default board page', () => {
+  const { c } = artifactCheck([withPage('one', DEFAULT_PAGE)]);
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /default board/);
+});
+
+test('registry:artifact-url is a WARN for a laneArtifact on a nested entry (laneBoard names another board)', () => {
+  const { c } = artifactCheck([withPage('one', PAGE_A), withPage('inner', PAGE_B, { laneBoard: 'one' })]);
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.ok(c.detail.includes('inner'), c.detail);
+  assert.match(c.detail, /nested/);
+});
+
+test('registry:artifact-url ignores an inactive entry, so a dead board cannot fail the doctor', () => {
+  const { c } = artifactCheck([withPage('gone', 'not a url', { status: 'inactive' }), withPage('one', PAGE_A)]);
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /\b1 boards with a phone page/);
+});
+
+test('registry:artifact-url is a PASS that says absent without a registry file', () => {
+  const c = run(fixture()).checks['registry:artifact-url'];
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /^absent: /);
+});
