@@ -63,6 +63,8 @@ I read every word. Write for speed of reading.
 ### Output I will copy
 
 - Messages, emails, tickets, PR comments I paste elsewhere: plain text, never a `>` blockquote.
+- When I must act in PowerShell: full numbered steps, first `Set-Location <full path>`, then
+  each command, check and return step. Assume a new window.
 - A command for me: one command per fenced block, with a "You should see ..." line after it.
   Default shell is PowerShell. Over ~80 characters: backtick continuation, one flag per line.
   No `&&` chains, no heredocs, no bash-only syntax in PowerShell. Pair a destructive command with a
