@@ -396,6 +396,29 @@ async function livePeers(c, board, all) {
   )).rows;
 }
 
+/**
+ * "Open, quiet" sessions: not active (beat more than STALE_MINUTES ago), and either seen inside QUIET_HOURS or holding a
+ * non-done lane. Heartbeat moves on a tool call or a prompt only, so a session waiting for Dave looks dead after
+ * STALE_MINUTES while it still holds lanes. This is a display count: it changes no claim or reclaim rule.
+ * An ended session (ended_at is its latest signal, the agentic-os rule) is never open, even when it still holds a lane.
+ * The active count and this one are two statements with two now() values; a session on the 5 minute line can be missed once.
+ * TWIN of quietCount in render-board.mjs (the phone page prints the same number); render-board.test.mjs pins both.
+ */
+const QUIET_HOURS = 2;
+async function quietCount(c, board, all) {
+  const roots = board ? boardRoots(board.key) : [];
+  return (await c.query(
+    `SELECT count(*)::int AS n FROM sessions s
+     WHERE ${ALIVE_AT('s.')} <= now() - interval '${STALE_MINUTES} minutes'
+       AND NOT COALESCE(s.ended_at >= GREATEST(s.last_heartbeat, COALESCE(s.last_activity_at, s.last_heartbeat)), false)
+       AND ($1::boolean OR ${peerOfBoardSql('$3', '$2')})
+       AND (${ALIVE_AT('s.')} > now() - interval '${QUIET_HOURS} hours'
+            OR EXISTS (SELECT 1 FROM agentic_os.lane ql WHERE ql.owner_session_id = s.id AND ql.state <> 'done'
+                       AND ($1::boolean OR ql.project_key = $2::text)))`,
+    [all, board ? board.key : null, roots],
+  )).rows[0].n;
+}
+
 /** The error for a lane id that is not on this board; names the board that has it. */
 async function noLane(c, id, board) {
   const other = (await c.query(`SELECT project_key FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
@@ -494,12 +517,14 @@ const commands = {
       [all, board ? board.key : null],
     );
     const peers = (await livePeers(c, board, all)).map((r) => ({ id: r.id, working_on: r.working_on }));
+    const quiet = await quietCount(c, board, all);
 
     if (JSON_OUT) {
       return {
         board: all ? '*' : board.key,
         lanes: rows.map((l) => ({ ...l, owner_name: l.owner_session_id ? nameOf(l.owner_session_id) : null })),
         peers,
+        quiet,
         me: myId,
         me_short: short(myId),
         me_name: nameOf(myId),
@@ -507,7 +532,7 @@ const commands = {
     }
 
     const out = [];
-    out.push(`LANE BOARD   ${all ? 'board (all boards, read-only)' : `board ${board.key}`}   me=${L(myId)}   ${rows.length} ${all ? '' : 'open '}lane(s)   ${peers.length} live session(s)`);
+    out.push(`LANE BOARD   ${all ? 'board (all boards, read-only)' : `board ${board.key}`}   me=${L(myId)}   ${rows.length} ${all ? '' : 'open '}lane(s)   ${peers.length} active (${STALE_MINUTES} min), ${quiet} open, quiet`);
     let group = null;
     for (const l of rows) {
       const g = all ? `${l.project_key}/${l.track}` : l.track;

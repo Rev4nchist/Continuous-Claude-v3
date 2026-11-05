@@ -38,6 +38,8 @@ import { boardStamp, defaultOut, parseRenderArgs, writeAtomic } from './render-b
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const STALE_MINUTES = 5;
+/** A session seen inside this window, or holding an open lane, still counts as "open, quiet" when it is not active. The sessions table keeps dead rows for days, so a longer window inflates the count. */
+const QUIET_HOURS = 2;
 
 function usage(message, code) {
   console.error(`${message}\nusage: node scripts/coordination/render-board.mjs [--project <key>] [--out <file>] [out.html]`);
@@ -170,6 +172,21 @@ const sessions = (await c.query(
    GROUP BY s.id, s.working_on, s.last_heartbeat, s.last_activity_at
    ORDER BY GREATEST(s.last_heartbeat, s.last_activity_at) DESC`, [KEY, BOARD_ROOTS],
 )).rows;
+
+// "Open, quiet": of this board, not active (beat more than STALE_MINUTES ago), and either seen inside QUIET_HOURS or holding a
+// non-done lane of this board. Heartbeat moves on a tool call or a prompt only, so a session waiting for Dave looks dead after
+// STALE_MINUTES while it still holds lanes. This counts it; it changes no claim or reclaim rule. lane.mjs board prints the same count.
+// An ended session (ended_at is its latest signal, the agentic-os rule) is never open, even when it still holds a lane.
+// The active count and this one are two statements with two now() values; a session on the 5 minute line can be missed once.
+const quietCount = (await c.query(
+  `SELECT count(*)::int AS n FROM sessions s
+   WHERE GREATEST(s.last_heartbeat, s.last_activity_at) <= now() - interval '${STALE_MINUTES} minutes'
+     AND NOT COALESCE(s.ended_at >= GREATEST(s.last_heartbeat, COALESCE(s.last_activity_at, s.last_heartbeat)), false)
+     AND ${PEER_OF_BOARD_SQL}
+     AND (GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${QUIET_HOURS} hours'
+          OR EXISTS (SELECT 1 FROM agentic_os.lane ql WHERE ql.owner_session_id = s.id AND ql.state <> 'done' AND ql.project_key = $1::text))`,
+  [KEY, BOARD_ROOTS],
+)).rows[0].n;
 
 const events = (await c.query(
   `SELECT * FROM agentic_os.lane_event WHERE project_key = $1::text ORDER BY id DESC LIMIT 30`, [KEY],
@@ -653,7 +670,8 @@ const html = `${STAMP}
       <span class="ctr is-ok"><b>${held}</b><span>held now</span></span>
       <span class="ctr"><b>${byState('ready')}</b><span>claimable</span></span>
       <span class="ctr${byState('blocked') ? ' is-crit' : ''}"><b>${byState('blocked')}</b><span>blocked</span></span>
-      <span class="ctr is-ok"><b>${sessions.length}</b><span>live sessions</span></span>
+      <span class="ctr is-ok"><b>${sessions.length}</b><span>active (${STALE_MINUTES} min)</span></span>
+      <span class="ctr"><b>${quietCount}</b><span>open, quiet</span></span>
     </div>
     <button class="themebtn" id="tt" type="button">theme</button>
   </div>
@@ -700,7 +718,7 @@ const html = `${STAMP}
         ${s.lanes.length ? `<ul>${s.lanes.map((l) => `
           <li><b>${esc(l.id)}</b>${l.note ? `<span>${esc(l.note)}</span>` : ''}${l.scope ? `<span>scope: ${esc(l.scope)}</span>` : ''}</li>`).join('')}</ul>`
         : '<p class="none">holds no lane</p>'}
-      </div>`).join('') : '<div class="card sess"><p class="none">no live sessions</p></div>'}
+      </div>`).join('') : '<div class="card sess"><p class="none">no active sessions</p></div>'}
     </div>
     <div class="card" style="margin-top:10px"><span class="recon"><b>sessions</b>  SELECT id, working_on, GREATEST(last_heartbeat, last_activity_at) AS last_alive
             FROM sessions
@@ -843,4 +861,4 @@ ${kbScript}
 </script>` : ''}`;
 
 writeAtomic(OUT, html);
-console.log(`wrote ${OUT} (${(html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} live sessions, ${events.length} events`);
+console.log(`wrote ${OUT} (${(html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${events.length} events`);
