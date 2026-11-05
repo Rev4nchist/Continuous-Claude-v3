@@ -125,6 +125,12 @@ describe('source twins', () => {
     assert.ok(a && b, 'FOLDED_PROJECT not found in both files');
     assert.equal(a, b);
   });
+
+  it('the "open, quiet" window is the same in lane.mjs and render-board.mjs (the header and the page must print one number)', () => {
+    const hours = (file) => /const QUIET_HOURS = (\d+);/.exec(fs.readFileSync(file, 'utf8'))?.[1];
+    assert.ok(hours(RENDER) && hours(LANE), 'QUIET_HOURS not found in both files');
+    assert.equal(hours(RENDER), hours(LANE));
+  });
 });
 
 // ------------------------------------------------------------------ the page, end to end
@@ -186,6 +192,13 @@ describe('render-board.mjs against a scratch database', () => {
       await c.query(`INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES
         ('zz-rb-s-c', $1, 'work on c', now()), ('zz-rb-s-a', $2, 'work on a', now()), ('zz-rb-s-away', 'c:/somewhere/else', 'away', now())`,
       [fwd(E2E.rootC).toLowerCase(), fwd(E2E.rootA).toLowerCase()]);
+      // Quiet sessions of board c: 30 min and 3 h since the last beat, and 5 h with an open lane. Only the first and the lane holder are "open, quiet".
+      await c.query(`INSERT INTO sessions (id, project, working_on, last_heartbeat, last_activity_at) VALUES
+        ('zz-rb-s-q30', $1, 'zzsleep-30m', now() - interval '30 minutes', now() - interval '30 minutes'),
+        ('zz-rb-s-q3h', $1, 'zzsleep-3h', now() - interval '3 hours', now() - interval '3 hours'),
+        ('zz-rb-s-qhold', $1, 'zzsleep-holder', now() - interval '5 hours', now() - interval '5 hours')`, [fwd(E2E.rootC).toLowerCase()]);
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, project_key, owner_session_id, lease_expires_at) VALUES
+        ('zz-rb-ccv3-qhold', 'ccv3 lane held by a sleeper', 'zz', 'backlog', 'continuous-claude', 'zz-rb-s-qhold', now() + interval '30 minutes')`);
       await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, project_key, owner_session_id, lease_expires_at) VALUES
         ('zz-rb-ccv3-lane', 'ccv3 lane title', 'zz', 'ready', 'continuous-claude', NULL, NULL),
         ('zz-rb-ccv3-held', 'ccv3 held title', 'zz', 'active', 'continuous-claude', 'zz-rb-s-c', now() + interval '30 minutes'),
@@ -226,6 +239,18 @@ describe('render-board.mjs against a scratch database', () => {
     assert.ok(!Number.isNaN(Date.parse(parseBoardStamp(html).generated)));
     assert.match(html, /id="gen-ago" data-ts="[^"]+"/, 'the page needs the embedded time for the generated N min ago badge');
     assert.match(r.out, new RegExp(`wrote .*ccv3\\.html.*board continuous-claude`));
+  });
+
+  it('the header counts active (5 min) and open, quiet sessions apart: a quiet lane holder counts, a session seen 3 h ago does not', () => {
+    const out = path.join(E2E.tmp, 'ccv3-counters.html');
+    assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+    const html = fs.readFileSync(out, 'utf8');
+    const ctr = (label) => new RegExp(String.raw`<b>(\d+)</b><span>${label}</span>`).exec(html)?.[1];
+    assert.equal(ctr(String.raw`active \(5 min\)`), '1', 'zz-rb-s-c beat just now; the quiet ones are not active');
+    assert.equal(ctr('open, quiet'), '2', 'zz-rb-s-q30 (30 min) and zz-rb-s-qhold (holds an open lane); zz-rb-s-q3h is out');
+    assert.ok(!html.includes('<span>live sessions</span>'), 'the old "live sessions" label is gone');
+    // The NOW cards stay on active sessions only.
+    assert.ok(!html.includes('zzsleep-30m') && !html.includes('zzsleep-holder'), 'a quiet session showed in the Right now cards');
   });
 
   it('--project zz-rb-a writes a page with only board a, a read-only Priorities section with board a lanes, and the stamp of board a', () => {
