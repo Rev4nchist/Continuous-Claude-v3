@@ -34,9 +34,7 @@
 - **Lane**: a unit of concurrent work claimed by one session. The
   **lane board** lists lanes and holders. **Claim / release** a lane; **note** progress on it.
 - **Board**: lanes and events under one `project_key`. **Board key**: the registry key; cooperative, not security.
-- **Project register**: `lane.mjs project register <path>`; the only way to make a board.
-- **Lane shim**: `~/.claude/scripts/lane.mjs`; the CLI path.
-- **Watermark key**: `<uuid>` on `continuous-claude`, `<uuid>@<board>` elsewhere.
+- **Lane shim**: `~/.claude/scripts/lane.mjs`, the CLI path. **Project register** makes a board.
 - **Session name**: the `/rename` (or `claude -n`) name, e.g. `trex`. It is the address peers use (`say --to trex`).
   **Session handle**: `#` + the first 8 hex of the session id, e.g. `#0d40499c`. **Label**: `name #sid8`.
   Write a session as `trex #0d40499c` or `#0d40499c`, never as bare hex. Identity file: `~/.claude/state/identity/<uuid>.json`.
