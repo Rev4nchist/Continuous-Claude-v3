@@ -631,9 +631,12 @@ describe('say --lane names a lane of this board only', () => {
 describe('peers: sessions.project in odd spellings still folds to the board root', () => {
   it('doubled slashes, capitals and the extended-length prefix all match; a lookalike root does not', async () => {
     const root = normalizeRoot(state.dirs.A);
+    // The fold keeps a leading `//` on purpose (a UNC path), so double only the slashes that follow a character. On Windows
+    // the root starts with `c:`, so nothing changes there; a POSIX root starts with `/`, which must stay single.
+    // The extended-length prefix `\\?\` is a Windows spelling: only a drive-letter root can carry it.
     const spell = {
-      'zz-pbprobe-sp-dbl': `${root.toUpperCase().replace(/\//g, '//')}//deep//`,
-      'zz-pbprobe-sp-ext': `\\\\?\\${root.replace(/\//g, '\\').toUpperCase()}`,
+      'zz-pbprobe-sp-dbl': `${root.toUpperCase().replace(/(?<=.)\//g, '//')}//deep//`,
+      ...(/^[a-z]:\//.test(root) ? { 'zz-pbprobe-sp-ext': `\\\\?\\${root.replace(/\//g, '\\').toUpperCase()}` } : {}),
       'zz-pbprobe-sp-bad': `${root}x//deep`,
     };
     for (const [id, project] of Object.entries(spell)) {
@@ -643,7 +646,7 @@ describe('peers: sessions.project in odd spellings still folds to the board root
     assert.equal(r.code, 0, r.all);
     const ids = JSON.parse(r.out).map((p) => p.id);
     assert.ok(ids.includes('zz-pbprobe-sp-dbl'), 'doubled slashes');
-    assert.ok(ids.includes('zz-pbprobe-sp-ext'), 'extended-length prefix');
+    if (spell['zz-pbprobe-sp-ext']) assert.ok(ids.includes('zz-pbprobe-sp-ext'), 'extended-length prefix');
     assert.ok(!ids.includes('zz-pbprobe-sp-bad'), 'a root that only starts with the same letters is another project');
   });
 });

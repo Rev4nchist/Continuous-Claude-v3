@@ -101,6 +101,48 @@ jobs:
         timeout-minutes: 5
         run: npx playwright test --config apps/agentic-os/playwright.pure.config.ts
 
+  # The lane board tests build a throwaway database (scripts/coordination/scratch-db.mjs) and run the real render-board.mjs
+  # and lane.mjs against it. Before this job no workflow ran them: two render-board tests sat red on main (PR #312, 2026-11-05)
+  # while every check was green. Separate job: the ratchets job has a 10 minute budget and already hit it once on a slow checkout.
+  coordination-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        # pgvector 0.8.7 on Postgres 16, built 2026-10-01: the same bits as the dev database in docker/docker-compose.yml.
+        # docker/init-schema.sql needs the vector and pg_trgm extensions, so a plain postgres image does not work.
+        image: pgvector/pgvector@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+        env:
+          POSTGRES_USER: claude
+          POSTGRES_PASSWORD: claude_dev   # the public dev default in docker/docker-compose.yml; the service lives for this job only
+          POSTGRES_DB: continuous_claude
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U claude -d continuous_claude"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CONTINUOUS_CLAUDE_DB_URL: postgresql://claude:claude_dev@localhost:5432/continuous_claude
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # this job never pushes; keep the git token off disk (zizmor artipacked)
+          fetch-depth: 0               # lane-project T3 reads an old lane.mjs from git history; a shallow clone silently skips it
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      # The tests resolve the `pg` module from .claude/hooks (same lookup as lane.mjs). Lockfile install, no scripts.
+      - name: Install pg (hooks bundle, no scripts)
+        working-directory: .claude/hooks
+        timeout-minutes: 5
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      # Explicit file names, not a glob: a missing file fails the step, so this gate cannot pass by finding nothing.
+      - name: lane board DB tests (render-board, lane-project, scratch-db)
+        timeout-minutes: 5
+        run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/scratch-db.test.mjs
+
   trivy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
