@@ -15,15 +15,6 @@
       "args": ["/c", "npx", "-y", "shadcn@4.22.1", "mcp"],
       "type": "stdio"
     },
-    "nia": {
-      "command": "cmd",
-      "args": ["/c", "uv", "tool", "run", "nia-mcp-server@1.1.2"],
-      "env": {
-        "NIA_API_KEY": "${NIA_API_KEY}",
-        "NIA_API_URL": "https://apigcp.trynia.ai/"
-      },
-      "type": "stdio"
-    },
     "firecrawl": {
       "type": "stdio",
       "command": "cmd",

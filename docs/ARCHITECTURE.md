@@ -115,7 +115,7 @@ Users activate capabilities through **natural language keywords**. No slash comm
 | **Structural Search** | "ast", "find all calls", "refactor" | AST-grep for code patterns |
 | **Text Search** | "grep", "find in code", "search for" | Fast text search via Morph/Grep |
 | **Web Research** | "search the web", "look up", "perplexity" | AI-powered web search |
-| **Documentation** | "docs", "how to use", "API reference" | Library docs via Nia |
+| **Documentation** | "docs", "how to use", "API reference" | Library docs via Context7 |
 
 ### Code Quality
 

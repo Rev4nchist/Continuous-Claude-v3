@@ -105,14 +105,14 @@ phoenix produces:
 - **Model:** Opus
 - **Purpose:** Lightweight planning with research and codebase analysis
 - **When to use:** Need a plan with external research (docs, best practices)
-- **Uses:** MCP tools (Nia, Perplexity, RepoPrompt)
+- **Uses:** MCP tools (Perplexity, RepoPrompt)
 - **Output:** `.claude/cache/agents/plan-agent/latest-output.md`
 
 **Example:**
 ```
 Task: "Plan rate limiting for API"
 plan-agent:
-  1. Researches rate limiting strategies (Nia, web)
+  1. Researches rate limiting strategies (web)
   2. Explores codebase for existing patterns (RepoPrompt)
   3. Produces plan with research citations
 ```
@@ -157,7 +157,7 @@ scout:
 - **Model:** Sonnet
 - **Purpose:** External research (web, docs, APIs)
 - **When to use:** Need best practices, library documentation, or external knowledge
-- **Tools:** Web search (Perplexity), docs (Nia), scraping (Firecrawl), GitHub search
+- **Tools:** Web search (Perplexity), scraping (Firecrawl), GitHub search
 - **Output:** `.claude/cache/agents/oracle/latest-output.md`
 - **Features:**
   - Always cites sources
@@ -169,7 +169,6 @@ scout:
 Task: "Research best practices for async Python error handling"
 oracle:
   - Searches web for async/await patterns
-  - Queries Python docs via Nia
   - Finds GitHub examples
   - Produces report with citations and confidence levels
 ```

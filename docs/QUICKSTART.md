@@ -25,7 +25,7 @@ uv run python scripts/setup/wizard.py
 
 The wizard walks you through 12 configuration steps including:
 - Database setup (PostgreSQL via Docker)
-- Optional API keys (Braintrust, Perplexity, Nia)
+- Optional API keys (Braintrust, Perplexity)
 - Claude Code integration (31 agents, 137+ skills, 25 hooks)
 
 ## 3. Verify Installation (1 min)
