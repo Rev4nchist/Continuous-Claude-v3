@@ -338,6 +338,8 @@ declare module 'claude-code' {
       board: BoardLane[] | null
       /** When that board read happened (epoch ms); null before the first good read (agentic-os). The Work tab says "as of <age>". */
       boardAt: number | null
+      /** 'no-board' when the last lane read said the session folder has no lane board (unregistered); null after a good read or before any (agentic-os). The Work tab says "no lane board (unregistered dir)". */
+      boardState: 'no-board' | null
       /** True once this environment's 5 s pulse is armed (agentic-os); a start resets it. */
       uiArmed: boolean
       /** True once this session's first turn left its beacon file (agentic-os). */

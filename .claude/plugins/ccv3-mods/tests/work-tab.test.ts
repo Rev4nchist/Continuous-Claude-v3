@@ -118,6 +118,26 @@ describe('work tab: sections and lane source', () => {
     expect(all(blank)).not.toContain('lane board not read')
   })
 
+  test('K1 board state "no-board" reads "no lane board (unregistered dir)" in YOUR LANES and OTHER SESSIONS, with no age and no old lanes', () => {
+    // The folder of the session has no lane board (lane.mjs: "no lane board for <cwd>"). That is not "not read" and not "no lane held".
+    const text = (s: TabState) => all(workTab(s, NOW, 80, 40))
+    for (const s of [empty({ board: null, boardState: 'no-board', boardAt: NOW }), empty({ board: [], boardState: 'no-board', boardAt: NOW })]) {
+      expect(all(section(workTab(s, NOW, 80, 40), 'YOUR LANES'))).toContain('no lane board (unregistered dir)')
+      expect(all(section(workTab(s, NOW, 80, 40), 'OTHER SESSIONS'))).toContain('no lane board (unregistered dir)')
+      expect(text(s)).not.toContain('lane board not read')
+      expect(text(s)).not.toContain('no lane held')
+      expect(text(s)).not.toContain('no other session holds a lane')
+      expect(text(s)).not.toMatch(/as of /)
+    }
+    // The state wins over a stale lane list: no lane of the old board is drawn.
+    expect(text({ ...peers(), boardState: 'no-board' })).not.toMatch(/lane-os|api-core|docs-lane/)
+    // The pane's tab dispatcher passes the field on.
+    expect(all(viaTab(empty({ board: null, boardState: 'no-board' }), 80, 40))).toContain('no lane board (unregistered dir)')
+    // Any other state is today's: null reads "not read", a list reads its lanes.
+    expect(text(empty({ board: null, boardState: null }))).toContain('lane board not read')
+    expect(text({ ...peers(), boardState: null })).toContain('api-core')
+  })
+
   test('K1 the four sections are in this order, each a head row', () => {
     const rows = workTab(peers(), NOW, 80, 60)
     const heads = rows.filter(isHead).map(one => SECTIONS.find(name => rowText(one).trim().startsWith(name)))

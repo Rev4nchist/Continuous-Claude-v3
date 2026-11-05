@@ -44,11 +44,16 @@ export type BoardColumn = {
 };
 
 export type LaneBoard = {
+  /** The board key this read covers (agentic_os.lane.project_key). */
+  board: string;
   status: 'ok' | 'error';
   error: string | null;
   columns: BoardColumn[];
   total: number;
 };
+
+/** The board the page and the endpoint show when no `project` is asked for. */
+export const DEFAULT_BOARD = 'continuous-claude';
 
 const LANE_LIMIT = 500;
 const DONE_SHOWN = 10;
@@ -117,8 +122,12 @@ function bucketLanes(rows: LaneRow[]): BoardColumn[] {
   });
 }
 
-/** Never throws: a failed read becomes `status: 'error'` with a path-free message. */
-export async function getLaneBoard(): Promise<LaneBoard> {
+/**
+ * One board only: lanes with `project_key = projectKey` (bound as a parameter by the drizzle sql tag).
+ * The caller validates the key (parseProjectKey). Lane ids are global; each board is a project_key.
+ * Never throws: a failed read becomes `status: 'error'` with a path-free message.
+ */
+export async function getLaneBoard(projectKey: string = DEFAULT_BOARD): Promise<LaneBoard> {
   try {
     const { rows } = await db.execute<LaneRow>(sql`
       SELECT l.id, l.title, l.branch, l.track, l.state, l.owner_session_id,
@@ -148,12 +157,13 @@ export async function getLaneBoard(): Promise<LaneBoard> {
             AS quiet_seconds
         FROM public.sessions s
       ) o ON o.id = l.owner_session_id
+      WHERE l.project_key = ${projectKey}
       ORDER BY l.priority, l.id
       LIMIT ${LANE_LIMIT}
     `);
     const columns = bucketLanes(rows);
-    return { status: 'ok', error: null, columns, total: columns.reduce((sum, c) => sum + c.count, 0) };
+    return { board: projectKey, status: 'ok', error: null, columns, total: columns.reduce((sum, c) => sum + c.count, 0) };
   } catch (error) {
-    return { status: 'error', error: safeMessage(error), columns: [], total: 0 };
+    return { board: projectKey, status: 'error', error: safeMessage(error), columns: [], total: 0 };
   }
 }

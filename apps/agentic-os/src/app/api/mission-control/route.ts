@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { getMissionControlSnapshot, parseViewName } from '@/server/queries/mission-control';
+import { getMissionControlSnapshot, parseProjectKey, parseViewName } from '@/server/queries/mission-control';
 import { parseSessionId } from '@/server/queries/session-detail';
 import { safeMessage } from '@/server/sources/safe-message';
 
@@ -19,6 +19,9 @@ import { safeMessage } from '@/server/sources/safe-message';
  * `?view=board` adds the lane Board. Any other `view` value is ignored (board stays null),
  * never an error. Without it the 5 second poll stays small.
  *
+ * `?project=<key>` picks the board for `view=board` (default continuous-claude). A key that does not
+ * match ^[a-z0-9][a-z0-9-]*$ is a 400, unlike `session` and `view`: an unknown board must not read as the default.
+ *
  * NOTE ON LOCATION: the `aos-fleet-grid` lane scope declared
  * `src/app/(mission-control)/**`, and a route group would have kept this file
  * inside it while still serving `/api/mission-control`. It is deliberately at the
@@ -33,7 +36,14 @@ export async function GET(request: NextRequest) {
   try {
     const sessionId = parseSessionId(request.nextUrl.searchParams.get('session'));
     const view = parseViewName(request.nextUrl.searchParams.get('view'));
-    const snapshot = await getMissionControlSnapshot(sessionId, view === 'board');
+    const project = parseProjectKey(request.nextUrl.searchParams.get('project'));
+    if (!project.ok) {
+      return NextResponse.json(
+        { error: 'project must match ^[a-z0-9][a-z0-9-]*$' },
+        { status: 400, headers: { 'cache-control': 'no-store' } },
+      );
+    }
+    const snapshot = await getMissionControlSnapshot(sessionId, view === 'board', project.key ?? undefined);
     return NextResponse.json(snapshot, {
       headers: { 'cache-control': 'no-store' },
     });
