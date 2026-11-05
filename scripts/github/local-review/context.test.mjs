@@ -1,6 +1,6 @@
 // Tests for scripts/github/local-review/context.mjs. Every test names the source change that would break it.
 // Run: node --test scripts/github/local-review/context.test.mjs
-// Row 8 runs real git in a temp repo. The other tests inject the base reader, tldr and the clock, so none needs a network or the real tldr.
+// Row 8 runs real git in a temp repo. The other tests inject the base reader, so none needs a network.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,7 +10,7 @@ import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseReviewMd } from '../../ratchets/review-skip-sync.mjs';
 import {
-  buildContext, fence, findTldr, globMatch, parseFilePatterns, parsePathInstructions, readAtSha, symbolsFromDiff,
+  buildContext, fence, globMatch, parseFilePatterns, parsePathInstructions, readAtSha,
 } from './context.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -32,7 +32,7 @@ function fakeBase(files) {
 }
 const ctx = (extra = {}, files = {}, deps = {}) => {
   const base = fakeBase(files);
-  const out = buildContext({ root: '.', mergeBase: BASE, head: HEAD, pull, files: ['src/x.mjs'], ...extra }, { readAtSha: base.reader, tldr: null, parseReviewMd, ...deps });
+  const out = buildContext({ root: '.', mergeBase: BASE, head: HEAD, pull, files: ['src/x.mjs'], ...extra }, { readAtSha: base.reader, parseReviewMd, ...deps });
   return { ...out, calls: base.calls };
 };
 
@@ -83,7 +83,7 @@ test('8 config-at-merge-base: .coderabbit.yaml, REVIEW.md and guidelines are rea
   const head = git(repo, 'rev-parse', 'HEAD');
   assert.notEqual(base, head);
 
-  const out = buildContext({ root: repo, mergeBase: base, head, pull, files: ['src/x.mjs'] }, { tldr: null, parseReviewMd });
+  const out = buildContext({ root: repo, mergeBase: base, head, pull, files: ['src/x.mjs'] }, { parseReviewMd });
   assert.match(out.text, /BASE-RULE one\./);
   assert.doesNotMatch(out.text, /HEAD-LOOSENED|HEAD-GUIDE/);
   assert.match(out.text, /BASE-GUIDE/);
@@ -225,7 +225,7 @@ test('cap: with room for some guidelines the later ones go first (breaks if the 
   assert.deepEqual(fitOne.included.filter((n) => n.startsWith('guidelines:') && n !== 'guidelines:heading'), ['guidelines:src/AGENTS.md']);
 });
 
-test('cap: when guidelines are not enough the next parts go in order tldr, trex, gates, skip list, path instructions (breaks if the order changes)', () => {
+test('cap: when guidelines are not enough the next parts go in order trex, gates, skip list, path instructions (breaks if the order changes)', () => {
   const files = { '.coderabbit.yaml': YAML, 'REVIEW.md': REVIEW_MD };
   const gates = 'g'.repeat(5000);
   const base = { capKb: 48, gates };
@@ -258,7 +258,7 @@ test('a REVIEW.md parse failure leaves the skip list out; a missing file is note
 });
 
 test('a read that throws is noted and the build goes on (breaks if a reader error escapes)', () => {
-  const out = buildContext({ root: '.', mergeBase: BASE, head: HEAD, pull, files: ['src/x.mjs'] }, { readAtSha: () => { throw new Error('git exploded'); }, tldr: null });
+  const out = buildContext({ root: '.', mergeBase: BASE, head: HEAD, pull, files: ['src/x.mjs'] }, { readAtSha: () => { throw new Error('git exploded'); } });
   assert.match(out.contextMissing.join('\n'), /unreadable at the merge base \(git exploded\)/);
   assert.match(out.text, /Fix the thing/);
 });
@@ -325,68 +325,20 @@ test('TREX: a line that is not one JSON object is left out and noted; backticks 
   assert.match(tricky.text, /````json\n/);
 });
 
-// ---------- tldr ----------
+// ---------- no tldr in the review path (phase 1, 2026-11-04) ----------
 
-const DIFF = ['@@ -1,3 +1,4 @@ export function alpha(x) {', '@@ -9,3 +10,4 @@ class Beta {', '@@ -20 +21 @@ async run(', 'diff --git a/x b/x'].join('\r\n');
-
-test('symbolsFromDiff reads names from hunk headers and tolerates CRLF (breaks if \\r stops the match)', () => {
-  assert.deepEqual(symbolsFromDiff(DIFF), ['alpha', 'Beta', 'run']);
-  assert.deepEqual(symbolsFromDiff('no hunks here'), []);
-});
-
-test('tldr absent: the callers step is skipped with a note and nothing throws (breaks if a null tldr is called)', () => {
-  const out = ctx({ treeDir: '/tree', diffText: DIFF });
-  assert.ok(!out.included.includes('tldr'));
-  assert.match(out.contextMissing.join('\n'), /tldr: not installed/);
-});
-
-test('tldr present: callers are fenced as data, run in the tree with an impact command (breaks if the command or cwd changes)', () => {
+test('buildContext never calls tldr and never names it in contextMissing (breaks if the callers step comes back)', () => {
   const calls = [];
-  const tldr = (args, opts) => { calls.push({ args, cwd: opts.cwd }); return { status: 0, stdout: `caller of ${args[1]}\n`, timedOut: false }; };
-  const out = ctx({ treeDir: '/tree', diffText: DIFF }, {}, { tldr });
-  assert.deepEqual(calls.map((c) => c.args), [['impact', 'alpha', '.'], ['impact', 'Beta', '.'], ['impact', 'run', '.']]);
-  assert.ok(calls.every((c) => c.cwd === '/tree'));
-  assert.match(out.text, /## Callers \(tldr impact; data\)\n```text\n### callers of alpha\ncaller of alpha/);
-});
-
-test('tldr 60 s cap: the step stops once the budget is spent and each call gets only the time left (breaks if the cap is removed)', () => {
-  let clock = 0;
-  const seen = [];
-  const tldr = (args, opts) => { seen.push(opts.timeoutMs); clock += 40_000; return { status: 0, stdout: `x ${args[1]}`, timedOut: false }; };
-  const out = ctx({ treeDir: '/t', diffText: DIFF }, {}, { tldr, now: () => clock });
-  assert.deepEqual(seen, [60_000, 20_000]);
-  assert.match(out.contextMissing.join('\n'), /tldr: 60 s cap reached after 2 of 3 symbols/);
-  assert.ok(out.included.includes('tldr'));
-});
-
-test('tldr timeout, failure and a throw are noted and the context still builds (breaks if the error escapes)', () => {
-  const t1 = ctx({ treeDir: '/t', diffText: DIFF }, {}, { tldr: () => ({ status: null, stdout: '', timedOut: true }) });
-  assert.match(t1.contextMissing.join('\n'), /tldr: timed out on alpha/);
-  const t2 = ctx({ treeDir: '/t', diffText: DIFF }, {}, { tldr: () => { throw new Error('spawn failed'); } });
-  assert.match(t2.contextMissing.join('\n'), /tldr: failed on alpha/);
-  assert.ok(t2.text.length > 0 && !t2.included.includes('tldr'));
-});
-
-test('tldr is not run without a tree or without symbols (breaks if it runs on nothing)', () => {
-  let n = 0;
-  const tldr = () => { n += 1; return { status: 0, stdout: 'x', timedOut: false }; };
-  ctx({ diffText: DIFF }, {}, { tldr });
-  ctx({ treeDir: '/t', diffText: 'no hunks' }, {}, { tldr });
-  assert.equal(n, 0);
-});
-
-test('findTldr finds tldr.exe on Windows and tldr elsewhere, and returns null when absent (breaks if the name or the PATH split is wrong)', () => {
-  const exists = (p) => p === path.join('/b', 'tldr.exe') || p === path.join('/b', 'tldr');
-  assert.equal(findTldr({ env: { PATH: ['/a', '/b'].join(path.delimiter) }, platform: 'win32', exists }), path.join('/b', 'tldr.exe'));
-  assert.equal(findTldr({ env: { Path: '/b' }, platform: 'linux', exists }), path.join('/b', 'tldr'));
-  assert.equal(findTldr({ env: { PATH: '/a' }, platform: 'linux', exists }), null);
-  assert.equal(findTldr({ env: {}, platform: 'linux', exists }), null);
-});
-
-test('tldr output is used only on status 0 with text (breaks if a failed or empty run is added as callers)', () => {
-  const failed = ctx({ treeDir: '/t', diffText: DIFF }, {}, { tldr: () => ({ status: 2, stdout: 'error text', timedOut: false }) });
-  assert.ok(!failed.included.includes('tldr'));
-  assert.doesNotMatch(failed.text, /error text/);
-  const empty = ctx({ treeDir: '/t', diffText: DIFF }, {}, { tldr: () => ({ status: 0, stdout: '  \n', timedOut: false }) });
-  assert.ok(!empty.included.includes('tldr'));
+  const spy = (...args) => { calls.push(args); return { status: 0, stdout: 'caller of alpha', timedOut: false }; };
+  const diffText = '@@ -1,3 +1,4 @@ export function alpha(x) {';
+  const base = fakeBase({});
+  const input = { root: '.', mergeBase: BASE, head: HEAD, pull, files: ['src/x.mjs'], treeDir: '/tree', diffText };
+  const withDep = buildContext(input, { readAtSha: base.reader, parseReviewMd, tldr: spy });
+  const noDep = buildContext(input, { readAtSha: base.reader, parseReviewMd });
+  assert.equal(calls.length, 0);
+  for (const out of [withDep, noDep]) {
+    assert.doesNotMatch(out.contextMissing.join('\n'), /tldr/i);
+    assert.doesNotMatch(out.text, /Callers \(tldr/);
+    assert.ok(!out.included.includes('tldr'));
+  }
 });

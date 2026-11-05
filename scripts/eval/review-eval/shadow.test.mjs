@@ -341,3 +341,10 @@ test('the default shadow engine maps a failed replay to void_partial and a cap r
   const cap = await mk({ exit: 3, status: 'cap', reason: 'headroom' })({ pr: 1, rank: 1, sha40: A });
   assert.equal(pairState({ round: { sha40: A }, engine: cap, pr: {}, now: 0, ttlMs: HOUR }).state, 'engine_pending');
 });
+test('the default shadow engine still replays with the cursor-review reviewer: its engineVersion hashes the old freeze (breaks if the replay default reaches shadow)', async () => {
+  const { defaultShadowEngine } = await import('./shadow.mjs');
+  const seen = [];
+  const engine = defaultShadowEngine({ cfg: {}, gh: null, root: os.tmpdir(), repoRoot: os.tmpdir(), replayRun: async (args) => { seen.push(args); return { exit: 3, status: 'cap' }; } });
+  await engine({ pr: 1, rank: 1, sha40: sha('a') });
+  assert.equal(seen[0].reviewer, 'cursor-review');
+});

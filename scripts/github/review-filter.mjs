@@ -384,12 +384,17 @@ export function dedupe(findings) {
 
 const toInt = (v) => (v !== null && v !== undefined && v !== '' && Number.isInteger(Number(v)) ? Number(v) : null);
 
+/** A repo path as findings carry it: forward slashes, no leading ./ . Non-strings pass through. */
+export function normalizeRepoPath(p) {
+  return typeof p === 'string' ? p.replaceAll('\\', '/').replace(/^\.\//, '') : p;
+}
+
 function normalize(r) {
   const o = r !== null && typeof r === 'object' && !Array.isArray(r) ? r : {};
   const conf = toInt(o.confidence);
   const f = {
     ...o,
-    file: typeof o.file === 'string' ? o.file.replaceAll('\\', '/').replace(/^\.\//, '') : o.file,
+    file: normalizeRepoPath(o.file),
     startLine: toInt(o.startLine),
     endLine: toInt(o.endLine),
     title: String(o.title ?? ''),

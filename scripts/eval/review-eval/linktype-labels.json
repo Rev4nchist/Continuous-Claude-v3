@@ -1,0 +1,197 @@
+{
+  "schema": 1,
+  "note": "linkType of the 22 real CodeRabbit Majors of the review-eval dataset (.claudedocs/2026-11-01-pr-review-dataset.json). Model labels, never Dave labels. final = the class both raters gave, or the agent-claude class when they split (see agreement.disputed).",
+  "classes": [
+    "within-hunk",
+    "same-file",
+    "cross-file-static",
+    "cross-file-dynamic"
+  ],
+  "raters": {
+    "agent-claude": {
+      "model": "Claude (team 2 our-repo researcher agent)",
+      "date": "2026-11-04",
+      "source": "prose per PR, mapped to keys by PR and file",
+      "sawRepo": true
+    },
+    "agent-grok": {
+      "model": "grok-4.7-high",
+      "cursorAgentVersion": "2026.10.22-27dcf5f",
+      "date": "2026-11-04",
+      "source": "one cursor-agent ask-mode run over the 22 review texts and diff hunks; blind to rater 1",
+      "sawRepo": false
+    }
+  },
+  "agreement": {
+    "n": 22,
+    "agree": 17,
+    "raw": 0.7727272727272727,
+    "kappa": 0.6485623003194888,
+    "disputed": [
+      "222:4419937189",
+      "225:4424706285",
+      "238:r2-86",
+      "238:r3-88",
+      "238:r4-90"
+    ]
+  },
+  "labels": {
+    "200:4406017695": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "within-hunk",
+      "final": "within-hunk",
+      "disputed": false,
+      "grokWhy": "Token regexes in the hunk stop at whitespace and leave the path tail."
+    },
+    "200:4406157937": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "within-hunk",
+      "final": "within-hunk",
+      "disputed": false,
+      "grokWhy": "QUOTED_PATH in the hunk rejects any apostrophe before the closing quote."
+    },
+    "203:4407064990": {
+      "agent-claude": "cross-file-dynamic",
+      "agent-grok": "cross-file-dynamic",
+      "final": "cross-file-dynamic",
+      "disputed": false,
+      "grokWhy": "Needs the router checkpoint contract and the review:none label, not just noneBlockers."
+    },
+    "206:4407781182": {
+      "agent-claude": "same-file",
+      "agent-grok": "same-file",
+      "final": "same-file",
+      "disputed": false,
+      "grokWhy": "Hiding the run needs liveAgents, chipNow, and pulse elsewhere in index.tsx."
+    },
+    "206:4408111287": {
+      "agent-claude": "same-file",
+      "agent-grok": "same-file",
+      "final": "same-file",
+      "disputed": false,
+      "grokWhy": "The stale overwrite needs refreshAgents and the turn.start update at line 537."
+    },
+    "207:4407827505": {
+      "agent-claude": "cross-file-dynamic",
+      "agent-grok": "cross-file-dynamic",
+      "final": "cross-file-dynamic",
+      "disputed": false,
+      "grokWhy": "Dropping HUD fields is wrong because claude-hud config.json omits those elements."
+    },
+    "211:4412999830": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "within-hunk",
+      "final": "within-hunk",
+      "disputed": false,
+      "grokWhy": "The cited argv line treats --apply as the path and uses USERPROFILE as home."
+    },
+    "217:4419304099": {
+      "agent-claude": "cross-file-dynamic",
+      "agent-grok": "cross-file-dynamic",
+      "final": "cross-file-dynamic",
+      "disputed": false,
+      "mapping": "prose says \"217 x2\" are cross-file-dynamic and \"217 isOff cites lines 702/707\" is same-file; the two review-router.mjs keys are taken as the x2, the pr-checkpoint key as isOff (inferred from the file)",
+      "grokWhy": "Old pclass sticks because /pathway reconfirm lives in the checkpoint hook."
+    },
+    "217:r1-43": {
+      "agent-claude": "same-file",
+      "agent-grok": "same-file",
+      "final": "same-file",
+      "disputed": false,
+      "mapping": "see 217:4419304099",
+      "grokWhy": "Proving the lost deny needs shellLock's try, a different function from the handlers."
+    },
+    "217:4419638554": {
+      "agent-claude": "cross-file-dynamic",
+      "agent-grok": "cross-file-dynamic",
+      "final": "cross-file-dynamic",
+      "disputed": false,
+      "mapping": "see 217:4419304099",
+      "grokWhy": "The workflow forwards ready_for_review without an explicit /pathway confirmation."
+    },
+    "221:7d3b6b2ca280bf2e819358f1": {
+      "agent-claude": "cross-file-dynamic",
+      "agent-grok": "cross-file-dynamic",
+      "final": "cross-file-dynamic",
+      "disputed": false,
+      "grokWhy": "The rule and review-status.mjs share only the forgeable PR-body CLI line."
+    },
+    "222:4419937189": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "same-file",
+      "final": "within-hunk",
+      "disputed": true,
+      "grokWhy": "Seeing the whole item dropped needs noAsk and nextSteps outside this regex."
+    },
+    "222:4419937193": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "within-hunk",
+      "final": "within-hunk",
+      "disputed": false,
+      "grokWhy": "Unbulleted questions miss items.push in the nextSteps branch shown here."
+    },
+    "222:4420104992": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "within-hunk",
+      "final": "within-hunk",
+      "disputed": false,
+      "grokWhy": "Dash rejection in WAIT_OBJECT requires spaces, so CI—approve still matches."
+    },
+    "225:4424706285": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "same-file",
+      "final": "within-hunk",
+      "disputed": true,
+      "grokWhy": "first:20 is in the query; trusting a partial edit history is another function."
+    },
+    "227:4426579552": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "within-hunk",
+      "final": "within-hunk",
+      "disputed": false,
+      "grokWhy": "Both If sentences in PAID_GATE are true while the paid review still runs."
+    },
+    "235:r1-80": {
+      "agent-claude": "within-hunk",
+      "agent-grok": "within-hunk",
+      "final": "within-hunk",
+      "disputed": false,
+      "grokWhy": "Cited Clear() scans a fixed handle range instead of listing inherited handles."
+    },
+    "238:r1-83": {
+      "agent-claude": "same-file",
+      "agent-grok": "same-file",
+      "final": "same-file",
+      "disputed": false,
+      "grokWhy": "Line 544's post-push instruction ignores decline state stored elsewhere in the file."
+    },
+    "238:r2-86": {
+      "agent-claude": "same-file",
+      "agent-grok": "within-hunk",
+      "final": "same-file",
+      "disputed": true,
+      "grokWhy": "The watcher applies a stored grant without checking it matches the checkpoint head."
+    },
+    "238:r3-88": {
+      "agent-claude": "same-file",
+      "agent-grok": "within-hunk",
+      "final": "same-file",
+      "disputed": true,
+      "grokWhy": "Cited submitLine writes the sent key before submit, then wasSent skips a retry."
+    },
+    "238:r4-89": {
+      "agent-claude": "same-file",
+      "agent-grok": "same-file",
+      "final": "same-file",
+      "disputed": false,
+      "grokWhy": "recordPathway and grantCommand are separate; old asks can restore a replaced grant."
+    },
+    "238:r4-90": {
+      "agent-claude": "same-file",
+      "agent-grok": "within-hunk",
+      "final": "same-file",
+      "disputed": true,
+      "grokWhy": "The cited delivery loop saves watch progress, then throw stops later alerts."
+    }
+  }
+}
