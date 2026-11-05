@@ -1028,6 +1028,8 @@ interface AgeCheckResult {
   blocked: boolean;
   warning?: string;
   error?: string;
+  /** The registry answered HTTP 404: the package does not exist there. */
+  notFound?: boolean;
 }
 
 export async function checkPackageAge(
@@ -1040,7 +1042,10 @@ export async function checkPackageAge(
   }
 
   try {
-    const publishDate = await fetchPublishDate(name, ecosystem, requestedVersion);
+    const { date: publishDate, notFound } = await fetchPublishDate(name, ecosystem, requestedVersion);
+    if (notFound) {
+      return { ageHours: null, blocked: false, notFound: true };
+    }
     if (!publishDate) {
       return { ageHours: null, blocked: false };
     }
@@ -1142,18 +1147,25 @@ function newestNpmVersion(time: Record<string, string> | undefined): string | un
   return best;
 }
 
+/** The publish date to age-check, and whether the registry answered HTTP 404 (no such package). */
+interface PublishLookup {
+  date: Date | null;
+  notFound: boolean;
+}
+
 function fetchPublishDate(
   name: string,
   ecosystem: 'pypi' | 'npm',
   requestedVersion?: string
-): Promise<Date | null> {
+): Promise<PublishLookup> {
   return new Promise((resolve) => {
+    const unknown: PublishLookup = { date: null, notFound: false };
     const url = ecosystem === 'pypi'
       ? `https://pypi.org/pypi/${encodeURIComponent(name)}/json`
       : `https://registry.npmjs.org/${encodeURIComponent(name)}`;
 
     const timer = setTimeout(() => {
-      resolve(null);
+      resolve(unknown);
     }, 5000);
 
     const req = https.get(url, { timeout: 5000 }, (res) => {
@@ -1161,23 +1173,28 @@ function fetchPublishDate(
       res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
       res.on('end', () => {
         clearTimeout(timer);
+        // Only a real HTTP 404 counts. Any other status, and a body that does not parse, stay fail-open.
+        if (res.statusCode === 404) {
+          resolve({ date: null, notFound: true });
+          return;
+        }
         try {
-          resolve(publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion));
+          resolve({ date: publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion), notFound: false });
         } catch {
-          resolve(null);
+          resolve(unknown);
         }
       });
     });
 
     req.on('error', () => {
       clearTimeout(timer);
-      resolve(null);
+      resolve(unknown);
     });
 
     req.on('timeout', () => {
       req.destroy();
       clearTimeout(timer);
-      resolve(null);
+      resolve(unknown);
     });
   });
 }
@@ -1417,6 +1434,7 @@ async function checkInstall(segment: string, cwd: string | null, tool: string): 
       return { asks, advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };
     }
     if (ageResult.warning) advisories.push(`PACKAGE ADVISORY: ${ageResult.warning}`);
+    if (ageResult.notFound) asks.push(`Package "${pkg.name}" was not found on the registry (404). Check the name or confirm.`);
   }
   return { asks, advisories };
 }

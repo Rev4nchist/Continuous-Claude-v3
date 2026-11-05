@@ -20654,7 +20654,10 @@ async function checkPackageAge(name, ecosystem, requestedVersion) {
     return { ageHours: null, blocked: false };
   }
   try {
-    const publishDate = await fetchPublishDate(name, ecosystem, requestedVersion);
+    const { date: publishDate, notFound } = await fetchPublishDate(name, ecosystem, requestedVersion);
+    if (notFound) {
+      return { ageHours: null, blocked: false, notFound: true };
+    }
     if (!publishDate) {
       return { ageHours: null, blocked: false };
     }
@@ -20715,9 +20718,10 @@ function newestNpmVersion(time) {
 }
 function fetchPublishDate(name, ecosystem, requestedVersion) {
   return new Promise((resolve2) => {
+    const unknown = { date: null, notFound: false };
     const url = ecosystem === "pypi" ? `https://pypi.org/pypi/${encodeURIComponent(name)}/json` : `https://registry.npmjs.org/${encodeURIComponent(name)}`;
     const timer = setTimeout(() => {
-      resolve2(null);
+      resolve2(unknown);
     }, 5e3);
     const req = https.get(url, { timeout: 5e3 }, (res) => {
       let data = "";
@@ -20726,21 +20730,25 @@ function fetchPublishDate(name, ecosystem, requestedVersion) {
       });
       res.on("end", () => {
         clearTimeout(timer);
+        if (res.statusCode === 404) {
+          resolve2({ date: null, notFound: true });
+          return;
+        }
         try {
-          resolve2(publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion));
+          resolve2({ date: publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion), notFound: false });
         } catch {
-          resolve2(null);
+          resolve2(unknown);
         }
       });
     });
     req.on("error", () => {
       clearTimeout(timer);
-      resolve2(null);
+      resolve2(unknown);
     });
     req.on("timeout", () => {
       req.destroy();
       clearTimeout(timer);
-      resolve2(null);
+      resolve2(unknown);
     });
   });
 }
@@ -20912,6 +20920,7 @@ async function checkInstall(segment, cwd, tool) {
       return { asks, advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };
     }
     if (ageResult.warning) advisories.push(`PACKAGE ADVISORY: ${ageResult.warning}`);
+    if (ageResult.notFound) asks.push(`Package "${pkg.name}" was not found on the registry (404). Check the name or confirm.`);
   }
   return { asks, advisories };
 }
