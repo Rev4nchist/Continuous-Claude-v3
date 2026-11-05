@@ -309,6 +309,20 @@ describe('render-board.mjs against a scratch database', () => {
     assert.ok(!html.includes('zzsleep-30m') && !html.includes('zzsleep-holder'), 'a quiet session showed in the Right now cards');
   });
 
+  it('the header shows claude.exe matched by start time, in red with the pid when one has no session; nothing when the list is unknown', () => {
+    const out = path.join(E2E.tmp, 'ccv3-procs.html');
+    // Year 2001: no fixture session started within 10 s of it, so the one process stays unmatched.
+    const procs = JSON.stringify([{ pid: 4242, startMs: Date.UTC(2001, 0, 1) }]);
+    const r = renderPage(['--project', 'continuous-claude', '--out', out], { env: { LANE_CLAUDE_PROCESSES: procs } });
+    assert.equal(r.code, 0, r.all);
+    const html = fs.readFileSync(out, 'utf8');
+    assert.match(html, /<span class="ctr is-crit" title="[^"]*no session for pid 4242"><b>0\/1<\/b><span>claude\.exe matched<\/span>/);
+    assert.match(r.out, /0\/1 claude\.exe matched/);
+    const none = path.join(E2E.tmp, 'ccv3-noprocs.html');
+    assert.equal(renderPage(['--project', 'continuous-claude', '--out', none], { env: { LANE_CLAUDE_PROCESSES: 'not json' } }).code, 0);
+    assert.ok(!fs.readFileSync(none, 'utf8').includes('claude.exe matched'));
+  });
+
   it('--project zz-rb-a writes a page with only board a, a read-only Priorities section with board a lanes, and the stamp of board a', () => {
     const out = path.join(E2E.tmp, 'a.html');
     const r = renderPage(['--project', 'zz-rb-a', '--out', out]);

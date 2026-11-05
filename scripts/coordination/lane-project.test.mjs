@@ -435,6 +435,33 @@ describe('board header: active (5 min) and open, quiet', () => {
   });
 });
 
+describe('board header: claude.exe processes matched to sessions by start time', () => {
+  const PM = 'zz-pbprobe-pm';
+  // sessions.started_at is a naive UTC timestamp. 2020-01-01 00:00:00 UTC is far from every other fixture session.
+  const START = Date.UTC(2020, 0, 1, 0, 0, 0);
+  it('counts a process whose start time is within seconds of a live session; names the pid with no session', async () => {
+    try {
+      await q(`INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat, last_activity_at)
+               VALUES ($1,$2,'fixture pm', TIMESTAMP '2020-01-01 00:00:00', now(), now())`, [PM, normalizeRoot(state.dirs.C)]);
+      const procs = JSON.stringify([{ pid: 4242, startMs: START + 2000 }, { pid: 4343, startMs: START + 3_600_000 }]);
+      const text = lane(state.dirs.C, SA, ['board'], { LANE_CLAUDE_PROCESSES: procs });
+      assert.equal(text.code, 0, text.all);
+      assert.match(text.out, /1\/2 claude\.exe matched \(no session for pid 4343\)/);
+      const json = JSON.parse(lane(state.dirs.C, SA, ['board', '--json'], { LANE_CLAUDE_PROCESSES: procs }).out);
+      assert.deepEqual(json.processes, { total: 2, matched: 1, unmatchedPids: [4343] });
+    } finally {
+      await q(`DELETE FROM sessions WHERE id = $1`, [PM]).catch(() => {});
+    }
+  });
+
+  it('an unknown process list prints nothing and the JSON field is null', () => {
+    const text = lane(state.dirs.C, SA, ['board'], { LANE_CLAUDE_PROCESSES: 'not json' });
+    assert.equal(text.code, 0, text.all);
+    assert.doesNotMatch(text.out, /claude\.exe matched/);
+    assert.equal(JSON.parse(lane(state.dirs.C, SA, ['board', '--json'], { LANE_CLAUDE_PROCESSES: 'not json' }).out).processes, null);
+  });
+});
+
 describe('peers', () => {
   const peerIds = (r) => JSON.parse(r.out).map((p) => p.id);
 
