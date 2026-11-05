@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { placeLanes } from './kanban-place.mjs';
+import { placeLanes, boardMismatch, boardWriteKind, mergeUnknownColumns } from './kanban-place.mjs';
 
 const L = (id, state, priority) => ({ id, state, priority });
 const lanes = [
@@ -109,4 +109,60 @@ test('defaults sort by DB priority, then by input order', () => {
 
 test('no lanes at all gives five empty lists', () => {
   assert.deepEqual(placeLanes(null, []), { now: [], next: [], later: [], waiting: [], inProgress: [] });
+});
+
+// ---- the board guard, the write kind and the unknown-id merge (the page save) ---------------------------------
+
+test('boardMismatch: a doc stamped with another board is foreign; the same board, no stamp and no doc are fine', () => {
+  assert.equal(boardMismatch({ board: 'zz-a', columns: {} }, 'zz-b'), true);
+  assert.equal(boardMismatch({ board: 'zz-a', columns: {} }, 'zz-a'), false);
+  // An old doc has no board field: it is allowed, and the next save stamps it.
+  assert.equal(boardMismatch({ columns: {}, updatedAt: 'x' }, 'zz-a'), false);
+  for (const doc of [null, undefined, 'junk', 7]) assert.equal(boardMismatch(doc, 'zz-a'), false);
+});
+
+test('boardMismatch fails closed on a stamp that is not a board key (null, number, empty, other case)', () => {
+  for (const stamp of [null, 7, '', 'ZZ-A', ['zz-a'], {}]) assert.equal(boardMismatch({ board: stamp }, 'zz-a'), true, JSON.stringify(stamp));
+});
+
+test('boardWriteKind: update when a doc exists (it keeps appliedColumns and syncedAt), set only when there is none', () => {
+  assert.equal(boardWriteKind({ columns: {} }), 'update');
+  assert.equal(boardWriteKind({}), 'update');
+  for (const doc of [null, undefined]) assert.equal(boardWriteKind(doc), 'set');
+});
+
+const COLS = (o) => ({ now: [], next: [], later: [], waiting: [], ...o });
+
+test('mergeUnknownColumns: ids the page does not know come back, each in the column the saved doc had it in, after the page\'s own', () => {
+  const known = [L('a', 'ready', 1), L('b', 'ready', 2)];
+  const doc = { columns: { now: ['ghost1', 'a'], later: ['ghost2'], waiting: ['ghost3'] } };
+  const merged = mergeUnknownColumns(doc, COLS({ now: ['b'], later: ['a'] }), known);
+  assert.deepEqual(merged, COLS({ now: ['b', 'ghost1'], later: ['a', 'ghost2'], waiting: ['ghost3'] }));
+});
+
+test('mergeUnknownColumns: an id the page knows is never merged back (the page placed it), and none repeats', () => {
+  const known = [L('a', 'ready', 1), L('b', 'ready', 2), L('d', 'done', 3)];
+  // The page moved a from now to later; the saved doc still has it in now. d is done: known to the page, so dropped, not merged.
+  const doc = { columns: { now: ['a', 'd', 'ghost'], next: ['ghost'], later: ['b'] } };
+  const merged = mergeUnknownColumns(doc, COLS({ later: ['a', 'b'] }), known);
+  assert.deepEqual(merged, COLS({ now: ['ghost'], later: ['a', 'b'] }));
+  const all = [].concat(merged.now, merged.next, merged.later, merged.waiting);
+  assert.equal(new Set(all).size, all.length, 'an id is in two columns');
+});
+
+test('mergeUnknownColumns: no doc, a doc with no columns, junk ids and junk columns change nothing; the page columns are not mutated', () => {
+  const known = [L('a', 'ready', 1)];
+  const mine = COLS({ now: ['a'] });
+  for (const doc of [null, undefined, {}, { columns: 'x' }, { columns: { now: 'a', next: null } }, 'junk']) {
+    assert.deepEqual(mergeUnknownColumns(doc, mine, known), COLS({ now: ['a'] }));
+  }
+  assert.deepEqual(mergeUnknownColumns({ columns: { now: [3, null, {}, '', 'g'] } }, mine, known).now, ['a', 'g']);
+  const before = JSON.stringify(mine);
+  mergeUnknownColumns({ columns: { now: ['g'] } }, mine, known);
+  assert.equal(JSON.stringify(mine), before);
+});
+
+test('mergeUnknownColumns: ids named like object builtins are handled as ids', () => {
+  const merged = mergeUnknownColumns({ columns: { now: ['__proto__', 'constructor', 'toString'] } }, COLS(), [L('a', 'ready', 1)]);
+  assert.deepEqual(merged.now, ['__proto__', 'constructor', 'toString']);
 });
