@@ -56,6 +56,10 @@ export type Answered = { kind: 'text'; text: string } | { kind: 'empty' } | { ki
 
 const ASK_LOG = `${DIAG_DIR}/ask-dialogs.jsonl`
 const ASK_LOG_LINES = 500
+const LABEL_CLIP = 80
+
+/** A label text for the log line: the mod writes every label, so it holds no secret; the clip only bounds the line. */
+const clipLabel = (label: string): string => label.slice(0, LABEL_CLIP)
 
 /** The engine clock, or null. A failing clock never changes a dialog. A function declaration: the engine follows `$` only into those. */
 async function nowOf($: EngineInterface): Promise<number | null> {
@@ -68,8 +72,9 @@ async function nowOf($: EngineInterface): Promise<number | null> {
 
 /**
  * One JSON line per dialog in ~/.claude/state/ccv3-mods/ask-dialogs.jsonl, the newest 500 kept (lane checkpoint-ask-self-answer: a dialog
- * once came back with the first label and Dave saw no question; the line shows how long it took). Sizes and timing only: no question
- * text, no label text, nothing Dave typed. The fs API has no append, so two sessions that write at the same moment can lose one line:
+ * once came back with the first label and Dave saw no question; the line shows how long it took). Timing, sizes, the option texts in the
+ * order shown and the label picked (11-05: #315 and #316 recorded the second label after 7 s and 20 s, and the counts alone could not say
+ * what was on screen). No question text, nothing Dave typed. The fs API has no append, so two sessions that write at the same moment can lose one line:
  * accepted. A failed write never touches the dialog.
  */
 async function logAsk($: EngineInterface, entry: Record<string, unknown>): Promise<void> {
@@ -107,6 +112,9 @@ export async function askDave($: EngineInterface, question: string, labels: read
     questionChars: question.length,
     outcome: answered.kind,
     matched: index >= 0 ? index : null,
+    // The mod's own label texts, in the order shown, and the one picked. Words typed under Other are never logged: chosen is null then.
+    options: labels.map(clipLabel),
+    chosen: index >= 0 ? clipLabel(labels[index]!) : null,
     answerChars: answered.kind === 'text' ? answered.text.length : 0,
     elapsedMs: startedAt === null || endedAt === null ? null : endedAt - startedAt,
   })

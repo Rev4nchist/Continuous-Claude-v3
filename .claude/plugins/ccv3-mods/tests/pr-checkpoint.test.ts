@@ -2384,8 +2384,9 @@ describe('pr-checkpoint: every /pathway leaves one log line', () => {
 // The mod cannot tell a person's pick from any other source, so each dialog leaves one line with its timing. The next real occurrence then
 // shows whether the answer came back in milliseconds or after minutes. How it can fail, and the test that catches it:
 // D1 an answered dialog leaves no line, or a line without ts, session, header, label count, question length, outcome, matched label or elapsed ms
-// D2 the line holds the question text, a label text or the words Dave typed under Other
+// D2 the line holds the question text or the words Dave typed under Other (label texts are logged since 11-05: lane checkpoint-ask-self-answer)
 // D3 Esc or typed words are logged as a pick of a label (matched is not null)
+// D6 the line lacks the option texts in the order shown, or the text of the label picked, or logs typed words as the picked label
 // D4 a failing log write changes what the call records or says
 // D5 the log grows without bound
 const ASK_LOG = 'C:/home/.claude/state/ccv3-mods/ask-dialogs.jsonl'
@@ -2421,7 +2422,7 @@ describe('pr-checkpoint: every dialog leaves one log line', () => {
     expect(Number.isNaN(Date.parse(String(lines[0]!.ts)))).toBe(false)
   })
 
-  test('D2 the line holds no question text, no label text and no words typed under Other', async ($, on) => {
+  test('D2 the line holds no question text and no words typed under Other', async ($, on) => {
     const typed = 'please wait for the weekend'
     const w = world(on, { answer: { other: typed } })
     await start($)
@@ -2430,7 +2431,19 @@ describe('pr-checkpoint: every dialog leaves one log line', () => {
     const text = w.written[ASK_LOG]!
     expect(text).not.toContain(typed)
     expect(text).not.toContain(w.seen.dialogs[0]!.question)
-    for (const label of w.seen.dialogs[0]!.labels) expect(text).not.toContain(label)
+  })
+
+  test('D6 the line lists the option texts in the order shown and the text of the label picked; typed words pick none', async ($, on) => {
+    const w = world(on, { answers: [/Recommended/, { other: 'typed words' }] })
+    await start($)
+    await call($)
+    await call($)
+    const [picked, typed] = askLines(w.written)
+    const shown = w.seen.dialogs[0]!.labels
+    expect(picked!.options).toEqual(shown)
+    expect(picked!.chosen).toBe(shown[0])
+    expect(typed!.options).toEqual(w.seen.dialogs[1]!.labels)
+    expect(typed!.chosen).toBeNull()
   })
 
   test('D3 Esc is logged closed and typed words are logged as no label; neither matches a label', async ($, on) => {
