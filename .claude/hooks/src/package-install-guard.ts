@@ -1508,10 +1508,11 @@ async function main() {
   }
 }
 
-// Only run main() when executed as a standalone script, not when imported
-// by vitest or other test runners. Vitest sets VITEST=true and
-// VITEST_WORKER_ID in the environment.
-if (!process.env.VITEST) {
+// Only run main() when executed as the hook itself. Two gates: vitest sets VITEST=true when it
+// imports this file, and a harness that bundles the file and imports installSegments has a different
+// argv[1]. Without the second gate that import reads stdin and logs a crash row to the real log.
+// The pattern accepts / and \ separators and the .mjs dist file, like heartbeat.ts.
+if (!process.env.VITEST && /(^|[\\/])package-install-guard\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
   main().catch((err) => {
     // Fail-open: if the hook itself crashes, allow the command. Log the crash first.
     logGuardError('package-install-guard', err);
