@@ -129,7 +129,7 @@ REM period ever gets. Worse, a task-limit kill does not reliably reap the
 REM process tree on this machine: measured 2026-08-28 on CCv3-Health-Check,
 REM PT30M fired at 10:25 and the orphaned child kept running to 11:49
 REM (duration_s=6777 vs a normal 58). run-generate.ps1 moves the ceiling
-REM INSIDE the wrapper: it taskkill /T /F-s the tree and returns 124, then
+REM INSIDE the wrapper: it stops the tree with Stop-ProcessTree and returns 124, then
 REM verify-run.mjs + the final emit below still record a truthful row.
 REM Override for a manual run: set CCV3_FOURTHOS_TIMEOUT_SEC before calling.
 REM Paths are relative to the REPO ROOT (this .bat cd /d-s there on line 13),

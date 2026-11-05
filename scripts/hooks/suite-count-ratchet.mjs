@@ -103,7 +103,7 @@ function runSuite() {
       throw new Error(
         'vitest produced no JSON report. The run did not complete -- check for a hang ' +
           '(a synchronous spawnSync cannot be interrupted by testTimeout) or a leaked ' +
-          'vitest tree from an earlier run (taskkill /PID <n> /T /F).'
+          'vitest tree from an earlier run (stop it with scripts/lib/Stop-ProcessTree.ps1: Stop-ProcessTree -RootId <n>).'
       );
     }
     const r = JSON.parse(readFileSync(outFile, 'utf8'));

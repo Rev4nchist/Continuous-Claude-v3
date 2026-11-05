@@ -66,6 +66,7 @@ import {
   CLAUDE_TIMEOUT_MS, REFRESH_TIMEOUT_MS,
 } from './lib/config.mjs';
 import { dateStamp, slugify } from './lib/util.mjs';
+import { killTree } from '../github/lib/proc.mjs';
 
 // Reporting Hub artifact URL for the Project Portfolio report-run emit (T3.1).
 // The registry row's "Artifact URL" points a reader straight at the gallery/hub
@@ -445,16 +446,10 @@ const NOTION_PUBLISH_TOOLS = [
 // itself plus its ~9 hook `node` children, permanently, on every timeout. Three such
 // clusters (33h / 9.7h / 3.1h old, 29 processes) had accumulated by 2026-07-25 and
 // were degrading spawn latency enough to cause MORE ETIMEDOUTs — a self-reinforcing
-// leak. `taskkill /T` walks the tree; /F forces. Best-effort by design: this runs
-// during spawn exhaustion, so it must never throw or block the sweep.
-function killTree(pid) {
-  if (!pid) return;
-  try {
-    spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], {
-      windowsHide: true, timeout: 15000, encoding: 'utf8',
-    });
-  } catch { /* best effort — never let cleanup break the run */ }
-}
+// leak. killTree (scripts/github/lib/proc.mjs) walks the tree itself and stops each
+// pid, children first; the Windows tree-kill switch is banned (pid reuse kills live
+// shells). Best-effort by design: this runs during spawn exhaustion, so the call
+// site below never lets cleanup break the run.
 
 // Spawn headless claude with the connector enabled (ANTHROPIC_API_KEY deleted) and
 // a scoped tool allowlist (no --dangerously-skip-permissions — see #9 above).
@@ -474,7 +469,9 @@ function spawnClaude(prompt) {
   });
   // res.error covers the ETIMEDOUT case (and any spawn failure). Reap the tree so a
   // timed-out publish costs one failed card, not ten permanently leaked processes.
-  if (res.error && res.pid) killTree(res.pid);
+  if (res.error && res.pid) {
+    try { killTree(res.pid); } catch { /* best effort — never let cleanup break the run */ }
+  }
   return res;
 }
 

@@ -45,6 +45,8 @@ param(
     [int]$MaxBashAlive = 25
 )
 
+. (Join-Path $PSScriptRoot '..\lib\Stop-ProcessTree.ps1')
+
 $BashExe = "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe"
 if (-not (Test-Path $BashExe)) {
     Write-Error "bash not found at $BashExe"
@@ -106,12 +108,12 @@ try {
         # stay a tidy list of 5: a storming trial produced 51 live bash processes,
         # 46 of them descendants this script never had a handle on, and the
         # per-pid reap sailed straight past them. Same spawn-tree leak already
-        # recorded for spawnSync -- taskkill /T is the only thing that gets the
-        # descendants.
+        # recorded for spawnSync -- Stop-ProcessTree is the safe way to get the
+        # descendants (the OS tree switch is banned: pid reuse kills live shells).
         foreach ($p in $procs) {
             if (-not $p.WaitForExit(20000)) {
                 Write-Host "  [repro] pid $($p.Id) did not exit in 20s - killing tree" -ForegroundColor Yellow
-                & taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+                $null = Stop-ProcessTree -RootId $p.Id
             }
         }
 

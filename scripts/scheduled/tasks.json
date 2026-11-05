@@ -6,7 +6,9 @@
       "trigger": "daily 07:50",
       "execLimitMin": 10,
       "allowedExit": [0],
-      "maxAgeHours": 48
+      "maxAgeHours": 48,
+      "llm": false,
+      "wake": false
     },
     {
       "name": "CCv3-Blocklist-Update",
@@ -14,7 +16,9 @@
       "trigger": "daily 09:00",
       "execLimitMin": 30,
       "allowedExit": [0],
-      "maxAgeHours": 48
+      "maxAgeHours": 48,
+      "llm": false,
+      "wake": false
     },
     {
       "name": "CCv3-RuleRouter-Audit",
@@ -22,7 +26,9 @@
       "trigger": "weekly Monday 09:07",
       "execLimitMin": 5,
       "allowedExit": [0],
-      "maxAgeHours": 336
+      "maxAgeHours": 336,
+      "llm": false,
+      "wake": false
     },
     {
       "name": "CCv3-RuleRouter-Review",
@@ -30,7 +36,9 @@
       "trigger": "weekly Monday 09:20",
       "execLimitMin": 15,
       "allowedExit": [0],
-      "maxAgeHours": 336
+      "maxAgeHours": 336,
+      "llm": true,
+      "wake": false
     }
   ]
 }
