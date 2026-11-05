@@ -7,6 +7,48 @@ import * as fs3 from "fs";
 // src/shared/lane-board.ts
 import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
+function normalizeRoot(p) {
+  let s = String(p ?? "").replace(/\\/g, "/");
+  s = s.replace(/^\/\/[?.]\//, "");
+  s = s.toLowerCase();
+  s = s.replace(/^\/([a-z])(?=\/|$)/, "$1:");
+  s = s.replace(/(?<=.)\/{2,}/g, "/");
+  return s.replace(/\/+$/, "");
+}
+var isAbsoluteNorm = (s) => /^[a-z]:(\/|$)/.test(s) || s.startsWith("/");
+var slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+var registryFile = (opts, env) => opts.registryPath || env.LANE_REGISTRY_PATH || path.join(env.USERPROFILE || env.HOME || os.homedir(), ".claude", "project-registry.json");
+function loadRegistry(opts = {}) {
+  const env = opts.env ?? process.env;
+  let projects;
+  try {
+    const text = fs.readFileSync(registryFile(opts, env), "utf8").replace(/^\uFEFF/, "");
+    projects = JSON.parse(text).projects;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(projects)) return [];
+  const out = [];
+  for (const p of projects) {
+    if (!p || typeof p !== "object") continue;
+    const e = p;
+    const name = typeof e.name === "string" ? e.name : "";
+    const key = typeof e.key === "string" && e.key ? e.key : slugify(name);
+    if (!key) continue;
+    const root = typeof e.path === "string" ? normalizeRoot(e.path) : "";
+    out.push({
+      key,
+      name,
+      board: typeof e.laneBoard === "string" && e.laneBoard ? e.laneBoard : key,
+      status: typeof e.status === "string" ? e.status : "active",
+      path: typeof e.path === "string" ? e.path : "",
+      root: root && isAbsoluteNorm(root) ? root : "",
+      artifact: typeof e.laneArtifact === "string" && e.laneArtifact ? e.laneArtifact : null
+    });
+  }
+  return out;
+}
 var DEFAULT_BOARD = "continuous-claude";
 function wmKey(sid, board) {
   return board === DEFAULT_BOARD ? sid : `${sid}@${board}`;
@@ -25,9 +67,26 @@ var FALLBACK_ARTIFACT = {
   url: "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
   publishFrom: "lane-board.html"
 };
+var LANE_ARTIFACT_RE = /^https:\/\/claude\.ai\/artifact\/([A-Za-z0-9_-]+)$/;
+var BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
+function artifactIdOf(raw) {
+  return (typeof raw === "string" ? LANE_ARTIFACT_RE.exec(raw)?.[1] : void 0) ?? null;
+}
+function registryBoardArtifact(board, opts, env) {
+  if (!BOARD_KEY_RE.test(board)) return null;
+  const owners = loadRegistry({ ...opts, env }).filter(
+    (e) => e.status.toLowerCase() !== "inactive" && e.key !== DEFAULT_BOARD && e.board === e.key && e.artifact !== null
+  );
+  const mine = owners.filter((e) => e.key === board);
+  const id = mine.length === 1 ? artifactIdOf(mine[0].artifact) : null;
+  if (!id) return null;
+  if (owners.some((e) => e !== mine[0] && artifactIdOf(e.artifact) === id)) return null;
+  if (boardArtifact(DEFAULT_BOARD, { ...opts, env })?.id === id) return null;
+  return { id, url: `https://claude.ai/artifact/${id}`, publishFrom: `lane-board-${board}.html` };
+}
 function boardArtifact(board, opts = {}) {
   const env = opts.env ?? process.env;
-  if (board !== DEFAULT_BOARD) return null;
+  if (board !== DEFAULT_BOARD) return registryBoardArtifact(board, opts, env);
   const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
   try {
     const text = fs.readFileSync(file, "utf8").replace(/^﻿/, "");
@@ -52,16 +111,16 @@ function pendingKey(sid, board) {
 
 // src/shared/lane-board-pending.ts
 import * as fs2 from "fs";
-import * as path from "path";
+import * as path2 from "path";
 var PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var isObj = (v) => v !== null && typeof v === "object";
 function pendingDir(env = process.env) {
   if (env.LANE_BOARD_PENDING_DIR) return env.LANE_BOARD_PENDING_DIR;
   const home = env.HOME || env.USERPROFILE || "";
-  return path.join(home, ".claude", "state", "lane-board-pending");
+  return path2.join(home, ".claude", "state", "lane-board-pending");
 }
 function pendingFile(sessionId, board = DEFAULT_BOARD, env = process.env) {
-  return path.join(pendingDir(env), `${pendingKey(sessionId, board)}.json`);
+  return path2.join(pendingDir(env), `${pendingKey(sessionId, board)}.json`);
 }
 function readPending(file) {
   try {
@@ -85,7 +144,7 @@ function listPending(sessionId, env = process.env) {
     if (!name.endsWith(".json")) continue;
     const base = name.slice(0, -5);
     if (base !== stem && !base.startsWith(`${stem}@`)) continue;
-    const file = path.join(dir, name);
+    const file = path2.join(dir, name);
     const pending = readPending(file);
     if (!pending) continue;
     const board = typeof pending.board === "string" && pending.board ? pending.board : base === stem ? DEFAULT_BOARD : base.slice(stem.length + 1);
@@ -99,7 +158,7 @@ function sweepStalePending(env = process.env, now = Date.now()) {
   try {
     for (const name of fs2.readdirSync(dir)) {
       if (!name.endsWith(".json")) continue;
-      const file = path.join(dir, name);
+      const file = path2.join(dir, name);
       try {
         if (now - fs2.statSync(file).mtimeMs > PENDING_MAX_AGE_MS) {
           fs2.rmSync(file, { force: true });
@@ -154,11 +213,11 @@ function stopGate(payload, env = process.env, now = Date.now()) {
   return { output: { decision: "block", reason: d.reason } };
 }
 async function readStdin() {
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
-    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("end", () => resolve2(data));
   });
 }
 async function main() {
