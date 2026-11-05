@@ -3,7 +3,7 @@
  * local-review.mjs: the local review engine core (spec .claudedocs/2026-11-02-review-engine-p1-engine-core-spec.md, sections 1 and 2,
  * with section 13 of .claudedocs/2026-11-02-local-review-engine-spec.md overriding it).
  *
- * Usage: node scripts/github/local-review.mjs --pr <n> [--fresh] [--gates <pre-pr log>] [--json] [--engine-here] [--repo owner/name]
+ * Usage: node scripts/github/local-review.mjs --pr <n> [--fresh] [--gates <pre-pr log>] [--facts <catchers.md>] [--json] [--engine-here] [--repo owner/name]
  *
  * Run without LOCAL_REVIEW_PINNED, it pins the engine first: it extracts scripts/ and review-router.config.json at fork/main to
  * <state>/local-review/engine/<sha>/ and starts that copy as a child process. The pinned process refuses (exit 2) when its own file is
@@ -610,7 +610,7 @@ function writeReviewDir(s, prep) {
   stripIgnoreFiles(prep.dir, d.platform);
   const agentFiles = [...new Set([...(prep.agentFiles ?? []), ...prep.files.filter((f) => isIgnoreFile(f, d.platform))])];
   const diffText = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
-  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: s.opts.withholdBody ? { ...target.pull, body: BODY_WITHHELD } : target.pull, files: target.files, gates: s.opts.gatesText, capKb: cfg.context_cap_kb };
+  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: s.opts.withholdBody ? { ...target.pull, body: BODY_WITHHELD } : target.pull, files: target.files, gates: s.opts.gatesText, facts: s.opts.factsText, capKb: cfg.context_cap_kb };
   const ctx = buildContext(input, { readAtSha: d.readAtSha });
   writeFileSync(path.join(dir, 'CONTEXT.md'), ctx.text);
   const delta = s.range.mode === 'delta';
@@ -816,7 +816,7 @@ async function runHead(opts, d) {
 }
 
 /**
- * One review of one PR head. opts: { pr, fresh, gatesText, engineHere, withholdBody (eval runs only), evalRun (eval runs: own cap ref), root, repo }.
+ * One review of one PR head. opts: { pr, fresh, gatesText, factsText, engineHere, withholdBody (eval runs only), evalRun (eval runs: own cap ref), root, repo }.
  * deps (tests): { git, gh, runAgent, reserveRun, finishRun, writeRecord, prepareReview, readAtSha, agent, now, pidAlive, sleep, env, stateRoot,
  *   stateDir, cursorLedger, selfPath, selfRoot, configPath, tmpRoot, grep, stderr }.
  * -> { exit, recordPath|null, skipReason|null, ... }
@@ -841,6 +841,7 @@ export function parseArgs(argv) {
     switch (a) {
       case '--pr': { const v = argv[++i]; if (!/^\d+$/.test(v ?? '') || Number(v) <= 0) return { error: `--pr needs a PR number, got ${JSON.stringify(v)}` }; out.pr = Number(v); break; }
       case '--gates': out.gates = argv[++i]; if (!out.gates) return { error: '--gates needs a file' }; break;
+      case '--facts': out.facts = argv[++i]; if (!out.facts) return { error: '--facts needs a file' }; break;
       case '--repo': out.repo = argv[++i]; if (!/^[\w.-]+\/[\w.-]+$/.test(out.repo ?? '')) return { error: '--repo needs owner/name' }; break;
       case '--fresh': out.fresh = true; break;
       case '--json': out.json = true; break;
@@ -876,8 +877,8 @@ async function relaunch(argv, ctx) {
   return r.status ?? EXIT.FAILED;
 }
 
-function readGates(file) {
-  try { return { text: readFileSync(file, 'utf8') }; } catch (e) { return { error: `cannot read --gates ${file}: ${e.message}` }; }
+function readTextArg(flag, file) {
+  try { return { text: readFileSync(file, 'utf8') }; } catch (e) { return { error: `cannot read ${flag} ${file}: ${e.message}` }; }
 }
 
 function report(r, json, out) {
@@ -896,9 +897,11 @@ export async function main(argv, deps = {}) {
   const env = deps.env ?? process.env;
   const root = deps.root ?? repoRoot();
   if (!env.LOCAL_REVIEW_PINNED && !args.engineHere) return relaunch(argv, { root, env, out, err, deps });
-  const gates = args.gates ? readGates(args.gates) : {};
+  const gates = args.gates ? readTextArg('--gates', args.gates) : {};
   if (gates.error) { err(`local-review: ${gates.error}`); return EXIT.REFUSED; }
-  const r = await (deps.reviewHead ?? reviewHead)({ ...args, root, gatesText: gates.text }, { ...deps, env, stderr: err });
+  const facts = args.facts ? readTextArg('--facts', args.facts) : {};
+  if (facts.error) { err(`local-review: ${facts.error}`); return EXIT.REFUSED; }
+  const r = await (deps.reviewHead ?? reviewHead)({ ...args, root, gatesText: gates.text, factsText: facts.text }, { ...deps, env, stderr: err });
   report(r, args.json, out);
   return r.exit;
 }

@@ -110,6 +110,14 @@ const modsTscNotRun = (out) =>
   MODS_TSC_NOT_RUN.test(out) ? 'tsc NOT RUN (no .claude-plugin/types on this machine); validate OK and every mod test passed' : null;
 const nodeGate = (id, script, extra = [], more = {}) => ({ id, cmd: 'node', args: [script, ...extra], cwd: '.', timeoutMs: 5 * MIN, ...more });
 
+// Tests in scripts/checks that the checks-tests gate runs. test-map.test.mjs has its own gate.
+const CHECKS_TESTS = ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers'].map((n) => `scripts/checks/${n}.test.mjs`);
+// Parser files outside scripts/**/*.mjs that scripts/checks/parser-fixtures/registry.mjs names. A test keeps this list equal to the registry.
+export const CATCHER_PARSER_FILES = ['apps/agentic-os/src/server/sources/safe-message.ts', '.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts'];
+export const BASE_TOKEN = '{base}';
+export const CATCHERS_JSON = '.claude/cache/pre-pr/catchers.json';
+export const CATCHERS_MD = '.claude/cache/pre-pr/catchers.md';
+
 /** Runs for every change set. */
 export const ALWAYS_GATES = [
   nodeGate('context-budget', 'scripts/rules/context-budget-guard.mjs', ['--repo']),
@@ -177,7 +185,14 @@ export const SURFACES = [
     // The pure config needs no server, database or browser. It needs root node_modules: run npm ci --ignore-scripts first.
     gates: [nodeGate('scrub-invariant', 'node_modules/@playwright/test/cli.js', ['test', '--config', 'apps/agentic-os/playwright.pure.config.ts', '--reporter=line'])],
   },
-  { id: 'checks-scripts', globs: ['scripts/checks/**'], gates: [{ id: 'checks-tests', cmd: 'node', args: ['--test', 'scripts/checks/prove-check.test.mjs', 'scripts/checks/state-table.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }, nodeTest('test-map-tests', 'scripts/checks/test-map.test.mjs')] },
+  { id: 'checks-scripts', globs: ['scripts/checks/**'], gates: [{ id: 'checks-tests', cmd: 'node', args: ['--test', ...CHECKS_TESTS], cwd: '.', timeoutMs: 10 * MIN }, nodeTest('test-map-tests', 'scripts/checks/test-map.test.mjs')] },
+  // The deterministic catchers (cli-smoke and parser-fixtures block; tsc and mapped tests are facts). The `{base}` token is
+  // replaced by withBase() in runPrePr. The facts file is the --facts input of local-review.mjs.
+  {
+    id: 'catchers',
+    globs: ['scripts/**/*.mjs', ...CATCHER_PARSER_FILES],
+    gates: [{ id: 'catchers', cmd: 'node', args: ['scripts/checks/catchers.mjs', '--base', BASE_TOKEN, '--head', 'HEAD', '--json', CATCHERS_JSON, '--md', CATCHERS_MD], cwd: '.', timeoutMs: 10 * MIN }],
+  },
   {
     id: 'config',
     globs: ['.coderabbit.yaml', 'review-router.config.json', '.claude/project-registry.json'],
@@ -231,6 +246,11 @@ export function gatesFor(changed) {
   for (const s of SURFACES) if (touches(s, paths)) (s.gates ?? []).forEach(add);
   ALWAYS_GATES.forEach(add);
   return out;
+}
+
+/** The gate with the base token replaced by the base ref. */
+export function withBase(gate, base) {
+  return gate.args.includes(BASE_TOKEN) ? { ...gate, args: gate.args.map((a) => (a === BASE_TOKEN ? base : a)) } : gate;
 }
 
 /** One NOTE line for each touched surface with a `manual` text, and for a gate dropped because no test file was touched. */
@@ -1060,7 +1080,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   results.push(changes.result);
   const evidenceAt = results.length;
   results.push(checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg }));
-  for (const gate of gatesFor(changes.paths)) results.push(runGate(gate, { root, exec, git }));
+  for (const gate of gatesFor(changes.paths)) results.push(runGate(withBase(gate, base), { root, exec, git }));
   // A stale GREEN sha after a merge of the base: fix the body file once the gates passed on this head.
   const green = head ? updateGreen({ git, base, bodyPath, bodyText, head, paths: changes.paths, config: cfg, results, evidence: results[evidenceAt] }) : null;
   if (green) {

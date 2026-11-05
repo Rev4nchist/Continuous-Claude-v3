@@ -12,6 +12,8 @@
 9389032e114d478295c5ba1462fec882d1f7409e:.claude/hooks/src/__tests__/intel-bus-hardening.test.ts:generic-api-key:271
 9389032e114d478295c5ba1462fec882d1f7409e:.claude/hooks/src/__tests__/intel-bus-hardening.test.ts:jwt:260
 ea1b1ea2d0b0de4fb28f7feaf71b190d5b4ce036:scripts/project-cards/test/sweep.test.mjs:aws-access-token:268
+# Parser fixture: a made-up token split by invisible characters (2026-11-04, review engine phase 2).
+scripts/checks/parser-fixtures/inputs.mjs:generic-api-key:255
 
 # Public identifiers in docs and review harvest (Entra app client_id GUID, session id), not secrets.
 87230341060a69c322c1e7169709d3f5914809f7:docs/reviews/2026-06-10/harvest/pr-10.diff:generic-api-key:2670
