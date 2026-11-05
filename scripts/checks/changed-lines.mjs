@@ -34,6 +34,11 @@ function addedLines(entry) {
 
 /** diffText: unified diff. Returns [{ path, ranges }] in diff order. */
 export function changedLines(diffText) {
+  const text = String(diffText ?? '');
+  // parseHunks starts a file only at "diff --git", so a plain unified diff would give no files at all.
+  if (/^@@ /m.test(text) && !/^diff --git /m.test(text)) {
+    throw new Error('changed-lines: diff has hunks but no "diff --git" header. Pass a Git-format diff.');
+  }
   const out = [];
   for (const entry of parseHunks(diffText).values()) {
     if (!entry.file) continue; // deleted file

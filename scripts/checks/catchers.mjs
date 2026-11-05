@@ -140,7 +140,7 @@ function smokeLines(smoke) {
   const slow = smoke.results.filter((r) => r.verdict === 'TIMEOUT');
   const timeouts = smoke.timeouts ?? slow.length;
   const head = `cli-smoke GATE: ${smoke.failed} failed of ${smoke.checked} script(s) run${timeouts > 0 ? `, ${timeouts} timeout(s) (fact, not a failure)` : ''}`;
-  const rowOf = (verdict) => (r) => r.runs.filter((x) => x.verdict === verdict).slice(0, 1).map((x) => `  ${verdict} ${r.path} ${x.args.join(' ') || '(no args)'}: ${oneLine(x.reason)}`);
+  const rowOf = (verdict) => (r) => r.runs.filter((x) => x.verdict === verdict).slice(0, 1).map((x) => `  ${verdict} ${oneLine(r.path)} ${oneLine(x.args.join(' ')) || '(no args)'}: ${oneLine(x.reason)}`);
   const rows = bad.slice(0, MAX_LISTED).flatMap(rowOf('FAIL'));
   const slowRows = slow.slice(0, MAX_LISTED).flatMap(rowOf('TIMEOUT'));
   const envRows = smoke.results.filter((r) => r.verdict === 'ENV').slice(0, MAX_LISTED).flatMap(rowOf('ENV'));

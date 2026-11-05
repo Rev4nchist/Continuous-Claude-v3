@@ -89,3 +89,10 @@ test('C10: the CLI prints usage for --help and reads a piped diff; it never wait
   const piped = spawnSync(process.execPath, [cli], { input: d, encoding: 'utf8', windowsHide: true, timeout: 5000 });
   assert.deepEqual(JSON.parse(piped.stdout), [{ path: 'x.mjs', ranges: [[2, 3]] }]);
 });
+
+// Breaks if a plain unified diff (hunks, no "diff --git" header) gives an empty list, which lets the catchers run on no files.
+test('C11: a diff with hunks but no "diff --git" header throws; a diff with no hunks still gives []', () => {
+  const plain = '--- a/scripts/a.mjs\n+++ b/scripts/a.mjs\n@@ -1 +1 @@\n-x\n+y\n';
+  assert.throws(() => changedLines(plain), /no "diff --git" header/);
+  assert.deepEqual(changedLines(''), []);
+});
