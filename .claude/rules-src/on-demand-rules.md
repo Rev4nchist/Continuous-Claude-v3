@@ -23,6 +23,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the tool ca
 | `cross-terminal-db.md` | local Postgres (sessions, claims) | inject |
 | `headless-claude-mcp.md` | headless `claude -p` | inject |
 | `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP or its skill | inject |
+| `lane-board.md` | lane commands, `kanban-sync` | inject |
 | `fabric-playbook.md` | Microsoft Fabric, OneLake, Power BI | inject |
 | `proactive-delegation.md` | delegating to agents | inject |
 

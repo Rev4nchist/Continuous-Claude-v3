@@ -16,8 +16,17 @@ worth remembering, because each one is a requirement the replacement had to meet
 ## Use this instead
 
 ```
-node scripts/coordination/lane.mjs board
+node C:/Users/dkhay/.claude/scripts/lane.mjs board
 ```
+
+Use the shim path in every command, from any folder. The shim runs the primary checkout's
+`C:/Users/dkhay/continuous-claude/scripts/coordination/lane.mjs`. A relative path fails outside this repo and runs a stale copy
+inside a worktree.
+
+A board belongs to a project. The registry decides the board from your current folder. A folder
+with no registry entry has no board. Make one with
+`node C:/Users/dkhay/.claude/scripts/lane.mjs project register <path>` from the primary checkout.
+Details: `.claude/rules-ondemand/lane-board.md`.
 
 | Command | What it does |
 |---|---|
@@ -49,16 +58,24 @@ session start and any unread updates on every prompt, and renews your leases whi
 | Thing | Path |
 |---|---|
 | Schema + the full design rationale | `apps/agentic-os/src/db/schema/lane.ts` |
-| CLI | `scripts/coordination/lane.mjs` |
+| CLI | `C:/Users/dkhay/continuous-claude/scripts/coordination/lane.mjs`, called through the shim `~/.claude/scripts/lane.mjs` |
 | Context-injection hook | `.claude/hooks/src/lane-context.ts` |
 | Correctness gate (10 properties) | `scripts/coordination/lane-race-probe.mjs` |
 | Board renderer | `scripts/coordination/render-board.mjs` |
-| Published board | artifact `9eb25020-1959-47b9-b51f-6589e0c0515a` |
+| Published board | generated artifact `RtrTNVfAq9uowmb2tfbzid` (`https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`) |
 
-To refresh the published board: `node scripts/coordination/render-board.mjs <out>.html`,
-then publish that file with the Artifact tool passing
-`url=https://claude.ai/code/artifact/9eb25020-1959-47b9-b51f-6589e0c0515a` — passing the
-URL is what keeps it at the same link instead of minting a second board.
+The old triage artifact `9eb25020-1959-47b9-b51f-6589e0c0515a` is retired. It holds saved
+triage decisions. Never publish the lane board over it.
+
+Only the `continuous-claude` board has a phone page. To refresh it, run from the primary checkout:
+
+```
+node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project continuous-claude
+```
+
+Then publish `lane-board.html` with the Artifact tool, passing
+`url=https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`. The URL keeps the same link instead of
+minting a second board. Other boards render to `lane-board-<key>.html` and have no artifact.
 
 Before trusting the claim path after any change to it:
 

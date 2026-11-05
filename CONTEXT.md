@@ -31,12 +31,16 @@
 
 ## Coordination
 
-- **Lane**: a unit of concurrent work claimed by one session (`scripts/coordination/lane.mjs`). The
+- **Lane**: a unit of concurrent work claimed by one session. The
   **lane board** lists lanes and holders. **Claim / release** a lane; **note** progress on it.
+- **Board**: lanes and events under one `project_key`. **Board key**: the registry key; cooperative, not security.
+- **Project register**: `lane.mjs project register <path>`; the only way to make a board.
+- **Lane shim**: `~/.claude/scripts/lane.mjs`; the CLI path.
+- **Watermark key**: `<uuid>` on `continuous-claude`, `<uuid>@<board>` elsewhere.
 - **Session name**: the `/rename` (or `claude -n`) name, e.g. `trex`. It is the address peers use (`say --to trex`).
   **Session handle**: `#` + the first 8 hex of the session id, e.g. `#0d40499c`. **Label**: `name #sid8`.
   Write a session as `trex #0d40499c` or `#0d40499c`, never as bare hex. Identity file: `~/.claude/state/identity/<uuid>.json`.
-- **Session name**: the Claude Code session title, shown as `name #sid8`. Dave sets it with `--name` or `/rename`. A session with no name gets an animal word from session-register at SessionStart (not headless `claude -p`). The identity file holds it.
+  A session with no name gets an animal word from session-register at SessionStart (not headless `claude -p`).
 - **Handoff**: a row in the Notion 📬 Handoffs database (YAML copy in `thoughts/shared/handoffs/`) that lets a new session resume work.
   Outcome is one of `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS`, `FAILED`.
 - **Bridge / Notion Bridge**: the HQ page and queues Eve and Code exchange work through.
