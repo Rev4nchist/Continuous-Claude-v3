@@ -354,6 +354,10 @@ export function installSegments(command: string, tool = 'Bash', depth = 0): stri
 const FD_REDIRECT_BASH = /(?:(?:\d+)?>>?&(?:\d+|-)|(?:\d+|&)?>>?[ \t]*\/dev\/null)(?=[\s;|&)]|$)/y;
 const FD_REDIRECT_PWSH = /(?:(?:\d+|\*)?>>?&(?:\d+|-)|(?:\d+|\*)?>>?[ \t]*(?:\/dev\/null|\$null))(?=[\s;|&)]|$)/y;
 
+// What may follow `&>`: an optional second `>` (append), blanks, then a target word. A line end, `;`, `|`,
+// `&`, `)`, `<` or `(` is no target.
+const AMP_GT_TARGET = /^>?[ \t]*[^\s;|&)<>(]/;
+
 /**
  * Remove pure fd redirections from the executable view before it is split into segments, so the `&`
  * of `2>&1` does not cut the word and leave `2>` as an install source. Raw-text and fail closed:
@@ -376,6 +380,18 @@ export function stripFdRedirects(text: string, tool = 'Bash'): string {
       re.lastIndex = i;
       const m = re.exec(text);
       if (m) { i += m[0].length - 1; continue; }
+    }
+    // Bash `&>` / `&>>` (stdout and stderr to a file) is one operator, in a word too (`npm install&>log pkg`).
+    // parseExecutable cuts at its `&` and the words after the target land in a segment nobody checks.
+    // Drop only the `&`: the rest reads as `>log`, a source the guard already asks about. A target that is
+    // missing or starts with a shell operator (`&>&2` is a Bash syntax error) stays as typed.
+    // Inside a word the `&` becomes a blank, so `install&>log` does not fuse into the word `install>log`.
+    if (!ps && c === '&' && text[i + 1] === '>' && !/[&|]/.test(text[i - 1] ?? '')) {
+      const blank = i > 0 && !/\s/.test(text[i - 1]) ? ' ' : '';
+      re.lastIndex = i;
+      const m = re.exec(text);
+      if (m) { out += blank; i += m[0].length - 1; continue; }
+      if (AMP_GT_TARGET.test(text.slice(i + 2))) { out += blank; continue; }
     }
     out += c;
   }

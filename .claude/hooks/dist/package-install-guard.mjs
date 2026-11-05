@@ -20190,6 +20190,7 @@ function installSegments(command, tool = "Bash", depth = 0) {
 }
 var FD_REDIRECT_BASH = /(?:(?:\d+)?>>?&(?:\d+|-)|(?:\d+|&)?>>?[ \t]*\/dev\/null)(?=[\s;|&)]|$)/y;
 var FD_REDIRECT_PWSH = /(?:(?:\d+|\*)?>>?&(?:\d+|-)|(?:\d+|\*)?>>?[ \t]*(?:\/dev\/null|\$null))(?=[\s;|&)]|$)/y;
+var AMP_GT_TARGET = /^>?[ \t]*[^\s;|&)<>(]/;
 function stripFdRedirects(text, tool = "Bash") {
   const ps = tool === "PowerShell";
   const re = ps ? FD_REDIRECT_PWSH : FD_REDIRECT_BASH;
@@ -20218,6 +20219,20 @@ function stripFdRedirects(text, tool = "Bash") {
       const m = re.exec(text);
       if (m) {
         i += m[0].length - 1;
+        continue;
+      }
+    }
+    if (!ps && c === "&" && text[i + 1] === ">" && !/[&|]/.test(text[i - 1] ?? "")) {
+      const blank = i > 0 && !/\s/.test(text[i - 1]) ? " " : "";
+      re.lastIndex = i;
+      const m = re.exec(text);
+      if (m) {
+        out += blank;
+        i += m[0].length - 1;
+        continue;
+      }
+      if (AMP_GT_TARGET.test(text.slice(i + 2))) {
+        out += blank;
         continue;
       }
     }
