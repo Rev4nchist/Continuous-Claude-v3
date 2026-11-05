@@ -5704,6 +5704,15 @@ function identityPath(uuid) {
 function asString(v) {
   return typeof v === "string" && v ? v : null;
 }
+function asPid(v) {
+  return typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : null;
+}
+function claudePidFromEnv(env = process.env) {
+  const raw = env.CLAUDE_PID;
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return void 0;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : void 0;
+}
 function readIdentity(uuid) {
   if (!uuid) return null;
   const file = identityPath(uuid);
@@ -5719,6 +5728,7 @@ function readIdentity(uuid) {
       cwd: asString(o.cwd),
       endedAt: asString(o.endedAt),
       endReason: asString(o.endReason),
+      pid: asPid(o.pid),
       updatedAt: asString(o.updatedAt) ?? ""
     };
   } catch {
@@ -5729,7 +5739,7 @@ function writeIdentity(uuid, patch) {
   const file = identityPath(uuid);
   if (!file) return null;
   const cur = readIdentity(uuid);
-  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] : null;
+  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] ?? null : null;
   const next = {
     uuid,
     short: shortId(uuid),
@@ -5738,6 +5748,7 @@ function writeIdentity(uuid, patch) {
     cwd: pick("cwd"),
     endedAt: pick("endedAt"),
     endReason: pick("endReason"),
+    pid: pick("pid"),
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   try {
@@ -6161,7 +6172,9 @@ function recordStart(input, plan, live) {
     ...plan.previous ? { previous: plan.previous } : {},
     cwd: input.cwd,
     endedAt: null,
-    endReason: null
+    endReason: null,
+    // Every start rewrites the pid: a resumed session has the same uuid and a new process.
+    pid: claudePidFromEnv()
   });
   if (plan.previous && input.source !== "fork") runAdopt(uuid, plan.previous);
   const hint = input.source === "startup" && input.session_title ? sameNameHint(uuid, plan.name, input.cwd) : null;

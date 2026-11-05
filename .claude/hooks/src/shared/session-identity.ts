@@ -5,8 +5,9 @@
  * name (--name or /rename). sid8 is the first 8 chars of the session UUID.
  *
  * Contract file: ~/.claude/state/identity/<uuid>.json (override: CCV3_IDENTITY_DIR)
- *   { uuid, short, name, previous, cwd, endedAt, endReason, updatedAt }
+ *   { uuid, short, name, previous, cwd, endedAt, endReason, pid, updatedAt }
  * Every surface (hooks, lane.mjs, launcher, band) reads or writes this one shape.
+ * `pid` is the claude.exe process id. Every SessionStart rewrites it: a resume is a new process.
  * Writers merge: a field the writer does not name keeps its stored value.
  * Readers treat a missing or corrupt file as absent.
  */
@@ -25,11 +26,12 @@ export interface Identity {
   cwd: string | null;
   endedAt: string | null;
   endReason: string | null;
+  pid: number | null;
   updatedAt: string;
 }
 
 /** The fields a writer may set. `undefined` keeps the stored value; `null` clears it. */
-export type IdentityPatch = Partial<Pick<Identity, 'name' | 'previous' | 'cwd' | 'endedAt' | 'endReason'>>;
+export type IdentityPatch = Partial<Pick<Identity, 'name' | 'previous' | 'cwd' | 'endedAt' | 'endReason' | 'pid'>>;
 
 export const NAME_CLIP = 16;
 /** A /clear is matched to the identity that ended this recently, in this cwd. */
@@ -57,6 +59,18 @@ function asString(v: unknown): string | null {
   return typeof v === 'string' && v ? v : null;
 }
 
+function asPid(v: unknown): number | null {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : null;
+}
+
+/** The claude.exe pid from CLAUDE_PID: digits only, > 0, a safe integer. Else undefined (keeps the stored pid). */
+export function claudePidFromEnv(env: Record<string, string | undefined> = process.env): number | undefined {
+  const raw = env.CLAUDE_PID;
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
 export function readIdentity(uuid: string | null | undefined): Identity | null {
   if (!uuid) return null;
   const file = identityPath(uuid);
@@ -73,6 +87,7 @@ export function readIdentity(uuid: string | null | undefined): Identity | null {
       cwd: asString(o.cwd),
       endedAt: asString(o.endedAt),
       endReason: asString(o.endReason),
+      pid: asPid(o.pid),
       updatedAt: asString(o.updatedAt) ?? '',
     };
   } catch {
@@ -86,7 +101,7 @@ export function writeIdentity(uuid: string, patch: IdentityPatch): Identity | nu
   if (!file) return null;
   const cur = readIdentity(uuid);
   const pick = <K extends keyof IdentityPatch>(k: K): Identity[K] =>
-    (patch[k] !== undefined ? patch[k] : cur ? cur[k] : null) as Identity[K];
+    (patch[k] !== undefined ? patch[k] : cur ? cur[k] ?? null : null) as Identity[K];
   const next: Identity = {
     uuid,
     short: shortId(uuid),
@@ -95,6 +110,7 @@ export function writeIdentity(uuid: string, patch: IdentityPatch): Identity | nu
     cwd: pick('cwd'),
     endedAt: pick('endedAt'),
     endReason: pick('endReason'),
+    pid: pick('pid'),
     updatedAt: new Date().toISOString(),
   };
   try {
