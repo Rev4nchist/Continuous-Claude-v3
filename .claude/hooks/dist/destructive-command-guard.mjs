@@ -947,7 +947,7 @@ function emit(input, decision, pattern, command) {
   };
   console.log(JSON.stringify(output));
 }
-if (!process.env.VITEST) {
+if (!process.env.VITEST && /(^|[\\/])destructive-command-guard\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
   main().catch((err) => {
     logGuardError(HOOK, err);
     console.log("{}");
