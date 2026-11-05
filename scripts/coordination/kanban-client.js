@@ -10,7 +10,14 @@
  * for Dave's saved order, (2) re-places the cards, and (3) saves his moves.
  *
  * Saved doc, `kanban/board`:
- *   { columns: { now: [id], next: [id], later: [id], waiting: [id] }, updatedAt: ISO }
+ *   { columns: { now: [id], next: [id], later: [id], waiting: [id] }, board: <board key>, updatedAt: ISO,
+ *     appliedColumns?, syncedAt? }
+ *   The page writes columns, board and updatedAt. The sync writes appliedColumns and syncedAt: the page never does,
+ *   and its save (update, not set) leaves them alone. Old docs have no `board`; their next save adds it.
+ *   Every artifact has its own db, but a page published to the wrong artifact would find another board's order here.
+ *   So the page goes read-only on a doc stamped with another board (boardMismatch) and never writes to it.
+ *   A save keeps the ids of the saved doc that this page does not know (mergeUnknownColumns): a stale device must not drop
+ *   lanes it has never heard of. Pruning ids of done or deleted lanes is the job of the kanban-sync write-back, not of this page.
  *
  * Also, per card (the data contract is in the lane-board PR):
  *   `cards/<laneId>`  { status?, note?, question?, updatedAt, syncedAt?, syncResult? }
@@ -31,7 +38,8 @@
  *  - No localStorage.
  *
  * Globals inlined ahead of this file by render-board.mjs: placeLanes, isPending, cardBase,
- * syncState, cardDiff, plainPrompt (all from kanban-place.mjs).
+ * syncState, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns (all from kanban-place.mjs),
+ * and KB_BOARD, the key of the board that owns this page.
  */
 (function () {
   var COLS = ['now', 'next', 'later', 'waiting'];
@@ -42,6 +50,7 @@
   var SAVE_DELAY = 800;
   var LOAD_TIMEOUT = 10000;
 
+  var PAGE_BOARD = KB_BOARD;
   var board = document.getElementById('kb-board');
   var dataEl = document.getElementById('kb-data');
   if (!board || !dataEl) return;
@@ -76,6 +85,8 @@
   var lastSaved = null;
   var saveTimer = null;
   var inflight = false;
+  var locked = false;
+  var cardsSubscribed = false;
   var again = false;
   var dragId = null;
   var placeholder = null;
@@ -325,6 +336,48 @@
     saveTimer = setTimeout(flush, SAVE_DELAY);
   }
 
+  // The doc as it stands after our write, for boardDoc: update merges into what was there, set is the whole doc.
+  function afterWrite(base, payload, kind) {
+    var doc = {};
+    if (kind === 'update' && base) Object.keys(base).forEach(function (k) { doc[k] = base[k]; });
+    Object.keys(payload).forEach(function (k) { doc[k] = payload[k]; });
+    return doc;
+  }
+
+  function stampPayload(doc, sent) {
+    return { columns: mergeUnknownColumns(doc, sent, LANES), board: PAGE_BOARD, updatedAt: new Date().toISOString() };
+  }
+
+  // update when the doc exists (it keeps appliedColumns and syncedAt, which only the sync writes); set only to create it.
+  // A page that saw no doc reads again before it writes: another device may have created it, and set would replace it.
+  // The fresh read also checks the board stamp, so a doc that turned foreign since the load is never written.
+  function writeBoard(sent) {
+    var ref = db.doc(DOC_PATH);
+    function viaRead() {
+      return attempt(function () { return ref.get(); }).then(function (snap) {
+        var fresh = docOf(snap);
+        if (boardMismatch(fresh, PAGE_BOARD)) {
+          lockForeign(fresh.board);
+          throw new Error('This page belongs to board ' + PAGE_BOARD);
+        }
+        var kind = boardWriteKind(fresh);
+        var payload = stampPayload(fresh, sent);
+        return attempt(function () { return kind === 'update' ? ref.update(payload) : ref.set(payload); }).then(function () {
+          return afterWrite(fresh, payload, kind);
+        });
+      });
+    }
+    if (boardWriteKind(boardDoc) === 'set') return viaRead();
+    var base = boardDoc;
+    var payload = stampPayload(base, sent);
+    return attempt(function () { return ref.update(payload); }).then(function () {
+      return afterWrite(base, payload, 'update');
+    }, function (e) {
+      if (e && e.code === 'invalid_argument') return viaRead();
+      throw e;
+    });
+  }
+
   function flush() {
     saveTimer = null;
     if (!db) return;
@@ -332,13 +385,13 @@
     var sent = key(cols);
     if (sent === lastSaved) { setStatus('Saved', 'ok'); return; }
     inflight = true;
-    var payload = { columns: copyCols(), updatedAt: new Date().toISOString() };
     var p;
-    try { p = Promise.resolve(db.doc(DOC_PATH).set(payload)); } catch (e) { p = Promise.reject(e); }
-    p.then(function () {
+    try { p = writeBoard(copyCols()); } catch (e) { p = Promise.reject(e); }
+    p.then(function (written) {
       inflight = false;
+      if (locked) return;
       lastSaved = sent;
-      boardDoc = { columns: payload.columns, updatedAt: payload.updatedAt };
+      boardDoc = written;
       showOrder();
       if (again || key(cols) !== lastSaved) {
         again = false;
@@ -349,6 +402,7 @@
     }, function (err) {
       inflight = false;
       again = false;
+      if (locked) return;
       setStatus('Save failed: ' + errText(err) + '. Move a card to try again.', 'crit');
     });
   }
@@ -466,6 +520,7 @@
   }
 
   function subscribeCards() {
+    cardsSubscribed = true;
     var timer = setTimeout(function () {
       if (cardsState === 'wait') cardsOff('Card notes not loaded. Editing is off.');
     }, LOAD_TIMEOUT);
@@ -634,8 +689,25 @@
     return typeof snap.data === 'function' ? snap.data() : snap.data;
   }
 
+  // The saved order belongs to another board. Nothing from this page may write, and the card notes of that board are not shown.
+  function lockForeign(other) {
+    locked = true;
+    db = null;
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    again = false;
+    dbWhy = 'Read-only: this page belongs to board ' + PAGE_BOARD + '.';
+    answered = true;
+    clearTimeout(loadTimer);
+    setEditable(false);
+    setStatus('This page belongs to board ' + PAGE_BOARD + ', but the saved order is for board ' + String(other) + '. Nothing is saved from this page.', 'crit');
+    paintAll();
+  }
+
   function applyRemote(snap) {
-    boardDoc = docOf(snap);
+    if (locked) return;
+    var remote = docOf(snap);
+    if (boardMismatch(remote, PAGE_BOARD)) { lockForeign(remote.board); return; }
+    boardDoc = remote;
     showOrder();
     if (dragId || saveTimer || inflight) return;
     var placed = pick(placeLanes(docOf(snap), LANES));
@@ -671,9 +743,11 @@
         return null;
       }
       db = handle;
-      subscribeCards();
+      // Read the board doc first: another board's order means this page must not show or write that artifact's cards either.
       return Promise.resolve(db.doc(DOC_PATH).get()).then(function (snap) {
         var doc = docOf(snap);
+        if (boardMismatch(doc, PAGE_BOARD)) { lockForeign(doc.board); return; }
+        subscribeCards();
         boardDoc = doc;
         showOrder();
         cols = pick(placeLanes(doc, LANES));
@@ -686,6 +760,8 @@
         subscribe();
       });
     }).catch(function (err) {
+      if (locked) return;
+      if (db && !cardsSubscribed) subscribeCards();
       if (!db) { dbWhy = 'Read-only: card notes not loaded.'; paintAll(); }
       readOnly('Board order not loaded: ' + errText(err), 'warn');
     });

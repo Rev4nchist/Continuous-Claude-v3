@@ -22,7 +22,7 @@
  * coordination_event sections are machine-wide and say so on the page. The page carries a stamp
  * (<meta name="lane-board">: board, template hash, generated time) and a "generated N min ago" badge.
  *
- * Usage: node scripts/coordination/render-board.mjs [--project <key>] [--out <file>] [out.html]
+ * Usage: node scripts/coordination/render-board.mjs [--project <key>] [--interactive] [--out <file>] [out.html]
  */
 
 import { readFileSync } from 'node:fs';
@@ -31,6 +31,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
+  boardMismatch, boardWriteKind, mergeUnknownColumns,
 } from './kanban-place.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
@@ -42,7 +43,7 @@ const STALE_MINUTES = 5;
 const QUIET_HOURS = 2;
 
 function usage(message, code) {
-  console.error(`${message}\nusage: node scripts/coordination/render-board.mjs [--project <key>] [--out <file>] [out.html]`);
+  console.error(`${message}\nusage: node scripts/coordination/render-board.mjs [--project <key>] [--interactive] [--out <file>] [out.html]`);
   process.exit(code);
 }
 
@@ -63,9 +64,10 @@ if (!BOARD) {
   process.exit(1);
 }
 const KEY = BOARD.key;
-/** Only the default board has the interactive kanban (its save is keyed by lane id and the page db is one document that only
- *  the published continuous-claude artifact can open). Every other board gets a static, read-only Priorities section. */
-const KANBAN = KEY === DEFAULT_BOARD;
+/** The interactive kanban: the default board always, any other board with --interactive. The page saves into its own artifact
+ *  db, so --interactive is for a page that will be published as that board's own artifact. A board without the flag keeps the
+ *  static, read-only Priorities section. Interactivity and identity are separate: the title and masthead test KEY, not KANBAN. */
+const KANBAN = KEY === DEFAULT_BOARD || args.interactive;
 const OUT = args.out || defaultOut(REPO, KEY);
 const BOARD_ROOTS = boardRoots(KEY);
 const GENERATED_AT = new Date();
@@ -368,7 +370,9 @@ const kbColumn = (key, name, ids, movable, ro = false) => `<div class="kcol"${mo
 // (kbColumn with ro) and no script: Details uses <details>, the columns do not collapse, nothing saves.
 const kbClient = KANBAN ? readFileSync(join(HERE, 'kanban-client.js'), 'utf8') : '';
 if (/<\/script/i.test(kbClient)) throw new Error('kanban-client.js must not contain a closing script tag');
-const kbScript = KANBAN ? `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt].map((f) => f.toString()).join('\n')}
+// KB_BOARD names the board that owns this page: the client stamps it on every save and refuses a saved order stamped with another.
+const kbScript = KANBAN ? `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns].map((f) => f.toString()).join('\n')}
+var KB_BOARD = ${JSON.stringify(KEY).replace(/</g, '\\u003c')};
 ${kbClient}` : '';
 
 // The template hash: what a page was rendered from. It covers this file and the kanban sources, so a page rendered from an
@@ -376,7 +380,7 @@ ${kbClient}` : '';
 const TEMPLATE_HASH = fnv1a(['render-board.mjs', 'render-board-args.mjs', 'kanban-client.js', 'kanban-place.mjs']
   .map((f) => readFileSync(join(HERE, f), 'utf8').replace(/\r\n/g, '\n')).join('\n--\n'));
 const STAMP = boardStamp({ board: KEY, template: TEMPLATE_HASH, generated: GENERATED_AT.toISOString() });
-const PAGE_TITLE = KANBAN ? 'Agentic OS — Lane Board' : `Agentic OS — Lane Board (${KEY})`;
+const PAGE_TITLE = KEY === DEFAULT_BOARD ? 'Agentic OS — Lane Board' : `Agentic OS — Lane Board (${KEY})`;
 
 const KB_RO_INTRO = 'Read-only snapshot from the last render. Columns come from lane state and priority. Lease times are clock times, not countdowns.';
 const KB_RO_NO_ORDER = 'Nothing is saved here: this board has no saved order.';
@@ -663,7 +667,7 @@ const html = `${STAMP}
   <div class="top-in">
     <div class="brand">
       <span class="mark">AOS</span>
-      <span><b>Lane Board${KANBAN ? '' : ` &middot; ${esc(KEY)}`}</b><span>generated from agentic_os.lane (board ${esc(KEY)}) &middot; ${localStamp()} local &middot; <span class="gen" id="gen-ago" data-ts="${GENERATED_AT.toISOString()}">generated just now</span></span></span>
+      <span><b>Lane Board${KEY === DEFAULT_BOARD ? '' : ` &middot; ${esc(KEY)}`}</b><span>generated from agentic_os.lane (board ${esc(KEY)}) &middot; ${localStamp()} local &middot; <span class="gen" id="gen-ago" data-ts="${GENERATED_AT.toISOString()}">generated just now</span></span></span>
     </div>
     <div class="counters">
       <span class="ctr"><b>${open.length}</b><span>open lanes</span></span>
