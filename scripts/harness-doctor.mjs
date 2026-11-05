@@ -20,6 +20,11 @@
  * One line per check: PASS|WARN|FAIL  <section>:<check>  <detail>. Last line: harness: N pass / N warn / N fail.
  * Exit 1 on any FAIL, else 0.
  *
+ * lanes:shim, lanes:hook-client-version, hooks:render-check, hooks:dist-parity and lanes:relative-path-guard read the lane propagation files:
+ * <home>/.claude/scripts/lane.mjs, the lane hook dists under <home>/.claude/hooks/dist, <home>/.claude/settings.json against the rendered
+ * <repo>/.claude/settings.json.template, and the ratchet baseline scripts/coordination/lane-path-guard.baseline.json. Each is a WARN when an
+ * input is absent or differs. Only lanes:hook-client-version can FAIL (a second board exists and the live hook build cannot renew its lease).
+ *
  * Where each input is written (read these writers before you change a path here):
  *   sync cursor, .sync.pending, .sync-quarantine/<YYYY-MM-DD-HHMMSS>   scripts/sync-to-active.sh
  *   <repo>/.claude/hooks/dist/.build-inputs.json                        .claude/hooks/scripts/write-build-inputs.mjs
@@ -37,7 +42,10 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
+import { checkLanePaths } from './coordination/lane-path-guard.mjs';
 import { registryDrift } from './coordination/registry-drift.mjs';
+import { resolveMachineProfile } from './settings/machine-profile.mjs';
+import { registrationKey, registrations, renderSettings, varsFromPaths } from './settings/render-settings.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR = 3600 * 1000;
@@ -122,7 +130,8 @@ function buildInputs(o) {
     : result('WARN', 'hooks', 'build-inputs', `missing ${file}: run npm run build in ${hooks}, then scripts/sync-to-active.sh --changed`);
 }
 
-const hooksSection = (o) => [...HOOK_CHECKS.map(([n, rel]) => runRepoCheck(o, n, rel)), baselineClean(o), buildInputs(o)];
+// hooksRenderCheck and hooksDistParity are defined in the lane propagation block below; they run when the section runs.
+const hooksSection = (o) => [...HOOK_CHECKS.map(([n, rel]) => runRepoCheck(o, n, rel)), baselineClean(o), buildInputs(o), hooksRenderCheck(o), hooksDistParity(o)];
 
 // ---- sync ----
 function syncCursor(o) {
@@ -598,7 +607,110 @@ export function worktreeLaneMjs(o) {
 }
 
 const registrySection = (o) => [registryRootsExist(o), registryMirrorDrift(o), registryProjectRows(o)];
-const lanesSection = (o) => [laneBoardColumns(o), laneSchema(o), worktreeLaneMjs(o)];
+// ---- lane propagation (the shim, the hook dists, the hook registrations, the relative-path ratchet) ----
+const DEFAULT_BOARD = 'continuous-claude';
+/** Hooks whose registration the lane work changes. prompt-submit bundles lane-context but is not itself a lane registration. */
+const LANE_HOOKS = ['lane-context', 'lane-board-stop-gate', 'lane-board-republish-reminder', 'lane-agent-tag'];
+/** Hook bundles that carry lane code: the lane hooks, prompt-submit (bundles lane-context) and session-register (prints the board line). */
+const LANE_DISTS = [...LANE_HOOKS, 'prompt-submit', 'session-register'];
+const SYNC_FIX = 'run scripts/sync-to-active.sh --changed on main';
+const fwdPath = (p) => String(p).replace(/\\/g, '/');
+/** The hash of a file with CRLF folded to LF (see laneHash). */
+const textHash = (file) => createHash('sha256').update(readFileSync(file, 'utf8').replace(/\r\n/g, '\n')).digest('hex');
+const distFile = (root, name) => join(root, '.claude', 'hooks', 'dist', `${name}.mjs`);
+
+/** The home shim (<home>/.claude/scripts/lane.mjs) is what model-run lane commands name. It must equal the repo copy. */
+export function lanesShim(o) {
+  const repoShim = join(o.repo, '.claude', 'scripts', 'lane.mjs');
+  const homeShim = join(o.home, '.claude', 'scripts', 'lane.mjs');
+  if (!existsSync(repoShim)) return result('WARN', 'lanes', 'shim', `missing ${fwdPath(repoShim)}: the shim source is not in this checkout`);
+  if (!existsSync(homeShim)) return result('WARN', 'lanes', 'shim', `missing ${fwdPath(homeShim)}: model-run lane commands name this path; ${SYNC_FIX}`);
+  return textHash(repoShim) === textHash(homeShim) ? result('PASS', 'lanes', 'shim', `${fwdPath(homeShim)} equals ${fwdPath(repoShim)}`)
+    : result('WARN', 'lanes', 'shim', `${fwdPath(homeShim)} differs from ${fwdPath(repoShim)} beyond line endings; ${SYNC_FIX}`);
+}
+
+/** Live board keys other than the default one, from the registry copy lane.mjs reads. A missing or broken registry gives none. */
+function otherLiveBoards(o) {
+  const reg = liveRegistry(o, 'hook-client-version');
+  return reg.result ? [] : [...new Set(reg.entries.map((e) => e.board).filter((b) => b !== DEFAULT_BOARD))];
+}
+
+/**
+ * The live hook build must set lane.client_version (migration 0004 trigger). Without it a session that owns a lane on a second board
+ * fails its lease renew with 42501 and the hook goes quiet. FAIL only when a live board other than continuous-claude exists and a bundle
+ * lacks the string. Any other gap is a WARN: today only continuous-claude has lanes, and the old build still works there.
+ */
+export function laneHookClientVersion(o) {
+  const names = ['lane-context', 'prompt-submit'];
+  const files = names.map((n) => distFile(o.home, n));
+  const missing = files.filter((f) => !existsSync(f));
+  const lacking = files.filter((f) => existsSync(f) && !readFileSync(f, 'utf8').includes('lane.client_version'));
+  if (!missing.length && !lacking.length) return result('PASS', 'lanes', 'hook-client-version', `${names.map((n) => `${n}.mjs`).join(' and ')} in ${fwdPath(join(o.home, '.claude', 'hooks', 'dist'))} set lane.client_version`);
+  const list = (fs) => fs.map((f) => fwdPath(f)).join(', ');
+  const boards = otherLiveBoards(o);
+  if (lacking.length && boards.length) {
+    return result('FAIL', 'lanes', 'hook-client-version', `${list(lacking)} lack lane.client_version but the registry has live board(s) ${boards.join(', ')}: a session that holds a lane there fails its lease renew with 42501; ${SYNC_FIX}, then restart the sessions`);
+  }
+  const parts = [missing.length && `missing: ${list(missing)}`, lacking.length && `no lane.client_version in: ${list(lacking)}`].filter(Boolean).join('; ');
+  const need = boards.length ? `the registry already has live board(s) ${boards.join(', ')}, so the build is required now` : `fine while only ${DEFAULT_BOARD} has lanes, required before a second board`;
+  return result('WARN', 'lanes', 'hook-client-version', `${parts}; ${need}; ${SYNC_FIX}`);
+}
+
+/** The rendered template and the live settings.json, or { result } (a WARN) when either cannot be read. */
+function renderedAndLive(o, check) {
+  const templatePath = join(o.repo, '.claude', 'settings.json.template');
+  const livePath = join(o.home, '.claude', 'settings.json');
+  if (!existsSync(templatePath)) return { result: result('WARN', 'hooks', check, `missing ${fwdPath(templatePath)}: the registrations cannot be compared`) };
+  if (!existsSync(livePath)) return { result: result('WARN', 'hooks', check, `missing ${fwdPath(livePath)}: the registrations cannot be compared`) };
+  try {
+    const resolved = resolveMachineProfile({ repoRoot: o.repo, home: o.home, argv: [], env: process.env });
+    const rendered = renderSettings({ templateText: readFileSync(templatePath, 'utf8'), vars: varsFromPaths(resolved.paths), overlay: resolved.paths.settingsOverlay });
+    return { rendered, live: JSON.parse(readFileSync(livePath, 'utf8').replace(/^﻿/, '')), livePath };
+  } catch (err) { return { result: result('WARN', 'hooks', check, `cannot compare ${fwdPath(templatePath)} with ${fwdPath(livePath)}: ${msg(err)}`) }; }
+}
+
+/**
+ * Every lane hook registration in the rendered template is live with the same event and matcher. Read only: a gap is a WARN that names
+ * the hook and the fix. The Stop gate is in the template but in no live file until apply-registrations runs with Dave's yes.
+ */
+export function hooksRenderCheck(o) {
+  const both = renderedAndLive(o, 'render-check');
+  if (both.result) return both.result;
+  const liveKeys = new Set(registrations(both.live).map(registrationKey));
+  const want = registrations(both.rendered).filter((r) => LANE_HOOKS.includes(r.hook));
+  const missing = want.filter((r) => !liveKeys.has(registrationKey(r)));
+  if (!missing.length) return result('PASS', 'hooks', 'render-check', `all ${want.length} lane hook registration(s) of the rendered template are live with the same matcher in ${fwdPath(both.livePath)}`);
+  const only = [...new Set(missing.map((r) => r.hook))].sort().join(',');
+  const rows = missing.map((r) => `${r.hook} on ${r.event}${r.matcher ? ` (matcher ${r.matcher})` : ''}`).join('; ');
+  return result('WARN', 'hooks', 'render-check', `${missing.length} lane hook registration(s) are in the rendered template but not live: ${rows}; fix: node ${fwdPath(join(o.repo, 'scripts', 'settings', 'apply-registrations.mjs'))} --only ${only} (dry run first, then --apply after Dave's yes)`);
+}
+
+/** The lane hook bundles in the home equal the repo's built bundles (CRLF folded). A gap is a WARN: the sync is owed. */
+export function hooksDistParity(o) {
+  const bad = [];
+  for (const n of LANE_DISTS) {
+    const repoFile = distFile(o.repo, n);
+    const homeFile = distFile(o.home, n);
+    if (!existsSync(repoFile)) bad.push(`${n}.mjs missing in the repo`);
+    else if (!existsSync(homeFile)) bad.push(`${n}.mjs missing in the home`);
+    else if (textHash(repoFile) !== textHash(homeFile)) bad.push(`${n}.mjs differs`);
+  }
+  return bad.length ? result('WARN', 'hooks', 'dist-parity', `${bad.length} lane hook bundle(s) out of step between ${fwdPath(join(o.repo, '.claude', 'hooks', 'dist'))} and ${fwdPath(join(o.home, '.claude', 'hooks', 'dist'))}: ${bad.join('; ')}; ${SYNC_FIX}`)
+    : result('PASS', 'hooks', 'dist-parity', `all ${LANE_DISTS.length} lane hook bundles in the home equal the repo build`);
+}
+
+/** The relative-path ratchet (scripts/coordination/lane-path-guard.mjs): bare `scripts/coordination/lane.mjs` text may only fall. */
+export function lanePathGuardCheck(o) {
+  const r = checkLanePaths({ repo: o.repo });
+  if (r.baselineMissing) return result('WARN', 'lanes', 'relative-path-guard', `no ratchet baseline at ${fwdPath(r.baselinePath)} (${r.total} bare relative lane.mjs path(s) in ${r.scanned} file(s)); create it with node scripts/coordination/lane-path-guard.mjs --update`);
+  if (!r.ok) {
+    const rows = r.over.map((f) => `${f.file} has ${f.count} (baseline ${f.baseline})`).join('; ');
+    return result('WARN', 'lanes', 'relative-path-guard', `${r.over.length} file(s) over the ratchet baseline: ${rows}; name the shim path (laneCliCmd) instead of a bare scripts/coordination/lane.mjs`);
+  }
+  return result('PASS', 'lanes', 'relative-path-guard', `${r.total} bare relative lane.mjs path(s) in ${r.scanned} file(s), none over baseline (baseline allows ${r.baselineTotal})`);
+}
+
+const lanesSection = (o) => [laneBoardColumns(o), laneSchema(o), worktreeLaneMjs(o), lanesShim(o), laneHookClientVersion(o), lanePathGuardCheck(o)];
 
 // ---- run ----
 const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],

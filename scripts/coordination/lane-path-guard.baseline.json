@@ -1,0 +1,5 @@
+{
+  "note": "Bare relative scripts/coordination/lane.mjs paths per file. A count may fall, never rise. Rewrite with: node scripts/coordination/lane-path-guard.mjs --update",
+  "total": 0,
+  "files": {}
+}
