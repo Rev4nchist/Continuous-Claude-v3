@@ -276,10 +276,10 @@ describe('render-board.mjs against a scratch database', () => {
     assert.ok(section, 'a board other than continuous-claude shows a Priorities section');
     assert.ok(html.indexOf('<section id="priorities"') < html.indexOf('<h2>Right now</h2>'), 'Priorities comes before Right now');
     assert.match(section, /<h2 id="kb-title">Priorities<\/h2>/);
-    // All five columns exist, in order. Now and Waiting on Dave are empty and say why in words.
+    // All five columns exist, in order. Now is empty and says why in words. Waiting on Dave holds the blocked lane (placeLanes, no saved order).
     assert.deepEqual([...section.matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['now', 'next', 'later', 'waiting', 'progress']);
     assert.match(section, /data-col="now" data-n="0"/);
-    assert.match(section, /data-col="waiting" data-n="0"/);
+    assert.match(section, /data-col="waiting" data-n="1"/);
     // LEAK GATE: no CCv3 lane in any column.
     assert.ok(!section.includes('zz-rb-ccv3') && !section.includes('ccv3 lane title') && !section.includes('ccv3 held title'), 'a CCv3 lane showed in a column of board a');
   });
@@ -295,19 +295,20 @@ describe('render-board.mjs against a scratch database', () => {
     };
     // Next: ready lanes by priority (1, 2, then the default 50).
     assert.deepEqual(ids('next'), ['zz-rb-a-p1', 'zz-rb-a-p2', 'zz-rb-a-lane']);
-    // Later: every other open state, in DB order at equal priority. Blocked is here, not in Waiting on Dave.
-    assert.deepEqual(ids('later').sort(), ['zz-rb-a-backlog', 'zz-rb-a-blocked', 'zz-rb-a-long', 'zz-rb-a-review']);
+    // Later: every other open state, in DB order at equal priority. Blocked is not here: with no saved order it goes to Waiting on Dave.
+    assert.deepEqual(ids('later').sort(), ['zz-rb-a-backlog', 'zz-rb-a-long', 'zz-rb-a-review']);
     assert.deepEqual(ids('progress'), ['zz-rb-a-held']);
     assert.deepEqual(ids('now'), []);
-    assert.deepEqual(ids('waiting'), []);
+    assert.deepEqual(ids('waiting'), ['zz-rb-a-blocked']);
     assert.ok(!section.includes('zz-rb-a-done'), 'a done lane is in no column');
     // Counts agree with the cards.
     assert.match(section, /data-col="next" data-n="3"/);
-    assert.match(section, /data-col="later" data-n="4"/);
-    // An empty column says why in plain words; the Now and Waiting columns name the missing saved order.
+    assert.match(section, /data-col="later" data-n="3"/);
+    assert.match(section, /data-col="waiting" data-n="1"/);
+    // An empty column says why in plain words: Now names the missing saved order. Waiting is not empty here, so it shows no empty text.
     const empty = (col) => new RegExp(`id="kb-list-${col}"><li class="kb-empty">([^<]*)</li>`).exec(section)?.[1];
     assert.match(empty('now'), /no saved order/);
-    assert.match(empty('waiting'), /no saved order/);
+    assert.equal(empty('waiting'), undefined);
   });
 
   it('read-only cards show the whole title, name each Details by lane, keep no countdown and call the rank an unsaved order', () => {
