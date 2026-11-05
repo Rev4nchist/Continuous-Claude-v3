@@ -98,3 +98,11 @@ test('a missing ledger is an empty budget', () => {
   assert.equal(r.ok, true);
   assert.equal(r.evalUsed, 0);
 });
+
+test('need reserves room for the retries: 38 used + need 2 fits a budget of 40, 39 does not; the default need is 1 (breaks if need is ignored)', () => {
+  assert.equal(cursorBudget(many(38, 'review-eval'), cfg, { now: NOW, need: 2 }).ok, true);
+  const r = cursorBudget(many(39, 'review-eval'), cfg, { now: NOW, need: 2 });
+  assert.deepEqual([r.ok, r.reason], [false, 'eval-budget']);
+  assert.equal(cursorBudget(many(39, 'review-eval'), cfg, { now: NOW }).ok, true);
+});
+

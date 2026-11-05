@@ -30,7 +30,7 @@ $sha = '0123456789abcdef0123456789abcdef01234567'
 $branch = 'fix/recheck-wiring'
 $prUrl = 'repos/Rev4nchist/Continuous-Claude-v3/pulls/7'
 
-function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$noneExit = 0, [string]$noneOut = '') {
+function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$noneExit = 0, [string]$noneOut = '', [int]$gateExit = 0) {
   # A stub dir plus a throwaway repo with a bare remote `fork`, so a merge that goes through can finish.
   $dir = Join-Path $work $name; $stub = Join-Path $dir 'stub'; $repo = Join-Path $dir 'repo'; $remote = Join-Path $dir 'fork.git'
   New-Item -ItemType Directory -Force -Path $stub, $repo | Out-Null
@@ -49,6 +49,8 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
   Set-Content -LiteralPath (Join-Path $stub 'recheck-out.txt') -Value $recheckOut
   Set-Content -LiteralPath (Join-Path $stub 'none-exit.txt') -Value $noneExit
   Set-Content -LiteralPath (Join-Path $stub 'none-out.txt') -Value $noneOut
+  Set-Content -LiteralPath (Join-Path $stub 'gate-exit.txt') -Value $gateExit
+  Set-Content -LiteralPath (Join-Path $stub 'gate-out.txt') -Value 'migration gate: stub answer'
   Set-Content -LiteralPath (Join-Path $stub 'gh.cmd') -Encoding ascii -Value @(
     '@echo off',
     "if `"%~1`"==`"api`" if `"%~2`"==`"$prUrl/merge`" goto merge",
@@ -67,6 +69,7 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
     'echo %~1| findstr /c:"review-status" >nul && goto rs',
     'echo %~1| findstr /c:"land-recheck" >nul && goto lr',
     'echo %~1| findstr /c:"land-none-check" >nul && goto ln',
+    'echo %~1| findstr /c:"migration-gate" >nul && goto mg',
     'echo stub node: unexpected arguments: %* 1>&2',
     'exit /b 9',
     ':rs',
@@ -77,12 +80,17 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
     'type "%~dp0recheck-out.txt"',
     'set /p code=<"%~dp0recheck-exit.txt"',
     'exit /b %code%',
+    ':mg',
+    'echo %*> "%~dp0gate-args.txt"',
+    'type "%~dp0gate-out.txt"',
+    'set /p gcode=<"%~dp0gate-exit.txt"',
+    'exit /b %gcode%',
     ':ln',
     'echo %*> "%~dp0none-args.txt"',
     'type "%~dp0none-out.txt"',
     'set /p ncode=<"%~dp0none-exit.txt"',
     'exit /b %ncode%')
-  [pscustomobject]@{ Stub = $stub; Repo = $repo; Merge = (Join-Path $stub 'merge.flag'); Args = (Join-Path $stub 'recheck-args.txt'); NoneArgs = (Join-Path $stub 'none-args.txt') }
+  [pscustomobject]@{ Stub = $stub; Repo = $repo; Merge = (Join-Path $stub 'merge.flag'); Args = (Join-Path $stub 'recheck-args.txt'); NoneArgs = (Join-Path $stub 'none-args.txt'); GateArgs = (Join-Path $stub 'gate-args.txt') }
 }
 
 function Invoke-Land($case, [string[]]$extra = @()) {
@@ -170,6 +178,21 @@ try {
   $c7b = New-Case 'w7b' 1 '  re-check: must not run' 3 ''
   $r7b = Invoke-Land $c7b @('-IgnoreReview')
   Check 'W7b -IgnoreReview, helper failed silently: the merge still goes and the LANDED line names the failure' ((Test-Path $c7b.Merge) -and $r7b.Text -match 'LANDED #7:[^\r\n]*WARNING: none-pick check did not run \(exit 3\)')
+
+  # W8: the migration gate refuses (exit 1): nothing merges, with and without -IgnoreReview (it is not a review check)
+  foreach ($extra in @(@(), @('-IgnoreReview'))) {
+    $label = if ($extra.Count) { '-IgnoreReview' } else { 'normal' }
+    $c8 = New-Case "w8-$($label.TrimStart('-'))" 0 '  re-check: PR #7 is unchanged' 0 '' 1
+    $r8 = Invoke-Land $c8 $extra
+    Check "W8 gate exit 1 ($label): land-pr exits non-zero and makes no merge call" ($r8.Code -ne 0 -and -not (Test-Path $c8.Merge))
+    Check "W8 gate exit 1 ($label): output says the gate refused and nothing was merged" ($r8.Text -match 'migration gate refused' -and $r8.Text -match 'Nothing was merged')
+    $args8 = if (Test-Path $c8.GateArgs) { Get-Content -LiteralPath $c8.GateArgs -Raw } else { '' }
+    Check "W8 gate ($label): the gate got the head sha and the remote" ($args8 -match $sha -and $args8 -match '--remote fork')
+  }
+  # W8b: the gate passes (exit 0): the merge goes through
+  $c8b = New-Case 'w8b' 0 '  re-check: PR #7 is unchanged'
+  $r8b = Invoke-Land $c8b
+  Check 'W8b gate exit 0: the merge call was made' ((Test-Path $c8b.Merge) -and $r8b.Code -eq 0)
 }
 finally {
   $env:PATH = $oldPath

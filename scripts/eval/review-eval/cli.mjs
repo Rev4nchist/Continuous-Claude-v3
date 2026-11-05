@@ -6,7 +6,8 @@
 //   shadow retro|sync|scorecard|decide ...    the shadow protocol (shadow.mjs)
 //   judge [--probe]                           one judge call (spends a headless run: the probe is the only caller)
 //   labels export --pairs F --dir D | labels ingest --dir D [--out F]
-//   score --dir D [--out F] [--rebase A]      scorecard from runs.jsonl and the dataset; --rebase A reads the findings files from archive A
+//   score --dir D [--out F] [--rebase A] [--linktype F]   scorecard from runs.jsonl and the dataset; --rebase A reads the findings files from archive A;
+//                                             --linktype F reads the linkType labels (default linktype-labels.json beside this file)
 //   rescore --archive A --out D [--root R]    re-apply the parser and the path filter to archived raw answers (no model call); then `score --dir D`
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
@@ -14,14 +15,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG_PATH, loadConfig } from './config.mjs';
 import { loadDataset, realMajors, resolveFindings, splitSets, zeroMajorPrs } from './dataset.mjs';
-import { recordFreeze } from './freeze.mjs';
+import { recordEngineFreeze, recordFreeze } from './freeze.mjs';
 import { exportPairs, ingestLabels } from './labels.mjs';
+import { LINKTYPE_PATH, loadLinkTypes } from './linktype.mjs';
 import { makeGit, replayRun as realReplayRun } from './replay.mjs';
 import { archiveFile, rescoreArchive, treeCheck } from './rescore.mjs';
 import { evaluateRuns, scorecard } from './score.mjs';
 import { main as shadowMain } from './shadow.mjs';
 
 const flag = (argv, name, d) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : d; };
+// A per-ref cap (one ref has used its share of the week) skips that round only; the eval budget and the headroom stop the batch.
+const isRefCap = (r) => r.exit === 3 && /^ref-cap\b/.test(String(r.reason ?? ''));
+const stopsBatch = (r) => r.exit === 2 || (r.exit === 3 && !isRefCap(r));
 const readJsonl = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : []);
 
 async function loadMajors(argv, io, cfg) {
@@ -35,31 +40,35 @@ async function loadMajors(argv, io, cfg) {
 
 async function replayCmd(argv, io, cfg, root) {
   const buildOnly = argv.includes('--build-only');
+  const bodyMode = flag(argv, '--body', undefined); // withheld (default in replayRun) or full: whether the engine sees the PR body
+  const reviewer = flag(argv, '--reviewer', undefined); // engine (default in replayRun) or cursor-review (the old runReview path)
   const run = io.replayRun ?? realReplayRun;
   const deps = io.replayDeps ?? { root, cfg, gh: io.gh, tmpRoot: flag(argv, '--tmp-root', undefined), ledgerPath: flag(argv, '--ledger', undefined), runsPath: flag(argv, '--runs', undefined), outRoot: flag(argv, '--out-root', undefined) };
   if (argv.includes('--all-majors')) {
     let majors;
     try { majors = await loadMajors(argv, io, cfg); } catch (e) { io.stderr(`replay: ${e.message}`); return e.code === 'BAD_INPUT' ? 2 : 1; }
+    const only = flag(argv, '--only', null);
+    if (only !== null && !['holdout', 'dev'].includes(only)) { io.stderr(`replay: --only takes holdout or dev, got ${JSON.stringify(only)}`); return 2; }
     const rounds = new Map();
-    for (const m of majors) rounds.set(`${m.pr}:${m.roundRank ?? m.round}`, { pr: m.pr, round: m.roundRank ?? m.round, set: m.set });
+    for (const m of majors.filter((x) => only === null || x.set === only)) rounds.set(`${m.pr}:${m.roundRank ?? m.round}`, { pr: m.pr, round: m.roundRank ?? m.round, set: m.set });
     const results = [];
     for (const r of rounds.values()) {
-      const res = await run({ ...r, buildOnly }, deps);
+      const res = await run({ ...r, buildOnly, reviewer, bodyMode }, deps);
       results.push({ pr: r.pr, round: r.round, set: r.set, status: res.status, exit: res.exit, reason: res.reason, files: res.files, range: res.range, base40: res.base40, sha40: res.sha40 });
-      if (res.exit === 2 || res.exit === 3) { io.stderr(`replay stopped: ${res.status}: ${res.reason}`); break; }
+      if (stopsBatch(res)) { io.stderr(`replay stopped: ${res.status}: ${res.reason}`); break; }
     }
     const okKey = new Set(results.filter((r) => r.exit === 0).map((r) => `${r.pr}:${r.round}`));
     const majorsBuilt = majors.filter((m) => okKey.has(`${m.pr}:${m.roundRank ?? m.round}`)).length;
     const summary = { buildOnly, majors: { total: majors.length, ok: majorsBuilt }, rounds: { total: rounds.size, ok: okKey.size }, results };
     io.stdout(JSON.stringify(summary, null, 1));
-    const refused = results.find((r) => r.exit === 2 || r.exit === 3);
+    const refused = results.find(stopsBatch);
     if (refused) return refused.exit;
     return results.every((r) => r.exit === 0) ? 0 : 1;
   }
   const pr = Number(flag(argv, '--pr', NaN));
   const round = Number(flag(argv, '--round', NaN));
   if (!Number.isInteger(pr) || !Number.isInteger(round)) { io.stderr('replay: --pr N --round K or --all-majors is required'); return 2; }
-  const res = await run({ pr, round, buildOnly, set: flag(argv, '--set', 'holdout') }, deps);
+  const res = await run({ pr, round, buildOnly, set: flag(argv, '--set', 'holdout'), reviewer, bodyMode }, deps);
   io.stdout(JSON.stringify(res, null, 1));
   return res.exit ?? 1;
 }
@@ -74,7 +83,7 @@ function scoreCmd(argv, io, cfg) {
   const resolved = JSON.parse(readFileSync(datasetFile, 'utf8'));
   const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => (p ? JSON.parse(readFileSync(p, 'utf8')) : { findings: [] }) });
   const labels = readJsonl(path.join(dir, 'labels.jsonl'));
-  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, frozenPromptSha256: cfg.freeze?.promptSha256 ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
+  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, linkTypes: loadLinkTypes(flag(argv, '--linktype', LINKTYPE_PATH)), frozenByReviewer: { engine: cfg.engineFreeze?.promptSha256?.full, 'cursor-review': cfg.freeze?.promptSha256 }, frozenPromptSha256: (runs.some((r) => r.reviewer === 'engine') ? cfg.engineFreeze?.promptSha256?.full : cfg.freeze?.promptSha256) ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
   const out = flag(argv, '--out', null);
   if (out) { mkdirSync(path.dirname(out), { recursive: true }); writeFileSync(out, `${JSON.stringify(card, null, 2)}\n`); }
   io.stdout(JSON.stringify(card, null, 1));
@@ -111,7 +120,8 @@ export async function main(argv, io = {}) {
   try {
     switch (cmd) {
       case 'freeze': {
-        const f = recordFreeze({ git: makeGit(root), cfgPath: flag(argv, '--config', CONFIG_PATH) });
+        const freezeIt = argv.includes('--engine') ? recordEngineFreeze : recordFreeze;
+        const f = freezeIt({ git: makeGit(root), cfgPath: flag(argv, '--config', CONFIG_PATH) });
         io.stdout(JSON.stringify(f, null, 1));
         return 0;
       }
@@ -160,7 +170,11 @@ export async function main(argv, io = {}) {
         if (code !== 0) return code;
         const c = JSON.parse(text);
         const pct = (r) => (r?.value == null ? 'n/a' : `${(r.value * 100).toFixed(0)}% (${r.found}/${r.total})`);
-        const md = ['# Review eval scorecard', '', '| Metric | Value |', '|---|---|', `| Strict Major recall | ${pct(c.perMajorRecall.strict)} |`, `| Lenient Major recall | ${pct(c.perMajorRecall.lenient)} |`, `| Per-PR recall | ${pct(c.perPrRecall)} |`, `| PR false alarms | ${c.prFalseAlarm.count} of ${c.prFalseAlarm.total} |`, `| Precision real/posted | ${c.precision.value == null ? 'n/a' : c.precision.value.toFixed(2)} |`, `| Judge agreement | ${c.judgeAgreement.n} pairs, gate ${c.judgeAgreement.pass ? 'passed' : 'not passed'} |`, ''].join('\n');
+        const num = (v) => (v == null ? 'n/a' : v.toFixed(2));
+        const dropReasons = (by) => (Object.keys(by).length > 0 ? ` (${Object.entries(by).map(([k, n]) => `${k} ${n}`).join(', ')})` : '');
+        const ja = c.judgeAgreement;
+        const classRows = (set) => Object.entries(c.perClassRecall?.[set] ?? {}).map(([cls, r]) => `| Same-issue recall, ${set}, ${cls} | ${pct(r)} |`);
+        const md = ['# Review eval scorecard', '', '| Metric | Value |', '|---|---|', `| Strict Major recall | ${pct(c.perMajorRecall.strict)} |`, `| Lenient Major recall | ${pct(c.perMajorRecall.lenient)} |`, `| Per-PR recall | ${pct(c.perPrRecall)} |`, `| PR false alarms | ${c.prFalseAlarm.count} of ${c.prFalseAlarm.total} |`, `| Precision real/posted | ${c.precision.value == null ? 'n/a' : c.precision.value.toFixed(2)} |`, `| Same-issue recall, holdout (overall) | ${pct(c.perMajorRecall.strictSameIssue)} |`, ...classRows('holdout'), ...classRows('dev'), `| Funnel, ${c.funnel.runs} run(s) | raw ${c.funnel.raw}, withdrawn ${c.funnel.withdrawn}, dropped ${c.funnel.dropped.total}${dropReasons(c.funnel.dropped.byReason)}, posted ${c.funnel.posted} |`, `| Holdout misses the reviewer withdrew | ${c.withdrawnMisses.inWithdrawn} of ${c.withdrawnMisses.misses} (no data: ${c.withdrawnMisses.noData}) |`, `| Judge agreement | n=${ja.n}, raw ${num(ja.value)}, kappa ${num(ja.kappa)}, ${ja.status} |`, `| Runs, ${c.cost.grok.runs + c.excludedRuns} (${c.excludedRuns} excluded) | body mode: withheld ${c.bodyModes.withheld}, full ${c.bodyModes.full}, unknown ${c.bodyModes.unknown} |`, ''].join('\n');
         const out = flag(argv, '--report', null);
         if (out) writeFileSync(out, md);
         io.stdout(md);

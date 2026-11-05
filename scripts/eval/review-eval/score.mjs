@@ -4,11 +4,16 @@
 //  labels:  [{ findingId|pairId, verdict, sameIssue?, by }]   precision and strictSameIssue read by 'dave' and 'claude' (Dave wins);
 //           judge agreement reads by 'dave' only, so model labels never grade the judge
 //  sets:    { zeroMajorPrs: [pr] }     pairsSent: [{ pairId, judge: { verdict } }]
+import { normalizeRepoPath } from '../../github/review-filter.mjs';
+import { cohenKappa } from './agreement.mjs';
 import { pairId } from './labels.mjs';
 import { foldSev, isMajor, matchFindings } from './match.mjs';
 
 const ratio = (found, total) => ({ found, total, value: total > 0 ? found / total : null });
 const lc = (s) => String(s ?? '').toLowerCase();
+/** Judge agreement is a NOTE below this many Dave-labelled pairs: too few to pass or fail a judge. */
+export const JUDGE_GATE_MIN_N = 30;
+export const JUDGE_GATE_MIN_KAPPA = 0.6;
 
 function sumUsage(runs) {
   const total = {};
@@ -38,14 +43,62 @@ function recallOf(rows, labelBy = new Map()) {
   };
 }
 
-export function scorecard({ runs = [], matches = [], labels = [], sets = {}, frozenPromptSha256 = null, escapes = {}, bakeoff = {}, headless = {}, pairsSent = [] } = {}) {
+/** Same-issue recall for each link class (linkTypes: { key: class }). A key with no class is 'unlabelled'. Only classes that have a real Major appear. */
+function perClass(rows, linkTypes, labelBy) {
+  const groups = new Map();
+  for (const row of rows) {
+    const cls = linkTypes[row.key] ?? 'unlabelled';
+    groups.set(cls, [...(groups.get(cls) ?? []), row]);
+  }
+  const recalls = [...groups].map(([cls, group]) => [cls, recallOf(group, labelBy).strictSameIssue]);
+  return Object.fromEntries(recalls.filter(([, r]) => r.total > 0)); // a class with no real Major (only minor findings) adds no row
+}
+
+/** The funnel of the valid runs that carry one: { runs, raw, withdrawn, dropped: { total, byReason }, posted }. */
+function sumFunnel(runs) {
+  const total = { runs: 0, raw: 0, withdrawn: 0, dropped: { total: 0, byReason: {} }, posted: 0 };
+  for (const r of runs.filter((x) => x.funnel)) {
+    total.runs += 1;
+    total.raw += r.funnel.raw ?? 0;
+    total.withdrawn += r.funnel.withdrawn ?? 0;
+    total.posted += r.funnel.posted ?? 0;
+    for (const [reason, n] of Object.entries(r.funnel.dropped?.byReason ?? {})) {
+      total.dropped.total += n;
+      total.dropped.byReason[reason] = (total.dropped.byReason[reason] ?? 0) + n;
+    }
+  }
+  return total;
+}
+
+/** Holdout Majors the reviewer did not find (no engine critical/major at the place): how many of them sit in its withdrawn list. noData: runs with no list. */
+function withdrawnMisses(rows) {
+  const misses = rows.filter((m) => isMajor(lc(m.crSev)) && lc(m.crVerdict) === 'real' && !isMajor(lc(m.engSev)));
+  return { misses: misses.length, inWithdrawn: misses.filter((m) => m.inWithdrawn === true).length, noData: misses.filter((m) => m.inWithdrawn == null).length };
+}
+
+/** How many runs saw the PR body: { withheld, full, unknown } (unknown: an older run with no bodyMode). */
+function bodyModes(runs) {
+  const count = { withheld: 0, full: 0, unknown: 0 };
+  for (const r of runs) count[r.bodyMode === 'withheld' || r.bodyMode === 'full' ? r.bodyMode : 'unknown'] += 1;
+  return count;
+}
+
+export function scorecard({ runs = [], matches = [], labels = [], sets = {}, linkTypes = {}, frozenPromptSha256 = null, frozenByReviewer = {}, escapes = {}, bakeoff = {}, headless = {}, pairsSent = [] } = {}) {
   // A holdout run (or match row) with another prompt hash leaves every holdout number: recall, precision, false alarms, cost.
-  const stale = (r) => r.set === 'holdout' && Boolean(frozenPromptSha256) && r.promptSha256 !== frozenPromptSha256;
-  const valid = runs.filter((r) => !stale(r));
+  // The frozen hash is the one of the row's reviewer (frozenByReviewer); a row with no reviewer, or a reviewer with no entry, uses frozenPromptSha256.
+  const frozenFor = (r) => (r.reviewer ? frozenByReviewer[r.reviewer] : undefined) ?? frozenPromptSha256;
+  const hashStale = (r) => r.set === 'holdout' && Boolean(frozenFor(r)) && r.promptSha256 !== frozenFor(r);
+  // bodyMode 'full' showed the reviewer the merged PR body, which holds the answers: a holdout run like that is a leak, not a recall. No bodyMode (older runs) scores as before.
+  const leaked = (r) => r.set === 'holdout' && r.bodyMode === 'full';
+  const stale = (r) => hashStale(r) || leaked(r);
+  // A run whose coverage was incomplete missed files by design: its Majors are not misses of the reviewer. It leaves every number and shows in excludedRuns.
+  const valid = runs.filter((r) => !stale(r) && r.coverageComplete !== false);
   const labelBy = labelMap(labels);
   // evaluateRuns always sets promptSha256 on a match row (null when the run had none); a row with no such field carries no hash.
-  const holdout = recallOf(matches.filter((m) => m.set === 'holdout' && !(m.promptSha256 !== undefined && stale(m))), labelBy);
-  const dev = recallOf(matches.filter((m) => m.set === 'dev'), labelBy);
+  const holdoutRows = matches.filter((m) => m.set === 'holdout' && !(m.promptSha256 !== undefined && hashStale(m)) && !leaked(m));
+  const devRows = matches.filter((m) => m.set === 'dev');
+  const holdout = recallOf(holdoutRows, labelBy);
+  const dev = recallOf(devRows, labelBy);
 
   const zero = new Set(sets.zeroMajorPrs ?? []);
   const zeroRuns = valid.filter((r) => zero.has(r.pr));
@@ -69,11 +122,18 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
   const joined = labels.filter((l) => l.by === 'dave' && sent.has(l.pairId ?? l.findingId));
   const agree = joined.filter((l) => lc(sent.get(l.pairId ?? l.findingId).judge?.verdict) === lc(l.verdict)).length;
   const agreement = joined.length > 0 ? agree / joined.length : null;
+  const kappa = cohenKappa(joined.map((l) => [lc(sent.get(l.pairId ?? l.findingId).judge?.verdict), lc(l.verdict)]));
+  // Raw agreement alone passes a judge that always gives the common verdict (kappa 0). Kappa must be defined and at least 0.6.
+  const gateMet = agreement !== null && agreement >= 0.8 && kappa !== null && kappa >= JUDGE_GATE_MIN_KAPPA;
+  const judgeStatus = joined.length < JUDGE_GATE_MIN_N ? 'NOTE' : (gateMet ? 'PASS' : 'FAIL');
 
   return {
     schema: 1,
     perMajorRecall: { strict: holdout.strict, lenient: holdout.lenient, strictSameIssue: holdout.strictSameIssue },
     perPrRecall: holdout.perPr,
+    funnel: sumFunnel(valid),
+    withdrawnMisses: withdrawnMisses(holdoutRows),
+    perClassRecall: { holdout: perClass(holdoutRows, linkTypes, labelBy), dev: perClass(devRows, linkTypes, labelBy) },
     prFalseAlarm: { count: alarmed.size, total: new Set(zeroRuns.map((r) => r.pr)).size, prs: [...alarmed] },
     precision: { real, noise, unverified, posted, value: posted > 0 ? real / posted : null, range: posted > 0 ? [real / posted, (real + unverified) / posted] : null, labelers },
     recall: { inDiff: holdout.inDiff, overall: holdout.overall },
@@ -84,8 +144,9 @@ export function scorecard({ runs = [], matches = [], labels = [], sets = {}, fro
       grok: { runs: valid.length, durationMs: valid.reduce((a, r) => a + (r.durationMs ?? 0), 0), usage: sumUsage(valid) },
       headless: { runs: headless.runs ?? 0, costUsd: headless.costUsd ?? 0, usage: headless.usage ?? null },
     },
-    judgeAgreement: { n: joined.length, agree, value: agreement, gate: 0.8, pass: joined.length >= 30 && agreement !== null && agreement >= 0.8 },
+    judgeAgreement: { n: joined.length, agree, value: agreement, kappa, gate: 0.8, kappaGate: JUDGE_GATE_MIN_KAPPA, status: judgeStatus, pass: judgeStatus === 'PASS' },
     excludedRuns: runs.length - valid.length,
+    bodyModes: bodyModes(runs),
   };
 }
 
@@ -105,6 +166,15 @@ function newestPerRound(runs) {
 }
 
 /**
+ * Did the reviewer withdraw a finding at the place of this dataset finding? Same file, and a line within tol of its lines (a dataset finding with no
+ * lines matches on the file alone). null when the run has no withdrawn list (an old run): "unknown", not "no".
+ */
+function nearWithdrawn(withdrawn, c, tol) {
+  if (withdrawn === null) return null;
+  return withdrawn.some((w) => normalizeRepoPath(w?.path) === normalizeRepoPath(c.file) && (c.start == null || (Number.isFinite(w.line) && w.line >= c.start - tol && w.line <= (c.end ?? c.start) + tol)));
+}
+
+/**
  * Glue: match each replayed run against the dataset findings of its (pr, sha40).
  * runs: run records (with findingsPath). dataset: resolved findings. readFindings(path) => { findings: [{ file, line, lineEnd, severity, title }] }.
  * Returns { runs: [{ ...run, findings: [{ id, sev, matchedKey }] }], matches: [...] } ready for scorecard().
@@ -112,13 +182,18 @@ function newestPerRound(runs) {
 export function evaluateRuns({ runs, dataset, readFindings, tol = 3 }) {
   const outRuns = [];
   const matches = [];
-  for (const run of newestPerRound(runs).filter((r) => r.status === 'ok')) {
+  for (const run of newestPerRound(runs).filter((r) => r.status === 'ok' || r.status === 'incomplete')) {
+    // An incomplete run (status incomplete, or an older ok row with coverageComplete false) stays in the output so the card counts it as excluded,
+    // but it adds no match rows: its Majors are not misses.
+    if (run.status === 'incomplete' || run.coverageComplete === false) { outRuns.push({ ...run, coverageComplete: false, findings: [] }); continue; }
     // pairId is the key ingestLabels writes; it must use the same fields as the exported pair (pr, sha40, file, raw line, title).
-    const eng = (readFindings(run.findingsPath).findings ?? []).map((f, i) => ({ src: 'engine', id: `${run.pr}-${run.round}-${i}`, pairId: pairId({ pr: run.pr, sha: run.sha40, file: f.file, line: f.line, engineTitle: f.title }), file: f.file, start: Number.isFinite(f.line) ? f.line : null, end: Number.isFinite(f.lineEnd) ? f.lineEnd : (Number.isFinite(f.line) ? f.line : null), sev: lc(f.severity) }));
+    const found = readFindings(run.findingsPath);
+    const withdrawn = Array.isArray(found.withdrawn) ? found.withdrawn : null;
+    const eng = (found.findings ?? []).map((f, i) => ({ src: 'engine', id: `${run.pr}-${run.round}-${i}`, pairId: pairId({ pr: run.pr, sha: run.sha40, file: f.file, line: f.line, engineTitle: f.title }), file: f.file, start: Number.isFinite(f.line) ? f.line : null, end: Number.isFinite(f.lineEnd) ? f.lineEnd : (Number.isFinite(f.line) ? f.line : null), sev: lc(f.severity) }));
     const cr = dataset.filter((d) => d.pr === run.pr && d.sha40 === run.sha40).map((d) => ({ src: 'cr', id: d.key, file: d.path, start: d.startLine, end: d.endLine, sev: foldSev(d.severity), d }));
     const res = matchFindings(cr, eng, { tol });
     const hit = new Map(res.matches.map((m) => [m.cr.id, m.eng]));
-    for (const c of cr) matches.push({ key: c.id, pr: run.pr, set: run.set, promptSha256: run.promptSha256 ?? null, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null, engPairId: hit.get(c.id)?.pairId ?? null });
+    for (const c of cr) matches.push({ key: c.id, pr: run.pr, set: run.set, reviewer: run.reviewer ?? null, promptSha256: run.promptSha256 ?? null, bodyMode: run.bodyMode ?? null, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null, engPairId: hit.get(c.id)?.pairId ?? null, inWithdrawn: nearWithdrawn(withdrawn, c, tol) });
     const byEng = new Map(res.matches.map((m) => [m.eng.id, m.cr.id]));
     outRuns.push({ ...run, findings: eng.map((e) => ({ id: e.id, pairId: e.pairId, sev: e.sev, matchedKey: byEng.get(e.id) ?? null })) });
   }

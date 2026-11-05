@@ -12,6 +12,8 @@ const HEAD40 = /^[0-9a-f]{40}$/;
 const RUN_ID = /^[A-Za-z0-9._-]{1,80}$/;
 const MAJOR = new Set(['critical', 'major']);
 const MISSING_CONFIDENCE = 3;
+/** A trace file sits beside its record as <runId>.trace.json. It is not a record: listRecords skips it. */
+export const TRACE_SUFFIX = '.trace.json';
 
 /** Folder-safe branch name: keep [A-Za-z0-9._-], map the rest to '-'. A name with '..' or no usable text is refused (throws). */
 export function branchSlug(branch) {
@@ -35,6 +37,18 @@ function checkHead(head) {
 
 const branchDir = (branch, opts) => path.join(stateRoot(opts), branchSlug(branch));
 const headDir = (branch, head, opts) => path.join(branchDir(branch, opts), checkHead(head));
+
+/**
+ * The funnel of one run: { raw, withdrawn, dropped: { byReason }, posted }.
+ * raw = findings in the answer before the filter; withdrawn = findings the reviewer says it dropped; dropped = what the S5 filter removed, by
+ * reason (no-file, no-line, claim-refuted, duplicate; the thread-min rule is not a drop); posted = findings the filter kept in this run
+ * (carried-over prior findings are not counted).
+ */
+export function buildFunnel({ answer, dropped = [], kept = [] }) {
+  const byReason = {};
+  for (const d of dropped) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1;
+  return { raw: answer?.findings?.length ?? 0, withdrawn: answer?.withdrawn?.length ?? 0, dropped: { byReason }, posted: kept.length };
+}
 
 /** The confidence of a finding. A missing or non-numeric value counts as 3, so a finding without one is not silently low. */
 export const confidenceOf = (f) => (typeof f?.confidence === 'number' && Number.isFinite(f.confidence) ? f.confidence : MISSING_CONFIDENCE);
@@ -66,7 +80,7 @@ function readJsonFiles(dir, io) {
     if (err.code === 'ENOENT') return out;
     throw err;
   }
-  for (const name of names.filter((n) => n.endsWith('.json')).sort()) {
+  for (const name of names.filter((n) => n.endsWith('.json') && !n.endsWith(TRACE_SUFFIX)).sort()) {
     const file = path.join(dir, name);
     try { out.records.push({ path: file, record: JSON.parse(io.readFileSync(file, 'utf8')) }); } catch { out.unreadable.push(file); }
   }

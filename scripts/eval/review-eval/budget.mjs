@@ -25,13 +25,14 @@ const onDay = (day) => (e) => {
 };
 
 /** { ok, evalUsed, globalUsed, shadowUsedToday, reason?: 'eval-budget' | 'headroom' | 'shadow-daily' }. */
-export function cursorBudget(entries, cfg, { now = Date.now(), kind = 'eval' } = {}) {
+/** need: how many runs this job may reserve (an engine run reserves 1 + retry_max). The eval check refuses when evalUsed + need passes the budget. */
+export function cursorBudget(entries, cfg, { now = Date.now(), kind = 'eval', need = 1 } = {}) {
   const evalUsed = starts(entries, EVAL_SESSION).size;
   const globalUsed = countRuns(entries, { now });
   const shadowUsedToday = starts(entries, SHADOW_SESSION, onDay(chicagoDay(now))).size;
   const out = { ok: true, evalUsed, globalUsed, shadowUsedToday };
   const headroomCap = WEEKLY_CAP - (cfg.cursorHeadroom ?? 60);
-  if (kind === 'eval' && evalUsed >= cfg.cursorEvalBudget) return { ...out, ok: false, reason: 'eval-budget' };
+  if (kind === 'eval' && evalUsed + need > cfg.cursorEvalBudget) return { ...out, ok: false, reason: 'eval-budget' };
   if (kind === 'shadow' && shadowUsedToday >= (cfg.shadow?.dailyMax ?? 6)) return { ...out, ok: false, reason: 'shadow-daily' };
   if (globalUsed >= headroomCap) return { ...out, ok: false, reason: 'headroom' };
   return out;

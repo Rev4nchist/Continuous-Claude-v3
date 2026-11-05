@@ -6,8 +6,6 @@
 // Agent files (AGENTS.md, CLAUDE.md, .cursorrules, .cursor, settings, .mcp.json) are stripped from the review tree by
 // cursor-review.mjs (AGENT_FILES, stripAgentFiles, which already matches at every depth). This module only quotes them from the base.
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 
 // The installed engine copy may not hold scripts/ratchets: then the skip list is left out and logged.
 let defaultParseReviewMd = null;
@@ -15,16 +13,13 @@ try { ({ parseReviewMd: defaultParseReviewMd } = await import('../../ratchets/re
 
 const KB = 1024;
 export const DEFAULT_CAP_KB = 48;
-export const TLDR_CAP_MS = 60_000;
 const BODY_MAX = 8 * KB;
 const TITLE_MAX = 300;
 const GATES_MAX = 6 * KB;
 const TREX_MAX = 2 * KB;
-const TLDR_EACH_MAX = 1500;
-const MAX_SYMBOLS = 8;
 const MAX_GUIDE_DIRS = 60;
 const GUIDE_NAMES = ['AGENTS.md', 'CLAUDE.md', '.cursorrules'];
-const RANK = { path: 10, skip: 20, gates: 30, trex: 40, tldr: 50, guideline: 100 };
+const RANK = { path: 10, skip: 20, gates: 30, trex: 40, guideline: 100 };
 
 const lf = (s) => String(s ?? '').replace(/\r\n?/g, '\n');
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}\n[cut: ${s.length - n} more characters]` : s);
@@ -173,57 +168,6 @@ export function fence(text, label = '') {
   return `${bar}${label}\n${body}\n${bar}`;
 }
 
-// ---------- tldr ----------
-
-/** The path of tldr(.exe) on PATH, or null. A .cmd shim is not used: no child runs through a shell. */
-export function findTldr({ env = process.env, platform = process.platform, exists = existsSync } = {}) {
-  const name = platform === 'win32' ? 'tldr.exe' : 'tldr';
-  const dirs = String(env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
-  const hit = dirs.map((d) => path.join(d, name)).find((p) => exists(p));
-  return hit ?? null;
-}
-
-function spawnTldr(exe) {
-  return (args, { cwd, timeoutMs }) => {
-    const r = spawnSync(exe, args, { cwd, encoding: 'utf8', timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 });
-    return { status: r.status, stdout: r.stdout ?? '', timedOut: r.error?.code === 'ETIMEDOUT' };
-  };
-}
-
-const SYMBOL_DEF = /\b(?:function\*?|def|class|fn|func|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)/;
-const SYMBOL_METHOD = /^\s*(?:export\s+)?(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/;
-
-/** Names from the hunk headers of a diff (the text after the second @@), at most MAX_SYMBOLS. Tolerates \r\n. */
-export function symbolsFromDiff(diffText) {
-  const names = new Set();
-  for (const line of lf(diffText).split('\n')) {
-    const m = /^@@[^@]*@@\s*(.+)$/.exec(line);
-    const sym = m && (SYMBOL_DEF.exec(m[1]) ?? SYMBOL_METHOD.exec(m[1]));
-    if (sym) names.add(sym[1]);
-  }
-  return [...names].slice(0, MAX_SYMBOLS);
-}
-
-// [Speculation] The command comes from the tldr-code skill: `tldr impact <function> <dir>` lists the callers of a function.
-function tldrSection(c, { diffText, treeDir, tldr, capMs, now }) {
-  if (!tldr) { c.missing.push('tldr: not installed, callers left out'); return null; }
-  const symbols = treeDir ? symbolsFromDiff(diffText) : [];
-  const began = now();
-  const out = [];
-  for (const [i, s] of symbols.entries()) {
-    const left = capMs - (now() - began);
-    if (left <= 0) { c.missing.push(`tldr: ${capMs / 1000} s cap reached after ${i} of ${symbols.length} symbols`); break; }
-    const r = tryRun(() => tldr(['impact', s, '.'], { cwd: treeDir, timeoutMs: left }));
-    if (!r || r.timedOut) { c.missing.push(r ? `tldr: timed out on ${s}` : `tldr: failed on ${s}`); break; }
-    if (r.status === 0 && r.stdout.trim()) out.push(`### callers of ${s}\n${clip(lf(r.stdout).trim(), TLDR_EACH_MAX)}`);
-  }
-  return out.length ? { name: 'tldr', rank: RANK.tldr, text: `## Callers (tldr impact; data)\n${fence(out.join('\n\n'), 'text')}` } : null;
-}
-
-function tryRun(fn) {
-  try { return fn(); } catch { return null; }
-}
-
 // ---------- sections ----------
 
 function changedPaths(files) {
@@ -341,21 +285,14 @@ function baseReader(input, reader) {
   return c;
 }
 
-function defaultTldr() {
-  const exe = findTldr();
-  return exe ? spawnTldr(exe) : null;
-}
-
 /**
  * The text of .review/CONTEXT.md.
- * input: { root, mergeBase, head, pull: { title, body }, files: [path | { filename, previous_filename }], gates, trex, treeDir, diffText, capKb }
+ * input: { root, mergeBase, head, pull: { title, body }, files: [path | { filename, previous_filename }], gates, trex, capKb }
  *   - mergeBase: the commit every config file is read at. head is for the header only.
  *   - gates: the --gates result (string or object), fenced as data.
  *   - trex: the TREX run's one-line JSON summary (string or object). Any single-line JSON object is accepted; its keys are returned.
  *     Absent: the TREX section is left out without a note.
- *   - treeDir + diffText: only for the tldr callers step.
- * deps (tests): { readAtSha(root, sha, rel), parseReviewMd, tldr(args, { cwd, timeoutMs }) | null, now }
- *   - tldr: undefined looks for tldr on PATH; null means absent. The step has a 60 s cap in all.
+ * deps (tests): { readAtSha(root, sha, rel), parseReviewMd }
  * Returns { text, bytes, contextMissing: [string], included: [string], trexKeys: [string] }. Never throws on a missing or bad optional part.
  */
 export function buildContext(input, deps = {}) {
@@ -365,14 +302,12 @@ export function buildContext(input, deps = {}) {
   const yaml = c.read('.coderabbit.yaml');
   if (yaml === null) c.missing.push('.coderabbit.yaml: not found at the merge base');
   const trex = trexSection(c, input.trex);
-  const tldr = deps.tldr === undefined ? defaultTldr() : deps.tldr;
   const parts = [
     prSection(input, capKb * KB),
     pathInstructionsSection(c, yaml, changed),
     skipSection(c, deps.parseReviewMd ?? defaultParseReviewMd),
     gatesSection(input.gates),
     trex.section,
-    tldrSection(c, { diffText: input.diffText, treeDir: input.treeDir, tldr, capMs: TLDR_CAP_MS, now: deps.now ?? Date.now }),
     ...guidelineSections(c, yaml, changed),
   ].filter(Boolean);
   const kept = fit(parts, capKb * KB, c.missing, capKb);
