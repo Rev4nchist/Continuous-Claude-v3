@@ -153,7 +153,7 @@ export const POWERSHELL_PATTERNS: DPattern[] = [
   { name: 'PowerShell recursive delete (Remove-Item -Recurse)', re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
   { name: 'PowerShell recursive delete ([IO.Directory]::Delete $true)', re: /\[(?:System\.)?IO\.Directory\]::Delete\([^)]*,\s*\$true\s*\)/i },
   // F06. A second argument that is not literally $false ($r, 1, (1 -eq 1)) can be true.
-  { name: 'PowerShell [IO.Directory]::Delete with a recurse argument', re: /\[(?:System\.)?IO\.Directory\]::Delete\([^),;\n]*,\s*(?!\$false\s*\))[^\s)]/i },
+  { name: 'PowerShell [IO.Directory]::Delete with a recurse argument', re: /\[(?:System\.)?IO\.Directory\]::Delete\((?:[^(),;\n]|\([^()\n]*\))*,\s*(?!\$false\s*\))[^\s)]/i },
   // F06. A splat (`Remove-Item @p`) hides -Recurse inside a hashtable; the guard cannot see it.
   { name: 'PowerShell splatted delete (Remove-Item @args)', re: /(?<![\w-])(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s@\w/i },
   // F06. A pipe into a delete removes every item the left side yields (parity with `xargs rm`).
@@ -334,10 +334,15 @@ const PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s([
 const wrapper = (interp: string, flag: string): RegExp =>
   new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, 'i');
 
+// Exec flags. POSIX: `c` anywhere in a short flag cluster (`-c`, `-lc`, `-cx`, `-ce`). PowerShell: any
+// prefix of -Command (`-c`, `-com`, `-comm`, ...) and -CommandWithArgs / -cwa (pwsh 7.4).
+const POSIX_EXEC_FLAG = String.raw`\s-[a-z]{0,5}c[a-z]{0,5}\b`;
+const PWSH_EXEC_FLAG = String.raw`\s-(?:c(?:o(?:m(?:m(?:a(?:n(?:d(?:withargs)?)?)?)?)?)?)?|cwa)\b`;
+
 type WrapperShell = 'posix' | 'powershell' | 'cmd';
 const WRAPPER_RES: Array<{ shell: WrapperShell; re: RegExp }> = [
-  { shell: 'posix', re: wrapper('(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?', String.raw`\s-[a-z]*c\b`) },
-  { shell: 'powershell', re: wrapper('(?:powershell|pwsh)(?:\\.exe)?', String.raw`\s-c(?:ommand)?\b`) },
+  { shell: 'posix', re: wrapper('(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?', POSIX_EXEC_FLAG) },
+  { shell: 'powershell', re: wrapper('(?:powershell|pwsh)(?:\\.exe)?', PWSH_EXEC_FLAG) },
   { shell: 'cmd', re: wrapper('cmd(?:\\.exe)?', String.raw`\s\/[ck]\b`) },
 ];
 
@@ -366,8 +371,12 @@ function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | n
     const m = seg.match(re);
     if (!m || !(m[1] || m[3])) continue;
     if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
-    const tail = m[2]?.trim() ? ' ' + dropQuotes(m[2]) : '';
-    return { payload: unwrapPayload(m[1]) + tail, shell };
+    if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
+    // pwsh and cmd join their args into one command. A POSIX tail is $0, $1, ...: it runs only through
+    // the payload ($1, eval), so it is scanned as its own command after a `;`, never as an argument of
+    // the payload's last word (`bash -c 'git rebase' '--abort'` runs a bare rebase; CR 299).
+    const join = shell === 'posix' ? ' ; ' : ' ';
+    return { payload: unwrapPayload(m[1]) + join + dropQuotes(m[2]), shell };
   }
   return null;
 }
@@ -510,8 +519,8 @@ function classifySegments(view: string, tool: string): string | null {
 // already. Each interpreter has its own exec flag (H2): POSIX `-c` is lowercase only (git's `-C` is a
 // folder), and `/c` `/k` count only for cmd and only before whitespace or a quote (not `/c/Users/...`).
 const INTERPRETERS: Array<{ word: RegExp; flag: RegExp }> = [
-  { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: /\s-[a-z]*c\b/ },
-  { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: /\s-c(?:ommand)?\b/i },
+  { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: new RegExp(POSIX_EXEC_FLAG) },
+  { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: new RegExp(PWSH_EXEC_FLAG, 'i') },
   { word: /(?<![\w.-])cmd(?:\.exe)?\b/i, flag: /\s\/[ck](?=\s|["']|$)/i },
 ];
 

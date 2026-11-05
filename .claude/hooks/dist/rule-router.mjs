@@ -440,9 +440,11 @@ var LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags("ug")}|env${val
 var OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
 var PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s([\s\S]*))?|(\S[\s\S]*))$`;
 var wrapper = (interp, flag) => new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, "i");
+var POSIX_EXEC_FLAG = String.raw`\s-[a-z]{0,5}c[a-z]{0,5}\b`;
+var PWSH_EXEC_FLAG = String.raw`\s-(?:c(?:o(?:m(?:m(?:a(?:n(?:d(?:withargs)?)?)?)?)?)?)?|cwa)\b`;
 var WRAPPER_RES = [
-  { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", String.raw`\s-[a-z]*c\b`) },
-  { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", String.raw`\s-c(?:ommand)?\b`) },
+  { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", POSIX_EXEC_FLAG) },
+  { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", PWSH_EXEC_FLAG) },
   { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) }
 ];
 function unwrapPayload(raw) {
@@ -457,8 +459,9 @@ function matchWrapper(seg2) {
     const m = seg2.match(re);
     if (!m || !(m[1] || m[3])) continue;
     if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
-    const tail = m[2]?.trim() ? " " + dropQuotes(m[2]) : "";
-    return { payload: unwrapPayload(m[1]) + tail, shell };
+    if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
+    const join3 = shell === "posix" ? " ; " : " ";
+    return { payload: unwrapPayload(m[1]) + join3 + dropQuotes(m[2]), shell };
   }
   return null;
 }
@@ -475,6 +478,11 @@ function extractShellWrapperPayloads(command) {
     return [];
   }
 }
+var INTERPRETERS = [
+  { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: new RegExp(POSIX_EXEC_FLAG) },
+  { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: new RegExp(PWSH_EXEC_FLAG, "i") },
+  { word: /(?<![\w.-])cmd(?:\.exe)?\b/i, flag: /\s\/[ck](?=\s|["']|$)/i }
+];
 
 // src/rule-router.ts
 var REARM_SOURCES = /* @__PURE__ */ new Set(["compact", "clear"]);

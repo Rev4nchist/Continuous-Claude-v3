@@ -118,7 +118,7 @@ var POWERSHELL_PATTERNS = [
   { name: "PowerShell recursive delete (Remove-Item -Recurse)", re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
   { name: "PowerShell recursive delete ([IO.Directory]::Delete $true)", re: /\[(?:System\.)?IO\.Directory\]::Delete\([^)]*,\s*\$true\s*\)/i },
   // F06. A second argument that is not literally $false ($r, 1, (1 -eq 1)) can be true.
-  { name: "PowerShell [IO.Directory]::Delete with a recurse argument", re: /\[(?:System\.)?IO\.Directory\]::Delete\([^),;\n]*,\s*(?!\$false\s*\))[^\s)]/i },
+  { name: "PowerShell [IO.Directory]::Delete with a recurse argument", re: /\[(?:System\.)?IO\.Directory\]::Delete\((?:[^(),;\n]|\([^()\n]*\))*,\s*(?!\$false\s*\))[^\s)]/i },
   // F06. A splat (`Remove-Item @p`) hides -Recurse inside a hashtable; the guard cannot see it.
   { name: "PowerShell splatted delete (Remove-Item @args)", re: /(?<![\w-])(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s@\w/i },
   // F06. A pipe into a delete removes every item the left side yields (parity with `xargs rm`).
@@ -308,9 +308,11 @@ var LAUNCHER = String.raw`(?:${LAUNCHER_PATH}(?:sudo${valueFlags("ug")}|env${val
 var OPTION_AREA = String.raw`(?:[^'"]|"[^"]*"|'[^']*')*?`;
 var PAYLOAD = String.raw`\s*(?:("(?:[^"\\]|\\[\s\S])*"|'[^']*')(?=\s|$)(?:\s([\s\S]*))?|(\S[\s\S]*))$`;
 var wrapper = (interp, flag) => new RegExp(`^${LAUNCHER}${PATH_PREFIX}${interp}\\b${OPTION_AREA}${flag}${PAYLOAD}`, "i");
+var POSIX_EXEC_FLAG = String.raw`\s-[a-z]{0,5}c[a-z]{0,5}\b`;
+var PWSH_EXEC_FLAG = String.raw`\s-(?:c(?:o(?:m(?:m(?:a(?:n(?:d(?:withargs)?)?)?)?)?)?)?|cwa)\b`;
 var WRAPPER_RES = [
-  { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", String.raw`\s-[a-z]*c\b`) },
-  { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", String.raw`\s-c(?:ommand)?\b`) },
+  { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", POSIX_EXEC_FLAG) },
+  { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", PWSH_EXEC_FLAG) },
   { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) }
 ];
 function unwrapPayload(raw) {
@@ -325,8 +327,9 @@ function matchWrapper(seg2) {
     const m = seg2.match(re);
     if (!m || !(m[1] || m[3])) continue;
     if (!m[1]) return { payload: unwrapPayload(m[3]), shell };
-    const tail = m[2]?.trim() ? " " + dropQuotes(m[2]) : "";
-    return { payload: unwrapPayload(m[1]) + tail, shell };
+    if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
+    const join = shell === "posix" ? " ; " : " ";
+    return { payload: unwrapPayload(m[1]) + join + dropQuotes(m[2]), shell };
   }
   return null;
 }
@@ -415,8 +418,8 @@ function classifySegments(view, tool) {
   return null;
 }
 var INTERPRETERS = [
-  { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: /\s-[a-z]*c\b/ },
-  { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: /\s-c(?:ommand)?\b/i },
+  { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: new RegExp(POSIX_EXEC_FLAG) },
+  { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: new RegExp(PWSH_EXEC_FLAG, "i") },
   { word: /(?<![\w.-])cmd(?:\.exe)?\b/i, flag: /\s\/[ck](?=\s|["']|$)/i }
 ];
 function runsInterpreter(stripped) {
