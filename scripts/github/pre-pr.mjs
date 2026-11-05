@@ -106,6 +106,9 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-path-guard', 'lane-shim', 'probe-boards', 'registry-drift', 'session-label', 'process-match'];
+const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'scratch-db'];
+const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
 // validate-mods exits 1 when its typecheck cannot run. On Claude Code 2.1.296 and later no command writes the
 // .claude-plugin/types folder tsc needs, so this machine has none. Accept that one case, and only that case: validate
@@ -229,7 +232,21 @@ export const SURFACES = [
     }],
   },
   { id: 'sync', globs: ['scripts/sync-to-active*', 'scripts/sync-claude.sh'], gates: [{ id: 'sync-cursor-test', cmd: 'bash', args: ['scripts/sync-to-active-cursor.test.sh'], cwd: '.', timeoutMs: 5 * MIN }] },
-  { id: 'coordination', globs: ['scripts/coordination/**'], gates: [], manual: 'run the matching scripts/coordination/*-probe.mjs and keep its output (AGENTS.md Testing)' },
+  {
+    // The same files as the CI job coordination-db (.github/workflows/ccv3-checks.yml), named one by one: a missing file
+    // FAILs, so the gate cannot pass by finding nothing. Test CO1 fails when this list and the CI list differ.
+    id: 'coordination',
+    // .claude/scripts/lane.mjs is the lane shim; lane-shim.test.mjs tests that file. scratch-db.mjs builds its
+    // throwaway database from docker/init-schema.sql and the apps/agentic-os/drizzle migrations.
+    globs: ['scripts/coordination/**', '.claude/scripts/lane.mjs', 'docker/init-schema.sql', 'apps/agentic-os/drizzle/**'],
+    gates: [
+      { id: 'coordination-tests', cmd: 'node', args: ['--test', ...COORDINATION_TESTS.map(coordTest)], cwd: '.', timeoutMs: 5 * MIN },
+      // These build a throwaway database on local Postgres. Postgres down = FAIL with ECONNREFUSED, never a skip: start it with
+      // docker compose up -d in docker/. pg comes from .claude/hooks/node_modules (npm ci there).
+      { id: 'coordination-db-tests', cmd: 'node', args: ['--test', ...COORDINATION_DB_TESTS.map(coordTest)], cwd: '.', timeoutMs: 10 * MIN },
+    ],
+    manual: 'for a lane, claim or lease change also run the matching scripts/coordination/*-probe.mjs and keep its output (AGENTS.md Testing)',
+  },
 ];
 
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');

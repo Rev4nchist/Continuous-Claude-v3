@@ -8,6 +8,7 @@
 //   - two files of one surface run its gate twice                              -> S7
 //   - opc runs pytest on the whole suite, or on a file that was not touched    -> S5
 //   - a path that no surface owns runs more than the always gate               -> S8
+//   - the coordination gates go back to gates: [] or drift from CI job coordination-db -> CO1
 // summaryLine
 //   - the first line is taken, not the runner's summary                        -> M1, M2
 // Git preconditions
@@ -178,6 +179,27 @@ test('S9: scripts/rules, skills, agents and ratchets run their own node --test f
     assert.ok(g, `${file} -> ${id}`);
     assert.deepEqual(g.args, ['--test', pattern]);
   }
+});
+
+test('CO1: a scripts/coordination change runs the same coordination test files as the CI job coordination-db', async () => {
+  // Breaks when the row goes back to gates: [] (two render-board tests sat red on main, PR 312) or drifts from CI.
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const start = wf.indexOf('\n  coordination-db:');
+  assert.ok(start >= 0, 'the workflow has the coordination-db job');
+  const rest = wf.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [\w-]+:/);
+  const job = (next < 0 ? rest : rest.slice(0, next + 1)).split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n'); // drop YAML and shell comments
+  const ci = [...job.matchAll(/scripts\/coordination\/[\w-]+\.test\.mjs/g)].map((m) => m[0]);
+  assert.ok(ci.length > 0, 'the CI job lists coordination test files');
+  for (const p of ['scripts/coordination/lane.mjs', 'scripts/coordination/render-board.test.mjs', '.claude/scripts/lane.mjs', 'docker/init-schema.sql', 'apps/agentic-os/drizzle/0004_x.sql']) {
+    const got = gatesFor([p], REPO_ROOT).filter((g) => g.id.startsWith('coordination-'));
+    assert.deepEqual(got.map((g) => g.id).sort(), ['coordination-db-tests', 'coordination-tests'], p);
+    for (const g of got) assert.equal(g.args[0], '--test', g.id);
+    const files = got.flatMap((g) => g.args.slice(1));
+    assert.deepEqual([...files].sort(), [...new Set(ci)].sort(), `${p}: same files as CI`);
+    for (const f of files) assert.ok(existsSync(path.join(REPO_ROOT, f)), f);
+  }
+  assert.equal(ids(gatesFor(['docs/x.md'], REPO_ROOT)).some((id) => id.startsWith('coordination-')), false);
 });
 
 test('S10: config, registry and always-loaded files get a NOTE row; rules, skills and agents add the claude -p behaviour check', async () => {
