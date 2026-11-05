@@ -63,10 +63,14 @@ name an event that runs it, or give `na` with the reason.
 1. Run `node scripts/github/pre-pr.mjs --body <draft.md>` from the repo root. Use a clean branch and a
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
    Evidence against the head. It runs one `cr review --agent`. Fix the findings, commit, and run it again.
+   Run `git fetch fork` and merge `fork/main` into the branch immediately before pre-pr and again right
+   before the push; pre-pr fails git:behind otherwise. A commit after the stamp needs a fresh pre-pr, and
+   the GREEN line must name the head. Pre-pr stops at the first FAIL, cheap gates first; `--keep-going`
+   runs every gate.
 
    The PR body must be a file: `-F body=@<file>` or `--body-file <file>`. The hook denies an inline body, stdin and `--fill`.
 
-   The review takes 10 to 30 minutes. Run the script in the background (Bash `run_in_background`). Read
+   The review takes 4 to 10 minutes and the gates 3 to 5. Run the script in the background (Bash `run_in_background`). Read
    its log when the exit notice arrives. A foreground call can be cut off.
 
    The script runs `cr review --agent --committed --base <base>`. It first runs the free `cr usage --agent`.
@@ -80,7 +84,8 @@ name an event that runs it, or give `na` with the reason.
    these reasons only:
 
    - `cli-missing`: `cr` cannot start because it is not installed. No run is spent.
-   - `cap`: the 2 CLI runs of the branch are used. It needs `cr_finished_runs` of at least 1.
+   - `cap`: the 2 CLI runs with new code of the branch are used (a run on a head with only docs, evidence,
+     PR body or test snapshot changes does not count). It needs `cr_finished_runs` of at least 1.
      That count holds only runs that finished with a PASS.
    - `rate-limited`: no included review is left. It needs a positive `cr_retry_minutes` in the stamp.
    - `cli-cap`: today's paid CLI spend reached `coderabbit.cli_daily_cap_usd`. No run is spent. The

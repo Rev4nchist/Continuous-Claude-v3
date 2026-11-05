@@ -6,8 +6,8 @@
  * nothing, so the gates, the Evidence block and one CLI review run here first.
  * Facts and flow: .claudedocs/2026-10-27-coderabbit-review-budget.md.
  *
- * Usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--cr-timeout-min N] [--json]
- * A review can take 10 to 30 minutes, and a foreground tool call may be cut off before that. Run this script in
+ * Usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--json]
+ * A review takes 4 to 10 minutes (the gates 3 to 5), and a foreground tool call may be cut off before that. Run this script in
  * the background (Bash run_in_background) and read its log when the exit notice arrives. It prints a progress line
  * to stderr each minute while `cr` runs, and streams the review to e2e/<date>-pre-pr-cr-<sha7>.running.txt.
  *   --body     the draft PR body (the Evidence block from pr-and-commit-style.md). Required.
@@ -23,6 +23,10 @@
  *              and the pre-pr-gate hook denies such a stamp. Use it to test this script, not to open a PR.
  *   --cr-timeout-min N  the hard time limit of the CodeRabbit review in minutes (default 30; env PRE_PR_CR_TIMEOUT_MIN).
  *              The floor is 15: a lower value is ignored with a warning and the limit stays 30.
+ *   --keep-going  run every gate after a FAIL. By default (Dave, 2026-11-04) the run stops at the first FAIL: the git, changes and
+ *              evidence checks always report, the gates run cheap ones first (`cheap: true`), and after a FAIL each later gate is a
+ *              SKIP line "not run: <step> failed" and the zizmor, osv and pssa advisories do not start. One FAIL does not stop the
+ *              gates: a stale GREEN sha that a clean merge of the base made and updateGreen can rewrite (the gates settle it).
  *   --json     print one JSON document, not lines.
  * Steps, one PASS / FAIL / SKIP / NOTE line each: git:branch, git:clean, git:behind, changes, evidence,
  * gate:<id> (the gates of every surface the diff touches, SURFACES below), coderabbit, git:stable (the last step: HEAD
@@ -49,7 +53,8 @@
  *     step holds the run lock for this branch (a run is in progress). Findings read
  *     before a failure are kept in the output and the log.
  * The coderabbit step SKIPs, and the stamp records cr_skipped true and cr_skip_reason, when: "flag" (--skip-cr),
- * "cap" (the 2 runs of this branch are used; the stamp also holds cr_finished_runs, the runs that finished with a PASS
+ * "cap" (the 2 counted runs of this branch are used: a script limit on runs with new code; a run on a head whose own commits since
+ * the last reviewed head touch only docs, evidence, PR body or test-snapshot files is not counted; the stamp also holds cr_finished_runs, the runs that finished with a PASS
  * event), "cli-missing" (cr cannot start: ENOENT or EINVAL; no run is spent), "cli-error" (cr usage or cr failed in another
  * way: exit code, timeout, auth error, EACCES; no run is spent; a retry costs nothing), "rate-limited" (`cr usage --agent`
  * reports no included review left; no run is spent; the stamp also holds cr_retry_minutes), "no-changes" (the CLI saw an
@@ -66,12 +71,12 @@
  * Files (all under the gitignored .claude/cache/):
  *   pre-pr/stamp.json                      read by the pre-pr-gate hook: { head, branch, at, body_sha256,
  *                                          cr_skipped, cr_skip_reason, cr_retry_minutes, cr_finished_runs, results }
- *   pre-pr/cr-runs-<branch>.json           the CLI runs used on this branch (cap 2, coderabbit-cli.md). Keyed on the branch
+ *   pre-pr/cr-runs-<branch>.json           the CLI runs used on this branch (cap 2 runs with new code; each row has newCode). Keyed on the branch
  *                                          name and its first own commit: a merge of main keeps the count, a rebase starts a new one.
  *   pre-pr/cr-lock-<branch>.json           { pid, head, at }, held for the whole CodeRabbit step; a second step on the
  *                                          branch FAILs while it is held; a lock whose pid is dead is replaced.
  *   The counter and the lock sit in the primary checkout's cache (git's common dir), so every worktree shares them.
- *   e2e/<date>-pre-pr-<shortsha>.log       the full log
+ *   e2e/<date>-pre-pr-<shortsha>-<HHMMSS>.log  the full log (the local time is in the name: a re-run keeps the earlier log)
  *   e2e/<date>-pre-pr-cr-<shortsha>.txt    the CLI review output for the head (reused, never run twice)
  * The CLI review is advisory: its findings are listed and never fail the step. The step fails only when the run is not
  * complete (see the FAIL causes above). It never passes --use-credits or --api-key.
@@ -109,10 +114,12 @@ const MODS_TSC_NOT_RUN = /^mods FAIL: validate OK \([^)]*\) \| tsc NOT RUN \| te
 const modsTscNotRun = (out) =>
   MODS_TSC_NOT_RUN.test(out) ? 'tsc NOT RUN (no .claude-plugin/types on this machine); validate OK and every mod test passed' : null;
 const nodeGate = (id, script, extra = [], more = {}) => ({ id, cmd: 'node', args: [script, ...extra], cwd: '.', timeoutMs: 5 * MIN, ...more });
+/** A gate that ends in well under a second (a static check). gatesFor runs these first, so a FAIL costs seconds, not minutes. */
+const cheapGate = (id, script, extra = []) => nodeGate(id, script, extra, { cheap: true });
 
 /** Runs for every change set. */
 export const ALWAYS_GATES = [
-  nodeGate('context-budget', 'scripts/rules/context-budget-guard.mjs', ['--repo']),
+  cheapGate('context-budget', 'scripts/rules/context-budget-guard.mjs', ['--repo']),
 ];
 
 /**
@@ -146,14 +153,14 @@ export const SURFACES = [
   {
     id: 'rules',
     globs: ['.claude/rules-ondemand/**', '.claude/rules-src/**'],
-    gates: [nodeGate('ondemand-index', 'scripts/rules/ondemand-index-check.mjs'), nodeGate('rule-router-probe', 'scripts/rules/rule-router-probe.mjs')],
+    gates: [cheapGate('ondemand-index', 'scripts/rules/ondemand-index-check.mjs'), nodeGate('rule-router-probe', 'scripts/rules/rule-router-probe.mjs')],
     manual: BEHAVIOUR,
   },
-  { id: 'skills', globs: ['.claude/skills/**'], gates: [nodeGate('audit-skills', 'scripts/skills/audit-skills.mjs')], manual: BEHAVIOUR },
+  { id: 'skills', globs: ['.claude/skills/**'], gates: [cheapGate('audit-skills', 'scripts/skills/audit-skills.mjs')], manual: BEHAVIOUR },
   {
     id: 'agents',
     globs: ['.claude/agents/**'],
-    gates: [nodeGate('agent-model-drift', 'scripts/check-agent-model-drift.mjs', ['.']), nodeGate('agent-body', 'scripts/agents/check-agent-body.mjs')],
+    gates: [cheapGate('agent-model-drift', 'scripts/check-agent-model-drift.mjs', ['.']), cheapGate('agent-body', 'scripts/agents/check-agent-body.mjs')],
     manual: `${BEHAVIOUR}; confirm "effort":"high" in the subagent transcript`,
   },
   { id: 'rules-scripts', globs: ['scripts/rules/**'], gates: [nodeTest('rules-tests', 'scripts/rules/test/*.test.mjs')] },
@@ -185,7 +192,7 @@ export const SURFACES = [
     manual: 'a config or registry file with no gate of its own: check it by hand (the review router classes it infra)',
   },
   { id: 'templates', globs: ['.claude/templates/**'], gates: [], manual: 'an always-loaded template: the context-budget gate runs anyway; the sync installs it' },
-  // The github suite takes about 14 minutes on this machine (real git, child processes and PowerShell).
+  // The github suite is the longest gate on this machine (real git, child processes and PowerShell).
   { id: 'github-scripts', globs: ['scripts/github/**'], gates: [nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN), nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/*.test.mjs', 5 * MIN)] },
   { id: 'trex', globs: ['.trex/**', 'scripts/trex/**', 'docker/trex/**', 'apps/agentic-os/.trex/**', 'apps/agentic-os/e2e/trex-*.spec.ts', 'apps/agentic-os/playwright.trex.config.ts', 'scripts/checks/test-map.mjs'], gates: [nodeTest('trex-tests', 'scripts/trex/**/*.test.mjs')] },
   {
@@ -220,7 +227,10 @@ function resolveGate(gate, paths) {
   return files.length === 0 ? null : { ...gate, args: [...gate.args, ...files] };
 }
 
-/** The gates a change set needs: the touched surfaces' gates once each, then the always gates. */
+/**
+ * The gates a change set needs: the touched surfaces' gates once each, then the always gates. The cheap gates (`cheap: true`)
+ * come first, each group in table order, so a FAIL of a static check shows before the minutes-long gates start.
+ */
 export function gatesFor(changed) {
   const paths = changed.map(norm);
   const out = [];
@@ -230,7 +240,7 @@ export function gatesFor(changed) {
   };
   for (const s of SURFACES) if (touches(s, paths)) (s.gates ?? []).forEach(add);
   ALWAYS_GATES.forEach(add);
-  return out;
+  return [...out.filter((g) => g.cheap), ...out.filter((g) => !g.cheap)];
 }
 
 /** One NOTE line for each touched surface with a `manual` text, and for a gate dropped because no test file was touched. */
@@ -380,7 +390,7 @@ function checkBehind(git, base, fetched = null) {
   const behind = counts.filter((c) => c.n > 0).map((c) => `${c.n} commit(s) behind ${c.name}${c.name === base ? '' : asFetched}`);
   // Merge, not rebase: the CLI run cap keys on the branch's first own commit, which a merge keeps and a rebase rewrites.
   if (behind.length > 0) {
-    const how = `merge ${base} in (a rebase rewrites the first own commit and starts a new CodeRabbit CLI run count)`;
+    const how = `run git fetch ${FORK} ${base}, then git merge ${FORK}/${base} --no-edit, then run pre-pr.mjs again (a rebase rewrites the first own commit and starts a new CodeRabbit CLI run count, so never rebase)`;
     return result('git:behind', 'FAIL', `${behind.join('; ')}: ${how} (${caveat})`);
   }
   return result('git:behind', 'PASS', `0 commits behind ${counts.map((c) => c.name).join(' and ')} (${caveat})`);
@@ -475,19 +485,31 @@ function isCleanMerge(git, m) {
 }
 
 /**
+ * The old sha on the GREEN line when a rewrite is possible before the gates run, else null: the only evidence problem is that
+ * GREEN names another commit, that commit is an ancestor of HEAD, and nothing but a clean merge of the base came after it.
+ * The gates must still pass on HEAD before the sha is written (updateGreen). Fail-fast uses this to know that a FAIL evidence
+ * line is not final: the gates must run to settle it.
+ */
+export function greenRewriteCandidate({ git, base = 'main', bodyText, head, evidence }) {
+  if (typeof bodyText !== 'string' || evidence.status !== 'FAIL') return null;
+  if (evidence.notes.length !== 1 || !/GREEN names commit/.test(evidence.notes[0])) return null;
+  const greens = parseProof(bodyText).fields.GREEN;
+  const oldSha = greens.length === 1 ? greens[0].sha : null;
+  if (!oldSha || git(['merge-base', '--is-ancestor', oldSha, head]).status !== 0) return null;
+  return onlyBaseMergedSince(git, base, oldSha, head) ? oldSha : null;
+}
+
+/**
  * After a merge of the base the GREEN line names the pre-merge head. This updates it when that is safe: the evidence has
  * no other problem, the GREEN commit is an ancestor of HEAD, nothing but a clean merge of the base came after it
  * (onlyBaseMergedSince), and no other step failed (the gates ran on HEAD). It writes the body file and returns
  * { evidence, bodyText, note }. Any other case returns null and changes nothing.
  */
 export function updateGreen({ git, base = 'main', bodyPath, bodyText, head, paths, config, results, evidence }) {
-  if (!bodyPath || typeof bodyText !== 'string' || evidence.status !== 'FAIL') return null;
-  if (evidence.notes.length !== 1 || !/GREEN names commit/.test(evidence.notes[0])) return null;
+  if (!bodyPath) return null;
   if (results.some((r) => r !== evidence && r.status === 'FAIL')) return null;
-  const greens = parseProof(bodyText).fields.GREEN;
-  const oldSha = greens.length === 1 ? greens[0].sha : null;
-  if (!oldSha || git(['merge-base', '--is-ancestor', oldSha, head]).status !== 0) return null;
-  if (!onlyBaseMergedSince(git, base, oldSha, head)) return null;
+  const oldSha = greenRewriteCandidate({ git, base, bodyText, head, evidence });
+  if (!oldSha) return null;
   const newSha = head.slice(0, 7);
   const text = rewriteGreenSha(bodyText, oldSha, newSha);
   if (text === null) return null;
@@ -497,7 +519,41 @@ export function updateGreen({ git, base = 'main', bodyPath, bodyText, head, path
     if (readFileSync(bodyPath, 'utf8') !== bodyText) return null; // the file changed during the run: never overwrite it
     writeFileSync(bodyPath, text);
   } catch { return null; }
-  return { evidence: again, bodyText: text, note: result('evidence:green', 'NOTE', `GREEN updated ${oldSha.slice(0, 7)} -> ${newSha}`) };
+  return { evidence: again, bodyText: text, note: result('evidence:green', 'NOTE', `GREEN updated ${oldSha.slice(0, 7)} -> ${newSha} in the local body file only: PATCH the PR body if the PR is open`) };
+}
+
+// ---------- heads with new code (the CodeRabbit run cap) ----------
+
+/** Never code, whatever the review router class: test snapshots (expected output), Claude reports and the evidence cache. */
+const NEVER_CODE_GLOBS = ['**/__snapshots__/**', '**/*.snap', '.claude/cache/**', ...['md', 'json', 'txt', 'html', 'csv'].map((ext) => `.claudedocs/**/*.${ext}`)];
+/** A PR body draft. Only for a path that the review router class "normal" holds: a rule or a script named pr-body is still code. */
+const BODY_DRAFT_GLOBS = ['**/*pr-body*.txt'];
+
+/** True when a changed path is docs (review router class docs), evidence, a PR body draft or a test snapshot: nothing a code review reads. */
+export function isNonCodePath(p, config) {
+  const n = norm(p);
+  if (NEVER_CODE_GLOBS.some((g) => matchGlob(g, n))) return true;
+  const cls = classify([n], config).class;
+  return cls === 'docs' || (cls === 'normal' && BODY_DRAFT_GLOBS.some((g) => matchGlob(g, n)));
+}
+
+/**
+ * True when `head` carries new code since `lastHead`, the head the CLI last reviewed to the end. It reads the branch's OWN commits in
+ * lastHead..head (not the commits the base or fork/<base> hold), so a merge of main that brings code is not new code. A merge in that
+ * range with an edit of its own (a hand-resolved conflict) is new code. Any git failure, an unknown sha, a missing config or no
+ * lastHead reads as true: a free run is never granted on a guess.
+ */
+export function carriesNewCode(git, base, lastHead, head, config) {
+  if (!lastHead || !head || !config) return true;
+  const forkRef = `refs/remotes/${FORK}/${base}`;
+  const hasFork = git(['rev-parse', '--verify', '--quiet', forkRef]).status === 0;
+  const range = [`${lastHead}..${head}`, '--not', base, ...(hasFork ? [forkRef] : [])];
+  const merges = git(['rev-list', '--merges', ...range]);
+  if (merges.status !== 0) return true;
+  if (!merges.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).every((m) => isCleanMerge(git, m))) return true;
+  const files = git(['-c', 'core.quotepath=false', 'log', '--no-merges', '--no-renames', '--name-only', '--pretty=format:', ...range]);
+  if (files.status !== 0) return true;
+  return files.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).some((p) => !isNonCodePath(p, config));
 }
 
 // ---------- gates ----------
@@ -687,6 +743,8 @@ const skipped = (reason, detail) => ({ ...result('coderabbit', 'SKIP', detail), 
 const safeName = (s) => `${String(s).replace(/[^A-Za-z0-9._-]/g, '_')}-${createHash('sha1').update(String(s)).digest('hex').slice(0, 8)}`;
 /** The local calendar day, so a late-evening run is dated the day Dave sees (the stamp `at` stays UTC). */
 const dayOf = (now) => `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+/** The local time as HHMMSS, for a log name. */
+const clockOf = (now) => [now.getHours(), now.getMinutes(), now.getSeconds()].map((n) => String(n).padStart(2, '0')).join('');
 const rel = (root, p) => path.relative(root, p).replace(/\\/g, '/');
 
 function readCounter(file, branch) {
@@ -921,6 +979,17 @@ async function preflight(runner, root) {
   return null;
 }
 
+/** The saved output file of a finished review of the head with this short sha, in the e2e folder, or undefined. */
+function savedReviewFor(e2e, short) {
+  return existsSync(e2e) ? readdirSync(e2e).find((n) => new RegExp(`^\\d{4}-\\d{2}-\\d{2}-pre-pr-cr-${short}\\.txt$`).test(n)) : undefined;
+}
+
+/** The verdict of a saved review, as a PASS or FAIL step that says why no run was made. */
+function reusedReview({ root, e2e, saved, base, why }) {
+  const verdict = crVerdict(parseAgentStream(readFileSync(path.join(e2e, saved), 'utf8')), { exitProblem: null, base });
+  return { ...verdict, detail: `${why}: ${verdict.detail} Output: ${rel(root, path.join(e2e, saved))}` };
+}
+
 /**
  * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; a saved
  * output for this head (reused, no run); the run lock (a second step on the same branch FAILs while one runs; a stale lock is replaced);
@@ -929,20 +998,17 @@ async function preflight(runner, root) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
-  const saved = existsSync(e2e) ? readdirSync(e2e).find((n) => new RegExp(`^\\d{4}-\\d{2}-\\d{2}-pre-pr-cr-${short}\\.txt$`).test(n)) : undefined;
-  if (saved) {
-    const verdict = crVerdict(parseAgentStream(readFileSync(path.join(e2e, saved), 'utf8')), { exitProblem: null, base });
-    return { ...verdict, detail: `reused the saved CLI output for ${short} (no run, no slot used): ${verdict.detail} Output: ${rel(root, path.join(e2e, saved))}` };
-  }
+  const saved = savedReviewFor(e2e, short);
+  if (saved) return reusedReview({ root, e2e, saved, base, why: `reused the saved CLI output for ${short} (no run, no slot used)` });
   const paths = crPaths(root, branch, base);
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -973,16 +1039,27 @@ function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
   }
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath }) {
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
-  if (counter.runs.length >= CR_RUN_LIMIT) return skipped('cap', `limit reached: ${counter.runs.length} cr review runs already used on ${branch} (coderabbit-cli.md allows ${CR_RUN_LIMIT} per PR), so no CLI review this time; the stamp records cr_skip_reason cap`);
+  // The head the CLI last reviewed to the end. A head with no new code since then needs no review: its saved output is reused, with no
+  // run and no slot (Dave, 2026-11-04). With no saved output the run goes on and uses no slot (the row says newCode false).
+  const lastReviewed = [...counter.runs].reverse().find((r) => r.complete === true)?.head ?? null;
+  const newCode = carriesNewCode(makeGit(root), base, lastReviewed, head, config);
+  const savedLast = !newCode && lastReviewed ? savedReviewFor(e2e, lastReviewed.slice(0, 7)) : undefined;
+  if (savedLast) {
+    return reusedReview({ root, e2e, saved: savedLast, base, why: `reused the saved CLI output for ${lastReviewed.slice(0, 7)}, the last reviewed head: no new code since (only docs, evidence, PR body, test snapshots or a clean merge of ${base} came after it); no run, no slot used` });
+  }
+  const counted = counter.runs.filter((r) => r.newCode !== false).length;
+  if (counted >= CR_RUN_LIMIT) {
+    return skipped('cap', `limit reached: ${counted} cr review runs with new code already used on ${branch} (a pre-pr.mjs limit of ${CR_RUN_LIMIT} per branch on heads with new code, not a coderabbit-cli.md rule; a run on a head that changed only docs, evidence, the PR body or test snapshots is not counted), so no CLI review this time; the stamp records cr_skip_reason cap`);
+  }
   const capped = cliCapBlock(cliCapUsd, now, ledgerPath);
   if (capped) return capped;
   const blocked = await preflight(runner, root);
   if (blocked) return blocked;
-  const run = { head, at: now.toISOString(), outcome: 'started' };
+  const run = { head, at: now.toISOString(), outcome: 'started', newCode };
   const giveBack = () => {
     counter.runs.splice(counter.runs.indexOf(run), 1);
     writeFileSync(counterFile, JSON.stringify(counter, null, 2));
@@ -1028,7 +1105,8 @@ function formatLines(results) {
 function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
   const dir = path.join(root, '.claude', 'cache', 'e2e');
   mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${dayOf(now)}-pre-pr-${head.slice(0, 7)}.log`);
+  // The time is in the name: a re-run on the same head must not overwrite the log of the run before it.
+  const file = path.join(dir, `${dayOf(now)}-pre-pr-${head.slice(0, 7)}-${clockOf(now)}.log`);
   const outputs = results.filter((r) => r.output).map((r) => `\n===== ${r.step}: ${r.command}\n${clip(r.output.replace(ANSI, ''), 200_000)}`);
   const head2 = [`pre-pr ${now.toISOString()}`, `head ${head}`, `branch ${branch}`, `base ${base} (local ref; fork/${base} fetched first, see git:behind)`, `body_sha256 ${bodySha}`, ''];
   writeFileSync(file, [...head2, ...lines, ...outputs, ''].join('\n'));
@@ -1047,7 +1125,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const headRun = git(['rev-parse', 'HEAD']);
@@ -1060,7 +1138,16 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   results.push(changes.result);
   const evidenceAt = results.length;
   results.push(checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg }));
-  for (const gate of gatesFor(changes.paths)) results.push(runGate(gate, { root, exec, git }));
+  // Fail-fast (Dave, 2026-11-04): the first FAIL stops the rest of the gates, which take minutes. One FAIL does not stop them: an evidence
+  // FAIL that only a gate pass can settle (a stale GREEN sha after a clean merge of the base, see greenRewriteCandidate).
+  const settledByGates = head && bodyPath && greenRewriteCandidate({ git, base, bodyText, head, evidence: results[evidenceAt] }) ? results[evidenceAt] : null;
+  const stopCause = () => (keepGoing ? undefined : results.find((r) => r.status === 'FAIL' && r !== settledByGates));
+  for (const gate of gatesFor(changes.paths)) {
+    const cause = stopCause();
+    results.push(cause
+      ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
+      : runGate(gate, { root, exec, git }));
+  }
   // A stale GREEN sha after a merge of the base: fix the body file once the gates passed on this head.
   const green = head ? updateGreen({ git, base, bodyPath, bodyText, head, paths: changes.paths, config: cfg, results, evidence: results[evidenceAt] }) : null;
   if (green) {
@@ -1069,18 +1156,21 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     log(`pre-pr: ${green.note.detail}`);
   }
   results.push(...notesFor(changes.paths, cfg));
-  // Advisory only (one-week trial): a NOTE line when the diff touches .github/workflows/*, never a FAIL.
-  const zizmor = zizmorAdvisory({ root, paths: changes.paths, bin: findZizmor(), run: zizmorRun });
-  if (zizmor) results.push(zizmor);
-  // Same trial rule. osv runs on every pre-pr that has a tracked lockfile (network); pssa only when an existing .ps1 changed.
-  const osv = osvAdvisory({ root, paths: changes.paths, bin: findOsv(), run: osvRun, lockfiles: osvLockfiles });
-  if (osv) results.push(osv);
-  const pssa = pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun });
-  if (pssa) results.push(pssa);
+  // The advisories run scanners (osv needs the network). A run that stopped at a FAIL does not start them.
+  if (keepGoing || !results.some((r) => r.status === 'FAIL')) {
+    // Advisory only (one-week trial): a NOTE line when the diff touches .github/workflows/*, never a FAIL.
+    const zizmor = zizmorAdvisory({ root, paths: changes.paths, bin: findZizmor(), run: zizmorRun });
+    if (zizmor) results.push(zizmor);
+    // Same trial rule. osv runs on every pre-pr that has a tracked lockfile (network); pssa only when an existing .ps1 changed.
+    const osv = osvAdvisory({ root, paths: changes.paths, bin: findOsv(), run: osvRun, lockfiles: osvLockfiles });
+    if (osv) results.push(osv);
+    const pssa = pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun });
+    if (pssa) results.push(pssa);
+  }
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(failedBefore && !skipCr
-    ? skipped('earlier-step-failed', 'not run: an earlier step failed, and a CLI review run is limited to 2 per branch')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath }));
+    ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg }));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
@@ -1106,7 +1196,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
 
 // ---------- CLI ----------
 
-const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--cr-timeout-min N] [--json]';
+const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--json]';
 
 function option(args, name) {
   const i = args.indexOf(name);
@@ -1132,7 +1222,7 @@ async function main() {
   if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
   const run = await runPrePr({
     root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, bodyPath: path.resolve(bodyPath), skipCr: args.includes('--skip-cr'),
-    crTimeout: crTimeoutMs(args), log: (line) => console.error(line),
+    keepGoing: args.includes('--keep-going'), crTimeout: crTimeoutMs(args), log: (line) => console.error(line),
   });
   if (args.includes('--json')) {
     console.log(JSON.stringify({ ok: run.ok, head: run.head, branch: run.branch, logPath: run.logPath, stampPath: run.stampPath, results: run.results.map(({ step, status, detail, notes }) => ({ step, status, detail, notes })) }));

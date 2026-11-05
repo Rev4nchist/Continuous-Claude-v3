@@ -37,6 +37,7 @@ Expected output: `.githooks`.
 Git reads hooks from `.githooks` instead of `.git/hooks`. The same checks still run from this directory:
 
 - **pre-commit:** gitleaks on staged changes, then `scripts/precommit-build-guard.sh` (build-forget) when that file is present. Gitleaks stays fail-closed. A guard failure exits with the guard's status.
+- **pre-merge-commit:** after a clean merge (no conflict), runs `node scripts/rules/context-budget-guard.mjs --repo --staged` on the merged tree. Git runs `pre-commit` only for a commit you make yourself, so two branches that are each under the always-loaded budget could merge over it (PR #303). On a fail the merge is left uncommitted; trim the text, then run `git commit`. A conflicted merge ends with `git commit`, and `pre-commit` covers that. It installs with the same one-time `core.hooksPath` setting above. `SKIP_RATCHETS=1` skips it, as it skips the ratchets in the pre-commit guard. The file needs the executable bit on Linux: `git update-index --chmod=+x .githooks/pre-merge-commit`. Proof: `.claude/cache/e2e/2026-11-04-prepr-fixes-pre-merge-hook.txt` (two branches at 25176 chars each alone, 25369 merged, merge blocked; a small merge passes).
 - **post-commit:** `.githooks/post-commit` calls `scripts/post-commit-hook.sh` when that file is present (sync to `~/.claude`).
 
 `scripts/install-hooks.sh` still installs copies under `.git/hooks` for clones that have not set `hooksPath`. After `core.hooksPath` is `.githooks`, use the hooks in this directory; do not expect the `.git/hooks` copies to run alongside them.
