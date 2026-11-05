@@ -1350,6 +1350,10 @@ function publishCockpit(html, asOfHuman) {
 // --- main ---
 
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log('usage: node scripts/project-cards/sweep.mjs [--dry-run] [--target mobile-cockpit|triage]');
+    process.exit(0);
+  }
   const dryRun = process.argv.includes('--dry-run');
   const targetIdx = process.argv.indexOf('--target');
   const target = targetIdx !== -1 ? process.argv[targetIdx + 1] : null;
