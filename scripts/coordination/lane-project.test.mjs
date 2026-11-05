@@ -717,9 +717,36 @@ describe('apply-kanban', () => {
     assert.ok(!ids.has('zz-pbprobe-b1'));
   });
 
+  // Lane board per board (PR C): a file that does not say its board could be another board's page db. A non-default
+  // board refuses it. The default board keeps today's behaviour so old input files still work.
+  it('a file that declares no board is refused on a non-default board, names the key and the fix, and writes nothing', async () => {
+    const before = await one(`SELECT priority FROM agentic_os.lane WHERE id='zz-pbprobe-a1'`);
+    const dry = lane(state.dirs.A, SA, ['apply-kanban', kanban({}), '--dry-run']);
+    assert.equal(dry.code, 1, dry.all);
+    assert.match(dry.err, /does not declare its board/);
+    assert.match(dry.err, /pb-a/);
+    assert.match(dry.err, /"project"/);
+    const real = lane(state.dirs.A, SA, ['apply-kanban', kanban({})]);
+    assert.equal(real.code, 1, real.all);
+    assert.deepEqual(await one(`SELECT priority FROM agentic_os.lane WHERE id='zz-pbprobe-a1'`), before);
+  });
+
+  it('every declaration form the planner accepts still passes on a non-default board', () => {
+    for (const extra of [{ project: 'pb-a' }, { board: 'pb-a', cards: [{ id: 'zz-pbprobe-a1', status: 'ready', updatedAt: new Date().toISOString() }] }, { board: { columns: { now: [], next: [], later: [], waiting: [] }, updatedAt: new Date().toISOString(), project: 'pb-a' } }]) {
+      const r = lane(state.dirs.A, SA, ['apply-kanban', kanban(extra), '--dry-run']);
+      assert.equal(r.code, 0, `${JSON.stringify(Object.keys(extra))}: ${r.all}`);
+    }
+  });
+
+  it('the default board still takes a file with no declaration (old input files keep working)', () => {
+    const r = lane(state.dirs.C, SA, ['apply-kanban', kanban({}), '--dry-run']);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /dry run/);
+  });
+
   it('a real apply does not touch the other board lane', async () => {
     const before = await one(`SELECT priority FROM agentic_os.lane WHERE id='zz-pbprobe-b1'`);
-    const r = lane(state.dirs.A, SA, ['apply-kanban', kanban({})]);
+    const r = lane(state.dirs.A, SA, ['apply-kanban', kanban({ project: 'pb-a' })]);
     assert.equal(r.code, 0, r.all);
     assert.deepEqual(await one(`SELECT priority FROM agentic_os.lane WHERE id='zz-pbprobe-b1'`), before);
     assert.equal((await one(`SELECT priority FROM agentic_os.lane WHERE id='zz-pbprobe-a2'`)).priority, 1);
@@ -1114,5 +1141,83 @@ describe('project which / register / unregister', () => {
     const missing = reg(['register', dir('proj-hook2')], { ...env, USERPROFILE: dir('no-hook-home'), HOME: dir('no-hook-home') });
     assert.equal(missing.code, 1, missing.all);
     assert.match(missing.err, /lane-context\.mjs/);
+  });
+
+  // Phone page per board (PR C). register never publishes: it prints one hint for a new owner board, keeps a recorded
+  // laneArtifact on re-register (and says so, so a dead url is visible), and unregister says the url stays in the entry.
+  describe('phone page hint and laneArtifact', () => {
+    const URL_KEPT = 'https://claude.ai/artifact/KeptPage_1-x';
+    let pair;
+    const lines = (r) => r.out.split(/\r?\n/);
+    const hint = (r, key) => lines(r).filter((l) => /^Phone page:/.test(l)).map((l) => l.trim()).filter((l) => l === `Phone page: run /publish-board ${key}`);
+    const hintLines = (r) => lines(r).filter((l) => /Phone page/i.test(l));
+    const preg = (args) => lane(state.cacheRoot, SA, ['project', ...args], regEnv({ LANE_REGISTRY_REPO: pair.repo, LANE_REGISTRY_ACTIVE: pair.act, LANE_REGISTRY_PATH: pair.repo }));
+    const pentries = () => JSON.parse(read(pair.repo)).projects;
+
+    before(() => {
+      const d = (n) => fwd(dir(`ph-${n}`));
+      const seedEntries = [
+        { name: 'zeta2', key: 'zeta2', path: d('zeta2'), status: 'active', laneBoard: 'zeta2' },
+        { name: 'continuous-claude', key: 'continuous-claude', path: d('cc'), status: 'active' },
+        { name: 'dormant', key: 'dormant', path: d('dormant'), status: 'inactive', laneArtifact: URL_KEPT },
+        { name: 'phoned', key: 'phoned', path: d('phoned'), status: 'active', laneArtifact: URL_KEPT.replace('KeptPage_1-x', 'Other_2-y') },
+      ];
+      const seed = JSON.stringify({ version: '1.0', projects: seedEntries }, null, 2) + '\n';
+      pair = { repo: path.join(state.cacheRoot, 'ph-repo.json'), act: path.join(state.cacheRoot, 'ph-active.json') };
+      fs.writeFileSync(pair.repo, seed);
+      fs.writeFileSync(pair.act, seed);
+    });
+
+    it('a new owner board with no laneArtifact prints exactly one hint line and adds no laneArtifact', () => {
+      const r = preg(['register', dir('ph-new')]);
+      assert.equal(r.code, 0, r.all);
+      assert.equal(hint(r, 'ph-new').length, 1, r.out);
+      assert.equal(hintLines(r).length, 1, r.out);
+      assert.equal('laneArtifact' in pentries().find((e) => e.key === 'ph-new'), false);
+      assert.equal(read(pair.repo), read(pair.act));
+    });
+
+    it('no hint for a nested entry (it joins a board) or for the default board', () => {
+      const nested = preg(['register', dir('ph-zeta2/inner'), '--key', 'ph-inner', '--board', 'zeta2']);
+      assert.equal(nested.code, 0, nested.all);
+      assert.equal(hintLines(nested).length, 0, nested.out);
+      const dflt = preg(['register', dir('ph-cc'), '--key', 'continuous-claude']);
+      assert.equal(dflt.code, 0, dflt.all);
+      assert.equal(hintLines(dflt).length, 0, dflt.out);
+    });
+
+    it('re-register of a board that has a laneArtifact keeps it, prints the kept url, and gives no hint', () => {
+      const r = preg(['register', dir('ph-dormant'), '--key', 'dormant']);
+      assert.equal(r.code, 0, r.all);
+      assert.equal(pentries().find((e) => e.key === 'dormant').laneArtifact, URL_KEPT);
+      assert.equal(pentries().find((e) => e.key === 'dormant').status, 'active');
+      assert.equal(hint(r, 'dormant').length, 0, r.out);
+      assert.equal(hintLines(r).length, 1, r.out);
+      assert.ok(r.out.includes(URL_KEPT), r.out);
+      assert.match(r.out, /kept/i);
+      assert.equal(read(pair.repo), read(pair.act));
+    });
+
+    it('unregister of a board with a laneArtifact says the url stays in the entry, and the entry still holds it', () => {
+      const r = preg(['unregister', 'phoned']);
+      assert.equal(r.code, 0, r.all);
+      assert.ok(r.out.includes('https://claude.ai/artifact/Other_2-y'), r.out);
+      assert.match(r.out, /stays in the (registry )?entry/i);
+      const e = pentries().find((x) => x.key === 'phoned');
+      assert.equal(e.status, 'inactive');
+      assert.equal(e.laneArtifact, 'https://claude.ai/artifact/Other_2-y');
+    });
+
+    it('unregister of a board with no laneArtifact prints no phone page line', () => {
+      const r = preg(['unregister', 'ph-new']);
+      assert.equal(r.code, 0, r.all);
+      assert.equal(hintLines(r).length, 0, r.out);
+    });
+
+    it('which --json exposes the recorded laneArtifact as entry.artifact (the url the skills read)', () => {
+      const r = lane(state.cacheRoot, SA, ['project', 'which', '--json', '--project', 'dormant'], regEnv({ LANE_REGISTRY_REPO: pair.repo, LANE_REGISTRY_ACTIVE: pair.act, LANE_REGISTRY_PATH: pair.repo }));
+      assert.equal(r.code, 0, r.all);
+      assert.equal(JSON.parse(r.out).entry.artifact, URL_KEPT);
+    });
   });
 });

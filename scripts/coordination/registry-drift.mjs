@@ -4,7 +4,8 @@
 // post-merge sync, a stale mirror gives a nested app the board of its own key and `add` writes lanes with that
 // project_key (CodeRabbit PR 297, project-registry.json:129).
 //
-// Board-relevant fields, per entry key: the board (laneBoard, else the key), the status (lowercase) and the normalised root.
+// Board-relevant fields, per entry key: the board (laneBoard, else the key), the status (lowercase), the normalised root and
+// the phone page url (laneArtifact: the hooks nag for that page, so a mirror without it leaves the Stop gate blind).
 // Names, notes, stacks and every other field are ignored: they pick no board.
 //
 // Not in lane-board.mjs on purpose: that file has a TypeScript twin (.claude/hooks/src/shared/lane-board.ts) and a parity
@@ -39,7 +40,7 @@ function fieldsByKey(file) {
   const byKey = new Map();
   for (const e of loadRegistry({ registryPath: file, env: {} })) {
     const list = byKey.get(e.key) ?? [];
-    list.push({ board: e.board, status: e.status.toLowerCase(), root: e.root });
+    list.push({ board: e.board, status: e.status.toLowerCase(), root: e.root, laneArtifact: e.artifact });
     byKey.set(e.key, list);
   }
   return byKey;
@@ -67,7 +68,7 @@ export function registryDrift(repoFile, mirrorFile) {
     if (!r) { diffs.push(`${key}: only in the mirror`); continue; }
     if (r.length !== m.length) { diffs.push(`${key}: ${r.length} entries in the repo copy, ${m.length} in the mirror`); continue; }
     r.forEach((re, i) => {
-      for (const field of ['board', 'status', 'root']) {
+      for (const field of ['board', 'status', 'root', 'laneArtifact']) {
         if (re[field] !== m[i][field]) diffs.push(`${key}: ${field} repo=${re[field] || '(none)'} mirror=${m[i][field] || '(none)'}`);
       }
     });

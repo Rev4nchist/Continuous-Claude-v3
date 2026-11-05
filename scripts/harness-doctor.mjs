@@ -12,7 +12,8 @@
  * schedule:* reads scripts/scheduled/tasks.json and runs `schtasks /query /v /fo csv` (read-only, Windows only).
  * blocklist:age reads git history. Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds fake <task>.csv schtasks output.
  * registry:* and lanes:* read <home>/.claude/project-registry.json (the copy lane.mjs reads), the worktree lane.mjs files, and,
- * for registry:mirror-drift, <repo>/.claude/project-registry.json too (FAIL when the two differ in keys, roots, status or laneBoard),
+ * for registry:mirror-drift, <repo>/.claude/project-registry.json too (FAIL when the two differ in keys, roots, status, laneBoard or laneArtifact),
+ * registry:artifact-url judges each board's laneArtifact (phone page) url in the home copy (FAIL on a bad or repeated url, WARN on an ignored one),
  * for registry:project-rows, lanes:board-columns and lanes:schema (agentic_os.__migrations rows vs apps/agentic-os/drizzle/meta/_journal.json,
  * plus the lane_guard_foreign_board trigger), the database named by CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL or OPC_POSTGRES_URL
  * (first one set; no default). That read is one READ ONLY transaction in a child process. No URL is a WARN, an unreachable database is a WARN.
@@ -41,7 +42,7 @@ import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, rea
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
+import { artifactIdOf, boardArtifact, loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
 import { checkLanePaths } from './coordination/lane-path-guard.mjs';
 import { registryDrift } from './coordination/registry-drift.mjs';
 import { resolveMachineProfile } from './settings/machine-profile.mjs';
@@ -450,7 +451,7 @@ export function registryRootsExist(o) {
 }
 
 /**
- * The home mirror (the copy lane.mjs reads) and the repo copy must agree on what picks a lane board: keys, roots, status, laneBoard.
+ * The home mirror (the copy lane.mjs reads) and the repo copy must agree on what picks a lane board and its phone page: keys, roots, status, laneBoard, laneArtifact.
  * A stale mirror gives a nested app the board of its own key, and `lane add` then writes lanes with that project_key (PR 297).
  * FAIL on drift: it is silent and writes wrong rows. A missing copy is a PASS that says absent (roots-exist reports a missing mirror).
  */
@@ -461,9 +462,39 @@ export function registryMirrorDrift(o) {
   if (r.state === 'repo-absent') return absent('registry', 'mirror-drift', repoFile);
   if (r.state === 'mirror-absent') return absent('registry', 'mirror-drift', mirror);
   if (r.state === 'unreadable') return result('WARN', 'registry', 'mirror-drift', `${repoFile} or ${mirror} is not valid JSON with a projects array`);
-  if (r.state === 'same') return result('PASS', 'registry', 'mirror-drift', `${mirror} matches ${repoFile} on keys, roots, status and laneBoard`);
+  if (r.state === 'same') return result('PASS', 'registry', 'mirror-drift', `${mirror} matches ${repoFile} on keys, roots, status, laneBoard and laneArtifact`);
   const shown = r.diffs.slice(0, 8).join('; ') + (r.diffs.length > 8 ? `; and ${r.diffs.length - 8} more` : '');
   return result('FAIL', 'registry', 'mirror-drift', `${r.diffs.length} difference(s) between the repo copy ${repoFile} and the mirror ${mirror} that lane.mjs reads: ${shown}; run scripts/sync-to-active.sh --changed on main`);
+}
+
+/**
+ * A board's phone page is the `laneArtifact` url on its own registry entry (board === key, not the default board). The hooks nag for
+ * that page, so a bad url nags for nothing and one url on two boards lets one publish clear both boards' pending files. FAIL on a
+ * url that is not https://claude.ai/artifact/<id>, on a repeated id and on the default board's id. WARN on a laneArtifact the
+ * resolvers ignore (a nested entry, or the default board's entry). The PASS line counts the pages, so 0 is visible, not vacuous.
+ * Reads the home mirror (the copy the hooks read); the default board's id comes from <repo>/.claude/artifacts.json, else the fallback.
+ */
+export function registryArtifactUrl(o) {
+  const reg = liveRegistry(o, 'artifact-url');
+  if (reg.result) return reg.result;
+  const withUrl = reg.entries.filter((e) => e.artifact !== null);
+  const ignored = withUrl.filter((e) => e.board !== e.key || e.key === DEFAULT_BOARD);
+  const owners = withUrl.filter((e) => !ignored.includes(e));
+  const defaultId = boardArtifact(DEFAULT_BOARD, { artifactsPath: join(o.repo, '.claude', 'artifacts.json'), env: {} })?.id ?? null;
+  const fails = [];
+  const seen = new Map();
+  for (const e of owners) {
+    const id = artifactIdOf(e.artifact);
+    if (!id) { fails.push(`${e.key}: laneArtifact "${e.artifact}" is not https://claude.ai/artifact/<id>`); continue; }
+    if (id === defaultId) fails.push(`${e.key}: laneArtifact is the default board's page (${id})`);
+    if (seen.has(id)) fails.push(`${e.key}: duplicate id ${id}, also the page of ${seen.get(id)}`); else seen.set(id, e.key);
+  }
+  if (fails.length) return result('FAIL', 'registry', 'artifact-url', `${fails.join('; ')} in ${reg.file}; fix the laneArtifact line (a board has its own page)`);
+  if (ignored.length) {
+    const names = ignored.map((e) => `${e.key} (${e.board !== e.key ? `nested on board ${e.board}` : 'default board'})`).join(', ');
+    return result('WARN', 'registry', 'artifact-url', `laneArtifact on ${names} in ${reg.file}: a nested entry or the default board's entry is ignored; put it on the entry where board equals key`);
+  }
+  return result('PASS', 'registry', 'artifact-url', `${owners.length} boards with a phone page in ${reg.file}; urls are strict, unique, and none is the default board's`);
 }
 
 // ---- lanes ----
@@ -606,7 +637,7 @@ export function worktreeLaneMjs(o) {
   return result('PASS', 'lanes', 'worktree-lane-mjs', copies.length ? `all ${copies.length} worktree lane.mjs copies match ${primary}` : `no worktree under ${dir} holds a lane.mjs`);
 }
 
-const registrySection = (o) => [registryRootsExist(o), registryMirrorDrift(o), registryProjectRows(o)];
+const registrySection = (o) => [registryRootsExist(o), registryMirrorDrift(o), registryArtifactUrl(o), registryProjectRows(o)];
 // ---- lane propagation (the shim, the hook dists, the hook registrations, the relative-path ratchet) ----
 const DEFAULT_BOARD = 'continuous-claude';
 /** Hooks whose registration the lane work changes. prompt-submit bundles lane-context but is not itself a lane registration. */

@@ -995,6 +995,11 @@ const commands = {
     if (declared !== null && declared !== board.key) {
       throw new Error(`"${file}" is for board '${declared}' but this run resolved board '${board.key}'. Nothing was applied.`);
     }
+    // Every board has its own page db. A file that does not name its board could come from another board's page, so a
+    // non-default board refuses it. The default board keeps taking an undeclared file: old input files still work.
+    if (declared === null && board.key !== DEFAULT_BOARD) {
+      throw new Error(`"${file}" does not declare its board, and board '${board.key}' is not the default board. Add "project": "${board.key}" to the file. Nothing was applied.`);
+    }
     const myId = dry ? null : me();
     const readAt = Date.parse(input?.readAt);
     const syncedAt = new Date(Number.isNaN(readAt) ? Date.now() : readAt).toISOString();
@@ -1269,6 +1274,17 @@ async function upsertProjectRow(c, e) {
   );
 }
 
+/**
+ * The closing line of `project register`. register never publishes (a publish is confirm-first and needs the Artifact tool).
+ * A board that owns its entry and has no laneArtifact gets one hint. One that has a laneArtifact keeps it, and the line shows
+ * the url so a dead one is visible. A nested entry or the default board gets nothing.
+ */
+function phonePageLine(key, board, artifact) {
+  if (board !== key || key === DEFAULT_BOARD) return '';
+  if (artifact) return `\n  Phone page kept: laneArtifact ${artifact} (check it still exists; unregister keeps it too)`;
+  return `\nPhone page: run /publish-board ${key}`;
+}
+
 async function projectRegister(c) {
   const arg = positional[2];
   if (!arg) throw new Error('usage: lane.mjs project register <path> [--key k] [--board parent]');
@@ -1304,7 +1320,7 @@ async function projectRegister(c) {
   const files = await writeRegistries(plan, () => upsertProjectRow(c, { ...entry, name: same?.name || name }));
   return `registered ${key} (board ${target}) at ${entry.path}\n` +
     `  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n` +
-    `  ${PRIMARY_NOTE}`;
+    `  ${PRIMARY_NOTE}` + phonePageLine(key, target, same?.artifact ?? null);
 }
 
 async function projectUnregister(c) {
@@ -1321,7 +1337,8 @@ async function projectUnregister(c) {
   const head = e.board !== e.key
     ? `unregistered ${key} (it joined board ${e.board}, which stays registered; its lanes are untouched)`
     : `unregistered ${key} (board ${e.board}); ${(await c.query(`SELECT count(*)::int AS n FROM agentic_os.lane WHERE project_key=$1`, [e.board])).rows[0].n} lane row(s) kept on that board`;
-  return `${head}\n  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n  ${PRIMARY_NOTE}`;
+  const kept = e.board === e.key && e.artifact ? `\n  the phone page url stays in the entry (laneArtifact ${e.artifact}); register again keeps it` : '';
+  return `${head}\n  wrote ${fwd(files.repoFile)} and ${fwd(files.activeFile)}\n  ${PRIMARY_NOTE}${kept}`;
 }
 
 // ---------------------------------------------------------------- main

@@ -35,6 +35,7 @@
   **lane board** lists lanes and holders. **Claim / release** a lane; **note** progress on it.
 - **Board**: lanes and events under one `project_key`. **Board key**: the registry key; cooperative, not security.
 - **Lane shim**: `~/.claude/scripts/lane.mjs`, the CLI path. **Project register** makes a board.
+- **Phone page**: a board's published lane page. Its url is `laneArtifact` in the registry entry; `/publish-board <key>` makes it.
 - **Session name**: the `/rename` (or `claude -n`) name, e.g. `trex`. It is the address peers use (`say --to trex`).
   **Session handle**: `#` + the first 8 hex of the session id, e.g. `#0d40499c`. **Label**: `name #sid8`.
   Write a session as `trex #0d40499c` or `#0d40499c`, never as bare hex. Identity file: `~/.claude/state/identity/<uuid>.json`.
