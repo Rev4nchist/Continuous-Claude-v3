@@ -1589,7 +1589,13 @@ describe('CR 299: nested Delete args, exec-flag forms, POSIX payload alone', () 
       expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
     });
   }
-  for (const cmd of ['git checkout -b feature-x', 'git checkout -B fix/y main', 'git checkout -q main']) {
+  // Round 3 (a7c494f0): -B / switch -C reset an existing branch to a new start point, like branch -f.
+  for (const cmd of ['git checkout -B fix/y main', 'git checkout -qB fix/y', 'git switch -C fix/y main', 'git switch --force-create fix/y main']) {
+    it(`Bash asks: ${cmd}`, () => {
+      expect(decide(cmd, interactiveFor('Bash'), {}).decision).not.toBe('allow');
+    });
+  }
+  for (const cmd of ['git checkout -b feature-x', 'git switch -c feature-x', 'git checkout -q main']) {
     it(`Bash allows: ${cmd}`, () => {
       expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');
     });
