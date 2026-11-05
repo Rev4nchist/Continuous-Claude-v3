@@ -203,4 +203,60 @@ function plainPrompt(lane, others) {
   ].join('\n');
 }
 
-export { placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt };
+/**
+ * Does the saved `kanban/board` doc belong to another board?
+ * Every artifact has its own db, but a page published to the wrong artifact would find another board's order there, and its
+ * first save would replace it. The page stamps `board` on every save and refuses a doc stamped with another board.
+ * A doc with no `board` field is an old doc: allowed, and its next save adds the field.
+ * Fails closed: a stamp that is not exactly the page's board (null, a number, other case) counts as foreign.
+ */
+function boardMismatch(doc, board) {
+  if (!doc || typeof doc !== 'object' || !Object.prototype.hasOwnProperty.call(doc, 'board')) return false;
+  return doc.board !== board;
+}
+
+/**
+ * How the page writes `kanban/board`: 'update' when the doc exists, 'set' only to create it.
+ * `set` replaces the whole doc, so on an existing doc it would drop appliedColumns and syncedAt, which only the sync writes.
+ * `update` merges top-level fields and leaves those two alone.
+ */
+function boardWriteKind(doc) {
+  return doc && typeof doc === 'object' ? 'update' : 'set';
+}
+
+/**
+ * The columns the page saves: its own, plus the ids of the saved doc that the page does not know.
+ * A device with an old page must not drop lanes it has never heard of. Each unknown id returns in the column the saved doc
+ * had it in, after the page's own ids. An id the page knows is never merged back: the page placed it (or dropped it, when
+ * the lane is done). Pruning ids of done or deleted lanes is the job of the kanban-sync write-back, not of this page.
+ *
+ * doc     : the saved `kanban/board` value, or null.
+ * columns : { now, next, later, waiting }, the page's columns. Not changed.
+ * lanes   : [{ id }] every lane the page knows, done ones included.
+ */
+function mergeUnknownColumns(doc, columns, lanes) {
+  var names = ['now', 'next', 'later', 'waiting'];
+  var known = Object.create(null);
+  var seen = Object.create(null);
+  var out = {};
+  var i;
+  var j;
+  for (i = 0; i < lanes.length; i++) known[lanes[i].id] = true;
+  for (i = 0; i < names.length; i++) {
+    out[names[i]] = Array.isArray(columns[names[i]]) ? columns[names[i]].slice() : [];
+    for (j = 0; j < out[names[i]].length; j++) seen[out[names[i]][j]] = true;
+  }
+  var saved = doc && typeof doc === 'object' && doc.columns && typeof doc.columns === 'object' ? doc.columns : {};
+  for (i = 0; i < names.length; i++) {
+    var ids = Array.isArray(saved[names[i]]) ? saved[names[i]] : [];
+    for (j = 0; j < ids.length; j++) {
+      var id = ids[j];
+      if (typeof id !== 'string' || id === '' || known[id] || seen[id]) continue;
+      seen[id] = true;
+      out[names[i]].push(id);
+    }
+  }
+  return out;
+}
+
+export { placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns };
