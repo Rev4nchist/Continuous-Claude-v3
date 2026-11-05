@@ -28,7 +28,8 @@ A per-session breakdown and ranked fixes for the CCv3 harness and the Software F
 ## Steps
 
 1. Extract. Flags: `--days D` (45), `--max-sessions N` (12, a hard cap), `--session <id>`,
-   `--include-headless`, `--include-subagents`, `--out <dir>`. Pass only what Dave asked for.
+   `--include-headless`, `--include-subagents`, `--out <dir>`, `--project-prefix <folder-prefix>`.
+   Pass only what Dave asked for. When you pass `--project-prefix`, pass the same value to `excerpt.mjs`.
 
    ```
    node "${CLAUDE_SKILL_DIR}/scripts/extract.mjs" --days 45 --max-sessions 12

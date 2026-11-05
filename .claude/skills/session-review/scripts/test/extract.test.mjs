@@ -578,3 +578,15 @@ test('11f redaction removes a whole credential value: one that contains the word
   assert.ok(!redact('API_KEY=abc;def').includes('def'));
   assert.equal(redact('API_KEY=[REDACTED]'), 'API_KEY=[REDACTED]');
 });
+
+test('16b excerpt honours --project-prefix: a matching prefix finds the session, another prefix does not', () => {
+  const t = setup([SID.hook]);
+  try {
+    const env = { ...process.env, USERPROFILE: t.home, HOME: t.home };
+    const args = ['--session', SID.hook.slice(0, 8), '--uuid', '00000000-0000-4000-8000-000000000032', '--context', '1'];
+    const same = spawnSync(process.execPath, [EXCERPT, ...args, '--project-prefix', PREFIX], { env, encoding: 'utf8' });
+    assert.equal(same.status, 0, same.stderr);
+    const other = spawnSync(process.execPath, [EXCERPT, ...args, '--project-prefix', 'C--Users-nobody-elsewhere'], { env, encoding: 'utf8' });
+    assert.notEqual(other.status, 0, 'a prefix that matches no folder finds nothing');
+  } finally { t.cleanup(); }
+});

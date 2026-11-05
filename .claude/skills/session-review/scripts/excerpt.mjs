@@ -14,18 +14,18 @@ import { redact, oneLine } from './lib/redact.mjs';
 const MAX_LINES = 40;
 const MAX_CHARS = 200;
 const MAX_CONTEXT = 10;
-const PREFIX = 'C--Users-dkhay-continuous-claude';
+const DEFAULT_PREFIX = 'C--Users-dkhay-continuous-claude';
 
 function fail(msg, code = 2) {
   process.stderr.write(`session-review excerpt: ${msg}\n`);
   process.exit(code);
 }
 
-function findFile(root, id) {
+function findFile(root, id, prefix) {
   if (!/^[0-9a-f-]{4,36}$/i.test(id)) fail(`bad session id: ${id}`);
   const hits = [];
   for (const d of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!d.isDirectory() || !d.name.startsWith(PREFIX)) continue;
+    if (!d.isDirectory() || !d.name.startsWith(prefix)) continue;
     const dir = path.join(root, d.name);
     for (const n of fs.readdirSync(dir)) if (n.endsWith('.jsonl') && n.startsWith(id)) hits.push(path.join(dir, n));
   }
@@ -58,12 +58,12 @@ function render(o) {
 }
 
 async function main() {
-  const { values } = parseArgs({ args: process.argv.slice(2), strict: true, options: { session: { type: 'string' }, uuid: { type: 'string' }, context: { type: 'string' } } });
+  const { values } = parseArgs({ args: process.argv.slice(2), strict: true, options: { session: { type: 'string' }, uuid: { type: 'string' }, context: { type: 'string' }, 'project-prefix': { type: 'string' } } });
   if (!values.session || !values.uuid) fail('need --session and --uuid');
   const n = values.context === undefined ? 3 : Number(values.context);
   if (!Number.isInteger(n) || n < 0 || n > MAX_CONTEXT) fail(`--context must be an integer 0..${MAX_CONTEXT}`);
   const root = path.join(os.homedir(), '.claude', 'projects');
-  const file = findFile(root, values.session);
+  const file = findFile(root, values.session, values['project-prefix'] || DEFAULT_PREFIX);
   const before = [];
   const after = [];
   let found = false;
