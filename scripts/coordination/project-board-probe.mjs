@@ -31,7 +31,8 @@
  *   9  an old-style client is refused (42501) on b1 and allowed on a continuous-claude lane
  *  10  the continuous-claude lane count is the same before and after
  *  11  cleanup deletes every fixture
- *  12  hook payloads (T6): SKIP, the hooks change in the next PR
+ *  7b  the built lane-context hook returns {} for cwd C, and names board A from A's folder (control)
+ *  12  T6: a lane owner under an sdk entrypoint, or in a folder with no board, gets {} from the hook and a moved lease
  *
  * Exit: 0 all pass | 1 a check failed | 2 refused or could not run.
  */
@@ -47,6 +48,8 @@ import { laneEnv, makeBoards } from './probe-boards.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const LANE = join(HERE, 'lane.mjs');
+/** The built lane-context hook (override: PBPROBE_HOOK). In a worktree this is the worktree's own bundle. */
+const HOOK = process.env.PBPROBE_HOOK || join(REPO, '.claude', 'hooks', 'dist', 'lane-context.mjs');
 
 function loadPg() {
   for (const anchor of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
@@ -67,6 +70,7 @@ const KEY_B = 'zz-pbprobe-b';
 const L_A1 = 'zz-pbprobe-a1';
 const L_B1 = 'zz-pbprobe-b1';
 const L_C1 = 'zz-pbprobe-c1';
+const L_H1 = 'zz-pbprobe-h1';
 const SA = 'zz-pbprobe-sa';
 const SB = 'zz-pbprobe-sb';
 const DEFAULT_BOARD = 'continuous-claude';
@@ -247,7 +251,28 @@ async function main() {
     check('(7) cwd C (planted .git file, in the temp dir) exits 1 and names --project continuous-claude',
       noBoard.code === 1 && /no lane board for/.test(noBoard.err) && /--project continuous-claude/.test(noBoard.err),
       `exit ${noBoard.code}; ${noBoard.err.trim().split('\n')[0]}`);
-    skip('(7b) the lane-context hook returns {} for cwd C', 'the hooks change in the next PR');
+    // 7b. the lane-context hook, as Claude Code runs it: JSON on stdin, the built bundle.
+    const hookOut = (cwd, event, extraEnv = {}) => {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd,
+        env: laneEnv(URL, bx, extraEnv),
+        input: JSON.stringify({ session_id: SA, hook_event_name: event, cwd }),
+        encoding: 'utf8',
+        timeout: 20000,
+      });
+      return { code: r.status, out: (r.stdout ?? '').trim(), err: r.stderr ?? '' };
+    };
+    if (!fs.existsSync(HOOK)) {
+      check('(7b) the lane-context hook returns {} for cwd C', false, `hook not built: ${HOOK} (cd .claude/hooks && npm run build)`);
+    } else {
+      // Positive control first: the same hook from board A's folder injects a banner naming board A.
+      const hookA = hookOut(dirA, 'SessionStart');
+      check('(7b-control) the lane-context hook names board A from A\'s folder',
+        hookA.code === 0 && hookA.out.includes(`Lane board ${KEY_A}`), `exit ${hookA.code}; ${hookA.out.slice(0, 100)}`);
+      const hookC = hookOut(dirC, 'SessionStart');
+      check('(7b) the lane-context hook returns {} for cwd C (planted .git file, no registry entry)',
+        hookC.code === 0 && hookC.out === '{}', `exit ${hookC.code}; stdout=${JSON.stringify(hookC.out.slice(0, 100))}`);
+    }
 
     // 8. subfolder
     const sub = json(lane(deep, SA, ['board', '--json']));
@@ -264,7 +289,27 @@ async function main() {
       check('(9b) an old-style client may still update a continuous-claude lane', own.rowCount === 1, `rowCount=${own.rowCount}`);
     } finally { await old.end().catch(() => {}); }
 
-    skip('(12) T6 hook test: a lane owner under an sdk entrypoint gets {} and a moved lease', 'the hooks change in the next PR');
+    // 12. T6: a lane owner whose hook resolves no board still renews its lease, and gets {}.
+    if (fs.existsSync(HOOK)) {
+      await probe.query(
+        `INSERT INTO agentic_os.lane (id,title,track,state,project_key,owner_session_id,lease_expires_at)
+         VALUES ($1,'t6 holder','zz','active',$2,$3, now() + interval '5 minutes')`, [L_H1, KEY_A, SA]);
+      const leaseMin = async () => Number((await one(
+        `SELECT extract(epoch FROM (lease_expires_at - now()))/60 AS m FROM agentic_os.lane WHERE id=$1`, [L_H1])).m);
+      const reset = () => probe.query(`UPDATE agentic_os.lane SET lease_expires_at = now() + interval '5 minutes' WHERE id=$1`, [L_H1]);
+      const m0 = await leaseMin();
+      const sdk = hookOut(dirA, 'UserPromptSubmit', { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' });
+      const m1 = await leaseMin();
+      check('(12a) T6 headless: a lane owner under an sdk entrypoint gets {} and a moved lease',
+        sdk.code === 0 && sdk.out === '{}' && m0 < 10 && m1 > 60, `exit ${sdk.code}; stdout=${JSON.stringify(sdk.out.slice(0, 60))}; lease ${m0.toFixed(1)} -> ${m1.toFixed(1)} min`);
+      await reset();
+      const unreg = hookOut(dirC, 'UserPromptSubmit');
+      const m2 = await leaseMin();
+      check('(12b) T6 unregistered: a lane owner in a folder with no board gets {} and a moved lease',
+        unreg.code === 0 && unreg.out === '{}' && m2 > 60, `exit ${unreg.code}; stdout=${JSON.stringify(unreg.out.slice(0, 60))}; lease -> ${m2.toFixed(1)} min`);
+    } else {
+      check('(12) T6 hook test', false, `hook not built: ${HOOK}`);
+    }
   } finally {
     // 11. cleanup, on a fresh connection
     let cleanErr = null;

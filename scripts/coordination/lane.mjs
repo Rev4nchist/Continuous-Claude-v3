@@ -80,7 +80,7 @@ import * as os from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { repoPath } from './canon-home.mjs';
-import { boardRoots, loadRegistry, normalizeRoot, resolveBoard } from './lane-board.mjs';
+import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
 import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
@@ -155,8 +155,6 @@ function me() {
   return id;
 }
 
-/** The board every lane and event belongs to until a command says otherwise. */
-const DEFAULT_BOARD = 'continuous-claude';
 /** What this CLI tells the DB trigger (migration 0004): "I know about boards". */
 const CLIENT_VERSION = '2';
 const BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -165,7 +163,6 @@ const fwd = (p) => String(p).replace(/[\\]/g, '/');
 /** The primary checkout (`~/continuous-claude`, or CCV3_USER_HOME/continuous-claude). Registry edits and the
  *  hints name this one, never the worktree this script may run from: a worktree has its own copy of the registry. */
 const PRIMARY = repoPath();
-const LANE_CLI = fwd(resolve(PRIMARY, 'scripts', 'coordination', 'lane.mjs'));
 
 /** The resolver's answer for this cwd, or null. Throws only for an unknown --project / LANE_PROJECT. */
 function softBoard() {
@@ -206,7 +203,7 @@ function projectOf() {
       throw new Error(`no lane board for ${cwd}; this directory cannot be registered (${never}). ` +
         `Pass --project ${DEFAULT_BOARD} or set LANE_PROJECT=${DEFAULT_BOARD} (or the key of another registered board).`);
     }
-    throw new Error(`no lane board for ${cwd}; register it: node ${LANE_CLI} project register ${cwd}`);
+    throw new Error(`no lane board for ${cwd}; register it: ${laneCliCmd()} project register ${cwd}`);
   }
   return b;
 }
@@ -227,9 +224,6 @@ async function projectForOwnedLane(c, id, myId) {
 }
 /** Board key for an event row: the resolved board, else the default board. */
 const eventBoard = () => (BOARD ? BOARD.key : DEFAULT_BOARD);
-
-/** Watermark row key: the bare session id on the default board, `<id>@<board>` on any other. */
-const wmKey = (sid, board) => (board === DEFAULT_BOARD ? sid : `${sid}@${board}`);
 
 // Session names live in identity files (session-label.mjs). Read once per run.
 let IDS = null;

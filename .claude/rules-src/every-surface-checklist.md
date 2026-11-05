@@ -11,6 +11,10 @@ paths:
   - ".claude/project-registry.json"
   - "scripts/sync-to-active.sh"
   - "scripts/sync-claude.sh"
+  - "scripts/coordination/**"
+  - "apps/agentic-os/drizzle/**"
+  - ".claude/artifacts.json"
+  - "COORDINATION.md"
 ---
 
 # Every-Surface Checklist
@@ -30,6 +34,17 @@ two-copy surfaces. Before you say "done", walk this list and name which rows app
 | Agents | `.claude/agents/<name>.md` and `.json` mirror | `model:` lives in both; `sync-agent-json.py` does not copy it. `effort:` lives only in the `.md`; the `.json` has none. |
 | Skills | `.claude/skills/<name>/SKILL.md` (repo) and `~/.claude/skills/` (active) | Repo is the source. Description is the ONLY prompt-time trigger (the skill-activation-prompt hook was retired 2026-08-19: 0 hits beyond the native router, 22/45 false fires); one line: "Does X. Use when Y." Gate: `node scripts/skills/audit-skills.mjs`. `skill-rules.json` still feeds vet-skill, plan-mode-discovery, and session-start-init-check, not prompt routing. |
 | Registry | `.claude/project-registry.json` (repo) and `~/.claude/` mirror | Edit repo only; the active mirror is never auto-deleted. |
+| Lane CLI and shim | `lane.mjs` in `scripts/coordination/` (primary checkout) and the shim `.claude/scripts/lane.mjs` (synced to `~/.claude/scripts/`) | Model-run text calls the shim path, never a relative `lane.mjs`; hooks keep the absolute primary path. Gate: `node scripts/coordination/lane-path-guard.mjs`. |
+| Resolver twins | `scripts/coordination/lane-board.mjs` and `.claude/hooks/src/shared/lane-board.ts` | Change both in one commit; the drift test `lane-board-resolver.test.ts` fails if they differ. Keep them pure: no cache, no DB. |
+| Lane schema | `apps/agentic-os/drizzle/**` and the live `agentic_os` tables | Confirm-first with Dave. Expand before contract. Prove on `scratch-db.mjs`, then apply by the runbook. |
+| DB writers | every client that writes `agentic_os.lane` | Each sets `lane.client_version` before it writes, or the board trigger denies it (42501) once a second board exists. |
+| Hooks and hint text | `.claude/hooks/src/lane-*.ts`, `session-register.ts`, `shared/session-names.ts` | Hint text uses `laneCliCmd()` from the twins. Build, then pipe a real payload into `dist/lane-context.mjs`. |
+| Hook registrations | `.claude/settings.json.template` and live `~/.claude/settings.json` | Never synced. After Dave says yes, run `apply-registrations.mjs --apply --only <hook>`, then `render-settings.mjs --check`. |
+| Phone board | `scripts/coordination/render-board.mjs` output and the artifact in `.claude/artifacts.json` | Only `continuous-claude` has a page. Render from the primary checkout, publish to the same URL, read back the meta stamp. |
+| Lane consumers | Agentic OS app, the `/os` pane in `ccv3-mods`, the `kanban-sync` skill | Each reads one board and passes `--project` or the session cwd. An unregistered folder shows "no lane board". |
+| Registration paths | `lane.mjs project register`, `/init-project`, the `project-registry` skill | One writer for a board: `project register`, from the primary checkout. A second board only after the release steps pass. |
+| Docs and onboarding | `CONTEXT.md`, `COORDINATION.md`, `rules-ondemand/lane-board.md`, `docs/harness/lane-board-claude-md-pointer.md` | Update all four when board behaviour changes. A project `CLAUDE.md` pointer needs Dave's yes per project. |
+| Worktree copies | `.claude/worktrees/*/scripts/coordination/` | Stale copies of the lane CLI. Do not edit or run them; use the shim. |
 | Reverse states | register / unregister, claim / release, start / stop, enable / disable | If you add one direction, test the other in the same change. |
 
 ## Rule-router records

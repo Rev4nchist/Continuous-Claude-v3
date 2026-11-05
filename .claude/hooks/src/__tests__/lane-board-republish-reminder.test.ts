@@ -12,13 +12,34 @@
  *  9. Crashes or speaks on a bad payload          -> malformed input gives 'none'
  * 10. Registered on a tool the runtime rejects    -> Bash, PowerShell and Artifact all accepted
  */
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  BOARD_ARTIFACT_URL,
-  RENDER_COMMAND,
-  decide,
-} from '../lane-board-republish-reminder.js';
+import { decide } from '../lane-board-republish-reminder.js';
+import { boardArtifact, renderBoardCmd } from '../shared/lane-board.js';
+
+const BOARD_ARTIFACT_URL = boardArtifact('continuous-claude')?.url as string;
+const RENDER_COMMAND = renderBoardCmd('continuous-claude');
+
+// Hermetic board: a temp registry whose continuous-claude root covers the test cwd, so decide() resolves a
+// board without reading the real ~/.claude/project-registry.json. decide() never spawns a render.
+let tmpRoot = '';
+const savedEnv = { reg: process.env.LANE_REGISTRY_PATH, ep: process.env.CLAUDE_CODE_ENTRYPOINT };
+beforeEach(() => {
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'reminder-'));
+  fs.writeFileSync(path.join(tmpRoot, 'registry.json'), JSON.stringify({ projects: [
+    { name: 'CCv3', key: 'continuous-claude', path: process.cwd(), status: 'active' },
+  ] }));
+  process.env.LANE_REGISTRY_PATH = path.join(tmpRoot, 'registry.json');
+  delete process.env.CLAUDE_CODE_ENTRYPOINT;
+});
+afterEach(() => {
+  if (savedEnv.reg === undefined) delete process.env.LANE_REGISTRY_PATH; else process.env.LANE_REGISTRY_PATH = savedEnv.reg;
+  if (savedEnv.ep === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT; else process.env.CLAUDE_CODE_ENTRYPOINT = savedEnv.ep;
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
 
 const bash = (command: string, extra: Record<string, unknown> = {}) => ({
   session_id: 's1',

@@ -13,21 +13,57 @@
  * the affordance the hand-written board introduced and the one worth keeping.
  * Any figure can be falsified in about ten seconds.
  *
- * Usage: node scripts/coordination/render-board.mjs [out.html]
+ * One page per board. The board comes from --project <key>, else LANE_PROJECT, else the registry entry that holds the cwd.
+ * A cwd with no board exits 1 with the register hint. continuous-claude writes <repo>/lane-board.html (the phone page);
+ * every other board writes <repo>/lane-board-<key>.html, read-only, without the kanban script (its save would drop ids
+ * the page does not know). The lane, session and event queries are filtered to the board. The file-claim and
+ * coordination_event sections are machine-wide and say so on the page. The page carries a stamp
+ * (<meta name="lane-board">: board, template hash, generated time) and a "generated N min ago" badge.
+ *
+ * Usage: node scripts/coordination/render-board.mjs [--project <key>] [--out <file>] [out.html]
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
 } from './kanban-place.mjs';
+import { DEFAULT_BOARD, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
+import { boardStamp, defaultOut, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
-const OUT = process.argv[2] || join(REPO, 'lane-board.html');
 const STALE_MINUTES = 5;
+
+function usage(message, code) {
+  console.error(`${message}\nusage: node scripts/coordination/render-board.mjs [--project <key>] [--out <file>] [out.html]`);
+  process.exit(code);
+}
+
+let args;
+try { args = parseRenderArgs(process.argv.slice(2)); } catch (err) { usage(err.message, 2); }
+
+// The board: --project, else LANE_PROJECT, else the cwd's registry entry. An unknown key throws; no board is an error with the hint.
+let BOARD;
+try {
+  BOARD = resolveBoard(process.cwd(), { cli: true, projectFlag: args.project ?? undefined });
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+if (!BOARD) {
+  const cwd = process.cwd().replace(/\\/g, '/');
+  console.error(`no lane board for ${cwd}; register it: ${laneCliCmd()} project register ${cwd}\nOr pass --project <key> (the registered boards: ${laneCliCmd()} project which).`);
+  process.exit(1);
+}
+const KEY = BOARD.key;
+/** Only the default board has the phone page and its kanban (the kanban save is keyed by lane id and the page db is one document). */
+const KANBAN = KEY === DEFAULT_BOARD;
+const OUT = args.out || defaultOut(REPO, KEY);
+const BOARD_ROOTS = boardRoots(KEY);
+const GENERATED_AT = new Date();
 
 function loadPg() {
   for (const a of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
@@ -57,6 +93,21 @@ function ago(ts) {
   const h = Math.round(m / 60);
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
 }
+
+/** `sessions.project` folded the way normalizeRoot folds a path (the SQL twin, steps in the same order): forward
+ *  slashes (chr(92) is a backslash), the `//?/` or `//./` extended-length prefix dropped, lower case, a leading
+ *  /c/ becomes c:/, runs of slashes collapse to one (not at the very start), no trailing slash.
+ *  TWIN of FOLDED_PROJECT in lane.mjs (that file runs a command on import, so it cannot be imported). render-board.test.mjs pins the two. */
+const FOLDED_PROJECT = (alias = 's.') =>
+  `rtrim(regexp_replace(regexp_replace(lower(regexp_replace(replace(${alias}project, chr(92), '/'), '^//[?.]/', '')), ` +
+  `'^/([a-z])(/|$)', '\\1:\\2'), '(?<=.)/{2,}', '/', 'g'), '/')`;
+
+/** SQL: the session belongs to the board. $1 = board key, $2 = the board's registry roots. starts_with, never LIKE: paths hold `_`. */
+const PEER_OF_BOARD_SQL = `(
+  EXISTS (SELECT 1 FROM unnest($2::text[]) r
+           WHERE ${FOLDED_PROJECT()} = r OR starts_with(${FOLDED_PROJECT()}, r || '/'))
+  OR EXISTS (SELECT 1 FROM agentic_os.lane bl
+              WHERE bl.owner_session_id = s.id AND bl.project_key = $1::text))`;
 
 const c = new Client({
   connectionString: process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL
@@ -99,22 +150,26 @@ const lanes = (await c.query(`
             )
          )) AS held_now
     FROM agentic_os.lane l
-   ORDER BY l.track, l.priority, l.id`)).rows;
+   WHERE l.project_key = $1::text
+   ORDER BY l.track, l.priority, l.id`, [KEY])).rows;
 
+// The sessions of this board: under one of its registry roots, or holding one of its lanes (a session started in the home dir).
+// The same rule as lane.mjs peers; the lanes listed under a session are this board's lanes only.
 const sessions = (await c.query(
   `SELECT s.id, s.working_on,
           GREATEST(s.last_heartbeat, s.last_activity_at) AS last_heartbeat,
           COALESCE(json_agg(json_build_object('id',l.id,'title',l.title,'scope',l.scope,'note',l.note)
             ORDER BY l.priority) FILTER (WHERE l.id IS NOT NULL), '[]') AS lanes
    FROM sessions s
-   LEFT JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done'
+   LEFT JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done' AND l.project_key = $1::text
    WHERE GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+     AND ${PEER_OF_BOARD_SQL}
    GROUP BY s.id, s.working_on, s.last_heartbeat, s.last_activity_at
-   ORDER BY GREATEST(s.last_heartbeat, s.last_activity_at) DESC`,
+   ORDER BY GREATEST(s.last_heartbeat, s.last_activity_at) DESC`, [KEY, BOARD_ROOTS],
 )).rows;
 
 const events = (await c.query(
-  `SELECT * FROM agentic_os.lane_event ORDER BY id DESC LIMIT 30`,
+  `SELECT * FROM agentic_os.lane_event WHERE project_key = $1::text ORDER BY id DESC LIMIT 30`, [KEY],
 )).rows;
 
 const claimHealth = (await c.query(
@@ -176,7 +231,7 @@ const laneRow = (l, i) => {
       ${l.done_when ? `<dt>done when</dt><dd>${esc(l.done_when)}</dd>` : ''}
     </dl>
     ${l.rationale ? `<p class="why">${esc(l.rationale)}</p>` : ''}
-    <p class="cmd">node scripts/coordination/lane.mjs ${owner ? `note ${esc(l.id)} "…"` : `claim ${esc(l.id)}`}</p>
+    <p class="cmd">${esc(laneCliCmd())} ${owner ? `note ${esc(l.id)} "…"` : `claim ${esc(l.id)}`}</p>
   </div>`;
 };
 
@@ -253,13 +308,22 @@ const kbColumn = (key, name, ids, movable) => `<div class="kcol"${movable ? ` da
   </div>`;
 
 // The client script is plain ES5 text: placeLanes' own source, then the page code.
-const kbClient = readFileSync(join(HERE, 'kanban-client.js'), 'utf8');
+// Only the default board's page carries the kanban and its script. Another board's page is read-only.
+const kbClient = KANBAN ? readFileSync(join(HERE, 'kanban-client.js'), 'utf8') : '';
 if (/<\/script/i.test(kbClient)) throw new Error('kanban-client.js must not contain a closing script tag');
-const kbScript = `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt].map((f) => f.toString()).join('\n')}
-${kbClient}`;
+const kbScript = KANBAN ? `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt].map((f) => f.toString()).join('\n')}
+${kbClient}` : '';
 
-const html = `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Agentic OS — Lane Board</title>
+// The template hash: what a page was rendered from. It covers this file and the kanban sources, so a page rendered from an
+// older generator shows a different hash. Read it back from the live page after a republish.
+const TEMPLATE_HASH = fnv1a(['render-board.mjs', 'render-board-args.mjs', 'kanban-client.js', 'kanban-place.mjs']
+  .map((f) => readFileSync(join(HERE, f), 'utf8').replace(/\r\n/g, '\n')).join('\n--\n'));
+const STAMP = boardStamp({ board: KEY, template: TEMPLATE_HASH, generated: GENERATED_AT.toISOString() });
+const PAGE_TITLE = KANBAN ? 'Agentic OS — Lane Board' : `Agentic OS — Lane Board (${KEY})`;
+
+const html = `${STAMP}
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>${esc(PAGE_TITLE)}</title>
 <style>
   :root {
     /* Carried from the 07-27 board so this reads as the same page, not a new one.
@@ -327,6 +391,7 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
   .ctr.is-crit { border-color:var(--crit); background:var(--crit-bg); } .ctr.is-crit b { color:var(--crit); }
   .themebtn { border:1px solid var(--line); background:var(--panel); color:var(--muted); border-radius:999px; padding:7px 12px; cursor:pointer; font:500 11px/1 var(--mono); }
   .themebtn:hover { color:var(--ink); border-color:var(--muted); }
+  .gen { color:var(--muted); } .gen.stale { color:var(--warn); font-weight:600; }
 
   section { margin-top:30px; }
   .sec-head { display:flex; align-items:baseline; gap:14px; margin-bottom:12px; flex-wrap:wrap; }
@@ -520,7 +585,7 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
   <div class="top-in">
     <div class="brand">
       <span class="mark">AOS</span>
-      <span><b>Lane Board</b><span>generated from agentic_os.lane &middot; ${localStamp()} local</span></span>
+      <span><b>Lane Board${KANBAN ? '' : ` &middot; ${esc(KEY)}`}</b><span>generated from agentic_os.lane (board ${esc(KEY)}) &middot; ${localStamp()} local &middot; <span class="gen" id="gen-ago" data-ts="${GENERATED_AT.toISOString()}">generated just now</span></span></span>
     </div>
     <div class="counters">
       <span class="ctr"><b>${open.length}</b><span>open lanes</span></span>
@@ -535,7 +600,7 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
 
 <div class="wrap">
 
-  <section id="priorities" aria-labelledby="kb-title">
+  ${KANBAN ? `<section id="priorities" aria-labelledby="kb-title">
     <div class="sec-head">
       <h2 id="kb-title">Priorities</h2>
       <p>Drag or use Move to. Your order saves to this board and Claude reads it.</p>
@@ -550,7 +615,7 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false)}
     </div>
     <script type="application/json" id="kb-data">${kbJson}</script>
-  </section>
+  </section>` : ''}
 
   <section>
     <div class="sec-head">
@@ -569,11 +634,12 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
     </div>
     <div class="card" style="margin-top:10px"><span class="recon"><b>sessions</b>  SELECT id, working_on, GREATEST(last_heartbeat, last_activity_at) AS last_alive
             FROM sessions
-            WHERE GREATEST(last_heartbeat, last_activity_at) &gt; now() - interval '${STALE_MINUTES} minutes';
+            WHERE GREATEST(last_heartbeat, last_activity_at) &gt; now() - interval '${STALE_MINUTES} minutes'
+              AND (the session's project is under a root of board ${esc(KEY)} OR it owns a lane with project_key = '${esc(KEY)}');
             -- NOT bare last_heartbeat: that column fires on UserPromptSubmit only, so it
             -- measures the human typing, not the agent working (peak drift 505s mid-edit).
 <b>held</b>      SELECT count(*) FROM agentic_os.lane l
-            WHERE l.state &lt;&gt; 'done' AND l.owner_session_id IS NOT NULL AND NOT (
+            WHERE l.project_key = '${esc(KEY)}' AND l.state &lt;&gt; 'done' AND l.owner_session_id IS NOT NULL AND NOT (
               (l.lease_expires_at IS NULL OR l.lease_expires_at &lt; now())
               AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = l.owner_session_id
                 AND GREATEST(s.last_heartbeat, s.last_activity_at) &gt; now() - interval '${STALE_MINUTES} minutes'));
@@ -602,13 +668,13 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
       </div>`;
     }).join('')}
     <div class="card" style="margin-top:6px"><span class="recon"><b>lanes</b>     SELECT id, state, owner_session_id, lease_expires_at, scope
-            FROM agentic_os.lane ORDER BY track, priority;
-<b>claim</b>     node scripts/coordination/lane.mjs claim &lt;id&gt;    # atomic: one winner, loser is told who won
+            FROM agentic_os.lane WHERE project_key = '${esc(KEY)}' ORDER BY track, priority;
+<b>claim</b>     ${esc(laneCliCmd())} claim &lt;id&gt;    # atomic: one winner, loser is told who won
 <b>gate</b>      node scripts/coordination/lane-race-probe.mjs   # 10 properties, incl. both reclaim negatives</span></div>
   </section>
 
   <section>
-    <div class="sec-head"><h2>Activity</h2><p>The last ${events.length} lane events. This log is also the message bus between sessions &mdash; a <span class="mono">note</span> is one session talking to the others.</p></div>
+    <div class="sec-head"><h2>Activity</h2><p>The last ${events.length} lane events of board ${esc(KEY)} (agentic_os.lane_event WHERE project_key = '${esc(KEY)}'). This log is also the message bus between sessions &mdash; a <span class="mono">note</span> is one session talking to the others.</p></div>
     <div class="card feed">
       ${events.map((e) => `<div>
         <span class="t">${esc(new Date(e.occurred_at).toTimeString().slice(0, 5))}</span>
@@ -619,7 +685,7 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
   </section>
 
   <section>
-    <div class="sec-head"><h2>Coordination integrity</h2><p>Is the file lock underneath the lanes telling the truth? Point-in-time &mdash; &ldquo;live&rdquo; only means something while somebody is mid-edit.</p></div>
+    <div class="sec-head"><h2>Coordination integrity</h2><p>Is the file lock underneath the lanes telling the truth? Point-in-time &mdash; &ldquo;live&rdquo; only means something while somebody is mid-edit. <b>Machine-wide, every board:</b> file_claims and coordination_event carry no board key, so these rows are not filtered to ${esc(KEY)}.</p></div>
     <div class="card">
       <div class="tw"><table>
         <thead><tr><th>Signal</th><th class="mono">Value</th><th>Reading</th></tr></thead>
@@ -638,7 +704,7 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
 
   <footer>
     <span>generated ${localStamp()} local &middot; ${lanes.length} lanes &middot; ${events.length} events</span>
-    <span>node scripts/coordination/render-board.mjs</span>
+    <span>${esc(renderBoardCmd(KEY))}</span>
   </footer>
 </div>
 
@@ -688,8 +754,23 @@ const html = `<meta name="viewport" content="width=device-width, initial-scale=1
   })();
 </script>
 <script>
+  // "generated N min ago": computed here from the embedded time, so a page nobody republished shows its age.
+  (function () {
+    var el = document.getElementById('gen-ago');
+    if (!el) return;
+    var t = Date.parse(el.getAttribute('data-ts'));
+    function tick() {
+      var m = Math.max(0, Math.round((Date.now() - t) / 60000));
+      el.textContent = m < 1 ? 'generated just now' : 'generated ' + m + ' min ago';
+      el.className = 'gen' + (m >= 60 ? ' stale' : '');
+    }
+    tick();
+    setInterval(tick, 30000);
+  })();
+</script>${KANBAN ? `
+<script>
 ${kbScript}
-</script>`;
+</script>` : ''}`;
 
-writeFileSync(OUT, html);
-console.log(`wrote ${OUT} (${(html.length / 1024).toFixed(1)}kb) -- ${lanes.length} lanes, ${sessions.length} live sessions, ${events.length} events`);
+writeAtomic(OUT, html);
+console.log(`wrote ${OUT} (${(html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} live sessions, ${events.length} events`);

@@ -31,6 +31,7 @@ function countText(column: BoardColumn): string {
  * link and is not draggable (P2 adds moving). Columns are at least 210 px wide and wrap: six in one
  * row from about 1340 px, one column on a phone, so a phone has no horizontal scroll.
  * A failed lane read shows one error line instead of six empty columns.
+ * The header names the board key (`Work board, middle dot, <key>`); the data is that one board's lanes (project_key).
  */
 export function LaneBoard({ board }: { board: LaneBoardData }) {
   return (
@@ -39,11 +40,14 @@ export function LaneBoard({ board }: { board: LaneBoardData }) {
         data-testid="board-header"
         className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm font-medium tracking-tight"
       >
-        <span>{`Work board ${DOT} lane states`}</span>
+        <span data-testid="board-key" data-board={board.board}>{`Work board ${DOT} ${board.board} ${DOT} lane states`}</span>
         <span className="text-xs font-normal text-muted-foreground">
           {`read-only in P1 ${DOT} drag to move in P2`}
         </span>
       </div>
+      <p data-testid="board-scope-note" className="text-xs text-muted-foreground">
+        {`This board lists the lanes of ${board.board} only. The active-lanes tile counts all boards.`}
+      </p>
 
       {board.status === 'error' ? (
         <p

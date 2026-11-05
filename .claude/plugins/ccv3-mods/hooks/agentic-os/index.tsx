@@ -38,6 +38,10 @@ const lanes = atom({ plugin: 'ccv3-mods', key: 'lanes' } as const, null as OsLan
 /** Every lane the lane board listed at the last good read (the Work tab), and when that read happened. Written by refreshLanes only. */
 const board = atom({ plugin: 'ccv3-mods', key: 'board' } as const, null as BoardLane[] | null)
 const boardAt = atom({ plugin: 'ccv3-mods', key: 'boardAt' } as const, null as number | null)
+/** 'no-board' when the last read said the session folder has no lane board (it is not registered); null after a good read or before any. Written by refreshLanes only. */
+const boardState = atom({ plugin: 'ccv3-mods', key: 'boardState' } as const, null as 'no-board' | null)
+/** What lane.mjs prints (stderr, exit 1) when the folder it runs in has no lane board (projectOf in scripts/coordination/lane.mjs). */
+const NO_BOARD_STDERR = 'no lane board for'
 /** Touched Files (hooks/touched-files) and the keeper's compaction records (hooks/compact-keeper). Read only here: the same atoms those hooks declare and write. */
 const files = atom({ plugin: 'ccv3-mods', key: 'files' } as const, [] as FileTouch[])
 const compactions = atom({ plugin: 'ccv3-mods', key: 'compactions' } as const, [] as KeeperRecord[])
@@ -364,9 +368,13 @@ const refreshAgents = async ($: EngineInterface): Promise<void> => {
 }
 
 /**
- * Reads the CCv3 lane board (every open lane, not only this session's), when the repo is there.
- * The one place that spawns lane.mjs, so the headless gate sits here. A good read writes the `lanes` atom (this session's lanes: the band and the
- * compact keeper read it), the `board` atom (all lanes: the Work tab) and the time of the read. A failed read writes none of them, so the pane keeps the last good board and says how old it is.
+ * Reads the lane board of the session's current folder (every open lane on that board, not only this session's), when the CCv3 checkout is there.
+ * The board follows the folder: the script is the absolute primary lane.mjs, and `cwd` is passed explicitly (`$.session.cwd()`; the engine default is the
+ * same folder, this pins it after a cd), so lane.mjs resolves the board from the registry. The one place that spawns lane.mjs, so the headless gate sits here.
+ * A good read writes the `lanes` atom (this session's lanes: the band and the compact keeper read it), the `board` atom (all lanes of that board: the Work tab),
+ * the time of the read, and clears `boardState`. Exit 1 with "no lane board for" in stderr (the folder is not registered) is a state, not a failure:
+ * it clears `board` and `lanes` and sets `boardState` to 'no-board', so the Work tab says so instead of showing the last board. Any other failed read
+ * writes nothing, so the pane keeps the last good board and says how old it is.
  */
 const refreshLanes = async ($: EngineInterface): Promise<void> => {
   try {
@@ -375,13 +383,22 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
     const script = `${home}/continuous-claude/scripts/coordination/lane.mjs`
     if (!home || !(await $.fs.exists(script))) return
     const sessionId = await $.session.id()
-    const run = await $.process.run(['node', script, 'board', '--json', '--as', sessionId], { timeoutMs: 5000 })
+    const cwd = await $.session.cwd().catch(() => null)
+    const run = await $.process.run(['node', script, 'board', '--json', '--as', sessionId], { timeoutMs: 5000, ...(typeof cwd === 'string' && cwd !== '' ? { cwd } : {}) })
     const at = await $.clock.now()
+    if (run.exitCode === 1 && run.stderr.includes(NO_BOARD_STDERR)) {
+      await update($, lanes, () => [])
+      await update($, board, () => null)
+      await update($, boardAt, () => at)
+      await update($, boardState, () => 'no-board')
+      return
+    }
     const parsed = run.exitCode === 0 ? parseBoard(run.stdout, sessionId, at) : null
     if (parsed === null) return
     await update($, lanes, () => parsed.mine)
     await update($, board, () => parsed.lanes)
     await update($, boardAt, () => at)
+    await update($, boardState, () => null)
   } catch {
     // Best effort: no board, no DB, or no node; the pane says "lane board not read".
   }
@@ -1018,6 +1035,7 @@ export const agenticOs = (on: On) => {
       compactions: await read($, compactions),
       board: await read($, board),
       boardAt: await read($, boardAt),
+      boardState: await read($, boardState),
       files: await read($, files),
       cachePct: hitRate(await read($, cache)),
       limits: hudState?.limits ?? [],

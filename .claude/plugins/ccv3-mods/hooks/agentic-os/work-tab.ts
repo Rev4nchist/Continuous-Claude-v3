@@ -9,7 +9,8 @@ import { filesSentences, laneSentence, prSentence } from './plain'
 import { oneLine, wrapRows } from './text'
 
 // The Work tab (key 4): lanes, other sessions, changes, files and where the session runs. Pure: no engine, no clock (the caller passes `now`), no state.
-//   YOUR LANES      the lanes of `board` this session holds (laneSentence), each note dim, at most 3 rows
+//   YOUR LANES      the lanes of `board` this session holds (laneSentence), each note dim, at most 3 rows. `boardState: 'no-board'` (the session folder
+//                   has no lane board) reads "no lane board (unregistered dir)" here and in OTHER SESSIONS, with no age row and no lane.
 //   OTHER SESSIONS  every lane another session owns: live sessions first, then stopped ones. "as of <age>" is its own dim row
 //                   (the board is read at start, at /os and at a press of this tab, so it can be old). A scope that matches my edited files
 //                   reads "may touch the same files": a guess, never a fact. An owner_name on the board adds `held by <name> #sid8`
@@ -32,13 +33,17 @@ const none = (key: string, text: string): Group => [line(key, sp(`  ${text}`, 'd
 const note = (key: string, text: string | undefined, columns: number): PaneRow[] =>
   oneLine(text) === '' ? [] : wrapRows(key, [sp('    ', 'dim')], text ?? '', 'dim', columns, LINES, { indent: 4 })
 
-const mineSection = (board: BoardLane[] | null | undefined, columns: number): Section => {
+/** The words for a session folder with no lane board. Not "not read" (no read failed) and not "no lane held" (there is no board to hold one on). */
+const NO_BOARD = 'no lane board (unregistered dir)'
+
+const mineSection = (s: TabState, columns: number): Section => {
+  const board = s.boardState === 'no-board' ? null : s.board
   const yours = (board ?? []).filter(one => one.mine)
   const groups: Group[] = yours.map((one, i) => [
     ...wrapRows(`wk-mine-${i}`, [sp('  ', 'dim')], laneSentence(one), 'todo', columns, LINES),
     ...note(`wk-mine-${i}-note`, one.note, columns),
   ])
-  const empty = board == null ? 'lane board not read' : 'no lane held'
+  const empty = s.boardState === 'no-board' ? NO_BOARD : board == null ? 'lane board not read' : 'no lane held'
   return { head: head('wk-h-mine', 'YOUR LANES'), groups: groups.length > 0 ? groups : [none('wk-mine-none', empty)] }
 }
 
@@ -61,13 +66,15 @@ const peerGroup = (one: BoardLane, i: number, s: TabState, columns: number): Gro
 }
 
 const othersSection = (s: TabState, now: number, columns: number): Section => {
-  const board = s.board
+  const noBoard = s.boardState === 'no-board'
+  const board = noBoard ? null : s.board
   // A lane nobody owns is not another session. Live sessions first; the order inside each stays the board's.
   const owned = (board ?? []).filter(one => !one.mine && one.owner !== null)
   const peers = [...owned.filter(one => one.live !== false), ...owned.filter(one => one.live === false)]
   const groups = peers.map((one, i) => peerGroup(one, i, s, columns))
   const first: Group[] = board == null ? [] : [[line('wk-asof', sp(asOf(s, now), 'dim'))]]
-  const body = groups.length > 0 ? groups : [none('wk-peer-none', board == null ? 'lane board not read' : 'no other session holds a lane')]
+  const missing = noBoard ? NO_BOARD : 'lane board not read'
+  const body = groups.length > 0 ? groups : [none('wk-peer-none', board == null ? missing : 'no other session holds a lane')]
   // The as-of row is the first row under the head. groupSections keeps it with the head and the lane rows are a group of their own, so a cut
   // can leave the age with no lane under it: the age still dates the read, and the `+N more` row counts the lanes left out.
   const [lead = [], ...rest] = body
@@ -106,6 +113,6 @@ const whereSection = (s: TabState, columns: number): Section => {
 export const workTab = (s: TabState, now: number, columns: number, rows: number): PaneRow[] => {
   const cap = Math.max(1, Math.floor(columns))
   const files = filesSection(s, cap)
-  const sections = [mineSection(s.board, cap), othersSection(s, now, cap), changesSection(s, cap), ...(files === null ? [] : [files]), whereSection(s, cap)]
+  const sections = [mineSection(s, cap), othersSection(s, now, cap), changesSection(s, cap), ...(files === null ? [] : [files]), whereSection(s, cap)]
   return takeGroups(groupSections(sections), Math.floor(rows), 'more-work').map(row => scrubFit(row, cap))
 }

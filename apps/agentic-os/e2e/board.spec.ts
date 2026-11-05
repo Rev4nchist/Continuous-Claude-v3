@@ -26,10 +26,21 @@ import {
  * this file is skipped. The only writes are fixture state files in the private E2E state dir,
  * emptied before and after every test. Nothing is ever written to agentic_os.lane.
  *
+ * PER-BOARD FILTER (describe "one board per view"). The board shown is one project_key (default
+ * continuous-claude; `?project=<key>` picks another). Those specs need two boards with a lane each.
+ * The harness (never this file) seeds them with lane.mjs on a SCRATCH database and the app must read
+ * that database, never the live one:
+ *   E2E_BOARD_DEFAULT_LANE   id of a lane on the continuous-claude board
+ *   E2E_BOARD_OTHER          key of a second registered board (e.g. zz-pbprobe-a)
+ *   E2E_BOARD_OTHER_LANE     id of a lane on that second board (e.g. zz-pbprobe-a1)
+ * A missing variable FAILS the spec with a message that names it. Nothing is skipped.
+ *
  * UI contract (testids) the implementation must meet:
  *   work-board            the panel (a <section>, not an <article>)
- *   board-header          the panel header: "Work board" and "lane states" left,
+ *   board-header          the panel header: "Work board", the board key and "lane states" left,
  *                         "read-only in P1" and "drag to move in P2" right
+ *   board-key             the left header text; attribute data-board="<board key>"
+ *   board-scope-note      one line: the board lists one project_key; the active-lanes tile counts all boards
  *   board-column          one per state, attribute data-state="<state>", six in API order
  *   board-column-heading  the state name, lowercase, exactly (an h3)
  *   board-column-count    "N", or "10 of 37" when shown < count
@@ -71,6 +82,7 @@ type BoardColumn = {
 };
 
 type LaneBoard = {
+  board: string;
   status: 'ok' | 'error';
   error: string | null;
   columns: BoardColumn[];
@@ -320,7 +332,8 @@ test.describe('GET /api/mission-control?view=board', () => {
     const board = await loadBoard(request);
     expect(snapshot).toHaveProperty('board');
 
-    expect(Object.keys(board).sort()).toEqual(['columns', 'error', 'status', 'total']);
+    expect(Object.keys(board).sort()).toEqual(['board', 'columns', 'error', 'status', 'total']);
+    expect(board.board, 'no ?project: the default board').toBe('continuous-claude');
     expect(board.error).toBeNull();
     expect(board.columns.map((c) => c.state)).toEqual([...STATES]);
 
@@ -547,6 +560,7 @@ test.describe('the Board on the page', () => {
     const header = page.getByTestId('board-header');
     await expect(header).toBeVisible();
     await expect(header).toContainText('Work board');
+    await expect(header).toContainText('continuous-claude');
     await expect(header).toContainText('lane states');
     await expect(header).toContainText('read-only in P1');
     await expect(header).toContainText('drag to move in P2');
@@ -704,5 +718,122 @@ test.describe('selection and the Board', () => {
     expect(urlParam(page, 'session')).toBe(live.id);
     expect([null, 'overview']).toContain(urlParam(page, 'view'));
     expect(errors).toEqual([]);
+  });
+});
+
+// --- Spec 9: one board per view (?project=<key>) ------------------------------------------------
+
+const DEFAULT_BOARD = 'continuous-claude';
+
+/** A variable of the seeded two-board scratch run. Fails with a message that names it. */
+function seeded(name: 'E2E_BOARD_DEFAULT_LANE' | 'E2E_BOARD_OTHER' | 'E2E_BOARD_OTHER_LANE'): string {
+  const value = process.env[name];
+  expect(
+    value,
+    `Precondition: ${name} is not set. Seed two boards with lane.mjs on a SCRATCH database, point ` +
+      'AGENTIC_OS_DATABASE_URL at it, and set E2E_BOARD_DEFAULT_LANE, E2E_BOARD_OTHER, E2E_BOARD_OTHER_LANE.',
+  ).toBeTruthy();
+  return value as string;
+}
+
+const laneIds = (board: LaneBoard | null): string[] =>
+  (board?.columns ?? []).flatMap((c) => c.lanes.map((l) => l.id));
+
+const BAD_KEYS = ['Bad_Key', 'UPPER', '-lead', 'a%20b', 'x;drop', 'a_b', '%2e%2e'];
+
+test.describe('one board per view', () => {
+  test('?view=board holds the continuous-claude lanes only, and names its board', async ({ request }) => {
+    const defaultLane = seeded('E2E_BOARD_DEFAULT_LANE');
+    const otherLane = seeded('E2E_BOARD_OTHER_LANE');
+    const snapshot = await loadSnapshot(request, '?view=board');
+    expect(snapshot.board?.board).toBe(DEFAULT_BOARD);
+    expect(snapshot.board?.status).toBe('ok');
+    expect(laneIds(snapshot.board), 'the default board holds its own lane').toContain(defaultLane);
+    expect(laneIds(snapshot.board), 'the default board must not hold the other board lane').not.toContain(otherLane);
+
+    const named = await loadSnapshot(request, `?view=board&project=${DEFAULT_BOARD}`);
+    expect(laneIds(named.board)).toEqual(laneIds(snapshot.board));
+  });
+
+  test('?view=board&project=<other> holds that board only', async ({ request }) => {
+    const defaultLane = seeded('E2E_BOARD_DEFAULT_LANE');
+    const other = seeded('E2E_BOARD_OTHER');
+    const otherLane = seeded('E2E_BOARD_OTHER_LANE');
+    const snapshot = await loadSnapshot(request, `?view=board&project=${encodeURIComponent(other)}`);
+    expect(snapshot.board?.board).toBe(other);
+    expect(snapshot.board?.status).toBe('ok');
+    expect(laneIds(snapshot.board)).toContain(otherLane);
+    expect(laneIds(snapshot.board), 'the other board must not hold a continuous-claude lane').not.toContain(defaultLane);
+  });
+
+  test('a well-formed key with no lanes is an empty board, not an error', async ({ request }) => {
+    const snapshot = await loadSnapshot(request, '?view=board&project=zz-no-such-board');
+    expect(snapshot.board?.board).toBe('zz-no-such-board');
+    expect(snapshot.board?.status).toBe('ok');
+    expect(snapshot.board?.total).toBe(0);
+  });
+
+  test('a malformed project key is a 400 on the API', async ({ request }) => {
+    for (const key of BAD_KEYS) {
+      const response = await request.get(`/api/mission-control?view=board&project=${key}`);
+      expect(response.status(), `project=${key} must be 400`).toBe(400);
+      expect(response.headers()['cache-control']).toBe('no-store');
+    }
+    // Control: a good key on the same route is 200, so the 400 above is the key and not the route.
+    const good = await request.get(`/api/mission-control?view=board&project=${DEFAULT_BOARD}`);
+    expect(good.status()).toBe(200);
+  });
+
+  test('the page: ?project=<other> shows that board and the poll keeps asking for it', async ({ page }) => {
+    const defaultLane = seeded('E2E_BOARD_DEFAULT_LANE');
+    const other = seeded('E2E_BOARD_OTHER');
+    const otherLane = seeded('E2E_BOARD_OTHER_LANE');
+    const errors = watchErrors(page);
+    // Arm the wait before the page loads: the first poll comes about 5 s after hydration.
+    const poll = page.waitForRequest(
+      (req) => {
+        const url = new URL(req.url());
+        return (
+          url.pathname === '/api/mission-control' &&
+          url.searchParams.get('view') === 'board' &&
+          url.searchParams.get('project') === other
+        );
+      },
+      { timeout: 20_000 },
+    );
+    await page.goto(`/?view=board&project=${encodeURIComponent(other)}`);
+    await waitForHydration(page);
+    await expect(boardPanel(page)).toBeVisible();
+    await expect(page.getByTestId('board-key')).toHaveAttribute('data-board', other);
+    await expect(page.getByTestId('board-header')).toContainText('Work board');
+    await expect(page.getByTestId('board-header')).toContainText(other);
+    await expect(page.locator(`[data-testid="board-lane"][data-lane-id="${otherLane}"]`)).toHaveCount(1);
+    await expect(page.locator(`[data-testid="board-lane"][data-lane-id="${defaultLane}"]`)).toHaveCount(0);
+    await expect(page.getByTestId('board-scope-note')).toContainText('all boards');
+
+    await poll;
+    // After a poll the board is still the asked-for one (it did not flip back to the default).
+    await expect(page.getByTestId('board-key')).toHaveAttribute('data-board', other);
+    expect(urlParam(page, 'project')).toBe(other);
+    expect(errors).toEqual([]);
+  });
+
+  test('the page: a malformed ?project shows the default board, not an error', async ({ page }) => {
+    const defaultLane = seeded('E2E_BOARD_DEFAULT_LANE');
+    const errors = watchErrors(page);
+    const response = await page.goto('/?view=board&project=Bad_Key');
+    expect(response?.status()).toBeLessThan(400);
+    await waitForHydration(page);
+    await expect(page.getByTestId('board-key')).toHaveAttribute('data-board', DEFAULT_BOARD);
+    await expect(page.locator(`[data-testid="board-lane"][data-lane-id="${defaultLane}"]`)).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('the other board fits the viewport (the desktop and phone projects both run this)', async ({ page }) => {
+    const other = seeded('E2E_BOARD_OTHER');
+    await page.goto(`/?view=board&project=${encodeURIComponent(other)}`);
+    await waitForHydration(page);
+    await expect(page.getByTestId('board-column')).toHaveCount(6);
+    expect(await horizontalOverflow(page), 'the Board is wider than the viewport').toBeLessThanOrEqual(0);
   });
 });

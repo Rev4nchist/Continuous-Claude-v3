@@ -22,19 +22,25 @@ import { readFileSync } from 'fs';
 /** Both shell tools. Same list as the settings.json matcher `Bash|PowerShell`. */
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 
-/** `node [path/]lane.mjs say|note`, with the verb captured. */
-const LANE_VERB_RE = /(\bnode(?:\.exe)?["']?\s+["']?[^\s"'|;&]*lane\.mjs["']?\s+)(say|note)(?=\s|$)/g;
+/**
+ * `node [path/]lane.mjs [global flags] say|note`: the head, the flags and the verb are captured.
+ * The path may be the shim (`<home>/.claude/scripts/lane.mjs`). Global flags sit before the verb. The
+ * value-taking ones (`--project x`, `--as id`, `--agent t`, or `--flag=value`) swallow their value; the rest are bare.
+ */
+const LANE_VERB_RE =
+  /(\bnode(?:\.exe)?["']?\s+["']?[^\s"'|;&]*lane\.mjs["']?\s+)((?:(?:--(?:project|as|agent)=\S+|--(?:project|as|agent)\s+[^\s"'|;&]+|--(?!(?:project|as|agent)\b)[\w-]+)\s+)*)(say|note)(?=\s|$)/g;
 const AGENT_TYPE_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 /** The rewritten command, or null when nothing should change. */
 export function tagLaneCommand(command: string, agentType: string): string | null {
   if (!AGENT_TYPE_RE.test(agentType)) return null;
   let changed = false;
-  const out = command.replace(LANE_VERB_RE, (m, head: string, verb: string, offset: number, whole: string) => {
-    // Already tagged: the next token after the verb is --agent.
+  const out = command.replace(LANE_VERB_RE, (m, head: string, flags: string, verb: string, offset: number, whole: string) => {
+    // Already tagged: --agent before the verb, or as the next token after it.
+    if (/(^|\s)--agent\b/.test(flags)) return m;
     if (/^\s+--agent\b/.test(whole.slice(offset + m.length))) return m;
     changed = true;
-    return `${head}${verb} --agent ${agentType}`;
+    return `${head}${flags}${verb} --agent ${agentType}`;
   });
   return changed ? out : null;
 }

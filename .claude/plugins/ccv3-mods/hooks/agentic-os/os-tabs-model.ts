@@ -87,6 +87,8 @@ export type TabState = {
   board?: BoardLane[] | null
   /** When that read happened (epoch ms); the Work tab says "as of <age>". Unknown reads "as of last read". */
   boardAt?: number | null
+  /** 'no-board': the session folder has no lane board (lane.mjs "no lane board for <cwd>"); the Work tab says so and draws no lanes. Null or not given: no such state. */
+  boardState?: 'no-board' | null
   /** The files this session touched (touched-files). A peer lane whose scope matches an edited or committed file may overlap. */
   files?: FileTouch[]
   /** Share of input tokens the prompt cache served, 0 to 100; null or not given: unknown. */
