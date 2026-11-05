@@ -209,8 +209,9 @@ function emit(input: HookInput, decision: 'ask' | 'deny', pattern: string, comma
   console.log(JSON.stringify(output));
 }
 
-// Auto-run only as a hook; VITEST imports the pure functions above.
-if (!process.env.VITEST) {
+// Auto-run only as the hook entry point. VITEST imports the pure functions above, and a harness
+// that bundles this file and imports classifyDestructive must not run main() on import.
+if (!process.env.VITEST && /(^|[\\/])destructive-command-guard\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
   main().catch((err) => {
     logGuardError(HOOK, err);
     console.log('{}'); // fail-open: a guard crash must never brick Bash
