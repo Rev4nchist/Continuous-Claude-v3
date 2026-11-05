@@ -93,9 +93,13 @@ export function cliTodayOf(deps) {
   return { date, total: centsOf(rows) / 100, rows };
 }
 
-/** The files of the PR rows whose Chicago date starts with monthPrefix (YYYY-MM). CLI rows never count. Pure. */
+/** The files of the PR rows whose Chicago date starts with monthPrefix (YYYY-MM). CLI rows never count. Throws when a counted row has no whole, non-negative files (a bad row would lower the total). Pure. */
 export function monthToDateFiles(rows, monthPrefix) {
-  return rows.filter((r) => !isCli(r) && String(r.date).startsWith(`${monthPrefix}-`)).reduce((sum, r) => sum + (Number.isInteger(r.files) ? r.files : 0), 0);
+  const counted = rows.filter((r) => !isCli(r) && String(r.date).startsWith(`${monthPrefix}-`));
+  for (const r of counted) {
+    if (!Number.isInteger(r.files) || r.files < 0) throw new Error(`ledger PR row dated ${r.date} (pr ${r.pr}) lacks a whole, non-negative files count`);
+  }
+  return counted.reduce((sum, r) => sum + r.files, 0);
 }
 
 /** { month, files, rounds }: the paid PR rows of the Chicago month of now. A missing ledger is an empty month. Throws on a bad ledger. */

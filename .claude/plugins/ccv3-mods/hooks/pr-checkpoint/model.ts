@@ -71,7 +71,11 @@ export const resolveBody = (root: string, body: string): string => (ABSOLUTE.tes
 
 export const engineArgv = (root: string, ...flags: string[]): string[] => ['node', `${root}/${ENGINE_REL}`, ...flags]
 
-export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,number', '-R', REPO]
+export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,labels,number', '-R', REPO]
+
+/** Whether the `labels` of a gh pr view carry risk:high (the one label the band reads), or null when the list is absent or malformed. */
+export const riskHighOf = (labels: unknown): boolean | null =>
+  Array.isArray(labels) ? labels.some(one => typeof one === 'object' && one !== null && (one as { name?: unknown }).name === 'risk:high') : null
 
 export const WORKTREE_ARGV = ['git', 'worktree', 'list', '--porcelain']
 

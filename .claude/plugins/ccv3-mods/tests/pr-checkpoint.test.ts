@@ -136,6 +136,8 @@ type Opts = {
   author?: string
   isDraft?: boolean
   viewHead?: string
+  /** The label names `gh pr view` answers with. Unset: none. */
+  labels?: string[]
   throwStore?: string
   /** A file write whose path contains this text throws (a full disk, a locked file). */
   throwWrite?: string
@@ -306,7 +308,7 @@ const world = (on: On, opts: Opts = {}) => {
     }
     if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') {
       const reply: Reply = opts.viewSeq?.shift() ?? opts.view ?? {
-        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, headRefName: opts.branch ?? 'feat/x', author: { login: opts.author ?? 'Rev4nchist' }, number: Number(argv[3]) }),
+        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, headRefName: opts.branch ?? 'feat/x', author: { login: opts.author ?? 'Rev4nchist' }, labels: (opts.labels ?? []).map(name => ({ name })), number: Number(argv[3]) }),
       }
       return done(reply)
     }
@@ -2633,6 +2635,45 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     expect(counts(w.seen).confirm).toBe(0)
     expect(told.text).toMatch(/changed while Dave answered/i)
     expect(told.text).toMatch(/head moved/i)
+  })
+
+  test('T7c a risk:high label added while Dave answered records nothing (the recommendation he saw is stale)', async ($, on) => {
+    const opts: Opts = {}
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.labels = ['risk:high']
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/changed while Dave answered/i)
+    expect(told.text).toMatch(/risk:high/i)
+  })
+
+  test('T7d a risk:high label removed while Dave answered records nothing', async ($, on) => {
+    const opts: Opts = { labels: ['risk:high'] }
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.labels = []
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/risk:high/i)
+  })
+
+  test('T7e an unrelated label change while Dave answered still records', async ($, on) => {
+    const opts: Opts = {}
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.labels = ['size:l']
+      return REC
+    }
+    await start($)
+    await call($)
+    expect(counts(w.seen).confirm).toBe(1)
   })
 
   test('T7b a PR that left draft while Dave answered records nothing', async ($, on) => {

@@ -404,6 +404,15 @@ test('CP25: monthToDateFiles sums the files of PR rows of that month only: no cl
   assert.equal(PAID.monthToDateFiles([], '2026-11'), 0);
 });
 
+test('CP25b: a counted PR row with a missing, fractional, negative or non-number files throws; a row outside the month or a cli row is not checked', () => {
+  const good = filesRow(1, 10, '2026-11-01');
+  for (const bad of [undefined, null, -5, 2.5, '7', NaN]) {
+    assert.throws(() => PAID.monthToDateFiles([good, { ...filesRow(2, 1, '2026-11-02'), files: bad }], '2026-11'), /files/, `files ${String(bad)}`);
+  }
+  const outside = [good, { ...filesRow(3, 1, '2026-10-30'), files: -1 }, { ...cliRow(2, '2026-11-02'), files: undefined }];
+  assert.equal(PAID.monthToDateFiles(outside, '2026-11'), 10);
+});
+
 test('CP26: monthOf reads the Chicago month of now (a UTC roll does not move it), and a bad ledger throws', () => {
   const h = harness({ rows: [filesRow(1, 12, '2026-10-31'), filesRow(2, 3, '2026-11-01')], now: new Date('2026-11-01T03:00:00Z') });
   // 2026-11-01T03:00Z is 2026-10-31 22:00 CDT: still October in Chicago.

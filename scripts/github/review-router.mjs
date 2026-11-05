@@ -134,7 +134,9 @@ export function bandOf(files, config, { labels = [], r = 0 } = {}) {
   const inPlane = anyGlob(m.control_plane);
   const inTrust = anyGlob(CRITICAL_TRUST_BOUNDARY);
   const gateFiles = entries.map((names) => hit(names, inPlane)).filter(Boolean);
-  const securityTier = gateFiles.filter(anyGlob(m.security_tier));
+  // Every name of a rename is checked, as for gateFiles: old path on the tier and new path off it (or the reverse) still counts.
+  const inTier = anyGlob(m.security_tier);
+  const securityTier = entries.map((names) => hit(names, (p) => inPlane(p) && inTier(p))).filter(Boolean);
   const G = gateFiles.length;
   const C = entries.some((names) => hit(names, anyGlob(m.config_files))) ? 1 : 0;
   const K = entries.some((names) => hit(names, isLogic)) ? 1 : 0;

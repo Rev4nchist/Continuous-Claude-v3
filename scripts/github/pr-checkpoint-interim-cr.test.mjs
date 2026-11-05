@@ -186,6 +186,26 @@ test('I13: the CLI (--facts) prints the cap reason from the ledger_month_files f
   assert.match(out.why.join(' '), /ledger month-to-date/);
 });
 
+test('I14b: a PR row with a missing, negative or fractional files value makes the month unreadable (null), so the checkpoint recommends none', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'interim-ledger-bad-'));
+  const ledger = path.join(dir, 'ledger.jsonl');
+  const row = (files) => JSON.stringify({ ts: '2026-11-01T10:00:00.000Z', date: '2026-11-01', pr: 1, head: HEAD, ...(files === undefined ? {} : { files }), cost: 1, session: 's' });
+  for (const files of [undefined, -5, 2.5]) {
+    writeFileSync(ledger, `${[row(30), row(files)].join('\n')}\n`);
+    assert.equal(ledgerMonthFiles(NOW, { ledgerPath: ledger }), null, `files ${String(files)}`);
+  }
+});
+
+test('I4b: a rename whose OLD name is security-tier and whose new name is another gate file still counts as a security-tier file', () => {
+  const renamed = { filename: 'scripts/github/cr-fix.mjs', previous_filename: SECURITY_FILE, additions: 5, deletions: 5 };
+  const r = run([], [], { files: [file(R3_FILE), renamed] });
+  assert.equal(r.band.band, 'CRITICAL');
+  assert.deepEqual(r.band.securityTier, [SECURITY_FILE]);
+  assert.notEqual(r.recommended, 'none', 'the rename must not hide the security-tier trigger');
+  const intoTier = run([], [], { files: [file(R3_FILE), { filename: SECURITY_FILE, previous_filename: 'scripts/github/cr-fix.mjs', additions: 5, deletions: 5 }] });
+  assert.deepEqual(intoTier.band.securityTier, [SECURITY_FILE]);
+});
+
 test('I14: ledgerMonthFiles reads the Chicago month of now from the ledger file (env seam or deps), and a bad ledger gives null, not 0', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'interim-ledger-'));
   const ledger = path.join(dir, 'ledger.jsonl');
