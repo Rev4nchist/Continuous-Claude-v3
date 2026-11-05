@@ -75,7 +75,7 @@ node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --pr
 
 Then publish `lane-board.html` with the Artifact tool, passing
 `url=https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`. The URL keeps the same link instead of
-minting a second board. Other boards render to `lane-board-<key>.html` and have no artifact.
+minting a second board. Other boards render to `lane-board-<key>.html` and have no artifact. They show a read-only Priorities section drawn from lane state and priority.
 
 Before trusting the claim path after any change to it:
 
