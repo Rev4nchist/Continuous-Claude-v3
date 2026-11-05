@@ -506,6 +506,18 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     await pane.press({ key: 'dismiss' })
   })
 
+  // CodeRabbit round 2: the question showed only why[0]. A HIGH or CRITICAL PR with the RF floor has the RB reason first and the floor (aegis + critic) second.
+  test('K1g the question shows every reason of the engine, so the internal-pass floor is visible before Dave picks none', async ($, on) => {
+    const rb = 'Band HIGH (score 5): no CodeRabbit PR bot under the interim rule.'
+    const rf = 'Security-tier file x-guard.ts: run the internal pass (aegis + critic) before READY.'
+    world(on, { json: { stdout: JSON.stringify(engineJson({ why: [rb, rf] })) } })
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.question).toContain('no CodeRabbit PR bot under the interim rule')
+    expect(dialog!.question).toContain('run the internal pass (aegis + critic) before READY')
+    expect(dialog!.question).not.toContain('READY..')
+    await pane.press({ key: 'dismiss' })
+  })
+
   test('K1e config drift with no reason keeps the generic warning', async ($, on) => {
     world(on, { json: { stdout: JSON.stringify(engineJson({ config_drift: true })) } })
     const { dialog, pane } = await openPane($)

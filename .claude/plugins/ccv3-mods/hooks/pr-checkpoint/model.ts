@@ -264,8 +264,9 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, s
     by: recommendedFirst && i === 0 && !onlyDaveRecordsNone(one.pathway, result.auto?.band) ? 'default' : 'dave',
   }))
   const lines = [overview(pr, result)]
-  const why = result.why[0]
-  if (recommendedFirst) lines.push(`Recommended: ${nameOf(result.recommended)}${why ? `, because ${why}` : ''}.`)
+  // Every reason shows: the RF floor (aegis + critic) is a second reason, and Dave must see it before he picks none.
+  const [why, ...also] = result.why.map(one => one.replace(/[.\s]+$/, '')).filter(one => one !== '')
+  if (recommendedFirst) lines.push(`Recommended: ${nameOf(result.recommended)}${why ? `, because ${why}` : ''}.`, ...also.map(one => `Also: ${one}.`))
   else lines.push(`The engine recommends ${result.recommended}, but it is held. Nothing is marked.`)
   const cap = result.capacity
   const crab = typeof cap.count === 'number' ? `CodeRabbit 7d ${cap.count}${cap.band ? ` ${cap.band}` : ''}` : 'CodeRabbit 7d unknown'

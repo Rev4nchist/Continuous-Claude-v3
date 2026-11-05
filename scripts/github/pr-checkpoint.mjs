@@ -228,11 +228,17 @@ function greptileRule(rule, label, c) {
 const criticalRule = (c) => (c.critical.length ? greptileRule('R3', `Critical file ${list(c.critical)}`, c) : null);
 const r3Rule = (c) => (c.cls === 'r3' ? greptileRule('R4', 'Class r3', c) : null);
 
-function noneReason(c) {
+/** Why a PR is docs-only (class docs, or only thoughts/, artifacts/ and .claudedocs/ paths), or null. Only these skip the CodeRabbit trigger. */
+function docsOnlyReason(c) {
   if (c.cls === 'docs' || c.budgetClass === 'docs') return 'Class docs: no bot review.';
-  if (c.size.lines === 0) return 'No reviewable lines: every path is filtered or a build output.';
   const quiet = c.paths.every((p) => QUIET_DIRS.some((d) => p.startsWith(d)));
   return quiet ? 'Only thoughts/, artifacts/ or .claudedocs/ paths: no bot review.' : null;
+}
+
+function noneReason(c) {
+  const docs = docsOnlyReason(c);
+  if (docs) return docs;
+  return c.size.lines === 0 ? 'No reviewable lines: every path is filtered or a build output.' : null;
 }
 
 function noneRule(c) {
@@ -266,7 +272,7 @@ function smallRule(c) {
 /**
  * The CodeRabbit PR bot is scarce ($0.25 a file, $50 a month). Interim rule (Dave 2026-11-04): a HIGH or CRITICAL PR earns it only through
  * (a) the risk:high label, or (b) band CRITICAL plus a changed matrix.security_tier or CRITICAL_TRUST_BOUNDARY file. Returns the cause text, or null.
- * Band CRITICAL from an r3 path alone, or from a checkpoint.critical file, earns nothing. Docs-only PRs are cut before this (noneReason).
+ * Band CRITICAL from an r3 path alone, or from a checkpoint.critical file, earns nothing. Docs-only PRs are cut before this (docsOnlyReason); a zero-line code PR is not.
  */
 function crTrigger(b) {
   if (b.labelHigh) return 'the risk:high label';
@@ -306,7 +312,7 @@ function bandRule(c) {
   if (!['HIGH', 'CRITICAL'].includes(b.band)) {
     return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot below HIGH. The internal review stack covers it.`]);
   }
-  const docs = noneReason(c);
+  const docs = docsOnlyReason(c);
   if (docs) return hit('RB', 'none', [0, 0], [`${head}: ${docs} A docs-only PR gets no CodeRabbit PR bot, even with risk:high (interim rule).`]);
   const cause = crTrigger(b);
   if (!cause) {

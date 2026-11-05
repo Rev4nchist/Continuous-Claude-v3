@@ -322,6 +322,23 @@ test('B27: the live-facts path reads the PR labels: a risk:high PR is CRITICAL; 
   assert.equal(code.out.recommended, 'coderabbit');
 });
 
+test('B27b: only a docs-only PR skips the CodeRabbit trigger: a zero-reviewable-line non-docs PR with risk:high, or CRITICAL with a trust or security file, is coderabbit (CodeRabbit round 2)', async () => {
+  const empty = (name) => ({ filename: name, additions: 0, deletions: 0 });
+  const label = await recommendFor([], { files: [empty('scripts/a.mjs')], labels: ['risk:high'] });
+  assert.equal(label.size.lines, 0);
+  assert.equal(label.recommended, 'coderabbit', 'risk:high on a zero-line code PR still reaches the trigger');
+  const trust = await recommendFor([], { files: [empty('scripts/github/lib/x.mjs')] });
+  assert.equal(trust.band.band, 'CRITICAL');
+  assert.equal(trust.recommended, 'coderabbit', 'CRITICAL with a trust-boundary file');
+  const tier = await recommendFor([], { files: [empty('scripts/github/local-review.mjs'), empty('.claude/hooks/src/x-guard.ts')] });
+  assert.equal(tier.band.band, 'CRITICAL');
+  assert.equal(tier.recommended, 'coderabbit', 'CRITICAL with a security-tier file');
+  const docs = await recommendFor([], { files: [empty('docs/a.md')], labels: ['risk:high'] });
+  assert.equal(docs.recommended, 'none', 'a docs-only PR with risk:high stays none');
+  const quiet = await recommendFor([], { files: [empty('thoughts/a.md')], labels: ['risk:high'] });
+  assert.equal(quiet.recommended, 'none', 'a thoughts-only PR stays none');
+});
+
 test('B28: the live-facts path with no risk:high label keeps a docs-only PR LOW and none', () => {
   const { out } = liveCheckpoint({ labels: ['builder:claude'] });
   assert.equal(out.band.band, 'LOW');
