@@ -2224,8 +2224,8 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
   // ----- 2026-11-05: `&>file` must not hide a package (second PR, HIGH bypass found by the workflow) -----
   // parseExecutable cuts at every lone `&`, so `npm install &>log zz-fresh-pkg` became the segments
   // `npm install ` and `>log zz-fresh-pkg`, and the package was never checked. In Bash `&>` is an operator
-  // even inside a word (`npm install&>log pkg` also installs pkg). stripFdRedirects now removes only the `&`
-  // of an unquoted, unescaped `&>` / `&>>` that has a file target; `&>/dev/null` is still removed whole.
+  // even inside a word (`npm install&>log pkg` also installs pkg). parseExecutable now keeps an unquoted
+  // `&>` / `&>>` in one segment with its command. stripFdRedirects removes only `&>/dev/null`.
   describe('&>file redirections do not hide a package', () => {
     async function lockDir(): Promise<string> {
       const { mkdtempSync, writeFileSync } = await import('node:fs');
@@ -2284,19 +2284,37 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       expect(stripFdRedirects('npm install &>log zz-fresh-pkg', 'PowerShell')).toBe('npm install &>log zz-fresh-pkg');
     });
 
+    // The parser (parseExecutable) now keeps `&>` inside one segment, so the words after the target stay
+    // with the command. PowerShell has no `&>`, but keeping the text whole fails closed there too.
+    it.each([
+      'npm install &>log zz-fresh-pkg',
+      'npm &>l install zz-fresh-pkg',
+      'npx &>l -y zz-fresh-pkg',
+    ])('gates a PowerShell install behind &>: %j', async (cmd) => {
+      gated(await runHook(cmd, { tool: 'PowerShell', stub: FRESH, cwd: await lockDir() }));
+    });
+
+    // The glued `&>/dev/null` strip: without it `bash -c&>/dev/null "..."` loses its wrapper flag.
+    it.each([
+      'bash -c&>/dev/null "npm install zz-fresh-pkg"',
+      'sh -c&>/dev/null "npm i zz-fresh-pkg"',
+      'bash -lc&>>/dev/null "npm i zz-fresh-pkg"',
+      'bash -c&> /dev/null "npm install zz-fresh-pkg"',
+    ])('gates a shell-wrapper payload behind a glued &>/dev/null: %j', async (cmd) => {
+      gated(await runHook(cmd, { stub: FRESH, cwd: await lockDir() }));
+    });
+
+    it('still allows an old clean package behind a glued &>/dev/null', async () => {
+      const r = await runHookFull('npm i zz-fresh-pkg&>/dev/null', { stub: OLD, cwd: await lockDir() });
+      expect(r.decision).toBeUndefined();
+    });
+
     describe('stripFdRedirects text', () => {
       it.each([
-        ['npm install &>log zz', 'npm install >log zz'],
-        ['npm install &> log zz', 'npm install > log zz'],
-        ['npm install &>>log zz', 'npm install >>log zz'],
-        ['npm install &>> log zz', 'npm install >> log zz'],
-        ['npm install zz &>log', 'npm install zz >log'],
-        ['npm install&>log zz', 'npm install >log zz'],
-        ['npm install &>log 2>&1 zz', 'npm install >log  zz'],
-        ['npm install &>"my log" zz', 'npm install >"my log" zz'],
+        ['npm install &>log 2>&1 zz', 'npm install &>log  zz'],
         ['npm ci &>/dev/null', 'npm ci '],
         ['npm ci&>/dev/null', 'npm ci '],
-        ['a &>x; b &>y', 'a >x; b >y'],
+        ['bash -c&>/dev/null "x"', 'bash -c  "x"'],
       ])('rewrites %j', (cmd, want) => {
         expect(stripFdRedirects(cmd)).toBe(want);
       });
@@ -2312,6 +2330,13 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
         ['echo a &&>log', 'Bash'],
         ['echo a |&>log', 'Bash'],
         ['echo "a &>log', 'Bash'],
+        ['npm install &>log zz', 'Bash'],
+        ['npm install &> log zz', 'Bash'],
+        ['npm install &>>log zz', 'Bash'],
+        ['npm install zz &>log', 'Bash'],
+        ['npm install&>log zz', 'Bash'],
+        ['npm install &>"my log" zz', 'Bash'],
+        ['a &>x; b &>y', 'Bash'],
         ['echo a &>log', 'PowerShell'],
         ['echo a &>> log', 'PowerShell'],
         ['echo a &>/dev/null', 'PowerShell'],
