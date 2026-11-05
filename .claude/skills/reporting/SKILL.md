@@ -119,7 +119,7 @@ Then, as needed:
 | FourthOS Sponsor | `CCv3-FourthOS-Weekly` (Thu 07:00) | `scripts\fourthos-weekly\scheduled-fourthos-weekly.bat` |
 | Team Dashboard | `CCv3-Dashboard-Sync` (daily) | `scripts\sync-tasks-dashboard.ps1` (LLM path; deterministic replacement is BLOCKED — see the 2026-07-17 efficiency handoff GAP-1..4) |
 | Project Portfolio (cards) | `CCv3-Project-Cards` (daily) | `node scripts/project-cards/sweep.mjs` (`--dry-run` is safe: no publishes, no claude spawn) |
-| Self-Improvement | `CCv3-Self-Improvement-Research` (daily 07:30) | headless research loop; digests queue in `docs/self-improvement/PENDING-DIGEST.md` for interactive Bridge sweep |
+| Self-Improvement | none (no scheduled job is registered) | manual only: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\self-improvement\run-research.ps1`; digests queue in `docs/self-improvement/PENDING-DIGEST.md` for interactive Bridge sweep |
 
 Every run must land a registry row (make-run + upsert are wired into the wrappers); the upsert
 auto-refreshes that type's child page + hub launcher (proposal 02).

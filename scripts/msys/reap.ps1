@@ -20,8 +20,14 @@
   real work (a sync, a build) accumulates CPU and is left alone no matter how
   long it has been running; a genuinely blocked one has essentially none.
 
-  Kills are tree kills (taskkill /T). Killing the parent alone leaves exactly
-  the untracked descendants that made the pile-up hard to clear.
+  Kills are tree kills through scripts/lib/Stop-ProcessTree.ps1 (leaves first,
+  by id, never this shell or its ancestors). Killing the parent alone leaves
+  exactly the untracked descendants that made the pile-up hard to clear.
+
+  The helper makes the KILL safe. It does not fix the SELECTION: the filter
+  above can still pick a live peer-session shell, because a waiting shell uses
+  about 0 CPU. See docs/windows/msys-fork-storm-investigation.md. Do not use
+  -Force without Dave's yes.
 
 .EXAMPLE
   pwsh -File scripts/msys/reap.ps1                 # show what is stuck
@@ -32,6 +38,8 @@ param(
     [int]$OlderThanSeconds = 120,
     [double]$MaxCpuSeconds = 2.0
 )
+
+. (Join-Path $PSScriptRoot '..\lib\Stop-ProcessTree.ps1')
 
 $all = @(Get-Process bash -ErrorAction SilentlyContinue)
 if ($all.Count -eq 0) {
@@ -68,8 +76,8 @@ if (-not $Force) {
 
 $killed = 0
 foreach ($c in $candidates) {
-    & taskkill /PID $c.Id /T /F 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { $killed++ }
+    $rows = @(Stop-ProcessTree -RootId $c.Id)
+    if (@($rows | Where-Object { $_.Status -eq 'Killed' -and $_.ProcessId -eq $c.Id }).Count -gt 0) { $killed++ }
 }
 
 Start-Sleep -Seconds 1

@@ -6,9 +6,10 @@
 # without a regression signal. This is the only way to get a complete one.
 #
 # It also survives the two traps that cost real time on 2026-07-29:
-#   * a hung run is KILLED with `taskkill /T /F` -- Stop-Process misses the
-#     descendant workers, which is how a run from the previous day was still
-#     alive 29 hours later at ~0 CPU with a 0-byte output file
+#   * a hung run is KILLED as a whole tree (scripts/lib/Stop-ProcessTree.ps1) --
+#     Stop-Process alone misses the descendant workers, which is how a run from
+#     the previous day was still alive 29 hours later at ~0 CPU with a 0-byte
+#     output file
 #   * per-file, so one hang cannot mask the other 112 results
 #
 # Baseline 2026-07-29: 99 pass / 12 fail / 2 timeout of 113. Inventory and
@@ -22,6 +23,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+. (Join-Path $PSScriptRoot '..\lib\Stop-ProcessTree.ps1')
 $repo  = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $hooks = Join-Path $repo '.claude\hooks'
 if (-not (Test-Path $hooks)) { Write-Error "hooks dir not found: $hooks"; exit 2 }
@@ -44,8 +46,8 @@ foreach ($f in $files) {
       -RedirectStandardOutput $out -RedirectStandardError "$out.err"
 
   if (-not $p.WaitForExit($TimeoutMs)) {
-    # /T /F: kill the whole tree. A plain kill leaves orphaned workers behind.
-    & taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+    # Kill the whole tree. A plain kill leaves orphaned workers behind.
+    $null = Stop-ProcessTree -RootId $p.Id
     $results += [pscustomobject]@{ File = $f.Name; Status = "TIMEOUT-$([int]($TimeoutMs/1000))s"; Detail = '' }
     Write-Host "TIMEOUT  $($f.Name)" -ForegroundColor Red
   }

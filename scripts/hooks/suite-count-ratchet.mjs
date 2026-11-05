@@ -73,12 +73,14 @@ const flags = new Set(process.argv.slice(2));
 const VITEST_BIN = join(HOOKS, 'node_modules', 'vitest', 'vitest.mjs');
 
 function runSuite() {
+  if (!existsSync(VITEST_BIN)) {
+    // A setup problem, not a crash: print one line and exit 2 (no stack trace).
+    console.error(`[suite-count-ratchet] vitest not installed at ${VITEST_BIN} -- run npm install in .claude/hooks`);
+    process.exit(2);
+  }
   const dir = mkdtempSync(join(tmpdir(), 'suite-ratchet-'));
   const outFile = join(dir, 'result.json');
   try {
-    if (!existsSync(VITEST_BIN)) {
-      throw new Error(`vitest not installed at ${VITEST_BIN} -- run npm install in .claude/hooks`);
-    }
     let spawnFailure = null;
     try {
       execFileSync(
@@ -103,7 +105,7 @@ function runSuite() {
       throw new Error(
         'vitest produced no JSON report. The run did not complete -- check for a hang ' +
           '(a synchronous spawnSync cannot be interrupted by testTimeout) or a leaked ' +
-          'vitest tree from an earlier run (taskkill /PID <n> /T /F).'
+          'vitest tree from an earlier run (stop it with scripts/lib/Stop-ProcessTree.ps1: Stop-ProcessTree -RootId <n>).'
       );
     }
     const r = JSON.parse(readFileSync(outFile, 'utf8'));

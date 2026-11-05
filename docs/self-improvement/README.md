@@ -1,6 +1,6 @@
 # Self-Improvement Loop — "CCv3 evolves CCv3"
 
-A recurring research loop: every morning a bounded, headless CCv3 session takes **one component** of
+A research loop: each run of a bounded, headless CCv3 session takes **one component** of
 this system as a baseline, researches how the field has evolved that capability, and writes a **cited
 proposal** for whether and how CCv3 should evolve it. Proposals accumulate into a corpus that feeds the
 next update phase. It mirrors how the Fable-5 deep review already worked: research → proposals → **you
@@ -8,7 +8,9 @@ ratify** → `docs/system-update/BACKLOG.md` → execution.
 
 ## How it runs
 
-- **Schedule:** Windows Task Scheduler job `CCv3-Self-Improvement-Research`, daily **7:30 AM**.
+- **Schedule:** none. No scheduled job is registered for this loop: it has no entry in
+  `scripts/scheduled/tasks.json` and no Task Scheduler job (checked 2026-11-05). Run it by hand (see
+  Operating it).
 - **Entry point:** `scripts/self-improvement/run-research.ps1`.
 - **Per run:** `select-component.mjs` picks the next component round-robin (state in `state.json`),
   renders `research-goal.md` with that component, and hands it to `claude -p` (headless). The session
@@ -28,9 +30,10 @@ ratify** → `docs/system-update/BACKLOG.md` → execution.
 - **Writes fenced to `docs/self-improvement/`** by the prompt. No `git commit`/`push` — proposals land as
   untracked files; **you** commit the ones you ratify.
 - **Append-only, never clobber:** new dated proposal per run; `INDEX.md` gets one appended row.
-- **Bounded:** one component per run; the task has a 1-hour execution-time cap.
+- **Bounded:** one component per run; the headless `claude -p` call has a 45-minute limit
+  (`CCV3_SI_TIMEOUT_SEC`, default 2700 s) and the wrapper stops its whole process tree when it fires.
 
-## Component coverage (round-robin, ~one/day → full sweep ~every 2 weeks)
+## Component coverage (round-robin, one component per run)
 
 Memory · Hooks · Agents · Workflows · Code Intelligence · Braintrust Observability · Doc-RAG (PageIndex)
 · Skills System · CLI Integration · Self-Improvement/Learning-Extraction · Cross-Session Coordination ·
@@ -43,9 +46,7 @@ add/reorder components.
 |--------|---------|
 | Run one iteration now | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\self-improvement\run-research.ps1` |
 | See coverage / cursor | `cat scripts\self-improvement\state.json` |
-| Pause the daily job | `Disable-ScheduledTask -TaskName CCv3-Self-Improvement-Research` |
-| Resume it | `Enable-ScheduledTask -TaskName CCv3-Self-Improvement-Research` |
-| Remove it | `Unregister-ScheduledTask -TaskName CCv3-Self-Improvement-Research -Confirm:$false` |
+| Schedule it | Add an entry to `scripts/scheduled/tasks.json`, then run `register-ccv3-tasks.ps1` (dry run first). Do this only if Dave decides to restart the loop. |
 
 ## Reviewing proposals
 

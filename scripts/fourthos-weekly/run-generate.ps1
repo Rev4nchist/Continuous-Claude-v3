@@ -16,14 +16,13 @@
 #      as the spawnSync leak that stranded 29 processes on 2026-07-25.
 #
 # So the bound is moved INSIDE the wrapper, where a timeout is survivable: this
-# script kills the tree with taskkill /T /F and returns 124 (the GNU `timeout`
+# script kills the tree with Stop-ProcessTree and returns 124 (the GNU `timeout`
 # convention), the .bat carries on, and verify-run.mjs + the final emit still
 # record a truthful row.
 #
 # Pattern copied deliberately from scripts/sync-tasks-dashboard.ps1 (the proven
 # bounded launcher on this machine) rather than invented: Start-Process,
-# touch .Handle so .ExitCode survives, WaitForExit(ms), taskkill /T /F,
-# Stop-Process fallback.
+# touch .Handle so .ExitCode survives, WaitForExit(ms), Stop-ProcessTree.
 #
 # PURE ASCII, no BOM: powershell.exe 5.1 decodes this file as CP1252, and a
 # UTF-8 dash inside a double-quoted string terminates the string early.
@@ -41,6 +40,9 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+# $PSScriptRoot, not the working directory: the .bat cd-s to the repo root, but this stays right from anywhere.
+. (Join-Path $PSScriptRoot '..\lib\Stop-ProcessTree.ps1')
 
 if (-not (Test-Path $Exe)) {
   $fallback = (Get-Command claude -ErrorAction SilentlyContinue)
@@ -73,10 +75,10 @@ try {
   if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
     $code = 124
     Write-Output "run-generate: TIMEOUT after ${TimeoutSec}s -- killing the process TREE (pid $($proc.Id))"
-    # taskkill /T (tree), NOT Stop-Process: Stop-Process kills only the named
-    # process and claude's node hook children would orphan permanently.
-    try { & taskkill.exe /T /F /PID $proc.Id 2>&1 | Out-Null } catch { }
-    try { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
+    # Kill the whole tree, not just the named process: claude's node hook children
+    # would orphan permanently. The OS tree switch is banned (pid reuse kills live
+    # shells); Stop-ProcessTree kills leaves first by id.
+    try { $null = Stop-ProcessTree -RootId $proc.Id } catch { }
     try { $proc.WaitForExit(15000) | Out-Null } catch { }
   } else {
     $code = $proc.ExitCode

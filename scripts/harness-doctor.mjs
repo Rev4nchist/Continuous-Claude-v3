@@ -324,14 +324,22 @@ function schtasksQuery(name) {
   return r.error ? { error: msg(r.error) } : { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-/** Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds <task name>.csv files of fake schtasks output. A missing file answers like an unknown task. */
-function fakeSchtasksQuery(dir) {
+/** Runs the real `schtasks /query /tn <name> /xml`. Read-only. It holds the battery and wake settings and the trigger, which the CSV does not. */
+function schtasksXml(name) {
+  const r = spawnSync('schtasks', ['/query', '/tn', name, '/xml'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  return r.error ? { error: msg(r.error) } : { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds <task name>.<ext> files of fake schtasks output. A missing file answers like an unknown task. */
+function fakeSchtasksFile(dir, ext) {
   return (name) => {
-    const file = join(dir, `${name}.csv`);
+    const file = join(dir, `${name}.${ext}`);
     return existsSync(file) ? { status: 0, stdout: readFileSync(file, 'utf8'), stderr: '' }
       : { status: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.' };
   };
 }
+const fakeSchtasksQuery = (dir) => fakeSchtasksFile(dir, 'csv');
+const fakeSchtasksXml = (dir) => fakeSchtasksFile(dir, 'xml');
 
 /** schtasks prints the last run as M/D/YYYY h:mm:ss AM|PM (English locale), or an ISO-like stamp. NaN when it is neither. */
 function parseRunTime(s) {
@@ -349,7 +357,47 @@ function entryProblem(t) {
   if (!t || typeof t.name !== 'string' || !t.name) return 'has no name';
   if (!Array.isArray(t.allowedExit) || !t.allowedExit.every(Number.isInteger)) return 'allowedExit is not an array of integers';
   if (!(t.maxAgeHours > 0)) return 'maxAgeHours is not a positive number';
+  for (const field of ['llm', 'wake']) if (field in t && typeof t[field] !== 'boolean') return `${field} is not true or false`;
   return null;
+}
+
+// ---- registration drift: the registered task XML against tasks.json (llm, wake, trigger) ----
+/** A boolean setting of the task XML, or the Windows default when the tag is absent (Windows leaves out a tag that is at its default). */
+function xmlFlag(settings, name, dflt) {
+  const m = new RegExp(`<${name}>\\s*(true|false)\\s*</${name}>`, 'i').exec(settings);
+  return m ? m[1].toLowerCase() === 'true' : dflt;
+}
+
+/** The trigger of the task XML as text: "daily 07:50", "weekly Monday 09:20", or null when it has no calendar trigger. */
+function xmlTrigger(xml) {
+  const block = /<CalendarTrigger>[\s\S]*?<\/CalendarTrigger>/.exec(xml)?.[0];
+  const time = /<StartBoundary>[^<]*?T(\d{2}:\d{2})/.exec(block ?? '')?.[1];
+  if (!block || !time) return null;
+  if (/<ScheduleByDay>/.test(block)) return `daily ${time}`;
+  const days = /<DaysOfWeek>([\s\S]*?)<\/DaysOfWeek>/.exec(block)?.[1];
+  if (days === undefined) return `other ${time}`;
+  return `weekly ${[...days.matchAll(/<(\w+)\s*\/>/g)].map((d) => d[1]).join('+')} ${time}`;
+}
+
+/** The drift between one task's XML and its tasks.json entry: a list of texts, or { warn } when the XML cannot be judged. */
+function registrationDrift(t, q) {
+  if (q.error) return { warn: `cannot read the task xml: ${q.error}` };
+  if (q.status !== 0) return { warn: `cannot read the task xml (schtasks exit ${q.status}: ${String(q.stderr).trim().split('\n')[0]})` };
+  const settings = /<Settings>[\s\S]*?<\/Settings>/.exec(q.stdout)?.[0];
+  if (!settings) return { warn: 'the task xml has no Settings block: cannot compare battery and wake' };
+  const llm = t.llm === true;
+  const want = llm ? 'allowed' : 'blocked';
+  const drift = [];
+  const disallow = xmlFlag(settings, 'DisallowStartIfOnBatteries', true);
+  const stop = xmlFlag(settings, 'StopIfGoingOnBatteries', true);
+  if (disallow === llm) drift.push(`battery: start on battery is ${disallow ? 'blocked' : 'allowed'}, tasks.json llm=${llm} wants it ${want}`);
+  if (stop === llm) drift.push(`battery: stop when going on battery is ${stop ? 'on' : 'off'}, tasks.json llm=${llm} wants it ${llm ? 'off' : 'on'}`);
+  const wake = xmlFlag(settings, 'WakeToRun', false);
+  if (wake !== (t.wake === true)) drift.push(`wake: WakeToRun is ${wake}, tasks.json wake=${t.wake === true}`);
+  const trigger = xmlTrigger(q.stdout);
+  const wantTrigger = /^(daily \d{2}:\d{2}|weekly \w+ \d{2}:\d{2})$/.test(t.trigger) ? t.trigger : null; // another grammar: not compared
+  if (wantTrigger && trigger?.toLowerCase() !== wantTrigger.toLowerCase()) drift.push(`trigger: the task has "${trigger ?? 'no calendar trigger'}", tasks.json says "${t.trigger}"`);
+  return { drift };
 }
 
 /** The header-name lookup of one schtasks answer, or the WARN text. */
@@ -376,21 +424,35 @@ function judgeTask(t, row, now) {
     : result('PASS', 'schedule', t.name, `last result ${code}, last run ${row.lastRun} (${hours.toFixed(1)} h ago, limit ${t.maxAgeHours})`);
 }
 
-function checkTask(t, query, now) {
+/** Folds registration drift into the task's one row. A FAIL stays a FAIL, a WARN stays a WARN, a PASS with drift becomes a WARN. No XML query: no drift check. */
+function withDrift(base, t, queryXml) {
+  if (!queryXml) return base;
+  const found = registrationDrift(t, queryXml(t.name));
+  const text = found.warn ?? found.drift.join('; ');
+  if (!text) return base;
+  return result(base.status === 'PASS' ? 'WARN' : base.status, 'schedule', t.name, `${base.detail}; registration drift: ${text}`);
+}
+
+function checkTask(t, query, queryXml, now) {
   const problem = entryProblem(t);
   if (problem) return result('WARN', 'schedule', t?.name || 'entry', `tasks.json entry ${problem}`);
   const q = query(t.name);
   if (q.error) return result('WARN', 'schedule', t.name, `cannot run schtasks: ${q.error}`);
   if (q.status !== 0) return result('WARN', 'schedule', t.name, `task is not registered (schtasks exit ${q.status}: ${String(q.stderr).trim().split('\n')[0]}); trigger ${t.trigger}`);
   const row = taskRow(q.stdout, t.name);
-  return row.warn ? result('WARN', 'schedule', t.name, row.warn) : judgeTask(t, row, now);
+  return row.warn ? result('WARN', 'schedule', t.name, row.warn) : withDrift(judgeTask(t, row, now), t, queryXml);
 }
 
-/** One check per task in scripts/scheduled/tasks.json. `deps` (platform, query, now) is injectable for tests. */
+/**
+ * One check per task in scripts/scheduled/tasks.json, with registration drift folded into the same row.
+ * `deps` (platform, query, queryXml, now) is injectable for tests. An injected `query` with no `queryXml` skips the drift
+ * check, so a test of the last result never reads the real Task Scheduler.
+ */
 export function scheduleChecks(o, deps = {}) {
   const seam = process.env.HARNESS_DOCTOR_SCHTASKS_DIR;
   const platform = deps.platform ?? (seam ? 'win32' : process.platform);
   const query = deps.query ?? (seam ? fakeSchtasksQuery(seam) : schtasksQuery);
+  const queryXml = deps.queryXml ?? (deps.query ? null : seam ? fakeSchtasksXml(seam) : schtasksXml);
   if (platform !== 'win32') return [result('PASS', 'schedule', 'tasks', `skipped: Task Scheduler exists only on Windows (this is ${platform})`)];
   const file = join(o.repo, ...SCHEDULE_REL);
   if (!existsSync(file)) return [result('WARN', 'schedule', 'tasks', `missing ${file}: no scheduled task is checked`)];
@@ -398,7 +460,7 @@ export function scheduleChecks(o, deps = {}) {
   try { tasks = readJson(file).tasks; } catch (err) { return [result('WARN', 'schedule', 'tasks', `${file} is not valid JSON: ${msg(err)}`)]; }
   if (!Array.isArray(tasks)) return [result('WARN', 'schedule', 'tasks', `${file} has no "tasks" array`)];
   if (!tasks.length) return [result('PASS', 'schedule', 'tasks', `${file} lists 0 tasks`)];
-  return tasks.map((t) => checkTask(t, query, deps.now ?? Date.now()));
+  return tasks.map((t) => checkTask(t, query, queryXml, deps.now ?? Date.now()));
 }
 
 const scheduleSection = (o) => scheduleChecks(o);
