@@ -73,12 +73,14 @@ const flags = new Set(process.argv.slice(2));
 const VITEST_BIN = join(HOOKS, 'node_modules', 'vitest', 'vitest.mjs');
 
 function runSuite() {
+  if (!existsSync(VITEST_BIN)) {
+    // A setup problem, not a crash: print one line and exit 2 (no stack trace).
+    console.error(`[suite-count-ratchet] vitest not installed at ${VITEST_BIN} -- run npm install in .claude/hooks`);
+    process.exit(2);
+  }
   const dir = mkdtempSync(join(tmpdir(), 'suite-ratchet-'));
   const outFile = join(dir, 'result.json');
   try {
-    if (!existsSync(VITEST_BIN)) {
-      throw new Error(`vitest not installed at ${VITEST_BIN} -- run npm install in .claude/hooks`);
-    }
     let spawnFailure = null;
     try {
       execFileSync(

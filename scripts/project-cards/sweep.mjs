@@ -1702,7 +1702,9 @@ async function main() {
   } catch (e) {
     fatalError = e;
     // Distinct fatal marker so a watchdog can grep the run apart from soft failures.
-    console.error(`[sweep] FATAL phase=${phase}: ${e && e.stack ? e.stack : (e && e.message) || e}`);
+    // Phase "start" is the ntn probe: a missing ntn is a setup problem, not a crash, so no stack there.
+    const detail = phase !== 'start' && e && e.stack ? e.stack : (e && e.message) || e;
+    console.error(`[sweep] FATAL phase=${phase}: ${detail}`);
   } finally {
     // REL#2: ALWAYS record one run-log row — except on the dry-run early exit.
     if (!dryRunExit) {
