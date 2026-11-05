@@ -404,6 +404,37 @@ describe('a name that matches two sessions', () => {
   });
 });
 
+describe('board header: active (5 min) and open, quiet', () => {
+  // Same three quiet sessions as render-board.test.mjs: 30 min, 3 h, and 5 h with an open lane. Board C has no other session.
+  const QUIET = ['zz-pbprobe-q30', 'zz-pbprobe-q3h', 'zz-pbprobe-qhold', 'zz-pbprobe-qend'];
+  it('counts a session seen 30 min ago and a quiet lane holder, not one seen 3 h ago; the JSON carries the same number', async () => {
+    const root = normalizeRoot(state.dirs.C);
+    try {
+      for (const [id, ago] of [[QUIET[0], '30 minutes'], [QUIET[1], '3 hours'], [QUIET[2], '5 hours'], [QUIET[3], '20 minutes']]) {
+        await q(`INSERT INTO sessions (id, project, working_on, last_heartbeat, last_activity_at)
+                 VALUES ($1,$2,'fixture quiet', now() - $3::interval, now() - $3::interval)`, [id, root, ago]);
+      }
+      await q(`INSERT INTO agentic_os.lane (id,title,track,state,project_key,owner_session_id,lease_expires_at)
+               VALUES ('zz-pbprobe-qlane','held by a sleeper','zz','backlog','continuous-claude',$1,now() + interval '30 minutes')`, [QUIET[2]]);
+      // An ended session that still holds an open lane is not open.
+      await q(`UPDATE sessions SET ended_at = now() - interval '10 minutes' WHERE id = $1`, [QUIET[3]]);
+      await q(`INSERT INTO agentic_os.lane (id,title,track,state,project_key,owner_session_id,lease_expires_at)
+               VALUES ('zz-pbprobe-qlane2','held by an ended session','zz','backlog','continuous-claude',$1,now() - interval '5 minutes')`, [QUIET[3]]);
+      const text = lane(state.dirs.C, SA, ['board']);
+      assert.equal(text.code, 0, text.all);
+      assert.match(text.out, /0 active \(5 min\), 2 open, quiet/);
+      assert.doesNotMatch(text.out, /live session/);
+      const json = lane(state.dirs.C, SA, ['board', '--json']);
+      assert.equal(JSON.parse(json.out).quiet, 2);
+      // Another board does not see them.
+      assert.equal(JSON.parse(lane(state.dirs.B, SB, ['board', '--json']).out).quiet, 0);
+    } finally {
+      await q(`DELETE FROM agentic_os.lane WHERE id = ANY($1)`, [['zz-pbprobe-qlane', 'zz-pbprobe-qlane2']]).catch(() => {});
+      await q(`DELETE FROM sessions WHERE id = ANY($1)`, [QUIET]).catch(() => {});
+    }
+  });
+});
+
 describe('peers', () => {
   const peerIds = (r) => JSON.parse(r.out).map((p) => p.id);
 

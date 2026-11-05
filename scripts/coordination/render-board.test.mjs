@@ -197,6 +197,11 @@ describe('render-board.mjs against a scratch database', () => {
         ('zz-rb-s-q30', $1, 'zzsleep-30m', now() - interval '30 minutes', now() - interval '30 minutes'),
         ('zz-rb-s-q3h', $1, 'zzsleep-3h', now() - interval '3 hours', now() - interval '3 hours'),
         ('zz-rb-s-qhold', $1, 'zzsleep-holder', now() - interval '5 hours', now() - interval '5 hours')`, [fwd(E2E.rootC).toLowerCase()]);
+      // An ended session that still holds an open lane is not open: ended_at is its latest signal.
+      await c.query(`INSERT INTO sessions (id, project, working_on, last_heartbeat, last_activity_at, ended_at) VALUES
+        ('zz-rb-s-qend', $1, 'zzsleep-ended', now() - interval '20 minutes', now() - interval '20 minutes', now() - interval '10 minutes')`, [fwd(E2E.rootC).toLowerCase()]);
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, project_key, owner_session_id, lease_expires_at) VALUES
+        ('zz-rb-ccv3-qend', 'ccv3 lane held by an ended session', 'zz', 'backlog', 'continuous-claude', 'zz-rb-s-qend', now() - interval '5 minutes')`);
       await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, project_key, owner_session_id, lease_expires_at) VALUES
         ('zz-rb-ccv3-qhold', 'ccv3 lane held by a sleeper', 'zz', 'backlog', 'continuous-claude', 'zz-rb-s-qhold', now() + interval '30 minutes')`);
       await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, project_key, owner_session_id, lease_expires_at) VALUES
@@ -247,7 +252,7 @@ describe('render-board.mjs against a scratch database', () => {
     const html = fs.readFileSync(out, 'utf8');
     const ctr = (label) => new RegExp(String.raw`<b>(\d+)</b><span>${label}</span>`).exec(html)?.[1];
     assert.equal(ctr(String.raw`active \(5 min\)`), '1', 'zz-rb-s-c beat just now; the quiet ones are not active');
-    assert.equal(ctr('open, quiet'), '2', 'zz-rb-s-q30 (30 min) and zz-rb-s-qhold (holds an open lane); zz-rb-s-q3h is out');
+    assert.equal(ctr('open, quiet'), '2', 'zz-rb-s-q30 (30 min) and zz-rb-s-qhold (holds an open lane); zz-rb-s-q3h is out, zz-rb-s-qend ended');
     assert.ok(!html.includes('<span>live sessions</span>'), 'the old "live sessions" label is gone');
     // The NOW cards stay on active sessions only.
     assert.ok(!html.includes('zzsleep-30m') && !html.includes('zzsleep-holder'), 'a quiet session showed in the Right now cards');
