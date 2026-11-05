@@ -5821,6 +5821,9 @@ function identityPath(uuid) {
 function asString(v) {
   return typeof v === "string" && v ? v : null;
 }
+function asPid(v) {
+  return typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : null;
+}
 function readIdentity(uuid) {
   if (!uuid) return null;
   const file = identityPath(uuid);
@@ -5836,6 +5839,7 @@ function readIdentity(uuid) {
       cwd: asString(o.cwd),
       endedAt: asString(o.endedAt),
       endReason: asString(o.endReason),
+      pid: asPid(o.pid),
       updatedAt: asString(o.updatedAt) ?? ""
     };
   } catch {
@@ -5846,7 +5850,7 @@ function writeIdentity(uuid, patch) {
   const file = identityPath(uuid);
   if (!file) return null;
   const cur = readIdentity(uuid);
-  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] : null;
+  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] ?? null : null;
   const next = {
     uuid,
     short: shortId(uuid),
@@ -5855,6 +5859,7 @@ function writeIdentity(uuid, patch) {
     cwd: pick("cwd"),
     endedAt: pick("endedAt"),
     endReason: pick("endReason"),
+    pid: pick("pid"),
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   try {

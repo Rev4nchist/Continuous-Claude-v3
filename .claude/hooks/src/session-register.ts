@@ -14,7 +14,7 @@ import { readFileSync } from 'fs';
 import { registerSession, type LiveSession } from './shared/db-utils-pg.js';
 import { resolveSessionId, writeSessionId, canonicalProject } from './shared/session-id.js';
 import { initActivity } from './shared/session-activity.js';
-import { label, readIdentity, resolveName, resolvePrevious, runAdopt, writeIdentity } from './shared/session-identity.js';
+import { claudePidFromEnv, label, readIdentity, resolveName, resolvePrevious, runAdopt, writeIdentity } from './shared/session-identity.js';
 import { autoNameAllowed, chooseName, heldDegraded, heldFromLive, laneBoardLine, sameNameHint, type HeldMap } from './shared/session-names.js';
 import type { SessionStartInput, SessionStartHookOutput } from './shared/types.js';
 
@@ -129,6 +129,9 @@ function recordStart(
     cwd: input.cwd,
     endedAt: null,
     endReason: null,
+    // Every start rewrites the pid: a resumed session has the same uuid and a new process.
+    // No usable CLAUDE_PID: clear it. The stored one belongs to an earlier process of this session.
+    pid: claudePidFromEnv() ?? null,
   });
   if (plan.previous && input.source !== 'fork') runAdopt(uuid, plan.previous);
   // Report only, never move lanes (D6): a session Dave named, started while an unended twin holds the name.
