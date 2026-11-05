@@ -48,15 +48,16 @@ function merge(into, from) {
 }
 
 /** The artifact db, as documented in db.d.ts. `log` holds every write the page tried, rejected ones too. */
-function fakeDb(initial = {}, { liveDoc = true } = {}) {
+function fakeDb(initial = {}, { liveDoc = true, getFails = null } = {}) {
   const store = new Map(Object.entries(initial).map(([k, v]) => [k, clone(v)]));
   const listeners = new Map();
   const log = [];
+  let cardSubs = 0;
   const snap = (p) => ({ id: p.split('/').pop(), exists: store.has(p), data: () => clone(store.get(p)), metadata: { fromCache: false, hasPendingWrites: false } });
   const notify = (p) => { for (const next of listeners.get(p) || []) next(snap(p)); };
   const ref = (p) => ({
     path: p,
-    get: () => Promise.resolve(snap(p)),
+    get: () => (getFails ? Promise.reject(getFails) : Promise.resolve(snap(p))),
     set(data) {
       log.push({ op: 'set', path: p, data: clone(data) });
       store.set(p, clone(data));
@@ -85,10 +86,12 @@ function fakeDb(initial = {}, { liveDoc = true } = {}) {
       doc: ref,
       collection: () => ({
         doc: (id) => ref(`cards/${id}`),
-        onSnapshot(next) { Promise.resolve().then(() => next({ docs: [] })); return () => {}; },
+        onSnapshot(next) { cardSubs += 1; Promise.resolve().then(() => next({ docs: [] })); return () => {}; },
       }),
     },
     log,
+    /** How many times the page subscribed to the card notes. */
+    cardSubs: () => cardSubs,
     /** A write by another device that this page has not been told about (no snapshot). */
     seed: (p, data) => store.set(p, clone(data)),
     remove: (p) => store.delete(p),
@@ -133,8 +136,8 @@ const LANES = [
 ];
 
 /** Opens the page and waits until the saved order has loaded (or the page has refused it). */
-async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true } = {}) {
-  const db = fakeDb(doc ? { [DOC]: doc } : {}, { liveDoc });
+async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null } = {}) {
+  const db = fakeDb(doc ? { [DOC]: doc } : {}, { liveDoc, getFails });
   const timers = [];
   const cardEls = new Map(lanes.filter((l) => l.state !== 'done').map((l) => [l.id, stub({
     attrs: { 'data-id': l.id, 'data-hash': 'h' },
@@ -197,6 +200,22 @@ for (const liveDoc of [true, false]) {
     assert.deepEqual(page.db.log, [], 'a foreign page wrote to the other board\'s doc');
   });
 }
+
+test('a board doc that cannot be read: the page cannot verify its board, so it subscribes to no card notes, writes nothing and says so', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-other', syncedAt: SYNCED }), getFails: new Error('boom') });
+  assert.match(page.status(), /^Board order not loaded: boom$/);
+  assert.equal(page.db.cardSubs(), 0, 'card notes of an artifact whose board could not be verified were subscribed');
+  await page.moveAndSave('a2', 'now');
+  assert.deepEqual(page.db.log, [], 'an unverified page wrote');
+});
+
+test('no db handle (claude.use returned null): read-only, no card notes, no writes', async () => {
+  const page = await openPage({ board: 'zz-a', noDb: true });
+  assert.match(page.status(), /sign in to save an order/);
+  assert.equal(page.db.cardSubs(), 0);
+  await page.moveAndSave('a2', 'now');
+  assert.deepEqual(page.db.log, []);
+});
 
 test('positive control: the same moves on a matching doc do write (so the refusal above is the guard)', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
