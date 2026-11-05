@@ -35,6 +35,7 @@ import {
 } from './kanban-place.mjs';
 import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
+import { processMatchSummary } from './process-match.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -190,6 +191,9 @@ const quietCount = (await c.query(
           OR EXISTS (SELECT 1 FROM agentic_os.lane ql WHERE ql.owner_session_id = s.id AND ql.state <> 'done' AND ql.project_key = $1::text))`,
   [KEY, BOARD_ROOTS],
 )).rows[0].n;
+
+// claude.exe processes on this machine matched to sessions by start time (process-match.mjs). null: not listable (not Windows).
+const procSummary = await processMatchSummary(c);
 
 const events = (await c.query(
   `SELECT * FROM agentic_os.lane_event WHERE project_key = $1::text ORDER BY id DESC LIMIT 30`, [KEY],
@@ -677,7 +681,8 @@ const html = `${STAMP}
       <span class="ctr${byState('blocked') ? ' is-crit' : ''}"><b>${byState('blocked')}</b><span>blocked</span></span>
       <span class="ctr is-ok"><b>${sessions.length}</b><span>active (${STALE_MINUTES} min)</span></span>
       <span class="ctr"><b>${quietCount}</b><span>open, quiet</span></span>
-    </div>
+${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is-crit' : ''}" title="claude.exe processes on this machine whose start time matches a live session${procSummary.unmatchedPids.length ? `; no session for pid ${procSummary.unmatchedPids.join(', ')}` : ''}"><b>${procSummary.matched}/${procSummary.total}</b><span>claude.exe matched</span></span>
+` : ''}    </div>
     <button class="themebtn" id="tt" type="button">theme</button>
   </div>
 </header>
@@ -866,4 +871,4 @@ ${kbScript}
 </script>` : ''}`;
 
 writeAtomic(OUT, html);
-console.log(`wrote ${OUT} (${(html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${events.length} events`);
+console.log(`wrote ${OUT} (${(html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${procSummary ? `${procSummary.matched}/${procSummary.total} claude.exe matched, ` : ''}${events.length} events`);

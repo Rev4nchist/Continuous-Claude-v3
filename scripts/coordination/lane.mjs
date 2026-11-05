@@ -82,6 +82,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { repoPath } from './canon-home.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
+import { processMatchSummary } from './process-match.mjs';
 import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
   adoptAllowed, isSafeId, label, labelWithAgent, listIdentities, readIdentity, resolveName, short, validAgent,
@@ -518,6 +519,8 @@ const commands = {
     );
     const peers = (await livePeers(c, board, all)).map((r) => ({ id: r.id, working_on: r.working_on }));
     const quiet = await quietCount(c, board, all);
+    // claude.exe processes (whole machine) matched to sessions by start time; null when the list is not available.
+    const procs = await processMatchSummary(c);
 
     if (JSON_OUT) {
       return {
@@ -525,6 +528,7 @@ const commands = {
         lanes: rows.map((l) => ({ ...l, owner_name: l.owner_session_id ? nameOf(l.owner_session_id) : null })),
         peers,
         quiet,
+        processes: procs,
         me: myId,
         me_short: short(myId),
         me_name: nameOf(myId),
@@ -532,7 +536,7 @@ const commands = {
     }
 
     const out = [];
-    out.push(`LANE BOARD   ${all ? 'board (all boards, read-only)' : `board ${board.key}`}   me=${L(myId)}   ${rows.length} ${all ? '' : 'open '}lane(s)   ${peers.length} active (${STALE_MINUTES} min), ${quiet} open, quiet`);
+    out.push(`LANE BOARD   ${all ? 'board (all boards, read-only)' : `board ${board.key}`}   me=${L(myId)}   ${rows.length} ${all ? '' : 'open '}lane(s)   ${peers.length} active (${STALE_MINUTES} min), ${quiet} open, quiet${procs ? `, ${procs.matched}/${procs.total} claude.exe matched${procs.unmatchedPids.length ? ` (no session for pid ${procs.unmatchedPids.join(', ')})` : ''}` : ''}`);
     let group = null;
     for (const l of rows) {
       const g = all ? `${l.project_key}/${l.track}` : l.track;
