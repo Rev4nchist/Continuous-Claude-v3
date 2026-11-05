@@ -820,7 +820,11 @@ describe('shell-running MCP tools (F07), built hook, subprocess', () => {
 // A decision is "gated" when permissionDecision is ask or deny. "Allowed" is no permissionDecision.
 // ---------------------------------------------------------------------------
 describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
-  type Stub = { ageHours?: number; nextHours?: number; osvMal?: boolean; osvCrit?: boolean };
+  type Stub = {
+    ageHours?: number; nextHours?: number; osvMal?: boolean; osvCrit?: boolean;
+    registryMode?: string; // see package-guard-net-stub.cjs: an HTTP status, garbage, timeout or error
+    registryOnly?: string; // comma list: the mode applies only to a registry URL holding one of these names
+  };
 
   async function runHook(
     command: string,
@@ -849,6 +853,8 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       PIG_STUB_NEXT_HOURS: String(opts.stub?.nextHours ?? 2400),
       PIG_STUB_OSV_MAL: opts.stub?.osvMal ? '1' : '',
       PIG_STUB_OSV_CRIT: opts.stub?.osvCrit ? '1' : '',
+      PIG_STUB_REGISTRY_MODE: opts.stub?.registryMode ?? '',
+      PIG_STUB_REGISTRY_ONLY: opts.stub?.registryOnly ?? '',
     };
     delete env.CDPATH;
     Object.assign(env, opts.env);
@@ -878,6 +884,130 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
   const FRESH: Stub = { ageHours: 1 }; // the package was published an hour ago: a detected install is denied
   const OLD: Stub = { ageHours: 2400 }; // 100 days old and clean
   const gated = (decision: string | undefined) => expect(['ask', 'deny']).toContain(decision);
+
+  // ----- 2026-11-05 F3 residual: a package the registry answers 404 for is not allowed silently -----
+  // Dave's decision: a real HTTP 404 from npm or PyPI is an ASK. A timeout, a socket error, any other
+  // status and a 200 with a body that is not JSON stay fail-open, as before.
+  // CLAUDE_AGENT_ID and CI are blanked: an unattended session turns every ask into a deny.
+  describe('registry 404 asks (F3 residual)', () => {
+    const NOT_FOUND = /was not found on the registry \(404\)/;
+    const interactive = { CLAUDE_AGENT_ID: '', CI: '' };
+    const run = (cmd: string, registryMode?: string, extra: { registryOnly?: string; cwd?: string; tool?: string } = {}) =>
+      runHookFull(cmd, { stub: { ...OLD, registryMode, registryOnly: extra.registryOnly }, env: interactive, cwd: extra.cwd, tool: extra.tool });
+
+    const missing = [
+      ['npm', 'npm install zz-missing-pkg-404'],
+      ['npm, scoped', 'npm install @zz-scope/zz-missing-pkg-404'],
+      ['npm, exact pin', 'npm install zz-missing-pkg-404@1.2.3'],
+      ['npm, runner', 'npx zz-missing-pkg-404'],
+      ['pypi, exact pin', 'pip install zz-missing-pkg-404==1.0.0'],
+    ];
+    it.each(missing)('asks with the 404 text for a missing package (%s): %s', async (_label, cmd) => {
+      const { decision, reason } = await run(cmd, '404');
+      expect(decision).toBe('ask');
+      expect(reason).toMatch(NOT_FOUND);
+    });
+
+    it('names the package and tells Dave to check the name', async () => {
+      const { reason } = await run('npm install @zz-scope/zz-missing-pkg-404', '404');
+      expect(reason).toContain('Package "@zz-scope/zz-missing-pkg-404" was not found on the registry (404). Check the name or confirm.');
+    });
+
+    it('asks once per missing package when several are named', async () => {
+      const { decision, reason } = await run('npm install zz-missing-a1 zz-missing-b2', '404');
+      expect(decision).toBe('ask');
+      expect(reason).toContain('"zz-missing-a1" was not found');
+      expect(reason).toContain('"zz-missing-b2" was not found');
+    });
+
+    it('asks only for the missing package, not for one the registry knows', async () => {
+      const { decision, reason } = await run('npm install zz-missing-a1 zz-known-b2', '404', { registryOnly: 'zz-missing-a1' });
+      expect(decision).toBe('ask');
+      expect(reason).toContain('"zz-missing-a1" was not found');
+      expect(reason).not.toContain('zz-known-b2');
+    });
+
+    it('asks from PowerShell too', async () => {
+      const { decision, reason } = await run('npm install zz-missing-pkg-404', '404', { tool: 'PowerShell' });
+      expect(decision).toBe('ask');
+      expect(reason).toMatch(NOT_FOUND);
+    });
+
+    // Fail-open stays: only a real 404 asks.
+    const notFourOhFour = ['500', '502', '503', '403', '429', '301', '302', '401', 'garbage', 'timeout', 'error'];
+    it.each(notFourOhFour)('npm: registry answer "%s" stays allowed, with no 404 ask', async (mode) => {
+      const { decision, reason } = await run('npm install zz-fake-pkg-a1', mode);
+      expect(decision).toBeUndefined();
+      expect(reason).not.toMatch(NOT_FOUND);
+    });
+    it.each(['500', '403', '429', 'garbage', 'timeout', 'error'])('pypi: registry answer "%s" stays allowed, with no 404 ask', async (mode) => {
+      const { decision, reason } = await run('pip install zz-fake-pkg-a1==1.0.0', mode);
+      expect(decision).toBeUndefined();
+      expect(reason).not.toMatch(NOT_FOUND);
+    });
+
+    it('a normal old package passes with no ask', async () => {
+      const { decision, reason } = await run('npm install zz-fake-pkg-a1');
+      expect(decision).toBeUndefined();
+      expect(reason).toBe('');
+    });
+
+    // Deny wins over ask.
+    it('a blocklisted npm package keeps its deny when the registry also says 404', async () => {
+      const { decision, reason } = await run('npm install zer0code', '404');
+      expect(decision).toBe('deny');
+      expect(reason).toMatch(/Known malicious/);
+    });
+    it('a blocklisted pypi package keeps its deny when the registry also says 404', async () => {
+      const { decision, reason } = await run('pip install litellm==1.82.7', '404');
+      expect(decision).toBe('deny');
+      expect(reason).toMatch(/Known malicious/);
+    });
+    it('a fresh package named next to a missing one denies, and the deny wins over the 404 ask', async () => {
+      // The registry answers 404 for the first name only; the second is one hour old.
+      const { decision, reason } = await runHookFull('npm install zz-missing-a1 zz-fresh-b2', {
+        stub: { ageHours: 1, registryMode: '404', registryOnly: 'zz-missing-a1' }, env: interactive,
+      });
+      expect(decision).toBe('deny');
+      expect(reason).toMatch(/published less than 24 hours ago/);
+    });
+    it('an unattended session turns the 404 ask into a deny, like every other ask', async () => {
+      const { decision, reason } = await runHookFull('npm install zz-missing-pkg-404', {
+        stub: { ...OLD, registryMode: '404' }, env: { CLAUDE_AGENT_ID: 'agent-1' },
+      });
+      expect(decision).toBe('deny');
+      expect(reason).toMatch(NOT_FOUND);
+    });
+
+    // Installs that name no registry package fetch nothing, so a 404 stub never reaches them.
+    it('pip install -r requirements.txt does not ask for a 404', async () => {
+      expect((await run('pip install -r requirements.txt', '404')).decision).toBeUndefined();
+    });
+    it('pip install -e . does not ask for a 404', async () => {
+      expect((await run('pip install -e .', '404')).decision).toBeUndefined();
+    });
+    it('npm install (no package named) does not ask for a 404', async () => {
+      expect((await run('npm install', '404')).decision).toBeUndefined();
+    });
+    it('npm ci with a lockfile does not ask for a 404', async () => {
+      const { mkdtempSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const dir = mkdtempSync(join(tmpdir(), 'pig-404-ci-'));
+      writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+      expect((await run('npm ci', '404', { cwd: dir })).decision).toBeUndefined();
+    });
+    it.each([
+      'npm install ./zz-fake-pkg-a1.tgz',
+      'npm install file:../zz-fake-pkg-a1',
+      'npm install git+https://zz-fake-host.example/zz-fake-org/zz-fake-pkg-a1.git',
+      'npm install github:zz-fake-org/zz-fake-pkg-a1',
+      'pip install git+https://zz-fake-host.example/zz-fake-org/zz-fake-pkg-a1.git',
+      'pip install ./zz-fake-pkg-a1',
+    ])('a local path or git source (%s) never gets the 404 text', async (cmd) => {
+      expect((await run(cmd, '404')).reason).not.toMatch(NOT_FOUND);
+    });
+  });
 
   // ----- F08: the override must be a leading env assignment -----
   describe('F08 override anchoring', () => {
