@@ -120,24 +120,26 @@ const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\
 export const fromGitBashPath = (p: string, platform: string = process.platform): string =>
   platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p;
 
-const resolveIn = (cwd: string, target: string): string => {
-  const t = fromGitBashPath(target.replace(/^["']|["']$/g, ''));
+const resolveIn = (cwd: string, target: string, shell: 'bash' | 'pwsh'): string => {
+  const raw = target.replace(/^["']|["']$/g, '');
+  // Only Git Bash writes /c/x for C:\x. PowerShell reads /c/x from the current drive root, so it keeps the text as written.
+  const t = shell === 'bash' ? fromGitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
 };
 
 /** The directory the first `cd <dir>` names, resolved against the hook cwd; else the cwd. */
-function workDir(command: string, cwd: string): string {
+function workDir(command: string, cwd: string, shell: 'bash' | 'pwsh'): string {
   const m = new RegExp(CD_TARGET.source, 'i').exec(command);
-  return m ? resolveIn(cwd, m[1]) : cwd;
+  return m ? resolveIn(cwd, m[1], shell) : cwd;
 }
 
 /**
  * Every directory a cd, Set-Location, sl, pushd or Push-Location in the text names, plus the cwd. Read from the raw text and from the text with
  * its quotes deleted. No lexing: a target inside quoted text counts too, which can only gate more (fail closed).
  */
-function candidateDirs(command: string, cwd: string): string[] {
+function candidateDirs(command: string, cwd: string, shell: 'bash' | 'pwsh'): string[] {
   const texts = [command, command.replace(/["']/g, '')];
-  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ''))));
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ''), shell)));
   return [...new Set([cwd, ...targets])];
 }
 
@@ -265,6 +267,8 @@ const shellOf = (input: HookInput): 'bash' | 'pwsh' => ((input.tool_name || inpu
 interface Ctx {
   /** The directory the command acts in (the first `cd` moves it). */
   dir: string;
+  /** The shell of the tool call: Git Bash paths (/c/x) are converted for bash only. */
+  shell: 'bash' | 'pwsh';
   /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal value beside a CCv3 signal does not hide it. */
   named: string | null;
   top: (dir: string) => string | null;
@@ -279,7 +283,8 @@ const once = <T>(f: () => T): (() => T) => {
 
 function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes): Ctx {
   const cwd = input.cwd || process.cwd();
-  const dir = workDir(command, cwd);
+  const shell = shellOf(input);
+  const dir = workDir(command, cwd, shell);
   const named = namedRepo(command, deps.env);
   const tops = new Map<string, string | null>();
   const top = (d: string): string | null => {
@@ -289,9 +294,9 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes):
     }
     return tops.get(d) ?? null;
   };
-  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d)));
+  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd, shell).some((d) => d !== dir && isCcv3Dir(deps, d)));
   return {
-    dir, named, top,
+    dir, shell, named, top,
     ccv3: inCcv3,
     // No usable config in the cwd checkout: fail closed for a command that names CCv3, a self-confirm (repo-free, pr-checkpoint is CCv3-only)
     // and a command that runs in a CCv3 checkout. Any other command is warn mode. A readable config keeps its own value.
@@ -326,7 +331,7 @@ function judge(command: string, deps: Deps, ctx: Ctx, shapes: Shapes): Decision 
 
 /** The stamp rules of #193 and #197. Enforced in both modes. */
 function stampDeny(command: string, deps: Deps, ctx: Ctx): Decision | null {
-  const { dir, named } = ctx;
+  const { dir, named, shell } = ctx;
   if (!ctx.ccv3()) return null;
   const top = ctx.top(dir);
   if (top === null) return deny('no-checkout', `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
@@ -338,7 +343,7 @@ function stampDeny(command: string, deps: Deps, ctx: Ctx): Decision | null {
   const headRun = deps.git(top, ['rev-parse', branch ? `${branch}^{commit}` : 'HEAD']);
   if (headRun.status !== 0) return deny('head-unresolved', `cannot resolve the head ${branch ?? 'HEAD'} in ${top}`);
   const head = headRun.stdout.trim();
-  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, fromGitBashPath(bodyPath)))) };
+  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, shell === 'bash' ? fromGitBashPath(bodyPath) : bodyPath))) };
   const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join(r, STAMP_REL)), head, deps.now(), body));
   if (!problems.some((p) => p === null)) return deny('stamp', problems[0] ?? 'no stamp');
   const pushed = pushedProblem(deps, top, branch, head);

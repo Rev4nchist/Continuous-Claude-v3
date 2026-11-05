@@ -2178,6 +2178,16 @@ describe.skipIf(process.platform !== 'win32')('pre-pr-gate: Git Bash /c/ paths',
     // A Windows drive letter is case-insensitive: compare lower case.
     expect(seen.map((p) => p.toLowerCase())).toEqual([`c:/users/dkhay/work/${STAMP_REL}`]);
   });
+  it('a PowerShell cd /c/... and a PowerShell body at /c/... keep the path as written (PowerShell reads it from the drive root)', () => {
+    const seen: string[] = [];
+    const spy: Deps = { ...deps({ stamp: stampJson() }), readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; if (p.endsWith('review-router.config.json')) return WARN_CONFIG[join(ROOT, 'review-router.config.json')]; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
+    decide(input(`Set-Location /c/Users/dkhay/work; ${CREATE[0]}`, { tool_name: 'PowerShell' }), spy);
+    expect(seen.map((p) => p.toLowerCase())).toEqual([`/c/users/dkhay/work/${STAMP_REL}`]);
+    const read: string[] = [];
+    const spy2: Deps = { ...deps({ stamp: stampJson() }), readFile: (p) => { read.push(p.replace(/\\/g, '/')); return null; } };
+    decide(input(`${POST}/c/Users/dkhay/body.md`, { tool_name: 'PowerShell' }), spy2);
+    expect(read.some((p) => /^c:\/users\/dkhay\/body\.md$/i.test(p))).toBe(false);
+  });
   it('a bare /c is the drive root c:/, not the drive-relative c:', () => {
     expect(fromGitBashPath('/c', 'win32')).toBe('c:/');
     expect(fromGitBashPath('/c/', 'win32')).toBe('c:/');
