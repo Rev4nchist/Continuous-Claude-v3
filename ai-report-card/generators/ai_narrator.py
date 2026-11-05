@@ -189,7 +189,7 @@ def generate_narratives(snapshot: dict, config: dict, strict: bool = True) -> di
 
     ai_config = config.get("ai", {})
     model = ai_config.get("model", "claude-sonnet-5-5")
-    max_tokens = ai_config.get("max_tokens", 4000)
+    max_tokens = ai_config.get("max_tokens", 16000)
 
     # Load previous snapshot for delta comparison
     snapshots_dir = Path(__file__).parent.parent / "data" / "snapshots"
@@ -204,6 +204,20 @@ def generate_narratives(snapshot: dict, config: dict, strict: bool = True) -> di
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}]
         )
+
+        stop = getattr(response, "stop_reason", None)
+        usage = getattr(response, "usage", None)
+        log.info(
+            "narrator response: stop_reason=%s output_tokens=%s thinking_tokens=%s",
+            stop,
+            getattr(usage, "output_tokens", None),
+            getattr(getattr(usage, "output_tokens_details", None), "thinking_tokens", None),
+        )
+        if stop == "max_tokens":
+            raise ValueError(
+                f"response stopped at max_tokens={max_tokens} before the report JSON "
+                "finished (thinking counts toward the cap); raise ai.max_tokens in config.yaml"
+            )
 
         text = _first_text(response).strip()
         # Strip markdown code fences if present

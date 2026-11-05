@@ -34,6 +34,10 @@ API_DEFAULT_MODEL = "haiku"    # API uses haiku-4.5 (cost efficient)
 
 def _first_text(message) -> str:
     """Return the text of the first text block (content[0] may be a thinking block)."""
+    if getattr(message, "stop_reason", None) == "max_tokens":
+        raise RuntimeError(
+            "Anthropic response stopped at max_tokens (thinking counts toward the cap); raise max_tokens"
+        )
     for block in message.content:
         if getattr(block, "type", None) == "text":
             return block.text
