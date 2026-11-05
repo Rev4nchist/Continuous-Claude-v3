@@ -211,9 +211,15 @@ export async function run(opts, ctx) {
 }
 
 function writeOut(res, outDir) {
-  fs.mkdirSync(outDir, { recursive: true });
-  for (const d of res.digests) fs.writeFileSync(path.join(outDir, `${d.sid}.json`), JSON.stringify(d));
-  fs.writeFileSync(path.join(outDir, 'inventory.json'), JSON.stringify(res.inventory, null, 1));
+  // Digests hold session prompts. Create the folder owner-only. An existing folder that group or others
+  // can access is refused. Windows has no POSIX modes, so the mode bits are not checked there.
+  const existed = fs.existsSync(outDir);
+  fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  if (existed && process.platform !== 'win32' && (fs.statSync(outDir).mode & 0o077) !== 0) {
+    throw new Error(`--out folder ${outDir} is accessible to group or others; use a private folder`);
+  }
+  for (const d of res.digests) fs.writeFileSync(path.join(outDir, `${d.sid}.json`), JSON.stringify(d), { mode: 0o600 });
+  fs.writeFileSync(path.join(outDir, 'inventory.json'), JSON.stringify(res.inventory, null, 1), { mode: 0o600 });
 }
 
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');

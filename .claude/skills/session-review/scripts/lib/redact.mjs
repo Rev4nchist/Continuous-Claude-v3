@@ -22,7 +22,7 @@ const PATTERNS = [
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, // email
 ];
 // KEY=value and KEY: value where the key holds API_KEY, TOKEN, SECRET, PASSWORD or PASSWD. Plain 'pass' and 'key' words stay.
-const KEY_VALUE = /\b([A-Za-z0-9_.-]*(?:API_?KEY|SECRET_?KEY|ACCESS_?KEY|PRIVATE_?KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Za-z0-9_.-]*)\s*[=:]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi;
+const KEY_VALUE = /\b([A-Za-z0-9_.-]*(?:API_?KEY|SECRET_?KEY|ACCESS_?KEY|PRIVATE_?KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Za-z0-9_.-]*)\s*[=:]\s*("[^"]*"|'[^']*'|\S+)/gi;
 
 /** Replace secrets with [REDACTED]. Accepts any value; non-strings give ''. */
 export function redact(input) {
@@ -33,7 +33,7 @@ export function redact(input) {
     if (v && v.length >= 8) s = s.split(v).join(MARK);
   }
   for (const re of PATTERNS) s = s.replace(re, MARK);
-  s = s.replace(KEY_VALUE, (m, key, val) => (val.includes('REDACTED') ? m : `${key}=${MARK}`));
+  s = s.replace(KEY_VALUE, (m, key, val) => (val === MARK ? m : `${key}=${MARK}`));
   return s;
 }
 

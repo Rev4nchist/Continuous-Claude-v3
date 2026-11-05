@@ -570,3 +570,11 @@ test('11e redaction keeps "tests pass: 29" and still removes PASSWORD and API_KE
   assert.match(redact('MY_API_KEY: abc123'), /REDACTED/);
   assert.match(redact(['ghu', 'A'.repeat(20)].join('_')), /REDACTED/);
 });
+
+test('11f redaction removes a whole credential value: one that contains the word, and one with a comma or semicolon', () => {
+  const keep = ['abc', 'REDACTED', 'def'].join('');
+  assert.ok(!redact(`API_KEY=${keep}`).includes(keep));
+  assert.ok(!redact('API_KEY=abc,def').includes('def'));
+  assert.ok(!redact('API_KEY=abc;def').includes('def'));
+  assert.equal(redact('API_KEY=[REDACTED]'), 'API_KEY=[REDACTED]');
+});
