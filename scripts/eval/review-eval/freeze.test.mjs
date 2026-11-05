@@ -49,3 +49,39 @@ test('engineVersion is 12 hex and changes with the prompt hash', () => {
   assert.notEqual(a, b);
   assert.equal(a, engineVersion({ model: 'grok-4.7-high', promptSha256: 'aaa' }));
 });
+
+// ---------- the engine freeze (phase 1, bridge) ----------
+import { buildEnginePrompt } from '../../github/local-review/prompt.mjs';
+import { checkEngineFreeze, enginePromptSha256, recordEngineFreeze } from './freeze.mjs';
+
+test('enginePromptSha256 is the sha256 of the engine rules for full and delta mode, not of the cursor-review prompt (breaks if it hashes buildPrompt)', () => {
+  const got = enginePromptSha256();
+  assert.equal(got.full, buildEnginePrompt({ mode: 'full' }).promptSha256);
+  assert.equal(got.delta, buildEnginePrompt({ mode: 'delta' }).promptSha256);
+  assert.notEqual(got.full, got.delta);
+  assert.notEqual(got.full, promptSha256());
+});
+
+test('checkEngineFreeze is ok when the full hash matches and not ok after the engine prompt changes or with no engine freeze (breaks if the compare is skipped or reads the old freeze)', () => {
+  const build = () => ({ full: 'F1', delta: 'D1' });
+  const cfg = { freeze: { promptSha256: 'old' }, engineFreeze: { promptSha256: { full: 'F1', delta: 'D1' } } };
+  assert.deepEqual(checkEngineFreeze(cfg, { build }), { ok: true, promptSha256: 'F1' });
+  const changed = checkEngineFreeze(cfg, { build: () => ({ full: 'F2', delta: 'D1' }) });
+  assert.equal(changed.ok, false);
+  assert.match(changed.reason, /engine prompt/);
+  assert.equal(checkEngineFreeze({ freeze: { promptSha256: 'old' } }, { build }).ok, false);
+});
+
+test('recordEngineFreeze writes engineFreeze with both hashes and the prompt.mjs blob, and leaves the old freeze alone (breaks if it overwrites freeze)', () => {
+  const file = path.join(tmp(), 'config.json');
+  writeFileSync(file, JSON.stringify({ cursorEvalBudget: 120, freeze: { promptSha256: 'old' } }));
+  const asked = [];
+  const git = (args) => { asked.push(args.join(' ')); return { status: 0, stdout: `${'cd'.repeat(20)}\n` }; };
+  const f = recordEngineFreeze({ git, cfgPath: file, build: () => ({ full: 'F1', delta: 'D1' }), now: () => Date.parse('2026-11-04T12:00:00Z') });
+  const cfg = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(cfg.engineFreeze, f);
+  assert.deepEqual(cfg.engineFreeze.promptSha256, { full: 'F1', delta: 'D1' });
+  assert.equal(cfg.engineFreeze.at, '2026-11-04T12:00:00.000Z');
+  assert.equal(cfg.freeze.promptSha256, 'old');
+  assert.ok(asked.some((a) => a.includes('HEAD:scripts/github/local-review/prompt.mjs')));
+});

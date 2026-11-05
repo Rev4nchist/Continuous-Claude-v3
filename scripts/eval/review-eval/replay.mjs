@@ -1,18 +1,24 @@
-// Replay: rebuild the review tree of a CodeRabbit round and run the engine (grok via runReview) on it.
+// Replay: rebuild the review tree of a CodeRabbit round and run a reviewer on it. The reviewer is the local review engine (engine-run.mjs, the default)
+// or the old cursor-review runReview ('cursor-review': args.reviewer, deps.reviewer or cfg.replayReviewer), which keeps old archives reproducible.
 // Round 1 of a merged PR: merge-base(sha, merge^1)..sha. Round 1 of an open PR: merge-base(sha, pull.base.sha)..sha.
 // Round k: rounds[k-1].sha..sha, or `rebased` (the round-1 rule) when that sha is not an ancestor.
 // Output only under .claude/cache/e2e/review-eval/ (or the shadow root). Never under a local-review/ folder: LR-PIN reads there.
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defaultLedgerPath, prepareReview, runReview } from '../../github/cursor-review.mjs';
+import { LOCAL_REVIEW_DEFAULTS, loadConfig as loadEngineConfig } from '../../github/local-review.mjs';
 import { budgetFromFile, EVAL_SESSION, SHADOW_SESSION } from './budget.mjs';
 import { underLocalReview } from './config.mjs';
-import { checkFreeze } from './freeze.mjs';
+import { runEngine, toEvalFindings } from './engine-run.mjs';
+import { checkEngineFreeze, checkFreeze } from './freeze.mjs';
 import { fetchPr } from './github.mjs';
 
 /** A sync git bound to a folder: (args) => { status, stdout, stderr }. */
+export const REVIEWERS = ['engine', 'cursor-review'];
+
 export function makeGit(root) {
   return (args) => {
     const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
@@ -64,12 +70,22 @@ export function ensureCommits(git, shas, pr, remote = 'fork') {
 
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
+/** The config file the engine itself loads: review-router.config.json beside the local-review.mjs this checkout runs (engine-here). */
+const ENGINE_CONFIG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'review-router.config.json');
+
+/** retry_max of the engine config, so a replay knows how many runs one engine call may reserve (1 + retry_max). An unreadable config gives the engine default. */
+function engineRetryMax(file) {
+  const loaded = loadEngineConfig(file);
+  return loaded.ok ? loaded.cfg.retry_max : LOCAL_REVIEW_DEFAULTS.retry_max;
+}
+
 /**
- * One replay. args: { pr, round, buildOnly, set, kind: 'eval' | 'shadow' }.
- * deps: { root, cfg, git, fetchPrFn, checkFreeze, ledgerPath, runsPath, outRoot, prepare, runReview, readFindings, now, tmpRoot, env, gh, repo }.
+ * One replay. args: { pr, round, buildOnly, set, kind: 'eval' | 'shadow', reviewer?: 'engine' | 'cursor-review', bodyMode?: 'withheld' | 'full' }.
+ * bodyMode (engine only): 'withheld' (the default) keeps the PR body out of the reviewer's CONTEXT.md; the body of a merged PR holds the findings and their fixes.
+ * deps: { root, cfg, git, fetchPrFn, checkFreeze, checkEngineFreeze, runEngine, readConfigText, reviewer, ledgerPath, runsPath, outRoot, prepare, runReview, readFindings, now, tmpRoot, env, gh, repo }.
  * Returns { exit, status: 'ok' | 'failed' | 'tree_unbuildable' | 'cap' | 'frozen' | 'refused' | 'built', ... }. It does not throw.
  */
-export async function replayRun({ pr, round, buildOnly = false, set = 'holdout', kind = 'eval' }, deps) {
+export async function replayRun({ pr, round, buildOnly = false, set = 'holdout', kind = 'eval', reviewer: asked, bodyMode = 'withheld' }, deps) {
   const root = deps.root;
   const cfg = deps.cfg;
   const now = deps.now ?? Date.now;
@@ -78,23 +94,28 @@ export async function replayRun({ pr, round, buildOnly = false, set = 'holdout',
   const outRoot = deps.outRoot ?? path.join(root, '.claude', 'cache', 'e2e', 'review-eval');
   const runsPath = deps.runsPath ?? path.join(outRoot, 'runs.jsonl');
   const refuse = (exit, status, reason) => ({ exit, status, reason, pr, round });
+  const reviewer = asked ?? deps.reviewer ?? cfg.replayReviewer ?? 'engine';
+  if (!['withheld', 'full'].includes(bodyMode)) return refuse(2, 'refused', `unknown bodyMode ${JSON.stringify(bodyMode)}: use withheld or full`);
+  if (!REVIEWERS.includes(reviewer)) return refuse(2, 'refused', `unknown reviewer ${JSON.stringify(reviewer)}: use ${REVIEWERS.join(' or ')}`);
 
   const bad = [outRoot, runsPath].find(underLocalReview);
   if (bad) return refuse(2, 'refused', `replay never writes under a local-review folder: ${bad}`);
 
   let promptSha = null;
   if (!buildOnly) {
-    const frozen = (deps.checkFreeze ?? checkFreeze)(cfg);
+    const frozen = reviewer === 'engine' ? (deps.checkEngineFreeze ?? checkEngineFreeze)(cfg) : (deps.checkFreeze ?? checkFreeze)(cfg);
     if (!frozen.ok) return refuse(2, 'frozen', frozen.reason);
     promptSha = frozen.promptSha256;
-    const budget = budgetFromFile(ledgerPath, cfg, { now: now(), kind });
+    // One engine call reserves 1 + retry_max runs, so the budget must hold all of them, not just the first.
+    const need = reviewer === 'engine' ? 1 + engineRetryMax(deps.engineConfigPath ?? ENGINE_CONFIG) : 1;
+    const budget = budgetFromFile(ledgerPath, cfg, { now: now(), kind, need });
     if (!budget.ok) return refuse(3, 'cap', `${budget.reason} (eval ${budget.evalUsed}, global ${budget.globalUsed})`);
   }
 
   let pull;
   try { pull = await (deps.fetchPrFn ?? fetchPr)(pr, { gh: deps.gh, repo: deps.repo }); } catch (err) { return refuse(1, 'failed', `PR ${pr}: ${err.message}`); }
   const cur = pull.rounds?.[round - 1];
-  const record = (patch) => ({ schema: 1, set, pr, round, sha40: cur?.sha40 ?? null, base40: null, range: 'normal', promptSha256: promptSha, cursorRunId: null, findingsPath: null, durationMs: 0, usage: null, findingCount: 0, ts: new Date(now()).toISOString(), ...patch });
+  const record = (patch) => ({ schema: 1, reviewer, set, pr, round, sha40: cur?.sha40 ?? null, base40: null, range: 'normal', promptSha256: promptSha, cursorRunId: null, findingsPath: null, durationMs: 0, usage: null, findingCount: 0, ts: new Date(now()).toISOString(), ...patch });
   const unbuildable = (reason, extra = {}) => {
     const rec = record({ status: 'tree_unbuildable', reason, ...extra });
     if (!buildOnly) appendRun(runsPath, rec);
@@ -122,6 +143,7 @@ export async function replayRun({ pr, round, buildOnly = false, set = 'holdout',
 
   const outDir = path.join(outRoot, String(pr), r.sha40.slice(0, 8));
   const env = { ...(deps.env ?? process.env), CLAUDE_CODE_SESSION_ID: kind === 'shadow' ? SHADOW_SESSION : EVAL_SESSION };
+  if (reviewer === 'engine') return replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDir, runsPath, ledgerPath, env, record });
   let res;
   try {
     res = await (deps.runReview ?? runReview)({ root, input: { range: r.spec }, model: 'grok-4.7-high', band: 'MID', ledgerPath, outDir }, { env });
@@ -142,4 +164,32 @@ export async function replayRun({ pr, round, buildOnly = false, set = 'holdout',
 function appendRun(file, rec) {
   mkdirSync(path.dirname(file), { recursive: true });
   appendFileSync(file, `${JSON.stringify(rec)}\n`);
+}
+
+/**
+ * The engine path of replayRun: one reviewHead run on the round (engine-run.mjs). The run row carries the funnel, the trace path, the record path,
+ * the band config source and its sha256. The findings file has the shape evaluateRuns reads (line = the engine startLine), plus the withdrawn list.
+ * State of the run (records, slots) sits in <outRoot>/engine-state, never under a local-review folder.
+ */
+async function replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDir, runsPath, ledgerPath, env, record }) {
+  const configText = (deps.readConfigText ?? (() => readFileSync(path.join(root, 'review-router.config.json'), 'utf8')))();
+  const res = await (deps.runEngine ?? runEngine)({
+    pr, sha40: r.sha40, base40: r.base, root, stateRoot: path.join(outRoot, 'engine-state'), stateDir: outRoot, ledgerPath, env, configText, bodyMode, gh: deps.gh, repo: deps.repo, log: deps.log,
+  });
+  let findingsPath = null;
+  let found = null;
+  if (res.record) {
+    found = toEvalFindings(res.record, { tracePath: res.tracePath && existsSync(res.tracePath) ? res.tracePath : null });
+    mkdirSync(outDir, { recursive: true });
+    findingsPath = path.join(outDir, `${res.record.runId}.findings.json`);
+    writeFileSync(findingsPath, `${JSON.stringify(found, null, 2)}\n`);
+  }
+  const rec = record({
+    status: res.status, base40: r.base, range: r.range, cursorRunId: res.record?.runId ?? null, findingsPath, durationMs: found?.durationMs ?? 0, usage: found?.usage ?? null,
+    findingCount: found?.findings.length ?? 0, trusted: false, bodyMode, baseConfig: res.baseConfig ?? null, recordPath: res.recordPath ?? null, tracePath: found?.tracePath ?? null,
+    funnel: found?.funnel ?? null, withdrawnCount: found?.withdrawn.length ?? 0, modelVerified: found?.modelVerified ?? false, coverageComplete: res.record?.coverage?.complete ?? null,
+    ...(res.record ? { promptSha256: res.record.promptSha256 ?? null } : {}), ...(res.reason ? { reason: res.reason } : {}),
+  });
+  appendRun(runsPath, rec);
+  return { exit: res.status === 'ok' ? 0 : res.status === 'cap' ? 3 : 1, status: res.status, ...(res.reason ? { reason: res.reason } : {}), pr, round, record: rec, findingsPath };
 }
