@@ -3,7 +3,8 @@
  * Lane Board Republish Reminder Hook
  *
  * A lane board page is a snapshot of one board. render-board.mjs writes it; only the agent's Artifact tool
- * can publish it, and only the default board (continuous-claude) has a phone page today. When a session
+ * can publish it. The default board (continuous-claude) has a phone page from artifacts.json; any other board
+ * has one only when its project-registry entry carries `laneArtifact` (boardArtifact). When a session
  * changes the lane DB through lane.mjs, this hook:
  *   1. renders the board's page itself, in the background (auto-render, debounced 20 s per board), and
  *   2. for a board WITH a phone page, reminds the session once per batch to publish it.
@@ -13,7 +14,9 @@
  *   (shared/lane-board-pending.ts; `<session>.json` on the default board, `<session>@<board>.json` elsewhere)
  *   - first lane change since the last republish: write state, emit the reminder
  *   - later lane changes while pending: update the verb list, stay silent
- *   - Artifact publish of a board page (artifact id/url or publish_from file): delete that board's state
+ *   - Artifact publish of a board page: delete that board's state. The default board clears on its artifact
+ *     id in the url or its publish_from file name. A non-default board clears only on an exact match of the
+ *     url's artifact id with its registry laneArtifact id (never on a file name).
  *   - a board with no phone page: no pending file; one render-only line per session per hour
  * Never blocks. Any error: no output, exit 0.
  *
@@ -227,28 +230,29 @@ function boardOfChange(payload: Record<string, unknown>, lc: LaneChange, env: En
 /**
  * The board whose page this Artifact call published, or null.
  *
- * The default board matches the artifact id/url or the publish_from file name (unchanged). Any other board
- * matches ONLY on its artifact id in a strict `https://claude.ai/artifact/<id>` url: its file name
- * (`lane-board-<key>.html`) says nothing, because a publish of that file to the wrong url must not clear it.
- * A url-id match wins over the default board's file-name match, so the answer does not depend on `boards` order.
+ * Any non-default board is checked first and matches ONLY when the id of a strict `https://claude.ai/artifact/<id>`
+ * url equals its artifact id exactly: its file name (`lane-board-<key>.html`) says nothing, because a publish of
+ * that file to the wrong url must not clear it. Only then does the default board match, as before: the artifact
+ * id inside the url, or the publish_from file name. So a non-default id that contains the default id clears its
+ * own board, and the answer does not depend on `boards` order.
  */
 function publishedBoard(input: Record<string, unknown>, boards: string[], env: Env): string | null {
   const url = typeof input.url === 'string' ? input.url : '';
   const urlId = artifactIdOf(url);
+  // Non-default boards first, on an EXACT id match: a non-default id that contains the default id
+  // (RtrTNV...zidX) must not fall into the default board's substring check below.
+  if (urlId !== null) {
+    for (const b of boards) {
+      if (b !== DEFAULT_BOARD && boardArtifact(b, { env })?.id === urlId) return b;
+    }
+  }
+  if (!boards.includes(DEFAULT_BOARD)) return null;
+  const a = boardArtifact(DEFAULT_BOARD, { env });
+  if (!a) return null;
+  if (url && url.includes(a.id)) return DEFAULT_BOARD;
   const file = typeof input.file_path === 'string' ? input.file_path.replace(/\\/g, '/').toLowerCase() : '';
   const base = file.slice(file.lastIndexOf('/') + 1);
-  let byFile: string | null = null;
-  for (const b of boards) {
-    const a = boardArtifact(b, { env });
-    if (!a) continue;
-    if (b !== DEFAULT_BOARD) {
-      if (urlId !== null && urlId === a.id) return b;
-      continue;
-    }
-    if (url && url.includes(a.id)) return b;
-    if (base && base === a.publishFrom.toLowerCase()) byFile = b;
-  }
-  return byFile;
+  return base && base === a.publishFrom.toLowerCase() ? DEFAULT_BOARD : null;
 }
 
 /**

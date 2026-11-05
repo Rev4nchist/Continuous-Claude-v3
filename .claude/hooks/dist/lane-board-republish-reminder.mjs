@@ -5770,20 +5770,18 @@ function boardOfChange(payload, lc, env, ownedBoard) {
 function publishedBoard(input, boards, env) {
   const url = typeof input.url === "string" ? input.url : "";
   const urlId = artifactIdOf(url);
+  if (urlId !== null) {
+    for (const b of boards) {
+      if (b !== DEFAULT_BOARD && boardArtifact(b, { env })?.id === urlId) return b;
+    }
+  }
+  if (!boards.includes(DEFAULT_BOARD)) return null;
+  const a = boardArtifact(DEFAULT_BOARD, { env });
+  if (!a) return null;
+  if (url && url.includes(a.id)) return DEFAULT_BOARD;
   const file = typeof input.file_path === "string" ? input.file_path.replace(/\\/g, "/").toLowerCase() : "";
   const base = file.slice(file.lastIndexOf("/") + 1);
-  let byFile = null;
-  for (const b of boards) {
-    const a = boardArtifact(b, { env });
-    if (!a) continue;
-    if (b !== DEFAULT_BOARD) {
-      if (urlId !== null && urlId === a.id) return b;
-      continue;
-    }
-    if (url && url.includes(a.id)) return b;
-    if (base && base === a.publishFrom.toLowerCase()) byFile = b;
-  }
-  return byFile;
+  return base && base === a.publishFrom.toLowerCase() ? DEFAULT_BOARD : null;
 }
 function decide(payload, pending, env = process.env, candidates = [DEFAULT_BOARD], ownedBoard = null) {
   if (!isObj2(payload)) return NONE;
