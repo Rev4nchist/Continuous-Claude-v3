@@ -64,3 +64,27 @@ test('mirrorRegistryPath follows the chain lane-board.mjs reads: LANE_REGISTRY_P
   assert.equal(mirrorRegistryPath({ USERPROFILE: 'U', HOME: 'H' }), path.join('U', '.claude', 'project-registry.json'));
   assert.equal(mirrorRegistryPath({ HOME: 'H' }), path.join('H', '.claude', 'project-registry.json'));
 });
+
+// laneArtifact (PR C): the phone page url of a board. The hooks read it from the mirror, so a repo copy that has it and a
+// mirror that lacks it leaves the Stop gate blind to the page. Each test fails if fieldsByKey stops comparing laneArtifact.
+const PAGE = 'https://claude.ai/artifact/AbCdEf_123-x';
+
+test('a laneArtifact the repo copy has and the mirror lacks is a diff that names the key and both values', () => {
+  const repo = [e('gm', 'C:/gm', { laneArtifact: PAGE })];
+  const r = registryDrift(write(repo), write([e('gm', 'C:/gm')]));
+  assert.equal(r.state, 'differ');
+  assert.deepEqual(r.diffs, [`gm: laneArtifact repo=${PAGE} mirror=(none)`]);
+});
+
+test('a laneArtifact that differs between the copies is a diff; the same url in both is the same', () => {
+  const other = 'https://claude.ai/artifact/Other_9';
+  const changed = registryDrift(write([e('gm', 'C:/gm', { laneArtifact: PAGE })]), write([e('gm', 'C:/gm', { laneArtifact: other })]));
+  assert.deepEqual(changed.diffs, [`gm: laneArtifact repo=${PAGE} mirror=${other}`]);
+  const same = registryDrift(write([e('gm', 'C:/gm', { laneArtifact: PAGE })]), write([{ laneArtifact: PAGE, status: 'Active', path: 'C:/GM/', key: 'gm', name: 'x' }]));
+  assert.deepEqual(same, { state: 'same', diffs: [] });
+});
+
+test('a mirror that has a laneArtifact the repo copy lacks (a hand edit of the live copy) is a diff', () => {
+  const r = registryDrift(write([e('gm', 'C:/gm')]), write([e('gm', 'C:/gm', { laneArtifact: PAGE })]));
+  assert.deepEqual(r.diffs, [`gm: laneArtifact repo=(none) mirror=${PAGE}`]);
+});
