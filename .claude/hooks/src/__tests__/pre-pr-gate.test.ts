@@ -57,6 +57,7 @@ import {
   headBranchOf,
   GIT_TIMEOUT_MS,
   isCcv3Remote,
+  fromGitBashPath,
   makeGit,
   namedRepo,
   resolveGit,
@@ -2176,6 +2177,13 @@ describe.skipIf(process.platform !== 'win32')('pre-pr-gate: Git Bash /c/ paths',
     decide(input(`cd /c/Users/dkhay/work && ${CREATE[0]}`), spy);
     // A Windows drive letter is case-insensitive: compare lower case.
     expect(seen.map((p) => p.toLowerCase())).toEqual([`c:/users/dkhay/work/${STAMP_REL}`]);
+  });
+  it('a bare /c is the drive root c:/, not the drive-relative c:', () => {
+    expect(fromGitBashPath('/c', 'win32')).toBe('c:/');
+    expect(fromGitBashPath('/c/', 'win32')).toBe('c:/');
+    expect(fromGitBashPath('/c/Users/x', 'win32')).toBe('c:/Users/x');
+    expect(fromGitBashPath('/c/Users/x', 'linux')).toBe('/c/Users/x');
+    expect(fromGitBashPath('/cd/x', 'win32')).toBe('/cd/x');
   });
   it('a cd to a multi-letter first folder such as /other/ is left alone', () => {
     const seen: string[] = [];

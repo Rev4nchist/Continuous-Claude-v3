@@ -405,7 +405,7 @@ function isCcv3Remote(url) {
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
 var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
-var fromGitBashPath = (p, platform = process.platform) => platform === "win32" ? p.replace(/^\/([A-Za-z])(?=\/|$)/, "$1:") : p;
+var fromGitBashPath = (p, platform = process.platform) => platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
 var resolveIn = (cwd, target) => {
   const t = fromGitBashPath(target.replace(/^["']|["']$/g, ""));
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);

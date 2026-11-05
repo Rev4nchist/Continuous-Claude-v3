@@ -118,7 +118,7 @@ export function isCcv3Remote(url: string): boolean {
 const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
 /** Git Bash writes C:\x as /c/x. Node on Windows reads /c/x as \c\x, so turn the one-letter drive prefix back into C:. Other platforms keep the path. */
 export const fromGitBashPath = (p: string, platform: string = process.platform): string =>
-  platform === 'win32' ? p.replace(/^\/([A-Za-z])(?=\/|$)/, '$1:') : p;
+  platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p;
 
 const resolveIn = (cwd: string, target: string): string => {
   const t = fromGitBashPath(target.replace(/^["']|["']$/g, ''));
