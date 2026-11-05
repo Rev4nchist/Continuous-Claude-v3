@@ -40,20 +40,18 @@ const SECTION_ERROR = 'changed-lines: a hunk or file header sits outside a "diff
  * Throws when a "+++ " file header has no "diff --git" line before it, or a hunk comes before any section.
  * Hunk bodies are skipped by their line counts, so an added line that starts with "++" is content, not a header.
  */
-function newPathOf(gitLine) {
-  const at = gitLine.lastIndexOf(' b/');
-  return at < 0 ? null : gitLine.slice(at + 3);
-}
-
-/** True when a "+++ " header names the new path of its own "diff --git" line (or /dev/null, or a quoted path). */
-function headerMatches(line, expected) {
+/**
+ * True when a "+++ " header names the new path of its own "diff --git" line (or /dev/null, or a quoted path).
+ * The whole header path is compared with the end of the "diff --git" line, because a path can hold " b/" itself.
+ */
+function headerMatches(line, gitLine) {
   const target = line.slice(4).split('\t')[0];
-  if (target === '/dev/null' || expected === null || target.startsWith('"') || expected.endsWith('"')) return true;
-  return target === `b/${expected}`;
+  if (target === '/dev/null' || target.startsWith('"') || gitLine.endsWith('"')) return true;
+  return gitLine.endsWith(` ${target}`);
 }
 
 function assertGitSections(text) {
-  let inGit = false, fresh = false, expected = null, oldLeft = 0, newLeft = 0;
+  let inGit = false, fresh = false, gitLine = '', oldLeft = 0, newLeft = 0;
   for (const raw of text.split('\n')) {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     if ((oldLeft > 0 || newLeft > 0) && /^[ +\-\\]/.test(line)) {
@@ -64,9 +62,9 @@ function assertGitSections(text) {
     oldLeft = 0; newLeft = 0;
     // A header-only section (pure rename, mode change) has no "+++ " line. A "+++ " header after it that names
     // another file belongs to a plain section, so the header must name the path of its own "diff --git" line.
-    if (line.startsWith('diff --git ')) { inGit = true; fresh = true; expected = newPathOf(line); continue; }
+    if (line.startsWith('diff --git ')) { inGit = true; fresh = true; gitLine = line; continue; }
     if (line.startsWith('+++ ')) {
-      if (!fresh || !headerMatches(line, expected)) throw new Error(SECTION_ERROR);
+      if (!fresh || !headerMatches(line, gitLine)) throw new Error(SECTION_ERROR);
       fresh = false; continue;
     }
     const hunk = HUNK_RE.exec(line);

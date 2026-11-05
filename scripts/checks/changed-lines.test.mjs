@@ -117,3 +117,12 @@ test('C13: a plain section after a pure rename throws; a rename with content and
   const untracked = ['diff --git a/u.mjs b/u.mjs', 'new file mode 100644', 'index 0000000..3333333', '--- /dev/null', '+++ b/u.mjs', '@@ -0,0 +1,2 @@', '+a', '+b', ''].join('\n');
   assert.deepEqual(changedLines(untracked), [{ path: 'u.mjs', ranges: [[1, 2]] }]);
 });
+
+// Breaks if the header check splits the "diff --git" line at the last " b/": a path can hold " b/" itself.
+test('C14: a path that holds " b/" parses; a plain section after it still throws', () => {
+  const spaced = ['diff --git a/docs/Plan b/report.mjs b/docs/Plan b/report.mjs', 'index 1111111..2222222 100644', '--- a/docs/Plan b/report.mjs', '+++ b/docs/Plan b/report.mjs', '@@ -1 +1 @@', '-x', '+y'];
+  assert.deepEqual(changedLines([...spaced, ''].join('\n')).map((e) => e.ranges), [[[1, 1]]]);
+  const plain = ['--- a/plain.mjs', '+++ b/plain.mjs', '@@ -1 +1 @@', '-old', '+new'];
+  const rename = ['diff --git a/x b/old.mjs b/x b/new.mjs', 'similarity index 100%', 'rename from x b/old.mjs', 'rename to x b/new.mjs'];
+  assert.throws(() => changedLines([...rename, ...plain, ''].join('\n')), /outside a "diff --git" section/);
+});
