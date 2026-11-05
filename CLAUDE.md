@@ -1,8 +1,6 @@
 # CLAUDE.md: continuous-claude (CCv3)
 
-This repo is the canonical source of the harness. `~/.claude` is the active copy that Claude Code reads.
-The global `~/.claude/CLAUDE.md`, `RULES.md` and `~/.claude/rules/` already load in every session.
-This file adds only what is specific to this repo. Do not repeat global content here.
+The global `~/.claude/CLAUDE.md`, `RULES.md` and `~/.claude/rules/` already load. Add only repo-specific content here.
 
 Glossary, loaded in every session. Use these exact terms: @CONTEXT.md
 

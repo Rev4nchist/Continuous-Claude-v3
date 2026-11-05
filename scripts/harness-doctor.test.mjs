@@ -15,6 +15,10 @@
 //   schedule:<task>: tasks.json missing / not JSON / no tasks array (WARN), a bad entry (WARN), task not registered (WARN),
 //          last result outside allowedExit (FAIL), last run older than maxAgeHours (WARN), never run (WARN),
 //          schtasks columns not found (WARN), columns in another order and quoted commas (parsed by name), skipped off Windows
+//   schedule:<task> registration drift (the task XML vs tasks.json llm/wake/trigger; one row per task, folded in): llm=true but the task
+//          still blocks on battery (WARN "battery"), stops on battery (WARN), wake wanted but WakeToRun absent (WARN "wake"), trigger time or
+//          kind differs (WARN "trigger"), everything matches (PASS), drift plus a bad last result (FAIL stays FAIL), drift on a stale task
+//          (still WARN, drift named), XML unreadable (WARN, never PASS), a non-boolean llm/wake in tasks.json (WARN), end to end drift exits 0
 //   blocklist:age: 1 day (PASS), 3 days exactly (PASS), 4 days (WARN), 14 days exactly (WARN), 15 days (FAIL), never committed (WARN)
 //   registry:roots-exist: an active entry with a missing path (FAIL, names it), an inactive one (ignored), in-development counts as active,
 //          a present path (PASS), no registry file (PASS absent), a registry that is not JSON (WARN)
@@ -79,6 +83,35 @@ const fakeQuery = (map) => (name) => (name in map ? { status: 0, stdout: map[nam
 const task = (over = {}) => ({ name: 'CCv3-Fake-Task', script: 's.bat', trigger: 'daily 07:50', execLimitMin: 10, allowedExit: [0], maxAgeHours: 48, ...over });
 const TASK_NAME = 'CCv3-Fake-Task';
 
+// ---- fake `schtasks /query /tn <name> /xml` output (shape copied from a real run: CRLF doubled, WakeToRun absent when false) ----
+/**
+ * The Settings and Triggers the doctor compares. Defaults match a task() with no llm/wake: no start on battery, stop on battery,
+ * no wake, daily 07:50. `wake: null` leaves the tag out like Windows does for false. `weekday` makes it a weekly trigger.
+ */
+const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', weekday = null } = {}) => [
+  '<?xml version="1.0" encoding="UTF-16"?>',
+  '<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+  '  <Settings>',
+  `    <DisallowStartIfOnBatteries>${disallow}</DisallowStartIfOnBatteries>`,
+  `    <StopIfGoingOnBatteries>${stop}</StopIfGoingOnBatteries>`,
+  ...(wake === null ? [] : [`    <WakeToRun>${wake}</WakeToRun>`]),
+  '    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>',
+  '    <StartWhenAvailable>true</StartWhenAvailable>',
+  '  </Settings>',
+  '  <Triggers>',
+  '    <CalendarTrigger>',
+  `      <StartBoundary>2026-11-03T${time}:00-06:00</StartBoundary>`,
+  ...(weekday
+    ? ['      <ScheduleByWeek>', '        <WeeksInterval>1</WeeksInterval>', `        <DaysOfWeek><${weekday} /></DaysOfWeek>`, '      </ScheduleByWeek>']
+    : ['      <ScheduleByDay>', '        <DaysInterval>1</DaysInterval>', '      </ScheduleByDay>']),
+  '    </CalendarTrigger>',
+  '  </Triggers>',
+  '</Task>',
+].join('\r\r\n');
+/** A fake schtasks /xml: name to XML. An unknown name answers like schtasks does. */
+const fakeQueryXml = (map) => (name) => (name in map ? { status: 0, stdout: map[name], stderr: '' }
+  : { status: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.\r\n' });
+
 // ---- the lane assets the five propagation checks read: the shim, the lane hook dists, a template with its live settings, the ratchet baseline ----
 const LANE_DISTS = ['lane-context', 'prompt-submit', 'lane-board-republish-reminder', 'lane-board-stop-gate', 'lane-agent-tag', 'session-register'];
 const laneHook = (name) => ({ type: 'command', command: 'node', timeout: 5, args: [`{{CLAUDE_HOME}}/hooks/dist/${name}.mjs`] });
@@ -131,6 +164,7 @@ function fixture({ blocklistDaysAgo = 0 } = {}) {
   put(join(repo, 'review-router.config.json'), JSON.stringify({ coderabbit: { reviews_7d_manual: 10, reviews_7d_manual_date: daysAgoDay(1) } }));
   put(join(repo, 'scripts', 'scheduled', 'tasks.json'), JSON.stringify({ tasks: [task()] }));
   put(join(schtasks, `${TASK_NAME}.csv`), taskCsv(TASK_NAME));
+  put(join(schtasks, `${TASK_NAME}.xml`), taskXml());
   seedLaneAssets(repo, home);
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '--no-verify', '-m', 'init');
@@ -431,7 +465,8 @@ const schedRepo = (tasksJson) => {
   if (tasksJson !== undefined) put(join(repo, 'scripts', 'scheduled', 'tasks.json'), typeof tasksJson === 'string' ? tasksJson : JSON.stringify(tasksJson));
   return { repo };
 };
-const sched = (tasks, map, extra = {}) => scheduleChecks(schedRepo({ tasks }), { platform: 'win32', query: fakeQuery(map), ...extra });
+// The XML query defaults to a task that matches task() exactly, so a test of the last result never reads the real Task Scheduler.
+const sched = (tasks, map, extra = {}) => scheduleChecks(schedRepo({ tasks }), { platform: 'win32', query: fakeQuery(map), queryXml: fakeQueryXml({ [TASK_NAME]: taskXml() }), ...extra });
 const only = (checks) => { assert.equal(checks.length, 1, JSON.stringify(checks)); return checks[0]; };
 
 test('parseCsv reads quoted commas, doubled quotes and CRLF line ends', () => {
@@ -541,6 +576,104 @@ test('end to end: a task with no schtasks output is a WARN and a bad last result
   const fail = run(fx);
   assert.equal(fail.checks[`schedule:${TASK_NAME}`].status, 'FAIL');
   assert.equal(fail.code, 1);
+});
+
+// ---- schedule: registration drift (task XML vs tasks.json llm / wake / trigger) ----
+const csvOk = { [TASK_NAME]: taskCsv(TASK_NAME) };
+const driftOf = (t, xml, map = csvOk) => only(sched([t], map, { queryXml: fakeQueryXml({ [TASK_NAME]: xml }) }));
+
+test('drift: llm=true but the task still does not start on battery is a WARN naming battery', () => {
+  const c = driftOf(task({ llm: true }), taskXml({ disallow: true, stop: false }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /battery/);
+});
+
+test('drift: llm=true but the task stops when the laptop goes on battery is a WARN naming battery', () => {
+  const c = driftOf(task({ llm: true }), taskXml({ disallow: false, stop: true }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /battery/);
+});
+
+test('drift: wake=true but WakeToRun is absent (Windows leaves the tag out for false) is a WARN naming wake', () => {
+  const c = driftOf(task({ llm: true, wake: true }), taskXml({ disallow: false, stop: false, wake: null }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /wake/);
+});
+
+test('drift: wake=false but WakeToRun is true is a WARN naming wake', () => {
+  const c = driftOf(task(), taskXml({ wake: true }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /wake/);
+});
+
+test('drift: a trigger time or kind that differs from tasks.json is a WARN naming trigger', () => {
+  const time = driftOf(task({ trigger: 'daily 09:00' }), taskXml({ time: '07:50' }));
+  assert.equal(time.status, 'WARN', time.detail);
+  assert.match(time.detail, /trigger/);
+  const kind = driftOf(task({ trigger: 'weekly Monday 07:50' }), taskXml({ time: '07:50' }));
+  assert.equal(kind.status, 'WARN', kind.detail);
+  assert.match(kind.detail, /trigger/);
+  const day = driftOf(task({ trigger: 'weekly Monday 09:20' }), taskXml({ time: '09:20', weekday: 'Tuesday' }));
+  assert.equal(day.status, 'WARN', day.detail);
+  assert.match(day.detail, /trigger/);
+});
+
+test('drift: a task that matches tasks.json on battery, wake and trigger is a PASS (daily and weekly, llm and not)', () => {
+  const cases = [
+    [task(), taskXml()],
+    [task({ llm: false, wake: false }), taskXml({ disallow: true, stop: true, wake: false })],
+    [task({ llm: true }), taskXml({ disallow: false, stop: false })],
+    [task({ llm: true, wake: true }), taskXml({ disallow: false, stop: false, wake: true })],
+    [task({ trigger: 'weekly Monday 09:20', llm: true }), taskXml({ disallow: false, stop: false, time: '09:20', weekday: 'Monday' })],
+  ];
+  for (const [t, xml] of cases) assert.equal(driftOf(t, xml).status, 'PASS', JSON.stringify(t));
+});
+
+test('drift: a bad last result stays a FAIL and a stale task stays a WARN, and both still name the drift', () => {
+  const drifted = taskXml({ disallow: true, stop: false });
+  const fail = driftOf(task({ llm: true }), drifted, { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Result': '1' }) });
+  assert.equal(fail.status, 'FAIL');
+  assert.match(fail.detail, /battery/);
+  const stale = driftOf(task({ llm: true }), drifted, { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Run Time': usTime(49 * HOUR) }) });
+  assert.equal(stale.status, 'WARN');
+  assert.match(stale.detail, /battery/);
+  assert.match(stale.detail, /48/);
+});
+
+test('drift: task XML that cannot be read or has no Settings is a WARN, never a PASS', () => {
+  const missing = only(sched([task()], csvOk, { queryXml: fakeQueryXml({}) }));
+  assert.equal(missing.status, 'WARN', missing.detail);
+  assert.match(missing.detail, /xml/i);
+  const garbage = driftOf(task(), 'not xml at all');
+  assert.equal(garbage.status, 'WARN', garbage.detail);
+  const broken = only(sched([task()], csvOk, { queryXml: () => ({ error: 'spawn schtasks ENOENT' }) }));
+  assert.equal(broken.status, 'WARN');
+  assert.match(broken.detail, /ENOENT/);
+});
+
+test('drift: an llm or wake that is not true/false in tasks.json is a WARN naming the field; no XML query runs for it', () => {
+  let calls = 0;
+  const queryXml = () => { calls++; return { status: 0, stdout: taskXml(), stderr: '' }; };
+  for (const [field, value] of [['llm', 'yes'], ['wake', 1]]) {
+    const c = only(sched([task({ [field]: value })], csvOk, { queryXml }));
+    assert.equal(c.status, 'WARN');
+    assert.match(c.detail, new RegExp(field));
+  }
+  assert.equal(calls, 0);
+});
+
+test('end to end: a task registered with the wrong battery and wake settings is a WARN on its own row and exits 0', () => {
+  const fx = fixture();
+  put(join(fx.repo, 'scripts', 'scheduled', 'tasks.json'), JSON.stringify({ tasks: [task({ llm: true, wake: true })] }));
+  put(join(fx.schtasks, `${TASK_NAME}.xml`), taskXml({ disallow: true, stop: true, wake: null }));
+  const r = run(fx);
+  const c = r.checks[`schedule:${TASK_NAME}`];
+  assert.equal(c.status, 'WARN', r.stdout);
+  assert.match(c.detail, /battery/);
+  assert.match(c.detail, /wake/);
+  assert.equal(r.code, 0, 'drift must not fail the doctor');
+  put(join(fx.schtasks, `${TASK_NAME}.xml`), taskXml({ disallow: false, stop: false, wake: true }));
+  assert.equal(run(fx).checks[`schedule:${TASK_NAME}`].status, 'PASS');
 });
 
 // ---- blocklist:age ----

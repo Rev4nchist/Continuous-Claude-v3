@@ -9,6 +9,12 @@
   The script path in tasks.json is relative to the repo root. The task runs the INSTALLED copy under
   ~/.claude (the forward sync puts it there), so the job that runs is always main's version.
   The trigger ("daily HH:MM" or "weekly <Day> HH:MM") and execLimitMin come from the file.
+  Two optional booleans set the power behaviour (a missing field is false):
+    llm   true -> the task starts on battery and keeps running when the laptop goes on battery.
+          false -> the Windows default: no start on battery, stopped when going on battery.
+    wake  true -> the task wakes the laptop (WakeToRun). Use it with llm=true, or the wake does nothing on battery.
+  The dry run prints llm, battery and wake for each task, read from the settings object it would register.
+  Wake on battery also needs the power plan setting "Allow wake timers" to be on for battery. This script does not change it.
 
   DRY RUN BY DEFAULT: it prints each task and changes nothing. Pass -Apply to register. -Apply refuses
   (exit 1) when an installed script is missing. Use -Only <name> to register one task.
@@ -57,14 +63,28 @@ if ($Apply -and $missing -gt 0) {
   exit 1
 }
 
+# Power settings come from the llm and wake fields (a missing field is false). Windows defaults are no start on
+# battery, stop when going on battery, no wake. An llm job must run on battery. Only wake=true wakes the laptop.
+# New-ScheduledTaskSettingsSet builds an object in memory: it changes nothing, so a dry run can print what it holds.
+function Get-TaskSettings($t) {
+  $set = @{ ExecutionTimeLimit = (New-TimeSpan -Minutes ([int]$t.execLimitMin)); StartWhenAvailable = $true }
+  if ($t.llm -eq $true) { $set.AllowStartIfOnBatteries = $true; $set.DontStopIfGoingOnBatteries = $true }
+  if ($t.wake -eq $true) { $set.WakeToRun = $true }
+  New-ScheduledTaskSettingsSet @set
+}
+
 foreach ($t in $tasks) {
   $installed = Get-Installed $t
   $parts = Get-ActionParts $installed
-  Write-Host ("{0}: {1} {2}  [{3}, limit {4} min]" -f $t.name, $parts[0], $parts[1], $t.trigger, $t.execLimitMin)
+  $settings = Get-TaskSettings $t
+  $llm = if ($t.llm -eq $true) { 'true' } else { 'false' }
+  $battery = if ($settings.DisallowStartIfOnBatteries -or $settings.StopIfGoingOnBatteries) { 'block' } else { 'allow' }
+  $wake = if ($settings.WakeToRun) { 'yes' } else { 'no' }
+  Write-Host ("{0}: {1} {2}  [{3}, limit {4} min, llm={5} battery={6} wake={7}]" -f $t.name, $parts[0], $parts[1], $t.trigger, $t.execLimitMin, $llm, $battery, $wake)
+  if ($t.wake -eq $true -and $t.llm -ne $true) { Write-Host "[WARN] $($t.name): wake=true needs llm=true. A task that is blocked on battery is stopped at once, so the wake does nothing there." }
   if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { Write-Host "  [MISSING] $installed"; continue }
   if (-not $Apply) { continue }
   $action = New-ScheduledTaskAction -Execute $parts[0] -Argument $parts[1] -WorkingDirectory $ClaudeHome
-  $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ([int]$t.execLimitMin)) -StartWhenAvailable
   Register-ScheduledTask -TaskName $t.name -Action $action -Trigger (Get-Trigger $t.trigger) -Settings $settings -Force | Out-Null
   Write-Host '  registered'
 }

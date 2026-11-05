@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Join-Path $env:USERPROFILE 'continuous-claude')
 $si   = Join-Path $repo 'scripts\self-improvement'
 Set-Location $repo
+. (Join-Path $PSScriptRoot '..\lib\Stop-ProcessTree.ps1')
 
 # claude -p must authenticate via the claude.ai subscription login, NOT the ANTHROPIC_API_KEY
 # that is present in this environment (it is invalid / 401s and takes precedence over the login).
@@ -174,12 +175,11 @@ try {
   if (-not $proc.WaitForExit($claudeTimeoutSec * 1000)) {
     $claudeTimedOut = $true
     Log "TIMEOUT: claude -p exceeded ${claudeTimeoutSec}s -- killing the process TREE so the registry emit below still runs"
-    # taskkill /T (tree), NOT Stop-Process: Stop-Process kills ONLY the named process,
-    # so claude's ~9 hook `node` children would orphan permanently -- the exact leak
-    # that stranded 29 processes via sweep.mjs's spawnSync timeout (found 2026-07-25).
-    try { & taskkill.exe /T /F /PID $proc.Id 2>&1 | Out-Null } catch { }
-    # Fallback: if taskkill is unavailable, at least kill the direct child.
-    try { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
+    # Kill the whole tree, not just the named process: Stop-Process alone would orphan
+    # claude's ~9 hook `node` children permanently -- the exact leak that stranded 29
+    # processes via sweep.mjs's spawnSync timeout (found 2026-07-25). The OS tree switch
+    # is banned (pid reuse kills live shells); Stop-ProcessTree kills leaves first by id.
+    try { $null = Stop-ProcessTree -RootId $proc.Id } catch { }
     try { $proc.WaitForExit(15000) | Out-Null } catch { }
   } else {
     $claudeExit = $proc.ExitCode

@@ -10,9 +10,8 @@ I am Dave. You are my agent. These are defaults, not hard rules. My prompt overr
   will stop. I correct that line when you misread me.
 - **Stop points are literal.** "Make the change, do not commit" means stop before commit. "Draft it"
   means do not send. "Keep going" means finish, then report.
-- **Name the target before you act.** Branch, directory, account. Most of my "wrong target"
-  corrections were the wrong branch or directory.
-- **Give full absolute paths.** Relative paths are ambiguous across repos, worktrees and `~/.claude`.
+- **Name the target before you act.** Branch, directory, account.
+- **Give full absolute paths.**
 - **Commit only your own work.** Other sessions share the tree. Stage the files you touched.
 - **Shared resources** (a branch, a repo another session has open, a Handoffs row you did not
   create): run `ListAgents`, then claim a lane where a lane board exists. No `ListAgents` tool: use
@@ -55,7 +54,6 @@ I read every word. Write for speed of reading.
 1. <Exact action for Dave. Name the file, command, or thing to paste.>
 ```
 
-- Name the object ("Paste the T2 response here", not "paste responses back").
 - Numbered actions only, plain words, no invented terms.
 - Nothing for me to do: `None — waiting on <X>.` A decision: the question and your recommendation.
 - A subagent or headless run with its own output contract (a JSON block, a schema) ends with that contract, not a Next steps block.
@@ -160,8 +158,7 @@ A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md 
   orchestration, forensics), `sonnet` for execution. Workflow and ad-hoc agents pick the same way.
   **Never haiku.** Sonnet effort is always `high`. Use `scout`, never `Explore`.
 - **Parallel agents that commit to one repo run one after another** (they race on
-  `.git/index.lock`), unless each has its own worktree. Name each agent's files first. N-file edits:
-  `proactive-delegation.md` (loads at the first Agent spawn).
+  `.git/index.lock`), unless each has its own worktree. Name each agent's files first.
 
 ## Skills to load first [MANDATORY]
 
@@ -185,8 +182,7 @@ No database change without a query-plan check.
 
 ## Quick wins
 
-Watch for small, high-leverage fixes to our own tooling (a slow script, a full rebuild where one
-thing changed, a hook reading the wrong field). Surface each in one line: "Also spotted: X, ~N-line
+Watch for small, high-leverage fixes to our own tooling. Surface each in one line: "Also spotted: X, ~N-line
 fix, saves Y." Fix it on the spot if it is small, safe and independent; otherwise capture it.
 Prove the friction is gone before you claim the win.
 
@@ -194,7 +190,7 @@ Prove the friction is gone before you claim the win.
 
 - `python`, never `python3`. `bash` on PATH is WSL, not Git Bash. Git Bash paths need the drive
   letter (`/c/Users/...`).
-- Commit and push through `scripts/git-safe.ps1` (detail: `pr-and-commit-style.md`). Never `taskkill /T`.
+- Commit and push through `scripts/git-safe.ps1`. Never `taskkill /T`.
 - When the Bash tool hangs on git or network, use the PowerShell tool with `git -C <repo>`.
 - Never edit `~/.claude.json` or `settings.json` with the Edit tool: use a Node read-modify-write.
 - Scripted exact-string edits: `node scripts/tools/safe-replace.mjs` (the tree mixes CRLF and LF).

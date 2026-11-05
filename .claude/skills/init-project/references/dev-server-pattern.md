@@ -31,7 +31,9 @@ if (existsSync(PID_FILE)) {
       console.log(`Cleaning up previous dev server (PID ${pid})...`);
       try {
         if (process.platform === 'win32') {
-          execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+          // One explicit pid. Never use the taskkill tree switch (pid reuse kills live shells).
+          // A dev server that spawns children should kill them itself on exit.
+          process.kill(Number(pid), 'SIGKILL');
         } else {
           execSync(`kill -9 ${pid}`, { stdio: 'ignore' });
         }
