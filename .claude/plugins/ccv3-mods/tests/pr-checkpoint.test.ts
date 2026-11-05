@@ -136,6 +136,8 @@ type Opts = {
   author?: string
   isDraft?: boolean
   viewHead?: string
+  /** The label names `gh pr view` answers with. Unset: none. */
+  labels?: string[]
   throwStore?: string
   /** A file write whose path contains this text throws (a full disk, a locked file). */
   throwWrite?: string
@@ -306,7 +308,7 @@ const world = (on: On, opts: Opts = {}) => {
     }
     if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') {
       const reply: Reply = opts.viewSeq?.shift() ?? opts.view ?? {
-        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, headRefName: opts.branch ?? 'feat/x', author: { login: opts.author ?? 'Rev4nchist' }, number: Number(argv[3]) }),
+        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, headRefName: opts.branch ?? 'feat/x', author: { login: opts.author ?? 'Rev4nchist' }, labels: (opts.labels ?? []).map(name => ({ name })), number: Number(argv[3]) }),
       }
       return done(reply)
     }
@@ -501,6 +503,18 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     const { dialog, pane } = await openPane($)
     expect(dialog!.question).toContain(why)
     expect(dialog!.question).not.toContain('branch config differs from main')
+    await pane.press({ key: 'dismiss' })
+  })
+
+  // CodeRabbit round 2: the question showed only why[0]. A HIGH or CRITICAL PR with the RF floor has the RB reason first and the floor (aegis + critic) second.
+  test('K1g the question shows every reason of the engine, so the internal-pass floor is visible before Dave picks none', async ($, on) => {
+    const rb = 'Band HIGH (score 5): no CodeRabbit PR bot under the interim rule.'
+    const rf = 'Security-tier file x-guard.ts: run the internal pass (aegis + critic) before READY.'
+    world(on, { json: { stdout: JSON.stringify(engineJson({ why: [rb, rf] })) } })
+    const { dialog, pane } = await openPane($)
+    expect(dialog!.question).toContain('no CodeRabbit PR bot under the interim rule')
+    expect(dialog!.question).toContain('run the internal pass (aegis + critic) before READY')
+    expect(dialog!.question).not.toContain('READY..')
     await pane.press({ key: 'dismiss' })
   })
 
@@ -2635,6 +2649,45 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     expect(told.text).toMatch(/head moved/i)
   })
 
+  test('T7c a risk:high label added while Dave answered records nothing (the recommendation he saw is stale)', async ($, on) => {
+    const opts: Opts = {}
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.labels = ['risk:high']
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/changed while Dave answered/i)
+    expect(told.text).toMatch(/risk:high/i)
+  })
+
+  test('T7d a risk:high label removed while Dave answered records nothing', async ($, on) => {
+    const opts: Opts = { labels: ['risk:high'] }
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.labels = []
+      return REC
+    }
+    await start($)
+    const told = await call($)
+    expect(counts(w.seen).confirm).toBe(0)
+    expect(told.text).toMatch(/risk:high/i)
+  })
+
+  test('T7e an unrelated label change while Dave answered still records', async ($, on) => {
+    const opts: Opts = {}
+    const w = world(on, opts)
+    opts.answer = () => {
+      opts.labels = ['size:l']
+      return REC
+    }
+    await start($)
+    await call($)
+    expect(counts(w.seen).confirm).toBe(1)
+  })
+
   test('T7b a PR that left draft while Dave answered records nothing', async ($, on) => {
     const opts: Opts = {}
     const w = world(on, opts)
@@ -3055,6 +3108,29 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     await pane.press({ key: 'opt-none' })
     expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
   })
+
+  // N-M9  the interim CodeRabbit rule makes none the recommendation at HIGH and CRITICAL. The first label is then Recommended, but the engine
+  //       refuses --by default for none there and land-none-check.mjs reads decided_by dave, so its pick and `accept` must record --by dave.
+  for (const band of ['HIGH', 'CRITICAL'] as const) {
+    const noneRecommended = () => highJson(band, { recommended: 'none', options: [option('none'), option('coderabbit')] })
+
+    test(`N-M9 ${band}: none is the recommendation: it is first and Recommended, and its pick records --by dave, never --by default`, async ($, on) => {
+      const { seen, store } = world(on, { json: noneRecommended(), answer: /^No review, land on CI/ })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      expect(seen.dialogs[0]!.labels[0]).toBe(`${NO_REVIEW} (Recommended)`)
+      expect(engineCalls(seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+      expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+    })
+
+    test(`N-M9b ${band}: a typed /pathway 7 accept of a recommended none records --by dave`, async ($, on) => {
+      const { seen } = world(on, { json: noneRecommended(), answer: 'dismiss' })
+      await start($)
+      await callTool($, { pr: 7, body: 'pr-body.md' })
+      await slash($, '7 accept')
+      expect(engineCalls(seen).filter(call => call.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm none --by dave /)])
+    })
+  }
 })
 
 // ---- self-approve: the record says how Dave chose, and the store file is locked (lane agent-self-approve-hole, Dave 2026-11-03: DETECT) ----------

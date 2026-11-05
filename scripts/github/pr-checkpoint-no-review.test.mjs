@@ -49,6 +49,8 @@ const CASES = [
   ['CRITICAL (band rule only, risk:high)', FIVE, ['risk:high'], 'CRITICAL'],
   ['CRITICAL (band rule and a critical file, risk:high)', GATE, ['risk:high'], 'CRITICAL'],
 ];
+// Interim CodeRabbit rule (Dave 2026-11-04): HIGH without the risk:high label is recommended none; the risk:high cases keep CodeRabbit.
+const RECOMMENDED = (labels) => (labels.includes('risk:high') ? 'coderabbit' : 'none');
 
 const load = () => import('./pr-checkpoint.mjs');
 
@@ -69,18 +71,22 @@ async function recommendFor(paths, labels = []) {
   return recommend(factsFor(paths, labels), await policy());
 }
 
-test('N1: every band offers `none` as an open option; at HIGH and CRITICAL it is never first and never the recommendation', async () => {
+test('N1: every band offers `none` as an open option; at HIGH and CRITICAL it is the recommendation (first) only without the CodeRabbit trigger, else last', async () => {
   for (const [name, paths, labels, band] of CASES) {
     const r = await recommendFor(paths, labels);
     assert.equal(r.band.band, band, name);
     const at = r.options.findIndex((o) => o.pathway === 'none');
-    assert.ok(at > 0, `${name}: none is offered and is not first (options: ${r.options.map((o) => o.pathway).join(', ')})`);
-    assert.equal(at, r.options.length - 1, `${name}: none is last`);
+    assert.equal(r.recommended, RECOMMENDED(labels), name);
+    if (r.recommended === 'none') assert.equal(at, 0, `${name}: none is first when it is the recommendation`);
+    else {
+      assert.ok(at > 0, `${name}: none is offered and is not first (options: ${r.options.map((o) => o.pathway).join(', ')})`);
+      assert.equal(at, r.options.length - 1, `${name}: none is last`);
+    }
     assert.equal(r.options[at].available, true, name);
     assert.deepEqual(r.options[at].cost, [0, 0], name);
     assert.equal(r.options[at].label, 'review:none', name);
-    assert.notEqual(r.recommended, 'none', `${name}: no review is never recommended`);
     assert.equal(r.options[0].pathway, r.recommended, `${name}: the recommendation stays first`);
+    assert.ok(r.options.some((o) => o.pathway === 'coderabbit' && o.available), `${name}: CodeRabbit stays pressable`);
   }
   for (const [name, paths, band] of [['LOW', LOW, 'LOW'], ['MID', MID, 'MID'], ['ELEVATED', ELEVATED, 'ELEVATED']]) {
     const r = await recommendFor(paths);
@@ -124,7 +130,7 @@ test('N3: `--confirm none --by dave` records for HIGH and CRITICAL: label review
     assert.equal(rec.decided_by, 'dave', name);
     assert.deepEqual(rec.budget, [0, 0], name);
     assert.equal(rec.head, HEAD, name);
-    assert.notEqual(rec.recommended, 'none', name);
+    assert.equal(rec.recommended, RECOMMENDED(labels), name);
   }
 });
 
@@ -133,7 +139,8 @@ test('N4: `--by default` and `--by auto` cannot record `none` for HIGH or CRITIC
     for (const by of ['default', 'auto']) {
       const r = confirm('none', by, { paths, labels });
       assert.equal(r.status, 1, `${name} --by ${by}: ${r.stdout} ${r.stderr}`);
-      assert.match(r.stderr, by === 'default' ? /--by default needs the recommended pathway/ : /--by auto is not allowed here/, `${name} --by ${by}`);
+      // none is the recommendation at HIGH without risk:high (interim rule), so the default pick is refused by its own rule: only Dave records none here.
+      assert.match(r.stderr, by === 'default' ? /--by default (needs the recommended pathway|cannot record none at)/ : /--by auto is not allowed here/, `${name} --by ${by}`);
       assert.ok(!existsSync(r.pathwayFile), `${name} --by ${by}: no pathway.json`);
     }
   }

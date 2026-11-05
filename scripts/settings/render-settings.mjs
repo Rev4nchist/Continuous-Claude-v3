@@ -4,7 +4,7 @@
  *
  * Substitutes {{CLAUDE_HOME}} {{OPC_DIR}} {{REPO_ROOT}} {{USER_HOME}},
  * then deep-merges the selected profile's settingsOverlay.
- * --check diffs (event, hook, matcher) against ~/.claude/settings.json
+ * --check diffs (event, hook, matcher) against ~/.claude/settings.json (or --settings <file>)
  * and lists overlay entries on their own. A comparison of zero hooks fails.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -143,7 +143,8 @@ if (isMain()) {
   const templateOnly = renderSettings({ templateText, vars, overlay: {} });
 
   if (argv.includes('--check')) {
-    const livePath = join(homedir(), '.claude', 'settings.json');
+    // --settings <file> checks a file other than the live one (apply-registrations tests and its temp-home proof).
+    const livePath = flag(argv, '--settings') || join(homedir(), '.claude', 'settings.json');
     const renderedRows = registrations(rendered);
     const templateRows = registrations(templateOnly);
     const overlay = diffKeys(renderedRows, templateRows);

@@ -73,13 +73,123 @@ afterEach(() => {
 describe('twin drift', () => {
   it('both copies export the same names', () => {
     expect(Object.keys(mjsTwin).sort()).toEqual(Object.keys(tsTwin).sort());
-    expect(Object.keys(tsTwin).sort()).toEqual(['boardRoots', 'isHeadless', 'loadRegistry', 'normalizeRoot', 'resolveBoard']);
+    expect(Object.keys(tsTwin).sort()).toEqual([
+      'DEFAULT_BOARD', 'boardArtifact', 'boardRoots', 'isHeadless', 'laneCliCmd', 'laneShimPath', 'loadRegistry',
+      'normalizeRoot', 'pendingKey', 'primaryRepo', 'renderBoardCmd', 'resolveBoard', 'wmKey',
+    ]);
   });
 
   it('normalizeRoot agrees on awkward inputs', () => {
     for (const p of ['C:\\Users\\Dave\\Proj\\', '/c/Users/Dave', '/C/Users', 'c:/a//b/', '\\\\?\\C:\\x\\y', 'rel/path', '']) {
       expect(mjsTwin.normalizeRoot(p)).toBe(tsTwin.normalizeRoot(p));
     }
+  });
+});
+
+describe('derived helpers (PR2 exports), both twins', () => {
+  const env = { CCV3_USER_HOME: 'C:\\Users\\Dave\\' } as Record<string, string>;
+
+  it('DEFAULT_BOARD is continuous-claude in both', () => {
+    expect(tsTwin.DEFAULT_BOARD).toBe('continuous-claude');
+    expect(mjsTwin.DEFAULT_BOARD).toBe('continuous-claude');
+  });
+
+  it('wmKey: bare id on the default board, id@board elsewhere', () => {
+    for (const t of [tsTwin, mjsTwin]) {
+      expect(t.wmKey('abc', 'continuous-claude')).toBe('abc');
+      expect(t.wmKey('abc', 'greymatter')).toBe('abc@greymatter');
+    }
+  });
+
+  it('primaryRepo / laneShimPath / laneCliCmd / renderBoardCmd: forward slashes, CCV3_USER_HOME wins, no trailing slash', () => {
+    for (const t of [tsTwin, mjsTwin]) {
+      expect(t.primaryRepo(env)).toBe('C:/Users/Dave/continuous-claude');
+      expect(t.laneShimPath(env)).toBe('C:/Users/Dave/.claude/scripts/lane.mjs');
+      expect(t.laneCliCmd(env)).toBe('node C:/Users/Dave/.claude/scripts/lane.mjs');
+      expect(t.renderBoardCmd('zz', env)).toBe(
+        'node C:/Users/Dave/continuous-claude/scripts/coordination/render-board.mjs --project zz',
+      );
+    }
+  });
+
+  it('primaryRepo falls back to os.homedir() with forward slashes and never prints a literal ~', () => {
+    const home = os.homedir().replace(/\\/g, '/').replace(/\/+$/, '');
+    for (const t of [tsTwin, mjsTwin]) {
+      expect(t.primaryRepo({})).toBe(`${home}/continuous-claude`);
+      expect(t.laneCliCmd({})).not.toContain('~');
+      expect(t.laneCliCmd({})).not.toContain('\\');
+    }
+  });
+
+  it('pendingKey: wmKey with every char outside [A-Za-z0-9@_-] replaced by _', () => {
+    for (const t of [tsTwin, mjsTwin]) {
+      expect(t.pendingKey('abc-123', 'continuous-claude')).toBe('abc-123');
+      expect(t.pendingKey('abc-123', 'green')).toBe('abc-123@green');
+      expect(t.pendingKey('../a b', 'x')).toBe('___a_b@x');
+    }
+  });
+
+  describe('boardArtifact', () => {
+    const write = (body: unknown): string => {
+      const f = path.join(tmp, 'artifacts.json');
+      fs.writeFileSync(f, typeof body === 'string' ? body : JSON.stringify(body));
+      return f;
+    };
+    const run = (board: string, opts: Parameters<typeof tsTwin.boardArtifact>[1]) => {
+      const a = tsTwin.boardArtifact(board, opts);
+      expect(mjsTwin.boardArtifact(board, opts)).toEqual(a);
+      return a;
+    };
+
+    it('the default board reads the entry whose id is agentic-os-lane-board', () => {
+      const f = write({ artifacts: [
+        { id: 'other', url: 'https://claude.ai/artifact/AAA', publish_from: 'x.html' },
+        { id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/GGG111', publish_from: 'page.html' },
+      ] });
+      expect(run('continuous-claude', { artifactsPath: f })).toEqual({
+        id: 'GGG111', url: 'https://claude.ai/artifact/GGG111', publishFrom: 'page.html',
+      });
+    });
+
+    it('no other board has an artifact, even when an entry carries a board field', () => {
+      const f = write({ artifacts: [
+        { id: 'lane-board-g', board: 'greymatter', url: 'https://claude.ai/artifact/GGG111', publish_from: 'lane-board-greymatter.html' },
+      ] });
+      expect(run('greymatter', { artifactsPath: f })).toBeNull();
+      expect(run('zz-board', { artifactsPath: f })).toBeNull();
+    });
+
+    it('a board with no entry has no artifact (null), except the default board', () => {
+      const f = write({ artifacts: [] });
+      expect(run('greymatter', { artifactsPath: f })).toBeNull();
+      expect(run('continuous-claude', { artifactsPath: f })).toEqual({
+        id: 'RtrTNVfAq9uowmb2tfbzid', url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid', publishFrom: 'lane-board.html',
+      });
+    });
+
+    it('a missing or corrupt file gives the fallback for the default board and null for others', () => {
+      const missing = path.join(tmp, 'nope.json');
+      const corrupt = write('{not json');
+      for (const f of [missing, corrupt]) {
+        expect(run('greymatter', { artifactsPath: f })).toBeNull();
+        expect(run('continuous-claude', { artifactsPath: f })?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+      }
+    });
+
+    it('the artifacts.json entry overrides the fallback; an entry with another id does not', () => {
+      const f = write({ artifacts: [{ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/NEW999', publish_from: 'lane-board.html' }] });
+      expect(run('continuous-claude', { artifactsPath: f })?.id).toBe('NEW999');
+      const g = write({ artifacts: [{ id: 'something-else', board: 'continuous-claude', url: 'https://claude.ai/artifact/NEW999', publish_from: 'lane-board.html' }] });
+      expect(run('continuous-claude', { artifactsPath: g })?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+    });
+
+    it('finds <primaryRepo>/.claude/artifacts.json through opts.env', () => {
+      const home = path.join(tmp, 'home');
+      fs.mkdirSync(path.join(home, 'continuous-claude', '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'continuous-claude', '.claude', 'artifacts.json'),
+        JSON.stringify({ artifacts: [{ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/ZZ1', publish_from: 'z.html' }] }));
+      expect(run('continuous-claude', { env: { CCV3_USER_HOME: home } })?.id).toBe('ZZ1');
+    });
   });
 });
 

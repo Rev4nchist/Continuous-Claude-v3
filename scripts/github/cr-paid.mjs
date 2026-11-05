@@ -6,6 +6,7 @@
  *   node scripts/github/cr-paid.mjs check --pr <N> [--json]     estimate the round, print ALLOW or ESCALATE
  *   node scripts/github/cr-paid.mjs record --pr <N> --head <sha> --files <K>   log a paid round you just posted
  *   node scripts/github/cr-paid.mjs today [--json]               today's paid total and rows
+ *   node scripts/github/cr-paid.mjs month [--json]               this Chicago month's paid files (the interim monthly cap reads it)
  *
  * Billing: $0.25 per reviewed file. Round 1 bills every reviewable PR file. A later round bills the files changed since the last
  * reviewed commit (the compare API). Accepted limit: billing exclusion by .coderabbit.yaml path_filters is unproven. The estimate
@@ -24,6 +25,8 @@
  * A paid CLI run (pre-pr.mjs and cr-fix.mjs log it from the run's usageCost) adds {ts, date, kind: "cli", branch, head, files, cost, session}.
  * A row with no kind is a PR row. The PR limits above count PR rows only. The CLI daily cap (review-router.config.json,
  * coderabbit.cli_daily_cap_usd) counts cli rows only, for the same America/Chicago day.
+ * The month counter (monthToDateFiles, `month`) sums the files of PR rows of one America/Chicago month. The pr-checkpoint reads it for
+ * coderabbit.monthly_file_cap. The ledger records paid rounds only, so the count misses reviews that used a free slot: it undercounts.
  */
 import { appendFileSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
@@ -88,6 +91,23 @@ export function cliTodayOf(deps) {
   const date = chicagoDay(d.now());
   const rows = readLedger(d.ledgerPath).filter((r) => r.date === date && isCli(r));
   return { date, total: centsOf(rows) / 100, rows };
+}
+
+/** The files of the PR rows whose Chicago date starts with monthPrefix (YYYY-MM). CLI rows never count. Throws when a counted row has no whole, non-negative files (a bad row would lower the total). Pure. */
+export function monthToDateFiles(rows, monthPrefix) {
+  const counted = rows.filter((r) => !isCli(r) && String(r.date).startsWith(`${monthPrefix}-`));
+  for (const r of counted) {
+    if (!Number.isInteger(r.files) || r.files < 0) throw new Error(`ledger PR row dated ${r.date} (pr ${r.pr}) lacks a whole, non-negative files count`);
+  }
+  return counted.reduce((sum, r) => sum + r.files, 0);
+}
+
+/** { month, files, rounds }: the paid PR rows of the Chicago month of now. A missing ledger is an empty month. Throws on a bad ledger. */
+export function monthOf(deps) {
+  const d = withDefaults(deps);
+  const month = chicagoDay(d.now()).slice(0, 7);
+  const rows = readLedger(d.ledgerPath).filter((r) => !isCli(r) && r.date.startsWith(`${month}-`));
+  return { month, files: monthToDateFiles(rows, month), rounds: rows.length, cost: centsOf(rows) / 100 };
 }
 
 /** The daily CLI cap in dollars from the router config (coderabbit.cli_daily_cap_usd), or null when the key is missing or not a number of 0 or more. */
@@ -236,9 +256,9 @@ export function reportOf(r) {
 }
 
 // ---- command line ----
-const COMMANDS = ['check', 'record', 'today'];
+const COMMANDS = ['check', 'record', 'today', 'month'];
 const VALUE_FLAGS = { '--pr': 'pr', '--head': 'head', '--files': 'files', '--repo': 'repo' };
-const USAGE_LINE = 'usage: cr-paid.mjs check --pr <N> [--json] | record --pr <N> --head <sha> --files <K> | today [--json] | --help';
+const USAGE_LINE = 'usage: cr-paid.mjs check --pr <N> [--json] | record --pr <N> --head <sha> --files <K> | today [--json] | month [--json] | --help';
 const toInt = (v, flag) => {
   if (!/^\d+$/.test(String(v ?? '')) || Number(v) === 0 && flag === '--pr') throw new Error(`${flag} needs a whole number${flag === '--pr' ? ' above 0' : ''}`);
   return Number(v);
@@ -254,7 +274,7 @@ export function parseArgs(argv) {
     else if (VALUE_FLAGS[rest[i]]) o[VALUE_FLAGS[rest[i]]] = rest[(i += 1)];
     else throw new Error(`unknown argument: ${rest[i]}`);
   }
-  if (cmd !== 'today') o.pr = toInt(o.pr, '--pr');
+  if (!['today', 'month'].includes(cmd)) o.pr = toInt(o.pr, '--pr');
   if (o.files !== null || cmd === 'record') o.files = toInt(o.files, '--files');
   if (!/^[\w.-]+\/[\w.-]+$/.test(o.repo)) throw new Error(`bad --repo: ${o.repo}`);
   return o;
@@ -279,6 +299,21 @@ export function todayLines(t, cli) {
   ];
 }
 
+/** The lines `month` prints. The ledger holds paid rounds only, so a review that used a free slot is not in the count. */
+export function monthLines(m) {
+  return [
+    `Paid CodeRabbit PR files in ${m.month} (America/Chicago): ${m.files} file(s), ${usd(m.cost * 100)} in ${m.rounds} round(s).`,
+    'The ledger records paid rounds only, so this undercounts reviews that used a free slot.',
+  ];
+}
+
+function runMonth(o) {
+  const m = monthOf();
+  if (o.json) console.log(JSON.stringify(m));
+  else print(monthLines(m), console.log);
+  return 0;
+}
+
 function runToday(o) {
   const t = todayOf();
   const cli = cliTodayOf();
@@ -294,6 +329,7 @@ function main() {
     const o = parseArgs(argv);
     if (o.cmd === 'check') return runCheck(o);
     if (o.cmd === 'today') return runToday(o);
+    if (o.cmd === 'month') return runMonth(o);
     console.log(JSON.stringify(recordPaid(o)));
     return 0;
   } catch (err) { console.error(`cr-paid: ${firstLine(err)}`); return 2; }

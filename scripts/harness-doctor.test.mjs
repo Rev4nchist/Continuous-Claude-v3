@@ -28,6 +28,13 @@
 //          equal with the trigger (PASS), behind by exactly 0004 (WARN "migration 0004 not applied"), behind by more (FAIL),
 //          ahead (WARN), equal but the trigger is gone (FAIL); against real scratch databases with a filled __migrations table
 //   lanes:worktree-lane-mjs: no worktrees dir (PASS absent), same file with CRLF (PASS), a different file (WARN, names the worktree)
+//   lanes:shim: the home shim equals the repo shim (PASS, CRLF folded), differs / missing in home / missing in repo (WARN, never FAIL)
+//   lanes:hook-client-version: both bundles carry lane.client_version (PASS); one lacks it (WARN, FAIL only when the registry has a live
+//          board other than continuous-claude); a bundle missing (WARN); an inactive other board does not count
+//   hooks:render-check: every lane hook of the rendered template is live with the same matcher (PASS); Stop missing (WARN naming
+//          lane-board-stop-gate and apply-registrations --only); a changed matcher (WARN); a non-lane hook missing (ignored); no template / no live file (WARN)
+//   hooks:dist-parity: the lane hook dists in the home equal the repo dists (PASS, CRLF folded); different / missing in either (WARN)
+//   lanes:relative-path-guard: at or under the ratchet baseline (PASS); a file over it (WARN naming the file); no baseline (WARN)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -37,7 +44,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns, laneSchema } from './harness-doctor.mjs';
+import {
+  parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns, laneSchema,
+  lanesShim, laneHookClientVersion, hooksRenderCheck, hooksDistParity, lanePathGuardCheck,
+} from './harness-doctor.mjs';
 import { assertScratchUrl } from './coordination/scratch-db.mjs';
 
 const DOCTOR = join(dirname(fileURLToPath(import.meta.url)), 'harness-doctor.mjs');
@@ -69,6 +79,40 @@ const fakeQuery = (map) => (name) => (name in map ? { status: 0, stdout: map[nam
 const task = (over = {}) => ({ name: 'CCv3-Fake-Task', script: 's.bat', trigger: 'daily 07:50', execLimitMin: 10, allowedExit: [0], maxAgeHours: 48, ...over });
 const TASK_NAME = 'CCv3-Fake-Task';
 
+// ---- the lane assets the five propagation checks read: the shim, the lane hook dists, a template with its live settings, the ratchet baseline ----
+const LANE_DISTS = ['lane-context', 'prompt-submit', 'lane-board-republish-reminder', 'lane-board-stop-gate', 'lane-agent-tag', 'session-register'];
+const laneHook = (name) => ({ type: 'command', command: 'node', timeout: 5, args: [`{{CLAUDE_HOME}}/hooks/dist/${name}.mjs`] });
+const LANE_TEMPLATE = {
+  hooks: {
+    SessionStart: [{ hooks: [laneHook('lane-context')] }],
+    PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [laneHook('lane-agent-tag')] }, { matcher: 'Bash', hooks: [laneHook('not-a-lane-hook')] }],
+    PostToolUse: [
+      { matcher: 'Bash|PowerShell|Artifact', hooks: [laneHook('lane-board-republish-reminder')] },
+      { matcher: 'Edit|Write|Bash|PowerShell|Task|Agent', hooks: [laneHook('lane-context')] },
+    ],
+    Stop: [{ hooks: [laneHook('lane-board-stop-gate')] }],
+  },
+};
+const claudeHomeOf = (home) => `${home.replace(/\\/g, '/')}/.claude`;
+const templateFile = (repo) => join(repo, '.claude', 'settings.json.template');
+const liveFile = (home) => join(home, '.claude', 'settings.json');
+const CLIENT_BUNDLE = "await c.query(\"SELECT set_config('lane.client_version','2',false)\");\n";
+const SHIM_TEXT = "// shim\nawait import('x');\n";
+/** Writes a repo and a home that agree on every lane asset. A test breaks one thing. */
+function seedLaneAssets(repo, home) {
+  put(join(repo, '.claude', 'scripts', 'lane.mjs'), SHIM_TEXT);
+  put(join(home, '.claude', 'scripts', 'lane.mjs'), SHIM_TEXT);
+  for (const n of LANE_DISTS) {
+    const body = `// ${n}\n${n === 'lane-context' || n === 'prompt-submit' ? CLIENT_BUNDLE : ''}`;
+    put(join(repo, '.claude', 'hooks', 'dist', `${n}.mjs`), body);
+    put(join(home, '.claude', 'hooks', 'dist', `${n}.mjs`), body);
+  }
+  const text = JSON.stringify(LANE_TEMPLATE, null, 2);
+  put(templateFile(repo), text);
+  put(liveFile(home), text.replace(/\{\{CLAUDE_HOME\}\}/g, claudeHomeOf(home)));
+  put(join(repo, 'scripts', 'coordination', 'lane-path-guard.baseline.json'), JSON.stringify({ total: 0, files: {} }));
+}
+
 /**
  * A clean fixture: a git repo on main with a build manifest and passing check scripts, a home whose cursor equals main,
  * a fresh review count, a tasks.json with one healthy fake task, and a blocklist file committed `blocklistDaysAgo` days ago
@@ -87,6 +131,7 @@ function fixture({ blocklistDaysAgo = 0 } = {}) {
   put(join(repo, 'review-router.config.json'), JSON.stringify({ coderabbit: { reviews_7d_manual: 10, reviews_7d_manual_date: daysAgoDay(1) } }));
   put(join(repo, 'scripts', 'scheduled', 'tasks.json'), JSON.stringify({ tasks: [task()] }));
   put(join(schtasks, `${TASK_NAME}.csv`), taskCsv(TASK_NAME));
+  seedLaneAssets(repo, home);
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '--no-verify', '-m', 'init');
   if (blocklistDaysAgo !== null) commitBlocklist(repo, blocklistDaysAgo);
@@ -900,4 +945,214 @@ test('end to end against scratch databases: board-columns and project-rows read 
     if (url4) dropScratch(url4);
     if (url3) dropScratch(url3);
   }
+});
+
+// ---- the five propagation checks (shim, hook client version, render check, dist parity, relative-path guard) ----
+const homeDist = (fx, n) => join(fx.home, '.claude', 'hooks', 'dist', `${n}.mjs`);
+const repoDist = (fx, n) => join(fx.repo, '.claude', 'hooks', 'dist', `${n}.mjs`);
+const rm = (f) => execFileSync(process.execPath, ['-e', `require('fs').rmSync(${JSON.stringify(f)})`]);
+const liveDoc = (fx) => JSON.parse(readFileSync(liveFile(fx.home), 'utf8'));
+const putLive = (fx, doc) => put(liveFile(fx.home), JSON.stringify(doc, null, 2));
+
+test('a clean fixture passes the five propagation checks end to end', () => {
+  const r = run(fixture());
+  for (const id of ['lanes:shim', 'lanes:hook-client-version', 'hooks:render-check', 'hooks:dist-parity', 'lanes:relative-path-guard']) {
+    assert.ok(r.checks[id], `${id} is missing from the output`);
+    assert.equal(r.checks[id].status, 'PASS', `${id}: ${r.checks[id].detail}`);
+  }
+});
+
+test('lanes:shim is a PASS when the home shim equals the repo shim, even with CRLF line ends', () => {
+  const fx = fixture();
+  put(join(fx.home, '.claude', 'scripts', 'lane.mjs'), SHIM_TEXT.replace(/\n/g, '\r\n'));
+  assert.equal(lanesShim({ home: fx.home, repo: fx.repo }).status, 'PASS');
+});
+
+test('lanes:shim is a WARN, never a FAIL: missing in the home, different from the repo, missing in the repo', () => {
+  const fx = fixture();
+  put(join(fx.home, '.claude', 'scripts', 'lane.mjs'), '// an older shim\n');
+  const differ = lanesShim({ home: fx.home, repo: fx.repo });
+  assert.equal(differ.status, 'WARN');
+  assert.match(differ.detail, /differs/);
+  assert.match(differ.detail, /sync-to-active\.sh --changed/);
+  rm(join(fx.home, '.claude', 'scripts', 'lane.mjs'));
+  const none = lanesShim({ home: fx.home, repo: fx.repo });
+  assert.equal(none.status, 'WARN');
+  assert.ok(none.detail.includes(fwd(join(fx.home, '.claude', 'scripts', 'lane.mjs'))), none.detail);
+  rm(join(fx.repo, '.claude', 'scripts', 'lane.mjs'));
+  assert.equal(lanesShim({ home: fx.home, repo: fx.repo }).status, 'WARN');
+});
+
+test('lanes:hook-client-version: both bundles carry lane.client_version is a PASS', () => {
+  const fx = fixture();
+  const r = laneHookClientVersion({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'PASS', r.detail);
+});
+
+test('lanes:hook-client-version: a bundle without the string is a WARN while only continuous-claude has a board', () => {
+  const fx = fixture();
+  put(homeDist(fx, 'lane-context'), '// old build\n');
+  const r = laneHookClientVersion({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'WARN');
+  assert.match(r.detail, /lane-context\.mjs/);
+  assert.doesNotMatch(r.detail, /prompt-submit\.mjs/);
+  writeRegistry(fx, [entry('continuous-claude', fwd(fx.repo)), { ...entry('agentic-os', fwd(fx.repo) + '/apps/x', 'in-development'), laneBoard: 'continuous-claude' }]);
+  assert.equal(laneHookClientVersion({ home: fx.home, repo: fx.repo }).status, 'WARN');
+});
+
+test('lanes:hook-client-version: FAIL only when a live board other than continuous-claude exists and a bundle lacks the string', () => {
+  const fx = fixture();
+  writeRegistry(fx, [entry('continuous-claude', fwd(fx.repo)), entry('zz-second', fwd(join(fx.root, 'second')))]);
+  assert.equal(laneHookClientVersion({ home: fx.home, repo: fx.repo }).status, 'PASS', 'the string is present: a second board is safe');
+  put(homeDist(fx, 'prompt-submit'), '// old build\n');
+  const r = laneHookClientVersion({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /prompt-submit\.mjs/);
+  assert.match(r.detail, /42501/);
+  writeRegistry(fx, [entry('continuous-claude', fwd(fx.repo)), entry('zz-second', fwd(join(fx.root, 'second')), 'inactive')]);
+  assert.equal(laneHookClientVersion({ home: fx.home, repo: fx.repo }).status, 'WARN', 'an inactive board does not count');
+});
+
+test('lanes:hook-client-version: a bundle that is not there is a WARN, never a FAIL', () => {
+  const fx = fixture();
+  writeRegistry(fx, [entry('continuous-claude', fwd(fx.repo)), entry('zz-second', fwd(join(fx.root, 'second')))]);
+  rm(homeDist(fx, 'lane-context'));
+  const r = laneHookClientVersion({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'WARN');
+  assert.match(r.detail, /lane-context\.mjs/);
+});
+
+test('hooks:render-check is a PASS when every lane hook of the rendered template is live with the same matcher', () => {
+  const fx = fixture();
+  const r = hooksRenderCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'PASS', r.detail);
+});
+
+test('hooks:render-check: a missing Stop registration is a WARN that names lane-board-stop-gate and the apply-registrations fix', () => {
+  const fx = fixture();
+  const doc = liveDoc(fx);
+  delete doc.hooks.Stop;
+  putLive(fx, doc);
+  const r = hooksRenderCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'WARN');
+  assert.match(r.detail, /lane-board-stop-gate/);
+  assert.match(r.detail, /Stop/);
+  assert.match(r.detail, /apply-registrations\.mjs --only lane-board-stop-gate/);
+  assert.match(r.detail, /dry run/i);
+});
+
+test('hooks:render-check: a lane hook on another matcher is a WARN naming the hook', () => {
+  const fx = fixture();
+  const doc = liveDoc(fx);
+  doc.hooks.PostToolUse.find((g) => g.matcher === 'Edit|Write|Bash|PowerShell|Task|Agent').matcher = 'Edit|Write|Bash|PowerShell|Task';
+  putLive(fx, doc);
+  const r = hooksRenderCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'WARN');
+  assert.match(r.detail, /lane-context/);
+  assert.match(r.detail, /PostToolUse/);
+});
+
+test('hooks:render-check ignores a hook that is not a lane hook, and never FAILs when an input is absent', () => {
+  const fx = fixture();
+  const doc = liveDoc(fx);
+  doc.hooks.PreToolUse = doc.hooks.PreToolUse.filter((g) => g.matcher !== 'Bash');
+  putLive(fx, doc);
+  assert.equal(hooksRenderCheck({ home: fx.home, repo: fx.repo }).status, 'PASS', 'a missing non-lane hook is not this check');
+  rm(liveFile(fx.home));
+  const noLive = hooksRenderCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(noLive.status, 'WARN');
+  assert.match(noLive.detail, /settings\.json/);
+  rm(templateFile(fx.repo));
+  const noTemplate = hooksRenderCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(noTemplate.status, 'WARN');
+  assert.match(noTemplate.detail, /settings\.json\.template/);
+});
+
+test('hooks:render-check: a live settings file that is not JSON is a WARN, not a crash', () => {
+  const fx = fixture();
+  put(liveFile(fx.home), '{ not json');
+  assert.equal(hooksRenderCheck({ home: fx.home, repo: fx.repo }).status, 'WARN');
+});
+
+test('hooks:dist-parity is a PASS when the home lane dists equal the repo dists, CRLF folded', () => {
+  const fx = fixture();
+  put(homeDist(fx, 'lane-agent-tag'), '// lane-agent-tag\r\n');
+  const r = hooksDistParity({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'PASS', r.detail);
+});
+
+test('hooks:dist-parity is a WARN naming each lane dist that differs or is missing in the home or the repo', () => {
+  const fx = fixture();
+  put(homeDist(fx, 'lane-board-stop-gate'), '// an older build\n');
+  rm(homeDist(fx, 'lane-agent-tag'));
+  const r = hooksDistParity({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'WARN');
+  assert.match(r.detail, /lane-board-stop-gate/);
+  assert.match(r.detail, /lane-agent-tag/);
+  assert.doesNotMatch(r.detail, /lane-context/);
+  assert.match(r.detail, /sync-to-active\.sh --changed/);
+  rm(repoDist(fx, 'lane-context'));
+  const noRepo = hooksDistParity({ home: fx.home, repo: fx.repo });
+  assert.equal(noRepo.status, 'WARN');
+  assert.match(noRepo.detail, /lane-context/);
+});
+
+test('lanes:relative-path-guard is a PASS at the baseline and names the count', () => {
+  const fx = fixture();
+  put(join(fx.repo, 'CLAUDE.md'), 'run node scripts/coordination/lane.mjs board\n');
+  put(join(fx.repo, 'scripts', 'coordination', 'lane-path-guard.baseline.json'), JSON.stringify({ files: { 'CLAUDE.md': 2 } }));
+  const r = lanePathGuardCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'PASS', r.detail);
+  assert.match(r.detail, /1 bare/);
+});
+
+test('lanes:relative-path-guard is a WARN naming a file over its baseline, and a WARN without a baseline file', () => {
+  const fx = fixture();
+  put(join(fx.repo, 'CLAUDE.md'), 'node scripts/coordination/lane.mjs board\nnode scripts/coordination/lane.mjs next\n');
+  const over = lanePathGuardCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(over.status, 'WARN');
+  assert.match(over.detail, /CLAUDE\.md/);
+  assert.match(over.detail, /2 .*baseline 0/);
+  rm(join(fx.repo, 'scripts', 'coordination', 'lane-path-guard.baseline.json'));
+  const none = lanePathGuardCheck({ home: fx.home, repo: fx.repo });
+  assert.equal(none.status, 'WARN');
+  assert.match(none.detail, /baseline/);
+});
+
+test('end to end: breaking each asset moves only its own check, and the doctor still exits 0 with no second board', () => {
+  const fx = fixture();
+  const doc = liveDoc(fx);
+  delete doc.hooks.Stop;
+  putLive(fx, doc);
+  put(homeDist(fx, 'lane-context'), '// old\n');
+  rm(join(fx.home, '.claude', 'scripts', 'lane.mjs'));
+  const r = run(fx);
+  assert.equal(r.checks['hooks:render-check'].status, 'WARN');
+  assert.equal(r.checks['hooks:dist-parity'].status, 'WARN');
+  assert.equal(r.checks['lanes:shim'].status, 'WARN');
+  assert.equal(r.checks['lanes:hook-client-version'].status, 'WARN');
+  assert.equal(r.checks['lanes:relative-path-guard'].status, 'PASS');
+  assert.equal(r.code, 0, r.stdout);
+});
+
+// Finding 2 (PR2 review): a second active board while the live lane-context hook cannot set lane.client_version. The check above
+// already covers prompt-submit; these two pin the lane-context bundle itself and the missing-bundle wording.
+test('lanes:hook-client-version: a lane-context bundle without the string FAILs and names the second board when the registry has two active boards', () => {
+  const fx = fixture();
+  writeRegistry(fx, [entry('continuous-claude', fwd(fx.repo)), entry('zz-second', fwd(join(fx.root, 'second')))]);
+  put(homeDist(fx, 'lane-context'), '// old build\n');
+  const r = laneHookClientVersion({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /lane-context\.mjs/);
+  assert.match(r.detail, /zz-second/);
+});
+
+test('lanes:hook-client-version: a missing bundle with a second active board stays a WARN but does not say a second board is fine', () => {
+  const fx = fixture();
+  writeRegistry(fx, [entry('continuous-claude', fwd(fx.repo)), entry('zz-second', fwd(join(fx.root, 'second')))]);
+  rm(homeDist(fx, 'lane-context'));
+  const r = laneHookClientVersion({ home: fx.home, repo: fx.repo });
+  assert.equal(r.status, 'WARN');
+  assert.doesNotMatch(r.detail, /fine while only/);
+  assert.match(r.detail, /zz-second/);
 });

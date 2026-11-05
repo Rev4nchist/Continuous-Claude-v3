@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "test:scripts": "node --test scripts/harness-doctor.test.mjs scripts/scheduled/scheduled-health-check.test.mjs .claude/scripts/security/cf-validate.test.mjs .claude/scripts/security/sink-spy.test.mjs",
+    "test:scripts": "node --test scripts/harness-doctor.test.mjs scripts/settings/apply-registrations.test.mjs scripts/scheduled/scheduled-health-check.test.mjs .claude/scripts/security/cf-validate.test.mjs .claude/scripts/security/sink-spy.test.mjs",
     "test:e2e": "npx playwright test",
     "test:e2e:headed": "npx playwright test --headed",
     "test:e2e:debug": "npx playwright test --debug",

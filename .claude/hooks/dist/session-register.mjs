@@ -1644,15 +1644,15 @@ var require_pg_connection_string = __commonJS({
       if (config.sslnegotiation === "direct" && config.ssl === void 0) {
         config.ssl = true;
       }
-      const fs = config.sslcert || config.sslkey || config.sslrootcert ? __require("fs") : null;
+      const fs2 = config.sslcert || config.sslkey || config.sslrootcert ? __require("fs") : null;
       if (config.sslcert) {
-        config.ssl.cert = fs.readFileSync(config.sslcert).toString();
+        config.ssl.cert = fs2.readFileSync(config.sslcert).toString();
       }
       if (config.sslkey) {
-        config.ssl.key = fs.readFileSync(config.sslkey).toString();
+        config.ssl.key = fs2.readFileSync(config.sslkey).toString();
       }
       if (config.sslrootcert) {
-        config.ssl.ca = fs.readFileSync(config.sslrootcert).toString();
+        config.ssl.ca = fs2.readFileSync(config.sslrootcert).toString();
       }
       if (options.useLibpqCompat && config.uselibpqcompat) {
         throw new Error("Both useLibpqCompat and uselibpqcompat are set. Please use only one of them.");
@@ -3093,7 +3093,7 @@ var require_dist = __commonJS({
     function parse(stream, callback) {
       const parser = new parser_1.Parser();
       stream.on("data", (buffer) => parser.parse(buffer, callback));
-      return new Promise((resolve) => stream.on("end", () => resolve()));
+      return new Promise((resolve2) => stream.on("end", () => resolve2()));
     }
   }
 });
@@ -3480,7 +3480,7 @@ var require_split2 = __commonJS({
 var require_helper = __commonJS({
   "node_modules/pgpass/lib/helper.js"(exports, module) {
     "use strict";
-    var path = __require("path");
+    var path2 = __require("path");
     var Stream = __require("stream").Stream;
     var split = require_split2();
     var util = __require("util");
@@ -3519,7 +3519,7 @@ var require_helper = __commonJS({
     };
     module.exports.getFileName = function(rawEnv) {
       var env = rawEnv || process.env;
-      var file = env.PGPASSFILE || (isWin ? path.join(env.APPDATA || "./", "postgresql", "pgpass.conf") : path.join(env.HOME || "./", ".pgpass"));
+      var file = env.PGPASSFILE || (isWin ? path2.join(env.APPDATA || "./", "postgresql", "pgpass.conf") : path2.join(env.HOME || "./", ".pgpass"));
       return file;
     };
     module.exports.usePgPass = function(stats, fname) {
@@ -3651,16 +3651,16 @@ var require_helper = __commonJS({
 var require_lib = __commonJS({
   "node_modules/pgpass/lib/index.js"(exports, module) {
     "use strict";
-    var path = __require("path");
-    var fs = __require("fs");
+    var path2 = __require("path");
+    var fs2 = __require("fs");
     var helper = require_helper();
     module.exports = function(connInfo, cb) {
       var file = helper.getFileName();
-      fs.stat(file, function(err, stat) {
+      fs2.stat(file, function(err, stat) {
         if (err || !helper.usePgPass(stat, file)) {
           return cb(void 0);
         }
-        var st = fs.createReadStream(file);
+        var st = fs2.createReadStream(file);
         helper.getPassword(connInfo, st, cb);
       });
     };
@@ -3862,12 +3862,12 @@ var require_client = __commonJS({
           this._connect(callback);
           return;
         }
-        return new this._Promise((resolve, reject) => {
+        return new this._Promise((resolve2, reject) => {
           this._connect((error) => {
             if (error) {
               reject(error);
             } else {
-              resolve(this);
+              resolve2(this);
             }
           });
         });
@@ -4249,8 +4249,8 @@ var require_client = __commonJS({
         } else {
           query = new Query2(config, values, callback);
           if (!query.callback) {
-            result = new this._Promise((resolve, reject) => {
-              query.callback = (err, res) => err ? reject(err) : resolve(res);
+            result = new this._Promise((resolve2, reject) => {
+              query.callback = (err, res) => err ? reject(err) : resolve2(res);
             }).catch((err) => {
               Error.captureStackTrace(err);
               throw err;
@@ -4350,8 +4350,8 @@ var require_client = __commonJS({
         if (cb) {
           this.connection.once("end", cb);
         } else {
-          return new this._Promise((resolve) => {
-            this.connection.once("end", resolve);
+          return new this._Promise((resolve2) => {
+            this.connection.once("end", resolve2);
           });
         }
       }
@@ -4400,8 +4400,8 @@ var require_pg_pool = __commonJS({
       const cb = function(err, client) {
         err ? rej(err) : res(client);
       };
-      const result = new Promise2(function(resolve, reject) {
-        res = resolve;
+      const result = new Promise2(function(resolve2, reject) {
+        res = resolve2;
         rej = reject;
       }).catch((err) => {
         Error.captureStackTrace(err);
@@ -4462,7 +4462,7 @@ var require_pg_pool = __commonJS({
         if (typeof Promise2.try === "function") {
           return Promise2.try(f);
         }
-        return new Promise2((resolve) => resolve(f()));
+        return new Promise2((resolve2) => resolve2(f()));
       }
       _isFull() {
         return this._clients.length >= this.options.max;
@@ -4857,8 +4857,8 @@ var require_query2 = __commonJS({
     NativeQuery.prototype._getPromise = function() {
       if (this._promise) return this._promise;
       this._promise = new Promise(
-        function(resolve, reject) {
-          this._once("end", resolve);
+        function(resolve2, reject) {
+          this._once("end", resolve2);
           this._once("error", reject);
         }.bind(this)
       );
@@ -5037,12 +5037,12 @@ var require_client2 = __commonJS({
         this._connect(callback);
         return;
       }
-      return new this._Promise((resolve, reject) => {
+      return new this._Promise((resolve2, reject) => {
         this._connect((error) => {
           if (error) {
             reject(error);
           } else {
-            resolve(this);
+            resolve2(this);
           }
         });
       });
@@ -5066,8 +5066,8 @@ var require_client2 = __commonJS({
         query = new NativeQuery(config, values, callback);
         if (!query.callback) {
           let resolveOut, rejectOut;
-          result = new this._Promise((resolve, reject) => {
-            resolveOut = resolve;
+          result = new this._Promise((resolve2, reject) => {
+            resolveOut = resolve2;
             rejectOut = reject;
           }).catch((err) => {
             Error.captureStackTrace(err);
@@ -5130,8 +5130,8 @@ var require_client2 = __commonJS({
       }
       let result;
       if (!cb) {
-        result = new this._Promise(function(resolve, reject) {
-          cb = (err) => err ? reject(err) : resolve();
+        result = new this._Promise(function(resolve2, reject) {
+          cb = (err) => err ? reject(err) : resolve2();
         });
       }
       const doEnd = function() {
@@ -5347,7 +5347,7 @@ var require_lib2 = __commonJS({
 });
 
 // src/session-register.ts
-import { readFileSync as readFileSync5 } from "fs";
+import { readFileSync as readFileSync6 } from "fs";
 
 // node_modules/pg/esm/index.mjs
 var import_lib = __toESM(require_lib2(), 1);
@@ -5757,8 +5757,8 @@ function label(uuid, name) {
   const n = clipName(name === void 0 ? readIdentity(uuid)?.name : name);
   return n ? `${n} #${shortId(uuid)}` : `#${shortId(uuid)}`;
 }
-function fileOffset(path, size, start, len) {
-  const fd = openSync2(path, "r");
+function fileOffset(path2, size, start, len) {
+  const fd = openSync2(path2, "r");
   try {
     const buf = Buffer.alloc(Math.min(len, size - start));
     readSync(fd, buf, 0, buf.length, start);
@@ -5860,8 +5860,134 @@ function runAdopt(newUuid, oldUuid, spawnFn = spawnDetachedHidden) {
 }
 
 // src/shared/session-names.ts
-import { readdirSync as readdirSync2, statSync as statSync4 } from "fs";
-import { join as join7 } from "path";
+import { readdirSync as readdirSync3, statSync as statSync4 } from "fs";
+import { join as join8 } from "path";
+
+// src/shared/lane-board.ts
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+var MAX_GITDIR_FILES = 100;
+function normalizeRoot(p) {
+  let s = String(p ?? "").replace(/\\/g, "/");
+  s = s.replace(/^\/\/[?.]\//, "");
+  s = s.toLowerCase();
+  s = s.replace(/^\/([a-z])(?=\/|$)/, "$1:");
+  s = s.replace(/(?<=.)\/{2,}/g, "/");
+  return s.replace(/\/+$/, "");
+}
+var isAbsoluteNorm = (s) => /^[a-z]:(\/|$)/.test(s) || s.startsWith("/");
+var slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+var isUnder = (child, root) => child === root || child.startsWith(root + "/");
+var registryFile = (opts, env) => opts.registryPath || env.LANE_REGISTRY_PATH || path.join(env.USERPROFILE || env.HOME || os.homedir(), ".claude", "project-registry.json");
+function loadRegistry(opts = {}) {
+  const env = opts.env ?? process.env;
+  let projects;
+  try {
+    const text = fs.readFileSync(registryFile(opts, env), "utf8").replace(/^\uFEFF/, "");
+    projects = JSON.parse(text).projects;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(projects)) return [];
+  const out = [];
+  for (const p of projects) {
+    if (!p || typeof p !== "object") continue;
+    const e = p;
+    const name = typeof e.name === "string" ? e.name : "";
+    const key = typeof e.key === "string" && e.key ? e.key : slugify(name);
+    if (!key) continue;
+    const root = typeof e.path === "string" ? normalizeRoot(e.path) : "";
+    out.push({
+      key,
+      name,
+      board: typeof e.laneBoard === "string" && e.laneBoard ? e.laneBoard : key,
+      status: typeof e.status === "string" ? e.status : "active",
+      path: typeof e.path === "string" ? e.path : "",
+      root: root && isAbsoluteNorm(root) ? root : ""
+    });
+  }
+  return out;
+}
+function isHeadless(env = process.env) {
+  return String(env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk") && env.LANE_CONTEXT_HEADLESS !== "1";
+}
+function realNorm(p) {
+  try {
+    return normalizeRoot(fs.realpathSync.native(p));
+  } catch {
+    return normalizeRoot(p);
+  }
+}
+function worktreeDirs(entry) {
+  const base = path.join(entry.path, ".git", "worktrees");
+  let names;
+  try {
+    names = fs.readdirSync(base).sort().slice(0, MAX_GITDIR_FILES);
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const n of names) {
+    const file = path.join(base, n, "gitdir");
+    try {
+      let raw = (fs.readFileSync(file, "utf8").split(/\r?\n/)[0] ?? "").trim();
+      if (!raw) continue;
+      if (!/^([a-zA-Z]:[\\/]|[\\/])/.test(raw)) raw = path.resolve(path.dirname(file), raw);
+      raw = raw.replace(/\\/g, "/");
+      if (!/\/\.git$/i.test(raw)) continue;
+      const dir = realNorm(raw.slice(0, -5));
+      if (dir && isAbsoluteNorm(dir)) found.push({ dir, file });
+    } catch {
+    }
+  }
+  return found;
+}
+function fromSelector(value, source, entries) {
+  const live = entries.filter((e) => e.status.toLowerCase() !== "inactive");
+  const hit = live.find((e) => e.key === value) ?? live.find((e) => e.board === value);
+  if (!hit) {
+    const keys = [...new Set(live.map((e) => e.key))];
+    throw new Error(`unknown board '${value}'; registered: ${keys.length ? keys.join(", ") : "(none)"}`);
+  }
+  return { key: hit.board, root: hit.root, source, via: hit.key };
+}
+function resolveBoard(cwd, opts = {}) {
+  const env = opts.env ?? process.env;
+  if (!opts.cli && !opts.headlessOk && isHeadless(env)) return null;
+  const entries = loadRegistry({ ...opts, env });
+  if (opts.cli) {
+    const flag = (opts.projectFlag ?? "").trim();
+    if (flag) return fromSelector(flag, "flag", entries);
+    const fromEnv = String(env.LANE_PROJECT ?? "").trim();
+    if (fromEnv) return fromSelector(fromEnv, "env", entries);
+  }
+  const live = entries.filter((e) => e.status.toLowerCase() !== "inactive" && e.root);
+  const here = realNorm(cwd);
+  let best = null;
+  for (const e of live) {
+    if (isUnder(here, e.root) && (!best || e.root.length > best.root.length)) best = e;
+  }
+  if (best) return { key: best.board, root: best.root, source: "registry", via: best.key };
+  let wt = null;
+  for (const e of live) {
+    for (const w of worktreeDirs(e)) {
+      if (isUnder(here, w.dir) && (!wt || w.dir.length > wt.dir.length)) wt = { entry: e, ...w };
+    }
+  }
+  if (wt) return { key: wt.entry.board, root: wt.entry.root, source: "worktree-gitdir", via: wt.file };
+  return null;
+}
+var fwd = (p) => String(p).replace(/\\/g, "/").replace(/\/+$/, "");
+var userHome = (env) => fwd(env.CCV3_USER_HOME || os.homedir());
+function laneShimPath(env = process.env) {
+  return `${userHome(env)}/.claude/scripts/lane.mjs`;
+}
+function laneCliCmd(env = process.env) {
+  return `node ${laneShimPath(env)}`;
+}
+
+// src/shared/session-names.ts
 var WORDS = "otter heron lynx puffin marten osprey ibex koala lemur bison crane egret finch gecko hyena kestrel llama moose narwhal ocelot panda quail stoat tapir walrus yak zebra badger beaver dingo ermine ferret gibbon impala jaguar kiwi magpie newt orca pika robin shrew sloth tern toad wombat wren vole".split(" ");
 var DEGRADED_WINDOW_MS = 7 * 24 * 36e5;
 var HINT_WINDOW_MS = 6 * 36e5;
@@ -5910,12 +6036,12 @@ function heldDegraded(now = Date.now(), exclude = []) {
   const map = /* @__PURE__ */ new Map();
   try {
     const dir = identityDir();
-    for (const f of readdirSync2(dir)) {
+    for (const f of readdirSync3(dir)) {
       if (!f.endsWith(".json")) continue;
       const uuid = f.slice(0, -5);
       if (exclude.includes(uuid)) continue;
       try {
-        if (now - statSync4(join7(dir, f)).mtimeMs > DEGRADED_WINDOW_MS) continue;
+        if (now - statSync4(join8(dir, f)).mtimeMs > DEGRADED_WINDOW_MS) continue;
         addHeld(map, readIdentity(uuid), uuid);
       } catch {
       }
@@ -5942,10 +6068,10 @@ function sameNameHint(uuid, name, cwd, now = Date.now()) {
   const twins = [];
   try {
     const dir = identityDir();
-    for (const f of readdirSync2(dir)) {
+    for (const f of readdirSync3(dir)) {
       if (!f.endsWith(".json") || f.slice(0, -5) === uuid) continue;
       try {
-        if (Math.abs(now - statSync4(join7(dir, f)).mtimeMs) > HINT_WINDOW_MS) continue;
+        if (Math.abs(now - statSync4(join8(dir, f)).mtimeMs) > HINT_WINDOW_MS) continue;
         const id = readIdentity(f.slice(0, -5));
         if (!id || id.endedAt || !id.name || lc(id.name) !== want) continue;
         if (!id.cwd || normCwd(id.cwd) !== normCwd(cwd)) continue;
@@ -5959,7 +6085,16 @@ function sameNameHint(uuid, name, cwd, now = Date.now()) {
   }
   if (twins.length !== 1) return null;
   const t = twins[0];
-  return `${label(t.uuid, t.name)} in this cwd never ended. If it crashed, run: node scripts/coordination/lane.mjs adopt --from ${t.uuid} once it is quiet 5 min.`;
+  return `${label(t.uuid, t.name)} in this cwd never ended. If it crashed, run: ${laneCliCmd()} adopt --from ${t.uuid} once it is quiet 5 min.`;
+}
+function laneBoardLine(cwd, env = process.env) {
+  try {
+    if (isHeadless(env)) return "";
+    const b = resolveBoard(cwd || process.cwd(), { env });
+    return b ? `lane board: ${b.key}` : "no lane board (unregistered dir)";
+  } catch {
+    return "";
+  }
 }
 
 // src/session-register.ts
@@ -5983,8 +6118,8 @@ function planStart(input) {
 }
 async function registerWithDeadline(sessionId, project, plan) {
   let timer;
-  const deadline = new Promise((resolve) => {
-    timer = setTimeout(() => resolve({ success: false, error: `no answer in ${DB_DEADLINE_MS} ms` }), DB_DEADLINE_MS);
+  const deadline = new Promise((resolve2) => {
+    timer = setTimeout(() => resolve2({ success: false, error: `no answer in ${DB_DEADLINE_MS} ms` }), DB_DEADLINE_MS);
   });
   try {
     return await Promise.race([
@@ -6034,7 +6169,7 @@ function recordStart(input, plan, live) {
 async function main() {
   let input;
   try {
-    const stdinContent = readFileSync5(0, "utf-8");
+    const stdinContent = readFileSync6(0, "utf-8");
     input = JSON.parse(stdinContent);
   } catch {
     console.log(JSON.stringify({ result: "continue" }));
@@ -6082,6 +6217,7 @@ MULTI-SESSION COORDINATION ACTIVE
 
 You are ${me}.
 Project: ${projectName}
+${laneBoardLine(input.cwd)}
 ${hint ? `${hint}
 ` : ""}
 Coordination features:

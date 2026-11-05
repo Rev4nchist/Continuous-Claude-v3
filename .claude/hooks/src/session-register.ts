@@ -15,7 +15,7 @@ import { registerSession, type LiveSession } from './shared/db-utils-pg.js';
 import { resolveSessionId, writeSessionId, canonicalProject } from './shared/session-id.js';
 import { initActivity } from './shared/session-activity.js';
 import { label, readIdentity, resolveName, resolvePrevious, runAdopt, writeIdentity } from './shared/session-identity.js';
-import { autoNameAllowed, chooseName, heldDegraded, heldFromLive, sameNameHint, type HeldMap } from './shared/session-names.js';
+import { autoNameAllowed, chooseName, heldDegraded, heldFromLive, laneBoardLine, sameNameHint, type HeldMap } from './shared/session-names.js';
 import type { SessionStartInput, SessionStartHookOutput } from './shared/types.js';
 
 /** SessionStart and SessionEnd payload fields this hook reads beyond the shared type. */
@@ -204,6 +204,7 @@ MULTI-SESSION COORDINATION ACTIVE
 
 You are ${me}.
 Project: ${projectName}
+${laneBoardLine(input.cwd)}
 ${hint ? `${hint}\n` : ''}
 Coordination features:
 - File edits are tracked to prevent conflicts

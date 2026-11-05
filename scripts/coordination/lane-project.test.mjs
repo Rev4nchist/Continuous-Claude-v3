@@ -182,7 +182,8 @@ describe('board scoping', () => {
     const r = lane(noBoardDir(), SA, ['board']);
     assert.equal(r.code, 1, r.all);
     assert.match(r.err, /no lane board for /);
-    assert.match(r.err, /register it: node .*lane\.mjs project register /);
+    assert.match(r.err, /register it: node \S*\/\.claude\/scripts\/lane\.mjs project register /, 'the hint names the shim, not the primary lane.mjs');
+    assert.doesNotMatch(r.err, /scripts\/coordination\/lane\.mjs/);
     assert.ok(path.isAbsolute(/node (\S+lane\.mjs)/.exec(r.err)[1].replace(/\//g, path.sep)), r.err);
   });
 
@@ -997,7 +998,7 @@ describe('project which / register / unregister', () => {
     assert.match(r.out, /This edits the repo registry in the primary checkout \(an uncommitted change on main\) and the live copy\. The next sync removes the live copy unless the change is committed to main\./);
     const hint = lane(noBoardDir(), SA, ['board'], { CCV3_USER_HOME: fakeHome });
     assert.equal(hint.code, 1, hint.all);
-    assert.ok(hint.err.includes(`${fwd(fakeHome)}/continuous-claude/scripts/coordination/lane.mjs`), hint.err);
+    assert.ok(hint.err.includes(`node ${fwd(fakeHome)}/.claude/scripts/lane.mjs project register `), hint.err);
   });
 
   it('PR 297 F1: a board resolved from a home mirror that differs from the primary repo copy prints one WARNING and still works; equal copies and an explicit LANE_REGISTRY_PATH print none', () => {

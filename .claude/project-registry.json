@@ -163,6 +163,12 @@
       "status": "inactive",
       "sentryProject": "",
       "linearTeam": ""
+    },
+    {
+      "name": "GreyMatter.Design",
+      "key": "greymatter-design",
+      "path": "D:/GreyMatter.Design",
+      "status": "active"
     }
   ]
 }

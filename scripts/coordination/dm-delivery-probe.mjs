@@ -75,12 +75,13 @@ const check = (name, ok, detail = '') => {
 };
 
 /** Invoke the built hook exactly as Claude Code does: JSON on stdin. */
-async function fireHook(event, sessionId) {
-  const child = run(process.execPath, [HOOK], { timeout: 15_000 });
+async function fireHook(event, sessionId, extra = {}, env = process.env) {
+  const child = run(process.execPath, [HOOK], { timeout: 15_000, env });
   child.child.stdin.end(JSON.stringify({
     session_id: sessionId,
     hook_event_name: event,
     tool_name: 'Read',
+    ...extra,
   }));
   const { stdout } = await child;
   return stdout.trim();
@@ -181,6 +182,13 @@ async function main() {
         [RECEIVER, b.norm]);
       const body = 'PROBE-XBOARD-DM: shows once';
       const sent = await lane(boards, a.dir, SENDER, ['say', body, '--to', RECEIVER]);
+      // The hook runs in the same env as lane.mjs: this DB, the temp registry. Positive control first, so the silence below is not vacuous.
+      const hookEnv = laneEnv(CONN, boards, {});
+      clearThrottle(RECEIVER);
+      const midBefore = injected(await fireHook('PostToolUse', RECEIVER, {}, hookEnv));
+      check('ONCE-ACROSS-BOARDS (hook): before any read, the mid-turn hook shows the board-A DM',
+        !!midBefore && midBefore.additionalContext.includes(body) && midBefore.additionalContext.includes('[from zz-dmprobe-a]'),
+        midBefore ? '' : 'no injection');
       const readB = await lane(boards, b.dir, RECEIVER, ['inbox', '--json']);
       const readA = await lane(boards, a.dir, RECEIVER, ['inbox', '--json']);
       // A read that failed or returned junk is null, never []: an empty A read proves "absent" only when it ran.
@@ -190,6 +198,16 @@ async function main() {
       check('ONCE-ACROSS-BOARDS: a DM from board A shows once across a read on B then on A',
         sent.code === 0 && !!inB && !!inA && inB.length === 1 && inB[0].project_key === a.key && inA.length === 0,
         `say exit ${sent.code}; read on B exit ${readB.code} saw ${inB ? inB.length : 'invalid output'}, read on A exit ${readA.code} saw ${inA ? inA.length : 'invalid output'} (want 1 then 0)${sent.code ? `: ${sent.err.trim().split(/\r?\n/)[0]}` : ''}`);
+      // Hook path (T4): the read on B wrote `<id>@zz-dmprobe-b`. The hook must take the highest of the bare row and every `<id>@<board>` row.
+      clearThrottle(RECEIVER);
+      const midAfter = injected(await fireHook('PostToolUse', RECEIVER, {}, hookEnv));
+      check('ONCE-ACROSS-BOARDS (hook, mid-turn): after the read on B the hook does not show the DM again',
+        !midAfter || !midAfter.additionalContext.includes(body),
+        midAfter ? 'the DM was shown again' : '');
+      const promptA = injected(await fireHook('UserPromptSubmit', RECEIVER, { cwd: a.dir }, hookEnv));
+      check('ONCE-ACROSS-BOARDS (hook, prompt): the prompt hook on board A does not show the DM again',
+        !promptA || !promptA.additionalContext.includes(body),
+        promptA ? 'the DM was shown again' : '');
     }
   } finally {
     await c.query('DELETE FROM agentic_os.lane_event WHERE session_id=$1', [SENDER]).catch(() => {});

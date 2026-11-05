@@ -214,6 +214,19 @@
       ]
     },
     {
+      "id": "lane-board",
+      "files": [
+        "lane-board.md"
+      ],
+      "mode": "inject",
+      "segment": [
+        "^node(\\.exe)?\\s+\\S*lane\\.mjs\\b"
+      ],
+      "skill": [
+        "^kanban-sync$"
+      ]
+    },
+    {
       "id": "headless-claude",
       "files": [
         "headless-claude-mcp.md"

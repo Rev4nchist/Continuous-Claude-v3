@@ -44,18 +44,21 @@ export type { ViewId } from './NavTabs';
 const BASE_ENDPOINT = '/api/mission-control';
 
 /** The one endpoint. The Board is asked for only while the Board tab is active. */
-function endpointFor(view: ViewId, session: string | null): string {
+function endpointFor(view: ViewId, session: string | null, project: string | null): string {
   const params = new URLSearchParams();
   if (view === 'board') params.set('view', 'board');
+  // Without the board key every poll would fall back to the default board.
+  if (view === 'board' && project !== null) params.set('project', project);
   if (session !== null) params.set('session', session);
   const query = params.toString();
   return query === '' ? BASE_ENDPOINT : `${BASE_ENDPOINT}?${query}`;
 }
 
 /** Mirror the view and the selection in the address bar. replaceState: no navigation, no history entry. */
-function mirrorUrl(view: ViewId, session: string | null): void {
+function mirrorUrl(view: ViewId, session: string | null, project: string | null): void {
   const params = new URLSearchParams();
   if (view !== 'overview') params.set('view', view);
+  if (project !== null) params.set('project', project);
   if (session !== null) params.set('session', session);
   const query = params.toString();
   window.history.replaceState(window.history.state, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
@@ -65,10 +68,13 @@ export function MissionControl({
   initial,
   initialView = 'overview',
   initialSession = null,
+  initialProject = null,
 }: {
   initial: MissionControlSnapshot;
   initialView?: ViewId;
   initialSession?: string | null;
+  /** The board key from `?project=`; null is the default board (continuous-claude). It does not change on the page. */
+  initialProject?: string | null;
 }) {
   // The view and the selected session live here and nowhere else. The endpoint carries the
   // selection, so the next poll brings the detail of that session.
@@ -77,7 +83,7 @@ export function MissionControl({
 
   const { data, status, error, ageMs, consecutiveFailures, refresh } =
     useLiveData<MissionControlSnapshot>({
-      endpoint: endpointFor(view, selected),
+      endpoint: endpointFor(view, selected, initialProject),
       initialData: initial,
     });
 
@@ -119,7 +125,7 @@ export function MissionControl({
   const changeView = (next: ViewId) => {
     handledFocus.current = focusRequest; // a tab switch is not a choice: drop a pending request
     setView(next);
-    mirrorUrl(next, selected);
+    mirrorUrl(next, selected, initialProject);
   };
   const choose = (id: string | null, nextView: ViewId = view) => {
     // A close drops a pending request.
@@ -127,7 +133,7 @@ export function MissionControl({
     else handledFocus.current = focusRequest;
     setSelected(id);
     setView(nextView);
-    mirrorUrl(nextView, id);
+    mirrorUrl(nextView, id, initialProject);
   };
   const toggleSession = (id: string) => choose(selected === id ? null : id);
   const closePanel = () => choose(null);

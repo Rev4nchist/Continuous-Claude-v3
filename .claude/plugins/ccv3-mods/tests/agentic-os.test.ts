@@ -387,6 +387,16 @@ describe('agentic-os git info', () => {
 // B-4 the compactions atom is not read: a lost-plan record does not show in WATCH or in the timeline
 // B-5 the files atom is not read: no overlap mark, whatever the peer scope says
 // B-6 a board read that returns the old array shape replaces the board with nothing
+// Per-project lane boards (2026-11-04): the board follows the session's folder, not the CCv3 checkout.
+//   - refreshLanes passes cwd = `await $.session.cwd()` to $.process.run explicitly (the engine default is the session's cwd; this pins it after a cd).
+//     The script stays the absolute primary path <home>/continuous-claude/scripts/coordination/lane.mjs.
+//   - Exit 1 with "no lane board for" in stderr (lane.mjs projectOf: the folder is not registered) writes the state 'no-board': the board atom is cleared,
+//     the lanes atom is emptied, and the Work tab says "no lane board (unregistered dir)". Any other failure still keeps the last good board (B-3).
+//   - A good read after that (a cd back to a registered folder) clears the state and draws the lanes again.
+// P-1 the spawn has no cwd, or a cwd other than the session's, or reads the script from the session folder
+// P-2 a no-board answer keeps the old board on screen, or reads as "lane board not read" / "no lane held"
+// P-3 any other exit 1 (a dead database) is taken for no-board and wipes the board
+// P-4 the no-board state sticks after a good read
 
 const OS_RUN = { command: 'os', args: '', origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 160 } }
 const PEER_ID = 'bbbbbbbb-2222-4000-8000-000000000002'
@@ -403,10 +413,21 @@ const BOARD_JSON = JSON.stringify({
   me: 'test-session',
 })
 
-type Board = { argv: string[][]; timeouts: (number | undefined)[]; stdout: string; exitCode: number; lanes: unknown[][]; board: unknown[][] }
+type Board = {
+  argv: string[][]
+  timeouts: (number | undefined)[]
+  cwds: (string | undefined)[]
+  stdout: string
+  stderr: string
+  cwd: string
+  exitCode: number
+  lanes: unknown[][]
+  board: unknown[][]
+  boardState: unknown[]
+}
 
 const boardWorld = (on: On, over: { seed?: Record<string, unknown> } = {}) => {
-  const seen: Board = { argv: [], timeouts: [], stdout: BOARD_JSON, exitCode: 0, lanes: [], board: [] }
+  const seen: Board = { argv: [], timeouts: [], cwds: [], stdout: BOARD_JSON, stderr: '', cwd: 'C:/work/repo', exitCode: 0, lanes: [], board: [], boardState: [] }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/home' })
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
@@ -415,14 +436,20 @@ const boardWorld = (on: On, over: { seed?: Record<string, unknown> } = {}) => {
   on('fs.write', () => ({ value: undefined }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'test-session' }))
+  on('session.cwd', () => ({ value: seen.cwd }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('tool.register', (_$, e) => ({ value: { tool: `mcp__ccv3-mods__${e.name}` } }))
   on('agent.list', () => ({ value: [] }))
   on('process.run', (_$, e) => {
     seen.argv.push([...e.argv])
     seen.timeouts.push(e.init?.timeoutMs)
-    return { value: { exitCode: seen.exitCode, stdout: seen.exitCode === 0 ? seen.stdout : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    seen.cwds.push(e.init?.cwd)
+    return { value: { exitCode: seen.exitCode, stdout: seen.exitCode === 0 ? seen.stdout : '', stderr: seen.exitCode === 0 ? '' : seen.stderr, isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  on('state.set', { plugin: 'ccv3-mods', key: 'boardState' } as never, ((_$: unknown, e: { value: unknown }, next: (e: unknown) => unknown) => {
+    seen.boardState.push(e.value)
+    return next(e)
+  }) as never)
   on('state.set', { plugin: 'ccv3-mods', key: 'lanes' } as never, ((_$: unknown, e: { value: unknown[] }, next: (e: unknown) => unknown) => {
     seen.lanes.push(e.value)
     return next(e)
@@ -514,6 +541,89 @@ describe('agentic-os lane board read', () => {
     expect(text).toContain('Another session holds lane api-core')
     expect(text).toContain('as of 10m ago')
     expect(text).not.toContain('lane board not read')
+  })
+
+  test('P-1 the spawn carries the session folder as cwd, and the script is still the absolute primary path', async ($, on) => {
+    const { seen, boards, settle } = boardWorld(on)
+    seen.cwd = 'D:/GreyMatter.Design/app'
+    await $.command.run(OS_RUN)
+    await settle()
+    expect(boards().length).toBeGreaterThanOrEqual(1)
+    const reads = seen.argv.flatMap((argv, i) => (argv.includes('board') ? [i] : []))
+    for (const i of reads) {
+      expect(seen.cwds[i]).toBe('D:/GreyMatter.Design/app')
+      expect(seen.argv[i]?.[1]).toMatch(/^C:\/home\/continuous-claude\/scripts\/coordination\/lane\.mjs$/)
+    }
+  })
+
+  test('P-1 after a cd the next read carries the new folder', async ($, on) => {
+    const { seen, settle, advance } = boardWorld(on)
+    await $.command.run(OS_RUN)
+    await settle()
+    seen.cwd = 'C:/elsewhere'
+    await advance(60_000)
+    await $.command.run(OS_RUN)
+    await settle()
+    const last = seen.argv.map((argv, i) => (argv.includes('board') ? i : -1)).filter(i => i >= 0).at(-1) as number
+    expect(seen.cwds[last]).toBe('C:/elsewhere')
+  })
+
+  test('P-2 exit 1 with "no lane board for" clears the old board and the Work tab says "no lane board (unregistered dir)"', async ($, on) => {
+    const { seen, settle, advance } = boardWorld(on)
+    await $.command.run(OS_RUN)
+    await settle()
+    expect(await tabText($, 'work')).toContain('You hold lane os-redesign: The pane')
+    seen.exitCode = 1
+    seen.stderr = 'no lane board for C:/Users/dkhay/scratch; register it: node C:/Users/dkhay/.claude/scripts/lane.mjs project register C:/Users/dkhay/scratch\n'
+    await advance(60_000)
+    await $.command.run(OS_RUN)
+    await settle()
+    expect(seen.board.at(-1)).toBeNull()
+    expect(seen.lanes.at(-1)).toEqual([])
+    expect(seen.boardState.at(-1)).toBe('no-board')
+    const text = await tabText($, 'work')
+    expect(text).toContain('no lane board (unregistered dir)')
+    expect(text).not.toContain('os-redesign')
+    expect(text).not.toContain('api-core')
+    expect(text).not.toContain('lane board not read')
+    expect(text).not.toContain('no lane held')
+  })
+
+  test('P-3 any other exit 1 (no "no lane board for" in stderr) keeps the last good board', async ($, on) => {
+    const { seen, settle, advance } = boardWorld(on)
+    await $.command.run(OS_RUN)
+    await settle()
+    const writes = seen.board.length
+    const stateWrites = seen.boardState.length
+    for (const stderr of ['connect ECONNREFUSED 127.0.0.1:5432\n', 'lane.mjs needs a live hook: lane.client_version\n', '']) {
+      seen.exitCode = 1
+      seen.stderr = stderr
+      await advance(60_000)
+      await $.command.run(OS_RUN)
+      await settle()
+    }
+    expect(seen.board).toHaveLength(writes)
+    expect(seen.boardState).toHaveLength(stateWrites)
+    const text = await tabText($, 'work')
+    expect(text).toContain('You hold lane os-redesign: The pane')
+    expect(text).not.toContain('unregistered dir')
+  })
+
+  test('P-4 a good read after no-board draws the lanes again and clears the state', async ($, on) => {
+    const { seen, settle, advance } = boardWorld(on)
+    seen.exitCode = 1
+    seen.stderr = 'no lane board for C:/scratch; register it: node x project register C:/scratch\n'
+    await $.command.run(OS_RUN)
+    await settle()
+    expect(await tabText($, 'work')).toContain('no lane board (unregistered dir)')
+    seen.exitCode = 0
+    await advance(60_000)
+    await $.command.run(OS_RUN)
+    await settle()
+    expect(seen.boardState.at(-1)).toBeNull()
+    const text = await tabText($, 'work')
+    expect(text).toContain('You hold lane os-redesign: The pane')
+    expect(text).not.toContain('unregistered dir')
   })
 
   test('B-6 a board read in the old array shape, or garbage, keeps the last good board too', async ($, on) => {

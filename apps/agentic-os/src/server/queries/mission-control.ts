@@ -12,7 +12,7 @@ import {
   type SessionCard,
 } from '@/server/queries/fleet-sessions';
 import { stateFilesSource } from '@/server/queries/fleet-join';
-import { getLaneBoard, type LaneBoard } from '@/server/queries/lane-board';
+import { DEFAULT_BOARD, getLaneBoard, type LaneBoard } from '@/server/queries/lane-board';
 import { getFleetOverview, type FleetOverview } from '@/server/queries/projects';
 import {
   getSessionDetail,
@@ -59,6 +59,20 @@ export type ViewName = (typeof VIEW_IDS)[number];
 export function parseViewName(value: unknown): ViewName | null {
   const first = Array.isArray(value) ? value[0] : value;
   return VIEW_IDS.find((view) => view === first) ?? null;
+}
+
+const PROJECT_KEY_FORMAT = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * A board key from a query string (`?project=<key>`), checked against the registry key format.
+ * Absent (null, undefined, empty array) -> `{ ok: true, key: null }`: the caller uses the default board.
+ * Present but malformed (or over 64 characters) -> `{ ok: false }`: the API answers 400, the page uses the default board.
+ */
+export function parseProjectKey(value: unknown): { ok: true; key: string | null } | { ok: false } {
+  const first = Array.isArray(value) ? value[0] : value;
+  if (first === undefined || first === null) return { ok: true, key: null };
+  if (typeof first !== 'string' || first.length > 64 || !PROJECT_KEY_FORMAT.test(first)) return { ok: false };
+  return { ok: true, key: first };
 }
 
 export type MissionControlSnapshot = {
@@ -122,10 +136,13 @@ function laneSource(
 /**
  * `sessionId` must already pass parseSessionId(); the caller validates it.
  * `withBoard` is true only for a request that carries `view=board`.
+ * `project` is the board key for that view; it must already pass parseProjectKey(). Default: continuous-claude.
+ * The active-lane tile (getActiveLaneCount) stays machine-wide: it counts every board.
  */
 export async function getMissionControlSnapshot(
   sessionId: string | null = null,
   withBoard = false,
+  project: string = DEFAULT_BOARD,
 ): Promise<MissionControlSnapshot> {
   const [databaseRaw, fleet, active, files, lanes, heldLanes, board] = await Promise.all([
     checkDatabaseReady(),
@@ -134,7 +151,7 @@ export async function getMissionControlSnapshot(
     settle(readStateFiles),
     settle(getActiveLaneCount),
     settle(getHeldLanes),
-    withBoard ? getLaneBoard() : Promise.resolve(null),
+    withBoard ? getLaneBoard(project) : Promise.resolve(null),
   ]);
 
   const database: MissionControlSnapshot['database'] = databaseRaw.ok

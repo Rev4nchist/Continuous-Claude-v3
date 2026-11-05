@@ -1,5 +1,5 @@
 import { MissionControl } from '@/components/fleet/MissionControl';
-import { getMissionControlSnapshot, parseViewName } from '@/server/queries/mission-control';
+import { getMissionControlSnapshot, parseProjectKey, parseViewName } from '@/server/queries/mission-control';
 import { parseSessionId } from '@/server/queries/session-detail';
 
 /**
@@ -17,7 +17,8 @@ import { parseSessionId } from '@/server/queries/session-detail';
  *
  * `?view=sessions&session=<id>` selects the view and the session (`overview`, `board`, `sessions`). `searchParams` is a
  * Promise in Next 16. A `view` that is not a known value and a `session` of the wrong
- * format are ignored.
+ * format are ignored. `?project=<key>` picks the Board's lane board; a malformed key shows the default board
+ * (the API answers 400 for it, the page never errors).
  */
 export const dynamic = 'force-dynamic';
 
@@ -29,14 +30,21 @@ export default async function MissionControlPage({
   const params = await searchParams;
   const initialSession = parseSessionId(params.session);
   const initialView = parseViewName(params.view) ?? 'overview';
+  const parsed = parseProjectKey(params.project);
+  const initialProject = parsed.ok ? parsed.key : null;
   // The Board is in the first snapshot only when the page opens on it.
-  const snapshot = await getMissionControlSnapshot(initialSession, initialView === 'board');
+  const snapshot = await getMissionControlSnapshot(
+    initialSession,
+    initialView === 'board',
+    initialProject ?? undefined,
+  );
 
   return (
     <MissionControl
       initial={snapshot}
       initialView={initialView}
       initialSession={initialSession}
+      initialProject={initialProject}
     />
   );
 }
