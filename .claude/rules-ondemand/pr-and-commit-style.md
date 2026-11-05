@@ -51,8 +51,8 @@ GREEN: `<command>` @ <head-sha>
 ~~~
 
 - Pick the type from the table in `pr-review-loop.md` "Proof in the PR body". Name one type.
-- RED: the commit where the check fails. GREEN: the head of the PR. After each push, run the check
-  again and update the GREEN line.
+- RED: the commit where the check fails. GREEN: the head of the PR. After each commit, before pre-pr,
+  run the check again and update the GREEN line.
 - A refactor writes `BEFORE:` in place of `RED:`, with the passing output. A docs PR writes only the
   Proof type line.
 - Each field has a command in backticks, `@`, a commit SHA (7 to 40 hex characters) and a fenced

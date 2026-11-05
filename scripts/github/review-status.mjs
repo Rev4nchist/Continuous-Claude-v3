@@ -807,7 +807,7 @@ function fieldProblems(key, list, type, head, say) {
   if (!ev.command) say(`the ${key} line has no command in backticks`);
   else if (/^<.*>$/.test(ev.command)) say(`the ${key} line has a placeholder command`);
   if (!ev.sha) say(`the ${key} line names no commit (7 to 40 hex characters after @)`);
-  else if (key === 'GREEN' && !shaIsHead(ev.sha, head)) say(`GREEN names commit ${ev.sha.slice(0, 7)}, not the head ${String(head).slice(0, 7)}. Run the check on the head and update the GREEN line`);
+  else if (key === 'GREEN' && !shaIsHead(ev.sha, head)) say(`GREEN names commit ${ev.sha}, not the head ${String(head).slice(0, Math.max(7, ev.sha.length))}. Run the check on the head and update the GREEN line`);
   if (ev.output === null) say(`the ${key} line has no fenced output block under it`);
   else if (ev.output.trim() === '') say(`the ${key} output block is empty`);
   else if (/^<[^>]*>$/.test(ev.output.trim())) say(`the ${key} output block is a placeholder`);

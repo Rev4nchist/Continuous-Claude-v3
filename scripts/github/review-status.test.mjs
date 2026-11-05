@@ -1907,6 +1907,15 @@ test('proof: every proof reason starts with the prefix and matches none of the p
   }
 });
 
+test('proof: a GREEN sha with a typo past the 7th character shows as written, and the head at the same length (RC10)', () => {
+  // Breaks when: the message cuts both shas to 7 characters, so "c9866d2, not the head c9866d2" hides which character is wrong.
+  const typo = `${HEAD.slice(0, 11)}b${HEAD.slice(12, 20)}`;
+  const reasons = proofReasons(check(proof(typo)));
+  assert.ok(reasons.some((x) => x.includes(`GREEN names commit ${typo}, not the head ${HEAD.slice(0, 20)}.`)), reasons.join(' | '));
+  const short = proofReasons(check(proof(OLD.slice(0, 7))));
+  assert.ok(short.some((x) => x.includes(`GREEN names commit ${OLD.slice(0, 7)}, not the head ${HEAD.slice(0, 7)}.`)), short.join(' | '));
+});
+
 test('proof: a null PR body is "missing", never a throw', () => {
   assert.deepEqual(RS.parseProof(null).types, []);
   assert.deepEqual(RS.parseProof(undefined).types, []);

@@ -1,0 +1,17 @@
+#!/bin/sh
+# pre-merge-commit: runs after a clean (conflict-free) merge, before the merge commit is made.
+# git runs pre-commit only for a commit you make yourself, so a clean merge of two branches that
+# are each under the always-loaded budget skipped the budget check (PR #303, 25172 of 25000).
+# The merged tree is in the index here, so the staged check reads exactly the merge result.
+# A conflicted merge is finished with `git commit`, and pre-commit covers that.
+# Opt-in: the repo-local core.hooksPath .githooks (see .githooks/README.md). Bypass: git merge --no-verify (humans only).
+# SKIP_RATCHETS=1 skips it, as it skips the ratchets in scripts/precommit-build-guard.sh.
+[ "${SKIP_RATCHETS:-0}" = "1" ] && exit 0
+command -v node >/dev/null 2>&1 || exit 0
+R="$(git rev-parse --show-toplevel)"
+[ -f "$R/scripts/rules/context-budget-guard.mjs" ] || exit 0
+node "$R/scripts/rules/context-budget-guard.mjs" --repo --staged || {
+  echo "pre-merge-commit: the merged tree is over the always-loaded budget. The merge is not committed." >&2
+  echo "  Trim text (see scripts/rules/context-budget-guard.mjs output), then run: git commit" >&2
+  exit 1
+}

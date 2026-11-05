@@ -48,7 +48,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1316,7 +1316,7 @@ test('R1: a full pass writes a stamp (head, branch, at, body hash, results), the
   assert.ok(stamp.results.every((x) => x.status !== 'FAIL'));
   const log = readFileSync(result.logPath, 'utf8');
   assert.match(log, /PASS/);
-  assert.match(path.basename(result.logPath), new RegExp(`^2026-10-27-pre-pr-${repo.head.slice(0, 7)}\\.log$`));
+  assert.match(path.basename(result.logPath), new RegExp(`^2026-10-27-pre-pr-${repo.head.slice(0, 7)}-\\d{6}\\.log$`));
   assert.equal(git(repo.dir, 'status', '--porcelain'), '', 'the stamp, counter and logs are ignored');
   // Every line is one PASS / FAIL / SKIP / NOTE line.
   assert.ok(result.lines.every((l) => /^(PASS|FAIL|SKIP|NOTE)\s|^\s/.test(l)), result.lines.join('\n'));
@@ -1578,7 +1578,7 @@ test('RR8: npm and npx run through node and npm\'s own CLI script, never a shell
 test('RR7: the behind FAIL says to merge the base in, and that a rebase starts a new CodeRabbit CLI run count', () => {
   const r = checkGit(fakeGit({ ...GOOD, 'rev-list --count HEAD..main': '3\n' }), 'main');
   assert.equal(r[2].status, 'FAIL');
-  assert.match(r[2].detail, /merge main in/);
+  assert.match(r[2].detail, /git merge fork\/main/);
   assert.doesNotMatch(r[2].detail, /merge or rebase/);
   assert.match(r[2].detail, /rebase .*new CodeRabbit CLI run count/);
 });
@@ -2031,7 +2031,7 @@ test('OSV-PP2: with the default lockfile lookup (git ls-files), no tracked lockf
   assert.equal(result.results.some((r) => r.step === 'osv'), false);
   // The lookup does see a tracked lockfile: no binary, so the step is a skip note and nothing starts.
   const locked = makeRepo({ files: { 'package-lock.json': '{}\n' } });
-  const second = await prePr(locked, { osvLockfiles: undefined, findOsv: () => null, osvRun: () => { ran += 1; return {}; } });
+  const second = await prePr(locked, { bodyText: featureBody(locked.head), skipCr: true, osvLockfiles: undefined, findOsv: () => null, osvRun: () => { ran += 1; return {}; } });
   assert.match(second.result.results.find((r) => r.step === 'osv').detail, /^skipped: osv-scanner not found/);
   assert.equal(ran, 0);
 });
@@ -2071,4 +2071,243 @@ test('PSSA-PP2: no .ps1 change means no pssa step and no pwsh run; a missing mod
   const miss = await prePr(repo, { bodyText: harnessBody(repo.head), skipCr: true, findPssa: () => null, pssaRun: () => { throw new Error('must not run'); } });
   assert.equal(miss.result.ok, true, miss.result.lines.join('\n'));
   assert.match(miss.result.results.find((r) => r.step === 'pssa').detail, /^skipped: PSScriptAnalyzer not found/);
+});
+
+// ---------- pre-pr fixes (Dave, 2026-11-04): fail-fast, cheap gates first, CR cap on new code, log per run ----------
+// How each part can fail, and the test that catches it (written before the code):
+//   a git:behind FAIL still runs every gate (no fail-fast)                                  -> FF1
+//   --keep-going no longer runs every gate after a FAIL                                     -> FF2
+//   a cheap gate runs after the costly ones                                                 -> FF3
+//   a failing cheap gate does not stop the costly gates                                     -> FF4
+//   a stale GREEN after a clean merge of main stops the gates (the rewrite needs them);
+//     a stale GREEN that cannot be rewritten does not stop them                             -> FF5, GU1
+//   the behind FAIL does not name the commands                                              -> FF6
+//   a docs-only, merge-only or hand-resolved head is classed wrongly                        -> NC1..NC4
+//   a run on a head with no new code uses a slot; a code head after it is capped            -> CAP1
+//   the old counter file (no newCode field) stops counting                                  -> CAP2
+//   the cap text says coderabbit-cli.md allows 2 per PR                                     -> CAP3
+//   two runs on one head overwrite the first log                                            -> LOG1
+//   the GREEN rewrite note does not say to PATCH an open PR body                            -> GU1b
+
+const commitFile = (repo, name, text, msg = `edit ${name}`) => {
+  mkdirSync(path.dirname(path.join(repo.dir, name)), { recursive: true });
+  writeFileSync(path.join(repo.dir, name), text);
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', msg);
+  return git(repo.dir, 'rev-parse', 'HEAD');
+};
+const forkAhead = (repo) => git(repo.dir, 'update-ref', 'refs/remotes/fork/main', git(repo.dir, 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'ahead'));
+const recordingExec = (runs, failIds = []) => (spec) => {
+  runs.push(spec.id);
+  return failIds.includes(spec.id) ? { status: 1, stdout: 'bad\n# fail 1\n', stderr: '' } : { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' };
+};
+
+test('FF1: by default a git:behind FAIL stops the gates: each is a SKIP line, no gate runs, no stamp, the CLI review is skipped', async () => {
+  const repo = makeRepo();
+  forkAhead(repo);
+  const runs = [];
+  const { result, crCalls } = await prePr(repo, { exec: recordingExec(runs) });
+  assert.equal(result.ok, false);
+  assert.deepEqual(runs, [], 'no gate ran');
+  const behind = result.lines.find((l) => /^FAIL git:behind/.test(l));
+  assert.match(behind, /git fetch fork main.*git merge fork\/main.*pre-pr\.mjs again/, 'the FAIL names the exact commands, in order');
+  assert.ok(result.lines.some((l) => /^SKIP gate:context-budget - not run: .*git:behind/.test(l)), result.lines.join('\n'));
+  assert.match(result.lines.find((l) => /^SKIP coderabbit/.test(l)), /earlier step failed/);
+  assert.doesNotMatch(result.lines.join('\n'), /limited to 2 per branch/);
+  assert.equal(crCalls.length, 0);
+  assert.equal(existsSync(stampFile(repo)), false);
+});
+
+test('FF2: --keep-going (keepGoing) runs every gate after a FAIL, as before', async () => {
+  const repo = makeRepo();
+  forkAhead(repo);
+  const runs = [];
+  const { result } = await prePr(repo, { exec: recordingExec(runs), keepGoing: true });
+  assert.equal(result.ok, false);
+  assert.deepEqual(runs, ['context-budget']);
+  assert.ok(result.lines.some((l) => /^FAIL git:behind/.test(l)));
+  assert.ok(!result.lines.some((l) => /^SKIP gate:/.test(l)), result.lines.join('\n'));
+});
+
+test('FF3: cheap gates come before the costly ones, in every change set', () => {
+  const got = ids(gatesFor(['.claude/hooks/src/a.ts', '.claude/rules-src/a.md', '.claude/skills/x/SKILL.md', '.claude/agents/a.md', 'scripts/github/x.mjs']));
+  const cheap = ['context-budget', 'ondemand-index', 'audit-skills', 'agent-model-drift', 'agent-body'];
+  for (const id of cheap) assert.ok(got.includes(id), id);
+  const lastCheap = Math.max(...cheap.map((id) => got.indexOf(id)));
+  const firstCostly = Math.min(...got.map((id, i) => (cheap.includes(id) ? Infinity : i)));
+  assert.ok(lastCheap < firstCostly, got.join(' '));
+});
+
+test('FF4: a failing cheap gate stops the costly gates; each is a SKIP line that names the gate that failed', async () => {
+  const repo = makeRepo({ files: { '.claude/hooks/src/a.ts': 'export {};\n' } });
+  const runs = [];
+  const { result } = await prePr(repo, { bodyText: featureBody(repo.head), skipCr: true, exec: recordingExec(runs, ['context-budget']) });
+  assert.equal(result.ok, false);
+  assert.deepEqual(runs, ['context-budget'], 'only the cheap gate ran');
+  assert.ok(result.lines.some((l) => /^FAIL gate:context-budget/.test(l)));
+  assert.ok(result.lines.some((l) => /^SKIP gate:hooks-vitest - not run: .*gate:context-budget/.test(l)), result.lines.join('\n'));
+});
+
+test('FF5: a stale GREEN that cannot be rewritten stops the gates; one a clean merge of main made still runs them', async () => {
+  const repo = mergedRepo();
+  const orphan = git(repo.dir, 'commit-tree', 'HEAD^{tree}', '-m', 'orphan');
+  const runs = [];
+  const stop = await runWithBodyFile(repo, greenBody({ green: orphan }), { exec: recordingExec(runs) });
+  assert.equal(stop.result.ok, false);
+  assert.deepEqual(runs, [], 'GREEN names a commit outside the branch: no rewrite is possible, so no gate runs');
+  const again = [];
+  const go = await runWithBodyFile(repo, greenBody({ green: repo.old }), { exec: recordingExec(again) });
+  assert.equal(go.result.ok, true, go.result.lines.join('\n'));
+  assert.deepEqual(again, ['context-budget'], 'the rewrite needs the gates');
+});
+
+test('GU1b: the GREEN rewrite note says the local file changed and an open PR body needs a PATCH', async () => {
+  const repo = mergedRepo();
+  const { result } = await runWithBodyFile(repo, greenBody({ green: repo.old }));
+  const note = result.results.find((r) => r.step === 'evidence:green');
+  assert.match(note.detail, /GREEN updated/);
+  assert.match(note.detail, /PATCH the PR body/);
+});
+
+test('NC1: a path is not code when it is docs, evidence, a PR body or a test snapshot; rules, scripts and tests are code', () => {
+  for (const p of ['docs/a.md', 'README.md', '.claudedocs/x.json', '.claudedocs/n/y.md', '.claudedocs/p.html', '.claudedocs/q.csv', '.claudedocs/r.txt', '.claude/cache/e2e/a.log', 'tests/__snapshots__/a.snap', 'src/b.test.ts.snap', 'pr-body-297.txt', 'x/pr-body.txt']) {
+    assert.equal(PRE.isNonCodePath(p, CONFIG), true, p);
+  }
+  for (const p of ['scripts/a.mjs', '.claude/rules-ondemand/pr-review-loop.md', '.claude/hooks/src/a.ts', 'src/a.test.ts', 'CLAUDE.md', '.github/workflows/x.yml', 'src/pr-body.ts', '.claudedocs/y.sql', '.claudedocs/z.mjs', '.claudedocs/n/w.py']) {
+    assert.equal(PRE.isNonCodePath(p, CONFIG), false, p);
+  }
+});
+
+test('NC2: carriesNewCode reads the own commits since the last reviewed head: docs only is false, a code file is true', () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const g = makeGit(repo.dir);
+  const reviewed = repo.head;
+  const docsHead = commitFile(repo, 'docs/b.md', 'b\n');
+  assert.equal(PRE.carriesNewCode(g, 'main', reviewed, docsHead, CONFIG), false);
+  const codeHead = commitFile(repo, 'misc/y.dat', 'y\n');
+  assert.equal(PRE.carriesNewCode(g, 'main', reviewed, codeHead, CONFIG), true);
+  assert.equal(PRE.carriesNewCode(g, 'main', docsHead, codeHead, CONFIG), true);
+  assert.equal(PRE.carriesNewCode(g, 'main', codeHead, codeHead, CONFIG), false, 'same head: nothing new');
+});
+
+test('NC3: a clean merge of main that brings code is not new code; an own commit after it still is', () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const g = makeGit(repo.dir);
+  const reviewed = repo.head;
+  git(repo.dir, 'checkout', '-q', 'main');
+  commitFile(repo, 'scripts/from-main.mjs', 'export {};\n');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  git(repo.dir, 'merge', '-q', '--no-edit', 'main');
+  const merged = git(repo.dir, 'rev-parse', 'HEAD');
+  assert.equal(PRE.carriesNewCode(g, 'main', reviewed, merged, CONFIG), false);
+  const own = commitFile(repo, 'misc/z.dat', 'z\n');
+  assert.equal(PRE.carriesNewCode(g, 'main', reviewed, own, CONFIG), true);
+});
+
+test('NC4: a hand-edited merge, an unknown sha and a non-git folder count as new code (never a free run on a guess)', () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const g = makeGit(repo.dir);
+  const reviewed = repo.head;
+  git(repo.dir, 'checkout', '-q', 'main');
+  commitFile(repo, 'later.md', 'later\n');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  git(repo.dir, 'merge', '-q', '--no-commit', '--no-ff', 'main');
+  writeFileSync(path.join(repo.dir, 'misc', 'evil.dat'), 'smuggled\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'merge with an edit of its own');
+  const evil = git(repo.dir, 'rev-parse', 'HEAD');
+  assert.equal(PRE.carriesNewCode(g, 'main', reviewed, evil, CONFIG), true);
+  assert.equal(PRE.carriesNewCode(g, 'main', '1'.repeat(40), evil, CONFIG), true);
+  assert.equal(PRE.carriesNewCode(makeGit(mkdtempSync(path.join(os.tmpdir(), 'prepr-nogit-'))), 'main', reviewed, evil, CONFIG), true);
+});
+
+test('NC5: a code file moved to a docs path still counts as code (the old path is listed)', () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const g = makeGit(repo.dir);
+  const reviewed = repo.head;
+  mkdirSync(path.join(repo.dir, 'docs'), { recursive: true });
+  git(repo.dir, 'mv', 'misc/x.dat', 'docs/x.md');
+  git(repo.dir, 'commit', '-q', '-m', 'move code into docs');
+  assert.equal(PRE.carriesNewCode(g, 'main', reviewed, git(repo.dir, 'rev-parse', 'HEAD'), CONFIG), true);
+});
+
+test('CAP1: a head with only docs changes reuses the saved review of the last reviewed head: no runner call, no slot; a code head is reviewed; the next code head is capped', async () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const f = crFixture();
+  const run = (head) => runCodeRabbit({ root: repo.dir, branch: 'feat/x', head, base: 'main', now: f.now, runner: f.runner, config: CONFIG, ledgerPath: f.ledgerPath });
+  assert.equal((await run(repo.head)).status, 'PASS');
+  const docs = commitFile(repo, 'docs/b.md', 'b\n');
+  const reused = await run(docs);
+  assert.equal(reused.status, 'PASS');
+  assert.match(reused.detail, new RegExp(`reused the saved CLI output for ${repo.head.slice(0, 7)}.*no new code`));
+  assert.equal(f.calls.length, 1, 'no cr call for the docs head');
+  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 1, 'and no counter row');
+  const code = commitFile(repo, 'misc/y.dat', 'y\n');
+  const second = await run(code);
+  assert.equal(second.status, 'PASS', `${second.status} ${second.detail}`);
+  assert.equal(f.calls.length, 2);
+  const capped = await run(commitFile(repo, 'misc/w.dat', 'w\n'));
+  assert.equal(capped.skipReason, 'cap', 'two runs with new code are used');
+  assert.doesNotMatch(capped.detail, /allows \d+ per PR/);
+  assert.match(capped.detail, /pre-pr\.mjs.*new code/);
+  assert.equal(f.calls.length, 2);
+});
+
+test('CAP4: with no saved review file, a docs-only head runs the CLI but uses no slot, so a later code head is still reviewed', async () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const f = crFixture();
+  const run = (head) => runCodeRabbit({ root: repo.dir, branch: 'feat/x', head, base: 'main', now: f.now, runner: f.runner, config: CONFIG, ledgerPath: f.ledgerPath });
+  assert.equal((await run(repo.head)).status, 'PASS');
+  const e2e = path.join(repo.dir, '.claude', 'cache', 'e2e');
+  for (const n of readdirSync(e2e)) if (/pre-pr-cr-/.test(n)) unlinkSync(path.join(e2e, n));
+  const docs = commitFile(repo, 'docs/b.md', 'b\n');
+  assert.equal((await run(docs)).status, 'PASS');
+  assert.equal(f.calls.length, 2, 'the fallback runs the CLI');
+  const code = commitFile(repo, 'misc/y.dat', 'y\n');
+  assert.equal((await run(code)).status, 'PASS');
+  assert.equal(f.calls.length, 3);
+  const rows = JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs;
+  assert.deepEqual(rows.map((r) => r.newCode), [true, false, true]);
+});
+
+test('CAP5: a merge-only head (main brought code, no own commit) reuses the saved review through pre-pr: 0 runner calls, a PASS line that names the reviewed sha, a stamp that is not a skip', async () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const first = await prePr(repo, { bodyText: featureBody(repo.head) });
+  assert.equal(first.result.ok, true, first.result.lines.join('\n'));
+  assert.equal(first.crCalls.length, 1);
+  git(repo.dir, 'checkout', '-q', 'main');
+  commitFile(repo, 'scripts/from-main.mjs', 'export {};\n');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  git(repo.dir, 'merge', '-q', '--no-edit', 'main');
+  const head = git(repo.dir, 'rev-parse', 'HEAD');
+  const second = await prePr(repo, { bodyText: featureBody(head) });
+  assert.equal(second.result.ok, true, second.result.lines.join('\n'));
+  assert.equal(second.crCalls.length, 0, 'no cr review was started');
+  assert.ok(second.result.lines.some((l) => new RegExp(`^PASS coderabbit - reused the saved CLI output for ${repo.head.slice(0, 7)}`).test(l)), second.result.lines.join('\n'));
+  const stamp = JSON.parse(readFileSync(stampFile(repo), 'utf8'));
+  assert.equal(stamp.head, head);
+  assert.equal(stamp.cr_skipped, false);
+});
+
+test('CAP2: a counter row from before this change (no newCode field) counts', async () => {
+  const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+  const f = crFixture();
+  const { counter } = crPaths(repo.dir, 'feat/x');
+  mkdirSync(path.dirname(counter), { recursive: true });
+  writeFileSync(counter, JSON.stringify({ branch: 'feat/x', runs: [{ head: '1'.repeat(40), outcome: 'finished', complete: true }, { head: '2'.repeat(40), outcome: 'finished', complete: true }] }));
+  const r = await runCodeRabbit({ root: repo.dir, branch: 'feat/x', head: repo.head, base: 'main', now: f.now, runner: f.runner, config: CONFIG });
+  assert.equal(r.skipReason, 'cap');
+  assert.equal(f.calls.length, 0);
+});
+
+test('LOG1: two runs on one head on one day keep two logs (the time is in the name)', async () => {
+  const repo = makeRepo();
+  const first = await prePr(repo, { skipCr: true, now: new Date(2026, 10, 4, 10, 0, 0) });
+  writeFileSync(path.join(repo.dir, 'untracked.txt'), 'x');
+  const second = await prePr(repo, { skipCr: true, now: new Date(2026, 10, 4, 10, 5, 7) });
+  assert.notEqual(first.result.logPath, second.result.logPath);
+  assert.ok(existsSync(first.result.logPath) && existsSync(second.result.logPath));
+  assert.match(path.basename(second.result.logPath), new RegExp(`^2026-11-04-pre-pr-${repo.head.slice(0, 7)}-100507\\.log$`));
+  assert.match(readFileSync(first.result.logPath, 'utf8'), /PASS git:clean/);
+  assert.match(readFileSync(second.result.logPath, 'utf8'), /FAIL git:clean/);
 });

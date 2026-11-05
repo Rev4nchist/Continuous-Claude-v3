@@ -7,7 +7,9 @@ alongside Greptile. A CLI or plugin run **never** grants READY.
 ## Run budget and timeouts
 
 - There is no cap of 2 `cr review --agent` runs per PR (Dave, 2026-10-30: use CLI reviews as needed).
-  `pre-pr.mjs` still counts its own runs and stops at 2 per branch. Runs of `scripts/github/cr-fix.mjs`
+  `pre-pr.mjs` still counts its own runs and stops at 2 per branch (a script limit, Dave 2026-11-04). It counts
+  only runs on heads with new code. A run on a head whose own commits since the last reviewed head touch only
+  docs, evidence, the PR body or test snapshots does not count. Runs of `scripts/github/cr-fix.mjs`
   count separately. Run `cr-fix.mjs` after the push of each batch of fix commits (see `pr-review-loop.md`).
 - `coderabbit-guard` is **not registered** (live settings or template) until DW-80 brings a vetted shell
   parser. Its run cap of 2 and its `--use-credits` block do not match this file. Change them before you register it.
