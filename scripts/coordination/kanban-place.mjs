@@ -18,8 +18,11 @@
  *  - An active lane is never in the four columns: it is in `inProgress`.
  *  - A done lane is nowhere.
  *  - A lane the doc does not place goes to the END of its default column:
- *    state ready -> next, anything else -> later. Defaults sort by DB
- *    priority, then by input order.
+ *    state ready -> next, state blocked -> waiting, anything else -> later.
+ *    Defaults sort by DB priority, then by input order. A saved doc always
+ *    wins: a blocked lane the doc puts in later stays in later.
+ *    Blocked <-> waiting is the same pairing kanban-apply.mjs uses when a
+ *    lane moves into or out of the waiting column.
  */
 function placeLanes(doc, lanes) {
   var names = ['now', 'next', 'later', 'waiting'];
@@ -58,7 +61,7 @@ function placeLanes(doc, lanes) {
     var l = open[i].lane;
     if (l.state === 'active') { out.inProgress.push(l.id); continue; }
     if (placed[l.id]) continue;
-    out[l.state === 'ready' ? 'next' : 'later'].push(l.id);
+    out[l.state === 'ready' ? 'next' : l.state === 'blocked' ? 'waiting' : 'later'].push(l.id);
   }
   return out;
 }

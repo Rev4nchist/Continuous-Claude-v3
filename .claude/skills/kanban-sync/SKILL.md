@@ -84,6 +84,7 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
 | Card note | lane note "Dave (kanban): ..." |
 | Card question | lane note "Dave asks (kanban): ..." |
 
+- With no saved order, the page puts a `blocked` lane in Waiting on Dave, a `ready` lane in Next and every other open lane in Later. A saved order always wins. A lane missing from a saved order gets this default. The default changes no state: a `blocked` lane in waiting stays `blocked`.
 - A card applies only while pending: `updatedAt` is later than `syncedAt`, or `syncedAt` is missing. The board columns follow the same rule.
 - An active lane is never changed by a card. The result is `skipped: active` and the card stays pending.
 - A held lane (a live session owns it, same test as `lane.mjs claim`) keeps its state. A card status or a column move gives `skipped: held` and the card stays pending. Notes and questions still apply. Priority still applies.
