@@ -214,6 +214,9 @@ var DESTRUCTIVE_PATTERNS = [
   // `git branch -f main abc123` moves a branch and drops the commits it pointed at (F05).
   // `--forc` and longer (R4): --format shares `--for`.
   { name: "git branch -f (force move)", re: gitFlag("branch", String.raw`(?:-[a-zA-Z]*f[a-zA-Z]*|--${abbrev("force", 4)})\b`) },
+  // `git checkout -B x main` and `git switch -C x main` reset an existing branch the same way (CR 299).
+  // Case-SENSITIVE on the letter: lowercase -b / -c only create a new branch and stay allowed.
+  { name: "git checkout -B / switch -C (force reset a branch)", re: /\bgit\s+(?:checkout\b[^;&|\n]*\s-[a-zA-Z]*B[a-zA-Z]*\b|switch\b[^;&|\n]*\s(?:-[a-zA-Z]*C[a-zA-Z]*\b|--force-c(?:r(?:e(?:a(?:t(?:e)?)?)?)?)?\b))/ },
   { name: "git worktree remove --force", re: /\bgit\s+worktree\s+remove\b[^&|;]*(--force|\s-f\b)/i },
   { name: "git submodule deinit -f", re: /\bgit\s+submodule\s+deinit\b[^&|;]*(--force|\s-f\b)/i },
   // bare `git rebase` rewrites history, but the recovery subcommands UNDO / continue an
