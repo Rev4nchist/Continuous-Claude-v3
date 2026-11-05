@@ -5617,6 +5617,9 @@ function identityPath(uuid) {
 function asString(v) {
   return typeof v === "string" && v ? v : null;
 }
+function asPid(v) {
+  return typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : null;
+}
 function readIdentity(uuid) {
   if (!uuid) return null;
   const file = identityPath(uuid);
@@ -5632,6 +5635,7 @@ function readIdentity(uuid) {
       cwd: asString(o.cwd),
       endedAt: asString(o.endedAt),
       endReason: asString(o.endReason),
+      pid: asPid(o.pid),
       updatedAt: asString(o.updatedAt) ?? ""
     };
   } catch {
