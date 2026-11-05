@@ -181,7 +181,7 @@ test('S9: scripts/rules, skills, agents and ratchets run their own node --test f
   }
 });
 
-test('CO1: a scripts/coordination change runs the same 12 coordination test files as the CI job coordination-db', async () => {
+test('CO1: a scripts/coordination change runs the same coordination test files as the CI job coordination-db', async () => {
   // Breaks when the row goes back to gates: [] (two render-board tests sat red on main, PR 312) or drifts from CI.
   const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
   const start = wf.indexOf('\n  coordination-db:');

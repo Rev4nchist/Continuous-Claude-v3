@@ -106,7 +106,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-path-guard', 'lane-shim', 'probe-boards', 'registry-drift', 'session-label'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-path-guard', 'lane-shim', 'probe-boards', 'registry-drift', 'session-label', 'process-match'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'scratch-db'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
@@ -233,7 +233,7 @@ export const SURFACES = [
   },
   { id: 'sync', globs: ['scripts/sync-to-active*', 'scripts/sync-claude.sh'], gates: [{ id: 'sync-cursor-test', cmd: 'bash', args: ['scripts/sync-to-active-cursor.test.sh'], cwd: '.', timeoutMs: 5 * MIN }] },
   {
-    // The same 12 files as the CI job coordination-db (.github/workflows/ccv3-checks.yml), named one by one: a missing file
+    // The same files as the CI job coordination-db (.github/workflows/ccv3-checks.yml), named one by one: a missing file
     // FAILs, so the gate cannot pass by finding nothing. Test CO1 fails when this list and the CI list differ.
     id: 'coordination',
     // .claude/scripts/lane.mjs is the lane shim; lane-shim.test.mjs tests that file.
