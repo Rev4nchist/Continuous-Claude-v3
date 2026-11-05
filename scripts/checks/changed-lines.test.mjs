@@ -106,3 +106,14 @@ test('C12: a plain section before or after a Git section throws; an added line t
   const plusPlus = ['diff --git a/g.mjs b/g.mjs', '--- a/g.mjs', '+++ b/g.mjs', '@@ -1,1 +1,2 @@', ' keep', '+++ added text', ''].join('\n');
   assert.deepEqual(changedLines(plusPlus), [{ path: 'g.mjs', ranges: [[2, 2]] }]);
 });
+
+// Breaks if a header-only Git section (pure rename, mode change) leaves the section open for a following plain section.
+test('C13: a plain section after a pure rename throws; a rename with content and a --no-index new file still parse', () => {
+  const rename = ['diff --git a/old.mjs b/new.mjs', 'similarity index 100%', 'rename from old.mjs', 'rename to new.mjs'];
+  const plain = ['--- a/plain.mjs', '+++ b/plain.mjs', '@@ -1 +1 @@', '-old', '+new'];
+  assert.throws(() => changedLines([...rename, ...plain, ''].join('\n')), /outside a "diff --git" section/);
+  const renameEdit = ['diff --git a/o.mjs b/n.mjs', 'similarity index 90%', 'rename from o.mjs', 'rename to n.mjs', 'index 1111111..2222222 100644', '--- a/o.mjs', '+++ b/n.mjs', '@@ -1 +1 @@', '-x', '+y', ''].join('\n');
+  assert.deepEqual(changedLines(renameEdit), [{ path: 'n.mjs', ranges: [[1, 1]] }]);
+  const untracked = ['diff --git a/u.mjs b/u.mjs', 'new file mode 100644', 'index 0000000..3333333', '--- /dev/null', '+++ b/u.mjs', '@@ -0,0 +1,2 @@', '+a', '+b', ''].join('\n');
+  assert.deepEqual(changedLines(untracked), [{ path: 'u.mjs', ranges: [[1, 2]] }]);
+});
