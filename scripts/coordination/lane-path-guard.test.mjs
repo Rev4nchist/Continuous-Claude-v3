@@ -43,6 +43,9 @@ test('countBare counts a bare relative path and ignores absolute, home and prima
   assert.equal(countBare('"scripts/coordination/lane.mjs"'), 1);
   assert.equal(countBare('<code>scripts/coordination/lane.mjs</code>'), 1);
   assert.equal(countBare('run ./scripts/coordination/lane.mjs now'), 1);
+  assert.equal(countBare('node ../scripts/coordination/lane.mjs board'), 1);
+  assert.equal(countBare('node ../../scripts/coordination/lane.mjs board'), 1);
+  assert.equal(countBare('node ..\\scripts\\coordination\\lane.mjs board'), 1);
   assert.equal(countBare('scripts\\coordination\\lane.mjs'), 1);
   assert.equal(countBare('node C:/Users/dkhay/continuous-claude/scripts/coordination/lane.mjs board'), 0);
   assert.equal(countBare('node C:\\Users\\dkhay\\continuous-claude\\scripts\\coordination\\lane.mjs board'), 0);

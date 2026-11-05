@@ -35,9 +35,9 @@ const SKIP_DIRS = new Set(['__tests__', 'node_modules', 'dist']);
 /**
  * `scripts/coordination/lane.mjs` with no path character before it. A `/`, `\`, `:`, `~`, word character, `.` or `-` in front
  * means the text names a full path (C:/..., /c/..., ~/..., $HOME/..., <primary>/..., /continuous-claude/...). `./scripts/...` is
- * relative, so a `./` in front is allowed when the dot itself stands alone.
+ * relative, so a run of `./` and `../` in front is allowed when the first dot stands alone.
  */
-const BARE_RE = /(?<![\w.~\-/\\:])(?:\.[\\/])?scripts[\\/]coordination[\\/]lane\.mjs(?![\w-])/g;
+const BARE_RE = /(?<![\w.~\-/\\:])(?:\.{1,2}[\\/])*scripts[\\/]coordination[\\/]lane\.mjs(?![\w-])/g;
 
 /** The number of bare relative lane.mjs paths in `text`. */
 export function countBare(text) {
