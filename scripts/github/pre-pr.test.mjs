@@ -188,10 +188,10 @@ test('CO1: a scripts/coordination change runs the same coordination test files a
   assert.ok(start >= 0, 'the workflow has the coordination-db job');
   const rest = wf.slice(start + 1);
   const next = rest.slice(1).search(/\n  [\w-]+:/);
-  const job = (next < 0 ? rest : rest.slice(0, next + 1)).split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+  const job = (next < 0 ? rest : rest.slice(0, next + 1)).split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n'); // drop YAML and shell comments
   const ci = [...job.matchAll(/scripts\/coordination\/[\w-]+\.test\.mjs/g)].map((m) => m[0]);
   assert.ok(ci.length > 0, 'the CI job lists coordination test files');
-  for (const p of ['scripts/coordination/lane.mjs', 'scripts/coordination/render-board.test.mjs', '.claude/scripts/lane.mjs']) {
+  for (const p of ['scripts/coordination/lane.mjs', 'scripts/coordination/render-board.test.mjs', '.claude/scripts/lane.mjs', 'docker/init-schema.sql', 'apps/agentic-os/drizzle/0004_x.sql']) {
     const got = gatesFor([p], REPO_ROOT).filter((g) => g.id.startsWith('coordination-'));
     assert.deepEqual(got.map((g) => g.id).sort(), ['coordination-db-tests', 'coordination-tests'], p);
     for (const g of got) assert.equal(g.args[0], '--test', g.id);

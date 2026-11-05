@@ -236,8 +236,9 @@ export const SURFACES = [
     // The same files as the CI job coordination-db (.github/workflows/ccv3-checks.yml), named one by one: a missing file
     // FAILs, so the gate cannot pass by finding nothing. Test CO1 fails when this list and the CI list differ.
     id: 'coordination',
-    // .claude/scripts/lane.mjs is the lane shim; lane-shim.test.mjs tests that file.
-    globs: ['scripts/coordination/**', '.claude/scripts/lane.mjs'],
+    // .claude/scripts/lane.mjs is the lane shim; lane-shim.test.mjs tests that file. scratch-db.mjs builds its
+    // throwaway database from docker/init-schema.sql and the apps/agentic-os/drizzle migrations.
+    globs: ['scripts/coordination/**', '.claude/scripts/lane.mjs', 'docker/init-schema.sql', 'apps/agentic-os/drizzle/**'],
     gates: [
       { id: 'coordination-tests', cmd: 'node', args: ['--test', ...COORDINATION_TESTS.map(coordTest)], cwd: '.', timeoutMs: 5 * MIN },
       // These build a throwaway database on local Postgres. Postgres down = FAIL with ECONNREFUSED, never a skip: start it with
