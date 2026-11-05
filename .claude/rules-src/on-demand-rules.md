@@ -1,14 +1,14 @@
 # On-demand rules
 
-These rules are NOT always loaded. They live in `~/.claude/rules-ondemand/`. The `rule-router` hook
+These rules live in `~/.claude/rules-ondemand/`. The `rule-router` hook
 loads each one at the first matching tool call in a session. A **block** rule refuses
-that first call and gives the rule as the reason: read it, then re-issue the call or change course.
+that call and gives the rule as the reason: read it, then re-issue the call or change course.
 An **inject** rule arrives as context and the call runs.
 
-**Read the file yourself before you PLAN work in its area** (before you propose a Grok run, write a
-commit message, design a page, or plan a CMA job). The hook fires at the tool call, too late for a plan.
+**Read the file yourself before you PLAN work in its area** (a Grok run, a commit
+message, a page design, a CMA job). The hook fires at the tool call, too late for a plan.
 
-| Rule file | Area (exact triggers: `manifest.json`) | Mode |
+| Rule file | Area | Mode |
 |---|---|---|
 | `grok-worker-safety.md` | Grok runs | block |
 | `cma-safety.md` | Claude Managed Agents (CMA, `ant`) | block |
@@ -42,4 +42,3 @@ Decisions these rules shape before any tool call:
 - Project paths, ports and commands: read `.claude/project-registry.json` (repo copy is canonical). Detail: `project-registry` skill.
 
 A fired rule not about the call is a false fire: record it at once in `~/.claude/logs/rule-router-false-fires.jsonl`.
-Triggers, logs and the weekly audits: `every-surface-checklist.md` (loads with harness files).

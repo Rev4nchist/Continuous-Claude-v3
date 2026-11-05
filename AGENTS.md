@@ -1,6 +1,5 @@
 # AGENTS.md: continuous-claude (CCv3)
 
-Other agents read this file directly, and Claude Code reads it through `@AGENTS.md` in CLAUDE.md.
 Global policy: CLAUDE.md "Testing standard". This file says what it means in this repo.
 
 ## Testing
@@ -13,9 +12,9 @@ End-to-end check per surface:
 |---|---|---|
 | A hook (`.claude/hooks/src/*.ts`) | `npm run build` in `.claude/hooks`, then pipe a real payload into the built hook: `Get-Content payload.json -Raw \| node .claude/hooks/dist/<hook>.mjs` | the hook's stdout JSON |
 | Sync (`scripts/sync-to-active.sh`) | `bash scripts/sync-to-active-cursor.test.sh` (runs the real script in a temp home) | its PASS/FAIL lines |
-| The harness doctor or a scheduled-task wrapper (`scripts/harness-doctor.mjs`, `.claude/scripts/scheduled/*.bat`) | `npm run test:scripts` (runs the real doctor and the real wrapper through cmd.exe against temp folders) | its pass/fail summary |
+| The harness doctor or a scheduled-task wrapper (`scripts/harness-doctor.mjs`, `.claude/scripts/scheduled/*.bat`) | `npm run test:scripts` (the real doctor and wrapper, through cmd.exe, in temp folders) | its pass/fail summary |
 | Coordination (lanes, claims, leases) | the matching `scripts/coordination/*-probe.mjs` | the probe's output |
-| A rule, skill or agent file | behaviour: after the sync, run a fresh headless session on a prompt the change targets, `claude -p "<prompt>" --output-format json`, and confirm the new behaviour appears (for a skill: that it loads). Then its static ratchet: `node scripts/rules/context-budget-guard.mjs --repo`, `node scripts/skills/audit-skills.mjs`, `node scripts/check-agent-model-drift.mjs .`, `node scripts/agents/check-agent-body.mjs`. For an agent, confirm `"effort":"high"` in the subagent transcript. | the session JSON, plus the ratchet's summary line |
+| A rule, skill or agent file | behaviour: after the sync, run `claude -p "<prompt>" --output-format json` on a prompt the change targets. Confirm the new behaviour appears (a skill: that it loads). Then its static ratchet: `node scripts/rules/context-budget-guard.mjs --repo`, `node scripts/skills/audit-skills.mjs`, `node scripts/check-agent-model-drift.mjs .`, `node scripts/agents/check-agent-body.mjs`. For an agent, confirm `"effort":"high"` in the subagent transcript. | the session JSON, plus the ratchet's summary line |
 | Lane rule or hooks, headless | in a registered folder: `$env:LANE_CONTEXT_HEADLESS='1'; claude -p "<prompt>"` | the output |
 | `apply-registrations.mjs` | dry run; `--apply --only <hook>` after Dave's yes | the output |
 | Any surface, when the registry entry has `e2e` | `node ~/.claude/scripts/verify.mjs` | the `.log` and its `.json` sidecar |
