@@ -20188,10 +20188,47 @@ function stripPrefixes(command) {
 function installSegments(command, tool = "Bash", depth = 0) {
   return installPlans(command, tool, null, depth).map((p) => p.segment);
 }
+var FD_REDIRECT_BASH = /(?:(?:\d+)?>>?&(?:\d+|-)|(?:\d+|&)?>>?[ \t]*\/dev\/null)(?=[\s;|&)]|$)/y;
+var FD_REDIRECT_PWSH = /(?:(?:\d+|\*)?>>?&(?:\d+|-)|(?:\d+|\*)?>>?[ \t]*(?:\/dev\/null|\$null))(?=[\s;|&)]|$)/y;
+function stripFdRedirects(text, tool = "Bash") {
+  const ps = tool === "PowerShell";
+  const re = ps ? FD_REDIRECT_PWSH : FD_REDIRECT_BASH;
+  const esc = ps ? "`" : "\\";
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === esc && quote !== "'") {
+      out += c + (text[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (c === quote) quote = null;
+      out += c;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      out += c;
+      continue;
+    }
+    if (i === 0 || /\s/.test(text[i - 1])) {
+      re.lastIndex = i;
+      const m = re.exec(text);
+      if (m) {
+        i += m[0].length - 1;
+        continue;
+      }
+    }
+    out += c;
+  }
+  return out;
+}
 function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured) {
   const config = configured ?? (indexConfigMarkers(command).length > 0 || persistentConfigMarkers(command, tool).length > 0 || rawConfigMarkers(command).length > 0);
   try {
-    const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
     const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool, config)).map((segment) => ({ segment, cwd, tool }));
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
@@ -20890,7 +20927,7 @@ async function main() {
     return;
   }
   const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(command, payloadCwd)));
+  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd)));
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   const wholeOverride = PS_OVERRIDE.test(command);
   const checked = installs.filter(({ segment }) => !wholeOverride && !checkOverride(segment));
@@ -20953,5 +20990,6 @@ export {
   isPackageInstallCommand,
   parseEcosystem,
   publishDateFromRegistryJson,
+  stripFdRedirects,
   unpinnedPipPackages
 };

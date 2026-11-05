@@ -348,6 +348,40 @@ export function installSegments(command: string, tool = 'Bash', depth = 0): stri
   return installPlans(command, tool, null, depth).map((p) => p.segment);
 }
 
+// A pure file-descriptor redirection, one whole word: N>&M, >&N, N>&- (dup or close), or a redirect
+// to /dev/null ($null in PowerShell). The fd is digits, `*` (PowerShell all streams) or, for `&>`, the `&`.
+// No other target is removed: `2>err.log`, `2>$FD`, `2>&$FD` and `> out.txt` stay and still ask.
+const FD_REDIRECT_BASH = /(?:(?:\d+)?>>?&(?:\d+|-)|(?:\d+|&)?>>?[ \t]*\/dev\/null)(?=[\s;|&)]|$)/y;
+const FD_REDIRECT_PWSH = /(?:(?:\d+|\*)?>>?&(?:\d+|-)|(?:\d+|\*)?>>?[ \t]*(?:\/dev\/null|\$null))(?=[\s;|&)]|$)/y;
+
+/**
+ * Remove pure fd redirections from the executable view before it is split into segments, so the `&`
+ * of `2>&1` does not cut the word and leave `2>` as an install source. Raw-text and fail closed:
+ * a token goes only when it starts a word (after start or whitespace), is outside quotes, and is not
+ * escaped. The escape is `\` in Bash and a backtick in PowerShell. An open quote keeps the rest of the
+ * text. Everything else stays as typed.
+ */
+export function stripFdRedirects(text: string, tool = 'Bash'): string {
+  const ps = tool === 'PowerShell';
+  const re = ps ? FD_REDIRECT_PWSH : FD_REDIRECT_BASH;
+  const esc = ps ? '`' : '\\';
+  let out = '';
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === esc && quote !== "'") { out += c + (text[i + 1] ?? ''); i++; continue; }
+    if (quote) { if (c === quote) quote = null; out += c; continue; }
+    if (c === '"' || c === "'") { quote = c; out += c; continue; }
+    if (i === 0 || /\s/.test(text[i - 1])) {
+      re.lastIndex = i;
+      const m = re.exec(text);
+      if (m) { i += m[0].length - 1; continue; }
+    }
+    out += c;
+  }
+  return out;
+}
+
 /**
  * installSegments, with the folder every segment runs in (`cwd`, from localBinCwd; null: not known).
  * When the whole command sets a registry or index (npm config set registry, export npm_config_registry=),
@@ -356,7 +390,7 @@ export function installSegments(command: string, tool = 'Bash', depth = 0): stri
 export function installPlans(command: string, tool = 'Bash', cwd: string | null = null, depth = 0, configured?: boolean): InstallPlan[] {
   const config = configured ?? (indexConfigMarkers(command).length > 0 || persistentConfigMarkers(command, tool).length > 0 || rawConfigMarkers(command).length > 0);
   try {
-    const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
     const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool, config)).map((segment) => ({ segment, cwd, tool }));
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
@@ -1414,7 +1448,7 @@ async function main() {
   // A desktop-commander shell is chosen at run time, so its text is read as Bash and PowerShell.
   // A desktop-commander shell keeps its own folder, not the session folder: the local-bin skip and the lockfile read cannot use it.
   const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
-  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(command, payloadCwd)));
+  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd)));
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   // F08: the override applies to the segment it prefixes, as a shell env assignment does.
   // A PowerShell `$env:SKIP_PACKAGE_GUARD=1;` first statement sets it for the whole command.
