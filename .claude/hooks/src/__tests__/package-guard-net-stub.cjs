@@ -10,6 +10,10 @@
  *   PIG_STUB_NEXT_HOURS  age of the `next` and `beta` npm dist-tags (default 2400)
  *   PIG_STUB_OSV_MAL     "1": OSV answers every query with one MAL- advisory (default: no advisories)
  *   PIG_STUB_OSV_CRIT    "1": OSV answers every query with one CRITICAL GHSA advisory (wins over PIG_STUB_OSV_MAL)
+ *   PIG_STUB_REGISTRY_MODE   PyPI and npm only, not OSV. An HTTP status ("404", "500", "403", ...) answers that
+ *                        status with a JSON body; "garbage" answers 200 with a body that is not JSON; "timeout"
+ *                        emits the request timeout event; "error" emits a socket error. Default: normal 200.
+ *   PIG_STUB_REGISTRY_ONLY   comma list of substrings (package names): the mode applies only to a URL holding one
  */
 'use strict';
 const https = require('https');
@@ -47,6 +51,16 @@ function hostOf(first) {
   return '';
 }
 
+// The registry knob answers PyPI and npm only, never OSV. With PIG_STUB_REGISTRY_ONLY set, it
+// answers only a URL that contains one of the listed substrings (the package names).
+function registryFault(host) {
+  const mode = process.env.PIG_STUB_REGISTRY_MODE;
+  if (!mode || !(host.includes('pypi.org') || host.includes('registry.npmjs.org'))) return null;
+  const only = (process.env.PIG_STUB_REGISTRY_ONLY || '').split(',').filter(Boolean);
+  if (only.length > 0 && !only.some((n) => host.includes(n))) return null;
+  return mode;
+}
+
 function fakeRequest(args) {
   const host = hostOf(args[0]);
   const cb = args.find((a) => typeof a === 'function');
@@ -55,9 +69,16 @@ function fakeRequest(args) {
   req.destroy = () => {};
   req.setTimeout = () => req;
   const reply = () => setImmediate(() => {
+    const fault = registryFault(host);
+    if (fault === 'timeout') return req.emit('timeout');
+    if (fault === 'error') return req.emit('error', new Error('ECONNREFUSED'));
     const res = new EventEmitter();
+    res.statusCode = 200;
+    let body = JSON.stringify(documentFor(host));
+    if (fault === 'garbage') body = '<html>not json {';
+    else if (fault) { res.statusCode = Number(fault); body = '{"error":"stub"}'; }
     if (cb) cb(res);
-    res.emit('data', Buffer.from(JSON.stringify(documentFor(host))));
+    res.emit('data', Buffer.from(body));
     res.emit('end');
   });
   req.end = reply;
