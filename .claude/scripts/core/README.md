@@ -49,7 +49,7 @@
 - Uses SymPy + Z3 internally
 
 ### Other scripts
-See `ls scripts/` for all available workflows (perplexity, github, nia, etc.)
+See `ls scripts/` for all available workflows (perplexity, github, etc.)
 
 ---
 

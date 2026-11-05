@@ -214,7 +214,6 @@ async def run_pipeline(topic: str, target_dir: str, verbose: bool = False) -> di
     # Import here to avoid circular deps
     from scripts.research_implement_pipeline import (
         PipelineContext,
-        step_research_nia,
         step_find_patterns_ast_grep,
         step_search_morph,
         step_validate_qlty,
@@ -239,9 +238,6 @@ async def run_pipeline(topic: str, target_dir: str, verbose: bool = False) -> di
     # Run steps
     results = []
 
-    r1 = await step_research_nia(ctx)
-    results.append({"step": "nia", "status": r1.status.value, "message": r1.message})
-
     r2 = await step_find_patterns_ast_grep(ctx)
     results.append({"step": "ast_grep", "status": r2.status.value, "message": r2.message})
 
@@ -260,7 +256,6 @@ async def run_pipeline(topic: str, target_dir: str, verbose: bool = False) -> di
         "results": results,
         "errors": ctx.errors,
         "data": {
-            "research_count": len(ctx.research_results) if ctx.research_results else 0,
             "pattern_count": len(ctx.code_patterns),
             "match_count": len(ctx.search_matches),
             "issue_count": len(ctx.quality_issues),

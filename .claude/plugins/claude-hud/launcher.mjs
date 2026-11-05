@@ -39,13 +39,12 @@ const SPELL_MAP = {
   // MCP tools (abbreviated)
   'mcp__serena':   'Legilimens',
   'mcp__github':   'Portus',
-  'mcp__nia':      'Accio Doctrina',
   'mcp__playwright': 'Locomotor',
 };
 
 // One pass over whole tool names, longest first, so 'NotebookEdit' is not read as
 // 'Notebook' + 'Edit' and words inside other names stay as they are. An mcp__ key is a
-// prefix: it also matches 'mcp__nia__search'.
+// prefix: it also matches 'mcp__github__search_code'.
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SPELL_RE = new RegExp(
   '(?<![\\w])(' +

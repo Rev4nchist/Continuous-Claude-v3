@@ -24,7 +24,7 @@ When you run `/help` without arguments, Claude asks what you're trying to accomp
 - **Fix a bug** - Routes to /fix workflow, sleuth agent, debug-agent
 - **Build a feature** - Routes to /build workflow, architect agent, kraken agent
 - **Prove something mathematically** - Routes to /prove skill with Lean 4
-- **Research external docs** - Routes to oracle agent, nia-docs, perplexity
+- **Research external docs** - Routes to oracle agent, perplexity
 - **Configure workspace** - Shows hooks, rules, settings, frontmatter
 
 ### Topic Mode (with argument)

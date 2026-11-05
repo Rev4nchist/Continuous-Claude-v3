@@ -89,7 +89,7 @@ These ensure you preserve state before Claude Code's automatic compaction.
 | "Help me figure out what I need" | `/discovery-interview` |
 | "Done for today" | `create_handoff` (critical) |
 | "Resume where we left off" | `resume_handoff` |
-| "Research auth patterns" | oracle agent + nia/perplexity |
+| "Research auth patterns" | oracle agent + perplexity |
 | "How does this function work?" | tldr-code → call graph, CFG, DFG |
 | "Find all usages of this API" | scout agent + ast-grep |
 | "Run all tests" | `/test` workflow → arbiter |

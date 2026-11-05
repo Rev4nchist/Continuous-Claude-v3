@@ -131,7 +131,7 @@ Machine-verified mathematical proofs using Lean 4 and Mathlib.
 
 **Phase 1: RESEARCH** - Understand if/how this can be formalized
 - Search Mathlib for existing formalizations
-- Find proof strategies using Nia MCP, Perplexity MCP, or WebSearch
+- Find proof strategies using Perplexity MCP or WebSearch
 - Identify obstacles (missing lemmas, required axioms)
 
 **Phase 2: DESIGN** - Build proof structure with sorries
@@ -161,7 +161,6 @@ The workflow uses available tools in priority order:
 | Tool | Best For |
 |------|----------|
 | Mathlib grep/loogle | Existing formalizations |
-| Nia MCP | Library documentation |
 | Perplexity MCP | Proof strategies, papers |
 | WebSearch | General references |
 | WebFetch | Specific paper content |
@@ -345,12 +344,6 @@ mcp__github-search__code --query "authentication typescript"
 mcp__morph__edit --file "src/config.ts" --changes "..."
 ```
 
-**nia** - Documentation search
-```bash
-# Search library docs
-mcp__nia__search --query "React hooks useEffect"
-```
-
 **perplexity** - AI-powered web research
 ```bash
 # Get research summaries
@@ -404,7 +397,6 @@ claude mcp list
 | firecrawl | Web scraping, data extraction |
 | github-search | Cross-repo code search |
 | morph | Bulk file edits |
-| nia | Library documentation lookup |
 | perplexity | Research, proof strategies, current info |
 
 ## Tool Selection Guide
@@ -416,8 +408,8 @@ claude mcp list
 - **Check impact**: `tldr impact`
 
 ### Research
-- **Math proofs**: Nia MCP, then Perplexity MCP, then WebSearch
-- **Library docs**: Nia MCP
+- **Math proofs**: Perplexity MCP, then WebSearch
+- **Library docs**: Context7 MCP
 - **Current events**: Perplexity MCP or WebSearch
 - **Code examples**: GitHub MCP
 

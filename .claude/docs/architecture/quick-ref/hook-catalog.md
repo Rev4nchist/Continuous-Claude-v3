@@ -82,7 +82,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | mcp-activity-tracker | * | Track MCP server tool usage |
 | vercel-deploy-context | Bash | Inject Vercel deployment context after deploy commands |
 | post-edit-diagnostics | Edit\|Write | Run type check and lint after code edits |
-| web-lookup-advisor | WebFetch\|WebSearch | Suggest Nia/context7 before web lookups |
+| web-lookup-advisor | WebFetch\|WebSearch | Suggest context7 before web lookups |
 
 ## PreCompact
 

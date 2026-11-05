@@ -348,7 +348,7 @@ AGENT_ROUTING = {
     r"\b(e2e|end-to-end|acceptance)\b": "atlas",
     r"\b(test|validate|verify|unit|integration)\b": "arbiter",
     # Research
-    r"\b(research|best practices|NIA|learn)\b": "oracle",
+    r"\b(research|best practices|learn)\b": "oracle",
     r"\b(analyze repo|external repo|github)\b": "pathfinder",
     r"\b(find|locate|where|codebase)\b": "scout",
     # Plan (check refactor first, then general plan)

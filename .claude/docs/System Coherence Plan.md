@@ -8,7 +8,7 @@ Continuous Claude (CCv3) is a context-management orchestration system. Its purpo
 - **Hook source confusion**: 5 shared library modules masquerade as orphan hooks; 60 zombie `.mjs` exist without sources; 3 registered hooks have no source (sentry/linear placeholders for future work).
 - **Memory recall noise**: proactive injection scorer is too permissive; recall returns marginally relevant matches and erodes trust in the system's most important capability.
 - **Routing brittleness**: skill activation is keyword-only — semantically equivalent prompts miss the right skill.
-- **Capability overlap**: hooks vs MCPs vs skills sometimes step on each other (e.g., package-install-guard hook vs nia MCP); no written policy exists.
+- **Capability overlap**: hooks vs MCPs vs skills sometimes step on each other (e.g., package-install-guard hook); no written policy exists.
 - **Critical-path blindness**: knowledge tree freshness, Notion bridge integrity, agent/skill composition — none have health signals.
 - **Documentation drift**: `help/SKILL.md` and `wiring/SKILL.md` reference hooks that no longer exist; `create-better-skills` is superseded by `skill-forge`.
 
