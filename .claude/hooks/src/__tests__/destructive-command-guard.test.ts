@@ -295,6 +295,67 @@ describe('parseExecutable — quote-aware segmentation + substitution extraction
   });
 });
 
+// `&>` and `&>>` (stdout and stderr to a file) are one redirect operator in Bash, not a background cut.
+// Before this change the words after the target landed in a segment of their own (`>log zzfresh`).
+describe('parseExecutable: `&>` stays in one segment', () => {
+  it.each([
+    ['npm install &>log zzfresh', ['npm install &>log zzfresh']],
+    ['npm install &> log zzfresh', ['npm install &> log zzfresh']],
+    ['npm install &>>log zzfresh', ['npm install &>>log zzfresh']],
+    ['a &>b & git reset --hard', ['a &>b', 'git reset --hard']],
+    ['a;&>b c', ['a', '&>b c']],
+    ['&>f rm -rf x', ['&>f rm -rf x']],
+    ['x &>', ['x &>']],
+    ['x &>&2', ['x &>', '2']],
+  ])('keeps the redirect with its command: %j', (cmd, want) => {
+    expect(parseExecutable(cmd).segments).toEqual(want);
+  });
+
+  it('puts a blank before a `&>` glued to a word, so the word does not fuse with the target', () => {
+    expect(parseExecutable('npm install&>>log zz').segments).toEqual(['npm install &>>log zz']);
+    expect(parseExecutable('npm install&>log zz').segments).toEqual(['npm install &>log zz']);
+  });
+
+  it.each([
+    ['a 2>&1 b', ['a 2>', '1 b']],
+    ['a >&2', ['a >', '2']],
+    ['a & b', ['a', 'b']],
+    ['a&b', ['a', 'b']],
+    ['a |& b', ['a', 'b']],
+    ['a && b', ['a', 'b']],
+    ['a || b', ['a', 'b']],
+    ['echo "&>"', ['echo "&>"']],
+    ['echo \\&>x', ['echo \\&>x']],
+  ])('regression pin, a separator other than `&>` still cuts: %j', (cmd, want) => {
+    expect(parseExecutable(cmd).segments).toEqual(want);
+  });
+
+  it.each([
+    'a &>b & git reset --hard',
+    'a &>b;git reset --hard',
+    'git reset --hard&>log',
+    'git reset --hard &>log',
+    'git push --force &>log',
+  ])('classifyDestructive still classifies %j', (cmd) => {
+    expect(classifyDestructive(cmd)).not.toBeNull();
+  });
+
+  // The blank check must stay O(1) per `&>`: a regex or a slice on the growing segment is quadratic.
+  // Measured: linear 6 ms, quadratic 1.6 s for 200 KB. The bound is 40x the linear time, 6x under quadratic.
+  it('is linear on a long run of `&>`', () => {
+    const input = 'x&>y'.repeat(50_000);
+    parseExecutable('x&>y'.repeat(100)); // warm up
+    const best = Math.min(
+      ...[0, 1, 2].map(() => {
+        const t0 = performance.now();
+        parseExecutable(input);
+        return performance.now() - t0;
+      }),
+    );
+    expect(best).toBeLessThan(250);
+  });
+});
+
 describe('extractShellWrapperPayloads — only real wrappers at a command position', () => {
   it('extracts the payload of bash -c', () => {
     expect(extractShellWrapperPayloads('bash -c "rm -rf x"')).toEqual(['rm -rf x']);
