@@ -15,8 +15,10 @@
  *
  * One page per board. The board comes from --project <key>, else LANE_PROJECT, else the registry entry that holds the cwd.
  * A cwd with no board exits 1 with the register hint. continuous-claude writes <repo>/lane-board.html (the phone page);
- * every other board writes <repo>/lane-board-<key>.html, read-only, without the kanban script (its save would drop ids
- * the page does not know). The lane, session and event queries are filtered to the board. The file-claim and
+ * every other board writes <repo>/lane-board-<key>.html, read-only. It shows a static Priorities section (the five columns
+ * drawn from lane state and priority) and carries no kanban script and no db: the save is keyed by lane id, and the page
+ * db is one document that only the published continuous-claude artifact can open. The lane, session and event queries are
+ * filtered to the board. The file-claim and
  * coordination_event sections are machine-wide and say so on the page. The page carries a stamp
  * (<meta name="lane-board">: board, template hash, generated time) and a "generated N min ago" badge.
  *
@@ -59,7 +61,8 @@ if (!BOARD) {
   process.exit(1);
 }
 const KEY = BOARD.key;
-/** Only the default board has the phone page and its kanban (the kanban save is keyed by lane id and the page db is one document). */
+/** Only the default board has the interactive kanban (its save is keyed by lane id and the page db is one document that only
+ *  the published continuous-claude artifact can open). Every other board gets a static, read-only Priorities section. */
 const KANBAN = KEY === DEFAULT_BOARD;
 const OUT = args.out || defaultOut(REPO, KEY);
 const BOARD_ROOTS = boardRoots(KEY);
@@ -249,23 +252,57 @@ const kbPlaced = placeLanes(null, kbLanes);
 const kbById = new Map(lanes.map((l) => [l.id, l]));
 // The page also needs each lane's facts for the Plain English prompt. placeLanes
 // reads only id, state and priority, so the extra keys are inert there.
-const kbData = lanes.map((l, i) => ({
+// The read-only page has no kb-data block, so it builds none.
+const kbJson = KANBAN ? JSON.stringify(lanes.map((l, i) => ({
   ...kbLanes[i], title: l.title || '', track: l.track || '', holder: short(l.owner_session_id),
   scope: l.scope || '', note: l.note || '',
-}));
-const kbJson = JSON.stringify(kbData).replace(/</g, '\\u003c');
+}))).replace(/</g, '\\u003c') : '';
 const KB_STATUS = ['backlog', 'ready', 'blocked', 'done'];
 // Hash of what a Plain English answer was written from. Computed here, read from
 // data-hash by the page, so the page never rebuilds it from DOM text.
 const kbHash = (l) => hashFields([l.title, l.scope, l.state, l.note]);
 let kbSeq = 0;
 
-const kbCard = (l, movable, rank, col) => {
-  const n = kbSeq++;
+// The holder line of an In progress card: who holds it and how long the lease has left.
+// ro: the read-only page has no script to refresh a countdown, so it shows the lease end as a clock time.
+const kbLeaseEnd = (iso) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const kbHolder = (l, ro = false) => {
   const owner = l.owner_session_id;
   const leaseMin = l.lease_expires_at
     ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000) : null;
+  if (ro) {
+    const end = l.lease_expires_at ? kbLeaseEnd(l.lease_expires_at) : '';
+    return `<div class="kb-holder">${owner
+      ? `<span class="kb-who mono">${esc(short(owner))}</span>${leaseMin !== null && leaseMin <= 0
+        ? `<span class="pill p-warn">LAPSED</span><span class="kb-lease mono">lease ended ${esc(end)}</span>`
+        : leaseMin !== null ? `<span class="kb-lease mono">lease ends ${esc(end)}</span>` : ''}`
+      : '<span class="kb-lease mono">unclaimed</span>'}</div>`;
+  }
+  return `<div class="kb-holder">${owner
+    ? `<span class="kb-who mono">${esc(short(owner))}</span>${leaseMin !== null && leaseMin <= 0
+      ? '<span class="pill p-warn">LAPSED</span>' : leaseMin !== null ? `<span class="kb-lease mono">${leaseMin}m left</span>` : ''}`
+    : '<span class="kb-lease mono">unclaimed</span>'}</div>`;
+};
+
+// ro = the read-only page of a board other than continuous-claude: no controls, no hidden panels, no script. The default
+// page never passes ro, so its strings stay byte-identical.
+const kbCard = (l, movable, rank, col, ro = false) => {
+  const n = kbSeq++;
   const prio = kbPrio(l) !== null ? `<span class="kb-prio mono" title="DB priority">prio ${kbPrio(l)}</span>` : '';
+  if (ro) {
+    return `<li class="card kb-card kb-ro" data-id="${esc(l.id)}" data-state="${esc(l.state)}" data-hash="${esc(kbHash(l))}">
+      <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Priority order (not a saved order)">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span></div>
+      <p class="kb-title">${esc(l.title)}</p>
+      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${prio}</div>
+      ${movable ? '' : kbHolder(l, true)}
+      <details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary>
+        <dl class="kb-dl">
+          <dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd>
+          <dt>last note</dt><dd>${esc(l.note || 'none')}</dd>
+        </dl>
+      </details>
+    </li>`;
+  }
   const statusOpts = movable
     ? `${KB_STATUS.includes(l.state) ? '' : `<option value="" selected>Keep current (${esc(l.state)})</option>`}${KB_STATUS.map((st) => `<option value="${st}"${st === l.state ? ' selected' : ''}>${st}</option>`).join('')}`
     : '<option value="" selected>Active: a session holds it</option>';
@@ -273,10 +310,7 @@ const kbCard = (l, movable, rank, col) => {
       <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Rank in this column">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span>${movable ? '<span class="kb-grip" title="Drag to move" aria-hidden="true">&#8942;&#8942;</span>' : ''}</div>
       <p class="kb-title">${esc(l.title)}</p>
       <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${prio}<span class="kb-sync" hidden></span></div>
-      ${movable ? '' : `<div class="kb-holder">${owner
-        ? `<span class="kb-who mono">${esc(short(owner))}</span>${leaseMin !== null && leaseMin <= 0
-          ? '<span class="pill p-warn">LAPSED</span>' : leaseMin !== null ? `<span class="kb-lease mono">${leaseMin}m left</span>` : ''}`
-        : '<span class="kb-lease mono">unclaimed</span>'}</div>`}
+      ${movable ? '' : kbHolder(l)}
       <button class="kb-btn kb-plain" type="button" hidden aria-expanded="false" aria-controls="kb-p${n}">Plain English</button>
       <p class="kb-plain-out" id="kb-p${n}" role="status" hidden></p>
       <button class="kb-more" type="button" aria-expanded="false" aria-controls="kb-d${n}">Details</button>
@@ -301,14 +335,20 @@ const kbCard = (l, movable, rank, col) => {
     </li>`;
 };
 
-const kbColumn = (key, name, ids, movable) => `<div class="kcol"${movable ? ` data-col="${key}"` : ' data-col="progress" data-fixed="1"'} data-n="${ids.length}">
-    <h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-${key}"><span class="kb-name">${name}</span><span class="kb-count mono">${ids.length}</span></button></h3>
-    ${movable ? '' : '<p class="kb-sub">Held by a session. Not reorderable.</p>'}
-    <ul class="kb-list" id="kb-list-${key}">${ids.map((id, i) => kbCard(kbById.get(id), movable, i + 1, key)).join('')}</ul>
+// ro: the heading is plain text (no button), because no script makes it collapse.
+const kbColumn = (key, name, ids, movable, ro = false) => `<div class="kcol"${movable ? ` data-col="${key}"` : ' data-col="progress" data-fixed="1"'} data-n="${ids.length}">
+    ${ro
+    ? `<h3 class="kb-h kb-ro-h"><span class="kb-name">${name}</span><span class="kb-count mono">${ids.length}</span></h3>`
+    : `<h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-${key}"><span class="kb-name">${name}</span><span class="kb-count mono">${ids.length}</span></button></h3>`}
+    ${movable || ro ? '' : '<p class="kb-sub">Held by a session. Not reorderable.</p>'}
+    <ul class="kb-list" id="kb-list-${key}">${ids.length === 0 && ro
+    ? `<li class="kb-empty">${KB_RO_EMPTY[key] || 'Nothing here'}</li>`
+    : ids.map((id, i) => kbCard(kbById.get(id), movable, i + 1, key, ro)).join('')}</ul>
   </div>`;
 
 // The client script is plain ES5 text: placeLanes' own source, then the page code.
-// Only the default board's page carries the kanban and its script. Another board's page is read-only.
+// Only the default board's page carries the kanban client and its script. Another board's page has a static Priorities section
+// (kbColumn with ro) and no script: Details uses <details>, the columns do not collapse, nothing saves.
 const kbClient = KANBAN ? readFileSync(join(HERE, 'kanban-client.js'), 'utf8') : '';
 if (/<\/script/i.test(kbClient)) throw new Error('kanban-client.js must not contain a closing script tag');
 const kbScript = KANBAN ? `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt].map((f) => f.toString()).join('\n')}
@@ -320,6 +360,27 @@ const TEMPLATE_HASH = fnv1a(['render-board.mjs', 'render-board-args.mjs', 'kanba
   .map((f) => readFileSync(join(HERE, f), 'utf8').replace(/\r\n/g, '\n')).join('\n--\n'));
 const STAMP = boardStamp({ board: KEY, template: TEMPLATE_HASH, generated: GENERATED_AT.toISOString() });
 const PAGE_TITLE = KANBAN ? 'Agentic OS — Lane Board' : `Agentic OS — Lane Board (${KEY})`;
+
+const KB_RO_INTRO = 'Read-only snapshot from the last render. Columns come from lane state and priority. Lease times are clock times, not countdowns.';
+const KB_RO_NO_ORDER = 'Nothing is saved here: this board has no saved order.';
+// An empty read-only column says why. Now and Waiting on Dave are only filled from a saved order, and this board has none.
+const KB_RO_EMPTY = { now: KB_RO_NO_ORDER, waiting: KB_RO_NO_ORDER };
+// CSS for the read-only section only. Emitted when !KANBAN, so the default page's CSS bytes do not change.
+// Small text uses --muted here, not --faint: --faint is below 4.5:1 on the card and column backgrounds.
+const KB_RO_CSS = `
+  /* Read-only Priorities (boards other than continuous-claude): plain headings and native <details>, no script. */
+  .kb-ro-h { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 4px; color:var(--ink);
+    font:600 12px/1.2 var(--mono); letter-spacing:.04em; }
+  .kb-ro .kb-title { display:block; overflow:visible; }
+  .kb-ro .kb-track, .kb-ro .kb-prio, .kb-ro .kb-lease, .kb-ro .kb-dl dt { color:var(--muted); }
+  .kb-ro .kcol[data-n="0"] .kb-list::after { content:none; }
+  .kb-ro .kb-empty { padding:14px 10px; border:1px dashed var(--line); border-radius:var(--r); color:var(--muted);
+    font:400 11px/1.4 var(--mono); text-align:center; overflow-wrap:anywhere; }
+  .kb-ro-detail { margin-top:8px; min-width:0; }
+  .kb-ro-detail > summary { padding:4px 0; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; list-style-position:inside; }
+  .kb-ro-detail > summary:hover { text-decoration:underline; }
+  .kb-ro-detail[open] > summary { margin-bottom:8px; }
+  @media (pointer:coarse), (max-width:720px) { .kb-ro-detail > summary { min-height:44px; box-sizing:border-box; padding:14px 0 4px; } }`;
 
 const html = `${STAMP}
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -578,7 +639,7 @@ const html = `${STAMP}
 
   @media (max-width:1080px) { .lane { grid-template-columns:3px minmax(160px,1.4fr) 92px 130px 56px; } .lane .scope { display:none; } }
   @media (max-width:720px) { .lane { grid-template-columns:3px 1fr 56px; } .lane .state-c, .lane .own { display:none; } .counters { width:100%; } }
-  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }${KANBAN ? '' : KB_RO_CSS}
 </style>
 
 <header class="top">
@@ -615,7 +676,16 @@ const html = `${STAMP}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false)}
     </div>
     <script type="application/json" id="kb-data">${kbJson}</script>
-  </section>` : ''}
+  </section>` : `<section id="priorities" class="kb-ro" aria-labelledby="kb-title">
+    <div class="sec-head">
+      <h2 id="kb-title">Priorities</h2>
+      <p>${KB_RO_INTRO}</p>
+    </div>
+    <div class="kb-board" id="kb-board">
+      ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true, true)).join('')}
+      ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false, true)}
+    </div>
+  </section>`}
 
   <section>
     <div class="sec-head">

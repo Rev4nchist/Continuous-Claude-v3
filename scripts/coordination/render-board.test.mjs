@@ -11,7 +11,9 @@
  *   - a flag with no value, an unknown flag, or a second file name is taken as something else
  *   - a board key with a path character picks a file outside the repo root
  *   - the foreign board's page lists continuous-claude lanes, events or sessions (or the reverse)
- *   - the foreign page carries the kanban script (its save drops ids the page does not know)
+ *   - the foreign page carries the kanban script or an artifact db reference (its save drops ids the page does not know)
+ *   - the foreign page has no read-only Priorities section, or shows a CCv3 lane in a column, or a lane in the wrong column
+ *   - a read-only flag leaks into the continuous-claude page, or that page loses its interactive kanban
  *   - the page has no stamp, or the stamp names the wrong board
  *   - an unknown key, or a cwd with no board, writes a page instead of exiting 1
  *   - a half-written page is left at the target (the write must be temp + rename)
@@ -34,6 +36,8 @@ const REPO = path.join(HERE, '..', '..');
 const RENDER = path.join(HERE, 'render-board.mjs');
 const LANE = path.join(HERE, 'lane.mjs');
 const SCRATCH = path.join(HERE, 'scratch-db.mjs');
+// A title long enough to need more than three lines in a narrow card.
+const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
 
 // ------------------------------------------------------------------ pure parts
 
@@ -187,6 +191,15 @@ describe('render-board.mjs against a scratch database', () => {
         ('zz-rb-ccv3-held', 'ccv3 held title', 'zz', 'active', 'continuous-claude', 'zz-rb-s-c', now() + interval '30 minutes'),
         ('zz-rb-a-lane', 'board a lane title', 'zz', 'ready', 'zz-rb-a', NULL, NULL),
         ('zz-rb-a-held', 'board a held title', 'zz', 'active', 'zz-rb-a', 'zz-rb-s-a', now() + interval '30 minutes')`);
+      // Priority 1 and 2 ready lanes, and one lane in each other state, to pin column placement and order on the read-only page.
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, priority, project_key) VALUES
+        ('zz-rb-a-p2', 'board a ready priority two', 'zz', 'ready', 2, 'zz-rb-a'),
+        ('zz-rb-a-p1', 'board a ready priority one', 'zz', 'ready', 1, 'zz-rb-a'),
+        ('zz-rb-a-blocked', 'board a blocked title', 'zz', 'blocked', 50, 'zz-rb-a'),
+        ('zz-rb-a-backlog', 'board a backlog title', 'zz', 'backlog', 50, 'zz-rb-a'),
+        ('zz-rb-a-review', 'board a review title', 'zz', 'review', 50, 'zz-rb-a'),
+        ('zz-rb-a-done', 'board a done title', 'zz', 'done', 50, 'zz-rb-a'),
+        ('zz-rb-a-long', $1, 'zz', 'backlog', 50, 'zz-rb-a')`, [LONG_TITLE]);
       await c.query(`INSERT INTO agentic_os.lane_event (session_id, kind, lane_id, body, project_key) VALUES
         ('zz-rb-s-c', 'note', 'zz-rb-ccv3-lane', 'ccv3 event body', 'continuous-claude'),
         ('zz-rb-s-a', 'note', 'zz-rb-a-lane', 'board a event body', 'zz-rb-a')`);
@@ -215,7 +228,7 @@ describe('render-board.mjs against a scratch database', () => {
     assert.match(r.out, new RegExp(`wrote .*ccv3\\.html.*board continuous-claude`));
   });
 
-  it('--project zz-rb-a writes a page with only board a, no kanban script, and the stamp of board a', () => {
+  it('--project zz-rb-a writes a page with only board a, a read-only Priorities section with board a lanes, and the stamp of board a', () => {
     const out = path.join(E2E.tmp, 'a.html');
     const r = renderPage(['--project', 'zz-rb-a', '--out', out]);
     assert.equal(r.code, 0, r.all);
@@ -225,11 +238,96 @@ describe('render-board.mjs against a scratch database', () => {
     assert.ok(!html.includes('zz-rb-ccv3') && !html.includes('ccv3 event body') && !html.includes('zz-rb-s-c'), 'CCv3 leaked into board a');
     assert.ok(!html.includes('zz-rb-s-away'), 'a session outside the board roots showed up');
     assert.ok(html.includes('zz-rb-s-a'.slice(0, 8)) || html.includes('zz-rb-s'), 'the live session of board a is listed');
-    for (const marker of ['id="kb-data"', 'id="kb-board"', 'id="priorities"', 'function placeLanes']) {
-      assert.ok(!html.includes(marker), `a non-CCv3 page must not carry the kanban (${marker})`);
-    }
     assert.equal(parseBoardStamp(html).board, 'zz-rb-a');
     assert.match(html, /<title>[^<]*zz-rb-a[^<]*<\/title>/);
+
+    // The Priorities section: board a's lanes in the right columns, nothing of CCv3 in any column.
+    const section = /<section id="priorities"[\s\S]*?<\/section>/.exec(html)?.[0];
+    assert.ok(section, 'a board other than continuous-claude shows a Priorities section');
+    assert.ok(html.indexOf('<section id="priorities"') < html.indexOf('<h2>Right now</h2>'), 'Priorities comes before Right now');
+    assert.match(section, /<h2 id="kb-title">Priorities<\/h2>/);
+    // All five columns exist, in order. Now and Waiting on Dave are empty and say why in words.
+    assert.deepEqual([...section.matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['now', 'next', 'later', 'waiting', 'progress']);
+    assert.match(section, /data-col="now" data-n="0"/);
+    assert.match(section, /data-col="waiting" data-n="0"/);
+    // LEAK GATE: no CCv3 lane in any column.
+    assert.ok(!section.includes('zz-rb-ccv3') && !section.includes('ccv3 lane title') && !section.includes('ccv3 held title'), 'a CCv3 lane showed in a column of board a');
+  });
+
+  it('the read-only page puts each state in its column, orders by priority, and drops done lanes', () => {
+    const out = path.join(E2E.tmp, 'a-cols.html');
+    assert.equal(renderPage(['--project', 'zz-rb-a', '--out', out]).code, 0);
+    const html = fs.readFileSync(out, 'utf8');
+    const section = /<section id="priorities"[\s\S]*?<\/section>/.exec(html)[0];
+    const ids = (col) => {
+      const body = new RegExp(`<ul class="kb-list" id="kb-list-${col}">([\\s\\S]*?)<\\/ul>`).exec(section)?.[1] ?? '';
+      return [...body.matchAll(/<li class="card kb-card[^"]*" data-id="([^"]+)"/g)].map((m) => m[1]);
+    };
+    // Next: ready lanes by priority (1, 2, then the default 50).
+    assert.deepEqual(ids('next'), ['zz-rb-a-p1', 'zz-rb-a-p2', 'zz-rb-a-lane']);
+    // Later: every other open state, in DB order at equal priority. Blocked is here, not in Waiting on Dave.
+    assert.deepEqual(ids('later').sort(), ['zz-rb-a-backlog', 'zz-rb-a-blocked', 'zz-rb-a-long', 'zz-rb-a-review']);
+    assert.deepEqual(ids('progress'), ['zz-rb-a-held']);
+    assert.deepEqual(ids('now'), []);
+    assert.deepEqual(ids('waiting'), []);
+    assert.ok(!section.includes('zz-rb-a-done'), 'a done lane is in no column');
+    // Counts agree with the cards.
+    assert.match(section, /data-col="next" data-n="3"/);
+    assert.match(section, /data-col="later" data-n="4"/);
+    // An empty column says why in plain words; the Now and Waiting columns name the missing saved order.
+    const empty = (col) => new RegExp(`id="kb-list-${col}"><li class="kb-empty">([^<]*)</li>`).exec(section)?.[1];
+    assert.match(empty('now'), /no saved order/);
+    assert.match(empty('waiting'), /no saved order/);
+  });
+
+  it('read-only cards show the whole title, name each Details by lane, keep no countdown and call the rank an unsaved order', () => {
+    const out = path.join(E2E.tmp, 'a-card.html');
+    assert.equal(renderPage(['--project', 'zz-rb-a', '--out', out]).code, 0);
+    const html = fs.readFileSync(out, 'utf8');
+    const section = /<section id="priorities"[\s\S]*?<\/section>/.exec(html)[0];
+    // The full long title is in the markup, and the read-only section lifts the 3-line clamp.
+    assert.ok(section.includes('long title start') && section.includes('long title END'));
+    assert.match(html, /\.kb-ro \.kb-title \{[^}]*overflow:visible/);
+    assert.match(html, /\.kb-ro \.kb-lease[^{]*\{[^}]*var\(--muted\)/);
+    // Each Details has a name that carries the lane id.
+    for (const id of ['zz-rb-a-lane', 'zz-rb-a-held', 'zz-rb-a-blocked']) {
+      assert.ok(section.includes(`<summary>Details<span class="sr"> for ${id}</span></summary>`), `Details for ${id} has no accessible name`);
+    }
+    assert.ok(section.includes('title="Priority order (not a saved order)"'));
+    assert.ok(!section.includes('Rank in this column'));
+    // In progress: no "Not reorderable" line, a lease end time and no "Nm left" countdown.
+    assert.ok(!section.includes('Not reorderable') && !section.includes('Held by a session'));
+    assert.match(section, /lease ends [A-Z][a-z]{2} \d+, \d+:\d{2}/);
+    assert.doesNotMatch(section, /\d+m left/);
+  });
+
+  it('the read-only page carries no kanban script, no save and no artifact db reference', () => {
+    const out = path.join(E2E.tmp, 'a-ro.html');
+    assert.equal(renderPage(['--project', 'zz-rb-a', '--out', out]).code, 0);
+    const html = fs.readFileSync(out, 'utf8');
+    // Markup and script strings. The kb-* CSS is on every page, so only markup attributes are matched here.
+    for (const marker of [
+      'function placeLanes', 'claude.use', 'kanban/board', 'onSnapshot', 'id="kb-data"', 'id="kb-order"', 'id="kb-live"',
+      'id="kb-status"', 'class="kb-to"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-up"',
+      'class="kb-edit"', 'class="kb-more"', 'class="kb-head"',
+    ]) {
+      assert.ok(!html.includes(marker), `a read-only page must not carry ${marker}`);
+    }
+  });
+
+  it('the continuous-claude page keeps the interactive kanban and none of the read-only markup', () => {
+    const out = path.join(E2E.tmp, 'ccv3-interactive.html');
+    assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+    const html = fs.readFileSync(out, 'utf8');
+    for (const marker of [
+      'Drag or use Move to', 'class="kb-grip"', 'class="kb-to"', 'class="kb-btn kb-up"', 'id="kb-order"', 'id="kb-data"',
+      'function placeLanes', 'claude.use', 'kanban/board', 'class="kb-head"', 'class="kb-more"',
+    ]) {
+      assert.ok(html.includes(marker), `the CCv3 page lost ${marker}`);
+    }
+    for (const marker of ['class="kb-ro"', 'kb-ro-detail"', 'class="kb-h kb-ro-h"', 'Read-only snapshot', 'class="kb-empty"']) {
+      assert.ok(!html.includes(marker), `the read-only marker ${marker} leaked into the CCv3 page`);
+    }
   });
 
   it('the old positional [out.html] still writes the page (board from the cwd), and no half-written temp file stays', () => {

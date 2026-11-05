@@ -15,7 +15,7 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
 
 - The lane CLI path is the shim: `node C:/Users/dkhay/.claude/scripts/lane.mjs`. It works from any folder. Never use a relative path to lane.mjs: it fails outside this repo and runs a stale copy inside a worktree.
 - `<key>` is the board key. The kanban page belongs to the board `continuous-claude`, so `<key>` is `continuous-claude` here. `apply-kanban` refuses a file that declares another board.
-- Only `continuous-claude` has a phone artifact. Any other board renders a read-only `lane-board-<key>.html` on this machine with no kanban. Never publish it to the artifact above.
+- Only `continuous-claude` has a phone artifact. Any other board renders `lane-board-<key>.html` on this machine. Its kanban is read-only: it has no saved order and nothing for `apply-kanban` to read. Never publish it to the artifact above.
 
 ## Safety
 
@@ -84,6 +84,7 @@ Artifact: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid
 | Card note | lane note "Dave (kanban): ..." |
 | Card question | lane note "Dave asks (kanban): ..." |
 
+- With no saved order, the page puts a `blocked` lane in Waiting on Dave, a `ready` lane in Next and every other open lane in Later. A saved order always wins. A lane missing from a saved order gets this default. The default changes no state: a `blocked` lane in waiting stays `blocked`.
 - A card applies only while pending: `updatedAt` is later than `syncedAt`, or `syncedAt` is missing. The board columns follow the same rule.
 - An active lane is never changed by a card. The result is `skipped: active` and the card stays pending.
 - A held lane (a live session owns it, same test as `lane.mjs claim`) keeps its state. A card status or a column move gives `skipped: held` and the card stays pending. Notes and questions still apply. Priority still applies.

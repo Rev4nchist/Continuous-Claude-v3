@@ -404,3 +404,24 @@ test('a held lane moved into waiting is not marked applied: the move retries aft
   assert.ok(kinds(released).includes('a:state:backlog->blocked'), 'after release the move applies');
   assert.equal(released.boardDone, true);
 });
+
+// ---- blocked lanes default into waiting (kanban-place.mjs): the first sync must not change them
+
+test('first sync, no appliedColumns: blocked lanes the default frame put in waiting get no state change and no note', () => {
+  const lanes = [
+    lane('a', 'blocked', 1, 'needs the vendor key'),
+    lane('b', 'blocked', 2, WAITING_NOTE),
+    lane('c', 'blocked', 3, null),
+    held(lane('d', 'blocked', 4, 'a live session owns this')),
+  ];
+  const p = plan({ board: board({ waiting: ['a', 'b', 'c', 'd'] }), cards: [] }, lanes);
+  assert.deepEqual(p.actions.filter((a) => a.kind !== 'priority'), [], kinds(p).join());
+  assert.equal(p.boardDone, true);
+  assert.deepEqual(p.skipped, []);
+});
+
+test('first sync: a blocked lane that carries the waiting note and sits in later (the old default) is sent back to backlog', () => {
+  // This is the path the new default closes: a saved first frame no longer puts a blocked lane in later.
+  const p = plan({ board: board({ later: ['b'] }), cards: [] }, [lane('b', 'blocked', 2, WAITING_NOTE)]);
+  assert.ok(kinds(p).includes('b:state:blocked->backlog'), kinds(p).join());
+});

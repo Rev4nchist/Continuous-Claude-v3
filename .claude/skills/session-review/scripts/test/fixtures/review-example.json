@@ -1,0 +1,207 @@
+{
+  "example": true,
+  "run": {
+    "run_ts": "2026-11-04T15:20:00Z",
+    "date": "2026-11-04",
+    "zone": "CST",
+    "note": "EXAMPLE data. Every name, uuid and number in this file is made up for the page design.",
+    "sessions_sampled": 4,
+    "sessions_eligible": 9,
+    "overflow_count": 5,
+    "skipped": { "self": 1, "review_run": 2, "headless": 3, "no_human": 1 },
+    "chains": 3,
+    "wall_ms": 21720000,
+    "active_ms": 9480000,
+    "cost_usd": 18.4,
+    "cost_source": "cost-state",
+    "review_cost": "not reported"
+  },
+  "top_finding": {
+    "text": "EXAMPLE: three sessions in two chains said done with no check after the last edit. Add the proof step to the code-review skill.",
+    "target": "code-review skill"
+  },
+  "scorers": ["goal", "done-proven", "corrections", "efficiency", "hook-response"],
+  "unstable": ["efficiency"],
+  "sessions": [
+    {
+      "label": "EXAMPLE otter #a1b2c3d4",
+      "chain_id": "a1b2c3d4-0000-4000-8000-000000000001",
+      "window": "2026-11-03 09:12 to 11:40 CST",
+      "goal": "EXAMPLE: add a retry to the notion queue sync script.",
+      "outcome": "Script changed and merged. The final test run came before the last edit.",
+      "partial": false,
+      "scores": { "goal": 0.8, "done-proven": 0.2, "corrections": 0.8, "efficiency": 0.6, "hook-response": null },
+      "notes": [
+        { "scorer": "done-proven", "uuid": "11111111-aaaa-4bbb-8ccc-000000000001", "text": "The claim 'all green' came 6 minutes after the last Edit. No test ran in between." },
+        { "scorer": "goal", "uuid": "11111111-aaaa-4bbb-8ccc-000000000002", "text": "The retry exists. The back-off limit Dave named is missing." }
+      ],
+      "corrections": [ { "uuid": "11111111-aaaa-4bbb-8ccc-000000000003", "class": "no_verify" } ],
+      "hook_blocks": [],
+      "evidence": { "check": "node --test scripts/queue/", "is_error": false, "before_claim": true, "after_last_edit": false },
+      "active_ms": 2820000,
+      "wall_ms": 8880000,
+      "cost_usd": 4.1,
+      "cost_source": "cost-state"
+    },
+    {
+      "label": "EXAMPLE heron #b2c3d4e5",
+      "chain_id": "b2c3d4e5-0000-4000-8000-000000000002",
+      "window": "2026-11-03 13:05 to 14:02 CST",
+      "goal": "EXAMPLE: find out why the lane board shows a stale holder.",
+      "outcome": "Root cause found. A fix PR is open and its check passed.",
+      "partial": false,
+      "scores": { "goal": 1.0, "done-proven": 1.0, "corrections": 1.0, "efficiency": 0.8, "hook-response": 1.0 },
+      "notes": [
+        { "scorer": "efficiency", "uuid": "22222222-aaaa-4bbb-8ccc-000000000001", "text": "One probe run answered the question. No retry loops." }
+      ],
+      "corrections": [],
+      "hook_blocks": [],
+      "evidence": { "check": "node scripts/coordination/lease-probe.mjs", "is_error": false, "before_claim": true, "after_last_edit": true },
+      "active_ms": 1500000,
+      "wall_ms": 3420000,
+      "cost_usd": 2.2,
+      "cost_source": "cost-state"
+    },
+    {
+      "label": "EXAMPLE finch #c3d4e5f6",
+      "chain_id": "c3d4e5f6-0000-4000-8000-000000000003",
+      "window": "2026-11-02 16:30 to 19:55 CST",
+      "goal": "EXAMPLE: move the report page to a new layout.",
+      "outcome": "Half done. Dave stopped the session with the layout open.",
+      "partial": false,
+      "scores": { "goal": 0.4, "done-proven": 0.4, "corrections": 0.2, "efficiency": 0.4, "hook-response": 0.4 },
+      "notes": [
+        { "scorer": "corrections", "uuid": "33333333-aaaa-4bbb-8ccc-000000000001", "text": "Four steers: wrong folder twice, unasked CSS edits, no check run." },
+        { "scorer": "hook-response", "uuid": "33333333-aaaa-4bbb-8ccc-000000000002", "text": "The package guard blocked an install. The agent then ran the same install through npx." }
+      ],
+      "corrections": [
+        { "uuid": "33333333-aaaa-4bbb-8ccc-000000000003", "class": "wrong_target" },
+        { "uuid": "33333333-aaaa-4bbb-8ccc-000000000004", "class": "wrong_target" },
+        { "uuid": "33333333-aaaa-4bbb-8ccc-000000000005", "class": "scope" },
+        { "uuid": "33333333-aaaa-4bbb-8ccc-000000000006", "class": "no_verify" }
+      ],
+      "hook_blocks": [ { "guard": "package-install-guard", "response": "workaround" } ],
+      "evidence": { "check": "none found", "is_error": null, "before_claim": false, "after_last_edit": false },
+      "active_ms": 3480000,
+      "wall_ms": 12300000,
+      "cost_usd": 9.6,
+      "cost_source": "cost-state"
+    },
+    {
+      "label": "EXAMPLE wren #d4e5f6a7",
+      "chain_id": "c3d4e5f6-0000-4000-8000-000000000003",
+      "window": "2026-11-04 08:40 to now CST",
+      "goal": "EXAMPLE: resume the layout work and finish it.",
+      "outcome": "Live session. Scored on what exists.",
+      "partial": true,
+      "scores": { "goal": 0.8, "done-proven": null, "corrections": 0.8, "efficiency": null, "hook-response": null },
+      "notes": [
+        { "scorer": "goal", "uuid": "44444444-aaaa-4bbb-8ccc-000000000001", "text": "The layout is built. The phone width check is still open." }
+      ],
+      "corrections": [ { "uuid": "44444444-aaaa-4bbb-8ccc-000000000002", "class": "format" } ],
+      "hook_blocks": [],
+      "evidence": { "check": "none yet", "is_error": null, "before_claim": null, "after_last_edit": null },
+      "active_ms": 1680000,
+      "wall_ms": null,
+      "cost_usd": null,
+      "cost_source": null
+    }
+  ],
+  "improvements": [
+    {
+      "title": "Add an after-last-edit check rule to the code-review skill",
+      "class": "no_verify",
+      "target_hint": "code-review",
+      "target_surface": "skill",
+      "target_file": ".claude/skills/code-review/SKILL.md",
+      "severity": "high",
+      "chains": 2,
+      "evidence": [
+        { "label": "EXAMPLE otter #a1b2c3d4", "uuid": "11111111-aaaa-4bbb-8ccc-000000000001" },
+        { "label": "EXAMPLE finch #c3d4e5f6", "uuid": "33333333-aaaa-4bbb-8ccc-000000000006" }
+      ],
+      "expected_saving_min": 38,
+      "expected_saving_usd": 5.2,
+      "verdict": "ADOPT",
+      "summary": "Two chains claimed done with no check after the last edit. Dave had to ask each time."
+    },
+    {
+      "title": "Say which folder is the target in the report layout task prompt",
+      "class": "wrong_target",
+      "target_hint": "project-registry",
+      "target_surface": "rule",
+      "target_file": ".claude/project-registry.json",
+      "severity": "medium",
+      "chains": 2,
+      "evidence": [
+        { "label": "EXAMPLE finch #c3d4e5f6", "uuid": "33333333-aaaa-4bbb-8ccc-000000000003" },
+        { "label": "EXAMPLE heron #b2c3d4e5", "uuid": "22222222-aaaa-4bbb-8ccc-000000000002" }
+      ],
+      "expected_saving_min": 24,
+      "expected_saving_usd": null,
+      "verdict": "WATCH",
+      "summary": "Two chains edited a worktree copy that the lane CLI marks stale."
+    },
+    {
+      "title": "Show a safe path in the package-install-guard deny message",
+      "class": "block_workaround",
+      "target_hint": "package-install-guard",
+      "target_surface": "hook",
+      "target_file": ".claude/hooks/src/package-install-guard.ts",
+      "severity": "low",
+      "chains": 2,
+      "evidence": [
+        { "label": "EXAMPLE finch #c3d4e5f6", "uuid": "33333333-aaaa-4bbb-8ccc-000000000002" },
+        { "label": "EXAMPLE otter #a1b2c3d4", "uuid": "11111111-aaaa-4bbb-8ccc-000000000002" }
+      ],
+      "expected_saving_min": 12,
+      "expected_saving_usd": 1.4,
+      "verdict": "ADOPT",
+      "summary": "After a block the agent ran the same install by another route."
+    }
+  ],
+  "watch": [
+    { "label": "EXAMPLE wren #d4e5f6a7", "uuid": "44444444-aaaa-4bbb-8ccc-000000000002", "class": "format", "target_hint": "unknown", "note": "One chain only. Dave asked for shorter output." },
+    { "label": "EXAMPLE heron #b2c3d4e5", "uuid": "22222222-aaaa-4bbb-8ccc-000000000001", "class": "tool_misuse", "target_hint": "mcp-guidance", "note": "One chain only. A second MCP call repeated the first." }
+  ],
+  "factory": {
+    "stations": [
+      { "id": "01", "name": "Intake", "signal": "rule router fired 6 times", "ran": true, "had_evidence": true, "passed": true },
+      { "id": "02", "name": "Plan", "signal": "plan mode in 1 of 4 sessions", "ran": true, "had_evidence": true, "passed": true },
+      { "id": "03", "name": "Build", "signal": "2 Opus agents on execution tasks", "ran": true, "had_evidence": true, "passed": false },
+      { "id": "04", "name": "Guard", "signal": "3 blocks, 1 workaround", "ran": true, "had_evidence": true, "passed": false },
+      { "id": "05", "name": "Review", "signal": "1 review round logged", "ran": true, "had_evidence": false, "passed": true },
+      { "id": "06", "name": "Land", "signal": "1 PR with a passing check", "ran": true, "had_evidence": true, "passed": true },
+      { "id": "07", "name": "Learn", "signal": "no handoff written", "ran": false, "had_evidence": false, "passed": false },
+      { "id": "R", "name": "Coordinate", "signal": "lane signals from prompts only", "ran": true, "had_evidence": false, "passed": true }
+    ],
+    "lane_signals": [
+      { "text": "2 sessions named a lane in their first prompt." },
+      { "text": "1 session edited a worktree copy of the lane CLI." }
+    ],
+    "pr_signals": [
+      { "text": "EXAMPLE PR 9001: check passed, merge held for Dave." },
+      { "text": "EXAMPLE PR 9002: open, no review yet." }
+    ],
+    "example_line": "Build: 2 chains spawned opus for an execution task. Target: .claude/agents/<name>.md and its .json mirror."
+  },
+  "harness": [
+    { "class": "no_verify", "count": 3, "target": "code-review skill", "note": "Done claimed with no check after the last edit." },
+    { "class": "wrong_target", "count": 2, "target": "project-registry entry", "note": "Edits landed in a stale worktree copy." },
+    { "class": "block_workaround", "count": 1, "target": ".claude/hooks/src/package-install-guard.ts", "note": "Same install run by another route." }
+  ],
+  "trend": {
+    "label": "Mean score across all scorers, last 6 runs",
+    "points": [
+      { "run_ts": "2026-10-14", "mean": 0.58 },
+      { "run_ts": "2026-10-19", "mean": 0.61 },
+      { "run_ts": "2026-10-24", "mean": 0.55 },
+      { "run_ts": "2026-10-28", "mean": 0.66 },
+      { "run_ts": "2026-11-01", "mean": 0.69 },
+      { "run_ts": "2026-11-04", "mean": 0.64 }
+    ],
+    "regressions": [
+      { "scorer": "done-proven", "previous": 0.7, "current": 0.5, "changed": "session_models" }
+    ]
+  }
+}
