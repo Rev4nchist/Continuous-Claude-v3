@@ -271,6 +271,9 @@ export function parseExecutable(command: string): { segments: string[]; substitu
     }
     if (c === ';' || c === '\n') { pushSeg(); i++; continue; }
     if ((c === '&' && next === '&') || (c === '|' && next === '|')) { pushSeg(); i += 2; continue; }
+    // `&>` and `&>>` (stdout and stderr to a file) are one redirect operator, not a background cut.
+    // A blank first, so `install&>log` reads as the word `install` and the redirect `&>log`.
+    if (c === '&' && next === '>') { seg += i > 0 && !/\s/.test(command[i - 1]) ? ' &' : '&'; i++; continue; }
     if (c === '|' || c === '&') { pushSeg(); i++; continue; }
     seg += c; i++;
   }

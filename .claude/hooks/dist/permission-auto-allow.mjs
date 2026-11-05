@@ -229,6 +229,11 @@ function parseExecutable(command) {
       i += 2;
       continue;
     }
+    if (c === "&" && next === ">") {
+      seg2 += i > 0 && !/\s/.test(command[i - 1]) ? " &" : "&";
+      i++;
+      continue;
+    }
     if (c === "|" || c === "&") {
       pushSeg();
       i++;
