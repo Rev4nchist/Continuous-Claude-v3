@@ -34,6 +34,13 @@ with `SYNC_MAIN_DETACHED=1` and Git Bash (`C:\Program Files\Git\bin\bash.exe`; `
 WSL), never from the primary checkout. Never hand-copy a synced file into `~/.claude`: the next sync
 quarantines it.
 
+`land-pr.ps1` allows one lander at a time. It takes `~/.claude/state/land.lock` just before the merge call. An already-merged PR and `-CleanupOnly` take it before the fetch.
+It releases the lock after the sync-cursor check, on every exit path. A second run prints "STOPPED: another land is in progress" and merges nothing. Wait, then run again.
+Same-host lock: stale when its pid is dead, or the pid's process started after the lock's `started` (pid reused). A live holder keeps the lock at any age.
+Other-host lock: stale after 30 minutes. Unreadable or empty lock: stale after 2 minutes. A takeover prints one line and logs it to `~/.claude/logs/land-lock.log`.
+Never delete a lock by hand while its pid runs. "SYNC CONFIRMED" prints after LANDED, but not with `-NoSync`.
+"NOT confirmed synced" exits 1. The lock is already free then, so sync by hand from a detached worktree of `main` before the next land.
+
 ## Gotchas (all real, all hit 2026-07-06)
 
 - **A timed-out command (exit 143) is NOT necessarily a failure.** VERIFY state before concluding — `gh pr merge` timed out yet the merge had already succeeded (`gh api …/pulls/<N>` → `merged=true`). Same for pushes/deletes.

@@ -36,6 +36,22 @@
   checkout is on the PR branch, it keeps the primary AND the remote branch, and prints what to do.
   Every step is idempotent: re-running after a partial failure picks up where it stopped.
   -CleanupOnly skips steps 1-2 for a PR that is already merged.
+
+  One lander at a time: the ready check, the pre-merge re-check, the none-pick check and the migration gate run
+  OUTSIDE the lock (the ready check is slow). The script takes a lock file ($env:CCV3_LAND_LOCK, else
+  ~/.claude/state/land.lock) just before the merge call and holds it through the fetch, the fast-forward of main,
+  the sync and the sync-cursor check. A `finally` releases it right after the cursor check, on every exit path (also
+  STOPPED, an error and Ctrl-C). Cleanup (step 5) runs after the release and only ever warns.
+  A second run prints "STOPPED: another land is in progress" and exits 1 before it merges anything. A lock written on
+  this host is stale when its pid is gone (dead-pid) or the pid's process started after the lock's `started` (pid-reused);
+  a live holder keeps its lock at any age, and an unreadable start time counts as held. A lock from another host is stale
+  after 30 minutes ($env:CCV3_LAND_LOCK_STALE_MIN overrides, in minutes). An unreadable or empty lock is stale after 2
+  minutes by file time. A takeover prints one line and appends it to ~/.claude/logs/land-lock.log
+  ($env:CCV3_LAND_LOCK_LOG overrides). The script deletes only a lock it created.
+  Both fetches in the held section retry up to 3 times, 2 seconds apart.
+  After the sync (not with -NoSync) it compares ~/.claude/state/sync-cursor ($env:CCV3_SYNC_CURSOR overrides)
+  with main. The lock is released first. It prints "SYNC CONFIRMED" or "NOT confirmed synced" after the LANDED
+  line, and exits 1 when not confirmed: the merge has already happened by then.
   -TestFailUnlink and -TestSwitchPrimary are TEST-ONLY switches (land-pr-worktree-links.test.ps1).
   Never use them in a real land. They replace the old LAND_PR_TEST_* env vars, which are no longer read.
 
@@ -147,6 +163,123 @@ foreach ($pair in @(@($env:LOCALAPPDATA, 'Programs\Git\bin\bash.exe'), @($env:Pr
 $gitBash = $bashCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
 if (-not $gitBash -and -not $NoSync) { Fail 'Git Bash not found (set CLAUDE_CODE_GIT_BASH_PATH). Nothing was merged.' }
 
+# ---- One-lander lock -------------------------------------------------------------------------------------------
+# Taken by Hold-LandLock just before the merge call (or before step 3 when the PR is already merged), released by
+# Exit-LandLock in the `finally` that closes right after the sync-cursor check. The try block below is NOT re-indented:
+# 270 lines of whitespace would hide the real diff.
+$lockPath = if ($env:CCV3_LAND_LOCK) { $env:CCV3_LAND_LOCK } else { Join-Path $HOME '.claude\state\land.lock' }
+$lockLogPath = if ($env:CCV3_LAND_LOCK_LOG) { $env:CCV3_LAND_LOCK_LOG } else { Join-Path $HOME '.claude\logs\land-lock.log' }
+$lockStaleMin = 30.0   # minutes
+if ($env:CCV3_LAND_LOCK_STALE_MIN) {
+  $m = 0.0
+  if ([double]::TryParse($env:CCV3_LAND_LOCK_STALE_MIN, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$m) -and $m -gt 0) { $lockStaleMin = $m }
+}
+$lockUnreadableMin = 2.0   # an empty or unreadable lock may be a racer mid-write: stale only after this long, by file time
+$lockHost = [Environment]::MachineName
+$script:lockMine = $null   # what this run wrote; Exit-LandLock deletes the file only when it still holds exactly this
+
+# The lock file as an object, or $null when it cannot be read or parsed (missing, empty, half written, held open by its writer).
+function Get-LockInfo([string]$Path) {
+  try {
+    $o = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json -ErrorAction Stop
+    $p = [int]$o.pid
+    if ($p -le 0) { throw 'no pid' }
+    # ConvertFrom-Json turns an ISO string into a DateTime; normalise either form to UTC.
+    $s = if ($o.started -is [datetime]) { $o.started.ToUniversalTime() }
+         else { [datetime]::Parse("$($o.started)", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal) }
+    [pscustomobject]@{ Pid = $p; Host = "$($o.host)"; Pr = "$($o.pr)"; Session = "$($o.session)"; Started = $s.ToString('o'); StartedUtc = $s }
+  } catch { $null }
+}
+
+# State of the lock file: Free (no file), Held, Stale (with the Reason: dead-pid, pid-reused or age).
+function Get-LockState([string]$Path) {
+  $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+  if (-not $item) { return [pscustomobject]@{ State = 'Free'; Reason = $null; Info = $null } }
+  $info = Get-LockInfo $Path
+  if (-not $info) {
+    $ageMin = ([DateTime]::UtcNow - $item.LastWriteTimeUtc).TotalMinutes
+    return [pscustomobject]@{ State = $(if ($ageMin -gt $lockUnreadableMin) { 'Stale' } else { 'Held' }); Reason = 'age'; Info = $null }
+  }
+  if ($info.Host -eq $lockHost) {
+    # Same host: the pid decides, at any age. A hung lander keeps its lock; nobody robs it after 30 minutes.
+    #   no such process                                  -> Stale (dead-pid)
+    #   process started AFTER the lock's `started`       -> Stale (pid-reused: the pid now belongs to another program)
+    #   process started before it                        -> Held (the real holder)
+    #   start time unreadable (access denied)            -> Held (never rob a lock we cannot disprove)
+    $proc = Get-Process -Id $info.Pid -ErrorAction SilentlyContinue
+    if (-not $proc) { return [pscustomobject]@{ State = 'Stale'; Reason = 'dead-pid'; Info = $info } }
+    $procStart = $null; try { $procStart = $proc.StartTime.ToUniversalTime() } catch { }
+    if ($procStart -and $procStart -gt $info.StartedUtc.AddSeconds(2)) { return [pscustomobject]@{ State = 'Stale'; Reason = 'pid-reused'; Info = $info } }
+    return [pscustomobject]@{ State = 'Held'; Reason = $null; Info = $info }
+  }
+  # Another host: its pid says nothing here, so only the age rule applies.
+  if (([DateTime]::UtcNow - $info.StartedUtc).TotalMinutes -gt $lockStaleMin) { return [pscustomobject]@{ State = 'Stale'; Reason = 'age'; Info = $info } }
+  [pscustomobject]@{ State = 'Held'; Reason = $null; Info = $info }
+}
+
+# Atomic create: exactly one of two racers gets $true. The content goes through the same stream, so the file is never
+# empty for longer than the write. An existing file is an IOException; any other failure propagates.
+function New-LockFile([string]$Path, [string]$Content) {
+  try { $fs = [System.IO.File]::Open($Path, 'CreateNew', 'Write', 'None') } catch [System.IO.IOException] { return $false }
+  try { $b = [System.Text.UTF8Encoding]::new($false).GetBytes($Content + "`n"); $fs.Write($b, 0, $b.Length) } finally { $fs.Dispose() }
+  $true
+}
+
+# Returns $true when this run now holds the lock. $false means someone else holds it (or took it first).
+function Enter-LandLock([string]$Path, [string]$Content) {
+  [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path))
+  if (New-LockFile $Path $Content) { return $true }
+  # A stale lock is taken over under a named mutex: two racers that both judged it stale must not both delete and create.
+  # Without it, B could delete the fresh lock A just created. The OS frees the mutex if its owner dies.
+  $key = [BitConverter]::ToString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($Path).ToLowerInvariant())), 0, 8).Replace('-', '')
+  $mutex = [System.Threading.Mutex]::new($false, "Global\ccv3-land-lock-$key")
+  $have = $false
+  try {
+    try { $have = $mutex.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { $have = $true }
+    if (-not $have) { return $false }
+    $st = Get-LockState $Path
+    if ($st.State -eq 'Held') { return $false }
+    if ($st.State -eq 'Stale') { try { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { return $false } }
+    if (-not (New-LockFile $Path $Content)) { return $false }   # lost to a racer outside the mutex: treat as held
+    if ($st.State -eq 'Stale') {
+      $i = $st.Info
+      $line = "land lock: took over stale lock (pid $(if ($i) { $i.Pid } else { '?' }), session $(if ($i -and $i.Session) { $i.Session } else { '-' }), started $(if ($i) { $i.Started } else { '?' }), reason $($st.Reason))"
+      Write-Host $line
+      try { [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lockLogPath)); Add-Content -LiteralPath $lockLogPath -Value $line } catch { Write-Host "  could not write $lockLogPath`: $($_.Exception.Message)" }
+    }
+    return $true
+  } finally { if ($have) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
+}
+
+# Take the lock or stop. Nothing is merged when this stops. A no-op when this run already holds it.
+function Hold-LandLock {
+  if ($script:lockMine) { return }
+  $started = [DateTime]::UtcNow
+  $rec = [ordered]@{ pid = $PID; host = $lockHost; pr = $Pr; started = $started.ToString('o') }
+  if ($env:CLAUDE_CODE_SESSION_ID) { $rec.session = $env:CLAUDE_CODE_SESSION_ID }
+  $got = $false
+  # Only an explicit $true counts: a stray value in the function's output must never read as "got the lock".
+  try { $v = @(Enter-LandLock $lockPath ($rec | ConvertTo-Json -Compress)) | Select-Object -Last 1; $got = ($v -is [bool]) -and $v } catch { Fail "cannot take the land lock at ${lockPath}: $($_.Exception.Message). Nothing was merged." }
+  if ($got) { $script:lockMine = @{ Pid = $PID; Host = $lockHost; Started = $started }; return }
+  $i = Get-LockInfo $lockPath
+  $who = if ($i) { "PR $($i.Pr), pid $($i.Pid), started $($i.Started)" } else { "lock file unreadable or just written, PR ?, pid ?, started $((Get-Item -LiteralPath $lockPath -ErrorAction SilentlyContinue).LastWriteTimeUtc.ToString('o'))" }
+  Fail "another land is in progress ($who). Wait for it to finish, then run again."
+}
+
+# Delete the lock only when it still holds what this run wrote. Never throws, never exits.
+function Exit-LandLock {
+  $mine = $script:lockMine
+  if (-not $mine) { return }
+  $script:lockMine = $null
+  try {
+    $i = Get-LockInfo $lockPath
+    if ($i -and $i.Pid -eq $mine.Pid -and $i.Host -eq $mine.Host -and [Math]::Abs(($i.StartedUtc - $mine.Started).TotalSeconds) -lt 1) {
+      Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
+    } else { Write-Host "  land lock: not releasing $lockPath (it no longer holds this run's record)" }
+  } catch { Write-Host "  land lock: could not release ${lockPath}: $($_.Exception.Message)" }
+}
+
+try {   # closes after the sync-cursor check, with the `finally` that releases the lock
 $pull = gh api "repos/$Repo/pulls/$Pr" | ConvertFrom-Json
 if ($LASTEXITCODE) { Fail "cannot read PR #$Pr" }
 $branch = $pull.head.ref; $head = $pull.head.sha
@@ -211,6 +344,8 @@ if (-not $pull.merged -and -not $CleanupOnly) {
   Step "migration gate for #$Pr"
   node (Join-Path $PSScriptRoot 'migration-gate.mjs') $head --repo-path $RepoPath --remote $Remote | Out-Host
   if ($LASTEXITCODE) { Fail "migration gate refused #$Pr (exit $LASTEXITCODE). Nothing was merged. Apply the migration to the live database (drizzle-kit migrate, after reading the SQL), then re-run." }
+  # One lander at a time: every check above is read-only and runs outside the lock. From here to the sync-cursor check only one run works.
+  Hold-LandLock
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1
   if ($LASTEXITCODE) {
@@ -226,17 +361,27 @@ $pull = gh api "repos/$Repo/pulls/$Pr" | ConvertFrom-Json
 if (-not $pull.merged) { Fail "#$Pr is not merged; nothing to clean up" }
 
 # 3. Fetch and fast-forward main
+Hold-LandLock   # a no-op after a merge by this run; an already-merged PR (or -CleanupOnly) takes the lock here, because the sync is in the held section
+# Both fetches run after the merge, so a network blip must not strand a merged PR: up to 3 retries, 2 seconds apart.
+# Returns the exit code of the last attempt.
+function Invoke-GitFetch([string[]]$GitArgs, [int]$Retries = 3, [int]$DelaySec = 2) {
+  for ($n = 0; $n -le $Retries; $n++) {
+    git -C $RepoPath @GitArgs 2>&1 | Out-Null
+    $rc = $LASTEXITCODE
+    if (-not $rc) { return 0 }
+    if ($n -lt $Retries) { Write-Host "  git $($GitArgs -join ' ') failed (exit $rc); retry $($n + 1) of $Retries in $DelaySec s"; Start-Sleep -Seconds $DelaySec }
+  }
+  return $rc
+}
 Step "fetch $Remote --prune"
-git -C $RepoPath fetch $Remote --prune 2>&1 | Out-Null
-if ($LASTEXITCODE) { Fail "git fetch failed" }
+if (Invoke-GitFetch @('fetch', $Remote, '--prune')) { Fail "git fetch failed" }
 $current = git -C $RepoPath rev-parse --abbrev-ref HEAD
 if ($current -eq 'main') {
   git -C $RepoPath merge --ff-only "$Remote/main" 2>&1 | Out-Host
   if ($LASTEXITCODE) { Fail "local main could not fast-forward to $Remote/main (diverged, or local edits conflict). Resolve by hand." }
 } else {
   # main is not checked out here: fetch into it, which only ever fast-forwards.
-  git -C $RepoPath fetch $Remote main:main 2>&1 | Out-Null
-  if ($LASTEXITCODE) { Fail "local main could not fast-forward to $Remote/main" }
+  if (Invoke-GitFetch @('fetch', $Remote, 'main:main')) { Fail "local main could not fast-forward to $Remote/main" }
 }
 $done.Add("main at $((git -C $RepoPath rev-parse --short main))")
 
@@ -244,13 +389,16 @@ $done.Add("main at $((git -C $RepoPath rev-parse --short main))")
 # Exit 0 from sync-to-active.sh is not proof: a run that finds the sync lock held only writes
 # ~/.claude/.sync.pending and exits 0, and a run that skips also exits 0. The proof is the cursor:
 # ~/.claude/state/sync-cursor must equal main's commit.
-function Confirm-Synced([string]$how) {
-  $cursorFile = Join-Path $HOME '.claude\state\sync-cursor'
-  $cursor = if (Test-Path $cursorFile) { "$(Get-Content $cursorFile -Raw)".Trim() } else { '' }
-  $mainSha = "$(git -C $RepoPath rev-parse main)".Trim()
-  if ($cursor -and $cursor -eq $mainSha) { $done.Add($how); return }
-  Write-Host "  NOT confirmed synced: sync cursor is '$cursor', main is '$mainSha'."
-  Write-Host "  (A held sync lock only queues the sync; a skip also exits 0.) From a checkout of main, run in Git Bash: scripts/sync-to-active.sh --changed"
+function Get-SyncStatus {
+  # Never throws: a cursor that cannot be read (a directory, a locked file) is "not confirmed", with the reason, and the
+  # LANDED line and the cleanup still happen. The merge is already done.
+  $cursor = ''; $mainSha = ''; $err = $null
+  try {
+    $cursorFile = if ($env:CCV3_SYNC_CURSOR) { $env:CCV3_SYNC_CURSOR } else { Join-Path $HOME '.claude\state\sync-cursor' }
+    $cursor = if (Test-Path -LiteralPath $cursorFile) { "$(Get-Content -LiteralPath $cursorFile -Raw -ErrorAction Stop)".Trim() } else { '' }
+  } catch { $err = $_.Exception.Message }
+  try { $mainSha = "$(git -C $RepoPath rev-parse main 2>$null)".Trim() } catch { }
+  [pscustomobject]@{ Ok = [bool](-not $err -and $cursor -and $cursor -eq $mainSha); Cursor = $cursor; Main = $mainSha; Error = $err }
 }
 if (-not $NoSync) {
     # Always sync from a throwaway detached worktree of main, never from the primary checkout.
@@ -281,7 +429,6 @@ if (-not $NoSync) {
             # main's own copy of the script decides. Show a skip line as printed, then let the cursor judge.
             $skip = $syncOut | Where-Object { "$_" -match 'Sync skipped' } | Select-Object -First 1
             if ($skip) { Write-Host "  main's sync script reported: $skip" }
-            Confirm-Synced 'synced via temp worktree'
           }
         }
         finally { Remove-Item Env:\SYNC_MAIN_DETACHED -ErrorAction SilentlyContinue; Pop-Location }
@@ -312,6 +459,13 @@ if (-not $NoSync) {
       }
     }
 }
+# Hard sync line: the proof is the cursor, not the exit code. Judged here, inside the held section; printed after LANDED.
+$syncStatus = $null
+if (-not $NoSync) {
+  $syncStatus = Get-SyncStatus
+  if ($syncStatus.Ok) { $done.Add('synced via temp worktree') }
+}
+} finally { Exit-LandLock }   # release right after the cursor check, before cleanup, on every exit path
 
 # 5. Cleanup: worktree, local branch, remote branch
 # A worktree's .claude/cache/ is gitignored, so `git status --porcelain` does not see the PR's e2e
@@ -347,6 +501,9 @@ function Save-E2eArtifacts([string]$Source, [string]$Destination) {
   }
 }
 
+# The merge and the sync are done and the lock is released. A cleanup failure (for example 'Permission denied' on a
+# worktree that holds a copied node_modules) is a warning: it never changes the exit code and never blocks the next lander.
+try {
 $wtLines = git -C $RepoPath worktree list --porcelain
 $wtPath = $null; $primaryOnBranch = $false
 for ($i = 0; $i -lt $wtLines.Count; $i++) {
@@ -413,5 +570,20 @@ if ($remoteRef -and $primaryOnBranch) {
   pwsh -File $gitSafe -C $RepoPath push $Remote --delete $branch 2>&1 | Out-Host
   if ($LASTEXITCODE -eq 0) { $done.Add("deleted $Remote/$branch") } else { Write-Host "  could not delete $Remote/$branch" }
 }
+} catch {
+  # "and synced" only when the cursor check passed (not under -NoSync, not when unconfirmed).
+  $cleanupWarn = "WARNING: cleanup did not finish ($($_.Exception.Message)). #$Pr is merged$(if ($syncStatus -and $syncStatus.Ok) { ' and synced' }); remove the worktree and branches by hand."
+  Write-Host $cleanupWarn -ForegroundColor Yellow
+  $done.Add($cleanupWarn)
+}
 
 Write-Host "LANDED #${Pr}: $($done -join '; ')" -ForegroundColor Green
+if ($syncStatus) {
+  $short = { param($s) if ($s) { $s.Substring(0, [Math]::Min(8, $s.Length)) } else { 'missing' } }
+  if ($syncStatus.Ok) { Write-Host "SYNC CONFIRMED: cursor $(& $short $syncStatus.Cursor) equals main" -ForegroundColor Green }
+  else {
+    $cursorText = if ($syncStatus.Error) { "unreadable ($($syncStatus.Error))" } else { & $short $syncStatus.Cursor }
+    Write-Host "NOT confirmed synced: cursor $cursorText main $(& $short $syncStatus.Main). The merge already happened; only the sync is open. Sync by hand from a detached worktree of main (SYNC_MAIN_DETACHED=1, Git Bash) before anyone else lands." -ForegroundColor Red
+    exit 1
+  }
+}

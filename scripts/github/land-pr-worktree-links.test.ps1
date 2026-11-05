@@ -53,6 +53,8 @@ $tmpRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $work = Join-Path $tmpRoot ('land-pr-links-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
 $oldPath = $env:PATH
+# land-pr.ps1 takes a lock before the merge: point it, its log and the sync cursor at the temp folder, never at ~/.claude.
+$env:CCV3_LAND_LOCK = Join-Path $work 'land.lock'; $env:CCV3_LAND_LOCK_LOG = Join-Path $work 'land-lock.log'; $env:CCV3_SYNC_CURSOR = Join-Path $work 'sync-cursor'
 
 function Remove-Scratch {
   # Unlink every link first so the recursive delete below cannot reach a target. Only this run's folder.
@@ -301,6 +303,7 @@ try {
 }
 finally {
   $env:PATH = $oldPath
+  Remove-Item Env:\CCV3_LAND_LOCK, Env:\CCV3_LAND_LOCK_LOG, Env:\CCV3_SYNC_CURSOR -ErrorAction SilentlyContinue
   Remove-Item Env:\GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue
   Remove-Scratch
 }
