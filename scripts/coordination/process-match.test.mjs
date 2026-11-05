@@ -55,6 +55,12 @@ test('parseProcessList: drops rows without a numeric pid or start', () => {
   assert.deepEqual(parseProcessList(`[{"pid":7,"startMs":${T}},{"pid":"x","startMs":1},{"pid":9}]`), [proc(7, T)]);
 });
 
+test('parseProcessList: JSON with rows but none usable is unknown (null), not zero processes', () => {
+  assert.equal(parseProcessList('{"error":"denied"}'), null);
+  assert.equal(parseProcessList('[{"pid":"x","startMs":1}]'), null);
+  assert.deepEqual(parseProcessList('[]'), []);
+});
+
 test('summarize: counts and unmatched pids', () => {
   const s = summarize(matchProcesses([proc(1, T), proc(2, T + 99999)], [sess('a', T)]));
   assert.deepEqual(s, { total: 2, matched: 1, unmatchedPids: [2] });

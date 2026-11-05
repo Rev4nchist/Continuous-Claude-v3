@@ -58,7 +58,7 @@ export function summarize(result) {
 
 /**
  * Parse `ConvertTo-Json` output of rows {pid, startMs}. PowerShell prints one object (not an array) for a single row and
- * nothing for none. Returns [] for no processes and null when the text is not JSON (unknown, not "zero").
+ * nothing for none. Returns [] for no processes and null when the text is not JSON or holds no usable row (unknown, not "zero").
  */
 export function parseProcessList(text) {
   const t = String(text ?? '').trim();
@@ -66,9 +66,11 @@ export function parseProcessList(text) {
   let v;
   try { v = JSON.parse(t); } catch { return null; }
   const rows = Array.isArray(v) ? v : [v];
-  return rows
+  const good = rows
     .filter((r) => r && Number.isInteger(r.pid) && Number.isFinite(r.startMs))
     .map((r) => ({ pid: r.pid, startMs: r.startMs }));
+  // Rows came back but none are usable (an error object, a changed shape): unknown, not "zero processes".
+  return rows.length > 0 && good.length === 0 ? null : good;
 }
 
 // Get-Process, not Get-CimInstance: same data, and the whole call is about 0.3 s instead of 1.3 s.
