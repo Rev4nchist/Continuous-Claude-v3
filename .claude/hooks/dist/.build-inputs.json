@@ -65,6 +65,7 @@
     "prd-roadmap-sync.ts": "b1a91a378e106f0000632965adb343b6049efb187f9bf568ccb58dc735789e44",
     "pre-compact-continuity.ts": "c9a07a9e8d3bb54aac7dd3ad3548e3a967104065963a2c06a264672a2a3fedb1",
     "pre-compact-extract.ts": "13ae3d39c2ed791a3357084f78f40ab06570ba05149ccb20d2cdb580b22431c6",
+    "pre-compact-lane-note.ts": "2f1de62135e4d1ff8c8e6cbb6fdbeca50c4ffbfccf80cc4da4829241acc3107c",
     "pre-plan-memory.ts": "496b3beaf3b89bbc77de435f1bd29e9037a1ec4a3d82149ed891107c70e1d2a3",
     "pre-pr-gate.ts": "b3823a64012a20bcb9f83b2c4f83fc462b2ea7dea415c37f555b89c77be04c31",
     "pre-tool-knowledge.ts": "a350de11ca8b57fbc01a9bd5f9f5bcc7d7e3f92406deddb8b5288d51949cbded",

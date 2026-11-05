@@ -438,6 +438,19 @@
             ]
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 15,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/pre-compact-lane-note.mjs"
+            ]
+          }
+        ]
       }
     ],
     "Stop": [
