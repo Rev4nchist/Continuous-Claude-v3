@@ -109,7 +109,6 @@ if __name__ == "__main__":
 | **Web** | firecrawl_scrape.py | `--url` (required) |
 | **Pipeline** | multi_tool_pipeline.py | `--repo-path` (default: "."), `--max-commits` (default: 10) |
 | **Search** | perplexity_search.py | `--query` (required) |
-| **Docs** | nia_docs.py | `--package`, `--query` |
 
 ## Creating New Skills
 

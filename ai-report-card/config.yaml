@@ -49,8 +49,9 @@ memory:
   recall_script: C:\Users\david.hayes\continuous-claude\opc\scripts\core\recall_learnings.py
 
 ai:
-  model: claude-sonnet-4-5-20250929
-  max_tokens: 2000
+  model: claude-sonnet-5-5
+  # Covers adaptive thinking plus the reply (Sonnet 5.5 thinks by default).
+  max_tokens: 16000
   budget_cap_usd: 0.50
 
 vocabulary:

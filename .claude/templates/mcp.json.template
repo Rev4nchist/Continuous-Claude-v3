@@ -30,15 +30,6 @@
       "command": "cmd",
       "args": ["/c", "npx", "-y", "next-devtools-mcp@latest"],
       "type": "stdio"
-    },
-    "nia": {
-      "command": "cmd",
-      "args": ["/c", "uv", "tool", "run", "nia-mcp-server"],
-      "env": {
-        "NIA_API_KEY": "${NIA_API_KEY}",
-        "NIA_API_URL": "https://apigcp.trynia.ai/"
-      },
-      "type": "stdio"
     }
   }
 }

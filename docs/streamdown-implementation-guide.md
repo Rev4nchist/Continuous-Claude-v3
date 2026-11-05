@@ -931,7 +931,7 @@ export async function POST(req: Request) {
   const { messages } = await req.json();
 
   const result = streamText({
-    model: anthropic("claude-sonnet-4-5-20250929"),
+    model: anthropic("claude-sonnet-5-5"),
     messages,
     system: "You are a helpful assistant. Use markdown formatting in your responses.",
   });
@@ -1152,7 +1152,7 @@ export async function POST(req: Request) {
 
   const model =
     provider === "anthropic"
-      ? anthropic("claude-sonnet-4-5-20250929")
+      ? anthropic("claude-sonnet-5-5")
       : openai("gpt-4o");
 
   const result = streamText({ model, messages });

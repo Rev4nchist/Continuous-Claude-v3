@@ -49,9 +49,6 @@ Use these for gathering information:
 For codebase exploration, use Grep and Glob first. Then `tldr` through Bash. Then `rg`.
 
 ```bash
-# Best practices & documentation (Nia)
-cd $CLAUDE_OPC_DIR && uv run python scripts/mcp/nia_docs.py search universal "best practices for [topic]"
-
 # Latest approaches (Perplexity)
 cd $CLAUDE_OPC_DIR && uv run python scripts/mcp/perplexity_search.py --search "modern approach to [topic]"
 

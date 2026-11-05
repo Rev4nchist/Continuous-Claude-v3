@@ -92,7 +92,6 @@ Skills that provide exceptional value across multiple workflows.
 | Skill | Purpose | When to Use |
 |-------|---------|-------------|
 | **perplexity-search** | AI-powered web search | Current events, best practices, API docs |
-| **nia-docs** | Library documentation search | Looking up library/framework docs |
 | **github-search** | Search GitHub code/issues/PRs | Finding examples, checking issues |
 | **firecrawl-scrape** | Web scraping for structured content | Extract info from websites |
 | **research-external** | Orchestrated external research | Complex research requiring multiple sources |
@@ -324,7 +323,6 @@ What do I want to do?
 │
 ├─ Need to research?
 │  ├─ Web/current info → perplexity-search
-│  ├─ Library docs → nia-docs
 │  ├─ GitHub examples → github-search
 │  ├─ Past work → /recall
 │  └─ Complex research → research-external (oracle)
@@ -546,7 +544,7 @@ New skills should follow:
 | Test-first development | `/tdd` |
 | Code to review | `/review` |
 | Release to ship | `/release` |
-| Research needed | `perplexity-search` or `nia-docs` |
+| Research needed | `perplexity-search` |
 
 ### Planning Phase
 | Situation | Skill |
@@ -585,7 +583,7 @@ Categories by directory prefix:
 - **Planning**: `discovery-interview/`, `plan-agent/`, `create_plan*/`, `premortem/`
 - **Memory**: `create_handoff/`, `resume_handoff/`, `continuity_ledger/`, `recall/`, `remember/`
 - **Analysis**: `tldr-*/`, `ast-grep-find/`, `morph-*/`
-- **Research**: `perplexity-search/`, `nia-docs/`, `github-search/`, `firecrawl-scrape/`, `loogle-search/`
+- **Research**: `perplexity-search/`, `github-search/`, `firecrawl-scrape/`, `loogle-search/`
 - **Quality**: `qlty-check/`, `braintrust-*/`, `validate-agent/`
 - **Math**: `math-*/`, `pint-compute/`, `shapely-compute/`, `prove/`, `formalize/`
 - **Infrastructure**: `agentica-*/`, `sub-agents/`, `parallel-agents/`, `hooks/`, `wiring/`

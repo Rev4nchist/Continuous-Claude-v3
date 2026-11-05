@@ -409,17 +409,15 @@ async def prompt_api_keys() -> dict[str, str]:
     """Prompt user for optional API keys.
 
     Returns:
-        dict with keys: perplexity, nia
+        dict with keys: perplexity
     """
     console.print("\n[bold]API Keys (optional)[/bold]")
     console.print("Press Enter to skip any key you don't have.\n")
 
     perplexity = Prompt.ask("Perplexity API key (web search)", default="")
-    nia = Prompt.ask("Nia API key (documentation search)", default="")
 
     return {
         "perplexity": perplexity,
-        "nia": nia,
     }
 
 
@@ -524,8 +522,6 @@ def generate_env_file(config: dict[str, Any], env_path: Path) -> None:
             lines.append("# API Keys")
             if api_keys.get("perplexity"):
                 lines.append(f"PERPLEXITY_API_KEY={api_keys['perplexity']}")
-            if api_keys.get("nia"):
-                lines.append(f"NIA_API_KEY={api_keys['nia']}")
             lines.append("")
 
     # Write file
@@ -1045,7 +1041,7 @@ async def run_setup_wizard() -> None:
     if Confirm.ask("Configure API keys?", default=False):
         api_keys = await prompt_api_keys()
     else:
-        api_keys = {"perplexity": "", "nia": ""}
+        api_keys = {"perplexity": ""}
 
     # Step 4b: Playwright CLI
     console.print("\n[bold]Step 4b: Playwright CLI[/bold]")

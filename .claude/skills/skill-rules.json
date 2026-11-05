@@ -497,31 +497,6 @@
       "evalTier": "verified",
       "evalDate": "2026-03-07"
     },
-    "nia-docs": {
-      "type": "domain",
-      "enforcement": "suggest",
-      "priority": "high",
-      "description": "Search library documentation via Nia API",
-      "promptTriggers": {
-        "keywords": [
-          "documentation",
-          "docs",
-          "library docs",
-          "API reference",
-          "how to use",
-          "package docs",
-          "nia"
-        ],
-        "intentPatterns": [
-          "(get|find|show|look.*?up).*?(docs|documentation)",
-          "(how|what).*?(library|package|module).*?(work|use)",
-          "(docs|documentation).*?for.*?(library|package)"
-        ]
-      },
-      "evalScore": 100,
-      "evalTier": "verified",
-      "evalDate": "2026-03-07"
-    },
     "exa-code-search": {
       "type": "domain",
       "enforcement": "suggest",
@@ -1411,7 +1386,6 @@
           "github mcp",
           "firecrawl",
           "perplexity",
-          "nia",
           "mcp tool",
           "mcp server",
           "model context protocol"
@@ -1419,7 +1393,7 @@
         "intentPatterns": [
           "(use|call|invoke).*?mcp",
           "mcp.*?(tool|server)",
-          "(context7|firecrawl|perplexity|nia).*?(search|get|fetch)",
+          "(context7|firecrawl|perplexity).*?(search|get|fetch)",
           "(which|what).*?mcp.*?(tool|use)"
         ]
       },
@@ -1671,7 +1645,7 @@
       "type": "research",
       "enforcement": "suggest",
       "priority": "critical",
-      "description": "EXTERNAL research using MCP tools (nia, perplexity, firecrawl) - NOT for codebase exploration",
+      "description": "EXTERNAL research using MCP tools (perplexity, firecrawl) - NOT for codebase exploration",
       "promptTriggers": {
         "keywords": [
           "external research",

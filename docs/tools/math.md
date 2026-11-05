@@ -52,7 +52,6 @@ Machine-verified mathematical proofs using Lean 4 and Mathlib. For mathematician
    ```
 
 2. **Search External** - What's the known proof strategy?
-   - Use Nia MCP if available: `mcp__nia__search`
    - Use Perplexity MCP if available: `mcp__perplexity__search`
    - Fall back to WebSearch for papers/references
    - Check for existing formalizations (Coq, Isabelle)
@@ -183,7 +182,6 @@ The workflow uses available tools in priority order:
 | Tool | Best For |
 |------|----------|
 | Mathlib grep/loogle | Existing formalizations |
-| Nia MCP | Library documentation |
 | Perplexity MCP | Proof strategies, papers |
 | WebSearch | General references |
 | WebFetch | Specific paper/page content |

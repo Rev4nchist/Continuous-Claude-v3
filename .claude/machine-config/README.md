@@ -53,17 +53,16 @@ assume a clean `git add` means everything arrived.
 
 ## Secret hygiene — checked, not assumed
 
-`mcp.json` was scanned before it was committed. All three secret-shaped values
+`mcp.json` was scanned before it was committed. Both secret-shaped values
 are **`${VAR}` placeholders**, not literals:
 
 ```
 github        GITHUB_PERSONAL_ACCESS_TOKEN   ${GITHUB_TOKEN}
-nia           NIA_API_KEY                    ${NIA_API_KEY}
 ai-reporting  NOTION_TOKEN                   ${NOTION_TOKEN}
 ```
 
 The only literal values are `NODE_TLS_REJECT_UNAUTHORIZED=0`,
-`MCP_TRANSPORT=stdio`, and a public `NIA_API_URL`. `commands/` scanned clean
+and `MCP_TRANSPORT=stdio`. `commands/` scanned clean
 (0 hits for `sk-*`, `ghp_`, `xox*-`, private-key headers, inline api keys).
 
 Worth recording *how* that was established: the first scan reported

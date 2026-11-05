@@ -43,7 +43,6 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 | `git` | `~/.claude/settings.json` | stdio (uvx) | Local git ops (used rarely; bash `git` is preferred) |
 | `fetch` | `~/.claude/settings.json` | stdio (uvx) | Generic URL fetch fallback |
 | `pageindex` | `~/.claude/settings.json` + `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Document search (long PDFs) |
-| `nia` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (uv) | External-source semantic indexing |
 | `context7` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Real-time library/SDK docs |
 | `github` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | GitHub API (issues, PRs, search) |
 | `playwright` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Browser automation (Tier 1) |
@@ -110,7 +109,6 @@ This table catalogs *real* overlap-cases in the current codebase and documents t
 
 | # | Overlap | Tier 1 (involved) | Tier 2 (involved) | Resolution | Verdict |
 |---|---------|-------------------|-------------------|------------|---------|
-| 1 | **Package install** | `package-install-guard` hook | `nia` MCP `index` tool | Hook is the **gate** (security; blocks malicious installs at PreToolUse:Bash). MCP is the **indexer** (read-only catalog of indexed sources). Different concerns, no real conflict. The hook never runs on `nia.index()` because nia.index does not invoke `pip`/`npm`. Document in `package-install-safety.md` rule (already done). | Resolved — distinct concerns |
 | 2 | **TLDR code analysis** | 9 TLDR hooks (auto-injection: `tldr-context-inject`, `tldr-read-enforcer`, `session-start-tldr-cache`, `smart-search-router`, `impact-refactor`, `arch-context-inject`, `edit-context-inject`, `post-edit-diagnostics`, `signature-helper`) | `tldr-code` skill (user-prompted teaching layer); `tldr-stats` skill (newly wired in `f9c7c59`) | Hooks own automatic injection. Skill is the user-prompted teaching layer that documents CLI commands. The recently-added "Canonical entry point" callout in `tldr-code/SKILL.md:15` codifies this split: extend the skill OR a hook, never add new `tldr-*` sub-skills. | Resolved — codified post-`f9c7c59` |
 | 3 | **Notion bridge** | `notion-bridge` skill (multi-step bridge protocol — read Active Context, write to handoff queue, update sprint state) | claude.ai Notion MCP (14 tools: search, fetch, create-pages, update-page, etc.) | Skill orchestrates; MCP provides the underlying tools. Skill body says "Always load `references/bridge-schema.md` before any write operation" — that workflow logic lives in the skill, not the MCP. | Resolved — skill calls MCP tools |
 | 4 | **Memory recall and store** | `memory-awareness` hook (proactive injection on UserPromptSubmit; `MEMORY MATCH` preview block) | `memory` skill (canonical user-invocable interface; documents `recall_learnings.py` and `store_learning.py`) | Skill is the manual interface and contract; hook is the proactive injection. Phase 4 plan tightens the hook (raise threshold to 0.85 RRF, preview-then-inject pattern) to reduce noise — does not change the split. | Resolved — distinct entry points |

@@ -380,17 +380,17 @@ def generate_test_parameters(
         )
 
         message = client.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=500,
+            model="claude-haiku-5-5",
+            max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
 
         # Extract JSON from response
         response_text = ""
-        if message.content:
-            first_block = message.content[0]
-            if hasattr(first_block, "text"):
-                response_text = first_block.text
+        for block in message.content or []:
+            if getattr(block, "type", None) == "text":
+                response_text = block.text
+                break
         response_text = response_text.strip()
 
         # Handle markdown code blocks

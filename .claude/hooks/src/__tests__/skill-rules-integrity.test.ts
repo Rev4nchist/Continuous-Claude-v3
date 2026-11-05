@@ -54,7 +54,7 @@ interface Rules {
  * month. A floor still catches the thing worth catching -- a purge or a bad
  * merge deleting live registrations -- without failing on additions.
  */
-const MIN_SKILLS = 56; // 2026-10-23: the removed cross-model skill left skill-rules.json
+const MIN_SKILLS = 55; // 2026-11-05: the removed nia-docs skill left skill-rules.json
 const MIN_AGENTS = 17; // 2026-10-29: the removed maestro agent left skill-rules.json
 
 // ── validators, extracted so they can be run against a bad fixture ─────────

@@ -5,11 +5,10 @@ DESCRIPTION: Chains multiple MCP tools to research patterns, find similar code,
 apply improvements, validate quality, and stage changes.
 
 Pipeline Steps:
-1. nia - Search library docs for patterns/examples
-2. ast-grep - Find similar code patterns in target codebase
-3. morph - Apply pattern via warpgrep search or edit
-4. qlty - Validate code quality
-5. git - Stage changes
+1. ast-grep - Find similar code patterns in target codebase
+2. morph - Apply pattern via warpgrep search or edit
+3. qlty - Validate code quality
+4. git - Stage changes
 
 USAGE:
     # Basic research and implementation
@@ -81,7 +80,6 @@ class PipelineContext:
     verbose: bool
 
     # Results from each step
-    research_results: dict = field(default_factory=dict)
     code_patterns: list = field(default_factory=list)
     search_matches: list = field(default_factory=list)
     quality_issues: list = field(default_factory=list)
@@ -141,56 +139,8 @@ async def check_tool_available(tool_id: str) -> bool:
     return True
 
 
-async def step_research_nia(ctx: PipelineContext) -> StepResult:
-    """Step 1: Research patterns using Nia documentation search."""
-    from runtime.mcp_client import call_mcp_tool
-
-    step_name = "nia_research"
-
-    # Check if nia is available
-    if not await check_tool_available("nia__search"):
-        return StepResult(
-            step_name=step_name,
-            status=StepStatus.SKIPPED,
-            message="Nia server not available (disabled or missing API key)",
-        )
-
-    print(f"\n[1/5] Researching: {ctx.topic}")
-
-    try:
-        # Use nia search tool
-        result = await call_mcp_tool("nia__search", {"query": ctx.topic})
-
-        ctx.research_results = {"source": "nia_universal", "query": ctx.topic, "results": result}
-
-        if ctx.verbose:
-            print(
-                f"  Found {len(result.get('results', [])) if isinstance(result, dict) else 'N/A'} results"
-            )
-            if isinstance(result, dict) and result.get("results"):
-                for i, r in enumerate(result["results"][:3], 1):
-                    title = r.get("title", r.get("name", f"Result {i}"))
-                    print(f"    {i}. {title[:60]}...")
-
-        return StepResult(
-            step_name=step_name,
-            status=StepStatus.SUCCESS,
-            data=result,
-            message=f"Found patterns for '{ctx.topic}'",
-        )
-
-    except Exception as e:
-        ctx.errors.append(f"nia: {e}")
-        return StepResult(
-            step_name=step_name,
-            status=StepStatus.FAILED,
-            error=str(e),
-            message=f"Nia search failed: {e}",
-        )
-
-
 async def step_find_patterns_ast_grep(ctx: PipelineContext) -> StepResult:
-    """Step 2: Find similar code patterns using AST-grep."""
+    """Step 1: Find similar code patterns using AST-grep."""
     from runtime.mcp_client import call_mcp_tool
 
     step_name = "ast_grep_patterns"
@@ -203,7 +153,7 @@ async def step_find_patterns_ast_grep(ctx: PipelineContext) -> StepResult:
             message="AST-grep server not available (disabled)",
         )
 
-    print(f"\n[2/5] Finding code patterns in {ctx.target_dir}")
+    print(f"\n[1/4] Finding code patterns in {ctx.target_dir}")
 
     # Derive AST pattern from topic
     # This is a heuristic - could be improved with LLM guidance
@@ -278,7 +228,7 @@ def derive_ast_pattern(topic: str) -> str:
 
 
 async def step_search_morph(ctx: PipelineContext) -> StepResult:
-    """Step 3: Search/apply patterns using Morph WarpGrep."""
+    """Step 2: Search/apply patterns using Morph WarpGrep."""
     from runtime.mcp_client import call_mcp_tool
 
     step_name = "morph_search"
@@ -291,7 +241,7 @@ async def step_search_morph(ctx: PipelineContext) -> StepResult:
             message="Morph server not available (disabled or missing API key)",
         )
 
-    print("\n[3/5] Searching codebase with Morph")
+    print("\n[2/4] Searching codebase with Morph")
 
     # Derive search string from topic
     search_terms = ctx.topic.split()[:3]  # First 3 words
@@ -336,7 +286,7 @@ async def step_search_morph(ctx: PipelineContext) -> StepResult:
 
 
 async def step_validate_qlty(ctx: PipelineContext) -> StepResult:
-    """Step 4: Validate code quality using Qlty."""
+    """Step 3: Validate code quality using Qlty."""
     from runtime.mcp_client import call_mcp_tool
 
     step_name = "qlty_validate"
@@ -349,7 +299,7 @@ async def step_validate_qlty(ctx: PipelineContext) -> StepResult:
             message="Qlty server not available (disabled)",
         )
 
-    print("\n[4/5] Validating code quality")
+    print("\n[3/4] Validating code quality")
 
     try:
         result = await call_mcp_tool(
@@ -400,7 +350,7 @@ async def step_validate_qlty(ctx: PipelineContext) -> StepResult:
 
 
 async def step_stage_git(ctx: PipelineContext) -> StepResult:
-    """Step 5: Stage changes using Git."""
+    """Step 4: Stage changes using Git."""
     from runtime.mcp_client import call_mcp_tool
 
     step_name = "git_stage"
@@ -416,7 +366,7 @@ async def step_stage_git(ctx: PipelineContext) -> StepResult:
             step_name=step_name, status=StepStatus.SKIPPED, message="Git server not available"
         )
 
-    print("\n[5/5] Checking git status")
+    print("\n[4/4] Checking git status")
 
     try:
         # Get status first
@@ -469,13 +419,6 @@ def print_summary(ctx: PipelineContext, results: list[StepResult]):
 
     # Data summary
     print("\nData Collected:")
-    if ctx.research_results:
-        results_count = (
-            len(ctx.research_results.get("results", {}).get("results", []))
-            if isinstance(ctx.research_results.get("results"), dict)
-            else 0
-        )
-        print(f"  - Research results: {results_count} items")
     if ctx.code_patterns:
         print(f"  - Code patterns: {len(ctx.code_patterns)} matches")
     if ctx.search_matches:
@@ -524,23 +467,19 @@ async def main():
     # Run pipeline steps
     results = []
 
-    # Step 1: Research with Nia
-    r1 = await step_research_nia(ctx)
-    results.append(r1)
-
-    # Step 2: Find patterns with AST-grep
+    # Step 1: Find patterns with AST-grep
     r2 = await step_find_patterns_ast_grep(ctx)
     results.append(r2)
 
-    # Step 3: Search with Morph
+    # Step 2: Search with Morph
     r3 = await step_search_morph(ctx)
     results.append(r3)
 
-    # Step 4: Validate with Qlty
+    # Step 3: Validate with Qlty
     r4 = await step_validate_qlty(ctx)
     results.append(r4)
 
-    # Step 5: Stage with Git
+    # Step 4: Stage with Git
     r5 = await step_stage_git(ctx)
     results.append(r5)
 
@@ -558,7 +497,6 @@ async def main():
         ],
         "errors": ctx.errors,
         "data": {
-            "research": ctx.research_results,
             "patterns": ctx.code_patterns,
             "matches": ctx.search_matches,
             "issues": ctx.quality_issues,
