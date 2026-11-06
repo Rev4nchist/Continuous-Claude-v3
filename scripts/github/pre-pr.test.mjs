@@ -1271,7 +1271,9 @@ test('B2: the same run with the cap reached, or a known rate-limit wait, or no C
   assert.equal(hookVerdict(capped.dir).allow, true);
 
   const limited = withFork(makeRepo());
-  const lim = await prePr(limited, { crRunner: (o) => (o.args[0] === 'usage' ? { status: 0, stdout: ev({ type: 'usage', remaining: 0, fullCapacityInMs: 720000 }), stderr: '' } : { status: 0, stdout: NDJSON_OK, stderr: '' }) });
+  // No cap in the config: remaining 0 has no budget to compare, so it stays rate-limited. With a cap it runs or skips on the estimate (CE tests).
+  const noCap = { ...CONFIG, coderabbit: { ...CONFIG.coderabbit, cli_daily_cap_usd: undefined } };
+  const lim = await prePr(limited, { config: noCap, crRunner: (o) => (o.args[0] === 'usage' ? { status: 0, stdout: ev({ type: 'usage', remaining: 0, fullCapacityInMs: 720000 }), stderr: '' } : { status: 0, stdout: NDJSON_OK, stderr: '' }) });
   assert.equal(lim.result.ok, true, lim.result.lines.join('\n'));
   const stamp = JSON.parse(readFileSync(path.join(limited.dir, STAMP_REL), 'utf8'));
   assert.equal(stamp.cr_skip_reason, 'rate-limited');
@@ -2030,6 +2032,118 @@ test('P8: runPrePr reads the cap from the config, stamps cli-cap, and the built 
   assert.equal(JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8')).cr_skip_reason, 'cli-cap');
   assert.equal(hookVerdict(repo.dir).allow, true);
   assert.notEqual(cliCapOf(CONFIG), null, 'the shipped config sets a cap');
+});
+
+// ---------- cost estimate before a run (Dave, 2026-11-06) ----------
+// Remaining 0 stays rate-limited: no run, no estimate gate (Dave: NO to billed runs on an empty allowance). The estimate (every changed
+// file x $0.25) applies only when the usage read is unavailable: today's spend plus the estimate over the cap SKIPs with cli-cap.
+
+const srcFiles = (n) => Array.from({ length: n }, (_, i) => `src/f${i}.ts`);
+const usageWith = (f, remaining) => { f.runner.usage = { status: 0, stdout: ev({ type: 'usage', remaining, fullCapacityInMs: 600000 }), stderr: '' }; };
+const USAGE_DOWN = '{"type":"status","phase":"usage","status":"unavailable","organization":"Rev4nchist","includedReviews":{"state":"unavailable","reason":"lookup_failed"}}\n';
+const usageDown = (f) => { f.runner.usage = { status: 1, stdout: USAGE_DOWN, stderr: '' }; };
+
+test('CE1: remaining 0 SKIPs rate-limited even when the estimate is over the cap, and starts no run', async () => {
+  // Breaks when: the estimate gate replaces rate-limited at remaining 0 (cli-cap), or remaining 0 lets a run start.
+  const f = crFixture();
+  usageWith(f, 0);
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3, changedPaths: srcFiles(16) }));
+  assert.equal(r.status, 'SKIP');
+  assert.equal(r.skipReason, 'rate-limited');
+  assert.match(r.detail, /remaining 0/);
+  assert.equal(f.usageCalls.length, 1);
+  assert.equal(f.calls.length, 0);
+  assert.equal(existsSync(crPaths(f.root, 'feat/x').counter), false, 'no slot counted');
+});
+
+test('CE2: remaining 0 SKIPs rate-limited even when the estimate fits under the cap', async () => {
+  // Breaks when: a cap and a small estimate let a billed run start on an empty allowance.
+  const f = crFixture();
+  usageWith(f, 0);
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3, changedPaths: srcFiles(2) }));
+  assert.equal(r.status, 'SKIP');
+  assert.equal(r.skipReason, 'rate-limited');
+  assert.equal(f.calls.length, 0);
+});
+
+test('CE3: unknown count: today\'s spend counts, so an estimate under the cap alone still SKIPs when spend plus estimate passes it', async () => {
+  // Breaks when: the estimate is compared with the cap alone.
+  const f = crFixture();
+  usageDown(f);
+  seedLedger(f.ledgerPath, cliRowOf(2));
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3, changedPaths: srcFiles(8) }));
+  assert.equal(r.skipReason, 'cli-cap');
+  assert.match(r.detail, /\$2\.00 plus today's paid CLI spend \$2\.00/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('CE4: remaining above 0 is unchanged: an estimate over the cap does not stop the run, and the run line still prints it', async () => {
+  // Breaks when: the estimate gate also applies while included reviews are left.
+  const f = crFixture();
+  usageWith(f, 5);
+  const lines = [];
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3, changedPaths: srcFiles(16), log: (m) => lines.push(m) }));
+  assert.equal(r.status, 'PASS', r.detail);
+  assert.equal(f.calls.length, 1);
+  assert.ok(lines.some((m) => /16 file\(s\) x \$0\.25 = \$4\.00/.test(m) && /5/.test(m)), lines.join('\n'));
+  assert.ok(r.notes.some((n) => /\$4\.00/.test(n)), 'the step line carries the estimate');
+});
+
+test('CE5: an unavailable usage read is an unknown count: over the cap SKIPs with cli-cap and names the estimate, under it runs and prints it', async () => {
+  // Breaks when: unknown is treated as free (the old behaviour) or as rate-limited, or the run line drops the estimate.
+  const over = crFixture();
+  usageDown(over);
+  const a = await runCodeRabbit(crOpts(over, { cliCapUsd: 3, changedPaths: srcFiles(16) }));
+  assert.equal(a.skipReason, 'cli-cap');
+  assert.match(a.detail, /16 file\(s\) x \$0\.25 = \$4\.00/);
+  assert.match(a.detail, /unknown/);
+  assert.equal(over.calls.length, 0);
+  assert.equal(existsSync(crPaths(over.root, 'feat/x').counter), false, 'no slot counted');
+  const under = crFixture();
+  usageDown(under);
+  const lines = [];
+  const b = await runCodeRabbit(crOpts(under, { cliCapUsd: 3, changedPaths: srcFiles(8), log: (m) => lines.push(m) }));
+  assert.equal(b.status, 'PASS', b.detail);
+  assert.equal(under.calls.length, 1);
+  assert.ok(lines.some((m) => /8 file\(s\) x \$0\.25 = \$2\.00/.test(m) && /unknown/.test(m)), lines.join('\n'));
+  assert.ok(b.notes.some((n) => /\$2\.00/.test(n)), 'the step line carries the estimate');
+});
+
+test('CE6: the estimate counts every changed file, even ones .coderabbit.yaml path_filters exclude', async () => {
+  // Breaks when: excluded files are dropped from the estimate (12 files = $3.00 passes a $2 cap; 4 files = $1.00 would not).
+  const f = crFixture();
+  usageDown(f);
+  writeFileSync(path.join(f.root, '.coderabbit.yaml'), 'reviews:\n  path_filters:\n    - "!docs/**"\n');
+  const docs = Array.from({ length: 8 }, (_, i) => `docs/d${i}.md`);
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 2, changedPaths: [...docs, ...srcFiles(4)] }));
+  assert.equal(r.skipReason, 'cli-cap');
+  assert.match(r.detail, /12 file\(s\) x \$0\.25 = \$3\.00/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('CE7: an unknown count with no cap, or with no file list, runs as on main (no budget to compare)', async () => {
+  // Breaks when: a missing cap or an unknown file list blocks a run the old code allowed.
+  const noCap = crFixture();
+  usageDown(noCap);
+  assert.equal((await runCodeRabbit(crOpts(noCap, { changedPaths: srcFiles(100) }))).status, 'PASS');
+  const noList = crFixture();
+  usageDown(noList);
+  assert.equal((await runCodeRabbit(crOpts(noList, { cliCapUsd: 3 }))).status, 'PASS');
+  assert.equal(noCap.calls.length + noList.calls.length, 2);
+});
+
+test('CE8: runPrePr passes the changed files: an unknown count over the cap stamps cli-cap (P8 covers the hook accepting it)', async () => {
+  // Breaks when: runPrePr does not give runCodeRabbit the changed file list.
+  const repo = withFork(makeRepo({ files: { 'src/a.ts': 'a\n', 'src/b.ts': 'b\n' } }));
+  const config = { ...CONFIG, coderabbit: { ...CONFIG.coderabbit, cli_daily_cap_usd: 0.25 } };
+  const crCalls = [];
+  const crRunner = (o) => { if (o.args[0] === 'usage') return { status: 1, stdout: USAGE_DOWN, stderr: '' }; crCalls.push(o); return { status: 0, stdout: NDJSON_OK, stderr: '' }; };
+  const { result } = await prePr(repo, { config, crRunner, bodyText: harnessBody(repo.head) });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(crCalls.length, 0);
+  const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
+  assert.equal(stamp.cr_skip_reason, 'cli-cap');
+  assert.match(result.results.find((r) => r.step === 'coderabbit').detail, /2 file\(s\) x \$0\.25 = \$0\.50/);
 });
 
 // ---------- zizmor advisory (one-week trial: it never fails pre-pr) ----------

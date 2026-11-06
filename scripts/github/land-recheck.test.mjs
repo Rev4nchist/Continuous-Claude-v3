@@ -19,6 +19,8 @@
 //   the comments are read without the edit history, or a read error there goes through          -> RC14e to RC14g, RC10e
 //   the newest round is picked by submitted_at, not by the PR's commit order, and hides a request   -> RC15, RC15e
 //   the commit list is unreadable and rounds on two commits cannot be ordered                       -> RC15b to RC15e
+//   the automatic "Review skipped" notice on a review:none PR refuses the land for 120 s (live PR 338) -> RC16
+//   that exception hides a notice on a CodeRabbit-labelled PR, a real summary edit, an edited or unlabelled-unknown notice -> RC16b to RC16f
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -153,6 +155,68 @@ test('RC14c: a summary with no edit history read does not answer the request (re
 
 test('RC14d: a summary only CodeRabbit edited still answers the request (live PR 211 shape)', () => {
   assert.deepEqual(decideRecheck(pr211({ commentEdits: { 900: [CR_EDIT, CR_EDIT] } })), { ok: true, refusals: [] });
+});
+
+// Live PR 338 (2026-11-05): a review:none PR. CodeRabbit posted its summary comment as a skip notice 23:49:44Z, 30 s before the
+// READY time. Two land runs STOPPED on that comment. The body below is the real text (the Run configuration block is cut).
+const SKIP_BODY = `<!-- coderabbit-ai-generated:v1 -->
+
+${MARKER}
+<!-- This is an auto-generated comment: skip review by coderabbit.ai -->
+
+> [!IMPORTANT]
+> ## Review skipped
+>
+> Auto reviews are limited based on label configuration.
+>
+> * review:coderabbit
+> * review:deep
+> * review:deep-held
+
+<!-- end of auto-generated comment: skip review by coderabbit.ai -->`;
+const SKIP_AT = '2026-10-30T11:59:30Z';
+const labelled = (...names) => ({ head: { sha: HEAD }, labels: names.map((name) => ({ name })) });
+const skipped = (over = {}) => quiet({
+  pull: labelled('risk:steering', 'review:none'),
+  comments: [summary(SKIP_AT, { body: SKIP_BODY, created_at: SKIP_AT })],
+  commentEdits: { 900: [CR_EDIT] },
+  ...over,
+});
+
+test('RC16: a CodeRabbit "Review skipped" summary after the READY check does not refuse a review:none PR (live PR 338)', () => {
+  assert.deepEqual(decideRecheck(skipped({ comments: [summary(AFTER, { body: SKIP_BODY })] })), { ok: true, refusals: [] });
+});
+
+test('RC16b: the same skip notice on a PR labelled review:coderabbit, review:deep or review:deep-held still refuses', () => {
+  for (const label of ['review:coderabbit', 'review:deep', 'review:deep-held']) {
+    const r = decideRecheck(skipped({ pull: labelled('review:none', label), comments: [summary(AFTER, { body: SKIP_BODY })] }));
+    assert.equal(r.ok, false, label);
+    assert.match(r.refusals.join(' '), /summary.*after the ready check/i);
+  }
+});
+
+test('RC16c: a real review summary edited after the READY check still refuses on a review:none PR', () => {
+  const r = decideRecheck(skipped({ comments: [summary(AFTER, { body: `${MARKER}\nsummary` })] }));
+  assert.equal(r.ok, false);
+  assert.match(r.refusals.join(' '), /summary.*after the ready check/i);
+});
+
+test('RC16d: a skip notice a person edited, or one with no edit history, is not ignored (fail closed)', () => {
+  const comments = [summary(AFTER, { body: SKIP_BODY })];
+  assert.equal(decideRecheck(skipped({ comments, commentEdits: { 900: [PERSON_EDIT, CR_EDIT] } })).ok, false);
+  assert.equal(decideRecheck(skipped({ comments, commentEdits: undefined })).ok, false);
+});
+
+test('RC16e: a PR whose labels are unreadable is not ignored (fail closed); an unlabelled PR is', () => {
+  const comments = [summary(AFTER, { body: SKIP_BODY })];
+  assert.equal(decideRecheck(skipped({ comments, pull: { head: { sha: HEAD } } })).ok, false);
+  assert.equal(decideRecheck(skipped({ comments, pull: labelled() })).ok, true);
+});
+
+test('RC16f: a skip notice does not hide a review object or a request that landed after the READY check', () => {
+  const comments = [summary(AFTER, { body: SKIP_BODY }), request(AFTER)];
+  assert.match(refusalsOf(skipped({ comments })), /in flight/i);
+  assert.match(refusalsOf(skipped({ comments, reviews: [review(2, AFTER)] })), /review landed after the ready check/i);
 });
 
 test('RC2c: with the READY time already backed off by the clock margin, a review 60 s after it refuses', () => {
