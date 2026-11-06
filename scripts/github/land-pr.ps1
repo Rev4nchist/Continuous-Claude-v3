@@ -288,7 +288,7 @@ $branch = $pull.head.ref; $head = $pull.head.sha
 if (-not $pull.merged -and -not $CleanupOnly) {
   if (-not $IgnoreReview) {
     Step "ready check for #$Pr at $($head.Substring(0,7))"
-    $skewMargin = 120  # seconds. The READY time is the local clock; GitHub stamps reviews. A fast local clock would hide a review that landed just before it.
+    $skewMargin = 120  # seconds. The READY time is the local clock; GitHub stamps reviews. A fast local clock would hide a review that landed just before it. The re-check ignores CodeRabbit's automatic "Review skipped" notice on a PR with no CodeRabbit label, so that notice does not refuse inside this margin.
     Write-Host "  clock margin: the re-check treats anything CodeRabbit did in the $skewMargin s before the READY check as new"
     # GitHub reports mergeable_state "unknown" for a while after the base branch moves (every PR
     # after the first in a landing run). Re-ask for up to ~90s before treating it as not ready.

@@ -10,7 +10,9 @@
  * Why: land-pr.ps1 checked READY and merged with no look in between. A CodeRabbit review (and its outside-diff
  * findings) that landed on the same head in that gap was never read. It refuses when, since the READY check:
  *   - the head SHA changed;
- *   - a CodeRabbit review object, or an edit of the CodeRabbit summary comment, is newer than the READY check;
+ *   - a CodeRabbit review object, or an edit of the CodeRabbit summary comment, is newer than the READY check. Exception: on a PR
+ *     with no review:coderabbit, review:deep or review:deep-held label, the TRUSTED summary that is CodeRabbit's automatic "Review
+ *     skipped ... limited based on label configuration" notice (skip marker, live PR 338) is not a change: it raised two false STOPs;
  *   - an "@coderabbitai review" request comment is newer than the newest CodeRabbit review with a body and newer than the
  *     TRUSTED CodeRabbit summary when that summary covers the head and is no notice (a review is in flight). Trusted is the
  *     rule READY uses (trustedCodeRabbitSummary): the comments are read with their edit history (readIssueComments), and a
@@ -29,6 +31,31 @@ import { codeRabbitNotice, coderabbitRequestComments, isCodeRabbitUser, latestCo
 
 const ms = (iso) => Date.parse(iso || '') || 0;
 const iso = (t) => new Date(t).toISOString();
+
+// Labels that make CodeRabbit review a PR (the list its own skip notice prints, live PR 338).
+const CODERABBIT_LABELS = new Set(['review:coderabbit', 'review:deep', 'review:deep-held']);
+// `-{2}` and not `--`: the Semgrep JS parser fails on a regex literal that holds an HTML comment opener, and CI counts that as a new scan error.
+const SKIP_MARKER = /<!-{2}\s*This is an auto-generated comment: skip review by coderabbit\.ai\s*-{2}>/;
+const SKIP_REASON = /Auto reviews are limited based on label configuration/i;
+
+/**
+ * True when the PR was read with labels and none of them asks for CodeRabbit. Unreadable labels give false (fail closed), and so
+ * does one label entry with no readable name: it may be the CodeRabbit label.
+ */
+function hasNoCodeRabbitLabel(pull) {
+  const named = (l) => typeof l?.name === 'string' && l.name !== '';
+  return Array.isArray(pull?.labels) && pull.labels.every(named) && !pull.labels.some((l) => CODERABBIT_LABELS.has(l.name));
+}
+
+/**
+ * True when `summary` is the "Review skipped" notice CodeRabbit posts on its own for a PR with no CodeRabbit label (live PR 338:
+ * two land runs stopped on it). It needs the skip marker, the skipped heading and the label reason. Only the trusted summary
+ * counts: a person or another app edited it, or no edit history, and it does not.
+ */
+function isLabelSkipNotice(summary, trusted) {
+  const body = String(summary?.body ?? '');
+  return trusted === summary && SKIP_MARKER.test(body) && codeRabbitNotice(body) === 'skipped' && SKIP_REASON.test(body);
+}
 
 /**
  * Pure decision. { readyHead, readyAt (ISO), pull, reviews, comments, commentEdits, statuses } in, { ok, refusals } out.
@@ -50,12 +77,13 @@ export function decideRecheck({ readyHead, readyAt, pull, reviews = [], comments
   if (newestReview > readyMs) refusals.push(`a CodeRabbit review landed after the READY check (${iso(newestReview)}); read it and re-run`);
 
   const summary = latestCodeRabbitSummary(comments);
-  const summaryAt = summary ? ms(summary.updated_at || summary.created_at) : 0;
-  if (summaryAt > readyMs) refusals.push(`the CodeRabbit summary comment changed after the READY check (${iso(summaryAt)})`);
-
   // A request is answered by the newest review with a body, or by a clean summary-only round: the TRUSTED summary covers the
   // head and is no notice (live PR 211 got no review object for its on-demand round, only a summary edit).
   const trusted = trustedCodeRabbitSummary(comments, commentEdits);
+  // The automatic skip notice on a PR with no CodeRabbit label is no change of the review state: it never refuses here.
+  const summaryIsSkipNotice = hasNoCodeRabbitLabel(pull) && isLabelSkipNotice(summary, trusted);
+  const summaryAt = summary && !summaryIsSkipNotice ? ms(summary.updated_at || summary.created_at) : 0;
+  if (summaryAt > readyMs) refusals.push(`the CodeRabbit summary comment changed after the READY check (${iso(summaryAt)})`);
   // newestCodeRabbitReview ranks by commit only when the list holds EVERY reviewed commit (ranksFor: all or none), else it
   // falls back to submitted_at. A round on a commit no longer in the PR (amend, rebase) reviewed code that is gone, so it
   // answers no request: drop it, then rank the rest. Dropping a round can only lower answeredAt, so the gate gets stricter.

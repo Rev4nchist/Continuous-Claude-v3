@@ -27,7 +27,6 @@ import {
   SUBAGENT_WHY,
   TOOL_NAME,
   USAGE,
-  ageText,
   autoNotice,
   autoToast,
   buildPathwayAsk,
@@ -233,7 +232,7 @@ const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawB
   const body = await bodyIn($, root, sessionRoot, rawBody)
   if (body === null) return fail(missingBody(rawBody, root, sessionRoot))
   const dependabot = info.author?.login === 'dependabot[bot]'
-  const ran = await run($, engineArgv(sessionRoot, '--json', ...(dependabot ? ['--dependabot'] : [])), root, ENGINE_TIMEOUT_MS)
+  const ran = await run($, engineArgv(sessionRoot, '--json', '--pr', String(pr), '--probe', ...(dependabot ? ['--dependabot'] : [])), root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return fail(`pr-checkpoint did not finish (timed out or failed to start: ${ran.text}). Nothing was recorded. The PR stays a draft.`)
   if (ran.code !== 0) return fail(`pr-checkpoint exited ${ran.code}: ${lastLine(ran.err || ran.out)}. Nothing was recorded. The PR stays a draft.`)
   const result = parseResult(ran.out)
@@ -434,7 +433,7 @@ async function confirmPaid($: EngineInterface, pr: number, choice: PathwayChoice
  */
 const askCheckpoint = async ($: EngineInterface, pending: Pending): Promise<Asked> => {
   const { pr } = pending
-  const ask = buildPathwayAsk(pr, pending.result, ageText(pending.stamp, await $.clock.now()))
+  const ask = buildPathwayAsk(pr, pending.result, await $.clock.now())
   if (!ask) return { text: noQuestionText(pr, pending.result.why[0]), recorded: null }
   await $.store.set(`${PENDING_PREFIX}${await sessionId($)}`, pending)
   const got = await askDave($, ask.question, ask.choices.map(one => one.label), ask.header)
@@ -443,8 +442,8 @@ const askCheckpoint = async ($: EngineInterface, pending: Pending): Promise<Aske
   const choice = pathwayOfAnswer(got.text, ask)
   if (!choice) return { text: otherText(pr, got.text), recorded: null }
   if (choice.pathway === 'wait') {
+    // The pending checkpoint stays: a bare /pathway raises the question again, and the stored copy is what that command reads.
     $.ui.toast(`PR #${pr} stays a draft`, { timeoutMs: 10_000 })
-    await clearPending($)
     return { text: keptDraftText(pr), recorded: null }
   }
   if (needsPaidConfirm(choice)) {

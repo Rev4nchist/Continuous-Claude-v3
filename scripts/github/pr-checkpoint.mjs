@@ -8,8 +8,14 @@
  * PR B adds two modes that write or spend. Only Dave's press in the /pathway mod runs them (the pre-pr-gate hook denies
  * a shell that names pr-checkpoint with --confirm or --apply).
  *
- * Usage: node scripts/github/pr-checkpoint.mjs [--json] [--facts facts.json] [--config router-config.json]
+ * Usage: node scripts/github/pr-checkpoint.mjs [--json] [--probe] [--pr <n>] [--facts facts.json] [--config router-config.json]
  *   --json     print the result as one JSON object (default: plain lines).
+ *   --pr       the PR number the live capacity fact reads (its comments and cache). Default: the PR of the current branch.
+ *   --probe    let the run post ONE free "@coderabbitai rate limit" comment (not a review) to learn whether a CodeRabbit slot is free. Without it the
+ *              run only reads (PR notices, the cache, the queue state file, cr usage) and never posts. It posts only with --json and --pr, when no
+ *              notice or cache answers, a question will be shown (the result is not stopped and auto-confirm does not cover the PR), and
+ *              `gh pr view <n>` says state OPEN and isDraft true. Only the /pathway mod's prepare call passes it. --confirm and --apply never post.
+ *              Kill switches: capacity.post_rate_limit_probe false in the config, or the env var PR_CHECKPOINT_NO_PROBE=1.
  *   --dependabot  the PR is a Dependabot PR. PR B's mod passes it from the PR author (the authoritative source).
  *              Without it, the real run derives it from base...HEAD: every commit author is dependabot[bot].
  *   --facts    read the facts from a JSON file, not from git and the stamp (tests, like review-router.mjs --fixture).
@@ -37,6 +43,9 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
+import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
+
+export { capacityFact, parseRateLimitReply };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -170,6 +179,21 @@ function capacityOf(policy, now) {
 }
 
 /**
+ * The capacity of the result. facts.capacity (the live fact, capacity-fact.mjs) wins when its state is known: free is band ok, wait is band
+ * high, and the hand-set count is dropped (it is stale). An unknown fact, or none (a fixture), keeps the old band logic (capacityOf), plus the
+ * fact's fields. A fact object always clears the stale-count warning (the mod would print "update reviews_7d_manual" beside a live answer).
+ * The legacy `source` stays as capacityOf gives it (null once the count is dropped); the fact's own source goes to `factSource`.
+ */
+function resultCapacity(policy, facts) {
+  const live = facts.capacity;
+  if (!live || typeof live !== 'object') return capacityOf(policy, facts.now);
+  const { source, ...fields } = live;
+  const known = live.state === 'free' || live.state === 'wait';
+  const legacy = known ? { count: null, band: live.state === 'free' ? 'ok' : 'high', date: null, source: null } : capacityOf(policy, facts.now);
+  return { ...legacy, ...fields, warning: null, source: legacy.source, factSource: source ?? null };
+}
+
+/**
  * Greptile is available only when the router holds nothing, the credit count is known and 3 credits are left.
  * Empty labels, because a present review:deep clears the router hold. A non-deep class is held like steering (not r3).
  */
@@ -230,9 +254,9 @@ const r3Rule = (c) => (c.cls === 'r3' ? greptileRule('R4', 'Class r3', c) : null
 
 /** Why a PR is docs-only (class docs, or only thoughts/, artifacts/ and .claudedocs/ paths), or null. Only these skip the CodeRabbit trigger. */
 function docsOnlyReason(c) {
-  if (c.cls === 'docs' || c.budgetClass === 'docs') return 'Class docs: no bot review.';
+  if (c.cls === 'docs' || c.budgetClass === 'docs') return `Class docs (first file ${c.paths[0] ?? 'none'}): no bot review.`;
   const quiet = c.paths.every((p) => QUIET_DIRS.some((d) => p.startsWith(d)));
-  return quiet ? 'Only thoughts/, artifacts/ or .claudedocs/ paths: no bot review.' : null;
+  return quiet ? `Only thoughts/, artifacts/ or .claudedocs/ paths (first file ${c.paths[0] ?? 'none'}): no bot review.` : null;
 }
 
 function noneReason(c) {
@@ -299,6 +323,15 @@ function monthCapProblem(c) {
   return `Month cap: ${c.monthFiles} file(s) reviewed this month (${LEDGER_NOTE}) plus ${c.size.files} reviewable file(s) in this PR is over the cap of ${c.monthCap} (coderabbit.monthly_file_cap). No CodeRabbit recommendation; press CodeRabbit by hand if you want it.`;
 }
 
+/** The real trigger of a band, for a reason line: the first critical file, the risk:high label, the first gate file, else the first changed file. */
+function triggerOf(c) {
+  const b = c.band;
+  if (c.critical.length) return `critical file ${c.critical[0]}`;
+  if (b.labelHigh) return 'the risk:high label';
+  if (b.gateFiles?.length) return `gate file ${b.gateFiles[0]}`;
+  return `first file ${c.paths[0] ?? 'none'}, band ${b.band}`;
+}
+
 /**
  * RB (review matrix, option A, interim CodeRabbit rule 2026-11-04): the band decides. LOW, MID and ELEVATED get no CodeRabbit PR bot. HIGH and
  * CRITICAL get it at the matrix.bot_budget only when crTrigger names a cause, the PR is not docs-only and the month cap is not over.
@@ -310,13 +343,13 @@ function bandRule(c) {
   const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}${tier}`;
   const head = `Band ${b.band} (${facts})`;
   if (!['HIGH', 'CRITICAL'].includes(b.band)) {
-    return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot below HIGH. The internal review stack covers it.`]);
+    return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot below HIGH (trigger: ${triggerOf(c)}). The internal review stack covers it.`]);
   }
   const docs = docsOnlyReason(c);
   if (docs) return hit('RB', 'none', [0, 0], [`${head}: ${docs} A docs-only PR gets no CodeRabbit PR bot, even with risk:high (interim rule).`]);
   const cause = crTrigger(b);
   if (!cause) {
-    return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot under the interim rule. It needs the risk:high label, or band CRITICAL with a trust-boundary or security-tier file. The internal review stack covers it.`]);
+    return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot under the interim rule (trigger: ${triggerOf(c)}). It needs the risk:high label, or band CRITICAL with a trust-boundary or security-tier file. The internal review stack covers it.`]);
   }
   const capped = monthCapProblem(c);
   if (capped) return hit('RB', 'none', [0, 0], [`${head}: ${capped}`]);
@@ -424,18 +457,27 @@ function optionOf(c, picked, pathway) {
   const floor = picked.rules.includes('RF') || floorApplies(c);
   const reason = {
     none: floor ? 'No bot review. READY needs CI, proof and the internal pass (aegis + critic).' : 'No bot review. READY needs CI and proof only.',
-    wait: 'Stay a draft and spend nothing until the CodeRabbit 7-day count drops.',
+    wait: c.capacity.state === 'wait' ? `Stay a draft and spend nothing${nextSlotText(c.capacity)}.` : 'Stay a draft and spend nothing until the CodeRabbit 7-day count drops.',
     coderabbit: `CodeRabbit ${cost[0]}+${cost[1]}.`,
     both: c.greptile.reason,
   }[pathway];
   return { pathway, label: LABELS[pathway], available: pathway === 'both' ? c.greptile.available : true, cost, budget: budgetOf(c, picked, pathway, cost), reason };
 }
 
+/** When the next slot opens, from the live fact: "about 2026-11-06T18:20:00.000Z (in 20 min)", or "" when the fact names no time. */
+const nextSlotText = (cap) => (cap.nextSlotAt ? ` until about ${cap.nextSlotAt} (in ${cap.minutesToSlot} min)` : '');
+
+/** Why wait is the default: the live slot fact when it says wait, else the hand-set 7-day count. */
+function waitText(cap) {
+  if (cap.state === 'wait') return `CodeRabbit has no free slot${nextSlotText(cap)}: wait is the default. It never blocks.`;
+  return `CodeRabbit 7-day count is ${cap.count}: wait is the default at 40 or more. It never blocks.`;
+}
+
 function waitWhy(c, picked) {
   const only = picked.rules.length === 1 && ['R5', 'RS'].includes(picked.rules[0]);
   // A clean small PR (RS, none) buys no review, so there is nothing to wait for.
   const buys = picked.pathway === 'coderabbit';
-  return only && buys && c.capacity.band === 'high' ? { recommended: 'wait', why: [`CodeRabbit 7-day count is ${c.capacity.count}: wait is the default at 40 or more. It never blocks.`] } : null;
+  return only && buys && c.capacity.band === 'high' ? { recommended: 'wait', why: [waitText(c.capacity)] } : null;
 }
 
 // ---------- auto-confirm (review factory step A, Dave 2026-11-01) ----------
@@ -444,8 +486,14 @@ function waitWhy(c, picked) {
 const AUTO_BANDS = ['LOW', 'MID', 'ELEVATED'];
 
 /**
- * May the mod record `none` without Dave's press? Fails closed: every doubt is "no, Dave presses". Only a literal `true` in
- * checkpoint.autoConfirm turns it on (the kill switch; it ships false). The band must be known and below HIGH, with no security-tier
+ * The bands an autoConfirm value covers: the literal true is LOW, MID and ELEVATED (the first switch), the word "low" is LOW only
+ * (Dave 2026-11-06), anything else is none (off).
+ */
+const autoBandsOf = (value) => (value === true ? AUTO_BANDS : value === 'low' ? ['LOW'] : []);
+
+/**
+ * May the mod record `none` without Dave's press? Fails closed: every doubt is "no, Dave presses". Only a literal `true` or the word "low" in
+ * checkpoint.autoConfirm turns it on (the kill switch; false turns it off). The band must be known and below HIGH, with no security-tier
  * or critical file (floorApplies, spec 3.1: that floor needs aegis + critic before READY, so Dave presses), the config must match main, the PR
  * labels must have been read (an absent list is as bad as a failed read), and the recommendation must be `none`.
  * HIGH with a free CodeRabbit slot is not covered: the slot is not readable without the pr-loop poller's queue (spec 3.7), and the
@@ -454,14 +502,15 @@ const AUTO_BANDS = ['LOW', 'MID', 'ELEVATED'];
 export function autoOf(c, facts, policy, recommended) {
   const band = c.band?.band ?? null;
   const no = (reason) => ({ eligible: false, band, reason });
-  if (policy.checkpoint?.autoConfirm !== true) return no('checkpoint.autoConfirm is not true in review-router.config.json: Dave presses.');
+  const covered = autoBandsOf(policy.checkpoint?.autoConfirm);
+  if (covered.length === 0) return no('checkpoint.autoConfirm is not true or "low" in review-router.config.json: Dave presses.');
   if (!band) return no('The PR has no review band (no matrix block): Dave presses.');
-  if (!AUTO_BANDS.includes(band)) return no(`Band ${band}: Dave presses. Auto-confirm covers LOW, MID and ELEVATED only.`);
+  if (!covered.includes(band)) return no(`Band ${band}: Dave presses. Auto-confirm (checkpoint.autoConfirm) covers ${covered.join(', ')} only.`);
   if (floorApplies(c)) return no(`${floorLabel(c)}: the internal pass (aegis + critic) runs before READY, so Dave presses.`);
   if (facts.config_drift) return no(`${driftWhy(facts.config_drift)}: Dave presses.`);
   if (!Array.isArray(facts.labels)) return no('The PR labels were not read: Dave presses.');
   if (recommended !== 'none') return no(`The recommendation is ${recommended ?? 'stopped'}, not none: Dave presses.`);
-  return { eligible: true, band, reason: `Band ${band} is recommended none: no CodeRabbit PR bot, the internal review stack covers it.` };
+  return { eligible: true, band, reason: `Band ${band} is recommended none (trigger: ${triggerOf(c)}): no CodeRabbit PR bot, the internal review stack covers it.` };
 }
 
 // ---------- recommend ----------
@@ -501,7 +550,7 @@ function contextOf(facts, policy) {
     band: bandOf(facts.files, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
     monthFiles: facts.ledger_month_files, monthCap: monthCapOf(policy),
-    size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: capacityOf(policy, facts.now),
+    size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: resultCapacity(policy, facts),
   };
 }
 
@@ -586,6 +635,14 @@ function configDrift(base, configText) {
   try { return JSON.stringify(main) !== JSON.stringify(JSON.parse(configText)) ? 'differs' : false; } catch { return 'differs'; }
 }
 
+/** { labels, number, author } of a gh pr view JSON text. labels is null and number is null when the text is not usable. */
+function viewFields(text) {
+  try {
+    const o = JSON.parse(text);
+    return { labels: labelNames(text), number: Number.isInteger(o.number) ? o.number : null, author: String(o.author?.login ?? '') };
+  } catch { return { labels: null, number: null, author: '' }; }
+}
+
 /** The label names in a gh pr view JSON text, or null. */
 function labelNames(text) {
   try {
@@ -595,22 +652,24 @@ function labelNames(text) {
 }
 
 /**
- * The label names of the PR on the current branch, or null when they cannot be read (null makes the checkpoint stop below HIGH).
+ * The labels, the number and the author of the PR on the current branch. labels is null when they cannot be read (null makes the checkpoint stop below HIGH).
+ * The number lets the capacity fact read the PR comments; without it nothing is posted.
  * First the lookup pinned to the fork repo by branch name. A fork PR is not found that way, so then `gh pr view` with no branch
  * (gh resolves the current branch's PR, fork-aware). That call cannot be pinned with -R, and origin here is parcadei, so its
  * answer counts only when the PR url is in DEFAULT_REPO.
  */
-function readLabels() {
+function readPrView() {
+  const none = viewFields('');
   let branch;
-  try { branch = git(['branch', '--show-current']).trim(); } catch { return null; }
-  if (!branch) return null;
+  try { branch = git(['branch', '--show-current']).trim(); } catch { return none; }
+  if (!branch) return none;
   const gh = ghRunner();
-  const pinned = gh(['pr', 'view', branch, '--json', 'labels', ...REPO_ARGS]);
-  if (pinned.status === 0) return labelNames(pinned.stdout);
-  const open = gh(['pr', 'view', '--json', 'labels,url']);
+  const pinned = gh(['pr', 'view', branch, '--json', 'labels,number,author', ...REPO_ARGS]);
+  if (pinned.status === 0) return viewFields(pinned.stdout);
+  const open = gh(['pr', 'view', '--json', 'labels,url,number,author']);
   let url = '';
   try { url = String(JSON.parse(open.stdout).url ?? ''); } catch { /* no JSON: not read */ }
-  return open.status === 0 && url.startsWith(`https://github.com/${DEFAULT_REPO}/pull/`) ? labelNames(open.stdout) : null;
+  return open.status === 0 && url.startsWith(`https://github.com/${DEFAULT_REPO}/pull/`) ? viewFields(open.stdout) : none;
 }
 
 const hasMatrix = (configText) => { try { return Boolean(JSON.parse(configText).matrix); } catch { return false; } };
@@ -625,16 +684,68 @@ export function ledgerMonthFiles(now, deps = {}, env = process.env) {
   try { return monthOf({ ...seam, ...deps, now: () => new Date(now) }).files; } catch { return null; }
 }
 
-function gatherFacts(configText, stateDir, readMonth = ledgerMonthFiles) {
+const parsedOr = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
+
+/**
+ * Will /pathway show Dave a question that offers CodeRabbit? True for a result that is not stopped (recommended null) and that auto-confirm does
+ * not cover, with a coderabbit or both option. Only then may the probe post: a PR that auto-confirms none, or stops, never needs the fact.
+ */
+export function questionShown(result) {
+  if (!result || result.recommended === null || result.auto?.eligible === true) return false;
+  return (result.options ?? []).some((o) => o.pathway === 'coderabbit' || o.pathway === 'both');
+}
+
+const PROBE_VIEW_TIMEOUT_MS = 20000;
+
+/** `gh pr view <n>` says the PR is OPEN, a draft, and has that number. Any gh error or odd answer is false. */
+function openDraft(pr) {
+  const r = ghRunner(process.env, PROBE_VIEW_TIMEOUT_MS)(['pr', 'view', String(pr), '--json', 'state,isDraft,number', ...REPO_ARGS]);
+  if (r.status !== 0) return false;
+  try { const o = JSON.parse(r.stdout); return o.state === 'OPEN' && o.isDraft === true && o.number === pr; } catch { return false; }
+}
+
+/**
+ * The probe gate: it runs just before the post. Needs --probe and --pr, a branch PR (when read) that is the --pr PR, a question that Dave will see
+ * (the result without the live fact), and then `gh pr view` of that number: OPEN, draft, same number. The cheap checks come first, the gh call last.
+ */
+function probeGate({ opts, view, facts, policy }) {
+  return () => {
+    if (opts.probe !== true || !Number.isInteger(opts.pr)) return false;
+    if (view.number !== null && view.number !== opts.pr) return false;
+    return questionShown(recommend(facts, policy)) && openDraft(opts.pr);
+  };
+}
+
+/**
+ * The live capacity fact (capacity-fact.mjs). It reads the PR comments and, behind the probe gate, may post one "@coderabbitai rate limit" comment, so it
+ * runs only when the stamp lets the checkpoint go on. Dependabot: the --dependabot flag, the commit authors or the PR author. Never throws.
+ */
+function readCapacity({ now, stamp, view, pr, dependabot, policy, gate }) {
+  if (!stamp) return idleCapacity(now);
+  try {
+    return capacityFact({ now, pr, dependabot: dependabot || /dependabot/i.test(view.author), policy, probe: gate, root: workTop() });
+  } catch {
+    return idleCapacity(now);
+  }
+}
+
+/** opts: { dependabot, probe (--probe), pr (the --pr number or null), policy (the router policy: the probe gate reads the result) }. */
+function gatherFacts(configText, stateDir, readMonth = ledgerMonthFiles, opts = {}) {
   const { ref: base, notes } = baseRef();
   const head = git(['rev-parse', 'HEAD']).trim();
   // Fallback only: the PR author is the authoritative source, and the mod passes it with --dependabot.
   const dependabot = isDependabotAuthors(git(['log', '--format=%ae', `${base}..HEAD`]));
   const stamp = readStamp(stateDir);
-  // The band needs the labels (risk:high). Read them only when a band is computed and the stamp lets the checkpoint go on.
-  const labels = hasMatrix(configText) && stamp ? { labels: readLabels() } : {};
+  // The band needs the labels (risk:high), and the capacity fact needs the PR number. Read the view only when the stamp lets the checkpoint go on.
+  const view = stamp ? readPrView() : viewFields('');
+  const labels = hasMatrix(configText) && stamp ? { labels: view.labels } : {};
   const now = new Date().toISOString();
-  return { head, now, stamp, files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), ledger_month_files: readMonth(now), ...labels, notes };
+  const facts = { head, now, stamp, files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), ledger_month_files: readMonth(now), ...labels, notes };
+  const policy = opts.policy ?? parsedOr(configText, {});
+  const asDependabot = dependabot || opts.dependabot === true;
+  const gate = probeGate({ opts, view, facts: { ...facts, dependabot: asDependabot }, policy });
+  const capacity = readCapacity({ now, stamp, view, pr: opts.pr ?? view.number, dependabot: asDependabot, policy, gate });
+  return { ...facts, capacity };
 }
 
 // ---------- PR B: --confirm (record a pathway) and --apply (label, then ready) ----------
@@ -723,18 +834,18 @@ export function applyPathway({ pr, record, gh }) {
 }
 
 /** The real gh, or `node $PR_CHECKPOINT_GH <args>` (the test seam: a fake gh script, never a real GitHub call). */
-function ghRunner(env = process.env) {
+function ghRunner(env = process.env, timeout = undefined) {
   return (args) => {
     const fake = env.PR_CHECKPOINT_GH;
-    const r = spawnSync(fake ? process.execPath : 'gh', fake ? [fake, ...args] : args, { encoding: 'utf8', windowsHide: true, env });
+    const r = spawnSync(fake ? process.execPath : 'gh', fake ? [fake, ...args] : args, { encoding: 'utf8', windowsHide: true, env, ...(timeout ? { timeout } : {}) });
     return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr || String(r.error?.message ?? '') };
   };
 }
 
 // ---------- CLI ----------
 
-const VALUE_FLAGS = ['--facts', '--config', '--confirm', '--by', '--body', '--state-dir', '--apply'];
-const BOOL_FLAGS = ['--json', '--dependabot'];
+const VALUE_FLAGS = ['--facts', '--config', '--confirm', '--by', '--body', '--state-dir', '--apply', '--pr'];
+const BOOL_FLAGS = ['--json', '--dependabot', '--probe'];
 const PATHWAYS = ['none', 'coderabbit', 'both', 'wait'];
 
 /** { opts } or { error }. A value flag with no value (or whose next argument is a flag) is an error. */
@@ -758,7 +869,7 @@ function confirmUsage(o) {
 
 function applyUsage(o) {
   if (!/^[1-9]\d*$/.test(o['--apply'])) return '--apply needs a PR number';
-  const stray = ['--facts', '--config', '--body', '--by', '--json', '--dependabot'].find((k) => o[k] !== undefined);
+  const stray = ['--facts', '--config', '--body', '--by', '--json', '--dependabot', '--probe', '--pr'].find((k) => o[k] !== undefined);
   return stray ? `${stray} is not an --apply flag: it takes --state-dir only` : null;
 }
 
@@ -766,6 +877,7 @@ function applyUsage(o) {
 function usageProblem(o) {
   const confirm = o['--confirm'] !== undefined;
   const apply = o['--apply'] !== undefined;
+  if (o['--pr'] !== undefined && !apply && !/^[1-9]\d*$/.test(o['--pr'])) return '--pr needs a PR number';
   if (confirm && apply) return '--confirm and --apply cannot be combined';
   if (confirm) return confirmUsage(o);
   if (apply) return applyUsage(o);
@@ -773,23 +885,32 @@ function usageProblem(o) {
   return stray ? `${stray} needs --confirm or --apply` : null;
 }
 
+/** One line for the live capacity fact: free now, the next slot, or unknown with the last notice. */
+function slotText(cap) {
+  const cli = typeof cap.cliRemaining === 'number' ? ` CLI reviews left: ${cap.cliRemaining}.` : '';
+  if (cap.state === 'free') return `free now (${cap.factSource}).${cli}`;
+  if (cap.state === 'wait') return `no free slot${cap.nextSlotAt ? `, next about ${cap.nextSlotAt} (in ${cap.minutesToSlot} min)` : ''} (${cap.factSource}).${cli}`;
+  return `unknown${cap.lastNoticeAt ? `, last notice ${cap.lastNoticeAt}` : ''}.${cli}`;
+}
+
 export function renderText(r) {
   const lines = [`PR checkpoint for ${String(r.head).slice(0, 7)}: class ${r.class}, ${r.size.files} file(s), ${r.size.lines} line(s)`];
   lines.push(`Recommended: ${r.recommended ?? 'stopped'}  budget ${r.budget[0]}+${r.budget[1]}`);
   lines.push(...r.why.map((w) => `  - ${w}`));
   r.options.forEach((o, i) => lines.push(`  ${i + 1}. ${o.pathway}${o.label ? ` (${o.label})` : ''}${o.available ? '' : ' [held]'}: ${o.reason}`));
+  if (r.capacity.state) lines.push(`CodeRabbit slot: ${slotText(r.capacity)}`);
   lines.push(`CodeRabbit 7-day count: ${r.capacity.count ?? 'unknown'} (${r.capacity.band})${r.capacity.warning ? `. ${r.capacity.warning}` : ''}`);
   if (r.config_drift) lines.push(`Warning: ${r.config_drift_why ?? 'Branch config differs from main'}. The router uses the config of main.`);
   return lines.join('\n');
 }
 
 /** The facts and the policy of a real or fixture run. With --facts and no `stamp` key, --confirm reads <state-dir>/stamp.json. */
-function inputsOf(o, stateDir) {
+function inputsOf(o, stateDir, probe = false) {
   const configText = readFileSync(o['--config'] ?? workFile('review-router.config.json'), 'utf8');
   const yaml = workFile('.coderabbit.yaml');
   const policy = { ...JSON.parse(configText), path_filters: pathFiltersFrom(existsSync(yaml) ? readFileSync(yaml, 'utf8') : '') };
   const factsFile = o['--facts'];
-  const facts = factsFile ? JSON.parse(readFileSync(factsFile, 'utf8')) : gatherFacts(configText, stateDir);
+  const facts = factsFile ? JSON.parse(readFileSync(factsFile, 'utf8')) : gatherFacts(configText, stateDir, undefined, { dependabot: o['--dependabot'] === true, probe, pr: o['--pr'] === undefined ? null : Number(o['--pr']), policy });
   if (factsFile && o['--confirm'] !== undefined && !('stamp' in facts)) facts.stamp = readStamp(stateDir);
   if (o['--dependabot']) facts.dependabot = true;
   return { facts, policy };
@@ -821,7 +942,8 @@ function runApply(o) {
 }
 
 function runRecommend(o) {
-  const { facts, policy } = inputsOf(o, defaultStateDir());
+  // The probe may post only in the JSON run the mod makes. The text plan and --confirm never post.
+  const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
   console.log(o['--json'] ? JSON.stringify(result) : renderText(result));
 }
@@ -830,7 +952,7 @@ function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const bad = parsed.error ?? usageProblem(parsed.opts);
   if (bad) {
-    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default|auto> --body <file> [--state-dir d] | --apply <pr> [--state-dir d].`);
+    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--probe] [--pr n] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default|auto> --body <file> [--state-dir d] | --apply <pr> [--state-dir d].`);
     process.exit(2);
   }
   const o = parsed.opts;

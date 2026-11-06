@@ -23,7 +23,10 @@ const PATHWAY_WORDS = ['accept', 'coderabbit', 'both', 'none', 'wait']
 
 export type CheckpointArgs = { pr: number | null; word: string | null; body: string | null }
 
-/** `7`, `#7`, a pathway word and `--body <file>`, in any order. Anything else is a usage error (null). */
+/** `328:none` or `none:328`: a PR number and a word joined by one colon. A drive path (`C:/x`) and any other colon text do not match. */
+const PR_WORD_PAIR = /^(?:#?\d+:[a-z]+|[a-z]+:#?\d+)$/i
+
+/** `7`, `#7`, `7:none`, a pathway word (any case) and `--body <file>`, in any order. Anything else is a usage error (null). */
 export const parseCheckpointArgs = (args: string): CheckpointArgs | null => {
   const words = args.trim().split(/\s+/).filter(Boolean)
   let pr: number | null = null
@@ -31,7 +34,11 @@ export const parseCheckpointArgs = (args: string): CheckpointArgs | null => {
   let body: string | null = null
   for (let i = 0; i < words.length; i += 1) {
     const one = words[i]!
-    if (one === '--body') {
+    if (PR_WORD_PAIR.test(one)) {
+      // The two halves go back into the list. The value after --body is read in the branch below, so it never gets here.
+      words.splice(i, 1, ...one.split(':'))
+      i -= 1
+    } else if (one === '--body') {
       const value = words[i + 1]
       if (value === undefined || body !== null) return null
       body = value.replace(/^["']|["']$/g, '')
@@ -171,15 +178,6 @@ export const optionsInOrder = (result: CheckpointResult): { buttons: CheckpointO
 
 export const costText = (cost: [number, number]): string => (cost[0] + cost[1] === 0 ? 'no review' : `budget ${cost[0]}+${cost[1]}`)
 
-/** `12m`, `3h`, `2d`: the age of the pre-PR stamp. Null when the stamp has no readable time. */
-export const ageText = (iso: string | null | undefined, now: number): string | null => {
-  if (!iso) return null
-  const at = Date.parse(iso)
-  if (!Number.isFinite(at)) return null
-  const minutes = Math.max(0, Math.round((now - at) / 60_000))
-  return minutes < 60 ? `${minutes}m` : minutes < 2880 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`
-}
-
 /** The top paths by changed lines from `git diff --numstat`. */
 export const topPaths = (numstat: string, count: number): string[] =>
   numstat
@@ -223,30 +221,111 @@ export type PathwayChoice = { label: string; pathway: string; by: 'default' | 'd
  * reads decided_by dave. Same bands as QUEUE_BANDS in pr-loop/slot.ts (not imported: this file takes types only).
  */
 export const onlyDaveRecordsNone = (pathway: string, band: unknown): boolean => pathway === 'none' && (band === 'HIGH' || band === 'CRITICAL')
-export type PathwayAsk = { header: string; question: string; choices: PathwayChoice[] }
+export type PathwayAsk = { pr: number; header: string; question: string; choices: PathwayChoice[] }
 
 const NAMES: Record<string, string> = { none: 'No review, land on CI', coderabbit: 'CodeRabbit review', both: 'CodeRabbit + Greptile', wait: 'Keep as draft' }
 const nameOf = (pathway: string): string => NAMES[pathway] ?? pathway
 
-const labelFor = (one: CheckpointOption, files: number): string => {
+// ---- the CodeRabbit slot fact ----------------------------------------------------------------------------------------------------
+// The engine prints `capacity` with the slot fact beside the old count fields: state free, wait or unknown, nextSlotAt, minutesToSlot and
+// lastNoticeAt. An older checkpoint has none of them. Anything that is not exactly free or wait reads unknown: the question never fails on it.
+
+export type SlotFact = { state: 'free' | 'wait' | 'unknown'; nextSlotAt: string | null; minutesToSlot: number | null; lastNoticeAt: string | null }
+
+const textOrNull = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null)
+
+/** A free fact older than this is no longer a fact: the slot may have gone. */
+export const FREE_FACT_MAX_AGE_MS = 5 * 60_000
+
+/**
+ * The slot fact, read at `now` (ms; null reads the fact as printed). Keep as draft leaves the pending entry, so a bare /pathway can ask
+ * again hours later from the stored fact. At `now`, a `free` fact with no readable `checkedAt` or one older than 5 minutes is unknown,
+ * and so is a `wait` fact whose `nextSlotAt` has passed. A `wait` fact with no readable `nextSlotAt` has no time to pass, so it ages out
+ * the same way a `free` fact does.
+ */
+export const slotOf = (raw: unknown, now: number | null = null): SlotFact => {
+  const cap = isObject(raw) ? raw : {}
+  const minutes = typeof cap.minutesToSlot === 'number' && Number.isFinite(cap.minutesToSlot) ? Math.max(0, Math.round(cap.minutesToSlot)) : null
+  const printed = cap.state === 'free' || cap.state === 'wait' ? cap.state : 'unknown'
+  const checked = typeof cap.checkedAt === 'string' ? Date.parse(cap.checkedAt) : Number.NaN
+  const next = typeof cap.nextSlotAt === 'string' ? Date.parse(cap.nextSlotAt) : Number.NaN
+  const staleFree = printed === 'free' && now !== null && !(now - checked <= FREE_FACT_MAX_AGE_MS)
+  const pastWait = printed === 'wait' && now !== null && (Number.isFinite(next) ? next <= now : !(now - checked <= FREE_FACT_MAX_AGE_MS))
+  const state = staleFree || pastWait ? 'unknown' : printed
+  return { state, nextSlotAt: textOrNull(cap.nextSlotAt), minutesToSlot: minutes, lastNoticeAt: textOrNull(cap.lastNoticeAt) }
+}
+
+/** `14:20 CST`: the clock time in Chicago, with the zone name of that date (CST or CDT). Null for a time that does not parse. */
+export const chicagoTime = (iso: string | null | undefined): string | null => {
+  const at = iso ? Date.parse(iso) : Number.NaN
+  if (!Number.isFinite(at)) return null
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(at)
+    const part = (type: string) => parts.find(one => one.type === type)?.value
+    const [hour, minute, zone] = [part('hour'), part('minute'), part('timeZoneName')]
+    return hour && minute && zone ? `${hour}:${minute} ${zone}` : null
+  } catch {
+    return null
+  }
+}
+
+/** The minutes to the next slot: counted from `now` when the slot time parses (a pending question can be asked again hours later), else the engine's figure. */
+const minutesLeft = (slot: SlotFact, now: number | null): number | null => {
+  const next = slot.nextSlotAt === null ? Number.NaN : Date.parse(slot.nextSlotAt)
+  return now !== null && Number.isFinite(next) ? Math.max(0, Math.ceil((next - now) / 60_000)) : slot.minutesToSlot
+}
+
+/** Line 3 of the question: the CodeRabbit slot, from the engine's fact. */
+export const slotLine = (slot: SlotFact, now: number | null): string => {
+  if (slot.state === 'free') return 'CodeRabbit slot: free now.'
+  if (slot.state === 'unknown') return `CodeRabbit slot: unknown (${chicagoTime(slot.lastNoticeAt) ? `last notice ${chicagoTime(slot.lastNoticeAt)}` : 'no notice seen'}).`
+  const minutes = minutesLeft(slot, now)
+  const at = chicagoTime(slot.nextSlotAt)
+  if (at && minutes !== null) return `CodeRabbit slot: next about ${at} (in ${minutes} min).`
+  return `CodeRabbit slot: no free slot, ${minutes === null ? 'next time unknown' : `next in about ${minutes} min`}.`
+}
+
+/** The label of one open pathway. The CodeRabbit row follows the slot: free is $0, no free slot is paid, unknown keeps the "up to" price. */
+const labelFor = (one: CheckpointOption, files: number, slot: SlotFact): string => {
   if (one.pathway === 'none' || one.pathway === 'wait') return `${nameOf(one.pathway)} ($0)`
-  return `${nameOf(one.pathway)} (${files > 0 || one.cost[0] + one.cost[1] > 0 ? upTo(files) : '$0'})`
+  const price = files > 0 || one.cost[0] + one.cost[1] > 0 ? upTo(files) : '$0'
+  if (one.pathway === 'coderabbit' && slot.state === 'free') return 'CodeRabbit now (free slot, $0)'
+  if (one.pathway === 'coderabbit' && slot.state === 'wait') return `CodeRabbit now, paid (${price})`
+  return `${nameOf(one.pathway)} (${price})`
 }
 
 const WAIT_OPTION: CheckpointOption = { pathway: 'wait', label: null, available: true, cost: [0, 0], reason: '' }
 
-/** The overview line: class, size, CLI findings. */
+/** Line 1 of the question: PR, band and file count. The band is the one the engine printed at auto-confirm. */
 const overview = (pr: number, result: CheckpointResult): string => {
-  const severities = result.cli ? Object.entries(result.cli.bySeverity).map(([name, count]) => `${count} ${name}`) : []
-  return `PR #${pr} (${result.class}, ${result.size.files} files, ${result.size.lines} lines, CLI ${severities.length ? severities.join(', ') : 'none'}): which review?`
+  const files = result.size.files
+  return `PR #${pr}, band ${result.auto?.band ?? 'unknown'}, ${files} ${files === 1 ? 'file' : 'files'}.`
+}
+
+/** The lines of the question: three fixed ones, then the extra reasons, the held pathways and the warnings. */
+const questionLines = (pr: number, result: CheckpointResultWithDrift, held: CheckpointOption[], recommendedFirst: boolean, now: number | null): string[] => {
+  // Every reason shows: the RF floor (aegis + critic) is a second reason, and Dave must see it before he picks none.
+  const [why, ...also] = result.why.map(one => one.replace(/[.\s]+$/, '')).filter(one => one !== '')
+  const second = recommendedFirst
+    ? `Recommended: ${nameOf(result.recommended ?? '')}${why ? `, because ${why}` : ''}.`
+    : `The engine recommends ${result.recommended}, but it is held. Nothing is marked.`
+  const lines = [overview(pr, result), second, slotLine(slotOf(result.capacity, now), now)]
+  if (recommendedFirst) lines.push(...also.map(one => `Also: ${one}.`))
+  if (held.length > 0) lines.push(`Held: ${held.map(one => `${nameOf(one.pathway)} (${one.reason})`).join('; ')}.`)
+  if (result.config_drift) lines.push(`Warning: ${result.config_drift_why ?? 'branch config differs from main'}`)
+  const warning = (result.capacity as Partial<CheckpointResult['capacity']> | undefined)?.warning
+  if (warning) lines.push(`Warning: ${warning}.`)
+  return lines
 }
 
 /**
- * The checkpoint question, or null when there is nothing to choose: no recommendation (R0), or no open pathway. The labels are 2 to 4:
+ * The checkpoint question, or null when there is nothing to choose: no recommendation (R0), or no open pathway. The question has 3 lines: the PR,
+ * the recommendation with its reason, and the CodeRabbit slot (`now` is the clock in ms, for the minutes left). A second reason, a held pathway
+ * and a warning each add a line below them: Dave must see them before he picks. The labels are 2 to 4:
  * the open pathways (at most 3), one "Keep as draft", and "No review, land on CI" last when the engine offers it and it is not the recommendation. When the recommendation is open it is first, with " (Recommended)", and is the only
  * one a `--by default` may record. When it is held, no label is marked and every pick is `--by dave`.
  */
-export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, stampAge: string | null = null): PathwayAsk | null => {
+export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, now: number | null = null): PathwayAsk | null => {
   const { buttons, held, recommendedFirst } = optionsInOrder(result)
   const open = buttons.filter(one => one.pathway !== 'wait')
   if (result.recommended === null || open.length === 0) return null
@@ -257,33 +336,49 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, s
   const noReview = noneIsRecommended ? [] : open.filter(one => one.pathway === 'none')
   const paid = open.filter(one => noneIsRecommended || one.pathway !== 'none').slice(0, 3 - noReview.length)
   const ordered = keepFirst ? [WAIT_OPTION, ...paid, ...noReview] : [...paid, WAIT_OPTION, ...noReview]
-  const files = result.size.files
+  const slot = slotOf(result.capacity, now)
   const choices: PathwayChoice[] = ordered.map((one, i) => ({
-    label: `${labelFor(one, files)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
+    label: `${labelFor(one, result.size.files, slot)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
     pathway: one.pathway,
     by: recommendedFirst && i === 0 && !onlyDaveRecordsNone(one.pathway, result.auto?.band) ? 'default' : 'dave',
   }))
-  const lines = [overview(pr, result)]
-  // Every reason shows: the RF floor (aegis + critic) is a second reason, and Dave must see it before he picks none.
-  const [why, ...also] = result.why.map(one => one.replace(/[.\s]+$/, '')).filter(one => one !== '')
-  if (recommendedFirst) lines.push(`Recommended: ${nameOf(result.recommended)}${why ? `, because ${why}` : ''}.`, ...also.map(one => `Also: ${one}.`))
-  else lines.push(`The engine recommends ${result.recommended}, but it is held. Nothing is marked.`)
-  const cap = result.capacity
-  const crab = typeof cap.count === 'number' ? `CodeRabbit 7d ${cap.count}${cap.band ? ` ${cap.band}` : ''}` : 'CodeRabbit 7d unknown'
-  const grep = typeof result.credits.used === 'number' && typeof result.credits.monthly === 'number' ? `Greptile ${result.credits.used} of ${result.credits.monthly}` : 'Greptile credits unknown'
-  lines.push(`${crab}. ${grep}.${stampAge ? ` Stamp ${stampAge} old.` : ''}`)
-  if (held.length > 0) lines.push(`Held: ${held.map(one => `${nameOf(one.pathway)} (${one.reason})`).join('; ')}.`)
-  if (result.config_drift) lines.push(`Warning: ${result.config_drift_why ?? 'branch config differs from main'}`)
-  if (cap.warning) lines.push(`Warning: ${cap.warning}.`)
-  return { header: clip(`PR #${pr}`, 12), question: lines.join('\n'), choices }
+  const question = questionLines(pr, result, held, recommendedFirst, now).join('\n')
+  return { pr, header: clip(`PR #${pr}`, 12), question, choices }
 }
 
-/** What Dave's answer maps to: an exact label of the ask, or null (free text, a comma-joined pair, a near miss, nothing). */
-export const pathwayOfAnswer = (answer: unknown, ask: PathwayAsk): PathwayChoice | null =>
-  typeof answer === 'string' ? (ask.choices.find(one => one.label === answer) ?? null) : null
+/** A typed word names the row of that pathway; `accept` names the Recommended row. A PR number in the text must be this PR's. */
+const choiceOfWord = (word: string, pr: number | null, ask: PathwayAsk): PathwayChoice | null => {
+  if (pr !== null && pr !== ask.pr) return null
+  const row = word === 'accept' ? ask.choices.find(one => one.label.endsWith(RECOMMENDED)) : ask.choices.find(one => one.pathway === word)
+  return row ?? null
+}
+
+/** The shortest label prefix that counts. A one or two letter prefix could press a paid row by a slip. */
+const MIN_PREFIX = 3
+
+/**
+ * Words Dave typed under Other, read loosely and without case: one digit (the row number), a pathway word with or without the PR (`none`,
+ * `328:none`, `328 none`, `none 328`), or a label prefix that names one row only. Anything else, a comma-joined pair included, is null.
+ */
+const typedChoice = (text: string, ask: PathwayAsk): PathwayChoice | null => {
+  const typed = text.trim().toLowerCase()
+  if (typed === '') return null
+  if (/^\d$/.test(typed)) return ask.choices[Number(typed) - 1] ?? null
+  const args = parseCheckpointArgs(typed)
+  if (args && args.word !== null && args.body === null) return choiceOfWord(args.word, args.pr, ask)
+  if (typed.length < MIN_PREFIX) return null
+  const rows = ask.choices.filter(one => one.label.toLowerCase().startsWith(typed))
+  return rows.length === 1 ? rows[0]! : null
+}
+
+/** What Dave's answer maps to: an exact label of the ask, else a loose typed pick (see typedChoice), else null. A typed pick keeps the `by` of its row. */
+export const pathwayOfAnswer = (answer: unknown, ask: PathwayAsk): PathwayChoice | null => {
+  if (typeof answer !== 'string') return null
+  return ask.choices.find(one => one.label === answer) ?? typedChoice(answer, ask)
+}
 
 /** The tool text for each outcome that records nothing. The model reads it; Dave's words reach the model through `otherText`. */
-export const keptDraftText = (pr: number): string => `Dave kept #${pr} as a draft. Nothing recorded. Do not ask him again. He answers with ${SLASH}.`
+export const keptDraftText = (pr: number): string => `Dave kept #${pr} as a draft. Nothing recorded. The checkpoint stays pending. Do not ask him again. He decides when he is ready.`
 export const closedText = (pr: number): string => `Dave closed the question for #${pr}. Nothing recorded. The PR stays a draft. He can answer later with ${SLASH}.`
 export const otherText = (pr: number, text: string): string =>
   `Dave wrote: ${clip(text.replace(/\s+/g, ' '), 400)}. Nothing recorded. The PR stays a draft. Reply to him. He answers with ${SLASH} ${pr} <word>.`
