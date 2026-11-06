@@ -678,7 +678,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 35,
+            "timeout": 60,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/post-edit-diagnostics.mjs"
             ]

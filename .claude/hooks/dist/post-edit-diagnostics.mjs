@@ -1,9 +1,9 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/post-edit-diagnostics.ts
-import { readFileSync as readFileSync5, existsSync as existsSync6 } from "fs";
+import { readFileSync as readFileSync6, existsSync as existsSync7 } from "fs";
 import { spawnSync as spawnSync2 } from "child_process";
-import { join as join7 } from "path";
+import { dirname as dirname6, join as join8, relative as relative2, resolve as resolve4 } from "path";
 
 // src/lib/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
@@ -1054,7 +1054,97 @@ function addFileInPlay(bus, file) {
   }
 }
 
+// src/shared/ts-diagnostics.ts
+import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
+import { dirname as dirname5, join as join7, resolve as resolve3, relative, isAbsolute } from "path";
+var TSC_LINE_REGEX = /^(.+)\((\d+),(\d+)\): (error|warning) TS(\d+): (.+)$/;
+var MAX_EDITED = 10;
+var MAX_OTHER_FILES = 5;
+var MAX_CHARS = 9e3;
+function classifyExtension(filePath) {
+  const dot = filePath.lastIndexOf(".");
+  if (dot < 0) return null;
+  const ext = filePath.slice(dot).toLowerCase();
+  if ([".ts", ".tsx", ".mts", ".cts"].includes(ext)) return "ts";
+  if ([".js", ".jsx", ".mjs", ".cjs"].includes(ext)) return "js";
+  if ([".py", ".pyx", ".pyi"].includes(ext)) return "python";
+  return null;
+}
+function isInside(child, parent) {
+  const rel = relative(parent, child);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute(rel);
+}
+function findNearestTsconfig(filePath, stopDir) {
+  const stop = resolve3(stopDir);
+  const bounded = isInside(resolve3(filePath), stop);
+  let dir = dirname5(resolve3(filePath));
+  for (; ; ) {
+    const candidate = join7(dir, "tsconfig.json");
+    try {
+      if (existsSync6(candidate)) return candidate;
+    } catch {
+      return null;
+    }
+    if (bounded && dir === stop) return null;
+    const parent = dirname5(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+function isSolutionStyleTsconfig(tsconfigPath) {
+  try {
+    const text = readFileSync5(tsconfigPath, "utf-8");
+    return /"files"\s*:\s*\[\s*\]/.test(text) && /"references"\s*:/.test(text);
+  } catch {
+    return false;
+  }
+}
+function parseTscOutput(stdout) {
+  const out = [];
+  for (const raw of stdout.split("\n")) {
+    const m = raw.replace(/\r$/, "").match(TSC_LINE_REGEX);
+    if (!m) continue;
+    out.push({
+      file: m[1],
+      line: parseInt(m[2], 10),
+      column: parseInt(m[3], 10),
+      severity: m[4],
+      code: parseInt(m[5], 10),
+      message: m[6]
+    });
+  }
+  return out;
+}
+function samePath(a, b) {
+  const n = (p) => resolve3(p).replace(/\\/g, "/").toLowerCase();
+  return n(a) === n(b);
+}
+function formatTsDiagnostics(diags, editedFile, cwd, tsconfigLabel) {
+  const edited = diags.filter((d) => samePath(resolve3(cwd, d.file), editedFile));
+  const others = diags.filter((d) => !samePath(resolve3(cwd, d.file), editedFile));
+  const perFile = /* @__PURE__ */ new Map();
+  for (const d of others) perFile.set(d.file, (perFile.get(d.file) ?? 0) + 1);
+  const lines = [
+    `TypeScript (${tsconfigLabel}): ${edited.length} in the edited file, ${others.length} in ${perFile.size} other files.`
+  ];
+  for (const d of edited.slice(0, MAX_EDITED)) {
+    lines.push(`   - ${d.file}:${d.line}:${d.column}: TS${d.code} ${d.message}`);
+  }
+  if (edited.length > MAX_EDITED) lines.push(`   ... ${edited.length - MAX_EDITED} more in the edited file`);
+  const top = [...perFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_OTHER_FILES);
+  if (top.length) {
+    lines.push("   Other files:");
+    for (const [file, n] of top) lines.push(`   - ${file}: ${n} error${n === 1 ? "" : "s"}`);
+    if (perFile.size > top.length) lines.push(`   ... ${perFile.size - top.length} more files`);
+  }
+  let text = lines.join("\n");
+  if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS) + "\n   ... (truncated)";
+  return text;
+}
+
 // src/post-edit-diagnostics.ts
+var TSC_TIMEOUT_MS = 45e3;
+var TSC_MAX_BUFFER = 64 * 1024 * 1024;
 function recordBusFilesInPlay(filePath) {
   try {
     mutateBus(void 0, (b) => {
@@ -1063,14 +1153,24 @@ function recordBusFilesInPlay(filePath) {
   } catch {
   }
 }
-function resolveTscCommand(projectDir) {
-  const candidates = [
-    join7(projectDir, "node_modules", "typescript", "bin", "tsc"),
-    join7(projectDir, ".claude", "hooks", "node_modules", "typescript", "bin", "tsc")
-  ];
+function resolveTscCommand(startDir, stopDir = startDir) {
+  const candidates = [];
+  if (process.env.CCV3_TSC) candidates.push(process.env.CCV3_TSC);
+  const stop = resolve4(stopDir);
+  let dir = resolve4(startDir);
+  for (; ; ) {
+    candidates.push(join8(dir, "node_modules", "typescript", "bin", "tsc"));
+    const parent = dirname6(dir);
+    if (dir === stop || parent === dir || relative2(stop, dir).startsWith("..")) break;
+    dir = parent;
+  }
+  candidates.push(join8(stop, ".claude", "hooks", "node_modules", "typescript", "bin", "tsc"));
+  if (process.env.CCV3_TSC) {
+    candidates.length = 1;
+  }
   for (const tscPath of candidates) {
     try {
-      if (existsSync6(tscPath)) {
+      if (existsSync7(tscPath)) {
         return {
           command: process.execPath,
           args: [tscPath, "--noEmit", "--pretty", "false"]
@@ -1082,7 +1182,7 @@ function resolveTscCommand(projectDir) {
   return null;
 }
 async function main() {
-  const input = JSON.parse(readFileSync5(0, "utf-8"));
+  const input = JSON.parse(readFileSync6(0, "utf-8"));
   if (input.tool_name !== "Edit" && input.tool_name !== "Write") {
     console.log("{}");
     return;
@@ -1092,49 +1192,12 @@ async function main() {
     console.log("{}");
     return;
   }
-  const codeExtensions = [
-    // Python (has linters: pyright + ruff)
-    ".py",
-    ".pyx",
-    ".pyi",
-    // TypeScript/JavaScript (has linter: tsc --noEmit)
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    // Go (TODO: add go vet)
-    ".go",
-    // Rust (TODO: add clippy)
-    ".rs",
-    // Java
-    ".java",
-    // C/C++
-    ".c",
-    ".h",
-    ".cpp",
-    ".hpp",
-    ".cc",
-    ".cxx",
-    ".hh",
-    // Ruby
-    ".rb",
-    // C#
-    ".cs"
-  ];
-  const ext = filePath.substring(filePath.lastIndexOf("."));
-  if (!codeExtensions.includes(ext)) {
-    console.log("{}");
-    return;
-  }
-  const pythonExtensions = [".py", ".pyx", ".pyi"];
-  const tsJsExtensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+  const kind = classifyExtension(filePath);
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  if (pythonExtensions.includes(ext)) {
+  if (kind === "python") {
     runPythonDiagnostics(filePath, projectDir);
-  } else if (tsJsExtensions.includes(ext)) {
-    runTscDiagnostics(filePath, projectDir);
+  } else if (kind === "ts" || kind === "js") {
+    runTscDiagnostics(filePath, projectDir, kind);
   } else {
     console.log("{}");
   }
@@ -1186,74 +1249,79 @@ function runPythonDiagnostics(filePath, projectDir) {
     console.log("{}");
   }
 }
-var TSC_LINE_REGEX = /^(.+)\((\d+),(\d+)\): (error|warning) TS(\d+): (.+)$/;
-function parseTscOutput(stdout) {
-  const diagnostics = [];
-  for (const line of stdout.split("\n")) {
-    const match = line.match(TSC_LINE_REGEX);
-    if (match) {
-      diagnostics.push({
-        file: match[1],
-        line: parseInt(match[2], 10),
-        column: parseInt(match[3], 10),
-        severity: match[4],
-        code: parseInt(match[5], 10),
-        message: match[6]
-      });
-    }
+function emit(note) {
+  if (!note) {
+    console.log("{}");
+    return;
   }
-  return diagnostics;
+  const output = {
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note }
+  };
+  console.log(JSON.stringify(output));
 }
-function runTscDiagnostics(filePath, projectDir) {
+function trackTs(projectDir, ok, metrics) {
+  process.env.CCV3_DAEMON_NO_AUTOSTART = "1";
+  trackHookActivitySync("post-edit-diagnostics", projectDir, ok, { edits_analyzed: 1, ...metrics });
+}
+function runTscDiagnostics(filePath, projectDir, kind) {
   recordBusFilesInPlay(filePath);
+  const started = Date.now();
+  const ms = () => Date.now() - started;
   try {
-    const tsc = resolveTscCommand(projectDir);
-    if (!tsc) {
-      console.log("{}");
+    const tsconfig = findNearestTsconfig(filePath, projectDir);
+    if (!tsconfig) {
+      trackTs(projectDir, false, { skipped_no_tsconfig: 1, duration_ms: ms() });
+      emit(kind === "ts" ? `TypeScript check skipped: no tsconfig.json found above ${filePath}.` : null);
       return;
     }
-    const result = spawnSync2(tsc.command, tsc.args, {
-      cwd: projectDir,
-      timeout: 3e4,
+    if (isSolutionStyleTsconfig(tsconfig)) {
+      trackTs(projectDir, false, { skipped_solution_style: 1, duration_ms: ms() });
+      emit(`TypeScript check skipped: ${tsconfig} only lists project references. Run tsc -b for that project.`);
+      return;
+    }
+    const tsconfigDir = dirname6(tsconfig);
+    const tsc = resolveTscCommand(tsconfigDir, projectDir);
+    if (!tsc) {
+      trackTs(projectDir, false, { no_compiler: 1, duration_ms: ms() });
+      emit(`TypeScript check did not run: no typescript compiler found for ${tsconfig}.`);
+      return;
+    }
+    const result = spawnSync2(tsc.command, [...tsc.args, "-p", tsconfig], {
+      cwd: tsconfigDir,
+      timeout: TSC_TIMEOUT_MS,
+      // A broken core type can print tens of thousands of errors; the 1 MiB default kills tsc.
+      maxBuffer: TSC_MAX_BUFFER,
       encoding: "utf-8",
       windowsHide: true
     });
     if (result.error || result.status === null) {
-      console.log("{}");
+      const timedOut = result.error?.code === "ETIMEDOUT";
+      trackTs(projectDir, false, { tsc_failed: 1, timed_out: timedOut ? 1 : 0, duration_ms: ms() });
+      emit(`TypeScript check did not run: ${timedOut ? `timed out after ${TSC_TIMEOUT_MS / 1e3} s` : "tsc failed to start"} (${tsconfig}).`);
       return;
     }
-    const diagnostics = parseTscOutput(result.stdout || "");
+    const stdout = result.stdout || "";
+    const diagnostics = parseTscOutput(stdout);
+    if (diagnostics.length === 0 && result.status !== 0) {
+      const head = (stdout + (result.stderr || "")).trim().split(/\r?\n/).slice(0, 3).join(" | ");
+      trackTs(projectDir, false, { tsc_failed: 1, duration_ms: ms() });
+      emit(`TypeScript check did not run cleanly (exit ${result.status}, ${tsconfig}): ${head.slice(0, 500)}`);
+      return;
+    }
     const errorCount = diagnostics.filter((d) => d.severity === "error").length;
-    const warningCount = diagnostics.filter((d) => d.severity === "warning").length;
-    trackHookActivitySync("post-edit-diagnostics", projectDir, true, {
-      edits_analyzed: 1,
+    trackTs(projectDir, true, {
       type_errors: errorCount,
-      lint_issues: warningCount
+      lint_issues: diagnostics.length - errorCount,
+      duration_ms: ms()
     });
     if (diagnostics.length === 0) {
-      console.log("{}");
+      emit(null);
       return;
     }
-    const lines = [];
-    lines.push(`Diagnostics: ${errorCount} type errors, ${warningCount} warnings`);
-    const maxPreviews = 5;
-    const previews = diagnostics.slice(0, maxPreviews);
-    for (const d of previews) {
-      lines.push(`   - ${d.file}:${d.line}:${d.column}: ${d.message}`);
-    }
-    if (diagnostics.length > maxPreviews) {
-      const remaining = diagnostics.length - maxPreviews;
-      lines.push(`   ... and ${remaining} more`);
-    }
-    const output = {
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        additionalContext: lines.join("\n")
-      }
-    };
-    console.log(JSON.stringify(output));
-  } catch {
-    console.log("{}");
+    const label = relative2(projectDir, tsconfig).replace(/\\/g, "/") || "tsconfig.json";
+    emit(formatTsDiagnostics(diagnostics, filePath, tsconfigDir, label));
+  } catch (e) {
+    emit(`TypeScript check did not run: ${e?.message ?? "internal error"}.`);
   }
 }
 var isDirectInvocation = (() => {
