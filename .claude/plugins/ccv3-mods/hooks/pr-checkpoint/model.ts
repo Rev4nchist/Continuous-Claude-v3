@@ -240,7 +240,8 @@ export const FREE_FACT_MAX_AGE_MS = 5 * 60_000
 /**
  * The slot fact, read at `now` (ms; null reads the fact as printed). Keep as draft leaves the pending entry, so a bare /pathway can ask
  * again hours later from the stored fact. At `now`, a `free` fact with no readable `checkedAt` or one older than 5 minutes is unknown,
- * and so is a `wait` fact whose `nextSlotAt` has passed.
+ * and so is a `wait` fact whose `nextSlotAt` has passed. A `wait` fact with no readable `nextSlotAt` has no time to pass, so it ages out
+ * the same way a `free` fact does.
  */
 export const slotOf = (raw: unknown, now: number | null = null): SlotFact => {
   const cap = isObject(raw) ? raw : {}
@@ -249,7 +250,7 @@ export const slotOf = (raw: unknown, now: number | null = null): SlotFact => {
   const checked = typeof cap.checkedAt === 'string' ? Date.parse(cap.checkedAt) : Number.NaN
   const next = typeof cap.nextSlotAt === 'string' ? Date.parse(cap.nextSlotAt) : Number.NaN
   const staleFree = printed === 'free' && now !== null && !(now - checked <= FREE_FACT_MAX_AGE_MS)
-  const pastWait = printed === 'wait' && now !== null && Number.isFinite(next) && next <= now
+  const pastWait = printed === 'wait' && now !== null && (Number.isFinite(next) ? next <= now : !(now - checked <= FREE_FACT_MAX_AGE_MS))
   const state = staleFree || pastWait ? 'unknown' : printed
   return { state, nextSlotAt: textOrNull(cap.nextSlotAt), minutesToSlot: minutes, lastNoticeAt: textOrNull(cap.lastNoticeAt) }
 }

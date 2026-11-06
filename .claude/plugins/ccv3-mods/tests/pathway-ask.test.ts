@@ -160,6 +160,15 @@ describe('buildPathwayAsk: three lines and the slot state', () => {
     expect(past.choices[0]!.label).not.toMatch(/paid/)
   })
 
+  test('P4d a wait fact with no slot time reads unknown once it is older than 5 minutes', () => {
+    const noTime = { ...WAIT, nextSlotAt: null, minutesToSlot: null, checkedAt: '2026-11-06T19:40:00Z' }
+    const fresh = buildPathwayAsk(328, result(noTime), NOW)!
+    const old = buildPathwayAsk(328, result(noTime), NOW + 6 * 60_000)!
+    expect(fresh.question.split('\n')[2]).toMatch(/^CodeRabbit slot: no free slot/)
+    expect(old.question.split('\n')[2]).toMatch(/^CodeRabbit slot: unknown \(/)
+    expect(old.choices[0]!.label).not.toMatch(/paid/)
+  })
+
   test('P3 a band the engine did not print reads unknown', () => {
     expect(ask(FREE, { auto: { eligible: false, band: null, reason: '' } }).question.split('\n')[0]).toBe('PR #328, band unknown, 7 files.')
   })
