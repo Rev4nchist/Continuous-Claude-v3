@@ -86,7 +86,7 @@ const noBoardDir = () => { const d = path.join(state.cacheRoot, 'no-board'); fs.
 const one = async (sql, params) => (await q(sql, params)).rows[0];
 
 before(async () => {
-  state.url = createScratch(4);
+  state.url = createScratch(5);
   state.url3 = createScratch(3);
   state.tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lane-project-')));
   for (const n of ['A', 'B', 'C', 'N']) {

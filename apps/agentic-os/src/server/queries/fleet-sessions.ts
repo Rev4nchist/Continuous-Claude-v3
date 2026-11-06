@@ -8,6 +8,7 @@ import { readSessionNames } from '@/server/sources/identity-names';
 import type { StateFiles, StateSnapshot } from '@/server/sources/state-files';
 
 import { joinSnapshots, LOOKUP_LIMIT, type JoinStats, type LookupRow } from './fleet-join';
+import { laneOrderSql } from './lane-sort';
 import type { ActiveSession, ActiveSessions } from './sessions';
 
 export type { JoinStats } from './fleet-join';
@@ -386,19 +387,19 @@ const HELD_LANE_STATES = ['active', 'review', 'blocked', 'ready'];
 const HELD_LANE_LIMIT = 200;
 
 /**
- * Lanes held by a session, by owner session id. Lowest priority number first, then id, so the
- * first entry is stable. Bounded by HELD_LANE_LIMIT. Throws when the query fails.
+ * Lanes held by a session, by owner session id. Shared lane sort key (band, due_at, priority, id), so the
+ * first entry is stable. Done lanes are excluded by HELD_LANE_STATES. Bounded by HELD_LANE_LIMIT. Throws when the query fails.
  */
 export async function getHeldLanes(): Promise<Map<string, string[]>> {
   const { rows } = await db.execute<{ id: string; owner_session_id: string }>(sql`
     SELECT id, owner_session_id
-    FROM agentic_os.lane
+    FROM agentic_os.lane l
     WHERE owner_session_id IS NOT NULL
       AND state IN (${sql.join(
         HELD_LANE_STATES.map((state) => sql`${state}`),
         sql`, `,
       )})
-    ORDER BY priority, id
+    ORDER BY ${sql.raw(laneOrderSql('l'))}
     LIMIT ${HELD_LANE_LIMIT}
   `);
   const byOwner = new Map<string, string[]>();

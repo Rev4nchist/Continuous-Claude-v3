@@ -45,8 +45,9 @@
  * one that errors, because the caller would proceed believing it had the lane.
  *
  * USAGE
- *   node scripts/coordination/lane.mjs board [--all]    # this board, grouped by track; --all = every board, read-only
- *   node scripts/coordination/lane.mjs next             # highest-priority claimable lane
+ *   node scripts/coordination/lane.mjs board [--all] [--by priority]   # this board, grouped by track; --all = every board, read-only
+ *                                                       # --by priority: one flat list of open lanes, band shown before each id
+ *   node scripts/coordination/lane.mjs next             # first claimable lane in the shared order (band, due_at, priority, id)
  *   node scripts/coordination/lane.mjs mine             # my lanes + lease time left
  *   node scripts/coordination/lane.mjs claim <id> [--note "..."]
  *   node scripts/coordination/lane.mjs note  <id> "status line"
@@ -85,6 +86,7 @@ import { repoPath } from './canon-home.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
 import { parseBand, parsePriority } from './lane-band.mjs';
+import { bandTag, laneOrderSql } from './lane-sort.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
@@ -350,7 +352,7 @@ function laneLine(l, myId, showBoard = false) {
   const leaseTag = l.owner_session_id
     ? (lease === null ? '' : lease > 0 ? ` ${lease}m` : ` LAPSED`)
     : '';
-  const head = `${STATE_MARK[l.state] || '·'} ${l.id.padEnd(26)} ${String(l.state).padEnd(8)} ${(who + leaseTag).padEnd(30)}`;
+  const head = `${STATE_MARK[l.state] || '·'} ${bandTag(l.band)} ${l.id.padEnd(26)} ${String(l.state).padEnd(8)} ${(who + leaseTag).padEnd(30)}`;
   const lines = [`${head} ${showBoard ? `[${l.project_key}] ` : ''}${l.title}`];
   if (l.note) lines.push(`${' '.repeat(30)}${l.note}`);
   if (l.scope) lines.push(`${' '.repeat(30)}scope: ${l.scope}`);
@@ -522,10 +524,13 @@ const commands = {
     const myId = me();
     const all = flags.all === true;
     const board = all ? softBoard() : projectOf();
+    if (flags.by !== undefined && flags.by !== 'priority') throw new Error('usage: lane.mjs board [--all] [--by priority]');
+    // --by priority: one flat list of open lanes in the shared order. The plain board keeps its track groups.
+    const flat = flags.by === 'priority';
     const { rows } = await c.query(
       `SELECT l.* FROM agentic_os.lane l
-       WHERE $1::boolean OR (l.project_key = $2::text AND l.state <> 'done')
-       ORDER BY l.project_key, l.track, l.priority, l.id`,
+       WHERE ${flat ? `l.state <> 'done' AND ($1::boolean OR l.project_key = $2::text)` : `$1::boolean OR (l.project_key = $2::text AND l.state <> 'done')`}
+       ORDER BY l.project_key, ${flat ? '' : 'l.track, '}${laneOrderSql('l')}`,
       [all, board ? board.key : null],
     );
     const peers = (await livePeers(c, board, all)).map((r) => ({ id: r.id, working_on: r.working_on }));
@@ -549,9 +554,10 @@ const commands = {
     const out = [];
     out.push(`LANE BOARD   ${all ? 'board (all boards, read-only)' : `board ${board.key}`}   me=${L(myId)}   ${rows.length} ${all ? '' : 'open '}lane(s)   ${peers.length} active (${STALE_MINUTES} min), ${quiet} open, quiet${procs ? `, ${procs.matched}/${procs.total} claude.exe matched${procs.unmatchedPids.length ? ` (no session for pid ${procs.unmatchedPids.join(', ')})` : ''}` : ''}`);
     let group = null;
+    if (flat) out.push(``);
     for (const l of rows) {
-      const g = all ? `${l.project_key}/${l.track}` : l.track;
-      if (g !== group) { group = g; out.push(``, `-- ${g} ${'-'.repeat(Math.max(0, 60 - g.length))}`); }
+      const g = flat ? null : all ? `${l.project_key}/${l.track}` : l.track;
+      if (!flat && g !== group) { group = g; out.push(``, `-- ${g} ${'-'.repeat(Math.max(0, 60 - g.length))}`); }
       out.push(laneLine(l, myId, all));
     }
     const unread = board ? (await c.query(
@@ -696,7 +702,7 @@ const commands = {
     const { rows } = await c.query(
       `SELECT l.* FROM agentic_os.lane l
        WHERE l.project_key = $1 AND l.state IN ('ready','backlog') AND ${RECLAIMABLE}
-       ORDER BY l.priority, l.id LIMIT ${Number(flags.n) > 0 ? Number(flags.n) : 5}`,
+       ORDER BY ${laneOrderSql('l')} LIMIT ${Number(flags.n) > 0 ? Number(flags.n) : 5}`,
       [board.key],
     );
     if (JSON_OUT) return rows;
@@ -707,7 +713,7 @@ const commands = {
   async mine(c) {
     const myId = me();
     const { rows } = await c.query(
-      `SELECT l.* FROM agentic_os.lane l WHERE l.owner_session_id=$1 ORDER BY l.priority, l.id`, [myId],
+      `SELECT l.* FROM agentic_os.lane l WHERE l.owner_session_id=$1 AND l.state <> 'done' ORDER BY ${laneOrderSql('l')}`, [myId],
     );
     if (JSON_OUT) return rows;
     return rows.length ? rows.map((l) => laneLine(l, myId, true)).join('\n') : 'you hold no lanes';

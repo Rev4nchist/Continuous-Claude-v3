@@ -7,6 +7,8 @@ import { db } from '@/db';
 import { redact } from '@/server/sources/redact';
 import { safeMessage, scrubPathsInText, stripControl } from '@/server/sources/safe-message';
 
+import { laneOrderSql } from './lane-sort';
+
 /**
  * The read-only lane Board (P1b part B2).
  *
@@ -103,7 +105,7 @@ function stateOf(value: string | null): BoardState {
   return (BOARD_STATES as readonly string[]).includes(value ?? '') ? (value as BoardState) : 'backlog';
 }
 
-/** Pure: rows already ordered by priority then id. Unknown states go to backlog. */
+/** Pure: rows already in the shared lane sort order (band, due_at, priority, id). Unknown states go to backlog. */
 function bucketLanes(rows: LaneRow[]): BoardColumn[] {
   const buckets = new Map<BoardState, { lane: BoardLane; updated: number }[]>(
     BOARD_STATES.map((state) => [state, []]),
@@ -158,7 +160,7 @@ export async function getLaneBoard(projectKey: string = DEFAULT_BOARD): Promise<
         FROM public.sessions s
       ) o ON o.id = l.owner_session_id
       WHERE l.project_key = ${projectKey}
-      ORDER BY l.priority, l.id
+      ORDER BY ${sql.raw(laneOrderSql('l'))}
       LIMIT ${LANE_LIMIT}
     `);
     const columns = bucketLanes(rows);

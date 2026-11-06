@@ -156,6 +156,7 @@ jobs:
           scripts/coordination/lane-path-guard.test.mjs
           scripts/coordination/lane-shim.test.mjs
           scripts/coordination/lane-band.test.mjs
+          scripts/coordination/lane-sort.test.mjs
           scripts/coordination/registry-drift.test.mjs
           scripts/coordination/session-label.test.mjs
           scripts/coordination/probe-boards.test.mjs

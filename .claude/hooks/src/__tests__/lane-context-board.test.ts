@@ -277,12 +277,14 @@ describe('B7-B10: SessionStart banner', () => {
 
   it('B8: "You hold" lists this board and summarises the rest', async () => {
     fake.mine = [
-      { id: 'zz-1', title: 't', track: 'a', state: 'active', scope: null, note: null, owner_session_id: ME, lease_expires_at: null, project_key: 'zz-board' },
+      { id: 'zz-1', title: 't', track: 'a', state: 'active', scope: null, note: null, owner_session_id: ME, lease_expires_at: null, project_key: 'zz-board', band: 'P1' },
+      { id: 'zz-2', title: 't', track: 'a', state: 'active', scope: null, note: null, owner_session_id: ME, lease_expires_at: null, project_key: 'zz-board' },
       { id: 'ccv3-1', title: 't', track: 'a', state: 'active', scope: null, note: null, owner_session_id: ME, lease_expires_at: null, project_key: 'continuous-claude' },
       { id: 'ccv3-2', title: 't', track: 'a', state: 'active', scope: null, note: null, owner_session_id: ME, lease_expires_at: null, project_key: 'continuous-claude' },
     ];
     const t = text(await run('SessionStart', zz));
-    expect(t).toContain('You hold: zz-1');
+    // The band prints before each id; a lane with no band reads "--" (Unsorted).
+    expect(t).toContain('You hold: P1 zz-1, -- zz-2');
     expect(t).toContain('+2 on other boards: ccv3-1@continuous-claude, ccv3-2@continuous-claude');
     expect(t).not.toMatch(/You hold:[^\n]*ccv3-1/);
   });
