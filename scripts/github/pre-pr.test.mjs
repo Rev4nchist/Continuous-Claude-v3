@@ -1337,6 +1337,15 @@ test('DO3: a different error event on a docs-only branch stays a FAIL', async ()
   assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
 });
 
+test('DO5: "No files to review" from a CLI that exited non-zero or timed out stays a FAIL (a stopped review is not a clean skip)', async () => {
+  const repo = withFork(makeRepo());
+  const stopped = (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: 1, stdout: NO_FILES, stderr: '' });
+  const { result } = await prePr(repo, { crRunner: stopped });
+  assert.equal(result.ok, false);
+  assert.match(result.lines.join('\n'), /FAIL coderabbit[\s\S]*exit 1/);
+  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
+});
+
 test('DO4: a finished review on a docs-only branch is unchanged: not skipped, no docs-only flag, the slot is used', async () => {
   const repo = makeRepo();
   const { result } = await prePr(repo);
