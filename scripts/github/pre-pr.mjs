@@ -106,7 +106,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-path-guard', 'lane-shim', 'lane-band', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'scratch-db'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
