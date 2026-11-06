@@ -1346,6 +1346,12 @@ test('DO5: "No files to review" from a CLI that timed out or could not start sta
   assert.equal(a.result.ok, false, a.result.lines.join('\n'));
   assert.match(a.result.lines.join('\n'), /FAIL coderabbit[\s\S]*timed out/);
   assert.equal(existsSync(path.join(timedOut.dir, STAMP_REL)), false, 'timed out: no stamp');
+  // Only exit 1 is the real CLI's code for this error: any other exit (for example 2 or 137) is a stopped review.
+  const otherExit = withFork(makeRepo());
+  const b = await prePr(otherExit, { crRunner: crExiting(2, NO_FILES) });
+  assert.equal(b.result.ok, false, b.result.lines.join('\n'));
+  assert.match(b.result.lines.join('\n'), /FAIL coderabbit[\s\S]*exit 2/);
+  assert.equal(existsSync(path.join(otherExit.dir, STAMP_REL)), false, 'exit 2: no stamp');
   // A CLI that could not start is the existing cli-error skip (the gate hook denies it); it must never be recorded as docs-only.
   const noStart = withFork(makeRepo());
   const broken = (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: null, stdout: NO_FILES, stderr: '', error: 'spawn EACCES' });
