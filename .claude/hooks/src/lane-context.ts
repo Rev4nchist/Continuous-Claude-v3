@@ -84,6 +84,7 @@ import { dirname, join } from 'node:path';
 
 import { Client } from 'pg';
 import { boardRoots, DEFAULT_BOARD, isHeadless, laneCliCmd, normalizeRoot, resolveBoard, wmKey } from './shared/lane-board.js';
+import { bandTag, laneOrderSql } from './shared/lane-sort.js';
 import { resolveDbUrl } from './shared/pg-client.js';
 import { label } from './shared/session-identity.js';
 
@@ -175,6 +176,9 @@ interface LaneRow {
   scope: string | null; note: string | null;
   owner_session_id: string | null; lease_expires_at: string | null;
   project_key?: string;
+  /** P0, P1, P2 or NULL (Unsorted). Absent on a database without migration 0005. */
+  band?: string | null;
+  due_at?: string | null;
 }
 interface EventRow {
   id: number; occurred_at: string; lane_id: string | null; kind: string;
@@ -541,7 +545,7 @@ export async function runLaneContext(raw: string): Promise<object | null> {
     if (isStart) {
       // Every lane I own, on any board: the banner shows this board's and summarises the rest.
       const mine = (await client.query<LaneRow>(
-        `SELECT * FROM agentic_os.lane WHERE owner_session_id=$1 AND state<>'done' ORDER BY priority, id`,
+        `SELECT * FROM agentic_os.lane l WHERE owner_session_id=$1 AND state<>'done' ORDER BY ${laneOrderSql('l')}`,
         [me],
       )).rows;
       const here = mine.filter((l) => (l.project_key ?? DEFAULT_BOARD) === board);
@@ -582,9 +586,9 @@ export async function runLaneContext(raw: string): Promise<object | null> {
       )).rows;
 
       const claimable = (await client.query<LaneRow>(
-        `SELECT * FROM agentic_os.lane
+        `SELECT * FROM agentic_os.lane l
          WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
-         ORDER BY priority, id LIMIT 5`,
+         ORDER BY ${laneOrderSql('l')} LIMIT 5`,
         [board],
       )).rows;
 
@@ -592,7 +596,7 @@ export async function runLaneContext(raw: string): Promise<object | null> {
       lines.push(`You are ${who(me, payload.session_title || undefined)}.`);
       lines.push('');
       lines.push(here.length
-        ? `You hold: ${here.map((l) => l.id).join(', ')}`
+        ? `You hold: ${here.map((l) => `${bandTag(l.band)} ${l.id}`).join(', ')}`
         : `You hold no lane. Claim one before starting work: \`${laneCliCmd()} next\``);
       if (elsewhere.length) {
         const shown = elsewhere.slice(0, 5).map((l) => `${l.id}@${l.project_key}`).join(', ');
@@ -615,7 +619,7 @@ export async function runLaneContext(raw: string): Promise<object | null> {
       if (claimable.length) {
         lines.push('');
         lines.push('Claimable next:');
-        for (const l of claimable) lines.push(`  ${l.id.padEnd(28)} ${l.title}`);
+        for (const l of claimable) lines.push(`  ${bandTag(l.band)} ${l.id.padEnd(28)} ${l.title}`);
       }
       lines.push('');
       lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id>`);

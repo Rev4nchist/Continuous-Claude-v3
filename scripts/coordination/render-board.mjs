@@ -36,6 +36,7 @@ import {
 import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
 import { processMatchSummary } from './process-match.mjs';
+import { laneOrderSql } from './lane-sort.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -160,15 +161,15 @@ const lanes = (await c.query(`
          )) AS held_now
     FROM agentic_os.lane l
    WHERE l.project_key = $1::text
-   ORDER BY l.track, l.priority, l.id`, [KEY])).rows;
+   ORDER BY l.track, ${laneOrderSql('l')}`, [KEY])).rows;
 
 // The sessions of this board: under one of its registry roots, or holding one of its lanes (a session started in the home dir).
 // The same rule as lane.mjs peers; the lanes listed under a session are this board's lanes only.
 const sessions = (await c.query(
   `SELECT s.id, s.working_on,
           GREATEST(s.last_heartbeat, s.last_activity_at) AS last_heartbeat,
-          COALESCE(json_agg(json_build_object('id',l.id,'title',l.title,'scope',l.scope,'note',l.note)
-            ORDER BY l.priority) FILTER (WHERE l.id IS NOT NULL), '[]') AS lanes
+          COALESCE(json_agg(json_build_object('id',l.id,'title',l.title,'scope',l.scope,'note',l.note,'band',to_jsonb(l)->>'band')
+            ORDER BY ${laneOrderSql('l')}) FILTER (WHERE l.id IS NOT NULL), '[]') AS lanes
    FROM sessions s
    LEFT JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done' AND l.project_key = $1::text
    WHERE GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
@@ -766,7 +767,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       </div>`;
     }).join('')}
     <div class="card" style="margin-top:6px"><span class="recon"><b>lanes</b>     SELECT id, state, owner_session_id, lease_expires_at, scope
-            FROM agentic_os.lane WHERE project_key = '${esc(KEY)}' ORDER BY track, priority;
+            FROM agentic_os.lane WHERE project_key = '${esc(KEY)}' ORDER BY track, band NULLS LAST, due_at NULLS LAST, priority, id;
 <b>claim</b>     ${esc(laneCliCmd())} claim &lt;id&gt;    # atomic: one winner, loser is told who won
 <b>gate</b>      node scripts/coordination/lane-race-probe.mjs   # 10 properties, incl. both reclaim negatives</span></div>
   </section>
