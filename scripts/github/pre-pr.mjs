@@ -58,9 +58,12 @@
  * event), "cli-missing" (cr cannot start: ENOENT or EINVAL; no run is spent), "cli-error" (cr usage or cr failed in another
  * way: exit code, timeout, auth error, EACCES; no run is spent; a retry costs nothing), "rate-limited" (`cr usage --agent`
  * reports no included review left; no run is spent; the stamp also holds cr_retry_minutes), "no-changes" (the CLI saw an
- * empty --committed scope; the run is given back), "cli-cap" (today's paid CLI spend reached coderabbit.cli_daily_cap_usd in
- * review-router.config.json; no run is spent) or "earlier-step-failed". The hook accepts "cli-missing", "cli-cap", "cap" with
- * cr_finished_runs >= 1, and "rate-limited" with a retry time. It denies the rest, including "cli-error".
+ * empty --committed scope; the run is given back), "docs-only" (every changed file is docs, the same test the evidence step uses, and the
+ * CLI sent only the error "No files to review" because .coderabbit.yaml path_filters exclude docs/**; the run is given back; the stamp also
+ * holds cr_docs_only true; any other error, or any non-docs changed file, stays a FAIL), "cli-cap" (today's paid CLI spend reached
+ * coderabbit.cli_daily_cap_usd in review-router.config.json; no run is spent) or "earlier-step-failed". The hook accepts "cli-missing",
+ * "cli-cap", "cap" with cr_finished_runs >= 1, "rate-limited" with a retry time, and "docs-only" with cr_docs_only and docs_verified both
+ * true. It denies the rest, including "cli-error".
  * Spend log: CLI 0.9.0 bills usage credits past the free hourly allowance with no flag and no prompt. When the complete record
  * carries usageCost with costCents above 0, the step appends one {kind: "cli"} row to ~/.claude/state/coderabbit-paid.jsonl
  * (cr-paid.mjs recordCliSpend) and prints "billed $X.XX" in its line. Before a run it sums today's cli rows (America/Chicago).
@@ -70,7 +73,7 @@
  * for example a missing review-router.config.json); the message goes to stderr.
  * Files (all under the gitignored .claude/cache/):
  *   pre-pr/stamp.json                      read by the pre-pr-gate hook: { head, branch, at, body_sha256,
- *                                          cr_skipped, cr_skip_reason, cr_retry_minutes, cr_finished_runs, results }
+ *                                          cr_skipped, cr_skip_reason, cr_docs_only, docs_verified, cr_retry_minutes, cr_finished_runs, results }
  *   pre-pr/cr-runs-<branch>.json           the CLI runs used on this branch (cap 2 runs with new code; each row has newCode). Keyed on the branch
  *                                          name and its first own commit: a merge of main keeps the count, a rebase starts a new one.
  *   pre-pr/cr-lock-<branch>.json           { pid, head, at }, held for the whole CodeRabbit step; a second step on the
@@ -444,11 +447,14 @@ export function changedFiles(git, base) {
 
 // ---------- evidence ----------
 
+/** True when every changed file is in the docs class. No files classes as normal, never docs. One computation for the evidence and coderabbit steps and the stamp. */
+export const isDocsOnly = (paths, config) => classify(paths, config).class === 'docs';
+
 /** The PR body proof, the way READY reads it (review-status.mjs). `docs` needs every changed file in the docs class. */
 export function checkEvidence({ body, head, paths, config }) {
   if (typeof body !== 'string') return result('evidence', 'FAIL', 'no PR body text', ['PR body proof: the draft body could not be read']);
   const parsed = parseProof(body);
-  const docsVerified = classify(paths, config).class === 'docs'; // no files classes as normal, never docs
+  const docsVerified = isDocsOnly(paths, config);
   const problems = proofProblems(parsed, { head, docsVerified });
   if (problems.length > 0) return result('evidence', 'FAIL', `${problems.length} problem(s) READY would report`, problems);
   return result('evidence', 'PASS', `Proof type ${parsed.types[0].trim()}${docsVerified ? ' (every changed file is docs)' : `, GREEN names the head ${head.slice(0, 7)}`}`);
@@ -882,12 +888,22 @@ function streamNotes(p) {
   return lines;
 }
 
-/** Verdict from the parsed stream and how the process ended (`exitProblem`: a text, or null). The output path is added by the caller. */
-function crVerdict(p, { exitProblem, base }) {
+/** The CLI's error when .coderabbit.yaml path_filters leave it no file (docs/** is excluded). Only a docs-only branch may skip on it. */
+const NO_FILES_TO_REVIEW = /No files to review/i;
+
+/**
+ * Verdict from the parsed stream and how the process ended (`exitProblem`: a text, or null). The output path is added by the caller.
+ * `docsOnly`: every changed file is docs (the evidence step's computation). With it, an error stream that holds only "No files to
+ * review" is a SKIP docs-only. Any other error, or a branch with a non-docs file, is a FAIL as before.
+ */
+function crVerdict(p, { exitProblem, base, docsOnly = false }) {
   const notes = streamNotes(p);
   const fail = (detail) => result('coderabbit', 'FAIL', detail, notes);
   const c = p.complete;
   if (p.awaiting) return fail(`the CLI ended ${p.awaiting}: stop and report to Dave; do not confirm anything.`);
+  if (docsOnly && !c && p.errors.length > 0 && p.errors.every((e) => NO_FILES_TO_REVIEW.test(String(e.message ?? '')))) {
+    return skipped('docs-only', `every changed file is docs and .coderabbit.yaml path_filters exclude docs/**, so the CLI had no file to review ("${clip(String(p.errors[0].message ?? '').split('\n')[0], 80)}"); the run is given back.`);
+  }
   if (p.errors.length > 0 && !c) {
     const e = p.errors[0];
     return fail(`the CLI sent an error event (${e.errorType ?? 'unknown'}): ${clip(String(e.message ?? ''), 160)}${exitProblem ? `; ${exitProblem}` : ''}.`);
@@ -1035,7 +1051,7 @@ function reusedReview({ root, e2e, saved, base, why }) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, docsOnly = false }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
@@ -1045,7 +1061,7 @@ export async function runCodeRabbit({ root, branch, head, base, now, runner, ski
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, docsOnly });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -1076,7 +1092,7 @@ function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
   }
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config }) {
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, docsOnly }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
@@ -1116,13 +1132,13 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   const exitProblem = r.timedOut ? `timed out after ${Math.round(timeoutMs / MIN)} min` : r.error ? `could not run (${r.error})` : r.status !== 0 ? `exit ${r.status}` : null;
   const stdout = r.stdout ?? '';
   const parsed = parseAgentStream(stdout);
-  const verdict = crVerdict(parsed, { exitProblem, base });
+  const verdict = crVerdict(parsed, { exitProblem, base, docsOnly });
   const out = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}${verdict.status === 'PASS' ? '' : '.failed'}.txt`);
   writeFileSync(out, r.stderr && verdict.status !== 'PASS' ? `${stdout}\n[stderr]\n${r.stderr}` : stdout);
   rmSync(running, { force: true });
   const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath });
   if (logNote) verdict.notes = [...(verdict.notes ?? []), logNote];
-  if (verdict.skipReason === 'no-changes') giveBack();
+  if (verdict.skipReason === 'no-changes' || verdict.skipReason === 'docs-only') giveBack();
   else {
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
     run.complete = verdict.status === 'PASS';
@@ -1173,6 +1189,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const results = [...checkGit(git, base, fetched)];
   const changes = head ? changedFiles(git, base) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') };
   results.push(changes.result);
+  const docsVerified = isDocsOnly(changes.paths, cfg);
   const evidenceAt = results.length;
   results.push(checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg }));
   // Fail-fast (Dave, 2026-11-04): the first FAIL stops the rest of the gates, which take minutes. One FAIL does not stop them: an evidence
@@ -1207,7 +1224,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg }));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, docsOnly: docsVerified }));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
@@ -1226,7 +1243,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const slim = results.map(({ step, status, detail }) => ({ step, status, detail }));
     const cr = results.find((r) => r.step === 'coderabbit');
     const crSkipped = cr?.status === 'SKIP';
-    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
+    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
   }
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }

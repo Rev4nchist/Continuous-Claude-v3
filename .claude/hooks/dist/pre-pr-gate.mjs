@@ -501,8 +501,12 @@ function stampProblem(raw, head, now, body) {
   if (o.cr_skipped === true && reason === "cap" && !capEarned) {
     return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? "none")}). The cap counts runs that finished with a PASS. Fix the CLI and run pre-pr.mjs again`;
   }
-  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned) {
-    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || "none"}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
+  const docsOnlyEarned = reason === "docs-only" && o.cr_docs_only === true && o.docs_verified === true;
+  if (o.cr_skipped === true && reason === "docs-only" && !docsOnlyEarned) {
+    return `the stamp skipped the CodeRabbit CLI review as docs-only, but it lacks cr_docs_only: true or docs_verified: true (cr_docs_only: ${String(o.cr_docs_only ?? "none")}, docs_verified: ${String(o.docs_verified ?? "none")}). A docs-only skip is allowed only when pre-pr.mjs confirmed every changed file is docs. Run pre-pr.mjs again`;
+  }
+  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned) {
+    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || "none"}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), a docs-only branch (docs-only, with cr_docs_only and docs_verified true), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
     if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~ or $env: paths. A Git Bash /c/ path is turned into C:/ on Windows`;

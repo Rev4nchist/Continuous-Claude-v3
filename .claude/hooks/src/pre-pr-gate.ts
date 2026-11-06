@@ -69,7 +69,8 @@ const FUTURE_SLACK_MS = 5 * 60_000;
 export const GIT_TIMEOUT_MS = 2000;
 /**
  * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cli-cap" (today's paid CLI spend reached the daily cap; no run was spent); "cap" only with cr_finished_runs >= 1; "rate-limited" only with a known retry time. "flag" (--skip-cr),
- * "no-changes" (the CLI saw an empty scope) and "earlier-step-failed" are not allowed. "rate-limited" is allowed only
+ * "no-changes" (the CLI saw an empty scope) and "earlier-step-failed" are not allowed. "docs-only" (every changed file is docs, so the CLI had
+ * nothing to review) is allowed only when the stamp has cr_docs_only === true AND docs_verified === true. "rate-limited" is allowed only
  * with a known retry time in the stamp (cr_retry_minutes), which the gate log also shows.
  */
 const ALLOWED_SKIP_REASONS = new Set(['cli-missing', 'cli-cap']);
@@ -226,7 +227,7 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
   if (raw === null) return 'no stamp. The pre-PR check has not passed in this checkout';
   let s: unknown;
   try { s = JSON.parse(raw); } catch { return 'the stamp is not valid JSON'; }
-  const o = s as { head?: unknown; at?: unknown; cr_skipped?: unknown; cr_skip_reason?: unknown; cr_retry_minutes?: unknown; cr_finished_runs?: unknown; body_sha256?: unknown } | null;
+  const o = s as { head?: unknown; at?: unknown; cr_skipped?: unknown; cr_skip_reason?: unknown; cr_retry_minutes?: unknown; cr_finished_runs?: unknown; cr_docs_only?: unknown; docs_verified?: unknown; body_sha256?: unknown } | null;
   if (!o || typeof o !== 'object' || typeof o.head !== 'string' || o.head === '') return 'the stamp has no head';
   const at = typeof o.at === 'string' ? Date.parse(o.at) : NaN;
   if (!Number.isFinite(at)) return 'the stamp has no valid time';
@@ -239,8 +240,12 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
   if (o.cr_skipped === true && reason === 'cap' && !capEarned) {
     return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? 'none')}). The cap counts runs that finished with a PASS. Fix the CLI and run pre-pr.mjs again`;
   }
-  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned) {
-    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || 'none'}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
+  const docsOnlyEarned = reason === 'docs-only' && o.cr_docs_only === true && o.docs_verified === true;
+  if (o.cr_skipped === true && reason === 'docs-only' && !docsOnlyEarned) {
+    return `the stamp skipped the CodeRabbit CLI review as docs-only, but it lacks cr_docs_only: true or docs_verified: true (cr_docs_only: ${String(o.cr_docs_only ?? 'none')}, docs_verified: ${String(o.docs_verified ?? 'none')}). A docs-only skip is allowed only when pre-pr.mjs confirmed every changed file is docs. Run pre-pr.mjs again`;
+  }
+  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned) {
+    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || 'none'}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), a docs-only branch (docs-only, with cr_docs_only and docs_verified true), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
     if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~ or $env: paths. A Git Bash /c/ path is turned into C:/ on Windows`;

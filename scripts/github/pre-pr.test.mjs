@@ -1300,6 +1300,54 @@ test('B3: a no-changes SKIP is stamped with reason no-changes and the built hook
   assert.match(v.reason, new RegExp('skipped the CodeRabbit CLI review.*no-changes'));
 });
 
+// ---------- docs-only branches: the CLI has nothing to review (.coderabbit.yaml path_filters exclude docs/**) ----------
+
+const NO_FILES = ev(CONTEXT, { type: 'error', errorType: 'review', message: 'Review failed: No files to review\nPrevious local review has no stored findings.', recoverable: false });
+const crReturning = (stdout) => (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: 0, stdout, stderr: '' });
+const runsOn = (repo) => JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs;
+const harnessBodyFor = (head) => `## Evidence\n\nProof type: harness\n\nRED: \`x\` @ ${'b'.repeat(40)}\n\`\`\`text\nred\n\`\`\`\n\nGREEN: \`x\` @ ${head}\n\`\`\`text\ngreen\n\`\`\`\n`;
+
+test('DO1: a docs-only branch where the CLI says "No files to review" is a SKIP docs-only, no slot spent, and the stamp says so', async () => {
+  const repo = withFork(makeRepo());
+  const { result } = await prePr(repo, { crRunner: crReturning(NO_FILES) });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.ok(result.lines.some((l) => /^SKIP coderabbit/.test(l)), result.lines.join('\n'));
+  const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
+  assert.equal(stamp.cr_skipped, true);
+  assert.equal(stamp.cr_skip_reason, 'docs-only');
+  assert.equal(stamp.cr_docs_only, true);
+  assert.equal(stamp.docs_verified, true);
+  assert.equal(runsOn(repo).length, 0, 'the slot is given back');
+});
+
+test('DO2: the same error with one non-docs changed file stays a FAIL', async () => {
+  const repo = makeRepo({ files: { 'docs/a.md': 'hello\n', 'scripts/a.mjs': 'export const a = 1;\n' } });
+  const { result } = await prePr(repo, { bodyText: harnessBodyFor(repo.head), crRunner: crReturning(NO_FILES) });
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.some((l) => /^FAIL coderabbit.*No files to review/.test(l)), result.lines.join('\n'));
+  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
+});
+
+test('DO3: a different error event on a docs-only branch stays a FAIL', async () => {
+  const repo = makeRepo();
+  const other = ev(CONTEXT, { type: 'error', errorType: 'review', message: 'Review failed: upstream timeout', recoverable: true });
+  const { result } = await prePr(repo, { crRunner: crReturning(other) });
+  assert.equal(result.ok, false);
+  assert.ok(result.lines.some((l) => /^FAIL coderabbit.*upstream timeout/.test(l)), result.lines.join('\n'));
+  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
+});
+
+test('DO4: a finished review on a docs-only branch is unchanged: not skipped, no docs-only flag, the slot is used', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo);
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
+  assert.equal(stamp.cr_skipped, false);
+  assert.equal(stamp.cr_skip_reason, null);
+  assert.equal(stamp.cr_docs_only, false);
+  assert.equal(runsOn(repo).length, 1);
+});
+
 // ---------- runPrePr: real git, fake runners ----------
 
 function git(cwd, ...args) {
