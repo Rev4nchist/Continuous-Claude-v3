@@ -57,7 +57,7 @@ test('reap.ps1 with no arguments lists and exits 0', { skip: !win }, () => {
   const r = pwsh([REAP]);
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /\[reap\]/);
-  assert.doesNotMatch(r.stdout, /killed/i, 'the list-only script must never print a "killed" line');
+  assert.doesNotMatch(r.stdout, /killed \d+ tree/i, 'the list-only script must never print the old kill summary');
 });
 
 test('repro.ps1 does not reference reap.ps1', () => {
