@@ -19950,6 +19950,108 @@ var malicious_packages_default = {
       reason: "Malware in @ai-ecoverse/slicc-windows-amd64 (GHSA-38rp-mcrj-j69m)",
       date: "2026-11-04",
       advisory: "https://github.com/advisories/GHSA-38rp-mcrj-j69m"
+    },
+    "sickle-wrapper": {
+      blocked_all: true,
+      reason: "Malware in sickle-wrapper (GHSA-f64g-9rx5-4jxf)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-f64g-9rx5-4jxf"
+    },
+    "vfat-tools": {
+      blocked_all: true,
+      reason: "Malware in vfat-tools (GHSA-jxh5-v495-r962)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-jxh5-v495-r962"
+    },
+    "@kora20030101/test-pkg-delete-me": {
+      blocked_all: true,
+      reason: "Malware in @kora20030101/test-pkg-delete-me (GHSA-g42p-gwv6-w549)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-g42p-gwv6-w549"
+    },
+    "@exclipz/baileys": {
+      blocked_all: true,
+      reason: "Malware in @exclipz/baileys (GHSA-9fv3-7f93-gcqh)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-9fv3-7f93-gcqh"
+    },
+    "@exclipz/bails": {
+      blocked_all: true,
+      reason: "Malware in @exclipz/bails (GHSA-9j99-fw58-88hg)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-9j99-fw58-88hg"
+    },
+    "rafael-bails": {
+      blocked_all: true,
+      reason: "Malicious code in rafael-bails (npm) (GHSA-h8q9-4jrq-9vfq)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-h8q9-4jrq-9vfq"
+    },
+    "nishiki-bail": {
+      blocked_all: true,
+      reason: "Malicious code in nishiki-bail (npm) (GHSA-gv3w-r6c7-9p4m)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-gv3w-r6c7-9p4m"
+    },
+    "oktz-baileys": {
+      blocked_all: true,
+      reason: "Malicious code in oktz-baileys (npm) (GHSA-wmf5-rghr-gxcf)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-wmf5-rghr-gxcf"
+    },
+    kurobails: {
+      blocked_all: true,
+      reason: "Malicious code in kurobails (npm) (GHSA-2g7c-j9mq-h3xp)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-2g7c-j9mq-h3xp"
+    },
+    "@nuri.yavuz.tr.2/my-unique-pinger": {
+      blocked_all: true,
+      reason: "Malicious code in @nuri.yavuz.tr.2/my-unique-pinger (npm) (GHSA-w25j-c6g4-mhwq)",
+      date: "2026-11-06",
+      advisory: "https://github.com/advisories/GHSA-w25j-c6g4-mhwq"
+    },
+    "itc-actors-api": {
+      blocked_all: true,
+      reason: "Malware in itc-actors-api (GHSA-w2fv-53fr-6qwg)",
+      date: "2026-11-05",
+      advisory: "https://github.com/advisories/GHSA-w2fv-53fr-6qwg"
+    },
+    "talk-lang": {
+      blocked_all: true,
+      reason: "Malware in talk-lang (GHSA-3x5r-f82m-84w9)",
+      date: "2026-11-05",
+      advisory: "https://github.com/advisories/GHSA-3x5r-f82m-84w9"
+    },
+    "plain-lang": {
+      blocked_all: true,
+      reason: "Malware in plain-lang (GHSA-28wv-5h54-vmjx)",
+      date: "2026-11-05",
+      advisory: "https://github.com/advisories/GHSA-28wv-5h54-vmjx"
+    },
+    "@db-tools/main-app": {
+      blocked_all: true,
+      reason: "Malware in @db-tools/main-app (GHSA-fwf6-6x3c-6g3h)",
+      date: "2026-11-05",
+      advisory: "https://github.com/advisories/GHSA-fwf6-6x3c-6g3h"
+    },
+    test1817: {
+      blocked_all: true,
+      reason: "Malware in test1817 (GHSA-jfvg-hq3f-9865)",
+      date: "2026-11-05",
+      advisory: "https://github.com/advisories/GHSA-jfvg-hq3f-9865"
+    },
+    "@gemshell/win32-x64": {
+      blocked_all: true,
+      reason: "Malware in @gemshell/win32-x64 (GHSA-fq5g-5qrm-crjh)",
+      date: "2026-11-05",
+      advisory: "https://github.com/advisories/GHSA-fq5g-5qrm-crjh"
+    },
+    "dsh-purge": {
+      blocked_all: true,
+      reason: "Malware in dsh-purge (GHSA-w7xp-2vj9-g24m)",
+      date: "2026-11-05",
+      advisory: "https://github.com/advisories/GHSA-w7xp-2vj9-g24m"
     }
   }
 };
