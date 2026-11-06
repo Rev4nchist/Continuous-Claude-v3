@@ -2589,7 +2589,7 @@ test('EN1: a hooks change with no esbuild is ONE ENV FAIL line, and no gate runs
   const { result, gateRuns } = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) });
   const envLines = result.lines.filter((l) => /^\w+ env - /.test(l));
   assert.equal(envLines.length, 1, result.lines.join('\n'));
-  assert.match(envLines[0], /^FAIL env - ENV: hooks-build needs esbuild\. Tried .+This is the environment, not your change\. Fix: run `npm ci` in /);
+  assert.match(envLines[0], /^FAIL env - ENV: hooks-build needs esbuild\. Tried .+This is the environment, not your change\. Fix: run `node scripts\/worktree\/shared-deps\.mjs --check` in /);
   assert.ok(result.lines.some((l) => /^ {4}ENV: hooks-vitest needs vitest\./.test(l)), 'the second missing need is a note under the line');
   assert.ok(result.lines.some((l) => /^SKIP gate:hooks-build - not run: env failed/.test(l)), result.lines.join('\n'));
   assert.equal(gateRuns.includes('hooks-build'), false);
@@ -2663,7 +2663,7 @@ test('EN7: a gate that fails with a missing package gets the ENV prefix; a missi
   const run = (out) => runGate(gate, { root: REPO_ROOT, exec: execOut(1, out), git: git0 });
   const pkg = run("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'pg' imported from x.mjs\n# fail 4\n");
   assert.equal(pkg.status, 'FAIL');
-  assert.match(pkg.detail, /^ENV: exit 1: # fail 4\. This is the environment, not your change\. Fix: run `npm ci` in /);
+  assert.match(pkg.detail, /^ENV: exit 1: # fail 4\. This is the environment, not your change\. Fix: run `node scripts\/worktree\/shared-deps\.mjs --check` in /);
   assert.match(run("Error: Cannot find module 'pg'\ncode: 'MODULE_NOT_FOUND'\n# fail 4\n").detail, /^ENV: /);
   assert.match(run("Error [ERR_MODULE_NOT_FOUND]: Cannot find module './gone.mjs' imported from x.mjs\n# fail 4\n").detail, /^exit 1: /);
   assert.match(run('# fail 4\nAssertionError: expected 1\n').detail, /^exit 1: # fail 4$/);
@@ -2673,4 +2673,11 @@ test('EN8: the ratchet and the resolver tests are gates of their own surfaces', 
   assert.deepEqual(gatesFor(['scripts/coordination/lane.mjs']).filter((g) => g.id === 'no-pg-lookup').map((g) => g.args[0]), ['scripts/ratchets/no-pg-lookup.mjs']);
   assert.ok(gatesFor(['scripts/lib/resolve-deps.mjs']).some((g) => g.id === 'resolve-deps-tests'));
   assert.equal(gatesFor(['docs/a.md']).some((g) => g.id === 'no-pg-lookup'), false);
+});
+
+test('EN9: a change under scripts/worktree runs the shared-deps tests, and a docs change does not', () => {
+  const gate = gatesFor(['scripts/worktree/shared-deps.mjs']).find((g) => g.id === 'shared-deps-tests');
+  assert.ok(gate, 'shared-deps-tests is a gate of the worktree-scripts surface');
+  assert.deepEqual(gate.args, ['--test', 'scripts/worktree/shared-deps.test.mjs']);
+  assert.equal(gatesFor(['docs/a.md']).some((g) => g.id === 'shared-deps-tests'), false);
 });

@@ -99,6 +99,7 @@ test('R5: nothing found throws ONE ENV error that lists every folder and the fix
     assert.ok(err.message.includes(dir), `names ${dir}`);
   }
   assert.match(err.message, /`pg`/);
+  assert.match(err.message, /Fix: run `node scripts\/worktree\/shared-deps\.mjs --check` in /);
   assert.match(err.message, /npm ci/);
   assert.ok(err.message.includes(`New-Item -ItemType Junction -Path .claude\\hooks\\node_modules -Target ${path.join(r.primary, '.claude', 'hooks', 'node_modules')}`));
   assert.match(err.message, /never delete a junction recursively/);
@@ -169,9 +170,19 @@ test('R10: a bin is found only on the walk up from the folder, never in the prim
   assert.ok(lookupBin('esbuild', { from: r.wtHooks }).path);
 });
 
-test('depsHint names the primary hooks folder, the npm ci line and the junction line', () => {
-  const text = depsHint('pg', ['x'], 'C:\\primary');
+test('depsHint leads with the store check, then the apply, and keeps the junction as a fallback only', () => {
+  const primary = path.join(tmpdir(), 'primary-x');
+  const text = depsHint('pg', ['x'], primary);
+  const check = text.indexOf('node scripts/worktree/shared-deps.mjs --check');
+  const apply = text.indexOf('node scripts/worktree/shared-deps.mjs --apply');
+  const junction = text.indexOf('New-Item -ItemType Junction');
+  assert.equal(check, 'run `'.length, 'the check is the first step');
+  assert.ok(apply > check && junction > apply, 'order: check, apply, junction');
+  assert.ok(text.includes(`in ${primary}.`), 'the check runs in the primary');
+  assert.match(text, /ask Dave/);
+  assert.match(text, /one shared link, never inside a worktree/);
+  assert.match(text, /Fallback only for a worktree outside the primary/);
   assert.match(text, /npm ci/);
-  assert.match(text, /Dave/);
-  assert.match(text, /New-Item -ItemType Junction/);
+  assert.match(text, /never delete a junction recursively/);
+  assert.ok(text.includes(`ln -s ${path.join(primary, '.claude', 'hooks', 'node_modules')} .claude/hooks/node_modules`), 'the POSIX hand link sits beside the Windows one');
 });

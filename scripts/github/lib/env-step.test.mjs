@@ -61,7 +61,9 @@ test('V1: a bare worktree names the missing esbuild bin and vitest, and blocks t
   assert.match(out.fail, /^ENV: hooks-build needs esbuild\. Tried /);
   assert.ok(out.fail.includes(path.join(r.wtHooks, 'node_modules', '.bin')), 'names the own folder it tried');
   assert.ok(!out.fail.includes(path.join(r.hooks, 'node_modules', '.bin')), 'the primary bin is not on the walk');
-  assert.match(out.fail, /This is the environment, not your change\. Fix: run `npm ci` in /);
+  assert.match(out.fail, /This is the environment, not your change\. Fix: run `node scripts\/worktree\/shared-deps\.mjs --check` in /);
+  assert.match(out.fail, /--apply` in the primary \(one shared link, never inside a worktree\)/);
+  assert.match(out.fail, /Fallback only for a worktree outside the primary/);
   assert.match(out.fail, /New-Item -ItemType Junction/);
   assert.equal(out.others.length, 1);
   assert.match(out.others[0], /^ENV: hooks-vitest needs vitest\./);
@@ -162,7 +164,7 @@ test('V8: envPrefix calls a missing package ENV and a missing relative import a 
   const here = path.join(tmpdir(), 'x', 'a.mjs');
   const info = { primary, status: 1, summary: '# fail 4' };
   const pkg = envPrefix(`Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'pg' imported from ${here}`, info);
-  assert.ok(pkg.startsWith('ENV: exit 1: # fail 4. This is the environment, not your change. Fix: run `npm ci` in '), pkg);
+  assert.ok(pkg.startsWith('ENV: exit 1: # fail 4. This is the environment, not your change. Fix: run `node scripts/worktree/shared-deps.mjs --check` in '), pkg);
   assert.ok(pkg.includes(path.join(primary, '.claude', 'hooks')), pkg);
   assert.match(envPrefix("Error: Cannot find module 'vitest'\ncode: 'MODULE_NOT_FOUND'", info), /^ENV: /);
   assert.equal(envPrefix(`Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${gone}' imported from ${here}`, info), null);

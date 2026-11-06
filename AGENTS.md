@@ -13,6 +13,7 @@ End-to-end check per surface:
 | A hook (`.claude/hooks/src/*.ts`) | `npm run build` in `.claude/hooks`, then pipe a real payload into the built hook: `Get-Content payload.json -Raw \| node .claude/hooks/dist/<hook>.mjs` | the hook's stdout JSON |
 | Sync (`scripts/sync-to-active.sh`) | `bash scripts/sync-to-active-cursor.test.sh` (runs the real script in a temp home) | its PASS/FAIL lines |
 | The harness doctor or a scheduled-task wrapper (`scripts/harness-doctor.mjs`, `.claude/scripts/scheduled/*.bat`) | `npm run test:scripts` (the real doctor and wrapper, through cmd.exe, in temp folders) | its pass/fail summary |
+| The shared store link (`scripts/worktree/shared-deps.mjs`) | `node --test scripts/worktree/shared-deps.test.mjs` | its pass/fail summary |
 | Coordination (lanes, claims, leases) | the matching `scripts/coordination/*-probe.mjs` | the probe's output |
 | A rule, skill or agent file | behaviour: after the sync, run `claude -p "<prompt>" --output-format json` on a prompt the change targets. Confirm the new behaviour appears (a skill: that it loads). Then its static ratchet: `node scripts/rules/context-budget-guard.mjs --repo`, `node scripts/skills/audit-skills.mjs`, `node scripts/check-agent-model-drift.mjs .`, `node scripts/agents/check-agent-body.mjs`. For an agent, confirm `"effort":"high"` in the subagent transcript. | the session JSON, plus the ratchet's summary line |
 | Lane rule or hooks, headless | in a registered folder: `$env:LANE_CONTEXT_HEADLESS='1'; claude -p "<prompt>"` | the output |

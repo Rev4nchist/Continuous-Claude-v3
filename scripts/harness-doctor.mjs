@@ -29,6 +29,9 @@
  * deps:hooks-install reads the PRIMARY checkout's .claude/hooks/node_modules (git rev-parse --git-common-dir, scripts/lib/resolve-deps.mjs):
  * FAIL when there is no .package-lock.json there or pg does not resolve, WARN with the version pair when installed typescript differs
  * from package-lock.json. No network and no install.
+ * deps:store-link runs only when that install is complete. It checks the shared store link <primary>/.claude/worktrees/node_modules
+ * (scripts/worktree/shared-deps.mjs): PASS when it resolves to the hooks install, WARN when absent, FAIL when dangling,
+ * wrong-target, a real file or folder, or no-target.
  *
  * Where each input is written (read these writers before you change a path here):
  *   sync cursor, .sync.pending, .sync-quarantine/<YYYY-MM-DD-HHMMSS>   scripts/sync-to-active.sh
@@ -47,6 +50,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { primaryRoot, resolveDep } from './lib/resolve-deps.mjs';
+import { checkStore } from './worktree/shared-deps.mjs';
 import { artifactIdOf, boardArtifact, loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
 import { checkLanePaths } from './coordination/lane-path-guard.mjs';
 import { registryDrift } from './coordination/registry-drift.mjs';
@@ -834,7 +838,31 @@ export function depsHooksInstall(o) {
   return result('PASS', 'deps', 'hooks-install', `${hooks}: complete install, pg resolves${have ? `, typescript ${have}` : ''}`);
 }
 
-const depsSection = (o) => [depsHooksInstall(o)];
+/**
+ * The shared store link <primary>/.claude/worktrees/node_modules points at <primary>/.claude/hooks/node_modules
+ * (scripts/worktree/shared-deps.mjs). PASS when it does. WARN when it is absent: the link is optional and needs Dave's yes.
+ * FAIL for a link that dangles or points elsewhere, a real file or folder at that path, or a target without a complete install.
+ * Read only.
+ */
+export function depsStoreLink(o) {
+  const r = checkStore({ primary: primaryRoot(o.repo) });
+  if (r.state === 'ok') return result('PASS', 'deps', 'store-link', r.detail);
+  if (r.state === 'absent') return result('WARN', 'deps', 'store-link', "no shared store link: run node scripts/worktree/shared-deps.mjs --apply in the primary (needs Dave's yes)");
+  return result('FAIL', 'deps', 'store-link', `${r.state}: ${r.detail}; ${storeFix(r.state)}`);
+}
+
+/** The fix text for a store state that is not ok and not absent. The script never replaces a path, so each fix is two steps or a question. */
+function storeFix(state) {
+  if (state === 'not-a-link') return "a real folder or file sits at the link path: ask Dave, do not delete it, then run node scripts/worktree/shared-deps.mjs --check";
+  if (state === 'no-target') return "the hooks install is incomplete: run npm ci in the primary's .claude/hooks (needs Dave's yes), then run node scripts/worktree/shared-deps.mjs --check";
+  return "run node scripts/worktree/shared-deps.mjs --unlink then --apply in the primary (Dave's yes)";
+}
+
+/** store-link runs only when the hooks install is complete: a FAIL there already names the one fix. */
+const depsSection = (o) => {
+  const install = depsHooksInstall(o);
+  return install.status === 'FAIL' ? [install] : [install, depsStoreLink(o)];
+};
 
 // ---- run ----
 const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],
