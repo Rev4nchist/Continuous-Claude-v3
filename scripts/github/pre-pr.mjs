@@ -901,7 +901,8 @@ function crVerdict(p, { exitProblem, base, docsOnly = false }) {
   const fail = (detail) => result('coderabbit', 'FAIL', detail, notes);
   const c = p.complete;
   if (p.awaiting) return fail(`the CLI ended ${p.awaiting}: stop and report to Dave; do not confirm anything.`);
-  if (docsOnly && !exitProblem && !c && p.errors.length > 0 && p.errors.every((e) => NO_FILES_TO_REVIEW.test(String(e.message ?? '')))) {
+  // The real CLI exits 1 on "No files to review", so a plain non-zero exit is allowed. A timeout or a spawn error is a stopped review: FAIL.
+  if (docsOnly && (!exitProblem || /^exit \d+$/.test(exitProblem)) && !c && p.errors.length > 0 && p.errors.every((e) => NO_FILES_TO_REVIEW.test(String(e.message ?? '')))) {
     return skipped('docs-only', `every changed file is docs and .coderabbit.yaml path_filters exclude docs/**, so the CLI had no file to review ("${clip(String(p.errors[0].message ?? '').split('\n')[0], 80)}"); the run is given back.`);
   }
   if (p.errors.length > 0 && !c) {

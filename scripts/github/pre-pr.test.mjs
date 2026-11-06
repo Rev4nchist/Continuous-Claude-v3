@@ -1304,12 +1304,14 @@ test('B3: a no-changes SKIP is stamped with reason no-changes and the built hook
 
 const NO_FILES = ev(CONTEXT, { type: 'error', errorType: 'review', message: 'Review failed: No files to review\nPrevious local review has no stored findings.', recoverable: false });
 const crReturning = (stdout) => (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: 0, stdout, stderr: '' });
+/** The real CLI on "No files to review": the error event on stdout, the same text on stderr, exit code 1 (seen 11-06 on docs/codemap). */
+const crExiting = (status, stdout) => (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status, stdout, stderr: 'Error: No files to review\n' });
 const runsOn = (repo) => JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs;
 const harnessBodyFor = (head) => `## Evidence\n\nProof type: harness\n\nRED: \`x\` @ ${'b'.repeat(40)}\n\`\`\`text\nred\n\`\`\`\n\nGREEN: \`x\` @ ${head}\n\`\`\`text\ngreen\n\`\`\`\n`;
 
 test('DO1: a docs-only branch where the CLI says "No files to review" is a SKIP docs-only, no slot spent, and the stamp says so', async () => {
   const repo = withFork(makeRepo());
-  const { result } = await prePr(repo, { crRunner: crReturning(NO_FILES) });
+  const { result } = await prePr(repo, { crRunner: crExiting(1, NO_FILES) }); // exit 1 is what the real CLI does
   assert.equal(result.ok, true, result.lines.join('\n'));
   assert.ok(result.lines.some((l) => /^SKIP coderabbit/.test(l)), result.lines.join('\n'));
   const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
@@ -1337,13 +1339,20 @@ test('DO3: a different error event on a docs-only branch stays a FAIL', async ()
   assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
 });
 
-test('DO5: "No files to review" from a CLI that exited non-zero or timed out stays a FAIL (a stopped review is not a clean skip)', async () => {
-  const repo = withFork(makeRepo());
-  const stopped = (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: 1, stdout: NO_FILES, stderr: '' });
-  const { result } = await prePr(repo, { crRunner: stopped });
-  assert.equal(result.ok, false);
-  assert.match(result.lines.join('\n'), /FAIL coderabbit[\s\S]*exit 1/);
-  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
+test('DO5: "No files to review" from a CLI that timed out or could not start stays a FAIL (a stopped review is not a clean skip)', async () => {
+  const timedOut = withFork(makeRepo());
+  const hung = (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: null, stdout: NO_FILES, stderr: '', timedOut: true });
+  const a = await prePr(timedOut, { crRunner: hung });
+  assert.equal(a.result.ok, false, a.result.lines.join('\n'));
+  assert.match(a.result.lines.join('\n'), /FAIL coderabbit[\s\S]*timed out/);
+  assert.equal(existsSync(path.join(timedOut.dir, STAMP_REL)), false, 'timed out: no stamp');
+  // A CLI that could not start is the existing cli-error skip (the gate hook denies it); it must never be recorded as docs-only.
+  const noStart = withFork(makeRepo());
+  const broken = (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: null, stdout: NO_FILES, stderr: '', error: 'spawn EACCES' });
+  await prePr(noStart, { crRunner: broken });
+  const stamp = JSON.parse(readFileSync(path.join(noStart.dir, STAMP_REL), 'utf8'));
+  assert.notEqual(stamp.cr_skip_reason, 'docs-only');
+  assert.equal(stamp.cr_docs_only, false);
 });
 
 test('DO4: a finished review on a docs-only branch is unchanged: not skipped, no docs-only flag, the slot is used', async () => {
