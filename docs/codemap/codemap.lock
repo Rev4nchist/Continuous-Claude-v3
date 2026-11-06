@@ -1,7 +1,7 @@
 {
-  "commit": "c206af0078237853c87a149f7664b12f41262476",
+  "commit": "55d7926b37a7e69cd7dc88e8ca17fbd8ddd3e526",
   "working_tree_dirty": false,
-  "generated_at": "2026-11-06T13:23:25-06:00",
+  "generated_at": "2026-11-06T14:11:09-06:00",
   "scope": [
     ".claude/hooks",
     ".claude/rules-src",
@@ -132,7 +132,7 @@
     "github-scripts": {
       "path": "scripts/github",
       "files": 113,
-      "fingerprint": "892e766919482cba22581a7f7d7e0558a7c19e4d482c29d0d7d61d5eff7bf853"
+      "fingerprint": "62f0ee18c10e57f8715d7838ae60e746494fcf851f38fd163091ff4f5c6e02ed"
     },
     "ccv3-mods": {
       "path": ".claude/plugins/ccv3-mods",
