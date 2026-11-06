@@ -305,7 +305,7 @@ function liveCheckpoint({ labels, ghFails = false, pinnedFails = false, url = 'h
   ].join('\n'));
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', cfg], {
     cwd: repo, encoding: 'utf8',
-    env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify({ url, labels: (labels ?? []).map((name) => ({ name })) }), ...(ghFails ? { FAKE_GH_FAIL: '1' } : {}), ...(pinnedFails ? { FAKE_GH_PINNED_FAIL: '1' } : {}) },
+    env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'), PR_CHECKPOINT_NO_PROBE: '1', PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify({ url, labels: (labels ?? []).map((name) => ({ name })) }), ...(ghFails ? { FAKE_GH_FAIL: '1' } : {}), ...(pinnedFails ? { FAKE_GH_PINNED_FAIL: '1' } : {}) },
   });
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
   return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null, calls };
@@ -316,7 +316,7 @@ test('B27: the live-facts path reads the PR labels: a risk:high PR is CRITICAL; 
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
   assert.equal(out.band.band, 'CRITICAL');
   assert.equal(out.recommended, 'none', 'docs-only wins over risk:high');
-  assert.deepEqual(calls, [['pr', 'view', 'feat/x', '--json', 'labels', '-R', 'Rev4nchist/Continuous-Claude-v3']]);
+  assert.deepEqual(calls, [['pr', 'view', 'feat/x', '--json', 'labels,number,author', '-R', 'Rev4nchist/Continuous-Claude-v3']]);
   const code = liveCheckpoint({ labels: ['risk:high'], file: 'scripts/guide.mjs' });
   assert.equal(code.out.band.band, 'CRITICAL');
   assert.equal(code.out.recommended, 'coderabbit');
@@ -357,7 +357,7 @@ test('B30: when the pinned lookup finds no PR (a fork PR), the labels come from 
   const ok = liveCheckpoint({ labels: ['risk:high'], pinnedFails: true });
   assert.equal(ok.out.band.band, 'CRITICAL');
   assert.deepEqual(ok.calls.map((c) => c.includes('-R')), [true, false], 'the pinned call first, then the fork-aware one');
-  assert.deepEqual(ok.calls[1], ['pr', 'view', '--json', 'labels,url']);
+  assert.deepEqual(ok.calls[1], ['pr', 'view', '--json', 'labels,url,number,author']);
   const other = liveCheckpoint({ labels: ['risk:high'], pinnedFails: true, url: 'https://github.com/parcadei/Continuous-Claude-v3/pull/9' });
   assert.equal(other.out.recommended, null, 'a PR in another repo (origin is parcadei) never supplies the labels');
   assert.match(other.out.why[0], /labels/i);

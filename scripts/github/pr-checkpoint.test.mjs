@@ -1200,7 +1200,7 @@ test('TB10 (critic): the facts (head, files, config drift, CLI output) come from
   writeFileSync(configFile, JSON.stringify(LIVE));
   const scriptHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
   assert.notEqual(tempHead, scriptHead, 'the fixture checkout and the script checkout differ');
-  const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', configFile], { cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token' } });
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', configFile], { cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'), PR_CHECKPOINT_NO_PROBE: '1' } });
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
   assert.equal(JSON.parse(r.stdout).head, tempHead, 'head is the cwd checkout head, not the script checkout head');
 });

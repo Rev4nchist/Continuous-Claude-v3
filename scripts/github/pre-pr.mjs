@@ -64,6 +64,10 @@
  * coderabbit.cli_daily_cap_usd in review-router.config.json; no run is spent) or "earlier-step-failed". The hook accepts "cli-missing",
  * "cli-cap", "cap" with cr_finished_runs >= 1, "rate-limited" with a retry time, and "docs-only" with cr_docs_only and docs_verified both
  * true. It denies the rest, including "cli-error".
+ * Cost estimate (Dave, 2026-11-06): after `cr usage --agent`, the step prints one line with every changed file x $0.25 (the estimate errs
+ * high: no file is left out). Remaining 0 stays a SKIP "rate-limited" with no run (Dave: no billed run on an empty allowance). Only an
+ * unavailable usage read (count unknown) adds today's paid CLI spend: over the cap is a SKIP "cli-cap"; under it the run starts as before
+ * (it may bill). With no cap or no file list the run starts as before. Remaining above 0 is unchanged.
  * Spend log: CLI 0.9.0 bills usage credits past the free hourly allowance with no flag and no prompt. When the complete record
  * carries usageCost with costCents above 0, the step appends one {kind: "cli"} row to ~/.claude/state/coderabbit-paid.jsonl
  * (cr-paid.mjs recordCliSpend) and prints "billed $X.XX" in its line. Before a run it sums today's cli rows (America/Chicago).
@@ -1014,23 +1018,47 @@ export function acquireLock(file, info, { nowMs, staleMs, stat = statSync }) {
   return { ok: false, pid: null, head: null };
 }
 
-/** The free check before a slot is spent. Null to go on, or a SKIP: the CLI is missing (cli-missing), broken (cli-error), or no included review is left. */
+/**
+ * The free check before a slot is spent. Returns { skip, remaining }. `skip` is a SKIP when the CLI is missing (cli-missing), broken
+ * (cli-error) or has no included review left (rate-limited). `remaining` is the included reviews left, or null when the count is unknown.
+ */
 async function preflight(runner, root) {
   const r = await runner({ cwd: root, args: CR_USAGE_ARGS, timeoutMs: USAGE_TIMEOUT_MS });
   // CodeRabbit could not look the count up (exit 1, status "unavailable"): the count is unknown, not the CLI broken. Go on: the
   // review itself stops on awaiting_confirmation past the allowance, and pre-pr never passes --use-credits.
-  if (!r.error && !r.timedOut && usageUnavailable(r.stdout)) return null;
+  if (!r.error && !r.timedOut && usageUnavailable(r.stdout)) return { remaining: null };
   if (r.error || r.timedOut || r.status !== 0) {
     const missing = Boolean(r.error) && MISSING.test(String(r.errorCode ?? r.error));
     const why = r.timedOut ? 'timed out' : r.error ?? `exit ${r.status}${r.stderr ? `: ${clip(r.stderr.trim().split(/\r?\n/)[0], 100)}` : ''}`;
-    return skipped(missing ? 'cli-missing' : 'cli-error', `cr usage --agent failed (${why}), so no CLI review was started and no run was spent. ${missing ? 'Install cr or ask Dave' : 'Check cr auth status; a retry costs nothing'}`);
+    return { skip: skipped(missing ? 'cli-missing' : 'cli-error', `cr usage --agent failed (${why}), so no CLI review was started and no run was spent. ${missing ? 'Install cr or ask Dave' : 'Check cr auth status; a retry costs nothing'}`) };
   }
   const usage = parseUsage(r.stdout);
   if (usage && usage.remaining <= 0) {
     const wait = usage.retryMinutes === null ? 'the wait is unknown' : `capacity returns in about ${usage.retryMinutes} min`;
-    return { ...skipped('rate-limited', `no included CLI review is left (remaining ${usage.remaining}); ${wait}. No run was spent`), retryMinutes: usage.retryMinutes };
+    return { skip: { ...skipped('rate-limited', `no included CLI review is left (remaining ${usage.remaining}); ${wait}. No run was spent`), retryMinutes: usage.retryMinutes } };
   }
-  return null;
+  return { remaining: usage ? usage.remaining : null };
+}
+
+/** The cost of one reviewed file in cents (coderabbit-cli.md: usage billing, $0.25 per reviewed file). */
+export const CR_CENTS_PER_FILE = 25;
+
+/**
+ * The cost of a billed CLI run: { files, cents } = every changed file x $0.25. No file is left out, not even one .coderabbit.yaml
+ * path_filters exclude: nobody has shown the CLI honors them, so the estimate errs high. Null when the file list is unknown.
+ */
+export function estimateCliCost(changedPaths) {
+  if (!Array.isArray(changedPaths)) return null;
+  return { files: changedPaths.length, cents: changedPaths.length * CR_CENTS_PER_FILE };
+}
+
+const usdOf = (cents) => `$${(cents / 100).toFixed(2)}`;
+
+/** One line for the run: the estimate and the included reviews left ("unknown" when the count could not be read). */
+export function estimateLine(estimate, remaining) {
+  const left = remaining === null ? 'included reviews left: unknown' : `included reviews left: ${remaining}`;
+  if (!estimate) return `pre-pr: cr review cost if billed: unknown (changed files not known); ${left}`;
+  return `pre-pr: cr review cost if billed: ${estimate.files} file(s) x $0.25 = ${usdOf(estimate.cents)}; ${left}`;
 }
 
 /** The saved output file of a finished review of the head with this short sha, in the e2e folder, or undefined. */
@@ -1052,7 +1080,7 @@ function reusedReview({ root, e2e, saved, base, why }) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, docsOnly = false }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
@@ -1062,7 +1090,7 @@ export async function runCodeRabbit({ root, branch, head, base, now, runner, ski
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, docsOnly });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -1075,11 +1103,13 @@ const ledgerDeps = (now, ledgerPath) => ({ now: () => now, ...(ledgerPath ? { le
  * The daily CLI spend cap (review-router.config.json coderabbit.cli_daily_cap_usd). Null to go on, or a result that stops the run before a
  * usage call or a slot: SKIP cli-cap at or over the cap, FAIL when the ledger cannot be read (the total is unknown). No cap: never reads the ledger.
  */
-function cliCapBlock(cliCapUsd, now, ledgerPath) {
+function cliCapBlock(cliCapUsd, now, ledgerPath, estimate = null) {
   if (cliCapUsd === null || cliCapUsd === undefined) return null;
   try {
     const check = cliCapCheck(cliCapUsd, ledgerDeps(now, ledgerPath));
-    return check.capped ? skipped('cli-cap', `${cliCapLine(check)}, so no CLI review this time and no run was spent. Raise the cap or run it tomorrow; ask Dave`) : null;
+    if (check.capped) return skipped('cli-cap', `${cliCapLine(check)}, so no CLI review this time and no run was spent. Raise the cap or run it tomorrow; ask Dave`);
+    if (!estimate || Math.round(check.total * 100) + estimate.cents <= Math.round(cliCapUsd * 100)) return null;
+    return skipped('cli-cap', `estimated cost ${estimate.files} file(s) x $0.25 = ${usdOf(estimate.cents)} plus today's paid CLI spend ${usdOf(Math.round(check.total * 100))} would pass the daily cap of ${usdOf(Math.round(cliCapUsd * 100))} (included reviews left: unknown), so no CLI review this time and no run was spent. Raise the cap or run it tomorrow; ask Dave`);
   } catch (err) {
     return result('coderabbit', 'FAIL', `the paid ledger is unreadable (${String(err.message).split('\n')[0]}), so the CLI spend today is unknown and no CLI review was started: fix or delete the ledger, then re-run`);
   }
@@ -1093,7 +1123,7 @@ function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
   }
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, docsOnly }) {
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
@@ -1111,8 +1141,16 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   }
   const capped = cliCapBlock(cliCapUsd, now, ledgerPath);
   if (capped) return capped;
-  const blocked = await preflight(runner, root);
-  if (blocked) return blocked;
+  const probe = await preflight(runner, root);
+  if (probe.skip) return probe.skip;
+  const estimate = estimateCliCost(changedPaths);
+  const estimateText = estimateLine(estimate, probe.remaining);
+  log(estimateText);
+  // The count is unknown (remaining 0 already returned rate-limited): a run may bill. Skip when its estimate would pass the daily cap.
+  if (probe.remaining === null) {
+    const overCap = cliCapBlock(cliCapUsd, now, ledgerPath, estimate);
+    if (overCap) return overCap;
+  }
   const run = { head, at: now.toISOString(), outcome: 'started', newCode };
   const giveBack = () => {
     counter.runs.splice(counter.runs.indexOf(run), 1);
@@ -1138,7 +1176,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   writeFileSync(out, r.stderr && verdict.status !== 'PASS' ? `${stdout}\n[stderr]\n${r.stderr}` : stdout);
   rmSync(running, { force: true });
   const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath });
-  if (logNote) verdict.notes = [...(verdict.notes ?? []), logNote];
+  verdict.notes = [...(verdict.notes ?? []), estimateText.replace(/^pre-pr: /, ''), ...(logNote ? [logNote] : [])];
   if (verdict.skipReason === 'no-changes' || verdict.skipReason === 'docs-only') giveBack();
   else {
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
@@ -1225,7 +1263,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, docsOnly: docsVerified }));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified }));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.

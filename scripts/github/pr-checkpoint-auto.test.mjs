@@ -90,8 +90,8 @@ test('AC2: HIGH and CRITICAL are never auto-eligible (HIGH stays with Dave: the 
   assert.equal(depHigh.auto.eligible, false, 'but a HIGH band still goes to Dave');
 });
 
-test('AC3: the kill switch is a literal true in checkpoint.autoConfirm; missing, false, "true" or 1 turn auto-confirm off', async () => {
-  assert.equal(LIVE.checkpoint.autoConfirm, false, 'the live config carries the switch, and it ships off (Dave 2026-11-02)');
+test('AC3: the kill switch is a literal true or the word low in checkpoint.autoConfirm; missing, false, "true" or 1 turn auto-confirm off', async () => {
+  assert.equal(LIVE.checkpoint.autoConfirm, 'low', 'the live config carries the switch, and it ships low: LOW band only (Dave 2026-11-06; it was false from 2026-11-02)');
   assert.equal((await recommendFor(MID, {}, withAuto(true))).auto.eligible, true);
   for (const value of [false, 'true', 1, null, undefined]) {
     const r = await recommendFor(MID, {}, withAuto(value));
@@ -236,7 +236,7 @@ function liveDrift(mainConfig) {
   const gh = path.join(outside, 'fake-gh.mjs');
   writeFileSync(gh, `process.stdout.write(${JSON.stringify(JSON.stringify({ labels: [] }))});`);
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', cfg], {
-    cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_GH: gh },
+    cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_GH: gh, PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(outside, 'no-slot.json'), PR_CHECKPOINT_NO_PROBE: '1' },
   });
   return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null };
 }
