@@ -38,7 +38,7 @@ try {
 mkdirSync(`${WT}/.claude/cache/e2e`, { recursive: true });
 writeFileSync(OUT, '');
 
-const mask = (s) => String(s).replace(/(postgresql:\/\/[^:]+:)[^@]+@/g, '$1***@');
+const mask = (s) => String(s).replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+@/g, '$1***@');
 const log = (s = '') => { const t = mask(s); appendFileSync(OUT, t + '\n'); console.log(t); };
 const results = [];
 const check = (name, ok, detail = '') => { results.push([name, ok]); log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -- ' + detail : ''}`); };
