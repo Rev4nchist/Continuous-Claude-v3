@@ -459,29 +459,33 @@ const html = `${STAMP}
 
   * { box-sizing:border-box; }
   body { margin:0; background:var(--ground); color:var(--ink); font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; }
-  .wrap { width:min(1240px,100%); margin:0 auto; padding:0 20px 72px; }
+  :root { --page-w:min(1840px,100%); }
+  .wrap { width:var(--page-w); margin:0 auto; padding:0 20px 72px; }
   h1,h2 { margin:0; text-wrap:balance; }
   .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
   :focus-visible { outline:2px solid var(--ok); outline-offset:2px; border-radius:3px; }
 
   header.top { position:sticky; top:0; z-index:30; background:color-mix(in srgb,var(--ground) 88%,transparent);
     backdrop-filter:blur(10px); border-bottom:1px solid var(--line); margin-bottom:24px; }
-  .top-in { width:min(1240px,100%); margin:0 auto; padding:12px 20px; display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  .top-in { width:var(--page-w); margin:0 auto; padding:12px 20px; display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  /* .top-row holds the brand and the theme button. On a wide screen it adds no box, so brand, counters and theme stay on one line. */
+  .top-row { display:contents; }
   .brand { display:flex; align-items:center; gap:10px; }
   .mark { width:30px; height:30px; border-radius:7px; display:grid; place-items:center; background:var(--ink); color:var(--ground); font:700 10px/1 var(--mono); }
   .brand b { font:650 15px/1.2 var(--display); letter-spacing:-.02em; }
   .brand span span { display:block; font:400 11px/1.3 var(--mono); color:var(--faint); }
-  .counters { display:flex; gap:8px; margin-left:auto; flex-wrap:wrap; }
+  .counters { display:flex; gap:8px; margin-left:auto; flex-wrap:wrap; order:1; }
   .ctr { display:flex; align-items:baseline; gap:7px; padding:6px 11px; border:1px solid var(--line); border-radius:999px; background:var(--panel); }
   .ctr b { font:650 15px/1 var(--mono); font-variant-numeric:tabular-nums; }
   .ctr span { font:500 10px/1 var(--mono); letter-spacing:.07em; text-transform:uppercase; color:var(--muted); }
   .ctr.is-ok { border-color:var(--ok); background:var(--ok-bg); } .ctr.is-ok b { color:var(--ok); }
   .ctr.is-crit { border-color:var(--crit); background:var(--crit-bg); } .ctr.is-crit b { color:var(--crit); }
-  .themebtn { border:1px solid var(--line); background:var(--panel); color:var(--muted); border-radius:999px; padding:7px 12px; cursor:pointer; font:500 11px/1 var(--mono); }
+  .themebtn { order:2; border:1px solid var(--line); background:var(--panel); color:var(--muted); border-radius:999px; padding:7px 12px; cursor:pointer; font:500 11px/1 var(--mono); }
   .themebtn:hover { color:var(--ink); border-color:var(--muted); }
   .gen { color:var(--muted); } .gen.stale { color:var(--warn); font-weight:600; }
 
   section { margin-top:30px; }
+  .sec-cap { max-width:1240px; }
   .sec-head { display:flex; align-items:baseline; gap:14px; margin-bottom:12px; flex-wrap:wrap; }
   .sec-head h2 { font:620 17px/1.2 var(--display); letter-spacing:-.015em; }
   .sec-head p { margin:0; color:var(--muted); font-size:12.5px; max-width:62ch; }
@@ -550,7 +554,7 @@ const html = `${STAMP}
     border-radius:4px; padding:6px 9px; display:inline-block; }
 
   .feed { padding:6px 0; }
-  .feed div { display:grid; grid-template-columns:52px 78px 1fr; gap:12px; padding:8px 16px; border-bottom:1px solid var(--line-soft); font-size:12.5px; }
+  .feed div { display:grid; grid-template-columns:52px 78px minmax(0,1fr); overflow-wrap:anywhere; gap:12px; padding:8px 16px; border-bottom:1px solid var(--line-soft); font-size:12.5px; }
   .feed div:last-child { border-bottom:none; }
   .feed .t, .feed .s { font:400 11px/1.5 var(--mono); color:var(--faint); }
   .feed .s { color:var(--muted); }
@@ -580,7 +584,7 @@ const html = `${STAMP}
   .kb-status[data-k="warn"]::before { background:var(--warn); }
   .kb-status[data-k="crit"]::before { background:var(--crit); }
   .kb-status[data-k="crit"] { color:var(--crit); }
-  .kb-board { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; align-items:start; }
+  .kb-board { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; align-items:start; }
   .kcol { min-width:0; padding:8px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel-2); }
   .kcol.kb-over { border-color:var(--ok); background:var(--ok-bg); }
   .kb-h { margin:0; font:inherit; }
@@ -650,7 +654,10 @@ const html = `${STAMP}
   .kb-btn:disabled, .kb-to:disabled { color:var(--faint); cursor:not-allowed; opacity:.6; }
   .kb-mv { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1 1 100%; min-width:0; color:var(--faint); font:500 10.5px/1 var(--mono); }
   .kb-to { width:100%; min-width:0; }
-  @media (max-width:1080px) { .kb-board { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+  /* Columns: 1 up to 720px, 3 (two rows) from 721px, 5 from 1360px. */
+  @media (min-width:1360px) { .kb-board { grid-template-columns:repeat(5,minmax(0,1fr)); } }
+  /* From 721px each column scrolls inside itself. The head is outside the list, so it stays in view. The phone scrolls the page. */
+  @media (min-width:721px) { .kb-list { max-height:calc(100vh - 190px); overflow-y:auto; } }
   @media (max-width:720px) {
     .kb-board { grid-template-columns:minmax(0,1fr); }
     .kb-head { cursor:pointer; }
@@ -665,15 +672,32 @@ const html = `${STAMP}
   }
 
   @media (max-width:1080px) { .lane { grid-template-columns:3px minmax(160px,1.4fr) 92px 130px 56px; } .lane .scope { display:none; } }
-  @media (max-width:720px) { .lane { grid-template-columns:3px 1fr 56px; } .lane .state-c, .lane .own { display:none; } .counters { width:100%; } }
+  @media (max-width:720px) { .lane { grid-template-columns:3px 1fr 56px; } .lane .state-c, .lane .own { display:none; } }
+  /* Phone header: only .top-row (brand and theme, one line) stays pinned. header and .top-in drop their boxes so .top-row sticks
+     against the page, not against the header; the counters then scroll away with the page. */
+  @media (max-width:720px) {
+    header.top, .top-in { display:contents; }
+    .top-row { position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 20px;
+      background:color-mix(in srgb,var(--ground) 88%,transparent); backdrop-filter:blur(10px); border-bottom:1px solid var(--line); }
+    .brand { min-width:0; }
+    .brand > span { min-width:0; }
+    .brand b { display:block; }
+    .brand b, .brand span span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .mark { flex:none; }
+    .brand .gen-src { display:none; }
+    .counters { margin:0; padding:12px 20px 0; width:100%; }
+  }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }${KANBAN ? '' : KB_RO_CSS}
 </style>
 
 <header class="top">
   <div class="top-in">
+    <div class="top-row">
     <div class="brand">
       <span class="mark">AOS</span>
-      <span><b>Lane Board${KEY === DEFAULT_BOARD ? '' : ` &middot; ${esc(KEY)}`}</b><span>generated from agentic_os.lane (board ${esc(KEY)}) &middot; ${localStamp()} local &middot; <span class="gen" id="gen-ago" data-ts="${GENERATED_AT.toISOString()}">generated just now</span></span></span>
+      <span><b>Lane Board${KEY === DEFAULT_BOARD ? '' : ` &middot; ${esc(KEY)}`}</b><span><span class="gen-src">generated from agentic_os.lane (board ${esc(KEY)}) &middot; ${localStamp()} local &middot; </span><span class="gen" id="gen-ago" data-ts="${GENERATED_AT.toISOString()}">generated just now</span></span></span>
+    </div>
+    <button class="themebtn" id="tt" type="button">theme</button>
     </div>
     <div class="counters">
       <span class="ctr"><b>${open.length}</b><span>open lanes</span></span>
@@ -684,7 +708,6 @@ const html = `${STAMP}
       <span class="ctr"><b>${quietCount}</b><span>open, quiet</span></span>
 ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is-crit' : ''}" title="claude.exe processes on this machine whose start time matches a live session${procSummary.unmatchedPids.length ? `; no session for pid ${procSummary.unmatchedPids.join(', ')}` : ''}"><b>${procSummary.matched}/${procSummary.total}</b><span>claude.exe matched</span></span>
 ` : ''}    </div>
-    <button class="themebtn" id="tt" type="button">theme</button>
   </div>
 </header>
 
@@ -747,7 +770,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
             -- unhold a lane, so an owned-but-lapsed lane is reclaimable, not held.</span></div>
   </section>
 
-  <section>
+  <section class="sec-cap">
     <div class="sec-head">
       <h2>Lanes</h2>
       <p>A lane is a durable work thread with a declared scope. Two sessions are safe to run at once exactly when their scopes are disjoint. Click a lane for its standing case and the command to claim it.</p>
@@ -772,7 +795,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
 <b>gate</b>      node scripts/coordination/lane-race-probe.mjs   # 10 properties, incl. both reclaim negatives</span></div>
   </section>
 
-  <section>
+  <section class="sec-cap">
     <div class="sec-head"><h2>Activity</h2><p>The last ${events.length} lane events of board ${esc(KEY)} (agentic_os.lane_event WHERE project_key = '${esc(KEY)}'). This log is also the message bus between sessions &mdash; a <span class="mono">note</span> is one session talking to the others.</p></div>
     <div class="card feed">
       ${events.map((e) => `<div>
