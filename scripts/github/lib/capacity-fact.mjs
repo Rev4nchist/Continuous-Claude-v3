@@ -76,16 +76,17 @@ function freshNotice(notices, comments, nowMs) {
   return newest(notices.filter((n) => holds(n, requests, nowMs)));
 }
 
-/** What a holding notice says. */
-function fromNotice(n) {
-  return n.state === 'free' ? { state: 'free', source: 'notice' } : { state: 'wait', nextAtMs: waitEnd(n), source: 'notice' };
+/** What a holding notice says. A free notice keeps its own time (checkedMs), so it ages out 5 min after the notice, not after the re-stamp. */
+function fromNotice(n, nowMs) {
+  return n.state === 'free' ? { state: 'free', source: 'notice', checkedMs: Math.min(n.at, nowMs) } : { state: 'wait', nextAtMs: waitEnd(n), source: 'notice' };
 }
 
+/** checkedMs (a pick's own time) when it has one, else now: a probe reply and a wait are stamped at the read. */
 function build(nowMs, p) {
   const next = p.state === 'wait' ? (p.nextAtMs ?? null) : null;
   return {
     state: p.state, nextSlotAt: iso(next), minutesToSlot: next === null ? null : Math.max(0, Math.ceil((next - nowMs) / MIN)),
-    lastNoticeAt: iso(p.lastNoticeMs ?? null), cliRemaining: p.cliRemaining ?? null, checkedAt: iso(nowMs), source: p.source,
+    lastNoticeAt: iso(p.lastNoticeMs ?? null), cliRemaining: p.cliRemaining ?? null, checkedAt: iso(p.checkedMs ?? nowMs), source: p.source,
   };
 }
 
@@ -111,12 +112,14 @@ function writeCache(d, fact) {
   }, null);
 }
 
-/** The cached fact at `nowMs`, as a pick. A wait whose time passed is free. An unknown entry only says a probe ran lately. */
+/** The cached fact at `nowMs`, as a pick. A wait whose time passed is free. An unknown entry only says a probe ran lately.
+ * A cached free fact keeps the entry's time; a wait that became free is stamped now, because its freedom began at the slot time, not at the cache time. */
 function fromCache(entry, nowMs) {
   if (entry.state === 'unknown') return { state: 'unknown', source: 'none', probed: true };
   const next = Date.parse(entry.nextSlotAt ?? '');
   const waiting = entry.state === 'wait' && (!Number.isFinite(next) || next > nowMs);
-  return { state: waiting ? 'wait' : 'free', nextAtMs: waiting && Number.isFinite(next) ? next : null, source: 'cache' };
+  const kept = entry.state === 'free' ? stamp(entry, 'checkedAt') : NaN;
+  return { state: waiting ? 'wait' : 'free', nextAtMs: waiting && Number.isFinite(next) ? next : null, source: 'cache', ...(Number.isFinite(kept) ? { checkedMs: Math.min(kept, nowMs) } : {}) };
 }
 
 /**
@@ -201,7 +204,7 @@ function pick(input, d, nowMs) {
   const lastWait = newest(notices.filter((n) => n.state === 'wait'));
   const withLast = (p, cachedMs = null) => ({ ...p, lastNoticeMs: lastWait?.at ?? cachedMs });
   const fresh = freshNotice(notices, comments, nowMs);
-  if (fresh) return withLast(fromNotice(fresh));
+  if (fresh) return withLast(fromNotice(fresh, nowMs));
   const entry = readCache(d, nowMs);
   const cached = entry ? fromCache(entry, nowMs) : null;
   if (cached && cached.state !== 'unknown') return withLast(cached, Date.parse(entry.lastNoticeAt ?? ''));

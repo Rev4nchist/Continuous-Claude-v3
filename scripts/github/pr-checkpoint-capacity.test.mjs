@@ -128,6 +128,12 @@ test('CP3: a rate-limit notice under 60 min old gives the state and posts nothin
   const young = capacityFact(input(), fakeDeps({ comments: [comment(FREE_REPLY, ago(2))] }).deps);
   assert.equal(young.state, 'free', 'a free reply under 5 minutes old holds');
   assert.equal(young.source, 'notice');
+  assert.equal(young.checkedAt, ago(2), 'a free notice keeps its own time, so it ages out 5 minutes after the notice');
+  const nearly = capacityFact(input(), fakeDeps({ comments: [comment(FREE_REPLY, ago(3))] }).deps);
+  assert.equal(nearly.source, 'notice');
+  assert.equal(nearly.checkedAt, ago(3), 'a free notice 3 minutes old is not re-stamped now');
+  assert.equal(passed.checkedAt, NOW, 'a probe reply is stamped now');
+  assert.equal(r.checkedAt, NOW, 'a wait notice is stamped now');
 });
 
 test('CP3b: a free reply is void once a review was requested after it', async () => {
@@ -170,6 +176,20 @@ test('CP4: a cache under 5 min old gives the state and posts nothing; one over 5
   writeFileSync(f.deps.cachePath, JSON.stringify({ [repo]: { ...cached, checkedAt: ago(6) } }));
   capacityFact(input(), f.deps);
   assert.equal(f.posts().length, 1, 'a 6 minute old cache is stale');
+  const keep = fakeDeps({ reply: WAIT_REPLY });
+  writeFileSync(keep.deps.cachePath, JSON.stringify({ [repo]: fact({ state: 'free', source: 'probe', checkedAt: ago(4) }) }));
+  const free = capacityFact(input(), keep.deps);
+  assert.equal(free.state, 'free');
+  assert.equal(free.source, 'cache');
+  assert.equal(free.checkedAt, ago(4), 'a cached free fact keeps the cache entry time');
+  const passed = fakeDeps({ reply: WAIT_REPLY });
+  writeFileSync(passed.deps.cachePath, JSON.stringify({ [repo]: fact({ state: 'wait', source: 'probe', nextSlotAt: ago(1), minutesToSlot: 0, checkedAt: ago(3) }) }));
+  const turned = capacityFact(input(), passed.deps);
+  assert.equal(turned.state, 'free', 'the cached wait passed 1 minute ago');
+  assert.equal(turned.source, 'cache');
+  assert.equal(turned.checkedAt, NOW, 'a cached wait that becomes free is stamped now');
+  const probed = fakeDeps({ reply: FREE_REPLY });
+  assert.equal(capacityFact(input(), probed.deps).checkedAt, NOW, 'a probe reply is stamped now');
 });
 
 test('CP4b: the cache is keyed by repo and PR: the cache of PR 8 does not answer PR 7', async () => {
