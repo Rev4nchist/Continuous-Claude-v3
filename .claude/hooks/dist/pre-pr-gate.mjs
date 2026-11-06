@@ -405,17 +405,19 @@ function isCcv3Remote(url) {
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
 var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
-var resolveIn = (cwd, target) => {
-  const t = target.replace(/^["']|["']$/g, "");
+var fromGitBashPath = (p, platform = process.platform) => platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
+var resolveIn = (cwd, target, shell) => {
+  const raw = target.replace(/^["']|["']$/g, "");
+  const t = shell === "bash" ? fromGitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
 };
-function workDir(command, cwd) {
+function workDir(command, cwd, shell) {
   const m = new RegExp(CD_TARGET.source, "i").exec(command);
-  return m ? resolveIn(cwd, m[1]) : cwd;
+  return m ? resolveIn(cwd, m[1], shell) : cwd;
 }
-function candidateDirs(command, cwd) {
+function candidateDirs(command, cwd, shell) {
   const texts = [command, command.replace(/["']/g, "")];
-  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ""))));
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ""), shell)));
   return [.../* @__PURE__ */ new Set([cwd, ...targets])];
 }
 var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
@@ -503,7 +505,7 @@ function stampProblem(raw, head, now, body) {
     return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || "none"}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
-    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~, $env: or /c/ paths`;
+    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~ or $env: paths. A Git Bash /c/ path is turned into C:/ on Windows`;
     if (o.body_sha256 !== body.sha) return `the body file ${body.path} is not the body pre-pr.mjs checked (its hash differs from the stamp). Run pre-pr.mjs on this file`;
   }
   return null;
@@ -524,7 +526,8 @@ var once = (f) => {
 };
 function makeCtx(input, command, deps, shapes) {
   const cwd = input.cwd || process.cwd();
-  const dir = workDir(command, cwd);
+  const shell = shellOf(input);
+  const dir = workDir(command, cwd, shell);
   const named = namedRepo(command, deps.env);
   const tops = /* @__PURE__ */ new Map();
   const top = (d) => {
@@ -534,9 +537,10 @@ function makeCtx(input, command, deps, shapes) {
     }
     return tops.get(d) ?? null;
   };
-  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d)));
+  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd, shell).some((d) => d !== dir && isCcv3Dir(deps, d)));
   return {
     dir,
+    shell,
     named,
     top,
     ccv3: inCcv3,
@@ -570,7 +574,7 @@ function judge(command, deps, ctx, shapes) {
   return stamp ?? checkpointDeny(deps, ctx, shapes) ?? { action: "allow" };
 }
 function stampDeny(command, deps, ctx) {
-  const { dir, named } = ctx;
+  const { dir, named, shell } = ctx;
   if (!ctx.ccv3()) return null;
   const top = ctx.top(dir);
   if (top === null) return deny("no-checkout", `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
@@ -581,7 +585,7 @@ function stampDeny(command, deps, ctx) {
   const headRun = deps.git(top, ["rev-parse", branch ? `${branch}^{commit}` : "HEAD"]);
   if (headRun.status !== 0) return deny("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${top}`);
   const head = headRun.stdout.trim();
-  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, bodyPath))) };
+  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, shell === "bash" ? fromGitBashPath(bodyPath) : bodyPath))) };
   const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join3(r, STAMP_REL)), head, deps.now(), body));
   if (!problems.some((p) => p === null)) return deny("stamp", problems[0] ?? "no stamp");
   const pushed = pushedProblem(deps, top, branch, head);
@@ -790,6 +794,7 @@ export {
   STAMP_REL,
   bodyFileOf,
   decide,
+  fromGitBashPath,
   handle,
   hasOverride,
   headBranchOf,
