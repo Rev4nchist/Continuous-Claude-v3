@@ -143,8 +143,9 @@ test('V6: installed typescript that differs from the lock is a NOTE with the pai
 test('V7: childEnv appends the primary node_modules to NODE_PATH in a bare worktree, and sets nothing in the primary', () => {
   const r = fakeRepo();
   assert.equal(childEnv(r.primary, { NODE_PATH: 'x' }), null);
-  const env = childEnv(r.wt, { NODE_PATH: 'C:\\old', KEEP: '1' });
-  assert.deepEqual(env.NODE_PATH.split(path.delimiter), ['C:\\old', path.join(r.hooks, 'node_modules')]);
+  const old = path.join(r.root, 'old'); // no drive letter: ':' is the NODE_PATH delimiter on Linux
+  const env = childEnv(r.wt, { NODE_PATH: old, KEEP: '1' });
+  assert.deepEqual(env.NODE_PATH.split(path.delimiter), [old, path.join(r.hooks, 'node_modules')]);
   assert.equal(env.KEEP, '1', 'the rest of the env is kept');
   assert.deepEqual(childEnv(r.wt, {}).NODE_PATH.split(path.delimiter), [path.join(r.hooks, 'node_modules')]);
   // A partial node_modules (only .vite) is not an install: the primary is still added.
@@ -156,11 +157,15 @@ test('V7: childEnv appends the primary node_modules to NODE_PATH in a bare workt
 });
 
 test('V8: envPrefix calls a missing package ENV and a missing relative import a code bug', () => {
-  const info = { primary: 'C:\\primary', status: 1, summary: '# fail 4' };
-  const pkg = envPrefix("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'pg' imported from C:\\x\\a.mjs", info);
-  assert.match(pkg, /^ENV: exit 1: # fail 4\. This is the environment, not your change\. Fix: run `npm ci` in C:\\primary\\\.claude\\hooks/);
+  const primary = path.join(tmpdir(), 'primary'); // an absolute path of the machine the test runs on (Windows or Linux)
+  const gone = path.join(tmpdir(), 'x', 'gone.mjs');
+  const here = path.join(tmpdir(), 'x', 'a.mjs');
+  const info = { primary, status: 1, summary: '# fail 4' };
+  const pkg = envPrefix(`Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'pg' imported from ${here}`, info);
+  assert.ok(pkg.startsWith('ENV: exit 1: # fail 4. This is the environment, not your change. Fix: run `npm ci` in '), pkg);
+  assert.ok(pkg.includes(path.join(primary, '.claude', 'hooks')), pkg);
   assert.match(envPrefix("Error: Cannot find module 'vitest'\ncode: 'MODULE_NOT_FOUND'", info), /^ENV: /);
-  assert.equal(envPrefix("Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\x\\gone.mjs' imported from C:\\x\\a.mjs", info), null);
+  assert.equal(envPrefix(`Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${gone}' imported from ${here}`, info), null);
   assert.equal(envPrefix("Error: Cannot find module './gone.mjs'\ncode: 'MODULE_NOT_FOUND'", info), null);
   assert.equal(envPrefix('# fail 4\nAssertionError: expected 1', info), null);
 });
