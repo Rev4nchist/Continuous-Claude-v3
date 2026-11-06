@@ -59,7 +59,7 @@ const versionIn = (file, name) => {
 };
 
 /** Looks one need up. Returns { path, tried }. */
-function lookupNeed(need, { root, primary, gateCwd }) {
+function lookupNeed(need, { root, primary, gateCwd, nodePath }) {
   const from = path.join(root, ...(need.from ?? '.').split('/'));
   if (need.kind === 'bin') return lookupBin(need.pkg, { from: gateCwd ?? from });
   if (need.kind === 'walk') return lookupWalk(need.pkg, { from: gateCwd ?? from });
@@ -68,7 +68,7 @@ function lookupNeed(need, { root, primary, gateCwd }) {
     const hit = lookupDep(need.pkg, { repoRoot: root, anchors });
     return { path: hit.path, tried: hit.tried.map((d) => path.join(d, 'node_modules')) };
   }
-  const hit = lookupDep(need.pkg, { repoRoot: root });
+  const hit = lookupDep(need.pkg, { repoRoot: root, ...(nodePath === undefined ? {} : { nodePath }) });
   return { path: hit.path, tried: hit.tried };
 }
 
@@ -138,7 +138,7 @@ function absoluteArgs(gate, hit) {
  *   blocked  Set of gate ids that must not run (their need is missing)
  *   gates    the gates, with the scrub gate's cli.js made absolute
  */
-export function envStep({ root, gates, changed = [] }) {
+export function envStep({ root, gates, changed = [], nodePath }) {
   const primary = primaryRoot(root);
   const texts = [];
   const lock = lockfileFail(root, primary, changed);
@@ -147,7 +147,7 @@ export function envStep({ root, gates, changed = [] }) {
   const fixed = gates.map((gate) => {
     let out = gate;
     for (const need of GATE_NEEDS[gate.id] ?? []) {
-      const hit = lookupNeed(need, { root, primary, gateCwd: path.join(root, gate.cwd ?? '.') });
+      const hit = lookupNeed(need, { root, primary, nodePath, gateCwd: path.join(root, gate.cwd ?? '.') });
       if (hit.path) { out = absoluteArgs(out, hit); continue; }
       blocked.add(gate.id);
       texts.push(envLine(gate.id, need.pkg, hit.tried, primary));

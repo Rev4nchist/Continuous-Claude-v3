@@ -88,7 +88,7 @@ test('V3: pg and typescript are found through the primary from a bare worktree; 
   const ok = envStep({ root: r.wt, gates: [gate('coordination-db-tests'), gate('github-tests'), gate('mods-validate')] });
   assert.equal(ok.fail, null, ok.fail);
   const none = fakeRepo({ install: false });
-  const miss = envStep({ root: none.wt, gates: [gate('coordination-db-tests')] });
+  const miss = envStep({ root: none.wt, gates: [gate('coordination-db-tests')], nodePath: '' }); // no ambient NODE_PATH: a shell or a pre-pr child may set one
   assert.match(miss.fail, /^ENV: coordination-db-tests needs pg\./);
   assert.ok(miss.fail.includes(path.join(none.primary, '.claude', 'hooks')), 'lists the primary folder');
 });

@@ -66,8 +66,21 @@ export function candidateRoots(repoRoot = OWN_CHECKOUT) {
 
 const asDir = (anchor) => (path.basename(anchor) === 'package.json' ? path.dirname(anchor) : path.resolve(anchor));
 
+/**
+ * Node's parent-folder walk from `dir`, done by hand: the first <folder>/node_modules/<name> that exists and resolves. It must not
+ * use require.resolve from `dir`: that also searches the global NODE_PATH folders Node read at startup, so a gate child that
+ * pre-pr gave a NODE_PATH would find the primary's copy before the own checkout, and "own first, then primary, then NODE_PATH"
+ * would not hold. NODE_PATH is the last, explicit step in lookupDep.
+ */
 function resolveFrom(name, dir) {
-  try { return createRequire(pathToFileURL(path.join(dir, 'package.json'))).resolve(name); } catch { return null; }
+  const here = createRequire(import.meta.url);
+  for (let folder = path.resolve(dir); ; folder = path.dirname(folder)) {
+    const candidate = path.join(folder, 'node_modules', name);
+    if (existsSync(candidate)) {
+      try { return here.resolve(candidate); } catch { /* not loadable from here: go on up, as Node does */ }
+    }
+    if (path.dirname(folder) === folder) return null;
+  }
 }
 
 /** A NODE_PATH entry is a node_modules folder itself: the package sits straight under it. */

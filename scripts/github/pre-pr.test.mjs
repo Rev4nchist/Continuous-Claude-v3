@@ -2498,7 +2498,11 @@ test('EN2: with --keep-going only the gate that misses its package is skipped', 
 test('EN3: a coordination change names a missing pg; with pg in place the step prints nothing and the gates run', async () => {
   const repo = makeRepo({ files: { 'scripts/coordination/x.mjs': '// x\n' } });
   ignoreModules(repo);
-  const miss = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) });
+  // The step reads NODE_PATH at call time as its last lookup: a shell, or the env step of the pre-pr run that tests this file, may set one.
+  const savedNodePath = process.env.NODE_PATH;
+  delete process.env.NODE_PATH;
+  let miss;
+  try { miss = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) }); } finally { if (savedNodePath !== undefined) process.env.NODE_PATH = savedNodePath; }
   assert.ok(miss.result.lines.some((l) => /^FAIL env - ENV: coordination-db-tests needs pg\. Tried /.test(l)), miss.result.lines.join('\n'));
   assert.equal(miss.gateRuns.includes('coordination-db-tests'), false);
   fakeFile(repo, '.claude/hooks/node_modules/pg/package.json', JSON.stringify({ name: 'pg', main: 'index.js' }));
