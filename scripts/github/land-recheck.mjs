@@ -39,10 +39,12 @@ const SKIP_MARKER = /<!-{2}\s*This is an auto-generated comment: skip review by 
 const SKIP_REASON = /Auto reviews are limited based on label configuration/i;
 
 /**
- * True when the PR was read with labels and none of them asks for CodeRabbit. Unreadable labels give false (fail closed).
+ * True when the PR was read with labels and none of them asks for CodeRabbit. Unreadable labels give false (fail closed), and so
+ * does one label entry with no readable name: it may be the CodeRabbit label.
  */
 function hasNoCodeRabbitLabel(pull) {
-  return Array.isArray(pull?.labels) && !pull.labels.some((l) => CODERABBIT_LABELS.has(l?.name));
+  const named = (l) => typeof l?.name === 'string' && l.name !== '';
+  return Array.isArray(pull?.labels) && pull.labels.every(named) && !pull.labels.some((l) => CODERABBIT_LABELS.has(l.name));
 }
 
 /**

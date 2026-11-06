@@ -213,6 +213,14 @@ test('RC16e: a PR whose labels are unreadable is not ignored (fail closed); an u
   assert.equal(decideRecheck(skipped({ comments, pull: labelled() })).ok, true);
 });
 
+test('RC16g: a label entry with no readable name keeps the refusal: it may be the CodeRabbit label (fail closed)', () => {
+  const comments = [summary(AFTER, { body: SKIP_BODY })];
+  for (const bad of [{}, { name: null }, { name: '' }, null]) {
+    const pull = { head: { sha: HEAD }, labels: [{ name: 'review:none' }, bad] };
+    assert.equal(decideRecheck(skipped({ comments, pull })).ok, false, JSON.stringify(bad));
+  }
+});
+
 test('RC16f: a skip notice does not hide a review object or a request that landed after the READY check', () => {
   const comments = [summary(AFTER, { body: SKIP_BODY }), request(AFTER)];
   assert.match(refusalsOf(skipped({ comments })), /in flight/i);
