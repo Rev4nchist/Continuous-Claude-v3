@@ -11,7 +11,7 @@
  *   D5  that read moves only the sentinel row <id>@: a CCv3 broadcast with a LOWER id than the DM is still delivered later
  *
  * Skipped unless LANE_TEST_DB_URL names a scratch database made by
- *   node scripts/coordination/scratch-db.mjs create --through 4
+ *   node scripts/coordination/scratch-db.mjs create --through 5
  * The test refuses any database whose name does not start with lanes_pr1_ (never the live database).
  * Run:  $env:LANE_TEST_DB_URL='<url from create>'; .\node_modules\.bin\vitest.cmd run src/__tests__/lane-context-db.test.ts
  */

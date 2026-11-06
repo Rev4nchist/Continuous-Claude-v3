@@ -5499,6 +5499,18 @@ function laneCliCmd(env = process.env) {
   return `node ${laneShimPath(env)}`;
 }
 
+// src/shared/lane-sort.ts
+function bandRank(band) {
+  return band === "P0" ? 0 : band === "P1" ? 1 : band === "P2" ? 2 : 3;
+}
+function bandTag(band) {
+  return bandRank(band) === 3 ? "--" : band;
+}
+function laneOrderSql(alias) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(alias)) throw new Error(`laneOrderSql: bad alias ${JSON.stringify(alias)}`);
+  return `CASE ${alias}.band WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END, ${alias}.due_at ASC NULLS LAST, ${alias}.priority, ${alias}.id`;
+}
+
 // src/shared/pg-client.ts
 var DB_URL_VARS = ["CONTINUOUS_CLAUDE_DB_URL", "DATABASE_URL", "OPC_POSTGRES_URL"];
 var warnedMissingDbUrl = false;
@@ -5911,7 +5923,7 @@ async function runLaneContext(raw) {
     const lines = [];
     if (isStart) {
       const mine = (await client.query(
-        `SELECT * FROM agentic_os.lane WHERE owner_session_id=$1 AND state<>'done' ORDER BY priority, id`,
+        `SELECT * FROM agentic_os.lane l WHERE owner_session_id=$1 AND state<>'done' ORDER BY ${laneOrderSql("l")}`,
         [me]
       )).rows;
       const here = mine.filter((l) => (l.project_key ?? DEFAULT_BOARD) === board);
@@ -5934,15 +5946,15 @@ async function runLaneContext(raw) {
         [me, boardRoots(board), board]
       )).rows;
       const claimable = (await client.query(
-        `SELECT * FROM agentic_os.lane
+        `SELECT * FROM agentic_os.lane l
          WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
-         ORDER BY priority, id LIMIT 5`,
+         ORDER BY ${laneOrderSql("l")} LIMIT 5`,
         [board]
       )).rows;
       lines.push(`## Lane board ${board} (concurrent sessions on this board)`);
       lines.push(`You are ${who(me, payload.session_title || void 0)}.`);
       lines.push("");
-      lines.push(here.length ? `You hold: ${here.map((l) => l.id).join(", ")}` : `You hold no lane. Claim one before starting work: \`${laneCliCmd()} next\``);
+      lines.push(here.length ? `You hold: ${here.map((l) => `${bandTag(l.band)} ${l.id}`).join(", ")}` : `You hold no lane. Claim one before starting work: \`${laneCliCmd()} next\``);
       if (elsewhere.length) {
         const shown = elsewhere.slice(0, 5).map((l) => `${l.id}@${l.project_key}`).join(", ");
         lines.push(`+${elsewhere.length} on other boards: ${shown}${elsewhere.length > 5 ? ", ..." : ""}`);
@@ -5964,7 +5976,7 @@ async function runLaneContext(raw) {
       if (claimable.length) {
         lines.push("");
         lines.push("Claimable next:");
-        for (const l of claimable) lines.push(`  ${l.id.padEnd(28)} ${l.title}`);
+        for (const l of claimable) lines.push(`  ${bandTag(l.band)} ${l.id.padEnd(28)} ${l.title}`);
       }
       lines.push("");
       lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id>`);

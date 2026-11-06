@@ -216,7 +216,7 @@ function maskPage(html) {
 
 describe('render-board.mjs against a scratch database', () => {
   before(async () => {
-    const created = spawnSync(process.execPath, [SCRATCH, 'create', '--through', '4'], { encoding: 'utf8' });
+    const created = spawnSync(process.execPath, [SCRATCH, 'create', '--through', '5'], { encoding: 'utf8' });
     assert.equal(created.status, 0, created.stderr);
     E2E.url = JSON.parse(created.stdout).url;
     assertScratchUrl(E2E.url);
