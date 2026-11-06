@@ -13,7 +13,7 @@
  * allows (exit 0) or blocks (exit 2).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // We test the exported logic functions directly, not via subprocess.
@@ -27,6 +27,7 @@ import {
   checkOverride,
   checkMaliciousPackage,
   checkOsvAdvisory,
+  checkPackageAge,
   publishDateFromRegistryJson,
   installSegments,
   stripFdRedirects,
@@ -434,6 +435,93 @@ describe('package-install-guard', () => {
     it('allows an unknown package', () => {
       const result = checkMaliciousPackage('some-random-safe-pkg', undefined, 'npm');
       expect(result.blocked).toBe(false);
+    });
+  });
+
+  // =========================================================================
+  // Ecosystems with no blocklist (2026-11-05: harden only). The blocklist JSON holds npm and pypi
+  // keys. A cargo, go, gem, composer, nuget or brew name must not be matched against the npm list.
+  // =========================================================================
+  describe('ecosystems with no blocklist', () => {
+    const UNCHECKED = ['cargo', 'go', 'gem', 'composer', 'nuget', 'brew'] as const;
+
+    it('control: zer0code is in the npm blocklist as blocked_all', () => {
+      expect((maliciousPackages as any).npm['zer0code']?.blocked_all).toBe(true);
+      expect(checkMaliciousPackage('zer0code', undefined, 'npm').blocked).toBe(true);
+    });
+
+    it.each(UNCHECKED)('an npm-blocklisted name is not blocked for %s', (eco) => {
+      expect(checkMaliciousPackage('zer0code', undefined, eco)).toEqual({ blocked: false });
+    });
+
+    it.each(UNCHECKED)('an npm-blocklisted name with a pinned version is not blocked for %s', (eco) => {
+      expect(checkMaliciousPackage('event-stream', '3.3.6', eco)).toEqual({ blocked: false });
+    });
+
+    it.each(UNCHECKED)('no known-bad-versions warning is produced for %s', (eco) => {
+      // event-stream has blocked_versions only: with npm and no version it warns.
+      expect(checkMaliciousPackage('event-stream', undefined, 'npm').warning).toBeDefined();
+      expect(checkMaliciousPackage('event-stream', undefined, eco).warning).toBeUndefined();
+    });
+
+    it('control: an npm-list name is not matched by the pypi list', () => {
+      expect(checkMaliciousPackage('zer0code', undefined, 'pypi').blocked).toBe(false);
+    });
+
+    it('control: a pypi-list name is not matched by the npm list', () => {
+      expect(checkMaliciousPackage('colourama', undefined, 'npm').blocked).toBe(false);
+    });
+
+    it('control: a pypi-blocklisted name still blocks for pypi', () => {
+      expect(checkMaliciousPackage('colourama', undefined, 'pypi').blocked).toBe(true);
+    });
+  });
+
+  // checkOsvAdvisory and checkPackageAge already skip other ecosystems. Pin that, and pin that
+  // they make no network call: a registry or OSV lookup for a crate would query the wrong index.
+  describe('OSV and age checks skip ecosystems with no registry support, with no network call', () => {
+    const UNCHECKED = ['cargo', 'go', 'gem', 'composer', 'nuget', 'brew'] as const;
+
+    async function withNetSpy<T>(run: (spies: { request: any; get: any }) => Promise<T>): Promise<T> {
+      const https = (await import('node:https')).default;
+      const request = vi.spyOn(https, 'request').mockImplementation((() => { throw new Error('test: network call'); }) as any);
+      const get = vi.spyOn(https, 'get').mockImplementation((() => { throw new Error('test: network call'); }) as any);
+      try {
+        return await run({ request, get });
+      } finally {
+        request.mockRestore();
+        get.mockRestore();
+      }
+    }
+
+    it('control: the spy sees the OSV call for npm', async () => {
+      await withNetSpy(async ({ request, get }) => {
+        await checkOsvAdvisory('zz-spy-control', '1.0.0', 'npm');
+        expect(request.mock.calls.length + get.mock.calls.length).toBeGreaterThan(0);
+      });
+    });
+
+    it('control: the spy sees the registry call for npm', async () => {
+      await withNetSpy(async ({ request, get }) => {
+        await checkPackageAge('zz-spy-control', 'npm', '1.0.0');
+        expect(request.mock.calls.length + get.mock.calls.length).toBeGreaterThan(0);
+      });
+    });
+
+    it.each(UNCHECKED)('checkOsvAdvisory for %s is not blocked and makes no network call', async (eco) => {
+      await withNetSpy(async ({ request, get }) => {
+        expect(await checkOsvAdvisory('serde', '1.0.0', eco)).toEqual({ blocked: false });
+        expect(request).not.toHaveBeenCalled();
+        expect(get).not.toHaveBeenCalled();
+      });
+    });
+
+    it.each(UNCHECKED)('checkPackageAge for %s is not blocked and makes no network call', async (eco) => {
+      await withNetSpy(async ({ request, get }) => {
+        expect(await checkPackageAge('serde', eco, '1.0.0')).toEqual({ ageHours: null, blocked: false });
+        expect(request).not.toHaveBeenCalled();
+        expect(get).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -1170,6 +1258,20 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     ];
     it.each(unchecked)('does not silently allow %j', async (cmd) => {
       gated(await runHook(cmd, { stub: OLD }));
+    });
+
+    // 2026-11-05 harden only: a name that the npm blocklist holds (zer0code) installed through another
+    // ecosystem asks with the "no check exists" text. It is not denied as malicious: that list is npm's.
+    const collisions = [
+      ['cargo', 'cargo add zer0code'],
+      ['go', 'go install zer0code@latest'],
+      ['gem', 'gem install zer0code'],
+    ];
+    it.each(collisions)('%s: an npm-blocklisted name asks "no check exists" and is not denied as malicious (%j)', async (eco, cmd) => {
+      const r = await runHookFull(cmd, { stub: OLD, env: { CLAUDE_AGENT_ID: '', CI: '' } });
+      expect(r.decision).toBe('ask');
+      expect(r.reason).toContain(`No blocklist, OSV or age check exists for ${eco} packages: zer0code.`);
+      expect(r.reason).not.toMatch(/malicious|Malware in zer0code|GHSA-frrq/i);
     });
   });
 

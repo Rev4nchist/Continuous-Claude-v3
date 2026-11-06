@@ -805,12 +805,11 @@ export function checkMaliciousPackage(
   version: string | undefined,
   ecosystem: Exclude<Ecosystem, null>
 ): MaliciousCheckResult {
-  const ecosystemKey = ecosystem === 'pypi' ? 'pypi' : 'npm';
-
-  // Only pypi and npm have blocklist entries currently
-  if (ecosystemKey !== 'pypi' && ecosystemKey !== 'npm') {
+  // Only pypi and npm have blocklist entries. Any other ecosystem must not fall back to the npm list.
+  if (ecosystem !== 'pypi' && ecosystem !== 'npm') {
     return { blocked: false };
   }
+  const ecosystemKey = ecosystem;
 
   const entry = blocklistIndex(ecosystemKey).get(normalizeName(name, ecosystemKey));
   if (!entry) return { blocked: false };
