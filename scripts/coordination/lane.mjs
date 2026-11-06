@@ -56,8 +56,10 @@
  *   node scripts/coordination/lane.mjs renew            # push my leases out
  *   node scripts/coordination/lane.mjs say "message" [--to <name|sid-prefix>] [--lane <id>]
  *   node scripts/coordination/lane.mjs inbox [--peek]   # unread; advances watermark unless --peek
- *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--priority N]
- *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add
+ *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--band P0|P1|P2|none] [--priority 1-999]
+ *                                                       # on an existing lane an omitted --band / --priority keeps the stored value
+ *   node scripts/coordination/lane.mjs band <id> P0|P1|P2|none   # set the importance band; needs migration 0005; no claim needed
+ *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add; items may carry band and priority (omitted = keep)
  *   node scripts/coordination/lane.mjs peers [--all]    # who else is live on this board (--all: on the machine)
  *   node scripts/coordination/lane.mjs whoami           # my label, uuid and lanes
  *   node scripts/coordination/lane.mjs adopt --from <old-uuid>
@@ -82,6 +84,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { repoPath } from './canon-home.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
+import { parseBand, parsePriority } from './lane-band.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
@@ -266,6 +269,11 @@ async function withDb(fn) {
 
 /** SQLSTATE 42703 on project_key: the database has not had migration 0004 applied. */
 const isMissingMigration = (e) => e?.code === '42703' && /project_key/.test(e.message || '');
+
+/** SQLSTATE 42703 on `band`: the database has not had migration 0005 applied. Returns the error to throw (the original when it is something else). */
+const bandMigrationError = (e) => (e?.code === '42703' && /\bband\b/.test(e.message || '')
+  ? new Error('migration 0005 (lane band) is not applied to this database; apply it before you set a band')
+  : e);
 
 /** Record a lane event on the current board. Never throws into the caller's result path --
  *  a failed log line must not make a successful claim look like a failure. The one
@@ -496,6 +504,9 @@ async function checkSeedItems(c, items, board) {
     if (it.project !== undefined && it.project !== board.key) {
       throw new Error(`seed item '${it.id}' names project '${it.project}' but this run resolved board '${board.key}'`);
     }
+    // A bad band or priority rejects the whole file here, before any write.
+    parseBand(it.band, `seed item '${it.id}': band`);
+    parsePriority(it.priority, `seed item '${it.id}': priority`);
   }
   const foreign = (await c.query(
     `SELECT id, project_key FROM agentic_os.lane WHERE id = ANY($1::text[]) AND project_key <> $2`,
@@ -904,26 +915,76 @@ const commands = {
     const board = projectOf();
     const id = positional[1];
     if (!id || typeof flags.title !== 'string') {
-      throw new Error('usage: lane.mjs add <lane-id> --title "..." [--track t] [--scope "..."] [--priority N]');
+      throw new Error('usage: lane.mjs add <lane-id> --title "..." [--track t] [--scope "..."] [--band P0|P1|P2|none] [--priority 1-999]');
     }
     if (!BOARD_KEY_RE.test(id)) throw new Error(badId(id));
+    // undefined = the flag was not given: a new lane gets the default, an existing lane keeps its stored value.
+    const band = parseBand(flags.band);
+    const priority = parsePriority(flags.priority);
+    // The band column exists only after migration 0005. Name it in the SQL only when the caller passed --band,
+    // so an add with no band flag still works on a database that has not had 0005 yet.
+    const withBand = band !== undefined;
     // The WHERE keeps an add from rewriting a lane that belongs to another board: no row back means a foreign id.
-    const { rows } = await c.query(
-      `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,project_key)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (id) DO UPDATE SET
-         title=EXCLUDED.title, track=EXCLUDED.track,
-         scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
-         priority=EXCLUDED.priority, updated_at=now()
-       WHERE agentic_os.lane.project_key = EXCLUDED.project_key
-       RETURNING *`,
-      [id, flags.title, flags.track || 'unsorted', flags.scope || null, flags.branch || null,
-       LANE_STATES.includes(flags.state) ? flags.state : 'backlog',
-       Number(flags.priority) || 50, typeof flags.note === 'string' ? flags.note : null, board.key],
-    );
+    let rows;
+    try {
+      ({ rows } = await c.query(
+        `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,project_key${withBand ? ',band' : ''})
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9${withBand ? ',$11' : ''})
+         ON CONFLICT (id) DO UPDATE SET
+           title=EXCLUDED.title, track=EXCLUDED.track,
+           scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
+           priority=CASE WHEN $10::boolean THEN EXCLUDED.priority ELSE agentic_os.lane.priority END,
+           ${withBand ? 'band=EXCLUDED.band,' : ''} updated_at=now()
+         WHERE agentic_os.lane.project_key = EXCLUDED.project_key
+         RETURNING *`,
+        [id, flags.title, flags.track || 'unsorted', flags.scope || null, flags.branch || null,
+         LANE_STATES.includes(flags.state) ? flags.state : 'backlog',
+         priority ?? 50, typeof flags.note === 'string' ? flags.note : null, board.key,
+         priority !== undefined, ...(withBand ? [band] : [])],
+      ));
+    } catch (e) { throw bandMigrationError(e); }
     if (!rows.length) throw await foreignId(c, id);
     await logEvent(c, { laneId: id, kind: 'seeded', sessionId: myId, body: flags.title });
-    return JSON_OUT ? rows[0] : `lane ${id} upserted on board ${board.key}`;
+    if (JSON_OUT) return rows[0];
+    const l = rows[0];
+    return `lane ${id} upserted on board ${board.key} (${'band' in l ? `band ${l.band ?? 'none'}, ` : ''}priority ${l.priority})`;
+  },
+
+  /**
+   * Set the importance band of a lane: P0, P1, P2, or none (NULL, "Unsorted"). Needs migration 0005.
+   * Needs no claim: Dave or any session may set a band. Scoped to the board like `state`. One 'band' lane_event
+   * per real change; the same value as stored writes nothing and says "unchanged".
+   * The lock and the update are one statement, so two racing callers log one event each for their own change.
+   */
+  async band(c) {
+    const myId = me();
+    const id = positional[1];
+    const board = await projectForOwnedLane(c, id, myId);
+    const to = parseBand(positional[2], 'band');
+    if (!id || to === undefined) throw new Error('usage: lane.mjs band <lane-id> <P0|P1|P2|none>');
+    let rows;
+    try {
+      ({ rows } = await c.query(
+        `WITH old AS (SELECT id, band FROM agentic_os.lane WHERE id=$1 AND project_key=$3 FOR UPDATE)
+         UPDATE agentic_os.lane l SET band=$2::text, updated_at=now()
+         FROM old WHERE l.id = old.id AND l.band IS DISTINCT FROM $2::text
+         RETURNING old.band AS from_band`,
+        [id, to, board.key],
+      ));
+    } catch (e) { throw bandMigrationError(e); }
+    const word = (v) => v ?? 'none';
+    if (!rows.length) {
+      // No row changed: the lane is missing from this board, or it already has this band.
+      const cur = (await c.query(`SELECT band FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [id, board.key])).rows[0];
+      if (!cur) throw await noLane(c, id, board);
+      return JSON_OUT ? { id, from: cur.band, to, changed: false } : `${id} band unchanged: ${word(cur.band)}`;
+    }
+    const from = rows[0].from_band;
+    await logEvent(c, {
+      laneId: id, kind: 'band', sessionId: myId,
+      body: `band ${word(from)} -> ${word(to)}`, detail: { from, to },
+    });
+    return JSON_OUT ? { id, from, to, changed: true } : `${id} band: ${word(from)} -> ${word(to)}`;
   },
 
   /** Bulk idempotent add from JSON. Re-running never clobbers live claims,
@@ -937,30 +998,40 @@ const commands = {
     if (!file) throw new Error('usage: lane.mjs seed <file.json>');
     const items = JSON.parse(readFileSync(file, 'utf8'));
     await checkSeedItems(c, items, board);
+    // Name the band column only when some item carries a band, so a seed with no bands works before migration 0005.
+    // An omitted band or priority (undefined) keeps the stored value on conflict; a new lane gets NULL / 50.
+    const withBand = items.some((it) => parseBand(it.band) !== undefined);
     let n = 0;
     for (const it of items) {
+      const band = parseBand(it.band);
+      const priority = parsePriority(it.priority);
       // Deliberately asymmetric on conflict: descriptive columns are refreshed
       // from the seed, but `state`, `note` and every ownership column are NOT.
       // Re-seeding must never revert a live claim or overwrite the status line
       // the holder is currently maintaining -- the seed knows the shape of the
       // work, the session knows what is happening to it right now.
-      const res = await c.query(
-        `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,rationale,done_when,project_key)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (id) DO UPDATE SET
-           title=EXCLUDED.title, track=EXCLUDED.track,
-           scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
-           branch=COALESCE(EXCLUDED.branch, agentic_os.lane.branch),
-           priority=EXCLUDED.priority,
-           note=COALESCE(agentic_os.lane.note, EXCLUDED.note),
-           rationale=COALESCE(EXCLUDED.rationale, agentic_os.lane.rationale),
-           done_when=COALESCE(EXCLUDED.done_when, agentic_os.lane.done_when),
-           updated_at=now()
-         WHERE agentic_os.lane.project_key = EXCLUDED.project_key`,
-        [it.id, it.title, it.track || 'unsorted', it.scope || null, it.branch || null,
-         LANE_STATES.includes(it.state) ? it.state : 'backlog', it.priority ?? 50, it.note || null,
-         it.rationale || null, it.doneWhen || null, board.key],
-      );
+      let res;
+      try {
+        res = await c.query(
+          `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,rationale,done_when,project_key${withBand ? ',band' : ''})
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11${withBand ? ',$13' : ''})
+           ON CONFLICT (id) DO UPDATE SET
+             title=EXCLUDED.title, track=EXCLUDED.track,
+             scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
+             branch=COALESCE(EXCLUDED.branch, agentic_os.lane.branch),
+             priority=CASE WHEN $12::boolean THEN EXCLUDED.priority ELSE agentic_os.lane.priority END,
+             ${withBand ? 'band=CASE WHEN $14::boolean THEN EXCLUDED.band ELSE agentic_os.lane.band END,' : ''}
+             note=COALESCE(agentic_os.lane.note, EXCLUDED.note),
+             rationale=COALESCE(EXCLUDED.rationale, agentic_os.lane.rationale),
+             done_when=COALESCE(EXCLUDED.done_when, agentic_os.lane.done_when),
+             updated_at=now()
+           WHERE agentic_os.lane.project_key = EXCLUDED.project_key`,
+          [it.id, it.title, it.track || 'unsorted', it.scope || null, it.branch || null,
+           LANE_STATES.includes(it.state) ? it.state : 'backlog', priority ?? 50, it.note || null,
+           it.rationale || null, it.doneWhen || null, board.key, priority !== undefined,
+           ...(withBand ? [band ?? null, band !== undefined] : [])],
+        );
+      } catch (e) { throw bandMigrationError(e); }
       if (res.rowCount === 0) throw await foreignId(c, it.id);
       n++;
     }
