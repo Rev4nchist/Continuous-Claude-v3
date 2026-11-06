@@ -9,16 +9,17 @@
 // only a NEW database named lanes_pr1_* is written.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 
 const WT = join(dirname(fileURLToPath(import.meta.url)), '..', '..').replace(/\\/g, '/');
 const OUT = `${WT}/.claude/cache/e2e/2026-11-04-migration-0004-scratch.txt`;
 const TOOL = `${WT}/scripts/coordination/scratch-db.mjs`;
 mkdirSync(`${WT}/.claude/cache/e2e`, { recursive: true });
 writeFileSync(OUT, '');
-const pg = createRequire(pathToFileURL(`${WT}/.claude/hooks/package.json`))('pg');
+let pg;
+try { pg = requireDep('pg', { repoRoot: WT }); } catch (e) { console.error(`migration-0004-proof: ${e.message}`); process.exit(2); }
 
 const mask = (s) => String(s).replace(/(postgresql:\/\/[^:]+:)[^@]+@/g, '$1***@');
 const log = (s = '') => { const t = mask(s); appendFileSync(OUT, t + '\n'); console.log(t); };

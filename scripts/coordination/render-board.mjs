@@ -26,9 +26,9 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import {
   placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
   boardMismatch, boardWriteKind, mergeUnknownColumns,
@@ -75,13 +75,8 @@ const OUT = args.out || defaultOut(REPO, KEY);
 const BOARD_ROOTS = boardRoots(KEY);
 const GENERATED_AT = new Date();
 
-function loadPg() {
-  for (const a of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
-    try { return createRequire(pathToFileURL(a)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve pg');
-}
-const { Client } = loadPg();
+let Client;
+try { ({ Client } = requireDep('pg', { repoRoot: REPO })); } catch (err) { console.error(err.message); process.exit(1); }
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -32,11 +32,11 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
 import { boardStamp, defaultOut, parseBoardStamp, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
 
@@ -161,12 +161,7 @@ describe('source twins', () => {
 
 // ------------------------------------------------------------------ the page, end to end
 
-function loadPg() {
-  for (const anchor of [path.join(REPO, '.claude', 'hooks', 'package.json'), path.join(REPO, 'apps', 'agentic-os', 'package.json')]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve `pg`');
-}
+const loadPg = () => requireDep('pg', { repoRoot: REPO });
 
 const E2E = { url: '', tmp: '', registry: '', home: '', rootA: '', rootC: '', rootArt: '', rootBad: '', noBoard: '' };
 const fwd = (p) => p.replace(/\\/g, '/');

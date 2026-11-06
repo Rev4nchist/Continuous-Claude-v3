@@ -30,27 +30,19 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { laneEnv, makeBoards } from './probe-boards.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const LANE = join(HERE, 'lane.mjs');
 
-function loadPg() {
-  for (const anchor of [
-    join(REPO, '.claude', 'hooks', 'package.json'),
-    join(REPO, 'apps', 'agentic-os', 'package.json'),
-  ]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve `pg`. Looked in .claude/hooks and apps/agentic-os.');
-}
-const { Client } = loadPg();
+let Client;
+try { ({ Client } = requireDep('pg', { repoRoot: REPO })); } catch (e) { console.error(`session-identity-probe: ${e.message}`); process.exit(2); }
 const CONN = process.env.CONTINUOUS_CLAUDE_DB_URL
   || process.env.DATABASE_URL
   || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';

@@ -21,15 +21,15 @@
  * Usage: node scripts/coordination/claim-sql-probe.mjs [--keep]
  * Exits non-zero on any failed case. Removes its own fixtures unless --keep.
  */
-import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { requireDep } from '../lib/resolve-deps.mjs';
 
 // `pg` is a dependency of the hooks package, not of the repo root, and ESM
 // resolves from the importing FILE rather than the cwd — so this script cannot
-// just `import 'pg'`. Borrow the hooks package's resolution root instead of
-// adding a second copy of the driver to the repo.
-const require = createRequire(new URL('../../.claude/hooks/package.json', import.meta.url));
-const pg = require('pg');
+// just `import 'pg'`. The shared resolver (scripts/lib/resolve-deps.mjs) finds it
+// in this checkout or the primary one, so no second copy of the driver is added.
+let pg;
+try { pg = requireDep('pg'); } catch (e) { console.error(`claim-sql-probe: ${e.message}`); process.exit(2); }
 
 const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL
   || process.env.DATABASE_URL

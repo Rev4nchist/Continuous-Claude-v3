@@ -46,11 +46,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimes
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { requireDep } from './lib/resolve-deps.mjs';
 import {
   parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns, laneSchema,
-  lanesShim, laneHookClientVersion, hooksRenderCheck, hooksDistParity, lanePathGuardCheck,
+  lanesShim, laneHookClientVersion, hooksRenderCheck, hooksDistParity, lanePathGuardCheck, depsHooksInstall,
 } from './harness-doctor.mjs';
 import { assertScratchUrl } from './coordination/scratch-db.mjs';
 
@@ -170,7 +169,22 @@ function fixture({ blocklistDaysAgo = 0 } = {}) {
   git(repo, 'commit', '-q', '--no-verify', '-m', 'init');
   if (blocklistDaysAgo !== null) commitBlocklist(repo, blocklistDaysAgo);
   put(join(home, '.claude', 'state', 'sync-cursor'), `${git(repo, 'rev-parse', 'main')}\n`);
+  seedHooksInstall(repo);
   return { root, repo, home, schtasks };
+}
+
+/**
+ * A fake install of .claude/hooks (what `npm ci` leaves): node_modules/.package-lock.json, a stub `pg`, and the two lock
+ * files with a typescript version each. Written after the commits, so git never sees it. `pg: false` leaves the stub out.
+ */
+function seedHooksInstall(repo, { installedTs = '5.9.3', lockTs = '5.9.3', pg = true } = {}) {
+  const hooks = join(repo, '.claude', 'hooks');
+  put(join(hooks, 'package-lock.json'), JSON.stringify({ packages: { 'node_modules/typescript': { version: lockTs } } }));
+  put(join(hooks, 'node_modules', '.package-lock.json'), JSON.stringify({ packages: { 'node_modules/typescript': { version: installedTs } } }));
+  if (pg) {
+    put(join(hooks, 'node_modules', 'pg', 'package.json'), JSON.stringify({ name: 'pg', main: 'index.js' }));
+    put(join(hooks, 'node_modules', 'pg', 'index.js'), 'module.exports = {};\n');
+  }
 }
 
 /** Commits the blocklist file with a committer date `days` days back. */
@@ -987,7 +1001,7 @@ test('lanes:schema end to end against scratch databases: 5 rows and the trigger 
     if (!url4 || !url3) { t.skip('no scratch database could be created'); return; }
     const fx = fixture();
     put(join(fx.repo, 'apps', 'agentic-os', 'drizzle', 'meta', '_journal.json'), JSON.stringify({ entries: TAGS5.map((tag) => ({ tag })) }));
-    const { Client } = createRequire(pathToFileURL(join(HERE_TEST, '..', '.claude', 'hooks', 'package.json')))('pg');
+    const { Client } = requireDep('pg', { repoRoot: join(HERE_TEST, '..') });
     const fill = async (url, rows) => {
       const c = new Client({ connectionString: assertScratchUrl(url) && url });
       await c.connect();
@@ -1060,7 +1074,7 @@ test('end to end against scratch databases: board-columns and project-rows read 
     assert.equal(before['registry:project-rows'].status, 'WARN');
     assert.match(before['registry:project-rows'].detail, /zz-doctor-a: no project row/);
 
-    const { Client } = createRequire(pathToFileURL(join(HERE_TEST, '..', '.claude', 'hooks', 'package.json')))('pg');
+    const { Client } = requireDep('pg', { repoRoot: join(HERE_TEST, '..') });
     const c = new Client({ connectionString: url4 });
     await c.connect();
     try {
@@ -1355,4 +1369,57 @@ test('registry:artifact-url is a PASS that says absent without a registry file',
   const c = run(fixture()).checks['registry:artifact-url'];
   assert.equal(c.status, 'PASS');
   assert.match(c.detail, /^absent: /);
+});
+
+// ---- deps:hooks-install: the primary checkout holds the one install of .claude/hooks ----
+// Each test names what breaks it: the lookup moves off the primary (D4), "installed" is judged by node_modules alone (D2, D3),
+// the version pair is lost (D5), or the lock drift becomes a FAIL (D5).
+test('deps:hooks-install passes on a clean fixture and says what it found', () => {
+  const c = run(fixture()).checks['deps:hooks-install'];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /pg/);
+});
+
+test('deps:hooks-install FAILs when the primary has no node_modules, and names the fix', () => {
+  const fx = fixture();
+  const bare = join(fx.root, 'bare');
+  mkdirSync(bare);
+  execFileSync('git', ['init', '-q', '-b', 'main', bare], { windowsHide: true });
+  const c = depsHooksInstall({ repo: bare });
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /node_modules/);
+  assert.match(c.detail, /npm ci/);
+});
+
+test('deps:hooks-install FAILs when node_modules holds only a partial install and no pg (a lone .vite folder is not an install)', () => {
+  const fx = fixture();
+  const lone = join(fx.root, 'lone');
+  put(join(lone, '.claude', 'hooks', 'node_modules', '.vite', 'deps', 'x.json'), '{}\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', lone], { windowsHide: true });
+  const noCanary = depsHooksInstall({ repo: lone });
+  assert.equal(noCanary.status, 'FAIL', noCanary.detail);
+  seedHooksInstall(lone, { pg: false });
+  const noPg = depsHooksInstall({ repo: lone });
+  assert.equal(noPg.status, 'FAIL', noPg.detail);
+  assert.match(noPg.detail, /pg/);
+});
+
+test('deps:hooks-install judges the PRIMARY: a bare worktree of a good primary passes', () => {
+  const fx = fixture();
+  const wt = join(fx.root, 'wt');
+  git(fx.repo, 'worktree', 'add', '-q', '-b', 'zz-wt', wt);
+  const c = depsHooksInstall({ repo: wt });
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.ok(c.detail.includes(join(fx.repo, '.claude', 'hooks')), c.detail);
+});
+
+test('deps:hooks-install WARNs with the version pair when installed typescript differs from the lock, never a FAIL', () => {
+  const fx = fixture();
+  seedHooksInstall(fx.repo, { installedTs: '5.9.3', lockTs: '7.0.2' });
+  const c = run(fx).checks['deps:hooks-install'];
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /installed typescript 5\.9\.3, lock says 7\.0\.2/);
+  assert.match(c.detail, /npm ci/);
+  seedHooksInstall(fx.repo, { installedTs: '7.0.2', lockTs: '7.0.2' });
+  assert.equal(run(fx).checks['deps:hooks-install'].status, 'PASS');
 });

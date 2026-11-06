@@ -11,9 +11,9 @@
 // Design: .claudedocs/2026-11-06-lane-reminders-design.md ("Data model", build phase 1).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 
 if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
   console.log('usage: node scripts/coordination/migration-0005-proof.mjs\n'
@@ -30,9 +30,9 @@ const SQL_0005 = `${WT}/apps/agentic-os/drizzle/0005_lane_reminders.sql`;
 const SQL_0005_DOWN = `${WT}/apps/agentic-os/drizzle/0005_down.sql`;
 let pg;
 try {
-  pg = createRequire(pathToFileURL(`${WT}/.claude/hooks/package.json`))('pg');
+  pg = requireDep('pg', { repoRoot: WT });
 } catch (e) {
-  console.error(`migration-0005-proof: the pg package is not available (${e.code || e.message}). Set NODE_PATH to a folder that holds pg.`);
+  console.error(`migration-0005-proof: the pg package is not available (${e.message}). Set NODE_PATH to a folder that holds pg.`);
   process.exit(2);
 }
 mkdirSync(`${WT}/.claude/cache/e2e`, { recursive: true });

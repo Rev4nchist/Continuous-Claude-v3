@@ -17,11 +17,11 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from '../coordination/scratch-db.mjs';
 import { decide } from './migration-gate.mjs';
 
@@ -29,7 +29,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
 const GATE = path.join(HERE, 'migration-gate.mjs');
 const SCRATCH = path.join(HERE, '..', 'coordination', 'scratch-db.mjs');
-const { Client } = createRequire(pathToFileURL(path.join(REPO, '.claude', 'hooks', 'package.json')))('pg');
+const { Client } = requireDep('pg', { repoRoot: REPO });
 
 describe('decide', () => {
   it('a PR with no migration passes even when the database could not be read', () => {

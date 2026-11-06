@@ -6,7 +6,7 @@
 //   an error on an unchanged line, or in an unchanged file, is reported          -> T2  (drop the filter in keepChanged)
 //   a real type error on a changed line is lost (wrong flags, cwd or typeRoots)  -> T3  (drop --checkJs or --typeRoots)
 //   a test file or a non-.mjs file is passed to tsc                              -> T4  (drop the target filter)
-//   no target, or no tsc, throws instead of reporting skipped                    -> T5  (drop the guards)
+//   no target throws instead of skipping, or a target with no tsc is a silent skip -> T5  (drop the guards, or turn the ENV error back into skipped)
 //   the CLI exits 1 without --strict, or 0 with --strict and errors              -> T6  (flip the exit rule)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -64,15 +64,26 @@ test('T4: test files and non-.mjs files are not targets', () => {
   assert.deepEqual(typecheckTargets(['a.mjs', 'a.test.mjs', 'b.ts', 'c.js', 'scripts\\d.mjs', './a.mjs']), ['a.mjs', 'scripts/d.mjs']);
 });
 
-test('T5: no target and no tsc both report skipped', () => {
+test('T5: no target is skipped; a target and no tsc anywhere is an ENV error, never a silent skip', () => {
   const dir = tmp();
   try {
     writeFileSync(path.join(dir, 'scripts', 'a.test.mjs'), BAD);
     const none = runTypecheck({ root: dir, files: ['scripts/a.test.mjs', 'scripts/gone.mjs'], ranges: [] });
     assert.match(none.skipped, /no changed non-test/);
     assert.deepEqual(none.errors, []);
+    // No tsc and nothing to check: still a skip (a docs-only change needs no compiler).
+    const noToolNoTarget = runTypecheck({ root: dir, files: ['scripts/a.test.mjs'], ranges: [] }, { hooksDir: dir });
+    assert.match(noToolNoTarget.skipped, /no changed non-test/);
+    assert.equal(noToolNoTarget.error, undefined);
+    // A changed .mjs file and no tsc in hooksDir: ENV, with the folder tried and the fix.
+    writeFileSync(path.join(dir, 'scripts', 'a.mjs'), BAD);
     const noTool = runTypecheck({ root: dir, files: ['scripts/a.mjs'], ranges: [] }, { hooksDir: dir });
-    assert.match(noTool.skipped, /tsc not found/);
+    assert.equal(noTool.skipped, null);
+    assert.equal(noTool.env, true);
+    assert.match(noTool.error, /^ENV: tsc needs typescript\. Tried /);
+    assert.ok(noTool.error.includes(path.join(dir, 'node_modules', 'typescript')));
+    assert.match(noTool.error, /npm ci/);
+    assert.deepEqual(noTool.errors, []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

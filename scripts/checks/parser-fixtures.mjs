@@ -26,6 +26,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { lookupDep, primaryRoot } from '../lib/resolve-deps.mjs';
 import { casesFor } from './parser-fixtures/inputs.mjs';
 import { REGISTRY } from './parser-fixtures/registry.mjs';
 
@@ -35,13 +36,12 @@ const PREVIEW = 100;
 
 // ---------- loading ----------
 
-/** Finds esbuild in the tree under test, then in this tree. */
+/** Finds esbuild in the tree under test, then in this tree, then in the primary checkout (a worktree has no node_modules). */
 function loadEsbuild(root) {
-  const tries = [root, TOOL_ROOT].map((r) => path.join(r, '.claude', 'hooks', 'package.json'));
-  for (const from of tries) {
-    try { return createRequire(from)('esbuild'); } catch { /* try the next tree */ }
-  }
-  throw new Error('esbuild not found in .claude/hooks/node_modules of the tree or of this checkout');
+  const anchors = [...new Set([root, TOOL_ROOT, primaryRoot(TOOL_ROOT)])].map((r) => path.join(r, '.claude', 'hooks'));
+  const hit = lookupDep('esbuild', { anchors });
+  if (!hit.path) throw new Error(`esbuild not found in .claude/hooks/node_modules of the tree, of this checkout or of the primary checkout. Tried ${hit.tried.join(', ')}`);
+  return createRequire(import.meta.url)(hit.path);
 }
 
 /** Bundles a .ts file to a temp ESM file and imports it. The temp folder goes away after the import. */
