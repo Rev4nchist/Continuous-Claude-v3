@@ -20,13 +20,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertScratchUrl, maskUrl } from './scratch-db.mjs';
 import { laneEnv, makeBoards } from './probe-boards.mjs';
 
+if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+  console.log('usage: node scripts/coordination/lane-band-probe.mjs\n'
+    + 'Proves the lane band writers on a throwaway lanes_pr1_* database with the real lane.mjs. Needs a reachable\n'
+    + 'Postgres and the pg package (set NODE_PATH to a folder that holds pg). Takes no other arguments.\n'
+    + 'Exit 1 if a check fails, 2 if pg is missing.');
+  process.exit(0);
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const LANE = join(HERE, 'lane.mjs');
 const SCRATCH = join(HERE, 'scratch-db.mjs');
 const OUT = join(REPO, '.claude', 'cache', 'e2e', '2026-11-06-lane-band-probe.txt');
-mkdirSync(dirname(OUT), { recursive: true });
-writeFileSync(OUT, '');
 
 function loadPg() {
   for (const anchor of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
@@ -34,9 +40,17 @@ function loadPg() {
   }
   throw new Error('cannot resolve `pg`. Looked in .claude/hooks and apps/agentic-os.');
 }
-const { Client } = loadPg();
+let Client;
+try {
+  ({ Client } = loadPg());
+} catch (e) {
+  console.error(`lane-band-probe: the pg package is not available (${e.message}). Set NODE_PATH to a folder that holds pg.`);
+  process.exit(2);
+}
+mkdirSync(dirname(OUT), { recursive: true });
+writeFileSync(OUT, '');
 
-const log = (s = '') => { const t = String(s).replace(/(postgresql:\/\/[^:]+:)[^@]+@/g, '$1***@'); appendFileSync(OUT, t + '\n'); console.log(t); };
+const log = (s = '') => { const t = String(s).replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+@/g, '$1***@'); appendFileSync(OUT, t + '\n'); console.log(t); };
 const results = [];
 const check = (name, ok, detail = '') => { results.push([name, ok]); log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -- ' + detail : ''}`); };
 
