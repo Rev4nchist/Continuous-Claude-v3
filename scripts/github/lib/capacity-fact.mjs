@@ -27,7 +27,8 @@ const POLL_STEP_MS = 3000;
 const POLL_TRIES = 9; // 9 x 3 s: the poll waits about 25 s in all
 const PROBE_BODY = '@coderabbitai rate limit';
 // The auto-generated wording: the bot marker, then "...rate-limits). Reviews are available now." as the last sentence. A chat reply that quotes the words does not end that way.
-const FREE_REPLY = /<!--\s*This is an auto-generated reply by CodeRabbit\s*-->[\s\S]{0,600}?[.)\]]\s+Reviews are available now\.\s*$/;
+// `-{2}` and not `--`: the Semgrep JS parser fails on a regex literal that holds an HTML comment opener.
+const FREE_REPLY = /<!-{2}\s*This is an auto-generated reply by CodeRabbit\s*-{2}>[\s\S]{0,600}?[.)\]]\s+Reviews are available now\.\s*$/;
 const WAIT_REPLY = /currently\s+rate\s+limited|next\s+review\s+will\s+be\s+available/i;
 const SLOT_SOURCES = ['notice', 'post', 'seen'];
 

@@ -34,7 +34,8 @@ const iso = (t) => new Date(t).toISOString();
 
 // Labels that make CodeRabbit review a PR (the list its own skip notice prints, live PR 338).
 const CODERABBIT_LABELS = new Set(['review:coderabbit', 'review:deep', 'review:deep-held']);
-const SKIP_MARKER = /<!--\s*This is an auto-generated comment: skip review by coderabbit\.ai\s*-->/;
+// `-{2}` and not `--`: the Semgrep JS parser fails on a regex literal that holds an HTML comment opener, and CI counts that as a new scan error.
+const SKIP_MARKER = /<!-{2}\s*This is an auto-generated comment: skip review by coderabbit\.ai\s*-{2}>/;
 const SKIP_REASON = /Auto reviews are limited based on label configuration/i;
 
 /**
