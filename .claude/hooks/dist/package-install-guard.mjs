@@ -20497,10 +20497,10 @@ function checkOverride(command) {
   return BASH_OVERRIDE.test(command) || PS_OVERRIDE.test(command);
 }
 function checkMaliciousPackage(name, version, ecosystem) {
-  const ecosystemKey = ecosystem === "pypi" ? "pypi" : "npm";
-  if (ecosystemKey !== "pypi" && ecosystemKey !== "npm") {
+  if (ecosystem !== "pypi" && ecosystem !== "npm") {
     return { blocked: false };
   }
+  const ecosystemKey = ecosystem;
   const entry = blocklistIndex(ecosystemKey).get(normalizeName(name, ecosystemKey));
   if (!entry) return { blocked: false };
   version = canonicalVersion(version, ecosystemKey);
