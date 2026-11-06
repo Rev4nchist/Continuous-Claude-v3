@@ -1,45 +1,43 @@
 <#
 .SYNOPSIS
-  Find and kill bash processes that are stuck rather than working.
+  List bash processes that look stuck. Never kills anything.
 
 .WHY
-  When MSYS cohort initialization goes wrong, the affected bash processes do not
-  all die loudly. Some block, burning no CPU, and never exit. Measured
+  When MSYS cohort initialization goes wrong, the affected bash processes do
+  not all die loudly. Some block, burning no CPU, and never exit. Measured
   2026-07-26: a single trial left 51 live bash processes, 46 of them untracked
   descendants, all at ~0 CPU, still there ten minutes later.
 
-  Killing them by hand is one command, but only if you already know that is the
-  problem. This script is that command, with the judgement built in.
+  This script shows which bash processes match that shape. It is a report, not
+  a cleanup.
 
 .SAFETY
-  Dry-run by default -- it prints what it would kill and exits without doing it.
-  -Force is required to actually terminate anything.
+  List-only. The script has no kill path. The old force switch was retired on
+  2026-11-05, and passing it fails with an unknown-parameter error.
 
-  Two filters keep it off legitimate work. A process must be BOTH older than
-  -OlderThanSeconds AND under -MaxCpuSeconds of CPU time. A bash process doing
-  real work (a sync, a build) accumulates CPU and is left alone no matter how
-  long it has been running; a genuinely blocked one has essentially none.
+  The filter is weak. A process is listed when it is BOTH older than
+  -OlderThanSeconds AND under -MaxCpuSeconds of CPU time. The filter cannot
+  tell a stuck shell from a live peer-session shell. A shell that waits on a
+  child that does the work also sits at ~0 CPU, and it is listed too. It also
+  sees only bash.exe, never sh.exe or other MSYS binaries. Read the output as
+  incomplete and as a list of suspects, never as proof.
 
-  Kills are tree kills through scripts/lib/Stop-ProcessTree.ps1 (leaves first,
-  by id, never this shell or its ancestors). Killing the parent alone leaves
-  exactly the untracked descendants that made the pile-up hard to clear.
-
-  The helper makes the KILL safe. It does not fix the SELECTION: the filter
-  above can still pick a live peer-session shell, because a waiting shell uses
-  about 0 CPU. See docs/windows/msys-fork-storm-investigation.md. Do not use
-  -Force without Dave's yes.
+  Before any manual kill, check the owner of each PID by its parent chain
+  (and its CreationDate, because PIDs are reused). Kill only a leaf orphan, by
+  explicit PID. See docs/windows/msys-fork-storm-investigation.md and
+  .claude/docs/windows/platform-notes.md.
 
 .EXAMPLE
-  pwsh -File scripts/msys/reap.ps1                 # show what is stuck
-  pwsh -File scripts/msys/reap.ps1 -Force          # clear it
+  pwsh -File scripts/msys/reap.ps1                       # list what looks stuck
+  pwsh -File scripts/msys/reap.ps1 -OlderThanSeconds 600 # a stricter age cut
 #>
+# CmdletBinding makes an unknown parameter such as the retired force switch an error.
+# Without it, PowerShell puts the unknown name into $args and the script runs.
+[CmdletBinding()]
 param(
-    [switch]$Force,
     [int]$OlderThanSeconds = 120,
     [double]$MaxCpuSeconds = 2.0
 )
-
-. (Join-Path $PSScriptRoot '..\lib\Stop-ProcessTree.ps1')
 
 $all = @(Get-Process bash -ErrorAction SilentlyContinue)
 if ($all.Count -eq 0) {
@@ -64,22 +62,10 @@ foreach ($p in $all) {
     }
 }
 
-Write-Host "[reap] bash alive: $($all.Count), stuck by filter (age > ${OlderThanSeconds}s AND cpu < ${MaxCpuSeconds}s): $($candidates.Count)"
+Write-Host "[reap] bash alive: $($all.Count), suspects by filter (age > ${OlderThanSeconds}s AND cpu < ${MaxCpuSeconds}s): $($candidates.Count)"
 if ($candidates.Count -eq 0) { exit 0 }
 
 $candidates | Sort-Object AgeSeconds -Descending | Format-Table -AutoSize | Out-String | Write-Host
 
-if (-not $Force) {
-    Write-Host "[reap] dry run. Re-run with -Force to kill these." -ForegroundColor Yellow
-    exit 0
-}
-
-$killed = 0
-foreach ($c in $candidates) {
-    $rows = @(Stop-ProcessTree -RootId $c.Id)
-    if (@($rows | Where-Object { $_.Status -eq 'Killed' -and $_.ProcessId -eq $c.Id }).Count -gt 0) { $killed++ }
-}
-
-Start-Sleep -Seconds 1
-$remaining = @(Get-Process bash -ErrorAction SilentlyContinue).Count
-Write-Host "[reap] killed $killed tree(s); bash alive now: $remaining" -ForegroundColor Green
+Write-Host "[reap] list only. Nothing was killed. Verify the owner of each PID by its parent chain before any manual kill." -ForegroundColor Yellow
+exit 0

@@ -600,8 +600,9 @@ Every one of these cost real time already.
   `.claude/docs/windows/platform-notes.md`.
 - **Hung test runners accumulate silently.** Found a vitest tree from
   **2026-07-28 13:33 still alive 29 hours later** at ~0 CPU with a 0-byte output
-  file. `Stop-Process` misses the descendants; use `taskkill /PID <n> /T /F`, or
-  `pwsh -File scripts/msys/reap.ps1` (dry-run, then `-Force`). Check for these
+  file. `Stop-Process` misses the descendants. `pwsh -File scripts/msys/reap.ps1` only
+  lists suspects; it never kills (its `-Force` was retired 2026-11-05). Kill by hand only after
+  you prove the PID owner by its parent chain, and never with `taskkill /T`. Check for these
   *before* concluding your own suite is hung.
 - **`--reporter=basic` no longer exists in vitest 4.** It fails as a "Startup
   Error / Failed to load custom Reporter", which reads exactly like a broken
