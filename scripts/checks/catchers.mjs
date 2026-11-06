@@ -123,7 +123,8 @@ export async function runCatchers({ root, diffText, files }, opts = {}) {
   const gates = mappedTestGates(list);
   const mappedTests = opts.runTests ? gates.map((g) => runTestGate(g, tree, opts.exec ?? defaultExec)) : gates.map((g) => ({ id: g.id, command: commandOf(g), status: 'NOT_RUN', summary: '' }));
   const errors = [smoke, fixtures, typecheck].map((r) => r.error).filter(Boolean);
-  const gateFailed = smoke.failed > 0 || fixtures.failed > 0 || Boolean(smoke.error) || Boolean(fixtures.error);
+  // tsc is a fact, not a gate, except when it cannot run at all: a missing compiler is the environment, and a green without it is wrong.
+  const gateFailed = smoke.failed > 0 || fixtures.failed > 0 || Boolean(smoke.error) || Boolean(fixtures.error) || typecheck.env === true;
   return { files: list, typecheck, smoke, fixtures, mappedTests, gateFailed, errors };
 }
 

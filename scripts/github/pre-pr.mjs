@@ -29,7 +29,7 @@
  *              gates: a stale GREEN sha that a clean merge of the base made and updateGreen can rewrite (the gates settle it).
  *   --json     print one JSON document, not lines.
  * Steps, one PASS / FAIL / SKIP / NOTE line each: git:branch, git:clean, git:behind, changes, evidence,
- * gate:<id> (the gates of every surface the diff touches, SURFACES below), coderabbit, git:stable (the last step: HEAD
+ * env (only when something is wrong, see below), gate:<id> (the gates of every surface the diff touches, SURFACES below), coderabbit, git:stable (the last step: HEAD
  * and the tracked files are unchanged since the start; a failed git call is a FAIL). NOTE lines follow the
  * gates: a surface with no automatic gate, a changed file no surface owns, an opc source change with no test.
  * A NOTE zizmor line follows when the diff touches .github/workflows/*.yml: counts by severity and the top 3 file:line items from
@@ -40,6 +40,13 @@
  * network; a network failure, a missing binary or a missing baseline is a skip note (CCV3_OSV; scripts/github/lib/osv-advisory.mjs).
  * A NOTE pssa line follows when the diff touches an existing .ps1: PSScriptAnalyzer findings with PSScriptAnalyzerSettings.psd1
  * (CCV3_PSSA; scripts/github/lib/pssa-advisory.mjs). Both are advisory in the same trial and never fail the run.
+ * The env step (scripts/github/lib/env-step.mjs) runs after the evidence check and before the gates. A gate that will run and
+ * cannot find a package it needs (esbuild bin, vitest, pg, @playwright/test, typescript) makes ONE FAIL line "ENV: <gate> needs
+ * <package>. Tried <folders>. This is the environment, not your change. Fix: ..." and that gate does not run. A branch that changes
+ * .claude/hooks/package-lock.json in a worktree with no install of its own FAILs with its own text. Installed typescript that differs
+ * from the lock is a NOTE only. The primary checkout and CI have everything, so the step prints nothing there. Gate children get
+ * NODE_PATH with the primary's node_modules when the worktree has no install of its own, and a gate that fails with
+ * MODULE_NOT_FOUND gets the ENV: prefix on its FAIL line.
  * A step FAILs when:
  *   - the branch is main, the base or detached; the tree has an edited, staged or untracked file;
  *     HEAD is behind the local base or behind fork/<base> (fetched first; the last-fetched ref if the fetch fails);
@@ -99,6 +106,8 @@ import { findOsv as defaultFindOsv, osvAdvisory } from './lib/osv-advisory.mjs';
 import { findPssa as defaultFindPssa, pssaAdvisory } from './lib/pssa-advisory.mjs';
 import { findZizmor as defaultFindZizmor, zizmorAdvisory } from './lib/zizmor-advisory.mjs';
 import { killTree, processChildren } from './lib/proc.mjs';
+import { childEnv, envPrefix, envStep } from './lib/env-step.mjs';
+import { primaryRoot } from '../lib/resolve-deps.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
@@ -186,6 +195,10 @@ export const SURFACES = [
   { id: 'agents-scripts', globs: ['scripts/agents/**'], gates: [nodeTest('agents-tests', 'scripts/agents/*.test.mjs')] },
   // The workflow is here because semgrep-ccv3.test.mjs (SG2) compares the Semgrep digest in it with the wrapper default.
   { id: 'ratchets-scripts', globs: ['scripts/ratchets/**', '.github/workflows/ccv3-checks.yml'], gates: [nodeTest('ratchets-tests', 'scripts/ratchets/*.test.mjs')] },
+  // scripts/lib holds the shared dependency resolver. Its tests build real git worktrees under the temp folder.
+  { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/resolve-deps.test.mjs')] },
+  // No script carries its own createRequire lookup of pg: scripts/lib/resolve-deps.mjs is the one (it also tries the primary checkout).
+  { id: 'no-pg-lookup', globs: ['scripts/**/*.mjs', 'scripts/**/*.js', 'scripts/**/*.cjs', '.claude/scripts/**'], gates: [cheapGate('no-pg-lookup', 'scripts/ratchets/no-pg-lookup.mjs')] },
   // A surface row, not an always gate: a docs-only PR does not need Docker. Docker not running is a FAIL (D3), never a NOTE or SKIP.
   {
     id: 'semgrep-ccv3',
@@ -631,7 +644,10 @@ export function resolveSpawn(spec, { platform = process.platform, execPath = pro
 export function defaultExec(spec) {
   let s;
   try { s = resolveSpawn(spec); } catch (err) { return { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message) }; }
-  const r = spawnSync(s.cmd, s.args, { cwd: spec.cwd, encoding: 'utf8', timeout: spec.timeoutMs, windowsHide: true, shell: false, maxBuffer: 64 * 1024 * 1024 });
+  // A worktree with no install of its own gets the primary's node_modules on NODE_PATH, so a createRequire or CommonJS lookup of
+  // `pg` in the gate child works (lib/env-step.mjs childEnv). Null: the primary, CI or a checkout with its own install: inherit.
+  const env = spec.root ? childEnv(spec.root) : null;
+  const r = spawnSync(s.cmd, s.args, { cwd: spec.cwd, encoding: 'utf8', timeout: spec.timeoutMs, windowsHide: true, shell: false, maxBuffer: 64 * 1024 * 1024, ...(env ? { env } : {}) });
   const timedOut = r.error?.code === 'ETIMEDOUT';
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', timedOut, error: r.error && !timedOut ? String(r.error.message) : undefined };
 }
@@ -642,7 +658,7 @@ const outputOf = (r) => `${r.stdout ?? ''}${r.stderr ? `\n${r.stderr}` : ''}`;
 export function runGate(gate, { root, exec, git }) {
   const step = `gate:${gate.id}`;
   const shown = `${gate.cmd} ${gate.args.join(' ')} (in ${gate.cwd})`;
-  const r = exec({ id: gate.id, cmd: gate.cmd, args: gate.args, cwd: path.join(root, gate.cwd), timeoutMs: gate.timeoutMs });
+  const r = exec({ id: gate.id, cmd: gate.cmd, args: gate.args, cwd: path.join(root, gate.cwd), timeoutMs: gate.timeoutMs, root });
   const out = outputOf(r);
   const base = { output: out, command: shown };
   if (r.timedOut) return { ...result(step, 'FAIL', `timed out after ${Math.round(gate.timeoutMs / MIN)} min: ${shown}`), ...base };
@@ -652,7 +668,9 @@ export function runGate(gate, { root, exec, git }) {
     const accepted = gate.acceptExit?.(out.replace(ANSI, ''));
     if (accepted) return { ...result(step, 'PASS', accepted), ...base };
     const tail = out.replace(ANSI, '').split(/\r?\n/).filter(Boolean).slice(-12);
-    return { ...result(step, 'FAIL', `exit ${r.status}: ${summaryLine(out)}`, tail), ...base };
+    // A missing package is the environment, not the change: say so first, so nobody hunts a bug in code that is fine.
+    const env = envPrefix(out.replace(ANSI, ''), { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
+    return { ...result(step, 'FAIL', env ?? `exit ${r.status}: ${summaryLine(out)}`, tail), ...base };
   }
   if (gate.postCheck) {
     const posts = gate.postCheck.argv.map((a) => git(a));
@@ -1217,7 +1235,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const headRun = git(['rev-parse', 'HEAD']);
@@ -1235,11 +1253,16 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   // FAIL that only a gate pass can settle (a stale GREEN sha after a clean merge of the base, see greenRewriteCandidate).
   const settledByGates = head && bodyPath && greenRewriteCandidate({ git, base, bodyText, head, evidence: results[evidenceAt] }) ? results[evidenceAt] : null;
   const stopCause = () => (keepGoing ? undefined : results.find((r) => r.status === 'FAIL' && r !== settledByGates));
-  for (const gate of gatesFor(changes.paths)) {
+  // The env step (after git:clean, before the gates): each gate that will run must find its packages. A missing one is ONE FAIL
+  // line that names the package, the folders tried and the fix, and that gate does not run. A clean primary or CI adds no line.
+  const env = envCheck({ root, gates: gatesFor(changes.paths), changed: changes.paths });
+  if (env.fail) results.push(result('env', 'FAIL', env.fail, env.others));
+  if (env.note) results.push(result('env', 'NOTE', env.note));
+  for (const gate of env.gates) {
     const cause = stopCause();
-    results.push(cause
-      ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
-      : runGate(withBase(gate, base), { root, exec, git }));
+    results.push(env.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
+      : cause ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
+        : runGate(withBase(gate, base), { root, exec, git }));
   }
   // A stale GREEN sha after a merge of the base: fix the body file once the gates passed on this head.
   const green = head ? updateGreen({ git, base, bodyPath, bodyText, head, paths: changes.paths, config: cfg, results, evidence: results[evidenceAt] }) : null;

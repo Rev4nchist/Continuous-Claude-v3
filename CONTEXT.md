@@ -28,6 +28,8 @@
   that records a baseline and fails if the number gets worse. **Vacuous gate**: passes on zero
   registrations; read the count before the verdict.
 - **Probe**: a script that measures live behaviour (`*-probe.mjs`), as opposed to reading code.
+- **Dependency fallback**: a script finds a package in its own checkout, then the primary checkout, then NODE_PATH
+  (`scripts/lib/resolve-deps.mjs`). A miss is one `ENV:` message.
 
 ## Coordination
 

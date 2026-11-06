@@ -18,10 +18,10 @@
  * A PR with no new migration never needs the database: it passes even when the database is down.
  */
 import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -43,16 +43,11 @@ export function decide({ newMigrations, journalCount, dbCount, dbError }) {
   return { ok: true, message: `migration gate: the database has ${dbCount} migration(s), the PR head's journal lists ${journalCount}; ${tags} is applied` };
 }
 
-function loadPg() {
-  for (const anchor of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve the pg module (run npm install in .claude/hooks or apps/agentic-os)');
-}
-
-/** The row count of agentic_os.__migrations. Throws a short message when it cannot be read. */
+/** The row count of agentic_os.__migrations. Throws a short message when it cannot be read (a missing pg is the one ENV: message). */
 export async function countAppliedMigrations(url) {
-  const { Client } = loadPg();
+  // Loaded here, not at the top: a PR with no migration never needs pg or the database. The resolver finds pg in this
+  // checkout or the primary one (scripts/lib/resolve-deps.mjs).
+  const { Client } = requireDep('pg', { repoRoot: REPO });
   const c = new Client({ connectionString: url, connectionTimeoutMillis: 4000, query_timeout: 8000 });
   try {
     await c.connect();

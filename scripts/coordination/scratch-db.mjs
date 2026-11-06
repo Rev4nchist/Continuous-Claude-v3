@@ -26,11 +26,11 @@
  * split on `--> statement-breakpoint`. That matters: `SET LOCAL` has no effect
  * outside a transaction.
  */
-import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -38,17 +38,13 @@ const DRIZZLE_DIR = join(REPO, 'apps', 'agentic-os', 'drizzle');
 const PREFIX = 'lanes_pr1_';
 const NAME_RE = /^lanes_pr1_[a-z0-9_]+$/;
 
-/** Same lookup as lane.mjs: `pg` lives in the hooks bundle or apps/agentic-os. */
-export function loadPg(anchors = [
-  join(REPO, '.claude', 'hooks', 'package.json'),
-  join(REPO, 'apps', 'agentic-os', 'package.json'),
-]) {
-  for (const anchor of anchors) {
-    try {
-      return createRequire(pathToFileURL(anchor)).call(null, 'pg');
-    } catch { /* try the next anchor */ }
-  }
-  throw new Error('cannot resolve the `pg` module. Run `npm install` in .claude/hooks or apps/agentic-os.');
+/**
+ * Same lookup as lane.mjs: `pg` lives in the hooks bundle or apps/agentic-os of this checkout or of the primary
+ * (scripts/lib/resolve-deps.mjs). `anchors` (package.json paths) replace the whole lookup; a test uses that to
+ * simulate "pg is in none". A miss throws the one ENV error.
+ */
+export function loadPg(anchors) {
+  return requireDep('pg', { repoRoot: REPO, anchors });
 }
 
 /** The server to create scratch databases on: same env chain as lane.mjs. */

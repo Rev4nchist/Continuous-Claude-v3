@@ -55,9 +55,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { maskUrl } from './scratch-db.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -74,14 +74,6 @@ const HOOK = resolve(arg('hook', join(REPO, '.claude', 'hooks', 'dist', 'coordin
 const PROBE_ID = `probe-lifecycle-${process.pid}-1`;
 const ABSENT_ID = `probe-lifecycle-${process.pid}-absent`;
 const REASON = 'probe_exit_reason';
-
-/** Same lookup as lane.mjs: `pg` lives in the hooks bundle or in apps/agentic-os. */
-function loadPg() {
-  for (const anchor of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve the `pg` module. Looked in .claude/hooks and apps/agentic-os.');
-}
 
 /** The one connection of a --db-url run. */
 let pgClient = null;
@@ -176,7 +168,8 @@ async function main() {
 
   try {
     if (DB_URL) {
-      const { Client } = loadPg();
+      // `pg` lives in the hooks bundle or apps/agentic-os of this checkout or the primary (scripts/lib/resolve-deps.mjs).
+      const { Client } = requireDep('pg', { repoRoot: REPO });
       pgClient = new Client({ connectionString: DB_URL, connectionTimeoutMillis: 5000 });
       await pgClient.connect();
     }

@@ -17,11 +17,11 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep, resolveDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
 import { normalizeRoot } from './lane-board.mjs';
 
@@ -30,13 +30,9 @@ const REPO = path.join(HERE, '..', '..');
 const LANE = path.join(HERE, 'lane.mjs');
 const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 
-function loadPg() {
-  for (const anchor of [path.join(REPO, '.claude', 'hooks', 'package.json'), path.join(REPO, 'apps', 'agentic-os', 'package.json')]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve `pg`');
-}
-const { Client } = loadPg();
+const { Client } = requireDep('pg', { repoRoot: REPO });
+/** The node_modules folder that holds a resolved package file, for NODE_PATH. */
+const nodeModulesOf = (file) => file.slice(0, file.lastIndexOf(`${path.sep}node_modules${path.sep}`) + `${path.sep}node_modules`.length);
 
 function createScratch(through) {
   const r = spawnSync(process.execPath, [SCRATCH, 'create', '--through', String(through)], { encoding: 'utf8' });
@@ -851,8 +847,9 @@ describe('the migration fence and the missing migration', () => {
         cwd: oldDir, encoding: 'utf8',
         env: {
           ...baseEnv(), CLAUDE_CODE_SESSION_ID: SA,
-          // The old file looks for `pg` beside itself; it is not in the temp folder.
-          NODE_PATH: path.join(REPO, '.claude', 'hooks', 'node_modules'),
+          // The old file looks for `pg` beside itself; it is not in the temp folder. Hand it the node_modules folder the
+          // shared resolver found pg in: this checkout's, or the primary's in a bare worktree.
+          NODE_PATH: nodeModulesOf(resolveDep('pg', { repoRoot: REPO })),
         },
       });
       return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}` };

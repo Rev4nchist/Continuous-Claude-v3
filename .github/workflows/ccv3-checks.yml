@@ -80,6 +80,15 @@ jobs:
       - name: harness-doctor unit tests
         timeout-minutes: 5
         run: node --test scripts/harness-doctor.test.mjs
+      # Worktree dependency fallback (PR1): one resolver for pg and friends, the pre-pr env step, and a ratchet against new copies.
+      - name: dependency resolver and pre-pr env step unit tests
+        timeout-minutes: 5
+        run: node --test scripts/lib/resolve-deps.test.mjs scripts/github/lib/env-step.test.mjs
+      - name: no new pg lookup outside the resolver (ratchet)
+        run: node scripts/ratchets/no-pg-lookup.mjs
+      - name: no-pg-lookup unit tests
+        timeout-minutes: 5
+        run: node --test scripts/ratchets/no-pg-lookup.test.mjs
       # Pre-PR checks built from CodeRabbit Majors (C1 scrubber grid, C2 Semgrep pack, C5 state tables).
       # semgrep-ccv3 unit tests also read the Semgrep digest above (SG2): they fail when the two digests differ.
       - name: semgrep-ccv3 wrapper unit tests

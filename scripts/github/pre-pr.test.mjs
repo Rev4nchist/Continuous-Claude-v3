@@ -57,6 +57,7 @@ import * as PRE from './pre-pr.mjs';
 import { REGISTRY } from '../checks/parser-fixtures/registry.mjs';
 import { MARKER } from './lib/pssa-advisory.mjs';
 import { cliCapOf } from './cr-paid.mjs';
+import { envStep } from './lib/env-step.mjs';
 import {
   SURFACES, ALWAYS_GATES, CATCHER_PARSER_FILES, BASE_TOKEN, withBase, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
@@ -1401,6 +1402,10 @@ function makeRepo({ files = { 'docs/a.md': 'hello\n' } } = {}) {
 
 const okExec = (log) => (spec) => { log.push(spec.id ?? spec.args.join(' ')); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
 
+// The env step looks for esbuild, vitest and pg in the temp repo, which has no node_modules. These tests are about the other steps,
+// so they run with an env step that finds everything. The EN tests below use the real one (envStep) or their own.
+const NO_ENV = ({ gates }) => ({ fail: null, others: [], note: null, blocked: new Set(), gates });
+
 async function prePr(repo, extra = {}) {
   const gateRuns = [];
   const crCalls = [];
@@ -1412,6 +1417,7 @@ async function prePr(repo, extra = {}) {
     // No fetch by default: withFork adds a GitHub URL as the fork remote. The PF tests pass fetch: undefined for the real one.
     fetch: () => null,
     guardLog: () => {},
+    envCheck: NO_ENV,
     ledgerPath: tempLedger(),
     // The osv and pssa advisories never start a scanner or touch the network here: no lockfile, no binary. The OSV-PP / PSSA-PP tests inject their own.
     osvLockfiles: [], findOsv: () => null, findPssa: () => null,
@@ -2383,7 +2389,7 @@ test('FF2: --keep-going (keepGoing) runs every gate after a FAIL, as before', as
 
 test('FF3: cheap gates come before the costly ones, in every change set', () => {
   const got = ids(gatesFor(['.claude/hooks/src/a.ts', '.claude/rules-src/a.md', '.claude/skills/x/SKILL.md', '.claude/agents/a.md', 'scripts/github/x.mjs']));
-  const cheap = ['context-budget', 'ondemand-index', 'audit-skills', 'agent-model-drift', 'agent-body'];
+  const cheap = ['context-budget', 'ondemand-index', 'audit-skills', 'agent-model-drift', 'agent-body', 'no-pg-lookup'];
   for (const id of cheap) assert.ok(got.includes(id), id);
   const lastCheap = Math.max(...cheap.map((id) => got.indexOf(id)));
   const firstCostly = Math.min(...got.map((id, i) => (cheap.includes(id) ? Infinity : i)));
@@ -2562,4 +2568,109 @@ test('LOG1: two runs on one head on one day keep two logs (the time is in the na
   assert.match(path.basename(second.result.logPath), new RegExp(`^2026-11-04-pre-pr-${repo.head.slice(0, 7)}-100507\\.log$`));
   assert.match(readFileSync(first.result.logPath, 'utf8'), /PASS git:clean/);
   assert.match(readFileSync(second.result.logPath, 'utf8'), /FAIL git:clean/);
+});
+
+// ---------- the env step (scripts/github/lib/env-step.mjs): a worktree has no node_modules ----------
+// How it can fail, and the test that catches it:
+//   a missing esbuild bin is not one ENV line, or the gate still runs                 -> EN1 (drop the step or its blocked set)
+//   with --keep-going the other gates stop, or the blocked gate runs                  -> EN2
+//   a missing pg is not named, or a repo that has it gets a line                      -> EN3 (judge pg on the own folder only)
+//   a drift NOTE fails the run, or the lockfile text is not a FAIL                    -> EN4, EN5
+//   a gate child in a worktree gets no NODE_PATH, or the primary gets one             -> EN6 (drop the env option of defaultExec)
+//   a MODULE_NOT_FOUND gate FAIL has no ENV prefix, or a plain failure has one         -> EN7
+const EN_FIX = 'ENV: this branch changes .claude/hooks/package-lock.json, so it needs its own npm ci in this worktree (Dave approves an install). The primary\'s packages would give a wrong green.';
+
+/** Keeps untracked fake packages out of git:clean. */
+function ignoreModules(repo) { writeFileSync(path.join(repo.dir, '.git', 'info', 'exclude'), 'node_modules/\n'); }
+const fakeFile = (repo, rel, text = '{}') => { const f = path.join(repo.dir, ...rel.split('/')); mkdirSync(path.dirname(f), { recursive: true }); writeFileSync(f, text); };
+
+test('EN1: a hooks change with no esbuild is ONE ENV FAIL line, and no gate runs', async () => {
+  const repo = makeRepo({ files: { '.claude/hooks/src/x.ts': '// x\n' } });
+  const { result, gateRuns } = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) });
+  const envLines = result.lines.filter((l) => /^\w+ env - /.test(l));
+  assert.equal(envLines.length, 1, result.lines.join('\n'));
+  assert.match(envLines[0], /^FAIL env - ENV: hooks-build needs esbuild\. Tried .+This is the environment, not your change\. Fix: run `npm ci` in /);
+  assert.ok(result.lines.some((l) => /^ {4}ENV: hooks-vitest needs vitest\./.test(l)), 'the second missing need is a note under the line');
+  assert.ok(result.lines.some((l) => /^SKIP gate:hooks-build - not run: env failed/.test(l)), result.lines.join('\n'));
+  assert.equal(gateRuns.includes('hooks-build'), false);
+  assert.equal(gateRuns.length, 0, 'a run stops at the first FAIL');
+  assert.equal(result.ok, false);
+});
+
+test('EN2: with --keep-going only the gate that misses its package is skipped', async () => {
+  const repo = makeRepo({ files: { '.claude/hooks/src/x.ts': '// x\n' } });
+  ignoreModules(repo);
+  fakeFile(repo, '.claude/hooks/node_modules/.bin/esbuild', '#!/bin/sh\n');
+  fakeFile(repo, '.claude/hooks/node_modules/.bin/esbuild.cmd', '@echo off\r\n');
+  const { result, gateRuns } = await prePr(repo, { envCheck: envStep, skipCr: true, keepGoing: true, bodyText: featureBody(repo.head) });
+  assert.ok(result.lines.some((l) => /^FAIL env - ENV: hooks-vitest needs vitest\./.test(l)), result.lines.join('\n'));
+  assert.ok(gateRuns.includes('hooks-build'), 'the gate whose bin exists still runs');
+  assert.equal(gateRuns.includes('hooks-vitest'), false);
+  assert.ok(result.lines.some((l) => /^SKIP gate:hooks-vitest - not run: env failed/.test(l)));
+});
+
+test('EN3: a coordination change names a missing pg; with pg in place the step prints nothing and the gates run', async () => {
+  const repo = makeRepo({ files: { 'scripts/coordination/x.mjs': '// x\n' } });
+  ignoreModules(repo);
+  // The step reads NODE_PATH at call time as its last lookup: a shell, or the env step of the pre-pr run that tests this file, may set one.
+  const savedNodePath = process.env.NODE_PATH;
+  delete process.env.NODE_PATH;
+  let miss;
+  try { miss = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) }); } finally { if (savedNodePath !== undefined) process.env.NODE_PATH = savedNodePath; }
+  assert.ok(miss.result.lines.some((l) => /^FAIL env - ENV: coordination-db-tests needs pg\. Tried /.test(l)), miss.result.lines.join('\n'));
+  assert.equal(miss.gateRuns.includes('coordination-db-tests'), false);
+  fakeFile(repo, '.claude/hooks/node_modules/pg/package.json', JSON.stringify({ name: 'pg', main: 'index.js' }));
+  fakeFile(repo, '.claude/hooks/node_modules/pg/index.js', 'module.exports = {};\n');
+  fakeFile(repo, 'node_modules/typescript/package.json', JSON.stringify({ name: 'typescript', version: '1.0.0' }));
+  const ok = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) });
+  assert.equal(ok.result.lines.some((l) => /^\w+ env - /.test(l)), false, ok.result.lines.join('\n'));
+  assert.ok(ok.gateRuns.includes('coordination-db-tests'), ok.result.lines.join('\n'));
+});
+
+test('EN4: a drift NOTE never fails the run, and prints the line the plan names', async () => {
+  const repo = makeRepo();
+  const note = "installed typescript 5.9.3, lock says 7.0.2: run npm ci in .claude/hooks (Dave's yes)";
+  const { result } = await prePr(repo, { envCheck: ({ gates }) => ({ ...NO_ENV({ gates }), note }) });
+  assert.ok(result.lines.includes(`NOTE env - ${note}`), result.lines.join('\n'));
+  assert.equal(result.ok, true, result.lines.join('\n'));
+});
+
+test('EN5: the lockfile text is a FAIL on the env step and blocks the stamp', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo, { skipCr: true, envCheck: ({ gates }) => ({ ...NO_ENV({ gates }), fail: EN_FIX }) });
+  assert.ok(result.lines.includes(`FAIL env - ${EN_FIX}`), result.lines.join('\n'));
+  assert.equal(result.ok, false);
+  assert.equal(result.stampPath, null);
+});
+
+test('EN6: a gate child in a worktree gets the primary node_modules on NODE_PATH; the primary gets none', () => {
+  const repo = makeRepo();
+  ignoreModules(repo);
+  fakeFile(repo, '.claude/hooks/node_modules/.package-lock.json');
+  const wt = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-wt-')), 'wt');
+  git(repo.dir, 'worktree', 'add', '-q', '-b', 'en6-wt', wt);
+  const probe = (root, env) => PRE.defaultExec({ cmd: 'node', args: ['-e', 'process.stdout.write(process.env.NODE_PATH || "")'], cwd: root, root, timeoutMs: 30_000, ...(env ? { env } : {}) });
+  const inWt = probe(wt);
+  assert.equal(inWt.status, 0, inWt.stderr);
+  assert.ok(inWt.stdout.split(path.delimiter).includes(path.join(repo.dir, '.claude', 'hooks', 'node_modules')), `NODE_PATH was "${inWt.stdout}"`);
+  const inPrimary = probe(repo.dir);
+  assert.equal(inPrimary.stdout, process.env.NODE_PATH ?? '', 'the primary inherits its env unchanged');
+});
+
+test('EN7: a gate that fails with a missing package gets the ENV prefix; a missing relative import and a plain failure do not', () => {
+  const git0 = fakeGit({});
+  const gate = gateById('coordination-db-tests');
+  const run = (out) => runGate(gate, { root: REPO_ROOT, exec: execOut(1, out), git: git0 });
+  const pkg = run("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'pg' imported from x.mjs\n# fail 4\n");
+  assert.equal(pkg.status, 'FAIL');
+  assert.match(pkg.detail, /^ENV: exit 1: # fail 4\. This is the environment, not your change\. Fix: run `npm ci` in /);
+  assert.match(run("Error: Cannot find module 'pg'\ncode: 'MODULE_NOT_FOUND'\n# fail 4\n").detail, /^ENV: /);
+  assert.match(run("Error [ERR_MODULE_NOT_FOUND]: Cannot find module './gone.mjs' imported from x.mjs\n# fail 4\n").detail, /^exit 1: /);
+  assert.match(run('# fail 4\nAssertionError: expected 1\n').detail, /^exit 1: # fail 4$/);
+});
+
+test('EN8: the ratchet and the resolver tests are gates of their own surfaces', () => {
+  assert.deepEqual(gatesFor(['scripts/coordination/lane.mjs']).filter((g) => g.id === 'no-pg-lookup').map((g) => g.args[0]), ['scripts/ratchets/no-pg-lookup.mjs']);
+  assert.ok(gatesFor(['scripts/lib/resolve-deps.mjs']).some((g) => g.id === 'resolve-deps-tests'));
+  assert.equal(gatesFor(['docs/a.md']).some((g) => g.id === 'no-pg-lookup'), false);
 });
