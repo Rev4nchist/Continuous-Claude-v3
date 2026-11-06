@@ -15,15 +15,28 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+  console.log('usage: node scripts/coordination/migration-0005-proof.mjs\n'
+    + 'Proves migration 0005 on a throwaway lanes_pr1_* database. Needs a reachable Postgres and the pg package\n'
+    + '(set NODE_PATH to a folder that holds pg). Takes no other arguments. Exit 1 if a check fails, 2 if pg is missing.');
+  process.exit(0);
+}
+
 const WT = join(dirname(fileURLToPath(import.meta.url)), '..', '..').replace(/\\/g, '/');
-const OUT = `${WT}/.claude/cache/e2e/2026-11-06-migration-0005-proof.txt`;
+const OUT =`${WT}/.claude/cache/e2e/2026-11-06-migration-0005-proof.txt`;
 const TOOL = `${WT}/scripts/coordination/scratch-db.mjs`;
 const LANE_CLI = `${WT}/scripts/coordination/lane.mjs`;
 const SQL_0005 = `${WT}/apps/agentic-os/drizzle/0005_lane_reminders.sql`;
 const SQL_0005_DOWN = `${WT}/apps/agentic-os/drizzle/0005_down.sql`;
+let pg;
+try {
+  pg = createRequire(pathToFileURL(`${WT}/.claude/hooks/package.json`))('pg');
+} catch (e) {
+  console.error(`migration-0005-proof: the pg package is not available (${e.code || e.message}). Set NODE_PATH to a folder that holds pg.`);
+  process.exit(2);
+}
 mkdirSync(`${WT}/.claude/cache/e2e`, { recursive: true });
 writeFileSync(OUT, '');
-const pg = createRequire(pathToFileURL(`${WT}/.claude/hooks/package.json`))('pg');
 
 const mask = (s) => String(s).replace(/(postgresql:\/\/[^:]+:)[^@]+@/g, '$1***@');
 const log = (s = '') => { const t = mask(s); appendFileSync(OUT, t + '\n'); console.log(t); };
