@@ -1,7 +1,7 @@
 {
-  "commit": "62049c89c1eda2b26f52b2c0865aaf883a117210",
+  "commit": "f4456d4b7b8842c7e268da914585eca8307e3b7a",
   "working_tree_dirty": false,
-  "generated_at": "2026-11-06T12:21:34-06:00",
+  "generated_at": "2026-11-06T12:24:38-06:00",
   "scope": [
     ".claude/hooks",
     ".claude/rules-src",
@@ -92,7 +92,7 @@
         ".claude/scripts/lane.mjs"
       ],
       "files": 48,
-      "fingerprint": "348c119c10e560efbb87f0e081ec7497304524c83950987df79197b87cc3c69e"
+      "fingerprint": "82ae819e452bc372a93831fd6774842768392a9dc18c23902ec8c9a7653ed4c8"
     },
     "project-registry": {
       "path": ".claude/project-registry.json",
@@ -102,7 +102,7 @@
     "render-board": {
       "path": "scripts/coordination/render-board.mjs",
       "files": 1,
-      "fingerprint": "754699764642804777b949b91602fefeaf70bd6632bb2ee55e53e8ef0be8e382"
+      "fingerprint": "b7897ee98854480f5177521565cee9ae1ce19ebface32c5bd9a7e687c9ba2f7f"
     },
     "lane-artifact": {
       "path": ".claude/artifacts.json",

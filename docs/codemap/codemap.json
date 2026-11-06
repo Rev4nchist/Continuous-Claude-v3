@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-06T12:21:34-06:00",
-  "generated_from_commit": "62049c89c1eda2b26f52b2c0865aaf883a117210",
+  "generated_at": "2026-11-06T12:24:38-06:00",
+  "generated_from_commit": "f4456d4b7b8842c7e268da914585eca8307e3b7a",
   "scope": [
     ".claude/hooks",
     ".claude/rules-src",
