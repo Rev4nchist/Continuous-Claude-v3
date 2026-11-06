@@ -1,0 +1,163 @@
+{
+  "commit": "55d7926b37a7e69cd7dc88e8ca17fbd8ddd3e526",
+  "working_tree_dirty": false,
+  "generated_at": "2026-11-06T14:11:09-06:00",
+  "scope": [
+    ".claude/hooks",
+    ".claude/rules-src",
+    ".claude/rules-ondemand",
+    ".claude/skills",
+    ".claude/agents",
+    ".claude/plugins/ccv3-mods",
+    ".claude/scripts",
+    ".claude/settings.json.template",
+    ".claude/project-registry.json",
+    ".claude/artifacts.json",
+    "scripts",
+    "apps/agentic-os",
+    "opc/scripts/core",
+    "docker",
+    ".github",
+    "CONTEXT.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "README.md",
+    "COORDINATION.md"
+  ],
+  "excluded": [
+    "node_modules",
+    "dist",
+    "build",
+    ".git",
+    ".next",
+    "coverage",
+    ".claude/cache",
+    ".claude/worktrees",
+    ".sync-quarantine",
+    "_vendor",
+    ".claude/skills/_vendor",
+    ".claude/skills/_archive",
+    ".claude/skills/_sandbox",
+    ".claude/skills/_snapshots",
+    ".claude/skills/_eval",
+    "__pycache__",
+    ".venv",
+    "test-results",
+    "playwright-report",
+    "docs/codemap"
+  ],
+  "fingerprint_algorithm": "sha256(sorted(path NUL sha256(content)) joined by LF) over the node's files. A tracked, non-excluded file belongs to exactly one node: the node whose path or fingerprint_paths entry is the longest prefix of the file (an entry matches a file when equal or when the file is under it as a folder). A nested node therefore takes its files out of its parent. A missing file hashes as MISSING.",
+  "modules": {
+    "claude-code": {
+      "path": "scripts/lib/headless.mjs",
+      "files": 1,
+      "fingerprint": "ea31d2b17138fbdacadad98c9a1a945cc1e8a774aec326a5b662093140064093"
+    },
+    "settings-template": {
+      "path": ".claude/settings.json.template",
+      "files": 1,
+      "fingerprint": "e41066b4053350b5f8ba7a6e7093b7a6be55bc78114d45539e3ea457741f7bb7"
+    },
+    "hooks": {
+      "path": ".claude/hooks",
+      "files": 392,
+      "fingerprint": "18846838bab169c768dc9c8770830e1f1f4afeaa872cd0764ef0c0a4dedffe48"
+    },
+    "rules": {
+      "path": ".claude/rules-src",
+      "files": 9,
+      "fingerprint": "ae27daba62210fb3ca4028e5202fd89797028f446c69d2750c02cc5d941020f0"
+    },
+    "skills-agents": {
+      "path": ".claude/skills",
+      "fingerprint_paths": [
+        ".claude/agents"
+      ],
+      "files": 639,
+      "fingerprint": "2ed6759000ffaa8bf3637f9d17667e063dfc05a1fae00e572008df9a78d2ec78"
+    },
+    "sync-to-active": {
+      "path": "scripts/sync-to-active.sh",
+      "files": 1,
+      "fingerprint": "bd1961e898eb08142ed83ed44d19250ab3d0e39fb05c23c3eb4a1c466cd929ec"
+    },
+    "active-claude": {
+      "path": ".claude/templates",
+      "files": 3,
+      "fingerprint": "bcfe2ad0fd4c0465acb1081e1a45583d705c21a867d59a391a6621b9ae64bb36"
+    },
+    "lane-cli": {
+      "path": "scripts/coordination",
+      "fingerprint_paths": [
+        ".claude/scripts/lane.mjs"
+      ],
+      "files": 48,
+      "fingerprint": "82ae819e452bc372a93831fd6774842768392a9dc18c23902ec8c9a7653ed4c8"
+    },
+    "project-registry": {
+      "path": ".claude/project-registry.json",
+      "files": 1,
+      "fingerprint": "d2c36fe679d824f913429b083232d510235431a7ab5f94998f4218a535d801c5"
+    },
+    "render-board": {
+      "path": "scripts/coordination/render-board.mjs",
+      "files": 1,
+      "fingerprint": "b7897ee98854480f5177521565cee9ae1ce19ebface32c5bd9a7e687c9ba2f7f"
+    },
+    "lane-artifact": {
+      "path": ".claude/artifacts.json",
+      "files": 1,
+      "fingerprint": "a802315c5151fbaaba0f552cf5346838486b20e6c65e5673386456de6cf7e585"
+    },
+    "agentic-os": {
+      "path": "apps/agentic-os",
+      "files": 76,
+      "fingerprint": "4d3085584d3d0ef744e46cdc2d8771370000d11979f0abaf6f32cf72741e9cbe"
+    },
+    "postgres": {
+      "path": "docker/init-schema.sql",
+      "fingerprint_paths": [
+        "apps/agentic-os/drizzle",
+        "apps/agentic-os/src/db/schema",
+        "scripts/coordination/migrations"
+      ],
+      "files": 23,
+      "fingerprint": "1eceaa97797ac04a5c9608dbc6c954a8c893999676e3a61345a3a7d27efed356"
+    },
+    "opc-memory": {
+      "path": "opc/scripts/core",
+      "files": 63,
+      "fingerprint": "53b5af370a205ba0585a73202a3fda6386090de61f2bbc5738b0ac0f29d57581"
+    },
+    "github-scripts": {
+      "path": "scripts/github",
+      "files": 113,
+      "fingerprint": "62f0ee18c10e57f8715d7838ae60e746494fcf851f38fd163091ff4f5c6e02ed"
+    },
+    "ccv3-mods": {
+      "path": ".claude/plugins/ccv3-mods",
+      "files": 98,
+      "fingerprint": "52412afbcfe3f32d8858dd8371507e2cbfb98a1dd6fa366c56f41675cda47727"
+    },
+    "github": {
+      "path": ".github",
+      "files": 6,
+      "fingerprint": "ef8f37e82dc53258afba67eddd4ca0147be4b90026b574643ec48b4abe792024"
+    },
+    "scheduled-tasks": {
+      "path": ".claude/scripts/scheduled",
+      "files": 10,
+      "fingerprint": "a5f9d5d1ea9d4ab153fd44adfb966c26af59a77125cd843b6803aebfcb57d996"
+    },
+    "harness-doctor": {
+      "path": "scripts/harness-doctor.mjs",
+      "files": 1,
+      "fingerprint": "9365a0a3b03d41b4019c2fa56e49892a92587f45f115fd39f00d126c1014ca31"
+    },
+    "notion-bridge": {
+      "path": ".claude/skills/notion-bridge",
+      "files": 7,
+      "fingerprint": "9754276ae6518635cd9d92f941bc574db617f651bf176740ac8efc14ad170742"
+    }
+  }
+}
