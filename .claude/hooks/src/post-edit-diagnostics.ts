@@ -288,6 +288,9 @@ function runTscDiagnostics(filePath: string, projectDir: string, kind: 'ts' | 'j
       return;
     }
 
+    // Safe: the command is process.execPath, args are an array with no shell, and tsconfig is an
+    // absolute path found on disk (it cannot start with '-'). Dave approved this suppression 2026-11-05.
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
     const result = spawnSync(tsc.command, [...tsc.args, '-p', tsconfig], {
       cwd: tsconfigDir,
       timeout: TSC_TIMEOUT_MS,

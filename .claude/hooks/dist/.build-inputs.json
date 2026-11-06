@@ -59,7 +59,7 @@
     "permission-auto-allow.ts": "789a74e7ea94c1c68a57a44907a777a0b020abe04e67b8c86eeb5a9e1ba1f683",
     "plan-exit-premortem-prompt.ts": "12c1932b34567dc94cb9b589f28318919aa7be5295f636a7eb1430cc2e854d9b",
     "plan-mode-approval-gate.ts": "59fa06b59f4b98d820d2cee35dd3fb7b1a50065b29ea45fd9fe9d32d9b150ba0",
-    "post-edit-diagnostics.ts": "c207d69ab6e9a457bc4cd291a3e4a8fb3cfee4e3382076428db2124ac1c35ff7",
+    "post-edit-diagnostics.ts": "e07c427a2b439015872262a2245929ade3cfbd515048c52b98538e1193fcb254",
     "post-plan-roadmap.ts": "aa3e6fa402083a7534ab12fe6ff746fb186aa09082ebacfc73f8457176d95fb6",
     "pr-opened-review-loop.ts": "9680ef369e6d89043ea45b576612c5e958bbeb2eb4b565861ac2c39dd478a2ba",
     "prd-roadmap-sync.ts": "b1a91a378e106f0000632965adb343b6049efb187f9bf568ccb58dc735789e44",
