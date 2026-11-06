@@ -22,6 +22,10 @@
  *   - the page has no stamp, or the stamp names the wrong board
  *   - an unknown key, or a cwd with no board, writes a page instead of exiting 1
  *   - a half-written page is left at the target (the write must be temp + rename)
+ *   - the page width cap is not one shared variable (header and board drift apart), or is not 1840px
+ *   - the Priorities grid is not 1 column to 720px, 3 from 721px and 5 from 1360px
+ *   - a Priorities list does not scroll inside itself from 721px, or the phone loses normal page scrolling
+ *   - the phone header pins the counters again (the counters sit inside the pinned row), or the Activity feed pushes the page sideways
  *   - the machine-wide sections do not say so
  *   - the folded-project SQL drifts from lane.mjs (the peer rule must match)
  */
@@ -566,6 +570,64 @@ describe('render-board.mjs against a scratch database', () => {
     assert.equal(r.code, 2, r.all);
     assert.match(r.err, /unknown argument: --projct/);
     assert.equal(fs.existsSync(path.join(E2E.rootC, '--projct')), false);
+  });
+
+  // Layout rules. The measured behaviour (widths, column counts, scroll, pinned header) is the Edge run in
+  // .claude/cache/e2e/2026-11-06-board-wide.json; these pin the CSS and markup that produce it. Each fails if its rule is reverted.
+  describe('page layout (emitted CSS and markup)', () => {
+    let html = '';
+    let css = '';
+    before(() => {
+      const out = path.join(E2E.tmp, 'layout.html');
+      assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+      html = fs.readFileSync(out, 'utf8');
+      css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
+    });
+
+    it('one variable sets the width of both .wrap and .top-in, capped at 1840px', () => {
+      assert.match(css, /:root \{ --page-w:min\(1840px,100%\); \}/);
+      assert.match(css, /\.wrap \{ width:var\(--page-w\);/);
+      assert.match(css, /\.top-in \{ width:var\(--page-w\);/);
+      assert.ok(!css.includes('min(1240px'), 'the old 1240px cap is still in the CSS');
+    });
+
+    it('the Lanes and Activity sections keep a 1240px cap while the board is wide; the board and Right now stay uncapped', () => {
+      assert.match(css, /\.sec-cap \{ max-width:1240px; \}/);
+      assert.match(html, /<section class="sec-cap">\s*<div class="sec-head">\s*<h2>Lanes<\/h2>/);
+      assert.match(html, /<section class="sec-cap">\s*<div class="sec-head"><h2>Activity<\/h2>/);
+      assert.equal((html.match(/<section class="sec-cap">/g) || []).length, 2, 'only Lanes and Activity are capped');
+    });
+
+    it('the board is 3 columns by default, 5 from 1360px and 1 up to 720px; the old 1080px board rule is gone', () => {
+      assert.match(css, /\.kb-board \{[^}]*grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+      assert.match(css, /@media \(min-width:1360px\) \{ \.kb-board \{ grid-template-columns:repeat\(5,minmax\(0,1fr\)\); \} \}/);
+      assert.match(css, /@media \(max-width:720px\) \{\s*\.kb-board \{ grid-template-columns:minmax\(0,1fr\); \}/);
+      assert.doesNotMatch(css, /max-width:1080px\) \{ \.kb-board/);
+    });
+
+    it('each list scrolls inside itself from 721px up, and only there (the phone scrolls the page)', () => {
+      assert.match(css, /@media \(min-width:721px\) \{ \.kb-list \{ max-height:calc\(100vh - 190px\); overflow-y:auto; \} \}/);
+      assert.doesNotMatch(/\.kb-list \{[^}]*\}/.exec(css)[0], /max-height|overflow/, 'the base .kb-list rule must not scroll on the phone');
+    });
+
+    it('on the phone only .top-row is sticky and header.top gives up its box; on a wide screen the header stays sticky', () => {
+      assert.match(css, /header\.top \{ position:sticky; top:0;/);
+      const phone = /@media \(max-width:720px\) \{\s*header\.top, \.top-in \{ display:contents; \}\s*\.top-row \{ position:sticky; top:0;[^}]*\}/.exec(css)?.[0];
+      assert.ok(phone, 'the phone header block is missing');
+      assert.match(css, /\.top-row \{ display:contents; \}/, 'on a wide screen .top-row must add no box');
+    });
+
+    it('the counters sit outside .top-row, so they can scroll away on the phone', () => {
+      const row = /<div class="top-row">([\s\S]*?)<\/div>\s*<div class="counters">/.exec(html)?.[1];
+      assert.ok(row, 'the .top-row block is missing');
+      assert.ok(row.includes('class="brand"') && row.includes('id="tt"'), 'the brand and the theme button belong in .top-row');
+      assert.ok(!row.includes('class="ctr'), 'a counter is inside the pinned row');
+      assert.ok(html.indexOf('class="counters"') > html.indexOf('class="top-row"'));
+    });
+
+    it('an Activity row cannot widen the page: its text column can shrink and breaks long tokens', () => {
+      assert.match(css, /\.feed div \{[^}]*grid-template-columns:52px 78px minmax\(0,1fr\);[^}]*overflow-wrap:anywhere/);
+    });
   });
 
   it('the machine-wide sections say so on every page', () => {
