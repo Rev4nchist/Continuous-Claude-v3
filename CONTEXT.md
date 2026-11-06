@@ -29,7 +29,9 @@
   registrations; read the count before the verdict.
 - **Probe**: a script that measures live behaviour (`*-probe.mjs`), as opposed to reading code.
 - **Dependency fallback**: a script finds a package in its own checkout, then the primary checkout, then NODE_PATH
-  (`scripts/lib/resolve-deps.mjs`). A miss is one `ENV:` message.
+  (`scripts/lib/resolve-deps.mjs`). A miss is one `ENV:` message. The **shared store link**
+  (`.claude/worktrees/node_modules`) points at the primary's hooks `node_modules` for every nested worktree.
+  Check it with `scripts/worktree/shared-deps.mjs --check`.
 
 ## Coordination
 

@@ -197,6 +197,8 @@ export const SURFACES = [
   { id: 'ratchets-scripts', globs: ['scripts/ratchets/**', '.github/workflows/ccv3-checks.yml'], gates: [nodeTest('ratchets-tests', 'scripts/ratchets/*.test.mjs')] },
   // scripts/lib holds the shared dependency resolver. Its tests build real git worktrees under the temp folder.
   { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/resolve-deps.test.mjs')] },
+  // scripts/worktree holds the shared store link script. Its tests build fake primaries and nested git worktrees under the temp folder.
+  { id: 'worktree-scripts', globs: ['scripts/worktree/**'], gates: [nodeTest('shared-deps-tests', 'scripts/worktree/shared-deps.test.mjs')] },
   // No script carries its own createRequire lookup of pg: scripts/lib/resolve-deps.mjs is the one (it also tries the primary checkout).
   { id: 'no-pg-lookup', globs: ['scripts/**/*.mjs', 'scripts/**/*.js', 'scripts/**/*.cjs', '.claude/scripts/**'], gates: [cheapGate('no-pg-lookup', 'scripts/ratchets/no-pg-lookup.mjs')] },
   // A surface row, not an always gate: a docs-only PR does not need Docker. Docker not running is a FAIL (D3), never a NOTE or SKIP.

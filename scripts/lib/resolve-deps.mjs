@@ -47,13 +47,21 @@ const samePath = (a, b) => {
  * primary, a CI clone) maps to itself. A folder that is not a git repo, or a failed git call, maps to itself.
  */
 export function primaryRoot(from) {
+  return primaryRootStrict(from) ?? path.resolve(from);
+}
+
+/**
+ * Like primaryRoot, but a folder that is not a git repo, or a failed git call, gives null instead of the input.
+ * A guard that must not fail open (shared-deps.mjs apply and unlink) uses this one.
+ */
+export function primaryRootStrict(from) {
   const start = path.resolve(from);
   // --path-format=absolute (git 2.31+): from a subfolder of a linked worktree the plain form can print a wrong relative path.
   const ask = (args) => spawnSync('git', ['-C', start, 'rev-parse', ...args, '--git-common-dir'], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
   let r = ask(['--path-format=absolute']);
   if (r.status !== 0) r = ask([]);
   const common = r.status === 0 ? String(r.stdout ?? '').trim() : '';
-  return common ? path.resolve(start, common, '..') : start;
+  return common ? path.resolve(start, common, '..') : null;
 }
 
 const anchorDirs = (root) => ANCHOR_SUBDIRS.map((parts) => path.join(path.resolve(root), ...parts));
@@ -132,14 +140,21 @@ export function resolveDep(name, opts = {}) {
 }
 
 /**
- * The fix text of an ENV message. The shared store does not exist yet, so the two ways are the install in the
- * primary and the hand junction for one worktree. The junction needs no recursive delete, ever: land-pr unlinks it.
+ * The fix text of an ENV message. Order: check the shared store link in the primary, then apply it (Dave's yes,
+ * one link, never inside a worktree). `npm ci` is for a primary with no install. The hand junction is a fallback
+ * for a worktree outside the primary. It needs no recursive delete, ever: land-pr unlinks it. Text only: this
+ * file does not import scripts/worktree/shared-deps.mjs.
  */
 export function depsHint(name, tried = [], primary = '<primary>') {
   const hooks = path.join(primary, '.claude', 'hooks');
   const store = path.join(hooks, 'node_modules');
-  return `run \`npm ci\` in ${hooks} (needs Dave's yes). In a worktree you can instead link the primary's packages: `
-    + `New-Item -ItemType Junction -Path .claude\\hooks\\node_modules -Target ${store} `
+  return `run \`node scripts/worktree/shared-deps.mjs --check\` in ${primary}. `
+    + 'If the store link is absent, ask Dave, then run `node scripts/worktree/shared-deps.mjs --apply` in the primary '
+    + '(one shared link, never inside a worktree). '
+    + `If the primary has no install, run \`npm ci\` in ${hooks} first (needs Dave's yes). `
+    + 'Fallback only for a worktree outside the primary, link its packages by hand. '
+    + `Windows: New-Item -ItemType Junction -Path .claude\\hooks\\node_modules -Target ${store} `
+    + `; macOS or Linux: ln -s ${store} .claude/hooks/node_modules `
     + '(never delete a junction recursively; land-pr unlinks it)';
 }
 
