@@ -160,4 +160,12 @@ function main(argv) {
   return r.ok ? 0 : 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+// Compare real paths: Node sets import.meta.url to the real path, but argv[1] keeps a symlink or junction as typed.
+function isEntryScript() {
+  if (!process.argv[1]) return false;
+  const self = fileURLToPath(import.meta.url);
+  const real = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+  return real(process.argv[1]) === real(self);
+}
+
+if (isEntryScript()) process.exitCode = main(process.argv.slice(2));

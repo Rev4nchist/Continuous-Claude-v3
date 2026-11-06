@@ -346,6 +346,18 @@ test('CLI: --help exits 0 and names the flags', () => withFake((f) => {
   for (const flag of ['--check', '--apply', '--unlink']) assert.ok(r.stdout.includes(flag), r.stdout);
 }));
 
+test('CLI: run through a symlinked or junctioned folder still runs main()', () => withFake((f) => {
+  const viaDir = path.join(f.root, 'viadir');
+  f.link(path.join(f.primary, 'scripts', 'worktree'), viaDir); // cleanup() removes the link first
+  try {
+    const r = spawnSync(process.execPath, [path.join(viaDir, 'shared-deps.mjs'), '--help'], { encoding: 'utf8', windowsHide: true, cwd: f.primary, timeout: 60000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stdout.includes('--check'), `no help text through the link: ${JSON.stringify(r.stdout)}`);
+    const c = spawnSync(process.execPath, [path.join(viaDir, 'shared-deps.mjs'), '--check'], { encoding: 'utf8', windowsHide: true, cwd: f.primary, timeout: 60000 });
+    assert.match(c.stdout, /^STORE /, `--check printed nothing through the link: ${JSON.stringify(c.stdout)}`);
+  } finally { dropLink(viaDir); }
+}));
+
 test('CLI: no args exits 2 with one short usage message and no stack', () => withFake((f) => {
   const r = cli(f.primary);
   assert.equal(r.status, 2);
