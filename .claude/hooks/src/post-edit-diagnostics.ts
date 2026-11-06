@@ -22,6 +22,8 @@ import {
 
 /** tsc gets this long; the registration timeout (60 s) leaves room for startup and telemetry. */
 const TSC_TIMEOUT_MS = 45000;
+/** Room for a large error cascade; formatTsDiagnostics caps what reaches Claude. */
+const TSC_MAX_BUFFER = 64 * 1024 * 1024;
 
 interface HookInput {
   tool_name: string;
@@ -294,6 +296,8 @@ function runTscDiagnostics(filePath: string, projectDir: string, kind: 'ts' | 'j
     const result = spawnSync(tsc.command, [...tsc.args, '-p', tsconfig], {
       cwd: tsconfigDir,
       timeout: TSC_TIMEOUT_MS,
+      // A broken core type can print tens of thousands of errors; the 1 MiB default kills tsc.
+      maxBuffer: TSC_MAX_BUFFER,
       encoding: 'utf-8',
       windowsHide: true,
     });

@@ -128,7 +128,7 @@ function runHook(projectDir: string, filePath: string, extraEnv: Record<string, 
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('VITEST')) env[k] = v;
   Object.assign(env, { CLAUDE_PROJECT_DIR: projectDir, COORDINATION_SESSION_ID: 'ped-ts-sess', CCV3_BUS_OFF: '1', CCV3_DAEMON_NO_AUTOSTART: '1' }, extraEnv);
   const r = spawnSync('node', [HOOK_PATH], {
-    input: JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: filePath } }),
+    input: JSON.stringify({ session_id: 'ped-ts-sess', tool_name: 'Edit', tool_input: { file_path: filePath } }),
     encoding: 'utf-8', timeout: 60000, env,
   });
   return { code: r.status, out: JSON.parse((r.stdout || '{}').trim() || '{}') };
@@ -162,5 +162,23 @@ describe('6-7. built hook, end to end', () => {
     writeFileSync(join(proj, 'tsconfig.json'), '{}');
     const broken = runHook(proj, join(proj, 'src', 'a.ts'), { CCV3_TSC: join(tmp, 'missing', 'tsc') });
     expect(broken.out.hookSpecificOutput?.additionalContext ?? '').toMatch(/did not run/i);
+  }, 70000);
+
+  it('keeps the edited-file errors when tsc prints more than 1 MiB (error cascade)', () => {
+    // CodeRabbit CLI finding: spawnSync's default maxBuffer (1 MiB) kills tsc on a big cascade.
+    const proj = join(tmp, 'proj');
+    mkdirSync(join(proj, 'src'), { recursive: true });
+    writeFileSync(join(proj, 'tsconfig.json'), '{}');
+    const fake = join(tmp, 'fake-tsc.js');
+    writeFileSync(fake, [
+      "const pad = 'x'.repeat(120);",
+      "let s = 'src/edited.ts(1,1): error TS2322: edited file error\\n';",
+      "for (let i = 0; i < 15000; i++) s += `src/f${i}.ts(1,1): error TS2322: cascade ${pad}\\n`;",
+      'process.stdout.write(s); process.exitCode = 2;',
+    ].join('\n'));
+    const r = runHook(proj, join(proj, 'src', 'edited.ts'), { CCV3_TSC: fake });
+    const ctx = r.out.hookSpecificOutput?.additionalContext ?? '';
+    expect(ctx).toContain('1 in the edited file');
+    expect(ctx).toContain('15000 in 15000 other files');
   }, 70000);
 });

@@ -1144,6 +1144,7 @@ function formatTsDiagnostics(diags, editedFile, cwd, tsconfigLabel) {
 
 // src/post-edit-diagnostics.ts
 var TSC_TIMEOUT_MS = 45e3;
+var TSC_MAX_BUFFER = 64 * 1024 * 1024;
 function recordBusFilesInPlay(filePath) {
   try {
     mutateBus(void 0, (b) => {
@@ -1288,6 +1289,8 @@ function runTscDiagnostics(filePath, projectDir, kind) {
     const result = spawnSync2(tsc.command, [...tsc.args, "-p", tsconfig], {
       cwd: tsconfigDir,
       timeout: TSC_TIMEOUT_MS,
+      // A broken core type can print tens of thousands of errors; the 1 MiB default kills tsc.
+      maxBuffer: TSC_MAX_BUFFER,
       encoding: "utf-8",
       windowsHide: true
     });
