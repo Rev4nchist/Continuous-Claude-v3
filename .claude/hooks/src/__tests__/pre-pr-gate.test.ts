@@ -403,6 +403,28 @@ describe('K2: rate-limited and no-changes skips', () => {
   });
 });
 
+describe('K3: the docs-only skip', () => {
+  const docsOnly = (over: Record<string, unknown> = {}) => stampJson({ cr_skipped: true, cr_skip_reason: 'docs-only', cr_docs_only: true, docs_verified: true, ...over });
+
+  it('K3a: docs-only is allowed when the stamp has cr_docs_only true and docs_verified true', () => {
+    expect(decide(input(CREATE[0]), deps({ stamp: docsOnly() })).action).toBe('allow');
+  });
+
+  it('K3b: docs-only without cr_docs_only true, or without docs_verified true, is denied with a reason that names the fields', () => {
+    for (const over of [{ cr_docs_only: undefined }, { cr_docs_only: false }, { cr_docs_only: 'true' }, { docs_verified: undefined }, { docs_verified: false }, { docs_verified: 1 }]) {
+      const d = decide(input(CREATE[0]), deps({ stamp: docsOnly(over) }));
+      expect(d.action, JSON.stringify(over)).toBe('deny');
+      expect(d.action === 'deny' && d.reason, JSON.stringify(over)).toMatch(/docs-only.*cr_docs_only.*docs_verified/);
+    }
+  });
+
+  it('K3c: the flags do not excuse another reason, and no-changes stays denied', () => {
+    for (const r of ['no-changes', 'flag', 'earlier-step-failed', 'cli-error']) {
+      expect(decide(input(CREATE[0]), deps({ stamp: docsOnly({ cr_skip_reason: r }) })).action, r).toBe('deny');
+    }
+  });
+});
+
 describe('B: the pushed head and the body file', () => {
   it('B1: a pushed head (refs/remotes/fork/<branch>) must equal the stamped head', () => {
     const other = 'e'.repeat(40);
