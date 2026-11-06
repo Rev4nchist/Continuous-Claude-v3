@@ -94,15 +94,20 @@ errors could destroy a peer session's work. Do NOT reach for it reflexively.**
   separate stuck from working, so "a bash doing real work is never touched" does not
   hold. A read-only simulation on 2026-08-17 found `-Force` would have tree-killed two
   live peer-session shells.
+- **Retired 2026-11-05.** `reap.ps1` is now list-only. The `-Force` switch, the kill loop and
+  the `Stop-ProcessTree` dot-source are removed, and passing `-Force` is an unknown-parameter
+  error. The `repro.ps1` circuit breaker no longer calls it. It stops only the process trees that
+  `repro.ps1` started. Rule: `reap.ps1` only lists. Kill by hand only after you prove the PID
+  owner by its parent chain.
 
 > **Superseded example (note added 2026-09-23).** The census command below is kept as recorded.
 > Do not copy it: it hard-codes one profile path and has no trailing separator, so a sibling such
 > as `...\GitHubDesktop\` would match. Use the current version in
 > `.claude/rules-src/windows-platform.md`, which resolves the active Git root with a trailing `\`.
 
-**Recovery, revised.** The dry run (`pwsh -File scripts/msys/reap.ps1`, no `-Force`) is
-safe to execute — the kill is gated at `:64-67` — but read its output as incomplete,
-never as an inventory. Census by path instead, which sees every MSYS binary:
+**Recovery, revised.** `pwsh -File scripts/msys/reap.ps1` is safe to execute. It only lists
+and never kills (since 2026-11-05 it has no `-Force`). Read its output as incomplete, never as
+an inventory. Census by path instead, which sees every MSYS binary:
 
 ```powershell
 $g='C:\Users\david.hayes\AppData\Local\Programs\Git'

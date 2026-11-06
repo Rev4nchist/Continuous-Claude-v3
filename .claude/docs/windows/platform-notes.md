@@ -95,9 +95,10 @@ bash, so every commit can hit it.
   It retries only on the MSYS signature (up to 4 attempts, ~6 s apart), never on a real git error,
   and logs to `~/.claude/logs/msys-events.jsonl`. Read-only git does not need it.
 - **When the Bash tool hangs, use the PowerShell tool** (next section).
-- **Never `taskkill /T` and never `scripts/msys/reap.ps1 -Force`.** Both have been shown to kill
-  live peer-session shells (PIDs are reused; low CPU does not mean stuck). To look for stuck MSYS
-  processes, census by path, read-only:
+- **Never `taskkill /T`. `scripts/msys/reap.ps1` only lists; it never kills.** Its `-Force` switch
+  was retired on 2026-11-05 after it was shown to select live peer-session shells (PIDs are reused;
+  low CPU does not mean stuck). Kill by hand only after you prove the PID owner by its parent chain.
+  To look for stuck MSYS processes, census by path, read-only:
   ```powershell
   $g=(Split-Path (Split-Path (Get-Command git).Source)).TrimEnd('\') + '\'   # the active Git root, with a trailing \
   Get-CimInstance Win32_Process | ? { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($g,'OrdinalIgnoreCase') } |

@@ -121,10 +121,21 @@ try {
         # dozens of blocked bash processes -- it did, twice, before this existed.
         # A measurement tool that degrades the system it measures is not a
         # measurement tool.
+        #
+        # The breaker stops ONLY the process trees this run started: the trial's
+        # $procs and the warm keeper. It never kills a bash it did not start.
+        # The live count includes peer-session shells, and a shell that merely
+        # waits looks the same as a stuck one, so the count is a reason to stop,
+        # not a list of targets. A process that already exited is skipped.
         $alive = @(Get-Process bash -ErrorAction SilentlyContinue)
         if ($alive.Count -gt $MaxBashAlive) {
-            Write-Warning "[repro] ABORT: $($alive.Count) bash processes alive (cap $MaxBashAlive). Reaping and stopping."
-            & pwsh -File (Join-Path $PSScriptRoot 'reap.ps1') -Force -OlderThanSeconds 30 2>&1 | Out-Null
+            Write-Warning "[repro] ABORT: $($alive.Count) bash processes alive (cap $MaxBashAlive). Stopping only the process trees this run started; other bash processes are left alone."
+            $own = @($procs)
+            if ($warmProc) { $own += $warmProc }
+            foreach ($p in $own) {
+                if ($p.HasExited) { continue }
+                $null = Stop-ProcessTree -RootId $p.Id
+            }
             $results += [pscustomobject]@{ trial = $t; crashed = $true; aborted = $true }
             break
         }
