@@ -1,4 +1,5 @@
-import { bigint, bigserial, index, integer, jsonb, text, timestamp } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { bigint, bigserial, check, index, integer, jsonb, text, timestamp } from 'drizzle-orm/pg-core';
 import { agenticOs } from './project';
 
 /**
@@ -146,6 +147,36 @@ export const lane = agenticOs.table(
     /** What would make this lane done. The acceptance test, in a sentence. */
     doneWhen: text('done_when'),
 
+    /**
+     * TIMED REMINDERS (migration 0005). A reminder is a lane with `due_at` set. All seven
+     * columns are nullable with no default, so the migration changes only catalog metadata
+     * and every row written before it, or by a writer that has never heard of reminders,
+     * stays a plain lane. Design: .claudedocs/2026-11-06-lane-reminders-design.md.
+     *
+     * When the reminder fires. NULL means the lane is not a reminder.
+     */
+    dueAt: timestamp('due_at', { withTimezone: true }),
+
+    /** Lane importance band, P0 | P1 | P2, 1:1 with the Notion Priority. NULL means Unsorted.
+     *  Kept apart from `priority`, which stays the drag rank and which kanban sync rewrites to 1..n.
+     *  Reminder order key: band, due_at, priority, id. */
+    band: text('band'),
+
+    /** scheduled | due | needs_dave | failed | acked. NULL means not a reminder. */
+    remindState: text('remind_state'),
+
+    /** Set once by the atomic fire UPDATE (`WHERE remind_state = 'scheduled'`). Cleared by a snooze. */
+    firedAt: timestamp('fired_at', { withTimezone: true }),
+
+    /** An allowlist id, never a shell string. NULL means notify only. */
+    actionId: text('action_id'),
+
+    /** The Notion row for this reminder. NULL means the row must be created. */
+    notionPageId: text('notion_page_id'),
+
+    /** The row needs a Notion sync when `updated_at` is newer than this. */
+    notionSyncedAt: timestamp('notion_synced_at', { withTimezone: true }),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -154,6 +185,13 @@ export const lane = agenticOs.table(
     index('lane_owner_idx').on(t.ownerSessionId),
     index('lane_project_track_priority_idx').on(t.projectKey, t.track, t.priority),
     index('lane_project_state_priority_idx').on(t.projectKey, t.state, t.priority, t.id),
+    // Partial: it holds only open reminders, so it stays tiny however many plain lanes exist.
+    index('lane_due_idx')
+      .on(t.projectKey, t.dueAt)
+      .where(sql`${t.dueAt} IS NOT NULL AND ${t.state} <> 'done'`),
+    // NULL passes a CHECK, so a lane that is not a reminder needs no value.
+    check('lane_band_check', sql`${t.band} IN ('P0','P1','P2')`),
+    check('lane_remind_state_check', sql`${t.remindState} IN ('scheduled','due','needs_dave','failed','acked')`),
     // No unique index on (project_key, id): id is the primary key, so such an index
     // could never reject a row the primary key had not already rejected.
   ],
