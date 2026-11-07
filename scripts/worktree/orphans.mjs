@@ -77,7 +77,7 @@ const localStamp = (ms) => {
 };
 
 /** The one PowerShell line Dave could paste. Text only: nothing here runs it. */
-export const removeCommand = (dir) => `Remove-Item -LiteralPath '${dir.replace(/'/g, "''")}' -Recurse -Force`;
+export const removeCommand = (dir) => `Remove-Item -LiteralPath '${dir.replace(/['‘’‚‛]/g, (c) => c + c)}' -Recurse -Force`;
 
 // ---- find the orphans ----
 export function listedWorktrees(root) {
@@ -128,25 +128,41 @@ export function scanFolder(dir) {
   return s;
 }
 
-/** { branch, dirty, merged } for a folder with its own repo, or null when git cannot answer for that folder alone. */
+/** true, false, or null (git cannot say): is the commit an ancestor of main in the primary repo? A commit the primary lacks is not in main. */
+function mergedIntoMain(sha, root, main) {
+  if (!runGit(root, ['cat-file', '-e', `${sha}^{commit}`]).ok) return false;
+  const anc = runGit(root, ['merge-base', '--is-ancestor', sha, main]);
+  return anc.status === 0 ? true : anc.status === 1 ? false : null;
+}
+
+const lineList = (out) => out.split(/\r?\n/).filter((l) => l.trim());
+
+/**
+ * Facts about a folder with its own repo, or null when git cannot answer for that folder alone.
+ *   dirty            tracked changes and untracked files
+ *   ignored          ignored files and folders (.env, build output): status hides them, a delete loses them
+ *   stashes          entries in the stash list
+ *   unmergedBranches local branches whose tip is not in main
+ * A count of null means that git call failed. decide() keeps the folder then.
+ */
 export function gitFacts(dir, root, main = 'main') {
   const top = runGit(dir, ['rev-parse', '--show-toplevel']);
   if (!top.ok || pathKey(top.out) !== pathKey(dir)) return null;
-  const status = runGit(dir, ['status', '--porcelain']);
+  const status = runGit(dir, ['status', '--porcelain', '--ignored']);
   if (!status.ok) return null;
-  const dirty = status.out.split(/\r?\n/).filter((l) => l.trim()).length;
+  const lines = lineList(status.out);
+  const ignored = lines.filter((l) => l.startsWith('!!')).length;
+  const dirty = lines.length - ignored;
   const branch = runGit(dir, ['branch', '--show-current']).out || '(detached)';
   const head = runGit(dir, ['rev-parse', 'HEAD']);
-  let merged = null;
-  if (head.ok) {
-    // A commit the primary repo does not have cannot be in main.
-    if (!runGit(root, ['cat-file', '-e', `${head.out}^{commit}`]).ok) merged = false;
-    else {
-      const anc = runGit(root, ['merge-base', '--is-ancestor', head.out, main]);
-      merged = anc.status === 0 ? true : anc.status === 1 ? false : null;
-    }
-  }
-  return { branch, dirty, merged };
+  const merged = head.ok ? mergedIntoMain(head.out, root, main) : null;
+  const stash = runGit(dir, ['stash', 'list']);
+  const tips = runGit(dir, ['for-each-ref', '--format=%(objectname)', 'refs/heads']);
+  return {
+    branch, dirty, merged, ignored,
+    stashes: stash.ok ? lineList(stash.out).length : null,
+    unmergedBranches: tips.ok ? lineList(tips.out).filter((sha) => mergedIntoMain(sha, root, main) !== true).length : null,
+  };
 }
 
 // ---- lanes ----
@@ -193,6 +209,10 @@ export function decide({ scan, git, ageMs, lane }) {
   if (git.dirty > 0) return keep(`has data (${git.dirty} uncommitted change(s))`);
   if (git.merged === false) return keep('has data (commits not in main)');
   if (git.merged === null) return keep('has data (cannot tell if merged into main)');
+  if ([git.ignored, git.stashes, git.unmergedBranches].includes(null)) return keep('has data (cannot read ignored files, stashes or branches)');
+  if (git.ignored > 0) return keep(`has data (${git.ignored} ignored file(s) or folder(s))`);
+  if (git.stashes > 0) return keep(`has data (${git.stashes} stash entr${git.stashes === 1 ? 'y' : 'ies'})`);
+  if (git.unmergedBranches > 0) return keep(`has data (${git.unmergedBranches} local branch(es) not in main)`);
   return { verdict: 'candidate', reason: 'clean and merged into main' };
 }
 
@@ -221,7 +241,7 @@ export function buildReport({ root, now = Date.now(), lanes = null, main = 'main
 export function formatReport(r) {
   const L = [`ORPHANS under ${r.worktreesDir}  (dry run: nothing is deleted)`, ''];
   for (const o of r.orphans) {
-    const g = o.git ? `branch ${o.git.branch}, ${o.git.dirty} dirty, merged into main: ${o.git.merged ?? 'unknown'}` : o.hasGit ? 'unknown (git cannot read it for this folder alone)' : 'n/a';
+    const g = o.git ? `branch ${o.git.branch}, ${o.git.dirty} dirty, merged into main: ${o.git.merged ?? 'unknown'}, ignored: ${o.git.ignored ?? '?'}, stashes: ${o.git.stashes ?? '?'}, branches not in main: ${o.git.unmergedBranches ?? '?'}` : o.hasGit ? 'unknown (git cannot read it for this folder alone)' : 'n/a';
     L.push(o.name,
       `  age: ${humanAge(r.now - o.newestMs)} (newest change ${localStamp(o.newestMs)})`,
       `  size: ${humanSize(o.bytes)} (${o.bytes.toLocaleString('en-US')} bytes), files: ${o.files}, links: ${o.links}`,

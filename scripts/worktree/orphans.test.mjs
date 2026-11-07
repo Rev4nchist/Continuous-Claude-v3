@@ -99,6 +99,20 @@ function makeFake() {
   git(path.join(wt, 'git-unmerged'), 'add', '-A');
   git(path.join(wt, 'git-unmerged'), 'commit', '-q', '--no-verify', '-m', 'unmerged work');
 
+  // Clean status and HEAD merged into main, but the repo still holds work that only this folder has.
+  clone('git-stash');
+  put(path.join(wt, 'git-stash', 'README.md'), 'edited then stashed\n');
+  git(path.join(wt, 'git-stash'), 'stash', 'push', '-q');
+  clone('git-ignored');
+  put(path.join(wt, 'git-ignored', '.git', 'info', 'exclude'), '.env\n');
+  put(path.join(wt, 'git-ignored', '.env'), 'SECRET=1\n');
+  clone('git-side');
+  git(path.join(wt, 'git-side'), 'switch', '-q', '-c', 'side');
+  put(path.join(wt, 'git-side', 'side.txt'), 'side\n');
+  git(path.join(wt, 'git-side'), 'add', '-A');
+  git(path.join(wt, 'git-side'), 'commit', '-q', '--no-verify', '-m', 'side work');
+  git(path.join(wt, 'git-side'), 'switch', '-q', 'main');
+
   const cleanup = () => { dropLinks(base); rmSync(base, { recursive: true, force: true }); };
   return { base, primary, wt, store, cleanup };
 }
@@ -112,7 +126,7 @@ test('lists only real orphans, and keeps the live worktree, the link and plain f
   try {
     const r = buildReport({ root: f.primary, now: farFuture(), lanes: LANES });
     const names = r.orphans.map((o) => o.name).sort();
-    assert.deepEqual(names, ['data-old', 'empty-old', 'fake-git', 'git-clean', 'git-dirty', 'git-unmerged', 'has-link', 'lane-empty', 'tldr-only']);
+    assert.deepEqual(names, ['data-old', 'empty-old', 'fake-git', 'git-clean', 'git-dirty', 'git-ignored', 'git-side', 'git-stash', 'git-unmerged', 'has-link', 'lane-empty', 'tldr-only']);
     assert.ok(!names.includes('live'), 'the in-flight worktree is never an orphan');
     assert.ok(!names.includes('node_modules'));
     assert.deepEqual(r.plainFiles, ['kp.bak']);
@@ -186,6 +200,25 @@ test('git orphans: clean and merged is a candidate; dirty or unmerged is kept', 
   } finally { f.cleanup(); }
 });
 
+test('git orphans holding a stash, an ignored file or an unmerged side branch are kept', () => {
+  const f = makeFake();
+  try {
+    const o = byName(buildReport({ root: f.primary, now: farFuture(), lanes: LANES }));
+    for (const name of ['git-stash', 'git-ignored', 'git-side']) {
+      assert.equal(o[name].git.dirty, 0, `${name}: status is clean`);
+      assert.equal(o[name].git.merged, true, `${name}: HEAD is merged into main`);
+      assert.equal(o[name].verdict, 'keep', name);
+      assert.match(o[name].reason, /has data/, name);
+    }
+    assert.equal(o['git-stash'].git.stashes, 1);
+    assert.equal(o['git-ignored'].git.ignored, 1);
+    assert.equal(o['git-side'].git.unmergedBranches, 1);
+    assert.equal(o['git-clean'].git.stashes, 0);
+    assert.equal(o['git-clean'].git.ignored, 0);
+    assert.equal(o['git-clean'].git.unmergedBranches, 0);
+  } finally { f.cleanup(); }
+});
+
 test('a fake .git folder does not borrow the primary repo state', () => {
   const f = makeFake();
   try {
@@ -221,6 +254,11 @@ test('only candidates get a manual command, and it is text only', () => {
     assert.match(text, /3 candidate/);
     assert.match(text, /never runs/i);
     assert.match(removeCommand("C:\\a'b"), /Remove-Item -LiteralPath 'C:\\a''b' -Recurse -Force/);
+    // PowerShell also reads the curly quotes U+2018 to U+201B as quotes inside a single-quoted string.
+    assert.equal(
+      removeCommand('C:\\a\u2019b\u2018c\u201Ad\u201Be'),
+      "Remove-Item -LiteralPath 'C:\\a\u2019\u2019b\u2018\u2018c\u201A\u201Ad\u201B\u201Be' -Recurse -Force",
+    );
   } finally { f.cleanup(); }
 });
 
