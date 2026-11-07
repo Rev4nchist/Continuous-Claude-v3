@@ -143,6 +143,37 @@ const resolveIn = (cwd: string, target: string, shell: 'bash' | 'pwsh'): string 
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
 };
 
+/**
+ * True when a cd target holds text that the shell expands and this hook does not: `$var`, `$(..)`, `${..}`, `%VAR%`, a backtick,
+ * or a leading `~`. Resolved as a path it names a folder that does not exist (`...\worktrees\x\$w`).
+ */
+export function hasUnexpandedPart(target: string): boolean {
+  const t = target.replace(/^["']|["']$/g, '');
+  return /[$`]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith('~');
+}
+
+/** `code` of the error a git call on an unexpandable cd target throws. handle() reads it. */
+export const CD_UNEXPANDED = 'CD_UNEXPANDED';
+
+/**
+ * Deps whose git refuses the directory of a first `cd` target that holds an unexpanded variable. The gate cannot know that directory, so it
+ * fails closed exactly as a missing directory did (handle() denies a gated command), with a reason that names the cause. A fallback to the
+ * hook cwd would judge another checkout's stamp and could turn that deny into an allow.
+ */
+function guardUnexpandedCd(deps: Deps, command: string, cwd: string, shell: 'bash' | 'pwsh'): Deps {
+  const m = new RegExp(CD_TARGET.source, 'i').exec(command);
+  if (!m || !hasUnexpandedPart(m[1])) return deps;
+  const dir = resolveIn(cwd, m[1], shell);
+  const target = m[1].replace(/^["']|["']$/g, '').slice(0, 120);
+  return {
+    ...deps,
+    git: (d, args) => {
+      if (d !== dir) return deps.git(d, args);
+      throw Object.assign(new Error(`cannot expand the cd target ${target}`), { code: CD_UNEXPANDED, target });
+    },
+  };
+}
+
 /** The directory the first `cd <dir>` names, resolved against the hook cwd; else the cwd. */
 function workDir(command: string, cwd: string, shell: 'bash' | 'pwsh'): string {
   const m = new RegExp(CD_TARGET.source, 'i').exec(command);
@@ -347,6 +378,7 @@ function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: 'allow' };
+  deps = guardUnexpandedCd(deps, command, input.cwd || process.cwd(), shellOf(input));
   const ctx = makeCtx(input, command, deps, shapes);
   const d = judge(command, deps, ctx, shapes);
   if (d.action !== 'deny') return d;
@@ -464,7 +496,9 @@ export function handle(raw: string, deps: Deps): string {
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: d.reason } });
   } catch (err) {
     const message = String((err as Error)?.message ?? err);
-    try { deps.logError?.(message, errorContext(err, input)); } catch { /* the log never blocks */ }
+    const cdUnexpanded = (err as { code?: string } | null)?.code === CD_UNEXPANDED;
+    // An unexpandable cd target is a known, user-fixable denial, not a fault: it gets no error row.
+    if (!cdUnexpanded) { try { deps.logError?.(message, errorContext(err, input)); } catch { /* the log never blocks */ } }
     // Unparsable input, another tool, or a command that is not a gated shape: nothing to guard, so allow.
     if (!gated) return '{}';
     // A gated command that could not be checked (git timeout, git error, unreadable stamp): the leading override allows it, else deny.
@@ -472,6 +506,11 @@ export function handle(raw: string, deps: Deps): string {
     if (hasOverride(joinContinuations(command, shellOf(input)), deps.env)) {
       logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
       return '{}';
+    }
+    if (cdUnexpanded) {
+      logGuardDecision(HOOK, input, 'deny', 'cd-unexpanded', { command });
+      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String((err as { target?: unknown }).target ?? '').slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick or ~, so it cannot tell which checkout the command runs in.\n\nUse a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.\n\nThe stamp comes from: ${RUN}`;
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } });
     }
     if ((err as { code?: string } | null)?.code === GIT_NOT_FOUND) {
       // Name the cause and the fix. A generic "could not verify" text hides a missing git.

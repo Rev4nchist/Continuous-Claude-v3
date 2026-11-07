@@ -263,6 +263,13 @@ function atomicWriteSync(filePath, content) {
     throw err;
   }
 }
+var missingLockDirsLogged = /* @__PURE__ */ new Set();
+function warnLockDirMissing(lockFile) {
+  const dir = dirname2(lockFile);
+  if (missingLockDirsLogged.has(dir)) return;
+  missingLockDirsLogged.add(dir);
+  log.warn("Lock dir missing, lock not acquired", { lockFile, dir });
+}
 function acquireLockSync(filePath, timeoutMs = LOCK_TIMEOUT_MS) {
   const lockFile = filePath + ".lock";
   const startTime = Date.now();
@@ -292,6 +299,9 @@ ${Date.now()}`, "utf-8");
         const waitUntil = Date.now() + LOCK_RETRY_MS;
         while (Date.now() < waitUntil) {
         }
+      } else if (err.code === "ENOENT") {
+        warnLockDirMissing(lockFile);
+        return false;
       } else {
         log.error("Lock acquisition failed", { lockFile, error: String(err) });
         return false;
