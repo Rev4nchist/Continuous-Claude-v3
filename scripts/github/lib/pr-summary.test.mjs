@@ -259,7 +259,10 @@ test('PS18: ok is true when the summary has no FAIL-class problem (PASS, an olde
   assert.equal(older.result.status, 'NOTE', 'an older Head with 1 own file is a NOTE');
   assert.equal(older.ok, true, 'an older Head still names a real summary of this branch');
   assert.equal(check(dir, textOf(FIELDS(head, { Branch: 'feat/other' })), { mode: 'note' }).ok, false, 'a leftover file from another branch, shown as a NOTE in note mode');
-  assert.equal(check(dir, null, { mode: 'note' }).ok, false, 'no file');
+  const fresh = makeRepo();
+  const missing = check(fresh, null, { mode: 'note' });
+  assert.equal(missing.sha, null, 'a fresh repo has no summary file');
+  assert.equal(missing.ok, false, 'no file');
 });
 
 test('PS14: a valid summary passes in fail mode, returns the hash of the file, and the line shows the facts', () => {
