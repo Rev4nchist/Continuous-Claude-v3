@@ -1529,7 +1529,7 @@ test('SM2: a passing summary puts its hash in the stamp; the check gets root, he
   const repo = makeRepo();
   const seen = [];
   const summaryCheck = (a) => { seen.push(a); return SUMMARY_OK(); };
-  const { result } = await prePr(repo, { summaryCheck });
+  const { result } = await prePr(repo, { summaryCheck, config: { ...CONFIG, pre_pr: undefined } });
   assert.equal(result.ok, true, result.lines.join('\n'));
   const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
   assert.equal(stamp.summary_sha256, 'a'.repeat(64));
@@ -1560,7 +1560,7 @@ test('SM3: the summary is step 0: first in the results, and it runs before the b
 
 test('SM4: the real check, no summary file, default mode: one NOTE line first, the run still passes, and the stamp has summary_sha256 null', async () => {
   const repo = makeRepo();
-  const { result } = await prePr(repo, { summaryCheck: undefined });
+  const { result } = await prePr(repo, { summaryCheck: undefined, config: { ...CONFIG, pre_pr: undefined } });
   assert.equal(result.ok, true, result.lines.join('\n'));
   assert.match(result.lines[0], /^NOTE summary - .*summary\.md/);
   const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
