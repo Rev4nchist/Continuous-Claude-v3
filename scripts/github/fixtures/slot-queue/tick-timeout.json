@@ -6,7 +6,7 @@
     {
       "kind": "toast",
       "pr": 900,
-      "text": "PR #900: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Type /slot pay 900 or /slot wait 900."
+      "text": "PR #900: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Dave answers the question the session asks: pay or keep waiting."
     }
   ],
   "rows": [

@@ -36,6 +36,12 @@ function Check([string]$name, [bool]$ok) {
 $tmpRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $work = Join-Path $tmpRoot ('land-pr-lock-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
+# Run a copy of land-pr.ps1 from a temp "own root" with no review-router.config.json: the script reads decisions.enforce from its own checkout too,
+# so the config of this checkout (true after the flag flip) must not turn the land check on in these lock cases.
+$ownGithub = Join-Path $work 'own\scripts\github'
+New-Item -ItemType Directory -Force -Path $ownGithub | Out-Null
+Copy-Item -LiteralPath $script -Destination (Join-Path $ownGithub 'land-pr.ps1') -Force
+$script = Join-Path $ownGithub 'land-pr.ps1'
 $oldPath = $env:PATH
 $realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
 $sha = '0123456789abcdef0123456789abcdef01234567'

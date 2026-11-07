@@ -56,7 +56,7 @@
 //       The refusals name their reason on stderr: "draft" for a PR that is not a draft, "head" for a moved head, "pathway" for a missing record (TA6).
 //   export applyPathway({ pr, record, gh }) -> { ok: true } | { ok: false, error }     gh(args) -> { status, stdout, stderr }
 //       gh call shapes (pinned; every call ends with '-R', DEFAULT_REPO so gh never picks the repo from the cwd remotes, where origin is parcadei):
-//                                read   ['pr','view',String(pr),'--json','isDraft,headRefOid','-R',repo] -> stdout {"isDraft":bool,"headRefOid":sha}
+//                                read   ['pr','view',String(pr),'--json','isDraft,headRefOid,labels','-R',repo] -> stdout {"isDraft":bool,"headRefOid":sha,"labels":[{name}]}
 //                                label  ['pr','edit',String(pr),'--add-label',<label>,'-R',repo]
 //                                comment ['pr','comment',String(pr),'--body',<marker + visible line>,'-R',repo]  (PR D: the router reads the marker)
 //                                ready  ['pr','ready',String(pr),'-R',repo]
@@ -1050,7 +1050,8 @@ test('TA2 (spec 17): apply refuses when the live head moved since confirm and ma
   const r = await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
   assert.equal(r.ok, false);
   assert.match(r.error, /head/i);
-  assert.match(r.error, /Run \/pathway again\./);
+  assert.match(r.error, /call pr_checkpoint \{pr\}/i, 'the refusal sends the model to the tool, then a tap');
+  assert.doesNotMatch(r.error, /\/pathway|\/slot/);
   assert.doesNotMatch(r.error, /\/checkpoint/, "/checkpoint is a built-in of Claude Code, not this mod's command");
   assert.deepEqual(g.mutations(), []);
 });
@@ -1129,6 +1130,46 @@ test('TA4c: a failed marker comment never reaches ready and says so; the label w
   assert.deepEqual(g.calls.map((a) => a[1]), ['view', 'edit', 'comment'], 'view, label, the failed comment, and no ready');
 });
 
+// M3 (pathway-flow-v2): on #349 a stale review:coderabbit stayed beside review:none and the router read the stronger label.
+// It fails if: another review:* label stays after the apply                               -> TM3a
+//              the removal comes in a later gh call than the add, or after the marker     -> TM3a
+//              a risk:* label, or the chosen label itself, is removed                     -> TM3b
+//              the edit shape changes when no stale review label exists (TA3 pins it)     -> TA3
+test('TM3a: apply removes every OTHER review:* label in the same gh pr edit that adds the chosen one, before the marker and ready', async () => {
+  const { applyPathway } = await load();
+  const labels = [{ name: 'review:coderabbit' }, { name: 'risk:infra' }, { name: 'review:deep-held' }];
+  const g = fakeGh({ view: { isDraft: true, headRefOid: HEAD, labels } });
+  const r = await applyPathway({ pr: 201, record: { ...RECORD, pathway: 'none', label: 'review:none' }, gh: g.gh });
+  assert.deepEqual(r, { ok: true });
+  const edits = g.calls.filter((a) => a[1] === 'edit');
+  assert.equal(edits.length, 1, 'one edit call: remove and add together');
+  assert.deepEqual(edits[0], ['pr', 'edit', '201', '--remove-label', 'review:coderabbit', '--remove-label', 'review:deep-held', '--add-label', 'review:none', '-R', DEFAULT_REPO]);
+  assert.deepEqual(g.calls.map((a) => a[1]), ['view', 'edit', 'comment', 'ready']);
+});
+
+test('TM3b: apply keeps risk:* labels and the chosen label, and reads label names given as plain strings', async () => {
+  const { applyPathway } = await load();
+  const g = fakeGh({ view: { isDraft: true, headRefOid: HEAD, labels: [{ name: 'review:none' }, { name: 'risk:high' }, 'review:deep'] } });
+  assert.deepEqual(await applyPathway({ pr: 201, record: { ...RECORD, pathway: 'none', label: 'review:none' }, gh: g.gh }), { ok: true });
+  assert.deepEqual(g.calls.find((a) => a[1] === 'edit'), ['pr', 'edit', '201', '--remove-label', 'review:deep', '--add-label', 'review:none', '-R', DEFAULT_REPO]);
+});
+
+// review-router.mjs `releasable` lifts a hold only while review:deep-held is still on the PR. A CodeRabbit pick must not remove it.
+//   a coderabbit record removes review:deep-held with the other stale labels      -> TM3c
+//   the keep rule spreads: a none or both record keeps review:deep-held             -> TM3c
+test('TM3c: a review:coderabbit record keeps review:deep-held and removes the other review:* labels; none and both still remove it', async () => {
+  const { applyPathway } = await load();
+  const labels = [{ name: 'review:none' }, { name: 'review:deep-held' }, { name: 'risk:high' }];
+  const g = fakeGh({ view: { isDraft: true, headRefOid: HEAD, labels } });
+  assert.deepEqual(await applyPathway({ pr: 201, record: { ...RECORD, pathway: 'coderabbit', label: 'review:coderabbit' }, gh: g.gh }), { ok: true });
+  assert.deepEqual(g.calls.find((a) => a[1] === 'edit'), ['pr', 'edit', '201', '--remove-label', 'review:none', '--add-label', 'review:coderabbit', '-R', DEFAULT_REPO]);
+  for (const pathway of ['none', 'both']) {
+    const h = fakeGh({ view: { isDraft: true, headRefOid: HEAD, labels } });
+    await applyPathway({ pr: 201, record: { ...RECORD, pathway, label: LABEL_OF[pathway] }, gh: h.gh });
+    assert.ok(h.calls.find((a) => a[1] === 'edit').includes('review:deep-held'), `${pathway}: review:deep-held is removed`);
+  }
+});
+
 test('TA4b: apply with no record, or a record with an unknown pathway or no head, refuses before any gh call', async () => {
   const { applyPathway } = await load();
   for (const record of [null, undefined, {}, { ...RECORD, pathway: 'wait' }, { ...RECORD, pathway: 'bogus' }, { ...RECORD, head: '' }]) {
@@ -1176,14 +1217,15 @@ test('TA6 (CLI): --apply exits 1 with no mutation when pathway.json is missing, 
   const none = runApply({ record: null });
   assert.equal(none.status, 1, `${none.stdout} ${none.stderr}`);
   assert.match(none.stderr, /pathway/i);
-  assert.match(none.stderr, /Run \/pathway /, 'the refusal names the command a person types');
+  assert.match(none.stderr, /call pr_checkpoint \{pr\}/i, 'the refusal sends the model to the tool, then a tap');
+  assert.doesNotMatch(none.stderr, /\/pathway|\/slot/, 'the refusal names no typed command');
   assert.doesNotMatch(none.stderr, /\/checkpoint/, "/checkpoint is a built-in of Claude Code, not this mod's command");
   assert.deepEqual(none.calls, [], 'no record: gh is not called');
   // The one gh call is the read. An empty call log would mean the injected gh was never used (the real gh failing on the bad token also exits 1).
   for (const [label, view, why] of [['not a draft', { isDraft: false, headRefOid: HEAD }, /draft/i], ['head moved', { isDraft: true, headRefOid: OTHER }, /head/i]]) {
     const r = runApply({ view });
     assert.equal(r.status, 1, `${label}: ${r.stdout} ${r.stderr}`);
-    assert.deepEqual(r.calls, [['pr', 'view', '999999', '--json', 'isDraft,headRefOid', '-R', DEFAULT_REPO]], `${label}: exactly one read through the injected gh, no mutation`);
+    assert.deepEqual(r.calls, [['pr', 'view', '999999', '--json', 'isDraft,headRefOid,labels', '-R', DEFAULT_REPO]], `${label}: exactly one read through the injected gh, no mutation`);
     assert.match(r.stderr, why, `${label}: the refusal names its reason`);
   }
 });

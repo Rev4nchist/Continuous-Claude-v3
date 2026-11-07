@@ -19,6 +19,10 @@
      Dave's own pick (his dialog or composer, not the bridge or auto-confirm) is on record for this exact head. A missing,
      stale or foreign record refuses (nothing merged). The provenance line goes into the LANDED summary. With
      -IgnoreReview the check still runs as a warning only: it prints the line or a WARNING, and the merge goes on.
+  1c2. Land tap (scripts/github/land-decision.mjs): when decisions.enforce is true in <RepoPath>/review-router.config.json or in the config of the checkout this script runs from (the stricter wins), Dave's
+     "Land now" or "Land when READY" answer (AskUserQuestion, ship-ask.mjs land) must be on record for this PR at this exact head.
+     Nothing else lands it. It runs before the READY check, in both branches, under -IgnoreReview too. The tap is used up AFTER the merge
+     succeeds. With the flag false or missing, it prints a WARNING line and does not block.
   1d. Migration gate (scripts/github/migration-gate.mjs): when the PR adds a drizzle migration, the live database
      (agentic_os.__migrations) must already have it applied. A database that is behind, or cannot be read, refuses
      (nothing merged). A PR without a new migration never needs the database. Runs under -IgnoreReview too: there is no bypass.
@@ -74,6 +78,13 @@ param(
   [switch]$TestSwitchPrimary    # TEST-ONLY: switch the primary checkout to the PR branch after the worktree step
 )
 $ErrorActionPreference = 'Stop'
+# CCV3_DECISIONS_FILE moves the decision store (a test seam of lib/decisions.mjs). A caller must not point the land check at a fake store: drop it before any node call.
+Remove-Item -LiteralPath Env:\CCV3_DECISIONS_FILE -ErrorAction SilentlyContinue
+# decisions.mjs falls back to os.homedir() for the store, and node reads USERPROFILE and HOME for that. A caller must not move the store with them:
+# set both from the OS profile folder (not from the environment) before any node call.
+$osProfile = [Environment]::GetFolderPath('UserProfile')
+$env:USERPROFILE = $osProfile
+$env:HOME = $osProfile
 # gh-personal routes the Rev4nchist account on machines with two GitHub logins
 # (docs/github/auth-routing.md). Where it does not exist, gh's own default login is the account.
 $ghPersonal = Join-Path $HOME '.config\gh-personal'
@@ -279,6 +290,19 @@ function Exit-LandLock {
   } catch { Write-Host "  land lock: could not release ${lockPath}: $($_.Exception.Message)" }
 }
 
+# decisions.enforce of <root>/review-router.config.json. Only a literal true enforces; a missing or unreadable file is "off".
+function Test-EnforceIn([string]$Root) {
+  try {
+    $cfg = Join-Path $Root 'review-router.config.json'
+    if (-not (Test-Path -LiteralPath $cfg)) { return $false }
+    return ((Get-Content -LiteralPath $cfg -Raw | ConvertFrom-Json).decisions.enforce -eq $true)
+  } catch { return $false }
+}
+# The stricter of two roots: -RepoPath and the checkout this script runs from ($PSScriptRoot\..\..). A -RepoPath with no config, or a stale one, cannot switch the land check off.
+function Test-DecisionsEnforced {
+  return ((Test-EnforceIn $RepoPath) -or (Test-EnforceIn (Join-Path $PSScriptRoot '..\..')))
+}
+
 try {   # closes after the sync-cursor check, with the `finally` that releases the lock
 $pull = gh api "repos/$Repo/pulls/$Pr" | ConvertFrom-Json
 if ($LASTEXITCODE) { Fail "cannot read PR #$Pr" }
@@ -286,6 +310,17 @@ $branch = $pull.head.ref; $head = $pull.head.sha
 
 # 1-2. Ready check and head-pinned merge
 if (-not $pull.merged -and -not $CleanupOnly) {
+  # Land tap: Dave's answer to the Land question, for this PR at this head. No bypass: it runs before the -IgnoreReview split.
+  $decisionsEnforced = Test-DecisionsEnforced
+  if ($decisionsEnforced) {
+    Step "land decision for #$Pr at $($head.Substring(0,7))"
+    $landOut = node (Join-Path $PSScriptRoot 'land-decision.mjs') check $Pr --repo $Repo --head $head
+    $landCode = $LASTEXITCODE
+    $landOut | Out-Host
+    if ($landCode) { Fail "land decision check refused #$Pr (exit $landCode). Nothing was merged. Ask Dave the Land question (see the line above), then re-run." }
+  } else {
+    Write-Host "  WARNING: decisions.enforce is not true, so no land decision from Dave is required for #$Pr. Ask the Land question anyway (ship-ask.mjs land --pr $Pr)." -ForegroundColor Yellow
+  }
   if (-not $IgnoreReview) {
     Step "ready check for #$Pr at $($head.Substring(0,7))"
     $skewMargin = 120  # seconds. The READY time is the local clock; GitHub stamps reviews. A fast local clock would hide a review that landed just before it. The re-check ignores CodeRabbit's automatic "Review skipped" notice on a PR with no CodeRabbit label, so that notice does not refuse inside this margin.
@@ -315,7 +350,7 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head
     $noneCode = $LASTEXITCODE
     Show-NoneOutput $noneOut
-    if ($noneCode -eq 1) { Fail "none-pick check refused #$Pr (exit 1). Nothing was merged. Dave picks again in /pathway for this head, then re-run." }
+    if ($noneCode -eq 1) { Fail "none-pick check refused #$Pr (exit 1). Nothing was merged. Call pr_checkpoint for PR #$Pr so Dave can pick again for this head, then re-run." }
     if ($noneCode) { Fail "none-pick check: could not determine; read the output above, then re-run. Nothing was merged (exit $noneCode)." }
     [void](Add-NoneLine $noneOut)
   } else {
@@ -354,6 +389,10 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     if (-not $again.merged) { Fail "merge refused: $res" }
   }
   $done.Add("merged #$Pr")
+  # The merge is done: use up Dave's land tap. A failure here only warns.
+  if ($decisionsEnforced) {
+    try { node (Join-Path $PSScriptRoot 'land-decision.mjs') use $Pr --repo $Repo --head $head | Out-Host } catch { Write-Host "  WARNING: could not use up the land decision: $($_.Exception.Message)" }
+  }
 } elseif ($pull.merged) {
   Step "#$Pr is already merged; continuing with the local steps"
 }

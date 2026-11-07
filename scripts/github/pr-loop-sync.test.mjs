@@ -49,8 +49,8 @@ test('the mod holds the same DRAFT_REASON as review-status.mjs, and review-statu
 
 test('the mod text never tells a person to run /checkpoint, a built-in of Claude Code (it is /pathway)', () => {
   assert.ok(!MODEL.includes('/checkpoint'), 'model.ts names /checkpoint');
-  assert.match(modelHolds('NONE_NO_CHECKPOINT_NOTE'), /run \/pathway /);
-  assert.match(modelHolds('CLASS_RAISED_NOTE'), /Return the PR to draft \(gh pr ready --undo\), then run \/pathway again/);
+  assert.match(modelHolds('NONE_NO_CHECKPOINT_NOTE'), /call pr_checkpoint \{pr\} /);
+  assert.match(modelHolds('CLASS_RAISED_NOTE'), /Call pr_checkpoint \{pr\}: it asks Dave whether to return the PR to draft and pick again/);
 });
 
 test('the mod holds the same ROUTER_NONE_UNVERIFIED_NOTE, NONE_NO_CHECKPOINT_NOTE and CLASS_RAISED_NOTE as review-status.mjs', async () => {
