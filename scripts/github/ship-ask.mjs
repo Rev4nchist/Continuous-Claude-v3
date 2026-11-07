@@ -40,15 +40,26 @@ const opt = (label, description, first = false) => ({ label: `${label}${first ? 
 
 // ---------- the specs: pure ----------
 
-/** commit-and-push. data: { branch, staged, ahead (number or null), subject (string or null) }. */
-export function shipSpec({ branch, staged, ahead, subject }) {
+/** Nothing is staged, commits are ahead of fork/main and the HEAD tree is known: the one case that offers "Push only". */
+const pushOnlyOf = ({ staged, ahead, headTree }) => staged === 0 && typeof ahead === 'number' && ahead > 0 && Boolean(headTree);
+
+/** commit-and-push. data: { branch, head, headTree, staged, ahead (number or null), subject (string or null) }. */
+export function shipSpec({ branch, head, headTree, staged, ahead, subject }) {
+  if (pushOnlyOf({ staged, ahead, headTree })) {
+    const lines = [`Push ${clip(branch, 60)} to fork? Nothing is staged.`, `No commit is made. HEAD is ${String(head ?? '').slice(0, 7)}.`, `${plural(ahead, 'commit')} ahead of fork/main.`];
+    return { header: 'Push', question: lines.join('\n'), options: [
+      opt('Push only', `Runs git-safe push fork ${clip(branch, 60)}. No commit is made.`, true),
+      opt('Show the commits first', 'Prints git log fork/main..HEAD --oneline, then asks again.'),
+      opt('Stop here', 'Nothing runs.'),
+    ] };
+  }
   const ready = staged > 0;
   const lines = [
     ready ? `Commit ${plural(staged, 'file')} on ${clip(branch, 60)} and push to fork?` : `Nothing is staged on ${clip(branch, 60)}.`,
     subject ? `Message: '${clip(subject, 90)}'.` : 'No commit message file was given.',
     typeof ahead === 'number' ? `${plural(ahead, 'commit')} ahead of fork/main.` : 'Commits ahead of fork/main: unknown.',
   ];
-  const go = opt('Commit and push', `Runs git commit -F <msg> and git-safe push fork ${clip(branch, 60)}.`, ready);
+  const go = opt('Commit and push', `Runs git commit -F <msg> && git-safe push fork ${clip(branch, 60)}, joined by &&.`, ready);
   const diff = opt('Show the diff first', 'Prints git diff --cached --stat and the message, then asks again.');
   const stop = opt('Stop here', 'Nothing runs. The work stays uncommitted.', !ready);
   return { header: 'Commit', question: lines.join('\n'), options: ready ? [go, diff, stop] : [stop, diff] };
@@ -132,15 +143,15 @@ const topOf = () => git(['rev-parse', '--show-toplevel'], process.cwd()) ?? ROOT
  */
 function branchTarget(branch, cwd) {
   const current = git(['branch', '--show-current'], cwd);
-  if (branch === undefined || branch === current) return { name: current, head: git(['rev-parse', 'HEAD'], cwd), tree: git(['write-tree'], cwd), ref: 'HEAD' };
+  if (branch === undefined || branch === current) return { name: current, head: git(['rev-parse', 'HEAD'], cwd), tree: git(['write-tree'], cwd), headTree: git(['rev-parse', 'HEAD^{tree}'], cwd), ref: 'HEAD' };
   for (const ref of [`refs/heads/${branch}`, `refs/remotes/fork/${branch}`]) {
     const head = git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd);
-    if (head) return { name: branch, head, tree: git(['rev-parse', `${ref}^{tree}`], cwd), ref };
+    if (head) { const tree = git(['rev-parse', `${ref}^{tree}`], cwd); return { name: branch, head, tree, headTree: tree, ref }; }
   }
   return { name: branch, head: null, tree: null, ref: null, missing: true };
 }
 
-/** { branch, head, tree, staged, ahead, subject } of --branch B (default: the checkout in the cwd). `missing` is set when B has no ref. */
+/** { branch, head, tree, headTree, staged, ahead, subject } of --branch B (default: the checkout in the cwd). `missing` is set when B has no ref. */
 export function gatherShip({ branch, msg }) {
   const cwd = process.cwd();
   const t = branchTarget(branch, cwd);
@@ -148,7 +159,7 @@ export function gatherShip({ branch, msg }) {
   const ahead = t.ref ? git(['rev-list', '--count', `fork/main..${t.ref}`], cwd) : null;
   let subject = null;
   try { subject = msg ? readFileSync(msg, 'utf8').split(/\r?\n/)[0] : null; } catch { /* no message file */ }
-  return { branch: t.name, head: t.head, tree: t.tree, staged, ahead: ahead === null ? null : Number(ahead), subject, missing: t.missing === true };
+  return { branch: t.name, head: t.head, tree: t.tree, headTree: t.headTree ?? null, staged, ahead: ahead === null ? null : Number(ahead), subject, missing: t.missing === true };
 }
 
 /** The stamp of this checkout, or null. */
@@ -225,7 +236,12 @@ export async function gatherPaid({ pr }) {
 /** { spec, key, head, tree } for a step and its data, or { refuse } when no question can be asked. */
 export function planOf(step, data, args) {
   if (data.missing) return { refuse: `branch ${data.branch} does not exist (no refs/heads/${data.branch} and no fork/${data.branch}). Pass a branch that exists.` };
-  if (step === 'commit-and-push') return { spec: shipSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: data.tree ?? null };
+  if (step === 'commit-and-push') {
+    // Push only binds HEAD's tree (no index tree exists to bind: nothing is staged). Commit and push binds the staged tree.
+    const spec = shipSpec(data);
+    const tree = spec.options[0].label.startsWith('Push only') ? data.headTree : data.tree;
+    return { spec, key: decisionKey({ branch: data.branch }), head: data.head, tree: tree ?? null };
+  }
   if (step === 'open-pr') {
     const ok = data.stampHead && data.fails === 0 && String(data.stampHead).toLowerCase() === String(data.head).toLowerCase();
     return { spec: ok ? openPrSpec(data) : rerunPrePrSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: null };

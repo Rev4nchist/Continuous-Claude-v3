@@ -246,6 +246,7 @@ describe('G3 git push to the fork', () => {
       expect(r).toContain('ship-ask.mjs commit-and-push --branch feat/x --json');
       expect(r).toContain('AskUserQuestion');
       expect(r).toContain('Commit and push');
+      expect(r).toContain('Push only');
     });
     it('reads the Desktop Commander process tools', () => {
       expect(denied({ tool_name: `${DC}start_process`, tool_input: { command: PUSH }, cwd: '/repo' })).toBe(true);
@@ -268,7 +269,7 @@ describe('G3 git push to the fork', () => {
       expect(denied(bash(PUSH))).toBe(true);
     });
     it('denies when the tap was another label', () => {
-      for (const label of ['Show the diff first', 'Stop here', 'Do not Commit and push', 'Push only']) {
+      for (const label of ['Show the diff first', 'Stop here', 'Do not Commit and push', 'Do not Push only']) {
         rmSync(storeFile, { force: true });
         shipTap('feat/x', TREE, HEAD, label);
         expect(denied(bash(PUSH)), label).toBe(true);
@@ -290,6 +291,58 @@ describe('G3 git push to the fork', () => {
       shipTap('feat/x', TREE2, OTHER);
       shipTap('feat/x', TREE, HEAD);
       expect(denied(bash(PUSH))).toBe(false);
+    });
+  });
+
+  // Push only: nothing is staged, the tap binds HEAD^{tree}. It licenses a plain push of that tree. It never licenses a push that
+  // follows a commit in the same command, because that push sends the index tree (viaIndex), which the tap did not bind.
+  describe('RED-14 "Push only" licenses a plain push of the tapped tree, never a chained commit and push', () => {
+    const PO = 'Push only (Recommended)';
+    const PUSHB = 'git push fork feat/x';
+    const COMMIT = 'git commit -F m.txt';
+    const INDEX = 'i'.repeat(40);
+    it('G-PO1: allows a plain push after Push only for this branch and the HEAD tree', () => {
+      shipTap('feat/x', TREE, HEAD, PO);
+      expect(denied(bash(PUSH))).toBe(false);
+      expect(denied(pwsh('pwsh -File scripts/git-safe.ps1 push fork feat/x'))).toBe(false);
+    });
+    it('G-PO1b: the plain label without (Recommended) works too', () => {
+      shipTap('feat/x', TREE, HEAD, 'Push only');
+      expect(denied(bash(PUSH))).toBe(false);
+    });
+    it('G-PO2: denies when the tapped tree is not the tree being pushed', () => {
+      shipTap('feat/x', TREE2, HEAD, PO);
+      expect(denied(bash(PUSH))).toBe(true);
+    });
+    it('G-PO3: denies when the tap is for another branch key', () => {
+      shipTap('feat/y', TREE, HEAD, PO);
+      expect(denied(bash(PUSH))).toBe(true);
+    });
+    it('G-PO4: denies a label that only starts like Push only', () => {
+      for (const label of ['Push only now', 'Push only (Recommended) please', 'Do not Push only', 'push only']) {
+        rmSync(storeFile, { force: true });
+        shipTap('feat/x', TREE, HEAD, label);
+        expect(denied(bash(PUSH)), label).toBe(true);
+      }
+    });
+    it('G-PO5: denies a commit chained before the push, when the tap tree is the index tree', () => {
+      shipTap('feat/x', INDEX, HEAD, PO);
+      expect(denied(bash(`${COMMIT} && ${PUSHB}`), { indexTree: INDEX })).toBe(true);
+      expect(reasonOf(bash(`${COMMIT} && ${PUSHB}`), { indexTree: INDEX })).toContain('Push only');
+    });
+    it('G-PO6: denies the chained form even when the tap tree equals both the HEAD tree and the index tree', () => {
+      shipTap('feat/x', TREE, HEAD, PO);
+      expect(denied(bash(`${COMMIT} && ${PUSHB}`), { indexTree: TREE })).toBe(true);
+    });
+    it('G-PO6b: Commit and push still allows the chained form (the new rule does not weaken it)', () => {
+      shipTap('feat/x', INDEX, HEAD, 'Commit and push (Recommended)');
+      expect(denied(bash(`${COMMIT} && ${PUSHB}`), { indexTree: INDEX })).toBe(false);
+    });
+    it('G-PO7: a Push only tap never licenses a force, origin or subagent push', () => {
+      shipTap('feat/x', TREE, HEAD, PO);
+      expect(denied(bash('git push --force fork feat/x'))).toBe(true);
+      expect(denied(bash('git push origin feat/x'))).toBe(true);
+      expect(denied(bash(PUSH, { agent_id: 'sub-1' }))).toBe(true);
     });
   });
 

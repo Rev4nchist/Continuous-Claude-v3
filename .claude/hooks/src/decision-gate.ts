@@ -15,9 +15,10 @@
  *             pr-checkpoint.mjs --json --pr is denied too: the model must not burn taps from a shell. That text check is best
  *             effort (a loop built from variables is not seen). Only decision-ledger writes decisions. A plain read passes.
  *   push      git push (git, git.exe, git-safe.ps1, git-for.ps1; any -C, -c, --no-pager before the verb) to the fork from a CCv3 checkout,
- *             to a branch other than main: needs "Commit and push" (ship step) for that branch and for the TREE being pushed. The tap is
- *             bound to the index tree before the commit (ship-ask.mjs), so the check compares it with <src|HEAD>^{tree} at push time: the
- *             head moves when the commit is made, the tree does not. A force or delete form (--force, -f, --force-with-lease, +refspec,
+ *             to a branch other than main: needs "Commit and push" or "Push only" (ship step) for that branch and for the TREE being pushed.
+ *             "Commit and push" is bound to the index tree before the commit (ship-ask.mjs), so the check compares it with <src|HEAD>^{tree}
+ *             at push time: the head moves when the commit is made, the tree does not. "Push only" is asked with nothing staged and is bound
+ *             to HEAD^{tree}. It licenses a push that has no commit chained before it, never a commit and push in one command. A force or delete form (--force, -f, --force-with-lease, +refspec,
  *             --mirror, --all, --tags, --delete, -d, --prune, :dst) is denied even with a tap. A push to origin (upstream) is denied.
  *             A dry run, --help, `git stash push`, another remote and a non-CCv3 checkout pass. A push to main passes unless it is a force form.
  *             A command with several pushes is judged one push at a time, like land.
@@ -80,6 +81,8 @@ interface HookInput { tool_name?: string; tool?: string; tool_input?: Record<str
 export const isOpenPrLabel = (label: string): boolean => /^Open draft PR\b/.test(label);
 export const isLandLabel = (label: string): boolean => /^Land (?:now|when READY)\b/.test(label);
 export const isShipLabel = (label: string): boolean => /^Commit and push\b/.test(label);
+/** The tap of ship-ask when nothing is staged. Anchored: "Push only now" is not this label. */
+export const isPushOnlyLabel = (label: string): boolean => /^Push only(?: \(Recommended\))?$/.test(label);
 
 // ---------- the question to ask, per deny ----------
 
@@ -89,7 +92,7 @@ const openPrWhy = (branch: string, head: string): string =>
 const landWhy = (pr: string): string =>
   `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
 const pushWhy = (branch: string): string =>
-  `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push". The tap is bound to the staged tree: stage, ask, commit, then push. A change after the tap (a merge, a new commit) needs a new tap.`;
+  `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap.`;
 const PUSH_UNSAFE_WHY = 'a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave\'s tap. Push without that option. If it is really needed, ask Dave to run it himself.';
 const PUSH_ORIGIN_WHY = 'a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.';
 const pushUnresolvedWhy = (what: string): string => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
@@ -515,8 +518,9 @@ function remoteKind(remote: string): 'origin' | 'fork' | null {
 }
 
 /**
- * Push: a ship decision ("Commit and push") for the branch, bound to the tree being pushed. The head is not compared: the tap was
- * made before the commit, so its head is the parent of the commit now at HEAD. The tree is the same before and after the commit.
+ * Push: a ship decision ("Commit and push", or "Push only" when no commit is chained) for the branch, bound to the tree being pushed.
+ * The head is not compared: the tap was made before the commit, so its head is the parent of the commit now at HEAD. The tree is the
+ * same before and after the commit. "Push only" is bound to HEAD's tree, so a chained push (viaIndex reads the index tree) never takes it.
  * `chained`: the same command commits the staged tree first (commitPrecedesPush), so the tree pushed is `git write-tree`, not HEAD's.
  * Order: unreadable target, not CCv3, origin, other remote, subagent, force or delete form, branch, main, tree, tap.
  * A force form is denied before the main check: a force push to the fork's main rewrites the branch every PR lands on.
@@ -558,7 +562,7 @@ function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean, cha
   if (r.status !== 0) return d('push-tree-unresolved', `cannot read the tree of ${viaIndex ? 'the index (git write-tree)' : ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
   const tree = r.stdout.trim();
   const key = decisionKey({ branch });
-  const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && isShipLabel(row.label) && row.tree !== null && row.tree === tree);
+  const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && (isShipLabel(row.label) || (!viaIndex && isPushOnlyLabel(row.label))) && row.tree !== null && row.tree === tree);
   return ok ? ALLOW : d('ship', pushWhy(branch));
 }
 
