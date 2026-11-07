@@ -785,6 +785,25 @@ const html = `${STAMP}
   @media (min-width:1360px) { .kb-board { grid-template-columns:repeat(6,minmax(0,1fr)); } }
   /* From 721px each column scrolls inside itself. The head is outside the list, so it stays in view. The phone scrolls the page. */
   @media (min-width:721px) { .kb-list { max-height:calc(100vh - 190px); overflow-y:auto; } }
+  /* Desktop (a mouse, over 720px): one board that scrolls sideways. Use .kb-board, not the id: By band must still hide it. */
+  @media (min-width:721px) and (pointer:fine) {
+    html { scroll-padding-top:var(--sp,127px); }
+    [data-view="columns"] { display:grid; grid-template-columns:auto auto 1fr; align-items:center; gap:0 16px; margin-top:6px; }
+    [data-view="columns"] :is(.sec-head, .vt-bar, .kb-bar) { margin:0; }
+    [data-view="columns"] .sec-head p { display:none; }
+    .kb-board { display:flex; grid-column:1/-1; align-items:stretch; height:var(--kbh,calc(100dvh - 240px)); min-height:440px; margin:10px -20px 0; padding:0 20px 10px; overflow-x:auto; overscroll-behavior-x:contain; scrollbar-width:thin; }
+    .kcol { flex:0 0 300px; display:flex; flex-direction:column; }
+    .kcol[data-col="scheduled"][data-n="0"] { flex-basis:220px; }
+    .kb-list { flex:1 1 0; min-height:0; max-height:none; margin:0 -4px; padding:2px 4px 8px; scrollbar-width:thin; }
+    .kb-h { margin-bottom:17px; }
+    .kb-sub { margin:-17px 4px 2px; color:var(--muted); }
+    .kcol[data-n="0"] .kb-list::after { color:var(--muted); }
+    .kcol[data-col="waiting"]:not([data-n="0"]) .kb-count { border-color:var(--warn); background:var(--warn-bg); color:var(--warn); }
+    .kb-id { font-size:11.5px; color:var(--muted); }
+    .kb-title { margin-top:4px; color:var(--ink); font-size:13px; }
+    .kb-ctl { flex-wrap:nowrap; }
+    .kb-mv { flex:1 1 96px; font-size:0; gap:0; }
+  }
   @media (max-width:720px) {
     .kb-board { grid-template-columns:minmax(0,1fr); }
     .kb-head { cursor:pointer; }
@@ -922,7 +941,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     <p class="bb-note">${BB_NOTE}</p>
     ${BB_HTML}
     <div class="sr" id="kb-live" aria-live="polite"></div>
-    <div class="kb-board" id="kb-board">
+    <div class="kb-board" id="kb-board" role="region" aria-label="Priorities columns">
       ${kbScheduledColumn()}
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false)}
@@ -937,7 +956,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     </div>
     ${VIEW_BAR}
     ${BB_HTML}
-    <div class="kb-board" id="kb-board">
+    <div class="kb-board" id="kb-board" role="region" aria-label="Priorities columns">
       ${kbScheduledColumn(true)}
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true, true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false, true)}
@@ -1082,11 +1101,29 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       pri.setAttribute('data-view', v);
       all('.vt[data-g="view"]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.v === v)); });
       if (save) lsSet('lb-view', v);
+      fitBoard();
+    }
+    // Desktop board: fill the window height and clear the sticky header on a jump. Other screens get both back.
+    function fitBoard() {
+      var b = document.getElementById('kb-board'), hd = document.querySelector('header.top');
+      if (!b || !hd) return;
+      if (!(window.matchMedia && window.matchMedia('(min-width:721px) and (pointer:fine)').matches)) {
+        b.style.removeProperty('--kbh');
+        root.style.removeProperty('--sp');
+        return;
+      }
+      b.style.setProperty('--kbh', Math.round(window.innerHeight - window.pageYOffset - b.getBoundingClientRect().top - 12) + 'px');
+      root.style.setProperty('--sp', Math.round(hd.getBoundingClientRect().height + 8) + 'px');
     }
     all('.vt[data-g="view"]').forEach(function (b) {
       b.addEventListener('click', function () { setView(b.dataset.v, true); });
     });
     setView(lsGet('lb-view', ['band', 'columns']) || 'band', false);
+    window.addEventListener('resize', fitBoard);
+    if (window.ResizeObserver) {
+      var fro = new ResizeObserver(fitBoard);
+      all('header.top, .kb-bar').forEach(function (e) { fro.observe(e); });
+    }
     window.lbSetView = setView;
 
     // Filters: two groups. State chips and band chips combine (state AND band); a second click on a band chip clears it.
