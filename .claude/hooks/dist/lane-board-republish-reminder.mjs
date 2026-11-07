@@ -5696,7 +5696,7 @@ var isObj2 = (v) => v !== null && typeof v === "object";
 var stateDir = pendingDir;
 var stateFile = pendingFile;
 function reminder(verb, board, env, a) {
-  return `Lane DB changed (lane.mjs ${verb}) on board ${board}. The lane board page is a snapshot. When this batch of lane changes is done: run ${renderBoardCmd(board, env)}, then publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). Steps: kanban-sync skill step 7.`;
+  return `Lane DB changed (lane.mjs ${verb}) on board ${board}. The lane board page is a snapshot. When this batch of lane changes is done: read the live page first (Artifact tool, action read, url ${a.url}; your held copy is old), then run ${renderBoardCmd(board, env)}, then at once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to the same url (omit capabilities). Steps: kanban-sync skill step 7.`;
 }
 function renderOnly(verb, board) {
   return `Lane DB changed (lane.mjs ${verb}) on board ${board}. This board has no phone page: the local page is re-rendered automatically, within 20 s of the last change (render-only). Nothing to publish.`;

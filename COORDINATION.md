@@ -92,7 +92,7 @@ only prints that hint. To refresh the `continuous-claude` page, run from the pri
 node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project continuous-claude
 ```
 
-Then publish `lane-board.html` with the Artifact tool, passing
+Read the live page first (Artifact tool, action `read`): other sessions publish all day, so your held copy is old. Order: read, render, publish at once. Then publish `lane-board.html` with the Artifact tool, passing
 `url=https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`. The URL keeps the same link instead of
 minting a second board. For another board, render with `--project <key>`, publish `lane-board-<key>.html` to that board's `laneArtifact`
 url and pass no `capabilities`. A board with no `laneArtifact` renders `lane-board-<key>.html` with no artifact. It shows a read-only Priorities section drawn from lane state and priority.

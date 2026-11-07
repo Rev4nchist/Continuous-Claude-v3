@@ -203,7 +203,7 @@ For every entry in scope:
    asserts — a finding it states, a lane's status, a count, a "next" item, a decision it records.
    A session that only read code does not make it stale. Say so and skip rather than churning.
    For a `"*"` entry, ask this about *your* work regardless of which track you are on.
-2. **WebFetch the artifact's `url` first.** This is REQUIRED, not optional. The Artifact tool
+2. **Read the artifact's `url` first with the Artifact tool, action `read` (not WebFetch).** This is REQUIRED, not optional. Your held copy is old. The Artifact tool
    refuses to redeploy from a session that has not seen the currently-published version — it
    errors with *"This session hasn't viewed the latest version"* — because another session may
    have republished since. Fetching is also how you find out: compare what is live against the
