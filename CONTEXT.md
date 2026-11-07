@@ -32,16 +32,19 @@
   (`scripts/lib/resolve-deps.mjs`). A miss is one `ENV:` message. The **shared store link**
   (`.claude/worktrees/node_modules`) points at the primary's hooks `node_modules` for every nested worktree.
   Check it with `scripts/worktree/shared-deps.mjs --check`.
+- **Offer / decision**: an offer is a question the model asks Dave with AskUserQuestion (written by `ship-ask.mjs` or `pr_checkpoint`).
+  A decision is his tap: the exact option label, single use. A mismatch records nothing and the model re-asks (max 2).
+- **Decision ledger**: the `decision-ledger` hook and store. The `decision-gate` hook denies PR create, land, merge and store writes
+  without a decision when `decisions.enforce` is true. Both ship off.
 
 ## Coordination
 
 - **Lane**: a unit of concurrent work claimed by one session. The
   **lane board** lists lanes and holders. **Claim / release** a lane; **note** progress on it.
-- **Reminder**: a lane with a due time (`remind set`). **Due**: its time passed and it is not acked. `next` skips it; SessionStart shows "Reminders due". **Band**: P0, P1 or P2; sorts first.
+- **Band**: P0, P1, P2 or NULL (Unsorted). **Rank**: `lane.priority`, the order inside a band. **Reminder**: a lane with a due time (`remind set`); `next` skips it. See COORDINATION.md "Band and rank".
 - **Board**: lanes and events under one `project_key`. **Board key**: the registry key; cooperative, not security.
 - **Lane shim**: `~/.claude/scripts/lane.mjs`, the CLI path. **Project register** makes a board.
 - **Phone page**: a board's published lane page. Its url is `laneArtifact` in the registry entry; `/publish-board <key>` makes it.
-- **Band**: P0, P1, P2 or NULL (Unsorted), the importance of an open lane. **Rank**: `lane.priority`, the order inside a band. See COORDINATION.md "Band and rank".
 - **Session name**: the `/rename` (or `claude -n`) name, e.g. `trex`. It is the address peers use (`say --to trex`).
   **Session handle**: `#` + the first 8 hex of the session id, e.g. `#0d40499c`. **Label**: `name #sid8`.
   Write a session as `trex #0d40499c` or `#0d40499c`, never as bare hex. Identity file: `~/.claude/state/identity/<uuid>.json`.

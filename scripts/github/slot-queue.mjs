@@ -212,15 +212,18 @@ const recent = (state, d) => {
   return age >= 0 && age < d.cfg.dedupe_min * MIN;
 };
 
+// Dave never types a command: the session asks him a question, and his answer runs the verb (Dave 2026-11-06).
+const ANSWER = 'Dave answers the question the session asks';
+
 const slotWord = (row) => (row.nextSlotInMin > 0 ? ` Next slot in about ${row.nextSlotInMin} minutes.` : ' The slot is free now.');
 
 const queuedText = (row) => `PR #${row.pr}: queued for the free CodeRabbit slot, ${row.position} of ${row.total}.${slotWord(row)}`;
-const stuckText = (pr) => `PR #${pr}: two free-slot posts made no review, so the item is stuck. Type /slot drop ${pr} to remove it, or /slot wait ${pr} to try again.`;
-const timeoutText = (pr) => `PR #${pr}: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Type /slot pay ${pr} or /slot wait ${pr}.`;
+const stuckText = (pr) => `PR #${pr}: two free-slot posts made no review, so the item is stuck. ${ANSWER}: remove it or try again.`;
+const timeoutText = (pr) => `PR #${pr}: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. ${ANSWER}: pay or keep waiting.`;
 
 function paidText(pr, v) {
-  if (v.verdict === 'ALLOW') return `PR #${pr}: no free slot for 30 minutes. Paid round $${Number(v.cost).toFixed(2)} (cr-paid ALLOW). Type /slot pay ${pr}, or wait.`;
-  return `PR #${pr}: no free slot for 30 minutes. A paid round is not allowed (${v.reasons?.[0] ?? 'cr-paid ESCALATE'}). Type /slot wait ${pr} to keep waiting.`;
+  if (v.verdict === 'ALLOW') return `PR #${pr}: no free slot for 30 minutes. Paid round $${Number(v.cost).toFixed(2)} (cr-paid ALLOW). ${ANSWER}, or the item keeps waiting.`;
+  return `PR #${pr}: no free slot for 30 minutes. A paid round is not allowed (${v.reasons?.[0] ?? 'cr-paid ESCALATE'}). The item keeps waiting.`;
 }
 
 /** Toasts for what changed between two states of the same file: queued, reviewed, stuck. Posts and asks make their own. */
@@ -262,7 +265,7 @@ function afterPost(state, item, res, now) {
   return { state: { ...state, items, slot }, actions: [toast(item.pr, `PR #${item.pr}: free slot taken, ${REVIEW_COMMENT} posted.`)] };
 }
 
-const readFailText = (pr, v) => `PR #${pr}: no free slot for 30 minutes. The paid-round check could not be read (${v.reason ?? 'no reason'}). Type /slot pay ${pr} to try it again, or /slot wait ${pr} to keep waiting.`;
+const readFailText = (pr, v) => `PR #${pr}: no free slot for 30 minutes. The paid-round check could not be read (${v.reason ?? 'no reason'}). ${ANSWER}: try it again or keep waiting.`;
 
 /** The paid ask from a verdict read before the lock. No verdict counts as a failed read (item.verdictFails); the third one gives up with one toast. */
 function askPaid(it, v) {
@@ -363,8 +366,8 @@ function waitItem(it, now) {
 /** Why a paid round may not go out now, or null. Checked before any verdict is read. */
 function payRefusal(a, state, it, d) {
   const now = d.now();
-  if (it.state === 'posted') return `PR ${a.pr} is already posted: a review was requested for this head. Wait for CodeRabbit, or type /slot drop ${a.pr}.`;
-  if (state.holder && now - state.holder.at < d.cfg.holder_max_min * MIN) return `PR ${state.holder.pr} holds the free slot (it expires ${d.cfg.holder_max_min} minutes after its post). Type /slot pay ${a.pr} again after that.`;
+  if (it.state === 'posted') return `PR ${a.pr} is already posted: a review was requested for this head. Wait for CodeRabbit, or ${ANSWER} to drop it.`;
+  if (state.holder && now - state.holder.at < d.cfg.holder_max_min * MIN) return `PR ${state.holder.pr} holds the free slot (it expires ${d.cfg.holder_max_min} minutes after its post). ${ANSWER} again after that.`;
   if (it.decision?.kind === 'pay' && it.decision.head === it.head) return `PR ${a.pr}: Dave already paid for this head; a second paid round needs a new head.`;
   return null;
 }
@@ -412,7 +415,7 @@ function decideLocked(a, d) {
   const it = state.items.find((x) => x.pr === a.pr);
   if (!it || isDone(it)) return refuse(`no live queue item for PR ${a.pr}`);
   if (a.kind === 'pay') return payLocked(a, d, state, it);
-  if (a.kind === 'wait' && !WAITABLE.includes(it.state)) return refuse(`PR ${a.pr} is ${it.state}; /slot wait restarts the clock of a queued, timed-out or stuck item only`);
+  if (a.kind === 'wait' && !WAITABLE.includes(it.state)) return refuse(`PR ${a.pr} is ${it.state}; wait restarts the clock of a queued, timed-out or stuck item only`);
   const next = a.kind === 'first' ? { ...it, pin: true, decision: decision('first', it, d.now()) } : waitItem(it, d.now());
   writeState(d.statePath, replaceItem(state, next));
   return { code: 0, body: { ok: true, item: next, posted: false } };

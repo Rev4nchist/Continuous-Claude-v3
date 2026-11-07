@@ -170,6 +170,7 @@ test('AC7: --confirm --by auto refuses (exit 1, nothing written) for HIGH, kill 
     // so --by auto reaches the auto rule there and is refused by band.
     const why = { 'unread labels': /Could not read the PR labels/ }[label] ?? /auto/i;
     assert.match(r.stderr, why, label);
+    assert.doesNotMatch(r.stderr, /\/pathway|\/slot/, `${label}: the refusal names no typed command`);
     assert.ok(!existsSync(r.pathwayFile), `${label}: no pathway.json`);
   }
 });

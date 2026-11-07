@@ -1,12 +1,39 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { CheckpointOption, CheckpointResult } from '../types'
-import { buildPathwayAsk, chicagoTime, keptDraftText, parseCheckpointArgs, pathwayOfAnswer, type PathwayAsk } from '../hooks/pr-checkpoint/model'
+import {
+  NEED_PR,
+  STORE_DENY,
+  askOrder,
+  askSpec,
+  buildPathwayAsk,
+  chicagoTime,
+  changeKeptText,
+  changeStopText,
+  ignoredText,
+  ledgerAskText,
+  ledgerCommandNote,
+  ledgerCommandText,
+  keptDraftText,
+  movedText,
+  needsPaidConfirm,
+  paidConfirmLabels,
+  paidUnconfirmedText,
+  parseCheckpointArgs,
+  pathwayOfAnswer,
+  notDraftText,
+  stopText,
+  undoFailedText,
+  whyTextOnly,
+  type PathwayAsk,
+} from '../hooks/pr-checkpoint/model'
+import { reportLine } from '../hooks/pr-loop/model'
+import { slotLine } from '../hooks/pr-loop/slot-model'
 
 // The 3-line review question, the slot-state labels, the loose typed answer and the Keep-as-draft text. Pure functions: model.ts takes no `$`.
 // How it can fail, and the test that catches it:
 // P1  a typed PR:word form (328:none, none:328) is a usage error; a drive colon in --body is split by mistake
-// P2  a typed answer under Other (option number, word, unique prefix, case) records nothing, or a near miss, a wrong PR or a comma pair records
+// P2  a dialog answer that is not an exact label (option number, word, prefix, case, trailing space, comma pair) records; an exact label does not
 // P3  the question is not 3 lines, or a line holds the wrong fact (PR, band, files, trigger, slot)
 // P4  the slot text is wrong for free, wait, unknown or an older checkpoint with no slot fact; the time is not Chicago time
 // P5  the CodeRabbit label does not follow the slot state
@@ -65,57 +92,29 @@ describe('parseCheckpointArgs: typed forms', () => {
   })
 })
 
-describe('pathwayOfAnswer: loose typed answer', () => {
+describe('pathwayOfAnswer: an exact option label only', () => {
   const a = ask(FREE)
   // Labels: 1 CodeRabbit now (free slot, $0) (Recommended), 2 Keep as draft ($0), 3 No review, land on CI ($0)
   const pathway = (text: unknown, from: PathwayAsk = a) => pathwayOfAnswer(text, from)?.pathway ?? null
 
-  test('P2 the option number picks that row', () => {
-    expect(pathway('1')).toBe('coderabbit')
-    expect(pathway(' 3 ')).toBe('none')
-    expect(pathway('4')).toBeNull()
-    expect(pathway('0')).toBeNull()
+  test('P2 each exact label picks its row', () => {
+    expect(a.choices.map(one => pathway(one.label))).toEqual(['coderabbit', 'wait', 'none'])
   })
 
-  test('P2 a pathway word, with or without the PR, in any case', () => {
-    for (const text of ['none', 'NONE', '328:none', '328 none', 'none 328', '#328:none']) expect(pathway(text), text).toBe('none')
-    expect(pathway('wait')).toBe('wait')
-    expect(pathway('accept')).toBe('coderabbit')
-    expect(pathway('coderabbit')).toBe('coderabbit')
+  test('P2 a row number, a pathway word, a label prefix, a changed label, a trailing space and more lines are misses (Dave 2026-11-06)', () => {
+    const first = a.choices[0]!.label
+    const misses = ['1', ' 3 ', '4', 'none', 'NONE', '328:none', 'none 328', 'wait', 'accept', 'coderabbit', 'no review', 'KEEP', 'code', first.toLowerCase(), `${first} `, `${first}
+please`, `${first}, ${a.choices[2]!.label}`, 'please wait for the weekend', '', '   ', 42, null]
+    for (const text of misses) expect(pathway(text), String(text)).toBeNull()
   })
 
-  test('P2 another PR number records nothing', () => {
-    expect(pathway('999:none')).toBeNull()
-    expect(pathway('none 999')).toBeNull()
+  test('P2 an exact label of another question is a miss', () => {
+    const other = ask(WAIT, { recommended: 'none' })
+    expect(pathway(other.choices[0]!.label, a)).toBeNull()
   })
 
-  test('P2 a unique label prefix, without case; an exact label with a trailing space', () => {
-    expect(pathway('no review')).toBe('none')
-    expect(pathway('KEEP')).toBe('wait')
-    expect(pathway('code')).toBe('coderabbit')
-    expect(pathway(`${a.choices[0]!.label.toLowerCase()} `)).toBe('coderabbit')
-  })
-
-  test('P2 a near miss records nothing: too short, a comma pair, other words, empty, not a string', () => {
-    expect(pathway('co')).toBeNull()
-    expect(pathway(`${a.choices[0]!.label}, ${a.choices[2]!.label}`)).toBeNull()
-    expect(pathway('please wait for the weekend')).toBeNull()
-    expect(pathway('')).toBeNull()
-    expect(pathway('   ')).toBeNull()
-    expect(pathway(42)).toBeNull()
-    expect(pathway('none --body x.md')).toBeNull()
-  })
-
-  test('P2 an ambiguous prefix records nothing; a word still picks', () => {
-    const both = ask(FREE, { options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] })
-    expect(pathway('code', both)).toBeNull()
-    expect(pathway('both', both)).toBe('both')
-  })
-
-  test('P2 a typed pick keeps the by of the row: only the recommended row is by default', () => {
-    const both = ask(FREE, { options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] })
-    expect(pathwayOfAnswer('coderabbit', both)?.by).toBe('default')
-    expect(pathwayOfAnswer('both', both)?.by).toBe('dave')
+  test('P2 a pick is by dave on every row (M9: no tap records by default)', () => {
+    expect(a.choices.map(one => pathwayOfAnswer(one.label, a)?.by)).toEqual(['dave', 'dave', 'dave'])
   })
 })
 
@@ -206,5 +205,140 @@ describe('keptDraftText', () => {
     expect(text).toMatch(/Do not ask him again/)
     expect(text).toMatch(/pending/i)
     expect(text).not.toContain('/pathway')
+  })
+})
+
+// ---- pathway flow v2 (Dave 2026-11-06): every decision is a tap ----------------------------------------------------------------------
+// How it can fail, and the test that catches it:
+// V1  a tap records `--by default` (the recommended row), so one dialog return can mark a paid PR ready        (M9)
+// V2  a paid pick, the recommended one too, records with no second tap                                           (M9)
+// V3  the paid confirm lists Yes first, so a dialog that returns row 0 twice records a paid pick                 (M9)
+// V4  a typed answer is read past its first line, or the ignored text is not named                              (M6)
+// V5  an ask that can spend lists the spending row first                                                         (item 5)
+// V6  a text for the model or Dave tells him to type or paste a command                                          (M10)
+
+describe('v2: a tap is always Dave\'s and a paid pick asks again', () => {
+  const NONE_FIRST = ask(FREE, { recommended: 'none', auto: { eligible: false, band: 'MID', reason: '' } })
+
+  test('V1 every row of the question is by dave: the recommended row, none and Keep as draft', () => {
+    for (const one of [ask(FREE), ask(WAIT), ask(UNKNOWN), NONE_FIRST]) expect(one.choices.map(choice => choice.by)).toEqual(one.choices.map(() => 'dave'))
+  })
+
+  test('V1 the exact label of the recommended row is by dave as well', () => {
+    const first = ask(FREE).choices[0]!.label
+    expect(pathwayOfAnswer(first, ask(FREE))?.by).toBe('dave')
+  })
+
+  test('V2 every paid pick asks again, the recommended row included; none and Keep as draft do not', () => {
+    const rows = ask(FREE, { options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] }).choices
+    expect(rows.filter(needsPaidConfirm).map(choice => choice.pathway)).toEqual(['coderabbit', 'both'])
+    expect(rows[0]!.label).toMatch(/\(Recommended\)$/)
+  })
+
+  test('V3 the paid confirm lists No first, marked Recommended, and Yes second', () => {
+    const [no, yes] = paidConfirmLabels(ask(FREE).choices[0]!)
+    expect(no).toBe('No, keep the PR a draft (Recommended)')
+    expect(yes).toBe('Yes, record coderabbit')
+  })
+})
+
+describe('v2: a typed answer reads its first line only', () => {
+  test('V4 the first line parses, the rest is ignored and named', () => {
+    const text = '349 none\n\nThis is exactly what I wanted, thanks.'
+    expect(parseCheckpointArgs(text)).toEqual({ pr: 349, word: 'none', body: null })
+    expect(ignoredText(text)).toBe('This is exactly what I wanted, thanks.')
+  })
+
+  test('V4 a second PR or word in the ignored lines changes nothing; one line has no ignored text', () => {
+    expect(parseCheckpointArgs('349 none\n350 both')).toEqual({ pr: 349, word: 'none', body: null })
+    expect(ignoredText('349 none')).toBe('')
+  })
+
+  test('V4 an unknown word in the FIRST line is still a usage error, whatever follows', () => {
+    expect(parseCheckpointArgs('This is great\n349 none')).toBeNull()
+    expect(parseCheckpointArgs('349 none and more')).toBeNull()
+  })
+
+  test('V4 a dialog answer is not read line by line: a label with a line after it is a miss', () => {
+    const a = ask(FREE)
+    expect(pathwayOfAnswer('none\nplease do not wait', a)).toBeNull()
+    expect(pathwayOfAnswer(`${a.choices[2]!.label}\nplease do not wait`, a)).toBeNull()
+  })
+})
+
+describe('v2: asks that can spend list the free row first', () => {
+  const spec = (kind: 'opening' | 'round' | 'greptile') => askSpec({ kind, pr: 7, head: 'a'.repeat(40), text: 'Question text.' }, 7)
+
+  test('V5 the opening ask, the round ask and the Greptile ask all put No first, marked Recommended', () => {
+    for (const kind of ['opening', 'round', 'greptile'] as const) {
+      expect(askOrder(kind), kind).toEqual(['no', 'yes'])
+      expect(spec(kind).choices.map(one => one.answer), kind).toEqual(['no', 'yes'])
+      expect(spec(kind).choices[0]!.label, kind).toMatch(/\(Recommended\)$/)
+      expect(spec(kind).choices[1]!.label, kind).not.toMatch(/Recommended/)
+    }
+  })
+})
+
+describe('v2: no text tells Dave to type or paste a command', () => {
+  const bad = /\/pathway </i
+  const slotPay = /\/slot (pay|wait|drop|first)/i
+  const answers = /He answers with|Dave answers with|picks again in|He can answer later with|Type the command|Dave types|Dave runs/i
+
+  test('V6 the texts of every outcome that records nothing', () => {
+    const texts = [
+      keptDraftText(7),
+      movedText(7, 'the head moved'),
+      stopText(7, 'other', 'free text'),
+      stopText(7, 'closed'),
+      stopText(7, 'empty'),
+      ...(['no', 'closed', 'empty', 'other'] as const).map(how => paidUnconfirmedText(7, 'coderabbit', how, 'typed words')),
+      NEED_PR,
+      STORE_DENY,
+      changeKeptText(7, 'review:coderabbit'),
+      changeStopText(7),
+      undoFailedText(7, 'gh exited 1'),
+      notDraftText(7),
+      ledgerCommandText(7),
+      ledgerCommandNote(7),
+      ledgerAskText({ state: 'ask', pathway: null, text: '', reasked: 1, ask: { header: 'PR #7', question: 'Q', options: [{ label: 'A' }, { label: 'B' }] } }),
+      whyTextOnly(null, null),
+      whyTextOnly('plugin', null),
+      whyTextOnly('bridge', 7),
+    ]
+    for (const text of texts) {
+      expect(text).not.toMatch(bad)
+      expect(text).not.toMatch(slotPay)
+      expect(text).not.toMatch(answers)
+    }
+  })
+
+  test('V6 the stop text says the PR stays a draft and nothing was recorded', () => {
+    expect(stopText(7, 'other', 'free text')).toMatch(/stays a draft/)
+    expect(stopText(7, 'other', 'free text')).toMatch(/Nothing was recorded/)
+    expect(stopText(7, 'other', 'free text')).toContain('free text')
+  })
+
+  const ALERT = { pr: 7, head: 'a'.repeat(40), headShort: 'aaaaaaa', merged: false, whenReady: false, reasons: ['not READY after 60 minutes'] }
+
+  test('V6 the watcher lines: the paid review and the timed-out queue ask by tap, never by a typed command, and never post before a Yes', () => {
+    const stalled = reportLine({ ...ALERT, state: 'STALLED', slot: { position: 1, total: 2, state: 'timed-out' } })
+    const limited = reportLine({ ...ALERT, state: 'LIMITED', rateLimit: { minutes: 40 }, reasons: ['CodeRabbit rate limited: head not reviewed'] })
+    for (const line of [stalled, limited]) {
+      expect(line).not.toMatch(bad)
+      expect(line).not.toMatch(slotPay)
+      expect(line).toContain('ship-ask.mjs paid-round --pr 7 --json')
+    }
+    expect(limited).toMatch(/only after Dave taps a Yes option/)
+    expect(limited.indexOf('post nothing yet')).toBeGreaterThan(-1)
+    expect(limited.indexOf('post nothing yet')).toBeLessThan(limited.indexOf('--use-credits'))
+  })
+
+  test('V6 a stuck queue item and the queue rows send the model to pr_checkpoint or to a question, never to a typed /slot verb', () => {
+    const stuck = reportLine({ ...ALERT, state: 'STALLED', slot: { position: 1, total: 2, state: 'stuck' } })
+    expect(stuck).not.toMatch(slotPay)
+    expect(stuck).toContain('pr_checkpoint with pr 7')
+    const row = { pr: 7, band: 'HIGH', position: 1, total: 2, head7: 'aaaaaaa', queuedMin: 70, timeoutInMin: 0, nextSlotInMin: 12, posts: 2, asked: { paid30: true, timeout60: true } }
+    for (const state of ['timed-out', 'stuck']) expect(slotLine({ ...row, state }), state).not.toMatch(slotPay)
+    expect(slotLine({ ...row, state: 'stuck' })).toContain('pr_checkpoint 7')
   })
 })

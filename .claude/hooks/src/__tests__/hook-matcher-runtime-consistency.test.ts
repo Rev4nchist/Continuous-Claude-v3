@@ -198,3 +198,58 @@ describe('shell guards cover every shell-running tool (F07)', () => {
     expect(missing).toEqual([]);
   });
 });
+
+/**
+ * Pathway flow v2 (2026-11-06). decision-gate gates at runtime on COMMAND_TOOLS and WRITE_TOOLS; decision-ledger on AskUserQuestion.
+ * Every name must pass a matcher that runs the hook. A name in the set but not in a matcher is inert (the hook never sees it).
+ */
+describe('decision hooks cover every tool they gate', () => {
+  const SETTINGS = JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+  const matches = (event: string, tool: string): Set<string> => {
+    const found = new Set<string>();
+    for (const block of SETTINGS.hooks?.[event] ?? []) {
+      const m: string = block.matcher ?? '';
+      const hit = m === '' || m === '*' || (/^[A-Za-z0-9_|]+$/.test(m) ? m.split('|').includes(tool) : new RegExp(`^(?:${m})$`).test(tool));
+      if (!hit) continue;
+      for (const hook of block.hooks ?? []) {
+        const name = [hook.command ?? '', ...(hook.args ?? [])].join(' ').match(/([a-zA-Z0-9-]+)\.mjs/);
+        if (name) found.add(name[1]);
+      }
+    }
+    return found;
+  };
+
+  it('every COMMAND_TOOLS and WRITE_TOOLS name reaches decision-gate through a PreToolUse matcher', async () => {
+    const { COMMAND_TOOLS, WRITE_TOOLS } = await import('../decision-gate.js');
+    const tools = [...COMMAND_TOOLS, ...WRITE_TOOLS];
+    expect(tools.length).toBeGreaterThan(0);
+    expect(tools.filter((t) => !matches('PreToolUse', t).has('decision-gate'))).toEqual([]);
+  });
+
+  it('decision-gate runs on the Desktop Commander process and write tools, not only on Bash', async () => {
+    const { COMMAND_TOOLS, WRITE_TOOLS } = await import('../decision-gate.js');
+    const dc = [...COMMAND_TOOLS, ...WRITE_TOOLS].filter((t) => t.startsWith('mcp__'));
+    expect(dc.length).toBe(6);
+  });
+
+  it('a Desktop Commander move_file onto the decision store reaches decision-gate and is denied', async () => {
+    const { decide } = await import('../decision-gate.js');
+    const tool = 'mcp__plugin_desktop-commander_desktop-commander__move_file';
+    expect(matches('PreToolUse', tool).has('decision-gate')).toBe(true);
+    const deps = {
+      git: () => ({ status: 1, stdout: '' }),
+      readFile: () => JSON.stringify({ decisions: { enforce: true } }),
+      env: {},
+      home: 'C:/Users/dave',
+    };
+    const input = { tool_name: tool, tool_input: { source: 'C:/tmp/forged.json', destination: 'C:/Users/dave/.claude/state/ccv3-mods/decisions.json' }, cwd: 'C:/repo' };
+    expect(decide(input, deps).action).toBe('deny');
+  });
+
+  it('decision-ledger is registered on PostToolUse for AskUserQuestion and its runtime gate names that tool', () => {
+    expect(matches('PostToolUse', 'AskUserQuestion').has('decision-ledger')).toBe(true);
+    const source = readFileSync(join(SRC_DIR, 'decision-ledger.ts'), 'utf-8');
+    expect(source).toMatch(/tool_name \|\| input\.tool\) !== TOOL/);
+    expect(source).toMatch(/const TOOL = 'AskUserQuestion'/);
+  });
+});

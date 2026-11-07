@@ -1,0 +1,185 @@
+// The store of offers and decisions behind the pathway-flow-v2 questions (design N1, .claudedocs/2026-11-06-pathway-flow-v2-design.md).
+// Tests: scripts/github/decisions.test.mjs.
+//
+// An OFFER is a question the model must ask Dave with AskUserQuestion: its options are fixed by a script, not by the model.
+// A DECISION is Dave's tap: the exact label of an open offer. A decision is bound to (step, key, head) and is used up once.
+// The AskUserQuestion hook calls decisionRecord. The engine, the mod and the gates call decisionRead and decisionUse.
+//
+// Steps: ship (commit and push), open-pr, review, land, paid-round. Key: the repo plus a PR number or a branch (decisionKey).
+// File: one JSON object { version, offers, decisions, misses }, each a map keyed by the triple. Writes run under file-lock.mjs and
+// replace the file by a rename. Reads take no lock and never throw: a missing or corrupt file reads as empty (fail closed: no decision).
+// Corrupt includes a section that is not a plain object (an array, a string, null): the whole store reads as empty and the next write repairs it.
+// Entries older than a week are dropped at the next write.
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import { withLock } from './file-lock.mjs';
+
+/** The env var that moves the store (tests). */
+export const DECISIONS_ENV = 'CCV3_DECISIONS_FILE';
+export const STEPS = Object.freeze(['ship', 'open-pr', 'review', 'land', 'paid-round']);
+/** Dave may be asked again this many times after a miss. Miss 1 and 2 re-ask; miss 3 stops (missBump returns 3). */
+export const MAX_REASKS = 2;
+const REPO = 'Rev4nchist/Continuous-Claude-v3';
+const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+/** A miss count older than this is dropped: the re-asks are one quick loop, and a stop must not block a PR for good. */
+const MISS_TTL_MS = 60 * 60 * 1000;
+const liveMisses = (m) => (m && Date.now() - Date.parse(m.at) <= MISS_TTL_MS ? m.count : 0);
+
+/** The store file: $CCV3_DECISIONS_FILE, else ~/.claude/state/ccv3-mods/decisions.json. */
+export const decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(os.homedir(), '.claude', 'state', 'ccv3-mods', 'decisions.json');
+
+/** The key of a PR (`repo#12`) or of a branch (`repo@feat/x`). A PR number wins when both are given. */
+export const decisionKey = ({ repo = REPO, pr, branch }) => (pr !== undefined && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`);
+
+const empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
+const idOf = ({ step, key, head }) => `${step}\n${key}\n${String(head).toLowerCase()}`;
+const isText = (v) => typeof v === 'string' && v !== '';
+
+const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** The store, or an empty one when the file is missing, malformed, or has a section (offers, decisions, misses) that is not a plain object. */
+function readStore(file) {
+  try {
+    const s = JSON.parse(readFileSync(file, 'utf8'));
+    if (!isPlain(s)) return empty();
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? store : empty();
+  } catch { return empty(); }
+}
+
+function writeStore(file, store) {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const text = `${JSON.stringify(store, null, 2)}\n`;
+  writeFileSync(tmp, text);
+  try { renameSync(tmp, file); } catch {
+    try { unlinkSync(tmp); } catch { /* gone */ }
+    writeFileSync(file, text);
+  }
+}
+
+function prune(store, now) {
+  for (const group of [store.offers, store.decisions, store.misses]) {
+    for (const [id, row] of Object.entries(group)) {
+      if (!(now - Date.parse(row?.at) <= MAX_AGE_MS)) delete group[id];
+    }
+  }
+}
+
+/** Runs fn(store) under the lock and saves the store. Returns fn's value, or { ok: false, reason: 'lock' }. */
+function update(fn) {
+  const file = decisionsPath();
+  mkdirSync(path.dirname(file), { recursive: true });
+  const locked = withLock(file, {}, () => {
+    const store = readStore(file);
+    prune(store, Date.now());
+    const out = fn(store);
+    writeStore(file, store);
+    return out;
+  });
+  return locked;
+}
+
+/** Why a spec cannot be an offer, or null. 2 to 4 options with distinct text labels. */
+function specProblem(spec) {
+  const options = spec?.options;
+  if (!Array.isArray(options) || options.length < 2 || options.length > 4) return 'the spec needs 2 to 4 options';
+  const labels = options.map((o) => o?.label);
+  if (!labels.every(isText)) return 'every option needs a text label';
+  return new Set(labels).size === labels.length ? null : 'the option labels must differ';
+}
+
+/**
+ * offerWrite({ step, key, head, spec, tree, cwd }) -> { ok: true, nonce } | { ok: false, reason }.
+ * Opens the question for (step, key, head). It drops an older decision for the triple (a new question needs a new tap) and keeps the miss
+ * count (a re-ask must not reset it). It closes every other open offer with the same step and key (older heads), so a stale offer takes no tap. spec is { header, question, options: [{ label, ... }] }; extra keys are stored as given.
+ * Do not call it when you still want to use a recorded decision.
+ */
+export function offerWrite({ step, key, head, spec, tree, cwd }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'bad-offer: step, key and head are needed' };
+  const bad = specProblem(spec);
+  if (bad) return { ok: false, reason: `bad-offer: ${bad}` };
+  return update((store) => {
+    const id = idOf({ step, key, head });
+    const nonce = randomUUID();
+    // An older head's offer of the same step and key must not take a later tap: close it (the stale tap then records nothing).
+    for (const other of Object.values(store.offers)) {
+      if (other?.step === step && other?.key === key && other.open === true) other.open = false;
+    }
+    store.offers[id] = { nonce, step, key, head: String(head).toLowerCase(), tree: tree ?? null, cwd: cwd ?? null, spec, labels: spec.options.map((o) => o.label), at: new Date().toISOString(), open: true };
+    delete store.decisions[id];
+    return { ok: true, nonce };
+  });
+}
+
+/**
+ * decisionRecord({ step, key, head, label }) -> { ok: true } | { ok: false, reason }.
+ * Records only an EXACT label of the open offer for the triple, then closes the offer. Reasons: no-open-offer, no-match, lock.
+ * A label that ends the question (such as "Keep open") is still a decision: the reader decides what a label means.
+ */
+export function decisionRecord({ step, key, head, label }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-open-offer' };
+  return update((store) => {
+    const id = idOf({ step, key, head });
+    const offer = store.offers[id];
+    if (!offer || offer.open !== true) return { ok: false, reason: 'no-open-offer' };
+    if (typeof label !== 'string' || !offer.labels.includes(label)) return { ok: false, reason: 'no-match' };
+    store.decisions[id] = { label, at: new Date().toISOString(), tree: offer.tree, nonce: offer.nonce };
+    offer.open = false;
+    delete store.misses[id];
+    return { ok: true };
+  });
+}
+
+/** decisionRead({ step, key, head }) -> { label, at } | null. No lock; any read error is null. */
+export function decisionRead({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return null;
+  const d = readStore(decisionsPath()).decisions[idOf({ step, key, head })];
+  return d && typeof d.label === 'string' ? { label: d.label, at: d.at } : null;
+}
+
+/** decisionUse({ step, key, head }) -> { ok: true } | { ok: false, reason }. Uses the decision up (call it AFTER the action succeeds). Resets the miss count. */
+export function decisionUse({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-decision' };
+  return update((store) => {
+    const id = idOf({ step, key, head });
+    const had = Boolean(store.decisions[id]);
+    delete store.decisions[id];
+    delete store.offers[id];
+    delete store.misses[id];
+    return had ? { ok: true } : { ok: false, reason: 'no-decision' };
+  });
+}
+
+/** missCount({ step, key, head }) -> the misses in the last hour (0 when none). */
+export function missCount({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return 0;
+  return liveMisses(readStore(decisionsPath()).misses[idOf({ step, key, head })]);
+}
+
+/**
+ * missBump({ step, key, head }) -> the new count. Miss 1 and 2 may re-ask (MAX_REASKS); a count above MAX_REASKS means stop.
+ * Fails closed: when the store cannot be locked it returns MAX_REASKS + 1.
+ */
+export function missBump({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return MAX_REASKS + 1;
+  const r = update((store) => {
+    const id = idOf({ step, key, head });
+    const count = liveMisses(store.misses[id]) + 1;
+    store.misses[id] = { count, at: new Date().toISOString() };
+    return { ok: true, count };
+  });
+  return r.ok === true ? r.count : MAX_REASKS + 1;
+}
+
+/** The open offers: [{ nonce, step, key, head, tree, cwd, spec, labels, at }]. The AskUserQuestion hook matches an answer against them. */
+export function offerList() {
+  return Object.values(readStore(decisionsPath()).offers).filter((o) => o?.open === true);
+}
+
+/** The newest offer of the triple, open or closed, or null. The engine reads its spec.values to map a label to a pathway. */
+export function offerRead({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return null;
+  return readStore(decisionsPath()).offers[idOf({ step, key, head })] ?? null;
+}

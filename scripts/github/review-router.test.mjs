@@ -1081,7 +1081,8 @@ test('CP5: a raise on a review:none PR adds risk:* only and posts the checkpoint
     const d = decide('synchronize', pr(['.github/workflows/x.yml']), labels, 'normal', config, { now: NOW, previousPathway: 'none', previousPclass: 'normal' });
     assert.equal(d.reason, 'raised');
     assert.deepEqual(d.add, ['risk:infra'], `deep_enabled ${config.deep_enabled}`);
-    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\. Return the PR to draft \(gh pr ready --undo\), then run \/pathway again\./);
+    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\. Call pr_checkpoint \{pr\}: it asks Dave whether to return the PR to draft and pick again\./);
+    assert.doesNotMatch(d.comment, /\/pathway/);
     assert.doesNotMatch(d.comment, /\/checkpoint/, "/checkpoint is a built-in of Claude Code, not this mod's command");
     assert.equal(d.pathway, 'none');
     assert.equal(d.pclass, 'normal', 'pclass stays the class at the checkpoint');
@@ -1295,7 +1296,7 @@ const c1Fix = (comments, state = consumedState(90)) => ({
 test('C1a (CLI): same head, undo then UI ready with only the old marker is not a checkpoint and the raise note stays', () => {
   const out = runCli(c1Fix([marked(HEAD, 'none', { id: 90 })]), ['--event', READY]);
   assert.match(out, consumedAfter('pathway=none pclass=normal', 90));
-  assert.match(out, /Class raised from normal to infra after the checkpoint\. Return the PR to draft \(gh pr ready --undo\), then run \/pathway again\./);
+  assert.match(out, /Class raised from normal to infra after the checkpoint\. Call pr_checkpoint \{pr\}: it asks Dave whether to return the PR to draft and pick again\./);
   const older = runCli(c1Fix([marked(HEAD, 'none', { id: 80 })]), ['--event', READY]);
   assert.match(older, consumedAfter('pclass=normal', 90), 'a marker older than the consumed one');
 });

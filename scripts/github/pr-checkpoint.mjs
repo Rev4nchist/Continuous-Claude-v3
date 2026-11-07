@@ -27,6 +27,10 @@
  *   --by default names a pathway that is not the recommendation; or --by auto names anything but `none`, or the result's `auto`
  *   block is not eligible (autoOf: kill switch checkpoint.autoConfirm, band LOW/MID/ELEVATED, no security-tier or critical file, no drift, labels read). The state dir holds stamp.json and pathway.json. Default:
  *   <git toplevel of the cwd>/.claude/cache/pre-pr. --facts and --config work as above (tests).
+ *   Flag checkpoint.ledger (review-router.config.json, default false): see lib/checkpoint-ledger.mjs. With it true, `--json --pr N` adds a `ledger` block (the
+ *   two-call protocol: state ask, confirm-paid, record, kept-draft, stop or none; `ledger.ask` is the AskUserQuestion spec) and writes the offer to the decision
+ *   store; --no-ledger turns that off for one run; --ask-anyway keeps the question open for an auto-eligible PR (the mod passes it after a failed auto-confirm). And a confirm by dave with --pr N records only when Dave's tap for the pathway is in the store (a paid
+ *   pathway also needs his Yes on the paid confirm); --by default records nothing. The taps are used up after the record.
  * node scripts/github/pr-checkpoint.mjs --apply <pr> [--state-dir <dir>]
  *   Reads pathway.json, checks the live PR (a draft, at the recorded head), adds the review label, then marks it ready. The label
  *   comes first, and a failed label never reaches ready. gh is the real gh, or `node $PR_CHECKPOINT_GH` (tests).
@@ -44,6 +48,7 @@ import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayM
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
+import { ledgerConfirmProblem, ledgerStep, ledgerUse } from './lib/checkpoint-ledger.mjs';
 
 export { capacityFact, parseRateLimitReply };
 
@@ -529,7 +534,7 @@ function driftWhy(drift) {
  */
 function labelsProblem(c, facts) {
   if (!c.band || facts.labels !== null || c.dependabot) return null;
-  return 'Could not read the PR labels (gh pr view failed, or there is no PR for this branch). The band needs the risk:high label, so no pathway is recommended. Open the draft PR, check gh, and run /pathway again.';
+  return 'Could not read the PR labels (gh pr view failed, or there is no PR for this branch). The band needs the risk:high label, so no pathway is recommended. Open the draft PR, check gh, and call pr_checkpoint {pr} again.';
 }
 
 function clockOf(iso) {
@@ -786,7 +791,7 @@ export function confirmRecord({ result, facts, pathway, by }) {
 
 /** Why a pathway record cannot be applied, or null. It is checked before any gh call. */
 function recordProblem(record) {
-  if (!record || typeof record !== 'object') return 'No pathway record. Run /pathway (pr-checkpoint.mjs --confirm) first.';
+  if (!record || typeof record !== 'object') return 'No pathway record. Call pr_checkpoint {pr} first: it asks Dave and records his tap.';
   if (typeof record.head !== 'string' || record.head === '') return 'The pathway record has no head.';
   if (!['none', 'coderabbit', 'both'].includes(record.pathway)) return `The pathway record holds pathway ${String(record.pathway)}, which records no review.`;
   if (record.label !== LABELS[record.pathway]) return `The pathway record label ${String(record.label)} does not match its pathway ${record.pathway}.`;
@@ -800,10 +805,18 @@ const firstLine = (text) => String(text ?? '').trim().split('\n')[0];
 const failed = (error) => ({ ok: false, error });
 
 function readPr(pr, gh) {
-  const r = gh(['pr', 'view', String(pr), '--json', 'isDraft,headRefOid', ...REPO_ARGS]);
+  const r = gh(['pr', 'view', String(pr), '--json', 'isDraft,headRefOid,labels', ...REPO_ARGS]);
   if (r.status !== 0) return { error: `Could not read PR #${pr} (${firstLine(r.stderr)}).` };
   try { return JSON.parse(r.stdout); } catch { return { error: `Could not read PR #${pr}: gh gave no JSON.` }; }
 }
+
+/**
+ * The review:* labels of a PR view other than `keep`. The router reads the strongest review:* label, so a stale one must go (#349). Labels may be objects or strings.
+ * A review:coderabbit record keeps review:deep-held: review-router.mjs `releasable` lifts a hold only while that label is still on the PR.
+ */
+const staleReviewLabels = (labels, keep) => (Array.isArray(labels) ? labels : [])
+  .map((l) => (typeof l === 'string' ? l : l?.name))
+  .filter((n) => typeof n === 'string' && n.startsWith('review:') && n !== keep && !(keep === 'review:coderabbit' && n === 'review:deep-held'));
 
 /** The comment applyPathway posts before ready: the hidden marker the router reads (review-router.mjs confirmedPathways), then one visible line. */
 const confirmBody = (record) => `${renderPathwayMarker(record.head.toLowerCase(), record.pathway)}
@@ -822,9 +835,9 @@ export function applyPathway({ pr, record, gh }) {
   if (live.error) return failed(live.error);
   if (live.isDraft !== true) return failed(`PR #${pr} is not a draft, so the pathway is not applied.`);
   if (String(live.headRefOid).toLowerCase() !== record.head.toLowerCase()) {
-    return failed(`The head of PR #${pr} moved since the pathway was confirmed (PR ${String(live.headRefOid).slice(0, 7)}, record ${record.head.slice(0, 7)}). Run /pathway again.`);
+    return failed(`The head of PR #${pr} moved since the pathway was confirmed (PR ${String(live.headRefOid).slice(0, 7)}, record ${record.head.slice(0, 7)}). Call pr_checkpoint {pr} again: it asks Dave again for the new head.`);
   }
-  const label = gh(['pr', 'edit', String(pr), '--add-label', record.label, ...REPO_ARGS]);
+  const label = gh(['pr', 'edit', String(pr), ...staleReviewLabels(live.labels, record.label).flatMap((n) => ['--remove-label', n]), '--add-label', record.label, ...REPO_ARGS]);
   if (label.status !== 0) return failed(`Could not add the label ${record.label} (${firstLine(label.stderr)}). The PR was not marked ready.`);
   const note = gh(['pr', 'comment', String(pr), '--body', confirmBody(record), ...REPO_ARGS]);
   if (note.status !== 0) return failed(`The label ${record.label} was added, but the pathway-confirmed comment failed (${firstLine(note.stderr)}). The PR was not marked ready.`);
@@ -845,7 +858,7 @@ function ghRunner(env = process.env, timeout = undefined) {
 // ---------- CLI ----------
 
 const VALUE_FLAGS = ['--facts', '--config', '--confirm', '--by', '--body', '--state-dir', '--apply', '--pr'];
-const BOOL_FLAGS = ['--json', '--dependabot', '--probe'];
+const BOOL_FLAGS = ['--json', '--dependabot', '--probe', '--no-ledger', '--ask-anyway'];
 const PATHWAYS = ['none', 'coderabbit', 'both', 'wait'];
 
 /** { opts } or { error }. A value flag with no value (or whose next argument is a flag) is an error. */
@@ -869,7 +882,7 @@ function confirmUsage(o) {
 
 function applyUsage(o) {
   if (!/^[1-9]\d*$/.test(o['--apply'])) return '--apply needs a PR number';
-  const stray = ['--facts', '--config', '--body', '--by', '--json', '--dependabot', '--probe', '--pr'].find((k) => o[k] !== undefined);
+  const stray = ['--facts', '--config', '--body', '--by', '--json', '--dependabot', '--probe', '--pr', '--ask-anyway'].find((k) => o[k] !== undefined);
   return stray ? `${stray} is not an --apply flag: it takes --state-dir only` : null;
 }
 
@@ -916,6 +929,9 @@ function inputsOf(o, stateDir, probe = false) {
   return { facts, policy };
 }
 
+/** The two-call protocol (lib/checkpoint-ledger.mjs) runs only for the literal true in checkpoint.ledger. */
+const ledgerOn = (policy) => policy.checkpoint?.ledger === true;
+
 const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`); process.exitCode = 1; };
 
 function runConfirm(o) {
@@ -924,11 +940,13 @@ function runConfirm(o) {
   let bodyText;
   try { bodyText = readFileSync(o['--body'], 'utf8'); } catch { return refuse(`cannot read the body file ${o['--body']}`); }
   const args = { result: recommend(facts, policy), facts, pathway: o['--confirm'], by: o['--by'], bodySha: bodyHash(bodyText) };
-  const problem = confirmProblem(args);
+  const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
+  const problem = confirmProblem(args) ?? (ledgerOn(policy) ? ledgerConfirmProblem({ pr, head: facts.head, pathway: args.pathway, by: args.by }) : null);
   if (problem) return refuse(problem);
   const record = confirmRecord(args);
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
+  if (ledgerOn(policy)) ledgerUse({ pr, head: facts.head, pathway: args.pathway });
   console.log(JSON.stringify(record));
 }
 
@@ -945,14 +963,16 @@ function runRecommend(o) {
   // The probe may post only in the JSON run the mod makes. The text plan and --confirm never post.
   const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
-  console.log(o['--json'] ? JSON.stringify(result) : renderText(result));
+  const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
+  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity), askAnyway: o['--ask-anyway'] === true }) : null;
+  console.log(o['--json'] ? JSON.stringify(ledger ? { ...result, ledger } : result) : renderText(result));
 }
 
 function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const bad = parsed.error ?? usageProblem(parsed.opts);
   if (bad) {
-    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--probe] [--pr n] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default|auto> --body <file> [--state-dir d] | --apply <pr> [--state-dir d].`);
+    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--probe] [--no-ledger] [--ask-anyway] [--pr n] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default|auto> --body <file> [--pr n] [--state-dir d] | --apply <pr> [--state-dir d].`);
     process.exit(2);
   }
   const o = parsed.opts;

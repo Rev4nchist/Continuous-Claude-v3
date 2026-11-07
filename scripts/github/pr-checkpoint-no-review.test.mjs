@@ -226,8 +226,12 @@ const run = async (event, labels, over = {}, opts = {}) => {
 const markers = async (...cs) => (await router()).confirmedMarkers(cs, HEAD, null);
 
 test('G1: HIGH first run with review:none and no marker saves no pathway and writes the unconfirmed note', async () => {
-  const { NONE_UNCONFIRMED_NOTE } = await router();
+  const { NONE_UNCONFIRMED_NOTE, NONE_BAND_RAISED_NOTE } = await router();
   assert.equal(typeof NONE_UNCONFIRMED_NOTE, 'string', 'the router exports the note');
+  for (const note of [NONE_UNCONFIRMED_NOTE, NONE_BAND_RAISED_NOTE]) {
+    assert.match(note, /Call pr_checkpoint \{pr\}/, 'the note sends the model to the tool, then a tap');
+    assert.doesNotMatch(note, /\/pathway|\/slot/, 'the note names no typed command');
+  }
   const d = await run('ready_for_review', NONE_LABELS);
   assert.equal(d.band.band, 'HIGH');
   assert.equal(d.pathway, null);
@@ -264,7 +268,7 @@ test('G5: HIGH ready_for_review with a fresh none marker for the head saves path
   assert.equal(d.pathway, 'none');
   assert.ok(d.pclass);
   assert.equal(d.consumed, 11);
-  assert.ok(!(d.comment ?? '').includes('no /pathway confirmation'), 'no unconfirmed note for a legit pick');
+  assert.ok(!(d.comment ?? '').includes('no pathway confirmation'), 'no unconfirmed note for a legit pick');
 });
 
 test('G6: ELEVATED first run with review:none and no marker still saves pathway none', async () => {

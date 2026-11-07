@@ -33,7 +33,7 @@
  *     (from the strongest review:* label) and pclass=<class at the checkpoint>. A later person_override or no_change run
  *     re-reads the pathway from the labels (no review:* label keeps the saved one) and keeps pclass. A raise keeps both.
  *     A ready_for_review with a review:* label is a new checkpoint only when a "pathway-confirmed head=<sha> pathway=<p>" marker comment (posted by /pathway before it marks the PR ready, by an OWNER, MEMBER or COLLABORATOR) names this head and the label's pathway: then pclass becomes the current class. Without one, pclass stays.
- *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Return the PR to draft (gh pr ready --undo), then run /pathway again.". A raise on a PR that
+ *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again.". A raise on a PR that
  *     already has review:coderabbit or review:deep-held adds neither of them (review:deep is still added when wanted).
  * Files: compare/<base>...<head sha> (pinned to the head), or the PR files list above 300 files.
  * Ledger: one JSON line on stdout, in $GITHUB_STEP_SUMMARY and in $RUNNER_TEMP/review-ledger.jsonl (the workflow uploads
@@ -279,10 +279,10 @@ const highest = (usedId, top) => (usedId === null && top < 0 ? null : Math.max(u
 // add the label, so the router saves pathway none there only when a fresh pathway-confirmed marker for the head names none. A null band
 // (a label event, a config with no matrix block) keeps the old behaviour.
 const NONE_GATED = new Set(['HIGH', 'CRITICAL']);
-export const NONE_UNCONFIRMED_NOTE = 'review:none at band HIGH or CRITICAL has no /pathway confirmation for this head, so the router saved no checkpoint. Return the PR to draft, then run /pathway.';
+export const NONE_UNCONFIRMED_NOTE = 'review:none at band HIGH or CRITICAL has no pathway confirmation for this head, so the router saved no checkpoint. Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again.';
 // A none saved with no marker (consumed null) at a band below HIGH stays when a push raises the band. The state keeps no band, so this
 // is the signal: a pick made at HIGH or above needs a marker, and a marker sets consumed. Detect only: the pathway is not changed.
-export const NONE_BAND_RAISED_NOTE = 'review:none was saved with no /pathway confirmation, and the band is HIGH or CRITICAL now. The pathway is unchanged. Return the PR to draft, then run /pathway. land-pr.ps1 refuses until Dave picks again for this head.';
+export const NONE_BAND_RAISED_NOTE = 'review:none was saved with no pathway confirmation, and the band is HIGH or CRITICAL now. The pathway is unchanged. Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again. land-pr.ps1 refuses until Dave picks again for this head.';
 const namesNone = (confirmed) => confirmed.some((c) => (typeof c === 'string' ? c : c?.pathway) === 'none');
 /** True when `wanted` is a change to none at HIGH or CRITICAL that no fresh none marker for the head backs. */
 const noneGated = (wanted, saved, confirmed, band) => NONE_GATED.has(band) && wanted === 'none' && saved.pathway !== 'none' && !namesNone(confirmed);
@@ -323,7 +323,7 @@ function checkpointOf({ event, reason, previousClass, labelsNow, effective, save
   return { pathway, pclass: redone ? effective : saved.pclass, consumed: (redone ? highest(used.id, top) : null) ?? saved.consumed, noneUnconfirmed: gated, noneBandRaised: noneBandRaised(pathway, saved, confirmed, band) };
 }
 
-const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Return the PR to draft (gh pr ready --undo), then run /pathway again.`;
+const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again.`;
 
 /**
  * What a raise may add. A review:none PR, or one whose saved pathway is none, gets risk:* only (it wants no bot). A PR with review:coderabbit or

@@ -173,6 +173,7 @@
       "mode": "inject",
       "command": [
         "^gh\\s+pr\\s+create\\b",
+        "^gh\\s+pr\\s+merge\\b",
         "^gh\\s+api\\b(?=.*\\s-X\\s+POST\\b)(?=.*/pulls(\\s|$))"
       ],
       "segment": [
@@ -180,7 +181,12 @@
         "^node(\\.exe)?\\s.*pre-pr\\.mjs",
         "^node(\\.exe)?\\s.*cr-fix\\.mjs",
         "^node(\\.exe)?\\s.*cr-paid\\.mjs",
+        "^node(\\.exe)?\\s.*ship-ask\\.mjs",
+        "^node(\\.exe)?\\s.*land-decision\\.mjs",
         "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
+      ],
+      "tools": [
+        "^mcp__ccv3-mods__pr_checkpoint$"
       ]
     },
     {

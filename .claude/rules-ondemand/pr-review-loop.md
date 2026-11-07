@@ -103,10 +103,13 @@ name an event that runs it, or give `na` with the reason.
    the first holds the lock. The run count is keyed on the branch name and its first own commit.
    A merge of main keeps the count. A rebase rewrites that commit and starts a new count.
 2. Open the PR as a draft (`gh pr create --draft`), then call `pr_watch`. Call `pr_checkpoint` with
-   `pr` and `body` (the file that `pre-pr.mjs --body` checked). The mod asks Dave the
-   question itself, in this session, and the call waits for his answer. Do not ask him yourself. Then the
-   mod adds the `review:` label and marks the PR ready, and the result tells you what he chose. A closed
-   question records nothing: the PR stays a draft, and Dave answers later with `/pathway`. A headless run gets a text plan and records nothing. Never run `gh pr ready`,
+   `pr` and `body` (the file that `pre-pr.mjs --body` checked). With `checkpoint.ledger` false (the
+   shipped default) the mod asks Dave the question itself, in this session, and the call waits for his
+   answer. Do not ask him yourself. With `checkpoint.ledger` true the tool returns the question: ask it
+   with AskUserQuestion, word for word, then call `pr_checkpoint` again (see "Ship flow: five taps").
+   Then the mod adds the `review:` label and marks the PR ready, and the result tells you what he chose.
+   A closed question records nothing: the PR stays a draft. Call `pr_checkpoint {pr}` again when Dave
+   wants to pick. A headless run gets a text plan and records nothing. Never run `gh pr ready`,
    never add a `review:` label by hand, and never run `pr-checkpoint.mjs --confirm` or `--apply` from a
    shell. Lock A of the ccv3-mods `pr-checkpoint` hook denies a Write-tool edit of `pathway.json`.
    Lock B of the same hook denies any shell text that names it.
@@ -124,6 +127,34 @@ name an event that runs it, or give `na` with the reason.
    review to the head, so each restack needs a new review.
 6. When the week is busy, post `@coderabbitai rate limit` before a review request. It costs no review.
    The warn and wait counts are in the first paragraph of this section.
+
+### Ship flow: five taps
+
+Every decision that needs Dave is an AskUserQuestion, with the recommended option first. Dave never types a
+command. A script builds each question, so you do not choose the options or their order. Run the script with
+`--json`, pass its JSON to AskUserQuestion word for word, and act only on the label he taps.
+
+| Step | Header | Get the question | The first option runs |
+|---|---|---|---|
+| 1 Commit and push | `Commit` | `node scripts/github/ship-ask.mjs commit-and-push --msg <file> --json` | `git commit -F <file>`, then `pwsh -File scripts/git-safe.ps1 push fork <branch>` |
+| 2 Open the PR | `Open PR` | `node scripts/github/ship-ask.mjs open-pr --json` | `gh api .../pulls -X POST -F draft=true -F body=@<file>` |
+| 3 Review choice | `PR #<N>` | call `pr_checkpoint {pr}`; with `checkpoint.ledger` true it returns the question | the tool records his pick (call it again after the answer) |
+| 4 Paid round | `Paid round` | `node scripts/github/ship-ask.mjs paid-round --pr <N> --json` | nothing: the first option is "No, keep it free" |
+| 5 Land | `Land` | `node scripts/github/ship-ask.mjs land --pr <N> --json` | `pwsh -File scripts/github/land-pr.ps1 -Pr <N>` |
+
+- A ship-ask exit code other than 0 means no question can be asked (the reason is on stderr). Do not ask.
+- The `decision-ledger` hook records only an exact option label. Free text, Esc, a timeout, an empty answer or
+  an array records nothing. The hook then says "re-ask n of 2". Ask again, at most 2 times. After that, say
+  "Nothing was recorded" and stop. The PR stays a draft.
+- "Show the diff first" and "Show the PR body first": print it, then ask the same question again. "Stop here",
+  "Keep open" and "Return to draft": nothing runs. Only the first option, or "Land when READY", lets the action run.
+- Every paid action needs a tap. A paid review pick (`coderabbit`, `both`) gets a second question whose first
+  option is "No, keep the PR a draft". Never post `--use-credits` or `@coderabbitai review` without a tap.
+  A dialog that returns the first row twice records nothing paid.
+- With `decisions.enforce` true, `decision-gate` denies a PR create without the Open PR tap, and a land or merge
+  without the Land tap. It denies a write to the decision store from any tool. No override exists. Step 1 has
+  no gate yet: `git push` is not denied, so the question is rule text only. With the flag false the gate only warns.
+- Do not write the decision store by hand. A subagent cannot open a PR, land or merge: the tap is the main session's.
 
 ### PR review budget per class
 
@@ -212,7 +243,7 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 
 - `bandOf()` in `review-router.mjs` computes the band from the changed files. The numbers live in the `matrix` block of `review-router.config.json`.
 - Bands: LOW, MID, ELEVATED, HIGH, CRITICAL. HIGH is 5 or more control-plane files (`matrix.control_plane`). CRITICAL is a `risk:high` label or an r3 path.
-- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget` only under the interim CodeRabbit rule below. Every band also offers "No review, land on CI ($0)" (`none`). At HIGH and CRITICAL only Dave's pick or typed `/pathway <pr> none` records it (`--by dave`, also when `none` is the recommendation). It adds `review:none`, so the router adds no review label when the PR leaves draft.
+- LOW, MID and ELEVATED: `/pathway` recommends `none`. HIGH and CRITICAL: it recommends `coderabbit` at `matrix.bot_budget` only under the interim CodeRabbit rule below. Every band also offers "No review, land on CI ($0)" (`none`). At HIGH and CRITICAL only Dave's tap records it (`--by dave`, also when `none` is the recommendation). It adds `review:none`, so the router adds no review label when the PR leaves draft.
 - Dave can still press CodeRabbit on any band. That is an escalation.
 - **Interim CodeRabbit rule (Dave, 2026-11-04).** CodeRabbit is scarce: $0.25 a file, $50 a month. `/pathway` recommends the CodeRabbit PR bot only when one of these holds:
   - The PR has the `risk:high` label.
@@ -227,7 +258,7 @@ Spec: `.claudedocs/2026-11-01-review-matrix.md`. Dave chose option A.
 - At HIGH and CRITICAL a `review:none` label alone is not a pick. The router saves `pathway=none` there only when a fresh `pathway-confirmed` marker for the head names `none`.
   Without it the router writes a note, saves no checkpoint, and READY says `review:none has no saved checkpoint`. Below HIGH the label still counts.
   A `none` saved with no marker at a lower band stays when a push raises the band to HIGH or CRITICAL. The router writes a note and leaves the pathway alone.
-  After a gated first run, the recovery is: return the PR to draft, run `/pathway`. A fresh `none` marker then saves the checkpoint.
+  After a gated first run, the recovery is: return the PR to draft, then call `pr_checkpoint {pr}`. A fresh `none` marker then saves the checkpoint.
 - A lone `risk:docs` label asks for no bot only when the router classed the head as `docs`. On a higher class READY keeps a bot required and says why.
 - A parser file keeps rule R2 (one review, no loop) only when the interim rule recommends CodeRabbit. A critical file (R3) and an r3 path (R4) follow the same gate. The floor (aegis + critic) stays.
 - A config without a `matrix` block keeps the rules R1 to R5 and RS.
@@ -276,8 +307,8 @@ slot and posts `@coderabbitai review`. The state file is `~/.claude/state/codera
 - If a `pr_watch` line says the free-slot queue holds the PR, do not post `@coderabbitai review`. Not for
   a rate limit, not at 30 minutes, not after a fix push. A second post only burns a slot.
 - A CRITICAL PR queued 30 minutes gets a paid ask. A queued PR 60 minutes old is `timed-out`. Both toasts
-  name `/slot pay N` and `/slot wait N`. Only Dave runs them. `/slot pay N` posts only when `cr-paid.mjs`
-  says ALLOW.
+  offer a paid round or a wait. Only Dave's tap starts a paid round: ask the Paid round question
+  (`ship-ask.mjs paid-round --pr <N>`). It posts only when `cr-paid.mjs` says ALLOW and he taps Yes.
 - A timed-out PR is still not READY. READY needs a CodeRabbit review of the head. On the STALLED line,
   run the principal-reviewer agent on the head (not in fast mode) and report its findings. Do not post.
 - The `pr-checkpoint` mod (Lock A, Lock B) denies `slot-queue.mjs add`, `decide` and `drop`, and any write
@@ -287,7 +318,7 @@ slot and posts `@coderabbitai review`. The state file is `~/.claude/state/codera
 
 ## No review on the head
 
-Never request a review on a draft or on a `review:none` PR. A draft waits on `/pathway`. A
+Never request a review on a draft or on a `review:none` PR. A draft waits on Dave's pathway tap: call `pr_checkpoint {pr}`. A
 `review:none` PR with no router state needs the review-router workflow re-run for that head.
 
 On a coderabbit or both PR with no CodeRabbit review 30 minutes after ready, the mod asks Dave
@@ -297,8 +328,8 @@ A HIGH or CRITICAL PR that the free-slot queue holds gets no such ask: the queue
 Never post a review request while the CodeRabbit commit status is pending: a review is running. The
 mod asks nothing in that state.
 
-For a draft, `review-status.mjs` says "no CodeRabbit PR-bot review of the head commit. Draft: run
-/pathway; do not request a review". Follow it.
+For a draft, `review-status.mjs` says "no CodeRabbit PR-bot review of the head commit. Draft: call
+pr_checkpoint {pr}; do not request a review". Follow it.
 
 On a PR with a checkpoint record, a missing, skipped or failed CodeRabbit review is a round. Follow the
 `pr_watch` line. Post `@coderabbitai review` only when it says a round is left or Dave allowed it.
@@ -571,7 +602,12 @@ file is meant to close them. Do not treat this list as a live gate:
   replies, then the merge landed.
 - **Green check ≠ review** (#149): the Greptile check ended `success` and no review or summary was posted.
 
-When Dave says merge for a reviewed PR, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
+Land only after Dave taps the Land question (`node scripts/github/ship-ask.mjs land --pr <N> --json`, asked with
+AskUserQuestion; see "Ship flow: five taps"). A chat word is not a tap. Only "Land now" or "Land when READY" lets a land run.
+The tap is bound to the PR and its head: a push voids it. With `decisions.enforce` true, `decision-gate` denies
+`land-pr.ps1`, `gh pr merge` and `gh api .../merge` without it, and `land-pr.ps1` checks it too (`land-decision.mjs`),
+then uses it up after the merge. After a partial failure run `land-pr.ps1 -Pr <N> -CleanupOnly`.
+Land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
 through REST pinned to the head SHA (GitHub refuses if the head moved), fast-forwards `main`, and
 removes the worktree and branches. It syncs `~/.claude` itself, always from a temporary detached
 worktree of `main`: other sessions share the primary checkout and can switch it mid-sync. If it
@@ -613,7 +649,7 @@ After Gate C, `land-pr.ps1` runs `node scripts/github/land-none-check.mjs <pr> -
   `review:none` next to `review:coderabbit` asks for a CodeRabbit review, so it needs no record. A no-bot PR whose band cannot be computed (a config with no `matrix` block) is refused.
 - The record must be Dave's: `pathway none`, `label review:none`, `decided_by dave`, and `via` `dialog` or `composer`.
   A `bridge` pick (a typed word from Remote Control), an `auto` pick and an old record with no `via` are refused.
-- The record's head must equal the PR head. A push after the pick makes it stale: Dave picks again for the new head (return the PR to draft, run `/pathway`).
+- The record's head must equal the PR head. A push after the pick makes it stale: Dave picks again for the new head (return the PR to draft, then call `pr_checkpoint {pr}`).
 - The live band must not be above the band at the pick.
 - It reads the `ccv3-mods_*.json` files in the plugin store folder of `~/.claude` on the machine that lands. No store file is a refusal.
   Two files that both hold a record for the PR are a refusal that names both. A file that is not JSON is ignored when another file holds a good record, and the provenance line names it. With no good record it is named in the refusal.
@@ -705,8 +741,8 @@ number (Actions, `review-router`, Run workflow).
 - A marker belongs to one ready event. The router skips a marker whose comment id is not above `consumed`.
   Once an id is consumed, the router ignores a marker with no numeric id. Only an owner, member or collaborator marker counts.
 - `gh pr ready --undo` followed by a UI "Ready for review" on the same head is not a checkpoint. The old marker does not count again.
-  The "Class raised ... run /pathway again" note stays.
-- A new `/pathway` run posts a new marker with a higher id. The next ready then counts as a checkpoint.
+  The "Class raised ... Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again." note stays.
+- A new pathway pick (the model calls `pr_checkpoint {pr}`, Dave taps) posts a new marker with a higher id. The next ready then counts as a checkpoint.
   `pclass` becomes the current class, and the note clears. A push, a reopen and an open keep the saved `consumed` id.
 - READY trusts a label that drops Greptile only when that comment names the current head and no
   `risk:*` label is above its class. Otherwise Greptile stays required (CodeRabbit instead while
