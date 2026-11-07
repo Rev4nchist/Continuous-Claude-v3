@@ -507,8 +507,20 @@
     setTimeout(function () { card.classList.add('kb-dragging'); }, 0);
   });
 
+  // Edge scroll for the wide desktop board. A drag within 64px of the left or right edge scrolls it sideways; the step is up to 32px and grows near the edge.
+  // It runs before the column check, so the gap between two columns scrolls too. A grid board has nothing to scroll, so there it does nothing.
+  function edgeScroll(e) {
+    if (typeof e.clientX !== 'number' || !board.getBoundingClientRect) return;
+    var r = board.getBoundingClientRect();
+    var fromLeft = e.clientX - r.left;
+    var fromRight = r.right - e.clientX;
+    if (fromLeft < 64) board.scrollLeft = Math.max(0, board.scrollLeft - Math.ceil((64 - Math.max(fromLeft, 0)) / 2));
+    else if (fromRight < 64) board.scrollLeft += Math.ceil((64 - Math.max(fromRight, 0)) / 2);
+  }
+
   board.addEventListener('dragover', function (e) {
     if (!dragId) return;
+    edgeScroll(e);
     var col = dropTarget(e);
     if (!col) return;
     e.preventDefault();
