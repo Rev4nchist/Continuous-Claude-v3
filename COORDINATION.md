@@ -43,6 +43,20 @@ Details: `.claude/rules-ondemand/lane-board.md`.
 You do not have to remember to run these. The `lane-context` hook injects the board at
 session start and any unread updates on every prompt, and renews your leases while you work.
 
+## Band and rank
+
+A lane has a **band** (`P0`, `P1`, `P2`, or NULL = Unsorted) and a **rank** (`lane.priority`, the order inside a band).
+P0 means this week. The cap of 5 is soft: the phone page warns above it and blocks nothing. Dave sets a band with
+`node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0|P1|P2|none`. Nothing sets one automatically.
+
+One sort key orders open lanes everywhere: band, then `due_at` (NULL last), then rank, then id
+(`scripts/coordination/lane-sort.mjs`, with twins in the hooks and the app). `lane.mjs next`, the board and the phone page share it.
+
+The phone page shows Priorities in two views. **By band** is the default: four groups (P0 this week, P1 next, P2 later, Unsorted),
+open lanes only, with `n/5` on P0 and an amber "over the cap of 5" above 5. **Columns** is the drag board. The choice persists in the browser.
+The Lanes list has state chips and band chips (they combine) and can group by Track or by Band. The read-only page of another board has the same views.
+A kanban drag changes rank only. The kanban sync never writes a band, and a lane that is done after the sync takes no rank (a pending card that reopens a done lane gives it one).
+
 ## The rules that are not enforced by code
 
 - **Claim a lane before you start.** The claim is the declaration of scope; a lane's

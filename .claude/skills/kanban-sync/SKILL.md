@@ -79,7 +79,8 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
 
 | Kanban input | Lane change |
 |---|---|
-| Column order | priority: one rank per card, 1..n across now, next, later, waiting (new lanes default to 50) |
+| Column order | priority: one rank per open lane, 1..n across now, next, later, waiting. A lane that is done after the sync gets no rank; a done lane that a pending card reopens does (new lanes default to 50) |
+| Band | never written by the sync. A drag changes rank only. Dave sets a band with `node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0\|P1\|P2\|none` |
 | Lane moved into waiting | state `blocked` and the note "Waiting on Dave (kanban)" |
 | Lane moved out of waiting | `blocked` goes back to `backlog`. `ready` stays `ready` |
 | Card status | state `backlog`, `ready`, `blocked` or `done` |
@@ -91,7 +92,9 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
 - An active lane is never changed by a card. The result is `skipped: active` and the card stays pending.
 - A held lane (a live session owns it, same test as `lane.mjs claim`) keeps its state. A card status or a column move gives `skipped: held` and the card stays pending. Notes and questions still apply. Priority still applies.
 - A column moves a lane's state only when the lane's column differs from `appliedColumns`. A lane that stays in waiting after Dave set it to `ready` on its card stays `ready`.
-- An id with no lane gets `skipped: no such lane`.
+- An id with no lane gets `skipped: no such lane`. It takes no rank.
+- Rank follows the state AFTER the card status: a pending card that sets done takes the lane out of the ranks, one that reopens a done lane puts it in.
+- A done lane in a stale doc is ignored for ranks: it gets no priority change and the open lanes after it keep contiguous ranks. Its id stays in `appliedColumns`.
 - A card status wins over the column for the same lane.
 - Each change is logged as a lane event of kind `kanban`. Other sessions see the notes in `lane.mjs inbox`.
 
