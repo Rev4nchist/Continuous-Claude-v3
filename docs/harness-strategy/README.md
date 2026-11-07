@@ -733,3 +733,5 @@ It exits 1 on any FAIL. With `--json` it also writes `.claude/cache/e2e/<YYYY-MM
 | `review` | today's `coderabbit-paid.jsonl` total against the $15 day cap (WARN from $12); `reviews_7d_manual_date` in `review-router.config.json` older than 7 days |
 
 A missing optional file is a PASS with `absent` in the detail. Tests: `node --test scripts/harness-doctor.test.mjs`.
+
+The `sync:worktrees` WARN lists orphan folders. `node scripts/worktree/orphans.mjs` is a dry run that sizes each one and gives a keep or candidate verdict. It deletes nothing and prints the paste-yourself command per candidate. Tests: `node --test scripts/worktree/orphans.test.mjs`.
