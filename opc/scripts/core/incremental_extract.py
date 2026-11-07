@@ -344,6 +344,7 @@ def _extract_error_context(text: str, max_len: int = 500) -> str:
 # one session it names. A flat file with no session id maps to no session.
 _STATE_VERSION = 2
 _STATE_MAX_SESSIONS = 50
+_STATE_MAX_HASHES = 100
 _LOCK_STALE_S = 10.0
 _LOCK_TIMEOUT_S = 5.0
 
@@ -410,8 +411,10 @@ def _acquire_lock(lock_file: str) -> bool:
                 if time.time() - os.stat(lock_file).st_mtime > _LOCK_STALE_S:
                     os.unlink(lock_file)
                     continue
+            except FileNotFoundError:
+                continue  # the lock vanished: take it now
             except OSError:
-                continue
+                pass  # cannot delete it (held handle): fall through to the timeout and sleep
             if time.monotonic() - start > _LOCK_TIMEOUT_S:
                 return False
             time.sleep(0.05)
@@ -439,7 +442,11 @@ def save_state(state_file: str, state: ExtractionState) -> None:
     tmp_file = os.path.join(state_dir, f".{os.path.basename(state_file)}.tmp.{os.getpid()}")
     try:
         raw = _read_raw_state(state_file)
-        raw["recent_hashes"] = list(state.get("recent_hashes", []))
+        # Merge, never replace: another session may have saved hashes since this run loaded.
+        on_disk = raw["recent_hashes"]
+        known = set(on_disk)
+        merged = on_disk + [h for h in state.get("recent_hashes", []) if h not in known]
+        raw["recent_hashes"] = merged[-_STATE_MAX_HASHES:]
         session_id = state.get("session_id", "")
         if session_id:
             entry = dict(raw["sessions"].get(session_id, {}))

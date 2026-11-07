@@ -131,6 +131,59 @@ def test_a_stale_lock_does_not_block_the_save(tmp_path):
     assert not lock.exists()
 
 
+def test_a_stale_lock_that_cannot_be_deleted_times_out_instead_of_spinning(tmp_path, monkeypatch):
+    lock = tmp_path / "state.json.lock"
+    lock.write_text("1\n0")
+    old = time.time() - 60
+    os.utime(lock, (old, old))
+    monkeypatch.setattr(ie, "_LOCK_TIMEOUT_S", 0.2)
+    calls = {"n": 0}
+
+    def locked_unlink(path, *a, **kw):
+        calls["n"] += 1
+        if calls["n"] > 1000:  # a spin loop: end the test with a clear failure
+            raise RuntimeError("spun on a stale lock that cannot be deleted")
+        raise PermissionError(13, "held by another process")
+
+    monkeypatch.setattr(ie.os, "unlink", locked_unlink)
+    assert ie._acquire_lock(str(lock)) is False
+    assert calls["n"] < 100
+
+
+def test_a_lock_that_vanishes_between_stat_and_unlink_is_retaken(tmp_path, monkeypatch):
+    lock = tmp_path / "state.json.lock"
+    lock.write_text("1\n0")
+    old = time.time() - 60
+    os.utime(lock, (old, old))
+    real_unlink = os.unlink
+
+    def racing_unlink(path, *a, **kw):
+        real_unlink(path)  # another process removed it first
+        real_unlink(path)  # so this raises FileNotFoundError
+
+    monkeypatch.setattr(ie.os, "unlink", racing_unlink)
+    assert ie._acquire_lock(str(lock)) is True
+    real_unlink(str(lock))
+
+
+def test_a_save_merges_hashes_another_session_saved_in_the_meantime(tmp_path):
+    f = tmp_path / "state.json"
+    # Session B loaded its snapshot (no hashes), then A saved, then B saves.
+    ie.save_state(str(f), _state(A, 10, ["hA1", "hA2"]))
+    ie.save_state(str(f), _state(B, 5, ["hB1"]))
+    assert _read(f)["recent_hashes"] == ["hA1", "hA2", "hB1"]
+
+
+def test_merged_hashes_have_no_duplicates_and_are_capped_at_100_newest(tmp_path):
+    f = tmp_path / "state.json"
+    ie.save_state(str(f), _state(A, 1, [f"h{i}" for i in range(90)]))
+    ie.save_state(str(f), _state(B, 1, ["h50"] + [f"n{i}" for i in range(30)]))
+    hashes = _read(f)["recent_hashes"]
+    assert len(hashes) == 100
+    assert hashes.count("h50") == 1
+    assert hashes[-1] == "n29"
+
+
 def test_sessions_are_pruned_to_the_cap_and_the_saving_session_stays(tmp_path):
     f = tmp_path / "state.json"
     sessions = {
