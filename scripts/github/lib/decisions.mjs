@@ -8,6 +8,7 @@
 // Steps: ship (commit and push), open-pr, review, land, paid-round. Key: the repo plus a PR number or a branch (decisionKey).
 // File: one JSON object { version, offers, decisions, misses }, each a map keyed by the triple. Writes run under file-lock.mjs and
 // replace the file by a rename. Reads take no lock and never throw: a missing or corrupt file reads as empty (fail closed: no decision).
+// Corrupt includes a section that is not a plain object (an array, a string, null): the whole store reads as empty and the next write repairs it.
 // Entries older than a week are dropped at the next write.
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -36,10 +37,15 @@ const empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 const idOf = ({ step, key, head }) => `${step}\n${key}\n${String(head).toLowerCase()}`;
 const isText = (v) => typeof v === 'string' && v !== '';
 
+const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** The store, or an empty one when the file is missing, malformed, or has a section (offers, decisions, misses) that is not a plain object. */
 function readStore(file) {
   try {
     const s = JSON.parse(readFileSync(file, 'utf8'));
-    return { ...empty(), ...(s && typeof s === 'object' ? s : {}) };
+    if (!isPlain(s)) return empty();
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? store : empty();
   } catch { return empty(); }
 }
 

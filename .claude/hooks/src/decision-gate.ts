@@ -22,6 +22,7 @@
  * The config is read from the payload cwd upward (no git), then from <home>/continuous-claude.
  *
  * Posture when enforcing: a gated shape that cannot be judged (git fails, no PR number in the text) is denied. Everything else passes.
+ * Unreadable input (not JSON) has no visible shape: it passes, with one line on stderr. Blocking it would block all work.
  * A subagent (agent_id) never has a tap: its create, land and merge are denied. -CleanupOnly never merges, so it passes.
  * There is NO override: no SKIP_* variable. Dave's tap is the only way. The hook guards against mistakes, not a hostile agent:
  * a command built from variables, an indirect script, or a store write from a language other than node is not seen.
@@ -297,11 +298,32 @@ function looksGated(input: HookInput): boolean {
   return cmd.kind === 'command' && shapesOf(cmd.text).length > 0;
 }
 
-/** The whole hook: raw stdin text in, stdout text out. Never throws. */
+/**
+ * One line on stderr when the input cannot be read. The text never holds the input or the parse error (a V8 parse error quotes the input).
+ * The log row is a fixed text for the same reason.
+ */
+function unreadableInput(): string {
+  const note = 'decision-gate: the hook input is not readable JSON, so no command shape can be judged; the call is allowed.';
+  try { logGuardError(HOOK, new Error('unreadable hook input')); } catch { /* the log never blocks */ }
+  try { process.stderr.write(`${note}\n`); } catch { /* stderr is only a note */ }
+  return '{}';
+}
+
+/**
+ * The whole hook: raw stdin text in, stdout text out. Never throws.
+ * Unreadable input (not JSON, or JSON that is not an object) is ALLOWED, with a note on stderr. This is the documented posture, not a gap:
+ * the gate fails closed only for a gated shape, and it cannot see a shape in input it cannot read. Denying here would block all work.
+ */
 export function handle(raw: string, deps: Deps): string {
   let input: HookInput = {};
   try {
-    input = JSON.parse(raw.trim() || '{}') as HookInput;
+    const parsed: unknown = JSON.parse(raw.trim() || '{}');
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return unreadableInput();
+    input = parsed as HookInput;
+  } catch {
+    return unreadableInput();
+  }
+  try {
     const d = decide(input, deps);
     if (d.action === 'allow' && d.warn) {
       logGuardDecision(HOOK, input, 'warn', d.warn.split(':')[0]);
@@ -347,5 +369,5 @@ async function main(): Promise<void> {
 
 // Auto-run only as a hook; VITEST imports the pure functions above.
 if (!process.env.VITEST) {
-  main().catch((err) => { logGuardError(HOOK, err); console.log('{}'); });
+  main().catch((err) => { logGuardError(HOOK, err); console.error('decision-gate: stdin could not be read; the call is allowed.'); console.log('{}'); });
 }

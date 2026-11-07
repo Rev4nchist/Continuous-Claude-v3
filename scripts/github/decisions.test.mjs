@@ -155,6 +155,27 @@ test('D9: a corrupt store reads as empty and the next write repairs it', async (
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 1);
 });
 
+test('D13: a store whose sections are not plain objects is corrupt: it reads as empty and the next write repairs it', async () => {
+  const file = fresh();
+  const d = await load();
+  for (const bad of [[], 'x', null, 7]) {
+    for (const section of ['offers', 'decisions', 'misses']) {
+      writeFileSync(file, JSON.stringify({ version: 1, offers: {}, decisions: {}, misses: {}, [section]: bad }));
+      assert.equal(d.decisionRead(triple()), null, `${section}=${JSON.stringify(bad)}: read`);
+      assert.deepEqual(d.offerList(), [], `${section}=${JSON.stringify(bad)}: list`);
+      assert.equal(d.missCount(triple()), 0, `${section}=${JSON.stringify(bad)}: misses`);
+      assert.equal(offer(d).ok, true, `${section}=${JSON.stringify(bad)}: the next write works`);
+      const repaired = JSON.parse(readFileSync(file, 'utf8'));
+      for (const s of ['offers', 'decisions', 'misses']) assert.ok(repaired[s] && typeof repaired[s] === 'object' && !Array.isArray(repaired[s]), `${section}=${JSON.stringify(bad)}: ${s} repaired`);
+    }
+  }
+  // A whole-store array or string is corrupt too.
+  for (const whole of ['[]', '"x"', 'null']) {
+    writeFileSync(file, whole);
+    assert.equal(offer(d).ok, true, `whole store ${whole}`);
+  }
+});
+
 test('D10: a malformed offer is refused and stored nowhere', async () => {
   fresh();
   const d = await load();

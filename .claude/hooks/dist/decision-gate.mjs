@@ -248,10 +248,13 @@ var idOf = ({ step, key, head }) => `${step}
 ${key}
 ${String(head).toLowerCase()}`;
 var isText = (v) => typeof v === "string" && v !== "";
+var isPlain = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 function readStore(file) {
   try {
     const s = JSON.parse(readFileSync2(file, "utf8"));
-    return { ...empty(), ...s && typeof s === "object" ? s : {} };
+    if (!isPlain(s)) return empty();
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? store : empty();
   } catch {
     return empty();
   }
@@ -269,6 +272,8 @@ var decisionsPath2 = decisionsPath;
 function decisionRows(env = process.env) {
   try {
     const parsed = JSON.parse(readFileSync3(decisionsPath2(env), "utf8"));
+    const plain = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+    if (!plain(parsed) || ["offers", "decisions", "misses"].some((k) => !plain(parsed[k]))) return [];
     return Object.entries(parsed?.decisions ?? {}).flatMap(([id, d]) => {
       const [step, key, head] = id.split("\n");
       return head !== void 0 && typeof d?.label === "string" ? [{ step, key, head, label: d.label }] : [];
@@ -597,10 +602,29 @@ function looksGated(input) {
   const cmd = readShellCommand(input);
   return cmd.kind === "command" && shapesOf(cmd.text).length > 0;
 }
+function unreadableInput() {
+  const note = "decision-gate: the hook input is not readable JSON, so no command shape can be judged; the call is allowed.";
+  try {
+    logGuardError(HOOK, new Error("unreadable hook input"));
+  } catch {
+  }
+  try {
+    process.stderr.write(`${note}
+`);
+  } catch {
+  }
+  return "{}";
+}
 function handle(raw, deps) {
   let input = {};
   try {
-    input = JSON.parse(raw.trim() || "{}");
+    const parsed = JSON.parse(raw.trim() || "{}");
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return unreadableInput();
+    input = parsed;
+  } catch {
+    return unreadableInput();
+  }
+  try {
     const d = decide(input, deps);
     if (d.action === "allow" && d.warn) {
       logGuardDecision(HOOK, input, "warn", d.warn.split(":")[0]);
@@ -657,6 +681,7 @@ async function main2() {
 if (!process.env.VITEST) {
   main2().catch((err) => {
     logGuardError(HOOK, err);
+    console.error("decision-gate: stdin could not be read; the call is allowed.");
     console.log("{}");
   });
 }

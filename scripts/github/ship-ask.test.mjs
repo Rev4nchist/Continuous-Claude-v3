@@ -194,6 +194,45 @@ test('SA8: the real git path reads the staged count, the branch, the message sub
   assert.equal(d.offerRead({ step: 'ship', key: `${DEFAULT_REPO}@feat/real`, head }).head, head);
 });
 
+test('SA8b: --branch B reads the head and the tree of branch B, not of the checked-out branch; a missing branch writes no offer', async () => {
+  const repo = temp('shipask-branch-');
+  const git = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(repo, 'a.txt'), '1\n');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'one');
+  git('checkout', '-q', '-b', 'feat/other');
+  writeFileSync(path.join(repo, 'b.txt'), '2\n');
+  git('add', 'b.txt');
+  git('commit', '-q', '-m', 'two');
+  const otherHead = git('rev-parse', 'refs/heads/feat/other').stdout.trim();
+  const otherTree = git('rev-parse', 'refs/heads/feat/other^{tree}').stdout.trim();
+  git('checkout', '-q', 'main');
+  const mainHead = git('rev-parse', 'HEAD').stdout.trim();
+  assert.notEqual(otherHead, mainHead);
+  const d = await loadStore();
+  const r = run(['commit-and-push', '--branch', 'feat/other', '--json'], { cwd: repo });
+  assert.equal(r.status, 0, r.stderr);
+  process.env.CCV3_DECISIONS_FILE = r.storeFile;
+  const key = `${DEFAULT_REPO}@feat/other`;
+  const offer = d.offerRead({ step: 'ship', key, head: otherHead });
+  assert.ok(offer, 'the offer is bound to the head of feat/other');
+  assert.equal(offer.tree, otherTree, 'the tree is the tree of feat/other');
+  assert.equal(d.offerRead({ step: 'ship', key, head: mainHead }), null, 'not bound to the checked-out head');
+  // open-pr reads the same ref (its stamp does not exist here, so the re-run spec is offered at the branch head).
+  const o = run(['open-pr', '--branch', 'feat/other', '--json'], { cwd: repo });
+  assert.equal(o.status, 0, o.stderr);
+  process.env.CCV3_DECISIONS_FILE = o.storeFile;
+  assert.ok(d.offerRead({ step: 'open-pr', key, head: otherHead }), 'open-pr: bound to the head of feat/other');
+  // A branch that does not exist: exit 1, the reason on stderr, no offer.
+  const none = run(['commit-and-push', '--branch', 'feat/nope', '--json'], { cwd: repo });
+  assert.equal(none.status, 1);
+  assert.match(none.stderr, /feat\/nope/);
+  assert.equal(none.stdout, '');
+  process.env.CCV3_DECISIONS_FILE = none.storeFile;
+  assert.deepEqual(d.offerList(), []);
+});
+
 function fakeStatus(dir, body) {
   const file = path.join(dir, 'fake-status.mjs');
   writeFileSync(file, `process.stdout.write(${JSON.stringify(JSON.stringify(body))});`);

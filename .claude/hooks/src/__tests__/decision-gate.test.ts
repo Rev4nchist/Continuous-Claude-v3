@@ -18,7 +18,7 @@
  *   G12 the model moves a file onto the store (Desktop Commander move_file, write_pdf), or reaches it with a .. path
  *   G13 the model burns taps from a shell (land-decision.mjs use, a loop of pr-checkpoint.mjs --json --pr)
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -281,6 +281,36 @@ describe('G8 what is not gated', () => {
   it('passes unreadable input', () => {
     expect(handle('not json', deps())).toBe('{}');
   });
+  // Unreadable input has no visible shape, so the documented posture (deny only a gated shape) allows it. It says so on stderr, once, and the log row holds no input text.
+  it('passes unreadable input, says so on stderr once, and logs none of the input text', () => {
+    const log = join(dir, 'guard.jsonl');
+    const savedLog = process.env.CCV3_GUARD_DECISIONS_LOG;
+    process.env.CCV3_GUARD_DECISIONS_LOG = log;
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => { writes.push(String(chunk)); return true; }) as typeof process.stderr.write;
+    try {
+      for (const raw of ['SECRET-TOKEN-abc123 gh pr merge', '{"tool_name": "Bash", SECRET-TOKEN-abc123']) {
+        writes.length = 0;
+        expect(handle(raw, deps())).toBe('{}');
+        expect(writes, raw).toHaveLength(1);
+        expect(writes[0]).toMatch(/^decision-gate: [^\n]*not readable[^\n]*allowed\.\n$/);
+        expect(writes[0]).not.toContain('SECRET-TOKEN');
+      }
+    } finally {
+      process.stderr.write = orig;
+      if (savedLog === undefined) delete process.env.CCV3_GUARD_DECISIONS_LOG; else process.env.CCV3_GUARD_DECISIONS_LOG = savedLog;
+    }
+    const logged = existsSync(log) ? readFileSync(log, 'utf8') : '';
+    expect(logged).not.toContain('SECRET-TOKEN');
+  });
+  it('a readable payload prints nothing on stderr', () => {
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => { writes.push(String(chunk)); return true; }) as typeof process.stderr.write;
+    try { expect(handle(JSON.stringify(bash('git status')), deps())).toBe('{}'); } finally { process.stderr.write = orig; }
+    expect(writes).toEqual([]);
+  });
 });
 
 describe('G9 there is no override', () => {
@@ -431,5 +461,14 @@ describe('decisions-store reader', () => {
   it('reads the rows the real store writes (a change of the row id breaks this)', () => {
     tap('land', prKey(12), HEAD, 'Land now (Recommended)');
     expect(decisionRows({ CCV3_DECISIONS_FILE: storeFile })).toEqual([{ step: 'land', key: prKey(12), head: HEAD, label: 'Land now (Recommended)' }]);
+  });
+
+  it('reads a store with any section that is not a plain object as empty, like decisions.mjs (fail closed)', () => {
+    tap('land', prKey(12), HEAD, 'Land now (Recommended)');
+    const good = JSON.parse(readFileSync(storeFile, 'utf8')) as Record<string, unknown>;
+    for (const bad of ['offers', 'misses', 'decisions']) {
+      writeFileSync(storeFile, JSON.stringify({ ...good, [bad]: [] }));
+      expect(decisionRows({ CCV3_DECISIONS_FILE: storeFile }), bad).toEqual([]);
+    }
   });
 });

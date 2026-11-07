@@ -119,15 +119,30 @@ function git(args, cwd) {
 
 const topOf = () => git(['rev-parse', '--show-toplevel'], process.cwd()) ?? ROOT;
 
-/** { branch, head, tree, staged, ahead, subject } of the checkout in the cwd. */
+/**
+ * The head of branch B: refs/heads/B, else fork/B. `null` when neither exists.
+ * With no --branch, or when B is the checked-out branch, the head is HEAD and the tree is the index (what a commit would hold).
+ * With another branch, the head and the tree are those of the ref, never of the checkout.
+ */
+function branchTarget(branch, cwd) {
+  const current = git(['branch', '--show-current'], cwd);
+  if (branch === undefined || branch === current) return { name: current, head: git(['rev-parse', 'HEAD'], cwd), tree: git(['write-tree'], cwd), ref: 'HEAD' };
+  for (const ref of [`refs/heads/${branch}`, `refs/remotes/fork/${branch}`]) {
+    const head = git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd);
+    if (head) return { name: branch, head, tree: git(['rev-parse', `${ref}^{tree}`], cwd), ref };
+  }
+  return { name: branch, head: null, tree: null, ref: null, missing: true };
+}
+
+/** { branch, head, tree, staged, ahead, subject } of --branch B (default: the checkout in the cwd). `missing` is set when B has no ref. */
 export function gatherShip({ branch, msg }) {
   const cwd = process.cwd();
-  const name = branch ?? git(['branch', '--show-current'], cwd);
+  const t = branchTarget(branch, cwd);
   const staged = (git(['diff', '--cached', '--name-only'], cwd) ?? '').split('\n').filter(Boolean).length;
-  const ahead = git(['rev-list', '--count', 'fork/main..HEAD'], cwd);
+  const ahead = t.ref ? git(['rev-list', '--count', `fork/main..${t.ref}`], cwd) : null;
   let subject = null;
   try { subject = msg ? readFileSync(msg, 'utf8').split(/\r?\n/)[0] : null; } catch { /* no message file */ }
-  return { branch: name, head: git(['rev-parse', 'HEAD'], cwd), tree: git(['write-tree'], cwd), staged, ahead: ahead === null ? null : Number(ahead), subject };
+  return { branch: t.name, head: t.head, tree: t.tree, staged, ahead: ahead === null ? null : Number(ahead), subject, missing: t.missing === true };
 }
 
 /** The stamp of this checkout, or null. */
@@ -149,12 +164,12 @@ async function capLeft() {
 
 /** { branch, head, stampHead, stampAt, rows, fails, cliDetail, costUsd, capLeftUsd, now } for open-pr. */
 export async function gatherOpenPr({ branch }) {
-  const cwd = process.cwd();
+  const t = branchTarget(branch, process.cwd());
   const stamp = readStamp();
   const results = Array.isArray(stamp?.results) ? stamp.results : [];
   const cli = results.find((r) => r.step === 'coderabbit');
   return {
-    branch: branch ?? git(['branch', '--show-current'], cwd), head: git(['rev-parse', 'HEAD'], cwd), stampHead: stamp?.head ?? null, stampAt: stamp?.at ?? null,
+    branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null, stampAt: stamp?.at ?? null,
     rows: results.length, fails: results.filter((r) => r.status === 'FAIL').length, cliDetail: cli?.detail ?? null, costUsd: costOfDetail(cli?.detail),
     capLeftUsd: await capLeft(), now: new Date().toISOString(),
   };
@@ -187,6 +202,7 @@ export async function gatherPaid({ pr }) {
 
 /** { spec, key, head, tree } for a step and its data, or { refuse } when no question can be asked. */
 export function planOf(step, data, args) {
+  if (data.missing) return { refuse: `branch ${data.branch} does not exist (no refs/heads/${data.branch} and no fork/${data.branch}). Pass a branch that exists.` };
   if (step === 'commit-and-push') return { spec: shipSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: data.tree ?? null };
   if (step === 'open-pr') {
     const ok = data.stampHead && data.fails === 0 && String(data.stampHead).toLowerCase() === String(data.head).toLowerCase();

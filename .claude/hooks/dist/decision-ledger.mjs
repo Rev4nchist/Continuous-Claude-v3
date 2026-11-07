@@ -115,10 +115,13 @@ var idOf = ({ step, key, head }) => `${step}
 ${key}
 ${String(head).toLowerCase()}`;
 var isText = (v) => typeof v === "string" && v !== "";
+var isPlain = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 function readStore(file) {
   try {
     const s = JSON.parse(readFileSync2(file, "utf8"));
-    return { ...empty(), ...s && typeof s === "object" ? s : {} };
+    if (!isPlain(s)) return empty();
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? store : empty();
   } catch {
     return empty();
   }

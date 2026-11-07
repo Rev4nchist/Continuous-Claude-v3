@@ -39,6 +39,9 @@ export interface DecisionRow { step: string; key: string; head: string; label: s
 export function decisionRows(env: NodeJS.ProcessEnv = process.env): DecisionRow[] {
   try {
     const parsed = JSON.parse(readFileSync(decisionsPath(env), 'utf8')) as { decisions?: Record<string, { label?: unknown }> } | null;
+    // Same rule as decisions.mjs readStore: any section that is not a plain object makes the whole store corrupt (fail closed).
+    const plain = (v: unknown): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
+    if (!plain(parsed) || ['offers', 'decisions', 'misses'].some((k) => !plain((parsed as Record<string, unknown>)[k]))) return [];
     return Object.entries(parsed?.decisions ?? {}).flatMap(([id, d]) => {
       const [step, key, head] = id.split('\n');
       return head !== undefined && typeof d?.label === 'string' ? [{ step, key, head, label: d.label }] : [];

@@ -21,6 +21,7 @@
 #   a refusal text tells Dave to type /pathway                                 -> W5b
 #   a caller-set CCV3_DECISIONS_FILE points the land check at a fake store      -> WD6 (the stub node sees the variable empty on every land-decision call)
 #   a caller-set USERPROFILE or HOME moves os.homedir() and so the decision store -> WD8 (the stub node sees the real profile folder, not the caller's, on every land-decision call)
+#   the USERPROFILE and HOME override stays set after the decision check, so git finds its config in the wrong home -> WD9 (gh sees the caller's values after the check), WD9b (a caller with no HOME gets none back)
 #   decisions.enforce is read from -RepoPath only, so a repo with no config or a stale one skips the check -> WD7 (the script's own root decides too; the stricter wins)
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot 'land-pr.ps1'
@@ -71,10 +72,12 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
     'echo stub gh: unexpected arguments: %* 1>&2',
     'exit /b 1',
     ':merge',
+    'echo [%USERPROFILE%][%HOME%]>> "%~dp0gh-home.txt"',
     'echo merged> "%~dp0merge.flag"',
     'echo {}',
     'exit /b 0',
     ':pull',
+    'echo [%USERPROFILE%][%HOME%]>> "%~dp0gh-home.txt"',
     'if exist "%~dp0merge.flag" (type "%~dp0merged.json") else (type "%~dp0pull.json")',
     'exit /b 0')
   Set-Content -LiteralPath (Join-Path $stub 'node.cmd') -Encoding ascii -Value @(
@@ -113,7 +116,7 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
     'type "%~dp0none-out.txt"',
     'set /p ncode=<"%~dp0none-exit.txt"',
     'exit /b %ncode%')
-  [pscustomobject]@{ Dir = $dir; OwnEnforce = $ownEnforce; LandEnv = (Join-Path $stub 'ld-env.txt'); LandHome = (Join-Path $stub 'ld-home.txt'); Stub = $stub; Repo = $repo; Merge = (Join-Path $stub 'merge.flag'); Args = (Join-Path $stub 'recheck-args.txt'); NoneArgs = (Join-Path $stub 'none-args.txt'); GateArgs = (Join-Path $stub 'gate-args.txt'); LandCalls = (Join-Path $stub 'ld-calls.txt'); LandOrder = (Join-Path $stub 'ld-order.txt') }
+  [pscustomobject]@{ Dir = $dir; OwnEnforce = $ownEnforce; LandEnv = (Join-Path $stub 'ld-env.txt'); LandHome = (Join-Path $stub 'ld-home.txt'); GhHome = (Join-Path $stub 'gh-home.txt'); Stub = $stub; Repo = $repo; Merge = (Join-Path $stub 'merge.flag'); Args = (Join-Path $stub 'recheck-args.txt'); NoneArgs = (Join-Path $stub 'none-args.txt'); GateArgs = (Join-Path $stub 'gate-args.txt'); LandCalls = (Join-Path $stub 'ld-calls.txt'); LandOrder = (Join-Path $stub 'ld-order.txt') }
 }
 
 function Invoke-Land($case, [string[]]$extra = @()) {
@@ -271,6 +274,28 @@ try {
   $homed8 = if (Test-Path $cd8.LandHome) { @(Get-Content -LiteralPath $cd8.LandHome) } else { @() }
   Check 'WD8 seam: land-decision.mjs ran twice (check, use) and the merge went' ($homed8.Count -eq 2 -and (Test-Path $cd8.Merge) -and $rd8.Code -eq 0)
   Check 'WD8 seam: both calls saw the real profile folder in USERPROFILE and HOME' (($homed8 | Where-Object { $_ -ne "[$realProfile][$realProfile]" }).Count -eq 0)
+  # WD9: the override is scoped to the land-decision calls. Every later call (gh, and git, which finds its config through the same variables) keeps the caller's USERPROFILE and HOME.
+  # The merge and the post-merge PR read run AFTER the decision check, so the gh stub sees what the script left in the environment.
+  $fakeUp = Join-Path $work 'caller-profile'; $fakeHome = Join-Path $work 'caller-home'
+  $oldUp9 = $env:USERPROFILE; $oldHome9 = $env:HOME
+  $env:USERPROFILE = $fakeUp; $env:HOME = $fakeHome
+  try {
+    $cd9 = New-Case 'wd9' 0 '  re-check: PR #7 is unchanged' 0 '' 0 'true' 0
+    $rd9 = Invoke-Land $cd9
+  } finally { $env:USERPROFILE = $oldUp9; if ($null -eq $oldHome9) { Remove-Item Env:\HOME -ErrorAction SilentlyContinue } else { $env:HOME = $oldHome9 } }
+  $ghd9 = if (Test-Path $cd9.GhHome) { @(Get-Content -LiteralPath $cd9.GhHome) } else { @() }
+  Check 'WD9 restore: the merge went and gh ran after the decision check' ((Test-Path $cd9.Merge) -and $rd9.Code -eq 0 -and $ghd9.Count -ge 2)
+  Check 'WD9 restore: every gh call after the decision check saw the caller USERPROFILE and HOME' (($ghd9 | Where-Object { $_ -ne "[$fakeUp][$fakeHome]" }).Count -eq 0)
+  # WD9b: a caller with no HOME gets none back (the override does not leave the OS profile folder in HOME), and the decision calls still saw the real folder.
+  $env:USERPROFILE = $fakeUp; Remove-Item Env:\HOME -ErrorAction SilentlyContinue
+  try {
+    $cd9b = New-Case 'wd9b' 0 '  re-check: PR #7 is unchanged' 0 '' 0 'true' 0
+    $rd9b = Invoke-Land $cd9b
+  } finally { $env:USERPROFILE = $oldUp9; if ($null -eq $oldHome9) { Remove-Item Env:\HOME -ErrorAction SilentlyContinue } else { $env:HOME = $oldHome9 } }
+  $ghd9b = if (Test-Path $cd9b.GhHome) { @(Get-Content -LiteralPath $cd9b.GhHome) } else { @() }
+  $ldd9b = if (Test-Path $cd9b.LandHome) { @(Get-Content -LiteralPath $cd9b.LandHome) } else { @() }
+  Check 'WD9b restore, HOME unset: gh saw the caller USERPROFILE and an empty HOME' ($ghd9b.Count -ge 2 -and ($ghd9b | Where-Object { $_ -ne "[$fakeUp][]" }).Count -eq 0)
+  Check 'WD9b restore, HOME unset: both decision calls still saw the real profile folder' ($ldd9b.Count -eq 2 -and ($ldd9b | Where-Object { $_ -ne "[$realProfile][$realProfile]" }).Count -eq 0)
   # WD7: decisions.enforce true in the script's own root enforces even when -RepoPath has no config, or a config that says false.
   foreach ($repoCfg in '', 'false') {
     $cd7 = New-Case "wd7-$(if ($repoCfg) { $repoCfg } else { 'none' })" 0 '  re-check: PR #7 is unchanged' 0 '' 0 $repoCfg 1 'true'
