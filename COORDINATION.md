@@ -39,7 +39,7 @@ Details: `.claude/rules-ondemand/lane-board.md`.
 | `done <id>` | land it and release the lane |
 | `peers` | who else is live right now |
 | `remind set\|list\|snooze\|ack\|clear` | timed reminders on lanes; due ones show at session start; `next` never offers them |
-| `remind tick` | the 5-minute `CCv3-Reminder-Tick` job: fires due reminders on every board, toasts P0/P1, and mirrors changed ones to the Notion To-Do Board (one headless `claude -p`, only when a row changed). The Notion sync is off until `remind sync on`, polls Done every 2 hours, and is capped at 12 runs a day. |
+| `remind tick` | the 5-minute `CCv3-Reminder-Tick` job: fires due reminders on every board, toasts P0/P1, and mirrors changed ones to the Notion To-Do Board (one headless `claude -p`, only when a row changed or the Done poll is due). The Notion sync is off until `remind sync on`, polls Done every 2 hours, and is capped at 12 runs a day. |
 
 You do not have to remember to run these. The `lane-context` hook injects the board at
 session start and any unread updates on every prompt, and renews your leases while you work.
