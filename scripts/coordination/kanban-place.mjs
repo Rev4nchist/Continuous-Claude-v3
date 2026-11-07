@@ -8,14 +8,15 @@
  * For that reason the function must stay self-contained: no imports, no
  * outer-scope names, no modern-only syntax (it runs in a browser as-is).
  *
- * doc   : the saved `kanban/board` value, { columns: { now, next, later, waiting } }.
+ * doc   : the saved `kanban/board` value, { columns: { next, later, waiting } }.
  *         null, undefined or malformed means "nothing saved yet".
+ *         An old doc may also hold columns.now (the Now column is retired). It is never read: its ids go to their default column.
  * lanes : [{ id, state, priority }] for every lane, done ones included.
  *
- * Returns { now, next, later, waiting, inProgress }, each a list of lane ids.
- *  - The four columns are Dave's order. Doc order wins, doc column wins.
+ * Returns { next, later, waiting, inProgress }, each a list of lane ids.
+ *  - The three columns are Dave's order. Doc order wins, doc column wins.
  *  - Ids in the doc that match no open lane are dropped.
- *  - An active lane is never in the four columns: it is in `inProgress`.
+ *  - An active lane is never in the three columns: it is in `inProgress`.
  *  - A done lane is nowhere.
  *  - A lane the doc does not place goes to the END of its default column:
  *    state ready -> next, state blocked -> waiting, anything else -> later.
@@ -25,8 +26,8 @@
  *    lane moves into or out of the waiting column.
  */
 function placeLanes(doc, lanes) {
-  var names = ['now', 'next', 'later', 'waiting'];
-  var out = { now: [], next: [], later: [], waiting: [], inProgress: [] };
+  var names = ['next', 'later', 'waiting'];
+  var out = { next: [], later: [], waiting: [], inProgress: [] };
   var byId = {};
   var open = [];
   var i;
@@ -231,11 +232,13 @@ function boardWriteKind(doc) {
  * the lane is done). Pruning ids of done or deleted lanes is the job of the kanban-sync write-back, not of this page.
  *
  * doc     : the saved `kanban/board` value, or null.
- * columns : { now, next, later, waiting }, the page's columns. Not changed.
+ * columns : { next, later, waiting }, the page's columns. Not changed.
  * lanes   : [{ id }] every lane the page knows, done ones included.
+ *           A scheduled lane (board-scheduled-view.mjs) is not in this list, so its saved id returns in its saved column and the lane
+ *           goes back to that place when its time passes. An id in the retired columns.now is dropped: the output has no `now` key.
  */
 function mergeUnknownColumns(doc, columns, lanes) {
-  var names = ['now', 'next', 'later', 'waiting'];
+  var names = ['next', 'later', 'waiting'];
   var known = Object.create(null);
   var seen = Object.create(null);
   var out = {};

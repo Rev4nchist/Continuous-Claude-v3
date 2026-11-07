@@ -12,7 +12,6 @@ const lanes = [
 test('absent doc: ready goes to next, blocked to waiting, other open states to later, active apart, done dropped', () => {
   for (const doc of [null, undefined, {}, { columns: {} }, 'junk', 42, { columns: 'x' }]) {
     const p = placeLanes(doc, lanes);
-    assert.deepEqual(p.now, []);
     assert.deepEqual(p.waiting, ['c']);
     assert.deepEqual(p.next, ['a', 'g']);
     assert.deepEqual(p.later, ['b', 'e']);
@@ -21,18 +20,17 @@ test('absent doc: ready goes to next, blocked to waiting, other open states to l
 });
 
 test('doc order is preserved inside and across columns', () => {
-  const p = placeLanes({ columns: { now: ['g', 'a'], next: [], later: ['e', 'c'], waiting: ['b'] } }, lanes);
-  assert.deepEqual(p.now, ['g', 'a']);
+  const p = placeLanes({ columns: { next: ['g', 'a'], later: ['e', 'c'], waiting: ['b'] } }, lanes);
+  assert.deepEqual(p.next, ['g', 'a']);
   assert.deepEqual(p.later, ['e', 'c']);
   assert.deepEqual(p.waiting, ['b']);
-  assert.deepEqual(p.next, []);
 });
 
 test('ids in the doc that no lane has are dropped', () => {
-  const p = placeLanes({ columns: { now: ['ghost', 'a'], later: ['gone'] } }, lanes);
-  assert.deepEqual(p.now, ['a']);
-  assert.ok(![].concat(p.now, p.next, p.later, p.waiting).includes('ghost'));
-  assert.ok(![].concat(p.now, p.next, p.later, p.waiting).includes('gone'));
+  const p = placeLanes({ columns: { next: ['ghost', 'a'], later: ['gone'] } }, lanes);
+  assert.deepEqual(p.next, ['a', 'g']);
+  assert.ok(![].concat(p.next, p.later, p.waiting).includes('ghost'));
+  assert.ok(![].concat(p.next, p.later, p.waiting).includes('gone'));
 });
 
 test('lanes missing from the doc land at the END of their default column', () => {
@@ -42,35 +40,34 @@ test('lanes missing from the doc land at the END of their default column', () =>
   assert.deepEqual(p.waiting, ['c']);
 });
 
-test('an active lane is never in the four columns, even when the doc names it', () => {
-  const p = placeLanes({ columns: { now: ['d', 'a'] } }, lanes);
-  assert.deepEqual(p.now, ['a']);
+test('an active lane is never in the three columns, even when the doc names it', () => {
+  const p = placeLanes({ columns: { next: ['d', 'a'] } }, lanes);
+  assert.deepEqual(p.next, ['a', 'g']);
   assert.deepEqual(p.inProgress, ['d']);
   assert.ok(![].concat(p.next, p.later, p.waiting).includes('d'));
 });
 
 test('a done lane is nowhere, even when the doc names it', () => {
   const p = placeLanes({ columns: { waiting: ['f'] } }, lanes);
-  const all = [].concat(p.now, p.next, p.later, p.waiting, p.inProgress);
+  const all = [].concat(p.next, p.later, p.waiting, p.inProgress);
   assert.ok(!all.includes('f'));
 });
 
 test('an id listed twice is placed once, first column wins', () => {
-  const p = placeLanes({ columns: { later: ['a'], now: ['a', 'a'] } }, lanes);
-  assert.deepEqual(p.now, ['a']);
+  const p = placeLanes({ columns: { later: ['a'], next: ['a', 'a'] } }, lanes);
+  assert.deepEqual(p.next, ['a', 'g']);
   assert.ok(!p.later.includes('a'));
-  assert.ok(!p.next.includes('a'));
 });
 
 test('non-string and non-array entries in the doc are ignored, not thrown on', () => {
-  const p = placeLanes({ columns: { now: [null, 7, {}, 'a'], next: 'g', later: undefined } }, lanes);
-  assert.deepEqual(p.now, ['a']);
-  assert.deepEqual(p.next, ['g']);
+  const p = placeLanes({ columns: { next: [null, 7, {}, 'a'], waiting: 'g', later: undefined } }, lanes);
+  assert.deepEqual(p.next, ['a', 'g']);
+  assert.deepEqual(p.waiting, ['c']);
 });
 
 test('every open lane appears exactly once', () => {
-  const p = placeLanes({ columns: { now: ['g'], waiting: ['b', 'ghost'] } }, lanes);
-  const all = [].concat(p.now, p.next, p.later, p.waiting, p.inProgress).sort();
+  const p = placeLanes({ columns: { next: ['g'], waiting: ['b', 'ghost'] } }, lanes);
+  const all = [].concat(p.next, p.later, p.waiting, p.inProgress).sort();
   assert.deepEqual(all, ['a', 'b', 'c', 'd', 'e', 'g']);
 });
 
@@ -81,8 +78,8 @@ test('absent doc: blocked lanes fill waiting, sorted by DB priority then input o
   assert.deepEqual(p.later, []);
 });
 
-test('a saved doc wins: a blocked lane the doc puts in later, now or next stays there', () => {
-  const p = placeLanes({ columns: { later: ['c'], now: ['g'] } }, lanes);
+test('a saved doc wins: a blocked lane the doc puts in later or next stays there', () => {
+  const p = placeLanes({ columns: { later: ['c'], next: ['g'] } }, lanes);
   assert.deepEqual(p.later, ['c', 'b', 'e']);
   assert.deepEqual(p.waiting, []);
   const q = placeLanes({ columns: { next: ['c'] } }, lanes);
@@ -108,8 +105,16 @@ test('defaults sort by DB priority, then by input order', () => {
   assert.deepEqual(p.next, ['y', 'z', 'x', 'w']);
 });
 
-test('no lanes at all gives five empty lists', () => {
-  assert.deepEqual(placeLanes(null, []), { now: [], next: [], later: [], waiting: [], inProgress: [] });
+test('no lanes at all gives four empty lists, and no now key (the Now column is retired)', () => {
+  assert.deepEqual(placeLanes(null, []), { next: [], later: [], waiting: [], inProgress: [] });
+});
+
+test('a saved doc with columns.now is read as if it had no such column: its ids go to their default column', () => {
+  const p = placeLanes({ columns: { now: ['g', 'c'], later: ['b'] } }, lanes);
+  assert.deepEqual(p.next, ['a', 'g']);
+  assert.deepEqual(p.waiting, ['c']);
+  assert.deepEqual(p.later, ['b', 'e']);
+  assert.equal('now' in p, false);
 });
 
 // ---- the board guard, the write kind and the unknown-id merge (the page save) ---------------------------------
@@ -132,40 +137,51 @@ test('boardWriteKind: update when a doc exists (it keeps appliedColumns and sync
   for (const doc of [null, undefined]) assert.equal(boardWriteKind(doc), 'set');
 });
 
-const COLS = (o) => ({ now: [], next: [], later: [], waiting: [], ...o });
+const COLS = (o) => ({ next: [], later: [], waiting: [], ...o });
 
 test('mergeUnknownColumns: ids the page does not know come back, each in the column the saved doc had it in, after the page\'s own', () => {
   const known = [L('a', 'ready', 1), L('b', 'ready', 2)];
-  const doc = { columns: { now: ['ghost1', 'a'], later: ['ghost2'], waiting: ['ghost3'] } };
-  const merged = mergeUnknownColumns(doc, COLS({ now: ['b'], later: ['a'] }), known);
-  assert.deepEqual(merged, COLS({ now: ['b', 'ghost1'], later: ['a', 'ghost2'], waiting: ['ghost3'] }));
+  const doc = { columns: { next: ['ghost1', 'a'], later: ['ghost2'], waiting: ['ghost3'] } };
+  const merged = mergeUnknownColumns(doc, COLS({ next: ['b'], later: ['a'] }), known);
+  assert.deepEqual(merged, COLS({ next: ['b', 'ghost1'], later: ['a', 'ghost2'], waiting: ['ghost3'] }));
 });
 
 test('mergeUnknownColumns: an id the page knows is never merged back (the page placed it), and none repeats', () => {
   const known = [L('a', 'ready', 1), L('b', 'ready', 2), L('d', 'done', 3)];
-  // The page moved a from now to later; the saved doc still has it in now. d is done: known to the page, so dropped, not merged.
-  const doc = { columns: { now: ['a', 'd', 'ghost'], next: ['ghost'], later: ['b'] } };
+  // The page moved a from next to later; the saved doc still has it in next. d is done: known to the page, so dropped, not merged.
+  const doc = { columns: { next: ['a', 'd', 'ghost'], waiting: ['ghost'], later: ['b'] } };
   const merged = mergeUnknownColumns(doc, COLS({ later: ['a', 'b'] }), known);
-  assert.deepEqual(merged, COLS({ now: ['ghost'], later: ['a', 'b'] }));
-  const all = [].concat(merged.now, merged.next, merged.later, merged.waiting);
+  assert.deepEqual(merged, COLS({ next: ['ghost'], later: ['a', 'b'] }));
+  const all = [].concat(merged.next, merged.later, merged.waiting);
   assert.equal(new Set(all).size, all.length, 'an id is in two columns');
 });
 
 test('mergeUnknownColumns: no doc, a doc with no columns, junk ids and junk columns change nothing; the page columns are not mutated', () => {
   const known = [L('a', 'ready', 1)];
-  const mine = COLS({ now: ['a'] });
-  for (const doc of [null, undefined, {}, { columns: 'x' }, { columns: { now: 'a', next: null } }, 'junk']) {
-    assert.deepEqual(mergeUnknownColumns(doc, mine, known), COLS({ now: ['a'] }));
+  const mine = COLS({ next: ['a'] });
+  for (const doc of [null, undefined, {}, { columns: 'x' }, { columns: { next: 'a', later: null } }, 'junk']) {
+    assert.deepEqual(mergeUnknownColumns(doc, mine, known), COLS({ next: ['a'] }));
   }
-  assert.deepEqual(mergeUnknownColumns({ columns: { now: [3, null, {}, '', 'g'] } }, mine, known).now, ['a', 'g']);
+  assert.deepEqual(mergeUnknownColumns({ columns: { next: [3, null, {}, '', 'g'] } }, mine, known).next, ['a', 'g']);
   const before = JSON.stringify(mine);
-  mergeUnknownColumns({ columns: { now: ['g'] } }, mine, known);
+  mergeUnknownColumns({ columns: { next: ['g'] } }, mine, known);
   assert.equal(JSON.stringify(mine), before);
 });
 
 test('mergeUnknownColumns: ids named like object builtins are handled as ids', () => {
-  const merged = mergeUnknownColumns({ columns: { now: ['__proto__', 'constructor', 'toString'] } }, COLS(), [L('a', 'ready', 1)]);
-  assert.deepEqual(merged.now, ['__proto__', 'constructor', 'toString']);
+  const merged = mergeUnknownColumns({ columns: { next: ['__proto__', 'constructor', 'toString'] } }, COLS(), [L('a', 'ready', 1)]);
+  assert.deepEqual(merged.next, ['__proto__', 'constructor', 'toString']);
+});
+
+test('mergeUnknownColumns: the retired now column is dropped. The output has three keys, so a new save no longer writes it', () => {
+  const merged = mergeUnknownColumns({ columns: { now: ['old1'], next: ['keep'] } }, COLS(), [L('a', 'ready', 1)]);
+  assert.deepEqual(Object.keys(merged).sort(), ['later', 'next', 'waiting']);
+  assert.deepEqual(merged.next, ['keep']);
+});
+
+test('mergeUnknownColumns: a scheduled lane is not in the page lanes, so its saved column is kept for when its time passes', () => {
+  const merged = mergeUnknownColumns({ columns: { later: ['sched'] } }, COLS({ next: ['a'] }), [L('a', 'ready', 1)]);
+  assert.deepEqual(merged, COLS({ next: ['a'], later: ['sched'] }));
 });
 
 // ---- PR-C: how many lanes a Do next card still sits under in By band, and when the Done chip shows.

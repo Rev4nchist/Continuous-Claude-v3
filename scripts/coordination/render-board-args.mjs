@@ -50,7 +50,7 @@ export function defaultOut(repo, board) {
 }
 
 /** The files a page is rendered from. An edit to any of them must change the template hash. */
-export const TEMPLATE_FILES = ['render-board.mjs', 'render-board-args.mjs', 'board-band-view.mjs', 'board-done-view.mjs', 'lane-sort.mjs', 'kanban-client.js', 'kanban-place.mjs', 'kanban-strip.mjs'];
+export const TEMPLATE_FILES = ['render-board.mjs', 'render-board-args.mjs', 'board-band-view.mjs', 'board-done-view.mjs', 'board-scheduled-view.mjs', 'lane-sort.mjs', 'kanban-client.js', 'kanban-place.mjs', 'kanban-strip.mjs'];
 
 /** What a page was rendered from: the text of TEMPLATE_FILES in `dir`, line endings ignored. A page from an older generator shows a different hash. */
 export function templateHash(dir) {

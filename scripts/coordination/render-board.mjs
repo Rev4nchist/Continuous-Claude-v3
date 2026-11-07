@@ -16,7 +16,7 @@
  * One page per board. The board comes from --project <key>, else LANE_PROJECT, else the registry entry that holds the cwd.
  * A cwd with no board exits 1 with the register hint. continuous-claude writes <repo>/lane-board.html (the phone page);
  * every other board writes <repo>/lane-board-<key>.html, read-only. It shows a static Priorities section (By band, and the six
- * columns drawn from lane state and priority, the last one a read-only Done) and carries no kanban script and no db: the save is keyed by lane id, and the page
+ * columns drawn from lane state and priority, the first a read-only Scheduled and reminders, the last a read-only Done) and carries no kanban script and no db: the save is keyed by lane id, and the page
  * db is one document that only the published continuous-claude artifact can open. The lane, session and event queries are
  * filtered to the board. The file-claim and
  * coordination_event sections are machine-wide and say so on the page. The page carries a stamp
@@ -40,6 +40,7 @@ import { processMatchSummary } from './process-match.mjs';
 import { compareLanes, laneOrderSql } from './lane-sort.mjs';
 import { BAND_CAP, BAND_GROUPS, bandChipHtml, bandKey, capState, groupByBand } from './board-band-view.mjs';
 import { DONE_DAYS, DONE_SQL, clockText, cutNote, dayLabel, pickDone } from './board-done-view.mjs';
+import { dueChip, splitScheduled } from './board-scheduled-view.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -275,22 +276,27 @@ const laneRow = (l, i) => {
 // order. One placement function (kanban-place.mjs) serves both.
 
 const KB_COLS = [
-  ['now', 'Now'], ['next', 'Next'], ['later', 'Later'], ['waiting', 'Waiting on Dave'],
+  ['next', 'Next'], ['later', 'Later'], ['waiting', 'Waiting on Dave'],
 ];
 const kbPrio = (l) => (l.priority != null && Number.isFinite(Number(l.priority)) ? Number(l.priority) : null);
-const kbLanes = lanes.map((l) => ({ id: l.id, state: l.state, priority: kbPrio(l), band: l.band ?? null }));
+// The Scheduled and reminders column takes its lanes out first (board-scheduled-view.mjs, `now` is the render time). They are in no movable column
+// and not in kb-data, so the browser never places one twice. Read-only, never saved, no rank.
+const SPLIT = splitScheduled(lanes, GENERATED_AT);
+const kbLanes = SPLIT.rest.map((l) => ({ id: l.id, state: l.state, priority: kbPrio(l), band: l.band ?? null }));
 const kbPlaced = placeLanes(null, kbLanes);
 const kbById = new Map(lanes.map((l) => [l.id, l]));
 // The Done column: done lanes of this board from the last 7 days, newest first, at most 30 (board-done-view.mjs). Read-only, never saved, no rank.
 const DONE = pickDone(lanes, doneAt, GENERATED_AT);
 // The page also needs each lane's facts for the Plain English prompt. placeLanes
 // reads only id, state and priority, so the extra keys are inert there.
-// The read-only page has no kb-data block, so it builds none.
-const kbJson = KANBAN ? JSON.stringify(lanes.map((l, i) => ({
+// The read-only page has no kb-data block, so it builds none. kbLanes comes from SPLIT.rest, so map over SPLIT.rest too (same index).
+const kbJson = KANBAN ? JSON.stringify(SPLIT.rest.map((l, i) => ({
   ...kbLanes[i], title: l.title || '', track: l.track || '', holder: short(l.owner_session_id),
   scope: l.scope || '', note: l.note || '',
 }))).replace(/</g, '\\u003c') : '';
-const KB_STATUS = ['backlog', 'ready', 'blocked', 'done'];
+// The scheduled lanes as id, state and band only. The page reads them for "lanes ahead" and nothing else; they are not placed or saved.
+const kbSchedJson = KANBAN ? JSON.stringify(SPLIT.scheduled.map(({ lane: l }) => ({ id: l.id, state: l.state, band: l.band ?? null }))).replace(/</g, '\\u003c') : '';
+const KB_STATUS =['backlog', 'ready', 'blocked', 'done'];
 // Hash of what a Plain English answer was written from. Computed here, read from
 // data-hash by the page, so the page never rebuilds it from DOM text.
 const kbHash = (l) => hashFields([l.title, l.scope, l.state, l.note]);
@@ -380,6 +386,24 @@ const kbHead = (key, name, count, ro) => (ro
 // The summary repeats the id as its accessible name. Everything from a lane is escaped; the note is cut.
 const kbDoneCard = ({ lane: l, at }) => `<li class="card kb-done-card"><div class="kb-top"><span class="kb-id mono">${esc(l.id)}</span></div><p class="kb-title">${esc(l.title)}</p><div class="kb-meta"><span class="kb-track mono">${esc(l.track)}</span><span class="dn-time mono">${clockText(at)}</span></div><details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary><dl class="kb-dl"><dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd><dt>last note</dt><dd>${esc(cutNote(l.note) || 'none')}</dd></dl></details></li>`;
 
+// One Scheduled card. Same frame as a Done card and for the same reason: a .kb-done-card, never a .kb-card (paintEdit in the client has no null check
+// for a card without a note field). The chip is worked out at render time, so a page nobody republished keeps a stale chip.
+const kbSchedCard = ({ lane: l, dueMs }) => {
+  const d = new Date(dueMs);
+  const due = dueMs <= GENERATED_AT.getTime();
+  return `<li class="card kb-done-card"><div class="kb-top"><span class="kb-id mono">${esc(l.id)}</span></div><p class="kb-title">${esc(l.title)}</p><div class="kb-meta"><span class="kb-track mono">${esc(l.track)}</span><span class="sc-chip mono${due ? ' sc-due' : ''}">${dueChip(dueMs, GENERATED_AT.getTime())}</span></div><details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary><dl class="kb-dl"><dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd><dt>last note</dt><dd>${esc(cutNote(l.note) || 'none')}</dd><dt>due</dt><dd>${dayLabel(d, GENERATED_AT)} ${clockText(d)}</dd></dl></details></li>`;
+};
+
+// The first column. Fixed like Done: data-col is "scheduled", so the client finds it (colEls) but does not move cards in it. It needs a .kb-head (syncHeads).
+// Empty: the read-only page has a line; the editable page draws it in CSS, like every other empty column.
+const kbScheduledColumn = (ro = false) => {
+  const n = SPLIT.scheduled.length;
+  return `<div class="kcol" data-col="scheduled" data-fixed="1" data-n="${n}">
+    ${kbHead('scheduled', 'Scheduled and reminders', n, ro)}
+    <ul class="kb-list" id="kb-list-scheduled">${n === 0 && ro ? `<li class="kb-empty">${KB_RO_EMPTY.scheduled}</li>` : SPLIT.scheduled.map(kbSchedCard).join('')}</ul>
+  </div>`;
+};
+
 // Day headers ("Today", "Yesterday", "Wed Nov 4") are worked out now, at render time. A page nobody republished keeps a stale "Today".
 const kbDoneList = () => {
   let day = null;
@@ -462,11 +486,11 @@ const TEMPLATE_HASH = templateHash(HERE);
 const STAMP = boardStamp({ board: KEY, template: TEMPLATE_HASH, generated: GENERATED_AT.toISOString() });
 const PAGE_TITLE = KEY === DEFAULT_BOARD ? 'Agentic OS — Lane Board' : `Agentic OS — Lane Board (${KEY})`;
 
-const KB_RO_INTRO = 'Read-only snapshot from the last render. By band lists open lanes by importance, P0 first. Columns come from lane state and priority; Done lists the lanes finished in the last 7 days. Lease times are clock times, not countdowns.';
+const KB_RO_INTRO = 'Read-only snapshot from the last render. By band lists open lanes by importance, P0 first. Columns come from lane state and priority; Scheduled and reminders lists lanes with a due time; Done lists the lanes finished in the last 7 days. Lease times are clock times, not countdowns.';
 const KB_RO_NO_ORDER = 'Nothing is saved here: this board has no saved order.';
-// An empty read-only column says why. Now and Waiting on Dave are only filled from a saved order, and this board has none.
+// An empty read-only column says why. Waiting on Dave is only filled from a saved order, and this board has none.
 // (The editable page draws "Nothing here" in CSS for an empty column.)
-const KB_RO_EMPTY = { now: KB_RO_NO_ORDER, waiting: KB_RO_NO_ORDER, done: 'Nothing done in the last 7 days.' };
+const KB_RO_EMPTY = { scheduled: 'Nothing scheduled', waiting: KB_RO_NO_ORDER, done: 'Nothing done in the last 7 days.' };
 // CSS for the read-only section only. Emitted when !KANBAN, so the default page's CSS bytes do not change.
 // Small text uses --muted here, not --faint: --faint is below 4.5:1 on the card and column backgrounds.
 const KB_RO_CSS = `
@@ -703,6 +727,10 @@ const html = `${STAMP}
   .dn-foot { margin:8px 4px 2px; color:var(--muted); font:400 11px/1.5 var(--mono); }
   .dn-all { padding:4px 0; border:0; background:none; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; }
   .dn-all:hover { text-decoration:underline; }
+  /* Scheduled and reminders: the time chip, and the empty text for the editable page. */
+  .sc-chip { padding:2px 7px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font:600 10.5px/1.2 var(--mono); }
+  .sc-due { border-color:var(--crit); color:var(--crit); }
+  .kcol[data-col="scheduled"][data-n="0"] .kb-list::after { content:'Nothing scheduled'; }
   /* Details of a Done card (and of a read-only card): native <details>, no script. */
   .kb-ro-detail { margin-top:8px; min-width:0; }
   .kb-ro-detail > summary { padding:4px 0; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; list-style-position:inside; }
@@ -847,7 +875,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
   ${KANBAN ? `<section id="priorities" aria-labelledby="kb-title" data-view="band">
     <div class="sec-head">
       <h2 id="kb-title">Priorities</h2>
-      <p>By band lists open lanes by importance, P0 first. Columns is the drag board, with a read-only Done column. Drag, or use Do next and Move to, to reorder. Your order saves to this board and Claude reads it.</p>
+      <p>By band lists open lanes by importance, P0 first. Columns is the drag board, with read-only Scheduled and reminders and Done columns. Drag, or use Do next and Move to, to reorder. Your order saves to this board and Claude reads it.</p>
     </div>
     ${VIEW_BAR}
     <div class="kb-bar">
@@ -858,12 +886,14 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     ${BB_HTML}
     <div class="sr" id="kb-live" aria-live="polite"></div>
     <div class="kb-board" id="kb-board">
+      ${kbScheduledColumn()}
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false)}
       ${kbDoneColumn()}
     </div>
     <script type="application/json" id="kb-data">${kbJson}</script>
-  </section>` : `<section id="priorities" class="kb-ro" aria-labelledby="kb-title" data-view="band">
+    <script type="application/json" id="kb-sched">${kbSchedJson}</script>
+  </section>` :`<section id="priorities" class="kb-ro" aria-labelledby="kb-title" data-view="band">
     <div class="sec-head">
       <h2 id="kb-title">Priorities</h2>
       <p>${KB_RO_INTRO}</p>
@@ -871,6 +901,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     ${VIEW_BAR}
     ${BB_HTML}
     <div class="kb-board" id="kb-board">
+      ${kbScheduledColumn(true)}
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true, true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false, true)}
       ${kbDoneColumn(true)}

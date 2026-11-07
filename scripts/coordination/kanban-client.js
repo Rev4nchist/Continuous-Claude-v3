@@ -10,7 +10,7 @@
  * for Dave's saved order, (2) re-places the cards, and (3) saves his moves.
  *
  * Saved doc, `kanban/board`:
- *   { columns: { now: [id], next: [id], later: [id], waiting: [id] }, board: <board key>, updatedAt: ISO,
+ *   { columns: { next: [id], later: [id], waiting: [id] }, board: <board key>, updatedAt: ISO,
  *     appliedColumns?, syncedAt? }
  *   The page writes columns, board and updatedAt. The sync writes appliedColumns and syncedAt: the page never does,
  *   and its save (update, not set) leaves them alone. Old docs have no `board`; their next save adds it.
@@ -19,9 +19,13 @@
  *   A save keeps the ids of the saved doc that this page does not know (mergeUnknownColumns): a stale device must not drop
  *   lanes it has never heard of. Pruning ids of done or deleted lanes is the job of the kanban-sync write-back, not of this page.
  *
- * The page has six columns: Now, Next, Later, Waiting on Dave, In progress, Done. This file moves cards in the first four (COLS).
- *   In progress and Done are drawn by the server, fixed, and never saved. Both need a .kb-head (syncHeads asks every column for one)
- *   and both start collapsed on the phone, with Next, Later and Waiting. A Done card is not a .kb-card, so nothing here handles it.
+ * The page has six columns: Scheduled and reminders, Next, Later, Waiting on Dave, In progress, Done. This file moves cards in Next, Later and Waiting (COLS).
+ *   Scheduled, In progress and Done are drawn by the server, fixed, and never saved. All three need a .kb-head (syncHeads asks every column for one)
+ *   and all three start collapsed on the phone, with Next, Later and Waiting. Exception: Scheduled starts open when it has cards (data-n above 0),
+ *   so a DUE reminder is seen. A Scheduled or Done card is not a .kb-card, so nothing here handles it.
+ *   The Now column is retired. An old saved doc may still hold columns.now: it is never read, and the next save no longer writes it.
+ *   A scheduled lane is not in kb-data, so LANES lacks it and a save keeps its id in the saved column, after the page's own ids (mergeUnknownColumns).
+ *   Its id, state and band are in kb-sched (SCHED), which only "lanes ahead" reads.
  *
  * Also, per card (the data contract is in the lane-board PR):
  *   `cards/<laneId>`  { status?, note?, question?, updatedAt, syncedAt?, syncResult? }
@@ -52,8 +56,8 @@
  * (all from kanban-place.mjs), and KB_BOARD, the key of the board that owns this page.
  */
 (function () {
-  var COLS = ['now', 'next', 'later', 'waiting'];
-  var LABEL = { now: 'Now', next: 'Next', later: 'Later', waiting: 'Waiting on Dave' };
+  var COLS = ['next', 'later', 'waiting'];
+  var LABEL = { next: 'Next', later: 'Later', waiting: 'Waiting on Dave' };
   var DOC_PATH = 'kanban/board';
   var CARDS = 'cards';
   var PLAIN = 'plain';
@@ -69,6 +73,11 @@
   try { LANES = JSON.parse(dataEl.textContent || '[]'); } catch (e) { LANES = []; }
   var LANE_BY_ID = {};
   LANES.forEach(function (l) { LANE_BY_ID[l.id] = l; });
+  // The scheduled lanes (id, state, band) are not in kb-data. Only "lanes ahead" reads them. A missing or bad block counts none.
+  var SCHED = [];
+  var schedEl = document.getElementById('kb-sched');
+  try { SCHED = JSON.parse((schedEl && schedEl.textContent) || '[]'); } catch (e) { SCHED = []; }
+  if (!Array.isArray(SCHED)) SCHED = [];
 
   var statusEl = document.getElementById('kb-status');
   var orderEl = document.getElementById('kb-order');
@@ -94,7 +103,7 @@
   var lists = {};
   var colEls = {};
   var counts = {};
-  var cols = { now: [], next: [], later: [], waiting: [] };
+  var cols = { next: [], later: [], waiting: [] };
   var db = null;
   var editable = false;
   var lastSaved = null;
@@ -115,9 +124,9 @@
     counts[k] = el.querySelector('.kb-count');
   });
 
-  function key(c) { return JSON.stringify([c.now, c.next, c.later, c.waiting]); }
-  function copyCols() { return { now: cols.now.slice(), next: cols.next.slice(), later: cols.later.slice(), waiting: cols.waiting.slice() }; }
-  function pick(p) { return { now: p.now, next: p.next, later: p.later, waiting: p.waiting }; }
+  function key(c) { return JSON.stringify([c.next, c.later, c.waiting]); }
+  function copyCols() { return { next: cols.next.slice(), later: cols.later.slice(), waiting: cols.waiting.slice() }; }
+  function pick(p) { return { next: p.next, later: p.later, waiting: p.waiting }; }
   function errText(e) { return (e && e.message) ? e.message : String(e); }
 
   function setStatus(text, kind) {
@@ -157,7 +166,7 @@
     if (to) { to.disabled = !editable; to.value = ''; }
   }
 
-  // The server draws one placeholder option. The eight real ones are made here, once, so the page stays small.
+  // The server draws one placeholder option. The six real ones are made here, once, so the page stays small.
   function fillMoveOptions() {
     if (optionsFilled) return;
     optionsFilled = true;
@@ -204,7 +213,7 @@
     clearMoveNotes();
     render();
     var first = toCol === 'next' && at === 0;
-    var ahead = first ? bandAhead(LANES, id) : 0;
+    var ahead = first ? bandAhead(LANES.concat(SCHED), id) : 0;
     var extra = [ahead > 0 ? bandSentence(ahead) : '', syncSentence(from.col, toCol, id)].filter(Boolean).join(' ');
     announce(id + ' moved to ' + LABEL[toCol] + ', rank ' + (at + 1) + ' of ' + dest.length + (extra ? '. ' + extra : ''));
     var line = [first ? 'First in Next.' : '', extra].filter(Boolean).join(' ');
@@ -348,7 +357,11 @@
   }
   if (mq.addEventListener) mq.addEventListener('change', syncHeads);
   if (mq.matches) {
-    ['next', 'later', 'waiting', 'progress', 'done'].forEach(function (n) { colEls[n].classList.add('kb-collapsed'); });
+    ['scheduled', 'next', 'later', 'waiting', 'progress', 'done'].forEach(function (n) {
+      // A Scheduled column with cards stays open: a DUE reminder must not hide behind its count.
+      if (n === 'scheduled' && Number(colEls[n].getAttribute('data-n')) > 0) return;
+      colEls[n].classList.add('kb-collapsed');
+    });
   }
   syncHeads();
 
