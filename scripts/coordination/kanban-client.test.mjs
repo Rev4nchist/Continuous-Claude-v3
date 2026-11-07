@@ -30,6 +30,12 @@
  *   - the Status select or Save button fall out of step with the saved doc after Done or Undo
  *   - a Done write that fails looks like it worked
  *   - the band sentence shows when no lane is ahead, or is missing when one is; a stale flag stays after the next move
+ *
+ * How the Done column (PR-D) can fail. The page now has six columns; the client knows four plus In progress:
+ *   - init throws because the phone collapse list names a column the page lacks, or Done takes the place of In progress
+ *   - on the phone Done or In progress starts open, or Now starts shut
+ *   - a card dropped on Done moves (dropTarget accepts a column that is not in COLS) and writes the board doc
+ *   - the saved doc grows a done key
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -183,7 +189,7 @@ const LANES = [
 ];
 
 /** Opens the page and waits until the saved order has loaded (or the page has refused it). */
-async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false } = {}) {
+async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false, phone = false } = {}) {
   focusLog.length = 0;
   const db = fakeDb(doc ? { [DOC]: doc } : {}, { liveDoc, getFails, cardsSilent });
   const timers = [];
@@ -202,7 +208,7 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     insertBefore: (node) => { flagBoxes.set(l.id, node); },
   })]));
   const classes = new Map();
-  const colEls = ['now', 'next', 'later', 'waiting', 'progress'].map((name) => stub({
+  const colEls = ['now', 'next', 'later', 'waiting', 'progress', 'done'].map((name) => stub({
     attrs: { 'data-col': name },
     classList: (() => {
       const set = new Set();
@@ -224,7 +230,8 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
   const claude = { use: (name) => (name === 'db' && !noDb ? Promise.resolve(db.api) : Promise.resolve(null)) };
   const sandbox = {
     document,
-    window: { claude },
+    // phone: the (max-width:720px) query matches, as on a phone. Without it the page sees a wide screen.
+    window: phone ? { claude, matchMedia: () => ({ matches: true, addEventListener() {} }) } : { claude },
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
   };
@@ -1041,4 +1048,42 @@ test('Undo announces itself and moves focus back to Done', async () => {
   assert.equal(page.live(), 'l1 is no longer marked done');
   assert.equal(page.lastFocus(), page.part('l1', '.kb-done'), 'focus did not return to Done');
   assert.equal(page.part('l1', '.kb-done').disabled, false);
+});
+
+// ------------------------------------------------------------------ PR-D: the read-only Done column
+
+test('a page with a Done column starts without throwing, and the board is still editable', async () => {
+  // The phone path names the Done column in the collapse list; a column the page lacks would throw there.
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true });
+  assert.doesNotMatch(page.status(), /not loaded|belongs to board/);
+  await page.moveAndSave('a2', 'now');
+  assert.equal(page.db.writes().length, 1, 'the client died at init: the move wrote nothing');
+});
+
+test('on the phone Done and In progress start collapsed with Next, Later and Waiting; Now starts open', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true });
+  for (const c of ['next', 'later', 'waiting', 'progress', 'done']) assert.equal(page.collapsed(c), true, `${c} starts open on the phone`);
+  assert.equal(page.collapsed('now'), false, 'Now starts shut on the phone');
+});
+
+test('on a wide screen no column starts collapsed, Done included', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  for (const c of ['now', 'next', 'later', 'waiting', 'progress', 'done']) assert.equal(page.collapsed(c), false, `${c} starts collapsed on a wide screen`);
+});
+
+test('a card dropped on the Done column moves nothing and writes nothing', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.dragStart('a2');
+  await page.drop('done');
+  await page.debounce();
+  assert.deepEqual(page.db.log, [], 'a drop on Done wrote to the db');
+  assert.match(page.status(), /^(?!Saving)/, 'a drop on Done started a save');
+});
+
+test('after a move the saved doc has exactly the four order columns: Done is never saved', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true });
+  await page.moveAndSave('a2', 'now');
+  const [w] = page.db.writes();
+  assert.deepEqual(Object.keys(w.data.columns).sort(), ['later', 'next', 'now', 'waiting']);
+  assert.deepEqual(Object.keys(page.db.read(DOC).columns).sort(), ['later', 'next', 'now', 'waiting']);
 });

@@ -15,8 +15,8 @@
  *
  * One page per board. The board comes from --project <key>, else LANE_PROJECT, else the registry entry that holds the cwd.
  * A cwd with no board exits 1 with the register hint. continuous-claude writes <repo>/lane-board.html (the phone page);
- * every other board writes <repo>/lane-board-<key>.html, read-only. It shows a static Priorities section (By band, and the five
- * columns drawn from lane state and priority) and carries no kanban script and no db: the save is keyed by lane id, and the page
+ * every other board writes <repo>/lane-board-<key>.html, read-only. It shows a static Priorities section (By band, and the six
+ * columns drawn from lane state and priority, the last one a read-only Done) and carries no kanban script and no db: the save is keyed by lane id, and the page
  * db is one document that only the published continuous-claude artifact can open. The lane, session and event queries are
  * filtered to the board. The file-claim and
  * coordination_event sections are machine-wide and say so on the page. The page carries a stamp
@@ -39,6 +39,7 @@ import { boardStamp, defaultOut, parseRenderArgs, templateHash, writeAtomic } fr
 import { processMatchSummary } from './process-match.mjs';
 import { compareLanes, laneOrderSql } from './lane-sort.mjs';
 import { BAND_CAP, BAND_GROUPS, bandChipHtml, bandKey, capState, groupByBand } from './board-band-view.mjs';
+import { DONE_DAYS, DONE_SQL, clockText, cutNote, dayLabel, pickDone } from './board-done-view.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -160,6 +161,9 @@ const lanes = (await c.query(`
    WHERE l.project_key = $1::text
    ORDER BY l.track, ${laneOrderSql('l')}`, [KEY])).rows;
 
+// When each lane was marked done (DONE_SQL, board-done-view.mjs). Its own query on purpose: the lanes query above is counted by liveness-predicate-guard.
+const doneAt = new Map((await c.query(DONE_SQL, [KEY])).rows.map((r) => [r.id, r.done_at]));
+
 // The sessions of this board: under one of its registry roots, or holding one of its lanes (a session started in the home dir).
 // The same rule as lane.mjs peers; the lanes listed under a session are this board's lanes only.
 const sessions = (await c.query(
@@ -277,6 +281,8 @@ const kbPrio = (l) => (l.priority != null && Number.isFinite(Number(l.priority))
 const kbLanes = lanes.map((l) => ({ id: l.id, state: l.state, priority: kbPrio(l), band: l.band ?? null }));
 const kbPlaced = placeLanes(null, kbLanes);
 const kbById = new Map(lanes.map((l) => [l.id, l]));
+// The Done column: done lanes of this board from the last 7 days, newest first, at most 30 (board-done-view.mjs). Read-only, never saved, no rank.
+const DONE = pickDone(lanes, doneAt, GENERATED_AT);
 // The page also needs each lane's facts for the Plain English prompt. placeLanes
 // reads only id, state and priority, so the extra keys are inert there.
 // The read-only page has no kb-data block, so it builds none.
@@ -364,11 +370,43 @@ const kbCard = (l, movable, rank, col, ro = false) => {
     </li>`;
 };
 
-// ro: the heading is plain text (no button), because no script makes it collapse.
+// The column heading. ro: plain text (no button), because no script makes it collapse. Otherwise the .kb-head button: syncHeads
+// in kanban-client.js asks EVERY column for one, so a column without it kills the client.
+const kbHead = (key, name, count, ro) => (ro
+  ? `<h3 class="kb-h kb-ro-h"><span class="kb-name">${name}</span><span class="kb-count mono">${count}</span></h3>`
+  : `<h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-${key}"><span class="kb-name">${name}</span><span class="kb-count mono">${count}</span></button></h3>`);
+
+// One Done card. Not a .kb-card and none of the classes the client handles: it has no id for the client, no control and no save.
+// The summary repeats the id as its accessible name. Everything from a lane is escaped; the note is cut.
+const kbDoneCard = ({ lane: l, at }) => `<li class="card kb-done-card"><div class="kb-top"><span class="kb-id mono">${esc(l.id)}</span></div><p class="kb-title">${esc(l.title)}</p><div class="kb-meta"><span class="kb-track mono">${esc(l.track)}</span><span class="dn-time mono">${clockText(at)}</span></div><details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary><dl class="kb-dl"><dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd><dt>last note</dt><dd>${esc(cutNote(l.note) || 'none')}</dd></dl></details></li>`;
+
+// Day headers ("Today", "Yesterday", "Wed Nov 4") are worked out now, at render time. A page nobody republished keeps a stale "Today".
+const kbDoneList = () => {
+  let day = null;
+  return DONE.shown.map((e) => {
+    const label = dayLabel(e.at, GENERATED_AT);
+    const head = label === day ? '' : `<li class="kb-day">${label}</li>`;
+    day = label;
+    return head + kbDoneCard(e);
+  }).join('');
+};
+
+// The sixth column. Fixed like In progress: data-col is "done" (not "progress", which would replace In progress in the client's column map),
+// the saved order has no Done and no rank. The count reads shown/total. The footer sits after the list, outside the scroll area.
+const kbDoneColumn = (ro = false) => {
+  const n = DONE.shown.length;
+  const foot = DONE.total
+    ? `<p class="dn-foot">Showing ${n} of ${DONE.inWindow} from the last ${DONE_DAYS} days. ${DONE.total} done in total. <button class="dn-all" type="button">Show all</button></p>`
+    : '';
+  return `<div class="kcol" data-col="done" data-fixed="1" data-n="${n}">
+    ${kbHead('done', 'Done', `${n}/${DONE.total}`, ro)}
+    <ul class="kb-list" id="kb-list-done">${n === 0 && ro ? `<li class="kb-empty">${KB_RO_EMPTY.done}</li>` : kbDoneList()}</ul>
+    ${foot}
+  </div>`;
+};
+
 const kbColumn = (key, name, ids, movable, ro = false) => `<div class="kcol"${movable ? ` data-col="${key}"` : ' data-col="progress" data-fixed="1"'} data-n="${ids.length}">
-    ${ro
-    ? `<h3 class="kb-h kb-ro-h"><span class="kb-name">${name}</span><span class="kb-count mono">${ids.length}</span></h3>`
-    : `<h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-${key}"><span class="kb-name">${name}</span><span class="kb-count mono">${ids.length}</span></button></h3>`}
+    ${kbHead(key, name, ids.length, ro)}
     ${movable || ro ? '' : '<p class="kb-sub">Held by a session. Not reorderable.</p>'}
     <ul class="kb-list" id="kb-list-${key}">${ids.length === 0 && ro
     ? `<li class="kb-empty">${KB_RO_EMPTY[key] || 'Nothing here'}</li>`
@@ -424,10 +462,11 @@ const TEMPLATE_HASH = templateHash(HERE);
 const STAMP = boardStamp({ board: KEY, template: TEMPLATE_HASH, generated: GENERATED_AT.toISOString() });
 const PAGE_TITLE = KEY === DEFAULT_BOARD ? 'Agentic OS — Lane Board' : `Agentic OS — Lane Board (${KEY})`;
 
-const KB_RO_INTRO = 'Read-only snapshot from the last render. By band lists open lanes by importance, P0 first. Columns come from lane state and priority. Lease times are clock times, not countdowns.';
+const KB_RO_INTRO = 'Read-only snapshot from the last render. By band lists open lanes by importance, P0 first. Columns come from lane state and priority; Done lists the lanes finished in the last 7 days. Lease times are clock times, not countdowns.';
 const KB_RO_NO_ORDER = 'Nothing is saved here: this board has no saved order.';
 // An empty read-only column says why. Now and Waiting on Dave are only filled from a saved order, and this board has none.
-const KB_RO_EMPTY = { now: KB_RO_NO_ORDER, waiting: KB_RO_NO_ORDER };
+// (The editable page draws "Nothing here" in CSS for an empty column.)
+const KB_RO_EMPTY = { now: KB_RO_NO_ORDER, waiting: KB_RO_NO_ORDER, done: 'Nothing done in the last 7 days.' };
 // CSS for the read-only section only. Emitted when !KANBAN, so the default page's CSS bytes do not change.
 // Small text uses --muted here, not --faint: --faint is below 4.5:1 on the card and column backgrounds.
 const KB_RO_CSS = `
@@ -438,12 +477,7 @@ const KB_RO_CSS = `
   .kb-ro .kb-track, .kb-ro .kb-prio, .kb-ro .kb-lease, .kb-ro .kb-dl dt { color:var(--muted); }
   .kb-ro .kcol[data-n="0"] .kb-list::after { content:none; }
   .kb-ro .kb-empty { padding:14px 10px; border:1px dashed var(--line); border-radius:var(--r); color:var(--muted);
-    font:400 11px/1.4 var(--mono); text-align:center; overflow-wrap:anywhere; }
-  .kb-ro-detail { margin-top:8px; min-width:0; }
-  .kb-ro-detail > summary { padding:4px 0; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; list-style-position:inside; }
-  .kb-ro-detail > summary:hover { text-decoration:underline; }
-  .kb-ro-detail[open] > summary { margin-bottom:8px; }
-  @media (pointer:coarse), (max-width:720px) { .kb-ro-detail > summary { min-height:44px; box-sizing:border-box; padding:14px 0 4px; } }`;
+    font:400 11px/1.4 var(--mono); text-align:center; overflow-wrap:anywhere; }`;
 
 const html = `${STAMP}
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -495,7 +529,9 @@ const html = `${STAMP}
 
   * { box-sizing:border-box; }
   body { margin:0; background:var(--ground); color:var(--ink); font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; }
-  :root { --page-w:min(1840px,100%); }
+  /* One cap for the header and the page: 2200px. The six Priorities columns start at 1360px. Below 1360px the viewport is already
+     narrower than the old 1840px width, so 100% gives the same page there and no media query is needed. */
+  :root { --page-w:min(2200px,100%); }
   .wrap { width:var(--page-w); margin:0 auto; padding:0 20px 72px; }
   h1,h2 { margin:0; text-wrap:balance; }
   .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
@@ -632,7 +668,7 @@ const html = `${STAMP}
   .kb-list { display:flex; flex-direction:column; gap:8px; min-height:56px; margin:0; padding:0; list-style:none; }
   .kcol[data-n="0"] .kb-list::after { content:'Nothing here'; display:block; padding:14px 10px; border:1px dashed var(--line); border-radius:var(--r);
     color:var(--faint); font:400 11px/1.4 var(--mono); text-align:center; }
-  .kb-card { min-width:0; padding:10px 11px; border-left:3px solid var(--line); }
+  .kb-card, .kb-done-card { min-width:0; padding:10px 11px; border-left:3px solid var(--line); }
   .kb-card[data-state="active"] { border-left-color:var(--ok); }
   .kb-card[data-state="ready"] { border-left-color:var(--info); }
   .kb-card[data-state="blocked"] { border-left-color:var(--crit); }
@@ -659,6 +695,19 @@ const html = `${STAMP}
     border-radius:6px; background:var(--panel-2); }
   .kb-dl dt { color:var(--faint); font:600 10px/1.5 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
   .kb-dl dd { margin:0; font:400 11.5px/1.45 var(--mono); overflow-wrap:anywhere; }
+  /* Done column: read-only cards (dn-* and kb-done-card; never a class the client handles) under a day header, and a footer outside the scroll area.
+     Small text is --muted: --faint is below 4.5:1 on these backgrounds. */
+  .kb-day { padding:4px 4px 0; color:var(--muted); font:600 10.5px/1.4 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
+  .kb-done-card .kb-track, .kb-done-card .kb-dl dt { color:var(--muted); }
+  .dn-time { color:var(--muted); font:500 10.5px/1.4 var(--mono); }
+  .dn-foot { margin:8px 4px 2px; color:var(--muted); font:400 11px/1.5 var(--mono); }
+  .dn-all { padding:4px 0; border:0; background:none; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; }
+  .dn-all:hover { text-decoration:underline; }
+  /* Details of a Done card (and of a read-only card): native <details>, no script. */
+  .kb-ro-detail { margin-top:8px; min-width:0; }
+  .kb-ro-detail > summary { padding:4px 0; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; list-style-position:inside; }
+  .kb-ro-detail > summary:hover { text-decoration:underline; }
+  .kb-ro-detail[open] > summary { margin-bottom:8px; }
   .kb-chip, .kb-sync { display:inline-flex; max-width:100%; padding:3px 8px; border:1px solid var(--line); border-radius:999px; background:var(--panel-2);
     color:var(--muted); font:600 10px/1.4 var(--mono); letter-spacing:.03em; overflow-wrap:anywhere; }
   .kb-chip[hidden], .kb-sync[hidden] { display:none; }
@@ -694,8 +743,8 @@ const html = `${STAMP}
   .kb-flag { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin-top:9px; color:var(--muted); font:500 11px/1.4 var(--mono); overflow-wrap:anywhere; }
   .kb-flag[hidden], .kb-undo[hidden] { display:none; }
   .kb-flag[data-k="crit"] { color:var(--crit); }
-  /* Columns: 1 up to 720px, 3 (two rows) from 721px, 5 from 1360px. */
-  @media (min-width:1360px) { .kb-board { grid-template-columns:repeat(5,minmax(0,1fr)); } }
+  /* Columns: 1 up to 720px, 3 (two rows) from 721px, 6 from 1360px. */
+  @media (min-width:1360px) { .kb-board { grid-template-columns:repeat(6,minmax(0,1fr)); } }
   /* From 721px each column scrolls inside itself. The head is outside the list, so it stays in view. The phone scrolls the page. */
   @media (min-width:721px) { .kb-list { max-height:calc(100vh - 190px); overflow-y:auto; } }
   @media (max-width:720px) {
@@ -703,9 +752,11 @@ const html = `${STAMP}
     .kb-head { cursor:pointer; }
     .kb-head::after { content:'▾'; color:var(--faint); }
     .kcol.kb-collapsed .kb-head::after { content:'▸'; }
-    .kcol.kb-collapsed .kb-list, .kcol.kb-collapsed .kb-sub { display:none; }
+    .kcol.kb-collapsed .kb-list, .kcol.kb-collapsed .kb-sub, .kcol.kb-collapsed .dn-foot { display:none; }
   }
   @media (pointer:coarse), (max-width:720px) {
+    .kb-ro-detail > summary { min-height:44px; box-sizing:border-box; padding:14px 0 4px; }
+    .dn-all { min-height:44px; }
     .kb-head, .kb-more, .kb-btn, .kb-to, .kb-st { min-height:44px; }
     .kb-btn { min-width:44px; }
     .kb-more { padding:4px 10px 4px 0; }
@@ -796,7 +847,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
   ${KANBAN ? `<section id="priorities" aria-labelledby="kb-title" data-view="band">
     <div class="sec-head">
       <h2 id="kb-title">Priorities</h2>
-      <p>By band lists open lanes by importance, P0 first. Columns is the drag board. Drag, or use Do next and Move to, to reorder. Your order saves to this board and Claude reads it.</p>
+      <p>By band lists open lanes by importance, P0 first. Columns is the drag board, with a read-only Done column. Drag, or use Do next and Move to, to reorder. Your order saves to this board and Claude reads it.</p>
     </div>
     ${VIEW_BAR}
     <div class="kb-bar">
@@ -809,6 +860,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     <div class="kb-board" id="kb-board">
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false)}
+      ${kbDoneColumn()}
     </div>
     <script type="application/json" id="kb-data">${kbJson}</script>
   </section>` : `<section id="priorities" class="kb-ro" aria-labelledby="kb-title" data-view="band">
@@ -821,6 +873,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     <div class="kb-board" id="kb-board">
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true, true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false, true)}
+      ${kbDoneColumn(true)}
     </div>
   </section>`}
 
@@ -1050,6 +1103,19 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       b.addEventListener('click', function () { setGroup(b.dataset.v, true); });
     });
     setGroup(lsGet('lb-group', ['track', 'band']) || 'track', false);
+    // Show all (the Done column footer): the Lanes list with every state, scrolled into view. It presses the existing chip; no new chip.
+    // A pressed band chip would still hide done lanes of other bands, so it is cleared first (a second click on a band chip clears it).
+    var dnAll = document.querySelector('.dn-all');
+    if (dnAll) {
+      dnAll.addEventListener('click', function () {
+        var pressed = document.querySelector('.chip[data-g="band"][aria-pressed="true"]');
+        if (pressed) pressed.click();
+        var chip = document.querySelector('.chip[data-g="state"][data-f="all"]');
+        if (chip) chip.click();
+        var groups = document.getElementById('lane-groups');
+        if (groups && groups.scrollIntoView) groups.scrollIntoView();
+      });
+    }
     document.querySelector('.chip[data-f="open"]').click();
   })();
 </script>
