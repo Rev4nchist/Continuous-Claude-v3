@@ -1279,7 +1279,7 @@ describe('pr-loop outside-diff findings', () => {
 })
 
 // PR C (checkpoint states). The module under test is pr-loop plus the pr-checkpoint questions; every check reads the engine's calls.
-// CW1  a draft PR is DRAFT: one toast "waiting on /<command>", no STALLED model line after 60 minutes
+// CW1  a draft PR is DRAFT: one toast "waiting on Dave's review pick", no STALLED model line after 60 minutes
 // CW2  review:none with no router state: the STALLED line names the router re-run, never "No review on the head"
 // CW3  a PR that leaves draft restarts the 60 minute clock (it is not STALLED at its first ready check)
 // CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says the mod asks Dave in the session
@@ -1293,8 +1293,6 @@ describe('pr-loop outside-diff findings', () => {
 // CW12 an older status script (no isDraft) is still a draft, from the DRAFT_REASON text
 // CW13 an older status script (no round fields) with a record: "rounds unknown", and no round ask
 describe('pr-loop checkpoint states', () => {
-  // The command the pr-checkpoint module registers (COMMAND in pr-checkpoint.test.ts).
-  const COMMAND = 'pathway'
   const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
   const NONE_UNVERIFIED = 'the router has not classified this head; re-run the router workflow'
   // The exact texts review-status.mjs writes today (scripts/github/review-status.mjs). Not imported: the fixture must break when the mod drifts.
@@ -1322,14 +1320,14 @@ describe('pr-loop checkpoint states', () => {
   const REVIEWED_AT = (rounds: number, over: Partial<Status> = {}) =>
     status(7, { routing: CR_ROUTE, routedReviewed: true, coderabbitReviewedHead: true, unresolved: 1, reasons: ['1 review thread(s) unresolved'], isDraft: false, coderabbitRounds: rounds, ...over })
 
-  test('CW1 a draft PR is DRAFT: one toast "waiting on /<command>", and no STALLED line after 60 minutes', async ($, on) => {
+  test('CW1 a draft PR is DRAFT: one toast "waiting on the review pick", and no STALLED line after 60 minutes', async ($, on) => {
     const draft = status(7, { isDraft: true, labels: [], routing: CR_ROUTE, routedReviewed: false, reasons: [DRAFT_REASON, NO_REVIEW] })
     const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [draft] } })
     await start($)
     await ticks(clock, 13)
     expect(seen.submits).toEqual([])
     expect(seen.toasts.length).toBe(1)
-    expect(seen.toasts[0]).toContain(`waiting on /${COMMAND}`)
+    expect(seen.toasts[0]).toContain("waiting on Dave's review pick")
   })
 
   test('CW2 review:none with no router state: STALLED names the router re-run and never "No review on the head"', async ($, on) => {
@@ -1478,6 +1476,17 @@ describe('pr-loop checkpoint states', () => {
     expect(line).toMatch(/cr-fix line is clean/)
   })
 
+  // Dave 2026-11-06: a paid round is offered only on cr-paid ALLOW. Breaks if the line tells the model to ask for a pay tap on ESCALATE or on no verdict.
+  test('CW4k2 the paid line offers a Yes only on ALLOW: ESCALATE and no verdict get the free question and no paid post', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 2], band: 'CRITICAL' }), RATE_LIMITED({ coderabbitRounds: 1 }))
+    expect(line).not.toMatch(/ALLOW or ESCALATE/)
+    expect(line).toMatch(/On ALLOW, post nothing yet/)
+    expect(line).toMatch(/On ESCALATE, or when cr-paid\.mjs gives no verdict \(exit 2\), no paid round is offered/)
+    expect(line).toMatch(/has no Yes option/)
+    expect(line.indexOf('On ESCALATE')).toBeGreaterThan(line.indexOf('only after Dave taps a Yes option'))
+    expect(line.slice(line.indexOf('On ESCALATE'))).not.toMatch(/--use-credits/)
+  })
+
   test('CW4l a rate limit with no checkpoint record keeps the paid review', async ($, on) => {
     const line = await limitedLine($, on, null, RATE_LIMITED())
     expect(line).toContain('cr-paid.mjs check --pr 7')
@@ -1603,7 +1612,7 @@ describe('pr-loop checkpoint states', () => {
     cw(on, { script: { 7: [draft] } })
     await start($)
     const told = JSON.stringify(((await $.tool.call({ tool: STATUS_TOOL, pr: 7 } as never)) as unknown as { result?: unknown }).result)
-    expect(told).toContain(`waiting on Dave's /${COMMAND}`)
+    expect(told).toContain("waiting on Dave's review pick")
     expect(told).toMatch(/Do not request a review/)
     expect(told).not.toContain('@coderabbitai')
   })
@@ -1668,7 +1677,7 @@ describe('pr-loop checkpoint states', () => {
     await ticks(clock, 13)
     expect(seen.submits).toEqual([])
     expect(seen.toasts.length).toBe(1)
-    expect(seen.toasts[0]).toContain(`waiting on /${COMMAND}`)
+    expect(seen.toasts[0]).toContain("waiting on Dave's review pick")
   })
 
   test('CW13 an older status script with no round fields and a record: "rounds unknown", and no round ask', async ($, on) => {

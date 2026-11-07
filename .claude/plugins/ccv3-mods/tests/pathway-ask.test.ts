@@ -27,7 +27,7 @@ import {
   whyTextOnly,
   type PathwayAsk,
 } from '../hooks/pr-checkpoint/model'
-import { reportLine } from '../hooks/pr-loop/model'
+import { DRAFT_REASON, reportLine, statusForModel, toastText } from '../hooks/pr-loop/model'
 import { slotLine } from '../hooks/pr-loop/slot-model'
 
 // The 3-line review question, the slot-state labels, the loose typed answer and the Keep-as-draft text. Pure functions: model.ts takes no `$`.
@@ -280,7 +280,7 @@ describe('v2: asks that can spend list the free row first', () => {
 })
 
 describe('v2: no text tells Dave to type or paste a command', () => {
-  const bad = /\/pathway </i
+  const bad = /\/(pathway|slot|land|watch)\b/i
   const slotPay = /\/slot (pay|wait|drop|first)/i
   const answers = /He answers with|Dave answers with|picks again in|He can answer later with|Type the command|Dave types|Dave runs/i
 
@@ -306,7 +306,7 @@ describe('v2: no text tells Dave to type or paste a command', () => {
       whyTextOnly('bridge', 7),
     ]
     for (const text of texts) {
-      expect(text).not.toMatch(bad)
+      expect(text, text).not.toMatch(bad)
       expect(text).not.toMatch(slotPay)
       expect(text).not.toMatch(answers)
     }
@@ -316,6 +316,22 @@ describe('v2: no text tells Dave to type or paste a command', () => {
     expect(stopText(7, 'other', 'free text')).toMatch(/stays a draft/)
     expect(stopText(7, 'other', 'free text')).toMatch(/Nothing was recorded/)
     expect(stopText(7, 'other', 'free text')).toContain('free text')
+  })
+
+  test('V6 the pr-loop draft toast and the draft line to the model name no typed command and say the model asks by tap', () => {
+    const toast = toastText({ pr: 7, state: 'DRAFT', head: 'a'.repeat(40), headShort: 'aaaaaaa', merged: false, whenReady: false, reasons: [] })
+    const lines = statusForModel({ isDraft: true, reasons: [DRAFT_REASON] } as never).reasons.filter(reason => reason !== DRAFT_REASON)
+    expect(lines.length).toBe(1)
+    for (const text of [toast, ...lines]) {
+      expect(text).not.toMatch(/\/(pathway|slot|land|watch)\b/i)
+      expect(text).not.toMatch(bad)
+      expect(text).not.toMatch(slotPay)
+      expect(text).not.toMatch(answers)
+      expect(text).toMatch(/Dave's review pick/)
+    }
+    expect(toast).toMatch(/asks him with a tap/)
+    expect(lines[0]).toContain('pr_checkpoint')
+    expect(lines[0]).toMatch(/Do not request a review/)
   })
 
   const ALERT = { pr: 7, head: 'a'.repeat(40), headShort: 'aaaaaaa', merged: false, whenReady: false, reasons: ['not READY after 60 minutes'] }

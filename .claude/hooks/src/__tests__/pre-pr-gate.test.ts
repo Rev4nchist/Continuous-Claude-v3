@@ -1054,6 +1054,68 @@ describe('F: fail open', () => {
   });
 });
 
+// Desktop Commander runs a shell too. Before this, `gh pr create` through start_process or interact_with_process skipped the gate.
+// How it can fail: a DC tool is not in COMMAND_TOOLS (D1 skip) -> DC1; the text is read from the wrong field -> DC2;
+// a PowerShell continuation hides the create when the text is read as Bash only -> DC3; a non-shell DC tool is judged -> DC4;
+// Bash starts reading the DC `input` field -> DC5.
+describe('DC: Desktop Commander shell tools are gated like Bash', () => {
+  const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
+  const START = `${DC}start_process`;
+  const INTERACT = `${DC}interact_with_process`;
+  const startInput = (command: string) => ({ tool_name: START, tool_input: { command, timeout_ms: 1000 }, cwd: ROOT });
+  const interactInput = (text: string) => ({ tool_name: INTERACT, tool_input: { pid: 123, input: text }, cwd: ROOT });
+  const verdict = (payload: unknown, d: Deps): string | undefined => {
+    const out = handle(JSON.stringify(payload), d);
+    return out === '{}' ? 'allow' : JSON.parse(out).hookSpecificOutput.permissionDecision;
+  };
+
+  it('DC1: start_process and interact_with_process deny every PR-create shape without a stamp', () => {
+    for (const c of CREATE) {
+      expect(verdict(startInput(c), deps({ stamp: null })), `start_process: ${c}`).toBe('deny');
+      expect(verdict(interactInput(c), deps({ stamp: null })), `interact_with_process: ${c}`).toBe('deny');
+    }
+  });
+
+  it('DC1b: a fresh stamp lets the same DC create through, and the leading override still works', () => {
+    expect(verdict(startInput(CREATE[0]), deps({ stamp: stampJson() }))).toBe('allow');
+    expect(verdict(interactInput(CREATE[0]), deps({ stamp: stampJson() }))).toBe('allow');
+    expect(verdict(startInput(`SKIP_PRE_PR_GATE=1 ${CREATE[0]}`), deps({ stamp: null }))).toBe('allow');
+  });
+
+  it('DC2: the command is read from `command` (start_process) and `input` (interact_with_process), not from the other field', () => {
+    expect(verdict({ tool_name: START, tool_input: { input: CREATE[0] }, cwd: ROOT }, deps({ stamp: null }))).toBe('allow');
+    expect(verdict({ tool_name: INTERACT, tool_input: { command: CREATE[0] }, cwd: ROOT }, deps({ stamp: null }))).toBe('allow');
+    expect(verdict({ tool_name: START, tool_input: { command: 42 }, cwd: ROOT }, deps({ stamp: null }))).toBe('allow');
+  });
+
+  it('DC3: a PowerShell backtick continuation in a DC command is still a PR create', () => {
+    for (const c of CONTINUED) {
+      expect(verdict(startInput(c), deps({ stamp: null })), c).toBe('deny');
+    }
+  });
+
+  it('DC4: a DC command that is not a PR create, and a DC tool that runs no shell, are allowed', () => {
+    expect(verdict(startInput('gh pr view 5'), deps({ stamp: null }))).toBe('allow');
+    expect(verdict(startInput('ls -la'), deps({ stamp: null }))).toBe('allow');
+    expect(verdict({ tool_name: `${DC}read_file`, tool_input: { command: CREATE[0], path: 'C:/x' }, cwd: ROOT }, deps({ stamp: null }))).toBe('allow');
+  });
+
+  it('DC5: Bash and PowerShell keep reading `command` only', () => {
+    for (const tool of ['Bash', 'PowerShell']) {
+      expect(verdict({ tool_name: tool, tool_input: { input: CREATE[0] }, cwd: ROOT }, deps({ stamp: null })), tool).toBe('allow');
+      expect(verdict({ tool_name: tool, tool_input: { command: CREATE[0] }, cwd: ROOT }, deps({ stamp: null })), tool).toBe('deny');
+    }
+  });
+
+  it('DC6: the checkpoint rules apply to a DC command too (gh pr ready on CCv3 is denied)', () => {
+    const d = deps({ stamp: null, stamps: WARN_CONFIG });
+    const ready = `gh pr ready 12 -R ${CCV3_REPO}`;
+    expect(verdict(startInput(ready), d)).toBe('allow'); // warn mode: allowed
+    const enforce = { [join(ROOT, 'review-router.config.json')]: JSON.stringify({ checkpoint: { enforce: true } }) };
+    expect(verdict(startInput(ready), deps({ stamp: null, stamps: enforce }))).toBe('deny');
+  });
+});
+
 describe('L: the decision log', () => {
   it('L1: a deny and an override go to the log named by CCV3_GUARD_DECISIONS_LOG, never to the real one', () => {
     const dir = mkdtempSync(join(tmpdir(), 'prepr-gate-log-'));

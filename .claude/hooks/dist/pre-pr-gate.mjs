@@ -429,6 +429,26 @@ function logGuardError(hook, err, opts = {}) {
   }
 }
 
+// src/shared/shell-tools.ts
+var BOTH = ["Bash", "PowerShell"];
+var SHELL_TOOLS = /* @__PURE__ */ new Map([
+  ["Bash", { field: "command", dialects: ["Bash"], failClosed: false }],
+  ["PowerShell", { field: "command", dialects: ["PowerShell"], failClosed: false }],
+  ["mcp__plugin_desktop-commander_desktop-commander__start_process", { field: "command", dialects: BOTH, failClosed: true }],
+  ["mcp__plugin_desktop-commander_desktop-commander__interact_with_process", { field: "input", dialects: BOTH, failClosed: true }]
+]);
+function readShellCommand(input) {
+  const tool = input.tool_name || input.tool;
+  const spec = tool ? SHELL_TOOLS.get(tool) : void 0;
+  if (!tool || !spec) return { kind: "not-shell" };
+  const toolInput = input.tool_input;
+  const text = toolInput && typeof toolInput === "object" ? toolInput[spec.field] : void 0;
+  if (typeof text !== "string") {
+    return spec.failClosed ? { kind: "unreadable", tool, field: spec.field } : { kind: "command", tool, text: "", dialects: spec.dialects };
+  }
+  return { kind: "command", tool, text, dialects: spec.dialects };
+}
+
 // src/pre-pr-gate.ts
 var STAMP_REL = ".claude/cache/pre-pr/stamp.json";
 var PATHWAY_REL = ".claude/cache/pre-pr/pathway.json";
@@ -437,10 +457,16 @@ var MAX_STAMP_AGE_MS = 24 * 36e5;
 var FUTURE_SLACK_MS = 5 * 6e4;
 var GIT_TIMEOUT_MS = 2e3;
 var ALLOWED_SKIP_REASONS = /* @__PURE__ */ new Set(["cli-missing", "cli-cap"]);
-var COMMAND_TOOLS2 = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+var DC = "mcp__plugin_desktop-commander_desktop-commander__";
+var COMMAND_TOOLS2 = /* @__PURE__ */ new Set(["Bash", "PowerShell", `${DC}start_process`, `${DC}interact_with_process`]);
 var HOOK = "pre-pr-gate";
 var RUN = "node scripts/github/pre-pr.mjs --body <file>";
 var BODY_UNVERIFIABLE = "the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied";
+var commandOf = (input) => {
+  const c = readShellCommand(input);
+  return c.kind === "command" ? c.text : "";
+};
+var isDesktopCommander = (input) => (input.tool_name || input.tool || "").startsWith(DC);
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
   return m ? m[1].replace(/^[^:\s]+:/, "").replace(/["']+$/, "") : null;
@@ -608,7 +634,13 @@ function enforceIn(deps, top) {
   }
 }
 function decide(input, deps) {
-  const raw = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+  if (!isDesktopCommander(input)) return decideAs(input, deps);
+  const text = commandOf(input);
+  const both = [decideAs({ ...input, tool_name: "Bash" }, deps, text), decideAs({ ...input, tool_name: "PowerShell" }, deps, text)];
+  return both.find((d) => d.action === "deny") ?? both.find((d) => d.action === "override") ?? both.find((d) => d.action === "allow" && d.warn) ?? both[0];
+}
+function decideAs(input, deps, text) {
+  const raw = text ?? commandOf(input);
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: "allow" };
@@ -703,9 +735,9 @@ The stamp comes from: ${RUN}`;
     }
     const tool = input.tool_name || input.tool || "";
     if (!COMMAND_TOOLS2.has(tool)) return "{}";
-    command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+    command = commandOf(input);
     create = isPrOpenCommand(command);
-    gated = create || isGated(shapesOf(joinContinuations(command, shellOf(input))));
+    gated = create || ["bash", "pwsh"].some((s) => isGated(shapesOf(joinContinuations(command, isDesktopCommander(input) ? s : shellOf(input)))));
     const d = decide(input, deps);
     if (d.action === "override") logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
     if (d.action === "allow" && d.warn) logGuardDecision(HOOK, input, "warn", d.warn, { command });
@@ -836,6 +868,7 @@ if (!process.env.VITEST) {
 }
 export {
   CCV3_REPO,
+  COMMAND_TOOLS2 as COMMAND_TOOLS,
   GIT_NOT_FOUND,
   GIT_TIMEOUT_MS,
   MAX_STAMP_AGE_MS,

@@ -200,6 +200,32 @@ describe('shell guards cover every shell-running tool (F07)', () => {
 });
 
 /**
+ * pre-pr-gate gates at runtime on its COMMAND_TOOLS. Every name must pass a matcher that runs pre-pr-gate, and every
+ * Desktop Commander shell tool in SHELL_TOOLS must be in COMMAND_TOOLS (a gap here let `gh pr create` skip the stamp check).
+ */
+describe('pre-pr-gate covers every shell-running tool', () => {
+  const blocksFor = (tool: string): string[] => {
+    const settings = JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+    return (settings.hooks?.PreToolUse ?? [])
+      .filter((b: { matcher?: string }) => (b.matcher ?? '').split('|').includes(tool))
+      .flatMap((b: { hooks?: Array<{ args?: string[] }> }) => (b.hooks ?? []).flatMap((h) => h.args ?? []))
+      .map((a: string) => (a.match(/([a-zA-Z0-9-]+)\.mjs/) ?? [])[1]);
+  };
+
+  it('every COMMAND_TOOLS name reaches pre-pr-gate through a PreToolUse matcher', async () => {
+    const { COMMAND_TOOLS } = await import('../pre-pr-gate.js');
+    expect(COMMAND_TOOLS.size).toBeGreaterThan(0);
+    expect([...COMMAND_TOOLS].filter((t) => !blocksFor(t).includes('pre-pr-gate'))).toEqual([]);
+  });
+
+  it('every SHELL_TOOLS name is in pre-pr-gate COMMAND_TOOLS', async () => {
+    const { COMMAND_TOOLS } = await import('../pre-pr-gate.js');
+    const { SHELL_TOOLS } = await import('../shared/shell-tools.js');
+    expect([...SHELL_TOOLS.keys()].filter((t) => !COMMAND_TOOLS.has(t))).toEqual([]);
+  });
+});
+
+/**
  * Pathway flow v2 (2026-11-06). decision-gate gates at runtime on COMMAND_TOOLS and WRITE_TOOLS; decision-ledger on AskUserQuestion.
  * Every name must pass a matcher that runs the hook. A name in the set but not in a matcher is inert (the hook never sees it).
  */

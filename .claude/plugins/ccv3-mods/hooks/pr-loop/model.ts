@@ -1,5 +1,4 @@
 import type { CheckpointAsk, CheckpointRecord, PrState, PrWatch, SlotRow } from '../../types'
-import { SLASH } from '../pr-checkpoint/model'
 import { slotLine } from './slot-model'
 import type { AlertSlot } from './slot-model'
 
@@ -274,7 +273,7 @@ const rateLimitedByCodeRabbit = (status: PrStatus): boolean =>
 export const stateOf = (status: PrStatus): PrState => {
   if (isClosed(status)) return 'CLOSED'
   if (status.ready) return 'READY'
-  // A draft waits on Dave's checkpoint command (SLASH): no bot reviews it, so it is never PENDING, STALLED, LIMITED or REVIEWED.
+  // A draft waits on Dave's review pick, asked by a tap (pr_checkpoint): no bot reviews it, so it is never PENDING, STALLED, LIMITED or REVIEWED.
   if (isDraftStatus(status)) return 'DRAFT'
   // Findings on a reviewed head come first: a skipped CodeRabbit review, or a cancelled Greptile run on a
   // review:deep PR, must not hide a finding to fix. Nothing to fix and a review that did not finish is LIMITED.
@@ -403,7 +402,7 @@ const WORDS: Record<PrState, string> = {
   PROOF: 'PR body proof needs fixing',
   // Not used for text: word() builds STALLED from the bots that have not reviewed (stalledWords).
   STALLED: 'not READY after 60 minutes',
-  DRAFT: `draft, waiting on ${SLASH}`,
+  DRAFT: "draft, waiting on Dave's review pick (the model asks him with a tap)",
 }
 
 const word = (alert: Alert): string =>
@@ -479,7 +478,7 @@ const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpoint
  * cr-paid.mjs check does not read the carry, the budget or the fixed findings, so the line states the round 2 condition.
  */
 const paidReview = (pr: number): string =>
-  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW or ESCALATE, post nothing yet. Run node scripts/github/ship-ask.mjs paid-round --pr ${pr} --json and pass its question to AskUserQuestion word for word: its first option is the free one. Post the paid comment (@coderabbitai review --use-credits) only after Dave taps a Yes option, then run cr-paid.mjs record. If he taps No, or the answer matches no option, post nothing and tell him the PR waits for the free slot. If ship-ask.mjs exits with anything but 0, do not ask and do not post.`
+  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post nothing yet. Run node scripts/github/ship-ask.mjs paid-round --pr ${pr} --json and pass its question to AskUserQuestion word for word: its first option is the free one. Post the paid comment (@coderabbitai review --use-credits) only after Dave taps a Yes option, then run cr-paid.mjs record. On ESCALATE, or when cr-paid.mjs gives no verdict (exit 2), no paid round is offered: post nothing. Run the same ship-ask.mjs command and pass its question word for word. It has no Yes option and says why. If he taps No or Stop here, or the answer matches no option, post nothing and tell him the PR waits for the free slot. If ship-ask.mjs exits with anything but 0, do not ask and do not post.`
 
 /**
  * A paid review replaces the capacity post while it runs. The retry depends on the paid review finishing or still running, not on the
@@ -567,7 +566,7 @@ export const reportLine = (alert: Alert): string => {
 
 /** A draft's reasons that name a bot or a review request: the model must not read them as an order. */
 const BOT_REASON = /CodeRabbit|Greptile|@coderabbitai|@greptileai/i
-const DRAFT_LINE = `Draft: waiting on Dave's ${SLASH}. Do not request a review.`
+const DRAFT_LINE = "Draft: waiting on Dave's review pick. The model asks him with a tap (pr_checkpoint). Do not request a review."
 
 /** The status the model reads. A draft drops the reasons that send it to a bot and gains the draft line. */
 export const statusForModel = (status: PrStatus): PrStatus =>
