@@ -91,24 +91,20 @@ cost more than 30 minutes, or happened twice. Name the new lessons under Finding
 ### 1. Filepath & Metadata (local YAML copy)
 Use the following information to understand how to create your document:
 
-**First, determine the session name from existing handoffs:**
-```bash
-ls -td thoughts/shared/handoffs/*/ 2>/dev/null | head -1 | xargs basename
-```
+**Get this session's id:** run `echo "$CLAUDE_CODE_SESSION_ID"`. That full uuid is `session_id`; its first 8
+characters are `sid8`. The id survives `/compact`, so the compacted session finds this file by it. If the
+variable is empty, leave `session_id:` empty and tell Dave the file will not auto-load.
 
-This returns the most recently modified handoff folder name (e.g., `open-source-release`). Use this as the handoff folder name.
+**Folder:** `{session-name}` is the workstream name Dave gave for this session, else `general`. Never
+pick it from other handoffs: another session's folder is not yours.
 
-If no handoffs exist, use `general` as the folder name.
-
-**Create your file under:** `thoughts/shared/handoffs/{session-name}/YYYY-MM-DD_HH-MM_description.yaml`, where:
-- `{session-name}` is from existing handoffs (e.g., `open-source-release`) or `general` if none exist
+**Create your file under:** `thoughts/shared/handoffs/{session-name}/YYYY-MM-DD_HH-MM_{sid8}_description.yaml`, where:
 - `YYYY-MM-DD` is today's date
 - `HH-MM` is the current time in 24-hour format (no seconds needed)
+- `{sid8}` is the first 8 characters of the session id
 - `description` is a brief kebab-case description
 
-**Examples:**
-- `thoughts/shared/handoffs/open-source-release/2026-01-08_16-30_memory-system-fix.yaml`
-- `thoughts/shared/handoffs/general/2026-01-08_16-30_bug-investigation.yaml`
+**Example:** `thoughts/shared/handoffs/general/2026-01-08_16-30_0d40499c_bug-investigation.yaml`
 
 ### 2. Write YAML handoff (~400 tokens vs ~2000 for markdown)
 
@@ -118,7 +114,8 @@ The `goal:` and `now:` fields are shown in the statusline - they MUST be named e
 
 ```yaml
 ---
-session: {session-name from ledger}
+session: {session-name}
+session_id: {full uuid of this session, from CLAUDE_CODE_SESSION_ID}
 date: YYYY-MM-DD
 status: complete|partial|blocked
 outcome: SUCCEEDED|PARTIAL_PLUS|PARTIAL_MINUS|FAILED
@@ -289,7 +286,7 @@ Then index the handoff you just created into `archival_memory` so recall can sur
 # Index THE handoff you created in step 1 (not "whatever is newest in a stale table").
 # index_handoffs.py is idempotent — re-runs on the same path insert nothing new.
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "${CLAUDE_PROJECT_DIR:-.}")
-HANDOFF_PATH="thoughts/shared/handoffs/{session-name}/YYYY-MM-DD_HH-MM_description.yaml"  # the file from step 1
+HANDOFF_PATH="thoughts/shared/handoffs/{session-name}/YYYY-MM-DD_HH-MM_{sid8}_description.yaml"  # the file from step 1
 cd "$PROJECT_ROOT/opc" && uv run python scripts/core/index_handoffs.py --apply --only-path "$HANDOFF_PATH"
 ```
 
