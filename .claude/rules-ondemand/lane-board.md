@@ -26,6 +26,8 @@ Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-projec
 ## Phone page
 
 - `continuous-claude` has the page `RtrTNVfAq9uowmb2tfbzid` (`.claude/artifacts.json`). Any other board has a published, interactive page only when its registry entry carries `laneArtifact` (a `https://claude.ai/artifact/<id>` url). Dave starts one with `/publish-board <key>`. `project register` only prints a hint.
+- The page opens on **By band**: P0 this week, P1 next, P2 later, Unsorted, open lanes only, in the shared sort order. P0 shows `n/5`; above 5 it turns amber with "over the cap of 5". The cap is soft. The **Columns** button shows the drag board. The choice is kept in the browser (`lb-view`, `lb-group`). The read-only page has both views too.
+- In Lanes, state chips and band chips combine; a second click on a band chip clears it. Group by Track or Band regroups the same rows. A card shows `rank N` (`lane.priority`) and a band chip. Dave sets a band with `node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0|P1|P2|none`; a drag changes rank only.
 - A board with no `laneArtifact` renders `lane-board-<key>.html` on this machine, read-only (a Priorities section from lane state and priority). Never publish it.
 - After a lane change on any board, the hooks render its page. Publish a board's page only to its own url, with no `capabilities`. Never to another board's url: each page keeps its own db.
 - `kanban-sync` reads one board's page at a time and passes `--project <key>`.

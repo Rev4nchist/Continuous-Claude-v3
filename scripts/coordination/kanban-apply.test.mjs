@@ -425,3 +425,109 @@ test('first sync: a blocked lane that carries the waiting note and sits in later
   const p = plan({ board: board({ later: ['b'] }), cards: [] }, [lane('b', 'blocked', 2, WAITING_NOTE)]);
   assert.ok(kinds(p).includes('b:state:blocked->backlog'), kinds(p).join());
 });
+
+// ---- band work: done lanes use no rank, band is never read or written
+
+const ranks = (p) => Object.fromEntries(p.actions.filter((a) => a.kind === 'priority').map((a) => [a.laneId, a.to]));
+
+test('a done id in a column takes no rank: open lanes around it get 1 and 2, the done lane gets no action', () => {
+  const lanes = [lane('a', 'ready', 50), lane('d', 'done', 50), lane('b', 'ready', 50)];
+  const p = plan({ board: board({ later: ['a', 'd', 'b'] }), cards: [] }, lanes);
+  assert.deepEqual(ranks(p), { a: 1, b: 2 });
+  assert.ok(!p.actions.some((a) => a.laneId === 'd'), kinds(p).join());
+});
+
+test('a stale doc whose columns hold only done ids gives no action', () => {
+  const lanes = [lane('d1', 'done', 7), lane('d2', 'done', 8)];
+  const p = plan({ board: board({ now: ['d1'], next: ['d2'] }), cards: [] }, lanes);
+  assert.deepEqual(p.actions, []);
+});
+
+test('an unknown id between two open lanes takes no rank and is still reported as skipped', () => {
+  const lanes = [lane('a', 'ready', 50), lane('b', 'ready', 50)];
+  const p = plan({ board: board({ next: ['a', 'ghost', 'b'] }), cards: [] }, lanes);
+  assert.deepEqual(ranks(p), { a: 1, b: 2 });
+  assert.deepEqual(p.skipped, [{ laneId: 'ghost', reason: 'no such lane' }]);
+});
+
+test('a pending card on a done lane in a column still applies its status, and the reopened lane takes rank 1', () => {
+  const lanes = [lane('d', 'done', 50)];
+  const p = plan({ board: board({ later: ['d'] }), cards: [card('d', { status: 'ready' })] }, lanes);
+  assert.deepEqual(kinds(p), ['d:priority:50->1', 'd:state:done->ready']);
+});
+
+test('appliedColumns keeps done ids: pruning them is the sync job', () => {
+  const lanes = [lane('a', 'ready', 1), lane('d', 'done', 50)];
+  const p = plan({ board: board({ now: ['a'], later: ['d'] }), cards: [] }, lanes);
+  assert.deepEqual(p.appliedColumns, cols({ now: ['a'], later: ['d'] }));
+});
+
+test('band fields on lanes and cards add no band action and change no other action', () => {
+  const plain = [lane('a', 'backlog', 50), lane('b', 'backlog', 50)];
+  const banded = plain.map((l, i) => ({ ...l, band: i ? 'P2' : 'P0' }));
+  const cardsPlain = [card('a', { status: 'ready', note: 'go' })];
+  const cardsBanded = [card('a', { status: 'ready', note: 'go', band: 'P1' })];
+  const b = board({ now: ['a'], next: ['b'] });
+  const p1 = plan({ board: b, cards: cardsPlain }, plain);
+  const p2 = plan({ board: b, cards: cardsBanded }, banded);
+  assert.ok(p2.actions.every((a) => ['priority', 'state', 'note'].includes(a.kind)));
+  assert.deepEqual(p2.actions, p1.actions);
+});
+
+test('applying a plan then planning again gives no action, with done lanes in the columns', () => {
+  const lanes = [lane('a', 'ready', 50), lane('d', 'done', 50), lane('b', 'ready', 50)];
+  const input = { board: board({ now: ['a'], later: ['d', 'b'] }), cards: [] };
+  const first = plan(input, lanes);
+  const next = applyTo(lanes, first);
+  assert.deepEqual(plan(input, next).actions, []);
+});
+
+// ---- rank on the FINAL state: a pending card status decides whether a lane is open
+
+const uniqueInRange = (p, open) => {
+  const got = Object.values(ranks(p));
+  assert.equal(new Set(got).size, got.length, `ranks repeat: ${got.join()}`);
+  assert.ok(got.every((r) => Number.isInteger(r) && r >= 1 && r <= open), `rank out of 1..${open}: ${got.join()}`);
+};
+
+test('a done lane that a pending card reopens counts as open: its rank is in range and unique', () => {
+  const lanes = [lane('a', 'ready', 50), lane('d', 'done', 50), lane('b', 'ready', 50)];
+  const p = plan({ board: board({ later: ['a', 'd', 'b'] }), cards: [card('d', { status: 'ready' })] }, lanes);
+  assert.deepEqual(ranks(p), { a: 1, d: 2, b: 3 });
+  uniqueInRange(p, 3);
+});
+
+test('an open lane that a pending card closes takes no rank: the lanes around it close the gap', () => {
+  const lanes = [lane('a', 'ready', 50), lane('x', 'ready', 50), lane('b', 'ready', 50)];
+  const p = plan({ board: board({ next: ['a', 'x', 'b'] }), cards: [card('x', { status: 'done' })] }, lanes);
+  assert.deepEqual(ranks(p), { a: 1, b: 2 });
+  uniqueInRange(p, 2);
+  assert.deepEqual(kinds(p).filter((k) => k.startsWith('x:')), ['x:state:ready->done']);
+});
+
+test('a stale card status (already synced) does not reopen a done lane for ranking', () => {
+  const lanes = [lane('a', 'ready', 50), lane('d', 'done', 50)];
+  const stale = card('d', { status: 'ready', syncedAt: '2026-11-02T12:00:00Z' });
+  const p = plan({ board: board({ later: ['d', 'a'] }), cards: [stale] }, lanes);
+  assert.deepEqual(ranks(p), { a: 1 });
+});
+
+test('a done lane with an invalid card status stays done and takes no rank', () => {
+  const lanes = [lane('a', 'ready', 50), lane('d', 'done', 50)];
+  const p = plan({ board: board({ later: ['d', 'a'] }), cards: [card('d', { status: 'bogus' })] }, lanes);
+  assert.deepEqual(ranks(p), { a: 1 });
+});
+
+test('a held done lane whose card status is deferred stays done and takes no rank', () => {
+  const lanes = [lane('a', 'ready', 50), held(lane('d', 'done', 50))];
+  const p = plan({ board: board({ later: ['d', 'a'] }), cards: [card('d', { status: 'ready' })] }, lanes);
+  assert.deepEqual(ranks(p), { a: 1 });
+});
+
+test('reopen then plan again: the ranks hold, no second action', () => {
+  const lanes = [lane('a', 'ready', 50), lane('d', 'done', 50)];
+  const input = { board: board({ now: ['a', 'd'] }), cards: [card('d', { status: 'ready' })] };
+  const next = applyTo(lanes, plan(input, lanes));
+  assert.deepEqual(next.map((l) => [l.id, l.state, l.priority]), [['a', 'ready', 1], ['d', 'ready', 2]]);
+  assert.deepEqual(plan(input, next).actions, []);
+});

@@ -15,8 +15,8 @@
  *
  * One page per board. The board comes from --project <key>, else LANE_PROJECT, else the registry entry that holds the cwd.
  * A cwd with no board exits 1 with the register hint. continuous-claude writes <repo>/lane-board.html (the phone page);
- * every other board writes <repo>/lane-board-<key>.html, read-only. It shows a static Priorities section (the five columns
- * drawn from lane state and priority) and carries no kanban script and no db: the save is keyed by lane id, and the page
+ * every other board writes <repo>/lane-board-<key>.html, read-only. It shows a static Priorities section (By band, and the five
+ * columns drawn from lane state and priority) and carries no kanban script and no db: the save is keyed by lane id, and the page
  * db is one document that only the published continuous-claude artifact can open. The lane, session and event queries are
  * filtered to the board. The file-claim and
  * coordination_event sections are machine-wide and say so on the page. The page carries a stamp
@@ -34,9 +34,10 @@ import {
   boardMismatch, boardWriteKind, mergeUnknownColumns,
 } from './kanban-place.mjs';
 import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
-import { boardStamp, defaultOut, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
+import { boardStamp, defaultOut, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 import { processMatchSummary } from './process-match.mjs';
-import { laneOrderSql } from './lane-sort.mjs';
+import { compareLanes, laneOrderSql } from './lane-sort.mjs';
+import { BAND_CAP, BAND_GROUPS, bandChipHtml, bandKey, capState, groupByBand } from './board-band-view.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -215,6 +216,11 @@ const open = lanes.filter((l) => l.state !== 'done');
 const byState = (s) => open.filter((l) => l.state === s).length;
 const held = open.filter((l) => l.held_now).length;
 const tracks = [...new Set(lanes.map((l) => l.track))];
+// Position of a lane in the shared sort order (done lanes included) and in the page order of the Lanes list. The page script
+// regroups the list by these two numbers: by band (data-ord) and back by track (data-seq).
+const ordOf = new Map(lanes.slice().sort(compareLanes).map((l, i) => [l.id, i]));
+const seqOf = new Map(lanes.map((l, i) => [l.id, i]));
+const bandCount = (key) => open.filter((l) => bandKey(l) === key).length;
 
 const STRIPE = {
   active: 's-ok', ready: 's-info', blocked: 's-crit',
@@ -233,9 +239,9 @@ const laneRow = (l, i) => {
     ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000) : null;
   const detailId = `d${i}`;
   return `
-  <button class="lane${l.held_now ? ' is-held' : ''}" aria-expanded="false" aria-controls="${detailId}" data-state="${esc(l.state)}" data-track="${esc(l.track)}" data-held="${l.held_now ? '1' : '0'}">
+  <button class="lane${l.held_now ? ' is-held' : ''}" aria-expanded="false" aria-controls="${detailId}" data-state="${esc(l.state)}" data-track="${esc(l.track)}" data-held="${l.held_now ? '1' : '0'}" data-band="${bandKey(l)}" data-ord="${ordOf.get(l.id)}" data-seq="${seqOf.get(l.id)}">
     <span class="stripe ${STRIPE[l.state] || 's-idle'}"></span>
-    <span class="nm">${esc(l.id)}<small>${esc(l.title)}</small></span>
+    <span class="nm">${bandChipHtml(l)}${esc(l.id)}<small>${esc(l.title)}</small></span>
     <span class="state-c"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span></span>
     <span class="own">${owner
       ? `<span class="who">${esc(short(owner))}</span>${leaseMin !== null
@@ -267,7 +273,7 @@ const KB_COLS = [
   ['now', 'Now'], ['next', 'Next'], ['later', 'Later'], ['waiting', 'Waiting on Dave'],
 ];
 const kbPrio = (l) => (l.priority != null && Number.isFinite(Number(l.priority)) ? Number(l.priority) : null);
-const kbLanes = lanes.map((l) => ({ id: l.id, state: l.state, priority: kbPrio(l) }));
+const kbLanes = lanes.map((l) => ({ id: l.id, state: l.state, priority: kbPrio(l), band: l.band ?? null }));
 const kbPlaced = placeLanes(null, kbLanes);
 const kbById = new Map(lanes.map((l) => [l.id, l]));
 // The page also needs each lane's facts for the Plain English prompt. placeLanes
@@ -308,12 +314,14 @@ const kbHolder = (l, ro = false) => {
 // page never passes ro, so its strings stay byte-identical.
 const kbCard = (l, movable, rank, col, ro = false) => {
   const n = kbSeq++;
-  const prio = kbPrio(l) !== null ? `<span class="kb-prio mono" title="DB priority">prio ${kbPrio(l)}</span>` : '';
+  // rank = lane.priority, the drag order inside a band. The round number in the card top is the position in the column: a different thing.
+  const prio = kbPrio(l) !== null ? `<span class="kb-prio mono" title="Rank inside the band (lane.priority)">rank ${kbPrio(l)}</span>` : '';
+  const band = bandChipHtml(l, 'kb-band');
   if (ro) {
     return `<li class="card kb-card kb-ro" data-id="${esc(l.id)}" data-state="${esc(l.state)}" data-hash="${esc(kbHash(l))}">
       <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Priority order (not a saved order)">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span></div>
       <p class="kb-title">${esc(l.title)}</p>
-      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${prio}</div>
+      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${band}${prio}</div>
       ${movable ? '' : kbHolder(l, true)}
       <details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary>
         <dl class="kb-dl">
@@ -329,7 +337,7 @@ const kbCard = (l, movable, rank, col, ro = false) => {
   return `<li class="card kb-card" data-id="${esc(l.id)}" data-state="${esc(l.state)}" data-hash="${esc(kbHash(l))}">
       <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Rank in this column">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span>${movable ? '<span class="kb-grip" title="Drag to move" aria-hidden="true">&#8942;&#8942;</span>' : ''}</div>
       <p class="kb-title">${esc(l.title)}</p>
-      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${prio}<span class="kb-sync" hidden></span></div>
+      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${band}${prio}<span class="kb-sync" hidden></span></div>
       ${movable ? '' : kbHolder(l)}
       <button class="kb-btn kb-plain" type="button" hidden aria-expanded="false" aria-controls="kb-p${n}">Plain English</button>
       <p class="kb-plain-out" id="kb-p${n}" role="status" hidden></p>
@@ -366,6 +374,36 @@ const kbColumn = (key, name, ids, movable, ro = false) => `<div class="kcol"${mo
     : ids.map((id, i) => kbCard(kbById.get(id), movable, i + 1, key, ro)).join('')}</ul>
   </div>`;
 
+// ------------------------------------------------------------ By band
+// Static and server-rendered on every page, the read-only one too. Open lanes only (state <> 'done'), from this board's own rows.
+// Rows use bb-* classes and never kb-card, lane, detail or chip: the card editor, the lane list and the filter look those up.
+// A row has no chip, no data-id and no title attribute: the group heading names the band, the id is in the text, and the page is
+// near its size ratchet (render-board.test.mjs).
+const bbRow = (l) => `<li class="bb-row" data-state="${esc(l.state)}"><span class="bb-id mono">${esc(l.id)}</span><span class="bb-t">${esc(l.title)}</span><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="bb-track mono">${esc(l.track)}</span>${kbPrio(l) !== null ? `<span class="bb-rank mono">rank ${kbPrio(l)}</span>` : ''}</li>`;
+
+const bbGroup = (g) => {
+  const cap = g.key === 'P0' ? capState(g.n) : null;
+  const over = cap !== null && cap.over;
+  return `<div class="bb-grp${over ? ' bb-over' : ''}" data-band="${g.key}">
+      <h3 class="bb-h"><span class="bb-name">${esc(g.label)}</span><span class="bb-count mono">${cap ? cap.text : g.n}</span>${over ? `<span class="bb-warn">over the cap of ${BAND_CAP}</span>` : ''}</h3>
+      ${g.n ? `<ul class="bb-list">${g.rows.map(bbRow).join('')}</ul>` : `<p class="bb-empty">Nothing in ${g.key === 'none' ? 'Unsorted' : g.key}.</p>`}
+    </div>`;
+};
+
+const BB_HTML = `<div class="bb" id="bb">
+    ${groupByBand(lanes).map(bbGroup).join('')}
+    <div class="card bb-q"><span class="recon"><b>by band</b>   SELECT l.id, l.band, l.priority, l.due_at, l.state, l.track FROM agentic_os.lane l
+            WHERE l.project_key = '${esc(KEY)}' AND l.state &lt;&gt; 'done'
+            ORDER BY ${laneOrderSql('l')};
+<b>P0 count</b> SELECT count(*) FROM agentic_os.lane WHERE project_key = '${esc(KEY)}' AND state &lt;&gt; 'done' AND band = 'P0';
+            -- the cap of ${BAND_CAP} is soft: the page warns above it and blocks nothing.</span></div>
+  </div><!-- /bb -->`;
+
+// By band is built when the page is rendered. A drag saves to the page db, and a session copies it to the lane DB at the next sync.
+const BB_NOTE = 'From the last render; a drag shows here after the next sync.';
+
+const VIEW_BAR = `<div class="vt-bar" role="group" aria-label="Priorities view"><button class="vt" type="button" data-g="view" data-v="band" aria-pressed="true">By band</button><button class="vt" type="button" data-g="view" data-v="columns" aria-pressed="false">Columns</button></div>`;
+
 // The client script is plain ES5 text: placeLanes' own source, then the page code.
 // Only the default board's page carries the kanban client and its script. Another board's page has a static Priorities section
 // (kbColumn with ro) and no script: Details uses <details>, the columns do not collapse, nothing saves.
@@ -378,12 +416,11 @@ ${kbClient}` : '';
 
 // The template hash: what a page was rendered from. It covers this file and the kanban sources, so a page rendered from an
 // older generator shows a different hash. Read it back from the live page after a republish.
-const TEMPLATE_HASH = fnv1a(['render-board.mjs', 'render-board-args.mjs', 'kanban-client.js', 'kanban-place.mjs']
-  .map((f) => readFileSync(join(HERE, f), 'utf8').replace(/\r\n/g, '\n')).join('\n--\n'));
+const TEMPLATE_HASH = templateHash(HERE);
 const STAMP = boardStamp({ board: KEY, template: TEMPLATE_HASH, generated: GENERATED_AT.toISOString() });
 const PAGE_TITLE = KEY === DEFAULT_BOARD ? 'Agentic OS — Lane Board' : `Agentic OS — Lane Board (${KEY})`;
 
-const KB_RO_INTRO = 'Read-only snapshot from the last render. Columns come from lane state and priority. Lease times are clock times, not countdowns.';
+const KB_RO_INTRO = 'Read-only snapshot from the last render. By band lists open lanes by importance, P0 first. Columns come from lane state and priority. Lease times are clock times, not countdowns.';
 const KB_RO_NO_ORDER = 'Nothing is saved here: this board has no saved order.';
 // An empty read-only column says why. Now and Waiting on Dave are only filled from a saved order, and this board has none.
 const KB_RO_EMPTY = { now: KB_RO_NO_ORDER, waiting: KB_RO_NO_ORDER };
@@ -664,7 +701,47 @@ const html = `${STAMP}
     .kb-head, .kb-more, .kb-btn, .kb-to, .kb-st { min-height:44px; }
     .kb-btn { min-width:44px; }
     .kb-more { padding:4px 10px 4px 0; }
+    .vt, .chip { min-height:44px; }
   }
+
+  /* Band. P0 is filled, P1 and P2 are outlined, Unsorted is dashed. Small text uses --muted: --faint is below 4.5:1 here.
+     The By band view is static markup; the view switch only shows one of two blocks. Rows are bb-*, never kb-card, lane, detail or chip. */
+  .bchip, .kb-band { display:inline-flex; align-items:center; flex:none; padding:2px 7px; border:1px solid var(--line); border-radius:999px;
+    background:transparent; color:var(--muted); font:700 10px/1.4 var(--mono); letter-spacing:.04em; white-space:nowrap; }
+  .bchip[data-band="P0"], .kb-band[data-band="P0"] { background:var(--ink); color:var(--ground); border-color:var(--ink); }
+  .bchip[data-band="P1"], .kb-band[data-band="P1"] { color:var(--info); border-color:var(--info); }
+  .bchip[data-band="P2"], .kb-band[data-band="P2"] { color:var(--muted); border-color:var(--muted); }
+  .bchip[data-band="none"], .kb-band[data-band="none"] { color:var(--muted); border:1px dashed var(--muted); }
+  .lane .nm .bchip { margin-right:7px; vertical-align:1px; }
+  .vt-bar { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 12px; }
+  .vt { border:1px solid var(--line); background:var(--panel); color:var(--muted); border-radius:999px; padding:6px 14px; cursor:pointer; font:500 11px/1 var(--mono); }
+  .vt:hover { border-color:var(--muted); color:var(--ink); }
+  .vt[aria-pressed="true"] { background:var(--ink); color:var(--ground); border-color:var(--ink); }
+  .flab { align-self:center; color:var(--muted); font:500 11px/1 var(--mono); }
+  [data-view="band"] .kb-board { display:none; }
+  [data-view="columns"] .bb { display:none; }
+  .bb { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr)); gap:12px; align-items:start; }
+  .bb-grp { min-width:0; padding:8px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel-2); }
+  .bb-over { border-color:var(--warn); border-width:2px; }
+  .bb-h { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin:0; padding:6px 4px; font:600 12px/1.2 var(--mono); letter-spacing:.04em; color:var(--ink); }
+  .bb-count { padding:3px 7px; border:1px solid var(--line); border-radius:999px; background:var(--panel); color:var(--muted); font:600 10.5px/1.2 var(--mono); }
+  .bb-over .bb-count { border-color:var(--warn); color:var(--warn); }
+  .bb-warn { color:var(--warn); font:700 11px/1.2 var(--mono); }
+  .bb-list { display:flex; flex-direction:column; gap:6px; margin:0; padding:0; list-style:none; }
+  .bb-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; min-width:0; padding:8px 10px; border:1px solid var(--line); border-left:3px solid var(--line);
+    border-radius:var(--r); background:var(--panel); }
+  .bb-row[data-state="active"] { border-left-color:var(--ok); }
+  .bb-row[data-state="ready"] { border-left-color:var(--info); }
+  .bb-row[data-state="blocked"] { border-left-color:var(--crit); }
+  .bb-row[data-state="review"] { border-left-color:var(--warn); }
+  .bb-id { min-width:0; font:600 12.5px/1.3 var(--mono); overflow-wrap:anywhere; }
+  .bb-t { flex:1 1 100%; min-width:0; margin:0; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; overflow:hidden;
+    color:var(--muted); font:400 12px/1.45 var(--sans); overflow-wrap:anywhere; }
+  .bb-track, .bb-rank { color:var(--muted); font:500 10.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .bb-empty { margin:0; padding:14px 10px; border:1px dashed var(--line); border-radius:var(--r); color:var(--muted); font:400 11px/1.4 var(--mono); text-align:center; }
+  .bb-q { grid-column:1 / -1; }
+  .bb-note { margin:0 0 10px; color:var(--muted); font:400 11.5px/1.4 var(--mono); }
+  [data-view="columns"] .bb-note { display:none; }
 
   @media (max-width:1080px) { .lane { grid-template-columns:3px minmax(160px,1.4fr) 92px 130px 56px; } .lane .scope { display:none; } }
   @media (max-width:720px) { .lane { grid-template-columns:3px 1fr 56px; } .lane .state-c, .lane .own { display:none; } }
@@ -708,26 +785,31 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
 
 <div class="wrap">
 
-  ${KANBAN ? `<section id="priorities" aria-labelledby="kb-title">
+  ${KANBAN ? `<section id="priorities" aria-labelledby="kb-title" data-view="band">
     <div class="sec-head">
       <h2 id="kb-title">Priorities</h2>
-      <p>Drag or use Move to. Your order saves to this board and Claude reads it.</p>
+      <p>By band lists open lanes by importance, P0 first. Columns is the drag board. Drag or use Move to reorder. Your order saves to this board and Claude reads it.</p>
     </div>
+    ${VIEW_BAR}
     <div class="kb-bar">
       <p class="kb-status" id="kb-status" role="status" data-k="idle">Default order. Saved order not loaded yet.</p>
       <span class="kb-chip" id="kb-order" data-k="pending" hidden>Order not yet synced to sessions</span>
     </div>
+    <p class="bb-note">${BB_NOTE}</p>
+    ${BB_HTML}
     <div class="sr" id="kb-live" aria-live="polite"></div>
     <div class="kb-board" id="kb-board">
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false)}
     </div>
     <script type="application/json" id="kb-data">${kbJson}</script>
-  </section>` : `<section id="priorities" class="kb-ro" aria-labelledby="kb-title">
+  </section>` : `<section id="priorities" class="kb-ro" aria-labelledby="kb-title" data-view="band">
     <div class="sec-head">
       <h2 id="kb-title">Priorities</h2>
       <p>${KB_RO_INTRO}</p>
     </div>
+    ${VIEW_BAR}
+    ${BB_HTML}
     <div class="kb-board" id="kb-board">
       ${KB_COLS.map(([k, name]) => kbColumn(k, name, kbPlaced[k], true, true)).join('')}
       ${kbColumn('progress', 'In progress', kbPlaced.inProgress, false, true)}
@@ -770,13 +852,22 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       <h2>Lanes</h2>
       <p>A lane is a durable work thread with a declared scope. Two sessions are safe to run at once exactly when their scopes are disjoint. Click a lane for its standing case and the command to claim it.</p>
     </div>
-    <div class="filters" role="group" aria-label="Filter lanes">
-      <button class="chip" data-f="open" aria-pressed="true">open ${open.length}</button>
-      <button class="chip" data-f="ready" aria-pressed="false">claimable ${byState('ready')}</button>
-      <button class="chip" data-f="held" aria-pressed="false">held ${held}</button>
-      <button class="chip" data-f="blocked" aria-pressed="false">blocked ${byState('blocked')}</button>
-      <button class="chip" data-f="all" aria-pressed="false">all ${lanes.length}</button>
+    <div class="filters" role="group" aria-label="Filter lanes by state">
+      <button class="chip" data-g="state" data-f="open" aria-pressed="true">open ${open.length}</button>
+      <button class="chip" data-g="state" data-f="ready" aria-pressed="false">claimable ${byState('ready')}</button>
+      <button class="chip" data-g="state" data-f="held" aria-pressed="false">held ${held}</button>
+      <button class="chip" data-g="state" data-f="blocked" aria-pressed="false">blocked ${byState('blocked')}</button>
+      <button class="chip" data-g="state" data-f="all" aria-pressed="false">all ${lanes.length}</button>
     </div>
+    <div class="filters" role="group" aria-label="Filter lanes by band">
+      ${BAND_GROUPS.map(([key, label]) => `<button class="chip" data-g="band" data-f="${key}" aria-pressed="false">${key === 'none' ? 'Unsorted' : key} ${bandCount(key)} open</button>`).join('\n      ')}
+    </div>
+    <div class="filters" role="group" aria-label="Group lanes">
+      <span class="flab">Group by</span>
+      <button class="vt" type="button" data-g="group" data-v="track" aria-pressed="true">Track</button>
+      <button class="vt" type="button" data-g="group" data-v="band" aria-pressed="false">Band</button>
+    </div>
+    <div id="lane-groups">
     ${tracks.map((t) => {
       const rows = lanes.filter((l) => l.track === t);
       return `<div class="grp" data-track="${esc(t)}">
@@ -784,6 +875,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
         ${rows.map((l, i) => laneRow(l, `${esc(t)}-${i}`)).join('')}
       </div>`;
     }).join('')}
+    </div>
     <div class="card" style="margin-top:6px"><span class="recon"><b>lanes</b>     SELECT id, state, owner_session_id, lease_expires_at, scope
             FROM agentic_os.lane WHERE project_key = '${esc(KEY)}' ORDER BY track, band NULLS LAST, due_at NULLS LAST, priority, id;
 <b>claim</b>     ${esc(laneCliCmd())} claim &lt;id&gt;    # atomic: one winner, loser is told who won
@@ -844,29 +936,112 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       });
     });
 
-    var chips = document.querySelectorAll('.chip');
-    chips.forEach(function (chip) {
+    function all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+
+    // A stored choice is trusted only when it is one of the known values. A blocked or throwing store is no store.
+    function lsGet(k, ok) {
+      try { var v = window.localStorage.getItem(k); return ok.indexOf(v) >= 0 ? v : null; } catch (e) { return null; }
+    }
+    function lsSet(k, v) {
+      try { window.localStorage.setItem(k, v); } catch (e) { }
+    }
+
+    // Priorities: By band (default) or Columns.
+    var pri = document.getElementById('priorities');
+    function setView(v, save) {
+      if (!pri) return;
+      pri.setAttribute('data-view', v);
+      all('.vt[data-g="view"]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.v === v)); });
+      if (save) lsSet('lb-view', v);
+    }
+    all('.vt[data-g="view"]').forEach(function (b) {
+      b.addEventListener('click', function () { setView(b.dataset.v, true); });
+    });
+    setView(lsGet('lb-view', ['band', 'columns']) || 'band', false);
+
+    // Filters: two groups. State chips and band chips combine (state AND band); a second click on a band chip clears it.
+    var fState = 'open';
+    var fBand = null;
+    function stateMatch(f, lane) {
+      var st = lane.dataset.state, held = lane.dataset.held === '1';
+      return f === 'all' ? true : f === 'open' ? st !== 'done' : f === 'held' ? held : st === f;
+    }
+    // Group headings: "N open / M" counted from the lanes now inside each group. A group with nothing visible is noise, not structure.
+    function recount() {
+      all('#lane-groups > .grp').forEach(function (g) {
+        var ls = g.querySelectorAll('.lane');
+        var openN = 0;
+        Array.prototype.forEach.call(ls, function (l) { if (l.dataset.state !== 'done') openN++; });
+        var ct = g.querySelector('.ct');
+        if (ct) ct.textContent = openN + ' open / ' + ls.length;
+        var any = Array.prototype.some.call(ls, function (l) { return l.style.display !== 'none'; });
+        g.style.display = any ? '' : 'none';
+      });
+    }
+    function applyFilter() {
+      all('.lane').forEach(function (lane) {
+        var show = stateMatch(fState, lane) && (fBand === null || lane.dataset.band === fBand);
+        lane.style.display = show ? '' : 'none';
+        var d = document.getElementById(lane.getAttribute('aria-controls'));
+        if (!show) { d.classList.remove('open'); lane.setAttribute('aria-expanded', 'false'); }
+        d.dataset.hidden = show ? '' : '1';
+      });
+      recount();
+    }
+    all('.chip').forEach(function (chip) {
       chip.addEventListener('click', function () {
-        chips.forEach(function (o) { o.setAttribute('aria-pressed', String(o === chip)); });
-        var f = chip.dataset.f;
-        document.querySelectorAll('.lane').forEach(function (lane) {
-          var st = lane.dataset.state, held = lane.dataset.held === '1';
-          var show = f === 'all' ? true
-            : f === 'open' ? st !== 'done'
-            : f === 'held' ? held
-            : st === f;
-          lane.style.display = show ? '' : 'none';
-          var d = document.getElementById(lane.getAttribute('aria-controls'));
-          if (!show) { d.classList.remove('open'); lane.setAttribute('aria-expanded', 'false'); }
-          d.dataset.hidden = show ? '' : '1';
-        });
-        // A track heading with nothing under it is noise, not structure.
-        document.querySelectorAll('.grp').forEach(function (g) {
-          var any = Array.prototype.some.call(g.querySelectorAll('.lane'), function (l) { return l.style.display !== 'none'; });
-          g.style.display = any ? '' : 'none';
-        });
+        if (chip.dataset.g === 'band') {
+          var clear = chip.getAttribute('aria-pressed') === 'true';
+          all('.chip[data-g="band"]').forEach(function (o) { o.setAttribute('aria-pressed', 'false'); });
+          fBand = clear ? null : chip.dataset.f;
+          if (!clear) chip.setAttribute('aria-pressed', 'true');
+        } else {
+          all('.chip[data-g="state"]').forEach(function (o) { o.setAttribute('aria-pressed', String(o === chip)); });
+          fState = chip.dataset.f;
+        }
+        applyFilter();
       });
     });
+
+    // Group by Track (default) or Band. One copy of the rows: each lane and its detail are MOVED, so ids stay unique and an open detail stays open.
+    var BANDS = ${JSON.stringify(BAND_GROUPS)};
+    var host = document.getElementById('lane-groups');
+    var trackGrps = {};
+    all('#lane-groups > .grp').forEach(function (g) { trackGrps['t:' + g.dataset.track] = g; });
+    function moveTo(box, lane) {
+      box.appendChild(lane);
+      box.appendChild(document.getElementById(lane.getAttribute('aria-controls')));
+    }
+    function by(attr) { return function (a, b) { return Number(a.dataset[attr]) - Number(b.dataset[attr]); }; }
+    function setGroup(g, save) {
+      if (!host) return;
+      // Always go back to the track groups first, in page order, so a regroup never depends on the previous one.
+      all('#lane-groups .lane').sort(by('seq')).forEach(function (l) {
+        var t = trackGrps['t:' + l.dataset.track];
+        if (t) moveTo(t, l);
+      });
+      all('#lane-groups > .grp-band').forEach(function (e) { host.removeChild(e); });
+      if (g === 'band') {
+        var boxes = {};
+        BANDS.forEach(function (b) {
+          var box = document.createElement('div');
+          box.className = 'grp grp-band';
+          box.setAttribute('data-band', b[0]);
+          box.innerHTML = '<div class="grp-h"><span class="nm"></span><span class="ct"></span><span class="rule"></span></div>';
+          box.querySelector('.nm').textContent = b[1];
+          host.appendChild(box);
+          boxes[b[0]] = box;
+        });
+        all('#lane-groups .lane').sort(by('ord')).forEach(function (l) { moveTo(boxes[l.dataset.band] || boxes.none, l); });
+      }
+      all('.vt[data-g="group"]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.v === g)); });
+      recount();
+      if (save) lsSet('lb-group', g);
+    }
+    all('.vt[data-g="group"]').forEach(function (b) {
+      b.addEventListener('click', function () { setGroup(b.dataset.v, true); });
+    });
+    setGroup(lsGet('lb-group', ['track', 'band']) || 'track', false);
     document.querySelector('.chip[data-f="open"]').click();
   })();
 </script>

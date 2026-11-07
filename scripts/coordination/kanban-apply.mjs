@@ -28,8 +28,11 @@
  * - Held lanes (a live session owns them) never change state from a card or a column.
  *   Notes still apply. The card result is "skipped: held" and the card stays pending.
  * - Done lanes are never moved into waiting. Done work stays done.
- * - Priority = one rank per placed card, 1..n in board order (now, next, later,
- *   waiting). New lanes default to 50, so they sort after a board of up to 49 cards.
+ * - Priority = one rank per open lane, 1..n in board order (now, next, later, waiting).
+ *   "Open" means open after this run: a pending card status can reopen a done lane (it gets a
+ *   rank) or close an open one (it gets none). Unknown ids use no rank. Band is never read or written: a card drag changes
+ *   rank only (Dave sets a band with `lane.mjs band`). New lanes default to 50, so they
+ *   sort after a board of up to 49 cards.
  * - "Leaving waiting" has no history in the planner. A lane counts as "was waiting"
  *   only when it is blocked AND its note still contains the waiting marker (kept
  *   notes carry it after "|| before:"). The priority number never decides it. A lane
@@ -45,7 +48,7 @@
  *   2026-11-02). lane_event keeps every step.
  */
 
-/** Board order: every placed card gets ONE rank, 1..n across the columns in this order. No bands, so no overflow. */
+/** Board order: every open lane gets ONE rank, 1..n across the columns in this order. Done and unknown ids use no rank. Band is never read or written. */
 export const COLUMNS = ['now', 'next', 'later', 'waiting'];
 export const WAITING_NOTE = 'Waiting on Dave (kanban)';
 export const CARD_STATUSES = ['backlog', 'ready', 'blocked', 'done'];
@@ -76,16 +79,39 @@ function columnOf(columns) {
   return out;
 }
 
-/** First position wins. Returns Map<laneId, {column, index, rank, changed}>. */
-function placements(board) {
+/**
+ * The state a lane has after this run's card status. Only a pending card with a valid
+ * status counts, and not on an active lane (skipped whole) or a held lane (status waits).
+ * Column rules never move a lane into or out of done, so they do not matter here.
+ */
+function finalState(row, card) {
+  if (!card || row.state === 'active' || !isPending(card.updatedAt, card.syncedAt)) return row.state;
+  if (!CARD_STATUSES.includes(card.status)) return row.state;
+  return row.held && card.status !== row.state ? row.state : card.status;
+}
+
+/**
+ * First position wins. Returns Map<laneId, {column, index, rank, changed}>.
+ * Rank follows the FINAL state: a lane that ends done gets no placement and uses no rank
+ * (a done lane that a pending card reopens does get one; an open lane the card closes does not).
+ * An id with no lane row keeps an entry (rank null, so planKanban reports it as skipped) and
+ * uses no rank. Lanes that end open get 1..n.
+ */
+function placements(board, rows = new Map(), cards = new Map()) {
   const out = new Map();
   if (!boardPending(board)) return out;
   const before = columnOf(board.appliedColumns);
+  const seen = new Set();
+  let rank = 0;
   for (const column of COLUMNS) {
     const ids = Array.isArray(board.columns[column]) ? board.columns[column] : [];
     ids.forEach((id, index) => {
+      if (typeof id !== 'string' || !id || seen.has(id)) return;
+      seen.add(id);
+      const row = rows.get(id);
+      if (row && finalState(row, cards.get(id)) === 'done') return;
       // changed: another column than in the last applied board (every lane, when none is known).
-      if (typeof id === 'string' && id && !out.has(id)) out.set(id, { column, index, rank: out.size + 1, changed: before.get(id) !== column });
+      out.set(id, { column, index, rank: row ? ++rank : null, changed: before.get(id) !== column });
     });
   }
   return out;
@@ -165,11 +191,11 @@ function readCard(card, lane) {
 export function planKanban(input, lanes) {
   const inp = isObj(input) ? input : {};
   const rows = new Map((Array.isArray(lanes) ? lanes : []).filter((l) => isObj(l) && l.id).map((l) => [l.id, l]));
-  const place = placements(inp.board);
   const cards = new Map();
   for (const c of Array.isArray(inp.cards) ? inp.cards : []) {
     if (isObj(c) && typeof c.id === 'string' && c.id && !cards.has(c.id)) cards.set(c.id, c);
   }
+  const place = placements(inp.board, rows, cards);
 
   const actions = [];
   const results = [];
