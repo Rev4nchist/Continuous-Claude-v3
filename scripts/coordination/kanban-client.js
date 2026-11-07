@@ -58,6 +58,8 @@
 (function () {
   var COLS = ['next', 'later', 'waiting'];
   var LABEL = { next: 'Next', later: 'Later', waiting: 'Waiting on Dave' };
+  // The two fixed columns a row tap can open. Not in COLS: they have no Move option.
+  var FIXED_LABEL = { progress: 'In progress', scheduled: 'Scheduled and reminders' };
   var DOC_PATH = 'kanban/board';
   var CARDS = 'cards';
   var PLAIN = 'plain';
@@ -117,6 +119,9 @@
   var again = false;
   var dragId = null;
   var placeholder = null;
+  // Later shows LATER_CAP cards on the phone (the CSS hides the rest). Show more, a move into Later or a row tap on a hidden card lifts the cap.
+  var laterAll = false;
+  var laterMore = null;
 
   Array.prototype.forEach.call(board.querySelectorAll('.kb-card'), function (el) { cards[el.getAttribute('data-id')] = el; });
   Array.prototype.forEach.call(board.querySelectorAll('.kcol'), function (el) {
@@ -125,6 +130,7 @@
     lists[k] = el.querySelector('.kb-list');
     counts[k] = el.querySelector('.kb-count');
   });
+  if (colEls.later) laterMore = colEls.later.querySelector('.lt-more');
 
   function key(c) { return JSON.stringify([c.next, c.later, c.waiting]); }
   function copyCols() { return { next: cols.next.slice(), later: cols.later.slice(), waiting: cols.waiting.slice() }; }
@@ -153,6 +159,11 @@
       });
       colEls[name].setAttribute('data-n', String(ids.length));
       counts[name].textContent = String(ids.length);
+      if (name === 'later') {
+        var over = ids.length - LATER_CAP;
+        colEls.later.classList.toggle('kb-capped', over > 0 && !laterAll);
+        if (laterMore && over > 0) laterMore.textContent = 'Show ' + over + ' more';
+      }
     });
   }
 
@@ -214,6 +225,7 @@
     var at = Math.max(0, Math.min(toIndex, dest.length));
     dest.splice(at, 0, id);
     if (from.col === toCol && from.at === at) { render(); return; }
+    if (toCol === 'later') laterAll = true;
     clearMoveNotes();
     render();
     var first = toCol === 'next' && at === 0;
@@ -254,10 +266,15 @@
   }
 
   // The card under the moved one (else the one above). The page scrolls by how far it shifts, so the list under the finger stays still.
+  // A card the CSS hides (the Later cap) has offsetParent null and a zero rect: measuring it would scroll the page by the card's whole top.
   function neighbour(id) {
     var el = cards[id];
-    var n = el ? (el.nextElementSibling || el.previousElementSibling) : null;
-    return n && n.getBoundingClientRect ? n : null;
+    var sibs = el ? [el.nextElementSibling, el.previousElementSibling] : [];
+    for (var i = 0; i < sibs.length; i++) {
+      var n = sibs[i];
+      if (n && n.getBoundingClientRect && n.offsetParent !== null) return n;
+    }
+    return null;
   }
 
   function focusAfter(id, sel) {
@@ -282,15 +299,18 @@
     if (sv) { saveCard(sv.closest('.kb-card').getAttribute('data-id')); return; }
     var pl = t.closest('.kb-plain');
     if (pl) { plainClick(pl); return; }
+    var lm = t.closest('.lt-more');
+    if (lm) {
+      laterAll = true;
+      render();
+      // The button hides itself, so focus would fall to the body and the live region would say nothing.
+      announce('Later: all ' + cols.later.length + ' cards shown');
+      focusShown(cards[cols.later[LATER_CAP]]);
+      return;
+    }
     var more = t.closest('.kb-more');
     if (more) {
-      var card = more.closest('.kb-card');
-      var detail = document.getElementById(more.getAttribute('aria-controls'));
-      var open = detail.hidden;
-      detail.hidden = !open;
-      card.classList.toggle('kb-open', open);
-      more.setAttribute('aria-expanded', String(open));
-      more.textContent = open ? 'Hide details' : 'Details';
+      toggleDetail(more.closest('.kb-card'), more, document.getElementById(more.getAttribute('aria-controls')));
       return;
     }
     var head = t.closest('.kb-head');
@@ -308,6 +328,71 @@
     var un = t.closest('.kb-undo');
     if (un) { if (editable && !un.disabled) undoDone(un.closest('.kb-card').getAttribute('data-id')); return; }
   });
+
+  function toggleDetail(card, more, detail) {
+    var open = detail.hidden;
+    detail.hidden = !open;
+    card.classList.toggle('kb-open', open);
+    more.setAttribute('aria-expanded', String(open));
+    more.textContent = open ? 'Hide details' : 'Details';
+  }
+
+  // A tap on a By band row (phone only). It is a deliberate move, so unlike Move to it may open a column and scroll.
+  // Order: view, Later cap, column, Details, bar height, then scroll last. Nothing after the scroll may change the layout above the card.
+  // The view choice is not saved: the page keeps opening on By band. A lane with no card here (Done, unknown) does nothing.
+  // A Scheduled lane has no .kb-card: its read-only card is found by the text of its .kb-id.
+  function schedCard(id) {
+    var found = null;
+    Array.prototype.forEach.call(colEls.scheduled ? colEls.scheduled.querySelectorAll('.kb-done-card') : [], function (el) {
+      var idEl = el.querySelector('.kb-id');
+      if (!found && idEl && idEl.textContent === id) found = el;
+    });
+    return found;
+  }
+
+  // A pinned crit status bar covers the top of the page. --bar-h adds its height to scroll-padding-top; 0 when the bar is not pinned.
+  function setBarPad() {
+    var bar = statusEl && statusEl.getAttribute('data-k') === 'crit' && statusEl.closest ? statusEl.closest('.kb-bar') : null;
+    document.documentElement.style.setProperty('--bar-h', (bar ? bar.offsetHeight : 0) + 'px');
+  }
+
+  // Fine pointer only: a touch screen has no focus() here (PR-M1). preventScroll keeps the page still.
+  function focusShown(el) {
+    var target = el && !coarse.matches ? (el.querySelector('.kb-more') || el.querySelector('summary')) : null;
+    if (target) target.focus({ preventScroll: true });
+  }
+
+  function showCard(id) {
+    var el = cards[id];
+    var sched = el ? null : schedCard(id);
+    if (!el && !sched) return;
+    if (window.lbSetView) window.lbSetView('columns', false);
+    var at = locate(id);
+    if (at && at.col === 'later' && at.at >= LATER_CAP) { laterAll = true; render(); }
+    var col = at ? at.col : sched ? 'scheduled' : 'progress';
+    colEls[col].classList.remove('kb-collapsed');
+    syncHeads();
+    var more = el ? el.querySelector('.kb-more') : null;
+    var detail = el ? el.querySelector('.kb-detail') : null;
+    if (more && detail && detail.hidden) toggleDetail(el, more, detail);
+    var ro = sched ? sched.querySelector('.kb-ro-detail') : null;
+    if (ro) ro.open = true;
+    setBarPad();
+    announce(id + ' shown in ' + (LABEL[col] || FIXED_LABEL[col]));
+    focusShown(el || sched);
+    var target = el || sched;
+    if (target.scrollIntoView) target.scrollIntoView({ block: 'start' });
+  }
+
+  var bandEl = document.getElementById('bb');
+  if (bandEl) {
+    bandEl.addEventListener('click', function (e) {
+      var t = e.target;
+      var row = mq.matches && t && t.closest ? t.closest('.bb-row') : null;
+      var idEl = row ? row.querySelector('.bb-id') : null;
+      if (idEl) showCard(idEl.textContent);
+    });
+  }
 
   function doNext(id) {
     expandColumn('next');
@@ -430,6 +515,12 @@
     e.dataTransfer.dropEffect = 'move';
     Array.prototype.forEach.call(board.querySelectorAll('.kb-over'), function (el) { if (el !== col) el.classList.remove('kb-over'); });
     col.classList.add('kb-over');
+    // A capped Later hides the slot the placeholder would take, and dropIndex skips the hidden cards: lift the cap first.
+    if (col === colEls.later && col.classList.contains('kb-capped')) {
+      if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+      laterAll = true;
+      render();
+    }
     var list = col.querySelector('.kb-list');
     if (!placeholder) { placeholder = document.createElement('li'); placeholder.className = 'kb-ph'; placeholder.setAttribute('aria-hidden', 'true'); }
     var where = dropIndex(list, e.clientY);
