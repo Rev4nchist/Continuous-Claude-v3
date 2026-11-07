@@ -69,6 +69,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const CONFIG = JSON.parse(readFileSync(path.join(REPO_ROOT, 'review-router.config.json'), 'utf8'));
 // Never read or write Dave's real paid ledger: every run here that could touch it gets a temp one.
+// Safety net: a run that forgets gateLogPath still writes to a temp file, never to Dave's real pre-pr-gates.jsonl.
+process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gatelog-env-')), 'pre-pr-gates.jsonl');
 const tempLedger = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
 
 const HEAD = 'a'.repeat(40);
@@ -1461,6 +1463,7 @@ async function prePr(repo, extra = {}) {
     guardLog: () => {},
     envCheck: NO_ENV,
     ledgerPath: tempLedger(),
+    gateLogPath: tempGateLog(),
     // The osv and pssa advisories never start a scanner or touch the network here: no lockfile, no binary. The OSV-PP / PSSA-PP tests inject their own.
     osvLockfiles: [], findOsv: () => null, findPssa: () => null,
     bodyText: 'Proof type: docs\n', ...extra,
@@ -2724,4 +2727,92 @@ test('EN9: a change under scripts/worktree runs the shared-deps tests, and a doc
   assert.ok(gate, 'shared-deps-tests is a gate of the worktree-scripts surface');
   assert.deepEqual(gate.args, ['--test', 'scripts/worktree/shared-deps.test.mjs']);
   assert.equal(gatesFor(['docs/a.md']).some((g) => g.id === 'shared-deps-tests'), false);
+});
+
+// ---------- gate-outcome log (one JSON row per step, append-only) ----------
+// How it can fail, and the test that catches it:
+//   a run writes no row, a row lacks a field, or the rows do not match the steps    -> GL1
+//   a second run on the same head overwrites the first run's rows                   -> GL2
+//   an unwritable log path changes the exit code, a verdict or the stamp            -> GL3
+//   a FAIL step has another status in the row, or no wall time                      -> GL4
+//   a token or the PR body reaches a row, or a detail passes 200 chars              -> GL5
+
+const tempGateLog = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gatelog-')), 'pre-pr-gates.jsonl');
+const rowsOf = (file) => readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const slowFail = (out = 'boom\n') => () => { const end = Date.now() + 15; while (Date.now() < end); return { status: 1, stdout: out, stderr: '' }; };
+
+test('GL1: a run writes one row per step with ts, branch, head, base, run_id, step, status, ms and detail', async () => {
+  const repo = makeRepo();
+  const file = tempGateLog();
+  const { result } = await prePr(repo, { gateLogPath: file });
+  const rows = rowsOf(file);
+  assert.equal(rows.length, result.results.length);
+  assert.deepEqual(rows.map((r) => [r.step, r.status]), result.results.map((r) => [r.step, r.status]));
+  for (const r of rows) {
+    assert.deepEqual(Object.keys(r).sort(), ['base', 'branch', 'detail', 'head', 'ms', 'run_id', 'status', 'step', 'ts']);
+    assert.equal(r.head, repo.head);
+    assert.equal(r.branch, 'feat/x');
+    assert.equal(r.base, 'main');
+    assert.ok(!Number.isNaN(Date.parse(r.ts)));
+    assert.ok(['PASS', 'FAIL', 'SKIP', 'NOTE'].includes(r.status));
+    assert.ok(r.ms === null || (Number.isInteger(r.ms) && r.ms >= 0), `ms of ${r.step} is ${r.ms}`);
+    assert.equal(typeof r.detail, 'string');
+  }
+  assert.equal(new Set(rows.map((r) => r.run_id)).size, 1);
+  assert.equal(typeof rows.find((r) => r.step === 'gate:context-budget').ms, 'number');
+  assert.equal(typeof rows.find((r) => r.step === 'coderabbit').ms, 'number');
+});
+
+test('GL2: two runs on the same head append, and never overwrite the first run', async () => {
+  const repo = makeRepo();
+  const file = tempGateLog();
+  await prePr(repo, { gateLogPath: file });
+  const first = readFileSync(file, 'utf8');
+  const n = rowsOf(file).length;
+  await prePr(repo, { gateLogPath: file });
+  const all = rowsOf(file);
+  assert.equal(all.length, n * 2);
+  assert.ok(readFileSync(file, 'utf8').startsWith(first), 'the first run rows are unchanged');
+  assert.equal(new Set(all.map((r) => r.run_id)).size, 2);
+});
+
+test('GL3: an unwritable log path changes no exit status, verdict or stamp', async () => {
+  const good = await prePr(makeRepo(), { gateLogPath: tempGateLog() });
+  const blocker = tempGateLog();
+  writeFileSync(blocker, 'a file where a folder should be\n');
+  const repo = makeRepo();
+  const bad = await prePr(repo, { gateLogPath: path.join(blocker, 'sub', 'log.jsonl') });
+  assert.equal(bad.result.ok, good.result.ok);
+  assert.equal(bad.result.ok, true);
+  assert.deepEqual(bad.result.results.map((r) => [r.step, r.status]), good.result.results.map((r) => [r.step, r.status]));
+  assert.ok(existsSync(path.join(repo.dir, STAMP_REL)), 'the stamp is still written');
+  assert.equal(readFileSync(blocker, 'utf8'), 'a file where a folder should be\n');
+});
+
+test('GL4: a FAIL gate row has status FAIL and a wall time in ms', async () => {
+  const file = tempGateLog();
+  const { result } = await prePr(makeRepo(), { gateLogPath: file, exec: slowFail() });
+  assert.equal(result.ok, false);
+  const row = rowsOf(file).find((r) => r.step === 'gate:context-budget');
+  assert.equal(row.status, 'FAIL');
+  assert.equal(typeof row.ms, 'number');
+  assert.ok(row.ms >= 10, `ms was ${row.ms}`);
+  assert.equal(rowsOf(file).find((r) => r.step === 'coderabbit').status, 'SKIP');
+});
+
+test('GL5: a token and the PR body never reach a row, and a detail stops at 200 chars', async () => {
+  const file = tempGateLog();
+  const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+  const body = 'Proof type: docs\nBODY-MARKER-9f3 private text\n';
+  await prePr(makeRepo(), { gateLogPath: file, exec: slowFail(`${'x'.repeat(400)} token=${token}\nTests  1 failed (${token})\n`), bodyText: body });
+  const text = readFileSync(file, 'utf8');
+  assert.ok(!text.includes(token), 'the token is gone');
+  assert.ok(!text.includes('BODY-MARKER-9f3'), 'the body is not in the log');
+  assert.ok(rowsOf(file).every((r) => r.detail.length <= 200));
+});
+
+test('GL6: the default log path honours PRE_PR_GATE_LOG, then falls back to the home logs folder', async () => {
+  const { gateLogPath } = await import('./lib/gate-log.mjs');
+  assert.equal(gateLogPath({ PRE_PR_GATE_LOG: path.join('somewhere', 'y.jsonl') }), path.join('somewhere', 'y.jsonl'));
+  assert.equal(gateLogPath({ USERPROFILE: path.join('home', 't') }), path.join('home', 't', '.claude', 'logs', 'pre-pr-gates.jsonl'));
 });
