@@ -399,6 +399,78 @@ function headBranch(text: string, deps: Deps, dir: string): string {
   return r.stdout.trim();
 }
 
+// ---------- a plain commit before the push, in the same command ----------
+
+const COMMIT_GIT = gitCallRe('commit');
+const COMMIT_SAFE = safeCallRe('commit', PUSH_WRAPPERS, '', 'gi');
+const READ_VERB = '(?:status|diff|log|show|rev-parse)';
+const READ_GIT = gitCallRe(READ_VERB);
+const READ_SAFE = safeCallRe(READ_VERB, PUSH_WRAPPERS, '', 'gi');
+/** The only commit arguments a chained commit may have: a message by file or text, and quiet. Nothing that stages, amends or names a path. */
+const COMMIT_MSG = String.raw`(?:-[Fm]\s+${VAL}|--(?:file|message)(?:=|\s+)${VAL})`;
+const COMMIT_ARGS_RE = new RegExp(String.raw`^(?:\s+(?:-q|--quiet))*\s+${COMMIT_MSG}(?:\s+(?:-q|--quiet|${COMMIT_MSG}))*\s*$`);
+const CD_SEG_RE = /^\s*(?:cd|Set-Location|sl|pushd|Push-Location)\s+\S/i;
+type SegKind = 'cd' | 'commit' | 'push' | 'read' | 'other';
+
+/** The call that opens a segment (no env prefix, no `then`, no wrapper word). Null when the segment opens with something else. */
+function openCall(ms: string, rs: string, git: RegExp, safe: RegExp): { opts: string; end: number } | null {
+  const kinds: [RegExp, (token: string) => boolean][] = [[git, isGitToken], [safe, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
+  for (const [re, valid] of kinds) {
+    for (const m of ms.matchAll(re)) {
+      if (m[1].trim() !== '') continue;
+      const tokenStart = m.index! + m[1].length;
+      if (!valid(rs.slice(tokenStart, tokenStart + m[2].length))) continue;
+      const optsStart = tokenStart + m[2].length;
+      return { opts: rs.slice(optsStart, optsStart + m[3].length), end: m.index! + m[0].length };
+    }
+  }
+  return null;
+}
+
+/** What one command segment is. Anything that is not plainly one of the kinds is 'other'. `ms` is the masked view, `rs` the raw text. */
+function segmentKind(ms: string, rs: string): SegKind {
+  // A group, a redirect or an expansion can hide a second command. $ and a backtick are checked in the raw text, because a quoted $( ) still runs.
+  if (/[(){}<>]/.test(ms) || /[$`]/.test(rs)) return 'other';
+  if (CD_SEG_RE.test(ms)) return 'cd';
+  const commit = openCall(ms, rs, COMMIT_GIT, COMMIT_SAFE);
+  if (commit) return commit.opts.trim() === '' && COMMIT_ARGS_RE.test(rs.slice(commit.end)) ? 'commit' : 'other';
+  if (openCall(ms, rs, PUSH_GIT, PUSH_SAFE)) return 'push';
+  const read = openCall(ms, rs, READ_GIT, READ_SAFE);
+  return read && read.opts.trim() === '' ? 'read' : 'other';
+}
+
+/**
+ * True when the command commits what is staged and only then pushes, so the tree the push sends is the INDEX tree read now, not HEAD's
+ * (HEAD is still the parent while the hook runs). Every segment must be plain: one cd at most, before the first commit; plain commits
+ * (segmentKind); pushes; read-only git. Every commit comes before every push, and only && joins the commit to the push (a failed commit
+ * must stop it; `;`, a newline or `||` would still push HEAD). A `|`, a lone `&` (background) or any other segment
+ * (git add, a checkout, a script, a commit with --amend or -a) gives false, and the push keeps the HEAD tree rule.
+ */
+function commitPrecedesPush(raw: string, shell: 'bash' | 'pwsh'): boolean {
+  const view = joinContinuations(raw, shell);
+  const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
+  if (masked.includes('|') || /(?<!&)&(?!&)/.test(masked)) return false;
+  const seq: SegKind[] = [];
+  const before: string[] = []; // before[i]: the operators and blanks between segment i-1 and segment i
+  let from = 0;
+  let pending = '';
+  const breaks = [...masked.matchAll(/[;&\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const);
+  for (const [start, next] of [...breaks, [view.length, view.length] as const]) {
+    const ms = masked.slice(from, start);
+    if (ms.trim() !== '') { seq.push(segmentKind(ms, view.slice(from, start))); before.push(pending.trim()); pending = ''; } else pending += ms;
+    pending += masked.slice(start, next);
+    from = next;
+  }
+  const firstCommit = seq.indexOf('commit');
+  const lastPush = seq.lastIndexOf('push');
+  const firstPush = seq.indexOf('push');
+  if (seq.includes('other') || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf('commit') > firstPush) return false;
+  // A failed commit must stop the push: `;`, a newline or `||` would still run it and send HEAD's tree. Only && joins the commit to the push.
+  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== '&&')) return false;
+  const cds = seq.flatMap((k, i) => (k === 'cd' ? [i] : []));
+  return cds.length === 0 || (cds.length === 1 && cds[0] < firstCommit);
+}
+
 // ---------- the judgment ----------
 
 const shellOf = (input: HookInput): 'bash' | 'pwsh' => ((input.tool_name || input.tool) === 'PowerShell' ? 'pwsh' : 'bash');
@@ -445,10 +517,11 @@ function remoteKind(remote: string): 'origin' | 'fork' | null {
 /**
  * Push: a ship decision ("Commit and push") for the branch, bound to the tree being pushed. The head is not compared: the tap was
  * made before the commit, so its head is the parent of the commit now at HEAD. The tree is the same before and after the commit.
+ * `chained`: the same command commits the staged tree first (commitPrecedesPush), so the tree pushed is `git write-tree`, not HEAD's.
  * Order: unreadable target, not CCv3, origin, other remote, subagent, force or delete form, branch, main, tree, tap.
  * A force form is denied before the main check: a force push to the fork's main rewrites the branch every PR lands on.
  */
-function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean): Decision {
+function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean, chained: boolean): Decision {
   const p = shape.push!;
   const d = (pattern: string, why: string): Deny => deny(pattern, why, 'push');
   if (p.moved) return d('push-target-unresolved', pushUnresolvedWhy('--git-dir or --work-tree moves the repo, so the checkout is unknown'));
@@ -478,8 +551,11 @@ function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean): De
   if (branch === 'main') return ALLOW;
   const ref = p.src ?? 'HEAD';
   if (ref.startsWith('-')) return d('push-target-unresolved', pushUnresolvedWhy(`${ref} is not a ref`));
-  const r = deps.git(dir, ['rev-parse', `${ref}^{tree}`]);
-  if (r.status !== 0) return d('push-tree-unresolved', `cannot read the tree of ${ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
+  // A plain commit earlier in the same command moves HEAD to the staged tree before this push runs: read the index. The commit lands on the
+  // checked-out branch in this directory, so the push must send HEAD or that branch, with no -C of its own. Anything else keeps the HEAD rule.
+  const viaIndex = chained && p.dir === null && (p.src === null || deps.git(dir, ['branch', '--show-current']).stdout.trim() === p.src);
+  const r = viaIndex ? deps.git(dir, ['write-tree']) : deps.git(dir, ['rev-parse', `${ref}^{tree}`]);
+  if (r.status !== 0) return d('push-tree-unresolved', `cannot read the tree of ${viaIndex ? 'the index (git write-tree)' : ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
   const tree = r.stdout.trim();
   const key = decisionKey({ branch });
   const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && isShipLabel(row.label) && row.tree !== null && row.tree === tree);
@@ -502,9 +578,10 @@ function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   const shell = shellOf(input);
   const dir = workDir(cmd.text, cwd, shell);
   const named = namedRepo(cmd.text, deps.env);
+  const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
     const d = s.kind === 'create' ? judgeCreate(cmd.text, deps, dir, named)
-      : s.kind === 'push' ? judgePush(s, deps, s.push!.dir === null ? dir : resolveDir(dir, s.push!.dir, shell), Boolean(input.agent_id))
+      : s.kind === 'push' ? judgePush(s, deps, s.push!.dir === null ? dir : resolveDir(dir, s.push!.dir, shell), Boolean(input.agent_id), chained)
         : judgeLand(s, deps, dir, named);
     if (d.action === 'deny') denies.push(d);
   }
