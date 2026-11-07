@@ -1369,17 +1369,17 @@ function asksFor(segment: string, install: InstallAnalysis | null, cwd: string |
 const LOCAL_BIN_MAX_LEVELS = 10;
 
 /**
- * A node_modules/.bin/<name> file (a symlink to a file counts) in npm's local prefix: the nearest
- * folder, cwd or an ancestor up to 10 levels, that holds package.json or node_modules.
- * Only that folder counts. npx fetches when the bin is missing there, even if a higher folder has it.
+ * A node_modules/.bin/<name> file (a symlink to a file counts) in cwd or an ancestor, up to 10 levels.
+ * npm 11.12.1 (libnpmexec localFileExists) starts at the local prefix and walks up to the root:
+ * the first folder with that file wins, and then npx runs it and fetches nothing.
+ * So a bin in a parent node_modules counts, even when a nearer folder has package.json.
+ * The guard stops at 10 levels. A bin higher up reads as not found, so the checks still run.
  */
 function hasLocalBin(name: string, cwd: string): boolean {
   let dir = resolve(cwd);
   for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
-    if (existsSync(join(dir, 'package.json')) || existsSync(join(dir, 'node_modules'))) {
-      // npm (libnpmexec) runs only a file with the exact name. A folder, or a lone .cmd or .ps1, is not one.
-      try { return statSync(join(dir, 'node_modules', '.bin', name)).isFile(); } catch { return false; }
-    }
+    // npm (libnpmexec) runs only a file with the exact name. A folder, or a lone .cmd or .ps1, is not one.
+    try { if (statSync(join(dir, 'node_modules', '.bin', name)).isFile()) return true; } catch { /* no bin here: check the parent */ }
     const parent = dirname(dir);
     if (parent === dir) return false;
     dir = parent;
