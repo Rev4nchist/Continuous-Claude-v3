@@ -513,7 +513,7 @@ const html = `${STAMP}
     --ground:#F4F7F7; --panel:#FFFFFF; --panel-2:#EDF2F2;
     --line:#D6E1E1; --line-soft:#E6EDED;
     --ink:#0F1A1D; --muted:#5C6E71; --faint:#849698;
-    --ok:#0B7C72; --warn:#A8630A; --crit:#B23A32; --info:#2A6296; --agent:#6B57B0;
+    --ok:#0A756B; --warn:#9A5A08; --crit:#B23A32; --info:#2A6296; --agent:#6B57B0;
     --ok-bg:#E2F1EF; --warn-bg:#F8EEDD; --crit-bg:#F8E6E4; --info-bg:#E4EDF6;
     --mono: ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
     --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
@@ -525,7 +525,7 @@ const html = `${STAMP}
     :root {
       --ground:#0E1417; --panel:#161F23; --panel-2:#1C282D;
       --line:#2A383E; --line-soft:#223037;
-      --ink:#E6EFEF; --muted:#93A6AA; --faint:#6D8188;
+      --ink:#E6EFEF; --muted:#93A6AA; --faint:#81969C;
       --ok:#3FB8A6; --warn:#D99A3C; --crit:#E4736A; --info:#6BA3DA; --agent:#A48EE8;
       --ok-bg:#12302E; --warn-bg:#33280F; --crit-bg:#331C1A; --info-bg:#14283A;
       --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);
@@ -535,7 +535,7 @@ const html = `${STAMP}
   :root[data-theme="dark"] {
     --ground:#0E1417; --panel:#161F23; --panel-2:#1C282D;
     --line:#2A383E; --line-soft:#223037;
-    --ink:#E6EFEF; --muted:#93A6AA; --faint:#6D8188;
+    --ink:#E6EFEF; --muted:#93A6AA; --faint:#81969C;
     --ok:#3FB8A6; --warn:#D99A3C; --crit:#E4736A; --info:#6BA3DA; --agent:#A48EE8;
     --ok-bg:#12302E; --warn-bg:#33280F; --crit-bg:#331C1A; --info-bg:#14283A;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);
@@ -545,7 +545,7 @@ const html = `${STAMP}
     --ground:#F4F7F7; --panel:#FFFFFF; --panel-2:#EDF2F2;
     --line:#D6E1E1; --line-soft:#E6EDED;
     --ink:#0F1A1D; --muted:#5C6E71; --faint:#849698;
-    --ok:#0B7C72; --warn:#A8630A; --crit:#B23A32; --info:#2A6296; --agent:#6B57B0;
+    --ok:#0A756B; --warn:#9A5A08; --crit:#B23A32; --info:#2A6296; --agent:#6B57B0;
     --ok-bg:#E2F1EF; --warn-bg:#F8EEDD; --crit-bg:#F8E6E4; --info-bg:#E4EDF6;
     --shadow:0 1px 2px rgba(15,26,29,.05),0 8px 24px rgba(15,26,29,.05);
     --live:#0B7C72; --live-halo:rgba(11,124,114,.18);
@@ -556,6 +556,8 @@ const html = `${STAMP}
   /* One cap for the header and the page: 2200px. The six Priorities columns start at 1360px. Below 1360px the viewport is already
      narrower than the old 1840px width, so 100% gives the same page there and no media query is needed. */
   :root { --page-w:min(2200px,100%); }
+  /* Height of the pinned phone row (10px padding twice, the 44px theme button, 1px border). The phone rules use it twice. */
+  :root { --top-h:65px; }
   .wrap { width:var(--page-w); margin:0 auto; padding:0 20px 72px; }
   h1,h2 { margin:0; text-wrap:balance; }
   .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
@@ -709,7 +711,7 @@ const html = `${STAMP}
     margin:6px 0 0; color:var(--muted); font:400 12px/1.45 var(--sans); }
   .kb-open .kb-title { display:block; overflow:visible; }
   .kb-meta, .kb-holder { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
-  .kb-track, .kb-prio, .kb-lease { color:var(--faint); font:500 10.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .kb-track, .kb-prio, .kb-lease { color:var(--muted); font:500 10.5px/1.4 var(--mono); overflow-wrap:anywhere; }
   .kb-who { color:var(--live); font:600 11px/1.4 var(--mono); }
   .kb-more { margin-top:8px; padding:4px 0; border:0; background:none; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; }
   .kb-more:hover { text-decoration:underline; }
@@ -717,7 +719,7 @@ const html = `${STAMP}
   .kb-detail[hidden] { display:none; }
   .kb-dl { display:grid; grid-template-columns:62px minmax(0,1fr); gap:4px 8px; margin:0; padding:8px 10px; border:1px solid var(--line-soft);
     border-radius:6px; background:var(--panel-2); }
-  .kb-dl dt { color:var(--faint); font:600 10px/1.5 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
+  .kb-dl dt { color:var(--muted); font:600 10px/1.5 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
   .kb-dl dd { margin:0; font:400 11.5px/1.45 var(--mono); overflow-wrap:anywhere; }
   /* Done column: read-only cards (dn-* and kb-done-card; never a class the client handles) under a day header, and a footer outside the scroll area.
      Small text is --muted: --faint is below 4.5:1 on these backgrounds. */
@@ -748,7 +750,7 @@ const html = `${STAMP}
   .kb-plain-out[data-k="warn"] { border-left-color:var(--warn); color:var(--warn); }
   .kb-plain-out[data-k="crit"] { border-left-color:var(--crit); color:var(--crit); }
   .kb-edit { display:flex; flex-direction:column; gap:8px; margin-top:8px; min-width:0; }
-  .kb-fl { display:flex; flex-direction:column; gap:4px; min-width:0; color:var(--faint); font:600 10px/1.4 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
+  .kb-fl { display:flex; flex-direction:column; gap:4px; min-width:0; color:var(--muted); font:600 10px/1.4 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
   .kb-st, .kb-note, .kb-q { width:100%; min-width:0; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
     color:var(--ink); font:400 12px/1.45 var(--sans); letter-spacing:normal; text-transform:none; }
   .kb-st { min-height:34px; font-family:var(--mono); }
@@ -758,7 +760,7 @@ const html = `${STAMP}
   .kb-saved { min-width:0; color:var(--muted); font:500 11px/1.4 var(--mono); overflow-wrap:anywhere; }
   .kb-saved[data-k="ok"] { color:var(--ok); }
   .kb-saved[data-k="crit"] { color:var(--crit); }
-  .kb-why { margin:0; color:var(--faint); font:400 10.5px/1.4 var(--mono); }
+  .kb-why { margin:0; color:var(--muted); font:400 10.5px/1.4 var(--mono); }
   .kb-why:empty { display:none; }
   .kb-ctl { display:flex; flex-wrap:wrap; align-items:flex-end; gap:6px; margin-top:9px; }
   .kb-btn, .kb-to { min-height:30px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
@@ -783,12 +785,23 @@ const html = `${STAMP}
     .kcol.kb-collapsed .kb-list, .kcol.kb-collapsed .kb-sub, .kcol.kb-collapsed .dn-foot { display:none; }
   }
   @media (pointer:coarse), (max-width:720px) {
-    .kb-ro-detail > summary { min-height:44px; box-sizing:border-box; padding:14px 0 4px; }
+    .kb-ro-detail > summary { min-height:44px; box-sizing:border-box; padding:4px 0; }
     .dn-all { min-height:44px; }
     .kb-head, .kb-more, .kb-btn, .kb-to, .kb-st { min-height:44px; }
     .kb-btn { min-width:44px; }
     .kb-more { padding:4px 10px 4px 0; }
-    .vt, .chip { min-height:44px; }
+    .vt, .chip, .themebtn { min-height:44px; }
+    button, select, .vt, .chip { touch-action:manipulation; }
+    /* 16px stops iOS zooming into a focused field or select. font-size only: the mono family stays. */
+    .kb-st, .kb-note, .kb-q, .kb-to { font-size:16px; }
+    .kb-title { font-size:14px; }
+    .kb-track, .kb-prio, .kb-lease, .kb-dl dd { font-size:12px; }
+    .kb-btn { font-size:13px; }
+    /* The Move to word is a bare text node; the select has its own aria-label and its own 16px. */
+    .kb-mv { font-size:0; gap:0; }
+  }
+  @media (pointer:coarse) {
+    .kb-grip { display:none; }
   }
 
   /* Band. P0 is filled, P1 and P2 are outlined, Unsorted is dashed. Small text uses --muted: --faint is below 4.5:1 here.
@@ -837,7 +850,7 @@ const html = `${STAMP}
   @media (max-width:720px) {
     header.top, .top-in { display:contents; }
     .top-row { position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 20px;
-      background:color-mix(in srgb,var(--ground) 88%,transparent); backdrop-filter:blur(10px); border-bottom:1px solid var(--line); }
+      background:color-mix(in srgb,var(--ground) 88%,transparent); backdrop-filter:blur(10px); border-bottom:1px solid var(--line); min-height:var(--top-h); }
     .brand { min-width:0; }
     .brand > span { min-width:0; }
     .brand b { display:block; }
@@ -845,6 +858,15 @@ const html = `${STAMP}
     .mark { flex:none; }
     .brand .gen-src { display:none; }
     .counters { margin:0; padding:12px 20px 0; width:100%; }
+    /* Keep open lanes, held now and blocked: children 1, 2 and 4 of .counters. This is order-bound; a test reads the markup order. */
+    .counters .ctr:nth-child(3), .counters .ctr:nth-child(n+5) { display:none; }
+    #priorities .sec-head p, .bb-note { display:none; }
+    [data-view="band"] .kb-status[data-k="idle"], [data-view="band"] .kb-status[data-k="ok"] { display:none; }
+    .kb-bar:has(.kb-status[data-k="crit"]) { position:sticky; top:var(--top-h); z-index:20; padding:6px 0; background:var(--ground); }
+    html { scroll-padding-top:calc(var(--top-h) + 8px); }
+    /* The By band rules are above this block, so its type sizes must be here to win. */
+    .bb-t { font-size:14px; }
+    .bb-track, .bb-rank { font-size:12px; }
   }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }${KANBAN ? '' : KB_RO_CSS}
 </style>

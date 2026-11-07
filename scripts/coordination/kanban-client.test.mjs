@@ -53,6 +53,8 @@ const RAW = fs.readFileSync(path.join(HERE, 'kanban-client.js'), 'utf8');
 const CLIENT = stripClientComments(RAW);
 /** Every element.focus() the page made, in order. Cleared by openPage. */
 const focusLog = [];
+/** Every window.scrollBy(x, y) the page made, in order. Cleared by openPage. */
+const scrollLog = [];
 const HELPERS = [
   place.placeLanes, place.stampMs, place.isPending, place.syncState, place.fnv1a, place.hashFields, place.cardBase, place.cardDiff,
   place.plainPrompt, place.boardMismatch, place.boardWriteKind, place.mergeUnknownColumns, place.bandAhead, place.doneChip,
@@ -190,8 +192,9 @@ const LANES = [
 ];
 
 /** Opens the page and waits until the saved order has loaded (or the page has refused it). */
-async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false, phone = false, sched = null, schedN = null } = {}) {
+async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false, phone = false, coarse = phone, shift = null, flagShift = 0, statusShift = 0, sched = null, schedN = null } = {}) {
   focusLog.length = 0;
+  scrollLog.length = 0;
   const db = fakeDb(doc ? { [DOC]: doc } : {}, { liveDoc, getFails, cardsSilent });
   const timers = [];
   const parts = new Map();
@@ -205,9 +208,17 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
   const flagBoxes = new Map();
   const cardEls = new Map(lanes.filter((l) => l.state !== 'done').map((l) => [l.id, stub({
     attrs: { 'data-id': l.id, 'data-hash': 'h' },
+    // shift: [top before the render, top after it] of the card below this one, to test the scroll the page makes after a move.
+    // flagShift / statusShift: pixels the layout adds below the moved card once a visible flag box / a Saving line is painted. The real page has layout; the stub fakes it here.
+    nextElementSibling: shift ? { getBoundingClientRect: (() => { let n = 0; return () => ({ top: shift[Math.min(n++, shift.length - 1)] + layoutShift() }); })() } : null,
+    previousElementSibling: null,
     querySelector: (sel) => partOf(l.id, sel),
     insertBefore: (node) => { flagBoxes.set(l.id, node); },
   })]));
+  const layoutShift = () => {
+    const flagUp = [...flagBoxes.values()].some((b) => !b.hidden && b.children[0] && b.children[0].textContent);
+    return (flagUp ? flagShift : 0) + (els['kb-status'] && els['kb-status'].textContent === 'Saving…' ? statusShift : 0);
+  };
   const classes = new Map();
   const colEls = ['scheduled', 'next', 'later', 'waiting', 'progress', 'done'].map((name) => stub({
     attrs: name === 'scheduled' && schedN !== null ? { 'data-col': name, 'data-n': String(schedN) } : { 'data-col': name },
@@ -233,8 +244,11 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
   const claude = { use: (name) => (name === 'db' && !noDb ? Promise.resolve(db.api) : Promise.resolve(null)) };
   const sandbox = {
     document,
-    // phone: the (max-width:720px) query matches, as on a phone. Without it the page sees a wide screen.
-    window: phone ? { claude, matchMedia: () => ({ matches: true, addEventListener() {} }) } : { claude },
+    // phone: the (max-width:720px) query matches, as on a phone. coarse: the (pointer:coarse) query matches (a touch screen); it follows phone.
+    // Without both the page sees a wide screen with a mouse and has no matchMedia.
+    window: phone || coarse
+      ? { claude, scrollBy: (x, y) => { scrollLog.push([x, y]); }, matchMedia: (q) => ({ matches: /pointer:\s*coarse/.test(q) ? coarse : phone, addEventListener() {} }) }
+      : { claude, scrollBy: (x, y) => { scrollLog.push([x, y]); } },
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
   };
@@ -270,6 +284,8 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     /** The last element the page focused. */
     lastFocus: () => focusLog[focusLog.length - 1] || null,
     focusCount: () => focusLog.length,
+    /** The window.scrollBy calls the page made, as [x, y]. */
+    scrolls: () => scrollLog.map((c) => c.slice()),
     /** A column's collapsed class, as the phone page uses it. */
     collapse(name) { classes.get(name).add('kb-collapsed'); },
     collapsed: (name) => classes.get(name).has('kb-collapsed'),
@@ -1130,4 +1146,53 @@ test('an old doc with columns.now loads, its ids go to their default column, and
   assert.deepEqual(w.data.columns, { next: ['a1'], later: ['a3', 'a2'], waiting: [] }, 'a3 sat in the retired column: it returns to its default column');
   assertNoSyncFields([w]);
   assert.deepEqual(page.db.read(DOC).appliedColumns.now, ['a3'], 'the sync\'s copy is not touched by the page');
+});
+
+// ------------------------------------------------------------------ PR-M1: a tap on a touch screen must not make the page jump
+
+test('on a touch screen Move to and Do next do not move focus; on a mouse screen they do', async () => {
+  const touch = await open({ phone: true });
+  const before = touch.focusCount();
+  await touch.moveTop('l1', 'next');
+  await touch.clickNext('w1');
+  assert.equal(touch.focusCount(), before, 'a tap on a touch screen moved focus, so the browser scrolled to it');
+  const mouse = await open();
+  const b2 = mouse.focusCount();
+  await mouse.moveTop('l1', 'next');
+  assert.equal(mouse.focusCount(), b2 + 1, 'a mouse user lost focus after Move to');
+});
+
+test('on a touch screen a card moved into a collapsed column leaves it collapsed; a narrow screen with a mouse still opens it', async () => {
+  const touch = await open({ phone: true });
+  assert.equal(touch.collapsed('later'), true);
+  await touch.moveTop('n1', 'later');
+  assert.equal(touch.collapsed('later'), true, 'the move opened the column under the finger');
+  await touch.clickNext('l2');
+  assert.equal(touch.collapsed('next'), true, 'Do next opened the column under the finger');
+  const narrow = await open({ phone: true, coarse: false });
+  await narrow.moveTop('n1', 'later');
+  assert.equal(narrow.collapsed('later'), false, 'a mouse user lost the open column');
+});
+
+test('on a touch screen the page scrolls back by the shift of the card below the moved card; a mouse screen does not scroll', async () => {
+  const touch = await open({ phone: true, shift: [300, 212] });
+  await touch.moveTop('n1', 'later');
+  assert.deepEqual(touch.scrolls(), [[0, -88]], 'the neighbour shifted 88px and the page did not follow');
+  const noShift = await open({ phone: true, shift: [300, 300] });
+  await noShift.moveTop('n1', 'later');
+  assert.deepEqual(noShift.scrolls(), [], 'the page scrolled although nothing moved');
+  const mouse = await open({ shift: [300, 212] });
+  await mouse.moveTop('n1', 'later');
+  assert.deepEqual(mouse.scrolls(), [], 'a mouse screen scrolled');
+});
+
+test('the scroll fix measures the shift after the move note and the status line are painted, so the page does not jump by the flag box', async () => {
+  // Do next paints "First in Next." into a flag box (+24px) and the status line goes to Saving… (+9px) after render. Both move the card below.
+  const page = await open({ phone: true, shift: [300, 212], flagShift: 24, statusShift: 9 });
+  await page.clickNext('l2');
+  assert.match(page.flag('l2').text, /^First in Next./);
+  assert.deepEqual(page.scrolls(), [[0, -55]], 'the scroll did not count the flag box (+24) and the status line (+9): expected 212 + 33 - 300');
+  const plain = await open({ phone: true, shift: [300, 212] });
+  await plain.clickNext('l2');
+  assert.deepEqual(plain.scrolls(), [[0, -88]], 'with no extra layout the scroll is the render shift only');
 });

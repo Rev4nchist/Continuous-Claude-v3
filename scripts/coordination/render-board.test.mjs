@@ -89,8 +89,11 @@ const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 // The same fixtures on the code before PR-F measure 167,973 bytes (about 3.6 KB per new lane: kb-card, Lanes row, By band row, kb-data row), so the column
 // itself makes this page 5,799 bytes smaller: three lanes become a Scheduled card instead of a kb-card, and the Now column and its client code go.
 // A scheduled card measures 422 bytes beyond its text (a done card: 395).
+// Measured 2026-11-07 (PR-M1): test page about 164,700 bytes (164,626 before the By band type sizes moved below the By band rules), so PAGE_BYTES_MAX is that plus about 1 KB. It rose from 163,200 (about +2,500 over the 162,174 above) ONLY because
+// the phone fixes add about a dozen CSS rules (16px fields, type sizes, hidden chrome, sticky status bar, 44px theme button, --top-h) and
+// a touch guard in the client (focus, column open, scroll back). No markup was added to a card, a row or a Done card.
 const ROW_OVERHEAD_MAX = 240;
-const PAGE_BYTES_MAX = 163200;
+const PAGE_BYTES_MAX = 165700;
 const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
@@ -756,6 +759,146 @@ describe('render-board.mjs against a scratch database', () => {
       assert.ok(row.includes('class="brand"') && row.includes('id="tt"'), 'the brand and the theme button belong in .top-row');
       assert.ok(!row.includes('class="ctr'), 'a counter is inside the pinned row');
       assert.ok(html.indexOf('class="counters"') > html.indexOf('class="top-row"'));
+    });
+
+    // PR-M1: phone fixes. The measured behaviour is the Edge run saved in .claude/cache/e2e/2026-11-07-pr-m1.{mjs,log,json} (360/390/430 px, overflow-anchor:none, 65px row); these pin the CSS that produces it.
+    // block(query) is the text of the media block that opens with query, up to its closing brace at two-space indent.
+    const block = (query) => {
+      const i = css.indexOf(query);
+      assert.ok(i >= 0, `the ${query} block is missing`);
+      return css.slice(i, css.indexOf('\n  }', i));
+    };
+    const COARSE = '@media (pointer:coarse), (max-width:720px) {';
+    const PHONE = '@media (max-width:720px) {\n    header.top';
+    const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    /** The bodies, joined, of every rule in text whose selector list contains sel. */
+    const rule = (text, sel) => {
+      const all = [...text.matchAll(new RegExp(`(?:^|[\\n}{;])\\s*([^{};]*${esc(sel)}[^{};]*)\\{([^}]*)\\}`, 'g'))];
+      assert.ok(all.length, `no rule for ${sel}`);
+      return all.map((m) => m[2]).join(' ');
+    };
+    const luminance = (hex) => {
+      const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    };
+    const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+    /** The colour tokens of one of the four sets, by the text that opens it. */
+    const tokens = (open) => {
+      const i = css.search(open);
+      assert.ok(i >= 0, `token set ${open} is missing`);
+      const body = css.slice(i, css.indexOf('}', i));
+      return Object.fromEntries([...body.matchAll(/(--[a-z0-9-]+):(#[0-9A-Fa-f]{6})\b/g)].map((m) => [m[1], m[2]]));
+    };
+
+    it('a field and the Move to select are 16px on a touch screen or a phone, so iOS does not zoom on focus', () => {
+      const b = block(COARSE);
+      for (const sel of ['.kb-st', '.kb-note', '.kb-q', '.kb-to']) assert.match(rule(b, sel), /font-size:16px/, `${sel} is not 16px in the touch block`);
+      assert.doesNotMatch(css, /maximum-scale|user-scalable/, 'zoom must stay possible');
+    });
+
+    it('on the phone the Priorities intro, the By band note and three of the counters are hidden', () => {
+      const b = block(PHONE);
+      assert.match(rule(b, '.bb-note'), /display:none/);
+      assert.match(rule(b, '#priorities .sec-head p'), /display:none/);
+      // The counters are hidden by position. Read the order from the markup and the hidden positions from the CSS together.
+      const labels = [...html.matchAll(/<span class="ctr[^"]*"[^>]*><b>[^<]*<\/b><span>([^<]*)<\/span>/g)].map((m) => m[1]);
+      const sel = /(\.counters \.ctr:nth-child\([^{]*)\{\s*display:none/.exec(b)?.[1];
+      assert.ok(sel, 'the counter rule is missing');
+      const hidden = (n) => sel.split(',').some((part) => {
+        const arg = /nth-child\(([^)]*)\)/.exec(part)[1].trim();
+        const plus = /^n\+(\d+)$/.exec(arg);
+        return plus ? n >= Number(plus[1]) : n === Number(arg);
+      });
+      const shown = labels.filter((_, i) => !hidden(i + 1));
+      assert.deepEqual(shown, ['open lanes', 'held now', 'blocked'], `the phone shows ${JSON.stringify(shown)} of ${JSON.stringify(labels)}`);
+    });
+
+    it('in By band the idle and ok status line is hidden on the phone; a warning or a failure still shows', () => {
+      const b = block(PHONE);
+      const r = /(\[data-view="band"\] \.kb-status[^{]*)\{\s*display:none/.exec(b)?.[1];
+      assert.ok(r, 'the status rule is missing');
+      assert.match(r, /data-k="idle"/);
+      assert.match(r, /data-k="ok"/);
+      assert.doesNotMatch(r, /data-k="(warn|crit)"/, 'a warning or a failure would be hidden');
+    });
+
+    it('the touch block sets phone type sizes: titles 14px, meta 12px, buttons 13px', () => {
+      const b = block(COARSE);
+      assert.match(rule(b, '.kb-title'), /font-size:14px/);
+      for (const sel of ['.kb-track', '.kb-prio', '.kb-lease', '.kb-dl dd']) assert.match(rule(b, sel), /font-size:12px/, sel);
+      // The By band rules come later in the file than the touch block, so their sizes sit in the phone block after them.
+      const ph = block(PHONE);
+      assert.ok(css.indexOf(ph) > css.indexOf('.bb-t { flex:1 1 100%'), 'the By band type sizes must come after the By band rules');
+      assert.match(rule(ph, '.bb-t'), /font-size:14px/);
+      for (const sel of ['.bb-track', '.bb-rank']) assert.match(rule(ph, sel), /font-size:12px/, sel);
+      assert.match(rule(b, '.kb-btn'), /font-size:13px/);
+    });
+
+    it('the colours that carry text pass 4.5:1 in every token set (light --faint stays below 4.5:1, so card text must not use it: next test)', () => {
+      const sets = {
+        light: [/:root \{\s*\/\*/, true], dark: [/@media \(prefers-color-scheme: dark\) \{\s*:root \{/, false],
+        'data-theme=dark': [/:root\[data-theme="dark"\] \{/, false], 'data-theme=light': [/:root\[data-theme="light"\] \{/, true],
+      };
+      for (const [name, [open, isLight]] of Object.entries(sets)) {
+        const t = tokens(open);
+        assert.ok(t['--ok-bg'] && t['--warn-bg'] && t['--panel-2'], `${name}: tokens not read`);
+        assert.ok(contrast(t['--ok'], t['--ok-bg']) >= 4.5, `${name}: --ok on --ok-bg is ${contrast(t['--ok'], t['--ok-bg']).toFixed(2)}`);
+        assert.ok(contrast(t['--warn'], t['--warn-bg']) >= 4.5, `${name}: --warn on --warn-bg is ${contrast(t['--warn'], t['--warn-bg']).toFixed(2)}`);
+        if (!isLight) assert.ok(contrast(t['--faint'], t['--panel-2']) >= 4.5, `${name}: --faint on --panel-2 is ${contrast(t['--faint'], t['--panel-2']).toFixed(2)}`);
+      }
+    });
+
+    it('the card meta and the field labels use --muted, not --faint, and --muted passes 4.5:1 on the card and column backgrounds in every token set', () => {
+      // Light --faint is 3.09:1 on --panel and 2.73:1 on --panel-2. Option 1 of the critic: the editable page uses --muted, as KB_RO_CSS does.
+      // The rule whose selector list holds exactly sel, outside any @media block (a rule with `color:` in it).
+      const colourOf = (sel) => {
+        const m = [...css.matchAll(/(?:^|\n)  ([^{}\n@][^{}]*)\{([^}]*)\}/g)].filter((x) => x[1].split(',').map((p) => p.trim()).includes(sel) && /(?:^|[;\s])color:/.test(x[2]));
+        assert.ok(m.length, `no colour rule for ${sel}`);
+        return /(?:^|[;\s])color:([^;]*)/.exec(m.at(-1)[2])[1].trim();
+      };
+      for (const sel of ['.kb-track', '.kb-prio', '.kb-lease', '.kb-fl', '.kb-dl dt', '.kb-why']) assert.equal(colourOf(sel), 'var(--muted)', `${sel} uses ${colourOf(sel)}`);
+      const sets = [/:root \{\s*\/\*/, /@media \(prefers-color-scheme: dark\) \{\s*:root \{/, /:root\[data-theme="dark"\] \{/, /:root\[data-theme="light"\] \{/];
+      for (const open of sets) {
+        const t = tokens(open);
+        for (const bg of ['--panel', '--panel-2']) assert.ok(contrast(t['--muted'], t[bg]) >= 4.5, `${open}: --muted on ${bg} is ${contrast(t['--muted'], t[bg]).toFixed(2)}`);
+      }
+    });
+
+    it('the Move to word is hidden in the touch block but the select keeps its aria-label; the Done Details summary has no top padding', () => {
+      const b = block(COARSE);
+      assert.match(rule(b, '.kb-mv'), /font-size:0/);
+      assert.match(rule(b, '.kb-ro-detail > summary'), /padding:4px 0[;\s}]/);
+      assert.match(html, /<select class="kb-to" aria-label="[^"]+"/);
+    });
+
+    it('one --top-h sets the pinned row height and the scroll padding, so a focused field is not hidden under the header', () => {
+      assert.match(css, /:root \{ --top-h:\d+px; \}/);
+      const b = block(PHONE);
+      assert.match(rule(b, '.top-row'), /min-height:var\(--top-h\)/);
+      assert.match(b, /html \{[^}]*scroll-padding-top:calc\(var\(--top-h\) \+ \d+px\)/);
+    });
+
+    it('a failed save pins the status bar under the header on the phone, for failures only (a save in progress is a warning too)', () => {
+      const b = block(PHONE);
+      const m = /(\.kb-bar:has\([^{]*)\{([^}]*)\}/.exec(b);
+      assert.ok(m, 'the sticky status rule is missing');
+      assert.match(m[1], /data-k="crit"/);
+      assert.doesNotMatch(m[1], /data-k="warn"/, 'Saving... is a warning: the bar would flash on every save');
+      assert.match(m[2], /position:sticky/);
+      assert.match(m[2], /top:var\(--top-h\)/);
+    });
+
+    it('every touch target is 44px, the theme button too, and taps do not wait for a double-tap zoom; the grip keeps touch-action:none', () => {
+      const b = block(COARSE);
+      assert.match(rule(b, '.themebtn'), /min-height:44px/);
+      assert.match(rule(b, '.vt'), /min-height:44px/);
+      assert.match(b, /button, select, \.vt, \.chip \{ touch-action:manipulation; \}/);
+      assert.match(css, /\.kb-grip \{[^}]*touch-action:none/);
+    });
+
+    it('the drag grip is hidden on a touch screen but stays in the markup', () => {
+      assert.match(css, /@media \(pointer:coarse\) \{\s*\.kb-grip \{ display:none; \}/);
+      assert.match(html, /class="kb-grip"/);
     });
 
     it('an Activity row cannot widen the page: its text column can shrink and breaks long tokens', () => {

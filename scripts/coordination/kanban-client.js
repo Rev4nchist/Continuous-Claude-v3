@@ -83,6 +83,8 @@
   var orderEl = document.getElementById('kb-order');
   var liveEl = document.getElementById('kb-live');
   var mq = window.matchMedia ? window.matchMedia('(max-width:720px)') : { matches: false };
+  // A touch screen. A tap there must not scroll the page: no focus(), no scrollIntoView, no column that opens under the finger.
+  var coarse = window.matchMedia ? window.matchMedia('(pointer:coarse)') : { matches: false };
 
   // Card docs and the per-card edit and Plain English state.
   var boardDoc = null;
@@ -205,6 +207,8 @@
   function moveCard(id, toCol, toIndex) {
     var from = locate(id);
     if (!from) return;
+    var ref = coarse.matches ? neighbour(id) : null;
+    var refTop = ref ? ref.getBoundingClientRect().top : 0;
     cols[from.col].splice(from.at, 1);
     var dest = cols[toCol];
     var at = Math.max(0, Math.min(toIndex, dest.length));
@@ -222,6 +226,9 @@
       paintFlag(id);
     }
     changed();
+    // Measure last: the move note adds a flag box and the status line can change height, and both move the neighbour.
+    var shift = ref ? ref.getBoundingClientRect().top - refTop : 0;
+    if (shift && window.scrollBy) window.scrollBy(0, shift);
   }
 
   // What kanban-apply does with a column move, said before Dave relies on it. Only a column that CHANGED since the last sync counts there.
@@ -246,9 +253,16 @@
     ids.forEach(paintFlag);
   }
 
+  // The card under the moved one (else the one above). The page scrolls by how far it shifts, so the list under the finger stays still.
+  function neighbour(id) {
+    var el = cards[id];
+    var n = el ? (el.nextElementSibling || el.previousElementSibling) : null;
+    return n && n.getBoundingClientRect ? n : null;
+  }
+
   function focusAfter(id, sel) {
     var el = cards[id];
-    if (!el) return;
+    if (!el || coarse.matches) return;
     var target = el.querySelector(sel);
     if (!target || target.disabled) target = el.querySelector('.kb-to');
     if (target) target.focus();
@@ -256,7 +270,7 @@
 
   function expandColumn(name) {
     var el = colEls[name];
-    if (!el || !el.classList.contains('kb-collapsed')) return;
+    if (coarse.matches || !el || !el.classList.contains('kb-collapsed')) return;
     el.classList.remove('kb-collapsed');
     syncHeads();
   }
@@ -299,7 +313,7 @@
     expandColumn('next');
     moveCard(id, 'next', 0);
     var el = cards[id];
-    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    if (el && el.scrollIntoView && !coarse.matches) el.scrollIntoView({ block: 'nearest' });
     focusAfter(id, '.kb-next');
   }
 
