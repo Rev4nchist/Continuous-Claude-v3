@@ -914,6 +914,19 @@ test('an arrow key on the closed Move select changes its value and fires change:
   assert.match(page.status(), /^Saved order loaded/, 'an arrow key started a save');
 });
 
+test('leaving the select after arrow keys, with no Enter, puts the placeholder back and writes nothing', async () => {
+  const page = await open();
+  page.key('n2', 'keydown', 'ArrowDown');
+  page.pick('n2', 't:later');
+  await page.fireChange('n2');
+  page.key('n2', 'keyup', 'ArrowDown');
+  assert.equal(page.part('n2', '.kb-to').value, 't:later', 'the arrow choice must stay while the select has focus');
+  page.key('n2', 'focusout', '');
+  assert.equal(page.part('n2', '.kb-to').value, '', 'a column name stayed on a select that did nothing');
+  await page.debounce();
+  assert.deepEqual(page.db.log, [], 'leaving the select saved a move');
+});
+
 test('a change with no key before it (a mouse, a touch or a phone picker) moves; so does one after the key was released', async () => {
   const page = await open();
   assert.equal(await page.moveRaw('l1', 't:now'), '');

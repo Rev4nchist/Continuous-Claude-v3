@@ -330,7 +330,11 @@
   });
 
   board.addEventListener('keyup', function () { navKey = false; });
-  board.addEventListener('focusout', function () { navKey = false; });
+  board.addEventListener('focusout', function (e) {
+    navKey = false;
+    var t = e && e.target;
+    if (t && t.classList && t.classList.contains('kb-to')) t.value = '';
+  });
 
   function syncHeads() {
     Array.prototype.forEach.call(board.querySelectorAll('.kcol'), function (el) {
