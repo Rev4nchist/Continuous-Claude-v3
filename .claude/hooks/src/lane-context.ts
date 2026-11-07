@@ -179,6 +179,10 @@ interface LaneRow {
   /** P0, P1, P2 or NULL (Unsorted). Absent on a database without migration 0005. */
   band?: string | null;
   due_at?: string | null;
+  /** Reminder columns (migration 0005). `total` is the window count the reminders query adds. */
+  remind_state?: string | null;
+  action_id?: string | null;
+  total?: string | number;
 }
 interface EventRow {
   id: number; occurred_at: string; lane_id: string | null; kind: string;
@@ -258,6 +262,73 @@ const peerOfBoardSql = (rootsParam: string, boardParam: string) => `(
   ${underRootsSql(rootsParam)}
   OR EXISTS (SELECT 1 FROM agentic_os.lane bl
               WHERE bl.owner_session_id = s.id AND bl.project_key = ${boardParam}::text))`;
+
+// ---------------------------------------------------------------- reminders
+
+/**
+ * The open, due reminders: a due time that has passed and a state that still waits for Dave. Nothing sets
+ * remind_state='due' until the tick exists (a later PR), so "due" is read from the clock: due_at <= now().
+ * TWIN of REMINDER_DUE_PRED in the lane CLI source (lane.mjs); lane-context-reminders.test.ts compares the two texts.
+ */
+const REMINDER_DUE_PRED = `l.due_at IS NOT NULL AND l.due_at <= now()
+  AND l.remind_state IN ('scheduled','due','needs_dave','failed')`;
+
+/**
+ * What Claimable next may offer as work: not a reminder lane (track 'reminders'), and no due time still ahead.
+ * A reminder lane is never work: an acked one would stay at the top for ever. Reminders show in their own block.
+ * TWIN of CLAIMABLE_NOT_REMINDER in the lane CLI source (lane.mjs); lane-context-reminders.test.ts compares the two texts.
+ */
+const CLAIMABLE_NOT_REMINDER = `l.track <> 'reminders' AND (l.due_at IS NULL OR l.due_at <= now())`;
+
+/** Same order as every other lane list: band, due_at, priority, id. LIMIT 5 keeps the block short; total counts the rest. */
+const REMINDERS_SQL = `SELECT l.id, l.title, l.band, l.due_at, l.remind_state, l.action_id,
+       count(*) OVER () AS total
+  FROM agentic_os.lane l
+ WHERE l.project_key = $1 AND l.state <> 'done' AND ${REMINDER_DUE_PRED}
+ ORDER BY ${laneOrderSql('l')} LIMIT 5`;
+
+const CT_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Chicago', weekday: 'short', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  hourCycle: 'h23', timeZoneName: 'short',
+});
+
+/** 'Fri 11-06 08:00 CST'. Same text as fmtCT in scripts/coordination/reminder-core.mjs (hooks cannot import from scripts/). */
+export function dueCT(due: string | Date): string {
+  const p = Object.fromEntries(CT_FORMAT.formatToParts(new Date(due)).map((x) => [x.type, x.value]));
+  return `${p.weekday} ${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName}`;
+}
+
+/** '' up to 60 minutes late, else 'OVERDUE 2h' (days from 24 hours). Same rule as overdueLabel in reminder-core.mjs. */
+export function overdue(due: string | Date, now: Date): string {
+  const late = Math.floor((now.getTime() - new Date(due).getTime()) / 60_000);
+  if (!(late > 60)) return '';
+  const h = Math.floor(late / 60);
+  return h < 24 ? `OVERDUE ${h}h` : `OVERDUE ${Math.floor(h / 24)}d`;
+}
+
+/**
+ * The "Reminders due (N)" lines, or [] when nothing is due (the empty case is silent: no heading).
+ * A row due after `now` is dropped here as well as in SQL. An action_id is shown as plain text and nothing runs:
+ * version 1 only notifies.
+ */
+export type ReminderRow = Pick<LaneRow, 'id' | 'title' | 'band' | 'due_at' | 'remind_state' | 'action_id' | 'total'>;
+
+export function formatReminderLines(rows: ReminderRow[], now: Date = new Date()): string[] {
+  const due = rows.filter((r) => r.due_at && new Date(r.due_at).getTime() <= now.getTime());
+  if (!due.length) return [];
+  const total = Number(rows[0].total) || 0;
+  const n = due.length === rows.length ? Math.max(total, due.length) : due.length;
+  const cmd = laneCliCmd();
+  const lines = [`## Reminders due (${n})`];
+  for (const r of due) {
+    const late = overdue(r.due_at as string, now);
+    lines.push(`  ${bandTag(r.band)} ${r.id.padEnd(28)} ${dueCT(r.due_at as string)}  ${late ? `${late}  ` : ''}${r.title}`);
+    if (r.action_id) lines.push(`     action: ${r.action_id} (shown only, nothing runs it)`);
+  }
+  if (n > due.length) lines.push(`  +${n - due.length} more: \`${cmd} remind list --due\``);
+  lines.push(`  Ack: \`${cmd} remind ack <id>\` | Snooze: \`${cmd} remind snooze <id> --for 2h\``);
+  return lines;
+}
 
 // ---------------------------------------------------------------- board resolver cache
 
@@ -588,6 +659,7 @@ export async function runLaneContext(raw: string): Promise<object | null> {
       const claimable = (await client.query<LaneRow>(
         `SELECT * FROM agentic_os.lane l
          WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
+           AND ${CLAIMABLE_NOT_REMINDER}
          ORDER BY ${laneOrderSql('l')} LIMIT 5`,
         [board],
       )).rows;
@@ -616,13 +688,22 @@ export async function runLaneContext(raw: string): Promise<object | null> {
         lines.push('');
         lines.push('No other live session.');
       }
+      // Own try/catch: a failing reminders query (or a formatter bug) drops this block and logs it, never the banner.
+      let reminderLines: string[] = [];
+      try {
+        reminderLines = formatReminderLines((await client.query<ReminderRow>(REMINDERS_SQL, [board])).rows, new Date());
+      } catch (err) { logLaneContextError(me, eventName, err); }
+      if (reminderLines.length) {
+        lines.push('');
+        lines.push(...reminderLines);
+      }
       if (claimable.length) {
         lines.push('');
         lines.push('Claimable next:');
         for (const l of claimable) lines.push(`  ${bandTag(l.band)} ${l.id.padEnd(28)} ${l.title}`);
       }
       lines.push('');
-      lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id>`);
+      lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id> | remind list|set|snooze|ack`);
       lines.push('Serialize commits — same branch, two committers race .git/index.lock.');
     }
 
