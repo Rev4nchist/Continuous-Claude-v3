@@ -118,6 +118,51 @@ test('SA4: open-pr offers the draft PR only for a clean stamp at this head', asy
   }
 });
 
+test('SA4b: open-pr shows the Change sentence in place of the CLI cost line, in 3 lines; with no Change the CLI line stays', async () => {
+  const m = await load();
+  const change = 'Pre-pr now reads a plain summary of the PR and prints it before any gate runs.';
+  const withChange = m.openPrSpec({ ...OPEN, change });
+  const lines = withChange.question.split('\n');
+  assert.equal(lines.length, 3);
+  assert.equal(lines[1], `Change: ${change}`);
+  assert.doesNotMatch(withChange.question, /pre-pr cost|CLI:/);
+  assert.match(lines[2], /Open a draft PR for feat\/x on fork\?/);
+  const long = m.openPrSpec({ ...OPEN, change: 'word '.repeat(80) }).question.split('\n');
+  assert.equal(long.length, 3);
+  assert.ok(long[1].length <= 160, String(long[1].length));
+  assert.match(m.openPrSpec({ ...OPEN, change: null }).question, /CLI: 0 finding\(s\), advisory only\. pre-pr cost \$0\.00\./);
+});
+
+test('SA4c: the real open-pr path reads the Change line of .claude/cache/pre-pr/summary.md only when its hash is the stamp summary_sha256', async () => {
+  const repo = temp('shipask-summary-');
+  const gitIn = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo, encoding: 'utf8' });
+  gitIn('init', '-q', '-b', 'feat/real');
+  writeFileSync(path.join(repo, 'a.txt'), '1\n');
+  gitIn('add', 'a.txt');
+  gitIn('commit', '-q', '-m', 'one');
+  const head = gitIn('rev-parse', 'HEAD').stdout.trim();
+  const dir = path.join(repo, '.claude', 'cache', 'pre-pr');
+  mkdirSync(dir, { recursive: true });
+  const summary = 'Branch: feat/real\r\nChange: Adds the plain summary step to pre-pr.\r\nRisk: Low\r\n';
+  writeFileSync(path.join(dir, 'summary.md'), summary);
+  const { hashOf } = await import(pathToFileURL(path.join(HERE, 'lib', 'pr-summary.mjs')).href);
+  const stamp = (sha, summaryStatus = 'PASS') => writeFileSync(path.join(dir, 'stamp.json'), JSON.stringify({ head, at: new Date().toISOString(), summary_sha256: sha, results: [{ step: 'summary', status: summaryStatus, detail: 'x' }, { step: 'coderabbit', status: 'PASS', detail: '0 finding(s), advisory only.' }] }));
+  stamp(hashOf(summary));
+  const ok = run(['open-pr', '--branch', 'feat/real', '--json'], { cwd: repo });
+  assert.equal(ok.status, 0, ok.stderr);
+  const q = JSON.parse(ok.stdout).question;
+  assert.match(q, /\nChange: Adds the plain summary step to pre-pr\.\n/);
+  assert.doesNotMatch(q, /pre-pr cost/);
+  stamp(hashOf(summary), 'NOTE');
+  const noted = JSON.parse(run(['open-pr', '--branch', 'feat/real', '--json'], { cwd: repo }).stdout).question;
+  assert.doesNotMatch(noted, /Change:/, 'a summary row that is not PASS (a leftover file from another branch) shows no Change');
+  assert.match(noted, /pre-pr cost/);
+  stamp(hashOf('another text\n'));
+  const stale = JSON.parse(run(['open-pr', '--branch', 'feat/real', '--json'], { cwd: repo }).stdout).question;
+  assert.doesNotMatch(stale, /Change:/);
+  assert.match(stale, /pre-pr cost/);
+});
+
 test('SA5: commit-and-push recommends the commit only when files are staged', async () => {
   const m = await load();
   const { ship, shipNone } = specsOf(m);

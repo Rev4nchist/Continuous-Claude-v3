@@ -1450,6 +1450,8 @@ const okExec = (log) => (spec) => { log.push(spec.id ?? spec.args.join(' ')); re
 // so they run with an env step that finds everything. The EN tests below use the real one (envStep) or their own.
 const NO_ENV = ({ gates }) => ({ fail: null, others: [], note: null, blocked: new Set(), gates });
 
+const SUMMARY_OK = () => ({ result: { step: 'summary', status: 'PASS', detail: 'stub summary', notes: [] }, sha: 'a'.repeat(64) });
+
 async function prePr(repo, extra = {}) {
   const gateRuns = [];
   const crCalls = [];
@@ -1466,6 +1468,8 @@ async function prePr(repo, extra = {}) {
     gateLogPath: tempGateLog(),
     // The osv and pssa advisories never start a scanner or touch the network here: no lockfile, no binary. The OSV-PP / PSSA-PP tests inject their own.
     osvLockfiles: [], findOsv: () => null, findPssa: () => null,
+    // The summary step has its own tests (lib/pr-summary.test.mjs and SM1..SM4 below); every other test runs with a summary that passes.
+    summaryCheck: SUMMARY_OK,
     bodyText: 'Proof type: docs\n', ...extra,
   };
   return { result: await runPrePr(opts), gateRuns, crCalls };
@@ -1507,6 +1511,60 @@ test('R2: a failing step writes no stamp, deletes an old one, and does not run t
   assert.equal(second.crCalls.length, 0, 'no review slot spent');
   assert.ok(second.result.lines.some((l) => /^FAIL git:clean/.test(l)), second.result.lines.join('\n'));
   assert.ok(second.result.lines.some((l) => /^SKIP coderabbit/.test(l)), second.result.lines.join('\n'));
+});
+
+test('SM1: a summary FAIL stops the run: no gate runs, no review slot is spent, no stamp, and the summary line is first', async () => {
+  const repo = makeRepo();
+  const summaryCheck = () => ({ result: { step: 'summary', status: 'FAIL', detail: 'no summary file', notes: [] }, sha: null });
+  const { result, gateRuns, crCalls } = await prePr(repo, { summaryCheck });
+  assert.equal(result.ok, false);
+  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
+  assert.equal(crCalls.length, 0);
+  assert.deepEqual(gateRuns, []);
+  assert.match(result.lines[0], /^FAIL summary - no summary file/);
+  assert.ok(result.lines.some((l) => /^SKIP gate:context-budget.*summary failed/.test(l)), result.lines.join('\n'));
+});
+
+test('SM2: a passing summary puts its hash in the stamp; the check gets root, head, branch and base, and mode note when the config names none', async () => {
+  const repo = makeRepo();
+  const seen = [];
+  const summaryCheck = (a) => { seen.push(a); return SUMMARY_OK(); };
+  const { result } = await prePr(repo, { summaryCheck });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
+  assert.equal(stamp.summary_sha256, 'a'.repeat(64));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].root, repo.dir);
+  assert.equal(seen[0].head, repo.head);
+  assert.equal(seen[0].branch, 'feat/x');
+  assert.equal(seen[0].base, 'main');
+  assert.equal(seen[0].mode, 'note');
+  assert.equal(typeof seen[0].git, 'function');
+  assert.match(readFileSync(result.logPath, 'utf8'), /PASS summary - stub summary/);
+  // The config can turn on the gate (Dave decides after the one-week trial).
+  await prePr(repo, { summaryCheck, config: { ...CONFIG, pre_pr: { summary_mode: 'fail' } } });
+  assert.equal(seen[1].mode, 'fail');
+});
+
+test('SM3: the summary is step 0: first in the results, and it runs before the base is fetched', async () => {
+  const repo = makeRepo();
+  const order = [];
+  const { result } = await prePr(repo, {
+    summaryCheck: () => { order.push('summary'); return SUMMARY_OK(); },
+    fetch: () => { order.push('fetch'); return null; },
+  });
+  assert.deepEqual(order, ['summary', 'fetch']);
+  assert.equal(result.results[0].step, 'summary');
+  assert.match(result.lines[0], /^PASS summary/);
+});
+
+test('SM4: the real check, no summary file, default mode: one NOTE line first, the run still passes, and the stamp has summary_sha256 null', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo, { summaryCheck: undefined });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.match(result.lines[0], /^NOTE summary - .*summary\.md/);
+  const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
+  assert.equal(stamp.summary_sha256, null);
 });
 
 test('CW4: runPrePr gives the catchers gate the real base, and a failing catchers gate blocks the stamp (breaks if the token is not replaced or a catchers FAIL is ignored)', async () => {
