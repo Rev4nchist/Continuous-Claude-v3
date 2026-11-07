@@ -59,6 +59,13 @@ describe('lane change fires once per batch', () => {
     expect(d.message).toContain(BOARD_ARTIFACT_URL);
   });
 
+  it('puts the live read before the render and the publish', () => {
+    const d = decide(bash('node scripts/coordination/lane.mjs note x "working on it"'), false);
+    const read = String(d.message).indexOf('action read');
+    expect(read).toBeGreaterThan(-1);
+    expect(read).toBeLessThan(String(d.message).indexOf(RENDER_COMMAND));
+  });
+
   it('stays silent but keeps tracking while the session is already pending', () => {
     const d = decide(bash('node scripts/coordination/lane.mjs note x "again"'), true);
     expect(d.action).toBe('mark');

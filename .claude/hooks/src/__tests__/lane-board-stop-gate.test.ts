@@ -144,6 +144,19 @@ describe('decideStop (pure)', () => {
       expect(d.reason).toContain('omit capabilities');
     }
   });
+
+  it('S6: the reason says to read the live page before the render and the publish, and a refusal retries the same file', () => {
+    const d = gate.decideStop(payload(), baseEnv(), [CCV3]);
+    expect(d.action).toBe('block');
+    if (d.action === 'block') {
+      const read = d.reason.indexOf('action read');
+      expect(read).toBeGreaterThan(-1);
+      expect(read).toBeLessThan(d.reason.indexOf(renderBoardCmd('continuous-claude', baseEnv())));
+      expect(d.reason.indexOf(renderBoardCmd('continuous-claude', baseEnv()))).toBeLessThan(d.reason.indexOf('publish '));
+      expect(d.reason).toContain('publish the same file again');
+      expect(d.reason).not.toContain('render again');
+    }
+  });
 });
 
 describe('stopGate (reads and writes the pending dir)', () => {
