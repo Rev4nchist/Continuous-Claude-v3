@@ -38,6 +38,7 @@ Details: `.claude/rules-ondemand/lane-board.md`.
 | `inbox` | unread updates since you last looked |
 | `done <id>` | land it and release the lane |
 | `peers` | who else is live right now |
+| `remind set|list|snooze|ack|clear` | timed reminders on lanes; due ones show at session start; `next` never offers them |
 
 You do not have to remember to run these. The `lane-context` hook injects the board at
 session start and any unread updates on every prompt, and renews your leases while you work.

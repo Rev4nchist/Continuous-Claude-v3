@@ -60,6 +60,15 @@
  *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--band P0|P1|P2|none] [--priority 1-999]
  *                                                       # on an existing lane an omitted --band / --priority keeps the stored value
  *   node scripts/coordination/lane.mjs band <id> P0|P1|P2|none   # set the importance band; needs migration 0005; no claim needed
+ *   node scripts/coordination/lane.mjs remind set <id> --at <time> [--title "..."] [--pri P0|P1|P2] [--action <id>] [--done-when "..."] [--allow-past]
+ *                                                       # a reminder is a lane with a due time. <time>: ISO with an offset, 'YYYY-MM-DD HH:MM' (America/Chicago)
+ *                                                       # or 'YYYY-MM-DD' (08:00 CT). A new id needs --title (track reminders, state backlog).
+ *                                                       # --pri omitted keeps the stored band, else P1. P0 only with a literal --pri P0 (soft cap 5).
+ *                                                       # --action is an allowlist id, shown as text; v1 never runs it. Needs migration 0005.
+ *   node scripts/coordination/lane.mjs remind list [--all] [--due] [--json]   # open reminders in the shared order; --all adds acked and done; --due: due now
+ *   node scripts/coordination/lane.mjs remind snooze <id> --for 30m|2h|1d | --at <time>   # new due time, state scheduled, fired_at cleared
+ *   node scripts/coordination/lane.mjs remind ack <id>  # alias: remind done. Marks the reminder acked; the lane state stays
+ *   node scripts/coordination/lane.mjs remind clear <id>  # the lane stops being a reminder; band and notion_page_id stay
  *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add; items may carry band and priority (omitted = keep)
  *   node scripts/coordination/lane.mjs peers [--all]    # who else is live on this board (--all: on the machine)
  *   node scripts/coordination/lane.mjs whoami           # my label, uuid and lanes
@@ -88,6 +97,9 @@ import { planKanban } from './kanban-apply.mjs';
 import { parseBand, parsePriority } from './lane-band.mjs';
 import { bandTag, laneOrderSql } from './lane-sort.mjs';
 import { processMatchSummary } from './process-match.mjs';
+import {
+  assertFuture, fmtCT, overdueLabel, parseAction, parseDue, parseFor, remindDetail, resolvePri,
+} from './reminder-core.mjs';
 import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
   adoptAllowed, isSafeId, label, labelWithAgent, listIdentities, readIdentity, resolveName, short, validAgent,
@@ -264,6 +276,29 @@ const isMissingMigration = (e) => e?.code === '42703' && /project_key/.test(e.me
 const bandMigrationError = (e) => (e?.code === '42703' && /\bband\b/.test(e.message || '')
   ? new Error('migration 0005 (lane band) is not applied to this database; apply it before you set a band')
   : e);
+
+/** SQLSTATE 42703 on a reminder column (or band): the database has not had migration 0005 applied. One message, no stack. */
+const remindMigrationError = (e) => (e?.code === '42703' && /\b(band|due_at|remind_state|fired_at|action_id)\b/.test(e.message || '')
+  ? new Error('migration 0005 (lane reminders) is not applied to this database; apply it before you use remind')
+  : e);
+
+/**
+ * The open, due reminders: a due time that has passed and a state that still waits for Dave. Nothing sets
+ * remind_state='due' until the tick exists (a later PR), so "due" is read from the clock: due_at <= now().
+ * TWIN of REMINDER_DUE_PRED in .claude/hooks/src/lane-context.ts; lane-context-reminders.test.ts compares the two texts.
+ */
+const REMINDER_DUE_PRED = `l.due_at IS NOT NULL AND l.due_at <= now()
+  AND l.remind_state IN ('scheduled','due','needs_dave','failed')`;
+
+/**
+ * What `next` may offer as work: a lane that is not a reminder (track 'reminders', made by `remind set`) and whose
+ * due time, if it has one, has passed. A reminder lane is never work: an acked one would stay at the top for ever.
+ * TWIN of CLAIMABLE_NOT_REMINDER in .claude/hooks/src/lane-context.ts; lane-context-reminders.test.ts compares the two texts.
+ */
+const CLAIMABLE_NOT_REMINDER = `l.track <> 'reminders' AND (l.due_at IS NULL OR l.due_at <= now())`;
+
+/** The P0 soft cap (Dave): a warning, never a refusal. */
+const P0_CAP = 5;
 
 /** Record a lane event on the current board. Never throws into the caller's result path --
  *  a failed log line must not make a successful claim look like a failure. The one
@@ -505,6 +540,183 @@ async function checkSeedItems(c, items, board) {
   if (foreign) throw new Error(`lane id '${foreign.id}' belongs to board '${foreign.project_key}'`);
 }
 
+// ---------------------------------------------------------------- remind
+// A reminder is a lane with a due time (design: .claudedocs/2026-11-06-lane-reminders-design.md). Pure rules live in
+// reminder-core.mjs. Every write sets updated_at=now() (the later Notion sync reads it) and logs ONE broadcast
+// lane_event of kind 'reminder'. A no-op (the same ack twice, a clear of a non-reminder) writes and logs nothing.
+
+const REMIND_USAGE = 'usage: lane.mjs remind set <id> --at <time> [--title "..."] [--pri P0|P1|P2] [--action <id>] [--done-when "..."] [--allow-past] '
+  + '| list [--all] [--due] | snooze <id> --for 30m|2h|1d (or --at <time>) | ack <id> | clear <id>';
+
+function reminderLine(l, now) {
+  const late = l.remind_state === 'acked' ? '' : overdueLabel(l.due_at, now);
+  return `${bandTag(l.band)} ${l.id.padEnd(26)} ${(l.due_at ? fmtCT(l.due_at) : '(no time)').padEnd(20)} ${String(l.remind_state).padEnd(10)} `
+    + `${late ? `${late}  ` : ''}${l.title}${l.action_id ? `  [action: ${l.action_id}]` : ''}`;
+}
+
+/** An Error with a `reason` code, so a caller branches on the code and not on the wording of the message. */
+const missError = (reason, message) => Object.assign(new Error(message), { reason });
+
+/** Why an ack, snooze or clear changed no row: no such lane on this board, or a state that rules it out. */
+async function remindMiss(c, id, board) {
+  const cur = (await c.query(`SELECT remind_state, state FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [id, board.key])).rows[0];
+  if (!cur) return noLane(c, id, board);
+  if (cur.remind_state === null) return missError('none', `lane ${id} has no reminder; make one with: ${laneCliCmd()} remind set ${id} --at <time>`);
+  if (cur.remind_state === 'acked') return missError('acked', `reminder ${id} is acked; reopen it with: ${laneCliCmd()} remind set ${id} --at <time>`);
+  return missError('done', `lane ${id} is done; reopen it first: ${laneCliCmd()} state ${id} backlog`);
+}
+
+/**
+ * A lane another session holds keeps its title and band: remind set may change only the reminder columns on it.
+ * The band counts when it would change, including the P1 written for a lane with no band. A title only goes in on create.
+ */
+function assertNotHeldAway(cur, id, myId, pri) {
+  if (!cur?.owner_session_id || cur.owner_session_id === myId) return;
+  const changes = [];
+  if (flags.title !== undefined && flags.title !== cur.title) changes.push('title');
+  if (pri !== cur.band) changes.push(`band ${cur.band ?? 'none'} -> ${pri}`);
+  if (!changes.length) return;
+  throw new Error(`lane ${id} is held by ${L(cur.owner_session_id)}; remind set would change its ${changes.join(' and ')}. `
+    + `Set the band first with: ${laneCliCmd()} band ${id} <P0|P1|P2>, and leave --title out.`);
+}
+
+async function remindSet(c) {
+  const myId = me();
+  const board = projectOf();
+  const id = positional[2];
+  if (!id) throw new Error(REMIND_USAGE);
+  if (!BOARD_KEY_RE.test(id)) throw new Error(badId(id));
+  if (flags.at === undefined) throw new Error('--at <time> is required: remind set <id> --at <time>');
+  const due = parseDue(flags.at);
+  assertFuture(due, new Date(), flags['allow-past'] === true);
+  const action = parseAction(flags.action);
+  for (const f of ['title', 'done-when']) if (flags[f] !== undefined && typeof flags[f] !== 'string') throw new Error(`--${f} needs a text`);
+  const cur = (await c.query(`SELECT project_key, title, state, band, owner_session_id FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
+  if (cur && cur.project_key !== board.key) throw await foreignId(c, id);
+  if (cur?.state === 'done') throw new Error(`lane ${id} is done, so a reminder on it would never show; reopen it first: ${laneCliCmd()} state ${id} backlog`);
+  if (!cur && flags.title === undefined) throw new Error(`lane ${id} does not exist; a new reminder needs --title "..."`);
+  const pri = resolvePri(flags.pri, cur?.band);
+  assertNotHeldAway(cur, id, myId, pri);
+  if (pri === 'P0' && cur?.band !== 'P0') {
+    const open = (await c.query(
+      `SELECT count(*)::int AS n FROM agentic_os.lane WHERE project_key=$1 AND state <> 'done' AND band='P0' AND id <> $2`, [board.key, id],
+    )).rows[0].n;
+    if (open >= P0_CAP) process.stderr.write(`WARNING: board ${board.key} already has ${open} open P0 lanes (soft cap ${P0_CAP}). P0 means this week; the reminder is set anyway.\n`);
+  }
+  const { rows } = await c.query(
+    `INSERT INTO agentic_os.lane (id,title,track,state,priority,project_key,band,due_at,remind_state,fired_at,action_id,done_when)
+     VALUES ($1,$2,'reminders','backlog',50,$3,$4,$5,'scheduled',NULL,$6,$7)
+     ON CONFLICT (id) DO UPDATE SET
+       title = CASE WHEN $8::boolean THEN EXCLUDED.title ELSE agentic_os.lane.title END,
+       band = CASE WHEN $9::boolean THEN EXCLUDED.band ELSE COALESCE(agentic_os.lane.band, 'P1') END,
+       due_at = EXCLUDED.due_at, remind_state = 'scheduled', fired_at = NULL,
+       action_id = CASE WHEN $10::boolean THEN EXCLUDED.action_id ELSE agentic_os.lane.action_id END,
+       done_when = COALESCE(EXCLUDED.done_when, agentic_os.lane.done_when),
+       updated_at = now()
+     WHERE agentic_os.lane.project_key = EXCLUDED.project_key AND agentic_os.lane.state <> 'done'
+     RETURNING band, (xmax = 0) AS inserted`,
+    [id, flags.title ?? cur?.title, board.key, pri, due.toISOString(), action ?? null, flags['done-when'] ?? null,
+     flags.title !== undefined, flags.pri !== undefined, action !== undefined],
+  );
+  if (!rows.length) throw new Error(`lane ${id} changed while the reminder was set (another board or done now); run it again`);
+  await logEvent(c, {
+    laneId: id, kind: 'reminder', sessionId: myId, body: `reminder set ${fmtCT(due)} ${rows[0].band}`,
+    detail: remindDetail({ op: 'set', due_at: due.toISOString(), pri: rows[0].band, via: 'cli' }),
+  });
+  if (JSON_OUT) return { id, due_at: due.toISOString(), band: rows[0].band, created: rows[0].inserted };
+  return `reminder set on ${id}: ${fmtCT(due)}, ${rows[0].band}${rows[0].inserted ? ' (new lane, track reminders)' : ''}`;
+}
+
+async function remindList(c) {
+  const board = projectOf();
+  const open = `l.state <> 'done' AND l.remind_state IS NOT NULL`;
+  const where = flags.due === true ? `l.state <> 'done' AND ${REMINDER_DUE_PRED}`
+    : flags.all === true ? `l.remind_state IS NOT NULL` : `${open} AND l.remind_state <> 'acked'`;
+  const { rows } = await c.query(
+    `SELECT l.* FROM agentic_os.lane l WHERE l.project_key = $1 AND ${where} ORDER BY ${laneOrderSql('l')}`, [board.key],
+  );
+  if (JSON_OUT) return rows;
+  if (!rows.length) return flags.due === true ? 'no reminders due' : 'no reminders';
+  const now = new Date();
+  return rows.map((l) => reminderLine(l, now)).join('\n');
+}
+
+async function remindSnooze(c) {
+  const myId = me();
+  const id = positional[2];
+  if (!id) throw new Error(REMIND_USAGE);
+  const hasFor = flags.for !== undefined; const hasAt = flags.at !== undefined;
+  if (hasFor === hasAt) throw new Error('remind snooze needs exactly one of --for <30m|2h|1d> or --at <time>');
+  const now = new Date();
+  const due = hasFor ? new Date(now.getTime() + parseFor(flags.for)) : parseDue(flags.at);
+  assertFuture(due, now, false);
+  const board = await projectForOwnedLane(c, id, myId);
+  const { rows } = await c.query(
+    `WITH old AS (SELECT id, due_at, remind_state FROM agentic_os.lane WHERE id=$1 AND project_key=$2 FOR UPDATE)
+     UPDATE agentic_os.lane l SET due_at=$3, remind_state='scheduled', fired_at=NULL, updated_at=now()
+     FROM old WHERE l.id = old.id AND old.remind_state IS NOT NULL AND old.remind_state <> 'acked' AND l.state <> 'done'
+     RETURNING old.due_at AS from_due_at, l.band`,
+    [id, board.key, due.toISOString()],
+  );
+  if (!rows.length) throw await remindMiss(c, id, board);
+  await logEvent(c, {
+    laneId: id, kind: 'reminder', sessionId: myId, body: `reminder snoozed to ${fmtCT(due)}`,
+    detail: remindDetail({ op: 'snooze', due_at: due.toISOString(), from_due_at: rows[0].from_due_at?.toISOString(), pri: rows[0].band, via: 'cli' }),
+  });
+  return JSON_OUT ? { id, due_at: due.toISOString(), from_due_at: rows[0].from_due_at } : `${id} snoozed to ${fmtCT(due)}`;
+}
+
+async function remindAck(c) {
+  const myId = me();
+  const id = positional[2];
+  if (!id) throw new Error(REMIND_USAGE);
+  const board = await projectForOwnedLane(c, id, myId);
+  const { rows } = await c.query(
+    `WITH old AS (SELECT id, remind_state FROM agentic_os.lane WHERE id=$1 AND project_key=$2 FOR UPDATE)
+     UPDATE agentic_os.lane l SET remind_state='acked', updated_at=now()
+     FROM old WHERE l.id = old.id AND old.remind_state IS NOT NULL AND old.remind_state <> 'acked'
+     RETURNING old.remind_state AS from_state, l.band, l.due_at`,
+    [id, board.key],
+  );
+  if (!rows.length) {
+    const miss = await remindMiss(c, id, board);
+    if (miss.reason !== 'acked') throw miss;
+    return JSON_OUT ? { id, changed: false } : `${id} ack unchanged: already acked`;
+  }
+  await logEvent(c, {
+    laneId: id, kind: 'reminder', sessionId: myId, body: `reminder acked (was ${rows[0].from_state})`,
+    detail: remindDetail({ op: 'ack', due_at: rows[0].due_at?.toISOString(), pri: rows[0].band, via: 'cli' }),
+  });
+  return JSON_OUT ? { id, changed: true, from: rows[0].from_state } : `${id} acked (was ${rows[0].from_state})`;
+}
+
+async function remindClear(c) {
+  const myId = me();
+  const id = positional[2];
+  if (!id) throw new Error(REMIND_USAGE);
+  const board = await projectForOwnedLane(c, id, myId);
+  const { rows } = await c.query(
+    `WITH old AS (SELECT id, due_at, remind_state, fired_at, action_id FROM agentic_os.lane WHERE id=$1 AND project_key=$2 FOR UPDATE)
+     UPDATE agentic_os.lane l SET due_at=NULL, remind_state=NULL, fired_at=NULL, action_id=NULL, updated_at=now()
+     FROM old WHERE l.id = old.id
+       AND (old.due_at IS NOT NULL OR old.remind_state IS NOT NULL OR old.fired_at IS NOT NULL OR old.action_id IS NOT NULL)
+     RETURNING old.due_at AS from_due_at, l.band`,
+    [id, board.key],
+  );
+  if (!rows.length) {
+    const exists = (await c.query(`SELECT 1 FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [id, board.key])).rowCount;
+    if (!exists) throw await noLane(c, id, board);
+    return JSON_OUT ? { id, changed: false } : `${id} clear unchanged: it is not a reminder`;
+  }
+  await logEvent(c, {
+    laneId: id, kind: 'reminder', sessionId: myId, body: 'reminder cleared',
+    detail: remindDetail({ op: 'clear', due_at: rows[0].from_due_at?.toISOString(), pri: rows[0].band, via: 'cli' }),
+  });
+  return JSON_OUT ? { id, changed: true } : `${id} cleared: it is no longer a reminder`;
+}
+
+const REMIND_VERBS = { set: remindSet, list: remindList, snooze: remindSnooze, ack: remindAck, done: remindAck, clear: remindClear };
+
 // ---------------------------------------------------------------- commands
 
 const commands = {
@@ -690,6 +902,7 @@ const commands = {
     const { rows } = await c.query(
       `SELECT l.* FROM agentic_os.lane l
        WHERE l.project_key = $1 AND l.state IN ('ready','backlog') AND ${RECLAIMABLE}
+         AND ${CLAIMABLE_NOT_REMINDER}
        ORDER BY ${laneOrderSql('l')} LIMIT ${Number(flags.n) > 0 ? Number(flags.n) : 5}`,
       [board.key],
     );
@@ -979,6 +1192,19 @@ const commands = {
       body: `band ${word(from)} -> ${word(to)}`, detail: { from, to },
     });
     return JSON_OUT ? { id, from, to, changed: true } : `${id} band: ${word(from)} -> ${word(to)}`;
+  },
+
+  /**
+   * Timed reminders on lanes: set, list, snooze, ack (alias done), clear. Needs migration 0005.
+   * `remind tick` (fire due reminders, toast, Notion) is a later phase and is refused here.
+   */
+  async remind(c) {
+    const sub = positional[1];
+    if (sub === 'tick') throw new Error('remind tick is not built yet (a later phase); due reminders show in the SessionStart banner');
+    if (!Object.hasOwn(REMIND_VERBS, sub)) throw new Error(REMIND_USAGE);
+    try {
+      return await REMIND_VERBS[sub](c);
+    } catch (e) { throw remindMigrationError(e); }
   },
 
   /** Bulk idempotent add from JSON. Re-running never clobbers live claims,

@@ -11,3 +11,5 @@ Lane rules load on your first lane command; this project's board follows the reg
 ```
 
 The markers let a script replace the block without touching the rest of the file.
+
+The block needs no change for reminders. `next` skips reminder lanes, so the line above stays correct. The verbs are in `.claude/rules-ondemand/lane-board.md`.

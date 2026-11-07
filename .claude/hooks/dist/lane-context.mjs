@@ -5731,6 +5731,50 @@ var peerOfBoardSql = (rootsParam, boardParam) => `(
   ${underRootsSql(rootsParam)}
   OR EXISTS (SELECT 1 FROM agentic_os.lane bl
               WHERE bl.owner_session_id = s.id AND bl.project_key = ${boardParam}::text))`;
+var REMINDER_DUE_PRED = `l.due_at IS NOT NULL AND l.due_at <= now()
+  AND l.remind_state IN ('scheduled','due','needs_dave','failed')`;
+var CLAIMABLE_NOT_REMINDER = `l.track <> 'reminders' AND (l.due_at IS NULL OR l.due_at <= now())`;
+var REMINDERS_SQL = `SELECT l.id, l.title, l.band, l.due_at, l.remind_state, l.action_id,
+       count(*) OVER () AS total
+  FROM agentic_os.lane l
+ WHERE l.project_key = $1 AND l.state <> 'done' AND ${REMINDER_DUE_PRED}
+ ORDER BY ${laneOrderSql("l")} LIMIT 5`;
+var CT_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Chicago",
+  weekday: "short",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "short"
+});
+function dueCT(due) {
+  const p = Object.fromEntries(CT_FORMAT.formatToParts(new Date(due)).map((x) => [x.type, x.value]));
+  return `${p.weekday} ${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName}`;
+}
+function overdue(due, now) {
+  const late = Math.floor((now.getTime() - new Date(due).getTime()) / 6e4);
+  if (!(late > 60)) return "";
+  const h = Math.floor(late / 60);
+  return h < 24 ? `OVERDUE ${h}h` : `OVERDUE ${Math.floor(h / 24)}d`;
+}
+function formatReminderLines(rows, now = /* @__PURE__ */ new Date()) {
+  const due = rows.filter((r) => r.due_at && new Date(r.due_at).getTime() <= now.getTime());
+  if (!due.length) return [];
+  const total = Number(rows[0].total) || 0;
+  const n = due.length === rows.length ? Math.max(total, due.length) : due.length;
+  const cmd = laneCliCmd();
+  const lines = [`## Reminders due (${n})`];
+  for (const r of due) {
+    const late = overdue(r.due_at, now);
+    lines.push(`  ${bandTag(r.band)} ${r.id.padEnd(28)} ${dueCT(r.due_at)}  ${late ? `${late}  ` : ""}${r.title}`);
+    if (r.action_id) lines.push(`     action: ${r.action_id} (shown only, nothing runs it)`);
+  }
+  if (n > due.length) lines.push(`  +${n - due.length} more: \`${cmd} remind list --due\``);
+  lines.push(`  Ack: \`${cmd} remind ack <id>\` | Snooze: \`${cmd} remind snooze <id> --for 2h\``);
+  return lines;
+}
 var BOARD_CACHE_TTL_MS = 10 * 6e4;
 var safeId = (s) => s.replace(/[^A-Za-z0-9._-]/g, "_");
 var boardCachePath = (sid) => join5(tmpdir2(), `claude-lane-board-${safeId(sid)}.json`);
@@ -5948,6 +5992,7 @@ async function runLaneContext(raw) {
       const claimable = (await client.query(
         `SELECT * FROM agentic_os.lane l
          WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
+           AND ${CLAIMABLE_NOT_REMINDER}
          ORDER BY ${laneOrderSql("l")} LIMIT 5`,
         [board]
       )).rows;
@@ -5973,13 +6018,23 @@ async function runLaneContext(raw) {
         lines.push("");
         lines.push("No other live session.");
       }
+      let reminderLines = [];
+      try {
+        reminderLines = formatReminderLines((await client.query(REMINDERS_SQL, [board])).rows, /* @__PURE__ */ new Date());
+      } catch (err) {
+        logLaneContextError(me, eventName, err);
+      }
+      if (reminderLines.length) {
+        lines.push("");
+        lines.push(...reminderLines);
+      }
       if (claimable.length) {
         lines.push("");
         lines.push("Claimable next:");
         for (const l of claimable) lines.push(`  ${bandTag(l.band)} ${l.id.padEnd(28)} ${l.title}`);
       }
       lines.push("");
-      lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id>`);
+      lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id> | remind list|set|snooze|ack`);
       lines.push("Serialize commits \u2014 same branch, two committers race .git/index.lock.");
     }
     if (unread.length) {
@@ -6005,7 +6060,10 @@ export {
   DM_THROTTLE_MS,
   deliverDirectMessages,
   dmStatePath,
+  dueCT,
+  formatReminderLines,
   logLaneContextError,
+  overdue,
   readDmState,
   resolveBoardKey,
   runLaneContext,
