@@ -154,7 +154,7 @@ const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f
 export const ROUTER_UNVERIFIED_NOTE = 'the review router has not classified this head; Greptile stays required';
 export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow';
 export const DOCS_NOT_ROUTED_NOTE = 'risk:docs is the only risk label, but the review router classed this head above docs; Greptile stays required';
-export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again';
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again';
 const PATHWAYS = new Set(['none', 'coderabbit', 'both']);
 
 /**
@@ -193,7 +193,7 @@ export const NONE_BEHIND_LABEL_NOTE = 'a risk label is higher than the class the
  * absent classification), no risk label above the saved class, and, for pathway none, a class that has not risen
  * above the class at the checkpoint. Each problem is a reason; none of them asks a bot for a review.
  */
-export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /pathway or re-run the router workflow';
+export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; call pr_checkpoint {pr} or re-run the router workflow';
 
 function noneBlockers(labels, state, head) {
   if (!state || state.head !== head) return [ROUTER_NONE_UNVERIFIED_NOTE];
@@ -1447,7 +1447,7 @@ function carriedReview({ carry, reviews, head, comments, commentEdits, labels, c
 
 /** The reasons a head with no CodeRabbit review carries. The first two are for a draft and an unrouted PR; a person must not post a review request for either. */
 export const NO_REVIEW_REASON = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one';
-export const NO_REVIEW_DRAFT_REASON = 'no CodeRabbit PR-bot review of the head commit. Draft: run /pathway; do not request a review';
+export const NO_REVIEW_DRAFT_REASON = 'no CodeRabbit PR-bot review of the head commit. Draft: call pr_checkpoint {pr}; do not request a review';
 export const NO_REVIEW_UNVERIFIED_REASON = 'no CodeRabbit PR-bot review of the head commit; re-run the review-router workflow for this head; do not request a review';
 /** Only the CLI fix review line blocks the carry: run cr-fix.mjs and paste its line. Never a paid PR review. The prefix is the one the mod and the rule match. */
 export const noReviewCliReason = (prNumber) => `no CodeRabbit PR-bot review of the head commit; the earlier review carries once the PR body has a clean CLI fix review line. Run node scripts/github/cr-fix.mjs --pr ${prNumber} and put its line in the PR body (or fix its findings, then run it again); do not request a review`;

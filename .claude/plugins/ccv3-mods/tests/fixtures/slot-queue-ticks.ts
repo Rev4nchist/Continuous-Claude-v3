@@ -88,7 +88,7 @@ export const TICKS = {
     {
       "kind": "toast",
       "pr": 901,
-      "text": "PR #901: no free slot for 30 minutes. Paid round $2.75 (cr-paid ALLOW). Type /slot pay 901, or wait."
+      "text": "PR #901: no free slot for 30 minutes. Paid round $2.75 (cr-paid ALLOW). Dave answers the question the session asks, or the item keeps waiting."
     }
   ],
   "rows": [
@@ -119,7 +119,7 @@ export const TICKS = {
     {
       "kind": "toast",
       "pr": 900,
-      "text": "PR #900: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Type /slot pay 900 or /slot wait 900."
+      "text": "PR #900: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Dave answers the question the session asks: pay or keep waiting."
     }
   ],
   "rows": [

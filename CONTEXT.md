@@ -32,6 +32,10 @@
   (`scripts/lib/resolve-deps.mjs`). A miss is one `ENV:` message. The **shared store link**
   (`.claude/worktrees/node_modules`) points at the primary's hooks `node_modules` for every nested worktree.
   Check it with `scripts/worktree/shared-deps.mjs --check`.
+- **Offer / decision**: an offer is a question the model asks Dave with AskUserQuestion (written by `ship-ask.mjs` or `pr_checkpoint`).
+  A decision is his tap: the exact option label, single use. A mismatch records nothing and the model re-asks (max 2).
+- **Decision ledger**: the `decision-ledger` hook and store. The `decision-gate` hook denies PR create, land, merge and store writes
+  without a decision when `decisions.enforce` is true. Both ship off.
 
 ## Coordination
 

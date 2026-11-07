@@ -344,7 +344,7 @@ test('F27: the 30-minute paid ask fires once, for CRITICAL only', () => {
   const checkPr = (pr) => { asked += 1; return ALLOW(pr); };
   const first = run(e, ['tick', '--json'], { checkPr });
   assert.equal(toasts(first.json).length, 1);
-  assert.match(toasts(first.json)[0].text, /^PR #7: no free slot for 30 minutes\. Paid round \$2\.75 \(cr-paid ALLOW\)\. Type \/slot pay 7, or wait\.$/);
+  assert.match(toasts(first.json)[0].text, /^PR #7: no free slot for 30 minutes\. Paid round \$2\.75 \(cr-paid ALLOW\)\. Dave answers the question the session asks, or the item keeps waiting\.$/);
   assert.deepEqual([itemIn(e, 7).asked.paid30, itemIn(e, 8).asked.paid30], [true, false]);
   const second = run(e, ['tick', '--json'], { checkPr, now: at(5) });
   assert.equal(toasts(second.json).length, 0);
@@ -352,7 +352,7 @@ test('F27: the 30-minute paid ask fires once, for CRITICAL only', () => {
 });
 
 // Breaks if an ESCALATE verdict is shown as an offer to pay, or a read error sets asked.paid30 (the ask would never repeat).
-test('F27: an ESCALATE verdict toasts the reason without /slot pay, and a verdict error asks nothing and retries', () => {
+test('F27: an ESCALATE verdict toasts the reason with no typed command, and a verdict error asks nothing and retries', () => {
   const e = setup('f27b');
   setWorld(e, { 7: prOf(7) });
   setState(e, [itemOf(7, { band: 'CRITICAL', queuedAt: at(-31) })], BUSY());
@@ -360,8 +360,8 @@ test('F27: an ESCALATE verdict toasts the reason without /slot pay, and a verdic
   assert.equal(toasts(err.json).length, 0);
   assert.equal(itemIn(e, 7).asked.paid30, false);
   const esc = run(e, ['tick', '--json'], { checkPr: ESCALATE, now: at(5) });
-  assert.match(toasts(esc.json)[0].text, /not allowed.*over \$15\.00.*\/slot wait 7/);
-  assert.doesNotMatch(toasts(esc.json)[0].text, /\/slot pay/);
+  assert.match(toasts(esc.json)[0].text, /^PR #7: .*not allowed.*over \$15\.00.*The item keeps waiting\.$/);
+  assert.doesNotMatch(toasts(esc.json)[0].text, /\/slot/);
 });
 
 // F10b. Breaks if the timers live in memory: a fresh process on a file with queuedAt 61 minutes ago must time the item out and toast.
@@ -373,7 +373,7 @@ test('F10b: a new process on a file with queuedAt 61 minutes ago gives timed-out
   assert.equal(first.code, 0, first.stderr);
   assert.equal(itemIn(e, 5).state, 'timed-out');
   assert.equal(toasts(first.json).length, 1);
-  assert.match(toasts(first.json)[0].text, /^PR #5: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review\. Type \/slot pay 5 or \/slot wait 5\.$/);
+  assert.match(toasts(first.json)[0].text, /^PR #5: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review\. Dave answers the question the session asks: pay or keep waiting\.$/);
   assert.equal(itemIn(e, 5).asked.timeout60, true);
   const second = await child(e, ['tick', '--json'], { now: at(5) });
   assert.equal(toasts(second.json).length, 0);
@@ -390,13 +390,14 @@ test('a SAMPLE item queued 70 minutes stays queued with no toast', () => {
 });
 
 // Breaks if the stuck transition is silent: the second empty post must tell Dave how to clear the item.
-test('an item whose second post made no review becomes stuck and toasts /slot drop', () => {
+test('an item whose second post made no review becomes stuck and toasts the question to answer, not a typed command', () => {
   const e = setup('stuck');
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5, { state: 'posted', posts: 1 })], { holder: { pr: 5, head: headOf(5), at: at(-25), session: 's1' }, slot: { nextAt: null, source: 'post', lastPostAt: at(-25), lastPostPr: 5 } });
   const r = run(e, ['tick', '--json']);
   assert.equal(itemIn(e, 5).state, 'stuck');
-  assert.match(toasts(r.json)[0].text, /PR #5: .*no review.*\/slot drop 5/);
+  assert.match(toasts(r.json)[0].text, /PR #5: .*no review.*Dave answers the question the session asks: remove it or try again\.$/);
+  assert.doesNotMatch(toasts(r.json)[0].text, /\/slot/);
 });
 
 // m6. Breaks if the cr-paid verdict is read inside tickLocked: about 6 gh reads would then run while the lock file exists,
@@ -424,7 +425,8 @@ test('m7: three failed cr-paid reads give one toast and stop reading', () => {
   assert.deepEqual(ticks.map((t) => toasts(t.json).length), [0, 0, 1, 0]);
   assert.equal(reads, 3);
   assert.equal(itemIn(e, 7).asked.paid30, true);
-  assert.match(toasts(ticks[2].json)[0].text, /PR #7: .*30 minutes.*could not be read.*gh failed.*\/slot pay 7/);
+  assert.match(toasts(ticks[2].json)[0].text, /PR #7: .*30 minutes.*could not be read.*gh failed.*Dave answers the question the session asks: try it again or keep waiting\.$/);
+  assert.doesNotMatch(toasts(ticks[2].json)[0].text, /\/slot/);
   assert.deepEqual(Object.keys(ticks[2].json.rows[0].asked).sort(), ['paid30', 'timeout60']);
 });
 
@@ -658,6 +660,7 @@ for (const [label, seed, why] of PAY_REFUSALS) {
     const r = run(e, payArgv(5), { checkPr: () => { reads += 1; return ALLOW(5); } });
     assert.equal(r.code, 2);
     assert.match(r.json.reason, why);
+    assert.doesNotMatch(r.json.reason, /\/slot/, 'the refusal names no typed command');
     assert.deepEqual([reads, posts(e).length, ledgerRows(e).length], [0, 0, 0]);
     assert.equal(digest(e.statePath), before);
   });
@@ -821,7 +824,7 @@ test('E2E-1: two sessions run the queue from the first add to the review, and on
   assert.deepEqual(t16.rows.map((r) => r.pr), [901, 900]);
   const t42 = await step('t+42 A: tick, the 30-minute ask', ['tick', '--json'], { now: at(42), verdict: ALLOW(901) });
   assert.deepEqual(toasts(t42).map((a) => a.pr), [901]);
-  assert.match(toasts(t42)[0].text, /Paid round \$2\.75 .*\/slot pay 901/);
+  assert.match(toasts(t42)[0].text, /Paid round \$2\.75 .*Dave answers the question the session asks/);
   assert.equal(posts(e).length, 0);
   const t66 = await step('t+66 A: tick, the slot is free', ['tick', '--json'], { now: at(66), verdict: ALLOW(901) });
   assert.deepEqual(posts(e), [{ pr: 901, body: '@coderabbitai review' }]);

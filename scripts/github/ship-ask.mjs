@@ -1,0 +1,272 @@
+#!/usr/bin/env node
+/**
+ * ship-ask.mjs: builds the AskUserQuestion spec of one ship step and writes the offer to the decision store (pathway-flow-v2, design N1).
+ * Tests: scripts/github/ship-ask.test.mjs. Store: scripts/github/lib/decisions.mjs.
+ *
+ * Usage: node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]
+ *   commit-and-push, open-pr: --branch B (default: the current branch). --msg is the commit message file (commit-and-push only).
+ *   land, paid-round: --pr N.
+ *   --json   print { header, question, options: [{ label, description }] } as one JSON object. Pass it to AskUserQuestion unchanged.
+ *   --facts  read the step data from a JSON file, not from git, gh and the ledger (tests).
+ * The recommended option is first and its label ends with " (Recommended)". The question has at most 3 lines.
+ * The store step of commit-and-push is `ship`. An open offer is what lets the AskUserQuestion hook record Dave's tap.
+ * Exit 0 = the offer is written and the spec printed. 1 = no question can be asked (the reason is on stderr, nothing written).
+ * 2 = bad usage. 3 = internal error.
+ */
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { decisionKey, offerWrite } from './lib/decisions.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, '..', '..');
+const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
+const RECOMMENDED = ' (Recommended)';
+const PAID_PER_FILE = 0.25;
+const PATHWAY_OF_LABEL = { 'review:none': 'none', 'review:coderabbit': 'coderabbit', 'review:deep': 'both' };
+
+/** The ship-ask step word -> the store step. */
+export const STORE_STEP = Object.freeze({ 'commit-and-push': 'ship', 'open-pr': 'open-pr', land: 'land', 'paid-round': 'paid-round' });
+
+const one = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
+const clip = (text, n) => (one(text).length > n ? `${one(text).slice(0, n - 1)}…` : one(text));
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const usd = (n) => `$${Number(n).toFixed(2)}`;
+const opt = (label, description, first = false) => ({ label: `${label}${first ? RECOMMENDED : ''}`, description });
+
+// ---------- the specs: pure ----------
+
+/** commit-and-push. data: { branch, staged, ahead (number or null), subject (string or null) }. */
+export function shipSpec({ branch, staged, ahead, subject }) {
+  const ready = staged > 0;
+  const lines = [
+    ready ? `Commit ${plural(staged, 'file')} on ${clip(branch, 60)} and push to fork?` : `Nothing is staged on ${clip(branch, 60)}.`,
+    subject ? `Message: '${clip(subject, 90)}'.` : 'No commit message file was given.',
+    typeof ahead === 'number' ? `${plural(ahead, 'commit')} ahead of fork/main.` : 'Commits ahead of fork/main: unknown.',
+  ];
+  const go = opt('Commit and push', `Runs git commit -F <msg> and git-safe push fork ${clip(branch, 60)}.`, ready);
+  const diff = opt('Show the diff first', 'Prints git diff --cached --stat and the message, then asks again.');
+  const stop = opt('Stop here', 'Nothing runs. The work stays uncommitted.', !ready);
+  return { header: 'Commit', question: lines.join('\n'), options: ready ? [go, diff, stop] : [stop, diff] };
+}
+
+const ageText = (min) => (min < 60 ? `${min} min` : `${Math.round(min / 60)} h`);
+
+/** open-pr when the stamp names this head. data: { branch, head, stampHead, stampAt, now, rows, fails, cliDetail, costUsd }. */
+export function openPrSpec(d) {
+  const min = Math.max(0, Math.round((Date.parse(d.now) - Date.parse(d.stampAt)) / 60000));
+  const lines = [
+    `pre-pr passed at ${String(d.head).slice(0, 7)}, ${ageText(min)} ago (${plural(d.rows, 'row')} checked, ${d.fails} failed).`,
+    `CLI: ${clip(d.cliDetail ?? 'no CLI result in the stamp', 100)} pre-pr cost ${usd(d.costUsd ?? 0)}.`,
+    `Open a draft PR for ${clip(d.branch, 60)} on fork?`,
+  ];
+  return { header: 'Open PR', question: lines.join('\n'), options: [
+    opt('Open draft PR', 'Runs gh api .../pulls -X POST -F draft=true -F body=@<file>. pre-pr-gate still checks the stamp.', true),
+    opt('Show the PR body first', 'Prints the body file, then asks again.'),
+    opt('Stop here', 'No PR opens.'),
+  ] };
+}
+
+/** open-pr when no PR can open: no stamp, a failed row, or a head that moved. data: { branch, head, stampHead, fails, capLeftUsd }. */
+export function rerunPrePrSpec({ branch, head, stampHead, fails, capLeftUsd }) {
+  const why = !stampHead ? `No pre-pr stamp for ${clip(branch, 60)}.`
+    : fails > 0 ? `The pre-pr stamp has ${plural(fails, 'failed row')}.`
+      : `The head moved: the stamp is for ${String(stampHead).slice(0, 7)}, the branch is at ${String(head).slice(0, 7)}.`;
+  const cost = typeof capLeftUsd === 'number' ? `up to ${usd(capLeftUsd)} CLI` : 'CLI cost unknown';
+  return { header: 'Open PR', question: `${why}\nA draft PR needs a pre-pr stamp for the pushed head.\nRe-run pre-pr first?`, options: [
+    opt(`Re-run pre-pr (${cost})`, 'Runs node scripts/github/pre-pr.mjs --body <file>. The CLI review is free inside the hourly allowance.', true),
+    opt('Stop here', 'No PR opens.'),
+  ] };
+}
+
+/** land. data: { pr, head, ready, reasons, mergeable, unresolved, pathway, by }. */
+export function landSpec(d) {
+  const state = d.ready ? 'READY' : 'NOT READY';
+  const review = d.pathway ? `review ${d.pathway}${d.by ? `, recorded by ${d.by}` : ''}` : 'no review recorded';
+  const lines = [
+    `PR #${d.pr} is ${state} at ${String(d.head).slice(0, 7)}: mergeable ${d.mergeable ?? 'unknown'}, ${plural(d.unresolved ?? 0, 'open thread')}.`,
+    `Review: ${review}.`,
+    d.ready ? 'land-pr.ps1 checks every gate again before it merges.' : `Not ready: ${clip((d.reasons ?? [])[0] ?? 'no reason given', 110)}.`,
+  ];
+  const go = d.ready ? opt('Land now', 'Runs land-pr.ps1 for this head. A push voids this answer.', true) : opt('Land when READY', 'Run land-pr.ps1 once READY is true for this head. A push voids this answer.', true);
+  return { header: 'Land', question: lines.join('\n'), options: [go, opt('Keep open', 'Nothing runs. The PR stays open.'), opt('Return to draft', 'Runs gh pr ready --undo. The review pick starts again.')] };
+}
+
+/** paid-round. data: { pr, round, files, today, paidRounds, verdict ('ALLOW'|'ESCALATE'|null), reasons, reason, caps: { round, day, rounds } }. */
+export function paidRoundSpec(d) {
+  const caps = d.caps ?? { round: 5, day: 15, rounds: 2 };
+  const cost = typeof d.files === 'number' ? d.files * PAID_PER_FILE : null;
+  const verdict = d.verdict === 'ALLOW' ? 'cr-paid says ALLOW.' : d.verdict === 'ESCALATE' ? `cr-paid says ESCALATE: ${clip((d.reasons ?? []).join('; '), 120)}.` : `cr-paid gave no verdict: ${clip(d.reason ?? 'unknown', 100)}.`;
+  const lines = [
+    cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${plural(d.files, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
+    `Today ${usd(d.today ?? 0)} of ${usd(caps.day)}. Paid rounds on this PR ${d.paidRounds ?? 0} of ${caps.rounds}. Round cap ${usd(caps.round)}.`,
+    verdict,
+  ];
+  const yes = d.verdict === 'ALLOW' ? `Yes, pay up to ${usd(cost ?? 0)}` : d.verdict === 'ESCALATE' ? `Yes, pay over the cap (up to ${usd(cost ?? 0)})` : 'Yes, pay (cost unknown)';
+  return { header: 'Paid round', question: lines.join('\n'), options: [
+    opt('No, keep it free', 'Posts nothing. The PR keeps its free-slot path.', true),
+    opt(yes, 'Posts @coderabbitai review --use-credits, then logs the round with cr-paid.mjs record.'),
+  ] };
+}
+
+// ---------- the data: git, gh, ledger ----------
+
+function git(args, cwd) {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+const topOf = () => git(['rev-parse', '--show-toplevel'], process.cwd()) ?? ROOT;
+
+/**
+ * The head of branch B: refs/heads/B, else fork/B. `null` when neither exists.
+ * With no --branch, or when B is the checked-out branch, the head is HEAD and the tree is the index (what a commit would hold).
+ * With another branch, the head and the tree are those of the ref, never of the checkout.
+ */
+function branchTarget(branch, cwd) {
+  const current = git(['branch', '--show-current'], cwd);
+  if (branch === undefined || branch === current) return { name: current, head: git(['rev-parse', 'HEAD'], cwd), tree: git(['write-tree'], cwd), ref: 'HEAD' };
+  for (const ref of [`refs/heads/${branch}`, `refs/remotes/fork/${branch}`]) {
+    const head = git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd);
+    if (head) return { name: branch, head, tree: git(['rev-parse', `${ref}^{tree}`], cwd), ref };
+  }
+  return { name: branch, head: null, tree: null, ref: null, missing: true };
+}
+
+/** { branch, head, tree, staged, ahead, subject } of --branch B (default: the checkout in the cwd). `missing` is set when B has no ref. */
+export function gatherShip({ branch, msg }) {
+  const cwd = process.cwd();
+  const t = branchTarget(branch, cwd);
+  const staged = (git(['diff', '--cached', '--name-only'], cwd) ?? '').split('\n').filter(Boolean).length;
+  const ahead = t.ref ? git(['rev-list', '--count', `fork/main..${t.ref}`], cwd) : null;
+  let subject = null;
+  try { subject = msg ? readFileSync(msg, 'utf8').split(/\r?\n/)[0] : null; } catch { /* no message file */ }
+  return { branch: t.name, head: t.head, tree: t.tree, staged, ahead: ahead === null ? null : Number(ahead), subject, missing: t.missing === true };
+}
+
+/** The stamp of this checkout, or null. */
+function readStamp() {
+  try { return JSON.parse(readFileSync(path.join(topOf(), '.claude', 'cache', 'pre-pr', 'stamp.json'), 'utf8')); } catch { return null; }
+}
+
+const costOfDetail = (detail) => Number(/billed \$([0-9.]+)/.exec(detail ?? '')?.[1] ?? 0);
+
+/** The CLI daily cap left today in dollars, or null when it cannot be read. */
+async function capLeft() {
+  try {
+    const { cliCapOf, cliTodayOf } = await import('./cr-paid.mjs');
+    const config = JSON.parse(readFileSync(path.join(topOf(), 'review-router.config.json'), 'utf8'));
+    const cap = cliCapOf(config);
+    return cap === null ? null : Math.max(0, cap - cliTodayOf().total);
+  } catch { return null; }
+}
+
+/** { branch, head, stampHead, stampAt, rows, fails, cliDetail, costUsd, capLeftUsd, now } for open-pr. */
+export async function gatherOpenPr({ branch }) {
+  const t = branchTarget(branch, process.cwd());
+  const stamp = readStamp();
+  const results = Array.isArray(stamp?.results) ? stamp.results : [];
+  const cli = results.find((r) => r.step === 'coderabbit');
+  return {
+    branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null, stampAt: stamp?.at ?? null,
+    rows: results.length, fails: results.filter((r) => r.status === 'FAIL').length, cliDetail: cli?.detail ?? null, costUsd: costOfDetail(cli?.detail),
+    capLeftUsd: await capLeft(), now: new Date().toISOString(),
+  };
+}
+
+/** { pr, head, ready, reasons, mergeable, unresolved, isDraft, prState, pathway, by } for land. Runs review-status.mjs (read-only). */
+export function gatherLand({ pr }, env = process.env) {
+  const script = env.SHIP_ASK_STATUS_SCRIPT || path.join(HERE, 'review-status.mjs');
+  const r = spawnSync(process.execPath, [script, String(pr), '--repo', DEFAULT_REPO, '--json'], { encoding: 'utf8', windowsHide: true, cwd: topOf() });
+  let s;
+  try { s = JSON.parse(r.stdout); } catch { throw new Error(`review-status.mjs gave no JSON for PR #${pr} (${one(r.stderr).slice(0, 120)})`); }
+  const record = readJson(path.join(topOf(), '.claude', 'cache', 'pre-pr', 'pathway.json'));
+  const mine = record && String(record.head).toLowerCase() === String(s.head).toLowerCase() ? record : null;
+  const label = (s.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).find((n) => String(n).startsWith('review:'));
+  return { pr, head: s.head, ready: s.ready === true, reasons: s.reasons ?? [], mergeable: s.mergeable_state, unresolved: s.unresolved, isDraft: s.isDraft === true, prState: s.prState, pathway: mine?.pathway ?? PATHWAY_OF_LABEL[label] ?? null, by: mine?.decided_by ?? null };
+}
+
+function readJson(file) {
+  try { return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null; } catch { return null; }
+}
+
+/** { pr, head, round, files, today, paidRounds, verdict, reasons, reason, caps } for paid-round. Runs the cr-paid estimate (reads GitHub). */
+export async function gatherPaid({ pr }) {
+  const { checkPr, LIMITS } = await import('./cr-paid.mjs');
+  const r = checkPr({ pr });
+  return { ...r, caps: { round: LIMITS.roundCents / 100, day: LIMITS.dayCents / 100, rounds: LIMITS.paidRounds } };
+}
+
+// ---------- plan: data -> { spec, key, head, tree } ----------
+
+/** { spec, key, head, tree } for a step and its data, or { refuse } when no question can be asked. */
+export function planOf(step, data, args) {
+  if (data.missing) return { refuse: `branch ${data.branch} does not exist (no refs/heads/${data.branch} and no fork/${data.branch}). Pass a branch that exists.` };
+  if (step === 'commit-and-push') return { spec: shipSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: data.tree ?? null };
+  if (step === 'open-pr') {
+    const ok = data.stampHead && data.fails === 0 && String(data.stampHead).toLowerCase() === String(data.head).toLowerCase();
+    return { spec: ok ? openPrSpec(data) : rerunPrePrSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: null };
+  }
+  const key = decisionKey({ pr: args.pr });
+  if (step === 'paid-round') return { spec: paidRoundSpec(data), key, head: data.head, tree: null };
+  if (data.isDraft) return { refuse: `PR #${args.pr} is a draft. Call pr_checkpoint {pr} first: land needs a ready PR.` };
+  if (data.prState && data.prState !== 'open') return { refuse: `PR #${args.pr} is ${data.prState}, not open.` };
+  return { spec: landSpec(data), key, head: data.head, tree: null };
+}
+
+// ---------- CLI ----------
+
+const VALUE_FLAGS = ['--pr', '--branch', '--msg', '--facts'];
+
+function parseArgs(argv) {
+  const [step, ...rest] = argv;
+  if (!Object.hasOwn(STORE_STEP, step ?? '')) return { error: `the step must be one of ${Object.keys(STORE_STEP).join(', ')}` };
+  const o = { step, json: false };
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--json') { o.json = true; continue; }
+    if (!VALUE_FLAGS.includes(rest[i]) || rest[i + 1] === undefined || rest[i + 1].startsWith('--')) return { error: `bad argument ${rest[i]}` };
+    o[rest[i].slice(2)] = rest[++i];
+  }
+  const byPr = step === 'land' || step === 'paid-round';
+  if (byPr && !/^[1-9]\d*$/.test(o.pr ?? '')) return { error: `${step} needs --pr N` };
+  if (!byPr && o.pr !== undefined) return { error: `${step} takes --branch, not --pr` };
+  if (step !== 'commit-and-push' && o.msg !== undefined) return { error: '--msg is a commit-and-push flag' };
+  return { o: { ...o, pr: byPr ? Number(o.pr) : undefined } };
+}
+
+async function dataOf(o) {
+  if (o.facts) return JSON.parse(readFileSync(o.facts, 'utf8'));
+  if (o.step === 'commit-and-push') return gatherShip({ branch: o.branch, msg: o.msg });
+  if (o.step === 'open-pr') return gatherOpenPr({ branch: o.branch });
+  return o.step === 'land' ? gatherLand({ pr: o.pr }) : gatherPaid({ pr: o.pr });
+}
+
+const textOf = (spec) => [`${spec.header}: ${spec.question}`, ...spec.options.map((x, i) => `  ${i + 1}. ${x.label} - ${x.description}`)].join('\n');
+
+async function main() {
+  const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.error) {
+    console.error(`ship-ask: usage: ${parsed.error}. node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]`);
+    process.exit(2);
+  }
+  const { o } = parsed;
+  try {
+    const plan = planOf(o.step, await dataOf(o), o);
+    if (plan.refuse) { console.error(`ship-ask: no question: ${plan.refuse}`); process.exit(1); }
+    if (!plan.head || !plan.key) { console.error('ship-ask: no question: the head or the branch could not be read.'); process.exit(1); }
+    const w = offerWrite({ step: STORE_STEP[o.step], key: plan.key, head: plan.head, spec: plan.spec, tree: plan.tree, cwd: process.cwd() });
+    if (!w.ok) { console.error(`ship-ask: the offer was not written (${w.reason}). Do not ask.`); process.exit(1); }
+    console.log(o.json ? JSON.stringify(plan.spec) : textOf(plan.spec));
+  } catch (err) {
+    console.error(`ship-ask: could not build the question (${String(err.message).split('\n')[0]})`);
+    process.exit(3);
+  }
+}
+
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)); }
+}
+if (isDirectRun()) await main();

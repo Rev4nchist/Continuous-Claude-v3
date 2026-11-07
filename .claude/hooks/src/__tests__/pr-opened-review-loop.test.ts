@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -360,5 +360,69 @@ describe('pr-opened-review-loop legacy state migration (unit)', () => {
     expect(alreadyFired(sid, URL_A)).toBe(false);
     markFired(sid, URL_A);
     expect(alreadyFired(sid, URL_A)).toBe(true);
+  });
+});
+
+/**
+ * Pathway flow v2 (N5). checkpoint.ledger in review-router.config.json picks the flow text.
+ * false: today's text. true: call pr_checkpoint, ask the returned question with AskUserQuestion, call it again. No typed command in either.
+ * Failure modes: the flag is ignored; the true text drops pr_watch or the body the tool still needs; a text tells Dave to type.
+ */
+describe('pr-opened-review-loop ledger flow text (N5)', () => {
+  const info = { owner: 'Rev4nchist', repo: 'Continuous-Claude-v3', number: '107', url: 'https://github.com/Rev4nchist/Continuous-Claude-v3/pull/107' };
+
+  it("false keeps today's text", () => {
+    expect(buildContext(info, false)).toBe(buildContext(info));
+    expect(buildContext(info)).toMatch(/pr_checkpoint tool with pr: 107 and body: /);
+    expect(buildContext(info)).not.toContain('AskUserQuestion');
+  });
+
+  it('true names the two-call flow with AskUserQuestion, after pr_watch', () => {
+    const ctx = buildContext(info, true);
+    expect(ctx).toMatch(/pr_checkpoint tool with pr: 107 and body: /);
+    expect(ctx).toContain('AskUserQuestion');
+    expect(ctx).toMatch(/call pr_checkpoint again/i);
+    expect(ctx.indexOf('pr_watch')).toBeLessThan(ctx.indexOf('pr_checkpoint'));
+    expect(ctx).toMatch(/never mark it ready/i);
+  });
+
+  it('no text tells Dave to type a command', () => {
+    for (const ledger of [false, true]) {
+      for (const repo of ['Continuous-Claude-v3', 'widgets']) {
+        const ctx = buildContext({ ...info, repo }, ledger);
+        expect(ctx).not.toMatch(/\/pathway </);
+        expect(ctx).not.toMatch(/\/slot pay/);
+      }
+    }
+    expect(buildContext(info, true)).not.toContain('/pathway');
+  });
+
+  it('another repo has no ledger flow, whatever the flag says', () => {
+    const other = { ...info, owner: 'acme', repo: 'widgets' };
+    expect(buildContext(other, true)).toBe(buildContext(other));
+  });
+
+  describe('the built hook reads the flag from the config above the payload cwd', () => {
+    const run = (config: string | null): string => {
+      const dir = mkdtempSync(join(tmpdir(), 'prloop-ledger-'));
+      try {
+        if (config !== null) writeFileSync(join(dir, 'review-router.config.json'), config);
+        const { stdout } = runHook({
+          session_id: sessionId(), cwd: dir, tool_name: 'Bash',
+          tool_input: { command: 'gh pr create --draft --title t --body-file b.md' },
+          tool_response: { stdout: 'https://github.com/Rev4nchist/Continuous-Claude-v3/pull/501\n', exit_code: 0 },
+        });
+        return (JSON.parse(stdout) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    };
+
+    it('ledger true gives the AskUserQuestion flow', () => {
+      expect(run(JSON.stringify({ checkpoint: { ledger: true } }))).toContain('AskUserQuestion');
+    });
+    it("ledger false, a string true, a missing key and bad JSON give today's flow", () => {
+      for (const c of [JSON.stringify({ checkpoint: { ledger: false } }), JSON.stringify({ checkpoint: { ledger: 'true' } }), '{}', 'not json']) {
+        expect(run(c), c).not.toContain('AskUserQuestion');
+      }
+    });
   });
 });

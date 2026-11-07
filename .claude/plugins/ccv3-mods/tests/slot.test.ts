@@ -5,7 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { TICKS } from './fixtures/slot-queue-ticks'
 import { askFor, reportLine, statusText, watchLine } from '../hooks/pr-loop/model'
 import type { Alert, PrStatus } from '../hooks/pr-loop/model'
-import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotLine, slotOf } from '../hooks/pr-loop/slot-model'
+import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotAskOf, slotAskSpec, slotLine, slotOf, toastText } from '../hooks/pr-loop/slot-model'
 import type { CheckpointRecord, SlotRow } from '../types'
 
 // The free-slot queue, the pure part (W3). The model lines, the ask and the tick parser run on real inputs; no engine world is needed
@@ -143,13 +143,23 @@ describe('slot: the tick parser reads the CLI contract (P1, F20)', () => {
     })
   }
 
-  test('F20 every toast that asks Dave for a paid round or reports a time-out names /slot <verb> <pr>', () => {
+  test('F20 every toast that asks Dave for a paid round or reports a time-out says Dave answers the question the session asks, and names no typed /slot command', () => {
     const asks = (['ask', 'timeout'] as const).flatMap(name => {
       const tick = parseTick(fixture(name))
       return tick && tick.ok ? tick.actions : []
     })
     expect(asks.length).toBe(2)
-    for (const action of asks) expect(action.text).toMatch(new RegExp(`/slot (pay|wait) ${action.pr}\\b`))
+    for (const action of asks) {
+      expect(action.text).toContain('Dave answers the question the session asks')
+      expect(action.text).not.toContain('/slot')
+    }
+  })
+
+  test('T1 toastText drops every "Type /slot ..." sentence and says Dave answers the question; a text with none is unchanged', () => {
+    const note = 'Dave answers the question the session asks.'
+    expect(toastText('PR #5: stuck. Type /slot drop 5 to remove it, or /slot wait 5 to try again.')).toBe(`PR #5: stuck. ${note}`)
+    expect(toastText('PR #7: x. Paid round $2.75 (cr-paid ALLOW). Type /slot pay 7, or wait.')).toBe(`PR #7: x. Paid round $2.75 (cr-paid ALLOW). ${note}`)
+    expect(toastText('PR #900: queued, 1 of 1. Next slot in about 12 minutes.')).toBe('PR #900: queued, 1 of 1. Next slot in about 12 minutes.')
   })
 
   test('P1 a failed tick ({ok:false, reason}) parses as a failure with its reason', () => {
@@ -203,8 +213,32 @@ describe('slot: the row text (P3)', () => {
     expect(lines.get('queued')).toMatch(/2 of 2/)
     expect(lines.get('queued')).toMatch(/12 min/)
     expect(lines.get('timed-out')).toMatch(/60 min/)
-    expect(lines.get('stuck')).toMatch(/\/slot drop 900/)
+    expect(lines.get('stuck')).toMatch(/pr_checkpoint 900/)
     expect(lines.get('opening')).toMatch(/label review/)
+  })
+
+  test('P3 no row text, and no question of the queue, tells Dave to type a /slot verb (Dave 2026-11-06: every decision is a tap)', () => {
+    const typed = /\/slot (pay|wait|drop|first)/i
+    for (const state of ['opening', 'awaiting-fix', 'queued', 'posted', 'timed-out', 'stuck', 'done', 'dropped']) expect(slotLine(row({ state })), state).not.toMatch(typed)
+    for (const name of ['ask', 'timeout'] as const) {
+      const tick = parseTick(TICKS[name])
+      const asks = tick && tick.ok ? tick.actions.flatMap(action => slotAskOf(action) ?? []) : []
+      expect(asks.length, name).toBe(1)
+      const spec = slotAskSpec(asks[0]!)
+      expect(spec.question, name).not.toMatch(typed)
+      for (const choice of spec.choices) expect(choice.label, name).not.toMatch(typed)
+    }
+  })
+
+  test('P3 the Pay row follows what the CLI text says: ALLOW, a failed read and the 60 minute time-out offer it; ESCALATE does not', () => {
+    const action = (text: string) => ({ kind: 'toast' as const, pr: 5, text })
+    const canPay = (text: string) => slotAskOf(action(text))?.canPay
+    expect(canPay('PR #5: no free slot for 30 minutes. Paid round $2.75 (cr-paid ALLOW). Type /slot pay 5, or wait.')).toBe(true)
+    expect(canPay('PR #5: no free slot for 30 minutes. The paid-round check could not be read (no answer). Type /slot pay 5 to try it again, or /slot wait 5 to keep waiting.')).toBe(true)
+    expect(canPay('PR #5: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Type /slot pay 5 or /slot wait 5.')).toBe(true)
+    expect(canPay('PR #5: no free slot for 30 minutes. A paid round is not allowed (over the day cap). Type /slot wait 5 to keep waiting.')).toBe(false)
+    expect(slotAskOf(action('PR #5: no free slot for 30 minutes. Paid round $2.75 (cr-paid ALLOW). Type /slot pay 5, or wait.'))?.cost).toBe('$2.75')
+    expect(slotAskOf(action('PR #5: queued 1 of 2.'))).toBeNull()
   })
 
   test('P3 a free slot says so instead of "about 0 minutes"', () => {
@@ -413,7 +447,8 @@ describe('slot: the tick delivers (M2, M5, F17)', () => {
     const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }] })
     await startLoop($)
     await w.clock.advance(TICK)
-    expect(w.seen.toasts).toEqual([JSON.parse(TICKS.ask).actions[0].text])
+    expect(w.seen.toasts).toEqual(['PR #901: no free slot for 30 minutes. Paid round $2.75 (cr-paid ALLOW). Dave answers the question the session asks, or the item keeps waiting.'])
+    expect(w.seen.toasts[0]).not.toContain('/slot')
   })
 
   test('M2 a tick with no action gives no toast, and the rows reach /watch', async ($, on) => {
@@ -429,8 +464,8 @@ describe('slot: the tick delivers (M2, M5, F17)', () => {
     const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.timeout }] })
     await startLoop($)
     await w.clock.advance(TICK)
-    expect(w.seen.toasts).toEqual([JSON.parse(TICKS.timeout).actions[0].text])
-    expect(w.seen.toasts[0]).toMatch(/\/slot pay 900/)
+    expect(w.seen.toasts).toEqual(['PR #900: no free slot for 60 minutes; still queued; READY still needs a CodeRabbit review. Dave answers the question the session asks: pay or keep waiting.'])
+    expect(w.seen.toasts[0]).not.toContain('/slot')
   })
 
   test('M5 two failed ticks in a row give one toast; a good tick between them resets the count', async ($, on) => {
@@ -443,7 +478,8 @@ describe('slot: the tick delivers (M2, M5, F17)', () => {
     await w.clock.advance(TICK)
     expect(w.seen.toasts.length).toBe(1)
     expect(w.seen.toasts[0]).toContain('slot-queue: bad state file')
-    expect(w.seen.toasts[0]).toContain('/slot')
+    expect(w.seen.toasts[0]).toContain('The queue could not be read twice. Dave answers the question the session asks.')
+    expect(w.seen.toasts[0]).not.toContain('/slot')
   })
 
   test('M5 a tick with no output at all is a failure too', async ($, on) => {
@@ -639,7 +675,7 @@ describe('slot: the paid ask and the time-out are dialogs (T17)', () => {
     const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: 'dismiss' })
     await startLoop($)
     await w.clock.advance(TICK)
-    expect(w.seen.toasts).toEqual([JSON.parse(TICKS.ask).actions[0].text])
+    expect(w.seen.toasts).toEqual(['PR #901: no free slot for 30 minutes. Paid round $2.75 (cr-paid ALLOW). Dave answers the question the session asks, or the item keeps waiting.'])
     expect(w.seen.dialogs.length).toBe(1)
     const [dialog] = w.seen.dialogs
     expect(dialog!.question).toContain('#901')

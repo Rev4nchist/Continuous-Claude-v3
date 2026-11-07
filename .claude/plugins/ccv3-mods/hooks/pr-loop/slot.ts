@@ -4,7 +4,7 @@ import type { EngineInterface } from 'claude-code'
 import type { SlotAction, SlotRow, SlotTick } from '../../types'
 import type { Alert } from './model'
 import { askDave, freeDialog, takeDialog } from '../pr-checkpoint/ask'
-import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotAskOf, slotAskSpec, slotOf } from './slot-model'
+import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotAskOf, slotAskSpec, slotOf, toastText } from './slot-model'
 import type { SlotVerb } from './slot-model'
 
 // The mod side of the free-slot queue. The queue is scripts/github/slot-queue.mjs; this file runs it and shows what it says.
@@ -97,9 +97,9 @@ async function setRows($: EngineInterface, rows: SlotRow[]): Promise<void> {
   await update($, slotRows, () => rows)
 }
 
-/** One toast per action. Each action that asks Dave for an answer names its `/slot` command. */
+/** One toast per action. The CLI's "Type /slot ..." sentence is replaced: Dave answers the question the session asks. */
 export function deliverActions($: EngineInterface, actions: SlotAction[]): void {
-  for (const action of actions) $.ui.toast(action.text, { timeoutMs: TOAST_MS })
+  for (const action of actions) $.ui.toast(toastText(action.text), { timeoutMs: TOAST_MS })
 }
 
 /** Consecutive failed ticks. Two in a row give one toast; a good tick resets the count. */
@@ -107,7 +107,7 @@ export type Streak = { fails: number }
 
 function failTick($: EngineInterface, streak: Streak, reason: string): void {
   streak.fails += 1
-  if (streak.fails === 2) $.ui.toast(`Free-slot queue: the tick failed twice in a row (${reason}). Type /slot to read the queue.`, { timeoutMs: TOAST_MS })
+  if (streak.fails === 2) $.ui.toast(`Free-slot queue: the tick failed twice in a row (${reason}). The queue could not be read twice. Dave answers the question the session asks.`, { timeoutMs: TOAST_MS })
 }
 
 async function readTick($: EngineInterface, found: Found): Promise<SlotTick> {

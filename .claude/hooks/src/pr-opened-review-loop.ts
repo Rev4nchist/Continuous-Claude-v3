@@ -15,7 +15,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
+import { routerFlag } from './shared/router-config.js';
 
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 
@@ -183,7 +184,27 @@ const WATCH_REPO = 'rev4nchist/continuous-claude-v3';
 const loopText = (info: PrInfo): string =>
   `/loop 5m Check the PR review bots that must review the head (in CCv3, the bots \`node scripts/github/review-status.mjs ${info.number}\` requires; elsewhere, the repo's configured bots) on ${info.owner}/${info.repo} PR #${info.number} (stop when reviews of the head land or after 60 minutes; fix real findings; dismiss false positives with a reason; verify thread isResolved via GraphQL; never merge)`;
 
-export function buildContext(info: PrInfo): string {
+/**
+ * The pr_checkpoint sentence. Flag off (checkpoint.ledger false): today's text. Flag on: the tool returns the review question,
+ * the model asks it with AskUserQuestion and calls the tool again, and only Dave's tap records. The tool still needs `body`.
+ */
+function checkpointText(info: PrInfo, ledger: boolean): string {
+  const call = `the pr_checkpoint tool with pr: ${info.number} and body: the path of the PR body file that pre-pr.mjs --body checked (mcp__ccv3-mods__pr_checkpoint)`;
+  const never = 'Never mark it ready or add a review: label yourself; the checkpoint does both. ';
+  if (ledger) {
+    return (
+      `Either way, also call ${call}. ` +
+      'If it returns a question, ask Dave that question with AskUserQuestion, word for word, then call pr_checkpoint again with the same pr and body. ' +
+      'Only his tap records a pick. An answer that matches no option records nothing, and the PR stays a draft. ' + never
+    );
+  }
+  return (
+    `Either way, also call ${call}. ` +
+    'Without that call /pathway has no checkpoint to record, and the PR stays a draft. ' + never
+  );
+}
+
+export function buildContext(info: PrInfo, ledger = false): string {
   const head = `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-review-loop.md, `;
   if (`${info.owner}/${info.repo}`.toLowerCase() === WATCH_REPO) {
     return (
@@ -191,8 +212,7 @@ export function buildContext(info: PrInfo): string {
       `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. ` +
       `It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave and you at READY; never merge. ` +
       `Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. ` +
-      `Either way, also call the pr_checkpoint tool with pr: ${info.number} and body: the path of the PR body file that pre-pr.mjs --body checked (mcp__ccv3-mods__pr_checkpoint). ` +
-      `Without that call /pathway has no checkpoint to record, and the PR stays a draft. Never mark it ready or add a review: label yourself; the checkpoint does both. ` +
+      checkpointText(info, ledger) +
       `This applies to every PR in every session.`
     );
   }
@@ -201,6 +221,12 @@ export function buildContext(info: PrInfo): string {
     `START THE REVIEW LOOP NOW, in this same turn: ${loopText(info)}. ` +
     `This applies to every PR in every session.`
   );
+}
+
+/** checkpoint.ledger of review-router.config.json, from the payload cwd upward (no git). Only a literal true is on. */
+function ledgerOn(cwd: string): boolean {
+  const readFile = (p: string): string | null => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
+  return routerFlag(cwd || process.cwd(), readFile, homedir(), 'checkpoint', 'ledger');
 }
 
 export function main(): void {
@@ -242,7 +268,7 @@ export function main(): void {
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PostToolUse',
-        additionalContext: buildContext(info),
+        additionalContext: buildContext(info, ledgerOn((input.cwd as string) || '')),
       },
     }),
   );

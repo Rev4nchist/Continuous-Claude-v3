@@ -151,6 +151,14 @@
           {
             "type": "command",
             "command": "node",
+            "timeout": 10,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/decision-gate.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
             "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
@@ -183,6 +191,14 @@
             "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pre-pr-gate.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/decision-gate.mjs"
             ]
           },
           {
@@ -229,6 +245,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/decision-gate.mjs"
+            ]
           }
         ]
       },
@@ -246,6 +270,19 @@
         ]
       },
       {
+        "matcher": "NotebookEdit|mcp__plugin_desktop-commander_desktop-commander__write_file|mcp__plugin_desktop-commander_desktop-commander__edit_block|mcp__plugin_desktop-commander_desktop-commander__move_file|mcp__plugin_desktop-commander_desktop-commander__write_pdf",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/decision-gate.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -254,6 +291,14 @@
             "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/file-claims.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/decision-gate.mjs"
             ]
           }
         ]
@@ -285,7 +330,7 @@
         ]
       },
       {
-        "matcher": "Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*|mcp__playwright__.*|mcp__claude-in-chrome__.*|WebFetch|WebSearch",
+        "matcher": "Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*|mcp__playwright__.*|mcp__claude-in-chrome__.*|mcp__ccv3-mods__pr_checkpoint|WebFetch|WebSearch",
         "hooks": [
           {
             "type": "command",
@@ -531,6 +576,19 @@
               "{{CLAUDE_HOME}}/hooks/dist/periodic-extract.mjs"
             ],
             "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/decision-ledger.mjs"
+            ]
           }
         ]
       },
