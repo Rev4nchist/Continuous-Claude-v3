@@ -336,39 +336,138 @@ def _extract_error_context(text: str, max_len: int = 500) -> str:
     return text[:max_len] if text else ""
 
 
-def load_state(state_file: str | None) -> ExtractionState:
-    """Load extraction state from file."""
-    if not state_file or not os.path.exists(state_file):
-        return ExtractionState(
-            session_id="",
-            last_extracted_line=0,
-            recent_hashes=[],
-            last_extraction_time=""
-        )
+# State file shape (B9, version 2), shared with .claude/hooks/src/shared/extraction-state.ts:
+#   {"version": 2, "recent_hashes": [...],
+#    "sessions": {"<session id>": {"last_extracted_line", "last_launched", "last_extraction_time"}}}
+# A line index only means something inside ONE transcript, so it is kept per session.
+# The old flat shape ({"session_id", "last_extracted_line", ...}) still loads: it maps to the
+# one session it names. A flat file with no session id maps to no session.
+_STATE_VERSION = 2
+_STATE_MAX_SESSIONS = 50
+_LOCK_STALE_S = 10.0
+_LOCK_TIMEOUT_S = 5.0
 
+
+def _empty_raw_state() -> dict:
+    return {"version": _STATE_VERSION, "recent_hashes": [], "sessions": {}}
+
+
+def _read_raw_state(state_file: str | None) -> dict:
+    """Read the state file (either shape) as {"recent_hashes": [...], "sessions": {...}}.
+
+    Never raises: a missing, empty or corrupt file reads as empty state.
+    """
+    raw = _empty_raw_state()
+    if not state_file:
+        return raw
     try:
-        with open(state_file, "r") as f:
+        with open(state_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return ExtractionState(
-                session_id=data.get("session_id", ""),
-                last_extracted_line=data.get("last_extracted_line", 0),
-                recent_hashes=data.get("recent_hashes", []),
-                last_extraction_time=data.get("last_extraction_time", "")
-            )
-    except (json.JSONDecodeError, IOError):
-        return ExtractionState(
-            session_id="",
-            last_extracted_line=0,
-            recent_hashes=[],
-            last_extraction_time=""
-        )
+    except (OSError, ValueError):
+        return raw
+    if not isinstance(data, dict):
+        return raw
+
+    hashes = data.get("recent_hashes")
+    if isinstance(hashes, list):
+        raw["recent_hashes"] = [h for h in hashes if isinstance(h, str)]
+
+    sessions = data.get("sessions")
+    if isinstance(sessions, dict):
+        raw["sessions"] = {k: v for k, v in sessions.items() if isinstance(v, dict)}
+    elif isinstance(data.get("session_id"), str) and data["session_id"]:
+        raw["sessions"] = {data["session_id"]: {
+            k: data[k]
+            for k in ("last_extracted_line", "last_launched", "last_extraction_time")
+            if k in data
+        }}
+    return raw
+
+
+def load_state(state_file: str | None, session_id: str | None = None) -> ExtractionState:
+    """Load the extraction state of ONE session. Hashes are shared across sessions."""
+    raw = _read_raw_state(state_file)
+    entry = raw["sessions"].get(session_id or "", {})
+    line = entry.get("last_extracted_line", 0)
+    return ExtractionState(
+        session_id=session_id or "",
+        last_extracted_line=line if isinstance(line, int) and line >= 0 else 0,
+        recent_hashes=raw["recent_hashes"],
+        last_extraction_time=str(entry.get("last_extraction_time", "")),
+    )
+
+
+def _acquire_lock(lock_file: str) -> bool:
+    """Take the same O_EXCL lock file as shared/atomic-write.ts (state_file + '.lock')."""
+    import time
+
+    start = time.monotonic()
+    while True:
+        try:
+            fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                if time.time() - os.stat(lock_file).st_mtime > _LOCK_STALE_S:
+                    os.unlink(lock_file)
+                    continue
+            except OSError:
+                continue
+            if time.monotonic() - start > _LOCK_TIMEOUT_S:
+                return False
+            time.sleep(0.05)
+        except OSError:
+            return False
+        else:
+            try:
+                os.write(fd, f"{os.getpid()}\n{int(time.time() * 1000)}".encode())
+            finally:
+                os.close(fd)
+            return True
 
 
 def save_state(state_file: str, state: ExtractionState) -> None:
-    """Save extraction state to file."""
-    os.makedirs(os.path.dirname(state_file), exist_ok=True)
-    with open(state_file, "w") as f:
-        json.dump(state, f, indent=2)
+    """Save one session's progress into the state file.
+
+    Read-modify-write under the shared lock: only this session's entry and the shared
+    hashes change, so other sessions and `last_launched` survive. The write goes to a
+    temp file, then os.replace, so a reader never sees an empty or half-written file.
+    """
+    state_dir = os.path.dirname(state_file) or "."
+    os.makedirs(state_dir, exist_ok=True)
+    lock_file = state_file + ".lock"
+    locked = _acquire_lock(lock_file)  # fail open: write anyway, as the TS side does
+    tmp_file = os.path.join(state_dir, f".{os.path.basename(state_file)}.tmp.{os.getpid()}")
+    try:
+        raw = _read_raw_state(state_file)
+        raw["recent_hashes"] = list(state.get("recent_hashes", []))
+        session_id = state.get("session_id", "")
+        if session_id:
+            entry = dict(raw["sessions"].get(session_id, {}))
+            entry["last_extracted_line"] = state.get("last_extracted_line", 0)
+            entry["last_extraction_time"] = state.get("last_extraction_time", "")
+            raw["sessions"][session_id] = entry
+        if len(raw["sessions"]) > _STATE_MAX_SESSIONS:
+            def recency(item: tuple[str, dict]) -> str:
+                return str(item[1].get("last_extraction_time", ""))
+            newest = sorted(raw["sessions"].items(), key=recency, reverse=True)
+            keep = dict(newest[:_STATE_MAX_SESSIONS])
+            if session_id in raw["sessions"]:
+                keep[session_id] = raw["sessions"][session_id]
+            raw["sessions"] = keep
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(raw, f, indent=2)
+        os.replace(tmp_file, state_file)
+    finally:
+        if os.path.exists(tmp_file):
+            try:
+                os.unlink(tmp_file)
+            except OSError:
+                pass
+        if locked:
+            try:
+                os.unlink(lock_file)
+            except OSError:
+                pass
 
 
 _UNSAFE_DISTILL_REASONS = frozenset({"distill:injected", "distill:secret"})
@@ -554,7 +653,7 @@ async def extract_incremental(
         return result
 
     # Load existing state for dedup hashes
-    state = load_state(state_file)
+    state = load_state(state_file, session_id)
     existing_hashes = set(state.get("recent_hashes", []))
     rejected_hashes = load_rejected_hashes()
 

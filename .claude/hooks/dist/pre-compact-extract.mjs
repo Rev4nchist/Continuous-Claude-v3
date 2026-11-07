@@ -170,17 +170,122 @@ function releaseLockSync(filePath) {
     log.warn("Failed to release lock", { lockFile, error: String(err) });
   }
 }
-function writeStateWithLock(filePath, content) {
-  const locked = acquireLockSync(filePath);
-  try {
-    atomicWriteSync(filePath, content);
-  } catch (err) {
-    log.error("State write failed", { filePath, error: String(err) });
-  } finally {
-    if (locked) {
-      releaseLockSync(filePath);
+function mutateStateWithLock(filePath, transformFn, opts = {}) {
+  const lockTimeoutMs = opts.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
+  const lockStart = Date.now();
+  const locked = acquireLockSync(filePath, lockTimeoutMs);
+  const waitMs = Date.now() - lockStart;
+  if (opts.onLockOutcome) {
+    try {
+      opts.onLockOutcome({ acquired: locked, wait_ms: waitMs });
+    } catch {
     }
   }
+  if (!locked) {
+    log.warn("mutateStateWithLock: lock not acquired, skipping write", { filePath });
+    return false;
+  }
+  try {
+    let current;
+    if (!existsSync2(filePath)) {
+      current = null;
+    } else {
+      try {
+        current = readFileSync(filePath, "utf-8");
+      } catch (err) {
+        log.warn("mutateStateWithLock: existing file unreadable, aborting write", {
+          filePath,
+          error: String(err)
+        });
+        return false;
+      }
+    }
+    let next;
+    try {
+      next = transformFn(current);
+    } catch (err) {
+      log.error("mutateStateWithLock: transform threw, leaving file untouched", {
+        filePath,
+        error: String(err)
+      });
+      return false;
+    }
+    if (next == null) {
+      return false;
+    }
+    const writeStart = Date.now();
+    atomicWriteSync(filePath, next);
+    if (opts.onWriteTiming) {
+      try {
+        opts.onWriteTiming({ write_ms: Date.now() - writeStart });
+      } catch {
+      }
+    }
+    return true;
+  } catch (err) {
+    log.error("mutateStateWithLock: write failed", { filePath, error: String(err) });
+    return false;
+  } finally {
+    releaseLockSync(filePath);
+  }
+}
+
+// src/shared/extraction-state.ts
+var STATE_VERSION = 2;
+var MAX_SESSIONS = 50;
+var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+var finiteNumber = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : void 0;
+function cleanEntry(raw) {
+  const o = isObject(raw) ? raw : {};
+  const entry = {};
+  const line = finiteNumber(o.last_extracted_line);
+  const launched = finiteNumber(o.last_launched);
+  if (line !== void 0) entry.last_extracted_line = line;
+  if (launched !== void 0) entry.last_launched = launched;
+  if (typeof o.last_extraction_time === "string") entry.last_extraction_time = o.last_extraction_time;
+  return entry;
+}
+function parseState(text) {
+  const sessions = /* @__PURE__ */ Object.create(null);
+  const state = { version: STATE_VERSION, recent_hashes: [], sessions };
+  if (!text || !text.trim()) return state;
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return state;
+  }
+  if (!isObject(data)) return state;
+  if (Array.isArray(data.recent_hashes)) {
+    state.recent_hashes = data.recent_hashes.filter((h) => typeof h === "string");
+  }
+  if (isObject(data.sessions)) {
+    for (const [sid, entry] of Object.entries(data.sessions)) sessions[sid] = cleanEntry(entry);
+  } else if (typeof data.session_id === "string" && data.session_id) {
+    sessions[data.session_id] = cleanEntry(data);
+  }
+  return state;
+}
+function sessionStartLine(state, sessionId) {
+  return state.sessions[sessionId]?.last_extracted_line ?? 0;
+}
+function inCooldown(state, sessionId, now, cooldownMs) {
+  const launched = state.sessions[sessionId]?.last_launched;
+  return launched !== void 0 && now - launched < cooldownMs;
+}
+function withLaunchStamp(state, sessionId, now) {
+  const sessions = /* @__PURE__ */ Object.create(null);
+  for (const [sid, entry] of Object.entries(state.sessions)) sessions[sid] = { ...entry };
+  sessions[sessionId] = { ...sessions[sessionId], last_launched: now };
+  const recency = (e) => Math.max(e.last_launched ?? 0, Date.parse(e.last_extraction_time ?? "") || 0);
+  const ids = Object.keys(sessions);
+  if (ids.length > MAX_SESSIONS) {
+    ids.sort((a, b) => recency(sessions[b]) - recency(sessions[a]));
+    for (const sid of ids.slice(MAX_SESSIONS)) {
+      if (sid !== sessionId) delete sessions[sid];
+    }
+  }
+  return { version: STATE_VERSION, recent_hashes: state.recent_hashes, sessions };
 }
 
 // src/pre-compact-extract.ts
@@ -190,18 +295,11 @@ function getOpcDir() {
 function getStateFilePath(projectDir) {
   return path.join(projectDir, ".claude", "extraction-state.json");
 }
-function loadState(stateFile) {
-  if (!fs.existsSync(stateFile)) {
-    return { last_extracted_line: 0, recent_hashes: [] };
-  }
+function readStateOrNull(stateFile) {
   try {
-    const data = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-    return {
-      last_extracted_line: data.last_extracted_line || 0,
-      recent_hashes: data.recent_hashes || []
-    };
+    return fs.readFileSync(stateFile, "utf-8");
   } catch {
-    return { last_extracted_line: 0, recent_hashes: [] };
+    return null;
   }
 }
 function runBackgroundExtraction(transcriptPath, sessionId, startLine, stateFile, projectDir) {
@@ -240,6 +338,51 @@ function runBackgroundExtraction(transcriptPath, sessionId, startLine, stateFile
     return false;
   }
 }
+var COOLDOWN_MS = 5 * 60 * 1e3;
+function runPreCompactExtract(data, projectDir, deps = {}) {
+  const launcher = deps.launcher ?? ((a) => runBackgroundExtraction(a.transcriptPath, a.sessionId, a.startLine, a.stateFile, a.projectDir));
+  const now = deps.now ?? Date.now;
+  const sessionId = data.session_id;
+  const transcriptPath = data.transcript_path;
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+    return { continue: true, systemMessage: "[PreCompact] No transcript available for extraction" };
+  }
+  const stateFile = getStateFilePath(projectDir);
+  try {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  } catch {
+  }
+  const launchFor = (state) => launcher({
+    transcriptPath,
+    sessionId,
+    startLine: sessionStartLine(state, sessionId),
+    stateFile,
+    projectDir
+  });
+  let ran = false;
+  let cooling = false;
+  let launched = false;
+  mutateStateWithLock(stateFile, (current) => {
+    ran = true;
+    const state = parseState(current);
+    if (inCooldown(state, sessionId, now(), COOLDOWN_MS)) {
+      cooling = true;
+      return null;
+    }
+    launched = launchFor(state);
+    return launched ? JSON.stringify(withLaunchStamp(state, sessionId, now()), null, 2) : null;
+  });
+  if (!ran) {
+    const state = parseState(readStateOrNull(stateFile));
+    if (inCooldown(state, sessionId, now(), COOLDOWN_MS)) cooling = true;
+    else launched = launchFor(state);
+  }
+  if (cooling) {
+    return { continue: true, systemMessage: "[PreCompact:L0] Cooldown active, skipping extraction" };
+  }
+  const message = launched ? "[PreCompact:L0] Memory extraction launched (background)" : "[PreCompact:L0] Memory extraction unavailable";
+  return { continue: true, systemMessage: message };
+}
 async function main() {
   if (process.env.CCV3_DISTILL_CHILD) {
     console.log(JSON.stringify({ continue: true }));
@@ -258,43 +401,7 @@ async function main() {
     return;
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const sessionId = data.session_id;
-  const transcriptPath = data.transcript_path;
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-    const output2 = {
-      continue: true,
-      systemMessage: "[PreCompact] No transcript available for extraction"
-    };
-    console.log(JSON.stringify(output2));
-    return;
-  }
-  const stateFile = getStateFilePath(projectDir);
-  const state = loadState(stateFile);
-  const COOLDOWN_MS = 5 * 60 * 1e3;
-  const stateWithMeta = state;
-  if (stateWithMeta.last_launched && Date.now() - stateWithMeta.last_launched < COOLDOWN_MS) {
-    console.log(JSON.stringify({ continue: true, systemMessage: "[PreCompact:L0] Cooldown active, skipping extraction" }));
-    return;
-  }
-  try {
-    const stateData = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, "utf-8")) : {};
-    stateData.last_launched = Date.now();
-    writeStateWithLock(stateFile, JSON.stringify(stateData, null, 2));
-  } catch {
-  }
-  const launched = runBackgroundExtraction(
-    transcriptPath,
-    sessionId,
-    state.last_extracted_line,
-    stateFile,
-    projectDir
-  );
-  const message = launched ? "[PreCompact:L0] Memory extraction launched (background)" : "[PreCompact:L0] Memory extraction unavailable";
-  const output = {
-    continue: true,
-    systemMessage: message
-  };
-  console.log(JSON.stringify(output));
+  console.log(JSON.stringify(runPreCompactExtract(data, projectDir)));
 }
 async function readStdin() {
   return new Promise((resolve) => {
@@ -304,7 +411,12 @@ async function readStdin() {
     process.stdin.on("end", () => resolve(data));
   });
 }
-main().catch((err) => {
-  console.error("pre-compact-extract error:", err);
-  console.log(JSON.stringify({ continue: true }));
-});
+if ((process.argv[1] || "").includes("pre-compact-extract")) {
+  main().catch((err) => {
+    console.error("pre-compact-extract error:", err);
+    console.log(JSON.stringify({ continue: true }));
+  });
+}
+export {
+  runPreCompactExtract
+};

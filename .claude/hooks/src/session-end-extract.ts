@@ -17,18 +17,12 @@ import { execSync, spawnSync } from 'child_process';
 import * as path from 'path';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import * as fs from 'fs';
+import { parseState, sessionStartLine } from './shared/extraction-state.js';
 
 interface SessionEndInput {
   session_id: string;
   type?: string;
   transcript_path?: string;
-}
-
-interface ExtractionState {
-  session_id: string;
-  last_extracted_line: number;
-  recent_hashes: string[];
-  last_extraction_time: string;
 }
 
 const MIN_TURNS = 10;
@@ -42,10 +36,10 @@ function getStateFilePath(projectDir: string): string {
   return path.join(projectDir, '.claude', 'extraction-state.json');
 }
 
-function loadExtractionState(stateFile: string): ExtractionState | null {
+function loadExtractionState(stateFile: string): string | null {
   if (!fs.existsSync(stateFile)) return null;
   try {
-    return JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+    return fs.readFileSync(stateFile, 'utf-8');
   } catch {
     return null;
   }
@@ -82,7 +76,8 @@ function extractWithDedup(sessionId: string, projectDir: string, transcriptPath?
   // If we have transcript and incremental_extract.py, use dedup-aware extraction
   const incrementalScript = path.join(opcDir, 'scripts', 'core', 'incremental_extract.py');
   if (transcriptPath && fs.existsSync(transcriptPath) && fs.existsSync(incrementalScript)) {
-    const startLine = state?.last_extracted_line || 0;
+    // Per session (B9): a line index only means something inside its own transcript.
+    const startLine = sessionStartLine(parseState(state), sessionId);
 
     console.error(`[SessionEnd:L3] Final sweep from line ${startLine} with dedup (fire-and-forget)`);
 
