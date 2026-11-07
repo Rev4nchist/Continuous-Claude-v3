@@ -156,11 +156,15 @@ export const ALWAYS_GATES = [
  * gate is dropped when none match, and `noneNote` becomes a NOTE line. A surface with `manual` adds a NOTE line
  * (with or without gates). A changed path that no surface owns, and is not in the docs class, adds its own NOTE.
  */
+const GITHUB_TESTS = nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN);
 const BEHAVIOUR = 'after the forward sync, run the AGENTS.md behaviour check: claude -p "<a prompt this change targets>" --output-format json, and keep the JSON';
 export const SURFACES = [
   {
     id: 'hooks',
-    globs: ['.claude/hooks/src/**', '.claude/hooks/dist/**', '.claude/hooks/package.json', '.claude/hooks/vitest.config.ts', '.claude/settings.json.template'],
+    globs: ['.claude/hooks/src/**', '.claude/hooks/dist/**', '.claude/hooks/package.json', '.claude/hooks/vitest.config.ts', '.claude/settings.json.template',
+      // Dependencies of the build and the vitest run: a change here can leave dist stale or break a test without touching hooks/src (#352 -> #353).
+      '.claude/hooks/package-lock.json', '.claude/hooks/tsconfig*.json', 'scripts/worktree/**/*.mjs', '.github/workflows/*.yml', '.github/workflows/*.yaml', // code and YAML only: a README beside them is docs and runs no gate
+    ],
     gates: [
       {
         id: 'hooks-build', cmd: 'npm', args: ['run', 'build'], cwd: '.claude/hooks', timeoutMs: 5 * MIN,
@@ -233,7 +237,10 @@ export const SURFACES = [
   },
   { id: 'templates', globs: ['.claude/templates/**'], gates: [], manual: 'an always-loaded template: the context-budget gate runs anyway; the sync installs it' },
   // The github suite is the longest gate on this machine (real git, child processes and PowerShell).
-  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN), nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/*.test.mjs', 5 * MIN)] },
+  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [GITHUB_TESTS, nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/*.test.mjs', 5 * MIN)] },
+  // Dependency row: scripts/github tests read scripts/coordination (CI github-tests caught a drift that #343 never ran locally).
+  // Only github-tests, not the lib and local-review suites. scripts/github/pre-pr.mjs is already owned by github-scripts above.
+  { id: 'github-deps', globs: ['scripts/coordination/**'], gates: [GITHUB_TESTS] },
   { id: 'trex', globs: ['.trex/**', 'scripts/trex/**', 'docker/trex/**', 'apps/agentic-os/.trex/**', 'apps/agentic-os/e2e/trex-*.spec.ts', 'apps/agentic-os/playwright.trex.config.ts', 'scripts/checks/test-map.mjs'], gates: [nodeTest('trex-tests', 'scripts/trex/**/*.test.mjs')] },
   {
     id: 'mod',
@@ -289,6 +296,7 @@ export function gatesFor(changed) {
   const paths = changed.map(norm);
   const out = [];
   const add = (gate) => {
+    if (out.some((g) => g.id === gate.id)) return; // two surfaces can name one gate: it runs once
     const resolved = resolveGate(gate, paths);
     if (resolved) out.push(resolved);
   };
