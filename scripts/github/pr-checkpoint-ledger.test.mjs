@@ -241,9 +241,9 @@ test('LD12: a stopped result (no stamp head match) and an auto-eligible LOW PR o
   assert.deepEqual(D.offerList(), []);
 });
 
-test('LD13: the live config has checkpoint.ledger ON (Dave 2026-11-07), decisions.enforce OFF, and auto-confirm at low', () => {
+test('LD13: the live config has checkpoint.ledger ON (Dave 2026-11-07), decisions.enforce ON (Dave 2026-11-07), and auto-confirm at low', () => {
   assert.strictEqual(LIVE.checkpoint.ledger, true, 'checkpoint.ledger is on (Dave, 2026-11-07)');
-  assert.strictEqual(LIVE.decisions?.enforce, false, 'decisions.enforce ships false');
+  assert.strictEqual(LIVE.decisions?.enforce, true, 'decisions.enforce is on (Dave, 2026-11-07)');
   assert.strictEqual(LIVE.checkpoint.autoConfirm, 'low');
   const docs = LIVE._doc.join('\n');
   assert.match(docs, /checkpoint\.ledger/);
