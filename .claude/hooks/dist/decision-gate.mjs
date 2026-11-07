@@ -459,6 +459,11 @@ function isStorePath(p, deps, cwd) {
   const store = norm(decisionsPath2(deps.env));
   return STORE_PATH_RE.test(full) || full === store || full.startsWith(`${store}.`);
 }
+var escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function readCopyRe(deps) {
+  const store = escRe(norm(decisionsPath2(deps.env)));
+  return new RegExp(`\\b(?:cp|copy|copy-item)\\s+(?:-(?:[frpavinu]{1,4}|-?(?:force|recurse|recursive|verbose|confirm|whatif))\\s+)*["']?(?:(?:[^\\s"';|&]*\\/)?ccv3-mods\\/+decisions\\.json|${store})["']?(?=\\s+[^\\s;|&])`, "gi");
+}
 var STORE_CODE_RE = /[\\/]lib[\\/]decisions\.mjs/i;
 var STORE_FN_RE = /\b(?:decisionRecord|offerWrite|decisionUse|missBump)\b/;
 var WRITE_SIGNAL_RE = /(?<![\d&])>|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|tee|sed|mv|cp|rm|del|truncate|dd|ln)\b|\b(?:writeFile|appendFile|writeFileSync|rename)/i;
@@ -469,7 +474,7 @@ var LOOP_RE = /\b(?:for|foreach|while|until|xargs|seq)\b|ForEach-Object|\d+\.\.\
 function writesStoreText(text, deps) {
   if (USE_TAP_RE.test(text) || CHECKPOINT_RUN_RE.test(text) && LOOP_RE.test(text)) return true;
   const flat = text.replace(/\\/g, "/");
-  const lower = norm(text);
+  const lower = norm(flat.replace(readCopyRe(deps), " "));
   const names = [lower, squashQuotes(lower)].some((t) => STORE_TEXT_RE.test(t)) || lower.includes(norm(decisionsPath2(deps.env)));
   const code = CODE_SIGNAL_RE.test(text);
   if (names || STORE_CODE_RE.test(text)) return WRITE_SIGNAL_RE.test(flat) || code;
