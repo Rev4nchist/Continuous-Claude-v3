@@ -68,8 +68,8 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    - On a version conflict, Dave edited the doc while you worked. Read the doc again. Retry the write with the new version and the same `syncedAt`. The newer `updatedAt` keeps it pending.
 
 7. Re-render and republish the board to the same url. Order: read the live page, render, publish at once. Other sessions publish all day, so your held copy is old. Follow step 3 of [create_handoff](../create_handoff/SKILL.md):
-   - Run `node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project <key>`. It writes `lane-board.html` in the primary checkout for `continuous-claude` and `lane-board-<key>.html` for any other board.
    - `Artifact read` `<url>` first. The Artifact tool refuses to redeploy from a session that has not seen the live version.
+   - Run `node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project <key>`. It writes `lane-board.html` in the primary checkout for `continuous-claude` and `lane-board-<key>.html` for any other board.
    - Publish that file with `url` set to `<url>` and NO `capabilities`. The page keeps its db and sample. Without `url` the tool makes a new artifact. `continuous-claude` also reuses the favicon from `.claude/artifacts.json`.
    - Read the result back before you report success: the returned url must equal `<url>` and the stamp must say `board=<key>`. On a mismatch, stop and report the stray url.
 
