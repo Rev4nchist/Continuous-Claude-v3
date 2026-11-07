@@ -20972,12 +20972,9 @@ var LOCAL_BIN_MAX_LEVELS = 10;
 function hasLocalBin(name, cwd) {
   let dir = resolve(cwd);
   for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
-    if (existsSync(join2(dir, "package.json")) || existsSync(join2(dir, "node_modules"))) {
-      try {
-        return statSync(join2(dir, "node_modules", ".bin", name)).isFile();
-      } catch {
-        return false;
-      }
+    try {
+      if (statSync(join2(dir, "node_modules", ".bin", name)).isFile()) return true;
+    } catch {
     }
     const parent = dirname2(dir);
     if (parent === dir) return false;

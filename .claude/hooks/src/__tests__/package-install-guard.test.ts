@@ -13,7 +13,7 @@
  * allows (exit 0) or blocks (exit 2).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // We test the exported logic functions directly, not via subprocess.
@@ -1546,12 +1546,72 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     it('local bin in an ancestor folder: npx zz-local-bin-a1 run allows', async () => {
       expect(await runHook('npx zz-local-bin-a1 run', { stub: FRESH, cwd: await binFixture(BINS, true) })).toBeUndefined();
     });
-    it('bypass: bin only above the npm local prefix (child has package.json): npx still denies', async () => {
+    // npm 11.12.1 libnpmexec localFileExists walks up from the local prefix to the root, so a bin
+    // above a folder that has package.json still runs: nothing is fetched.
+    it('bin above the nearest package.json folder: npx zz-local-bin-a1 run allows', async () => {
       const { writeFileSync } = await import('node:fs');
       const { join } = await import('node:path');
       const child = await binFixture(BINS, true);
       writeFileSync(join(child, 'package.json'), '{}');
-      expect(await runHook('npx zz-local-bin-a1 run', { stub: FRESH, cwd: child })).toBe('deny');
+      expect(await runHook('npx zz-local-bin-a1 run', { stub: FRESH, cwd: child })).toBeUndefined();
+    });
+
+    // ----- Local bin at any parent level (bare worktree: the bin sits in a shared parent node_modules) -----
+    describe('local bin at any parent level, up to 10 levels', () => {
+      const BIN = 'zz-local-bin-a1';
+      const made: string[] = [];
+      afterEach(async () => {
+        const { rmSync } = await import('node:fs');
+        for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+      });
+      /** A temp tree. binAt: folders (under the root) that get node_modules/.bin/BIN. pkgAt: folders with a package.json. cwdRel: the cwd under the root. */
+      async function tree(binAt: string[][], pkgAt: string[][], cwdRel: string[]): Promise<string> {
+        const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const root = mkdtempSync(join(tmpdir(), 'pig-lvl-'));
+        made.push(root);
+        mkdirSync(join(root, ...cwdRel), { recursive: true });
+        for (const rel of binAt) {
+          mkdirSync(join(root, ...rel, 'node_modules', '.bin'), { recursive: true });
+          writeFileSync(join(root, ...rel, 'node_modules', '.bin', BIN), '');
+          writeFileSync(join(root, ...rel, 'node_modules', '.bin', BIN + '.cmd'), '');
+        }
+        for (const rel of pkgAt) {
+          mkdirSync(join(root, ...rel), { recursive: true });
+          writeFileSync(join(root, ...rel, 'package.json'), '{}');
+        }
+        return join(root, ...cwdRel);
+      }
+
+      it('(1) bin two levels up, nearest folder has package.json: allows', async () => {
+        const cwd = await tree([[]], [['a']], ['a', 'b']);
+        expect(await runHook(`npx ${BIN} run`, { stub: FRESH, cwd })).toBeUndefined();
+      });
+      it('(2) bin only in the nearest folder: allows', async () => {
+        const cwd = await tree([['a', 'b']], [['a', 'b']], ['a', 'b']);
+        expect(await runHook(`npx ${BIN} run`, { stub: FRESH, cwd })).toBeUndefined();
+      });
+      it('(3) no bin at any level: npx still denies', async () => {
+        const cwd = await tree([], [['a'], ['a', 'b'], []], ['a', 'b', 'c']);
+        expect(await runHook(`npx ${BIN} run`, { stub: FRESH, cwd })).toBe('deny');
+      });
+      it('(4) the cap: a bin 9 levels up is found, a bin 11 levels up is not', async () => {
+        const deep = Array.from({ length: 11 }, (_, i) => `d${i}`);
+        const found = await tree([[]], [['d0']], deep.slice(0, 9)); // root is 9 levels above cwd
+        expect(await runHook(`npx ${BIN} run`, { stub: FRESH, cwd: found })).toBeUndefined();
+        const missed = await tree([[]], [['d0']], deep); // root is 11 levels above cwd
+        expect(await runHook(`npx ${BIN} run`, { stub: FRESH, cwd: missed })).toBe('deny');
+      });
+      it('(5) nested worktree under primary/.claude/worktrees/node_modules/.bin: allows', async () => {
+        const wt = ['primary', '.claude', 'worktrees', 'guard-local-bin'];
+        const cwd = await tree(
+          [['primary', '.claude', 'worktrees']],
+          [[...wt, '.claude', 'hooks']],
+          [...wt, '.claude', 'hooks', 'src'],
+        );
+        expect(await runHook(`npx ${BIN} run`, { stub: FRESH, cwd })).toBeUndefined();
+      });
     });
     it.each([
       'npx -c "npm install zz-fake-pkg-a1"',

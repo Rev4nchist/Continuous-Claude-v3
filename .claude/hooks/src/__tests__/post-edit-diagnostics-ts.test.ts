@@ -19,7 +19,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
 import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { dirname, join, resolve } from 'path';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 
@@ -35,7 +36,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, '..');
 const HOOKS_DIR = resolve(__dirname, '..', '..');
 const HOOK_PATH = resolve(HOOKS_DIR, 'dist', 'post-edit-diagnostics.mjs');
-const HOOKS_TSC = resolve(HOOKS_DIR, 'node_modules', 'typescript', 'bin', 'tsc');
+// Find typescript the way Node does: in the primary this is .claude/hooks/node_modules; in a nested
+// worktree it is the shared store link above it. A fixed path would fail in a bare worktree.
+const HOOKS_TSC = resolve(dirname(createRequire(import.meta.url).resolve('typescript/package.json')), 'bin', 'tsc');
 
 let tmp: string;
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'ped-ts-')); });
