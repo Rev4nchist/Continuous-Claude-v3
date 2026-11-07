@@ -213,6 +213,16 @@ describe('G4 the model writes the store', () => {
     expect(denied(pwsh(`Get-Content ${storeFile} -Raw`))).toBe(false);
     expect(denied(bash('rg decisionRecord scripts/github'))).toBe(false);
   });
+  it('passes a copy that only READS the store (the store is the first source) and still denies a copy that writes it', () => {
+    expect(denied(bash(`cp ${storeFile} /tmp/before.json`))).toBe(false);
+    expect(denied(bash(`cp -f ${storeFile} /tmp/before.json`))).toBe(false);
+    expect(denied(pwsh(`Copy-Item ${storeFile} C:\\tmp\\before.json`))).toBe(false);
+    expect(denied(bash(`cp /tmp/x.json ${storeFile}`))).toBe(true);
+    expect(denied(pwsh(`Copy-Item C:\\tmp\\x.json ${storeFile}`))).toBe(true);
+    expect(denied(bash(`cp ${storeFile} ${storeFile}.bak`))).toBe(true);
+    expect(denied(bash(`cp ${storeFile} /tmp/b.json && echo '{}' > ${storeFile}`))).toBe(true);
+    expect(denied(bash(`cp ${storeFile} /tmp/b.json; mv /tmp/x.json ${storeFile}`))).toBe(true);
+  });
 });
 
 describe('G5 Desktop Commander process tools', () => {

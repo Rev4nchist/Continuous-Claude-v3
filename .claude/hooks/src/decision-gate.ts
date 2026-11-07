@@ -101,6 +101,13 @@ function isStorePath(p: string, deps: Deps, cwd: string): boolean {
   return STORE_PATH_RE.test(full) || full === store || full.startsWith(`${store}.`);
 }
 
+// cp, copy or Copy-Item, optional flags, then the store as the FIRST path, then a destination. Quoted paths with spaces do not match: they stay denied.
+const escRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** The read-copy shape for the default store path and for the CCV3_DECISIONS_FILE path of this run. */
+function readCopyRe(deps: Deps): RegExp {
+  const store = escRe(norm(decisionsPath(deps.env)));
+  return new RegExp(`\\b(?:cp|copy|copy-item)\\s+(?:-{1,2}[\\w-]+\\s+)*["']?(?:(?:[^\\s"';|&]*\\/)?ccv3-mods\\/+decisions\\.json|${store})["']?(?=\\s+[^\\s;|&])`, 'gi');
+}
 const STORE_CODE_RE = /[\\/]lib[\\/]decisions\.mjs/i;
 const STORE_FN_RE = /\b(?:decisionRecord|offerWrite|decisionUse|missBump)\b/;
 const WRITE_SIGNAL_RE = /(?<![\d&])>|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|tee|sed|mv|cp|rm|del|truncate|dd|ln)\b|\b(?:writeFile|appendFile|writeFileSync|rename)/i;
@@ -119,7 +126,8 @@ const LOOP_RE = /\b(?:for|foreach|while|until|xargs|seq)\b|ForEach-Object|\d+\.\
 function writesStoreText(text: string, deps: Deps): boolean {
   if (USE_TAP_RE.test(text) || (CHECKPOINT_RUN_RE.test(text) && LOOP_RE.test(text))) return true;
   const flat = text.replace(/\\/g, '/');
-  const lower = norm(text);
+  // A copy whose first source is the store only reads it. The mention is cut out; a later mention (the destination, a second command) still counts.
+  const lower = norm(flat.replace(readCopyRe(deps), ' '));
   const names = [lower, squashQuotes(lower)].some((t) => STORE_TEXT_RE.test(t)) || lower.includes(norm(decisionsPath(deps.env)));
   const code = CODE_SIGNAL_RE.test(text);
   if (names || STORE_CODE_RE.test(text)) return WRITE_SIGNAL_RE.test(flat) || code;
