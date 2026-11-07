@@ -51,6 +51,7 @@
  *   node scripts/coordination/lane.mjs mine             # my lanes + lease time left
  *   node scripts/coordination/lane.mjs claim <id> [--note "..."]
  *   node scripts/coordination/lane.mjs note  <id> "status line"
+ *   node scripts/coordination/lane.mjs compact <id> "text"   # log a compaction as an event; the note stays (PreCompact hook)
  *   node scripts/coordination/lane.mjs state <id> <backlog|ready|active|blocked|review|done>
  *   node scripts/coordination/lane.mjs release <id> [--note "why"]
  *   node scripts/coordination/lane.mjs done <id> [--note "evidence"]
@@ -1196,6 +1197,28 @@ const commands = {
     if (!rows.length) throw await noLane(c, id, board);
     await logEvent(c, { laneId: id, kind: 'note', sessionId: myId, body, detail: agentDetail() });
     return JSON_OUT ? rows[0] : `noted on ${id}: ${body}`;
+  },
+
+  /**
+   * Record a compaction on a lane I own as a 'compact' event. EVENT ONLY: lane.note is not touched, so the progress
+   * note Dave or a session wrote stays. The PreCompact hook calls this (it used to call `note`, which replaced the note).
+   * Addressed to me, like `adopt`: no peer gets an inbox line, and my own inbox skips my own events. The lease is
+   * renewed as `note` did. updated_at is left alone, as nothing on the lane changed.
+   */
+  async compact(c) {
+    const myId = me();
+    const id = positional[1];
+    const board = await projectForOwnedLane(c, id, myId);
+    const body = positional.slice(2).join(' ');
+    if (!id || !body) throw new Error('usage: lane.mjs compact <lane-id> "compaction text"  (event only; the note stays)');
+    const { rows } = await c.query(
+      `UPDATE agentic_os.lane SET lease_expires_at = CASE WHEN owner_session_id=$3
+           THEN now() + interval '${LEASE_MINUTES} minutes' ELSE lease_expires_at END
+       WHERE id=$1 AND project_key=$2 RETURNING id`, [id, board.key, myId],
+    );
+    if (!rows.length) throw await noLane(c, id, board);
+    await logEvent(c, { laneId: id, kind: 'compact', sessionId: myId, to: myId, body, detail: agentDetail() });
+    return JSON_OUT ? { id, kind: 'compact', body } : `compact event on ${id}: ${body}`;
   },
 
   async state(c) {

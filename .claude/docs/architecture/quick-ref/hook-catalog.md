@@ -90,7 +90,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 |------|-------------|
 | pre-compact-extract | Extract learnings before context compaction (L1) |
 | pre-compact-continuity | Save continuity state before compaction |
-| pre-compact-lane-note | Write one lane note on every lane the session holds, so a compaction leaves a trail on the board (5 minute cooldown) |
+| pre-compact-lane-note | Log one `compact` event on every lane the session holds (`lane.mjs compact`), so a compaction leaves a trail on the board. The lane note stays as written (5 minute cooldown) |
 
 ## SessionEnd
 
