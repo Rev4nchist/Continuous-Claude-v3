@@ -177,7 +177,7 @@ var isObj2 = (v) => v !== null && typeof v === "object";
 function blockReason(board, env = process.env) {
   const a = boardArtifact(board, { env });
   if (!a) return "";
-  return `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. Other sessions update this page all day, so your held copy is old. In this order: 1. Read the live page with the Artifact tool, action read, url ${a.url}. Do not open or paste the saved file. 2. Run ${renderBoardCmd(board, env)}. 3. At once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). If the publish is refused, publish the same file again: the refusal counts as the read. Then finish your turn.`;
+  return `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. Other sessions update this page all day, so your held copy is old. In this order: 1. Read the live page with the Artifact tool, action read, url ${a.url}, without path (a read with path does not count). Do not open or paste the saved file.2. Run ${renderBoardCmd(board, env)}. 3. At once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). If the publish is refused, publish the same file again: the refusal counts as the read. Then finish your turn.`;
 }
 function isHeadless(env) {
   if (env.LANE_CONTEXT_HEADLESS === "1") return false;

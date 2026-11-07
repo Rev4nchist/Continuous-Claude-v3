@@ -86,13 +86,13 @@ triage decisions. Never publish the lane board over it.
 
 Each board can have its own phone page. `continuous-claude` has the one above. Another board has a page when its entry in
 `.claude/project-registry.json` carries `laneArtifact` (the page url). Dave starts one with `/publish-board <key>`; `project register`
-only prints that hint. To refresh the `continuous-claude` page, run from the primary checkout:
+only prints that hint. To refresh the `continuous-claude` page, first read the live page (Artifact tool, action `read`, no `path`): other sessions publish all day, so your held copy is old. Order: read, render, publish at once. Then run from the primary checkout:
 
 ```
 node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project continuous-claude
 ```
 
-Read the live page first (Artifact tool, action `read`): other sessions publish all day, so your held copy is old. Order: read, render, publish at once. Then publish `lane-board.html` with the Artifact tool, passing
+Then publish `lane-board.html` with the Artifact tool, passing
 `url=https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`. The URL keeps the same link instead of
 minting a second board. For another board, render with `--project <key>`, publish `lane-board-<key>.html` to that board's `laneArtifact`
 url and pass no `capabilities`. A board with no `laneArtifact` renders `lane-board-<key>.html` with no artifact. It shows a read-only Priorities section drawn from lane state and priority.
