@@ -160,6 +160,26 @@ try {
   check('hook skips and still continues', h3.code === 0 && /"continue":true/.test(h3.out) && /skipped/.test(h3.out), h3.out);
   check('the note is still the exact original', (await row('zz-lc-noted')).note === NOTE);
 
+  log('\n## adopt after /clear: my own compact events must not turn into unread DMs for the new session');
+  const OLD = '5a5a5a5a-0000-4000-8000-000000000001'; const NEW = '5a5a5a5a-0000-4000-8000-000000000002';
+  writeFileSync(join(boards.identityDir, `${OLD}.json`), JSON.stringify({ name: 'zz-lcprobe', endedAt: new Date().toISOString() }));
+  writeFileSync(join(boards.identityDir, `${NEW}.json`), JSON.stringify({ name: 'zz-lcprobe', previous: OLD }));
+  r = lane(OLD, ['add', 'zz-lc-adopt', '--title', 'adopt me']);
+  r = lane(OLD, ['claim', 'zz-lc-adopt']);
+  check('old session claims zz-lc-adopt', r.code === 0, r.all);
+  r = lane(OLD, ['compact', 'zz-lc-adopt', 'Compacting (auto) at 09:00 local. old session event']);
+  check('old session logs a compact event', r.code === 0, r.all);
+  // A real DM to the old session, written straight to the table (`say --to` needs a sessions row for the recipient).
+  await db.query(
+    `INSERT INTO agentic_os.lane_event (kind, session_id, to_session_id, body, detail, project_key) VALUES ('note', $1, $2, $3, '{}'::jsonb, $4)`,
+    [PEER, OLD, 'real DM for the old session', A.key]);
+  r = lane(NEW, ['adopt', '--from', OLD]);
+  log(`adopt: ${r.all}`);
+  check('adopt moves the lane and the one real DM, not the compact event', r.code === 0 && /1 lane\(s\)/.test(r.out) && /1 message\(s\)/.test(r.out), r.all);
+  r = lane(NEW, ['inbox', '--peek']);
+  check('the new session inbox shows the real DM', r.code === 0 && /real DM for the old session/.test(r.all), r.all);
+  check('the new session inbox shows no Compacting line', !/Compacting/.test(r.all), r.all);
+
   log('\n## an event insert that fails: the verb exits nonzero and the hook does not start its cooldown');
   const homeFail = fakeHome(boards.tmp, 'home-fail', realPrimary);
   await db.query(`ALTER TABLE agentic_os.lane_event ADD CONSTRAINT zz_block_compact CHECK (kind <> 'compact') NOT VALID`);

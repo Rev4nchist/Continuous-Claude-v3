@@ -1036,7 +1036,7 @@ const commands = {
       const dms = (await c.query(
         `UPDATE agentic_os.lane_event
             SET to_session_id=$2, detail = detail || jsonb_build_object('adoptedFrom', $1::text)
-          WHERE to_session_id=$1 AND id > $3::bigint RETURNING id`, [oldId, newId, oldWm ?? 0],
+          WHERE to_session_id=$1 AND session_id <> $1 AND id > $3::bigint RETURNING id`, [oldId, newId, oldWm ?? 0],
       )).rows.map((r) => Number(r.id));
       let cursor = 'unchanged';
       const have = new Set(newRows.map((r) => r.session_id));
