@@ -249,6 +249,19 @@ test('PS13: an internal error (git throws, readFile throws something odd) is a N
   assert.doesNotThrow(() => checkSummary({}));
 });
 
+test('PS18: ok is true when the summary has no FAIL-class problem (PASS, an older Head, a long sentence) and false when it has one, even in note mode', () => {
+  const dir = makeRepo();
+  const head = headOf(dir);
+  assert.equal(check(dir, textOf(FIELDS(head))).ok, true, 'a clean summary');
+  assert.equal(check(dir, textOf(FIELDS(head, { Problem: 'word '.repeat(25).trim() + '.' }))).ok, true, 'a long sentence is only a NOTE');
+  commitFiles(dir, { 'docs/n1.md': '1\n' });
+  const older = check(dir, textOf(FIELDS(head)));
+  assert.equal(older.result.status, 'NOTE', 'an older Head with 1 own file is a NOTE');
+  assert.equal(older.ok, true, 'an older Head still names a real summary of this branch');
+  assert.equal(check(dir, textOf(FIELDS(head, { Branch: 'feat/other' })), { mode: 'note' }).ok, false, 'a leftover file from another branch, shown as a NOTE in note mode');
+  assert.equal(check(dir, null, { mode: 'note' }).ok, false, 'no file');
+});
+
 test('PS14: a valid summary passes in fail mode, returns the hash of the file, and the line shows the facts', () => {
   const dir = makeRepo();
   const head = headOf(dir);
