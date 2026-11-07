@@ -5,12 +5,39 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2, statSync } from "fs";
-import { dirname as dirname2, isAbsolute, join as join3, posix, resolve, win32 } from "path";
+import { dirname as dirname3, isAbsolute, join as join4, posix, resolve, win32 } from "path";
 
 // src/pr-opened-review-loop.ts
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+import { join as join2 } from "path";
+import { homedir, tmpdir } from "os";
+
+// src/shared/router-config.ts
+import { dirname, join } from "path";
+var CONFIG_REL = "review-router.config.json";
+function routerConfigText(cwd, readFile, home) {
+  let dir = cwd;
+  for (let i = 0; i < 40; i++) {
+    const text = readFile(join(dir, CONFIG_REL));
+    if (text !== null) return text;
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return readFile(join(home, "continuous-claude", CONFIG_REL));
+}
+function routerFlag(cwd, readFile, home, section, key) {
+  const text = routerConfigText(cwd, readFile, home);
+  if (text === null) return false;
+  try {
+    const cfg = JSON.parse(text);
+    return cfg?.[section]?.[key] === true;
+  } catch {
+    return false;
+  }
+}
+
+// src/pr-opened-review-loop.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
 var GH_API_RE = /\bgh\s+api\b/i;
@@ -70,10 +97,10 @@ function safeSession(sessionId) {
   return (sessionId || "no-session").replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 function statePath(sessionId) {
-  return join(tmpdir(), `pr-opened-review-loop-${safeSession(sessionId)}.json`);
+  return join2(tmpdir(), `pr-opened-review-loop-${safeSession(sessionId)}.json`);
 }
 function legacyStatePath(sessionId) {
-  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession(sessionId)}.json`);
+  return join2(tmpdir(), `pr-opened-coderabbit-loop-${safeSession(sessionId)}.json`);
 }
 function readSeen(p) {
   try {
@@ -99,12 +126,30 @@ function markFired(sessionId, url) {
 }
 var WATCH_REPO = "rev4nchist/continuous-claude-v3";
 var loopText = (info) => `/loop 5m Check the PR review bots that must review the head (in CCv3, the bots \`node scripts/github/review-status.mjs ${info.number}\` requires; elsewhere, the repo's configured bots) on ${info.owner}/${info.repo} PR #${info.number} (stop when reviews of the head land or after 60 minutes; fix real findings; dismiss false positives with a reason; verify thread isResolved via GraphQL; never merge)`;
-function buildContext(info) {
+function checkpointText(info, ledger) {
+  const call = `the pr_checkpoint tool with pr: ${info.number} and body: the path of the PR body file that pre-pr.mjs --body checked (mcp__ccv3-mods__pr_checkpoint)`;
+  const never = "Never mark it ready or add a review: label yourself; the checkpoint does both. ";
+  if (ledger) {
+    return `Either way, also call ${call}. If it returns a question, ask Dave that question with AskUserQuestion, word for word, then call pr_checkpoint again with the same pr and body. Only his tap records a pick. An answer that matches no option records nothing, and the PR stays a draft. ` + never;
+  }
+  return `Either way, also call ${call}. Without that call /pathway has no checkpoint to record, and the PR stays a draft. ` + never;
+}
+function buildContext(info, ledger = false) {
   const head = `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-review-loop.md, `;
   if (`${info.owner}/${info.repo}`.toLowerCase() === WATCH_REPO) {
-    return head + `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave and you at READY; never merge. Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. Either way, also call the pr_checkpoint tool with pr: ${info.number} and body: the path of the PR body file that pre-pr.mjs --body checked (mcp__ccv3-mods__pr_checkpoint). Without that call /pathway has no checkpoint to record, and the PR stays a draft. Never mark it ready or add a review: label yourself; the checkpoint does both. This applies to every PR in every session.`;
+    return head + `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave and you at READY; never merge. Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. ` + checkpointText(info, ledger) + `This applies to every PR in every session.`;
   }
   return head + `START THE REVIEW LOOP NOW, in this same turn: ${loopText(info)}. This applies to every PR in every session.`;
+}
+function ledgerOn(cwd) {
+  const readFile = (p) => {
+    try {
+      return readFileSync(p, "utf8");
+    } catch {
+      return null;
+    }
+  };
+  return routerFlag(cwd || process.cwd(), readFile, homedir(), "checkpoint", "ledger");
 }
 function main() {
   const raw = readFileSync(0, "utf8");
@@ -141,7 +186,7 @@ function main() {
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
-        additionalContext: buildContext(info)
+        additionalContext: buildContext(info, ledgerOn(input.cwd || ""))
       }
     })
   );
@@ -258,8 +303,8 @@ function namedRepo(command, env = {}) {
 
 // src/shared/guard-log.ts
 import { appendFileSync, mkdirSync as mkdirSync2 } from "fs";
-import { homedir } from "os";
-import { dirname, join as join2 } from "path";
+import { homedir as homedir2 } from "os";
+import { dirname as dirname2, join as join3 } from "path";
 var COMMAND_HEAD_CHARS = 80;
 var REASON_CHARS = 200;
 var PATH_CHARS = 300;
@@ -272,8 +317,8 @@ var TARGET_FIELD = {
   Skill: "skill"
 };
 function guardLogPath(env = process.env) {
-  const home = env.USERPROFILE || env.HOME || homedir();
-  return env.CCV3_GUARD_DECISIONS_LOG || join2(home, ".claude", "logs", "guard-decisions.jsonl");
+  const home = env.USERPROFILE || env.HOME || homedir2();
+  return env.CCV3_GUARD_DECISIONS_LOG || join3(home, ".claude", "logs", "guard-decisions.jsonl");
 }
 var SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
 var MASKS = [
@@ -347,7 +392,7 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
     if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
     const path = guardLogPath(env);
-    mkdirSync2(dirname(path), { recursive: true, mode: 448 });
+    mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
     appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
@@ -378,7 +423,7 @@ function logGuardError(hook, err, opts = {}) {
     if (!shouldWrite(env)) return;
     const entry = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook, kind: "error", message: errorMessage(err), stack: firstFrame(err) };
     const path = guardLogPath(env);
-    mkdirSync2(dirname(path), { recursive: true, mode: 448 });
+    mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
     appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
@@ -387,7 +432,7 @@ function logGuardError(hook, err, opts = {}) {
 // src/pre-pr-gate.ts
 var STAMP_REL = ".claude/cache/pre-pr/stamp.json";
 var PATHWAY_REL = ".claude/cache/pre-pr/pathway.json";
-var CONFIG_REL = "review-router.config.json";
+var CONFIG_REL2 = "review-router.config.json";
 var MAX_STAMP_AGE_MS = 24 * 36e5;
 var FUTURE_SLACK_MS = 5 * 6e4;
 var GIT_TIMEOUT_MS = 2e3;
@@ -554,7 +599,7 @@ function makeCtx(input, command, deps, shapes) {
   };
 }
 function enforceIn(deps, top) {
-  const text = top === null ? null : deps.readFile(join3(top, CONFIG_REL));
+  const text = top === null ? null : deps.readFile(join4(top, CONFIG_REL2));
   if (text === null) return null;
   try {
     return JSON.parse(text)?.checkpoint?.enforce === true;
@@ -590,7 +635,7 @@ function stampDeny(command, deps, ctx) {
   if (headRun.status !== 0) return deny("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${top}`);
   const head = headRun.stdout.trim();
   const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, shell === "bash" ? fromGitBashPath(bodyPath) : bodyPath))) };
-  const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join3(r, STAMP_REL)), head, deps.now(), body));
+  const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join4(r, STAMP_REL)), head, deps.now(), body));
   if (!problems.some((p) => p === null)) return deny("stamp", problems[0] ?? "no stamp");
   const pushed = pushedProblem(deps, top, branch, head);
   return pushed ? deny("pushed-head", pushed) : null;
@@ -600,9 +645,9 @@ function soft(pattern, why) {
 }
 var SELF_WHY = "pr-checkpoint --confirm and --apply record and spend a review pathway. Only Dave's press in the /pathway mod does that. Do not run them from a shell. The read-only form (node scripts/github/pr-checkpoint.mjs --json) is allowed.";
 var LITERAL_WHY = "pass a literal OWNER/REPO to --repo or -R. A value with $, a backtick or %VAR% hides the target repo from this gate.";
-var DRAFT_WHY = `open as draft; run /pathway. Open the PR with gh pr create --draft (gh api: -F draft=true). The /pathway mod picks the review pathway and marks the PR ready after Dave presses it.`;
-var READY_WHY = "gh pr ready is not run from a shell. Run /pathway: when Dave presses a pathway, the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.";
-var LABEL_WHY = "a review: label is set only by /pathway, for the pathway Dave confirmed for this head. Do not add one by hand, and do not use a command whose label text is hidden. Run /pathway.";
+var DRAFT_WHY = `open as draft; call pr_checkpoint {pr}. Open the PR with gh pr create --draft (gh api: -F draft=true). Then call pr_checkpoint {pr}: it asks Dave to pick the review pathway, and the PR is marked ready after his tap.`;
+var READY_WHY = "gh pr ready is not run from a shell. Call pr_checkpoint {pr}: it asks Dave to pick a pathway, and after his tap the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.";
+var LABEL_WHY = "a review: label is set only by the pathway Dave taps for this head. Do not add one by hand, and do not use a command whose label text is hidden. Call pr_checkpoint {pr}.";
 function checkpointDeny(deps, ctx, shapes) {
   if (shapes.self) return soft("self-confirm", SELF_WHY);
   if (shapes.nonLiteral) return soft("nonliteral-repo", LITERAL_WHY);
@@ -618,7 +663,7 @@ function labelAllowed(label, deps, ctx) {
 }
 function pathwayLabel(deps, ctx) {
   const top = ctx.top(ctx.dir);
-  const text = top === null ? null : deps.readFile(join3(top, PATHWAY_REL));
+  const text = top === null ? null : deps.readFile(join4(top, PATHWAY_REL));
   const head = top === null ? null : deps.git(top, ["rev-parse", "HEAD"]);
   if (text === null || head === null || head.status !== 0) return null;
   let p;
@@ -750,8 +795,8 @@ function makeGit(spawn = spawnSync, env = process.env, gitPath) {
 function makeErrorLogger(env = process.env) {
   return (message, ctx = {}) => {
     if (!shouldWrite(env)) return;
-    const file = join3(dirname2(guardLogPath(env)), "pre-pr-gate-errors.jsonl");
-    mkdirSync3(dirname2(file), { recursive: true, mode: 448 });
+    const file = join4(dirname3(guardLogPath(env)), "pre-pr-gate-errors.jsonl");
+    mkdirSync3(dirname3(file), { recursive: true, mode: 448 });
     const cwd = ctx.cwd ?? null;
     let cwdExists = false;
     try {

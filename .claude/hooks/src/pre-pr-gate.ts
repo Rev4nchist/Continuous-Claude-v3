@@ -363,9 +363,9 @@ function soft(pattern: string, why: string): Decision {
 
 const SELF_WHY = 'pr-checkpoint --confirm and --apply record and spend a review pathway. Only Dave\'s press in the /pathway mod does that. Do not run them from a shell. The read-only form (node scripts/github/pr-checkpoint.mjs --json) is allowed.';
 const LITERAL_WHY = 'pass a literal OWNER/REPO to --repo or -R. A value with $, a backtick or %VAR% hides the target repo from this gate.';
-const DRAFT_WHY = `open as draft; run /pathway. Open the PR with gh pr create --draft (gh api: -F draft=true). The /pathway mod picks the review pathway and marks the PR ready after Dave presses it.`;
-const READY_WHY = 'gh pr ready is not run from a shell. Run /pathway: when Dave presses a pathway, the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.';
-const LABEL_WHY = 'a review: label is set only by /pathway, for the pathway Dave confirmed for this head. Do not add one by hand, and do not use a command whose label text is hidden. Run /pathway.';
+const DRAFT_WHY = `open as draft; call pr_checkpoint {pr}. Open the PR with gh pr create --draft (gh api: -F draft=true). Then call pr_checkpoint {pr}: it asks Dave to pick the review pathway, and the PR is marked ready after his tap.`;
+const READY_WHY = 'gh pr ready is not run from a shell. Call pr_checkpoint {pr}: it asks Dave to pick a pathway, and after his tap the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.';
+const LABEL_WHY = 'a review: label is set only by the pathway Dave taps for this head. Do not add one by hand, and do not use a command whose label text is hidden. Call pr_checkpoint {pr}.';
 
 /** The first PR B rule the command breaks, or null. Rules past the repo-free ones apply to CCv3 only. */
 function checkpointDeny(deps: Deps, ctx: Ctx, shapes: Shapes): Decision | null {
