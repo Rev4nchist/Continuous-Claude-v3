@@ -431,12 +431,22 @@ function registrationDrift(t, q) {
   return { drift };
 }
 
-/** Text when the registered action's -WindowStyle Hidden differs from tasks.json hidden; null when equal or when the XML has no Arguments to read. */
+/**
+ * Text when the registered action differs from tasks.json hidden; null when equal or when the XML has no Arguments to read.
+ * hidden=true wants Command conhost.exe and Arguments that start with --headless. Anything else is the plain form.
+ */
 function hiddenDrift(t, xml) {
   const args = /<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1];
   if (args === undefined) return null;
-  const has = /-WindowStyle\s+Hidden/i.test(args);
-  return has === (t.hidden === true) ? null : `hidden: the registered action ${has ? 'hides' : 'does not hide'} the window, tasks.json hidden=${t.hidden === true}`;
+  const command = /<Command>([^<]*)<\/Command>/.exec(xml)?.[1] ?? '';
+  const isConhost = /(^|[\\/])conhost\.exe"?$/i.test(command.trim());
+  const headless = /^\s*--headless\b/i.test(args);
+  if (t.hidden === true) {
+    if (isConhost && headless) return null;
+    const got = isConhost ? 'conhost.exe without --headless first' : `${command.trim() || 'no command'} (not conhost.exe --headless)`;
+    return `hidden: the registered action is ${got}, tasks.json hidden=true wants conhost.exe --headless powershell.exe`;
+  }
+  return isConhost && headless ? 'hidden: the registered action runs through conhost.exe --headless, tasks.json hidden is not true' : null;
 }
 
 /** The header-name lookup of one schtasks answer, or the WARN text. */

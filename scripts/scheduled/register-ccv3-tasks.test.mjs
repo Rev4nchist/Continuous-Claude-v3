@@ -9,7 +9,7 @@
 //   dry run: the output ends with the DRY RUN line, says nothing was registered, exits 0
 //   -Only: a name that matches nothing is refused with exit 1
 //   every Nm: "every 5m" is accepted and a battery:true task prints battery=allow with llm=false; "every 0m" and "every 1440m" are refused;
-//             the existing four lines stay as they were; only a hidden:true task gets -WindowStyle Hidden
+//             the existing four lines stay as they were; only a hidden:true .ps1 task runs through conhost.exe --headless
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -82,11 +82,22 @@ test('dry run: every Nm with battery:true prints battery=allow while llm stays f
   assert.match(r.lineOf('CCv3-T-WakeOnly'), /llm=false battery=block wake=yes]$/);
 });
 
-test('dry run: a task with hidden:true gets -WindowStyle Hidden; other .ps1 and .bat actions keep theirs', win, () => {
+test('dry run: a task with hidden:true runs through conhost.exe --headless powershell.exe, with no -WindowStyle', win, () => {
   const r = dryRun();
-  assert.match(r.lineOf('CCv3-T-Battery'), /powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File/);
-  assert.doesNotMatch(r.lineOf('CCv3-T-Llm'), /WindowStyle/, 'the other .ps1 task keeps its action');
-  assert.doesNotMatch(r.lineOf('CCv3-T-Plain'), /WindowStyle/);
+  const line = r.lineOf('CCv3-T-Battery');
+  const conhost = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'conhost.exe').toLowerCase();
+  assert.ok(line.toLowerCase().startsWith(`ccv3-t-battery: ${conhost} --headless powershell.exe -noprofile -executionpolicy bypass -file "`), line);
+  assert.match(line, / -File ".*e\.ps1"  \[/);
+  assert.doesNotMatch(line, /WindowStyle/);
+});
+
+test('dry run: the other four tasks keep their exact actions (no conhost, no --headless, no -WindowStyle)', win, () => {
+  const r = dryRun();
+  assert.match(r.lineOf('CCv3-T-Plain'), /^CCv3-T-Plain: cmd\.exe \/c ".*a\.bat"  \[/);
+  assert.match(r.lineOf('CCv3-T-Llm'), /^CCv3-T-Llm: powershell\.exe -NoProfile -ExecutionPolicy Bypass -File ".*b\.ps1"  \[/);
+  assert.match(r.lineOf('CCv3-T-LlmWake'), /^CCv3-T-LlmWake: cmd\.exe \/c ".*c\.bat"  \[/);
+  assert.match(r.lineOf('CCv3-T-WakeOnly'), /^CCv3-T-WakeOnly: cmd\.exe \/c ".*d\.bat"  \[/);
+  for (const n of ['CCv3-T-Plain', 'CCv3-T-Llm', 'CCv3-T-LlmWake', 'CCv3-T-WakeOnly']) assert.doesNotMatch(r.lineOf(n), /conhost|--headless|WindowStyle/, n);
 });
 
 test('F4: an every-Nm trigger repeats for ever with NO duration (a MaxValue duration is refused by Register-ScheduledTask on current Windows)', win, () => {

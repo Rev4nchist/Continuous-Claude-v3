@@ -14,7 +14,9 @@
     llm   true -> the task starts on battery and keeps running when the laptop goes on battery.
           false -> the Windows default: no start on battery, stopped when going on battery.
     battery  true -> the same battery behaviour as llm, for a job that is not an LLM job.
-    hidden   true -> a .ps1 action runs with -WindowStyle Hidden (only the tasks that set it change).
+    hidden   true -> a .ps1 action runs through conhost.exe --headless powershell.exe, so Task Scheduler opens no window
+             (-WindowStyle Hidden still flashed one; the 2026-11-07 live test of the conhost form showed no flash).
+             Only the tasks that set it change.
     wake  true -> the task wakes the laptop (WakeToRun). Use it with llm=true, or the wake does nothing on battery.
   The dry run prints llm, battery and wake for each task, read from the settings object it would register.
   Wake on battery also needs the power plan setting "Allow wake timers" to be on for battery. This script does not change it.
@@ -52,8 +54,12 @@ function Get-Trigger([string]$text) {
 
 function Get-ActionParts([string]$installed, [bool]$hidden = $false) {
   if ($installed.EndsWith('.ps1')) {
-    $style = if ($hidden) { '-WindowStyle Hidden ' } else { '' }
-    return @('powershell.exe', ('-NoProfile -ExecutionPolicy Bypass ' + $style + '-File "' + $installed + '"'))
+    if ($hidden) {
+      # conhost --headless gives powershell.exe no console, so Task Scheduler opens no window. -WindowStyle Hidden still flashed one.
+      $conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
+      return @($conhost, ('--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + $installed + '"'))
+    }
+    return @('powershell.exe', ('-NoProfile -ExecutionPolicy Bypass -File "' + $installed + '"'))
   }
   return @('cmd.exe', ('/c "' + $installed + '"'))
 }
