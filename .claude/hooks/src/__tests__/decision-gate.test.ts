@@ -221,6 +221,11 @@ describe('G4 the model writes the store', () => {
     expect(denied(pwsh(`Copy-Item C:\\tmp\\x.json ${storeFile}`))).toBe(true);
     expect(denied(bash(`cp ${storeFile} ${storeFile}.bak`))).toBe(true);
     expect(denied(bash(`cp ${storeFile} /tmp/b.json && echo '{}' > ${storeFile}`))).toBe(true);
+    expect(denied(pwsh(`Copy-Item -Destination ${storeFile} C:\\tmp\\x.json`))).toBe(true);
+    expect(denied(pwsh(`Copy-Item -Path C:\\tmp\\x.json -Destination ${storeFile}`))).toBe(true);
+    expect(denied(bash(`cp -t ${storeFile} /tmp/x.json`))).toBe(true);
+    expect(denied(bash(`cp --target-directory ${storeFile} /tmp/x.json`))).toBe(true);
+    expect(denied(pwsh(`Copy-Item -Force ${storeFile} C:\\tmp\\before.json`))).toBe(false);
     expect(denied(bash(`cp ${storeFile} /tmp/b.json; mv /tmp/x.json ${storeFile}`))).toBe(true);
   });
 });

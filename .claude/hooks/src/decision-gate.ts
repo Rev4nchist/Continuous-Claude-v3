@@ -101,12 +101,13 @@ function isStorePath(p: string, deps: Deps, cwd: string): boolean {
   return STORE_PATH_RE.test(full) || full === store || full.startsWith(`${store}.`);
 }
 
+// Only flags that take no value may sit before the store: -Destination, -t and --target-directory name the store as the DESTINATION, so they never match.
 // cp, copy or Copy-Item, optional flags, then the store as the FIRST path, then a destination. Quoted paths with spaces do not match: they stay denied.
 const escRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** The read-copy shape for the default store path and for the CCV3_DECISIONS_FILE path of this run. */
 function readCopyRe(deps: Deps): RegExp {
   const store = escRe(norm(decisionsPath(deps.env)));
-  return new RegExp(`\\b(?:cp|copy|copy-item)\\s+(?:-{1,2}[\\w-]+\\s+)*["']?(?:(?:[^\\s"';|&]*\\/)?ccv3-mods\\/+decisions\\.json|${store})["']?(?=\\s+[^\\s;|&])`, 'gi');
+  return new RegExp(`\\b(?:cp|copy|copy-item)\\s+(?:-(?:[frpavinu]{1,4}|-?(?:force|recurse|recursive|verbose|confirm|whatif))\\s+)*["']?(?:(?:[^\\s"';|&]*\\/)?ccv3-mods\\/+decisions\\.json|${store})["']?(?=\\s+[^\\s;|&])`, 'gi');
 }
 const STORE_CODE_RE = /[\\/]lib[\\/]decisions\.mjs/i;
 const STORE_FN_RE = /\b(?:decisionRecord|offerWrite|decisionUse|missBump)\b/;

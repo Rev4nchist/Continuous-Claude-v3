@@ -462,7 +462,7 @@ function isStorePath(p, deps, cwd) {
 var escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function readCopyRe(deps) {
   const store = escRe(norm(decisionsPath2(deps.env)));
-  return new RegExp(`\\b(?:cp|copy|copy-item)\\s+(?:-{1,2}[\\w-]+\\s+)*["']?(?:(?:[^\\s"';|&]*\\/)?ccv3-mods\\/+decisions\\.json|${store})["']?(?=\\s+[^\\s;|&])`, "gi");
+  return new RegExp(`\\b(?:cp|copy|copy-item)\\s+(?:-(?:[frpavinu]{1,4}|-?(?:force|recurse|recursive|verbose|confirm|whatif))\\s+)*["']?(?:(?:[^\\s"';|&]*\\/)?ccv3-mods\\/+decisions\\.json|${store})["']?(?=\\s+[^\\s;|&])`, "gi");
 }
 var STORE_CODE_RE = /[\\/]lib[\\/]decisions\.mjs/i;
 var STORE_FN_RE = /\b(?:decisionRecord|offerWrite|decisionUse|missBump)\b/;
