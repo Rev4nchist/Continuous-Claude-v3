@@ -92,8 +92,13 @@ const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 // Measured 2026-11-07 (PR-M1): test page about 164,700 bytes (164,626 before the By band type sizes moved below the By band rules), so PAGE_BYTES_MAX is that plus about 1 KB. It rose from 163,200 (about +2,500 over the 162,174 above) ONLY because
 // the phone fixes add about a dozen CSS rules (16px fields, type sizes, hidden chrome, sticky status bar, 44px theme button, --top-h) and
 // a touch guard in the client (focus, column open, scroll back). No markup was added to a card, a row or a Done card.
+// Measured 2026-11-07 (PR-M2): test page 166,868 bytes (about +2,100 over the PR-M1 page above; the PR-M1 figure of about 164,761 comes from the PR-M2 task, not from a re-measure of the base), so PAGE_BYTES_MAX is that plus about 1 KB. It rose from 165,700 ONLY because
+// of phone CSS (row cursor, state word, Waiting above Later, the Later cap), one Show more button in the Later footer (85 bytes), and client logic (row tap,
+// cap, neighbour skip; the client comments are stripped from the page). No card, row, Done or Scheduled markup grew: ROW, DONE and SCHED overheads are unchanged.
+// Measured 2026-11-07 (PR-M2 critic fixes): test page 168,457 bytes (+1,589 over the 166,868 above), so PAGE_BYTES_MAX is that plus about 1 KB (167,900 to 169,500). It rose ONLY because
+// of client logic (a Scheduled row tap, the pinned-bar height, the drag cap lift, two live-region lines, focus on a fine pointer) and one CSS term (--bar-h). No markup grew.
 const ROW_OVERHEAD_MAX = 240;
-const PAGE_BYTES_MAX = 165700;
+const PAGE_BYTES_MAX = 169500;
 const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
@@ -875,7 +880,8 @@ describe('render-board.mjs against a scratch database', () => {
       assert.match(css, /:root \{ --top-h:\d+px; \}/);
       const b = block(PHONE);
       assert.match(rule(b, '.top-row'), /min-height:var\(--top-h\)/);
-      assert.match(b, /html \{[^}]*scroll-padding-top:calc\(var\(--top-h\) \+ \d+px\)/);
+      // --bar-h is the pinned crit status bar; the client sets it when a row tap scrolls (0px when the bar is not pinned).
+      assert.match(b, /html \{[^}]*scroll-padding-top:calc\(var\(--top-h\) \+ var\(--bar-h,0px\) \+ \d+px\)/);
     });
 
     it('a failed save pins the status bar under the header on the phone, for failures only (a save in progress is a warning too)', () => {
@@ -903,6 +909,84 @@ describe('render-board.mjs against a scratch database', () => {
 
     it('an Activity row cannot widen the page: its text column can shrink and breaks long tokens', () => {
       assert.match(css, /\.feed div \{[^}]*grid-template-columns:52px 78px minmax\(0,1fr\);[^}]*overflow-wrap:anywhere/);
+    });
+
+    // PR-M2: a row tap in By band, a state word in Lanes, a capped Later column, Waiting above Later. The measured behaviour is the Edge run
+    // saved in .claude/cache/e2e/2026-11-07-pr-m2.{mjs,log,json}; these pin the markup and CSS that produce it.
+    const laterCap = () => Number(/var LATER_CAP = (\d+);/.exec(html)?.[1]);
+    const colMarkup = (page, name) => new RegExp(`<div class="kcol" data-col="${name}"[\\s\\S]*?\\n  </div>`).exec(page)?.[0] ?? '';
+    const pageBody = (page) => page.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script[\s\S]*?<\/script>/g, '');
+
+    it('the editable page has one Show more button, in the Later column only; the read-only page has none', () => {
+      const body = pageBody(html);
+      assert.equal((body.match(/class="lt-more"/g) || []).length, 1, 'the Later footer button is missing or repeated');
+      assert.ok(colMarkup(body, 'later').includes('<p class="dn-foot lt-foot"><button class="lt-more" type="button"></button></p>'), 'the button is not in the Later column');
+      for (const other of ['next', 'waiting', 'scheduled']) assert.ok(!colMarkup(body, other).includes('lt-more'), `${other} has a Show more button`);
+      const roOut = path.join(E2E.tmp, 'layout-ro.html');
+      assert.equal(renderPage(['--project', 'zz-rb-a', '--out', roOut]).code, 0);
+      assert.ok(!pageBody(fs.readFileSync(roOut, 'utf8')).includes('lt-more'), 'the read-only page has a Show more button');
+    });
+
+    it('Later shows LATER_CAP cards on the phone: the hide rule counts from cap+1, the footer shows only while the column is open and capped', () => {
+      const cap = laterCap();
+      assert.ok(cap >= 5, 'the page script has no LATER_CAP');
+      const b = block(PHONE);
+      assert.match(rule(b, '.kb-capped .kb-list'), /display:none/);
+      assert.ok(b.includes(`.kcol.kb-capped .kb-list > :nth-child(n+${cap + 1})`), `the hide rule does not start at card ${cap + 1}`);
+      const foot = /(\.kcol\.kb-capped[^{]*\.lt-foot)\s*\{([^}]*)\}/.exec(b);
+      assert.ok(foot, 'the footer rule is missing');
+      assert.match(foot[1], /:not\(\.kb-collapsed\)/, 'a collapsed column would show the footer');
+      assert.match(foot[2], /display:block/);
+      // The footer is hidden in the base CSS, so a wide screen never shows it.
+      const base = css.slice(0, css.indexOf('@media (max-width:720px) {\n    header.top'));
+      assert.match(rule(base, '.lt-foot'), /display:none/);
+      assert.ok(!css.slice(css.indexOf(PHONE) + PHONE.length).includes('.lt-foot { display:none'), 'the cap must not be undone later in the file');
+    });
+
+    it('the Show more button is styled and sized like Show all', () => {
+      assert.match(css, /\.dn-all, \.lt-more \{ padding:4px 0;/);
+      assert.match(rule(block(COARSE), '.lt-more'), /min-height:44px/);
+    });
+
+    it('on the phone the visual order is Scheduled, Next, Waiting, Later, In progress, Done; the markup order does not change', () => {
+      const b = block(PHONE).replace(/\/\*[\s\S]*?\*\//g, '');
+      const order = {};
+      for (const m of b.matchAll(/([^{}]*)\{\s*order:(-?\d+)\s*;?\s*\}/g)) {
+        for (const sel of m[1].split(',')) {
+          const name = /^\s*\.kcol\[data-col="([a-z]+)"\]\s*$/.exec(sel)?.[1];
+          assert.ok(name, `an order rule has a selector that is not .kcol[data-col]: ${sel.trim()}`);
+          order[name] = Number(m[2]);
+        }
+      }
+      const markup = [...html.matchAll(/<div class="kcol"(?: data-col="([a-z]+)")/g)].map((m) => m[1]);
+      assert.deepEqual(markup, ['scheduled', 'next', 'later', 'waiting', 'progress', 'done'], 'the markup order changed');
+      const visual = markup.map((n, i) => ({ n, i, o: order[n] ?? 0 })).sort((x, y) => x.o - y.o || x.i - y.i).map((x) => x.n);
+      assert.deepEqual(visual, ['scheduled', 'next', 'waiting', 'later', 'progress', 'done']);
+    });
+
+    it('a By band row looks tappable on the phone, in the phone block, after the By band rules', () => {
+      const b = block(PHONE);
+      assert.match(rule(b, '.bb-row'), /cursor:pointer/);
+      assert.match(rule(b, '.bb-row'), /touch-action:manipulation/);
+      assert.ok(css.indexOf(b) > css.indexOf('.bb-row { display:flex'), 'the phone rule comes before the base row rule and loses');
+    });
+
+    it('the Lanes list shows the state word on the phone and still hides the owner; the word goes under the title', () => {
+      const line = css.split('\n').find((l) => l.includes('@media (max-width:720px) { .lane {'));
+      assert.ok(line, 'the phone Lanes rule is missing');
+      const hidden = /([^{}]*)\{\s*display:none;\s*\}/.exec(line.slice(line.indexOf('}') + 1))?.[1] ?? '';
+      assert.match(hidden, /\.lane \.own/, 'the owner is no longer hidden');
+      assert.doesNotMatch(hidden, /state-c/, 'the state word is still hidden');
+      const b = block(PHONE);
+      assert.match(rule(b, '.lane .state-c'), /grid-area:2\/2/);
+      assert.match(rule(b, '.stripe'), /grid-row:1\/3/);
+    });
+
+    it('the main script exposes the view switch to the client, and the client calls it', () => {
+      assert.match(html, /window\.lbSetView = setView;/);
+      const client = fs.readFileSync(path.join(HERE, 'kanban-client.js'), 'utf8');
+      assert.match(client, /window\.lbSetView\('columns', false\)/);
+      assert.match(client, /setProperty\('--bar-h'/, 'the client never sets the bar height the scroll padding reads');
     });
   });
 

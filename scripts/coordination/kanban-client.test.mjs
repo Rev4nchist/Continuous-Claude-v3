@@ -55,6 +55,12 @@ const CLIENT = stripClientComments(RAW);
 const focusLog = [];
 /** Every window.scrollBy(x, y) the page made, in order. Cleared by openPage. */
 const scrollLog = [];
+/** PR-M2: what a By band row tap did, in order: 'view:<v>,<save>' from window.lbSetView and 'scroll:<id>:<opts>' from scrollIntoView. Cleared by openPage. */
+const navLog = [];
+/** The state of the page at the moment of the last scrollIntoView, so a test can check the scroll came after every layout change. */
+let atScroll = null;
+// The cap is a constant of the page generator. The test reads it, so a change there cannot leave this file on another number.
+const LATER_CAP = Number(/const LATER_CAP = (\d+);/.exec(fs.readFileSync(path.join(HERE, 'render-board.mjs'), 'utf8'))?.[1]);
 const HELPERS = [
   place.placeLanes, place.stampMs, place.isPending, place.syncState, place.fnv1a, place.hashFields, place.cardBase, place.cardDiff,
   place.plainPrompt, place.boardMismatch, place.boardWriteKind, place.mergeUnknownColumns, place.bandAhead, place.doneChip,
@@ -192,9 +198,11 @@ const LANES = [
 ];
 
 /** Opens the page and waits until the saved order has loaded (or the page has refused it). */
-async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false, phone = false, coarse = phone, shift = null, flagShift = 0, statusShift = 0, sched = null, schedN = null } = {}) {
+async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false, phone = false, coarse = phone, shift = null, flagShift = 0, statusShift = 0, sched = null, schedN = null, hiddenNext = false, noLbSetView = false, schedCards = [], barH = 40 } = {}) {
   focusLog.length = 0;
   scrollLog.length = 0;
+  navLog.length = 0;
+  atScroll = null;
   const db = fakeDb(doc ? { [DOC]: doc } : {}, { liveDoc, getFails, cardsSilent });
   const timers = [];
   const parts = new Map();
@@ -210,11 +218,26 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     attrs: { 'data-id': l.id, 'data-hash': 'h' },
     // shift: [top before the render, top after it] of the card below this one, to test the scroll the page makes after a move.
     // flagShift / statusShift: pixels the layout adds below the moved card once a visible flag box / a Saving line is painted. The real page has layout; the stub fakes it here.
-    nextElementSibling: shift ? { getBoundingClientRect: (() => { let n = 0; return () => ({ top: shift[Math.min(n++, shift.length - 1)] + layoutShift() }); })() } : null,
-    previousElementSibling: null,
+    nextElementSibling: hiddenNext ? { offsetParent: null, getBoundingClientRect: (() => { let n = 0; return () => ({ top: [0, 400][Math.min(n++, 1)] }); })() } : shift ? { getBoundingClientRect: (() => { let n = 0; return () => ({ top: shift[Math.min(n++, shift.length - 1)] + layoutShift() }); })() } : null,
+    previousElementSibling: hiddenNext ? { getBoundingClientRect: () => ({ top: 100 }) } : null,
+    scrollIntoView(opts) {
+      navLog.push('scroll:' + l.id + ':' + JSON.stringify(opts));
+      atScroll = { view: navLog.some((e) => e.startsWith('view:')), detailHidden: partOf(l.id, '.kb-detail').hidden, collapsed: [...classes].filter(([, set]) => set.has('kb-collapsed')).map(([n]) => n), capped: classes.get('later').has('kb-capped') };
+    },
     querySelector: (sel) => partOf(l.id, sel),
     insertBefore: (node) => { flagBoxes.set(l.id, node); },
   })]));
+  for (const id of cardEls.keys()) partOf(id, '.kb-detail').hidden = true;
+  const laterMore = stub();
+  const schedParts = new Map();
+  const schedEls = schedCards.map((id) => {
+    const part = (sel) => { if (!schedParts.has(id + sel)) schedParts.set(id + sel, stub()); return schedParts.get(id + sel); };
+    return stub({
+      querySelector: (sel) => (sel === '.kb-id' ? { textContent: id } : part(sel)),
+      scrollIntoView(opts) { navLog.push('scroll:' + id + ':' + JSON.stringify(opts)); },
+      part,
+    });
+  });
   const layoutShift = () => {
     const flagUp = [...flagBoxes.values()].some((b) => !b.hidden && b.children[0] && b.children[0].textContent);
     return (flagUp ? flagShift : 0) + (els['kb-status'] && els['kb-status'].textContent === 'Saving…' ? statusShift : 0);
@@ -227,20 +250,26 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
       classes.set(name, set);
       return { add: (c) => set.add(c), remove: (c) => set.delete(c), toggle: (c, on) => (on === undefined ? (set.has(c) ? set.delete(c) : set.add(c)) : on ? set.add(c) : set.delete(c)), contains: (c) => set.has(c) };
     })(),
-    querySelector: (sel) => (sel === '.kb-list' ? stub({ children: [] }) : stub()),
+    querySelector: (sel) => (sel === '.kb-list' ? stub({ children: [] }) : sel === '.lt-more' && name === 'later' ? laterMore : stub()),
+    // The Scheduled column holds .kb-done-card items (no data-id): the id is the text of their .kb-id.
+    querySelectorAll: (sel) => (name === 'scheduled' && sel === '.kb-done-card' ? schedEls : []),
   }));
-  const els = { 'kb-status': stub(), 'kb-order': stub({ hidden: true }), 'kb-live': stub(), 'kb-data': stub({ textContent: JSON.stringify(lanes) }) };
+  const els = { 'kb-status': stub({ closest: (sel) => (sel === '.kb-bar' ? { offsetHeight: barH } : null) }), 'kb-order': stub({ hidden: true }), 'kb-live': stub(), 'kb-data': stub({ textContent: JSON.stringify(lanes) }) };
   // kb-sched: the scheduled lanes (id, state, band), which are not in kb-data. A string is raw text, to test bad JSON.
   if (sched !== null) els['kb-sched'] = stub({ textContent: typeof sched === 'string' ? sched : JSON.stringify(sched) });
+  // The By band block sits outside the board. A row has a .bb-id child that holds the lane id.
+  els.bb = stub();
   els['kb-board'] = stub({
     querySelectorAll: (sel) => (sel === '.kb-card' ? [...cardEls.values()] : sel === '.kcol' ? colEls : []),
   });
   const document = {
     createElement: (tag) => { const el = stub(); el.tag = tag; return el; },
     getElementById: (id) => els[id] || null,
+    documentElement: { style: { setProperty: (k, v) => { rootVars[k] = v; } } },
     addEventListener() {},
     visibilityState: 'visible',
   };
+  const rootVars = {};
   const claude = { use: (name) => (name === 'db' && !noDb ? Promise.resolve(db.api) : Promise.resolve(null)) };
   const sandbox = {
     document,
@@ -252,7 +281,9 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
   };
-  const source = `${HELPERS.map((f) => f.toString()).join('\n')}\nvar KB_BOARD = ${JSON.stringify(board)};\n${raw ? RAW : CLIENT}`;
+  // The main page script defines window.lbSetView (the view switch). A page without it must not break the row tap.
+  if (!noLbSetView) sandbox.window.lbSetView = (v, save) => { navLog.push('view:' + v + ',' + save); };
+  const source = `${HELPERS.map((f) => f.toString()).join('\n')}\nvar LATER_CAP = ${LATER_CAP};\nvar KB_BOARD = ${JSON.stringify(board)};\n${raw ? RAW : CLIENT}`;
   vm.runInNewContext(source, sandbox, { filename: 'kanban-client.inlined.js' });
   await settle();
   return {
@@ -309,6 +340,30 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
       const [text, undo] = box.children;
       return { hidden: box.hidden, text: text.textContent, kind: box.getAttribute('data-k'), undo, undoHidden: undo.hidden };
     },
+    /** A tap on a By band row for lane id. No settle: the page answers at once. */
+    tapRow(id) {
+      const row = { querySelector: (sel) => (sel === '.bb-id' ? { textContent: id } : null) };
+      const target = { closest: (sel) => (sel === '.bb-row' ? row : null) };
+      for (const f of els.bb.handlers.click || []) f({ target });
+    },
+    /** A tap in By band that is not on a row (a group heading). */
+    tapBandOutside() { for (const f of els.bb.handlers.click || []) f({ target: { closest: () => null } }); },
+    /** A tap on the Show more button of Later. */
+    tapShowMore() { for (const f of els['kb-board'].handlers.click || []) f({ target: { closest: (sel) => (sel === '.lt-more' ? laterMore : null) } }); },
+    /** The By band tap log, the page state at the last scrollIntoView, and the Later cap as the page painted it. */
+    nav: () => navLog.slice(),
+    atScroll: () => atScroll,
+    capped: () => classes.get('later').has('kb-capped'),
+    moreText: () => laterMore.textContent,
+    /** A dragover on a column, like the event. Needs dragStart first. */
+    dragOver(colName, y = 0) {
+      const col = colEls.find((c) => c.attrs['data-col'] === colName);
+      const target = { closest: (sel) => (sel === '.kcol' ? col : null) };
+      for (const f of els['kb-board'].handlers.dragover || []) f({ target, clientY: y, dataTransfer: {}, preventDefault() {} });
+    },
+    /** A part of a scheduled card (.kb-ro-detail, summary), and the root custom properties the page set. */
+    schedPart: (id, sel) => schedEls.find((e) => e.querySelector('.kb-id').textContent === id).part(sel),
+    rootVars: () => ({ ...rootVars }),
     /** The screen-reader line the page announces. */
     live: () => els['kb-live'].textContent,
     /** The values of the options the page put in a card's Move select. */
@@ -1195,4 +1250,197 @@ test('the scroll fix measures the shift after the move note and the status line 
   const plain = await open({ phone: true, shift: [300, 212] });
   await plain.clickNext('l2');
   assert.deepEqual(plain.scrolls(), [[0, -88]], 'with no extra layout the scroll is the render shift only');
+});
+
+// ------------------------------------------------------------------ PR-M2: a By band row tap, a capped Later column
+//
+// How these can fail:
+//   - a row tap does nothing on the phone, or runs on a wide screen, or runs for a lane that has no card (Scheduled, Done)
+//   - the tap saves the view choice (the page would open on Columns at every reload), or leaves the column collapsed, or the Details shut
+//   - a second tap closes the Details; the tap moves focus or writes to the db
+//   - the scroll comes before the view switch, the column open or the Details open, so a later layout change moves the card
+//   - Later with more than LATER_CAP cards is not capped, is capped at LATER_CAP or less, or "Show N more" has the wrong N
+//   - Show more or a move into Later leaves the cap on, so the moved card is hidden
+//   - Do next or Move to on the last visible Later card measures a hidden neighbour (top 0) and the page jumps
+
+/** n backlog lanes, all saved in Later. */
+const laterLanes = (n) => Array.from({ length: n }, (_, i) => ({ id: 'x' + (i + 1), state: 'backlog', priority: 10 + i, band: 'P2', title: 'X' + (i + 1) }));
+const withLater = (n, extra = {}) => {
+  const lanes = [...BLANES.filter((l) => l.id.startsWith('n') || l.id === 'd1'), ...laterLanes(n), { id: 'p1', state: 'active', priority: 99, band: 'P1', title: 'P1' }];
+  const columns = { next: ['n1', 'n2', 'n3'], later: laterLanes(n).map((l) => l.id), waiting: [] };
+  return openPage({ board: 'zz-a', lanes, doc: board({ board: 'zz-a', syncedAt: SYNCED, columns }), ...extra });
+};
+
+test('a row tap on the phone opens the Columns view without saving the choice, opens the column and the Details, and scrolls last', async () => {
+  const page = await open({ phone: true });
+  assert.equal(page.collapsed('next'), true);
+  const before = page.focusCount();
+  page.tapRow('n2');
+  assert.equal(page.collapsed('next'), false, 'the column stays shut under the card');
+  assert.equal(page.part('n2', '.kb-detail').hidden, false, 'the Details are shut');
+  assert.equal(page.part('n2', '.kb-more').attrs['aria-expanded'], 'true');
+  assert.deepEqual(page.nav(), ['view:columns,false', 'scroll:n2:{"block":"start"}'], 'view first (not saved), scroll last');
+  const s = page.atScroll();
+  assert.equal(s.view, true);
+  assert.equal(s.detailHidden, false, 'the page scrolled before the Details opened');
+  assert.ok(!s.collapsed.includes('next'), 'the page scrolled before the column opened');
+  assert.equal(page.focusCount(), before, 'a row tap moved focus');
+  assert.deepEqual(page.db.log, [], 'a row tap wrote to the db');
+});
+
+test('a second tap on the same row keeps the Details open', async () => {
+  const page = await open({ phone: true });
+  page.tapRow('n2');
+  page.tapRow('n2');
+  assert.equal(page.part('n2', '.kb-detail').hidden, false, 'the second tap closed the Details');
+  assert.equal(page.part('n2', '.kb-more').attrs['aria-expanded'], 'true');
+});
+
+test('a row tap on a wide screen does nothing; a tap outside a row does nothing', async () => {
+  const wide = await open();
+  wide.tapRow('n2');
+  assert.deepEqual(wide.nav(), [], 'a wide screen navigated');
+  const phone = await open({ phone: true });
+  phone.tapBandOutside();
+  assert.deepEqual(phone.nav(), []);
+});
+
+test('a row tap for a lane with no card at all (Done, unknown) does not switch the view', async () => {
+  const page = await open({ phone: true });
+  for (const id of ['d1', 'sch-1', 'nope']) page.tapRow(id); // openPage gives no Scheduled card here
+  assert.deepEqual(page.nav(), [], 'the view switched for a lane that has no card');
+});
+
+test('an In progress row opens the In progress column and its Details and writes nothing', async () => {
+  const page = await withLater(3, { phone: true });
+  assert.equal(page.collapsed('progress'), true);
+  page.tapRow('p1');
+  assert.equal(page.collapsed('progress'), false);
+  assert.equal(page.part('p1', '.kb-detail').hidden, false);
+  assert.deepEqual(page.nav(), ['view:columns,false', 'scroll:p1:{"block":"start"}']);
+  assert.deepEqual(page.db.log, []);
+});
+
+test('a row tap still scrolls when the main script has no view switch', async () => {
+  const page = await open({ phone: true, noLbSetView: true });
+  page.tapRow('n2');
+  assert.deepEqual(page.nav(), ['scroll:n2:{"block":"start"}']);
+});
+
+test('Later with more than the cap is capped and says how many are hidden; at the cap it is not', async () => {
+  const over = await withLater(LATER_CAP + 5, { phone: true });
+  assert.equal(over.capped(), true);
+  assert.equal(over.moreText(), 'Show 5 more');
+  const exact = await withLater(LATER_CAP, { phone: true });
+  assert.equal(exact.capped(), false, 'a list of exactly the cap is capped');
+  const one = await withLater(LATER_CAP + 1, { phone: true });
+  assert.equal(one.capped(), true);
+  assert.equal(one.moreText(), 'Show 1 more');
+});
+
+test('Show more removes the cap', async () => {
+  const page = await withLater(LATER_CAP + 5, { phone: true });
+  assert.equal(page.capped(), true, 'Later was not capped before the tap');
+  page.tapShowMore();
+  assert.equal(page.capped(), false);
+});
+
+test('a card moved into a capped Later column removes the cap, so it is not hidden; a move out of Later leaves the cap', async () => {
+  const page = await withLater(LATER_CAP + 5, { phone: true });
+  await page.clickNext('x1');
+  assert.equal(page.capped(), true, 'a move out of Later lifted the cap');
+  await page.moveTop('n1', 'later');
+  assert.equal(page.capped(), false, 'the moved card sits in a hidden list');
+});
+
+test('a row tap on a Later card past the cap removes the cap; one inside the cap leaves it', async () => {
+  const page = await withLater(LATER_CAP + 5, { phone: true });
+  page.tapRow('x1');
+  assert.equal(page.capped(), true, 'a card inside the cap lifted it');
+  page.tapRow('x' + (LATER_CAP + 1));
+  assert.equal(page.capped(), false, 'the card is in a hidden list');
+  assert.equal(page.atScroll().capped, false, 'the page scrolled before the cap was lifted');
+});
+
+test('Do next or Move to skips a hidden neighbour: the page does not scroll by the hidden card\'s top', async () => {
+  const page = await open({ phone: true, hiddenNext: true });
+  await page.moveTop('n1', 'later');
+  assert.deepEqual(page.scrolls(), [], 'the hidden card measured top 0 before and 400 after');
+});
+
+// ---------------------------------------------------------------- PR-M2 critic fixes
+//   - a Scheduled lane has a By band row, but its card is a .kb-done-card: the tap must still open that column and card
+//   - a pinned crit status bar covers the top of the page: the scroll padding must count the bar
+//   - a drag over a capped Later puts the drop placeholder in a hidden slot: the cap must lift first
+//   - Show more and a row tap hide the control that was focused: say where the card is, and keep focus on a fine pointer
+
+test('a row tap on a Scheduled lane opens the Scheduled column and its Details, scrolls last, and says where it is', async () => {
+  const page = await open({ phone: true, schedCards: ['sch-1'] });
+  page.collapse('scheduled');
+  page.tapRow('sch-1');
+  assert.deepEqual(page.nav(), ['view:columns,false', 'scroll:sch-1:{"block":"start"}']);
+  assert.equal(page.collapsed('scheduled'), false, 'the Scheduled column stays shut');
+  assert.equal(page.schedPart('sch-1', '.kb-ro-detail').open, true, 'the Details of the Scheduled card are shut');
+  assert.equal(page.live(), 'sch-1 shown in Scheduled and reminders');
+  assert.deepEqual(page.db.log, []);
+});
+
+test('a row tap on a lane with no card anywhere still does nothing, even when other Scheduled cards exist', async () => {
+  const page = await open({ phone: true, schedCards: ['sch-1'] });
+  page.tapRow('nope');
+  assert.deepEqual(page.nav(), []);
+  assert.equal(page.live(), '');
+});
+
+test('a row tap says which column holds the card', async () => {
+  const page = await withLater(LATER_CAP + 5, { phone: true });
+  page.tapRow('n2');
+  assert.equal(page.live(), 'n2 shown in Next');
+  page.tapRow('p1');
+  assert.equal(page.live(), 'p1 shown in In progress');
+  page.tapRow('x' + (LATER_CAP + 1));
+  assert.equal(page.live(), 'x' + (LATER_CAP + 1) + ' shown in Later');
+});
+
+test('a row tap sets the pinned bar height for the scroll padding only while the status is crit', async () => {
+  const calm = await open({ phone: true, barH: 52 });
+  calm.tapRow('n2');
+  assert.equal(calm.rootVars()['--bar-h'], '0px', 'a calm status reserved room for the bar');
+  const crit = await open({ phone: true, barH: 52, doc: board({ board: 'zz-other', syncedAt: SYNCED }), board: 'zz-a' });
+  assert.match(crit.status(), /belongs to board/);
+  crit.tapRow('n2');
+  assert.equal(crit.rootVars()['--bar-h'], '52px', 'the pinned crit bar is not counted in the scroll padding');
+});
+
+test('a drag over a capped Later lifts the cap before the placeholder is placed; a drag over Next does not', async () => {
+  const page = await withLater(LATER_CAP + 5, { phone: true });
+  page.dragStart('x1');
+  page.dragOver('next');
+  assert.equal(page.capped(), true, 'a drag over Next lifted the Later cap');
+  page.dragOver('later');
+  assert.equal(page.capped(), false, 'the placeholder would sit in a hidden slot');
+});
+
+test('Show more says that all cards are shown', async () => {
+  const page = await withLater(LATER_CAP + 5, { phone: true });
+  page.tapShowMore();
+  assert.equal(page.live(), 'Later: all ' + (LATER_CAP + 5) + ' cards shown');
+});
+
+test('Show more moves focus to the first revealed card on a fine pointer, and not on a touch screen', async () => {
+  const fine = await withLater(LATER_CAP + 5, { phone: true, coarse: false });
+  fine.tapShowMore();
+  assert.equal(fine.lastFocus(), fine.part('x' + (LATER_CAP + 1), '.kb-more'), 'focus fell to the body');
+  const touch = await withLater(LATER_CAP + 5, { phone: true });
+  touch.tapShowMore();
+  assert.equal(touch.focusCount(), 0, 'a touch screen got a focus() call');
+});
+
+test('a row tap moves focus to the shown card on a fine pointer only', async () => {
+  const fine = await open({ phone: true, coarse: false });
+  fine.tapRow('n2');
+  assert.equal(fine.lastFocus(), fine.part('n2', '.kb-more'));
+  const touch = await open({ phone: true });
+  touch.tapRow('n2');
+  assert.equal(touch.focusCount(), 0);
 });

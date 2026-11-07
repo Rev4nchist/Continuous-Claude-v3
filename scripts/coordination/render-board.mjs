@@ -275,6 +275,12 @@ const laneRow = (l, i) => {
 // complete with no script. kanban-client.js re-places the cards from the saved
 // order. One placement function (kanban-place.mjs) serves both.
 
+// Later shows this many cards on the phone, then "Show N more". The client reads it as a global (kbScript) and the phone CSS counts from it.
+// PR-M2 phone CSS (no comments in the CSS: the page is near its size ratchet). The By band row rule sits in the phone block because the touch block loses on
+// source order. The state word takes row 2 of the Lanes grid under the title (the stripe spans both rows). Waiting goes above Later by CSS order, never by
+// markup order (pinned, and it keeps the tab order); the selector is .kcol[data-col] because cards carry data-col too. The footer rule has :not(.kb-collapsed)
+// because the collapsed rule ties on specificity.
+const LATER_CAP = 15;
 const KB_COLS = [
   ['next', 'Next'], ['later', 'Later'], ['waiting', 'Waiting on Dave'],
 ];
@@ -434,7 +440,7 @@ const kbColumn = (key, name, ids, movable, ro = false) => `<div class="kcol"${mo
     ${movable || ro ? '' : '<p class="kb-sub">Held by a session. Not reorderable.</p>'}
     <ul class="kb-list" id="kb-list-${key}">${ids.length === 0 && ro
     ? `<li class="kb-empty">${KB_RO_EMPTY[key] || 'Nothing here'}</li>`
-    : ids.map((id, i) => kbCard(kbById.get(id), movable, i + 1, key, ro)).join('')}</ul>
+    : ids.map((id, i) => kbCard(kbById.get(id), movable, i + 1, key, ro)).join('')}</ul>${key === 'later' && movable && !ro ? '<p class="dn-foot lt-foot"><button class="lt-more" type="button"></button></p>' : ''}
   </div>`;
 
 // ------------------------------------------------------------ By band
@@ -477,6 +483,7 @@ if (/<\/script/i.test(kbClientSource)) throw new Error('kanban-client.js must no
 const kbClient = KANBAN ? stripClientComments(kbClientSource) : '';
 // KB_BOARD names the board that owns this page: the client stamps it on every save and refuses a saved order stamped with another.
 const kbScript = KANBAN ? `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip].map((f) => f.toString()).join('\n')}
+var LATER_CAP = ${LATER_CAP};
 var KB_BOARD = ${JSON.stringify(KEY).replace(/</g, '\\u003c')};
 ${kbClient}` : '';
 
@@ -727,8 +734,9 @@ const html = `${STAMP}
   .kb-done-card .kb-track, .kb-done-card .kb-dl dt { color:var(--muted); }
   .dn-time { color:var(--muted); font:500 10.5px/1.4 var(--mono); }
   .dn-foot { margin:8px 4px 2px; color:var(--muted); font:400 11px/1.5 var(--mono); }
-  .dn-all { padding:4px 0; border:0; background:none; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; }
-  .dn-all:hover { text-decoration:underline; }
+  .lt-foot { display:none; }
+  .dn-all, .lt-more { padding:4px 0; border:0; background:none; color:var(--info); font:500 11px/1.4 var(--mono); cursor:pointer; }
+  .dn-all:hover, .lt-more:hover { text-decoration:underline; }
   /* Scheduled and reminders: the time chip, and the empty text for the editable page. */
   .sc-chip { padding:2px 7px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font:600 10.5px/1.2 var(--mono); }
   .sc-due { border-color:var(--crit); color:var(--crit); }
@@ -786,7 +794,7 @@ const html = `${STAMP}
   }
   @media (pointer:coarse), (max-width:720px) {
     .kb-ro-detail > summary { min-height:44px; box-sizing:border-box; padding:4px 0; }
-    .dn-all { min-height:44px; }
+    .dn-all, .lt-more { min-height:44px; }
     .kb-head, .kb-more, .kb-btn, .kb-to, .kb-st { min-height:44px; }
     .kb-btn { min-width:44px; }
     .kb-more { padding:4px 10px 4px 0; }
@@ -844,7 +852,7 @@ const html = `${STAMP}
   [data-view="columns"] .bb-note { display:none; }
 
   @media (max-width:1080px) { .lane { grid-template-columns:3px minmax(160px,1.4fr) 92px 130px 56px; } .lane .scope { display:none; } }
-  @media (max-width:720px) { .lane { grid-template-columns:3px 1fr 56px; } .lane .state-c, .lane .own { display:none; } }
+  @media (max-width:720px) { .lane { grid-template-columns:3px 1fr 56px; } .lane .own { display:none; } }
   /* Phone header: only .top-row (brand and theme, one line) stays pinned. header and .top-in drop their boxes so .top-row sticks
      against the page, not against the header; the counters then scroll away with the page. */
   @media (max-width:720px) {
@@ -863,10 +871,17 @@ const html = `${STAMP}
     #priorities .sec-head p, .bb-note { display:none; }
     [data-view="band"] .kb-status[data-k="idle"], [data-view="band"] .kb-status[data-k="ok"] { display:none; }
     .kb-bar:has(.kb-status[data-k="crit"]) { position:sticky; top:var(--top-h); z-index:20; padding:6px 0; background:var(--ground); }
-    html { scroll-padding-top:calc(var(--top-h) + 8px); }
+    html { scroll-padding-top:calc(var(--top-h) + var(--bar-h,0px) + 8px); }
     /* The By band rules are above this block, so its type sizes must be here to win. */
     .bb-t { font-size:14px; }
     .bb-track, .bb-rank { font-size:12px; }
+    .bb-row { cursor:pointer; touch-action:manipulation; }
+    .stripe { grid-row:1/3; }
+    .lane .state-c { grid-area:2/2; padding:0 13px 10px; }
+    .kcol[data-col="later"] { order:1; }
+    .kcol[data-col="progress"], .kcol[data-col="done"] { order:2; }
+    .kcol.kb-capped .kb-list > :nth-child(n+${LATER_CAP + 1}) { display:none; }
+    .kcol.kb-capped:not(.kb-collapsed) .lt-foot { display:block; }
   }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }${KANBAN ? '' : KB_RO_CSS}
 </style>
@@ -1072,6 +1087,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       b.addEventListener('click', function () { setView(b.dataset.v, true); });
     });
     setView(lsGet('lb-view', ['band', 'columns']) || 'band', false);
+    window.lbSetView = setView;
 
     // Filters: two groups. State chips and band chips combine (state AND band); a second click on a band chip clears it.
     var fState = 'open';
