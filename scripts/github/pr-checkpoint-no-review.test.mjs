@@ -24,7 +24,8 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
-const LIVE = JSON.parse(readFileSync(path.join(ROOT, 'review-router.config.json'), 'utf8'));
+// These tests cover the plain (flag off) confirm path. checkpoint.ledger is on in the live config (Dave 2026-11-07), so pin it off here; pr-checkpoint-ledger.test.mjs covers the flag on.
+const LIVE = (() => { const c = JSON.parse(readFileSync(path.join(ROOT, 'review-router.config.json'), 'utf8')); c.checkpoint = { ...c.checkpoint, ledger: false }; return c; })();
 const YAML = readFileSync(path.join(ROOT, '.coderabbit.yaml'), 'utf8');
 const NOW = '2026-11-04T12:00:00.000Z';
 const HEAD = 'a'.repeat(40);
