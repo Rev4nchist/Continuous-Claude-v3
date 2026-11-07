@@ -30,6 +30,7 @@ import {
   rmSync,
   mkdirSync,
   readFileSync,
+  writeFileSync,
 } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
@@ -55,21 +56,30 @@ function norm(p: string): string {
 // ---------------------------------------------------------------------------
 describe('post-edit-diagnostics D2e-02: tsc invoked as node <tsc>, not a .cmd shim', () => {
   it('resolves to `node <typescript/bin/tsc>` with discrete array args (no shell)', () => {
-    const cmd = resolveTscCommand(HOOKS_DIR);
+    // A fixture project with its own typescript entry: the test must not depend on where this
+    // checkout keeps node_modules (a nested worktree reaches it through the shared store link).
+    const fixture = mkdtempSync(join(tmpdir(), 'ped-d2e02-'));
+    mkdirSync(join(fixture, 'node_modules', 'typescript', 'bin'), { recursive: true });
+    writeFileSync(join(fixture, 'node_modules', 'typescript', 'bin', 'tsc'), '#!/usr/bin/env node\n');
+    try {
+      const cmd = resolveTscCommand(fixture);
 
-    expect(cmd).not.toBeNull();
+      expect(cmd).not.toBeNull();
 
-    // The command is the Node binary itself -- never a tsc/.cmd/.bat shim.
-    expect(cmd!.command).toBe(process.execPath);
-    expect(norm(cmd!.command).toLowerCase()).toMatch(/node(\.exe)?$/);
-    expect(norm(cmd!.command).toLowerCase()).not.toMatch(/tsc(\.cmd|\.bat)$/);
+      // The command is the Node binary itself -- never a tsc/.cmd/.bat shim.
+      expect(cmd!.command).toBe(process.execPath);
+      expect(norm(cmd!.command).toLowerCase()).toMatch(/node(\.exe)?$/);
+      expect(norm(cmd!.command).toLowerCase()).not.toMatch(/tsc(\.cmd|\.bat)$/);
 
-    // First arg is the typescript package JS entrypoint, and it really exists.
-    expect(norm(cmd!.args[0])).toMatch(/typescript\/bin\/tsc$/);
-    expect(existsSync(cmd!.args[0])).toBe(true);
+      // First arg is the typescript package JS entrypoint, and it really exists.
+      expect(norm(cmd!.args[0])).toMatch(/typescript\/bin\/tsc$/);
+      expect(existsSync(cmd!.args[0])).toBe(true);
 
-    // Flags are preserved as individual array elements (spaced-path safe).
-    expect(cmd!.args).toEqual([cmd!.args[0], '--noEmit', '--pretty', 'false']);
+      // Flags are preserved as individual array elements (spaced-path safe).
+      expect(cmd!.args).toEqual([cmd!.args[0], '--noEmit', '--pretty', 'false']);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
   });
 
   it('returns null when typescript is not installed for the project', () => {
