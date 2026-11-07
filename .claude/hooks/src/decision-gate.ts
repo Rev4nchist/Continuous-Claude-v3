@@ -114,6 +114,17 @@ const STORE_FN_RE = /\b(?:decisionRecord|offerWrite|decisionUse|missBump)\b/;
 const WRITE_SIGNAL_RE = /(?<![\d&])>|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|tee|sed|mv|cp|rm|del|truncate|dd|ln)\b|\b(?:writeFile|appendFile|writeFileSync|rename)/i;
 const CODE_SIGNAL_RE = /\bnode(?:\.exe)?\b[^|;&\n]*?(?:\s-e\b|\s--eval\b|\s-p\b|\s--print\b|--input-type)|\bimport\s*\(|\brequire\s*\(/i;
 
+// Code (node -e) that names the store is a write unless it only reads: it calls a read API and holds nothing that can write, copy, open, run a program or load code.
+// Anything else stays denied (fail closed). `=>` and `>` still count as a write signal above.
+// require() may load only fs or the store file itself: any other module, a variable argument, string building, a template or bracket access on a string can reach a writer, so it stays denied.
+const READ_ONLY_CODE_RE = /\b(?:readFileSync|readFile)\s*\(|\brequire\s*\(\s*["'][^"']*decisions\.json["']\s*\)/;
+const CODE_CAN_WRITE_RE = new RegExp([
+  'write|append|copy|rename|unlink|\\brm|truncate|open|link|mkdir|chmod|chown|utimes|stream|child_process|spawn|exec|eval|\\bFunction\\b|import\\s*\\(|\\bflags?\\b|O_[A-Z]',
+  'process\\.binding|decisions\\.mjs|decisionRecord|offerWrite|decisionUse|missBump|fetch|https?:',
+  '\\brequire\\s*\\(\\s*(?!["\'](?:(?:node:)?fs|[^"\']*decisions\\.json)["\']\\s*\\))',
+  '["\'`]\\s*\\+|\\+\\s*["\'`]|\\$\\{|\\[\\s*["\'`]',
+].join('|'), 'i');
+
 // A tap is used up by land-decision.mjs use (land-pr.ps1 calls it after the merge), and a pr-checkpoint.mjs run may post a probe or offer.
 // The model must not run the first from a shell, nor loop the second.
 const USE_TAP_RE = /land-decision\.mjs["']?\s+["']?use\b/i;
@@ -131,7 +142,11 @@ function writesStoreText(text: string, deps: Deps): boolean {
   const lower = norm(flat.replace(readCopyRe(deps), ' '));
   const names = [lower, squashQuotes(lower)].some((t) => STORE_TEXT_RE.test(t)) || lower.includes(norm(decisionsPath(deps.env)));
   const code = CODE_SIGNAL_RE.test(text);
-  if (names || STORE_CODE_RE.test(text)) return WRITE_SIGNAL_RE.test(flat) || code;
+  if (names || STORE_CODE_RE.test(text)) {
+    if (WRITE_SIGNAL_RE.test(flat)) return true;
+    if (!code) return false;
+    return !(names && !STORE_CODE_RE.test(text) && READ_ONLY_CODE_RE.test(text) && !CODE_CAN_WRITE_RE.test(text));
+  }
   return STORE_FN_RE.test(text) && code;
 }
 
