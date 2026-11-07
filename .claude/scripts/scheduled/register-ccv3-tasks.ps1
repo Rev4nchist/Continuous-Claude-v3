@@ -8,10 +8,13 @@
     .ps1  ->  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed script>"
   The script path in tasks.json is relative to the repo root. The task runs the INSTALLED copy under
   ~/.claude (the forward sync puts it there), so the job that runs is always main's version.
-  The trigger ("daily HH:MM" or "weekly <Day> HH:MM") and execLimitMin come from the file.
-  Two optional booleans set the power behaviour (a missing field is false):
+  The trigger ("daily HH:MM", "weekly <Day> HH:MM" or "every Nm", N from 1 to 1439: repeat every N minutes all day, for ever)
+  and execLimitMin come from the file. A bad trigger fails the dry run too.
+  Optional booleans set the power behaviour and the window (a missing field is false):
     llm   true -> the task starts on battery and keeps running when the laptop goes on battery.
           false -> the Windows default: no start on battery, stopped when going on battery.
+    battery  true -> the same battery behaviour as llm, for a job that is not an LLM job.
+    hidden   true -> a .ps1 action runs with -WindowStyle Hidden (only the tasks that set it change).
     wake  true -> the task wakes the laptop (WakeToRun). Use it with llm=true, or the wake does nothing on battery.
   The dry run prints llm, battery and wake for each task, read from the settings object it would register.
   Wake on battery also needs the power plan setting "Allow wake timers" to be on for battery. This script does not change it.
@@ -36,12 +39,21 @@ if (-not $TasksFile) { $TasksFile = Join-Path (Resolve-Path (Join-Path $PSScript
 function Get-Trigger([string]$text) {
   if ($text -match '^daily (\d{2}:\d{2})$') { return New-ScheduledTaskTrigger -Daily -At $Matches[1] }
   if ($text -match '^weekly (\w+) (\d{2}:\d{2})$') { return New-ScheduledTaskTrigger -Weekly -DaysOfWeek $Matches[1] -At $Matches[2] }
+  if ($text -match '^every (\d+)m$') {
+    $n = [int]$Matches[1]
+    if ($n -lt 1 -or $n -gt 1439) { throw "unsupported trigger '$text': every Nm needs N from 1 to 1439" }
+    # Repeat all day, for ever: a Once trigger from midnight today with an interval and NO -RepetitionDuration (an empty
+    # duration repeats for ever on Windows 10 and later). Do not pass [TimeSpan]::MaxValue: its duration P99999999DT23H59M59S
+    # is refused by Register-ScheduledTask as "incorrectly formatted or out of range".
+    return New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes $n)
+  }
   throw "unsupported trigger '$text'"
 }
 
-function Get-ActionParts([string]$installed) {
+function Get-ActionParts([string]$installed, [bool]$hidden = $false) {
   if ($installed.EndsWith('.ps1')) {
-    return @('powershell.exe', ('-NoProfile -ExecutionPolicy Bypass -File "' + $installed + '"'))
+    $style = if ($hidden) { '-WindowStyle Hidden ' } else { '' }
+    return @('powershell.exe', ('-NoProfile -ExecutionPolicy Bypass ' + $style + '-File "' + $installed + '"'))
   }
   return @('cmd.exe', ('/c "' + $installed + '"'))
 }
@@ -68,20 +80,22 @@ if ($Apply -and $missing -gt 0) {
 # New-ScheduledTaskSettingsSet builds an object in memory: it changes nothing, so a dry run can print what it holds.
 function Get-TaskSettings($t) {
   $set = @{ ExecutionTimeLimit = (New-TimeSpan -Minutes ([int]$t.execLimitMin)); StartWhenAvailable = $true }
-  if ($t.llm -eq $true) { $set.AllowStartIfOnBatteries = $true; $set.DontStopIfGoingOnBatteries = $true }
+  if ($t.llm -eq $true -or $t.battery -eq $true) { $set.AllowStartIfOnBatteries = $true; $set.DontStopIfGoingOnBatteries = $true }
   if ($t.wake -eq $true) { $set.WakeToRun = $true }
   New-ScheduledTaskSettingsSet @set
 }
 
 foreach ($t in $tasks) {
   $installed = Get-Installed $t
-  $parts = Get-ActionParts $installed
+  $parts = Get-ActionParts $installed ($t.hidden -eq $true)
+  $trig = Get-Trigger $t.trigger   # a bad trigger fails the dry run too, not only -Apply
   $settings = Get-TaskSettings $t
   $llm = if ($t.llm -eq $true) { 'true' } else { 'false' }
   $battery = if ($settings.DisallowStartIfOnBatteries -or $settings.StopIfGoingOnBatteries) { 'block' } else { 'allow' }
   $wake = if ($settings.WakeToRun) { 'yes' } else { 'no' }
   Write-Host ("{0}: {1} {2}  [{3}, limit {4} min, llm={5} battery={6} wake={7}]" -f $t.name, $parts[0], $parts[1], $t.trigger, $t.execLimitMin, $llm, $battery, $wake)
-  if ($t.wake -eq $true -and $t.llm -ne $true) { Write-Host "[WARN] $($t.name): wake=true needs llm=true. A task that is blocked on battery is stopped at once, so the wake does nothing there." }
+  if ($trig.Repetition -and $trig.Repetition.Interval) { Write-Host ("  repeat: every {0}, duration '{1}'" -f $trig.Repetition.Interval, $trig.Repetition.Duration) }
+  if ($t.wake -eq $true -and $t.llm -ne $true -and $t.battery -ne $true) { Write-Host "[WARN] $($t.name): wake=true needs llm=true or battery=true. A task that is blocked on battery is stopped at once, so the wake does nothing there." }
   if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { Write-Host "  [MISSING] $installed"; continue }
   if (-not $Apply) { continue }
   $action = New-ScheduledTaskAction -Execute $parts[0] -Argument $parts[1] -WorkingDirectory $ClaudeHome

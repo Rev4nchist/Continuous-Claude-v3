@@ -366,7 +366,7 @@ function entryProblem(t) {
   if (!t || typeof t.name !== 'string' || !t.name) return 'has no name';
   if (!Array.isArray(t.allowedExit) || !t.allowedExit.every(Number.isInteger)) return 'allowedExit is not an array of integers';
   if (!(t.maxAgeHours > 0)) return 'maxAgeHours is not a positive number';
-  for (const field of ['llm', 'wake']) if (field in t && typeof t[field] !== 'boolean') return `${field} is not true or false`;
+  for (const field of ['llm', 'wake', 'battery', 'hidden']) if (field in t && typeof t[field] !== 'boolean') return `${field} is not true or false`;
   return null;
 }
 
@@ -377,8 +377,25 @@ function xmlFlag(settings, name, dflt) {
   return m ? m[1].toLowerCase() === 'true' : dflt;
 }
 
-/** The trigger of the task XML as text: "daily 07:50", "weekly Monday 09:20", or null when it has no calendar trigger. */
+/** Minutes in an ISO interval such as PT5M or PT1H, else NaN (a day or longer is not a repeat the tasks.json grammar names). */
+function isoMinutes(iso) {
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?$/.exec(String(iso).trim());
+  return m && (m[1] || m[2]) ? Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0) : NaN;
+}
+
+/** The repeat of a TimeTrigger in the task XML: { every: 'every 5m', duration } (duration null: repeats for ever), or null. */
+function xmlRepeat(xml) {
+  const block = /<TimeTrigger>[\s\S]*?<\/TimeTrigger>/.exec(xml)?.[0];
+  const rep = /<Repetition>[\s\S]*?<\/Repetition>/.exec(block ?? '')?.[0];
+  const minutes = isoMinutes(/<Interval>([^<]*)<\/Interval>/.exec(rep ?? '')?.[1] ?? '');
+  if (!rep || Number.isNaN(minutes)) return null;
+  return { every: `every ${minutes}m`, duration: /<Duration>([^<]*)<\/Duration>/.exec(rep)?.[1] ?? null };
+}
+
+/** The trigger of the task XML as text: "daily 07:50", "weekly Monday 09:20", "every 5m", or null when it has none of those. */
 function xmlTrigger(xml) {
+  const repeat = xmlRepeat(xml);
+  if (repeat) return repeat.every;
   const block = /<CalendarTrigger>[\s\S]*?<\/CalendarTrigger>/.exec(xml)?.[0];
   const time = /<StartBoundary>[^<]*?T(\d{2}:\d{2})/.exec(block ?? '')?.[1];
   if (!block || !time) return null;
@@ -394,19 +411,32 @@ function registrationDrift(t, q) {
   if (q.status !== 0) return { warn: `cannot read the task xml (schtasks exit ${q.status}: ${String(q.stderr).trim().split('\n')[0]})` };
   const settings = /<Settings>[\s\S]*?<\/Settings>/.exec(q.stdout)?.[0];
   if (!settings) return { warn: 'the task xml has no Settings block: cannot compare battery and wake' };
-  const llm = t.llm === true;
+  const llm = t.llm === true || t.battery === true; // either field asks for a start on battery
+  const field = t.battery === true ? 'battery=true' : `llm=${t.llm === true}`;
   const want = llm ? 'allowed' : 'blocked';
   const drift = [];
   const disallow = xmlFlag(settings, 'DisallowStartIfOnBatteries', true);
   const stop = xmlFlag(settings, 'StopIfGoingOnBatteries', true);
-  if (disallow === llm) drift.push(`battery: start on battery is ${disallow ? 'blocked' : 'allowed'}, tasks.json llm=${llm} wants it ${want}`);
-  if (stop === llm) drift.push(`battery: stop when going on battery is ${stop ? 'on' : 'off'}, tasks.json llm=${llm} wants it ${llm ? 'off' : 'on'}`);
+  if (disallow === llm) drift.push(`battery: start on battery is ${disallow ? 'blocked' : 'allowed'}, tasks.json ${field} wants it ${want}`);
+  if (stop === llm) drift.push(`battery: stop when going on battery is ${stop ? 'on' : 'off'}, tasks.json ${field} wants it ${llm ? 'off' : 'on'}`);
   const wake = xmlFlag(settings, 'WakeToRun', false);
   if (wake !== (t.wake === true)) drift.push(`wake: WakeToRun is ${wake}, tasks.json wake=${t.wake === true}`);
   const trigger = xmlTrigger(q.stdout);
-  const wantTrigger = /^(daily \d{2}:\d{2}|weekly \w+ \d{2}:\d{2})$/.test(t.trigger) ? t.trigger : null; // another grammar: not compared
+  const wantTrigger = /^(daily \d{2}:\d{2}|weekly \w+ \d{2}:\d{2}|every \d+m)$/.test(t.trigger) ? t.trigger : null; // another grammar: not compared
   if (wantTrigger && trigger?.toLowerCase() !== wantTrigger.toLowerCase()) drift.push(`trigger: the task has "${trigger ?? 'no calendar trigger'}", tasks.json says "${t.trigger}"`);
+  const stop1 = xmlRepeat(q.stdout)?.duration;
+  if (stop1 && wantTrigger?.startsWith('every') && !/^P[1-9]\d*[DWMY]/.test(stop1)) drift.push(`trigger: the repetition stops after ${stop1} (under one day), so the task stops running`);
+  const hidden = hiddenDrift(t, q.stdout);
+  if (hidden) drift.push(hidden);
   return { drift };
+}
+
+/** Text when the registered action's -WindowStyle Hidden differs from tasks.json hidden; null when equal or when the XML has no Arguments to read. */
+function hiddenDrift(t, xml) {
+  const args = /<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1];
+  if (args === undefined) return null;
+  const has = /-WindowStyle\s+Hidden/i.test(args);
+  return has === (t.hidden === true) ? null : `hidden: the registered action ${has ? 'hides' : 'does not hide'} the window, tasks.json hidden=${t.hidden === true}`;
 }
 
 /** The header-name lookup of one schtasks answer, or the WARN text. */
@@ -472,7 +502,26 @@ export function scheduleChecks(o, deps = {}) {
   return tasks.map((t) => checkTask(t, query, queryXml, deps.now ?? Date.now()));
 }
 
-const scheduleSection = (o) => scheduleChecks(o);
+/**
+ * The Notion sync of the reminder tick, from its heartbeat ~/.claude/state/reminders/latest.json. WARN when the last sync failed or
+ * failCount is 3 or more (a connector login that fails under Task Scheduler retries every hour and nothing else shows it). No file: PASS.
+ * The sync is off unless the file sync-enabled sits next to latest.json (`lane.mjs remind sync on`). Off: PASS "sync off", never a WARN.
+ */
+export function reminderSyncCheck(o) {
+  const dir = join(o.home, '.claude', 'state', 'reminders');
+  const file = join(dir, 'latest.json');
+  if (!existsSync(join(dir, 'sync-enabled'))) return result('PASS', 'schedule', 'reminder-sync', 'sync off (turn it on with: lane.mjs remind sync on)');
+  if (!existsSync(file)) return absent('schedule', 'reminder-sync', file);
+  let s;
+  try { s = readJson(file); } catch (err) { return result('WARN', 'schedule', 'reminder-sync', `${file} is not valid JSON: ${msg(err)}`); }
+  const fails = Number(s?.failCount) || 0;
+  if (s?.lastSyncOk === false || fails >= 3) {
+    return result('WARN', 'schedule', 'reminder-sync', `the Notion sync is failing (failCount ${fails}, last run ${s?.ranAt ?? 'unknown'}): ${String(s?.lastError ?? 'no error recorded').slice(0, 200)}`);
+  }
+  return result('PASS', 'schedule', 'reminder-sync', `last sync ok or not run yet (failCount ${fails}, last tick ${s?.ranAt ?? 'unknown'})`);
+}
+
+const scheduleSection = (o) => [...scheduleChecks(o), reminderSyncCheck(o)];
 
 // ---- blocklist ----
 const BLOCKLIST_REL = '.claude/hooks/src/shared/malicious-packages.json';

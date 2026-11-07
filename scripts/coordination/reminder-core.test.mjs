@@ -13,12 +13,13 @@
  *   R9  --action accepts a shell string
  *   R10 the event detail keeps undefined keys
  *   R11 a lateness label shows at 60 min, or not at 125 min; CT shows the wrong zone abbreviation
+ *   R12 a down database is not told apart from a bug (remind tick must exit 2 only for the first)
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
-  REMIND_STATES, assertFuture, fmtCT, overdueLabel, parseAction, parseDue, parseFor, remindDetail, resolvePri,
+  REMIND_STATES, assertFuture, fmtCT, overdueLabel, parseAction, parseDue, parseFor, remindDetail, resolvePri, isDbUnreachable,
 } from './reminder-core.mjs';
 
 const iso = (d) => d.toISOString();
@@ -128,4 +129,13 @@ test('R11 fmtCT shows CDT in July and CST in January', () => {
   assert.equal(fmtCT(new Date('2026-07-06T13:00:00Z')), 'Mon 07-06 08:00 CDT');
   assert.equal(fmtCT(new Date('2026-01-05T14:00:00Z')), 'Mon 01-05 08:00 CST');
   assert.equal(fmtCT(new Date('2026-11-06T14:00:00Z')), 'Fri 11-06 08:00 CST');
+});
+
+test('R12 isDbUnreachable: connection codes and connect or timeout messages yes; a syntax error or a plain Error no', () => {
+  for (const e of [{ code: 'ECONNREFUSED' }, { code: 'ENOTFOUND' }, { code: 'ETIMEDOUT' }, { code: 'ECONNRESET' }, { code: '28P01' }, { code: '57P03' }, new Error('Connection terminated due to connection timeout')]) {
+    assert.equal(isDbUnreachable(e), true, JSON.stringify(e));
+  }
+  for (const e of [{ code: '42703', message: 'column x does not exist' }, new Error('lane r1 is done'), null, undefined]) {
+    assert.equal(isDbUnreachable(e), false, String(e?.message));
+  }
 });

@@ -294,7 +294,7 @@ try {
 
   // ------------------------------------------------------------------ usage errors
   log('\n## usage');
-  for (const [label, args] of [['no sub-verb', ['remind']], ['an unknown sub-verb', ['remind', 'frobnicate', 'x']], ['tick (phase 5)', ['remind', 'tick']]]) {
+  for (const [label, args] of [['no sub-verb', ['remind']], ['an unknown sub-verb', ['remind', 'frobnicate', 'x']]]) {
     r = a(...args);
     check(`remind ${label}: exit 1 with a usage line`, r.code === 1 && /remind/.test(r.err) && noStack(r.err), `exit ${r.code}: ${r.err.split('\n')[0]}`);
   }

@@ -50,6 +50,7 @@ import { requireDep } from './lib/resolve-deps.mjs';
 import {
   parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns, laneSchema,
   lanesShim, laneHookClientVersion, hooksRenderCheck, hooksDistParity, lanePathGuardCheck, depsHooksInstall, depsStoreLink,
+  reminderSyncCheck,
 } from './harness-doctor.mjs';
 import { assertScratchUrl } from './coordination/scratch-db.mjs';
 
@@ -86,8 +87,9 @@ const TASK_NAME = 'CCv3-Fake-Task';
 /**
  * The Settings and Triggers the doctor compares. Defaults match a task() with no llm/wake: no start on battery, stop on battery,
  * no wake, daily 07:50. `wake: null` leaves the tag out like Windows does for false. `weekday` makes it a weekly trigger.
+ * `every` (an ISO interval such as 'PT5M') makes it a repeating TimeTrigger; `duration` adds a Repetition Duration (none: repeats for ever).
  */
-const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', weekday = null } = {}) => [
+const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', weekday = null, every = null, duration = null, args = null } = {}) => [
   '<?xml version="1.0" encoding="UTF-16"?>',
   '<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
   '  <Settings>',
@@ -98,13 +100,25 @@ const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', we
   '    <StartWhenAvailable>true</StartWhenAvailable>',
   '  </Settings>',
   '  <Triggers>',
+  ...(every ? [
+    '    <TimeTrigger>',
+    '      <Repetition>',
+    `        <Interval>${every}</Interval>`,
+    ...(duration ? [`        <Duration>${duration}</Duration>`] : []),
+    '        <StopAtDurationEnd>false</StopAtDurationEnd>',
+    '      </Repetition>',
+    `      <StartBoundary>2026-11-03T${time}:00-06:00</StartBoundary>`,
+    '    </TimeTrigger>',
+  ] : [
   '    <CalendarTrigger>',
   `      <StartBoundary>2026-11-03T${time}:00-06:00</StartBoundary>`,
   ...(weekday
     ? ['      <ScheduleByWeek>', '        <WeeksInterval>1</WeeksInterval>', `        <DaysOfWeek><${weekday} /></DaysOfWeek>`, '      </ScheduleByWeek>']
     : ['      <ScheduleByDay>', '        <DaysInterval>1</DaysInterval>', '      </ScheduleByDay>']),
   '    </CalendarTrigger>',
+  ]),
   '  </Triggers>',
+  ...(args === null ? [] : ['  <Actions Context="Author">', '    <Exec>', '      <Command>powershell.exe</Command>', `      <Arguments>${args}</Arguments>`, '    </Exec>', '  </Actions>']),
   '</Task>',
 ].join('\r\r\n');
 /** A fake schtasks /xml: name to XML. An unknown name answers like schtasks does. */
@@ -659,6 +673,121 @@ test('drift: a task that matches tasks.json on battery, wake and trigger is a PA
     [task({ trigger: 'weekly Monday 09:20', llm: true }), taskXml({ disallow: false, stop: false, time: '09:20', weekday: 'Monday' })],
   ];
   for (const [t, xml] of cases) assert.equal(driftOf(t, xml).status, 'PASS', JSON.stringify(t));
+});
+
+test('drift: battery:true with llm false on an every-5-minutes task matches an XML that allows battery and repeats every PT5M (PASS)', () => {
+  const t = task({ trigger: 'every 5m', llm: false, battery: true });
+  assert.equal(driftOf(t, taskXml({ disallow: false, stop: false, every: 'PT5M' })).status, 'PASS');
+  assert.equal(driftOf(task({ trigger: 'every 60m', battery: true }), taskXml({ disallow: false, stop: false, every: 'PT1H' })).status, 'PASS', 'PT1H is every 60m');
+  assert.equal(driftOf(t, taskXml({ disallow: false, stop: false, every: 'PT5M', duration: 'P1D' })).status, 'PASS', 'a one-day repetition is accepted');
+});
+
+test('drift: an every-5-minutes task whose XML repeats every PT15M is a WARN naming trigger', () => {
+  const c = driftOf(task({ trigger: 'every 5m', battery: true }), taskXml({ disallow: false, stop: false, every: 'PT15M' }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /trigger/);
+});
+
+test('drift: an every-5-minutes task whose XML is a daily trigger is a WARN naming trigger', () => {
+  const c = driftOf(task({ trigger: 'every 5m', battery: true }), taskXml({ disallow: false, stop: false }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /trigger/);
+});
+
+test('drift: battery:true but the XML still blocks start and stops on battery is a WARN naming battery and the field', () => {
+  const c = driftOf(task({ trigger: 'every 5m', battery: true }), taskXml({ disallow: true, stop: true, every: 'PT5M' }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /battery/);
+  assert.match(c.detail, /battery=true/);
+});
+
+test('drift: a repetition that stops after under one day (Duration PT1H) is a WARN naming trigger', () => {
+  const c = driftOf(task({ trigger: 'every 5m', battery: true }), taskXml({ disallow: false, stop: false, every: 'PT5M', duration: 'PT1H' }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /trigger/);
+  assert.match(c.detail, /PT1H/);
+});
+
+const PS_ARGS = '-NoProfile -ExecutionPolicy Bypass -File &quot;C:\\x\\t.ps1&quot;';
+const PS_ARGS_HIDDEN = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;C:\\x\\t.ps1&quot;';
+const hiddenTask = (over = {}) => task({ trigger: 'every 5m', battery: true, hidden: true, ...over });
+const hiddenXml = (args) => taskXml({ disallow: false, stop: false, every: 'PT5M', args });
+
+test('F15: hidden:true but the registered action has no -WindowStyle Hidden is a WARN naming hidden', () => {
+  const c = driftOf(hiddenTask(), hiddenXml(PS_ARGS));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /hidden/);
+  assert.equal(driftOf(hiddenTask(), hiddenXml(PS_ARGS_HIDDEN)).status, 'PASS');
+});
+
+test('F15: hidden not set but the registered action hides the window is a WARN; no Arguments in the XML is not judged', () => {
+  const c = driftOf(task({ trigger: 'every 5m', battery: true }), hiddenXml(PS_ARGS_HIDDEN));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /hidden/);
+  assert.equal(driftOf(hiddenTask(), hiddenXml(null)).status, 'PASS', 'an XML with no action block is not compared');
+});
+
+test('F15: a tasks.json entry with hidden that is not true or false is a WARN on its own row', () => {
+  const c = only(sched([task({ hidden: 'yes' })], csvOk));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /hidden is not true or false/);
+});
+
+// ---- F8: the Notion sync of the reminder tick must be visible when it keeps failing ----
+// The sync switch is the file ~/.claude/state/reminders/sync-enabled. The helper turns it on unless told not to.
+const reminderHome = (state, { syncOn = true } = {}) => {
+  const home = mkdtempSync(join(tmpdir(), 'rem-home-'));
+  if (syncOn) put(join(home, '.claude', 'state', 'reminders', 'sync-enabled'), 'on');
+  if (state !== undefined) put(join(home, '.claude', 'state', 'reminders', 'latest.json'), typeof state === 'string' ? state : JSON.stringify(state));
+  return { home };
+};
+
+test('F8: reminderSyncCheck is a PASS with no heartbeat, a healthy one, or a sync that has not run', () => {
+  assert.equal(reminderSyncCheck(reminderHome()).status, 'PASS');
+  assert.equal(reminderSyncCheck(reminderHome({ lastSyncOk: true, failCount: 0, ranAt: iso(1000) })).status, 'PASS');
+  assert.equal(reminderSyncCheck(reminderHome({ lastSyncOk: null, failCount: 0 })).status, 'PASS');
+});
+
+test('F8: reminderSyncCheck WARNs when the last sync failed, naming the error and the time, and when failCount is 3 or more', () => {
+  const ranAt = '2026-11-07T15:00:00.000Z';
+  const failed = reminderSyncCheck(reminderHome({ lastSyncOk: false, failCount: 1, lastError: 'headless daily cap reached', ranAt }));
+  assert.equal(failed.status, 'WARN', failed.detail);
+  assert.match(failed.detail, /headless daily cap reached/);
+  assert.match(failed.detail, /2026-11-07T15:00:00/);
+  const stuck = reminderSyncCheck(reminderHome({ lastSyncOk: true, failCount: 3, ranAt }));
+  assert.equal(stuck.status, 'WARN', stuck.detail);
+  assert.match(stuck.detail, /3/);
+  assert.equal(reminderSyncCheck(reminderHome('{broken')).status, 'WARN');
+});
+
+test('sync switch: with the sync off the check is a PASS that says "sync off", whatever the heartbeat holds', () => {
+  const failing = { lastSyncOk: false, failCount: 5, lastError: 'old failure', ranAt: iso(1000) };
+  for (const state of [undefined, failing, '{broken']) {
+    const c = reminderSyncCheck(reminderHome(state, { syncOn: false }));
+    assert.equal(c.status, 'PASS', c.detail);
+    assert.match(c.detail, /sync off/);
+  }
+  assert.equal(reminderSyncCheck(reminderHome(failing)).status, 'WARN', 'the same heartbeat WARNs once the sync is on');
+});
+
+test('F8: the doctor run carries the reminder sync row in the schedule section', () => {
+  const { home } = reminderHome({ lastSyncOk: false, failCount: 4, lastError: 'x', ranAt: iso(1000) });
+  const c = reminderSyncCheck({ home });
+  assert.equal(c.section, 'schedule');
+  assert.equal(c.check, 'reminder-sync');
+});
+
+test('drift: battery false with llm false still wants battery blocked, so the old tasks do not drift', () => {
+  assert.equal(driftOf(task({ battery: false }), taskXml()).status, 'PASS');
+  const c = driftOf(task({ battery: false }), taskXml({ disallow: false, stop: false }));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /battery/);
+});
+
+test('a tasks.json entry with battery that is not true or false is a WARN on its own row', () => {
+  const c = only(sched([task({ battery: 'yes' })], csvOk));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /battery is not true or false/);
 });
 
 test('drift: a bad last result stays a FAIL and a stale task stays a WARN, and both still name the drift', () => {
