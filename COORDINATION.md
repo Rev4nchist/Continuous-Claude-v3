@@ -56,6 +56,7 @@ One sort key orders open lanes everywhere: band, then `due_at` (NULL last), then
 The phone page shows Priorities in two views. **By band** is the default: four groups (P0 this week, P1 next, P2 later, Unsorted),
 open lanes only, with `n/5` on P0 and an amber "over the cap of 5" above 5. **Columns** is the drag board; on the editable page each card has Do next, Done and Move to buttons. The choice persists in the browser.
 The Lanes list has state chips and band chips (they combine) and can group by Track or by Band. The read-only page of another board has the same views and none of the card buttons.
+Columns also shows a read-only Done column: lanes done in the last 7 days, at most 30, newest first, with a Show all that opens the Lanes list. Done is never saved and takes no rank.
 A kanban drag, Do next and Move to change rank only. By band keeps band first, so a Do next card is first in its OWN band and stays under every lane of a higher band. Done is a card status (`status: done`) that the sync applies after Dave's yes; Undo gives back the status that was pending before, or `null` (no status). The kanban sync never writes a band, and a lane that is done after the sync takes no rank (a pending card that reopens a done lane gives it one).
 
 ## The rules that are not enforced by code

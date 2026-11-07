@@ -22,8 +22,8 @@
  *   - the page has no stamp, or the stamp names the wrong board
  *   - an unknown key, or a cwd with no board, writes a page instead of exiting 1
  *   - a half-written page is left at the target (the write must be temp + rename)
- *   - the page width cap is not one shared variable (header and board drift apart), or is not 1840px
- *   - the Priorities grid is not 1 column to 720px, 3 from 721px and 5 from 1360px
+ *   - the page width cap is not one shared variable (header and board drift apart), or is not 2200px
+ *   - the Priorities grid is not 1 column to 720px, 3 from 721px and 6 from 1360px
  *   - a Priorities list does not scroll inside itself from 721px, or the phone loses normal page scrolling
  *   - the phone header pins the counters again (the counters sit inside the pinned row), or the Activity feed pushes the page sideways
  *   - the machine-wide sections do not say so
@@ -40,6 +40,17 @@
  *   - the By band intro does not say a drag shows only after the next sync, or the status line and order chip leave the page in one view
  *   - a band chip count counts open lanes under a label that does not say "open"
  *   - a By band row grows (bytes beyond id and title), or the page outgrows its size ratchet (the artifact limit is 16 MB)
+ *
+ * How the Done column (PR-D) can fail, one test each (the pure window, cap and order rules are in board-done-view.test.mjs):
+ *   - the six columns are not Now, Next, Later, Waiting on Dave, In progress, Done (Done first, or missing on the read-only page)
+ *   - the Done head has no .kb-head: syncHeads of the client throws and the whole client dies
+ *   - a Done card takes a class the client handles (kb-card, kb-ctl, kb-st, kb-save, kb-grip, kb-more, kb-next, kb-done, kb-undo, kb-plain)
+ *   - a done title, scope or note is not escaped, or a long note is not cut
+ *   - a lane shows in Done under the wrong day, in the wrong order, or when its only done event is the kanban sync's
+ *   - a done lane appears in By band, or an open lane in Done
+ *   - the Done footer or Show all is missing, sits inside the scroll area, or its handler is in the client (the read-only page has none)
+ *   - a collapsed Done column on the phone still shows its footer
+ *   - a done card grows beyond its ratchet, or the template hash ignores board-done-view.mjs
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -52,6 +63,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
 import { stripClientComments } from './kanban-strip.mjs';
+import { DONE_NOTE_MAX } from './board-done-view.mjs';
 import { TEMPLATE_FILES, boardStamp, defaultOut, parseBoardStamp, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -60,10 +72,20 @@ const RENDER = path.join(HERE, 'render-board.mjs');
 const LANE = path.join(HERE, 'lane.mjs');
 const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 // Size ratchets for the band page (see the ratchet note in the band tests). Measured 2026-11-06: test page 136,616 bytes, widest row 232 bytes of markup.
+// Measured 2026-11-07 (PR-D, after the critic fixes): test page 149,826 bytes. PAGE_BYTES_MAX is that plus about 1 KB. It rose from 140,000
+// because the Done column (Dave chose option B: native <details> with scope and last note on every Done card) adds about 32 KB to the live page,
+// and the test fixture gained five done lanes (their Done cards, Lanes rows and the new CSS), the fifth for the max-not-min check.
+// A done card measures 395 bytes beyond its text.
 const ROW_OVERHEAD_MAX = 240;
-const PAGE_BYTES_MAX = 140000;
+const PAGE_BYTES_MAX = 150800;
+const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
+// Done fixtures. A note longer than DONE_NOTE_MAX, and a title that needs escaping.
+const DN_TITLE = '<b>done</b> "quoted" & today';
+const DN_NOTE = `${'N'.repeat(300)}TAILMARK`;
+/** Local noon, `back` days ago. Built with local constructors so "Yesterday" is right in any timezone. */
+const noon = (back) => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate() - back, 12, 0, 0); };
 
 // ------------------------------------------------------------------ pure parts
 
@@ -303,6 +325,28 @@ describe('render-board.mjs against a scratch database', () => {
       await c.query(`INSERT INTO agentic_os.lane_event (session_id, kind, lane_id, body, project_key) VALUES
         ('zz-rb-s-c', 'note', 'zz-rb-ccv3-lane', 'ccv3 event body', 'continuous-claude'),
         ('zz-rb-s-a', 'note', 'zz-rb-a-lane', 'board a event body', 'zz-rb-a')`);
+      // Done lanes of continuous-claude (zz-rb-done-p0 above has no event: its time is updated_at, which is now).
+      //   dn-today   a 'done' event just now           -> Today
+      //   dn-yday    a 'done' event yesterday 12:00    -> Yesterday
+      //   dn-kanban  ONLY a kanban sync event, to done, yesterday 15:00 -> Yesterday, above dn-yday
+      //   dn-old     a 'done' event 9 days ago, plus a kanban note event to 'done' and a kanban state event to 'ready' just now (neither counts)
+      //   dn-twice   a 'done' event 9 days ago AND a kanban state event to done a second ahead of now: the NEWEST counts (max, not min), so it is the first card under Today
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, priority, scope, note, project_key) VALUES
+        ('zz-rb-dn-today', $1, 'zz', 'done', 50, $2, $3, 'continuous-claude'),
+        ('zz-rb-dn-yday', 'done yesterday', 'zz', 'done', 50, NULL, NULL, 'continuous-claude'),
+        ('zz-rb-dn-kanban', 'done by the sync only', 'yy', 'done', 50, NULL, NULL, 'continuous-claude'),
+        ('zz-rb-dn-old', 'done nine days ago', 'zz', 'done', 50, NULL, NULL, 'continuous-claude'),
+        ('zz-rb-dn-twice', 'done, reopened and done again', 'zz', 'done', 50, NULL, NULL, 'continuous-claude')`, [DN_TITLE, 'dn <i>scope</i>', DN_NOTE]);
+      await c.query(`INSERT INTO agentic_os.lane_event (session_id, kind, lane_id, project_key, occurred_at, detail) VALUES
+        ('zz-rb-s-c', 'done', 'zz-rb-dn-today', 'continuous-claude', $1, '{}'),
+        ('zz-rb-s-c', 'done', 'zz-rb-dn-yday', 'continuous-claude', $2, '{}'),
+        ('zz-rb-s-c', 'kanban', 'zz-rb-dn-kanban', 'continuous-claude', $3, '{"kind":"state","from":"review","to":"done"}'),
+        ('zz-rb-s-c', 'done', 'zz-rb-dn-old', 'continuous-claude', $4, '{}'),
+        ('zz-rb-s-c', 'kanban', 'zz-rb-dn-old', 'continuous-claude', $5, '{"kind":"note","to":"done"}'),
+        ('zz-rb-s-c', 'kanban', 'zz-rb-dn-old', 'continuous-claude', $5, '{"kind":"state","from":"done","to":"ready"}'),
+        ('zz-rb-s-c', 'done', 'zz-rb-dn-twice', 'continuous-claude', $4, '{}'),
+        ('zz-rb-s-c', 'kanban', 'zz-rb-dn-twice', 'continuous-claude', $6, '{"kind":"state","from":"review","to":"done"}')`,
+      [new Date(), noon(1), new Date(noon(1).getTime() + 3 * 3600 * 1000), noon(9), new Date(), new Date(Date.now() + 1000)]);
     } finally { await c.end(); }
   });
 
@@ -372,8 +416,8 @@ describe('render-board.mjs against a scratch database', () => {
     assert.ok(section, 'a board other than continuous-claude shows a Priorities section');
     assert.ok(html.indexOf('<section id="priorities"') < html.indexOf('<h2>Right now</h2>'), 'Priorities comes before Right now');
     assert.match(section, /<h2 id="kb-title">Priorities<\/h2>/);
-    // All five columns exist, in order. Now is empty and says why in words. Waiting on Dave holds the blocked lane (placeLanes, no saved order).
-    assert.deepEqual([...section.matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['now', 'next', 'later', 'waiting', 'progress']);
+    // All six columns exist, in order, Done last. Now is empty and says why in words. Waiting on Dave holds the blocked lane (placeLanes, no saved order).
+    assert.deepEqual([...section.matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['now', 'next', 'later', 'waiting', 'progress', 'done']);
     assert.match(section, /data-col="now" data-n="0"/);
     assert.match(section, /data-col="waiting" data-n="1"/);
     // LEAK GATE: no CCv3 lane in any column.
@@ -396,7 +440,8 @@ describe('render-board.mjs against a scratch database', () => {
     assert.deepEqual(ids('progress'), ['zz-rb-a-held']);
     assert.deepEqual(ids('now'), []);
     assert.deepEqual(ids('waiting'), ['zz-rb-a-blocked']);
-    assert.ok(!section.includes('zz-rb-a-done'), 'a done lane is in no column');
+    // A done lane is in no OPEN column. It is in Done (read-only, tested in the Done column block), which this helper does not read.
+    for (const col of ['now', 'next', 'later', 'waiting', 'progress']) assert.ok(!ids(col).includes('zz-rb-a-done'), `a done lane is in the ${col} column`);
     // Counts agree with the cards.
     assert.match(section, /data-col="next" data-n="3"/);
     assert.match(section, /data-col="later" data-n="3"/);
@@ -453,7 +498,8 @@ describe('render-board.mjs against a scratch database', () => {
     ]) {
       assert.ok(html.includes(marker), `the CCv3 page lost ${marker}`);
     }
-    for (const marker of ['class="kb-ro"', 'kb-ro-detail"', 'class="kb-h kb-ro-h"', 'Read-only snapshot', 'class="kb-empty"']) {
+    // kb-ro-detail is not a read-only marker any more: the Done cards of every page use that native <details> (PR-D).
+    for (const marker of ['class="kb-ro"', 'class="kb-h kb-ro-h"', 'Read-only snapshot', 'class="kb-empty"']) {
       assert.ok(!html.includes(marker), `the read-only marker ${marker} leaked into the CCv3 page`);
     }
   });
@@ -494,7 +540,8 @@ describe('render-board.mjs against a scratch database', () => {
     ]) {
       assert.ok(html.includes(marker), `an interactive foreign page must carry ${marker}`);
     }
-    for (const marker of ['class="kb-ro"', 'kb-ro-detail"', 'class="kb-h kb-ro-h"', 'Read-only snapshot', 'class="kb-empty"']) {
+    // kb-ro-detail is shared with the Done cards of every page (PR-D), so it is not a read-only marker.
+    for (const marker of ['class="kb-ro"', 'class="kb-h kb-ro-h"', 'Read-only snapshot', 'class="kb-empty"']) {
       assert.ok(!html.includes(marker), `the read-only marker ${marker} is on an interactive page`);
     }
     // The page's own lanes, and none of CCv3's.
@@ -636,8 +683,9 @@ describe('render-board.mjs against a scratch database', () => {
       css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
     });
 
-    it('one variable sets the width of both .wrap and .top-in, capped at 1840px', () => {
-      assert.match(css, /:root \{ --page-w:min\(1840px,100%\); \}/);
+    it('one variable sets the width of both .wrap and .top-in, capped at 2200px', () => {
+      assert.match(css, /:root \{ --page-w:min\(2200px,100%\); \}/);
+      assert.ok(!css.includes('min(1840px'), 'the old 1840px cap is still in the CSS');
       assert.match(css, /\.wrap \{ width:var\(--page-w\);/);
       assert.match(css, /\.top-in \{ width:var\(--page-w\);/);
       assert.ok(!css.includes('min(1240px'), 'the old 1240px cap is still in the CSS');
@@ -650,9 +698,9 @@ describe('render-board.mjs against a scratch database', () => {
       assert.equal((html.match(/<section class="sec-cap">/g) || []).length, 2, 'only Lanes and Activity are capped');
     });
 
-    it('the board is 3 columns by default, 5 from 1360px and 1 up to 720px; the old 1080px board rule is gone', () => {
+    it('the board is 3 columns by default, 6 from 1360px and 1 up to 720px; the old 1080px board rule is gone', () => {
       assert.match(css, /\.kb-board \{[^}]*grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
-      assert.match(css, /@media \(min-width:1360px\) \{ \.kb-board \{ grid-template-columns:repeat\(5,minmax\(0,1fr\)\); \} \}/);
+      assert.match(css, /@media \(min-width:1360px\) \{ \.kb-board \{ grid-template-columns:repeat\(6,minmax\(0,1fr\)\); \} \}/);
       assert.match(css, /@media \(max-width:720px\) \{\s*\.kb-board \{ grid-template-columns:minmax\(0,1fr\); \}/);
       assert.doesNotMatch(css, /max-width:1080px\) \{ \.kb-board/);
     });
@@ -889,6 +937,7 @@ describe('render-board.mjs against a scratch database', () => {
 
     it('the template hash changes when a generator file changes, board-band-view.mjs included, and the page stamp is that hash', () => {
       assert.ok(TEMPLATE_FILES.includes('board-band-view.mjs'));
+      assert.ok(TEMPLATE_FILES.includes('board-done-view.mjs'), 'an edit to the Done rules would not change the page stamp');
       assert.equal(parseBoardStamp(html).template, templateHash(HERE), 'the stamp is not the hash of the generator files');
       const copyOf = () => {
         const dir = fs.mkdtempSync(path.join(E2E.tmp, 'tpl-'));
@@ -928,6 +977,194 @@ describe('render-board.mjs against a scratch database', () => {
     it('the continuous-claude test page stays under its size ratchet', () => {
       const bytes = Buffer.byteLength(html);
       assert.ok(bytes <= PAGE_BYTES_MAX, `page is ${bytes} bytes, ratchet ${PAGE_BYTES_MAX}`);
+    });
+  });
+
+  // ---------------------------------------------------------------- Done column (PR-D)
+  describe('Done column', () => {
+    let html = '';   // continuous-claude, editable
+    let ro = '';     // zz-rb-a, read-only, one done lane with no event
+    let roEmpty = ''; // zz-rb-bad, read-only, no done lane
+    before(() => {
+      for (const [name, board] of [['dn-edit', 'continuous-claude'], ['dn-ro', 'zz-rb-a'], ['dn-empty', 'zz-rb-bad']]) {
+        const out = path.join(E2E.tmp, `${name}.html`);
+        assert.equal(renderPage(['--project', board, '--out', out]).code, 0);
+        if (board === 'continuous-claude') html = fs.readFileSync(out, 'utf8');
+        else if (board === 'zz-rb-a') ro = fs.readFileSync(out, 'utf8');
+        else roEmpty = fs.readFileSync(out, 'utf8');
+      }
+    });
+
+    const section = (page) => /<section id="priorities"[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
+    /** The Done column: from its opening tag to the script block (editable page) or the end of the section (read-only page). */
+    const doneCol = (page) => {
+      const at = page.indexOf('<div class="kcol" data-col="done"');
+      if (at < 0) return '';
+      const rest = page.slice(at);
+      return rest.slice(0, Math.min(...['<script type="application/json"', '</section>'].map((m) => (rest.indexOf(m) < 0 ? Infinity : rest.indexOf(m)))));
+    };
+    const doneList = (page) => /<ul class="kb-list" id="kb-list-done">([\s\S]*?)<\/ul>/.exec(page)?.[1] ?? '';
+    /** The Done list as a sequence: { day } for a day header, { id, card } for a card. */
+    const doneSeq = (page) => [...doneList(page).matchAll(/<li class="kb-day">([^<]*)<\/li>|<li class="card kb-done-card"[\s\S]*?<\/li>/g)]
+      .map((m) => (m[1] !== undefined ? { day: m[1] } : { card: m[0], id: /class="kb-id mono">([^<]*)</.exec(m[0])[1] }));
+    const doneCards = (page) => doneSeq(page).filter((e) => e.card);
+    const tokens = (markup) => new Set([...markup.matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+
+    it('there are six columns, left to right Now, Next, Later, Waiting on Dave, In progress, Done, on the editable and the read-only page', () => {
+      for (const page of [html, ro]) {
+        assert.deepEqual([...section(page).matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['now', 'next', 'later', 'waiting', 'progress', 'done']);
+        assert.deepEqual([...section(page).matchAll(/<span class="kb-name">([^<]*)</g)].map((m) => m[1]), ['Now', 'Next', 'Later', 'Waiting on Dave', 'In progress', 'Done']);
+      }
+      assert.match(section(html), /<div class="kcol" data-col="done" data-fixed="1" data-n="\d+">/);
+    });
+
+    it('the Done head keeps the .kb-head button, a count of shown/total, and no "Held by a session" line (syncHeads calls querySelector(".kb-head") on every column)', () => {
+      const col = doneCol(html);
+      assert.match(col, /<h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-done"><span class="kb-name">Done<\/span><span class="kb-count mono">\d+\/\d+<\/span><\/button><\/h3>/);
+      assert.ok(!col.includes('kb-sub'), 'Done has no sub line');
+      // The read-only page has no script and no button: a plain heading.
+      assert.match(doneCol(ro), /<h3 class="kb-h kb-ro-h"><span class="kb-name">Done<\/span><span class="kb-count mono">\d+\/\d+<\/span><\/h3>/);
+      assert.ok(!doneCol(ro).includes('kb-head'));
+    });
+
+    it('the Done count reads shown/total, data-n is the shown count, and the footer says the same in words with a Show all button outside the list', () => {
+      // continuous-claude: done-p0 (no event, updated_at), dn-today, dn-twice, dn-yday, dn-kanban are in the 7 days; dn-old is not. Six done lanes in all.
+      assert.match(section(html), /data-col="done" data-fixed="1" data-n="5"/);
+      assert.match(doneCol(html), /<span class="kb-count mono">5\/6<\/span>/);
+      assert.match(doneCol(html), /<\/ul>\s*<p class="dn-foot">Showing 5 of 5 from the last 7 days\. 6 done in total\. <button class="dn-all" type="button">Show all<\/button><\/p>/);
+      assert.ok(!doneList(html).includes('dn-foot'), 'the footer is inside the scroll area');
+      // The read-only page has the same footer: one done lane (zz-rb-a-done) and it is in the 7 days.
+      assert.match(doneCol(ro), /<span class="kb-count mono">1\/1<\/span>/);
+      assert.match(doneCol(ro), /<p class="dn-foot">Showing 1 of 1 from the last 7 days\. 1 done in total\. <button class="dn-all" type="button">Show all<\/button><\/p>/);
+    });
+
+    it('an empty Done column says "Nothing done in the last 7 days." on the read-only page, and has no footer when no lane is done', () => {
+      assert.match(section(roEmpty), /id="kb-list-done"><li class="kb-empty">Nothing done in the last 7 days\.<\/li>/);
+      assert.match(section(roEmpty), /data-col="done" data-fixed="1" data-n="0"/);
+      assert.ok(!roEmpty.includes('class="dn-foot"'), 'a footer with nothing to show');
+      assert.ok(!html.includes('class="kb-empty"'), 'the editable page draws its empty text in CSS');
+    });
+
+    it('a done card carries none of the class tokens the client handles; kb-done-card is not the token kb-done', () => {
+      const FORBIDDEN = ['kb-card', 'kb-ctl', 'kb-st', 'kb-save', 'kb-grip', 'kb-more', 'kb-next', 'kb-done', 'kb-undo', 'kb-plain'];
+      for (const page of [html, ro]) {
+        const cards = doneCards(page);
+        assert.ok(cards.length >= 1, 'the test page has done cards');
+        for (const { id, card } of cards) {
+          const t = tokens(card);
+          for (const f of FORBIDDEN) assert.ok(!t.has(f), `${id}: the done card has the class token ${f}`);
+          assert.ok(t.has('kb-done-card'));
+          for (const attr of ['data-id=', 'data-hash=']) assert.ok(!card.includes(attr), `${id}: a done card must not carry ${attr}`);
+          assert.ok(!card.includes('<button') && !card.includes('<select') && !card.includes('<textarea'), `${id}: a done card has a control`);
+        }
+      }
+      // The client's own selector for Done is `.kb-done`. A class selector matches a token, never a prefix.
+      assert.ok(/t\.closest\('\.kb-done'\)/.test(fs.readFileSync(path.join(HERE, 'kanban-client.js'), 'utf8')), 'the client no longer uses .kb-done (update this pin)');
+    });
+
+    it('a done card shows the id, the title, the track, a clock chip, and a native <details> with scope and last note', () => {
+      const card = doneCards(html).find((c) => c.id === 'zz-rb-dn-yday').card;
+      assert.match(card, /<span class="kb-id mono">zz-rb-dn-yday<\/span>/);
+      assert.match(card, /<p class="kb-title">done yesterday<\/p>/);
+      assert.match(card, /<span class="kb-track mono">zz<\/span>/);
+      assert.match(card, /<span class="dn-time mono">12:00 PM<\/span>/);
+      assert.match(card, /<details class="kb-ro-detail"><summary>Details<span class="sr"> for zz-rb-dn-yday<\/span><\/summary>/);
+      assert.match(card, /<dt>scope<\/dt><dd>none set<\/dd>/);
+      assert.match(card, /<dt>last note<\/dt><dd>none<\/dd>/);
+    });
+
+    it('a done title, scope and note are escaped, and a note is cut at DONE_NOTE_MAX characters', () => {
+      const card = doneCards(html).find((c) => c.id === 'zz-rb-dn-today').card;
+      assert.ok(!card.includes('<b>done</b>') && !card.includes('<i>scope</i>'), 'raw markup from a lane reached the page');
+      assert.ok(card.includes('&lt;b&gt;done&lt;/b&gt; &quot;quoted&quot; &amp; today'));
+      assert.ok(card.includes('dn &lt;i&gt;scope&lt;/i&gt;'));
+      const note = /<dt>last note<\/dt><dd>([^<]*)<\/dd>/.exec(card)[1];
+      assert.ok(!note.includes('TAILMARK'), 'the end of a long note is on the page');
+      assert.equal(note, `${'N'.repeat(DONE_NOTE_MAX - 1)}…`);
+    });
+
+    it('lanes stand under the day they were done, newest first: the kanban-only lane counts, an old lane and the sync\'s other events do not', () => {
+      assert.deepEqual(doneSeq(html).map((e) => e.day ?? e.id), [
+        'Today', 'zz-rb-dn-twice', 'zz-rb-dn-today', 'zz-rb-done-p0', 'Yesterday', 'zz-rb-dn-kanban', 'zz-rb-dn-yday',
+      ]);
+      // A lane with two events that count is placed by the newest (max): its 9 day old 'done' event does not hide it or pull it down.
+      assert.ok(!doneList(html).includes('zz-rb-dn-old'), 'a lane done 9 days ago is in the list (or a kanban note/ready event counted as done)');
+      // The old lane still counts in the total and stays in the Lanes list.
+      assert.ok(html.includes('zz-rb-dn-old'));
+      // The kanban-only lane shows its sync time (15:00), not updated_at.
+      assert.match(doneCards(html).find((c) => c.id === 'zz-rb-dn-kanban').card, /<span class="dn-time mono">3:00 PM<\/span>/);
+    });
+
+    it('an open lane is never in Done, and a done lane is never in By band', () => {
+      const ids = doneCards(html).map((c) => c.id);
+      for (const open of ['zz-rb-ccv3-lane', 'zz-rb-ccv3-held', 'zz-rb-p0-1']) assert.ok(!ids.includes(open), `${open} is in Done`);
+      const bb = /<div class="bb" id="bb">[\s\S]*?<!-- \/bb -->/.exec(html)[0];
+      for (const id of ids) assert.ok(!bb.includes(id), `${id} is in By band`);
+      // Board a: only its own done lane, none of CCv3.
+      assert.deepEqual(doneCards(ro).map((c) => c.id), ['zz-rb-a-done']);
+    });
+
+    it('Show all is handled by the main page script (the read-only page has no kanban client), and the client has no part in it', () => {
+      for (const page of [html, ro]) {
+        const main = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).find((b) => b.includes("'lb-view'"));
+        assert.ok(main, 'the main script is missing');
+        assert.ok(main.includes("'.dn-all'"), 'the main script has no Show all handler');
+        assert.ok(main.includes(`.chip[data-g="state"][data-f="all"]`) && main.includes("getElementById('lane-groups')") && main.includes('scrollIntoView'));
+      }
+      assert.ok(!fs.readFileSync(path.join(HERE, 'kanban-client.js'), 'utf8').includes('dn-all'), 'the Show all handler is in the client');
+    });
+
+    it('Show all first clears a pressed band chip, then presses the state "all" chip (a band filter would hide done lanes of other bands)', () => {
+      for (const page of [html, ro]) {
+        const main = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).find((b) => b.includes("'lb-view'"));
+        const body = /var dnAll = [\s\S]*?\n    }\n/.exec(main)?.[0] ?? '';
+        const band = body.indexOf('.chip[data-g="band"][aria-pressed="true"]');
+        const state = body.indexOf('.chip[data-g="state"][data-f="all"]');
+        assert.ok(band >= 0, 'Show all does not look for a pressed band chip');
+        assert.ok(state > band, 'Show all presses the state chip before it clears the band chip');
+        assert.match(body.slice(band, state), /\.click\(\)/, 'the pressed band chip is found but not clicked');
+      }
+    });
+
+    it('only the Done cards use <details>: the open cards, By band and the rest of the page have none', () => {
+      const rest = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script[\s\S]*?<\/script>/g, '').replace(doneList(html), '');
+      assert.ok(doneList(html).includes('<details class="kb-ro-detail">'), 'the Done list lost its <details>');
+      assert.ok(!rest.includes('<details') && !rest.includes('kb-ro-detail'), 'a card outside Done uses <details>: the editor panel is the .kb-detail button pair');
+    });
+
+    it('the Done CSS: shared card rule, day headers, footer, a collapsed phone column hides the footer, and the Details rules are in the base CSS once', () => {
+      const css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
+      assert.match(css, /\.kb-card, \.kb-done-card \{ min-width:0; padding:10px 11px; border-left:3px solid var\(--line\); \}/);
+      for (const sel of ['.kb-day', '.dn-foot', '.dn-all', '.dn-time']) assert.ok(css.includes(`${sel} {`) || css.includes(`${sel},`), `${sel} has no rule`);
+      assert.match(css, /\.kcol\.kb-collapsed \.dn-foot[^{]*\{ display:none; \}/);
+      assert.match(css, /\.kb-ro-detail > summary \{/);
+      const roCss = /<style>([\s\S]*?)<\/style>/.exec(ro)[1];
+      // Two summary rules in the base CSS: the plain one and the 44px touch one. The read-only extra CSS must not add a third.
+      assert.equal(css.split('.kb-ro-detail > summary {').length - 1, 2);
+      assert.equal(roCss.split('.kb-ro-detail > summary {').length - 1, 2, 'the Details rules are defined again for the read-only page');
+    });
+
+    it('the header comment says six columns, and both intros mention Done', () => {
+      const src = fs.readFileSync(RENDER, 'utf8');
+      const header = /\/\*\*[\s\S]*?\*\//.exec(src)[0].replace(/\n\s*\*\s?/g, ' '); // a phrase may wrap over two comment lines
+      assert.match(header, /six\s+columns/);
+      assert.doesNotMatch(header, /five\s+columns/);
+      const intro = (page) => /<div class="sec-head">\s*<h2 id="kb-title">Priorities<\/h2>\s*<p>([^<]*)<\/p>/.exec(page)[1];
+      assert.match(intro(html), /Done/);
+      assert.match(intro(ro), /Done/);
+      assert.ok(intro(html).includes('Drag, or use Do next and Move to, to reorder.') && intro(html).includes('Your order saves to this board'));
+    });
+
+    // Size ratchet for one Done card: bytes beyond its id, title, track, clock, scope and note text. The summary repeats the id (its accessible name).
+    it('a done card carries no bytes beyond its text and a fixed frame', () => {
+      const cards = doneCards(html);
+      assert.ok(cards.length >= 5);
+      for (const { id, card } of cards) {
+        const text = [/class="kb-id mono">([^<]*)</, /class="kb-title">([^<]*)</, /class="kb-track mono">([^<]*)</, /class="dn-time mono">([^<]*)</,
+          /<dt>scope<\/dt><dd>([^<]*)</, /<dt>last note<\/dt><dd>([^<]*)</].map((re) => re.exec(card)[1]);
+        const overhead = card.length - text.reduce((n, t) => n + t.length, 0);
+        assert.ok(overhead <= DONE_OVERHEAD_MAX, `done card of ${id} has ${overhead} bytes of markup (limit ${DONE_OVERHEAD_MAX}): ${card}`);
+      }
     });
   });
 

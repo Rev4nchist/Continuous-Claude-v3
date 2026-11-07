@@ -19,6 +19,10 @@
  *   A save keeps the ids of the saved doc that this page does not know (mergeUnknownColumns): a stale device must not drop
  *   lanes it has never heard of. Pruning ids of done or deleted lanes is the job of the kanban-sync write-back, not of this page.
  *
+ * The page has six columns: Now, Next, Later, Waiting on Dave, In progress, Done. This file moves cards in the first four (COLS).
+ *   In progress and Done are drawn by the server, fixed, and never saved. Both need a .kb-head (syncHeads asks every column for one)
+ *   and both start collapsed on the phone, with Next, Later and Waiting. A Done card is not a .kb-card, so nothing here handles it.
+ *
  * Also, per card (the data contract is in the lane-board PR):
  *   `cards/<laneId>`  { status?, note?, question?, updatedAt, syncedAt?, syncResult? }
  *       The page writes status/note/question/updatedAt, changed fields only,
@@ -344,7 +348,7 @@
   }
   if (mq.addEventListener) mq.addEventListener('change', syncHeads);
   if (mq.matches) {
-    ['next', 'later', 'waiting'].forEach(function (n) { colEls[n].classList.add('kb-collapsed'); });
+    ['next', 'later', 'waiting', 'progress', 'done'].forEach(function (n) { colEls[n].classList.add('kb-collapsed'); });
   }
   syncHeads();
 
