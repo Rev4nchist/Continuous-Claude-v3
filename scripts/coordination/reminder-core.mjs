@@ -154,3 +154,23 @@ export function overdueLabel(due, now = new Date()) {
   const h = Math.floor(late / 60);
   return h < 24 ? `OVERDUE ${h}h` : `OVERDUE ${Math.floor(h / 24)}d`;
 }
+
+const DOWN_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', 'EHOSTUNREACH', '57P03', '3D000']);
+
+export const DONE_POLL_MS = 2 * 3_600_000; // 2 hours
+
+/** True when the Done-poll has not run for DONE_POLL_MS (or never). `state` is latest.json. The tick and the sync share this rule. */
+export function pollDue(state, nowMs) {
+  return !state?.lastDonePollAt || !(nowMs - Date.parse(state.lastDonePollAt) < DONE_POLL_MS);
+}
+
+/**
+ * True when an error means "the database is not there" and not "the code is wrong": a network code, a login refusal
+ * (SQLSTATE class 28), the server starting up (57P03), or a connect or timeout message. `remind tick` exits 2 for it.
+ */
+export function isDbUnreachable(e) {
+  if (!e) return false;
+  const code = String(e.code ?? '');
+  if (DOWN_CODES.has(code) || code.startsWith('28')) return true;
+  return /connect|timeout/i.test(String(e.message ?? ''));
+}

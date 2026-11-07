@@ -31,6 +31,7 @@ Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-projec
 - `remind set` never changes the title or band of a lane another session holds. Set the band first with `band`.
 - SessionStart prints a "Reminders due" block. `ack` closes it, `snooze --for 2h` moves it.
 - `next` and "Claimable next" never offer a lane on track `reminders`, or a lane whose due time is still ahead.
+- The `CCv3-Reminder-Tick` task runs every 5 minutes (`remind tick`): it fires due reminders, shows a toast for P0 and P1, and syncs the To-Do Board through one headless `claude -p` only when a row changed. A Done card in Notion acks the reminder. The Notion sync is off until `remind sync on`, polls Done every 2 hours, and is capped at 12 runs a day. Code: `scripts/coordination/reminder-tick.mjs`, `reminder-sync.mjs`.
 
 ## Phone page
 

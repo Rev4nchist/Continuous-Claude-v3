@@ -78,6 +78,8 @@
  *   node scripts/coordination/lane.mjs remind snooze <id> --for 30m|2h|1d | --at <time>   # new due time, state scheduled, fired_at cleared
  *   node scripts/coordination/lane.mjs remind ack <id>  # alias: remind done. Marks the reminder acked; the lane state stays
  *   node scripts/coordination/lane.mjs remind clear <id>  # the lane stops being a reminder; band and notion_page_id stay
+ *   node scripts/coordination/lane.mjs remind sync on|off|status  # the Notion sync switch (default off): a file in the reminder state folder, no database
+ *   node scripts/coordination/lane.mjs remind tick [--dry-run] [--no-sync]  # the 5-minute job: fire due reminders on every board, event, toast P0/P1. Exit 2: database down or no migration 0005
  *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add; items may carry band and priority (omitted = keep)
  *   node scripts/coordination/lane.mjs peers [--all]    # who else is live on this board (--all: on the machine)
  *   node scripts/coordination/lane.mjs whoami           # my label, uuid and lanes
@@ -107,7 +109,7 @@ import { parseBand, parseExpect, parseP0List, parsePriority } from './lane-band.
 import { bandTag, laneOrderSql } from './lane-sort.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import {
-  assertFuture, fmtCT, overdueLabel, parseAction, parseDue, parseFor, remindDetail, resolvePri,
+  assertFuture, fmtCT, isDbUnreachable, overdueLabel, parseAction, parseDue, parseFor, remindDetail, resolvePri,
 } from './reminder-core.mjs';
 import { mirrorRegistryPath, registryDrift } from './registry-drift.mjs';
 import {
@@ -555,7 +557,7 @@ async function checkSeedItems(c, items, board) {
 // lane_event of kind 'reminder'. A no-op (the same ack twice, a clear of a non-reminder) writes and logs nothing.
 
 const REMIND_USAGE = 'usage: lane.mjs remind set <id> --at <time> [--title "..."] [--pri P0|P1|P2] [--action <id>] [--done-when "..."] [--allow-past] '
-  + '| list [--all] [--due] | snooze <id> --for 30m|2h|1d (or --at <time>) | ack <id> | clear <id>';
+  + '| list [--all] [--due] | snooze <id> --for 30m|2h|1d (or --at <time>) | ack <id> | clear <id> | tick [--dry-run] [--no-sync]';
 
 function reminderLine(l, now) {
   const late = l.remind_state === 'acked' ? '' : overdueLabel(l.due_at, now);
@@ -723,6 +725,28 @@ async function remindClear(c) {
     detail: remindDetail({ op: 'clear', due_at: rows[0].from_due_at?.toISOString(), pri: rows[0].band, via: 'cli' }),
   });
   return JSON_OUT ? { id, changed: true } : `${id} cleared: it is no longer a reminder (a lane on track reminders moves to unsorted)`;
+}
+
+/**
+ * `remind tick`: fire the due reminders of EVERY board (no projectOf, no session). The engine is loaded on demand,
+ * so no other command pays for it. A missing migration 0005 is exit 2, like a database that is down (see main).
+ */
+async function remindSync() {
+  const { defaultStateDir, syncSwitch } = await import('./reminder-tick.mjs');
+  return syncSwitch(defaultStateDir(), positional[2]);
+}
+
+async function remindTick(c) {
+  const { runTick } = await import('./reminder-tick.mjs');
+  const lines = [];
+  try {
+    const res = await runTick({ db: c, dryRun: flags['dry-run'] === true, noSync: flags['no-sync'] === true, reclaimable: RECLAIMABLE, log: (l) => lines.push(l) });
+    return JSON_OUT ? { ...res, lines } : lines.join('\n');
+  } catch (e) {
+    const err = remindMigrationError(e);
+    if (err !== e) err.exitCode = 2;
+    throw err;
+  }
 }
 
 const REMIND_VERBS = { set: remindSet, list: remindList, snooze: remindSnooze, ack: remindAck, done: remindAck, clear: remindClear };
@@ -1409,12 +1433,13 @@ const commands = {
   },
 
   /**
-   * Timed reminders on lanes: set, list, snooze, ack (alias done), clear. Needs migration 0005.
-   * `remind tick` (fire due reminders, toast, Notion) is a later phase and is refused here.
+   * Timed reminders on lanes: set, list, snooze, ack (alias done), clear, tick. Needs migration 0005.
+   * `remind tick` is the 5-minute job (reminder-tick.mjs). It needs no board and no session.
    */
   async remind(c) {
     const sub = positional[1];
-    if (sub === 'tick') throw new Error('remind tick is not built yet (a later phase); due reminders show in the SessionStart banner');
+    if (sub === 'tick') return remindTick(c);
+    if (sub === 'sync') return remindSync();
     if (!Object.hasOwn(REMIND_VERBS, sub)) throw new Error(REMIND_USAGE);
     try {
       return await REMIND_VERBS[sub](c);
@@ -1859,12 +1884,14 @@ if (!commands[cmd]) {
 }
 
 try {
-  const needsDb = !(cmd === 'project' && positional[1] === 'which');
+  const needsDb = !(cmd === 'project' && positional[1] === 'which') && !(cmd === 'remind' && positional[1] === 'sync');
   const result = needsDb ? await withDb((c) => commands[cmd](c)) : await commands[cmd](null);
   process.stdout.write((JSON_OUT ? JSON.stringify(result, null, 2) : String(result)) + '\n');
 } catch (e) {
   process.stderr.write(`${isMissingMigration(e) ? MIGRATION_MSG : e.message}\n`);
   // A denied claim is a correct, expected answer -- exit 3 so a caller can tell
   // "someone else has it" apart from "the tool broke" (exit 1).
-  process.exit(e.soft ? 3 : 1);
+  // remind tick exits 2 when the database is not there (down, login refused, no migration), so the doctor shows red.
+  const tickDown = cmd === 'remind' && positional[1] === 'tick' && (isDbUnreachable(e) || isMissingMigration(e));
+  process.exit(e.exitCode ?? (tickDown ? 2 : e.soft ? 3 : 1));
 }

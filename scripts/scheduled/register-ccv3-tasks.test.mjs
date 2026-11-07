@@ -8,6 +8,8 @@
 //   guard: wake=true without llm prints a [WARN] naming the task and still goes on (exit 0)
 //   dry run: the output ends with the DRY RUN line, says nothing was registered, exits 0
 //   -Only: a name that matches nothing is refused with exit 1
+//   every Nm: "every 5m" is accepted and a battery:true task prints battery=allow with llm=false; "every 0m" and "every 1440m" are refused;
+//             the existing four lines stay as they were; only a hidden:true task gets -WindowStyle Hidden
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -22,15 +24,16 @@ const TASKS = [
   { name: 'CCv3-T-Llm', script: '.claude/scripts/scheduled/b.ps1', trigger: 'weekly Monday 09:20', execLimitMin: 15, allowedExit: [0], maxAgeHours: 336, llm: true, wake: false },
   { name: 'CCv3-T-LlmWake', script: '.claude/scripts/scheduled/c.bat', trigger: 'daily 08:10', execLimitMin: 20, allowedExit: [0], maxAgeHours: 48, llm: true, wake: true },
   { name: 'CCv3-T-WakeOnly', script: '.claude/scripts/scheduled/d.bat', trigger: 'daily 08:30', execLimitMin: 5, allowedExit: [0], maxAgeHours: 48, llm: false, wake: true },
+  { name: 'CCv3-T-Battery', script: '.claude/scripts/scheduled/e.ps1', trigger: 'every 5m', execLimitMin: 5, allowedExit: [0], maxAgeHours: 1, llm: false, battery: true, wake: false, hidden: true },
 ];
 
-function dryRun(extraArgs = []) {
+function dryRun(extraArgs = [], tasks = TASKS) {
   const root = mkdtempSync(join(tmpdir(), 'reg-'));
   const home = join(root, 'home');
   mkdirSync(join(home, 'scripts', 'scheduled'), { recursive: true });
-  for (const f of ['a.bat', 'b.ps1', 'c.bat', 'd.bat']) writeFileSync(join(home, 'scripts', 'scheduled', f), 'rem stub\r\n');
+  for (const f of ['a.bat', 'b.ps1', 'c.bat', 'd.bat', 'e.ps1']) writeFileSync(join(home, 'scripts', 'scheduled', f), 'rem stub\r\n');
   const tasksFile = join(root, 'tasks.json');
-  writeFileSync(tasksFile, JSON.stringify({ tasks: TASKS }));
+  writeFileSync(tasksFile, JSON.stringify({ tasks }));
   const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT, '-TasksFile', tasksFile, '-ClaudeHome', home, ...extraArgs],
     { encoding: 'utf8', windowsHide: true, timeout: 90000 });
   const lines = (r.stdout ?? '').split(/\r?\n/).filter(Boolean);
@@ -69,4 +72,36 @@ test('-Only with a name that matches nothing is refused with exit 1', win, () =>
   const r = dryRun(['-Only', 'CCv3-No-Such-Task']);
   assert.equal(r.code, 1);
   assert.match(r.out, /REFUSED/);
+});
+
+test('dry run: every Nm with battery:true prints battery=allow while llm stays false, and the other four lines are unchanged', win, () => {
+  const r = dryRun();
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.match(r.lineOf('CCv3-T-Battery'), /every 5m, limit 5 min, llm=false battery=allow wake=no]$/);
+  assert.match(r.lineOf('CCv3-T-Plain'), /llm=false battery=block wake=no]$/);
+  assert.match(r.lineOf('CCv3-T-WakeOnly'), /llm=false battery=block wake=yes]$/);
+});
+
+test('dry run: a task with hidden:true gets -WindowStyle Hidden; other .ps1 and .bat actions keep theirs', win, () => {
+  const r = dryRun();
+  assert.match(r.lineOf('CCv3-T-Battery'), /powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File/);
+  assert.doesNotMatch(r.lineOf('CCv3-T-Llm'), /WindowStyle/, 'the other .ps1 task keeps its action');
+  assert.doesNotMatch(r.lineOf('CCv3-T-Plain'), /WindowStyle/);
+});
+
+test('F4: an every-Nm trigger repeats for ever with NO duration (a MaxValue duration is refused by Register-ScheduledTask on current Windows)', win, () => {
+  const r = dryRun();
+  assert.equal(r.code, 0, r.out + r.err);
+  const repeat = r.lines.filter((l) => /^\s+repeat:/.test(l));
+  assert.equal(repeat.length, 1, r.out);
+  assert.match(repeat[0], /repeat: every PT5M, duration ''$/, 'the trigger object the script would register has an empty duration');
+  assert.doesNotMatch(r.out, /P99999999/);
+});
+
+test('dry run: a bad every Nm (0, 1440, a word) is refused before anything is registered', win, () => {
+  for (const trigger of ['every 0m', 'every 1440m', 'every 5 minutes']) {
+    const r = dryRun([], [{ ...TASKS[4], trigger }]);
+    assert.notEqual(r.code, 0, trigger + ': ' + r.out);
+    assert.doesNotMatch(r.out, /DRY RUN: nothing changed/);
+  }
 });

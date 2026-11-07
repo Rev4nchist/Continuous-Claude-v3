@@ -39,6 +39,18 @@
       "maxAgeHours": 336,
       "llm": true,
       "wake": false
+    },
+    {
+      "name": "CCv3-Reminder-Tick",
+      "script": ".claude/scripts/scheduled/scheduled-reminder-tick.ps1",
+      "trigger": "every 5m",
+      "execLimitMin": 5,
+      "allowedExit": [0],
+      "maxAgeHours": 1,
+      "llm": false,
+      "battery": true,
+      "hidden": true,
+      "wake": false
     }
   ]
 }
