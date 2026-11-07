@@ -5,6 +5,25 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
+
+// src/shared/session-source.ts
+var COMPACT_SOURCE = "compact";
+function parseSessionSource(stdin) {
+  try {
+    const doc = JSON.parse(stdin);
+    if (doc !== null && typeof doc === "object" && !Array.isArray(doc)) {
+      const source = doc.source;
+      if (typeof source === "string" && source !== "") return source;
+    }
+  } catch {
+  }
+  return "startup";
+}
+function isCompactSource(source) {
+  return source === COMPACT_SOURCE;
+}
+
+// src/roadmap-reconcile.ts
 var PACKAGE_ALIASES = {
   "passport": ["passport", "passport.js"],
   "redis": ["redis", "ioredis"],
@@ -282,6 +301,10 @@ async function readStdin() {
 }
 async function main() {
   const input = await readStdin();
+  if (isCompactSource(parseSessionSource(input))) {
+    console.log(JSON.stringify({}));
+    return;
+  }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const result = reconcile(projectDir);
   console.log(JSON.stringify(result));

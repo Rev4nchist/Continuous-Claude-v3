@@ -16,6 +16,9 @@
  * sees it at the start of each session.
  * Also appends one harness-doctor line (shared/health-alert.ts) when the doctor
  * report shows a problem or is more than 36 h old; silent when healthy.
+ * After /compact (stdin source = compact) it prints only problems: a degraded memory
+ * line, a failing or stale doctor report, or a warning set that changed since the last
+ * print. A healthy compact prints `{}`.
  * Starts a background backup (shared/memory-backup.ts) when the newest one is stale.
  */
 
@@ -23,12 +26,12 @@ import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProject } from './shared/session-id.js';
-import type { SessionStartInput } from './shared/types.js';
+import { isCompactSource, parseSessionSource } from './shared/session-source.js';
 import { runCommand } from './lib/run-command.js';
 import { getOpcDir } from './shared/opc-path.js';
 import { runSessionHealth } from './shared/memory-health.js';
 import { buildSessionStartOutput, isClaudeHomeProject } from './shared/session-start-output.js';
-import { healthAlertLine } from './shared/health-alert.js';
+import { healthAlertForSource } from './shared/health-alert.js';
 
 export async function main(): Promise<void> {
   const project = getProject();
@@ -42,19 +45,21 @@ export async function main(): Promise<void> {
   let stdinContent = '{}';
   try {
     stdinContent = readFileSync(0, 'utf-8');
-    JSON.parse(stdinContent) as SessionStartInput;
   } catch {
     // Empty/invalid stdin is fine for SessionStart
   }
+  // After /compact only problems print, and the failed-writes marker stays (shared/session-source.ts).
+  const source = parseSessionSource(stdinContent);
 
   const hooksDir = join(homedir(), '.claude', 'hooks').replace(/\\/g, '/');
   const daemonScript = `${hooksDir}/session-start-memory-daemon.ps1`;
 
   // The daemon launcher was archived (lazy on-demand daemons replaced it). With the
   // file gone, `powershell -File <missing>` prints the "Windows PowerShell Copyright"
-  // banner on stdout and that landed in additionalContext. Run it only when it exists.
+  // banner on stdout and that landed in additionalContext. Run it only when it exists,
+  // and not after compact (the daemon outlives the compact).
   const [result, health] = await Promise.all([
-    existsSync(daemonScript)
+    existsSync(daemonScript) && !isCompactSource(source)
       ? runCommand(
           'memory-daemon',
           'powershell',
@@ -63,10 +68,10 @@ export async function main(): Promise<void> {
           10000
         )
       : Promise.resolve({ name: 'memory-daemon', success: true, output: undefined, duration: 0 }),
-    runSessionHealth({ opcDir: getOpcDir() }),
+    runSessionHealth({ opcDir: getOpcDir(), source }),
   ]);
 
-  emitAndExit(buildSessionStartOutput(result.output ?? '', health, healthAlertLine()));
+  emitAndExit(buildSessionStartOutput(result.output ?? '', health, healthAlertForSource(source), source));
 }
 
 /**

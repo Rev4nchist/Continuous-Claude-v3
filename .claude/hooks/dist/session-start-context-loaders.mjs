@@ -1,7 +1,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/session-start-context-loaders.ts
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -74,10 +74,15 @@ async function main() {
   } catch {
   }
   const hooksDir = join(homedir(), ".claude", "hooks").replace(/\\/g, "/");
+  const treeDaemonScript = `${hooksDir}/session-start-tree-daemon.ps1`;
+  if (!existsSync(treeDaemonScript)) {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
   const result = await runCommand(
     "tree-daemon",
     "powershell",
-    ["-ExecutionPolicy", "Bypass", "-File", `${hooksDir}/session-start-tree-daemon.ps1`],
+    ["-ExecutionPolicy", "Bypass", "-File", treeDaemonScript],
     stdinContent,
     15e3
   );

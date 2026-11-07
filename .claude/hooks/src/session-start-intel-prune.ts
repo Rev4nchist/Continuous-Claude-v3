@@ -13,6 +13,7 @@
 
 import { readFileSync } from 'fs';
 import { pruneIntelBus } from './shared/intel-bus.js';
+import { isCompactSource, parseSessionSource } from './shared/session-source.js';
 
 /** Run the prune against a given project dir (default: env/cwd). Exported for the smoke test. */
 export function runPrune(projectDir?: string): void {
@@ -21,11 +22,16 @@ export function runPrune(projectDir?: string): void {
 }
 
 function main(): void {
-  // Consume stdin (SessionStart payload) but we don't need it.
+  let stdin = '';
   try {
-    readFileSync(0, 'utf-8');
+    stdin = readFileSync(0, 'utf-8');
   } catch {
     /* ignore */
+  }
+  // After /compact the prune already ran at this session's start.
+  if (isCompactSource(parseSessionSource(stdin))) {
+    console.log('{}');
+    return;
   }
   try {
     runPrune();
