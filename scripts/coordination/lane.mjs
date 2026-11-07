@@ -1217,7 +1217,13 @@ const commands = {
        WHERE id=$1 AND project_key=$2 RETURNING id`, [id, board.key, myId],
     );
     if (!rows.length) throw await noLane(c, id, board);
-    await logEvent(c, { laneId: id, kind: 'compact', sessionId: myId, to: myId, body, detail: agentDetail() });
+    // Direct INSERT, not logEvent: logEvent swallows its error, and the event is the only effect of this verb.
+    // A failed insert must reach the exit handler, or the hook would report success and start its cooldown.
+    await c.query(
+      `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail, project_key)
+       VALUES ($1,'compact',$2,$2,$3,$4,$5)`,
+      [id, myId, body, JSON.stringify(agentDetail()), eventBoard()],
+    );
     return JSON_OUT ? { id, kind: 'compact', body } : `compact event on ${id}: ${body}`;
   },
 

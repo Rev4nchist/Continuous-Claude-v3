@@ -14,7 +14,7 @@
  * Exit 1 if a check fails, 2 if pg is missing. Output also goes to .claude/cache/e2e/2026-11-07-a3-probe.txt.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
@@ -159,6 +159,22 @@ try {
   log(`hook stdout: ${h3.out}`);
   check('hook skips and still continues', h3.code === 0 && /"continue":true/.test(h3.out) && /skipped/.test(h3.out), h3.out);
   check('the note is still the exact original', (await row('zz-lc-noted')).note === NOTE);
+
+  log('\n## an event insert that fails: the verb exits nonzero and the hook does not start its cooldown');
+  const homeFail = fakeHome(boards.tmp, 'home-fail', realPrimary);
+  await db.query(`ALTER TABLE agentic_os.lane_event ADD CONSTRAINT zz_block_compact CHECK (kind <> 'compact') NOT VALID`);
+  const eventsBefore = (await events('compact')).length;
+  r = lane(ME, ['compact', 'zz-lc-noted', 'will fail']);
+  log(`compact verb: exit ${r.code}: ${r.all.split('\n')[0]}`);
+  check('the compact verb exits nonzero when the insert fails', r.code !== 0 && !/compact event on/.test(r.out), `exit ${r.code}`);
+  const h4 = hook(homeFail, ME);
+  log(`hook stdout: ${h4.out}`);
+  check('the hook reports the failure, not success', h4.code === 0 && /skipped: every compact event write failed/.test(h4.out), h4.out);
+  const stateFile = join(homeFail, '.claude', 'state', 'pre-compact-lane-note.json');
+  const stamped = existsSync(stateFile) && ME in JSON.parse(readFileSync(stateFile, 'utf8'));
+  check('the hook did not stamp the cooldown', !stamped);
+  check('no compact event was recorded', (await events('compact')).length === eventsBefore);
+  await db.query('ALTER TABLE agentic_os.lane_event DROP CONSTRAINT zz_block_compact');
 } catch (e) {
   log(`ERROR: ${e.stack || e.message}`);
   results.push(['driver error', false]);
