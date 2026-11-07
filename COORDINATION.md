@@ -48,6 +48,7 @@ session start and any unread updates on every prompt, and renews your leases whi
 A lane has a **band** (`P0`, `P1`, `P2`, or NULL = Unsorted) and a **rank** (`lane.priority`, the order inside a band).
 P0 means this week. The cap of 5 is soft: the phone page warns above it and blocks nothing. Dave sets a band with
 `node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0|P1|P2|none`. Nothing sets one automatically.
+The one-off first banding is `node C:/Users/dkhay/.claude/scripts/lane.mjs band-backfill --dry-run`, then the `to apply:` line it prints (`--apply --p0 id,id|none --expect N`) after Dave's yes. Only lanes with band IS NULL get the map (priority 1..9 P1, 10..40 P2, the rest Unsorted); a lane named in `--p0` gets P0 whatever band it has; done lanes are skipped; `updated_at` does not move; a second run with the same `--p0` list changes 0 rows; a wrong `--expect` rolls back.
 
 One sort key orders open lanes everywhere: band, then `due_at` (NULL last), then rank, then id
 (`scripts/coordination/lane-sort.mjs`, with twins in the hooks and the app). `lane.mjs next`, the board and the phone page share it.
