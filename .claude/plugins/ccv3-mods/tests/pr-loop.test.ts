@@ -586,7 +586,10 @@ describe('pr-loop watcher', () => {
     expect(line).toContain('over 15 minutes')
     expect(line).toContain('@coderabbitai review --use-credits')
     expect(line).toContain('cr-paid.mjs record')
-    expect(line).toMatch(/On ESCALATE, ask Dave with AskUserQuestion/)
+    expect(line).toContain('node scripts/github/ship-ask.mjs paid-round --pr 8 --json')
+    expect(line).toMatch(/only after Dave taps a Yes option/)
+    expect(line).toMatch(/first option is the free one/)
+    expect(line).not.toMatch(/\/slot pay|\/pathway </)
   })
 
   test('W31 the general LIMITED line (skipped or failed) has no paid-review step', async ($, on) => {
@@ -1294,7 +1297,9 @@ describe('pr-loop checkpoint states', () => {
   const COMMAND = 'pathway'
   const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
   const NONE_UNVERIFIED = 'the router has not classified this head; re-run the router workflow'
-  const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again'
+  // The exact texts review-status.mjs writes today (scripts/github/review-status.mjs). Not imported: the fixture must break when the mod drifts.
+  const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again'
+  const NONE_NO_CHECKPOINT = 'review:none has no saved checkpoint (pathway=none) on this head; call pr_checkpoint {pr} or re-run the router workflow'
   const CR_ROUTE = { required: ['coderabbit'], held: null, source: 'labels' }
   const NO_REVIEW = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one'
   const record = (over: Record<string, unknown> = {}) => ({
@@ -1335,6 +1340,18 @@ describe('pr-loop checkpoint states', () => {
     expect(seen.submits.length).toBe(1)
     expect(seen.submits[0]).toMatch(/re-run the review-router workflow/i)
     expect(seen.submits[0]).toContain('review:none')
+    expect(seen.submits[0]).not.toMatch(/No review on the head/)
+  })
+
+  test('CW2b review:none with no saved checkpoint (the CLI text): STALLED stays the router line and asks for no bot review', async ($, on) => {
+    const none = status(7, { labels: ['review:none', 'risk:normal'], routing: { required: [], held: null, source: 'labels' }, routedReviewed: true, reasons: [NONE_NO_CHECKPOINT] })
+    const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [none] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('call pr_checkpoint 7 or re-run the router workflow')
+    expect(seen.submits[0]).not.toMatch(/re-run the review-router workflow/i)
+    expect(seen.submits[0]).toMatch(/Do not request a bot review/)
     expect(seen.submits[0]).not.toMatch(/No review on the head/)
   })
 
@@ -1453,7 +1470,8 @@ describe('pr-loop checkpoint states', () => {
     expect(line).toContain('node scripts/github/cr-paid.mjs check --pr 7')
     expect(line).toContain('@coderabbitai review --use-credits')
     expect(line).toContain('over 15 minutes')
-    expect(line).toMatch(/On ESCALATE, ask Dave with AskUserQuestion/)
+    expect(line).toContain('node scripts/github/ship-ask.mjs paid-round --pr 7 --json')
+    expect(line).toMatch(/only after Dave taps a Yes option/)
     expect(line).toMatch(/round 2 or later/)
     expect(line).toMatch(/every finding of the last round is fixed/)
     expect(line).toMatch(/threads are resolved/)
@@ -1632,15 +1650,14 @@ describe('pr-loop checkpoint states', () => {
     expect(comments(seen)).toEqual([])
   })
 
-  test('CW11 CLASS_RAISED_NOTE in the reasons: the line says "Return the PR to draft (gh pr ready --undo), then run /<command> again" and "Do not request a review"', async ($, on) => {
+  test('CW11 CLASS_RAISED_NOTE in the reasons: the line sends the model to pr_checkpoint, which asks Dave whether to return the PR to draft, and says "Do not request a review"', async ($, on) => {
     const raised = status(7, { labels: ['review:none', 'risk:infra'], routing: { required: [], held: null, source: 'labels' }, routedReviewed: true, reasons: [CLASS_RAISED] })
     const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [raised] } })
     await start($)
     await ticks(clock, 13)
     expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain(`Return the PR to draft (gh pr ready 7 --undo), then run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
-    expect(seen.submits[0]).toContain('gh pr ready 7 --undo')
-    expect(seen.submits[0]).not.toContain('gh pr ready --undo')
+    expect(seen.submits[0]).toContain('Call pr_checkpoint with pr 7: it asks Dave whether to return the PR to draft and pick again. The class rose after the checkpoint. Do not request a review.')
+    expect(seen.submits[0]).not.toMatch(/gh pr ready/)
     expect(seen.submits[0]).not.toContain('/checkpoint')
   })
 

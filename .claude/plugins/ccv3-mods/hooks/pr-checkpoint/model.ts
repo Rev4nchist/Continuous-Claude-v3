@@ -18,7 +18,7 @@ export const GIT_TIMEOUT_MS = 20_000
 export const PENDING_STALE_MS = 7 * 24 * 3_600_000
 
 export const USAGE = `Usage: ${SLASH} [pr] [accept|coderabbit|both|none|wait] [--body <file>]   or   ${SLASH} grant <pr> <round>`
-export const NEED_PR = 'Call pr_checkpoint first, or pass <pr> --body <file>.'
+export const NEED_PR = 'No checkpoint waits in this session. The session asks the question: it calls pr_checkpoint with the PR number. Nothing was recorded.'
 const PATHWAY_WORDS = ['accept', 'coderabbit', 'both', 'none', 'wait']
 
 export type CheckpointArgs = { pr: number | null; word: string | null; body: string | null }
@@ -26,9 +26,12 @@ export type CheckpointArgs = { pr: number | null; word: string | null; body: str
 /** `328:none` or `none:328`: a PR number and a word joined by one colon. A drive path (`C:/x`) and any other colon text do not match. */
 const PR_WORD_PAIR = /^(?:#?\d+:[a-z]+|[a-z]+:#?\d+)$/i
 
-/** `7`, `#7`, `7:none`, a pathway word (any case) and `--body <file>`, in any order. Anything else is a usage error (null). */
+/**
+ * `7`, `#7`, `7:none`, a pathway word (any case) and `--body <file>`, in any order. Anything else is a usage error (null).
+ * Only the FIRST line is read (M6: a long typed answer put prose in the args and the whole command failed). `ignoredText` names the rest.
+ */
 export const parseCheckpointArgs = (args: string): CheckpointArgs | null => {
-  const words = args.trim().split(/\s+/).filter(Boolean)
+  const words = firstLine(args).split(/\s+/).filter(Boolean)
   let pr: number | null = null
   let word: string | null = null
   let body: string | null = null
@@ -78,6 +81,15 @@ export const resolveBody = (root: string, body: string): string => (ABSOLUTE.tes
 
 export const engineArgv = (root: string, ...flags: string[]): string[] => ['node', `${root}/${ENGINE_REL}`, ...flags]
 
+/**
+ * The facts call of `prepare`: --no-ledger, so the engine writes no offer and counts no miss before the head check has passed.
+ * `ledgerArgv` is the second call (after the head check and after a return to draft): it adds the ledger block. `askAnyway` asks the question for
+ * an auto-eligible PR whose auto-confirm did not record (the ledger would otherwise say no question is needed).
+ */
+export const factsFlags = (pr: number, dependabot: boolean): string[] => ['--json', '--pr', String(pr), '--probe', '--no-ledger', ...(dependabot ? ['--dependabot'] : [])]
+/** The ledger call sees the same facts as the facts call: a Dependabot PR (the author, read by prepare) changes the options, so the flag goes again. */
+export const ledgerFlags = (pr: number, askAnyway: boolean, dependabot: boolean): string[] => ['--json', '--pr', String(pr), ...(dependabot ? ['--dependabot'] : []), ...(askAnyway ? ['--ask-anyway'] : [])]
+
 export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,labels,number', '-R', REPO]
 
 /** Whether the `labels` of a gh pr view carry risk:high (the one label the band reads), or null when the list is absent or malformed. */
@@ -121,6 +133,9 @@ export const lastLine = (text: string): string =>
 
 export const firstLine = (text: string): string => text.trim().split(/\r?\n/).find(Boolean) ?? ''
 
+/** The text after the first line, on one line and clipped: what a typed answer carried that no parser read. Empty for a one-line answer. */
+export const ignoredText = (text: string): string => clip(text.trim().split(/\r?\n/).slice(1).join(' ').replace(/\s+/g, ' ').trim(), 200)
+
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /** The engine's auto-confirm answer. Only a boolean true is eligible: an old engine (no block), a string or any other shape is not. */
@@ -132,7 +147,7 @@ const autoOf = (value: unknown): CheckpointResult['auto'] => {
 }
 
 /** The result plus the engine's drift text (`config_drift_why`: null or absent without drift, or from an old engine). */
-export type CheckpointResultWithDrift = CheckpointResult & { config_drift_why?: string | null }
+export type CheckpointResultWithDrift = CheckpointResult & { config_drift_why?: string | null; ledger?: LedgerBlock | null }
 
 /** The engine's `--json` output, or null when it lacks the fields the mod reads. */
 export const parseResult = (stdout: string): CheckpointResultWithDrift | null => {
@@ -156,6 +171,7 @@ export const parseResult = (stdout: string): CheckpointResultWithDrift | null =>
       config_drift: parsed.config_drift === true,
       config_drift_why: typeof parsed.config_drift_why === 'string' ? parsed.config_drift_why : null,
       auto: autoOf(parsed.auto),
+      ledger: ledgerOf(parsed.ledger),
     }
   } catch {
     return null
@@ -213,10 +229,11 @@ export const FIGURE = (dollars: number): string => `$${dollars.toFixed(2)}`
 /** The cost part of a label for `files` changed files. Unknown files: the per-file price. */
 export const upTo = (files: number | null): string => (files === null ? `up to ${FIGURE(PAID_PER_FILE)} per changed file` : `up to ${FIGURE(files * PAID_PER_FILE)}`)
 
-export type PathwayChoice = { label: string; pathway: string; by: 'default' | 'dave' }
+/** A tap is always Dave's own pick: `by` is `dave` for every row, the recommended row included (M9, Dave 2026-11-06). Never `default` for a dialog answer. */
+export type PathwayChoice = { label: string; pathway: string; by: 'dave' }
 
 /**
- * At HIGH and CRITICAL a `none` is always Dave's own pick (`--by dave`), even when it is the recommendation (the interim CodeRabbit rule,
+ * At HIGH and CRITICAL a typed `accept` of `none` is Dave's own pick (`--by dave`), even when it is the recommendation (the interim CodeRabbit rule,
  * 2026-11-04: HIGH without the risk:high trigger is recommended none). The engine refuses `--by default` for it, and land-none-check.mjs
  * reads decided_by dave. Same bands as QUEUE_BANDS in pr-loop/slot.ts (not imported: this file takes types only).
  */
@@ -322,8 +339,8 @@ const questionLines = (pr: number, result: CheckpointResultWithDrift, held: Chec
  * The checkpoint question, or null when there is nothing to choose: no recommendation (R0), or no open pathway. The question has 3 lines: the PR,
  * the recommendation with its reason, and the CodeRabbit slot (`now` is the clock in ms, for the minutes left). A second reason, a held pathway
  * and a warning each add a line below them: Dave must see them before he picks. The labels are 2 to 4:
- * the open pathways (at most 3), one "Keep as draft", and "No review, land on CI" last when the engine offers it and it is not the recommendation. When the recommendation is open it is first, with " (Recommended)", and is the only
- * one a `--by default` may record. When it is held, no label is marked and every pick is `--by dave`.
+ * the open pathways (at most 3), one "Keep as draft", and "No review, land on CI" last when the engine offers it and it is not the recommendation. When the recommendation is open it is first, with " (Recommended)".
+ * Every pick is `--by dave`, and a paid pick asks a second question (needsPaidConfirm). When it is held, no label is marked.
  */
 export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, now: number | null = null): PathwayAsk | null => {
   const { buttons, held, recommendedFirst } = optionsInOrder(result)
@@ -340,51 +357,104 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, n
   const choices: PathwayChoice[] = ordered.map((one, i) => ({
     label: `${labelFor(one, result.size.files, slot)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
     pathway: one.pathway,
-    by: recommendedFirst && i === 0 && !onlyDaveRecordsNone(one.pathway, result.auto?.band) ? 'default' : 'dave',
+    by: 'dave',
   }))
   const question = questionLines(pr, result, held, recommendedFirst, now).join('\n')
   return { pr, header: clip(`PR #${pr}`, 12), question, choices }
 }
 
-/** A typed word names the row of that pathway; `accept` names the Recommended row. A PR number in the text must be this PR's. */
-const choiceOfWord = (word: string, pr: number | null, ask: PathwayAsk): PathwayChoice | null => {
-  if (pr !== null && pr !== ask.pr) return null
-  const row = word === 'accept' ? ask.choices.find(one => one.label.endsWith(RECOMMENDED)) : ask.choices.find(one => one.pathway === word)
-  return row ?? null
-}
-
-/** The shortest label prefix that counts. A one or two letter prefix could press a paid row by a slip. */
-const MIN_PREFIX = 3
+/**
+ * What Dave's dialog answer maps to: the choice whose label EXACTLY equals the answer, else null (Dave 2026-11-06). A row number, a pathway word,
+ * a label prefix, another case, a trailing space and free text are all misses: they record nothing and the question is asked again.
+ * (A typed /pathway word is read by parseCheckpointArgs in the command path; the dialog never reads loose text.)
+ */
+export const pathwayOfAnswer = (answer: unknown, ask: PathwayAsk): PathwayChoice | null =>
+  typeof answer === 'string' ? (ask.choices.find(one => one.label === answer) ?? null) : null
 
 /**
- * Words Dave typed under Other, read loosely and without case: one digit (the row number), a pathway word with or without the PR (`none`,
- * `328:none`, `328 none`, `none 328`), or a label prefix that names one row only. Anything else, a comma-joined pair included, is null.
+ * The tool text for each outcome that records nothing. The model reads it; Dave's words reach the model through `stopText`.
+ * No text here tells Dave to type or paste a command (M10): the way back is a question, which the model asks by calling pr_checkpoint.
  */
-const typedChoice = (text: string, ask: PathwayAsk): PathwayChoice | null => {
-  const typed = text.trim().toLowerCase()
-  if (typed === '') return null
-  if (/^\d$/.test(typed)) return ask.choices[Number(typed) - 1] ?? null
-  const args = parseCheckpointArgs(typed)
-  if (args && args.word !== null && args.body === null) return choiceOfWord(args.word, args.pr, ask)
-  if (typed.length < MIN_PREFIX) return null
-  const rows = ask.choices.filter(one => one.label.toLowerCase().startsWith(typed))
-  return rows.length === 1 ? rows[0]! : null
-}
-
-/** What Dave's answer maps to: an exact label of the ask, else a loose typed pick (see typedChoice), else null. A typed pick keeps the `by` of its row. */
-export const pathwayOfAnswer = (answer: unknown, ask: PathwayAsk): PathwayChoice | null => {
-  if (typeof answer !== 'string') return null
-  return ask.choices.find(one => one.label === answer) ?? typedChoice(answer, ask)
-}
-
-/** The tool text for each outcome that records nothing. The model reads it; Dave's words reach the model through `otherText`. */
 export const keptDraftText = (pr: number): string => `Dave kept #${pr} as a draft. Nothing recorded. The checkpoint stays pending. Do not ask him again. He decides when he is ready.`
-export const closedText = (pr: number): string => `Dave closed the question for #${pr}. Nothing recorded. The PR stays a draft. He can answer later with ${SLASH}.`
-export const otherText = (pr: number, text: string): string =>
-  `Dave wrote: ${clip(text.replace(/\s+/g, ' '), 400)}. Nothing recorded. The PR stays a draft. Reply to him. He answers with ${SLASH} ${pr} <word>.`
-export const emptyText = (pr: number): string => `No valid answer came back for #${pr}. Nothing recorded. The PR stays a draft. Dave answers with ${SLASH}.`
+
+/** What a typed answer carried past its first line, as a sentence for the end of a reply: ` Ignored: "...".` Empty for a one-line answer. */
+export const ignoredNote = (text: string): string => {
+  const ignored = ignoredText(text)
+  return ignored === '' ? '' : ` Ignored: "${ignored}".`
+}
+
+/** The question is asked again at most this many times after a miss (an answer that matches no option, Esc, an empty answer). Dave 2026-11-06. */
+export const MAX_REASKS = 2
+export type Miss = 'closed' | 'empty' | 'other'
+/** The first line of a re-asked question: it says why Dave sees the question again. `n` is 1 or 2. */
+export const reaskLine = (n: number): string => `No answer matched an option. Asking again (${n} of ${MAX_REASKS}).`
+
+const saidOf = (pr: number, how: Miss, typed: string): string =>
+  how === 'closed' ? `Dave closed the question for #${pr}` : how === 'empty' ? `No valid answer came back for #${pr}` : `Dave wrote: ${clip(typed.replace(/\s+/g, ' '), 400)}`
+
+/** The tool text when the re-asks are used up: nothing was recorded and the PR stays a draft. The model tells Dave. */
+export const stopText = (pr: number, how: Miss, typed = ''): string =>
+  `Stop. ${saidOf(pr, how, typed)}. The question was asked ${MAX_REASKS + 1} times with no valid answer. Nothing was recorded. PR #${pr} stays a draft. Tell Dave.`
 export const movedText = (pr: number, why: string): string =>
   `#${pr} changed while Dave answered (${why}). Nothing recorded. Run pre-pr.mjs at the new head, then call pr_checkpoint again.`
+
+// M2: a ready PR that already has a record. The question is Dave's own dialog; the answer never records a review.
+export const changeLabels = (label: string): readonly [string, string] => [`Keep ${label}${RECOMMENDED}`, 'Return to draft and pick again']
+export const changeQuestion = (pr: number, label: string, by: string, at: string | null): string =>
+  `PR #${pr} is ready with ${label} (by ${by}${at ? `, ${at}` : ''}). Change the review pick?`
+export const changeKeptText = (pr: number, label: string): string => `Dave kept ${label} for #${pr}. Nothing was changed. The PR stays ready.`
+export const changeStopText = (pr: number): string => `No valid answer came back to "Change the review pick?" for #${pr}. Nothing was changed. The PR stays ready.`
+export const undoFailedText = (pr: number, why: string): string => `Could not return #${pr} to draft (${why}). Nothing was changed. Nothing was recorded.`
+export const notDraftText = (pr: number): string => `PR #${pr} is not a draft. The checkpoint applies to a draft PR only. Nothing was recorded.`
+/** `gh pr ready <n> --undo`, run by the mod itself (not a model tool call, so the locks do not see it). */
+export const undoArgv = (pr: number): string[] => ['gh', 'pr', 'ready', String(pr), '--undo', '-R', REPO]
+/** The free-slot queue drop of a PR returned to draft: the queue must not post `@coderabbitai review` on it. `script` is the queue script path. */
+export const slotDropArgv = (script: string, pr: number): string[] => ['node', script, 'drop', '--pr', String(pr), '--reason', 'returned-to-draft', '--json']
+
+// M1: the engine's ledger block (the two-call protocol behind checkpoint.ledger). The engine writes the offer and reads the tap.
+export type LedgerAsk = { header: string; question: string; options: { label: string; description?: string }[] }
+export type LedgerBlock = { state: 'none' | 'ask' | 'confirm-paid' | 'record' | 'kept-draft' | 'stop'; ask: LedgerAsk | null; pathway: string | null; reasked: number; text: string }
+const LEDGER_STATES = ['none', 'ask', 'confirm-paid', 'record', 'kept-draft', 'stop']
+
+const ledgerAskOf = (value: unknown): LedgerAsk | null => {
+  if (!isObject(value) || typeof value.header !== 'string' || typeof value.question !== 'string' || !Array.isArray(value.options)) return null
+  const options = value.options.filter((one): one is { label: string; description?: string } => isObject(one) && typeof one.label === 'string')
+  return options.length >= 2 && options.length === value.options.length ? { header: value.header, question: value.question, options } : null
+}
+
+/** The `ledger` block of the engine's --json output, or null when it is absent or unreadable (the flag is off, or an old engine). */
+export const ledgerOf = (value: unknown): LedgerBlock | null => {
+  if (!isObject(value) || typeof value.state !== 'string' || !LEDGER_STATES.includes(value.state)) return null
+  return {
+    state: value.state as LedgerBlock['state'],
+    ask: ledgerAskOf(value.ask),
+    pathway: typeof value.pathway === 'string' ? value.pathway : null,
+    reasked: typeof value.reasked === 'number' ? value.reasked : 0,
+    text: typeof value.text === 'string' ? value.text : '',
+  }
+}
+
+/** The tool text of call 1: the question for the model to ask, word for word. A re-ask says so. The model never records. */
+export const ledgerAskText = (ledger: LedgerBlock & { ask: LedgerAsk }): string =>
+  [
+    'Ask Dave now with AskUserQuestion. Pass this question word for word and change nothing.',
+    JSON.stringify(ledger.ask),
+    ...(ledger.reasked > 0 ? [`Dave's last answer matched no option. This is re-ask ${ledger.reasked} of ${MAX_REASKS}.`] : []),
+    'Then call pr_checkpoint again with the same pr and body. Never record, label or mark the PR ready yourself.',
+  ].join('\n')
+
+/** The text of a typed /pathway while the ledger is on: only a tap on the question the model asks records, so the model is told to ask it. */
+export const ledgerCommandText = (pr: number): string => `PR #${pr}: the review question is a tap. The session asks it now. Nothing was recorded.`
+export const ledgerCommandNote = (pr: number): string =>
+  `Dave asked for the review question on #${pr}. Call pr_checkpoint with pr ${pr} and the body file, then pass the question it returns to AskUserQuestion. Do not record anything yourself.`
+
+/** Why a headless run, a plugin or the bridge only shows the plan. No text tells Dave to type. */
+export const whyTextOnly = (via: string | null, waiting: number | null): string => {
+  if (via === null) return `This session is headless, so ${SLASH} only shows the plan. An interactive session calls pr_checkpoint to ask Dave.`
+  const where = `This ${SLASH} came from ${via}, not Dave's terminal composer, so it only shows the plan. A pick records from Dave's tap on the question pr_checkpoint asks.`
+  if (via !== 'bridge') return where
+  return `${where} From the bridge, ${SLASH} records only the PR whose checkpoint waits in this session (${waiting === null ? 'none waits now' : `#${waiting}`}).`
+}
 export const BUSY_TEXT = 'A checkpoint question is open. Wait for Dave. Nothing was asked and nothing was recorded.'
 export const noQuestionText = (pr: number, why: string | undefined): string =>
   `${(why ?? 'No pathway is open for #' + pr).replace(/[.\s]+$/, '')}. Nothing recorded. The PR stays a draft.`
@@ -395,8 +465,11 @@ export const SUBAGENT_WHY = `A subagent may not raise Dave's question. Only the 
 export type AskChoice = { label: string; answer: 'yes' | 'no' }
 export type AskSpec = { header: string; question: string; choices: AskChoice[] }
 
-/** The order of an ask's two labels. The first is the recommendation. Rounds and Greptile spend, so No is first; the opening is inside the budget, so Yes is first. */
-export const askOrder = (kind: CheckpointAsk['kind']): ['yes' | 'no', 'yes' | 'no'] => (kind === 'opening' ? ['yes', 'no'] : ['no', 'yes'])
+/**
+ * The order of an ask's two labels. The first is the recommendation, and it is the free one: every ask here can spend (an opening review, a
+ * round, Greptile), so No is first and a Yes is a tap on the second row (Dave 2026-11-06). The opening ask used to put Yes first.
+ */
+export const askOrder = (_kind: CheckpointAsk['kind']): ['no', 'yes'] => ['no', 'yes']
 
 const askLabel = (kind: CheckpointAsk['kind'], answer: 'yes' | 'no', files: number | null): string => {
   if (kind === 'greptile') return answer === 'yes' ? 'Yes, ask Greptile (3 credits)' : 'No, skip Greptile ($0)'
@@ -419,17 +492,17 @@ export const answerOfLabel = (spec: AskSpec, answer: unknown): 'yes' | 'no' | nu
 export const RETRY_LABELS = ['Retry', 'Leave as draft'] as const
 
 /**
- * True for a paid pick that is not the recommended row: Dave's own press (`by` dave) of a pathway that is neither none nor wait.
- * A mis-tap on the row under the default row spends money (PRs 315 and 316), so this pick asks a second time.
+ * True for every paid pick, the recommended row too: a pathway that is neither none nor wait. A mis-tap spends money (PRs 315 and 316), and
+ * one dialog return once picked the recommended row with no tap at all (PR 349, M9), so a paid pick always asks a second time.
  */
-export const needsPaidConfirm = (choice: PathwayChoice): boolean => choice.by === 'dave' && choice.pathway !== 'none' && choice.pathway !== 'wait'
+export const needsPaidConfirm = (choice: PathwayChoice): boolean => choice.pathway !== 'none' && choice.pathway !== 'wait'
 
-/** The two labels of the paid confirm. Only the first records. */
-export const paidConfirmLabels = (choice: PathwayChoice): readonly [string, string] => [`Yes, record ${choice.pathway}`, 'No, keep the PR a draft']
+/** The two labels of the paid confirm. The first is No, the free row, so a dialog that returns row 0 twice records nothing. Only the second records. */
+export const paidConfirmLabels = (choice: PathwayChoice): readonly [string, string] => [`No, keep the PR a draft${RECOMMENDED}`, `Yes, record ${choice.pathway}`]
 
 /** The paid confirm question. `choice.label` holds the pathway name and its cost. */
 export const paidConfirmQuestion = (pr: number, choice: PathwayChoice): string =>
-  `PR #${pr}: you picked ${choice.label}. It is not the recommendation and it can cost money. Record it?`
+  `PR #${pr}: you picked ${choice.label.replace(RECOMMENDED, '')}. It can cost money. Record it? If you say No, nothing is recorded and the PR stays a draft.`
 
 /** The tool text when the paid confirm records nothing. `typed` is what Dave wrote under Other, shown to the model like `otherText`. */
 export const paidUnconfirmedText = (pr: number, pathway: string, how: 'no' | 'closed' | 'empty' | 'other', typed = ''): string => {
@@ -439,7 +512,7 @@ export const paidUnconfirmedText = (pr: number, pathway: string, how: 'no' | 'cl
     empty: `No valid answer came back to the confirm for ${pathway} on #${pr}`,
     other: `Dave wrote: ${clip(typed.replace(/\s+/g, ' '), 400)}`,
   }[how]
-  return `${said}. Nothing recorded. The PR stays a draft. He answers with ${SLASH} ${pr} <word>.`
+  return `${said}. Nothing recorded. The PR stays a draft. Call pr_checkpoint with pr ${pr} to ask again, only when Dave wants to.`
 }
 
 /** A watcher ask Dave closed three ways: the quiet time before it may come back, and how often it comes back at all. */
@@ -471,7 +544,7 @@ export const SHAPES_CLI_REL = '.claude/hooks/dist/checkpoint-shapes-cli.mjs'
 export const SHAPES_TIMEOUT_MS = 10_000
 export const CONFIG_REL = 'review-router.config.json'
 export const PATHWAY_DENY = "pathway.json is written only by the mod, after Dave answers the checkpoint question. A tool or a shell command may not name it. Read it with the Read tool."
-export const STORE_DENY = "The plugin store file holds the checkpoint records that the land gate reads. Only the mod writes it. A tool or a shell command may not name it. Ask Dave to run /pathway."
+export const STORE_DENY = "The plugin store file holds the checkpoint records that the land gate reads. Only the mod writes it. A tool or a shell command may not name it. Call pr_checkpoint to record a pick."
 export const LOCK_FAILED = 'pr-checkpoint lock failed; nothing ran'
 
 /** Resolves `.` and `..`, turns backslashes into slashes and lower-cases: the spellings of one path compare equal. */

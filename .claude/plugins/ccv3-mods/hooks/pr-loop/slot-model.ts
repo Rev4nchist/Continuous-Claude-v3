@@ -79,8 +79,8 @@ const LINES: Record<string, (row: SlotRow) => string> = {
   'awaiting-fix': () => 'waits for the fix push, then queues',
   queued: row => `${at('queued', row)}, ${nextSlot(row)}`,
   posted: () => 'review requested, waiting for CodeRabbit',
-  'timed-out': row => `no free slot for 60 min, ${at('still queued', row)}; /slot pay ${row.pr} or /slot wait ${row.pr}`,
-  stuck: row => `${row.posts} posts made no review; /slot drop ${row.pr}`,
+  'timed-out': row => `no free slot for 60 min, ${at('still queued', row)}; a question asks Dave to pay or keep waiting`,
+  stuck: row => `${row.posts} posts made no review; call pr_checkpoint ${row.pr}`,
   done: () => 'done',
   dropped: row => `dropped${row.dropReason ? ` (${row.dropReason})` : ''}`,
 }
@@ -114,7 +114,23 @@ export const parseSlotArgs = (args: string): SlotArgs => {
 // The tick emits a toast when it asks Dave to pay (30 minutes without a free slot) or reports the time-out (60 minutes). The mod also puts
 // the question as a dialog. The CLI stays the decider: Pay runs `decide --kind pay`, which posts only when cr-paid says ALLOW.
 
+/**
+ * The toast text of a tick action. The CLI's own text says "Type /slot pay N" (or drop). Dave answers by the question the session asks,
+ * not by a typed command, so those sentences go and one plain sentence stands in. A text with no such sentence stays as the CLI wrote it.
+ */
+export const toastText = (text: string): string => {
+  const plain = text.replace(/\s*Type \/slot [^.]*\./g, '')
+  return plain === text ? text : `${plain} Dave answers the question the session asks.`
+}
+
 export type SlotAsk = { pr: number; kind: 'paid' | 'timeout'; canPay: boolean; cost: string | null }
+
+/**
+ * The Pay row is offered when the CLI's own words say a paid round may follow: cr-paid ALLOW (30 minutes), a paid-round check that could not be
+ * read (Pay tries it again), or the 60 minute time-out ("still queued"). The ESCALATE text ("A paid round is not allowed") matches none. The
+ * dialog never reads the typed `/slot` command in the text (Dave 2026-11-06: every decision is a tap).
+ */
+const PAYABLE = /\(cr-paid ALLOW\)|paid-round check could not be read|still queued/
 
 /** The ask a tick action carries, or null for any other toast (queued, stuck, posted). The text is the CLI's; an unknown text raises no dialog. */
 export const slotAskOf = (action: SlotAction): SlotAsk | null => {
@@ -122,7 +138,7 @@ export const slotAskOf = (action: SlotAction): SlotAsk | null => {
   const kind = /no free slot for 60 minutes/.test(text) ? 'timeout' : /no free slot for 30 minutes/.test(text) ? 'paid' : null
   if (kind === null) return null
   const cost = /Paid round \$(\d+(?:\.\d+)?)/.exec(text)
-  return { pr: action.pr, kind, canPay: new RegExp(`/slot pay ${action.pr}(?!\\d)`).test(text), cost: cost ? `$${cost[1]}` : null }
+  return { pr: action.pr, kind, canPay: PAYABLE.test(text), cost: cost ? `$${cost[1]}` : null }
 }
 
 export type SlotChoice = { label: string; verb: 'pay' | 'wait' | 'drop' }

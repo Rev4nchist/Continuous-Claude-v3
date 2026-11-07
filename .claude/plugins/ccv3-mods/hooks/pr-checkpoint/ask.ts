@@ -1,5 +1,7 @@
 import type { EngineInterface } from 'claude-code'
 import { DIAG_DIR } from '../shared/diag'
+import { MAX_REASKS, reaskLine } from './model'
+import type { Miss } from './model'
 
 /**
  * The dialog primitives of the PR checkpoint. Every question the mod puts to Dave goes through `askDave` (the engine's own AskUserQuestion
@@ -119,6 +121,25 @@ export async function askDave($: EngineInterface, question: string, labels: read
     elapsedMs: startedAt === null || endedAt === null ? null : endedAt - startedAt,
   })
   return answered
+}
+
+/** `hit` is what `accept` read from an answer. `miss` is the kind of the LAST answer that matched nothing, and `typed` is what Dave wrote then. */
+export type Heard<T> = { hit: T; raw: string } | { miss: Miss; typed: string }
+
+/**
+ * Asks one question until `accept` reads an answer, at most 1 + MAX_REASKS times (Dave 2026-11-06: free text, Esc, an empty answer and a
+ * timeout record nothing and ask again, twice at most). A re-asked question starts with `reaskLine`. `accept` returns null for a miss.
+ * A function declaration: the engine follows `$` into those only.
+ */
+export async function askUntil<T>($: EngineInterface, question: string, labels: readonly string[], header: string, accept: (text: string) => T | null): Promise<Heard<T>> {
+  let last: Heard<T> = { miss: 'closed', typed: '' }
+  for (let miss = 0; miss <= MAX_REASKS; miss += 1) {
+    const got = await askDave($, miss === 0 ? question : `${reaskLine(miss)}\n${question}`, labels, header)
+    const hit = got.kind === 'text' ? accept(got.text) : null
+    if (hit !== null && got.kind === 'text') return { hit, raw: got.text }
+    last = { miss: got.kind === 'text' ? 'other' : got.kind, typed: got.kind === 'text' ? got.text : '' }
+  }
+  return last
 }
 
 /** The label Dave chose: an exact match of one of the mod's own labels, nothing looser. */

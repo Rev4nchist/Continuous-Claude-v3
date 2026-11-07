@@ -3,9 +3,9 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { CheckpointRecord, CheckpointResult } from '../../types'
 import { isPrNumber, readRecord } from '../pr-loop/model'
-import { QUEUE_BANDS, slotAdd } from '../pr-loop/slot'
+import { QUEUE_BANDS, slotAdd, slotScript } from '../pr-loop/slot'
 import { DIAG_DIR } from '../shared/diag'
-import { askDave, freeDialog, message, run, takeDialog, tellModel } from './ask'
+import { askDave, askUntil, freeDialog, message, run, takeDialog, tellModel } from './ask'
 import {
   APPLY_TIMEOUT_MS,
   BUSY_TEXT,
@@ -30,14 +30,19 @@ import {
   autoNotice,
   autoToast,
   buildPathwayAsk,
+  changeKeptText,
+  changeLabels,
+  changeQuestion,
+  changeStopText,
+  chicagoTime,
   clip,
-  closedText,
   costText,
   coversRows,
   editedPr,
-  emptyText,
   engineArgv,
+  factsFlags,
   firstLine,
+  ignoredNote,
   isPathwayFile,
   isSlotStateFile,
   isStoreFile,
@@ -45,6 +50,10 @@ import {
   keptDraftText,
   labelNeedsRecord,
   lastLine,
+  ledgerAskText,
+  ledgerCommandNote,
+  ledgerCommandText,
+  ledgerFlags,
   lockDeny,
   lockWarn,
   mayBeGated,
@@ -55,8 +64,8 @@ import {
   namesStore,
   needsPaidConfirm,
   noQuestionText,
+  notDraftText,
   onlyDaveRecordsNone,
-  otherText,
   paidConfirmLabels,
   paidConfirmQuestion,
   paidUnconfirmedText,
@@ -69,13 +78,18 @@ import {
   recordAllowsLabel,
   resolveBody,
   riskHighOf,
+  slotDropArgv,
   stateArgv,
+  stopText,
+  undoArgv,
+  undoFailedText,
   viewArgv,
+  whyTextOnly,
   WORKTREE_ARGV,
   samePath,
   worktreeFor,
 } from './model'
-import type { LockPattern, LockShapes, PathwayChoice } from './model'
+import type { LedgerBlock, LockPattern, LockShapes, PathwayChoice } from './model'
 import { GRANT_PREFIX, RECORD_PREFIX, allowedRound, askNotice, coverDecline, currentHead, enqueueRound, keptNotice, loadAsks, raiseQueued, rootOf, saveAsks } from './tick-asks'
 
 /** The same atom the other modules declare (same plugin and key, same default): an atom is read only where it is declared. */
@@ -103,7 +117,7 @@ const sessionId = async ($: EngineInterface): Promise<string> => $.session.id()
 // ---- store -----------------------------------------------------------------------------------------------------------------
 
 /** riskHigh: whether the PR carried risk:high when the checkpoint read it (null: unread; absent: a pending stored by an older mod). A flip makes the recommendation stale. */
-type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number; riskHigh?: boolean | null }
+type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number; riskHigh?: boolean | null; dependabot?: boolean }
 
 const isPending = (value: unknown): value is Pending => {
   const p = value as Partial<Pending> | null | undefined
@@ -129,7 +143,8 @@ const restore = async ($: EngineInterface): Promise<void> => {
 
 // ---- the engine --------------------------------------------------------------------------------------------------------------
 
-type Failure = { ok: false; text: string }
+/** `notDraft` is the PR head when the PR is not a draft (M2 may offer to change the pick); absent for every other refusal. */
+type Failure = { ok: false; text: string; notDraft?: string }
 type Prepared = { ok: true; pending: Pending }
 
 const fail = (text: string): Failure => ({ ok: false, text })
@@ -146,13 +161,6 @@ const textPlan = async ($: EngineInterface, root: string, checkout: string = roo
   if (!ran.ok) return `pr-checkpoint could not run (${ran.text}). Nothing was recorded. The PR stays a draft.`
   const out = (ran.out || ran.err).trim()
   return `${out}\nNothing was recorded. The PR stays a draft. ${why ?? whyTextOnly(via, waiting)}`
-}
-
-const whyTextOnly = (via: string | null, waiting: number | null): string => {
-  if (via === null) return `This session is headless, so ${SLASH} only shows the plan. Dave runs ${SLASH} in an interactive session.`
-  const where = `This ${SLASH} came from ${via}, not Dave's terminal composer, so it only shows the plan. Dave types ${SLASH} in the composer to record it.`
-  if (via !== 'bridge') return where
-  return `${where} From the bridge, ${SLASH} records only the PR whose checkpoint waits in this session (${waiting === null ? 'none waits now' : `#${waiting}`}).`
 }
 
 const gitLines = async ($: EngineInterface, root: string, argv: string[]): Promise<string | null> => {
@@ -226,13 +234,14 @@ const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawB
   } catch {
     return fail(`gh pr view printed no JSON for PR #${pr}. Nothing was recorded.`)
   }
-  if (info.isDraft !== true) return fail(`PR #${pr} is not a draft. The checkpoint applies to a draft PR only. Nothing was recorded.`)
+  if (info.isDraft !== true) return { ok: false, text: notDraftText(pr), notDraft: typeof info.headRefOid === 'string' ? info.headRefOid : '' }
   const branch = typeof info.headRefName === 'string' ? info.headRefName : ''
   const root = await checkoutOf($, sessionRoot, branch)
   const body = await bodyIn($, root, sessionRoot, rawBody)
   if (body === null) return fail(missingBody(rawBody, root, sessionRoot))
   const dependabot = info.author?.login === 'dependabot[bot]'
-  const ran = await run($, engineArgv(sessionRoot, '--json', '--pr', String(pr), '--probe', ...(dependabot ? ['--dependabot'] : [])), root, ENGINE_TIMEOUT_MS)
+  // --no-ledger: the facts call writes no offer and counts no miss. The ledger step is a second call after the head check (ledgerBlock).
+  const ran = await run($, engineArgv(sessionRoot, ...factsFlags(pr, dependabot)), root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return fail(`pr-checkpoint did not finish (timed out or failed to start: ${ran.text}). Nothing was recorded. The PR stays a draft.`)
   if (ran.code !== 0) return fail(`pr-checkpoint exited ${ran.code}: ${lastLine(ran.err || ran.out)}. Nothing was recorded. The PR stays a draft.`)
   const result = parseResult(ran.out)
@@ -248,7 +257,7 @@ const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawB
   const numstat = await gitLines($, root, ['git', 'diff', '--numstat', 'fork/main...HEAD'])
   return {
     ok: true,
-    pending: { pr, body, root, result, covers: coversRows(subjects, numstat), stamp: await stampAt($, root), prHead, at: await $.clock.now(), riskHigh: riskHighOf(info.labels) },
+    pending: { pr, body, root, result, covers: coversRows(subjects, numstat), stamp: await stampAt($, root), prHead, at: await $.clock.now(), riskHigh: riskHighOf(info.labels), dependabot },
   }
 }
 
@@ -283,7 +292,10 @@ const recordPathway = async (
   by: string,
   via: NonNullable<CheckpointRecord['via']>,
 ): Promise<Outcome> => {
-  const ran = await run($, engineArgv(await engineRoot($, a.root), '--confirm', pathway, '--by', by, '--body', a.body), a.root, ENGINE_TIMEOUT_MS)
+  // Always --pr: with the ledger on the engine looks for Dave's tap under it, with the flag off it ignores it. The mod and the engine may
+  // read different configs (session root against the PR checkout), so the mod never guesses which one is on.
+  const prFlag = ['--pr', String(a.pr)]
+  const ran = await run($, engineArgv(await engineRoot($, a.root), '--confirm', pathway, '--by', by, '--body', a.body, ...prFlag), a.root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return { stage: 'confirm', text: `--confirm could not run (${ran.text})` }
   if (ran.code !== 0) return { stage: 'confirm', text: lastLine(ran.err || ran.out) || `--confirm exited ${ran.code}` }
   let printed: Partial<CheckpointRecord>
@@ -416,31 +428,37 @@ const recordChoice = async ($: EngineInterface, pending: Pending, choice: Pathwa
 }
 
 /**
- * The second question for a paid pick that is not the recommended row. Null when Dave confirmed (the exact Yes label); otherwise the
- * answer that records nothing. The pending checkpoint stays, so a bare /pathway still works. The caller holds the dialog flag.
+ * The second question for every paid pick, the recommended row too (M9). The first label is No, so a dialog that returns row 0 twice records
+ * nothing. Null when Dave said the exact Yes; otherwise the answer that records nothing. A miss asks again, twice at most. The pending
+ * checkpoint stays. The caller holds the dialog flag.
  */
 async function confirmPaid($: EngineInterface, pr: number, choice: PathwayChoice): Promise<Asked | null> {
   const labels = paidConfirmLabels(choice)
-  const got = await askDave($, paidConfirmQuestion(pr, choice), labels, clip(`PR #${pr}`, 12))
-  if (got.kind === 'text' && got.text === labels[0]) return null
-  const how = got.kind === 'text' ? (got.text === labels[1] ? 'no' : 'other') : got.kind
-  return { text: paidUnconfirmedText(pr, choice.pathway, how, got.kind === 'text' ? got.text : ''), recorded: null }
+  const heard = await askUntil($, paidConfirmQuestion(pr, choice), labels, clip(`PR #${pr}`, 12), text => (labels.includes(text) ? text : null))
+  if ('hit' in heard && heard.hit === labels[1]) return null
+  const how = 'hit' in heard ? 'no' : heard.miss
+  return { text: paidUnconfirmedText(pr, choice.pathway, how, 'hit' in heard ? '' : heard.typed), recorded: null }
 }
+
 
 /**
  * Raises the checkpoint question for a pending checkpoint and acts on the answer. The caller holds the dialog flag. The pending checkpoint is
  * stored first, so a closed question comes back with a bare /pathway. With no recommendation or no open pathway nothing is asked.
+ * An answer that matches no row (free text, Esc, empty) records nothing and the question comes back, twice at most; then the PR stays a draft.
  */
 const askCheckpoint = async ($: EngineInterface, pending: Pending): Promise<Asked> => {
   const { pr } = pending
   const ask = buildPathwayAsk(pr, pending.result, await $.clock.now())
   if (!ask) return { text: noQuestionText(pr, pending.result.why[0]), recorded: null }
   await $.store.set(`${PENDING_PREFIX}${await sessionId($)}`, pending)
-  const got = await askDave($, ask.question, ask.choices.map(one => one.label), ask.header)
-  if (got.kind === 'closed') return { text: closedText(pr), recorded: null }
-  if (got.kind === 'empty') return { text: emptyText(pr), recorded: null }
-  const choice = pathwayOfAnswer(got.text, ask)
-  if (!choice) return { text: otherText(pr, got.text), recorded: null }
+  const heard = await askUntil($, ask.question, ask.choices.map(one => one.label), ask.header, text => pathwayOfAnswer(text, ask))
+  if (!('hit' in heard)) return { text: stopText(pr, heard.miss, heard.typed), recorded: null }
+  return actOnChoice($, pending, heard.hit)
+}
+
+/** Acts on Dave's pick: Keep as draft records nothing; a paid pick asks the paid confirm; then the pick records. */
+const actOnChoice = async ($: EngineInterface, pending: Pending, choice: PathwayChoice): Promise<Asked> => {
+  const { pr } = pending
   if (choice.pathway === 'wait') {
     // The pending checkpoint stays: a bare /pathway raises the question again, and the stored copy is what that command reads.
     $.ui.toast(`PR #${pr} stays a draft`, { timeoutMs: 10_000 })
@@ -453,11 +471,109 @@ const askCheckpoint = async ($: EngineInterface, pending: Pending): Promise<Aske
   return recordChoice($, pending, choice)
 }
 
+// ---- a ready PR with a record (M2) ----------------------------------------------------------------------------------------------------
+// A PR that is ready with a record of this head can change its pick. The question is Dave's own dialog. "Return to draft" runs `--undo` here,
+// in the mod's process: it is not a model tool call, so Lock B and the pre-pr gate do not see it. The PR is never left ready after a re-pick.
+
+/** The text to answer with, or null when the PR is a draft again and the checkpoint goes on. */
+async function changePick($: EngineInterface, root: string, pr: number, head: string): Promise<string | null> {
+  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pr}`))
+  if (!record || head === '' || record.head !== head) return notDraftText(pr)
+  const label = record.label ?? record.pathway
+  const labels = changeLabels(label)
+  const when = chicagoTime(typeof record.at === 'string' ? record.at : null)
+  const heard = await askUntil($, changeQuestion(pr, label, record.decided_by, when), labels, clip(`PR #${pr}`, 12), text => (labels.includes(text) ? text : null))
+  if (!('hit' in heard)) return changeStopText(pr)
+  if (heard.hit === labels[0]) return changeKeptText(pr, label)
+  const undone = await run($, undoArgv(pr), root, VIEW_TIMEOUT_MS)
+  if (!undone.ok) return undoFailedText(pr, undone.text)
+  if (undone.code !== 0) return undoFailedText(pr, firstLine(undone.err || undone.out) || `gh exited ${undone.code}`)
+  await releaseReturned($, pr)
+  return null
+}
+
+/**
+ * A PR Dave returned to draft loses its round grant and its place in the free-slot queue: the queue posts `@coderabbitai review` for an item it
+ * holds, and a PR in draft must get no review request. A failure never stops the new question (the queue ticks on and reports a stuck item).
+ */
+async function releaseReturned($: EngineInterface, pr: number): Promise<void> {
+  try {
+    await $.store.delete(`${GRANT_PREFIX}${pr}`)
+    const found = await slotScript($)
+    if (found) await run($, slotDropArgv(found.script, pr), found.root, VIEW_TIMEOUT_MS)
+  } catch {
+    // Diagnostics are the queue's own toast; the re-pick goes on.
+  }
+}
+
+/** `prepare`, and for a ready PR with a record the change question first. A string is the final answer; a Prepared goes on. */
+const prepareChanging = async ($: EngineInterface, root: string, pr: number, body: string): Promise<Prepared | string> => {
+  let prepared = await prepare($, root, pr, body)
+  if (!prepared.ok && prepared.notDraft !== undefined) {
+    const text = await changePick($, root, pr, prepared.notDraft)
+    if (text !== null) return text
+    prepared = await prepare($, root, pr, body)
+  }
+  return prepared.ok ? prepared : prepared.text
+}
+
+// ---- the question, asked by the model (M1, checkpoint.ledger) --------------------------------------------------------------------------
+// With the flag on the engine prints a `ledger` block. Call 1 returns the question; the model asks it with AskUserQuestion and a hook writes
+// Dave's tap into the decision store. Call 2 finds the tap: state `record`. The mod raises no dialog here. The engine counts the misses and
+// stops after 2 re-asks (state `stop`).
+
+/**
+ * The ledger step: a second engine call, run only after `prepare` passed its head check (and after a return to draft). It writes the offer and counts
+ * the miss. `askAnyway` is for an auto-eligible PR that auto-confirm did not record: the engine would say no question is needed. A string is a refusal.
+ * Null: the engine printed no ledger block (the flag is off for that checkout, or an old engine), so the caller asks in the dialog as before.
+ */
+const ledgerBlock = async ($: EngineInterface, root: string, pending: Pending, askAnyway: boolean): Promise<LedgerBlock | string | null> => {
+  const ran = await run($, engineArgv(root, ...ledgerFlags(pending.pr, askAnyway, pending.dependabot === true)), pending.root, ENGINE_TIMEOUT_MS)
+  if (!ran.ok) return `pr-checkpoint did not finish the question (timed out or failed to start: ${ran.text}). Nothing was recorded. The PR stays a draft.`
+  if (ran.code !== 0) return `pr-checkpoint exited ${ran.code}: ${lastLine(ran.err || ran.out)}. Nothing was recorded. The PR stays a draft.`
+  return parseResult(ran.out)?.ledger ?? null
+}
+
+/** The text for a ledger block, and the record when the state is `record`. */
+const ledgerCheckpoint = async ($: EngineInterface, pending: Pending, ledger: LedgerBlock): Promise<Asked> => {
+  const { pr } = pending
+  if (ledger.state === 'record' && ledger.pathway) return recordChoice($, pending, { label: ledger.pathway, pathway: ledger.pathway, by: 'dave' })
+  if (ledger.state === 'ask' || ledger.state === 'confirm-paid') {
+    if (!ledger.ask) return { text: `The engine gave no question for #${pr}. Nothing was recorded. The PR stays a draft.`, recorded: null }
+    await $.store.set(`${PENDING_PREFIX}${await sessionId($)}`, pending)
+    return { text: ledgerAskText({ ...ledger, ask: ledger.ask }), recorded: null }
+  }
+  if (ledger.state === 'none') return { text: noQuestionText(pr, pending.result.why[0]), recorded: null }
+  return { text: ledger.text || `Nothing was recorded. PR #${pr} stays a draft.`, recorded: null }
+}
+
 // ---- the tool -----------------------------------------------------------------------------------------------------------------------
 
 /**
+ * One interactive call: the PR is read (a ready PR with a record may change its pick first), auto-confirm is tried, then the question.
+ * The question is Dave's dialog here, or, with checkpoint.ledger on, the model's AskUserQuestion (the engine's ledger block).
+ */
+const interactiveText = async ($: EngineInterface, root: string, pr: number, body: string): Promise<string> => {
+  const prepared = await prepareChanging($, root, pr, body)
+  if (typeof prepared === 'string') return prepared
+  // The flag is read where the engine runs (the PR checkout), not in the session root: the two configs may differ.
+  const ledgerFlag = await ledgerOn($, prepared.pending.root)
+  const auto = await autoConfirm($, prepared.pending)
+  if (auto?.kind === 'done') {
+    await finishAuto($, auto.record, prepared.pending.result.auto.band)
+    return `The checkpoint for #${pr} was auto-confirmed: band ${prepared.pending.result.auto.band ?? 'unknown'}, none (${auto.record.label ?? 'no label'}). The mod added the label and marked the PR ready. No answer is needed. pr_watch continues. Do not merge.`
+  }
+  const lead = auto ? `Auto-confirm was not possible (${auto.why}), so the checkpoint for #${pr} waits for Dave. ` : ''
+  // An auto-eligible PR that was not recorded (auto failed, or the engine recommends another pathway) still needs Dave's answer.
+  const ledger = ledgerFlag ? await ledgerBlock($, root, prepared.pending, prepared.pending.result.auto.eligible === true) : null
+  if (typeof ledger === 'string') return `${lead}${ledger}`
+  const asked = ledger ? await ledgerCheckpoint($, prepared.pending, ledger) : await askCheckpoint($, prepared.pending)
+  return `${lead}${asked.text}`
+}
+
+/**
  * The tool. Headless and a subagent get the text plan. The main session of an interactive run gets Dave's question, and the call
- * waits for his answer. Returns the text for the model.
+ * waits for his answer; with checkpoint.ledger on it returns the question for the model to ask. Returns the text for the model.
  */
 const toolText = async ($: EngineInterface, pr: number, body: string, isSubagent: boolean): Promise<string> => {
   const root = await rootOf($)
@@ -470,17 +586,19 @@ const toolText = async ($: EngineInterface, pr: number, body: string, isSubagent
   // Taken before the first await below: a second call that finds it taken asks nothing.
   if (!takeDialog()) return BUSY_TEXT
   try {
-    const prepared = await prepare($, root, pr, body)
-    if (!prepared.ok) return prepared.text
-    const auto = await autoConfirm($, prepared.pending)
-    if (auto?.kind === 'done') {
-      await finishAuto($, auto.record, prepared.pending.result.auto.band)
-      return `The checkpoint for #${pr} was auto-confirmed: band ${prepared.pending.result.auto.band ?? 'unknown'}, none (${auto.record.label ?? 'no label'}). The mod added the label and marked the PR ready. No answer is needed. pr_watch continues. Do not merge.`
-    }
-    const lead = auto ? `Auto-confirm was not possible (${auto.why}), so the checkpoint for #${pr} waits for Dave. ` : ''
-    return `${lead}${(await askCheckpoint($, prepared.pending)).text}`
+    return await interactiveText($, root, pr, body)
   } finally {
     freeDialog()
+  }
+}
+
+/** Whether the session root's config turns the two-call protocol on. Only the literal true counts, as in the engine. A missing or unreadable file is off. */
+const ledgerOn = async ($: EngineInterface, root: string): Promise<boolean> => {
+  try {
+    const config = JSON.parse(await $.fs.read(`${root}/${CONFIG_REL}`)) as { checkpoint?: { ledger?: unknown } } | null
+    return config?.checkpoint?.ledger === true
+  } catch {
+    return false
   }
 }
 
@@ -489,10 +607,10 @@ const toolText = async ($: EngineInterface, pr: number, body: string, isSubagent
  * (`checkpoint:grant:<pr>`) on the record's head and clears a round decline it covers. Only his own composer command writes. It posts nothing.
  */
 const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: number; round: number }): Promise<{ text: string }> => {
-  if (origin !== 'composer' || !(await interactive($))) return { text: `Only Dave's own ${SLASH} grant records. Nothing was recorded.` }
+  if (origin !== 'composer' || !(await interactive($))) return { text: `Only Dave's own composer command grants a round. Nothing was recorded. A round comes from his tap on the question the session asks.` }
   const key = `${RECORD_PREFIX}${grant.pr}`
   const stored = readRecord(await $.store.get(key))
-  if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. Run ${SLASH} on it first. Nothing was recorded.` }
+  if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. The session asks the review question first (pr_checkpoint). Nothing was recorded.` }
   // A lower grant never lowers a round Dave already allowed, whichever head that grant carries (a dialog stores the PR head at ask time).
   // A grant never outlives its checkpoint record: recordPathway deletes it, so a stored grant belongs to this record.
   const allowed = await allowedRound($, grant.pr, grant.round)
@@ -513,7 +631,7 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   } catch (err) {
     // The grant is already stored and the watcher reads it, so say so. The decline or the queued ask may still be there.
     await tellModel($, `PR checkpoint: Dave allowed round ${grant.round} for #${grant.pr}, but the cleanup failed (${message(err)}). Read pr_status before you request a review.`)
-    return { text: `PR #${grant.pr}: the grant is stored for round ${grant.round}, but the cleanup failed (${message(err)}). A decline or a queued ask may remain. Type the command again.` }
+    return { text: `PR #${grant.pr}: the grant is stored for round ${grant.round}, but the cleanup failed (${message(err)}). A decline or a queued ask may remain. Dave can send the grant again.` }
   }
   if (retained) {
     await tellModel($, keptNotice(grant.pr, grant.round, retained))
@@ -604,13 +722,37 @@ const bareCommand = async ($: EngineInterface, e: CommandEvent, live: boolean, p
   if (pending) {
     trace.root = await rootOf($)
     trace.checkout = pending.root
-    return askPending($, pending, trace)
+    return (await ledgerRoute($, e, pending.pr, trace)) ?? askPending($, pending, trace)
   }
   if ((await loadAsks($)).length === 0) return say('need-pr', NEED_PR)
   if (!takeDialog()) return say('busy', BUSY_TEXT)
   try {
     const text = await raiseQueued($)
     return text === null ? say('need-pr', NEED_PR) : say('asked', text)
+  } finally {
+    freeDialog()
+  }
+}
+
+/**
+ * M1: with checkpoint.ledger on, the engine records only a tap on the question the MODEL asks (the decision store holds the tap). A dialog
+ * the mod raised would give no tap the engine can read, and its record would be refused. So Dave's own /pathway (composer or phone) tells
+ * the model to ask the question, and records nothing. Null: the flag is off, the session is headless or the origin is another one.
+ */
+const ledgerRoute = async ($: EngineInterface, e: CommandEvent, pr: number, trace: Trace): Promise<CommandReply | null> => {
+  const root = await rootOf($)
+  if (!root || !(await interactive($)) || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') || !(await ledgerOn($, root))) return null
+  trace.root = root
+  return sayer(trace)('ledger', ledgerCommandText(pr), [ledgerCommandNote(pr)])
+}
+
+/** A typed paid word asks the paid confirm first (M9). Null when the confirm said Yes or the pathway is free. */
+const typedPaidConfirm = async ($: EngineInterface, pending: Pending, pathway: string): Promise<Asked | null> => {
+  if (!takeDialog()) return { text: BUSY_TEXT, recorded: null }
+  try {
+    const row = buildPathwayAsk(pending.pr, pending.result, await $.clock.now())?.choices.find(one => one.pathway === pathway)
+    const choice: PathwayChoice = row ?? { label: pathway, pathway, by: 'dave' }
+    return needsPaidConfirm(choice) ? await confirmPaid($, pending.pr, choice) : null
   } finally {
     freeDialog()
   }
@@ -627,6 +769,8 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   const pending = await loadPending($)
   if (parsed.pr === null && parsed.word === null && parsed.body === null) return bareCommand($, e, live, pending, trace)
   const pr = parsed.pr ?? pending?.pr ?? null
+  const routed = pr === null ? null : await ledgerRoute($, e, pr, trace)
+  if (routed) return routed
   const body = parsed.body ?? (pending && pending.pr === pr ? pending.body : null)
   if (pr === null || body === null) return say('need-pr', NEED_PR)
   const root = await rootOf($)
@@ -652,7 +796,7 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   const next = prepared.pending
   trace.checkout = next.root
   if (parsed.word === null) return askPending($, next, trace)
-  if (parsed.word === 'wait') return say('wait', `PR #${pr} stays a draft. Nothing was recorded.`)
+  if (parsed.word === 'wait') return say('wait', `PR #${pr} stays a draft. Nothing was recorded.${ignoredNote(e.args)}`)
   const result = next.result
   const pathway = parsed.word === 'accept' ? result.recommended : parsed.word
   if (!pathway) return say('refused', `There is no recommendation: ${result.why[0] ?? 'run pre-pr.mjs'}. Nothing was recorded.`)
@@ -661,9 +805,13 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   // At HIGH and CRITICAL "no review" records only from Dave's own composer. A bridge command (the phone, a relay) raises the dialog instead,
   // so only his tap on the exact label records.
   if (pathway === 'none' && e.origin.kind !== 'composer' && isQueueBand(result.auto.band)) return askPending($, next, trace)
-  const by = parsed.word === 'accept' && !onlyDaveRecordsNone(pathway, result.auto.band) ? 'default' : 'dave'
+  // A paid pick asks the paid confirm below, and Dave's Yes there is a tap: it records `dave`. Only a free `accept` (none) stays `default`.
+  const paid = needsPaidConfirm({ label: pathway, pathway, by: 'dave' })
+  const by = parsed.word === 'accept' && !paid && !onlyDaveRecordsNone(pathway, result.auto.band) ? 'default' : 'dave'
   // Only a composer command or a bridge command for the pending PR gets here (the check above). The bridge is Remote Control, not Dave's keyboard.
   const via = e.origin.kind === 'bridge' ? 'bridge' : 'composer'
+  const refused = await typedPaidConfirm($, next, pathway)
+  if (refused) return say('not-recorded', refused.text)
   const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by, via)
   if (out.stage !== 'done') {
     return say('not-recorded', out.stage === 'apply' ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}` : `PR #${pr}: ${pathway} was not recorded: ${out.text}`)
@@ -673,7 +821,7 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   $.ui.toast(`PR #${pr}: ${pathway} recorded, the PR is ready`, { timeoutMs: 10_000 })
   return say(
     'recorded',
-    `PR #${pr}: ${pathway} recorded (${record.label ?? 'no label'}, ${costText(record.budget)}, by ${by}). The label is on the PR and it is ready.`,
+    `PR #${pr}: ${pathway} recorded (${record.label ?? 'no label'}, ${costText(record.budget)}, by ${by}). The label is on the PR and it is ready.${ignoredNote(e.args)}`,
     [pressNotice({ pr, pathway, label: record.label, budget: record.budget, by })],
   )
 }
@@ -808,7 +956,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
     await $.tool.register({
       name: TOOL_NAME,
       description:
-        "Asks Dave the PR checkpoint question for a DRAFT pull request in Rev4nchist/Continuous-Claude-v3, in this session: the review pathways with their cost in dollars, and the recommended one first. The call waits for his answer. The mod then records the pathway he picked, adds the review label and marks the PR ready, and the result tells you what he chose. Call it after pre-pr.mjs passed, with the PR number and the path of the body file that pre-pr.mjs --body checked. Do not ask Dave the question yourself, and never run gh pr ready, add a review: label or run pr-checkpoint --confirm yourself. A headless session or a subagent gets the text plan only and nothing is recorded.",
+        "Asks Dave the PR checkpoint question for a DRAFT pull request in Rev4nchist/Continuous-Claude-v3: the review pathways with their cost in dollars, and the recommended one first. Call it after pre-pr.mjs passed, with the PR number and the path of the body file that pre-pr.mjs --body checked. By default the mod raises Dave's dialog itself and the call waits for his answer. The mod then records the pathway he tapped, adds the review label and marks the PR ready, and the result tells you what he chose. When the config flag checkpoint.ledger is on, the result is a question instead: pass it to AskUserQuestion word for word, then call this tool again with the same pr and body, and that second call records Dave's tap. Every paid pick asks one more question. An answer that matches no option records nothing and is asked again, twice at most. Then the PR stays a draft and you tell Dave. A ready PR that already has a record offers to change the pick. Never ask the question any other way, and never mark a PR ready, add a review: label or run the engine's confirm mode yourself. A headless session or a subagent gets the text plan only and nothing is recorded.",
       inputSchema: {
         type: 'object',
         properties: {

@@ -205,8 +205,8 @@ const OUTSIDE_DIFF_REASON = /^CodeRabbit lists \d+ outside-diff finding\(s\)/
  */
 export const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
 export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow'
-export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /pathway or re-run the router workflow'
-export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again'
+export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; call pr_checkpoint {pr} or re-run the router workflow'
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Call pr_checkpoint {pr}: it asks Dave whether to return the PR to draft and pick again'
 
 /** CodeRabbit findings outside the diff that nobody handled yet. Whatever the labels: they make no thread. */
 const outsideDiffCount = (status: PrStatus): number =>
@@ -426,7 +426,7 @@ const carryHolds = (alert: Alert): boolean => alert.checkpoint?.rounds !== 0 && 
 const carryAction = (pr: number): string =>
   `Run node scripts/github/cr-fix.mjs --pr ${pr} and paste its line in the PR body: READY carries the earlier review. Do not post @coderabbitai review.`
 
-const classRaisedLine = (pr: number): string => `Return the PR to draft (gh pr ready ${pr} --undo), then run ${SLASH} again: the class rose after the checkpoint. Do not request a review.`
+const classRaisedLine = (pr: number): string => `Call pr_checkpoint with pr ${pr}: it asks Dave whether to return the PR to draft and pick again. The class rose after the checkpoint. Do not request a review.`
 
 /**
  * What the model may do about a CodeRabbit review on a PR with a checkpoint record. `when` starts the clause that allows a post.
@@ -443,7 +443,7 @@ const budgetSentence = (cp: AlertCheckpoint, pr: number, when: string): string =
     return `Rounds used ${cp.rounds} of ${opening}+${extra}. Do not post @coderabbitai review. The mod asks Dave about round ${next} in the session. Do not ask him yourself.`
   }
   // Round 0: no review has run, so the advice is the opening review, not a carry of an earlier one.
-  if (cp.rounds === 0) return `Rounds used 0 of ${opening}+${extra}. No CodeRabbit review has run on #${pr} yet. ${when}, post one @coderabbitai review: it is the opening review.`
+  if (cp.rounds === 0) return `Rounds used 0 of ${opening}+${extra}. No CodeRabbit review has run on #${pr} yet. Dave's tap at the checkpoint covers the opening review. ${when}, post one @coderabbitai review, never with --use-credits: it is the opening review.`
   // The carry (review-status.mjs): after a Minor-only round, a fix of 30 lines or fewer with a clean cr-fix line needs no new review.
   return `Rounds used ${cp.rounds} of ${opening}+${extra}. ${when}, post one @coderabbitai review only if the last round had a Major or Critical or the fix is over 30 lines; otherwise run node scripts/github/cr-fix.mjs --pr ${pr} and paste its line in the PR body (READY carries the earlier review).`
 }
@@ -479,7 +479,7 @@ const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpoint
  * cr-paid.mjs check does not read the carry, the budget or the fixed findings, so the line states the round 2 condition.
  */
 const paidReview = (pr: number): string =>
-  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post the comment it prints (@coderabbitai review --use-credits), then run cr-paid.mjs record. On ESCALATE, ask Dave with AskUserQuestion: one recommended option first, the cost in dollars, and the reason.`
+  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW or ESCALATE, post nothing yet. Run node scripts/github/ship-ask.mjs paid-round --pr ${pr} --json and pass its question to AskUserQuestion word for word: its first option is the free one. Post the paid comment (@coderabbitai review --use-credits) only after Dave taps a Yes option, then run cr-paid.mjs record. If he taps No, or the answer matches no option, post nothing and tell him the PR waits for the free slot. If ship-ask.mjs exits with anything but 0, do not ask and do not post.`
 
 /**
  * A paid review replaces the capacity post while it runs. The retry depends on the paid review finishing or still running, not on the
@@ -503,9 +503,9 @@ const queuedAct = (alert: Alert): string | null => {
   if (!slot) return null
   const where = slot.position === null ? '' : ` (${slot.position} of ${slot.total})`
   if (slot.state === 'posted') return `The free-slot queue posted @coderabbitai review for #${alert.pr}. Wait for the review. ${NO_POST}`
-  if (slot.state === 'stuck') return `The free-slot queue posted twice for #${alert.pr} and no review came (stuck). ${NO_POST} Tell Dave to decide: /slot drop ${alert.pr}.`
+  if (slot.state === 'stuck') return `The free-slot queue posted twice for #${alert.pr} and no review came (stuck). ${NO_POST} Tell Dave, then call pr_checkpoint with pr ${alert.pr}: it asks him whether to keep the review pick or return the PR to draft.`
   if (slot.state === 'timed-out' && alert.state === 'STALLED') {
-    return `The free-slot queue has had no free slot for #${alert.pr}${where} for 60 minutes. Run the principal-reviewer agent on head ${alert.headShort} (not in fast mode) and report its findings. READY still needs a CodeRabbit review: the queue posts @coderabbitai review when the slot opens, or Dave decides (/slot pay ${alert.pr}). ${NO_POST}`
+    return `The free-slot queue has had no free slot for #${alert.pr}${where} for 60 minutes. Run the principal-reviewer agent on head ${alert.headShort} (not in fast mode) and report its findings. READY still needs a CodeRabbit review: the queue posts @coderabbitai review when the slot opens, or Dave pays for one by a tap: run node scripts/github/ship-ask.mjs paid-round --pr ${alert.pr} --json and ask him with AskUserQuestion, word for word. ${NO_POST}`
   }
   const after = slot.state === 'awaiting-fix' ? 'after the fix push' : 'when the slot opens'
   return `The free-slot queue holds #${alert.pr}${where} and posts @coderabbitai review ${after}. ${NO_POST}`
@@ -548,7 +548,10 @@ export const reportLine = (alert: Alert): string => {
     const why = alert.reasons.length ? ` Reasons: ${alert.reasons.slice(0, 5).join('; ')}.` : ''
     // A review:none PR with no router state, or one classed higher after the checkpoint: a bot review is not the fix.
     if (alert.reasons.some(reason => reason.includes(CLASS_RAISED_NOTE))) return `${lead} (review:none): ${classRaisedLine(alert.pr)} Then report to Dave. Do not merge it.`
-    if (alert.reasons.some(reason => reason.includes(ROUTER_NONE_UNVERIFIED_NOTE) || reason.includes(NONE_NO_CHECKPOINT_NOTE))) {
+    if (alert.reasons.some(reason => reason.includes(NONE_NO_CHECKPOINT_NOTE))) {
+      return `${lead} (review:none) has no saved checkpoint for this head: call pr_checkpoint ${alert.pr} or re-run the router workflow. Do not request a bot review. Then report to Dave. Do not merge it.`
+    }
+    if (alert.reasons.some(reason => reason.includes(ROUTER_NONE_UNVERIFIED_NOTE))) {
       return `${lead} (review:none) has no router state for this head. Re-run the review-router workflow for this head. Do not request a bot review. Then report to Dave. Do not merge it.`
     }
     if (!bots) return `${lead} is not READY after 60 minutes and ${alert.bots?.length ? 'every required bot has reviewed it' : 'needs no bot review'}: check CI, threads and mergeable state, then report to Dave.${why} Do not merge it.`

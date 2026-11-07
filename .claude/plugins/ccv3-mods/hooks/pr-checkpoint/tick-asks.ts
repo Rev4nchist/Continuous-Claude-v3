@@ -266,7 +266,7 @@ async function deferAsk($: EngineInterface, ask: CheckpointAsk, why: string): Pr
   const until = now + ASK_DEFER_MS
   await saveAsks($, queue.map(one => (sameAsk(one, ask) ? { ...one, dismissed: (one.dismissed ?? 0) + 1, deferredUntil: until } : one)))
   await claim($, ask.pr, now, until)
-  return `PR #${ask.pr}: ${why}. Nothing recorded. The question comes back once in 30 minutes, then only when Dave types /pathway.`
+  return `PR #${ask.pr}: ${why}. Nothing recorded. The question comes back once in 30 minutes, then stays closed until Dave asks for it.`
 }
 
 /** The caller holds the dialog flag. Raises the dialog for one ask and applies the answer. Never throws on a closed or odd answer. */
