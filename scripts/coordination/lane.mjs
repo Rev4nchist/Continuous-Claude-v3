@@ -697,7 +697,8 @@ async function remindClear(c) {
   const board = await projectForOwnedLane(c, id, myId);
   const { rows } = await c.query(
     `WITH old AS (SELECT id, due_at, remind_state, fired_at, action_id FROM agentic_os.lane WHERE id=$1 AND project_key=$2 FOR UPDATE)
-     UPDATE agentic_os.lane l SET due_at=NULL, remind_state=NULL, fired_at=NULL, action_id=NULL, updated_at=now()
+     UPDATE agentic_os.lane l SET due_at=NULL, remind_state=NULL, fired_at=NULL, action_id=NULL, updated_at=now(),
+       track = CASE WHEN l.track = 'reminders' THEN 'unsorted' ELSE l.track END
      FROM old WHERE l.id = old.id
        AND (old.due_at IS NOT NULL OR old.remind_state IS NOT NULL OR old.fired_at IS NOT NULL OR old.action_id IS NOT NULL)
      RETURNING old.due_at AS from_due_at, l.band`,
@@ -712,7 +713,7 @@ async function remindClear(c) {
     laneId: id, kind: 'reminder', sessionId: myId, body: 'reminder cleared',
     detail: remindDetail({ op: 'clear', due_at: rows[0].from_due_at?.toISOString(), pri: rows[0].band, via: 'cli' }),
   });
-  return JSON_OUT ? { id, changed: true } : `${id} cleared: it is no longer a reminder`;
+  return JSON_OUT ? { id, changed: true } : `${id} cleared: it is no longer a reminder (a lane on track reminders moves to unsorted)`;
 }
 
 const REMIND_VERBS = { set: remindSet, list: remindList, snooze: remindSnooze, ack: remindAck, done: remindAck, clear: remindClear };

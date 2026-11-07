@@ -266,6 +266,7 @@ try {
   s = await row('zz-rm-act');
   check('clear NULLs due_at, remind_state, fired_at and action_id, and keeps band and notion_page_id',
     r.code === 0 && s?.due_at === null && s.remind_state === null && s.fired_at === null && s.action_id === null && s.band === 'P1' && s.notion_page_id === 'pg-1', `${r.all} ${JSON.stringify(s)}`);
+  check('clear moves a lane off the reminders track, so next can offer it again', s?.track === 'unsorted', JSON.stringify(s));
   n0 = await nEvents();
   r = a('remind', 'clear', 'zz-rm-act');
   check('a second clear says unchanged and logs no event', r.code === 0 && /unchanged/.test(r.out) && (await nEvents()) === n0, r.all);
@@ -287,7 +288,7 @@ try {
   check('set, snooze, ack and clear wrote exactly four events, in order; the two no-ops wrote none',
     same(ev.map((e) => e.detail.op), ['set', 'snooze', 'ack', 'clear']), JSON.stringify(ev.map((e) => e.detail.op)));
   check('each event is a broadcast of kind reminder on board a', ev.length === 4 && ev.every((e) => e.kind === 'reminder' && e.to_session_id === null && e.project_key === A.key));
-  check('the set event detail carries due_at and pri and no undefined keys', typeof ev[0]?.detail?.due_at === 'string' && ev[0].detail.pri === 'P1' && !('via' in ev[0].detail && ev[0].detail.via === undefined), JSON.stringify(ev[0]?.detail));
+  check('the set event detail carries due_at, pri and via', typeof ev[0]?.detail?.due_at === 'string' && ev[0].detail.pri === 'P1' && ev[0].detail.via === 'cli', JSON.stringify(ev[0]?.detail));
   a('remind', 'set', 'zz-rm-ev', '--at', minutes(600));
   check('reverse: set after clear works again', (await row('zz-rm-ev'))?.remind_state === 'scheduled');
 

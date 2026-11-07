@@ -27,7 +27,7 @@ Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-projec
 
 - A reminder is a lane with a due time. Version 1 only notifies: nothing runs on its own.
 - Verbs: `node C:/Users/dkhay/.claude/scripts/lane.mjs remind set|list|snooze|ack|clear`. Needs migration 0005.
-- `remind set <id> --at <time>`: a new id needs `--title`. Band is P1 unless you pass `--pri P0` (soft cap 5).
+- `remind set <id> --at <time>`: a new id needs `--title`. Without `--pri` an existing lane keeps its band and a lane with no band gets P1. P0 only with a literal `--pri P0` (soft cap 5).
 - `remind set` never changes the title or band of a lane another session holds. Set the band first with `band`.
 - SessionStart prints a "Reminders due" block. `ack` closes it, `snooze --for 2h` moves it.
 - `next` and "Claimable next" never offer a lane on track `reminders`, or a lane whose due time is still ahead.
