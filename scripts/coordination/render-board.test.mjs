@@ -41,8 +41,16 @@
  *   - a band chip count counts open lanes under a label that does not say "open"
  *   - a By band row grows (bytes beyond id and title), or the page outgrows its size ratchet (the artifact limit is 16 MB)
  *
+ * How the Scheduled and reminders column (PR-F) can fail, one test each (the split and the chip are in board-scheduled-view.test.mjs):
+ *   - a scheduled lane is also in Next, Later or Waiting, or in kb-data (the browser would place it twice)
+ *   - a scheduled card takes kb-card (paintEdit in the client does part(id,'.kb-note').disabled with no null check) or any class the client handles
+ *   - the Scheduled head has no .kb-head on the editable page (syncHeads kills the client), or an empty column says nothing
+ *   - an acked reminder, a held lane or a past-due normal lane shows in Scheduled; a due reminder or a future lane is missing
+ *   - the column order is not Scheduled, Next, Later, Waiting on Dave, In progress, Done; the Now column is back
+ *   - a lane title is not escaped; the chip says the wrong time; the template hash ignores board-scheduled-view.mjs
+ *
  * How the Done column (PR-D) can fail, one test each (the pure window, cap and order rules are in board-done-view.test.mjs):
- *   - the six columns are not Now, Next, Later, Waiting on Dave, In progress, Done (Done first, or missing on the read-only page)
+ *   - the six columns are not Scheduled, Next, Later, Waiting on Dave, In progress, Done (Done first, or missing on the read-only page)
  *   - the Done head has no .kb-head: syncHeads of the client throws and the whole client dies
  *   - a Done card takes a class the client handles (kb-card, kb-ctl, kb-st, kb-save, kb-grip, kb-more, kb-next, kb-done, kb-undo, kb-plain)
  *   - a done title, scope or note is not escaped, or a long note is not cut
@@ -76,14 +84,22 @@ const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 // because the Done column (Dave chose option B: native <details> with scope and last note on every Done card) adds about 32 KB to the live page,
 // and the test fixture gained five done lanes (their Done cards, Lanes rows and the new CSS), the fifth for the max-not-min check.
 // A done card measures 395 bytes beyond its text.
+// Measured 2026-11-07 (PR-F): test page 162,174 bytes, so PAGE_BYTES_MAX is that plus about 1 KB. It rose from 150,800 (+12,348 over the 149,826 above) ONLY because
+// the fixture gained five open lanes with a due time (sch-future, sch-rem, sch-acked, sch-past, sch-held), and p1-due now has a relative due time.
+// The same fixtures on the code before PR-F measure 167,973 bytes (about 3.6 KB per new lane: kb-card, Lanes row, By band row, kb-data row), so the column
+// itself makes this page 5,799 bytes smaller: three lanes become a Scheduled card instead of a kb-card, and the Now column and its client code go.
+// A scheduled card measures 422 bytes beyond its text (a done card: 395).
 const ROW_OVERHEAD_MAX = 240;
-const PAGE_BYTES_MAX = 150800;
+const PAGE_BYTES_MAX = 163200;
 const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
 // Done fixtures. A note longer than DONE_NOTE_MAX, and a title that needs escaping.
 const DN_TITLE = '<b>done</b> "quoted" & today';
 const DN_NOTE = `${'N'.repeat(300)}TAILMARK`;
+// A scheduled title that needs escaping, and the markup limit of a scheduled card.
+const SCH_TITLE = '<b>sched</b> "quoted" & later';
+const SCHED_OVERHEAD_MAX = 440;
 /** Local noon, `back` days ago. Built with local constructors so "Yesterday" is right in any timezone. */
 const noon = (back) => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate() - back, 12, 0, 0); };
 
@@ -318,10 +334,25 @@ describe('render-board.mjs against a scratch database', () => {
         ('zz-rb-p0-6', 'p0 six', 'yy', 'ready', 16, 'P0', NULL, 'continuous-claude'),
         ('zz-rb-p1-rank20', 'p1 rank twenty', 'zz', 'ready', 20, 'P1', NULL, 'continuous-claude'),
         ('zz-rb-p1-rank5', 'p1 rank five', 'zz', 'ready', 5, 'P1', NULL, 'continuous-claude'),
-        ('zz-rb-p1-due', 'p1 has a due date', 'yy', 'ready', 99, 'P1', '2026-11-20T00:00:00Z', 'continuous-claude'),
+        ('zz-rb-p1-due', 'p1 has a due date', 'yy', 'ready', 99, 'P1', now() + interval '20 days', 'continuous-claude'),
         ('zz-rb-p2-plain', 'p2 plain', 'zz', 'backlog', 60, 'P2', NULL, 'continuous-claude'),
         ('zz-rb-p2-xss', '<b>bold</b> "quoted" & done', 'zz', 'backlog', 61, 'P2', NULL, 'continuous-claude'),
         ('zz-rb-done-p0', 'done lane with a band', 'zz', 'done', 5, 'P0', NULL, 'continuous-claude')`);
+      // Scheduled and reminders (PR-F). The times are relative to the insert, so a slow run still reads "in 3h" (3 h 30 min ahead).
+      //   sch-future  ready, due in 3 h 30 min                        -> Scheduled, chip "in 3h"
+      //   sch-rem     reminders track, due 10 min ago, needs_dave     -> Scheduled, chip DUE, above sch-future
+      //   sch-acked   reminders track, due an hour ago, acked         -> not Scheduled; Next (ready lane)
+      //   sch-past    ready, due 2 h ago, not a reminder              -> not Scheduled; Next
+      //   sch-held    active (held), due in 2 h                       -> In progress, not Scheduled
+      //   zz-rb-a-sched  board a, ready, due in 5 h 30 min            -> Scheduled on the read-only page
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, priority, scope, note, due_at, remind_state, project_key) VALUES
+        ('zz-rb-sch-future', $1, 'zz', 'ready', 50, $2, 'sch last note', now() + interval '3 hours 30 minutes', NULL, 'continuous-claude'),
+        ('zz-rb-sch-rem', 'reminder that needs Dave', 'reminders', 'ready', 50, NULL, NULL, now() - interval '10 minutes', 'needs_dave', 'continuous-claude'),
+        ('zz-rb-sch-acked', 'acked reminder', 'reminders', 'ready', 50, NULL, NULL, now() - interval '1 hour', 'acked', 'continuous-claude'),
+        ('zz-rb-sch-past', 'past due normal lane', 'zz', 'ready', 50, NULL, NULL, now() - interval '2 hours', NULL, 'continuous-claude'),
+        ('zz-rb-a-sched', 'board a lane due later', 'zz', 'ready', 50, NULL, NULL, now() + interval '5 hours 30 minutes', NULL, 'zz-rb-a')`, [SCH_TITLE, 'sch <i>scope</i>']);
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, owner_session_id, lease_expires_at, due_at, project_key) VALUES
+        ('zz-rb-sch-held', 'held with a due time', 'zz', 'active', 'zz-rb-s-c', now() + interval '30 minutes', now() + interval '2 hours', 'continuous-claude')`);
       await c.query(`INSERT INTO agentic_os.lane_event (session_id, kind, lane_id, body, project_key) VALUES
         ('zz-rb-s-c', 'note', 'zz-rb-ccv3-lane', 'ccv3 event body', 'continuous-claude'),
         ('zz-rb-s-a', 'note', 'zz-rb-a-lane', 'board a event body', 'zz-rb-a')`);
@@ -416,9 +447,9 @@ describe('render-board.mjs against a scratch database', () => {
     assert.ok(section, 'a board other than continuous-claude shows a Priorities section');
     assert.ok(html.indexOf('<section id="priorities"') < html.indexOf('<h2>Right now</h2>'), 'Priorities comes before Right now');
     assert.match(section, /<h2 id="kb-title">Priorities<\/h2>/);
-    // All six columns exist, in order, Done last. Now is empty and says why in words. Waiting on Dave holds the blocked lane (placeLanes, no saved order).
-    assert.deepEqual([...section.matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['now', 'next', 'later', 'waiting', 'progress', 'done']);
-    assert.match(section, /data-col="now" data-n="0"/);
+    // All six columns exist, in order, Done last. Scheduled holds the one board a lane with a future due time. Waiting on Dave holds the blocked lane (placeLanes, no saved order).
+    assert.deepEqual([...section.matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['scheduled', 'next', 'later', 'waiting', 'progress', 'done']);
+    assert.match(section, /data-col="scheduled" data-fixed="1" data-n="1"/);
     assert.match(section, /data-col="waiting" data-n="1"/);
     // LEAK GATE: no CCv3 lane in any column.
     assert.ok(!section.includes('zz-rb-ccv3') && !section.includes('ccv3 lane title') && !section.includes('ccv3 held title'), 'a CCv3 lane showed in a column of board a');
@@ -438,18 +469,20 @@ describe('render-board.mjs against a scratch database', () => {
     // Later: every other open state, in DB order at equal priority. Blocked is not here: with no saved order it goes to Waiting on Dave.
     assert.deepEqual(ids('later').sort(), ['zz-rb-a-backlog', 'zz-rb-a-long', 'zz-rb-a-review']);
     assert.deepEqual(ids('progress'), ['zz-rb-a-held']);
-    assert.deepEqual(ids('now'), []);
     assert.deepEqual(ids('waiting'), ['zz-rb-a-blocked']);
+    // The scheduled lane is in no movable column, and is not a kb-card at all.
+    assert.deepEqual(ids('scheduled'), []);
+    for (const col of ['next', 'later', 'waiting', 'progress']) assert.ok(!ids(col).includes('zz-rb-a-sched'), `a scheduled lane is in the ${col} column`);
     // A done lane is in no OPEN column. It is in Done (read-only, tested in the Done column block), which this helper does not read.
-    for (const col of ['now', 'next', 'later', 'waiting', 'progress']) assert.ok(!ids(col).includes('zz-rb-a-done'), `a done lane is in the ${col} column`);
+    for (const col of ['next', 'later', 'waiting', 'progress']) assert.ok(!ids(col).includes('zz-rb-a-done'), `a done lane is in the ${col} column`);
     // Counts agree with the cards.
     assert.match(section, /data-col="next" data-n="3"/);
     assert.match(section, /data-col="later" data-n="3"/);
     assert.match(section, /data-col="waiting" data-n="1"/);
-    // An empty column says why in plain words: Now names the missing saved order. Waiting is not empty here, so it shows no empty text.
+    // Waiting and Scheduled are not empty here, so they show no empty text.
     const empty = (col) => new RegExp(`id="kb-list-${col}"><li class="kb-empty">([^<]*)</li>`).exec(section)?.[1];
-    assert.match(empty('now'), /no saved order/);
     assert.equal(empty('waiting'), undefined);
+    assert.equal(empty('scheduled'), undefined);
   });
 
   it('read-only cards show the whole title, name each Details by lane, keep no countdown and call the rank an unsaved order', () => {
@@ -781,8 +814,10 @@ describe('render-board.mjs against a scratch database', () => {
     });
 
     it('a NULL band is Unsorted, and the group counts match the rows', () => {
-      assert.deepEqual(rowIds(html, 'none').sort(), ['zz-rb-ccv3-held', 'zz-rb-ccv3-lane', 'zz-rb-ccv3-qend', 'zz-rb-ccv3-qhold']);
-      for (const [key, n] of [['P0', 6], ['P1', 3], ['P2', 2], ['none', 4]]) {
+      // The five zz-rb-sch-* lanes (PR-F) have no band either. A scheduled lane stays in By band: only the kanban columns split it out.
+      assert.deepEqual(rowIds(html, 'none').sort(), ['zz-rb-ccv3-held', 'zz-rb-ccv3-lane', 'zz-rb-ccv3-qend', 'zz-rb-ccv3-qhold',
+        'zz-rb-sch-acked', 'zz-rb-sch-future', 'zz-rb-sch-held', 'zz-rb-sch-past', 'zz-rb-sch-rem']);
+      for (const [key, n] of [['P0', 6], ['P1', 3], ['P2', 2], ['none', 9]]) {
         assert.equal((group(html, key).match(/<li class="bb-row"/g) || []).length, n, key);
       }
     });
@@ -878,7 +913,7 @@ describe('render-board.mjs against a scratch database', () => {
     it('the filter has two chip groups: state chips and band chips with open counts; the view buttons are not chips', () => {
       const chips = [...html.matchAll(/<button class="chip" data-g="(\w+)" data-f="(\w+)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2], m[3]]);
       assert.deepEqual(chips.filter((c) => c[0] === 'state').map((c) => c[1]), ['open', 'ready', 'held', 'blocked', 'all']);
-      assert.deepEqual(chips.filter((c) => c[0] === 'band'), [['band', 'P0', 'P0 6 open'], ['band', 'P1', 'P1 3 open'], ['band', 'P2', 'P2 2 open'], ['band', 'none', 'Unsorted 4 open']]);
+      assert.deepEqual(chips.filter((c) => c[0] === 'band'), [['band', 'P0', 'P0 6 open'], ['band', 'P1', 'P1 3 open'], ['band', 'P2', 'P2 2 open'], ['band', 'none', 'Unsorted 9 open']]);
       assert.ok(!/class="chip"[^>]*data-g="(view|group)"/.test(html) && !/class="vt"[^>]*data-g="(state|band)"/.test(html));
       assert.match(html, /data-g="group" data-v="track" aria-pressed="true">Track</);
       assert.match(html, /data-g="group" data-v="band" aria-pressed="false">Band</);
@@ -938,6 +973,7 @@ describe('render-board.mjs against a scratch database', () => {
     it('the template hash changes when a generator file changes, board-band-view.mjs included, and the page stamp is that hash', () => {
       assert.ok(TEMPLATE_FILES.includes('board-band-view.mjs'));
       assert.ok(TEMPLATE_FILES.includes('board-done-view.mjs'), 'an edit to the Done rules would not change the page stamp');
+      assert.ok(TEMPLATE_FILES.includes('board-scheduled-view.mjs'), 'an edit to the Scheduled rules would not change the page stamp');
       assert.equal(parseBoardStamp(html).template, templateHash(HERE), 'the stamp is not the hash of the generator files');
       const copyOf = () => {
         const dir = fs.mkdtempSync(path.join(E2E.tmp, 'tpl-'));
@@ -1010,10 +1046,10 @@ describe('render-board.mjs against a scratch database', () => {
     const doneCards = (page) => doneSeq(page).filter((e) => e.card);
     const tokens = (markup) => new Set([...markup.matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
 
-    it('there are six columns, left to right Now, Next, Later, Waiting on Dave, In progress, Done, on the editable and the read-only page', () => {
+    it('there are six columns, left to right Scheduled and reminders, Next, Later, Waiting on Dave, In progress, Done, on the editable and the read-only page', () => {
       for (const page of [html, ro]) {
-        assert.deepEqual([...section(page).matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['now', 'next', 'later', 'waiting', 'progress', 'done']);
-        assert.deepEqual([...section(page).matchAll(/<span class="kb-name">([^<]*)</g)].map((m) => m[1]), ['Now', 'Next', 'Later', 'Waiting on Dave', 'In progress', 'Done']);
+        assert.deepEqual([...section(page).matchAll(/data-col="(\w+)"/g)].map((m) => m[1]), ['scheduled', 'next', 'later', 'waiting', 'progress', 'done']);
+        assert.deepEqual([...section(page).matchAll(/<span class="kb-name">([^<]*)</g)].map((m) => m[1]), ['Scheduled and reminders', 'Next', 'Later', 'Waiting on Dave', 'In progress', 'Done']);
       }
       assert.match(section(html), /<div class="kcol" data-col="done" data-fixed="1" data-n="\d+">/);
     });
@@ -1126,8 +1162,9 @@ describe('render-board.mjs against a scratch database', () => {
       }
     });
 
-    it('only the Done cards use <details>: the open cards, By band and the rest of the page have none', () => {
-      const rest = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script[\s\S]*?<\/script>/g, '').replace(doneList(html), '');
+    it('only the Done and Scheduled cards use <details>: the open cards, By band and the rest of the page have none', () => {
+      const rest = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script[\s\S]*?<\/script>/g, '').replace(doneList(html), '')
+        .replace(/<ul class="kb-list" id="kb-list-scheduled">[\s\S]*?<\/ul>/, ''); // the Scheduled cards use <details> too (PR-F)
       assert.ok(doneList(html).includes('<details class="kb-ro-detail">'), 'the Done list lost its <details>');
       assert.ok(!rest.includes('<details') && !rest.includes('kb-ro-detail'), 'a card outside Done uses <details>: the editor panel is the .kb-detail button pair');
     });
@@ -1164,6 +1201,153 @@ describe('render-board.mjs against a scratch database', () => {
           /<dt>scope<\/dt><dd>([^<]*)</, /<dt>last note<\/dt><dd>([^<]*)</].map((re) => re.exec(card)[1]);
         const overhead = card.length - text.reduce((n, t) => n + t.length, 0);
         assert.ok(overhead <= DONE_OVERHEAD_MAX, `done card of ${id} has ${overhead} bytes of markup (limit ${DONE_OVERHEAD_MAX}): ${card}`);
+      }
+    });
+  });
+
+
+  // ---------------------------------------------------------------- Scheduled and reminders column (PR-F)
+  describe('Scheduled and reminders column', () => {
+    let html = '';   // continuous-claude, editable
+    let ro = '';     // zz-rb-a, read-only, one lane due in 5 h 30 min
+    let roEmpty = ''; // zz-rb-bad, read-only, no due time anywhere
+    before(() => {
+      for (const [name, board] of [['sc-edit', 'continuous-claude'], ['sc-ro', 'zz-rb-a'], ['sc-empty', 'zz-rb-bad']]) {
+        const out = path.join(E2E.tmp, `${name}.html`);
+        assert.equal(renderPage(['--project', board, '--out', out]).code, 0);
+        const page = fs.readFileSync(out, 'utf8');
+        if (board === 'continuous-claude') html = page; else if (board === 'zz-rb-a') ro = page; else roEmpty = page;
+      }
+    });
+
+    const section = (page) => /<section id="priorities"[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
+    /** One column: from its opening tag to the next column or the end of the page. */
+    const col = (page, key) => {
+      const at = page.indexOf(`<div class="kcol" data-col="${key}"`);
+      if (at < 0) return '';
+      const rest = page.slice(at);
+      const next = rest.indexOf('<div class="kcol"', 10);
+      return next < 0 ? rest : rest.slice(0, next);
+    };
+    const list = (page, key) => new RegExp(`<ul class="kb-list" id="kb-list-${key}">([\\s\\S]*?)</ul>`).exec(page)?.[1] ?? '';
+    const cardsOf = (page) => [...list(page, 'scheduled').matchAll(/<li class="card kb-done-card"[\s\S]*?<\/li>/g)].map((m) => m[0]);
+    const idOf = (card) => /class="kb-id mono">([^<]*)</.exec(card)[1];
+    const cardIds = (markup) => [...markup.matchAll(/class="kb-id mono">([^<]*)</g)].map((m) => m[1]);
+    const count = (page, id) => cardIds(section(page)).filter((x) => x === id).length;
+    const kbData = (page) => JSON.parse(/<script type="application\/json" id="kb-data">([\s\S]*?)<\/script>/.exec(page)[1]);
+
+    it('holds the future lanes and the due reminder, the reminder first, and no past-due lane, acked reminder or held lane', () => {
+      assert.deepEqual(cardsOf(html).map(idOf), ['zz-rb-sch-rem', 'zz-rb-sch-future', 'zz-rb-p1-due']);
+      assert.match(col(html, 'scheduled'), /data-fixed="1" data-n="3"/);
+      assert.match(col(html, 'scheduled'), /<span class="kb-count mono">3<\/span>/);
+    });
+
+    it('a scheduled lane is on the page once: not in Next, Later, Waiting or In progress, and not in kb-data', () => {
+      const dataIds = kbData(html).map((l) => l.id);
+      for (const id of ['zz-rb-sch-rem', 'zz-rb-sch-future', 'zz-rb-p1-due']) {
+        assert.equal(count(html, id), 1, `${id} is on the board ${count(html, id)} times`);
+        assert.ok(!dataIds.includes(id), `${id} is in kb-data`);
+        for (const key of ['next', 'later', 'waiting', 'progress']) assert.ok(!cardIds(list(html, key)).includes(id), `${id} is in ${key}`);
+      }
+      // The lanes that stay out of the column are placed once, and are in kb-data.
+      assert.ok(cardIds(list(html, 'next')).includes('zz-rb-sch-past'), 'a past-due normal lane is a normal lane');
+      assert.ok(cardIds(list(html, 'next')).includes('zz-rb-sch-acked'), 'an acked reminder is a normal lane');
+      assert.deepEqual(cardIds(list(html, 'progress')).filter((id) => id.startsWith('zz-rb-sch')), ['zz-rb-sch-held']);
+      for (const id of ['zz-rb-sch-past', 'zz-rb-sch-acked', 'zz-rb-sch-held']) {
+        assert.equal(count(html, id), 1, `${id} is on the board ${count(html, id)} times`);
+        assert.ok(dataIds.includes(id), `${id} is missing from kb-data`);
+      }
+      assert.equal(new Set(dataIds).size, dataIds.length, 'kb-data lists a lane twice');
+    });
+
+    it('every open lane of kb-data is placed exactly once, and each kb-data row keeps the facts of its own lane (no index shift)', () => {
+      const rows = new Map(kbData(html).map((l) => [l.id, l]));
+      for (const l of rows.values()) if (l.state !== 'done') assert.equal(count(html, l.id), 1, `${l.id} is on the board ${count(html, l.id)} times`);
+      assert.equal(rows.get('zz-rb-ccv3-lane').title, 'ccv3 lane title');
+      assert.equal(rows.get('zz-rb-sch-past').title, 'past due normal lane');
+      assert.equal(rows.get('zz-rb-sch-acked').title, 'acked reminder');
+      assert.equal(rows.get('zz-rb-sch-acked').track, 'reminders');
+      assert.equal(rows.get('zz-rb-sch-held').state, 'active');
+    });
+
+    it('the editable page lists the scheduled lanes (id, state, band only) in kb-sched, so "lanes ahead" counts them; the read-only page has no such block', () => {
+      const m = /<script type="application\/json" id="kb-sched">([\s\S]*?)<\/script>/.exec(html);
+      assert.ok(m, 'kb-sched is missing');
+      const rows = JSON.parse(m[1].replace(/\\u003c/g, '<'));
+      assert.deepEqual(rows.map((r) => r.id), ['zz-rb-sch-rem', 'zz-rb-sch-future', 'zz-rb-p1-due']);
+      assert.deepEqual(Object.keys(rows[0]).sort(), ['band', 'id', 'state']);
+      assert.equal(rows.find((r) => r.id === 'zz-rb-p1-due').band, 'P1');
+      assert.ok(!kbData(html).some((l) => rows.some((r) => r.id === l.id)), 'a scheduled lane is also in kb-data');
+      assert.ok(!ro.includes('id="kb-sched"'), 'the read-only page has a kb-sched block');
+    });
+
+    it('a scheduled card is a kb-done-card with id, title, track, a time chip and Details, and takes no class the client handles', () => {
+      const cards = cardsOf(html);
+      assert.equal(cards.length, 3);
+      const handled = ['kb-card', 'kb-ctl', 'kb-st', 'kb-save', 'kb-grip', 'kb-more', 'kb-next', 'kb-done', 'kb-undo', 'kb-plain', 'kb-note', 'kb-to'];
+      for (const c of cards) {
+        const tokens = new Set([...c.matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+        for (const h of handled) assert.ok(!tokens.has(h), `a scheduled card takes the class ${h}: ${c}`);
+        assert.ok(!c.includes('data-id='), 'a scheduled card has a data-id the client could pick up');
+        assert.match(c, /<details class="kb-ro-detail"><summary>Details<span class="sr"> for zz-rb-[^<]*<\/span><\/summary>/);
+      }
+      assert.ok(!list(html, 'scheduled').includes('class="card kb-card'), 'a kb-card is in the Scheduled list');
+    });
+
+    it('the chip says DUE for the due reminder, "in 3h" for the lane 3 h 30 min ahead and "in 20d" for the one 20 days ahead', () => {
+      const chips = Object.fromEntries(cardsOf(html).map((c) => [idOf(c), /class="sc-chip mono[^"]*">([^<]*)</.exec(c)[1]]));
+      assert.deepEqual(chips, { 'zz-rb-sch-rem': 'DUE', 'zz-rb-sch-future': 'in 3h', 'zz-rb-p1-due': 'in 20d' });
+      assert.match(list(html, 'scheduled'), /class="sc-chip mono sc-due">DUE</, 'DUE has its own class so it can stand out');
+    });
+
+    it('escapes the title, scope and note of a scheduled lane', () => {
+      const card = cardsOf(html).find((c) => idOf(c) === 'zz-rb-sch-future');
+      assert.ok(card.includes('&lt;b&gt;sched&lt;/b&gt; &quot;quoted&quot; &amp; later'), card);
+      assert.ok(card.includes('sch &lt;i&gt;scope&lt;/i&gt;') && card.includes('sch last note'));
+      assert.ok(!card.includes('<b>sched') && !card.includes('<i>scope'));
+    });
+
+    it('the editable head keeps the .kb-head button; the read-only head is a plain heading', () => {
+      assert.match(col(html, 'scheduled'), /<h3 class="kb-h"><button class="kb-head" type="button" aria-expanded="true" aria-controls="kb-list-scheduled"><span class="kb-name">Scheduled and reminders<\/span>/);
+      assert.match(col(ro, 'scheduled'), /<h3 class="kb-h kb-ro-h"><span class="kb-name">Scheduled and reminders<\/span><span class="kb-count mono">1<\/span><\/h3>/);
+      assert.ok(!col(ro, 'scheduled').includes('kb-head'));
+    });
+
+    it('the read-only page puts its due lane in Scheduled and nowhere else', () => {
+      assert.deepEqual(cardsOf(ro).map(idOf), ['zz-rb-a-sched']);
+      assert.equal(count(ro, 'zz-rb-a-sched'), 1);
+      assert.match(list(ro, 'scheduled'), /class="sc-chip mono">in 5h</);
+    });
+
+    it('an empty column says "Nothing scheduled": a line on the read-only page, a CSS line on the editable page', () => {
+      assert.match(col(roEmpty, 'scheduled'), /id="kb-list-scheduled"><li class="kb-empty">Nothing scheduled<\/li><\/ul>/);
+      assert.match(col(roEmpty, 'scheduled'), /data-n="0"/);
+      const css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
+      assert.ok(css.includes(`.kcol[data-col="scheduled"][data-n="0"] .kb-list::after { content:'Nothing scheduled'; }`), 'the editable page has no empty text for Scheduled');
+    });
+
+    it('the Now column is gone from both pages and from the client', () => {
+      for (const page of [html, ro]) {
+        assert.ok(!/data-col="now"/.test(page) && !/kb-list-now/.test(page), 'a Now column is on the page');
+        assert.ok(!/<span class="kb-name">Now</.test(page));
+      }
+      const script = KB_SCRIPT_RE.exec(html)[0];
+      assert.ok(!/\bnow:/.test(script), 'the client or placeLanes still names a now column');
+      assert.ok(!script.includes("'now'"), "the client names 'now'");
+    });
+
+    it('both intros mention Scheduled', () => {
+      const intro = (page) => /<div class="sec-head">\s*<h2 id="kb-title">Priorities<\/h2>\s*<p>([^<]*)<\/p>/.exec(page)[1];
+      assert.match(intro(html), /Scheduled/);
+      assert.match(intro(ro), /Scheduled/);
+    });
+
+    it('a scheduled card carries no bytes beyond its text and a fixed frame', () => {
+      for (const card of cardsOf(html)) {
+        const text = [/class="kb-id mono">([^<]*)</, /class="kb-title">([^<]*)</, /class="kb-track mono">([^<]*)</, /class="sc-chip mono[^"]*">([^<]*)</,
+          /<dt>scope<\/dt><dd>([^<]*)</, /<dt>last note<\/dt><dd>([^<]*)</, /<dt>due<\/dt><dd>([^<]*)</].map((re) => re.exec(card)[1]);
+        const overhead = card.length - text.reduce((n, t) => n + t.length, 0);
+        assert.ok(overhead <= SCHED_OVERHEAD_MAX, `scheduled card has ${overhead} bytes of markup (limit ${SCHED_OVERHEAD_MAX}): ${card}`);
       }
     });
   });

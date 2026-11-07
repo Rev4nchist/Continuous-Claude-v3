@@ -22,7 +22,7 @@
  * How the card buttons (PR-C) can fail, one or two tests each:
  *   - Do next lands anywhere but Next index 0, or stays on at Next index 0 or on a read-only page
  *   - Move to Top or Bottom uses the wrong index (same-column Bottom is off by one), or a value that is no column writes
- *   - the Move select keeps showing a column name, or its 8 options are missing or filled twice
+ *   - the Move select keeps showing a column name, or its 6 options are missing or filled twice
  *   - Top then Bottom does not return to the saved order (a write that changes nothing)
  *   - Done writes more than {status, updatedAt} (an unsaved note), writes the board doc, runs while saving or twice or before the cards loaded
  *   - the Done flag shows only on the device that tapped, or shows after the sync
@@ -31,9 +31,10 @@
  *   - a Done write that fails looks like it worked
  *   - the band sentence shows when no lane is ahead, or is missing when one is; a stale flag stays after the next move
  *
- * How the Done column (PR-D) can fail. The page now has six columns; the client knows four plus In progress:
- *   - init throws because the phone collapse list names a column the page lacks, or Done takes the place of In progress
- *   - on the phone Done or In progress starts open, or Now starts shut
+ * How the Done column (PR-D) and the Scheduled column (PR-F) can fail. The page has six columns; the client moves cards in three (Next, Later, Waiting):
+ *   - init throws because the phone collapse list names a column the page lacks (the stub has no Now column), or Done takes the place of In progress
+ *   - on the phone Scheduled, Done or In progress starts open
+ *   - a card dropped on Scheduled moves, or the saved doc still has a now key, or an old doc with columns.now fails to load or loses lanes
  *   - a card dropped on Done moves (dropTarget accepts a column that is not in COLS) and writes the board doc
  *   - the saved doc grows a done key
  */
@@ -58,7 +59,7 @@ const HELPERS = [
 ];
 const DOC = 'kanban/board';
 const SYNCED = '2026-11-04T10:00:00.000Z';
-const APPLIED = { now: [], next: ['a1', 'a2'], later: ['a3'], waiting: [] };
+const APPLIED = { next: ['a1', 'a2'], later: ['a3'], waiting: [] };
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -189,7 +190,7 @@ const LANES = [
 ];
 
 /** Opens the page and waits until the saved order has loaded (or the page has refused it). */
-async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false, phone = false } = {}) {
+async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = false, liveDoc = true, getFails = null, cardsSilent = false, raw = false, phone = false, sched = null, schedN = null } = {}) {
   focusLog.length = 0;
   const db = fakeDb(doc ? { [DOC]: doc } : {}, { liveDoc, getFails, cardsSilent });
   const timers = [];
@@ -208,8 +209,8 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     insertBefore: (node) => { flagBoxes.set(l.id, node); },
   })]));
   const classes = new Map();
-  const colEls = ['now', 'next', 'later', 'waiting', 'progress', 'done'].map((name) => stub({
-    attrs: { 'data-col': name },
+  const colEls = ['scheduled', 'next', 'later', 'waiting', 'progress', 'done'].map((name) => stub({
+    attrs: name === 'scheduled' && schedN !== null ? { 'data-col': name, 'data-n': String(schedN) } : { 'data-col': name },
     classList: (() => {
       const set = new Set();
       classes.set(name, set);
@@ -218,6 +219,8 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     querySelector: (sel) => (sel === '.kb-list' ? stub({ children: [] }) : stub()),
   }));
   const els = { 'kb-status': stub(), 'kb-order': stub({ hidden: true }), 'kb-live': stub(), 'kb-data': stub({ textContent: JSON.stringify(lanes) }) };
+  // kb-sched: the scheduled lanes (id, state, band), which are not in kb-data. A string is raw text, to test bad JSON.
+  if (sched !== null) els['kb-sched'] = stub({ textContent: typeof sched === 'string' ? sched : JSON.stringify(sched) });
   els['kb-board'] = stub({
     querySelectorAll: (sel) => (sel === '.kb-card' ? [...cardEls.values()] : sel === '.kcol' ? colEls : []),
   });
@@ -336,7 +339,7 @@ for (const liveDoc of [true, false]) {
   test(`a doc stamped with another board: the page refuses it, says so, and never writes (realtime stream ${liveDoc ? 'answers' : 'silent'})`, async () => {
     const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-other', syncedAt: SYNCED }), liveDoc });
     assert.match(page.status(), /This page belongs to board zz-a, but the saved order is for board zz-other/);
-    await page.moveAndSave('a2', 'now');
+    await page.moveAndSave('a2', 'later');
     assert.deepEqual(page.db.log, [], 'a foreign page wrote to the other board\'s doc');
   });
 }
@@ -345,7 +348,7 @@ test('a board doc that cannot be read: the page cannot verify its board, so it s
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-other', syncedAt: SYNCED }), getFails: new Error('boom') });
   assert.match(page.status(), /^Board order not loaded: boom$/);
   assert.equal(page.db.cardSubs(), 0, 'card notes of an artifact whose board could not be verified were subscribed');
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.deepEqual(page.db.log, [], 'an unverified page wrote');
 });
 
@@ -353,19 +356,19 @@ test('no db handle (claude.use returned null): read-only, no card notes, no writ
   const page = await openPage({ board: 'zz-a', noDb: true });
   assert.match(page.status(), /sign in to save an order/);
   assert.equal(page.db.cardSubs(), 0);
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.deepEqual(page.db.log, []);
 });
 
 test('positive control: the same moves on a matching doc do write (so the refusal above is the guard)', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.equal(page.db.writes().length, 1);
 });
 
 test('the other board\'s order arriving live locks the page, and drops a move still in the debounce window', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
-  await page.move('a2', 'now');
+  await page.move('a2', 'later');
   page.db.push(DOC, board({ board: 'zz-other', syncedAt: SYNCED }));
   await settle();
   assert.match(page.status(), /belongs to board zz-a, but the saved order is for board zz-other/);
@@ -379,13 +382,13 @@ test('a doc with no board field is an old doc: allowed, and the first save stamp
   const old = board({ appliedColumns: clone(APPLIED), syncedAt: SYNCED });
   const page = await openPage({ board: 'continuous-claude', doc: old });
   assert.doesNotMatch(page.status(), /belongs to board/);
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   const writes = page.db.writes();
   assert.equal(writes.length, 1);
   assert.equal(writes[0].op, 'update', 'set would replace the whole doc');
   assert.deepEqual(Object.keys(writes[0].data).sort(), ['board', 'columns', 'updatedAt']);
   assert.equal(writes[0].data.board, 'continuous-claude');
-  assert.deepEqual(writes[0].data.columns, { now: ['a2'], next: ['a1'], later: ['a3'], waiting: [] });
+  assert.deepEqual(writes[0].data.columns, { next: ['a1'], later: ['a3', 'a2'], waiting: [] });
   assertNoSyncFields(writes);
   const saved = page.db.read(DOC);
   assert.equal(saved.syncedAt, SYNCED, 'the save dropped syncedAt');
@@ -396,7 +399,7 @@ test('a doc with no board field is an old doc: allowed, and the first save stamp
 test('the first save on a new board creates the doc with set, stamped with the board, and tries no update first', async () => {
   const page = await openPage({ board: 'zz-a', doc: null });
   assert.match(page.status(), /No saved order yet/);
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.deepEqual(page.db.log.map((e) => e.op), ['set']);
   const [w] = page.db.writes();
   assert.deepEqual(Object.keys(w.data).sort(), ['board', 'columns', 'updatedAt']);
@@ -410,7 +413,7 @@ test('the first save on a new board creates the doc with set, stamped with the b
 test('a doc another device created after this page loaded with no doc is updated, not replaced', async () => {
   const page = await openPage({ board: 'zz-a', doc: null });
   page.db.seed(DOC, board({ board: 'zz-a', appliedColumns: clone(APPLIED), syncedAt: SYNCED }));
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.deepEqual(page.db.log.map((e) => e.op), ['update']);
   const saved = page.db.read(DOC);
   assert.equal(saved.syncedAt, SYNCED);
@@ -420,7 +423,7 @@ test('a doc another device created after this page loaded with no doc is updated
 test('a doc another device created for ANOTHER board after this page loaded with no doc is not written to', async () => {
   const page = await openPage({ board: 'zz-a', doc: null });
   page.db.seed(DOC, board({ board: 'zz-other', syncedAt: SYNCED }));
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.deepEqual(page.db.log, []);
   assert.match(page.status(), /saved order is for board zz-other/);
 });
@@ -428,7 +431,7 @@ test('a doc another device created for ANOTHER board after this page loaded with
 test('a doc deleted under the page after load: the save creates it with set instead of failing', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
   page.db.remove(DOC);
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.deepEqual(page.db.log.map((e) => `${e.op}${e.rejected ? ':rejected' : ''}`), ['update:rejected', 'set']);
   assert.equal(page.db.read(DOC).board, 'zz-a');
   assert.doesNotMatch(page.status(), /Save failed/);
@@ -437,7 +440,7 @@ test('a doc deleted under the page after load: the save creates it with set inst
 test('ids the page does not know come back in their saved column; ids it knows are placed by the page; done ids are not kept', async () => {
   const doc = board({
     board: 'zz-a',
-    columns: { now: ['ghost', 'a4'], next: ['a1', 'a2'], later: ['a3', 'ghost2'], waiting: [] },
+    columns: { next: ['a1', 'a2'], later: ['a3', 'ghost2'], waiting: ['ghost', 'a4'] },
     appliedColumns: clone(APPLIED),
     syncedAt: SYNCED,
   });
@@ -445,7 +448,7 @@ test('ids the page does not know come back in their saved column; ids it knows a
   await page.moveAndSave('a2', 'later');
   const [w] = page.db.writes();
   // a2 moved next -> later. ghost and ghost2 are unknown to this page and survive; a4 is a known (done) lane, so it is dropped.
-  assert.deepEqual(w.data.columns, { now: ['ghost'], next: ['a1'], later: ['a3', 'a2', 'ghost2'], waiting: [] });
+  assert.deepEqual(w.data.columns, { next: ['a1'], later: ['a3', 'a2', 'ghost2'], waiting: ['ghost'] });
   assertNoSyncFields([w]);
 });
 
@@ -453,7 +456,7 @@ test('the page never writes appliedColumns or syncedAt, even when the doc it loa
   const withSync = board({ board: 'zz-a', appliedColumns: clone(APPLIED), syncedAt: SYNCED });
   for (const doc of [null, withSync]) {
     const page = await openPage({ board: 'zz-a', doc });
-    await page.moveAndSave('a2', 'now');
+    await page.moveAndSave('a2', 'later');
     await page.moveAndSave('a1', 'waiting');
     assert.ok(page.db.writes().length >= 2);
     assertNoSyncFields(page.db.writes());
@@ -463,7 +466,7 @@ test('the page never writes appliedColumns or syncedAt, even when the doc it loa
 test('after a save the order is pending again: the chip shows and syncedAt is still the sync\'s', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED, updatedAt: '2026-11-04T09:00:00.000Z' }) });
   assert.equal(page.chipHidden(), true, 'a synced order shows no chip');
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.equal(page.chipHidden(), false, 'a saved move is not yet synced');
 });
 
@@ -519,7 +522,7 @@ test('after the lock the card fields are off and a card save writes nothing', as
   assert.equal(page.part('a1', '.kb-save').disabled, true, 'the Save button is still on');
   page.part('a1', '.kb-note').value = 'typed after the lock';
   await page.clickSave('a1');
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.deepEqual(page.db.log, [], 'a locked page wrote');
 });
 
@@ -570,7 +573,7 @@ test('a drop that arrives after the lock moves nothing and keeps the lock messag
   await settle();
   const lockText = page.status();
   assert.match(lockText, /saved order is for board zz-other/, 'setup: the page locked');
-  await page.drop('now');
+  await page.drop('later');
   assert.equal(page.status(), lockText, 'the drop replaced the lock message');
   await page.debounce();
   assert.deepEqual(page.db.log, [], 'a locked page wrote after a drop');
@@ -592,19 +595,19 @@ const BLANES = [
   { id: 'w1', state: 'blocked', priority: 6, band: 'P0', title: 'W1' },
   { id: 'd1', state: 'done', priority: 7, band: 'P0', title: 'D1' },
 ];
-const ORDER = { now: [], next: ['n1', 'n2', 'n3'], later: ['l1', 'l2'], waiting: ['w1'] };
+const ORDER = { next: ['n1', 'n2', 'n3'], later: ['l1', 'l2'], waiting: ['w1'] };
 const open = (extra = {}) => openPage({ board: 'zz-a', lanes: BLANES, doc: board({ board: 'zz-a', syncedAt: SYNCED, columns: clone(ORDER) }), ...extra });
 const savedColumns = (page) => page.db.writes().filter((w) => w.path === DOC).at(-1)?.data.columns;
 const cardWrites = (page) => page.db.writes().filter((w) => w.path.startsWith('cards/'));
 
-test('Do next puts the card first in Next from Next, Later, Waiting and Now', async () => {
+test('Do next puts the card first in Next from Next, Later and Waiting', async () => {
   const page = await open();
   await page.clickNext('l1');
   await page.clickNext('w1');
-  await page.moveAndSave('n3', 'now');
+  await page.moveAndSave('n3', 'waiting');
   await page.clickNext('n3');
   await page.debounce();
-  assert.deepEqual(savedColumns(page), { now: [], next: ['n3', 'w1', 'l1', 'n1', 'n2'], later: ['l2'], waiting: [] });
+  assert.deepEqual(savedColumns(page), { next: ['n3', 'w1', 'l1', 'n1', 'n2'], later: ['l2'], waiting: [] });
 });
 
 test('Do next is off at Next index 0 and on a read-only page, and a tap on it writes nothing', async () => {
@@ -632,10 +635,10 @@ test('Do next is off at Next index 0 and on a read-only page, and a tap on it wr
 test('Move to Top and Bottom use index 0 and the last index; Bottom inside the same column is not off by one', async () => {
   const page = await open();
   await page.moveTop('n3', 'later');
-  await page.moveTop('w1', 'now');
+  await page.moveTop('w1', 'next');
   await page.move('n1', 'next');
   await page.debounce();
-  assert.deepEqual(savedColumns(page), { now: ['w1'], next: ['n2', 'n1'], later: ['n3', 'l1', 'l2'], waiting: [] });
+  assert.deepEqual(savedColumns(page), { next: ['w1', 'n2', 'n1'], later: ['n3', 'l1', 'l2'], waiting: [] });
   await page.move('l1', 'later');
   await page.moveTop('l2', 'later');
   await page.debounce();
@@ -644,28 +647,28 @@ test('Move to Top and Bottom use index 0 and the last index; Bottom inside the s
 
 test('a Move value that names no column writes nothing and still resets the select', async () => {
   const page = await open();
-  for (const bad of ['t:bogus', 'b:', 'x:later', 'later', 'now', 't:__proto__', 't:constructor']) {
+  for (const bad of ['t:bogus', 'b:', 'x:later', 'later', 'now', 't:now', 'b:now', 't:scheduled', 't:__proto__', 't:constructor']) {
     assert.equal(await page.moveRaw('n2', bad), '', `the select kept ${bad}`);
   }
   await page.debounce();
   assert.deepEqual(page.db.log, [], 'a value that is no column wrote');
 });
 
-test('the Move select shows its placeholder after load and after every move, and holds the 8 options once', async () => {
+test('the Move select shows its placeholder after load and after every move, and holds the 6 options once', async () => {
   const page = await open();
-  const want = ['now', 'next', 'later', 'waiting'].flatMap((c) => [`t:${c}`, `b:${c}`]);
+  const want = ['next', 'later', 'waiting'].flatMap((c) => [`t:${c}`, `b:${c}`]);
   for (const id of ['n1', 'l2', 'w1']) {
     assert.equal(page.part(id, '.kb-to').value, '', `${id}: the select shows a column name`);
     assert.deepEqual(page.moveOptions(id), want, `${id}: options`);
   }
-  assert.equal(await page.moveTop('l1', 'now'), '');
+  assert.equal(await page.moveTop('l1', 'next'), '');
   assert.equal(await page.move('l1', 'waiting'), '');
   assert.equal(page.part('l1', '.kb-to').value, '');
   await page.clickNext('l2');
   assert.equal(page.part('l2', '.kb-to').value, '');
   assert.deepEqual(page.moveOptions('l1'), want, 'options were added again');
   // A select a browser left on an option: the next paint of the board puts the placeholder back.
-  page.part('w1', '.kb-to').value = 't:now';
+  page.part('w1', '.kb-to').value = 't:next';
   await page.clickNext('l1');
   assert.equal(page.part('w1', '.kb-to').value, '', 'a repaint left a column name in the select');
 });
@@ -820,9 +823,21 @@ test('Do next says "First in Next." and counts the open lanes of a higher band; 
 
 test('one lane ahead reads in the singular', async () => {
   const lanes = [{ id: 'x', state: 'ready', priority: 1, band: 'P0' }, { id: 'y', state: 'backlog', priority: 2, band: 'P1' }];
-  const page = await openPage({ board: 'zz-a', lanes, doc: board({ board: 'zz-a', syncedAt: SYNCED, columns: { now: [], next: ['x'], later: ['y'], waiting: [] } }) });
+  const page = await openPage({ board: 'zz-a', lanes, doc: board({ board: 'zz-a', syncedAt: SYNCED, columns: { next: ['x'], later: ['y'], waiting: [] } }) });
   await page.clickNext('y');
   assert.equal(page.flag('y').text, 'First in Next. By band, 1 lane of a higher band stays above it.');
+});
+
+test('"lanes ahead" counts a scheduled lane of a higher band (it is in kb-sched, not kb-data); bad kb-sched JSON counts none and does not stop the page', async () => {
+  const lanes = [{ id: 'x', state: 'ready', priority: 1, band: 'P0' }, { id: 'y', state: 'backlog', priority: 2, band: 'P2' }];
+  const doc = board({ board: 'zz-a', syncedAt: SYNCED, columns: { next: ['x'], later: ['y'], waiting: [] } });
+  const sched = [{ id: 's1', state: 'ready', band: 'P0' }, { id: 's2', state: 'ready', band: 'P1' }, { id: 's3', state: 'ready', band: 'P2' }];
+  const page = await openPage({ board: 'zz-a', lanes, doc, sched });
+  await page.clickNext('y');
+  assert.equal(page.flag('y').text, 'First in Next. By band, 3 lanes of a higher band stay above it.', 'x, s1 and s2 are ahead of y; s3 is the same band');
+  const bad = await openPage({ board: 'zz-a', lanes, doc, sched: '{not json' });
+  await bad.clickNext('y');
+  assert.equal(bad.flag('y').text, 'First in Next. By band, 1 lane of a higher band stays above it.');
 });
 
 test('a move that lands at Next index 0 by Top or by drag is flagged the same way; a landing anywhere else shows no flag', async () => {
@@ -936,20 +951,20 @@ test('leaving the select after arrow keys, with no Enter, puts the placeholder b
 
 test('a change with no key before it (a mouse, a touch or a phone picker) moves; so does one after the key was released', async () => {
   const page = await open();
-  assert.equal(await page.moveRaw('l1', 't:now'), '');
+  assert.equal(await page.moveRaw('l1', 't:waiting'), '');
   page.key('l2', 'keydown', 'ArrowDown');
   page.key('l2', 'keyup', 'ArrowDown');
-  assert.equal(await page.moveRaw('l2', 't:now'), '', 'a change after the key was released was ignored');
+  assert.equal(await page.moveRaw('l2', 't:waiting'), '', 'a change after the key was released was ignored');
   page.key('n2', 'keydown', 'a');
-  assert.equal(await page.moveRaw('n2', 't:now'), '', 'a letter key blocked the next change');
+  assert.equal(await page.moveRaw('n2', 't:waiting'), '', 'a letter key blocked the next change');
   await page.debounce();
-  assert.deepEqual(savedColumns(page).now, ['n2', 'l2', 'l1']);
+  assert.deepEqual(savedColumns(page).waiting, ['n2', 'l2', 'l1', 'w1']);
 });
 
 test('Enter on the select applies the option the arrows chose, once, and puts the placeholder back', async () => {
   const page = await open();
   page.key('l1', 'keydown', 'ArrowDown');
-  page.pick('l1', 't:now');
+  page.pick('l1', 't:next');
   await page.fireChange('l1');
   page.key('l1', 'keyup', 'ArrowDown');
   assert.deepEqual(page.db.log, []);
@@ -961,7 +976,7 @@ test('Enter on the select applies the option the arrows chose, once, and puts th
   // A popup that was open sends its own change after Enter: the select is back on the placeholder, so nothing moves twice.
   await page.fireChange('l1');
   await page.debounce();
-  assert.deepEqual(savedColumns(page), { now: ['l1'], next: ['n1', 'n2', 'n3'], later: ['l2'], waiting: ['w1'] });
+  assert.deepEqual(savedColumns(page), { next: ['l1', 'n1', 'n2', 'n3'], later: ['l2'], waiting: ['w1'] });
   assert.equal(page.db.writes().length, 1);
 });
 
@@ -993,7 +1008,7 @@ const WLANES = [
   { id: 'bk', state: 'blocked', priority: 3, band: 'P1' },
   { id: 'y', state: 'backlog', priority: 4, band: 'P2' },
 ];
-const openW = () => openPage({ board: 'zz-a', lanes: WLANES, doc: board({ board: 'zz-a', syncedAt: SYNCED, columns: { now: [], next: ['a'], later: ['bk', 'y'], waiting: ['x'] } }) });
+const openW = () => openPage({ board: 'zz-a', lanes: WLANES, doc: board({ board: 'zz-a', syncedAt: SYNCED, columns: { next: ['a'], later: ['bk', 'y'], waiting: ['x'] } }) });
 const OUT_OF_WAITING = 'Sync may change this lane from blocked to backlog, after your yes.';
 const INTO_WAITING = 'Sync may set this lane to blocked, after your yes.';
 
@@ -1056,19 +1071,26 @@ test('a page with a Done column starts without throwing, and the board is still 
   // The phone path names the Done column in the collapse list; a column the page lacks would throw there.
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true });
   assert.doesNotMatch(page.status(), /not loaded|belongs to board/);
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   assert.equal(page.db.writes().length, 1, 'the client died at init: the move wrote nothing');
 });
 
-test('on the phone Done and In progress start collapsed with Next, Later and Waiting; Now starts open', async () => {
+test('on the phone Scheduled, Done and In progress start collapsed with Next, Later and Waiting', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true });
+  for (const c of ['scheduled', 'next', 'later', 'waiting', 'progress', 'done']) assert.equal(page.collapsed(c), true, `${c} starts open on the phone`);
+});
+
+test('on the phone a Scheduled column with cards starts open, so a DUE reminder is not hidden; the other columns stay collapsed', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true, schedN: 2 });
+  assert.equal(page.collapsed('scheduled'), false, 'a Scheduled column with 2 cards started collapsed');
   for (const c of ['next', 'later', 'waiting', 'progress', 'done']) assert.equal(page.collapsed(c), true, `${c} starts open on the phone`);
-  assert.equal(page.collapsed('now'), false, 'Now starts shut on the phone');
+  const empty = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true, schedN: 0 });
+  assert.equal(empty.collapsed('scheduled'), true, 'an empty Scheduled column started open');
 });
 
 test('on a wide screen no column starts collapsed, Done included', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
-  for (const c of ['now', 'next', 'later', 'waiting', 'progress', 'done']) assert.equal(page.collapsed(c), false, `${c} starts collapsed on a wide screen`);
+  for (const c of ['scheduled', 'next', 'later', 'waiting', 'progress', 'done']) assert.equal(page.collapsed(c), false, `${c} starts collapsed on a wide screen`);
 });
 
 test('a card dropped on the Done column moves nothing and writes nothing', async () => {
@@ -1080,10 +1102,32 @@ test('a card dropped on the Done column moves nothing and writes nothing', async
   assert.match(page.status(), /^(?!Saving)/, 'a drop on Done started a save');
 });
 
-test('after a move the saved doc has exactly the four order columns: Done is never saved', async () => {
+test('after a move the saved doc has exactly the three order columns: Scheduled and Done are never saved', async () => {
   const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }), phone: true });
-  await page.moveAndSave('a2', 'now');
+  await page.moveAndSave('a2', 'later');
   const [w] = page.db.writes();
-  assert.deepEqual(Object.keys(w.data.columns).sort(), ['later', 'next', 'now', 'waiting']);
-  assert.deepEqual(Object.keys(page.db.read(DOC).columns).sort(), ['later', 'next', 'now', 'waiting']);
+  assert.deepEqual(Object.keys(w.data.columns).sort(), ['later', 'next', 'waiting']);
+  assert.deepEqual(Object.keys(page.db.read(DOC).columns).sort(), ['later', 'next', 'waiting']);
+});
+
+// ------------------------------------------------------------------ PR-F: the Now column is retired; Scheduled and reminders is read-only
+
+test('a card dropped on the Scheduled column moves nothing and writes nothing', async () => {
+  const page = await openPage({ board: 'zz-a', doc: board({ board: 'zz-a', syncedAt: SYNCED }) });
+  page.dragStart('a2');
+  await page.drop('scheduled');
+  await page.debounce();
+  assert.deepEqual(page.db.log, [], 'a drop on Scheduled wrote to the db');
+  assert.match(page.status(), /^(?!Saving)/, 'a drop on Scheduled started a save');
+});
+
+test('an old doc with columns.now loads, its ids go to their default column, and the next save no longer writes now', async () => {
+  const old = board({ board: 'zz-a', syncedAt: SYNCED, columns: { now: ['a3'], next: ['a1', 'a2'], later: [], waiting: [] }, appliedColumns: { now: ['a3'], next: ['a1', 'a2'], later: [], waiting: [] } });
+  const page = await openPage({ board: 'zz-a', doc: old });
+  assert.doesNotMatch(page.status(), /not loaded|belongs to board|Save failed/);
+  await page.moveAndSave('a2', 'later');
+  const [w] = page.db.writes();
+  assert.deepEqual(w.data.columns, { next: ['a1'], later: ['a3', 'a2'], waiting: [] }, 'a3 sat in the retired column: it returns to its default column');
+  assertNoSyncFields([w]);
+  assert.deepEqual(page.db.read(DOC).appliedColumns.now, ['a3'], 'the sync\'s copy is not touched by the page');
 });

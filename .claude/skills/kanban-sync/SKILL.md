@@ -39,7 +39,7 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    {
      "project": "<key>",
      "readAt": "<readAt>",
-     "board": { "columns": {"now": [], "next": [], "later": [], "waiting": []}, "updatedAt": "...", "syncedAt": "...", "appliedColumns": {"now": [], "next": [], "later": [], "waiting": []} },
+     "board": { "columns": {"next": [], "later": [], "waiting": []}, "updatedAt": "...", "syncedAt": "...", "appliedColumns": {"next": [], "later": [], "waiting": []} },
      "cards": [ { "id": "<lane id>", "status": "...", "note": "...", "question": "...", "appliedNote": "...", "appliedQuestion": "...", "updatedAt": "...", "syncedAt": "..." } ]
    }
    ```
@@ -79,7 +79,7 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
 
 | Kanban input | Lane change |
 |---|---|
-| Column order | priority: one rank per open lane, 1..n across now, next, later, waiting. A lane that is done after the sync gets no rank; a done lane that a pending card reopens does (new lanes default to 50) |
+| Column order | priority: one rank per open lane, 1..n across next, later, waiting. A lane that is done after the sync gets no rank; a done lane that a pending card reopens does (new lanes default to 50) |
 | Band | never written by the sync. A drag changes rank only. Dave sets a band with `node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0\|P1\|P2\|none` |
 | Lane moved into waiting | state `blocked` and the note "Waiting on Dave (kanban)" |
 | Lane moved out of waiting | `blocked` goes back to `backlog`. `ready` stays `ready` |
@@ -93,6 +93,8 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
 - A held lane (a live session owns it, same test as `lane.mjs claim`) keeps its state. A card status or a column move gives `skipped: held` and the card stays pending. Notes and questions still apply. Priority still applies.
 - A column moves a lane's state only when the lane's column differs from `appliedColumns`. A lane that stays in waiting after Dave set it to `ready` on its card stays `ready`.
 - An id with no lane gets `skipped: no such lane`. It takes no rank.
+- The Now column is retired. The page saves three columns. Copy an old doc's `columns.now` and `appliedColumns.now` as they are: the sync ignores them, and their lanes keep their priority.
+- The Scheduled and reminders column on the page is read-only. It is never saved, takes no rank, and has no action here.
 - Rank follows the state AFTER the card status: a pending card that sets done takes the lane out of the ranks, one that reopens a done lane puts it in.
 - A done lane in a stale doc is ignored for ranks: it gets no priority change and the open lanes after it keep contiguous ranks. Its id stays in `appliedColumns`.
 - A card status wins over the column for the same lane.

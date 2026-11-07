@@ -742,7 +742,7 @@ describe('apply-kanban', () => {
     const f = path.join(state.tmp, `k-${Math.random().toString(36).slice(2)}.json`);
     const now = new Date().toISOString();
     fs.writeFileSync(f, JSON.stringify({
-      board: { columns: { now: ['zz-pbprobe-a2', 'zz-pbprobe-b1'], next: [], later: [], waiting: [] }, updatedAt: now },
+      board: { columns: { next: ['zz-pbprobe-a2', 'zz-pbprobe-b1'], later: [], waiting: [] }, updatedAt: now },
       cards: [], readAt: now, ...extra,
     }));
     return f;
@@ -778,7 +778,7 @@ describe('apply-kanban', () => {
   });
 
   it('every declaration form the planner accepts still passes on a non-default board', () => {
-    for (const extra of [{ project: 'pb-a' }, { board: 'pb-a', cards: [{ id: 'zz-pbprobe-a1', status: 'ready', updatedAt: new Date().toISOString() }] }, { board: { columns: { now: [], next: [], later: [], waiting: [] }, updatedAt: new Date().toISOString(), project: 'pb-a' } }]) {
+    for (const extra of [{ project: 'pb-a' }, { board: 'pb-a', cards: [{ id: 'zz-pbprobe-a1', status: 'ready', updatedAt: new Date().toISOString() }] }, { board: { columns: { next: [], later: [], waiting: [] }, updatedAt: new Date().toISOString(), project: 'pb-a' } }]) {
       const r = lane(state.dirs.A, SA, ['apply-kanban', kanban(extra), '--dry-run']);
       assert.equal(r.code, 0, `${JSON.stringify(Object.keys(extra))}: ${r.all}`);
     }
