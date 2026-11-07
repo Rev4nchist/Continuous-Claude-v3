@@ -26,8 +26,9 @@ When a PR opens (`gh pr create` or `POST .../pulls`), call the `pr_watch` tool w
 not in `Rev4nchist/Continuous-Claude-v3`, start a `/loop` instead. Interval 5 minutes.
 
 A session keeps the mod code it loaded at start. After a sync that changed `plugins/ccv3-mods/`,
-ask Dave to run `/reload-plugins` before you trust `pr_watch` text (on #285 an old copy said "decide
-in the checkpoint pane" after the mod had moved round questions into the session).
+the mod code in a running session is stale until the plugin reloads, and `pr_watch` text may be old
+(on #285 an old copy said "decide in the checkpoint pane" after the mod had moved round questions
+into the session). Say so. If a reload matters, ask Dave with AskUserQuestion. Do not tell him to type a command.
 
 `pr_watch` is a ccv3-mods tool. The session checks the PR every 5 minutes with
 `scripts/github/review-status.mjs` and tells Dave with a toast at READY, merged or closed. Those three
@@ -38,7 +39,7 @@ give you no line. You get one report line only when a reviewed head has findings
 stops the report lines too. It never merges. Dave uses `/watch <N>` to watch
 and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
-`pr_watch` also reports a draft as "waiting on /pathway" (a toast, no line to you) and a
+`pr_watch` also reports a draft as "waiting on Dave's review pick" (a toast, no line to you) and a
 `review:none` PR with no router state as "has no router state for this head. Re-run the
 review-router workflow for this head. Do not request a bot review." Before a CodeRabbit round past
 the PR's budget, the mod asks Dave in the session. Read its line before you post any review request.
@@ -139,7 +140,7 @@ command. A script builds each question, so you do not choose the options or thei
 | 1 Commit and push | `Commit` | `node scripts/github/ship-ask.mjs commit-and-push --msg <file> --json` | `git commit -F <file>`, then `pwsh -File scripts/git-safe.ps1 push fork <branch>` |
 | 2 Open the PR | `Open PR` | `node scripts/github/ship-ask.mjs open-pr --json` | `gh api .../pulls -X POST -F draft=true -F body=@<file>` |
 | 3 Review choice | `PR #<N>` | call `pr_checkpoint {pr}`; with `checkpoint.ledger` true it returns the question | the tool records his pick (call it again after the answer) |
-| 4 Paid round | `Paid round` | `node scripts/github/ship-ask.mjs paid-round --pr <N> --json` | nothing: the first option is "No, keep it free" |
+| 4 Paid round | `Paid round` | `node scripts/github/ship-ask.mjs paid-round --pr <N> --json` | nothing: the first option is "No, keep it free". A Yes row exists only on cr-paid ALLOW; ESCALATE or no verdict gives "No" and "Stop here" |
 | 5 Land | `Land` | `node scripts/github/ship-ask.mjs land --pr <N> --json` | `pwsh -File scripts/github/land-pr.ps1 -Pr <N>` |
 
 - A ship-ask exit code other than 0 means no question can be asked (the reason is on stderr). Do not ask.
@@ -308,7 +309,8 @@ slot and posts `@coderabbitai review`. The state file is `~/.claude/state/codera
   a rate limit, not at 30 minutes, not after a fix push. A second post only burns a slot.
 - A CRITICAL PR queued 30 minutes gets a paid ask. A queued PR 60 minutes old is `timed-out`. Both toasts
   offer a paid round or a wait. Only Dave's tap starts a paid round: ask the Paid round question
-  (`ship-ask.mjs paid-round --pr <N>`). It posts only when `cr-paid.mjs` says ALLOW and he taps Yes.
+  (`ship-ask.mjs paid-round --pr <N>`). It has a Yes row only when `cr-paid.mjs` says ALLOW. On ESCALATE or
+  no verdict it offers no paid round, only free options, and the question says why. A paid round posts only after ALLOW and his tap on Yes.
 - A timed-out PR is still not READY. READY needs a CodeRabbit review of the head. On the STALLED line,
   run the principal-reviewer agent on the head (not in fast mode) and report its findings. Do not post.
 - The `pr-checkpoint` mod (Lock A, Lock B) denies `slot-queue.mjs add`, `decide` and `drop`, and any write
@@ -446,7 +448,7 @@ Commands:
 
 1. Run `node scripts/github/cr-paid.mjs check --pr <N>`. It checks conditions 4 and 5, the paid round count and the fix size. It does not check conditions 1, 2, 3 and 6.
 2. On ALLOW (exit 0), post exactly the comment it prints: `@coderabbitai review --use-credits`.
-3. On ESCALATE (exit 3), stop and ask Dave. Exit 2 gives no verdict, so treat it as ESCALATE.
+3. On ESCALATE (exit 3), or on exit 2 (no verdict), offer no paid round. Post nothing. Run `ship-ask.mjs paid-round --pr <N> --json`: its question has no pay option and states the reason. Pass it to Dave, then stop.
 4. After you post, run `node scripts/github/cr-paid.mjs record --pr <N> --head <sha> --files <K>`. It writes the shared ledger `~/.claude/state/coderabbit-paid.jsonl`.
 5. Run `node scripts/github/cr-paid.mjs today` to read today's total.
 

@@ -7,7 +7,10 @@
  *   commit-and-push, open-pr: --branch B (default: the current branch). --msg is the commit message file (commit-and-push only).
  *   land, paid-round: --pr N.
  *   --json   print { header, question, options: [{ label, description }] } as one JSON object. Pass it to AskUserQuestion unchanged.
- *   --facts  read the step data from a JSON file, not from git, gh and the ledger (tests).
+ *   --facts  read the step data from a JSON file, not from git, gh and the ledger (tests). Honoured only in test mode.
+ *   SHIP_ASK_STATUS_SCRIPT  replaces review-status.mjs for land (tests). Honoured only in test mode.
+ *   Test mode = SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE set to a path other than the default real store.
+ *   Outside test mode both are ignored, with one warning on stderr, and the real data path runs.
  * The recommended option is first and its label ends with " (Recommended)". The question has at most 3 lines.
  * The store step of commit-and-push is `ship`. An open offer is what lets the AskUserQuestion hook record Dave's tap.
  * Exit 0 = the offer is written and the spec printed. 1 = no question can be asked (the reason is on stderr, nothing written).
@@ -17,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decisionKey, offerWrite } from './lib/decisions.mjs';
+import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -97,17 +100,20 @@ export function landSpec(d) {
 export function paidRoundSpec(d) {
   const caps = d.caps ?? { round: 5, day: 15, rounds: 2 };
   const cost = typeof d.files === 'number' ? d.files * PAID_PER_FILE : null;
-  const verdict = d.verdict === 'ALLOW' ? 'cr-paid says ALLOW.' : d.verdict === 'ESCALATE' ? `cr-paid says ESCALATE: ${clip((d.reasons ?? []).join('; '), 120)}.` : `cr-paid gave no verdict: ${clip(d.reason ?? 'unknown', 100)}.`;
+  const allow = d.verdict === 'ALLOW';
+  const verdict = allow ? 'cr-paid says ALLOW.'
+    : d.verdict === 'ESCALATE' ? `cr-paid says ESCALATE: ${clip((d.reasons ?? []).join('; '), 100)}. No paid round is offered: it is over the cap.`
+      : `cr-paid gave no verdict: ${clip(d.reason ?? 'unknown', 80)}. No paid round is offered without an ALLOW.`;
   const lines = [
     cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${plural(d.files, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
     `Today ${usd(d.today ?? 0)} of ${usd(caps.day)}. Paid rounds on this PR ${d.paidRounds ?? 0} of ${caps.rounds}. Round cap ${usd(caps.round)}.`,
     verdict,
   ];
-  const yes = d.verdict === 'ALLOW' ? `Yes, pay up to ${usd(cost ?? 0)}` : d.verdict === 'ESCALATE' ? `Yes, pay over the cap (up to ${usd(cost ?? 0)})` : 'Yes, pay (cost unknown)';
-  return { header: 'Paid round', question: lines.join('\n'), options: [
-    opt('No, keep it free', 'Posts nothing. The PR keeps its free-slot path.', true),
-    opt(yes, 'Posts @coderabbitai review --use-credits, then logs the round with cr-paid.mjs record.'),
-  ] };
+  const free = opt('No, keep it free', 'Posts nothing. The PR keeps its free-slot path.', true);
+  // Dave 2026-11-06: a paid round is offered only on cr-paid ALLOW. ESCALATE and a missing verdict get no pay row.
+  const rows = allow ? [free, opt(`Yes, pay up to ${usd(cost ?? 0)}`, 'Posts @coderabbitai review --use-credits, then logs the round with cr-paid.mjs record.')]
+    : [free, opt('Stop here', 'Posts nothing. The reason is in the question above.')];
+  return { header: 'Paid round', question: lines.join('\n'), options: rows };
 }
 
 // ---------- the data: git, gh, ledger ----------
@@ -175,9 +181,25 @@ export async function gatherOpenPr({ branch }) {
   };
 }
 
+/** True only when SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one. The test seams (--facts, SHIP_ASK_STATUS_SCRIPT) need both. */
+function seamsOn(env = process.env) {
+  if (env.SHIP_ASK_TEST !== '1' || !env[DECISIONS_ENV]) return false;
+  return path.resolve(env[DECISIONS_ENV]) !== path.resolve(decisionsPath({}));
+}
+const warnSeam = (name) => console.error(`ship-ask: ignored ${name}: it is a test seam and needs SHIP_ASK_TEST=1 and a temp CCV3_DECISIONS_FILE. The real data path runs.`);
+
+/** The script that reports PR status: review-status.mjs, or SHIP_ASK_STATUS_SCRIPT in test mode only. */
+export function statusScriptOf(env = process.env) {
+  const real = path.join(HERE, 'review-status.mjs');
+  if (!env.SHIP_ASK_STATUS_SCRIPT) return real;
+  if (seamsOn(env)) return env.SHIP_ASK_STATUS_SCRIPT;
+  warnSeam('SHIP_ASK_STATUS_SCRIPT');
+  return real;
+}
+
 /** { pr, head, ready, reasons, mergeable, unresolved, isDraft, prState, pathway, by } for land. Runs review-status.mjs (read-only). */
 export function gatherLand({ pr }, env = process.env) {
-  const script = env.SHIP_ASK_STATUS_SCRIPT || path.join(HERE, 'review-status.mjs');
+  const script = statusScriptOf(env);
   const r = spawnSync(process.execPath, [script, String(pr), '--repo', DEFAULT_REPO, '--json'], { encoding: 'utf8', windowsHide: true, cwd: topOf() });
   let s;
   try { s = JSON.parse(r.stdout); } catch { throw new Error(`review-status.mjs gave no JSON for PR #${pr} (${one(r.stderr).slice(0, 120)})`); }
@@ -236,7 +258,10 @@ function parseArgs(argv) {
 }
 
 async function dataOf(o) {
-  if (o.facts) return JSON.parse(readFileSync(o.facts, 'utf8'));
+  if (o.facts) {
+    if (seamsOn()) return JSON.parse(readFileSync(o.facts, 'utf8'));
+    warnSeam('--facts');
+  }
   if (o.step === 'commit-and-push') return gatherShip({ branch: o.branch, msg: o.msg });
   if (o.step === 'open-pr') return gatherOpenPr({ branch: o.branch });
   return o.step === 'land' ? gatherLand({ pr: o.pr }) : gatherPaid({ pr: o.pr });
