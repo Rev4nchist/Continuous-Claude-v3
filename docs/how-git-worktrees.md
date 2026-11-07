@@ -145,6 +145,18 @@ git branch -d status-system
 
 ---
 
+## Packages in a worktree (shared store link)
+
+A worktree has no `node_modules`. Only the primary checkout has an install, in `<primary>/.claude/hooks/node_modules`.
+
+- A worktree under `<primary>/.claude/worktrees/<name>` gets its packages through one link: `<primary>/.claude/worktrees/node_modules`. Node finds it by walking up the parent folders.
+- Check the link from any worktree: `node scripts/worktree/shared-deps.mjs --check`. It prints one `STORE <state>` line.
+- Make or remove the link only in the primary, with Dave's yes: `--apply` or `--unlink`. The script refuses to run in a worktree.
+- A worktree outside the primary gets only the resolver (`scripts/lib/resolve-deps.mjs`) for `pg` and similar packages. For vitest and the hooks build, link by hand. See the Testing section in `.claude/skills/hooks/SKILL.md`. `land-pr` unlinks that hand junction.
+- Never make a link inside a worktree. Never delete a link recursively: `git worktree remove --force` follows a junction and empties the primary install.
+
+---
+
 ## Windows-Specific Notes
 
 On Windows, use forward slashes or escape backslashes:

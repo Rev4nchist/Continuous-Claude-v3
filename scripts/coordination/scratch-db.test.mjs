@@ -28,6 +28,7 @@ test('refuses an unparseable URL', () => {
 });
 
 import { createDatabase, dropDatabase, loadPg, maskUrl } from './scratch-db.mjs';
+import { candidateRoots } from '../lib/resolve-deps.mjs';
 
 test('maskUrl hides the password and keeps host and database', () => {
   assert.equal(maskUrl('postgresql://claude:s3cret@localhost:5432/lanes_pr1_ab'), 'postgresql://claude:***@localhost:5432/lanes_pr1_ab');
@@ -94,9 +95,10 @@ const dbExists = async (name) => {
 // Fails if loadPg stops trying the next anchor, or if the test goes back to one hard-coded location.
 test('loadPg falls back to the next location when pg is missing from the first, and throws when it is in none', () => {
   const here = dirname(fileURLToPath(import.meta.url));
-  const real = [join(here, '..', '..', '.claude', 'hooks', 'package.json'), join(here, '..', '..', 'apps', 'agentic-os', 'package.json')];
+  // The real anchors: this checkout's two and, in a bare worktree, the primary's two (scripts/lib/resolve-deps.mjs).
+  const real = candidateRoots(join(here, '..', '..'));
   const nowhere = join(tmpdir(), 'no-such-dir-for-pg', 'package.json');
-  // pg is installed under at least one real anchor, not necessarily both: a missing first anchor must fall through to the rest.
+  // pg is installed under at least one real anchor, not necessarily all: a missing first anchor must fall through to the rest.
   assert.equal(typeof loadPg([nowhere, ...real]).Client, 'function');
   assert.equal(typeof loadPg([nowhere, nowhere, ...real.reverse()]).Client, 'function');
   assert.throws(() => loadPg([nowhere, nowhere]), /cannot resolve the `pg` module/);

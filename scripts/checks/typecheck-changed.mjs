@@ -3,10 +3,13 @@
  * typecheck-changed.mjs: tsc facts for the changed .mjs files. This is a fact for the reviewer, never a gate.
  *
  * Usage: node scripts/checks/typecheck-changed.mjs --root <dir> --diff <file> [--strict]
- * Output: JSON { errors: [{ path, line, code, message }], skipped, tool: 'tsc', version }
+ * Output: JSON { errors: [{ path, line, code, message }], skipped, tool: 'tsc', version } (plus { env: true, error: 'ENV: ...' } when tsc is missing)
  *
  * Rules:
- *   - tsc runs on the changed non-test .mjs files only, with --allowJs --checkJs and @types/node from .claude/hooks.
+ *   - tsc runs on the changed non-test .mjs files only, with --allowJs --checkJs and @types/node from .claude/hooks of this
+ *     checkout, else of the primary checkout (a worktree has no node_modules).
+ *   - A changed .mjs file and no tsc anywhere is { env: true, error: 'ENV: ...' }, not a skip: catchers.mjs fails on it.
+ *     With no changed .mjs file the run is skipped, as before.
  *   - An error stays only when its file is a changed file and its line is in a changed range.
  *   - The CLI exits 0 even with errors. With --strict it exits 1 when errors remain.
  *   - tsc runs through process.execPath on its JS entry, with no shell. The timeout is 120 s.
@@ -15,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { depsHint, primaryRoot } from '../lib/resolve-deps.mjs';
 import { changedLines, inRanges } from './changed-lines.mjs';
 
 const HOOKS_DIR = fileURLToPath(new URL('../../.claude/hooks/', import.meta.url));
@@ -57,6 +61,20 @@ function tscTool(hooksDir) {
   return { entry, version: pkg.version, typeRoots: path.join(hooksDir, 'node_modules', '@types') };
 }
 
+/**
+ * The tsc of the first hooks folder that has one: this checkout's, then the primary checkout's (a worktree has no
+ * node_modules; scripts/lib/resolve-deps.mjs finds the primary). Returns { tool, tried }.
+ */
+function findTool(hooksDirs) {
+  const tried = [];
+  for (const dir of hooksDirs) {
+    tried.push(dir);
+    const tool = tscTool(dir);
+    if (tool) return { tool, tried };
+  }
+  return { tool: null, tried };
+}
+
 function tscArgs(tool, targets) {
   return [
     tool.entry, '--noEmit', '--allowJs', '--checkJs', '--skipLibCheck', '--pretty', 'false',
@@ -71,10 +89,15 @@ function tscArgs(tool, targets) {
  */
 export function runTypecheck({ root, files, ranges }, opts = {}) {
   const base = { errors: [], skipped: null, tool: 'tsc', version: null };
-  const tool = tscTool(opts.hooksDir ?? HOOKS_DIR);
-  if (!tool) return { ...base, skipped: 'tsc not found in .claude/hooks/node_modules' };
+  const dirs = opts.hooksDir ? [opts.hooksDir] : [HOOKS_DIR, path.join(primaryRoot(path.resolve(HOOKS_DIR, '..', '..')), '.claude', 'hooks')];
+  const { tool, tried } = findTool([...new Set(dirs)]);
   const targets = typecheckTargets(files).filter((f) => existsSync(path.join(root, f)));
-  if (targets.length === 0) return { ...base, version: tool.version, skipped: 'no changed non-test .mjs files' };
+  if (targets.length === 0) return { ...base, version: tool?.version ?? null, skipped: 'no changed non-test .mjs files' };
+  // A file needs checking and there is no compiler: that is the environment, loud, never a silent skip.
+  if (!tool) {
+    const where = tried.map((d) => path.join(d, 'node_modules', 'typescript')).join(', ');
+    return { ...base, env: true, error: `ENV: tsc needs typescript. Tried ${where}. This is the environment, not your change. Fix: ${depsHint('typescript', tried, primaryRoot(HOOKS_DIR))}` };
+  }
   const r = spawnSync(process.execPath, tscArgs(tool, targets), {
     cwd: root, encoding: 'utf8', shell: false, windowsHide: true, timeout: TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024,
   });

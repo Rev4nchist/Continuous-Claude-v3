@@ -29,30 +29,21 @@
  */
 
 import { execFile } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { existsSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { jsonArrayOf, laneEnv, makeBoards } from './probe-boards.mjs';
 
 const run = promisify(execFile);
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** Same resolution rule as lane.mjs: `pg` lives in the hooks bundle or in
- *  apps/agentic-os, never at the repo root. Do not add a third copy. */
-function loadPg() {
-  for (const anchor of [
-    join(REPO, '.claude', 'hooks', 'package.json'),
-    join(REPO, 'apps', 'agentic-os', 'package.json'),
-  ]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve `pg`. Looked in .claude/hooks and apps/agentic-os.');
-}
-const pg = loadPg();
+/** `pg` lives in the hooks bundle or in apps/agentic-os of this checkout or the primary (scripts/lib/resolve-deps.mjs). */
+let pg;
+try { pg = requireDep('pg', { repoRoot: REPO }); } catch (e) { console.error(`dm-delivery-probe: ${e.message}`); process.exit(2); }
 
 const dmFile = (sid) => join(tmpdir(), `claude-lane-dm-${sid}.json`);
 const clearThrottle = (sid) => { try { rmSync(dmFile(sid), { force: true }); } catch { /* fine */ } };

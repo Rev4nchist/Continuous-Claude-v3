@@ -45,6 +45,7 @@ two-copy surfaces. Before you say "done", walk this list and name which rows app
 | Registration paths | `lane.mjs project register`, `/init-project`, the `project-registry` skill | One writer for a board: `project register`, from the primary checkout. A second board only after the release steps pass. |
 | Docs and onboarding | `CONTEXT.md`, `COORDINATION.md`, `rules-ondemand/lane-board.md`, `docs/harness/lane-board-claude-md-pointer.md` | Update all four when board behaviour changes. A project `CLAUDE.md` pointer needs Dave's yes per project. |
 | Worktree copies | `.claude/worktrees/*/scripts/coordination/` | Stale copies of the lane CLI. Do not edit or run them; use the shim. |
+| Shared store link | the real `.claude/hooks/node_modules` (primary) and the link `.claude/worktrees/node_modules` | One link serves every nested worktree. Apply it once, from the primary, with Dave's yes. Check: `node scripts/worktree/shared-deps.mjs --check`. |
 | Reverse states | register / unregister, claim / release, start / stop, enable / disable | If you add one direction, test the other in the same change. |
 
 ## Rule-router records

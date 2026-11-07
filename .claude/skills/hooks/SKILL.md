@@ -54,7 +54,9 @@ Test hooks manually:
 echo '{"type": "resume"}' | .claude/hooks/session-start-continuity.sh
 ```
 
-In a git worktree, link `.claude/hooks/node_modules` to the primary checkout's copy. Do not run `npm install` there. Run the command from the worktree root and replace `<primary>` with the primary checkout path:
+A bare worktree gets `pg` through the shared resolver (scripts/lib/resolve-deps.mjs) and NODE_PATH. The shared store link (`.claude/worktrees/node_modules`) serves vitest, the hooks build and the bins from every nested worktree. Run `node scripts/worktree/shared-deps.mjs --check` in the primary. The one-time `--apply` needs Dave's yes. Run it in the primary, never in a worktree. pre-pr names a missing package in one ENV line.
+
+Use the hand junction only for a worktree outside the primary. Link `.claude/hooks/node_modules` to the primary checkout's copy. Do not run `npm install` there. Run the command from the worktree root and replace `<primary>` with the primary checkout path:
 - Windows: `New-Item -ItemType Junction -Path .claude\hooks\node_modules -Target <primary>\.claude\hooks\node_modules`
 - macOS or Linux: `ln -s <primary>/.claude/hooks/node_modules .claude/hooks/node_modules`
 

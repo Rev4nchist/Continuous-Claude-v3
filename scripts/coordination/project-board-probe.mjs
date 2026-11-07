@@ -37,11 +37,11 @@
  * Exit: 0 all pass | 1 a check failed | 2 refused or could not run.
  */
 import { spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { dbNameOf, maskUrl } from './scratch-db.mjs';
 import { laneEnv, makeBoards } from './probe-boards.mjs';
 
@@ -51,13 +51,8 @@ const LANE = join(HERE, 'lane.mjs');
 /** The built lane-context hook (override: PBPROBE_HOOK). In a worktree this is the worktree's own bundle. */
 const HOOK = process.env.PBPROBE_HOOK || join(REPO, '.claude', 'hooks', 'dist', 'lane-context.mjs');
 
-function loadPg() {
-  for (const anchor of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve `pg`. Looked in .claude/hooks and apps/agentic-os.');
-}
-const { Client } = loadPg();
+let Client;
+try { ({ Client } = requireDep('pg', { repoRoot: REPO })); } catch (e) { console.error(`project-board-probe: ${e.message}`); process.exit(2); }
 
 const URL = process.env.CONTINUOUS_CLAUDE_DB_URL
   || process.env.DATABASE_URL

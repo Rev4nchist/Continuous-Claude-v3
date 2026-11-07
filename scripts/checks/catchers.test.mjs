@@ -150,6 +150,13 @@ test('C5b: a typecheck crash is a recorded fact, not a gate failure (breaks if t
   assert.equal(clean.errors.length, 1);
 });
 
+test('C5c: a typecheck that cannot run for want of typescript (env) fails the gate and shows its ENV line (breaks if typecheck.env stops joining gateFailed)', async () => {
+  const noTsc = () => ({ errors: [], skipped: null, env: true, error: 'ENV: tsc needs typescript. Tried x. This is the environment, not your change. Fix: npm ci' });
+  const r = await catchersOn(CLEAN_CLI, { typecheck: noTsc });
+  assert.equal(r.gateFailed, true);
+  assert.match(factsBody(r), /catcher error: ENV: tsc needs typescript/);
+});
+
 // ---------- facts ----------
 
 function fakeResult(over = {}) {

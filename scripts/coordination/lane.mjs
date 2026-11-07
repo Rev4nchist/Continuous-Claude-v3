@@ -76,12 +76,12 @@
  * Global flags: --as <session-id>, --json, --project <board-key>
  */
 
-import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { repoPath } from './canon-home.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
@@ -98,23 +98,11 @@ const REPO = join(HERE, '..', '..');
 
 /**
  * `pg` is not a dependency of the repo root -- it lives in the hooks bundle and
- * in apps/agentic-os. Resolve from whichever is present rather than adding a
- * third copy, and say so clearly if neither is.
+ * in apps/agentic-os, of this checkout or of the primary (scripts/lib/resolve-deps.mjs).
+ * A miss throws the one ENV error that names every folder tried and the fix.
  */
 function loadPg() {
-  const candidates = [
-    join(REPO, '.claude', 'hooks', 'package.json'),
-    join(REPO, 'apps', 'agentic-os', 'package.json'),
-  ];
-  for (const anchor of candidates) {
-    try {
-      return createRequire(pathToFileURL(anchor)).call(null, 'pg');
-    } catch { /* try the next anchor */ }
-  }
-  throw new Error(
-    'cannot resolve the `pg` module. Looked in .claude/hooks and apps/agentic-os.\n' +
-    'Run `npm install` in one of them.',
-  );
+  return requireDep('pg', { repoRoot: REPO });
 }
 
 const LANE_STATES = ['backlog', 'ready', 'active', 'blocked', 'review', 'done'];

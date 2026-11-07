@@ -14,9 +14,9 @@
  */
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl, maskUrl } from './scratch-db.mjs';
 import { laneEnv, makeBoards } from './probe-boards.mjs';
 
@@ -34,15 +34,9 @@ const LANE = join(HERE, 'lane.mjs');
 const SCRATCH = join(HERE, 'scratch-db.mjs');
 const OUT = join(REPO, '.claude', 'cache', 'e2e', '2026-11-06-lane-band-probe.txt');
 
-function loadPg() {
-  for (const anchor of [join(REPO, '.claude', 'hooks', 'package.json'), join(REPO, 'apps', 'agentic-os', 'package.json')]) {
-    try { return createRequire(pathToFileURL(anchor)).call(null, 'pg'); } catch { /* next */ }
-  }
-  throw new Error('cannot resolve `pg`. Looked in .claude/hooks and apps/agentic-os.');
-}
 let Client;
 try {
-  ({ Client } = loadPg());
+  ({ Client } = requireDep('pg', { repoRoot: REPO }));
 } catch (e) {
   console.error(`lane-band-probe: the pg package is not available (${e.message}). Set NODE_PATH to a folder that holds pg.`);
   process.exit(2);

@@ -26,6 +26,13 @@
  * <repo>/.claude/settings.json.template, and the ratchet baseline scripts/coordination/lane-path-guard.baseline.json. Each is a WARN when an
  * input is absent or differs. Only lanes:hook-client-version can FAIL (a second board exists and the live hook build cannot renew its lease).
  *
+ * deps:hooks-install reads the PRIMARY checkout's .claude/hooks/node_modules (git rev-parse --git-common-dir, scripts/lib/resolve-deps.mjs):
+ * FAIL when there is no .package-lock.json there or pg does not resolve, WARN with the version pair when installed typescript differs
+ * from package-lock.json. No network and no install.
+ * deps:store-link runs only when that install is complete. It checks the shared store link <primary>/.claude/worktrees/node_modules
+ * (scripts/worktree/shared-deps.mjs): PASS when it resolves to the hooks install, WARN when absent, FAIL when dangling,
+ * wrong-target, a real file or folder, or no-target.
+ *
  * Where each input is written (read these writers before you change a path here):
  *   sync cursor, .sync.pending, .sync-quarantine/<YYYY-MM-DD-HHMMSS>   scripts/sync-to-active.sh
  *   <repo>/.claude/hooks/dist/.build-inputs.json                        .claude/hooks/scripts/write-build-inputs.mjs
@@ -41,7 +48,9 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { primaryRoot, resolveDep } from './lib/resolve-deps.mjs';
+import { checkStore } from './worktree/shared-deps.mjs';
 import { artifactIdOf, boardArtifact, loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
 import { checkLanePaths } from './coordination/lane-path-guard.mjs';
 import { registryDrift } from './coordination/registry-drift.mjs';
@@ -561,18 +570,17 @@ export function registryArtifactUrl(o) {
 
 // ---- lanes ----
 const DB_CHILD_TIMEOUT_MS = 20000;
-/** The pg module lives in the hooks bundle or apps/agentic-os, not at the repo root. Same lookup as lane.mjs. */
-const PG_ANCHORS = [join(HERE, '..', '.claude', 'hooks', 'package.json'), join(HERE, '..', 'apps', 'agentic-os', 'package.json')];
+/** The pg module lives in the hooks bundle or apps/agentic-os of this checkout or the primary: the shared resolver, same as lane.mjs. */
+const RESOLVER_URL = pathToFileURL(join(HERE, 'lib', 'resolve-deps.mjs')).href;
+const DOCTOR_CHECKOUT = resolve(HERE, '..');
 
 /** One READ ONLY transaction, in a child process so the doctor stays synchronous. Prints one JSON object. */
 const DB_READER = `
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { requireDep } from ${JSON.stringify(RESOLVER_URL)};
 const out = {};
 let pg = null;
-for (const a of ${JSON.stringify(PG_ANCHORS)}) { try { pg = createRequire(pathToFileURL(a)).call(null, 'pg'); break; } catch { /* next */ } }
-if (!pg) out.error = 'cannot resolve the pg module';
-else {
+try { pg = requireDep('pg', { repoRoot: ${JSON.stringify(DOCTOR_CHECKOUT)} }); } catch (e) { out.error = e.message; }
+if (pg) {
   const c = new pg.Client({ connectionString: process.env.HARNESS_DOCTOR_DB_URL, connectionTimeoutMillis: 4000, query_timeout: 8000 });
   try {
     await c.connect();
@@ -805,9 +813,60 @@ export function lanePathGuardCheck(o) {
 
 const lanesSection = (o) => [laneBoardColumns(o), laneSchema(o), worktreeLaneMjs(o), lanesShim(o), laneHookClientVersion(o), lanePathGuardCheck(o)];
 
+// ---- deps (the one install of .claude/hooks, in the primary checkout) ----
+/** The version of node_modules/<name> that a lock-shaped file records, or null. */
+function lockedVersion(file, name) {
+  try { return readJson(file).packages?.[`node_modules/${name}`]?.version ?? null; } catch { return null; }
+}
+
+/**
+ * The primary checkout's .claude/hooks install is whole: node_modules/.package-lock.json exists (npm writes it last, so a lone
+ * node_modules/.vite does not count) and `pg` resolves from it. A gap is a FAIL: every worktree borrows this install through the
+ * shared resolver (scripts/lib/resolve-deps.mjs). Installed typescript that differs from package-lock.json is a WARN with the pair:
+ * the gates then run an older compiler than the lock names. Read only: no network, no install.
+ */
+export function depsHooksInstall(o) {
+  const primary = primaryRoot(o.repo);
+  const hooks = join(primary, '.claude', 'hooks');
+  const fix = `run npm ci in ${hooks} (needs Dave's yes)`;
+  const installed = join(hooks, 'node_modules', '.package-lock.json');
+  if (!existsSync(installed)) return result('FAIL', 'deps', 'hooks-install', `${join(hooks, 'node_modules')} has no .package-lock.json: no complete install in the primary checkout; ${fix}`);
+  if (!resolveDep('pg', { repoRoot: primary, anchors: [hooks] })) return result('FAIL', 'deps', 'hooks-install', `pg does not resolve from ${hooks}: the install is partial; ${fix}`);
+  const have = lockedVersion(installed, 'typescript');
+  const want = lockedVersion(join(hooks, 'package-lock.json'), 'typescript');
+  if (have && want && have !== want) return result('WARN', 'deps', 'hooks-install', `installed typescript ${have}, lock says ${want}: ${fix}`);
+  return result('PASS', 'deps', 'hooks-install', `${hooks}: complete install, pg resolves${have ? `, typescript ${have}` : ''}`);
+}
+
+/**
+ * The shared store link <primary>/.claude/worktrees/node_modules points at <primary>/.claude/hooks/node_modules
+ * (scripts/worktree/shared-deps.mjs). PASS when it does. WARN when it is absent: the link is optional and needs Dave's yes.
+ * FAIL for a link that dangles or points elsewhere, a real file or folder at that path, or a target without a complete install.
+ * Read only.
+ */
+export function depsStoreLink(o) {
+  const r = checkStore({ primary: primaryRoot(o.repo) });
+  if (r.state === 'ok') return result('PASS', 'deps', 'store-link', r.detail);
+  if (r.state === 'absent') return result('WARN', 'deps', 'store-link', "no shared store link: run node scripts/worktree/shared-deps.mjs --apply in the primary (needs Dave's yes)");
+  return result('FAIL', 'deps', 'store-link', `${r.state}: ${r.detail}; ${storeFix(r.state)}`);
+}
+
+/** The fix text for a store state that is not ok and not absent. The script never replaces a path, so each fix is two steps or a question. */
+function storeFix(state) {
+  if (state === 'not-a-link') return "a real folder or file sits at the link path: ask Dave, do not delete it, then run node scripts/worktree/shared-deps.mjs --check";
+  if (state === 'no-target') return "the hooks install is incomplete: run npm ci in the primary's .claude/hooks (needs Dave's yes), then run node scripts/worktree/shared-deps.mjs --check";
+  return "run node scripts/worktree/shared-deps.mjs --unlink then --apply in the primary (Dave's yes)";
+}
+
+/** store-link runs only when the hooks install is complete: a FAIL there already names the one fix. */
+const depsSection = (o) => {
+  const install = depsHooksInstall(o);
+  return install.status === 'FAIL' ? [install] : [install, depsStoreLink(o)];
+};
+
 // ---- run ----
 const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],
-  ['schedule', scheduleSection], ['blocklist', blocklistSection], ['registry', registrySection], ['lanes', lanesSection]];
+  ['schedule', scheduleSection], ['blocklist', blocklistSection], ['registry', registrySection], ['lanes', lanesSection], ['deps', depsSection]];
 
 /** Runs every section. A section that throws becomes one WARN, so one bad input never hides the rest. */
 export function collect(o) {

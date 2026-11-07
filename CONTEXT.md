@@ -28,13 +28,14 @@
   that records a baseline and fails if the number gets worse. **Vacuous gate**: passes on zero
   registrations; read the count before the verdict.
 - **Probe**: a script that measures live behaviour (`*-probe.mjs`), as opposed to reading code.
-- **Offer**: a question the model must ask Dave with AskUserQuestion. A script writes it (`ship-ask.mjs`, the `pr_checkpoint` engine)
-  to the decision store with a fixed header, question and option labels, bound to a step, a key (repo plus PR or branch) and a head.
-- **Decision**: Dave's tap. It is the exact option label of an open offer, bound to the same step, key and head. Single use.
-  Free text, Esc or a timeout is not a decision: nothing is recorded and the model re-asks (at most 2 times).
-- **Decision ledger**: the `decision-ledger` PostToolUse hook (AskUserQuestion) that turns a tap into a decision, plus the store
-  (`scripts/github/lib/decisions.mjs`). The `decision-gate` PreToolUse hook denies a PR create, a land, a merge and a store write
-  without a decision, when `decisions.enforce` is true. Both ship off (`checkpoint.ledger` false, `decisions.enforce` false).
+- **Dependency fallback**: a script finds a package in its own checkout, then the primary checkout, then NODE_PATH
+  (`scripts/lib/resolve-deps.mjs`). A miss is one `ENV:` message. The **shared store link**
+  (`.claude/worktrees/node_modules`) points at the primary's hooks `node_modules` for every nested worktree.
+  Check it with `scripts/worktree/shared-deps.mjs --check`.
+- **Offer / decision**: an offer is a question the model asks Dave with AskUserQuestion (written by `ship-ask.mjs` or `pr_checkpoint`).
+  A decision is his tap: the exact option label, single use. A mismatch records nothing and the model re-asks (max 2).
+- **Decision ledger**: the `decision-ledger` hook and store. The `decision-gate` hook denies PR create, land, merge and store writes
+  without a decision when `decisions.enforce` is true. Both ship off.
 
 ## Coordination
 
