@@ -21,6 +21,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
+import { SUMMARY_REL, changeOf, hashOf } from './lib/pr-summary.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -56,12 +57,14 @@ export function shipSpec({ branch, staged, ahead, subject }) {
 
 const ageText = (min) => (min < 60 ? `${min} min` : `${Math.round(min / 60)} h`);
 
-/** open-pr when the stamp names this head. data: { branch, head, stampHead, stampAt, now, rows, fails, cliDetail, costUsd }. */
+/** open-pr when the stamp names this head. data: { branch, head, stampHead, stampAt, now, rows, fails, change, cliDetail, costUsd }. change is the Change sentence of the summary, or null. */
 export function openPrSpec(d) {
   const min = Math.max(0, Math.round((Date.parse(d.now) - Date.parse(d.stampAt)) / 60000));
+  // The Change sentence replaces the CLI cost line. With no summary for this stamp the CLI line stays.
+  const second = d.change ? `Change: ${clip(d.change, 140)}` : `CLI: ${clip(d.cliDetail ?? 'no CLI result in the stamp', 100)} pre-pr cost ${usd(d.costUsd ?? 0)}.`;
   const lines = [
     `pre-pr passed at ${String(d.head).slice(0, 7)}, ${ageText(min)} ago (${plural(d.rows, 'row')} checked, ${d.fails} failed).`,
-    `CLI: ${clip(d.cliDetail ?? 'no CLI result in the stamp', 100)} pre-pr cost ${usd(d.costUsd ?? 0)}.`,
+    second,
     `Open a draft PR for ${clip(d.branch, 60)} on fork?`,
   ];
   return { header: 'Open PR', question: lines.join('\n'), options: [
@@ -168,7 +171,17 @@ async function capLeft() {
   } catch { return null; }
 }
 
-/** { branch, head, stampHead, stampAt, rows, fails, cliDetail, costUsd, capLeftUsd, now } for open-pr. */
+/** The Change sentence of the summary file, only when the stamp's summary row is PASS and the file is the one the stamp hashed (stamp.summary_sha256). Else null. */
+function readChange(stamp) {
+  try {
+    if (!stamp?.summary_sha256) return null;
+    if (!Array.isArray(stamp.results) || stamp.results.find((r) => r.step === 'summary')?.status !== 'PASS') return null;
+    const text = readFileSync(path.join(topOf(), SUMMARY_REL), 'utf8');
+    return hashOf(text) === stamp.summary_sha256 ? changeOf(text) : null;
+  } catch { return null; }
+}
+
+/** { branch, head, stampHead, stampAt, rows, fails, change, cliDetail, costUsd, capLeftUsd, now } for open-pr. */
 export async function gatherOpenPr({ branch }) {
   const t = branchTarget(branch, process.cwd());
   const stamp = readStamp();
@@ -176,7 +189,7 @@ export async function gatherOpenPr({ branch }) {
   const cli = results.find((r) => r.step === 'coderabbit');
   return {
     branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null, stampAt: stamp?.at ?? null,
-    rows: results.length, fails: results.filter((r) => r.status === 'FAIL').length, cliDetail: cli?.detail ?? null, costUsd: costOfDetail(cli?.detail),
+    rows: results.length, fails: results.filter((r) => r.status === 'FAIL').length, change: readChange(stamp), cliDetail: cli?.detail ?? null, costUsd: costOfDetail(cli?.detail),
     capLeftUsd: await capLeft(), now: new Date().toISOString(),
   };
 }

@@ -83,6 +83,7 @@
  * Exit 2 = bad usage (no --body, or the body file cannot be read). Exit 3 = an internal error (an exception inside the run,
  * for example a missing review-router.config.json); the message goes to stderr.
  * Files (all under the gitignored .claude/cache/):
+ *   pre-pr/summary.md                      the plain summary the session writes first (step 0, lib/pr-summary.mjs); summary_sha256 in the stamp is its hash
  *   pre-pr/stamp.json                      read by the pre-pr-gate hook: { head, branch, at, body_sha256,
  *                                          cr_skipped, cr_skip_reason, cr_docs_only, docs_verified, cr_retry_minutes, cr_finished_runs, results }
  *   pre-pr/cr-runs-<branch>.json           the CLI runs used on this branch (cap 2 runs with new code; each row has newCode). Keyed on the branch
@@ -108,6 +109,7 @@ import { killTree, processChildren } from './lib/proc.mjs';
 import { childEnv, envPrefix, envStep } from './lib/env-step.mjs';
 import { primaryRoot } from '../lib/resolve-deps.mjs';
 import { appendGateRows, gateLogPath, gateRows, logsDir } from './lib/gate-log.mjs';
+import { checkSummary } from './lib/pr-summary.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
@@ -1244,7 +1246,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
@@ -1255,10 +1257,14 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const headRun = git(['rev-parse', 'HEAD']);
   const head = headRun.status === 0 ? headRun.stdout.trim() : null;
   const branch = git(['branch', '--show-current']).stdout.trim();
+  // Step 0: the plain summary the session wrote. A note this week unless the config says fail (pre_pr.summary_mode).
+  const summaryT0 = performance.now();
+  const summary = summaryCheck({ root, head: head ?? '', branch, base, git, mode: cfg.pre_pr?.summary_mode === 'fail' ? 'fail' : 'note' });
+  durations.set(summary.result, Math.round(performance.now() - summaryT0));
   const gitT0 = performance.now();
   const fetched = fetch(root, base);
   if (fetched?.state === 'failed') log(`pre-pr: fetch of ${FORK}/${base} failed (${fetched.detail}); the behind check uses the last-fetched ref`);
-  const results = [...checkGit(git, base, fetched)];
+  const results = [summary.result, ...checkGit(git, base, fetched)];
   // The fetch is the slow part of git:behind, so its time is the fetch plus the three git checks. git:branch and git:clean stay null.
   durations.set(results.find((r) => r.step === 'git:behind') ?? results[0], Math.round(performance.now() - gitT0));
   const changes = head ? measure(() => changedFiles(git, base)) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') };
@@ -1326,7 +1332,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const slim = results.map(({ step, status, detail }) => ({ step, status, detail }));
     const cr = results.find((r) => r.step === 'coderabbit');
     const crSkipped = cr?.status === 'SKIP';
-    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
+    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
   }
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }

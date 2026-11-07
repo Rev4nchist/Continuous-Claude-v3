@@ -61,6 +61,15 @@ out-of-order events, and timers. Each pair is a cell with an `expect`, or `na` w
 Also cover each kind in `KINDS` (stale-read, duplicate, second-entry, timer-overlap, retained-flag):
 name an event that runs it, or give `na` with the reason.
 
+0. Write the plain summary first. Save it as `.claude/cache/pre-pr/summary.md`, one label per line: `Branch`,
+   `Head` (the head sha), `Base`, `Problem`, `Change`, `You will see`, `Risk` (starts with Low, Medium or High)
+   and `Not included`. Write each as a plain line like `Problem: <one sentence>`, with no bullet and no bold.
+   Use 80 words or fewer in all, and 20 words or fewer in a sentence. Name only files in the
+   diff. Mark a reason that is not in the diff or from Dave with `[inferred]`. Use plain words, no harness terms.
+   Paste the same text to Dave in chat as plain text, then start pre-pr in the background. An older Head is fine: pre-pr
+   counts only the branch's own files since then, and 5 or fewer pass. A base merge does not count. Start the PR body with the Problem and Change
+   lines. Pre-pr notes a missing or stale summary and prints a facts line (files, lines added and removed).
+   The Open PR question shows the Change sentence. Dave decides when a bad summary becomes a FAIL.
 1. Run `node scripts/github/pre-pr.mjs --body <draft.md>` from the repo root. Use a clean branch and a
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
    Evidence against the head. It runs one `cr review --agent`. Fix the findings, commit, and run it again.
