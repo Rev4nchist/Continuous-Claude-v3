@@ -97,9 +97,8 @@
  * Known limits: the stamp and the hook stop an accident, not a forged stamp or a PR opened another way.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findOsv as defaultFindOsv, osvAdvisory } from './lib/osv-advisory.mjs';
@@ -108,6 +107,7 @@ import { findZizmor as defaultFindZizmor, zizmorAdvisory } from './lib/zizmor-ad
 import { killTree, processChildren } from './lib/proc.mjs';
 import { childEnv, envPrefix, envStep } from './lib/env-step.mjs';
 import { primaryRoot } from '../lib/resolve-deps.mjs';
+import { appendGateRows, gateLogPath, gateRows, logsDir } from './lib/gate-log.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
@@ -1236,8 +1236,7 @@ function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
 /** One row in the guard decision log (the file the hooks write): the CodeRabbit CLI is not installed, so no CLI review ran. Never throws. */
 export function logCliMissing(entry, env = process.env) {
   try {
-    const home = env.USERPROFILE || env.HOME || os.homedir();
-    const file = env.CCV3_GUARD_DECISIONS_LOG || path.join(home, '.claude', 'logs', 'guard-decisions.jsonl');
+    const file = env.CCV3_GUARD_DECISIONS_LOG || path.join(logsDir(env), 'guard-decisions.jsonl');
     const row = { ts: new Date().toISOString(), hook: 'pre-pr', tool: '', decision: 'cli-missing', reason: String(entry?.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200), session_id: '' };
     mkdirSync(path.dirname(file), { recursive: true });
     appendFileSync(file, `${JSON.stringify(row)}\n`);
@@ -1245,20 +1244,29 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
+  const runId = randomUUID();
+  // Wall time per step, kept beside the results (a WeakMap): a result object, the stamp and --json stay as they were.
+  const durations = new WeakMap();
+  const measure = (fn) => { const t0 = performance.now(); const r = fn(); if (r && typeof r === 'object') durations.set(r, Math.round(performance.now() - t0)); return r; };
+  const measureAsync = async (fn) => { const t0 = performance.now(); const r = await fn(); if (r && typeof r === 'object') durations.set(r, Math.round(performance.now() - t0)); return r; };
   const headRun = git(['rev-parse', 'HEAD']);
   const head = headRun.status === 0 ? headRun.stdout.trim() : null;
   const branch = git(['branch', '--show-current']).stdout.trim();
+  const gitT0 = performance.now();
   const fetched = fetch(root, base);
   if (fetched?.state === 'failed') log(`pre-pr: fetch of ${FORK}/${base} failed (${fetched.detail}); the behind check uses the last-fetched ref`);
   const results = [...checkGit(git, base, fetched)];
-  const changes = head ? changedFiles(git, base) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') };
+  // The fetch is the slow part of git:behind, so its time is the fetch plus the three git checks. git:branch and git:clean stay null.
+  durations.set(results.find((r) => r.step === 'git:behind') ?? results[0], Math.round(performance.now() - gitT0));
+  const changes = head ? measure(() => changedFiles(git, base)) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') };
+  if (head) durations.set(changes.result, durations.get(changes));
   results.push(changes.result);
   const docsVerified = isDocsOnly(changes.paths, cfg);
   const evidenceAt = results.length;
-  results.push(checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg }));
+  results.push(measure(() => checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg })));
   // Fail-fast (Dave, 2026-11-04): the first FAIL stops the rest of the gates, which take minutes. One FAIL does not stop them: an evidence
   // FAIL that only a gate pass can settle (a stale GREEN sha after a clean merge of the base, see greenRewriteCandidate).
   const settledByGates = head && bodyPath && greenRewriteCandidate({ git, base, bodyText, head, evidence: results[evidenceAt] }) ? results[evidenceAt] : null;
@@ -1272,12 +1280,13 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const cause = stopCause();
     results.push(env.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
       : cause ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
-        : runGate(withBase(gate, base), { root, exec, git }));
+        : measure(() => runGate(withBase(gate, base), { root, exec, git })));
   }
   // A stale GREEN sha after a merge of the base: fix the body file once the gates passed on this head.
   const green = head ? updateGreen({ git, base, bodyPath, bodyText, head, paths: changes.paths, config: cfg, results, evidence: results[evidenceAt] }) : null;
   if (green) {
     bodyText = green.bodyText;
+    durations.set(green.evidence, durations.get(results[evidenceAt]));
     results.splice(evidenceAt, 1, green.evidence, green.note);
     log(`pre-pr: ${green.note.detail}`);
   }
@@ -1285,18 +1294,18 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   // The advisories run scanners (osv needs the network). A run that stopped at a FAIL does not start them.
   if (keepGoing || !results.some((r) => r.status === 'FAIL')) {
     // Advisory only (one-week trial): a NOTE line when the diff touches .github/workflows/*, never a FAIL.
-    const zizmor = zizmorAdvisory({ root, paths: changes.paths, bin: findZizmor(), run: zizmorRun });
+    const zizmor = measure(() => zizmorAdvisory({ root, paths: changes.paths, bin: findZizmor(), run: zizmorRun }));
     if (zizmor) results.push(zizmor);
     // Same trial rule. osv runs on every pre-pr that has a tracked lockfile (network); pssa only when an existing .ps1 changed.
-    const osv = osvAdvisory({ root, paths: changes.paths, bin: findOsv(), run: osvRun, lockfiles: osvLockfiles });
+    const osv = measure(() => osvAdvisory({ root, paths: changes.paths, bin: findOsv(), run: osvRun, lockfiles: osvLockfiles }));
     if (osv) results.push(osv);
-    const pssa = pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun });
+    const pssa = measure(() => pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun }));
     if (pssa) results.push(pssa);
   }
   const failedBefore = results.some((r) => r.status === 'FAIL');
-  results.push(failedBefore && !skipCr
+  results.push(await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified }));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified }))));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
@@ -1304,11 +1313,13 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     guardLog({ hook: 'pre-pr', decision: 'cli-missing', reason: crStep.detail });
   }
   // A tree that was already dirty at the start is reported once, by git:clean.
-  if (head !== null && !results.some((r) => r.step === 'git:clean' && r.status === 'FAIL')) results.push(checkStable(git, head));
+  if (head !== null && !results.some((r) => r.step === 'git:clean' && r.status === 'FAIL')) results.push(measure(() => checkStable(git, head)));
   const ok = head !== null && !results.some((r) => r.status === 'FAIL');
   const lines = formatLines(results);
   const bodySha = createHash('sha256').update(String(bodyText ?? '')).digest('hex');
   const logPath = head ? writeLog({ root, now, head, branch, base, bodySha, results, lines }) : null;
+  // One row per step in the append-only gate log. A log problem is swallowed, so it cannot change a verdict or the stamp.
+  try { appendGateRows(gateLogFile ?? gateLogPath(), gateRows({ results, durations, runId, now, branch, head: head ?? '', base })); } catch { /* a log problem never stops the run */ }
   if (existsSync(stampPath)) unlinkSync(stampPath);
   if (ok) {
     mkdirSync(path.dirname(stampPath), { recursive: true });
