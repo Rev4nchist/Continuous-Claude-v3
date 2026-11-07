@@ -4,10 +4,12 @@
  *   parseRenderArgs(argv)        --project <key>, --out <file>, --interactive, and the old positional [out.html]
  *   defaultOut(repo, board)      <repo>/lane-board.html for continuous-claude, <repo>/lane-board-<key>.html for any other board
  *   boardStamp / parseBoardStamp the <meta name="lane-board"> tag a page carries: board, template hash, generated time
+ *   TEMPLATE_FILES, templateHash the generator files a page is rendered from, and the hash of their text (the stamp's template=)
  *   writeAtomic(file, text)      temp file in the same folder, then rename: a reader never sees half a page
  */
-import { renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fnv1a } from './kanban-place.mjs';
 
 const DEFAULT_BOARD = 'continuous-claude';
 const BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -45,6 +47,14 @@ export function parseRenderArgs(argv) {
 export function defaultOut(repo, board) {
   if (!BOARD_KEY_RE.test(String(board))) throw new Error(`'${board}' is not a board key (lowercase letters, digits and dashes)`);
   return join(repo, board === DEFAULT_BOARD ? 'lane-board.html' : `lane-board-${board}.html`);
+}
+
+/** The files a page is rendered from. An edit to any of them must change the template hash. */
+export const TEMPLATE_FILES = ['render-board.mjs', 'render-board-args.mjs', 'board-band-view.mjs', 'kanban-client.js', 'kanban-place.mjs'];
+
+/** What a page was rendered from: the text of TEMPLATE_FILES in `dir`, line endings ignored. A page from an older generator shows a different hash. */
+export function templateHash(dir) {
+  return fnv1a(TEMPLATE_FILES.map((f) => readFileSync(join(dir, f), 'utf8').replace(/\r\n/g, '\n')).join('\n--\n'));
 }
 
 /** The identity tag of a page. Read it back with parseBoardStamp. */

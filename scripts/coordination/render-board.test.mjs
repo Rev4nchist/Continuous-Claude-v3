@@ -28,6 +28,18 @@
  *   - the phone header pins the counters again (the counters sit inside the pinned row), or the Activity feed pushes the page sideways
  *   - the machine-wide sections do not say so
  *   - the folded-project SQL drifts from lane.mjs (the peer rule must match)
+ *   - By band shows a done lane, lists another board's lane, mis-orders the groups or a group, or shows P0 6/5 without the cap warning
+ *   - a NULL band is not Unsorted, or a title or band chip is not HTML-escaped
+ *   - the editable and read-only cards differ (band chip, "rank N"), or still print "prio N"
+ *   - a lane row lacks data-band, data-ord or data-seq; kb-data lacks band
+ *   - a By band row borrows kb-card, lane, detail or chip (breaks paintEdit, the filter, the details toggle)
+ *   - the read-only page loses the By band view, or gains a kanban marker
+ *   - the filter chips are not two groups (state, band), or the view and group buttons use the chip class
+ *   - the inline script is not ES5, or localStorage is read outside try/catch
+ *   - the template hash does not change when a generator file (board-band-view.mjs included) changes, or the page stamp is not that hash
+ *   - the By band intro does not say a drag shows only after the next sync, or the status line and order chip leave the page in one view
+ *   - a band chip count counts open lanes under a label that does not say "open"
+ *   - a By band row grows (bytes beyond id and title), or the page outgrows its size ratchet (the artifact limit is 16 MB)
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,13 +50,16 @@ import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
-import { boardStamp, defaultOut, parseBoardStamp, parseRenderArgs, writeAtomic } from './render-board-args.mjs';
+import { TEMPLATE_FILES, boardStamp, defaultOut, parseBoardStamp, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
 const RENDER = path.join(HERE, 'render-board.mjs');
 const LANE = path.join(HERE, 'lane.mjs');
 const SCRATCH = path.join(HERE, 'scratch-db.mjs');
+// Size ratchets for the band page (see the ratchet note in the band tests). Measured 2026-11-06: test page 136,616 bytes, widest row 232 bytes of markup.
+const ROW_OVERHEAD_MAX = 240;
+const PAGE_BYTES_MAX = 140000;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
 
@@ -260,14 +275,29 @@ describe('render-board.mjs against a scratch database', () => {
         ('zz-rb-a-lane', 'board a lane title', 'zz', 'ready', 'zz-rb-a', NULL, NULL),
         ('zz-rb-a-held', 'board a held title', 'zz', 'active', 'zz-rb-a', 'zz-rb-s-a', now() + interval '30 minutes')`);
       // Priority 1 and 2 ready lanes, and one lane in each other state, to pin column placement and order on the read-only page.
-      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, priority, project_key) VALUES
-        ('zz-rb-a-p2', 'board a ready priority two', 'zz', 'ready', 2, 'zz-rb-a'),
-        ('zz-rb-a-p1', 'board a ready priority one', 'zz', 'ready', 1, 'zz-rb-a'),
-        ('zz-rb-a-blocked', 'board a blocked title', 'zz', 'blocked', 50, 'zz-rb-a'),
-        ('zz-rb-a-backlog', 'board a backlog title', 'zz', 'backlog', 50, 'zz-rb-a'),
-        ('zz-rb-a-review', 'board a review title', 'zz', 'review', 50, 'zz-rb-a'),
-        ('zz-rb-a-done', 'board a done title', 'zz', 'done', 50, 'zz-rb-a'),
-        ('zz-rb-a-long', $1, 'zz', 'backlog', 50, 'zz-rb-a')`, [LONG_TITLE]);
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, priority, project_key, band) VALUES
+        ('zz-rb-a-p2', 'board a ready priority two', 'zz', 'ready', 2, 'zz-rb-a', NULL),
+        ('zz-rb-a-p1', 'board a ready priority one', 'zz', 'ready', 1, 'zz-rb-a', 'P0'),
+        ('zz-rb-a-blocked', 'board a blocked title', 'zz', 'blocked', 50, 'zz-rb-a', NULL),
+        ('zz-rb-a-backlog', 'board a backlog title', 'zz', 'backlog', 50, 'zz-rb-a', NULL),
+        ('zz-rb-a-review', 'board a review title', 'zz', 'review', 50, 'zz-rb-a', NULL),
+        ('zz-rb-a-done', 'board a done title', 'zz', 'done', 50, 'zz-rb-a', 'P0'),
+        ('zz-rb-a-long', $1, 'zz', 'backlog', 50, 'zz-rb-a', NULL)`, [LONG_TITLE]);
+      // Bands. continuous-claude: six P0 (one over the cap of 5), three P1 (a due date, two ranks), two P2 (one title needs escaping),
+      // a done lane that still carries P0. The four older open lanes have no band: they are Unsorted. board a: one P0, plus a done P0.
+      await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, priority, band, due_at, project_key) VALUES
+        ('zz-rb-p0-1', 'p0 one', 'zz', 'ready', 11, 'P0', NULL, 'continuous-claude'),
+        ('zz-rb-p0-2', 'p0 two', 'zz', 'ready', 12, 'P0', NULL, 'continuous-claude'),
+        ('zz-rb-p0-3', 'p0 three', 'zz', 'ready', 13, 'P0', NULL, 'continuous-claude'),
+        ('zz-rb-p0-4', 'p0 four', 'zz', 'backlog', 14, 'P0', NULL, 'continuous-claude'),
+        ('zz-rb-p0-5', 'p0 five', 'zz', 'blocked', 15, 'P0', NULL, 'continuous-claude'),
+        ('zz-rb-p0-6', 'p0 six', 'yy', 'ready', 16, 'P0', NULL, 'continuous-claude'),
+        ('zz-rb-p1-rank20', 'p1 rank twenty', 'zz', 'ready', 20, 'P1', NULL, 'continuous-claude'),
+        ('zz-rb-p1-rank5', 'p1 rank five', 'zz', 'ready', 5, 'P1', NULL, 'continuous-claude'),
+        ('zz-rb-p1-due', 'p1 has a due date', 'yy', 'ready', 99, 'P1', '2026-11-20T00:00:00Z', 'continuous-claude'),
+        ('zz-rb-p2-plain', 'p2 plain', 'zz', 'backlog', 60, 'P2', NULL, 'continuous-claude'),
+        ('zz-rb-p2-xss', '<b>bold</b> "quoted" & done', 'zz', 'backlog', 61, 'P2', NULL, 'continuous-claude'),
+        ('zz-rb-done-p0', 'done lane with a band', 'zz', 'done', 5, 'P0', NULL, 'continuous-claude')`);
       await c.query(`INSERT INTO agentic_os.lane_event (session_id, kind, lane_id, body, project_key) VALUES
         ('zz-rb-s-c', 'note', 'zz-rb-ccv3-lane', 'ccv3 event body', 'continuous-claude'),
         ('zz-rb-s-a', 'note', 'zz-rb-a-lane', 'board a event body', 'zz-rb-a')`);
@@ -642,4 +672,219 @@ describe('render-board.mjs against a scratch database', () => {
     const html = fs.readFileSync(out, 'utf8');
     assert.ok(!html.includes('STALE PAGE') && html.includes('zz-rb-a-lane'));
   });
+
+  // ---------------------------------------------------------------- band view (priority phase 5)
+  describe('band on the page', () => {
+    let html = '';
+    let ro = '';
+    before(() => {
+      const out = path.join(E2E.tmp, 'band.html');
+      assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+      html = fs.readFileSync(out, 'utf8');
+      const roOut = path.join(E2E.tmp, 'band-ro.html');
+      assert.equal(renderPage(['--project', 'zz-rb-a', '--out', roOut]).code, 0);
+      ro = fs.readFileSync(roOut, 'utf8');
+    });
+
+    /** The By band block of a page: from its opening tag to the end marker. */
+    const bb = (page) => /<div class="bb" id="bb">[\s\S]*?<!-- \/bb -->/.exec(page)?.[0] ?? '';
+    const group = (page, key) => new RegExp(`<div class="bb-grp[^"]*" data-band="${key}">[\\s\\S]*?(?=<div class="bb-grp|<!-- /bb -->)`).exec(bb(page))?.[0] ?? '';
+    const rowIds = (page, key) => [...group(page, key).matchAll(/<li class="bb-row"[^>]*><span class="bb-id mono">([^<]+)</g)].map((m) => m[1]);
+    const rowOf = (page, id) => bb(page).split('<li class="bb-row"').find((r) => r.includes(`<span class="bb-id mono">${id}<`)) ?? '';
+
+    it('By band is the default view, with four groups in the order P0, P1, P2, Unsorted', () => {
+      assert.match(html, /<section id="priorities"[^>]*data-view="band"/);
+      assert.deepEqual([...bb(html).matchAll(/<div class="bb-grp[^"]*" data-band="(\w+)">/g)].map((m) => m[1]), ['P0', 'P1', 'P2', 'none']);
+      assert.match(html, /<button class="vt" type="button" data-g="view" data-v="band" aria-pressed="true">By band<\/button>/);
+      assert.match(html, /<button class="vt" type="button" data-g="view" data-v="columns" aria-pressed="false">Columns<\/button>/);
+    });
+
+    it('a group lists its open lanes in the shared order: due date first, then rank, then id', () => {
+      assert.deepEqual(rowIds(html, 'P0'), ['zz-rb-p0-1', 'zz-rb-p0-2', 'zz-rb-p0-3', 'zz-rb-p0-4', 'zz-rb-p0-5', 'zz-rb-p0-6']);
+      assert.deepEqual(rowIds(html, 'P1'), ['zz-rb-p1-due', 'zz-rb-p1-rank5', 'zz-rb-p1-rank20']);
+      assert.deepEqual(rowIds(html, 'P2'), ['zz-rb-p2-plain', 'zz-rb-p2-xss']);
+    });
+
+    it('a NULL band is Unsorted, and the group counts match the rows', () => {
+      assert.deepEqual(rowIds(html, 'none').sort(), ['zz-rb-ccv3-held', 'zz-rb-ccv3-lane', 'zz-rb-ccv3-qend', 'zz-rb-ccv3-qhold']);
+      for (const [key, n] of [['P0', 6], ['P1', 3], ['P2', 2], ['none', 4]]) {
+        assert.equal((group(html, key).match(/<li class="bb-row"/g) || []).length, n, key);
+      }
+    });
+
+    it('P0 shows 6/5 with the over class and the words "over the cap of 5"; a group under the cap shows neither', () => {
+      const p0 = group(html, 'P0');
+      assert.match(p0, /<div class="bb-grp bb-over" data-band="P0">/);
+      assert.ok(p0.includes('6/5') && p0.includes('over the cap of 5'));
+      assert.ok(!group(html, 'P1').includes('bb-over') && !group(html, 'P1').includes('over the cap'));
+      assert.ok(!group(html, 'P1').includes('/5'), 'only P0 has a cap');
+      assert.ok(group(ro, 'P0').includes('1/5') && !group(ro, 'P0').includes('bb-over'));
+    });
+
+    it('a done lane is in no By band row, even with band P0', () => {
+      assert.ok(bb(html).includes('zz-rb-p0-1'), 'By band has rows to test against');
+      assert.ok(!bb(html).includes('zz-rb-done-p0'));
+      assert.ok(html.includes('zz-rb-done-p0'), 'the done lane stays in the Lanes list');
+      assert.ok(!bb(ro).includes('zz-rb-a-done'));
+    });
+
+    it('an empty group says so in words', () => {
+      assert.match(group(ro, 'P2'), /Nothing in P2\./);
+      assert.match(group(ro, 'P1'), /Nothing in P1\./);
+    });
+
+    it('By band lists the lanes of its own board only', () => {
+      assert.ok(!bb(ro).includes('zz-rb-ccv3') && !bb(ro).includes('zz-rb-p0-1'), 'CCv3 leaked into board a By band');
+      assert.deepEqual(rowIds(ro, 'P0'), ['zz-rb-a-p1']);
+      assert.ok(!bb(html).includes('zz-rb-a-'), 'board a leaked into the CCv3 By band');
+    });
+
+    it('titles are escaped in every By band row, card and lane row', () => {
+      assert.ok(!html.includes('<b>bold</b>'), 'a raw <b> from a title reached the page');
+      assert.ok(html.includes('&lt;b&gt;bold&lt;/b&gt; &quot;quoted&quot; &amp; done'));
+      assert.ok(bb(html).includes('&lt;b&gt;bold&lt;/b&gt;'));
+    });
+
+    it('a By band row never takes a class the lane list, the filter or the card editor looks up', () => {
+      const rows = bb(html);
+      assert.ok(rows.includes('class="bb-row"'));
+      for (const cls of ['kb-card', 'class="lane', 'class="detail', 'class="chip', 'kb-head', 'kb-more', 'data-col=']) {
+        assert.ok(!rows.includes(cls), `By band uses ${cls}`);
+      }
+    });
+
+    it('a By band row shows the state, the track and "rank N", and no chip: its group heading names the band', () => {
+      const row = rowOf(html, 'zz-rb-p1-rank5');
+      assert.ok(row, 'row not found');
+      assert.match(row, /data-state="ready"/);
+      assert.match(row, /rank 5</);
+      assert.match(row, />zz</);
+      assert.ok(!row.includes('bchip'), 'a chip repeats the group heading in every row');
+      assert.ok(!row.includes('title='), 'a title attribute repeats text the row already shows');
+    });
+
+    it('both card branches carry the band chip and "rank N", and none says "prio N"', () => {
+      const card = (page, id) => new RegExp(`<li class="card kb-card[^"]*" data-id="${id}"[\\s\\S]*?</li>`).exec(page)?.[0] ?? '';
+      const edit = card(html, 'zz-rb-p0-1');
+      const read = card(ro, 'zz-rb-a-p1');
+      for (const [name, c] of [['editable', edit], ['read-only', read]]) {
+        assert.ok(c, `${name} card not found`);
+        assert.match(c, /<span class="kb-band" data-band="P0"/, name);
+        assert.match(c, /<span class="kb-prio mono" title="Rank inside the band \(lane\.priority\)">rank \d+<\/span>/, name);
+      }
+      assert.ok(!/>prio \d/.test(html) && !/>prio \d/.test(ro), 'prio N is still on the page');
+      assert.match(edit, /title="Rank in this column"/, 'the position circle keeps its own title');
+    });
+
+    it('every lane row has data-band, data-ord and data-seq; the order index counts done lanes', () => {
+      const rows = [...html.matchAll(/<button class="lane[^"]*"[^>]*>/g)].map((m) => m[0]);
+      assert.ok(rows.length > 12);
+      for (const r of rows) assert.match(r, /data-band="(P0|P1|P2|none)" data-ord="\d+" data-seq="\d+"/);
+      const ordOf = (id) => {
+        const body = new RegExp(`<button class="lane[^"]*"[^>]*>\\s*<span class="stripe[^"]*"></span>\\s*<span class="nm"><span class="bchip"[^>]*>[^<]*</span>${id}<`).exec(html);
+        assert.ok(body, `lane row of ${id} not found`);
+        return Number(/data-ord="(\d+)"/.exec(body[0])[1]);
+      };
+      const seqs = rows.map((r) => Number(/data-seq="(\d+)"/.exec(r)[1]));
+      assert.deepEqual(seqs, seqs.map((_, i) => i), 'data-seq is the DOM order 0..n-1');
+      assert.ok(ordOf('zz-rb-p0-1') < ordOf('zz-rb-p1-due'), 'a P0 lane sorts before a P1 lane');
+      assert.ok(ordOf('zz-rb-done-p0') < ordOf('zz-rb-p1-due'), 'a done lane keeps its band slot in the order index');
+    });
+
+    it('kb-data carries the band of each lane (null for none), and the placeLanes input keys stay', () => {
+      const data = JSON.parse(/<script type="application\/json" id="kb-data">([\s\S]*?)<\/script>/.exec(html)[1].replace(/\\u003c/g, '<'));
+      const by = Object.fromEntries(data.map((l) => [l.id, l.band]));
+      assert.equal(by['zz-rb-p0-1'], 'P0');
+      assert.equal(by['zz-rb-p2-plain'], 'P2');
+      assert.equal(by['zz-rb-ccv3-lane'], null);
+      for (const l of data) for (const k of ['id', 'state', 'priority']) assert.ok(k in l);
+    });
+
+    it('the filter has two chip groups: state chips and band chips with open counts; the view buttons are not chips', () => {
+      const chips = [...html.matchAll(/<button class="chip" data-g="(\w+)" data-f="(\w+)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2], m[3]]);
+      assert.deepEqual(chips.filter((c) => c[0] === 'state').map((c) => c[1]), ['open', 'ready', 'held', 'blocked', 'all']);
+      assert.deepEqual(chips.filter((c) => c[0] === 'band'), [['band', 'P0', 'P0 6 open'], ['band', 'P1', 'P1 3 open'], ['band', 'P2', 'P2 2 open'], ['band', 'none', 'Unsorted 4 open']]);
+      assert.ok(!/class="chip"[^>]*data-g="(view|group)"/.test(html) && !/class="vt"[^>]*data-g="(state|band)"/.test(html));
+      assert.match(html, /data-g="group" data-v="track" aria-pressed="true">Track</);
+      assert.match(html, /data-g="group" data-v="band" aria-pressed="false">Band</);
+    });
+
+    it('the read-only page has the By band view and the view toggle, and still no kanban script or marker', () => {
+      assert.match(ro, /<section id="priorities" class="kb-ro"[^>]*data-view="band"/);
+      assert.ok(bb(ro).includes('class="bb-row"'));
+      assert.ok(ro.includes('data-g="view" data-v="columns"'));
+      for (const marker of ['function placeLanes', 'id="kb-data"', 'class="kb-grip"', 'class="kb-head"', 'class="kb-btn kb-save"', 'claude.use']) {
+        assert.ok(!ro.includes(marker), `the read-only page gained ${marker}`);
+      }
+    });
+
+    it('the page prints the queries behind By band and the P0 count', () => {
+      assert.match(bb(html), /FROM agentic_os\.lane/);
+      assert.match(bb(html), /state &lt;&gt; 'done'/);
+      assert.match(bb(html), /CASE l\.band WHEN 'P0' THEN 0/);
+      assert.match(bb(html), /SELECT count\(\*\) FROM agentic_os\.lane WHERE project_key = 'continuous-claude' AND state &lt;&gt; 'done' AND band = 'P0'/);
+    });
+
+    it('the page script is ES5 and guards localStorage', () => {
+      const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+      const inline = blocks.find((b) => b.includes("'lb-view'"));
+      assert.ok(inline, 'the inline script with the view code is missing');
+      for (const b of blocks) {
+        const code = b.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''); // comments may name `db` in backticks
+        assert.doesNotMatch(code, /=>|\bconst\s|\blet\s|`|\.\.\.[\w(\[]/, 'ES6 syntax in a page script');
+      }
+      const kbCode = KB_SCRIPT_RE.exec(html)[0].replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      assert.ok(!kbCode.includes('localStorage'), 'localStorage in the kanban script');
+      // Every read and write sits inside try { }.
+      for (const m of inline.matchAll(/localStorage/g)) {
+        const before = inline.slice(0, m.index);
+        assert.ok(before.lastIndexOf('try {') > before.lastIndexOf('} catch'), 'localStorage used outside try/catch');
+      }
+      assert.ok(inline.includes("'lb-group'"));
+    });
+
+    it('the template hash changes when a generator file changes, board-band-view.mjs included, and the page stamp is that hash', () => {
+      assert.ok(TEMPLATE_FILES.includes('board-band-view.mjs'));
+      assert.equal(parseBoardStamp(html).template, templateHash(HERE), 'the stamp is not the hash of the generator files');
+      const copyOf = () => {
+        const dir = fs.mkdtempSync(path.join(E2E.tmp, 'tpl-'));
+        for (const f of TEMPLATE_FILES) fs.copyFileSync(path.join(HERE, f), path.join(dir, f));
+        return dir;
+      };
+      assert.equal(templateHash(copyOf()), templateHash(HERE), 'a plain copy hashes the same');
+      for (const f of TEMPLATE_FILES) {
+        const edited = copyOf();
+        fs.appendFileSync(path.join(edited, f), '\n// changed\n');
+        assert.notEqual(templateHash(edited), templateHash(HERE), `editing ${f} does not change the hash`);
+      }
+    });
+
+    it('the By band intro says a drag shows only after the next sync; the status line and order chip sit outside both views', () => {
+      assert.match(html, /<section id="priorities"[^>]*>[\s\S]*?From the last render; a drag shows here after the next sync\.[\s\S]*?<div class="bb" id="bb">/);
+      const at = (needle) => html.indexOf(needle);
+      assert.ok(at('id="kb-status"') > 0 && at('id="kb-order"') > 0);
+      assert.ok(at('id="kb-status"') < at('<div class="bb" id="bb">') && at('id="kb-order"') < at('<div class="bb" id="bb">'), 'the status line sits above both views');
+      assert.ok(at('id="kb-status"') < at('id="kb-board"') && at('id="kb-order"') < at('id="kb-board"'));
+    });
+
+    // Size ratchet. The artifact limit is 16 MB. The live page was 997,523 bytes on 2026-11-06 (217 lanes) before the row shrink and 983,024 after it
+    // against about 895,500 for main without the band view. The limits below sit just above the size after the band work,
+    // so growth is a decision, not an accident. Raise one only with a reason in the commit. They are not the artifact limit.
+    it('a By band row carries no bytes beyond its id, its title and a few short fields', () => {
+      const rows = bb(html).split('<li class="bb-row"').slice(1).map((r) => r.slice(0, r.indexOf('</li>') + 5));
+      assert.ok(rows.length >= 15);
+      for (const r of rows) {
+        const id = /class="bb-id mono">([^<]*)</.exec(r)[1];
+        const title = /class="bb-t">([^<]*)</.exec(r)[1];
+        const overhead = r.length + '<li class="bb-row"'.length - id.length - title.length;
+        assert.ok(overhead <= ROW_OVERHEAD_MAX, `row of ${id} has ${overhead} bytes of markup (limit ${ROW_OVERHEAD_MAX}): ${r}`);
+      }
+    });
+
+    it('the continuous-claude test page stays under its size ratchet', () => {
+      const bytes = Buffer.byteLength(html);
+      assert.ok(bytes <= PAGE_BYTES_MAX, `page is ${bytes} bytes, ratchet ${PAGE_BYTES_MAX}`);
+    });
+  });
+
 });
