@@ -468,6 +468,8 @@ var STORE_CODE_RE = /[\\/]lib[\\/]decisions\.mjs/i;
 var STORE_FN_RE = /\b(?:decisionRecord|offerWrite|decisionUse|missBump)\b/;
 var WRITE_SIGNAL_RE = /(?<![\d&])>|\b(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|tee|sed|mv|cp|rm|del|truncate|dd|ln)\b|\b(?:writeFile|appendFile|writeFileSync|rename)/i;
 var CODE_SIGNAL_RE = /\bnode(?:\.exe)?\b[^|;&\n]*?(?:\s-e\b|\s--eval\b|\s-p\b|\s--print\b|--input-type)|\bimport\s*\(|\brequire\s*\(/i;
+var READ_ONLY_CODE_RE = /\b(?:readFileSync|readFile|require)\s*\(/;
+var CODE_CAN_WRITE_RE = /write|append|copy|rename|unlink|\brm|truncate|open|link|mkdir|chmod|chown|utimes|stream|child_process|spawn|exec|eval|\bFunction\b|import\s*\(|process\.binding|decisions\.mjs|decisionRecord|offerWrite|decisionUse|missBump|fetch|https?:/i;
 var USE_TAP_RE = /land-decision\.mjs["']?\s+["']?use\b/i;
 var CHECKPOINT_RUN_RE = /pr-checkpoint\.mjs\b(?=[^\n]*--json)(?=[^\n]*--pr\b)/i;
 var LOOP_RE = /\b(?:for|foreach|while|until|xargs|seq)\b|ForEach-Object|\d+\.\.\d+|%\s*\{/i;
@@ -477,7 +479,11 @@ function writesStoreText(text, deps) {
   const lower = norm(flat.replace(readCopyRe(deps), " "));
   const names = [lower, squashQuotes(lower)].some((t) => STORE_TEXT_RE.test(t)) || lower.includes(norm(decisionsPath2(deps.env)));
   const code = CODE_SIGNAL_RE.test(text);
-  if (names || STORE_CODE_RE.test(text)) return WRITE_SIGNAL_RE.test(flat) || code;
+  if (names || STORE_CODE_RE.test(text)) {
+    if (WRITE_SIGNAL_RE.test(flat)) return true;
+    if (!code) return false;
+    return !(names && !STORE_CODE_RE.test(text) && READ_ONLY_CODE_RE.test(text) && !CODE_CAN_WRITE_RE.test(text));
+  }
   return STORE_FN_RE.test(text) && code;
 }
 var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;

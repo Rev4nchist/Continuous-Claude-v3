@@ -213,6 +213,16 @@ describe('G4 the model writes the store', () => {
     expect(denied(pwsh(`Get-Content ${storeFile} -Raw`))).toBe(false);
     expect(denied(bash('rg decisionRecord scripts/github'))).toBe(false);
   });
+  it('passes a node -e that only READS the store, and still denies node code that can write it', () => {
+    expect(denied(bash(`node -e "const d=require('${storeFile}');console.log(Object.keys(d))"`))).toBe(false);
+    expect(denied(bash(`node -e "console.log(require('fs').readFileSync('${storeFile}','utf8').length)"`))).toBe(false);
+    expect(denied(bash(`node -e "require('fs').writeFileSync('${storeFile}','{}')"`))).toBe(true);
+    expect(denied(bash(`node -e "require('fs').createWriteStream('${storeFile}').end('{}')"`))).toBe(true);
+    expect(denied(bash(`node -e "require('fs').copyFileSync('/tmp/x.json','${storeFile}')"`))).toBe(true);
+    expect(denied(bash(`node -e "const f=require('fs').openSync('${storeFile}','w');require('fs').closeSync(f)"`))).toBe(true);
+    expect(denied(bash(`node -e "require('child_process').execSync('echo {} > ${storeFile}')"`))).toBe(true);
+    expect(denied(bash(`node -e "import('./scripts/github/lib/decisions.mjs').then(m=>m.decisionRecord({}))"`))).toBe(true);
+  });
   it('passes a copy that only READS the store (the store is the first source) and still denies a copy that writes it', () => {
     expect(denied(bash(`cp ${storeFile} /tmp/before.json`))).toBe(false);
     expect(denied(bash(`cp -f ${storeFile} /tmp/before.json`))).toBe(false);
