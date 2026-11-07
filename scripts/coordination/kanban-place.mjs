@@ -259,4 +259,36 @@ function mergeUnknownColumns(doc, columns, lanes) {
   return out;
 }
 
-export { placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns };
+/**
+ * How many open lanes stay above this lane in By band after a Do next: lanes with state other than done
+ * whose band is better. P0 is best, then P1, then P2, then Unsorted (no band, or a band this page does not know).
+ * An unknown id gives 0. A lane never counts itself, so Unsorted counts every banded open lane.
+ *
+ * lanes : [{ id, state, band }] every lane the page knows.
+ */
+function bandAhead(lanes, id) {
+  var order = { P0: 0, P1: 1, P2: 2 };
+  var rankOf = function (band) { return Object.prototype.hasOwnProperty.call(order, band) ? order[band] : 3; };
+  if (!Array.isArray(lanes)) return 0;
+  var mine = -1;
+  var i;
+  for (i = 0; i < lanes.length; i++) {
+    if (lanes[i] && lanes[i].id === id) { mine = rankOf(lanes[i].band); break; }
+  }
+  if (mine < 0) return 0;
+  var n = 0;
+  for (i = 0; i < lanes.length; i++) {
+    if (lanes[i] && lanes[i].id !== id && lanes[i].state !== 'done' && rankOf(lanes[i].band) < mine) n++;
+  }
+  return n;
+}
+
+/**
+ * Does the card show "Done, waiting for sync"? The saved card says done, Dave changed it after the last sync,
+ * and the lane is not done yet. After the sync, or on a lane that is done, the chip is gone.
+ */
+function doneChip(doc, laneState) {
+  return isPending(doc) && doc.status === 'done' && laneState !== 'done';
+}
+
+export { placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip };

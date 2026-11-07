@@ -531,3 +531,27 @@ test('reopen then plan again: the ranks hold, no second action', () => {
   assert.deepEqual(next.map((l) => [l.id, l.state, l.priority]), [['a', 'ready', 1], ['d', 'ready', 2]]);
   assert.deepEqual(plan(input, next).actions, []);
 });
+
+// ---- the phone page's Do next, Done and Undo write shapes (PR-C). The sync is unchanged: these pin what it does with them.
+
+test('Do next plus a Done card: the moved lane and its neighbours get priorities, the Done lane gets one state action and no rank', () => {
+  const lanes = [lane('a', 'ready', 1), lane('x', 'ready', 2), lane('b', 'backlog', 5)];
+  // b went to Next index 0 (Do next); x was marked done and stays in its column.
+  const p = plan({ board: board({ next: ['b', 'a', 'x'] }), cards: [card('x', { status: 'done' })] }, lanes);
+  assert.deepEqual(ranks(p), { b: 1, a: 2 });
+  assert.deepEqual(kinds(p).filter((k) => k.startsWith('x:')), ['x:state:ready->done']);
+  assert.ok(!p.actions.some((a) => a.laneId === 'b' && a.kind === 'state'), 'Do next changed the state of b');
+});
+
+test('a card that was Done and is now status null with a note: the note applies and no state action follows', () => {
+  const lanes = [lane('d', 'done', 50)];
+  const p = plan({ board: null, cards: [card('d', { status: null, note: 'back on it' })] }, lanes);
+  assert.deepEqual(kinds(p), ['d:note:null->Dave (kanban): back on it']);
+});
+
+test('a status null card on a lane a session moved gives no state action: Undo never forces the lane back', () => {
+  const lanes = [lane('a', 'ready', 1)];
+  const p = plan({ board: null, cards: [card('a', { status: null })] }, lanes);
+  assert.deepEqual(p.actions, []);
+  assert.equal(result(p, 'a').syncResult, 'no change');
+});

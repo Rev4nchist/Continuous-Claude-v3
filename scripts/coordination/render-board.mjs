@@ -29,9 +29,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
+import { stripClientComments } from './kanban-strip.mjs';
 import {
   placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
-  boardMismatch, boardWriteKind, mergeUnknownColumns,
+  boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip,
 } from './kanban-place.mjs';
 import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
@@ -356,9 +357,9 @@ const kbCard = (l, movable, rank, col, ro = false) => {
         </div>
       </div>
       ${movable ? `<div class="kb-ctl">
-        <button class="kb-btn kb-up" type="button" aria-label="Move ${esc(l.id)} up" disabled>Up</button>
-        <button class="kb-btn kb-dn" type="button" aria-label="Move ${esc(l.id)} down" disabled>Down</button>
-        <label class="kb-mv">Move to <select class="kb-to" aria-label="Move ${esc(l.id)} to column" disabled>${KB_COLS.map(([k, name]) => `<option value="${k}"${k === col ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
+        <button class="kb-btn kb-next" type="button" aria-label="Do next: ${esc(l.id)}" disabled>Do next</button>
+        <button class="kb-btn kb-done" type="button" aria-label="Mark ${esc(l.id)} done" disabled>Done</button>
+        <label class="kb-mv">Move to <select class="kb-to" aria-label="Move ${esc(l.id)} to" disabled><option value="" selected>Move to…</option></select></label>
       </div>` : ''}
     </li>`;
 };
@@ -407,10 +408,13 @@ const VIEW_BAR = `<div class="vt-bar" role="group" aria-label="Priorities view">
 // The client script is plain ES5 text: placeLanes' own source, then the page code.
 // Only the default board's page carries the kanban client and its script. Another board's page has a static Priorities section
 // (kbColumn with ro) and no script: Details uses <details>, the columns do not collapse, nothing saves.
-const kbClient = KANBAN ? readFileSync(join(HERE, 'kanban-client.js'), 'utf8') : '';
-if (/<\/script/i.test(kbClient)) throw new Error('kanban-client.js must not contain a closing script tag');
+const kbClientSource = KANBAN ? readFileSync(join(HERE, 'kanban-client.js'), 'utf8') : '';
+if (/<\/script/i.test(kbClientSource)) throw new Error('kanban-client.js must not contain a closing script tag');
+// The page carries the code, not its comments (about 7 KB of the file): the page is near its size ratchet.
+// kanban-strip.mjs removes whole-line comments only and throws when anything is left that could hide a comment marker.
+const kbClient = KANBAN ? stripClientComments(kbClientSource) : '';
 // KB_BOARD names the board that owns this page: the client stamps it on every save and refuses a saved order stamped with another.
-const kbScript = KANBAN ? `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns].map((f) => f.toString()).join('\n')}
+const kbScript = KANBAN ? `${[placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip].map((f) => f.toString()).join('\n')}
 var KB_BOARD = ${JSON.stringify(KEY).replace(/</g, '\\u003c')};
 ${kbClient}` : '';
 
@@ -679,13 +683,17 @@ const html = `${STAMP}
   .kb-saved[data-k="crit"] { color:var(--crit); }
   .kb-why { margin:0; color:var(--faint); font:400 10.5px/1.4 var(--mono); }
   .kb-why:empty { display:none; }
-  .kb-ctl { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:9px; }
+  .kb-ctl { display:flex; flex-wrap:wrap; align-items:flex-end; gap:6px; margin-top:9px; }
   .kb-btn, .kb-to { min-height:30px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
     color:var(--ink); font:500 11px/1 var(--mono); cursor:pointer; }
   .kb-btn:hover:not(:disabled), .kb-to:hover:not(:disabled) { border-color:var(--muted); }
   .kb-btn:disabled, .kb-to:disabled { color:var(--faint); cursor:not-allowed; opacity:.6; }
-  .kb-mv { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1 1 100%; min-width:0; color:var(--faint); font:500 10.5px/1 var(--mono); }
+  .kb-mv { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1 1 110px; min-width:0; color:var(--muted); font:500 10.5px/1 var(--mono); }
   .kb-to { width:100%; min-width:0; }
+  /* The flag above the buttons: Done chip with Undo, a failed write, or the note of the last move. Made by the page script. */
+  .kb-flag { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin-top:9px; color:var(--muted); font:500 11px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .kb-flag[hidden], .kb-undo[hidden] { display:none; }
+  .kb-flag[data-k="crit"] { color:var(--crit); }
   /* Columns: 1 up to 720px, 3 (two rows) from 721px, 5 from 1360px. */
   @media (min-width:1360px) { .kb-board { grid-template-columns:repeat(5,minmax(0,1fr)); } }
   /* From 721px each column scrolls inside itself. The head is outside the list, so it stays in view. The phone scrolls the page. */
@@ -788,7 +796,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
   ${KANBAN ? `<section id="priorities" aria-labelledby="kb-title" data-view="band">
     <div class="sec-head">
       <h2 id="kb-title">Priorities</h2>
-      <p>By band lists open lanes by importance, P0 first. Columns is the drag board. Drag or use Move to reorder. Your order saves to this board and Claude reads it.</p>
+      <p>By band lists open lanes by importance, P0 first. Columns is the drag board. Drag, or use Do next and Move to, to reorder. Your order saves to this board and Claude reads it.</p>
     </div>
     ${VIEW_BAR}
     <div class="kb-bar">

@@ -47,9 +47,11 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
+import { stripClientComments } from './kanban-strip.mjs';
 import { TEMPLATE_FILES, boardStamp, defaultOut, parseBoardStamp, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -434,6 +436,7 @@ describe('render-board.mjs against a scratch database', () => {
     for (const marker of [
       'function placeLanes', 'claude.use', 'kanban/board', 'onSnapshot', 'id="kb-data"', 'id="kb-order"', 'id="kb-live"',
       'id="kb-status"', 'class="kb-to"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-up"',
+      'class="kb-btn kb-next"', 'class="kb-btn kb-done"', "'kb-btn kb-undo'", 'class="kb-ctl"', 'class="kb-flag"',
       'class="kb-edit"', 'class="kb-more"', 'class="kb-head"',
     ]) {
       assert.ok(!html.includes(marker), `a read-only page must not carry ${marker}`);
@@ -445,7 +448,7 @@ describe('render-board.mjs against a scratch database', () => {
     assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
     const html = fs.readFileSync(out, 'utf8');
     for (const marker of [
-      'Drag or use Move to', 'class="kb-grip"', 'class="kb-to"', 'class="kb-btn kb-up"', 'id="kb-order"', 'id="kb-data"',
+      'Drag, or use Do next and Move to, to reorder.', 'class="kb-grip"', 'class="kb-to"', 'class="kb-btn kb-next"', 'class="kb-btn kb-done"', 'id="kb-order"', 'id="kb-data"',
       'function placeLanes', 'claude.use', 'kanban/board', 'class="kb-head"', 'class="kb-more"',
     ]) {
       assert.ok(html.includes(marker), `the CCv3 page lost ${marker}`);
@@ -455,6 +458,30 @@ describe('render-board.mjs against a scratch database', () => {
     }
   });
 
+  it('the Columns cards carry Do next, Done and Move to with one placeholder option; By band, In progress and the old Up and Down carry none', () => {
+    const out = path.join(E2E.tmp, 'ccv3-buttons.html');
+    assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+    const html = fs.readFileSync(out, 'utf8');
+    const columns = /<div class="kb-board" id="kb-board">([\s\S]*?)<script type="application\/json" id="kb-data">/.exec(html)[1];
+    const cut = columns.indexOf('data-col="progress"');
+    const cardsIn = (part) => part.split('<li class="card kb-card"').slice(1);
+    const movable = cardsIn(columns.slice(0, cut));
+    assert.ok(movable.length >= 4, 'the test page has movable cards');
+    for (const c of movable) {
+      const id = /data-id="([^"]+)"/.exec(c)[1];
+      assert.ok(c.includes('<button class="kb-btn kb-next" type="button" aria-label="Do next: ' + id + '" disabled>Do next</button>'), id + ': Do next');
+      assert.ok(c.includes('<button class="kb-btn kb-done" type="button" aria-label="Mark ' + id + ' done" disabled>Done</button>'), id + ': Done');
+      const select = /<select class="kb-to"[^>]*>([\s\S]*?)<\/select>/.exec(c)[1];
+      assert.equal(select, '<option value="" selected>Move to\u2026</option>', id + ': the select holds more than its placeholder');
+      assert.ok(!c.includes('kb-up') && !c.includes('kb-dn'), id + ': Up or Down is back');
+    }
+    const progress = columns.slice(cut);
+    assert.ok(progress.includes('kb-card') && !progress.includes('kb-ctl'), 'a card that a session holds has controls');
+    const bb = /<div class="bb" id="bb">[\s\S]*?<!-- \/bb -->/.exec(html)[0];
+    assert.ok(!/kb-next|kb-done|kb-to|kb-undo|<button/.test(bb), 'By band has a control');
+    assert.ok(!html.includes('class="kb-flag"') && !html.includes('class="kb-btn kb-undo"'), 'the flag and Undo are made by the page script, not drawn by the server');
+  });
+
   it('--interactive on a foreign board gives kb-data with only that board\'s lanes, every interactive marker, and keeps the board\'s name in the title and masthead', () => {
     const out = path.join(E2E.tmp, 'a-interactive.html');
     const r = renderPage(['--project', 'zz-rb-a', '--interactive', '--out', out]);
@@ -462,7 +489,7 @@ describe('render-board.mjs against a scratch database', () => {
     const html = fs.readFileSync(out, 'utf8');
     for (const marker of [
       'function placeLanes', 'claude.use', 'kanban/board', 'onSnapshot', 'id="kb-data"', 'id="kb-order"', 'id="kb-live"', 'id="kb-status"',
-      'class="kb-to"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-up"', 'class="kb-edit"',
+      'class="kb-to"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-next"', 'class="kb-btn kb-done"', 'class="kb-edit"',
       'class="kb-more"', 'class="kb-head"', 'Your order saves to this board',
     ]) {
       assert.ok(html.includes(marker), `an interactive foreign page must carry ${marker}`);
@@ -518,7 +545,7 @@ describe('render-board.mjs against a scratch database', () => {
       const script = KB_SCRIPT_RE.exec(html)?.[0];
       assert.ok(script, `${board}: the kanban script block is missing`);
       assert.ok(script.includes(`var KB_BOARD = "${board}";`), `${board}: the page does not name its board`);
-      for (const helper of ['boardMismatch', 'boardWriteKind', 'mergeUnknownColumns']) {
+      for (const helper of ['boardMismatch', 'boardWriteKind', 'mergeUnknownColumns', 'bandAhead', 'doneChip']) {
         assert.ok(script.includes(`function ${helper}(`), `${board}: the page calls ${helper} but does not inline it`);
       }
       assert.ok(script.indexOf('var KB_BOARD') < script.indexOf('(function () {'), 'KB_BOARD must come before the client');
@@ -841,6 +868,23 @@ describe('render-board.mjs against a scratch database', () => {
         assert.ok(before.lastIndexOf('try {') > before.lastIndexOf('} catch'), 'localStorage used outside try/catch');
       }
       assert.ok(inline.includes("'lb-group'"));
+    });
+
+    it('the page script ships without the comments of kanban-client.js, and what is left still compiles', () => {
+      const script = KB_SCRIPT_RE.exec(html)[0].replace(/^<script>\n|<\/script>$/g, '');
+      assert.doesNotMatch(script, /^[ \t]*\/\//m, 'a whole-line comment is on the page');
+      assert.ok(!script.includes('/*'), 'a block comment is on the page');
+      assert.doesNotThrow(() => new vm.Script(script), 'the stripped script does not compile');
+    });
+
+    it('the page ships exactly the client that kanban-strip.mjs returns, and the stripper is one of the generator files', () => {
+      assert.ok(TEMPLATE_FILES.includes('kanban-strip.mjs'), 'a change to the stripper would not change the page stamp');
+      const raw = fs.readFileSync(path.join(HERE, 'kanban-client.js'), 'utf8');
+      assert.ok(KB_SCRIPT_RE.exec(html)[0].includes(stripClientComments(raw)), 'the page script is not the stripped client');
+    });
+
+    it('the Move to caption uses the muted ink, not the faint one (faint is below 4.5:1 on the card)', () => {
+      assert.match(html, /\.kb-mv \{[^}]*color:var\(--muted\)/);
     });
 
     it('the template hash changes when a generator file changes, board-band-view.mjs included, and the page stamp is that hash', () => {
