@@ -203,6 +203,48 @@ test('CO1: a scripts/coordination change runs the same coordination test files a
   assert.equal(ids(gatesFor(['docs/x.md'], REPO_ROOT)).some((id) => id.startsWith('coordination-')), false);
 });
 
+// ---------- dependency routing: a path that feeds a gate selects it, even when the diff never touches that gate's own folder ----------
+
+test('GR1: a hooks dependency (store link script, hooks package files, tsconfig, any workflow) runs hooks-build and hooks-vitest (#352 shipped a stale dist because none ran)', async () => {
+  for (const p of ['scripts/worktree/shared-deps.mjs', '.claude/hooks/package-lock.json', '.claude/hooks/tsconfig.json', '.claude/hooks/tsconfig.build.json', '.github/workflows/gitleaks.yml', '.github/workflows/ccv3-checks.yml']) {
+    const got = ids(gatesFor([p], REPO_ROOT));
+    assert.ok(got.includes('hooks-build'), `${p} -> hooks-build`);
+    assert.ok(got.includes('hooks-vitest'), `${p} -> hooks-vitest`);
+  }
+});
+
+test('GR2: a scripts/coordination or pre-pr.mjs change runs github-tests (CI github-tests caught a drift pre-pr never ran in #343)', async () => {
+  for (const p of ['scripts/coordination/lane.mjs', 'scripts/coordination/render-board.test.mjs', 'scripts/github/pre-pr.mjs']) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'github-tests');
+    assert.ok(g, `${p} -> github-tests`);
+    assert.deepEqual(g.args, ['--test', 'scripts/github/*.test.mjs']);
+  }
+  // The coordination gates still run for scripts/coordination.
+  assert.ok(ids(gatesFor(['scripts/coordination/lane.mjs'], REPO_ROOT)).includes('coordination-tests'));
+});
+
+test('GR3: a docs-only diff selects no surface gate, and a hooks dependency glob does not catch Markdown beside it', async () => {
+  assert.deepEqual(ids(gatesFor(['docs/x.md', 'README.md', 'docs/architecture/a.md'], REPO_ROOT)), ['context-budget']);
+  for (const p of ['.claude/hooks/CONFIG.md', '.github/workflows/README.md']) {
+    assert.deepEqual(ids(gatesFor(['docs/x.md', p], REPO_ROOT)), ['context-budget'], p);
+  }
+  // scripts/worktree/README.md is owned by worktree-scripts (its own test gate), but it must not pull in the hooks build.
+  assert.equal(ids(gatesFor(['scripts/worktree/README.md'], REPO_ROOT)).some((i) => i.startsWith('hooks-')), false);
+});
+
+test('GR4: no gate id appears twice when one diff reaches the same gate through two surfaces', async () => {
+  const sets = [
+    ['scripts/coordination/lane.mjs', 'scripts/github/pre-pr.mjs', 'scripts/github/lib/proc.mjs'],
+    ['scripts/worktree/shared-deps.mjs', '.claude/hooks/src/a.ts', '.claude/hooks/package.json', '.github/workflows/ccv3-checks.yml', '.claude/hooks/tsconfig.json'],
+    SURFACES.flatMap((s) => s.globs.filter((g) => !/[*?]/.test(g))),
+  ];
+  for (const set of sets) {
+    const got = ids(gatesFor(set, REPO_ROOT));
+    assert.ok(got.length > 1, 'the set selects gates');
+    assert.deepEqual(got, [...new Set(got)], `duplicate gate id in: ${got.join(', ')}`);
+  }
+});
+
 test('S10: config, registry and always-loaded files get a NOTE row; rules, skills and agents add the claude -p behaviour check', async () => {
   for (const p of ['.coderabbit.yaml', 'review-router.config.json', '.claude/project-registry.json', '.claude/templates/CLAUDE.md.template']) {
     const notes = notesFor([p], CONFIG);
@@ -2617,7 +2659,9 @@ test('EN3: a coordination change names a missing pg; with pg in place the step p
   delete process.env.NODE_PATH;
   let miss;
   try { miss = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) }); } finally { if (savedNodePath !== undefined) process.env.NODE_PATH = savedNodePath; }
-  assert.ok(miss.result.lines.some((l) => /^FAIL env - ENV: coordination-db-tests needs pg\. Tried /.test(l)), miss.result.lines.join('\n'));
+  // github-tests (also selected by scripts/coordination, GR2) needs pg too and comes first: the FAIL line names it, a note line names the other.
+  assert.ok(miss.result.lines.some((l) => /^FAIL env - ENV: github-tests needs pg\. Tried /.test(l)), miss.result.lines.join('\n'));
+  assert.ok(miss.result.lines.some((l) => /^ {4}ENV: coordination-db-tests needs pg\. Tried /.test(l)), miss.result.lines.join('\n'));
   assert.equal(miss.gateRuns.includes('coordination-db-tests'), false);
   fakeFile(repo, '.claude/hooks/node_modules/pg/package.json', JSON.stringify({ name: 'pg', main: 'index.js' }));
   fakeFile(repo, '.claude/hooks/node_modules/pg/index.js', 'module.exports = {};\n');
