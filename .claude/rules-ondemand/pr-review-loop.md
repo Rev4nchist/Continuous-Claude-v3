@@ -68,8 +68,9 @@ name an event that runs it, or give `na` with the reason.
    diff. Mark a reason that is not in the diff or from Dave with `[inferred]`. Use plain words, no harness terms.
    Paste the same text to Dave in chat as plain text, then start pre-pr in the background. An older Head is fine: pre-pr
    counts only the branch's own files since then, and 5 or fewer pass. A base merge does not count. Start the PR body with the Problem and Change
-   lines. Pre-pr notes a missing or stale summary and prints a facts line (files, lines added and removed).
-   The Open PR question shows the Change sentence. Dave decides when a bad summary becomes a FAIL.
+   lines. Pre-pr refuses a missing or stale summary (config `pre_pr.summary_mode`, set to `fail` on 2026-11-07) and prints a facts line
+   (files, lines added and removed). On the refusal, write the file, paste it to Dave, and run pre-pr again.
+   The Open PR question shows the Change sentence.
 1. Run `node scripts/github/pre-pr.mjs --body <draft.md>` from the repo root. Use a clean branch and a
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
    Evidence against the head. It runs one `cr review --agent`. Fix the findings, commit, and run it again.

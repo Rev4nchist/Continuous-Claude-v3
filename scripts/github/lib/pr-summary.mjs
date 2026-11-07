@@ -125,7 +125,7 @@ function check({ root, head, branch, base = 'main', git, readFile = (f) => readF
   try { text = readFile(path.join(root, SUMMARY_REL)); } catch { text = null; }
   const problems = typeof text === 'string'
     ? problemsOf(text, { branch, head, base, git })
-    : [{ fail: true, text: `no summary file at ${SUMMARY_REL}: write it before pre-pr (rule step 0)` }];
+    : [{ fail: true, text: `no summary file at ${SUMMARY_REL}: write it now (Branch, Head, Base, Problem, Change, You will see, Risk, Not included), paste it to Dave in chat, then run pre-pr again` }];
   const sha = typeof text === 'string' ? hashOf(text) : null;
   const sorted = [...problems.filter((p) => p.fail), ...problems.filter((p) => !p.fail)];
   const failing = sorted.some((p) => p.fail);

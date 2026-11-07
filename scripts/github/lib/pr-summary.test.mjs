@@ -24,7 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { changeOf, checkSummary, hashOf, SUMMARY_REL } from './pr-summary.mjs';
@@ -88,7 +88,13 @@ test('PS1: a missing summary file is a FAIL in fail mode and names the path', ()
   assert.equal(r.result.step, 'summary');
   assert.equal(r.result.status, 'FAIL');
   assert.match(all(r), /summary\.md/);
+  assert.match(all(r), /paste it to Dave in chat, then run pre-pr again/, 'the refusal tells the model what to do next');
   assert.equal(r.sha, null);
+});
+
+test('PS17: the shipped config turns the summary gate on (Dave, 2026-11-07, after the headless rule check)', () => {
+  const cfg = JSON.parse(readFileSync(new URL('../../../review-router.config.json', import.meta.url), 'utf8'));
+  assert.equal(cfg.pre_pr?.summary_mode, 'fail');
 });
 
 test('PS2: a missing, an empty and a repeated label each FAIL, and the line names the label', () => {
