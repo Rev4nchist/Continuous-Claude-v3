@@ -28,7 +28,8 @@ export const missBump: (t: Triple) => number = store.missBump;
 export const decisionKey: (a: { repo?: string; pr?: number | string; branch?: string }) => string = store.decisionKey;
 export const decisionsPath: (env?: NodeJS.ProcessEnv) => string = store.decisionsPath;
 
-export interface DecisionRow { step: string; key: string; head: string; label: string }
+/** `tree` is the git tree the offer was bound to (decisions.mjs offerWrite -> decisionRecord), or null when the offer bound none or the value is not text. */
+export interface DecisionRow { step: string; key: string; head: string; label: string; tree: string | null }
 
 /**
  * Every recorded decision, read from the store file. decisions.mjs has no list call, and the land gate has no head to ask for
@@ -38,13 +39,14 @@ export interface DecisionRow { step: string; key: string; head: string; label: s
  */
 export function decisionRows(env: NodeJS.ProcessEnv = process.env): DecisionRow[] {
   try {
-    const parsed = JSON.parse(readFileSync(decisionsPath(env), 'utf8')) as { decisions?: Record<string, { label?: unknown }> } | null;
+    const parsed = JSON.parse(readFileSync(decisionsPath(env), 'utf8')) as { decisions?: Record<string, { label?: unknown; tree?: unknown }> } | null;
     // Same rule as decisions.mjs readStore: any section that is not a plain object makes the whole store corrupt (fail closed).
     const plain = (v: unknown): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
     if (!plain(parsed) || ['offers', 'decisions', 'misses'].some((k) => !plain((parsed as Record<string, unknown>)[k]))) return [];
     return Object.entries(parsed?.decisions ?? {}).flatMap(([id, d]) => {
       const [step, key, head] = id.split('\n');
-      return head !== undefined && typeof d?.label === 'string' ? [{ step, key, head, label: d.label }] : [];
+      const tree = typeof d?.tree === 'string' && d.tree !== '' ? d.tree : null;
+      return head !== undefined && typeof d?.label === 'string' ? [{ step, key, head, label: d.label, tree }] : [];
     });
   } catch {
     return [];

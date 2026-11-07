@@ -276,12 +276,29 @@ function decisionRows(env = process.env) {
     if (!plain(parsed) || ["offers", "decisions", "misses"].some((k) => !plain(parsed[k]))) return [];
     return Object.entries(parsed?.decisions ?? {}).flatMap(([id, d]) => {
       const [step, key, head] = id.split("\n");
-      return head !== void 0 && typeof d?.label === "string" ? [{ step, key, head, label: d.label }] : [];
+      const tree = typeof d?.tree === "string" && d.tree !== "" ? d.tree : null;
+      return head !== void 0 && typeof d?.label === "string" ? [{ step, key, head, label: d.label, tree }] : [];
     });
   } catch {
     return [];
   }
 }
+
+// src/shared/git-call.ts
+var VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)`;
+var globalOpt = (extra = "") => String.raw`(?:\s+(?:${extra}-C\s+${VAL}|-c\s+(?:[^\s"']|"[^"]*"|'[^']*')+|--(?:git-dir|work-tree|namespace)(?:=|\s+)${VAL}|--no-pager|--no-replace-objects|--bare|-P))*`;
+var GLOBAL_OPT = globalOpt();
+var CALL_START = String.raw`(?:^\s*|[;&|(\n{]\s*|\b(?:then|do|else)\s+)(?:&\s+)?(?:\w+=\S*\s+)*(?:(?:time|sudo|command|exec|nohup)\s+)*`;
+var PATH_PREFIX = String.raw`(?:[^\s;&|()]*[\\/])?`;
+var PWSH_PREFIX = String.raw`(?:(?:pwsh|powershell)(?:\.exe)?(?:\s+-[A-Za-z]+(?:\s+[^-\s]\S*)?)*?\s+-File\s+)?`;
+function gitCallRe(verb) {
+  return new RegExp(String.raw`(${CALL_START})(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+${verb})(?=\s|$)`, "g");
+}
+function safeCallRe(verb, wrappers = "git-safe", extraOpts = "", flags = "g") {
+  return new RegExp(String.raw`(${CALL_START})(${PWSH_PREFIX}(?:${PATH_PREFIX}(?:${wrappers})\.ps1|"\s*"|'\s*'))(${globalOpt(extraOpts)})(\s+${verb})(?=\s|$)`, flags);
+}
+var isGitToken = (raw) => /(?:^|[\\/"'])git(?:\.exe)?["']?$/i.test(raw);
+var isSafeToken = (raw, wrappers = "git-safe") => new RegExp(`(?:${wrappers})\\.ps1`, "i").test(raw);
 
 // src/shared/guard-log.ts
 import { appendFileSync, mkdirSync as mkdirSync3 } from "fs";
@@ -411,6 +428,14 @@ function logGuardError(hook, err, opts = {}) {
   }
 }
 
+// src/shared/mask-quotes.ts
+var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
+var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
+var blank = (s) => s[0] + " ".repeat(s.length - 2) + s[s.length - 1];
+function maskQuoted(command, tool = "Bash") {
+  return command.replace(tool === "PowerShell" ? PWSH_STRING : BASH_STRING, blank);
+}
+
 // src/shared/shell-tools.ts
 var BOTH = ["Bash", "PowerShell"];
 var SHELL_TOOLS = /* @__PURE__ */ new Map([
@@ -440,11 +465,16 @@ var PATH_FIELDS = ["file_path", "notebook_path", "path", "destination", "source"
 var GIT_TIMEOUT_MS = 2e3;
 var isOpenPrLabel = (label) => /^Open draft PR\b/.test(label);
 var isLandLabel = (label) => /^Land (?:now|when READY)\b/.test(label);
-var deny = (pattern, why) => ({ action: "deny", pattern, reason: `BLOCKED (decision-gate): ${why}` });
+var isShipLabel = (label) => /^Commit and push\b/.test(label);
+var deny = (pattern, why, scope = "other") => ({ action: "deny", pattern, scope, reason: `BLOCKED (decision-gate): ${why}` });
 var openPrWhy = (branch, head) => `no "open-pr" decision from Dave for ${branch} at ${head.slice(0, 7)}. Ask him first: run node scripts/github/ship-ask.mjs open-pr --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then open the PR only if he taps "Open draft PR".`;
 var landWhy = (pr) => `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
+var pushWhy = (branch) => `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push". The tap is bound to the staged tree: stage, ask, commit, then push. A change after the tap (a merge, a new commit) needs a new tap.`;
+var PUSH_UNSAFE_WHY = "a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave's tap. Push without that option. If it is really needed, ask Dave to run it himself.";
+var PUSH_ORIGIN_WHY = "a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.";
+var pushUnresolvedWhy = (what) => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
 var STORE_WHY = "only decision-ledger writes the decision store, from Dave's tap in AskUserQuestion. Do not write it by hand. To record a decision, ask the question with AskUserQuestion.";
-var SUBAGENT_WHY = "a subagent cannot open a PR, land or merge: Dave's tap belongs to the main session. Ask the main session to do it.";
+var SUBAGENT_WHY = "a subagent cannot open a PR, land, merge or push: Dave's tap belongs to the main session. Ask the main session to do it.";
 var NO_PR_WHY = "the PR number cannot be read from this command, so its land decision cannot be found. Name the PR number in the command (land-pr.ps1 -Pr <n>, gh pr merge <n>).";
 var norm = (p) => p.replace(/\\/g, "/").toLowerCase();
 var STORE_PATH_RE = /ccv3-mods\/decisions\.json(?:\.|$)/;
@@ -491,6 +521,7 @@ function writesStoreText(text, deps) {
   }
   return STORE_FN_RE.test(text) && code;
 }
+var scopeOf = (s) => s.kind === "push" ? "push" : "other";
 var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
 var CLEANUP_RE = /(?:^|\s)-CleanupOnly\b/i;
@@ -508,6 +539,123 @@ function landShapesOf(seg) {
   if (cli) out2.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), sha });
   const api = MERGE_API_RE.exec(seg);
   if (api && !GET_RE.test(api[0])) out2.push({ kind: "merge", pr: api[1], sha });
+  return out2;
+}
+var PUSH_GIT = gitCallRe("push");
+var PUSH_WRAPPERS = "git-(?:safe|for)";
+var abbr = (name, min) => name.slice(0, min) + [...name.slice(min)].reduceRight((acc, ch) => `(?:${ch}${acc})?`, "");
+var GIT_FOR_OPTS = String.raw`-(?:${abbr("Path", 2)}|${abbr("Remote", 1)})(?::|\s+)${VAL}|-(?:${abbr("WhichAccount", 2)}|${abbr("UseGitSafe", 1)})(?=\s)|`;
+var PUSH_SAFE = safeCallRe("push", PUSH_WRAPPERS, GIT_FOR_OPTS, "gi");
+var ARGS_END_RE = /[;&|\r\n)}]/;
+var DIR_OPT_RE = new RegExp(String.raw`(?:^|\s)-C\s+(${VAL})`, "g");
+var PATH_OPT_RE = new RegExp(String.raw`(?:^|\s)-${abbr("Path", 2)}(?::|\s+)(${VAL})`, "gi");
+var MOVE_OPT_RE = /(?:^|\s)--(?:git-dir|work-tree)(?:=|\s)/;
+var REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
+var VALUE_OPTS = /* @__PURE__ */ new Set(["--repo", "--receive-pack", "--exec", "--push-option", "-o"]);
+var FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
+function pushCallsOf(masked, raw, atStart) {
+  const calls = [];
+  const kinds = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
+  for (const [re, valid] of kinds) {
+    for (const m of masked.matchAll(re)) {
+      const tokenStart = m.index + m[1].length;
+      if (!valid(raw.slice(tokenStart, tokenStart + m[2].length))) continue;
+      if (atStart && masked.slice(0, m.index).trim() !== "") continue;
+      const optsStart = tokenStart + m[2].length;
+      const end = m.index + m[0].length;
+      const cut = masked.slice(end).search(ARGS_END_RE);
+      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut) });
+    }
+  }
+  return calls;
+}
+function pushCallsIn(raw) {
+  const bash = joinContinuations(raw, "bash");
+  const pwsh = joinContinuations(raw, "pwsh");
+  const maskedBash = maskQuoted(bash, "Bash");
+  const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskQuoted(pwsh, "PowerShell"), pwsh, false)];
+  let from = 0;
+  const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]);
+  for (const [start, next] of [...breaks, [bash.length, bash.length]]) {
+    const seg = bash.slice(from, start);
+    from = next;
+    const squashed = squashQuotes(seg);
+    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true));
+  }
+  return calls;
+}
+var REF_HEADS = /^refs\/heads\//;
+function pushShapesFrom(call) {
+  const tokens = call.args.replace(REDIRECT_RE, " ").split(/\s+/).map(squashQuotes).filter(Boolean);
+  const dirs = [...call.opts.matchAll(DIR_OPT_RE), ...call.opts.matchAll(PATH_OPT_RE)].sort((a, b) => a.index - b.index);
+  const dir = dirs.map((m) => squashQuotes(m[1])).pop() ?? null;
+  const positional = [];
+  let force = false;
+  let quiet = false;
+  let literal = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (literal || !t.startsWith("-") || t === "-") {
+      positional.push(t);
+      continue;
+    }
+    if (t === "--") {
+      literal = true;
+      continue;
+    }
+    if (VALUE_OPTS.has(t)) {
+      i++;
+      continue;
+    }
+    if (t.startsWith("--")) {
+      if (FORCE_LONG.test(t)) force = true;
+      if (t === "--dry-run" || t === "--help") quiet = true;
+    } else if (/^-[A-Za-z0-9]+$/.test(t)) {
+      if (/[fd]/.test(t)) force = true;
+      if (/[nh]/.test(t)) quiet = true;
+    }
+  }
+  if (quiet) return [];
+  const [remote = null, ...specs] = positional;
+  const base = { remote, dir, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  if (specs.length === 0) return [{ kind: "push", pr: null, push: { ...base, branch: null, src: null, force } }];
+  const out2 = [];
+  for (let i = 0; i < specs.length; i++) {
+    let spec = specs[i];
+    let rewrite = force;
+    if (spec === "tag") {
+      rewrite = true;
+      i++;
+      spec = specs[i] ?? "tag";
+    }
+    if (spec.startsWith("+")) {
+      rewrite = true;
+      spec = spec.slice(1);
+    }
+    const colon = spec.indexOf(":");
+    const rawSrc = colon < 0 ? spec : spec.slice(0, colon);
+    const rawDst = colon < 0 ? "" : spec.slice(colon + 1);
+    if (colon >= 0 && rawSrc === "") rewrite = true;
+    if (/^refs\/tags\//.test(rawDst || rawSrc)) rewrite = true;
+    const src = rawSrc.replace(REF_HEADS, "");
+    const name = (rawDst || rawSrc).replace(REF_HEADS, "");
+    out2.push({ kind: "push", pr: null, push: { ...base, branch: name === "" || name === "HEAD" ? null : name, src: src === "" || src === "HEAD" ? null : src, force: rewrite } });
+  }
+  return out2;
+}
+function pushShapesOf(raw) {
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const call of pushCallsIn(raw)) {
+    for (const shape of pushShapesFrom(call)) {
+      const p = shape.push;
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved].join("|");
+      if (!seen.has(id)) {
+        seen.add(id);
+        out2.push(shape);
+      }
+    }
+  }
   return out2;
 }
 function shapesOf(raw) {
@@ -528,9 +676,13 @@ function shapesOf(raw) {
       }
     }
   }
+  out2.push(...pushShapesOf(raw));
   return out2;
 }
 var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforce");
+var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
+var enforcingScope = (scope, deps, cwd) => scope === "push" ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
+var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce" };
 var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i;
 var gitBashPath = (p) => process.platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
 function workDir(text, cwd, shell) {
@@ -577,46 +729,98 @@ function judgeLand(shape, deps, dir, named) {
   const ok = decisionRows(deps.env).some((r) => r.step === "land" && r.key === key && isLandLabel(r.label) && (!sha || r.head.toLowerCase() === sha));
   return ok ? ALLOW : deny("land", landWhy(shape.pr));
 }
+function resolveDir(base, raw, shell) {
+  const t = shell === "bash" ? gitBashPath(raw) : raw;
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+}
+function remoteKind(remote) {
+  const r = remote.toLowerCase();
+  if (r === "origin" || r.includes("parcadei")) return "origin";
+  return r === "fork" || r.includes(CCV3_REPO) ? "fork" : null;
+}
+function judgePush(shape, deps, dir, subagent) {
+  const p = shape.push;
+  const d = (pattern, why) => deny(pattern, why, "push");
+  if (p.moved) return d("push-target-unresolved", pushUnresolvedWhy("--git-dir or --work-tree moves the repo, so the checkout is unknown"));
+  if (!isCcv3Checkout(deps, dir)) return ALLOW;
+  let remote = p.remote;
+  if (remote === null) {
+    const up = deps.git(dir, ["rev-parse", "--abbrev-ref", "@{push}"]);
+    remote = up.status === 0 && up.stdout.trim() !== "" ? up.stdout.trim().split("/")[0] : "fork";
+  }
+  let kind = remoteKind(remote);
+  if (kind === null) {
+    const u = deps.git(dir, ["remote", "get-url", remote]);
+    if (u.status === 0) kind = remoteKind(u.stdout.trim());
+  }
+  if (kind === "origin") return d("push-origin", PUSH_ORIGIN_WHY);
+  if (kind === null) return ALLOW;
+  if (subagent) return d("subagent", SUBAGENT_WHY);
+  if (p.force) return d("push-unsafe", PUSH_UNSAFE_WHY);
+  let branch = p.branch;
+  if (branch === null) {
+    const r2 = deps.git(dir, ["branch", "--show-current"]);
+    if (r2.status !== 0) throw new Error("git branch --show-current failed");
+    branch = r2.stdout.trim();
+  }
+  if (branch === "") return d("push-target-unresolved", pushUnresolvedWhy("the branch of this push cannot be named (detached HEAD?)"));
+  if (branch === "main") return ALLOW;
+  const ref = p.src ?? "HEAD";
+  if (ref.startsWith("-")) return d("push-target-unresolved", pushUnresolvedWhy(`${ref} is not a ref`));
+  const r = deps.git(dir, ["rev-parse", `${ref}^{tree}`]);
+  if (r.status !== 0) return d("push-tree-unresolved", `cannot read the tree of ${ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
+  const tree = r.stdout.trim();
+  const key = decisionKey2({ branch });
+  const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && isShipLabel(row.label) && row.tree !== null && row.tree === tree);
+  return ok ? ALLOW : d("ship", pushWhy(branch));
+}
 function judgeCommand(input, deps) {
   const cmd = readShellCommand(input);
-  if (cmd.kind !== "command" || cmd.text === "") return ALLOW;
+  if (cmd.kind !== "command" || cmd.text === "") return [];
   const cwd = input.cwd || process.cwd();
-  if (writesStoreText(cmd.text, deps)) return deny("store-write", STORE_WHY);
+  if (writesStoreText(cmd.text, deps)) return [deny("store-write", STORE_WHY)];
   const shapes = shapesOf(cmd.text);
-  if (shapes.length === 0) return ALLOW;
-  if (input.agent_id) return deny("subagent", SUBAGENT_WHY);
-  const dir = workDir(cmd.text, cwd, shellOf(input));
+  const denies = [];
+  if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(deny("subagent", SUBAGENT_WHY));
+  const pushes = shapes.filter((s) => s.kind === "push");
+  const rest = input.agent_id ? [] : shapes.filter((s) => s.kind !== "push");
+  if (pushes.length === 0 && rest.length === 0) return denies;
+  const shell = shellOf(input);
+  const dir = workDir(cmd.text, cwd, shell);
   const named = namedRepo(cmd.text, deps.env);
-  for (const s of shapes) {
-    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : judgeLand(s, deps, dir, named);
-    if (d.action === "deny") return d;
+  for (const s of [...rest, ...pushes]) {
+    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, s.push.dir === null ? dir : resolveDir(dir, s.push.dir, shell), Boolean(input.agent_id)) : judgeLand(s, deps, dir, named);
+    if (d.action === "deny") denies.push(d);
   }
-  return ALLOW;
+  return denies;
 }
 function judgeWrite(input, deps) {
   const args = input.tool_input ?? {};
   const cwd = input.cwd || process.cwd();
   const hit = PATH_FIELDS.some((f) => typeof args[f] === "string" && isStorePath(args[f], deps, cwd));
-  return hit ? deny("store-write", STORE_WHY) : ALLOW;
+  return hit ? [deny("store-write", STORE_WHY)] : [];
 }
 function judge(input, deps) {
   const tool = input.tool_name || input.tool || "";
   if (WRITE_TOOLS.has(tool)) return judgeWrite(input, deps);
-  return COMMAND_TOOLS2.has(tool) ? judgeCommand(input, deps) : ALLOW;
+  return COMMAND_TOOLS2.has(tool) ? judgeCommand(input, deps) : [];
 }
 function decide(input, deps) {
-  const d = judge(input, deps);
-  if (d.action !== "deny" || enforcing(deps, input.cwd || process.cwd())) return d;
-  return { action: "allow", warn: `${d.pattern}: ${d.reason}` };
+  const denies = judge(input, deps);
+  if (denies.length === 0) return ALLOW;
+  const cwd = input.cwd || process.cwd();
+  const live = denies.find((d) => enforcingScope(d.scope, deps, cwd));
+  if (live) return live;
+  return { action: "allow", warn: `${denies[0].pattern}: ${denies[0].reason}`, scope: denies[0].scope };
 }
 var out = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...extra } });
 var denyOut = (reason) => out({ permissionDecision: "deny", permissionDecisionReason: reason });
-var warnOut = (text) => out({ additionalContext: `WARNING (decision-gate, warn mode): this command would be blocked when decisions.enforce is true. ${text.replace(/^BLOCKED \(decision-gate\): /, "")}` });
-function looksGated(input) {
+var warnOut = (text, scope = "other") => out({ additionalContext: `WARNING (decision-gate, warn mode): this command would be blocked when ${FLAG_OF[scope]} is true. ${text.replace(/^BLOCKED \(decision-gate\): /, "")}` });
+function gatedScopes(input) {
   const tool = input.tool_name || input.tool || "";
-  if (WRITE_TOOLS.has(tool)) return true;
+  if (WRITE_TOOLS.has(tool)) return /* @__PURE__ */ new Set(["other"]);
   const cmd = readShellCommand(input);
-  return cmd.kind === "command" && shapesOf(cmd.text).length > 0;
+  return new Set(cmd.kind === "command" ? shapesOf(cmd.text).map(scopeOf) : []);
 }
 function unreadableInput() {
   const note = "decision-gate: the hook input is not readable JSON, so no command shape can be judged; the call is allowed.";
@@ -644,7 +848,7 @@ function handle(raw, deps) {
     const d = decide(input, deps);
     if (d.action === "allow" && d.warn) {
       logGuardDecision(HOOK, input, "warn", d.warn.split(":")[0]);
-      return warnOut(d.warn.slice(d.warn.indexOf(":") + 2));
+      return warnOut(d.warn.slice(d.warn.indexOf(":") + 2), d.scope);
     }
     if (d.action === "deny") {
       logGuardDecision(HOOK, input, "deny", d.pattern);
@@ -656,16 +860,19 @@ function handle(raw, deps) {
       logGuardError(HOOK, err);
     } catch {
     }
-    if (!looksGatedSafe(input)) return "{}";
+    const scopes = gatedScopesSafe(input);
+    if (scopes.size === 0) return "{}";
     const why = `could not verify Dave's tap (${String(err?.message ?? err).slice(0, 160)}). Run the command again. If it keeps failing, ask Dave.`;
-    return enforcing(deps, input.cwd || process.cwd()) ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why);
+    const cwd = input.cwd || process.cwd();
+    const live = [...scopes].some((s) => enforcingScope(s, deps, cwd));
+    return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : "push");
   }
 }
-var looksGatedSafe = (input) => {
+var gatedScopesSafe = (input) => {
   try {
-    return looksGated(input);
+    return gatedScopes(input);
   } catch {
-    return false;
+    return /* @__PURE__ */ new Set();
   }
 };
 function makeGit() {
@@ -707,5 +914,6 @@ export {
   decide,
   handle,
   isLandLabel,
-  isOpenPrLabel
+  isOpenPrLabel,
+  isShipLabel
 };

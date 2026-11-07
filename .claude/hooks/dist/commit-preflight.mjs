@@ -148,6 +148,22 @@ function judge(i) {
   };
 }
 
+// src/shared/git-call.ts
+var VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)`;
+var globalOpt = (extra = "") => String.raw`(?:\s+(?:${extra}-C\s+${VAL}|-c\s+(?:[^\s"']|"[^"]*"|'[^']*')+|--(?:git-dir|work-tree|namespace)(?:=|\s+)${VAL}|--no-pager|--no-replace-objects|--bare|-P))*`;
+var GLOBAL_OPT = globalOpt();
+var CALL_START = String.raw`(?:^\s*|[;&|(\n{]\s*|\b(?:then|do|else)\s+)(?:&\s+)?(?:\w+=\S*\s+)*(?:(?:time|sudo|command|exec|nohup)\s+)*`;
+var PATH_PREFIX = String.raw`(?:[^\s;&|()]*[\\/])?`;
+var PWSH_PREFIX = String.raw`(?:(?:pwsh|powershell)(?:\.exe)?(?:\s+-[A-Za-z]+(?:\s+[^-\s]\S*)?)*?\s+-File\s+)?`;
+function gitCallRe(verb) {
+  return new RegExp(String.raw`(${CALL_START})(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+${verb})(?=\s|$)`, "g");
+}
+function safeCallRe(verb, wrappers = "git-safe", extraOpts = "", flags = "g") {
+  return new RegExp(String.raw`(${CALL_START})(${PWSH_PREFIX}(?:${PATH_PREFIX}(?:${wrappers})\.ps1|"\s*"|'\s*'))(${globalOpt(extraOpts)})(\s+${verb})(?=\s|$)`, flags);
+}
+var isGitToken = (raw) => /(?:^|[\\/"'])git(?:\.exe)?["']?$/i.test(raw);
+var isSafeToken = (raw, wrappers = "git-safe") => new RegExp(`(?:${wrappers})\\.ps1`, "i").test(raw);
+
 // src/shared/git-head.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2, statSync as statSync2 } from "fs";
 import { basename, dirname, isAbsolute, join as join3, resolve as resolve2 } from "path";
@@ -330,21 +346,8 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var PROTECTED_BRANCHES = /* @__PURE__ */ new Set(["main", "master"]);
 var FEAT_OR_FIX = /^(feat|fix)(\(|:|!)/;
-var VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)`;
-var GLOBAL_OPT = String.raw`(?:\s+(?:-C\s+${VAL}|-c\s+(?:[^\s"']|"[^"]*"|'[^']*')+|--(?:git-dir|work-tree|namespace)(?:=|\s+)${VAL}|--no-pager|--no-replace-objects|--bare|-P))*`;
-var CALL_START = String.raw`(?:^\s*|[;&|(\n{]\s*|\b(?:then|do|else)\s+)(?:&\s+)?(?:\w+=\S*\s+)*(?:(?:time|sudo|command|exec|nohup)\s+)*`;
-var PATH_PREFIX = String.raw`(?:[^\s;&|()]*[\\/])?`;
-var PWSH_PREFIX = String.raw`(?:(?:pwsh|powershell)(?:\.exe)?(?:\s+-[A-Za-z]+(?:\s+[^-\s]\S*)?)*?\s+-File\s+)?`;
-var GIT_CALL = new RegExp(
-  String.raw`(${CALL_START})(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+commit)(?=\s|$)`,
-  "g"
-);
-var SAFE_CALL = new RegExp(
-  String.raw`(${CALL_START})(${PWSH_PREFIX}(?:${PATH_PREFIX}git-safe\.ps1|"\s*"|'\s*'))(${GLOBAL_OPT})(\s+commit)(?=\s|$)`,
-  "g"
-);
-var isGitToken = (raw) => /(?:^|[\\/"'])git(?:\.exe)?["']?$/i.test(raw);
-var isSafeToken = (raw) => /git-safe\.ps1/i.test(raw);
+var GIT_CALL = gitCallRe("commit");
+var SAFE_CALL = safeCallRe("commit");
 function findCommits(command, masked) {
   const calls = [];
   for (const [re, valid] of [[GIT_CALL, isGitToken], [SAFE_CALL, isSafeToken]]) {
