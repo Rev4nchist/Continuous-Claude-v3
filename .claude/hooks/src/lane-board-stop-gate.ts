@@ -45,8 +45,11 @@ export function blockReason(board: string, env: Env = process.env): string {
   if (!a) return '';
   return (
     `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. ` +
-    `Run ${renderBoardCmd(board, env)}, then publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} ` +
-    `(omit capabilities). If the publish is refused because a newer version exists, render again and retry once. ` +
+    `Other sessions update this page all day, so your held copy is old. In this order: ` +
+    `1. Read the live page with the Artifact tool, action read, url ${a.url}, without path (a read with path does not count). Do not open or paste the saved file.` +
+    `2. Run ${renderBoardCmd(board, env)}. ` +
+    `3. At once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). ` +
+    `If the publish is refused, publish the same file again: the refusal counts as the read. ` +
     `Then finish your turn.`
   );
 }

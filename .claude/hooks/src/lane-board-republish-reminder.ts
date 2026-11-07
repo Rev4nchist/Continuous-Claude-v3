@@ -95,8 +95,9 @@ export const stateFile = pendingFile;
 function reminder(verb: string, board: string, env: Env, a: { url: string; publishFrom: string }): string {
   return (
     `Lane DB changed (lane.mjs ${verb}) on board ${board}. The lane board page is a snapshot. ` +
-    `When this batch of lane changes is done: run ${renderBoardCmd(board, env)}, then publish ` +
-    `${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). ` +
+    `When this batch of lane changes is done: read the live page first (Artifact tool, action read, url ${a.url}, without path; your held copy is old), ` +
+    `then run ${renderBoardCmd(board, env)}, then at once publish ` +
+    `${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to the same url (omit capabilities). ` +
     `Steps: kanban-sync skill step 7.`
   );
 }
