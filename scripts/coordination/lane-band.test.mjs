@@ -6,7 +6,54 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBand, parsePriority } from './lane-band.mjs';
+import { parseBand, parsePriority, parseP0List, parseExpect } from './lane-band.mjs';
+
+describe('parseExpect (band-backfill --apply --expect N)', () => {
+  it('is required: missing or a bare flag throws and names the dry run', () => {
+    assert.throws(() => parseExpect(undefined), /--expect is required.*--dry-run/);
+    assert.throws(() => parseExpect(true), /--expect is required/);
+  });
+  it('accepts a whole number from 0 up, as a flag string', () => {
+    assert.equal(parseExpect('0'), 0);
+    assert.equal(parseExpect('82'), 82);
+  });
+  for (const bad of ['abc', '-1', '1.5', '', ' 3', '3 ', '1e2', '+4', '0x10']) {
+    it(`rejects ${JSON.stringify(bad)}`, () => {
+      assert.throws(() => parseExpect(bad), /--expect must be a whole number/);
+    });
+  }
+});
+
+describe('parseP0List (band-backfill --p0)', () => {
+  it('a missing --p0 throws: the list is required, an empty list is spelled "none"', () => {
+    assert.throws(() => parseP0List(undefined), /--p0 is required/);
+  });
+  it('a bare --p0 (the arg parser gives true) throws', () => {
+    assert.throws(() => parseP0List(true), /--p0 is required/);
+  });
+  it('"none" is the only way to name zero P0 lanes', () => {
+    assert.deepEqual(parseP0List('none'), []);
+  });
+  it('splits on commas and trims spaces', () => {
+    assert.deepEqual(parseP0List('a-1, b2 ,c'), ['a-1', 'b2', 'c']);
+  });
+  it('keeps one id as a one-item list', () => {
+    assert.deepEqual(parseP0List('solo'), ['solo']);
+  });
+  it('rejects an empty token (a trailing comma, a double comma, an empty string)', () => {
+    for (const bad of ['a,', ',a', 'a,,b', '']) assert.throws(() => parseP0List(bad), /empty id/, bad);
+  });
+  it('rejects a duplicate id and names it', () => {
+    assert.throws(() => parseP0List('a,b,a'), /duplicate id 'a'/);
+  });
+  it('rejects "none" mixed with ids', () => {
+    assert.throws(() => parseP0List('none,a'), /'none' cannot be mixed/);
+    assert.throws(() => parseP0List('a,none'), /'none' cannot be mixed/);
+  });
+  it('rejects an id that is not a valid lane id (upper case, space, slash)', () => {
+    for (const bad of ['Bad', 'a b', 'a/b', '-x']) assert.throws(() => parseP0List(bad), /not a valid lane id/, bad);
+  });
+});
 
 describe('parsePriority', () => {
   it('a missing value is "not given" (undefined), so the caller keeps the stored value', () => {

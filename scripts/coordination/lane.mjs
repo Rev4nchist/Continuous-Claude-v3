@@ -60,6 +60,15 @@
  *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--band P0|P1|P2|none] [--priority 1-999]
  *                                                       # on an existing lane an omitted --band / --priority keeps the stored value
  *   node scripts/coordination/lane.mjs band <id> P0|P1|P2|none   # set the importance band; needs migration 0005; no claim needed
+ *   node scripts/coordination/lane.mjs band-backfill --dry-run [--p0 id,id|none] [--json]   # read-only: band table (now, after), a triage list,
+ *                                                       # and the exact "to apply:" line to copy (it carries --expect N)
+ *   node scripts/coordination/lane.mjs band-backfill --apply --p0 id,id,...|none --expect N   # first banding, after Dave's yes. Only lanes with
+ *                                                       # band IS NULL get the map (priority 1..9 P1, 10..40 P2, else Unsorted); a lane named in
+ *                                                       # --p0 gets P0 whatever band it has (never automatic; soft cap 5). Done lanes are skipped.
+ *                                                       # --expect N must equal the lanes that would change, else it rolls back (the board changed
+ *                                                       # since the dry run). One transaction; a lock wait over 5s fails with 0 writes; updated_at
+ *                                                       # kept; per-lane 'band' events go to the caller only, plus ONE broadcast summary line
+ *                                                       # (actor 'backfill'); a second run with the same --p0 list changes 0 rows
  *   node scripts/coordination/lane.mjs remind set <id> --at <time> [--title "..."] [--pri P0|P1|P2] [--action <id>] [--done-when "..."] [--allow-past]
  *                                                       # a reminder is a lane with a due time. <time>: ISO with an offset, 'YYYY-MM-DD HH:MM' (America/Chicago)
  *                                                       # or 'YYYY-MM-DD' (08:00 CT). A new id needs --title (track reminders, state backlog).
@@ -94,7 +103,7 @@ import { requireDep } from '../lib/resolve-deps.mjs';
 import { repoPath } from './canon-home.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
-import { parseBand, parsePriority } from './lane-band.mjs';
+import { parseBand, parseExpect, parseP0List, parsePriority } from './lane-band.mjs';
 import { bandTag, laneOrderSql } from './lane-sort.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import {
@@ -718,6 +727,151 @@ async function remindClear(c) {
 
 const REMIND_VERBS = { set: remindSet, list: remindList, snooze: remindSnooze, ack: remindAck, done: remindAck, clear: remindClear };
 
+// ---------------------------------------------------------------- band-backfill
+// One-off first banding of the open lanes (design: .claudedocs/2026-11-06-lane-priority-design.md, "Backfill plan").
+// Both modes read the same plan. --apply is one transaction over locked open rows (lock_timeout 5s), checks --expect against
+// the plan, keeps updated_at, logs one 'band' event per changed lane (actor 'backfill', addressed to the caller) and one broadcast
+// summary, and a second run with the same --p0 list changes nothing. The end-to-end proof is band-backfill-probe.mjs.
+
+const BACKFILL_USAGE = 'usage: lane.mjs band-backfill --dry-run [--p0 id,id,...|none] [--json] | --apply --p0 id,id,...|none --expect N [--json]'
+  + ' (give exactly one of --dry-run and --apply; N is the change count the dry run printed)';
+/** How long --apply waits for a row lock before it gives up and writes nothing. */
+const BACKFILL_LOCK_TIMEOUT = '5s';
+const BACKFILL_BANDS = ['P0', 'P1', 'P2', 'Unsorted'];
+const BACKFILL_TRIAGE_STATES = ['active', 'ready', 'blocked'];
+
+/**
+ * The map from a drag rank to a first band: priority 1..9 is P1, 10..40 is P2, anything else (the default 50 and up) gives NULL,
+ * which stays Unsorted. P0 is never in this map. The ONE copy: the dry run and the apply both read it.
+ */
+const BACKFILL_MAP_SQL = `CASE WHEN l.priority BETWEEN 1 AND 9 THEN 'P1' WHEN l.priority BETWEEN 10 AND 40 THEN 'P2' END`;
+
+async function hasBandColumn(c) {
+  return (await c.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_schema='agentic_os' AND table_name='lane' AND column_name='band'`,
+  )).rowCount > 0;
+}
+
+/**
+ * The lanes of the board. `which` is 'open' (state <> 'done'), 'done' or 'all'. `lock` takes a row lock, and the caller
+ * locks only the open ones: a done lane is never written, so it never blocks the run. A database without 0005 has no band: all read NULL.
+ */
+async function backfillLanes(c, boardKey, hasBand, which, lock = false) {
+  const cond = { open: `AND l.state <> 'done'`, done: `AND l.state = 'done'`, all: '' }[which];
+  return (await c.query(
+    `SELECT l.id, l.title, l.state, l.priority, ${hasBand ? 'l.band' : 'NULL::text AS band'}, ${BACKFILL_MAP_SQL} AS mapped, NOT ${RECLAIMABLE} AS held
+       FROM agentic_os.lane l WHERE l.project_key = $1 ${cond} ORDER BY l.priority, l.id${lock ? ' FOR UPDATE OF l' : ''}`,
+    [boardKey],
+  )).rows;
+}
+
+/** The text a human or model copies to apply this plan: the shim path, the P0 list ('none' when empty) and the change count. */
+const backfillApplyCommand = (p0, n) => `${laneCliCmd()} band-backfill --apply --p0 ${p0.length ? p0.join(',') : 'none'} --expect ${n}`;
+
+/** Every --p0 id must be an open lane of this board. One error lists them all; it is thrown before any write. */
+async function checkP0Ids(c, rows, p0, board) {
+  const byId = new Map(rows.map((l) => [l.id, l]));
+  const problems = [];
+  for (const id of p0) {
+    const l = byId.get(id);
+    if (l && l.state !== 'done') continue;
+    if (l) { problems.push(`'${id}' is done (P0 needs an open lane)`); continue; }
+    const other = (await c.query(`SELECT project_key FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
+    problems.push(other ? `'${id}' is a lane of board ${other.project_key}, not ${board.key}` : `'${id}' is not a lane on board ${board.key}`);
+  }
+  if (problems.length) throw new Error(`--p0 refused, nothing was written: ${problems.join('; ')}`);
+}
+
+/**
+ * The plan. Only open lanes change. A named lane gets P0 whatever it has now (Dave named it). Any other lane
+ * with a band keeps it; one with no band gets the mapped band (NULL stays NULL). A lane whose band would not move is not a change.
+ */
+function planBackfill(rows, p0) {
+  const named = new Set(p0);
+  const open = rows.filter((l) => l.state !== 'done');
+  const changes = [];
+  for (const l of open) {
+    const isNamed = named.has(l.id);
+    const to = isNamed ? 'P0' : l.band === null ? l.mapped : l.band;
+    if (to === l.band) continue;
+    changes.push({
+      id: l.id, from: l.band, to, source: isNamed ? 'p0' : 'priority',
+      ...(isNamed && l.band !== null ? { note: `already ${l.band}, set to P0 because Dave named it` } : {}),
+    });
+  }
+  const after = new Map(open.map((l) => [l.id, l.band]));
+  for (const ch of changes) after.set(ch.id, ch.to);
+  const tally = (f) => {
+    const m = new Map();
+    for (const l of open) { const b = f(l) ?? 'Unsorted'; m.set(b, (m.get(b) || 0) + 1); }
+    return m;
+  };
+  const now = tally((l) => l.band);
+  const next = tally((l) => after.get(l.id));
+  const table = BACKFILL_BANDS.map((band) => ({ band, now: now.get(band) || 0, after: next.get(band) || 0 }));
+  const done = { total: rows.length - open.length, banded: rows.filter((l) => l.state === 'done' && l.band !== null).length };
+  const triage = open.flatMap((l) => {
+    const to = after.get(l.id);
+    const why = [...(BACKFILL_TRIAGE_STATES.includes(l.state) ? [l.state] : []), ...(to === 'P1' ? ['P1 candidate'] : []), ...(named.has(l.id) ? ['named P0'] : [])];
+    return why.length ? [{ id: l.id, state: l.state, priority: l.priority, band: l.band, after: to, held: l.held, title: l.title, why }] : [];
+  });
+  return { changes, table, done, triage, open: open.length };
+}
+
+/** One transaction body: the band UPDATE and its events are two statements, and the caller COMMITs or ROLLBACKs both. */
+async function writeBackfill(c, changes, boardKey, myId) {
+  const ids = changes.map((x) => x.id);
+  const { rowCount } = await c.query(
+    `UPDATE agentic_os.lane l SET band = v.to_band
+       FROM unnest($1::text[], $2::text[]) AS v(id, to_band)
+      WHERE l.id = v.id AND l.project_key = $3 AND l.state <> 'done'`,
+    [ids, changes.map((x) => x.to), boardKey],
+  );
+  if (rowCount !== changes.length) throw new Error(`band-backfill: expected ${changes.length} rows and updated ${rowCount}; nothing was written`);
+  // Direct INSERT, not logEvent: logEvent swallows its error, and inside a transaction a failed INSERT would abort the rest.
+  // Each per-lane event is a message to the caller (to_session_id = the caller): neither unread branch of UNREAD_SQL shows it to
+  // anyone else, and the caller's own events are never unread. One broadcast summary line tells the board what happened.
+  await c.query(
+    `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail, project_key)
+     SELECT v.id, 'band', $1, $1, v.body, v.detail::jsonb, $2 FROM unnest($3::text[], $4::text[], $5::text[]) AS v(id, body, detail)`,
+    [myId, boardKey, ids,
+     changes.map((x) => `band ${x.from ?? 'none'} -> ${x.to ?? 'none'} (backfill)`),
+     changes.map((x) => JSON.stringify({ from: x.from, to: x.to, actor: 'backfill' }))],
+  );
+  const per = BACKFILL_BANDS.filter((b) => b !== 'Unsorted').map((b) => [b, changes.filter((x) => x.to === b).length]).filter(([, n]) => n > 0);
+  await c.query(
+    `INSERT INTO agentic_os.lane_event (kind, session_id, body, detail, project_key) VALUES ('band', $1, $2, $3::jsonb, $4)`,
+    [myId, `band backfill: ${changes.length} lane${changes.length === 1 ? '' : 's'} banded (${per.map(([b, n]) => `${b} ${n}`).join(', ')})`,
+     JSON.stringify({ actor: 'backfill', changed: changes.length, counts: Object.fromEntries(per) }), boardKey],
+  );
+}
+
+function renderBackfill(r) {
+  const w = (s, n) => String(s).padEnd(n);
+  const head = r.mode === 'apply'
+    ? `band-backfill applied on board ${r.board}: ${r.changed} row${r.changed === 1 ? '' : 's'} changed`
+      + (r.changed === 0 ? ' (nothing to do: no open lane with no band maps to a band, and no --p0 lane needs P0)' : '')
+    : `band-backfill dry run on board ${r.board} (nothing written)`;
+  const out = [head];
+  if (!r.band_column) out.push('NOTE: migration 0005 (lane band) is not applied to this database: no lane has a band yet, and --apply needs it.');
+  out.push(`open lanes: ${r.open}   done lanes: ${r.done.total} (${r.done.banded} with a band; done lanes are never touched)`, '',
+    `${w('band', 10)}${w('now', 6)}after`, ...r.table.map((t) => `${w(t.band, 10)}${w(t.now, 6)}${t.after}`), '');
+  const verb = r.mode === 'apply' ? 'changed' : 'would change';
+  out.push(`${verb} ${r.changes.length} lane(s)${r.p0.length ? `; named P0: ${r.p0.join(', ')}` : ''}`);
+  for (const ch of r.changes) {
+    out.push(`  ${w(ch.id, 30)} ${w(ch.from ?? 'none', 5)} -> ${w(ch.to ?? 'none', 5)} ${ch.source === 'p0' ? `named by Dave${ch.note ? ` (${ch.note})` : ''}` : 'priority map'}`);
+  }
+  out.push('', 'triage (open active, ready and blocked lanes, P1 candidates and named lanes):');
+  for (const t of r.triage) {
+    out.push(`  ${w(t.id, 30)} ${w(t.state, 8)} prio ${w(t.priority, 4)} ${w(t.band ?? 'none', 5)} -> ${w(t.after ?? 'none', 5)} ${t.held ? 'HELD ' : ''}[${t.why.join(', ')}] ${t.title}`);
+  }
+  if (r.apply_command) {
+    out.push('', `to apply: ${r.apply_command}`);
+    if (!r.p0.length) out.push('  (no P0 lane named: to name some, run --dry-run --p0 id,id first; the count and this line change with the list)');
+  }
+  return out.join('\n');
+}
+
 // ---------------------------------------------------------------- commands
 
 const commands = {
@@ -1193,6 +1347,65 @@ const commands = {
       body: `band ${word(from)} -> ${word(to)}`, detail: { from, to },
     });
     return JSON_OUT ? { id, from, to, changed: true } : `${id} band: ${word(from)} -> ${word(to)}`;
+  },
+
+  /**
+   * The first banding of the open lanes. `--dry-run` reads and prints the plan (a band table and a triage list) and
+   * changes nothing. `--apply --p0 id,id|none` writes it: needs Dave's explicit P0 list, one transaction, updated_at kept,
+   * one 'band' event per changed lane (session_id = the caller, detail.actor = 'backfill'). Scoped to the board of the cwd.
+   * `lane.client_version` is already set for the session by withDb, before any write here.
+   */
+  async 'band-backfill'(c) {
+    const given = (v) => v !== undefined && v !== false;
+    const dry = given(flags['dry-run']);
+    const apply = given(flags.apply);
+    if (dry === apply) throw new Error(BACKFILL_USAGE);
+    const board = projectOf();
+    const p0 = apply || flags.p0 !== undefined ? parseP0List(flags.p0) : [];
+    const expect = apply ? parseExpect(flags.expect) : null;
+    const myId = apply ? me() : null;
+    const hasBand = await hasBandColumn(c);
+    if (apply && !hasBand) throw new Error('migration 0005 (lane band) is not applied to this database; apply it before you run band-backfill --apply');
+
+    let plan;
+    let changed = 0;
+    if (dry) {
+      const rows = await backfillLanes(c, board.key, hasBand, 'all');
+      await checkP0Ids(c, rows, p0, board);
+      plan = planBackfill(rows, p0);
+    } else {
+      await c.query('BEGIN');
+      try {
+        // A lock wait longer than this fails the run (SQLSTATE 55P03) instead of hanging on a busy lane.
+        await c.query(`SET LOCAL lock_timeout = '${BACKFILL_LOCK_TIMEOUT}'`);
+        const open = await backfillLanes(c, board.key, hasBand, 'open', true);
+        const rows = [...open, ...await backfillLanes(c, board.key, hasBand, 'done')];
+        await checkP0Ids(c, rows, p0, board);
+        plan = planBackfill(rows, p0);
+        if (plan.changes.length !== expect) {
+          throw new Error(`band-backfill: the board changed since the dry run: the plan now changes ${plan.changes.length} lane(s), not the ${expect} in --expect. `
+            + 'Nothing was written. Run --dry-run again and use its "to apply" line.');
+        }
+        if (plan.changes.length) await writeBackfill(c, plan.changes, board.key, myId);
+        changed = plan.changes.length;
+        await c.query('COMMIT');
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => {});
+        throw e.code === '55P03'
+          ? new Error(`band-backfill: another transaction holds a lock on a lane of this board (waited ${BACKFILL_LOCK_TIMEOUT}). Nothing was written. Try again in a moment.`)
+          : e;
+      }
+    }
+    const p0After = plan.table.find((t) => t.band === 'P0').after;
+    if (p0After > P0_CAP) {
+      console.error(`WARNING: ${p0After} open lanes ${apply ? 'are' : 'would be'} P0, above the soft cap of ${P0_CAP}. Nothing is refused; check that this is what Dave means.`);
+    }
+    const result = {
+      board: board.key, mode: dry ? 'dry-run' : 'apply', band_column: hasBand, p0, open: plan.open, done: plan.done,
+      table: plan.table, changes: plan.changes, triage: plan.triage,
+      ...(apply ? { changed } : { apply_command: backfillApplyCommand(p0, plan.changes.length) }),
+    };
+    return JSON_OUT ? result : renderBackfill(result);
   },
 
   /**
