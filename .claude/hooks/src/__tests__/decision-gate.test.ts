@@ -222,6 +222,9 @@ describe('G4 the model writes the store', () => {
     expect(denied(bash(`node -e "const f=require('fs').openSync('${storeFile}','w');require('fs').closeSync(f)"`))).toBe(true);
     expect(denied(bash(`node -e "require('child_process').execSync('echo {} > ${storeFile}')"`))).toBe(true);
     expect(denied(bash(`node -e "import('./scripts/github/lib/decisions.mjs').then(m=>m.decisionRecord({}))"`))).toBe(true);
+    expect(denied(bash(`node -e "require('/tmp/evil.js');console.log(require('${storeFile}'))"`))).toBe(true);
+    expect(denied(bash(`node -e "const m=process.argv[1];require(m);console.log(require('${storeFile}'))" x`))).toBe(true);
+    expect(denied(bash(`node -e "const f=require('fs');f['wri'+'teFileSync']('${storeFile}','{}')"`))).toBe(true);
   });
   it('passes a copy that only READS the store (the store is the first source) and still denies a copy that writes it', () => {
     expect(denied(bash(`cp ${storeFile} /tmp/before.json`))).toBe(false);
