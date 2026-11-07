@@ -7,7 +7,7 @@
  * applies the actions. This module has no I/O, so every rule has a unit test.
  *
  * Contract: scratchpad kanban-contract.md. Page db paths:
- *   kanban/board   { columns: {now,next,later,waiting: [laneId]}, updatedAt, syncedAt? }
+ *   kanban/board   { columns: {next,later,waiting: [laneId]}, updatedAt, syncedAt? }
  *   cards/<laneId> { status?, note?, question?, updatedAt, syncedAt?, syncResult? }
  *
  * DECISIONS THE CONTRACT LEAVES OPEN (each has a test)
@@ -28,7 +28,9 @@
  * - Held lanes (a live session owns them) never change state from a card or a column.
  *   Notes still apply. The card result is "skipped: held" and the card stays pending.
  * - Done lanes are never moved into waiting. Done work stays done.
- * - Priority = one rank per open lane, 1..n in board order (now, next, later, waiting).
+ * - The Now column is retired. An old doc's columns.now and a stale appliedColumns.now are ignored: their lanes get no rank here
+ *   and keep their priority. A scheduled lane is not a column either. The page saves its id at the end of its saved column, so its rank follows that. There is no apply action for it.
+ * - Priority = one rank per open lane, 1..n in board order (next, later, waiting).
  *   "Open" means open after this run: a pending card status can reopen a done lane (it gets a
  *   rank) or close an open one (it gets none). Unknown ids use no rank. Band is never read or written: a card drag changes
  *   rank only (Dave sets a band with `lane.mjs band`). New lanes default to 50, so they
@@ -49,7 +51,7 @@
  */
 
 /** Board order: every open lane gets ONE rank, 1..n across the columns in this order. Done and unknown ids use no rank. Band is never read or written. */
-export const COLUMNS = ['now', 'next', 'later', 'waiting'];
+export const COLUMNS = ['next', 'later', 'waiting'];
 export const WAITING_NOTE = 'Waiting on Dave (kanban)';
 export const CARD_STATUSES = ['backlog', 'ready', 'blocked', 'done'];
 const NOTE_MAX = 1000;
