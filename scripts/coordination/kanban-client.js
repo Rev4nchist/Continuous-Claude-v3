@@ -37,9 +37,15 @@
  *    with textContent.
  *  - No localStorage.
  *
+ * Card buttons (the Columns view only; By band has none):
+ *   Do next = move the card to Next index 0. Move to = Top or Bottom of a column. Both change rank only: they save the
+ *   board doc like a drag. Done = write {status:'done', updatedAt} to the card doc, nothing else (never an unsaved note).
+ *   Undo = write the status that was pending before Done, or null. The "Done, waiting for sync" flag is derived from the
+ *   saved card (doneChip), so a second device shows it. The page never writes '' as a status: the sync reads it as invalid.
+ *
  * Globals inlined ahead of this file by render-board.mjs: placeLanes, isPending, cardBase,
- * syncState, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns (all from kanban-place.mjs),
- * and KB_BOARD, the key of the board that owns this page.
+ * syncState, cardDiff, plainPrompt, boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip
+ * (all from kanban-place.mjs), and KB_BOARD, the key of the board that owns this page.
  */
 (function () {
   var COLS = ['now', 'next', 'later', 'waiting'];
@@ -72,6 +78,11 @@
   var cardsWhy = '';
   var dbWhy = '';
   var saving = {};
+  var prevPending = {};
+  var moveNote = {};
+  var failNote = {};
+  var flags = {};
+  var optionsFilled = false;
   var plainBusy = {};
   var sampleFn = null;
 
@@ -123,12 +134,40 @@
         if (list.children[i] !== el) list.insertBefore(el, list.children[i] || null);
         el.setAttribute('data-col', name);
         el.querySelector('.kb-rank').textContent = String(i + 1);
-        el.querySelector('.kb-to').value = name;
-        el.querySelector('.kb-up').disabled = !editable || i === 0;
-        el.querySelector('.kb-dn').disabled = !editable || i === ids.length - 1;
+        paintCtl(id, { col: name, at: i });
       });
       colEls[name].setAttribute('data-n', String(ids.length));
       counts[name].textContent = String(ids.length);
+    });
+  }
+
+  // Do next, Done and the Move select of one card. The select always shows its placeholder: the move is the event.
+  function paintCtl(id, pos) {
+    var el = cards[id];
+    var next = el ? el.querySelector('.kb-next') : null;
+    var done = el ? el.querySelector('.kb-done') : null;
+    var to = el ? el.querySelector('.kb-to') : null;
+    var at = pos || locate(id);
+    if (next) next.disabled = !editable || !at || (at.col === 'next' && at.at === 0);
+    if (done) done.disabled = !editable || cardsState !== 'ready' || !!saving[id] || doneChip(cardDocs[id], stateOf(id));
+    if (to) { to.disabled = !editable; to.value = ''; }
+  }
+
+  // The server draws one placeholder option. The eight real ones are made here, once, so the page stays small.
+  function fillMoveOptions() {
+    if (optionsFilled) return;
+    optionsFilled = true;
+    Object.keys(cards).forEach(function (id) {
+      var sel = cards[id].querySelector('.kb-to');
+      if (!sel) return;
+      COLS.forEach(function (name) {
+        [['t', 'Top of '], ['b', 'Bottom of ']].forEach(function (kind) {
+          var o = document.createElement('option');
+          o.value = kind[0] + ':' + name;
+          o.textContent = kind[1] + LABEL[name];
+          sel.appendChild(o);
+        });
+      });
     });
   }
 
@@ -136,7 +175,7 @@
     editable = on;
     board.classList.toggle('kb-on', on);
     Array.prototype.forEach.call(board.querySelectorAll('.kb-grip'), function (g) { g.setAttribute('draggable', on ? 'true' : 'false'); });
-    Array.prototype.forEach.call(board.querySelectorAll('.kb-to'), function (s) { s.disabled = !on; });
+    fillMoveOptions();
     render();
   }
 
@@ -158,9 +197,40 @@
     var at = Math.max(0, Math.min(toIndex, dest.length));
     dest.splice(at, 0, id);
     if (from.col === toCol && from.at === at) { render(); return; }
+    clearMoveNotes();
     render();
-    announce(id + ' moved to ' + LABEL[toCol] + ', rank ' + (at + 1) + ' of ' + dest.length);
+    var first = toCol === 'next' && at === 0;
+    var ahead = first ? bandAhead(LANES, id) : 0;
+    var extra = [ahead > 0 ? bandSentence(ahead) : '', syncSentence(from.col, toCol, id)].filter(Boolean).join(' ');
+    announce(id + ' moved to ' + LABEL[toCol] + ', rank ' + (at + 1) + ' of ' + dest.length + (extra ? '. ' + extra : ''));
+    var line = [first ? 'First in Next.' : '', extra].filter(Boolean).join(' ');
+    if (line) {
+      moveNote[id] = line;
+      paintFlag(id);
+    }
     changed();
+  }
+
+  // What kanban-apply does with a column move, said before Dave relies on it. Only a column that CHANGED since the last sync counts there.
+  // Out of Waiting: a blocked lane that carries the waiting note goes back to backlog (the page cannot see the note, so it says "may").
+  // Into Waiting: a lane that is not blocked, active or done becomes blocked.
+  function syncSentence(fromCol, toCol, id) {
+    var st = stateOf(id);
+    if (fromCol === 'waiting' && toCol !== 'waiting' && st === 'blocked') return 'Sync may change this lane from blocked to backlog, after your yes.';
+    if (toCol === 'waiting' && fromCol !== 'waiting' && st !== 'blocked' && st !== 'active' && st !== 'done') return 'Sync may set this lane to blocked, after your yes.';
+    return '';
+  }
+
+  // After a Do next, By band still puts every higher band lane above the card. Say so.
+  function bandSentence(n) {
+    return n === 1 ? 'By band, 1 lane of a higher band stays above it.' : 'By band, ' + n + ' lanes of a higher band stay above it.';
+  }
+
+  // A move note is true only until the next move: the card that was first in Next may be second now.
+  function clearMoveNotes() {
+    var ids = Object.keys(moveNote);
+    moveNote = {};
+    ids.forEach(paintFlag);
   }
 
   function focusAfter(id, sel) {
@@ -204,17 +274,21 @@
       syncHeads();
       return;
     }
-    var btn = t.closest('.kb-up, .kb-dn');
-    if (btn && editable && !btn.disabled) {
-      var c = btn.closest('.kb-card');
-      var id = c.getAttribute('data-id');
-      var pos = locate(id);
-      if (!pos) return;
-      var isUp = btn.classList.contains('kb-up');
-      moveCard(id, pos.col, pos.at + (isUp ? -1 : 1));
-      focusAfter(id, isUp ? '.kb-up' : '.kb-dn');
-    }
+    var nx = t.closest('.kb-next');
+    if (nx) { if (editable && !nx.disabled) doNext(nx.closest('.kb-card').getAttribute('data-id')); return; }
+    var dn = t.closest('.kb-done');
+    if (dn) { if (editable && !dn.disabled) setCardStatus(dn.closest('.kb-card').getAttribute('data-id'), 'done'); return; }
+    var un = t.closest('.kb-undo');
+    if (un) { if (editable && !un.disabled) undoDone(un.closest('.kb-card').getAttribute('data-id')); return; }
   });
+
+  function doNext(id) {
+    expandColumn('next');
+    moveCard(id, 'next', 0);
+    var el = cards[id];
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    focusAfter(id, '.kb-next');
+  }
 
   board.addEventListener('input', function (e) {
     var t = e.target;
@@ -224,16 +298,39 @@
     paintEdit(id);
   });
 
+  // The options are t:<column> (Top of) and b:<column> (Bottom of). Anything else, the placeholder included, moves nothing.
+  function applyMove(t) {
+    var id = t.closest('.kb-card').getAttribute('data-id');
+    var m = /^([tb]):([a-z]+)$/.exec(t.value);
+    t.value = '';
+    if (!m || COLS.indexOf(m[2]) < 0) return;
+    expandColumn(m[2]);
+    moveCard(id, m[2], m[1] === 't' ? 0 : cols[m[2]].length);
+    focusAfter(id, '.kb-to');
+  }
+
+  // On Windows Chromium an arrow key on a CLOSED select changes its value and fires change at once. That change is the user
+  // looking through the options, not a choice: it must not move a card (it would also put the placeholder back under the next key).
+  // So a change that arrives while a navigation key is down is ignored, and Enter applies the option the keys chose.
+  // A change with no key before it (mouse, touch, a phone's picker) applies at once. keyup and leaving the select end the key.
+  var NAV_KEYS = ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'];
+  var navKey = false;
+
   board.addEventListener('change', function (e) {
     var t = e.target;
-    if (!t || !t.classList || !t.classList.contains('kb-to') || !editable) return;
-    var id = t.closest('.kb-card').getAttribute('data-id');
-    var to = t.value;
-    if (COLS.indexOf(to) < 0) return;
-    expandColumn(to);
-    moveCard(id, to, cols[to].length);
-    focusAfter(id, '.kb-to');
+    if (!t || !t.classList || !t.classList.contains('kb-to') || !editable || navKey) return;
+    applyMove(t);
   });
+
+  board.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (!t || !t.classList || !t.classList.contains('kb-to')) return;
+    if (NAV_KEYS.indexOf(e.key) >= 0) { navKey = true; return; }
+    if (e.key === 'Enter' && editable && /^[tb]:/.test(t.value)) { e.preventDefault(); applyMove(t); }
+  });
+
+  board.addEventListener('keyup', function () { navKey = false; });
+  board.addEventListener('focusout', function () { navKey = false; });
 
   function syncHeads() {
     Array.prototype.forEach.call(board.querySelectorAll('.kcol'), function (el) {
@@ -283,8 +380,9 @@
     var card = grip.closest('.kb-card');
     dragId = card.getAttribute('data-id');
     e.dataTransfer.effectAllowed = 'move';
-    try { e.dataTransfer.setData('text/plain', dragId); } catch (err) { /* some browsers refuse */ }
-    try { e.dataTransfer.setDragImage(card, 16, 16); } catch (err2) { /* optional */ }
+    // Some browsers refuse setData, and setDragImage is optional: the drag works without both.
+    try { e.dataTransfer.setData('text/plain', dragId); } catch (err) { }
+    try { e.dataTransfer.setDragImage(card, 16, 16); } catch (err2) { }
     // Style after the browser has taken its drag image.
     setTimeout(function () { card.classList.add('kb-dragging'); }, 0);
   });
@@ -497,6 +595,7 @@
     part(id, '.kb-q').disabled = !on;
     part(id, '.kb-save').disabled = !on || !!saving[id] || !hasKeys(changesOf(id));
     part(id, '.kb-why').textContent = whyOff();
+    paintCtl(id);
   }
 
   function paintAll() {
@@ -513,6 +612,7 @@
       if (next[id]) cardDocs[id] = next[id]; else delete cardDocs[id];
       fillForm(id, keep);
       paintSync(id);
+      paintFlag(id);
     });
     cardsState = 'ready';
     paintAll();
@@ -594,6 +694,89 @@
     });
   }
 
+  // ------------------------------------------------------------ Done and Undo
+
+  var FOUR = ['backlog', 'ready', 'blocked', 'done'];
+
+  // The flag line above a card's buttons: the Done chip with Undo (from the saved card), a failed write, or the note of the last move.
+  // Made on first use, so a page nobody touches carries no flag nodes. The Undo button is made with it and only shown or hidden.
+  function flagOf(id) {
+    if (flags[id]) return flags[id];
+    var ctl = part(id, '.kb-ctl');
+    if (!ctl) return null;
+    var box = document.createElement('div');
+    box.className = 'kb-flag';
+    box.setAttribute('role', 'status');
+    var text = document.createElement('span');
+    var undo = document.createElement('button');
+    undo.type = 'button';
+    undo.className = 'kb-btn kb-undo';
+    undo.textContent = 'Undo';
+    undo.setAttribute('aria-label', 'Undo done: ' + id);
+    box.appendChild(text);
+    box.appendChild(undo);
+    cards[id].insertBefore(box, ctl);
+    flags[id] = { box: box, text: text, undo: undo };
+    return flags[id];
+  }
+
+  function paintFlag(id) {
+    var chip = doneChip(cardDocs[id], stateOf(id));
+    var line = failNote[id] ? { text: failNote[id], k: 'crit' } : chip ? { text: 'Done, waiting for sync.', k: 'done' } : moveNote[id] ? { text: moveNote[id], k: 'move' } : null;
+    var f = flags[id] || (line ? flagOf(id) : null);
+    if (!f) return;
+    f.box.hidden = !line;
+    f.box.setAttribute('data-k', line ? line.k : 'idle');
+    f.text.textContent = line ? line.text : '';
+    f.undo.hidden = !chip;
+    f.undo.disabled = !editable || !!saving[id];
+  }
+
+  // Write ONLY {status, updatedAt} to the card doc. Never through saveCard: unsaved note text in the form must not go with it.
+  // Done remembers the status that was pending before it, so Undo can give it back. A status the sync already applied is history.
+  function setCardStatus(id, status) {
+    if (!db || locked || cardsState !== 'ready' || saving[id] || !cards[id]) return;
+    var old = cardDocs[id];
+    if (status === 'done' && doneChip(old, stateOf(id))) return;
+    if (status === 'done') prevPending[id] = old && isPending(old) && FOUR.indexOf(old.status) >= 0 ? old.status : null;
+    var payload = { status: status, updatedAt: new Date().toISOString() };
+    var known = !!old;
+    delete failNote[id];
+    saving[id] = true;
+    paintEdit(id);
+    paintFlag(id);
+    attempt(function () { return writeCard(db.collection(CARDS).doc(id), payload, known); }).then(function () {
+      saving[id] = false;
+      if (locked) return;
+      var merged = {};
+      var was = cardDocs[id] || {};
+      Object.keys(was).forEach(function (k) { merged[k] = was[k]; });
+      Object.keys(payload).forEach(function (k) { merged[k] = payload[k]; });
+      cardDocs[id] = merged;
+      if (status !== 'done') delete prevPending[id];
+      var st = part(id, '.kb-st');
+      if (st && stateOf(id) !== 'active') st.value = cardBase(merged, stateOf(id));
+      paintSync(id);
+      paintFlag(id);
+      paintEdit(id);
+      // A tap that hides the button it hit would drop focus to the page: hand it to the control that undoes or redoes it.
+      announce(id + (status === 'done' ? ' marked done, waiting for sync' : ' is no longer marked done'));
+      var next = status === 'done' ? (flags[id] ? flags[id].undo : null) : part(id, '.kb-done');
+      if (next && !next.disabled && !next.hidden) next.focus();
+    }, function (err) {
+      saving[id] = false;
+      if (status === 'done') delete prevPending[id];
+      if (locked) return;
+      failNote[id] = (status === 'done' ? 'Could not mark done: ' : 'Could not undo: ') + errText(err) + '. Try again.';
+      paintFlag(id);
+      paintEdit(id);
+    });
+  }
+
+  function undoDone(id) {
+    setCardStatus(id, prevPending[id] || null);
+  }
+
   // ----------------------------------------------------------- Plain English
 
   function setPlainVisible(on) {
@@ -610,7 +793,7 @@
       if (typeof fn !== 'function') return;
       sampleFn = fn;
       setPlainVisible(true);
-    }, function () { /* the buttons stay hidden */ });
+    }, function () { });  // the buttons stay hidden
   }
 
   function showPlainOut(out, text, kind, src) {
@@ -700,13 +883,17 @@
 
   // Stop listening to the card notes and take down what they painted: they belong to the other board.
   function dropCards() {
-    if (cardsUnsub) { try { cardsUnsub(); } catch (e) { /* already gone */ } cardsUnsub = null; }
+    // The subscription may be gone already.
+    if (cardsUnsub) { try { cardsUnsub(); } catch (e) { } cardsUnsub = null; }
     cardDocs = {};
+    moveNote = {};
+    failNote = {};
     cardsState = 'off';
     cardsWhy = dbWhy;
     Object.keys(cards).forEach(function (id) {
       fillForm(id, {});
       paintSync(id);
+      paintFlag(id);
       setSaved(id, '', 'idle');
     });
   }
@@ -738,14 +925,16 @@
     if (key(placed) === key(cols)) return;
     cols = placed;
     lastSaved = key(cols);
+    clearMoveNotes();
     render();
     setStatus('Updated from another device', 'ok');
   }
 
   function subscribe() {
     try {
-      db.doc(DOC_PATH).onSnapshot(function (snap) { try { applyRemote(snap); } catch (e) { /* keep the page alive */ } });
-    } catch (e) { /* live updates are optional */ }
+      // A bad snapshot must not kill the page, and live updates are optional.
+      db.doc(DOC_PATH).onSnapshot(function (snap) { try { applyRemote(snap); } catch (e) { } });
+    } catch (e) { }
   }
 
   function boot() {

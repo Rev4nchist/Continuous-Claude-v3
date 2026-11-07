@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { placeLanes, boardMismatch, boardWriteKind, mergeUnknownColumns } from './kanban-place.mjs';
+import * as place from './kanban-place.mjs';
 
 const L = (id, state, priority) => ({ id, state, priority });
 const lanes = [
@@ -165,4 +166,48 @@ test('mergeUnknownColumns: no doc, a doc with no columns, junk ids and junk colu
 test('mergeUnknownColumns: ids named like object builtins are handled as ids', () => {
   const merged = mergeUnknownColumns({ columns: { now: ['__proto__', 'constructor', 'toString'] } }, COLS(), [L('a', 'ready', 1)]);
   assert.deepEqual(merged.now, ['__proto__', 'constructor', 'toString']);
+});
+
+// ---- PR-C: how many lanes a Do next card still sits under in By band, and when the Done chip shows.
+// The new helpers are read through the namespace (imported at the top) so a missing export fails one test, not the whole file.
+const B = (id, state, band) => ({ id, state, band });
+const BANDED = [B('p0', 'ready', 'P0'), B('p0b', 'backlog', 'P0'), B('p0done', 'done', 'P0'), B('p1', 'ready', 'P1'), B('p2', 'backlog', 'P2'), B('u', 'ready', null)];
+
+test('bandAhead: a P2 card counts only the OPEN P0 and P1 lanes, never a done one', () => {
+  assert.equal(place.bandAhead(BANDED, 'p2'), 3);
+});
+
+test('bandAhead: a P1 card counts the open P0 lanes; a P0 card counts none', () => {
+  assert.equal(place.bandAhead(BANDED, 'p1'), 2);
+  assert.equal(place.bandAhead(BANDED, 'p0'), 0);
+});
+
+test('bandAhead: an Unsorted card (null, missing or junk band) counts every open banded lane; the lane itself is not counted', () => {
+  assert.equal(place.bandAhead(BANDED, 'u'), 4);
+  assert.equal(place.bandAhead([B('x', 'ready'), B('y', 'ready', 'P0')], 'x'), 1);
+  assert.equal(place.bandAhead([B('x', 'ready', 'zz'), B('y', 'ready', 'P2')], 'x'), 1);
+});
+
+test('bandAhead: an unknown id, an empty list and junk input give 0', () => {
+  assert.equal(place.bandAhead(BANDED, 'ghost'), 0);
+  assert.equal(place.bandAhead([], 'p2'), 0);
+  assert.equal(place.bandAhead(null, 'p2'), 0);
+});
+
+const NOW = '2026-11-06T10:00:00.000Z';
+const BEFORE = '2026-11-06T09:00:00.000Z';
+const AFTER = '2026-11-06T11:00:00.000Z';
+
+test('doneChip: shows only for a pending done card on a lane that is not done yet', () => {
+  assert.equal(place.doneChip({ status: 'done', updatedAt: NOW }, 'ready'), true, 'pending done on an open lane');
+  assert.equal(place.doneChip({ status: 'done', updatedAt: NOW, syncedAt: BEFORE }, 'backlog'), true, 'edited after the sync is pending');
+});
+
+test('doneChip: not after the sync, not on a done lane, not for another status, not without a doc', () => {
+  assert.equal(place.doneChip({ status: 'done', updatedAt: NOW, syncedAt: AFTER }, 'ready'), false, 'synced');
+  assert.equal(place.doneChip({ status: 'done', updatedAt: NOW }, 'done'), false, 'lane already done');
+  assert.equal(place.doneChip({ status: 'ready', updatedAt: NOW }, 'backlog'), false, 'another status');
+  assert.equal(place.doneChip({ status: null, updatedAt: NOW }, 'ready'), false, 'status null after Undo');
+  assert.equal(place.doneChip(null, 'ready'), false);
+  assert.equal(place.doneChip(undefined, 'ready'), false);
 });
