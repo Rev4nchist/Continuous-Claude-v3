@@ -1,6 +1,7 @@
 // Tests for ship-ask.mjs: the AskUserQuestion spec of each ship step, and the offer it writes.
 // Run: node --test scripts/github/ship-ask.test.mjs
 // The CLI tests run the real script. --facts replaces git, gh and the ledger; CCV3_DECISIONS_FILE moves the store to a temp folder.
+// --facts and SHIP_ASK_STATUS_SCRIPT are test seams: the script honours them only when SHIP_ASK_TEST=1. run() sets it unless told not to.
 //
 // How the unit can fail, and the test that catches it:
 //   a spec breaks the AskUserQuestion limits (header over 12, question over 3 lines, 2 to 4 options, recommended first)   -> SA1
@@ -70,9 +71,24 @@ test('SA2: paid-round puts "No, keep it free" first, shows files x $0.25, the da
   assert.equal(paid.options[1].label, 'Yes, pay up to $4.25');
   assert.match(paid.question, /17 files x \$0\.25 = up to \$4\.25/);
   assert.match(paid.question, /Today \$0\.00 of \$15\.00\. Paid rounds on this PR 0 of 2\. Round cap \$5\.00/);
-  assert.match(paidEsc.options[1].label, /^Yes, pay over the cap \(up to \$10\.00\)$/);
   assert.match(paidEsc.question, /ESCALATE: round cost \$10\.00 is over \$5\.00/);
-  assert.match(paidNone.options[1].label, /cost unknown/);
+});
+
+// Dave 2026-11-06: a paid round is offered only on cr-paid ALLOW. Breaks if ESCALATE or a missing verdict gets a Yes row again.
+test('SA2b: ESCALATE and a missing verdict offer no pay option, and the question says why a paid round is not offered', async () => {
+  const m = await load();
+  const { paid, paidEsc, paidNone } = specsOf(m);
+  for (const [name, s] of Object.entries({ paidEsc, paidNone })) {
+    assert.ok(s.options.length >= 2 && s.options.length <= 4, `${name}: 2 to 4 options`);
+    assert.deepEqual(s.options.filter((o) => /pay|yes|credit/i.test(o.label)), [], `${name}: no pay label`);
+    assert.deepEqual(s.options.filter((o) => /use-credits|@coderabbitai/i.test(o.description)), [], `${name}: no posting description`);
+    assert.match(s.question, /No paid round is offered/, `${name}: question states the rule`);
+  }
+  assert.match(paidEsc.question, /over the cap/);
+  assert.match(paidNone.question, /no verdict/);
+  assert.doesNotMatch(paid.question, /No paid round is offered/);
+  assert.equal(paid.options.length, 2);
+  assert.match(paid.options[1].label, /^Yes, pay/);
 });
 
 test('SA3: land says "Land now" only when READY; a draft or a closed PR gets no question', async () => {
@@ -111,12 +127,14 @@ test('SA5: commit-and-push recommends the commit only when files are staged', as
   assert.equal(shipNone.options[0].label, 'Stop here (Recommended)');
 });
 
-function run(args, { facts, store, cwd, env = {} } = {}) {
+function run(args, { facts, store, cwd, env = {}, seams = true } = {}) {
   const dir = temp('shipask-');
   const factsFile = facts ? path.join(dir, 'facts.json') : null;
   if (facts) writeFileSync(factsFile, JSON.stringify(facts));
   const storeFile = store ?? path.join(dir, 'decisions.json');
-  const r = spawnSync(process.execPath, [SCRIPT, ...args, ...(factsFile ? ['--facts', factsFile] : [])], { cwd: cwd ?? dir, encoding: 'utf8', env: { ...process.env, CCV3_DECISIONS_FILE: storeFile, ...env } });
+  const full = { ...process.env, CCV3_DECISIONS_FILE: storeFile, ...env };
+  if (seams) full.SHIP_ASK_TEST = '1'; else delete full.SHIP_ASK_TEST;
+  const r = spawnSync(process.execPath, [SCRIPT, ...args, ...(factsFile ? ['--facts', factsFile] : [])], { cwd: cwd ?? dir, encoding: 'utf8', env: full });
   return { ...r, storeFile };
 }
 
@@ -255,6 +273,58 @@ test('SA9: land runs review-status.mjs for the PR, reads READY and the recorded 
   assert.doesNotMatch(JSON.parse(stale.stdout).question, /recorded by/);
   const draft = run(['land', '--pr', '349', '--json'], { cwd: repo, env: { SHIP_ASK_STATUS_SCRIPT: fakeStatus(repo, { ...status, isDraft: true }) } });
   assert.equal(draft.status, 1);
+});
+
+test('SA11: without SHIP_ASK_TEST=1, --facts is ignored with one stderr warning and the real path runs (breaks if the gate is removed)', async () => {
+  const repo = temp('shipask-noseam-');
+  spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  // With the seam on, the facts answer and the branch need not exist. With it off, the real path finds no feat/nope.
+  const on = run(['commit-and-push', '--branch', 'feat/nope', '--json'], { cwd: repo, facts: SHIP });
+  assert.equal(on.status, 0, on.stderr);
+  const off = run(['commit-and-push', '--branch', 'feat/nope', '--json'], { cwd: repo, facts: SHIP, seams: false });
+  assert.equal(off.status, 1, off.stderr);
+  assert.match(off.stderr, /feat\/nope/);
+  assert.equal(off.stdout, '');
+  const warns = off.stderr.split('\n').filter((l) => /--facts/.test(l) && /SHIP_ASK_TEST/.test(l));
+  assert.equal(warns.length, 1, off.stderr);
+  const d = await loadStore();
+  const saved = process.env.CCV3_DECISIONS_FILE;
+  process.env.CCV3_DECISIONS_FILE = off.storeFile;
+  try {
+    assert.deepEqual(d.offerList(), [], 'no offer is written from ignored facts');
+  } finally {
+    if (saved === undefined) delete process.env.CCV3_DECISIONS_FILE; else process.env.CCV3_DECISIONS_FILE = saved;
+  }
+});
+
+test('SA12: statusScriptOf honours SHIP_ASK_STATUS_SCRIPT only in test mode (breaks if the gate is removed)', async () => {
+  const m = await load();
+  const real = m.statusScriptOf({});
+  assert.match(real, /review-status\.mjs$/);
+  assert.equal(m.statusScriptOf({ SHIP_ASK_STATUS_SCRIPT: 'C:/x/fake.mjs', SHIP_ASK_TEST: '1', CCV3_DECISIONS_FILE: path.join(os.tmpdir(), 'x-decisions.json') }), 'C:/x/fake.mjs');
+  assert.equal(m.statusScriptOf({ SHIP_ASK_STATUS_SCRIPT: 'C:/x/fake.mjs' }), real);
+  assert.equal(m.statusScriptOf({ SHIP_ASK_STATUS_SCRIPT: 'C:/x/fake.mjs', SHIP_ASK_TEST: '0' }), real);
+});
+
+test('SA13: SHIP_ASK_TEST=1 alone, with no temp CCV3_DECISIONS_FILE or the real default store, leaves the seams off (breaks if the store check is removed)', async () => {
+  const m = await load();
+  const d = await loadStore();
+  const real = m.statusScriptOf({});
+  const fake = { SHIP_ASK_STATUS_SCRIPT: 'C:/x/fake.mjs', SHIP_ASK_TEST: '1' };
+  assert.equal(m.statusScriptOf(fake), real, 'no CCV3_DECISIONS_FILE');
+  assert.equal(m.statusScriptOf({ ...fake, CCV3_DECISIONS_FILE: '' }), real, 'empty CCV3_DECISIONS_FILE');
+  assert.equal(m.statusScriptOf({ ...fake, CCV3_DECISIONS_FILE: d.decisionsPath({}) }), real, 'the default real store path');
+  // The CLI: facts are ignored, the real path runs, and it writes no offer to the real store.
+  const repo = temp('shipask-nostore-');
+  spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  const facts = path.join(repo, 'facts.json');
+  writeFileSync(facts, JSON.stringify(SHIP));
+  const env = { ...process.env, SHIP_ASK_TEST: '1' };
+  delete env.CCV3_DECISIONS_FILE;
+  const r = spawnSync(process.execPath, [SCRIPT, 'commit-and-push', '--branch', 'feat/nope', '--json', '--facts', facts], { cwd: repo, encoding: 'utf8', env });
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr.split('\n').filter((l) => /--facts/.test(l) && /SHIP_ASK_TEST/.test(l)).length, 1, r.stderr);
 });
 
 test('SA10: the store key of a PR is the same repo string the engine uses', async () => {

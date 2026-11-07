@@ -450,10 +450,10 @@ export const ledgerCommandNote = (pr: number): string =>
 
 /** Why a headless run, a plugin or the bridge only shows the plan. No text tells Dave to type. */
 export const whyTextOnly = (via: string | null, waiting: number | null): string => {
-  if (via === null) return `This session is headless, so ${SLASH} only shows the plan. An interactive session calls pr_checkpoint to ask Dave.`
-  const where = `This ${SLASH} came from ${via}, not Dave's terminal composer, so it only shows the plan. A pick records from Dave's tap on the question pr_checkpoint asks.`
+  if (via === null) return `This session is headless, so a review request only shows the plan. An interactive session calls pr_checkpoint to ask Dave.`
+  const where = `This request came from ${via}, not Dave's terminal composer, so it only shows the plan. A pick records from Dave's tap on the question pr_checkpoint asks.`
   if (via !== 'bridge') return where
-  return `${where} From the bridge, ${SLASH} records only the PR whose checkpoint waits in this session (${waiting === null ? 'none waits now' : `#${waiting}`}).`
+  return `${where} From the bridge, a request records only the PR whose checkpoint waits in this session (${waiting === null ? 'none waits now' : `#${waiting}`}).`
 }
 export const BUSY_TEXT = 'A checkpoint question is open. Wait for Dave. Nothing was asked and nothing was recorded.'
 export const noQuestionText = (pr: number, why: string | undefined): string =>

@@ -249,6 +249,14 @@
           {
             "type": "command",
             "command": "node",
+            "timeout": 15,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/pre-pr-gate.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
             "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/decision-gate.mjs"

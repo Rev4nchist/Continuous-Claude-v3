@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * pre-pr-gate -- PreToolUse (matcher: Bash, PowerShell).
+ * pre-pr-gate -- PreToolUse (matcher: Bash, PowerShell, Desktop Commander start_process and interact_with_process).
  *
  * Denies a PR-create command in Rev4nchist/Continuous-Claude-v3 unless `node scripts/github/pre-pr.mjs`
  * passed for the head being opened. That script writes `.claude/cache/pre-pr/stamp.json` { head, at, ... }.
@@ -21,6 +21,8 @@
  * The hook never names a foreign repo: a gated command from a CCv3 checkout is always gated, whatever -R it holds.
  * Any cd, Set-Location, sl, pushd or Push-Location target in the text (before or after the call, quoted or not) that is a CCv3 checkout gates too, as the cwd does.
  * Accepted residual: from a foreign checkout, a CCv3 -R hidden by shell syntax (v""3, -dR) is not seen. The hook guards against mistakes, not a hostile agent.
+ * Accepted residual: text sent to an existing Desktop Commander shell is judged against the payload cwd, not that shell's cwd. So a PR create
+ * with no -R, sent from a non-CCv3 session cwd into a shell already cd'd into a CCv3 checkout, is not gated.
  * Everything else is allowed: another tool, a command that is not a PR create, a repo that is not CCv3, and input that
  * cannot be parsed (there is no command to judge).
  * Override: `SKIP_PRE_PR_GATE=1` as a LEADING assignment (`$env:SKIP_PRE_PR_GATE='1';` in PowerShell).
@@ -56,6 +58,7 @@ import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
+import { readShellCommand } from './shared/shell-tools.js';
 
 export { CCV3_REPO, namedRepo };
 export const STAMP_REL = '.claude/cache/pre-pr/stamp.json';
@@ -74,7 +77,12 @@ export const GIT_TIMEOUT_MS = 2000;
  * with a known retry time in the stamp (cr_retry_minutes), which the gate log also shows.
  */
 const ALLOWED_SKIP_REASONS = new Set(['cli-missing', 'cli-cap']);
-const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
+/**
+ * The tools that run a shell command. Desktop Commander start_process and interact_with_process run one too (the same
+ * names and text fields as shared/shell-tools.ts, which commandOf reads). Two gates: settings.json.template must match each name.
+ */
+export const COMMAND_TOOLS: ReadonlySet<string> = new Set(['Bash', 'PowerShell', `${DC}start_process`, `${DC}interact_with_process`]);
 const HOOK = 'pre-pr-gate';
 const RUN = 'node scripts/github/pre-pr.mjs --body <file>';
 const BODY_UNVERIFIABLE = 'the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied';
@@ -98,7 +106,14 @@ export type Decision =
   | { action: 'override' }
   | { action: 'deny'; reason: string; pattern: string; soft?: boolean };
 
-interface HookInput { tool_name?: string; tool?: string; tool_input?: { command?: unknown }; cwd?: string; session_id?: string; agent_id?: string }
+interface HookInput { tool_name?: string; tool?: string; tool_input?: Record<string, unknown>; cwd?: string; session_id?: string; agent_id?: string }
+
+/** The command text of a shell tool call (Bash and PowerShell: `command`; Desktop Commander: `command` or `input`). Empty for any other tool or an unreadable field: there is no command to judge. */
+const commandOf = (input: HookInput): string => {
+  const c = readShellCommand(input);
+  return c.kind === 'command' ? c.text : '';
+};
+const isDesktopCommander = (input: HookInput): boolean => (input.tool_name || input.tool || '').startsWith(DC);
 
 // ---------- raw-text readers (narrow on purpose) ----------
 
@@ -316,9 +331,19 @@ function enforceIn(deps: Deps, top: string | null): boolean | null {
   try { return (JSON.parse(text) as { checkpoint?: { enforce?: unknown } } | null)?.checkpoint?.enforce === true; } catch { return null; }
 }
 
-/** Pure given its deps. Allow, override (a deny that the override let through; it is logged) or deny. */
+/**
+ * Pure given its deps. Allow, override (a deny that the override let through; it is logged) or deny.
+ * A Desktop Commander shell is chosen at run time, so its text is judged as Bash, then as PowerShell: the first non-allow wins.
+ */
 export function decide(input: HookInput, deps: Deps): Decision {
-  const raw = typeof input.tool_input?.command === 'string' ? input.tool_input.command : '';
+  if (!isDesktopCommander(input)) return decideAs(input, deps);
+  const text = commandOf(input);
+  const both = [decideAs({ ...input, tool_name: 'Bash' }, deps, text), decideAs({ ...input, tool_name: 'PowerShell' }, deps, text)];
+  return both.find((d) => d.action === 'deny') ?? both.find((d) => d.action === 'override') ?? both.find((d) => d.action === 'allow' && d.warn) ?? both[0];
+}
+
+function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
+  const raw = text ?? commandOf(input);
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: 'allow' };
@@ -427,10 +452,10 @@ export function handle(raw: string, deps: Deps): string {
     }
     const tool = input.tool_name || input.tool || '';
     if (!COMMAND_TOOLS.has(tool)) return '{}';
-    command = typeof input.tool_input?.command === 'string' ? input.tool_input.command : '';
+    command = commandOf(input);
     // Known before anything can throw: an error on a gated shape must not let the command through unchecked.
     create = isPrOpenCommand(command);
-    gated = create || isGated(shapesOf(joinContinuations(command, shellOf(input))));
+    gated = create || ['bash', 'pwsh'].some((s) => isGated(shapesOf(joinContinuations(command, isDesktopCommander(input) ? (s as 'bash' | 'pwsh') : shellOf(input)))));
     const d = decide(input, deps);
     if (d.action === 'override') logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
     if (d.action === 'allow' && d.warn) logGuardDecision(HOOK, input, 'warn', d.warn, { command });
