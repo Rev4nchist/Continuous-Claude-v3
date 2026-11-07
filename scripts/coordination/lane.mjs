@@ -766,7 +766,7 @@ async function backfillLanes(c, boardKey, hasBand, which, lock = false) {
 }
 
 /** The text a human or model copies to apply this plan: the shim path, the P0 list ('none' when empty) and the change count. */
-const backfillApplyCommand = (p0, n) => `node C:/Users/dkhay/.claude/scripts/lane.mjs band-backfill --apply --p0 ${p0.length ? p0.join(',') : 'none'} --expect ${n}`;
+const backfillApplyCommand = (p0, n) => `${laneCliCmd()} band-backfill --apply --p0 ${p0.length ? p0.join(',') : 'none'} --expect ${n}`;
 
 /** Every --p0 id must be an open lane of this board. One error lists them all; it is thrown before any write. */
 async function checkP0Ids(c, rows, p0, board) {
