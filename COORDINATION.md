@@ -34,6 +34,7 @@ Details: `.claude/rules-ondemand/lane-board.md`.
 | `next` | the highest-priority lane you may claim |
 | `claim <id>` | **atomic** — one winner; a loser is told who won, by session id |
 | `note <id> "..."` | update the status line the other session reads |
+| `compact <id> "..."` | log a compaction as an event only; the status line stays (the PreCompact hook runs this) |
 | `say "..." [--to <sid>]` | message the branch, or one peer |
 | `inbox` | unread updates since you last looked |
 | `done <id>` | land it and release the lane |
