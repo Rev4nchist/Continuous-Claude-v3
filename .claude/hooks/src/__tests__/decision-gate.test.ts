@@ -57,6 +57,8 @@ interface GitCall { cwd: string; args: string[] }
 interface World {
   enforce?: unknown; enforcePush?: unknown; config?: string | null; remote?: string; branch?: string; gitFails?: boolean;
   heads?: Record<string, string>; trees?: Record<string, string>; pushRef?: string; calls?: GitCall[];
+  /** What `git write-tree` answers (the index tree). Absent: write-tree fails. */
+  indexTree?: string;
   /** What `git remote get-url <name>` answers for a remote other than fork (default: it fails). */
   remoteUrls?: Record<string, string>;
 }
@@ -76,6 +78,7 @@ function deps(w: World = {}): Deps {
       const a = args.join(' ');
       if (a === 'remote -v') return { status: 0, stdout: `fork\t${w.remote ?? `https://github.com/${REPO}.git`} (push)\n` };
       if (a === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
+      if (a === 'write-tree') return w.indexTree ? { status: 0, stdout: `${w.indexTree}\n` } : { status: 128, stdout: '' };
       if (a === 'branch --show-current') return { status: 0, stdout: `${w.branch ?? 'feat/x'}\n` };
       const gu = /^remote get-url (.+)$/.exec(a);
       if (gu) return w.remoteUrls?.[gu[1]] ? { status: 0, stdout: `${w.remoteUrls[gu[1]]}\n` } : { status: 2, stdout: '' };
@@ -500,6 +503,203 @@ describe('G3 git push to the fork', () => {
       decide(bash('git -C /wt push fork'), deps({ calls }));
       const b = calls.find((c) => c.args.join(' ') === 'branch --show-current');
       expect(b?.cwd).toBe('/wt');
+    });
+  });
+
+  // RED-13: a plain commit in the SAME command text moves HEAD before the push runs. The hook reads HEAD earlier, so the tap is
+  // compared with the index tree (what the commit will hold). HEAD's tree is TREE, the index tree is INDEX in these tests.
+  describe('RED-13 a plain commit before the push in the same command: the tap is compared with the index tree', () => {
+    const INDEX = 'i'.repeat(40);
+    const W: World = { indexTree: INDEX };
+    const PUSHB = 'git push fork feat/x';
+    const COMMIT = 'git commit -F m.txt';
+    const callsOf = (cmd: string, tool: typeof bash | typeof pwsh = bash, w: World = W): string[] => {
+      const calls: GitCall[] = [];
+      decide(tool(cmd), deps({ ...w, calls }));
+      return calls.map((c) => c.args.join(' '));
+    };
+
+    it.each([
+      `${COMMIT} && ${PUSHB}`,
+      `git commit -q -F m.txt && ${PUSHB}`,
+      `git commit --quiet --file m.txt && ${PUSHB}`,
+      `git commit --file=m.txt && ${PUSHB}`,
+      `git commit -m "fix: a thing (x)" && ${PUSHB}`,
+      `git commit --message='msg' && ${PUSHB}`,
+      `cd /repo && ${COMMIT} && ${PUSHB}`,
+      `cd /repo; ${COMMIT} && ${PUSHB}`,
+      `git status; ${COMMIT} && ${PUSHB}`,
+      `${COMMIT} && git status && ${PUSHB}`,
+      `${COMMIT} && git push fork HEAD:feat/x`,
+      `${COMMIT} && git push fork`,
+      `${COMMIT} && pwsh -File scripts/git-safe.ps1 push fork feat/x`,
+      `pwsh -File scripts/git-safe.ps1 commit -F m.txt && pwsh -File scripts/git-safe.ps1 push fork feat/x`,
+      `pwsh -File scripts/github/git-for.ps1 commit -F m.txt && pwsh -File scripts/github/git-for.ps1 push fork feat/x`,
+    ])('1: allows %j with a tap on the index tree', (cmd) => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      expect(denied(bash(cmd), W), cmd).toBe(false);
+    });
+
+    it('1b: the same command is denied with no tap (the rule is the tree, not the shape)', () => {
+      expect(denied(bash(`${COMMIT} && ${PUSHB}`), W)).toBe(true);
+    });
+
+    it('2: denies when the index tree is not the tapped tree (a file changed after the tap)', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE2);
+      expect(denied(bash(`${COMMIT} && ${PUSHB}`), W)).toBe(true);
+      expect(reasonOf(bash(`${COMMIT} && ${PUSHB}`), W)).toContain('ship-ask.mjs commit-and-push --branch feat/x');
+    });
+
+    it('2b: a tap on the HEAD tree does not license a different index tree', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
+      expect(denied(bash(`${COMMIT} && ${PUSHB}`), W)).toBe(true);
+    });
+
+    it('2c: denies when write-tree fails, as push-tree-unresolved', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      const w: World = { enforcePush: true }; // no indexTree: write-tree fails
+      expect(denied(bash(`${COMMIT} && ${PUSHB}`), w)).toBe(true);
+      expect(reasonOf(bash(`${COMMIT} && ${PUSHB}`), w)).toContain('cannot read the tree of');
+      expect(decide(bash(`${COMMIT} && ${PUSHB}`), deps({ enforcePush: undefined })).action).toBe('allow'); // warn mode still only warns
+    });
+
+    it('2d: reads the index in the directory the command acts in', () => {
+      const calls: GitCall[] = [];
+      decide(bash(`cd /wt && ${COMMIT} && ${PUSHB}`), deps({ ...W, calls }));
+      const wt = calls.find((c) => c.args.join(' ') === 'write-tree');
+      expect(wt?.cwd).toBe('/wt');
+    });
+
+    it.each([
+      `${COMMIT}; ${PUSHB}`,
+      `${COMMIT}
+${PUSHB}`,
+      `${COMMIT} ;${PUSHB}`,
+      `${COMMIT} && ; ${PUSHB}`,
+      `${COMMIT} && git status; ${PUSHB}`,
+      `${COMMIT} || ${PUSHB}`,
+      `git commit -q -F m.txt; ${PUSHB}`,
+      `${COMMIT}; git push fork HEAD:feat/x`,
+      `${COMMIT}; pwsh -File scripts/git-safe.ps1 push fork feat/x`,
+      `pwsh -File scripts/git-safe.ps1 commit -F m.txt; pwsh -File scripts/git-safe.ps1 push fork feat/x`,
+      `git commit --amend -F m.txt; ${PUSHB}`,
+      `git commit --amend --no-edit; ${PUSHB}`,
+      `git commit -a -F m.txt; ${PUSHB}`,
+      `git commit -am "msg"; ${PUSHB}`,
+      `git commit --all -F m.txt; ${PUSHB}`,
+      `git commit --allow-empty -F m.txt; ${PUSHB}`,
+      `git commit -F m.txt --no-verify; ${PUSHB}`,
+      `git commit -F m.txt -- file.txt; ${PUSHB}`,
+      `git commit -F m.txt file.txt; ${PUSHB}`,
+      `git commit; ${PUSHB}`,
+      `git add -A; ${COMMIT}; ${PUSHB}`,
+      `${COMMIT}; git add -A; ${PUSHB}`,
+      `git rm x; ${COMMIT}; ${PUSHB}`,
+      `git checkout other; ${COMMIT}; ${PUSHB}`,
+      `git stash; ${COMMIT}; ${PUSHB}`,
+      `git merge fork/main; ${COMMIT}; ${PUSHB}`,
+      `echo x > m.txt; ${COMMIT}; ${PUSHB}`,
+      `GIT_INDEX_FILE=/tmp/other ${COMMIT}; ${PUSHB}`,
+      `git -C /elsewhere commit -F m.txt; ${PUSHB}`,
+      `git -c core.hooksPath=/x commit -F m.txt; ${PUSHB}`,
+      `${COMMIT} || ${PUSHB}`,
+      `${COMMIT} | cat; ${PUSHB}`,
+      `git commit -m "$(git add -A)"; ${PUSHB}`,
+      `git commit -m "\`git add -A\`"; ${PUSHB}`,
+      `(${COMMIT}); ${PUSHB}`,
+      `${COMMIT}; ${PUSHB}; git add -A`,
+      `${COMMIT}; cd /other; ${PUSHB}`,
+      `cd /a; cd /b; ${COMMIT}; ${PUSHB}`,
+      `${COMMIT}; git -C /other push fork feat/x`,
+      `${COMMIT}; git push fork other:feat/x`,
+      `${COMMIT}; git push fork feat/x; ${COMMIT}`,
+    ])('3/4: %j falls back to the HEAD tree rule (a tap on the index tree is not enough)', (cmd) => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      expect(denied(bash(cmd), W), cmd).toBe(true);
+      rmSync(storeFile, { force: true });
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
+      expect(denied(bash(cmd), { ...W, trees: { HEAD: TREE, 'feat/x': TREE, other: TREE } }), `${cmd} with a HEAD-tree tap`).toBe(false);
+    });
+
+    it('3b: a fallback never asks git for the index tree', () => {
+      for (const cmd of [`git commit --amend -F m.txt; ${PUSHB}`, `git commit -a -F m.txt; ${PUSHB}`, `git add -A; ${COMMIT}; ${PUSHB}`]) {
+        expect(callsOf(cmd), cmd).not.toContain('write-tree');
+      }
+    });
+
+    it('5: a push alone is unchanged: HEAD tree rule, no write-tree', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      expect(denied(bash(PUSHB), W)).toBe(true);
+      rmSync(storeFile, { force: true });
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
+      expect(denied(bash(PUSHB), W)).toBe(false);
+      expect(callsOf(PUSHB)).not.toContain('write-tree');
+    });
+
+    it('6/9: a push before the commit uses the HEAD tree rule', () => {
+      for (const cmd of [`${PUSHB}; ${COMMIT}`, `${PUSHB} && ${COMMIT}`]) {
+        rmSync(storeFile, { force: true });
+        tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+        expect(denied(bash(cmd), W), cmd).toBe(true);
+        rmSync(storeFile, { force: true });
+        tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
+        expect(denied(bash(cmd), W), `${cmd} with a HEAD-tree tap`).toBe(false);
+        expect(callsOf(cmd), cmd).not.toContain('write-tree');
+      }
+    });
+
+    it('7: force, delete, origin and subagent denials hold for a chained command', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      tap('ship', branchKey('main'), HEAD, 'Commit and push (Recommended)', INDEX);
+      for (const push of ['git push -f fork feat/x', 'git push --force-with-lease fork feat/x', 'git push fork +feat/x', 'git push fork :feat/x', 'git push --delete fork feat/x', 'git push --tags fork']) {
+        expect(reasonOf(bash(`${COMMIT} && ${push}`), W), push).toMatch(/force|delete|rewrit/i);
+      }
+      for (const push of ['git push origin feat/x', 'git push origin main', 'git push']) {
+        expect(denied(bash(`${COMMIT} && ${push}`), { ...W, pushRef: 'origin/feat/x' }), push).toBe(true);
+      }
+      expect(reasonOf(bash(`${COMMIT} && git push origin feat/x`), W)).toContain('origin');
+      expect(reasonOf(bash(`${COMMIT} && ${PUSHB}`, { agent_id: 'sub-1' }), W)).toContain('subagent');
+    });
+
+    it('7b: a chained land still needs its own tap', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      expect(denied(bash(`${COMMIT} && ${PUSHB} && pwsh -File scripts/github/land-pr.ps1 -Pr 12`), W)).toBe(true);
+    });
+
+    it('8: PowerShell git-safe commit then push', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      const cmd = 'pwsh -File scripts/git-safe.ps1 commit -F m.txt && pwsh -File scripts/git-safe.ps1 push fork feat/x';
+      expect(denied(pwsh(cmd), W)).toBe(false);
+      expect(denied(pwsh(`pwsh -File scripts/git-safe.ps1 commit --amend -F m.txt && pwsh -File scripts/git-safe.ps1 push fork feat/x`), W)).toBe(true);
+    });
+
+    it('8b: PowerShell: && chains (PowerShell 7), ; is the fallback', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      const gs = 'pwsh -File scripts/git-safe.ps1';
+      expect(denied(pwsh(`${gs} commit -F m.txt && ${gs} push fork feat/x`), W)).toBe(false);
+      expect(denied(pwsh(`${gs} commit -F m.txt; ${gs} push fork feat/x`), W)).toBe(true);
+      expect(denied(pwsh(`${gs} commit -F m.txt
+${gs} push fork feat/x`), W)).toBe(true);
+    });
+
+    it('10: ; newline and || between commit and push use the HEAD tree rule (a failed commit would push HEAD)', () => {
+      for (const cmd of [`${COMMIT}; ${PUSHB}`, `${COMMIT}
+${PUSHB}`, `${COMMIT} || ${PUSHB}`]) {
+        rmSync(storeFile, { force: true });
+        tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+        expect(denied(bash(cmd), W), `${cmd} with an index-tree tap`).toBe(true);
+        expect(callsOf(cmd), cmd).not.toContain('write-tree');
+        rmSync(storeFile, { force: true });
+        tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
+        expect(denied(bash(cmd), W), `${cmd} with a HEAD-tree tap`).toBe(false);
+      }
+    });
+
+    it('the push gate in warn mode warns, with the same tree rule', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+      expect(decide(bash(`${COMMIT} && ${PUSHB}`), deps({ ...W, enforcePush: undefined }))).toEqual({ action: 'allow' });
+      const d = decide(bash(`${COMMIT} && ${PUSHB}`), deps({ indexTree: TREE2, enforcePush: undefined }));
+      expect(d.action === 'allow' && d.warn).toContain('ship');
     });
   });
 });

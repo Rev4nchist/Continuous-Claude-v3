@@ -708,6 +708,63 @@ function headBranch(text, deps, dir) {
   if (r.status !== 0) throw new Error("git branch --show-current failed");
   return r.stdout.trim();
 }
+var COMMIT_GIT = gitCallRe("commit");
+var COMMIT_SAFE = safeCallRe("commit", PUSH_WRAPPERS, "", "gi");
+var READ_VERB = "(?:status|diff|log|show|rev-parse)";
+var READ_GIT = gitCallRe(READ_VERB);
+var READ_SAFE = safeCallRe(READ_VERB, PUSH_WRAPPERS, "", "gi");
+var COMMIT_MSG = String.raw`(?:-[Fm]\s+${VAL}|--(?:file|message)(?:=|\s+)${VAL})`;
+var COMMIT_ARGS_RE = new RegExp(String.raw`^(?:\s+(?:-q|--quiet))*\s+${COMMIT_MSG}(?:\s+(?:-q|--quiet|${COMMIT_MSG}))*\s*$`);
+var CD_SEG_RE = /^\s*(?:cd|Set-Location|sl|pushd|Push-Location)\s+\S/i;
+function openCall(ms, rs, git, safe) {
+  const kinds = [[git, isGitToken], [safe, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
+  for (const [re, valid] of kinds) {
+    for (const m of ms.matchAll(re)) {
+      if (m[1].trim() !== "") continue;
+      const tokenStart = m.index + m[1].length;
+      if (!valid(rs.slice(tokenStart, tokenStart + m[2].length))) continue;
+      const optsStart = tokenStart + m[2].length;
+      return { opts: rs.slice(optsStart, optsStart + m[3].length), end: m.index + m[0].length };
+    }
+  }
+  return null;
+}
+function segmentKind(ms, rs) {
+  if (/[(){}<>]/.test(ms) || /[$`]/.test(rs)) return "other";
+  if (CD_SEG_RE.test(ms)) return "cd";
+  const commit = openCall(ms, rs, COMMIT_GIT, COMMIT_SAFE);
+  if (commit) return commit.opts.trim() === "" && COMMIT_ARGS_RE.test(rs.slice(commit.end)) ? "commit" : "other";
+  if (openCall(ms, rs, PUSH_GIT, PUSH_SAFE)) return "push";
+  const read = openCall(ms, rs, READ_GIT, READ_SAFE);
+  return read && read.opts.trim() === "" ? "read" : "other";
+}
+function commitPrecedesPush(raw, shell) {
+  const view = joinContinuations(raw, shell);
+  const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
+  if (masked.includes("|") || /(?<!&)&(?!&)/.test(masked)) return false;
+  const seq = [];
+  const before = [];
+  let from = 0;
+  let pending = "";
+  const breaks = [...masked.matchAll(/[;&\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]);
+  for (const [start, next] of [...breaks, [view.length, view.length]]) {
+    const ms = masked.slice(from, start);
+    if (ms.trim() !== "") {
+      seq.push(segmentKind(ms, view.slice(from, start)));
+      before.push(pending.trim());
+      pending = "";
+    } else pending += ms;
+    pending += masked.slice(start, next);
+    from = next;
+  }
+  const firstCommit = seq.indexOf("commit");
+  const lastPush = seq.lastIndexOf("push");
+  const firstPush = seq.indexOf("push");
+  if (seq.includes("other") || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf("commit") > firstPush) return false;
+  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== "&&")) return false;
+  const cds = seq.flatMap((k, i) => k === "cd" ? [i] : []);
+  return cds.length === 0 || cds.length === 1 && cds[0] < firstCommit;
+}
 var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pwsh" : "bash";
 var ALLOW = { action: "allow" };
 function judgeCreate(text, deps, dir, named) {
@@ -738,7 +795,7 @@ function remoteKind(remote) {
   if (r === "origin" || r.includes("parcadei")) return "origin";
   return r === "fork" || r.includes(CCV3_REPO) ? "fork" : null;
 }
-function judgePush(shape, deps, dir, subagent) {
+function judgePush(shape, deps, dir, subagent, chained) {
   const p = shape.push;
   const d = (pattern, why) => deny(pattern, why, "push");
   if (p.moved) return d("push-target-unresolved", pushUnresolvedWhy("--git-dir or --work-tree moves the repo, so the checkout is unknown"));
@@ -767,8 +824,9 @@ function judgePush(shape, deps, dir, subagent) {
   if (branch === "main") return ALLOW;
   const ref = p.src ?? "HEAD";
   if (ref.startsWith("-")) return d("push-target-unresolved", pushUnresolvedWhy(`${ref} is not a ref`));
-  const r = deps.git(dir, ["rev-parse", `${ref}^{tree}`]);
-  if (r.status !== 0) return d("push-tree-unresolved", `cannot read the tree of ${ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
+  const viaIndex = chained && p.dir === null && (p.src === null || deps.git(dir, ["branch", "--show-current"]).stdout.trim() === p.src);
+  const r = viaIndex ? deps.git(dir, ["write-tree"]) : deps.git(dir, ["rev-parse", `${ref}^{tree}`]);
+  if (r.status !== 0) return d("push-tree-unresolved", `cannot read the tree of ${viaIndex ? "the index (git write-tree)" : ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
   const tree = r.stdout.trim();
   const key = decisionKey2({ branch });
   const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && isShipLabel(row.label) && row.tree !== null && row.tree === tree);
@@ -788,8 +846,9 @@ function judgeCommand(input, deps) {
   const shell = shellOf(input);
   const dir = workDir(cmd.text, cwd, shell);
   const named = namedRepo(cmd.text, deps.env);
+  const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, s.push.dir === null ? dir : resolveDir(dir, s.push.dir, shell), Boolean(input.agent_id)) : judgeLand(s, deps, dir, named);
+    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, s.push.dir === null ? dir : resolveDir(dir, s.push.dir, shell), Boolean(input.agent_id), chained) : judgeLand(s, deps, dir, named);
     if (d.action === "deny") denies.push(d);
   }
   return denies;
