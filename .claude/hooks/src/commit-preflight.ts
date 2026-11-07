@@ -31,6 +31,7 @@
 import { readFileSync } from 'fs';
 import { isAbsolute, resolve } from 'path';
 import { hasE2e, judge, latestSidecar, readTestRun } from './shared/done-proof.js';
+import { VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { resolveHead } from './shared/git-head.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { isUnattended } from './shared/unattended.js';
@@ -69,31 +70,11 @@ export interface PreflightOutput {
 // Finding the commit calls
 // ---------------------------------------------------------------------------
 
-// A quoted value (kept as-is in the masked view: only the inside is blanked) or a bare word.
-const VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)`;
-// git's global options that may sit between `git` and `commit`.
-const GLOBAL_OPT = String.raw`(?:\s+(?:-C\s+${VAL}|-c\s+(?:[^\s"']|"[^"]*"|'[^']*')+|--(?:git-dir|work-tree|namespace)(?:=|\s+)${VAL}|--no-pager|--no-replace-objects|--bare|-P))*`;
-// A command position: the start, after `; & | ( { newline`, or after then/do/else. An env prefix
-// (`GIT_X=y`), a PowerShell `&` and a wrapper (`time`, `sudo`) may come first.
-const CALL_START = String.raw`(?:^\s*|[;&|(\n{]\s*|\b(?:then|do|else)\s+)(?:&\s+)?(?:\w+=\S*\s+)*(?:(?:time|sudo|command|exec|nohup)\s+)*`;
-const PATH_PREFIX = String.raw`(?:[^\s;&|()]*[\\/])?`;
-// `pwsh -NoProfile -File <script>` in front of git-safe.ps1.
-const PWSH_PREFIX = String.raw`(?:(?:pwsh|powershell)(?:\.exe)?(?:\s+-[A-Za-z]+(?:\s+[^-\s]\S*)?)*?\s+-File\s+)?`;
-
+// The regexes live in shared/git-call.ts (decision-gate finds `git push` with the same builder).
 // Four contiguous groups cover the whole match: 1 the lead-in, 2 the executable token, 3 git's
 // global options, 4 `commit`. Offsets in the masked view are offsets in the raw command.
-const GIT_CALL = new RegExp(
-  String.raw`(${CALL_START})(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+commit)(?=\s|$)`,
-  'g',
-);
-const SAFE_CALL = new RegExp(
-  String.raw`(${CALL_START})(${PWSH_PREFIX}(?:${PATH_PREFIX}git-safe\.ps1|"\s*"|'\s*'))(${GLOBAL_OPT})(\s+commit)(?=\s|$)`,
-  'g',
-);
-
-// The masked view hides a quoted executable path, so the raw token is checked.
-const isGitToken = (raw: string): boolean => /(?:^|[\\/"'])git(?:\.exe)?["']?$/i.test(raw);
-const isSafeToken = (raw: string): boolean => /git-safe\.ps1/i.test(raw);
+const GIT_CALL = gitCallRe('commit');
+const SAFE_CALL = safeCallRe('commit');
 
 interface CommitCall {
   /** Where the call (with its lead-in) starts in the command. */

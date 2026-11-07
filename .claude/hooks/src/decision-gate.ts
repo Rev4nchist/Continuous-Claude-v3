@@ -14,16 +14,27 @@
  *             store or runs its code (node -e ...). Shell text that uses a tap up (land-decision.mjs use) or loops
  *             pr-checkpoint.mjs --json --pr is denied too: the model must not burn taps from a shell. That text check is best
  *             effort (a loop built from variables is not seen). Only decision-ledger writes decisions. A plain read passes.
- * NOT gated: git push (the push gate is not in this PR), anything else.
+ *   push      git push (git, git.exe, git-safe.ps1, git-for.ps1; any -C, -c, --no-pager before the verb) to the fork from a CCv3 checkout,
+ *             to a branch other than main: needs "Commit and push" (ship step) for that branch and for the TREE being pushed. The tap is
+ *             bound to the index tree before the commit (ship-ask.mjs), so the check compares it with <src|HEAD>^{tree} at push time: the
+ *             head moves when the commit is made, the tree does not. A force or delete form (--force, -f, --force-with-lease, +refspec,
+ *             --mirror, --all, --tags, --delete, -d, --prune, :dst) is denied even with a tap. A push to origin (upstream) is denied.
+ *             A dry run, --help, `git stash push`, another remote and a non-CCv3 checkout pass. A push to main passes unless it is a force form.
+ *             A command with several pushes is judged one push at a time, like land.
+ * NOT gated: anything else. Known gaps: a push inside a child process (land-pr.ps1, scheduled jobs), `bash -c '...'`, a variable or alias for git.
  *
  * Mode. `decisions.enforce` is a TOP-LEVEL block of review-router.config.json (not `checkpoint`). Only a literal true denies.
  * Anything else, a missing file included, is WARN mode: the command runs and the hook adds a context line (and a log row).
  * This is the opposite of pre-pr-gate, which fails closed on a missing config: this gate ships OFF.
+ * The push gate has its own flag, `decisions.enforcePush`, read the same way (a literal true denies; absent warns). A deny has a scope,
+ * push or other, and the flag of its scope decides it in all three places: decide(), the subagent deny and the handle() catch.
+ * A command that mixes a push with a land is judged per scope: either flag that is on denies its own part.
  * The config is read from the payload cwd upward (no git), then from <home>/continuous-claude.
  *
  * Posture when enforcing: a gated shape that cannot be judged (git fails, no PR number in the text) is denied. Everything else passes.
  * Unreadable input (not JSON) has no visible shape: it passes, with one line on stderr. Blocking it would block all work.
- * A subagent (agent_id) never has a tap: its create, land and merge are denied. -CleanupOnly never merges, so it passes.
+ * A subagent (agent_id) never has a tap: its create, land and merge are denied, and so is a push to the fork of a CCv3 checkout (a push in
+ * another repo, or to another remote, is not ours). -CleanupOnly never merges, so it passes.
  * There is NO override: no SKIP_* variable. Dave's tap is the only way. The hook guards against mistakes, not a hostile agent:
  * a command built from variables, an indirect script, or a store write from a language other than node is not seen.
  * Known best-effort gap: a Windows 8.3 short name of the store (DECISI~1.JSN) reaches the same file and is not seen.
@@ -39,7 +50,9 @@ import { isAbsolute, resolve } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, namedRepo } from './shared/checkpoint-shapes.js';
 import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared/decisions-store.js';
+import { VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
+import { maskQuoted } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand } from './shared/shell-tools.js';
 
@@ -57,22 +70,31 @@ export interface Deps {
   env: NodeJS.ProcessEnv;
   home: string;
 }
-export type Decision = { action: 'allow'; warn?: string } | { action: 'deny'; reason: string; pattern: string };
+/** Which flag decides a deny: `push` is decisions.enforcePush, `other` is decisions.enforce. */
+export type Scope = 'push' | 'other';
+export type Deny = { action: 'deny'; reason: string; pattern: string; scope: Scope };
+export type Decision = { action: 'allow'; warn?: string; scope?: Scope } | Deny;
 interface HookInput { tool_name?: string; tool?: string; tool_input?: Record<string, unknown>; cwd?: string; agent_id?: string; session_id?: string }
 
 /** The label of a decision that lets the action run. Any other label (Keep open, Stop here, Show ..., a re-run) does not. */
 export const isOpenPrLabel = (label: string): boolean => /^Open draft PR\b/.test(label);
 export const isLandLabel = (label: string): boolean => /^Land (?:now|when READY)\b/.test(label);
+export const isShipLabel = (label: string): boolean => /^Commit and push\b/.test(label);
 
 // ---------- the question to ask, per deny ----------
 
-const deny = (pattern: string, why: string): Decision => ({ action: 'deny', pattern, reason: `BLOCKED (decision-gate): ${why}` });
+const deny = (pattern: string, why: string, scope: Scope = 'other'): Deny => ({ action: 'deny', pattern, scope, reason: `BLOCKED (decision-gate): ${why}` });
 const openPrWhy = (branch: string, head: string): string =>
   `no "open-pr" decision from Dave for ${branch} at ${head.slice(0, 7)}. Ask him first: run node scripts/github/ship-ask.mjs open-pr --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then open the PR only if he taps "Open draft PR".`;
 const landWhy = (pr: string): string =>
   `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
+const pushWhy = (branch: string): string =>
+  `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push". The tap is bound to the staged tree: stage, ask, commit, then push. A change after the tap (a merge, a new commit) needs a new tap.`;
+const PUSH_UNSAFE_WHY = 'a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave\'s tap. Push without that option. If it is really needed, ask Dave to run it himself.';
+const PUSH_ORIGIN_WHY = 'a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.';
+const pushUnresolvedWhy = (what: string): string => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
 const STORE_WHY = 'only decision-ledger writes the decision store, from Dave\'s tap in AskUserQuestion. Do not write it by hand. To record a decision, ask the question with AskUserQuestion.';
-const SUBAGENT_WHY = 'a subagent cannot open a PR, land or merge: Dave\'s tap belongs to the main session. Ask the main session to do it.';
+const SUBAGENT_WHY = 'a subagent cannot open a PR, land, merge or push: Dave\'s tap belongs to the main session. Ask the main session to do it.';
 const NO_PR_WHY = 'the PR number cannot be read from this command, so its land decision cannot be found. Name the PR number in the command (land-pr.ps1 -Pr <n>, gh pr merge <n>).';
 
 // ---------- the store, as text and as a path ----------
@@ -152,7 +174,22 @@ function writesStoreText(text: string, deps: Deps): boolean {
 
 // ---------- the command shapes ----------
 
-interface Shape { kind: 'create' | 'land' | 'merge' | 'store'; pr: string | null; sha?: string | null }
+/** One push, read from the text. `branch` and `remote` are null when the command names none (resolved later, in the checkout). */
+interface PushShape {
+  remote: string | null;
+  /** The branch the push updates: the refspec destination, else its source; null for HEAD or no refspec (the current branch). */
+  branch: string | null;
+  /** The source ref whose tree is pushed; null is HEAD. */
+  src: string | null;
+  /** The -C value, raw. */
+  dir: string | null;
+  /** A force or delete form (see FORCE_LONG). */
+  force: boolean;
+  /** --git-dir or --work-tree moves the repo: the checkout cannot be known. */
+  moved: boolean;
+}
+interface Shape { kind: 'create' | 'land' | 'merge' | 'store' | 'push'; pr: string | null; sha?: string | null; push?: PushShape }
+const scopeOf = (s: Shape): Scope => (s.kind === 'push' ? 'push' : 'other');
 
 const LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 const LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
@@ -177,6 +214,123 @@ function landShapesOf(seg: string): Shape[] {
   return out;
 }
 
+// ---------- the push shape ----------
+
+const PUSH_GIT = gitCallRe('push');
+const PUSH_WRAPPERS = 'git-(?:safe|for)';
+/** A PowerShell parameter may be shortened to its first letters (unique prefix) and ignores case. */
+const abbr = (name: string, min: number): string => name.slice(0, min) + [...name.slice(min)].reduceRight((acc, ch) => `(?:${ch}${acc})?`, '');
+// git-for.ps1 has its own parameters before the git arguments: `git-for.ps1 -UseGitSafe -Remote fork push fork b`, `-Path <dir> push ...`.
+// -Path is the directory git runs in, like git -C.
+const GIT_FOR_OPTS = String.raw`-(?:${abbr('Path', 2)}|${abbr('Remote', 1)})(?::|\s+)${VAL}|-(?:${abbr('WhichAccount', 2)}|${abbr('UseGitSafe', 1)})(?=\s)|`;
+const PUSH_SAFE = safeCallRe('push', PUSH_WRAPPERS, GIT_FOR_OPTS, 'gi');
+/** Where the arguments of a push end in the masked view: a segment break, or the ) or } that closes a group. */
+const ARGS_END_RE = /[;&|\r\n)}]/;
+const DIR_OPT_RE = new RegExp(String.raw`(?:^|\s)-C\s+(${VAL})`, 'g');
+const PATH_OPT_RE = new RegExp(String.raw`(?:^|\s)-${abbr('Path', 2)}(?::|\s+)(${VAL})`, 'gi');
+const MOVE_OPT_RE = /(?:^|\s)--(?:git-dir|work-tree)(?:=|\s)/;
+const REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
+/** Options that take the next word as their value (or `--opt=value`, handled by the `--` branch). */
+const VALUE_OPTS = new Set(['--repo', '--receive-pack', '--exec', '--push-option', '-o']);
+const FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
+
+interface RawPush { opts: string; args: string }
+
+/** The push calls of one view. `masked` and `raw` have the same length. `atStart`: the call must open the text (the squashed view). */
+function pushCallsOf(masked: string, raw: string, atStart: boolean): RawPush[] {
+  const calls: RawPush[] = [];
+  const kinds: [RegExp, (token: string) => boolean][] = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
+  for (const [re, valid] of kinds) {
+    for (const m of masked.matchAll(re)) {
+      const tokenStart = m.index! + m[1].length;
+      if (!valid(raw.slice(tokenStart, tokenStart + m[2].length))) continue;
+      if (atStart && masked.slice(0, m.index!).trim() !== '') continue;
+      const optsStart = tokenStart + m[2].length;
+      const end = m.index! + m[0].length;
+      const cut = masked.slice(end).search(ARGS_END_RE);
+      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut) });
+    }
+  }
+  return calls;
+}
+
+/** The push calls of a command: the bash view, the pwsh view, and each bash segment with its quotes deleted (`g"i"t push`, `git "push"`). */
+function pushCallsIn(raw: string): RawPush[] {
+  const bash = joinContinuations(raw, 'bash');
+  const pwsh = joinContinuations(raw, 'pwsh');
+  const maskedBash = maskQuoted(bash, 'Bash');
+  const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskQuoted(pwsh, 'PowerShell'), pwsh, false)];
+  let from = 0;
+  const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const);
+  for (const [start, next] of [...breaks, [bash.length, bash.length] as const]) {
+    const seg = bash.slice(from, start);
+    from = next;
+    const squashed = squashQuotes(seg);
+    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true));
+  }
+  return calls;
+}
+
+const REF_HEADS = /^refs\/heads\//;
+
+/** The shapes of one push call: one per refspec, or one with no refspec. A dry run or a help request has none. */
+function pushShapesFrom(call: RawPush): Shape[] {
+  const tokens = call.args.replace(REDIRECT_RE, ' ').split(/\s+/).map(squashQuotes).filter(Boolean);
+  const dirs = [...call.opts.matchAll(DIR_OPT_RE), ...call.opts.matchAll(PATH_OPT_RE)].sort((a, b) => a.index! - b.index!);
+  const dir = dirs.map((m) => squashQuotes(m[1])).pop() ?? null;
+  const positional: string[] = [];
+  let force = false;
+  let quiet = false; // --dry-run, -n, --help, -h
+  let literal = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (literal || !t.startsWith('-') || t === '-') { positional.push(t); continue; }
+    if (t === '--') { literal = true; continue; }
+    if (VALUE_OPTS.has(t)) { i++; continue; }
+    if (t.startsWith('--')) {
+      if (FORCE_LONG.test(t)) force = true;
+      if (t === '--dry-run' || t === '--help') quiet = true;
+    } else if (/^-[A-Za-z0-9]+$/.test(t)) {
+      if (/[fd]/.test(t)) force = true;
+      if (/[nh]/.test(t)) quiet = true;
+    }
+  }
+  if (quiet) return [];
+  const [remote = null, ...specs] = positional;
+  const base = { remote, dir, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  if (specs.length === 0) return [{ kind: 'push', pr: null, push: { ...base, branch: null, src: null, force } }];
+  const out: Shape[] = [];
+  for (let i = 0; i < specs.length; i++) {
+    let spec = specs[i];
+    let rewrite = force;
+    if (spec === 'tag') { rewrite = true; i++; spec = specs[i] ?? 'tag'; } // `tag <name>` pushes refs/tags/<name>
+    if (spec.startsWith('+')) { rewrite = true; spec = spec.slice(1); }
+    const colon = spec.indexOf(':');
+    const rawSrc = colon < 0 ? spec : spec.slice(0, colon);
+    const rawDst = colon < 0 ? '' : spec.slice(colon + 1);
+    if (colon >= 0 && rawSrc === '') rewrite = true; // `:dst` deletes dst
+    if (/^refs\/tags\//.test(rawDst || rawSrc)) rewrite = true;
+    const src = rawSrc.replace(REF_HEADS, '');
+    const name = (rawDst || rawSrc).replace(REF_HEADS, '');
+    out.push({ kind: 'push', pr: null, push: { ...base, branch: name === '' || name === 'HEAD' ? null : name, src: src === '' || src === 'HEAD' ? null : src, force: rewrite } });
+  }
+  return out;
+}
+
+/** Every push shape of a command, de-duplicated across the views. */
+function pushShapesOf(raw: string): Shape[] {
+  const out: Shape[] = [];
+  const seen = new Set<string>();
+  for (const call of pushCallsIn(raw)) {
+    for (const shape of pushShapesFrom(call)) {
+      const p = shape.push!;
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved].join('|');
+      if (!seen.has(id)) { seen.add(id); out.push(shape); }
+    }
+  }
+  return out;
+}
+
 /**
  * The shapes of one command text (continued lines joined, both shells read). EVERY land and merge shape is returned, one per segment:
  * the text is split on && ; | and newlines, and each segment is read alone, so a tap for the first PR does not cover the second.
@@ -197,6 +351,7 @@ function shapesOf(raw: string): Shape[] {
       }
     }
   }
+  out.push(...pushShapesOf(raw));
   return out;
 }
 
@@ -204,6 +359,10 @@ function shapesOf(raw: string): Shape[] {
 
 /** decisions.enforce of the review-router.config.json found from `cwd` upward, else under <home>/continuous-claude. Only a literal true enforces. */
 const enforcing = (deps: Deps, cwd: string): boolean => routerFlag(cwd, deps.readFile, deps.home, 'decisions', 'enforce');
+/** decisions.enforcePush: the push gate's own flag, so a push can warn while create, land and merge enforce. Absent is warn. */
+const enforcingPush = (deps: Deps, cwd: string): boolean => routerFlag(cwd, deps.readFile, deps.home, 'decisions', 'enforcePush');
+const enforcingScope = (scope: Scope, deps: Deps, cwd: string): boolean => (scope === 'push' ? enforcingPush(deps, cwd) : enforcing(deps, cwd));
+const FLAG_OF: Record<Scope, string> = { push: 'decisions.enforcePush', other: 'decisions.enforce' };
 
 // ---------- the checkout ----------
 
@@ -270,56 +429,127 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, named: string | null):
   return ok ? ALLOW : deny('land', landWhy(shape.pr));
 }
 
-function judgeCommand(input: HookInput, deps: Deps): Decision {
-  const cmd = readShellCommand(input);
-  if (cmd.kind !== 'command' || cmd.text === '') return ALLOW;
-  const cwd = input.cwd || process.cwd();
-  if (writesStoreText(cmd.text, deps)) return deny('store-write', STORE_WHY);
-  const shapes = shapesOf(cmd.text);
-  if (shapes.length === 0) return ALLOW;
-  if (input.agent_id) return deny('subagent', SUBAGENT_WHY);
-  const dir = workDir(cmd.text, cwd, shellOf(input));
-  const named = namedRepo(cmd.text, deps.env);
-  for (const s of shapes) {
-    const d = s.kind === 'create' ? judgeCreate(cmd.text, deps, dir, named) : judgeLand(s, deps, dir, named);
-    if (d.action === 'deny') return d;
-  }
-  return ALLOW;
+/** `-C <path>` of a push: absolute as given, else under the directory the command acts in. */
+function resolveDir(base: string, raw: string, shell: 'bash' | 'pwsh'): string {
+  const t = shell === 'bash' ? gitBashPath(raw) : raw;
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
 
-function judgeWrite(input: HookInput, deps: Deps): Decision {
+/** A remote name or URL: the upstream (origin, parcadei), the fork (fork, the CCv3 repo URL) or neither. */
+function remoteKind(remote: string): 'origin' | 'fork' | null {
+  const r = remote.toLowerCase();
+  if (r === 'origin' || r.includes('parcadei')) return 'origin';
+  return r === 'fork' || r.includes(CCV3_REPO) ? 'fork' : null;
+}
+
+/**
+ * Push: a ship decision ("Commit and push") for the branch, bound to the tree being pushed. The head is not compared: the tap was
+ * made before the commit, so its head is the parent of the commit now at HEAD. The tree is the same before and after the commit.
+ * Order: unreadable target, not CCv3, origin, other remote, subagent, force or delete form, branch, main, tree, tap.
+ * A force form is denied before the main check: a force push to the fork's main rewrites the branch every PR lands on.
+ */
+function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean): Decision {
+  const p = shape.push!;
+  const d = (pattern: string, why: string): Deny => deny(pattern, why, 'push');
+  if (p.moved) return d('push-target-unresolved', pushUnresolvedWhy('--git-dir or --work-tree moves the repo, so the checkout is unknown'));
+  if (!isCcv3Checkout(deps, dir)) return ALLOW;
+  let remote = p.remote;
+  if (remote === null) {
+    const up = deps.git(dir, ['rev-parse', '--abbrev-ref', '@{push}']);
+    remote = up.status === 0 && up.stdout.trim() !== '' ? up.stdout.trim().split('/')[0] : 'fork';
+  }
+  let kind = remoteKind(remote);
+  if (kind === null) { // another name for a URL we gate: ask git what the remote points at
+    const u = deps.git(dir, ['remote', 'get-url', remote]);
+    if (u.status === 0) kind = remoteKind(u.stdout.trim());
+  }
+  if (kind === 'origin') return d('push-origin', PUSH_ORIGIN_WHY);
+  if (kind === null) return ALLOW;
+  // A subagent never has a tap (D3): any push to the fork is denied, main included. Its pushes elsewhere are not our business.
+  if (subagent) return d('subagent', SUBAGENT_WHY);
+  if (p.force) return d('push-unsafe', PUSH_UNSAFE_WHY);
+  let branch = p.branch;
+  if (branch === null) {
+    const r = deps.git(dir, ['branch', '--show-current']);
+    if (r.status !== 0) throw new Error('git branch --show-current failed');
+    branch = r.stdout.trim();
+  }
+  if (branch === '') return d('push-target-unresolved', pushUnresolvedWhy('the branch of this push cannot be named (detached HEAD?)'));
+  if (branch === 'main') return ALLOW;
+  const ref = p.src ?? 'HEAD';
+  if (ref.startsWith('-')) return d('push-target-unresolved', pushUnresolvedWhy(`${ref} is not a ref`));
+  const r = deps.git(dir, ['rev-parse', `${ref}^{tree}`]);
+  if (r.status !== 0) return d('push-tree-unresolved', `cannot read the tree of ${ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
+  const tree = r.stdout.trim();
+  const key = decisionKey({ branch });
+  const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && isShipLabel(row.label) && row.tree !== null && row.tree === tree);
+  return ok ? ALLOW : d('ship', pushWhy(branch));
+}
+
+/** Every deny of a command. All shapes are judged (no early return), so each deny keeps its scope and decide() applies the flag of that scope. */
+function judgeCommand(input: HookInput, deps: Deps): Deny[] {
+  const cmd = readShellCommand(input);
+  if (cmd.kind !== 'command' || cmd.text === '') return [];
+  const cwd = input.cwd || process.cwd();
+  if (writesStoreText(cmd.text, deps)) return [deny('store-write', STORE_WHY)];
+  const shapes = shapesOf(cmd.text);
+  const denies: Deny[] = [];
+  // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
+  if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(deny('subagent', SUBAGENT_WHY));
+  const pushes = shapes.filter((s) => s.kind === 'push');
+  const rest = input.agent_id ? [] : shapes.filter((s) => s.kind !== 'push');
+  if (pushes.length === 0 && rest.length === 0) return denies;
+  const shell = shellOf(input);
+  const dir = workDir(cmd.text, cwd, shell);
+  const named = namedRepo(cmd.text, deps.env);
+  for (const s of [...rest, ...pushes]) {
+    const d = s.kind === 'create' ? judgeCreate(cmd.text, deps, dir, named)
+      : s.kind === 'push' ? judgePush(s, deps, s.push!.dir === null ? dir : resolveDir(dir, s.push!.dir, shell), Boolean(input.agent_id))
+        : judgeLand(s, deps, dir, named);
+    if (d.action === 'deny') denies.push(d);
+  }
+  return denies;
+}
+
+function judgeWrite(input: HookInput, deps: Deps): Deny[] {
   const args = input.tool_input ?? {};
   const cwd = input.cwd || process.cwd();
   const hit = PATH_FIELDS.some((f) => typeof args[f] === 'string' && isStorePath(args[f] as string, deps, cwd));
-  return hit ? deny('store-write', STORE_WHY) : ALLOW;
+  return hit ? [deny('store-write', STORE_WHY)] : [];
 }
 
-/** The raw judgment, as if enforcing. May throw (git). */
-function judge(input: HookInput, deps: Deps): Decision {
+/** The raw judgment, as if enforcing: every deny, each with its scope. May throw (git). */
+function judge(input: HookInput, deps: Deps): Deny[] {
   const tool = input.tool_name || input.tool || '';
   if (WRITE_TOOLS.has(tool)) return judgeWrite(input, deps);
-  return COMMAND_TOOLS.has(tool) ? judgeCommand(input, deps) : ALLOW;
+  return COMMAND_TOOLS.has(tool) ? judgeCommand(input, deps) : [];
 }
 
-/** Pure given its deps. A deny becomes an allow with `warn` unless decisions.enforce is true. */
+/**
+ * Pure given its deps. A deny whose flag is on (decisions.enforce for most shapes, decisions.enforcePush for a push) is returned as a deny.
+ * Other denies become an allow with `warn`.
+ */
 export function decide(input: HookInput, deps: Deps): Decision {
-  const d = judge(input, deps);
-  if (d.action !== 'deny' || enforcing(deps, input.cwd || process.cwd())) return d;
-  return { action: 'allow', warn: `${d.pattern}: ${d.reason}` };
+  const denies = judge(input, deps);
+  if (denies.length === 0) return ALLOW;
+  const cwd = input.cwd || process.cwd();
+  const live = denies.find((d) => enforcingScope(d.scope, deps, cwd));
+  if (live) return live;
+  return { action: 'allow', warn: `${denies[0].pattern}: ${denies[0].reason}`, scope: denies[0].scope };
 }
 
 // ---------- hook plumbing ----------
 
 const out = (extra: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...extra } });
 const denyOut = (reason: string): string => out({ permissionDecision: 'deny', permissionDecisionReason: reason });
-const warnOut = (text: string): string => out({ additionalContext: `WARNING (decision-gate, warn mode): this command would be blocked when decisions.enforce is true. ${text.replace(/^BLOCKED \(decision-gate\): /, '')}` });
+const warnOut = (text: string, scope: Scope = 'other'): string => out({ additionalContext: `WARNING (decision-gate, warn mode): this command would be blocked when ${FLAG_OF[scope]} is true. ${text.replace(/^BLOCKED \(decision-gate\): /, '')}` });
 
-/** True when the tool call reads like a gated shape. Cheap, no git: it decides what an internal error does. */
-function looksGated(input: HookInput): boolean {
+/** The scopes of the gated shapes of the tool call, empty when it is not gated. Cheap, no git: it decides what an internal error does. */
+function gatedScopes(input: HookInput): Set<Scope> {
   const tool = input.tool_name || input.tool || '';
-  if (WRITE_TOOLS.has(tool)) return true;
+  if (WRITE_TOOLS.has(tool)) return new Set<Scope>(['other']);
   const cmd = readShellCommand(input);
-  return cmd.kind === 'command' && shapesOf(cmd.text).length > 0;
+  return new Set(cmd.kind === 'command' ? shapesOf(cmd.text).map(scopeOf) : []);
 }
 
 /**
@@ -351,7 +581,7 @@ export function handle(raw: string, deps: Deps): string {
     const d = decide(input, deps);
     if (d.action === 'allow' && d.warn) {
       logGuardDecision(HOOK, input, 'warn', d.warn.split(':')[0]);
-      return warnOut(d.warn.slice(d.warn.indexOf(':') + 2));
+      return warnOut(d.warn.slice(d.warn.indexOf(':') + 2), d.scope);
     }
     if (d.action === 'deny') {
       logGuardDecision(HOOK, input, 'deny', d.pattern);
@@ -360,13 +590,17 @@ export function handle(raw: string, deps: Deps): string {
     return '{}';
   } catch (err) {
     try { logGuardError(HOOK, err); } catch { /* the log never blocks */ }
-    if (!looksGatedSafe(input)) return '{}';
+    const scopes = gatedScopesSafe(input);
+    if (scopes.size === 0) return '{}';
     const why = `could not verify Dave's tap (${String((err as Error)?.message ?? err).slice(0, 160)}). Run the command again. If it keeps failing, ask Dave.`;
-    return enforcing(deps, input.cwd || process.cwd()) ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why);
+    const cwd = input.cwd || process.cwd();
+    // Each gated scope is judged by its own flag. A mixed command denies when either flag is on.
+    const live = [...scopes].some((s) => enforcingScope(s, deps, cwd));
+    return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : 'push');
   }
 }
 
-const looksGatedSafe = (input: HookInput): boolean => { try { return looksGated(input); } catch { return false; } };
+const gatedScopesSafe = (input: HookInput): Set<Scope> => { try { return gatedScopes(input); } catch { return new Set(); } };
 
 function makeGit(): Deps['git'] {
   return (cwd, args) => {

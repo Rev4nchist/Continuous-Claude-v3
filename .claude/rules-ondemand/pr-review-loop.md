@@ -153,9 +153,14 @@ command. A script builds each question, so you do not choose the options or thei
   option is "No, keep the PR a draft". Never post `--use-credits` or `@coderabbitai review` without a tap.
   A dialog that returns the first row twice records nothing paid.
 - With `decisions.enforce` true, `decision-gate` denies a PR create without the Open PR tap, and a land or merge
-  without the Land tap. It denies a write to the decision store from any tool. No override exists. Step 1 has
-  no gate yet: `git push` is not denied, so the question is rule text only. With the flag false the gate only warns.
-- Do not write the decision store by hand. A subagent cannot open a PR, land or merge: the tap is the main session's.
+  without the Land tap. It denies a write to the decision store from any tool. No override exists. With the flag false the gate only warns.
+- Step 1 gate: `git push fork <branch>` (any wrapper: `git`, `git-safe.ps1`, `git-for.ps1`) needs the "Commit and push" tap for
+  that branch and for the tree you push. The tap binds the staged tree, not the head, so a commit after the tap does not void it.
+  A merge or a new commit after the ask changes the tree and needs a new ask. Order: merge `fork/main`, stage, ask, commit, push.
+  Pushes to `main`, dry runs and other remotes pass. A force or delete form is denied even with a tap, and so is a push to `origin`.
+  Its flag is `decisions.enforcePush`: absent means warn only (a warning in the context, no block). A push has no "Push only"
+  option yet, so a push with nothing staged is warned, not denied.
+- Do not write the decision store by hand. A subagent cannot open a PR, land, merge or push: the tap is the main session's.
 
 ### PR review budget per class
 
