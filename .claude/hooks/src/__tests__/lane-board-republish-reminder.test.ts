@@ -64,6 +64,7 @@ describe('lane change fires once per batch', () => {
     const read = String(d.message).indexOf('action read');
     expect(read).toBeGreaterThan(-1);
     expect(read).toBeLessThan(String(d.message).indexOf(RENDER_COMMAND));
+    expect(d.message).toContain('without path');
   });
 
   it('stays silent but keeps tracking while the session is already pending', () => {

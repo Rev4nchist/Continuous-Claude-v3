@@ -153,6 +153,7 @@ describe('decideStop (pure)', () => {
       expect(read).toBeGreaterThan(-1);
       expect(read).toBeLessThan(d.reason.indexOf(renderBoardCmd('continuous-claude', baseEnv())));
       expect(d.reason.indexOf(renderBoardCmd('continuous-claude', baseEnv()))).toBeLessThan(d.reason.indexOf('publish '));
+      expect(d.reason).toContain('without path');
       expect(d.reason).toContain('publish the same file again');
       expect(d.reason).not.toContain('render again');
     }
