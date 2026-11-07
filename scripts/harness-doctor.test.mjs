@@ -89,7 +89,7 @@ const TASK_NAME = 'CCv3-Fake-Task';
  * no wake, daily 07:50. `wake: null` leaves the tag out like Windows does for false. `weekday` makes it a weekly trigger.
  * `every` (an ISO interval such as 'PT5M') makes it a repeating TimeTrigger; `duration` adds a Repetition Duration (none: repeats for ever).
  */
-const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', weekday = null, every = null, duration = null, args = null } = {}) => [
+const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', weekday = null, every = null, duration = null, args = null, command = 'powershell.exe' } = {}) => [
   '<?xml version="1.0" encoding="UTF-16"?>',
   '<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
   '  <Settings>',
@@ -118,7 +118,7 @@ const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', we
   '    </CalendarTrigger>',
   ]),
   '  </Triggers>',
-  ...(args === null ? [] : ['  <Actions Context="Author">', '    <Exec>', '      <Command>powershell.exe</Command>', `      <Arguments>${args}</Arguments>`, '    </Exec>', '  </Actions>']),
+  ...(args === null ? [] : ['  <Actions Context="Author">', '    <Exec>', `      <Command>${command}</Command>`, `      <Arguments>${args}</Arguments>`, '    </Exec>', '  </Actions>']),
   '</Task>',
 ].join('\r\r\n');
 /** A fake schtasks /xml: name to XML. An unknown name answers like schtasks does. */
@@ -709,22 +709,46 @@ test('drift: a repetition that stops after under one day (Duration PT1H) is a WA
 });
 
 const PS_ARGS = '-NoProfile -ExecutionPolicy Bypass -File &quot;C:\\x\\t.ps1&quot;';
-const PS_ARGS_HIDDEN = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;C:\\x\\t.ps1&quot;';
+const PS_ARGS_OLD = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;C:\\x\\t.ps1&quot;';
+const CONHOST = 'C:\\Windows\\System32\\conhost.exe';
+const HEADLESS_ARGS = '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;C:\\x\\t.ps1&quot;';
 const hiddenTask = (over = {}) => task({ trigger: 'every 5m', battery: true, hidden: true, ...over });
-const hiddenXml = (args) => taskXml({ disallow: false, stop: false, every: 'PT5M', args });
+const hiddenXml = (args, command = 'powershell.exe') => taskXml({ disallow: false, stop: false, every: 'PT5M', args, command });
 
-test('F15: hidden:true but the registered action has no -WindowStyle Hidden is a WARN naming hidden', () => {
+test('hidden:true and the registered action is the plain powershell form is a WARN naming hidden', () => {
   const c = driftOf(hiddenTask(), hiddenXml(PS_ARGS));
   assert.equal(c.status, 'WARN', c.detail);
   assert.match(c.detail, /hidden/);
-  assert.equal(driftOf(hiddenTask(), hiddenXml(PS_ARGS_HIDDEN)).status, 'PASS');
 });
 
-test('F15: hidden not set but the registered action hides the window is a WARN; no Arguments in the XML is not judged', () => {
-  const c = driftOf(task({ trigger: 'every 5m', battery: true }), hiddenXml(PS_ARGS_HIDDEN));
+test('hidden:true and the registered action is the old -WindowStyle Hidden powershell form is a WARN naming hidden', () => {
+  const c = driftOf(hiddenTask(), hiddenXml(PS_ARGS_OLD));
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /hidden/);
+});
+
+test('hidden:true and the registered action is conhost.exe --headless powershell.exe is a PASS', () => {
+  assert.equal(driftOf(hiddenTask(), hiddenXml(HEADLESS_ARGS, CONHOST)).status, 'PASS');
+});
+
+test('hidden:true and conhost.exe without --headless first is a WARN naming hidden and --headless', () => {
+  const noFlag = driftOf(hiddenTask(), hiddenXml(PS_ARGS, CONHOST));
+  assert.equal(noFlag.status, 'WARN', noFlag.detail);
+  assert.match(noFlag.detail, /hidden/);
+  assert.match(noFlag.detail, /--headless/);
+  const late = driftOf(hiddenTask(), hiddenXml('powershell.exe --headless -NoProfile', CONHOST));
+  assert.equal(late.status, 'WARN', late.detail);
+});
+
+test('hidden not set but the registered action is conhost --headless is a WARN; no Arguments in the XML is not judged', () => {
+  const c = driftOf(task({ trigger: 'every 5m', battery: true }), hiddenXml(HEADLESS_ARGS, CONHOST));
   assert.equal(c.status, 'WARN', c.detail);
   assert.match(c.detail, /hidden/);
   assert.equal(driftOf(hiddenTask(), hiddenXml(null)).status, 'PASS', 'an XML with no action block is not compared');
+});
+
+test('hidden not set and the registered action is the plain powershell form is a PASS', () => {
+  assert.equal(driftOf(task({ trigger: 'every 5m', battery: true }), hiddenXml(PS_ARGS)).status, 'PASS');
 });
 
 test('F15: a tasks.json entry with hidden that is not true or false is a WARN on its own row', () => {

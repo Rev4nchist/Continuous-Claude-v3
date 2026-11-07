@@ -1,4 +1,5 @@
-# Lane reminder tick (Task Scheduler: CCv3-Reminder-Tick, every 5 minutes, powershell.exe -WindowStyle Hidden -File <this file>).
+# Lane reminder tick (Task Scheduler: CCv3-Reminder-Tick, every 5 minutes, conhost.exe --headless powershell.exe -File <this file>).
+# The task is hidden:true in tasks.json: it runs through conhost --headless so Task Scheduler opens no window. The 2026-11-07 live test showed no flash.
 # Runs under Windows PowerShell 5.1: no PS7-only syntax here. ASCII only.
 #
 # It runs `node scripts/coordination/lane.mjs remind tick`: fire the reminders that are due, write the lane events,
