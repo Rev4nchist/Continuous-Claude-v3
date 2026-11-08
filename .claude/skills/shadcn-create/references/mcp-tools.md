@@ -12,6 +12,8 @@ The 7 tool names come from `packages/shadcn/src/mcp/index.ts` in shadcn-ui/ui. T
 npx shadcn@latest mcp init --client claude
 ```
 
+The generated entry runs `shadcn@latest`. Edit it to `shadcn@4.22.1` before the next session start.
+
 `npx shadcn registry:mcp` does not exist. Do not use it.
 
 ### Or write the config by hand

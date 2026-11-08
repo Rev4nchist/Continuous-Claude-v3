@@ -51,6 +51,8 @@ Generate the config with the official command:
 npx shadcn@latest mcp init --client claude
 ```
 
+The generated entry runs `shadcn@latest`. Edit it to `shadcn@4.22.1` before the next session start.
+
 Or write the config by hand. On Windows, run `npx` through `cmd`. Pin the version. Never use `@latest` in a session-start config.
 
 ```json
@@ -182,7 +184,9 @@ Select in right sidebar → "Component Library" row.
 
 ```yaml
 Shortcut: if the choices are known, skip the browser. Build the URL
-from "Common Theme Presets" below and hand it to the user or the CLI.
+from "Common Theme Presets" below and hand it to the user. Do not pass a
+/create URL to the CLI: it fetches the HTML page and setup fails. Give the
+CLI a preset code or an /init URL.
 
 1. Navigate to platform:
    mcp__playwright__browser_navigate({ url: "https://ui.shadcn.com/create" })
@@ -409,7 +413,7 @@ Full catalog: `references/blocks.md`. Install: `npx shadcn@latest add dashboard-
 
 ```yaml
 mcp__playwright__browser_take_screenshot:
-  filename: "shadcn-theme-exploration.png"
+  filename: "shadcn-theme-style.png"  # use a different filename for each capture
   # Capture after each step: select style → cycle colors → adjust radius
   # For a dashboard block, check widths 1440 and 390 with browser_resize
 ```
