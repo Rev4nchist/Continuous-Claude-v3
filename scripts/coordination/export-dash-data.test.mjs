@@ -205,10 +205,11 @@ describe('refresh trigger doc (defect g)', () => {
 });
 
 // ---- collected fixtures for checkInvariants and writeExport
-function collected(exportedAt, { lanes = [lane({ id: 'a', state: 'backlog' }), lane({ id: 'b', state: 'done', done_at: exportedAt, done_day: chicagoDay(exportedAt) })], directOpen } = {}) {
+function collected(exportedAt, { lanes = [lane({ id: 'a', state: 'backlog' }), lane({ id: 'b', state: 'done', done_at: exportedAt, done_day: chicagoDay(exportedAt) })], directOpen, bornDone } = {}) {
   const env = (rows) => ({ sql: 'x', exportedAt, rows });
   const today = chicagoDay(exportedAt);
   return {
+    ...(bornDone ? { bornDone } : {}),
     directOpen: directOpen ?? lanes.filter((l) => l.state !== 'done').length,
     envelopes: {
       lanes: env(lanes),
@@ -262,6 +263,13 @@ describe('checkInvariants', () => {
     const lanes = [lane({ id: 'x', state: 'done', done_at: null, done_day: null })];
     const c = withSnapshots(collected(T1, { lanes, directOpen: 0 }));
     assert.throws(() => checkInvariants(c), /open/);
+  });
+
+  it('a lane born done (only a seeded event) passes, and any other done lane without a done signal still fails', () => {
+    // Breaks if bornDone is ignored (the first assertion) or if it excuses lanes that are not in the list (the second).
+    const lanes = [lane({ id: 'x', state: 'done', done_at: null, done_day: null })];
+    assert.doesNotThrow(() => checkInvariants(withSnapshots(collected(T1, { lanes, directOpen: 0, bornDone: ['x'] }))));
+    assert.throws(() => checkInvariants(withSnapshots(collected(T1, { lanes, directOpen: 0, bornDone: ['other'] }))), /open/);
   });
 
   it('reports every problem, not only the first', () => {

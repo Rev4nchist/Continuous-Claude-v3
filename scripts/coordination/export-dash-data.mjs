@@ -136,7 +136,8 @@ export function buildProjectRows(rules, lanes, config) {
 }
 
 /** Throws one Error (with .problems) listing every failed check. */
-export function checkInvariants({ envelopes, directOpen }) {
+export function checkInvariants({ envelopes, directOpen, bornDone = [] }) {
+  const born = new Set(bornDone);
   const problems = [];
   const stamps = new Set();
   for (const d of DATASETS) {
@@ -152,7 +153,8 @@ export function checkInvariants({ envelopes, directOpen }) {
   for (const l of lanes) if (!keys.has(l.project)) problems.push(`lane ${l.id} has project '${l.project}', which is not in the projects rows`);
   const today = envelopes?.meta?.rows?.[0]?.today;
   if (today) {
-    const rebuilt = lanes.filter((l) => l.created_day <= today && !(l.done_day && l.done_day <= today)).length;
+    // A lane born done (lane.mjs add --state done) has no done event, so no done_day. It is done, with an unknown time.
+    const rebuilt = lanes.filter((l) => l.created_day <= today && !(l.done_day && l.done_day <= today) && !born.has(l.id)).length;
     if (rebuilt !== directOpen) problems.push(`open count: ${rebuilt} rebuilt from lanes (created minus done on ${today}), ${directOpen} counted directly`);
   } else {
     problems.push('meta has no today value, so the open count cannot be rebuilt');
@@ -252,7 +254,7 @@ export function writeExport(outDir, collected) {
         rows: upsertSnapshot(prior, row),
       },
     };
-    checkInvariants({ envelopes, directOpen: collected.directOpen });
+    checkInvariants({ envelopes, directOpen: collected.directOpen, bornDone: collected.bornDone });
     const files = DATASETS.map((d) => ({ name: `${d}.json`, text: JSON.stringify(envelopes[d]) }));
     files.push({ name: 'refresh.json', text: JSON.stringify(buildRefreshDoc(exportedAt, DATASETS.map((d) => `${d}.json`)), null, 2) });
     for (const f of files) {
@@ -353,7 +355,12 @@ ORDER BY e.lane_id, (e.occurred_at AT TIME ZONE 'America/Chicago')::date, lower(
 const SQL_DIRECT = `SELECT count(*) FILTER (WHERE state <> 'done')::int AS open, count(*) FILTER (WHERE state = 'done')::int AS done
 FROM agentic_os.lane WHERE project_key = $1`;
 
-const SQL_DONE_EVENTS = `SELECT count(DISTINCT e.lane_id)::int AS lanes, count(*)::int AS events
+// Done lanes whose only events are 'seeded' (or none): created as done, never marked done. Any other done lane without a done signal stays a check failure.
+const SQL_BORN_DONE = `SELECT l.id FROM agentic_os.lane l
+WHERE l.project_key = $1 AND l.state = 'done'
+  AND NOT EXISTS (SELECT 1 FROM agentic_os.lane_event e WHERE e.lane_id = l.id AND e.kind <> 'seeded')`;
+
+const SQL_DONE_EVENTS =`SELECT count(DISTINCT e.lane_id)::int AS lanes, count(*)::int AS events
 FROM agentic_os.lane_event e JOIN agentic_os.lane l ON l.id = e.lane_id
 WHERE (e.kind = 'done' OR (e.kind = 'kanban' AND e.detail->>'kind' = 'state' AND e.detail->>'to' = 'done')) AND l.project_key = $1`;
 
@@ -390,6 +397,7 @@ export async function collect(client, { rules, config }) {
 
   const direct = (await rows(SQL_DIRECT))[0];
   const doneEvents = (await rows(SQL_DONE_EVENTS))[0];
+  const bornDone = (await rows(SQL_BORN_DONE)).map((r) => r.id);
   const history = lanes.map((l) => l.created_day).sort()[0] ?? null;
   const meta = [{
     exported_at: exportedAt, today: chicagoDay(now), history_start: history, band_history_start: config.band_history_start,
@@ -401,6 +409,7 @@ export async function collect(client, { rules, config }) {
 
   return {
     directOpen: direct.open,
+    bornDone,
     envelopes: {
       lanes: env(showSql(SQL_LANES, board), lanes),
       assignments: env(`${showSql(SQL_CLAIMS, board)}\n-- plus --\n${showSql(SQL_DAVE, board)}`, assignments),

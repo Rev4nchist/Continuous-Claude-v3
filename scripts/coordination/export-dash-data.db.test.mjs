@@ -352,6 +352,24 @@ describe('export-dash-data.mjs against a scratch database', () => {
 });
 
 describe('failure paths', () => {
+  it('a lane created as done (only a seeded event) does not block the export, and gets no invented done time', async () => {
+    // Breaks if the born-done lane is counted open by the rebuilt check (export exits non-zero), or if a done time is made up.
+    await addLane({ id: 'born-done', state: 'done', created: '2026-11-05T15:00:00Z' });
+    await addEvent('born-done', 'seeded', '2026-11-05T15:00:00Z', { body: 'Title of born-done' });
+    try {
+      const d = outDir('born');
+      const r = runExport(['--out', d, '--rules', state.rules]);
+      assert.equal(r.code, 0, r.all);
+      const row = readDoc(d, 'lanes').rows.find((l) => l.id === 'born-done');
+      assert.equal(row.state, 'done');
+      assert.equal(row.done_at, null);
+      assert.equal(row.done_day, null);
+    } finally {
+      await q('DELETE FROM agentic_os.lane_event WHERE lane_id = $1', ['born-done']);
+      await q('DELETE FROM agentic_os.lane WHERE id = $1', ['born-done']);
+    }
+  });
+
   it('exits non-zero and writes nothing when a done lane has no done signal of either kind (open count mismatch)', async () => {
     // Breaks if the rebuilt-versus-direct open count check is removed. The lane has kanban events that are NOT a move to done.
     await addLane({ id: 'bad-done', state: 'done', created: '2026-11-05T15:00:00Z' });
