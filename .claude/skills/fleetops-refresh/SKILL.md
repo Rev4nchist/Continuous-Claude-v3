@@ -20,7 +20,7 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
 ## Steps
 
 1. Read `~/.claude/state/lane-dash/refresh.json`. If it is missing, treat the data as stale.
-   - `pending: true` means the files are newer than the last upload. Go to step 3.
+   - `pending: true` means the files are newer than the last upload. Go to step 3. If Dave asked for a fresh export, go to step 2 instead.
    - `pending: false` and `exported_at` under 1 hour old: tell Dave nothing is stale. Stop, unless Dave asked for a refresh.
 2. Export new files. Do this only when nothing is pending and the data is stale, or Dave asked for a fresh export.
    `node C:/Users/dkhay/continuous-claude/scripts/coordination/export-dash-data.mjs`
@@ -31,7 +31,7 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
       `node -e "const fs=require('fs'),p=process.argv[1],h=process.env.USERPROFILE;const key=JSON.parse(fs.readFileSync(h+'/.claude/state/lane-dash/refresh.json','utf8')).key;let bad=0;for(const i of ['lanes','tiles','assignments','projects','targets','meta','snapshots']){const d=JSON.parse(fs.readFileSync(p+'/'+i+'.json','utf8'));const ok=d.exportedAt===key&&(i!=='tiles'||(d.rows||[]).length>0);if(!ok)bad++;console.log(i,d.exportedAt,(d.rows||[]).length,ok?'ok':'BAD')}process.exit(bad?1:0)" <your scratchpad folder>`
    3. Stop if the command exits 1 or a file is missing. Then start again from step 1.
 4. Upload and switch the 7 sources.
-   1. `ArtifactData list` on collection `datasets`. Check the 7 ids exist and each `source.kind` is `file`. If one is missing, stop and report. Never write a document that does not exist. Keep each `version` and each old `source.url` (`/_blob/<assetId>`).
+   1. `ArtifactData list` on collection `datasets`. Check the 7 ids exist and each `source.kind` is `file`. If one is missing, stop and report. Never write a document that does not exist. Keep each `version` and each old `source`, `updated`, `edit` and `schedule`. The old `source.url` is `/_blob/<assetId>`.
    2. For each id, call `Artifact` with `url` = the dashboard url, `asset: true` and `file_path` = the scratchpad copy. Make one call per file. Keep each result `url` exactly as given.
    3. Get the time: `node -p "new Date().toISOString()"`.
    4. Send one `ArtifactData batch` with 7 `update` entries, each with its `if_version`. Each entry sets:
@@ -46,7 +46,10 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
    - `check` can stay empty or unchanged after a data-only write. That is normal. Read it 5 times at most.
    - On `failed` in `check`, fix only what the code confirms. Fix 2 times at most.
    - Never say the page works from a missing document.
-   - Stop here, and do not go on to step 6, if `runs` shows a failed or refused dataset or `check` shows a failure you could not fix. The pending flag stays on and the old uploads stay. Report it.
+   - If `runs` shows a failed or refused dataset, or `check` shows a failure you could not fix, roll back and stop. Do not go on to step 6.
+     1. `ArtifactData list` on `datasets`. For each id whose `source.url` is still the url you uploaded in step 4, send one `update` pinned with its current `version`. It restores the old `source`, `updated`, `edit` and `schedule` from step 4.1. Never touch a source someone else changed.
+     2. Delete the new uploads you made in step 4.
+     3. Leave the pending flag on. Report the failing ids.
 6. Clear the pending flag. Do this only when step 5 found no failure. Use the `key` from your last read of `refresh.json`.
    `node C:/Users/dkhay/continuous-claude/scripts/coordination/export-dash-data.mjs --clear-refresh <key>`
    - A key mismatch means a newer export ran. Start again from step 1.
@@ -57,6 +60,6 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
 ## When it goes wrong
 
 - An upload or `ArtifactData` write is refused because you are not an editor: say so. Do not retry.
-- Some uploads worked and the batch failed for a reason other than a version conflict: the old sources still work. Delete the new assets you uploaded. Then report.
+- Some uploads worked and the batch failed for a reason other than a version conflict: the old sources still work. Delete the new uploads. Then report.
 - A delete failed after the batch worked: the sources point at the new files. Report the stray asset ids.
 - Docker is down in step 2: the old data stays on the dashboard. Report it.
