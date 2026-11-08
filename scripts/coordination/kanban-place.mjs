@@ -145,14 +145,23 @@ function cardBase(doc, laneState) {
  *
  * The status baseline is the saved status while the card is pending, else the lane state. An active lane
  * never gets a status. Note and question are trimmed and cut at 1000 characters.
+ *
+ * laneBand  : the lane's band when the page was drawn ('P0', 'P1', 'P2' or null). Optional.
+ * form.band : 'P0', 'P1', 'P2' or 'none' (clear). '' means "keep current". Written only when it differs from the
+ *             baseline: a pending saved band (bandAt, else updatedAt, later than syncedAt), else the lane band ('none' when the lane has none). The planner gates
+ *             an active or held lane, so this does not.
  */
-function cardDiff(doc, form, laneState) {
+function cardDiff(doc, form, laneState, laneBand) {
   var d = doc && typeof doc === 'object' ? doc : {};
   var f = form && typeof form === 'object' ? form : {};
   var four = ['backlog', 'ready', 'blocked', 'done'];
+  var bands = ['P0', 'P1', 'P2', 'none'];
   var out = {};
   var base = cardBase(doc, laneState);
   if (laneState !== 'active' && typeof f.status === 'string' && four.indexOf(f.status) >= 0 && f.status !== base) out.status = f.status;
+  var bandBase = bands.indexOf(laneBand) >= 0 ? laneBand : 'none';
+  if (bands.indexOf(d.band) >= 0 && isPending({ updatedAt: d.bandAt || d.updatedAt, syncedAt: d.syncedAt })) bandBase = d.band;
+  if (typeof f.band === 'string' && bands.indexOf(f.band) >= 0 && f.band !== bandBase) out.band = f.band;
   var keys = ['note', 'question'];
   for (var i = 0; i < keys.length; i++) {
     var was = typeof d[keys[i]] === 'string' ? d[keys[i]].trim() : '';

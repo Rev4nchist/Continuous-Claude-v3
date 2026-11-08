@@ -182,3 +182,51 @@ test('cardDiff: a pending card status is still the baseline', () => {
   assert.deepEqual(cardDiff(pending, { status: 'done', note: '', question: '' }, 'ready'), {});
   assert.deepEqual(cardDiff(pending, { status: 'ready', note: '', question: '' }, 'ready'), { status: 'ready' });
 });
+
+// ---- PR-G: the Band select. cardDiff takes the lane band as an OPTIONAL 4th argument.
+
+const NOTE_ONLY = { status: '', note: '', question: '' };
+const PENDING_AT = { updatedAt: '2026-11-02T10:10:00Z', syncedAt: '2026-11-02T10:05:00Z' };
+
+test('cardDiff band: a choice that differs from the lane band is written', () => {
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: 'P0' }, 'ready', 'P1'), { band: 'P0' });
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: 'P2' }, 'ready', null), { band: 'P2' });
+});
+
+test('cardDiff band: the lane band again, or an empty choice, writes nothing', () => {
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: 'P1' }, 'ready', 'P1'), {});
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: '' }, 'ready', 'P1'), {});
+});
+
+test('cardDiff band: none is a string that clears a banded lane, and is no change on an unbanded lane', () => {
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: 'none' }, 'ready', 'P1'), { band: 'none' });
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: 'none' }, 'ready', null), {});
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: 'none' }, 'ready', undefined), {});
+});
+
+test('cardDiff band: a pending doc band is the baseline; a synced doc band is not', () => {
+  const pending = { band: 'P0', ...PENDING_AT };
+  assert.deepEqual(cardDiff(pending, { ...NOTE_ONLY, band: 'P0' }, 'ready', 'P1'), {});
+  assert.deepEqual(cardDiff(pending, { ...NOTE_ONLY, band: 'P1' }, 'ready', 'P1'), { band: 'P1' });
+  const synced = { band: 'P0', updatedAt: '2026-11-02T10:00:00Z', syncedAt: '2026-11-02T10:05:00Z' };
+  assert.deepEqual(cardDiff(synced, { ...NOTE_ONLY, band: 'P0' }, 'ready', 'P1'), { band: 'P0' });
+});
+
+test('cardDiff band: a form with no band key adds no band key', () => {
+  assert.deepEqual(cardDiff(null, { status: '', note: 'hi', question: '' }, 'ready', 'P1'), { note: 'hi' });
+  assert.deepEqual(cardDiff({ band: 'P0', ...PENDING_AT }, NOTE_ONLY, 'ready', 'P1'), {});
+});
+
+test('cardDiff band: a junk band value is never written', () => {
+  for (const junk of ['p0', 'P3', 'null', 7, null, {}]) {
+    assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: junk }, 'ready', 'P1'), {}, String(junk));
+  }
+});
+
+test('cardDiff band: an active lane may carry a band choice (the planner decides)', () => {
+  assert.deepEqual(cardDiff(null, { ...NOTE_ONLY, band: 'P0' }, 'active', 'P1'), { band: 'P0' });
+});
+
+test('cardDiff band: status, note and band changes come out together', () => {
+  assert.deepEqual(cardDiff(null, { status: 'ready', note: 'go', question: '', band: 'P0' }, 'backlog', 'P1'), { status: 'ready', note: 'go', band: 'P0' });
+});
