@@ -229,6 +229,93 @@ describe('compact harness alert', () => {
     expect(formatCompactAlert(d, NOW, undefined, '').line!.length).toBeLessThan(400);
   });
 
+  // Age and cut. Failure list:
+  //   A2 the compact line shows a fixed time only, so an old FAIL looks current
+  //   A3 the age is wrong at the unit edges (just now, 59 min, 60 min) or for a future report time
+  //   A4 a long detail is cut inside a word
+  //   A5 a long detail is cut inside a parenthesis group, or the cut line is longer than the limit
+  //   A6 a FAIL with an unchanged problem set stops printing, or its age stays frozen
+  //   A7 a detail under the limit is changed
+  const LONG = 'logs:guard-decisions has 11 error(s) in the last 24 hours, top reasons pair(...) and some extra words that run past the limit of one hundred and twenty characters';
+
+  it('A2: the compact line shows the age next to the time', () => {
+    const d = doc([['FAIL', 'db', 'down']]);
+    expect(formatCompactAlert(d, NOW, undefined, '').line).toMatch(/as of \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(4 h ago\): db:down/);
+  });
+
+  it('A3: age unit edges', () => {
+    const d = doc([['FAIL', 'db', 'down']]);
+    const ago = (ms: number) => formatCompactAlert(d, new Date(Date.parse(TS) + ms), undefined, '').line!;
+    expect(ago(30_000)).toContain('(just now)');
+    expect(ago(-5 * 60_000)).toContain('(just now)');
+    expect(ago(59 * 60_000)).toContain('(59 min ago)');
+    expect(ago(60 * 60_000)).toContain('(1 h ago)');
+    expect(ago(119 * 60_000)).toContain('(1 h ago)');
+  });
+
+  it('A4: a long detail is cut at a word boundary with an ellipsis', () => {
+    const line = formatCompactAlert(doc([['FAIL', 'db', 'down', LONG]]), NOW, undefined, '').line!;
+    const detail = /db:down \((.*)\)\. Run/.exec(line)![1];
+    expect(detail.endsWith('...')).toBe(true);
+    const body = detail.slice(0, -3);
+    expect(LONG.startsWith(body)).toBe(true);
+    expect(LONG[body.length]).toBe(' ');
+    expect(detail.length).toBeLessThanOrEqual(120);
+  });
+
+  it('A5: the cut never leaves an open parenthesis, and one long token is still cut', () => {
+    const paren = 'a'.repeat(100) + ' (inner words that go past the limit and then more) tail';
+    const line = formatCompactAlert(doc([['FAIL', 'db', 'down', paren]]), NOW, undefined, '').line!;
+    const opens = (line.match(/\(/g) ?? []).length;
+    const closes = (line.match(/\)/g) ?? []).length;
+    expect(opens).toBe(closes);
+    expect(line).not.toContain('inner');
+    const token = formatCompactAlert(doc([['FAIL', 'db', 'down', 'z'.repeat(500)]]), NOW, undefined, '').line!;
+    expect(token).toContain(`${'z'.repeat(117)}...`);
+    // Nested open groups: the cut goes back to the OUTER "(", so no "(" survives in the detail.
+    const nested = 'x'.repeat(60) + ' (a (b ' + 'y'.repeat(80);
+    const nestedLine = formatCompactAlert(doc([['FAIL', 'db', 'down', nested]]), NOW, undefined, '').line!;
+    const nestedDetail = /db:down \((.*)\)\. Run/.exec(nestedLine)![1];
+    expect(nestedDetail).not.toContain('(');
+    expect(nestedDetail).toBe(`${'x'.repeat(60)}...`);
+  });
+
+  it('A5: the real guard-decisions detail is cut at a word boundary, not inside "pair(s)"', () => {
+    const real = '11 error(s) in the last 24 h in C:\\Users\\dkhay\\.claude\\logs\\guard-decisions.jsonl; 2 distinct (message, folder) pair(s); top: "spawnSync git ENOENT" x10';
+    expect(real).toContain('C:\\Users\\dkhay\\.claude\\logs');
+    const line = formatCompactAlert(doc([['WARN', 'logs', 'guard-decisions', real]]), NOW, undefined, '').line!;
+    const detail = /logs:guard-decisions \((.*)\)\. Run/.exec(line)![1];
+    expect(detail).toBe('11 error(s) in the last 24 h in C:\\Users\\dkhay\\.claude\\logs\\guard-decisions.jsonl; 2 distinct (message, folder)...');
+    expect(detail).not.toContain('pair(');
+    expect(detail.length).toBeLessThanOrEqual(120);
+    const opens = (detail.match(/\(/g) ?? []).length;
+    const closes = (detail.match(/\)/g) ?? []).length;
+    expect(opens).toBe(closes);
+  });
+
+  it('A5: a detail that starts with "(" and runs past the limit is cut at a word, keeping the "("', () => {
+    // Cutting at index 0 would leave nothing, so the open "(" stays. The wrapper adds its own parens.
+    const lead = '(' + Array(40).fill('word').join(' ');
+    const line = formatCompactAlert(doc([['FAIL', 'db', 'down', lead]]), NOW, undefined, '').line!;
+    const detail = /db:down \((.*)\)\. Run/.exec(line)![1];
+    expect(detail).toBe(`(${Array(23).fill('word').join(' ')}...`);
+    expect(detail.length).toBeLessThanOrEqual(120);
+  });
+
+  it('A6: a FAIL with an unchanged set prints every time, with the new age', () => {
+    const d = doc([['FAIL', 'db', 'down']]);
+    const h = problemSetHash(d);
+    const first = formatCompactAlert(d, new Date(Date.parse(TS) + 3 * 3600_000), undefined, h).line;
+    const later = formatCompactAlert(d, new Date(Date.parse(TS) + 5 * 3600_000), undefined, h).line;
+    expect(first).toContain('(3 h ago)');
+    expect(later).toContain('(5 h ago)');
+  });
+
+  it('A7: a short detail is not changed', () => {
+    const line = formatCompactAlert(doc([['FAIL', 'db', 'down', 'connection refused (ECONNREFUSED)']]), NOW, undefined, '').line!;
+    expect(line).toContain('db:down (connection refused (ECONNREFUSED))');
+  });
+
   describe('healthAlertForSource with files', () => {
     let dir: string;
     let latest: string;
