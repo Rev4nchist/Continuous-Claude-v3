@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   DATASETS, DOC_CAP_BYTES, buildProjectRows, buildRefreshDoc, buildSnapshotRow, checkInvariants,
-  chicagoDay, clearRefreshFile, clearRefreshPending, readSnapshots, upsertSnapshot, writeExport,
+  chicagoDay, clearRefreshFile, clearRefreshPending, cutTitle, readSnapshots, TITLE_MAX, upsertSnapshot, writeExport,
 } from './export-dash-data.mjs';
 import { compileRules } from './lane-dash-project.mjs';
 import { normalizeConfig } from './lane-dash-config.mjs';
@@ -23,6 +23,42 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dash-export-'));
 const T1 = '2026-11-08T01:00:00.000Z'; // 19:00 CT on 2026-11-07
 const T2 = '2026-11-08T03:30:00.000Z'; // 21:30 CT on 2026-11-07 (same Chicago day)
 const T3 = '2026-11-08T14:00:00.000Z'; // 08:00 CT on 2026-11-08
+
+describe('cutTitle', () => {
+  const words = (n) => Array.from({ length: n }, (_, i) => `word${i}`).join(' ');
+
+  it('keeps a title that fits, byte for byte', () => {
+    // Breaks if a short title gains an ellipsis or loses characters.
+    assert.equal(cutTitle('Plan: CCv3 local review engine'), 'Plan: CCv3 local review engine');
+    const exact = 'x'.repeat(TITLE_MAX);
+    assert.equal(cutTitle(exact), exact);
+  });
+
+  it('cuts a long title at a word boundary and adds one ellipsis', () => {
+    // Breaks if the cut lands inside a word (the old export cut "MAX_RUNS b" mid-word) or the result is too long.
+    const out = cutTitle(words(80));
+    assert.ok(out.length <= TITLE_MAX, `length ${out.length}`);
+    assert.ok(out.endsWith('…'));
+    const body = out.slice(0, -1);
+    assert.ok(words(80).startsWith(body));
+    assert.match(words(80).slice(body.length), /^ /); // the next char in the source is a space: no word was split
+  });
+
+  it('hard-cuts a long title with no spaces, still ending in an ellipsis within the limit', () => {
+    // Breaks if a single long token is returned whole or throws.
+    const out = cutTitle('y'.repeat(400));
+    assert.equal(out.length, TITLE_MAX);
+    assert.ok(out.endsWith('…'));
+  });
+
+  it('does not cut the masked handle text in half and passes null as an empty string', () => {
+    // Breaks if "#[handle]" is split by the cut, or null throws.
+    const t = `${'a '.repeat(77)}#[handle] tail tail tail`;
+    const out = cutTitle(t);
+    assert.ok(!out.includes('#[') || out.includes('#[handle]'), out);
+    assert.equal(cutTitle(null), '');
+  });
+});
 
 describe('chicagoDay', () => {
   it('buckets by America/Chicago, across the 2026-11-01 DST change', () => {
