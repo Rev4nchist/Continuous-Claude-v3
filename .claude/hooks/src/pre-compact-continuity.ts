@@ -82,9 +82,56 @@ async function main() {
 
   const output: HookOutput = {
     continue: true,
-    systemMessage: ledgerMessage || '[PreCompact] No continuity data to preserve'
+    systemMessage: ledgerMessage || handoffMessage(projectDir, input.session_id)
   };
   console.log(JSON.stringify(output));
+}
+
+export function formatAge(ms: number): string {
+  if (!(ms >= 60_000)) return 'just now';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function listHandoffYaml(dir: string, out: string[] = []): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) listHandoffYaml(full, out);
+    else if (e.isFile() && /\.ya?ml$/i.test(e.name)) out.push(full);
+  }
+  return out;
+}
+
+function newestByMtime(files: string[]): { file: string; mtime: number } | null {
+  let best: { file: string; mtime: number } | null = null;
+  for (const file of files) {
+    try {
+      const mtime = fs.statSync(file).mtimeMs;
+      if (!best || mtime > best.mtime) best = { file, mtime };
+    } catch {}
+  }
+  return best;
+}
+
+// Message used when no ledger exists. Prefers a handoff whose file name carries
+// the session's sid8; otherwise the newest yaml under thoughts/shared/handoffs.
+export function handoffMessage(projectDir: string, sessionId?: string, now: number = Date.now()): string {
+  const files = listHandoffYaml(path.join(projectDir, 'thoughts', 'shared', 'handoffs'));
+  const sid8 = (sessionId || '').slice(0, 8);
+  const mine = sid8.length === 8 ? files.filter(f => path.basename(f).includes(sid8)) : [];
+  const best = newestByMtime(mine.length > 0 ? mine : files);
+  if (!best) return '[PreCompact] no ledger and no handoff found';
+  const rel = path.relative(projectDir, best.file).split(path.sep).join('/');
+  return `[PreCompact] newest handoff: ${rel} (${formatAge(now - best.mtime)})`;
 }
 
 function generateAutoSummary(projectDir: string, sessionId: string): string | null {
