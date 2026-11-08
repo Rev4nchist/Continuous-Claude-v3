@@ -22,6 +22,9 @@
  *   G11 a command with two lands or merges is judged on the first one only (every segment needs its own tap and its own sha)
  *   G12 the model moves a file onto the store (Desktop Commander move_file, write_pdf), or reaches it with a .. path
  *   G13 the model burns taps from a shell (land-decision.mjs use, a loop of pr-checkpoint.mjs --json --pr)
+ *   T16 a create is judged in the folder of the first cd anywhere in the text, so a cd after it, or a cd that may not run, hides a CCv3 checkout;
+ *       the head is read from a later command or a quoted title, and an empty head is allowed
+ *   T17 a merge or a land is judged the same wrong way (a land script is judged by its tap only, so popd never blocks it)
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1343,6 +1346,277 @@ describe('G11 every land and merge shape of a command is judged', () => {
     tap('land', prKey(12), HEAD, 'Land now (Recommended)');
     expect(denied(bash('pwsh -File scripts/github/land-pr.ps1 -Pr 12 && pwsh -File scripts/github/land-pr.ps1 -Pr 13'))).toBe(true);
     expect(denied(bash('pwsh -File scripts/github/land-pr.ps1 -Pr 13 -CleanupOnly && pwsh -File scripts/github/land-pr.ps1 -Pr 12'))).toBe(false);
+  });
+});
+
+// T16 and T17: a create, a land and a merge run in the folder the cd commands BEFORE them set, like a push (T14, T15).
+// Before this change they were judged in the folder of the FIRST cd anywhere in the text, so `M; cd O` was judged in O and passed.
+// The commands below name no repo (no -R, no repos/<owner>/<repo>/pulls), so the checkout of the folder decides.
+describe('T16 a create is judged in every folder on the cd path before it', () => {
+  const O = '/tmp/other-repo';
+  const W: World = { otherDirs: [O, '/tmp/other', 'C:/other'] };
+  const SUB = '/repo/sub';
+  const WSUB: World = { otherDirs: [...W.otherDirs!, SUB, O] };
+  const C = 'gh pr create --draft --title t --body-file b.md';
+  const REST = 'gh api repos/{owner}/{repo}/pulls -X POST -F head=feat/x -F base=main -F title=t';
+  const cwdsOf = (calls: GitCall[]) => [...new Set(calls.map((c) => c.cwd))];
+  const ask = 'open-pr --branch feat/x';
+
+  it.each([
+    `${C}; cd ${O}`,
+    `${C} && cd ${O}`,
+    `${C}\ncd ${O}`,
+    `${C} || cd ${O}`,
+    `${REST}; cd ${O}`,
+    `${REST}\ncd ${O}`,
+  ])('denies %j with no tap: a cd after the create does not move it', (cmd) => {
+    expect(denied(bash(cmd), W), cmd).toBe(true);
+    expect(reasonOf(bash(cmd), W), cmd).toContain(ask);
+  });
+  it('denies the PowerShell forms with a cd after the create', () => {
+    expect(denied(pwsh(`${C}; Set-Location C:\\other`), W)).toBe(true);
+    expect(denied(pwsh(`${C}; sl C:\\other`), W)).toBe(true);
+    expect(denied(pwsh(`${C}; Push-Location C:\\other`), W)).toBe(true);
+  });
+  it('judges the create in the payload cwd, never in a later cd', () => {
+    const calls: GitCall[] = [];
+    decide(bash(`${C}; cd ${O}`), deps({ ...W, calls }));
+    expect(cwdsOf(calls)).toEqual(['/repo']);
+  });
+  it('a quoted cd is not a cd', () => {
+    expect(denied(bash(`echo "; cd ${O}"; ${C}`), W)).toBe(true);
+    expect(denied(bash(`echo '; cd ${O}'; ${C}`), W)).toBe(true);
+  });
+  it('a cd before the create into a folder that is not CCv3 still passes it (as before)', () => {
+    expect(denied(bash(`cd ${O} && ${C}`), W)).toBe(false);
+    expect(denied(bash(`cd ${O}; ${C}`), W)).toBe(false);
+    expect(denied(pwsh(`Set-Location C:\\other; ${C}`), W)).toBe(false);
+    expect(denied(pwsh(`Set-Location -LiteralPath 'C:\\other'; ${C}`), W)).toBe(false);
+  });
+  // The old rule took the FIRST cd, so `cd O && cd /repo && C` passed. Every folder on the path is judged now.
+  it('every folder on the cd path is judged: a cd back into the repo needs the tap', () => {
+    const cmd = `cd ${O} && cd /repo && ${C}`;
+    expect(denied(bash(cmd), W)).toBe(true);
+    expect(denied(bash(`cd /repo && cd ${O} && ${C}`), W)).toBe(true);
+    tap('open-pr', branchKey(), HEAD, 'Open draft PR (Recommended)');
+    expect(denied(bash(cmd), W)).toBe(false);
+  });
+  it('a relative cd chains: each folder on the path is judged', () => {
+    const calls: GitCall[] = [];
+    decide(bash(`cd sub && cd deeper && ${C}`), deps({ calls }));
+    expect(cwdsOf(calls)).toEqual([resolve('/repo', 'sub'), resolve('/repo', 'sub', 'deeper')]);
+  });
+  it('two creates are each judged in their own folder', () => {
+    const calls: GitCall[] = [];
+    const cmd = `cd ${O} && ${C}; cd /repo && ${C}`;
+    expect(denied(bash(cmd), W)).toBe(true);
+    decide(bash(cmd), deps({ ...W, calls }));
+    expect(cwdsOf(calls)).toContain('/repo');
+    expect(cwdsOf(calls)).toContain(O);
+  });
+  it.each([
+    ['|| short-circuit', `cd /repo && true || cd ${O}; ${C}`],
+    ['&& after false', `cd /repo; false && cd ${O}; ${C}`],
+    ['subshell', `cd /repo && (true; cd ${O}; true) && ${C}`],
+    ['background', `cd /repo; cd ${O} & ${C}`],
+    ['pipe', `cd /repo && cd ${O} | cat; ${C}`],
+    ['comment', `cd /repo # ; cd ${O}\n${C}`],
+    ['heredoc body', `cd /repo\ncat <<EOF\ncd ${O}\nEOF\n${C}`],
+    ['cd with too many arguments', `cd /repo; cd ${O} extra; ${C}`],
+    ['REST create after a || cd', `cd /repo && true || cd ${O}; ${REST}`],
+  ])('denies a create when the later cd is a %s: %j', (_name, cmd) => {
+    expect(denied(bash(cmd), W), cmd).toBe(true);
+  });
+  it('denies the PowerShell -WhatIf cd, which does not move', () => {
+    expect(denied(pwsh(`Set-Location /repo; cd C:\\other -WhatIf; ${C}`), W)).toBe(true);
+  });
+  it('allows the create when the tap covers every folder on the path', () => {
+    tap('open-pr', branchKey(), HEAD, 'Open draft PR (Recommended)');
+    expect(denied(bash(`cd /repo && true || cd ${O}; ${C}`), W)).toBe(false);
+    expect(denied(bash(`${C}; cd ${O}`), W)).toBe(false);
+  });
+  it('the worktree ship flow: a create with a quoted ; in the title and a head after it, in a worktree, with the tap', () => {
+    tap('open-pr', branchKey(), HEAD, 'Open draft PR (Recommended)');
+    const calls: GitCall[] = [];
+    const cmd = `cd .claude/worktrees/x && ${CREATE} -f title="a; b & c" -F head=feat/x`;
+    expect(decide(bash(cmd), deps({ calls })).action).toBe('allow');
+    expect(cwdsOf(calls)).toContain(resolve('/repo', '.claude/worktrees/x'));
+  });
+
+  // The folder cannot be known after popd, Pop-Location, `cd -` or a bare cd.
+  describe('a folder that cannot be known', () => {
+    it.each([
+      `cd /repo && pushd ${O} && popd && ${C}`,
+      `cd ${O} && popd && ${C}`,
+      `cd ${O}; cd - ; ${C}`,
+      `cd ${O}; cd; ${C}`,
+    ])('denies %j with position-unknown when a CCv3 checkout is on the path', (cmd) => {
+      const d = decide(bash(cmd), deps(W));
+      expect(d.action, cmd).toBe('deny');
+      expect(d.action === 'deny' ? d.pattern : '', cmd).toBe('position-unknown');
+      expect(reasonOf(bash(cmd), W), cmd).toContain('one absolute cd');
+    });
+    it('denies the PowerShell Pop-Location form', () => {
+      expect(denied(pwsh(`Push-Location C:\\other; Pop-Location; ${C}`), W)).toBe(true);
+    });
+    it('does not deny when no folder on the path is a CCv3 checkout', () => {
+      expect(denied(bash(`pushd ${O} && popd && ${C}`, { cwd: SUB }), WSUB)).toBe(false);
+      expect(denied(bash(`popd && ${C}`, { cwd: SUB }), WSUB)).toBe(false);
+    });
+  });
+
+  // The head is read from the create's OWN segment, so a later command's -H or a quoted --head does not set it.
+  describe('the head branch', () => {
+    it('a -H header of a later command is not the head: the checked-out branch is judged', () => {
+      const cmd = `${C}; curl -H "Accept: x" u`;
+      expect(denied(bash(cmd))).toBe(true);
+      tap('open-pr', branchKey(), HEAD, 'Open draft PR (Recommended)');
+      expect(denied(bash(cmd))).toBe(false);
+    });
+    it('a --head inside a quoted title is not the head', () => {
+      expect(denied(bash('gh pr create --draft --title "x --head main" --body-file b.md'))).toBe(true);
+    });
+    it('a --head after a quoted ; in the title is still the head', () => {
+      tap('open-pr', branchKey('feat/y'), HEAD, 'Open draft PR (Recommended)');
+      expect(denied(bash('gh pr create --title "a; b" --head feat/y'), { heads: { 'feat/y': HEAD } })).toBe(false);
+    });
+    it('a head that cannot be named (detached HEAD) is denied, not allowed', () => {
+      const d = decide(bash(C), deps({ branch: '' }));
+      expect(d.action).toBe('deny');
+      expect(d.action === 'deny' ? d.pattern : '').toBe('head-unresolved');
+    });
+    it('a create from main is still not gated', () => {
+      expect(denied(bash(C), { branch: 'main' })).toBe(false);
+    });
+    it('a spliced gh pr "create" reads --head too', () => {
+      expect(denied(bash('gh pr "create" --head feat/y --title t'), { branch: 'main', heads: { 'feat/y': HEAD } })).toBe(true);
+    });
+  });
+});
+
+describe('T17 a merge and a land are judged in every folder on the cd path before them', () => {
+  const O = '/tmp/other-repo';
+  const W: World = { otherDirs: [O, '/tmp/other', 'C:/other'] };
+  const SUB = '/repo/sub';
+  const WSUB: World = { otherDirs: [...W.otherDirs!, SUB] };
+  const M = `gh pr merge 12 --merge --match-head-commit ${HEAD}`;
+  const M13 = `gh pr merge 13 --merge --match-head-commit ${HEAD}`;
+  const REST = `gh api repos/{owner}/{repo}/pulls/12/merge -X PUT -f sha=${HEAD}`;
+  const LAND = 'pwsh -File scripts/github/land-pr.ps1 -Pr 12';
+  const cwdsOf = (calls: GitCall[]) => [...new Set(calls.map((c) => c.cwd))];
+  const land12 = () => tap('land', prKey(12), HEAD, 'Land now (Recommended)');
+
+  it.each([
+    `${M}; cd ${O}`,
+    `${M} && cd ${O}`,
+    `${M}\ncd ${O}`,
+    `${REST}; cd ${O}`,
+    `gh pr "merge" 12 --match-head-commit ${HEAD}; cd ${O}`,
+    `echo "; cd ${O}"; ${M}`,
+  ])('denies %j with no tap: a cd after the merge does not move it', (cmd) => {
+    expect(denied(bash(cmd), W), cmd).toBe(true);
+    expect(reasonOf(bash(cmd), W), cmd).toContain('land --pr 12');
+  });
+  it('denies the PowerShell forms with a cd after the merge', () => {
+    expect(reasonOf(pwsh(`${M}; Set-Location C:\\other`), W)).toContain('land --pr 12');
+    expect(denied(pwsh(`${M}; sl C:\\other`), W)).toBe(true);
+    expect(denied(pwsh(`${REST}; Push-Location C:\\other`), W)).toBe(true);
+  });
+  it('judges the merge in the payload cwd, never in a later cd', () => {
+    const calls: GitCall[] = [];
+    decide(bash(`${M}; cd ${O}`), deps({ ...W, calls }));
+    expect(cwdsOf(calls)).toEqual(['/repo']);
+  });
+  it('pins: a merge in a folder that is not CCv3 passes; a land script, a named repo and a subagent do not', () => {
+    expect(denied(bash(`cd ${O} && ${M}`), W)).toBe(false);
+    expect(denied(pwsh(`Set-Location C:\\other; ${M}`), W)).toBe(false);
+    expect(denied(bash(`cd ${O} && ${LAND}`), W)).toBe(true);
+    expect(denied(bash(`cd ${O} && ${M} -R ${REPO}`), W)).toBe(true);
+    expect(denied(bash(`cd ${O} && GH_REPO=${REPO} ${M}`), W)).toBe(true);
+    expect(denied(bash(`cd ${O} && gh pr merge https://github.com/${REPO}/pull/12 --match-head-commit ${HEAD}`), W)).toBe(true);
+    expect(denied(bash(`cd ${O} && ${M}`, { agent_id: 'a1' }), W)).toBe(true);
+  });
+  it('every folder on the cd path is judged: a cd back into the repo needs the tap', () => {
+    expect(denied(bash(`cd ${O} && cd /repo && ${M}`), W)).toBe(true);
+    expect(denied(bash(`cd /repo && cd ${O} && ${M}`), W)).toBe(true);
+    land12();
+    expect(denied(bash(`cd ${O} && cd /repo && ${M}`), W)).toBe(false);
+  });
+  it('a relative cd chains: each folder on the path is judged', () => {
+    const calls: GitCall[] = [];
+    decide(bash(`cd sub && cd deeper && ${M}`), deps({ calls }));
+    expect(cwdsOf(calls)).toEqual([resolve('/repo', 'sub'), resolve('/repo', 'sub', 'deeper')]);
+  });
+  // The other folder is FIRST, so a de-duplication that drops the cd list keeps the shape in O and denied() would pass.
+  it('two identical merges in two folders are two judgments', () => {
+    const calls: GitCall[] = [];
+    const cmd = `cd ${O} && ${M}; cd /repo && ${M}`;
+    expect(denied(bash(cmd), W)).toBe(true);
+    decide(bash(cmd), deps({ ...W, calls }));
+    expect(cwdsOf(calls)).toContain('/repo');
+    expect(cwdsOf(calls)).toContain(O);
+  });
+  it('two merges of two PRs: the one in the CCv3 folder needs its own tap', () => {
+    tap('land', prKey(13), HEAD, 'Land now (Recommended)');
+    const cmd = `cd ${O} && ${M13}; cd /repo && ${M}`;
+    expect(reasonOf(bash(cmd), W)).toContain('PR #12');
+  });
+  it.each([
+    ['|| short-circuit', `cd /repo && true || cd ${O}; ${M}`],
+    ['&& after false', `cd /repo; false && cd ${O}; ${M}`],
+    ['subshell', `cd /repo && (true; cd ${O}; true) && ${M}`],
+    ['background', `cd /repo; cd ${O} & ${M}`],
+    ['pipe', `cd /repo && cd ${O} | cat; ${M}`],
+    ['comment', `cd /repo # ; cd ${O}\n${M}`],
+    ['heredoc body', `cd /repo\ncat <<EOF\ncd ${O}\nEOF\n${M}`],
+    ['cd with too many arguments', `cd /repo; cd ${O} extra; ${M}`],
+    ['REST merge after a || cd', `cd /repo && true || cd ${O}; ${REST}`],
+  ])('denies a merge when the later cd is a %s: %j', (_name, cmd) => {
+    expect(denied(bash(cmd), W), cmd).toBe(true);
+  });
+  it('denies the PowerShell -WhatIf cd, which does not move', () => {
+    expect(denied(pwsh(`Set-Location /repo; cd C:\\other -WhatIf; ${M}`), W)).toBe(true);
+  });
+  it('allows the merge when the tap covers every folder on the path', () => {
+    land12();
+    expect(denied(bash(`cd /repo && true || cd ${O}; ${M}`), W)).toBe(false);
+    expect(denied(bash(`${M}; cd ${O}`), W)).toBe(false);
+    expect(denied(bash(`${REST}; cd ${O}`), W)).toBe(false);
+  });
+  // The squashed gh pr "merge" is found only in the quote-less reading. \" escapes in bash, not in PowerShell, so each mask hides a different cd.
+  it('denies a squashed merge when the real PowerShell cd into CCv3 is hidden from the bash mask', () => {
+    const cmd = `Write-Output "a\\"; cd /repo; Write-Output \\"b"; gh pr "merge" 12 --match-head-commit ${HEAD}`;
+    expect(denied(pwsh(cmd, { cwd: SUB }), WSUB), cmd).toBe(true);
+  });
+  it('denies a squashed merge when a bash-visible fake cd follows the real PowerShell cd into CCv3', () => {
+    const cmd = 'cd /repo; Write-Output "a`"; cd ' + O + '; echo `"b"; gh pr "merge" 12 --match-head-commit ' + HEAD;
+    expect(denied(pwsh(cmd, { cwd: SUB }), WSUB), cmd).toBe(true);
+  });
+
+  describe('a folder that cannot be known', () => {
+    it.each([
+      `cd /repo && pushd ${O} && popd && ${M}`,
+      `cd ${O} && popd && ${REST}`,
+      `cd ${O}; cd - ; ${M}`,
+    ])('denies %j with position-unknown when a CCv3 checkout is on the path', (cmd) => {
+      const d = decide(bash(cmd), deps(W));
+      expect(d.action === 'deny' ? d.pattern : '', cmd).toBe('position-unknown');
+    });
+    it('denies position-unknown for a merge that names the repo, wherever it runs', () => {
+      const d = decide(bash(`popd && ${M} -R ${REPO}`, { cwd: SUB }), deps(WSUB));
+      expect(d.action === 'deny' ? d.pattern : '').toBe('position-unknown');
+    });
+    it('does not deny when no folder on the path is a CCv3 checkout', () => {
+      expect(denied(bash(`pushd ${O} && popd && ${M}`, { cwd: SUB }), WSUB)).toBe(false);
+    });
+    // judgeLand never reads the folder for the land script, so a pushd and popd must not block a tapped land.
+    it('the land script is judged by its PR tap only: pushd and popd do not block it', () => {
+      const cmd = `pushd ${O} && popd && ${LAND}`;
+      expect(reasonOf(bash(cmd), W)).toContain('land --pr 12');
+      land12();
+      expect(denied(bash(cmd), W)).toBe(false);
+      expect(denied(pwsh(`Push-Location C:\\other; Pop-Location; ${LAND}`), W)).toBe(false);
+    });
   });
 });
 
