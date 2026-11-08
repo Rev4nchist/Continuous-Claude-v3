@@ -19,7 +19,7 @@
  * The DB clock is UTC. Every day bucket is America/Chicago.
  *
  * What is NOT exported: lane.note, scope, rationale, done_when text, event bodies, session ids or 8-hex handles.
- * Lane titles are exported (cut to 110 characters). A '#' plus 8 hex digits in a title becomes '#[handle]'. The lanes rows follow a column allowlist.
+ * Lane titles are exported (cut at a word boundary to TITLE_MAX characters, with an ellipsis). A '#' plus 8 hex digits in a title becomes '#[handle]'. The lanes rows follow a column allowlist.
  *
  * Meanings:
  *   done      the lane's state is done. done_at is the latest done signal and is null for a lane that was
@@ -54,6 +54,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
 
 export const DOC_CAP_BYTES = 256 * 1024;
+/** Longest exported lane title, ellipsis included. The page clamps a row to two lines; this keeps the file small. */
+export const TITLE_MAX = 160;
+
+/** Cuts a title at a word boundary and ends it with "…". A title that fits is returned as it is. */
+export function cutTitle(title, max = TITLE_MAX) {
+  const s = String(title ?? '');
+  if (s.length <= max) return s;
+  const room = s.slice(0, max - 1);
+  const space = room.lastIndexOf(' ');
+  // A cut on the next character being a space keeps every word whole; with no usable space, cut hard.
+  const keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room);
+  return `${keep.trimEnd()}…`;
+}
 export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles'];
 const TZ = 'America/Chicago';
 const LOCK_STALE_MS = 10 * 60 * 1000;
@@ -367,7 +380,7 @@ const SQL_LANES = `WITH ev AS (
   FROM agentic_os.lane_event e JOIN agentic_os.lane l2 ON l2.id = e.lane_id
   CROSS JOIN LATERAL (SELECT split_part(coalesce(e.body, ''), ' || before:', 1) AS head) h
   WHERE l2.project_key = $1 GROUP BY e.lane_id)
-SELECT l.id, left(regexp_replace(l.title, '#[0-9a-f]{8}', '#[handle]', 'g'), 110) AS title, l.track, l.band, l.state, l.priority, l.created_at, l.lease_expires_at,
+SELECT l.id, left(regexp_replace(l.title, '#[0-9a-f]{8}', '#[handle]', 'g'), 400) AS title, l.track, l.band, l.state, l.priority, l.created_at, l.lease_expires_at,
   (l.owner_session_id IS NOT NULL) AS held, (coalesce(l.done_when, '') <> '') AS has_done_when,
   ev.first_claim, CASE WHEN l.state = 'done' THEN ev.done_ev END AS done_at, ev.last_work, ev.dave_ask,
   coalesce(ev.claims, 0) AS claims
@@ -412,7 +425,7 @@ export async function collect(client, { rules, config }) {
   const terminal = new Set(rules.projects.flatMap((p) => p.terminalLanes));
 
   const lanes = (await rows(SQL_LANES)).map((l) => ({
-    id: l.id, title: l.title, project: projectOf({ id: l.id, track: l.track }, rules), track: l.track, band: l.band,
+    id: l.id, title: cutTitle(l.title), project: projectOf({ id: l.id, track: l.track }, rules), track: l.track, band: l.band,
     state: l.state, priority: l.priority,
     created_at: iso(l.created_at), created_day: chicagoDay(l.created_at),
     first_claim_at: iso(l.first_claim), done_at: iso(l.done_at), done_day: chicagoDay(l.done_at),

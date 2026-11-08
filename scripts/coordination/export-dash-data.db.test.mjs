@@ -142,7 +142,7 @@ before(async () => {
     body: 'py-kdone state review -> done', detail: { kind: 'state', from: 'review', to: 'done', text: 'kanban card' },
   });
   // M2: a session handle in a title must be masked.
-  await addLane({ id: 'py-title', created: '2026-11-04T15:00:00Z', title: 'Resume session #aaaa1111 handoff #12 and #abcdef12' });
+  await addLane({ id: 'py-title', created: '2026-11-04T15:00:00Z', title: `Resume session #aaaa1111 handoff #12 and #abcdef12 ${'tail '.repeat(60)}end` });
   await addLane({ id: 'py-reassign', created: '2026-11-01T15:00:00Z' });
   await addEvent('py-reassign', 'claimed', '2026-11-02T15:00:00Z', { session: S1 });
   await addEvent('py-reassign', 'claimed', '2026-11-03T15:00:00Z', { session: S2 });
@@ -225,7 +225,16 @@ describe('export-dash-data.mjs against a scratch database', () => {
   it('masks a #<8 hex> session handle in a title and keeps other #numbers (M2)', () => {
     // Breaks if the title is exported as it is: a handle in a lane title would reach the dashboard.
     const t = readDoc(dir, 'lanes').rows.find((l) => l.id === 'py-title').title;
-    assert.equal(t, 'Resume session #[handle] handoff #12 and #[handle]');
+    assert.ok(t.startsWith('Resume session #[handle] handoff #12 and #[handle] tail'), t);
+    assert.ok(!/#[0-9a-f]{8}/.test(t));
+  });
+
+  it('cuts a long title at a word boundary within TITLE_MAX (not at 110 characters mid-word)', () => {
+    // Breaks if the SQL still cuts at 110, the export does not cut at all, or the cut splits a word.
+    const t = readDoc(dir, 'lanes').rows.find((l) => l.id === 'py-title').title;
+    assert.ok(t.length > 110 && t.length <= 160, `length ${t.length}`);
+    assert.ok(t.endsWith('…'));
+    assert.match(t.slice(0, -1), /\btail$/);
   });
 
   it('repeat done counts the lane once and takes the latest done event; day buckets are America/Chicago', () => {
