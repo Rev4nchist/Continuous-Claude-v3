@@ -483,19 +483,37 @@ function isCcv3Remote(url) {
   const m = /github\.com[:/]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
-var CMD_POS = String.raw`(?:^|[;&|\r\n{]\s*|\b(?:then|else|do)\s+)(?:(?:builtin|command)\s+)?`;
+var OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\s+|time\s+(?:(?:-p|--)\s+)*)`;
+var CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))` + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
 var CD_NAMES = "cd|Set-Location|sl|chdir|pushd|Push-Location";
-var CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?("[^"]+"|'[^']+'|[^\s;&|]+)`, "gi");
-var UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})[ \t]*(?=[;&|\r\n]|$))`, "gi");
+var CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\`[^\`]*\`|\\[^;&|\r\n]|[^\s;&|)\`"'\\])+)`, "gi");
+var UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`, "gi");
+var NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
+var JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Pa(?:r(?:a(?:l(?:l(?:e(?:l)?)?)?)?)?)?|As(?:J(?:o(?:b)?)?)?)\b|\b(?:Invoke-Command|icm)\b(?!\s+(?:-ScriptBlock\s+)?\{))[^{};&|\r\n]*\{[^}]*$/i;
+var REMOTE_AFTER_BLOCK = /^[^;\r\n]*?\}[^;&|\r\n{]*?\s(?:-[A-Za-z]|@\w)/;
+function withoutClosed(text, group) {
+  let t = text;
+  for (; ; ) {
+    const next = t.replace(group, "");
+    if (next === t) return t;
+    t = next;
+  }
+}
+var CLOSED_BRACES = /\{[^{}]*\}/g;
+var CLOSED_PARENS = /\([^()]*\)|`[^`]*`/g;
+var insideSubshell = (before) => /[(`]/.test(withoutClosed(before, CLOSED_PARENS));
 var fromGitBashPath = (p, platform = process.platform) => platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
+var unquote2 = (target, shell) => {
+  if (shell === "pwsh") return target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d, s) => d ?? s ?? "").trimEnd();
+  return fromGitBashPath(target.replace(/\\([ "'])|["']/g, (_m, esc) => esc ?? ""));
+};
 var resolveIn = (cwd, target, shell) => {
-  const raw = target.replace(/^["']|["']$/g, "");
-  const t = shell === "bash" ? fromGitBashPath(raw) : raw;
+  const t = unquote2(target, shell);
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
 };
 function hasUnexpandedPart(target) {
   const t = target.replace(/^["']|["']$/g, "");
-  return /[$`]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith("~");
+  return /[$`*?[]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith("~") || /^[(@]/.test(t);
 }
 var CD_UNEXPANDED = "CD_UNEXPANDED";
 var DIR_NOT_FOUND = "DIR_NOT_FOUND";
@@ -513,15 +531,17 @@ function gatedStart(masked, raw) {
   cut(masked.length);
   return found;
 }
-function cdSteps(masked, raw, end) {
+function cdSteps(masked, raw, end, shell) {
   const pre = masked.slice(0, end);
   return [...pre.matchAll(new RegExp(CD_TARGET.source, "gi"))].flatMap((m) => {
     const at = m.index + m[0].length;
-    const target = raw.slice(at - m[1].length, at);
-    if (/^[-+]$/.test(target)) return [{ target, andOnly: false, unknown: true }];
+    const target = raw.slice(at - m.groups.t.length, at);
+    if (NO_FOLDER.test(target)) return [{ target, andOnly: false, unknown: true }];
     const joiners = pre.slice(at).replace(FD_REDIRECT, " ").match(/&&|\|\||[;&|\r\n]/g) ?? [];
-    const piped = m[0].startsWith("|") || endsInPipe(pre.slice(0, m.index));
-    return [{ target, andOnly: !piped && joiners.length > 0 && joiners.every((j) => j === "&&") }];
+    const before = pre.slice(0, m.index);
+    const loose = m.groups.soft !== void 0 || /^\||[(`]/.test(m.groups.hard ?? "") || endsInPipe(before) || insideSubshell(before) || JOB_BLOCK.test(withoutClosed(before, CLOSED_BRACES)) || REMOTE_AFTER_BLOCK.test(masked.slice(at));
+    const word = shell === "pwsh" && raw[at] === "`" ? raw.slice(at - m.groups.t.length, at + 1) : target;
+    return [{ target: word, andOnly: !loose && joiners.length > 0 && joiners.every((j) => j === "&&") }];
   });
 }
 var FD_REDIRECT = /\d*[<>]&\d*-?|&>>?/g;
@@ -532,20 +552,22 @@ function endsInPipe(before) {
     if (c === t) break;
     t = c;
   }
-  return t.endsWith("|");
+  return t.endsWith("|") || t.endsWith("|&");
 }
-function planRun(command, cwd, shell) {
+function planRun(command, cwd, shell, env = {}) {
+  const cdpath = shell === "bash" && (/\bCDPATH\b/.test(command) || (env.CDPATH ?? "") !== "");
   const masked = maskQuoted(command, shell === "pwsh" ? "PowerShell" : "Bash");
   const start = gatedStart(masked, command);
-  const all = cdSteps(masked, command, start ?? command.length);
+  const all = cdSteps(masked, command, start ?? command.length, shell);
   const steps = all.filter((s) => s.unknown !== true);
   const states = [cwd];
   const unexpanded = /* @__PURE__ */ new Map();
   let broken = false;
   for (const s of steps) {
-    const t = s.target.replace(/^["']|["']$/g, "");
+    const t = unquote2(s.target, shell);
     const absolute = isAbsolute(t) || /^[A-Za-z]:/.test(t);
-    broken = hasUnexpandedPart(s.target) || broken && !absolute;
+    const viaCdpath = cdpath && !absolute && !/^\.{1,2}(?:[\\/]|$)/.test(t);
+    broken = hasUnexpandedPart(s.target) || viaCdpath || broken && !absolute;
     const dir = resolveIn(states[states.length - 1], s.target, shell);
     states.push(dir);
     if (broken) unexpanded.set(dir, t.slice(0, 120));
@@ -568,7 +590,7 @@ function guardUnexpandedCd(deps, plan) {
 }
 function candidateDirs(command, cwd, shell) {
   const texts = [command, command.replace(/["']/g, "")];
-  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ""), shell)));
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m.groups.t, shell)));
   return [.../* @__PURE__ */ new Set([cwd, ...targets])];
 }
 var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"';&|]+)))/;
@@ -746,7 +768,7 @@ function decideAs(input, deps, text) {
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: "allow" };
-  const plan = planRun(command, input.cwd || process.cwd(), shellOf(input));
+  const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
   deps = guardUnexpandedCd(deps, plan);
   const ctx = makeCtx(input, command, deps, shapes, plan);
   const d = judge(command, deps, ctx, shapes);
@@ -879,7 +901,7 @@ The stamp comes from: ${RUN}`;
     }
     if (cdUnexpanded) {
       logGuardDecision(HOOK, input, "deny", "cd-unexpanded", { command });
-      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String(err.target ?? "").slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick or ~, so it cannot tell which checkout the command runs in.
+      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String(err.target ?? "").slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick, ~, a glob (* ? [), a PowerShell expression or a relative target under CDPATH, so it cannot tell which checkout the command runs in.
 
 Use a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.
 

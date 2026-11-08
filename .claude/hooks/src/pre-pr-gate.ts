@@ -29,7 +29,18 @@
  * folder on the known cd path is a CCv3 checkout. Otherwise the known folders are still judged. Use one absolute cd (`cd <full path> && ...`).
  * The open is denied when any one of these folders denies. A folder that does not exist is dropped when the cwd is also a candidate.
  * Join the cd to the open with `&&` to name one folder.
- * Accepted residual: a cd inside `( ... )`, `$( ... )` or quotes is not seen as a cd.
+ * A cd is read at a command position (CMD_POS, the same reading as decision-gate): after a separator, an opener (`{`, `(`, a backtick, `!`, then, else, do, if, while, until, elif, time, time -p),
+ * a variable prefix (X=1, X+=1), a redirect prefix (`2>/dev/null cd B`), builtin, command or eval (with -p or --). A cd in `( ... )`, `$( ... )` or backticks is read, and it is loose (the cwd counts too),
+ * also when a separator comes first inside the group (`(true && cd B) && open`, `x=$(true; cd B)`): a group still open before the cd makes it loose (insideSubshell). So is a cd after a word that is no command
+ * position (`echo then cd B`, `echo { cd B`), inside a Start-Job, Start-ThreadJob, pwsh or -Parallel / -AsJob block (also -Pa, -Para, -As), in an Invoke-Command block with a word before the block
+ * (`icm -cn srv {`, `Invoke-Command srv {`, `@p {`), or with a parameter or splat after it (-ComputerName, -cn, -Session, -AsJob, `@p`, also behind an `&&` inside the block). A closed `{ }` inside a job block does not end it.
+ * A cd target the shell resolves and this hook cannot (a glob `u*`, `[u]a`, a PowerShell `(Join-Path ...)`, a relative target under CDPATH, a backtick substitution) fails closed: cannot expand, in any folder list.
+ * A cd with only options (`cd -P`, `cd --`) is a position-unknown cd. A cd inside quotes is not seen.
+ * Accepted over-deny: `(cd A) && open` is loose, so the cwd and A are both judged although the subshell cd did not last. Accepted over-deny: `! cd A && open` reads as a sure cd (bash runs the open only when the cd failed), so A is judged.
+ * Accepted over-deny: a closing backtick that pairs with a later backtick (`` x=`cd B` && y=`pwd` && open ``) reads as a substitution in the target (cannot expand).
+ * Accepted residual: PowerShell `Set-Location 'x' -WhatIf`, `-Pat` and other parameter forms before the folder, `iex`, `bash -c '...'`, a quoted command name (`"cd" A`), a variable command name (`c=cd; $c B`)
+ * and the `$ExecutionContext.SessionState.Path.SetLocation(...)` API are not read. A script block held in a variable (`Start-Job $sb`) is not read.
+ * Accepted residual: checkpoint-shapes reads `\"` in a PowerShell string as an escape, so a quoted folder ending in a backslash before `--draft` reads as a non-draft create (an over-deny, not a fail-open).
  * Accepted over-deny: a heredoc body line that is only `popd`, `cd -` or `cd` reads as a command (position-unknown). Reading heredocs needs a lexer.
  * Accepted residual: from a foreign checkout, a CCv3 -R hidden by shell syntax (v""3, -dR) is not seen. The hook guards against mistakes, not a hostile agent.
  * Accepted residual: text sent to an existing Desktop Commander shell is judged against the payload cwd, not that shell's cwd. So a PR create
@@ -148,35 +159,77 @@ export function isCcv3Remote(url: string): boolean {
 }
 
 // The gap after the command is spaces or tabs only: `cd` + newline is a bare cd (UNKNOWN_CD), and the next line is not its target.
-// A command position: the start, after a separator or an open brace, or after then, else or do. A builtin or command word before the name does not hide it.
-const CMD_POS = String.raw`(?:^|[;&|\r\n{]\s*|\b(?:then|else|do)\s+)(?:(?:builtin|command)\s+)?`;
+// A command position, read in the quote-masked text. The same reading as decision-gate (PR #417: OPENER, CMD_POS), kept as this gate's own copy.
+//   hard = a SURE position: the start, a separator (; & | or a line end), the end of a PowerShell block comment (#>), or the scriptblock of
+//          Invoke-Command / icm (it runs in the current session), then any run of openers: `{`, `(`, a backtick, `!`, then, else, do, if, while, until, elif, time.
+//   soft = `(`, `)` (a case pattern), a backtick, `{`, then, else or do with NO separator before it. `echo then cd B` and `Start-Job { cd B }` are not commands
+//          that move the shell, so the cd is read but LOOSE (the cwd is judged too, see cdSteps).
+// After the opener: variable prefixes (X=1), a PowerShell `$x =`, builtin, command or eval words, a module name (Microsoft.PowerShell.Management\) and one backslash (\cd).
+const OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\s+|time\s+(?:(?:-p|--)\s+)*)`;
+const CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))`
+  + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
 const CD_NAMES = 'cd|Set-Location|sl|chdir|pushd|Push-Location';
-// A bash option (cd -P A, cd -- A) or a PowerShell parameter (-Path A, -Path:A) may come before the target.
-const CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?("[^"]+"|'[^']+'|[^\s;&|]+)`, 'gi');
+// A bash option (cd -P A, cd -- A) or a PowerShell parameter (-Path A, -Path:A) may come before the target. The target is one word of plain characters, quoted
+// parts and escapes (`P/"x"`, `P/x\ y`); it ends before a closing `)` or backtick of a subshell. A quoted part comes first, so a PowerShell folder may end in `\`.
+const CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\`[^\`]*\`|\\[^;&|\r\n]|[^\s;&|)\`"'\\])+)`, 'gi');
 /**
- * popd, Pop-Location and a bare cd (with no target) go to a folder the text does not name. Found in the masked view, at a command position.
- * `cd -` is not here: cdSteps reads it as a cd step and flags it, so one reader sees every cd that has a target and the two cannot disagree.
- * It reads separators and command names only. decision-gate keeps its own copy of this reading (UNKNOWN_CD_SOURCE); it is not touched by this fix.
+ * popd, Pop-Location and a bare cd (with no target) go to a folder the text does not name. A cd with only options (cd -P, cd --, cd -P -) does too.
+ * Found in the masked view, at a command position. `cd -` with nothing else is also read by cdSteps (NO_FOLDER), so the two readers cannot disagree.
+ * It reads separators and command names only. decision-gate keeps its own copy of this reading (UNKNOWN_CD_SOURCE); the two read alike.
  */
-const UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})[ \t]*(?=[;&|\r\n]|$))`, 'gi');
+const UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`, 'gi');
+/** A cd target that is no folder: `cd -`, or an option with nothing after it (`cd -P`, `cd --`). The shell goes to a place the text does not name. */
+const NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
+// A job, a parallel block or a remote block runs its cd in another runspace, process or machine: the parent shell does not move. True when the text before a cd has an
+// open `{` that follows such a word: Start-Job, Start-ThreadJob, pwsh, -Parallel and -AsJob (also their abbreviations -Pa, -Para ... and -As, -AsJ, -AsJo), or an
+// Invoke-Command / icm with anything between the word and the block but -ScriptBlock (`icm -cn srv {`, `Invoke-Command srv {`, `Invoke-Command @p {`: the target comes before the block).
+// Run it on the text with its closed `{ ... }` groups removed (withoutClosed), so `if (1) {}` or `@{}` inside the block, or a hashtable before it, does not end the block.
+const JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Pa(?:r(?:a(?:l(?:l(?:e(?:l)?)?)?)?)?)?|As(?:J(?:o(?:b)?)?)?)\b|\b(?:Invoke-Command|icm)\b(?!\s+(?:-ScriptBlock\s+)?\{))[^{};&|\r\n]*\{[^}]*$/i;
+// Invoke-Command names its target AFTER the block too: `{ cd B } -ComputerName srv` (or -cn, -Comp, -CU, -VMGuid) or a splat `@p` runs the cd elsewhere. Aliases and prefixes cannot be
+// listed safely, so ANY parameter or splat after a closing brace in the same statement counts. The cd may be followed by `&&` or a pipe before that brace (`{ cd B && $null } -cn srv`).
+// A local-only parameter, or a later unrelated block, over-denies (fail closed).
+const REMOTE_AFTER_BLOCK = /^[^;\r\n]*?\}[^;&|\r\n{]*?\s(?:-[A-Za-z]|@\w)/;
+
+/** The text with every closed group the pattern finds removed, innermost first (`a { b { c } d } e` becomes `a  e`). A group left over is an open one. Regex only, no scan of characters. */
+function withoutClosed(text: string, group: RegExp): string {
+  let t = text;
+  for (;;) {
+    const next = t.replace(group, '');
+    if (next === t) return t;
+    t = next;
+  }
+}
+const CLOSED_BRACES = /\{[^{}]*\}/g;
+const CLOSED_PARENS = /\([^()]*\)|`[^`]*`/g;
+/** True when the text before a cd leaves a `(`, `$(`, `<(` or backtick open: the cd is inside a subshell or a substitution, so it may not last (`(true && cd B) && open`). */
+const insideSubshell = (before: string): boolean => /[(`]/.test(withoutClosed(before, CLOSED_PARENS));
 /** Git Bash writes C:\x as /c/x. Node on Windows reads /c/x as \c\x, so turn the one-letter drive prefix back into C:. Other platforms keep the path. */
 export const fromGitBashPath = (p: string, platform: string = process.platform): string =>
   platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p;
 
+/**
+ * A cd target (raw, quote marks still on) as the folder text the shell reads. Every quote mark goes (P/"x" is P/x); in bash a backslash before a space or a quote
+ * is an escape, so the mark itself stays. PowerShell has no backslash escape: a quoted part is taken whole (a folder may end in `\`), and a quote inside the
+ * other kind of quote is a letter of the name. Only Git Bash writes /c/x for C:\x. PowerShell reads /c/x from the current drive root, so it keeps the text as written.
+ */
+const unquote = (target: string, shell: 'bash' | 'pwsh'): string => {
+  if (shell === 'pwsh') return target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d: string | undefined, s: string | undefined) => d ?? s ?? '').trimEnd();
+  return fromGitBashPath(target.replace(/\\([ "'])|["']/g, (_m, esc: string | undefined) => esc ?? ''));
+};
+
 const resolveIn = (cwd: string, target: string, shell: 'bash' | 'pwsh'): string => {
-  const raw = target.replace(/^["']|["']$/g, '');
-  // Only Git Bash writes /c/x for C:\x. PowerShell reads /c/x from the current drive root, so it keeps the text as written.
-  const t = shell === 'bash' ? fromGitBashPath(raw) : raw;
+  const t = unquote(target, shell);
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
 };
 
 /**
  * True when a cd target holds text that the shell expands and this hook does not: `$var`, `$(..)`, `${..}`, `%VAR%`, a backtick,
- * or a leading `~`. Resolved as a path it names a folder that does not exist (`...\worktrees\x\$w`).
+ * a leading `~`, a glob (`*`, `?`, `[`) or a leading `(` or `@` (a PowerShell expression). Resolved as a path it names a folder that does not exist (`...\worktrees\x\$w`).
  */
 export function hasUnexpandedPart(target: string): boolean {
   const t = target.replace(/^["']|["']$/g, '');
-  return /[$`]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith('~');
+  // A glob (`u*`, `[u]a`, `u?`) and a PowerShell expression (`(Join-Path ...`, `@(...)`) name a folder the shell finds and this hook cannot: read as a path they are a folder that does not exist.
+  return /[$`*?[]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith('~') || /^[(@]/.test(t);
 }
 
 /** `code` of the error a git call on an unexpandable cd target throws. handle() reads it. */
@@ -226,19 +279,24 @@ function gatedStart(masked: string, raw: string): number | null {
 }
 
 /** The cds that come before `end`, in order. A cd is found in the masked view, so a quoted `; cd x` is not one; the target is read from the raw text. */
-function cdSteps(masked: string, raw: string, end: number): CdStep[] {
+function cdSteps(masked: string, raw: string, end: number, shell: 'bash' | 'pwsh'): CdStep[] {
   const pre = masked.slice(0, end);
   return [...pre.matchAll(new RegExp(CD_TARGET.source, 'gi'))].flatMap((m) => {
     const at = m.index! + m[0].length;
-    const target = raw.slice(at - m[1].length, at);
-    // `cd -` goes to a folder the text does not name, not to a folder called "-": flag it. planRun makes the position unknown.
-    if (/^[-+]$/.test(target)) return [{ target, andOnly: false, unknown: true }];
+    const target = raw.slice(at - m.groups!.t.length, at);
+    // `cd -` and `cd -P` go to a folder the text does not name, not to a folder called "-": flag it. planRun makes the position unknown.
+    if (NO_FOLDER.test(target)) return [{ target, andOnly: false, unknown: true }];
     // Every separator between this cd and the open must be `&&`: a later `;`, `||` or line end lets the open run when this cd failed.
     // The & of a file-descriptor redirect (2>&1, &>file) is no separator: blank it first.
     const joiners = pre.slice(at).replace(FD_REDIRECT, ' ').match(/&&|\|\||[;&|\r\n]/g) ?? [];
-    // A | before the cd (||, a pipe, |&, with or without a comment line between) means the cd may be skipped, or run in a pipe subshell. Then it is loose.
-    const piped = m[0].startsWith('|') || endsInPipe(pre.slice(0, m.index!));
-    return [{ target, andOnly: !piped && joiners.length > 0 && joiners.every((j) => j === '&&') }];
+    // The cd may be skipped, may not last, or may run elsewhere: then it is loose and the cwd is judged too. That holds for a | before it (||, a pipe, |&, with or
+    // without a comment line between), a `(` or a backtick (a subshell), a soft position (`echo then cd B`), a cd inside a job block, and an Invoke-Command block with a parameter after it.
+    const before = pre.slice(0, m.index!);
+    const loose = m.groups!.soft !== undefined || /^\||[(`]/.test(m.groups!.hard ?? '') || endsInPipe(before) || insideSubshell(before)
+      || JOB_BLOCK.test(withoutClosed(before, CLOSED_BRACES)) || REMOTE_AFTER_BLOCK.test(masked.slice(at));
+    // In PowerShell a backtick right after the word is an escape inside it: the word goes on, the folder is not known. Keep the mark in the target so it is flagged.
+    const word = shell === 'pwsh' && raw[at] === '`' ? raw.slice(at - m.groups!.t.length, at + 1) : target;
+    return [{ target: word, andOnly: !loose && joiners.length > 0 && joiners.every((j) => j === '&&') }];
   });
 }
 
@@ -253,7 +311,7 @@ function endsInPipe(before: string): boolean {
     if (c === t) break;
     t = c;
   }
-  return t.endsWith('|');
+  return t.endsWith('|') || t.endsWith('|&');
 }
 
 /**
@@ -263,18 +321,21 @@ function endsInPipe(before: string): boolean {
  * (`cd B extra`, a missing folder) and the shell then stays where it was. A cd joined only by `&&` cannot fail into the open.
  * A text with no gated segment is judged in the cwd and the folder after every cd.
  */
-function planRun(command: string, cwd: string, shell: 'bash' | 'pwsh'): RunPlan {
+function planRun(command: string, cwd: string, shell: 'bash' | 'pwsh', env: NodeJS.ProcessEnv = {}): RunPlan {
+  // CDPATH makes bash look up a relative cd target (not ./x, ../x or an absolute one) in other folders: the folder is not the one the text names.
+  const cdpath = shell === 'bash' && (/\bCDPATH\b/.test(command) || (env.CDPATH ?? '') !== '');
   const masked = maskQuoted(command, shell === 'pwsh' ? 'PowerShell' : 'Bash');
   const start = gatedStart(masked, command);
-  const all = cdSteps(masked, command, start ?? command.length);
+  const all = cdSteps(masked, command, start ?? command.length, shell);
   const steps = all.filter((s) => s.unknown !== true);
   const states = [cwd];
   const unexpanded = new Map<string, string>();
   let broken = false;
   for (const s of steps) {
-    const t = s.target.replace(/^["']|["']$/g, '');
+    const t = unquote(s.target, shell);
     const absolute = isAbsolute(t) || /^[A-Za-z]:/.test(t);
-    broken = hasUnexpandedPart(s.target) || (broken && !absolute);
+    const viaCdpath = cdpath && !absolute && !/^\.{1,2}(?:[\\/]|$)/.test(t);
+    broken = hasUnexpandedPart(s.target) || viaCdpath || (broken && !absolute);
     const dir = resolveIn(states[states.length - 1], s.target, shell);
     states.push(dir);
     if (broken) unexpanded.set(dir, t.slice(0, 120));
@@ -309,7 +370,7 @@ function guardUnexpandedCd(deps: Deps, plan: RunPlan): Deps {
  */
 function candidateDirs(command: string, cwd: string, shell: 'bash' | 'pwsh'): string[] {
   const texts = [command, command.replace(/["']/g, '')];
-  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ''), shell)));
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m.groups!.t, shell)));
   return [...new Set([cwd, ...targets])];
 }
 
@@ -527,7 +588,7 @@ function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: 'allow' };
-  const plan = planRun(command, input.cwd || process.cwd(), shellOf(input));
+  const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
   deps = guardUnexpandedCd(deps, plan);
   const ctx = makeCtx(input, command, deps, shapes, plan);
   const d = judge(command, deps, ctx, shapes);
@@ -688,7 +749,7 @@ export function handle(raw: string, deps: Deps): string {
     }
     if (cdUnexpanded) {
       logGuardDecision(HOOK, input, 'deny', 'cd-unexpanded', { command });
-      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String((err as { target?: unknown }).target ?? '').slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick or ~, so it cannot tell which checkout the command runs in.\n\nUse a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.\n\nThe stamp comes from: ${RUN}`;
+      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String((err as { target?: unknown }).target ?? '').slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick, ~, a glob (* ? [), a PowerShell expression or a relative target under CDPATH, so it cannot tell which checkout the command runs in.\n\nUse a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.\n\nThe stamp comes from: ${RUN}`;
       return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } });
     }
     if ((err as { code?: string } | null)?.code === GIT_NOT_FOUND) {
