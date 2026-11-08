@@ -3,7 +3,9 @@ import type { On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import {
+  FREE_TEXT,
   LIMITS,
+  TAP_BY,
   applyBrief,
   briefSummary,
   deriveChip,
@@ -15,8 +17,11 @@ import {
   mergeParsed,
   parseTurnEnd,
   redact,
+  tapDecisions,
   validateBrief,
+  withTaps,
 } from '../hooks/agentic-os/brief'
+import { captureTaps } from '../hooks/agentic-os/index'
 import type { Brief } from '../hooks/agentic-os/brief'
 import type { AgentRun, OsTask } from '../types'
 
@@ -67,6 +72,10 @@ import type { AgentRun, OsTask } from '../types'
 // P36 "Waiting on CI—approve PR 12" (unspaced em or en dash) is dropped whole, so the approval request is lost
 // P37 "Nothing needed" (not in the README's closed set) is dropped, so it clears an open ask
 // E14d a turn whose only Next steps item is "Waiting on CI, then approve PR 12" clears the earlier ask and the chip leaves waiting-on-dave
+// CL1..CL17 (GPAA P2) an ask that leaves the open list is not kept in `cleared` (last 5, one per kind and text), a prompt does not stamp answeredAt, or a repeated Next steps block re-opens an answered ask
+// T0 (pr-checkpoint.test.ts) the origin of a model AskUserQuestion is not engine, or of the mod's own $.ui.ask is not ccv3-mods
+// TAP-U1..U3 TAP1..TAP20 (GPAA P3) a tap in a model AskUserQuestion dialog is not stored as "<header>: <label>", stores Dave's typed words or a secret, or reads the wrong source
+// TAP-U2b (GPAA P3) the text is cut to 300 before redact, so a key that straddles the cut keeps a prefix and a few body characters that no check sees
 
 const NOW = 1_000_000
 const secrets = {
@@ -74,7 +83,8 @@ const secrets = {
   bearer: 'Bear' + 'er ' + 't'.repeat(30),
   dbUrl: 'postgres' + '://' + 'admin' + ':' + 'pw' + 'Hunter99' + '@db.internal:5432/app',
 }
-const SECRET_BODIES = ['aaaaaaaa', 'tttttt', 'Hunter99']
+// 'sk-ant' is the prefix: a key cut short by a clip before redact keeps its prefix and a few body characters, too few for redact or the body check.
+const SECRET_BODIES = ['aaaaaaaa', 'tttttt', 'Hunter99', 'sk-ant']
 const leaks = (text: string): boolean => SECRET_BODIES.some(body => text.includes(body))
 
 const task = (id: string, subject: string, status: OsTask['status'] = 'pending'): OsTask => ({ id, subject, status })
@@ -375,7 +385,7 @@ describe('deriveChip', () => {
   })
 
   test('C6 an answered ask does not count', () => {
-    const brief = markAsksAnswered(apply(null, { ask: [{ kind: 'question', text: 'q' }] }))
+    const brief = markAsksAnswered(apply(null, { ask: [{ kind: 'question', text: 'q' }] }), NOW)
     expect(deriveChip(state({ brief }))).toBe('idle')
     expect(deriveChip(state({ brief, turnActive: true }))).toBe('working')
   })
@@ -437,7 +447,7 @@ describe('deriveChip', () => {
 describe('ask lifecycle', () => {
   test('K1 Dave answers: open asks flip to answered, the input is not mutated, the next brief_set replaces them', () => {
     const prev = apply(null, { ask: [{ kind: 'question', text: 'q' }, { kind: 'block', text: 'b' }] })
-    const after = markAsksAnswered(prev)
+    const after = markAsksAnswered(prev, NOW)
     expect(after.ask.every(one => one.answered === true)).toBe(true)
     expect(prev.ask.some(one => one.answered === true)).toBe(false)
     expect(apply(after, { ask: [{ kind: 'question', text: 'fresh' }] }).ask.map(one => one.answered)).toEqual([undefined])
@@ -447,7 +457,7 @@ describe('ask lifecycle', () => {
     const brief = apply(null, { ask: [{ kind: 'question', text: 'q' }] }, [], NOW)
     expect(isAskStale(brief, NOW + 24 * 3600_000 - 1)).toBe(false)
     expect(isAskStale(brief, NOW + 24 * 3600_000)).toBe(true)
-    expect(isAskStale(markAsksAnswered(brief), NOW + 48 * 3600_000)).toBe(false)
+    expect(isAskStale(markAsksAnswered(brief, NOW), NOW + 48 * 3600_000)).toBe(false)
     expect(isAskStale(emptyBrief(NOW), NOW + 48 * 3600_000)).toBe(false)
   })
 
@@ -602,6 +612,166 @@ describe('mergeParsed', () => {
   test('M4 a parse with nothing in it changes nothing', () => {
     const set = apply(null, { goal: 'g' })
     expect(mergeParsed(set, parseTurnEnd('nothing here'), NOW)).toEqual(set)
+  })
+})
+
+// --- Cleared asks (GPAA P2, design 2026-11-09) ---
+
+/** A Next steps block as the model writes it: one numbered item per text. The items below read as kind `question` (no approve/decide/block word). */
+const parse = (...items: string[]) => parseTurnEnd(`## Next steps\n${items.map((item, i) => `${i + 1}. ${item}`).join('\n')}`)
+const askA = { kind: 'question' as const, text: 'Paste log A' }
+const askB = { kind: 'question' as const, text: 'Paste log B' }
+const askC = { kind: 'question' as const, text: 'Paste log C' }
+const texts = (list: readonly { text: string }[] | undefined) => (list ?? []).map(one => one.text)
+
+describe('cleared asks', () => {
+  test('CL1 markAsksAnswered stamps answeredAt on each open ask, and a second call keeps the first time', () => {
+    const open = apply(null, { ask: [askA, { kind: 'block', text: 'b' }] })
+    const first = markAsksAnswered(open, 7)
+    expect(first.ask.map(one => one.answeredAt)).toEqual([7, 7])
+    const second = markAsksAnswered(first, 9)
+    expect(second.ask.map(one => one.answeredAt)).toEqual([7, 7])
+    expect(second).toBe(first)
+  })
+
+  test('CL2 a brief_set ask [] over open asks moves both to cleared as replaced, with the call time and no answeredAt', () => {
+    const open = apply(null, { ask: [askA, { kind: 'block', text: 'b' }] })
+    const after = apply(open, { ask: [] }, [], 9)
+    expect(after.ask).toEqual([])
+    expect(after.cleared).toEqual([
+      { kind: 'question', text: 'Paste log A', clearedAt: 9, how: 'replaced' },
+      { kind: 'block', text: 'b', clearedAt: 9, how: 'replaced' },
+    ])
+  })
+
+  test('CL3 answered asks that a new brief_set list replaces go to cleared as prompted, with their answeredAt', () => {
+    const answered = markAsksAnswered(apply(null, { ask: [askA, askB] }), 5)
+    const after = apply(answered, { ask: [askC] }, [], 9)
+    expect(texts(after.ask)).toEqual(['Paste log C'])
+    expect(after.cleared).toEqual([
+      { kind: 'question', text: 'Paste log A', answeredAt: 5, clearedAt: 9, how: 'prompted' },
+      { kind: 'question', text: 'Paste log B', answeredAt: 5, clearedAt: 9, how: 'prompted' },
+    ])
+  })
+
+  test('CL4 a brief_set that re-sends an answered ask re-opens it: no answered, no answeredAt, not in cleared', () => {
+    const answered = markAsksAnswered(apply(null, { ask: [askA] }), 5)
+    const again = apply(answered, { ask: [askA] }, [], 9)
+    expect(again.ask[0]?.answered).toBeUndefined()
+    expect(again.ask[0]?.answeredAt).toBeUndefined()
+    expect(texts(again.cleared)).toEqual([])
+  })
+
+  test('CL5 the same parsed block after Dave\'s prompt keeps answered and answeredAt, and the brief is returned as it was', () => {
+    const asked = mergeParsed(null, parse('Paste log A'), 100)
+    const answered = markAsksAnswered(asked, 200)
+    const again = mergeParsed(answered, parse('Paste log A'), 300)
+    expect(again).toBe(answered)
+    expect(again.ask[0]).toMatchObject({ answered: true, answeredAt: 200 })
+    expect(again.updatedAt).toBe(100)
+  })
+
+  test('CL6 a new parsed block keeps a matching answered ask (with the new recommend), moves the dropped ask to cleared and opens the new one', () => {
+    const answered = markAsksAnswered(mergeParsed(null, parse('Paste log A', 'Paste log B'), 100), 200)
+    const next = mergeParsed(answered, parse('Paste log B (recommended: yes)', 'Paste log C'), 300)
+    expect(next).not.toBe(answered)
+    expect(next.ask.map(one => [one.text, one.answered, one.answeredAt, one.recommend])).toEqual([
+      ['Paste log B', true, 200, 'yes'],
+      ['Paste log C', undefined, undefined, undefined],
+    ])
+    expect(next.cleared).toEqual([{ kind: 'question', text: 'Paste log A', answeredAt: 200, clearedAt: 300, how: 'prompted' }])
+  })
+
+  test('CL7 a parsed block with nothing for Dave moves every open ask to cleared as replaced', () => {
+    const asked = mergeParsed(null, parse('Paste log A', 'Paste log B'), 100)
+    const none = mergeParsed(asked, parseTurnEnd('## Next steps\n1. None for now.'), 300)
+    expect(none.ask).toEqual([])
+    expect(none.cleared).toEqual([
+      { kind: 'question', text: 'Paste log A', clearedAt: 300, how: 'replaced' },
+      { kind: 'question', text: 'Paste log B', clearedAt: 300, how: 'replaced' },
+    ])
+  })
+
+  test('CL8 seven leavers over three calls keep the newest five, oldest first', () => {
+    const one = (text: string) => ({ kind: 'question' as const, text })
+    let brief = apply(null, { ask: [one('a1'), one('a2'), one('a3')] }, [], 1)
+    brief = apply(brief, { ask: [one('b1'), one('b2'), one('b3'), one('b4')] }, [], 2)
+    brief = apply(brief, { ask: [one('c1')] }, [], 3)
+    expect(LIMITS.clearedKept).toBe(5)
+    expect(texts(brief.cleared)).toEqual(['a3', 'b1', 'b2', 'b3', 'b4'])
+  })
+
+  test('CL9 one entry per kind and text (the later one wins, last); the same text of another kind is a second entry', () => {
+    const base = apply(null, { ask: [askA, askB] }, [], 1)
+    const older: Brief = { ...base, cleared: [{ kind: 'question', text: 'Paste log A', clearedAt: 1, how: 'replaced' }, { kind: 'question', text: 'Paste log B', clearedAt: 1, how: 'replaced' }] }
+    const after = apply(older, { ask: [askC] }, [], 5)
+    expect(after.cleared).toEqual([
+      { kind: 'question', text: 'Paste log A', clearedAt: 5, how: 'replaced' },
+      { kind: 'question', text: 'Paste log B', clearedAt: 5, how: 'replaced' },
+    ])
+    const twice = apply(apply(null, { ask: [askA, askA] }, [], 1), { ask: [] }, [], 2)
+    expect(texts(twice.cleared)).toEqual(['Paste log A'])
+    const kinds = apply(apply(null, { ask: [{ kind: 'question', text: 'x' }, { kind: 'block', text: 'x' }] }, [], 1), { ask: [] }, [], 2)
+    expect(kinds.cleared?.map(one => one.kind)).toEqual(['question', 'block'])
+  })
+
+  test('CL10 a brief_set ask list is not touched by a parsed block: the asks stay and no cleared key appears', () => {
+    const set = apply(null, { ask: [askA] })
+    const after = mergeParsed(set, parse('Paste log Z'), NOW)
+    expect(after).toBe(set)
+    expect('cleared' in after).toBe(false)
+  })
+
+  test('CL11 an old brief with no cleared and an answered ask with no answeredAt goes through applyBrief and mergeParsed without a throw or an answeredAt key', () => {
+    const old: Brief = { sources: { ask: 'parsed' }, plan: [], ask: [{ kind: 'question', text: 'Paste log A', source: 'parsed', answered: true }], decisions: [], proofs: [], updatedAt: 1 }
+    const viaTool = apply({ ...old, sources: { ask: 'parsed' } }, { ask: [] }, [], 5)
+    const viaParse = mergeParsed(old, parse('Paste log B'), 6)
+    for (const entry of [viaTool.cleared?.[0], viaParse.cleared?.[0]]) {
+      expect(entry).toMatchObject({ kind: 'question', text: 'Paste log A', how: 'prompted' })
+      expect(Object.keys(entry ?? {})).not.toContain('answeredAt')
+    }
+  })
+
+  test('CL12 neither applyBrief nor mergeParsed changes the cleared list of the brief it was given', () => {
+    const viaTool = apply(apply(null, { ask: [askA] }), { ask: [askB] })
+    const viaParse = mergeParsed(mergeParsed(null, parse('Paste log A'), 1), parse('Paste log B'), 2)
+    for (const prev of [viaTool, viaParse]) {
+      expect(texts(prev.cleared)).toEqual(['Paste log A'])
+      const before = JSON.stringify(prev)
+      apply({ ...prev, sources: { ...prev.sources, ask: 'parsed' } }, { ask: [] })
+      mergeParsed(prev, parse('Paste log C'), NOW)
+      expect(JSON.stringify(prev)).toBe(before)
+    }
+  })
+
+  test('CL13 a brief that clears nothing has no cleared key: not at the start, not after a goal, not after the same block twice', () => {
+    expect('cleared' in emptyBrief(NOW)).toBe(false)
+    const goal = apply(apply(null, { ask: [askA] }), { goal: 'g' })
+    expect('cleared' in goal).toBe(false)
+    const parsed = mergeParsed(mergeParsed(null, parse('Paste log A'), 1), parse('Paste log A'), 2)
+    expect('cleared' in parsed).toBe(false)
+  })
+
+  test('CL15 brief_set [A], [B], [A]: A is open and not in cleared, B is in cleared', () => {
+    const third = apply(apply(apply(null, { ask: [askA] }), { ask: [askB] }), { ask: [askA] })
+    expect(texts(third.ask)).toEqual(['Paste log A'])
+    expect(texts(third.cleared)).toEqual(['Paste log B'])
+  })
+
+  test('CL16 parsed [A], [B], [A]: A is open and not in cleared, B is in cleared', () => {
+    const third = mergeParsed(mergeParsed(mergeParsed(null, parse('Paste log A'), 1), parse('Paste log B'), 2), parse('Paste log A'), 3)
+    expect(texts(third.ask)).toEqual(['Paste log A'])
+    expect(texts(third.cleared)).toEqual(['Paste log B'])
+  })
+
+  test('CL17 the same parsed block after two prompts keeps the first answeredAt, and the ask stays answered', () => {
+    let brief = mergeParsed(null, parse('Paste log A'), 1)
+    brief = markAsksAnswered(brief, 5)
+    brief = mergeParsed(brief, parse('Paste log A'), 6)
+    brief = markAsksAnswered(brief, 9)
+    brief = mergeParsed(brief, parse('Paste log A'), 10)
+    expect(brief.ask[0]).toMatchObject({ answered: true, answeredAt: 5 })
+    expect(brief.ask.some(one => one.answered !== true)).toBe(false)
   })
 })
 
@@ -883,8 +1053,15 @@ const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
 
 type Seen = { writes: { path: string; text: string }[]; tools: Record<string, string>; schemas: Record<string, unknown>; clock: ReturnType<typeof mock.clock>; inRead?: () => Promise<void>; agents: unknown[] }
 
-const world = (on: On, env: Record<string, string> = {}) => {
-  const clock = mock.clock(on, { now: 1_000 })
+/** `gap` replaces mock.clock (a plugin holds one clock.now hook): every `$.clock.now()` awaits `gap.run` first, then answers 1_000. */
+const world = (on: On, env: Record<string, string> = {}, gap?: { run?: () => Promise<void> }) => {
+  const clock = gap === undefined ? mock.clock(on, { now: 1_000 }) : (undefined as never)
+  if (gap !== undefined) {
+    on('clock.now', async () => {
+      await gap.run?.()
+      return { value: 1_000 }
+    })
+  }
   mock.env(on, { USERPROFILE: 'C:/home', ...env })
   const seen: Seen = { writes: [], tools: {}, schemas: {}, clock, agents: [] }
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
@@ -1402,6 +1579,37 @@ describe('turn.step answers in the mod', () => {
     expect(after.chip).toBe('waiting-on-dave')
   })
 
+  test('CL14 a prompt stamps answeredAt with the clock; the next Next steps block moves the ask to cleared as prompted, and the snapshot holds it', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    await seen.clock.advance(1000)
+    await $.prompt.submit({ text: 'go ahead', wait: false, origin: { kind: 'composer' } })
+    await turnEnd($, '## Next steps\n1. Pick the release name?')
+    const brief = lastSnapshot(seen).brief
+    expect(brief.ask.map((one: { text: string }) => one.text)).toEqual(['Pick the release name?'])
+    expect(brief.cleared).toHaveLength(1)
+    expect(brief.cleared[0]).toMatchObject({ kind: 'approval', text: 'Approve the merge of PR 12?', answeredAt: 2000, how: 'prompted' })
+  })
+
+  test('CL14b a brief_set that lands while the prompt waits for the clock is kept, and the ask is still marked answered', async ($, on) => {
+    // answerAsks reads the clock twice (touch, then the stamp). A brief_set goes in before the second read, once armed.
+    const gap: { run?: () => Promise<void> } = {}
+    const seen = world(on, {}, gap)
+    await startMod($, true)
+    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    let reads = 0
+    gap.run = async () => {
+      reads += 1
+      if (reads === 2) await $.tool.call({ tool: BRIEF_TOOL, title: 'set in the gap' })
+    }
+    await $.prompt.submit({ text: 'go ahead', wait: false, origin: { kind: 'composer' } })
+    expect(reads).toBeGreaterThanOrEqual(2)
+    const brief = lastSnapshot(seen).brief
+    expect(brief.title).toBe('set in the gap')
+    expect(brief.ask[0]).toMatchObject({ text: 'Approve the merge of PR 12?', answered: true })
+  })
+
   test('E15 narration in a later step ("I will ... stop at ...", "I\'ll stop here ...") never replaces the labelled restate', async ($, on) => {
     const seen = stepWorld(on)
     await startMod($, true)
@@ -1431,5 +1639,336 @@ describe('turn.step answers in the mod', () => {
     await turnEnd($, 'Done.')
     expect(lastSnapshot(seen).brief?.goal ?? '').toContain('rawProject')
     expect(lastSnapshot(seen).brief?.stopAt ?? '').toContain('open PR')
+  })
+})
+
+// --- Taps in a model AskUserQuestion dialog (GPAA P3, design 2026-11-09) ---
+
+/** An AskUserQuestion result as the engine returns it (census 2026-11-09: questions echoed, answers keyed by question text, annotations empty). */
+const auth = (extra: Record<string, unknown> = {}) => ({
+  question: 'Which auth?',
+  header: 'Auth',
+  options: [{ label: 'OAuth', description: 'd' }, { label: 'SAML', description: 'd' }],
+  multiSelect: false,
+  ...extra,
+})
+const resultOf = (questions: unknown, answers: unknown, extra: Record<string, unknown> = {}) => ({ questions, answers, annotations: {}, ...extra })
+
+describe('tapDecisions', () => {
+  test('TAP-U1a one answered question gives "<header>: <label>"; two answered give two texts in question order', () => {
+    expect(tapDecisions(resultOf([auth()], { 'Which auth?': 'OAuth' }))).toEqual(['Auth: OAuth'])
+    const two = [auth(), auth({ question: 'Which db?', header: 'Store', options: [{ label: 'PG' }, { label: 'SQLite' }] })]
+    expect(tapDecisions(resultOf(two, { 'Which db?': 'SQLite', 'Which auth?': 'SAML' }))).toEqual(['Auth: SAML', 'Store: SQLite'])
+    expect(tapDecisions(resultOf(two, { 'Which db?': 'PG' }))).toEqual(['Store: PG'])
+  })
+
+  test('TAP-U1b multiSelect: joined labels are kept when every part is a label; a label that holds ", " matches whole; no greedy match', () => {
+    const pick = (labels: string[], answer: string, multiSelect = true) =>
+      tapDecisions(resultOf([{ question: 'Pick?', header: 'Pick', options: labels.map(label => ({ label })), multiSelect }], { 'Pick?': answer }))
+    expect(pick(['Red', 'Blue'], 'Red, Blue')).toEqual(['Pick: Red, Blue'])
+    expect(pick(['A, B', 'C'], 'A, B')).toEqual(['Pick: A, B'])
+    expect(pick(['A, B', 'C'], 'A, B, C')).toEqual([`Pick: ${FREE_TEXT}`])
+    expect(pick(['Red', 'Blue'], 'Red, Green')).toEqual([`Pick: ${FREE_TEXT}`])
+    expect(pick(['Red', 'Blue'], 'Red, Blue', false)).toEqual([`Pick: ${FREE_TEXT}`])
+  })
+
+  test('TAP-U1c Other text and a text question store the constant; a text or number question with no options does not throw; a number answer is the constant too (design Q3 default, no answer from Dave yet)', () => {
+    expect(tapDecisions(resultOf([auth()], { 'Which auth?': 'my own words' }))).toEqual([`Auth: ${FREE_TEXT}`])
+    const bare = (kind: string) => [{ question: 'How many?', header: 'Count', kind, multiSelect: false }]
+    expect(tapDecisions(resultOf(bare('text'), { 'How many?': 'seven' }))).toEqual([`Count: ${FREE_TEXT}`])
+    expect(tapDecisions(resultOf(bare('text'), { 'How many?': '7' }))).toEqual([`Count: ${FREE_TEXT}`])
+    expect(tapDecisions(resultOf(bare('number'), { 'How many?': '7' }))).toEqual([`Count: ${FREE_TEXT}`])
+    expect(tapDecisions(resultOf(bare('number'), { 'How many?': '3.5' }))).toEqual([`Count: ${FREE_TEXT}`])
+    expect(tapDecisions(resultOf(bare('number'), { 'How many?': 'about seven' }))).toEqual([`Count: ${FREE_TEXT}`])
+  })
+
+  test('TAP-U1d a missing or empty header reads "Question N" by position, never the question text', () => {
+    expect(tapDecisions(resultOf([auth({ header: undefined })], { 'Which auth?': 'OAuth' }))).toEqual(['Question 1: OAuth'])
+    expect(tapDecisions(resultOf([auth({ header: '' })], { 'Which auth?': 'OAuth' }))).toEqual(['Question 1: OAuth'])
+    expect(tapDecisions(resultOf([auth(), auth({ question: 'Two?', header: undefined })], { 'Two?': 'OAuth' }))).toEqual(['Question 2: OAuth'])
+  })
+
+  test('TAP-U1e results that are not a Dave tap give []: idle auto-resolve, follow-up, a string, null answers, no list, an empty answer', () => {
+    const ok = resultOf([auth()], { 'Which auth?': 'OAuth' })
+    expect(tapDecisions(ok)).toEqual(['Auth: OAuth'])
+    expect(tapDecisions({ ...ok, afkTimeoutMs: 1000 })).toEqual([])
+    expect(tapDecisions({ ...ok, followUp: true })).toEqual([])
+    expect(tapDecisions('Auth: OAuth')).toEqual([])
+    expect(tapDecisions(null)).toEqual([])
+    expect(tapDecisions(resultOf([auth()], null))).toEqual([])
+    expect(tapDecisions(resultOf('x', { 'Which auth?': 'OAuth' }))).toEqual([])
+    expect(tapDecisions(resultOf([auth()], { 'Which auth?': '' }))).toEqual([])
+    expect(tapDecisions(resultOf([auth()], { 'Which auth?': 7 }))).toEqual([])
+    expect(tapDecisions({ ...ok, response: 'free words' })).toEqual(['Auth: OAuth'])
+  })
+
+  test('TAP-U1f only the first four questions are read', () => {
+    const five = Array.from({ length: 5 }, (_, i) => auth({ question: `Q${i}?`, header: `H${i}` }))
+    const answers = Object.fromEntries(five.map(one => [one.question, 'OAuth']))
+    expect(tapDecisions(resultOf(five, answers))).toHaveLength(4)
+  })
+
+  test('TAP-U2 a 400-character label is cut to 300 with an ellipsis; a 20 KB label is named; a header over 256 characters reads "Question N"', () => {
+    const long = (n: number) => 'x'.repeat(n)
+    const withLabel = (label: string, header = 'Auth') => resultOf([auth({ header, options: [{ label }] })], { 'Which auth?': label })
+    const cut = tapDecisions(withLabel(long(400)))[0] ?? ''
+    expect(cut).toHaveLength(LIMITS.decisionText)
+    expect(cut.endsWith('…')).toBe(true)
+    expect(tapDecisions(withLabel(long(20_000)))).toEqual(['Auth: long answer'])
+    expect(tapDecisions(withLabel('OAuth', long(300)))[0]?.startsWith('Question 1: ')).toBe(true)
+    expect(tapDecisions(withLabel('OAuth', long(256)))[0]?.startsWith(`${long(256)}: `)).toBe(true)
+  })
+
+  test('TAP-U2b a secret in a label or a header is redacted before the cut', () => {
+    const viaLabel = tapDecisions(resultOf([auth({ options: [{ label: `use ${secrets.anthropic}` }] })], { 'Which auth?': `use ${secrets.anthropic}` }))
+    const viaHeader = tapDecisions(resultOf([auth({ header: `use ${secrets.anthropic}` })], { 'Which auth?': 'OAuth' }))
+    expect(viaLabel).toHaveLength(1)
+    expect(viaHeader).toHaveLength(1)
+    for (const text of [...viaLabel, ...viaHeader]) expect(leaks(text)).toBe(false)
+    // A secret that straddles the 300 cut: redact has to see the whole text first.
+    const straddle = `${'y '.repeat(140)}${secrets.anthropic}`
+    const cut = tapDecisions(resultOf([auth({ options: [{ label: straddle }] })], { 'Which auth?': straddle }))
+    expect(cut).toHaveLength(1)
+    expect(leaks(cut[0] ?? '')).toBe(false)
+    expect(cut[0]).not.toContain('sk-ant')
+    expect(cut[0]).toContain('[REDACTED:') // the marker starts at 286, so the 300 cut keeps its head
+  })
+})
+
+describe('withTaps', () => {
+  test('TAP-U3 a null brief becomes an empty brief with the decisions at the call time; 60 taps keep 50; the time moves past updatedAt', () => {
+    const first = withTaps(null, ['H: A'], 5)
+    expect(first.decisions).toEqual([{ text: 'H: A', by: TAP_BY, at: 5 }])
+    expect(first.updatedAt).toBe(5)
+    const many = withTaps(null, Array.from({ length: 60 }, (_, i) => `H: ${i}`), 5)
+    expect(many.decisions).toHaveLength(LIMITS.decisionsKept)
+    expect(many.decisions[0]?.text).toBe('H: 10')
+    const prev = apply(null, { goal: 'g' }, [], 10)
+    const next = withTaps(prev, ['H: B', 'H: C'], 10)
+    expect(next.updatedAt).toBe(11)
+    expect(next.decisions.map(one => one.at)).toEqual([11, 11])
+    expect(prev.decisions).toEqual([])
+    expect(next.goal).toBe('g')
+  })
+})
+
+describe('a question the mod told the model to ask', () => {
+  const REC = ' (Recommended)'
+  const modQ = (header: string, first = `No, keep it free${REC}`) =>
+    auth({ question: `${header} question?`, header, options: [{ label: first, description: 'd' }, { label: 'Stop here', description: 'd' }] })
+  const answered = (q: { question: string }, answer: string) => resultOf([q], { [q.question]: answer })
+
+  test('TAP-U4 every header of ship-ask.mjs and checkpoint-ledger.mjs with a recommended first option is a mod question and stores nothing', () => {
+    for (const header of ['Push', 'Commit', 'Open PR', 'Land', 'Paid round', 'PR #7', 'PR #12345678']) {
+      const q = modQ(header)
+      expect(tapDecisions(answered(q, `No, keep it free${REC}`))).toEqual([])
+      expect(tapDecisions(answered(q, 'my own words'))).toEqual([])
+    }
+  })
+
+  test('TAP-U5 a model question is still stored when only one of the two markers matches', () => {
+    const plain = (header: string, first: string) => answered(modQ(header, first), first)
+    // A model header such as Commit, with no (Recommended) first option.
+    expect(tapDecisions(plain('Commit', 'Commit now'))).toEqual(['Commit: Commit now'])
+    expect(tapDecisions(plain('PR #12', 'Merge'))).toEqual(['PR #12: Merge'])
+    // A recommended first option under a header no script uses.
+    expect(tapDecisions(plain('Auth', `OAuth${REC}`))).toEqual([`Auth: OAuth${REC}`])
+    // The header must be the whole word: a longer header is the model's.
+    expect(tapDecisions(plain('PR #12 plan', `Merge${REC}`))).toEqual([`PR #12 plan: Merge${REC}`])
+    expect(tapDecisions(plain('Pushing', `Go${REC}`))).toEqual([`Pushing: Go${REC}`])
+    // (Recommended) on a later option is not the script marker.
+    const later = auth({ header: 'Land', options: [{ label: 'Keep open', description: 'd' }, { label: `Land now${REC}`, description: 'd' }] })
+    expect(tapDecisions(answered(later, 'Keep open'))).toEqual(['Land: Keep open'])
+  })
+
+  test('TAP-U6 the skip is per question: a mod question beside a model question drops only itself, and the index names stay put', () => {
+    const mod = modQ('Paid round')
+    const model = auth({ question: 'Which db?', header: '', options: [{ label: 'PG', description: 'd' }, { label: 'SQLite', description: 'd' }] })
+    const both = resultOf([mod, model], { [mod.question]: `No, keep it free${REC}`, [model.question]: 'PG' })
+    expect(tapDecisions(both)).toEqual(['Question 2: PG'])
+  })
+})
+
+type TapQ = { question: string; header?: string; options?: { label: string }[]; multiSelect?: boolean; kind?: string }
+type TapReply = { answers: Record<string, string> | ((qs: TapQ[]) => Record<string, string>) } | { raw: unknown }
+
+/** The world plus an AskUserQuestion bottom that echoes every question into `result.questions`, as the engine does. `answers` is per reply and never copied from the input. */
+const tapWorld = (on: On, replies: TapReply[]) => {
+  const seen = world(on)
+  const asks: { input: TapQ[]; origin: unknown }[] = []
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e, next) => {
+    const input = e as unknown as { questions: TapQ[] }
+    asks.push({ input: input.questions, origin: (next as unknown as { origin?: unknown }).origin })
+    const reply = replies.shift() ?? { answers: {} }
+    if ('raw' in reply) return reply.raw as never
+    const answers = typeof reply.answers === 'function' ? reply.answers(input.questions) : reply.answers
+    return { result: { questions: input.questions, answers, annotations: {} } } as never
+  })
+  return { seen, asks }
+}
+const askModel = ($: Engine, questions: unknown[], extra: Record<string, unknown> = {}) => $.tool.call({ tool: 'AskUserQuestion', questions, ...extra } as never)
+const tapRows = (seen: Seen): { text: string; by: string; at: number }[] =>
+  (lastSnapshot(seen).brief?.decisions ?? []).filter((one: { by: string }) => one.by === TAP_BY)
+const everyWrite = (seen: Seen): string => seen.writes.map(write => write.text).join('\n')
+
+describe('a tap in the mod', () => {
+  test('TAP1 a tap on a label is stored as "<header>: <label>" by Dave (tap) at the clock, and the snapshot holds it', async ($, on) => {
+    const { seen, asks } = tapWorld(on, [{ answers: { 'Which auth?': 'OAuth' } }])
+    await startMod($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const before = snapshots(seen).length
+    await seen.clock.advance(500)
+    await askModel($, [auth()])
+    expect(asks).toHaveLength(1)
+    expect(snapshots(seen).length).toBeGreaterThan(before)
+    expect(tapRows(seen)).toEqual([{ text: 'Auth: OAuth', by: 'Dave (tap)', at: 1500 }])
+    expect(lastSnapshot(seen).brief.goal).toBe('g')
+  })
+
+  test('TAP2 an answer under Other is stored as the constant, and the typed words are in no write', async ($, on) => {
+    const { seen } = tapWorld(on, [{ answers: { 'Which auth?': 'my words xyz' } }])
+    await startMod($, true)
+    await askModel($, [auth()])
+    expect(tapRows(seen).map(one => one.text)).toEqual([`Auth: ${FREE_TEXT}`])
+    expect(everyWrite(seen)).not.toContain('xyz')
+  })
+
+  test('TAP3 a label that holds a secret reaches no write', async ($, on) => {
+    const label = `use ${secrets.anthropic}`
+    const { seen } = tapWorld(on, [{ answers: { 'Which auth?': label } }])
+    await startMod($, true)
+    await askModel($, [auth({ options: [{ label, description: 'd' }, { label: 'SAML', description: 'd' }] })])
+    expect(tapRows(seen)).toHaveLength(1)
+    expect(snapshots(seen).length).toBeGreaterThan(0)
+    for (const write of snapshots(seen)) expect(leaks(write.text)).toBe(false)
+  })
+
+  test('TAP3b a header that holds a secret reaches no write', async ($, on) => {
+    const { seen } = tapWorld(on, [{ answers: { 'Which auth?': 'OAuth' } }])
+    await startMod($, true)
+    await askModel($, [auth({ header: `use ${secrets.anthropic}` })])
+    expect(tapRows(seen)).toHaveLength(1)
+    for (const write of snapshots(seen)) expect(leaks(write.text)).toBe(false)
+  })
+
+  test('TAP4 a subagent call stores nothing', async ($, on) => {
+    const { seen, asks } = tapWorld(on, [{ answers: { 'Which auth?': 'OAuth' } }])
+    await startMod($, true)
+    await askModel($, [auth()], { agentId: 'a1' })
+    expect(asks).toHaveLength(1)
+    expect(tapRows(seen)).toEqual([])
+    expect(everyWrite(seen)).not.toContain(TAP_BY)
+  })
+
+  test('TAP5 a dismissed dialog stores nothing and does not block the chip', async ($, on) => {
+    const { seen } = tapWorld(on, [{ raw: { deny: 'dismissed' } }])
+    await startMod($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const ran = await askModel($, [auth()])
+    expect(ran.deny).toBe('dismissed')
+    expect(tapRows(seen)).toEqual([])
+    expect(lastSnapshot(seen).chip).not.toBe('blocked')
+  })
+
+  test('TAP5b a result with isError true that still holds questions and answers stores nothing', async ($, on) => {
+    const { seen } = tapWorld(on, [{ raw: { result: resultOf([auth()], { 'Which auth?': 'OAuth' }), isError: true } }])
+    await startMod($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const before = snapshots(seen).length
+    await askModel($, [auth()])
+    expect(tapRows(seen)).toEqual([])
+    expect(everyWrite(seen)).not.toContain(TAP_BY)
+    expect(snapshots(seen)).toHaveLength(before)
+  })
+
+  test('TAP22 a ship-ask or pr_checkpoint question the mod told the model to ask stores no tap row; an ordinary question in the same session does', async ($, on) => {
+    const paid = auth({
+      question: 'PR #9: paid round?',
+      header: 'Paid round',
+      options: [{ label: 'No, keep it free (Recommended)', description: 'd' }, { label: 'Stop here', description: 'd' }],
+    })
+    const review = auth({ question: 'PR #9: review?', header: 'PR #9', options: [{ label: 'CodeRabbit (Recommended)', description: 'd' }, { label: 'None', description: 'd' }] })
+    const { seen } = tapWorld(on, [
+      { answers: { 'PR #9: paid round?': 'No, keep it free (Recommended)' } },
+      { answers: { 'PR #9: review?': 'CodeRabbit (Recommended)' } },
+      { answers: { 'Which auth?': 'OAuth' } },
+    ])
+    await startMod($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const before = snapshots(seen).length
+    await askModel($, [paid])
+    await askModel($, [review])
+    expect(tapRows(seen)).toEqual([])
+    expect(everyWrite(seen)).not.toContain(TAP_BY)
+    expect(snapshots(seen)).toHaveLength(before)
+    await askModel($, [auth()])
+    expect(tapRows(seen).map(one => one.text)).toEqual(['Auth: OAuth'])
+  })
+
+  test('TAP6 an empty result stores nothing and writes no snapshot of its own', async ($, on) => {
+    const { seen } = tapWorld(on, [{ raw: { result: { questions: [], answers: {} } } }])
+    await startMod($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const before = snapshots(seen).length
+    await askModel($, [auth()])
+    expect(tapRows(seen)).toEqual([])
+    expect(snapshots(seen)).toHaveLength(before)
+  })
+
+  test('TAP7 two questions with one answer give one decision; both answered give two, in question order', async ($, on) => {
+    const second = auth({ question: 'Which db?', header: 'Store', options: [{ label: 'PG' }, { label: 'SQLite' }] })
+    const { seen } = tapWorld(on, [{ answers: { 'Which db?': 'PG' } }, { answers: { 'Which auth?': 'SAML', 'Which db?': 'SQLite' } }])
+    await startMod($, true)
+    await askModel($, [auth(), second])
+    expect(tapRows(seen).map(one => one.text)).toEqual(['Store: PG'])
+    await askModel($, [auth(), second])
+    expect(tapRows(seen).map(one => one.text)).toEqual(['Store: PG', 'Auth: SAML', 'Store: SQLite'])
+  })
+
+  test('TAP14 an answers field in the call input is not read: only the result counts', async ($, on) => {
+    const { seen } = tapWorld(on, [{ answers: {} }])
+    await startMod($, true)
+    await askModel($, [auth()], { answers: { 'Which auth?': 'OAuth' } })
+    expect(tapRows(seen)).toEqual([])
+    expect(everyWrite(seen)).not.toContain(TAP_BY)
+  })
+
+  test('TAP15 captureTaps never throws: an engine that fails on its first call is swallowed', async () => {
+    const result = { result: resultOf([auth()], { 'Which auth?': 'OAuth' }) }
+    await captureTaps({} as never, { plugin: 'engine', tier: 'core' }, result)
+    await captureTaps({ clock: { now: () => Promise.reject(new Error('clock')) } } as never, { plugin: 'engine', tier: 'core' }, result)
+  })
+
+  test('TAP15b a result with a string for questions and null answers stores nothing and does not throw', async ($, on) => {
+    const { seen } = tapWorld(on, [{ raw: { result: { questions: 'x', answers: null } } }])
+    await startMod($, true)
+    await askModel($, [auth()])
+    expect(tapRows(seen)).toEqual([])
+  })
+
+  test('TAP19 an interactive session with no brief gets one, holding the decision', async ($, on) => {
+    const { seen } = tapWorld(on, [{ answers: { 'Which auth?': 'OAuth' } }])
+    await startMod($, true)
+    expect(lastSnapshot(seen).brief ?? null).toBeNull()
+    await askModel($, [auth()])
+    expect(lastSnapshot(seen).brief.decisions).toHaveLength(1)
+    expect(lastSnapshot(seen).brief.decisions[0]).toMatchObject({ text: 'Auth: OAuth', by: TAP_BY })
+  })
+
+  test('TAP20 a headless run with no brief makes no brief and writes no tap', async ($, on) => {
+    const { seen, asks } = tapWorld(on, [{ answers: { 'Which auth?': 'OAuth' } }])
+    await startMod($, false)
+    await askModel($, [auth()])
+    expect(asks).toHaveLength(1)
+    expect(everyWrite(seen)).not.toContain(TAP_BY)
+  })
+
+  test('TAP21 a tap does not mark an open ask answered', async ($, on) => {
+    const { seen } = tapWorld(on, [{ answers: { 'Which auth?': 'OAuth' } }])
+    await startMod($, true)
+    await turnEnd($, '## Next steps\n1. Paste log A')
+    await askModel($, [auth()])
+    expect(tapRows(seen)).toHaveLength(1)
+    expect(lastSnapshot(seen).brief.ask[0].answered).toBeUndefined()
   })
 })

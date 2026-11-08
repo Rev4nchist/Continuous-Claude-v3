@@ -390,7 +390,7 @@ describe('os decisions', () => {
     const kind = open.flatMap(one => one.left).find(one => one.text.includes('approval'))
     expect(kind?.tone).toBe('warn')
 
-    const done = tabRows('decisions', empty({ brief: markAsksAnswered(asked), activeAt: NOW }), NOW, 100, 30)
+    const done = tabRows('decisions', empty({ brief: markAsksAnswered(asked, NOW), activeAt: NOW }), NOW, 100, 30)
     expect(all(done)).toContain('answered?')
     const row = done.find(one => rowText(one).includes('Create the roles?'))!
     expect([...row.left, ...(row.right ?? [])].every(one => one.tone === 'dim' || one.text.trim() === '')).toBe(true)
@@ -682,7 +682,7 @@ describe('os decisions: the open ask count (moved from Overview)', () => {
   const right = (rows: PaneRow[]) => rows.find(one => one.key === 'h-asks')?.right?.[0]
 
   test('O14 an answered ask is not counted as open, and shows "answered?"', () => {
-    const answered = tabRows('decisions', empty({ brief: markAsksAnswered(asked()), activeAt: NOW }), NOW, 100, 30)
+    const answered = tabRows('decisions', empty({ brief: markAsksAnswered(asked(), NOW), activeAt: NOW }), NOW, 100, 30)
     expect(right(answered)?.text).toContain('0 open')
     expect(all(answered)).toContain('answered?')
     const fresh = tabRows('decisions', empty({ brief: asked(), activeAt: NOW }), NOW, 100, 30)
@@ -698,7 +698,7 @@ describe('os decisions: the open ask count (moved from Overview)', () => {
     const fresh = tabRows('decisions', empty({ brief: asked(), activeAt: later - 3600_000 }), later, 100, 30)
     expect(right(fresh)?.text).toBe('1 open')
     expect(right(fresh)?.tone).toBe('warn')
-    const none = tabRows('decisions', empty({ brief: markAsksAnswered(asked()), activeAt: NOW }), later, 100, 30)
+    const none = tabRows('decisions', empty({ brief: markAsksAnswered(asked(), NOW), activeAt: NOW }), later, 100, 30)
     expect(right(none)?.text ?? '').not.toContain('stale')
   })
 })
