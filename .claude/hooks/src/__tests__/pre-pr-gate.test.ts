@@ -2309,7 +2309,8 @@ describe.skipIf(process.platform !== 'win32')('pre-pr-gate: Git Bash /c/ paths',
   it('a PowerShell cd /c/... and a PowerShell body at /c/... keep the path as written (PowerShell reads it from the drive root)', () => {
     const seen: string[] = [];
     const spy: Deps = { ...deps({ stamp: stampJson() }), readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; if (p.endsWith('review-router.config.json')) return WARN_CONFIG[join(ROOT, 'review-router.config.json')]; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
-    decide(input(`Set-Location /c/Users/dkhay/work; ${CREATE[0]}`, { tool_name: 'PowerShell' }), spy);
+    // `&&`, not `;`: a cd joined by `;` can fail, so the cwd stamp is read too (the W rows). This test is about the path of the cd folder.
+    decide(input(`Set-Location /c/Users/dkhay/work && ${CREATE[0]}`, { tool_name: 'PowerShell' }), spy);
     expect(seen.map((p) => p.toLowerCase())).toEqual([`/c/users/dkhay/work/${STAMP_REL}`]);
     const read: string[] = [];
     const spy2: Deps = { ...deps({ stamp: stampJson() }), readFile: (p) => { read.push(p.replace(/\\/g, '/')); return null; } };
@@ -2335,5 +2336,136 @@ describe.skipIf(process.platform !== 'win32')('pre-pr-gate: Git Bash /c/ paths',
     decide(input(`${POST}/c/Users/dkhay/body.md`), spy);
     expect(read.map((p) => p.toLowerCase())).toContain('c:/users/dkhay/body.md');
     expect(read.some((p) => /^\/c\//.test(p))).toBe(false);
+  });
+});
+
+// ---------- the folders a PR open may run in (fix/pre-pr-gate-workdir) ----------
+// How the gate can fail here, and the test that catches it:
+//   - a cd AFTER the open (`open; cd B`) moves the stamp check to B, so unstamped A opens a PR        -> W-rows
+//   - the first cd of `cd B && cd A && open` is used, but the shell ends in A (the last cd wins)       -> W-rows
+//   - `cd B extra; open` and `cd B extra || open`: the cd fails, the open runs in the cwd              -> W-rows
+//   - a cd after the open, a cd to a missing folder or a `$X` after the open denies a stamped cwd      -> W-rows
+//   - `cd A && cd B && open` from B denies because A, an earlier step, has no stamp                    -> W-rows
+//   - `--head feat/x; cd B` reads the head `feat/x;`, `--body-file X; cd B` reads the file `X;`        -> W5
+//   - a cd target with a variable is not refused when it is the second cd, not the first               -> W6
+describe('W: the folders a PR open may run in (cds before the open only)', () => {
+  const A = '/work/a'; // a CCv3 checkout with no stamp
+  const B = '/work/b'; // a CCv3 checkout with a valid stamp at the head
+  const C = '/work/c'; // a checkout of another repo
+  const NOPE = '/work/nope'; // a folder that does not exist
+  const FOREIGN = 'origin\thttps://github.com/someone/other.git (fetch)\norigin\thttps://github.com/someone/other.git (push)\n';
+  const CLI = `gh pr create --draft --head feat/x --body-file ${DB}`;
+  const API = `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t -f head=feat/x -f base=main -F draft=true -F body=@${DB}`;
+
+  /** A, B, C as fake checkouts. A fake git reads a head or a branch with a shell character as an error, as a real git does. */
+  function world(): Deps {
+    const base = deps({ stamps: { [join(B, STAMP_REL)]: stampJson() } });
+    return {
+      ...base,
+      git: (cwd, args) => {
+        if (cwd === NOPE) throw Object.assign(new Error(`directory not found: ${cwd}`), { code: 'DIR_NOT_FOUND' });
+        if (args.join(' ') === 'remote -v' && cwd === C) return { status: 0, stdout: FOREIGN };
+        if (args[0] === 'rev-parse' && /[;&|]/.test(args[1] ?? '')) return { status: 128, stdout: '' };
+        return base.git(cwd, args);
+      },
+    };
+  }
+  const run = (text: string, cwd: string) => decide(input(text, { cwd }), world());
+  const verdict = (text: string, cwd: string): string => {
+    const d = run(text, cwd);
+    return d.action === 'deny' ? d.pattern : d.action;
+  };
+
+  // [name, text builder, expected verdict per cwd]. A pair is [CLI form, API form].
+  type Row = [string, (o: string) => string, Record<string, string | [string, string]>];
+  const ROWS: Row[] = [
+    // fail-open rows: the folder the shell really uses has no stamp
+    ['open; cd B', (o) => `${o}; cd ${B}`, { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }],
+    ['cd B && cd A && open', (o) => `cd ${B} && cd ${A} && ${o}`, { A: 'stamp', B: 'stamp', C: 'stamp' }],
+    ['cd B extra; open', (o) => `cd ${B} extra; ${o}`, { A: 'stamp' }],
+    ['cd B extra || open', (o) => `cd ${B} extra || ${o}`, { A: 'stamp' }],
+    ['cd B<newline>open', (o) => `cd ${B}\n${o}`, { A: 'stamp' }],
+    // false-deny rows: a cd after the open, a step that cannot be the open folder, a folder that does not exist
+    ['open; cd A', (o) => `${o}; cd ${A}`, { B: 'allow', C: ['allow', 'repo-identity'] }],
+    ['open; cd C', (o) => `${o}; cd ${C}`, { B: 'allow' }],
+    ['open; cd $X', (o) => `${o}; cd $X`, { B: 'allow' }],
+    ['cd A && cd B && open', (o) => `cd ${A} && cd ${B} && ${o}`, { A: 'allow', B: 'allow', C: 'allow' }],
+    ['cd nope; open', (o) => `cd ${NOPE}; ${o}`, { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }],
+    ['cd nope || open', (o) => `cd ${NOPE} || ${o}`, { B: 'allow' }],
+    // rows that were right before and stay right
+    ['open', (o) => o, { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }],
+    ['cd B && open', (o) => `cd ${B} && ${o}`, { A: 'allow', C: 'allow' }],
+    ['cd A && open', (o) => `cd ${A} && ${o}`, { B: 'stamp' }],
+    ['cd A; cd B; open', (o) => `cd ${A}; cd ${B}; ${o}`, { A: 'stamp', B: 'stamp' }],
+  ];
+  const cwds: Record<string, string> = { A, B, C };
+
+  for (const [form, open] of [['CLI', CLI], ['API', API]] as const) {
+    for (const [name, build, expected] of ROWS) {
+      for (const [cwdName, want] of Object.entries(expected)) {
+        const exp = Array.isArray(want) ? want[form === 'CLI' ? 0 : 1] : want;
+        it(`W-${form}: from ${cwdName}, \`${name}\` is ${exp}`, () => {
+          expect(verdict(build(open), cwds[cwdName])).toBe(exp);
+        });
+      }
+    }
+  }
+
+  it('W7: a cd to a missing folder joined by && is the only folder: the gate still fails closed', () => {
+    const out = JSON.parse(handle(JSON.stringify(input(`cd ${NOPE} && ${CLI}`, { cwd: B })), world()));
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/directory not found/);
+  });
+
+  it('W6: every cd target before the open is checked for a variable, not only the first', () => {
+    for (const text of [`cd ${B} && cd $X && ${CLI}`, `cd ${B}; cd "$X"; ${CLI}`, `cd $X && cd sub && ${CLI}`]) {
+      const out = JSON.parse(handle(JSON.stringify(input(text, { cwd: B })), world()));
+      expect(out.hookSpecificOutput.permissionDecision, text).toBe('deny');
+      expect(out.hookSpecificOutput.permissionDecisionReason, text).toMatch(/cannot expand/);
+    }
+  });
+
+  it('W8: a deny names the folder and tells how to name one folder when the open can run in several', () => {
+    const d = run(`cd ${B} extra; ${CLI}`, A);
+    expect(d.action).toBe('deny');
+    expect((d as { reason: string }).reason).toContain(A);
+    expect((d as { reason: string }).reason).toMatch(/&&/);
+  });
+
+  it('W9: a quoted `; cd X` is text, not a cd', () => {
+    expect(verdict(`${CLI} --title "a; cd ${A}"`, B)).toBe('allow');
+    expect(verdict(`${CLI} --title "a; cd ${B}"`, A)).toBe('stamp');
+  });
+
+  it('W10: PowerShell: the same rows hold for Set-Location', () => {
+    const ps = (text: string, cwd: string) => decide(input(text, { cwd, tool_name: 'PowerShell' }), world());
+    expect(ps(`${CLI}; Set-Location ${B}`, A).action).toBe('deny');
+    expect(ps(`Set-Location ${B}; ${CLI}`, A).action).toBe('deny');
+    expect(ps(`Set-Location ${B} && ${CLI}`, A).action).toBe('allow');
+    expect(ps(`${CLI}; Set-Location ${A}`, B).action).toBe('allow');
+  });
+
+  it('W5: a head or a body file followed by `;` is read without the `;`', () => {
+    expect(headBranchOf(`gh pr create --head feat/x; cd ${B}`)).toBe('feat/x');
+    expect(headBranchOf(`gh pr create --head=feat/x && cd ${B}`)).toBe('feat/x');
+    expect(headBranchOf(`gh pr create -H feat/x | cat`)).toBe('feat/x');
+    expect(headBranchOf(`gh api repos/o/r/pulls -f head=feat/x; cd ${B}`)).toBe('feat/x');
+    expect(bodyFileOf(`gh pr create --body-file /w/body.md; cd ${B}`)).toBe('/w/body.md');
+    expect(bodyFileOf(`gh pr create -F /w/body.md; cd ${B}`)).toBe('/w/body.md');
+    expect(bodyFileOf(`gh api repos/o/r/pulls -F body=@/w/body.md; cd ${B}`)).toBe('/w/body.md');
+    expect(bodyFileOf(`gh pr create --body-file "/w/a;b.md"`)).toBe('/w/a;b.md');
+  });
+
+  it('W5b: a create whose head and body file end in `;` before a cd is judged on the real head and file', () => {
+    expect(verdict(`gh pr create --draft --head feat/x --body-file ${DB}; cd ${A}`, B)).toBe('allow');
+    expect(verdict(`gh pr create --draft --body-file ${DB} --head feat/x; cd ${A}`, B)).toBe('allow');
+  });
+
+  it('W11: makeGit marks a missing folder with the code DIR_NOT_FOUND, so a cd to it can be told from a git error', () => {
+    const gone = join(tmpdir(), 'prepr-gate-no-such-cwd');
+    const git = makeGit(() => ({ status: null, stdout: '', error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }) }), {}, process.execPath);
+    let caught: (Error & { code?: string }) | undefined;
+    try { git(gone, ['status']); } catch (err) { caught = err as Error & { code?: string }; }
+    expect(caught?.code).toBe('DIR_NOT_FOUND');
   });
 });

@@ -19,7 +19,14 @@
  * The checkout decides the target; only a CCv3 signal overrides it. A CCv3 signal anywhere in the raw text (a CCv3 -R / --repo / GH_REPO value,
  * the process env GH_REPO, a repos/<o>/<r>/ endpoint text, a PR URL) names CCv3, and that command must run in a CCv3 checkout.
  * The hook never names a foreign repo: a gated command from a CCv3 checkout is always gated, whatever -R it holds.
- * Any cd, Set-Location, sl, pushd or Push-Location target in the text (before or after the call, quoted or not) that is a CCv3 checkout gates too, as the cwd does.
+ * Any cd, Set-Location, sl, pushd or Push-Location target in the text (before or after the call, quoted or not) that is a CCv3 checkout gates the checkpoint rules too, as the cwd does.
+ * The stamp rules judge every folder the open may run in (planRun). Only the cds BEFORE the open count. A cd after it never moves it.
+ * With no cd, the folder is the payload cwd. With cds, the folder is the one after the last cd.
+ * Up to the last cd that is not joined by `&&`, the folder after each earlier cd and the cwd count too.
+ * A cd joined by `;`, `||` or a line end can fail (`cd B extra`, a missing folder). The shell then stays where it was.
+ * The open is denied when any one of these folders denies. A folder that does not exist is dropped when the cwd is also a candidate.
+ * Join the cd to the open with `&&` to name one folder.
+ * Accepted residual: a cd inside `( ... )`, `$( ... )` or quotes is not seen as a cd.
  * Accepted residual: from a foreign checkout, a CCv3 -R hidden by shell syntax (v""3, -dR) is not seen. The hook guards against mistakes, not a hostile agent.
  * Accepted residual: text sent to an existing Desktop Commander shell is judged against the payload cwd, not that shell's cwd. So a PR create
  * with no -R, sent from a non-CCv3 session cwd into a shell already cd'd into a CCv3 checkout, is not gated.
@@ -55,9 +62,10 @@ import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
-import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
+import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
+import { maskQuoted } from './shared/mask-quotes.js';
 import { readShellCommand } from './shared/shell-tools.js';
 
 export { CCV3_REPO, namedRepo };
@@ -68,7 +76,10 @@ const CONFIG_REL = 'review-router.config.json';
 export const MAX_STAMP_AGE_MS = 24 * 3_600_000;
 /** A stamp this far in the future is a clock error, not a fresh stamp. */
 const FUTURE_SLACK_MS = 5 * 60_000;
-/** One git call may take this long. A decision makes up to 6 git calls (6 x 2 s = 12 s), inside the template timeout of 15 s. */
+/**
+ * One git call may take this long. A decision for one folder makes up to 6 git calls (6 x 2 s = 12 s), inside the template timeout of 15 s.
+ * A text with cds can name more folders (ctx.dirs). The stamp check stops at the first folder that denies.
+ */
 export const GIT_TIMEOUT_MS = 2000;
 /**
  * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cli-cap" (today's paid CLI spend reached the daily cap; no run was spent); "cap" only with cr_finished_runs >= 1; "rate-limited" only with a known retry time. "flag" (--skip-cr),
@@ -120,8 +131,9 @@ const isDesktopCommander = (input: HookInput): boolean => (input.tool_name || in
 /** The head branch a PR-create command names (`--head`, `-H`, `-f head=`), without an `owner:` prefix. */
 export function headBranchOf(command: string): string | null {
   // -H is a header for gh api and the head only for gh pr create.
-  const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command)
-    ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
+  // A shell separator ends the word: `--head feat/x; cd B` names feat/x, not `feat/x;`.
+  const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"';&|]+)/.exec(command)
+    ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"';&|]+)/.exec(command) : null);
   return m ? m[1].replace(/^[^:\s]+:/, '').replace(/["']+$/, '') : null;
 }
 
@@ -155,29 +167,93 @@ export function hasUnexpandedPart(target: string): boolean {
 /** `code` of the error a git call on an unexpandable cd target throws. handle() reads it. */
 export const CD_UNEXPANDED = 'CD_UNEXPANDED';
 
+/** `code` of the error makeGit throws when the folder of a git call does not exist. A cd to such a folder fails in the shell, which stays where it was. */
+export const DIR_NOT_FOUND = 'DIR_NOT_FOUND';
+
+// ---------- the folders a PR open may run in ----------
+
+/** One cd, Set-Location, sl, pushd or Push-Location before the open: its raw target, and whether `&&` joins it to what follows. */
+interface CdStep { target: string; andOnly: boolean }
+
+/** What the text says about where the gated command runs. */
+interface RunPlan {
+  /** Every folder the gated command may run in. The folder after all cds comes last. */
+  dirs: string[];
+  /** The folder after every cd succeeded. */
+  final: string;
+  /** Folders (with the cd target text) that hold an unexpanded variable, or follow a cd that does. */
+  unexpanded: Map<string, string>;
+}
+
 /**
- * Deps whose git refuses the directory of a first `cd` target that holds an unexpanded variable. The gate cannot know that directory, so it
- * fails closed exactly as a missing directory did (handle() denies a gated command), with a reason that names the cause. A fallback to the
- * hook cwd would judge another checkout's stamp and could turn that deny into an allow.
+ * Where the last gated command segment starts (a PR open, a ready, a label add), or null when no segment shows one (the open is split
+ * by a newline, or quoted). Segments are cut at ; & | and line ends in the text with its quoted strings blanked, so a quoted `;` does not cut.
  */
-function guardUnexpandedCd(deps: Deps, command: string, cwd: string, shell: 'bash' | 'pwsh'): Deps {
-  const m = new RegExp(CD_TARGET.source, 'i').exec(command);
-  if (!m || !hasUnexpandedPart(m[1])) return deps;
-  const dir = resolveIn(cwd, m[1], shell);
-  const target = m[1].replace(/^["']|["']$/g, '').slice(0, 120);
+function gatedStart(masked: string, raw: string): number | null {
+  let found: number | null = null;
+  let from = 0;
+  const cut = (to: number): void => {
+    const seg = raw.slice(from, to);
+    if (seg.trim() !== '' && (isPrOpenText(seg) || isGated(shapesOf(seg)))) found = from;
+  };
+  for (const m of masked.matchAll(/[;&|\r\n]+/g)) { cut(m.index!); from = m.index! + m[0].length; }
+  cut(masked.length);
+  return found;
+}
+
+/** The cds that come before `end`, in order. A cd is found in the masked view, so a quoted `; cd x` is not one; the target is read from the raw text. */
+function cdSteps(masked: string, raw: string, end: number): CdStep[] {
+  const pre = masked.slice(0, end);
+  return [...pre.matchAll(new RegExp(CD_TARGET.source, 'gi'))].map((m) => {
+    const at = m.index! + m[0].length;
+    const joiner = /&&|\|\||[;&|\r\n]/.exec(pre.slice(at))?.[0];
+    return { target: raw.slice(at - m[1].length, at), andOnly: joiner === '&&' };
+  });
+}
+
+/**
+ * Every folder a gated command may run in. Only the cds that come BEFORE the command count: a cd after it never moves it.
+ * With no cd it is the payload cwd. With cds it is the folder after the last cd (all of them worked), plus, up to the last cd that is
+ * not joined by `&&`, the folder after each earlier cd and the cwd: a cd joined by `;`, `||`, `|`, `&` or a line end may fail
+ * (`cd B extra`, a missing folder) and the shell then stays where it was. A cd joined only by `&&` cannot fail into the open.
+ * A text with no gated segment is judged in the cwd and the folder after every cd.
+ */
+function planRun(command: string, cwd: string, shell: 'bash' | 'pwsh'): RunPlan {
+  const masked = maskQuoted(command, shell === 'pwsh' ? 'PowerShell' : 'Bash');
+  const start = gatedStart(masked, command);
+  const steps = cdSteps(masked, command, start ?? command.length);
+  const states = [cwd];
+  const unexpanded = new Map<string, string>();
+  let broken = false;
+  for (const s of steps) {
+    const t = s.target.replace(/^["']|["']$/g, '');
+    const absolute = isAbsolute(t) || /^[A-Za-z]:/.test(t);
+    broken = hasUnexpandedPart(s.target) || (broken && !absolute);
+    const dir = resolveIn(states[states.length - 1], s.target, shell);
+    states.push(dir);
+    if (broken) unexpanded.set(dir, t.slice(0, 120));
+  }
+  const lastLoose = start === null ? steps.length : steps.map((s) => s.andOnly).lastIndexOf(false) + 1;
+  const final = states[states.length - 1];
+  return { dirs: [...new Set([...(lastLoose > 0 ? states.slice(0, lastLoose + 1) : []), final])], final, unexpanded };
+}
+
+/**
+ * Deps whose git refuses a folder that a `cd` target with an unexpanded variable names (any cd before the open, not only the first), or that
+ * a relative cd after such a target reaches. The gate cannot know that folder, so it fails closed exactly as a missing directory did
+ * (handle() denies a gated command), with a reason that names the cause. A fallback to the hook cwd would judge another checkout's stamp
+ * and could turn that deny into an allow.
+ */
+function guardUnexpandedCd(deps: Deps, plan: RunPlan): Deps {
+  if (plan.unexpanded.size === 0) return deps;
   return {
     ...deps,
     git: (d, args) => {
-      if (d !== dir) return deps.git(d, args);
+      const target = plan.unexpanded.get(d);
+      if (target === undefined) return deps.git(d, args);
       throw Object.assign(new Error(`cannot expand the cd target ${target}`), { code: CD_UNEXPANDED, target });
     },
   };
-}
-
-/** The directory the first `cd <dir>` names, resolved against the hook cwd; else the cwd. */
-function workDir(command: string, cwd: string, shell: 'bash' | 'pwsh'): string {
-  const m = new RegExp(CD_TARGET.source, 'i').exec(command);
-  return m ? resolveIn(cwd, m[1], shell) : cwd;
 }
 
 /**
@@ -194,10 +270,10 @@ function candidateDirs(command: string, cwd: string, shell: 'bash' | 'pwsh'): st
  * The file `-F body=@<file>` or `--body-file <file>` names, or null (no body file, inline body, or stdin).
  * A quoted path keeps its spaces: the whole quoted text is the file name. A stdin marker `-` is null, quoted or not.
  */
-const FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
-const BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
+const FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"';&|]+)))/;
+const BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"';&|]+))/;
 /** `-F <file>` is the short form of --body-file for `gh pr create` only. For `gh api`, -F is a field flag. */
-const SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
+const SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"';&|]+))/;
 /** A second source of the body: --body, -b, -f / -F body=<text>. gh may take the last one, so the file would not be the body. */
 const INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)(?:=|\s*)["']?body=|(?:^|\s)(?:-F|--field)(?:=|\s*)["']?body=(?!@)/;
 /** `gh api --input <file>` posts that file as the request body, so the -F fields are not the body. */
@@ -250,7 +326,11 @@ function isCcv3Checkout(deps: Deps, dir: string): boolean {
 
 /** isCcv3Checkout for a directory the text only mentions: a directory that git cannot read (it may not exist) is not a CCv3 checkout. */
 function isCcv3Dir(deps: Deps, dir: string): boolean {
-  try { return isCcv3Checkout(deps, dir); } catch { return false; }
+  try { return isCcv3Checkout(deps, dir); } catch (err) {
+    // A folder the hook cannot expand is not "not a checkout": the gate does not know which folder it is.
+    if ((err as { code?: string } | null)?.code === CD_UNEXPANDED) throw err;
+    return false;
+  }
 }
 
 /** Checkouts that may hold the stamp: the command's own, then any worktree that has the named branch checked out. */
@@ -316,13 +396,17 @@ const shellOf = (input: HookInput): 'bash' | 'pwsh' => ((input.tool_name || inpu
 
 /** Per-decision memo of the facts several rules share, so a decision spawns each git call at most once. */
 interface Ctx {
-  /** The directory the command acts in (the first `cd` moves it). */
-  dir: string;
+  /** Every folder the command may run in (planRun): only the cds before it count. A rule denies when it denies in any one of them. */
+  dirs: string[];
+  /** The folder after every cd worked. It is the one folder whose git errors fail closed; the others only add denies. */
+  final: string;
   /** The shell of the tool call: Git Bash paths (/c/x) are converted for bash only. */
   shell: 'bash' | 'pwsh';
   /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal value beside a CCv3 signal does not hide it. */
   named: string | null;
   top: (dir: string) => string | null;
+  /** True when the folder is a CCv3 checkout. A git error in `final` throws (fail closed); in another folder it counts as "no". */
+  isCcv3At: (dir: string) => boolean;
   ccv3: () => boolean;
   enforcing: () => boolean;
 }
@@ -332,10 +416,9 @@ const once = <T>(f: () => T): (() => T) => {
   return () => (box ??= { v: f() }).v;
 };
 
-function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes): Ctx {
+function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes, plan: RunPlan): Ctx {
   const cwd = input.cwd || process.cwd();
   const shell = shellOf(input);
-  const dir = workDir(command, cwd, shell);
   const named = namedRepo(command, deps.env);
   const tops = new Map<string, string | null>();
   const top = (d: string): string | null => {
@@ -345,9 +428,22 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes):
     }
     return tops.get(d) ?? null;
   };
-  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd, shell).some((d) => d !== dir && isCcv3Dir(deps, d)));
+  // A cd to a folder that does not exist fails and the shell stays where it was. So when the cwd is also a candidate, such a folder is no candidate.
+  // With no cwd in the list (`cd nope && open`) it is kept, and its git error denies as before. Any other git error is thrown.
+  const missing = (d: string): boolean => {
+    try { top(d); return false; } catch (err) { if ((err as { code?: string } | null)?.code === DIR_NOT_FOUND) return true; throw err; }
+  };
+  const live = plan.dirs.includes(cwd) ? plan.dirs.filter((d) => d === cwd || !missing(d)) : plan.dirs;
+  const dirs = live.length > 0 ? live : plan.dirs;
+  const final = dirs.includes(plan.final) ? plan.final : cwd;
+  const ccv3At = new Map<string, boolean>();
+  const isCcv3At = (d: string): boolean => {
+    if (!ccv3At.has(d)) ccv3At.set(d, d === final ? isCcv3Checkout(deps, d) : isCcv3Dir(deps, d));
+    return ccv3At.get(d) ?? false;
+  };
+  const inCcv3 = once(() => named === CCV3_REPO || isCcv3At(final) || candidateDirs(command, cwd, shell).some((d) => d !== final && isCcv3Dir(deps, d)));
   return {
-    dir, shell, named, top,
+    dirs, final, shell, named, top, isCcv3At,
     ccv3: inCcv3,
     // No usable config in the cwd checkout: fail closed for a command that names CCv3, a self-confirm (repo-free, pr-checkpoint is CCv3-only)
     // and a command that runs in a CCv3 checkout. Any other command is warn mode. A readable config keeps its own value.
@@ -378,8 +474,9 @@ function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: 'allow' };
-  deps = guardUnexpandedCd(deps, command, input.cwd || process.cwd(), shellOf(input));
-  const ctx = makeCtx(input, command, deps, shapes);
+  const plan = planRun(command, input.cwd || process.cwd(), shellOf(input));
+  deps = guardUnexpandedCd(deps, plan);
+  const ctx = makeCtx(input, command, deps, shapes, plan);
   const d = judge(command, deps, ctx, shapes);
   if (d.action !== 'deny') return d;
   if (hasOverride(command, deps.env)) return { action: 'override' };
@@ -391,25 +488,38 @@ function judge(command: string, deps: Deps, ctx: Ctx, shapes: Shapes): Decision 
   return stamp ?? checkpointDeny(deps, ctx, shapes) ?? { action: 'allow' };
 }
 
-/** The stamp rules of #193 and #197. Enforced in both modes. */
+/** The stamp rules of #193 and #197, judged in every folder the open may run in. Enforced in both modes. The first folder that denies wins. */
 function stampDeny(command: string, deps: Deps, ctx: Ctx): Decision | null {
-  const { dir, named, shell } = ctx;
-  if (!ctx.ccv3()) return null;
+  for (const dir of ctx.dirs) {
+    const d = stampDenyIn(command, deps, ctx, dir);
+    if (d) return d;
+  }
+  return null;
+}
+
+/** The stamp rules for one folder. A folder that is not a CCv3 checkout (and no CCv3 signal names the repo) is no concern of the stamp. */
+function stampDenyIn(command: string, deps: Deps, ctx: Ctx, dir: string): Decision | null {
+  const { named, shell } = ctx;
+  // When the open can run in more than one folder, say so: the fix is to join the cd to the open with &&.
+  const rule = (pattern: string, why: string): Decision => deny(pattern, ctx.dirs.length > 1
+    ? `${why}. The command can run in more than one folder. A cd joined by ; or || or a line end can fail. The shell then stays in its folder. This check is for ${dir}. Join the cd to the PR command with && to name one folder`
+    : why);
+  if (named !== CCV3_REPO && !ctx.isCcv3At(dir)) return null;
   const top = ctx.top(dir);
-  if (top === null) return deny('no-checkout', `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
+  if (top === null) return rule('no-checkout', `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
   // An explicit target skipped the checkout test above: the stamp of a foreign checkout must not open a CCv3 PR.
-  if (named !== null && !isCcv3Checkout(deps, dir)) return deny('repo-identity', `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
+  if (named !== null && !ctx.isCcv3At(dir)) return rule('repo-identity', `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
   const bodyPath = singleBodyFile(command);
-  if (bodyPath === null) return deny('body', BODY_UNVERIFIABLE);
+  if (bodyPath === null) return rule('body', BODY_UNVERIFIABLE);
   const branch = headBranchOf(command);
   const headRun = deps.git(top, ['rev-parse', branch ? `${branch}^{commit}` : 'HEAD']);
-  if (headRun.status !== 0) return deny('head-unresolved', `cannot resolve the head ${branch ?? 'HEAD'} in ${top}`);
+  if (headRun.status !== 0) return rule('head-unresolved', `cannot resolve the head ${branch ?? 'HEAD'} in ${top}`);
   const head = headRun.stdout.trim();
   const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, shell === 'bash' ? fromGitBashPath(bodyPath) : bodyPath))) };
   const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join(r, STAMP_REL)), head, deps.now(), body));
-  if (!problems.some((p) => p === null)) return deny('stamp', problems[0] ?? 'no stamp');
+  if (!problems.some((p) => p === null)) return rule('stamp', problems[0] ?? 'no stamp');
   const pushed = pushedProblem(deps, top, branch, head);
-  return pushed ? deny('pushed-head', pushed) : null;
+  return pushed ? rule('pushed-head', pushed) : null;
 }
 
 // ---------- the checkpoint rules (PR B) ----------
@@ -435,15 +545,15 @@ function checkpointDeny(deps: Deps, ctx: Ctx, shapes: Shapes): Decision | null {
   return null;
 }
 
-/** A review: label add is allowed only for the one label pathway.json (for HEAD) names. A blind add is never allowed. */
+/** A review: label add is allowed only for the one label pathway.json (for HEAD) names, in every folder the command may run in. A blind add is never allowed. */
 function labelAllowed(label: LabelShape, deps: Deps, ctx: Ctx): boolean {
   if (label.blind || label.labels.length !== 1) return false;
-  return pathwayLabel(deps, ctx) === label.labels[0];
+  return ctx.dirs.every((dir) => pathwayLabel(deps, ctx, dir) === label.labels[0]);
 }
 
-/** The lower-case label of pathway.json when it names HEAD (`git rev-parse HEAD` at the toplevel), else null. */
-function pathwayLabel(deps: Deps, ctx: Ctx): string | null {
-  const top = ctx.top(ctx.dir);
+/** The lower-case label of pathway.json when it names HEAD (`git rev-parse HEAD` at the toplevel of the folder), else null. */
+function pathwayLabel(deps: Deps, ctx: Ctx, dir: string): string | null {
+  const top = ctx.top(dir);
   const text = top === null ? null : deps.readFile(join(top, PATHWAY_REL));
   const head = top === null ? null : deps.git(top, ['rev-parse', 'HEAD']);
   if (text === null || head === null || head.status !== 0) return null;
@@ -601,7 +711,7 @@ export function makeGit(
       if ((r.error as NodeJS.ErrnoException).code === 'ENOENT') {
         // spawn also fails with ENOENT when the cwd is missing. Name the real cause.
         if (!existsSync(resolved)) throw gitNotFound(r.error.message);
-        if (!existsSync(cwd)) throw new Error(`directory not found: ${cwd}`);
+        if (!existsSync(cwd)) throw Object.assign(new Error(`directory not found: ${cwd}`), { code: DIR_NOT_FOUND });
       }
       throw r.error;
     }
