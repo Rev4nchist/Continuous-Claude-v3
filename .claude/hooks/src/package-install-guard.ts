@@ -31,7 +31,7 @@ import { isUnattended } from './shared/unattended.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { readShellCommand } from './shared/shell-tools.js';
-import maliciousPackages from './shared/malicious-packages.json';
+import maliciousPackages from './shared/malicious-packages.json' with { type: 'json' };
 
 // ---------------------------------------------------------------------------
 // Types

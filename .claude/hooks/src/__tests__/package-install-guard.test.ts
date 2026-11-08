@@ -37,7 +37,7 @@ import {
 import { checkTyposquat } from '../shared/typosquat-detect.js';
 
 // We also import the malicious packages data to test version blocking
-import maliciousPackages from '../shared/malicious-packages.json';
+import maliciousPackages from '../shared/malicious-packages.json' with { type: 'json' };
 
 // ---------------------------------------------------------------------------
 // Helpers
