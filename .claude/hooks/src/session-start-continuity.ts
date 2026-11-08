@@ -3,18 +3,17 @@ import * as path from 'path';
 import { execSync, spawnSync } from 'child_process';
 import { getProjectIdentity, isContentRelevantToProject } from './shared/project-relevance.js';
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
+import { buildHandoffPointer, handoffSkipReason, selectSessionHandoff } from './shared/handoff-select.js';
+import { previousFromClear, readIdentity } from './shared/session-identity.js';
 
 interface SessionStartInput {
   type?: 'startup' | 'resume' | 'clear' | 'compact';  // Legacy field
   source?: 'startup' | 'resume' | 'clear' | 'compact'; // Per docs
   session_id: string;
+  cwd?: string;
 }
 
-// ============================================
-// STALENESS FILTERING
-// ============================================
-const STALE_THRESHOLD_DAYS = 7;
-const STALE_THRESHOLD_MS = STALE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
+// The 7-day stale rule and the terminal-outcome rule live in shared/handoff-select.ts.
 
 // ============================================
 // UUID ISOLATION: Path construction & parsing
@@ -340,8 +339,16 @@ interface UnmarkedHandoff {
   task_summary: string;
 }
 
-async function buildUnifiedContext(projectDir: string): Promise<string> {
+interface UnifiedContextOptions {
+  /** The caller already injects the ROADMAP Current Focus block. */
+  skipRoadmapFocus?: boolean;
+  /** Skip the `uv run` memory recall (5 s timeout). */
+  skipRecall?: boolean;
+}
+
+async function buildUnifiedContext(projectDir: string, opts: UnifiedContextOptions = {}): Promise<string> {
   const sections: string[] = [];
+  let currentGoal = '';
 
   // 1. ROADMAP Current Focus + Recent Planning
   const roadmapPath = path.join(projectDir, 'ROADMAP.md');
@@ -354,7 +361,9 @@ async function buildUnifiedContext(projectDir: string): Promise<string> {
       // re-injected into the unified context.
       const guardedFocus = extractGuardedCurrentFocus(roadmap, projectDir);
       if (guardedFocus) {
-        sections.push(`## ROADMAP - Current Focus\n${guardedFocus.substring(0, 500)}`);
+        const focusSection = `## ROADMAP - Current Focus\n${guardedFocus.substring(0, 500)}`;
+        currentGoal = focusSection.match(/\*\*([^*]+)\*\*/)?.[1] ?? '';
+        if (!opts.skipRoadmapFocus) sections.push(focusSection);
       }
 
       // Extract most recent planning session
@@ -410,10 +419,7 @@ async function buildUnifiedContext(projectDir: string): Promise<string> {
   }
 
   // 3. Relevant Memories based on current goal
-  const currentGoalMatch = sections[0]?.match(/\*\*([^*]+)\*\*/);
-  const currentGoal = currentGoalMatch ? currentGoalMatch[1] : '';
-
-  if (currentGoal) {
+  if (currentGoal && !opts.skipRecall) {
     const opcDir = process.env.CLAUDE_OPC_DIR || path.join(process.env.USERPROFILE || '', '.claude');
     try {
       const queryText = currentGoal.replace(/"/g, '').substring(0, 100);
@@ -471,6 +477,26 @@ function getUnmarkedHandoffs(): UnmarkedHandoff[] {
   }
 }
 
+/**
+ * Session ids whose handoff this SessionStart may load.
+ * compact keeps the session id, so it is the one id. /clear changes the id, so the
+ * session that ended with "clear" in this cwd (the identity `previous`) counts too.
+ */
+function ownSessionIds(input: SessionStartInput, sessionType: string | undefined, projectDir: string): string[] {
+  const current = input.session_id;
+  if (!current || current === 'unknown') return [];
+  const ids = [current];
+  if (sessionType === 'clear') {
+    try {
+      const previous = readIdentity(current)?.previous ?? previousFromClear(current, input.cwd || projectDir);
+      if (previous) ids.push(previous);
+    } catch {
+      // No identity data: only the current id counts.
+    }
+  }
+  return ids;
+}
+
 async function main() {
   let input: SessionStartInput;
   try {
@@ -510,7 +536,27 @@ async function main() {
         currentFocus: string;
       } | null = null;
 
-      for (const sessionName of sessionDirs) {
+      // compact and clear belong to ONE session: select by session_id, never by mtime
+      // across sessions. No match means no handoff (no cross-session fallback).
+      const sessionScoped = sessionType === 'compact' || sessionType === 'clear';
+      let pointer = '';
+      if (sessionScoped) {
+        const selected = selectSessionHandoff(handoffsDir, ownSessionIds(input, sessionType, projectDir));
+        if (selected) {
+          const fields = extractYamlFields(selected.content);
+          pointer = buildHandoffPointer(selected.path, selected.content, projectDir);
+          mostRecentLedger = {
+            content: selected.content,
+            sessionName: path.basename(path.dirname(selected.path)),
+            handoffPath: selected.path,
+            mtime: selected.mtime,
+            goalSummary: (fields?.goal || 'No goal found').substring(0, 100),
+            currentFocus: fields?.now || 'Unknown'
+          };
+        }
+      }
+
+      for (const sessionName of sessionScoped ? [] : sessionDirs) {
         const handoffPath = findSessionHandoff(sessionName);
         if (handoffPath) {
           const content = fs.readFileSync(handoffPath, 'utf-8');
@@ -544,27 +590,12 @@ async function main() {
           // Only process if we found content
           if (ledgerContent || (isYaml && (goalSummary !== 'No goal found' || currentFocus !== 'Unknown'))) {
             const mtime = fs.statSync(handoffPath).mtime.getTime();
-            const fileAge = Date.now() - mtime;
 
-            // Skip stale handoffs on startup (older than 7 days)
-            if (sessionType === 'startup' && fileAge > STALE_THRESHOLD_MS) {
-              console.error(`Skipping stale handoff: ${sessionName} (${Math.floor(fileAge / (24 * 60 * 60 * 1000))} days old)`);
-              continue;
-            }
-
-            // Skip completed handoffs. Accept both 'complete' and 'completed'
-            // (the handoff convention writes 'complete'); a terminal
-            // outcome marker is also a done signal. Matching only 'completed'
-            // previously let 'complete'-marked handoffs linger on the banner.
-            const statusMatch = content.match(/^status:\s*(\w+)/m);
-            const statusValue = statusMatch ? statusMatch[1].toLowerCase() : '';
-            const outcomeMatch = content.match(/^outcome:\s*(\w+)/m);
-            const outcomeValue = outcomeMatch ? outcomeMatch[1].toUpperCase() : '';
-            const isDone =
-              ['complete', 'completed', 'done'].includes(statusValue) ||
-              outcomeValue === 'SUCCEEDED';
-            if (isDone) {
-              console.error(`Skipping completed handoff: ${sessionName} (status=${statusValue || 'n/a'}, outcome=${outcomeValue || 'n/a'})`);
+            // Skip stale (over 7 days) and terminal (complete, SUCCEEDED, FAILED) handoffs
+            // on every source. PARTIAL_PLUS and PARTIAL_MINUS stay resumable.
+            const skipReason = handoffSkipReason(content, mtime);
+            if (skipReason) {
+              console.error(`Skipping ${skipReason} handoff: ${sessionName}`);
               continue;
             }
 
@@ -618,7 +649,7 @@ async function main() {
 
       if (mostRecentLedger) {
         usedHandoffLedger = true;
-        const { sessionName, goalSummary, currentFocus, content: ledgerSection, handoffPath } = mostRecentLedger;
+        const { sessionName, goalSummary, currentFocus, handoffPath } = mostRecentLedger;
         const handoffFilename = path.basename(handoffPath);
 
         if (sessionType === 'startup') {
@@ -629,32 +660,17 @@ async function main() {
             message = `📋 Handoff Ledger: ${sessionName} → ${currentFocus} (run /resume_handoff to continue)`;
           }
         } else {
-          // resume/clear/compact: load full Ledger section
-          console.error(`✓ Handoff Ledger loaded: ${sessionName} → ${currentFocus}`);
+          // resume/clear/compact. Resume only shows a banner.
+          console.error(`✓ Handoff loaded: ${sessionName} → ${currentFocus}`);
           message = `[${sessionType}] Loaded from handoff: ${handoffFilename} | Goal: ${goalSummary} | Focus: ${currentFocus}`;
 
-          if (sessionType === 'clear' || sessionType === 'compact') {
-            // Start with ROADMAP if available (primary context)
+          if (sessionScoped) {
+            // This session's own handoff: ROADMAP focus once, then a short pointer.
+            // No full YAML, no deprecated `handoffs` table nag.
             if (roadmapContext) {
               additionalContext = `${roadmapContext}\n\n---\n\n`;
             }
-            additionalContext += `Handoff Ledger loaded from ${handoffFilename}:\n\n${ledgerSection}`;
-
-            // Check for unmarked handoffs
-            const unmarkedHandoffs = getUnmarkedHandoffs();
-            if (unmarkedHandoffs.length > 0) {
-              additionalContext += `\n\n---\n\n## Unmarked Session Outcomes\n\n`;
-              additionalContext += `The following handoffs have no outcome marked. Consider marking them to improve future session recommendations:\n\n`;
-              for (const h of unmarkedHandoffs) {
-                const taskLabel = h.task_number ? `task-${h.task_number}` : 'handoff';
-                const summaryPreview = h.task_summary ? h.task_summary.substring(0, 60) + '...' : '(no summary)';
-                additionalContext += `- **${h.session_name}/${taskLabel}** (ID: \`${h.id.substring(0, 8)}\`): ${summaryPreview}\n`;
-              }
-              additionalContext += `\nTo mark an outcome:\n\`\`\`bash\ncd ~/.claude && uv run python scripts/core/artifact_mark.py --handoff <ID> --outcome SUCCEEDED|PARTIAL_PLUS|PARTIAL_MINUS|FAILED\n\`\`\`\n`;
-            }
-
-            // Add full handoff path for reference
-            additionalContext += `\n\n---\n\nFull handoff available at: ${handoffPath}\n`;
+            additionalContext += pointer;
           }
         }
       }
@@ -674,7 +690,11 @@ async function main() {
       // For all session types, try to build unified context
       if (sessionType === 'startup' || sessionType === 'clear' || sessionType === 'compact') {
         try {
-          const unifiedContext = await buildUnifiedContext(projectDir);
+          // clear/compact already carry the ROADMAP focus block above; compact skips the 5 s recall.
+          const unifiedContext = await buildUnifiedContext(projectDir, {
+            skipRoadmapFocus: sessionScoped,
+            skipRecall: sessionType === 'compact',
+          });
           if (unifiedContext && unifiedContext.trim().length > 50) {
             if (additionalContext) {
               additionalContext = unifiedContext + '\n\n---\n\n' + additionalContext;
@@ -695,7 +715,9 @@ async function main() {
   // ============================================
   // FALLBACK: Legacy ledger files (if no handoff Ledger found)
   // ============================================
-  if (!usedHandoffLedger) {
+  // Not on compact: the newest legacy ledger belongs to no particular session.
+  const skipLegacyLedger = (sessionType as string | undefined) === 'compact';
+  if (!usedHandoffLedger && !skipLegacyLedger) {
     const ledgerDir = path.join(projectDir, 'thoughts', 'ledgers');
     if (!fs.existsSync(ledgerDir)) {
       // No thoughts/ledgers directory - exit silently (normal for new projects)
