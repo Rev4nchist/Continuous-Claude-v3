@@ -19,6 +19,9 @@
  * (first one set; no default). That read is one READ ONLY transaction in a child process. No URL is a WARN, an unreachable database is a WARN.
  * Test seam: HARNESS_DOCTOR_NO_DB=1 skips the database read (a PASS that says skipped).
  * One line per check: PASS|WARN|FAIL  <section>:<check>  <detail>. Last line: harness: N pass / N warn / N fail.
+ * Info is not a status: a state that is owed later or not yet due is a PASS whose detail starts "info:" (an unlisted worktree folder under 24 h old,
+ * a task that never ran before its first scheduled time, a worktree lane.mjs ahead of main on a feature branch). A WARN is a real fault.
+ * logs:* WARN at 3 or more distinct (message, folder) pairs in 24 h, FAIL at 5 or more error rows. A "directory not found" row for a path that is gone is benign.
  * Exit 1 on any FAIL, else 0.
  *
  * lanes:shim, lanes:hook-client-version, hooks:render-check, hooks:dist-parity and lanes:relative-path-guard read the lane propagation files:
@@ -174,14 +177,29 @@ function syncQuarantine(o) {
     : result('PASS', 'sync', 'quarantine', `no quarantine dir newer than 7 days under ${dir}`);
 }
 
+const ORPHAN_GRACE_MS = DAY; // a folder under .claude/worktrees that git does not list is an orphan only after this long (a session may be mid-setup)
+const ORPHAN_HELPER = 'node scripts/worktree/orphans.mjs'; // the dry-run helper (package D14)
+const STORE_LINK_NAME = 'node_modules';
+
 function worktreeFolders(o) {
   const dir = join(o.repo, '.claude', 'worktrees');
   if (!existsSync(dir)) return absent('sync', 'worktrees', dir);
   let listed;
   try { listed = git(o.repo, ['worktree', 'list', '--porcelain']).split(/\r?\n/).filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9)); }
   catch (err) { return result('WARN', 'sync', 'worktrees', `git worktree list failed in ${o.repo}: ${msg(err)}`); }
-  const orphans = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && !listed.some((w) => samePath(w, join(dir, d.name)))).map((d) => d.name);
-  return orphans.length ? result('WARN', 'sync', 'worktrees', `${orphans.length} folder(s) under ${dir} not in git worktree list: ${orphans.join(', ')}`)
+  const now = Date.now();
+  // node_modules here is the shared store link (scripts/worktree/shared-deps.mjs), never a worktree and never an orphan. deps:store-link judges it.
+  const orphans = readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && d.name !== STORE_LINK_NAME && !listed.some((w) => samePath(w, join(dir, d.name))))
+    .map((d) => ({ name: d.name, age: now - statSync(join(dir, d.name)).mtimeMs }));
+  const old = orphans.filter((x) => x.age >= ORPHAN_GRACE_MS);
+  const young = orphans.filter((x) => x.age < ORPHAN_GRACE_MS);
+  if (old.length) {
+    const oldest = Math.floor(Math.max(...old.map((x) => x.age)) / HOUR);
+    const ignored = young.length ? `; ${young.length} younger than 24 h ignored` : '';
+    return result('WARN', 'sync', 'worktrees', `${old.length} folder(s) under ${dir} not in git worktree list and 24 h old or older (oldest ${oldest} h): ${old.map((x) => x.name).join(', ')}; dry run: ${ORPHAN_HELPER}${ignored}`);
+  }
+  return young.length ? result('PASS', 'sync', 'worktrees', `info: ${young.length} folder(s) under ${dir} not in git worktree list but under 24 h old, so not an orphan yet: ${young.map((x) => x.name).join(', ')}`)
     : result('PASS', 'sync', 'worktrees', `every folder under ${dir} is a git worktree`);
 }
 
@@ -200,10 +218,22 @@ function readTail(file) {
   } finally { closeSync(fd); }
 }
 
-/** Counts the error lines of the last `windowMs`. `isError` picks the lines; a line that is not JSON or has no valid ts is skipped and counted. */
-export function scanLog(text, isError, windowMs, nowMs = Date.now()) {
+/** The path of a "directory not found: <path>" error whose path no longer exists, else null. Such a row is a stale path, not a live fault. */
+function goneDirectory(message, exists) {
+  const path = /^directory not found: (.+)$/.exec(message)?.[1];
+  return path && !exists(path) ? path : null;
+}
+
+/**
+ * Counts the error lines of the last `windowMs`. `isError` picks the lines; a line that is not JSON or has no valid ts is skipped and counted.
+ * `pairs` is the number of distinct (message, folder) pairs; the folder is the row's cwd (only some logs carry one).
+ * A benign row ("directory not found" for a path that is gone) is counted in `benign` and in nothing else.
+ */
+export function scanLog(text, isError, windowMs, nowMs = Date.now(), exists = existsSync) {
   const tally = new Map();
+  const seen = new Set();
   let count = 0;
+  let benign = 0;
   let unparsable = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -213,15 +243,21 @@ export function scanLog(text, isError, windowMs, nowMs = Date.now()) {
     const t = Date.parse(obj.ts);
     if (Number.isNaN(t)) { unparsable++; continue; }
     if (nowMs - t > windowMs) continue;
+    const full = String(obj.error ?? obj.reason ?? obj.msg ?? obj.message ?? '(no message)');
+    if (goneDirectory(full, exists)) { benign++; continue; }
     count++;
-    const m = String(obj.error ?? obj.reason ?? obj.msg ?? obj.message ?? '(no message)').slice(0, 100);
+    const m = full.slice(0, 100);
+    seen.add(`${m}\u0000${obj.cwd ?? obj.data?.cwd ?? ''}`);
     tally.set(m, (tally.get(m) ?? 0) + 1);
   }
   const [top, topN] = [...tally.entries()].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
-  return { count, unparsable, top, topN };
+  return { count, pairs: seen.size, benign, unparsable, top, topN };
 }
 
-export const levelOf = (n) => (n === 0 ? 'PASS' : n < 5 ? 'WARN' : 'FAIL');
+const LOG_FAIL_ROWS = 5; // this many error rows in 24 h is a FAIL
+const LOG_WARN_PAIRS = 3; // this many distinct (message, folder) pairs is a WARN; one repeating error is not
+/** FAIL at 5 or more error rows, WARN at 3 or more distinct (message, folder) pairs, else PASS. */
+export const logLevel = ({ count, pairs }) => (count >= LOG_FAIL_ROWS ? 'FAIL' : pairs >= LOG_WARN_PAIRS ? 'WARN' : 'PASS');
 
 const LOGS = [
   { check: 'pre-pr-gate-errors', dir: 'logs', file: 'pre-pr-gate-errors.jsonl', isError: () => true },
@@ -235,8 +271,9 @@ function logCheck(o, spec) {
   if (!existsSync(file)) return absent('logs', spec.check, file);
   const s = scanLog(readTail(file), spec.isError, DAY);
   const skipped = s.unparsable ? `; ${s.unparsable} unparsable line(s) skipped` : '';
-  const top = s.top ? `; top: "${s.top}" x${s.topN}` : '';
-  return result(levelOf(s.count), 'logs', spec.check, `${s.count} error(s) in the last 24 h in ${file}${top}${skipped}`);
+  const top = s.top ? `; ${s.pairs} distinct (message, folder) pair(s); top: "${s.top}" x${s.topN}` : '';
+  const benign = s.benign ? `; ${s.benign} benign (directory not found, path no longer exists), not counted` : '';
+  return result(logLevel(s), 'logs', spec.check, `${s.count} error(s) in the last 24 h in ${file}${top}${benign}${skipped}`);
 }
 
 const logsSection = (o) => LOGS.map((spec) => logCheck(o, spec));
@@ -460,12 +497,42 @@ function taskRow(out, name) {
   return data ? { lastRun: data[col['Last Run Time']], lastResult: data[col['Last Result']] } : { warn: `schtasks answered with no row for \\${name}` };
 }
 
-/** Judges one registered task's last run and result. */
-function judgeTask(t, row, now) {
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtLocal = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+
+/**
+ * The first time the task XML says it fires, in ms (local time), or NaN when the XML has no trigger it can read.
+ * A daily, repeating or one-time trigger first fires at its StartBoundary. A weekly trigger first fires on the first listed weekday
+ * at or after the StartBoundary date, at the StartBoundary time. The boundary is read as wall-clock time: the offset in it is the machine's own.
+ */
+export function firstFire(xml) {
+  const block = /<(CalendarTrigger|TimeTrigger)>[\s\S]*?<\/\1>/.exec(xml)?.[0];
+  const m = /<StartBoundary>\s*(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(block ?? '');
+  if (!m) return NaN;
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  const start = new Date(y, mo - 1, d, h, mi).getTime();
+  const days = /<DaysOfWeek>([\s\S]*?)<\/DaysOfWeek>/.exec(block)?.[1];
+  if (days === undefined) return start;
+  const want = new Set([...days.matchAll(/<(\w+)\s*\/>/g)].map((x) => WEEKDAYS.indexOf(x[1])).filter((i) => i >= 0));
+  for (let i = 0; i < 7; i++) {
+    const at = new Date(y, mo - 1, d + i, h, mi);
+    if (want.has(at.getDay())) return at.getTime();
+  }
+  return start;
+}
+
+/** Judges one registered task's last run and result. `xml` is the answer of schtasks /xml (or null): it dates the first scheduled run. */
+function judgeTask(t, row, now, xml = null) {
   const code = Number(row.lastResult);
   if (!Number.isInteger(code)) return result('WARN', 'schedule', t.name, `Last Result "${row.lastResult}" is not a number`);
   const ran = parseRunTime(row.lastRun);
-  if (code === TASK_NEVER_RAN || row.lastRun === 'N/A' || new Date(ran).getFullYear() === 1999) return result('WARN', 'schedule', t.name, `task is registered but never ran (trigger ${t.trigger})`);
+  if (code === TASK_NEVER_RAN || row.lastRun === 'N/A' || new Date(ran).getFullYear() === 1999) {
+    const first = xml && xml.status === 0 ? firstFire(xml.stdout) : NaN;
+    // Not due yet is not a fault: nothing was owed. Info is a PASS whose detail starts "info:". Once a fire time has passed, never ran is a WARN.
+    if (first > now) return result('PASS', 'schedule', t.name, `info: registered, never ran, not due yet: first scheduled run ${fmtLocal(first)} (trigger ${t.trigger})`);
+    return result('WARN', 'schedule', t.name, `task is registered but never ran (trigger ${t.trigger}${first <= now ? `; first scheduled run ${fmtLocal(first)} has passed` : ''})`);
+  }
   if (code !== TASK_RUNNING && !t.allowedExit.includes(code)) return result('FAIL', 'schedule', t.name, `last result ${code} is not in allowedExit [${t.allowedExit}]; last run ${row.lastRun}`);
   if (Number.isNaN(ran)) return result('WARN', 'schedule', t.name, `Last Run Time "${row.lastRun}" is not a date the doctor reads`);
   const hours = (now - ran) / HOUR;
@@ -474,9 +541,9 @@ function judgeTask(t, row, now) {
 }
 
 /** Folds registration drift into the task's one row. A FAIL stays a FAIL, a WARN stays a WARN, a PASS with drift becomes a WARN. No XML query: no drift check. */
-function withDrift(base, t, queryXml) {
-  if (!queryXml) return base;
-  const found = registrationDrift(t, queryXml(t.name));
+function withDrift(base, t, xml) {
+  if (!xml) return base;
+  const found = registrationDrift(t, xml);
   const text = found.warn ?? found.drift.join('; ');
   if (!text) return base;
   return result(base.status === 'PASS' ? 'WARN' : base.status, 'schedule', t.name, `${base.detail}; registration drift: ${text}`);
@@ -489,7 +556,9 @@ function checkTask(t, query, queryXml, now) {
   if (q.error) return result('WARN', 'schedule', t.name, `cannot run schtasks: ${q.error}`);
   if (q.status !== 0) return result('WARN', 'schedule', t.name, `task is not registered (schtasks exit ${q.status}: ${String(q.stderr).trim().split('\n')[0]}); trigger ${t.trigger}`);
   const row = taskRow(q.stdout, t.name);
-  return row.warn ? result('WARN', 'schedule', t.name, row.warn) : withDrift(judgeTask(t, row, now), t, queryXml);
+  if (row.warn) return result('WARN', 'schedule', t.name, row.warn);
+  const xml = queryXml ? queryXml(t.name) : null; // one XML read serves the first-run date and the drift check
+  return withDrift(judgeTask(t, row, now, xml), t, xml);
 }
 
 /**
@@ -761,9 +830,35 @@ export function worktreeLaneMjs(o) {
   if (!existsSync(primary)) return result('WARN', 'lanes', 'worktree-lane-mjs', `missing ${primary}: worktree copies cannot be compared`);
   const want = laneHash(primary);
   const copies = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => ({ name: d.name, file: join(dir, d.name, ...rel) })).filter((c) => existsSync(c.file));
-  const differ = copies.filter((c) => laneHash(c.file) !== want).map((c) => c.name);
-  if (differ.length) return result('WARN', 'lanes', 'worktree-lane-mjs', `${differ.length} worktree(s) under ${dir} have a lane.mjs that differs from ${primary}: ${differ.join(', ')}; a stale copy cannot see boards (rebase that worktree), a newer copy is not on main yet (merge it)`);
+  const differ = copies.filter((c) => laneHash(c.file) !== want);
+  const last = differ.length ? lastLaneChange(o.repo) : null;
+  const judged = differ.map((c) => ({ name: c.name, ...laneCopyState(join(dir, c.name), last) }));
+  const stale = judged.filter((j) => j.stale);
+  const ahead = judged.filter((j) => j.ahead).map((j) => j.name);
+  if (stale.length) {
+    const info = ahead.length ? `; ${ahead.length} more on feature branches ahead of main (info): ${ahead.join(', ')}` : '';
+    return result('WARN', 'lanes', 'worktree-lane-mjs', `${stale.length} worktree(s) under ${dir} have a lane.mjs that differs from ${primary}: ${stale.map((j) => `${j.name} (${j.stale})`).join(', ')}; a stale copy cannot see boards (rebase that worktree)${info}`);
+  }
+  if (ahead.length) return result('PASS', 'lanes', 'worktree-lane-mjs', `info: ${ahead.length} worktree(s) under ${dir} carry a lane.mjs ahead of ${primary} (feature work, main's last lane.mjs change is in their history): ${ahead.join(', ')}; ${copies.length - ahead.length} other copies match`);
   return result('PASS', 'lanes', 'worktree-lane-mjs', copies.length ? `all ${copies.length} worktree lane.mjs copies match ${primary}` : `no worktree under ${dir} holds a lane.mjs`);
+}
+
+/** The newest commit on main that changed scripts/coordination/lane.mjs, or null when main or that history is absent. */
+function lastLaneChange(repo) {
+  try { return git(repo, ['rev-list', '-1', 'main', '--', 'scripts/coordination/lane.mjs']) || null; } catch { return null; }
+}
+
+/**
+ * Judges one worktree copy of lane.mjs that differs from the primary's. { ahead: true } when the worktree's history holds main's last
+ * lane.mjs change (it forked from main's current lane.mjs and then edited it: feature work, not stale). { stale: <reason> } when it lacks
+ * that change, is no git worktree root, or main has no history to compare. No database read: a lane-holding session is not looked up.
+ */
+function laneCopyState(folder, last) {
+  const top = spawnSync('git', ['-C', folder, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  if (top.status !== 0 || !samePath(top.stdout.trim(), folder)) return { stale: 'not a git worktree' };
+  if (!last) return { stale: 'main has no lane.mjs history to compare' };
+  const anc = spawnSync('git', ['-C', folder, 'merge-base', '--is-ancestor', last, 'HEAD'], { windowsHide: true, timeout: 20000 });
+  return anc.status === 0 ? { ahead: true } : { stale: "lacks main's last lane.mjs change" };
 }
 
 const registrySection = (o) => [registryRootsExist(o), registryMirrorDrift(o), registryArtifactUrl(o), registryProjectRows(o)];

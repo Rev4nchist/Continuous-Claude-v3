@@ -728,8 +728,11 @@ It exits 1 on any FAIL. With `--json` it also writes `.claude/cache/e2e/<YYYY-MM
 | Section | Checks |
 |---|---|
 | `hooks` | `registration-reconcile`, `hook-contract-guard` and `hook-parity` as child processes; `registration-baseline.json` dirty in git; `~/.claude/hooks/dist/.build-inputs.json` missing |
-| `sync` | cursor against `git rev-parse main` (missing cursor is FAIL); `.sync.pending`; `.sync-quarantine` dirs under 7 days old; folders under `.claude/worktrees` that git does not list |
-| `logs` | errors in the last 24 h in `pre-pr-gate-errors.jsonl`, `guard-decisions.jsonl` (kind `error`), `memory-write-failures.jsonl`, `hooks.log` (level `error`). 0 is PASS, 1 to 4 WARN, 5 or more FAIL. A line that does not parse is skipped and counted |
+| `sync` | cursor against `git rev-parse main` (missing cursor is FAIL); `.sync.pending`; `.sync-quarantine` dirs under 7 days old; folders under `.claude/worktrees` that git does not list. Such a folder is a WARN only from 24 h old (by mtime); the WARN names the oldest age and the dry-run command `node scripts/worktree/orphans.mjs`. A younger folder is info. `node_modules` (the shared store link) is never an orphan |
+| `logs` | errors in the last 24 h in `pre-pr-gate-errors.jsonl`, `guard-decisions.jsonl` (kind `error`), `memory-write-failures.jsonl`, `hooks.log` (level `error`). PASS below 3 distinct (message, folder) pairs, WARN at 3 or more pairs, FAIL at 5 or more error rows. A `directory not found` row whose path is gone is benign: labelled, not counted. A line that does not parse is skipped and counted |
+| `schedule` | one row per task in `scripts/scheduled/tasks.json`. A task that never ran is info (a PASS that starts `info:`) until its first scheduled time, read from the task XML `StartBoundary` and weekday, has passed; then WARN. Other results are unchanged |
+| `lanes` | `worktree-lane-mjs`: a worktree `lane.mjs` that differs from the primary is a WARN when that worktree lacks main's last `lane.mjs` change (or is no git worktree); it is info when the worktree has that change and edited the file (feature work) |
 | `review` | today's `coderabbit-paid.jsonl` total against the $15 day cap (WARN from $12); `reviews_7d_manual_date` in `review-router.config.json` older than 7 days |
 
+Info is not a status. It is a PASS whose detail starts `info:`, so the summary line and the session-start alert count only real warnings.
 A missing optional file is a PASS with `absent` in the detail. Tests: `node --test scripts/harness-doctor.test.mjs`.
