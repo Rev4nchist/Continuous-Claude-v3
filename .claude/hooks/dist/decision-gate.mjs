@@ -736,7 +736,7 @@ var CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t
 var JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Parallel|AsJob)\b)[^{};&|\r\n]*\{[^}]*$/i;
 var gitBashPath = (p) => process.platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
 function moveTo(base, target, shell) {
-  const raw = target.replace(/\\([ "'])|["']/g, (_m, esc) => esc ?? "");
+  const raw = shell === "pwsh" ? target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d, s) => d ?? s ?? "") : target.replace(/\\([ "'])|["']/g, (_m, esc) => esc ?? "");
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
@@ -757,7 +757,7 @@ function endsInPipe(before) {
 }
 var UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
 var NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
-var REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?-(?:ComputerName|Session|HostName|VMName|VMId|ContainerId|AsJob|SSHConnection|ConnectionUri)\b/i;
+var REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?\s-[A-Za-z]/;
 function cdPositions(masked, raw) {
   const cds = [];
   const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, "gi"))].map((m) => m.index + m[0].length);

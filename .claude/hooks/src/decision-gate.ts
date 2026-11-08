@@ -465,7 +465,10 @@ const gitBashPath = (p: string): string => (process.platform === 'win32' ? p.rep
 /** `base` moved by one cd target (raw, quotes still on): absolute as given, else under `base`. */
 function moveTo(base: string, target: string, shell: 'bash' | 'pwsh'): string {
   // Every quote mark goes (P/"x" is P/x); a backslash before a space or a quote is an escape (bash), so the mark itself stays.
-  const raw = target.replace(/\\([ "'])|["']/g, (_m, esc: string | undefined) => esc ?? '');
+  // PowerShell has no backslash escape: a quoted part is taken whole, and a quote inside the other kind is a letter of the name.
+  const raw = shell === 'pwsh'
+    ? target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d: string | undefined, s: string | undefined) => d ?? s ?? '')
+    : target.replace(/\\([ "'])|["']/g, (_m, esc: string | undefined) => esc ?? '');
   const t = shell === 'bash' ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
@@ -507,9 +510,9 @@ const UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&
 /** A cd target that is no folder: `cd -`, or an option with nothing after it (`cd -P`, `cd --`). The shell goes to a place the text does not name. */
 const NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
 
-// Invoke-Command names its target AFTER the block: `{ cd B } -ComputerName srv` runs the cd elsewhere. True when the text after a cd closes a block and then
-// has one of those parameters in the same statement. It over-reads a later unrelated block (an over-deny, fail closed).
-const REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?-(?:ComputerName|Session|HostName|VMName|VMId|ContainerId|AsJob|SSHConnection|ConnectionUri)\b/i;
+// Invoke-Command names its target AFTER the block: `{ cd B } -ComputerName srv` (or -cn, -Comp, -CU, -VMGuid) runs the cd elsewhere. Aliases and prefixes cannot be
+// listed safely, so ANY parameter after the closing brace in the same statement counts. A local-only parameter, or a later unrelated block, over-denies (fail closed).
+const REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?\s-[A-Za-z]/;
 
 /** Every cd of a masked view with the offset where it ends, and where each popd-like command ends. Read once per view: a segment takes the ones before it. */
 interface CdPositions { cds: { end: number; target: string; piped: boolean }[]; unknown: number[]; masked: string }

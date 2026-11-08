@@ -2131,7 +2131,7 @@ describe('T20 cd positions, scriptblocks and targets', () => {
   const O = '/tmp/other-repo';
   const OSP = '/tmp/other repo';
   const SUB = '/repo/sub';
-  const W: World = { otherDirs: [O, SUB, OSP] };
+  const W: World = { otherDirs: [O, SUB, OSP, O + '/'] };
   const PUSH = 'git push fork feat/x';
   const C = 'gh pr create --draft --head feat/x --title t --body-file b.md';
   const M = `gh pr merge 12 --merge --match-head-commit ${HEAD}`;
@@ -2183,6 +2183,22 @@ describe('T20 cd positions, scriptblocks and targets', () => {
       ['-ScriptBlock and -ComputerName', 'icm -ScriptBlock { Set-Location %O } -ComputerName srv && %S'],
     ])('judges the cwd when Invoke-Command runs the cd with %s', (_name, tpl) => {
       expect(denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(true);
+    });
+    // A parameter alias or a prefix after the block (-cn, -Comp, -CU, -VMGuid) also names another place: any parameter after the block counts (CodeRabbit CLI, 816013a).
+    it.each([
+      ['-cn alias', 'icm { Set-Location %O } -cn srv && %S'],
+      ['-Comp prefix', 'Invoke-Command { Set-Location %O } -Comp srv && %S'],
+      ['-CU alias', 'icm { Set-Location %O } -CU http://srv && %S'],
+      ['-VMGuid', 'icm { Set-Location %O } -VMGuid $g && %S'],
+    ])('judges the cwd when Invoke-Command runs the cd with %s', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(true);
+    });
+    // In PowerShell a backslash is no escape: a quoted folder may end in one, and a quote inside the other kind of quote is a letter of the name.
+    it.each([
+      ['a double-quoted folder with a trailing backslash', 'Set-Location "%O\\" && %S'],
+      ['a single-quoted folder with a trailing backslash', "Set-Location '%O\\' && %S"],
+    ])('reads %s as the folder', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape), { cwd: SUB }), W), fill(tpl, shape)).toBe(false);
     });
     // The closing ) or backtick of a subshell is no part of the folder.
     it.each([
