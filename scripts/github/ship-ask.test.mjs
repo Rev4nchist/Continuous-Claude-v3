@@ -9,6 +9,7 @@
 //   land offers "Land now" for a PR that is not READY, or asks about a draft                                              -> SA3
 //   open-pr offers "Open draft PR" with no stamp, a failed row or a moved head                                            -> SA4
 //   commit-and-push recommends a commit when nothing is staged                                                            -> SA5
+//   Push only is offered with files staged, with nothing ahead, or with no HEAD tree, or its offer binds the index tree           -> SA5b, SA5c, SA6d, SA8c
 //   the CLI prints a spec but writes no offer (the hook could never record the tap), or writes one for bad usage          -> SA6
 //   the offer is bound to another key or head than the spec names                                                         -> SA6
 //   a text tells Dave to type a command ('/pathway <', '/slot pay')                                                       -> SA7
@@ -32,13 +33,14 @@ const OLD = 'd'.repeat(40);
 const temp = (prefix) => realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)));
 
 const SHIP = { branch: 'feat/x', head: HEAD, tree: 't', staged: 6, ahead: 2, subject: 'fix(pathway): drop stale labels' };
+const PUSH_FACTS = { ...SHIP, staged: 0, ahead: 2, head: 'abc1234def', headTree: 'ht' };
 const OPEN = { branch: 'feat/x', head: HEAD, stampHead: HEAD, stampAt: '2026-11-06T10:00:00Z', now: '2026-11-06T10:17:00Z', rows: 9, fails: 0, cliDetail: '0 finding(s), advisory only.', costUsd: 0, capLeftUsd: 3 };
 const LAND = { pr: 349, head: HEAD, ready: true, reasons: [], mergeable: 'clean', unresolved: 0, pathway: 'none', by: 'dave' };
 const PAID = { pr: 349, head: HEAD, round: 1, files: 17, today: 0, paidRounds: 0, verdict: 'ALLOW', reasons: [], caps: { round: 5, day: 15, rounds: 2 } };
 
 function specsOf(m) {
   return {
-    ship: m.shipSpec(SHIP), shipNone: m.shipSpec({ ...SHIP, staged: 0 }), open: m.openPrSpec(OPEN), rerun: m.rerunPrePrSpec({ ...OPEN, stampHead: OLD }),
+    ship: m.shipSpec(SHIP), shipNone: m.shipSpec({ ...SHIP, staged: 0, ahead: 0 }), shipPush: m.shipSpec(PUSH_FACTS), open: m.openPrSpec(OPEN), rerun: m.rerunPrePrSpec({ ...OPEN, stampHead: OLD }),
     land: m.landSpec(LAND), landWait: m.landSpec({ ...LAND, ready: false, reasons: ['CI is still running'] }),
     paid: m.paidRoundSpec(PAID), paidEsc: m.paidRoundSpec({ ...PAID, files: 40, verdict: 'ESCALATE', reasons: ['round cost $10.00 is over $5.00'] }), paidNone: m.paidRoundSpec({ pr: 349, verdict: null, reason: 'gh failed' }),
   };
@@ -178,6 +180,44 @@ test('SA5: commit-and-push recommends the commit only when files are staged', as
   assert.equal(shipNone.options[0].label, 'Stop here (Recommended)');
 });
 
+test('SA5b: nothing staged and commits ahead recommends Push only, with three question lines and no commit wording', async () => {
+  const { shipPush } = specsOf(await load());
+  assert.equal(shipPush.options[0].label, 'Push only (Recommended)');
+  assert.deepEqual(shipPush.options.map((o) => o.label), ['Push only (Recommended)', 'Show the commits first', 'Stop here']);
+  assert.equal(shipPush.question.split('\n').length, 3);
+  assert.doesNotMatch(shipPush.question, /Commit /);
+  assert.match(shipPush.question, /HEAD is abc1234\./);
+  assert.match(shipPush.question, /2 commits ahead of fork\/main\./);
+  assert.match(shipPush.options[0].description, /git-safe push fork feat\/x/);
+});
+
+test('SA5c: no Push only when files are staged, nothing is ahead, ahead is unknown, or the HEAD tree is unknown', async () => {
+  const m = await load();
+  const cases = { staged: { ...PUSH_FACTS, staged: 6 }, 'ahead 0': { ...PUSH_FACTS, ahead: 0 }, 'ahead null': { ...PUSH_FACTS, ahead: null }, 'no headTree': { ...PUSH_FACTS, headTree: null } };
+  for (const [name, facts] of Object.entries(cases)) {
+    const s = m.shipSpec(facts);
+    assert.ok(!s.options.some((o) => o.label.startsWith('Push only')), name);
+  }
+});
+
+test('SA5d: the Commit and push description says the commit and the push run joined by &&', async () => {
+  const { ship } = specsOf(await load());
+  assert.match(ship.options[0].description, /&&/);
+});
+
+test('SA6d: a Push only offer binds headTree, a Commit and push offer binds tree, and the first label records', async () => {
+  const d = await loadStore();
+  const push = run(['commit-and-push', '--branch', 'feat/x', '--json'], { facts: { ...PUSH_FACTS, tree: 'tt', head: HEAD } });
+  assert.equal(push.status, 0, push.stderr);
+  process.env.CCV3_DECISIONS_FILE = push.storeFile;
+  const offer = d.offerRead({ step: 'ship', key: `${DEFAULT_REPO}@feat/x`, head: HEAD });
+  assert.equal(offer.tree, 'ht', 'the Push only offer binds the HEAD tree');
+  assert.equal(d.decisionRecord({ step: 'ship', key: `${DEFAULT_REPO}@feat/x`, head: HEAD, label: 'Push only (Recommended)' }).ok, true);
+  const commit = run(['commit-and-push', '--branch', 'feat/x', '--json'], { facts: { ...SHIP, headTree: 'ht', tree: 'tt' } });
+  process.env.CCV3_DECISIONS_FILE = commit.storeFile;
+  assert.equal(d.offerRead({ step: 'ship', key: `${DEFAULT_REPO}@feat/x`, head: HEAD }).tree, 'tt', 'staged files: the index tree');
+});
+
 function run(args, { facts, store, cwd, env = {}, seams = true } = {}) {
   const dir = temp('shipask-');
   const factsFile = facts ? path.join(dir, 'facts.json') : null;
@@ -300,6 +340,37 @@ test('SA8b: --branch B reads the head and the tree of branch B, not of the check
   assert.equal(none.stdout, '');
   process.env.CCV3_DECISIONS_FILE = none.storeFile;
   assert.deepEqual(d.offerList(), []);
+});
+
+test('SA8c: real git, nothing staged and a commit ahead of fork/main: the offer is Push only and binds HEAD^{tree}', async () => {
+  const repo = temp('shipask-pushonly-');
+  const git = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo, encoding: 'utf8' });
+  git('init', '-q', '-b', 'feat/real');
+  writeFileSync(path.join(repo, 'a.txt'), '1\n');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'one');
+  const first = git('rev-parse', 'HEAD').stdout.trim();
+  writeFileSync(path.join(repo, 'b.txt'), '2\n');
+  git('add', 'b.txt');
+  git('commit', '-q', '-m', 'two');
+  git('update-ref', 'refs/remotes/fork/main', first);
+  const head = git('rev-parse', 'HEAD').stdout.trim();
+  const headTree = git('rev-parse', 'HEAD^{tree}').stdout.trim();
+  const r = run(['commit-and-push', '--json'], { cwd: repo });
+  assert.equal(r.status, 0, r.stderr);
+  const spec = JSON.parse(r.stdout);
+  assert.equal(spec.options[0].label, 'Push only (Recommended)');
+  assert.match(spec.question, /1 commit ahead of fork\/main\./);
+  const d = await loadStore();
+  process.env.CCV3_DECISIONS_FILE = r.storeFile;
+  assert.equal(d.offerRead({ step: 'ship', key: `${DEFAULT_REPO}@feat/real`, head }).tree, headTree);
+  // --branch B for a branch that is not checked out reads the ref tree.
+  git('checkout', '-q', '-b', 'feat/else');
+  const other = run(['commit-and-push', '--branch', 'feat/real', '--json'], { cwd: repo });
+  assert.equal(other.status, 0, other.stderr);
+  assert.equal(JSON.parse(other.stdout).options[0].label, 'Push only (Recommended)');
+  process.env.CCV3_DECISIONS_FILE = other.storeFile;
+  assert.equal(d.offerRead({ step: 'ship', key: `${DEFAULT_REPO}@feat/real`, head }).tree, headTree);
 });
 
 function fakeStatus(dir, body) {
