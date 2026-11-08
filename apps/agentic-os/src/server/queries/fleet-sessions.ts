@@ -7,7 +7,7 @@ import { db } from '@/db';
 import { readSessionNames } from '@/server/sources/identity-names';
 import type { StateFiles, StateSnapshot } from '@/server/sources/state-files';
 
-import { goalOf, groupHeldLanes, type HeldLane } from './fleet-card-fields';
+import { answeredOf, goalOf, groupHeldLanes, type Answered, type GoalSource, type HeldLane } from './fleet-card-fields';
 import { joinSnapshots, LOOKUP_LIMIT, type JoinStats, type LookupRow } from './fleet-join';
 import { laneOrderSql } from './lane-sort';
 import type { ActiveSession, ActiveSessions } from './sessions';
@@ -79,8 +79,12 @@ export type SessionCard = {
   projectDisplayName: string | null;
   chip: Chip | null;
   title: string | null;
-  /** One line for the card: the brief goal, else the first held lane title, else null (no prompt text exists). */
+  /**
+   * One line for the card: a brief_set goal, else the title of the held lane claimed last, else a parsed goal,
+   * else null (no prompt text exists). `goalSource` says which.
+   */
   goal: string | null;
+  goalSource: GoalSource;
   branch: string | null;
   repo: string | null;
   hasBrief: boolean;
@@ -88,6 +92,8 @@ export type SessionCard = {
   planTotal: number;
   askOpen: number;
   askStale: number;
+  /** The ANSWERED row: the last brief decision and the count of answered asks. Empty with no brief. */
+  answered: Answered;
   unproven: number;
   ctxPct: number | null;
   /** First lane this session holds (active, review, blocked or ready), or null. */
@@ -222,6 +228,7 @@ function buildCard(
   const brief = snapshot?.brief ?? null;
   const asks = (brief?.ask ?? []).filter((a) => !a.answered);
   const stale = brief !== null && askAgeSeconds(brief.updatedAt, snapshot, nowMs) > STALE_ASK_SECONDS;
+  const goal = goalOf(brief?.goal, brief?.goalSource, lanes);
 
   return {
     id: session.id,
@@ -232,7 +239,8 @@ function buildCard(
     projectDisplayName: session.projectDisplayName,
     chip: chipOf(snapshot?.chip ?? null),
     title: brief?.title ?? null,
-    goal: goalOf(brief?.goal, lanes),
+    goal: goal.text,
+    goalSource: goal.source,
     branch: snapshot?.branch ?? null,
     repo: snapshot?.repo ?? null,
     hasBrief: brief !== null,
@@ -240,6 +248,7 @@ function buildCard(
     planTotal: steps.length,
     askOpen: stale ? 0 : asks.length,
     askStale: stale ? asks.length : 0,
+    answered: answeredOf(brief?.decisions ?? [], brief?.ask ?? [], nowMs),
     unproven: steps.filter((s) => s.done && !s.proven).length,
     ctxPct:
       snapshot?.ctx === null || snapshot?.ctx === undefined
@@ -410,10 +419,12 @@ export async function getHeldLanes(): Promise<Map<string, HeldLane[]>> {
     title: string | null;
     owner_session_id: string;
     lease_expires_epoch: number | null;
+    claimed_at_epoch: number | null;
     db_now_epoch: number;
   }>(sql`
     SELECT l.id, left(l.title, ${LANE_TITLE_CLIP}) AS title, l.owner_session_id,
       EXTRACT(EPOCH FROM l.lease_expires_at)::float8 AS lease_expires_epoch,
+      EXTRACT(EPOCH FROM l.claimed_at)::float8 AS claimed_at_epoch,
       EXTRACT(EPOCH FROM now())::float8 AS db_now_epoch
     FROM agentic_os.lane l
     WHERE l.owner_session_id IS NOT NULL

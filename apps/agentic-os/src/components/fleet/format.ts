@@ -77,6 +77,17 @@ export function chipWord(code: string): string {
   return Object.hasOwn(CHIP_WORDS, code) ? CHIP_WORDS[code] : code;
 }
 
+/**
+ * The waiting line of a card, in the chip's own words so one card never shows two phrases. A card waits
+ * only with an open, fresh ask. With no open ask and a waiting-on-dave chip, "Not waiting for you" would
+ * contradict the chip, so the line says what is true: no ask is open.
+ */
+export function waitingLine(waiting: boolean, chip: string | null): string {
+  const phrase = chipWord('waiting-on-dave');
+  if (waiting) return phrase;
+  return chip === 'waiting-on-dave' ? 'No open ask' : `Not ${phrase.charAt(0).toLowerCase()}${phrase.slice(1)}`;
+}
+
 /** Chip colours by code, shared by the cards, the table and the detail header. */
 const CHIP_TONE: Record<string, string> = {
   working: 'border-doing/40 text-doing',

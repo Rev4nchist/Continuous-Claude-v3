@@ -2,7 +2,7 @@ import type { SessionCard } from '@/server/queries/mission-control';
 
 import { cn } from '@/lib/utils';
 
-import { chipTone, chipWord, formatAgo, formatLease, leaseTone } from './format';
+import { chipTone, chipWord, formatAgo, formatLease, leaseTone, waitingLine } from './format';
 import { SessionLabel } from './SessionLabel';
 
 /** A state file older than this is shown as stale on the card. */
@@ -21,8 +21,11 @@ export type SessionFilter = { key: string; label: string };
  * file with no brief), a stale state file, and a brief with an empty plan. Cards show counts
  * of asks, never the ask text: the text belongs to the Ready for Dave strip. Level 1 (2026-11-07) adds
  * six fields: name #sid8, every held lane with its lease time left (amber when short or lapsed),
- * "heartbeat Nm ago", waiting on Dave yes or no, and the goal clipped to ONE line (brief goal, else the
- * first lane title). The state word comes from the glossary; the code
+ * "heartbeat Nm ago", waiting on Dave yes or no, and the goal clipped to ONE line. GPAA F1 + F2
+ * (2026-11-08): the goal is a brief_set goal, else the title of the lane claimed last (tag [lane]), else a
+ * parsed goal (tag [parsed]); `data-goal-source` says which. Fixed row labels GOAL, PLAN, ASK, ANSWERED.
+ * A card waits on Dave only with an open, fresh ask (the strip's rule), never from the chip alone.
+ * The state word comes from the glossary; the code
  * stays in `data-chip`. A card that waits on Dave has an amber border, a blocked one a red border.
  */
 export function SessionCards({
@@ -99,7 +102,9 @@ function SessionCardItem({
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
-  const waiting = card.chip === 'waiting-on-dave' || card.askOpen > 0;
+  // One rule for "waits on Dave": an open, fresh ask. The Ready for Dave strip and the Needs Dave tile use it
+  // too (fleet-sessions.ts). The chip alone does not count: it is a state word, not a question.
+  const waiting = card.askOpen > 0;
   const stateStale = card.stateAgeSeconds !== null && card.stateAgeSeconds > STATE_STALE_SECONDS;
   // With a brief the plan and the counts always show. Without one they show only when the task
   // list (PRD 5.1, the Plan source when it has items) or an ask count gives them something to say.
@@ -156,13 +161,21 @@ function SessionCardItem({
       {card.hasBrief && card.title !== null && (
         <span className="block text-sm [overflow-wrap:anywhere]">{card.title}</span>
       )}{' '}
-      <span
-        data-testid="session-card-goal"
-        data-goal-source={card.goal === null ? 'none' : 'text'}
-        title={card.goal ?? undefined}
-        className={cn('block truncate text-xs', card.goal === null && 'text-muted-foreground')}
-      >
-        {card.goal ?? 'No goal yet'}
+      <span className="flex min-w-0 items-baseline gap-2 text-xs">
+        <RowLabel testId="session-card-label-goal">GOAL</RowLabel>{' '}
+        <span
+          data-testid="session-card-goal"
+          data-goal-source={card.goalSource}
+          title={card.goal ?? undefined}
+          className={cn('min-w-0 flex-1 truncate', card.goal === null && 'text-muted-foreground')}
+        >
+          {card.goal ?? 'No goal yet'}
+        </span>{' '}
+        {(card.goalSource === 'lane' || card.goalSource === 'parsed') && (
+          <span data-testid="session-card-goal-tag" className="shrink-0 text-[0.6875rem] text-muted-foreground">
+            {`[${card.goalSource}]`}
+          </span>
+        )}
       </span>{' '}
 
       <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -171,7 +184,7 @@ function SessionCardItem({
           data-waiting={waiting ? 'true' : 'false'}
           className={waiting ? 'font-medium text-warn' : 'text-muted-foreground'}
         >
-          {waiting ? 'Waiting on Dave' : 'Not waiting on Dave'}
+          {waitingLine(waiting, card.chip)}
         </span>{' '}
         <span data-testid="session-card-heartbeat" className="text-muted-foreground">
           {`last prompt ${formatAgo(card.heartbeatSecondsAgo)}`}
@@ -215,9 +228,17 @@ function SessionCardItem({
         </span>
       )}{' '}
 
-      {card.planTotal > 0 && <PlanBar done={card.planDone} total={card.planTotal} />}{' '}
-      {card.planTotal === 0 && card.hasBrief && (
-        <span className="block text-xs text-muted-foreground">No plan steps yet.</span>
+      {(card.planTotal > 0 || card.hasBrief) && (
+        <span className="flex min-w-0 items-center gap-2 text-xs">
+          <RowLabel testId="session-card-label-plan">PLAN</RowLabel>{' '}
+          {card.planTotal > 0 ? (
+            <span className="min-w-0 flex-1">
+              <PlanBar done={card.planDone} total={card.planTotal} />
+            </span>
+          ) : (
+            <span className="min-w-0 flex-1 text-muted-foreground">No plan steps yet.</span>
+          )}
+        </span>
       )}{' '}
 
       {showCounts && (
@@ -247,6 +268,29 @@ function SessionCardItem({
         </span>
       )}{' '}
 
+      {/* ANSWERED (design section 6): line 1 the last brief decision, else "no decision recorded"; line 2 "N cleared",
+          the asks with answered: true. A cleared ask has no age: `answeredAt` is not in the state file yet (plugin
+          step P2). Both empty: one line, "nothing recorded". */}
+      <span className="flex min-w-0 items-baseline gap-2 text-xs">
+        <RowLabel testId="session-card-label-answered">ANSWERED</RowLabel>{' '}
+        <span data-testid="session-card-answered" className="min-w-0 flex-1 text-muted-foreground">
+          {card.answered.decision === null && card.answered.cleared === 0 ? (
+            'nothing recorded'
+          ) : (
+            <>
+              <span data-testid="session-card-answered-decision" className="block [overflow-wrap:anywhere]">
+                {card.answered.decision === null
+                  ? 'no decision recorded'
+                  : `${card.answered.decision.text} · by ${card.answered.decision.by}, ${formatAgo(card.answered.decision.ageSeconds)}`}
+              </span>
+              <span data-testid="session-card-answered-cleared" className="block">
+                {`${card.answered.cleared} cleared`}
+              </span>
+            </>
+          )}
+        </span>
+      </span>{' '}
+
       {card.stateAgeSeconds !== null && (
         <span className={cn('block text-[0.6875rem]', stateStale ? 'text-warn' : 'text-muted-foreground')}>
           {stateStale
@@ -256,6 +300,15 @@ function SessionCardItem({
       )}
       </button>
     </li>
+  );
+}
+
+/** The fixed label at the start of a card row (GOAL, PLAN, ANSWERED). The ASK label is in the counts line. */
+function RowLabel({ testId, children }: { testId: string; children: string }) {
+  return (
+    <span data-testid={testId} className="w-[4.5rem] shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
+      {children}
+    </span>
   );
 }
 

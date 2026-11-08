@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
 import {
+  ask,
   clearStateDir,
+  expectedLaneGoal,
   findLaneHolderSession,
   makeBrief,
   writeState,
@@ -17,8 +19,8 @@ import {
  * .claudedocs/2026-11-07-fleet-level1-design.md. The card must show:
  *   1. name #sid8            2. every lane the session holds    3. lease time left (per lane)
  *   4. "heartbeat Nm ago"    5. waiting on Dave: yes or no      6. the goal, clipped to ONE line
- * The goal comes from the brief, else the title of the first held lane. There is no third source:
- * prompt text is not in the data (fleet-data.spec.ts R4).
+ * The goal comes from a brief_set goal, else the title of the lane claimed last, else a parsed goal
+ * (fleet-gpaa.spec.ts). Prompt text is not a source: it is not in the data (fleet-data.spec.ts R4).
  *
  * Both Playwright projects run it: `chromium` (1280 px) and `phone` (390 px).
  *
@@ -155,7 +157,9 @@ test.describe('Fleet level 1 card', () => {
     writeState(holder.sessionId, {
       chip: 'waiting-on-dave',
       branch: 'e2e/level1',
-      brief: makeBrief({ title: 'E2E level 1 title', goal: LONG_GOAL }),
+      // An open ask makes the card wait: since GPAA F2 the chip alone does not (fleet-gpaa.spec.ts W1).
+      // sources.goal brief_set so the goal outranks the held lanes (fleet-gpaa.spec.ts G1).
+      brief: makeBrief({ title: 'E2E level 1 title', goal: LONG_GOAL, ask: [ask('E2E level 1 open ask')] }),
     });
     const card = await openCard(page, holder);
 
@@ -164,7 +168,7 @@ test.describe('Fleet level 1 card', () => {
     await expectHeartbeat(card);
     const waiting = card.getByTestId('session-card-waiting');
     await check(waiting, 'field 5: the card says it waits on Dave').toHaveAttribute('data-waiting', 'true');
-    await check(waiting).toContainText('Waiting on Dave');
+    await check(waiting).toContainText('Waiting for you');
     const goalBox = await expectGoalOneLine(card, LONG_GOAL);
     check(goalBox.clipped, 'field 6: a goal this long is cut off at the card edge').toBe(true);
 
@@ -183,7 +187,9 @@ test.describe('Fleet level 1 card', () => {
     await expectHeartbeat(card);
     await check(card.getByTestId('session-card-waiting'), 'field 5: the card says it does not wait on Dave')
       .toHaveAttribute('data-waiting', 'false');
-    await expectGoalOneLine(card, holder.lanes[0].title.replace(/\s+/g, ' ').trim());
+    await check(card.getByTestId('session-card-waiting')).toHaveText('Not waiting for you');
+    // The lane claimed last, not lanes[0] (GPAA F1).
+    await expectGoalOneLine(card, expectedLaneGoal(holder.lanes) ?? '');
 
     await shoot(card, page, 'L2-no-brief', info);
   });
@@ -235,6 +241,6 @@ test.describe('Fleet level 1 card, edge lanes', () => {
         `lane ${lane.id} matches exactly one row by its exact id`,
       ).toHaveCount(1);
     }
-    await expectLanes(card, { ...holder, lanes });
+    await expectLanes(card, { ...holder, lanes: lanes.map((lane) => ({ ...lane, claimedAtEpoch: null })) });
   });
 });

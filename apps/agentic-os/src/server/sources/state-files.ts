@@ -60,6 +60,8 @@ export type StateAsk = {
 export type StateBrief = {
   title: string | null;
   goal: string | null;
+  /** Who set the goal: `brief.sources.goal` (brief_set tool or the turn-end parser). Null when the file records none. */
+  goalSource: 'brief_set' | 'parsed' | null;
   stopAt: string | null;
   plan: { id: string; text: string; status: StatePlanStatus }[];
   ask: StateAsk[];
@@ -180,6 +182,7 @@ const TASK_STATUS = ['pending', 'in_progress', 'completed'] as const;
 const PLAN_STATUS = ['todo', 'doing', 'done', 'blocked'] as const;
 const ASK_KIND = ['question', 'approval', 'decision', 'block'] as const;
 const PROOF_KIND = ['task', 'plan'] as const;
+const GOAL_SOURCE = ['brief_set', 'parsed'] as const;
 
 // --- Parsing ------------------------------------------------------------------------------------
 
@@ -245,6 +248,7 @@ function parseBrief(value: unknown): StateBrief | null {
   return {
     title: strScrubbed(value.title, CLIP.title),
     goal: strScrubbed(value.goal, CLIP.goal),
+    goalSource: isRecord(value.sources) ? oneOf(value.sources.goal, GOAL_SOURCE) : null,
     stopAt: strScrubbed(value.stopAt, CLIP.stopAt),
     plan: parsePlan(value.plan),
     ask: parseAsk(value.ask),
