@@ -161,6 +161,27 @@ function deriveSrcPath(distPath: string): string {
 }
 
 /**
+ * The active Claude home, the folder Claude Code reads. Same home expression
+ * as main() uses for settings.json. Read at call time so tests can set the env.
+ */
+function activeClaudeRoot(): string {
+  const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+  return path.join(home, '.claude');
+}
+
+/** True when child is root or inside root. Ignores slash style, case on Windows and trailing slashes. */
+function isUnder(child: string, root: string): boolean {
+  const norm = (p: string): string => {
+    const s = path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '');
+    return process.platform === 'win32' ? s.toLowerCase() : s;
+  };
+  const c = norm(child);
+  const r = norm(root);
+  // The trailing slash keeps a sibling such as ".claude-other" out.
+  return c === r || c.startsWith(r + '/');
+}
+
+/**
  * Check the health of a single hook by examining its dist and src files.
  *
  * Returns:
@@ -186,6 +207,16 @@ export function checkHookHealth(hookInfo: HookFileInfo): HookHealthResult {
   // time. A newer src mtime with a matching hash is a checkout/copy false positive.
   const distDir = path.dirname(distPath);
   const srcRoot = path.resolve(distDir, '..', 'src');
+
+  // ~/.claude/hooks/src is never synced (sync-known-gaps.md), so it is a stale
+  // copy. Hashing it against a manifest gives a STALE warning nobody can clear:
+  // building in ~/.claude/hooks is forbidden. The registered dist is always in
+  // the active tree, so no src there is trustworthy. Repo staleness is checked
+  // by session-start-init-check, which reads the repo copy.
+  if (isUnder(srcRoot, activeClaudeRoot())) {
+    return { hookName, status: 'healthy', hookEvent };
+  }
+
   const freshness = assessFileFreshness(srcPath, srcRoot, loadBuildInputs(distDir));
   if (freshness.state === 'stale') {
     return { hookName, status: 'stale', hookEvent };
