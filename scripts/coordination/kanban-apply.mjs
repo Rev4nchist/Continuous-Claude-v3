@@ -1,14 +1,14 @@
 /**
  * kanban-apply -- the pure planner that carries Dave's kanban changes into the lane DB.
  *
- * Dave sets order, status, notes and questions on the lane board's kanban page. The
+ * Dave sets order, status, band, notes and questions on the lane board's kanban page. The
  * page keeps them in its own db. A session reads that db, writes a JSON file, and
  * runs `lane.mjs apply-kanban <file>`. That command calls `planKanban` here and
  * applies the actions. This module has no I/O, so every rule has a unit test.
  *
  * Contract: scratchpad kanban-contract.md. Page db paths:
  *   kanban/board   { columns: {next,later,waiting: [laneId]}, updatedAt, syncedAt? }
- *   cards/<laneId> { status?, note?, question?, updatedAt, syncedAt?, syncResult? }
+ *   cards/<laneId> { status?, band?, note?, question?, updatedAt, syncedAt?, syncResult? }
  *
  * DECISIONS THE CONTRACT LEAVES OPEN (each has a test)
  * - The board columns apply only while the board is pending (updatedAt later than
@@ -32,9 +32,16 @@
  *   and keep their priority. A scheduled lane is not a column either. The page saves its id at the end of its saved column, so its rank follows that. There is no apply action for it.
  * - Priority = one rank per open lane, 1..n in board order (next, later, waiting).
  *   "Open" means open after this run: a pending card status can reopen a done lane (it gets a
- *   rank) or close an open one (it gets none). Unknown ids use no rank. Band is never read or written: a card drag changes
- *   rank only (Dave sets a band with `lane.mjs band`). New lanes default to 50, so they
- *   sort after a board of up to 49 cards.
+ *   rank) or close an open one (it gets none). Unknown ids use no rank. A column never writes a band: a card drag changes
+ *   rank only. New lanes default to 50, so they sort after a board of up to 49 cards.
+ * - Band (importance, P0/P1/P2) is a different thing from rank. A drag or a column NEVER writes it. The only band source
+ *   is a card's `band`: 'P0'|'P1'|'P2', or 'none' (clear: lane.band becomes NULL), and only while `bandAt` (the page sets it
+ *   with every band write; a doc with none uses `updatedAt`) is later than `syncedAt`. A later status or note save moves
+ *   updatedAt, not bandAt, so a stale band is never re-asserted over a CLI change. A missing key or null means no opinion.
+ *   A lane that ends done gets no band (done lanes stay NULL); the request is consumed. A band equal to the lane's gives no action. An invalid value skips the card ("skipped: invalid band").
+ *   An active lane skips the whole card; a held lane skips a card whose band would change ("skipped: held"), and the
+ *   card stays pending. The result carries `appliedBand` (the value consumed): the sync then writes band null on the
+ *   card, only while the doc still holds that value, so a stale band is never re-asserted over a CLI change.
  * - "Leaving waiting" has no history in the planner. A lane counts as "was waiting"
  *   only when it is blocked AND its note still contains the waiting marker (kept
  *   notes carry it after "|| before:"). The priority number never decides it. A lane
@@ -50,10 +57,12 @@
  *   2026-11-02). lane_event keeps every step.
  */
 
-/** Board order: every open lane gets ONE rank, 1..n across the columns in this order. Done and unknown ids use no rank. Band is never read or written. */
+/** Board order: every open lane gets ONE rank, 1..n across the columns in this order. Done and unknown ids use no rank. A column never writes a band. */
 export const COLUMNS = ['next', 'later', 'waiting'];
 export const WAITING_NOTE = 'Waiting on Dave (kanban)';
 export const CARD_STATUSES = ['backlog', 'ready', 'blocked', 'done'];
+/** A card band: P0, P1, P2, or 'none' (clear: lane.band becomes NULL). A missing key or null means no opinion. */
+export const CARD_BANDS = ['P0', 'P1', 'P2', 'none'];
 const NOTE_MAX = 1000;
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -161,7 +170,13 @@ function columnState(lane, place) {
   return wasWaiting(lane) ? 'backlog' : null;
 }
 
-/** Actions for the card of one lane. Returns { status, notes, result } (result may be null). */
+/** The band a card asks for: undefined = no opinion (key missing, null or already synced), null = clear, else 'P0'|'P1'|'P2'. */
+const cardBand = (card) => (bandValue(card) === undefined ? undefined : card.band === 'none' ? null : card.band);
+
+/** The card band, or undefined when it is absent, null, or older than the last sync (bandAt, else updatedAt, against syncedAt). */
+const bandValue = (card) => (card.band === undefined || card.band === null || !isPending(card.bandAt ?? card.updatedAt, card.syncedAt) ? undefined : card.band);
+
+/** Actions for the card of one lane. Returns { status, notes, result, band? } (result may be null). band: { to, value } when the card asks for one. */
 function readCard(card, lane) {
   const pending = isPending(card.updatedAt, card.syncedAt);
   if (!pending) return { status: null, notes: [], result: null };
@@ -170,6 +185,14 @@ function readCard(card, lane) {
   if (card.status !== undefined && card.status !== null && !CARD_STATUSES.includes(card.status)) {
     return { status: null, notes: [], result: { syncResult: 'skipped: invalid status', applied: false } };
   }
+  const asked = bandValue(card);
+  if (asked !== undefined && !CARD_BANDS.includes(asked)) {
+    return { status: null, notes: [], result: { syncResult: 'skipped: invalid band', applied: false } };
+  }
+  const to = cardBand(card);
+  const wantBand = to !== undefined;
+  // A lane that ends done keeps no band: the request is consumed without an action (see planKanban).
+  const bandChange = wantBand && to !== (lane.band ?? null) && finalState(lane, card) !== 'done';
   const notes = [];
   const note = cleanText(card.note);
   const question = cleanText(card.question);
@@ -177,16 +200,16 @@ function readCard(card, lane) {
   if (note && note !== cleanText(card.appliedNote)) notes.push(`Dave (kanban): ${note}`);
   if (question && question !== cleanText(card.appliedQuestion)) notes.push(`Dave asks (kanban): ${question}`);
   const applied = { applied: true, appliedNote: note ?? null, appliedQuestion: question ?? null };
-  // A held lane keeps its state. Its notes still apply; the card stays pending so the status can apply later.
-  if (lane.held && card.status && card.status !== lane.state) {
+  // A held lane keeps its state and its band. Its notes still apply; the card stays pending so the status and band can apply later.
+  if (lane.held && ((card.status && card.status !== lane.state) || bandChange)) {
     return { status: null, notes, held: true, result: { ...applied, applied: false, syncResult: 'skipped: held' } };
   }
-  return { status: card.status || null, notes, result: applied };
+  return { status: card.status || null, notes, band: wantBand ? { to, value: card.band } : null, result: applied };
 }
 
 /**
  * @param {{board?: object, cards?: object[]}} input
- * @param {{id: string, state: string, priority: number, note: string|null, held?: boolean}[]} lanes
+ * @param {{id: string, state: string, priority: number, note: string|null, band?: string|null, held?: boolean}[]} lanes
  *   held: a live session owns the lane (lane.mjs computes it with the RECLAIMABLE predicate).
  * @returns {{actions: object[], results: object[], skipped: {laneId: string, reason: string}[], appliedColumns: object|null, boardDone: boolean}}
  */
@@ -234,6 +257,11 @@ export function planKanban(input, lanes) {
         if (read.status) cardDone.push('state');
         if (want === 'blocked' && p?.column === 'waiting') act(id, 'note', lane.note ?? null, withPrevious(WAITING_NOTE, lane.note), 'moved into waiting');
       }
+      // The only band source is a pending card. A band equal to the lane's is consumed without an action.
+      if (read.band && read.band.to !== (lane.band ?? null) && finalState(lane, card) !== 'done') {
+        act(id, 'band', lane.band ?? null, read.band.to, 'kanban card band');
+        cardDone.push('band');
+      }
       // The lane already shows this card's last text: a run whose write-back failed. Do not repeat the chain.
       for (const text of shows(lane.note, read.notes.at(-1)) ? [] : read.notes) {
         const current = actions.filter((a) => a.laneId === id && a.kind === 'note').at(-1)?.to ?? lane.note ?? null;
@@ -245,7 +273,9 @@ export function planKanban(input, lanes) {
     if (read.result) {
       const syncResult = read.result.syncResult ?? (cardDone.length ? `applied: ${cardDone.join(', ')}` : 'no change');
       const kept = 'appliedNote' in read.result ? { appliedNote: read.result.appliedNote, appliedQuestion: read.result.appliedQuestion } : {};
-      results.push({ laneId: id, syncResult, applied: read.result.applied, ...kept });
+      // appliedBand: the band value this run consumed. The sync clears card.band only while the doc still holds it.
+      const bandKept = read.band ? { appliedBand: read.band.value } : {};
+      results.push({ laneId: id, syncResult, applied: read.result.applied, ...kept, ...bandKept });
       if (!read.result.applied && !skipped.some((k) => k.laneId === id)) {
         skipped.push({ laneId: id, reason: syncResult.replace(/^skipped: /, '') });
       }

@@ -18,6 +18,7 @@ function applyTo(lanes, p) {
     if (a.kind === 'priority') l.priority = a.to;
     if (a.kind === 'state') l.state = a.to;
     if (a.kind === 'note') l.note = a.to;
+    if (a.kind === 'band') l.band = a.to;
   }
   return [...byId.values()];
 }
@@ -426,7 +427,7 @@ test('first sync: a blocked lane that carries the waiting note and sits in later
   assert.ok(kinds(p).includes('b:state:blocked->backlog'), kinds(p).join());
 });
 
-// ---- band work: done lanes use no rank, band is never read or written
+// ---- band work: done lanes use no rank; a band comes only from a pending card, never from a drag
 
 const ranks = (p) => Object.fromEntries(p.actions.filter((a) => a.kind === 'priority').map((a) => [a.laneId, a.to]));
 
@@ -462,16 +463,161 @@ test('appliedColumns keeps done ids: pruning them is the sync job', () => {
   assert.deepEqual(p.appliedColumns, cols({ next: ['a'], later: ['d'] }));
 });
 
-test('band fields on lanes and cards add no band action and change no other action', () => {
+test('band fields on lanes alone add no band action and change no other action', () => {
   const plain = [lane('a', 'backlog', 50), lane('b', 'backlog', 50)];
   const banded = plain.map((l, i) => ({ ...l, band: i ? 'P2' : 'P0' }));
-  const cardsPlain = [card('a', { status: 'ready', note: 'go' })];
-  const cardsBanded = [card('a', { status: 'ready', note: 'go', band: 'P1' })];
+  const cards = [card('a', { status: 'ready', note: 'go' })];
   const b = board({ next: ['a', 'b'] });
-  const p1 = plan({ board: b, cards: cardsPlain }, plain);
-  const p2 = plan({ board: b, cards: cardsBanded }, banded);
+  const p1 = plan({ board: b, cards }, plain);
+  const p2 = plan({ board: b, cards }, banded);
   assert.ok(p2.actions.every((a) => ['priority', 'state', 'note'].includes(a.kind)));
   assert.deepEqual(p2.actions, p1.actions);
+});
+
+// ---- PR-G: a card band is the ONLY band source. A drag never writes a band.
+
+const banded = (id, band, state = 'backlog', priority = 50) => ({ ...lane(id, state, priority), band });
+const bandActs = (p) => p.actions.filter((a) => a.kind === 'band');
+
+test('card band differs from the lane band: exactly one band action', () => {
+  const p = plan({ cards: [card('a', { band: 'P0' })] }, [banded('a', 'P1')]);
+  assert.deepEqual(bandActs(p).map((a) => [a.laneId, a.from, a.to]), [['a', 'P1', 'P0']]);
+  assert.equal(result(p, 'a').syncResult, 'applied: band');
+  assert.equal(result(p, 'a').appliedBand, 'P0');
+});
+
+test('card band on an unbanded lane sets it (from null)', () => {
+  const p = plan({ cards: [card('a', { band: 'P2' })] }, [lane('a')]);
+  assert.deepEqual(bandActs(p).map((a) => [a.from, a.to]), [[null, 'P2']]);
+});
+
+test('card band equal to the lane band: no action, but the request is consumed', () => {
+  const p = plan({ cards: [card('a', { band: 'P1' })] }, [banded('a', 'P1')]);
+  assert.deepEqual(p.actions, []);
+  assert.equal(result(p, 'a').syncResult, 'no change');
+  assert.equal(result(p, 'a').appliedBand, 'P1');
+});
+
+test('a card with NO band key gives no band action, whatever the lane band is', () => {
+  const p = plan({ cards: [card('a', { status: 'ready', note: 'go' })] }, [banded('a', 'P1')]);
+  assert.deepEqual(bandActs(p), []);
+  assert.ok(!('appliedBand' in result(p, 'a')));
+});
+
+test('card band null means no opinion: no action, nothing consumed', () => {
+  const p = plan({ cards: [card('a', { band: null })] }, [banded('a', 'P1')]);
+  assert.deepEqual(p.actions, []);
+  assert.ok(!('appliedBand' in result(p, 'a')));
+});
+
+test('card band none clears a banded lane (to null) and is a no-op on an unbanded lane', () => {
+  const p = plan({ cards: [card('a', { band: 'none' }), card('b', { band: 'none' })] }, [banded('a', 'P1'), lane('b')]);
+  assert.deepEqual(bandActs(p).map((a) => [a.laneId, a.from, a.to]), [['a', 'P1', null]]);
+  assert.equal(result(p, 'a').appliedBand, 'none');
+  assert.equal(result(p, 'b').appliedBand, 'none');
+});
+
+test('an invalid card band is skipped whole: no action, reason invalid band', () => {
+  for (const bad of ['p0', 'P3', 7, '', {}]) {
+    const p = plan({ cards: [card('a', { band: bad, note: 'x' })] }, [banded('a', 'P1')]);
+    assert.deepEqual(p.actions, [], String(bad));
+    assert.equal(result(p, 'a').syncResult, 'skipped: invalid band');
+    assert.equal(result(p, 'a').applied, false);
+  }
+});
+
+test('a drag-only doc (columns change, no cards) gives no band action for any lane band', () => {
+  const lanes = [banded('a', 'P0', 'ready', 5), banded('b', 'P2', 'ready', 6), lane('c', 'ready', 7)];
+  const p = plan({ board: board({ next: ['c', 'b'], later: ['a'] }), cards: [] }, lanes);
+  assert.ok(p.actions.length > 0);
+  assert.deepEqual(bandActs(p), []);
+});
+
+test('a band action changes no priority: the other actions equal the plan without the card band', () => {
+  const lanes = [banded('a', 'P1', 'backlog', 50), lane('b', 'backlog', 50)];
+  const b = board({ next: ['a', 'b'] });
+  const without = plan({ board: b, cards: [card('a', { status: 'ready' })] }, lanes);
+  const withBand = plan({ board: b, cards: [card('a', { status: 'ready', band: 'P0' })] }, lanes);
+  assert.deepEqual(withBand.actions.filter((a) => a.kind !== 'band'), without.actions);
+  assert.equal(bandActs(withBand).length, 1);
+});
+
+test('a card that is not pending gives no band action', () => {
+  const synced = card('a', { band: 'P0', syncedAt: '2026-11-02T12:00:00Z' });
+  const p = plan({ cards: [synced] }, [banded('a', 'P1')]);
+  assert.deepEqual(p.actions, []);
+  assert.equal(p.results.length, 0);
+});
+
+test('an active lane: the card is skipped whole, no band action, the card stays pending', () => {
+  const p = plan({ cards: [card('a', { band: 'P0' })] }, [banded('a', 'P1', 'active')]);
+  assert.deepEqual(p.actions, []);
+  assert.equal(result(p, 'a').syncResult, 'skipped: active');
+  assert.equal(result(p, 'a').applied, false);
+  assert.ok(!('appliedBand' in result(p, 'a')));
+});
+
+test('a held lane: a band change is skipped as held and stays pending; notes still apply', () => {
+  const held = { ...banded('a', 'P1', 'ready'), held: true };
+  const p = plan({ cards: [card('a', { band: 'P0', note: 'hello' })] }, [held]);
+  assert.deepEqual(bandActs(p), []);
+  assert.deepEqual(kinds(p), ['a:note:null->Dave (kanban): hello']);
+  assert.equal(result(p, 'a').syncResult, 'skipped: held');
+  assert.equal(result(p, 'a').applied, false);
+  assert.ok(!('appliedBand' in result(p, 'a')));
+  assert.deepEqual(p.skipped, [{ laneId: 'a', reason: 'held' }]);
+});
+
+test('a held lane whose card band equals the lane band is not held-skipped', () => {
+  const held = { ...banded('a', 'P1', 'ready'), held: true };
+  const p = plan({ cards: [card('a', { band: 'P1' })] }, [held]);
+  assert.equal(result(p, 'a').applied, true);
+  assert.equal(result(p, 'a').appliedBand, 'P1');
+});
+
+test('applying a band plan then planning again gives no action', () => {
+  const lanes = [banded('a', 'P1'), banded('b', 'P2')];
+  const input = { cards: [card('a', { band: 'P0' }), card('b', { band: 'none' })] };
+  const first = plan(input, lanes);
+  assert.equal(bandActs(first).length, 2);
+  assert.deepEqual(plan(input, applyTo(lanes, first)).actions, []);
+});
+
+// A band is a request only while bandAt is newer than syncedAt. A later status or note save moves updatedAt, not bandAt.
+test('a stale card band (bandAt before syncedAt) is not re-applied after a later status-only edit', () => {
+  const stale = card('a', { status: 'done', band: 'P0', bandAt: '2026-11-02T09:00:00Z', syncedAt: '2026-11-02T10:30:00Z', updatedAt: '2026-11-02T11:00:00Z' });
+  const p = plan({ cards: [stale] }, [banded('a', 'P1', 'ready')]);
+  assert.deepEqual(kinds(p), ['a:state:ready->done']);
+  assert.deepEqual(bandActs(p), []);
+  assert.ok(!('appliedBand' in result(p, 'a')), 'a stale band was consumed again');
+});
+
+test('a card band with bandAt after syncedAt is a request; with no bandAt the card updatedAt counts', () => {
+  const fresh = card('a', { band: 'P0', bandAt: '2026-11-02T10:45:00Z', syncedAt: '2026-11-02T10:30:00Z', updatedAt: '2026-11-02T11:00:00Z' });
+  assert.deepEqual(bandActs(plan({ cards: [fresh] }, [banded('a', 'P1')])).map((a) => a.to), ['P0']);
+  const noAt = card('a', { band: 'P0', syncedAt: '2026-11-02T10:30:00Z' });
+  assert.deepEqual(bandActs(plan({ cards: [noAt] }, [banded('a', 'P1')])).map((a) => a.to), ['P0']);
+});
+
+test('a stale invalid card band is ignored, not skipped as invalid', () => {
+  const stale = card('a', { band: 'P9', note: 'x', bandAt: '2026-11-02T09:00:00Z', syncedAt: '2026-11-02T10:30:00Z' });
+  const p = plan({ cards: [stale] }, [banded('a', 'P1')]);
+  assert.notEqual(result(p, 'a').syncResult, 'skipped: invalid band');
+});
+
+// Done lanes stay at NULL band: a done lane gets no band action, and the request is consumed.
+test('a card that ends done gives no band action; the request is consumed', () => {
+  const p = plan({ cards: [card('a', { status: 'done', band: 'P0' })] }, [lane('a', 'ready')]);
+  assert.deepEqual(kinds(p), ['a:state:ready->done']);
+  assert.deepEqual(bandActs(p), []);
+  assert.equal(result(p, 'a').appliedBand, 'P0');
+});
+
+test('a card band on a lane that is already done gives no band action; the request is consumed', () => {
+  const p = plan({ cards: [card('a', { band: 'P0' })] }, [lane('a', 'done')]);
+  assert.deepEqual(bandActs(p), []);
+  assert.equal(result(p, 'a').appliedBand, 'P0');
+  assert.equal(result(p, 'a').applied, true);
 });
 
 test('applying a plan then planning again gives no action, with done lanes in the columns', () => {

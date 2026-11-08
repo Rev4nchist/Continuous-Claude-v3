@@ -28,8 +28,9 @@
  *   Its id, state and band are in kb-sched (SCHED), which only "lanes ahead" reads.
  *
  * Also, per card (the data contract is in the lane-board PR):
- *   `cards/<laneId>`  { status?, note?, question?, updatedAt, syncedAt?, syncResult? }
- *       The page writes status/note/question/updatedAt, changed fields only,
+ *   `cards/<laneId>`  { status?, band?, note?, question?, updatedAt, syncedAt?, syncResult? }
+ *       The page writes status/band/note/question/updatedAt, changed fields only (band: 'P0'|'P1'|'P2'|'none', a band the lane does not have yet;
+ *       the sync applies it, then writes band null on the card),
  *       with update (set only to create the doc). The sync writes syncedAt.
  *   `plain/<laneId>`  { text, sourceHash, createdAt }
  *       A cached Plain English answer, reused only while sourceHash matches
@@ -124,6 +125,20 @@
   var laterMore = null;
 
   Array.prototype.forEach.call(board.querySelectorAll('.kb-card'), function (el) { cards[el.getAttribute('data-id')] = el; });
+  // The Band select: the server draws it empty; its 4 options are made here, once, so the page stays small. Without an option the browser
+  // would show nothing, and the first one (P0) would show after any value that is no option.
+  var BANDS = ['P0', 'P1', 'P2', 'none'];
+  Object.keys(cards).forEach(function (id) {
+    var bd = cards[id].querySelector('.kb-bd');
+    if (!bd) return;
+    BANDS.forEach(function (b) {
+      var o = document.createElement('option');
+      o.value = b;
+      o.textContent = b;
+      bd.appendChild(o);
+    });
+    bd.value = bandBase(null, id);
+  });
   Array.prototype.forEach.call(board.querySelectorAll('.kcol'), function (el) {
     var k = el.getAttribute('data-col') || 'progress';
     colEls[k] = el;
@@ -670,12 +685,13 @@
 
   function readForm(id) {
     var st = part(id, '.kb-st');
-    return { status: st ? st.value : '', note: part(id, '.kb-note').value, question: part(id, '.kb-q').value };
+    var bd = part(id, '.kb-bd');
+    return { status: st ? st.value : '', band: bd ? bd.value : '', note: part(id, '.kb-note').value, question: part(id, '.kb-q').value };
   }
 
   function stateOf(id) { return LANE_BY_ID[id] ? LANE_BY_ID[id].state : ''; }
 
-  function changesOf(id) { return cardDiff(cardDocs[id] || null, readForm(id), stateOf(id)); }
+  function changesOf(id) { return cardDiff(cardDocs[id] || null, readForm(id), stateOf(id), LANE_BY_ID[id] ? LANE_BY_ID[id].band : null); }
 
   function two(n) { return n < 10 ? '0' + n : String(n); }
 
@@ -688,6 +704,13 @@
     return same ? hm : two(d.getMonth() + 1) + '-' + two(d.getDate()) + ' ' + hm;
   }
 
+  // The band the select starts from: a saved band while it is pending, else the lane band, else none. Same rule as cardDiff.
+  function bandBase(d, id) {
+    if (d && BANDS.indexOf(d.band) >= 0 && isPending({ updatedAt: d.bandAt || d.updatedAt, syncedAt: d.syncedAt })) return d.band;
+    var lb = LANE_BY_ID[id] ? LANE_BY_ID[id].band : null;
+    return BANDS.indexOf(lb) >= 0 ? lb : 'none';
+  }
+
   // Fill the form from the saved doc. `keep` names fields with unsaved edits; they stay.
   function fillForm(id, keep) {
     var d = cardDocs[id] || {};
@@ -696,6 +719,8 @@
     if (st && state !== 'active' && !keep.status) {
       st.value = cardBase(d, state);
     }
+    var bd = part(id, '.kb-bd');
+    if (bd && !keep.band) bd.value = bandBase(d, id);
     if (!keep.note) part(id, '.kb-note').value = typeof d.note === 'string' ? d.note : '';
     if (!keep.question) part(id, '.kb-q').value = typeof d.question === 'string' ? d.question : '';
   }
@@ -729,10 +754,13 @@
     var active = stateOf(id) === 'active';
     var st = part(id, '.kb-st');
     if (st) st.disabled = !on || active;
+    // Not off for an active lane: the sync decides (it skips the card while a session holds the lane).
+    var bd = part(id, '.kb-bd');
+    if (bd) bd.disabled = !on;
     part(id, '.kb-note').disabled = !on;
     part(id, '.kb-q').disabled = !on;
     part(id, '.kb-save').disabled = !on || !!saving[id] || !hasKeys(changesOf(id));
-    part(id, '.kb-why').textContent = whyOff();
+    part(id, '.kb-why').textContent = whyOff() || (active ? 'Band applies after the session releases the lane.' : '');
     paintCtl(id);
   }
 
@@ -810,6 +838,8 @@
     var payload = {};
     Object.keys(changes).forEach(function (k) { payload[k] = changes[k]; });
     payload.updatedAt = new Date().toISOString();
+    // bandAt: when the band was asked for. The sync reads the band only while bandAt is later than syncedAt, so a later status or note save cannot bring it back.
+    if (payload.band) payload.bandAt = payload.updatedAt;
     var known = !!cardDocs[id];
     saving[id] = true;
     setSaved(id, 'Saving…', 'warn');

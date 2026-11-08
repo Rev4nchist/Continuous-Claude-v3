@@ -862,6 +862,110 @@ test('after Done and after Undo the Status select and Save button match the save
   assert.equal(page.part('n2', '.kb-save').disabled, true);
 });
 
+// ------------------------------------------------------------------ PR-G: the Band select on the card form
+//
+// How the Band select can fail:
+//   - its options are missing, filled twice, or the select shows P0 (the first option) instead of the lane band
+//   - Save writes a band that did not change, writes it for a note-only edit, or writes null instead of the string 'none'
+//   - a pending saved band is ignored after a reload, or a synced (old) band is shown instead of the lane band
+//   - an unsaved band choice is lost when a card snapshot arrives
+//   - Done, Undo or a drag write a band
+//   - the select is on before the card docs loaded
+const BAND_VALUES = ['P0', 'P1', 'P2', 'none'];
+const bandOpts = (page, id) => page.part(id, '.kb-bd').children.map((o) => o.value);
+
+test('the Band select holds its 4 options once and shows the lane band (none for an unbanded lane)', async () => {
+  const page = await open();
+  for (const id of ['n1', 'n2', 'n3', 'l1', 'l2', 'w1']) assert.deepEqual(bandOpts(page, id), BAND_VALUES, `${id}: options`);
+  assert.equal(page.part('n1', '.kb-bd').value, 'P0');
+  assert.equal(page.part('n2', '.kb-bd').value, 'P1');
+  assert.equal(page.part('l2', '.kb-bd').value, 'none');
+  await page.clickNext('l2');
+  assert.deepEqual(bandOpts(page, 'l2'), BAND_VALUES, 'options were added again');
+});
+
+test('a band choice and Save write {band, updatedAt} and nothing else', async () => {
+  const page = await open();
+  assert.equal(page.part('n2', '.kb-save').disabled, true, 'Save is on with nothing to save');
+  page.part('n2', '.kb-bd').value = 'P0';
+  await page.clickSave('n2');
+  const w = cardWrites(page);
+  assert.equal(w.length, 1);
+  assert.deepEqual(Object.keys(w[0].data).sort(), ['band', 'bandAt', 'updatedAt']);
+  assert.equal(w[0].data.band, 'P0');
+  assert.equal(w[0].data.bandAt, w[0].data.updatedAt, 'bandAt is not the time of the band write');
+});
+
+test('the choice "none" writes the string none, never null or an empty value', async () => {
+  const page = await open();
+  page.part('n1', '.kb-bd').value = 'none';
+  await page.clickSave('n1');
+  assert.equal(cardWrites(page).at(-1).data.band, 'none');
+});
+
+test('the lane band again writes nothing; a note-only Save carries no band key', async () => {
+  const page = await open();
+  page.part('n2', '.kb-bd').value = 'P1';
+  await page.clickSave('n2');
+  assert.deepEqual(cardWrites(page), [], 'the unchanged band wrote');
+  page.part('n2', '.kb-note').value = 'just a note';
+  await page.clickSave('n2');
+  assert.deepEqual(Object.keys(cardWrites(page).at(-1).data).sort(), ['note', 'updatedAt'], 'a note Save carried a band');
+});
+
+test('Save follows the band choice: on when it differs, off when it is back at the lane band', async () => {
+  const page = await open();
+  page.part('n2', '.kb-bd').value = 'P2';
+  page.db.pushCards({});
+  await settle();
+  assert.equal(page.part('n2', '.kb-bd').value, 'P2', 'an unsaved band choice was lost at a card snapshot');
+  assert.equal(page.part('n2', '.kb-save').disabled, false);
+  page.part('n2', '.kb-bd').value = 'P1';
+  page.db.pushCards({});
+  await settle();
+  assert.equal(page.part('n2', '.kb-save').disabled, true);
+});
+
+test('a pending saved band shows after a reload; a synced band is history and the lane band shows', async () => {
+  const page = await open();
+  page.db.pushCards({ n2: { band: 'P0', updatedAt: T2 }, n3: { band: 'P0', updatedAt: T0, syncedAt: T1 } });
+  assert.equal(page.part('n2', '.kb-bd').value, 'P0', 'a pending band was dropped');
+  assert.equal(page.part('n3', '.kb-bd').value, 'P2', 'a synced band overrode the lane band');
+  assert.equal(page.part('n2', '.kb-save').disabled, true, 'Save is on for the band that is already saved');
+});
+
+// A stale band (bandAt before syncedAt) is history even when a later status save moved updatedAt past syncedAt.
+test('a stale saved band is not the select baseline after a status-only edit moved updatedAt', async () => {
+  const page = await open();
+  page.db.pushCards({ n2: { band: 'P0', bandAt: T0, syncedAt: T1, updatedAt: T2, status: 'ready' } });
+  assert.equal(page.part('n2', '.kb-bd').value, 'P1', 'a stale band overrode the lane band');
+  page.part('n2', '.kb-bd').value = 'P0';
+  await page.clickSave('n2');
+  assert.equal(cardWrites(page).at(-1).data.band, 'P0', 'choosing the stale band again was treated as no change');
+});
+
+test('the Band select is off until the card docs load, on after, and an active lane is not turned off by its state', async () => {
+  const cold = await open({ cardsSilent: true });
+  assert.equal(cold.part('n1', '.kb-bd').disabled, true, 'the band select is on before the cards loaded');
+  const page = await open({ lanes: [...BLANES, { id: 'x1', state: 'active', priority: 8, band: 'P1', title: 'X1' }] });
+  assert.equal(page.part('n1', '.kb-bd').disabled, false);
+  assert.equal(page.part('x1', '.kb-bd').disabled, false, 'the planner decides for an active lane, not the page');
+  assert.equal(page.part('x1', '.kb-st').disabled, true);
+});
+
+test('Done and Undo write only {status, updatedAt}, even with an unsaved band choice; a drag writes no card', async () => {
+  const page = await open();
+  page.part('l1', '.kb-bd').value = 'P0';
+  await page.clickDone('l1');
+  assert.deepEqual(Object.keys(cardWrites(page).at(-1).data).sort(), ['status', 'updatedAt'], 'Done wrote the band');
+  await page.clickUndo('l1');
+  assert.deepEqual(Object.keys(cardWrites(page).at(-1).data).sort(), ['status', 'updatedAt'], 'Undo wrote the band');
+  assert.ok(cardWrites(page).every((w) => !('band' in w.data)));
+  await page.clickNext('l2');
+  await page.debounce();
+  assert.ok(page.db.writes().filter((w) => w.path === DOC).every((w) => !JSON.stringify(w.data).includes('band')), 'a drag wrote a band');
+});
+
 test('a Done write that fails says so in a red flag, keeps the saved card as it was, and Done works again', async () => {
   const page = await open();
   page.db.failWrites(new Error('boom'));
@@ -1509,4 +1613,10 @@ test('a drag closer to the edge scrolls faster than a drag farther from it', asy
   far.dragStart('n1');
   far.dragOver('later', 0, 1050);
   assert.ok(near.boardScroll() > far.boardScroll() && far.boardScroll() > 0, 'near ' + near.boardScroll() + ', far ' + far.boardScroll());
+});
+
+test('an active card says its band waits for the session; a card that is not active says nothing', async () => {
+  const page = await open({ lanes: [...BLANES, { id: 'x1', state: 'active', priority: 8, band: 'P1', title: 'X1' }] });
+  assert.equal(page.part('x1', '.kb-why').textContent, 'Band applies after the session releases the lane.');
+  assert.equal(page.part('n1', '.kb-why').textContent, '');
 });
