@@ -9,6 +9,8 @@
  *   G2  a land or merge (land-pr.ps1, gh pr merge, gh api .../merge) runs with no land decision for the PR, or with Keep open
  *   G3  git push to the fork runs with no ship tap for the tree being pushed (every wrapper form), or with the wrong label, tree or branch;
  *       a force or delete form, or a push to origin, runs even with a tap; a command that only mentions a push is denied
+ *   G17 the cwd of the call does not exist: the real makeGit() reports "spawnSync git ENOENT" (a missing git), the reason hides the folder,
+ *       and the crash row fails the harness doctor; the call must still deny where the gate enforces and warn where it warns
  *   G16 the push flag and the other flag cross over: each acts alone, in decide(), the subagent deny and the handle() catch
  *   G4  the model writes the store: Write, Edit, NotebookEdit, the Desktop Commander writes, or shell text
  *   G5  the Desktop Commander process tools are not read (their text is in `command` and in `input`)
@@ -26,7 +28,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionRecord, decisionRows, offerWrite, type Step } from '../shared/decisions-store.js';
-import { COMMAND_TOOLS, WRITE_TOOLS, decide, handle, type Deps } from '../decision-gate.js';
+import { COMMAND_TOOLS, WRITE_TOOLS, decide, handle, makeGit, type Deps } from '../decision-gate.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);
@@ -966,6 +968,94 @@ describe('G10 fail closed on a gated shape', () => {
   it('denies a push when the tree cannot be read', () => {
     tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
     expect(denied(bash('git push fork feat/x'), { trees: {} })).toBe(true);
+  });
+});
+
+describe('G17 a working folder (cwd) that does not exist', () => {
+  // The real makeGit() runs here, not the fake: the bug is in how a failed spawn is reported. Node gives "spawnSync git ENOENT" for a
+  // missing cwd, the same text as a missing git binary. The config is found from any path, so the cwd being gone does not hide the flags.
+  const PUSH = 'git push fork feat/x';
+  const missing = (): string => join(dir, 'gone', 'worktree');
+  const realDeps = (w: World = {}): Deps => {
+    const base = deps(w);
+    const config = base.readFile('/repo/review-router.config.json');
+    return { ...base, git: makeGit(), readFile: (p) => (p.replace(/\\/g, '/').endsWith('/review-router.config.json') ? config : null) };
+  };
+  type Out = { hookSpecificOutput: { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string } };
+  const run = (input: object, w?: World): Out => JSON.parse(handle(JSON.stringify(input), realDeps(w))) as Out;
+  const textOf = (o: Out): string => o.hookSpecificOutput.permissionDecisionReason ?? o.hookSpecificOutput.additionalContext ?? '';
+
+  it('makeGit names the cwd and does not blame git', () => {
+    const cwd = missing();
+    let message = '';
+    try { makeGit()(cwd, ['--version']); } catch (e) { message = (e as Error).message; }
+    expect(message, 'the message names the cwd').toContain(cwd);
+    expect(message, 'the message must not say ENOENT').not.toMatch(/ENOENT/);
+  });
+  it('makeGit still runs git in a folder that exists', () => {
+    const r = makeGit()(dir, ['--version']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/^git version/);
+  });
+  it('enforce on: a push from a missing cwd is denied, and the reason names the cwd', () => {
+    const o = run(bash(PUSH, { cwd: missing() }), { enforcePush: true });
+    expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(textOf(o), 'names the cwd').toContain(missing());
+    expect(textOf(o), 'no ENOENT').not.toMatch(/ENOENT/);
+  });
+  it('enforce on: a create from a missing cwd is denied too (the other scope)', () => {
+    const o = run(bash(CREATE, { cwd: missing() }), { enforce: true });
+    expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(textOf(o)).toContain(missing());
+  });
+  it('warn mode: the command runs, with a warning that names the cwd', () => {
+    const o = run(bash(PUSH, { cwd: missing() }), { enforcePush: undefined });
+    expect(o.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(textOf(o), 'names the cwd').toContain(missing());
+    expect(textOf(o), 'no ENOENT').not.toMatch(/ENOENT/);
+    expect(textOf(o)).toContain('decisions.enforcePush');
+  });
+  it('a cd target that is missing is named, not the payload cwd', () => {
+    const target = missing();
+    const o = run(bash(`cd "${target.replace(/\\/g, '/')}" && ${PUSH}`, { cwd: dir }), { enforcePush: true });
+    expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(textOf(o).replace(/\\/g, '/')).toContain(target.replace(/\\/g, '/'));
+    expect(textOf(o)).not.toMatch(/ENOENT/);
+  });
+  it('a command that is not gated still passes from a missing cwd', () => {
+    expect(handle(JSON.stringify(bash('git status', { cwd: missing() })), realDeps())).toBe('{}');
+  });
+  it('an existing cwd that is not a repo behaves as before: git fails, the push is denied', () => {
+    const o = run(bash(PUSH, { cwd: dir }), { enforcePush: true });
+    expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(textOf(o)).toContain('git remote -v failed');
+  });
+  it('the log gets a decision row, not an error row, so the doctor stays green', () => {
+    const log = join(dir, 'guard.jsonl');
+    const saved = process.env.CCV3_GUARD_DECISIONS_LOG;
+    process.env.CCV3_GUARD_DECISIONS_LOG = log;
+    try {
+      run(bash(PUSH, { cwd: missing() }), { enforcePush: true });
+      const rows = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+      expect(rows.filter((r) => r.kind === 'error'), 'no crash row').toEqual([]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ hook: 'decision-gate', decision: 'deny', reason: 'cwd-missing' });
+    } finally {
+      if (saved === undefined) delete process.env.CCV3_GUARD_DECISIONS_LOG; else process.env.CCV3_GUARD_DECISIONS_LOG = saved;
+    }
+  });
+  it('a real git failure on an existing cwd is still a crash row (the log is not silenced)', () => {
+    const log = join(dir, 'guard2.jsonl');
+    const saved = process.env.CCV3_GUARD_DECISIONS_LOG;
+    process.env.CCV3_GUARD_DECISIONS_LOG = log;
+    try {
+      const boom: Deps = { ...realDeps({ enforcePush: true }), git: () => { throw new Error('git exploded'); } };
+      handle(JSON.stringify(bash(PUSH, { cwd: dir })), boom);
+      const rows = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+      expect(rows.map((r) => r.kind)).toEqual(['error']);
+    } finally {
+      if (saved === undefined) delete process.env.CCV3_GUARD_DECISIONS_LOG; else process.env.CCV3_GUARD_DECISIONS_LOG = saved;
+    }
   });
 });
 

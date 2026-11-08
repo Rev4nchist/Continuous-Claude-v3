@@ -1,11 +1,11 @@
 ---
 name: kanban-sync
-description: Carries Dave's lane-board kanban changes (order, status, notes, questions) into the lane database. Use when the user says "sync the kanban", "read my priorities" or "what did Dave change on the board", and at the start of lane work, before claiming a lane.
+description: Carries Dave's lane-board kanban changes (order, status, band, notes, questions) into the lane database. Use when the user says "sync the kanban", "read my priorities" or "what did Dave change on the board", and at the start of lane work, before claiming a lane.
 ---
 
 # Kanban sync
 
-Dave sets priority, status, notes and questions on a board's kanban page. The page keeps them in its own db. Sessions read lanes from Postgres. This skill copies the changes across.
+Dave sets priority, status, band, notes and questions on a board's kanban page. The page keeps them in its own db. Sessions read lanes from Postgres. This skill copies the changes across.
 
 The artifact db is reachable only through your `ArtifactData` tool. You read it, write a JSON file, and run `lane.mjs`. The script does the planning and the SQL.
 
@@ -40,11 +40,11 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
      "project": "<key>",
      "readAt": "<readAt>",
      "board": { "columns": {"next": [], "later": [], "waiting": []}, "updatedAt": "...", "syncedAt": "...", "appliedColumns": {"next": [], "later": [], "waiting": []} },
-     "cards": [ { "id": "<lane id>", "status": "...", "note": "...", "question": "...", "appliedNote": "...", "appliedQuestion": "...", "updatedAt": "...", "syncedAt": "..." } ]
+     "cards": [ { "id": "<lane id>", "status": "...", "band": "P0|P1|P2|none", "bandAt": "...", "note": "...", "question": "...", "appliedNote": "...", "appliedQuestion": "...", "updatedAt": "...", "syncedAt": "..." } ]
    }
    ```
 
-   `"project"` is required for every board except `continuous-claude`: `apply-kanban` refuses an undeclared file there and refuses a file for another board. Copy the other values as they are, `appliedColumns` too (leave it out on the first sync). The card `id` is the doc id, which is the lane id. Leave out fields the doc does not have.
+   `"project"` is required for every board except `continuous-claude`: `apply-kanban` refuses an undeclared file there and refuses a file for another board. Copy the other values as they are, `appliedColumns` too (leave it out on the first sync). The card `id` is the doc id, which is the lane id. Leave out fields the doc does not have. A card with no `band` (or `band: null`) gives no band action.
 
 4. Show the plan. Nothing is written yet.
 
@@ -52,7 +52,7 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    node C:/Users/dkhay/.claude/scripts/lane.mjs apply-kanban <file> --project <key> --dry-run
    ```
 
-   If the plan has state changes or notes, show Dave the plan and wait for his yes. If it has only priority changes, continue.
+   If the plan has state changes, band changes or notes, show Dave the plan and wait for his yes. A band change shows as `N band` in the first line and as a `band` row. If it has only priority changes, continue.
 
 5. Apply. Add `--json` to get the per-card results.
 
@@ -63,7 +63,7 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    The command needs `CLAUDE_CODE_SESSION_ID`. It runs in one transaction. A second run of the same file changes nothing.
 
 6. Write back to the page with `ArtifactData update`. Pin each write with `if_version`.
-   - For each entry in `results`: update `cards/<laneId>` with `syncResult`, and with `syncedAt` when the entry has one. Entries with `applied: true` also get `appliedNote` and `appliedQuestion` (copy them from the entry, null included), so a later status-only edit does not post the same note again. Entries with `applied: false` get `syncResult` only, and also `appliedNote` and `appliedQuestion` when the entry has them (a held lane). They stay pending.
+   - For each entry in `results`: update `cards/<laneId>` with `syncResult`, and with `syncedAt` when the entry has one. Entries with `applied: true` also get `appliedNote` and `appliedQuestion` (copy them from the entry, null included), so a later status-only edit does not post the same note again. An entry with `appliedBand` also gets `band: null` on the card, but only while the card doc's `band` still equals `appliedBand` (on a version conflict, read the doc again: a newer band from Dave stays pending). This is a second guard. The planner already reads a card band only while `bandAt` is later than `syncedAt` (copy `bandAt` into the file as it is), so a later status or note save cannot bring an old band back over a `lane.mjs band` change. Entries with `applied: false` get `syncResult` only, and also `appliedNote` and `appliedQuestion` when the entry has them (a held lane). They stay pending.
    - Update `kanban/board` with the top-level `appliedColumns` (skip it when it is null). Write the top-level `syncedAt` to `kanban/board` ONLY when `boardDone` is true. When it is false, a held lane's column move waits: the board stays pending and the next sync retries that move. The next run moves only lanes whose column differs from `appliedColumns`.
    - On a version conflict, Dave edited the doc while you worked. Read the doc again. Retry the write with the new version and the same `syncedAt`. The newer `updatedAt` keeps it pending.
 
@@ -72,15 +72,16 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    - Run `node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project <key>`. It writes `lane-board.html` in the primary checkout for `continuous-claude` and `lane-board-<key>.html` for any other board.
    - Publish that file with `url` set to `<url>` and NO `capabilities`. The page keeps its db and sample. Without `url` the tool makes a new artifact. `continuous-claude` also reuses the favicon from `.claude/artifacts.json`.
    - Read the result back before you report success: the returned url must equal `<url>` and the stamp must say `board=<key>`. On a mismatch, stop and report the stray url.
+   - Until this republish, an open page still shows the band it was drawn with. Dave may see the old band in the Band select for a short time. The new page shows the applied band. A band saved on an In progress card applies only after the session releases the lane.
 
-8. Report. Say how many priority, state and note changes you applied. Name each skipped card and its reason. Quote each new question from Dave with its lane id.
+8. Report. Say how many priority, state, band and note changes you applied. Name each skipped card and its reason. Quote each new question from Dave with its lane id.
 
 ## What the sync changes
 
 | Kanban input | Lane change |
 |---|---|
 | Column order | priority: one rank per open lane, 1..n across next, later, waiting. A lane that is done after the sync gets no rank; a done lane that a pending card reopens does (new lanes default to 50) |
-| Band | never written by the sync. A drag changes rank only. Dave sets a band with `node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0\|P1\|P2\|none` |
+| Card band | lane band: `P0`, `P1`, `P2`, or `none` (clears it to NULL). Needs Dave's yes (step 4). A drag, Do next and Move to never write a band. Priority is unchanged. A band can also be set with `node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0\|P1\|P2\|none` |
 | Lane moved into waiting | state `blocked` and the note "Waiting on Dave (kanban)" |
 | Lane moved out of waiting | `blocked` goes back to `backlog`. `ready` stays `ready` |
 | Card status | state `backlog`, `ready`, `blocked` or `done` |
@@ -89,8 +90,8 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
 
 - With no saved order, the page puts a `blocked` lane in Waiting on Dave, a `ready` lane in Next and every other open lane in Later. A saved order always wins. A lane missing from a saved order gets this default. The default changes no state: a `blocked` lane in waiting stays `blocked`.
 - A card applies only while pending: `updatedAt` is later than `syncedAt`, or `syncedAt` is missing. The board columns follow the same rule.
-- An active lane is never changed by a card. The result is `skipped: active` and the card stays pending.
-- A held lane (a live session owns it, same test as `lane.mjs claim`) keeps its state. A card status or a column move gives `skipped: held` and the card stays pending. Notes and questions still apply. Priority still applies.
+- An active lane is never changed by a card, its band included. The result is `skipped: active` and the card stays pending.
+- A held lane (a live session owns it, same test as `lane.mjs claim`) keeps its state and its band. A card status or card band that differs from the lane, or a column move, gives `skipped: held` and the card stays pending. Notes and questions still apply. Priority still applies.
 - A column moves a lane's state only when the lane's column differs from `appliedColumns`. A lane that stays in waiting after Dave set it to `ready` on its card stays `ready`.
 - An id with no lane gets `skipped: no such lane`. It takes no rank.
 - The Now column is retired. The page saves three columns. Copy an old doc's `columns.now` and `appliedColumns.now` as they are: the sync ignores them, and their lanes keep their priority.
@@ -98,6 +99,6 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
 - Rank follows the state AFTER the card status: a pending card that sets done takes the lane out of the ranks, one that reopens a done lane puts it in.
 - A done lane in a stale doc is ignored for ranks: it gets no priority change and the open lanes after it keep contiguous ranks. Its id stays in `appliedColumns`.
 - A card status wins over the column for the same lane.
-- Each change is logged as a lane event of kind `kanban`. Other sessions see the notes in `lane.mjs inbox`.
+- Each change is logged as a lane event of kind `kanban`. A band change is logged as kind `band`, like the `band` verb. Other sessions see the notes in `lane.mjs inbox`.
 
 After the sync, run `node C:/Users/dkhay/.claude/scripts/lane.mjs next --project <key>` to see the order Dave set.

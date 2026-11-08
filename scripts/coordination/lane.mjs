@@ -1528,7 +1528,8 @@ const commands = {
   },
 
   /**
-   * Carry Dave's kanban changes (order, status, notes, questions) into the lane table.
+   * Carry Dave's kanban changes (order, status, band, notes, questions) into the lane table.
+   * A band comes only from a pending card (never from a drag) and needs migration 0005.
    *
    * The artifact db is reachable only through the agent's ArtifactData tool, so the
    * agent writes its content to <file> and this command applies it. All rules live in
@@ -1569,11 +1570,11 @@ const commands = {
 
     let plan;
     if (dry) {
-      plan = planKanban(input, (await c.query(KANBAN_LANES, [board.key])).rows);
+      plan = planKanban(input, await kanbanLanes(c, board.key));
     } else {
       await c.query('BEGIN');
       try {
-        const lanes = (await c.query(`${KANBAN_LANES} FOR UPDATE OF l`, [board.key])).rows;
+        const lanes = await kanbanLanes(c, board.key, ' FOR UPDATE OF l');
         plan = planKanban(input, lanes);
         for (const a of plan.actions) await applyKanbanAction(c, a, board.key);
         await c.query('COMMIT');
@@ -1582,6 +1583,15 @@ const commands = {
         throw e;
       }
       for (const a of plan.actions) {
+        // A band change is logged as kind 'band', the same as the band verb, so band history readers see it.
+        if (a.kind === 'band') {
+          const word = (v) => v ?? 'none';
+          await logEvent(c, {
+            laneId: a.laneId, kind: 'band', sessionId: myId,
+            body: `band ${word(a.from)} -> ${word(a.to)}`, detail: { from: a.from, to: a.to, actor: 'kanban' },
+          });
+          continue;
+        }
         await logEvent(c, {
           laneId: a.laneId, kind: 'kanban', sessionId: myId,
           body: a.kind === 'note' ? a.to : `${a.laneId} ${a.kind} ${a.from ?? '(none)'} -> ${a.to}`,
@@ -1591,8 +1601,8 @@ const commands = {
     }
 
     const count = (k) => plan.actions.filter((a) => a.kind === k).length;
-    const summary = { priority: count('priority'), state: count('state'), note: count('note'), skipped: plan.skipped.length };
-    const line = `kanban${dry ? ' (dry run, nothing written)' : ''}: ${summary.priority} priority, ${summary.state} state, ${summary.note} notes, ${summary.skipped} skipped`;
+    const summary = { priority: count('priority'), state: count('state'), band: count('band'), note: count('note'), skipped: plan.skipped.length };
+    const line = `kanban${dry ? ' (dry run, nothing written)' : ''}: ${summary.priority} priority, ${summary.state} state, ${summary.band} band, ${summary.note} notes, ${summary.skipped} skipped`;
     if (JSON_OUT) {
       const results = plan.results.map((r) => (r.applied && !dry ? { ...r, syncedAt } : r));
       return { dryRun: dry, summary, syncedAt, appliedColumns: plan.appliedColumns, boardDone: plan.boardDone, actions: plan.actions, results, skipped: plan.skipped };
@@ -1619,7 +1629,12 @@ const commands = {
  * The lanes the kanban planner sees. `held` is NOT RECLAIMABLE: a live session owns the
  * lane, so a card or column must not change its state. Same predicate as claim and next.
  */
-const KANBAN_LANES = `SELECT l.id, l.state, l.priority, l.note, NOT ${RECLAIMABLE} AS held FROM agentic_os.lane l WHERE l.project_key = $1`;
+const KANBAN_LANES = `SELECT l.id, l.state, l.priority, l.note, l.band, NOT ${RECLAIMABLE} AS held FROM agentic_os.lane l WHERE l.project_key = $1`;
+
+/** Read the lanes for the planner. l.band needs migration 0005: a database without it gets one clear message. */
+async function kanbanLanes(c, boardKey, suffix = '') {
+  try { return (await c.query(`${KANBAN_LANES}${suffix}`, [boardKey])).rows; } catch (e) { throw bandMigrationError(e); }
+}
 
 /** The board a kanban file says it is for: a string `board`, a top-level `project`, or `board.project`. null = it does not say. */
 function kanbanFileBoard(input) {
@@ -1633,6 +1648,8 @@ async function applyKanbanAction(c, a, boardKey) {
   const sql = {
     priority: `UPDATE agentic_os.lane SET priority=$2, updated_at=now() WHERE id=$1 AND project_key=$3`,
     note: `UPDATE agentic_os.lane SET note=$2, updated_at=now() WHERE id=$1 AND project_key=$3`,
+    // band, not priority. The ::text cast types the NULL that 'none' sends.
+    band: `UPDATE agentic_os.lane SET band=$2::text, updated_at=now() WHERE id=$1 AND project_key=$3`,
     state: `UPDATE agentic_os.lane SET state=$2, updated_at=now(),
               owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE owner_session_id END,
               lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE lease_expires_at END
