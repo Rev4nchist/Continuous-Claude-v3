@@ -20184,6 +20184,12 @@ var malicious_packages_default = {
       reason: "Malware in evmos-contracts (GHSA-ch75-7hv2-w5hw)",
       date: "2026-11-06",
       advisory: "https://github.com/advisories/GHSA-ch75-7hv2-w5hw"
+    },
+    "@htooayelwinict/travis234": {
+      blocked_all: true,
+      reason: "Malware in @htooayelwinict/travis234 (GHSA-r6cf-96rv-f56v)",
+      date: "2026-11-08",
+      advisory: "https://github.com/advisories/GHSA-r6cf-96rv-f56v"
     }
   }
 };
