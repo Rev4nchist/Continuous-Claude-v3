@@ -729,27 +729,48 @@ var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisi
 var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
 var enforcingScope = (scope, deps, cwd) => scope === "push" ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
 var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce" };
-var CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)`;
+var OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif|time)\s+)`;
+var CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))` + String.raw`(?:[A-Za-z_]\w*=[^\s;&|]*[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+)*(?:[\w.]+\\)?\\?`;
+var CD_NAMES = "cd|Set-Location|sl|chdir|pushd|Push-Location";
+var CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\\.|[^\s;&|)\`"'\\])+)`;
+var JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Parallel|AsJob)\b)[^{};&|\r\n]*\{[^}]*$/i;
 var gitBashPath = (p) => process.platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
 function moveTo(base, target, shell) {
-  const raw = target.replace(/^["']|["']$/g, "");
+  const raw = target.replace(/\\([ "'])|["']/g, (_m, esc) => esc ?? "");
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
 var cdsBefore = (masked, raw) => whereAt(cdPositions(masked, raw), masked.length);
 function looseJoin(between) {
-  const joiners = between.match(/&&|\|\||[;&|\r\n]/g) ?? [];
+  const joiners = between.replace(FD_REDIRECT, " ").match(/&&|\|\||[;&|\r\n]/g) ?? [];
   return !(joiners.length > 0 && joiners.every((j) => j === "&&"));
 }
-var UNKNOWN_CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:cd|Set-Location|sl|pushd|Push-Location)(?:[ \t]+[-+])?[ \t]*(?=[;&|\r\n]|$))`;
+var FD_REDIRECT = /\d*[<>]&\d*-?|&>>?/g;
+function endsInPipe(before) {
+  let t = before.trimEnd();
+  for (; ; ) {
+    const c = t.replace(/(?:^|\s)#[^\r\n]*$/, "").trimEnd();
+    if (c === t) break;
+    t = c;
+  }
+  return t.endsWith("|") || t.endsWith("|&");
+}
+var UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
+var NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
+var REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?-(?:ComputerName|Session|HostName|VMName|VMId|ContainerId|AsJob|SSHConnection|ConnectionUri)\b/i;
 function cdPositions(masked, raw) {
   const cds = [];
+  const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, "gi"))].map((m) => m.index + m[0].length);
   for (const m of masked.matchAll(new RegExp(CD_SOURCE, "gi"))) {
     const end = m.index + m[0].length;
-    const target = raw.slice(end - m[1].length, end);
-    if (!/^[-+]$/.test(target)) cds.push({ end, target, piped: m[0].startsWith("|") });
+    const target = raw.slice(end - m.groups.t.length, end);
+    if (NO_FOLDER.test(target)) {
+      unknown.push(end);
+      continue;
+    }
+    const piped = m.groups.soft !== void 0 || /^\||[(`]/.test(m.groups.hard ?? "") || endsInPipe(masked.slice(0, m.index)) || JOB_BLOCK.test(masked.slice(0, m.index)) || REMOTE_AFTER_BLOCK.test(masked.slice(end));
+    cds.push({ end, target, piped });
   }
-  const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, "gi"))].map((m) => m.index + m[0].length);
   return { cds, unknown, masked };
 }
 function whereAt(pos, from) {
