@@ -51,6 +51,7 @@
  *   node scripts/coordination/lane.mjs mine             # my lanes + lease time left
  *   node scripts/coordination/lane.mjs claim <id> [--note "..."]
  *   node scripts/coordination/lane.mjs note  <id> "status line"
+ *   node scripts/coordination/lane.mjs compact <id> "text"   # log a compaction as an event; the note stays (PreCompact hook)
  *   node scripts/coordination/lane.mjs state <id> <backlog|ready|active|blocked|review|done>
  *   node scripts/coordination/lane.mjs release <id> [--note "why"]
  *   node scripts/coordination/lane.mjs done <id> [--note "evidence"]
@@ -1035,7 +1036,7 @@ const commands = {
       const dms = (await c.query(
         `UPDATE agentic_os.lane_event
             SET to_session_id=$2, detail = detail || jsonb_build_object('adoptedFrom', $1::text)
-          WHERE to_session_id=$1 AND id > $3::bigint RETURNING id`, [oldId, newId, oldWm ?? 0],
+          WHERE to_session_id=$1 AND session_id <> $1 AND id > $3::bigint RETURNING id`, [oldId, newId, oldWm ?? 0],
       )).rows.map((r) => Number(r.id));
       let cursor = 'unchanged';
       const have = new Set(newRows.map((r) => r.session_id));
@@ -1196,6 +1197,34 @@ const commands = {
     if (!rows.length) throw await noLane(c, id, board);
     await logEvent(c, { laneId: id, kind: 'note', sessionId: myId, body, detail: agentDetail() });
     return JSON_OUT ? rows[0] : `noted on ${id}: ${body}`;
+  },
+
+  /**
+   * Record a compaction on a lane I own as a 'compact' event. EVENT ONLY: lane.note is not touched, so the progress
+   * note Dave or a session wrote stays. The PreCompact hook calls this (it used to call `note`, which replaced the note).
+   * Addressed to me, like `adopt`: no peer gets an inbox line, and my own inbox skips my own events. The lease is
+   * renewed as `note` did. updated_at is left alone, as nothing on the lane changed.
+   */
+  async compact(c) {
+    const myId = me();
+    const id = positional[1];
+    const board = await projectForOwnedLane(c, id, myId);
+    const body = positional.slice(2).join(' ');
+    if (!id || !body) throw new Error('usage: lane.mjs compact <lane-id> "compaction text"  (event only; the note stays)');
+    const { rows } = await c.query(
+      `UPDATE agentic_os.lane SET lease_expires_at = CASE WHEN owner_session_id=$3
+           THEN now() + interval '${LEASE_MINUTES} minutes' ELSE lease_expires_at END
+       WHERE id=$1 AND project_key=$2 RETURNING id`, [id, board.key, myId],
+    );
+    if (!rows.length) throw await noLane(c, id, board);
+    // Direct INSERT, not logEvent: logEvent swallows its error, and the event is the only effect of this verb.
+    // A failed insert must reach the exit handler, or the hook would report success and start its cooldown.
+    await c.query(
+      `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail, project_key)
+       VALUES ($1,'compact',$2,$2,$3,$4,$5)`,
+      [id, myId, body, JSON.stringify(agentDetail()), eventBoard()],
+    );
+    return JSON_OUT ? { id, kind: 'compact', body } : `compact event on ${id}: ${body}`;
   },
 
   async state(c) {
