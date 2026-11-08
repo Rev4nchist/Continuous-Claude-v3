@@ -187,6 +187,63 @@ d="$(committed_repo $F $'declare function f(): number;\nexport const a = /* @__P
 stage_edit "$d" $F $'declare function f(): number;\nexport const a =\n  /* @__PURE__ */ f();'
 assert_exit "newline before unchanged annotation (no dist) -> allow" 0 "$(run_guard "$d")"
 
+# --- Type-only allowance: types are erased before the bundle, so an edit that leaves the emitted
+# JavaScript unchanged cannot change the dist. Same shape as the #400 edits.
+
+# --- Case 25: a field added to an interface -> ALLOW
+d="$(committed_repo $F $'interface Out { result?: string; }\nexport const a: Out = {};')"
+stage_edit "$d" $F $'interface Out { result?: \x27continue\x27 | \x27block\x27; message?: string; }\nexport const a: Out = {};'
+assert_exit "interface field added (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 26: a type annotation and a source union widened -> ALLOW
+d="$(committed_repo $F $'export function f(s: \x27a\x27 | \x27b\x27): number { return s === \x27a\x27 ? 1 : 2; }')"
+stage_edit "$d" $F $'export function f(s: \x27a\x27 | \x27b\x27 | \x27cli\x27): number { return s === \x27a\x27 ? 1 : 2; }'
+assert_exit "union widened (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 27: a // @ts-expect-error line added -> ALLOW
+d="$(committed_repo $F $'import { readFileSync } from \x27node:fs\x27;\nexport const a = readFileSync;')"
+stage_edit "$d" $F $'// @ts-expect-error TS7016 no types\nimport { readFileSync } from \x27node:fs\x27;\nexport const a = readFileSync;'
+assert_exit "ts-expect-error comment added (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 28: an import type line added, never used as a value -> ALLOW
+d="$(committed_repo $F $'export const a = 1;')"
+stage_edit "$d" $F $'import type { Foo } from \x27./foo.js\x27;\nexport const a = 1;\nexport type B = Foo;'
+assert_exit "import type + type alias added (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 29: a type edit together with a code edit -> BLOCK
+d="$(committed_repo $F $'interface Out { r?: string; }
+export const a = 1;')"
+stage_edit "$d" $F $'interface Out { r?: string; m?: string; }
+export const a = 2;'
+assert_exit "type edit + code edit together (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 30: a value import path changed -> BLOCK (the bundle follows the path)
+d="$(committed_repo $F $'import { x } from \x27./lib/a\x27;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib/a.js\x27;\nexport const a = x;'
+assert_exit "value import path changed (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 31: a cast turned into a call -> BLOCK
+d="$(committed_repo $F $'declare const v: unknown;
+export const a = v as number;')"
+stage_edit "$d" $F $'declare const v: unknown;
+export const a = Number(v);'
+assert_exit "cast replaced by a call (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 32: an enum member added -> BLOCK (enums emit code, so the guard does not trust erasure)
+d="$(committed_repo $F $'export enum E { A = 1 }')"
+stage_edit "$d" $F $'export enum E { A = 1, B = 2 }'
+assert_exit "enum member added (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 33: a constructor parameter property added -> BLOCK (it emits an assignment)
+d="$(committed_repo $F $'export class C { constructor(x: number) {} }')"
+stage_edit "$d" $F $'export class C { constructor(private x: number) {} }'
+assert_exit "parameter property added (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 34: a type-only edit in a file that does not parse -> BLOCK (fail closed)
+d="$(committed_repo $F $'export const a = (1;')"
+stage_edit "$d" $F $'export const a: number = (1;'
+assert_exit "unparseable file, type edit (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
 echo ""
 echo "precommit-build-guard tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
