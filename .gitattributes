@@ -42,6 +42,10 @@
 # would otherwise differ in all 149 sources (dist-freshness.ts also strips CR).
 /.claude/hooks/src/**/*.ts text eol=lf
 
+# The price table and its generated twin stay LF. refresh-prices.mjs writes LF; the nightly --check compares
+# the twin to that text, so a CRLF checkout (core.autocrlf=true) would show false drift.
+/.claude/plugins/ccv3-mods/hooks/shared/prices.* text eol=lf
+
 # Always-loaded instruction files stay LF: the context budget counts every \r, so CRLF costs
 # ~377 chars (scripts/rules/context-budget-guard.mjs; 2026-10-03 trim pass).
 /.claude/templates/CLAUDE.md.template text eol=lf
