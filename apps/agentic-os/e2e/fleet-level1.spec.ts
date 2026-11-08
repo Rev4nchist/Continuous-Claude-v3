@@ -30,6 +30,27 @@ import {
  * Screenshots go to <repo>/.claudedocs/e2e-fleet-level1/ (kept on green too).
  */
 
+type FakeLane = { id: string; title: string; leaseSecondsLeft: number | null };
+
+/**
+ * Replace the `lanes` of ONE card in every `/api/mission-control` answer the page polls. The SELECT-only
+ * e2e role cannot write a lane, and the state file does not carry lanes, so this is the only way to draw
+ * an empty lane list, a lane with no lease or two lane ids where one is a prefix of the other.
+ * Call it BEFORE `page.goto`. The first server render still shows the real lanes; the first poll swaps them.
+ */
+async function withCardLanes(page: Page, sessionId: string, lanes: FakeLane[]): Promise<void> {
+  await page.route('**/api/mission-control**', async (route) => {
+    const response = await route.fetch();
+    const json = (await response.json().catch(() => null)) as { cards?: Array<{ id: string; lanes: unknown }> } | null;
+    if (json === null || !Array.isArray(json.cards)) {
+      await route.fulfill({ response });
+      return;
+    }
+    for (const card of json.cards) if (card.id === sessionId) card.lanes = lanes;
+    await route.fulfill({ response, json });
+  });
+}
+
 const SHOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.claudedocs', 'e2e-fleet-level1');
 
 // Under the 200 character clip of state-files.ts (CLIP.goal), but wider than a 390 px card at any font size.
@@ -71,7 +92,8 @@ async function expectLanes(card: Locator, holder: LaneHolder): Promise<void> {
   await check(lanes, `field 2: the card draws all ${holder.lanes.length} held lanes, not the first only`)
     .toHaveCount(holder.lanes.length);
   for (const lane of holder.lanes) {
-    const row = lanes.filter({ hasText: lane.id });
+    // The exact id, not a substring: lane a1 must not also match a12.
+    const row = card.locator(`[data-testid="session-card-lane"][data-lane-id="${lane.id}"]`);
     await check(row, `field 2: lane ${lane.id} is on the card`).toHaveCount(1);
     // Field 3: lease time left, per lane.
     const lease = row.getByTestId('session-card-lease');
@@ -164,5 +186,55 @@ test.describe('Fleet level 1 card', () => {
     await expectGoalOneLine(card, holder.lanes[0].title.replace(/\s+/g, ' ').trim());
 
     await shoot(card, page, 'L2-no-brief', info);
+  });
+});
+
+// Edge cases the live database cannot hold on demand. The SELECT-only role cannot write a lane, so
+// withCardLanes() rewrites the `lanes` of one card in the poll answer. The server render still shows the
+// real lanes first; each check waits for the rewritten row (polled, so a longer timeout than `check`).
+const polled = expect.configure({ soft: true, timeout: 12_000 });
+
+test.describe('Fleet level 1 card, edge lanes', () => {
+  test('L3 a session with an empty lane list says "No lane held" and draws no lane row', async ({ page }) => {
+    const holder = await findLaneHolderSession();
+    await withCardLanes(page, holder.sessionId, []);
+    const card = await openCard(page, holder);
+
+    await polled(card.getByTestId('session-card-no-lanes'), 'an empty lane list shows "No lane held"')
+      .toHaveText('No lane held');
+    await polled(card.getByTestId('session-card-lane'), 'an empty lane list draws no lane row').toHaveCount(0);
+  });
+
+  test('L4 a lane with no lease shows "no lease", tone none and no lease seconds', async ({ page }) => {
+    const holder = await findLaneHolderSession();
+    await withCardLanes(page, holder.sessionId, [{ id: 'e2e-nolease', title: 'No lease lane', leaseSecondsLeft: null }]);
+    const card = await openCard(page, holder);
+
+    const row = card.locator('[data-testid="session-card-lane"][data-lane-id="e2e-nolease"]');
+    await polled(row, 'the rewritten lane is on the card').toHaveCount(1);
+    const lease = row.getByTestId('session-card-lease');
+    await polled(lease, 'no lease reads "no lease"').toHaveText('no lease');
+    await polled(lease, 'no lease has tone none').toHaveAttribute('data-lease-tone', 'none');
+    await polled(lease, 'no lease has no data-lease-seconds').not.toHaveAttribute('data-lease-seconds', /.*/);
+  });
+
+  test('L5 lane ids a1 and a12 each match exactly one row (a substring match finds a1 twice)', async ({ page }) => {
+    const holder = await findLaneHolderSession();
+    const lanes = [
+      { id: 'a1', title: 'A one', leaseSecondsLeft: 3600 },
+      { id: 'a12', title: 'A twelve', leaseSecondsLeft: 7200 },
+    ];
+    await withCardLanes(page, holder.sessionId, lanes);
+    const card = await openCard(page, holder);
+
+    // Wait for the rewritten rows by their exact ids. A real session may hold two lanes, so a bare row
+    // count of 2 can pass on the server render, before the first poll swaps the lanes.
+    for (const lane of lanes) {
+      await polled(
+        card.locator(`[data-testid="session-card-lane"][data-lane-id="${lane.id}"]`),
+        `lane ${lane.id} matches exactly one row by its exact id`,
+      ).toHaveCount(1);
+    }
+    await expectLanes(card, { ...holder, lanes });
   });
 });

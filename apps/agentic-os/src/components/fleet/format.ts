@@ -89,3 +89,32 @@ const CHIP_TONE: Record<string, string> = {
 export function chipTone(code: string): string | undefined {
   return Object.hasOwn(CHIP_TONE, code) ? CHIP_TONE[code] : undefined;
 }
+
+/** A lease with this many seconds or fewer left reads amber on the card. A lapsed lease is amber too. */
+export const LEASE_SHORT_SECONDS = 15 * 60;
+
+export type LeaseTone = 'ok' | 'short' | 'lapsed' | 'none';
+
+/** `lapsed` at 0 seconds or less, `short` at LEASE_SHORT_SECONDS or less, `none` with no lease. */
+export function leaseTone(secondsLeft: number | null): LeaseTone {
+  if (secondsLeft === null) return 'none';
+  if (secondsLeft <= 0) return 'lapsed';
+  return secondsLeft <= LEASE_SHORT_SECONDS ? 'short' : 'ok';
+}
+
+/** "lease 1h 20m left", "lease 12m left", "lease <1m left", "lease lapsed 5m ago", "no lease". */
+export function formatLease(secondsLeft: number | null): string {
+  if (secondsLeft === null) return 'no lease';
+  if (secondsLeft <= 0) {
+    const late = -secondsLeft;
+    if (late < 45) return 'lease lapsed just now';
+    if (late < 3_600) return `lease lapsed ${Math.round(late / 60)}m ago`;
+    if (late < 86_400) return `lease lapsed ${Math.round(late / 3_600)}h ago`;
+    return `lease lapsed ${Math.round(late / 86_400)}d ago`;
+  }
+  if (secondsLeft < 60) return 'lease <1m left';
+  const minutes = Math.floor(secondsLeft / 60);
+  if (minutes < 60) return `lease ${minutes}m left`;
+  const hours = Math.floor(minutes / 60);
+  return `lease ${hours}h ${minutes % 60}m left`;
+}
