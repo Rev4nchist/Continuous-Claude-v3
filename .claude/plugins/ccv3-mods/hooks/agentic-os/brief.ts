@@ -1,5 +1,5 @@
 import { redact } from '../shared/redact'
-import type { OsAskItem, OsBrief, OsBriefSource, OsPlanStep, OsProof, OsTask } from '../../types'
+import type { OsAskItem, OsBrief, OsBriefSource, OsClearedAsk, OsPlanStep, OsProof, OsTask } from '../../types'
 
 // The brief: what the session says about itself (PRD 5.1, 5.2, 5.5). Pure functions, no engine imports,
 // so the tool handler and the hooks in index.tsx stay thin. Every string passes `redact` before it is stored.
@@ -27,6 +27,7 @@ export type Chip = 'working' | 'waiting-on-dave' | 'blocked' | 'done' | 'idle'
 export type PlanStep = OsPlanStep
 export type AskItem = OsAskItem
 export type Decision = OsBrief['decisions'][number]
+export type ClearedAsk = OsClearedAsk
 export type Proof = OsProof
 /** `sources` says who set each value. A `parsed` value never replaces a `brief_set` one. `updatedAt` is the clock for a stale ask. */
 export type Brief = OsBrief
@@ -56,6 +57,7 @@ export const LIMITS = {
   decisionText: 300,
   artifact: 300,
   decisionsKept: 50,
+  clearedKept: 5,
   proofsKept: 200,
 } as const
 
@@ -232,7 +234,11 @@ export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], no
   if (input.stopAt !== undefined) setField(next, 'stopAt', input.stopAt)
   if (input.plan !== undefined) next.plan = input.plan
   if (input.ask !== undefined) {
-    next.ask = input.ask.map(one => ({ ...one, source: 'brief_set' as const }))
+    const fresh = input.ask.map(one => ({ ...one, source: 'brief_set' as const }))
+    // A re-sent ask (same kind and text) is open again, not a leaver: brief_set is an explicit re-ask.
+    const cleared = clearLeavers(base.cleared, base.ask, fresh, now)
+    if (cleared !== undefined) next.cleared = cleared
+    next.ask = fresh
     next.sources.ask = 'brief_set'
   }
   if (input.decision !== undefined) next.decisions = [...next.decisions, { ...input.decision, at: now }].slice(-LIMITS.decisionsKept)
@@ -248,9 +254,43 @@ export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], no
 
 const isOpen = (one: AskItem): boolean => one.answered !== true
 
-/** Dave's prompt arrived: every open ask becomes `answered?` (dim, not counted) until the next brief_set. */
-export const markAsksAnswered = (brief: Brief): Brief =>
-  brief.ask.some(isOpen) ? { ...brief, ask: brief.ask.map(one => (isOpen(one) ? { ...one, answered: true as const } : one)) } : brief
+/**
+ * Dave's prompt arrived at `now`: every open ask becomes `answered?` (dim, not counted) until the next brief_set, and keeps the time.
+ * An ask that is already answered keeps its first time. The prompt may not address the ask.
+ */
+export const markAsksAnswered = (brief: Brief, now: number): Brief =>
+  brief.ask.some(isOpen)
+    ? { ...brief, ask: brief.ask.map(one => (isOpen(one) ? { ...one, answered: true as const, answeredAt: now } : one)) }
+    : brief
+
+const askKey = (one: { kind: string; text: string }): string => `${one.kind}\u0000${one.text}`
+
+/**
+ * Asks in `old` whose kind and text are not in `kept` go to `cleared`, newest last, one entry per kind and text, last 5 kept.
+ * An entry whose kind and text is in `kept` (open again) leaves `cleared`: no ask is in both lists.
+ * `text` is already redacted (it came from validateBrief or the parser). An absent list with no leaver stays absent.
+ */
+const clearLeavers = (cleared: readonly ClearedAsk[] | undefined, old: readonly AskItem[], kept: readonly AskItem[], now: number): ClearedAsk[] | undefined => {
+  const stay = new Set(kept.map(askKey))
+  const byKey = new Map<string, ClearedAsk>()
+  for (const one of old) {
+    if (stay.has(askKey(one))) continue
+    byKey.delete(askKey(one)) // two old asks with one key: the later one wins and goes last
+    byKey.set(askKey(one), {
+      kind: one.kind,
+      text: one.text,
+      ...(one.answeredAt === undefined ? {} : { answeredAt: one.answeredAt }),
+      clearedAt: now,
+      how: one.answered === true ? 'prompted' : 'replaced',
+    })
+  }
+  const leavers = [...byKey.values()]
+  const gone = new Set(leavers.map(askKey))
+  const before = cleared ?? []
+  const rest = before.filter(one => !gone.has(askKey(one)) && !stay.has(askKey(one)))
+  if (leavers.length === 0 && rest.length === before.length) return cleared === undefined ? undefined : [...cleared]
+  return [...rest, ...leavers].slice(-LIMITS.clearedKept)
+}
 
 /**
  * An open ask with 24 hours of quiet behind it (PRD 5.2: 24 hours from the last session activity). The clock starts at
@@ -494,10 +534,91 @@ export const mergeParsed = (brief: Brief | null, parsed: ParsedTurnEnd, now: num
       changed = true
     }
   }
-  if (parsed.ask && base.sources.ask !== 'brief_set' && JSON.stringify(parsed.ask) !== JSON.stringify(base.ask)) {
-    next.ask = parsed.ask
-    next.sources.ask = 'parsed'
-    changed = true
+  if (parsed.ask && base.sources.ask !== 'brief_set') {
+    // An ask with the same kind and text as an answered one keeps answered and answeredAt: a repeated block does not re-open it.
+    const before = new Map(base.ask.map(one => [askKey(one), one]))
+    const carried = parsed.ask.map(one => {
+      const was = before.get(askKey(one))
+      return was?.answered === true ? { ...one, answered: true as const, ...(was.answeredAt === undefined ? {} : { answeredAt: was.answeredAt }) } : one
+    })
+    if (JSON.stringify(carried) !== JSON.stringify(base.ask)) {
+      const cleared = clearLeavers(base.cleared, base.ask, carried, now)
+      if (cleared !== undefined) next.cleared = cleared
+      next.ask = carried
+      next.sources.ask = 'parsed'
+      changed = true
+    }
   }
   return changed ? { ...next, updatedAt: now } : base
+}
+
+// --- Taps in a model AskUserQuestion dialog (GPAA P3, design 2026-11-09) ---
+
+/** The `by` of a decision that came from a tap, not from brief_set. */
+export const TAP_BY = 'Dave (tap)'
+/** What a decision holds for an answer that is not one of the labels: Dave's typed words are never stored. */
+export const FREE_TEXT = 'free-text answer'
+
+const TAP_HEADER_MAX = 256
+/** The same bound as the turn-end parser tail: a longer text is not read, it is named. */
+const TAP_RAW_MAX = TAIL_CHARS
+
+type TapQuestion = { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown; kind?: unknown }
+
+const labelsOf = (options: unknown): string[] =>
+  Array.isArray(options) ? options.flatMap(one => (isRecord(one) && typeof one.label === 'string' ? [one.label] : [])) : []
+
+/** What one answer stores: the label (or the joined labels of a multi-select), else `free-text answer`. A number answer is free text until Dave decides design Q3. */
+const pickOf = (q: TapQuestion, answer: string): string => {
+  const labels = labelsOf(q.options)
+  if (labels.includes(answer)) return answer
+  if (q.multiSelect === true && answer.split(', ').every(part => labels.includes(part))) return answer
+  return FREE_TEXT
+}
+
+/**
+ * A question the mod told the model to ask (GPAA P3, design F14). The decision ledger already records its answer, so it is no
+ * `Dave (tap)` row. Two scripts write these offers, and the model passes the spec on word for word:
+ *   - scripts/github/ship-ask.mjs: header Push, Commit, Open PR, Land or Paid round (the pr-loop paid round, ship steps, Land).
+ *   - scripts/github/lib/checkpoint-ledger.mjs (pr_checkpoint ledger mode): header `PR #<n>`.
+ * Both markers must hold: the header, and a first option that ends ` (Recommended)` (every spec of both scripts puts the
+ * recommended option first). A model question with only one marker is Dave's tap and is stored. The match is on the result's
+ * echo of the question, so the model-written call input is never read. A new offer header must be added here.
+ */
+const MOD_ASK_HEADERS = new Set(['Push', 'Commit', 'Open PR', 'Land', 'Paid round'])
+const MOD_ASK_PR_HEADER = /^PR #\d+$/
+const MOD_ASK_FIRST_LABEL = / \(Recommended\)$/
+
+const isModAsk = (q: TapQuestion): boolean => {
+  const header = typeof q.header === 'string' ? q.header : ''
+  const first = labelsOf(q.options)[0] ?? ''
+  return (MOD_ASK_HEADERS.has(header) || MOD_ASK_PR_HEADER.test(header)) && MOD_ASK_FIRST_LABEL.test(first)
+}
+
+/**
+ * One decision text per answered question of a model AskUserQuestion result: "<header>: <pick>". [] when nothing is a Dave tap
+ * (a shape the tool does not return, an idle auto-resolve, a follow-up). The header is the model's own word, never cut before
+ * redact; the question text and `result.response` are never read. Order: bound, redact, clip.
+ */
+export const tapDecisions = (result: unknown): string[] => {
+  if (!isRecord(result) || result.afkTimeoutMs !== undefined || result.followUp === true) return []
+  const { questions, answers } = result
+  if (!Array.isArray(questions) || !isRecord(answers)) return []
+  const out: string[] = []
+  questions.slice(0, 4).forEach((q: unknown, i) => {
+    if (!isRecord(q) || isModAsk(q)) return
+    const answer = typeof q.question === 'string' ? answers[q.question] : undefined
+    if (typeof answer !== 'string' || answer === '') return
+    const head = typeof q.header === 'string' && q.header !== '' && q.header.length <= TAP_HEADER_MAX ? q.header : `Question ${i + 1}`
+    const raw = `${head}: ${pickOf(q, answer)}`
+    out.push(clip(redact(raw.length > TAP_RAW_MAX ? `${head}: long answer` : raw).text, LIMITS.decisionText))
+  })
+  return out
+}
+
+/** Appends tap decisions, keeps the last 50, moves `updatedAt`. `prev` null makes an empty brief. Two saves in one millisecond must differ. */
+export const withTaps = (prev: Brief | null, texts: readonly string[], now: number): Brief => {
+  const base = prev ?? emptyBrief(now)
+  const at = prev === null ? now : Math.max(now, prev.updatedAt + 1)
+  return { ...base, decisions: [...base.decisions, ...texts.map(text => ({ text, by: TAP_BY, at }))].slice(-LIMITS.decisionsKept), updatedAt: at }
 }
