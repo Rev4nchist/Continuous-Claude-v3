@@ -25,7 +25,7 @@
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionRecord, decisionRows, offerWrite, type Step } from '../shared/decisions-store.js';
 import { COMMAND_TOOLS, WRITE_TOOLS, decide, handle, makeGit, type Deps } from '../decision-gate.js';
@@ -63,6 +63,8 @@ interface World {
   indexTree?: string;
   /** What `git remote get-url <name>` answers for a remote other than fork (default: it fails). */
   remoteUrls?: Record<string, string>;
+  /** Folders that are NOT a CCv3 checkout: `git remote -v` there lists another repo. Every other folder is the CCv3 checkout. */
+  otherDirs?: string[];
 }
 
 /** A fake git and config for a checkout at /repo. */
@@ -78,7 +80,10 @@ function deps(w: World = {}): Deps {
       w.calls?.push({ cwd, args });
       if (w.gitFails) throw new Error('git exploded');
       const a = args.join(' ');
-      if (a === 'remote -v') return { status: 0, stdout: `fork\t${w.remote ?? `https://github.com/${REPO}.git`} (push)\n` };
+      if (a === 'remote -v') {
+        if (w.otherDirs?.includes(cwd.replace(/\\/g, '/'))) return { status: 0, stdout: 'origin\thttps://github.com/someone/else.git (push)\n' };
+        return { status: 0, stdout: `fork\t${w.remote ?? `https://github.com/${REPO}.git`} (push)\n` };
+      }
       if (a === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
       if (a === 'write-tree') return w.indexTree ? { status: 0, stdout: `${w.indexTree}\n` } : { status: 128, stdout: '' };
       if (a === 'branch --show-current') return { status: 0, stdout: `${w.branch ?? 'feat/x'}\n` };
@@ -581,6 +586,95 @@ describe('G3 git push to the fork', () => {
       decide(bash('git -C /wt push fork'), deps({ calls }));
       const b = calls.find((c) => c.args.join(' ') === 'branch --show-current');
       expect(b?.cwd).toBe('/wt');
+    });
+  });
+
+  // T14: git runs a push from the folder the cd commands BEFORE it set. A cd after the push never moves it.
+  describe('T14 the folder of a push is set by the cd commands before it, not after it', () => {
+    const OTHER_DIR = '/tmp/other-repo';
+    const W: World = { otherDirs: [OTHER_DIR, '/tmp/other', 'C:/other'] };
+    const cwdsOf = (calls: GitCall[]) => [...new Set(calls.map((c) => c.cwd))];
+    it.each([
+      `${PUSH}; cd ${OTHER_DIR}`,
+      `${PUSH} && cd ${OTHER_DIR}`,
+      `${PUSH}\ncd ${OTHER_DIR}`,
+      `${PUSH} || cd ${OTHER_DIR}`,
+      `${PUSH}; cd ${OTHER_DIR}; git status`,
+    ])('denies %s with no tap: a cd after the push does not move it out of the CCv3 checkout', (cmd) => {
+      expect(denied(bash(cmd), W), cmd).toBe(true);
+      expect(denied(pwsh(cmd), W), `pwsh: ${cmd}`).toBe(true);
+    });
+    it.each([
+      `${PUSH}; Set-Location C:\\other`,
+      `${PUSH}; sl C:\\other`,
+      `${PUSH}; Push-Location C:\\other`,
+      `${PUSH}; Set-Location -LiteralPath 'C:\\other'`,
+    ])('denies the PowerShell form %s with no tap', (cmd) => {
+      expect(denied(pwsh(cmd), W), cmd).toBe(true);
+    });
+    it('judges the push in the payload cwd, never in the later cd', () => {
+      const calls: GitCall[] = [];
+      decide(bash(`${PUSH}; cd ${OTHER_DIR}`), deps({ ...W, calls }));
+      expect(cwdsOf(calls)).toEqual(['/repo']);
+    });
+    it('allows the same push after the tap: the tap is checked in the CCv3 checkout', () => {
+      shipTap();
+      expect(denied(bash(`${PUSH}; cd ${OTHER_DIR}`), W)).toBe(false);
+    });
+    it('a cd text inside a quoted string is not a cd', () => {
+      expect(denied(bash(`echo "; cd ${OTHER_DIR}"; ${PUSH}`), W)).toBe(true);
+      expect(denied(bash(`echo '; cd ${OTHER_DIR}'; ${PUSH}`), W)).toBe(true);
+    });
+    it('a cd before the push into a folder that is not CCv3 still passes the push (as before)', () => {
+      expect(denied(bash(`cd ${OTHER_DIR} && ${PUSH}`), W)).toBe(false);
+      expect(denied(bash(`cd ${OTHER_DIR}; ${PUSH}`), W)).toBe(false);
+      expect(denied(pwsh(`Set-Location C:\\other; ${PUSH}`), W)).toBe(false);
+    });
+    it('the last cd before the push wins: a cd back into the repo needs the tap', () => {
+      const cmd = `cd ${OTHER_DIR} && cd /repo && ${PUSH}`;
+      expect(denied(bash(cmd), W)).toBe(true);
+      shipTap();
+      expect(denied(bash(cmd), W)).toBe(false);
+    });
+    it('the last cd before the push wins: a cd out of the repo before the push passes it', () => {
+      expect(denied(bash(`cd /repo && cd ${OTHER_DIR} && ${PUSH}`), W)).toBe(false);
+    });
+    it('a cd after the push, with a cd back to the repo before it, still needs the tap', () => {
+      const cmd = `cd ${OTHER_DIR}; cd /repo; ${PUSH}; cd ${OTHER_DIR}`;
+      expect(denied(bash(cmd), W)).toBe(true);
+      shipTap();
+      expect(denied(bash(cmd), W)).toBe(false);
+    });
+    it('a -C value still wins over the cd target', () => {
+      const calls: GitCall[] = [];
+      decide(bash(`cd ${OTHER_DIR} && git -C /wt2 push fork feat/x; cd /wt9`), deps({ ...W, calls }));
+      expect(cwdsOf(calls)).toEqual(['/wt2']);
+    });
+    it('a relative cd is resolved against the cwd, and a later relative cd is resolved against the earlier one', () => {
+      const calls: GitCall[] = [];
+      decide(bash('cd sub && cd deeper && git push fork feat/x; cd ../other'), deps({ calls }));
+      expect(cwdsOf(calls)).toEqual([resolve('/repo', 'sub', 'deeper')]);
+    });
+    it('a squashed-quote push (g"i"t push) is placed by the cds before it', () => {
+      expect(denied(bash(`g"i"t push fork feat/x; cd ${OTHER_DIR}`), W)).toBe(true);
+      expect(denied(bash(`cd ${OTHER_DIR} && g"i"t push fork feat/x`), W)).toBe(false);
+    });
+    it('two pushes are each judged in their own folder: only the one in the CCv3 checkout needs the tap', () => {
+      const cmd = `cd /tmp/other && git push other main; cd /repo && ${PUSH}`;
+      expect(denied(bash(cmd), W)).toBe(true);
+      shipTap();
+      expect(denied(bash(cmd), W)).toBe(false);
+    });
+    it('two pushes: the first in the CCv3 checkout needs the tap, the second in another folder does not', () => {
+      const cmd = `cd /repo && ${PUSH}; cd /tmp/other && git push fork feat/y`;
+      expect(denied(bash(cmd), W)).toBe(true);
+      shipTap();
+      expect(denied(bash(cmd), W)).toBe(false); // feat/y has no tap, and needs none in /tmp/other
+    });
+    it('two identical pushes in different folders are two judgments', () => {
+      const calls: GitCall[] = [];
+      decide(bash(`cd /tmp/a && ${PUSH}; cd /tmp/b && ${PUSH}`), deps({ calls }));
+      expect(cwdsOf(calls).sort()).toEqual(['/tmp/a', '/tmp/b']);
     });
   });
 

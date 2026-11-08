@@ -186,6 +186,8 @@ interface PushShape {
   src: string | null;
   /** The -C value, raw. */
   dir: string | null;
+  /** The cd targets (raw) that come before this push in the command text, in order. They set the folder git runs the push in. */
+  cds: string[];
   /** A force or delete form (see FORCE_LONG). */
   force: boolean;
   /** --git-dir or --work-tree moves the repo: the checkout cannot be known. */
@@ -237,10 +239,13 @@ const REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
 const VALUE_OPTS = new Set(['--repo', '--receive-pack', '--exec', '--push-option', '-o']);
 const FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
 
-interface RawPush { opts: string; args: string }
+interface RawPush { opts: string; args: string; cds: string[] }
 
-/** The push calls of one view. `masked` and `raw` have the same length. `atStart`: the call must open the text (the squashed view). */
-function pushCallsOf(masked: string, raw: string, atStart: boolean): RawPush[] {
+/**
+ * The push calls of one view. `masked` and `raw` have the same length. `atStart`: the call must open the text (the squashed view).
+ * `before`: the cd targets that come before the text (the squashed view is one segment; the segments before it hold the cds).
+ */
+function pushCallsOf(masked: string, raw: string, atStart: boolean, before: string[] = []): RawPush[] {
   const calls: RawPush[] = [];
   const kinds: [RegExp, (token: string) => boolean][] = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -251,7 +256,8 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean): RawPush[] {
       const optsStart = tokenStart + m[2].length;
       const end = m.index! + m[0].length;
       const cut = masked.slice(end).search(ARGS_END_RE);
-      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut) });
+      const cds = [...before, ...cdTargetsIn(masked.slice(0, tokenStart), raw.slice(0, tokenStart))];
+      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut), cds });
     }
   }
   return calls;
@@ -267,9 +273,10 @@ function pushCallsIn(raw: string): RawPush[] {
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const);
   for (const [start, next] of [...breaks, [bash.length, bash.length] as const]) {
     const seg = bash.slice(from, start);
+    const before = cdTargetsIn(maskedBash.slice(0, from), bash.slice(0, from));
     from = next;
     const squashed = squashQuotes(seg);
-    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true));
+    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true, before));
   }
   return calls;
 }
@@ -300,7 +307,7 @@ function pushShapesFrom(call: RawPush): Shape[] {
   }
   if (quiet) return [];
   const [remote = null, ...specs] = positional;
-  const base = { remote, dir, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  const base = { remote, dir, cds: call.cds, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
   if (specs.length === 0) return [{ kind: 'push', pr: null, push: { ...base, branch: null, src: null, force } }];
   const out: Shape[] = [];
   for (let i = 0; i < specs.length; i++) {
@@ -327,7 +334,7 @@ function pushShapesOf(raw: string): Shape[] {
   for (const call of pushCallsIn(raw)) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push!;
-      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved].join('|');
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.cds.join('\0')].join('|');
       if (!seen.has(id)) { seen.add(id); out.push(shape); }
     }
   }
@@ -369,16 +376,39 @@ const FLAG_OF: Record<Scope, string> = { push: 'decisions.enforcePush', other: '
 
 // ---------- the checkout ----------
 
-const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i;
+const CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)`;
+const CD_TARGET = new RegExp(CD_SOURCE, 'i');
 const gitBashPath = (p: string): string => (process.platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p);
 
-/** The directory the command acts in: the first cd target, else the payload cwd. */
+/** `base` moved by one cd target (raw, quotes still on): absolute as given, else under `base`. */
+function moveTo(base: string, target: string, shell: 'bash' | 'pwsh'): string {
+  const raw = target.replace(/^["']|["']$/g, '');
+  const t = shell === 'bash' ? gitBashPath(raw) : raw;
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+}
+
+/** The directory the command acts in: the first cd target, else the payload cwd. Used by create and land. */
 function workDir(text: string, cwd: string, shell: 'bash' | 'pwsh'): string {
   const m = CD_TARGET.exec(text);
-  if (!m) return cwd;
-  const raw = m[1].replace(/^["']|["']$/g, '');
-  const t = shell === 'bash' ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+  return m ? moveTo(cwd, m[1], shell) : cwd;
+}
+
+/**
+ * The raw cd targets of a text, in order. A cd is found in the masked view, so a quoted `; cd x` is not one; the target is read from the
+ * raw text at the same offsets (both views have the same length). Callers pass the text up to the start of a push: only what runs before it.
+ */
+function cdTargetsIn(masked: string, raw: string): string[] {
+  const out: string[] = [];
+  for (const m of masked.matchAll(new RegExp(CD_SOURCE, 'gi'))) {
+    const end = m.index! + m[0].length;
+    out.push(raw.slice(end - m[1].length, end));
+  }
+  return out;
+}
+
+/** The folder a push runs in: the payload cwd moved by each cd before the push, in order (the last absolute one wins). */
+function pushDir(cwd: string, cds: string[], shell: 'bash' | 'pwsh'): string {
+  return cds.reduce((dir, target) => moveTo(dir, target, shell), cwd);
 }
 
 /** True when a remote of the checkout is the CCv3 fork. Throws when git cannot list the remotes (the caller denies a gated shape). */
@@ -528,6 +558,12 @@ function resolveDir(base: string, raw: string, shell: 'bash' | 'pwsh'): string {
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
 
+/** The folder one push is judged in: the cds before it move the payload cwd, then its own -C (or -Path) moves that. */
+function pushDirOf(p: PushShape, cwd: string, shell: 'bash' | 'pwsh'): string {
+  const dir = pushDir(cwd, p.cds, shell);
+  return p.dir === null ? dir : resolveDir(dir, p.dir, shell);
+}
+
 /** A remote name or URL: the upstream (origin, parcadei), the fork (fork, the CCv3 repo URL) or neither. */
 function remoteKind(remote: string): 'origin' | 'fork' | null {
   const r = remote.toLowerCase();
@@ -605,7 +641,7 @@ function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
     const d = s.kind === 'create' ? judgeCreate(cmd.text, deps, dir, named)
-      : s.kind === 'push' ? judgePush(s, deps, s.push!.dir === null ? dir : resolveDir(dir, s.push!.dir, shell), Boolean(input.agent_id), chained, alone)
+      : s.kind === 'push' ? judgePush(s, deps, pushDirOf(s.push!, cwd, shell), Boolean(input.agent_id), chained, alone)
         : judgeLand(s, deps, dir, named);
     if (d.action === 'deny') denies.push(d);
   }

@@ -554,7 +554,7 @@ var MOVE_OPT_RE = /(?:^|\s)--(?:git-dir|work-tree)(?:=|\s)/;
 var REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
 var VALUE_OPTS = /* @__PURE__ */ new Set(["--repo", "--receive-pack", "--exec", "--push-option", "-o"]);
 var FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
-function pushCallsOf(masked, raw, atStart) {
+function pushCallsOf(masked, raw, atStart, before = []) {
   const calls = [];
   const kinds = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -565,7 +565,8 @@ function pushCallsOf(masked, raw, atStart) {
       const optsStart = tokenStart + m[2].length;
       const end = m.index + m[0].length;
       const cut = masked.slice(end).search(ARGS_END_RE);
-      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut) });
+      const cds = [...before, ...cdTargetsIn(masked.slice(0, tokenStart), raw.slice(0, tokenStart))];
+      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut), cds });
     }
   }
   return calls;
@@ -579,9 +580,10 @@ function pushCallsIn(raw) {
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]);
   for (const [start, next] of [...breaks, [bash.length, bash.length]]) {
     const seg = bash.slice(from, start);
+    const before = cdTargetsIn(maskedBash.slice(0, from), bash.slice(0, from));
     from = next;
     const squashed = squashQuotes(seg);
-    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true));
+    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true, before));
   }
   return calls;
 }
@@ -618,7 +620,7 @@ function pushShapesFrom(call) {
   }
   if (quiet) return [];
   const [remote = null, ...specs] = positional;
-  const base = { remote, dir, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  const base = { remote, dir, cds: call.cds, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
   if (specs.length === 0) return [{ kind: "push", pr: null, push: { ...base, branch: null, src: null, force } }];
   const out2 = [];
   for (let i = 0; i < specs.length; i++) {
@@ -650,7 +652,7 @@ function pushShapesOf(raw) {
   for (const call of pushCallsIn(raw)) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push;
-      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved].join("|");
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.cds.join("\0")].join("|");
       if (!seen.has(id)) {
         seen.add(id);
         out2.push(shape);
@@ -684,14 +686,28 @@ var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisi
 var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
 var enforcingScope = (scope, deps, cwd) => scope === "push" ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
 var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce" };
-var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i;
+var CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)`;
+var CD_TARGET = new RegExp(CD_SOURCE, "i");
 var gitBashPath = (p) => process.platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
+function moveTo(base, target, shell) {
+  const raw = target.replace(/^["']|["']$/g, "");
+  const t = shell === "bash" ? gitBashPath(raw) : raw;
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+}
 function workDir(text, cwd, shell) {
   const m = CD_TARGET.exec(text);
-  if (!m) return cwd;
-  const raw = m[1].replace(/^["']|["']$/g, "");
-  const t = shell === "bash" ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+  return m ? moveTo(cwd, m[1], shell) : cwd;
+}
+function cdTargetsIn(masked, raw) {
+  const out2 = [];
+  for (const m of masked.matchAll(new RegExp(CD_SOURCE, "gi"))) {
+    const end = m.index + m[0].length;
+    out2.push(raw.slice(end - m[1].length, end));
+  }
+  return out2;
+}
+function pushDir(cwd, cds, shell) {
+  return cds.reduce((dir, target) => moveTo(dir, target, shell), cwd);
 }
 function isCcv3Checkout(deps, dir) {
   const r = deps.git(dir, ["remote", "-v"]);
@@ -801,6 +817,10 @@ function resolveDir(base, raw, shell) {
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
+function pushDirOf(p, cwd, shell) {
+  const dir = pushDir(cwd, p.cds, shell);
+  return p.dir === null ? dir : resolveDir(dir, p.dir, shell);
+}
 function remoteKind(remote) {
   const r = remote.toLowerCase();
   if (r === "origin" || r.includes("parcadei")) return "origin";
@@ -860,7 +880,7 @@ function judgeCommand(input, deps) {
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, s.push.dir === null ? dir : resolveDir(dir, s.push.dir, shell), Boolean(input.agent_id), chained, alone) : judgeLand(s, deps, dir, named);
+    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, pushDirOf(s.push, cwd, shell), Boolean(input.agent_id), chained, alone) : judgeLand(s, deps, dir, named);
     if (d.action === "deny") denies.push(d);
   }
   return denies;
