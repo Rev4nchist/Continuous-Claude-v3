@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 
 import { E2E_IDENTITY_DIR, E2E_STATE_DIR } from '../playwright.config';
+import { laneOrderSql } from '../src/server/queries/lane-sort';
 
 /**
  * Fixture state files for e2e/fleet.spec.ts.
@@ -418,6 +419,64 @@ export async function findQuietSessionId(options: { validFormat?: boolean } = {}
       );
     }
     return rows[0].id;
+  } finally {
+    await client.end();
+  }
+}
+
+// --- A live session that holds lanes (read from the database) -----------------------------------
+
+export type HeldLaneFact = { id: string; title: string; leaseSecondsLeft: number | null };
+
+export type LaneHolder = { sessionId: string; shortId: string; lanes: HeldLaneFact[] };
+
+/**
+ * A LIVE session (not ended, last sign of life within 15 minutes, UUID-shaped id) and EVERY lane it
+ * holds, in the shared lane sort order. Read straight from the database (SELECT only): the oracle for
+ * the level 1 card, independent of the app's own query. The session with the most lanes wins, then
+ * the lower id. Lease seconds are measured against the database clock when the query runs. Throws
+ * with a clear message when no live session holds a lane.
+ */
+export async function findLaneHolderSession(): Promise<LaneHolder> {
+  const client = new Client({ connectionString: databaseUrl() });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{
+      id: string;
+      title: string;
+      owner_session_id: string;
+      lease_left: number | null;
+    }>(
+      `SELECT l.id, l.title, l.owner_session_id,
+              EXTRACT(EPOCH FROM (l.lease_expires_at - now()))::int AS lease_left
+       FROM agentic_os.lane l
+       JOIN public.sessions s ON s.id = l.owner_session_id
+       WHERE l.state IN ('active', 'review', 'blocked', 'ready')
+         AND s.id::text ~ '${SESSION_ID_PATTERN}'
+         AND GREATEST(s.last_heartbeat, COALESCE(s.last_activity_at, s.last_heartbeat))
+             > (now() AT TIME ZONE 'UTC') - interval '15 minutes'
+         AND NOT COALESCE(
+           s.ended_at >= GREATEST(s.last_heartbeat, COALESCE(s.last_activity_at, s.last_heartbeat)), FALSE)
+       ORDER BY ${laneOrderSql('l')}`,
+    );
+    const byOwner = new Map<string, HeldLaneFact[]>();
+    for (const row of rows) {
+      const held = byOwner.get(row.owner_session_id) ?? [];
+      held.push({
+        id: row.id,
+        title: row.title,
+        leaseSecondsLeft: row.lease_left === null ? null : Number(row.lease_left),
+      });
+      byOwner.set(row.owner_session_id, held);
+    }
+    const best = [...byOwner.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))[0];
+    if (best === undefined) {
+      throw new Error(
+        'Precondition: needs a LIVE session (active in the last 15 minutes) that holds a lane. ' +
+          'Claim one with `node C:/Users/dkhay/.claude/scripts/lane.mjs claim <id>` and run again.',
+      );
+    }
+    return { sessionId: best[0], shortId: best[0].slice(0, 8), lanes: best[1] };
   } finally {
     await client.end();
   }

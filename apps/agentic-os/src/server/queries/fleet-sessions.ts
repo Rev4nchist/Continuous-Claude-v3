@@ -7,11 +7,13 @@ import { db } from '@/db';
 import { readSessionNames } from '@/server/sources/identity-names';
 import type { StateFiles, StateSnapshot } from '@/server/sources/state-files';
 
+import { goalOf, groupHeldLanes, type HeldLane } from './fleet-card-fields';
 import { joinSnapshots, LOOKUP_LIMIT, type JoinStats, type LookupRow } from './fleet-join';
 import { laneOrderSql } from './lane-sort';
 import type { ActiveSession, ActiveSessions } from './sessions';
 
 export type { JoinStats } from './fleet-join';
+export type { HeldLane } from './fleet-card-fields';
 
 /**
  * Session cards and the Ready for Dave strip: the DB session list joined to state files.
@@ -77,6 +79,7 @@ export type SessionCard = {
   projectDisplayName: string | null;
   chip: Chip | null;
   title: string | null;
+  /** One line for the card: the brief goal, else the first held lane title, else null (no prompt text exists). */
   goal: string | null;
   branch: string | null;
   repo: string | null;
@@ -89,6 +92,10 @@ export type SessionCard = {
   ctxPct: number | null;
   /** First lane this session holds (active, review, blocked or ready), or null. */
   laneId: string | null;
+  /** EVERY lane this session holds, in the shared lane sort order, each with its lease time left. */
+  lanes: HeldLane[];
+  /** Seconds since the last user prompt (sessions.ts heartbeatSecondsAgo). Not a liveness rule: liveColour stays. */
+  heartbeatSecondsAgo: number;
   liveColour: 'green' | 'amber';
   liveSecondsAgo: number;
   /** Seconds since the state file was written, or null with no file. */
@@ -208,7 +215,7 @@ function buildCard(
   session: ActiveSession,
   snapshot: StateSnapshot | undefined,
   nowMs: number,
-  laneId: string | null,
+  lanes: readonly HeldLane[],
   sessionName: string | null,
 ): SessionCard {
   const steps = stepsOf(snapshot);
@@ -225,7 +232,7 @@ function buildCard(
     projectDisplayName: session.projectDisplayName,
     chip: chipOf(snapshot?.chip ?? null),
     title: brief?.title ?? null,
-    goal: brief?.goal ?? null,
+    goal: goalOf(brief?.goal, lanes),
     branch: snapshot?.branch ?? null,
     repo: snapshot?.repo ?? null,
     hasBrief: brief !== null,
@@ -238,7 +245,9 @@ function buildCard(
       snapshot?.ctx === null || snapshot?.ctx === undefined
         ? null
         : Math.min(100, Math.max(0, Math.round(snapshot.ctx))),
-    laneId,
+    laneId: lanes[0]?.id ?? null,
+    lanes: [...lanes],
+    heartbeatSecondsAgo: session.heartbeatSecondsAgo,
     liveColour: session.liveSecondsAgo < GREEN_UNDER_SECONDS ? 'green' : 'amber',
     liveSecondsAgo: session.liveSecondsAgo,
     stateAgeSeconds: snapshot ? Math.max(0, Math.round((nowMs - snapshot.at) / 1000)) : null,
@@ -341,7 +350,7 @@ export async function getFleetSessions(
   active: ActiveSessions,
   files: StateFiles,
   nowMs: number = Date.now(),
-  lanes: Map<string, string[]> = new Map(),
+  lanes: Map<string, HeldLane[]> = new Map(),
 ): Promise<FleetSessions> {
   const bySession = new Map(files.snapshots.map((s) => [s.sessionId, s]));
   const liveIds = new Set(active.sessions.map((s) => s.id));
@@ -356,7 +365,7 @@ export async function getFleetSessions(
   const watching: { card: SessionCard; snapshot: StateSnapshot; rank: number }[] = [];
   for (const session of active.sessions) {
     const snapshot = bySession.get(session.id);
-    const card = buildCard(session, snapshot, nowMs, lanes.get(session.id)?.[0] ?? null, names.get(session.id) ?? null);
+    const card = buildCard(session, snapshot, nowMs, lanes.get(session.id) ?? [], names.get(session.id) ?? null);
     cards.push(card);
     if (!snapshot) continue;
     ready.push(...buildReady(card.id, card.name, card.sessionName, snapshot, nowMs, true));
@@ -386,27 +395,35 @@ export async function getActiveLaneCount(): Promise<number> {
 const HELD_LANE_STATES = ['active', 'review', 'blocked', 'ready'];
 const HELD_LANE_LIMIT = 200;
 
+const LANE_TITLE_CLIP = 200;
+
 /**
- * Lanes held by a session, by owner session id. Shared lane sort key (band, due_at, priority, id), so the
- * first entry is stable. Done lanes are excluded by HELD_LANE_STATES. Bounded by HELD_LANE_LIMIT. Throws when the query fails.
+ * Lanes held by a session, by owner session id: ALL of them, each with its title and lease time left. Shared
+ * lane sort key (band, due_at, priority, id), so the first entry is stable. Done lanes are excluded by
+ * HELD_LANE_STATES. Bounded by HELD_LANE_LIMIT. The lease end and the database clock come from the same
+ * query, so `leaseSecondsLeft` does not depend on this machine's clock; it is negative when the lease has
+ * lapsed. Throws when the query fails.
  */
-export async function getHeldLanes(): Promise<Map<string, string[]>> {
-  const { rows } = await db.execute<{ id: string; owner_session_id: string }>(sql`
-    SELECT id, owner_session_id
+export async function getHeldLanes(): Promise<Map<string, HeldLane[]>> {
+  const { rows } = await db.execute<{
+    id: string;
+    title: string | null;
+    owner_session_id: string;
+    lease_expires_epoch: number | null;
+    db_now_epoch: number;
+  }>(sql`
+    SELECT l.id, left(l.title, ${LANE_TITLE_CLIP}) AS title, l.owner_session_id,
+      EXTRACT(EPOCH FROM l.lease_expires_at)::float8 AS lease_expires_epoch,
+      EXTRACT(EPOCH FROM now())::float8 AS db_now_epoch
     FROM agentic_os.lane l
-    WHERE owner_session_id IS NOT NULL
-      AND state IN (${sql.join(
+    WHERE l.owner_session_id IS NOT NULL
+      AND l.state IN (${sql.join(
         HELD_LANE_STATES.map((state) => sql`${state}`),
         sql`, `,
       )})
     ORDER BY ${sql.raw(laneOrderSql('l'))}
     LIMIT ${HELD_LANE_LIMIT}
   `);
-  const byOwner = new Map<string, string[]>();
-  for (const row of rows) {
-    const held = byOwner.get(row.owner_session_id) ?? [];
-    held.push(row.id);
-    byOwner.set(row.owner_session_id, held);
-  }
-  return byOwner;
+  const dbNow = Number(rows[0]?.db_now_epoch ?? Date.now() / 1000);
+  return groupHeldLanes(rows, dbNow);
 }
