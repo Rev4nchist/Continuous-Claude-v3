@@ -1764,6 +1764,10 @@ describe('T18 the payload cwd is judged when a cd before the shape can fail', ()
         expect(denied(bash(`pushd ${O} && popd && ${PUSH}`, { cwd: SUB }), WSUB)).toBe(false);
         expect(denied(bash(`popd && ${PUSH}`, { cwd: SUB }), WSUB)).toBe(false);
       });
+      it('a --git-dir or --work-tree push still denies after a popd, even when no folder on the path is CCv3', () => {
+        expect(denied(bash('popd && git --git-dir=/other/.git push fork feat/x', { cwd: SUB }), WSUB)).toBe(true);
+        expect(denied(bash('popd && git --work-tree /other push fork feat/x', { cwd: SUB }), WSUB)).toBe(true);
+      });
       it('an absolute -C names the folder, so a popd does not make it unknown', () => {
         expect(denied(bash(`popd && git -C ${O} push fork feat/x`), W)).toBe(false);
         const d = decide(bash('popd && git -C /repo push fork feat/x'), deps(W));

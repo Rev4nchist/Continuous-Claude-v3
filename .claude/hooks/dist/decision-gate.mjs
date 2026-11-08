@@ -903,7 +903,7 @@ function judgePushAt(s, deps, cwd, shell, subagent, chained, alone) {
   const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
   if (p.unknown && !fixedByDir) {
     const ccv3 = [.../* @__PURE__ */ new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
-    return ccv3 ? [deny("position-unknown", POSITION_WHY, "push")] : [];
+    if (ccv3) return [deny("position-unknown", POSITION_WHY, "push")];
   }
   return dirs.map((d) => judgePush(s, deps, d, subagent, chained, alone));
 }

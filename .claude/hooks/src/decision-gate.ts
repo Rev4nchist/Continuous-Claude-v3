@@ -707,7 +707,8 @@ function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', 
   const fixedByDir = p.dir !== null && resolveDir('/a', p.dir, shell) === resolveDir('/b', p.dir, shell);
   if (p.unknown && !fixedByDir) {
     const ccv3 = [...new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
-    return ccv3 ? [deny('position-unknown', POSITION_WHY, 'push')] : [];
+    // No CCv3 folder on the path: judge the known folders anyway, so a --git-dir or --work-tree push (p.moved) still denies.
+    if (ccv3) return [deny('position-unknown', POSITION_WHY, 'push')];
   }
   return dirs.map((d) => judgePush(s, deps, d, subagent, chained, alone));
 }
