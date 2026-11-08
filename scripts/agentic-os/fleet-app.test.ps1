@@ -23,12 +23,21 @@ $state = Join-Path $tmp 'state'; $lnks = Join-Path $tmp 'lnk'
 $port = 3012; $decoyPort = 3013
 $common = @('-Port', "$port", '-AppDir', $app, '-StateDir', $state)
 $decoy = $null
+$mayStop = $false   # the cleanup stops port $port only after the busy-port guard passed
 
 try {
   if ((Get-PortOwnerPid $port) -ne 0 -or (Get-PortOwnerPid $decoyPort) -ne 0) { throw "ports $port/$decoyPort are busy; free them first" }
   # Next 16 allows one dev server per app folder. A running Fleet app on any port makes the start step fail.
   $running = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { ([string]$_.CommandLine).IndexOf((Join-Path $app 'node_modules\next\dist\bin\next'), [StringComparison]::OrdinalIgnoreCase) -ge 0 })
   if ($running.Count -gt 0) { throw "SKIP: a Fleet app already runs from $app (pid $($running[0].ProcessId)). Stop it with stop-fleet.ps1, then run this test." }
+
+  $mayStop = $true
+
+  # sibling folder: a path that only shares the prefix is not a Fleet process
+  $sib = [pscustomobject]@{ Name = 'node.exe'; CommandLine = "node $app-old\node_modules\next\dist\bin\next dev" }
+  $own = [pscustomobject]@{ Name = 'node.exe'; CommandLine = "node $app\node_modules\next\dist\bin\next dev" }
+  Check 'a sibling folder with the same prefix is not Fleet' (-not (Test-IsFleetProcess $sib $app))
+  Check 'a process inside the app folder is Fleet' (Test-IsFleetProcess $own $app)
 
   # pid reuse: a "parent" that started after its child is a reused id and must be rejected
   $old = [pscustomobject]@{ CreationDate = [datetime]'2026-01-01T10:00:00' }
@@ -92,7 +101,7 @@ try {
   Check 'start with a missing install exits 3 and names the fix' ($r.Code -eq 3 -and $r.Out -match 'NOT READY')
 }
 finally {
-  Run 'stop-fleet.ps1' $common | Out-Null
+  if ($mayStop) { Run 'stop-fleet.ps1' $common | Out-Null }
   if ($decoy) { Stop-Process -Id $decoy.Id -Force -ErrorAction SilentlyContinue }
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

@@ -29,7 +29,9 @@ function Test-IsFleetProcess($Proc, [string]$AppDir) {
   if (-not $Proc) { return $false }
   if ($Proc.Name -ne 'node.exe') { return $false }
   $cmd = [string]$Proc.CommandLine
-  return $cmd.IndexOf($AppDir, [StringComparison]::OrdinalIgnoreCase) -ge 0
+  # Match the folder with a trailing separator, so a sibling such as agentic-os-old does not pass.
+  $dir = $AppDir.TrimEnd('\', '/') + '\'
+  return $cmd.IndexOf($dir, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
 # Windows reuses process ids. ParentProcessId can name a dead parent whose id a new, unrelated process now holds.
