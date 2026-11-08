@@ -13,6 +13,11 @@
  * - kept in the output, so a change shows: legal notices, `@__PURE__` style annotations, the `#!`
  *   line, import paths, `return\nx` (ASI), enum and parameter-property code, any code edit.
  * - dropped, so a change does not show: ordinary comments, layout, types.
+ * One more step: a relative import path (`./a`, `./a.js`, `./dir`) is compared by the file it names
+ * in the git index, so adding `.js` to a path that names the same file is not a change. A path
+ * that names no file in the index stays as written, so an edit to it is a change. Package names
+ * are never rewritten. The rewrite reads esbuild's output by pattern (a path at the start of a
+ * line after `from`, or `import("...")`), so a string literal that looks like one could hide an edit.
  * Any failure to transform (syntax error, no esbuild) means "not proven", never "unchanged".
  *
  * Usage: node scripts/hooks-src-comment-only.mjs <repo-relative .ts path>...   (run in the repo)
@@ -21,7 +26,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,11 +48,57 @@ function emitted(esbuild, text) {
   return esbuild.transformSync(text, OPTIONS).code;
 }
 
-/** True when `after` emits exactly the code `before` emits. A file that does not transform is "no". */
-function sameEmit(esbuild, before, after) {
+/** True when this repo-relative path is a file in the git index. */
+function inIndex(path) {
+  try {
+    return execFileSync('git', ['cat-file', '-t', `:${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'blob';
+  } catch {
+    return false;
+  }
+}
+
+const SWAP = { '.js': ['.ts', '.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'], '.jsx': ['.tsx'] };
+
+/**
+ * The file a relative import path names, as the bundler resolves it, or null. Tried in order:
+ * the exact file, a .js style ending swapped for its TypeScript ending, an added ending, an
+ * index file. Only files in the git index count, so a path to nothing stays unresolved.
+ */
+function resolveImport(importer, spec) {
+  const base = posix.normalize(posix.join(posix.dirname(importer), spec));
+  const ext = posix.extname(base);
+  const candidates = [base];
+  for (const to of SWAP[ext] ?? []) candidates.push(base.slice(0, -ext.length) + to);
+  for (const e of ['.ts', '.tsx', '.js', '.mjs']) candidates.push(base + e);
+  for (const e of ['.ts', '.tsx', '.js']) candidates.push(`${base}/index${e}`);
+  return candidates.find(inIndex) ?? null;
+}
+
+// esbuild writes import and export-from paths in double quotes at the start of a line, and dynamic
+// imports as import("..."). Only relative paths are rewritten; a package name stays as written.
+const STATIC_IMPORT = /^([ \t]*(?:(?:import|export)\b[^"'\n]*?\bfrom[ \t]*|\}[ \t]*from[ \t]*|import[ \t]*))"(\.{1,2}\/[^"\n]*)"/gm;
+const DYNAMIC_IMPORT = /\bimport\([ \t]*"(\.{1,2}\/[^"\n]*)"[ \t]*\)/g;
+
+/** The emitted code with each relative import path replaced by the file it resolves to. */
+function withResolvedImports(code, importer) {
+  const name = (spec) => {
+    const file = resolveImport(importer, spec);
+    return file === null ? spec : `\0${file}`;
+  };
+  return code
+    .replace(STATIC_IMPORT, (_, head, spec) => `${head}"${name(spec)}"`)
+    .replace(DYNAMIC_IMPORT, (_, spec) => `import("${name(spec)}")`);
+}
+
+/**
+ * True when `after` emits the code `before` emits, with each relative import path read as the file
+ * it names (so `./a` and `./a.js` match when both are the same file). A file that does not
+ * transform, and an import path that names no file in the index, are "no".
+ */
+function sameEmit(esbuild, before, after, importer) {
   if (before === after) return true;
   try {
-    return emitted(esbuild, before) === emitted(esbuild, after);
+    return withResolvedImports(emitted(esbuild, before), importer) === withResolvedImports(emitted(esbuild, after), importer);
   } catch {
     return false;
   }
@@ -66,7 +117,7 @@ function main(paths) {
     let after;
     try { before = gitShow(`HEAD:${p}`); } catch { return 1; } // new or renamed file: a real change
     try { after = gitShow(`:${p}`); } catch { return 2; }
-    if (!sameEmit(esbuild, before, after)) return 1;
+    if (!sameEmit(esbuild, before, after, p)) return 1;
   }
   return 0;
 }
