@@ -443,12 +443,32 @@ const FLAG_OF: Record<Scope, string> = { push: 'decisions.enforcePush', other: '
 
 // ---------- the checkout ----------
 
-const CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)`;
+// The same reading as pre-pr-gate (PR #411: CMD_POS, CD_NAMES, CD_TARGET, UNKNOWN_CD), kept as its own copy. A cd that is not seen runs the shape in a folder
+// that is never judged. A SURE command position is the start or a separator, then any run of openers (a brace, `(`, a backtick, `!`, then, else, do, if,
+// while, until, elif, time). `{`, then, else and do count only there: in `echo then cd B` or `Start-Job { cd B }` the word is no command position, so the
+// cd is no sure cd. They still count as LOOSE positions (the `soft` group): the cd is read, but the cwd is judged too (cdPositions). `(`, a backtick,
+// `)` (a case pattern) are loose anywhere. After the opener: variable prefixes (X=1), a PowerShell `$x =`, builtin, command or eval words, a module name
+// (Microsoft.PowerShell.Management\) and one backslash (\cd). The scriptblock of `Invoke-Command` and `icm` runs in the current session: a sure position.
+// The gap after the name is spaces or tabs only: `cd` + newline is a bare cd (UNKNOWN_CD_SOURCE), and the next line is not its target.
+const OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif|time)\s+)`;
+const CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))`
+  + String.raw`(?:[A-Za-z_]\w*=[^\s;&|]*[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+)*(?:[\w.]+\\)?\\?`;
+const CD_NAMES = 'cd|Set-Location|sl|chdir|pushd|Push-Location';
+// A bash option (cd -P A, cd -- A) or a PowerShell parameter (-Path A, -Path:A) may come before the target. The target is one word of plain
+// characters, quoted parts and escapes (`P/"x"`, `P/x\ y`); it ends before a closing `)` or backtick of a subshell.
+const CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\\.|[^\s;&|)\`"'\\])+)`;
+// A job or a parallel block runs its cd in another runspace or process: the parent shell does not move. True when the text before a cd has an open `{`
+// that follows such a word (Start-Job, Start-ThreadJob, pwsh, -Parallel, -AsJob) with no `}` after it. Residual: a hashtable `@{}` between the word and the block.
+const JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Parallel|AsJob)\b)[^{};&|\r\n]*\{[^}]*$/i;
 const gitBashPath = (p: string): string => (process.platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p);
 
 /** `base` moved by one cd target (raw, quotes still on): absolute as given, else under `base`. */
 function moveTo(base: string, target: string, shell: 'bash' | 'pwsh'): string {
-  const raw = target.replace(/^["']|["']$/g, '');
+  // Every quote mark goes (P/"x" is P/x); a backslash before a space or a quote is an escape (bash), so the mark itself stays.
+  // PowerShell has no backslash escape: a quoted part is taken whole, and a quote inside the other kind is a letter of the name.
+  const raw = shell === 'pwsh'
+    ? target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d: string | undefined, s: string | undefined) => d ?? s ?? '')
+    : target.replace(/\\([ "'])|["']/g, (_m, esc: string | undefined) => esc ?? '');
   const t = shell === 'bash' ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
@@ -466,25 +486,48 @@ const cdsBefore = (masked: string, raw: string): Where => whereAt(cdPositions(ma
  * pre-pr-gate cdSteps. It reads separator characters only; it finds no command.
  */
 function looseJoin(between: string): boolean {
-  const joiners = between.match(/&&|\|\||[;&|\r\n]/g) ?? [];
+  // The & of a file-descriptor redirect (2>&1, >&2, &>file) is no joiner: blank it first (as pre-pr-gate cdSteps).
+  const joiners = between.replace(FD_REDIRECT, ' ').match(/&&|\|\||[;&|\r\n]/g) ?? [];
   return !(joiners.length > 0 && joiners.every((j) => j === '&&'));
 }
 
-// popd, Pop-Location, `cd -` and a bare cd go to a folder the text does not name. Found in the masked view, at a command position.
-const UNKNOWN_CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:cd|Set-Location|sl|pushd|Push-Location)(?:[ \t]+[-+])?[ \t]*(?=[;&|\r\n]|$))`;
+/** 2>&1, >&2, <&3, 2>&-, &>file and &>>file: the & belongs to a redirect. */
+const FD_REDIRECT = /\d*[<>]&\d*-?|&>>?/g;
+
+/** True when the text ends in a pipe (|, || or |&), looking past blanks and comment lines. Text that only looks like a comment makes the cd loose: fail closed. */
+function endsInPipe(before: string): boolean {
+  let t = before.trimEnd();
+  for (;;) {
+    const c = t.replace(/(?:^|\s)#[^\r\n]*$/, '').trimEnd();
+    if (c === t) break;
+    t = c;
+  }
+  return t.endsWith('|') || t.endsWith('|&');
+}
+
+// popd, Pop-Location, `cd -`, a bare cd (also with only options: cd -P, cd --) go to a folder the text does not name. Found in the masked view, at a command position.
+const UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
+/** A cd target that is no folder: `cd -`, or an option with nothing after it (`cd -P`, `cd --`). The shell goes to a place the text does not name. */
+const NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
+
+// Invoke-Command names its target AFTER the block: `{ cd B } -ComputerName srv` (or -cn, -Comp, -CU, -VMGuid) runs the cd elsewhere. Aliases and prefixes cannot be
+// listed safely, so ANY parameter after the closing brace in the same statement counts. A local-only parameter, or a later unrelated block, over-denies (fail closed).
+const REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?\s-[A-Za-z]/;
 
 /** Every cd of a masked view with the offset where it ends, and where each popd-like command ends. Read once per view: a segment takes the ones before it. */
 interface CdPositions { cds: { end: number; target: string; piped: boolean }[]; unknown: number[]; masked: string }
 function cdPositions(masked: string, raw: string): CdPositions {
   const cds: CdPositions['cds'] = [];
+  const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, 'gi'))].map((m) => m.index! + m[0].length);
   for (const m of masked.matchAll(new RegExp(CD_SOURCE, 'gi'))) {
     const end = m.index! + m[0].length;
-    const target = raw.slice(end - m[1].length, end);
-    // The match opens on the separator before the cd: a | there (|| or a pipe) means the cd may be skipped or run in a pipe subshell.
-    // `cd -` is an unknown position, not a folder named "-".
-    if (!/^[-+]$/.test(target)) cds.push({ end, target, piped: m[0].startsWith('|') });
+    const target = raw.slice(end - m.groups!.t.length, end);
+    if (NO_FOLDER.test(target)) { unknown.push(end); continue; }
+    // The match opens on the separator before the cd. A | there (|| or a pipe), a pipe before a comment line (endsInPipe), a `(` (a subshell)
+    // or a backtick means the cd may be skipped or may not last: it is loose. So is a cd at a soft position (CMD_POS) and a cd inside a job block.
+    const piped = m.groups!.soft !== undefined || /^\||[(`]/.test(m.groups!.hard ?? '') || endsInPipe(masked.slice(0, m.index!)) || JOB_BLOCK.test(masked.slice(0, m.index!)) || REMOTE_AFTER_BLOCK.test(masked.slice(end));
+    cds.push({ end, target, piped });
   }
-  const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, 'gi'))].map((m) => m.index! + m[0].length);
   return { cds, unknown, masked };
 }
 
