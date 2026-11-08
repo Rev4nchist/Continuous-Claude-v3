@@ -916,17 +916,26 @@ function handle(raw, deps) {
     }
     return "{}";
   } catch (err) {
+    return unjudgeable(input, deps, err);
+  }
+}
+function unjudgeable(input, deps, err) {
+  const gone = err instanceof MissingCwdError;
+  if (!gone) {
     try {
       logGuardError(HOOK, err);
     } catch {
     }
-    const scopes = gatedScopesSafe(input);
-    if (scopes.size === 0) return "{}";
-    const why = `could not verify Dave's tap (${String(err?.message ?? err).slice(0, 160)}). Run the command again. If it keeps failing, ask Dave.`;
-    const cwd = input.cwd || process.cwd();
-    const live = [...scopes].some((s) => enforcingScope(s, deps, cwd));
-    return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : "push");
   }
+  const scopes = gatedScopesSafe(input);
+  if (scopes.size === 0) return "{}";
+  const detail = gone ? err.message : String(err?.message ?? err).slice(0, 160);
+  const hint = gone ? "Run the command from a folder that exists." : "Run the command again. If it keeps failing, ask Dave.";
+  const why = `could not verify Dave's tap (${detail}). ${hint}`;
+  const cwd = input.cwd || process.cwd();
+  const live = [...scopes].some((s) => enforcingScope(s, deps, cwd));
+  if (gone) logGuardDecision(HOOK, input, live ? "deny" : "warn", "cwd-missing");
+  return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : "push");
 }
 var gatedScopesSafe = (input) => {
   try {
@@ -935,8 +944,17 @@ var gatedScopesSafe = (input) => {
     return /* @__PURE__ */ new Set();
   }
 };
+var MissingCwdError = class extends Error {
+  constructor(cwd) {
+    super(`the working folder does not exist: ${cwd}`);
+    this.cwd = cwd;
+    this.name = "MissingCwdError";
+  }
+  cwd;
+};
 function makeGit() {
   return (cwd, args) => {
+    if (!existsSync2(cwd)) throw new MissingCwdError(cwd);
     const r = spawnSync("git", args, { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS, windowsHide: true });
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? "" };
@@ -970,11 +988,13 @@ if (!process.env.VITEST) {
 }
 export {
   COMMAND_TOOLS2 as COMMAND_TOOLS,
+  MissingCwdError,
   WRITE_TOOLS,
   decide,
   handle,
   isLandLabel,
   isOpenPrLabel,
   isPushOnlyLabel,
-  isShipLabel
+  isShipLabel,
+  makeGit
 };
