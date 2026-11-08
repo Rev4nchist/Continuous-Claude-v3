@@ -169,6 +169,7 @@ command. A script builds each question, so you do not choose the options or thei
   "Push only" is offered when nothing is staged and commits are ahead. It binds HEAD's tree and passes only a push with no commit before
   it in the same command. A merge or a new commit after the ask changes the tree and needs a new ask.
   Order: merge `fork/main`, stage, ask, commit, push. With nothing staged: ask, push.
+  Run the ship as a bare `git commit -F <file> && git-safe push fork <branch>`: no redirect, pipe or trailing command (any of them makes the gate read the old tree). Report the result in a second command.
   Pushes to `main`, dry runs and other remotes pass. A force or delete form is denied even with a tap, and so is a push to `origin`.
   Its flag is `decisions.enforcePush`: absent means warn only (a warning in the context, no block).
 - Do not write the decision store by hand. A subagent cannot open a PR, land, merge or push: the tap is the main session's.

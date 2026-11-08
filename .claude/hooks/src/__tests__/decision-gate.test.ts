@@ -247,6 +247,8 @@ describe('G3 git push to the fork', () => {
       expect(r).toContain('AskUserQuestion');
       expect(r).toContain('Commit and push');
       expect(r).toContain('Push only');
+      expect(r).toContain('bare commit && push');
+      expect(r).toContain('no redirect');
     });
     it('reads the Desktop Commander process tools', () => {
       expect(denied({ tool_name: `${DC}start_process`, tool_input: { command: PUSH }, cwd: '/repo' })).toBe(true);
