@@ -9,7 +9,9 @@ import * as keeper from '../hooks/compact-keeper/model'
 
 // Ways the compact keeper can fail, one test each.
 // K1 a long task list pushes the block over the limit, loses the marker, or counts the cut tasks wrong
-// K2 a session with nothing to keep still gets a block (and a marker that claims the keeper ran)
+// K2 a session with nothing to keep gets no keep-list, or a long state crowds the keep-list out (changed for A1: the keep-list is fixed text, always present, with the marker at 0 of 0)
+// F1-F6 the fixed keep-list: six items and the drop line, always whole; the cap holds; the facts (branch, session label, handoff) show when known
+// F7-F12 the facts in a manual compaction: branch from the session folder, label from the sessionName atom, newest handoff of this session id, no throw when any is unreadable
 // K3 a manual /compact reaches the summarizer without the open tasks or the marker
 // K4 the person's own text after /compact is replaced, or is not first
 // K5 an auto or plugin compaction is changed (only the person's /compact is)
@@ -25,14 +27,14 @@ import * as keeper from '../hooks/compact-keeper/model'
 //     counts the marker carried (openCounts of the task list).
 //   - The summary is messages[0] of the compaction result ("its summary and the messages it kept", oldest first). Only that message is
 //     scanned: a marker in a later (kept) message is an OLD summary's, and records kept=false (K13b).
-//   - Nothing is recorded for: a trigger other than manual, a subagent, either off switch, a skip result, or a session with nothing to keep.
+//   - Nothing is recorded for: a trigger other than manual, a subagent, either off switch, a skip result, or a skip result.
 //   - The record step runs after next() in its own try/catch, so a throw in it never reaches the hook's .catch (which calls next again).
 //   - K16 forces the throw with a poisoned read: a test hook answers `state.get` of `compactions` with 42, which is not a list. A throwing
 //     test hook is skipped by the engine, and the engine rejects a malformed message before the plugin sees it, so these are the only levers.
 // K12  a manual compaction whose summary holds the exact marker records kept=true, with the full record shape; the result is returned as is
 // K13  a summary without the marker, with the marker followed by a digit ("of 20"), or with another session's or other counts' marker records kept=false
 // K13b the marker only in an old kept message (not the summary) records kept=false
-// K14  an auto or plugin compaction, a subagent, either off switch, a skip result, and a session with nothing to keep record nothing
+// K14  an auto or plugin compaction, a subagent, either off switch and a skip result record nothing; a session with nothing to keep records open 0 of 0 (A1: the block is never null)
 // K15  the record list caps at 10, newest last
 // K16  a throw in the record step leaves next() called once, returns its result, and the next compaction still records
 // Not tested here: a hook that throws. The engine skips it with or without `.catch`, so a test cannot tell;
@@ -67,9 +69,76 @@ describe('compactBlock (pure)', () => {
     expect(block).toContain(keeperMarker('abcdef123456', 2, 2))
   })
 
-  test('K2 nothing to keep gives no block: empty, or only finished tasks', () => {
-    expect(compactBlock({ plan: null, tasks: [], lanes: null, prs: [] }, 's1')).toBeNull()
-    expect(compactBlock({ plan: null, tasks: [task(1, 'completed')], lanes: [], prs: [] }, 's1')).toBeNull()
+  test('K2 nothing to keep still gives the keep-list and the marker: empty, or only finished tasks', () => {
+    const empty = compactBlock({ plan: null, tasks: [], lanes: null, prs: [] }, 's1')
+    expect(empty).toContain(keeper.KEEP_LIST)
+    expect(empty).toContain(keeperMarker('s1', 0, 0))
+    expect(empty).not.toContain('Open tasks')
+    const done = compactBlock({ plan: null, tasks: [task(1, 'completed')], lanes: [], prs: [] }, 's1')
+    expect(done).toContain(keeper.KEEP_LIST)
+    expect(done).toContain(keeperMarker('s1', 0, 1))
+    expect(done).not.toContain('Open tasks')
+  })
+
+  test('F1 the keep-list holds the six items and the drop line, in plain words, 700 to 900 characters', () => {
+    const list = keeper.KEEP_LIST
+    expect(list.length).toBeGreaterThanOrEqual(700)
+    expect(list.length).toBeLessThanOrEqual(900)
+    for (const phrase of ['Lane id and board key', 'session label', 'open plan path', 'next step', 'every decision', 'preference', 'Absolute paths', 'branch', 'PR numbers', 'commit hashes', 'last failing test or probe', 'first error line', 'artifact path', 'handoff path or Notion row', 'open tasks', 'active one marked', 'run and passed', 'only read', "never turn 'not run' into 'passed'"]) {
+      expect(list.toLowerCase()).toContain(phrase.toLowerCase())
+    }
+    expect(list).toContain('Drop: tool output already saved to a file, rule and skill text, dead ends, repeated MEMORY MATCH results.')
+  })
+
+  test('F2 the keep-list comes with every block: a plan, a long task list, or nothing', () => {
+    for (const view of [
+      { plan: { title: 'P' }, tasks: [task(1)], lanes: null, prs: [] },
+      { plan: null, tasks: [], lanes: null, prs: [] },
+    ]) {
+      expect(compactBlock(view, 's1')).toContain(keeper.KEEP_LIST)
+    }
+  })
+
+  test('F3 a huge plan, task list, lane list and PR list: under the limit, keep-list and marker whole, the "+N more" count exact', () => {
+    const tasks = Array.from({ length: 400 }, (_, i) => task(i + 1, 'pending', `a fairly long task subject number ${i + 1} that takes space`))
+    const view = {
+      plan: { title: 'P'.repeat(500), file: 'C:/very/long/path/'.repeat(30) },
+      tasks,
+      lanes: Array.from({ length: 9 }, (_, i) => ({ id: `lane-${i}`, title: 'T'.repeat(300), state: 'active' })),
+      prs: Array.from({ length: 20 }, (_, i) => ({ pr: 100 + i, state: 'READY' as const, whenReady: false })),
+      facts: { branch: 'b'.repeat(400), name: 'n'.repeat(400), handoff: 'C:/h/'.repeat(200) },
+    }
+    const block = compactBlock(view, 'abcdef123456') ?? ''
+    expect(block.length).toBeLessThanOrEqual(KEEPER_LIMIT)
+    expect(block).toContain(keeper.KEEP_LIST)
+    expect(block).toContain(keeperMarker('abcdef123456', 400, 400))
+    const listed = block.split('\n').filter(line => line.startsWith('- a fairly')).length
+    expect(listed).toBeGreaterThan(0)
+    expect(block).toContain(`- (+${400 - listed} more)`)
+  })
+
+  test('F4 a tiny limit cuts the plan and the tasks, never the keep-list or the marker', () => {
+    const block = compactBlock({ plan: { title: 'P' }, tasks: [task(1), task(2)], lanes: null, prs: [] }, 'abcdef123456', 10) ?? ''
+    expect(block).toContain(keeper.KEEP_LIST)
+    expect(block).toContain(keeperMarker('abcdef123456', 2, 2))
+  })
+
+  test('F5 the limit stays small enough for a summary', () => {
+    expect(KEEPER_LIMIT).toBeLessThanOrEqual(2500)
+    expect(KEEPER_LIMIT).toBeGreaterThan(keeper.KEEP_LIST.length)
+  })
+
+  test('F6 facts: branch, session label and handoff show when known; a name is optional and a null fact leaves no line', () => {
+    const view = { plan: null, tasks: [], lanes: null, prs: [] }
+    const full = compactBlock({ ...view, facts: { branch: 'feat/x', name: 'trex', handoff: 'C:/p/thoughts/shared/handoffs/g/h_a1b2c3d4_x.yaml' } }, 'a1b2c3d4-0000') ?? ''
+    expect(full).toContain('Branch: feat/x')
+    expect(full).toContain('Session: trex #a1b2c3d4')
+    expect(full).toContain('Handoff: C:/p/thoughts/shared/handoffs/g/h_a1b2c3d4_x.yaml')
+    const bare = compactBlock({ ...view, facts: { branch: null, name: null, handoff: null } }, 'a1b2c3d4-0000') ?? ''
+    expect(bare).not.toContain('Branch:')
+    expect(bare).not.toContain('Handoff:')
+    expect(bare).toContain('Session: #a1b2c3d4')
+    expect(compactBlock(view, 'a1b2c3d4-0000')).not.toContain('Branch:')
   })
 
   test('K7 finished tasks count in the marker only; the plan, lane and PRs show', () => {
@@ -135,10 +204,13 @@ describe('compact keeper (engine)', () => {
     expect(seen.instructions).toContain(keeperMarker('s1', 1, 2))
   })
 
-  test('K2 no state: the compaction reaches the engine untouched', async ($, on) => {
+  test('K2 no state: the keep-list alone follows the persons text, with no task or plan line', async ($, on) => {
     world(on)
     await compact($, 'manual', { instructions: 'only this' })
-    expect(seen.instructions).toBe('only this')
+    expect(seen.instructions?.startsWith('only this\n\n')).toBe(true)
+    expect(seen.instructions).toContain(keeper.KEEP_LIST)
+    expect(seen.instructions).toContain(keeperMarker('s1', 0, 0))
+    expect(seen.instructions).not.toContain('Open tasks')
   })
 
   test('K5 an auto or plugin compaction is left alone', async ($, on) => {
@@ -169,7 +241,8 @@ describe('compact keeper (engine)', () => {
     await twoTasks($)
     await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
     await compact($, 'manual')
-    expect(seen.instructions).toBeUndefined()
+    expect(seen.instructions).not.toContain('beta')
+    expect(seen.instructions).not.toContain('Open tasks')
     await $.tool.call({ tool: 'TaskCreate', subject: 'gamma', description: 'd' })
     await compact($, 'manual')
     expect(seen.instructions).toContain('- gamma')
@@ -181,12 +254,130 @@ describe('compact keeper (engine)', () => {
     await twoTasks($)
     await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } } as never)
     await compact($, 'manual')
-    expect(seen.instructions).toBeUndefined()
+    expect(seen.instructions).not.toContain('beta')
+    expect(seen.instructions).not.toContain('Open tasks')
   })
 
   test('K8 a subagent compaction does not get this session plan', async ($, on) => {
     world(on)
     await twoTasks($)
+    await compact($, 'manual', { agentId: 'sub-1' })
+    expect(seen.instructions).toBeUndefined()
+  })
+})
+
+// The facts the keeper reads when a manual compaction starts: git branch of the session folder, the session name atom, and this session's newest handoff.
+// A test cannot read an atom, so a state.get hook answers for `sessionName`. The files here are a Map; a path missing from it rejects.
+const SID = 'a1b2c3d4-0000-4000-8000-000000000000'
+const CWD = 'C:/wt/w1/src'
+const HANDOFFS = 'C:/wt/w1/thoughts/shared/handoffs'
+type Entry = { name: string; kind: 'file' | 'dir'; size: number; mtimeMs: number; isLink: boolean }
+const file = (name: string, mtimeMs: number): Entry => ({ name, kind: 'file', size: 10, mtimeMs, isLink: false })
+const folder = (name: string): Entry => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })
+const GIT = {
+  'C:/wt/w1/.git': 'gitdir: C:/main/repo-x/.git/worktrees/w1\r\n',
+  'C:/main/repo-x/.git/worktrees/w1/HEAD': 'ref: refs/heads/feat/one\r\n',
+  'C:/main/repo-x/.git/worktrees/w1/commondir': '../..\r\n',
+}
+
+type Facts = { files: Record<string, string>; dirs: Record<string, Entry[]>; name: string | null; cwdFails: boolean }
+const factsWorld = (on: On, facts: Partial<Facts> = {}, env: Record<string, string> = {}) => {
+  const w: Facts = { files: {}, dirs: {}, name: null, cwdFails: false, ...facts }
+  const slash = (path: string) => path.replace(/\\/g, '/')
+  mock.clock(on, { now: 1_000 })
+  mock.env(on, env)
+  on('session.id', () => ({ value: SID }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('session.compact', (_$, e) => {
+    seen.instructions = e.instructions
+    return { messages: [SUMMARY] }
+  })
+  const where = () => {
+    if (w.cwdFails) throw new Error('no cwd')
+    return { value: CWD }
+  }
+  on('session.cwd', where)
+  on('session.root', where)
+  on('fs.read', (_$, e) => {
+    const hit = w.files[slash(e.path)]
+    if (hit === undefined) throw new Error(`ENOENT ${e.path}`)
+    return { value: hit }
+  })
+  on('fs.list', (_$, e) => {
+    const hit = w.dirs[slash(e.path ?? '')]
+    if (hit === undefined) throw new Error(`ENOENT ${e.path}`)
+    return { value: hit }
+  })
+  on('state.get', { plugin: 'ccv3-mods', key: 'sessionName' } as never, ((_$: unknown, e: unknown, next: (e: unknown) => unknown) =>
+    w.name === null ? next(e) : { value: { value: w.name, version: 1 } }) as never)
+  seen.instructions = null
+}
+
+const HANDOFF_DIRS = {
+  [HANDOFFS]: [folder('general'), folder('other')],
+  [`${HANDOFFS}/general`]: [file('2026-11-07_10-00_a1b2c3d4_old.yaml', 100), file('2026-11-07_12-00_ffffffff_theirs.yaml', 300), file('2026-10-01_legacy.yaml', 400)],
+  [`${HANDOFFS}/other`]: [file('2026-11-07_11-00_a1b2c3d4_new.yaml', 200)],
+}
+
+describe('compact keeper facts (engine)', () => {
+  test('F7 the branch of a linked worktree, read from the session folder, shows in the block', async ($, on) => {
+    factsWorld(on, { files: GIT })
+    await compact($, 'manual')
+    expect(seen.instructions).toContain('Branch: feat/one')
+    expect(seen.instructions).toContain(keeper.KEEP_LIST)
+  })
+
+  test('F8 the session label is the sessionName atom and #sid8', async ($, on) => {
+    factsWorld(on, { name: 'trex' })
+    await compact($, 'manual')
+    expect(seen.instructions).toContain('Session: trex #a1b2c3d4')
+  })
+
+  test('F8 an unnamed session is #sid8 alone', async ($, on) => {
+    factsWorld(on)
+    await compact($, 'manual')
+    expect(seen.instructions).toContain('Session: #a1b2c3d4')
+  })
+
+  test('F9 the newest handoff of this session id is named; other sessions and unmarked files are not; a folder above the session folder is searched', async ($, on) => {
+    factsWorld(on, { dirs: HANDOFF_DIRS })
+    await compact($, 'manual')
+    expect(seen.instructions).toContain(`Handoff: ${HANDOFFS}/other/2026-11-07_11-00_a1b2c3d4_new.yaml`)
+    expect(seen.instructions).not.toContain('ffffffff')
+    expect(seen.instructions).not.toContain('legacy')
+  })
+
+  test('F10 no handoff of this session: no Handoff line', async ($, on) => {
+    factsWorld(on, { dirs: { [HANDOFFS]: [folder('general')], [`${HANDOFFS}/general`]: [file('2026-11-07_12-00_ffffffff_theirs.yaml', 300)] } })
+    await compact($, 'manual')
+    expect(seen.instructions).not.toContain('Handoff:')
+    expect(seen.instructions).toContain(keeper.KEEP_LIST)
+  })
+
+  test('F11 a session folder, git files and handoff folder that cannot be read: no throw, the keep-list and marker still arrive', async ($, on) => {
+    factsWorld(on, { cwdFails: true })
+    await compact($, 'manual', { instructions: 'mine' })
+    expect(seen.instructions?.startsWith('mine\n\n')).toBe(true)
+    expect(seen.instructions).toContain(keeper.KEEP_LIST)
+    expect(seen.instructions).toContain(keeperMarker(SID, 0, 0))
+    expect(seen.instructions).not.toContain('Branch:')
+    expect(seen.instructions).not.toContain('Handoff:')
+  })
+
+  test('F12 CCV3_MOD_KEEPER_OFF skips the facts and the keep-list', async ($, on) => {
+    factsWorld(on, { files: GIT, dirs: HANDOFF_DIRS }, { CCV3_MOD_KEEPER_OFF: '1' })
+    await compact($, 'manual')
+    expect(seen.instructions).toBeUndefined()
+  })
+
+  test('F12 CCV3_MODS_OFF skips the facts and the keep-list', async ($, on) => {
+    factsWorld(on, { files: GIT, dirs: HANDOFF_DIRS }, { CCV3_MODS_OFF: '1' })
+    await compact($, 'manual')
+    expect(seen.instructions).toBeUndefined()
+  })
+
+  test('F12 a subagent compaction gets no facts and no keep-list', async ($, on) => {
+    factsWorld(on, { files: GIT, dirs: HANDOFF_DIRS })
     await compact($, 'manual', { agentId: 'sub-1' })
     expect(seen.instructions).toBeUndefined()
   })
@@ -362,11 +553,11 @@ describe('compact keeper record (engine)', () => {
     expect(rec.writes).toEqual([])
   })
 
-  test('K14 a session with nothing to keep adds no block and records nothing', async ($, on) => {
+  test('K14 a session with nothing to keep still gets the keep-list; the record says open 0 of 0, marker not kept', async ($, on) => {
     recordWorld(on)
     await compact($, 'manual')
     expect(rec.calls).toBe(1)
-    expect(rec.writes).toEqual([])
+    expect(lastWrite()).toEqual([{ ...RECORD_KEPT, open: 0, total: 0, kept: false }])
   })
 
   test('K15 after 11 manual compactions the list holds the newest 10, newest last', async ($, on) => {
