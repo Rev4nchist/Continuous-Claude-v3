@@ -482,6 +482,24 @@ var resolveIn = (cwd, target, shell) => {
   const t = shell === "bash" ? fromGitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
 };
+function hasUnexpandedPart(target) {
+  const t = target.replace(/^["']|["']$/g, "");
+  return /[$`]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith("~");
+}
+var CD_UNEXPANDED = "CD_UNEXPANDED";
+function guardUnexpandedCd(deps, command, cwd, shell) {
+  const m = new RegExp(CD_TARGET.source, "i").exec(command);
+  if (!m || !hasUnexpandedPart(m[1])) return deps;
+  const dir = resolveIn(cwd, m[1], shell);
+  const target = m[1].replace(/^["']|["']$/g, "").slice(0, 120);
+  return {
+    ...deps,
+    git: (d, args) => {
+      if (d !== dir) return deps.git(d, args);
+      throw Object.assign(new Error(`cannot expand the cd target ${target}`), { code: CD_UNEXPANDED, target });
+    }
+  };
+}
 function workDir(command, cwd, shell) {
   const m = new RegExp(CD_TARGET.source, "i").exec(command);
   return m ? resolveIn(cwd, m[1], shell) : cwd;
@@ -644,6 +662,7 @@ function decideAs(input, deps, text) {
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: "allow" };
+  deps = guardUnexpandedCd(deps, command, input.cwd || process.cwd(), shellOf(input));
   const ctx = makeCtx(input, command, deps, shapes);
   const d = judge(command, deps, ctx, shapes);
   if (d.action !== "deny") return d;
@@ -746,14 +765,26 @@ The stamp comes from: ${RUN}`;
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: d.reason } });
   } catch (err) {
     const message = String(err?.message ?? err);
-    try {
-      deps.logError?.(message, errorContext(err, input));
-    } catch {
+    const cdUnexpanded = err?.code === CD_UNEXPANDED;
+    if (!cdUnexpanded) {
+      try {
+        deps.logError?.(message, errorContext(err, input));
+      } catch {
+      }
     }
     if (!gated) return "{}";
     if (hasOverride(joinContinuations(command, shellOf(input)), deps.env)) {
       logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
       return "{}";
+    }
+    if (cdUnexpanded) {
+      logGuardDecision(HOOK, input, "deny", "cd-unexpanded", { command });
+      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String(err.target ?? "").slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick or ~, so it cannot tell which checkout the command runs in.
+
+Use a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.
+
+The stamp comes from: ${RUN}`;
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
     }
     if (err?.code === GIT_NOT_FOUND) {
       logGuardDecision(HOOK, input, "deny", "git-not-found", { command });
@@ -868,6 +899,7 @@ if (!process.env.VITEST) {
 }
 export {
   CCV3_REPO,
+  CD_UNEXPANDED,
   COMMAND_TOOLS2 as COMMAND_TOOLS,
   GIT_NOT_FOUND,
   GIT_TIMEOUT_MS,
@@ -879,6 +911,7 @@ export {
   fromGitBashPath,
   handle,
   hasOverride,
+  hasUnexpandedPart,
   headBranchOf,
   isCcv3Remote,
   makeErrorLogger,

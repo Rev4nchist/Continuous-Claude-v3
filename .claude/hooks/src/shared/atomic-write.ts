@@ -55,6 +55,16 @@ export function atomicWriteSync(filePath: string, content: string): void {
   }
 }
 
+/** Lock directories already reported in this process: one warn row per directory. */
+const missingLockDirsLogged = new Set<string>();
+
+function warnLockDirMissing(lockFile: string): void {
+  const dir = dirname(lockFile);
+  if (missingLockDirsLogged.has(dir)) return;
+  missingLockDirsLogged.add(dir);
+  log.warn('Lock dir missing, lock not acquired', { lockFile, dir });
+}
+
 /**
  * Acquire an exclusive lock file.
  * Uses O_EXCL (create-only) flag — fails if lock already exists.
@@ -98,6 +108,11 @@ export function acquireLockSync(filePath: string, timeoutMs: number = LOCK_TIMEO
         // Busy wait (synchronous context — no setTimeout available)
         const waitUntil = Date.now() + LOCK_RETRY_MS;
         while (Date.now() < waitUntil) { /* spin */ }
+      } else if (err.code === 'ENOENT') {
+        // The lock directory does not exist (a session started in a folder with no .claude/cache).
+        // Do not create it under an arbitrary cwd. Callers see the same "not acquired" result.
+        warnLockDirMissing(lockFile);
+        return false;
       } else {
         // Unexpected error
         log.error('Lock acquisition failed', { lockFile, error: String(err) });

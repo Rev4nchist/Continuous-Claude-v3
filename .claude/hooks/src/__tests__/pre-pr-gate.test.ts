@@ -54,6 +54,7 @@ import {
   decide,
   handle,
   hasOverride,
+  hasUnexpandedPart,
   headBranchOf,
   GIT_TIMEOUT_MS,
   isCcv3Remote,
@@ -349,6 +350,48 @@ describe('D: the stamp decides', () => {
     const c = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t -F body=@' + DB;
     const res = decide(input(c), deps({ worktrees: wt, stamps: { ...WARN_CONFIG, [join('/work/wt-x', STAMP_REL)]: stampJson() } }));
     expect(res.action).toBe('allow');
+  });
+});
+
+describe('U: a cd target the hook cannot expand (D13)', () => {
+  const reasonOfHandle = (out: string): string => JSON.parse(out).hookSpecificOutput.permissionDecisionReason;
+
+  it('U1: hasUnexpandedPart flags variables, command substitution, backticks and a leading ~, not real paths', () => {
+    for (const t of ['$w', '"$wt"', '$env:TEMP\\x', '${SP}/x', '$(pwd)/x', '%TEMP%\\x', '`pwd`', '~', '~/proj', "'~user/x'"]) {
+      expect(hasUnexpandedPart(t), t).toBe(true);
+    }
+    for (const t of ['/c/Users/x', 'C:\\Users\\x', '../x', './x', '"C:\\Program Files\\x"', 'PROGRA~1\\x', '100%', '50% off']) {
+      expect(hasUnexpandedPart(t), t).toBe(false);
+    }
+  });
+
+  it('U2: a PR create after `cd $var` is denied with a clear reason, writes no error row, and never runs git in the literal path', () => {
+    for (const tool of ['Bash', 'PowerShell']) {
+      for (const cd of ['cd $wt; ', 'Set-Location "$wt"; ', 'cd %WT% && ', 'pushd ~/proj; ']) {
+        const calls: Array<{ cwd: string; args: string[] }> = [];
+        const errors: string[] = [];
+        const d: Deps = { ...deps({ calls, stamp: stampJson() }), logError: (m) => errors.push(m) };
+        const out = handle(JSON.stringify(input(`${cd}${CREATE[0]}`, { tool_name: tool })), d);
+        const label = `${tool}: ${cd}`;
+        expect(JSON.parse(out).hookSpecificOutput.permissionDecision, label).toBe('deny');
+        expect(reasonOfHandle(out), label).toMatch(/cannot expand|unexpanded/i);
+        expect(reasonOfHandle(out), label).not.toMatch(/directory not found/);
+        expect(errors, label).toEqual([]);
+        expect(calls.some((c) => /[$%~]/.test(c.cwd.replace(/^[A-Za-z]:/, ''))), label).toBe(false);
+      }
+    }
+  });
+
+  it('U3: the override still lets the command through, and a literal cd keeps its old decision', () => {
+    const d = deps({ stamp: stampJson() });
+    expect(handle(JSON.stringify(input(`$env:SKIP_PRE_PR_GATE='1'; cd $wt; ${CREATE[0]}`, { tool_name: 'PowerShell' })), d)).toBe('{}');
+    expect(JSON.parse(handle(JSON.stringify(input(`cd $wt; ${CREATE[0]}`)), deps({ stamp: null }))).hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(decide(input(`cd /other/checkout && ${CREATE[0]}`), d).action).toBe('allow');
+    expect(decide(input(`cd /other/checkout && ${CREATE[0]}`), deps({ stamp: null })).action).toBe('deny');
+  });
+
+  it('U4: a variable in a later command, not in the cd target, is not an unexpanded cd', () => {
+    expect(decide(input(`cd /other/checkout && echo $HOME && ${CREATE[0]}`), deps({ stamp: stampJson() })).action).toBe('allow');
   });
 });
 
