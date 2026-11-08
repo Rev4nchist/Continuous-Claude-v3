@@ -107,8 +107,11 @@ const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 // Measured 2026-11-07 (PR-K1, the desktop board): test page 171,469 bytes (+3,012 over the 168,457 above), so PAGE_BYTES_MAX is that plus about 1 KB (172,469 to 172,500). It rose from 169,500 ONLY because
 // of the desktop CSS block (one wide board, 13px titles, amber Waiting pill, one control row, narrow empty Scheduled; about 1.5 KB with its comment), the fit script beside setView (height and scroll padding, gated by the
 // fine-pointer query, about 1.0 KB), the edge scroll in the client (about 0.5 KB) and a region label on the board (41 bytes). Dave's estimate was 171,500, from the 1.9 KB of the Design A prototype. No card, row, Done or Scheduled markup grew.
+// Measured 2026-11-07 (desktop polish): test page 173,910 bytes. The source grew by +2,434 (render-board.mjs 85,417 to 87,851, LF; the e2e log shows the desktop block 1,341 to 3,775), so the base page was about 171,476, not the 171,469 above. So PAGE_BYTES_MAX is that plus about 1 KB (174,900). It rose from 172,500 ONLY because
+// of CSS inside the desktop block: one scrollbar family for the board and the lists (about 1.1 KB: thumb, hover, press, corner, inset tracks, Firefox guard), the card finish (inset state bar, quiet
+// rank disc, button press and disabled states, grip hover, about 1.3 KB), less the two scrollbar-width:thin declarations it replaces (44 bytes). No markup and no script grew.
 const ROW_OVERHEAD_MAX = 240;
-const PAGE_BYTES_MAX = 172500;
+const PAGE_BYTES_MAX = 174900;
 const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
@@ -866,6 +869,88 @@ describe('render-board.mjs against a scratch database', () => {
         assert.ok(fit.includes('removeProperty'), 'the fit leaves its properties set after a resize to a phone');
         assert.ok(fit.includes('matchMedia'), 'the fit has no matchMedia guard');
         assert.match(desk(), /html\s*\{\s*scroll-padding-top:var\(--sp,\d+px\)/, 'no desktop scroll-padding-top');
+      });
+    });
+
+    // The desktop polish pass (Dave, 2026-11-07: "vertical sliders need a more polished - barely visible design"). The measured behaviour is the Edge run
+    // saved in .claude/cache/e2e/2026-11-07-desktop-polish.{mjs,log,json}. How it can fail, one test each:
+    //   - a scrollbar rule leaks out of the desktop block (the phone and touch layouts must stay byte-identical)
+    //   - scrollbar-width or scrollbar-color sits where Edge and Chrome see it: from Chromium 121 they switch off every ::-webkit-scrollbar rule on that element
+    //   - a bar loses its thumb, its hover or press state, its minimum length (a 22px thumb on the 89-card Later list), or its corner (a white square)
+    //   - the thumb falls under 3:1 against the column or the track in either theme
+    //   - position:relative lands on .kb-board: the 1px .sr spans of far-down cards then give the board its own vertical scroll. It belongs on .kb-list
+    //   - color-scheme is set, which changes the By band root scrollbar
+    describe('desktop polish: scrollbars and card finish', () => {
+      const desk = () => block(DESK);
+      const outside = () => css.slice(0, css.indexOf(DESK)) + css.slice(css.indexOf(DESK) + desk().length);
+      const SB = '::-webkit-scrollbar';
+
+      it('every scrollbar rule lives in the desktop block; no phone, touch or base block holds one; none names the id', () => {
+        const b = desk();
+        assert.ok(b.includes(`${SB}-thumb`), 'the desktop block has no scrollbar thumb rule');
+        assert.doesNotMatch(outside(), /::-webkit-scrollbar|scrollbar-(width|color|gutter)/, 'a scrollbar rule is outside the desktop block');
+        assert.doesNotMatch(b, /#kb-board/);
+        assert.doesNotMatch(b, /color-scheme/, 'color-scheme changes the By band root scrollbar');
+      });
+
+      it('scrollbar-width and scrollbar-color appear only inside the Firefox guard, because Edge and Chrome 121+ then ignore the ::-webkit-scrollbar rules', () => {
+        const lines = desk().split('\n').filter((l) => !l.trim().startsWith('/*') && /scrollbar-(width|color)/.test(l));
+        assert.ok(lines.length >= 1, 'Firefox gets no scrollbar-width / scrollbar-color');
+        for (const l of lines) assert.match(l, /^\s*@supports \(-moz-appearance:none\) \{/, `unguarded: ${l.trim()}`);
+      });
+
+      it('the board bar and the list bars share one family: size, thumb, hover, press, corner, a 40px minimum thumb and inset tracks', () => {
+        const b = desk();
+        const all = `:is(.kb-board,.kb-list)${SB}`;
+        assert.match(rule(b, `${all} `), /width:10px;\s*height:10px/);
+        const thumb = rule(b, `${all}-thumb `);
+        assert.match(thumb, /min-width:40px/);
+        assert.match(thumb, /min-height:40px/);
+        assert.match(thumb, /border:2px solid transparent/, 'a 6px thumb in a 10px bar');
+        assert.match(thumb, /background:var\(--sb\) padding-box/);
+        assert.match(rule(b, `${all}-thumb:hover`), /background:var\(--muted\)/);
+        assert.match(rule(b, `${all}-thumb:active`), /color-mix\(in srgb,var\(--ink\)/);
+        assert.match(rule(b, `${all}-corner`), /background:none/);
+        assert.match(rule(b, `.kb-board${SB}-track`), /margin:0 20px/, 'the board bar is inset to the board padding');
+        assert.match(rule(b, `.kb-list${SB}-track`), /margin:4px 0/);
+      });
+
+      it('the thumb passes 3:1 against the column and against its track, in the dark and the light set', () => {
+        const m = /--sb:color-mix\(in srgb,var\(--muted\) (\d+)%,var\(--panel-2\)\)/.exec(desk());
+        assert.ok(m, 'the --sb token is missing or changed shape');
+        const k = Number(m[1]) / 100;
+        const mix = (a, b) => `#${[1, 3, 5].map((i) => Math.round(parseInt(a.slice(i, i + 2), 16) * k + parseInt(b.slice(i, i + 2), 16) * (1 - k)).toString(16).padStart(2, '0')).join('')}`;
+        const tr = /scrollbar-track \{[^}]*background:color-mix\(in srgb,var\(--panel\) (\d+)%,transparent\)/.exec(desk());
+        assert.ok(tr, 'the track fill is missing');
+        for (const open of [/:root\[data-theme="dark"\] \{/, /:root\[data-theme="light"\] \{/]) {
+          const t = tokens(open);
+          const thumb = mix(t['--muted'], t['--panel-2']);
+          assert.ok(contrast(thumb, t['--panel-2']) >= 3, `${open}: thumb ${thumb} on the column is ${contrast(thumb, t['--panel-2']).toFixed(2)}`);
+          const p = Number(tr[1]) / 100;
+          const track = `#${[1, 3, 5].map((i) => Math.round(parseInt(t['--panel'].slice(i, i + 2), 16) * p + parseInt(t['--panel-2'].slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, '0')).join('')}`;
+          assert.ok(contrast(thumb, track) >= 3, `${open}: thumb ${thumb} on the track ${track} is ${contrast(thumb, track).toFixed(2)}`);
+        }
+      });
+
+      it('position:relative is on .kb-list (it clips the 1px .sr spans), not on .kb-board (that gives the board its own vertical scroll); cards share one width', () => {
+        const b = desk();
+        assert.match(rule(b, '.kb-list '), /position:relative/);
+        assert.match(rule(b, '.kb-list '), /scrollbar-gutter:stable/);
+        assert.doesNotMatch(rule(b, '.kb-board '), /position:\s*relative/, '.kb-board must not be positioned');
+      });
+
+      it('card finish: an inset state bar (no crescent), a 1px neutral border, readable idle chip, a column head ring inside the column, a quiet rank disc', () => {
+        const b = desk();
+        assert.match(rule(b, '.kb-card, .kb-done-card '), /border-left-width:1px/);
+        assert.match(rule(b, '.kb-card, .kb-done-card '), /position:relative/);
+        assert.match(rule(b, '.kb-card::before'), /content:''/);
+        assert.match(rule(b, '.kb-card::before'), /background:var\(--sc,transparent\)/);
+        for (const [s, c] of [['active', 'ok'], ['ready', 'info'], ['blocked', 'crit'], ['review', 'warn']]) assert.match(rule(b, `.kb-card[data-state="${s}"] `), new RegExp(`--sc:var\\(--${c}\\)`), `${s} bar colour`);
+        assert.match(rule(b, '.kb-card .p-idle'), /color:var\(--muted\)/, 'light --faint on --panel-2 is 2.73:1');
+        assert.match(rule(b, '.kb-head:focus-visible'), /outline-offset:-2px/);
+        assert.doesNotMatch(rule(b, '.kb-rank'), /background:var\(--ink\)/, 'a solid ink disc outshouts the title');
+        // The base rules stay as the phone and By band know them.
+        assert.match(css.slice(0, css.indexOf(DESK)), /\.kb-card, \.kb-done-card \{ min-width:0; padding:10px 11px; border-left:3px solid var\(--line\); \}/);
       });
     });
 

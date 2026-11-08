@@ -791,10 +791,10 @@ const html = `${STAMP}
     [data-view="columns"] { display:grid; grid-template-columns:auto auto 1fr; align-items:center; gap:0 16px; margin-top:6px; }
     [data-view="columns"] :is(.sec-head, .vt-bar, .kb-bar) { margin:0; }
     [data-view="columns"] .sec-head p { display:none; }
-    .kb-board { display:flex; grid-column:1/-1; align-items:stretch; height:var(--kbh,calc(100dvh - 240px)); min-height:440px; margin:10px -20px 0; padding:0 20px 10px; overflow-x:auto; overscroll-behavior-x:contain; scrollbar-width:thin; }
+    .kb-board { display:flex; grid-column:1/-1; align-items:stretch; height:var(--kbh,calc(100dvh - 240px)); min-height:440px; margin:10px -20px 0; padding:0 20px 10px; overflow-x:auto; overscroll-behavior-x:contain; }
     .kcol { flex:0 0 300px; display:flex; flex-direction:column; }
     .kcol[data-col="scheduled"][data-n="0"] { flex-basis:220px; }
-    .kb-list { flex:1 1 0; min-height:0; max-height:none; margin:0 -4px; padding:2px 4px 8px; scrollbar-width:thin; }
+    .kb-list { flex:1 1 0; min-height:0; max-height:none; margin:0 -4px; padding:2px 4px 8px; position:relative; scrollbar-gutter:stable; }
     .kb-h { margin-bottom:17px; }
     .kb-sub { margin:-17px 4px 2px; color:var(--muted); }
     .kcol[data-n="0"] .kb-list::after { color:var(--muted); }
@@ -803,6 +803,35 @@ const html = `${STAMP}
     .kb-title { margin-top:4px; color:var(--ink); font-size:13px; }
     .kb-ctl { flex-wrap:nowrap; }
     .kb-mv { flex:1 1 96px; font-size:0; gap:0; }
+    /* Scrollbars: no scrollbar-width or scrollbar-color for Edge (Chromium 121+ then ignores ::-webkit-scrollbar). Firefox gets them in the @supports. */
+    .kb-board { --sb:color-mix(in srgb,var(--muted) 80%,var(--panel-2)); }
+    :is(.kb-board,.kb-list)::-webkit-scrollbar { width:10px; height:10px; }
+    :is(.kb-board,.kb-list)::-webkit-scrollbar-track { border-radius:9px; background:color-mix(in srgb,var(--panel) 70%,transparent); }
+    .kb-list::-webkit-scrollbar-track { margin:4px 0; }
+    .kb-board::-webkit-scrollbar-track { margin:0 20px; }
+    :is(.kb-board,.kb-list)::-webkit-scrollbar-thumb { min-width:40px; min-height:40px; border:2px solid transparent; border-radius:9px; background:var(--sb) padding-box; }
+    :is(.kb-board,.kb-list)::-webkit-scrollbar-thumb:hover { border-width:1px; background:var(--muted) padding-box; }
+    :is(.kb-board,.kb-list)::-webkit-scrollbar-thumb:active { background:color-mix(in srgb,var(--ink) 55%,var(--muted)) padding-box; }
+    :is(.kb-board,.kb-list)::-webkit-scrollbar-corner { background:none; }
+    @supports (-moz-appearance:none) { .kb-board, .kb-list { scrollbar-width:thin; scrollbar-color:var(--sb) transparent; } }
+    /* Card finish: inset state bar (no corner crescent). */
+    .kb-card, .kb-done-card { position:relative; padding:12px; border-left-width:1px; box-shadow:0 1px 1px rgba(0,0,0,.12); transition:border-color .12s; }
+    .kb-card[data-state] { border-left-color:var(--line); }
+    .kb-card::before { content:''; position:absolute; left:-1px; top:12px; bottom:12px; width:3px; border-radius:0 3px 3px 0; background:var(--sc,transparent); }
+    .kb-card[data-state="active"] { --sc:var(--ok); }
+    .kb-card[data-state="ready"] { --sc:var(--info); }
+    .kb-card[data-state="blocked"] { --sc:var(--crit); }
+    .kb-card[data-state="review"] { --sc:var(--warn); }
+    .kb-card:hover, .kb-done-card:hover { border-color:color-mix(in srgb,var(--muted) 45%,var(--line)); }
+    .kb-count { background:transparent; }
+    .kb-rank { background:var(--panel-2); color:var(--ink); box-shadow:inset 0 0 0 1px var(--line); }
+    .kb-card .p-idle { color:var(--muted); }
+    .kb-ctl { margin-top:8px; }
+    .kb-btn:active:not(:disabled) { background:var(--panel-2); }
+    .kb-btn:disabled { opacity:1; background:transparent; }
+    .kb-grip { padding:4px 6px; }
+    .kb-card:hover .kb-grip { color:var(--muted); }
+    .kb-head:focus-visible { outline-offset:-2px; }
   }
   @media (max-width:720px) {
     .kb-board { grid-template-columns:minmax(0,1fr); }
