@@ -4,7 +4,7 @@
  * The scheduled harness doctor writes ~/.claude/state/health/latest.json. This module reads it
  * and returns one line for Dave, or null when there is nothing to say:
  *   - fresh (under 36 h) with 0 fail and 0 warn: null (silent)
- *   - fresh with problems: "harness: N fail, N warn as of <time>: <top checks>. Run: ..."
+ *   - fresh with problems: "harness: N fail, N warn as of <time> (<age>): <top checks>. Run: ..."
  *   - older than 36 h: "harness doctor has not run since <time>" (the dead-man switch)
  *   - file missing: "harness doctor has never run. ..."
  *   - any read or parse error: null. A session start never breaks on this.
@@ -36,6 +36,20 @@ function formatTime(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+/**
+ * How old a report is, from the injected clock: "just now" (under 1 min or a future time),
+ * "N min ago" (under 1 h), else "N h ago" (whole hours, rounded down).
+ */
+export function formatAge(reportTime: Date, now: Date): string {
+  const minutes = Math.floor((now.getTime() - reportTime.getTime()) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  return `${Math.floor(minutes / 60)} h ago`;
+}
+
+/** "YYYY-MM-DD HH:MM (3 h ago)": the time and its age, for a line that says "as of". */
+const timeWithAge = (when: Date, now: Date): string => `${formatTime(when)} (${formatAge(when, now)})`;
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -95,7 +109,7 @@ export function formatHealthAlert(doc: unknown, now: Date, fallbackTime?: Date):
   const shown = names.slice(0, MAX_NAMES).join(', ');
   const more = names.length > MAX_NAMES ? ` and ${names.length - MAX_NAMES} more` : '';
   const list = names.length > 0 ? `: ${shown}${more}` : '';
-  return `harness: ${failCount} fail, ${warnCount} warn as of ${formatTime(when)}${list}. ${runHintFor(rec.repo)}`;
+  return `harness: ${failCount} fail, ${warnCount} warn as of ${timeWithAge(when, now)}${list}. ${runHintFor(rec.repo)}`;
 }
 
 type Report = { kind: 'missing' } | { kind: 'error' } | { kind: 'ok'; doc: unknown; mtime: Date };
@@ -132,11 +146,35 @@ export function defaultPrintStatePath(): string {
   return join(dirname(defaultLatestPath()), 'last-session-print.txt');
 }
 
-/** The first non-empty line, whitespace folded, cut at MAX_DETAIL. */
+/** Index of the first (outermost) "(" that has no closing ")" in `s`, or -1. */
+function firstOpenParen(s: string): number {
+  const open: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') open.push(i);
+    else if (s[i] === ')') open.pop();
+  }
+  return open.length > 0 ? open[0] : -1;
+}
+
+/**
+ * Cut `flat` to at most `max` characters including a "..." tail. The cut falls on a word
+ * boundary and never leaves an open "(" group, unless that would leave nothing: a single
+ * long token is then cut hard.
+ */
+function cutAtWord(flat: string, max: number): string {
+  if (flat.length <= max) return flat;
+  let head = flat.slice(0, max - 3);
+  const space = flat[head.length] === ' ' ? head.length : head.lastIndexOf(' ');
+  if (space > 0) head = head.slice(0, space);
+  const paren = firstOpenParen(head);
+  if (paren > 0) head = head.slice(0, paren);
+  return `${head.trimEnd().replace(/[,;:]+$/, '')}...`;
+}
+
+/** The first non-empty line, whitespace folded, cut at MAX_DETAIL on a word boundary. */
 function oneLine(text: string): string {
   const first = text.split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
-  const flat = first.replace(/\s+/g, ' ').trim();
-  return flat.length > MAX_DETAIL ? `${flat.slice(0, MAX_DETAIL - 3)}...` : flat;
+  return cutAtWord(first.replace(/\s+/g, ' ').trim(), MAX_DETAIL);
 }
 
 /**
@@ -187,7 +225,7 @@ export function formatCompactAlert(
     const detail = oneLine(worst.detail);
     tail = `: ${worst.name}${detail ? ` (${detail})` : ''}${rest > 0 ? ` and ${rest} more` : ''}`;
   }
-  const line = `harness: ${failCount} fail, ${warnCount} warn as of ${formatTime(when)}${tail}. ${runHintFor(rec.repo)}`;
+  const line = `harness: ${failCount} fail, ${warnCount} warn as of ${timeWithAge(when, now)}${tail}. ${runHintFor(rec.repo)}`;
   return { line, hash };
 }
 

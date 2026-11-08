@@ -52,8 +52,21 @@ describe('formatHealthAlert', () => {
   it('H2: problems give counts, the report time and the check names', () => {
     const doc = report([['FAIL', 'hooks', 'build-fresh'], ['WARN', 'sync', 'quarantine'], ['PASS', 'x', 'y']]);
     expect(formatHealthAlert(doc, at(1))).toBe(
-      `harness: 1 fail, 1 warn as of ${REPORT_TEXT}: hooks:build-fresh, sync:quarantine. Run: node scripts/harness-doctor.mjs`,
+      `harness: 1 fail, 1 warn as of ${REPORT_TEXT} (1 h ago): hooks:build-fresh, sync:quarantine. Run: node scripts/harness-doctor.mjs`,
     );
+  });
+
+  it('A1: the long line shows the report age next to the time, from the injected clock', () => {
+    const doc = report([['FAIL', 'hooks', 'a']]);
+    const min = (m: number) => new Date(REPORT_TIME.getTime() + m * 60_000);
+    expect(formatHealthAlert(doc, min(12))).toContain(`as of ${REPORT_TEXT} (12 min ago):`);
+    expect(formatHealthAlert(doc, min(180))).toContain(`as of ${REPORT_TEXT} (3 h ago):`);
+    expect(formatHealthAlert(doc, min(35 * 60))).toContain(`as of ${REPORT_TEXT} (35 h ago):`);
+  });
+
+  it('A1: the same report gives a different age at a different time (no fixed text)', () => {
+    const doc = report([['FAIL', 'hooks', 'a']]);
+    expect(formatHealthAlert(doc, at(1))).not.toBe(formatHealthAlert(doc, at(3)));
   });
 
   it('H3: fail names come before warn names and the list is capped', () => {
@@ -138,7 +151,7 @@ describe('healthAlertLine (file reading)', () => {
 
 describe('buildSessionStartOutput with a harness line', () => {
   const MEM = { line: 'Memory: 130 lessons', warn: false };
-  const ALERT = 'harness: 1 fail, 0 warn as of 2026-10-31 07:50: hooks:boom. Run: node scripts/harness-doctor.mjs';
+  const ALERT = 'harness: 1 fail, 0 warn as of 2026-10-31 07:50 (1 h ago): hooks:boom. Run: node scripts/harness-doctor.mjs';
 
   it('H9: the harness line reaches Dave and the model, after the memory line', () => {
     const out = buildSessionStartOutput('daemon', MEM, ALERT);

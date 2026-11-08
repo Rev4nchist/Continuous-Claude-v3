@@ -1629,8 +1629,8 @@ describe('T17 a merge and a land are judged in every folder on the cd path befor
 // T18: a cd before the shape that can FAIL (joined to what follows by ;, || or a line end) leaves the shell in the payload cwd, so the
 // shape is judged there too. Same rule as pre-pr-gate planRun: every separator from the cd to the shape must be && for the cd to count as sure.
 // A cd after the shape never counts. A | or || right BEFORE a cd also makes it loose (the cd may be skipped or run in a pipe subshell).
-// Accepted over-denies (fail closed, pinned below): a loose cd followed by an absolute && cd still adds the cwd; an & or | inside a && list
-// (`cd O && npm test 2>&1 && push`, `&>`, `>&2`, `| tail`); a line end after && (`cd O &&` newline push); `cd O || exit 1; push`.
+// The & of an fd redirect (`2>&1`, `&>`, `>&2`) is no joiner (T19). Accepted over-denies (fail closed, pinned below): a loose cd followed by an
+// absolute && cd still adds the cwd; a | or lone & inside a && list (`| tail`); a line end after && (`cd O &&` newline push); `cd O || exit 1; push`.
 // A push is also denied with position-unknown (as a create or merge) after a popd, Pop-Location, `cd -` or a bare cd, when a CCv3 checkout is on the path.
 describe('T18 the payload cwd is judged when a cd before the shape can fail', () => {
   const O = '/tmp/other-repo';
@@ -1675,12 +1675,24 @@ describe('T18 the payload cwd is judged when a cd before the shape can fail', ()
       decide(bash(`true || cd ${O} && ${PUSH}`), deps({ ...W, calls }));
       expect(cwdsOf(calls).sort()).toEqual(['/repo', O].sort());
     });
-    // Accepted over-denies, pinned (fail closed): an & or | inside a && list counts as loose, so is a line end after &&, and `|| exit`.
+    // The & of an fd redirect (2>&1, &>file, >&2) is no joiner (FD_REDIRECT, as in pre-pr-gate): the cd is sure, the cwd is not judged.
     it.each([
       ['a 2>&1 redirect between the && joiners', `cd ${O} && npm test 2>&1 && ${PUSH}`],
       ['a &> redirect between the && joiners', `cd ${O} && npm test &> /dev/null && ${PUSH}`],
       ['a >&2 redirect between the && joiners', `cd ${O} && npm test >&2 && ${PUSH}`],
+      ['a 2>&1 redirect on the cd itself', `cd ${O} 2>&1 && ${PUSH}`],
+    ])('does not read the & of %s as a joiner: the cwd is not judged', (_name, cmd) => {
+      expect(denied(bash(cmd), W), cmd).toBe(false);
+      const calls: GitCall[] = [];
+      decide(bash(cmd), deps({ ...W, calls }));
+      expect(cwdsOf(calls), cmd).not.toContain('/repo');
+    });
+    // Accepted over-denies, pinned (fail closed): a | in a && list counts as loose, so is a line end after &&, and `|| exit`.
+    it.each([
       ['a pipe between the && joiners', `cd ${O} && npm test | tail -5 && ${PUSH}`],
+      ['a pipe after a 2>&1 redirect', `cd ${O} && npm test 2>&1 | tail -5 && ${PUSH}`],
+      ['a ; after a 2>&1 redirect', `cd ${O} && npm test 2>&1; ${PUSH}`],
+      ['a lone & (background) after the cd', `cd ${O} & ${PUSH}`],
       ['a line end after &&', `cd ${O} &&\n${PUSH}`],
       ['|| exit 1 then ;', `cd ${O} || exit 1; ${PUSH}`],
     ])('over-deny accepted: %s', (_name, cmd) => {
@@ -1973,5 +1985,282 @@ describe('decisions-store reader', () => {
       writeFileSync(storeFile, JSON.stringify({ ...good, [bad]: [] }));
       expect(decisionRows({ CCV3_DECISIONS_FILE: storeFile }), bad).toEqual([]);
     }
+  });
+});
+
+// T19: cd spellings that pre-pr-gate reads since PR #411 (CMD_POS, CD_NAMES, CD_TARGET, UNKNOWN_CD, FD_REDIRECT, endsInPipe) must be read here too.
+// A cd that decision-gate cannot see runs the push, create or merge in a folder that is never judged (fail-open). A land reads no folder, so it is not here.
+describe('T19 cd spellings: the same reading as pre-pr-gate', () => {
+  const O = '/tmp/other-repo';
+  const SUB = '/repo/sub';
+  const W: World = { otherDirs: [O, SUB] };
+  const PUSH = 'git push fork feat/x';
+  const C = 'gh pr create --draft --head feat/x --title t --body-file b.md';
+  const M = `gh pr merge 12 --merge --match-head-commit ${HEAD}`;
+  const SHAPES: [string, string][] = [['push', PUSH], ['create', C], ['merge', M]];
+  const cwdsOf = (calls: GitCall[]) => [...new Set(calls.map((c) => c.cwd))];
+  const patternOf = (input: object, w: World): string => { const d = decide(input, deps(w)); return d.action === 'deny' ? d.pattern : 'allow'; };
+  // Each form moves the shell to /repo (CCv3) from a non-CCv3 cwd: the shape must be judged there, so it is denied.
+  const HIDDEN: [string, string][] = [
+    ['builtin cd', 'builtin cd /repo && %S'],
+    ['command cd', 'command cd /repo && %S'],
+    ['chdir', 'chdir /repo && %S'],
+    ['cd -P', 'cd -P /repo && %S'],
+    ['cd -L', 'cd -L /repo && %S'],
+    ['cd --', 'cd -- /repo && %S'],
+    ['cd -P --', 'cd -P -- /repo && %S'],
+    ['a brace group', '{ cd /repo && %S; }'],
+    ['then', 'if true; then cd /repo && %S; fi'],
+    ['else', 'if false; then true; else cd /repo && %S; fi'],
+    ['do', 'for i in 1; do cd /repo && %S; done'],
+    ['builtin cd after then', 'if true; then builtin cd /repo && %S; fi'],
+    ['a subshell (not seen by pre-pr-gate either)', '(cd /repo && %S)'],
+    ['a command substitution', 'x=$(cd /repo && %S)'],
+    ['a backtick', 'x=`cd /repo && %S`'],
+  ];
+  describe.each(SHAPES)('%s', (_kind, shape) => {
+    it.each(HIDDEN)('judges the shape in the folder %s names', (_name, tpl) => {
+      const cmd = tpl.replace('%S', shape);
+      expect(denied(bash(cmd, { cwd: SUB }), W), cmd).toBe(true);
+      const calls: GitCall[] = [];
+      decide(bash(cmd, { cwd: SUB }), deps({ ...W, calls }));
+      expect(cwdsOf(calls), cmd).toContain('/repo');
+      expect(cwdsOf(calls).filter((c) => /-[PL]$|\/--$/.test(c)), cmd).toEqual([]);
+    });
+    it.each([
+      ['Set-Location -Path:', 'Set-Location -Path:/repo; %S'],
+      ['Set-Location -Path', 'Set-Location -Path /repo; %S'],
+      ['Set-Location -LiteralPath:', 'Set-Location -LiteralPath:/repo; %S'],
+      ['Set-Location -PSPath', 'Set-Location -PSPath /repo; %S'],
+      ['Push-Location -Path:', 'Push-Location -Path:/repo; %S'],
+      ['chdir', 'chdir /repo; %S'],
+    ])('judges the shape in the folder PowerShell %s names', (_name, tpl) => {
+      const cmd = tpl.replace('%S', shape);
+      const calls: GitCall[] = [];
+      expect(denied(pwsh(cmd, { cwd: SUB }), { ...W, calls }), cmd).toBe(true);
+      expect(cwdsOf(calls), cmd).toContain('/repo');
+      expect(cwdsOf(calls).filter((c) => /Path:?\/repo|PSPath/i.test(c)), cmd).toEqual([]);
+    });
+    it('allows a cd to a non-CCv3 folder in each new spelling', () => {
+      for (const tpl of ['builtin cd', 'command cd', 'chdir', 'cd -P', 'cd --', '{ cd']) {
+        const cmd = `${tpl} ${O} && ${shape}${tpl === '{ cd' ? '; }' : ''}`;
+        expect(denied(bash(cmd, { cwd: SUB }), W), cmd).toBe(false);
+      }
+    });
+    // A cd after a pipe (|, ||, |&, with or without comment lines between) may be skipped or run in a pipe subshell: the cwd is judged too.
+    it.each([
+      ['|&', `echo x |& cd ${O} && %S`],
+      ['| and a comment line', `echo x |\n# note\ncd ${O} && %S`],
+      ['| and two comment lines', `echo x |\n# one\n# two\ncd ${O} && %S`],
+      ['|& and a comment line, builtin cd', `echo x |&\n# note\nbuiltin cd ${O} && %S`],
+      ['|| and a comment line', `false ||\n# note\ncd ${O} && %S`],
+      ['| and chdir', `echo x | chdir ${O} && %S`],
+    ])('judges the cwd too when the cd follows %s', (_name, tpl) => {
+      const cmd = tpl.replace('%S', shape);
+      expect(denied(bash(cmd), W), cmd).toBe(true);
+    });
+    // A cd in a subshell does not last past the `)`: the shape after it runs in the cwd. It must not be judged in the cd folder alone.
+    it.each([
+      ['a subshell closed before the shape', `(cd ${O}) && %S`],
+      ['a command substitution closed before the shape', `x=$(cd ${O}) && %S`],
+    ])('judges the cwd too after %s', (_name, tpl) => {
+      const cmd = tpl.replace('%S', shape);
+      expect(denied(bash(cmd), W), cmd).toBe(true);
+    });
+    it('a comment line after && does not make the cd loose', () => {
+      const cmd = `echo x &&\n# note\ncd ${O} && ${shape}`;
+      expect(denied(bash(cmd), W), cmd).toBe(false);
+    });
+    it('does not read the & of an fd redirect as a joiner', () => {
+      for (const cmd of [`cd ${O} 2>&1 && ${shape}`, `cd ${O} && npm test 2>&1 && ${shape}`, `cd ${O} &>/dev/null && ${shape}`, `cd ${O} && npm test >&2 && ${shape}`]) {
+        expect(denied(bash(cmd), W), cmd).toBe(false);
+      }
+    });
+    it.each([
+      ['a pipe after the redirect', `cd ${O} && npm test 2>&1 | tail && %S`],
+      ['a ; after the redirect', `cd ${O} && npm test 2>&1; %S`],
+      ['a lone & after the cd', `cd ${O} & %S`],
+    ])('still judges the cwd when %s', (_name, tpl) => {
+      const cmd = tpl.replace('%S', shape);
+      expect(denied(bash(cmd), W), cmd).toBe(true);
+    });
+  });
+
+  // A bare cd form goes home: the folder is unknown. Denied as position-unknown when a CCv3 folder is on the path, even with a tap.
+  describe('an unknown position', () => {
+    const UNKNOWN: [string, string][] = [
+      ['chdir', `cd ${O} && chdir && %S`],
+      ['builtin cd', `cd ${O} && builtin cd && %S`],
+      ['command cd', `cd ${O} && command cd && %S`],
+      ['cd -P', `cd ${O} && cd -P && %S`],
+      ['cd --', `cd ${O} && cd -- && %S`],
+      ['cd -P -', `cd ${O} && cd -P - && %S`],
+      ['a bare cd after {', `cd ${O} && { cd; %S; }`],
+      ['a bare cd after then', `cd ${O} && if true; then cd; %S; fi`],
+      ['a bare cd after do', `cd ${O} && for i in 1; do cd; %S; done`],
+    ];
+    describe.each(SHAPES)('%s', (_kind, shape) => {
+      it.each(UNKNOWN)('denies %s as position-unknown', (_name, tpl) => {
+        const cmd = tpl.replace('%S', shape);
+        expect(patternOf(bash(cmd), W), cmd).toBe('position-unknown');
+      });
+      it('a tap does not lift it', () => {
+        tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
+        tap('open-pr', branchKey(), HEAD, 'Open draft PR (Recommended)');
+        tap('land', prKey(12), HEAD, 'Land now (Recommended)');
+        const cmd = `cd ${O} && chdir && ${shape}`;
+        expect(patternOf(bash(cmd), W), cmd).toBe('position-unknown');
+      });
+      it('passes when no folder on the path is CCv3', () => {
+        for (const cmd of [`chdir && ${shape}`, `builtin cd && ${shape}`, `cd -P && ${shape}`, `cd ${O} && chdir && ${shape}`]) {
+          expect(denied(bash(cmd, { cwd: SUB }), W), cmd).toBe(false);
+        }
+      });
+    });
+    it('denies the PowerShell bare forms', () => {
+      for (const cmd of [`Set-Location ${O}; chdir; ${PUSH}`, `Set-Location ${O}; sl; ${PUSH}`, `Set-Location ${O}; Set-Location; ${PUSH}`]) {
+        expect(patternOf(pwsh(cmd), W), cmd).toBe('position-unknown');
+      }
+    });
+  });
+});
+
+// T20 (round 2 of the cd parity lane): a cd that is not at a command position must not hide the cwd; a cd that never moves the parent shell
+// (a job, a parallel block) must not count as a sure cd; more bash command positions; a partly quoted target; more PowerShell spellings.
+describe('T20 cd positions, scriptblocks and targets', () => {
+  const O = '/tmp/other-repo';
+  const OSP = '/tmp/other repo';
+  const SUB = '/repo/sub';
+  const W: World = { otherDirs: [O, SUB, OSP, O + '/'] };
+  const PUSH = 'git push fork feat/x';
+  const C = 'gh pr create --draft --head feat/x --title t --body-file b.md';
+  const M = `gh pr merge 12 --merge --match-head-commit ${HEAD}`;
+  const SHAPES: [string, string][] = [['push', PUSH], ['create', C], ['merge', M]];
+  const fill = (tpl: string, shape: string): string => tpl.replaceAll('%O', O).replaceAll('%S', shape);
+
+  describe.each(SHAPES)('%s', (_kind, shape) => {
+    // These words are no command position: nothing moves the shell, so the shape runs in the CCv3 cwd (/repo) and is judged there.
+    it.each([
+      ['echo then cd', 'echo then cd %O && %S'],
+      ['echo else cd', 'echo else cd %O && %S'],
+      ['echo do cd', 'echo do cd %O && %S'],
+      ['echo { cd', 'echo { cd %O && %S'],
+      ['echo x{ cd', 'echo x{ cd %O && %S'],
+      ['git log do cd', 'git log -1 --format=x do cd %O && %S'],
+    ])('judges the cwd when %s is no command', (_name, tpl) => {
+      expect(denied(bash(fill(tpl, shape)), W), fill(tpl, shape)).toBe(true);
+    });
+    it.each([
+      ['Write-Output then cd', 'Write-Output then cd %O && %S'],
+      ['Write-Output { cd', 'Write-Output { cd %O && %S'],
+    ])('judges the cwd when PowerShell %s is no command', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(true);
+    });
+    // A job or a parallel block runs its cd in another runspace: the parent shell stays in the cwd, so the cwd is judged.
+    it.each([
+      ['Start-Job', 'Start-Job { Set-Location %O } && %S'],
+      ['Start-Job -ScriptBlock', 'Start-Job -ScriptBlock { Set-Location %O } && %S'],
+      ['Start-ThreadJob', 'Start-ThreadJob { Set-Location %O } && %S'],
+      ['ForEach-Object -Parallel', '1 | ForEach-Object -Parallel { Set-Location %O } && %S'],
+      ['pwsh -Command', 'pwsh -NoProfile -Command { Set-Location %O } && %S'],
+      ['a cd after a ; in the job', 'Start-Job { Write-Host hi; Set-Location %O } && %S'],
+      ['a cd in a nested block of the job', 'Start-Job { if ($true) { Set-Location %O } } && %S'],
+    ])('judges the cwd when the cd is inside %s', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(true);
+    });
+    // The scriptblock of & and Invoke-Command runs in the current session: the location stays. Pinned (the round-1 change stays).
+    it.each([
+      ['& {', '& { Set-Location %O } && %S'],
+      ['Invoke-Command {', 'Invoke-Command { Set-Location %O } && %S'],
+    ])('does not judge the cwd after %s } moved the location', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(false);
+    });
+    // Invoke-Command names its target AFTER the block: the cd runs on another computer, in a session or as a job, and the local shell stays in the cwd.
+    it.each([
+      ['-ComputerName', 'Invoke-Command { Set-Location %O } -ComputerName localhost && %S'],
+      ['-Session', 'Invoke-Command { Set-Location %O } -Session $s && %S'],
+      ['-AsJob', 'Invoke-Command { Set-Location %O } -AsJob && %S'],
+      ['-ScriptBlock and -ComputerName', 'icm -ScriptBlock { Set-Location %O } -ComputerName srv && %S'],
+    ])('judges the cwd when Invoke-Command runs the cd with %s', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(true);
+    });
+    // A parameter alias or a prefix after the block (-cn, -Comp, -CU, -VMGuid) also names another place: any parameter after the block counts (CodeRabbit CLI, 816013a).
+    it.each([
+      ['-cn alias', 'icm { Set-Location %O } -cn srv && %S'],
+      ['-Comp prefix', 'Invoke-Command { Set-Location %O } -Comp srv && %S'],
+      ['-CU alias', 'icm { Set-Location %O } -CU http://srv && %S'],
+      ['-VMGuid', 'icm { Set-Location %O } -VMGuid $g && %S'],
+    ])('judges the cwd when Invoke-Command runs the cd with %s', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(true);
+    });
+    // In PowerShell a backslash is no escape: a quoted folder may end in one, and a quote inside the other kind of quote is a letter of the name.
+    it.each([
+      ['a double-quoted folder with a trailing backslash', 'Set-Location "%O\\" && %S'],
+      ['a single-quoted folder with a trailing backslash', "Set-Location '%O\\' && %S"],
+    ])('reads %s as the folder', (_name, tpl) => {
+      expect(denied(pwsh(fill(tpl, shape), { cwd: SUB }), W), fill(tpl, shape)).toBe(false);
+    });
+    // The closing ) or backtick of a subshell is no part of the folder.
+    it.each([
+      ['a subshell', '(cd %O) && %S'],
+      ['a command substitution', 'x=$(cd %O) && %S'],
+      ['a backtick', 'x=`cd %O` && %S'],
+    ])('reads the folder of %s without the closing mark', (_name, tpl) => {
+      expect(denied(bash(fill(tpl, shape), { cwd: SUB }), W), fill(tpl, shape)).toBe(false);
+    });
+    // Bash command positions: the cd after if, while, until, elif, !, time, a variable prefix, a backslash, a wrapper chain, eval, a case pattern.
+    it.each([
+      ['if', 'if cd /repo; then %S; fi'],
+      ['if and &&', 'if cd /repo && %S; then :; fi'],
+      ['while', 'while cd /repo && %S; do break; done'],
+      ['until', 'until cd /repo; do :; done; %S'],
+      ['elif', 'if false; then :; elif cd /repo && %S; then :; fi'],
+      ['!', '! cd /repo || %S'],
+      ['a case pattern', 'case x in x) cd /repo && %S;; esac'],
+      ['a variable prefix', 'X=1 cd /repo && %S'],
+      ['time', 'time cd /repo && %S'],
+      ['a backslash', '\\cd /repo && %S'],
+      ['command builtin', 'command builtin cd /repo && %S'],
+      ['builtin command', 'builtin command cd /repo && %S'],
+      ['eval', 'eval cd /repo && %S'],
+    ])('judges the shape in the folder a cd names after %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd, { cwd: SUB }), W), cmd).toBe(true);
+    });
+    it.each([
+      ['a variable prefix', 'X=1 cd %O && %S'],
+      ['time', 'time cd %O && %S'],
+      ['a backslash', '\\cd %O && %S'],
+      ['command builtin', 'command builtin cd %O && %S'],
+      ['eval', 'eval cd %O && %S'],
+    ])('sees the cd after %s, so a cd to a non-CCv3 folder passes', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd), W), cmd).toBe(false);
+    });
+    // A target that is partly quoted or has an escaped space is one folder.
+    it.each([
+      ['a quoted tail', 'cd /tmp/"other-repo" && %S'],
+      ['a single-quoted tail', "cd /tmp/'other-repo' && %S"],
+      ['a quoted head', "cd '/tmp'/other-repo && %S"],
+      ['an escaped space', 'cd /tmp/other\\ repo && %S'],
+      ['a quoted space', 'cd "/tmp/other repo" && %S'],
+    ])('reads %s as the whole folder', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd), W), cmd).toBe(false);
+    });
+    it.each([
+      ['a comment block', '<# note #> Set-Location /repo; %S'],
+      ['an assignment', '$null = Set-Location /repo; %S'],
+      ['a module name', 'Microsoft.PowerShell.Management\\Set-Location /repo; %S'],
+    ])('judges the shape in the folder PowerShell names after %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(pwsh(cmd, { cwd: SUB }), W), cmd).toBe(true);
+    });
+    // Accepted over-deny, pinned: the target is a shell variable, so the folder is the literal `$d`. It fails closed: here the fake git reads
+    // it as a CCv3 folder (tap deny); the real hook finds no such folder and denies as unjudgeable.
+    it('denies a cd to a shell variable (accepted over-deny, fails closed)', () => {
+      const cmd = fill('for d in %O; do cd $d && %S; done', shape);
+      expect(denied(bash(cmd, { cwd: SUB }), W), cmd).toBe(true);
+    });
   });
 });
