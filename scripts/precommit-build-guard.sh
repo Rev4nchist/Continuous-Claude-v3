@@ -13,9 +13,10 @@
 #   - staged .claude/hooks/src/**/*.ts (excluding __tests__/ and *.d.ts) AND no staged
 #     .claude/hooks/dist/*.mjs                                              -> BLOCK (exit 1)
 #   - same src staged WITH >=1 staged .claude/hooks/dist/*.mjs              -> ALLOW (exit 0)
-#   - every staged src change is comment/whitespace-only vs HEAD            -> ALLOW (exit 0)
-#     (scripts/hooks-src-comment-only.mjs parses both versions with TypeScript; esbuild drops
-#     ordinary comments, so the dist cannot change. Needs node + TypeScript; else the block stays.)
+#   - every staged src change leaves the emitted code unchanged vs HEAD      -> ALLOW (exit 0)
+#     (scripts/hooks-src-comment-only.mjs runs both versions through esbuild's transform, the tool
+#     that builds the dist. Comments, layout and TypeScript types are erased, so the dist cannot
+#     change. Needs node + esbuild; a file that does not transform keeps the block.)
 #   - anything else (docs-only, dist-only, test-only, d.ts-only, nothing)  -> ALLOW (exit 0)
 #
 # Escape hatch:  SKIP_BUILD_GUARD=1 git commit ...   (or `git commit --no-verify`)
@@ -116,15 +117,15 @@ if [ -n "$dist_mjs" ]; then
   exit 0
 fi
 
-# A change that touches only comments or whitespace cannot change the built dist (esbuild drops
-# ordinary comments), so there is nothing to rebuild or stage. The helper proves it by parsing both
-# versions; anything it cannot prove (code change, new file, legal comment, no node/TypeScript)
-# keeps the block below.
+# A change that only touches comments, whitespace or TypeScript types cannot change the built dist
+# (esbuild erases all three), so there is nothing to rebuild or stage. The helper proves it by
+# comparing the esbuild output of both versions; anything it cannot prove (code change, import path
+# change, new file, legal comment, no node/esbuild) keeps the block below.
 helper="$(dirname "${BASH_SOURCE[0]}")/hooks-src-comment-only.mjs"
 if command -v node >/dev/null 2>&1 && [ -f "$helper" ]; then
   mapfile -t src_files <<< "$src_ts"
   if node "$helper" "${src_files[@]}" >/dev/null 2>&1; then
-    echo "precommit-build-guard: staged hook source changes are comment/whitespace-only; dist cannot change." >&2
+    echo "precommit-build-guard: staged hook source changes are comment, whitespace or type-only; dist cannot change." >&2
     exit 0
   fi
 fi
