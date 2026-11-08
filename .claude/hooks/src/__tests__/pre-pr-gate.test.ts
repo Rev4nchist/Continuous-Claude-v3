@@ -2385,6 +2385,10 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
     ['cd B extra; open', (o) => `cd ${B} extra; ${o}`, { A: 'stamp' }],
     ['cd B extra || open', (o) => `cd ${B} extra || ${o}`, { A: 'stamp' }],
     ['cd B<newline>open', (o) => `cd ${B}\n${o}`, { A: 'stamp' }],
+    // a later `;` splits the && chain: if `cd B` fails, `git status` is skipped and the open still runs in the cwd (CodeRabbit CLI, minor)
+    ['cd B && git status; open', (o) => `cd ${B} && git status; ${o}`, { A: 'stamp', B: 'allow' }],
+    ['cd B && git status || open', (o) => `cd ${B} && git status || ${o}`, { A: 'stamp', B: 'allow' }],
+    ['cd B && git status && open', (o) => `cd ${B} && git status && ${o}`, { A: 'allow', C: 'allow' }],
     // false-deny rows: a cd after the open, a step that cannot be the open folder, a folder that does not exist
     ['open; cd A', (o) => `${o}; cd ${A}`, { B: 'allow', C: ['allow', 'repo-identity'] }],
     ['open; cd C', (o) => `${o}; cd ${C}`, { B: 'allow' }],

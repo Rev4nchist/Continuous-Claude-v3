@@ -514,8 +514,8 @@ function cdSteps(masked, raw, end) {
   const pre = masked.slice(0, end);
   return [...pre.matchAll(new RegExp(CD_TARGET.source, "gi"))].map((m) => {
     const at = m.index + m[0].length;
-    const joiner = /&&|\|\||[;&|\r\n]/.exec(pre.slice(at))?.[0];
-    return { target: raw.slice(at - m[1].length, at), andOnly: joiner === "&&" };
+    const joiners = pre.slice(at).match(/&&|\|\||[;&|\r\n]/g) ?? [];
+    return { target: raw.slice(at - m[1].length, at), andOnly: joiners.length > 0 && joiners.every((j) => j === "&&") };
   });
 }
 function planRun(command, cwd, shell) {
