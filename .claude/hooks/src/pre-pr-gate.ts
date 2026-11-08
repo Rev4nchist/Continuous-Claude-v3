@@ -19,14 +19,18 @@
  * The checkout decides the target; only a CCv3 signal overrides it. A CCv3 signal anywhere in the raw text (a CCv3 -R / --repo / GH_REPO value,
  * the process env GH_REPO, a repos/<o>/<r>/ endpoint text, a PR URL) names CCv3, and that command must run in a CCv3 checkout.
  * The hook never names a foreign repo: a gated command from a CCv3 checkout is always gated, whatever -R it holds.
- * Any cd, Set-Location, sl, pushd or Push-Location target in the text (before or after the call, quoted or not) that is a CCv3 checkout gates the checkpoint rules too, as the cwd does.
+ * Any cd, Set-Location, sl, chdir, pushd or Push-Location target in the text (before or after the call, quoted or not) that is a CCv3 checkout gates the checkpoint rules too, as the cwd does.
  * The stamp rules judge every folder the open may run in (planRun). Only the cds BEFORE the open count. A cd after it never moves it.
  * With no cd, the folder is the payload cwd. With cds, the folder is the one after the last cd.
  * Up to the last cd that is not joined by `&&`, the folder after each earlier cd and the cwd count too.
  * A cd joined by `;`, `||` or a line end can fail (`cd B extra`, a missing folder). The shell then stays where it was.
+ * A cd that follows a `||` or a pipe (`true || cd B && open`, `true | cd B && open`) may be skipped or run in a subshell: it is loose too, and the cwd counts.
+ * A popd, Pop-Location, `cd -` or a bare cd before the open makes the folder unknown. It is denied (position-unknown) when it names CCv3 or the cwd or a
+ * folder on the known cd path is a CCv3 checkout. Otherwise the known folders are still judged. Use one absolute cd (`cd <full path> && ...`).
  * The open is denied when any one of these folders denies. A folder that does not exist is dropped when the cwd is also a candidate.
  * Join the cd to the open with `&&` to name one folder.
  * Accepted residual: a cd inside `( ... )`, `$( ... )` or quotes is not seen as a cd.
+ * Accepted over-deny: a heredoc body line that is only `popd`, `cd -` or `cd` reads as a command (position-unknown). Reading heredocs needs a lexer.
  * Accepted residual: from a foreign checkout, a CCv3 -R hidden by shell syntax (v""3, -dR) is not seen. The hook guards against mistakes, not a hostile agent.
  * Accepted residual: text sent to an existing Desktop Commander shell is judged against the payload cwd, not that shell's cwd. So a PR create
  * with no -R, sent from a non-CCv3 session cwd into a shell already cd'd into a CCv3 checkout, is not gated.
@@ -143,7 +147,18 @@ export function isCcv3Remote(url: string): boolean {
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
 
-const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
+// The gap after the command is spaces or tabs only: `cd` + newline is a bare cd (UNKNOWN_CD), and the next line is not its target.
+// A command position: the start, after a separator or an open brace, or after then, else or do. A builtin or command word before the name does not hide it.
+const CMD_POS = String.raw`(?:^|[;&|\r\n{]\s*|\b(?:then|else|do)\s+)(?:(?:builtin|command)\s+)?`;
+const CD_NAMES = 'cd|Set-Location|sl|chdir|pushd|Push-Location';
+// A bash option (cd -P A, cd -- A) or a PowerShell parameter (-Path A, -Path:A) may come before the target.
+const CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?("[^"]+"|'[^']+'|[^\s;&|]+)`, 'gi');
+/**
+ * popd, Pop-Location and a bare cd (with no target) go to a folder the text does not name. Found in the masked view, at a command position.
+ * `cd -` is not here: cdSteps reads it as a cd step and flags it, so one reader sees every cd that has a target and the two cannot disagree.
+ * It reads separators and command names only. decision-gate keeps its own copy of this reading (UNKNOWN_CD_SOURCE); it is not touched by this fix.
+ */
+const UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})[ \t]*(?=[;&|\r\n]|$))`, 'gi');
 /** Git Bash writes C:\x as /c/x. Node on Windows reads /c/x as \c\x, so turn the one-letter drive prefix back into C:. Other platforms keep the path. */
 export const fromGitBashPath = (p: string, platform: string = process.platform): string =>
   platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p;
@@ -173,7 +188,12 @@ export const DIR_NOT_FOUND = 'DIR_NOT_FOUND';
 // ---------- the folders a PR open may run in ----------
 
 /** One cd, Set-Location, sl, pushd or Push-Location before the open: its raw target, and whether `&&` joins it to what follows. */
-interface CdStep { target: string; andOnly: boolean }
+interface CdStep {
+  target: string;
+  andOnly: boolean;
+  /** `cd -` or `cd +`: a folder the text does not name. It is no step of the known path. */
+  unknown?: boolean;
+}
 
 /** What the text says about where the gated command runs. */
 interface RunPlan {
@@ -181,8 +201,12 @@ interface RunPlan {
   dirs: string[];
   /** The folder after every cd succeeded. */
   final: string;
+  /** The cwd, then the folder after each known cd, in order. A && chain collapses dirs to the last one; the position rule judges all of these. */
+  states: string[];
   /** Folders (with the cd target text) that hold an unexpanded variable, or follow a cd that does. */
   unexpanded: Map<string, string>;
+  /** A popd, Pop-Location, `cd -` or a bare cd comes before the gated command: the folder is not named by the text (see positionDeny). */
+  unknown: boolean;
 }
 
 /**
@@ -204,12 +228,32 @@ function gatedStart(masked: string, raw: string): number | null {
 /** The cds that come before `end`, in order. A cd is found in the masked view, so a quoted `; cd x` is not one; the target is read from the raw text. */
 function cdSteps(masked: string, raw: string, end: number): CdStep[] {
   const pre = masked.slice(0, end);
-  return [...pre.matchAll(new RegExp(CD_TARGET.source, 'gi'))].map((m) => {
+  return [...pre.matchAll(new RegExp(CD_TARGET.source, 'gi'))].flatMap((m) => {
     const at = m.index! + m[0].length;
+    const target = raw.slice(at - m[1].length, at);
+    // `cd -` goes to a folder the text does not name, not to a folder called "-": flag it. planRun makes the position unknown.
+    if (/^[-+]$/.test(target)) return [{ target, andOnly: false, unknown: true }];
     // Every separator between this cd and the open must be `&&`: a later `;`, `||` or line end lets the open run when this cd failed.
-    const joiners = pre.slice(at).match(/&&|\|\||[;&|\r\n]/g) ?? [];
-    return { target: raw.slice(at - m[1].length, at), andOnly: joiners.length > 0 && joiners.every((j) => j === '&&') };
+    // The & of a file-descriptor redirect (2>&1, &>file) is no separator: blank it first.
+    const joiners = pre.slice(at).replace(FD_REDIRECT, ' ').match(/&&|\|\||[;&|\r\n]/g) ?? [];
+    // A | before the cd (||, a pipe, |&, with or without a comment line between) means the cd may be skipped, or run in a pipe subshell. Then it is loose.
+    const piped = m[0].startsWith('|') || endsInPipe(pre.slice(0, m.index!));
+    return [{ target, andOnly: !piped && joiners.length > 0 && joiners.every((j) => j === '&&') }];
   });
+}
+
+/** 2>&1, >&2, <&3, 2>&-, &>file and &>>file: the & belongs to a redirect. */
+const FD_REDIRECT = /\d*[<>]&\d*-?|&>>?/g;
+
+/** True when the text ends in a pipe (|, || or |&), looking past blanks and comment lines. Text that only looks like a comment makes the cd loose: fail closed. */
+function endsInPipe(before: string): boolean {
+  let t = before.trimEnd();
+  for (;;) {
+    const c = t.replace(/(?:^|\s)#[^\r\n]*$/, '').trimEnd();
+    if (c === t) break;
+    t = c;
+  }
+  return t.endsWith('|');
 }
 
 /**
@@ -222,7 +266,8 @@ function cdSteps(masked: string, raw: string, end: number): CdStep[] {
 function planRun(command: string, cwd: string, shell: 'bash' | 'pwsh'): RunPlan {
   const masked = maskQuoted(command, shell === 'pwsh' ? 'PowerShell' : 'Bash');
   const start = gatedStart(masked, command);
-  const steps = cdSteps(masked, command, start ?? command.length);
+  const all = cdSteps(masked, command, start ?? command.length);
+  const steps = all.filter((s) => s.unknown !== true);
   const states = [cwd];
   const unexpanded = new Map<string, string>();
   let broken = false;
@@ -236,7 +281,8 @@ function planRun(command: string, cwd: string, shell: 'bash' | 'pwsh'): RunPlan 
   }
   const lastLoose = start === null ? steps.length : steps.map((s) => s.andOnly).lastIndexOf(false) + 1;
   const final = states[states.length - 1];
-  return { dirs: [...new Set([...(lastLoose > 0 ? states.slice(0, lastLoose + 1) : []), final])], final, unexpanded };
+  const unknown = all.some((s) => s.unknown === true) || masked.slice(0, start ?? command.length).match(UNKNOWN_CD) !== null;
+  return { dirs: [...new Set([...(lastLoose > 0 ? states.slice(0, lastLoose + 1) : []), final])], final, states, unexpanded, unknown };
 }
 
 /**
@@ -401,6 +447,12 @@ interface Ctx {
   dirs: string[];
   /** The folder after every cd worked. It is the one folder whose git errors fail closed; the others only add denies. */
   final: string;
+  /** The payload cwd. */
+  cwd: string;
+  /** The cwd, then the folder after each known cd (RunPlan.states). */
+  states: string[];
+  /** A popd, Pop-Location, `cd -` or a bare cd comes before the gated command (RunPlan.unknown). */
+  unknown: boolean;
   /** The shell of the tool call: Git Bash paths (/c/x) are converted for bash only. */
   shell: 'bash' | 'pwsh';
   /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal value beside a CCv3 signal does not hide it. */
@@ -444,7 +496,7 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes, 
   };
   const inCcv3 = once(() => named === CCV3_REPO || isCcv3At(final) || candidateDirs(command, cwd, shell).some((d) => d !== final && isCcv3Dir(deps, d)));
   return {
-    dirs, final, shell, named, top, isCcv3At,
+    dirs, final, cwd, states: plan.states, unknown: plan.unknown, shell, named, top, isCcv3At,
     ccv3: inCcv3,
     // No usable config in the cwd checkout: fail closed for a command that names CCv3, a self-confirm (repo-free, pr-checkpoint is CCv3-only)
     // and a command that runs in a CCv3 checkout. Any other command is warn mode. A readable config keeps its own value.
@@ -485,8 +537,24 @@ function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
 }
 
 function judge(command: string, deps: Deps, ctx: Ctx, shapes: Shapes): Decision {
-  const stamp = shapes.create ? stampDeny(command, deps, ctx) : null;
-  return stamp ?? checkpointDeny(deps, ctx, shapes) ?? { action: 'allow' };
+  const where = positionDeny(ctx, shapes);
+  // An open: the position deny is a stamp-rule deny (hard) and comes first, as its text tells the fix. It is null unless CCv3 may be the folder,
+  // so every other deny still runs for a position that cannot be CCv3. Any other shape: its own soft rules first, then the position.
+  if (shapes.create) return where ?? stampDeny(command, deps, ctx) ?? checkpointDeny(deps, ctx, shapes) ?? { action: 'allow' };
+  return checkpointDeny(deps, ctx, shapes) ?? where ?? { action: 'allow' };
+}
+
+const POSITION_WHY = 'popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, so the checkout this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd.';
+
+/**
+ * A popd, Pop-Location, `cd -` or a bare cd comes before the gated command, so the folder is unknown. Denied when the command may run in a CCv3
+ * checkout without a stamp: it names CCv3, or the cwd or a folder on the known cd path is a CCv3 checkout. Otherwise null, and the caller still judges
+ * the known folders (a --repo, a self-confirm, a stamp in a known CCv3 folder). Same wording as decision-gate POSITION_WHY.
+ */
+function positionDeny(ctx: Ctx, shapes: Shapes): Decision | null {
+  if (!ctx.unknown) return null;
+  if (ctx.named !== CCV3_REPO && ![...new Set([ctx.cwd, ...ctx.states, ...ctx.dirs])].some((d) => ctx.isCcv3At(d))) return null;
+  return shapes.create ? { action: 'deny', pattern: 'position-unknown', reason: `BLOCKED (pre-pr-gate): ${POSITION_WHY}` } : soft('position-unknown', POSITION_WHY);
 }
 
 /** The stamp rules of #193 and #197, judged in every folder the open may run in. Enforced in both modes. The first folder that denies wins. */
