@@ -429,6 +429,14 @@ function logGuardError(hook, err, opts = {}) {
   }
 }
 
+// src/shared/mask-quotes.ts
+var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
+var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
+var blank = (s) => s[0] + " ".repeat(s.length - 2) + s[s.length - 1];
+function maskQuoted(command, tool = "Bash") {
+  return command.replace(tool === "PowerShell" ? PWSH_STRING : BASH_STRING, blank);
+}
+
 // src/shared/shell-tools.ts
 var BOTH = ["Bash", "PowerShell"];
 var SHELL_TOOLS = /* @__PURE__ */ new Map([
@@ -468,7 +476,7 @@ var commandOf = (input) => {
 };
 var isDesktopCommander = (input) => (input.tool_name || input.tool || "").startsWith(DC);
 function headBranchOf(command) {
-  const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
+  const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"';&|]+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"';&|]+)/.exec(command) : null);
   return m ? m[1].replace(/^[^:\s]+:/, "").replace(/["']+$/, "") : null;
 }
 function isCcv3Remote(url) {
@@ -487,31 +495,67 @@ function hasUnexpandedPart(target) {
   return /[$`]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith("~");
 }
 var CD_UNEXPANDED = "CD_UNEXPANDED";
-function guardUnexpandedCd(deps, command, cwd, shell) {
-  const m = new RegExp(CD_TARGET.source, "i").exec(command);
-  if (!m || !hasUnexpandedPart(m[1])) return deps;
-  const dir = resolveIn(cwd, m[1], shell);
-  const target = m[1].replace(/^["']|["']$/g, "").slice(0, 120);
+var DIR_NOT_FOUND = "DIR_NOT_FOUND";
+function gatedStart(masked, raw) {
+  let found = null;
+  let from = 0;
+  const cut = (to) => {
+    const seg = raw.slice(from, to);
+    if (seg.trim() !== "" && (isPrOpenText(seg) || isGated(shapesOf(seg)))) found = from;
+  };
+  for (const m of masked.matchAll(/[;&|\r\n]+/g)) {
+    cut(m.index);
+    from = m.index + m[0].length;
+  }
+  cut(masked.length);
+  return found;
+}
+function cdSteps(masked, raw, end) {
+  const pre = masked.slice(0, end);
+  return [...pre.matchAll(new RegExp(CD_TARGET.source, "gi"))].map((m) => {
+    const at = m.index + m[0].length;
+    const joiners = pre.slice(at).match(/&&|\|\||[;&|\r\n]/g) ?? [];
+    return { target: raw.slice(at - m[1].length, at), andOnly: joiners.length > 0 && joiners.every((j) => j === "&&") };
+  });
+}
+function planRun(command, cwd, shell) {
+  const masked = maskQuoted(command, shell === "pwsh" ? "PowerShell" : "Bash");
+  const start = gatedStart(masked, command);
+  const steps = cdSteps(masked, command, start ?? command.length);
+  const states = [cwd];
+  const unexpanded = /* @__PURE__ */ new Map();
+  let broken = false;
+  for (const s of steps) {
+    const t = s.target.replace(/^["']|["']$/g, "");
+    const absolute = isAbsolute(t) || /^[A-Za-z]:/.test(t);
+    broken = hasUnexpandedPart(s.target) || broken && !absolute;
+    const dir = resolveIn(states[states.length - 1], s.target, shell);
+    states.push(dir);
+    if (broken) unexpanded.set(dir, t.slice(0, 120));
+  }
+  const lastLoose = start === null ? steps.length : steps.map((s) => s.andOnly).lastIndexOf(false) + 1;
+  const final = states[states.length - 1];
+  return { dirs: [.../* @__PURE__ */ new Set([...lastLoose > 0 ? states.slice(0, lastLoose + 1) : [], final])], final, unexpanded };
+}
+function guardUnexpandedCd(deps, plan) {
+  if (plan.unexpanded.size === 0) return deps;
   return {
     ...deps,
     git: (d, args) => {
-      if (d !== dir) return deps.git(d, args);
+      const target = plan.unexpanded.get(d);
+      if (target === void 0) return deps.git(d, args);
       throw Object.assign(new Error(`cannot expand the cd target ${target}`), { code: CD_UNEXPANDED, target });
     }
   };
-}
-function workDir(command, cwd, shell) {
-  const m = new RegExp(CD_TARGET.source, "i").exec(command);
-  return m ? resolveIn(cwd, m[1], shell) : cwd;
 }
 function candidateDirs(command, cwd, shell) {
   const texts = [command, command.replace(/["']/g, "")];
   const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ""), shell)));
   return [.../* @__PURE__ */ new Set([cwd, ...targets])];
 }
-var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
-var BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
-var SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
+var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"';&|]+)))/;
+var BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"';&|]+))/;
+var SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"';&|]+))/;
 var INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)(?:=|\s*)["']?body=|(?:^|\s)(?:-F|--field)(?:=|\s*)["']?body=(?!@)/;
 var INPUT_FLAG2 = /(?:^|\s)--input(?![\w-])/;
 function bodyFilesOf(command) {
@@ -553,7 +597,8 @@ function isCcv3Checkout(deps, dir) {
 function isCcv3Dir(deps, dir) {
   try {
     return isCcv3Checkout(deps, dir);
-  } catch {
+  } catch (err) {
+    if (err?.code === CD_UNEXPANDED) throw err;
     return false;
   }
 }
@@ -617,10 +662,9 @@ var once = (f) => {
   let box;
   return () => (box ??= { v: f() }).v;
 };
-function makeCtx(input, command, deps, shapes) {
+function makeCtx(input, command, deps, shapes, plan) {
   const cwd = input.cwd || process.cwd();
   const shell = shellOf(input);
-  const dir = workDir(command, cwd, shell);
   const named = namedRepo(command, deps.env);
   const tops = /* @__PURE__ */ new Map();
   const top = (d) => {
@@ -630,12 +674,31 @@ function makeCtx(input, command, deps, shapes) {
     }
     return tops.get(d) ?? null;
   };
-  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd, shell).some((d) => d !== dir && isCcv3Dir(deps, d)));
+  const missing = (d) => {
+    try {
+      top(d);
+      return false;
+    } catch (err) {
+      if (err?.code === DIR_NOT_FOUND) return true;
+      throw err;
+    }
+  };
+  const live = plan.dirs.includes(cwd) ? plan.dirs.filter((d) => d === cwd || !missing(d)) : plan.dirs;
+  const dirs = live.length > 0 ? live : plan.dirs;
+  const final = dirs.includes(plan.final) ? plan.final : cwd;
+  const ccv3At = /* @__PURE__ */ new Map();
+  const isCcv3At = (d) => {
+    if (!ccv3At.has(d)) ccv3At.set(d, d === final ? isCcv3Checkout(deps, d) : isCcv3Dir(deps, d));
+    return ccv3At.get(d) ?? false;
+  };
+  const inCcv3 = once(() => named === CCV3_REPO || isCcv3At(final) || candidateDirs(command, cwd, shell).some((d) => d !== final && isCcv3Dir(deps, d)));
   return {
-    dir,
+    dirs,
+    final,
     shell,
     named,
     top,
+    isCcv3At,
     ccv3: inCcv3,
     // No usable config in the cwd checkout: fail closed for a command that names CCv3, a self-confirm (repo-free, pr-checkpoint is CCv3-only)
     // and a command that runs in a CCv3 checkout. Any other command is warn mode. A readable config keeps its own value.
@@ -662,8 +725,9 @@ function decideAs(input, deps, text) {
   const command = normalizeGh(joinContinuations(raw, shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: "allow" };
-  deps = guardUnexpandedCd(deps, command, input.cwd || process.cwd(), shellOf(input));
-  const ctx = makeCtx(input, command, deps, shapes);
+  const plan = planRun(command, input.cwd || process.cwd(), shellOf(input));
+  deps = guardUnexpandedCd(deps, plan);
+  const ctx = makeCtx(input, command, deps, shapes, plan);
   const d = judge(command, deps, ctx, shapes);
   if (d.action !== "deny") return d;
   if (hasOverride(command, deps.env)) return { action: "override" };
@@ -674,22 +738,30 @@ function judge(command, deps, ctx, shapes) {
   return stamp ?? checkpointDeny(deps, ctx, shapes) ?? { action: "allow" };
 }
 function stampDeny(command, deps, ctx) {
-  const { dir, named, shell } = ctx;
-  if (!ctx.ccv3()) return null;
+  for (const dir of ctx.dirs) {
+    const d = stampDenyIn(command, deps, ctx, dir);
+    if (d) return d;
+  }
+  return null;
+}
+function stampDenyIn(command, deps, ctx, dir) {
+  const { named, shell } = ctx;
+  const rule = (pattern, why) => deny(pattern, ctx.dirs.length > 1 ? `${why}. The command can run in more than one folder. A cd joined by ; or || or a line end can fail. The shell then stays in its folder. This check is for ${dir}. Join the cd to the PR command with && to name one folder` : why);
+  if (named !== CCV3_REPO && !ctx.isCcv3At(dir)) return null;
   const top = ctx.top(dir);
-  if (top === null) return deny("no-checkout", `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
-  if (named !== null && !isCcv3Checkout(deps, dir)) return deny("repo-identity", `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
+  if (top === null) return rule("no-checkout", `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
+  if (named !== null && !ctx.isCcv3At(dir)) return rule("repo-identity", `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
   const bodyPath = singleBodyFile(command);
-  if (bodyPath === null) return deny("body", BODY_UNVERIFIABLE);
+  if (bodyPath === null) return rule("body", BODY_UNVERIFIABLE);
   const branch = headBranchOf(command);
   const headRun = deps.git(top, ["rev-parse", branch ? `${branch}^{commit}` : "HEAD"]);
-  if (headRun.status !== 0) return deny("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${top}`);
+  if (headRun.status !== 0) return rule("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${top}`);
   const head = headRun.stdout.trim();
   const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, shell === "bash" ? fromGitBashPath(bodyPath) : bodyPath))) };
   const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join4(r, STAMP_REL)), head, deps.now(), body));
-  if (!problems.some((p) => p === null)) return deny("stamp", problems[0] ?? "no stamp");
+  if (!problems.some((p) => p === null)) return rule("stamp", problems[0] ?? "no stamp");
   const pushed = pushedProblem(deps, top, branch, head);
-  return pushed ? deny("pushed-head", pushed) : null;
+  return pushed ? rule("pushed-head", pushed) : null;
 }
 function soft(pattern, why) {
   return { action: "deny", pattern, soft: true, reason: `BLOCKED (pre-pr-gate): ${why}` };
@@ -710,10 +782,10 @@ function checkpointDeny(deps, ctx, shapes) {
 }
 function labelAllowed(label, deps, ctx) {
   if (label.blind || label.labels.length !== 1) return false;
-  return pathwayLabel(deps, ctx) === label.labels[0];
+  return ctx.dirs.every((dir) => pathwayLabel(deps, ctx, dir) === label.labels[0]);
 }
-function pathwayLabel(deps, ctx) {
-  const top = ctx.top(ctx.dir);
+function pathwayLabel(deps, ctx, dir) {
+  const top = ctx.top(dir);
   const text = top === null ? null : deps.readFile(join4(top, PATHWAY_REL));
   const head = top === null ? null : deps.git(top, ["rev-parse", "HEAD"]);
   if (text === null || head === null || head.status !== 0) return null;
@@ -848,7 +920,7 @@ function makeGit(spawn = spawnSync, env = process.env, gitPath) {
     if (r.error) {
       if (r.error.code === "ENOENT") {
         if (!existsSync2(resolved)) throw gitNotFound(r.error.message);
-        if (!existsSync2(cwd)) throw new Error(`directory not found: ${cwd}`);
+        if (!existsSync2(cwd)) throw Object.assign(new Error(`directory not found: ${cwd}`), { code: DIR_NOT_FOUND });
       }
       throw r.error;
     }
@@ -901,6 +973,7 @@ export {
   CCV3_REPO,
   CD_UNEXPANDED,
   COMMAND_TOOLS2 as COMMAND_TOOLS,
+  DIR_NOT_FOUND,
   GIT_NOT_FOUND,
   GIT_TIMEOUT_MS,
   MAX_STAMP_AGE_MS,
