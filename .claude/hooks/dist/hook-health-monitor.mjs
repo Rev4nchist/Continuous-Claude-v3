@@ -93,6 +93,19 @@ function deriveSrcPath(distPath) {
   const srcPath = normalized.replace("/hooks/dist/", "/hooks/src/").replace(/\.mjs$/, ".ts");
   return srcPath;
 }
+function activeClaudeRoot() {
+  const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+  return path2.join(home, ".claude");
+}
+function isUnder(child, root) {
+  const norm = (p) => {
+    const s = path2.resolve(p).replace(/\\/g, "/").replace(/\/+$/, "");
+    return process.platform === "win32" ? s.toLowerCase() : s;
+  };
+  const c = norm(child);
+  const r = norm(root);
+  return c === r || c.startsWith(r + "/");
+}
 function checkHookHealth(hookInfo) {
   const { distPath, srcPath, hookEvent, hookName } = hookInfo;
   if (!fs2.existsSync(distPath)) {
@@ -103,6 +116,9 @@ function checkHookHealth(hookInfo) {
   }
   const distDir = path2.dirname(distPath);
   const srcRoot = path2.resolve(distDir, "..", "src");
+  if (isUnder(srcRoot, activeClaudeRoot())) {
+    return { hookName, status: "healthy", hookEvent };
+  }
   const freshness = assessFileFreshness(srcPath, srcRoot, loadBuildInputs(distDir));
   if (freshness.state === "stale") {
     return { hookName, status: "stale", hookEvent };
