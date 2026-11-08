@@ -175,7 +175,8 @@ async function capLeft() {
 function readChange(stamp) {
   try {
     if (!stamp?.summary_sha256) return null;
-    if (!Array.isArray(stamp.results) || stamp.results.find((r) => r.step === 'summary')?.status !== 'PASS') return null;
+    // PASS, or a NOTE the check marked ok (an older Head, a long sentence). A NOTE that hides a real problem has no summary_ok.
+  if (!Array.isArray(stamp.results) || !(stamp.summary_ok === true || stamp.results.find((r) => r.step === 'summary')?.status === 'PASS')) return null;
     const text = readFileSync(path.join(topOf(), SUMMARY_REL), 'utf8');
     return hashOf(text) === stamp.summary_sha256 ? changeOf(text) : null;
   } catch { return null; }

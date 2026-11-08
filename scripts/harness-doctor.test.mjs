@@ -4,16 +4,19 @@
 //
 // How the doctor can fail, one test each below:
 //   sync cursor: missing (FAIL), stale (WARN), current (PASS)
-//   sync: .sync.pending marker, fresh quarantine dirs (count), orphan worktree folder
+//   sync: .sync.pending marker, fresh quarantine dirs (count), orphan worktree folder (WARN from 24 h old with its age and the orphans.mjs
+//          command; younger is info; node_modules is never an orphan)
 //   hooks: missing build manifest (read from the repo, not the home), dirty baseline, child script exit 1 and exit 0,
 //          a missing child script (WARN, not a vacuous PASS)
-//   logs: 0 / 1 / 4 / 5 error thresholds, the 24 h window, bad JSON lines, each log's own error rule
+//   logs: 0 / 1 / 4 rows (PASS), 3 distinct (message, folder) pairs (WARN), 5 rows (FAIL), a benign "directory not found" row, the 24 h window,
+//          bad JSON lines, each log's own error rule
 //   review: ledger at 80% of the day cap, rows of another day, stale review count date
 //   output: exit code, summary line, --json artifact, no artifact without --json
 //   --out: writes the JSON to the named file (parent dir created), needs a value, works without --json
 //   repo:branch: main (PASS), another branch (WARN), detached HEAD (WARN)
 //   schedule:<task>: tasks.json missing / not JSON / no tasks array (WARN), a bad entry (WARN), task not registered (WARN),
-//          last result outside allowedExit (FAIL), last run older than maxAgeHours (WARN), never run (WARN),
+//          last result outside allowedExit (FAIL), last run older than maxAgeHours (WARN), never run (info until its first scheduled
+//          time, then WARN; no XML: WARN),
 //          schtasks columns not found (WARN), columns in another order and quoted commas (parsed by name), skipped off Windows
 //   schedule:<task> registration drift (the task XML vs tasks.json llm/wake/trigger; one row per task, folded in): llm=true but the task
 //          still blocks on battery (WARN "battery"), stops on battery (WARN), wake wanted but WakeToRun absent (WARN "wake"), trigger time or
@@ -31,7 +34,8 @@
 //   lanes:schema: agentic_os.__migrations rows vs the journal. Skipped (PASS), no URL / unreachable / no journal / no table (WARN),
 //          equal with the trigger (PASS), behind by exactly 0004 (WARN "migration 0004 not applied"), behind by more (FAIL),
 //          ahead (WARN), equal but the trigger is gone (FAIL); against real scratch databases with a filled __migrations table
-//   lanes:worktree-lane-mjs: no worktrees dir (PASS absent), same file with CRLF (PASS), a different file (WARN, names the worktree)
+//   lanes:worktree-lane-mjs: no worktrees dir (PASS absent), same file with CRLF (PASS), a different file in a non-worktree or a worktree
+//          that lacks main's last lane.mjs change (WARN, names it), a differing copy on a branch that has that change (info PASS)
 //   lanes:shim: the home shim equals the repo shim (PASS, CRLF folded), differs / missing in home / missing in repo (WARN, never FAIL)
 //   lanes:hook-client-version: both bundles carry lane.client_version (PASS); one lacks it (WARN, FAIL only when the registry has a live
 //          board other than continuous-claude); a bundle missing (WARN); an inactive other board does not count
@@ -89,7 +93,7 @@ const TASK_NAME = 'CCv3-Fake-Task';
  * no wake, daily 07:50. `wake: null` leaves the tag out like Windows does for false. `weekday` makes it a weekly trigger.
  * `every` (an ISO interval such as 'PT5M') makes it a repeating TimeTrigger; `duration` adds a Repetition Duration (none: repeats for ever).
  */
-const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', weekday = null, every = null, duration = null, args = null, command = 'powershell.exe' } = {}) => [
+const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', weekday = null, every = null, duration = null, args = null, command = 'powershell.exe', start = '2026-11-03' } = {}) => [
   '<?xml version="1.0" encoding="UTF-16"?>',
   '<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
   '  <Settings>',
@@ -107,11 +111,11 @@ const taskXml = ({ disallow = true, stop = true, wake = null, time = '07:50', we
     ...(duration ? [`        <Duration>${duration}</Duration>`] : []),
     '        <StopAtDurationEnd>false</StopAtDurationEnd>',
     '      </Repetition>',
-    `      <StartBoundary>2026-11-03T${time}:00-06:00</StartBoundary>`,
+    `      <StartBoundary>${start}T${time}:00-06:00</StartBoundary>`,
     '    </TimeTrigger>',
   ] : [
   '    <CalendarTrigger>',
-  `      <StartBoundary>2026-11-03T${time}:00-06:00</StartBoundary>`,
+  `      <StartBoundary>${start}T${time}:00-06:00</StartBoundary>`,
   ...(weekday
     ? ['      <ScheduleByWeek>', '        <WeeksInterval>1</WeeksInterval>', `        <DaysOfWeek><${weekday} /></DaysOfWeek>`, '      </ScheduleByWeek>']
     : ['      <ScheduleByDay>', '        <DaysInterval>1</DaysInterval>', '      </ScheduleByDay>']),
@@ -299,14 +303,48 @@ test('a quarantine dir with an odd name falls back to its mtime', () => {
   assert.equal(r.checks['sync:quarantine'].status, 'WARN');
 });
 
-test('a worktree folder that git does not list is a WARN naming it; a listed one is not', () => {
+const ageDir = (dir, hours) => { const t = new Date(Date.now() - hours * HOUR); utimesSync(dir, t, t); };
+
+test('a worktree folder that git does not list and is 24 h old or older is a WARN naming it, its age and the dry-run helper; a listed one is not', () => {
   const fx = fixture();
   git(fx.repo, 'worktree', 'add', '-q', '-b', 'wt-real', join(fx.repo, '.claude', 'worktrees', 'real-one'));
-  mkdirSync(join(fx.repo, '.claude', 'worktrees', 'orphan-one'), { recursive: true });
+  const orphan = join(fx.repo, '.claude', 'worktrees', 'orphan-one');
+  mkdirSync(orphan, { recursive: true });
+  ageDir(orphan, 25);
   const r = run(fx);
   assert.equal(r.checks['sync:worktrees'].status, 'WARN');
   assert.match(r.checks['sync:worktrees'].detail, /orphan-one/);
   assert.doesNotMatch(r.checks['sync:worktrees'].detail, /real-one/);
+  assert.match(r.checks['sync:worktrees'].detail, /oldest 2[5-6] h/);
+  assert.ok(r.checks['sync:worktrees'].detail.includes('node scripts/worktree/orphans.mjs'), r.checks['sync:worktrees'].detail);
+});
+
+test('an unlisted worktree folder under 24 h old is not a WARN (a PASS that says info and names it); the oldest orphan sets the age', () => {
+  const fx = fixture();
+  const wt = join(fx.repo, '.claude', 'worktrees');
+  mkdirSync(join(wt, 'fresh-one'), { recursive: true });
+  ageDir(join(wt, 'fresh-one'), 23);
+  const young = run(fx).checks['sync:worktrees'];
+  assert.equal(young.status, 'PASS', young.detail);
+  assert.match(young.detail, /^info: /);
+  assert.match(young.detail, /fresh-one/);
+  mkdirSync(join(wt, 'old-one'), { recursive: true });
+  ageDir(join(wt, 'old-one'), 50);
+  const mixed = run(fx).checks['sync:worktrees'];
+  assert.equal(mixed.status, 'WARN');
+  assert.match(mixed.detail, /old-one/);
+  assert.doesNotMatch(mixed.detail, /fresh-one/);
+  assert.match(mixed.detail, /oldest 5[0-1] h/);
+});
+
+test('the shared store link node_modules is never an orphan, even when it is old', () => {
+  const fx = fixture();
+  const link = join(fx.repo, '.claude', 'worktrees', 'node_modules');
+  const t = new Date(Date.now() - 90 * HOUR);
+  utimesSync(link, t, t);
+  const c = run(fx).checks['sync:worktrees'];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.doesNotMatch(c.detail, /node_modules/);
 });
 
 test('a --repo reached through a link still matches its listed worktrees (no false orphan)', () => {
@@ -377,14 +415,49 @@ test('a repo hook check gets the fixture home, not the real one', () => {
 });
 
 // ---- logs ----
-test('error counts map 0 to PASS, 1 to 4 to WARN and 5 to FAIL', () => {
-  const expected = [[0, 'PASS'], [1, 'WARN'], [4, 'WARN'], [5, 'FAIL']];
+test('error rows map 0 to PASS, a repeat of one error to PASS up to 4 rows, and 5 rows to FAIL', () => {
+  const expected = [[0, 'PASS'], [1, 'PASS'], [2, 'PASS'], [4, 'PASS'], [5, 'FAIL']];
   for (const [n, status] of expected) {
     const fx = fixture();
     put(logPath(fx, 'pre-pr-gate-errors.jsonl'), jsonl(gate(n)));
     const r = run(fx);
     assert.equal(r.checks['logs:pre-pr-gate-errors'].status, status, `${n} errors`);
   }
+});
+
+const gateAt = (n, cwdOf, error = 'spawnSync git ETIMEDOUT') => Array.from({ length: n }, (_, i) => ({ ts: iso(HOUR), hook: 'pre-pr-gate', error, cwd: cwdOf(i) }));
+
+test('a log is a WARN at 3 distinct (message, folder) pairs, not before; the same pair repeated stays below it', () => {
+  const same = fixture();
+  put(logPath(same, 'pre-pr-gate-errors.jsonl'), jsonl(gateAt(4, () => 'C:\\work\\a')));
+  const one = run(same).checks['logs:pre-pr-gate-errors'];
+  assert.equal(one.status, 'PASS', one.detail);
+  assert.match(one.detail, /1 distinct/);
+  const two = fixture();
+  put(logPath(two, 'pre-pr-gate-errors.jsonl'), jsonl([...gateAt(1, () => 'C:\\work\\a'), ...gateAt(1, () => 'C:\\work\\b')]));
+  assert.equal(run(two).checks['logs:pre-pr-gate-errors'].status, 'PASS', '2 pairs');
+  const three = fixture();
+  put(logPath(three, 'pre-pr-gate-errors.jsonl'), jsonl(gateAt(3, (i) => `C:\\work\\${i}`)));
+  const c = run(three).checks['logs:pre-pr-gate-errors'];
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /3 distinct/);
+  const msgs = fixture();
+  put(logPath(msgs, 'pre-pr-gate-errors.jsonl'), jsonl([...gateAt(1, () => 'C:\\w', 'e1'), ...gateAt(1, () => 'C:\\w', 'e2'), ...gateAt(1, () => 'C:\\w', 'e3')]));
+  assert.equal(run(msgs).checks['logs:pre-pr-gate-errors'].status, 'WARN', 'three messages in one folder are three pairs');
+});
+
+test('a "directory not found" error whose path no longer exists is labelled benign and does not count; one whose path exists counts', () => {
+  const gone = fixture();
+  const missing = (i) => join(gone.root, 'no-such-dir', String(i));
+  put(logPath(gone, 'pre-pr-gate-errors.jsonl'), jsonl(Array.from({ length: 6 }, (_, i) => ({ ts: iso(HOUR), hook: 'pre-pr-gate', error: `directory not found: ${missing(i)}`, cwd: gone.root }))));
+  const benign = run(gone).checks['logs:pre-pr-gate-errors'];
+  assert.equal(benign.status, 'PASS', benign.detail);
+  assert.match(benign.detail, /6 benign/);
+  const real = fixture();
+  put(logPath(real, 'pre-pr-gate-errors.jsonl'), jsonl(Array.from({ length: 5 }, () => ({ ts: iso(HOUR), hook: 'pre-pr-gate', error: `directory not found: ${real.repo}`, cwd: real.root }))));
+  const c = run(real).checks['logs:pre-pr-gate-errors'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.doesNotMatch(c.detail, /benign/);
 });
 
 test('a log FAIL exits 1 and names the top message and the file', () => {
@@ -401,14 +474,17 @@ test('a log FAIL exits 1 and names the top message and the file', () => {
 test('errors older than 24 hours are not counted', () => {
   const fx = fixture();
   put(logPath(fx, 'pre-pr-gate-errors.jsonl'), jsonl([...gate(9, 25 * HOUR), ...gate(2, 23 * HOUR)]));
-  assert.equal(run(fx).checks['logs:pre-pr-gate-errors'].status, 'WARN');
+  const c = run(fx).checks['logs:pre-pr-gate-errors'];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /^2 error\(s\)/, 'only the two in-window rows count');
 });
 
 test('bad JSON lines and lines without a valid ts are skipped and counted', () => {
   const fx = fixture();
   put(logPath(fx, 'pre-pr-gate-errors.jsonl'), jsonl(['{not json', '', { error: 'no ts' }, { ts: 'yesterday-ish', error: 'bad ts' }, ...gate(1)]));
   const c = run(fx).checks['logs:pre-pr-gate-errors'];
-  assert.equal(c.status, 'WARN');
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /^1 error\(s\)/);
   assert.match(c.detail, /3 unparsable/);
 });
 
@@ -417,7 +493,8 @@ test('guard-decisions counts only lines with kind error', () => {
   const other = Array.from({ length: 8 }, () => ({ ts: iso(HOUR), kind: 'deny', reason: 'blocked' }));
   put(logPath(fx, 'guard-decisions.jsonl'), jsonl([...other, { ts: iso(HOUR), kind: 'error', reason: 'guard crashed' }]));
   const c = run(fx).checks['logs:guard-decisions'];
-  assert.equal(c.status, 'WARN');
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /^1 error\(s\)/, 'only the kind error line counts');
   assert.match(c.detail, /guard crashed/);
 });
 
@@ -426,7 +503,8 @@ test('hooks.log counts level error lines and ignores info lines', () => {
   const info = Array.from({ length: 8 }, () => ({ ts: iso(HOUR), level: 'info', hook: 'x', msg: 'fine' }));
   put(logPath(fx, 'hooks.log'), jsonl([...info, { ts: iso(HOUR), level: 'error', hook: 'atomic-write', msg: 'write failed' }]));
   const c = run(fx).checks['logs:hooks.log'];
-  assert.equal(c.status, 'WARN');
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /^1 error\(s\)/, 'only the level error line counts');
   assert.match(c.detail, /write failed/);
 });
 
@@ -434,7 +512,8 @@ test('memory-write-failures is read from the state dir', () => {
   const fx = fixture();
   put(join(fx.home, '.claude', 'state', 'memory-write-failures.jsonl'), jsonl([{ ts: iso(HOUR), source: 'store_learning', error: 'missing metadata.source' }]));
   const c = run(fx).checks['logs:memory-write-failures'];
-  assert.equal(c.status, 'WARN');
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /^1 error\(s\)/);
   assert.match(c.detail, /missing metadata\.source/);
 });
 
@@ -565,6 +644,48 @@ test('a task that never ran (N/A, or result 267011) is a WARN', () => {
     assert.equal(c.status, 'WARN', JSON.stringify(f));
     assert.match(c.detail, /never ran/);
   }
+});
+
+// Real data of 2026-11-07 (Saturday): both RuleRouter tasks never ran. Audit: weekly Monday 09:07, start boundary 2026-11-03 (a Tuesday).
+// Review: weekly Monday 09:20, start boundary 2026-11-05 (a Thursday). The first Monday fire after each boundary is 2026-11-09.
+const NEVER_RAN = { 'Last Run Time': 'N/A', 'Last Result': '267011' };
+const localMs = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi).getTime();
+const neverRan = (t, xml, now) => only(sched([t], { [TASK_NAME]: taskCsv(TASK_NAME, NEVER_RAN) }, { queryXml: fakeQueryXml({ [TASK_NAME]: xml }), now }));
+const auditTask = task({ trigger: 'weekly Monday 09:07' });
+const auditXml = taskXml({ weekday: 'Monday', time: '09:07', start: '2026-11-03' });
+const reviewTask = task({ trigger: 'weekly Monday 09:20' });
+const reviewXml = taskXml({ weekday: 'Monday', time: '09:20', start: '2026-11-05' });
+
+test('a weekly task that never ran is info (a PASS) until its first scheduled time has passed: the two RuleRouter tasks on Saturday 2026-11-07', () => {
+  const sat = localMs(2026, 11, 7, 12, 0);
+  for (const [t, xml, first] of [[auditTask, auditXml, '2026-11-09 09:07'], [reviewTask, reviewXml, '2026-11-09 09:20']]) {
+    const c = neverRan(t, xml, sat);
+    assert.equal(c.status, 'PASS', c.detail);
+    assert.match(c.detail, /^info: /);
+    assert.match(c.detail, /not due yet/);
+    assert.ok(c.detail.includes(first), c.detail);
+  }
+});
+
+test('a weekly task that never ran is a WARN once the first Monday fire has passed, and not a minute before', () => {
+  assert.equal(neverRan(auditTask, auditXml, localMs(2026, 11, 9, 9, 6)).status, 'PASS', 'one minute before 09:07');
+  const after = neverRan(auditTask, auditXml, localMs(2026, 11, 9, 9, 8));
+  assert.equal(after.status, 'WARN', after.detail);
+  assert.match(after.detail, /never ran/);
+  assert.equal(neverRan(reviewTask, reviewXml, localMs(2026, 11, 9, 9, 19)).status, 'PASS');
+  assert.equal(neverRan(reviewTask, reviewXml, localMs(2026, 11, 9, 9, 21)).status, 'WARN');
+  assert.equal(neverRan(auditTask, auditXml, localMs(2026, 11, 12, 12, 0)).status, 'WARN', 'later in the week');
+});
+
+test('a task that never ran with a daily or repeating trigger, or one with no readable XML, is judged from its start boundary (or stays a WARN)', () => {
+  const daily = taskXml({ time: '07:50', start: '2026-11-10' });
+  assert.equal(neverRan(task(), daily, localMs(2026, 11, 7, 12, 0)).status, 'PASS', 'start boundary in the future');
+  assert.equal(neverRan(task(), daily, localMs(2026, 11, 10, 7, 51)).status, 'WARN', 'start boundary passed');
+  const every = taskXml({ every: 'PT5M', time: '07:50', start: '2026-11-10' });
+  assert.equal(neverRan(task({ trigger: 'every 5m' }), every, localMs(2026, 11, 7, 12, 0)).status, 'PASS');
+  const noXml = only(sched([task()], { [TASK_NAME]: taskCsv(TASK_NAME, NEVER_RAN) }, { queryXml: null, now: localMs(2026, 11, 7, 12, 0) }));
+  assert.equal(noXml.status, 'WARN', 'without the XML the doctor cannot tell, so it warns as before');
+  assert.equal(neverRan(task(), 'not xml at all', localMs(2026, 11, 7, 12, 0)).status, 'WARN');
 });
 
 test('a task that is running now (result 267009) is not judged by its result', () => {
@@ -1219,6 +1340,32 @@ test('lanes:worktree-lane-mjs: no worktrees dir is a PASS that says absent; the 
   assert.equal(differ.status, 'WARN');
   assert.match(differ.detail, /1 worktree\(s\)/);
   assert.ok(differ.detail.includes('old-copy') && !differ.detail.includes('same-crlf') && !differ.detail.includes('no-lane-file'), differ.detail);
+  assert.match(differ.detail, /not a git worktree/, 'a folder git does not know cannot be judged, so it still warns');
+});
+
+test('lanes:worktree-lane-mjs: a git worktree that lacks main\'s last lane.mjs change is a WARN; one that has it and differs is info (a PASS)', () => {
+  const fx = fixture();
+  const rel = ['scripts', 'coordination', 'lane.mjs'];
+  const main = join(fx.repo, ...rel);
+  const wt = join(fx.repo, '.claude', 'worktrees');
+  put(main, '// lane v1\n');
+  git(fx.repo, 'add', '--', 'scripts/coordination/lane.mjs');
+  git(fx.repo, 'commit', '-q', '--no-verify', '-m', 'lane v1');
+  git(fx.repo, 'worktree', 'add', '-q', '-b', 'old-branch', join(wt, 'stale-one'));
+  put(main, '// lane v2\n');
+  git(fx.repo, 'add', '--', 'scripts/coordination/lane.mjs');
+  git(fx.repo, 'commit', '-q', '--no-verify', '-m', 'lane v2');
+  git(fx.repo, 'worktree', 'add', '-q', '-b', 'feat/ahead', join(wt, 'feature-one'));
+  put(join(wt, 'feature-one', ...rel), '// lane v3, a feature edit\n');
+  const info = run(fx).checks['lanes:worktree-lane-mjs'];
+  assert.equal(info.status, 'WARN', info.detail);
+  assert.ok(info.detail.includes('stale-one'), info.detail);
+  assert.doesNotMatch(info.detail.split('; ')[0], /feature-one/, 'the WARN list names only the stale worktree');
+  git(fx.repo, 'worktree', 'remove', '--force', join(wt, 'stale-one'));
+  const feature = run(fx).checks['lanes:worktree-lane-mjs'];
+  assert.equal(feature.status, 'PASS', feature.detail);
+  assert.match(feature.detail, /^info: /);
+  assert.ok(feature.detail.includes('feature-one'), feature.detail);
 });
 
 // ---- the database checks against real scratch databases (skipped when none can be made) ----

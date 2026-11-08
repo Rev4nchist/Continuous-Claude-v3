@@ -259,7 +259,10 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
   if (sched !== null) els['kb-sched'] = stub({ textContent: typeof sched === 'string' ? sched : JSON.stringify(sched) });
   // The By band block sits outside the board. A row has a .bb-id child that holds the lane id.
   els.bb = stub();
+  // The board is 1000px wide at x 100 to 1100 and can scroll sideways (PR-K1 edge scroll). A test sets scrollLeft with setBoardScroll.
   els['kb-board'] = stub({
+    scrollLeft: 0,
+    getBoundingClientRect: () => ({ left: 100, right: 1100, top: 0, bottom: 600 }),
     querySelectorAll: (sel) => (sel === '.kb-card' ? [...cardEls.values()] : sel === '.kcol' ? colEls : []),
   });
   const document = {
@@ -355,12 +358,15 @@ async function openPage({ board = 'zz-a', doc = null, lanes = LANES, noDb = fals
     atScroll: () => atScroll,
     capped: () => classes.get('later').has('kb-capped'),
     moreText: () => laterMore.textContent,
-    /** A dragover on a column, like the event. Needs dragStart first. */
-    dragOver(colName, y = 0) {
+    /** A dragover on a column, like the event. Needs dragStart first. x is clientX (left out: an event with no position). colName null: the gap between two columns. */
+    dragOver(colName, y = 0, x) {
       const col = colEls.find((c) => c.attrs['data-col'] === colName);
       const target = { closest: (sel) => (sel === '.kcol' ? col : null) };
-      for (const f of els['kb-board'].handlers.dragover || []) f({ target, clientY: y, dataTransfer: {}, preventDefault() {} });
+      for (const f of els['kb-board'].handlers.dragover || []) f({ target, clientX: x, clientY: y, dataTransfer: {}, preventDefault() {} });
     },
+    /** The sideways scroll position of the board, and a way to set it. */
+    boardScroll: () => els['kb-board'].scrollLeft,
+    setBoardScroll(n) { els['kb-board'].scrollLeft = n; },
     /** A part of a scheduled card (.kb-ro-detail, summary), and the root custom properties the page set. */
     schedPart: (id, sel) => schedEls.find((e) => e.querySelector('.kb-id').textContent === id).part(sel),
     rootVars: () => ({ ...rootVars }),
@@ -1443,4 +1449,64 @@ test('a row tap moves focus to the shown card on a fine pointer only', async () 
   const touch = await open({ phone: true });
   touch.tapRow('n2');
   assert.equal(touch.focusCount(), 0);
+});
+
+// PR-K1: edge scroll. A drag near the left or right edge of the wide board scrolls it sideways. The fake board is 1000px wide at x 100 to 1100.
+// How it can fail, one test each: the right edge does not scroll right; the left edge does not scroll left; the middle scrolls;
+// a pointer that is not dragging a card scrolls; a gap between two columns (no .kcol under the pointer) does not scroll; a drag event with no
+// position throws or scrolls; a drag next to the edge scrolls no faster than a drag farther from it.
+test('a drag near the right edge scrolls the board right', async () => {
+  const page = await open();
+  page.dragStart('n1');
+  page.dragOver('later', 0, 1095);
+  assert.ok(page.boardScroll() > 0, 'the board did not scroll right');
+});
+
+test('a drag near the left edge scrolls the board left', async () => {
+  const page = await open();
+  page.dragStart('n1');
+  page.setBoardScroll(500);
+  page.dragOver('later', 0, 105);
+  assert.ok(page.boardScroll() < 500, 'the board did not scroll left');
+});
+
+test('a drag in the middle of the board does not scroll it', async () => {
+  const page = await open();
+  page.dragStart('n1');
+  page.setBoardScroll(500);
+  page.dragOver('later', 0, 600);
+  assert.equal(page.boardScroll(), 500);
+});
+
+test('a pointer over the edge with no card in the air does not scroll the board', async () => {
+  const page = await open();
+  page.setBoardScroll(500);
+  page.dragOver('later', 0, 1095);
+  page.dragOver('later', 0, 105);
+  assert.equal(page.boardScroll(), 500);
+});
+
+test('a drag over the gap between columns, where no column is under the pointer, still scrolls the board', async () => {
+  const page = await open();
+  page.dragStart('n1');
+  page.dragOver(null, 0, 1095);
+  assert.ok(page.boardScroll() > 0, 'the gap swallowed the edge scroll');
+});
+
+test('a drag event with no position neither throws nor scrolls', async () => {
+  const page = await open();
+  page.dragStart('n1');
+  page.setBoardScroll(500);
+  page.dragOver('later');
+  assert.equal(page.boardScroll(), 500);
+});
+
+test('a drag closer to the edge scrolls faster than a drag farther from it', async () => {
+  const near = await open();
+  near.dragStart('n1');
+  near.dragOver('later', 0, 1099);
+  const far = await open();
+  far.dragStart('n1');
+  far.dragOver('later', 0, 1050);
+  assert.ok(near.boardScroll() > far.boardScroll() && far.boardScroll() > 0, 'near ' + near.boardScroll() + ', far ' + far.boardScroll());
 });

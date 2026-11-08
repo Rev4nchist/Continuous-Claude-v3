@@ -11,22 +11,29 @@
  * Key Insight: PreCompact has JSONL transcript access, so we can extract
  * thinking blocks that are about to be "forgotten" before they're summarized away.
  *
- * State tracked in: .claude/extraction-state.json
+ * State tracked in: .claude/extraction-state.json (per session; see shared/extraction-state.ts)
  */
 
 import * as fs from 'fs';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import * as path from 'path';
-import { writeStateWithLock } from './shared/atomic-write.js';
+import { mutateStateWithLock } from './shared/atomic-write.js';
+import {
+  parseState,
+  sessionStartLine,
+  inCooldown,
+  withLaunchStamp,
+  type ExtractionStateV2,
+} from './shared/extraction-state.js';
 
-interface PreCompactInput {
+export interface PreCompactInput {
   trigger: 'manual' | 'auto';
   session_id: string;
   transcript_path: string;
   custom_instructions?: string;
 }
 
-interface HookOutput {
+export interface HookOutput {
   continue: boolean;
   systemMessage?: string;
 }
@@ -49,19 +56,11 @@ function getStateFilePath(projectDir: string): string {
   return path.join(projectDir, '.claude', 'extraction-state.json');
 }
 
-function loadState(stateFile: string): { last_extracted_line: number; recent_hashes: string[] } {
-  if (!fs.existsSync(stateFile)) {
-    return { last_extracted_line: 0, recent_hashes: [] };
-  }
-
+function readStateOrNull(stateFile: string): string | null {
   try {
-    const data = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
-    return {
-      last_extracted_line: data.last_extracted_line || 0,
-      recent_hashes: data.recent_hashes || []
-    };
+    return fs.readFileSync(stateFile, 'utf-8');
   } catch {
-    return { last_extracted_line: 0, recent_hashes: [] };
+    return null;
   }
 }
 
@@ -102,6 +101,89 @@ function runBackgroundExtraction(
   }
 }
 
+export interface ExtractDeps {
+  launcher?: (a: LaunchArgs) => boolean;
+  now?: () => number;
+}
+
+export interface LaunchArgs {
+  transcriptPath: string;
+  sessionId: string;
+  startLine: number;
+  stateFile: string;
+  projectDir: string;
+}
+
+const COOLDOWN_MS = 5 * 60 * 1000;
+
+/** Decide, launch and stamp for one PreCompact event. Pure of stdin/stdout. */
+export function runPreCompactExtract(
+  data: PreCompactInput,
+  projectDir: string,
+  deps: ExtractDeps = {}
+): HookOutput {
+  const launcher = deps.launcher ?? ((a: LaunchArgs) =>
+    runBackgroundExtraction(a.transcriptPath, a.sessionId, a.startLine, a.stateFile, a.projectDir));
+  const now = deps.now ?? Date.now;
+  const sessionId = data.session_id;
+  const transcriptPath = data.transcript_path;
+
+  // Extraction fires on ALL compact events regardless of trigger type
+
+  // Need transcript path for extraction
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+    return { continue: true, systemMessage: '[PreCompact] No transcript available for extraction' };
+  }
+
+  const stateFile = getStateFilePath(projectDir);
+  try {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  } catch { /* fail open: the launch still runs, the stamp may not land */ }
+
+  const launchFor = (state: ExtractionStateV2): boolean => launcher({
+    transcriptPath,
+    sessionId,
+    startLine: sessionStartLine(state, sessionId),
+    stateFile,
+    projectDir,
+  });
+
+  // Cooldown check, start line, launch and stamp are ONE read-modify-write under
+  // the state lock, so two hooks cannot interleave a read and a stamp. The stamp
+  // lands only after a successful launch, so a failed launch starts no cooldown.
+  // State is per session: a session never reads another session's line.
+  let ran = false;
+  let cooling = false;
+  let launched = false;
+  mutateStateWithLock(stateFile, (current) => {
+    ran = true;
+    const state = parseState(current);
+    if (inCooldown(state, sessionId, now(), COOLDOWN_MS)) {
+      cooling = true;
+      return null;
+    }
+    launched = launchFor(state);
+    return launched ? JSON.stringify(withLaunchStamp(state, sessionId, now()), null, 2) : null;
+  });
+
+  if (!ran) {
+    // Lock timeout or unreadable file: fail open as before. Launch without a stamp.
+    const state = parseState(readStateOrNull(stateFile));
+    if (inCooldown(state, sessionId, now(), COOLDOWN_MS)) cooling = true;
+    else launched = launchFor(state);
+  }
+
+  if (cooling) {
+    return { continue: true, systemMessage: '[PreCompact:L0] Cooldown active, skipping extraction' };
+  }
+
+  const message = launched
+    ? '[PreCompact:L0] Memory extraction launched (background)'
+    : '[PreCompact:L0] Memory extraction unavailable';
+
+  return { continue: true, systemMessage: message };
+}
+
 async function main() {
   // Recursion sentinel (07-09 R2, 2026-07-24): the LLM distiller spawned by
   // incremental_extract.py runs a headless claude session with
@@ -126,58 +208,7 @@ async function main() {
   }
 
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const sessionId = data.session_id;
-  const transcriptPath = data.transcript_path;
-
-  // Extraction fires on ALL compact events regardless of trigger type
-
-  // Need transcript path for extraction
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-    const output: HookOutput = {
-      continue: true,
-      systemMessage: '[PreCompact] No transcript available for extraction'
-    };
-    console.log(JSON.stringify(output));
-    return;
-  }
-
-  // Load state to get start line
-  const stateFile = getStateFilePath(projectDir);
-  const state = loadState(stateFile);
-
-  // Cooldown: skip if extraction ran recently (within 5 minutes)
-  const COOLDOWN_MS = 5 * 60 * 1000;
-  const stateWithMeta = state as { last_extracted_line: number; recent_hashes: string[]; last_launched?: number };
-  if (stateWithMeta.last_launched && Date.now() - stateWithMeta.last_launched < COOLDOWN_MS) {
-    console.log(JSON.stringify({ continue: true, systemMessage: '[PreCompact:L0] Cooldown active, skipping extraction' }));
-    return;
-  }
-
-  // Update last_launched timestamp
-  try {
-    const stateData = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf-8')) : {};
-    stateData.last_launched = Date.now();
-    writeStateWithLock(stateFile, JSON.stringify(stateData, null, 2));
-  } catch { /* fail open */ }
-
-  // Run extraction in background (non-blocking)
-  const launched = runBackgroundExtraction(
-    transcriptPath,
-    sessionId,
-    state.last_extracted_line,
-    stateFile,
-    projectDir
-  );
-
-  const message = launched
-    ? '[PreCompact:L0] Memory extraction launched (background)'
-    : '[PreCompact:L0] Memory extraction unavailable';
-
-  const output: HookOutput = {
-    continue: true,
-    systemMessage: message
-  };
-  console.log(JSON.stringify(output));
+  console.log(JSON.stringify(runPreCompactExtract(data, projectDir)));
 }
 
 async function readStdin(): Promise<string> {
@@ -189,7 +220,9 @@ async function readStdin(): Promise<string> {
   });
 }
 
-main().catch(err => {
-  console.error('pre-compact-extract error:', err);
-  console.log(JSON.stringify({ continue: true }));
-});
+if ((process.argv[1] || '').includes('pre-compact-extract')) {
+  main().catch(err => {
+    console.error('pre-compact-extract error:', err);
+    console.log(JSON.stringify({ continue: true }));
+  });
+}
