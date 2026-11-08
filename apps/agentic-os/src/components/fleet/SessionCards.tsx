@@ -1,3 +1,4 @@
+import { formatLease, leaseTone } from '@/server/queries/fleet-card-fields';
 import type { SessionCard } from '@/server/queries/mission-control';
 
 import { cn } from '@/lib/utils';
@@ -19,8 +20,10 @@ export type SessionFilter = { key: string; label: string };
  *
  * Three states are drawn on purpose: no brief yet (a live session with no state file, or a
  * file with no brief), a stale state file, and a brief with an empty plan. Cards show counts
- * of asks, never the ask text: the text belongs to the Ready for Dave strip. The goal is not on
- * the card either; the session detail holds it. The state word comes from the glossary; the code
+ * of asks, never the ask text: the text belongs to the Ready for Dave strip. Level 1 (2026-11-07) adds
+ * six fields: name #sid8, every held lane with its lease time left (amber when short or lapsed),
+ * "heartbeat Nm ago", waiting on Dave yes or no, and the goal clipped to ONE line (brief goal, else the
+ * first lane title). The state word comes from the glossary; the code
  * stays in `data-chip`. A card that waits on Dave has an amber border, a blocked one a red border.
  */
 export function SessionCards({
@@ -97,6 +100,7 @@ function SessionCardItem({
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
+  const waiting = card.chip === 'waiting-on-dave' || card.askOpen > 0;
   const stateStale = card.stateAgeSeconds !== null && card.stateAgeSeconds > STATE_STALE_SECONDS;
   // With a brief the plan and the counts always show. Without one they show only when the task
   // list (PRD 5.1, the Plan source when it has items) or an ask count gives them something to say.
@@ -109,7 +113,7 @@ function SessionCardItem({
       data-session-id={card.id}
       className={cn(
         'min-w-0 rounded-md border bg-card',
-        card.chip === 'waiting-on-dave' && 'border-warn',
+        waiting && 'border-warn',
         card.chip === 'blocked' && 'border-bad',
         selected && 'ring-2 ring-primary',
       )}
@@ -153,6 +157,56 @@ function SessionCardItem({
       {card.hasBrief && card.title !== null && (
         <span className="block text-sm [overflow-wrap:anywhere]">{card.title}</span>
       )}{' '}
+      <span
+        data-testid="session-card-goal"
+        data-goal-source={card.goal === null ? 'none' : 'text'}
+        title={card.goal ?? undefined}
+        className={cn('block truncate text-xs', card.goal === null && 'text-muted-foreground')}
+      >
+        {card.goal ?? 'No goal yet'}
+      </span>{' '}
+
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span
+          data-testid="session-card-waiting"
+          data-waiting={waiting ? 'true' : 'false'}
+          className={waiting ? 'font-medium text-warn' : 'text-muted-foreground'}
+        >
+          {waiting ? 'Waiting on Dave' : 'Not waiting on Dave'}
+        </span>{' '}
+        <span data-testid="session-card-heartbeat" className="text-muted-foreground">
+          {`last prompt ${formatAgo(card.heartbeatSecondsAgo)}`}
+        </span>
+      </span>{' '}
+
+      <span data-testid="session-card-lanes" className="block space-y-0.5">
+        {card.lanes.length === 0 && (
+          <span data-testid="session-card-no-lanes" className="block text-xs text-muted-foreground">
+            No lane held
+          </span>
+        )}
+        {card.lanes.map((lane) => {
+          const tone = leaseTone(lane.leaseSecondsLeft);
+          return (
+            <span
+              key={lane.id}
+              data-testid="session-card-lane"
+              data-lane-id={lane.id}
+              className="flex flex-wrap items-baseline gap-x-2 text-xs"
+            >
+              <span className="min-w-0 font-mono font-bold [overflow-wrap:anywhere]">{lane.id}</span>{' '}
+              <span
+                data-testid="session-card-lease"
+                data-lease-tone={tone}
+                data-lease-seconds={lane.leaseSecondsLeft ?? undefined}
+                className={tone === 'short' || tone === 'lapsed' ? 'text-warn' : 'text-muted-foreground'}
+              >
+                {formatLease(lane.leaseSecondsLeft)}
+              </span>
+            </span>
+          );
+        })}
+      </span>{' '}
       {!card.hasBrief && (
         <span className="block text-xs text-muted-foreground">
           No brief yet{' '}
