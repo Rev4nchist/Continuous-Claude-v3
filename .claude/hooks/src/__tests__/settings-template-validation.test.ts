@@ -16,6 +16,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import * as path from 'path';
+// @ts-expect-error TS7016: render-settings.mjs has no declaration file; the test calls it as plain JS.
 import { renderSettings } from '../../../../scripts/settings/render-settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));      // .claude/hooks/src/__tests__
