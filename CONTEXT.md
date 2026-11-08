@@ -41,7 +41,7 @@
 
 - **Lane**: a unit of concurrent work claimed by one session. The
   **lane board** lists lanes and holders. **Claim / release** a lane; **note** progress on it.
-- **Band**: P0, P1, P2 or NULL (Unsorted). **Rank**: `lane.priority`, the order inside a band. **Reminder**: a lane with a due time (`remind set`); `next` skips it. See COORDINATION.md "Band and rank".
+- **Band**: P0, P1, P2 or NULL (Unsorted). Written only by an explicit choice (the `band` verb or a card's Band select), never by a drag. **Rank**: `lane.priority`, the order inside a band. **Reminder**: a lane with a due time (`remind set`); `next` skips it. See COORDINATION.md "Band and rank".
 - **Board**: lanes and events under one `project_key`. **Board key**: the registry key; cooperative, not security.
 - **Lane shim**: `~/.claude/scripts/lane.mjs`, the CLI path. **Project register** makes a board.
 - **Phone page**: a board's published lane page. Its url is `laneArtifact` in the registry entry; `/publish-board <key>` makes it.

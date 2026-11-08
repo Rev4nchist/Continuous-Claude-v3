@@ -797,6 +797,84 @@ describe('apply-kanban', () => {
     assert.deepEqual(await one(`SELECT priority FROM agentic_os.lane WHERE id='zz-pbprobe-b1'`), before);
     assert.equal((await one(`SELECT priority FROM agentic_os.lane WHERE id='zz-pbprobe-a2'`)).priority, 1);
   });
+
+  // PR-G: a band set on a card reaches lane.band. A drag never does. Priority is a different column.
+  describe('card band', () => {
+    const ID = 'zz-pbprobe-band';
+    const bandFile = (cards) => {
+      const now = new Date().toISOString();
+      return kanban({ project: 'pb-a', board: { columns: { next: [], later: [], waiting: [] }, updatedAt: now, project: 'pb-a' }, cards });
+    };
+    const bandCard = (band) => [{ id: ID, band, updatedAt: new Date().toISOString() }];
+    const row = () => one(`SELECT band, priority FROM agentic_os.lane WHERE id=$1`, [ID]);
+    const events = async () => (await q(`SELECT body, detail FROM agentic_os.lane_event WHERE lane_id=$1 AND kind='band' ORDER BY id`, [ID])).rows;
+    const run = (cards, ...flags) => lane(state.dirs.A, SA, ['apply-kanban', bandFile(cards), '--json', ...flags]);
+
+    before(async () => {
+      await q(`INSERT INTO agentic_os.lane (id,title,track,state,project_key,priority) VALUES ($1,'band probe','zz','ready','pb-a',77)`, [ID]);
+    });
+
+    it('a dry run plans one band action and writes nothing', async () => {
+      const r = run(bandCard('P0'), '--dry-run');
+      assert.equal(r.code, 0, r.all);
+      const plan = JSON.parse(r.out);
+      assert.equal(plan.summary.band, 1);
+      assert.deepEqual(plan.actions.filter((a) => a.kind === 'band').map((a) => [a.laneId, a.from, a.to]), [[ID, null, 'P0']]);
+      assert.deepEqual(await row(), { band: null, priority: 77 });
+      assert.equal((await events()).length, 0);
+    });
+
+    it('a real apply sets the band, leaves priority alone, logs one band event', async () => {
+      const r = run(bandCard('P0'));
+      assert.equal(r.code, 0, r.all);
+      assert.equal(JSON.parse(r.out).summary.band, 1);
+      assert.deepEqual(await row(), { band: 'P0', priority: 77 });
+      const ev = await events();
+      assert.equal(ev.length, 1);
+      assert.equal(ev[0].body, 'band none -> P0');
+      assert.deepEqual({ from: ev[0].detail.from, to: ev[0].detail.to, actor: ev[0].detail.actor }, { from: null, to: 'P0', actor: 'kanban' });
+    });
+
+    it('the same card again gives no action and no second event', async () => {
+      const r = run(bandCard('P0'));
+      assert.equal(r.code, 0, r.all);
+      assert.equal(JSON.parse(r.out).summary.band, 0);
+      assert.equal((await events()).length, 1);
+    });
+
+    it('the text output names the band count', () => {
+      const r = lane(state.dirs.A, SA, ['apply-kanban', bandFile(bandCard('P1')), '--dry-run']);
+      assert.equal(r.code, 0, r.all);
+      assert.match(r.out, /1 band/);
+      assert.match(r.out, new RegExp(`${ID}\\s+band\\s+P0 -> P1`));
+    });
+
+    it('a drag-only file gives no band action', () => {
+      const r = lane(state.dirs.A, SA, ['apply-kanban', kanban({ project: 'pb-a', board: { columns: { next: [ID], later: [], waiting: [] }, updatedAt: new Date().toISOString(), project: 'pb-a' } }), '--dry-run', '--json']);
+      assert.equal(r.code, 0, r.all);
+      const plan = JSON.parse(r.out);
+      assert.equal(plan.summary.band, 0);
+      assert.ok(plan.actions.some((a) => a.kind === 'priority'), 'the drag still sets rank');
+    });
+
+    it('band none clears the band to NULL, writes a none event body, and passes the board trigger', async () => {
+      const r = run(bandCard('none'));
+      assert.equal(r.code, 0, r.all);
+      assert.equal((await row()).band, null);
+      const ev = await events();
+      assert.equal(ev.at(-1).body, 'band P0 -> none');
+      assert.ok(!ev.some((e) => /null/.test(e.body)));
+    });
+
+    it('an invalid band is skipped and changes nothing', async () => {
+      const r = run(bandCard('P3'));
+      assert.equal(r.code, 0, r.all);
+      const plan = JSON.parse(r.out);
+      assert.equal(plan.summary.band, 0);
+      assert.equal(plan.results[0].syncResult, 'skipped: invalid band');
+      assert.equal((await row()).band, null);
+    });
+  });
 });
 
 describe('the migration fence and the missing migration', () => {

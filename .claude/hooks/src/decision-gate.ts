@@ -690,21 +690,46 @@ export function handle(raw: string, deps: Deps): string {
     }
     return '{}';
   } catch (err) {
-    try { logGuardError(HOOK, err); } catch { /* the log never blocks */ }
-    const scopes = gatedScopesSafe(input);
-    if (scopes.size === 0) return '{}';
-    const why = `could not verify Dave's tap (${String((err as Error)?.message ?? err).slice(0, 160)}). Run the command again. If it keeps failing, ask Dave.`;
-    const cwd = input.cwd || process.cwd();
-    // Each gated scope is judged by its own flag. A mixed command denies when either flag is on.
-    const live = [...scopes].some((s) => enforcingScope(s, deps, cwd));
-    return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : 'push');
+    return unjudgeable(input, deps, err);
   }
+}
+
+/**
+ * A gated call that could not be judged because git failed or threw: fail closed where a flag is on, warn where it is off.
+ * A missing cwd (MissingCwdError) is a condition of the call, not a crash of the hook: it is logged as a deny or warn row
+ * (reason cwd-missing), so it does not show as an error row in the harness doctor. Any other throw stays an error row.
+ */
+function unjudgeable(input: HookInput, deps: Deps, err: unknown): string {
+  const gone = err instanceof MissingCwdError;
+  if (!gone) { try { logGuardError(HOOK, err); } catch { /* the log never blocks */ } }
+  const scopes = gatedScopesSafe(input);
+  if (scopes.size === 0) return '{}';
+  const detail = gone ? err.message : String((err as Error)?.message ?? err).slice(0, 160);
+  const hint = gone ? 'Run the command from a folder that exists.' : 'Run the command again. If it keeps failing, ask Dave.';
+  const why = `could not verify Dave's tap (${detail}). ${hint}`;
+  const cwd = input.cwd || process.cwd();
+  // Each gated scope is judged by its own flag. A mixed command denies when either flag is on.
+  const live = [...scopes].some((s) => enforcingScope(s, deps, cwd));
+  if (gone) logGuardDecision(HOOK, input, live ? 'deny' : 'warn', 'cwd-missing');
+  return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : 'push');
 }
 
 const gatedScopesSafe = (input: HookInput): Set<Scope> => { try { return gatedScopes(input); } catch { return new Set(); } };
 
-function makeGit(): Deps['git'] {
+/**
+ * The cwd of a git call is gone (a removed worktree). Node reports that as "spawnSync git ENOENT", the text of a missing git binary,
+ * so makeGit checks the folder first and throws this instead. The call stays unjudged (fail closed), with the folder named.
+ */
+export class MissingCwdError extends Error {
+  constructor(readonly cwd: string) {
+    super(`the working folder does not exist: ${cwd}`);
+    this.name = 'MissingCwdError';
+  }
+}
+
+export function makeGit(): Deps['git'] {
   return (cwd, args) => {
+    if (!existsSync(cwd)) throw new MissingCwdError(cwd);
     const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true });
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? '' };

@@ -368,6 +368,7 @@ const kbCard = (l, movable, rank, col, ro = false) => {
         </dl>
         <div class="kb-edit">
           <label class="kb-fl"><span>Status</span><select class="kb-st" disabled>${statusOpts}</select></label>
+          <label class="kb-fl"><span>Band</span><select class="kb-bd" disabled></select></label>
           <label class="kb-fl"><span>Note to Claude</span><textarea class="kb-note" rows="3" maxlength="1000" disabled></textarea></label>
           <label class="kb-fl"><span>Question for Claude</span><textarea class="kb-q" rows="3" maxlength="1000" disabled></textarea></label>
           <div class="kb-sv"><button class="kb-btn kb-save" type="button" disabled>Save</button><span class="kb-saved" role="status"></span></div>
@@ -759,11 +760,11 @@ const html = `${STAMP}
   .kb-plain-out[data-k="crit"] { border-left-color:var(--crit); color:var(--crit); }
   .kb-edit { display:flex; flex-direction:column; gap:8px; margin-top:8px; min-width:0; }
   .kb-fl { display:flex; flex-direction:column; gap:4px; min-width:0; color:var(--muted); font:600 10px/1.4 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
-  .kb-st, .kb-note, .kb-q { width:100%; min-width:0; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
+  .kb-st, .kb-bd, .kb-note, .kb-q { width:100%; min-width:0; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
     color:var(--ink); font:400 12px/1.45 var(--sans); letter-spacing:normal; text-transform:none; }
-  .kb-st { min-height:34px; font-family:var(--mono); }
+  .kb-st, .kb-bd { min-height:34px; font-family:var(--mono); }
   .kb-note, .kb-q { resize:vertical; min-height:60px; }
-  .kb-st:disabled, .kb-note:disabled, .kb-q:disabled { color:var(--faint); background:var(--panel-2); cursor:not-allowed; }
+  .kb-st:disabled, .kb-bd:disabled, .kb-note:disabled, .kb-q:disabled { color:var(--faint); background:var(--panel-2); cursor:not-allowed; }
   .kb-sv { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .kb-saved { min-width:0; color:var(--muted); font:500 11px/1.4 var(--mono); overflow-wrap:anywhere; }
   .kb-saved[data-k="ok"] { color:var(--ok); }
@@ -814,13 +815,13 @@ const html = `${STAMP}
   @media (pointer:coarse), (max-width:720px) {
     .kb-ro-detail > summary { min-height:44px; box-sizing:border-box; padding:4px 0; }
     .dn-all, .lt-more { min-height:44px; }
-    .kb-head, .kb-more, .kb-btn, .kb-to, .kb-st { min-height:44px; }
+    .kb-head, .kb-more, .kb-btn, .kb-to, .kb-st, .kb-bd { min-height:44px; }
     .kb-btn { min-width:44px; }
     .kb-more { padding:4px 10px 4px 0; }
     .vt, .chip, .themebtn { min-height:44px; }
     button, select, .vt, .chip { touch-action:manipulation; }
     /* 16px stops iOS zooming into a focused field or select. font-size only: the mono family stays. */
-    .kb-st, .kb-note, .kb-q, .kb-to { font-size:16px; }
+    .kb-st, .kb-bd, .kb-note, .kb-q, .kb-to { font-size:16px; }
     .kb-title { font-size:14px; }
     .kb-track, .kb-prio, .kb-lease, .kb-dl dd { font-size:12px; }
     .kb-btn { font-size:13px; }

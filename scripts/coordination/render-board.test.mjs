@@ -59,7 +59,7 @@
  * How the Done column (PR-D) can fail, one test each (the pure window, cap and order rules are in board-done-view.test.mjs):
  *   - the six columns are not Scheduled, Next, Later, Waiting on Dave, In progress, Done (Done first, or missing on the read-only page)
  *   - the Done head has no .kb-head: syncHeads of the client throws and the whole client dies
- *   - a Done card takes a class the client handles (kb-card, kb-ctl, kb-st, kb-save, kb-grip, kb-more, kb-next, kb-done, kb-undo, kb-plain)
+ *   - a Done card takes a class the client handles (kb-card, kb-ctl, kb-st, kb-bd, kb-save, kb-grip, kb-more, kb-next, kb-done, kb-undo, kb-plain)
  *   - a done title, scope or note is not escaped, or a long note is not cut
  *   - a lane shows in Done under the wrong day, in the wrong order, or when its only done event is the kanban sync's
  *   - a done lane appears in By band, or an open lane in Done
@@ -107,8 +107,10 @@ const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 // Measured 2026-11-07 (PR-K1, the desktop board): test page 171,469 bytes (+3,012 over the 168,457 above), so PAGE_BYTES_MAX is that plus about 1 KB (172,469 to 172,500). It rose from 169,500 ONLY because
 // of the desktop CSS block (one wide board, 13px titles, amber Waiting pill, one control row, narrow empty Scheduled; about 1.5 KB with its comment), the fit script beside setView (height and scroll padding, gated by the
 // fine-pointer query, about 1.0 KB), the edge scroll in the client (about 0.5 KB) and a region label on the board (41 bytes). Dave's estimate was 171,500, from the 1.9 KB of the Design A prototype. No card, row, Done or Scheduled markup grew.
+// Measured 2026-11-07 PR-G (the Band select on the card form): test page 174,538 bytes after the critic fixes (+3,062 over 171,476, the main page re-measured today; the PR-K1 note above says 171,469), so PAGE_BYTES_MAX is 175,000, the hard limit Dave approved, and headroom is 462 bytes. The critic fixes added 245 bytes: bandAt with every band write and in the band base, and the line on an active card. It rose from 172,500 ONLY because
+// of the Band select markup (one label and an EMPTY select per editable card, about 100 bytes x 17 cards; the client fills the 4 options once, as it does for Move to: a full inline select would cost about 3.9 KB and break the limit), the client option fill and band base (about 0.7 KB, comments stripped), and .kb-bd added to four CSS rules.
 const ROW_OVERHEAD_MAX = 240;
-const PAGE_BYTES_MAX = 172500;
+const PAGE_BYTES_MAX = 175000;
 const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
@@ -531,7 +533,7 @@ describe('render-board.mjs against a scratch database', () => {
     // Markup and script strings. The kb-* CSS is on every page, so only markup attributes are matched here.
     for (const marker of [
       'function placeLanes', 'claude.use', 'kanban/board', 'onSnapshot', 'id="kb-data"', 'id="kb-order"', 'id="kb-live"',
-      'id="kb-status"', 'class="kb-to"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-up"',
+      'id="kb-status"', 'class="kb-to"', 'class="kb-bd"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-up"',
       'class="kb-btn kb-next"', 'class="kb-btn kb-done"', "'kb-btn kb-undo'", 'class="kb-ctl"', 'class="kb-flag"',
       'class="kb-edit"', 'class="kb-more"', 'class="kb-head"',
     ]) {
@@ -544,7 +546,7 @@ describe('render-board.mjs against a scratch database', () => {
     assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
     const html = fs.readFileSync(out, 'utf8');
     for (const marker of [
-      'Drag, or use Do next and Move to, to reorder.', 'class="kb-grip"', 'class="kb-to"', 'class="kb-btn kb-next"', 'class="kb-btn kb-done"', 'id="kb-order"', 'id="kb-data"',
+      'Drag, or use Do next and Move to, to reorder.', 'class="kb-grip"', 'class="kb-to"', 'class="kb-bd"', 'class="kb-btn kb-next"', 'class="kb-btn kb-done"', 'id="kb-order"', 'id="kb-data"',
       'function placeLanes', 'claude.use', 'kanban/board', 'class="kb-head"', 'class="kb-more"',
     ]) {
       assert.ok(html.includes(marker), `the CCv3 page lost ${marker}`);
@@ -579,6 +581,28 @@ describe('render-board.mjs against a scratch database', () => {
     assert.ok(!html.includes('class="kb-flag"') && !html.includes('class="kb-btn kb-undo"'), 'the flag and Undo are made by the page script, not drawn by the server');
   });
 
+  it('PR-G: every editable card (Columns and In progress) has exactly one empty Band select; By band and the read-only page have none', () => {
+    const out = path.join(E2E.tmp, 'ccv3-band-select.html');
+    assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+    const html = fs.readFileSync(out, 'utf8');
+    const columns = /<div class="kb-board" id="kb-board"[^>]*>([\s\S]*?)<script type="application\/json" id="kb-data">/.exec(html)[1];
+    const cards = columns.split('<li class="card kb-card"').slice(1);
+    assert.ok(cards.length >= 4, 'the test page has cards');
+    for (const c of cards) {
+      const id = /data-id="([^"]+)"/.exec(c)[1];
+      const sels = [...c.matchAll(/<select class="kb-bd"[^>]*>([\s\S]*?)<\/select>/g)];
+      assert.equal(sels.length, 1, `${id}: ${sels.length} Band selects`);
+      assert.equal(sels[0][1], '', `${id}: the server drew the options (the client fills them, to keep the page small)`);
+      assert.match(sels[0][0], /disabled/, `${id}: the Band select is on before the cards load`);
+      assert.match(c, /<span>Band<\/span><select class="kb-bd"/, `${id}: the label`);
+    }
+    const bb = /<div class="bb" id="bb">[\s\S]*?<!-- \/bb -->/.exec(html)[0];
+    assert.ok(!bb.includes('kb-bd'), 'By band has a Band select');
+    const ro = path.join(E2E.tmp, 'ccv3-band-select-ro.html');
+    assert.equal(renderPage(['--project', 'zz-rb-a', '--out', ro]).code, 0);
+    assert.ok(!fs.readFileSync(ro, 'utf8').includes('<select class="kb-bd"'), 'the read-only page carries a Band select');
+  });
+
   it('--interactive on a foreign board gives kb-data with only that board\'s lanes, every interactive marker, and keeps the board\'s name in the title and masthead', () => {
     const out = path.join(E2E.tmp, 'a-interactive.html');
     const r = renderPage(['--project', 'zz-rb-a', '--interactive', '--out', out]);
@@ -586,7 +610,7 @@ describe('render-board.mjs against a scratch database', () => {
     const html = fs.readFileSync(out, 'utf8');
     for (const marker of [
       'function placeLanes', 'claude.use', 'kanban/board', 'onSnapshot', 'id="kb-data"', 'id="kb-order"', 'id="kb-live"', 'id="kb-status"',
-      'class="kb-to"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-next"', 'class="kb-btn kb-done"', 'class="kb-edit"',
+      'class="kb-to"', 'class="kb-bd"', 'class="kb-grip"', 'class="kb-btn kb-plain"', 'class="kb-btn kb-save"', 'class="kb-btn kb-next"', 'class="kb-btn kb-done"', 'class="kb-edit"',
       'class="kb-more"', 'class="kb-head"', 'Your order saves to this board',
     ]) {
       assert.ok(html.includes(marker), `an interactive foreign page must carry ${marker}`);
@@ -871,7 +895,7 @@ describe('render-board.mjs against a scratch database', () => {
 
     it('a field and the Move to select are 16px on a touch screen or a phone, so iOS does not zoom on focus', () => {
       const b = block(COARSE);
-      for (const sel of ['.kb-st', '.kb-note', '.kb-q', '.kb-to']) assert.match(rule(b, sel), /font-size:16px/, `${sel} is not 16px in the touch block`);
+      for (const sel of ['.kb-st', '.kb-bd', '.kb-note', '.kb-q', '.kb-to']) assert.match(rule(b, sel), /font-size:16px/, `${sel} is not 16px in the touch block`);
       assert.doesNotMatch(css, /maximum-scale|user-scalable/, 'zoom must stay possible');
     });
 
@@ -1383,7 +1407,7 @@ describe('render-board.mjs against a scratch database', () => {
     });
 
     it('a done card carries none of the class tokens the client handles; kb-done-card is not the token kb-done', () => {
-      const FORBIDDEN = ['kb-card', 'kb-ctl', 'kb-st', 'kb-save', 'kb-grip', 'kb-more', 'kb-next', 'kb-done', 'kb-undo', 'kb-plain'];
+      const FORBIDDEN = ['kb-card', 'kb-ctl', 'kb-st', 'kb-bd', 'kb-save', 'kb-grip', 'kb-more', 'kb-next', 'kb-done', 'kb-undo', 'kb-plain'];
       for (const page of [html, ro]) {
         const cards = doneCards(page);
         assert.ok(cards.length >= 1, 'the test page has done cards');
@@ -1585,7 +1609,7 @@ describe('render-board.mjs against a scratch database', () => {
     it('a scheduled card is a kb-done-card with id, title, track, a time chip and Details, and takes no class the client handles', () => {
       const cards = cardsOf(html);
       assert.equal(cards.length, 3);
-      const handled = ['kb-card', 'kb-ctl', 'kb-st', 'kb-save', 'kb-grip', 'kb-more', 'kb-next', 'kb-done', 'kb-undo', 'kb-plain', 'kb-note', 'kb-to'];
+      const handled = ['kb-card', 'kb-ctl', 'kb-st', 'kb-save', 'kb-grip', 'kb-more', 'kb-next', 'kb-done', 'kb-undo', 'kb-plain', 'kb-note', 'kb-to', 'kb-bd'];
       for (const c of cards) {
         const tokens = new Set([...c.matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
         for (const h of handled) assert.ok(!tokens.has(h), `a scheduled card takes the class ${h}: ${c}`);
