@@ -12,13 +12,34 @@ export type OsBriefSource = 'brief_set' | 'parsed'
 
 export type OsPlanStep = { id: string; text: string; status: 'todo' | 'doing' | 'done' | 'blocked' }
 
-/** `answered` is set when Dave's next prompt arrives: the ask stays, dim, and is not counted. */
+/**
+ * `answered` is set when Dave's next prompt arrives: the ask stays, dim, and is not counted. The prompt may not address this ask.
+ * `answeredAt` is that prompt's time. A parsed ask with the same kind and text in a later Next steps block keeps both: a repeated
+ * block does not re-open it. Only a brief_set re-ask or a change of kind or text re-opens it (design 2026-11-09, F2).
+ */
 export type OsAskItem = {
   kind: 'question' | 'approval' | 'decision' | 'block'
   text: string
   recommend?: string
   source: OsBriefSource
   answered?: true
+  /** Epoch ms of the prompt that set `answered`. Absent on an ask answered before this field shipped. */
+  answeredAt?: number
+}
+
+/**
+ * An ask that left the open list. `how`: `prompted` when it had `answered: true` as it left (a prompt from Dave arrived
+ * while it was open; that prompt may not address this ask), `replaced` when it was still open (a new list or `ask: []`
+ * took its place with no prompt from Dave in between).
+ * `text` is the stored ask text, already redacted. `recommend` and `source` are not kept.
+ * No kind and text is in both `ask` and `cleared`: an ask that is open again leaves `cleared`.
+ */
+export type OsClearedAsk = {
+  kind: OsAskItem['kind']
+  text: string
+  answeredAt?: number
+  clearedAt: number
+  how: 'prompted' | 'replaced'
 }
 
 /**
@@ -41,7 +62,10 @@ export type OsBrief = {
   sources: { title?: OsBriefSource; goal?: OsBriefSource; stopAt?: OsBriefSource; ask?: OsBriefSource }
   plan: OsPlanStep[]
   ask: OsAskItem[]
+  /** A decision from brief_set (`by` as given) or from a tap in a model AskUserQuestion dialog (`by: "Dave (tap)"`). */
   decisions: { text: string; by: string; at: number }[]
+  /** The last 5 asks that left the open list, oldest first. Absent until the first ask leaves. */
+  cleared?: OsClearedAsk[]
   proofs: OsProof[]
   updatedAt: number
 }

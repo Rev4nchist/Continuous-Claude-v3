@@ -9,7 +9,7 @@ import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
-import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact } from './brief'
+import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact, tapDecisions, withTaps } from './brief'
 import { hudOrSeed, seedHud } from '../hud/seed'
 import { bandLines, compactLine } from './band-model'
 import type { BandState } from './band-model'
@@ -617,11 +617,34 @@ const answerAsks = async ($: EngineInterface, text: unknown): Promise<void> => {
   try {
     // The mod's own report lines are not activity of Dave's; any other prompt is.
     if (!(typeof text === 'string' && isModSubmission(text))) await touch($)
+    // The clock is read before the brief: no await sits between that read and the update, so a brief_set or a parsed turn end
+    // that lands while the clock answers is not overwritten. The update is a function of the live brief for the same reason.
+    const at = await $.clock.now()
     const current = await read($, brief)
     if (current === null || (typeof text === 'string' && isModSubmission(text))) return
-    const next = markAsksAnswered(current)
-    if (next !== current) await update($, brief, () => next)
+    if (markAsksAnswered(current, at) !== current) await update($, brief, now => (now === null ? now : markAsksAnswered(now, at)))
     if (await worthSnapshot($)) await writeSnapshot($, { working: true })
+  } catch {
+    // Observer only.
+  }
+}
+
+/**
+ * A tap in a model AskUserQuestion dialog: one decision per answered question (GPAA P3). Observer only, with its own try/catch:
+ * a throw here must not reach the tool.call `.catch`, which would call `next` a second time.
+ * `$.ui.ask` dialogs of this mod (PR checkpoint, Land) pass through every other hook, this one too, with `origin.plugin` set to the
+ * caller; they are skipped (their answers go to ask-dialogs.jsonl). Only the result is read: the call input is model-written.
+ */
+export const captureTaps = async ($: EngineInterface, origin: { plugin: string; tier?: string }, ran: Result): Promise<void> => {
+  try {
+    if (origin.plugin !== 'engine') return
+    const texts = tapDecisions(okResult(ran))
+    if (texts.length === 0) return
+    // A headless run with no brief writes no file: nothing prunes the folder.
+    if ((await read($, brief)) === null && (await read($, mode)) !== 'interactive') return
+    const at = await $.clock.now()
+    await update($, brief, now => withTaps(now, texts, at))
+    await writeSnapshot($)
   } catch {
     // Observer only.
   }
@@ -894,6 +917,7 @@ export const agenticOs = (on: On) => {
     // A refusal (not Dave dismissing his own question) blocks the chip until the next turn.
     if (ran.deny !== undefined && tool !== 'AskUserQuestion') await update($, refused, () => true)
     if (await record($, tool, input, ran)) await writeSnapshot($)
+    if (tool === 'AskUserQuestion') await captureTaps($, next.origin, ran)
     refreshAfter($, tool, input)
     return ran
   }).catch(($, e, next) => next(e))

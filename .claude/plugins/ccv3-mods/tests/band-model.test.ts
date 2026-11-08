@@ -152,7 +152,7 @@ describe('band line 2: ASK and UNPROVEN', () => {
   })
 
   test('L5 answered asks are not counted, and show dim as answered?', () => {
-    const answered = markAsksAnswered(briefWith({ ask: asks }))
+    const answered = markAsksAnswered(briefWith({ ask: asks }), 1_000)
     const line = bandLines(state({ brief: answered }), 120)[1] ?? []
     expect(text(line)).toContain('ASK 0')
     expect(text(line)).not.toContain('ASK 2')
@@ -161,7 +161,7 @@ describe('band line 2: ASK and UNPROVEN', () => {
   })
 
   test('L5 one answered and one fresh ask: counts the fresh one only', () => {
-    const first = markAsksAnswered(briefWith({ ask: [asks[0]] }))
+    const first = markAsksAnswered(briefWith({ ask: [asks[0]] }), 1_000)
     const next: Brief = { ...first, ask: [...first.ask, { kind: 'question', text: 'New?', source: 'brief_set' }] }
     const got = lineOf({ brief: next })
     expect(got).toContain('ASK 1')

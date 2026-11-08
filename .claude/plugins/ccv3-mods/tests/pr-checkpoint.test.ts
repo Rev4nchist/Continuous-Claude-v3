@@ -226,6 +226,8 @@ const world = (on: On, opts: Opts = {}) => {
     tools: [] as string[],
     ran: [] as { tool: string; text: string }[],
     writes: [] as string[],
+    /** `next.origin` of each AskUserQuestion that reached the bottom (T0). */
+    origins: [] as { plugin: unknown; tier: unknown }[],
   }
   manualDefault = false
   lastSeen = seen
@@ -380,7 +382,9 @@ const world = (on: On, opts: Opts = {}) => {
   }
   // The engine draws $.ui.ask as a tool.call of AskUserQuestion; this is its bottom. A call by the model (the test) lands here too.
   const sequence = [...(opts.answers ?? [])]
-  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e, next) => {
+    const origin = (next as unknown as { origin?: { plugin: unknown; tier: unknown } }).origin
+    seen.origins.push({ plugin: origin?.plugin, tier: origin?.tier })
     const input = e as unknown as { questions: { question: string; header?: string; options: ({ label: string } | string)[] }[] }
     const q = input.questions[0]!
     const labels = q.options.map(one => (typeof one === 'string' ? one : one.label))
@@ -393,7 +397,8 @@ const world = (on: On, opts: Opts = {}) => {
       if (picked === 'empty') return { result: { questions: [], answers: {} } } as never
       const text = typeof picked === 'object' && 'other' in picked ? picked.other : picked instanceof RegExp ? labels.find(l => picked.test(l)) : picked
       if (text === undefined) throw new Error(`no label matches in ${JSON.stringify(labels)}`)
-      return { result: { questions: [], answers: { [q.question]: text } } } as never
+      // The engine echoes the questions into the result (census 2026-11-09: 521 of 521); the agentic-os tap writer reads them.
+      return { result: { questions: input.questions, answers: { [q.question]: text } } } as never
     }
     const spec = sequence.shift() ?? opts.answer ?? (manualDefault ? 'manual' : 'dismiss')
     const resolved = typeof spec === 'function' ? spec(labels, q.question) : spec
@@ -4028,5 +4033,34 @@ describe('pr-checkpoint v2: Return to draft drops the grant and the free-slot qu
     expect(drops(w.seen).length).toBe(1)
     expect(w.seen.dialogs.length).toBe(2)
     expect(told.text).toMatch(/kept #7 as a draft/i)
+  })
+})
+
+describe('pr-checkpoint: who raised an AskUserQuestion (GPAA P3, T0)', () => {
+  // The agentic-os tap writer skips the mod's own dialogs by reading `next.origin.plugin`. This pins the two values it relies on.
+  test('T0 a call by the model reads origin engine; the mod own $.ui.ask reads origin ccv3-mods', async ($, on) => {
+    const { seen } = world(on, { answers: ['Alpha', ...PICK_YES] })
+    await start($)
+    await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which one?', header: 'Test', options: [{ label: 'Alpha', description: 'a' }, { label: 'Beta', description: 'b' }], multiSelect: false }] } as never)
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await settle()
+    expect(seen.origins.length).toBeGreaterThanOrEqual(2)
+    expect(seen.origins[0]).toEqual({ plugin: 'engine', tier: 'core' })
+    // Every dialog of the mod (the pick and the paid confirm) reads the same.
+    for (const origin of seen.origins.slice(1)) expect(origin).toEqual({ plugin: 'ccv3-mods', tier: 'user' })
+  })
+
+  // TAP11: the agentic-os tap writer skips a dialog whose origin is not the engine. Without the skip, the pick and the paid confirm of
+  // the mod would be stored as taps by Dave. The model call at the end proves the writer is live in this world (a control).
+  test('TAP11 the own dialogs of the mod are not stored as taps; a model call in the same session is', async ($, on) => {
+    const { seen, written } = world(on, { answers: [...PICK_YES, 'Alpha'] })
+    await start($)
+    const everything = () => Object.values(written).join('\n')
+    await callTool($, { pr: 7, body: 'pr-body.md' })
+    await settle()
+    expect(seen.origins.length).toBeGreaterThanOrEqual(2)
+    expect(everything()).not.toContain('Dave (tap)')
+    await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which one?', header: 'Test', options: [{ label: 'Alpha', description: 'a' }, { label: 'Beta', description: 'b' }], multiSelect: false }] } as never)
+    expect(everything()).toContain('Test: Alpha')
   })
 })
