@@ -234,14 +234,19 @@ const judgedOf = (records: KeeperRecord[]): KeeperRecord[] =>
 /** The record that sets the keeper line: the same pick keeperSentence makes, so a row's tone and its text read one source. Null with no record. */
 export const newestKeeper = (records: KeeperRecord[]): KeeperRecord | null => judgedOf(records)[0] ?? null
 
-/** The newest record sets the line; 3 of the newest 5 that lost the plan add the kill rule. Null with no record. */
+/**
+ * The newest record sets the line; 3 of the newest 5 that lost the plan add the kill rule. Null with no record.
+ * A record stores the task counts, not whether a plan existed. With total 0 the record cannot say a plan was there, so
+ * the line speaks of the marker only. With tasks (total above 0) a missing marker is a lost plan.
+ */
 export const keeperSentence = (records: KeeperRecord[]): { text: string; kill: boolean } | null => {
   const judged = judgedOf(records)
   const newest = judged[0]
   if (newest === undefined) return null
   const lost = judged.filter(one => one.kept !== true).length
   if (lost >= KILL_LOST) return { text: `The plan keeper failed ${lost} of ${judged.length} times. Consider removing it.`, kill: true }
-  return { text: newest.kept === true ? 'The last summary kept the plan.' : 'The last summary lost the plan.', kill: false }
+  const what = newest.total > 0 ? 'the plan' : 'the keeper marker'
+  return { text: `The last summary ${newest.kept === true ? 'kept' : 'lost'} ${what}.`, kill: false }
 }
 
 // --- Money and room ---
