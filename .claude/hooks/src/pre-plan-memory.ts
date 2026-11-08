@@ -75,7 +75,9 @@ async function main() {
       encoding: 'utf-8',
       timeout: 5000,
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: isWindows ? 'cmd.exe' : true
+      // execSync takes a shell path, not true. undefined keeps its default (/bin/sh on Unix),
+      // which is what `shell: true` selected.
+      shell: isWindows ? 'cmd.exe' : undefined
     });
 
     if (result && !result.includes('No results') && result.trim().length > 20) {
