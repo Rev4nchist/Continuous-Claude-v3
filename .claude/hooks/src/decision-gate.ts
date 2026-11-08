@@ -29,6 +29,14 @@
  * so one deny in any of those folders denies. A cd after the shape never counts. When popd, Pop-Location, `cd -` or a bare cd comes
  * before a push, a create or a merge, the folder is unknown: it is denied if the cwd or a folder on the known cd path is a CCv3 checkout, or the
  * command names CCv3 (create and merge only). A push with an absolute -C names its folder, so it is judged there. The land script reads no folder, so it is judged by its tap only.
+ * A cd target the shell expands and this hook cannot (`$D/..`, `$(pwd)/..`, a backtick, `~`, a glob, a PowerShell expression) is an unexpanded folder: denied in any checkout (cd-unexpanded),
+ * and so is a relative cd after it (`cd $D && cd ..`). The same holds for a -C value. GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR in the text, and a cd alias (alias go=cd, Set-Alias go Set-Location),
+ * are denied in any checkout too (the folder is not named). A bash cd name spelled `c\d`, `c''d` or `''cd` is read as cd. A comment line with an open `(` or backtick opens no subshell.
+ * A wrapper before git (env, nice, timeout, xargs, setsid, sudo, with their options) is still a push.
+ * Accepted over-deny: an unquoted read of the name (`echo $GIT_DIR`, `unset GIT_DIR`), an alias for cd that is never used, a variable cd before an absolute one (`cd $D && cd /abs`: the prefix is judged).
+ * A quoted GIT_DIR= in an argument (`git commit -m "GIT_DIR= fix"`, `echo "GIT_DIR=x"`) is text. Accepted residual: `[Environment]::SetEnvironmentVariable('GIT_DIR', ...)`.
+ * Accepted residual: `"cd" A` (a quoted name with letters in it), `sh -c '...'`, GIT_DIR set in the shell session before the command, GH_REPO, CDPATH,
+ * a wrapper not listed (`doas`, `chrt`, `flock`), text sent to an existing Desktop Commander shell.
  * NOT gated: anything else. Known gaps: a push inside a child process (land-pr.ps1, scheduled jobs), `bash -c '...'`, a variable or alias for git.
  *
  * Mode. `decisions.enforce` is a TOP-LEVEL block of review-router.config.json (not `checkpoint`). Only a literal true denies.
@@ -58,7 +66,7 @@ import { isAbsolute, resolve } from 'path';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, namedRepo } from './shared/checkpoint-shapes.js';
 import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared/decisions-store.js';
-import { VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
+import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
@@ -244,7 +252,10 @@ function landShapesOf(seg: string): Shape[] {
 
 // ---------- the push shape ----------
 
-const PUSH_GIT = gitCallRe('push');
+// A wrapper may sit before git: env (with options and assignments), nice, timeout (with a duration), xargs, setsid, sudo (with options). The push is the same push.
+// It is part of the lead-in (group 1), like the shared CALL_START words. Regex only. sh -c '...' stays a known gap.
+const WRAPPERS = String.raw`(?:env(?:\s+(?:-[uCS]\s+\S+|-\S+|\w+=\S*))*|nice(?:\s+-\S+(?:\s+\d+)?)*|timeout(?:\s+-\S+(?:\s+[A-Z0-9]+)?)*\s+[\d.]+[smhd]?|xargs(?:\s+-\S+(?:\s+(?:\d+|\{\}))?)*|setsid(?:\s+-\S+)*|sudo(?:\s+-\S+(?:\s+\w+)?)*)\s+`;
+const PUSH_GIT = new RegExp(String.raw`(${CALL_START}(?:${WRAPPERS})*)(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+push)(?=\s|$)`, 'g');
 const PUSH_WRAPPERS = 'git-(?:safe|for)';
 /** A PowerShell parameter may be shortened to its first letters (unique prefix) and ignores case. */
 const abbr = (name: string, min: number): string => name.slice(0, min) + [...name.slice(min)].reduceRight((acc, ch) => `(?:${ch}${acc})?`, '');
@@ -450,27 +461,69 @@ const FLAG_OF: Record<Scope, string> = { push: 'decisions.enforcePush', other: '
 // `)` (a case pattern) are loose anywhere. After the opener: variable prefixes (X=1), a PowerShell `$x =`, builtin, command or eval words, a module name
 // (Microsoft.PowerShell.Management\) and one backslash (\cd). The scriptblock of `Invoke-Command` and `icm` runs in the current session: a sure position.
 // The gap after the name is spaces or tabs only: `cd` + newline is a bare cd (UNKNOWN_CD_SOURCE), and the next line is not its target.
-const OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif|time)\s+)`;
+const OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\s+|time\s+(?:(?:-p|--)\s+)*)`;
 const CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))`
-  + String.raw`(?:[A-Za-z_]\w*=[^\s;&|]*[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+)*(?:[\w.]+\\)?\\?`;
-const CD_NAMES = 'cd|Set-Location|sl|chdir|pushd|Push-Location';
+  + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
+// A bash cd name may be spelled with a backslash or an empty quote pair between (and around) its letters: `c\d`, `c''d`, `c""d`, `''cd`. Bash still runs cd, so the cd is read
+// and its folder judged. A quoted name with letters inside (`"cd" A`) stays a residual: the mask blanks it. PowerShell names stay literal.
+const NOISE = String.raw`(?:\\|''|"")*`;
+const spell = (word: string): string => NOISE + [...word].join(NOISE) + NOISE;
+const CD_NAMES = `${spell('cd')}|Set-Location|sl|${spell('chdir')}|${spell('pushd')}|Push-Location`;
 // A bash option (cd -P A, cd -- A) or a PowerShell parameter (-Path A, -Path:A) may come before the target. The target is one word of plain
-// characters, quoted parts and escapes (`P/"x"`, `P/x\ y`); it ends before a closing `)` or backtick of a subshell.
-const CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\\.|[^\s;&|)\`"'\\])+)`;
-// A job or a parallel block runs its cd in another runspace or process: the parent shell does not move. True when the text before a cd has an open `{`
-// that follows such a word (Start-Job, Start-ThreadJob, pwsh, -Parallel, -AsJob) with no `}` after it. Residual: a hashtable `@{}` between the word and the block.
-const JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Parallel|AsJob)\b)[^{};&|\r\n]*\{[^}]*$/i;
+// characters, quoted parts and escapes (`P/"x"`, `P/x\ y`); it ends before a closing `)` or backtick of a subshell. A backtick pair is one part of the target
+// (a command substitution: `cd `pwd`/x`), so the cd is read and its folder fails closed. A backslash escapes a character that is no separator, so a PowerShell
+// folder that ends in `\` (`Set-Location X\&& y`) does not swallow the next `;`, `&` or `|`. The same reading as pre-pr-gate CD_TARGET (PR #421).
+const CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\`[^\`]*\`|\\[^;&|\r\n]|[^\s;&|)\`"'\\])+)`;
+// A job, a parallel block or a remote block runs its cd in another runspace, process or machine: the parent shell does not move. True when the text before a cd
+// has an open `{` that follows such a word: Start-Job, Start-ThreadJob, pwsh, -Parallel and -AsJob (also -Pa, -Para ... and -As, -AsJo ...), or an Invoke-Command /
+// icm with anything between the word and the block but -ScriptBlock (`icm -cn srv {`, `Invoke-Command srv {`, `Invoke-Command @p {`: the target comes before the block).
+// It runs on the text with its closed `{ ... }` groups removed (withoutClosed), so `if (1) {}` or `@{}` inside the block does not end it.
+const JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Pa(?:r(?:a(?:l(?:l(?:e(?:l)?)?)?)?)?)?|As(?:J(?:o(?:b)?)?)?)\b|\b(?:Invoke-Command|icm)\b(?!\s+(?:-ScriptBlock\s+)?\{))[^{};&|\r\n]*\{[^}]*$/i;
+
+/** The text with every closed group the pattern finds removed, innermost first (`a { b { c } d } e` becomes `a  e`). A group left over is an open one. Regex only, no scan of characters. */
+function withoutClosed(text: string, group: RegExp): string {
+  let t = text;
+  for (;;) {
+    const next = t.replace(group, '');
+    if (next === t) return t;
+    t = next;
+  }
+}
+const CLOSED_BRACES = /\{[^{}]*\}/g;
+const CLOSED_PARENS = /\([^()]*\)|`[^`]*`/g;
+/** True when the text before a cd leaves a `(`, `$(`, `<(` or backtick open: the cd is inside a subshell or a substitution, so it may not last (`(true && cd B) && push`). */
+// A comment line (`# (x`) opens no subshell: the text from a `#` at the start or after a blank to the line end is dropped first. A blank after a backslash is escaped, so its `#`
+// is no comment. A `#` inside a word (`a#(x`, `$#`) is no comment either. The cost of a wrong guess is an over-deny, never a fail-open.
+const COMMENT = /(?:^|(?<!\\)\s)#[^\r\n]*/g;
+const insideSubshell = (before: string): boolean => /[(`]/.test(withoutClosed(before.replace(COMMENT, ''), CLOSED_PARENS));
 const gitBashPath = (p: string): string => (process.platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p);
 
-/** `base` moved by one cd target (raw, quotes still on): absolute as given, else under `base`. */
+/**
+ * True when a cd target holds text the shell expands and this hook does not: `$var`, `$(..)`, `${..}`, `%VAR%`, a backtick, a leading `~`, a glob (`*`, `?`, `[`)
+ * or a leading `(` or `@` (a PowerShell expression). Read as a path it names a folder that does not exist, or, with a `..` after it (`$D/..`), the cwd. The same
+ * reading as pre-pr-gate hasUnexpandedPart, kept as this gate's own copy.
+ */
+function hasUnexpandedPart(target: string): boolean {
+  const t = target.replace(/^["']|["']$/g, '');
+  return /[$`*?[]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith('~') || /^[(@]/.test(t);
+}
+/** A folder this hook cannot name. It starts every such path, so a later relative cd keeps it (`cd $D && cd ..`), and only an absolute cd names a folder again. */
+const UNEXPANDED = '<cannot-expand>';
+const isUnexpanded = (dir: string): boolean => dir.startsWith(UNEXPANDED);
+const unexpandedWhy = (dir: string): string => `a cd target or -C value (${dir.slice(UNEXPANDED.length, UNEXPANDED.length + 120)}) holds a variable, a command substitution, a ~ or a glob, so the checkout this command runs in cannot be known. Use a literal path in the cd (cd <full path> && ...).`;
+const absoluteText = (t: string): boolean => isAbsolute(t) || /^[A-Za-z]:/.test(t);
+
+/** `base` moved by one cd target (raw, quotes still on): absolute as given, else under `base`. An unexpanded target, or a relative one after it, gives an unexpanded folder. */
 function moveTo(base: string, target: string, shell: 'bash' | 'pwsh'): string {
   // Every quote mark goes (P/"x" is P/x); a backslash before a space or a quote is an escape (bash), so the mark itself stays.
   // PowerShell has no backslash escape: a quoted part is taken whole, and a quote inside the other kind is a letter of the name.
   const raw = shell === 'pwsh'
-    ? target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d: string | undefined, s: string | undefined) => d ?? s ?? '')
+    ? target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d: string | undefined, s: string | undefined) => d ?? s ?? '').trimEnd()
     : target.replace(/\\([ "'])|["']/g, (_m, esc: string | undefined) => esc ?? '');
+  if (hasUnexpandedPart(target)) return UNEXPANDED + raw;
   const t = shell === 'bash' ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+  if (absoluteText(t)) return t;
+  return isUnexpanded(base) ? base : resolve(base, t);
 }
 
 /**
@@ -506,13 +559,13 @@ function endsInPipe(before: string): boolean {
 }
 
 // popd, Pop-Location, `cd -`, a bare cd (also with only options: cd -P, cd --) go to a folder the text does not name. Found in the masked view, at a command position.
-const UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
+const UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:${spell('popd')}|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
 /** A cd target that is no folder: `cd -`, or an option with nothing after it (`cd -P`, `cd --`). The shell goes to a place the text does not name. */
 const NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
 
 // Invoke-Command names its target AFTER the block: `{ cd B } -ComputerName srv` (or -cn, -Comp, -CU, -VMGuid) runs the cd elsewhere. Aliases and prefixes cannot be
 // listed safely, so ANY parameter after the closing brace in the same statement counts. A local-only parameter, or a later unrelated block, over-denies (fail closed).
-const REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?\s-[A-Za-z]/;
+const REMOTE_AFTER_BLOCK = /^[^;\r\n]*?\}[^;&|\r\n{]*?\s(?:-[A-Za-z]|@\w)/;
 
 /** Every cd of a masked view with the offset where it ends, and where each popd-like command ends. Read once per view: a segment takes the ones before it. */
 interface CdPositions { cds: { end: number; target: string; piped: boolean }[]; unknown: number[]; masked: string }
@@ -525,7 +578,11 @@ function cdPositions(masked: string, raw: string): CdPositions {
     if (NO_FOLDER.test(target)) { unknown.push(end); continue; }
     // The match opens on the separator before the cd. A | there (|| or a pipe), a pipe before a comment line (endsInPipe), a `(` (a subshell)
     // or a backtick means the cd may be skipped or may not last: it is loose. So is a cd at a soft position (CMD_POS) and a cd inside a job block.
-    const piped = m.groups!.soft !== undefined || /^\||[(`]/.test(m.groups!.hard ?? '') || endsInPipe(masked.slice(0, m.index!)) || JOB_BLOCK.test(masked.slice(0, m.index!)) || REMOTE_AFTER_BLOCK.test(masked.slice(end));
+    // insideSubshell: a separator inside an open `(`, `$(` or backtick (`(true && cd B) && push`) does not make the match start with the `(`. JOB_BLOCK runs on the text
+    // with its closed `{ }` groups removed, so a closed brace in the job (`if (1) {}`, `@{}`) does not hide the block.
+    const before = masked.slice(0, m.index!);
+    const piped = m.groups!.soft !== undefined || /^\||[(`]/.test(m.groups!.hard ?? '') || endsInPipe(before) || insideSubshell(before)
+      || JOB_BLOCK.test(withoutClosed(before, CLOSED_BRACES)) || REMOTE_AFTER_BLOCK.test(masked.slice(end));
     cds.push({ end, target, piped });
   }
   return { cds, unknown, masked };
@@ -594,7 +651,7 @@ const READ_SAFE = safeCallRe(READ_VERB, PUSH_WRAPPERS, '', 'gi');
 /** The only commit arguments a chained commit may have: a message by file or text, and quiet. Nothing that stages, amends or names a path. */
 const COMMIT_MSG = String.raw`(?:-[Fm]\s+${VAL}|--(?:file|message)(?:=|\s+)${VAL})`;
 const COMMIT_ARGS_RE = new RegExp(String.raw`^(?:\s+(?:-q|--quiet))*\s+${COMMIT_MSG}(?:\s+(?:-q|--quiet|${COMMIT_MSG}))*\s*$`);
-const CD_SEG_RE = /^\s*(?:cd|Set-Location|sl|pushd|Push-Location)\s+\S/i;
+const CD_SEG_RE = /^\s*(?:cd|Set-Location|sl|chdir|pushd|Push-Location)\s+\S/i;
 type SegKind = 'cd' | 'commit' | 'push' | 'read' | 'other';
 
 /** The call that opens a segment (no env prefix, no `then`, no wrapper word). Null when the segment opens with something else. */
@@ -708,8 +765,10 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, named: string | null):
 
 /** `-C <path>` of a push: absolute as given, else under the directory the command acts in. */
 function resolveDir(base: string, raw: string, shell: 'bash' | 'pwsh'): string {
+  if (hasUnexpandedPart(raw)) return UNEXPANDED + raw;
   const t = shell === 'bash' ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+  if (absoluteText(t)) return t;
+  return isUnexpanded(base) ? base : resolve(base, t);
 }
 
 /**
@@ -731,6 +790,9 @@ const POSITION_WHY = 'popd, Pop-Location, cd - or a bare cd moves the folder to 
 function judgeAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', named: string | null): Decision[] {
   const at = s.at!;
   const dirs = dirsAfter(cwd, at.cds, shell, at.loose);
+  // An unexpanded cd target names a folder this hook cannot know: denied in any checkout (as pre-pr-gate: cannot expand). The land script reads no folder.
+  const lost = dirs.find(isUnexpanded);
+  if (lost !== undefined && s.kind !== 'land') return [deny('cd-unexpanded', unexpandedWhy(lost))];
   // judgeLand reads no folder for the land script, so a popd never blocks it: its PR tap alone decides.
   if (at.unknown && s.kind !== 'land') {
     const ccv3 = named === CCV3_REPO || [...new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
@@ -747,6 +809,8 @@ function judgeAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', name
 function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', subagent: boolean, chained: boolean, alone: boolean): Decision[] {
   const p = s.push!;
   const dirs = pushDirsOf(p, cwd, shell);
+  const lost = dirs.find(isUnexpanded);
+  if (lost !== undefined) return [deny('cd-unexpanded', unexpandedWhy(lost), 'push')];
   const fixedByDir = p.dir !== null && resolveDir('/a', p.dir, shell) === resolveDir('/b', p.dir, shell);
   if (p.unknown && !fixedByDir) {
     const ccv3 = [...new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
@@ -813,6 +877,19 @@ function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean, cha
   return ok ? ALLOW : d('ship', pushWhy(branch));
 }
 
+// The environment can point git at another repo than the folder: GIT_DIR, GIT_WORK_TREE and GIT_COMMON_DIR. The flag forms (--git-dir, --work-tree) are p.moved. The name is
+// read in the quote-masked text (a quoted mention such as echo "the GIT_DIR variable" is text) and as `NAME=` in the raw text (env "GIT_DIR=x" is a real assignment).
+// A cd alias (alias go=cd, Set-Alias go Set-Location, sal, nal, New-Alias) runs a cd the text does not show: the definition is read in the text with its quotes deleted.
+// Neither names a folder, so the shape is denied in any checkout (fail closed). An unquoted read of the name (echo $GIT_DIR) over-denies: pinned by tests.
+const MOVE_ENV_MASKED = /(?:^|\W)GIT_(?:DIR|WORK_TREE|COMMON_DIR)(?!\w)/i;
+// The raw text adds one thing the mask hides: a QUOTED assignment given to env or export, or at a command position (env "GIT_DIR=x" git push). A quoted GIT_DIR= in an argument is text.
+const MOVE_ENV_RAW = /(?:^|[;&|\r\n(]\s*)(?:(?:env|export)\s+(?:-\S+\s+|\S+=\S*\s+)*)?["']GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/i;
+const CD_ALIAS = /(?:^|[;&|(\r\n]\s*)(?:alias|(?:Set|New)-Alias|sal|nal)\s[^;&|\r\n]*?(?<![\w-])(?:cd|chdir|pushd|popd|Set-Location|sl|Push-Location|Pop-Location)(?![\w-])/i;
+const MOVED_WHY = 'GIT_DIR, GIT_WORK_TREE or an alias for cd moves git or the shell to a folder this text does not name, so the checkout this command runs in cannot be known. Run the command in the repo with no GIT_DIR and no cd alias.';
+function movesRepo(text: string): boolean {
+  return MOVE_ENV_RAW.test(text) || (['Bash', 'PowerShell'] as const).some((tool) => MOVE_ENV_MASKED.test(maskQuoted(text, tool))) || CD_ALIAS.test(squashQuotes(text));
+}
+
 /** Every deny of a command. All shapes are judged (no early return), so each deny keeps its scope and decide() applies the flag of that scope. */
 function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   const cmd = readShellCommand(input);
@@ -830,7 +907,13 @@ function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   const named = namedRepo(cmd.text, deps.env);
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
+  const moved = movesRepo(cmd.text);
   for (const s of [...rest, ...pushes]) {
+    // The land script reads no folder, so GIT_DIR and an alias never block it.
+    if (moved && s.kind !== 'land') {
+      denies.push(s.kind === 'push' ? deny('push-target-unresolved', pushUnresolvedWhy(MOVED_WHY), 'push') : deny('repo-moved', MOVED_WHY));
+      continue;
+    }
     const found = s.kind === 'push' ? judgePushAt(s, deps, cwd, shell, Boolean(input.agent_id), chained, alone) : judgeAt(s, deps, cwd, shell, named);
     for (const d of found) {
       if (d.action === 'deny' && !denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope)) denies.push(d);

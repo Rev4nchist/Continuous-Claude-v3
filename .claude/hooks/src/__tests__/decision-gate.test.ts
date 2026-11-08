@@ -78,7 +78,8 @@ function deps(w: World = {}): Deps {
   return {
     env: { ...process.env, CCV3_DECISIONS_FILE: storeFile },
     home: '/home/nobody',
-    readFile: (p) => (p.replace(/\\/g, '/') === '/repo/review-router.config.json' ? config : null),
+    // The router config sits in /repo and in the other (plain) repo of T22, so a command run from either folder is enforced.
+    readFile: (p) => (['/repo/review-router.config.json', '/tmp/other-repo/review-router.config.json'].includes(p.replace(/\\/g, '/')) ? config : null),
     git: (cwd, args) => {
       w.calls?.push({ cwd, args });
       if (w.gitFails) throw new Error('git exploded');
@@ -2261,6 +2262,347 @@ describe('T20 cd positions, scriptblocks and targets', () => {
     it('denies a cd to a shell variable (accepted over-deny, fails closed)', () => {
       const cmd = fill('for d in %O; do cd $d && %S; done', shape);
       expect(denied(bash(cmd, { cwd: SUB }), W), cmd).toBe(true);
+    });
+  });
+});
+
+// T21 (lane decision-gate-cd-residuals): six cd shapes that pre-pr-gate reads since PR #421 and this gate did not. Each hid a CCv3 cwd behind a cd to
+// another folder (fail-open), or judged a folder the text does not name. Every row runs for a push, a create and a merge. /repo is the CCv3 cwd and O is
+// not CCv3, so a LOOSE row must be denied (the cwd is judged too) and a SURE row must pass (only O is judged). Regex reading only: no lexer.
+describe('T21 cd residuals: subshell separators, closed braces in jobs, abbreviations, Invoke-Command, backslash and backtick targets, chdir', () => {
+  const O = '/tmp/other-repo';
+  const SUB = '/repo/sub';
+  const W: World = { otherDirs: [O, SUB, O + '/'] }; // O + '/': an absolute target that ends in a backslash is kept as written, and the fake reads it with a slash
+  const PUSH = 'git push fork feat/x';
+  const C = 'gh pr create --draft --head feat/x --title t --body-file b.md';
+  const M = `gh pr merge 12 --merge --match-head-commit ${HEAD}`;
+  const SHAPES: [string, string][] = [['push', PUSH], ['create', C], ['merge', M]];
+  const fill = (tpl: string, shape: string): string => tpl.replaceAll('%O', O).replaceAll('%S', shape);
+  const cwdsOf = (calls: GitCall[]): string[] => [...new Set(calls.map((c) => c.cwd))];
+
+  describe.each(SHAPES)('%s', (_kind, shape) => {
+    // 1. A cd after a separator INSIDE an open ( or $( may not last: the shape after the `)` runs in the cwd.
+    it.each([
+      ['(true && cd O) && S', '(true && cd %O) && %S'],
+      ['(true; cd O) && S', '(true; cd %O) && %S'],
+      ['x=$(true; cd O) && S', 'x=$(true; cd %O) && %S'],
+      ['echo $(true && cd O) && S', 'echo $(true && cd %O) && %S'],
+      ['a backtick with a ;', 'x=`true; cd %O` && %S'],
+      ['a process substitution', 'cat <(true; cd %O) && %S'],
+      ['a nested group before the cd', '(true && (echo y); cd %O) && %S'],
+    ])('1: judges the cwd too: %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd), W), cmd).toBe(true);
+    });
+    it('1: a PowerShell subexpression with a ; before the cd is loose', () => {
+      const cmd = fill('$d = (1; Set-Location %O) && %S', shape);
+      expect(denied(pwsh(cmd), W), cmd).toBe(true);
+    });
+    it.each([
+      ['a subshell closed before the cd', '(true; echo y); cd %O && %S'],
+      ['a substitution closed before the cd', 'x=$(echo y); cd %O && %S'],
+      ['a backtick pair closed before the cd', 'x=`echo y`; cd %O && %S'],
+    ])('1: pinned, the cd stays sure after %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd), W), cmd).toBe(false);
+    });
+
+    // 2. A closed } inside a job block does not end the block: the cd after it still runs in the job.
+    it.each([
+      ['if (1) {}', 'Start-Job { if (1) {}; Set-Location %O } && %S'],
+      ['a hashtable', 'Start-Job { $h = @{}; Set-Location %O } && %S'],
+      ['a closed block with a body', 'Start-Job { if ($true) { $null }; Set-Location %O } && %S'],
+      ['Start-ThreadJob and foreach', 'Start-ThreadJob { foreach ($i in 1) {}; Set-Location %O } && %S'],
+      ['pwsh -Command', 'pwsh -NoProfile -Command { if (1) {}; Set-Location %O } && %S'],
+      ['-Parallel', '1 | ForEach-Object -Parallel { if (1) {}; Set-Location %O } && %S'],
+      ['a hashtable argument before the block', 'Start-Job -ArgumentList @{a=1} -ScriptBlock { Set-Location %O } && %S'],
+    ])('2: judges the cwd when a closed brace comes before the cd in %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(pwsh(cmd), W), cmd).toBe(true);
+    });
+    it('2: pinned, a job block that closed before the cd does not make it loose', () => {
+      const cmd = fill('Start-Job { $null }; Set-Location %O && %S', shape);
+      expect(denied(pwsh(cmd), W), cmd).toBe(false);
+    });
+
+    // 3. -Pa and -Para are abbreviations of -Parallel (and -As, -AsJo of -AsJob).
+    it.each([
+      ['-Pa', '1 | % -Pa { $null; Set-Location %O } && %S'],
+      ['-Para', '1 | ForEach-Object -Para { $null; Set-Location %O } && %S'],
+      ['-Parall', '1 | ForEach-Object -Parall { Set-Location %O } && %S'],
+      ['-AsJo', '1 | ForEach-Object -AsJo { $null; Set-Location %O } && %S'],
+      ['-As', 'icm -As { Set-Location %O } && %S'],
+    ])('3: judges the cwd when the cd is inside a block of %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(pwsh(cmd), W), cmd).toBe(true);
+    });
+
+    // 4. Invoke-Command runs the cd elsewhere when a parameter comes before the block, an && sits inside it, or a splat follows it.
+    it.each([
+      ['a parameter before the block', 'Invoke-Command -ComputerName srv -ScriptBlock { $null; Set-Location %O } && %S'],
+      ['icm -cn before the block', 'icm -cn srv { $null; Set-Location %O } && %S'],
+      ['a word before the block', 'Invoke-Command srv { $null; Set-Location %O } && %S'],
+      ['-Session before the block', 'Invoke-Command -Session $s { $null; Set-Location %O } && %S'],
+      ['a splat before the block', 'Invoke-Command @p { Set-Location %O } && %S'],
+      ['an && inside the block and -cn after it', 'Invoke-Command { Set-Location %O && $null } -cn srv && %S'],
+      ['a splat after the block', 'Invoke-Command { Set-Location %O } @p && %S'],
+      ['a nested block and -cn after it', 'Invoke-Command { if (1) { Set-Location %O } } -cn srv && %S'],
+    ])('4: judges the cwd with %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(pwsh(cmd), W), cmd).toBe(true);
+    });
+    it('4: pinned, a local scriptblock stays a sure cd', () => {
+      const cmd = fill('Invoke-Command -ScriptBlock { Set-Location %O } && %S', shape);
+      expect(denied(pwsh(cmd), W), cmd).toBe(false);
+    });
+
+    // 5. A PowerShell target that ends in a backslash must not swallow the next separator (`\&`, `\;` were read as an escape).
+    it.each([
+      ['a backslash then &&', 'Set-Location %O\\&& %S'],
+      ['a backslash, a space, then &&', 'Set-Location %O\\ && %S'],
+    ])('5: reads the folder without the separator after %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      const calls: GitCall[] = [];
+      expect(denied(pwsh(cmd), { ...W, calls }), cmd).toBe(false);
+      expect(cwdsOf(calls).filter((c) => /[;&|]/.test(c)), cmd).toEqual([]);
+    });
+    it('5: a backslash then | ends the folder; the pipe makes the cd loose, so the cwd is judged too', () => {
+      const cmd = fill('Set-Location %O\\|Out-Null; %S', shape);
+      const calls: GitCall[] = [];
+      expect(denied(pwsh(cmd), { ...W, calls }), cmd).toBe(true);
+      expect(cwdsOf(calls).filter((c) => /[;&|]/.test(c)), cmd).toEqual([]);
+    });
+    it('5: a ; after the backslash is a separator, so the next cd is read', () => {
+      const cmd = fill('Set-Location %O\\; Set-Location /repo; %S', shape);
+      const calls: GitCall[] = [];
+      expect(denied(pwsh(cmd, { cwd: SUB }), { ...W, calls }), cmd).toBe(true);
+      expect(cwdsOf(calls), cmd).toContain('/repo');
+      expect(cwdsOf(calls).filter((c) => /[;&|]/.test(c)), cmd).toEqual([]);
+    });
+
+    // The command positions pre-pr-gate reads since #421 (a redirect prefix, an option after command, builtin or time, a += prefix): the cd is seen, so /repo is judged.
+    it.each([
+      ['a redirect prefix', '2>/dev/null cd /repo && %S'],
+      ['an output redirect prefix', '>/dev/null cd /repo && %S'],
+      ['command -p', 'command -p cd /repo && %S'],
+      ['command --', 'command -- cd /repo && %S'],
+      ['builtin --', 'builtin -- cd /repo && %S'],
+      ['time -p', 'time -p cd /repo && %S'],
+      ['a += prefix', 'Y+=1 cd /repo && %S'],
+    ])('judges the shape in the folder a cd names after %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd, { cwd: SUB }), W), cmd).toBe(true);
+    });
+
+    // 6. A bash backtick substitution as the target names a folder this hook cannot expand. It is read as a target, so the folder is unexpanded: a deny in any checkout
+    // (T22 reads the `..` forms). Before round 2 the folder was only a path that does not exist, and a `/..` after the backticks made it the cwd.
+    it.each([
+      ['a backtick substitution', 'cd `echo /repo` && %S'],
+      ['a backtick substitution after ;', 'true; cd `pwd` && %S'],
+      ['a backtick substitution in a path', 'cd `pwd`/x && %S'],
+    ])('6: does not skip the cd with %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      const calls: GitCall[] = [];
+      const d = decide(bash(cmd, { cwd: SUB }), deps({ ...W, calls }));
+      expect(d.action === 'deny' && d.pattern, cmd).toBe('cd-unexpanded');
+      expect(cwdsOf(calls).some((c) => c.includes('`')), cmd).toBe(false); // no git runs in the unexpanded folder
+    });
+  });
+
+  // chdir is a cd word: a chdir before a commit and a push is the one cd the ship rule allows.
+  it('chdir: a commit and a push after a chdir is judged on the index tree, like cd', () => {
+    const INDEX = 'i'.repeat(40);
+    tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
+    for (const cd of ['cd /repo', 'chdir /repo']) {
+      const cmd = `${cd} && git commit -F m.txt && ${PUSH}`;
+      expect(denied(bash(cmd), { indexTree: INDEX }), cmd).toBe(false);
+    }
+  });
+});
+
+// T22 (lane decision-gate-cd-residuals, round 2): nine shapes two reviewers reproduced in a real shell. /repo is the CCv3 checkout with no tap, O is not CCv3.
+// The cwd is O, so a fail-open row is one where the gate judges only O and the real shell runs in /repo. Regex reading only: no lexer, no tokenizer.
+const patternOf = (input: object, w?: World): string => { const d = decide(input, deps(w)); return d.action === 'deny' ? d.pattern : d.action; };
+describe('T22 reviewer shapes: unexpanded targets that cancel, GIT_DIR, cd aliases, spelled cd names, wrappers, comment lines', () => {
+  const O = '/tmp/other-repo';
+  const W: World = { otherDirs: [O] };
+  const PUSH = 'git push fork feat/x';
+  const C = 'gh pr create --draft --head feat/x --title t --body-file b.md';
+  const M = `gh pr merge 12 --merge --match-head-commit ${HEAD}`;
+  const SHAPES: [string, string][] = [['push', PUSH], ['create', C], ['merge', M]];
+  const fill = (tpl: string, shape: string): string => tpl.replaceAll('%O', O).replaceAll('%S', shape);
+
+  describe.each(SHAPES)('%s', (kind, shape) => {
+    // 1. A variable, a command substitution or a ~ in the target, then a `..` that cancels it: the folder looks like the cwd, the shell is somewhere else.
+    it.each([
+      ['$D/..', 'cd $D/.. && %S'],
+      ['"$D"/..', 'cd "$D"/.. && %S'],
+      ['${D}/..', 'cd ${D}/.. && %S'],
+      ['$PWD/..', 'cd $PWD/.. && %S'],
+      ['"$(pwd)/.."', 'cd "$(pwd)/.." && %S'],
+      ['"$(git rev-parse --show-toplevel)/.."', 'cd "$(git rev-parse --show-toplevel)/.." && %S'],
+      ['$(pwd)/.. unquoted', 'cd $(pwd)/.. && %S'],
+      ['a backtick pair then /..', 'cd `pwd`/.. && %S'],
+      ['~/..', 'cd ~/.. && %S'],
+      ['a later cd .. after a variable', 'cd $D && cd .. && %S'],
+      ['a variable in the first cd, a sure one after it', 'cd $D && cd %O && %S'],
+    ])('1: bash %s is an unexpanded target: deny, cwd is not enough', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(patternOf(bash(cmd, { cwd: O }), W), cmd).toBe('cd-unexpanded');
+    });
+    it.each([
+      ['$d/.. in Set-Location', '$d = "x"; Set-Location $d\\..; %S'],
+      ['$d/.. in cd', "$d='x'; cd $d/..; %S"],
+      ['$PWD/..', 'cd $PWD/..; %S'],
+      ['a subexpression', 'cd (Join-Path $a ..); %S'],
+      ['$env: variable', 'Set-Location $env:HOME\\..; %S'],
+    ])('1: pwsh %s is an unexpanded target: deny', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(patternOf(pwsh(cmd, { cwd: O }), W), cmd).toBe('cd-unexpanded');
+    });
+    it('1: pinned, the target names a plain folder: no unexpanded deny', () => {
+      const cmd = fill('cd %O && cd %O && %S', shape);
+      expect(patternOf(bash(cmd, { cwd: O }), W), cmd).toBe('allow');
+    });
+    it('1: pinned, a single-quoted $ is literal in bash but the hook cannot tell it apart: deny (fail closed)', () => {
+      expect(patternOf(bash(fill("cd '$D'/.. && %S", shape), { cwd: O }), W)).toBe('cd-unexpanded');
+    });
+    it('1: a scope that is off warns instead of denying (the flag of its scope)', () => {
+      const flag = kind === 'push' ? { enforcePush: false } : { enforce: false };
+      const d = decide(bash(fill('cd $D/.. && %S', shape), { cwd: O }), deps({ ...W, ...flag }));
+      expect(d.action).toBe('allow');
+    });
+
+    // 2. GIT_DIR and GIT_WORK_TREE in the environment name another repo than the folder: the flag forms were denied, the env forms were not.
+    const MOVED = kind === 'push' ? 'push-target-unresolved' : 'repo-moved';
+    it.each([
+      ['a prefix', 'GIT_DIR=/repo/.git %S'],
+      ['a prefix with a work tree', 'GIT_WORK_TREE=/repo %S'],
+      ['export, then the shape', 'export GIT_DIR=/repo/.git; %S'],
+      ['env', 'env GIT_DIR=/repo/.git %S'],
+      ['a quoted assignment given to env', 'env "GIT_DIR=/repo/.git" %S'],
+      ['a quoted value', 'GIT_DIR="/repo/.git" %S'],
+    ])('2: bash %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(patternOf(bash(cmd, { cwd: O }), W), cmd).toBe(MOVED);
+    });
+    it.each([
+      ['$env: with a quote', "$env:GIT_DIR='/repo/.git'; %S"],
+      ['$env: with spaces', "$env:GIT_DIR = '/repo/.git'; %S"],
+      ['$env: work tree', "$env:GIT_WORK_TREE = '/repo'; %S"],
+    ])('2: pwsh %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(patternOf(pwsh(cmd, { cwd: O }), W), cmd).toBe(MOVED);
+    });
+    it('2: pinned, a quoted mention of the name without an assignment is text', () => {
+      expect(patternOf(bash(fill('echo "the GIT_DIR variable" && %S', shape), { cwd: O }), W)).toBe('allow');
+    });
+    it('2: pinned, a quoted GIT_DIR= in an argument is text (a commit message that names it must not block the ship)', () => {
+      expect(patternOf(bash(fill('echo "GIT_DIR=x" && %S', shape), { cwd: O }), W)).toBe('allow');
+      expect(patternOf(bash(fill("git commit -m 'deny GIT_DIR= env forms' && %S", shape), { cwd: O }), W)).toBe('allow');
+    });
+    it.each([
+      ['an unquoted read', 'echo $GIT_DIR && %S'],
+      ['unset', 'unset GIT_DIR && %S'],
+      ['export with a quoted assignment', 'export "GIT_DIR=/repo/.git"; %S'],
+      ['env with an option and a quoted assignment', 'env -i "GIT_WORK_TREE=/repo" %S'],
+      ['a quoted assignment at a command position', '"GIT_DIR=/repo/.git" env %S'],
+    ])('2: %s is read as a GIT_DIR move (ACCEPTED over-deny for the reads)', (_name, tpl) => {
+      expect(patternOf(bash(fill(tpl, shape), { cwd: O }), W), tpl).toBe(MOVED);
+    });
+
+    // 3. An alias for cd (bash alias, PowerShell Set-Alias): the folder the alias moves to is not readable.
+    it.each([
+      ['alias go=cd', 'alias go=cd\ngo /repo && %S'],
+      ["alias go='cd'", "alias go='cd'; go /repo && %S"],
+      ['alias with shopt', 'shopt -s expand_aliases\nalias go=pushd\ngo /repo && %S'],
+      ['alias chdir', 'true && alias go="chdir"; go /repo && %S'],
+    ])('3: bash %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(patternOf(bash(cmd, { cwd: O }), W), cmd).toBe(MOVED);
+    });
+    it.each([
+      ['Set-Alias', 'Set-Alias go Set-Location; go /repo; %S'],
+      ['Set-Alias -Name -Value', 'Set-Alias -Name go -Value Set-Location; go /repo; %S'],
+      ['New-Alias sl', 'New-Alias go sl; go /repo; %S'],
+      ['sal', 'sal go cd; go /repo; %S'],
+    ])('3: pwsh %s', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(patternOf(pwsh(cmd, { cwd: O }), W), cmd).toBe(MOVED);
+    });
+    it('3: pinned, an alias for something else is no cd alias', () => {
+      expect(patternOf(bash(fill("alias ll='ls -l'; %S", shape), { cwd: O }), W)).toBe('allow');
+      expect(patternOf(pwsh(fill('Set-Alias ll Get-ChildItem; %S', shape), { cwd: O }), W)).toBe('allow');
+    });
+
+    // 4. A cd name spelled with a backslash or an empty quote pair between the letters: bash still runs cd.
+    it.each([
+      ['c\\d', 'c\\d /repo && %S'],
+      ["c''d", "c''d /repo && %S"],
+      ['c""d', 'c""d /repo && %S'],
+      ["''cd", "''cd /repo && %S"],
+      ['p\\ushd', 'p\\ushd /repo && %S'],
+      ['ch\\dir', 'ch\\dir /repo && %S'],
+    ])('4: %s is read as a cd to /repo, so /repo is judged', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd, { cwd: O }), W), cmd).toBe(true);
+    });
+    it('4: pinned, the spelled cd is READ: a sure cd to O is judged in O only, even from the /repo cwd', () => {
+      expect(denied(bash(fill('c\\d %O && %S', shape), { cwd: '/repo' }), W)).toBe(false);
+      expect(denied(bash(fill("c''d %O && %S", shape), { cwd: '/repo' }), W)).toBe(false);
+    });
+    it('4: a spelled bare cd is a position-unknown cd', () => {
+      expect(patternOf(bash(fill('c\\d && %S', shape), { cwd: '/repo' }), W)).toBe('position-unknown');
+    });
+
+    // 9. A comment line with an open ( or backtick opens no subshell. It made the next line's cd loose.
+    it.each([
+      ['a comment with (', '# (x\ncd %O && %S'],
+      ['a comment with a backtick', '# run `x\ncd %O && %S'],
+      ['a comment after a command', 'echo a # (x\ncd %O && %S'],
+      ['a comment with $(', '# build $(x\ncd %O && %S'],
+    ])('9: %s does not make the cd loose', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd, { cwd: '/repo' }), W), cmd).toBe(false);
+    });
+    it.each([
+      ['a ( in the middle of a word is no comment', 'echo a#(x\ncd %O && %S'],
+      ['a ( after an escaped space is no comment', 'echo a\\ #(x\ncd %O && %S'],
+      ['a real subshell after a comment', '# c\n(true; cd %O) && %S'],
+    ])('9: pinned, %s: the cd stays loose', (_name, tpl) => {
+      const cmd = fill(tpl, shape);
+      expect(denied(bash(cmd, { cwd: '/repo' }), W), cmd).toBe(true);
+    });
+  });
+
+  // 8. A wrapper before git: env, nice, timeout, xargs, setsid, sudo with options. The push is the same push. /repo is the cwd, there is no tap.
+  describe('8: a wrapper before git push is still a push', () => {
+    it.each([
+      'env git push fork feat/x',
+      'env GIT_TRACE=0 git push fork feat/x',
+      'env -i git push fork feat/x',
+      'env -u FOO git push fork feat/x',
+      'nice git push fork feat/x',
+      'nice -n 5 git push fork feat/x',
+      'timeout 60 git push fork feat/x',
+      'timeout -s KILL 60s git push fork feat/x',
+      'timeout --foreground 60 git push fork feat/x',
+      'echo | xargs git push fork feat/x',
+      'echo x | xargs -n 1 git push fork feat/x',
+      'setsid git push fork feat/x',
+      'sudo -u bob git push fork feat/x',
+      'true && env GIT_TRACE=0 nice -n 5 timeout 60 git push fork feat/x',
+    ])('denies %s with no tap', (cmd) => {
+      expect(patternOf(bash(cmd), {}), cmd).toBe('ship');
+    });
+    it('an allowed shape stays allowed behind a wrapper (main, and a non-push git command)', () => {
+      expect(denied(bash('env git push fork main'))).toBe(false);
+      expect(denied(bash('timeout 60 git fetch fork'))).toBe(false);
+      expect(denied(bash('nice -n 5 git status'))).toBe(false);
+    });
+    it('a tap licenses the wrapped push like the plain one', () => {
+      tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
+      expect(denied(bash('timeout 60 git push fork feat/x'))).toBe(false);
     });
   });
 });

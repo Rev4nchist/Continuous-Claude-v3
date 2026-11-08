@@ -36,6 +36,10 @@
  * (`icm -cn srv {`, `Invoke-Command srv {`, `@p {`), or with a parameter or splat after it (-ComputerName, -cn, -Session, -AsJob, `@p`, also behind an `&&` inside the block). A closed `{ }` inside a job block does not end it.
  * A cd target the shell resolves and this hook cannot (a glob `u*`, `[u]a`, a PowerShell `(Join-Path ...)`, a relative target under CDPATH, a backtick substitution) fails closed: cannot expand, in any folder list.
  * A cd with only options (`cd -P`, `cd --`) is a position-unknown cd. A cd inside quotes is not seen.
+ * GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR in the text, and a cd alias (alias go=cd, Set-Alias go Set-Location, sal, nal), are denied in any checkout (repo-moved): the folder is not named.
+ * A bash cd name spelled `c\d`, `c''d` or `''cd` is read as cd. A comment line with an open `(` or backtick opens no subshell.
+ * Accepted over-deny: an unquoted read of the name (`echo $GIT_DIR`) and an alias for cd that is never used. A quoted GIT_DIR= in an argument (`--title "GIT_DIR= fix"`) is text.
+ * Accepted residual: GIT_DIR set in the shell session before the command, and `[Environment]::SetEnvironmentVariable('GIT_DIR', ...)`.
  * Accepted over-deny: `(cd A) && open` is loose, so the cwd and A are both judged although the subshell cd did not last. Accepted over-deny: `! cd A && open` reads as a sure cd (bash runs the open only when the cd failed), so A is judged.
  * Accepted over-deny: a closing backtick that pairs with a later backtick (`` x=`cd B` && y=`pwd` && open ``) reads as a substitution in the target (cannot expand).
  * Accepted residual: PowerShell `Set-Location 'x' -WhatIf`, `-Pat` and other parameter forms before the folder, `iex`, `bash -c '...'`, a quoted command name (`"cd" A`), a variable command name (`c=cd; $c B`)
@@ -77,7 +81,7 @@ import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
-import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
+import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
 import { maskQuoted } from './shared/mask-quotes.js';
@@ -168,7 +172,11 @@ export function isCcv3Remote(url: string): boolean {
 const OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\s+|time\s+(?:(?:-p|--)\s+)*)`;
 const CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))`
   + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
-const CD_NAMES = 'cd|Set-Location|sl|chdir|pushd|Push-Location';
+// A bash cd name may be spelled with a backslash or an empty quote pair between (and around) its letters: `c\d`, `c''d`, `c""d`, `''cd`. Bash still runs cd, so the cd is read
+// and its folder judged. A quoted name with letters inside (`"cd" A`) stays a residual: the mask blanks it. PowerShell names stay literal. Same as decision-gate.
+const NOISE = String.raw`(?:\\|''|"")*`;
+const spell = (word: string): string => NOISE + [...word].join(NOISE) + NOISE;
+const CD_NAMES = `${spell('cd')}|Set-Location|sl|${spell('chdir')}|${spell('pushd')}|Push-Location`;
 // A bash option (cd -P A, cd -- A) or a PowerShell parameter (-Path A, -Path:A) may come before the target. The target is one word of plain characters, quoted
 // parts and escapes (`P/"x"`, `P/x\ y`); it ends before a closing `)` or backtick of a subshell. A quoted part comes first, so a PowerShell folder may end in `\`.
 const CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\`[^\`]*\`|\\[^;&|\r\n]|[^\s;&|)\`"'\\])+)`, 'gi');
@@ -177,7 +185,7 @@ const CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[P
  * Found in the masked view, at a command position. `cd -` with nothing else is also read by cdSteps (NO_FOLDER), so the two readers cannot disagree.
  * It reads separators and command names only. decision-gate keeps its own copy of this reading (UNKNOWN_CD_SOURCE); the two read alike.
  */
-const UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`, 'gi');
+const UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:${spell('popd')}|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`, 'gi');
 /** A cd target that is no folder: `cd -`, or an option with nothing after it (`cd -P`, `cd --`). The shell goes to a place the text does not name. */
 const NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
 // A job, a parallel block or a remote block runs its cd in another runspace, process or machine: the parent shell does not move. True when the text before a cd has an
@@ -202,7 +210,10 @@ function withoutClosed(text: string, group: RegExp): string {
 const CLOSED_BRACES = /\{[^{}]*\}/g;
 const CLOSED_PARENS = /\([^()]*\)|`[^`]*`/g;
 /** True when the text before a cd leaves a `(`, `$(`, `<(` or backtick open: the cd is inside a subshell or a substitution, so it may not last (`(true && cd B) && open`). */
-const insideSubshell = (before: string): boolean => /[(`]/.test(withoutClosed(before, CLOSED_PARENS));
+// A comment line (`# (x`) opens no subshell: the text from a `#` at the start or after a blank to the line end is dropped first. A blank after a backslash is escaped, so its `#`
+// is no comment. A `#` inside a word (`a#(x`, `$#`) is no comment either. The cost of a wrong guess is an over-deny, never a fail-open. Same as decision-gate.
+const COMMENT = /(?:^|(?<!\\)\s)#[^\r\n]*/g;
+const insideSubshell = (before: string): boolean => /[(`]/.test(withoutClosed(before.replace(COMMENT, ''), CLOSED_PARENS));
 /** Git Bash writes C:\x as /c/x. Node on Windows reads /c/x as \c\x, so turn the one-letter drive prefix back into C:. Other platforms keep the path. */
 export const fromGitBashPath = (p: string, platform: string = process.platform): string =>
   platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p;
@@ -598,11 +609,28 @@ function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
 }
 
 function judge(command: string, deps: Deps, ctx: Ctx, shapes: Shapes): Decision {
+  const moved = repoMovedDeny(command, shapes);
+  if (moved) return moved;
   const where = positionDeny(ctx, shapes);
   // An open: the position deny is a stamp-rule deny (hard) and comes first, as its text tells the fix. It is null unless CCv3 may be the folder,
   // so every other deny still runs for a position that cannot be CCv3. Any other shape: its own soft rules first, then the position.
   if (shapes.create) return where ?? stampDeny(command, deps, ctx) ?? checkpointDeny(deps, ctx, shapes) ?? { action: 'allow' };
   return checkpointDeny(deps, ctx, shapes) ?? where ?? { action: 'allow' };
+}
+
+// The environment can point git at another repo than the folder: GIT_DIR, GIT_WORK_TREE and GIT_COMMON_DIR. The name is read in the quote-masked text (a quoted mention such as
+// echo "the GIT_DIR variable" is text) and as `NAME=` in the raw text (env "GIT_DIR=x" is a real assignment). A cd alias (alias go=cd, Set-Alias go Set-Location, sal, nal, New-Alias)
+// runs a cd the text does not show: the definition is read in the text with its quotes deleted. Neither names a folder, so the open is denied in any checkout (fail closed).
+// An unquoted read of the name (echo $GIT_DIR) over-denies: accepted, pinned. Same reading as decision-gate movesRepo.
+const MOVE_ENV_MASKED = /(?:^|\W)GIT_(?:DIR|WORK_TREE|COMMON_DIR)(?!\w)/i;
+// The raw text adds one thing the mask hides: a QUOTED assignment given to env or export, or at a command position (env "GIT_DIR=x" gh pr create). A quoted GIT_DIR= in an argument is text.
+const MOVE_ENV_RAW = /(?:^|[;&|\r\n(]\s*)(?:(?:env|export)\s+(?:-\S+\s+|\S+=\S*\s+)*)?["']GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/i;
+const CD_ALIAS = /(?:^|[;&|(\r\n]\s*)(?:alias|(?:Set|New)-Alias|sal|nal)\s[^;&|\r\n]*?(?<![\w-])(?:cd|chdir|pushd|popd|Set-Location|sl|Push-Location|Pop-Location)(?![\w-])/i;
+const MOVED_WHY = 'GIT_DIR, GIT_WORK_TREE or an alias for cd moves git or the shell to a folder this text does not name, so the checkout this command runs in cannot be known. Run the command in the repo with no GIT_DIR and no cd alias.';
+function repoMovedDeny(command: string, shapes: Shapes): Decision | null {
+  const moved = MOVE_ENV_RAW.test(command) || (['Bash', 'PowerShell'] as const).some((tool) => MOVE_ENV_MASKED.test(maskQuoted(command, tool))) || CD_ALIAS.test(squashQuotes(command));
+  if (!moved) return null;
+  return shapes.create ? { action: 'deny', pattern: 'repo-moved', reason: `BLOCKED (pre-pr-gate): ${MOVED_WHY}` } : soft('repo-moved', MOVED_WHY);
 }
 
 const POSITION_WHY = 'popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, so the checkout this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd.';
