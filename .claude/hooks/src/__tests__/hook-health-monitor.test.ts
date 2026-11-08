@@ -507,3 +507,143 @@ describe('hook-health-monitor', () => {
     });
   });
 });
+
+// ============================================
+// Active tree: ~/.claude/hooks/src is never synced, so it is stale.
+// The monitor must never compare it with a build manifest.
+// ============================================
+describe('hook-health-monitor: active ~/.claude tree', () => {
+  const root = path.join(tmpdir(), `hook-health-active-${Date.now()}`);
+  const fakeHome = path.join(root, 'home');
+  const repoRoot = path.join(root, 'repo');
+
+  const sha = (content: string): string =>
+    createHash('sha256').update(content).digest('hex');
+
+  /** Build <base>/hooks/{dist,src}, write the hook files, return the paths. */
+  function layout(
+    base: string,
+    name: string,
+    opts: { src: string; manifestFor?: string | null; manifestKey?: string },
+  ): HookFileInfo {
+    const distDir = path.join(base, 'hooks', 'dist');
+    const srcDir = path.join(base, 'hooks', 'src');
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.mkdirSync(srcDir, { recursive: true });
+    const distPath = path.join(distDir, `${name}.mjs`);
+    const srcPath = path.join(srcDir, `${name}.ts`);
+    fs.writeFileSync(distPath, '// bundle');
+    fs.writeFileSync(srcPath, opts.src);
+    if (opts.manifestFor != null) {
+      fs.writeFileSync(path.join(distDir, '.build-inputs.json'), JSON.stringify({
+        version: 1,
+        algorithm: 'sha256',
+        inputs: { [opts.manifestKey ?? `${name}.ts`]: sha(opts.manifestFor) },
+      }));
+    }
+    return { distPath, srcPath, hookEvent: 'PreToolUse', hookName: name };
+  }
+
+  beforeEach(() => {
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.stubEnv('USERPROFILE', fakeHome);
+    vi.stubEnv('HOME', fakeHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch { /* ignore */ }
+  });
+
+  // --- must be quiet ---
+
+  it('active layout, stale src, manifest present: healthy, not stale', () => {
+    const info = layout(path.join(fakeHome, '.claude'), 'act-hook', {
+      src: 'export const old = 1;\n',
+      manifestFor: 'export const built = 2;\n',
+    });
+    expect(checkHookHealth(info).status).toBe('healthy');
+  });
+
+  it('active layout, no manifest: healthy with no info line', () => {
+    const info = layout(path.join(fakeHome, '.claude'), 'act-nomanifest', {
+      src: 'export const old = 1;\n',
+      manifestFor: null,
+    });
+    const result = checkHookHealth(info);
+    expect(result.status).toBe('healthy');
+    expect(result.info).toBeUndefined();
+  });
+
+  it('active layout, source key missing from the manifest: healthy', () => {
+    const info = layout(path.join(fakeHome, '.claude'), 'act-nokey', {
+      src: 'export const old = 1;\n',
+      manifestFor: 'export const built = 2;\n',
+      manifestKey: 'some-other-hook.ts',
+    });
+    expect(checkHookHealth(info).status).toBe('healthy');
+  });
+
+  it('active layout written with backslashes: healthy', () => {
+    const info = layout(path.join(fakeHome, '.claude'), 'act-backslash', {
+      src: 'export const old = 1;\n',
+      manifestFor: 'export const built = 2;\n',
+    });
+    const result = checkHookHealth({
+      ...info,
+      distPath: info.distPath.replace(/\//g, '\\'),
+      srcPath: info.srcPath.replace(/\//g, '\\'),
+    });
+    expect(result.status).toBe('healthy');
+  });
+
+  // --- must still warn ---
+
+  it('repo-style layout outside the home .claude, src differs from manifest: stale', () => {
+    const info = layout(path.join(repoRoot, '.claude'), 'repo-stale', {
+      src: 'export const edited = 2;\n',
+      manifestFor: 'export const built = 1;\n',
+    });
+    expect(checkHookHealth(info).status).toBe('stale');
+  });
+
+  it('repo-style layout, source key missing from the manifest: stale', () => {
+    const info = layout(path.join(repoRoot, '.claude'), 'repo-nokey', {
+      src: 'export const v = 1;\n',
+      manifestFor: 'export const v = 1;\n',
+      manifestKey: 'some-other-hook.ts',
+    });
+    expect(checkHookHealth(info).status).toBe('stale');
+  });
+
+  it('repo-style layout, fresh manifest: healthy', () => {
+    const content = 'export const v = 1;\n';
+    const info = layout(path.join(repoRoot, '.claude'), 'repo-fresh', {
+      src: content,
+      manifestFor: content,
+    });
+    expect(checkHookHealth(info).status).toBe('healthy');
+  });
+
+  it('missing dist under the home .claude: still missing', () => {
+    const base = path.join(fakeHome, '.claude');
+    fs.mkdirSync(path.join(base, 'hooks', 'src'), { recursive: true });
+    const result = checkHookHealth({
+      distPath: path.join(base, 'hooks', 'dist', 'gone.mjs'),
+      srcPath: path.join(base, 'hooks', 'src', 'gone.ts'),
+      hookEvent: 'PreToolUse',
+      hookName: 'gone',
+    });
+    expect(result.status).toBe('missing');
+  });
+
+  it('sibling .claude-other under the home is not the active tree: stale', () => {
+    const info = layout(path.join(fakeHome, '.claude-other'), 'sibling', {
+      src: 'export const edited = 2;\n',
+      manifestFor: 'export const built = 1;\n',
+    });
+    expect(checkHookHealth(info).status).toBe('stale');
+  });
+});
