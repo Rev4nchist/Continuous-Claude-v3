@@ -7,6 +7,7 @@
  * Storage: ~/.claude/cache/session-activity/{sessionId}.json
  */
 
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';

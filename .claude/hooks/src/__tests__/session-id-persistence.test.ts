@@ -10,6 +10,7 @@
  *   PreToolUse:   file-claims.ts reads ID from that file
  */
 
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
