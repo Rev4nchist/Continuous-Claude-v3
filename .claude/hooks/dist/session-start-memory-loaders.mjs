@@ -5766,6 +5766,13 @@ function formatTime(d) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+function formatAge(reportTime2, now) {
+  const minutes = Math.floor((now.getTime() - reportTime2.getTime()) / 6e4);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  return `${Math.floor(minutes / 60)} h ago`;
+}
+var timeWithAge = (when, now) => `${formatTime(when)} (${formatAge(when, now)})`;
 function asRecord(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v) ? v : null;
 }
@@ -5809,7 +5816,7 @@ function formatHealthAlert(doc, now, fallbackTime) {
   const shown = names.slice(0, MAX_NAMES).join(", ");
   const more = names.length > MAX_NAMES ? ` and ${names.length - MAX_NAMES} more` : "";
   const list = names.length > 0 ? `: ${shown}${more}` : "";
-  return `harness: ${failCount} fail, ${warnCount} warn as of ${formatTime(when)}${list}. ${runHintFor(rec.repo)}`;
+  return `harness: ${failCount} fail, ${warnCount} warn as of ${timeWithAge(when, now)}${list}. ${runHintFor(rec.repo)}`;
 }
 function loadReport(path) {
   try {
@@ -5825,10 +5832,26 @@ var MAX_DETAIL = 120;
 function defaultPrintStatePath() {
   return join5(dirname2(defaultLatestPath()), "last-session-print.txt");
 }
+function lastOpenParen(s) {
+  const open = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "(") open.push(i);
+    else if (s[i] === ")") open.pop();
+  }
+  return open.length > 0 ? open[open.length - 1] : -1;
+}
+function cutAtWord(flat, max) {
+  if (flat.length <= max) return flat;
+  let head = flat.slice(0, max - 3);
+  const space = flat[head.length] === " " ? head.length : head.lastIndexOf(" ");
+  if (space > 0) head = head.slice(0, space);
+  const paren = lastOpenParen(head);
+  if (paren > 0) head = head.slice(0, paren);
+  return `${head.trimEnd().replace(/[,;:]+$/, "")}...`;
+}
 function oneLine(text) {
   const first = text.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
-  const flat = first.replace(/\s+/g, " ").trim();
-  return flat.length > MAX_DETAIL ? `${flat.slice(0, MAX_DETAIL - 3)}...` : flat;
+  return cutAtWord(first.replace(/\s+/g, " ").trim(), MAX_DETAIL);
 }
 function problemSetHash(doc) {
   const rec = asRecord(doc);
@@ -5859,7 +5882,7 @@ function formatCompactAlert(doc, now, fallbackTime, lastHash) {
     const detail = oneLine(worst.detail);
     tail = `: ${worst.name}${detail ? ` (${detail})` : ""}${rest > 0 ? ` and ${rest} more` : ""}`;
   }
-  const line = `harness: ${failCount} fail, ${warnCount} warn as of ${formatTime(when)}${tail}. ${runHintFor(rec.repo)}`;
+  const line = `harness: ${failCount} fail, ${warnCount} warn as of ${timeWithAge(when, now)}${tail}. ${runHintFor(rec.repo)}`;
   return { line, hash };
 }
 function readPrintState(path) {
