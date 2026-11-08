@@ -1,9 +1,8 @@
-import { formatLease, leaseTone } from '@/server/queries/fleet-card-fields';
 import type { SessionCard } from '@/server/queries/mission-control';
 
 import { cn } from '@/lib/utils';
 
-import { chipTone, chipWord, formatAgo } from './format';
+import { chipTone, chipWord, formatAgo, formatLease, leaseTone } from './format';
 import { SessionLabel } from './SessionLabel';
 
 /** A state file older than this is shown as stale on the card. */

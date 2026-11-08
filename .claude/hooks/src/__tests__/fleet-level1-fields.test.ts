@@ -1,9 +1,11 @@
 /**
  * Fleet level 1 card fields: lease seconds, lease tone, lease text, goal fallback, lane grouping.
  *
- * The code lives in the Agentic OS app (apps/agentic-os/src/server/queries/fleet-card-fields.ts), a pure
- * file with no `server-only` and no database import, so this runner can load it. The app has no vitest
- * of its own. Same load-by-URL pattern as lane-sort-twin.test.ts.
+ * The code lives in the Agentic OS app, in two pure files with no `server-only` and no database import, so
+ * this runner can load them:
+ *   apps/agentic-os/src/server/queries/fleet-card-fields.ts   lease seconds, goal fallback, lane grouping
+ *   apps/agentic-os/src/components/fleet/format.ts            lease tone and lease text (the card imports it)
+ * The app has no vitest of its own. Same load-by-URL pattern as lane-sort-twin.test.ts.
  *
  * Each test names the change that breaks it:
  *   lease seconds   a swapped subtraction, a missing round, no null guard
@@ -18,20 +20,25 @@ import { pathToFileURL } from 'node:url';
 // The module sits outside this package's rootDir, so its shape is declared here and checked at run time.
 type HeldLane = { id: string; title: string | null; leaseSecondsLeft: number | null };
 type Fields = {
-  LEASE_SHORT_SECONDS: number;
   leaseSecondsLeft: (expires: number | null | undefined, dbNow: number) => number | null;
-  leaseTone: (seconds: number | null) => 'ok' | 'short' | 'lapsed' | 'none';
-  formatLease: (seconds: number | null) => string;
   goalOf: (briefGoal: string | null | undefined, lanes: { title: string | null }[]) => string | null;
   groupHeldLanes: (
     rows: { id: string; title: string | null; owner_session_id: string; lease_expires_epoch: number | null }[],
     dbNow: number,
   ) => Map<string, HeldLane[]>;
 };
+type LeaseFormat = {
+  LEASE_SHORT_SECONDS: number;
+  leaseTone: (seconds: number | null) => 'ok' | 'short' | 'lapsed' | 'none';
+  formatLease: (seconds: number | null) => string;
+};
 
 const url = (rel: string): string => pathToFileURL(path.resolve(__dirname, rel)).href;
 const f: Fields = await import(
   /* @vite-ignore */ url('../../../../apps/agentic-os/src/server/queries/fleet-card-fields.ts')
+);
+const g: LeaseFormat = await import(
+  /* @vite-ignore */ url('../../../../apps/agentic-os/src/components/fleet/format.ts')
 );
 
 describe('leaseSecondsLeft', () => {
@@ -54,31 +61,31 @@ describe('leaseSecondsLeft', () => {
 
 describe('leaseTone', () => {
   it('reads amber (short) at the threshold and below, ok above it', () => {
-    expect(f.leaseTone(f.LEASE_SHORT_SECONDS + 1)).toBe('ok');
-    expect(f.leaseTone(f.LEASE_SHORT_SECONDS)).toBe('short');
-    expect(f.leaseTone(1)).toBe('short');
+    expect(g.leaseTone(g.LEASE_SHORT_SECONDS + 1)).toBe('ok');
+    expect(g.leaseTone(g.LEASE_SHORT_SECONDS)).toBe('short');
+    expect(g.leaseTone(1)).toBe('short');
   });
 
   it('reads lapsed at zero and below, and none with no lease', () => {
-    expect(f.leaseTone(0)).toBe('lapsed');
-    expect(f.leaseTone(-1)).toBe('lapsed');
-    expect(f.leaseTone(null)).toBe('none');
+    expect(g.leaseTone(0)).toBe('lapsed');
+    expect(g.leaseTone(-1)).toBe('lapsed');
+    expect(g.leaseTone(null)).toBe('none');
   });
 });
 
 describe('formatLease', () => {
   it('counts down in hours and minutes, rounding the remainder down', () => {
-    expect(f.formatLease(5_400)).toBe('lease 1h 30m left');
-    expect(f.formatLease(3_599)).toBe('lease 59m left');
-    expect(f.formatLease(90)).toBe('lease 1m left');
-    expect(f.formatLease(59)).toBe('lease <1m left');
+    expect(g.formatLease(5_400)).toBe('lease 1h 30m left');
+    expect(g.formatLease(3_599)).toBe('lease 59m left');
+    expect(g.formatLease(90)).toBe('lease 1m left');
+    expect(g.formatLease(59)).toBe('lease <1m left');
   });
 
   it('says how long ago a lapsed lease ended, and the no-lease case', () => {
-    expect(f.formatLease(0)).toBe('lease lapsed just now');
-    expect(f.formatLease(-300)).toBe('lease lapsed 5m ago');
-    expect(f.formatLease(-7_200)).toBe('lease lapsed 2h ago');
-    expect(f.formatLease(null)).toBe('no lease');
+    expect(g.formatLease(0)).toBe('lease lapsed just now');
+    expect(g.formatLease(-300)).toBe('lease lapsed 5m ago');
+    expect(g.formatLease(-7_200)).toBe('lease lapsed 2h ago');
+    expect(g.formatLease(null)).toBe('no lease');
   });
 });
 
