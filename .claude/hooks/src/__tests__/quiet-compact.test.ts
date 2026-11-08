@@ -272,6 +272,34 @@ describe('compact harness alert', () => {
     expect(line).not.toContain('inner');
     const token = formatCompactAlert(doc([['FAIL', 'db', 'down', 'z'.repeat(500)]]), NOW, undefined, '').line!;
     expect(token).toContain(`${'z'.repeat(117)}...`);
+    // Nested open groups: the cut goes back to the OUTER "(", so no "(" survives in the detail.
+    const nested = 'x'.repeat(60) + ' (a (b ' + 'y'.repeat(80);
+    const nestedLine = formatCompactAlert(doc([['FAIL', 'db', 'down', nested]]), NOW, undefined, '').line!;
+    const nestedDetail = /db:down \((.*)\)\. Run/.exec(nestedLine)![1];
+    expect(nestedDetail).not.toContain('(');
+    expect(nestedDetail).toBe(`${'x'.repeat(60)}...`);
+  });
+
+  it('A5: the real guard-decisions detail is cut at a word boundary, not inside "pair(s)"', () => {
+    const real = '11 error(s) in the last 24 h in C:\\Users\\dkhay\\.claude\\logs\\guard-decisions.jsonl; 2 distinct (message, folder) pair(s); top: "spawnSync git ENOENT" x10';
+    expect(real).toContain('C:\\Users\\dkhay\\.claude\\logs');
+    const line = formatCompactAlert(doc([['WARN', 'logs', 'guard-decisions', real]]), NOW, undefined, '').line!;
+    const detail = /logs:guard-decisions \((.*)\)\. Run/.exec(line)![1];
+    expect(detail).toBe('11 error(s) in the last 24 h in C:\\Users\\dkhay\\.claude\\logs\\guard-decisions.jsonl; 2 distinct (message, folder)...');
+    expect(detail).not.toContain('pair(');
+    expect(detail.length).toBeLessThanOrEqual(120);
+    const opens = (detail.match(/\(/g) ?? []).length;
+    const closes = (detail.match(/\)/g) ?? []).length;
+    expect(opens).toBe(closes);
+  });
+
+  it('A5: a detail that starts with "(" and runs past the limit is cut at a word, keeping the "("', () => {
+    // Cutting at index 0 would leave nothing, so the open "(" stays. The wrapper adds its own parens.
+    const lead = '(' + Array(40).fill('word').join(' ');
+    const line = formatCompactAlert(doc([['FAIL', 'db', 'down', lead]]), NOW, undefined, '').line!;
+    const detail = /db:down \((.*)\)\. Run/.exec(line)![1];
+    expect(detail).toBe(`(${Array(23).fill('word').join(' ')}...`);
+    expect(detail.length).toBeLessThanOrEqual(120);
   });
 
   it('A6: a FAIL with an unchanged set prints every time, with the new age', () => {

@@ -5832,20 +5832,20 @@ var MAX_DETAIL = 120;
 function defaultPrintStatePath() {
   return join5(dirname2(defaultLatestPath()), "last-session-print.txt");
 }
-function lastOpenParen(s) {
+function firstOpenParen(s) {
   const open = [];
   for (let i = 0; i < s.length; i++) {
     if (s[i] === "(") open.push(i);
     else if (s[i] === ")") open.pop();
   }
-  return open.length > 0 ? open[open.length - 1] : -1;
+  return open.length > 0 ? open[0] : -1;
 }
 function cutAtWord(flat, max) {
   if (flat.length <= max) return flat;
   let head = flat.slice(0, max - 3);
   const space = flat[head.length] === " " ? head.length : head.lastIndexOf(" ");
   if (space > 0) head = head.slice(0, space);
-  const paren = lastOpenParen(head);
+  const paren = firstOpenParen(head);
   if (paren > 0) head = head.slice(0, paren);
   return `${head.trimEnd().replace(/[,;:]+$/, "")}...`;
 }

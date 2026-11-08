@@ -108,7 +108,7 @@
     "shared/git-head.ts": "6cea04b8914ff6e0059a56832420b7cf5dd8bd2e978d4f43611ae39da15ba6db",
     "shared/guard-log.ts": "97443eed0f25749a1a081a851ef8c37fda02ba469f028f1d203d9a25e0855a33",
     "shared/handoff-select.ts": "47663a88da961b112c399ac34749dde9a7e3a06ff5b49cc4e5bdf22005f35a90",
-    "shared/health-alert.ts": "10455f77941e7e7d66d19a32226ceac3e482853629b31151ba1ce1e5dc94ccd0",
+    "shared/health-alert.ts": "b965223443f44a96f65f690ecddf9252c85912cce4db822ba8c19664130e5074",
     "shared/host-ram.ts": "201bf91867ca7eb006372b2a54d786399fcce190c0843e3e7924a5cb345ab2f1",
     "shared/index.ts": "195c48754deead7511a2f3958ddde604fb8dc26707c327af694b781e7ff6f8c7",
     "shared/intel-bus.ts": "262f87ae8fb08479b7e4399878a9232ede646d0285f0e041e7bbdf7244695e0b",

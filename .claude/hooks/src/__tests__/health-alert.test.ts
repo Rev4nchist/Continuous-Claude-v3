@@ -151,7 +151,7 @@ describe('healthAlertLine (file reading)', () => {
 
 describe('buildSessionStartOutput with a harness line', () => {
   const MEM = { line: 'Memory: 130 lessons', warn: false };
-  const ALERT = 'harness: 1 fail, 0 warn as of 2026-10-31 07:50: hooks:boom. Run: node scripts/harness-doctor.mjs';
+  const ALERT = 'harness: 1 fail, 0 warn as of 2026-10-31 07:50 (1 h ago): hooks:boom. Run: node scripts/harness-doctor.mjs';
 
   it('H9: the harness line reaches Dave and the model, after the memory line', () => {
     const out = buildSessionStartOutput('daemon', MEM, ALERT);

@@ -4,7 +4,7 @@
  * The scheduled harness doctor writes ~/.claude/state/health/latest.json. This module reads it
  * and returns one line for Dave, or null when there is nothing to say:
  *   - fresh (under 36 h) with 0 fail and 0 warn: null (silent)
- *   - fresh with problems: "harness: N fail, N warn as of <time> (<age> ago): <top checks>. Run: ..."
+ *   - fresh with problems: "harness: N fail, N warn as of <time> (<age>): <top checks>. Run: ..."
  *   - older than 36 h: "harness doctor has not run since <time>" (the dead-man switch)
  *   - file missing: "harness doctor has never run. ..."
  *   - any read or parse error: null. A session start never breaks on this.
@@ -146,14 +146,14 @@ export function defaultPrintStatePath(): string {
   return join(dirname(defaultLatestPath()), 'last-session-print.txt');
 }
 
-/** Index of the last "(" that has no closing ")" in `s`, or -1. */
-function lastOpenParen(s: string): number {
+/** Index of the first (outermost) "(" that has no closing ")" in `s`, or -1. */
+function firstOpenParen(s: string): number {
   const open: number[] = [];
   for (let i = 0; i < s.length; i++) {
     if (s[i] === '(') open.push(i);
     else if (s[i] === ')') open.pop();
   }
-  return open.length > 0 ? open[open.length - 1] : -1;
+  return open.length > 0 ? open[0] : -1;
 }
 
 /**
@@ -166,7 +166,7 @@ function cutAtWord(flat: string, max: number): string {
   let head = flat.slice(0, max - 3);
   const space = flat[head.length] === ' ' ? head.length : head.lastIndexOf(' ');
   if (space > 0) head = head.slice(0, space);
-  const paren = lastOpenParen(head);
+  const paren = firstOpenParen(head);
   if (paren > 0) head = head.slice(0, paren);
   return `${head.trimEnd().replace(/[,;:]+$/, '')}...`;
 }
