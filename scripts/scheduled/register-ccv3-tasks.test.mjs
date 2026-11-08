@@ -10,12 +10,13 @@
 //   -Only: a name that matches nothing is refused with exit 1
 //   every Nm: "every 5m" is accepted and a battery:true task prints battery=allow with llm=false; "every 0m" and "every 1440m" are refused;
 //             the existing four lines stay as they were; only a hidden:true .ps1 task runs through conhost.exe --headless
+//   real tasks.json: CCv3-Lane-Snapshot prints daily 23:55, limit 5 min, battery=allow, and the conhost --headless action (dry run, -Only)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.claude', 'scripts', 'scheduled', 'register-ccv3-tasks.ps1');
@@ -115,4 +116,22 @@ test('dry run: a bad every Nm (0, 1440, a word) is refused before anything is re
     assert.notEqual(r.code, 0, trigger + ': ' + r.out);
     assert.doesNotMatch(r.out, /DRY RUN: nothing changed/);
   }
+});
+
+test('dry run on the REAL tasks.json: CCv3-Lane-Snapshot is daily 23:55, allowed on battery, hidden through conhost --headless', win, () => {
+  const realTasks = join(dirname(SCRIPT), '..', '..', '..', 'scripts', 'scheduled', 'tasks.json');
+  const tasks = JSON.parse(readFileSync(realTasks, 'utf8')).tasks;
+  const home = join(mkdtempSync(join(tmpdir(), 'reg-real-')), 'home');
+  mkdirSync(join(home, 'scripts', 'scheduled'), { recursive: true });
+  for (const t of tasks) writeFileSync(join(home, 'scripts', 'scheduled', basename(t.script)), 'rem stub\r\n');
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT, '-TasksFile', realTasks, '-ClaudeHome', home, '-Only', 'CCv3-Lane-Snapshot'],
+    { encoding: 'utf8', windowsHide: true, timeout: 90000 });
+  assert.equal(r.status, 0, (r.stdout ?? '') + (r.stderr ?? ''));
+  const line = (r.stdout ?? '').split(/\r?\n/).find((l) => l.startsWith('CCv3-Lane-Snapshot:'));
+  assert.ok(line, r.stdout);
+  const conhost = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'conhost.exe').toLowerCase();
+  assert.ok(line.toLowerCase().startsWith(`ccv3-lane-snapshot: ${conhost} --headless powershell.exe -noprofile -executionpolicy bypass -file "`), line);
+  assert.match(line, / -File ".*scheduled-lane-snapshot\.ps1"  \[daily 23:55, limit 5 min, llm=false battery=allow wake=no\]$/);
+  assert.doesNotMatch(line, /WindowStyle/);
+  assert.match(r.stdout, /^DRY RUN: nothing changed/m);
 });

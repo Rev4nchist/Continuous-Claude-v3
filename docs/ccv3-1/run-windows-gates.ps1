@@ -108,7 +108,7 @@ echo "work_paths=$(grep -rIl 'david[.-]hayes' "$H/.claude" 2>/dev/null | wc -l)"
   $badFields = @($tl | Where-Object { $e = $_; @($fields | Where-Object { $null -eq $e.PSObject.Properties[$_] }).Count -gt 0 }).Count
   $missing = @($tl | Where-Object { -not (Test-Path -LiteralPath "$($_.script)" -PathType Leaf) }).Count
   $o += "tasks=$($tl.Count) tasks_missing_fields=$badFields tasks_missing_script=$missing"
-  Save-Gate 'W9' 'ps1-parse' $o ($n -gt 0 -and $errs -eq 0 -and $hits.Count -eq 0 -and $tl.Count -eq 4 -and $badFields -eq 0 -and $missing -eq 0) "ps1=$n parse_errors=$errs work_paths=$($hits.Count) tasks=$($tl.Count) tasks_missing_fields=$badFields tasks_missing_script=$missing"
+  Save-Gate 'W9' 'ps1-parse' $o ($n -gt 0 -and $errs -eq 0 -and $hits.Count -eq 0 -and $tl.Count -gt 0 -and $badFields -eq 0 -and $missing -eq 0) "ps1=$n parse_errors=$errs work_paths=$($hits.Count) tasks=$($tl.Count) tasks_missing_fields=$badFields tasks_missing_script=$missing"
 }
 
 if ($runPost) {

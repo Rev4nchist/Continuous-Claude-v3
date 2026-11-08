@@ -33,6 +33,7 @@ Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-projec
 - `next` and "Claimable next" never offer a lane on track `reminders`, or a lane whose due time is still ahead.
 - The `CCv3-Reminder-Tick` task runs every 5 minutes (`remind tick`). It fires due reminders and shows a toast for P0 and P1.
 - It can sync the To-Do Board through one headless `claude -p`, only when a row changed or the Done poll is due. A Done card in Notion acks the reminder. The sync is off until `remind sync on`, polls Done every 2 hours, and is capped at 12 runs a day. Code: `scripts/coordination/reminder-tick.mjs`, `reminder-sync.mjs`.
+- The `CCv3-Lane-Snapshot` task runs the lane export every day at 23:55 local (Central) time (`export-dash-data.mjs`, no model, hidden, runs on battery). It adds one row per Chicago day to `~/.claude/state/lane-dash/snapshots.json`. A run that starts after midnight (laptop asleep at 23:55) lands on the next day, and the missed day has no row. It reads the primary checkout's current branch; the log names it. Log: `~/.claude/logs/lane-snapshot/<date>.log`. Code: `.claude/scripts/scheduled/scheduled-lane-snapshot.ps1`.
 
 ## Phone page
 
