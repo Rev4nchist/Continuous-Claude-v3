@@ -340,6 +340,27 @@ describe('G3 git push to the fork', () => {
       shipTap('feat/x', INDEX, HEAD, 'Commit and push (Recommended)');
       expect(denied(bash(`${COMMIT} && ${PUSHB}`), { indexTree: INDEX })).toBe(false);
     });
+    // The HEAD tree is read before any commit in the command runs. A Push only tap equals that tree, so a command that stages or commits
+    // and then pushes, in a form the chained-commit rule does not recognise, would send a new tree the tap never bound. Fail closed.
+    it('G-PO8: denies add, commit and push in one command (a form the chained rule does not accept)', () => {
+      shipTap('feat/x', TREE, HEAD, PO);
+      expect(denied(bash(`git add f.txt && ${COMMIT} && ${PUSHB}`))).toBe(true);
+    });
+    it('G-PO9: denies a commit and a push joined by ; , a newline or ||', () => {
+      shipTap('feat/x', TREE, HEAD, PO);
+      for (const join of ['; ', '\n', ' || ']) expect(denied(bash(`${COMMIT}${join}${PUSHB}`)), JSON.stringify(join)).toBe(true);
+    });
+    it('G-PO10: denies a push with an output redirect or a trailing command (only a bare push is licensed)', () => {
+      shipTap('feat/x', TREE, HEAD, PO);
+      expect(denied(bash(`${PUSHB} > out.txt 2>&1`))).toBe(true);
+      expect(denied(bash(`${PUSHB}; echo done`))).toBe(true);
+      expect(denied(bash(`${PUSHB} | tail -3`))).toBe(true);
+    });
+    it('G-PO11: still allows a bare push after a cd or a read-only git call', () => {
+      shipTap('feat/x', TREE, HEAD, PO);
+      expect(denied(bash(`cd /tmp/repo && ${PUSHB}`))).toBe(false);
+      expect(denied(bash(`git status && ${PUSHB}`))).toBe(false);
+    });
     it('G-PO7: a Push only tap never licenses a force, origin or subagent push', () => {
       shipTap('feat/x', TREE, HEAD, PO);
       expect(denied(bash('git push --force fork feat/x'))).toBe(true);

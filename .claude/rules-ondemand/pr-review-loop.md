@@ -166,10 +166,10 @@ command. A script builds each question, so you do not choose the options or thei
   without the Land tap. It denies a write to the decision store from any tool. No override exists. With the flag false the gate only warns.
 - Step 1 gate: `git push fork <branch>` (any wrapper: `git`, `git-safe.ps1`, `git-for.ps1`) needs the "Commit and push" or "Push only" tap for
   that branch and for the tree you push. "Commit and push" binds the staged tree, not the head, so a commit after the tap does not void it.
-  "Push only" is offered when nothing is staged and commits are ahead. It binds HEAD's tree and passes only a push with no commit before
-  it in the same command. A merge or a new commit after the ask changes the tree and needs a new ask.
+  "Push only" is offered when nothing is staged and commits are ahead. It binds HEAD's tree and passes only a bare push: the command holds nothing but
+  cd, read-only git calls and pushes (no add, commit, redirect or trailing command). A merge or a new commit after the ask changes the tree and needs a new ask.
   Order: merge `fork/main`, stage, ask, commit, push. With nothing staged: ask, push.
-  Run the ship as a bare `git commit -F <file> && git-safe push fork <branch>`: no redirect, pipe or trailing command (any of them makes the gate read the old tree). Report the result in a second command.
+  Run the ship as a bare `git commit -F <file> && pwsh -File scripts/git-safe.ps1 push fork <branch>`: no redirect, pipe or trailing command (any of them makes the gate read the old tree). Report the result in a second command.
   Pushes to `main`, dry runs and other remotes pass. A force or delete form is denied even with a tap, and so is a push to `origin`.
   Its flag is `decisions.enforcePush`: absent means warn only (a warning in the context, no block).
 - Do not write the decision store by hand. A subagent cannot open a PR, land, merge or push: the tap is the main session's.
