@@ -9,7 +9,7 @@
 | Dark mode broken | Theme class missing | Add `dark` class to html element |
 | Import errors | Wrong path alias | Check tsconfig paths for `@/` |
 | cn() undefined | Utils missing | Run init or add manually |
-| MCP tools unavailable | Server not configured | Run `npx shadcn@latest mcp init --client claude`, then pin the entry to `shadcn@4.22.1` |
+| MCP tools unavailable | Server not configured | Back up any existing `.mcp.json` (init can overwrite it), run `npx shadcn@latest mcp init --client claude`, pin the entry to `shadcn@4.22.1`, then restart Claude Code |
 | Browser automation fails | Claude in Chrome not available | Use WebFetch fallback or direct CLI |
 | Block dependencies missing | Incomplete install | Reinstall with `--overwrite` flag |
 | TypeScript errors | Missing types | Install @types for dependencies |
