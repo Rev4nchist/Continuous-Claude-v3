@@ -20,7 +20,7 @@ import {
   markFired,
   responseText,
   statePath,
-} from '../pr-opened-review-loop';
+} from '../pr-opened-review-loop.js';
 
 const HOOK = resolve(__dirname, '../../dist/pr-opened-review-loop.mjs');
 

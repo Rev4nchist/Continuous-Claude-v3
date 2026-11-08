@@ -92,7 +92,7 @@ const openPrWhy = (branch: string, head: string): string =>
 const landWhy = (pr: string): string =>
   `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
 const pushWhy = (branch: string): string =>
-  `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap.`;
+  `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 const PUSH_UNSAFE_WHY = 'a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave\'s tap. Push without that option. If it is really needed, ask Dave to run it himself.';
 const PUSH_ORIGIN_WHY = 'a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.';
 const pushUnresolvedWhy = (what: string): string => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
@@ -186,6 +186,8 @@ interface PushShape {
   src: string | null;
   /** The -C value, raw. */
   dir: string | null;
+  /** The cd targets (raw) that come before this push in the command text, in order. They may set the folder git runs the push in. A cd may not run, so the push is judged in the folder after each prefix (pushDirsOf). */
+  cds: string[];
   /** A force or delete form (see FORCE_LONG). */
   force: boolean;
   /** --git-dir or --work-tree moves the repo: the checkout cannot be known. */
@@ -237,10 +239,13 @@ const REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
 const VALUE_OPTS = new Set(['--repo', '--receive-pack', '--exec', '--push-option', '-o']);
 const FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
 
-interface RawPush { opts: string; args: string }
+interface RawPush { opts: string; args: string; cds: string[] }
 
-/** The push calls of one view. `masked` and `raw` have the same length. `atStart`: the call must open the text (the squashed view). */
-function pushCallsOf(masked: string, raw: string, atStart: boolean): RawPush[] {
+/**
+ * The push calls of one view. `masked` and `raw` have the same length. `atStart`: the call must open the text (the squashed view).
+ * `before`: the cd targets that come before the text (the squashed view is one segment; the segments before it hold the cds).
+ */
+function pushCallsOf(masked: string, raw: string, atStart: boolean, before: string[] = []): RawPush[] {
   const calls: RawPush[] = [];
   const kinds: [RegExp, (token: string) => boolean][] = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -251,7 +256,8 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean): RawPush[] {
       const optsStart = tokenStart + m[2].length;
       const end = m.index! + m[0].length;
       const cut = masked.slice(end).search(ARGS_END_RE);
-      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut) });
+      const cds = [...before, ...cdTargetsIn(masked.slice(0, tokenStart), raw.slice(0, tokenStart))];
+      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut), cds });
     }
   }
   return calls;
@@ -262,14 +268,18 @@ function pushCallsIn(raw: string): RawPush[] {
   const bash = joinContinuations(raw, 'bash');
   const pwsh = joinContinuations(raw, 'pwsh');
   const maskedBash = maskQuoted(bash, 'Bash');
+  const maskedPwshOnBash = maskQuoted(bash, 'PowerShell');
   const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskQuoted(pwsh, 'PowerShell'), pwsh, false)];
   let from = 0;
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const);
   for (const [start, next] of [...breaks, [bash.length, bash.length] as const]) {
     const seg = bash.slice(from, start);
+    // \" escapes in bash, not in PowerShell: each mask can hide a cd the other shows. Read the cds under both and keep each list that differs.
+    const lists = [cdTargetsIn(maskedBash.slice(0, from), bash.slice(0, from)), cdTargetsIn(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
     from = next;
     const squashed = squashQuotes(seg);
-    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true));
+    if (squashed === seg) continue;
+    for (const before of lists.filter((l, i) => lists.findIndex((o) => o.join('\0') === l.join('\0')) === i)) calls.push(...pushCallsOf(squashed, squashed, true, before));
   }
   return calls;
 }
@@ -300,7 +310,7 @@ function pushShapesFrom(call: RawPush): Shape[] {
   }
   if (quiet) return [];
   const [remote = null, ...specs] = positional;
-  const base = { remote, dir, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  const base = { remote, dir, cds: call.cds, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
   if (specs.length === 0) return [{ kind: 'push', pr: null, push: { ...base, branch: null, src: null, force } }];
   const out: Shape[] = [];
   for (let i = 0; i < specs.length; i++) {
@@ -327,7 +337,7 @@ function pushShapesOf(raw: string): Shape[] {
   for (const call of pushCallsIn(raw)) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push!;
-      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved].join('|');
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.cds.join('\0')].join('|');
       if (!seen.has(id)) { seen.add(id); out.push(shape); }
     }
   }
@@ -369,16 +379,39 @@ const FLAG_OF: Record<Scope, string> = { push: 'decisions.enforcePush', other: '
 
 // ---------- the checkout ----------
 
-const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i;
+const CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)`;
+const CD_TARGET = new RegExp(CD_SOURCE, 'i');
 const gitBashPath = (p: string): string => (process.platform === 'win32' ? p.replace(/^\/([A-Za-z])(?:\/|$)/, '$1:/') : p);
 
-/** The directory the command acts in: the first cd target, else the payload cwd. */
+/** `base` moved by one cd target (raw, quotes still on): absolute as given, else under `base`. */
+function moveTo(base: string, target: string, shell: 'bash' | 'pwsh'): string {
+  const raw = target.replace(/^["']|["']$/g, '');
+  const t = shell === 'bash' ? gitBashPath(raw) : raw;
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+}
+
+/** The directory the command acts in: the first cd target, else the payload cwd. Used by create and land. */
 function workDir(text: string, cwd: string, shell: 'bash' | 'pwsh'): string {
   const m = CD_TARGET.exec(text);
-  if (!m) return cwd;
-  const raw = m[1].replace(/^["']|["']$/g, '');
-  const t = shell === 'bash' ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+  return m ? moveTo(cwd, m[1], shell) : cwd;
+}
+
+/**
+ * The raw cd targets of a text, in order. A cd is found in the masked view, so a quoted `; cd x` is not one; the target is read from the
+ * raw text at the same offsets (both views have the same length). Callers pass the text up to the start of a push: only what runs before it.
+ */
+function cdTargetsIn(masked: string, raw: string): string[] {
+  const out: string[] = [];
+  for (const m of masked.matchAll(new RegExp(CD_SOURCE, 'gi'))) {
+    const end = m.index! + m[0].length;
+    out.push(raw.slice(end - m[1].length, end));
+  }
+  return out;
+}
+
+/** The folder a push runs in: the payload cwd moved by each cd before the push, in order (the last absolute one wins). */
+function pushDir(cwd: string, cds: string[], shell: 'bash' | 'pwsh'): string {
+  return cds.reduce((dir, target) => moveTo(dir, target, shell), cwd);
 }
 
 /** True when a remote of the checkout is the CCv3 fork. Throws when git cannot list the remotes (the caller denies a gated shape). */
@@ -450,9 +483,34 @@ function segmentKind(ms: string, rs: string): SegKind {
  * (git add, a checkout, a script, a commit with --amend or -a) gives false, and the push keeps the HEAD tree rule.
  */
 function commitPrecedesPush(raw: string, shell: 'bash' | 'pwsh'): boolean {
+  const segs = segmentsOf(raw, shell);
+  if (segs === null) return false;
+  const { seq, before } = segs;
+  const firstCommit = seq.indexOf('commit');
+  const lastPush = seq.lastIndexOf('push');
+  const firstPush = seq.indexOf('push');
+  if (seq.includes('other') || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf('commit') > firstPush) return false;
+  // A failed commit must stop the push: `;`, a newline or `||` would still run it and send HEAD's tree. Only && joins the commit to the push.
+  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== '&&')) return false;
+  const cds = seq.flatMap((k, i) => (k === 'cd' ? [i] : []));
+  return cds.length === 0 || (cds.length === 1 && cds[0] < firstCommit);
+}
+
+/**
+ * True when every segment of the command is a cd, a read-only git call or a push, with at least one push. Only then does "Push only" apply:
+ * nothing in the command can stage, commit or move HEAD before the push, so the tree pushed is the HEAD tree the tap bound. A redirect, a
+ * trailing command, an add, a commit, a merge or any 'other' segment gives false, and the Push only tap does not count (fail closed).
+ */
+function pushesAlone(raw: string, shell: 'bash' | 'pwsh'): boolean {
+  const segs = segmentsOf(raw, shell);
+  return segs !== null && segs.seq.includes('push') && segs.seq.every((k) => k === 'cd' || k === 'push' || k === 'read');
+}
+
+/** The kinds of the command's segments and the operators before each, or null when a pipe or a lone & (background) is present. */
+function segmentsOf(raw: string, shell: 'bash' | 'pwsh'): { seq: SegKind[]; before: string[] } | null {
   const view = joinContinuations(raw, shell);
   const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
-  if (masked.includes('|') || /(?<!&)&(?!&)/.test(masked)) return false;
+  if (masked.includes('|') || /(?<!&)&(?!&)/.test(masked)) return null;
   const seq: SegKind[] = [];
   const before: string[] = []; // before[i]: the operators and blanks between segment i-1 and segment i
   let from = 0;
@@ -464,14 +522,7 @@ function commitPrecedesPush(raw: string, shell: 'bash' | 'pwsh'): boolean {
     pending += masked.slice(start, next);
     from = next;
   }
-  const firstCommit = seq.indexOf('commit');
-  const lastPush = seq.lastIndexOf('push');
-  const firstPush = seq.indexOf('push');
-  if (seq.includes('other') || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf('commit') > firstPush) return false;
-  // A failed commit must stop the push: `;`, a newline or `||` would still run it and send HEAD's tree. Only && joins the commit to the push.
-  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== '&&')) return false;
-  const cds = seq.flatMap((k, i) => (k === 'cd' ? [i] : []));
-  return cds.length === 0 || (cds.length === 1 && cds[0] < firstCommit);
+  return { seq, before };
 }
 
 // ---------- the judgment ----------
@@ -510,6 +561,16 @@ function resolveDir(base: string, raw: string, shell: 'bash' | 'pwsh'): string {
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
 
+/**
+ * Every folder one push may run in. A cd in the text may never run (|| short-circuit, a failed cd, a comment) or may not last (a subshell,
+ * a pipe, the background), so the push is judged in the folder after each prefix of its cds. With no cd it is the payload cwd.
+ * The push's own -C (or -Path) then moves each of them.
+ */
+function pushDirsOf(p: PushShape, cwd: string, shell: 'bash' | 'pwsh'): string[] {
+  const dirs = p.cds.length === 0 ? [cwd] : p.cds.map((_, i) => pushDir(cwd, p.cds.slice(0, i + 1), shell));
+  return [...new Set(dirs.map((dir) => (p.dir === null ? dir : resolveDir(dir, p.dir, shell))))];
+}
+
 /** A remote name or URL: the upstream (origin, parcadei), the fork (fork, the CCv3 repo URL) or neither. */
 function remoteKind(remote: string): 'origin' | 'fork' | null {
   const r = remote.toLowerCase();
@@ -520,12 +581,13 @@ function remoteKind(remote: string): 'origin' | 'fork' | null {
 /**
  * Push: a ship decision ("Commit and push", or "Push only" when no commit is chained) for the branch, bound to the tree being pushed.
  * The head is not compared: the tap was made before the commit, so its head is the parent of the commit now at HEAD. The tree is the
- * same before and after the commit. "Push only" is bound to HEAD's tree, so a chained push (viaIndex reads the index tree) never takes it.
+ * same before and after the commit. "Push only" is bound to HEAD's tree. It counts only when `alone` is true (pushesAlone: the command holds
+ * nothing but cd, read-only git and pushes), so a command that can stage or commit before the push never takes it, whatever shape it has.
  * `chained`: the same command commits the staged tree first (commitPrecedesPush), so the tree pushed is `git write-tree`, not HEAD's.
  * Order: unreadable target, not CCv3, origin, other remote, subagent, force or delete form, branch, main, tree, tap.
  * A force form is denied before the main check: a force push to the fork's main rewrites the branch every PR lands on.
  */
-function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean, chained: boolean): Decision {
+function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean, chained: boolean, alone: boolean): Decision {
   const p = shape.push!;
   const d = (pattern: string, why: string): Deny => deny(pattern, why, 'push');
   if (p.moved) return d('push-target-unresolved', pushUnresolvedWhy('--git-dir or --work-tree moves the repo, so the checkout is unknown'));
@@ -562,7 +624,7 @@ function judgePush(shape: Shape, deps: Deps, dir: string, subagent: boolean, cha
   if (r.status !== 0) return d('push-tree-unresolved', `cannot read the tree of ${viaIndex ? 'the index (git write-tree)' : ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
   const tree = r.stdout.trim();
   const key = decisionKey({ branch });
-  const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && (isShipLabel(row.label) || (!viaIndex && isPushOnlyLabel(row.label))) && row.tree !== null && row.tree === tree);
+  const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && (isShipLabel(row.label) || (!viaIndex && alone && isPushOnlyLabel(row.label))) && row.tree !== null && row.tree === tree);
   return ok ? ALLOW : d('ship', pushWhy(branch));
 }
 
@@ -583,11 +645,14 @@ function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   const dir = workDir(cmd.text, cwd, shell);
   const named = namedRepo(cmd.text, deps.env);
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
+  const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const d = s.kind === 'create' ? judgeCreate(cmd.text, deps, dir, named)
-      : s.kind === 'push' ? judgePush(s, deps, s.push!.dir === null ? dir : resolveDir(dir, s.push!.dir, shell), Boolean(input.agent_id), chained)
-        : judgeLand(s, deps, dir, named);
-    if (d.action === 'deny') denies.push(d);
+    const found = s.kind === 'create' ? [judgeCreate(cmd.text, deps, dir, named)]
+      : s.kind === 'push' ? pushDirsOf(s.push!, cwd, shell).map((d) => judgePush(s, deps, d, Boolean(input.agent_id), chained, alone))
+        : [judgeLand(s, deps, dir, named)];
+    for (const d of found) {
+      if (d.action === 'deny' && !denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope)) denies.push(d);
+    }
   }
   return denies;
 }

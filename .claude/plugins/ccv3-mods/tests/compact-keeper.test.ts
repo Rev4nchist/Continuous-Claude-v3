@@ -36,6 +36,10 @@ import * as keeper from '../hooks/compact-keeper/model'
 // K13b the marker only in an old kept message (not the summary) records kept=false
 // K14  an auto or plugin compaction, a subagent, either off switch and a skip result record nothing; a session with nothing to keep records open 0 of 0 (A1: the block is never null)
 // K15  the record list caps at 10, newest last
+// R1  a manual compaction whose summary kept the marker shows ONE toast: `Keeper: marker kept (open N of M)`
+// R2  a summary that lost the marker shows ONE toast that says the keep-list may be dropped; an empty session says the same and never names the plan
+// R3  a subagent, an auto or plugin compaction, either off switch and a skip result show nothing
+// R4  a message sink that throws (sayResult, the real helper the hook calls) neither throws nor changes anything; the compaction runs once and still records
 // K16  a throw in the record step leaves next() called once, returns its result, and the next compaction still records
 // Not tested here: a hook that throws. The engine skips it with or without `.catch`, so a test cannot tell;
 // `node scripts/mods/validate-mods.mjs` fails a gating hook without `.catch` (shown 2026-10-13: "session.compact{trigger=manual}").
@@ -441,13 +445,14 @@ type Rec = {
   writes: KeeperRecord[][]
   poisoned: boolean
   gets: number
+  toasts: string[]
 }
-const rec: Rec = { messages: [], skip: undefined, calls: 0, writes: [], poisoned: false, gets: 0 }
+const rec: Rec = { messages: [], skip: undefined, calls: 0, writes: [], poisoned: false, gets: 0, toasts: [] }
 const summaryWith = (text: string) => ({ role: 'user' as const, text, toolUses: [] as never[] })
 const MARKER = keeperMarker('s1', 1, 2)
 
 const recordWorld = (on: On, env: Record<string, string> = {}) => {
-  Object.assign(rec, { messages: [summaryWith(`Summary of the work.\n${MARKER}\nEnd.`)], skip: undefined, calls: 0, writes: [], poisoned: false, gets: 0 })
+  Object.assign(rec, { messages: [summaryWith(`Summary of the work.\n${MARKER}\nEnd.`)], skip: undefined, calls: 0, writes: [], poisoned: false, gets: 0, toasts: [] })
   mock.clock(on, { now: 1_000 })
   mock.env(on, env)
   on('session.id', () => ({ value: 's1' }))
@@ -459,6 +464,10 @@ const recordWorld = (on: On, env: Record<string, string> = {}) => {
   let next = 0
   on('tool.call', { tool: 'TaskCreate' }, (_$, e) => ({ result: { task: { id: String(++next), subject: e.subject } } }))
   on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
+  on('ui.toast', (_$, e) => {
+    rec.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('state.set', { plugin: 'ccv3-mods', key: 'compactions' } as never, ((_$: unknown, e: { value: KeeperRecord[] }, next: (e: unknown) => unknown) => {
     rec.writes.push(e.value)
     return next(e)
@@ -582,5 +591,94 @@ describe('compact keeper record (engine)', () => {
     await compact($, 'manual')
     expect(rec.calls).toBe(2)
     expect(lastWrite().at(-1)).toEqual(RECORD_KEPT)
+  })
+})
+
+const KEPT_LINE = 'Keeper: marker kept (open 1 of 2)'
+const LOST_LINE = 'Keeper: marker lost, the summary may have dropped the keep-list'
+
+describe('keeper result line (pure)', () => {
+  test('R1 R2 the line names the counts when kept, and the lost line has no counts and no plan claim', () => {
+    expect(keeper.keeperResultLine(true, 1, 2)).toBe(KEPT_LINE)
+    expect(keeper.keeperResultLine(true, 0, 0)).toBe('Keeper: marker kept (open 0 of 0)')
+    expect(keeper.keeperResultLine(false, 1, 2)).toBe(LOST_LINE)
+    expect(keeper.keeperResultLine(false, 0, 0)).toBe(LOST_LINE)
+    expect(keeper.keeperResultLine(false, 0, 0).toLowerCase()).not.toContain('plan')
+  })
+
+  test('R4 sayResult hands the line to the sink once, and a sink that throws does not throw', () => {
+    const lines: string[] = []
+    keeper.sayResult(text => void lines.push(text), 'Keeper: x')
+    expect(lines).toEqual(['Keeper: x'])
+    expect(() =>
+      keeper.sayResult(() => {
+        throw new Error('no screen')
+      }, 'Keeper: x'),
+    ).not.toThrow()
+  })
+})
+
+describe('compact keeper result shown (engine)', () => {
+  test('R1 a summary that kept the marker shows the kept line once, and the record and result are as before', async ($, on) => {
+    recordWorld(on)
+    await twoTasks($)
+    const result = (await compact($, 'manual')) as { messages?: unknown }
+    expect(rec.toasts).toEqual([KEPT_LINE])
+    expect(result.messages).toEqual(rec.messages)
+    expect(rec.calls).toBe(1)
+    expect(lastWrite()).toEqual([RECORD_KEPT])
+  })
+
+  test('R2 a summary that lost the marker shows the lost line once', async ($, on) => {
+    recordWorld(on)
+    rec.messages = [summaryWith('Summary of the work. The tasks are gone.')]
+    await twoTasks($)
+    await compact($, 'manual')
+    expect(rec.toasts).toEqual([LOST_LINE])
+  })
+
+  test('R2 an empty session with a lost marker never claims a lost plan', async ($, on) => {
+    recordWorld(on)
+    rec.messages = [summaryWith('Summary. No marker.')]
+    await compact($, 'manual')
+    expect(rec.toasts).toEqual([LOST_LINE])
+    expect(rec.toasts.join(' ').toLowerCase()).not.toContain('plan')
+  })
+
+  test('R4 a record step that fails still shows the line, and next runs once', async ($, on) => {
+    recordWorld(on)
+    await twoTasks($)
+    rec.poisoned = true
+    await compact($, 'manual')
+    expect(rec.gets).toBeGreaterThan(0)
+    expect(rec.calls).toBe(1)
+    expect(rec.toasts).toEqual([KEPT_LINE])
+  })
+
+  test('R3 an auto or plugin compaction, a subagent and a skip result show nothing', async ($, on) => {
+    recordWorld(on)
+    await twoTasks($)
+    for (const trigger of ['auto', 'plugin']) await compact($, trigger)
+    await compact($, 'manual', { agentId: 'sub-1' })
+    rec.skip = 'a classic PreCompact hook said no'
+    await compact($, 'manual')
+    expect(rec.calls).toBe(4)
+    expect(rec.toasts).toEqual([])
+  })
+
+  test('R3 CCV3_MODS_OFF shows nothing', async ($, on) => {
+    recordWorld(on, { CCV3_MODS_OFF: '1' })
+    await twoTasks($)
+    await compact($, 'manual')
+    expect(rec.calls).toBe(1)
+    expect(rec.toasts).toEqual([])
+  })
+
+  test('R3 CCV3_MOD_KEEPER_OFF shows nothing', async ($, on) => {
+    recordWorld(on, { CCV3_MOD_KEEPER_OFF: '1' })
+    await twoTasks($)
+    await compact($, 'manual')
+    expect(rec.calls).toBe(1)
+    expect(rec.toasts).toEqual([])
   })
 })
