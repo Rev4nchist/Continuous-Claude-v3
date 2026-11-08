@@ -69,10 +69,10 @@ describe('the committed lane-dash.config.json', () => {
     assert.equal(val(cfg, 'p0_cap'), 5);
   });
 
-  it('tile 6 shows 4 project rows and tile 1 keeps 6 rows (Dave, 2026-11-08)', () => {
-    // Breaks if project_rows is missing, is not 4, or tile 1's show_rows changes with it.
+  it('tile 6 shows 4 project rows and tile 1 shows 4 wait rows (Dave, 2026-11-08)', () => {
+    // Breaks if project_rows or show_rows is missing or is not 4.
     assert.equal(val(cfg, 'project_rows'), 4);
-    assert.equal(val(cfg, 'show_rows'), 6);
+    assert.equal(val(cfg, 'show_rows'), 4);
     assert.ok(row(cfg, 'project_rows').source.length > 0);
   });
 

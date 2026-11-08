@@ -43,7 +43,7 @@ export const TZ = 'America/Chicago';
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
-export const DEFAULT_SHOW_ROWS = 6;
+export const DEFAULT_SHOW_ROWS = 4;
 export const DEFAULT_PROJECT_ROWS = 4;
 export const HOURS_TOKEN = '{h}';
 export const TILE_COLUMNS = ['id', 'tile', 'kind', 'rank', 'value', 'text', 'tone'];
@@ -382,7 +382,7 @@ function tile1(add, c) {
       add(`wait.row.${i + 1}.title`, 'row', { rank: i + 1, text: cleanText(r.title) });
       add(`wait.row.${i + 1}.meta`, 'row', {
         rank: i + 1, value: r.ageDays,
-        text: `${cleanText(r.project)} · ${r.band ?? 'no band'} · asked ${r.ageDays} ${pluralize(r.ageDays, 'day')} before the export`,
+        text: `${cleanText(r.project)} · ${r.band ?? 'no band'} · ${r.ageDays} ${pluralize(r.ageDays, 'day')}`,
       });
     });
     if (q.n > q.rows.length) add('wait.more', 'text', { value: q.n - q.rows.length, text: `${q.n - q.rows.length} more on the board` });

@@ -305,6 +305,11 @@ test('niceTicks: even steps from 0, at most five ticks, top covers the max', () 
   assert.deepEqual(niceTicks(171), [0, 50, 100, 150, 200]);
 });
 
+// Breaks if the phone page default goes back to 6 wait rows (Dave, 2026-11-08: 4 rows, about 3 screens).
+test('DEFAULT_SHOW_ROWS is 4', () => {
+  assert.equal(DEFAULT_SHOW_ROWS, 4);
+});
+
 test('daveQueue: with no targets it shows DEFAULT_SHOW_ROWS rows', () => {
   const lanes = Array.from({ length: 12 }, (_, i) =>
     lane({ id: `a${i}`, state: 'blocked', dave_ask_at: `2026-11-0${(i % 7) + 1}T15:00:00Z` }));
@@ -625,7 +630,11 @@ test('row limits: tile 1 follows show_rows, tile 6 follows project_rows', () => 
 test('tile 1: rows are oldest first with title and a meta line; the limit text says no limit set', () => {
   const rows = build();
   assert.equal(text(rows, 'wait.row.1.title'), 'Decide the plan');
-  assert.equal(text(rows, 'wait.row.1.meta'), 'alpha · P1 · asked 8 days before the export');
+  assert.equal(text(rows, 'wait.row.1.meta'), 'alpha · P1 · 8 days');
+  // Breaks if any row meta repeats the age words that the age column already shows.
+  for (const [id, r] of byId(rows)) {
+    if (/^wait\.row\.\d+\.meta$/.test(id)) assert.ok(!/asked|before the export/.test(r.text), id);
+  }
   assert.equal(byId(rows).get('wait.row.1.meta').value, 8);
   assert.equal(text(rows, 'wait.row.2.title'), 'Pick the logo');
   assert.equal(text(rows, 'wait.limit'), 'no limit set');
