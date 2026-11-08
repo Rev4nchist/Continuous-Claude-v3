@@ -44,7 +44,11 @@
     "the lane board sat 3 days stale because it was scoped to one track while reporting on eight.",
     "",
     "The `title` lives in the source file's <title> tag, not here - here it is a mirror for humans.",
-    "Titles must NOT carry a hard date: these are living pages, the as-of stamp belongs in the body."
+    "Titles must NOT carry a hard date: these are living pages, the as-of stamp belongs in the body.",
+    "",
+    "content_model \"dashboard-store\" (added 2026-11-08): a Claude Dashboard artifact. Its page and data live in the artifact store, not in a file",
+    "you publish. Do NOT pass a file_path to the Artifact tool for it. Handoff step 3 has a dashboard-store bullet that skips file publishing. Its session is \"fleetops\", which no handoff folder uses today.",
+    "To refresh its data, run the skill named in the entry (`refresh_skill`). To change the page, read the Dashboard type SKILL.md on the artifact first."
   ],
   "artifacts": [
     {
@@ -181,6 +185,27 @@
         "Phone-first by request - Dave reads it on his phone. Every table is stacked definition",
         "blocks rather than a real <table>, which is why it survives a narrow viewport. Keep that",
         "constraint when editing; a four-column table would break the only device it is read on."
+      ]
+    },
+    {
+      "id": "fleetops-dashboard",
+      "url": "https://claude.ai/artifact/Vnf8urTCv7awKXwNT423F8",
+      "source": null,
+      "title": "FleetOps",
+      "favicon": "chart",
+      "description": "Dave's lane dashboard: what waits on Dave, the weekly pile, never-started lanes, work in progress, P0 and projects.",
+      "session": "fleetops",
+      "refresh": "on-request",
+      "content_model": "dashboard-store",
+      "refresh_skill": ".claude/skills/fleetops-refresh/SKILL.md",
+      "data_source": "~/.claude/state/lane-dash (written nightly at 23:55 Central by the CCv3-Lane-Snapshot task)",
+      "page_copy": "C:/Users/dkhay/scratch/fleetops-build/page/index.html (machine-local build copy; the live page is in the store at files/index.html)",
+      "last_published": "2026-11-08",
+      "notes": [
+        "Private artifact, owned by Dave. Attached data files are readable by everyone who can open it and hold lane titles (Dave decided, 2026-11-08).",
+        "Never render or screenshot the real dashboard. Read its check and runs documents (data/users/me) after a write.",
+        "Page look: Notion style, built from frame tokens only. Before changing the page, read the Dashboard SKILL.md, design-defaults.md and one-writer.md on the artifact.",
+        "Data refresh is manual for now. Run the fleetops-refresh skill. A stale-data line in the stop gate is planned."
       ]
     }
   ]

@@ -216,7 +216,11 @@ For every entry in scope:
      editing the rendered HTML, which the next render silently discards. If the page shows a stale
      status line that lives in the database, correct it at the source of truth (for the lane board:
      `node C:/Users/dkhay/.claude/scripts/lane.mjs note <id> "..."`).
-4. **Republish to the same URL:**
+   - `dashboard-store` — a Claude Dashboard artifact. Its page and data live in the artifact store.
+     Never pass a `file_path` to the Artifact tool for it, and skip step 4. To refresh its data,
+     run the skill the entry names in `refresh_skill`. A page change follows the Dashboard type's
+     own `SKILL.md` on that artifact.
+4. **Republish to the same URL** (not for `dashboard-store`):
 
 ```
 Artifact tool:
