@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "note": "Settings for the lane dashboard export (scripts/coordination/export-dash-data.mjs). A limit is null until Dave sets a number: wip_limit, never_started_cap, dave_queue_cap. There is no default of 3. Only the P0 cap of 5 can turn a figure red until Dave sets a limit.",
+  "board": "continuous-claude",
+  "board_url": "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
+  "stale_after_hours": 36,
+  "projects_stale_after_hours": 168,
+  "band_history_start": "2026-11-07",
+  "targets": [
+    { "key": "p0_cap", "value": 5, "label": "P0 soft cap", "source": "Lane board rule (COORDINATION.md): at most 5 open P0 lanes." },
+    { "key": "wip_limit", "value": null, "label": "Live work limit", "source": "Not set. Source: Dave. Dave picks a number, or leaves it unset. Until then nothing is marked over a limit." },
+    { "key": "never_started_cap", "value": null, "label": "Cap on never-started lanes", "source": "Not set. Source: Dave. Until then the page ranks Growing projects by net flow." },
+    { "key": "dave_queue_cap", "value": null, "label": "Cap on the Waiting-on-Dave queue", "source": "Not set. Source: Dave. Until then the page marks no queue as too long." },
+    { "key": "window_days", "value": 7, "label": "Window in days", "source": "Page choice: the word \"week\" on the page." },
+    { "key": "age_edge_1", "value": 1, "label": "Age edge 1 (days)", "source": "PROPOSAL for the age buckets." },
+    { "key": "age_edge_2", "value": 3, "label": "Age edge 2 (days)", "source": "PROPOSAL for the age buckets." },
+    { "key": "age_edge_3", "value": 7, "label": "Decide-or-drop age (days)", "source": "PROPOSAL: a never-started lane older than this needs a decision." },
+    { "key": "show_rows", "value": 6, "label": "Rows per list", "source": "Page choice." },
+    { "key": "log_rows", "value": 12, "label": "Rows in the assignment log", "source": "Page choice." },
+    { "key": "session_rows", "value": 7, "label": "Rows in Who took work", "source": "Page choice." },
+    { "key": "trend_min_days", "value": 7, "label": "Snapshots before trends show", "source": "PROPOSAL: a trend line needs a week of daily snapshots." },
+    { "key": "done_visible_days", "value": 28, "label": "Days a Done project stays visible", "source": "Design decision 2026-11-07 (defects first, item 2): 4 weeks." }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "note": "Project rules for the lane dashboard export (scripts/coordination/export-dash-data.mjs). Rules run in order, first match wins: pass 1 is idRe or ids, pass 2 is tracks, else unassigned. idRe must start with ^ and every alternative is anchored by lane-dash-project.mjs. terminalLanes are the lanes that must all be done for the project to be Done. goal and done are proposals Dave edits. parked, proposed and focus are page flags. greymatter-design has its own board and no rule here. No project is the focus yet: Dave sets focus true on one.",
+  "projects": [
+    {
+      "key": "review-engine",
+      "name": "Review engine (retire CodeRabbit)",
+      "goal": "Replace CodeRabbit with the CCv3 local review engine (lane map line 3).",
+      "done": "re-cr-retire-gate is decided per band (pre-pr CLI, then HIGH, then CRITICAL) and every wave 1-10 lane it depends on is done.",
+      "idRe": "^(re-|review-engine-|review-eval-|review-matrix-|review-factory-|review-sota-|review-capacity-|review-budget-|review-merge-gate|review-status-|local-review|engine-|hf-|seeded-vuln|prepr-(?!coord)|pre-pr-|scanner-|gate-|coderabbit-|ready-outside-diff|force-high-security|reviews-7d|autoconfirm-|cli-spend)",
+      "ids": [],
+      "tracks": [
+        "review-engine"
+      ],
+      "terminalLanes": [
+        "re-cr-retire-gate"
+      ],
+      "parked": false,
+      "proposed": false,
+      "focus": false
+    },
+    {
+      "key": "guard-hardening",
+      "name": "Guards and security",
+      "goal": "Close the known bypass and false-positive classes of the destructive-command, package-install and scoped-cleanup guards.",
+      "done": "Every finding listed in the open guard lanes has a failing-then-passing test and a built-hook payload proof; the 3 live false-positive repros stop firing.",
+      "idRe": "^(?:.*-)?guard(?:-|$)|^destructive-|^package-guard|^scoped-cleanup|^dc-config-guard|^agent-self-approve|^security-|^cf-|^cloudflare-",
+      "ids": [
+        "guard-prompt-text-fp"
+      ],
+      "tracks": [],
+      "terminalLanes": [
+        "destructive-guard-redirect-gaps",
+        "guard-prompt-text-fp",
+        "package-guard-residuals",
+        "scoped-cleanup-gitdir-redirect"
+      ],
+      "parked": false,
+      "proposed": true,
+      "focus": false
+    },
+    {
+      "key": "lane-board",
+      "name": "Lane board and reminders",
+      "goal": "Dave plans and reads the work from his phone: bands, kanban, timed reminders, Done column, dashboard.",
+      "done": "Reminders fire and sync to Notion (PR-E), band page shows the cap, and the dashboard hub is published and refreshed.",
+      "idRe": "^(lane-|timed-reminders|desktop-board|pr-f-test|per-project-lanes|render-board)",
+      "ids": [],
+      "tracks": [],
+      "terminalLanes": [
+        "timed-reminders-laneboard",
+        "lane-reminder-tick",
+        "lane-dashboard"
+      ],
+      "parked": false,
+      "proposed": true,
+      "focus": false
+    },
+    {
+      "key": "pr-flow",
+      "name": "PR, pathway and landing flow",
+      "goal": "A PR goes from branch to landed with one clear question per decision, on a phone, with no manual retries.",
+      "done": "pathway flow v2 and the ship-ask push gate are live and proven on a phone; land-pr and land-recheck have no known false refusals.",
+      "idRe": "^(pathway-|bare-pathway|pr-|prd-|push-gate|ship-|grant-|land-|slot-|free-slot|checkpoint-|summary-change|decision-gate|enforce-flag|ledger-flag|prepr-coord)",
+      "ids": [
+        "pathway-bridge-polish"
+      ],
+      "tracks": [],
+      "terminalLanes": [
+        "ship-push-only",
+        "land-pr-red-check-block"
+      ],
+      "parked": false,
+      "proposed": true,
+      "focus": false
+    },
+    {
+      "key": "memory-and-skills",
+      "name": "Memory, compaction and skill quality",
+      "goal": "Sessions keep what they learned across compaction, and skills load when they should.",
+      "done": "Compact quick wins landed and checked with a real /compact; memory extractor gaps and skill misfires measured and fixed or dropped.",
+      "idRe": "^(compact-|memory-|tool-error-|store-receipt|skill-|tdd-|debug-skill|style-ab|p4-|p4b-|always-loaded|precompact|keepwarm|prompt-hook)",
+      "ids": [],
+      "tracks": [],
+      "terminalLanes": [
+        "compact-quickwins-r1"
+      ],
+      "parked": false,
+      "proposed": true,
+      "focus": false
+    },
+    {
+      "key": "toolchain-gates",
+      "name": "Harness health, toolchain and type gates",
+      "goal": "tsc, hooks build and tests block bad changes at pre-pr and CI; the repo has no stale type errors.",
+      "done": "hooks-205-type-errors is 0, ts-gates-prepr-ci blocks a planted type error, and worktrees start with working deps.",
+      "idRe": "^(ts-|ts7-|hooks-|post-edit-ts|worktree-|rust-|smoke-|scratch-db|daemon-|active-register|ci-|harness-health|opc-dep|dependabot|file-lock|reap-|codemap|model-id|remove-nia|gitleaks|health-tasks|doctor-|scheduler-|claude-|grok-)",
+      "ids": [],
+      "tracks": [],
+      "terminalLanes": [
+        "ts-gates-prepr-ci",
+        "hooks-205-type-errors"
+      ],
+      "parked": false,
+      "proposed": true,
+      "focus": false
+    },
+    {
+      "key": "trex",
+      "name": "TREX (parked)",
+      "goal": "Local review-finding verification bench (TREX). Verify P1 was KILLED 11-04; lanes parked on Dave's yes.",
+      "done": "Dave decides: revive or close. Close the 3 open lanes if he says close.",
+      "idRe": "^trex-",
+      "ids": [],
+      "tracks": [
+        "trex"
+      ],
+      "terminalLanes": [],
+      "parked": true,
+      "proposed": true,
+      "focus": false
+    },
+    {
+      "key": "agentic-os-bridge",
+      "name": "Agentic OS, fleet and Notion bridge",
+      "goal": "Fleet page, session identity and the CTO bot bridge work as one SDLC operating system.",
+      "done": "sdlc-os board and P2 hardening finished; team-bridge phase 1 approved or dropped.",
+      "idRe": "^(sdlc-|team-bridge|scrubber-|fleet-|session-|sid-)",
+      "ids": [],
+      "tracks": [
+        "session-identity"
+      ],
+      "terminalLanes": [
+        "sdlc-os",
+        "team-bridge-phase1"
+      ],
+      "parked": false,
+      "proposed": true,
+      "focus": false
+    }
+  ]
+}
