@@ -322,9 +322,51 @@ Ledger: ${mostRecent}`;
   }
   const output = {
     continue: true,
-    systemMessage: ledgerMessage || "[PreCompact] No continuity data to preserve"
+    systemMessage: ledgerMessage || handoffMessage(projectDir, input.session_id)
   };
   console.log(JSON.stringify(output));
+}
+function formatAge(ms) {
+  if (!(ms >= 6e4)) return "just now";
+  const mins = Math.floor(ms / 6e4);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+function listHandoffYaml(dir, out = []) {
+  let entries;
+  try {
+    entries = fs2.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) listHandoffYaml(full, out);
+    else if (e.isFile() && /\.ya?ml$/i.test(e.name)) out.push(full);
+  }
+  return out;
+}
+function newestByMtime(files) {
+  let best = null;
+  for (const file of files) {
+    try {
+      const mtime = fs2.statSync(file).mtimeMs;
+      if (!best || mtime > best.mtime) best = { file, mtime };
+    } catch {
+    }
+  }
+  return best;
+}
+function handoffMessage(projectDir, sessionId, now = Date.now()) {
+  const files = listHandoffYaml(path.join(projectDir, "thoughts", "shared", "handoffs"));
+  const sid8 = (sessionId || "").slice(0, 8);
+  const mine = sid8.length === 8 ? files.filter((f) => path.basename(f).includes(sid8)) : [];
+  const best = newestByMtime(mine.length > 0 ? mine : files);
+  if (!best) return "[PreCompact] no ledger and no handoff found";
+  const rel = path.relative(projectDir, best.file).split(path.sep).join("/");
+  return `[PreCompact] newest handoff: ${rel} (${formatAge(now - best.mtime)})`;
 }
 function generateAutoSummary(projectDir, sessionId) {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
@@ -409,3 +451,7 @@ async function readStdin() {
 if ((process.argv[1] || "").includes("pre-compact-continuity")) {
   main().catch(console.error);
 }
+export {
+  formatAge,
+  handoffMessage
+};
