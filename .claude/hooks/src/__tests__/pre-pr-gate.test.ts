@@ -2401,6 +2401,50 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
     ['cd B && open', (o) => `cd ${B} && ${o}`, { A: 'allow', C: 'allow' }],
     ['cd A && open', (o) => `cd ${A} && ${o}`, { B: 'stamp' }],
     ['cd A; cd B; open', (o) => `cd ${A}; cd ${B}; ${o}`, { A: 'stamp', B: 'stamp' }],
+    // fix/pre-pr-gate-pipe-before-cd: a || or a pipe BEFORE a cd means the cd may be skipped, or run in a pipe subshell (decision-gate `piped`)
+    ['true || cd B && open', (o) => `true || cd ${B} && ${o}`, { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }],
+    ['true | cd B && open', (o) => `true | cd ${B} && ${o}`, { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }],
+    ['cd A && true | cd B && open', (o) => `cd ${A} && true | cd ${B} && ${o}`, { A: 'stamp', B: 'stamp' }],
+    ['true && cd B && open', (o) => `true && cd ${B} && ${o}`, { A: 'allow', C: 'allow' }],
+    ['echo "x || cd A" && open', (o) => `echo "x || cd ${A}" && ${o}`, { B: 'allow' }],
+    ['echo "x | cd B" && open', (o) => `echo "x | cd ${B}" && ${o}`, { A: 'stamp' }],
+    // popd, Pop-Location, `cd -` and a bare cd: the folder is unknown. Denied when the cwd or a known folder is CCv3 (the API form names CCv3 itself)
+    ['popd && open', (o) => `popd && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: ['allow', 'position-unknown'] }],
+    ['cd B && popd && open', (o) => `cd ${B} && popd && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: 'position-unknown' }],
+    ['cd C && popd && open', (o) => `cd ${C} && popd && ${o}`, { A: 'position-unknown', C: ['allow', 'position-unknown'] }],
+    ['cd - && open', (o) => `cd - && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: ['allow', 'position-unknown'] }],
+    ['cd; open', (o) => `cd; ${o}`, { A: 'position-unknown', B: 'position-unknown', C: ['allow', 'position-unknown'] }],
+    ['cd<newline>open', (o) => `cd\n${o}`, { A: 'position-unknown', B: 'position-unknown', C: ['allow', 'position-unknown'] }],
+    ['open; popd', (o) => `${o}; popd`, { A: 'stamp', B: 'allow' }],
+    ['echo "popd" && open', (o) => `echo "popd" && ${o}`, { A: 'stamp', B: 'allow' }],
+    // round 2, F1: a redirect after `cd -` must not hide it. One reader (cdSteps) flags the dropped `-`; A is on the cd path, so every cwd denies
+    ['cd A && cd B && cd - >/dev/null && open', (o) => `cd ${A} && cd ${B} && cd - >/dev/null && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: 'position-unknown' }],
+    ['cd A && cd B && cd -   2>&1 && open', (o) => `cd ${A} && cd ${B} && cd -   2>&1 && ${o}`, { B: 'position-unknown', C: 'position-unknown' }],
+    // round 2, F2: the position rule judges every cd state on the path, not only the cwd and the final folder (A is collapsed out of dirs by &&)
+    ['cd A && cd C && cd - && open', (o) => `cd ${A} && cd ${C} && cd - && ${o}`, { B: 'position-unknown', C: 'position-unknown' }],
+    ['pushd A && pushd C && popd && open', (o) => `pushd ${A} && pushd ${C} && popd && ${o}`, { B: 'position-unknown', C: 'position-unknown' }],
+    // round 2, F3: a pipe-and-stderr `|&`, or a comment between the pipe and the cd, still makes the cd loose
+    ['true |& cd B && open', (o) => `true |& cd ${B} && ${o}`, { A: 'stamp', B: 'allow' }],
+    ['true || <comment><newline>cd B && open', (o) => `true || # c\ncd ${B} && ${o}`, { A: 'stamp', B: 'allow' }],
+    ['true | <comment><newline>cd B && open', (o) => `true | # c\ncd ${B} && ${o}`, { A: 'stamp', B: 'allow' }],
+    ['true || <comment><comment><newline>cd B && open', (o) => `true || # c\n# d\ncd ${B} && ${o}`, { A: 'stamp', B: 'allow' }],
+    ['true && <comment><newline>cd B && open', (o) => `true && # c\ncd ${B} && ${o}`, { A: 'allow', C: 'allow' }],
+    // round 2, F4: a cd with an option, behind builtin/command, or in a { } or then/else/do block, is a cd
+    ['cd -P A; open', (o) => `cd -P ${A}; ${o}`, { B: 'stamp' }],
+    ['cd -- A; open', (o) => `cd -- ${A}; ${o}`, { B: 'stamp' }],
+    ['cd -P B && open', (o) => `cd -P ${B} && ${o}`, { A: 'allow', C: 'allow' }],
+    ['builtin cd A && open', (o) => `builtin cd ${A} && ${o}`, { B: 'stamp' }],
+    ['command cd A && open', (o) => `command cd ${A} && ${o}`, { B: 'stamp' }],
+    ['{ cd A; } && open', (o) => `{ cd ${A}; } && ${o}`, { B: 'stamp' }],
+    ['if true; then cd A; fi; open', (o) => `if true; then cd ${A}; fi; ${o}`, { B: 'stamp' }],
+    ['pushd A && pushd B && builtin popd && open', (o) => `pushd ${A} && pushd ${B} && builtin popd && ${o}`, { B: 'position-unknown' }],
+    // round 2, reviewer 1 #2: a fd redirect (`2>&1`) is not a separator: the cd stays joined by &&
+    ['cd B 2>&1 && open', (o) => `cd ${B} 2>&1 && ${o}`, { A: 'allow', C: 'allow' }],
+    ['cd B && git push 2>&1 && open', (o) => `cd ${B} && git push 2>&1 && ${o}`, { A: 'allow', C: 'allow' }],
+    ['cd B &>/dev/null && open', (o) => `cd ${B} &>/dev/null && ${o}`, { A: 'allow' }],
+    ['cd B && git push 2>&1; open', (o) => `cd ${B} && git push 2>&1; ${o}`, { A: 'stamp' }],
+    ['cd B; open 2>&1', (o) => `cd ${B}; ${o} 2>&1`, { A: 'stamp' }],
+    ['cd B 2>&1 & open', (o) => `cd ${B} 2>&1 & ${o}`, { A: 'stamp' }],
   ];
   const cwds: Record<string, string> = { A, B, C };
 
@@ -2447,6 +2491,72 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
     expect(ps(`Set-Location ${B}; ${CLI}`, A).action).toBe('deny');
     expect(ps(`Set-Location ${B} && ${CLI}`, A).action).toBe('allow');
     expect(ps(`${CLI}; Set-Location ${A}`, B).action).toBe('allow');
+  });
+
+  it('W12: PowerShell: a || before Set-Location, and Pop-Location, sl and a bare Set-Location, are read like their bash forms', () => {
+    const ps = (text: string, cwd: string) => {
+      const d = decide(input(text, { cwd, tool_name: 'PowerShell' }), world());
+      return d.action === 'deny' ? d.pattern : d.action;
+    };
+    expect(ps(`$true || Set-Location ${B} && ${CLI}`, A)).toBe('stamp');
+    expect(ps(`$true || Set-Location ${B} && ${CLI}`, B)).toBe('allow');
+    expect(ps(`Pop-Location; ${CLI}`, B)).toBe('position-unknown');
+    expect(ps(`Set-Location ${B}; Pop-Location; ${CLI}`, C)).toBe('position-unknown');
+    expect(ps(`sl; ${CLI}`, B)).toBe('position-unknown');
+    expect(ps(`Set-Location; ${CLI}`, A)).toBe('position-unknown');
+    expect(ps(`Set-Location ${C}; Pop-Location; ${CLI}`, C)).toBe('allow');
+    expect(ps(`${CLI}; Pop-Location`, B)).toBe('allow');
+  });
+
+  it('W12b: PowerShell: round 2 shapes (comment after ||, Set-Location - with a redirect, chdir, a script block, -Path:)', () => {
+    const ps = (text: string, cwd: string) => {
+      const d = decide(input(text, { cwd, tool_name: 'PowerShell' }), world());
+      return d.action === 'deny' ? d.pattern : d.action;
+    };
+    expect(ps(`$true || # c\nSet-Location ${B} && ${CLI}`, A)).toBe('stamp');
+    expect(ps(`Set-Location ${A} && Set-Location ${C} && Set-Location - && ${CLI}`, C)).toBe('position-unknown');
+    expect(ps(`Push-Location ${A} && Push-Location ${C} && Pop-Location && ${CLI}`, C)).toBe('position-unknown');
+    expect(ps(`chdir ${A}; ${CLI}`, B)).toBe('stamp');
+    expect(ps(`& { Set-Location ${A} }; ${CLI}`, B)).toBe('stamp');
+    expect(ps(`Set-Location -Path:${A}; ${CLI}`, B)).toBe('stamp');
+    expect(ps(`Set-Location -Path:${B} && ${CLI}`, A)).toBe('allow');
+  });
+
+  it('W15: ACCEPTED over-deny, pinned: a heredoc body line `popd`, `cd -` or a bare `cd` reads as a command (no heredoc tracking: that needs a lexer)', () => {
+    for (const line of ['popd', 'cd -', 'cd']) {
+      expect(verdict(`cat > /dev/null <<'EOF'\n${line}\nEOF\ncd ${B} && ${CLI}`, B), line).toBe('position-unknown');
+    }
+  });
+
+  it('W16: ACCEPTED over-deny, pinned: `$(...)` around the open glues the `)` to the body path (shared with decision-gate shapes; LOW)', () => {
+    const d = run(`cd ${B} && PR=$(${CLI}) && popd`, B);
+    expect(d.action).toBe('deny');
+    expect((d as { reason: string }).reason).toMatch(/cannot be read/);
+  });
+
+  it('W17: an unexpanded cd target before a popd still fails closed through the new states walk (cannot expand, not a crash)', () => {
+    const out = JSON.parse(handle(JSON.stringify(input(`cd $X && popd && ${CLI}`, { cwd: C })), world()));
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/cannot expand/);
+  });
+
+  it('W13: an unknown folder does not stop the other denies: a non-CCv3 cwd and path still judge the known folders', () => {
+    // pr-checkpoint --confirm is a self-confirm (any checkout); the nonliteral --repo is a soft rule. Both still run when the position is unknown but no CCv3 folder is on the path.
+    const self = run('popd && node scripts/github/pr-checkpoint.mjs --confirm --pr 5', C);
+    expect(self.action === 'deny' ? self.pattern : self.action === 'allow' ? self.warn : self.action).toBe('self-confirm');
+    const lit = run(`popd && gh pr create --draft --repo $R --body-file ${DB}`, C);
+    expect(lit.action === 'deny' ? lit.pattern : lit.action === 'allow' ? lit.warn : lit.action).toBe('nonliteral-repo');
+    // a known folder that is CCv3 and unstamped still gets the stamp deny, with a non-CCv3 cwd and no popd in the way
+    expect(verdict(`cd ${A} && ${CLI}`, C)).toBe('stamp');
+  });
+
+  it('W14: the position-unknown reason says to use one absolute cd and no popd; it is a hard deny for an open', () => {
+    const d = run(`popd && ${CLI}`, B);
+    expect(d.action).toBe('deny');
+    const reason = (d as { reason: string }).reason;
+    expect(reason).toMatch(/cd <full path> && \.\.\./);
+    expect(reason).toMatch(/no popd/);
+    expect((d as { soft?: boolean }).soft).toBeUndefined();
   });
 
   it('W5: a head or a body file followed by `;` is read without the `;`', () => {

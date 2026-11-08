@@ -483,7 +483,10 @@ function isCcv3Remote(url) {
   const m = /github\.com[:/]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
-var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
+var CMD_POS = String.raw`(?:^|[;&|\r\n{]\s*|\b(?:then|else|do)\s+)(?:(?:builtin|command)\s+)?`;
+var CD_NAMES = "cd|Set-Location|sl|chdir|pushd|Push-Location";
+var CD_TARGET = new RegExp(CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?("[^"]+"|'[^']+'|[^\s;&|]+)`, "gi");
+var UNKNOWN_CD = new RegExp(CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})[ \t]*(?=[;&|\r\n]|$))`, "gi");
 var fromGitBashPath = (p, platform = process.platform) => platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
 var resolveIn = (cwd, target, shell) => {
   const raw = target.replace(/^["']|["']$/g, "");
@@ -512,16 +515,30 @@ function gatedStart(masked, raw) {
 }
 function cdSteps(masked, raw, end) {
   const pre = masked.slice(0, end);
-  return [...pre.matchAll(new RegExp(CD_TARGET.source, "gi"))].map((m) => {
+  return [...pre.matchAll(new RegExp(CD_TARGET.source, "gi"))].flatMap((m) => {
     const at = m.index + m[0].length;
-    const joiners = pre.slice(at).match(/&&|\|\||[;&|\r\n]/g) ?? [];
-    return { target: raw.slice(at - m[1].length, at), andOnly: joiners.length > 0 && joiners.every((j) => j === "&&") };
+    const target = raw.slice(at - m[1].length, at);
+    if (/^[-+]$/.test(target)) return [{ target, andOnly: false, unknown: true }];
+    const joiners = pre.slice(at).replace(FD_REDIRECT, " ").match(/&&|\|\||[;&|\r\n]/g) ?? [];
+    const piped = m[0].startsWith("|") || endsInPipe(pre.slice(0, m.index));
+    return [{ target, andOnly: !piped && joiners.length > 0 && joiners.every((j) => j === "&&") }];
   });
+}
+var FD_REDIRECT = /\d*[<>]&\d*-?|&>>?/g;
+function endsInPipe(before) {
+  let t = before.trimEnd();
+  for (; ; ) {
+    const c = t.replace(/(?:^|\s)#[^\r\n]*$/, "").trimEnd();
+    if (c === t) break;
+    t = c;
+  }
+  return t.endsWith("|");
 }
 function planRun(command, cwd, shell) {
   const masked = maskQuoted(command, shell === "pwsh" ? "PowerShell" : "Bash");
   const start = gatedStart(masked, command);
-  const steps = cdSteps(masked, command, start ?? command.length);
+  const all = cdSteps(masked, command, start ?? command.length);
+  const steps = all.filter((s) => s.unknown !== true);
   const states = [cwd];
   const unexpanded = /* @__PURE__ */ new Map();
   let broken = false;
@@ -535,7 +552,8 @@ function planRun(command, cwd, shell) {
   }
   const lastLoose = start === null ? steps.length : steps.map((s) => s.andOnly).lastIndexOf(false) + 1;
   const final = states[states.length - 1];
-  return { dirs: [.../* @__PURE__ */ new Set([...lastLoose > 0 ? states.slice(0, lastLoose + 1) : [], final])], final, unexpanded };
+  const unknown = all.some((s) => s.unknown === true) || masked.slice(0, start ?? command.length).match(UNKNOWN_CD) !== null;
+  return { dirs: [.../* @__PURE__ */ new Set([...lastLoose > 0 ? states.slice(0, lastLoose + 1) : [], final])], final, states, unexpanded, unknown };
 }
 function guardUnexpandedCd(deps, plan) {
   if (plan.unexpanded.size === 0) return deps;
@@ -695,6 +713,9 @@ function makeCtx(input, command, deps, shapes, plan) {
   return {
     dirs,
     final,
+    cwd,
+    states: plan.states,
+    unknown: plan.unknown,
     shell,
     named,
     top,
@@ -734,8 +755,15 @@ function decideAs(input, deps, text) {
   return d.soft && !ctx.enforcing() ? { action: "allow", warn: d.pattern } : d;
 }
 function judge(command, deps, ctx, shapes) {
-  const stamp = shapes.create ? stampDeny(command, deps, ctx) : null;
-  return stamp ?? checkpointDeny(deps, ctx, shapes) ?? { action: "allow" };
+  const where = positionDeny(ctx, shapes);
+  if (shapes.create) return where ?? stampDeny(command, deps, ctx) ?? checkpointDeny(deps, ctx, shapes) ?? { action: "allow" };
+  return checkpointDeny(deps, ctx, shapes) ?? where ?? { action: "allow" };
+}
+var POSITION_WHY = "popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, so the checkout this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd.";
+function positionDeny(ctx, shapes) {
+  if (!ctx.unknown) return null;
+  if (ctx.named !== CCV3_REPO && ![.../* @__PURE__ */ new Set([ctx.cwd, ...ctx.states, ...ctx.dirs])].some((d) => ctx.isCcv3At(d))) return null;
+  return shapes.create ? { action: "deny", pattern: "position-unknown", reason: `BLOCKED (pre-pr-gate): ${POSITION_WHY}` } : soft("position-unknown", POSITION_WHY);
 }
 function stampDeny(command, deps, ctx) {
   for (const dir of ctx.dirs) {
