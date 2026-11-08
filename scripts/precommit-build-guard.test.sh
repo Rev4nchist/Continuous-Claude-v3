@@ -244,6 +244,74 @@ d="$(committed_repo $F $'export const a = (1;')"
 stage_edit "$d" $F $'export const a: number = (1;'
 assert_exit "unparseable file, type edit (no dist) -> BLOCK" 1 "$(run_guard "$d")"
 
+# --- Import paths. A relative path that resolves to the same file before and after cannot change
+# the bundle. Helper: a repo with src/lib/a.ts, b.ts and lib2/index.ts committed next to foo.ts.
+import_repo() {  # $1 = base content of foo.ts -> echoes repo dir
+  local r; r="$(committed_repo $F "$1")"
+  mkdir -p "$r/.claude/hooks/src/lib" "$r/.claude/hooks/src/lib2"
+  printf '%s\n' 'export const x = 1;' > "$r/.claude/hooks/src/lib/a.ts"
+  printf '%s\n' 'export const x = 2;' > "$r/.claude/hooks/src/lib/b.ts"
+  printf '%s\n' 'export const x = 3;' > "$r/.claude/hooks/src/lib2/index.ts"
+  git -C "$r" add .claude/hooks/src/lib .claude/hooks/src/lib2 && git -C "$r" commit -q -m libs
+  echo "$r"
+}
+
+# --- Case 35: ./lib/a becomes ./lib/a.js, same file -> ALLOW (the #400 tldr-read-enforcer shape)
+d="$(import_repo $'import { x } from \x27./lib/a\x27;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib/a.js\x27;\nexport const a = x;'
+assert_exit "import path gains .js, same file (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 36: ./lib/a becomes ./lib/b, another file -> BLOCK
+d="$(import_repo $'import { x } from \x27./lib/a\x27;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib/b\x27;\nexport const a = x;'
+assert_exit "import path points at another file (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 37: gains .js but the file does not exist -> BLOCK (cannot prove it, fail closed)
+d="$(import_repo $'import { x } from \x27./lib/zzz\x27;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib/zzz.js\x27;\nexport const a = x;'
+assert_exit "import path gains .js, file missing (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 38: .js added plus a code edit -> BLOCK
+d="$(import_repo $'import { x } from \x27./lib/a\x27;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib/a.js\x27;\nexport const a = x + 1;'
+assert_exit "import .js plus code edit (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 39: a package name changes -> BLOCK (only relative paths are compared by file)
+d="$(import_repo $'import { readFileSync } from \x27node:fs\x27;\nexport const a = readFileSync;')"
+stage_edit "$d" $F $'import { readFileSync } from \x27fs\x27;\nexport const a = readFileSync;'
+assert_exit "package specifier changed (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 40: a folder import becomes the index file path -> ALLOW (same file)
+d="$(import_repo $'import { x } from \x27./lib2\x27;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib2/index.js\x27;\nexport const a = x;'
+assert_exit "folder import becomes index.js, same file (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 41: a re-export path gains .js -> ALLOW
+d="$(import_repo $'export { x } from \x27./lib/a\x27;')"
+stage_edit "$d" $F $'export { x } from \x27./lib/a.js\x27;'
+assert_exit "re-export path gains .js, same file (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 42: a dynamic import path gains .js -> ALLOW
+d="$(import_repo $'export const load = () => import(\x27./lib/a\x27);')"
+stage_edit "$d" $F $'export const load = () => import(\x27./lib/a.js\x27);'
+assert_exit "dynamic import path gains .js, same file (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 43: import-shaped text inside a template literal gains .js -> BLOCK (it is a runtime string)
+d="$(import_repo $'export const s = `import("./lib/a")`;')"
+stage_edit "$d" $F $'export const s = `import("./lib/a.js")`;'
+assert_exit "template literal text shaped like an import (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 44: a line in a template literal that starts like a static import -> BLOCK
+d="$(import_repo $'export const s = `\nimport { x } from "./lib/a";\n`;')"
+stage_edit "$d" $F $'export const s = `\nimport { x } from "./lib/a.js";\n`;'
+assert_exit "template literal line shaped like a static import (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 45: a real import gains .js while a template literal holds import-shaped text -> BLOCK
+# (the pattern finds two paths and the build reports one import, so the guard cannot tell them apart)
+d="$(import_repo $'import { x } from \x27./lib/a\x27;\nexport const s = `import("./lib/a")`;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib/a.js\x27;\nexport const s = `import("./lib/a")`;\nexport const a = x;'
+assert_exit "real import gains .js, template text unchanged (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
 echo ""
 echo "precommit-build-guard tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
