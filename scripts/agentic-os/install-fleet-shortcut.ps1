@@ -29,7 +29,7 @@ foreach ($l in $links) {
   }
   $extra = ''
   if ($Port -ne 3010) { $extra += " -Port $Port" }
-  if ($AppDir) { $extra += " -AppDir `"$AppDir`"" }
+  if ($AppDir) { $extra += " -AppDir `"$((Resolve-Path -LiteralPath $AppDir).Path)`"" }
   $lnk = $shell.CreateShortcut($path)
   $lnk.TargetPath = $pwsh
   $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($l.Script)`"$extra"

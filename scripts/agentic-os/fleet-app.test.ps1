@@ -30,6 +30,13 @@ try {
   $running = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { ([string]$_.CommandLine).IndexOf((Join-Path $app 'node_modules\next\dist\bin\next'), [StringComparison]::OrdinalIgnoreCase) -ge 0 })
   if ($running.Count -gt 0) { throw "SKIP: a Fleet app already runs from $app (pid $($running[0].ProcessId)). Stop it with stop-fleet.ps1, then run this test." }
 
+  # pid reuse: a "parent" that started after its child is a reused id and must be rejected
+  $old = [pscustomobject]@{ CreationDate = [datetime]'2026-01-01T10:00:00' }
+  $new = [pscustomobject]@{ CreationDate = [datetime]'2026-01-01T10:05:00' }
+  Check 'a parent that started before its child is real' (Test-IsRealParent $old $new)
+  Check 'a parent that started after its child is a reused id' (-not (Test-IsRealParent $new $old))
+  Check 'a missing parent is not real' (-not (Test-IsRealParent $null $new))
+
   # install: two shortcuts that point at the real scripts; a second run keeps two; -Remove deletes both
   $r = Run 'install-fleet-shortcut.ps1' @('-Dir', $lnks)
   $sh = New-Object -ComObject WScript.Shell

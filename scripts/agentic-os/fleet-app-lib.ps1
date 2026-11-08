@@ -32,24 +32,33 @@ function Test-IsFleetProcess($Proc, [string]$AppDir) {
   return $cmd.IndexOf($AppDir, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
-# The port owner plus its Fleet ancestors (stop at the first process that is not Fleet) plus all their descendants.
+# Windows reuses process ids. ParentProcessId can name a dead parent whose id a new, unrelated process now holds.
+# A real parent started before its child. A candidate that started after the child is a reused id: reject it.
+function Test-IsRealParent($Parent, $Child) {
+  if (-not $Parent -or -not $Child) { return $false }
+  return ([datetime]$Parent.CreationDate) -le ([datetime]$Child.CreationDate)
+}
+
+# The port owner plus its Fleet ancestors (stop at the first process that is not Fleet) plus all their real descendants.
 function Get-FleetProcessSet([int]$OwnerPid, [string]$AppDir) {
   $set = New-Object System.Collections.Generic.List[int]
   $cur = Get-ProcInfo $OwnerPid
   if (-not (Test-IsFleetProcess $cur $AppDir)) { return @() }
   $root = $cur
+  $seen = New-Object System.Collections.Generic.HashSet[int]
+  [void]$seen.Add([int]$root.ProcessId)
   while ($true) {
     $parent = Get-ProcInfo ([int]$root.ParentProcessId)
-    if (Test-IsFleetProcess $parent $AppDir) { $root = $parent } else { break }
+    if ((Test-IsFleetProcess $parent $AppDir) -and (Test-IsRealParent $parent $root) -and $seen.Add([int]$parent.ProcessId)) { $root = $parent } else { break }
   }
   $queue = New-Object System.Collections.Queue
-  $queue.Enqueue([int]$root.ProcessId)
+  $queue.Enqueue($root)
   while ($queue.Count -gt 0) {
-    $id = [int]$queue.Dequeue()
-    if ($set.Contains($id)) { continue }
-    $set.Add($id)
-    Get-CimInstance Win32_Process -Filter "ParentProcessId=$id" -ErrorAction SilentlyContinue |
-      ForEach-Object { $queue.Enqueue([int]$_.ProcessId) }
+    $p = $queue.Dequeue()
+    if ($set.Contains([int]$p.ProcessId)) { continue }
+    $set.Add([int]$p.ProcessId)
+    Get-CimInstance Win32_Process -Filter "ParentProcessId=$([int]$p.ProcessId)" -ErrorAction SilentlyContinue |
+      Where-Object { Test-IsRealParent $p $_ } | ForEach-Object { $queue.Enqueue($_) }
   }
   return $set.ToArray()
 }
