@@ -174,16 +174,30 @@ describe('export-dash-data.mjs against a scratch database', () => {
     run = runExport(['--out', dir, '--rules', state.rules]);
   });
 
-  it('exits 0 and writes the six documents plus the refresh doc', () => {
-    // Breaks if the script fails on the fixture or skips a document.
+  it('exits 0 and writes the seven documents plus the refresh doc', () => {
+    // Breaks if the script fails on the fixture or skips a document (tiles.json included).
     assert.equal(run.code, 0, run.all);
-    assert.deepEqual(fs.readdirSync(dir).sort(), ['assignments.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json']);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['assignments.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
+  });
+
+  it('tiles.json: flat rows from the real database figures, titles allowed, no handle, TREX name stripped', () => {
+    // Breaks if tiles are built from stale data, a title is dropped, or a handle or "(parked)" reaches the tiles.
+    const tiles = readDoc(dir, 'tiles');
+    const ids = new Set(tiles.rows.map((r) => r.id));
+    assert.equal(ids.size, tiles.rows.length);
+    const get = (id) => tiles.rows.find((r) => r.id === id);
+    const meta = readDoc(dir, 'meta').rows[0];
+    assert.equal(tiles.exportedAt, meta.exported_at);
+    assert.equal(get('wait.count.label').text, `of ${meta.open_check} open`);
+    assert.ok(tiles.rows.some((r) => r.id.startsWith('wait.row.') && r.id.endsWith('.title') && /^Title of /.test(r.text)));
+    assert.ok(!/#[0-9a-f]{8}/i.test(JSON.stringify(tiles)));
+    assert.ok(!JSON.stringify(tiles).includes('(parked)'));
   });
 
   it('every document has the same exportedAt and the envelope shape {sql, exportedAt, rows}', () => {
     // Breaks if exportedAt is taken per file instead of once.
     const stamps = new Set();
-    for (const d of ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots']) {
+    for (const d of ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles']) {
       const doc = readDoc(dir, d);
       assert.deepEqual(Object.keys(doc).sort(), ['exportedAt', 'rows', 'sql'], d);
       assert.equal(typeof doc.sql, 'string');
