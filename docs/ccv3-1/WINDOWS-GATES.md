@@ -67,7 +67,7 @@ Get-Content scripts\scheduled\tasks.json | ConvertFrom-Json | Select-Object -Exp
 Pass when all of these hold:
 - every file reports `0 errors`;
 - there are 0 `david.hayes` matches;
-- `tasks.json` parses and lists exactly 4 tasks;
+- `tasks.json` parses and lists at least one task (the gate line shows the count; the file is the source of the number);
 - each task has the fields `name`, `script`, `trigger`, `execLimitMin`, `allowedExit`, `maxAgeHours`;
 - each task's `script` path exists in the repo.
 

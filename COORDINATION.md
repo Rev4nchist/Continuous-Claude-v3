@@ -41,6 +41,7 @@ Details: `.claude/rules-ondemand/lane-board.md`.
 | `peers` | who else is live right now |
 | `remind set\|list\|snooze\|ack\|clear` | timed reminders on lanes; due ones show at session start; `next` never offers them |
 | `remind tick` | the 5-minute `CCv3-Reminder-Tick` job: fires due reminders on every board, toasts P0/P1, and mirrors changed ones to the Notion To-Do Board (one headless `claude -p`, only when a row changed or the Done poll is due). The Notion sync is off until `remind sync on`, polls Done every 2 hours, and is capped at 12 runs a day. |
+| `export-dash-data.mjs` | the nightly `CCv3-Lane-Snapshot` job: runs the lane export at 23:55 local (Central) time, hidden, on battery too, no model. It writes the lane-dash files to `~/.claude/state/lane-dash` and adds one row per Chicago day to `snapshots.json`, so daily snapshots add up. A run that starts after midnight (laptop asleep at 23:55) lands on the next day, and the missed day has no row. It reads the primary checkout's current branch; the log names it. A manual export running at 23:55 makes the nightly run exit 1. Log: `~/.claude/logs/lane-snapshot/<date>.log` (14 days kept). Limit 2 min in the wrapper, 5 min in the task. Code: `.claude/scripts/scheduled/scheduled-lane-snapshot.ps1`. |
 
 You do not have to remember to run these. The `lane-context` hook injects the board at
 session start and any unread updates on every prompt, and renews your leases while you work.

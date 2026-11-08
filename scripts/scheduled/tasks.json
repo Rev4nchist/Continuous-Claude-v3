@@ -51,6 +51,18 @@
       "battery": true,
       "hidden": true,
       "wake": false
+    },
+    {
+      "name": "CCv3-Lane-Snapshot",
+      "script": ".claude/scripts/scheduled/scheduled-lane-snapshot.ps1",
+      "trigger": "daily 23:55",
+      "execLimitMin": 5,
+      "allowedExit": [0],
+      "maxAgeHours": 30,
+      "llm": false,
+      "battery": true,
+      "hidden": true,
+      "wake": false
     }
   ]
 }
