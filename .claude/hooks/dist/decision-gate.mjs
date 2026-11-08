@@ -554,7 +554,7 @@ var MOVE_OPT_RE = /(?:^|\s)--(?:git-dir|work-tree)(?:=|\s)/;
 var REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
 var VALUE_OPTS = /* @__PURE__ */ new Set(["--repo", "--receive-pack", "--exec", "--push-option", "-o"]);
 var FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
-function pushCallsOf(masked, raw, atStart, before = []) {
+function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, loose: false }) {
   const calls = [];
   const kinds = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -565,8 +565,14 @@ function pushCallsOf(masked, raw, atStart, before = []) {
       const optsStart = tokenStart + m[2].length;
       const end = m.index + m[0].length;
       const cut = masked.slice(end).search(ARGS_END_RE);
-      const cds = [...before, ...cdTargetsIn(masked.slice(0, tokenStart), raw.slice(0, tokenStart))];
-      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut), cds });
+      const own = cdsBefore(masked.slice(0, tokenStart), raw.slice(0, tokenStart));
+      calls.push({
+        opts: raw.slice(optsStart, optsStart + m[3].length),
+        args: raw.slice(end, cut < 0 ? raw.length : end + cut),
+        cds: [...before.cds, ...own.cds],
+        loose: before.loose || own.loose,
+        unknown: before.unknown || own.unknown
+      });
     }
   }
   return calls;
@@ -581,11 +587,11 @@ function pushCallsIn(raw) {
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]);
   for (const [start, next] of [...breaks, [bash.length, bash.length]]) {
     const seg = bash.slice(from, start);
-    const lists = [cdTargetsIn(maskedBash.slice(0, from), bash.slice(0, from)), cdTargetsIn(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
+    const lists = [cdsBefore(maskedBash.slice(0, from), bash.slice(0, from)), cdsBefore(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
     from = next;
     const squashed = squashQuotes(seg);
     if (squashed === seg) continue;
-    for (const before of lists.filter((l, i) => lists.findIndex((o) => o.join("\0") === l.join("\0")) === i)) calls.push(...pushCallsOf(squashed, squashed, true, before));
+    for (const before of distinctWheres(lists)) calls.push(...pushCallsOf(squashed, squashed, true, before));
   }
   return calls;
 }
@@ -622,7 +628,7 @@ function pushShapesFrom(call) {
   }
   if (quiet) return [];
   const [remote = null, ...specs] = positional;
-  const base = { remote, dir, cds: call.cds, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  const base = { remote, dir, cds: call.cds, loose: call.loose, unknown: call.unknown, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
   if (specs.length === 0) return [{ kind: "push", pr: null, push: { ...base, branch: null, src: null, force } }];
   const out2 = [];
   for (let i = 0; i < specs.length; i++) {
@@ -654,7 +660,7 @@ function pushShapesOf(raw) {
   for (const call of pushCallsIn(raw)) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push;
-      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.cds.join("\0")].join("|");
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.loose, p.unknown, p.cds.join("\0")].join("|");
       if (!seen.has(id)) {
         seen.add(id);
         out2.push(shape);
@@ -673,7 +679,7 @@ function cmdSegments(view) {
   out2.push({ seg: view.slice(from), from });
   return out2;
 }
-var whereId = (at) => `${at.unknown ? "?" : ""}${at.cds.join("\0")}`;
+var whereId = (at) => `${at.unknown ? "?" : ""}${at.loose ? "~" : ""}${at.cds.join("\0")}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 function shapesOf(raw) {
   const text = normalizeGh(raw);
@@ -712,7 +718,7 @@ function shapesOf(raw) {
   if (!created && isPrOpenCommand(text)) {
     const view = views[0];
     const masked = maskQuoted(view, "Bash");
-    for (const at of [{ cds: [], unknown: false }, whereAt(cdPositions(masked, view), view.length)]) {
+    for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
       add({ kind: "create", pr: null, at, text: view, mtext: masked }, `create|${whereId(at)}|${view}`);
     }
   }
@@ -730,13 +736,10 @@ function moveTo(base, target, shell) {
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
-function cdTargetsIn(masked, raw) {
-  const out2 = [];
-  for (const m of masked.matchAll(new RegExp(CD_SOURCE, "gi"))) {
-    const end = m.index + m[0].length;
-    out2.push(raw.slice(end - m[1].length, end));
-  }
-  return out2;
+var cdsBefore = (masked, raw) => whereAt(cdPositions(masked, raw), masked.length);
+function looseJoin(between) {
+  const joiners = between.match(/&&|\|\||[;&|\r\n]/g) ?? [];
+  return !(joiners.length > 0 && joiners.every((j) => j === "&&"));
 }
 var UNKNOWN_CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:cd|Set-Location|sl|pushd|Push-Location)(?:[ \t]+[-+])?[ \t]*(?=[;&|\r\n]|$))`;
 function cdPositions(masked, raw) {
@@ -744,15 +747,19 @@ function cdPositions(masked, raw) {
   for (const m of masked.matchAll(new RegExp(CD_SOURCE, "gi"))) {
     const end = m.index + m[0].length;
     const target = raw.slice(end - m[1].length, end);
-    if (!/^[-+]$/.test(target)) cds.push({ end, target });
+    if (!/^[-+]$/.test(target)) cds.push({ end, target, piped: m[0].startsWith("|") });
   }
   const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, "gi"))].map((m) => m.index + m[0].length);
-  return { cds, unknown };
+  return { cds, unknown, masked };
 }
-var whereAt = (pos, from) => ({
-  cds: pos.cds.filter((c) => c.end <= from).map((c) => c.target),
-  unknown: pos.unknown.some((end) => end <= from)
-});
+function whereAt(pos, from) {
+  const before = pos.cds.filter((c) => c.end <= from);
+  return {
+    cds: before.map((c) => c.target),
+    unknown: pos.unknown.some((end) => end <= from),
+    loose: before.some((c) => c.piped || looseJoin(pos.masked.slice(c.end, from)))
+  };
+}
 function pushDir(cwd, cds, shell) {
   return cds.reduce((dir, target) => moveTo(dir, target, shell), cwd);
 }
@@ -875,20 +882,30 @@ function resolveDir(base, raw, shell) {
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
-function dirsAfter(cwd, cds, shell, dir = null) {
-  const dirs = cds.length === 0 ? [cwd] : cds.map((_, i) => pushDir(cwd, cds.slice(0, i + 1), shell));
+function dirsAfter(cwd, cds, shell, loose, dir = null) {
+  const dirs = cds.length === 0 ? [cwd] : [...loose ? [cwd] : [], ...cds.map((_, i) => pushDir(cwd, cds.slice(0, i + 1), shell))];
   return [...new Set(dirs.map((d) => dir === null ? d : resolveDir(d, dir, shell)))];
 }
-var pushDirsOf = (p, cwd, shell) => dirsAfter(cwd, p.cds, shell, p.dir);
+var pushDirsOf = (p, cwd, shell) => dirsAfter(cwd, p.cds, shell, p.loose, p.dir);
 var POSITION_WHY = "popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, so the checkout this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd.";
 function judgeAt(s, deps, cwd, shell, named) {
   const at = s.at;
-  const dirs = dirsAfter(cwd, at.cds, shell);
+  const dirs = dirsAfter(cwd, at.cds, shell, at.loose);
   if (at.unknown && s.kind !== "land") {
     const ccv3 = named === CCV3_REPO || [.../* @__PURE__ */ new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
     return ccv3 ? [deny("position-unknown", POSITION_WHY)] : [];
   }
   return dirs.map((d) => s.kind === "create" ? judgeCreate(s.text, s.mtext, deps, d, named) : judgeLand(s, deps, d, named));
+}
+function judgePushAt(s, deps, cwd, shell, subagent, chained, alone) {
+  const p = s.push;
+  const dirs = pushDirsOf(p, cwd, shell);
+  const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
+  if (p.unknown && !fixedByDir) {
+    const ccv3 = [.../* @__PURE__ */ new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
+    return ccv3 ? [deny("position-unknown", POSITION_WHY, "push")] : [];
+  }
+  return dirs.map((d) => judgePush(s, deps, d, subagent, chained, alone));
 }
 function remoteKind(remote) {
   const r = remote.toLowerCase();
@@ -948,7 +965,7 @@ function judgeCommand(input, deps) {
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const found = s.kind === "push" ? pushDirsOf(s.push, cwd, shell).map((d) => judgePush(s, deps, d, Boolean(input.agent_id), chained, alone)) : judgeAt(s, deps, cwd, shell, named);
+    const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, Boolean(input.agent_id), chained, alone) : judgeAt(s, deps, cwd, shell, named);
     for (const d of found) {
       if (d.action === "deny" && !denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope)) denies.push(d);
     }
