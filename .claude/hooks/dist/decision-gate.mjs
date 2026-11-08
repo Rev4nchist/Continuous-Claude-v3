@@ -470,7 +470,7 @@ var isPushOnlyLabel = (label) => /^Push only(?: \(Recommended\))?$/.test(label);
 var deny = (pattern, why, scope = "other") => ({ action: "deny", pattern, scope, reason: `BLOCKED (decision-gate): ${why}` });
 var openPrWhy = (branch, head) => `no "open-pr" decision from Dave for ${branch} at ${head.slice(0, 7)}. Ask him first: run node scripts/github/ship-ask.mjs open-pr --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then open the PR only if he taps "Open draft PR".`;
 var landWhy = (pr) => `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
-var pushWhy = (branch) => `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap.`;
+var pushWhy = (branch) => `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 var PUSH_UNSAFE_WHY = "a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave's tap. Push without that option. If it is really needed, ask Dave to run it himself.";
 var PUSH_ORIGIN_WHY = "a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.";
 var pushUnresolvedWhy = (what) => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
@@ -740,9 +740,25 @@ function segmentKind(ms, rs) {
   return read && read.opts.trim() === "" ? "read" : "other";
 }
 function commitPrecedesPush(raw, shell) {
+  const segs = segmentsOf(raw, shell);
+  if (segs === null) return false;
+  const { seq, before } = segs;
+  const firstCommit = seq.indexOf("commit");
+  const lastPush = seq.lastIndexOf("push");
+  const firstPush = seq.indexOf("push");
+  if (seq.includes("other") || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf("commit") > firstPush) return false;
+  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== "&&")) return false;
+  const cds = seq.flatMap((k, i) => k === "cd" ? [i] : []);
+  return cds.length === 0 || cds.length === 1 && cds[0] < firstCommit;
+}
+function pushesAlone(raw, shell) {
+  const segs = segmentsOf(raw, shell);
+  return segs !== null && segs.seq.includes("push") && segs.seq.every((k) => k === "cd" || k === "push" || k === "read");
+}
+function segmentsOf(raw, shell) {
   const view = joinContinuations(raw, shell);
   const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
-  if (masked.includes("|") || /(?<!&)&(?!&)/.test(masked)) return false;
+  if (masked.includes("|") || /(?<!&)&(?!&)/.test(masked)) return null;
   const seq = [];
   const before = [];
   let from = 0;
@@ -758,13 +774,7 @@ function commitPrecedesPush(raw, shell) {
     pending += masked.slice(start, next);
     from = next;
   }
-  const firstCommit = seq.indexOf("commit");
-  const lastPush = seq.lastIndexOf("push");
-  const firstPush = seq.indexOf("push");
-  if (seq.includes("other") || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf("commit") > firstPush) return false;
-  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== "&&")) return false;
-  const cds = seq.flatMap((k, i) => k === "cd" ? [i] : []);
-  return cds.length === 0 || cds.length === 1 && cds[0] < firstCommit;
+  return { seq, before };
 }
 var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pwsh" : "bash";
 var ALLOW = { action: "allow" };
@@ -796,7 +806,7 @@ function remoteKind(remote) {
   if (r === "origin" || r.includes("parcadei")) return "origin";
   return r === "fork" || r.includes(CCV3_REPO) ? "fork" : null;
 }
-function judgePush(shape, deps, dir, subagent, chained) {
+function judgePush(shape, deps, dir, subagent, chained, alone) {
   const p = shape.push;
   const d = (pattern, why) => deny(pattern, why, "push");
   if (p.moved) return d("push-target-unresolved", pushUnresolvedWhy("--git-dir or --work-tree moves the repo, so the checkout is unknown"));
@@ -830,7 +840,7 @@ function judgePush(shape, deps, dir, subagent, chained) {
   if (r.status !== 0) return d("push-tree-unresolved", `cannot read the tree of ${viaIndex ? "the index (git write-tree)" : ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
   const tree = r.stdout.trim();
   const key = decisionKey2({ branch });
-  const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && (isShipLabel(row.label) || !viaIndex && isPushOnlyLabel(row.label)) && row.tree !== null && row.tree === tree);
+  const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label)) && row.tree !== null && row.tree === tree);
   return ok ? ALLOW : d("ship", pushWhy(branch));
 }
 function judgeCommand(input, deps) {
@@ -848,8 +858,9 @@ function judgeCommand(input, deps) {
   const dir = workDir(cmd.text, cwd, shell);
   const named = namedRepo(cmd.text, deps.env);
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
+  const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, s.push.dir === null ? dir : resolveDir(dir, s.push.dir, shell), Boolean(input.agent_id), chained) : judgeLand(s, deps, dir, named);
+    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, s.push.dir === null ? dir : resolveDir(dir, s.push.dir, shell), Boolean(input.agent_id), chained, alone) : judgeLand(s, deps, dir, named);
     if (d.action === "deny") denies.push(d);
   }
   return denies;
