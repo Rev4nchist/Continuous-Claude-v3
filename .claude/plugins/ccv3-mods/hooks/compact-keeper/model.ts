@@ -78,6 +78,22 @@ export const markerKept = (texts: readonly string[], sessionId: string, open: nu
   return false
 }
 
+/**
+ * The one line the person sees after a manual compaction. The lost line makes no claim about the plan: a missing marker
+ * can mean the summary dropped the whole keep-list, and the counts it carried may be 0 of 0.
+ */
+export const keeperResultLine = (kept: boolean, open: number, total: number): string =>
+  kept ? `Keeper: marker kept (open ${open} of ${total})` : 'Keeper: marker lost, the summary may have dropped the keep-list'
+
+/** Hands `line` to the message sink (the engine's toast). A sink that throws changes nothing: the compaction stands. */
+export const sayResult = (sink: (line: string) => void, line: string): void => {
+  try {
+    sink(line)
+  } catch {
+    // The line is lost; the compaction stands.
+  }
+}
+
 /** Compactions kept in the record: the newest ones. */
 export const MAX_RECORDS = 10
 

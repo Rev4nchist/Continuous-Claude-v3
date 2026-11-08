@@ -8,7 +8,7 @@ import { previousFromClear, readIdentity } from './shared/session-identity.js';
 
 interface SessionStartInput {
   type?: 'startup' | 'resume' | 'clear' | 'compact';  // Legacy field
-  source?: 'startup' | 'resume' | 'clear' | 'compact'; // Per docs
+  source?: 'startup' | 'resume' | 'clear' | 'compact' | 'cli'; // Per docs; 'cli' is the fallback this hook sets when stdin is empty
   session_id: string;
   cwd?: string;
 }

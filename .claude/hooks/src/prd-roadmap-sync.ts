@@ -46,8 +46,9 @@ interface PostToolUseInput {
 }
 
 interface HookOutput {
-  result: 'continue' | 'block';
+  result?: 'continue' | 'block';
   message?: string;
+  hookSpecificOutput?: { hookEventName: string; additionalContext: string };
 }
 
 interface PRDMetadata {

@@ -14,7 +14,7 @@ import {
   redactCommand,
   responseText,
   rotateIfNeeded,
-} from '../msys-crash-capture';
+} from '../msys-crash-capture.js';
 
 const HOOK = resolve(__dirname, '../../dist/msys-crash-capture.mjs');
 const SESSION_ID = 'msystest-0000-0000-0000-000000000000';

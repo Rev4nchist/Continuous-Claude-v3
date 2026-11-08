@@ -390,6 +390,18 @@ describe('keeperSentence', () => {
     expect(keeperSentence(five)).toEqual({ text: 'The plan keeper failed 3 of 5 times. Consider removing it.', kill: true })
   })
 
+  test('W9 an empty session (0 of 0) with a lost marker never claims a lost plan, and a kept one never claims a kept plan', () => {
+    const empty = (kept: boolean): KeeperRecord => ({ at: 1, sessionId: 's1', open: 0, total: 0, kept })
+    const lost = keeperSentence([empty(false)])
+    expect(lost?.text).toBe('The last summary lost the keeper marker.')
+    expect(lost?.text).not.toContain('plan')
+    expect(keeperSentence([empty(true)])?.text).toBe('The last summary kept the keeper marker.')
+  })
+
+  test('W9 a session that had tasks (open or all done) still reads plan loss', () => {
+    expect(keeperSentence([{ at: 1, sessionId: 's1', open: 0, total: 3, kept: false }])?.text).toBe('The last summary lost the plan.')
+  })
+
   test('W8 2 of 5 lost does not set the kill rule; an old loss outside the newest 5 does not count', () => {
     const two = [rec(1, false), rec(2, true), rec(3, false), rec(4, true), rec(5, true)]
     expect(keeperSentence(two)?.kill).toBe(false)

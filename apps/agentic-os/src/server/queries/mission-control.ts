@@ -7,6 +7,7 @@ import {
   getFleetSessions,
   getHeldLanes,
   type FleetSessions,
+  type HeldLane,
   type PrRow,
   type ReadyItem,
   type SessionCard,
@@ -158,14 +159,16 @@ export async function getMissionControlSnapshot(
     ? databaseRaw
     : { ok: false, error: safeMessage(databaseRaw.error) };
 
-  const heldByOwner = heldLanes.ok ? heldLanes.value : new Map<string, string[]>();
+  const heldByOwner = heldLanes.ok ? heldLanes.value : new Map<string, HeldLane[]>();
+  // The session detail takes lane ids only.
+  const laneIdsByOwner = new Map([...heldByOwner].map(([owner, held]) => [owner, held.map((lane) => lane.id)]));
   const stateFiles = files.ok ? files.value : NO_FILES;
   const nowMs = Date.now();
   const [joined, detailResult] = await Promise.all([
     settle(() => getFleetSessions(active, stateFiles, nowMs, heldByOwner)),
     sessionId === null
       ? Promise.resolve(null)
-      : settle(() => getSessionDetail(sessionId, stateFiles, heldByOwner, nowMs)),
+      : settle(() => getSessionDetail(sessionId, stateFiles, laneIdsByOwner, nowMs)),
   ]);
   const sessions = joined.ok ? joined.value : NO_FLEET;
 

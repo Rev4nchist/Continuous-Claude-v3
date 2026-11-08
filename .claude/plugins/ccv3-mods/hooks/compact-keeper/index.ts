@@ -3,14 +3,15 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { KeeperRecord, OsLane, OsPlan, OsTask, PrWatch } from '../../types'
 import { keeperFacts } from './facts'
-import { addRecord, compactBlock, markerKept, openCounts } from './model'
+import { addRecord, compactBlock, keeperResultLine, markerKept, openCounts, sayResult } from './model'
 
 // Compact keeper (M4). A manual /compact asks the summarizer to keep this session's plan, open tasks, lane and
 // watched PRs, a fixed keep-list (decisions, paths, the failing test, the handoff, what was run), the facts
 // (git branch, session label, this session's newest handoff), and to copy one marker line. Only the person's /compact:
 // the mod never compacts by itself.
 // The atoms are the Agentic OS ones (declared there under the same keys); this module only reads them, except `compactions`:
-// after the compaction it records whether the summary (the first message of the result) kept the marker. The record is an observer.
+// after the compaction it records whether the summary (the first message of the result) kept the marker, and shows the person one toast with
+// the answer. The record and the toast are observers.
 
 const tasks = atom({ plugin: 'ccv3-mods', key: 'tasks' } as const, [] as OsTask[])
 const plan = atom({ plugin: 'ccv3-mods', key: 'plan' } as const, null as OsPlan | null)
@@ -49,6 +50,8 @@ export const compactKeeper = (on: On) => {
         const { open, total } = openCounts(view.tasks)
         // Only the summary (the first message) counts: a kept message may hold an earlier summary's marker.
         const kept = markerKept(result.messages.slice(0, 1).map(one => one.text), sessionId, open, total)
+        // The person sees one line before the record is written, so a failed record does not hide it. A toast leaves the transcript and the model alone.
+        sayResult(line => $.ui.toast(line, { timeoutMs: 15_000 }), keeperResultLine(kept, open, total))
         const at = await $.clock.now()
         await update($, compactions, list => addRecord(list, { at, sessionId, open, total, kept }))
       } catch {

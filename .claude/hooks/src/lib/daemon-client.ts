@@ -161,6 +161,7 @@ export interface DaemonResponse {
   results?: any[];
   result?: any;
   callers?: any[];
+  imports?: any[];
   error?: string;
   indexing?: boolean;
   message?: string;

@@ -470,7 +470,7 @@ var isPushOnlyLabel = (label) => /^Push only(?: \(Recommended\))?$/.test(label);
 var deny = (pattern, why, scope = "other") => ({ action: "deny", pattern, scope, reason: `BLOCKED (decision-gate): ${why}` });
 var openPrWhy = (branch, head) => `no "open-pr" decision from Dave for ${branch} at ${head.slice(0, 7)}. Ask him first: run node scripts/github/ship-ask.mjs open-pr --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then open the PR only if he taps "Open draft PR".`;
 var landWhy = (pr) => `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
-var pushWhy = (branch) => `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap.`;
+var pushWhy = (branch) => `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 var PUSH_UNSAFE_WHY = "a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave's tap. Push without that option. If it is really needed, ask Dave to run it himself.";
 var PUSH_ORIGIN_WHY = "a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.";
 var pushUnresolvedWhy = (what) => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
@@ -554,7 +554,7 @@ var MOVE_OPT_RE = /(?:^|\s)--(?:git-dir|work-tree)(?:=|\s)/;
 var REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
 var VALUE_OPTS = /* @__PURE__ */ new Set(["--repo", "--receive-pack", "--exec", "--push-option", "-o"]);
 var FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
-function pushCallsOf(masked, raw, atStart) {
+function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, loose: false }) {
   const calls = [];
   const kinds = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -565,7 +565,14 @@ function pushCallsOf(masked, raw, atStart) {
       const optsStart = tokenStart + m[2].length;
       const end = m.index + m[0].length;
       const cut = masked.slice(end).search(ARGS_END_RE);
-      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut) });
+      const own = cdsBefore(masked.slice(0, tokenStart), raw.slice(0, tokenStart));
+      calls.push({
+        opts: raw.slice(optsStart, optsStart + m[3].length),
+        args: raw.slice(end, cut < 0 ? raw.length : end + cut),
+        cds: [...before.cds, ...own.cds],
+        loose: before.loose || own.loose,
+        unknown: before.unknown || own.unknown
+      });
     }
   }
   return calls;
@@ -574,14 +581,17 @@ function pushCallsIn(raw) {
   const bash = joinContinuations(raw, "bash");
   const pwsh = joinContinuations(raw, "pwsh");
   const maskedBash = maskQuoted(bash, "Bash");
+  const maskedPwshOnBash = maskQuoted(bash, "PowerShell");
   const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskQuoted(pwsh, "PowerShell"), pwsh, false)];
   let from = 0;
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]);
   for (const [start, next] of [...breaks, [bash.length, bash.length]]) {
     const seg = bash.slice(from, start);
+    const lists = [cdsBefore(maskedBash.slice(0, from), bash.slice(0, from)), cdsBefore(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
     from = next;
     const squashed = squashQuotes(seg);
-    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true));
+    if (squashed === seg) continue;
+    for (const before of distinctWheres(lists)) calls.push(...pushCallsOf(squashed, squashed, true, before));
   }
   return calls;
 }
@@ -618,7 +628,7 @@ function pushShapesFrom(call) {
   }
   if (quiet) return [];
   const [remote = null, ...specs] = positional;
-  const base = { remote, dir, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  const base = { remote, dir, cds: call.cds, loose: call.loose, unknown: call.unknown, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
   if (specs.length === 0) return [{ kind: "push", pr: null, push: { ...base, branch: null, src: null, force } }];
   const out2 = [];
   for (let i = 0; i < specs.length; i++) {
@@ -650,7 +660,7 @@ function pushShapesOf(raw) {
   for (const call of pushCallsIn(raw)) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push;
-      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved].join("|");
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.loose, p.unknown, p.cds.join("\0")].join("|");
       if (!seen.has(id)) {
         seen.add(id);
         out2.push(shape);
@@ -659,22 +669,57 @@ function pushShapesOf(raw) {
   }
   return out2;
 }
+function cmdSegments(view) {
+  const out2 = [];
+  let from = 0;
+  for (const m of view.matchAll(new RegExp(SEGMENT_RE.source, "g"))) {
+    out2.push({ seg: view.slice(from, m.index), from });
+    from = m.index + m[0].length;
+  }
+  out2.push({ seg: view.slice(from), from });
+  return out2;
+}
+var whereId = (at) => `${at.unknown ? "?" : ""}${at.loose ? "~" : ""}${at.cds.join("\0")}`;
+var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 function shapesOf(raw) {
   const text = normalizeGh(raw);
-  const bash = joinContinuations(text, "bash");
-  const pwsh = joinContinuations(text, "pwsh");
+  const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const out2 = [];
-  if (isPrOpenCommand(text)) out2.push({ kind: "create", pr: null });
   const seen = /* @__PURE__ */ new Set();
-  for (const t of [bash, pwsh, squashQuotes(bash)]) {
-    for (const seg of t.split(SEGMENT_RE)) {
-      for (const shape of landShapesOf(seg)) {
-        const id = `${shape.kind}|${shape.pr}|${shape.sha}`;
-        if (!seen.has(id)) {
-          seen.add(id);
-          out2.push(shape);
+  const add = (shape, id) => {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out2.push(shape);
+    }
+  };
+  let created = false;
+  for (const view of views) {
+    const reads = ["Bash", "PowerShell"].map((tool) => {
+      const masked = maskQuoted(view, tool);
+      return { masked, pos: cdPositions(masked, view) };
+    });
+    for (const { seg, from } of cmdSegments(view)) {
+      const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
+      for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
+        for (const shape of landShapesOf(s)) {
+          for (const at of wheres) add({ ...shape, at }, `${shape.kind}|${shape.pr}|${shape.sha}|${whereId(at)}`);
         }
       }
+      if (!isPrOpenText(seg)) continue;
+      created = true;
+      for (const { masked } of reads) {
+        const cut = masked.slice(from).search(SEGMENT_RE);
+        const to = cut < 0 ? view.length : from + cut;
+        const own = view.slice(from, to);
+        for (const at of wheres) add({ kind: "create", pr: null, at, text: own, mtext: masked.slice(from, to) }, `create|${whereId(at)}|${own}`);
+      }
+    }
+  }
+  if (!created && isPrOpenCommand(text)) {
+    const view = views[0];
+    const masked = maskQuoted(view, "Bash");
+    for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
+      add({ kind: "create", pr: null, at, text: view, mtext: masked }, `create|${whereId(at)}|${view}`);
     }
   }
   out2.push(...pushShapesOf(raw));
@@ -684,14 +729,39 @@ var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisi
 var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
 var enforcingScope = (scope, deps, cwd) => scope === "push" ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
 var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce" };
-var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i;
+var CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)`;
 var gitBashPath = (p) => process.platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
-function workDir(text, cwd, shell) {
-  const m = CD_TARGET.exec(text);
-  if (!m) return cwd;
-  const raw = m[1].replace(/^["']|["']$/g, "");
+function moveTo(base, target, shell) {
+  const raw = target.replace(/^["']|["']$/g, "");
   const t = shell === "bash" ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+}
+var cdsBefore = (masked, raw) => whereAt(cdPositions(masked, raw), masked.length);
+function looseJoin(between) {
+  const joiners = between.match(/&&|\|\||[;&|\r\n]/g) ?? [];
+  return !(joiners.length > 0 && joiners.every((j) => j === "&&"));
+}
+var UNKNOWN_CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:cd|Set-Location|sl|pushd|Push-Location)(?:[ \t]+[-+])?[ \t]*(?=[;&|\r\n]|$))`;
+function cdPositions(masked, raw) {
+  const cds = [];
+  for (const m of masked.matchAll(new RegExp(CD_SOURCE, "gi"))) {
+    const end = m.index + m[0].length;
+    const target = raw.slice(end - m[1].length, end);
+    if (!/^[-+]$/.test(target)) cds.push({ end, target, piped: m[0].startsWith("|") });
+  }
+  const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, "gi"))].map((m) => m.index + m[0].length);
+  return { cds, unknown, masked };
+}
+function whereAt(pos, from) {
+  const before = pos.cds.filter((c) => c.end <= from);
+  return {
+    cds: before.map((c) => c.target),
+    unknown: pos.unknown.some((end) => end <= from),
+    loose: before.some((c) => c.piped || looseJoin(pos.masked.slice(c.end, from)))
+  };
+}
+function pushDir(cwd, cds, shell) {
+  return cds.reduce((dir, target) => moveTo(dir, target, shell), cwd);
 }
 function isCcv3Checkout(deps, dir) {
   const r = deps.git(dir, ["remote", "-v"]);
@@ -702,9 +772,19 @@ function isCcv3Checkout(deps, dir) {
     return m !== null && m[1].toLowerCase() === CCV3_REPO;
   });
 }
-function headBranch(text, deps, dir) {
-  const named = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(text) ?? (/\bgh\s+pr\s+create\b/i.test(text) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(text) : null);
-  if (named) return named[1].replace(/^[^:\s]+:/, "").replace(/["']+$/, "");
+var HEAD_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/g;
+var HEAD_FLAG_RE = /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/g;
+var PR_CREATE_CMD_RE = /\bgh\s+pr\s+create\b/i;
+function unquotedFlagValue(re, text, mtext) {
+  for (const m of text.matchAll(re)) {
+    const at = m.index + m[0].search(/\S/);
+    if (mtext[at] === text[at]) return m[1];
+  }
+  return null;
+}
+function headBranch(text, mtext, deps, dir) {
+  const named = unquotedFlagValue(HEAD_FIELD_RE, text, mtext) ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+  if (named) return named.replace(/^[^:\s]+:/, "").replace(/["']+$/, "");
   const r = deps.git(dir, ["branch", "--show-current"]);
   if (r.status !== 0) throw new Error("git branch --show-current failed");
   return r.stdout.trim();
@@ -740,9 +820,25 @@ function segmentKind(ms, rs) {
   return read && read.opts.trim() === "" ? "read" : "other";
 }
 function commitPrecedesPush(raw, shell) {
+  const segs = segmentsOf(raw, shell);
+  if (segs === null) return false;
+  const { seq, before } = segs;
+  const firstCommit = seq.indexOf("commit");
+  const lastPush = seq.lastIndexOf("push");
+  const firstPush = seq.indexOf("push");
+  if (seq.includes("other") || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf("commit") > firstPush) return false;
+  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== "&&")) return false;
+  const cds = seq.flatMap((k, i) => k === "cd" ? [i] : []);
+  return cds.length === 0 || cds.length === 1 && cds[0] < firstCommit;
+}
+function pushesAlone(raw, shell) {
+  const segs = segmentsOf(raw, shell);
+  return segs !== null && segs.seq.includes("push") && segs.seq.every((k) => k === "cd" || k === "push" || k === "read");
+}
+function segmentsOf(raw, shell) {
   const view = joinContinuations(raw, shell);
   const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
-  if (masked.includes("|") || /(?<!&)&(?!&)/.test(masked)) return false;
+  if (masked.includes("|") || /(?<!&)&(?!&)/.test(masked)) return null;
   const seq = [];
   const before = [];
   let from = 0;
@@ -758,20 +854,15 @@ function commitPrecedesPush(raw, shell) {
     pending += masked.slice(start, next);
     from = next;
   }
-  const firstCommit = seq.indexOf("commit");
-  const lastPush = seq.lastIndexOf("push");
-  const firstPush = seq.indexOf("push");
-  if (seq.includes("other") || firstCommit < 0 || firstPush < 0 || seq.lastIndexOf("commit") > firstPush) return false;
-  if (before.slice(firstCommit + 1, lastPush + 1).some((op) => op !== "&&")) return false;
-  const cds = seq.flatMap((k, i) => k === "cd" ? [i] : []);
-  return cds.length === 0 || cds.length === 1 && cds[0] < firstCommit;
+  return { seq, before };
 }
 var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pwsh" : "bash";
 var ALLOW = { action: "allow" };
-function judgeCreate(text, deps, dir, named) {
+function judgeCreate(text, mtext, deps, dir, named) {
   if (named !== CCV3_REPO && !isCcv3Checkout(deps, dir)) return ALLOW;
-  const branch = headBranch(text, deps, dir);
-  if (branch === "" || branch === "main") return ALLOW;
+  const branch = headBranch(text, mtext, deps, dir);
+  if (branch === "") return deny("head-unresolved", `the head branch of this create cannot be named in ${dir} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo on a branch.`);
+  if (branch === "main") return ALLOW;
   const r = deps.git(dir, ["rev-parse", `${branch}^{commit}`]);
   if (r.status !== 0) return deny("head-unresolved", `cannot read the head of ${branch} in ${dir}, so its open-pr decision cannot be found. Run the command again from the repo.`);
   const head = r.stdout.trim();
@@ -791,12 +882,37 @@ function resolveDir(base, raw, shell) {
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
+function dirsAfter(cwd, cds, shell, loose, dir = null) {
+  const dirs = cds.length === 0 ? [cwd] : [...loose ? [cwd] : [], ...cds.map((_, i) => pushDir(cwd, cds.slice(0, i + 1), shell))];
+  return [...new Set(dirs.map((d) => dir === null ? d : resolveDir(d, dir, shell)))];
+}
+var pushDirsOf = (p, cwd, shell) => dirsAfter(cwd, p.cds, shell, p.loose, p.dir);
+var POSITION_WHY = "popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, so the checkout this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd.";
+function judgeAt(s, deps, cwd, shell, named) {
+  const at = s.at;
+  const dirs = dirsAfter(cwd, at.cds, shell, at.loose);
+  if (at.unknown && s.kind !== "land") {
+    const ccv3 = named === CCV3_REPO || [.../* @__PURE__ */ new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
+    return ccv3 ? [deny("position-unknown", POSITION_WHY)] : [];
+  }
+  return dirs.map((d) => s.kind === "create" ? judgeCreate(s.text, s.mtext, deps, d, named) : judgeLand(s, deps, d, named));
+}
+function judgePushAt(s, deps, cwd, shell, subagent, chained, alone) {
+  const p = s.push;
+  const dirs = pushDirsOf(p, cwd, shell);
+  const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
+  if (p.unknown && !fixedByDir) {
+    const ccv3 = [.../* @__PURE__ */ new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
+    if (ccv3) return [deny("position-unknown", POSITION_WHY, "push")];
+  }
+  return dirs.map((d) => judgePush(s, deps, d, subagent, chained, alone));
+}
 function remoteKind(remote) {
   const r = remote.toLowerCase();
   if (r === "origin" || r.includes("parcadei")) return "origin";
   return r === "fork" || r.includes(CCV3_REPO) ? "fork" : null;
 }
-function judgePush(shape, deps, dir, subagent, chained) {
+function judgePush(shape, deps, dir, subagent, chained, alone) {
   const p = shape.push;
   const d = (pattern, why) => deny(pattern, why, "push");
   if (p.moved) return d("push-target-unresolved", pushUnresolvedWhy("--git-dir or --work-tree moves the repo, so the checkout is unknown"));
@@ -830,7 +946,7 @@ function judgePush(shape, deps, dir, subagent, chained) {
   if (r.status !== 0) return d("push-tree-unresolved", `cannot read the tree of ${viaIndex ? "the index (git write-tree)" : ref} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`);
   const tree = r.stdout.trim();
   const key = decisionKey2({ branch });
-  const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && (isShipLabel(row.label) || !viaIndex && isPushOnlyLabel(row.label)) && row.tree !== null && row.tree === tree);
+  const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label)) && row.tree !== null && row.tree === tree);
   return ok ? ALLOW : d("ship", pushWhy(branch));
 }
 function judgeCommand(input, deps) {
@@ -845,12 +961,14 @@ function judgeCommand(input, deps) {
   const rest = input.agent_id ? [] : shapes.filter((s) => s.kind !== "push");
   if (pushes.length === 0 && rest.length === 0) return denies;
   const shell = shellOf(input);
-  const dir = workDir(cmd.text, cwd, shell);
   const named = namedRepo(cmd.text, deps.env);
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
+  const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const d = s.kind === "create" ? judgeCreate(cmd.text, deps, dir, named) : s.kind === "push" ? judgePush(s, deps, s.push.dir === null ? dir : resolveDir(dir, s.push.dir, shell), Boolean(input.agent_id), chained) : judgeLand(s, deps, dir, named);
-    if (d.action === "deny") denies.push(d);
+    const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, Boolean(input.agent_id), chained, alone) : judgeAt(s, deps, cwd, shell, named);
+    for (const d of found) {
+      if (d.action === "deny" && !denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope)) denies.push(d);
+    }
   }
   return denies;
 }
