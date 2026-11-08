@@ -63,7 +63,9 @@ async function main() {
       encoding: "utf-8",
       timeout: 5e3,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: isWindows ? "cmd.exe" : true
+      // execSync takes a shell path, not true. undefined keeps its default (/bin/sh on Unix),
+      // which is what `shell: true` selected.
+      shell: isWindows ? "cmd.exe" : void 0
     });
     if (result && !result.includes("No results") && result.trim().length > 20) {
       const truncated = sanitizeMemoryContent(result, 1500);
