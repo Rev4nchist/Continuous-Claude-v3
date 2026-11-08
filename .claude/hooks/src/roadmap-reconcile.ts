@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import { isCompactSource, parseSessionSource } from './shared/session-source.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -482,8 +483,12 @@ async function readStdin(): Promise<string> {
 async function main() {
   // Read stdin (SessionStart input)
   const input = await readStdin();
-  // SessionStart hooks receive { session_id, source/type }
-  // We don't need to parse it - just run reconciliation
+  // SessionStart hooks receive { session_id, source }. After /compact the roadmap
+  // was reconciled at this session's start: skip it.
+  if (isCompactSource(parseSessionSource(input))) {
+    console.log(JSON.stringify({}));
+    return;
+  }
 
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const result = reconcile(projectDir);
