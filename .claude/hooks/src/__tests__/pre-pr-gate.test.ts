@@ -365,6 +365,15 @@ describe('U: a cd target the hook cannot expand (D13)', () => {
     }
   });
 
+  it('U1b: hasUnexpandedPart flags a glob and a PowerShell expression (the shell resolves them, the hook cannot), not a plain path', () => {
+    for (const t of ['/c/u*', 'C:/x/[u]a', 'C:/x/u?', '(Resolve-Path', '(Join-Path', '@(1)', '`echo x`']) {
+      expect(hasUnexpandedPart(t), t).toBe(true);
+    }
+    for (const t of ['C:/x/ua', '/work/a b', 'C:\\x\\a\\']) {
+      expect(hasUnexpandedPart(t), t).toBe(false);
+    }
+  });
+
   it('U2: a PR create after `cd $var` is denied with a clear reason, writes no error row, and never runs git in the literal path', () => {
     for (const tool of ['Bash', 'PowerShell']) {
       for (const cd of ['cd $wt; ', 'Set-Location "$wt"; ', 'cd %WT% && ', 'pushd ~/proj; ']) {
@@ -2348,6 +2357,15 @@ describe.skipIf(process.platform !== 'win32')('pre-pr-gate: Git Bash /c/ paths',
 //   - `cd A && cd B && open` from B denies because A, an earlier step, has no stamp                    -> W-rows
 //   - `--head feat/x; cd B` reads the head `feat/x;`, `--body-file X; cd B` reads the file `X;`        -> W5
 //   - a cd target with a variable is not refused when it is the second cd, not the first               -> W6
+// fix/pre-pr-gate-cd-parity (the cd reading of decision-gate, PR #417):
+//   - `echo then cd B && open`, `echo { cd B && open`: the word is no command, the cd is read as a sure cd   -> CD_PARITY_ROWS (echo, Write-Output)
+//   - `(cd A && open )`, `x=$(cd A && open )`, backtick cd: the cd is not seen, the cwd alone is judged       -> CD_PARITY_ROWS (subshell), W18, W19
+//   - if / while / until / elif / time / ! before the cd, X=1 cd, \cd, eval cd, `$x = Set-Location`          -> CD_PARITY_ROWS (command positions)
+//   - `|&` then a comment line then the cd: the pipe is not seen, the cd reads as sure                       -> CD_PARITY_ROWS (|&)
+//   - Start-Job / Start-ThreadJob / pwsh / -Parallel block: the cd does not move the parent shell            -> CD_PARITY_ROWS (jobs)
+//   - Invoke-Command { cd B } with any parameter after the block runs the cd elsewhere                       -> CD_PARITY_ROWS (-ComputerName, -cn, -Session, -AsJob)
+//   - a PowerShell quoted folder with a trailing backslash is read as an escape                              -> CD_PARITY_ROWS (pinned)
+//   - `cd -P`, `cd --` have no folder; a partly quoted folder (`/work/"b"`) is read whole                    -> CD_PARITY_ROWS (position-unknown, quoted parts)
 describe('W: the folders a PR open may run in (cds before the open only)', () => {
   const A = '/work/a'; // a CCv3 checkout with no stamp
   const B = '/work/b'; // a CCv3 checkout with a valid stamp at the head
@@ -2370,14 +2388,193 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
       },
     };
   }
-  const run = (text: string, cwd: string) => decide(input(text, { cwd }), world());
-  const verdict = (text: string, cwd: string): string => {
-    const d = run(text, cwd);
+  type Tool = 'Bash' | 'PowerShell';
+  const run = (text: string, cwd: string, tool: Tool = 'Bash') => decide(input(text, { cwd, tool_name: tool }), world());
+  const verdict = (text: string, cwd: string, tool: Tool = 'Bash'): string => {
+    const d = run(text, cwd, tool);
     return d.action === 'deny' ? d.pattern : d.action;
   };
 
-  // [name, text builder, expected verdict per cwd]. A pair is [CLI form, API form].
-  type Row = [string, (o: string) => string, Record<string, string | [string, string]>];
+  // [name, text builder, expected verdict per cwd, tool]. A pair is [CLI form, API form]. The tool is Bash unless the row says PowerShell.
+  type Row = [string, (o: string) => string, Record<string, string | [string, string]>, Tool?];
+
+  // fix/pre-pr-gate-cd-parity: the cd reading of decision-gate (PR #417) ported to this gate. A cd the gate does not see runs the open in a folder it never judges.
+  //   SURE  = the open runs in X when the cd works and only `&&` joins them: X alone is judged.
+  //   LOOSE = the cd may be skipped, may not last, or runs elsewhere (a word that is no command, a subshell, a job, a remote block, a pipe): the cwd is judged too.
+  // Each form is run with X = A (unstamped) and X = B (stamped). Before the port the forms below were not read: the cd was missed or taken as sure (fail-open).
+  function CD_PARITY_ROWS(): Row[] {
+    const fill = (tpl: string, x: string, o: string): string => tpl.replaceAll('%X', x).replaceAll('%O', o);
+    const sure = (name: string, tpl: string, tool?: Tool): Row[] => [
+      [`${name} [X=A]`, (o) => fill(tpl, A, o), { B: 'stamp', C: 'stamp' }, tool],
+      [`${name} [X=B]`, (o) => fill(tpl, B, o), { A: 'allow', C: 'allow' }, tool],
+    ];
+    // From C the cwd is judged first: the API form (it names CCv3) is denied there as repo-identity before the stamp of A is read.
+    const loose = (name: string, tpl: string, tool?: Tool): Row[] => [
+      [`${name} [X=A]`, (o) => fill(tpl, A, o), { B: 'stamp', C: ['stamp', 'repo-identity'] }, tool],
+      [`${name} [X=B]`, (o) => fill(tpl, B, o), { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }, tool],
+    ];
+    const NL = '\n';
+    return [
+      // bash command positions: if / while / elif / time / a variable prefix / a backslash / a wrapper chain / eval
+      ...sure('if cd X && open; then :; fi', 'if cd %X && %O; then :; fi'),
+      ...sure('while cd X && open', 'while cd %X && %O; do break; done'),
+      ...sure('elif cd X && open', 'if false; then :; elif cd %X && %O; then :; fi'),
+      ...sure('time cd X && open', 'time cd %X && %O'),
+      ...sure('X=1 cd X && open', 'X=1 cd %X && %O'),
+      ...sure('\\cd X && open', '\\cd %X && %O'),
+      ...sure('command builtin cd X && open', 'command builtin cd %X && %O'),
+      ...sure('builtin command cd X && open', 'builtin command cd %X && %O'),
+      ...sure('eval cd X && open', 'eval cd %X && %O'),
+      ...loose('if cd X; then open; fi', 'if cd %X; then %O; fi'),
+      ...loose('until cd X; do :; done; open', 'until cd %X; do :; done; %O'),
+      ...loose('! cd X || open', '! cd %X || %O'),
+      ...loose('case x) cd X && open', 'case x in x) cd %X && %O;; esac'),
+      // a word that is no command position: `{`, then, else and do count only after a separator or an opener
+      ...loose('echo then cd X && open', 'echo then cd %X && %O'),
+      ...loose('echo else cd X && open', 'echo else cd %X && %O'),
+      ...loose('echo do cd X && open', 'echo do cd %X && %O'),
+      ...loose('echo { cd X && open', 'echo { cd %X && %O'),
+      ...loose('echo x{ cd X && open', 'echo x{ cd %X && %O'),
+      ...loose('Write-Output then cd X && open', 'Write-Output then cd %X && %O', 'PowerShell'),
+      ...loose('Write-Output { cd X } && open', 'Write-Output { cd %X } && %O', 'PowerShell'),
+      // a subshell, a command substitution and a backtick: the cd may not last, and the closing mark is no part of the folder
+      ...loose('(cd X) && open', '(cd %X) && %O'),
+      ...loose('(cd X && open )', '(cd %X && %O )'),
+      ...loose('x=$(cd X) && open', 'x=$(cd %X) && %O'),
+      ...loose('x=$(cd X && open )', 'x=$(cd %X && %O )'),
+      ...loose('x=`cd X` && open', 'x=`cd %X` && %O'),
+      ...loose('x=`cd X && open `', 'x=`cd %X && %O `'),
+      // |& with comment lines between the pipe and the cd
+      ...loose('echo x |&<nl># note<nl>cd X && open', `echo x |&${NL}# note${NL}cd %X && %O`),
+      ...loose('echo x |&<nl># one<nl># two<nl>cd X && open', `echo x |&${NL}# one${NL}# two${NL}cd %X && %O`),
+      ...loose('echo x |<nl># note<nl>cd X && open', `echo x |${NL}# note${NL}cd %X && %O`),
+      // PowerShell: a job or a parallel block runs its cd in another runspace or process; the parent shell stays put
+      ...loose('Start-Job { Set-Location X } && open', 'Start-Job { Set-Location %X } && %O', 'PowerShell'),
+      ...loose('Start-Job -ScriptBlock { Set-Location X } && open', 'Start-Job -ScriptBlock { Set-Location %X } && %O', 'PowerShell'),
+      ...loose('Start-ThreadJob { Set-Location X } && open', 'Start-ThreadJob { Set-Location %X } && %O', 'PowerShell'),
+      ...loose('ForEach-Object -Parallel { Set-Location X } && open', '1 | ForEach-Object -Parallel { Set-Location %X } && %O', 'PowerShell'),
+      ...loose('pwsh -Command { Set-Location X } && open', 'pwsh -NoProfile -Command { Set-Location %X } && %O', 'PowerShell'),
+      ...loose('Start-Job { Write-Host hi; Set-Location X } && open', 'Start-Job { Write-Host hi; Set-Location %X } && %O', 'PowerShell'),
+      ...loose('Start-Job { if ($true) { Set-Location X } } && open', 'Start-Job { if ($true) { Set-Location %X } } && %O', 'PowerShell'),
+      // PowerShell: the scriptblock of & and Invoke-Command runs in the current session, so its cd lasts (pinned)
+      ...sure('& { Set-Location X } && open', '& { Set-Location %X } && %O', 'PowerShell'),
+      ...sure('Invoke-Command { Set-Location X } && open', 'Invoke-Command { Set-Location %X } && %O', 'PowerShell'),
+      ...sure('icm { Set-Location X } && open', 'icm { Set-Location %X } && %O', 'PowerShell'),
+      // PowerShell: Invoke-Command names its target AFTER the block; any parameter after the block may send the cd elsewhere
+      ...loose('Invoke-Command { Set-Location X } -ComputerName localhost && open', 'Invoke-Command { Set-Location %X } -ComputerName localhost && %O', 'PowerShell'),
+      ...loose('Invoke-Command { Set-Location X } -Session $s && open', 'Invoke-Command { Set-Location %X } -Session $s && %O', 'PowerShell'),
+      ...loose('Invoke-Command { Set-Location X } -AsJob && open', 'Invoke-Command { Set-Location %X } -AsJob && %O', 'PowerShell'),
+      ...loose('icm -ScriptBlock { Set-Location X } -ComputerName srv && open', 'icm -ScriptBlock { Set-Location %X } -ComputerName srv && %O', 'PowerShell'),
+      ...loose('icm { Set-Location X } -cn srv && open', 'icm { Set-Location %X } -cn srv && %O', 'PowerShell'),
+      ...loose('Invoke-Command { Set-Location X } -Comp srv && open', 'Invoke-Command { Set-Location %X } -Comp srv && %O', 'PowerShell'),
+      ...loose('icm { Set-Location X } -CU http://srv && open', 'icm { Set-Location %X } -CU http://srv && %O', 'PowerShell'),
+      ...loose('icm { Set-Location X } -VMGuid $g && open', 'icm { Set-Location %X } -VMGuid $g && %O', 'PowerShell'),
+      // PowerShell: a comment block, an assignment and a module name before the cmdlet
+      ...loose('<# note #> Set-Location X; open', '<# note #> Set-Location %X; %O', 'PowerShell'),
+      ...loose('$null = Set-Location X; open', '$null = Set-Location %X; %O', 'PowerShell'),
+      ...loose('Microsoft.PowerShell.Management\\Set-Location X; open', 'Microsoft.PowerShell.Management\\Set-Location %X; %O', 'PowerShell'),
+      // PowerShell: a quoted folder may end in a backslash; it is not an escape (pinned: the gate read this right before the port)
+      // Only X = A: with X = B the shared shape reader (checkpoint-shapes) reads the `\"` as an escape and finds no --draft (non-draft, a soft over-deny; residual, out of this gate).
+      ['Set-Location "A\\" && open', (o) => `Set-Location "${A}\\" && ${o}`, { B: 'stamp', C: 'stamp' }, 'PowerShell'],
+      ["Set-Location 'A\\' && open", (o) => `Set-Location '${A}\\' && ${o}`, { B: 'stamp', C: 'stamp' }, 'PowerShell'],
+      // bash and PowerShell targets with a quoted part: one folder, read with the quote marks off
+      ['cd /work/"b" && open', (o) => `cd /work/"b" && ${o}`, { A: 'allow', C: 'allow' }],
+      ["cd /work/'b' && open", (o) => `cd /work/'b' && ${o}`, { A: 'allow', C: 'allow' }],
+      ["cd '/work'/b && open", (o) => `cd '/work'/b && ${o}`, { A: 'allow', C: 'allow' }],
+      ['cd "/work/b" && open', (o) => `cd "${B}" && ${o}`, { A: 'allow', C: 'allow' }],
+      ['Set-Location /work/"b" && open', (o) => `Set-Location /work/"b" && ${o}`, { A: 'allow', C: 'allow' }, 'PowerShell'],
+      // a cd option with no folder after it goes to a place the text does not name
+      ['cd -P && open', (o) => `cd -P && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: ['allow', 'position-unknown'] }],
+      ['cd -- && open', (o) => `cd -- && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: ['allow', 'position-unknown'] }],
+      ['cd -P - && open', (o) => `cd -P - && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: ['allow', 'position-unknown'] }],
+      ['cd B && cd -P && open', (o) => `cd ${B} && cd -P && ${o}`, { A: 'position-unknown', B: 'position-unknown', C: 'position-unknown' }],
+      // quoted text is no cd (pinned)
+      ['echo "(cd A)" && open', (o) => `echo "(cd ${A})" && ${o}`, { B: 'allow' }],
+    ];
+  }
+
+  // fix/pre-pr-gate-cd-parity, round 2 (two reviewers): the cd forms the first port still read as a sure cd, or did not read at all.
+  //   - a cd after a separator INSIDE an open `(`, `$(`, `<(` or backtick: `(true && cd X) && open` reads as a sure cd   -> subshell rows
+  //   - a closed `}` inside a job block (`if (1) {}`, `@{}`) hides the block from JOB_BLOCK; abbreviated -Pa / -Para       -> job rows
+  //   - Invoke-Command remote through a word BEFORE the block, an `&&` inside the block, a splat, a nested block        -> remote rows
+  //   - bash command positions: a redirect prefix, `command -p` / `command --` / `builtin --` / `time -p`, `Y+=1`        -> bash position rows
+  //   - a PowerShell target that ends in a backslash swallows the next `;`, `&&` or `|` (`\\.` read as an escape)         -> backslash rows
+  function CD_PARITY_ROUND2(): Row[] {
+    const fill = (tpl: string, x: string, o: string): string => tpl.replaceAll('%X', x).replaceAll('%O', o);
+    const sure = (name: string, tpl: string, tool?: Tool): Row[] => [
+      [`${name} [X=A]`, (o) => fill(tpl, A, o), { B: 'stamp', C: 'stamp' }, tool],
+      [`${name} [X=B]`, (o) => fill(tpl, B, o), { A: 'allow', C: 'allow' }, tool],
+    ];
+    const loose = (name: string, tpl: string, tool?: Tool): Row[] => [
+      [`${name} [X=A]`, (o) => fill(tpl, A, o), { B: 'stamp', C: ['stamp', 'repo-identity'] }, tool],
+      [`${name} [X=B]`, (o) => fill(tpl, B, o), { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }, tool],
+    ];
+    const PS: Tool = 'PowerShell';
+    return [
+      // a separator inside an open subshell: the cd may not last
+      ...loose('(true && cd X) && open', '(true && cd %X) && %O'),
+      ...loose('(true; cd X) && open', '(true; cd %X) && %O'),
+      ...loose('(npm run build && cd X) && open', '(npm run build && cd %X) && %O'),
+      ...loose('x=$(true; cd X) && open', 'x=$(true; cd %X) && %O'),
+      ...loose('echo $(true && cd X) && open', 'echo $(true && cd %X) && %O'),
+      ...loose('x=`true; cd X` && open', 'x=`true; cd %X` && %O'),
+      ...loose('cat <(true; cd X) && open', 'cat <(true; cd %X) && %O'),
+      ...loose('(true && (echo y); cd X) && open', '(true && (echo y); cd %X) && %O'),
+      ...loose('$d = (1; Set-Location X) && open', '$d = (1; Set-Location %X) && %O', PS),
+      // a subshell that closed before the cd does not make it loose
+      ...sure('(true; echo y); cd X && open', '(true; echo y); cd %X && %O'),
+      ...sure('x=$(echo y); cd X && open', 'x=$(echo y); cd %X && %O'),
+      ...sure('x=`echo y`; cd X && open', 'x=`echo y`; cd %X && %O'),
+      ...sure('$d = (Get-Date); Set-Location X && open', '$d = (Get-Date); Set-Location %X && %O', PS),
+      // a closed block inside a job block does not end the job block
+      ...loose('Start-Job { if (1) {}; Set-Location X } && open', 'Start-Job { if (1) {}; Set-Location %X } && %O', PS),
+      ...loose('Start-Job { $h = @{}; Set-Location X } && open', 'Start-Job { $h = @{}; Set-Location %X } && %O', PS),
+      ...loose('Start-Job { if ($true) { $null }; Set-Location X } && open', 'Start-Job { if ($true) { $null }; Set-Location %X } && %O', PS),
+      ...loose('Start-ThreadJob { foreach ($i in 1) {}; Set-Location X } && open', 'Start-ThreadJob { foreach ($i in 1) {}; Set-Location %X } && %O', PS),
+      ...loose('pwsh -Command { if (1) {}; Set-Location X } && open', 'pwsh -NoProfile -Command { if (1) {}; Set-Location %X } && %O', PS),
+      ...loose('-Parallel { if (1) {}; Set-Location X } && open', '1 | ForEach-Object -Parallel { if (1) {}; Set-Location %X } && %O', PS),
+      ...loose('Start-Job -ArgumentList @{a=1} -ScriptBlock { Set-Location X } && open', 'Start-Job -ArgumentList @{a=1} -ScriptBlock { Set-Location %X } && %O', PS),
+      // a job block that closed before the cd does not make it loose
+      ...sure('Start-Job { $null }; Set-Location X && open', 'Start-Job { $null }; Set-Location %X && %O', PS),
+      // abbreviated -Parallel and -AsJob
+      ...loose('% -Pa { $null; Set-Location X } && open', '1 | % -Pa { $null; Set-Location %X } && %O', PS),
+      ...loose('ForEach-Object -Para { $null; Set-Location X } && open', '1 | ForEach-Object -Para { $null; Set-Location %X } && %O', PS),
+      ...loose('ForEach-Object -AsJo { $null; Set-Location X } && open', '1 | ForEach-Object -AsJo { $null; Set-Location %X } && %O', PS),
+      // Invoke-Command: a word before the block, an && inside the block, a splat, a nested block
+      ...loose('Invoke-Command -ComputerName srv -ScriptBlock { $null; Set-Location X } && open', 'Invoke-Command -ComputerName srv -ScriptBlock { $null; Set-Location %X } && %O', PS),
+      ...loose('icm -cn srv { $null; Set-Location X } && open', 'icm -cn srv { $null; Set-Location %X } && %O', PS),
+      ...loose('Invoke-Command srv { $null; Set-Location X } && open', 'Invoke-Command srv { $null; Set-Location %X } && %O', PS),
+      ...loose('Invoke-Command -Session $s { $null; Set-Location X } && open', 'Invoke-Command -Session $s { $null; Set-Location %X } && %O', PS),
+      ...loose('Invoke-Command @p { Set-Location X } && open', 'Invoke-Command @p { Set-Location %X } && %O', PS),
+      ...loose('Invoke-Command { Set-Location X && $null } -cn srv && open', 'Invoke-Command { Set-Location %X && $null } -cn srv && %O', PS),
+      ...loose('Invoke-Command { Set-Location X } @p && open', 'Invoke-Command { Set-Location %X } @p && %O', PS),
+      ...loose('Invoke-Command { if (1) { Set-Location X } } -cn srv && open', 'Invoke-Command { if (1) { Set-Location %X } } -cn srv && %O', PS),
+      // a local scriptblock stays a sure cd (pinned)
+      ...sure('Invoke-Command -ScriptBlock { Set-Location X } && open', 'Invoke-Command -ScriptBlock { Set-Location %X } && %O', PS),
+      // bash command positions: a redirect prefix, an option after command / builtin / time, a += prefix
+      ...sure('2>/dev/null cd X && open', '2>/dev/null cd %X && %O'),
+      ...sure('>/dev/null cd X && open', '>/dev/null cd %X && %O'),
+      ...sure('</dev/null cd X && open', '</dev/null cd %X && %O'),
+      ...sure('true; >/dev/null cd X && open', 'true; >/dev/null cd %X && %O'),
+      ...sure('2>&1 cd X && open', '2>&1 cd %X && %O'),
+      ...sure('&>/dev/null cd X && open', '&>/dev/null cd %X && %O'),
+      ...sure('command -p cd X && open', 'command -p cd %X && %O'),
+      ...sure('command -- cd X && open', 'command -- cd %X && %O'),
+      ...sure('builtin -- cd X && open', 'builtin -- cd %X && %O'),
+      ...sure('time -p cd X && open', 'time -p cd %X && %O'),
+      ...sure('Y+=1 cd X && open', 'Y+=1 cd %X && %O'),
+      ...sure('Y=1 2>/dev/null cd X && open', 'Y=1 2>/dev/null cd %X && %O'),
+      // a PowerShell target that ends in a backslash: the next separator is a separator, not an escape
+      ...sure('Set-Location X\\&& open', 'Set-Location %X\\&& %O', PS),
+      ...sure('Set-Location X\\ && open', 'Set-Location %X\\ && %O', PS),
+      ...loose('Set-Location X\\; open', 'Set-Location %X\\; %O', PS),
+      ...loose('cd X\\; open', 'cd %X\\; %O', PS),
+      ...loose('Set-Location X\\|Out-Null; open', 'Set-Location %X\\|Out-Null; %O', PS),
+      // `popd` / bare cd behind the new bash prefixes is still an unknown folder
+      ['2>/dev/null cd && open', (o) => `2>/dev/null cd && ${o}`, { A: 'position-unknown', B: 'position-unknown' }],
+      ['command -- popd && open', (o) => `command -- popd && ${o}`, { A: 'position-unknown', B: 'position-unknown' }],
+    ];
+  }
   const ROWS: Row[] = [
     // fail-open rows: the folder the shell really uses has no stamp
     ['open; cd B', (o) => `${o}; cd ${B}`, { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }],
@@ -2445,15 +2642,17 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
     ['cd B && git push 2>&1; open', (o) => `cd ${B} && git push 2>&1; ${o}`, { A: 'stamp' }],
     ['cd B; open 2>&1', (o) => `cd ${B}; ${o} 2>&1`, { A: 'stamp' }],
     ['cd B 2>&1 & open', (o) => `cd ${B} 2>&1 & ${o}`, { A: 'stamp' }],
+    ...CD_PARITY_ROWS(),
+    ...CD_PARITY_ROUND2(),
   ];
   const cwds: Record<string, string> = { A, B, C };
 
   for (const [form, open] of [['CLI', CLI], ['API', API]] as const) {
-    for (const [name, build, expected] of ROWS) {
+    for (const [name, build, expected, tool] of ROWS) {
       for (const [cwdName, want] of Object.entries(expected)) {
         const exp = Array.isArray(want) ? want[form === 'CLI' ? 0 : 1] : want;
-        it(`W-${form}: from ${cwdName}, \`${name}\` is ${exp}`, () => {
-          expect(verdict(build(open), cwds[cwdName])).toBe(exp);
+        it(`W-${form}: from ${cwdName}, \`${name}\` is ${exp}${tool ? ` (${tool})` : ''}`, () => {
+          expect(verdict(build(open), cwds[cwdName], tool)).toBe(exp);
         });
       }
     }
@@ -2538,6 +2737,79 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
     const out = JSON.parse(handle(JSON.stringify(input(`cd $X && popd && ${CLI}`, { cwd: C })), world()));
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/cannot expand/);
+  });
+
+  it('W18: ACCEPTED over-deny, pinned: a cd in a subshell that closed before the open is loose, so the cwd and the cd folder are both judged', () => {
+    // The real folder is B (the subshell cd did not last); A is judged too and has no stamp. Fail closed, as decision-gate does.
+    expect(verdict(`(cd ${A}) && ${CLI}`, B)).toBe('stamp');
+    expect(verdict(`x=$(cd ${A}) && ${CLI}`, B)).toBe('stamp');
+  });
+
+  it('W19: the folder of a closed subshell is read without the `)`: a stamped folder in a subshell is judged at its own stamp', () => {
+    // `(cd B)`: the target is B, not "B)". Both folders (the cwd and B) are CCv3 here, so a wrongly read folder shows as a stamp deny from a stamped cwd.
+    expect(verdict(`(cd ${B}) && ${CLI}`, B)).toBe('allow');
+    expect(verdict(`x=\`cd ${B}\` && ${CLI}`, B)).toBe('allow');
+  });
+
+  // A world where a folder that is not A, B or C does not exist (git: DIR_NOT_FOUND), as in a real checkout. The shell may still resolve such a target (a glob, CDPATH, a PowerShell expression).
+  const missingWorld = (): Deps => {
+    const w = world();
+    return { ...w, git: (cwd, args) => { if (![A, B, C].includes(cwd)) throw Object.assign(new Error(`directory not found: ${cwd}`), { code: 'DIR_NOT_FOUND' }); return w.git(cwd, args); } };
+  };
+  const handleIn = (text: string, cwd: string, tool: Tool = 'Bash', d: Deps = missingWorld()) =>
+    JSON.parse(handle(JSON.stringify(input(text, { cwd, tool_name: tool })), d)).hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string } | undefined;
+
+  it('W20: a cd target the shell resolves but the hook reads as a missing folder (glob, CDPATH, a PowerShell expression) fails closed, also behind `;`', () => {
+    const cases: Array<[string, Tool]> = [
+      [`cd /work/u*; ${CLI}`, 'Bash'],
+      [`cd /work/[u]a; ${CLI}`, 'Bash'],
+      [`cd /work/u?; ${CLI}`, 'Bash'],
+      [`export CDPATH=/work; cd ua; ${CLI}`, 'Bash'],
+      [`CDPATH=/work cd ua; ${CLI}`, 'Bash'],
+      [`export CDPATH=/work; cd ua && ${CLI}`, 'Bash'],
+      [`Set-Location /work/u*; ${CLI}`, 'PowerShell'],
+      [`Set-Location (Resolve-Path /work/a); ${CLI}`, 'PowerShell'],
+      [`Set-Location (Join-Path /work a); ${CLI}`, 'PowerShell'],
+      [`Set-Location -Path (Join-Path /work a); ${CLI}`, 'PowerShell'],
+    ];
+    for (const [text, tool] of cases) {
+      const o = handleIn(text, B, tool);
+      expect(o?.permissionDecision, text).toBe('deny');
+      expect(o?.permissionDecisionReason, text).toMatch(/cannot expand/);
+    }
+  });
+
+  it('W20b: CDPATH changes only a relative cd; an absolute or ./ cd is read as written', () => {
+    expect(handleIn(`export CDPATH=/work; cd ${B} && ${CLI}`, A)).toBeUndefined();
+    expect(handleIn(`export CDPATH=/work; cd ${A} && ${CLI}`, B)?.permissionDecisionReason).toMatch(/no stamp/);
+    expect(handleIn(`export CDPATH=/work; cd ./nope; ${CLI}`, B)).toBeUndefined();
+    expect(handleIn(`cd ./nope; ${CLI}`, B)).toBeUndefined();
+  });
+
+  it('W20c: an env CDPATH makes a relative cd unknown too', () => {
+    const d = missingWorld();
+    const o = handleIn(`cd ua; ${CLI}`, B, 'Bash', { ...d, env: { CDPATH: '/work' } });
+    expect(o?.permissionDecisionReason).toMatch(/cannot expand/);
+    expect(handleIn(`cd ua; ${CLI}`, B, 'Bash', { ...d, env: { CDPATH: '' } })).toBeUndefined();
+  });
+
+  it('W21: a backtick command substitution as the cd target is not read, so it fails closed (cannot expand)', () => {
+    for (const text of [`cd \`echo ${A}\` && ${CLI}`, `cd ${B}\`echo x\` && ${CLI}`, `pushd \`echo ${A}\` && ${CLI}`]) {
+      const o = handleIn(text, B);
+      expect(o?.permissionDecision, text).toBe('deny');
+      expect(o?.permissionDecisionReason, text).toMatch(/cannot expand/);
+    }
+  });
+
+  it('W21b: ACCEPTED over-deny, pinned: a closing backtick that pairs with a later backtick reads as a command substitution in the target', () => {
+    // `x=`cd B` && y=`pwd` && open`: the closing backtick of the first pair and the opening one of the second look like a substitution inside the target. No lexer, so fail closed.
+    const o = handleIn(`x=\`cd ${B}\` && y=\`pwd\` && ${CLI}`, B);
+    expect(o?.permissionDecisionReason).toMatch(/cannot expand/);
+  });
+
+  it('W22: ACCEPTED over-deny, pinned: `! cd X && open` reads as a sure cd, so X is judged (real bash runs the open only when the cd failed)', () => {
+    expect(verdict(`! cd ${A} && ${CLI}`, B)).toBe('stamp');
+    expect(verdict(`! cd ${B} && ${CLI}`, A)).toBe('allow');
   });
 
   it('W13: an unknown folder does not stop the other denies: a non-CCv3 cwd and path still judge the known folders', () => {
