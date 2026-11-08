@@ -24,7 +24,7 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 var BUILD_INPUTS_NAME = ".build-inputs.json";
-var MANIFEST_MISSING_INFO = "[i] Hook dist freshness manifest missing (.build-inputs.json); not using mtime, so no stale warning. Run: cd ~/.claude/hooks && npm run build";
+var MANIFEST_MISSING_INFO = "[i] Hook dist freshness manifest missing (.build-inputs.json); not using mtime, so no stale warning. Run: cd ~/continuous-claude/.claude/hooks && npm run build";
 function sha256(content) {
   const text = (typeof content === "string" ? content : content.toString("utf8")).replace(/\r/g, "");
   return createHash("sha256").update(text).digest("hex");
@@ -89,7 +89,7 @@ function formatStaleDistWarning(srcRoot, result) {
   if (result.state !== "stale") return null;
   const names = result.staleFiles.slice(0, 3).map((file) => srcKey(srcRoot, file)).join(", ");
   const more = result.staleFiles.length > 3 ? `, +${result.staleFiles.length - 3} more` : "";
-  return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/.claude/hooks && npm run build`;
+  return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/continuous-claude/.claude/hooks && npm run build`;
 }
 
 // src/session-start-init-check.ts
