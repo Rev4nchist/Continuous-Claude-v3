@@ -630,14 +630,15 @@ describe('G3 git push to the fork', () => {
       expect(denied(bash(`cd ${OTHER_DIR}; ${PUSH}`), W)).toBe(false);
       expect(denied(pwsh(`Set-Location C:\\other; ${PUSH}`), W)).toBe(false);
     });
-    it('the last cd before the push wins: a cd back into the repo needs the tap', () => {
+    it('every folder on the cd path is judged: a cd back into the repo needs the tap, and with the tap both folders pass', () => {
       const cmd = `cd ${OTHER_DIR} && cd /repo && ${PUSH}`;
       expect(denied(bash(cmd), W)).toBe(true);
       shipTap();
       expect(denied(bash(cmd), W)).toBe(false);
     });
-    it('the last cd before the push wins: a cd out of the repo before the push passes it', () => {
-      expect(denied(bash(`cd /repo && cd ${OTHER_DIR} && ${PUSH}`), W)).toBe(false);
+    // A later cd may not run (|| short-circuit, a subshell, a failed cd), so the repo folder is still judged. See T15.
+    it('a cd out of the repo before the push no longer lets it pass: the cd may not run', () => {
+      expect(denied(bash(`cd /repo && cd ${OTHER_DIR} && ${PUSH}`), W)).toBe(true);
     });
     it('a cd after the push, with a cd back to the repo before it, still needs the tap', () => {
       const cmd = `cd ${OTHER_DIR}; cd /repo; ${PUSH}; cd ${OTHER_DIR}`;
@@ -653,7 +654,7 @@ describe('G3 git push to the fork', () => {
     it('a relative cd is resolved against the cwd, and a later relative cd is resolved against the earlier one', () => {
       const calls: GitCall[] = [];
       decide(bash('cd sub && cd deeper && git push fork feat/x; cd ../other'), deps({ calls }));
-      expect(cwdsOf(calls)).toEqual([resolve('/repo', 'sub', 'deeper')]);
+      expect(cwdsOf(calls)).toEqual([resolve('/repo', 'sub'), resolve('/repo', 'sub', 'deeper')]);
     });
     it('a squashed-quote push (g"i"t push) is placed by the cds before it', () => {
       expect(denied(bash(`g"i"t push fork feat/x; cd ${OTHER_DIR}`), W)).toBe(true);
@@ -665,16 +666,73 @@ describe('G3 git push to the fork', () => {
       shipTap();
       expect(denied(bash(cmd), W)).toBe(false);
     });
-    it('two pushes: the first in the CCv3 checkout needs the tap, the second in another folder does not', () => {
+    it('two pushes: the second runs after both cds, so the repo folder on its path needs its own tap too', () => {
       const cmd = `cd /repo && ${PUSH}; cd /tmp/other && git push fork feat/y`;
       expect(denied(bash(cmd), W)).toBe(true);
       shipTap();
-      expect(denied(bash(cmd), W)).toBe(false); // feat/y has no tap, and needs none in /tmp/other
+      expect(denied(bash(cmd), W)).toBe(true); // the second push may run in /repo (its cd may not run): feat/y has no tap
+      shipTap('feat/y', TREE, HEAD);
+      expect(denied(bash(cmd), { ...W, trees: { HEAD: TREE, 'feat/x': TREE, 'feat/y': TREE } })).toBe(false);
     });
     it('two identical pushes in different folders are two judgments', () => {
       const calls: GitCall[] = [];
       decide(bash(`cd /tmp/a && ${PUSH}; cd /tmp/b && ${PUSH}`), deps({ calls }));
       expect(cwdsOf(calls).sort()).toEqual(['/tmp/a', '/tmp/b']);
+    });
+  });
+
+  // T15: a cd in the text may never run, or may not last. The push is judged in EVERY folder on its cd path; one deny denies.
+  describe('T15 a cd that may not run does not hide the CCv3 folder', () => {
+    const OTHER_DIR = '/tmp/other-repo';
+    const W: World = { otherDirs: [OTHER_DIR, '/tmp/other', 'C:/other'] };
+    const OTHER_WIN = 'C:\\other';
+    // The payload cwd is a non-CCv3 folder under /repo, so the config is still found (the flag is read from the payload cwd).
+    const SUB = '/repo/sub';
+    const WSUB: World = { otherDirs: [...W.otherDirs!, SUB] };
+    it.each([
+      ['|| short-circuit', `cd /repo && true || cd ${OTHER_DIR}; ${PUSH}`],
+      ['&& after false', `cd /repo; false && cd ${OTHER_DIR}; ${PUSH}`],
+      ['subshell', `cd /repo && (true; cd ${OTHER_DIR}; true) && ${PUSH}`],
+      ['background', `cd /repo; cd ${OTHER_DIR} & ${PUSH}`],
+      ['pipe', `cd /repo && cd ${OTHER_DIR} | cat; ${PUSH}`],
+      ['comment', `cd /repo # ; cd ${OTHER_DIR}\n${PUSH}`],
+      ['heredoc body', `cd /repo\ncat <<EOF\ncd ${OTHER_DIR}\nEOF\n${PUSH}`],
+      ['cd with too many arguments', `cd /repo; cd ${OTHER_DIR} extra; ${PUSH}`],
+      ['function body', `cd /repo\nf() {\n  cd ${OTHER_DIR}\n}\n${PUSH}`],
+    ])('denies a push when the later cd is a %s: %s', (_name, cmd) => {
+      expect(denied(bash(cmd), W), cmd).toBe(true);
+    });
+    it('denies the PowerShell -WhatIf cd, which does not move', () => {
+      const cmd = `Set-Location /repo; cd ${OTHER_WIN} -WhatIf; ${PUSH}`;
+      expect(denied(pwsh(cmd), W), cmd).toBe(true);
+    });
+    it('judges the push in each folder on the path, never in the payload cwd when a cd comes first', () => {
+      const calls: GitCall[] = [];
+      decide(bash(`cd /aa && cd /bb && cd /cc && ${PUSH}`), deps({ calls }));
+      expect([...new Set(calls.map((c) => c.cwd))]).toEqual(['/aa', '/bb', '/cc']);
+    });
+    it('a push before any cd is judged only in the payload cwd', () => {
+      const calls: GitCall[] = [];
+      decide(bash(`${PUSH}; cd /a`), deps({ calls }));
+      expect([...new Set(calls.map((c) => c.cwd))]).toEqual(['/repo']);
+    });
+    it('allows the push when the tap covers every folder on the path', () => {
+      shipTap();
+      expect(denied(bash(`cd /repo && true || cd ${OTHER_DIR}; ${PUSH}`), W)).toBe(false);
+    });
+
+    // HOLE 2: \" escapes in bash, not in PowerShell. Each shell hides a different cd, so the squashed view reads cds under both masks.
+    it('denies a push when the real PowerShell cd into CCv3 is hidden from the bash mask', () => {
+      const cmd = `Write-Output "a\\"; cd /repo; Write-Output \\"b"; git "push" fork feat/x`;
+      expect(denied(pwsh(cmd, { cwd: SUB }), WSUB), cmd).toBe(true);
+    });
+    it('denies a push when a bash-visible fake cd to another folder follows the real PowerShell cd into CCv3', () => {
+      const cmd = 'cd /repo; Write-Output "a`"; cd ' + OTHER_DIR + '; echo `"b"; git "push" fork feat/x';
+      expect(denied(pwsh(cmd, { cwd: SUB }), WSUB), cmd).toBe(true);
+    });
+    it('denies a push when a bash-visible cd to another folder follows a PowerShell cd into CCv3 that the bash mask hides', () => {
+      const cmd = `Write-Output "a\\"; cd /repo; Write-Output \\"b"; cd ${OTHER_DIR}; git "push" fork feat/x`;
+      expect(denied(pwsh(cmd, { cwd: SUB }), WSUB), cmd).toBe(true);
     });
   });
 

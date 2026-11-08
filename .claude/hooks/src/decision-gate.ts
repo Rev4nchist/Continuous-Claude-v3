@@ -186,7 +186,7 @@ interface PushShape {
   src: string | null;
   /** The -C value, raw. */
   dir: string | null;
-  /** The cd targets (raw) that come before this push in the command text, in order. They set the folder git runs the push in. */
+  /** The cd targets (raw) that come before this push in the command text, in order. They may set the folder git runs the push in. A cd may not run, so the push is judged in the folder after each prefix (pushDirsOf). */
   cds: string[];
   /** A force or delete form (see FORCE_LONG). */
   force: boolean;
@@ -268,15 +268,18 @@ function pushCallsIn(raw: string): RawPush[] {
   const bash = joinContinuations(raw, 'bash');
   const pwsh = joinContinuations(raw, 'pwsh');
   const maskedBash = maskQuoted(bash, 'Bash');
+  const maskedPwshOnBash = maskQuoted(bash, 'PowerShell');
   const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskQuoted(pwsh, 'PowerShell'), pwsh, false)];
   let from = 0;
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const);
   for (const [start, next] of [...breaks, [bash.length, bash.length] as const]) {
     const seg = bash.slice(from, start);
-    const before = cdTargetsIn(maskedBash.slice(0, from), bash.slice(0, from));
+    // \" escapes in bash, not in PowerShell: each mask can hide a cd the other shows. Read the cds under both and keep each list that differs.
+    const lists = [cdTargetsIn(maskedBash.slice(0, from), bash.slice(0, from)), cdTargetsIn(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
     from = next;
     const squashed = squashQuotes(seg);
-    if (squashed !== seg) calls.push(...pushCallsOf(squashed, squashed, true, before));
+    if (squashed === seg) continue;
+    for (const before of lists.filter((l, i) => lists.findIndex((o) => o.join('\0') === l.join('\0')) === i)) calls.push(...pushCallsOf(squashed, squashed, true, before));
   }
   return calls;
 }
@@ -558,10 +561,14 @@ function resolveDir(base: string, raw: string, shell: 'bash' | 'pwsh'): string {
   return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
 }
 
-/** The folder one push is judged in: the cds before it move the payload cwd, then its own -C (or -Path) moves that. */
-function pushDirOf(p: PushShape, cwd: string, shell: 'bash' | 'pwsh'): string {
-  const dir = pushDir(cwd, p.cds, shell);
-  return p.dir === null ? dir : resolveDir(dir, p.dir, shell);
+/**
+ * Every folder one push may run in. A cd in the text may never run (|| short-circuit, a failed cd, a comment) or may not last (a subshell,
+ * a pipe, the background), so the push is judged in the folder after each prefix of its cds. With no cd it is the payload cwd.
+ * The push's own -C (or -Path) then moves each of them.
+ */
+function pushDirsOf(p: PushShape, cwd: string, shell: 'bash' | 'pwsh'): string[] {
+  const dirs = p.cds.length === 0 ? [cwd] : p.cds.map((_, i) => pushDir(cwd, p.cds.slice(0, i + 1), shell));
+  return [...new Set(dirs.map((dir) => (p.dir === null ? dir : resolveDir(dir, p.dir, shell))))];
 }
 
 /** A remote name or URL: the upstream (origin, parcadei), the fork (fork, the CCv3 repo URL) or neither. */
@@ -640,10 +647,12 @@ function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const d = s.kind === 'create' ? judgeCreate(cmd.text, deps, dir, named)
-      : s.kind === 'push' ? judgePush(s, deps, pushDirOf(s.push!, cwd, shell), Boolean(input.agent_id), chained, alone)
-        : judgeLand(s, deps, dir, named);
-    if (d.action === 'deny') denies.push(d);
+    const found = s.kind === 'create' ? [judgeCreate(cmd.text, deps, dir, named)]
+      : s.kind === 'push' ? pushDirsOf(s.push!, cwd, shell).map((d) => judgePush(s, deps, d, Boolean(input.agent_id), chained, alone))
+        : [judgeLand(s, deps, dir, named)];
+    for (const d of found) {
+      if (d.action === 'deny' && !denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope)) denies.push(d);
+    }
   }
   return denies;
 }
