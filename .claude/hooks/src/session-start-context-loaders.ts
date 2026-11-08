@@ -13,7 +13,7 @@
  * its only caller (session-start-parallel.ts) was never registered.
  */
 
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProject } from './shared/session-id.js';
@@ -42,10 +42,18 @@ export async function main(): Promise<void> {
 
   const hooksDir = join(homedir(), '.claude', 'hooks').replace(/\\/g, '/');
 
+  // The launcher was deleted (d172936a). Without this check every start and compact ran
+  // PowerShell on a missing file. Skip silently when it is absent.
+  const treeDaemonScript = `${hooksDir}/session-start-tree-daemon.ps1`;
+  if (!existsSync(treeDaemonScript)) {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
   const result = await runCommand(
     'tree-daemon',
     'powershell',
-    ['-ExecutionPolicy', 'Bypass', '-File', `${hooksDir}/session-start-tree-daemon.ps1`],
+    ['-ExecutionPolicy', 'Bypass', '-File', treeDaemonScript],
     stdinContent,
     15000
   );

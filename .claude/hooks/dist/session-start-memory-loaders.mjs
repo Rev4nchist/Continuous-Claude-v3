@@ -5356,6 +5356,23 @@ function getProject() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
 
+// src/shared/session-source.ts
+var COMPACT_SOURCE = "compact";
+function parseSessionSource(stdin) {
+  try {
+    const doc = JSON.parse(stdin);
+    if (doc !== null && typeof doc === "object" && !Array.isArray(doc)) {
+      const source = doc.source;
+      if (typeof source === "string" && source !== "") return source;
+    }
+  } catch {
+  }
+  return "startup";
+}
+function isCompactSource(source) {
+  return source === COMPACT_SOURCE;
+}
+
 // src/lib/run-command.ts
 import { spawn } from "child_process";
 function runCommand(name, command, args, stdinData, timeoutMs = 1e4) {
@@ -5698,7 +5715,7 @@ async function runSessionHealth(opts) {
     const logPath = join4(stateDir, "memory-write-failures.jsonl");
     const markerPath = join4(stateDir, "memory-health-last-session");
     const failedWrites = countFailedWritesSince(logPath, markerPath);
-    markSessionStart(markerPath, now);
+    if (!isCompactSource(opts.source)) markSessionStart(markerPath, now);
     const newest = newestBackup(stateDir);
     const hasRows = probe.kind === "ok" && probe.rows > 0;
     if (hasRows && opts.opcDir && needsBackup(newest, now)) spawnBackup(opts.opcDir, opts.spawnFn);
@@ -5721,18 +5738,23 @@ function isClaudeHomeProject(project, home) {
   const h = home.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
   return p === `${h}/.claude` || p.startsWith(`${h}/.claude/`);
 }
-function buildSessionStartOutput(daemonOutput, health, harnessLine) {
-  const additionalContext = [daemonOutput, health.line, harnessLine].filter(Boolean).join("\n");
+function buildSessionStartOutput(daemonOutput, health, harnessLine, source) {
+  const compact = isCompactSource(source);
+  const healthLine = compact && !health.warn ? "" : health.line;
+  const daemon = compact ? "" : daemonOutput;
+  const additionalContext = [daemon, healthLine, harnessLine].filter(Boolean).join("\n");
+  if (compact && additionalContext === "") return {};
   return {
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext },
-    systemMessage: [health.line, harnessLine].filter(Boolean).join("\n")
+    systemMessage: [healthLine, harnessLine].filter(Boolean).join("\n")
   };
 }
 
 // src/shared/health-alert.ts
-import { readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, rmSync, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join5 } from "node:path";
+import { dirname as dirname2, join as join5 } from "node:path";
 var STALE_AFTER_MS = 36 * 36e5;
 var MAX_NAMES = 3;
 var RUN_HINT = "Run: node scripts/harness-doctor.mjs";
@@ -5754,17 +5776,25 @@ function problemsOf(checks) {
     const rec = asRecord(c);
     const status = typeof rec?.status === "string" ? rec.status.toUpperCase() : "";
     if (!rec || status !== "FAIL" && status !== "WARN") continue;
-    out.push({ status, name: `${String(rec.section ?? "?")}:${String(rec.check ?? "?")}` });
+    out.push({
+      status,
+      name: `${String(rec.section ?? "?")}:${String(rec.check ?? "?")}`,
+      detail: typeof rec.detail === "string" ? rec.detail : ""
+    });
   }
   return out;
+}
+function reportTime(rec, fallbackTime) {
+  const parsed = typeof rec.ts === "string" ? new Date(rec.ts) : null;
+  const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : fallbackTime;
+  return when && !Number.isNaN(when.getTime()) ? when : void 0;
 }
 var asCount = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 function formatHealthAlert(doc, now, fallbackTime) {
   const rec = asRecord(doc);
   if (!rec || !Array.isArray(rec.checks)) return null;
-  const parsed = typeof rec.ts === "string" ? new Date(rec.ts) : null;
-  const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed : fallbackTime;
-  if (!when || Number.isNaN(when.getTime())) return null;
+  const when = reportTime(rec, fallbackTime);
+  if (!when) return null;
   if (now.getTime() - when.getTime() > STALE_AFTER_MS) {
     return `harness doctor has not run since ${formatTime(when)}`;
   }
@@ -5781,19 +5811,88 @@ function formatHealthAlert(doc, now, fallbackTime) {
   const list = names.length > 0 ? `: ${shown}${more}` : "";
   return `harness: ${failCount} fail, ${warnCount} warn as of ${formatTime(when)}${list}. ${runHintFor(rec.repo)}`;
 }
-function healthAlertLine(opts = {}) {
+function loadReport(path) {
   try {
-    const path = opts.path ?? defaultLatestPath();
-    let text;
-    let mtime;
+    const text = readFileSync2(path, "utf-8");
+    const mtime = statSync2(path).mtime;
+    return { kind: "ok", doc: JSON.parse(text), mtime };
+  } catch (err) {
+    return err?.code === "ENOENT" ? { kind: "missing" } : { kind: "error" };
+  }
+}
+var neverRunLine = () => `harness doctor has never run. ${RUN_HINT}`;
+var MAX_DETAIL = 120;
+function defaultPrintStatePath() {
+  return join5(dirname2(defaultLatestPath()), "last-session-print.txt");
+}
+function oneLine(text) {
+  const first = text.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
+  const flat = first.replace(/\s+/g, " ").trim();
+  return flat.length > MAX_DETAIL ? `${flat.slice(0, MAX_DETAIL - 3)}...` : flat;
+}
+function problemSetHash(doc) {
+  const rec = asRecord(doc);
+  const lines = problemsOf(rec?.checks).map((p) => `${p.status} ${p.name}`).sort();
+  return lines.length === 0 ? "" : createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+function formatCompactAlert(doc, now, fallbackTime, lastHash) {
+  const rec = asRecord(doc);
+  if (!rec || !Array.isArray(rec.checks)) return { line: null, hash: lastHash };
+  const when = reportTime(rec, fallbackTime);
+  if (!when) return { line: null, hash: lastHash };
+  if (now.getTime() - when.getTime() > STALE_AFTER_MS) {
+    return { line: `harness doctor has not run since ${formatTime(when)}`, hash: lastHash };
+  }
+  const problems = problemsOf(rec.checks);
+  const fails = problems.filter((p) => p.status === "FAIL");
+  const warns = problems.filter((p) => p.status === "WARN");
+  const summary = asRecord(rec.summary);
+  const failCount = asCount(summary?.fail) ?? fails.length;
+  const warnCount = asCount(summary?.warn) ?? warns.length;
+  if (failCount === 0 && warnCount === 0) return { line: null, hash: "" };
+  const hash = problemSetHash(rec);
+  if (failCount === 0 && hash === lastHash) return { line: null, hash };
+  const worst = fails[0] ?? warns[0];
+  const rest = problems.length - 1;
+  let tail = "";
+  if (worst) {
+    const detail = oneLine(worst.detail);
+    tail = `: ${worst.name}${detail ? ` (${detail})` : ""}${rest > 0 ? ` and ${rest} more` : ""}`;
+  }
+  const line = `harness: ${failCount} fail, ${warnCount} warn as of ${formatTime(when)}${tail}. ${runHintFor(rec.repo)}`;
+  return { line, hash };
+}
+function readPrintState(path) {
+  try {
+    return readFileSync2(path, "utf-8").trim();
+  } catch {
+    return "";
+  }
+}
+function writePrintState(path, hash) {
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    mkdirSync2(dirname2(path), { recursive: true });
+    writeFileSync2(tmp, hash);
+    renameSync(tmp, path);
+  } catch {
     try {
-      text = readFileSync2(path, "utf-8");
-      mtime = statSync2(path).mtime;
-    } catch (err) {
-      if (err?.code === "ENOENT") return `harness doctor has never run. ${RUN_HINT}`;
-      return null;
+      rmSync(tmp, { force: true });
+    } catch {
     }
-    return formatHealthAlert(JSON.parse(text), opts.now ?? /* @__PURE__ */ new Date(), mtime);
+  }
+}
+function healthAlertForSource(source, opts = {}) {
+  try {
+    const now = opts.now ?? /* @__PURE__ */ new Date();
+    const report = loadReport(opts.path ?? defaultLatestPath());
+    if (report.kind === "missing") return neverRunLine();
+    if (report.kind === "error") return null;
+    const statePath = opts.statePath ?? defaultPrintStatePath();
+    const last = readPrintState(statePath);
+    const next = formatCompactAlert(report.doc, now, report.mtime, last);
+    if (next.hash !== last) writePrintState(statePath, next.hash);
+    return isCompactSource(source) ? next.line : formatHealthAlert(report.doc, now, report.mtime);
   } catch {
     return null;
   }
@@ -5810,22 +5909,22 @@ async function main() {
   let stdinContent = "{}";
   try {
     stdinContent = readFileSync3(0, "utf-8");
-    JSON.parse(stdinContent);
   } catch {
   }
+  const source = parseSessionSource(stdinContent);
   const hooksDir = join6(homedir3(), ".claude", "hooks").replace(/\\/g, "/");
   const daemonScript = `${hooksDir}/session-start-memory-daemon.ps1`;
   const [result, health] = await Promise.all([
-    existsSync2(daemonScript) ? runCommand(
+    existsSync2(daemonScript) && !isCompactSource(source) ? runCommand(
       "memory-daemon",
       "powershell",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", daemonScript],
       stdinContent,
       1e4
     ) : Promise.resolve({ name: "memory-daemon", success: true, output: void 0, duration: 0 }),
-    runSessionHealth({ opcDir: getOpcDir() })
+    runSessionHealth({ opcDir: getOpcDir(), source })
   ]);
-  emitAndExit(buildSessionStartOutput(result.output ?? "", health, healthAlertLine()));
+  emitAndExit(buildSessionStartOutput(result.output ?? "", health, healthAlertForSource(source), source));
 }
 function emitAndExit(output) {
   process.stdout.write(JSON.stringify(output) + "\n", () => process.exit(0));

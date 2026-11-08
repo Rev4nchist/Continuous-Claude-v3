@@ -16,6 +16,7 @@ import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { SessionStartInput, HookOutput } from './shared/types.js';
+import { isCompactSource } from './shared/session-source.js';
 
 /**
  * Async sleep using setTimeout (non-blocking)
@@ -168,6 +169,12 @@ export async function main(): Promise<void> {
     const stdinContent = readFileSync(0, 'utf-8');
     input = JSON.parse(stdinContent) as SessionStartInput;
   } catch {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // After /compact the container is already up from this session's start: do nothing.
+  if (isCompactSource(input.source)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }

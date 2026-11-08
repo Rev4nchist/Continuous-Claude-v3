@@ -176,6 +176,7 @@ var CALL_TIMEOUT_MS = 4e3;
 var TOTAL_BUDGET_MS = 1e4;
 var TODO_MAX = 120;
 var NOTE_MAX = 300;
+var BRANCH_MAX = 80;
 var TRANSCRIPT_TAIL_BYTES = 8 * 1024 * 1024;
 var SAFE_LANE_ID = /^[A-Za-z0-9_][A-Za-z0-9_.:-]*$/;
 var skipped = (why) => ({ continue: true, systemMessage: `[PreCompact] lane note skipped: ${why}` });
@@ -194,31 +195,101 @@ function pickHeldLanes(boardJson, sessionId) {
 function toOneLine(text) {
   return text.replace(/\s+/g, " ").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
 }
-function buildNoteText(opts) {
+function buildCompactText(opts) {
   const trigger = opts.trigger === "manual" || opts.trigger === "auto" ? opts.trigger : "unknown";
   const hh = String(opts.now.getHours()).padStart(2, "0");
   const mm = String(opts.now.getMinutes()).padStart(2, "0");
   const todo = toOneLine(opts.todo ?? "").slice(0, TODO_MAX).trim();
-  const text = `Compacting (${trigger}) at ${hh}:${mm} local. ${todo ? `Open todo: ${todo}. ` : ""}The compaction summary and the lane notes are the only record of this session's context.`;
+  const branch = toOneLine(opts.branch ?? "").slice(0, BRANCH_MAX).trim();
+  const text = `Compacting (${trigger}) at ${hh}:${mm} local${branch ? ` on branch ${branch}` : ""}.` + (todo ? ` Open task: ${todo}.` : "");
   return text.slice(0, NOTE_MAX);
 }
-function firstInProgressTodo(transcriptText) {
+function lastTodoWrite(transcriptText) {
   let last = null;
-  for (const line of transcriptText.split("\n")) {
-    if (!line.includes("TodoWrite")) continue;
+  let at = -1;
+  const lines = transcriptText.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes("TodoWrite")) continue;
     try {
-      const entry = JSON.parse(line);
+      const entry = JSON.parse(lines[i]);
       if (entry?.type !== "assistant" || !Array.isArray(entry.message?.content)) continue;
       for (const part of entry.message.content) {
         if (part?.type === "tool_use" && part.name === "TodoWrite" && Array.isArray(part.input?.todos)) {
           last = part.input.todos;
+          at = i;
         }
       }
     } catch {
     }
   }
   const hit = last?.find((t) => t && t.status === "in_progress" && typeof t.content === "string");
-  return hit ? hit.content : null;
+  return hit ? { text: hit.content, at } : null;
+}
+function firstInProgressTodo(transcriptText) {
+  return lastTodoWrite(transcriptText)?.text ?? null;
+}
+function firstInProgressTask(transcriptText) {
+  const pending = /* @__PURE__ */ new Map();
+  const subjects = /* @__PURE__ */ new Map();
+  const status = /* @__PURE__ */ new Map();
+  const lines = transcriptText.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.includes("TaskCreate") && !line.includes("TaskUpdate") && !line.includes('"task"')) continue;
+    try {
+      const entry = JSON.parse(line);
+      const content = entry?.message?.content;
+      if (!Array.isArray(content)) continue;
+      if (entry.type === "assistant") {
+        for (const part of content) {
+          if (part?.type !== "tool_use") continue;
+          if (part.name === "TaskCreate" && typeof part.input?.subject === "string" && typeof part.id === "string") {
+            pending.set(part.id, part.input.subject);
+          } else if (part.name === "TaskUpdate" && typeof part.input?.taskId === "string") {
+            if (typeof part.input.subject === "string") subjects.set(part.input.taskId, part.input.subject);
+            if (typeof part.input.status === "string") status.set(part.input.taskId, { status: part.input.status, at: i });
+          }
+        }
+      } else if (entry.type === "user" && typeof entry.toolUseResult?.task?.id === "string") {
+        for (const part of content) {
+          const subject = part?.type === "tool_result" ? pending.get(part.tool_use_id) : void 0;
+          if (subject !== void 0) subjects.set(entry.toolUseResult.task.id, subject);
+        }
+      }
+    } catch {
+    }
+  }
+  const open = [...status.entries()].filter(([id, s]) => s.status === "in_progress" && subjects.has(id)).sort((a, b) => Number(a[0]) - Number(b[0]));
+  return open.length ? { text: subjects.get(open[0][0]), at: open[0][1].at } : null;
+}
+function currentWorkText(transcriptText) {
+  const todo = lastTodoWrite(transcriptText);
+  const task = firstInProgressTask(transcriptText);
+  if (todo && task) return todo.at > task.at ? todo.text : task.text;
+  return (todo ?? task)?.text ?? null;
+}
+function branchOf(cwd) {
+  try {
+    let dir = path.resolve(cwd || ".");
+    for (let i = 0; i < 8; i++) {
+      const dotGit = path.join(dir, ".git");
+      if (fs.existsSync(dotGit)) {
+        let gitDir = dotGit;
+        if (fs.statSync(dotGit).isFile()) {
+          const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, "utf-8"));
+          if (!m) return null;
+          gitDir = path.resolve(dir, m[1].trim());
+        }
+        const ref = /^ref:\s*refs\/heads\/(.+)$/m.exec(fs.readFileSync(path.join(gitDir, "HEAD"), "utf-8"));
+        return ref ? ref[1].trim() : null;
+      }
+      const up = path.dirname(dir);
+      if (up === dir) return null;
+      dir = up;
+    }
+  } catch {
+  }
+  return null;
 }
 function inCooldown(state, sessionId, nowMs) {
   const last = state?.[sessionId];
@@ -261,7 +332,7 @@ function readTranscriptTail(file) {
     return "";
   }
 }
-var spawnLaneCli = (laneCli) => (args, opts) => new Promise((resolve) => {
+var spawnLaneCli = (laneCli) => (args, opts) => new Promise((resolve2) => {
   let stdout = "";
   let stderr = "";
   let settled = false;
@@ -269,7 +340,7 @@ var spawnLaneCli = (laneCli) => (args, opts) => new Promise((resolve) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
-    resolve({ code, stdout, stderr });
+    resolve2({ code, stdout, stderr });
   };
   let proc;
   try {
@@ -280,7 +351,7 @@ var spawnLaneCli = (laneCli) => (args, opts) => new Promise((resolve) => {
       stdio: ["ignore", "pipe", "pipe"]
     });
   } catch {
-    resolve({ code: -1, stdout, stderr });
+    resolve2({ code: -1, stdout, stderr });
     return;
   }
   const timer = setTimeout(() => {
@@ -319,33 +390,34 @@ async function runPreCompactLaneNote(input, deps) {
     }
     const held = pickHeldLanes(boardJson, sessionId);
     if (held.length === 0) return skipped("no held lane");
-    const text = buildNoteText({
+    const text = buildCompactText({
       trigger: input.trigger,
       now: deps.now(),
-      todo: firstInProgressTodo(readTranscriptTail(input.transcript_path))
+      todo: currentWorkText(readTranscriptTail(input.transcript_path)),
+      branch: branchOf(cwd)
     });
     let written = 0;
     for (const laneId of held) {
       if (left() <= 0) break;
       try {
-        const r = await deps.runner(["note", laneId, text], { cwd, env, timeoutMs: left() });
+        const r = await deps.runner(["compact", laneId, text], { cwd, env, timeoutMs: left() });
         if (r.code === 0) written++;
       } catch {
       }
     }
-    if (written === 0) return skipped("every note write failed");
+    if (written === 0) return skipped("every compact event write failed");
     stampState(deps.stateFile, sessionId, started);
-    return { continue: true, systemMessage: `[PreCompact] lane note written on ${written} lane(s)` };
+    return { continue: true, systemMessage: `[PreCompact] compact event logged on ${written} lane(s)` };
   } catch (err) {
     return skipped(`error (${err instanceof Error ? err.message.slice(0, 80) : "unknown"})`);
   }
 }
 async function readStdin() {
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
-    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("end", () => resolve2(data));
   });
 }
 async function main() {
@@ -371,7 +443,10 @@ if ((process.argv[1] || "").includes("pre-compact-lane-note")) {
   main().catch(() => console.log(JSON.stringify(skipped("error"))));
 }
 export {
-  buildNoteText,
+  branchOf,
+  buildCompactText,
+  currentWorkText,
+  firstInProgressTask,
   firstInProgressTodo,
   inCooldown,
   pickHeldLanes,

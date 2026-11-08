@@ -34,15 +34,37 @@ function pruneIntelBus(opts = {}) {
   }
 }
 
+// src/shared/session-source.ts
+var COMPACT_SOURCE = "compact";
+function parseSessionSource(stdin) {
+  try {
+    const doc = JSON.parse(stdin);
+    if (doc !== null && typeof doc === "object" && !Array.isArray(doc)) {
+      const source = doc.source;
+      if (typeof source === "string" && source !== "") return source;
+    }
+  } catch {
+  }
+  return "startup";
+}
+function isCompactSource(source) {
+  return source === COMPACT_SOURCE;
+}
+
 // src/session-start-intel-prune.ts
 function runPrune(projectDir) {
   if (process.env.CCV3_BUS_OFF === "1") return;
   pruneIntelBus(projectDir ? { projectDir } : {});
 }
 function main() {
+  let stdin = "";
   try {
-    readFileSync(0, "utf-8");
+    stdin = readFileSync(0, "utf-8");
   } catch {
+  }
+  if (isCompactSource(parseSessionSource(stdin))) {
+    console.log("{}");
+    return;
   }
   try {
     runPrune();

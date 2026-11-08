@@ -117,7 +117,8 @@ function problemsOf(text, { branch, head, base, git }) {
   return out;
 }
 
-const done = (status, detail, notes, sha, facts) => ({ result: { step: 'summary', status, detail, notes }, sha, facts });
+// ok: the file is a real summary of this branch (no FAIL-class problem). A NOTE for an older Head or a long sentence is still ok; a NOTE that hides a FAIL-class problem in note mode is not.
+const done = (status, detail, notes, sha, facts, ok = false) => ({ result: { step: 'summary', status, detail, notes }, sha, facts, ok });
 
 function check({ root, head, branch, base = 'main', git, readFile = (f) => readFileSync(f, 'utf8'), mode = 'note' }) {
   const facts = factsOf(git, base);
@@ -125,15 +126,15 @@ function check({ root, head, branch, base = 'main', git, readFile = (f) => readF
   try { text = readFile(path.join(root, SUMMARY_REL)); } catch { text = null; }
   const problems = typeof text === 'string'
     ? problemsOf(text, { branch, head, base, git })
-    : [{ fail: true, text: `no summary file at ${SUMMARY_REL}: write it before pre-pr (rule step 0)` }];
+    : [{ fail: true, text: `no summary file at ${SUMMARY_REL}: write it now (Branch, Head, Base, Problem, Change, You will see, Risk, Not included), paste it to Dave in chat, then run pre-pr again` }];
   const sha = typeof text === 'string' ? hashOf(text) : null;
   const sorted = [...problems.filter((p) => p.fail), ...problems.filter((p) => !p.fail)];
   const failing = sorted.some((p) => p.fail);
-  if (sorted.length === 0) return done('PASS', `summary matches ${branch} at ${short(head)}${facts ? ` (${facts})` : ''}`, [], sha, facts);
+  if (sorted.length === 0) return done('PASS', `summary matches ${branch} at ${short(head)}${facts ? ` (${facts})` : ''}`, [], sha, facts, true);
   const status = failing && mode === 'fail' ? 'FAIL' : 'NOTE';
   const rest = sorted.slice(1).map((p) => p.text);
   const notes = [...(facts ? [`facts: ${facts}`] : []), ...rest, ...(failing && status === 'NOTE' ? ['this check only notes for now; it becomes a FAIL when Dave turns it on'] : [])];
-  return done(status, `${sorted[0].text}${rest.length ? ` (${rest.length} more below)` : ''}`, notes, sha, facts);
+  return done(status, `${sorted[0].text}${rest.length ? ` (${rest.length} more below)` : ''}`, notes, sha, facts, !failing);
 }
 
 /** { result, sha, facts }: result is the pre-pr step { step: 'summary', status, detail, notes }, sha the file hash or null. Never throws. */

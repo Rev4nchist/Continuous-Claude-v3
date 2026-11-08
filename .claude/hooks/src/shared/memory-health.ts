@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { withPgClient } from './pg-client.js';
 import { needsBackup, newestBackup, restoreCommand, spawnBackup } from './memory-backup.js';
+import { isCompactSource } from './session-source.js';
 
 /** The one copy of the expected schema version. docker/init-schema.sql must carry the same string. */
 export const EXPECTED_SCHEMA_VERSION = '2026-10-27.1';
@@ -199,6 +200,8 @@ export interface SessionHealthOptions {
   now?: Date;
   runner?: PgRunner;
   spawnFn?: (cmd: string, args: string[], options: SpawnOptions) => ChildProcess;
+  /** SessionStart `source`. After 'compact' the marker is kept, so the next real start still counts the failures. */
+  source?: string;
 }
 
 /**
@@ -213,7 +216,7 @@ export async function runSessionHealth(opts: SessionHealthOptions): Promise<Heal
     const logPath = join(stateDir, 'memory-write-failures.jsonl');
     const markerPath = join(stateDir, 'memory-health-last-session');
     const failedWrites = countFailedWritesSince(logPath, markerPath);
-    markSessionStart(markerPath, now);
+    if (!isCompactSource(opts.source)) markSessionStart(markerPath, now);
     const newest = newestBackup(stateDir);
     const hasRows = probe.kind === 'ok' && probe.rows > 0;
     if (hasRows && opts.opcDir && needsBackup(newest, now)) spawnBackup(opts.opcDir, opts.spawnFn);

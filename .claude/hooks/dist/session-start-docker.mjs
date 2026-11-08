@@ -5,6 +5,14 @@ import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+
+// src/shared/session-source.ts
+var COMPACT_SOURCE = "compact";
+function isCompactSource(source) {
+  return source === COMPACT_SOURCE;
+}
+
+// src/session-start-docker.ts
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -114,6 +122,10 @@ async function main() {
     const stdinContent = readFileSync(0, "utf-8");
     input = JSON.parse(stdinContent);
   } catch {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  if (isCompactSource(input.source)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }

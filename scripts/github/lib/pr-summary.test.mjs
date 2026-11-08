@@ -24,7 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { changeOf, checkSummary, hashOf, SUMMARY_REL } from './pr-summary.mjs';
@@ -88,7 +88,13 @@ test('PS1: a missing summary file is a FAIL in fail mode and names the path', ()
   assert.equal(r.result.step, 'summary');
   assert.equal(r.result.status, 'FAIL');
   assert.match(all(r), /summary\.md/);
+  assert.match(all(r), /paste it to Dave in chat, then run pre-pr again/, 'the refusal tells the model what to do next');
   assert.equal(r.sha, null);
+});
+
+test('PS17: the shipped config turns the summary gate on (Dave, 2026-11-07, after the headless rule check)', () => {
+  const cfg = JSON.parse(readFileSync(new URL('../../../review-router.config.json', import.meta.url), 'utf8'));
+  assert.equal(cfg.pre_pr?.summary_mode, 'fail');
 });
 
 test('PS2: a missing, an empty and a repeated label each FAIL, and the line names the label', () => {
@@ -241,6 +247,22 @@ test('PS13: an internal error (git throws, readFile throws something odd) is a N
   const r2 = checkSummary({ root: dir, head: headOf(dir), branch: 'feat/x', base: 'main', git: gitOf(dir), readFile: () => { throw 'plain string'; }, mode: 'fail' });
   assert.ok(['NOTE', 'FAIL'].includes(r2.result.status));
   assert.doesNotThrow(() => checkSummary({}));
+});
+
+test('PS18: ok is true when the summary has no FAIL-class problem (PASS, an older Head, a long sentence) and false when it has one, even in note mode', () => {
+  const dir = makeRepo();
+  const head = headOf(dir);
+  assert.equal(check(dir, textOf(FIELDS(head))).ok, true, 'a clean summary');
+  assert.equal(check(dir, textOf(FIELDS(head, { Problem: 'word '.repeat(25).trim() + '.' }))).ok, true, 'a long sentence is only a NOTE');
+  commitFiles(dir, { 'docs/n1.md': '1\n' });
+  const older = check(dir, textOf(FIELDS(head)));
+  assert.equal(older.result.status, 'NOTE', 'an older Head with 1 own file is a NOTE');
+  assert.equal(older.ok, true, 'an older Head still names a real summary of this branch');
+  assert.equal(check(dir, textOf(FIELDS(head, { Branch: 'feat/other' })), { mode: 'note' }).ok, false, 'a leftover file from another branch, shown as a NOTE in note mode');
+  const fresh = makeRepo();
+  const missing = check(fresh, null, { mode: 'note' });
+  assert.equal(missing.sha, null, 'a fresh repo has no summary file');
+  assert.equal(missing.ok, false, 'no file');
 });
 
 test('PS14: a valid summary passes in fail mode, returns the hash of the file, and the line shows the facts', () => {

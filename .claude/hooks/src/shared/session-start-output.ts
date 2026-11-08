@@ -7,6 +7,7 @@
  */
 import type { ContextInjectionHookOutput } from './types.js';
 import type { HealthLine } from './memory-health.js';
+import { isCompactSource } from './session-source.js';
 
 /**
  * True when `project` is the claude home dir or a path inside it. The hook skips
@@ -21,18 +22,26 @@ export function isClaudeHomeProject(project: string, home: string): boolean {
 }
 
 /**
- * Build the hook output. The health line goes to the model (additionalContext) and to
- * Dave's terminal (systemMessage) in every state, so a healthy store is visible too.
+ * Build the hook output. At startup the health line goes to the model (additionalContext)
+ * and to Dave's terminal (systemMessage) in every state, so a healthy store is visible too.
  * `harnessLine` (shared/health-alert.ts) goes after it in both places, only when there is one.
+ *
+ * After /compact (`source` = 'compact') the session is the same one, so only problems print:
+ * a degraded memory line (`health.warn`) and the harness line. Nothing to say gives `{}`.
  */
 export function buildSessionStartOutput(
   daemonOutput: string,
   health: HealthLine,
   harnessLine?: string | null,
-): ContextInjectionHookOutput {
-  const additionalContext = [daemonOutput, health.line, harnessLine].filter(Boolean).join('\n');
+  source?: string,
+): ContextInjectionHookOutput | Record<string, never> {
+  const compact = isCompactSource(source);
+  const healthLine = compact && !health.warn ? '' : health.line;
+  const daemon = compact ? '' : daemonOutput;
+  const additionalContext = [daemon, healthLine, harnessLine].filter(Boolean).join('\n');
+  if (compact && additionalContext === '') return {};
   return {
     hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext },
-    systemMessage: [health.line, harnessLine].filter(Boolean).join('\n'),
+    systemMessage: [healthLine, harnessLine].filter(Boolean).join('\n'),
   };
 }
