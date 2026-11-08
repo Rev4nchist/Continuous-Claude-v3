@@ -2,8 +2,9 @@
 /**
  * Pre-Compact Lane Note Hook
  *
- * When a session compacts, write ONE short note on every lane it holds.
+ * When a session compacts, log ONE short compact event on every lane it holds.
  * The lane board then keeps a durable trail of each compaction.
+ * The event never touches lane.note: Dave's progress note stays as he wrote it.
  *
  * Hook: PreCompact
  * Input: { trigger, session_id, transcript_path, cwd? }
@@ -11,6 +12,8 @@
  *
  * Lane reads and writes go through the lane CLI shim only (never SQL):
  * the board trigger needs lane.client_version, and the CLI sets it.
+ * The write is the event-only verb `compact <id> "text"`. There is NO fallback to `note`: an older CLI that
+ * lacks the verb exits 2, and the hook skips. `note` would overwrite the progress note.
  * State: ~/.claude/state/pre-compact-lane-note.json ({ [session_id]: ms }), for the 5 minute cooldown.
  */
 
@@ -56,6 +59,7 @@ const CALL_TIMEOUT_MS = 4000;
 const TOTAL_BUDGET_MS = 10_000;
 const TODO_MAX = 120;
 const NOTE_MAX = 300;
+const BRANCH_MAX = 80;
 const TRANSCRIPT_TAIL_BYTES = 8 * 1024 * 1024;
 const SAFE_LANE_ID = /^[A-Za-z0-9_][A-Za-z0-9_.:-]*$/;
 
@@ -82,16 +86,23 @@ function toOneLine(text: string): string {
   return text.replace(/\s+/g, ' ').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-export function buildNoteText(opts: { trigger: 'manual' | 'auto'; now: Date; todo: string | null }): string {
+export function buildCompactText(opts: { trigger: 'manual' | 'auto'; now: Date; todo: string | null; branch?: string | null }): string {
   const trigger = opts.trigger === 'manual' || opts.trigger === 'auto' ? opts.trigger : 'unknown';
   const hh = String(opts.now.getHours()).padStart(2, '0');
   const mm = String(opts.now.getMinutes()).padStart(2, '0');
   const todo = toOneLine(opts.todo ?? '').slice(0, TODO_MAX).trim();
-  // No todo: leave the clause out. Real sessions use TaskCreate, which this hook does not read, so "none" would mislead.
+  const branch = toOneLine(opts.branch ?? '').slice(0, BRANCH_MAX).trim();
+  // No task: leave the clause out, so a session with none does not read as "nothing in progress".
   const text =
-    `Compacting (${trigger}) at ${hh}:${mm} local. ${todo ? `Open todo: ${todo}. ` : ''}` +
-    "The compaction summary and the lane notes are the only record of this session's context.";
+    `Compacting (${trigger}) at ${hh}:${mm} local${branch ? ` on branch ${branch}` : ''}.` +
+    (todo ? ` Open task: ${todo}.` : '');
   return text.slice(0, NOTE_MAX);
+}
+
+interface Found {
+  text: string;
+  /** Line number of the call that set it, to compare a TodoWrite with a task update. */
+  at: number;
 }
 
 /**
@@ -100,22 +111,103 @@ export function buildNoteText(opts: { trigger: 'manual' | 'auto'; now: Date; tod
  * lib/transcript-parser.ts reads top-level tool_name only, so it misses these.
  * api-request-blob lines repeat each call and are skipped.
  */
-export function firstInProgressTodo(transcriptText: string): string | null {
+function lastTodoWrite(transcriptText: string): Found | null {
   let last: Array<{ content?: unknown; status?: unknown }> | null = null;
-  for (const line of transcriptText.split('\n')) {
-    if (!line.includes('TodoWrite')) continue;
+  let at = -1;
+  const lines = transcriptText.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes('TodoWrite')) continue;
     try {
-      const entry = JSON.parse(line);
+      const entry = JSON.parse(lines[i]);
       if (entry?.type !== 'assistant' || !Array.isArray(entry.message?.content)) continue;
       for (const part of entry.message.content) {
         if (part?.type === 'tool_use' && part.name === 'TodoWrite' && Array.isArray(part.input?.todos)) {
           last = part.input.todos;
+          at = i;
         }
       }
     } catch { /* skip a partial or corrupt line */ }
   }
   const hit = last?.find((t) => t && t.status === 'in_progress' && typeof t.content === 'string');
-  return hit ? (hit.content as string) : null;
+  return hit ? { text: hit.content as string, at } : null;
+}
+
+export function firstInProgressTodo(transcriptText: string): string | null {
+  return lastTodoWrite(transcriptText)?.text ?? null;
+}
+
+/**
+ * The lowest-numbered task whose last TaskUpdate set it to in_progress.
+ * Real shapes: TaskCreate is a tool_use with input.subject. Its id comes back in the next user line as
+ * toolUseResult.task.id, matched by tool_use_id. TaskUpdate is a tool_use with input { taskId, status }.
+ * A task created before the transcript tail has no known subject and is skipped.
+ */
+export function firstInProgressTask(transcriptText: string): Found | null {
+  const pending = new Map<string, string>(); // tool_use id of a TaskCreate -> subject
+  const subjects = new Map<string, string>(); // task id -> subject
+  const status = new Map<string, { status: string; at: number }>();
+  const lines = transcriptText.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.includes('TaskCreate') && !line.includes('TaskUpdate') && !line.includes('"task"')) continue;
+    try {
+      const entry = JSON.parse(line);
+      const content = entry?.message?.content;
+      if (!Array.isArray(content)) continue;
+      if (entry.type === 'assistant') {
+        for (const part of content) {
+          if (part?.type !== 'tool_use') continue;
+          if (part.name === 'TaskCreate' && typeof part.input?.subject === 'string' && typeof part.id === 'string') {
+            pending.set(part.id, part.input.subject);
+          } else if (part.name === 'TaskUpdate' && typeof part.input?.taskId === 'string') {
+            if (typeof part.input.subject === 'string') subjects.set(part.input.taskId, part.input.subject);
+            if (typeof part.input.status === 'string') status.set(part.input.taskId, { status: part.input.status, at: i });
+          }
+        }
+      } else if (entry.type === 'user' && typeof entry.toolUseResult?.task?.id === 'string') {
+        for (const part of content) {
+          const subject = part?.type === 'tool_result' ? pending.get(part.tool_use_id) : undefined;
+          if (subject !== undefined) subjects.set(entry.toolUseResult.task.id, subject);
+        }
+      }
+    } catch { /* skip a partial or corrupt line */ }
+  }
+  const open = [...status.entries()]
+    .filter(([id, s]) => s.status === 'in_progress' && subjects.has(id))
+    .sort((a, b) => Number(a[0]) - Number(b[0]));
+  return open.length ? { text: subjects.get(open[0][0]) as string, at: open[0][1].at } : null;
+}
+
+/** The open work item: the newer of the last TodoWrite and the last task update. */
+export function currentWorkText(transcriptText: string): string | null {
+  const todo = lastTodoWrite(transcriptText);
+  const task = firstInProgressTask(transcriptText);
+  if (todo && task) return todo.at > task.at ? todo.text : task.text;
+  return (todo ?? task)?.text ?? null;
+}
+
+/** The branch at cwd or above, read from .git/HEAD. Follows the `gitdir:` pointer of a linked worktree. Never throws. */
+export function branchOf(cwd: string | undefined): string | null {
+  try {
+    let dir = path.resolve(cwd || '.');
+    for (let i = 0; i < 8; i++) {
+      const dotGit = path.join(dir, '.git');
+      if (fs.existsSync(dotGit)) {
+        let gitDir = dotGit;
+        if (fs.statSync(dotGit).isFile()) {
+          const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, 'utf-8'));
+          if (!m) return null;
+          gitDir = path.resolve(dir, m[1].trim());
+        }
+        const ref = /^ref:\s*refs\/heads\/(.+)$/m.exec(fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf-8'));
+        return ref ? ref[1].trim() : null;
+      }
+      const up = path.dirname(dir);
+      if (up === dir) return null;
+      dir = up;
+    }
+  } catch { /* no repo, or unreadable: leave the branch out */ }
+  return null;
 }
 
 export function inCooldown(state: unknown, sessionId: string, nowMs: number): boolean {
@@ -147,7 +239,7 @@ function stampState(stateFile: string, sessionId: string, nowMs: number): void {
   } catch { /* fail open: a state error must not block the hook */ }
 }
 
-/** Read at most the last 8 MB of the transcript. TodoWrite rewrites its whole list, so the tail is enough. */
+/** Read at most the last 8 MB of the transcript. TodoWrite rewrites its whole list and tasks are recent, so the tail is enough. */
 function readTranscriptTail(file: string | undefined): string {
   if (!file) return '';
   try {
@@ -227,23 +319,24 @@ export async function runPreCompactLaneNote(input: PreCompactInput, deps: Deps):
     const held = pickHeldLanes(boardJson, sessionId);
     if (held.length === 0) return skipped('no held lane');
 
-    const text = buildNoteText({
+    const text = buildCompactText({
       trigger: input.trigger as 'manual' | 'auto',
       now: deps.now(),
-      todo: firstInProgressTodo(readTranscriptTail(input.transcript_path)),
+      todo: currentWorkText(readTranscriptTail(input.transcript_path)),
+      branch: branchOf(cwd),
     });
 
     let written = 0;
     for (const laneId of held) {
       if (left() <= 0) break;
       try {
-        const r = await deps.runner(['note', laneId, text], { cwd, env, timeoutMs: left() });
+        const r = await deps.runner(['compact', laneId, text], { cwd, env, timeoutMs: left() });
         if (r.code === 0) written++;
       } catch { /* one lane failing must not stop the next */ }
     }
-    if (written === 0) return skipped('every note write failed');
+    if (written === 0) return skipped('every compact event write failed');
     stampState(deps.stateFile, sessionId, started);
-    return { continue: true, systemMessage: `[PreCompact] lane note written on ${written} lane(s)` };
+    return { continue: true, systemMessage: `[PreCompact] compact event logged on ${written} lane(s)` };
   } catch (err) {
     return skipped(`error (${err instanceof Error ? err.message.slice(0, 80) : 'unknown'})`);
   }

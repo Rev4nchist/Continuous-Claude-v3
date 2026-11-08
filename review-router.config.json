@@ -192,8 +192,8 @@
   "pre_pr": { "summary_mode": "fail" },
   "capacity": { "post_rate_limit_probe": true },
   "coderabbit": {
-    "reviews_7d_manual": 107,
-    "reviews_7d_manual_date": "2026-10-29",
+    "reviews_7d_manual": null,
+    "reviews_7d_manual_date": null,
     "cli_daily_cap_usd": 3,
     "monthly_file_cap": 160
   },

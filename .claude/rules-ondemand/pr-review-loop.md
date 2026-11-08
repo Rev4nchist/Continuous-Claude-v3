@@ -147,7 +147,7 @@ command. A script builds each question, so you do not choose the options or thei
 
 | Step | Header | Get the question | The first option runs |
 |---|---|---|---|
-| 1 Commit and push | `Commit` | `node scripts/github/ship-ask.mjs commit-and-push --msg <file> --json` | `git commit -F <file>`, then `pwsh -File scripts/git-safe.ps1 push fork <branch>` |
+| 1 Commit and push | `Commit`, or `Push` when nothing is staged | `node scripts/github/ship-ask.mjs commit-and-push --msg <file> --json` | `git commit -F <file> && pwsh -File scripts/git-safe.ps1 push fork <branch>` in one command. "Push only" runs the push alone |
 | 2 Open the PR | `Open PR` | `node scripts/github/ship-ask.mjs open-pr --json` | `gh api .../pulls -X POST -F draft=true -F body=@<file>` |
 | 3 Review choice | `PR #<N>` | call `pr_checkpoint {pr}`; with `checkpoint.ledger` true it returns the question | the tool records his pick (call it again after the answer) |
 | 4 Paid round | `Paid round` | `node scripts/github/ship-ask.mjs paid-round --pr <N> --json` | nothing: the first option is "No, keep it free". A Yes row exists only on cr-paid ALLOW; ESCALATE or no verdict gives "No" and "Stop here" |
@@ -157,19 +157,20 @@ command. A script builds each question, so you do not choose the options or thei
 - The `decision-ledger` hook records only an exact option label. Free text, Esc, a timeout, an empty answer or
   an array records nothing. The hook then says "re-ask n of 2". Ask again, at most 2 times. After that, say
   "Nothing was recorded" and stop. The PR stays a draft.
-- "Show the diff first" and "Show the PR body first": print it, then ask the same question again. "Stop here",
+- "Show the diff first", "Show the commits first" and "Show the PR body first": print it, then ask the same question again. "Stop here",
   "Keep open" and "Return to draft": nothing runs. Only the first option, or "Land when READY", lets the action run.
 - Every paid action needs a tap. A paid review pick (`coderabbit`, `both`) gets a second question whose first
   option is "No, keep the PR a draft". Never post `--use-credits` or `@coderabbitai review` without a tap.
   A dialog that returns the first row twice records nothing paid.
 - With `decisions.enforce` true, `decision-gate` denies a PR create without the Open PR tap, and a land or merge
   without the Land tap. It denies a write to the decision store from any tool. No override exists. With the flag false the gate only warns.
-- Step 1 gate: `git push fork <branch>` (any wrapper: `git`, `git-safe.ps1`, `git-for.ps1`) needs the "Commit and push" tap for
-  that branch and for the tree you push. The tap binds the staged tree, not the head, so a commit after the tap does not void it.
-  A merge or a new commit after the ask changes the tree and needs a new ask. Order: merge `fork/main`, stage, ask, commit, push.
+- Step 1 gate: `git push fork <branch>` (any wrapper: `git`, `git-safe.ps1`, `git-for.ps1`) needs the "Commit and push" or "Push only" tap for
+  that branch and for the tree you push. "Commit and push" binds the staged tree, not the head, so a commit after the tap does not void it.
+  "Push only" is offered when nothing is staged and commits are ahead. It binds HEAD's tree and passes only a push with no commit before
+  it in the same command. A merge or a new commit after the ask changes the tree and needs a new ask.
+  Order: merge `fork/main`, stage, ask, commit, push. With nothing staged: ask, push.
   Pushes to `main`, dry runs and other remotes pass. A force or delete form is denied even with a tap, and so is a push to `origin`.
-  Its flag is `decisions.enforcePush`: absent means warn only (a warning in the context, no block). A push has no "Push only"
-  option yet, so a push with nothing staged is warned, not denied.
+  Its flag is `decisions.enforcePush`: absent means warn only (a warning in the context, no block).
 - Do not write the decision store by hand. A subagent cannot open a PR, land, merge or push: the tap is the main session's.
 
 ### PR review budget per class

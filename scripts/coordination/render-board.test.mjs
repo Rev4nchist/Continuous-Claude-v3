@@ -41,6 +41,13 @@
  *   - a band chip count counts open lanes under a label that does not say "open"
  *   - a By band row grows (bytes beyond id and title), or the page outgrows its size ratchet (the artifact limit is 16 MB)
  *
+ * How the desktop board (PR-K1) can fail, one test each (the layout itself is the Edge run in .claude/cache/e2e/2026-11-07-desktop-board.*):
+ *   - the fine-pointer block is missing, twice, out of order, names #kb-board (it would beat the By band hide rule) or snaps (it undoes the edge scroll)
+ *   - the board is not a flex row that scrolls sideways, a list does not scroll by itself, or the base rule stops being a grid (touch screens lose the 3x2 grid)
+ *   - the intro hides outside the desktop Columns view, the board has no region name, or the polish rules (13px ink title, amber Waiting pill, one control row,
+ *     narrow empty Scheduled, muted small text) are missing or leak into the phone
+ *   - the page script fits the board without the fine-pointer query, or leaves its two properties set after a resize to a phone
+ *
  * How the Scheduled and reminders column (PR-F) can fail, one test each (the split and the chip are in board-scheduled-view.test.mjs):
  *   - a scheduled lane is also in Next, Later or Waiting, or in kb-data (the browser would place it twice)
  *   - a scheduled card takes kb-card (paintEdit in the client does part(id,'.kb-note').disabled with no null check) or any class the client handles
@@ -97,8 +104,11 @@ const SCRATCH = path.join(HERE, 'scratch-db.mjs');
 // cap, neighbour skip; the client comments are stripped from the page). No card, row, Done or Scheduled markup grew: ROW, DONE and SCHED overheads are unchanged.
 // Measured 2026-11-07 (PR-M2 critic fixes): test page 168,457 bytes (+1,589 over the 166,868 above), so PAGE_BYTES_MAX is that plus about 1 KB (167,900 to 169,500). It rose ONLY because
 // of client logic (a Scheduled row tap, the pinned-bar height, the drag cap lift, two live-region lines, focus on a fine pointer) and one CSS term (--bar-h). No markup grew.
+// Measured 2026-11-07 (PR-K1, the desktop board): test page 171,469 bytes (+3,012 over the 168,457 above), so PAGE_BYTES_MAX is that plus about 1 KB (172,469 to 172,500). It rose from 169,500 ONLY because
+// of the desktop CSS block (one wide board, 13px titles, amber Waiting pill, one control row, narrow empty Scheduled; about 1.5 KB with its comment), the fit script beside setView (height and scroll padding, gated by the
+// fine-pointer query, about 1.0 KB), the edge scroll in the client (about 0.5 KB) and a region label on the board (41 bytes). Dave's estimate was 171,500, from the 1.9 KB of the Design A prototype. No card, row, Done or Scheduled markup grew.
 const ROW_OVERHEAD_MAX = 240;
-const PAGE_BYTES_MAX = 169500;
+const PAGE_BYTES_MAX = 172500;
 const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
 const LONG_TITLE = `long title start ${'word '.repeat(80)}long title END`;
@@ -549,7 +559,7 @@ describe('render-board.mjs against a scratch database', () => {
     const out = path.join(E2E.tmp, 'ccv3-buttons.html');
     assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
     const html = fs.readFileSync(out, 'utf8');
-    const columns = /<div class="kb-board" id="kb-board">([\s\S]*?)<script type="application\/json" id="kb-data">/.exec(html)[1];
+    const columns = /<div class="kb-board" id="kb-board"[^>]*>([\s\S]*?)<script type="application\/json" id="kb-data">/.exec(html)[1];
     const cut = columns.indexOf('data-col="progress"');
     const cardsIn = (part) => part.split('<li class="card kb-card"').slice(1);
     const movable = cardsIn(columns.slice(0, cut));
@@ -794,6 +804,70 @@ describe('render-board.mjs against a scratch database', () => {
       const body = css.slice(i, css.indexOf('}', i));
       return Object.fromEntries([...body.matchAll(/(--[a-z0-9-]+):(#[0-9A-Fa-f]{6})\b/g)].map((m) => [m[1], m[2]]));
     };
+
+    // PR-K1: the desktop board. The measured behaviour is the Edge run saved in .claude/cache/e2e/2026-11-07-desktop-board.{mjs,log,json}.
+    // How it can fail, one test each:
+    //   - the block is missing, or is not a fine-pointer block (a touch laptop or an iPad would lose the 3x2 grid)
+    //   - the block targets #kb-board (0,1,0 + id beats the By band rule [data-view="band"] .kb-board and shows the board in By band)
+    //   - the block is not between the 721px list rule and the phone block (it loses to nothing, but the order is the contract)
+    //   - the board does not scroll sideways, a list does not scroll by itself, or scroll-snap undoes the edge scroll
+    //   - the intro is hidden outside the Columns view, or the board loses its region name
+    //   - the page script sets --kbh or the header padding without the same query, or leaves them set after a resize to a phone
+    const DESK = '@media (min-width:721px) and (pointer:fine) {';
+    describe('desktop board (PR-K1)', () => {
+      const desk = () => block(DESK);
+
+      it('the block is a fine-pointer block between the 721px list rule and the phone block, and never names the id', () => {
+        const at = css.indexOf(DESK);
+        assert.ok(at > css.indexOf('@media (min-width:721px) { .kb-list {'), 'the block comes before the 721px list rule');
+        assert.ok(at < css.indexOf('@media (max-width:720px) {\n    .kb-board'), 'the block comes after the phone block');
+        assert.doesNotMatch(desk(), /#kb-board/, 'an id selector would beat the By band hide rule');
+        assert.equal(css.split(DESK).length, 2, 'there must be exactly one desktop block');
+      });
+
+      it('the board is one flex row that scrolls sideways; each list scrolls inside its column; nothing snaps', () => {
+        const b = desk();
+        assert.match(rule(b, '.kb-board'), /display:flex/);
+        assert.match(rule(b, '.kb-board'), /overflow-x:auto/);
+        assert.match(rule(b, '.kb-board'), /height:var\(--kbh,/);
+        assert.match(rule(b, '.kcol'), /flex:0 0 300px/);
+        assert.match(rule(b, '.kb-list'), /min-height:0/);
+        assert.match(rule(b, '.kb-list'), /max-height:none/);
+        assert.doesNotMatch(b, /scroll-snap/, 'scroll-snap undoes the edge scroll');
+        assert.doesNotMatch(css.slice(0, css.indexOf(DESK)), /\.kb-board \{[^}]*display:flex/, 'the base rule must stay a grid');
+      });
+
+      it('the intro is hidden in the Columns view only, and the board has a region name', () => {
+        assert.match(rule(desk(), '[data-view="columns"] .sec-head p'), /display:none/);
+        assert.doesNotMatch(css.slice(0, css.indexOf(DESK)) + css.slice(css.indexOf(DESK) + desk().length), /sec-head p \{[^}]*display:none/, 'the intro is hidden outside the desktop block');
+        assert.match(html, /<div class="kb-board" id="kb-board" role="region" aria-label="[^"]+">/);
+      });
+
+      it('the polish: 13px ink titles, an amber Waiting count, one control row, a narrow empty Scheduled, muted small text', () => {
+        const b = desk();
+        assert.match(rule(b, '.kb-title'), /font-size:13px/);
+        assert.match(rule(b, '.kb-title'), /color:var\(--ink\)/);
+        assert.match(rule(b, '[data-col="waiting"]'), /var\(--warn\)/);
+        assert.ok(b.includes('.kcol[data-col="waiting"]:not([data-n="0"]) .kb-count'), 'the pill is amber on an empty Waiting column too');
+        assert.match(rule(b, '.kb-mv'), /font-size:0/);
+        assert.match(rule(b, '.kb-ctl'), /flex-wrap:nowrap/);
+        assert.match(rule(b, '[data-col="scheduled"][data-n="0"]'), /flex-basis:\d+px/);
+        assert.match(rule(b, '.kb-sub'), /color:var\(--muted\)/);
+        assert.match(rule(b, 'data-n="0"] .kb-list::after'), /color:var\(--muted\)/);
+        // The phone and By band keep their ink: the change is scoped to this block.
+        assert.match(rule(css.slice(0, css.indexOf(DESK)), '.kb-sub'), /color:var\(--faint\)/);
+      });
+
+      it('the page script fits the board only on a fine pointer wider than 720px, and gives the properties back otherwise', () => {
+        const fit = html.slice(html.indexOf('function fitBoard'), html.indexOf('window.lbSetView = setView'));
+        assert.ok(fit.length > 60, 'the main page script has no fitBoard function beside setView');
+        assert.ok(fit.includes("(min-width:721px) and (pointer:fine)"), 'the fit is not gated by the desktop query');
+        assert.ok(fit.includes("'--kbh'"), 'the fit does not set --kbh');
+        assert.ok(fit.includes('removeProperty'), 'the fit leaves its properties set after a resize to a phone');
+        assert.ok(fit.includes('matchMedia'), 'the fit has no matchMedia guard');
+        assert.match(desk(), /html\s*\{\s*scroll-padding-top:var\(--sp,\d+px\)/, 'no desktop scroll-padding-top');
+      });
+    });
 
     it('a field and the Move to select are 16px on a touch screen or a phone, so iOS does not zoom on focus', () => {
       const b = block(COARSE);

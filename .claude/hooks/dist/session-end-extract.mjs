@@ -20,6 +20,47 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
 
 // src/session-end-extract.ts
 import * as fs from "fs";
+
+// src/shared/extraction-state.ts
+var STATE_VERSION = 2;
+var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+var finiteNumber = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : void 0;
+function cleanEntry(raw) {
+  const o = isObject(raw) ? raw : {};
+  const entry = {};
+  const line = finiteNumber(o.last_extracted_line);
+  const launched = finiteNumber(o.last_launched);
+  if (line !== void 0) entry.last_extracted_line = line;
+  if (launched !== void 0) entry.last_launched = launched;
+  if (typeof o.last_extraction_time === "string") entry.last_extraction_time = o.last_extraction_time;
+  return entry;
+}
+function parseState(text) {
+  const sessions = /* @__PURE__ */ Object.create(null);
+  const state = { version: STATE_VERSION, recent_hashes: [], sessions };
+  if (!text || !text.trim()) return state;
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return state;
+  }
+  if (!isObject(data)) return state;
+  if (Array.isArray(data.recent_hashes)) {
+    state.recent_hashes = data.recent_hashes.filter((h) => typeof h === "string");
+  }
+  if (isObject(data.sessions)) {
+    for (const [sid, entry] of Object.entries(data.sessions)) sessions[sid] = cleanEntry(entry);
+  } else if (typeof data.session_id === "string" && data.session_id) {
+    sessions[data.session_id] = cleanEntry(data);
+  }
+  return state;
+}
+function sessionStartLine(state, sessionId) {
+  return state.sessions[sessionId]?.last_extracted_line ?? 0;
+}
+
+// src/session-end-extract.ts
 var MIN_TURNS = 10;
 function getOpcDir() {
   return process.env.CLAUDE_OPC_DIR || path.join(process.env.HOME || process.env.USERPROFILE || "", "continuous-claude", "opc");
@@ -30,7 +71,7 @@ function getStateFilePath(projectDir) {
 function loadExtractionState(stateFile) {
   if (!fs.existsSync(stateFile)) return null;
   try {
-    return JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+    return fs.readFileSync(stateFile, "utf-8");
   } catch {
     return null;
   }
@@ -59,7 +100,7 @@ function extractWithDedup(sessionId, projectDir, transcriptPath) {
   const state = loadExtractionState(stateFile);
   const incrementalScript = path.join(opcDir, "scripts", "core", "incremental_extract.py");
   if (transcriptPath && fs.existsSync(transcriptPath) && fs.existsSync(incrementalScript)) {
-    const startLine = state?.last_extracted_line || 0;
+    const startLine = sessionStartLine(parseState(state), sessionId);
     console.error(`[SessionEnd:L3] Final sweep from line ${startLine} with dedup (fire-and-forget)`);
     const child = spawnDetachedHidden("uv", [
       "run",

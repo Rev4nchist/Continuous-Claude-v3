@@ -1450,7 +1450,7 @@ const okExec = (log) => (spec) => { log.push(spec.id ?? spec.args.join(' ')); re
 // so they run with an env step that finds everything. The EN tests below use the real one (envStep) or their own.
 const NO_ENV = ({ gates }) => ({ fail: null, others: [], note: null, blocked: new Set(), gates });
 
-const SUMMARY_OK = () => ({ result: { step: 'summary', status: 'PASS', detail: 'stub summary', notes: [] }, sha: 'a'.repeat(64) });
+const SUMMARY_OK = () => ({ result: { step: 'summary', status: 'PASS', detail: 'stub summary', notes: [] }, sha: 'a'.repeat(64), ok: true });
 
 async function prePr(repo, extra = {}) {
   const gateRuns = [];
@@ -1533,6 +1533,7 @@ test('SM2: a passing summary puts its hash in the stamp; the check gets root, he
   assert.equal(result.ok, true, result.lines.join('\n'));
   const stamp = JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8'));
   assert.equal(stamp.summary_sha256, 'a'.repeat(64));
+  assert.equal(stamp.summary_ok, true, 'the stamp records that the summary is a real one, so the Open PR question can show its Change');
   assert.equal(seen.length, 1);
   assert.equal(seen[0].root, repo.dir);
   assert.equal(seen[0].head, repo.head);
