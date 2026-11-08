@@ -57,7 +57,8 @@ export type FixtureBrief = {
   title?: string;
   goal?: string;
   stopAt?: string;
-  sources: Record<string, never>;
+  /** Who set each value (brief.ts `sources`). The reader keeps only `goal`. */
+  sources: { goal?: 'brief_set' | 'parsed'; ask?: 'brief_set' | 'parsed' };
   plan: FixturePlanStep[];
   ask: FixtureAsk[];
   decisions: { text: string; by: string; at: number }[];
@@ -65,10 +66,13 @@ export type FixtureBrief = {
   updatedAt: number;
 };
 
-/** An OsBrief with every list present. `updatedAt` defaults to now (epoch ms). */
+/**
+ * An OsBrief with every list present. `updatedAt` defaults to now (epoch ms). A goal given without
+ * `sources` reads as set by `brief_set`, as the real writer records it; pass `sources` to say otherwise.
+ */
 export function makeBrief(parts: Partial<FixtureBrief> = {}): FixtureBrief {
   return {
-    sources: {},
+    sources: parts.goal === undefined ? {} : { goal: 'brief_set' },
     plan: [],
     ask: [],
     decisions: [],
@@ -426,7 +430,27 @@ export async function findQuietSessionId(options: { validFormat?: boolean } = {}
 
 // --- A live session that holds lanes (read from the database) -----------------------------------
 
-export type HeldLaneFact = { id: string; title: string; leaseSecondsLeft: number | null };
+export type HeldLaneFact = {
+  id: string;
+  title: string;
+  leaseSecondsLeft: number | null;
+  /** `lane.claimed_at` in epoch seconds, null when the lane has none. */
+  claimedAtEpoch: number | null;
+};
+
+/**
+ * The title the card must show as the lane goal: the held lane with the NEWEST `claimed_at` (the first
+ * of equal or missing claims wins), clipped to the 200 characters the app query keeps, on one line.
+ * Null when no lane has a title. Computed here from the database facts, not from the app's code.
+ */
+export function expectedLaneGoal(lanes: readonly HeldLaneFact[]): string | null {
+  let best: HeldLaneFact | null = null;
+  for (const lane of lanes) {
+    if (lane.title.trim() === '') continue;
+    if (best === null || (lane.claimedAtEpoch ?? -Infinity) > (best.claimedAtEpoch ?? -Infinity)) best = lane;
+  }
+  return best === null ? null : best.title.slice(0, 200).replace(/\s+/g, ' ').trim();
+}
 
 export type LaneHolder = { sessionId: string; shortId: string; lanes: HeldLaneFact[] };
 
@@ -446,9 +470,11 @@ export async function findLaneHolderSession(): Promise<LaneHolder> {
       title: string;
       owner_session_id: string;
       lease_left: number | null;
+      claimed_epoch: number | null;
     }>(
       `SELECT l.id, l.title, l.owner_session_id,
-              EXTRACT(EPOCH FROM (l.lease_expires_at - now()))::int AS lease_left
+              EXTRACT(EPOCH FROM (l.lease_expires_at - now()))::int AS lease_left,
+              EXTRACT(EPOCH FROM l.claimed_at)::float8 AS claimed_epoch
        FROM agentic_os.lane l
        JOIN public.sessions s ON s.id = l.owner_session_id
        WHERE l.state IN ('active', 'review', 'blocked', 'ready')
@@ -466,6 +492,7 @@ export async function findLaneHolderSession(): Promise<LaneHolder> {
         id: row.id,
         title: row.title,
         leaseSecondsLeft: row.lease_left === null ? null : Number(row.lease_left),
+        claimedAtEpoch: row.claimed_epoch === null ? null : Number(row.claimed_epoch),
       });
       byOwner.set(row.owner_session_id, held);
     }
