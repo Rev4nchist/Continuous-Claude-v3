@@ -23,10 +23,12 @@
  *             A dry run, --help, `git stash push`, another remote and a non-CCv3 checkout pass. A push to main passes unless it is a force form.
  *             A command with several pushes is judged one push at a time, like land.
  * Where it runs. A push, a create, a land and a merge are each judged in EVERY folder on the cd path before them (dirsAfter): with no cd,
- * the payload cwd; else the folder after each prefix of the cd list, never the cwd. A cd may not run (||, a subshell, &, a pipe, a comment),
+ * the payload cwd; else the folder after each prefix of the cd list. The cwd joins them when any cd before the shape is joined to it by
+ * something other than && (`;`, `||`, `|`, `&`, a line end), or follows a `||` or a pipe: that cd can fail or be skipped (`cd B extra`,
+ * `true || cd B`) and the shell stays in the cwd (looseJoin, as pre-pr-gate planRun). A cd may not run (||, a subshell, &, a pipe, a comment),
  * so one deny in any of those folders denies. A cd after the shape never counts. When popd, Pop-Location, `cd -` or a bare cd comes
- * before a create or a merge, the folder is unknown: it is denied if the cwd or a folder on the known cd path is a CCv3 checkout, or the
- * command names CCv3. The land script reads no folder, so it is judged by its tap only.
+ * before a push, a create or a merge, the folder is unknown: it is denied if the cwd or a folder on the known cd path is a CCv3 checkout, or the
+ * command names CCv3 (create and merge only). A push with an absolute -C names its folder, so it is judged there. The land script reads no folder, so it is judged by its tap only.
  * NOT gated: anything else. Known gaps: a push inside a child process (land-pr.ps1, scheduled jobs), `bash -c '...'`, a variable or alias for git.
  *
  * Mode. `decisions.enforce` is a TOP-LEVEL block of review-router.config.json (not `checkpoint`). Only a literal true denies.
@@ -193,13 +195,20 @@ interface PushShape {
   dir: string | null;
   /** The cd targets (raw) that come before this push in the command text, in order. They may set the folder git runs the push in. A cd may not run, so the push is judged in the folder after each prefix (pushDirsOf). */
   cds: string[];
+  /** Some cd before this push is joined to it by something other than &&, or follows a || or a pipe (see looseJoin): the push may run in the payload cwd. */
+  loose: boolean;
+  /** A popd, Pop-Location, `cd -` or a bare cd comes before this push: the folder is unknown (see judgePushAt). */
+  unknown: boolean;
   /** A force or delete form (see FORCE_LONG). */
   force: boolean;
   /** --git-dir or --work-tree moves the repo: the checkout cannot be known. */
   moved: boolean;
 }
-/** Where a create, a land or a merge runs: the cd targets (raw) before it, and whether a popd, Pop-Location, `cd -` or a bare cd made the folder unknowable. */
-interface Where { cds: string[]; unknown: boolean }
+/**
+ * Where a create, a land or a merge runs: the cd targets (raw) before it, and whether a popd, Pop-Location, `cd -` or a bare cd made the folder unknowable.
+ * `loose`: some cd before it is joined to the shape by a ; || | & or line end (not only &&), so that cd may fail and leave the shell in the payload cwd.
+ */
+interface Where { cds: string[]; unknown: boolean; loose: boolean }
 interface Shape {
   kind: 'create' | 'land' | 'merge' | 'store' | 'push'; pr: string | null; sha?: string | null; push?: PushShape;
   /** Create, land and merge: where the shape runs. */
@@ -253,13 +262,13 @@ const REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
 const VALUE_OPTS = new Set(['--repo', '--receive-pack', '--exec', '--push-option', '-o']);
 const FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
 
-interface RawPush { opts: string; args: string; cds: string[] }
+interface RawPush { opts: string; args: string; cds: string[]; loose: boolean; unknown: boolean }
 
 /**
  * The push calls of one view. `masked` and `raw` have the same length. `atStart`: the call must open the text (the squashed view).
  * `before`: the cd targets that come before the text (the squashed view is one segment; the segments before it hold the cds).
  */
-function pushCallsOf(masked: string, raw: string, atStart: boolean, before: string[] = []): RawPush[] {
+function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Where = { cds: [], unknown: false, loose: false }): RawPush[] {
   const calls: RawPush[] = [];
   const kinds: [RegExp, (token: string) => boolean][] = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -270,8 +279,11 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean, before: stri
       const optsStart = tokenStart + m[2].length;
       const end = m.index! + m[0].length;
       const cut = masked.slice(end).search(ARGS_END_RE);
-      const cds = [...before, ...cdTargetsIn(masked.slice(0, tokenStart), raw.slice(0, tokenStart))];
-      calls.push({ opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut), cds });
+      const own = cdsBefore(masked.slice(0, tokenStart), raw.slice(0, tokenStart));
+      calls.push({
+        opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut),
+        cds: [...before.cds, ...own.cds], loose: before.loose || own.loose, unknown: before.unknown || own.unknown,
+      });
     }
   }
   return calls;
@@ -289,11 +301,11 @@ function pushCallsIn(raw: string): RawPush[] {
   for (const [start, next] of [...breaks, [bash.length, bash.length] as const]) {
     const seg = bash.slice(from, start);
     // \" escapes in bash, not in PowerShell: each mask can hide a cd the other shows. Read the cds under both and keep each list that differs.
-    const lists = [cdTargetsIn(maskedBash.slice(0, from), bash.slice(0, from)), cdTargetsIn(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
+    const lists = [cdsBefore(maskedBash.slice(0, from), bash.slice(0, from)), cdsBefore(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
     from = next;
     const squashed = squashQuotes(seg);
     if (squashed === seg) continue;
-    for (const before of lists.filter((l, i) => lists.findIndex((o) => o.join('\0') === l.join('\0')) === i)) calls.push(...pushCallsOf(squashed, squashed, true, before));
+    for (const before of distinctWheres(lists)) calls.push(...pushCallsOf(squashed, squashed, true, before));
   }
   return calls;
 }
@@ -324,7 +336,7 @@ function pushShapesFrom(call: RawPush): Shape[] {
   }
   if (quiet) return [];
   const [remote = null, ...specs] = positional;
-  const base = { remote, dir, cds: call.cds, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
+  const base = { remote, dir, cds: call.cds, loose: call.loose, unknown: call.unknown, moved: MOVE_OPT_RE.test(` ${call.opts}`) };
   if (specs.length === 0) return [{ kind: 'push', pr: null, push: { ...base, branch: null, src: null, force } }];
   const out: Shape[] = [];
   for (let i = 0; i < specs.length; i++) {
@@ -351,7 +363,7 @@ function pushShapesOf(raw: string): Shape[] {
   for (const call of pushCallsIn(raw)) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push!;
-      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.cds.join('\0')].join('|');
+      const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.loose, p.unknown, p.cds.join('\0')].join('|');
       if (!seen.has(id)) { seen.add(id); out.push(shape); }
     }
   }
@@ -370,7 +382,7 @@ function cmdSegments(view: string): { seg: string; from: number }[] {
   return out;
 }
 
-const whereId = (at: Where): string => `${at.unknown ? '?' : ''}${at.cds.join('\0')}`;
+const whereId = (at: Where): string => `${at.unknown ? '?' : ''}${at.loose ? '~' : ''}${at.cds.join('\0')}`;
 /** The folders a segment may run in, one `Where` per distinct reading of the cds before it. */
 const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 
@@ -412,7 +424,7 @@ function shapesOf(raw: string): Shape[] {
   if (!created && isPrOpenCommand(text)) {
     const view = views[0];
     const masked = maskQuoted(view, 'Bash');
-    for (const at of [{ cds: [], unknown: false }, whereAt(cdPositions(masked, view), view.length)]) {
+    for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
       add({ kind: 'create', pr: null, at, text: view, mtext: masked }, `create|${whereId(at)}|${view}`);
     }
   }
@@ -442,39 +454,49 @@ function moveTo(base: string, target: string, shell: 'bash' | 'pwsh'): string {
 }
 
 /**
- * The raw cd targets of a text, in order. A cd is found in the masked view, so a quoted `; cd x` is not one; the target is read from the
- * raw text at the same offsets (both views have the same length). Callers pass the text up to the start of a push: only what runs before it.
+ * Where the text that ENDS at a push runs: the cds in it, whether the folder is unknown, whether the cwd must be judged too. A cd is found
+ * in the masked view, so a quoted `; cd x` is not one; the target is read from the raw text at the same offsets (both views have the same
+ * length). Callers pass the text up to the start of a push: only what runs before it. The same reading as a create or a merge (whereAt).
  */
-function cdTargetsIn(masked: string, raw: string): string[] {
-  const out: string[] = [];
-  for (const m of masked.matchAll(new RegExp(CD_SOURCE, 'gi'))) {
-    const end = m.index! + m[0].length;
-    out.push(raw.slice(end - m[1].length, end));
-  }
-  return out;
+const cdsBefore = (masked: string, raw: string): Where => whereAt(cdPositions(masked, raw), masked.length);
+
+/**
+ * True when the text between a cd and the shape it runs before (masked, so a quoted break is blank) is NOT joined only by `&&`: a `;`, `||`, `|`, `&`
+ * or line end lets the shape run after that cd failed (`cd B extra`, a missing folder), and the shell then stays where it was. Same rule as
+ * pre-pr-gate cdSteps. It reads separator characters only; it finds no command.
+ */
+function looseJoin(between: string): boolean {
+  const joiners = between.match(/&&|\|\||[;&|\r\n]/g) ?? [];
+  return !(joiners.length > 0 && joiners.every((j) => j === '&&'));
 }
 
 // popd, Pop-Location, `cd -` and a bare cd go to a folder the text does not name. Found in the masked view, at a command position.
 const UNKNOWN_CD_SOURCE = String.raw`(?:^|[;&|\r\n]\s*)(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:cd|Set-Location|sl|pushd|Push-Location)(?:[ \t]+[-+])?[ \t]*(?=[;&|\r\n]|$))`;
 
 /** Every cd of a masked view with the offset where it ends, and where each popd-like command ends. Read once per view: a segment takes the ones before it. */
-interface CdPositions { cds: { end: number; target: string }[]; unknown: number[] }
+interface CdPositions { cds: { end: number; target: string; piped: boolean }[]; unknown: number[]; masked: string }
 function cdPositions(masked: string, raw: string): CdPositions {
   const cds: CdPositions['cds'] = [];
   for (const m of masked.matchAll(new RegExp(CD_SOURCE, 'gi'))) {
     const end = m.index! + m[0].length;
     const target = raw.slice(end - m[1].length, end);
-    if (!/^[-+]$/.test(target)) cds.push({ end, target }); // `cd -` is an unknown position, not a folder named "-"
+    // The match opens on the separator before the cd: a | there (|| or a pipe) means the cd may be skipped or run in a pipe subshell.
+    // `cd -` is an unknown position, not a folder named "-".
+    if (!/^[-+]$/.test(target)) cds.push({ end, target, piped: m[0].startsWith('|') });
   }
   const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, 'gi'))].map((m) => m.index! + m[0].length);
-  return { cds, unknown };
+  return { cds, unknown, masked };
 }
 
 /** Where a segment that starts at `from` runs: only a cd that ends before the segment counts, never one in or after it. */
-const whereAt = (pos: CdPositions, from: number): Where => ({
-  cds: pos.cds.filter((c) => c.end <= from).map((c) => c.target),
-  unknown: pos.unknown.some((end) => end <= from),
-});
+function whereAt(pos: CdPositions, from: number): Where {
+  const before = pos.cds.filter((c) => c.end <= from);
+  return {
+    cds: before.map((c) => c.target),
+    unknown: pos.unknown.some((end) => end <= from),
+    loose: before.some((c) => c.piped || looseJoin(pos.masked.slice(c.end, from))),
+  };
+}
 
 /** The folder a push runs in: the payload cwd moved by each cd before the push, in order (the last absolute one wins). */
 function pushDir(cwd: string, cds: string[], shell: 'bash' | 'pwsh'): string {
@@ -651,25 +673,44 @@ function resolveDir(base: string, raw: string, shell: 'bash' | 'pwsh'): string {
  * Every folder a shape may run in. A cd in the text may never run (|| short-circuit, a failed cd, a comment) or may not last (a subshell,
  * a pipe, the background), so the shape is judged in the folder after each prefix of its cds. With no cd it is the payload cwd.
  * `dir` is a -C (or -Path) of the shape itself: it then moves each of them. Used by push, create, land and merge.
+ * `loose`: a cd before the shape is joined to it by something other than && (looseJoin), so it can fail and the shape runs in the payload
+ * cwd (or the folder of an earlier cd, which the prefixes already hold). The cwd is judged too, as planRun in pre-pr-gate does.
  */
-function dirsAfter(cwd: string, cds: string[], shell: 'bash' | 'pwsh', dir: string | null = null): string[] {
-  const dirs = cds.length === 0 ? [cwd] : cds.map((_, i) => pushDir(cwd, cds.slice(0, i + 1), shell));
+function dirsAfter(cwd: string, cds: string[], shell: 'bash' | 'pwsh', loose: boolean, dir: string | null = null): string[] {
+  const dirs = cds.length === 0 ? [cwd] : [...(loose ? [cwd] : []), ...cds.map((_, i) => pushDir(cwd, cds.slice(0, i + 1), shell))];
   return [...new Set(dirs.map((d) => (dir === null ? d : resolveDir(d, dir, shell))))];
 }
-const pushDirsOf = (p: PushShape, cwd: string, shell: 'bash' | 'pwsh'): string[] => dirsAfter(cwd, p.cds, shell, p.dir);
+const pushDirsOf = (p: PushShape, cwd: string, shell: 'bash' | 'pwsh'): string[] => dirsAfter(cwd, p.cds, shell, p.loose, p.dir);
 
 const POSITION_WHY = 'popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, so the checkout this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd.';
 
 /** Every deny of one create, land or merge: judged in each folder on its cd path. A position that is unknown is denied when CCv3 may be the place. */
 function judgeAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', named: string | null): Decision[] {
   const at = s.at!;
-  const dirs = dirsAfter(cwd, at.cds, shell);
+  const dirs = dirsAfter(cwd, at.cds, shell, at.loose);
   // judgeLand reads no folder for the land script, so a popd never blocks it: its PR tap alone decides.
   if (at.unknown && s.kind !== 'land') {
     const ccv3 = named === CCV3_REPO || [...new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
     return ccv3 ? [deny('position-unknown', POSITION_WHY)] : [];
   }
   return dirs.map((d) => (s.kind === 'create' ? judgeCreate(s.text!, s.mtext!, deps, d, named) : judgeLand(s, deps, d, named)));
+}
+
+/**
+ * Every deny of one push: judged in each folder on its cd path (pushDirsOf). When a popd, Pop-Location, `cd -` or a bare cd comes before it the
+ * folder is unknown (as in judgeAt): it is denied, tap or not, if the cwd or a folder on the known cd path is a CCv3 checkout. A -C that is
+ * absolute names the folder itself, so the position does not matter and the push is judged there.
+ */
+function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', subagent: boolean, chained: boolean, alone: boolean): Decision[] {
+  const p = s.push!;
+  const dirs = pushDirsOf(p, cwd, shell);
+  const fixedByDir = p.dir !== null && resolveDir('/a', p.dir, shell) === resolveDir('/b', p.dir, shell);
+  if (p.unknown && !fixedByDir) {
+    const ccv3 = [...new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
+    // No CCv3 folder on the path: judge the known folders anyway, so a --git-dir or --work-tree push (p.moved) still denies.
+    if (ccv3) return [deny('position-unknown', POSITION_WHY, 'push')];
+  }
+  return dirs.map((d) => judgePush(s, deps, d, subagent, chained, alone));
 }
 
 /** A remote name or URL: the upstream (origin, parcadei), the fork (fork, the CCv3 repo URL) or neither. */
@@ -747,8 +788,7 @@ function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
   for (const s of [...rest, ...pushes]) {
-    const found = s.kind === 'push' ? pushDirsOf(s.push!, cwd, shell).map((d) => judgePush(s, deps, d, Boolean(input.agent_id), chained, alone))
-      : judgeAt(s, deps, cwd, shell, named);
+    const found = s.kind === 'push' ? judgePushAt(s, deps, cwd, shell, Boolean(input.agent_id), chained, alone) : judgeAt(s, deps, cwd, shell, named);
     for (const d of found) {
       if (d.action === 'deny' && !denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope)) denies.push(d);
     }
