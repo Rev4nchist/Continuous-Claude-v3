@@ -736,3 +736,5 @@ It exits 1 on any FAIL. With `--json` it also writes `.claude/cache/e2e/<YYYY-MM
 
 Info is not a status. It is a PASS whose detail starts `info:`, so the summary line and the session-start alert count only real warnings.
 A missing optional file is a PASS with `absent` in the detail. Tests: `node --test scripts/harness-doctor.test.mjs`.
+
+The `sync:worktrees` WARN lists orphan folders. `node scripts/worktree/orphans.mjs` is a dry run that sizes each one and gives a keep or candidate verdict. It deletes nothing and prints the paste-yourself command per candidate. Tests: `node --test scripts/worktree/orphans.test.mjs`.
