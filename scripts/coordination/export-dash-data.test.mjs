@@ -6,17 +6,18 @@
  * The database parts (SQL, fixtures, read-only transaction) are in export-dash-data.db.test.mjs.
  * Each test names the change that breaks it.
  */
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   DATASETS, DOC_CAP_BYTES, buildProjectRows, buildRefreshDoc, buildSnapshotRow, checkInvariants,
-  chicagoDay, clearRefreshPending, readSnapshots, upsertSnapshot, writeExport,
+  chicagoDay, clearRefreshFile, clearRefreshPending, readSnapshots, upsertSnapshot, writeExport,
 } from './export-dash-data.mjs';
 import { compileRules } from './lane-dash-project.mjs';
 import { normalizeConfig } from './lane-dash-config.mjs';
+import { buildTileRows } from './lane-dash-metrics.mjs';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dash-export-'));
 const T1 = '2026-11-08T01:00:00.000Z'; // 19:00 CT on 2026-11-07
@@ -214,13 +215,32 @@ function collected(exportedAt, { lanes = [lane({ id: 'a', state: 'backlog' }), l
     envelopes: {
       lanes: env(lanes),
       assignments: env([]),
-      projects: env([{ key: 'p' }, { key: 'unassigned' }]),
+      projects: env(['p', 'unassigned'].map((key) => ({
+        key, name: key, goal: '', done_when: '', terminal_lanes: '', terminal_total: 0, terminal_done: 0, status: 'no_end',
+        done_at: null, done_day: null, visible_until: null, parked: false, proposed: false, focus: false,
+      }))),
       targets: env([{ key: 'p0_cap', value: 5, label: 'x', source: 's' }]),
-      meta: env([{ exported_at: exportedAt, today }]),
+      meta: env([{
+        exported_at: exportedAt, today, history_start: '2026-11-01', band_history_start: '2026-11-07', board: 'b', board_url: 'https://example.test/b',
+        stale_after_hours: 36, projects_stale_after_hours: 168, timezone: 'America/Chicago',
+        open_check: lanes.filter((l) => l.state !== 'done').length, done_check: lanes.filter((l) => l.state === 'done').length,
+      }]),
     },
   };
 }
-const withSnapshots = (c) => ({ ...c, envelopes: { ...c.envelopes, snapshots: { sql: 's', exportedAt: c.envelopes.lanes.exportedAt, rows: [] } } });
+/** Adds the snapshots and tiles documents the way writeExport does, so checkInvariants sees all seven. */
+const withSnapshots = (c) => {
+  const e = c.envelopes;
+  const exportedAt = e.lanes.exportedAt;
+  const snapshots = { sql: 's', exportedAt, rows: [] };
+  const tiles = {
+    sql: 't', exportedAt,
+    rows: buildTileRows({
+      lanes: e.lanes.rows, assignments: e.assignments.rows, projects: e.projects.rows, targets: e.targets.rows, meta: e.meta.rows[0], snapshots: snapshots.rows,
+    }),
+  };
+  return { ...c, envelopes: { ...e, snapshots, tiles } };
+};
 
 describe('checkInvariants', () => {
   it('passes a consistent export', () => {
@@ -237,13 +257,30 @@ describe('checkInvariants', () => {
   });
 
   it('fails when exportedAt differs between documents', () => {
-    // Breaks if the stamps are not compared across all six documents.
+    // Breaks if the stamps are not compared across all seven documents.
     const c = withSnapshots(collected(T1));
     c.envelopes.meta.exportedAt = T2;
     assert.throws(() => checkInvariants(c), /exportedAt/);
     const d = withSnapshots(collected(T1));
     d.envelopes.snapshots.exportedAt = T2;
     assert.throws(() => checkInvariants(d), /exportedAt/);
+  });
+
+  it('covers the tiles document: missing, over 256 KB, or a different exportedAt each fail and name tiles.json', () => {
+    // Breaks if tiles is left out of DATASETS, so its cap and stamp are never checked.
+    assert.ok(DATASETS.includes('tiles'));
+    const missing = withSnapshots(collected(T1));
+    delete missing.envelopes.tiles;
+    assert.throws(() => checkInvariants(missing), /tiles\.json is missing/);
+    const notRows = withSnapshots(collected(T1));
+    notRows.envelopes.tiles.rows = 'x';
+    assert.throws(() => checkInvariants(notRows), /tiles\.json is missing or has no rows/);
+    const big = withSnapshots(collected(T1));
+    big.envelopes.tiles.rows = [{ id: 'x', tile: 1, kind: 'text', rank: null, value: null, text: 'é'.repeat(140000), tone: null }];
+    assert.throws(() => checkInvariants(big), /tiles\.json.*(262144|256 KB)/s);
+    const skew = withSnapshots(collected(T1));
+    skew.envelopes.tiles.exportedAt = T2;
+    assert.throws(() => checkInvariants(skew), /exportedAt/);
   });
 
   it('fails when a lane project is not in the projects rows', () => {
@@ -281,11 +318,13 @@ describe('checkInvariants', () => {
 });
 
 describe('writeExport', () => {
-  it('writes the six documents and the refresh doc, atomically, with no temp files left', () => {
-    // Breaks if a document is skipped, a temp file is left, or refresh.json is not written.
+  it('writes the seven documents and the refresh doc, atomically, with no temp files left', () => {
+    // Breaks if a document is skipped (tiles.json included), a temp file is left, or refresh.json is not written.
     const out = tmpDir();
     const r = writeExport(out, collected(T1));
     const names = fs.readdirSync(out).sort();
+    assert.equal(DATASETS.length, 7);
+    assert.deepEqual(names, ['assignments.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
     assert.deepEqual(names, [...DATASETS.map((d) => `${d}.json`), 'refresh.json'].sort());
     for (const d of DATASETS) {
       const doc = JSON.parse(fs.readFileSync(path.join(out, `${d}.json`), 'utf8'));
@@ -296,6 +335,28 @@ describe('writeExport', () => {
     assert.equal(refresh.pending, true);
     assert.equal(refresh.key, T1);
     assert.equal(r.exportedAt, T1);
+  });
+
+  it('tiles.json is built from the in-memory documents with exported_at as "now", and lists itself in refresh.json', () => {
+    // Breaks if tiles is computed before the snapshots document, from the browser or process clock, or left out of the refresh file list.
+    const out = tmpDir();
+    // mock.timers replaces Date itself (new Date() too); a wrong clock would change the ages and the stamp
+    mock.timers.enable({ apis: ['Date'], now: Date.parse('2030-01-01T00:00:00Z') });
+    try {
+      writeExport(out, collected(T1, { lanes: [lane({ id: 'a', state: 'blocked', dave_ask_at: '2026-11-06T01:00:00.000Z', last_work_at: T1 })] }));
+    } finally {
+      mock.timers.reset();
+    }
+    const tiles = JSON.parse(fs.readFileSync(path.join(out, 'tiles.json'), 'utf8'));
+    assert.deepEqual(Object.keys(tiles).sort(), ['exportedAt', 'rows', 'sql']);
+    const get = (id) => tiles.rows.find((r) => r.id === id);
+    assert.equal(tiles.exportedAt, T1);
+    assert.equal(get('wait.count').value, 1);
+    assert.equal(get('wait.oldest').value, 2); // 2026-11-08T01:00 minus 2026-11-06T01:00 on the export clock
+    assert.equal(get('page.data_from').text, 'Nov 7, 7:00 PM CST');
+    assert.equal(get('pile.trend.note').text, 'Trend after 7 daily snapshots: 1 so far'); // the snapshots document is built first
+    const refresh = JSON.parse(fs.readFileSync(path.join(out, 'refresh.json'), 'utf8'));
+    assert.ok(refresh.files.includes('tiles.json'));
   });
 
   it('adds one snapshot row per Chicago day: a second run the same day replaces, a new day appends, .bak is kept', () => {
@@ -355,6 +416,57 @@ describe('writeExport', () => {
     writeExport(out, collected(T1));
     assert.ok(!fs.existsSync(path.join(out, '.export.lock')));
     assert.throws(() => writeExport(out, collected(T2, { directOpen: 99 })));
+    assert.ok(!fs.existsSync(path.join(out, '.export.lock')));
+  });
+});
+
+describe('clearRefreshFile (PR 409 follow-up: same lock as writeExport, own temp name)', () => {
+  const exported = () => {
+    const out = tmpDir();
+    writeExport(out, collected(T1));
+    return out;
+  };
+  const refreshPath = (out) => path.join(out, 'refresh.json');
+
+  it('a normal clear flips pending for the same key, leaves no lock or temp file, and ignores an older key', () => {
+    // Breaks if taking the lock stops the clear from working, or the lock or a temp file is left behind.
+    const out = exported();
+    const stale = clearRefreshFile(out, '2020-01-01T00:00:00.000Z', T3);
+    assert.equal(stale.pending, true);
+    const doc = clearRefreshFile(out, T1, T3);
+    assert.equal(doc.pending, false);
+    assert.equal(doc.cleared_at, T3);
+    assert.equal(JSON.parse(fs.readFileSync(refreshPath(out), 'utf8')).pending, false);
+    assert.ok(!fs.existsSync(path.join(out, '.export.lock')));
+    assert.deepEqual(fs.readdirSync(out).filter((f) => f.includes('.tmp')), []);
+    assert.equal(clearRefreshFile(tmpDir(), T1, T3), null);
+  });
+
+  it('a held lock throws like writeExport and leaves refresh.json unchanged', () => {
+    // Breaks if clearRefreshFile skips the .export.lock that writeExport holds while it renames refresh.json.
+    const out = exported();
+    const before = fs.readFileSync(refreshPath(out), 'utf8');
+    fs.writeFileSync(path.join(out, '.export.lock'), String(process.pid));
+    assert.throws(() => clearRefreshFile(out, T1, T3), /lock/i);
+    assert.equal(fs.readFileSync(refreshPath(out), 'utf8'), before);
+    assert.ok(fs.existsSync(path.join(out, '.export.lock')), 'the other holder keeps its lock');
+  });
+
+  it('does not use writeExport\'s refresh.json.tmp name', () => {
+    // Breaks if the clear writes or renames refresh.json.tmp, which a running export owns.
+    const out = exported();
+    const sentinel = path.join(out, 'refresh.json.tmp');
+    fs.writeFileSync(sentinel, 'EXPORT-OWNED');
+    clearRefreshFile(out, T1, T3);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'EXPORT-OWNED');
+    assert.equal(JSON.parse(fs.readFileSync(refreshPath(out), 'utf8')).pending, false);
+  });
+
+  it('releases the lock when the refresh file does not parse', () => {
+    // Breaks if the lock is left behind after a failed clear and every later export fails.
+    const out = exported();
+    fs.writeFileSync(refreshPath(out), '{oops');
+    assert.throws(() => clearRefreshFile(out, T1, T3));
     assert.ok(!fs.existsSync(path.join(out, '.export.lock')));
   });
 });

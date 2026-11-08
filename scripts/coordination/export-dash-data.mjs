@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
- * export-dash-data -- export the lane board as six local JSON documents for the lane dashboard.
+ * export-dash-data -- export the lane board as seven local JSON documents for the lane dashboard.
  *
  *   node scripts/coordination/export-dash-data.mjs [--out <dir>] [--rules <file>] [--config <file>]
  *   node scripts/coordination/export-dash-data.mjs --out <dir> --clear-refresh <key>
  *
  * It only writes local files. It uploads nothing and writes to no artifact (a later step does that).
  *
- * Documents (each {sql, exportedAt, rows}, one exportedAt in all six, each under 256 KB):
- *   lanes, assignments, projects, targets, meta, snapshots
+ * Documents (each {sql, exportedAt, rows}, one exportedAt in all seven, each under 256 KB):
+ *   lanes, assignments, projects, targets, meta, snapshots, tiles
+ *   tiles = flat rows of every tile figure, verdict word and sentence, computed here in Node by lane-dash-metrics.mjs
+ *   (schema in that file). The page only marks and draws them. Ages use meta.exported_at, never a clock.
  * Plus refresh.json, the refresh trigger doc (not a dataset). See buildRefreshDoc.
  *
  * Database: SELECT only, in BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY with default_transaction_read_only=on.
@@ -30,7 +32,7 @@
  *             "no longer needs Dave" is no ask. lane.note is never read: it changes only on a new note.
  *   project   from lane-projects.json through the shared projectOf (lane-dash-project.mjs).
  *
- * Checks (exit 1, nothing written): a document over 256 KB, exportedAt not equal in all six, a lane project
+ * Checks (exit 1, nothing written): a document over 256 KB, exportedAt not equal in all seven, a lane project
  * that is not in the projects rows, and a rebuilt open count (created minus done at the last day) that differs
  * from the direct count.
  *
@@ -46,12 +48,13 @@ import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { loadConfig } from './lane-dash-config.mjs';
 import { loadProjectRules, projectOf, UNASSIGNED } from './lane-dash-project.mjs';
+import { buildTileRows } from './lane-dash-metrics.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
 
 export const DOC_CAP_BYTES = 256 * 1024;
-export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots'];
+export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles'];
 const TZ = 'America/Chicago';
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -173,7 +176,7 @@ export function checkInvariants({ envelopes, directOpen, bornDone = [] }) {
  * dashboard has not been updated. The CLEARING CALL is an ArtifactData write to datasets/lanes (the step that
  * points the dashboard at the new files). After that write, run `--clear-refresh <key>` with the doc's key.
  * clearRefreshPending resets it only for the same key, so an older upload never hides a newer export.
- * Wiring the clearing call to a hook (HOOK_TOOLS and the settings matcher) is PR 2, not this file.
+ * Wiring the clearing call to a hook (HOOK_TOOLS and the settings matcher) is a later PR, not this file. It needs Dave's yes on hooks. A held lock makes clearRefreshFile throw, so that hook must retry.
  */
 export function buildRefreshDoc(exportedAt, files) {
   return {
@@ -232,9 +235,29 @@ function acquireLock(lock) {
 }
 
 /**
- * Check, then write the six documents and refresh.json. `collected` = {envelopes: {lanes, assignments, projects,
- * targets, meta}, directOpen}. The snapshots document is built here from the previous file under a lock.
- * Nothing is written unless every check passes. Each file is a temp file renamed into place.
+ * The tiles document: flat rows of figures, verdict words and sentences (see lane-dash-metrics.mjs for the schema).
+ * Built from the other documents in memory. "Now" is meta.exported_at, never a clock.
+ */
+function buildTilesEnvelope(envelopes, exportedAt) {
+  return {
+    sql: 'Computed in Node by scripts/coordination/lane-dash-metrics.mjs from the lanes, assignments, projects, targets, meta and snapshots documents. No query.',
+    exportedAt,
+    rows: buildTileRows({
+      lanes: envelopes.lanes.rows,
+      assignments: envelopes.assignments.rows,
+      projects: envelopes.projects.rows,
+      targets: envelopes.targets.rows,
+      meta: envelopes.meta.rows[0],
+      snapshots: envelopes.snapshots.rows,
+    }),
+  };
+}
+
+/**
+ * Check, then write the seven documents and refresh.json. `collected` = {envelopes: {lanes, assignments, projects,
+ * targets, meta}, directOpen}. The snapshots and tiles documents are built here (snapshots from the previous file
+ * under a lock, tiles from the in-memory documents). Nothing is written unless every check passes. Each file is a
+ * temp file renamed into place.
  */
 export function writeExport(outDir, collected) {
   mkdirSync(outDir, { recursive: true });
@@ -246,7 +269,7 @@ export function writeExport(outDir, collected) {
     const snapFile = path.join(outDir, 'snapshots.json');
     const prior = readSnapshots(snapFile);
     const row = buildSnapshotRow(collected.envelopes.lanes.rows, exportedAt);
-    const envelopes = {
+    const withSnaps = {
       ...collected.envelopes,
       snapshots: {
         sql: 'One row per America/Chicago day, counted from the lanes document and upserted by the export script. Earlier days are kept from the previous run.',
@@ -254,6 +277,7 @@ export function writeExport(outDir, collected) {
         rows: upsertSnapshot(prior, row),
       },
     };
+    const envelopes = { ...withSnaps, tiles: buildTilesEnvelope(withSnaps, exportedAt) };
     checkInvariants({ envelopes, directOpen: collected.directOpen, bornDone: collected.bornDone });
     const files = DATASETS.map((d) => ({ name: `${d}.json`, text: JSON.stringify(envelopes[d]) }));
     files.push({ name: 'refresh.json', text: JSON.stringify(buildRefreshDoc(exportedAt, DATASETS.map((d) => `${d}.json`)), null, 2) });
@@ -272,18 +296,30 @@ export function writeExport(outDir, collected) {
   }
 }
 
-/** Clear the refresh doc in `outDir` for `key`. Returns the doc after the call (null when there is none). */
+/**
+ * Clear the refresh doc in `outDir` for `key`. Returns the doc after the call (null when there is none).
+ * It takes the same .export.lock as writeExport, so it never renames refresh.json while an export writes it.
+ * A held lock throws like writeExport does. The temp file name has the pid, so it never collides with
+ * writeExport's refresh.json.tmp.
+ */
 export function clearRefreshFile(outDir, key, at = new Date().toISOString()) {
   const file = path.join(outDir, 'refresh.json');
   if (!existsSync(file)) return null;
-  const doc = JSON.parse(readFileSync(file, 'utf8'));
-  const next = clearRefreshPending(doc, key, at);
-  if (next !== doc) {
-    const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(next, null, 2));
-    renameSync(tmp, file);
+  const lock = path.join(outDir, '.export.lock');
+  acquireLock(lock);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    const doc = JSON.parse(readFileSync(file, 'utf8'));
+    const next = clearRefreshPending(doc, key, at);
+    if (next !== doc) {
+      writeFileSync(tmp, JSON.stringify(next, null, 2));
+      renameSync(tmp, file);
+    }
+    return next;
+  } finally {
+    try { unlinkSync(tmp); } catch { /* renamed or never written */ }
+    try { unlinkSync(lock); } catch { /* already gone */ }
   }
-  return next;
 }
 
 // ---------------------------------------------------------------- database

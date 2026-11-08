@@ -69,6 +69,20 @@ describe('the committed lane-dash.config.json', () => {
     assert.equal(val(cfg, 'p0_cap'), 5);
   });
 
+  it('tile 6 shows 4 project rows and tile 1 keeps 6 rows (Dave, 2026-11-08)', () => {
+    // Breaks if project_rows is missing, is not 4, or tile 1's show_rows changes with it.
+    assert.equal(val(cfg, 'project_rows'), 4);
+    assert.equal(val(cfg, 'show_rows'), 6);
+    assert.ok(row(cfg, 'project_rows').source.length > 0);
+  });
+
+  it('the file lists every default target, so the targets document has 14 rows and no key is left to the defaults', () => {
+    // Breaks if a default target (such as project_rows) is added to the loader and not to the committed file, or the other way round.
+    const fileKeys = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')).targets.map((t) => t.key);
+    assert.deepEqual([...fileKeys].sort(), normalizeConfig({}).targets.map((t) => t.key).sort());
+    assert.equal(cfg.targets.length, 14);
+  });
+
   it('keeps Done projects visible for 28 days and names the board', () => {
     // Breaks if the 4-week rule (defect b) is dropped from the config.
     assert.equal(val(cfg, 'done_visible_days'), 28);
