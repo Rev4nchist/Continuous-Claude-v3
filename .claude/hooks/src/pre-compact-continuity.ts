@@ -103,6 +103,7 @@ function listHandoffYaml(dir: string, out: string[] = []): string[] {
   } catch {
     return out;
   }
+  // Symlinked/junction folders are skipped on purpose: isDirectory() is false for them (no loops, no leaving the tree).
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) listHandoffYaml(full, out);
