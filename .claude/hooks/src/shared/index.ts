@@ -88,12 +88,6 @@ export {
   CompositionInvalidError,
 } from './composition-gate.js';
 
-// Pattern validation (formerly via Python bridge, now pure TypeScript)
-export {
-  validateComposition,
-  selectPattern,
-} from './pattern-selector.js';
-
 // Resource utilities
 export {
   readResourceState,
