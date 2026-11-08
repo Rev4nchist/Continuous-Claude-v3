@@ -40,13 +40,14 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
       - `edit`: `{via: "claude", at: <time>}`
       - `schedule`: `Exported nightly at 23:55 Central by CCv3-Lane-Snapshot. Uploaded on request by a Claude session.`
       - `staleAfterHours`: `48`
-      A version conflict writes nothing. Run `list` again and resend the whole batch.
+      A version conflict writes nothing. Read `refresh.json` again. If `key` changed, a newer export exists: start again from step 1. If it is the same, run `list` again and resend the whole batch.
 5. Check the dashboard. Read collection `data/users/me`, doc `runs`, then doc `check`.
    - `runs` is the main signal. Fix a `failed` or `refused` dataset only from your own result.
    - `check` can stay empty or unchanged after a data-only write. That is normal. Read it 5 times at most.
    - On `failed` in `check`, fix only what the code confirms. Fix 2 times at most.
    - Never say the page works from a missing document.
-6. Clear the pending flag. Use the `key` from your last read of `refresh.json`.
+   - Stop here, and do not go on to step 6, if `runs` shows a failed or refused dataset or `check` shows a failure you could not fix. The pending flag stays on and the old uploads stay. Report it.
+6. Clear the pending flag. Do this only when step 5 found no failure. Use the `key` from your last read of `refresh.json`.
    `node C:/Users/dkhay/continuous-claude/scripts/coordination/export-dash-data.mjs --clear-refresh <key>`
    - A key mismatch means a newer export ran. Start again from step 1.
    - The message `export lock is held` means an export runs now. Wait 1 minute and run this step again.

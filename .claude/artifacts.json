@@ -47,7 +47,7 @@
     "Titles must NOT carry a hard date: these are living pages, the as-of stamp belongs in the body.",
     "",
     "content_model \"dashboard-store\" (added 2026-11-08): a Claude Dashboard artifact. Its page and data live in the artifact store, not in a file",
-    "you publish. Do NOT pass a file_path to the Artifact tool for it. Handoff step 3 has a dashboard-store bullet that skips file publishing. Its session is \"fleetops\", which no handoff folder uses today.",
+    "you publish. Never publish a page file to it. A data upload (asset: true) is not a page publish. Handoff step 3 has a dashboard-store bullet that skips file publishing. Its session is \"fleetops\", which no handoff folder uses today.",
     "To refresh its data, run the skill named in the entry (`refresh_skill`). To change the page, read the Dashboard type SKILL.md on the artifact first."
   ],
   "artifacts": [

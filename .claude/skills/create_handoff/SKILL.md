@@ -217,9 +217,10 @@ For every entry in scope:
      status line that lives in the database, correct it at the source of truth (for the lane board:
      `node C:/Users/dkhay/.claude/scripts/lane.mjs note <id> "..."`).
    - `dashboard-store` — a Claude Dashboard artifact. Its page and data live in the artifact store.
-     Never pass a `file_path` to the Artifact tool for it, and skip step 4. To refresh its data,
-     run the skill the entry names in `refresh_skill`. A page change follows the Dashboard type's
-     own `SKILL.md` on that artifact.
+     Skip steps 2, 4, 5 and 6 for it: never read it as a page, never publish a page file to it and
+     never record a `last_published` from a publish. Data uploads are not page publishes: the skill
+     the entry names in `refresh_skill` makes them (`asset: true`). A page change follows the
+     Dashboard type's own `SKILL.md` on that artifact.
 4. **Republish to the same URL** (not for `dashboard-store`):
 
 ```
