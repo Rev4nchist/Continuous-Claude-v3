@@ -1,18 +1,18 @@
 ---
 name: shadcn-create
-description: Configure Shadcn/ui theming, components, blocks via browser automation. Use when the user says "configure shadcn theme", "set up shadcn", "add shadcn components", "shadcn blocks", or asks for a design system.
-allowed-tools: [mcp__claude-in-chrome__*, mcp__shadcn__*, Bash, Read, Write, WebFetch]
+description: Sets up shadcn/ui with theme presets, components, blocks, registries and the shadcn MCP. Use when the user says "set up shadcn", "shadcn theme", "add a shadcn block", "shadcn registry", "shadcn MCP", or "dashboard block". Not for generic design-system or brand work.
+allowed-tools: [mcp__playwright__*, mcp__shadcn__*, Bash, Read, Write, WebFetch]
 ---
 
 # Shadcn/create Platform Skill
 
-Comprehensive skill for Shadcn/ui theming, component management, and design system creation.
+Comprehensive skill for Shadcn/ui theming, component management, registries and the shadcn MCP.
 
 ## Quick Reference
 
 | Need | Tool | Reference |
 |------|------|-----------|
-| Visual theme exploration | Claude in Chrome | This file |
+| Visual theme exploration | URL shortcut, then @playwright/mcp | This file |
 | Component research | Shadcn MCP | references/mcp-tools.md |
 | Install components | CLI | references/components.md |
 | Add blocks/layouts | CLI | references/blocks.md |
@@ -35,7 +35,9 @@ Comprehensive skill for Shadcn/ui theming, component management, and design syst
 | "explore shadcn options" | Comparing design options |
 | "add shadcn components" | Component installation |
 | "shadcn blocks" | Block installation |
-| "design system" | Creating consistent design language |
+| "shadcn registry" | Registry and namespace use (`add @ns/item`) |
+| "shadcn MCP" | Set up or use the shadcn MCP server |
+| "dashboard block" | Install a block such as `dashboard-01` |
 
 ---
 
@@ -43,32 +45,44 @@ Comprehensive skill for Shadcn/ui theming, component management, and design syst
 
 ### Shadcn MCP Server (Optional but Recommended)
 
+Generate the config with the official command:
+
 ```bash
-npx shadcn registry:mcp
+npx shadcn@latest mcp init --client claude
 ```
 
-Add to `.mcp.json`:
+Or write the config by hand. On Windows, run `npx` through `cmd`. Pin the version. Never use `@latest` in a session-start config.
+
 ```json
 {
   "mcpServers": {
     "shadcn": {
-      "command": "npx",
-      "args": ["shadcn", "registry:mcp"]
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "shadcn@4.22.1", "mcp"]
     }
   }
 }
 ```
 
-### Claude in Chrome (For Visual Exploration)
+- `4.22.1` is the version in `.claude/machine-config/mcp.json`. Change it only on purpose.
+- `npx shadcn registry:mcp` does not exist. Do not use it.
+- Verify with `/mcp`. The server shows Connected.
+- Source: https://ui.shadcn.com/docs/mcp
 
-Required for interactive browser-based theme exploration. Falls back to WebFetch for basic page info when unavailable.
+### Playwright MCP (For Visual Exploration)
+
+Use `@playwright/mcp` (tools `mcp__playwright__*`) for interactive theme exploration. `claude-in-chrome` is deprecated here. See `rules-ondemand/browser-automation.md`. Falls back to WebFetch for basic page info when unavailable.
 
 ---
 
 ## Decision: Browser vs MCP vs CLI
 
 ```yaml
-Use Claude in Chrome when:
+Use the URL shortcut when (no browser needed):
+  - You know the style, base color and radius
+  - Build the ui.shadcn.com/create URL from the presets below
+
+Use @playwright/mcp when:
   - Exploring visual themes interactively
   - Comparing color/radius/style options visually
   - First-time project theming decisions
@@ -87,7 +101,7 @@ Use CLI directly when:
   - Automating component installation
 
 Use WebFetch fallback when:
-  - Claude in Chrome unavailable
+  - @playwright/mcp unavailable
   - Need basic page structure info
   - Verifying platform options
 ```
@@ -167,20 +181,24 @@ Select in right sidebar → "Component Library" row.
 ### Phase 1: Session Setup
 
 ```yaml
-1. Get tab context:
-   mcp__claude-in-chrome__tabs_context_mcp()
+Shortcut: if the choices are known, skip the browser. Build the URL
+from "Common Theme Presets" below and hand it to the user or the CLI.
 
-2. Navigate to platform:
-   mcp__claude-in-chrome__navigate_to_url({
-     url: "https://ui.shadcn.com/create",
-     tabId: <active_tab_id>
-   })
+1. Navigate to platform:
+   mcp__playwright__browser_navigate({ url: "https://ui.shadcn.com/create" })
+
+2. Read the page (accessibility tree, gives element refs):
+   mcp__playwright__browser_snapshot()
 
 3. Wait for load (SPA hydration):
-   Wait 2-3 seconds or check with javascript_tool
+   mcp__playwright__browser_wait_for({ time: 3 })
+   then browser_snapshot again
 ```
 
 ### Phase 2: Theme Configuration
+
+Click each control with `mcp__playwright__browser_click` (use the `ref`
+from the latest `browser_snapshot`). Snapshot again after each change.
 
 ```yaml
 Configure Style:
@@ -216,7 +234,7 @@ Preview Updates:
 
 ```yaml
 Method 1: URL Parameters
-  - Current URL contains encoded settings
+  - Current URL contains encoded settings (read it from the browser_snapshot page URL line)
   - Parse: baseColor, theme, radius, style, template
 
 Method 2: Create Project Button
@@ -225,7 +243,7 @@ Method 2: Create Project Button
   3. Copy generated command
 
 Method 3: Screenshot
-  - For documentation or user confirmation
+  - mcp__playwright__browser_take_screenshot() for documentation or user confirmation
 ```
 
 > Full CLI commands and URL parameter reference: `references/cli-reference.md`
@@ -313,6 +331,7 @@ Flow:
 ## Shadcn MCP Quick Reference
 
 **Note:** MCP tools return `bunx` (Bun) commands — adapt for npm (`npx`) or pnpm (`pnpm dlx`).
+The 7 tool names come from `packages/shadcn/src/mcp/index.ts` in shadcn-ui/ui. The docs page lists none. Confirm them with `/mcp` after the server connects.
 
 ```yaml
 mcp__shadcn__get_project_registries()          # Show configured registries
@@ -386,12 +405,13 @@ Full catalog: `references/blocks.md`. Install: `npx shadcn@latest add dashboard-
 
 ---
 
-## GIF Recording for Demos
+## Screenshots for Demos
 
 ```yaml
-mcp__claude-in-chrome__gif_creator:
-  filename: "shadcn-theme-exploration.gif"
-  # Capture: navigate → select style → cycle colors → adjust radius → get command
+mcp__playwright__browser_take_screenshot:
+  filename: "shadcn-theme-exploration.png"
+  # Capture after each step: select style → cycle colors → adjust radius
+  # For a dashboard block, check widths 1440 and 390 with browser_resize
 ```
 
 ---

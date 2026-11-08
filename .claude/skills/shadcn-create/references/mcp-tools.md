@@ -1,30 +1,35 @@
 # Shadcn MCP Tools Reference
 
-Complete reference for all 7 Shadcn MCP server tools.
+Reference for the 7 Shadcn MCP server tools.
+
+The 7 tool names come from `packages/shadcn/src/mcp/index.ts` in shadcn-ui/ui. The docs page (https://ui.shadcn.com/docs/mcp) lists none. The input and output shapes below are not checked against the live server. Check `tools/list` (or `/mcp`) after a connection.
 
 ## Prerequisites
 
-### Enable MCP Server
+### Generate the config
 
 ```bash
-# Enable MCP for any registry (zero-config)
-npx shadcn registry:mcp
+npx shadcn@latest mcp init --client claude
 ```
 
-### Configure Claude Code
+`npx shadcn registry:mcp` does not exist. Do not use it.
 
-Add to `.mcp.json` or `claude_desktop_config.json`:
+### Or write the config by hand
+
+Add to `.mcp.json`. On Windows, run `npx` through `cmd`. Pin the version. Never use `@latest` in a session-start config.
 
 ```json
 {
   "mcpServers": {
     "shadcn": {
-      "command": "npx",
-      "args": ["shadcn", "registry:mcp"]
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "shadcn@4.22.1", "mcp"]
     }
   }
 }
 ```
+
+`4.22.1` is the version in `.claude/machine-config/mcp.json`. Verify with `/mcp`: the server shows Connected.
 
 ---
 
