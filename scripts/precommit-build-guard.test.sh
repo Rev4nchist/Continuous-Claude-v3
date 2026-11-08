@@ -296,6 +296,22 @@ d="$(import_repo $'export const load = () => import(\x27./lib/a\x27);')"
 stage_edit "$d" $F $'export const load = () => import(\x27./lib/a.js\x27);'
 assert_exit "dynamic import path gains .js, same file (no dist) -> allow" 0 "$(run_guard "$d")"
 
+# --- Case 43: import-shaped text inside a template literal gains .js -> BLOCK (it is a runtime string)
+d="$(import_repo $'export const s = `import("./lib/a")`;')"
+stage_edit "$d" $F $'export const s = `import("./lib/a.js")`;'
+assert_exit "template literal text shaped like an import (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 44: a line in a template literal that starts like a static import -> BLOCK
+d="$(import_repo $'export const s = `\nimport { x } from "./lib/a";\n`;')"
+stage_edit "$d" $F $'export const s = `\nimport { x } from "./lib/a.js";\n`;'
+assert_exit "template literal line shaped like a static import (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 45: a real import gains .js while a template literal holds import-shaped text -> BLOCK
+# (the pattern finds two paths and the build reports one import, so the guard cannot tell them apart)
+d="$(import_repo $'import { x } from \x27./lib/a\x27;\nexport const s = `import("./lib/a")`;\nexport const a = x;')"
+stage_edit "$d" $F $'import { x } from \x27./lib/a.js\x27;\nexport const s = `import("./lib/a")`;\nexport const a = x;'
+assert_exit "real import gains .js, template text unchanged (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
 echo ""
 echo "precommit-build-guard tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

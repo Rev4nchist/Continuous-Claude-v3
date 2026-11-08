@@ -16,8 +16,9 @@
  * One more step: a relative import path (`./a`, `./a.js`, `./dir`) is compared by the file it names
  * in the git index, so adding `.js` to a path that names the same file is not a change. A path
  * that names no file in the index stays as written, so an edit to it is a change. Package names
- * are never rewritten. The rewrite reads esbuild's output by pattern (a path at the start of a
- * line after `from`, or `import("...")`), so a string literal that looks like one could hide an edit.
+ * are never rewritten. The rewrite finds paths in esbuild's output by pattern, then checks that the
+ * pattern found exactly the imports esbuild's metafile reports, in order. Import-shaped text inside
+ * a string or template literal breaks that match, so nothing is rewritten and the edit blocks.
  * Any failure to transform (syntax error, no esbuild) means "not proven", never "unchanged".
  *
  * Usage: node scripts/hooks-src-comment-only.mjs <repo-relative .ts path>...   (run in the repo)
@@ -43,9 +44,19 @@ function loadEsbuild() {
 // for both sides.
 const OPTIONS = { loader: 'ts', format: 'esm', platform: 'node', legalComments: 'inline', sourcemap: false };
 
-/** The code esbuild would emit for one file. Throws when the file does not transform. */
+/**
+ * What esbuild would emit for one file: the code, and the relative import paths the build itself
+ * reports (its metafile), in order. A string or template literal is not in that list. Throws when
+ * the file does not build.
+ */
 function emitted(esbuild, text) {
-  return esbuild.transformSync(text, OPTIONS).code;
+  const r = esbuild.buildSync({
+    stdin: { contents: text, loader: OPTIONS.loader, sourcefile: 'x.ts' },
+    bundle: false, write: false, metafile: true, logLevel: 'silent',
+    format: OPTIONS.format, platform: OPTIONS.platform, legalComments: OPTIONS.legalComments,
+  });
+  const imports = Object.values(r.metafile.outputs)[0].imports.map((i) => i.path).filter((p) => /^\.{1,2}\//.test(p));
+  return { code: r.outputFiles[0].text, imports };
 }
 
 /** True when this repo-relative path is a file in the git index. */
@@ -76,29 +87,41 @@ function resolveImport(importer, spec) {
 
 // esbuild writes import and export-from paths in double quotes at the start of a line, and dynamic
 // imports as import("..."). Only relative paths are rewritten; a package name stays as written.
-const STATIC_IMPORT = /^([ \t]*(?:(?:import|export)\b[^"'\n]*?\bfrom[ \t]*|\}[ \t]*from[ \t]*|import[ \t]*))"(\.{1,2}\/[^"\n]*)"/gm;
-const DYNAMIC_IMPORT = /\bimport\([ \t]*"(\.{1,2}\/[^"\n]*)"[ \t]*\)/g;
+const IMPORT_PATH = /^([ \t]*(?:(?:import|export)\b[^"'\n]*?\bfrom[ \t]*|\}[ \t]*from[ \t]*|import[ \t]*))"(\.{1,2}\/[^"\n]*)"|\bimport\([ \t]*"(\.{1,2}\/[^"\n]*)"[ \t]*\)/gm;
 
-/** The emitted code with each relative import path replaced by the file it resolves to. */
-function withResolvedImports(code, importer) {
+/**
+ * The emitted code with each relative import path replaced by the file it resolves to, or null.
+ * Null means the paths the pattern found are not exactly the imports the build reported, in order:
+ * some text that looks like an import (in a string or a template literal) or an import form the
+ * pattern does not know. Then nothing is rewritten, because a rewrite could hide a change.
+ */
+function withResolvedImports({ code, imports }, importer) {
+  const found = [];
   const name = (spec) => {
+    found.push(spec);
     const file = resolveImport(importer, spec);
     return file === null ? spec : `\0${file}`;
   };
-  return code
-    .replace(STATIC_IMPORT, (_, head, spec) => `${head}"${name(spec)}"`)
-    .replace(DYNAMIC_IMPORT, (_, spec) => `import("${name(spec)}")`);
+  const out = code.replace(IMPORT_PATH, (_, head, spec, dyn) =>
+    spec === undefined ? `import("${name(dyn)}")` : `${head}"${name(spec)}"`);
+  return found.length === imports.length && found.every((s, i) => s === imports[i]) ? out : null;
 }
 
 /**
  * True when `after` emits the code `before` emits, with each relative import path read as the file
  * it names (so `./a` and `./a.js` match when both are the same file). A file that does not
- * transform, and an import path that names no file in the index, are "no".
+ * build, an import path that names no file in the index, and import-shaped text the build does
+ * not report as an import are "no".
  */
 function sameEmit(esbuild, before, after, importer) {
   if (before === after) return true;
   try {
-    return withResolvedImports(emitted(esbuild, before), importer) === withResolvedImports(emitted(esbuild, after), importer);
+    const b = emitted(esbuild, before);
+    const a = emitted(esbuild, after);
+    if (b.code === a.code) return true;
+    const rb = withResolvedImports(b, importer);
+    const ra = withResolvedImports(a, importer);
+    return rb !== null && rb === ra;
   } catch {
     return false;
   }
