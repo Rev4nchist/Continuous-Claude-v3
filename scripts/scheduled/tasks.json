@@ -65,6 +65,18 @@
       "wake": false
     },
     {
+      "name": "CCv3-FleetOps-Auto",
+      "script": ".claude/scripts/scheduled/scheduled-fleetops-auto.ps1",
+      "trigger": "every 30m",
+      "execLimitMin": 5,
+      "allowedExit": [0],
+      "maxAgeHours": 2,
+      "llm": false,
+      "battery": true,
+      "hidden": true,
+      "wake": false
+    },
+    {
       "name": "CCv3-Cost-Reconcile",
       "script": ".claude/scripts/scheduled/scheduled-cost-reconcile.ps1",
       "trigger": "daily 23:50",
