@@ -54,6 +54,13 @@ var MASKS = [
 function maskSecrets(text) {
   return MASKS.reduce((acc, [re, to]) => acc.replace(re, to), text);
 }
+var MARK_OPEN = String.fromCharCode(57344);
+var MARK_CLOSE = String.fromCharCode(57345);
+var UUID_MARK = new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g");
+var PATH_MASKS = [
+  ...MASKS.slice(0, -1),
+  [/\b(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{32,}/g, "***"]
+];
 
 // src/shared/mask-quotes.ts
 var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;

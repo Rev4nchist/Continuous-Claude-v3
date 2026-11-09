@@ -365,13 +365,32 @@ function guardSource(env) {
 function pathText(value, max = PATH_CHARS) {
   return typeof value === "string" && value ? value.slice(0, max) : void 0;
 }
+var UUID_SEGMENT = /(^|[\\/])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=$|[\\/.])/gi;
+var MARK_OPEN = String.fromCharCode(57344);
+var MARK_CLOSE = String.fromCharCode(57345);
+var UUID_MARK = new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g");
+var PATH_MASKS = [
+  ...MASKS.slice(0, -1),
+  [/\b(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{32,}/g, "***"]
+];
+function maskedPath(value, max = PATH_CHARS) {
+  if (typeof value !== "string" || !value) return void 0;
+  const kept = [];
+  const shielded = value.replace(UUID_SEGMENT, (_m, sep, uuid) => {
+    kept.push(uuid);
+    return `${sep}${MARK_OPEN}${kept.length - 1}${MARK_CLOSE}`;
+  });
+  const masked = PATH_MASKS.reduce((acc, [re, to]) => acc.replace(re, to), shielded);
+  return masked.replace(UUID_MARK, (m, i) => kept[Number(i)] ?? m).slice(0, max);
+}
 function targetOf(input, tool) {
-  const explicit = pathText(input?.target);
+  const explicit = maskedPath(input?.target);
   if (explicit) return explicit;
   const field = Object.hasOwn(TARGET_FIELD, tool) ? TARGET_FIELD[tool] : void 0;
   const toolInput = input?.tool_input;
   if (!field || typeof toolInput !== "object" || toolInput === null) return void 0;
-  return pathText(toolInput[field]);
+  const raw = toolInput[field];
+  return field === "file_path" ? maskedPath(raw) : pathText(raw);
 }
 function logGuardDecision(hook, input, decision, reason, opts = {}) {
   const env = opts.env ?? process.env;
@@ -390,7 +409,7 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
       source: guardSource(env)
     };
     if (agent) entry.agent_id = agent;
-    const cwd = pathText(input?.cwd);
+    const cwd = maskedPath(input?.cwd);
     if (cwd) entry.cwd = cwd;
     const mode = pathText(input?.permission_mode, 40);
     if (mode) entry.permission_mode = mode;
