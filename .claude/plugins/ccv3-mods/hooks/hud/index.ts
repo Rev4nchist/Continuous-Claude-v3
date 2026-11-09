@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, TurnUsage } from 'claude-code'
 
 import type { AgentRun, CacheState, HudState, OsBrief } from '../../types'
-import { addStep } from '../agent-ledger/model'
+import { addStep, advisorCalls } from '../agent-ledger/model'
 import { mergeParsed, parseStep } from '../agentic-os/brief'
 import { DIAG_DIR, errorFile, errorText, usageKeysFile, usageKeysProbe } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
@@ -171,10 +171,12 @@ export const hudCapture = (on: On) => {
       await noteUsageKeys($, result.usage, 'subagent')
       try {
         const effort = typeof e.effort === 'string' ? e.effort : null
+        // The advisor's own tokens are not in the live usage: the count marks the run's dollars as a floor.
+        const advised = advisorCalls(result.serverToolUses)
         // No run (ledger off, or a spawn this plugin never saw): leave the list as it is.
         if ((await read($, agentRuns)).some(run => run.id === agentId)) {
           await update($, agentRuns, runs =>
-            runs.map(run => (run.id === agentId ? addStep(run, { model: e.model, effort, usage: result.usage }) : run)),
+            runs.map(run => (run.id === agentId ? addStep(run, { model: e.model, effort, usage: result.usage, advised }) : run)),
           )
         }
       } catch {
@@ -204,7 +206,7 @@ export const hudCapture = (on: On) => {
       // A numeric effort is a thinking budget, not a level: the chip shows no effort then.
       const effort = typeof e.effort === 'string' ? e.effort : null
       // An advisor use proves the advisor is on, whatever the settings and env said at start.
-      const advised = (result.serverToolUses ?? []).filter(use => use.name === 'advisor').length
+      const advised = advisorCalls(result.serverToolUses)
       await update($, hud, now =>
         now === null
           ? now
