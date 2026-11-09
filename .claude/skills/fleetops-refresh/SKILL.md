@@ -7,7 +7,7 @@ description: Refreshes the data on Dave's FleetOps lane dashboard from the lane 
 
 FleetOps is Dave's lane dashboard: https://claude.ai/artifact/Vnf8urTCv7awKXwNT423F8. It is a Claude Dashboard artifact, registered in `.claude/artifacts.json` as `fleetops-dashboard`. A refresh changes only its 7 data files. It never changes the page. For a page change, read the Dashboard type's `SKILL.md` on that artifact first.
 
-The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It writes the 7 files to `~/.claude/state/lane-dash` and uploads nothing. This skill does the upload.
+The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It writes the 7 files to `~/.claude/state/lane-dash` and uploads nothing. This skill does the upload. The export also writes `flow.json` for the Fleet app. It is not a dashboard source: never copy or upload it.
 
 ## Rules
 

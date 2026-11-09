@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 /**
- * export-dash-data -- export the lane board as seven local JSON documents for the lane dashboard.
+ * export-dash-data -- export the lane board as eight local JSON documents for the lane dashboard and the Fleet app.
  *
  *   node scripts/coordination/export-dash-data.mjs [--out <dir>] [--rules <file>] [--config <file>]
  *   node scripts/coordination/export-dash-data.mjs --out <dir> --clear-refresh <key>
  *
  * It only writes local files. It uploads nothing and writes to no artifact (a later step does that).
  *
- * Documents (each {sql, exportedAt, rows}, one exportedAt in all seven, each under 256 KB):
- *   lanes, assignments, projects, targets, meta, snapshots, tiles
+ * Documents (each {sql, exportedAt, rows}, one exportedAt in all eight, each under 256 KB):
+ *   lanes, assignments, projects, targets, meta, snapshots, tiles, flow
  *   tiles = flat rows of every tile figure, verdict word and sentence, computed here in Node by lane-dash-metrics.mjs
  *   (schema in that file). The page only marks and draws them. Ages use meta.exported_at, never a clock.
+ *   flow = flat rows of the Flow figures (claimed, done, created and reopened per day, week totals, median claim to done,
+ *   rework rate), computed in Node by lane-dash-flow.mjs (schema in that file). The Fleet app reads it. It is NOT a
+ *   FleetOps dashboard source: the fleetops-refresh skill copies seven files and never uploads flow.json.
  * Plus refresh.json, the refresh trigger doc (not a dataset). See buildRefreshDoc.
  *
  * Database: SELECT only, in BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY with default_transaction_read_only=on.
@@ -32,7 +35,7 @@
  *             "no longer needs Dave" is no ask. lane.note is never read: it changes only on a new note.
  *   project   from lane-projects.json through the shared projectOf (lane-dash-project.mjs).
  *
- * Checks (exit 1, nothing written): a document over 256 KB, exportedAt not equal in all seven, a lane project
+ * Checks (exit 1, nothing written): a document over 256 KB, exportedAt not equal in all eight, a lane project
  * that is not in the projects rows, and a rebuilt open count (created minus done at the last day) that differs
  * from the direct count.
  *
@@ -48,6 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { loadConfig } from './lane-dash-config.mjs';
 import { loadProjectRules, projectOf, UNASSIGNED } from './lane-dash-project.mjs';
+import { buildFlowRows } from './lane-dash-flow.mjs';
 import { buildTileRows } from './lane-dash-metrics.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -67,7 +71,7 @@ export function cutTitle(title, max = TITLE_MAX) {
   const keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room);
   return `${keep.trimEnd()}…`;
 }
-export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles'];
+export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles', 'flow'];
 const TZ = 'America/Chicago';
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -267,10 +271,29 @@ function buildTilesEnvelope(envelopes, exportedAt) {
 }
 
 /**
- * Check, then write the seven documents and refresh.json. `collected` = {envelopes: {lanes, assignments, projects,
- * targets, meta}, directOpen}. The snapshots and tiles documents are built here (snapshots from the previous file
- * under a lock, tiles from the in-memory documents). Nothing is written unless every check passes. Each file is a
- * temp file renamed into place.
+ * The flow document: flat rows of the Flow figures (see lane-dash-flow.mjs for the schema). Built from the other
+ * documents and the in-memory rework rows. "Today" is meta.today, never a clock. The rework rows are not a document.
+ */
+function buildFlowEnvelope(envelopes, collected, exportedAt) {
+  return {
+    sql: `Computed in Node by scripts/coordination/lane-dash-flow.mjs from the lanes, assignments, targets and meta documents, plus one query for reopens:
+${collected.reworkSql ?? '(no rework query)'}`,
+    exportedAt,
+    rows: buildFlowRows({
+      lanes: envelopes.lanes.rows,
+      assignments: envelopes.assignments.rows,
+      rework: collected.rework ?? [],
+      targets: envelopes.targets.rows,
+      meta: envelopes.meta.rows[0],
+    }),
+  };
+}
+
+/**
+ * Check, then write the eight documents and refresh.json. `collected` = {envelopes: {lanes, assignments, projects,
+ * targets, meta}, directOpen, rework}. The snapshots, tiles and flow documents are built here (snapshots from the previous
+ * file under a lock, tiles and flow from the in-memory documents). Nothing is written unless every check passes. Each
+ * file is a temp file renamed into place.
  */
 export function writeExport(outDir, collected) {
   mkdirSync(outDir, { recursive: true });
@@ -290,7 +313,7 @@ export function writeExport(outDir, collected) {
         rows: upsertSnapshot(prior, row),
       },
     };
-    const envelopes = { ...withSnaps, tiles: buildTilesEnvelope(withSnaps, exportedAt) };
+    const envelopes = { ...withSnaps, tiles: buildTilesEnvelope(withSnaps, exportedAt), flow: buildFlowEnvelope(withSnaps, collected, exportedAt) };
     checkInvariants({ envelopes, directOpen: collected.directOpen, bornDone: collected.bornDone });
     const files = DATASETS.map((d) => ({ name: `${d}.json`, text: JSON.stringify(envelopes[d]) }));
     files.push({ name: 'refresh.json', text: JSON.stringify(buildRefreshDoc(exportedAt, DATASETS.map((d) => `${d}.json`)), null, 2) });
@@ -413,9 +436,24 @@ const SQL_DONE_EVENTS =`SELECT count(DISTINCT e.lane_id)::int AS lanes, count(*)
 FROM agentic_os.lane_event e JOIN agentic_os.lane l ON l.id = e.lane_id
 WHERE (e.kind = 'done' OR (e.kind = 'kanban' AND e.detail->>'kind' = 'state' AND e.detail->>'to' = 'done')) AND l.project_key = $1`;
 
+// Rework: one row per done signal, with the first reopen signal after it (null when none). A reopen signal is a
+// state_changed event (lane.mjs state <id> <not done> writes it) or a kanban state move to anything but done. Read in
+// Node by lane-dash-flow.mjs; no body, note or session is selected, and it is not written as a document.
+export const SQL_REWORK = `WITH d AS (
+  SELECT e.lane_id, e.occurred_at AS done_at
+  FROM agentic_os.lane_event e JOIN agentic_os.lane l ON l.id = e.lane_id
+  WHERE l.project_key = $1 AND (e.kind = 'done' OR (e.kind = 'kanban' AND e.detail->>'kind' = 'state' AND e.detail->>'to' = 'done'))),
+r AS (
+  SELECT e.lane_id, e.occurred_at AS reopen_at
+  FROM agentic_os.lane_event e JOIN agentic_os.lane l ON l.id = e.lane_id
+  WHERE l.project_key = $1 AND (e.kind = 'state_changed' OR (e.kind = 'kanban' AND e.detail->>'kind' = 'state' AND e.detail->>'to' <> 'done')))
+SELECT d.lane_id, d.done_at, min(r.reopen_at) AS reopen_at
+FROM d LEFT JOIN r ON r.lane_id = d.lane_id AND r.reopen_at > d.done_at
+GROUP BY d.lane_id, d.done_at ORDER BY d.done_at, d.lane_id`;
+
 const showSql = (sql, board) => sql.replace(/\$1/g, `'${board}'`);
 
-/** Run the SELECTs and build the five database documents. `client` must be a read-only client. */
+/** Run the SELECTs and build the five database documents, plus the rework rows flow.json needs. `client` must be a read-only client. */
 export async function collect(client, { rules, config }) {
   const board = config.board;
   const rows = async (sql) => (await client.query(sql, [board])).rows;
@@ -447,6 +485,7 @@ export async function collect(client, { rules, config }) {
   const direct = (await rows(SQL_DIRECT))[0];
   const doneEvents = (await rows(SQL_DONE_EVENTS))[0];
   const bornDone = (await rows(SQL_BORN_DONE)).map((r) => r.id);
+  const rework = (await rows(SQL_REWORK)).map((r) => ({ lane_id: r.lane_id, done_at: iso(r.done_at), reopen_at: iso(r.reopen_at) }));
   const history = lanes.map((l) => l.created_day).sort()[0] ?? null;
   const meta = [{
     exported_at: exportedAt, today: chicagoDay(now), history_start: history, band_history_start: config.band_history_start,
@@ -459,6 +498,8 @@ export async function collect(client, { rules, config }) {
   return {
     directOpen: direct.open,
     bornDone,
+    rework,
+    reworkSql: showSql(SQL_REWORK, board),
     envelopes: {
       lanes: env(showSql(SQL_LANES, board), lanes),
       assignments: env(`${showSql(SQL_CLAIMS, board)}\n-- plus --\n${showSql(SQL_DAVE, board)}`, assignments),
