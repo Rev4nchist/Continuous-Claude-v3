@@ -65,6 +65,7 @@ import { isUnattended } from './shared/unattended.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { scopedCleanupKind, type ScopedCleanupDeps, type ScopedKind } from './shared/scoped-cleanup.js';
 import { readShellCommand, dialectsFor } from './shared/shell-tools.js';
+import { blankDocHeredocBody } from './shared/doc-heredoc.js';
 
 // Re-exported so existing imports (and the test file) keep working.
 export { classifyDestructive, stripQuotedStrings, parseExecutable, extractShellWrapperPayloads, normalizeGitGlobalOptions };
@@ -138,8 +139,10 @@ export function decide(
       || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
   // A desktop-commander shell is chosen at run time, so its text is checked as Bash and PowerShell.
   let pattern: string | null = null;
+  // The body of a quoted heredoc that writes a .md, .txt or .json file is prose, not a command (shared/doc-heredoc.ts).
+  const scanned = blankDocHeredocBody(command);
   for (const dialect of dialectsFor(input.tool_name || input.tool)) {
-    pattern = classifyDestructive(command, 0, dialect);
+    pattern = classifyDestructive(scanned, 0, dialect);
     if (pattern) break;
   }
   if (overridden) return pattern ? { decision: 'allow', pattern, override: true } : { decision: 'allow' };

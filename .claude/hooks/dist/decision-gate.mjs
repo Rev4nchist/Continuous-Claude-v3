@@ -446,6 +446,31 @@ function quotedSpans(command, tool = "Bash") {
   return [...command.matchAll(tool === "PowerShell" ? PWSH_STRING : BASH_STRING)].map((m) => [m.index, m.index + m[0].length]);
 }
 
+// src/shared/doc-heredoc.ts
+var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt|json))`;
+var DELIM = String.raw`(?<dash>-?)(?<q>['"])(?<d>[A-Za-z_]\w*)\k<q>`;
+var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`, "i");
+var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`, "i");
+var ODD_BREAK = /[\r\0\v\f\x85\u2028\u2029]/;
+function blankDocHeredocBody(command) {
+  if (!command.includes("<<") || ODD_BREAK.test(command)) return command;
+  const lines = command.split("\n");
+  const head = HEAD_FILE_FIRST.exec(lines[0]) ?? HEAD_MARKER_FIRST.exec(lines[0]);
+  if (!head || !head.groups) return command;
+  const { dash, d } = head.groups;
+  let close = -1;
+  for (let i = 1; i < lines.length; i++) {
+    const line = dash ? lines[i].replace(/^\t+/, "") : lines[i];
+    if (line === d) {
+      close = i;
+      break;
+    }
+  }
+  if (close < 1) return command;
+  if (lines.slice(close + 1).some((l) => l.trim() !== "")) return command;
+  return lines.map((l, i) => i >= 1 && i < close ? " ".repeat(l.length) : l).join("\n");
+}
+
 // src/shared/inert-quotes.ts
 var INERT_HEAD = new RegExp(
   String.raw`^\s*(?:echo|printf|Write-(?:Host|Output|Warning|Information)|git\s+commit|claude|ntn|curl|gh\s+(?:pr|issue)\s+comment` + String.raw`|node(?:\.exe)?\s+(?:\S*[\\/])?lane\.mjs\s+(?:add|note|say))(?=\s|$)`,
@@ -486,6 +511,8 @@ function inertSpans(command, tool) {
   return out2;
 }
 function blankInertQuotes(command) {
+  const doc = blankDocHeredocBody(command);
+  if (doc !== command) return doc;
   const bash = inertSpans(command, "Bash");
   const pwsh = inertSpans(command, "PowerShell");
   let out2 = command;

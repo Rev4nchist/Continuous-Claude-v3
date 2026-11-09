@@ -20,6 +20,7 @@
  * Only the strings in INERT_HEAD segments are blanked.
  */
 import { quotedSpans } from './mask-quotes.js';
+import { blankDocHeredocBody } from './doc-heredoc.js';
 
 type Tool = 'Bash' | 'PowerShell';
 
@@ -78,6 +79,9 @@ function inertSpans(command: string, tool: Tool): Set<string> {
  * The quote marks stay, so the quote pairing of the rest of the text does not change.
  */
 export function blankInertQuotes(command: string): string {
+  // A document heredoc is the whole command, so there is no quoted string left to read.
+  const doc = blankDocHeredocBody(command);
+  if (doc !== command) return doc;
   const bash = inertSpans(command, 'Bash');
   const pwsh = inertSpans(command, 'PowerShell');
   let out = command;
