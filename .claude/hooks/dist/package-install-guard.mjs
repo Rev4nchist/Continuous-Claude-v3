@@ -20518,17 +20518,117 @@ function stripFdRedirects(text, tool = "Bash") {
   }
   return out;
 }
-function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured) {
-  const config = configured ?? (indexConfigMarkers(command).length > 0 || persistentConfigMarkers(command, tool).length > 0 || rawConfigMarkers(command).length > 0);
+var PWSH_WORD = /^(?:pwsh|powershell)$/;
+var ENCODED_FLAG = /^[-/]([a-z]+)(?:[:=]([\s\S]*))?$/i;
+var ENCODED_MAX = 8;
+function isEncodedFlag(name) {
+  const lower = name.toLowerCase();
+  return lower === "ec" || "encodedcommand".startsWith(lower);
+}
+function endsEncodedScan(name) {
+  const lower = name.toLowerCase();
+  return "file".startsWith(lower) || "command".startsWith(lower) || lower === "cwa" || "commandwithargs".startsWith(lower);
+}
+function decodeEncodedCommand(raw) {
+  const value = raw.replace(/^["']|["']$/g, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) return null;
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length % 2 !== 0) return null;
+  const text = bytes.toString("utf16le");
+  return text.trim() === "" || text.includes("\0") ? null : text;
+}
+function encodedCommands(segment) {
+  const whole = scanEncodedCommands(segment);
+  if (!/[\r\n]/.test(segment)) return whole;
+  const payloads = new Set(whole.payloads);
+  let bad = whole.bad;
+  for (const line of segment.split(/\r\n|\n|\r/)) {
+    const part = scanEncodedCommands(line);
+    bad = bad || part.bad;
+    part.payloads.forEach((text) => payloads.add(text));
+  }
+  return { payloads: [...payloads].slice(0, ENCODED_MAX), bad: bad || payloads.size > ENCODED_MAX };
+}
+function scanEncodedCommands(segment) {
+  if (!/pwsh|powershell/i.test(segment.replace(/[\\'"`^]/g, ""))) return { payloads: [], bad: false };
+  const words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(",")).filter(Boolean);
+  const payloads = [];
+  let bad = false;
+  let inShell = false;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i].replace(/^[({]+(?=.)/, "");
+    if (PWSH_WORD.test(commandName(w)) || PWSH_WORD.test(commandName(w.replace(/\\/g, "")))) {
+      inShell = !(i > 0 && LOOKUP.test(words[i - 1]));
+      continue;
+    }
+    const m = inShell ? ENCODED_FLAG.exec(w) : null;
+    if (!m) continue;
+    if (endsEncodedScan(m[1])) {
+      inShell = false;
+      continue;
+    }
+    if (!isEncodedFlag(m[1])) continue;
+    const value = m[2] !== void 0 ? m[2] : words[++i];
+    const text = value === void 0 ? null : decodeEncodedCommand(value);
+    if (text === null || payloads.length >= ENCODED_MAX) bad = true;
+    else payloads.push(text);
+  }
+  return { payloads, bad };
+}
+var IEX_WORD = /^(?:iex|invoke-expression)$/i;
+var IEX_COMMAND_FLAG = /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i;
+function iexPayload(segment) {
+  const words = tokenize(stripPrefixes(segment));
+  if (words[0] === "&") words.shift();
+  if (!IEX_WORD.test(words[0] ?? "")) return null;
+  const text = words.slice(1).filter((w) => !IEX_COMMAND_FLAG.test(w)).join(" ").trim();
+  return text === "" ? null : text;
+}
+function decodedTexts(command, tool, depth = 0) {
+  if (depth >= 3 || !ENCODED_HINT.test(command)) return [];
   try {
     const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
-    const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool, config)).map((segment) => ({ segment, cwd, tool }));
+    const own = segments.flatMap((s) => encodedCommands(s).payloads);
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)].flatMap((text) => decodedTexts(text, tool, depth + 1));
+    return [...own, ...own.flatMap((text) => decodedTexts(text, "PowerShell", depth + 1)), ...nested];
+  } catch {
+    return [];
+  }
+}
+var ENCODED_HINT = /(?:pwsh|powershell)[\s\S]*[-/]e/i;
+function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured) {
+  const config = configured ?? configMarkersIn([command, ...decodedTexts(command, tool)].join("\n"), tool);
+  try {
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
+    const found = [];
+    const viaIex = [];
+    for (const raw of segments) {
+      const segment = stripLeaders(raw);
+      const iex = depth < 3 && !checkOverride(segment) ? iexPayload(segment) : null;
+      const inner = iex === null ? [] : installPlans(iex, tool, cwd, depth + 1, config);
+      viaIex.push(...inner);
+      if (inner.length === 0 && (needsCheck(segment, tool, config) || encodedCommands(segment).bad)) found.push({ segment, cwd, tool });
+    }
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
-    return [...found, ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config))];
+    const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
+    return [
+      ...found,
+      ...viaIex,
+      ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config)),
+      ...decoded.flatMap((text) => installPlans(text, "PowerShell", null, depth + 1, config || void 0))
+    ];
   } catch {
-    return needsCheck(command, tool, config) ? [{ segment: command.trim(), cwd: null, tool }] : [];
+    const encoded = encodedCommands(command);
+    const risky = needsCheck(command, tool, config) || encoded.bad || encoded.payloads.length > 0 || mayEncode(command);
+    return risky ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+function mayEncode(text) {
+  return ENCODED_HINT.test(text) || ENCODED_HINT.test(text.replace(/[\\'"`^]/g, ""));
+}
+function configMarkersIn(text, tool) {
+  return indexConfigMarkers(text).length > 0 || persistentConfigMarkers(text, tool).length > 0 || rawConfigMarkers(text).length > 0;
 }
 var MAY_MOVE_WORD = /\b(?:cd|pushd|popd|chdir|sl|set-location|push-location|pop-location|source|eval|iex|invoke-expression)\b|(?:^|\s)\.\s|(?:^|\s)-(?:wd|wo\w*)(?=[\s:=]|$)/i;
 var MAY_MOVE_OTHER = /(?:^|\s)(?:-[CD]|--chdir|--prefix|--cwd|--dir|--directory)(?=[\s=]|$)|(?:^|\s)-[CD]\S|[$`]/;
@@ -20541,12 +20641,13 @@ var PS_SCRIPT_END = /\.(?:ps1|psm1|bat|cmd)["']?\s*(?:[;|&)\r\n]|$)/i;
 var PS_SCRIPT_PATH = /^["']?[^\s"']*[\\/][^\s"']*\.(?:ps1|psm1|bat|cmd)["']?$/i;
 var PS_LOOKUP = /\b(?:gcm|get-command|icm|invoke-command|invoke-item)\b/i;
 var PS_CALL_OP = /&\s*[($"']/;
+var PS_INVOKE_ITEM_ALIAS = /^ii$/i;
 function psMayMoveFolder(text) {
   const plain = text.replace(/[`'"]/g, "");
   if (PS_SCRIPT_END.test(text) || PS_SCRIPT_END.test(plain) || PS_LOOKUP.test(text) || PS_LOOKUP.test(plain) || PS_CALL_OP.test(text)) return true;
   return text.split(/[;|&\r\n(){}]/).some((piece) => {
     const first = piece.trim().split(/\s+/)[0] ?? "";
-    return /[*?]/.test(first) || PS_SCRIPT_PATH.test(first);
+    return /[*?]/.test(first) || PS_SCRIPT_PATH.test(first) || PS_INVOKE_ITEM_ALIAS.test(first.replace(/[`'"]/g, ""));
   });
 }
 function localBinCwd(command, cwd, tool = "Bash") {
@@ -20660,6 +20761,19 @@ var BREW_BUNDLE_READ_ONLY = /^(?:check|list|dump|cleanup|exec|env|sh|edit|remove
 function pair(pos, a, next) {
   return pos.some((w, i) => w === a && next.test(pos[i + 1] ?? ""));
 }
+var SOURCE_VERBS = /^(?:add|update)$/;
+var SOURCE_WORDS = /^(?:source|sources)$/;
+function nugetSourceChange(rest) {
+  const pos = positionals(rest, 6);
+  const at = pos.findIndex((w) => SOURCE_WORDS.test(w));
+  return at >= 0 && pos.slice(at + 1).some((w) => SOURCE_VERBS.test(w));
+}
+function dotnetSourceChange(rest) {
+  const pos = positionals(rest, 8);
+  const nuget = pos.indexOf("nuget");
+  const verb = nuget < 0 ? -1 : pos.findIndex((w, i) => i > nuget && SOURCE_VERBS.test(w));
+  return verb >= 0 && pos.slice(verb + 1).some((w) => SOURCE_WORDS.test(w));
+}
 function dotnetInstall(rest) {
   const pos = positionals(rest, 8);
   const add = pos.indexOf("add");
@@ -20679,6 +20793,10 @@ var ECO_RULES = [
     installs: (r) => installVerbFirst(r, NUGET_VERBS, NUGET_READ_ONLY) || positionals(r, 4).includes("restore") && r.has(NUGET_SOURCE_FLAG)
   },
   { ecosystem: "nuget", names: /^dotnet$/, commandOnly: false, installs: dotnetInstall },
+  // Source changes: not installs, but a later install reads from the new source and no check covers it. Read forms (nuget sources list) are not here.
+  { ecosystem: "nuget", names: /^nuget$/, commandOnly: false, installs: nugetSourceChange, source: true },
+  { ecosystem: "nuget", names: /^dotnet$/, commandOnly: false, installs: dotnetSourceChange, source: true },
+  { ecosystem: "powershell", names: /^(?:register|set)-(?:psrepository|packagesource)$/, commandOnly: false, installs: () => true, source: true },
   { ecosystem: "conda", names: /^(?:conda|mamba|micromamba)$/, commandOnly: false, installs: (r) => installVerbFirst(r, CONDA_VERBS, CONDA_READ_ONLY) },
   { ecosystem: "brew", names: /^brew$/, commandOnly: false, installs: (r) => {
     const [a, b] = positionals(r, 2);
@@ -20691,6 +20809,9 @@ var ECO_RULES = [
 var LAUNCHER2 = /^(?:xargs|call|start|\/[ck]|cmd|cmd\.exe|[{(&]|then|do|else|elif|if|while|until|!)$/i;
 var LOOKUP = /^(?:which|where|where\.exe|type|whereis|man|help|get-help|get-command|gcm|get-alias|echo|write-host|write-output|printf)$/i;
 function ecosystemInstall(segment) {
+  return ecosystemRule(segment)?.ecosystem ?? null;
+}
+function ecosystemRule(segment) {
   let words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(",")).filter(Boolean);
   if (words[0] === "&") words.shift();
   const spawns = START_PROCESS.test(words[0] ?? "") || /^(?:iex|invoke-expression)$/i.test(words[0] ?? "");
@@ -20711,7 +20832,7 @@ function ecosystemInstall(segment) {
     const names = [commandName(word2), commandName(word2.replace(/\\/g, ""))];
     const atCommand = i === 0 || spawns || LAUNCHER2.test(words[i - 1]) || word2 !== words[i];
     const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs({ words, from: i + 1, has: (re) => lastIndex(re) > i }));
-    if (rule) return rule.ecosystem;
+    if (rule) return rule;
   }
   return null;
 }
@@ -20813,7 +20934,12 @@ function persistentConfigMarkers(command, tool, depth = 0) {
     const own = segments.flatMap((seg2) => [...indexConfigMarkers(stripQuotedStrings(seg2, tool), PERSISTENT_CONFIG), ...registrySet(seg2)]);
     if (depth >= 3) return own;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
-    return [...own, ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1))];
+    const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
+    return [
+      ...own,
+      ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1)),
+      ...decoded.flatMap((text) => persistentConfigMarkers(text, "PowerShell", depth + 1))
+    ];
   } catch {
     return [...indexConfigMarkers(command, PERSISTENT_CONFIG), ...registrySet(command)];
   }
@@ -21248,8 +21374,12 @@ function readStdin() {
 var OVERRIDE = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
 function asksFor(segment, install, cwd, tool) {
   if (!install) {
-    const eco = ecosystemInstall(segment);
-    if (eco) return [`No blocklist, OSV or age check exists for ${eco} packages: ${segment.slice(0, 200)}.`];
+    if (encodedCommands(segment).bad) {
+      return [`Encoded PowerShell command the guard cannot read: "${segment.slice(0, 200)}". It is not valid base64 of UTF-16 text, or it is empty, so no package check ran. Confirm it.`];
+    }
+    const rule = ecosystemRule(segment);
+    if (rule?.source) return [`Non-registry source change: ${segment.slice(0, 200)}. It adds or changes a ${rule.ecosystem} package source that stays for later installs. No blocklist, OSV or age check will cover later installs from it.`];
+    if (rule) return [`No blocklist, OSV or age check exists for ${rule.ecosystem} packages: ${segment.slice(0, 200)}.`];
     return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
   }
   const asks = [];
@@ -21330,12 +21460,13 @@ var RC_GATE_NAMES = /npm|pnpm|yarn|pip|poetry|pdm|conda|mamba|cargo|brew|compose
 var RC_GATE_SHORT = /(?<![a-z0-9])(?:go|gem|uv|py|bun|cup)(?![a-z])/;
 var RC_GATE_CONFIG = /registry|index-url|index_url|find-links|find_links|userconfig|globalconfig|npm_config|\.npmrc|\.yarnrc|bunfig|pip\.(?:ini|conf)|uv\.toml|iex|invoke-expression|start-process|saps/;
 var RC_GATE_HIDDEN = /[$`{]/;
+var RC_GATE_ENCODED = /[-/]e(?:c|n(?:c(?:o(?:d(?:e(?:d(?:c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?)?)?)?)?)?)?)?(?=[\s:=]|$)/;
 function mayInstall(command) {
   if (RC_GATE_HIDDEN.test(command)) return true;
   const joined = command.toLowerCase().replace(/\\\r?\n/g, "");
   const plain = joined.replace(/[\\'"^]/g, "");
   const unquoted = joined.replace(/['"^]/g, "");
-  return [plain, unquoted].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text) || RC_GATE_CONFIG.test(text));
+  return [plain, unquoted].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text) || RC_GATE_CONFIG.test(text) || RC_GATE_ENCODED.test(text));
 }
 function rcFileMarkers(cwd) {
   const dirs = /* @__PURE__ */ new Set();
@@ -21452,7 +21583,7 @@ async function main() {
     logGuardDecision("package-install-guard", input, "override", "SKIP_PACKAGE_GUARD", { command });
   }
   if (checked.length === 0) {
-    const persistent = installs.length === 0 && !wholeOverride && !checkOverride(command) ? [...new Set(shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)))] : [];
+    const persistent = !wholeOverride && !checkOverride(command) ? [...new Set(shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)))] : [];
     if (persistent.length === 0) {
       outputContinue();
       return;
@@ -21474,7 +21605,8 @@ async function main() {
     asks.push(...result.asks);
     advisories.push(...result.advisories);
   }
-  const config = [.../* @__PURE__ */ new Set([...indexConfigMarkers(command), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(command)])];
+  const scanText = [command, ...shell.dialects.flatMap((dialect) => decodedTexts(command, dialect))].join("\n");
+  const config = [.../* @__PURE__ */ new Set([...indexConfigMarkers(scanText), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(scanText)])];
   if (config.length > 0 && !asks.some((a) => a.startsWith("Custom package index"))) {
     asks.push(`Custom package index or config in the command: ${config.join(", ")}. The checks read the public PyPI or npm registry, not this index.`);
   }
