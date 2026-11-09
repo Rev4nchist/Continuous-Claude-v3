@@ -199,7 +199,7 @@ Workflow tool pattern:
 
 | Component | Location |
 |-----------|----------|
-| Hooks (source) | `~/.claude/hooks/src/` |
+| Hooks (source) | `~/continuous-claude/.claude/hooks/src/` |
 | Hooks (built) | `~/.claude/hooks/dist/` |
 | Skills | `~/.claude/skills/` |
 | Agents | `~/.claude/agents/` |

@@ -163,7 +163,7 @@ Present results as:
 ## Post-Audit Actions
 
 1. **Wire ready hooks** -- Add suggested JSON to settings.json
-2. **Rebuild stale** -- `cd ~/.claude/hooks && npm run build`
+2. **Rebuild stale** -- `cd ~/continuous-claude/.claude/hooks && npm run build`
 3. **Archive dead hooks** -- Move to `hooks/src/archive/`
 4. **Remove broken** -- Delete orphaned registrations
 5. **Sync to repo** -- Forward sync if ~/.claude was changed
@@ -174,7 +174,7 @@ Present results as:
 
 - Hook catalog: `.claude/docs/architecture/quick-ref/hook-catalog.md`
 - Hook system: `.claude/docs/architecture/subsystems/hooks.md`
-- Build: `cd ~/.claude/hooks && npm run build`
+- Build: `cd ~/continuous-claude/.claude/hooks && npm run build`
 
 ---
 *On-demand skill for auditing hook registrations vs source files*

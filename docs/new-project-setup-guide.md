@@ -81,7 +81,7 @@ ls ~/.claude/hooks/dist/*.mjs | wc -l
 # Should show 80+ files
 
 # If hooks are missing or stale:
-cd ~/.claude/hooks && npm run build
+cd ~/continuous-claude/.claude/hooks && npm run build
 ```
 
 ### Step 3: Start Claude Code Session
@@ -346,7 +346,7 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/tree_schema.py --v
 ls ~/.claude/hooks/dist/*.mjs | wc -l
 
 # Rebuild if needed
-cd ~/.claude/hooks && npm run build
+cd ~/continuous-claude/.claude/hooks && npm run build
 
 # Check settings.json references correct paths
 cat ~/.claude/settings.json | head -50

@@ -65,6 +65,6 @@ When a file appears in a diff result:
 | Drift Type | Fix Command |
 |------------|-------------|
 | Missing in active / Content differs | `bash ~/continuous-claude/scripts/sync-to-active.sh` |
-| Stale build in hooks/dist/ | `cd ~/.claude/hooks && npm run build` |
+| Stale build in hooks/dist/ | `cd ~/continuous-claude/.claude/hooks && npm run build` |
 | Missing in repo (intentional local file) | No action needed -- add to local-only list if permanent |
 | Missing in repo (should be tracked) | `bash ~/continuous-claude/scripts/sync-claude.sh --to-repo` |

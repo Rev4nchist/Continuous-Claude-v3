@@ -113,5 +113,5 @@ cd opc && uv sync
 ls ~/.claude/hooks/dist/*.mjs
 
 # Rebuild if needed
-cd ~/.claude/hooks && ./build.sh
+cd ~/continuous-claude/.claude/hooks && ./build.sh
 ```
