@@ -21,7 +21,7 @@ import * as path from 'path';
 export const BUILD_INPUTS_NAME = '.build-inputs.json';
 
 export const MANIFEST_MISSING_INFO =
-  '[i] Hook dist freshness manifest missing (.build-inputs.json); not using mtime, so no stale warning. Run: cd ~/.claude/hooks && npm run build';
+  '[i] Hook dist freshness manifest missing (.build-inputs.json); not using mtime, so no stale warning. Run: cd ~/continuous-claude/.claude/hooks && npm run build';
 
 export interface BuildInputsManifest {
   version: 1;
@@ -121,5 +121,5 @@ export function formatStaleDistWarning(srcRoot: string, result: TreeFreshness): 
   if (result.state !== 'stale') return null;
   const names = result.staleFiles.slice(0, 3).map(file => srcKey(srcRoot, file)).join(', ');
   const more = result.staleFiles.length > 3 ? `, +${result.staleFiles.length - 3} more` : '';
-  return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/.claude/hooks && npm run build`;
+  return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/continuous-claude/.claude/hooks && npm run build`;
 }
