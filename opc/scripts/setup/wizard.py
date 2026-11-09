@@ -279,62 +279,16 @@ def confirm_feature_toggle(feature: str, current: bool, new: bool) -> bool:
     return response.strip().lower() == "y"
 
 
-def build_typescript_hooks(hooks_dir: Path) -> tuple[bool, str]:
-    """Build TypeScript hooks using npm.
+def build_and_report_hooks(opc_source: Path, claude_dir: Path, symlinked: bool) -> None:
+    """Build the hooks in the repo, sync them to ~/.claude, and print the result."""
+    from scripts.setup.hooks_build import build_and_sync_hooks
 
-    Args:
-        hooks_dir: Path to hooks directory
-
-    Returns:
-        Tuple of (success, message)
-    """
-    # Check if hooks directory exists
-    if not hooks_dir.exists():
-        return True, "Hooks directory does not exist"
-
-    # Check if package.json exists
-    if not (hooks_dir / "package.json").exists():
-        return True, "No package.json found - no npm build needed"
-
-    # Find npm executable
-    npm_cmd = shutil.which("npm")
-    if npm_cmd is None:
-        if platform.system() == "Windows":
-            npm_cmd = shutil.which("npm.cmd")
-        if npm_cmd is None:
-            return False, "npm not found in PATH - TypeScript hooks will not be built"
-
-    try:
-        # Install dependencies
-        console.print("  Running npm install...")
-        result = subprocess.run(
-            [npm_cmd, "install"],
-            cwd=hooks_dir,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            return False, f"npm install failed: {result.stderr[:200]}"
-
-        # Build
-        console.print("  Running npm run build...")
-        result = subprocess.run(
-            [npm_cmd, "run", "build"],
-            cwd=hooks_dir,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            return False, f"npm build failed: {result.stderr[:200]}"
-
-        return True, "TypeScript hooks built successfully"
-
-    except subprocess.TimeoutExpired:
-        return False, "npm command timed out"
-    except OSError as e:
-        return False, f"Failed to run npm: {e}"
+    console.print("  Building TypeScript hooks in the repo...")
+    ok, msg = build_and_sync_hooks(opc_source, claude_dir, symlinked, log=console.print)
+    if ok:
+        console.print(f"  [green]OK[/green] {msg}")
+    else:
+        console.print(f"  [yellow]WARN[/yellow] {msg}")
 
 
 async def check_prerequisites() -> dict[str, Any]:
@@ -1176,15 +1130,7 @@ async def run_setup_wizard() -> None:
                         f"  [green]OK[/green] Merged {len(result['merged_items'])} custom items"
                     )
 
-                # Build TypeScript hooks
-                console.print("  Building TypeScript hooks...")
-                hooks_dir = claude_dir / "hooks"
-                build_success, build_msg = build_typescript_hooks(hooks_dir)
-                if build_success:
-                    console.print(f"  [green]OK[/green] {build_msg}")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
-                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+                build_and_report_hooks(opc_source, claude_dir, symlinked=False)
 
                 # enabledPlugins only turns plugins on; download them too
                 _install_plugins(claude_dir / "settings.json")
@@ -1200,15 +1146,7 @@ async def run_setup_wizard() -> None:
                     console.print(f"  [green]OK[/green] Backed up: {', '.join(result['backed_up_dirs'])}")
                 console.print("  [dim]Changes in ~/.claude/ now sync to repo automatically[/dim]")
 
-                # Build TypeScript hooks
-                console.print("  Building TypeScript hooks...")
-                hooks_dir = claude_dir / "hooks"
-                build_success, build_msg = build_typescript_hooks(hooks_dir)
-                if build_success:
-                    console.print(f"  [green]OK[/green] {build_msg}")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
-                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+                build_and_report_hooks(opc_source, claude_dir, symlinked=True)
 
                 # enabledPlugins only turns plugins on; download them too
                 _install_plugins(claude_dir / "settings.json")
@@ -1240,15 +1178,7 @@ async def run_setup_wizard() -> None:
                 console.print(f"  [green]OK[/green] Installed {result['installed_agents']} agents")
                 console.print(f"  [green]OK[/green] Installed {result['installed_servers']} MCP servers")
 
-                # Build TypeScript hooks
-                console.print("  Building TypeScript hooks...")
-                hooks_dir = claude_dir / "hooks"
-                build_success, build_msg = build_typescript_hooks(hooks_dir)
-                if build_success:
-                    console.print(f"  [green]OK[/green] {build_msg}")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
-                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+                build_and_report_hooks(opc_source, claude_dir, symlinked=False)
 
                 # enabledPlugins only turns plugins on; download them too
                 _install_plugins(claude_dir / "settings.json")
@@ -1262,15 +1192,7 @@ async def run_setup_wizard() -> None:
                 console.print(f"  [green]OK[/green] Symlinked: {', '.join(result['symlinked_dirs'])}")
                 console.print("  [dim]Changes in ~/.claude/ now sync to repo automatically[/dim]")
 
-                # Build TypeScript hooks
-                console.print("  Building TypeScript hooks...")
-                hooks_dir = claude_dir / "hooks"
-                build_success, build_msg = build_typescript_hooks(hooks_dir)
-                if build_success:
-                    console.print(f"  [green]OK[/green] {build_msg}")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
-                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+                build_and_report_hooks(opc_source, claude_dir, symlinked=True)
 
                 # enabledPlugins only turns plugins on; download them too
                 _install_plugins(claude_dir / "settings.json")
