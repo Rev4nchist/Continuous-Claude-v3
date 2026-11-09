@@ -11,6 +11,7 @@ Used by scripts/setup/wizard.py and scripts/setup/update.py.
 from __future__ import annotations
 
 import filecmp
+import hashlib
 import platform
 import shutil
 import subprocess
@@ -19,6 +20,11 @@ from pathlib import Path
 
 NPM_INSTALL_TIMEOUT = 300
 NPM_BUILD_TIMEOUT = 120
+
+# The stamp sits next to node_modules in ~/.claude/hooks. It holds the hash of the
+# files below at the last good install. The copy never touches it.
+DEPS_STAMP_NAME = ".deps-stamp"
+_DEPS_FILES = ("package.json", "package-lock.json")
 
 # Top-level hook files to copy, by suffix and by exact name.
 _TOP_LEVEL_SUFFIXES = (".sh", ".py", ".mjs", ".ps1")
@@ -114,11 +120,37 @@ def _copy_hooks(repo_hooks: Path, active_hooks: Path) -> int:
     return copied
 
 
+def _deps_fingerprint(active_hooks: Path) -> str:
+    """Hash package.json and package-lock.json. A missing lock file hashes as empty."""
+    digest = hashlib.sha256()
+    for name in _DEPS_FILES:
+        path = active_hooks / name
+        digest.update(name.encode())
+        digest.update(path.read_bytes() if path.is_file() else b"")
+    return digest.hexdigest()
+
+
+def _deps_are_current(active_hooks: Path, fingerprint: str) -> bool:
+    """True when node_modules exists and the stamp matches the fingerprint."""
+    if not (active_hooks / "node_modules").exists():
+        return False
+    stamp = active_hooks / DEPS_STAMP_NAME
+    try:
+        return stamp.read_text(encoding="utf-8").strip() == fingerprint
+    except OSError:
+        return False
+
+
 def _ensure_runtime_deps(active_hooks: Path, npm_cmd: str) -> str | None:
-    """The copy skips node_modules. Install runtime deps in ~/.claude/hooks when missing."""
+    """The copy skips node_modules. Install runtime deps in ~/.claude/hooks.
+
+    Install when node_modules is missing or the deps stamp differs from the hash
+    of package.json and package-lock.json. Write the stamp only after a good install.
+    """
     if not (active_hooks / "package.json").is_file():
         return None
-    if (active_hooks / "node_modules").exists():
+    fingerprint = _deps_fingerprint(active_hooks)
+    if _deps_are_current(active_hooks, fingerprint):
         return None
     result = _run_npm(
         npm_cmd, ["install", "--omit=dev"], active_hooks, NPM_INSTALL_TIMEOUT
@@ -128,6 +160,7 @@ def _ensure_runtime_deps(active_hooks: Path, npm_cmd: str) -> str | None:
             "Hooks are copied, but npm install --omit=dev failed in ~/.claude/hooks: "
             f"{_snippet(result.stderr)}. Run that command in that folder by hand."
         )
+    (active_hooks / DEPS_STAMP_NAME).write_text(fingerprint, encoding="utf-8")
     return None
 
 
