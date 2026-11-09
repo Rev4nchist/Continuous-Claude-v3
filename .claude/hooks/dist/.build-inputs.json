@@ -143,7 +143,7 @@
     "shared/roadmap-splice.ts": "66e8fa0d8d2f95c9ce076d24a85336c61141d360fe155f1a58f500564459a09c",
     "shared/roadmap-sync-guards.ts": "dfdecf29796b68d7b5b90610973370faf947bc19a5cee186be1bc1ac285b3371",
     "shared/router-config.ts": "5756194e2200aa63303930360b5f148db0ede213574d724d0602e9fae2e08c7e",
-    "shared/scoped-cleanup.ts": "97625ce69475d7618b878e1b3dab656873e9b1b2c3c1f4087008d22b7cbc9a60",
+    "shared/scoped-cleanup.ts": "7a1164e6ef956785efca350e9df442dae9ee7874adf3169018059fbcc50e129e",
     "shared/search-context-path.ts": "3efdf0976e62fd34e063959535c137967f7c5dee15c67dfd2f32805c1245ac50",
     "shared/session-activity.ts": "bde3d6b271e8e23937f1706c76791b75a428bf447d50c63576783f70469a3f20",
     "shared/session-bus-id.ts": "20b843ec98a7233e50713a797d8c44085f92aedf17631150600185907a5c6f4b",
