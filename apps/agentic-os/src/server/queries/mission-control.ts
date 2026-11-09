@@ -21,6 +21,7 @@ import {
   type SessionDetail,
 } from '@/server/queries/session-detail';
 import { getActiveSessions, type ActiveSessions } from '@/server/queries/sessions';
+import { foldTiles, type BreaksTile, type QuotaTile, type SpendTile } from '@/server/queries/spend-fold';
 import { safeMessage } from '@/server/sources/safe-message';
 import { readStateFiles, type StateFiles } from '@/server/sources/state-files';
 
@@ -45,10 +46,21 @@ export type DataSource = { id: string; label: string; status: SourceStatus; deta
 
 export type StatTiles = {
   liveSessions: number;
+  /** Cards whose chip is `working` / `waiting-on-dave` (the join's live cards). */
+  working: number;
+  waiting: number;
   needsDave: number;
   blocked: number;
+  /** Sessions quiet over 15 minutes and up to 24 hours (the join's `quiet`). */
+  quiet: number;
   activeLanes: number;
   openPrs: number;
+  /** 7-day quota, from the live file with the newest `cache.lastUsedAt`. Null: not reported. */
+  quota: QuotaTile;
+  /** Engine and est sums over LIVE sessions only. */
+  spend: SpendTile;
+  /** Subagent rule breaks over LIVE sessions only. */
+  breaks: BreaksTile;
 };
 
 export type { DetailUnavailable, LaneBoard, PrRow, ReadyItem, SessionCard, SessionDetail };
@@ -172,12 +184,21 @@ export async function getMissionControlSnapshot(
   ]);
   const sessions = joined.ok ? joined.value : NO_FLEET;
 
+  // A state file has no live flag: fold only the files of the live sessions.
+  const liveIds = new Set(active.sessions.map((s) => s.id));
+  const cost = foldTiles(stateFiles.snapshots, liveIds);
   const tiles: StatTiles = {
     liveSessions: active.sessions.length,
+    working: sessions.cards.filter((c) => c.chip === 'working').length,
+    waiting: sessions.cards.filter((c) => c.chip === 'waiting-on-dave').length,
     needsDave: sessions.ready.length,
     blocked: sessions.cards.filter((c) => c.chip === 'blocked').length,
+    quiet: sessions.join.quiet,
     activeLanes: lanes.ok ? lanes.value : 0,
     openPrs: sessions.prs.length,
+    quota: cost.quota,
+    spend: cost.spend,
+    breaks: cost.breaks,
   };
 
   const sources: DataSource[] = [

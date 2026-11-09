@@ -42,7 +42,8 @@ import {
  *   pr-row-session    one <button> per watching session, text = session name, data-session-id
  *   pr-panel-empty    "No PR is watched by a live session." (only when there is no row)
  *   pr-panel-note     "Only PRs a live session watches. Merged or ready PRs leave the watch."
- *   stat-tile (5th)   "Open PRs" tile, value = number of pr-row (exists already)
+ *   stat-tile (6th)   "Open PRs" tile, value = number of pr-row (exists already). Hidden on a phone
+ *                     (`hidden sm:block`), so a test reads its text, never its visibility.
  */
 
 test.beforeEach(() => clearStateDir());
@@ -138,8 +139,9 @@ const rows = (page: Page): Locator => page.getByTestId('pr-row');
 const rowByKey = (page: Page, key: string): Locator =>
   page.locator(`[data-testid="pr-row"][data-pr-key="${key}"]`);
 const detailPanel = (page: Page): Locator => page.getByTestId('session-detail');
-// The mockup order is Live sessions, Active lanes, Blocked, Open PRs, Needs Dave: Open PRs is the
-// 4th tile (index 3). Found by its label, so the next reorder cannot silently point at another tile.
+// The order is Live, Needs Dave, Quota and spend, Rule breaks, Active lanes, Open PRs: Open PRs is the
+// 6th tile (index 5). Found by its label, so the next reorder cannot silently point at another tile.
+// It keeps label and value only: the /^Open PRs\s*N$/ checks break on any extra line.
 const openPrsTile = (page: Page): Locator =>
   page.getByTestId('stat-tile').filter({ hasText: 'Open PRs' });
 
