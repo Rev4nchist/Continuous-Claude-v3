@@ -619,16 +619,18 @@ Every one of these cost real time already.
   Prove a new test can fail by reconstructing the old behaviour.
 - **`~/.claude` drift recurs by design** after every forward sync. If it ever
   matters the fix is a scheduled snapshot commit, not a hook — `PostToolUse`
-  cannot see shell-copy writes. **Both halves shipped 2026-08-31 (harness-security
-  lane):** (1) `sync-to-active.sh` now carries a clobber guard — a manifest at
+  cannot see shell-copy writes. **Half (1) shipped 2026-08-31 (harness-security
+  lane); half (2) was retired 2026-11-09:** (1) `sync-to-active.sh` now carries a clobber guard — a manifest at
   `~/.claude/state/sync-manifest.txt` records what each destination held when the
   sync last wrote it; a destination edited directly in `~/.claude` since then is
   preserved to `~/.claude/.sync-quarantine/<ts>/` (never auto-purged) before the
   repo copy lands, and reported loudly. The script refuses to run under WSL.
-  (2) The `CCv3-Claude-Snapshot` scheduled task commits the active tree daily at
-  18:00 (`scripts/claude-snapshot/snapshot-claude.ps1`; secret/size preflights,
-  single-flight lock). A snapshot older than ~3 days means the task is broken —
-  check `~/.claude/logs/claude-snapshot/`. Known guard gaps, accepted:
+  (2) The Claude snapshot task (retired 2026-11-09) was meant to commit the
+  active tree daily at 18:00. It never ran: no task was registered and
+  `~/.claude` has no git repo, so `snapshot-claude.ps1` exits 1. The scripts in
+  `scripts/claude-snapshot/` stay in the repo, unregistered. Do not register
+  them without a decision on secrets (its secret preflight checks path names
+  only, not file content: `snapshot-claude.ps1:63-74`). Known guard gaps, accepted:
   deletions/renames and dir↔file transitions are outside the manifest model
   (`--changed` deletes stay scoped to mapped paths; full mode never deletes).
 - **Do not run `scripts/msys/repro.ps1` unattended.** It deliberately storms the
@@ -708,7 +710,7 @@ Relevant to CCv3 refinement specifically:
 
 | Lane | State | Note |
 |---|---|---|
-| `harness-security` | done (2026-08-31) | clobber guard + quarantine in `sync-to-active.sh`; repo sources for the 3 active-only rules + 2 orphan hooks (registration-reconcile GREEN); settings/template registration capture (`scripts/settings/capture-active-registrations.mjs`, 5 machine-local exclusions incl. `permission-auto-allow`); daily `CCv3-Claude-Snapshot` task re-enables `~/.claude` history |
+| `harness-security` | done (2026-08-31) | clobber guard + quarantine in `sync-to-active.sh`; repo sources for the 3 active-only rules + 2 orphan hooks (registration-reconcile GREEN); settings/template registration capture (`scripts/settings/capture-active-registrations.mjs`, 5 machine-local exclusions incl. `permission-auto-allow`); the daily Claude snapshot task was retired 2026-11-09 (it never ran; `~/.claude` has no git repo) |
 | `msys-fork-storm` | done, unresolved | instrumented, root cause NOT established |
 | `conflict-events` | ready | `claim_degraded` exists but nothing emits it |
 | `self-improvement-triage` | backlog | |
@@ -730,7 +732,7 @@ It exits 1 on any FAIL. With `--json` it also writes `.claude/cache/e2e/<YYYY-MM
 | `hooks` | `registration-reconcile`, `hook-contract-guard` and `hook-parity` as child processes; `registration-baseline.json` dirty in git; `~/.claude/hooks/dist/.build-inputs.json` missing |
 | `sync` | cursor against `git rev-parse main` (missing cursor is FAIL); `.sync.pending`; `.sync-quarantine` dirs under 7 days old; folders under `.claude/worktrees` that git does not list. Such a folder is a WARN only from 24 h old (by mtime); the WARN names the oldest age and the dry-run command `node scripts/worktree/orphans.mjs`. A younger folder is info. `node_modules` (the shared store link) is never an orphan |
 | `logs` | errors in the last 24 h in `pre-pr-gate-errors.jsonl`, `guard-decisions.jsonl` (kind `error`), `memory-write-failures.jsonl`, `hooks.log` (level `error`). PASS below 3 distinct (message, folder) pairs, WARN at 3 or more pairs, FAIL at 5 or more error rows. A `directory not found` row whose path is gone is benign: labelled, not counted. A line that does not parse is skipped and counted |
-| `schedule` | one row per task in `scripts/scheduled/tasks.json`. A task that never ran is info (a PASS that starts `info:`) until its first scheduled time, read from the task XML `StartBoundary` and weekday, has passed; then WARN. Other results are unchanged |
+| `schedule` | one row per task in `scripts/scheduled/tasks.json`. A task that never ran is info (a PASS that starts `info:`) until its first scheduled time, read from the task XML `StartBoundary` and weekday, has passed; then WARN. Other results are unchanged. `readme-tasks`: FAIL when this README names a `CCv3-*` task that `tasks.json` does not list. Write a retired task name without the `CCv3-` prefix |
 | `lanes` | `worktree-lane-mjs`: a worktree `lane.mjs` that differs from the primary is a WARN when that worktree lacks main's last `lane.mjs` change (or is no git worktree); it is info when the worktree has that change and edited the file (feature work) |
 | `review` | today's `coderabbit-paid.jsonl` total against the $15 day cap (WARN from $12); `reviews_7d_manual_date` in `review-router.config.json` older than 7 days |
 

@@ -22,6 +22,9 @@
 //          still blocks on battery (WARN "battery"), stops on battery (WARN), wake wanted but WakeToRun absent (WARN "wake"), trigger time or
 //          kind differs (WARN "trigger"), everything matches (PASS), drift plus a bad last result (FAIL stays FAIL), drift on a stale task
 //          (still WARN, drift named), XML unreadable (WARN, never PASS), a non-boolean llm/wake in tasks.json (WARN), end to end drift exits 0
+//   schedule:readme-tasks: README names a CCv3-* task that tasks.json lacks (FAIL, names token, line and README), only listed tasks (PASS with count),
+//          a prefix of a real name or a longer name (FAIL), CCv3-1 / bare CCv3 / unprefixed names (no false hit), no README (PASS absent),
+//          tasks.json not JSON (WARN)
 //   blocklist:age: 1 day (PASS), 3 days exactly (PASS), 4 days (WARN), 14 days exactly (WARN), 15 days (FAIL), never committed (WARN)
 //   registry:roots-exist: an active entry with a missing path (FAIL, names it), an inactive one (ignored), in-development counts as active,
 //          a present path (PASS), no registry file (PASS absent), a registry that is not JSON (WARN)
@@ -754,6 +757,73 @@ test('end to end: a task with no schtasks output is a WARN and a bad last result
   const fail = run(fx);
   assert.equal(fail.checks[`schedule:${TASK_NAME}`].status, 'FAIL');
   assert.equal(fail.code, 1);
+});
+
+// ---- schedule:readme-tasks (the README must name only tasks that tasks.json lists) ----
+const readmeOf = (fx) => join(fx.repo, 'docs', 'harness-strategy', 'README.md');
+const READMEcheck = 'schedule:readme-tasks';
+
+test('a README that names a CCv3 task missing from tasks.json is a FAIL naming the token, the line and the README, and exits 1', () => {
+  const fx = fixture();
+  put(readmeOf(fx), 'Intro line.\nThe `CCv3-Claude-Snapshot` task runs daily.\n');
+  const r = run(fx);
+  const c = r.checks[READMEcheck];
+  assert.equal(c.status, 'FAIL', r.stdout);
+  assert.match(c.detail, /CCv3-Claude-Snapshot/);
+  assert.match(c.detail, /line 2\)/);
+  assert.ok(c.detail.includes(readmeOf(fx)), c.detail);
+  assert.equal(r.code, 1);
+});
+
+test('a README that names only tasks in tasks.json is a PASS that reports the count', () => {
+  const fx = fixture();
+  put(readmeOf(fx), `The \`${TASK_NAME}\` task runs daily. It is the same \`${TASK_NAME}\`.\n`);
+  const r = run(fx);
+  assert.equal(r.checks[READMEcheck].status, 'PASS', r.checks[READMEcheck].detail);
+  assert.match(r.checks[READMEcheck].detail, /^2 task name\(s\)/);
+  assert.equal(r.code, 0, r.stdout);
+});
+
+test('a task name that is only a prefix of a real task is still a FAIL (positive control)', () => {
+  const fx = fixture();
+  put(readmeOf(fx), 'The CCv3-Fake task runs daily.\n');
+  const c = run(fx).checks[READMEcheck];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /CCv3-Fake \(line 1\)/);
+  put(readmeOf(fx), `The ${TASK_NAME}-2 task runs daily.\n`);
+  assert.equal(run(fx).checks[READMEcheck].status, 'FAIL');
+  put(readmeOf(fx), `The ${TASK_NAME}_v2 task runs daily.\n`);
+  assert.equal(run(fx).checks[READMEcheck].status, 'FAIL', 'an underscore suffix is part of the name');
+});
+
+test('words that only look like task names are no false hit: CCv3-1, bare CCv3, Lane-Snapshot, a retired name without the prefix', () => {
+  const fx = fixture();
+  put(readmeOf(fx), 'See CCv3-1 and CCv3. The Lane-Snapshot and Reminder-Tick tasks are real. The Claude snapshot task is retired.\n');
+  const c = run(fx).checks[READMEcheck];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /^0 task name/);
+});
+
+test('a task name that differs only in case is still the listed task (schtasks ignores case)', () => {
+  const fx = fixture();
+  put(readmeOf(fx), `The ${TASK_NAME.toLowerCase()} task runs daily.\n`);
+  const c = run(fx).checks[READMEcheck];
+  assert.equal(c.status, 'PASS', c.detail);
+});
+
+test('no README is a PASS (absent), not a crash', () => {
+  const c = run(fixture()).checks[READMEcheck];
+  assert.equal(c.status, 'PASS');
+  assert.match(c.detail, /absent/);
+});
+
+test('a tasks.json that is not JSON makes the README check a WARN, never a PASS', () => {
+  const fx = fixture();
+  put(readmeOf(fx), `The ${TASK_NAME} task runs daily.\n`);
+  put(join(fx.repo, 'scripts', 'scheduled', 'tasks.json'), '{nope');
+  const c = run(fx).checks[READMEcheck];
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /tasks\.json/);
 });
 
 // ---- schedule: registration drift (task XML vs tasks.json llm / wake / trigger) ----
