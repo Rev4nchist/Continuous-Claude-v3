@@ -232,8 +232,10 @@ Labels M1 to M6 mean "missed". They are not ROADMAP gates.
 - Evidence: registered at `~/.claude/settings.json:720`. It runs `git --version` and `git rev-parse` before it reads stdin (`.claude/hooks/src/git-auto-commit.ts:172-188, 193`). It always exits at :183-186 with a non-PostToolUse output shape.
 - If revived, it runs `git add -A` with no secret preflight (:139, :155). Compare `snapshot-claude.ps1:63-72`. No test covers it.
 - The no-op depends on `~/.claude` having no `.git` (`git-auto-commit.ts:33, 48-50, 181-188`). I confirmed there is none. M1 "restore" would run `git init` there and revive this hook. Decide M1 and M2 together: unregister first, or the restore wakes a hook with no secret check.
-- Fix: unregister with `apply-registrations.mjs` after Dave's yes and archive the source.
-- Test first: `apply-registrations.mjs` dry run must list the removal. After apply, a Write must spawn no git process.
+- Correction (lead session, 2026-11-09): the first draft said to unregister with `apply-registrations.mjs`. That script never removes a live registration (`scripts/settings/apply-registrations.mjs:14`, "A live registration is never removed"). A removal needs its own small script, like the one-off `scripts/settings/remove-maestro-registrations.mjs`.
+- Order trap: `scripts/settings/capture-active-registrations.mjs` appends any live registration that is missing from the template, when its dist file exists. Remove the hook from live settings first. Then remove it from `.claude/settings.json.template:707-714` (the `git-auto-commit` entry, line 712 is its path). Never run capture in between.
+- Fix: a `remove-registrations.mjs --only <hook>` script with a dry run, a backup like `apply-registrations`, and a test. Run it on live settings after Dave's yes, then edit the template in the same PR. Keep `git-auto-commit.ts` as retained source (the `sync-to-repo` precedent), and check that `/hook-audit` stays clean.
+- Test first: a settings test that fails while the template still registers `git-auto-commit`. Then the removal dry run must list one entry on live settings. After the live write, a Write must spawn no git process.
 - Effort: S.
 
 ### M3. Eleven registered hooks have zero tests
@@ -276,7 +278,7 @@ Order: evidence grade first, then effort. Grade A means an observed incident or 
 |---|---|---|---|---|---|
 | 1 | M5 guard-log source tag, probe log path, doctor grouping | A | S | agree split via SendMessage first (#faffe84e, #4c4b5eb5 import guard-log) | no |
 | 2 | Claim 4 heredoc segment fix in rule-router | A | S | blocked until #faffe84e lands; agree split via SendMessage first | no |
-| 3 | M2 unregister git-auto-commit | B | S | none | yes: apply-registrations |
+| 3 | M2 unregister git-auto-commit | B | S | none | yes: live settings write (new removal script) |
 | 4 | M1 snapshot restore or retire, plus doctor check | B | S/M | none | yes: restore vs retire |
 | 5 | Claim 6 rescue runbook with disableAllHooks | B | S | none | no |
 | 6 | M6 mask test-run-tracker command | B | S | none | yes: guard-log masking, ACL |
