@@ -2575,6 +2575,65 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
       ['command -- popd && open', (o) => `command -- popd && ${o}`, { A: 'position-unknown', B: 'position-unknown' }],
     ];
   }
+  // lane decision-gate-cd-residuals, round 2: shapes two reviewers reproduced in a real shell, for this gate too.
+  //   - GIT_DIR / GIT_WORK_TREE in the environment: git reads another repo than the folder              -> repo-moved rows (any cwd)
+  //   - an alias for cd (bash alias, Set-Alias): the folder the alias goes to is not readable            -> repo-moved rows
+  //   - a cd name spelled with a backslash or an empty quote pair (c\d, c''d)                             -> spelled rows
+  //   - a comment line with an open ( or backtick opens no subshell                                      -> comment rows
+  function CD_RESIDUALS_ROUND3(): Row[] {
+    const fill = (tpl: string, x: string, o: string): string => tpl.replaceAll('%X', x).replaceAll('%O', o);
+    const sure = (name: string, tpl: string, tool?: Tool): Row[] => [
+      [`${name} [X=A]`, (o) => fill(tpl, A, o), { B: 'stamp', C: 'stamp' }, tool],
+      [`${name} [X=B]`, (o) => fill(tpl, B, o), { A: 'allow', C: 'allow' }, tool],
+    ];
+    const loose = (name: string, tpl: string, tool?: Tool): Row[] => [
+      [`${name} [X=A]`, (o) => fill(tpl, A, o), { B: 'stamp', C: ['stamp', 'repo-identity'] }, tool],
+      [`${name} [X=B]`, (o) => fill(tpl, B, o), { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }, tool],
+    ];
+    const PS: Tool = 'PowerShell';
+    const moved = (name: string, tpl: string, tool?: Tool): Row => [name, (o) => fill(tpl, A, o), { A: 'repo-moved', B: 'repo-moved', C: 'repo-moved' }, tool];
+    return [
+      moved('GIT_DIR=A %O', 'GIT_DIR=%X/.git %O'),
+      moved('GIT_WORK_TREE=A %O', 'GIT_WORK_TREE=%X %O'),
+      moved('export GIT_DIR=A; %O', 'export GIT_DIR=%X/.git; %O'),
+      moved('env GIT_DIR=A %O', 'env GIT_DIR=%X/.git %O'),
+      moved('env "GIT_DIR=A" %O', 'env "GIT_DIR=%X/.git" %O'),
+      moved('GIT_DIR="A" %O', 'GIT_DIR="%X/.git" %O'),
+      moved("$env:GIT_DIR='A'; %O", "$env:GIT_DIR='%X/.git'; %O", PS),
+      moved("$env:GIT_WORK_TREE = 'A'; %O", "$env:GIT_WORK_TREE = '%X'; %O", PS),
+      moved('alias go=cd; go A && %O', 'alias go=cd\ngo %X && %O'),
+      moved("alias go='cd'; go A && %O", "alias go='cd'; go %X && %O"),
+      moved('alias go=pushd', 'shopt -s expand_aliases\nalias go=pushd\ngo %X && %O'),
+      moved('Set-Alias go Set-Location', 'Set-Alias go Set-Location; go %X; %O', PS),
+      moved('Set-Alias -Name -Value', 'Set-Alias -Name go -Value Set-Location; go %X; %O', PS),
+      moved('New-Alias go sl', 'New-Alias go sl; go %X; %O', PS),
+      moved('sal go cd', 'sal go cd; go %X; %O', PS),
+      // pinned: a quoted mention without an assignment, and an alias for something else, are no signal
+      ['echo "the GIT_DIR variable" && open', (o) => `echo "the GIT_DIR variable" && ${o}`, { A: 'stamp', B: 'allow' }],
+      ["alias ll='ls -l'; open", (o) => `alias ll='ls -l'; ${o}`, { A: 'stamp', B: 'allow' }],
+      ['Set-Alias ll Get-ChildItem; open', (o) => `Set-Alias ll Get-ChildItem; ${o}`, { A: 'stamp', B: 'allow' }, PS],
+      // pinned: a quoted GIT_DIR= in an argument is text; an unquoted read of the name is an accepted over-deny
+      ['echo "GIT_DIR=x" && open', (o) => `echo "GIT_DIR=x" && ${o}`, { A: 'stamp', B: 'allow' }],
+      ['echo $GIT_DIR && open', (o) => `echo $GIT_DIR && ${o}`, { A: 'repo-moved', B: 'repo-moved' }],
+      ['export "GIT_DIR=A/.git"; open', (o) => `export "GIT_DIR=${A}/.git"; ${o}`, { A: 'repo-moved', B: 'repo-moved', C: 'repo-moved' }],
+      // a spelled cd name is read: the folder it names is judged
+      ...sure('c\\d X && open', 'c\\d %X && %O'),
+      ...sure("c''d X && open", "c''d %X && %O"),
+      ...sure('c""d X && open', 'c""d %X && %O'),
+      ...sure("''cd X && open", "''cd %X && %O"),
+      ...sure('p\\ushd X && open', 'p\\ushd %X && %O'),
+      ['c\\d && open', (o) => `c\\d && ${o}`, { A: 'position-unknown', B: 'position-unknown' }],
+      // a comment line with an open ( or backtick opens no subshell: the cd on the next line stays sure
+      ...sure('# (x<NL>cd X && open', '# (x\ncd %X && %O'),
+      ...sure('# run `x<NL>cd X && open', '# run `x\ncd %X && %O'),
+      ...sure('echo a # (x<NL>cd X && open', 'echo a # (x\ncd %X && %O'),
+      ...sure('# build $(x<NL>cd X && open', '# build $(x\ncd %X && %O'),
+      // pinned: a ( in the middle of a word, or after an escaped space, is no comment; a real subshell after a comment is loose
+      ...loose('echo a#(x<NL>cd X && open', 'echo a#(x\ncd %X && %O'),
+      ...loose('echo a\\ #(x<NL>cd X && open', 'echo a\\ #(x\ncd %X && %O'),
+      ...loose('# c<NL>(true; cd X) && open', '# c\n(true; cd %X) && %O'),
+    ];
+  }
   const ROWS: Row[] = [
     // fail-open rows: the folder the shell really uses has no stamp
     ['open; cd B', (o) => `${o}; cd ${B}`, { A: 'stamp', B: 'allow', C: ['allow', 'repo-identity'] }],
@@ -2644,6 +2703,7 @@ describe('W: the folders a PR open may run in (cds before the open only)', () =>
     ['cd B 2>&1 & open', (o) => `cd ${B} 2>&1 & ${o}`, { A: 'stamp' }],
     ...CD_PARITY_ROWS(),
     ...CD_PARITY_ROUND2(),
+    ...CD_RESIDUALS_ROUND3(),
   ];
   const cwds: Record<string, string> = { A, B, C };
 

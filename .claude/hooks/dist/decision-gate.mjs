@@ -542,7 +542,8 @@ function landShapesOf(seg) {
   if (api && !GET_RE.test(api[0])) out2.push({ kind: "merge", pr: api[1], sha });
   return out2;
 }
-var PUSH_GIT = gitCallRe("push");
+var WRAPPERS = String.raw`(?:env(?:\s+(?:-[uCS]\s+\S+|-\S+|\w+=\S*))*|nice(?:\s+-\S+(?:\s+\d+)?)*|timeout(?:\s+-\S+(?:\s+[A-Z0-9]+)?)*\s+[\d.]+[smhd]?|xargs(?:\s+-\S+(?:\s+(?:\d+|\{\}))?)*|setsid(?:\s+-\S+)*|sudo(?:\s+-\S+(?:\s+\w+)?)*)\s+`;
+var PUSH_GIT = new RegExp(String.raw`(${CALL_START}(?:${WRAPPERS})*)(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+push)(?=\s|$)`, "g");
 var PUSH_WRAPPERS = "git-(?:safe|for)";
 var abbr = (name, min) => name.slice(0, min) + [...name.slice(min)].reduceRight((acc, ch) => `(?:${ch}${acc})?`, "");
 var GIT_FOR_OPTS = String.raw`-(?:${abbr("Path", 2)}|${abbr("Remote", 1)})(?::|\s+)${VAL}|-(?:${abbr("WhichAccount", 2)}|${abbr("UseGitSafe", 1)})(?=\s)|`;
@@ -729,16 +730,40 @@ var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisi
 var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
 var enforcingScope = (scope, deps, cwd) => scope === "push" ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
 var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce" };
-var OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif|time)\s+)`;
-var CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))` + String.raw`(?:[A-Za-z_]\w*=[^\s;&|]*[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+)*(?:[\w.]+\\)?\\?`;
-var CD_NAMES = "cd|Set-Location|sl|chdir|pushd|Push-Location";
-var CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\\.|[^\s;&|)\`"'\\])+)`;
-var JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Parallel|AsJob)\b)[^{};&|\r\n]*\{[^}]*$/i;
+var OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\s+|time\s+(?:(?:-p|--)\s+)*)`;
+var CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))` + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
+var NOISE = String.raw`(?:\\|''|"")*`;
+var spell = (word) => NOISE + [...word].join(NOISE) + NOISE;
+var CD_NAMES = `${spell("cd")}|Set-Location|sl|${spell("chdir")}|${spell("pushd")}|Push-Location`;
+var CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\`[^\`]*\`|\\[^;&|\r\n]|[^\s;&|)\`"'\\])+)`;
+var JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Pa(?:r(?:a(?:l(?:l(?:e(?:l)?)?)?)?)?)?|As(?:J(?:o(?:b)?)?)?)\b|\b(?:Invoke-Command|icm)\b(?!\s+(?:-ScriptBlock\s+)?\{))[^{};&|\r\n]*\{[^}]*$/i;
+function withoutClosed(text, group) {
+  let t = text;
+  for (; ; ) {
+    const next = t.replace(group, "");
+    if (next === t) return t;
+    t = next;
+  }
+}
+var CLOSED_BRACES = /\{[^{}]*\}/g;
+var CLOSED_PARENS = /\([^()]*\)|`[^`]*`/g;
+var COMMENT = /(?:^|(?<!\\)\s)#[^\r\n]*/g;
+var insideSubshell = (before) => /[(`]/.test(withoutClosed(before.replace(COMMENT, ""), CLOSED_PARENS));
 var gitBashPath = (p) => process.platform === "win32" ? p.replace(/^\/([A-Za-z])(?:\/|$)/, "$1:/") : p;
+function hasUnexpandedPart(target) {
+  const t = target.replace(/^["']|["']$/g, "");
+  return /[$`*?[]/.test(t) || /%[^%\s]+%/.test(t) || t.startsWith("~") || /^[(@]/.test(t);
+}
+var UNEXPANDED = "<cannot-expand>";
+var isUnexpanded = (dir) => dir.startsWith(UNEXPANDED);
+var unexpandedWhy = (dir) => `a cd target or -C value (${dir.slice(UNEXPANDED.length, UNEXPANDED.length + 120)}) holds a variable, a command substitution, a ~ or a glob, so the checkout this command runs in cannot be known. Use a literal path in the cd (cd <full path> && ...).`;
+var absoluteText = (t) => isAbsolute(t) || /^[A-Za-z]:/.test(t);
 function moveTo(base, target, shell) {
-  const raw = shell === "pwsh" ? target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d, s) => d ?? s ?? "") : target.replace(/\\([ "'])|["']/g, (_m, esc) => esc ?? "");
+  const raw = shell === "pwsh" ? target.replace(/"([^"]*)"|'([^']*)'/g, (_m, d, s) => d ?? s ?? "").trimEnd() : target.replace(/\\([ "'])|["']/g, (_m, esc) => esc ?? "");
+  if (hasUnexpandedPart(target)) return UNEXPANDED + raw;
   const t = shell === "bash" ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+  if (absoluteText(t)) return t;
+  return isUnexpanded(base) ? base : resolve(base, t);
 }
 var cdsBefore = (masked, raw) => whereAt(cdPositions(masked, raw), masked.length);
 function looseJoin(between) {
@@ -755,9 +780,9 @@ function endsInPipe(before) {
   }
   return t.endsWith("|") || t.endsWith("|&");
 }
-var UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:popd|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
+var UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:${spell("popd")}|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
 var NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
-var REMOTE_AFTER_BLOCK = /^[^;&|\r\n]*?\}[^;&|\r\n{}]*?\s-[A-Za-z]/;
+var REMOTE_AFTER_BLOCK = /^[^;\r\n]*?\}[^;&|\r\n{]*?\s(?:-[A-Za-z]|@\w)/;
 function cdPositions(masked, raw) {
   const cds = [];
   const unknown = [...masked.matchAll(new RegExp(UNKNOWN_CD_SOURCE, "gi"))].map((m) => m.index + m[0].length);
@@ -768,7 +793,8 @@ function cdPositions(masked, raw) {
       unknown.push(end);
       continue;
     }
-    const piped = m.groups.soft !== void 0 || /^\||[(`]/.test(m.groups.hard ?? "") || endsInPipe(masked.slice(0, m.index)) || JOB_BLOCK.test(masked.slice(0, m.index)) || REMOTE_AFTER_BLOCK.test(masked.slice(end));
+    const before = masked.slice(0, m.index);
+    const piped = m.groups.soft !== void 0 || /^\||[(`]/.test(m.groups.hard ?? "") || endsInPipe(before) || insideSubshell(before) || JOB_BLOCK.test(withoutClosed(before, CLOSED_BRACES)) || REMOTE_AFTER_BLOCK.test(masked.slice(end));
     cds.push({ end, target, piped });
   }
   return { cds, unknown, masked };
@@ -817,7 +843,7 @@ var READ_GIT = gitCallRe(READ_VERB);
 var READ_SAFE = safeCallRe(READ_VERB, PUSH_WRAPPERS, "", "gi");
 var COMMIT_MSG = String.raw`(?:-[Fm]\s+${VAL}|--(?:file|message)(?:=|\s+)${VAL})`;
 var COMMIT_ARGS_RE = new RegExp(String.raw`^(?:\s+(?:-q|--quiet))*\s+${COMMIT_MSG}(?:\s+(?:-q|--quiet|${COMMIT_MSG}))*\s*$`);
-var CD_SEG_RE = /^\s*(?:cd|Set-Location|sl|pushd|Push-Location)\s+\S/i;
+var CD_SEG_RE = /^\s*(?:cd|Set-Location|sl|chdir|pushd|Push-Location)\s+\S/i;
 function openCall(ms, rs, git, safe) {
   const kinds = [[git, isGitToken], [safe, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -900,8 +926,10 @@ function judgeLand(shape, deps, dir, named) {
   return ok ? ALLOW : deny("land", landWhy(shape.pr));
 }
 function resolveDir(base, raw, shell) {
+  if (hasUnexpandedPart(raw)) return UNEXPANDED + raw;
   const t = shell === "bash" ? gitBashPath(raw) : raw;
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(base, t);
+  if (absoluteText(t)) return t;
+  return isUnexpanded(base) ? base : resolve(base, t);
 }
 function dirsAfter(cwd, cds, shell, loose, dir = null) {
   const dirs = cds.length === 0 ? [cwd] : [...loose ? [cwd] : [], ...cds.map((_, i) => pushDir(cwd, cds.slice(0, i + 1), shell))];
@@ -912,6 +940,8 @@ var POSITION_WHY = "popd, Pop-Location, cd - or a bare cd moves the folder to a 
 function judgeAt(s, deps, cwd, shell, named) {
   const at = s.at;
   const dirs = dirsAfter(cwd, at.cds, shell, at.loose);
+  const lost = dirs.find(isUnexpanded);
+  if (lost !== void 0 && s.kind !== "land") return [deny("cd-unexpanded", unexpandedWhy(lost))];
   if (at.unknown && s.kind !== "land") {
     const ccv3 = named === CCV3_REPO || [.../* @__PURE__ */ new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
     return ccv3 ? [deny("position-unknown", POSITION_WHY)] : [];
@@ -921,6 +951,8 @@ function judgeAt(s, deps, cwd, shell, named) {
 function judgePushAt(s, deps, cwd, shell, subagent, chained, alone) {
   const p = s.push;
   const dirs = pushDirsOf(p, cwd, shell);
+  const lost = dirs.find(isUnexpanded);
+  if (lost !== void 0) return [deny("cd-unexpanded", unexpandedWhy(lost), "push")];
   const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
   if (p.unknown && !fixedByDir) {
     const ccv3 = [.../* @__PURE__ */ new Set([cwd, ...dirs])].some((d) => isCcv3Checkout(deps, d));
@@ -970,6 +1002,13 @@ function judgePush(shape, deps, dir, subagent, chained, alone) {
   const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label)) && row.tree !== null && row.tree === tree);
   return ok ? ALLOW : d("ship", pushWhy(branch));
 }
+var MOVE_ENV_MASKED = /(?:^|\W)GIT_(?:DIR|WORK_TREE|COMMON_DIR)(?!\w)/i;
+var MOVE_ENV_RAW = /(?:^|[;&|\r\n(]\s*)(?:(?:env|export)\s+(?:-\S+\s+|\S+=\S*\s+)*)?["']GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/i;
+var CD_ALIAS = /(?:^|[;&|(\r\n]\s*)(?:alias|(?:Set|New)-Alias|sal|nal)\s[^;&|\r\n]*?(?<![\w-])(?:cd|chdir|pushd|popd|Set-Location|sl|Push-Location|Pop-Location)(?![\w-])/i;
+var MOVED_WHY = "GIT_DIR, GIT_WORK_TREE or an alias for cd moves git or the shell to a folder this text does not name, so the checkout this command runs in cannot be known. Run the command in the repo with no GIT_DIR and no cd alias.";
+function movesRepo(text) {
+  return MOVE_ENV_RAW.test(text) || ["Bash", "PowerShell"].some((tool) => MOVE_ENV_MASKED.test(maskQuoted(text, tool))) || CD_ALIAS.test(squashQuotes(text));
+}
 function judgeCommand(input, deps) {
   const cmd = readShellCommand(input);
   if (cmd.kind !== "command" || cmd.text === "") return [];
@@ -985,7 +1024,12 @@ function judgeCommand(input, deps) {
   const named = namedRepo(cmd.text, deps.env);
   const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
   const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
+  const moved = movesRepo(cmd.text);
   for (const s of [...rest, ...pushes]) {
+    if (moved && s.kind !== "land") {
+      denies.push(s.kind === "push" ? deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push") : deny("repo-moved", MOVED_WHY));
+      continue;
+    }
     const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, Boolean(input.agent_id), chained, alone) : judgeAt(s, deps, cwd, shell, named);
     for (const d of found) {
       if (d.action === "deny" && !denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope)) denies.push(d);
