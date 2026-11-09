@@ -31,7 +31,7 @@ for (const [eventType, entries] of Object.entries(hooks)) {
     const hookList = entry.hooks || [];
     for (const h of hookList) {
       if (h.command || h.args) {
-        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
+        const match = [h.command, ...(h.args || [])].filter(Boolean).map(s => s.match(/dist\/([^\.]+)\.mjs/)).find(Boolean);
         if (match) {
           registeredMap.set(match[1], { eventType, matcher, timeout: h.timeout, command: h.command });
         }
@@ -113,7 +113,7 @@ for (const [eventType, entries] of Object.entries(settings.hooks || {})) {
   for (const entry of entries) {
     for (const h of (entry.hooks || [])) {
       if (h.command || h.args) {
-        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
+        const match = [h.command, ...(h.args || [])].filter(Boolean).map(s => s.match(/dist\/([^\.]+)\.mjs/)).find(Boolean);
         if (match) registered.add(match[1]);
       }
     }
@@ -186,7 +186,7 @@ for (const [eventType, entries] of Object.entries(settings.hooks || {})) {
   for (const entry of entries) {
     for (const h of (entry.hooks || [])) {
       if (h.command || h.args) {
-        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
+        const match = [h.command, ...(h.args || [])].filter(Boolean).map(s => s.match(/dist\/([^\.]+)\.mjs/)).find(Boolean);
         if (match) registered.add(match[1]);
       }
     }
@@ -290,7 +290,7 @@ for (const [eventType, entries] of Object.entries(settings.hooks || {})) {
   for (const entry of entries) {
     for (const h of (entry.hooks || [])) {
       if (h.command || h.args) {
-        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
+        const match = [h.command, ...(h.args || [])].filter(Boolean).map(s => s.match(/dist\/([^\.]+)\.mjs/)).find(Boolean);
         if (match && !srcFiles.has(match[1])) {
           if ((h.command || '').includes('.py')) continue;
           console.log('  ' + match[1] + ' (' + eventType + ':' + (entry.matcher || 'all') + ')');
