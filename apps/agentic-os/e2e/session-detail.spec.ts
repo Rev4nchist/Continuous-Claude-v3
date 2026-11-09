@@ -334,14 +334,14 @@ const TABS: { tab: string; label: string; tag: 'NEXT' | 'LATER' | null }[] = [
   { tab: 'board', label: 'Board', tag: null },
   { tab: 'sessions', label: 'Sessions', tag: null },
   { tab: 'workflows', label: 'Workflows', tag: 'NEXT' },
-  { tab: 'handoffs', label: 'Handoffs', tag: 'NEXT' },
+  { tab: 'flow', label: 'Flow', tag: null },
   { tab: 'notes', label: 'Notes', tag: 'NEXT' },
   { tab: 'spend', label: 'Spend', tag: null },
   { tab: 'swarm', label: 'Swarm', tag: 'LATER' },
 ];
 
 test.describe('nav shell', () => {
-  test('eight tabs in order; Overview, Board, Sessions and Spend live; the rest disabled with NEXT or LATER', async ({
+  test('eight tabs in order; Overview, Board, Sessions, Flow and Spend live; the rest disabled with NEXT or LATER', async ({
     page,
   }) => {
     const errors = watchErrors(page);

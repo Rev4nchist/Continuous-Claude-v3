@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { AccountingBar } from './AccountingBar';
 import { ActiveSessionsStrip } from './ActiveSessionsStrip';
 import { FleetGrid } from './FleetGrid';
+import { FlowView } from './FlowView';
 import { LaneBoard } from './LaneBoard';
 import { NavTabs, type ViewId } from './NavTabs';
 import { PrPanel } from './PrPanel';
@@ -49,6 +50,7 @@ function endpointFor(view: ViewId, session: string | null, project: string | nul
   const params = new URLSearchParams();
   if (view === 'board') params.set('view', 'board');
   if (view === 'spend') params.set('view', 'spend');
+  if (view === 'flow') params.set('view', 'flow');
   // Without the board key every poll would fall back to the default board.
   if (view === 'board' && project !== null) params.set('project', project);
   if (session !== null) params.set('session', session);
@@ -217,6 +219,18 @@ export function MissionControl({
               className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
             >
               Loading spend
+            </p>
+          )
+        ) : view === 'flow' ? (
+          // Same rule again: the old data stays until the answer for this view lands.
+          data.flow !== null ? (
+            <FlowView flow={data.flow} />
+          ) : (
+            <p
+              data-testid="flow-loading"
+              className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
+            >
+              Loading flow
             </p>
           )
         ) : view === 'sessions' ? (

@@ -61,6 +61,14 @@ mkdirSync(E2E_IDENTITY_DIR, { recursive: true });
 export const E2E_SPEND_DIR = join(tmpdir(), 'agentic-os-e2e-spend');
 mkdirSync(E2E_SPEND_DIR, { recursive: true });
 
+/**
+ * Where the E2E server reads the lane-dashboard export (AGENTIC_OS_LANE_DASH_DIR): flow.json and factory.json,
+ * written by the lane-dashboard lane to ~/.claude/state/lane-dash. A temp dir for the same reason as E2E_STATE_DIR:
+ * a test never reads or writes the real export. e2e/state-fixture.ts imports this constant.
+ */
+export const E2E_LANE_DASH_DIR = join(tmpdir(), 'agentic-os-e2e-lane-dash');
+mkdirSync(E2E_LANE_DASH_DIR, { recursive: true });
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
@@ -94,6 +102,7 @@ export default defineConfig({
       AGENTIC_OS_STATE_DIR: E2E_STATE_DIR,
       AGENTIC_OS_IDENTITY_DIR: E2E_IDENTITY_DIR,
       AGENTIC_OS_SPEND_DIR: E2E_SPEND_DIR,
+      AGENTIC_OS_LANE_DASH_DIR: E2E_LANE_DASH_DIR,
     },
     url: `${ORIGIN}/icon.svg`,
     reuseExistingServer: false,
