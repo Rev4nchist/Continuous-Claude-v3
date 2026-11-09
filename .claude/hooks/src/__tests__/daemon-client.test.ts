@@ -149,17 +149,18 @@ function stopMockServer(server: net.Server | null): Promise<void> {
 }
 
 /**
- * True when a `nc` binary exists. On POSIX the client's reachability probe
- * (isDaemonReachable -> ncPing) shells out to `nc -U`; with no nc it reports a
- * live daemon as unreachable, so a test that needs a live Unix daemon cannot pass.
+ * True when a `nc` binary exists. On POSIX queryDaemonSync still sends the
+ * query through `nc -U` (buildDaemonInvocation), so a test that needs a live
+ * Unix daemon to answer a query cannot pass without it. The reachability probe
+ * no longer needs nc (probeUnixSocket uses node's net module).
  */
 const NC_AVAILABLE = IS_WINDOWS || !spawnSync('nc', ['-h'], { stdio: 'ignore' }).error;
 
 /**
  * Host the mock Unix-socket daemon in a CHILD process. The client probes the
- * socket with a blocking spawnSync(nc); an in-process server shares the test's
- * event loop, so it cannot accept while spawnSync blocks, the probe times out,
- * and the client unlinks the "stale" socket. A child process keeps accepting.
+ * socket with a blocking spawnSync; an in-process server shares the test's
+ * event loop, so it cannot accept while spawnSync blocks and the probe cannot
+ * connect. A child process keeps accepting.
  * The child parses each request line as JSON. It answers {"cmd":"ping"} with
  * {"status":"ok"} (the client's ncPing probe needs that), answers the request
  * whose cmd equals `cmd` with the canned `response`, and for any other command
