@@ -4,7 +4,7 @@ import type { EngineInterface, On, TurnUsage } from 'claude-code'
 import type { AgentRun, CacheState, HudState, OsBrief } from '../../types'
 import { addStep } from '../agent-ledger/model'
 import { mergeParsed, parseStep } from '../agentic-os/brief'
-import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
+import { DIAG_DIR, errorFile, errorText, usageKeysFile, usageKeysProbe } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
 import { costShownAgain, forgetSeedCost, isCostForgotten, reassertCostForgotten, seedHud, setSwitches } from './seed'
@@ -100,6 +100,29 @@ const reset = async ($: EngineInterface): Promise<void> => {
   await update($, hud, now => (now === null ? now : { ...now, costUsd: null, advisor: { ...now.advisor, calls: 0 } }))
 }
 
+/**
+ * Diagnostic: which fields the live turn.step usage carries (does it hold `iterations` with advisor entries, and
+ * `cache_creation` 5m/1h?). Writes the keys only, once per key set per session, to
+ * `~/.claude/state/ccv3-mods/usage-keys/<session>.<hash>.json` (README, Diagnostics). The file itself is the once-only mark
+ * (no module state, so a reload does not repeat it). Observer only: never throws, never
+ * touches the result, and runs for a subagent with no ledger run too.
+ */
+const noteUsageKeys = async ($: EngineInterface, usage: unknown, where: 'main' | 'subagent'): Promise<void> => {
+  try {
+    if ((await $.env.get('CCV3_MODS_OFF')) === '1') return
+    const probe = usageKeysProbe(usage, where)
+    if (probe === null) return
+    const file = usageKeysFile(await $.session.id(), probe.signature)
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+    if (!home) return
+    const path = `${home}/${DIAG_DIR}/${file}`
+    if (await $.fs.exists(path)) return
+    await $.fs.write(path, probe.text).catch(() => undefined)
+  } catch {
+    // Observer only.
+  }
+}
+
 const advisorOn = (model: string | undefined, calls: number) => ({ state: 'on' as const, ...(model === undefined ? {} : { model }), calls })
 
 const start = async ($: EngineInterface): Promise<void> => {
@@ -145,6 +168,7 @@ export const hudCapture = (on: On) => {
     const agentId = e.agentId
     if (agentId !== undefined) {
       const result = yield* next(e)
+      await noteUsageKeys($, result.usage, 'subagent')
       try {
         const effort = typeof e.effort === 'string' ? e.effort : null
         // No run (ledger off, or a spawn this plugin never saw): leave the list as it is.
@@ -161,6 +185,7 @@ export const hudCapture = (on: On) => {
     // Read before the request: the idle gap a cache entry lived through ends when the request is sent.
     const sentAt = await $.clock.now().catch(() => null)
     const result = yield* next(e)
+    await noteUsageKeys($, result.usage, 'main')
     await learnFromStep($, result.answer)
     try {
       await measureStep($, { turnId: e.turnId, sentAt }, result.usage)
