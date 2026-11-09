@@ -12,7 +12,7 @@
  * Stale = refresh.json says pending === true, OR exported_at is over STALE_AFTER_HOURS old.
  * A missing, empty or corrupt refresh.json says nothing.
  * Show the line when the throttle marker is missing, holds another key, or is over one hour old.
- * The marker is written when the line is added. A failed write drops the line (fail open) and logs one line to stderr.
+ * The marker is written when the line is added. A failed write drops the line (fail open, silent).
  * The write is atomic (temp file, then rename). A marker that is a symlink is never written through.
  * A file over MAX_BYTES is not read: refresh.json then says nothing, and the marker counts as missing.
  */
@@ -138,7 +138,7 @@ function writeMarker(file: string, marker: Marker): void {
 
 /**
  * The line to append to a block reason, or ''. Writes the throttle marker before it returns a line.
- * Never throws: any failure (read, parse, write) gives ''. A failed marker write logs one line to stderr.
+ * Never throws: any failure (read, parse, write) gives ''. A failed marker write is silent.
  */
 export function fleetopsLine(env: Env = process.env, now: number = Date.now()): string {
   try {
@@ -152,8 +152,8 @@ export function fleetopsLine(env: Env = process.env, now: number = Date.now()): 
     if (!shouldShow(readMarker(markerFile), r.key, now)) return '';
     try {
       writeMarker(markerFile, { key: r.key, shown_at: new Date(now).toISOString() });
-    } catch (e) {
-      console.error(`lane-board-stop-gate: cannot write ${MARKER_FILE}, so the FleetOps line is dropped: ${(e as Error).message}`);
+    } catch {
+      // Fail open and silent: the block still happens without the line.
       return '';
     }
     return line;

@@ -18,7 +18,7 @@
  *   F13 a huge refresh.json or marker is read whole after the block is final (memory, slow stop)
  *   F14 the marker write leaves a .tmp file behind, or is not atomic
  *   F15 a headless opt-in (LANE_CONTEXT_HEADLESS=1) burns the marker for a run that cannot act on it
- *   F16 a marker write failure is silent (the line is lost with no trace)
+ *   F16 a marker write failure writes to stderr (an advisory hook fails open and silent)
  *   F17 the marker write follows a symlink to another file
  */
 import * as fs from 'fs';
@@ -380,18 +380,20 @@ describe('hardening', () => {
     expect(fs.existsSync(marker())).toBe(false);
   });
 
-  it('F16: a marker write failure logs one line to stderr; the block still fires without the line', () => {
+  it('F16: a marker write failure writes nothing to stderr; the block still fires without the line', () => {
     writeRefresh(refreshDoc());
     fs.mkdirSync(marker());
     batch();
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const r = gate.stopGate(payload(), baseEnv(), NOW);
-    const calls = spy.mock.calls.map((c) => String(c[0]));
+    const errCalls = errSpy.mock.calls.length;
+    const stderrCalls = stderrSpy.mock.calls.length;
     vi.restoreAllMocks();
     expect(r.output).toMatchObject({ decision: 'block' });
     expect(reasonOf(r)).not.toMatch(STALE);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toContain('.refresh-shown.json');
+    expect(errCalls).toBe(0);
+    expect(stderrCalls).toBe(0);
   });
 
   it('F16: a good write logs nothing to stderr', () => {

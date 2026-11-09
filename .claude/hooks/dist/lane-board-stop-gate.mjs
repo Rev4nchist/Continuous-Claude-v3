@@ -212,8 +212,7 @@ function fleetopsLine(env = process.env, now = Date.now()) {
     if (!shouldShow(readMarker(markerFile), r.key, now)) return "";
     try {
       writeMarker(markerFile, { key: r.key, shown_at: new Date(now).toISOString() });
-    } catch (e) {
-      console.error(`lane-board-stop-gate: cannot write ${MARKER_FILE}, so the FleetOps line is dropped: ${e.message}`);
+    } catch {
       return "";
     }
     return line;
