@@ -257,7 +257,7 @@ Before deleting state:
 ### After Each Phase
 ```bash
 # Rebuild hooks
-cd ~/.claude/hooks && npm run build
+cd ~/continuous-claude/.claude/hooks && npm run build
 
 # Test specific hook
 node dist/<hook>.mjs < test-input.json

@@ -169,7 +169,7 @@ class SystemHealthService:
         recommendations = []
         if compiled_count == 0:
             status = "FAILING"
-            recommendations.append("No compiled hooks found. Run: cd ~/.claude/hooks && npm run build")
+            recommendations.append("No compiled hooks found. Run: cd ~/continuous-claude/.claude/hooks && npm run build")
         elif missing_critical or compiled_count < 50:
             status = "DEGRADED"
             if missing_critical:
