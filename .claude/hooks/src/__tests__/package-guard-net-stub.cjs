@@ -88,3 +88,20 @@ function fakeRequest(args) {
 
 https.get = (...args) => { const req = fakeRequest(args); req.__reply(); return req; };
 https.request = (...args) => fakeRequest(args);
+
+// Optional fs trace (PIG_STUB_FS_TRACE=<file>): every statSync or openSync on an rc file name appends one line to <file>.
+// A test reads it to see WHETHER the guard looked for an rc file. The dist imports statSync and openSync by name,
+// so the exports are synced after the patch.
+if (process.env.PIG_STUB_FS_TRACE) {
+  const fs = require('fs');
+  const trace = process.env.PIG_STUB_FS_TRACE;
+  const RC = /(?:^|[\\/])(?:\.npmrc|\.yarnrc\.yml|\.?bunfig\.toml|pip\.conf|pip\.ini|uv\.toml)$/;
+  for (const name of ['statSync', 'openSync']) {
+    const real = fs[name];
+    fs[name] = function patched(p, ...rest) {
+      if (typeof p === 'string' && RC.test(p)) fs.appendFileSync(trace, `${name} ${p}\n`);
+      return real.call(this, p, ...rest);
+    };
+  }
+  require('module').syncBuiltinESMExports();
+}
