@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "source": ".claudedocs/2026-11-09-token-cost-method.md sections 4, 6.1 and 6.2; research scripts in .claudedocs/2026-11-09-measurement-folds (roll.py, thresh.py)",
+  "baselineMedianPct": -2.27,
+  "cleanN": 36,
+  "window": 20,
+  "warnDeltaPts": 1,
+  "failDeltaPts": 2,
+  "failConsecutiveRuns": 2,
+  "singleInfoPct": 8.48,
+  "singleWarnPct": 15,
+  "priceTolerancePct": 0.01,
+  "minRowUsd": 0.01,
+  "minCleanUsd": 1,
+  "afterTs": "2026-11-06T23:25:50.376Z",
+  "afterTsNote": "First sliced main record of the last of the 36 clean baseline sessions (6c578187 is the first, 3e60fc28 the last). Only clean sessions that start after this time fill the rolling window; until it holds 20, the run only reports.",
+  "rollingRange": { "min": -2.98, "max": -2.01, "windows": 17 },
+  "failDirection": "The band is symmetric on |median|. Warn at |median| > |baselineMedianPct| + warnDeltaPts (3.27). Over at |median| > |baselineMedianPct| + failDeltaPts (4.27); fail when a night is over on failConsecutiveRuns runs in a row, counting only nights whose window holds a new session. A median closer to 0 than the thresholds never warns or fails.",
+  "singleInfoNote": "singleInfoPct 8.48 is the largest residual of the 36 baseline sessions (6899a287, -8.4833%). That session always shows as an info line when it is in a run. It is not a regression."
+}

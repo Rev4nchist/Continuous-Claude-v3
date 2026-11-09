@@ -476,8 +476,9 @@ describe('applyRoadmapUpdate -- appended session block is compact', () => {
 // CLAUDE_PROJECT_DIR against a backslash path.join result with startsWith, so
 // it never matched and a full absolute path landed in ROADMAP.md.
 // ---------------------------------------------------------------------------
+// The three skipIf tests below use drive-letter and backslash fixtures: Windows path semantics only.
 describe('planPathForRoadmap -- separator-agnostic', () => {
-  it('relativises a plan inside the project even when separators differ', () => {
+  it.skipIf(process.platform !== 'win32')('relativises a plan inside the project even when separators differ', () => {
     const out = planPathForRoadmap(
       'C:/repos/widget',
       ['C:', 'repos', 'widget', '.claude', 'plans', 'add-jitter.md'].join(SEP_BS),
@@ -490,12 +491,17 @@ describe('planPathForRoadmap -- separator-agnostic', () => {
       .toBe('plans/p.md');
   });
 
-  it('keeps an absolute path when the plan is outside the project', () => {
+  it.skipIf(process.platform !== 'win32')('keeps an absolute path when the plan is outside the project', () => {
     const out = planPathForRoadmap('C:/repos/widget', 'C:/Users/dave/.claude/plans/p.md');
     expect(out!.split(SEP_BS).join('/')).toBe('C:/Users/dave/.claude/plans/p.md');
   });
 
-  it('never emits a Windows drive letter for an in-project plan', () => {
+  it.skipIf(process.platform === 'win32')('keeps an absolute path when the plan is outside the project (POSIX)', () => {
+    const out = planPathForRoadmap('/repos/widget', '/home/dave/.claude/plans/p.md');
+    expect(out).toBe('/home/dave/.claude/plans/p.md');
+  });
+
+  it.skipIf(process.platform !== 'win32')('never emits a Windows drive letter for an in-project plan', () => {
     const out = planPathForRoadmap(
       'C:/repos/widget',
       ['C:', 'repos', 'widget', '.claude', 'plans', 'add-jitter.md'].join(SEP_BS),

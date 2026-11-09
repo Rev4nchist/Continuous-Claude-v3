@@ -265,7 +265,10 @@ describe('hasE2e', () => {
     const reg = writeRegistry(join(dir, 'r.json'), [
       { name: 'p', path: dir.replace(/\\/g, '/').toUpperCase(), e2e: { none: 'x' } },
     ]);
-    expect(hasE2e(dir.replace(/\//g, '\\').toLowerCase(), null, reg)).toBe(true);
+    // Backslash separators are Windows path semantics: on POSIX a backslash is an
+    // ordinary filename character, so only the case-fold half applies there.
+    const query = process.platform === 'win32' ? dir.replace(/\//g, '\\') : dir;
+    expect(hasE2e(query.toLowerCase(), null, reg)).toBe(true);
   });
 
   it('is false for an entry without e2e', () => {
