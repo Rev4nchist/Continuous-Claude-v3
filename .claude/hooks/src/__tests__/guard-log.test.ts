@@ -13,8 +13,9 @@
  *  9. target is missing for a non-command tool (Read/Edit/Write file_path, Agent subagent_type, Skill skill),
  *     or a Bash call picks up a stray file_path.
  * 10. `agent` is not a boolean: false with no agent, true from the payload or from CLAUDE_AGENT_ID.
- * 11. cwd or target is unbounded, or a non-string value is written, or a path segment that looks like an id
- *     (a UUID directory) is erased. These are paths: replay needs them exact, so they are cut, not masked.
+ * 11. cwd or target is unbounded, or a non-string value is written, or a secret in the path (token folder,
+ *     NAME=value segment) is written raw, or the cut runs before the mask, or a standalone UUID directory is erased
+ *     (a replay needs it). cwd and target are masked first, then cut at 300; a UUID path segment is kept.
  * 12. Dropping the new fields changes the old shape: command stays 80 chars, agent_id stays absent without an agent.
  * 13. The file is not owner-only (POSIX only: Windows ignores the mode).
  * 14. A probe leaks into the live log: an empty VITEST counts as unset, or the row has no source tag for the doctor to skip.
@@ -272,6 +273,101 @@ describe('replay fields: cwd, permission_mode, target, agent', () => {
     const r = row({ tool_name: 'Read', cwd: `/tmp/${uuid}/scratchpad`, tool_input: { file_path: `/tmp/${uuid}/f.txt` } });
     expect(r.cwd).toBe(`/tmp/${uuid}/scratchpad`);
     expect(r.target).toBe(`/tmp/${uuid}/f.txt`);
+  });
+
+  // M6b: cwd and target are masked, then cut. Fixtures are joined at runtime (secret scanners flag literals).
+  describe('cwd and target are masked before they are written', () => {
+    const TOKEN = j('gh', 'p_', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    const KEYVAL = j('abc', '123', 'secretvalue');
+
+    it('masks a token folder in cwd', () => {
+      const r = row({ cwd: `C:\\Users\\dave\\${TOKEN}\\repo` });
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+      expect(r.cwd).toBe('C:\\Users\\dave\\***\\repo');
+    });
+
+    it('masks a token folder in a Read target and in an explicit target', () => {
+      const viaTool = row({ tool_name: 'Read', tool_input: { file_path: `/home/u/${TOKEN}/f.ts` } });
+      expect(JSON.stringify(viaTool)).not.toContain(TOKEN);
+      expect(viaTool.target).toBe('/home/u/***/f.ts');
+      const explicit = row({ tool_name: 'Read', target: `/home/u/${TOKEN}/g.ts` });
+      expect(JSON.stringify(explicit)).not.toContain(TOKEN);
+    });
+
+    it('masks an env-style NAME=value prefix in cwd and target', () => {
+      const r = row({ cwd: `NPM_TOKEN=${KEYVAL} /work`, tool_name: 'Edit', tool_input: { file_path: `API_KEY=${KEYVAL}/x.ts` } });
+      expect(JSON.stringify(r)).not.toContain(KEYVAL);
+    });
+
+    it('hides a key=value path segment and keeps the part before it', () => {
+      const r = row({ cwd: `/work/api_key=${KEYVAL}/x`, tool_name: 'Read', tool_input: { file_path: `/work/api_key=${KEYVAL}/x` } });
+      expect(JSON.stringify(r)).not.toContain(KEYVAL);
+      expect((r.cwd as string).startsWith('/work/')).toBe(true);
+      expect((r.target as string).startsWith('/work/')).toBe(true);
+    });
+
+    it('masks BEFORE the 300-char cut: a token across char 300 leaks no head, and the value stays within 300', () => {
+      const path = `/${'p'.repeat(292)}/${TOKEN}`; // token starts at char 294
+      const r = row({ cwd: path, tool_name: 'Read', tool_input: { file_path: path } });
+      for (const v of [r.cwd as string, r.target as string]) {
+        expect(v).not.toContain('ghp_');
+        expect(v.length).toBeLessThanOrEqual(300);
+      }
+    });
+
+    it('keeps a UUID folder beside a token folder: the UUID stays and the token goes', () => {
+      const uuid = 'd11fb964-286c-483c-a5fc-7d6c40bcbb40';
+      const r = row({ cwd: `/tmp/${uuid}/${TOKEN}/s`, tool_name: 'Read', tool_input: { file_path: `C:\\t\\${uuid}\\${TOKEN}\\f` } });
+      expect(r.cwd).toBe(`/tmp/${uuid}/***/s`);
+      expect(r.target).toBe(`C:\\t\\${uuid}\\***\\f`);
+    });
+
+    it('does not exempt a UUID that is the value of a key=value segment', () => {
+      const uuid = 'd11fb964-286c-483c-a5fc-7d6c40bcbb40';
+      expect(row({ cwd: `/work/api_key=${uuid}/x` }).cwd).not.toContain(uuid);
+    });
+
+    it('keeps a UUID file name with an extension (a session transcript path)', () => {
+      const uuid = 'd11fb964-286c-483c-a5fc-7d6c40bcbb40';
+      const p = `/p/projects/${uuid}.jsonl`;
+      expect(row({ tool_name: 'Read', tool_input: { file_path: p } }).target).toBe(p);
+    });
+
+    it('keeps a long kebab-case worktree folder: distinct worktrees stay distinct', () => {
+      const a = '/r/.claude/worktrees/m6b-guard-log-mask-followup-2026-11-09/x.ts';
+      const b = '/r/.claude/worktrees/m6b-guard-log-mask-followup-2026-11-10/x.ts';
+      expect(row({ cwd: a }).cwd).toBe(a);
+      expect(row({ cwd: b }).cwd).toBe(b);
+    });
+
+    it('masks a 40-character hex segment, such as a git SHA (decision: leak-safe)', () => {
+      const sha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+      expect(row({ cwd: `/r/${sha}/x` }).cwd).toBe('/r/***/x');
+    });
+
+    it('keeps a digit run beside a UUID untouched (the sentinel must not eat digits)', () => {
+      const uuid = 'd11fb964-286c-483c-a5fc-7d6c40bcbb40';
+      const p = `/tmp/${uuid}/v0/log0.txt`;
+      expect(row({ cwd: p }).cwd).toBe(p);
+    });
+
+    it('keeps a skill name and an agent type readable: only file paths are masked', () => {
+      expect(row({ tool_name: 'Skill', tool_input: { skill: 'auth-tools:login' } }).target).toBe('auth-tools:login');
+      expect(row({ tool_name: 'Agent', tool_input: { subagent_type: 'token-reviewer' } }).target).toBe('token-reviewer');
+    });
+
+    it('writes plain paths unchanged, including folders named like secrets', () => {
+      for (const p of ['C:\\work\\repo', '/a/b.ts', '/srv/token-service/password-manager/auth']) {
+        const r = row({ cwd: p, tool_name: 'Read', tool_input: { file_path: p } });
+        expect(r.cwd).toBe(p);
+        expect(r.target).toBe(p);
+      }
+    });
+
+    it('keeps the row readable by its consumers: hook, tool, decision, session_id and a parseable line', () => {
+      const r = row({ cwd: `/x/${TOKEN}`, session_id: 'sess-9', tool_name: 'Read', tool_input: { file_path: '/ok' } });
+      expect(r).toMatchObject({ hook: 'h', tool: 'Read', decision: 'deny', session_id: 'sess-9', source: 'probe' });
+    });
   });
 
   it('still cuts command at 80 characters and writes no agent_id without an agent', () => {

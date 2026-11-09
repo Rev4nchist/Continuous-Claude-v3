@@ -11,10 +11,11 @@
  *
  * `agent` is true when the payload has agent_id or CLAUDE_AGENT_ID is set. `cwd` and `permission_mode` come from
  * the payload: they decide a guard's result, so a replay needs them. `target` is the thing a non-command tool acts
- * on: file_path (Read, Edit, Write), subagent_type (Agent), skill (Skill). `cwd` and `target` are paths: they are
- * cut at 300 characters and NOT masked (masking would erase a UUID directory name and break a replay).
- * This stores more than the 80-character masked command did. Replay item 2 asks Dave to accept that; until
- * he decides, a path with a secret in it would be written as is. The file is owner-only (0o600).
+ * on: file_path (Read, Edit, Write), subagent_type (Agent), skill (Skill). `cwd` and a file_path `target` are paths:
+ * they are masked, then cut at 300 characters (mask first, so a token across the cut leaks no head). A skill or
+ * agent name is cut but not masked. Hyphenated folder names are kept. A standalone UUID path segment, with or
+ * without an extension, is kept, because a replay needs it. A secret-shaped folder or NAME=value
+ * segment is written as `***`. This stores more than the 80-character command did. The file is owner-only (0o600).
  * 'inject' = a hook blocked the call to inject context (tldr-read-enforcer): not a denial of a bad action.
  * 'override' = a guard let a command through because of an override (SKIP_DESTRUCTIVE_GUARD). Count these for SKIP uses.
  * 'allow' = a guard let a command through under a built-in allow rule (destructive-command-guard scoped cleanup,
@@ -136,19 +137,52 @@ export function guardSource(env: NodeJS.ProcessEnv): string {
   return env.CCV3_GUARD_DECISIONS_LOG ? 'probe' : 'live';
 }
 
-/** A non-empty string cut to `max` characters, or undefined. Not masked: replay needs a path exact. */
+/** A non-empty string cut to `max` characters, or undefined. Not masked: use it for short enums such as permission_mode, and for skill and agent names. */
 function pathText(value: unknown, max = PATH_CHARS): string | undefined {
   return typeof value === 'string' && value ? value.slice(0, max) : undefined;
 }
 
+// A UUID that is a whole path segment, or a segment plus an extension (session scratchpad folders,
+// `<uuid>.jsonl` transcripts). The long-run mask would erase it.
+const UUID_SEGMENT = /(^|[\\/])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=$|[\\/.])/gi;
+// Private-use characters carry the index of a shielded UUID through the mask. Written as escapes on purpose.
+const MARK_OPEN = String.fromCharCode(0xe000);
+const MARK_CLOSE = String.fromCharCode(0xe001);
+const UUID_MARK = new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, 'g');
+
+// A path keeps its hyphenated names: a kebab-case worktree folder of 32+ characters is not a secret.
+// The generic long-run rule (the last MASKS entry) is swapped for one that has no hyphen.
+const PATH_MASKS: Array<[RegExp, string]> = [
+  ...MASKS.slice(0, -1),
+  [/\b(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{32,}/g, '***'],
+];
+
+/**
+ * A path with secrets masked, then cut to `max` characters. Mask first: a token that straddles the cut
+ * cannot leak its head. A standalone UUID path segment is kept, because a replay needs it.
+ * A 32+ character hex or alphanumeric segment, such as a git SHA, is masked. Pure.
+ */
+function maskedPath(value: unknown, max = PATH_CHARS): string | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  const kept: string[] = [];
+  const shielded = value.replace(UUID_SEGMENT, (_m, sep: string, uuid: string) => {
+    kept.push(uuid);
+    return `${sep}${MARK_OPEN}${kept.length - 1}${MARK_CLOSE}`;
+  });
+  const masked = PATH_MASKS.reduce((acc, [re, to]) => acc.replace(re, to), shielded);
+  return masked.replace(UUID_MARK, (m, i: string) => kept[Number(i)] ?? m).slice(0, max);
+}
+
 /** The explicit `target`, else the tool_input field that names the target of this tool. */
 function targetOf(input: GuardInput | null | undefined, tool: string): string | undefined {
-  const explicit = pathText(input?.target);
+  const explicit = maskedPath(input?.target);
   if (explicit) return explicit;
   const field = Object.hasOwn(TARGET_FIELD, tool) ? TARGET_FIELD[tool] : undefined;
   const toolInput = input?.tool_input;
   if (!field || typeof toolInput !== 'object' || toolInput === null) return undefined;
-  return pathText((toolInput as Record<string, unknown>)[field]);
+  const raw = (toolInput as Record<string, unknown>)[field];
+  // A file path is masked. A skill or agent name is not a path: `auth-tools:login` must stay readable.
+  return field === 'file_path' ? maskedPath(raw) : pathText(raw);
 }
 
 /**
@@ -178,7 +212,7 @@ export function logGuardDecision(
       source: guardSource(env),
     };
     if (agent) entry.agent_id = agent;
-    const cwd = pathText(input?.cwd);
+    const cwd = maskedPath(input?.cwd);
     if (cwd) entry.cwd = cwd;
     const mode = pathText(input?.permission_mode, 40);
     if (mode) entry.permission_mode = mode;
