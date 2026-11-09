@@ -35,7 +35,8 @@
  *   factory.days | factory.today | factory.day.<r>          the grid (day rows carry the ISO day in text)
  *   F.rows | F.bad_lines | F.as_of | F.first_day | F.note     for F in prpr, rev, rev.coderabbit, hand
  *   F.note                                                    "no data: <reason>" (family dark: the only row of F)
- *                                                             or "no data since <Mon D>" (family quiet: real zeros stay)
+ *                                                             or "no data since <Mon D>" (family quiet: real zeros stay);
+ *                                                             rev says "no review runs since <Mon D>", rev.coderabbit "no paid CodeRabbit run since <Mon D>"
  *   prpr.bar.<r>.runs|fail_runs|fail_rows|heads|first_pass   prpr.week.* prpr.today.* prpr.summary
  *   prpr.prs.S.bar.<r>  prpr.prs.S.week|today|as_of|rows|bad_lines|note   for S in landed, opened (no first_day: a lookback is not history)
  *   prpr.prs.landed.check   figure: GitHub count minus git count for the week; text "GitHub agrees", "GitHub counts more" or "git counts more"
@@ -64,6 +65,8 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const SENTENCE = {
   capSource: 'repo cap: review-router.config.json coderabbit.monthly_file_cap, PR rows only',
   floorNote: 'paid rounds only; a review on a free slot is not in the ledger',
+  quietRev: 'no review runs',
+  quietCodeRabbit: 'no paid CodeRabbit run',
 };
 
 const dollars = (cents) => `$${(cents / 100).toFixed(2)}`;
@@ -105,8 +108,12 @@ function intake(fam, { today, exportedMs, isHand }) {
 /**
  * The status rows every readable family has: rows, bad_lines, as_of, first_day, and the quiet note. Returns false for a dark one.
  * `firstDay: false` leaves first_day out: for the PR families the oldest row read is a lookback bound, not the start of history.
+ * `quiet` is the start of the quiet note. Review and CodeRabbit say what the ledger counts, because a quiet ledger there means
+ * "none ran", not an outage: "no review runs since <day>", "no paid CodeRabbit run since <day>".
+ * `quietDay` is the day the note counts from and tests against today. It defaults to as_of, the newest row of any kind. The review
+ * family passes its newest start row: an end row on a later day is not a run.
  */
-function familyHeader(add, id, info, today, { firstDay = true } = {}) {
+function familyHeader(add, id, info, today, { firstDay = true, quiet = 'no data', quietDay = null } = {}) {
   if (info.reason) {
     add(`${id}.note`, 'text', { text: `no data: ${info.reason}` });
     return false;
@@ -117,7 +124,8 @@ function familyHeader(add, id, info, today, { firstDay = true } = {}) {
   add(`${id}.rows`, 'figure', { value: info.rows.length, text: String(info.rows.length) });
   add(`${id}.bad_lines`, 'figure', { value: info.bad, text: String(info.bad) });
   if (firstDay) add(`${id}.first_day`, 'text', { text: days[0] });
-  if (asOf < today) add(`${id}.note`, 'text', { text: `no data since ${formatDay(asOf)}` });
+  const since = quietDay ?? asOf;
+  if (since < today) add(`${id}.note`, 'text', { text: `${quiet} since ${formatDay(since)}` });
   return true;
 }
 
@@ -361,9 +369,12 @@ export function buildFactoryRows(input) {
   if (familyHeader(add, 'prpr.prs.opened', opened, today, { firstDay: false })) prsRows(add, 'prpr.prs.opened', opened, g, 'PRs opened');
   checkRow(add, landed, opened, g, input.prsCheck);
   const rev = intake(input.rev, ctx);
-  if (familyHeader(add, 'rev', rev, today)) revRows(add, rev, g);
+  // Without a start row the ledger has no run to count from, so the note keeps the plain wording and as_of.
+  const lastStart = rev.rows ? rev.rows.filter((r) => r.phase === 'start').map((r) => r.day).sort().pop() : undefined;
+  const revQuiet = lastStart ? { quiet: SENTENCE.quietRev, quietDay: lastStart } : {};
+  if (familyHeader(add, 'rev', rev, today, revQuiet)) revRows(add, rev, g);
   const cr = intake(input.coderabbit, ctx);
-  if (familyHeader(add, 'rev.coderabbit', cr, today)) coderabbitRows(add, cr, g, input.cap ?? null);
+  if (familyHeader(add, 'rev.coderabbit', cr, today, { quiet: SENTENCE.quietCodeRabbit })) coderabbitRows(add, cr, g, input.cap ?? null);
   const hand = intake(input.hand, { ...ctx, isHand: true });
   if (familyHeader(add, 'hand', hand, today)) handRows(add, hand, g);
   return rows;
