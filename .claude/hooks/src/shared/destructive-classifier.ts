@@ -345,11 +345,13 @@ const wrapper = (interp: string, flag: string): RegExp =>
 const POSIX_EXEC_FLAG = String.raw`\s-[a-z]{0,5}c[a-z]{0,5}\b`;
 const PWSH_EXEC_FLAG = String.raw`\s-(?:c(?:o(?:m(?:m(?:a(?:n(?:d(?:withargs)?)?)?)?)?)?)?|cwa)\b`;
 
-type WrapperShell = 'posix' | 'powershell' | 'cmd';
+// `eval` runs its arguments, joined by spaces, as one command line: a wrapper with no exec flag.
+type WrapperShell = 'posix' | 'powershell' | 'cmd' | 'eval';
 const WRAPPER_RES: Array<{ shell: WrapperShell; re: RegExp }> = [
   { shell: 'posix', re: wrapper('(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?', POSIX_EXEC_FLAG) },
   { shell: 'powershell', re: wrapper('(?:powershell|pwsh)(?:\\.exe)?', PWSH_EXEC_FLAG) },
   { shell: 'cmd', re: wrapper('cmd(?:\\.exe)?', String.raw`\s\/[ck]\b`) },
+  { shell: 'eval', re: new RegExp(`^${LAUNCHER}eval(?=\\s)${PAYLOAD}`, 'i') },
 ];
 
 function unwrapPayload(raw: string): string {
@@ -372,14 +374,24 @@ const dropQuotes = (s: string): string => s.replace(/["']/g, '');
  * The bare form keeps its quotes: `pwsh -File x.ps1 -C C:\repo commit -m "..."` reads `-C` as -Command (H2)
  * and must stay allowed.
  */
-function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | null {
+function matchWrapper(segment: string, tool: string = 'Bash'): { payload: string; shell: WrapperShell } | null {
+  // A redirect before the payload (`bash -c &>log "..."`, `bash -c >log "..."`) would turn the quoted payload into
+  // a bare tail whose quotes blank it. Blank the redirects first, so package-install-guard (which reads
+  // the same payloads) sees `npm install zz` too.
+  const seg = stripRedirects(segment, tool);
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg.match(re);
     if (!m || !(m[1] || m[3])) continue;
     // A bare payload that starts with a quote is a quoted payload glued to more text (`"rm -rf x">f`,
     // `'...'x`): its quotes would blank the command, so delete them (fail closed; CR 299). A bare payload
-    // that starts with a word keeps its quotes (H2: `pwsh -File x.ps1 -C C:\repo commit -m "..."`).
-    if (!m[1]) return { payload: /^["']/.test(m[3]) ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
+    // that starts with a word keeps its quotes for pwsh and cmd (H2: `pwsh -File x.ps1 -C C:\repo commit -m "..."`).
+    // A POSIX or eval payload that starts with a word (`bash -c -- "rm -rf x"`, or the text a redirect the
+    // regex could not take leaves in front of the payload) loses its quotes too: they would blank the command
+    // (round 2). Accepted false positive: `bash -c echo "rm -rf x"` asks, though it only echoes $0.
+    if (!m[1]) {
+      const dequote = shell === 'posix' || shell === 'eval' || /^["']/.test(m[3]);
+      return { payload: dequote ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
+    }
     if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
     // pwsh and cmd join their args into one command. A POSIX tail is $0, $1, ...: it runs only through
     // the payload ($1, eval), so it is scanned as its own command after a `;`, never as an argument of
@@ -392,7 +404,7 @@ function matchWrapper(seg: string): { payload: string; shell: WrapperShell } | n
 
 /** Wrapper payloads tagged with the interpreter that runs them. */
 function taggedWrapperPayloads(segments: string[]): Array<{ payload: string; shell: WrapperShell }> {
-  return segments.map(matchWrapper).filter((w): w is { payload: string; shell: WrapperShell } => w !== null);
+  return segments.map((s) => matchWrapper(s)).filter((w): w is { payload: string; shell: WrapperShell } => w !== null);
 }
 
 export function wrapperPayloadsFromSegments(segments: string[]): string[] {
@@ -563,7 +575,105 @@ function classifyInterpreterSegments(segments: string[], tool: string): string |
   return null;
 }
 
+// Redirect operators that sit BETWEEN a command's words (`rm 2>&1 -rf x`, `git>log reset --hard`,
+// `bash -c >log "rm -rf x"`). A redirect does not change the command's argv, but it breaks three things:
+// the `[^;&|\n]*` scans stop at the `&` of `2>&1`/`&>`/`>&2` and the `|` of `>|`; the segment anchors
+// (Fabric patterns, wrapper regexes) stop at a redirect before or inside the command; and parseExecutable
+// cuts a segment at the `&` of `2>&1`.
+// stripRedirects blanks each redirect and its target word, outside quotes, so the same patterns see the
+// bare command. Ops: &> &>> > >> >| >& < <& <> <<<. NOT `<<` (a heredoc: executableView reads its marker;
+// HEREDOC_RES below takes one that sits between words) and NOT `>(`/`<(` (a process substitution, which
+// runs a command). An fd number counts only at the start of a word (`build2>log` keeps `build2`; Bash also
+// takes `{fd}>`); PowerShell also takes `*>`. Target: one word, quoted parts kept whole, so `>"my log"` goes
+// entirely. A target the regex cannot take WHOLE (`$( )` nested twice or over 300 items, `${...}` with a
+// space, an unclosed backtick) matches nothing: the redirect stays in the text, so no half of it is blanked
+// and the rest never hides the next word. unparsedRedirect reports that case. Every alternative is
+// disjoint, so the scan is linear.
+const REDIR_OPS = String.raw`&>>?|<<<|>>|>\||>&|<&|<>|>(?!\()|(?<!<)<(?![<(])`;
+const redirectRegex = (tool: string): RegExp => {
+  const ps = tool === 'PowerShell';
+  const quoted = (ps ? PS_QUOTED : BASH_QUOTED).source;
+  // One target character. `$` only when no `(` or `{` follows, and no Bash backtick: those open a substitution
+  // that `subst` below must take whole.
+  const plain = ps ? String.raw`(?:[^\s;&|<>()'"\x60$]|\$(?![({]))` : String.raw`(?:[^\s;&|<>()'"\\\x60$]|\$(?![({]))`;
+  const fd = String.raw`(?:(?<![^\s;&|(])${ps ? String.raw`(?:\d+|\*)` : String.raw`(?:\d+|\{\w+\})`})?`;
+  // A `$(...)` target (one nesting level, at most 300 items: an unclosed one costs a bounded scan), a Bash
+  // backtick pair, or a plain `${name:-x}` goes whole, so `>$(echo log) "rm -rf x"` leaves the payload.
+  const subst = String.raw`\$\((?:[^()]|\([^()]*\)){0,300}\)|\$\{[^{}\s]*\}` + (ps ? '' : '|`[^`]{0,300}`');
+  // The target group is atomic (lookahead plus backreference): it never backs off to a shorter target. After it
+  // no `$`, backtick or `(` may follow, or the target was cut inside `>a$(b $(c $(d)))` and half of it would go.
+  return new RegExp(`(${quoted})|${fd}(?:${REDIR_OPS})[ \\t]*(?=((?:${quoted}|${subst}|${plain})+))\\2(?![$\\x60(])`, 'g');
+};
+const REDIRECT_RES: Record<string, RegExp> = { Bash: redirectRegex('Bash'), PowerShell: redirectRegex('PowerShell') };
+// A heredoc marker with another word after it on the same line (`git <<EOF reset --hard`, `bash -c <<EOF "rm -rf x"`).
+// The shell reads the body from the next lines and runs the line as `git reset --hard`, so the marker goes.
+// A marker with nothing after it (`cat <<EOF`, `bash <<EOF`) stays: executableView reads it. This pass runs
+// after the redirect pass, so `<<EOF >log reset --hard` has lost its `>log` first. The body lines stay in the text.
+const heredocRegex = (tool: string): RegExp => {
+  const quoted = (tool === 'PowerShell' ? PS_QUOTED : BASH_QUOTED).source;
+  return new RegExp(String.raw`(${quoted})|(?<!<)<<(?!<)-?[ \t]*(?:\\?\w+|${quoted})(?=[ \t]+[^\s;&|<>])`, 'g');
+};
+const HEREDOC_RES: Record<string, RegExp> = { Bash: heredocRegex('Bash'), PowerShell: heredocRegex('PowerShell') };
+
+/** `text` with every unquoted redirect (operator and target) replaced by one space. Quotes and escapes stay. */
+export function stripRedirects(text: string, tool: string = 'Bash'): string {
+  const key = tool === 'PowerShell' ? 'PowerShell' : 'Bash';
+  const keepQuoted = (m: string, quoted?: string): string => (quoted !== undefined ? quoted : ' ');
+  return text.replace(REDIRECT_RES[key], keepQuoted).replace(HEREDOC_RES[key], keepQuoted);
+}
+
+// A redirect operator followed, before the next blank, by the opener of a substitution: stripRedirects left it
+// because it could not take the target whole (`>$(a $(b $(c)))`), or it is a process substitution used as a
+// target (`> >(cat)`, `< <(echo)`). Whatever follows may hold the next word of the command. Quoted text is skipped.
+const UNPARSED_REDIRECT_RE = new RegExp(
+  String.raw`(${BASH_QUOTED.source})|[<>][ \t]*(?:[^\s;&|<>()'"\\\x60$]|\$(?![({]))*(?:\$[({]|\x60|[<>]\()`,
+  'g',
+);
+// The words of the destructive patterns, loosely: no order, no flags. A text with an unparsed redirect is
+// flagged only when it names a guarded verb, so `ls >$(a $(b $(c)))` stays allowed. Each row is a list of word
+// tests, all of which must hit the text, so the check is linear.
+const GUARDED_VERBS: RegExp[][] = [
+  [/(?<![-\w.])(?:rm|rmdir|rd|del|erase|ri|find|xargs|rsync|dd|shred|wipefs|blkdiscard|truncate|Remove-Item)(?![-\w])|\bmkfs\b/i],
+  [/\bgit\b/i, /\b(?:reset|clean|push|checkout|restore|switch|branch|worktree|submodule|rebase|stash|update-ref|reflog|gc|filter-branch|filter-repo)\b/i],
+  [/\bdocker(?:-compose)?\b/i, /\b(?:prune|rm|rmi|down)\b/i],
+  [/\b(?:az|fab|curl|irm|iwr)(?:\.exe|\.cmd)?\b|\bInvoke-\w+|\b(?:Suspend|Resume|Update|Remove)-AzFabricCapacity\b/i, /capacit|dataAccessRoles/i],
+];
+
+function unparsedRedirect(bare: string): string | null {
+  let found = false;
+  bare.replace(UNPARSED_REDIRECT_RE, (m, quoted?: string) => { if (quoted === undefined) found = true; return m; });
+  if (!found || !GUARDED_VERBS.some((words) => words.every((w) => w.test(bare)))) return null;
+  return 'unparsed redirect target';
+}
+
+/**
+ * Add-only scans. The text as typed comes first, so every old match stays (including `> /dev/sda`, which needs
+ * its `>`). Only when that finds nothing do the others run: the text with its line continuations joined
+ * (`git \<newline>push --force`: the patterns and the quote strip read the raw text), then each of those
+ * with its redirects blanked, then the fail-closed row for a redirect target nothing could read.
+ */
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
+  const hit = classifyText(command, depth, tool);
+  if (hit || typeof command !== 'string') return hit;
+  const joined = normalizeEscapes(command, tool);
+  const variants = joined === command ? [command] : [command, joined];
+  if (variants.length > 1) {
+    const joinedHit = classifyText(joined, depth, tool);
+    if (joinedHit) return joinedHit;
+  }
+  if (!/[<>]/.test(command)) return null;
+  let lastBare = command;
+  for (const text of variants) {
+    const bare = stripRedirects(text, tool);
+    if (bare === text) continue;
+    lastBare = bare;
+    const bareHit = classifyText(bare, depth, tool);
+    if (bareHit) return bareHit;
+  }
+  return unparsedRedirect(lastBare);
+}
+
+function classifyText(command: string, depth: number, tool: string): string | null {
   if (!command || typeof command !== 'string') return null;
   // R2: the top-level scan reads the RAW command, heredoc bodies included, as on fork/main. A body that
   // `cat > x.sh` writes can run on the next line (`bash x.sh`), so prose that names a destructive command asks.
@@ -584,7 +694,7 @@ export function classifyDestructive(command: string, depth = 0, tool: string = '
       // (normalizeEscapes), or an escaped quote in a message ("say `"git reset --hard`"")
       // parses as a command.
       const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
-      const wrapped = segments.map(matchWrapper);
+      const wrapped = segments.map((s) => matchWrapper(s, tool));
       const interpHit = classifyInterpreterSegments(segments.filter((_, i) => wrapped[i] === null), tool);
       if (interpHit) return interpHit;
       // A powershell/pwsh payload runs as PowerShell, whichever tool launched it.

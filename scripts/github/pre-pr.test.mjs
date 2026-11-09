@@ -107,9 +107,9 @@ test('S1: every node script and cwd named in the surface table exists', async ()
   }
 });
 
-test('S2: hooks source runs the build with a dist check, vitest, the Semgrep pack and the always gate', async () => {
+test('S2: hooks source runs tsc, the build with a dist check, vitest, the Semgrep pack and the always gate', async () => {
   const got = gatesFor(['.claude/hooks/src/pre-pr-gate.ts'], REPO_ROOT);
-  assert.deepEqual(ids(got).sort(), ['context-budget', 'hooks-build', 'hooks-vitest', 'semgrep-ccv3']);
+  assert.deepEqual(ids(got).sort(), ['context-budget', 'hooks-build', 'hooks-tsc', 'hooks-vitest', 'semgrep-ccv3']);
   const build = got.find((g) => g.id === 'hooks-build');
   assert.ok(build.postCheck.argv.every((a) => a.includes('.claude/hooks/dist')));
   assert.deepEqual(build.postCheck.argv.map((a) => a[0]), ['diff', 'ls-files'], 'content changes and new files; never git status');
@@ -207,11 +207,28 @@ test('CO1: a scripts/coordination change runs the same coordination test files a
 
 // ---------- dependency routing: a path that feeds a gate selects it, even when the diff never touches that gate's own folder ----------
 
-test('GR1: a hooks dependency (store link script, hooks package files, tsconfig, any workflow) runs hooks-build and hooks-vitest (#352 shipped a stale dist because none ran)', async () => {
+test('GR1: a hooks dependency (store link script, hooks package files, tsconfig, any workflow) runs hooks-tsc, hooks-build and hooks-vitest (#352 shipped a stale dist because none ran)', async () => {
   for (const p of ['scripts/worktree/shared-deps.mjs', '.claude/hooks/package-lock.json', '.claude/hooks/tsconfig.json', '.claude/hooks/tsconfig.build.json', '.github/workflows/gitleaks.yml', '.github/workflows/ccv3-checks.yml']) {
     const got = ids(gatesFor([p], REPO_ROOT));
     assert.ok(got.includes('hooks-build'), `${p} -> hooks-build`);
     assert.ok(got.includes('hooks-vitest'), `${p} -> hooks-vitest`);
+    assert.ok(got.includes('hooks-tsc'), `${p} -> hooks-tsc`);
+  }
+});
+
+test('TS1: hooks-tsc type-checks .claude/hooks with tsc --noEmit, runs before hooks-build, and no other surface plans it', async () => {
+  const got = gatesFor(['.claude/hooks/src/pre-pr-gate.ts'], REPO_ROOT);
+  const tsc = got.find((g) => g.id === 'hooks-tsc');
+  assert.ok(tsc, 'a hooks change plans hooks-tsc');
+  assert.ok(['npx', 'node'].includes(tsc.cmd), tsc.cmd);
+  assert.ok(tsc.args.includes('tsc') && tsc.args.includes('--noEmit'), tsc.args.join(' '));
+  assert.equal(tsc.cwd, '.claude/hooks');
+  assert.ok(tsc.timeoutMs >= 5 * 60_000, 'tsc 7 is fast, but a cold busy machine gets the same 5 min as the build');
+  assert.ok(ids(got).indexOf('hooks-tsc') < ids(got).indexOf('hooks-build'), 'tsc fails fast, before the build');
+  const owners = SURFACES.filter((s) => (s.gates ?? []).some((g) => g.id === 'hooks-tsc')).map((s) => s.id);
+  assert.deepEqual(owners, ['hooks']);
+  for (const p of ['scripts/other.mjs', '.claude/rules-src/x.md', 'docs/a.md', 'opc/src/x.py', '.claude/skills/tdd/SKILL.md']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('hooks-tsc'), false, p);
   }
 });
 
@@ -2693,8 +2710,10 @@ test('EN1: a hooks change with no esbuild is ONE ENV FAIL line, and no gate runs
   const { result, gateRuns } = await prePr(repo, { envCheck: envStep, skipCr: true, bodyText: featureBody(repo.head) });
   const envLines = result.lines.filter((l) => /^\w+ env - /.test(l));
   assert.equal(envLines.length, 1, result.lines.join('\n'));
-  assert.match(envLines[0], /^FAIL env - ENV: hooks-build needs esbuild\. Tried .+This is the environment, not your change\. Fix: run `node scripts\/worktree\/shared-deps\.mjs --check` in /);
-  assert.ok(result.lines.some((l) => /^ {4}ENV: hooks-vitest needs vitest\./.test(l)), 'the second missing need is a note under the line');
+  // hooks-tsc comes first (it fails fast), so it owns the FAIL line; the other two missing needs are notes under it.
+  assert.match(envLines[0], /^FAIL env - ENV: hooks-tsc needs tsc\. Tried .+This is the environment, not your change\. Fix: run `node scripts\/worktree\/shared-deps\.mjs --check` in /);
+  assert.ok(result.lines.some((l) => /^ {4}ENV: hooks-build needs esbuild\./.test(l)), 'the second missing need is a note under the line');
+  assert.ok(result.lines.some((l) => /^ {4}ENV: hooks-vitest needs vitest\./.test(l)), 'the third missing need is a note under the line');
   assert.ok(result.lines.some((l) => /^SKIP gate:hooks-build - not run: env failed/.test(l)), result.lines.join('\n'));
   assert.equal(gateRuns.includes('hooks-build'), false);
   assert.equal(gateRuns.length, 0, 'a run stops at the first FAIL');
@@ -2706,6 +2725,8 @@ test('EN2: with --keep-going only the gate that misses its package is skipped', 
   ignoreModules(repo);
   fakeFile(repo, '.claude/hooks/node_modules/.bin/esbuild', '#!/bin/sh\n');
   fakeFile(repo, '.claude/hooks/node_modules/.bin/esbuild.cmd', '@echo off\r\n');
+  fakeFile(repo, '.claude/hooks/node_modules/.bin/tsc', '#!/bin/sh\n');
+  fakeFile(repo, '.claude/hooks/node_modules/.bin/tsc.cmd', '@echo off\r\n');
   const { result, gateRuns } = await prePr(repo, { envCheck: envStep, skipCr: true, keepGoing: true, bodyText: featureBody(repo.head) });
   assert.ok(result.lines.some((l) => /^FAIL env - ENV: hooks-vitest needs vitest\./.test(l)), result.lines.join('\n'));
   assert.ok(gateRuns.includes('hooks-build'), 'the gate whose bin exists still runs');

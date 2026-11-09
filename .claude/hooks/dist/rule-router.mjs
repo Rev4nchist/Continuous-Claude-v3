@@ -453,7 +453,8 @@ var PWSH_EXEC_FLAG = String.raw`\s-(?:c(?:o(?:m(?:m(?:a(?:n(?:d(?:withargs)?)?)?
 var WRAPPER_RES = [
   { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", POSIX_EXEC_FLAG) },
   { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", PWSH_EXEC_FLAG) },
-  { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) }
+  { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) },
+  { shell: "eval", re: new RegExp(`^${LAUNCHER}eval(?=\\s)${PAYLOAD}`, "i") }
 ];
 function unwrapPayload(raw) {
   const s = raw.trim();
@@ -462,11 +463,15 @@ function unwrapPayload(raw) {
   return s;
 }
 var dropQuotes = (s) => s.replace(/["']/g, "");
-function matchWrapper(seg2) {
+function matchWrapper(segment, tool = "Bash") {
+  const seg2 = stripRedirects(segment, tool);
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg2.match(re);
     if (!m || !(m[1] || m[3])) continue;
-    if (!m[1]) return { payload: /^["']/.test(m[3]) ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
+    if (!m[1]) {
+      const dequote = shell === "posix" || shell === "eval" || /^["']/.test(m[3]);
+      return { payload: dequote ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
+    }
     if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
     const join3 = shell === "posix" ? " ; " : " ";
     return { payload: unwrapPayload(m[1]) + join3 + dropQuotes(m[2]), shell };
@@ -474,7 +479,7 @@ function matchWrapper(seg2) {
   return null;
 }
 function taggedWrapperPayloads(segments) {
-  return segments.map(matchWrapper).filter((w) => w !== null);
+  return segments.map((s) => matchWrapper(s)).filter((w) => w !== null);
 }
 function wrapperPayloadsFromSegments(segments) {
   return taggedWrapperPayloads(segments).map((w) => w.payload);
@@ -491,6 +496,30 @@ var INTERPRETERS = [
   { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: new RegExp(PWSH_EXEC_FLAG, "i") },
   { word: /(?<![\w.-])cmd(?:\.exe)?\b/i, flag: /\s\/[ck](?=\s|["']|$)/i }
 ];
+var REDIR_OPS = String.raw`&>>?|<<<|>>|>\||>&|<&|<>|>(?!\()|(?<!<)<(?![<(])`;
+var redirectRegex = (tool) => {
+  const ps = tool === "PowerShell";
+  const quoted = (ps ? PS_QUOTED : BASH_QUOTED).source;
+  const plain = ps ? String.raw`(?:[^\s;&|<>()'"\x60$]|\$(?![({]))` : String.raw`(?:[^\s;&|<>()'"\\\x60$]|\$(?![({]))`;
+  const fd = String.raw`(?:(?<![^\s;&|(])${ps ? String.raw`(?:\d+|\*)` : String.raw`(?:\d+|\{\w+\})`})?`;
+  const subst = String.raw`\$\((?:[^()]|\([^()]*\)){0,300}\)|\$\{[^{}\s]*\}` + (ps ? "" : "|`[^`]{0,300}`");
+  return new RegExp(`(${quoted})|${fd}(?:${REDIR_OPS})[ \\t]*(?=((?:${quoted}|${subst}|${plain})+))\\2(?![$\\x60(])`, "g");
+};
+var REDIRECT_RES = { Bash: redirectRegex("Bash"), PowerShell: redirectRegex("PowerShell") };
+var heredocRegex = (tool) => {
+  const quoted = (tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED).source;
+  return new RegExp(String.raw`(${quoted})|(?<!<)<<(?!<)-?[ \t]*(?:\\?\w+|${quoted})(?=[ \t]+[^\s;&|<>])`, "g");
+};
+var HEREDOC_RES = { Bash: heredocRegex("Bash"), PowerShell: heredocRegex("PowerShell") };
+function stripRedirects(text, tool = "Bash") {
+  const key = tool === "PowerShell" ? "PowerShell" : "Bash";
+  const keepQuoted = (m, quoted) => quoted !== void 0 ? quoted : " ";
+  return text.replace(REDIRECT_RES[key], keepQuoted).replace(HEREDOC_RES[key], keepQuoted);
+}
+var UNPARSED_REDIRECT_RE = new RegExp(
+  String.raw`(${BASH_QUOTED.source})|[<>][ \t]*(?:[^\s;&|<>()'"\\\x60$]|\$(?![({]))*(?:\$[({]|\x60|[<>]\()`,
+  "g"
+);
 
 // src/rule-router.ts
 var REARM_SOURCES = /* @__PURE__ */ new Set(["compact", "clear"]);
