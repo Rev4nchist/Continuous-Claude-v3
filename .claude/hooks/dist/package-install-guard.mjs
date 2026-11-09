@@ -21166,6 +21166,7 @@ function asksFor(segment, install, cwd, tool) {
 }
 var LOCAL_BIN_MAX_LEVELS = 10;
 var RC_FILES = [".npmrc", ".yarnrc.yml", "bunfig.toml", "pip.conf", "pip.ini", "uv.toml"];
+var HOME_RC_FILES = [".npmrc", ".yarnrc.yml", ".bunfig.toml", ".config/pip/pip.conf", ".pip/pip.conf", ".config/uv/uv.toml", "AppData/Roaming/pip/pip.ini"];
 var RC_MAX_BYTES = 64 * 1024;
 var RC_PUBLIC_HOSTS = /* @__PURE__ */ new Set(["npmjs.org", "registry.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org"]);
 var RC_KEY = /^(?:@[^\s=:'"]+:)?(?:registry|npmRegistryServer|index[-_]url|extra[-_]index[-_]url|find[-_]links)$/i;
@@ -21173,11 +21174,12 @@ var RC_LINE = /^\s*["']?([^\s=:"']+(?::[^\s=:"']+)?)["']?\s*[=:]\s*(.*)$/;
 var URL_IN_VALUE = /[a-z][a-z0-9+.-]*:\/\/[^\s"',}]+/i;
 function readRcFile(path) {
   try {
-    if (!statSync(path).isFile()) return null;
+    const st = statSync(path);
+    if (!st.isFile()) return null;
     const fd = openSync(path, "r");
     try {
       const buf = Buffer.alloc(RC_MAX_BYTES);
-      return buf.toString("utf8", 0, readSync(fd, buf, 0, RC_MAX_BYTES, 0));
+      return { text: buf.toString("utf8", 0, readSync(fd, buf, 0, RC_MAX_BYTES, 0)), truncated: st.size > RC_MAX_BYTES };
     } finally {
       closeSync(fd);
     }
@@ -21205,11 +21207,8 @@ function rcFileSettings(file, text) {
     if (/^\s*[#;]/.test(line)) return;
     const m = line.match(RC_LINE);
     if (!m || !keyOk(m[1])) return;
-    if (m[2].trim() !== "") {
-      judge(m[1], m[2]);
-      return;
-    }
-    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^\s*[#;]/.test(lines[j]); j++) judge(m[1], lines[j]);
+    if (m[2].trim() !== "") judge(m[1], m[2]);
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^\s*[#;]/.test(lines[j]) && !/^\s+[\w.-]+\s*=/.test(lines[j]); j++) judge(m[1], lines[j]);
   });
   return out;
 }
@@ -21222,19 +21221,22 @@ function rcFileMarkers(cwd) {
     if (parent === dir) break;
     dir = parent;
   }
+  const paths = /* @__PURE__ */ new Set();
+  for (const d of dirs) for (const name of RC_FILES) paths.add(join2(d, name));
   try {
-    dirs.add(resolve(process.env.CCV3_GUARD_RC_HOME || homedir2()));
+    const home = resolve(process.env.CCV3_GUARD_RC_HOME || homedir2());
+    for (const name of [...RC_FILES, ...HOME_RC_FILES]) paths.add(join2(home, name));
   } catch {
   }
+  if (process.env.APPDATA) paths.add(join2(resolve(process.env.APPDATA), "pip", "pip.ini"));
   const out = [];
-  for (const d of dirs) {
-    for (const name of RC_FILES) {
-      const path = join2(d, name);
-      const text = readRcFile(path);
-      if (text !== null) out.push(...rcFileSettings(path, text));
-    }
+  for (const path of paths) {
+    const rc = readRcFile(path);
+    if (rc === null) continue;
+    out.push(...rcFileSettings(path, rc.text));
+    if (rc.truncated) out.push(`${path} (larger than ${RC_MAX_BYTES} bytes, not fully read)`);
   }
-  return out;
+  return [...new Set(out)];
 }
 function hasLocalBin(name, cwd) {
   let dir = resolve(cwd);

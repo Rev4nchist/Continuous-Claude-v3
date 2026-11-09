@@ -1425,6 +1425,8 @@ const LOCAL_BIN_MAX_LEVELS = 10;
 // ---------------------------------------------------------------------------
 
 const RC_FILES = ['.npmrc', '.yarnrc.yml', 'bunfig.toml', 'pip.conf', 'pip.ini', 'uv.toml'];
+// Where each tool keeps its USER config, relative to the home folder. The home folder also gets RC_FILES (fail closed).
+const HOME_RC_FILES = ['.npmrc', '.yarnrc.yml', '.bunfig.toml', '.config/pip/pip.conf', '.pip/pip.conf', '.config/uv/uv.toml', 'AppData/Roaming/pip/pip.ini'];
 const RC_MAX_BYTES = 64 * 1024;
 // Hosts whose registry or index the checks read. Any other host in a registry key asks.
 const RC_PUBLIC_HOSTS = new Set(['npmjs.org', 'registry.npmjs.org', 'registry.yarnpkg.com', 'pypi.org', 'files.pythonhosted.org']);
@@ -1434,14 +1436,15 @@ const RC_KEY = /^(?:@[^\s=:'"]+:)?(?:registry|npmRegistryServer|index[-_]url|ext
 const RC_LINE = /^\s*["']?([^\s=:"']+(?::[^\s=:"']+)?)["']?\s*[=:]\s*(.*)$/;
 const URL_IN_VALUE = /[a-z][a-z0-9+.-]*:\/\/[^\s"',}]+/i;
 
-/** The first 64 KB of a regular file as text. A missing file, a folder or any read error gives null. */
-function readRcFile(path: string): string | null {
+/** The first 64 KB of a regular file as text, and whether the file is longer. A missing file, a folder or any read error gives null. */
+function readRcFile(path: string): { text: string; truncated: boolean } | null {
   try {
-    if (!statSync(path).isFile()) return null;
+    const st = statSync(path);
+    if (!st.isFile()) return null;
     const fd = openSync(path, 'r');
     try {
       const buf = Buffer.alloc(RC_MAX_BYTES);
-      return buf.toString('utf8', 0, readSync(fd, buf, 0, RC_MAX_BYTES, 0));
+      return { text: buf.toString('utf8', 0, readSync(fd, buf, 0, RC_MAX_BYTES, 0)), truncated: st.size > RC_MAX_BYTES };
     } finally {
       closeSync(fd);
     }
@@ -1469,16 +1472,17 @@ function rcFileSettings(file: string, text: string): string[] {
     if (/^\s*[#;]/.test(line)) return;
     const m = line.match(RC_LINE);
     if (!m || !keyOk(m[1])) return;
-    if (m[2].trim() !== '') { judge(m[1], m[2]); return; }
-    // pip lists several values on the indented lines after an empty key: extra-index-url =\n  URL\n  URL
-    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^\s*[#;]/.test(lines[j]); j++) judge(m[1], lines[j]);
+    if (m[2].trim() !== '') judge(m[1], m[2]);
+    // pip lists more values on the indented lines after the key, with or without a value on the key line:
+    // extra-index-url = URL, then one URL per indented line. A comment or an indented `key = value` line (a TOML key) ends the list.
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^\s*[#;]/.test(lines[j]) && !/^\s+[\w.-]+\s*=/.test(lines[j]); j++) judge(m[1], lines[j]);
   });
   return out;
 }
 
 /**
  * Registry or index settings that point away from the public registries, read from the rc files an install reads:
- * the cwd, up to 10 folders above it, and the home folder (CCV3_GUARD_RC_HOME overrides it, for tests).
+ * the cwd, up to 10 folders above it, the home folder (CCV3_GUARD_RC_HOME overrides it, for tests) and %APPDATA%.
  * Read errors are ignored. A null cwd is not read by the caller.
  */
 function rcFileMarkers(cwd: string): string[] {
@@ -1490,16 +1494,23 @@ function rcFileMarkers(cwd: string): string[] {
     if (parent === dir) break;
     dir = parent;
   }
-  try { dirs.add(resolve(process.env.CCV3_GUARD_RC_HOME || homedir())); } catch { /* no home folder: skip it */ }
+  const paths = new Set<string>();
+  for (const d of dirs) for (const name of RC_FILES) paths.add(join(d, name));
+  try {
+    const home = resolve(process.env.CCV3_GUARD_RC_HOME || homedir());
+    for (const name of [...RC_FILES, ...HOME_RC_FILES]) paths.add(join(home, name));
+  } catch { /* no home folder: skip it */ }
+  // pip on Windows: %APPDATA%\pip\pip.ini
+  if (process.env.APPDATA) paths.add(join(resolve(process.env.APPDATA), 'pip', 'pip.ini'));
   const out: string[] = [];
-  for (const d of dirs) {
-    for (const name of RC_FILES) {
-      const path = join(d, name);
-      const text = readRcFile(path);
-      if (text !== null) out.push(...rcFileSettings(path, text));
-    }
+  for (const path of paths) {
+    const rc = readRcFile(path);
+    if (rc === null) continue;
+    out.push(...rcFileSettings(path, rc.text));
+    // A file longer than the cap is not fully read: the rest may hold a registry key. Parse doubt asks.
+    if (rc.truncated) out.push(`${path} (larger than ${RC_MAX_BYTES} bytes, not fully read)`);
   }
-  return out;
+  return [...new Set(out)];
 }
 
 /**
