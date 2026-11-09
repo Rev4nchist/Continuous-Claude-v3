@@ -33,6 +33,7 @@ const HOOKS_REL = '.claude/hooks';
 
 /** What each gate needs. Gates that are not listed need nothing from node_modules. */
 export const GATE_NEEDS = {
+  'hooks-tsc': [{ pkg: 'tsc', kind: 'bin', from: HOOKS_REL }],
   'hooks-build': [{ pkg: 'esbuild', kind: 'bin', from: HOOKS_REL }],
   'hooks-vitest': [{ pkg: 'vitest/package.json', kind: 'walk', from: HOOKS_REL }],
   'coordination-db-tests': [{ pkg: 'pg', kind: 'dep' }],
@@ -42,7 +43,7 @@ export const GATE_NEEDS = {
 };
 
 /** Gates whose result depends on the installed .claude/hooks packages: the drift NOTE is shown only when one of them runs. */
-const DRIFT_GATES = ['hooks-build', 'hooks-vitest', 'mods-validate'];
+const DRIFT_GATES = ['hooks-tsc', 'hooks-build', 'hooks-vitest', 'mods-validate'];
 
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 const samePath = (a, b) => {

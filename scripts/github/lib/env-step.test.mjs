@@ -44,6 +44,8 @@ function fakeRepo({ install = true, lock = '{"v":1}\n', typescript = '7.0.2' } =
     }
     put(path.join(hooks, 'node_modules', '.bin', 'esbuild'), '#!/bin/sh\n');
     put(path.join(hooks, 'node_modules', '.bin', 'esbuild.cmd'), '@echo off\r\n');
+    put(path.join(hooks, 'node_modules', '.bin', 'tsc'), '#!/bin/sh\n');
+    put(path.join(hooks, 'node_modules', '.bin', 'tsc.cmd'), '@echo off\r\n');
     put(path.join(primary, 'node_modules', '@playwright', 'test', 'package.json'), '{"name":"@playwright/test","version":"1.0.0"}');
     put(path.join(primary, 'node_modules', '@playwright', 'test', 'cli.js'), '// cli\n');
   }
@@ -70,6 +72,13 @@ test('V1: a bare worktree names the missing esbuild bin and vitest, and blocks t
   assert.deepEqual([...out.blocked].sort(), ['hooks-build', 'hooks-vitest']);
 });
 
+test('V1b: a bare worktree names the missing tsc bin and blocks hooks-tsc', () => {
+  const r = fakeRepo({ install: false });
+  const out = envStep({ root: r.wt, gates: [gate('hooks-tsc', '.claude/hooks')], nodePath: '' });
+  assert.match(out.fail, /^ENV: hooks-tsc needs tsc\. Tried /);
+  assert.ok(out.blocked.has('hooks-tsc'));
+});
+
 test('V2: the primary, and a worktree with its own install, add no line', () => {
   const r = fakeRepo();
   const inPrimary = envStep({ root: r.primary, gates: ALL() });
@@ -81,6 +90,8 @@ test('V2: the primary, and a worktree with its own install, add no line', () => 
   for (const pkg of ['vitest', 'pg', 'typescript']) put(path.join(r.wtHooks, 'node_modules', pkg, 'package.json'), '{}');
   put(path.join(r.wtHooks, 'node_modules', '.bin', 'esbuild.cmd'), '@echo off\r\n');
   put(path.join(r.wtHooks, 'node_modules', '.bin', 'esbuild'), '#!/bin/sh\n');
+  put(path.join(r.wtHooks, 'node_modules', '.bin', 'tsc.cmd'), '@echo off\r\n');
+  put(path.join(r.wtHooks, 'node_modules', '.bin', 'tsc'), '#!/bin/sh\n');
   const own = envStep({ root: r.wt, gates: ALL() });
   assert.equal(own.fail, null, own.fail);
 });
