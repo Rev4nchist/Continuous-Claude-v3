@@ -13,6 +13,9 @@ Failure modes covered:
 - a message uses a semicolon, parentheses or " - "
 - a wizard call site passes the wrong symlinked flag or opc_source
 - update.py still copies hooks/src into ~/.claude, or skips the build
+- runtime deps are not refreshed: node_modules missing, no stamp, package.json
+  or lock file changed, or a failed install still leaves a stamp
+- runtime deps are reinstalled on every run when nothing changed
 """
 from __future__ import annotations
 
@@ -105,11 +108,11 @@ def test_good_build_copies_exactly_the_sync_list(layout):
     _repo, _opc, claude_dir = layout
     ok, msg = run_helper(layout, Runner())
     assert ok, msg
-    assert relative_files(claude_dir / "hooks") == {
-        *COPIED_TOP_LEVEL,
-        "dist/a.mjs",
-        "dist/b.mjs",
-    }
+    expected = {*COPIED_TOP_LEVEL, "dist/a.mjs", "dist/b.mjs"}
+    found = relative_files(claude_dir / "hooks")
+    assert expected <= found
+    # the only extra file allowed is the hidden deps stamp
+    assert all(name.startswith(".") for name in found - expected)
     assert (claude_dir / "hooks" / "dist" / "a.mjs").read_text() == "dist a"
 
 
@@ -197,13 +200,88 @@ def test_runtime_deps_installed_when_active_has_no_node_modules(layout):
     assert (claude_dir / "hooks" / "package.json").is_file()
 
 
-def test_runtime_deps_not_installed_when_node_modules_exists(layout):
+def settled_install(layout):
+    """Run once so deps install, then fake the node_modules that npm would make."""
     _repo, _opc, claude_dir = layout
-    (claude_dir / "hooks" / "node_modules").mkdir(parents=True)
+    ok, msg = run_helper(layout, Runner())
+    assert ok, msg
+    (claude_dir / "hooks" / "node_modules").mkdir()
+
+
+def test_runtime_deps_not_installed_when_nothing_changed(layout):
+    settled_install(layout)
     runner = Runner()
     ok, msg = run_helper(layout, runner)
     assert ok, msg
     assert runner.active_install_calls() == []
+
+
+def test_runtime_deps_installed_when_node_modules_removed(layout):
+    _repo, _opc, claude_dir = layout
+    run_helper(layout, Runner())  # no node_modules appears: the fake npm makes none
+    runner = Runner()
+    ok, msg = run_helper(layout, runner)
+    assert ok, msg
+    assert len(runner.active_install_calls()) == 1
+    assert not (claude_dir / "hooks" / "node_modules").exists()
+
+
+def test_runtime_deps_installed_when_node_modules_has_no_stamp(layout):
+    _repo, _opc, claude_dir = layout
+    (claude_dir / "hooks").mkdir()
+    (claude_dir / "hooks" / "package.json").write_text("{}")
+    (claude_dir / "hooks" / "node_modules").mkdir()
+    runner = Runner()
+    ok, msg = run_helper(layout, runner)
+    assert ok, msg
+    assert len(runner.active_install_calls()) == 1
+
+
+def test_runtime_deps_installed_when_package_json_changed(layout):
+    _repo, opc_source, _claude = layout
+    settled_install(layout)
+    (opc_source / "hooks" / "package.json").write_text('{"dependencies": {"x": "1"}}')
+    runner = Runner()
+    ok, msg = run_helper(layout, runner)
+    assert ok, msg
+    assert len(runner.active_install_calls()) == 1
+
+
+def test_runtime_deps_installed_when_lock_file_changed(layout):
+    _repo, _opc, claude_dir = layout
+    lock = claude_dir / "hooks" / "package-lock.json"
+    lock.parent.mkdir()
+    lock.write_text('{"v": 1}')
+    settled_install(layout)
+    unchanged = Runner()
+    run_helper(layout, unchanged)
+    assert unchanged.active_install_calls() == []
+    lock.write_text('{"v": 2}')
+    runner = Runner()
+    ok, msg = run_helper(layout, runner)
+    assert ok, msg
+    assert len(runner.active_install_calls()) == 1
+
+
+def test_runtime_deps_installed_once_when_lock_file_appears(layout):
+    _repo, _opc, claude_dir = layout
+    settled_install(layout)
+    (claude_dir / "hooks" / "package-lock.json").write_text('{"v": 1}')
+    runner = Runner()
+    ok, msg = run_helper(layout, runner)
+    assert ok, msg
+    assert len(runner.active_install_calls()) == 1
+
+
+def test_failed_runtime_install_is_retried_next_run(layout):
+    _repo, _opc, claude_dir = layout
+    ok, _msg = run_helper(layout, Runner(npm_fail_on="--omit=dev"))
+    assert not ok
+    (claude_dir / "hooks" / "node_modules").mkdir()  # a partial install left a folder
+    runner = Runner()
+    ok, msg = run_helper(layout, runner)
+    assert ok, msg
+    assert len(runner.active_install_calls()) == 1
 
 
 def test_runtime_deps_failure_ends_with_manual_steps(layout):
