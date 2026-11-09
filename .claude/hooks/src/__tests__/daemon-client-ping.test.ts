@@ -22,6 +22,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { spawn, type ChildProcess } from 'child_process';
+import type * as ChildProcessModule from 'child_process';
 import { tmpdir } from 'os';
 
 // Hoisted so the vi.mock factory below can read it. Default = pass through.
@@ -31,7 +32,8 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('child_process')>();
+  // A typed binding, not importOriginal<typeof import(...)>(): Semgrep's TypeScript parser fails on that generic.
+  const actual: typeof ChildProcessModule = await importOriginal();
   const spawnSync = ((file: string, args: string[], opts: unknown) => {
     // Simulate a host with no `nc` binary.
     if (state.ncEnoent && file === 'nc') {
