@@ -211,14 +211,14 @@
     {
       "id": "ccv3-phase3-progress",
       "url": "https://claude.ai/artifact/EusCghJQP2Yomn49NDVDf5",
-      "source": ".claudedocs/phase3-progress.html",
+      "source": "docs/history/2026-11-09-ccv3-phase3-progress-frozen.html",
       "title": "CCv3 Phase 3 Progress",
       "favicon": "progress",
       "description": "Living status board for CCv3 Phase 3 (DW-80) and the phases after it: units, steps, waits, loose ends and a dated log.",
       "session": "general",
-      "refresh": "at-handoff",
+      "refresh": "on-request",
       "content_model": "narrative-snapshot",
-      "last_published": "2026-10-29",
+      "last_published": "2026-10-30",
       "verified": {
         "on": "2026-10-27",
         "by_session": "4b739767",
@@ -226,10 +226,11 @@
         "publish": "Version 51 published at 13:16 CT from the same session that wrote it."
       },
       "notes": [
-        "Dave asked (2026-10-26) that Code keep this page current through each session. Edit the DATA object at the top of the script; republish the same source to this url.",
-        "Every log time must come from Get-Date, git or the GitHub API; mark an unknown minute as 17:1x. Guessed times were caught and corrected on 2026-10-26.",
-        "Source lives in .claudedocs (untracked, machine-local). If it is lost, rebuild from Artifact action:read of this url."
-      ]
+        "FROZEN 2026-11-09 (Dave decided: archive). Phase 3 (P3a, P3b, P3c) is done. The page was last updated 2026-10-30 20:4x CT and is not refreshed any more. Current status lives in the Harness Reporting Hub.",
+        "source is a byte copy of the live page (version 1793411176-4ba7), saved so the PR step history is not lost. The old source .claudedocs/phase3-progress.html was older than the live page and untracked.",
+        "Do not delete the artifact. If a living phase tracker is needed, start a new page and give it one owner."
+      ],
+      "frozen": "2026-11-09"
     },
     {
       "id": "per-project-lanes-plan",
