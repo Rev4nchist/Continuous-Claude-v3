@@ -321,7 +321,8 @@ var PWSH_EXEC_FLAG = String.raw`\s-(?:c(?:o(?:m(?:m(?:a(?:n(?:d(?:withargs)?)?)?
 var WRAPPER_RES = [
   { shell: "posix", re: wrapper("(?:bash|sh|zsh|dash|ksh|ash)(?:\\.exe)?", POSIX_EXEC_FLAG) },
   { shell: "powershell", re: wrapper("(?:powershell|pwsh)(?:\\.exe)?", PWSH_EXEC_FLAG) },
-  { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) }
+  { shell: "cmd", re: wrapper("cmd(?:\\.exe)?", String.raw`\s\/[ck]\b`) },
+  { shell: "eval", re: new RegExp(`^${LAUNCHER}eval(?=\\s)${PAYLOAD}`, "i") }
 ];
 function unwrapPayload(raw) {
   const s = raw.trim();
@@ -330,11 +331,15 @@ function unwrapPayload(raw) {
   return s;
 }
 var dropQuotes = (s) => s.replace(/["']/g, "");
-function matchWrapper(seg2) {
+function matchWrapper(segment, tool = "Bash") {
+  const seg2 = stripRedirects(segment, tool);
   for (const { shell, re } of WRAPPER_RES) {
     const m = seg2.match(re);
     if (!m || !(m[1] || m[3])) continue;
-    if (!m[1]) return { payload: /^["']/.test(m[3]) ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
+    if (!m[1]) {
+      const dequote = shell === "posix" || shell === "eval" || /^["']/.test(m[3]);
+      return { payload: dequote ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
+    }
     if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
     const join = shell === "posix" ? " ; " : " ";
     return { payload: unwrapPayload(m[1]) + join + dropQuotes(m[2]), shell };
@@ -456,7 +461,66 @@ function classifyInterpreterSegments(segments, tool) {
   }
   return null;
 }
+var REDIR_OPS = String.raw`&>>?|<<<|>>|>\||>&|<&|<>|>(?!\()|(?<!<)<(?![<(])`;
+var redirectRegex = (tool) => {
+  const ps = tool === "PowerShell";
+  const quoted = (ps ? PS_QUOTED : BASH_QUOTED).source;
+  const plain = ps ? String.raw`(?:[^\s;&|<>()'"\x60$]|\$(?![({]))` : String.raw`(?:[^\s;&|<>()'"\\\x60$]|\$(?![({]))`;
+  const fd = String.raw`(?:(?<![^\s;&|(])${ps ? String.raw`(?:\d+|\*)` : String.raw`(?:\d+|\{\w+\})`})?`;
+  const subst = String.raw`\$\((?:[^()]|\([^()]*\)){0,300}\)|\$\{[^{}\s]*\}` + (ps ? "" : "|`[^`]{0,300}`");
+  return new RegExp(`(${quoted})|${fd}(?:${REDIR_OPS})[ \\t]*(?=((?:${quoted}|${subst}|${plain})+))\\2(?![$\\x60(])`, "g");
+};
+var REDIRECT_RES = { Bash: redirectRegex("Bash"), PowerShell: redirectRegex("PowerShell") };
+var heredocRegex = (tool) => {
+  const quoted = (tool === "PowerShell" ? PS_QUOTED : BASH_QUOTED).source;
+  return new RegExp(String.raw`(${quoted})|(?<!<)<<(?!<)-?[ \t]*(?:\\?\w+|${quoted})(?=[ \t]+[^\s;&|<>])`, "g");
+};
+var HEREDOC_RES = { Bash: heredocRegex("Bash"), PowerShell: heredocRegex("PowerShell") };
+function stripRedirects(text, tool = "Bash") {
+  const key = tool === "PowerShell" ? "PowerShell" : "Bash";
+  const keepQuoted = (m, quoted) => quoted !== void 0 ? quoted : " ";
+  return text.replace(REDIRECT_RES[key], keepQuoted).replace(HEREDOC_RES[key], keepQuoted);
+}
+var UNPARSED_REDIRECT_RE = new RegExp(
+  String.raw`(${BASH_QUOTED.source})|[<>][ \t]*(?:[^\s;&|<>()'"\\\x60$]|\$(?![({]))*(?:\$[({]|\x60|[<>]\()`,
+  "g"
+);
+var GUARDED_VERBS = [
+  [/(?<![-\w.])(?:rm|rmdir|rd|del|erase|ri|find|xargs|rsync|dd|shred|wipefs|blkdiscard|truncate|Remove-Item)(?![-\w])|\bmkfs\b/i],
+  [/\bgit\b/i, /\b(?:reset|clean|push|checkout|restore|switch|branch|worktree|submodule|rebase|stash|update-ref|reflog|gc|filter-branch|filter-repo)\b/i],
+  [/\bdocker(?:-compose)?\b/i, /\b(?:prune|rm|rmi|down)\b/i],
+  [/\b(?:az|fab|curl|irm|iwr)(?:\.exe|\.cmd)?\b|\bInvoke-\w+|\b(?:Suspend|Resume|Update|Remove)-AzFabricCapacity\b/i, /capacit|dataAccessRoles/i]
+];
+function unparsedRedirect(bare) {
+  let found = false;
+  bare.replace(UNPARSED_REDIRECT_RE, (m, quoted) => {
+    if (quoted === void 0) found = true;
+    return m;
+  });
+  if (!found || !GUARDED_VERBS.some((words) => words.every((w) => w.test(bare)))) return null;
+  return "unparsed redirect target";
+}
 function classifyDestructive(command, depth = 0, tool = "Bash") {
+  const hit = classifyText(command, depth, tool);
+  if (hit || typeof command !== "string") return hit;
+  const joined = normalizeEscapes(command, tool);
+  const variants = joined === command ? [command] : [command, joined];
+  if (variants.length > 1) {
+    const joinedHit = classifyText(joined, depth, tool);
+    if (joinedHit) return joinedHit;
+  }
+  if (!/[<>]/.test(command)) return null;
+  let lastBare = command;
+  for (const text of variants) {
+    const bare = stripRedirects(text, tool);
+    if (bare === text) continue;
+    lastBare = bare;
+    const bareHit = classifyText(bare, depth, tool);
+    if (bareHit) return bareHit;
+  }
+  return unparsedRedirect(lastBare);
+}
+function classifyText(command, depth, tool) {
   if (!command || typeof command !== "string") return null;
   let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
   if (tool === "PowerShell") scan = scan.replace(/`([A-Za-z0-9])/g, "$1");
@@ -470,7 +534,7 @@ function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (depth < 4) {
     try {
       const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
-      const wrapped = segments.map(matchWrapper);
+      const wrapped = segments.map((s) => matchWrapper(s, tool));
       const interpHit = classifyInterpreterSegments(segments.filter((_, i) => wrapped[i] === null), tool);
       if (interpHit) return interpHit;
       const payloads = [
