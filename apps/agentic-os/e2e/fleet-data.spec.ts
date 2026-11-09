@@ -161,7 +161,8 @@ test.describe('Ready for Dave rows', () => {
     await page.goto('/');
     const rows = await page.getByTestId('ready-item').count();
     const tile = page.getByTestId('stat-tile').filter({ hasText: 'Needs Dave' });
-    await expect(tile).toContainText(String(rows));
+    // The value node only: line 2 of the tile ("blocked N, quiet N") holds digits too.
+    await expect(tile.getByTestId('stat-tile-value')).toHaveText(String(rows));
     expect(rows).toBe(snapshot.ready.length);
   });
 

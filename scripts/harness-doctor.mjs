@@ -10,6 +10,7 @@
  *
  * It runs no Docker, no network and no paid call. It writes only the --json and --out artifacts.
  * schedule:* reads scripts/scheduled/tasks.json and runs `schtasks /query /v /fo csv` (read-only, Windows only).
+ * schedule:readme-tasks reads docs/harness-strategy/README.md and FAILs when it names a CCv3-* task that tasks.json does not list.
  * blocklist:age reads git history. Test seam: HARNESS_DOCTOR_SCHTASKS_DIR holds fake <task>.csv schtasks output.
  * registry:* and lanes:* read <home>/.claude/project-registry.json (the copy lane.mjs reads), the worktree lane.mjs files, and,
  * for registry:mirror-drift, <repo>/.claude/project-registry.json too (FAIL when the two differ in keys, roots, status, laneBoard or laneArtifact),
@@ -602,7 +603,40 @@ export function reminderSyncCheck(o) {
   return result('PASS', 'schedule', 'reminder-sync', `last sync ok or not run yet (failCount ${fails}, last tick ${s?.ranAt ?? 'unknown'})`);
 }
 
-const scheduleSection = (o) => [...scheduleChecks(o), reminderSyncCheck(o)];
+const README_REL = ['docs', 'harness-strategy', 'README.md'];
+const README_TASK_TOKEN = /\bCCv3-[A-Za-z]\w*(?:-\w+)*/gi;
+
+/** Each CCv3-* token in a text, with the line numbers where it appears: Map(token, [line, ...]). */
+function taskTokens(text) {
+  const found = new Map();
+  text.split(/\r?\n/).forEach((line, i) => {
+    for (const [token] of line.matchAll(README_TASK_TOKEN)) found.set(token, [...(found.get(token) ?? []), i + 1]);
+  });
+  return found;
+}
+
+/**
+ * The README must not name a CCv3-* scheduled task that scripts/scheduled/tasks.json does not list. The Snapshot task stayed in the
+ * README after it was gone, and the doctor read only tasks.json, so it reported green. FAIL names each missing token and its lines.
+ * No README: PASS (absent). tasks.json missing or not valid JSON: WARN. Zero tokens: PASS that reports 0, so a reader sees the check read nothing.
+ * Names match without case, as schtasks does. A retired name has no exemption: write it without the "CCv3-" prefix.
+ * Limit: a hyphenated word such as CCv3-Lane-Snapshot-style reads as one token and gives a false FAIL. Rephrase the prose.
+ */
+export function readmeTaskCheck(o) {
+  const readme = join(o.repo, ...README_REL);
+  if (!existsSync(readme)) return absent('schedule', 'readme-tasks', readme);
+  const file = join(o.repo, ...SCHEDULE_REL);
+  let names;
+  try { names = readJson(file).tasks.map((t) => t.name); } catch (err) { return result('WARN', 'schedule', 'readme-tasks', `cannot read task names from ${file}: ${msg(err)}`); }
+  const tokens = taskTokens(readFileSync(readme, 'utf8'));
+  const known = names.map((n) => String(n).toLowerCase());
+  const missing = [...tokens].filter(([token]) => !known.includes(token.toLowerCase()));
+  if (!missing.length) return result('PASS', 'schedule', 'readme-tasks', `${[...tokens.values()].flat().length} task name(s) in ${readme} are all in tasks.json`);
+  const list = missing.map(([token, lines]) => `${token} (line ${lines.join(', ')})`).join('; ');
+  return result('FAIL', 'schedule', 'readme-tasks', `${readme} names a task that is not in tasks.json: ${list}`);
+}
+
+const scheduleSection = (o) => [...scheduleChecks(o), reminderSyncCheck(o), readmeTaskCheck(o)];
 
 // ---- blocklist ----
 const BLOCKLIST_REL = '.claude/hooks/src/shared/malicious-packages.json';

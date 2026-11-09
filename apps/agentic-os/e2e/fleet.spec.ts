@@ -402,9 +402,10 @@ test.describe('fixture brief for a live session', () => {
     await expect(readyItem(page, live.id)).toBeVisible();
 
     const tiles = page.getByTestId('stat-tile');
-    await expect(tiles).toHaveCount(5);
-    // The mockup's order: Live sessions, Active lanes, Blocked, Open PRs, Needs Dave.
-    const labels = ['Live sessions', 'Active lanes', 'Blocked', 'Open PRs', 'Needs Dave'];
+    // Six nodes in both projects; a phone shows the first four (see spend.spec.ts).
+    await expect(tiles).toHaveCount(6);
+    // The E2 order: Live, Needs Dave, Quota and spend, Rule breaks, Active lanes, Open PRs.
+    const labels = ['Live', 'Needs Dave', 'Quota and spend', 'Rule breaks', 'Active lanes', 'Open PRs'];
     for (const [index, label] of labels.entries()) {
       await expect(tiles.nth(index)).toContainText(label);
     }
@@ -413,8 +414,9 @@ test.describe('fixture brief for a live session', () => {
     // Values come from the same snapshot the page polls. Needs Dave counts the ready rows:
     // one row per session.
     const snapshot = await loadSnapshot(request);
-    await expect(tile('Live sessions')).toContainText(String(snapshot.tiles.liveSessions));
-    await expect(tile('Needs Dave')).toContainText(String(snapshot.tiles.needsDave));
+    // The big number is in the value node: line 2 of a tile holds digits too.
+    await expect(tile('Live').getByTestId('stat-tile-value')).toHaveText(String(snapshot.tiles.liveSessions));
+    await expect(tile('Needs Dave').getByTestId('stat-tile-value')).toHaveText(String(snapshot.tiles.needsDave));
     expect(snapshot.tiles.needsDave).toBe(snapshot.ready.length);
     await expect(page.getByTestId('ready-item')).toHaveCount(snapshot.ready.length);
 
@@ -831,7 +833,7 @@ test.describe('layout with the new sections', () => {
     // The long ask must be on screen, or the overflow check proves nothing.
     await expect(readyItem(page, live.id)).toBeVisible();
     await expect(sessionCard(page, live.id)).toBeVisible();
-    await expect(page.getByTestId('stat-tile')).toHaveCount(5);
+    await expect(page.getByTestId('stat-tile')).toHaveCount(6);
     await expect(page.getByTestId('source-health')).toBeVisible();
 
     if (testInfo.project.name === 'phone') {
