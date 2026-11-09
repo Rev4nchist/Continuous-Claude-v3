@@ -241,10 +241,32 @@ const ASK: Record<string, Case[]> = {
     ['Bash', 'pwsh -c "Install-Module Foo"'],
     ['Bash', 'powershell -Command "Install-PSResource Foo"'],
   ],
+  // PR 3: conda, mamba and micromamba had no pattern, so they passed with no check.
+  conda: [
+    ['Bash', 'conda install numpy'],
+    ['Bash', 'conda install -c conda-forge numpy'],
+    ['Bash', 'conda create -n e python=3.12'],
+    ['Bash', 'conda update --all'],
+    ['Bash', 'conda env create -f environment.yml'],
+    ['Bash', 'conda.exe install numpy'],
+    ['Bash', 'sudo conda install numpy'],
+    ['Bash', 'mamba install numpy'],
+    ['Bash', 'micromamba install numpy'],
+    ['Bash', 'echo hi; conda install numpy'],
+    ['Bash', 'cond\\a install numpy'],
+    ['PowerShell', '& conda install numpy'],
+  ],
 };
 
 /** Commands that must stay allowed: read-only, local, or not an install. */
 const ALLOW: Case[] = [
+  ['Bash', 'conda list'],
+  ['Bash', 'conda info'],
+  ['Bash', 'conda activate base'],
+  ['Bash', 'conda env list'],
+  ['Bash', 'conda search numpy'],
+  ['Bash', 'conda config --show'],
+  ['Bash', 'echo "conda install numpy"'],
   ['Bash', 'dotnet build'],
   ['Bash', 'dotnet test'],
   ['Bash', 'dotnet test -s my.runsettings'],

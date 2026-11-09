@@ -1109,6 +1109,93 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     ])('a local path or git source (%s) never gets the 404 text', async (cmd) => {
       expect((await run(cmd, '404')).reason).not.toMatch(NOT_FOUND);
     });
+
+    // ----- PR 3 of the lane: a pip token with a backslash or slash was read as a local path (classifyToken) -----
+    // The shell passes `name==1.0.0; python_version>"3"` to pip as ONE requirement, marker included. The guard read the RAW
+    // token, saw the backslash (tokenize keeps the one before the quote), called it a path and ran no check. The path test must read
+    // only the part before the first ";" and must not trust a path that also holds a version operator.
+    // Each command below passed as `continue` before the fix.
+    describe('a pip requirement with a backslash or slash in its marker is still checked', () => {
+      const BSQ = String.raw`python_version>\"3\"`;
+      const spec = `"zzqx-nope-81723==1.0.0; ${BSQ}"`;
+      it.each([
+        ['pip', `pip install ${spec}`],
+        ['pip3', `pip3 install ${spec}`],
+        ['python -m pip', `python -m pip install ${spec}`],
+        ['uv pip install', `uv pip install ${spec}`],
+        ['uv add', `uv add ${spec}`],
+        ['poetry add', `poetry add ${spec}`],
+        ['pipx install', `pipx install ${spec}`],
+        ['uvx', `uvx ${spec}`],
+        ['forward slash in the marker', `pip install "zzqx-nope-81723==1.0.0; platform_release=='a/b'"`],
+        ['a second token hides behind a clean one', `pip install "requests==2.31.0" ${spec}`],
+      ])('asks with the 404 text (%s)', async (_label, cmd) => {
+        const { decision, reason } = await run(cmd, '404', { registryOnly: 'zzqx-nope-81723' });
+        expect(decision).toBe('ask');
+        expect(reason).toMatch(NOT_FOUND);
+        expect(reason).toContain('"zzqx-nope-81723"');
+      });
+      it('PowerShell reads the same token', async () => {
+        const { decision, reason } = await run(`pip install ${spec}`, '404', { tool: 'PowerShell' });
+        expect(decision).toBe('ask');
+        expect(reason).toMatch(NOT_FOUND);
+      });
+      it('a typosquat with the marker is denied, as it is without the marker', async () => {
+        const { decision, reason } = await run(`pip install "reqeusts==2.31.0; ${BSQ}"`);
+        expect(decision).toBe('deny');
+        expect(reason).toMatch(/typosquat/i);
+      });
+      it('a blocklisted version with the marker is denied', async () => {
+        const { decision, reason } = await run(`pip install "litellm==1.82.7; ${BSQ}"`);
+        expect(decision).toBe('deny');
+        expect(reason).toMatch(/malicious/i);
+      });
+      it('a Bash escape inside the name no longer hides it: asks', async () => {
+        gated((await run(String.raw`pip install reqeus\ts==2.31.0`)).decision);
+      });
+      it('a name with a version and a slash is not a local path: asks for a non-registry source', async () => {
+        const { decision, reason } = await run('pip install zzqx-nope-81723==1.0.0/x');
+        expect(decision).toBe('ask');
+        expect(reason).toMatch(/Non-registry source/);
+      });
+      // Controls. They passed before the fix and must keep their verdict: the fix adds no ask for a real path.
+      it('the same marker with single quotes asks with the 404 text (control)', async () => {
+        const { decision, reason } = await run(`pip install "zzqx-nope-81723==1.0.0; python_version>'3'"`, '404');
+        expect(decision).toBe('ask');
+        expect(reason).toMatch(NOT_FOUND);
+      });
+      it.each([
+        'pip install ./zz-fake-pkg-a1',
+        String.raw`pip install .\zz-fake-pkg-a1`,
+        'pip install ../zz-fake-pkg-a1',
+        'pip install ~/zz-fake-pkg-a1',
+      ])('a plain local path (%s) still gets no 404 ask (control)', async (cmd) => {
+        const { decision, reason } = await run(cmd, '404');
+        expect(decision).toBeUndefined();
+        expect(reason).not.toMatch(NOT_FOUND);
+      });
+    });
+
+    // PR 3: pdm add has no INSTALL_PATTERNS or MANAGER_VERBS entry, so it passed with no check at all.
+    describe('pdm add is checked like poetry add', () => {
+      it.each([
+        'pdm add zzqx-nope-81723',
+        'pdm add zzqx-nope-81723==1.0.0',
+        'pdm add -d zzqx-nope-81723',
+        'sudo pdm add zzqx-nope-81723',
+        '/usr/local/bin/pdm add zzqx-nope-81723',
+      ])('asks with the 404 text: %s', async (cmd) => {
+        const { decision, reason } = await run(cmd, '404');
+        expect(decision).toBe('ask');
+        expect(reason).toMatch(NOT_FOUND);
+      });
+      it('a typosquat is denied', async () => {
+        expect((await run('pdm add reqeusts')).decision).toBe('deny');
+      });
+      it.each(['pdm list', 'pdm run pytest', 'pdm lock', 'pdm --version'])('%s is not an install (control)', async (cmd) => {
+        expect((await run(cmd, '404')).decision).toBeUndefined();
+      });
+    });
   });
 
   // ----- F08: the override must be a leading env assignment -----
