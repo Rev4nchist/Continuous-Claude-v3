@@ -10,7 +10,9 @@
   1. Ready check: scripts/github/review-status.mjs must report READY for the PR's CURRENT head
      (Greptile reviewed that exact commit, confidence >= 4, 0 unresolved threads, checks green,
      mergeable clean).
-     -IgnoreReview skips this; say why in the PR when you use it.
+     -IgnoreReview skips this; say why in the PR when you use it. It skips the review wait only: a red CI check on the head
+     (a check run that ended failure, timed_out, startup_failure or action_required, or a commit status failure or error;
+     not the Greptile or CodeRabbit review results) still refuses, and so does a failed or cut-off read of the checks. Nothing is merged.
   1b. Pre-merge re-check (Gate C, scripts/github/land-recheck.mjs): right before the merge, re-read the
      PR and refuse (nothing merged) when the head changed, a CodeRabbit review or summary-comment edit
      is newer than the READY check, an "@coderabbitai review" request has no review after it, or the
@@ -315,6 +317,30 @@ function Test-DecisionsEnforced {
   return ((Test-EnforceIn $RepoPath) -or (Test-EnforceIn (Join-Path $PSScriptRoot '..\..')))
 }
 
+# Red CI checks on a head commit, one line each. Review bots are not CI: the Greptile app's check run and CodeRabbit's commit status
+# are review results, which -IgnoreReview skips (review-status.mjs reads them the same way). Red means a run that ended
+# failure, timed_out, startup_failure or action_required, or a commit status that is failure or error. Skipped, neutral,
+# cancelled and still-running checks are not red. Every page is read. A failed read, or fewer items than total_count, stops the land.
+function Get-RedChecks([string]$Sha) {
+  # --paginate --slurp: one JSON array holding every page. Any failed page makes gh exit non-zero, and the land stops.
+  $runPages = @(gh api --paginate --slurp "repos/$Repo/commits/$Sha/check-runs?per_page=100" | ConvertFrom-Json | Where-Object { $_ })
+  if ($LASTEXITCODE -or -not $runPages) { Fail "cannot read the check runs of #$Pr. Nothing was merged." }
+  $statusPages = @(gh api --paginate --slurp "repos/$Repo/commits/$Sha/status?per_page=100" | ConvertFrom-Json | Where-Object { $_ })
+  if ($LASTEXITCODE -or -not $statusPages) { Fail "cannot read the commit statuses of #$Pr. Nothing was merged." }
+  $runs = @($runPages | ForEach-Object { $_.check_runs }); $statuses = @($statusPages | ForEach-Object { $_.statuses })
+  $runsTotal = ($runPages | ForEach-Object { [int]$_.total_count } | Measure-Object -Maximum).Maximum
+  $statusTotal = ($statusPages | ForEach-Object { [int]$_.total_count } | Measure-Object -Maximum).Maximum
+  if ($runsTotal -gt $runs.Count) { Fail "#$Pr has $runsTotal check runs but only $($runs.Count) were read; cannot read them all. Nothing was merged." }
+  if ($statusTotal -gt $statuses.Count) { Fail "#$Pr has $statusTotal commit statuses but only $($statuses.Count) were read; cannot read them all. Nothing was merged." }
+  $badConclusions = 'failure', 'timed_out', 'startup_failure', 'action_required'
+  foreach ($r in $runs) {
+    if ($r.app.slug -ne 'greptile-apps' -and $r.status -eq 'completed' -and $r.conclusion -in $badConclusions) { "check run `"$($r.name)`" ended $($r.conclusion)" }
+  }
+  foreach ($s in $statuses) {
+    if ($s.context -notmatch 'coderabbit' -and $s.state -in 'failure', 'error') { "status `"$($s.context)`" is $($s.state)" }
+  }
+}
+
 try {   # closes after the sync-cursor check, with the `finally` that releases the lock
 $pull = gh api "repos/$Repo/pulls/$Pr" | ConvertFrom-Json
 if ($LASTEXITCODE) { Fail "cannot read PR #$Pr" }
@@ -367,6 +393,11 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     [void](Add-NoneLine $noneOut)
   } else {
     Write-Host "  -IgnoreReview: skipping the READY check and the pre-merge re-check"
+    # -IgnoreReview skips the review wait only. A red CI check on the head still blocks: branch protection is not available here
+    # (REST 403, private repo, free plan), so this script is the only gate. Fails closed on a read error or a cut-off page.
+    Step "CI check gate for #$Pr at $($head.Substring(0,7))"
+    $redChecks = @(Get-RedChecks $head)
+    if ($redChecks.Count) { foreach ($rc in $redChecks) { Write-Host "  red: $rc" -ForegroundColor Red }; Fail "#$Pr has $($redChecks.Count) red CI check(s) on the head; -IgnoreReview never skips a red check. Nothing was merged. Fix the check, then re-run." }
     # Dave's own yes. The none-pick check still runs, as a warning only, so the yes is informed. It never blocks.
     Step "none-pick check for #$Pr (warning only)"
     # A launch failure (node missing) must not stop the merge under -IgnoreReview: catch it and warn below.
