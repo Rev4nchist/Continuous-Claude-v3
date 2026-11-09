@@ -152,8 +152,8 @@ export function labelShape(raw: string, create: boolean): LabelShape | null {
 
 const SELF_FLAG = /(?:^|\s)--(?:confirm|apply)(?:=|\s|$)/;
 const NODE_CMD = /\bnode(?:\.exe)?["']?\s/i;
-/** `--apply 2>&1` is a stderr redirect, not PR 2: the number must not run into a digit or a `>`. */
-const APPLY_N = /(?:^|\s)--apply(?:=|\s+)["']?\d+(?![\d>])/;
+/** `--apply 2>&1` is a stderr redirect, not PR 2: a spaced number must not run into a digit or a `>`. `--apply=2>&1` is one argument, so an attached number counts. */
+const APPLY_N = /(?:^|\s)--apply(?:=["']?\d+(?!\d)|\s+["']?\d+(?![\d>]))/;
 const CONFIRM_PATHWAY = /(?:^|\s)--confirm(?:=|\s+)["']?(?:none|coderabbit|both|wait)\b/;
 const BY_FLAG = /(?:^|\s)--by(?:=|\s)/;
 /** A glob character in a scripts/github path: `pr-c*.mjs` reaches pr-checkpoint.mjs without naming it. */
