@@ -13,6 +13,8 @@
 #   the gate counts a review bot (Greptile check run, CodeRabbit status) as a CI failure  -> R4 (-IgnoreReview must still skip review results)
 #   a check read that fails (gh exit 1) or is cut off (more runs than one page) merges    -> R5, R6 (fail closed)
 #   the refusal does not name the red check, or does not say nothing was merged           -> R1
+#   only page 1 is read: a red run (P1) or status (P4) on page 2 is missed, or a green PR with two pages is refused (P2)
+#   a failed read of page 2 does not stop the land                                         -> P3 (fail closed)
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot 'land-pr.ps1'
 $fail = 0; $pass = 0
@@ -37,7 +39,9 @@ function New-Run([string]$name, [string]$status, $conclusion, [string]$app = 'gi
 }
 
 # $runs: check run objects. $statuses: commit status objects. -RunsTotal overrides total_count (a cut-off page). -RunsExit is the exit code of the check-runs read.
-function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(), [int]$runsTotal = -1, [int]$runsExit = 0) {
+# -Page2Runs / -Page2Statuses: a second page. A plain read gets page 1 only (as the real API does); "--paginate --slurp" gets an array of every page.
+# -SlurpExit: exit code of the paginated check-runs read only (gh fails on page 2).
+function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(), [int]$runsTotal = -1, [int]$runsExit = 0, [object[]]$page2Runs = $null, [object[]]$page2Statuses = $null, [int]$slurpExit = 0) {
   $dir = Join-Path $work $name; $stub = Join-Path $dir 'stub'; $repo = Join-Path $dir 'repo'; $remote = Join-Path $dir 'fork.git'
   New-Item -ItemType Directory -Force -Path $stub, $repo | Out-Null
   git init -q -b main $repo 2>&1 | Out-Null
@@ -50,16 +54,28 @@ function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(
   $pull = { param($merged) (@{ merged = $merged; head = @{ ref = $branch; sha = $sha } } | ConvertTo-Json -Compress) }
   Set-Content -LiteralPath (Join-Path $stub 'pull.json') -Value (& $pull $false)
   Set-Content -LiteralPath (Join-Path $stub 'merged.json') -Value (& $pull $true)
-  $total = if ($runsTotal -ge 0) { $runsTotal } else { $runs.Count }
-  Set-Content -LiteralPath (Join-Path $stub 'runs.json') -Value (@{ total_count = $total; check_runs = @($runs) } | ConvertTo-Json -Compress -Depth 6)
+  $total = if ($runsTotal -ge 0) { $runsTotal } else { @($runs).Count + $(if ($null -ne $page2Runs) { @($page2Runs).Count } else { 0 }) }
+  $page1 = @{ total_count = $total; check_runs = @($runs) } | ConvertTo-Json -Compress -Depth 6
+  $pages = @($page1)
+  if ($null -ne $page2Runs) { $pages += (@{ total_count = $total; check_runs = @($page2Runs) } | ConvertTo-Json -Compress -Depth 6) }
+  Set-Content -LiteralPath (Join-Path $stub 'runs.json') -Value $page1
+  Set-Content -LiteralPath (Join-Path $stub 'runs-slurp.json') -Value ('[' + ($pages -join ',') + ']')
   Set-Content -LiteralPath (Join-Path $stub 'runs-exit.txt') -Value $runsExit
-  Set-Content -LiteralPath (Join-Path $stub 'status.json') -Value (@{ state = 'success'; total_count = $statuses.Count; statuses = @($statuses) } | ConvertTo-Json -Compress -Depth 6)
+  Set-Content -LiteralPath (Join-Path $stub 'slurp-exit.txt') -Value $slurpExit
+  $stTotal = @($statuses).Count + $(if ($null -ne $page2Statuses) { @($page2Statuses).Count } else { 0 })
+  $stPage1 = @{ state = 'success'; total_count = $stTotal; statuses = @($statuses) } | ConvertTo-Json -Compress -Depth 6
+  $stPages = @($stPage1)
+  if ($null -ne $page2Statuses) { $stPages += (@{ state = 'success'; total_count = $stTotal; statuses = @($page2Statuses) } | ConvertTo-Json -Compress -Depth 6) }
+  Set-Content -LiteralPath (Join-Path $stub 'status.json') -Value $stPage1
+  Set-Content -LiteralPath (Join-Path $stub 'status-slurp.json') -Value ('[' + ($stPages -join ',') + ']')
   Set-Content -LiteralPath (Join-Path $stub 'gh.cmd') -Encoding ascii -Value @(
     '@echo off',
     "if `"%~1`"==`"api`" if `"%~2`"==`"$prUrl/merge`" goto merge",
     "if `"%~1`"==`"api`" if `"%~2`"==`"$prUrl`" goto pull",
     "if `"%~1`"==`"api`" if `"%~2`"==`"$runsUrl`" goto runs",
     "if `"%~1`"==`"api`" if `"%~2`"==`"$statusUrl`" goto status",
+    "if `"%~1`"==`"api`" if `"%~2`"==`"--paginate`" if `"%~3`"==`"--slurp`" if `"%~4`"==`"$runsUrl`" goto runsslurp",
+    "if `"%~1`"==`"api`" if `"%~2`"==`"--paginate`" if `"%~3`"==`"--slurp`" if `"%~4`"==`"$statusUrl`" goto statusslurp",
     'echo stub gh: unexpected arguments: %* 1>&2',
     'exit /b 1',
     ':merge',
@@ -76,6 +92,16 @@ function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(
     'exit /b 0',
     ':status',
     'type "%~dp0status.json"',
+    'exit /b 0',
+    ':runsslurp',
+    'set /p rcode=<"%~dp0runs-exit.txt"',
+    'if not "%rcode%"=="0" (echo stub gh: check-runs read failed 1>&2 & exit /b %rcode%)',
+    'set /p scode=<"%~dp0slurp-exit.txt"',
+    'if not "%scode%"=="0" (echo stub gh: check-runs page 2 read failed 1>&2 & exit /b %scode%)',
+    'type "%~dp0runs-slurp.json"',
+    'exit /b 0',
+    ':statusslurp',
+    'type "%~dp0status-slurp.json"',
     'exit /b 0')
   Set-Content -LiteralPath (Join-Path $stub 'node.cmd') -Encoding ascii -Value @(
     '@echo off',
@@ -134,6 +160,26 @@ try {
   $c6 = New-Case 'r6' @((New-Run 'build' 'completed' 'success')) @() 150
   $r6 = Invoke-Land $c6
   Check 'R6 cut-off page: land-pr exits non-zero and makes no merge call' ($r6.Code -ne 0 -and -not (Test-Path $c6.Merge))
+
+  # P1: the red check run is on page 2: the land refuses and names it
+  $p1 = New-Case 'p1' @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'success')) @() -1 0 @((New-Run 'unit-tests' 'completed' 'failure'))
+  $rp1 = Invoke-Land $p1
+  Check 'P1 red run on page 2: land-pr exits non-zero, makes no merge call, names the check and says nothing was merged' ($rp1.Code -ne 0 -and -not (Test-Path $p1.Merge) -and $rp1.Text -match 'unit-tests' -and $rp1.Text -match 'Nothing was merged')
+
+  # P2: two pages, every check green: the check gate does not refuse
+  $p2 = New-Case 'p2' @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'success')) @() -1 0 @((New-Run 'unit-tests' 'completed' 'success'))
+  $rp2 = Invoke-Land $p2
+  Check 'P2 green on two pages: the merge call was made and land-pr exits 0' ((Test-Path $p2.Merge) -and $rp2.Code -eq 0)
+
+  # P3: the read of page 2 fails: fail closed
+  $p3 = New-Case 'p3' @((New-Run 'build' 'completed' 'success')) @() -1 0 @((New-Run 'unit-tests' 'completed' 'success')) $null 1
+  $rp3 = Invoke-Land $p3
+  Check 'P3 page 2 read fails: land-pr exits non-zero, makes no merge call, says the check runs cannot be read and nothing was merged' ($rp3.Code -ne 0 -and -not (Test-Path $p3.Merge) -and $rp3.Text -match 'cannot read the check runs' -and $rp3.Text -match 'Nothing was merged')
+
+  # P4: the red commit status is on page 2: the land refuses and names it
+  $p4 = New-Case 'p4' @((New-Run 'build' 'completed' 'success')) @(@{ context = 'ci/ok'; state = 'success' }) -1 0 $null @(@{ context = 'ci/legacy'; state = 'failure' })
+  $rp4 = Invoke-Land $p4
+  Check 'P4 red status on page 2: land-pr exits non-zero, makes no merge call, names the status and says nothing was merged' ($rp4.Code -ne 0 -and -not (Test-Path $p4.Merge) -and $rp4.Text -match 'ci/legacy' -and $rp4.Text -match 'Nothing was merged')
 }
 finally {
   $env:PATH = $oldPath
