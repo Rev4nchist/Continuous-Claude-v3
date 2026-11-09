@@ -312,28 +312,67 @@ export function isListenerAlive(projectDir: string): boolean {
       return false;
     }
   }
-  // Unix socket: a ping that fails is a dead listener, full stop.
+  // Unix socket: only a confirmed live listener counts. Stale and unknown
+  // are both "not alive" here; isListenerAlive never touches the socket file.
   if (!existsSync(connInfo.path!)) return false;
-  return ncPing(connInfo.path!, 1000);
+  return probeUnixSocket(connInfo.path!, 1000) === 'live';
 }
 
 /**
- * Ping a Unix daemon socket via nc with an argv spawn — NO shell (GAP4-02
- * posture): interpolating the tmpdir-derived socket path into an execSync
- * string let a hostile TMPDIR (`$(...)`) execute as the hook user.
+ * Result of probing a Unix daemon socket.
+ * - live:    a connect succeeded (something is listening).
+ * - stale:   ECONNREFUSED or ENOENT (nothing listens). The ONLY result that
+ *            lets a caller unlink the socket file.
+ * - unknown: timeout or any other error, including a failure to run the probe.
+ *            Keep the socket.
  */
-function ncPing(socketPath: string, timeoutMs: number): boolean {
+export type SocketProbe = 'live' | 'stale' | 'unknown';
+
+const PROBE_EXIT_LIVE = 0;
+const PROBE_EXIT_STALE = 10;
+
+/**
+ * Probe script, run as `node -e <script> <socketPath> <timeoutMs>`. The path
+ * and timeout arrive as argv DATA, never interpolated into code. It connects,
+ * sends the ping, then waits for any reply or close. Once connected, an error
+ * or a timeout still means a listener exists, so those exit "live".
+ */
+const UNIX_PROBE_SCRIPT = [
+  "const s=require('net').connect(process.argv[1]);",
+  'let up=false;',
+  `const done=c=>process.exit(c);`,
+  `s.setTimeout(Number(process.argv[2]),()=>done(up?${PROBE_EXIT_LIVE}:1));`,
+  "s.on('connect',()=>{up=true;s.write('{\"cmd\":\"ping\"}\\n');});",
+  `s.on('data',()=>done(${PROBE_EXIT_LIVE}));`,
+  `s.on('end',()=>done(${PROBE_EXIT_LIVE}));`,
+  `s.on('close',()=>done(up?${PROBE_EXIT_LIVE}:1));`,
+  `s.on('error',e=>done(up?${PROBE_EXIT_LIVE}:(e.code==='ECONNREFUSED'||e.code==='ENOENT')?${PROBE_EXIT_STALE}:1));`,
+].join('');
+
+/**
+ * Probe a Unix daemon socket with node's own net module, in a child node
+ * process (isDaemonReachable is synchronous, and a spin loop cannot let an
+ * in-process socket run). Replaces the old `nc -U` probe: no `nc` on Windows
+ * or a minimal Linux made a LIVE socket look dead.
+ *
+ * Argv spawn, shell:false (GAP4-02 posture). Never throws: every failure to
+ * run the probe is 'unknown'. The kill timer allows node start-up on top of
+ * the in-script timeout.
+ */
+export function probeUnixSocket(socketPath: string, timeoutMs: number): SocketProbe {
   try {
-    const r = spawnSync('nc', ['-U', socketPath], {
-      input: '{"cmd":"ping"}\n',
-      encoding: 'utf-8',
-      timeout: timeoutMs,
+    const r = spawnSync(process.execPath, ['-e', UNIX_PROBE_SCRIPT, socketPath, String(timeoutMs)], {
+      timeout: timeoutMs + 750,
       shell: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'ignore',
+      windowsHide: true,
     });
-    return !r.error && !r.signal && r.status === 0;
+    if (r.error || r.signal) return 'unknown';
+    if (r.status === PROBE_EXIT_LIVE) return 'live';
+    if (r.status === PROBE_EXIT_STALE) return 'stale';
+    return 'unknown';
   } catch {
-    return false;
+    return 'unknown';
   }
 }
 
@@ -355,20 +394,25 @@ function isDaemonReachable(projectDir: string): boolean {
       // Ping failed but process exists -> daemon is starting or busy;
       // still return true to prevent spawning duplicates. (Zombie detection
       // must NOT rely on this function for exactly that reason — it uses
-      // the strict isListenerAlive above.)
-      ncPing(connInfo.path!, 1000);
+      // the strict isListenerAlive above.) No probe here: its result was
+      // always discarded, and it cost a spawn on every hook call.
       return true;
     }
 
-    // No daemon process running - try ping to verify socket isn't stale
-    if (ncPing(connInfo.path!, 500)) {
+    // No daemon process running - probe the socket to see whether it is stale
+    const probe = probeUnixSocket(connInfo.path!, 500);
+    if (probe === 'live') {
       return true;
     }
-    // Connection failed AND no daemon process - socket is stale, safe to remove
-    try {
-      unlinkSync(connInfo.path!);
-    } catch {
-      // Ignore unlink errors
+    // Only ECONNREFUSED / ENOENT (nothing listens) AND no daemon process means
+    // the socket is stale and safe to remove. A timeout or other error is
+    // 'unknown': keep the socket, a busy daemon may own it.
+    if (probe === 'stale') {
+      try {
+        unlinkSync(connInfo.path!);
+      } catch {
+        // Ignore unlink errors
+      }
     }
     return false;
   }

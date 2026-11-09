@@ -22,6 +22,39 @@ function isRatchet(command) {
   return !!command && RATCHETS.some((re) => re.test(command));
 }
 
+// src/shared/guard-log.ts
+var SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
+var MASKS = [
+  // A URL inside quotes may hold a password with a space: the closing quote ends it, not the space.
+  [/(["'])([a-z][\w+.-]*:\/\/)[^\s/@:"']+:(?:(?!\1)[^/@])+@/gi, "$1$2***@"],
+  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***@"],
+  // `curl -u user:pass`, `curl --user user:pass`. A numeric user (`docker run -u 1000:1000`) is a uid:gid.
+  // Quoting decides where the credential ends: `-u "user:two words"`, `-u user:"two words"`.
+  [/(\s(?:-u[\s=]*|--user[\s=]+)")(?!\d+:)([^":]+):[^"]*"/g, '$1$2:***"'],
+  [/(\s(?:-u[\s=]*|--user[\s=]+)')(?!\d+:)([^':]+):[^']*'/g, "$1$2:***'"],
+  [/(\s(?:-u[\s=]*|--user[\s=]+))(?!\d+:)([^\s:"']+):(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1$2:***"],
+  // `mysql -uroot -pS3cret`: the password is glued to -p. Case matters: -P is the port.
+  [/(\b(?:mysql|mariadb)\w*\b[^|;&\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1***"],
+  // `sshpass -p pw ssh host`
+  [/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "$1***"],
+  [/\b(Bearer|Basic|Token)\s+[^\s'"]+/gi, "$1 ***"],
+  [new RegExp(`(${SECRET_NAME})(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s'"]+)`, "gi"), "$1$2***"],
+  [new RegExp(`(--?${SECRET_NAME})(\\s+)("[^"]*"|'[^']*'|[^\\s'"-][^\\s'"]*)`, "gi"), "$1$2***"],
+  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "***"],
+  [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***"],
+  [/\bgithub_pat_\w+/g, "***"],
+  [/\bxox[abprs]-[\w-]+/g, "***"],
+  [/\bnpm_[A-Za-z0-9]{20,}/g, "***"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "***"],
+  [/\bAIza[\w-]{30,}/g, "***"],
+  [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "***"],
+  // Any other long opaque run that mixes letters and digits (hex, base64url keys).
+  [/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}/g, "***"]
+];
+function maskSecrets(text) {
+  return MASKS.reduce((acc, [re, to]) => acc.replace(re, to), text);
+}
+
 // src/shared/mask-quotes.ts
 var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
 var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
@@ -128,7 +161,7 @@ async function main() {
     try {
       fs.writeFileSync(
         stateFile,
-        JSON.stringify({ lastTestRun: Date.now(), command, ok: okOf(data) })
+        JSON.stringify({ lastTestRun: Date.now(), command: maskSecrets(command), ok: okOf(data) })
       );
     } catch {
     }

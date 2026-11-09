@@ -36,7 +36,7 @@ import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join, extname, relative } from 'node:path';
 import { homedir } from 'node:os';
 // The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
-process.env.CCV3_GUARD_DECISIONS_LOG ??= (process.env.TEMP || process.env.TMPDIR || '/tmp') + '/ccv3-probe-guard-decisions.jsonl';
+process.env.CCV3_GUARD_DECISIONS_LOG ||= (process.env.TEMP || process.env.TMPDIR || '/tmp') + `/ccv3-probe-guard-decisions-${process.pid}.jsonl`; // one file per run, so two runs never mix rows
 
 const PROJECT = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const HOOK = join(homedir(), '.claude', 'hooks', 'dist', 'tldr-read-enforcer.mjs');

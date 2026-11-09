@@ -114,20 +114,35 @@ function isListenerAlive(projectDir) {
     }
   }
   if (!existsSync(connInfo.path)) return false;
-  return ncPing(connInfo.path, 1e3);
+  return probeUnixSocket(connInfo.path, 1e3) === "live";
 }
-function ncPing(socketPath, timeoutMs) {
+var PROBE_EXIT_LIVE = 0;
+var PROBE_EXIT_STALE = 10;
+var UNIX_PROBE_SCRIPT = [
+  "const s=require('net').connect(process.argv[1]);",
+  "let up=false;",
+  `const done=c=>process.exit(c);`,
+  `s.setTimeout(Number(process.argv[2]),()=>done(up?${PROBE_EXIT_LIVE}:1));`,
+  `s.on('connect',()=>{up=true;s.write('{"cmd":"ping"}\\n');});`,
+  `s.on('data',()=>done(${PROBE_EXIT_LIVE}));`,
+  `s.on('end',()=>done(${PROBE_EXIT_LIVE}));`,
+  `s.on('close',()=>done(up?${PROBE_EXIT_LIVE}:1));`,
+  `s.on('error',e=>done(up?${PROBE_EXIT_LIVE}:(e.code==='ECONNREFUSED'||e.code==='ENOENT')?${PROBE_EXIT_STALE}:1));`
+].join("");
+function probeUnixSocket(socketPath, timeoutMs) {
   try {
-    const r = spawnSync("nc", ["-U", socketPath], {
-      input: '{"cmd":"ping"}\n',
-      encoding: "utf-8",
-      timeout: timeoutMs,
+    const r = spawnSync(process.execPath, ["-e", UNIX_PROBE_SCRIPT, socketPath, String(timeoutMs)], {
+      timeout: timeoutMs + 750,
       shell: false,
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: "ignore",
+      windowsHide: true
     });
-    return !r.error && !r.signal && r.status === 0;
+    if (r.error || r.signal) return "unknown";
+    if (r.status === PROBE_EXIT_LIVE) return "live";
+    if (r.status === PROBE_EXIT_STALE) return "stale";
+    return "unknown";
   } catch {
-    return false;
+    return "unknown";
   }
 }
 function isDaemonReachable(projectDir) {
@@ -139,15 +154,17 @@ function isDaemonReachable(projectDir) {
       return false;
     }
     if (isDaemonProcessRunning(projectDir)) {
-      ncPing(connInfo.path, 1e3);
       return true;
     }
-    if (ncPing(connInfo.path, 500)) {
+    const probe = probeUnixSocket(connInfo.path, 500);
+    if (probe === "live") {
       return true;
     }
-    try {
-      unlinkSync(connInfo.path);
-    } catch {
+    if (probe === "stale") {
+      try {
+        unlinkSync(connInfo.path);
+      } catch {
+      }
     }
     return false;
   }
