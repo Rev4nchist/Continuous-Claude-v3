@@ -604,7 +604,7 @@ export function reminderSyncCheck(o) {
 }
 
 const README_REL = ['docs', 'harness-strategy', 'README.md'];
-const README_TASK_TOKEN = /\bCCv3-[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/gi;
+const README_TASK_TOKEN = /\bCCv3-[A-Za-z]\w*(?:-\w+)*/gi;
 
 /** Each CCv3-* token in a text, with the line numbers where it appears: Map(token, [line, ...]). */
 function taskTokens(text) {

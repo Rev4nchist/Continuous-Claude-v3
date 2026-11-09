@@ -792,6 +792,8 @@ test('a task name that is only a prefix of a real task is still a FAIL (positive
   assert.match(c.detail, /CCv3-Fake\b/);
   put(readmeOf(fx), `The ${TASK_NAME}-2 task runs daily.\n`);
   assert.equal(run(fx).checks[READMEcheck].status, 'FAIL');
+  put(readmeOf(fx), `The ${TASK_NAME}_v2 task runs daily.\n`);
+  assert.equal(run(fx).checks[READMEcheck].status, 'FAIL', 'an underscore suffix is part of the name');
 });
 
 test('words that only look like task names are no false hit: CCv3-1, bare CCv3, Lane-Snapshot, a retired name without the prefix', () => {
