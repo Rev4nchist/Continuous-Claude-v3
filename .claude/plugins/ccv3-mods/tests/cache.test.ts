@@ -25,6 +25,8 @@ import type { CacheState } from '../types'
 // K8 a miss is given the wrong cause, or the miss list grows without bound
 /// K9 a cold send after a compaction or an advisor loop is priced at the wrong prompt size or rate
 // K10 uncached input is counted as cached; an uncached request or a long reply stretches the lifetime
+// K11 savedUsd or a miss price uses a tier rate or the wrong write TTL (exact model id; the usage's own 5m/1h split beats the account flag)
+// K12 a request on an unknown model id adds a silent $0 to savedUsd/the miss: nothing in /cache says it is unpriced
 
 const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200, scroll: { offset: 0, bodyRows: 10 }, view: {} }
 
@@ -537,6 +539,40 @@ describe('cache model', () => {
       Math.round((addRequest(warm(), request({ read: 0, write: 100_000, at: 120_000, ttlMin: 30, oneHour, input: 0 })).misses.at(-1)?.usd ?? 0) * 100)
     expect(cents(true)).toBe(80)
     expect(cents(false)).toBe(50)
+  })
+
+  test('K11 savedUsd and a miss are priced at the exact model id, the 1-hour flag or the usage split', () => {
+    const sonnet = (over: Over, usage: Record<string, unknown> = {}): CacheRequest => {
+      const req = request({ ...over, model: 'claude-sonnet-5-5', input: 0 })
+      return { ...req, usage: { ...req.usage, ...usage } }
+    }
+    const M = 1_000_000
+    const near = (a: number | null | undefined, b: number) => a !== null && a !== undefined && Math.abs(a - b) < 1e-9
+    // Sonnet 5.5: input $2, cache hit $0.10 (not the 0.20 of the old tier table), 5m write $2.50, 1h write $4.
+    expect(near(addRequest(EMPTY_CACHE, sonnet({ read: M, write: 0 })).savedUsd, 1.9)).toBe(true)
+    expect(near(addRequest(EMPTY_CACHE, sonnet({ read: 0, write: M, oneHour: true })).savedUsd, -2)).toBe(true)
+    expect(near(addRequest(EMPTY_CACHE, sonnet({ read: 0, write: M, oneHour: false })).savedUsd, -0.5)).toBe(true)
+    // The usage's own split wins over the account flag: all 5m under an hour-long account.
+    const split = { cache_creation: { ephemeral_5m_input_tokens: M, ephemeral_1h_input_tokens: 0 } }
+    expect(near(addRequest(EMPTY_CACHE, sonnet({ read: 0, write: M, oneHour: true }, split)).savedUsd, -0.5)).toBe(true)
+    // A miss on the first request rewrites 1M at the 1-hour rate of the account.
+    expect(near(addRequest(EMPTY_CACHE, sonnet({ read: 0, write: M, oneHour: true })).misses.at(-1)?.usd, 4)).toBe(true)
+    expect(near(addRequest(EMPTY_CACHE, sonnet({ read: 0, write: M, oneHour: false })).misses.at(-1)?.usd, 2.5)).toBe(true)
+  })
+
+  test('K12 a request on an unknown model id is flagged as unpriced in /cache, and a priced one leaves no flag', () => {
+    const priced = addRequest(EMPTY_CACHE, request({ read: 0, write: 100_000, at: 60_000 }))
+    expect('hasUnknownModelCost' in priced).toBe(false)
+    expect(cacheReport(priced, 120_000)).not.toContain('unpriced')
+    const unknown = addRequest(priced, request({ read: 100_000, write: 0, at: 120_000, model: 'claude-future-9' }))
+    expect(unknown.hasUnknownModelCost).toBe(true)
+    // The dollars stay what the priced requests made them: the unknown one adds nothing.
+    expect(unknown.savedUsd).toBe(priced.savedUsd)
+    expect(cacheReport(unknown, 120_000)).toContain('unpriced')
+    // The flag sticks for the session: a later priced request keeps it.
+    expect(addRequest(unknown, request({ read: 100_000, write: 0, at: 180_000 })).hasUnknownModelCost).toBe(true)
+    // A <synthetic> placeholder is a real $0, not an unknown id.
+    expect('hasUnknownModelCost' in addRequest(EMPTY_CACHE, request({ read: 0, write: 0, at: 60_000, model: '<synthetic>' }))).toBe(false)
   })
 
   test('K2 the label, the low-time tone and the report read the same state', () => {

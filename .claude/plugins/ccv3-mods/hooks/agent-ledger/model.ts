@@ -4,7 +4,7 @@ import type { AgentRun } from '../../types'
 import { elapsed } from '../agentic-os/model'
 import { fit } from '../agentic-os/pane-model'
 import type { PaneRow, Span, Tone } from '../agentic-os/pane-model'
-import { estimate, fmtTokens, fmtUsd } from '../shared/price'
+import { advisorTokens, fmtTokens, fmtUsd, stepCost, tokenCount } from '../shared/price'
 import type { Usage } from '../shared/price'
 import { driftOf, tierBadge, tierOf } from '../shared/tiers'
 
@@ -35,14 +35,30 @@ export const newRun = (
   drift: model === null ? null : driftOf(spec, { model }),
 })
 
-const usageTokens = (usage: Usage): number =>
-  usage.input_tokens + usage.output_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+// A count that is negative, NaN or infinite adds nothing; a part of the usage that throws on read counts 0.
+const safe = (read: () => number): number => {
+  try {
+    return read()
+  } catch {
+    return 0
+  }
+}
 
-/** One model request of the run: its model, effort and usage (null when the request counted nothing). */
+// The four top-level counts, plus the advisor iterations: the tokens that the run's dollars (stepCost) are made of.
+const usageTokens = (usage: Usage): number =>
+  safe(() => tokenCount(usage.input_tokens) + tokenCount(usage.output_tokens) + tokenCount(usage.cache_read_input_tokens) + tokenCount(usage.cache_creation_input_tokens)) +
+  safe(() => advisorTokens(usage))
+
+/**
+ * One model request of the run: its model, effort and usage (null when the request counted nothing).
+ * The cost prices the whole usage (5m/1h writes, web search, speed, and each advisor iteration at its own model).
+ * The tokens add the advisor iterations to the four top-level counts, so a row shows one basis for both.
+ * A model with no price adds $0 and marks the run `hasUnknownModelCost`: that key is set only then, so a saved run keeps its shape.
+ */
 export const addStep = (run: AgentRun, step: { model: string; effort: string | null; usage: (Usage & { model?: string }) | null }): AgentRun => {
   const model = step.usage?.model ?? step.model
   const effort = step.effort ?? run.effort
-  const cost = step.usage === null ? 0 : (estimate(step.usage, model) ?? 0)
+  const { usd: cost, unknown } = step.usage === null ? { usd: 0, unknown: false } : stepCost(step.usage, model)
   return {
     ...run,
     model,
@@ -52,6 +68,7 @@ export const addStep = (run: AgentRun, step: { model: string; effort: string | n
     endedAt: null,
     tokens: run.tokens + (step.usage === null ? 0 : usageTokens(step.usage)),
     costUsd: run.costUsd + cost,
+    ...(run.hasUnknownModelCost === true || unknown ? { hasUnknownModelCost: true } : {}),
     // The first drift sticks: one fallback or Haiku request is worth seeing even if later ones are on spec.
     drift: run.drift ?? driftOf(run.spec, { model, ...(effort === null ? {} : { effort }) }),
   }
@@ -76,7 +93,12 @@ export const capRuns = (runs: readonly AgentRun[]): AgentRun[] => {
   return runs.filter(run => !drop.has(run.id))
 }
 
-export type LedgerSummary = { running: number; usd: number; tokens: number; opusShare: number | null }
+/** `hasUnknownModelCost`: a run used a model with no price, so `usd` leaves it out. */
+export type LedgerSummary = { running: number; usd: number; tokens: number; opusShare: number | null; hasUnknownModelCost: boolean }
+
+/** "≈ $1.20", plus "unpriced" when a model had no price; a total that is only unpriced reads "unpriced", never "$0.00". */
+const usdText = (usd: number, unpriced: boolean, gap = ' '): string =>
+  !unpriced ? `≈${gap}${fmtUsd(usd)}` : usd > 0 ? `≈${gap}${fmtUsd(usd)} + unpriced` : 'unpriced'
 
 export const summarize = (runs: readonly AgentRun[]): LedgerSummary => {
   const usd = runs.reduce((n, run) => n + run.costUsd, 0)
@@ -86,6 +108,7 @@ export const summarize = (runs: readonly AgentRun[]): LedgerSummary => {
     usd,
     tokens: runs.reduce((n, run) => n + run.tokens, 0),
     opusShare: usd > 0 ? opus / usd : null,
+    hasUnknownModelCost: runs.some(run => run.hasUnknownModelCost === true),
   }
 }
 
@@ -95,7 +118,7 @@ export const ledgerBandSpans = (runs: readonly AgentRun[]): Span[] | null => {
   const sum = summarize(runs)
   const drifted = runs.some(run => run.drift !== null)
   const lead = sum.running > 0 ? `◉ ${sum.running} running` : `◉ ${runs.length} agents`
-  return [{ text: `${lead} · ≈${fmtUsd(sum.usd)}${drifted ? ' !' : ''}`, tone: drifted ? 'bad' : 'dim' }]
+  return [{ text: `${lead} · ${usdText(sum.usd, sum.hasUnknownModelCost, '')}${drifted ? ' !' : ''}`, tone: drifted ? 'bad' : 'dim' }]
 }
 
 const sp = (text: string, tone: Tone): Span => ({ text, tone })
@@ -112,7 +135,7 @@ const runRows = (run: AgentRun, nowMs: number): PaneRow[] => {
     run.status === 'running' ? sp('● ', 'active') : run.status === 'failed' ? sp('✗ ', 'bad') : sp('✓ ', 'done')
   const badge = run.model === null ? sp('…', 'dim') : sp(tierBadge(run.model, run.effort ?? undefined), run.drift ? 'bad' : tierTone(run.model))
   const time = elapsed((run.endedAt ?? nowMs) - run.startedAt)
-  const cost = run.status === 'running' ? 'settles at finish' : `≈ ${fmtUsd(run.costUsd)}`
+  const cost = run.status === 'running' ? 'settles at finish' : usdText(run.costUsd, run.hasUnknownModelCost === true)
   const rows: PaneRow[] = [
     { key: `run-${run.id}`, left: [mark, sp(run.type, 'head'), sp(`  ${run.description}`, 'dim')], right: [badge] },
     { key: `run-${run.id}-meta`, left: [sp(`  ${time} · ${fmtTokens(run.tokens)} tok`, 'dim')], right: [sp(cost, run.status === 'running' ? 'dim' : 'todo')] },
@@ -125,7 +148,7 @@ const runRows = (run: AgentRun, nowMs: number): PaneRow[] => {
 export const ledgerRows = (runs: readonly AgentRun[], nowMs: number, columns: number, rows: number, offset = 0): PaneRow[] => {
   const sum = summarize(runs)
   const head: PaneRow[] = [
-    { key: 'title', left: [sp('Agents', 'title')], right: [sp(`≈ ${fmtUsd(sum.usd)} · ${fmtTokens(sum.tokens)} tok`, 'dim')] },
+    { key: 'title', left: [sp('Agents', 'title')], right: [sp(`${usdText(sum.usd, sum.hasUnknownModelCost)} · ${fmtTokens(sum.tokens)} tok`, 'dim')] },
   ]
   if (sum.opusShare !== null) {
     const pct = Math.round(sum.opusShare * 100)

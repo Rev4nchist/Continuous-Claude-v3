@@ -175,13 +175,17 @@ export type CacheState = {
   /** Newest last, capped; `missCount` counts every one. */
   misses: CacheMiss[]
   missCount: number
+  /** Set (never cleared until the state resets) when a request ran on a model id with no price: `savedUsd` and `CacheMiss.usd` leave it out. Absent in a state saved before this. */
+  hasUnknownModelCost?: boolean
 }
 
 /**
  * One subagent run as the Agent Ledger shows it. Tokens and cost add up per model request
  * (turn.step); `costUsd` is an estimate from hooks/shared/price.ts (exact model id, 5m/1h writes, web search), never the bill.
- * It prices each step's top-level usage. A run's advisor iterations are not in it (price.ts `advisorCost` prices them; PR C wires them in).
- * Runs saved before this table keep the `costUsd` they had: tier rates, every write at 1.25x.
+ * It prices each step's whole usage (price.ts `stepCost`): top-level tokens, the 5m/1h split, web searches, and each advisor iteration
+ * (`usage.iterations`) at its own model. Runs saved before this table keep the `costUsd` they had: tier rates, every write at 1.25x. Old and new dollars add up in one run.
+ * `tokens` add the advisor iterations to the four top-level counts, so tokens and dollars share one basis.
+ * Live limit, not proven: the engine's `turn.step` usage type names four token fields. A live run prices an advisor or a 5m/1h split only when the engine sends `iterations` or `cache_creation` there (README, agent-ledger row).
  * `drift` says how the run broke its agent's .md (`model:`, `effort:`), or that it ran on Haiku.
  */
 export type AgentRun = {
@@ -200,6 +204,8 @@ export type AgentRun = {
   status: 'running' | 'done' | 'failed'
   tokens: number
   costUsd: number
+  /** True when a step used a model id with no price: `costUsd` leaves it out ($0, not a real $0). Absent otherwise, and in a run saved before this. */
+  hasUnknownModelCost?: boolean
   drift: string | null
 }
 
