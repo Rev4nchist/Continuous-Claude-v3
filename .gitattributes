@@ -42,6 +42,11 @@
 # would otherwise differ in all 149 sources (dist-freshness.ts also strips CR).
 /.claude/hooks/src/**/*.ts text eol=lf
 
+# The build-inputs manifest stays LF. write-build-inputs.mjs always writes LF. Without this rule,
+# core.autocrlf=true checks the file out as CRLF, the next build rewrites LF, and git status shows
+# it modified (the index stat size no longer matches) until someone runs git add.
+/.claude/hooks/dist/.build-inputs.json text eol=lf
+
 # The price table and its generated twin stay LF. refresh-prices.mjs writes LF; the nightly --check compares
 # the twin to that text, so a CRLF checkout (core.autocrlf=true) would show false drift.
 /.claude/plugins/ccv3-mods/hooks/shared/prices.* text eol=lf
