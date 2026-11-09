@@ -103,11 +103,27 @@ export type StateSnapshot = {
     hasUnknownModelCost: boolean;
     /** Advisor floor from the ledger (written only above 0). Under 0, a wrong type or absent reads 0. */
     advised: number;
+    /** The effort the run asked for (a string level). Null when absent or numeric (a thinking budget). */
+    effort: string | null;
+    /** Why the run breaks its agent spec (ledger `driftOf`), or null: on spec, or the spec names nothing. */
+    drift: string | null;
+    /** True when the run's `spec` has a non-empty `model` or `effort` string: drift could be checked. */
+    hasSpec: boolean;
     startedAt: number | null;
     endedAt: number | null;
   }[];
   /** `input` is kept beside the design's fields: the hit rate needs it (hud/cache.ts hitRate). */
-  cache: { requests: number; input: number; read: number; write: number; savedUsd: number } | null;
+  cache: {
+    requests: number;
+    input: number;
+    read: number;
+    write: number;
+    savedUsd: number;
+    /** Epoch ms of the last cache use. The newest one picks the file that reports the quota. */
+    lastUsedAt: number | null;
+    /** True only when the file wrote `true`: the session was resumed or forked, so `hud.costUsd` counts since resume. */
+    resumed: boolean;
+  } | null;
   /** The HUD's session cost and rate-limit windows (writer: `hud` in writeSnapshot). Null when the file has none. */
   hud: { costUsd: number | null; limits: { kind: string; percentUsed: number }[] } | null;
 };
@@ -307,6 +323,12 @@ function parseAgents(value: unknown): StateSnapshot['agents'] {
   return out;
 }
 
+/** A run's `spec` names a model or an effort (a non-empty string). An empty `{}` spec checks nothing. */
+function hasSpec(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return str(value.model, CLIP.kind) !== null || str(value.effort, CLIP.kind) !== null;
+}
+
 function parseAgentRuns(value: unknown): StateSnapshot['agentRuns'] {
   const out: StateSnapshot['agentRuns'] = [];
   list(value, 100).forEach((item, index) => {
@@ -320,6 +342,9 @@ function parseAgentRuns(value: unknown): StateSnapshot['agentRuns'] {
       costUsd: num(item.costUsd) ?? 0,
       hasUnknownModelCost: item.hasUnknownModelCost === true,
       advised: Math.max(0, num(item.advised) ?? 0),
+      effort: str(item.effort, CLIP.kind),
+      drift: str(item.drift, CLIP.kind),
+      hasSpec: hasSpec(item.spec),
       startedAt: num(item.startedAt),
       endedAt: num(item.endedAt),
     });
@@ -335,6 +360,8 @@ function parseCache(value: unknown): StateSnapshot['cache'] {
     read: num(value.read) ?? 0,
     write: num(value.write) ?? 0,
     savedUsd: num(value.savedUsd) ?? 0,
+    lastUsedAt: num(value.lastUsedAt),
+    resumed: value.resumed === true,
   };
 }
 

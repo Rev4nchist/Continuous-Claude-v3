@@ -1,6 +1,16 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 
-import { ask, clearStateDir, findQuietSessionId, makeBrief, writeState, type FixturePlanStep } from './state-fixture';
+import {
+  agentRun,
+  ask,
+  cacheState,
+  clearStateDir,
+  findQuietSessionId,
+  makeBrief,
+  SESSION_ID_FORMAT,
+  writeState,
+  type FixturePlanStep,
+} from './state-fixture';
 
 /**
  * End-to-end check for the Fleet page LAYOUT (build map 5.2: L1-L5, P1 and the tile order).
@@ -63,6 +73,42 @@ function writeFixture(id: string): void {
   });
 }
 
+/**
+ * The longest T3 and T4 text: engine cost, a resumed session, a second live session with no hud
+ * ("no data"), subagent runs with an advised floor and an unpriced run, quota 100, a haiku break.
+ * Returns whether a second live UUID-shaped session was there to carry the "no data" line.
+ */
+async function writeCostFixture(request: APIRequestContext): Promise<boolean> {
+  const response = await request.get('/api/mission-control');
+  expect(response.status(), 'GET /api/mission-control must return 200').toBe(200);
+  const snapshot = (await response.json()) as Snapshot;
+  const ids = snapshot.active.sessions
+    .filter((s) => s.liveSecondsAgo < LIVE_UNDER_SECONDS && SESSION_ID_FORMAT.test(s.id))
+    .map((s) => s.id);
+  expect(ids.length, 'Precondition: the database needs a live session with a UUID-shaped id.').toBeGreaterThanOrEqual(1);
+  writeState(ids[0], {
+    chip: 'waiting-on-dave',
+    hud: { costUsd: 1234.5678, limits: [{ kind: 'seven_day', percentUsed: 100 }] },
+    cache: cacheState({ resumed: true }),
+    agentRuns: [
+      agentRun('r1', { costUsd: 987.65, advised: 3, effort: 'medium' }),
+      agentRun('r2', { hasUnknownModelCost: true, model: 'claude-haiku-4-5', drift: 'Haiku is banned' }),
+    ],
+  });
+  if (ids.length >= 2) writeState(ids[1], {});
+  return ids.length >= 2;
+}
+
+/** The three T3 lines are all on screen: the fixture is the worst case, so a missing line proves nothing. */
+async function expectLongestTiles(page: Page, withNoData: boolean): Promise<void> {
+  const t3 = page.getByTestId('stat-tile').nth(2);
+  await expect(t3).toContainText('at least est $1234.57 all sessions');
+  await expect(t3).toContainText('since resume');
+  await expect(t3).toContainText('of which subagents at least est $987.65 + 1 unpriced');
+  if (withNoData) await expect(t3).toContainText('1 no data');
+  else test.info().annotations.push({ type: 'note', description: 'only one live session: the "no data" line was not drawn' });
+}
+
 /** Wait until React has hydrated: the poll hook has fetched once and the age button shows. */
 async function waitForHydration(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: /updated \d+s ago/ })).toBeVisible({
@@ -118,17 +164,21 @@ test.describe('layout at every width', () => {
     expect(drawn.height).toBeLessThanOrEqual(1);
   });
 
-  test('the five stat tiles are in the mockup order', async ({ page }) => {
+  test('the six stat tiles are in the E2 order, and a phone shows the first four', async ({ page }, testInfo) => {
     await page.goto('/');
     await waitForHydration(page);
 
     const tiles = page.getByTestId('stat-tile');
-    await expect(tiles).toHaveCount(5);
+    await expect(tiles).toHaveCount(6);
+    // The DOM holds six nodes in both projects; Active lanes and Open PRs are `hidden sm:block`.
+    await expect(page.locator('[data-testid="stat-tile"]:visible')).toHaveCount(
+      testInfo.project.name === 'phone' ? 4 : 6,
+    );
     // Each tile is a label line and a value line. Compare the label line only.
     const labels = await tiles.evaluateAll((els) =>
       els.map((el) => el.firstElementChild?.textContent?.trim() ?? ''),
     );
-    expect(labels).toEqual(['Live sessions', 'Active lanes', 'Blocked', 'Open PRs', 'Needs Dave']);
+    expect(labels).toEqual(['Live', 'Needs Dave', 'Quota and spend', 'Rule breaks', 'Active lanes', 'Open PRs']);
   });
 
   test('the left column reads Projects, then Live sessions, then Unmatched sessions', async ({ page }) => {
@@ -300,6 +350,25 @@ test.describe('layout at 1440 px', () => {
     expect(card.y + 80, `the first card (top ${card.y}) shows at least 80 px inside ${DESKTOP.height}`).toBeLessThanOrEqual(DESKTOP.height);
   });
 
+  test('the longest cost tiles keep the first Live session card above the fold', async ({ page, request }) => {
+    const withNoData = await writeCostFixture(request);
+    await page.goto('/');
+    await waitForHydration(page);
+    await expectLongestTiles(page, withNoData);
+    const tiles = await box(page.getByTestId('stat-tiles'), 'the stat tiles');
+    const header = await box(h2(page, /^Live sessions/), 'the Live sessions header');
+    const card = await box(page.getByTestId('session-card').first(), 'the first session card');
+    expect(tiles.y + tiles.height, 'the tile row ends above the Live sessions header').toBeLessThanOrEqual(header.y);
+    expect(header.y, 'the Live sessions header is inside the first screen').toBeLessThan(DESKTOP.height);
+    expect(card.y + 80, `the first card (top ${card.y}) shows at least 80 px inside ${DESKTOP.height}`).toBeLessThanOrEqual(DESKTOP.height);
+    expect(await horizontalOverflow(page), 'overview is wider than the screen').toBeLessThanOrEqual(0);
+    // No tile clips its own text.
+    const clipped = await page
+      .getByTestId('stat-tile')
+      .evaluateAll((els) => els.filter((el) => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1).length);
+    expect(clipped, 'tiles whose content is cut off').toBe(0);
+  });
+
   test('a project card is name, counts and status, with the rest behind a closed disclosure', async ({ page }) => {
     await page.goto('/');
     await waitForHydration(page);
@@ -372,6 +441,21 @@ test.describe('layout at 390 px', () => {
     await page.goto('/');
     await waitForHydration(page);
     expect(await horizontalOverflow(page), 'overview is wider than the screen').toBeLessThanOrEqual(0);
+  });
+
+  test('the longest cost tiles end inside the first screen and do not push the page sideways', async ({ page, request }) => {
+    const withNoData = await writeCostFixture(request);
+    await page.goto('/');
+    await waitForHydration(page);
+    await expectLongestTiles(page, withNoData);
+    const tiles = await box(page.getByTestId('stat-tiles'), 'the stat tiles');
+    const height = page.viewportSize()?.height ?? 844;
+    expect(tiles.y + tiles.height, `the tile row (bottom ${tiles.y + tiles.height}) ends inside ${height}`).toBeLessThanOrEqual(height);
+    expect(await horizontalOverflow(page), 'overview is wider than the screen').toBeLessThanOrEqual(0);
+    const clipped = await page
+      .getByTestId('stat-tile')
+      .evaluateAll((els) => els.filter((el) => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1).length);
+    expect(clipped, 'tiles whose content is cut off').toBe(0);
   });
 
   test('the Projects grid is one column', async ({ page }) => {

@@ -191,7 +191,7 @@ export function MissionControl({
 
         <ReadyForDave items={ready} onSelect={(id) => choose(id, 'overview')} />
 
-        <StatTiles tiles={tiles} />
+        <StatTiles tiles={tiles} databaseOk={database.ok} />
 
         {view === 'board' ? (
           // The hook keeps old data after an endpoint change, so the Board shows only once it arrives.
