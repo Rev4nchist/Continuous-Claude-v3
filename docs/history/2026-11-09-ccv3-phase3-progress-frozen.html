@@ -1,0 +1,482 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>CCv3 Phase 3 Progress</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: status board. Headline + one-line status, 3 unit columns (P3a/P3b/P3c) with step lists, then waits, later phases, loose ends, and a dated log. All content comes from the DATA object in the script. */
+:root{
+  --bg:#f2f4f6; --panel:#ffffff; --ink:#15202a; --muted:#57636e; --line:#d5dce3;
+  --accent:#1f6f8b; --accent-soft:#e1eef3;
+  --done:#1d7a4f; --done-soft:#e0f1e8; --active:#1f6f8b; --active-soft:#e1eef3;
+  --wait:#9a5b00; --wait-soft:#fbefd8; --held:#a1324a; --held-soft:#f8e3e8; --todo:#6b7783; --todo-soft:#eceff2;
+  --display:"Archivo","Segoe UI",system-ui,sans-serif; --body:"Public Sans","Segoe UI",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f151b; --panel:#16202a; --ink:#e5ecf1; --muted:#9aa7b3; --line:#293642;
+  --accent:#5fb3d1; --accent-soft:#15303b;
+  --done:#5fcf98; --done-soft:#123025; --active:#5fb3d1; --active-soft:#15303b;
+  --wait:#f0b45a; --wait-soft:#38290f; --held:#f08aa0; --held-soft:#3a1b23; --todo:#93a0ac; --todo-soft:#1d2833;
+  color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0f151b; --panel:#16202a; --ink:#e5ecf1; --muted:#9aa7b3; --line:#293642;
+  --accent:#5fb3d1; --accent-soft:#15303b;
+  --done:#5fcf98; --done-soft:#123025; --active:#5fb3d1; --active-soft:#15303b;
+  --wait:#f0b45a; --wait-soft:#38290f; --held:#f08aa0; --held-soft:#3a1b23; --todo:#93a0ac; --todo-soft:#1d2833;
+  color-scheme:dark;}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5}
+.wrap{max-width:1180px;margin:0 auto;padding-block:26px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:22px}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(26px,4vw,36px);line-height:1.1;margin:4px 0 0;text-wrap:balance}
+h2{font-family:var(--display);font-weight:700;font-size:18px;margin:0}
+.now{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 16px;display:grid;gap:4px}
+.now b{font-family:var(--display)}
+.meta{font-family:var(--mono);font-size:12px;color:var(--muted)}
+code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);padding:1px 5px;border-radius:4px;word-break:break-word}
+a{color:var(--accent)}
+.bar{display:flex;flex-wrap:wrap;gap:10px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 14px;display:grid;gap:1px}
+.stat b{font-family:var(--display);font-size:21px;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;color:var(--muted)}
+.units{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.unit{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:10px;align-content:start;min-width:0}
+.uhead{display:grid;gap:4px}
+.uhead .id{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.uhead h3{font-family:var(--display);font-weight:700;font-size:17px;margin:0;text-wrap:balance}
+.uhead p{margin:0;font-size:13.5px;color:var(--muted)}
+.prog{height:6px;border-radius:999px;background:var(--todo-soft);overflow:hidden}
+.prog i{display:block;height:100%;background:var(--done)}
+ol.steps{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+ol.steps li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:start;font-size:13.5px}
+.pill{font:600 10.5px var(--mono);letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:999px;white-space:nowrap;margin-top:1px}
+.done{color:var(--done);background:var(--done-soft)} .active{color:var(--active);background:var(--active-soft)}
+.wait{color:var(--wait);background:var(--wait-soft)} .held{color:var(--held);background:var(--held-soft)} .todo{color:var(--todo);background:var(--todo-soft)}
+.links{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:13px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:8px;align-content:start;min-width:0}
+.box ul{margin:0;padding-left:18px;display:grid;gap:5px;font-size:13.5px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px var(--mono);color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.tw{overflow-x:auto}
+.log{display:grid;gap:6px;font-size:13.5px}
+.log div{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px}
+.log time{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+@media (max-width:900px){.units{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">CCv3 · Alignment spine · Phase 3 (DW-80)</div>
+    <h1>CCv3 Phase 3 Progress</h1>
+  </header>
+  <div class="now" id="now"></div>
+  <div class="bar" id="stats"></div>
+  <section style="display:grid;gap:10px"><h2>Phase 3 units</h2><div class="units" id="units"></div></section>
+  <div class="grid2">
+    <div class="box"><h2>Waiting on</h2><ul id="waits"></ul></div>
+    <div class="box"><h2>Loose ends</h2><ul id="loose"></ul></div>
+  </div>
+  <div class="box"><h2>Phases after 3</h2><div class="tw"><table id="later"><thead><tr><th>Phase</th><th>Work</th><th>Starts when</th><th>State</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="box"><h2>Log</h2><div class="log" id="log"></div></div>
+  <p class="meta" id="foot"></p>
+</div>
+
+<script>
+const DATA = {
+  updated: '2026-10-30 20:4x CT',
+  now: '<b>/pathway now works from any session: #229 landed 18:34 (<code>b3336666</code>). #230 (Agentic OS pane A, other session) landed 19:28. main = sync cursor = <code>7b65016f</code>.</b> The checkpoint finds the worktree that has the PR branch checked out and runs the engine with that worktree as its cwd; the engine code stays the session root\'s copy. #229 was the first landing through gate C (the land-pr re-check passed) and its CodeRabbit round used an included slot ($0). Paid CodeRabbit today stays $9.25 in 4 rounds. <b>Now running:</b> a read-only audit workflow (6 Sonnet readers + Opus rank + Opus critic) on reliability and visibility across the review pipeline, hooks, mods, memory, sync and logs, to give you review, test and eval options before new work. <br><span class="meta">Earlier:</span> <b>Review economy done for now: PR D #221, its follow-ups #225 and the merge gate #227 all landed today. main = sync cursor = <code>ac03ec78</code>.</b> Sessions may now pay for a CodeRabbit round alone inside your caps ($5 per round, $15 per day, ledger <code>~/.claude/state/coderabbit-paid.jsonl</code>) and escalate to you past them; <code>cr-paid.mjs</code> made 2 such calls on #227 by itself. READY now needs each outside-diff finding named in the PR body, and <code>land-pr</code> re-checks the PR right before it merges. Paid CodeRabbit today: $9.25 in 4 rounds. Research proposal on the PR-Agent hybrid setup: A and D3 adopted, D-2 pilot on hold. <br><span class="meta">Earlier:</span> <b>PR D (CodeRabbit spend policy) is open as draft #221 at <code>75d6d032</code>, pre-PR gate PASS. It waits for your /pathway press from a session started in the <code>pr-d</code> worktree.</b> #217 (/pathway rename and lock fixes) landed 20:40 (<code>f4370d8b</code>, synced). A re-review study of 29 PRs found that later CodeRabbit rounds caught 12 real Majors in a week, 11 in guard, gate, SQL and scrubber code; you approved 5 policy changes, now in PR D: CLI review of fix commits (<code>cr-fix.mjs</code>), a wider risk list, the carry counts only PR files, at most 2 cloud rounds outside the risk list, read every finding before landing. CodeRabbit billing: On demand, $50 monthly cap, $0.25 per file; $25 CLI credit. <br><span class="meta">Earlier:</span> <b>PR A landed: #203, merge <code>3626f45a</code>, synced. The checkpoint engine, the review:none pathway and READY support are on main. PR B (confirm, apply, gate rules, warn mode) RED tests are being written.</b> <br><span class="meta">Earlier:</span> <b>PR Checkpoint PR A is GREEN and passes the pre-PR gate: 342 of 342 tests at <code>0237674f</code>, stamp written 18:04, CodeRabbit CLI 0 findings. On your yes: PR #203 opened, the review:none label created, pr_watch on.</b> Workflow wf_719f4363-f6f: Sonnet kraken (engine, config, router, READY), Opus critic (5 medium, 4 low), Sonnet fix round (7 fixed, 1 rejected, 1 deferred). The first gate CLI run found a cut-off CLI run read as clean; fixed tests-first (<code>92a6ecb3</code>). You chose the 3 open test-contract options: narrow raise rule, fixed pclass, Dependabot gets none. <br><span class="meta">Earlier:</span> <b>Stopped for a fresh session. #197 landed (82a06d63, synced): the pre-PR gate now denies an unverifiable body, a title spoof, a foreign checkout and a mid-run edit. PR A of the PR Checkpoint is RED at 6af7afcb; GREEN is next.</b> <br><span class="meta">Earlier:</span> <b>Review flow hardened this afternoon. Landed: #196 (13:15, READY counts CodeRabbit outside-diff findings), #198 (13:46, CodeRabbit instructions phase 1), Minions #85 (13:56, Minions stops spending the shared allowance on every push).</b> #197 (pre-PR gate fixes) is open at <code>c7407707</code>: the new READY caught an outside-diff Major (a title naming another repo skipped the gate; fixed tests-first); your 4th review is running. <b>PR Checkpoint mod:</b> spec approved (all 13 decisions), spike 5 of 5 PASS, UI = side pane; PR A (engine) RED tests in progress. You decided: CCv3 stays private (Greptile needs 50+ stars; 186 commits use the Fourth email). Machine slowdown fixed by a reboot (suspect: Fortect kernel drivers). <br><span class="meta">Earlier:</span> <b>Pre-PR gate landed (09:19): PR #193, merge <code>6bc94082</code>. main = sync cursor = <code>6bc94082</code>. The PR-create hook is registered in your settings (09:27) and live.</b> A PR create now needs a passing <code>pre-pr.mjs</code> stamp for the pushed head. Hook check: a PR create with no stamp is denied; a plain command is allowed. #193 took 3 fix rounds after the GREEN rerun: CI Semgrep twice (no shell, then a literal <code>shell: false</code>), and 6 CodeRabbit findings, all fixed tests-first. Final suite 96 of 96 at <code>10514ebf</code>. You approved a 4th review, over the 1+2 budget. Now running: a workflow on further CodeRabbit instruction setup (your request). <br><span class="meta">Earlier:</span> <b>Overnight run stopped at 07:0x: Claude Code killed the last test run because the machine was low on memory.</b> You restarted it at 07:5x. <br><b>Pre-PR gate PR #193 opened 06:32.</b> <code>pre-pr.mjs</code> ran for real 7 times overnight: runs 1, 2 and 5 found gate and test bugs that test doubles could not show; runs 3, 4 and 6 ran the first real CodeRabbit CLI reviews (7, 2 and 3 findings, fixed or dismissed with reasons); run 7 passed with the CLI cap reached. The PR-create hook allows the real stamp and denies a changed body. Also landed: <b>#186</b> (22:10, Windows hook-suite fix), <b>#187</b> (22:44, CodeRabbit config: no commits, CCv3 path instructions), <b>#190</b> (00:29, keep-warm rule). Idle compaction off and the auto-compact key fixed in your settings. <br><span class="meta">Earlier:</span> <b>P4b landed (20:57): PR #185, merge <code>f2b94ada</code>. main = sync cursor = <code>f2b94ada</code>.</b> READY now fails a CCv3 PR whose body has no <code>Proof type:</code> line and RED/GREEN evidence (GREEN must name the head). tdd names the proof type and ends with prove-it-works. AC7 headless bugfix check: failing test first, RED then GREEN; gap: the tdd skill did not load (lane tdd-skill-headless-trigger). AC6 sent to Dev PM (Bridge row, To = Grok). Also landed: <b>#183</b> (20:00, Docker preflight path) and <b>#184</b> (20:09, a health-check test that deleted <code>.claude/hooks/package.json</code>). CodeRabbit is on the Team plan; you adopted the review-budget flow (A, B) and the pre-PR gate, now being built. <br><span class="meta">Earlier today:</span> <b>P4 landed (17:51): PR #182, merge <code>3bcc2072</code>. main = sync cursor = <code>3bcc2072</code>.</b> Pocock v1.3.1 and pstack 519d36aa skills are vendored byte for byte and locked. <code>/tdd</code> now follows Pocock\'s method (headless check after sync loads the new body). New user-only skills: <code>/to-spec</code>, <code>/grill-with-docs</code>, <code>/sketch-first</code>. Memory phase 3 landed earlier (#181, 13:33). Six follow-ups are on the lane board. Next: P4b (TDD as harness law) needs a card. <br><span class="meta">Earlier today:</span> <b>#174 landed (05:48): <code>symbolica-agentica</code> is no longer an opc required dependency. main = sync cursor = <code>c9af052a</code>.</b> Worktrees cleaned. uv 0.13.4 installed (your yes); opc lock check passes. <b>#175 landed</b> (2ad8f5ca; headless check reads the new rule). <b>#176 landed</b> (b65fa2c2, no bot review by your yes: CodeRabbit skips dist). main = cursor = 2ad8f5ca. <b>agentic_os schema restored</b> in local Postgres (4 migrations); lane board and coordination events work again. <b>#177</b> (setup creates agentic_os; 3 CodeRabbit fixes) lands by itself at READY. <b>Memory refilled</b>: schema repaired, 130 lessons with embeddings. <b>#178 open</b>: memory scripts read CONTINUOUS_CLAUDE_DB_URL; one schema file. Research workflow on memory design running.',
+  units: [
+    { id:'P3a · DW-80 1/3', title:'Test and scanner CI', blurb:'Repo ratchets, Trivy, Semgrep and Dependabot in GitHub Actions. Only new findings in changed files fail.',
+      links:[['PR #157','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/157'],['Card','https://app.notion.com/p/40576fd7ac828115a8acc86495e35e53']],
+      steps:[
+        ['done','Built on <code>feat/ccv3-p3a-ci</code>; 12 ratchet tests pass'],
+        ['done','Baselines: Trivy 121, Semgrep 33 (main 1db5a6c7)'],
+        ['done','CI proof: green → red seed → green revert'],
+        ['done','Guard removed from settings template'],
+        ['done','Card Ready (Code for Dev PM, your yes) + pack'],
+        ['done','Marked ready for review'],
+        ['done','Greptile round 1 (8802d29, 4/5): 3 findings, 3 fixed in <code>dbf84f7c</code>, threads resolved'],
+        ['done','Greptile round 2 (dbf84f7, 5/5): 0 findings; all 8 checks green'],
+        ['done','READY (review-status.mjs)'],
+        ['done','Landed: merge <code>7da9a5ae</code>; ~/.claude synced (cursor = main); card Done'],
+        ['done','Post-land: Windows gates 9/9 PASS; first main CI run green'],
+      ]},
+    { id:'P3b · DW-80 2/3', title:'READY v2', blurb:'READY follows routing labels; Greptile failure/cancelled read correctly; reply POSTs stop firing the PR hook; one shared skip-list.',
+      links:[['PR #162','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/162'],['Card','https://app.notion.com/p/40576fd7ac8281a58074dc3c3b6310e2']],
+      steps:[
+        ['done','Card created (Owner Claude Code)'],
+        ['done','Worktree <code>cc-wt\\p3b</code> from main dd7c9d4a'],
+        ['done','Build: 2 kraken rounds + Code fix (Greptile findings alert at once on deep PRs)'],
+        ['done','Code reruns: review-status 101, skip-sync 13, plugin 196, hook 29 — 0 fail; hook E2E'],
+        ['done','Draft PR #162 at <code>f88f0cc4</code> (main merged in; skip-sync in CI); pack; card PR open'],
+        ['done','CI on #162: 6/6 green'],
+        ['done','Grok xreview waived by you (10-26); Opus critic review instead'],
+        ['done','Opus critic: HOLD — 2 P1 (low Greptile score ignored on CodeRabbit-only PRs; 2nd bot findings silent), 8 P2'],
+        ['done','Fix round: all 10 findings fixed in <code>72e0c10b</code>; Code reruns 106 + 18 + 203 (x2) + 34, 0 fail'],
+        ['done','Opus re-review: fixes 2–10 confirmed; 1 P1 left (failed Greptile check on an unrequired PR) + 3 smaller'],
+        ['done','Round 3 by Code (<code>cc9f741f</code>): all 4 fixed; mutation-checked; 108 + 205 + 35 + 18, 0 fail; hook E2E'],
+        ['done','Flipped to ready (17:1x). Greptile round 1 (cc9f741, 4/5): 1 P1 (watcher silent on a failed check with no summary) — fixed in <code>2f482157</code>, thread resolved'],
+        ['done','READY at <code>2f48215</code>: Greptile 5/5, 0/1 threads open, 7/7 checks green, mergeable clean'],
+        ['done','Landed: merge <code>bf32cd1f</code>; ~/.claude synced (cursor = main); card Done'],
+        ['held','Greptile trigger change (Apex billing)'],
+      ]},
+    { id:'P3c · DW-80 3/3', title:'Risk classifier + router v1', blurb:'Label PRs by changed paths; route docs/normal/deep; credit alerts; ledger lines.',
+      links:[['PR #163','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/163'],['Card','https://app.notion.com/p/40576fd7ac8281ac8294e59c4d1480ac'],['Decisions','https://claude.ai/artifact/WSB7SU8A2NayzGX6Cm8Dup'],['Grok check','https://app.notion.com/p/40576fd7ac8281f29b4fc129cab980c7']],
+      steps:[
+        ['done','Spec drafted and adopted (23/23 agreed)'],
+        ['done','Card created (Owner Claude Code)'],
+        ['done','Worktree <code>cc-wt\\p3c</code> from the P3b branch'],
+        ['done','Built: router, config, workflow (pull_request_target, base code only), 63 tests'],
+        ['done','Code reruns: router 63, review-status 101, rules 23 — 0 fail; live dry run'],
+        ['done','Draft PR #163 at <code>4b1318ed</code>, stacked on #162; card PR open'],
+        ['done','#163 reopened (base deletion had closed it), retargeted to main, main merged in: <code>e7bb3573</code>, 9 files, mergeable clean'],
+        ['done','CI on e7bb3573: Semgrep ratchet caught a partial scan of review-router.mjs (regex starting with &lt;!--); fixed in <code>f53feffd</code>; CI green'],
+        ['done','Flipped to ready 17:52. Greptile round 1 (f53feff, 4/5): 2 findings (P1 a raise undid a removed label; P2 no re-route on a CodeRabbit limit notice), both fixed in <code>baddabf0</code>, threads resolved'],
+        ['done','Greptile round 2 (baddabf, 4/5): 1 P1 (my round-1 fix could skip review:deep after deep is switched on) — fixed in <code>26830085</code>, thread resolved'],
+        ['done','READY at <code>2683008</code>: Greptile 5/5, 0/3 threads open, 7/7 checks green, mergeable clean'],
+        ['done','Landed: merge <code>f1646517</code>; ~/.claude synced (cursor = main); card Done'],
+        ['done','10 router labels created on GitHub'],
+        ['done','First live router run on #164 (run 40420657475, 18:34): risk:docs only, one bot comment with class+head, ledger artifact, READY routing required none'],
+        ['done','Grok xreview waived by you (10-26)'],
+        ['done','Opus critic + security review: HOLD — forgeable router comment; person risk:high not routed; stale label after a failed raise; 9 P2'],
+        ['done','Fix round: bot-only comment state with head SHA, raises, retarget, ledger upload (<code>20e729c4</code>)'],
+        ['done','Code added the READY head check (<code>398117e6</code>); mutation-checked; router 77, status 109, plugin 203 — 0 fail'],
+        ['done','Opus security re-review: SHIP (5/5 P1s fixed, 24 reverts caught)'],
+        ['done','Follow-ups closed in <code>f03c786c</code>: 2 READY tests, person risk label above saved class, job-level concurrency, manual re-run, rule text; head now <code>21cbefa6</code>'],
+        ['done','Follow-ups built (<code>09113f17</code>, local): N5 files via compare pinned to the head with re-read on lag; labeled/unlabeled ledger rows in their own concurrency group; held PRs get review:deep once a hold ends (credit hold only on a known count). Opus critic: 2 P2 + 4 P3, all fixed.'],
+        ['done','READY with Greptile off: reads autoReview from main; [] means CodeRabbit replaces Greptile on every path. CI still gates. Tests 100 + 120, 14/14 mutations caught.'],
+        ['done','PR #165 landed: merge <code>6f402bb6</code>, synced (cursor = main). Greptile auto reviews are off for all PRs.'],
+        ['done','PR #167 landed: merge <code>c395480f</code>, synced. READY with Greptile off, held release, label ledger rows, head-pinned files are live.'],
+        ['done','PR #173 landed: merge <code>48ed6c33</code>. READY rule for Dependabot (author and every commit GitHub-signed by dependabot[bot]; head checked with headRefOid). 3 CodeRabbit rounds, 3 findings fixed, 123 tests, 5/5 mutations caught.'],
+        ['done','Dependabot landed: #166 actions (<code>8d4b48e4</code>), #170 npm (<code>5a54ec9d</code>), #171 uv (<code>d2bd465f</code>); synced, cursor = main'],
+        ['done','#174 c9af052a: remove unused <code>symbolica-agentica</code> from opc required dependencies (your yes); the optional extra stays'],
+        ['done','#175 2ad8f5ca: review-loop rule and hook text match Greptile-off and the Dependabot rule; headless check reads the new rule'],
+        ['done','#176 b65fa2c2: hooks dist rebuilt for pg 8.23.1 (no bot review, your yes); #177 2682eb04: setup wizard creates the agentic_os schema'],
+        ['wait','Grok box-spec check: post-merge follow-up (config edits)'],
+      ]},
+    { id:'MEM · memory', title:'Memory system repair and phase 1', blurb:'Memory was empty and silently broken from 2026-10-24. Repair it, refill it, then make it observable and recoverable.',
+      links:[['PR #178','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/178'],['Memory guide','https://claude.ai/artifact/2aaiN6tbppQXx52X8sNiyK']],
+      steps:[
+        ['done','Root cause: DB recreated 2026-10-24 from a stale schema file; Python scripts ignored CONTINUOUS_CLAUDE_DB_URL (fell back to port 5434); store fell back to a missing SQLite module'],
+        ['done','agentic_os schema restored (lane board + coordination events); probe 16/16'],
+        ['done','archival_memory schema repaired (4 columns, 6 indexes; your yes)'],
+        ['done','Refill: 2 harvest workflows (25 agents) over 95 Notion handoffs, 11 GitHub handoffs and 14 Notion decision pages; 130 lessons, all embedded; recall hit'],
+        ['done','Old 685 lessons checked: no surviving Postgres volume among 55 Docker volumes; not recoverable'],
+        ['done','PR #178 landed 5d38344d (2 CodeRabbit rounds, 4 findings fixed). opc/.env held a stale DB password that overrode the working URL; fixed locally (backup kept). Hook recall now finds rows (3 results); the text-only floor 0.05 still drops them: tune in phase 2'],
+        ['done','Research workflow (5 agents): Supermemory, 4 X posts, Graph Engineering PDF, codegraph. Verdict: borrow patterns, skip the service and the graph. Report in .claudedocs'],
+        ['done','Phase 1 LANDED 28b89cd5; schema_version 2026-10-27.1 applied; live health line clean. PR #179 (b3b5362c, 2690b16c): health line, failed-write log, outcome codes, schema version, daily backup + restore. Tests 64 vitest + 29 pytest; E2E live / empty / forced failure / backup-restore all pass. CodeRabbit round 1: 6 findings fixed in a6e45889 (probe bound, restore lock, private backups and log, setup failure logged). Lands at READY and then re-applies init-schema.sql (your yes)'],
+        ['done','PR #180 landed e96a7b65 (1 CodeRabbit round, 3 findings fixed in 16e5dcab). Cursor = main. Embedding daemon restarted on the new code (pid 47360, ping ok). Live: no tsquery error on "body=(...)", health line shows with no banner. Gold set v2 (48 prompts), ratchet CHECK PASS ndcg 0.579, none-precision 0.900; floors hybrid 0.03275, text 0.0225'],
+        ['done','Phase 3 LANDED: PR #181 merge <code>e0dc3ea0</code> (13:33) after GitGuardian was cleared in its dashboard; cursor = main; daemon restarted, ping ok, live recall and health line pass (135 lessons). Follow-ups on the lane board: memory-provenance-backfill (needs your yes), tool-error-extractor, memory-client-dead-src, daemon-pipe-fix. History: PR #181 (6c8a679e). Provenance on every row, one redaction module on all write paths, schema-checked extraction, reject log, offline precision harness (raw-secret rows 2 to 0, provenance 0 to 527 of 527, precision unchanged 0.075). Lands at READY with your yes. History: workflow in worktree mem-p3 (branch feat/memory-provenance on top of #180): Sonnet scouts (write paths; extraction + redact.js), Opus architect, Sonnet kraken, Opus critic + 1 fix round. Round 2 critic still FIX (SECRET_KEY and redis://:pw@ not redacted, vacuous reject-log check, 4 low); fix round 2 + Opus re-review running. Scope: provenance on every row, schema-checked extraction, rejected-candidate log, redaction on all write paths, precision before/after. No live DB writes by agents; no live migration'],
+      ]},
+    { id:'P4 · vendor skills', title:'Pocock + pstack skills, vendored', blurb:'One shared method for specs, TDD, design and hard bugs. Byte-exact copies at pinned commits; overlays state the CCv3 never-lines.',
+      links:[['PR #182','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/182'],['Card','https://app.notion.com/p/40676fd7ac82819aafc7e8b7e6ee0216'],['Blueprint','https://claude.ai/artifact/9zcdcLAdo8soTJ6SEQR8Fh']],
+      steps:[
+        ['done','Blueprint page; you accepted the approved list and 4 decisions (tdd name, debugging entry point, pins)'],
+        ['done','Card CCV3-P4-VENDOR created; worktree p4-vendor from <code>e0dc3ea0</code>'],
+        ['done','Workflow: Opus architect + plan-reviewer, Sonnet kraken (gates, bytes, wrappers), Sonnet arbiter, Opus principal-reviewer: SHIP'],
+        ['done','Code re-ran all gates: audit 0 hard failures; conflict scans 72/15/29, 0 uncovered; 182/182 tests; probe 135/135'],
+        ['done','3 commits pushed (91b08ef4, a588e139, 7543be81); PR #182 opened 16:36'],
+        ['done','CodeRabbit: 2 findings (rm flag forms, async retry example) fixed in <code>135d19e5</code>, threads resolved'],
+        ['done','READY; landed 17:51 on your yes: merge <code>3bcc2072</code>, synced'],
+        ['done','Post-sync headless check: /tdd loads the new body, /to-spec loads its wrapper'],
+        ['todo','Follow-up lane p4-followups: tdd frontmatter test, root tdd duplicates, philosophy.md example'],
+      ]},
+    { id:'P4b · DW-102', title:'TDD as harness law', blurb:'Every PR names a proof type and shows RED then GREEN evidence. READY checks it in code.',
+      links:[['PR #185','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/185'],['Card','https://app.notion.com/p/40676fd7ac828126abc3fc3fd482f298'],['AC6 handoff','https://app.notion.com/p/40776fd7ac828124a6cfc7546e3c623a']],
+      steps:[
+        ['done','Your decisions: enforce in code (AC4 in); "bump" = tdd reads prove-it-works last; docs exemption kept'],
+        ['done','Workflow wf_58a11b2b-bfb (8 agents): Opus architect + plan-reviewer, Sonnet kraken, Sonnet arbiter, Opus principal-reviewer; one fix round (template placeholders passed READY); final SHIP'],
+        ['done','Code re-ran every gate: 151/151 + 252/252 tests, 33/33 mutants killed, probe 135/135, budget unchanged'],
+        ['done','Tests-first commits: RED <code>94522d99</code> (25 of 151 fail), then gate, rules, skills; main merged in'],
+        ['done','PR #185 opened 20:19; its own Evidence block passes the new gate'],
+        ['done','CodeRabbit: hit the limit, then (after your Team upgrade) 1 finding: kraken refactor proof; fixed in <code>22921d3b</code>, thread resolved'],
+        ['done','READY; landed 20:57 on your yes: merge <code>f2b94ada</code>, synced'],
+        ['done','AC7 headless bugfix check: test first, RED then GREEN (2026-10-27-p4b-tdd-law.json)'],
+        ['wait','AC7 gap: tdd skill did not load on "Work test-first"; no proof type named (lane tdd-skill-headless-trigger)'],
+        ['done','AC6 Bridge handoff to Dev PM sent 21:06 (Gate 14, plan.md, Dev QA)'],
+      ]},
+    { id:'RB · review budget', title:'CodeRabbit budget + pre-PR gate', blurb:'Team plan: 8 reviews/hour while under 40 in 7 days, one identity. Run checks before a PR opens; about 2 reviews per PR.',
+      links:[['Rate limits','https://docs.coderabbit.ai/management/rate-limits']],
+      steps:[
+        ['done','Docs read (plans, rate limits); usage audit of PRs since 10-20; report in .claudedocs (20:39)'],
+        ['done','You adopted A (rule flow) and B (pr_watch rate-limit handling); stacking not the default'],
+        ['done','You chose the pre-PR gate: script + PR-create hook; the gate runs one CLI review per head'],
+        ['done','Built by kraken in 4 rounds against 4 Opus critic passes (FIX, FIX, FIX, SHIP)'],
+        ['done','Committed tests first (RED 9e537140), main merged in; #187 CodeRabbit config landed 22:44'],
+        ['done','Real gate runs 1-2 (02:xx): 4 false FAILs in the gate (suite timeout, load-only timer test, tsc-not-run on mods, 5 s test timeout) fixed tests-first'],
+        ['done','Run 3 (03:00): every gate PASS, first real CodeRabbit CLI review: 5 real findings, fixed (cap reset on merge, 15-min floor, STE, fail-closed hook, PROOF list)'],
+        ['done','Runs 4-6: 2nd CLI review (split-word continuation bypass, fixed), a test clock bomb found and fixed, 3rd review (raw-text fail-closed taken, 2 deny-all asks dismissed)'],
+        ['done','Run 7 (06:15): PASS, stamp d05dd187 (cap, 2 finished CLI runs); hook allows the real stamp, denies a changed body'],
+        ['done','PR #193 opened 06:32: router labels risk:infra, proof feature (ok), pr_watch on'],
+        ['done','CI Semgrep (spawn-shell-true) and 3 CodeRabbit threads fixed tests-first in local commits 250d0710 + 8491cd23'],
+        ['done','GREEN rerun 95/95 at 8491cd23; pushed; 3 threads resolved; review 2 requested'],
+        ['done','Round 2: Semgrep still red (shell: s.shell is not a literal) + 2 CodeRabbit findings (lock gone between read and stat; retry minutes did not count down); fixed tests-first in 41f3dbe4; suite 96/96; review 3'],
+        ['done','Round 3: expired wait showed as 1 minute; fixed in 10514ebf (null once passed); suite 96/96; 4th review by your yes'],
+        ['done','READY; landed 09:19 on your yes: merge <code>6bc94082</code>, synced; hook dist and rule match ~/.claude'],
+        ['done','Hook registered in settings Bash + PowerShell PreToolUse (09:27, backup kept); E2E: PR create with no stamp denied, plain command allowed'],
+        ['done','CodeRabbit instruction workflow: the repo-settings UI is ignored while .coderabbit.yaml exists; proposal in .claudedocs (12 decisions, you chose the order)'],
+        ['done','#196 landed 13:15 (bfed50d3): READY sums "Outside diff range comments (N)" over every CodeRabbit review; blocks until an Outside-diff: handled list covers them. Live: #193 read 4'],
+        ['done','#198 landed 13:46 (dbc8b123): shell:true rule, SQL privilege checklist, ps1 ACL, steering split, chat replies off, knowledge base local'],
+        ['done','Minions #85 landed 13:56 (7e314f75): chill, one review at open, [WIP] skip, no code-writing touches, local knowledge base'],
+        ['done','Autofix keys checked against the live schema: no code-writing CodeRabbit feature is on in either repo'],
+        ['done','#197 landed 17:2x (82a06d63), synced: 4 #193 outside-diff findings + 6 more fixed tests-first; live hook now denies the title spoof. 1 thread deferred to PR B (non-literal --repo value), lane gate-nonliteral-repo'],
+      ]},
+    { id:'PC · PR Checkpoint', title:'PR Checkpoint mod', blurb:'Before any bot review: a side pane shows what the PR covers, the checks, the budget and one recommended pathway (none / CodeRabbit / both / wait). One press approves.',
+      links:[['PR #203','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/203'],['PR #217','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/217'],['PR #221','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/221'],['Spec','https://github.com/Rev4nchist/Continuous-Claude-v3']],
+      steps:[
+        ['done','Design workflow (8 agents): two designs, judge, plan review, final spec v2'],
+        ['done','You approved the spec with all 13 recommended decisions'],
+        ['done','Spike 5 of 5 PASS live: ask from a tool, mod shell deny (Bash + PowerShell), result shapes, pane hotkey, store round trip'],
+        ['done','You set the UI: side pane (or the band above the prompt), never a chat prompt'],
+        ['done','PR A RED committed and pushed: 6af7afcb on feat/pr-checkpoint-engine (331 tests, 54 fail as intended)'],
+        ['done','You chose the 3 open test-contract options (narrow raise rule, fixed pclass, Dependabot gets none); main merged in (<code>501f28aa</code>)'],
+        ['done','GREEN workflow (Sonnet kraken, Opus critic, Sonnet fix round): <code>f9265782</code>, 341 of 341'],
+        ['done','Gate CLI review: 3 minor; cut-off CLI run read as clean fixed tests-first (<code>92a6ecb3</code>, T31)'],
+        ['done','Main merged again (<code>0237674f</code>); 342 of 342; pre-PR gate PASS, stamp 18:04, CLI 0 findings'],
+        ['done','You said yes: pushed, PR #203 opened at <code>0237674f</code>, review:none label created, pr_watch on'],
+        ['done','CodeRabbit review 1: 1 Major (review:none passed READY with no saved checkpoint) + 1 Minor (stale 7-day count); both fixed tests-first (<code>e0a5ac45</code>, <code>d37c6bfb</code>); 344 of 344; thread resolved'],
+        ['done','CodeRabbit review 2: 1 Minor (bad or future count date not stale), fixed tests-first (<code>a2f601a4</code>); thread resolved'],
+        ['done','Review 3: 0 findings; READY at <code>a2f601a</code>. Landed on your yes: merge <code>3626f45a</code> (18:4x), synced (cursor = main), worktree and branches removed. Lane claimed 18:41'],
+        ['done','PR B started while #203 waits (your request): worktree <code>cp-gate</code>, branch <code>feat/pr-checkpoint-gate</code> stacked on PR A. RED written: confirm/apply, gate rules, non-literal --repo deny, warn mode, parser 1+0 (22 node + 13 vitest fail). Your 4 gate decisions in the tests. RED committed <code>9c75574e</code> (node 22 fail, vitest 17 fail); main merged (<code>cdb2862f</code>)'],
+        ['done','PR B GREEN (wf_eb1bbf0d-ff7): Opus critic 15 findings (6 high), 11 fixed + 2 in part tests-first, 1 to PR C, 1 named residual. Committed <code>e0e225bb</code>: node 366/366, hooks 111/111, tsc same 206 as main, hook E2E 95/95'],
+        ['done','Gate run 1 FAIL on hooks-build only: the worktree borrowed the primary checkout\'s hook packages (pg 8.22.0; lockfile pins 8.23.1), so the build rewrote 8 unrelated hooks. On your yes: junction removed, npm ci in the worktree, rebuild clean'],
+        ['done','Gate rerun PASS at <code>e0e225bb</code>; CLI review 1 minor (foreign -R in another segment hid a CCv3 ready), fixed tests-first <code>80073c84</code> (A5b)'],
+        ['done','PR B landed: #212, merge <code>02bc64a7</code> (10-29 09:52). History: gate at <code>80073c84</code>: github-tests timed out (25 min). Cause: slow process start again (cmd 191 ms vs 12 ms after the morning reboot; git ~500 ms); pre-pr.test.mjs spawns git hundreds of times. Rerun when the machine is faster'],
+        ['done','PR C plan (.claudedocs/pr-checkpoint/prC-plan.md) and RED committed <code>c0a0e5a4</code> on <code>feat/pr-checkpoint-mod</code> (worktree cp-mod): side pane, /checkpoint, tool.call lock, pr_watch DRAFT and review:none, asks that never post without a press. Enforce stays false'],
+        ['done','PR C landed: #216, merge <code>aef1e7e2</code> (10-29 13:53): side pane, checkpoint command, tool locks, pr_watch DRAFT and review:none'],
+        ['done','#217 landed 10-29 20:40 (<code>f4370d8b</code>): the command is /pathway everywhere (Claude Code owns /checkpoint); Lock A and Lock B deny by their own return; a second /pathway clears the class-raised note. 3 CodeRabbit rounds; a CLI review of a fix commit found one more Major. Spike S6 PASS live on #217 (label 00:22:23Z, ready 00:22:25Z, CodeRabbit 00:22:59Z)'],
+        ['done','PR D #221 landed 10-30 07:45 (<code>d4270286</code>, synced): small clean PRs get no bot review, READY carry after a Minor-only round with a clean CLI fix review, budgets 1+1, enforce on, gate fails closed outside a checkout, /pathway marker. Claude review workflow first (12 of 17 findings confirmed and fixed), 2 CodeRabbit rounds. Post-land: shell ready denied by Lock B and the gate; headless check reads the new rules'],
+      ]},
+    { id:'RE · review economy', title:'Paid reviews, follow-ups, merge gate', blurb:'Sessions pay for CodeRabbit inside fixed caps and ask you past them. READY sees every finding, and the merge re-checks the PR.',
+      links:[['PR #225','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/225'],['PR #227','https://github.com/Rev4nchist/Continuous-Claude-v3/pull/227'],['Proposal','https://github.com/Rev4nchist/Continuous-Claude-v3/blob/main/docs/self-improvement/proposals/2026-10-30-review-stack-hybrid-pr-agent.md']],
+      steps:[
+        ['done','PR D follow-ups #225 opened 09:08: old /pathway markers cannot replay, summary-only and outside-diff-only rounds can carry, cr-fix uses the same round as READY'],
+        ['done','You turned on usage-based reviews (On demand). Measured: round 1 bills every reviewable file, later rounds only the files changed since'],
+        ['done','Paid-review policy: <code>cr-paid.mjs</code> ALLOWs a round at most $5, $15 a day across sessions, 2 paid rounds per PR, fix of 30 lines or fewer; else it escalates to you. Folded into #225'],
+        ['done','#225 landed 11:04 (<code>66a3b385</code>): 3 CodeRabbit rounds ($4.25 + $1.50 paid on your yes), 2 Minors deferred to #227'],
+        ['done','Research workflow (7 agents) on the PR-Agent hybrid setup: A keep and tighten ADOPT, B and D1 WATCH, C SKIP, D3 fewer larger PRs ADOPT. You approved D-1 to D-5, then held D-2 (pilot)'],
+        ['done','Merge investigation: #178, #180, #191, #193 passed READY with unread outside-diff findings; main already blocks all four'],
+        ['done','#227 opened 11:56: gate A (each handled bullet names its finding by marker id or path:lines), gate C (land-pr re-checks head, new reviews, open requests and a pending status before the merge; 120 s clock margin)'],
+        ['done','#227 rounds: R1 $3.00 paid by policy (3 Minors), R2 free slot (1 Major), R3 $0.50 paid by policy (clean). No escalation needed'],
+        ['done','#227 landed 15:01 (<code>ac03ec78</code>), synced. Gates A and C live; the first live re-check runs on the next landing'],
+        ['done','#229 /pathway from any session: tests first (5 of 6 new tests fail on main), Opus review (0 Major, 3 Minor, 3 Nit, all fixed), CLI 1 Minor fixed; mod tests 1045/0'],
+        ['done','#229 pressed by this session on your instruction while you were on mobile (engine --confirm coderabbit --by dave, then --apply); the lock reads command text only, so a script passed it. Recorded on the lane'],
+        ['done','#229 landed 18:34 (<code>b3336666</code>), synced: CodeRabbit LGTM on the included slot ($0); the first live gate C re-check passed'],
+        ['done','#230 (Agentic OS pane A, session 12d3a42b) landed 19:28 (<code>7b65016f</code>), review waived by you'],
+      ]},
+  ],
+  waits: [
+    'Your CodeRabbit 7-day review count from the dashboard CSV on or after 2026-11-05 (calendar reminder 09:00 CT) to refresh <code>reviews_7d_manual</code>.',
+    'D-3: your Greptile plan check (Starter, 50 free credits?) before D2 (Greptile on risk PRs).',
+    'Dev PM (Grok) write-back on the AC6 row: box-side Gate 14, plan.md and Dev QA paths.',
+    'CodeRabbit billing warning (payment not collected for 72+ hours) seen 10-27; check it cleared after the Team upgrade.',
+    'Grok box-spec reconcile for the router (after 10-29): https://app.notion.com/p/40576fd7ac8281f29b4fc129cab980c7',
+    'Greptile is on Pro at $1 per credit: 49 credits (about $49) Oct 24 - Nov 24 over 36 reviews. The router credit alerts assume a capped plan; Greptile stays held until a dollar budget is set.',
+    'Grok at capacity until 2026-10-29: box spec check, audit of the Ready set for Dev PM, xreview CAs for P3b/P3c.',
+    'Apex billing root cause (DW-83) before any <code>review:deep</code> or the Greptile trigger change.',
+    'Greptile credits: 13 used / 37 left as of 10-24 (not re-checked). Alerts at 35 and 45 used; check on 2026-11-03.',
+  ],
+  loose: [
+    'Unknown process deletes files: hooks <code>node_modules</code> and archify (10-25), a <code>%TEMP%</code> folder (10-26).',
+    'Lane board follow-ups (backlog): daemon-pipe-fix, memory-provenance-backfill (your yes), tool-error-extractor, memory-client-dead-src, guard-prompt-text-fp, p4-followups, tdd-skill-headless-trigger. pr-loop-proof-reason is folded into the review-budget PR.',
+    'Every open CCv3 PR now needs an Evidence block in its body to reach READY.',
+    'Leftover worktree folders <code>review-budget</code>, <code>ready-od</code>, <code>cr-yaml</code> (land-pr.ps1 could not delete them while this session used them), and the spike mod in <code>~/.claude/dev-mods</code>. Remove after the session ends.',
+    'Machine slowdown root cause (.claudedocs/2026-10-28-machine-slowness-rca.md): Fortect on-access scanner costs 3-50 ms per file open; about 85,000 dead process objects since 17:01 (kernel references). Tests are confirm-first: a short Fortect real-time toggle, then an A/B reboot with Fortect services off. Also cut process starts: hook fan-out, 4 npx desktop-commander copies, tests that start a process per case.',
+    'CodeRabbit YAML phase 2 (after 5 PRs): ccv3-mods, tests, templates/docker, opc, plumbing; plus explicit simplify:false.',
+    'CodeRabbit IDE/CLI dashboard showed 0 CLI reviews: its date range ended 10-27; the 3 CLI reviews ran 10-28 08:00-10:34 UTC. Re-check with a range that includes 10-28.',
+    'Follow-up idea: add a local Semgrep row to <code>pre-pr.mjs</code>; CI Semgrep caught twice what the local gate missed.',
+    'AC7 sandbox <code>%TEMP%\\p4b-ac7-sandbox</code> left in place (recursive delete needs your yes).',
+    'Empty locked folder <code>.claude\\worktrees\\mem-p2</code>: remove after this session ends.',
+    '<code>settings-template-validation.test.ts</code> fails to load on Windows (also on main).',
+    'Tidy row pending: prune 6 skip-skills, chmod <code>opc/.env</code>.',
+    'Lanes on the board: reviews-7d-refresh (needs your CSV). Follow-up: CodeRabbit round order ties to the mutable summary updated_at.',
+    'From #230 (session 12d3a42b): <code>review-status.mjs</code> returns on a CodeRabbit "Review skipped" notice before the carry check, so a Minor-only review never carries to a pushed head. Fix test first.',
+    'The checkpoint record lives only in the store of the session that pressed /pathway; another session\'s pr_watch shows generic round lines. Lock B reads command text only, so a script file passes it (documented; used once on #229 by your instruction).',
+    'The stale 107 seven-day count makes the engine recommend <b>wait</b> on every PR until the 11-05 refresh: press coderabbit or none on purpose.',
+    'Check after the first paid round with filtered files: does the CodeRabbit dashboard bill files that <code>path_filters</code> excludes? <code>cr-paid</code> assumes no.',
+  ],
+  later: [
+    ['4','Vendor Pocock + pstack skills','Landed 2026-10-27 (#182, 3bcc2072)','done'],
+    ['4b','TDD as harness law (proof types, Evidence red/green)','Landed 2026-10-27 (#185, f2b94ada)','done'],
+    ['4c','User-flow (statechart, verify skill, FV pilot)','You define the start trigger','held'],
+    ['5','xreview auto-trigger (draft PR → CA → verdict on SHA)','After 3, plus a CA launcher and key you approve','todo'],
+    ['6','Sentry','Option A decided: no CCv3 code; close with a write-back','todo'],
+    ['7','System tests T1–T4 + scorecard (DW-85/88/89)','After 2–5; sandbox spend needs your yes','todo'],
+  ],
+  log: [
+    ['10-30 20:4x','This page updated. Reliability and visibility audit workflow started (read-only, 8 agents).'],
+    ['10-30 19:28','#230 landed (7b65016f), session 12d3a42b; synced.'],
+    ['10-30 18:34','You said land 229 when ready: READY, CodeRabbit LGTM ($0, included slot), gate C re-check passed, merged b3336666, synced.'],
+    ['10-30 16:01','#229 out of draft with review:coderabbit; this session ran the press steps on your instruction (you were on mobile).'],
+    ['10-30 15:4x','#229 opened as draft. The installed mod refused it from the main session (checkout 6d77dac vs PR c191176): the bug, live.'],
+    ['10-30 15:0x','This page updated. Handoff written for a fresh session.'],
+    ['10-30 15:01','You said land 227: merged ac03ec78, synced. Gates A and C live.'],
+    ['10-30 12:42','#227 round 3 paid $0.50 by policy (ALLOW, no escalation); clean.'],
+    ['10-30 12:01','#227 round 1 paid $3.00 by policy: the first paid call a session made without asking you.'],
+    ['10-30 11:56','#227 opened (merge gate). You chose A+C after the investigation showed main already blocks the four old cases.'],
+    ['10-30 11:04','You said land 225: merged 66a3b385, synced. You approved proposal D-1 to D-5; D-2 then held.'],
+    ['10-30 10:16','First paid CodeRabbit round ($4.25, #225) on your yes. You set the policy: $5 a round, $15 a day, escalate on spirals.'],
+    ['10-30 09:08','#225 opened (PR D follow-ups).'],
+    ['10-30 07:45','You said land 221: PR D merged d4270286, synced. Paid-review usage turned on by you later this morning.'],
+    ['10-29 21:10','PR D opened as draft #221 (75d6d032), pr_watch on. Handoff to a fresh session next.'],
+    ['10-29 20:40','You said land 217: merged f4370d8b, synced (cursor = main). Round-3 Major (a hand ready click cleared the raise note) moved to PR D: /pathway now posts a head marker the router requires.'],
+    ['10-29 20:xx','Re-review study done (7 agents): later rounds caught 12 real Majors, 11 in risk code. You approved 5 policy changes for PR D, set CodeRabbit to On demand with a $50 cap, and allowed CLI reviews as needed ($25 credit).'],
+    ['10-29 13:53','#216 landed (aef1e7e2): PR C, the checkpoint mod.'],
+    ['10-29 09:52','#212 landed (02bc64a7): PR B, confirm, apply and gate rules.'],
+    ['22:42','Session stopped for a reboot and a fresh session. PR C RED committed c0a0e5a4 (mod 435 pass / 75 fail, node 8 fail, vitest 6 fail, as intended). Slowdown root cause memo done: Fortect on-access scanner (avgntflt / MainService) costs 3-50 ms per file open, and about 85,000 dead process objects piled up since 17:01 (a kernel driver keeps references). Lane released. Handoff written.'],
+    ['22:21','Stopping point for a fresh session (your ask). Waiting on the PR C fill round and the slowdown root-cause memo, then the handoff. Suite timing run: 37 min, 470/471; the 1 failure (pre-pr.test B2) passes alone in 97 s, so it is load, not code.'],
+    ['22:1x','CodeRabbit eval done (wf_6503519a-96b): no review on every PR. You chose: small CLI-clean PRs default to none (incl. infra) from PR B enforcement; READY accepts the earlier reviewed head after a Minor-only round (path b); steering and infra 1+1; warn 30, wait 40; no auto-post. Builds as PR D after PR B. @coderabbitai rate limit gave no count ("Reviews are available now").'],
+    ['21:5x','PR B gate at 80073c84 FAIL: github-tests timed out after 25 min. Process start is slow again (cmd 191 ms, git ~500 ms). You asked for a CodeRabbit usage evaluation: workflow wf_6503519a-96b (6 agents: live docs, spend paths, real usage audit, Opus memo, Opus critic, final).'],
+    ['21:0x','PR B gate PASS at e0e225bb; CLI review 1 minor fixed tests-first (80073c84); gate rerun started.'],
+    ['20:50','You said yes: npm ci in the primary checkout hooks folder while quiet (no other build or test running): pg now 8.23.1, no tracked file changed. Live hooks unaffected (they run from ~/.claude dist).'],
+    ['20:4x','PR B gate run 1 FAIL on hooks-build (stale pg via the node_modules junction). On your yes: npm ci in the PR B worktree; rebuild leaves the tree clean; gate rerun started.'],
+    ['20:2x','You said: merge PR B when READY; start PR C while PR B waits. PR C worktree cp-mod from e0e225bb; plan + RED workflow started; sdlc-os session told about register.tsx.'],
+    ['20:23','PR B GREEN committed e0e225bb after one Opus critic and fix round. Code reran: node 366/366, hooks 111/111, E2E 95/95 on the built hook. Pre-PR gate started (20:24). You said: open PR B when ready.'],
+    ['19:25','PR B RED committed 9c75574e (node 365/343/22, vitest 72/55/17); main merged as cdb2862f; GREEN workflow started.'],
+    ['19:14','PR B RED written (workflow wf_80469def-0c6: kraken, Opus critic 14 findings, fill round): 22 node + 13 vitest tests fail as intended. You decided: strict gate (label must match pathway, shell ready always denied in enforce, no-text label adds denied, --draft --label denied), allow ready --undo, close the non-literal --repo stamp bypass now, --confirm takes --body. Tests amended to match (wf_7d366136-a38).'],
+    ['18:4x','#203 READY (review 3: 0 findings). You said merge when READY: landed 3626f45a, synced, cursor = main. PR A is live. Lane pr-checkpoint-mod claimed (18:41).'],
+    ['18:3x','You said start PR B while #203 waits: worktree cp-gate from a2f601a4; RED workflow wf_80469def-0c6 started (Sonnet kraken, Opus critic, fill round).'],
+    ['18:31','#203 review 2: 1 finding, 1 fixed tests-first (a2f601a4), 0 dismissed; 344 of 344; thread resolved; review 3 requested (last in budget).'],
+    ['18:19','#203 review 1: 2 findings, 2 fixed tests-first (e0a5ac45, d37c6bfb), 0 dismissed; pushed; thread resolved; review 2 requested. You said: merge when READY; parser files get 1+0 (PR B).'],
+    ['18:0x','You said yes: pushed, PR #203 opened (0237674f), review:none label created, pr_watch on.'],
+    ['18:04','Pre-PR gate PASS at 0237674f (stamp written; CodeRabbit CLI 0 findings). This page updated. PR A waits for your yes to push and open.'],
+    ['17:57','Main moved (sdlc-os #202); merged in as 0237674f; 342 of 342.'],
+    ['17:53','Fix 92a6ecb3: a cut-off CodeRabbit CLI run no longer reads as a clean review (T31 failed first).'],
+    ['17:52','Gate run 1 PASS at f9265782; CLI review: 3 minor findings.'],
+    ['17:44','PR A GREEN committed: f9265782 (7 files, 341 of 341).'],
+    ['17:15','Fresh session resumed the handoff. Main merged into the branch (501f28aa); RED baseline unchanged (331 / 277 / 54). GREEN workflow started.'],
+    ['17:3x','Handoff written for a fresh session: PR A GREEN next.'],
+    ['17:2x','You said merge 197 when ready: landed 82a06d63, synced. PR A RED 6af7afcb pushed.'],
+    ['17:02','This page updated. #197 waits on its 4th review; PR A RED tests running.'],
+    ['16:3x','#197 fix c7407707: title spoof bypass (live hook allowed it) fixed tests-first; 4th review requested by your yes. Autofix keys checked: none on.'],
+    ['16:xx','You decided: CCv3 stays private. Open-source plan and free-tools research saved in .claudedocs.'],
+    ['15:4x','Spike S1-S5 PASS live. You set the checkpoint UI to the side pane.'],
+    ['15:0x','You approved the PR Checkpoint spec (13 decisions).'],
+    ['13:56','You said merge Minions 85: 7e314f75.'],
+    ['13:46','You said merge 198: dbc8b123, synced.'],
+    ['13:15','You said merge 196: bfed50d3, synced (READY counts outside-diff findings).'],
+    ['12:xx','Reboot fixed the machine slowdown (cmd 1,700 ms to 12 ms). Investigation: kernel driver overhead, Fortect drivers the lead suspect.'],
+    ['09:44','This page updated. CodeRabbit instruction workflow running (5 agents).'],
+    ['09:27','You said register the hook: pre-pr-gate added to the Bash and PowerShell PreToolUse blocks (Node read-modify-write, backup kept). E2E: deny on a PR create with no stamp, allow on a plain command.'],
+    ['09:19','You said merge 193 when ready: landed 6bc94082, synced. Branches deleted; worktree folder left (in use).'],
+    ['08:46','Round 3 fix 10514ebf pushed (expired wait reported as none); you approved a 4th CodeRabbit review.'],
+    ['08:30','Round 2 fix 41f3dbe4 pushed: literal shell: false for Semgrep; lock and retry-countdown findings fixed tests-first.'],
+    ['07:5x','You said resume the GREEN run: 95/95 at 8491cd23; pushed; 3 threads resolved; review requested.'],
+    ['07:12','Stopped: Claude Code killed the GREEN run for low memory. Handoff written; 2 fix commits wait to be pushed.'],
+    ['07:09','Handoff row written to Notion (Next session).'],
+    ['06:34','This page updated. Waiting for CodeRabbit on #193.'],
+    ['06:32','PR #193 opened (pre-PR gate + hook + A + B), head d05dd187, router-labelled, pr_watch on.'],
+    ['06:15','Gate run 7 PASS, stamp written (CLI cap reached after 2 PASS runs). Hook E2E on the real stamp: allow; changed body: deny.'],
+    ['03:00','Gate run 3: first PASS and first real CodeRabbit CLI review (7 findings, 5 distinct, all fixed).'],
+    ['00:29','You said land 190: c29b95d3 (keep-warm rule + billing-flag test fix).'],
+    ['22:44','You said merge 187: 991e3892 (CodeRabbit: commit touches off, CCv3 path instructions, guidelines, learnings delay).'],
+    ['22:10','You said merge 186: e1118dc0 (Windows hook suite: .mjs LF, path mock). Around this evening: CodeRabbit on Team, repo access CCv3 + Minions + greymatter-sec-sandbox, plugin uninstalled, idle compaction off, autoCompactEnabled fixed.'],
+    ['21:26','This page updated.'],
+    ['21:06','AC6 sent: Bridge row [Code→Grok] for Dev PM (Gate 14, plan.md, Dev QA).'],
+    ['20:58','AC7 headless bugfix check saved: failing test first, RED then GREEN; the tdd skill did not load.'],
+    ['20:57','You said merge 185: landed f2b94ada, synced, worktree and branches removed. P4b live. Pre-PR gate + A + B build started (kraken, worktree review-budget).'],
+    ['20:44','CodeRabbit finding on #185 (kraken demanded a failing check for a refactor) fixed in 22921d3b; GREEN line moved to the new head; thread resolved.'],
+    ['20:39','CodeRabbit review-budget report written. You upgraded to Team and adopted A and B, then the pre-PR gate.'],
+    ['20:19','PR #185 opened (P4b). CodeRabbit hit the hourly limit before the upgrade.'],
+    ['20:17','P4b committed tests first: RED 94522d99 (25 of 151 fail), then gate, rules, skills; main merged in.'],
+    ['20:14','P4b workflow done (8 agents, 1 fix round): principal-reviewer SHIP.'],
+    ['20:09','You said merge 184: abef6cc6. Root cause of the vanishing hooks/package.json: test_vitest_check_uses_output_file wrote {} over the real file, then deleted it. Fixed tests first.'],
+    ['20:00','You said merge 183: 2f251981. CLAUDE.md Docker preflight now points at ~/continuous-claude/docker; health-check hint uses REPO_ROOT.'],
+    ['19:32','PR #183 opened (Docker preflight path). Docker started; lane board back.'],
+    ['18:03','Six follow-ups filed as lanes on the lane board. This page and the memory guide updated.'],
+    ['17:53','Post-sync headless check: /tdd loads the new Pocock-method body from ~/.claude; /to-spec loads its wrapper (2026-10-27-p4-skill-smoke.json).'],
+    ['17:51','You said land 182 at READY: merged 3bcc2072, synced, cursor = main. Worktree and branches removed; lane released; card result written.'],
+    ['17:30','CodeRabbit on #182: 2 findings fixed in 135d19e5 (rm -rfv / -r -f now caught; async retry example); threads resolved; re-review requested.'],
+    ['16:36','PR #182 opened (P4), review:coderabbit, pr_watch on. Commits 91b08ef4 (16:34), a588e139, 7543be81.'],
+    ['13:33','You said land 181 after GitGuardian was cleared: merged e0dc3ea0, synced; daemon restarted, live checks pass.'],
+    ['13:15','#181: CodeRabbit + GitGuardian flagged a fake test password; fixed in d78b3ba6, thread resolved, re-review requested. GitGuardian stays red because it scans the old commit 06cf68dc: needs your choice (mark incident 39165807 as test credential, or squash). Scratch DB dropped (your yes). Handoff written for a fresh session (Phase 4 next).'],
+    ['12:55','Phase 3 PR #181 opened (06cf68dc + merge of main 6c8a679e), CodeRabbit labelled, pr_watch on. Fix round 2 closed 7 of 8 findings; critic 3 found symbol passwords not redacted, fixed by parent with 4 failing-first tests. E2E on scratch DB continuous_claude_p3e2e: both write paths store redacted rows with source + session_id; reject log skips on pass 2; live DB untouched (130 rows). Ratchet CHECK PASS. Main dist restored (your yes).'],
+    ['12:18','#180 landed e96a7b65. Land script stopped at the local fast-forward: main checkout had a stale 10:24 dist rebuild (older pg bundled). 3 blocking files stashed with backups; main fast-forwarded; synced from a temp worktree; cursor = main. Daemon restarted (pid 47360, ping ok); live recall and health line pass. Phase 3: critic round 2 FIX, fix round 2 running.'],
+    ['11:02','#180 READY after the CodeRabbit fix round (16e5dcab: DB URL redacted before the error cut, bad baseline = setup error, trailing-slash HOME).'],
+    ['10:41','Land job for #180 started (lands at READY, then forward sync check, daemon restart via its shutdown command, live recall test with "(" and "="). Phase 3 workflow started.'],
+    ['10:34','Phase 2 PR #180 opened. Opus critic caught that the eval built queries unlike the hook; fix round made the eval use the hook\'s own functions, re-swept, and both floors now meet the 2-of-10 false-injection limit. AGENTS.md row dropped (context budget ratchet).'],
+    ['08:52','Health line was invisible by design (healthy state set no systemMessage); fix folded into phase 2. Worktrees cleaned (mem-p1, setup-aos, router-fu; 2 empty folders locked until this session ends). Phase 2 workflow started.'],
+    ['09:10','Landed #179 28b89cd5 (2 CodeRabbit rounds, 7 findings fixed); cursor = main. init-schema.sql re-applied: schema_version 2026-10-27.1. Live hook: "Memory: 130 lessons, newest 1h ago, 0 without embeddings, schema 2026-10-27.1".'],
+    ['08:40','#179 round 1: 6 CodeRabbit findings fixed (a6e45889); hang test: hook ends in 3.25 s with a 15 s table lock. Land + schema-version job re-armed.'],
+    ['07:58','Opened #179 (memory phase 1). Verified the build agent: reruns pass; own E2E on live, empty and scratch DBs; fixed test pollution of the real failure log.'],
+    ['07:35','Landed #178 5d38344d; cursor = main. Fixed stale password in opc/.env. Live memory-awareness hook: 3 results, 0 kept after the text-only floor.'],
+    ['07:19','Memory work stream added. #177 landed 2682eb04. Research verdict in. Phase 1 started (your go), stacked on #178.'],
+    ['06:59','Memory: schema fix applied (your yes); 8 handoff rows + 122 harvested (2 workflows, 25 agents) = 130 rows, 130 embeddings, recall hit. Opened #178 (E2E on 2 temp DBs). Published memory guide.'],
+    ['06:40','Opened #177: setup runs agentic-os db:check + db:migrate. pytest 17 pass; E2E on new DB ccv3_e2e_aos: 7 tables, re-run no-op, DB dropped. Removed wording + dist-rebuild worktrees.'],
+    ['06:22','Landed #175 2ad8f5ca at READY. main = cursor = 2ad8f5ca. Headless claude -p reads the synced rule: CodeRabbit + @coderabbitai review after a push; Dependabot rule.'],
+    ['06:17','Applied agentic-os drizzle migrations 0000-0003 to local continuous_claude (db:check OK; created 2026-10-24 DB never had agentic_os). event-recording-probe 16/16 PASS; lane board loads.'],
+    ['06:15','Landed #176 b65fa2c2 with -IgnoreReview (reason posted on PR). main = cursor = b65fa2c2.'],
+    ['06:10','uv 0.13.4 installed. #175 round 2 (17af045d): fallback /loop follows review-status; thread resolved; re-review asked; auto-land armed. Opened #176 (dist rebuild after #170 pg 8.23.1).'],
+    ['05:57','Opened #175 (wording follow-up). Removed 6 worktrees + empty ready-dep; deleted local chore/opc-drop-symbolica. uv: package guard blocked 0.13.3 (GHSA-hq85-5cpj-mr62); fixed 0.13.4 is under 7 days old.'],
+    ['05:48','Landed #174 c9af052a (CodeRabbit: no actionable comments on 9a9db94). main = cursor = c9af052a.'],
+    ['00:39','Started the symbolica-agentica removal: 1 line in pyproject, 2 lines in uv.lock (local uv 0.6.12 rewrote the whole lock in an old format, so the lock is edited by hand); <code>uv lock --check</code> passes.'],
+    ['00:23','Landing queue: #173 48ed6c33, #166 8d4b48e4, #170 5a54ec9d, #171 d2bd465f. main = cursor = d2bd465f.'],
+    ['00:17','CodeRabbit round 3 on #173: an empty commit list crashed the head check. Fixed in 256857fb (compare with headRefOid).'],
+    ['22:xx','Tests: #170 SAFE (frontend lint 5 -> 16 from eslint-plugin-react-hooks; lint is not in CI). #171 SAFE except a latent break in unused symbolica-agentica. CodeRabbit refuses bot PRs (no seat), so you chose a READY rule for Dependabot: PR #173 (c799355d). Live from the branch: #166, #170, #171 all read READY.'],
+    ['21:3x','Dependabot closed #160/#161 and opened #170 (npm, 33 updates) and #171 (uv, 38 updates) under the new rule. Test agents started on both. #166 rebuilt (ed1dc82): CI green, CodeRabbit review requested. #172 is the README session\'s.'],
+    ['21:1x','#169 READY after the CodeRabbit fix; landed on your earlier yes: merged fb9df887, synced. Dependabot npm and uv now minor/patch only. @dependabot recreate posted on #160 and #161.'],
+    ['21:0x','You said land 167: merged c395480f, synced (cursor = main). First PR READY with Greptile off (CodeRabbit only). Router follow-ups and READY change are live. @dependabot recreate posted on #166. #169 waiting on CodeRabbit re-review (finding fixed in ea2f3f64).'],
+    ['20:4x','#167: 2 CodeRabbit findings (label runs could replace each other; label on a closed PR reported a class), both fixed in 010f019d, threads resolved, re-review requested. Dependabot: #160 RISKY (TypeScript 7), #161 RISKY (mcp 2). You chose minor/patch only; PR #169 adds ignore semver-major for npm and uv. After it lands: @dependabot recreate on #160 and #161.'],
+    ['20:0x','PR sweep: #38 and #98 archived (closed, branches kept). Dependabot PRs #160 (npm), #161 (uv), #166 (actions; replaced #159) have no owner yet: CodeRabbit skips bot PRs, so each needs a manual "@coderabbitai review" plus local tests. #166 edits review-router.yml, so it waits for #167. #168 belongs to the README session.'],
+    ['19:48','You said flip 167: ready at 5c27c973. Router: risk:infra + review:coderabbit + review:deep-held. No Greptile check started, so autoReview [] works. CodeRabbit had only a draft-time skip notice; one "@coderabbitai review" posted.'],
+    ['19:5x','You said land 165: merged 6f402bb6, synced. Main merged into the follow-ups branch; draft PR #167 opened (5c27c973).'],
+    ['19:4x','#165 READY at b3368b9: Greptile 5/5 with no findings; 1 CodeRabbit finding dismissed (Dependabot PRs are never drafts; a push would buy another Greptile review), thread resolved; CI green, mergeable clean. Waiting for your land yes.'],
+    ['19:28','You said flip 165: ready at b3368b95. Router labelled it risk:infra + review:coderabbit + review:deep-held. Greptile still started a review (it does not take autoReview from the PR branch; the change applies to all PRs once #165 merges). CI 7/7 green; READY waits for the Greptile check and CodeRabbit.'],
+    ['19:19','Follow-ups committed locally (09113f17) with the READY change for Greptile off. Opus critic findings fixed; 14/14 mutations caught.'],
+    ['19:1x','You chose: autoReview [] for all PRs, and CodeRabbit in place of Greptile for READY. Draft PR #165 opened (b3368b95); the README session has the full answer.'],
+    ['19:03','Router follow-ups built in a worktree, tests first: 94 router + 115 status tests green, 7/7 mutations caught. A read-only workflow is answering your question on stopping Greptile reviews.'],
+    ['18:34','First live router run on #164 (README PR): risk:docs, one bot comment naming the head, ledger artifact uploaded. Works as specified.'],
+    ['18:26','You said land 163: merged f1646517, synced (cursor = main). 10 router labels created. P3b cleaned up (remote branch, worktree, local branch). Cards Done. Phase 3 complete.'],
+    ['18:16','#163 READY at 2683008: Greptile 5/5, 0 open threads, 7/7 checks green, mergeable clean. Waiting for your land yes.'],
+    ['18:07','#163 Greptile round 2: 1 P1 in my previous fix (a raise could skip review:deep after a config change). Narrowed in 26830085 (router 79/0; old logic fails the new test); thread resolved.'],
+    ['17:59','#163 Greptile 4/5: 2 findings, both fixed in baddabf0 (router 78/0, mutation-checked); 2 threads replied, 👍, resolved.'],
+    ['17:52','#163 CI green at f53feffd (after the Semgrep ratchet caught a partial scan); flipped to ready for Greptile.'],
+    ['17:40','You said land 162: merged bf32cd1f, synced. Deleting its branch closed #163; restored the branch, reopened #163, retargeted to main, merged main in (e7bb3573). CI running.'],
+    ['17:31','#162 READY at 2f48215: Greptile 5/5, 0 open threads, 7/7 checks green, mergeable clean. Waiting for your land yes.'],
+    ['17:25','#162 Greptile 4/5 with 1 P1, fixed in 2f482157 (plugin 206/0), thread resolved. #163 security re-review SHIP; follow-ups pushed (21cbefa6).'],
+    ['17:1x','#162 flipped to ready at cc9f741f.'],
+    ['17:15','P3b re-review: HOLD on one remaining P1 (a failed Greptile check was ignored on a CodeRabbit-only PR). Fixed with 3 smaller items in cc9f741f; merged into P3c (status 111, router 77, 0 fail).'],
+    ['17:00','Second Opus review round started on both fix commits.'],
+    ['16:59','P3c fixes (20e729c4) + READY head check (398117e6) pushed: labels can only drop Greptile when the router’s own bot comment names the current head.'],
+    ['16:54','P3b fixes pushed (72e0c10b): a low Greptile score now blocks READY on every PR; each bot’s findings alert.'],
+    ['16:44','Opus reviews done: #162 HOLD (2 P1, 8 P2), #163 HOLD from both critic and security reviewer (3 P1 incl. a forgeable router comment, 9 P2). Fix rounds started for both.'],
+    ['16:33','You waived the Grok cross-family review for #162/#163. Three Opus reviewers started: critic on #162, critic on #163, principal-reviewer (security) on the #163 workflow.'],
+    ['16:26','#163 (P3c) opened as draft, stacked on #162. Code moved the router to pull_request_target (a PR cannot lower its own class) and added its tests to ccv3-checks. #162 CI 6/6 green.'],
+    ['16:09','P3c worktree created from the P3b branch; router build started.'],
+    ['16:06','#162 (P3b) opened as draft at f88f0cc4 (commits 16:04–16:06). Code reran all P3b suites first: 101 + 13 + 196 + 29, 0 fail; built hook E2E; fixed the deep-PR alert path.'],
+    ['15:54','You said land 157: merged 7da9a5ae via land-pr.ps1; sync cursor = main. Then: main CI green; post-land Windows gates 9/9 PASS.'],
+    ['15:5x','#157 READY at dbf84f7: Greptile 5/5, 0/3 threads open, 8 checks green, mergeable clean.'],
+    ['15:44','#157 round 1: Greptile 4/5, 3 findings (1 P1, 2 P2), all fixed in dbf84f7c; 3 threads replied, 👍, resolved. Ratchet tests 15/15.'],
+    ['15:36','#157 flipped to ready; Greptile review in progress. P3b worktree created; kraken build started.'],
+    ['15:07','P3a pack pushed (8802d297). DW-80 split into P3a (Ready), P3b, P3c; Wiring Plan G-R2 note. You had agreed all 23 decisions.'],
+    ['14:33','CI proof posted on #157: green 78a6ddbd, red seed 4cf82135 (14:20), green revert 41c2adc4 (14:26). Router spec sent to Grok.'],
+    ['14:13','#157 opened as draft (P3a): ee2b14e1 + 78a6ddbd.'],
+    ['12:58','Start point: main 1db5a6c7 (#155). Session resumed; Phase 3 decisions taken.'],
+  ],
+};
+
+const STATE = {done:'Done', active:'Now', wait:'Waiting', held:'Held', todo:'To do'};
+const el = id => document.getElementById(id);
+el('now').innerHTML = `<span class="meta">Updated ${DATA.updated}</span><div>${DATA.now}</div>`;
+const all = DATA.units.flatMap(u => u.steps);
+const count = s => all.filter(x => x[0] === s).length;
+el('stats').innerHTML = [['done','steps done'],['active','in progress'],['wait','waiting'],['held','held']]
+  .map(([s,l]) => `<div class="stat"><b>${count(s)}</b><span>${l}</span></div>`).join('') + `<div class="stat"><b>${all.length}</b><span>steps in Phase 3</span></div>`;
+el('units').innerHTML = DATA.units.map(u => {
+  const d = u.steps.filter(s => s[0] === 'done').length;
+  return `<article class="unit"><div class="uhead"><span class="id">${u.id}</span><h3>${u.title}</h3><p>${u.blurb}</p></div>
+  <div class="prog" role="img" aria-label="${d} of ${u.steps.length} steps done"><i style="width:${Math.round(100*d/u.steps.length)}%"></i></div>
+  <ol class="steps">${u.steps.map(([s,t]) => `<li><span class="pill ${s}">${STATE[s]}</span><span>${t}</span></li>`).join('')}</ol>
+  <div class="links">${u.links.map(([t,h]) => `<a href="${h}" target="_blank" rel="noopener">${t}</a>`).join('')}</div></article>`;
+}).join('');
+el('waits').innerHTML = DATA.waits.map(w => `<li>${w}</li>`).join('');
+el('loose').innerHTML = DATA.loose.map(w => `<li>${w}</li>`).join('');
+el('later').querySelector('tbody').innerHTML = DATA.later.map(([p,w,s,st]) => `<tr><td><b>${p}</b></td><td>${w}</td><td>${s}</td><td><span class="pill ${st}">${STATE[st]}</span></td></tr>`).join('');
+el('log').innerHTML = DATA.log.map(([t,m]) => `<div><time>${t}</time><span>${m}</span></div>`).join('');
+el('foot').textContent = 'Times are CT on 2026-10-26. Claude Code updates this page as work moves. Sources: PR #157, DevWork cards, router-spec.md, Wiring Plan 2026-10-25.';
+</script>
+
+</body></html>

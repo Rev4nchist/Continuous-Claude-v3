@@ -36,7 +36,11 @@
  *   R48d a partial page set is kept                                                                                   (F9b, M13)
  *   R50  the pager is not a GET or loses the jq cut                                                                   (F18)
  *   R51  HEAD replaces main, --since is a bare day                                                                    (F10, F20, M10)
- *   R52  the search bound is UTC midnight, or loses its upper bound, base:main or its guard; a 0 is not trusted       (F23, F24, F26, F28, M16, M20)
+ *   R52  the search bound is UTC midnight, or loses its upper bound, base:main or its guard; a trusted 0 is refused, or an untrusted bound is called     (F23, F24, F26, F28, M16, M20)
+ *   R48e an empty --repo garbles the stderr line                                                                      (N1)
+ *   R51b git log loses --no-show-signature                                                                            (N3)
+ *   R53  a reader writes its budget into the caller deps; R53b a caller budget is replaced                            (N2)
+ *   38b  a USAGE option column is out of line                                                                         (N5)
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, utimesSync, writeFileSync } from 'node:fs';
@@ -466,6 +470,18 @@ test('38 an unknown flag or a flag with no value exits 2 and writes nothing', as
   assert.equal(await main(['--help'], w.deps), 0);
 });
 
+test('38b --help: every option in USAGE starts its description in one column (N5)', async () => {
+  // Breaks when an option line in USAGE is padded by a different width than the rest.
+  const logs = [];
+  assert.equal(await main(['--help'], { ...quiet(), log: (m) => logs.push(m) }), 0);
+  const cols = logs.join('\n').split('\n').flatMap((l) => {
+    const m = /^(  --[\w-]+)( +)\S/.exec(l);
+    return m ? [{ name: m[1].trim(), col: m[1].length + m[2].length }] : [];
+  });
+  assert.equal(cols.length, 9, 'nine option lines');
+  assert.deepEqual([...new Set(cols.map((c) => c.col))].length, 1, JSON.stringify(cols));
+});
+
 // ---------------------------------------------------------------- B2: PR counts per Chicago day
 
 const rowsById = (w) => Object.fromEntries(readOut(w).rows.map((r) => [r.id, r]));
@@ -593,6 +609,15 @@ test('R48 a gh stderr line is cut after its (HTTP nnn) token: the user id and re
   assert.ok(!/123456789|ABCD/.test(errs[0]), errs[0]);
 });
 
+test('R48e an empty repo does not garble the gh stderr line (N1)', () => {
+  // Breaks when ghTail splits the line on '' (every character) instead of skipping an empty repo.
+  const errs = [];
+  const run = () => { throw fail({ status: 1, stderr: 'gh: Not Found (HTTP 404) more' }); };
+  EX.readOpened({ repo: '', start: '2026-10-26' }, readerDeps(run, { err: (m) => errs.push(m) }));
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /gh: Not Found \(HTTP 404\)$/);
+});
+
 /** A fake gh that honours the timeout it is given: it takes 9.9 s a call, or the whole timeout when that is shorter, and then times out. */
 function slowWorld() {
   const clock = { t: 0 };
@@ -683,10 +708,38 @@ test('R51 the git call names main, never HEAD, with --since as a UTC instant 90 
   assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
   const call = w.calls.find((c) => c.kind === 'git');
   assert.equal(call.file, 'git');
-  assert.deepEqual(call.args, ['log', '--first-parent', 'main', '--since', '2026-07-28T00:00:00Z', '--format=%P%x1f%ct%x1f%s']);
+  assert.deepEqual(call.args, ['log', '--first-parent', 'main', '--since', '2026-07-28T00:00:00Z', '--no-show-signature', '--format=%P%x1f%ct%x1f%s']);
   assert.ok(!call.args.includes('HEAD'));
   assert.equal(call.opts.cwd, w.d, '--git-root is the cwd');
   assert.equal(call.opts.timeout, 10_000);
+});
+
+test('R51b the git call turns signature lines off, so log.showSignature=true cannot add malformed lines (N3)', () => {
+  // Breaks when --no-show-signature is dropped from the git args.
+  const f = fakeRun();
+  EX.readLanded({ cwd: '/x', since: '2026-07-28T00:00:00Z' }, readerDeps(f.run));
+  assert.ok(f.calls[0].args.includes('--no-show-signature'), f.calls[0].args.join(' '));
+});
+
+test('R53 a reader leaves the caller deps untouched: no ghBudget is written into them (N2)', () => {
+  // Breaks when a reader writes its gh budget into the caller's deps (`deps.ghBudget ??=`).
+  const make = (run) => Object.freeze({ run, err: () => {}, clock: () => 0 });
+  const f = fakeRun();
+  const d1 = make(f.run);
+  assert.deepEqual(EX.readOpened({ repo: 'o/r', start: '2026-10-26' }, d1).ok, true);
+  assert.equal('ghBudget' in d1, false);
+  const d2 = make(f.run);
+  assert.equal(EX.readMergedWeek(MW, d2).ok, true);
+  assert.equal('ghBudget' in d2, false);
+});
+
+test('R53b a budget the caller passes is still shared across its calls (the collector relies on it)', () => {
+  // Breaks when a reader ignores deps.ghBudget and starts a new one.
+  const budget = { start: 0 };
+  const f = fakeRun({ search: () => { throw new Error('must not run'); } });
+  const r = EX.readMergedWeek(MW, readerDeps(f.run, { ghBudget: budget, clock: () => 41_000 }));
+  assert.deepEqual(r, { ok: false, reason: 'unreachable' });
+  assert.equal(f.calls.length, 0, 'the caller budget was already used up, so no call is made');
 });
 
 const MW = { repo: 'o/r', weekStart: '2026-11-03', from: '2026-11-03T06:00:00Z', to: '2026-11-10T05:55:01.000Z' };
