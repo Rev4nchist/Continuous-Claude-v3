@@ -115,6 +115,13 @@ export type FixtureAgentRun = {
   tokens: number;
   costUsd: number;
   drift: string | null;
+  /**
+   * Written by the ledger only when true (agent-ledger/model.ts). `unknown` so a spec can write a
+   * wrong type, which the reader must treat as absent.
+   */
+  hasUnknownModelCost?: unknown;
+  /** Written by the ledger only above 0 (the advisor floor). `unknown` for the same reason. */
+  advised?: unknown;
 };
 
 export type FixtureCache = {

@@ -129,3 +129,22 @@ export function formatLease(secondsLeft: number | null): string {
   const hours = Math.floor(minutes / 60);
   return `lease ${hours}h ${minutes % 60}m left`;
 }
+
+/** "$1.50". The one money format of the fleet view. */
+export function formatUsd(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
+/**
+ * The words for a run-cost sum. Same rule as the ledger pane's `usdText` (agent-ledger/model.ts), with
+ * words in place of the glyphs.
+ *  - `unpriced`: how many runs used a model with no price. Their dollars are left out of `usd`.
+ *  - `floor`: a run used the advisor, whose tokens the live feed leaves out. `usd` is a floor.
+ * A sum of 0 with unpriced runs and no floor reads "unpriced", never "$0.00". A floor never hides: it
+ * reads "at least $0.00" at zero.
+ */
+export function costLabel({ usd, unpriced, floor }: { usd: number; unpriced: number; floor: boolean }): string {
+  if (unpriced > 0 && usd <= 0 && !floor) return 'unpriced';
+  const base = `${floor ? 'at least ' : ''}${formatUsd(usd)}`;
+  return unpriced > 0 ? `${base} + ${unpriced} unpriced` : base;
+}
