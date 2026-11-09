@@ -136,7 +136,7 @@ export type HudState = {
  */
 export type CacheMissCause = 'start' | 'resume' | 'expired' | 'compaction' | 'model' | 'changed'
 
-/** One miss. `rewritten` is tokens; `usd` prices that rewrite as a cache write (hooks/shared/price.ts), null with no price. */
+/** One miss. `rewritten` is tokens; `usd` prices that rewrite as a cache write at the exact model id's rate (hooks/shared/price.ts, from prices.json), null when the id has no price. */
 export type CacheMiss = {
   at: number
   idleMs: number
@@ -179,7 +179,9 @@ export type CacheState = {
 
 /**
  * One subagent run as the Agent Ledger shows it. Tokens and cost add up per model request
- * (turn.step); `costUsd` is an estimate from hooks/shared/price.ts, never the bill.
+ * (turn.step); `costUsd` is an estimate from hooks/shared/price.ts (exact model id, 5m/1h writes, web search), never the bill.
+ * It prices each step's top-level usage. A run's advisor iterations are not in it (price.ts `advisorCost` prices them; PR C wires them in).
+ * Runs saved before this table keep the `costUsd` they had: tier rates, every write at 1.25x.
  * `drift` says how the run broke its agent's .md (`model:`, `effort:`), or that it ran on Haiku.
  */
 export type AgentRun = {
