@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, rmSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
-import { execSync, spawnSync } from 'child_process';
+import { execSync, spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as net from 'net';
 import * as crypto from 'crypto';
 import { tmpdir } from 'os';
@@ -148,6 +148,72 @@ function stopMockServer(server: net.Server | null): Promise<void> {
   return new Promise<void>((res) => server.close(() => res()));
 }
 
+/**
+ * True when a `nc` binary exists. On POSIX the client's reachability probe
+ * (isDaemonReachable -> ncPing) shells out to `nc -U`; with no nc it reports a
+ * live daemon as unreachable, so a test that needs a live Unix daemon cannot pass.
+ */
+const NC_AVAILABLE = IS_WINDOWS || !spawnSync('nc', ['-h'], { stdio: 'ignore' }).error;
+
+/**
+ * Host the mock Unix-socket daemon in a CHILD process. The client probes the
+ * socket with a blocking spawnSync(nc); an in-process server shares the test's
+ * event loop, so it cannot accept while spawnSync blocks, the probe times out,
+ * and the client unlinks the "stale" socket. A child process keeps accepting.
+ * The child parses each request line as JSON. It answers {"cmd":"ping"} with
+ * {"status":"ok"} (the client's ncPing probe needs that), answers the request
+ * whose cmd equals `cmd` with the canned `response`, and for any other command
+ * closes the connection and writes nothing. A client that sends the wrong
+ * command gets no answer, so the test fails.
+ */
+function startChildUnixMock(
+  projectDir: string,
+  cmd: string,
+  response: unknown,
+): Promise<() => Promise<void>> {
+  const script = [
+    "const net=require('net');",
+    'const s=net.createServer(c=>{',
+    '  let buf="";',
+    '  c.on("error",()=>{});',
+    '  c.on("data",d=>{',
+    '    buf+=d.toString();',
+    '    const nl=buf.indexOf("\\n");',
+    '    if(nl<0)return;',
+    '    let req;',
+    '    try{req=JSON.parse(buf.slice(0,nl));}catch{return c.end();}',
+    '    if(req&&req.cmd==="ping")c.write(JSON.stringify({status:"ok"})+"\\n");',
+    '    else if(req&&req.cmd===process.env.MOCK_CMD)c.write(process.env.MOCK_RESPONSE+"\\n");',
+    '    c.end();',
+    '  });',
+    '});',
+    's.listen(process.env.MOCK_SOCKET,()=>console.log("ready"));',
+  ].join('\n');
+  const child: ChildProcess = spawn(process.execPath, ['-e', script], {
+    env: {
+      ...process.env,
+      MOCK_SOCKET: getConnectionInfo(projectDir).path!,
+      MOCK_CMD: cmd,
+      MOCK_RESPONSE: JSON.stringify(response),
+    },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  const stop = (): Promise<void> =>
+    new Promise<void>((res) => {
+      if (child.exitCode !== null || child.signalCode !== null) return res();
+      child.once('exit', () => res());
+      child.kill();
+    });
+  return new Promise<() => Promise<void>>((res, rej) => {
+    child.once('error', rej);
+    child.once('exit', (code) => rej(new Error(`mock daemon child exited early (${code})`)));
+    child.stdout!.once('data', () => {
+      child.removeAllListeners('exit');
+      res(stop);
+    });
+  });
+}
+
 /** Clean up Unix socket file if applicable. */
 function cleanupSocket(projectDir: string): void {
   if (IS_WINDOWS) return; // TCP on Windows — no socket file to clean
@@ -278,6 +344,7 @@ describe('queryDaemonSync', () => {
 
 describe('queryDaemon async', () => {
   let mockServer: net.Server | null = null;
+  let stopChildMock: (() => Promise<void>) | null = null;
 
   beforeEach(() => {
     setupTestEnv();
@@ -287,49 +354,77 @@ describe('queryDaemon async', () => {
   afterEach(async () => {
     await stopMockServer(mockServer);
     mockServer = null;
+    await stopChildMock?.();
+    stopChildMock = null;
     cleanupSocket(TEST_PROJECT_DIR);
     cleanupTestEnv();
   });
 
-  it('should connect to daemon and receive response', { timeout: 30000 }, async () => {
-    // Create mock server on same transport as real implementation
-    mockServer = await startMockServer(TEST_PROJECT_DIR, (conn) => {
-      conn.on('data', (data) => {
-        const request = JSON.parse(data.toString().trim());
-        if (request.cmd === 'ping') {
-          conn.write(JSON.stringify({ status: 'ok' }) + '\n');
-        }
-        conn.end();
-      });
-    });
+  // On CI a missing nc must fail loudly, not skip: the two tests below would
+  // silently stop covering the Unix path.
+  it('nc is installed on CI', () => {
+    const ci = process.env.CI;
+    const onCi = ci !== undefined && ci !== '' && ci !== 'false';
+    if (onCi && process.platform !== 'win32' && !NC_AVAILABLE) {
+      throw new Error(
+        'nc is not installed on this CI runner. lib/daemon-client.ts isDaemonReachable has no node ' +
+          'net.connect fallback, so it reports a live Unix daemon as unreachable and the queryDaemon ' +
+          'tests cannot run. Install netcat-openbsd.',
+      );
+    }
+  });
 
-    if (!serverUsedDeterministicPort(mockServer, TEST_PROJECT_DIR)) {
-      // Port was restricted on Windows — client won't reach this server
-      return;
+  // POSIX: the live-daemon tests need a child-process mock AND `nc` (see
+  // NC_AVAILABLE). Windows uses the in-process TCP mock and never needs nc.
+  it.skipIf(!NC_AVAILABLE)('should connect to daemon and receive response', { timeout: 30000 }, async () => {
+    const response = { status: 'ok' };
+    if (IS_WINDOWS) {
+      // Create mock server on same transport as real implementation
+      mockServer = await startMockServer(TEST_PROJECT_DIR, (conn) => {
+        conn.on('data', (data) => {
+          const request = JSON.parse(data.toString().trim());
+          if (request.cmd === 'ping') {
+            conn.write(JSON.stringify(response) + '\n');
+          }
+          conn.end();
+        });
+      });
+
+      if (!serverUsedDeterministicPort(mockServer, TEST_PROJECT_DIR)) {
+        // Port was restricted on Windows — client won't reach this server
+        return;
+      }
+    } else {
+      stopChildMock = await startChildUnixMock(TEST_PROJECT_DIR, 'ping', response);
     }
 
     const result = await queryDaemon({ cmd: 'ping' }, TEST_PROJECT_DIR);
     expect(result.status).toBe('ok');
   });
 
-  it('should handle search command', { timeout: 30000 }, async () => {
-    mockServer = await startMockServer(TEST_PROJECT_DIR, (conn) => {
-      conn.on('data', (data) => {
-        const request = JSON.parse(data.toString().trim());
-        if (request.cmd === 'search') {
-          conn.write(JSON.stringify({
-            status: 'ok',
-            results: [
-              { file: 'test.ts', line: 10, content: 'function test()' },
-            ],
-          }) + '\n');
-        }
-        conn.end();
+  it.skipIf(!NC_AVAILABLE)('should handle search command', { timeout: 30000 }, async () => {
+    const response = {
+      status: 'ok',
+      results: [
+        { file: 'test.ts', line: 10, content: 'function test()' },
+      ],
+    };
+    if (IS_WINDOWS) {
+      mockServer = await startMockServer(TEST_PROJECT_DIR, (conn) => {
+        conn.on('data', (data) => {
+          const request = JSON.parse(data.toString().trim());
+          if (request.cmd === 'search') {
+            conn.write(JSON.stringify(response) + '\n');
+          }
+          conn.end();
+        });
       });
-    });
 
-    if (!serverUsedDeterministicPort(mockServer, TEST_PROJECT_DIR)) {
-      return;
+      if (!serverUsedDeterministicPort(mockServer, TEST_PROJECT_DIR)) {
+        return;
+      }
+    } else {
+      stopChildMock = await startChildUnixMock(TEST_PROJECT_DIR, 'search', response);
     }
 
     const result = await queryDaemon({ cmd: 'search', pattern: 'test' }, TEST_PROJECT_DIR);

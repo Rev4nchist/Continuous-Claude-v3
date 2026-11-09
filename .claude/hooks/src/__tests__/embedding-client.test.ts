@@ -14,6 +14,22 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+
+// Point the daemon rendezvous + spawn lockfile at a private temp dir BEFORE the
+// module under test is imported (DAEMON_INFO_PATH is snapshotted at import).
+// Without this the suite reads, writes and deletes the real ~/.claude/run
+// files, and fails with ENOENT on a machine where that folder does not exist
+// (a fresh CI runner). CCV3_EMBEDDING_RUN_DIR is the source's own test seam.
+const { dir: _runDirTmp, prev: _prevRunDir } = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'ccv3-embrun-'));
+  const prev = process.env.CCV3_EMBEDDING_RUN_DIR;
+  process.env.CCV3_EMBEDDING_RUN_DIR = dir;
+  return { dir, prev };
+});
+
 import * as net from 'net';
 import { spawn, fork } from 'child_process';
 import {
@@ -80,7 +96,9 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 const DISCOVERY_PATH = __test.DAEMON_INFO_PATH;
-const SPAWN_LOCK_PATH = __test.SPAWN_LOCK_PATH;
+// __test.SPAWN_LOCK_PATH is the homedir snapshot; spawnLockPath() honors the
+// CCV3_EMBEDDING_RUN_DIR set above, which is the path ensureDaemonRunning uses.
+const SPAWN_LOCK_PATH = __test.spawnLockPath();
 const SPAWN_LOCK_TTL_MS = __test.SPAWN_LOCK_TTL_MS;
 const EXPECTED_MODEL = __test.EXPECTED_MODEL;
 const EXPECTED_DIM = __test.EXPECTED_DIM;
@@ -166,11 +184,14 @@ beforeAll(() => {
   }
 });
 afterAll(() => {
+  if (_prevRunDir === undefined) delete process.env.CCV3_EMBEDDING_RUN_DIR;
+  else process.env.CCV3_EMBEDDING_RUN_DIR = _prevRunDir;
   if (savedDiscovery) {
     writeFileSync(DISCOVERY_PATH, savedDiscovery);
   }
   try {
     rmSync(_muTmp, { recursive: true, force: true });
+    rmSync(_runDirTmp, { recursive: true, force: true });
   } catch {
     /* best-effort temp cleanup */
   }
