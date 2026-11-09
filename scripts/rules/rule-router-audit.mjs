@@ -28,10 +28,11 @@ const today = new Date().toISOString().slice(0, 10);
 const outPath = arg('--out', join(repo, 'docs', 'self-improvement', 'audits', `rule-router-${today}.md`));
 
 const since = Date.now() - days * 86400000;
-const fires = existsSync(logPath)
+const logged = existsSync(logPath)
   ? readFileSync(logPath, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } })
-      .filter((f) => Date.parse(f.ts) >= since && f.kind !== 'rearm') // a re-arm after /compact is not a fire
+      .filter((f) => Date.parse(f.ts) >= since)
   : [];
+const fires = logged.filter((f) => f.kind !== 'rearm'); // a re-arm after /compact is not a fire
 
 // One row per (fire, rule): a fire can carry several rules.
 const rows = fires.flatMap((f) => (f.rules || []).map((rule) => ({ ...f, rule })));
@@ -44,12 +45,21 @@ for (const r of rows) {
   byRule.set(r.rule, e);
 }
 
+// The router re-arms the main agent's rules on SessionStart compact|clear (rule-router.ts rearm), so a
+// repeat after a re-arm row is expected. Replay the log in order and forget that session's main-agent
+// rules at each re-arm. A subagent's repeat is still a break.
 const seen = new Map();
 const dedupeBreaks = [];
-for (const r of rows) {
-  const k = `${r.session}|${r.agent ?? 'main'}|${r.rule}`;
-  if (seen.has(k)) dedupeBreaks.push({ rule: r.rule, session: r.session, agent: r.agent ?? 'main', first: seen.get(k), again: r.ts });
-  else seen.set(k, r.ts);
+for (const f of logged) {
+  if (f.kind === 'rearm') {
+    for (const k of [...seen.keys()]) if (k.startsWith(`${f.session}|main|`)) seen.delete(k);
+    continue;
+  }
+  for (const rule of f.rules || []) {
+    const k = `${f.session}|${f.agent ?? 'main'}|${rule}`;
+    if (seen.has(k)) dedupeBreaks.push({ rule, session: f.session, agent: f.agent ?? 'main', first: seen.get(k), again: f.ts });
+    else seen.set(k, f.ts);
+  }
 }
 
 const sessions = new Set(fires.map((f) => f.session));
