@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * export-factory-data -- write factory.json for the Fleet app Flow tab (Phase B). It reads four local files and writes one
- * JSON document. It uploads nothing and calls no database or model.
+ * export-factory-data -- write factory.json for the Fleet app Flow tab (Phase B). It reads four local files, the git log of main
+ * and two read-only GitHub calls, and writes one JSON document. It uploads nothing and calls no database or model.
  *
  *   node scripts/coordination/export-factory-data.mjs [--out <dir>] [--gates <file>] [--reviews <file>] [--coderabbit <file>]
- *        [--handoffs <dir>] [--dash-config <file>] [--router-config <file>]
+ *        [--handoffs <dir>] [--dash-config <file>] [--router-config <file>] [--repo <owner/name>] [--git-root <dir>]
  *
  * The files (defaults in USAGE): the pre-PR gate log, the cursor review ledger, the CodeRabbit paid ledger, and the
  * handoff YAML headers. The rows are built by factory-rows.mjs (schema in that file). Design:
@@ -20,25 +20,42 @@
  * reader error (the message goes to stderr). The script never throws past a family. Exit 0 whenever factory.json is written.
  * Exit 1 when it cannot be written (the lock is held, the folder is not writable, over 256 KB). Exit 2 for a bad argument.
  *
+ * PR counts (Phase B2, design .claudedocs/2026-11-09-factory-json-b2-design.md): landed = `git log --first-parent main`, 90 days before
+ * the grid start, offline. Opened = paged `gh api` GET of the pulls list, cut to {number, created_at} by --jq. Check = one `gh api`
+ * GET of the search count of PRs merged this week. A gh failure darkens opened (and the check) with "no data: unreachable"; it never
+ * changes the exit code. The gh phase has a 40 s budget shared by its calls, each call timed out at the smaller of 10 s and the budget
+ * left; git has 10 s. No title, branch, author, PR number, SHA, URL or repo name is read into a row or a log line.
+ *
  * Writes: <out>/factory.json through a temp file and a rename, under <out>/.factory.lock. It never touches the 8 export
  * files, refresh.json or .export.lock. It never writes to a source file and never creates a source folder.
  *
  * Importing this file does nothing: no I/O.
  */
 import { createReadStream, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { primaryRoot } from '../lib/resolve-deps.mjs';
-import { buildFactoryRows } from './factory-rows.mjs';
-import { chicagoDay } from './lane-dash-metrics.mjs';
+import { buildFactoryRows, chicagoMidnight, gridOf } from './factory-rows.mjs';
+import { addDays, chicagoDay } from './lane-dash-metrics.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const MAX_BYTES = 64 * 1024 * 1024;
 export const DOC_CAP_BYTES = 256 * 1024;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const SQL = 'Computed in Node by scripts/coordination/factory-rows.mjs from four local files. No query.';
+const SQL = 'Computed in Node by scripts/coordination/factory-rows.mjs from four local files, git log on main and two GitHub reads. No query.';
+const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
+const GIT_TIMEOUT_MS = 10_000;
+const GH_CALL_MS = 10_000;
+const GH_BUDGET_MS = 40_000; // the pager and the search share it: git 10 s + gh 40 s stays under the wrapper's 60 s
+const PAGE_CAP = 10;
+const LOOKBACK_DAYS = 90;
+const SEP = '\x1f';
+const SKIP = Symbol('skip'); // a well-formed git line with no PR shape: not a line, not a row, not bad
+const DUP = Symbol('dup'); // a PR number seen already: a line, not a row, not bad
+const BOUND = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
 const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 // ---------------------------------------------------------------- paths and config
@@ -61,6 +78,8 @@ export function defaultPaths({ primaryRoot: findRoot = primaryRoot, home = homed
     get handoffs() { return path.join(primary(), 'thoughts', 'shared', 'handoffs'); },
     dashConfig: path.join(HERE, 'lane-dash.config.json'),
     get routerConfig() { return path.join(primary(), 'review-router.config.json'); },
+    get gitRoot() { return primary(); },
+    repo: DEFAULT_REPO,
   };
 }
 
@@ -115,6 +134,8 @@ const opaque = (map, prefix, value) => {
 function reducers(exportedMs) {
   const runs = new Map();
   const heads = new Map();
+  const landedSeen = new Set();
+  const openedSeen = new Set();
   const ok = (ts) => typeof ts === 'string' && Number.isFinite(Date.parse(ts)) && Date.parse(ts) <= exportedMs;
   return {
     prpr: (o) => (ok(o.ts) && typeof o.status === 'string' && typeof o.run_id === 'string' && o.run_id !== ''
@@ -126,6 +147,29 @@ function reducers(exportedMs) {
     coderabbit: (o) => (ok(o.ts) && isNumber(o.files) && isNumber(o.cost)
       ? { ts: o.ts, kind: typeof o.kind === 'string' ? o.kind : null, files: o.files, cost: o.cost }
       : null),
+    // One line of `git log --first-parent main --format=%P%x1f%ct%x1f%s`: {ts}, SKIP, DUP or null (bad). The PR number is only a dedupe key.
+    landed: (raw) => {
+      const line = raw.replace(/\r$/, '');
+      const a = line.indexOf(SEP);
+      const b = a < 0 ? -1 : line.indexOf(SEP, a + 1);
+      if (b < 0) return null; // fewer than three fields
+      const parents = line.slice(0, a).split(' ').filter(Boolean).length;
+      const subject = line.slice(b + 1);
+      const m = parents === 2 ? /^Merge pull request #(\d+)/.exec(subject) : (parents === 1 ? /\(#(\d+)\)$/.exec(subject) : null);
+      if (!m) return SKIP;
+      const ct = line.slice(a + 1, b);
+      if (!/^\d{1,12}$/.test(ct)) return null;
+      if (landedSeen.has(m[1])) return DUP;
+      landedSeen.add(m[1]);
+      return { ts: new Date(Number(ct) * 1000).toISOString() };
+    },
+    // One item of the pager: {number, created_at}. Nothing else is read.
+    opened: (o) => {
+      if (!isObject(o) || !Number.isInteger(o.number) || typeof o.created_at !== 'string' || !Number.isFinite(Date.parse(o.created_at))) return null;
+      if (openedSeen.has(o.number)) return DUP;
+      openedSeen.add(o.number);
+      return { ts: o.created_at };
+    },
   };
 }
 
@@ -244,9 +288,164 @@ export async function readHandoffs(dir, deps = {}) {
   }
 }
 
+// ---------------------------------------------------------------- git and GitHub readers (Phase B2)
+
+const clockOf = (deps) => (deps.clock ?? Date.now)();
+const UNREACHABLE = { ok: false, reason: 'unreachable' };
+
+/** Why a child process failed, in a few safe words: the error code or the exit status. Never the message, which holds the command line. */
+const why = (e) => e?.code ?? (Number.isInteger(e?.status) ? `exit ${e.status}` : 'failed');
+
+/** The first stderr line of a failed gh call, cut after its (HTTP nnn) token (a user id and a request id follow it), URLs and the repo hidden. */
+function ghTail(e, repo) {
+  const first = String(e?.stderr ?? '').split(/\r?\n/)[0];
+  const http = /\(HTTP \d{3}\)/.exec(first);
+  const cut = http ? first.slice(0, http.index + http[0].length) : first;
+  const noUrl = cut.replace(/https?:\/\/\S+/g, '<url>');
+  return (repo ? noUrl.split(repo).join('<repo>') : noUrl).slice(0, 200);
+}
+
+/**
+ * One gh call under the shared time budget (GH_BUDGET_MS from the first gh call). The timeout of a call is the smaller of
+ * GH_CALL_MS and what the budget has left; with nothing left no call is made. ENOENT retries once with deps.ghFallback.
+ * Returns the stdout text, or null after one stderr line. A failed call's stdout is never read.
+ */
+function ghRun(args, deps, repo, label) {
+  const err = deps.err ?? console.error;
+  const run = deps.run ?? execFileSync;
+  const budget = (deps.ghBudget ??= { start: clockOf(deps) });
+  const left = Math.floor(GH_BUDGET_MS - (clockOf(deps) - budget.start));
+  if (left <= 0) {
+    err(`export-factory-data: ${label}: gh time budget used up`);
+    return null;
+  }
+  const opts = { encoding: 'utf8', timeout: Math.min(GH_CALL_MS, left), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] };
+  const fallback = Object.hasOwn(deps, 'ghFallback') ? deps.ghFallback : (process.platform === 'win32' ? 'C:\\Program Files\\GitHub CLI\\gh.exe' : null);
+  let failure;
+  try {
+    return String(run('gh', args, opts));
+  } catch (e) {
+    failure = e;
+  }
+  if (failure?.code === 'ENOENT' && fallback) {
+    try {
+      return String(run(fallback, args, opts));
+    } catch (e) {
+      failure = e;
+    }
+  }
+  const tail = ghTail(failure, repo);
+  err(`export-factory-data: ${label}: gh ${why(failure)}${tail ? `: ${tail}` : ''}`.slice(0, 200));
+  return null;
+}
+
+/** The JSON a gh call printed, or undefined after one stderr line. */
+function ghJson(out, deps, label) {
+  try {
+    return JSON.parse(out);
+  } catch {
+    (deps.err ?? console.error)(`export-factory-data: ${label}: reply is not JSON`);
+    return undefined;
+  }
+}
+
+/**
+ * PRs landed: the PR-shaped lines of `git log --first-parent main` since `since` (an ISO UTC instant). Every line read is kept,
+ * in the grid or not. Returns {ok: true, rows: [{ts}], bad} or {ok: false, reason}. deps = {run, err}.
+ * A line is a PR-shaped or a malformed git line. A skipped line (no PR shape) is not a line. A duplicate is a line, not a row.
+ */
+export function readLanded({ cwd, since }, deps = {}) {
+  const err = deps.err ?? console.error;
+  const run = deps.run ?? execFileSync;
+  let out;
+  try {
+    const args = ['log', '--first-parent', 'main', '--since', since, '--format=%P%x1f%ct%x1f%s'];
+    out = String(run('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }));
+  } catch (e) {
+    err(`export-factory-data: prpr.prs.landed: git ${why(e)}`);
+    return { ok: false, reason: 'reader error' };
+  }
+  const reduce = reducers(0).landed;
+  const rows = [];
+  let lines = 0;
+  let bad = 0;
+  for (const raw of out.split('\n')) {
+    if (raw.replace(/\r$/, '') === '') continue;
+    const row = reduce(raw);
+    if (row === SKIP) continue;
+    lines++;
+    if (row === DUP) continue;
+    if (row) rows.push(row); else bad++;
+  }
+  return verdict(rows, lines, bad);
+}
+
+/**
+ * PRs opened: `gh api` pulls pages, newest created first, cut to {number, created_at} by --jq. Stops at a short page, a page that
+ * reaches a Chicago day before `start`, or the page cap ("too large"). Any gh failure is "unreachable" for the whole family:
+ * no partial pages are kept. deps = {run, err, clock, ghFallback, ghBudget}.
+ */
+export function readOpened({ repo, start }, deps = {}) {
+  const label = 'prpr.prs.opened';
+  const reduce = reducers(0).opened;
+  const rows = [];
+  let lines = 0;
+  let bad = 0;
+  for (let page = 1; page <= PAGE_CAP; page++) {
+    const url = `repos/${repo}/pulls?state=all&sort=created&direction=desc&per_page=100&page=${page}`;
+    const out = ghRun(['api', '-X', 'GET', url, '--jq', '[.[]|{number,created_at}]'], deps, repo, label);
+    if (out === null) return UNREACHABLE;
+    const items = ghJson(out, deps, label);
+    if (!Array.isArray(items)) {
+      if (items !== undefined) (deps.err ?? console.error)(`export-factory-data: ${label}: reply is not a list`);
+      return UNREACHABLE;
+    }
+    let oldest = Infinity;
+    for (const it of items) {
+      lines++;
+      const row = reduce(it);
+      if (row === DUP) continue;
+      if (!row) { bad++; continue; }
+      rows.push(row);
+      oldest = Math.min(oldest, Date.parse(row.ts));
+    }
+    if (items.length < 100) return verdict(rows, lines, bad);
+    if (Number.isFinite(oldest) && chicagoDay(new Date(oldest).toISOString()) < start) return verdict(rows, lines, bad);
+  }
+  return { ok: false, reason: 'too large' };
+}
+
+const goodBound = (s) => typeof s === 'string' && BOUND.test(s) && Number.isFinite(Date.parse(s));
+
+/**
+ * One integer: PRs merged into main in [from, to] by GitHub search. `weekStart` is echoed so the row builder can check it asked for
+ * the same week. GitHub answers a malformed bound with 0 and exit 0, so both bounds are checked here and a miss makes no call.
+ * Returns {ok: true, apiCount, weekStart} or {ok: false, reason}. deps as readOpened.
+ */
+export function readMergedWeek({ repo, weekStart, from, to }, deps = {}) {
+  const label = 'prpr.prs.check';
+  if (!goodBound(from) || !goodBound(to)) {
+    (deps.err ?? console.error)(`export-factory-data: ${label}: bad time bound`);
+    return { ok: false, reason: 'reader error' };
+  }
+  const url = `search/issues?q=repo:${repo}+is:pr+base:main+merged:${from}..${to}&per_page=1`;
+  const out = ghRun(['api', '-X', 'GET', url, '--jq', '.total_count'], deps, repo, label);
+  if (out === null) return UNREACHABLE;
+  const reply = ghJson(out, deps, label);
+  const count = typeof reply === 'number' ? reply : reply?.total_count;
+  if (!Number.isInteger(count) || count < 0) {
+    if (reply !== undefined) (deps.err ?? console.error)(`export-factory-data: ${label}: reply has no whole count`);
+    return UNREACHABLE;
+  }
+  return { ok: true, apiCount: count, weekStart };
+}
+
 // ---------------------------------------------------------------- build and write
 
-/** Read the four families and build the envelope. `deps.now` is the run clock (ISO UTC). */
+/**
+ * Read the four files, git and GitHub, and build the envelope. `deps.now` is the run clock (ISO UTC); `deps.clock` is a millisecond
+ * clock for the gh budget only (default Date.now); `deps.run` runs git and gh (default execFileSync). Returns {envelope, checkLine}.
+ */
 export async function collectFactory(opts, deps = {}) {
   const exportedAt = (deps.now ?? (() => new Date().toISOString()))();
   const err = deps.err ?? console.error;
@@ -255,11 +454,20 @@ export async function collectFactory(opts, deps = {}) {
   const rev = await readJsonlFamily(opts.reviews, 'rev', exportedAt, d);
   const coderabbit = await readJsonlFamily(opts.coderabbit, 'coderabbit', exportedAt, d);
   const hand = await readHandoffs(opts.handoffs, d);
+  const today = chicagoDay(exportedAt);
+  const targets = readDashTargets(opts.dashConfig, err);
+  const g = gridOf(today, targets);
+  const repo = opts.repo ?? DEFAULT_REPO;
+  d.ghBudget = { start: clockOf(d) }; // the gh phase starts here: pager, then search, then git
+  const prsOpened = readOpened({ repo, start: g.start }, d);
+  const prsCheck = readMergedWeek({ repo, weekStart: g.weekStart, from: chicagoMidnight(g.weekStart), to: exportedAt }, d);
+  const prsLanded = readLanded({ cwd: opts.gitRoot, since: `${addDays(g.start, -LOOKBACK_DAYS)}T00:00:00Z` }, d);
   const rows = buildFactoryRows({
-    today: chicagoDay(exportedAt), exportedAt, targets: readDashTargets(opts.dashConfig, err), cap: readRouterCap(opts.routerConfig),
-    prpr, rev, coderabbit, hand,
+    today, exportedAt, targets, cap: readRouterCap(opts.routerConfig),
+    prpr, rev, coderabbit, hand, prsLanded, prsOpened, prsCheck,
   });
-  return { envelope: { sql: SQL, exportedAt, rows } };
+  const checkLine = `prpr.prs.check: ${prsCheck.ok ? `${prsCheck.apiCount} merged this week` : `no data: ${prsCheck.reason}`}`;
+  return { envelope: { sql: SQL, exportedAt, rows }, checkLine };
 }
 
 function acquireLock(lock) {
@@ -302,15 +510,18 @@ export function writeFactory(outDir, envelope, deps = {}) {
 
 const USAGE = `usage: export-factory-data.mjs [--out <dir>] [--gates <file>] [--reviews <file>] [--coderabbit <file>]
                                [--handoffs <dir>] [--dash-config <file>] [--router-config <file>]
-  --out            output folder (default ~/.claude/state/lane-dash)
+                               [--repo <owner/name>] [--git-root <dir>]
+  --out           output folder (default ~/.claude/state/lane-dash)
   --gates          pre-PR gate log (default ~/.claude/logs/pre-pr-gates.jsonl)
   --reviews        review ledger (default ~/.claude/state/cursor-review-ledger.jsonl)
   --coderabbit     CodeRabbit paid ledger (default ~/.claude/state/coderabbit-paid.jsonl)
   --handoffs       handoff YAML folder (default <primary checkout>/thoughts/shared/handoffs)
   --dash-config    window_days (default scripts/coordination/lane-dash.config.json)
-  --router-config  coderabbit.monthly_file_cap (default <primary checkout>/review-router.config.json)`;
+  --router-config  coderabbit.monthly_file_cap (default <primary checkout>/review-router.config.json)
+  --repo           GitHub repo for the PR reads, read-only GET calls (default ${DEFAULT_REPO})
+  --git-root       checkout whose main branch is counted for landed PRs (default <primary checkout>)`;
 
-const FLAGS = { '--out': 'out', '--gates': 'gates', '--reviews': 'reviews', '--coderabbit': 'coderabbit', '--handoffs': 'handoffs', '--dash-config': 'dashConfig', '--router-config': 'routerConfig' };
+const FLAGS = { '--out': 'out', '--gates': 'gates', '--reviews': 'reviews', '--coderabbit': 'coderabbit', '--handoffs': 'handoffs', '--dash-config': 'dashConfig', '--router-config': 'routerConfig', '--repo': 'repo', '--git-root': 'gitRoot' };
 
 function parseArgs(argv) {
   const opts = { help: false };
@@ -333,7 +544,7 @@ function familyLine(rows, id, unit) {
   return `${id}: ${get('rows').value} ${unit}, ${get('bad_lines').value} bad lines, as of ${asOf.text}`;
 }
 
-/** Run. Returns the exit code. `deps` = {now, log, err, stat, open, rename, primaryRoot, home} (tests inject them). */
+/** Run. Returns the exit code. `deps` = {now, clock, run, ghFallback, log, err, stat, open, rename, primaryRoot, home} (tests inject them). */
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const log = deps.log ?? console.log;
   const err = deps.err ?? console.error;
@@ -347,9 +558,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (opts.help) { log(USAGE); return 0; }
   const defaults = defaultPaths({ primaryRoot: deps.primaryRoot, home: deps.home });
   const o = Object.fromEntries(Object.values(FLAGS).map((k) => [k, opts[k] ?? defaults[k]]));
-  const { envelope } = await collectFactory(o, { ...deps, err });
+  const { envelope, checkLine } = await collectFactory(o, { ...deps, err });
   const rows = envelope.rows;
-  for (const [id, unit] of [['prpr', 'rows'], ['rev', 'rows'], ['rev.coderabbit', 'rows'], ['hand', 'files']]) log(familyLine(rows, id, unit));
+  for (const [id, unit] of [['prpr', 'rows'], ['rev', 'rows'], ['rev.coderabbit', 'rows'], ['hand', 'files'], ['prpr.prs.landed', 'events'], ['prpr.prs.opened', 'events']]) {
+    log(familyLine(rows, id, unit));
+  }
+  log(checkLine);
   const out = path.resolve(o.out);
   try {
     const { bytes } = writeFactory(out, envelope, deps);
