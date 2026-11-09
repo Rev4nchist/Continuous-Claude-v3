@@ -114,6 +114,42 @@ jobs:
         timeout-minutes: 5
         run: npx playwright test --config apps/agentic-os/playwright.pure.config.ts
 
+  # The hooks are TypeScript that ships as dist/*.mjs. Before this job no workflow type-checked or built them:
+  # a type error or a stale dist reached main if the author skipped pre-pr (lane ts-gates-prepr-ci, part two; part one is the
+  # pre-pr hooks-tsc gate). Separate job: the ratchets job has a 10 minute budget. Each step runs even when an earlier one failed,
+  # so one red step does not hide the others. `npx --no-install` never fetches a package from the registry.
+  hooks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # this job never pushes; keep the git token off disk (zizmor artipacked)
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Install hooks dependencies (lockfile, no scripts)
+        working-directory: .claude/hooks
+        timeout-minutes: 5
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Hooks type check (tsc --noEmit)
+        if: ${{ !cancelled() }}
+        working-directory: .claude/hooks
+        timeout-minutes: 5
+        run: npx --no-install tsc --noEmit
+      - name: Hooks build, and dist is not stale
+        if: ${{ !cancelled() }}
+        working-directory: .claude/hooks
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          npm run build
+          # The committed dist files hold CRLF (Windows autocrlf) and Linux writes LF: compare content, not line endings.
+          git diff --exit-code --ignore-cr-at-eol -- dist
+          test -z "$(git ls-files --others --exclude-standard -- dist)"
+      # No vitest step yet: on Linux 40 of 7289 hooks tests fail (Windows paths, the daemon, PowerShell). They run in pre-pr on
+      # Dave's machine. Lane ts-gates-vitest-ci triages them, then adds the step back.
+
   # The lane board tests build a throwaway database (scripts/coordination/scratch-db.mjs) and run the real render-board.mjs
   # and lane.mjs against it. Before this job no workflow ran them: two render-board tests sat red on main (PR #312, 2026-11-05)
   # while every check was green. Separate job: the ratchets job has a 10 minute budget and already hit it once on a slow checkout.
