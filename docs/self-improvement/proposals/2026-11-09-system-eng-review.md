@@ -303,7 +303,7 @@ Already tracked elsewhere: MEMORY.md claim blocks under ROADMAP G4 (`ROADMAP.md:
 6. Did the decision-gate `spawnSync git ENOENT` rows on 2026-11-08 come before the aecad9ed sync, or from a missing git PATH?
 7. [Speculation] Does the harness doctor surface DB-drop counts anywhere?
 8. Is a Bash `mv` and `git mv` matcher for file claims worth its noise?
-9. M2 keeps `git-auto-commit.ts` and its dist while unregistering it. Flagging an unregistered dist is the job of `/hook-audit`. Keep the source and allowlist it in hook-audit, or archive both source and dist? Not decided.
+9. M2 keeps `git-auto-commit.ts` and its dist while unregistering it. Flagging an unregistered dist is the job of `/hook-audit`. Keep the source and allowlist it in hook-audit, or archive both source and dist? DECIDED by Dave 2026-11-09: keep the source and allowlist it in hook-audit, following the `sync-to-repo` precedent.
 
 ## 7. Dave's decisions and the headless probe (2026-11-09)
 
