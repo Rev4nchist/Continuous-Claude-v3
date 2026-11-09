@@ -40,7 +40,7 @@
  * from the direct count.
  *
  * Snapshots: one row per Chicago day, upserted into <out>/snapshots.json under a lock. The old file is kept
- * as snapshots.json.bak. A file that does not parse fails the export and is never overwritten.
+ * as snapshots.json.bak, written once per Chicago day (on the first export of the day), so it covers a day, not one run. A file that does not parse fails the export and is never overwritten.
  *
  * Importing this file does nothing: no I/O, no connection.
  */
@@ -322,7 +322,10 @@ export function writeExport(outDir, collected) {
       writeFileSync(tmp, f.text);
       temps.push(tmp);
     }
-    if (existsSync(snapFile)) copyFileSync(snapFile, `${snapFile}.bak`);
+    // The .bak is the file as the last day left it: copy it on the first export of a Chicago day only (the file has no row for
+    // today yet). The 30-minute task would otherwise overwrite it every run and it would cover 30 minutes. No .bak yet: copy once.
+    const firstOfDay = !prior.some((r) => r.day === row.day);
+    if (existsSync(snapFile) && (firstOfDay || !existsSync(`${snapFile}.bak`))) copyFileSync(snapFile, `${snapFile}.bak`);
     for (const f of files) renameSync(path.join(outDir, `${f.name}.tmp`), path.join(outDir, f.name));
     temps.length = 0;
     return { exportedAt, files: files.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.text) })), envelopes };
