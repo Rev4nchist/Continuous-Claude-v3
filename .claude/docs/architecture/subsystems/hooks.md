@@ -105,7 +105,7 @@ Edit hook source in the repo, build, then sync `dist/`.
 
 ## Creating a Hook
 
-1. Create `~/.claude/hooks/src/my-hook.ts`
+1. Create `.claude/hooks/src/my-hook.ts` in the repo
 2. Implement hook logic matching the lifecycle event (read stdin, print the output contract)
 3. Build: `cd .claude/hooks && npm run build` → produces `dist/my-hook.mjs`
 4. Register in `~/.claude/settings.json`

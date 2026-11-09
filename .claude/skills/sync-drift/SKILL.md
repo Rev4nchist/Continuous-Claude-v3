@@ -146,7 +146,7 @@ Format the output as a table:
 | File Path | Status | Fix Command |
 |-----------|--------|-------------|
 | `hooks/src/example.ts` | Content differs | `bash scripts/sync-to-active.sh` |
-| `hooks/dist/example.mjs` | Stale build | `cd ~/.claude/hooks && npm run build` |
+| `hooks/dist/example.mjs` | Stale build | `cd ~/continuous-claude/.claude/hooks && npm run build` |
 | `rules/new-rule.md` | Missing in active | `bash scripts/sync-to-active.sh` |
 | `skills/new-skill/SKILL.md` | Missing in active | `bash scripts/sync-to-active.sh` |
 | `agents/new-agent.md` | Content differs | `bash scripts/sync-to-active.sh` |
@@ -159,7 +159,7 @@ Format the output as a table:
 
 **Fix commands:**
 - For source/config drift: `bash ~/continuous-claude/scripts/sync-to-active.sh`
-- For stale builds: `cd ~/.claude/hooks && npm run build`
+- For stale builds: `cd ~/continuous-claude/.claude/hooks && npm run build`
 - For missing in repo: `bash ~/continuous-claude/scripts/sync-claude.sh --to-repo`
 
 ### Step 5: Summary
