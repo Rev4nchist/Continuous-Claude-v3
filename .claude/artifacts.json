@@ -293,7 +293,7 @@
       },
       "notes": [
         "A SNAPSHOT of 2026-11-09 built by a 10-agent workflow. It does not refresh by itself: re-run the discovery workflow, update inventory.json, then run build.mjs.",
-        "Source, template, generator and data live in .claudedocs/harness-resource-index/ (untracked, machine-local). Rebuild: node .claudedocs/harness-resource-index/build.mjs.",
+        "Source, template, build script and data live in .claudedocs/harness-resource-index/ (untracked, machine-local). build.mjs also applies one-off fixes to inventory.json, so it is not a clean render: edit inventory.json and template.html, check the script, then rebuild and publish. Content model is narrative-snapshot for that reason, like the three entries above it.",
         "Dave said yes on 2026-11-09 to registering it. Publish WITHOUT capabilities."
       ]
     }
