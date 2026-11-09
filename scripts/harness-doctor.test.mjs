@@ -503,7 +503,7 @@ test('guard-decisions counts only lines with kind error', () => {
 
 const crash = (n, hook, message, extra = {}) => Array.from({ length: n }, () => ({ ts: iso(HOUR), hook, kind: 'error', message, ...extra }));
 
-test('guard-decisions ignores error rows tagged with a source other than live, and says how many', () => {
+test('guard-decisions ignores error rows tagged test or probe, and says how many', () => {
   const fx = fixture();
   put(logPath(fx, 'guard-decisions.jsonl'), jsonl([...crash(6, 'decision-gate', 'spawnSync git ENOENT', { source: 'probe' }), ...crash(2, 'decision-gate', 'x', { source: 'test' })]));
   const c = run(fx).checks['logs:guard-decisions'];
