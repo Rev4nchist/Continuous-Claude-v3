@@ -20258,6 +20258,8 @@ var INSTALL_PATTERNS = [
   installPattern(String.raw`uv${UV_OPTS}\s+pip\s+install${END}`, "pypi", { requirePin: true, flags: "pip" }),
   installPattern(String.raw`uv${UV_OPTS}\s+add${END}`, "pypi", { flags: "pip" }),
   installPattern(String.raw`poetry\s+add${END}`, "pypi", { flags: "pip" }),
+  // pdm add resolves from PyPI and writes a lockfile, like poetry add.
+  installPattern(String.raw`${bin("pdm")}\s+add${END}`, "pypi", { flags: "pip" }),
   installPattern(String.raw`pipenv\s+install${END}`, "pypi", { flags: "pip" }),
   // Python runners and tool installs (F13): the first token is the package, the rest is its argv.
   installPattern(String.raw`(?:uvx|uv${UV_OPTS}\s+tool\s+(?:run|install)|pipx\s+(?:run|install))${END}`, "pypi", { kind: "first", flags: "pyrunner" }),
@@ -20559,7 +20561,7 @@ var MANAGER_VERBS = [
   [/^(?:pip\d*(?:\.\d+)?|pipx|pipenv)$/, word(PIP_VERBS)],
   // uv with an option the patterns do not know (uv --foo X run --with y) still asks. managerVerbs takes the first entry, so uv has one.
   [/^uv$/, /^(?:install|download|wheel|add|run|tool)$/],
-  [/^poetry$/, /^add$/],
+  [/^(?:poetry|pdm)$/, /^add$/],
   [/^cargo$/, /^(?:add|install|binstall)$/],
   [/^brew$/, /^(?:install|reinstall|upgrade)$/],
   [/^go$/, /^(?:get|install)$/],
@@ -20582,19 +20584,33 @@ var ANY_VERB = new RegExp(`^(?:${MANAGER_VERBS.filter(([, v]) => v !== ANY_WORD)
 var START_PROCESS = /^(?:start-process|saps|start)$/i;
 var NOT_INSTALL = /^(?:test|t|tst|run|run-script|start|stop|restart|build|exec)$/;
 function anyManagerInstall(words) {
+  const solved = /* @__PURE__ */ new Map();
+  const solve = (verbs) => {
+    const cached = solved.get(verbs);
+    if (cached) return cached;
+    const n = words.length;
+    const table = [new Uint8Array(n + 1), new Uint8Array(n + 1)];
+    for (let j = n - 1; j >= 1; j--) {
+      const v = words[j];
+      if (verbs.test(v)) {
+        table[0][j] = 1;
+        table[1][j] = 1;
+        continue;
+      }
+      const flagLike = v.startsWith("-") || words[j - 1].startsWith("-");
+      const stops = !flagLike && NOT_INSTALL.test(v);
+      for (const seen of [0, 1]) {
+        if (v === "--" && seen === 1) table[seen][j] = 0;
+        else if (flagLike) table[seen][j] = table[seen][j + 1];
+        else table[seen][j] = stops ? 0 : table[1][j + 1];
+      }
+    }
+    solved.set(verbs, table);
+    return table;
+  };
   return words.some((w, i) => {
     const verbs = managerVerbs(w);
-    if (verbs === void 0) return false;
-    let subcommandSeen = false;
-    for (let j = i + 1; j < words.length; j++) {
-      const v = words[j];
-      if (verbs.test(v)) return true;
-      if (v === "--" && subcommandSeen) return false;
-      if (v.startsWith("-") || words[j - 1].startsWith("-")) continue;
-      if (NOT_INSTALL.test(v)) return false;
-      subcommandSeen = true;
-    }
-    return false;
+    return verbs !== void 0 && solve(verbs)[0][i + 1] === 1;
   });
 }
 function hiddenInstall(segment, tool) {
@@ -20606,8 +20622,9 @@ function hiddenInstall(segment, tool) {
 var isFlagWord = (w) => /^[-/]/.test(w);
 function positionals(rest, max) {
   const out = [];
-  for (const w of rest) {
+  for (let j = rest.from; j < rest.words.length; j++) {
     if (out.length >= max) break;
+    const w = rest.words[j];
     if (!isFlagWord(w)) out.push(w.replace(/\\/g, "").toLowerCase());
   }
   return out;
@@ -20628,7 +20645,10 @@ var NUGET_READ_ONLY = /^(?:locals|sources|source|config|help|list|pack|push|dele
 var NUGET_SOURCE_FLAG = /^-(?:source|configfile|fallbacksource)(?:[=:].*)?$/i;
 var DOTNET_SOURCE_FLAG = /^(?:--source|-s|--add-source|--configfile|--config-file)(?:[=:].*)?$/i;
 var DOTNET_SOURCE_PROP = /restoresources|restoreadditionalprojectsources|restoreconfigfile/i;
+var DOTNET_INSTALL_FLAG = /^(?:--install|-i)(?:[=:].*)?$/i;
 var DOTNET_RESTORING = /^(?:restore|build|publish|pack)$/;
+var CONDA_VERBS = /^(?:install|create|update|upgrade)$/;
+var CONDA_READ_ONLY = /^(?:list|search|info|config|clean|remove|uninstall|activate|deactivate|init|run|package|doctor|notices|compare|export|repoquery|env-list)$/;
 var BREW_BUNDLE_READ_ONLY = /^(?:check|list|dump|cleanup|exec|env|sh|edit|remove)$/;
 function pair(pos, a, next) {
   return pos.some((w, i) => w === a && next.test(pos[i + 1] ?? ""));
@@ -20636,7 +20656,7 @@ function pair(pos, a, next) {
 function dotnetInstall(rest) {
   const pos = positionals(rest, 8);
   const add = pos.indexOf("add");
-  return pair(pos, "new", /^(?:install|update)$/) || pos.includes("new") && rest.some((w) => /^(?:--install|-i)(?:[=:].*)?$/i.test(w)) || pair(pos, "workload", /^(?:install|update|restore)$/) || pair(pos, "tool", /^(?:install|update|exec|run)$/) || pair(pos, "package", /^add$/) || add >= 0 && pos.indexOf("package", add + 1) >= 0 || pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w)) || rest.some((w) => DOTNET_SOURCE_PROP.test(w));
+  return pair(pos, "new", /^(?:install|update)$/) || pos.includes("new") && rest.has(DOTNET_INSTALL_FLAG) || pair(pos, "workload", /^(?:install|update|restore)$/) || pair(pos, "tool", /^(?:install|update|exec|run)$/) || pair(pos, "package", /^add$/) || add >= 0 && pos.indexOf("package", add + 1) >= 0 || pos.some((w) => DOTNET_RESTORING.test(w)) && rest.has(DOTNET_SOURCE_FLAG) || rest.has(DOTNET_SOURCE_PROP);
 }
 var ECO_RULES = [
   { ecosystem: "cargo", names: /^cargo-binstall$/, commandOnly: false, installs: () => true },
@@ -20649,9 +20669,10 @@ var ECO_RULES = [
     ecosystem: "nuget",
     names: /^nuget$/,
     commandOnly: false,
-    installs: (r) => installVerbFirst(r, NUGET_VERBS, NUGET_READ_ONLY) || positionals(r, 4).includes("restore") && r.some((w) => NUGET_SOURCE_FLAG.test(w))
+    installs: (r) => installVerbFirst(r, NUGET_VERBS, NUGET_READ_ONLY) || positionals(r, 4).includes("restore") && r.has(NUGET_SOURCE_FLAG)
   },
   { ecosystem: "nuget", names: /^dotnet$/, commandOnly: false, installs: dotnetInstall },
+  { ecosystem: "conda", names: /^(?:conda|mamba|micromamba)$/, commandOnly: false, installs: (r) => installVerbFirst(r, CONDA_VERBS, CONDA_READ_ONLY) },
   { ecosystem: "brew", names: /^brew$/, commandOnly: false, installs: (r) => {
     const [a, b] = positionals(r, 2);
     return a === "bundle" && !BREW_BUNDLE_READ_ONLY.test(b ?? "");
@@ -20667,12 +20688,22 @@ function ecosystemInstall(segment) {
   if (words[0] === "&") words.shift();
   const spawns = START_PROCESS.test(words[0] ?? "") || /^(?:iex|invoke-expression)$/i.test(words[0] ?? "");
   if (spawns) words = words.flatMap((w) => w.split(/\s+/)).filter(Boolean);
+  const last = /* @__PURE__ */ new Map();
+  const lastIndex = (re) => {
+    let at = last.get(re);
+    if (at === void 0) {
+      at = words.length - 1;
+      while (at >= 0 && !re.test(words[at])) at--;
+      last.set(re, at);
+    }
+    return at;
+  };
   for (let i = 0; i < words.length; i++) {
     if (i > 0 && !spawns && LOOKUP.test(words[i - 1])) continue;
     const word2 = words[i].replace(/^[({]+(?=.)/, "");
     const names = [commandName(word2), commandName(word2.replace(/\\/g, ""))];
     const atCommand = i === 0 || spawns || LAUNCHER2.test(words[i - 1]) || word2 !== words[i];
-    const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs(words.slice(i + 1)));
+    const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs({ words, from: i + 1, has: (re) => lastIndex(re) > i }));
     if (rule) return rule.ecosystem;
   }
   return null;
@@ -20855,7 +20886,7 @@ function classifyToken(token, pattern) {
     const at = pattern.kind === "first" ? spec.match(/^([A-Za-z0-9_.-]+)@([^:/@]+)$/) : null;
     if (at) return { pkg: { name: at[1], version: at[2] === "latest" ? void 0 : at[2] } };
     if (isRemoteSource(spec) || ARCHIVE.test(spec)) return { unparsed: true };
-    if (/^[.~/]|[\\/]/.test(token)) return {};
+    if (/^[.~/]|[\\/]/.test(spec)) return /[=<>!]/.test(spec) ? { unparsed: true } : {};
     const pkg2 = parsePackageToken(token, ecosystem);
     return pkg2 ? { pkg: pkg2 } : { unparsed: true };
   }
@@ -21288,6 +21319,17 @@ function rcFileSettings(file, text) {
   });
   return out;
 }
+var RC_GATE_NAMES = /npm|pnpm|yarn|pip|poetry|pdm|conda|mamba|cargo|brew|composer|deno|dnx|dotnet|nuget|choco|cinst|winget|npx|bunx|uvx|python|(?:install|save|update)-/;
+var RC_GATE_SHORT = /(?<![a-z0-9])(?:go|gem|uv|py|bun|cup)(?![a-z])/;
+var RC_GATE_CONFIG = /registry|index-url|index_url|find-links|find_links|userconfig|globalconfig|npm_config|\.npmrc|\.yarnrc|bunfig|pip\.(?:ini|conf)|uv\.toml|iex|invoke-expression|start-process|saps/;
+var RC_GATE_HIDDEN = /[$`{]/;
+function mayInstall(command) {
+  if (RC_GATE_HIDDEN.test(command)) return true;
+  const joined = command.toLowerCase().replace(/\\\r?\n/g, "");
+  const plain = joined.replace(/[\\'"^]/g, "");
+  const unquoted = joined.replace(/['"^]/g, "");
+  return [plain, unquoted].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text) || RC_GATE_CONFIG.test(text));
+}
 function rcFileMarkers(cwd) {
   const dirs = /* @__PURE__ */ new Set();
   let dir = resolve(cwd);
@@ -21394,7 +21436,7 @@ async function main() {
     return;
   }
   const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  const rcMarkers = payloadCwd === null ? [] : rcFileMarkers(payloadCwd);
+  const rcMarkers = payloadCwd === null || !mayInstall(command) ? [] : rcFileMarkers(payloadCwd);
   const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : void 0));
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   const wholeOverride = PS_OVERRIDE.test(command);
@@ -21459,6 +21501,7 @@ export {
   installPlans,
   installSegments,
   isPackageInstallCommand,
+  mayInstall,
   parseEcosystem,
   publishDateFromRegistryJson,
   stripFdRedirects,

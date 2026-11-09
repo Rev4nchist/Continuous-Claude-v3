@@ -54,7 +54,7 @@ interface PackageInfo {
   version: string | undefined;
 }
 
-type Ecosystem = 'pypi' | 'npm' | 'cargo' | 'go' | 'gem' | 'composer' | 'nuget' | 'brew' | 'chocolatey' | 'winget' | 'powershell' | null;
+type Ecosystem = 'pypi' | 'npm' | 'cargo' | 'go' | 'gem' | 'composer' | 'nuget' | 'brew' | 'chocolatey' | 'winget' | 'powershell' | 'conda' | null;
 
 interface MaliciousCheckResult {
   blocked: boolean;
@@ -165,6 +165,8 @@ const INSTALL_PATTERNS: InstallPattern[] = [
   installPattern(String.raw`uv${UV_OPTS}\s+pip\s+install${END}`, 'pypi', { requirePin: true, flags: 'pip' }),
   installPattern(String.raw`uv${UV_OPTS}\s+add${END}`, 'pypi', { flags: 'pip' }),
   installPattern(String.raw`poetry\s+add${END}`, 'pypi', { flags: 'pip' }),
+  // pdm add resolves from PyPI and writes a lockfile, like poetry add.
+  installPattern(String.raw`${bin('pdm')}\s+add${END}`, 'pypi', { flags: 'pip' }),
   installPattern(String.raw`pipenv\s+install${END}`, 'pypi', { flags: 'pip' }),
   // Python runners and tool installs (F13): the first token is the package, the rest is its argv.
   installPattern(String.raw`(?:uvx|uv${UV_OPTS}\s+tool\s+(?:run|install)|pipx\s+(?:run|install))${END}`, 'pypi', { kind: 'first', flags: 'pyrunner' }),
@@ -481,7 +483,7 @@ const MANAGER_VERBS: [RegExp, RegExp][] = [
   [/^(?:pip\d*(?:\.\d+)?|pipx|pipenv)$/, word(PIP_VERBS)],
   // uv with an option the patterns do not know (uv --foo X run --with y) still asks. managerVerbs takes the first entry, so uv has one.
   [/^uv$/, /^(?:install|download|wheel|add|run|tool)$/],
-  [/^poetry$/, /^add$/],
+  [/^(?:poetry|pdm)$/, /^add$/],
   [/^cargo$/, /^(?:add|install|binstall)$/],
   [/^brew$/, /^(?:install|reinstall|upgrade)$/],
   [/^go$/, /^(?:get|install)$/],
@@ -524,19 +526,32 @@ const NOT_INSTALL = /^(?:test|t|tst|run|run-script|start|stop|restart|build|exec
  * options, so npm -w ws -- install x still installs.
  */
 function anyManagerInstall(words: string[]): boolean {
+  // The scan from a manager word is a small state machine over the words after it (state: subcommandSeen). Starting a scan
+  // from every manager word made a command of 40000 repeated "npm" words quadratic. So each verb set is solved once, from the
+  // right: solved.get(verbs)[seen][j] is 1 when a scan that reaches word j in state `seen` finds an install. Same answers, linear time.
+  const solved = new Map<RegExp, [Uint8Array, Uint8Array]>();
+  const solve = (verbs: RegExp): [Uint8Array, Uint8Array] => {
+    const cached = solved.get(verbs);
+    if (cached) return cached;
+    const n = words.length;
+    const table: [Uint8Array, Uint8Array] = [new Uint8Array(n + 1), new Uint8Array(n + 1)];
+    for (let j = n - 1; j >= 1; j--) {
+      const v = words[j];
+      if (verbs.test(v)) { table[0][j] = 1; table[1][j] = 1; continue; }
+      const flagLike = v.startsWith('-') || words[j - 1].startsWith('-');
+      const stops = !flagLike && NOT_INSTALL.test(v);
+      for (const seen of [0, 1] as const) {
+        if (v === '--' && seen === 1) table[seen][j] = 0;
+        else if (flagLike) table[seen][j] = table[seen][j + 1];
+        else table[seen][j] = stops ? 0 : table[1][j + 1];
+      }
+    }
+    solved.set(verbs, table);
+    return table;
+  };
   return words.some((w, i) => {
     const verbs = managerVerbs(w);
-    if (verbs === undefined) return false;
-    let subcommandSeen = false;
-    for (let j = i + 1; j < words.length; j++) {
-      const v = words[j];
-      if (verbs.test(v)) return true;
-      if (v === '--' && subcommandSeen) return false;
-      if (v.startsWith('-') || words[j - 1].startsWith('-')) continue;
-      if (NOT_INSTALL.test(v)) return false;
-      subcommandSeen = true;
-    }
-    return false;
+    return verbs !== undefined && solve(verbs)[0][i + 1] === 1;
   });
 }
 
@@ -565,16 +580,24 @@ interface EcoRule {
   /** true: the name counts only as the command word (or after a launcher), because the name is a common word or a cmdlet. */
   commandOnly: boolean;
   /** The words after the command name. */
-  installs: (rest: string[]) => boolean;
+  installs: (rest: Rest) => boolean;
 }
+
+/**
+ * The words after an ecosystem command name: words[from..]. It is a view, not a copy: a copy at every name hit
+ * made a command of 40000 repeated names quadratic. `has(re)` is words.slice(from).some(re) in O(1): the last
+ * matching index of each regex is found once per segment. The regexes must not be global (no lastIndex state).
+ */
+interface Rest { words: string[]; from: number; has: (re: RegExp) => boolean }
 
 // A word that may start a flag: -y, --source, /p:Prop (msbuild), /? (winget).
 const isFlagWord = (w: string) => /^[-/]/.test(w);
 // The first non-flag words, lower case, with a backslash inside removed (in\stall).
-function positionals(rest: string[], max: number): string[] {
+function positionals(rest: Rest, max: number): string[] {
   const out: string[] = [];
-  for (const w of rest) {
+  for (let j = rest.from; j < rest.words.length; j++) {
     if (out.length >= max) break;
+    const w = rest.words[j];
     if (!isFlagWord(w)) out.push(w.replace(/\\/g, '').toLowerCase());
   }
   return out;
@@ -584,7 +607,7 @@ function positionals(rest: string[], max: number): string[] {
  * Some positional (the first 4) is an install verb, or hides its text ($VERB). A read-only verb before it
  * ends the scan: `choco list install` and `winget search install` look for a package named "install".
  */
-function installVerbFirst(rest: string[], verbs: RegExp, readOnly: RegExp): boolean {
+function installVerbFirst(rest: Rest, verbs: RegExp, readOnly: RegExp): boolean {
   for (const w of positionals(rest, 4)) {
     if (/^[$`]/.test(w) || verbs.test(w)) return true;
     if (readOnly.test(w)) return false;
@@ -603,7 +626,11 @@ const NUGET_SOURCE_FLAG = /^-(?:source|configfile|fallbacksource)(?:[=:].*)?$/i;
 // dotnet restore, build, publish, pack: --source, -s, --add-source, --configfile (also -s:URL, --source=URL), and the msbuild properties.
 const DOTNET_SOURCE_FLAG = /^(?:--source|-s|--add-source|--configfile|--config-file)(?:[=:].*)?$/i;
 const DOTNET_SOURCE_PROP = /restoresources|restoreadditionalprojectsources|restoreconfigfile/i;
+const DOTNET_INSTALL_FLAG = /^(?:--install|-i)(?:[=:].*)?$/i;
 const DOTNET_RESTORING = /^(?:restore|build|publish|pack)$/;
+// conda, mamba and micromamba install from conda channels, which the guard cannot read. Any of these verbs asks.
+const CONDA_VERBS = /^(?:install|create|update|upgrade)$/;
+const CONDA_READ_ONLY = /^(?:list|search|info|config|clean|remove|uninstall|activate|deactivate|init|run|package|doctor|notices|compare|export|repoquery|env-list)$/;
 // brew bundle sub-commands that install nothing. A bare `brew bundle`, `install`, `add` and a --file option install.
 const BREW_BUNDLE_READ_ONLY = /^(?:check|list|dump|cleanup|exec|env|sh|edit|remove)$/;
 
@@ -612,18 +639,18 @@ function pair(pos: string[], a: string, next: RegExp): boolean {
   return pos.some((w, i) => w === a && next.test(pos[i + 1] ?? ''));
 }
 
-function dotnetInstall(rest: string[]): boolean {
+function dotnetInstall(rest: Rest): boolean {
   const pos = positionals(rest, 8);
   const add = pos.indexOf('add');
   return pair(pos, 'new', /^(?:install|update)$/)
-    || (pos.includes('new') && rest.some((w) => /^(?:--install|-i)(?:[=:].*)?$/i.test(w)))
+    || (pos.includes('new') && rest.has(DOTNET_INSTALL_FLAG))
     || pair(pos, 'workload', /^(?:install|update|restore)$/)
     || pair(pos, 'tool', /^(?:install|update|exec|run)$/)
     || pair(pos, 'package', /^add$/)
     || (add >= 0 && pos.indexOf('package', add + 1) >= 0)
-    || (pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w)))
+    || (pos.some((w) => DOTNET_RESTORING.test(w)) && rest.has(DOTNET_SOURCE_FLAG))
     // test, run and msbuild restore too, and a RestoreSources property needs no verb gate (-s on test is a settings flag).
-    || rest.some((w) => DOTNET_SOURCE_PROP.test(w));
+    || rest.has(DOTNET_SOURCE_PROP);
 }
 
 const ECO_RULES: EcoRule[] = [
@@ -638,9 +665,10 @@ const ECO_RULES: EcoRule[] = [
     names: /^nuget$/,
     commandOnly: false,
     installs: (r) => installVerbFirst(r, NUGET_VERBS, NUGET_READ_ONLY)
-      || (positionals(r, 4).includes('restore') && r.some((w) => NUGET_SOURCE_FLAG.test(w))),
+      || (positionals(r, 4).includes('restore') && r.has(NUGET_SOURCE_FLAG)),
   },
   { ecosystem: 'nuget', names: /^dotnet$/, commandOnly: false, installs: dotnetInstall },
+  { ecosystem: 'conda', names: /^(?:conda|mamba|micromamba)$/, commandOnly: false, installs: (r) => installVerbFirst(r, CONDA_VERBS, CONDA_READ_ONLY) },
   { ecosystem: 'brew', names: /^brew$/, commandOnly: false, installs: (r) => { const [a, b] = positionals(r, 2); return a === 'bundle' && !BREW_BUNDLE_READ_ONLY.test(b ?? ''); } },
   // The cmdlets install, save or update a module, script or package. A block body counts ({ Install-Module x }).
   { ecosystem: 'winget', names: /^(?:install|update)-wingetpackage$/, commandOnly: false, installs: () => true },
@@ -662,13 +690,24 @@ function ecosystemInstall(segment: string): EcoName | null {
   // Start-Process pwsh -ArgumentList "-c","Install-Module x" and iex "choco install x": a quoted argument holds the command.
   const spawns = START_PROCESS.test(words[0] ?? '') || /^(?:iex|invoke-expression)$/i.test(words[0] ?? '');
   if (spawns) words = words.flatMap((w) => w.split(/\s+/)).filter(Boolean);
+  // The last index of each regex over all words, found once: rest.has(re) is then a comparison, not a scan of the rest.
+  const last = new Map<RegExp, number>();
+  const lastIndex = (re: RegExp) => {
+    let at = last.get(re);
+    if (at === undefined) {
+      at = words.length - 1;
+      while (at >= 0 && !re.test(words[at])) at--;
+      last.set(re, at);
+    }
+    return at;
+  };
   for (let i = 0; i < words.length; i++) {
     if (i > 0 && !spawns && LOOKUP.test(words[i - 1])) continue;
     // A block opener glued to the name: {Install-Module, (choco.
     const word = words[i].replace(/^[({]+(?=.)/, '');
     const names = [commandName(word), commandName(word.replace(/\\/g, ''))];
     const atCommand = i === 0 || spawns || LAUNCHER.test(words[i - 1]) || word !== words[i];
-    const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs(words.slice(i + 1)));
+    const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs({ words, from: i + 1, has: (re) => lastIndex(re) > i }));
     if (rule) return rule.ecosystem;
   }
   return null;
@@ -950,7 +989,10 @@ function classifyToken(token: string, pattern: InstallPattern): { pkg?: PackageI
     const at = pattern.kind === 'first' ? spec.match(/^([A-Za-z0-9_.-]+)@([^:/@]+)$/) : null;
     if (at) return { pkg: { name: at[1], version: at[2] === 'latest' ? undefined : at[2] } };
     if (isRemoteSource(spec) || ARCHIVE.test(spec)) return { unparsed: true };
-    if (/^[.~/]|[\\/]/.test(token)) return {};
+    // A local path is read from the part before the PEP 508 marker (pipSpec): a slash or backslash inside the marker
+    // (python_version>\"3\", platform_release=='a/b') names no path. A path that also holds a version operator
+    // (name==1.0/x, reqeus\ts==2.31) is no folder pip can use: ask, and never skip the checks.
+    if (/^[.~/]|[\\/]/.test(spec)) return /[=<>!]/.test(spec) ? { unparsed: true } : {};
     const pkg = parsePackageToken(token, ecosystem);
     return pkg ? { pkg } : { unparsed: true };
   }
@@ -1609,6 +1651,31 @@ function rcFileSettings(file: string, text: string): string[] {
   return out;
 }
 
+// Whether the rc files can matter for a command. They change two things: the `configured` flag of installPlans (a bare
+// install such as `npm ci` or `pip install -r f` becomes a plan) and the rc ask text. Both need an install, so both need
+// a manager word or an ECO_RULES name. The gate is a SUPERSET of every word MANAGER_VERBS, INSTALL_PATTERNS and ECO_RULES
+// read, plus the ways the guard sees through a disguised command word: a $variable, a substitution, a backtick, a brace,
+// and a quote or backslash inside the word. When unsure it reads. A gate that misses a word makes the guard more
+// permissive, so the long names match as substrings (no word boundary at all).
+const RC_GATE_NAMES = /npm|pnpm|yarn|pip|poetry|pdm|conda|mamba|cargo|brew|composer|deno|dnx|dotnet|nuget|choco|cinst|winget|npx|bunx|uvx|python|(?:install|save|update)-/;
+// Short names are common inside other words (go in google, uv in uvicorn, py in pytest): they need a non-letter on both sides.
+const RC_GATE_SHORT = /(?<![a-z0-9])(?:go|gem|uv|py|bun|cup)(?![a-z])/;
+// A registry or rc-file word, or a launcher: rawConfigMarkers has raw rules for them.
+const RC_GATE_CONFIG = /registry|index-url|index_url|find-links|find_links|userconfig|globalconfig|npm_config|\.npmrc|\.yarnrc|bunfig|pip\.(?:ini|conf)|uv\.toml|iex|invoke-expression|start-process|saps/;
+// Text the guard resolves at run time: a variable, a substitution, a backtick escape, a brace list.
+const RC_GATE_HIDDEN = /[$`{]/;
+
+/** false only when no segment of the command can be an install: then no rc file can change the verdict. */
+export function mayInstall(command: string): boolean {
+  if (RC_GATE_HIDDEN.test(command)) return true;
+  // A backslash before a newline joins words (n\<LF>pm). Quotes, carets and backslashes inside a word are dropped (n"p"m, n^pm, pi\p).
+  // A path keeps its backslash in one copy (C:\tools\go.exe), so the short names still see a separator.
+  const joined = command.toLowerCase().replace(/\\\r?\n/g, '');
+  const plain = joined.replace(/[\\'"^]/g, '');
+  const unquoted = joined.replace(/['"^]/g, '');
+  return [plain, unquoted].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text) || RC_GATE_CONFIG.test(text));
+}
+
 /**
  * Registry or index settings that point away from the public registries, read from the rc files an install reads:
  * the cwd, up to 10 folders above it, the home folder (CCV3_GUARD_RC_HOME overrides it, for tests) and %APPDATA%.
@@ -1753,7 +1820,8 @@ async function main() {
   // A desktop-commander shell keeps its own folder, not the session folder: the local-bin skip and the lockfile read cannot use it.
   const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
   // An rc file on disk (the cwd, its ancestors, the home folder) that points at another registry makes every install a configured one.
-  const rcMarkers = payloadCwd === null ? [] : rcFileMarkers(payloadCwd);
+  // Read only when the text can hold an install (mayInstall): up to 20 file reads on a command that installs nothing add nothing.
+  const rcMarkers = payloadCwd === null || !mayInstall(command) ? [] : rcFileMarkers(payloadCwd);
   const plans = shell.dialects.flatMap((dialect) =>
     installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : undefined));
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
