@@ -107,6 +107,9 @@ jobs:
       - name: self-approve gate (router none gate, land-none-check)
         timeout-minutes: 5
         run: node --test scripts/github/pr-checkpoint-no-review.test.mjs scripts/github/land-none-check.test.mjs
+      - name: agentic-os CI job is defined (lint, typecheck, build)
+        timeout-minutes: 5
+        run: node --test scripts/ratchets/ccv3-checks-agentic-os.test.mjs
       - name: Install root dev dependencies (Playwright test runner, no scripts, no browser download)
         timeout-minutes: 5
         run: npm ci --ignore-scripts
@@ -153,6 +156,60 @@ jobs:
         working-directory: .claude/hooks
         timeout-minutes: 20
         run: npx --no-install vitest run --retry=2 --testTimeout=30000
+
+  # apps/agentic-os has lint, typecheck and build scripts. Before this job CI ran only its pure Playwright specs (ratchets job),
+  # so a lint error, a type error or a broken build reached main. The `scope` step turns every later step off unless this change
+  # touched apps/agentic-os/ or this workflow: a workflow-level `paths:` filter would also skip the other jobs. `npm run build`
+  # runs `prebuild` (eslint) first. The build imports src/db, which throws without AGENTIC_OS_DATABASE_URL: the value below is a
+  # placeholder (the pool is lazy, nothing connects, every page is force-dynamic). `next/font/google` fetches JetBrains Mono at build.
+  agentic-os:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # this job never pushes; keep the git token off disk (zizmor artipacked)
+          fetch-depth: 0               # changed-files.sh diffs against the base commit
+      - name: Changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ratchets/changed-files.sh "$BASE_SHA" > "$RUNNER_TEMP/changed.txt"
+      - name: Scope (apps/agentic-os or this workflow changed)
+        id: scope
+        run: |
+          if grep -zqE '^(apps/agentic-os/|\.github/workflows/ccv3-checks\.yml$)' "$RUNNER_TEMP/changed.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No change under apps/agentic-os/ or in ccv3-checks.yml: agentic-os checks skipped."
+          fi
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        with:
+          node-version: "22"
+      - name: Install agentic-os dependencies (lockfile, no scripts)
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        working-directory: apps/agentic-os
+        timeout-minutes: 5
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: agentic-os lint
+        if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
+        working-directory: apps/agentic-os
+        timeout-minutes: 5
+        run: npm run lint
+      - name: agentic-os typecheck
+        if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
+        working-directory: apps/agentic-os
+        timeout-minutes: 5
+        run: npm run typecheck
+      - name: agentic-os build
+        if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
+        working-directory: apps/agentic-os
+        timeout-minutes: 10
+        env:
+          AGENTIC_OS_DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder   # never connected; see the job comment
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build
 
   # The lane board tests build a throwaway database (scripts/coordination/scratch-db.mjs) and run the real render-board.mjs
   # and lane.mjs against it. Before this job no workflow ran them: two render-board tests sat red on main (PR #312, 2026-11-05)
