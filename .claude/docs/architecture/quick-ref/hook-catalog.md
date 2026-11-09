@@ -72,7 +72,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | smarter-everyday | Edit\|Write\|Bash\|TaskUpdate | Extract learnings from tool use patterns (L0) |
 | prd-roadmap-sync | Write\|Edit | Sync PRD changes to ROADMAP.md |
 | sync-to-repo | Write\|Edit | Auto-sync ~/.claude changes to continuous-claude repo |
-| git-auto-commit | Write\|Edit | Auto-commit ~/.claude file changes |
+| git-auto-commit | (unregistered 2026-11-09) | Retained, not wired: ~/.claude has no .git, so it was a no-op. Source and dist stay. |
 | tree-invalidate | Write\|Edit | Mark knowledge tree stale after file changes |
 | pageindex-watch | Write\|Edit | Update PageIndex after doc file changes |
 | auto-build | Write\|Edit | Auto-rebuild hooks after source changes |
