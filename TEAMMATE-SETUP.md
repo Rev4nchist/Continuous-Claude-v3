@@ -353,7 +353,7 @@ cd scripts
 source ./sync-claude.sh --from-repo
 
 # Rebuild TypeScript hooks
-cd ~/.claude/hooks
+cd ~/continuous-claude/.claude/hooks
 npm run build
 ```
 

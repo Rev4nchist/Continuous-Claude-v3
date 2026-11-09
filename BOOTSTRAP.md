@@ -313,12 +313,12 @@ Manual sync: `bash scripts/sync-to-active.sh`
 
 | Problem | Fix |
 |---------|-----|
-| Hooks not firing | `cd ~/.claude/hooks && npm run build` |
+| Hooks not firing | `cd ~/continuous-claude/.claude/hooks && npm run build` |
 | Memory recall fails | Check `echo $CLAUDE_OPC_DIR`; check Docker running |
 | Knowledge tree missing | `cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/knowledge_tree.py --project <dir>` |
 | Python encoding crash (Windows) | Set env var: `PYTHONUTF8=1` |
 | settings.json wrong paths | Re-run wizard or regenerate from `.claude/settings.json.template` |
-| Hooks stale after source edit | `cd ~/.claude/hooks && npm run build` then restart session |
+| Hooks stale after source edit | `cd ~/continuous-claude/.claude/hooks && npm run build` then restart session |
 | "Repository not found" on a repo you own | Wrong-account auth. Run `verify-github-accounts.ps1`; usually a missing `credential.https://github.com.username` (step 4) or a second credential helper |
 | `gh` acts as the wrong account | `Get-GhAccount` shows who `gh` would be in the current directory. If it says `ambient GH_CONFIG_DIR`, the shim is not loaded in this profile (step 6) |
 | Commits authored with the wrong email | `pwsh -File scripts/github/apply-commit-identity.ps1` to plan, `-Apply` to fix. This does **not** rewrite existing commits |
