@@ -680,6 +680,7 @@ Every one of these cost real time already.
 | Thing | Path |
 |---|---|
 | Strategy + measurement docs (this dir) | `docs/harness-strategy/` |
+| Rescue runbook: a hook breaks every session | `docs/harness-strategy/rescue-runbook.md` |
 | Self-improvement proposals + verdict index | `docs/self-improvement/INDEX.md` |
 | Hook concurrency plan | `docs/hook-dispatcher-consolidation-plan.md` |
 | Session handoffs (YAML, newest last) | `thoughts/shared/handoffs/<lane>/` |
