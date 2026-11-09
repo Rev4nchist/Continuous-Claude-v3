@@ -1024,10 +1024,10 @@ function dialectsFor(tool) {
 }
 
 // src/shared/doc-heredoc.ts
-var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt|json))`;
+var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt))`;
 var DELIM = String.raw`(?<dash>-?)(?<q>['"])(?<d>[A-Za-z_]\w*)\k<q>`;
-var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`, "i");
-var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`, "i");
+var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`);
+var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`);
 var ODD_BREAK = /[\r\0\v\f\x85\u2028\u2029]/;
 function blankDocHeredocBody(command) {
   if (!command.includes("<<") || ODD_BREAK.test(command)) return command;
@@ -1056,8 +1056,9 @@ var SCOPED_PATTERNS = /* @__PURE__ */ new Set(["recursive rm", "PowerShell recur
 function decide(command, input, env = process.env, scopedDeps) {
   const overridden = env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
   let pattern = null;
-  const scanned = blankDocHeredocBody(command);
-  for (const dialect of dialectsFor(input.tool_name || input.tool)) {
+  const toolName = input.tool_name || input.tool;
+  const scanned = toolName === "Bash" ? blankDocHeredocBody(command) : command;
+  for (const dialect of dialectsFor(toolName)) {
     pattern = classifyDestructive(scanned, 0, dialect);
     if (pattern) break;
   }

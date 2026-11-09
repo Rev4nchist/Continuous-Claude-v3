@@ -26,7 +26,7 @@ describe('BLANKED: a document heredoc', () => {
   it.each([
     ['append to .md', DOC],
     ['write .txt, double quotes', `cat > docs/n.txt <<"EOF"\n${BODY}\nEOF`],
-    ['marker first, .json', `cat <<'EOF' > out.json\n${BODY}\nEOF`],
+    ['marker first, .txt', `cat <<'EOF' > out.txt\n${BODY}\nEOF`],
     ['<<- with tabs', `cat > n.md <<-'EOF'\n\t${BODY}\n\tEOF`],
     ['a trailing newline', `${DOC}\n`],
     ['a Windows path', `cat > C:/Users/x/notes.md <<'EOF'\n${BODY}\nEOF`],
@@ -40,6 +40,13 @@ describe('BLANKED: a document heredoc', () => {
 
 describe('KEPT: the body may run, or the shape is not exact', () => {
   it.each([
+    ['a config file (.json holds commands a later tool runs)', `cat > package.json <<'EOF'\n${BODY}\nEOF`],
+    ['a .json file, marker first', `cat <<'EOF' > .mcp.json\n${BODY}\nEOF`],
+    ['an upper-case CAT', `CAT > n.md <<'EOF'\n${BODY}\nEOF`],
+    ['an upper-case extension', `cat > N.MD <<'EOF'\n${BODY}\nEOF`],
+    ['marker first, then a command', `cat <<'EOF' > n.md && bash n.md\n${BODY}\nEOF`],
+    ['marker first, a command before', `echo x; cat <<'EOF' > n.md\n${BODY}\nEOF`],
+    ['marker first, a pipe after the path', `cat <<'EOF' > n.md | bash\n${BODY}\nEOF`],
     ['a script file', `cat > run.sh <<'EOF'\n${BODY}\nEOF`],
     ['a PowerShell script', `cat > run.ps1 <<'EOF'\n${BODY}\nEOF`],
     ['no extension', `cat > run <<'EOF'\n${BODY}\nEOF`],
@@ -58,6 +65,7 @@ describe('KEPT: the body may run, or the shape is not exact', () => {
     ['an indented end without <<-', `cat > n.md <<'EOF'\n${BODY}\n\tEOF`],
     ['tee', `tee n.md <<'EOF'\n${BODY}\nEOF`],
     ['CRLF line ends', `cat > n.md <<'EOF'\r\n${BODY}\r\nEOF`],
+    ['a CR only in a body line', `cat > n.md <<'EOF'\nx\r\n${BODY}\nEOF`],
     ['a form feed', `cat > n.md <<'EOF'\n${BODY}\f\nEOF`],
     ['a bash wrapper', `bash <<'EOF'\n${BODY}\nEOF`],
   ])('%s', (_n, c) => {
@@ -67,7 +75,7 @@ describe('KEPT: the body may run, or the shape is not exact', () => {
 
 describe('WIRED: the guards read the blanked text', () => {
   it('blankInertQuotes blanks the body (decision-gate and pre-pr-gate call it)', () => {
-    expect(blankInertQuotes(DOC)).not.toMatch(/reset|gh pr|land-pr/);
+    expect(blankInertQuotes(DOC, 'Bash')).not.toMatch(/reset|gh pr|land-pr/);
   });
   it('destructive-command-guard allows a document heredoc that names a hard reset', () => {
     expect(decide(DOC, { tool_name: 'Bash' }, {}).decision).toBe('allow');
@@ -82,7 +90,23 @@ describe('REAL: a command next to the heredoc, or a script body, is still seen',
     expect(decide(`${DOC}\ngit reset --hard`, { tool_name: 'Bash' }, {}).decision).toBe('ask');
   });
   it('blankInertQuotes keeps a real PR create after the body', () => {
-    expect(blankInertQuotes(`${DOC}\ngh pr create --fill`)).toContain('gh pr create --fill');
+    expect(blankInertQuotes(`${DOC}\ngh pr create --fill`, 'Bash')).toContain('gh pr create --fill');
+  });
+  // PowerShell and cmd have no heredoc, and a REPL may run each body line, so the body is commands there.
+  it.each([
+    'PowerShell',
+    'mcp__plugin_desktop-commander_desktop-commander__start_process',
+    'mcp__plugin_desktop-commander_desktop-commander__interact_with_process',
+    undefined,
+  ])('blankInertQuotes keeps the body for tool %s', (tool) => {
+    expect(blankInertQuotes(DOC, tool)).toBe(DOC);
+  });
+  it.each([
+    ['PowerShell', 'command'],
+    ['mcp__plugin_desktop-commander_desktop-commander__start_process', 'command'],
+    ['mcp__plugin_desktop-commander_desktop-commander__interact_with_process', 'input'],
+  ])('destructive-command-guard still asks for the document heredoc on %s', (tool_name, field) => {
+    expect(decide(DOC, { tool_name, tool_input: { [field]: DOC } }, {}).decision).toBe('ask');
   });
   it('destructive-command-guard still asks for a plain hard reset', () => {
     expect(decide('git reset --hard HEAD', { tool_name: 'Bash' }, {}).decision).toBe('ask');

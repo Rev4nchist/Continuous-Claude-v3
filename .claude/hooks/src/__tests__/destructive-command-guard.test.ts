@@ -1302,7 +1302,7 @@ describe('H2: git -C and a Git Bash /c/ path are not exec flags', () => {
 describe('heredoc bodies: the top-level scan reads them, as on fork/main (R2 reverts M1)', () => {
   // A literal heredoc body that names a destructive command asks, because dropping the body let a written
   // script run unseen (R2: write-then-run). Exception (Dave, 11-09, lane guard-heredoc-body-fp): a quoted
-  // heredoc that writes a .md, .txt or .json file is prose and is allowed (shared/doc-heredoc.ts).
+  // heredoc that writes a .md or .txt file is prose and is allowed, on the Bash tool only (shared/doc-heredoc.ts).
   it('Bash allows a literal heredoc PR body in a .md file that names rm build -rf', () => {
     const cmd = `cat <<'EOF' > PR.md\n- rm build -rf now asks (F04)\nEOF`;
     expect(decide(cmd, interactiveFor('Bash'), {}).decision).toBe('allow');

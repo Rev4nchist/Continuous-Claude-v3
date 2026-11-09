@@ -448,10 +448,10 @@ function quotedSpans(command, tool = "Bash") {
 }
 
 // src/shared/doc-heredoc.ts
-var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt|json))`;
+var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt))`;
 var DELIM = String.raw`(?<dash>-?)(?<q>['"])(?<d>[A-Za-z_]\w*)\k<q>`;
-var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`, "i");
-var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`, "i");
+var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`);
+var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`);
 var ODD_BREAK = /[\r\0\v\f\x85\u2028\u2029]/;
 function blankDocHeredocBody(command) {
   if (!command.includes("<<") || ODD_BREAK.test(command)) return command;
@@ -511,9 +511,11 @@ function inertSpans(command, tool) {
   }
   return out;
 }
-function blankInertQuotes(command) {
-  const doc = blankDocHeredocBody(command);
-  if (doc !== command) return doc;
+function blankInertQuotes(command, tool) {
+  if (tool === "Bash") {
+    const doc = blankDocHeredocBody(command);
+    if (doc !== command) return doc;
+  }
   const bash = inertSpans(command, "Bash");
   const pwsh = inertSpans(command, "PowerShell");
   let out = command;
@@ -856,7 +858,7 @@ function decide(input, deps) {
 }
 function decideAs(input, deps, text) {
   const raw = text ?? commandOf(input);
-  const command = normalizeGh(joinContinuations(blankInertQuotes(raw), shellOf(input)));
+  const command = normalizeGh(joinContinuations(blankInertQuotes(raw, input.tool_name || input.tool), shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: "allow" };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
@@ -979,7 +981,7 @@ The stamp comes from: ${RUN}`;
     const tool = input.tool_name || input.tool || "";
     if (!COMMAND_TOOLS2.has(tool)) return "{}";
     command = commandOf(input);
-    const seen = blankInertQuotes(command);
+    const seen = blankInertQuotes(command, tool);
     create = isPrOpenCommand(seen);
     gated = create || ["bash", "pwsh"].some((s) => isGated(shapesOf(joinContinuations(seen, isDesktopCommander(input) ? s : shellOf(input)))));
     const d = decide(input, deps);

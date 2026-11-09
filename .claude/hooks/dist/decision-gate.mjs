@@ -447,10 +447,10 @@ function quotedSpans(command, tool = "Bash") {
 }
 
 // src/shared/doc-heredoc.ts
-var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt|json))`;
+var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt))`;
 var DELIM = String.raw`(?<dash>-?)(?<q>['"])(?<d>[A-Za-z_]\w*)\k<q>`;
-var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`, "i");
-var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`, "i");
+var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`);
+var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`);
 var ODD_BREAK = /[\r\0\v\f\x85\u2028\u2029]/;
 function blankDocHeredocBody(command) {
   if (!command.includes("<<") || ODD_BREAK.test(command)) return command;
@@ -510,9 +510,11 @@ function inertSpans(command, tool) {
   }
   return out2;
 }
-function blankInertQuotes(command) {
-  const doc = blankDocHeredocBody(command);
-  if (doc !== command) return doc;
+function blankInertQuotes(command, tool) {
+  if (tool === "Bash") {
+    const doc = blankDocHeredocBody(command);
+    if (doc !== command) return doc;
+  }
   const bash = inertSpans(command, "Bash");
   const pwsh = inertSpans(command, "PowerShell");
   let out2 = command;
@@ -770,8 +772,8 @@ function cmdSegments(view) {
 }
 var whereId = (at) => `${at.unknown ? "?" : ""}${at.loose ? "~" : ""}${at.cds.join("\0")}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
-function shapesOf(raw) {
-  const text = normalizeGh(blankInertQuotes(raw));
+function shapesOf(raw, tool) {
+  const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
@@ -783,8 +785,8 @@ function shapesOf(raw) {
   };
   let created = false;
   for (const view of views) {
-    const reads = ["Bash", "PowerShell"].map((tool) => {
-      const masked = maskQuoted(view, tool);
+    const reads = ["Bash", "PowerShell"].map((tool2) => {
+      const masked = maskQuoted(view, tool2);
       return { masked, pos: cdPositions(masked, view) };
     });
     for (const { seg, from } of cmdSegments(view)) {
@@ -1102,7 +1104,7 @@ function judgeCommand(input, deps) {
   if (cmd.kind !== "command" || cmd.text === "") return [];
   const cwd = input.cwd || process.cwd();
   if (writesStoreText(cmd.text, deps)) return [deny("store-write", STORE_WHY)];
-  const shapes = shapesOf(cmd.text);
+  const shapes = shapesOf(cmd.text, cmd.tool);
   const denies = [];
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(deny("subagent", SUBAGENT_WHY));
   const pushes = shapes.filter((s) => s.kind === "push");
@@ -1151,7 +1153,7 @@ function gatedScopes(input) {
   const tool = input.tool_name || input.tool || "";
   if (WRITE_TOOLS.has(tool)) return /* @__PURE__ */ new Set(["other"]);
   const cmd = readShellCommand(input);
-  return new Set(cmd.kind === "command" ? shapesOf(cmd.text).map(scopeOf) : []);
+  return new Set(cmd.kind === "command" ? shapesOf(cmd.text, cmd.tool).map(scopeOf) : []);
 }
 function unreadableInput() {
   const note = "decision-gate: the hook input is not readable JSON, so no command shape can be judged; the call is allowed.";

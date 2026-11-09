@@ -140,8 +140,10 @@ export function decide(
   // A desktop-commander shell is chosen at run time, so its text is checked as Bash and PowerShell.
   let pattern: string | null = null;
   // The body of a quoted heredoc that writes a .md, .txt or .json file is prose, not a command (shared/doc-heredoc.ts).
-  const scanned = blankDocHeredocBody(command);
-  for (const dialect of dialectsFor(input.tool_name || input.tool)) {
+  // Bash tool, Bash reading only: PowerShell and cmd have no heredoc, and a desktop-commander REPL may run each body line.
+  const toolName = input.tool_name || input.tool;
+  const scanned = toolName === 'Bash' ? blankDocHeredocBody(command) : command;
+  for (const dialect of dialectsFor(toolName)) {
     pattern = classifyDestructive(scanned, 0, dialect);
     if (pattern) break;
   }
