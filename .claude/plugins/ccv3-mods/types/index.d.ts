@@ -185,7 +185,8 @@ export type CacheState = {
  * It prices each step's whole usage (price.ts `stepCost`): top-level tokens, the 5m/1h split, web searches, and each advisor iteration
  * (`usage.iterations`) at its own model. Runs saved before this table keep the `costUsd` they had: tier rates, every write at 1.25x. Old and new dollars add up in one run.
  * `tokens` add the advisor iterations to the four top-level counts, so tokens and dollars share one basis.
- * Live limit, not proven: the engine's `turn.step` usage type names four token fields. A live run prices an advisor or a 5m/1h split only when the engine sends `iterations` or `cache_creation` there (README, agent-ledger row).
+ * Live limit, proven (PR #436): the engine's `turn.step` usage names four token fields and no `iterations`, so a live run leaves the advisor's own tokens out (a probe priced $0.0082 against $0.1862). A live run prices an advisor or a 5m/1h split only when the engine sends `iterations` or `cache_creation` there (README, agent-ledger row).
+ * `advised` counts the advisor calls seen; above 0 the run's dollars are a floor and every ledger display says "at least" (`≥`). The engine's own cost state stays the truth.
  * `drift` says how the run broke its agent's .md (`model:`, `effort:`), or that it ran on Haiku.
  */
 export type AgentRun = {
@@ -206,6 +207,8 @@ export type AgentRun = {
   costUsd: number
   /** True when a step used a model id with no price: `costUsd` leaves it out ($0, not a real $0). Absent otherwise, and in a run saved before this. */
   hasUnknownModelCost?: boolean
+  /** How many advisor calls the live feed showed for this run (`result.serverToolUses`, name `advisor`, counted at turn.step). Absent means 0 and in a run saved before this. Above 0, `costUsd` is a floor: the advisor's own tokens are not in the live usage, so the displays say "at least". The Fleet app reads this name. */
+  advised?: number
   drift: string | null
 }
 
