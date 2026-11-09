@@ -187,6 +187,10 @@ jobs:
         if: ${{ steps.scope.outputs.run == 'true' }}
         with:
           node-version: "22"
+      - name: Install root dev dependencies (Playwright test package for the e2e specs, no scripts, no browser download)
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        timeout-minutes: 5
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install agentic-os dependencies (lockfile, no scripts)
         if: ${{ steps.scope.outputs.run == 'true' }}
         working-directory: apps/agentic-os
