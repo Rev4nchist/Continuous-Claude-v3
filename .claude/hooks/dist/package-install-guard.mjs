@@ -20636,7 +20636,7 @@ function pair(pos, a, next) {
 function dotnetInstall(rest) {
   const pos = positionals(rest, 8);
   const add = pos.indexOf("add");
-  return pair(pos, "new", /^(?:install|update)$/) || pos.includes("new") && rest.some((w) => /^(?:--install|-i)(?:[=:].*)?$/i.test(w)) || pair(pos, "workload", /^(?:install|update|restore)$/) || pair(pos, "tool", /^(?:install|update|exec|run)$/) || pair(pos, "package", /^add$/) || add >= 0 && pos.indexOf("package", add + 1) >= 0 || pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w) || DOTNET_SOURCE_PROP.test(w));
+  return pair(pos, "new", /^(?:install|update)$/) || pos.includes("new") && rest.some((w) => /^(?:--install|-i)(?:[=:].*)?$/i.test(w)) || pair(pos, "workload", /^(?:install|update|restore)$/) || pair(pos, "tool", /^(?:install|update|exec|run)$/) || pair(pos, "package", /^add$/) || add >= 0 && pos.indexOf("package", add + 1) >= 0 || pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w)) || rest.some((w) => DOTNET_SOURCE_PROP.test(w));
 }
 var ECO_RULES = [
   { ecosystem: "cargo", names: /^cargo-binstall$/, commandOnly: false, installs: () => true },

@@ -621,7 +621,9 @@ function dotnetInstall(rest: string[]): boolean {
     || pair(pos, 'tool', /^(?:install|update|exec|run)$/)
     || pair(pos, 'package', /^add$/)
     || (add >= 0 && pos.indexOf('package', add + 1) >= 0)
-    || (pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w) || DOTNET_SOURCE_PROP.test(w)));
+    || (pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w)))
+    // test, run and msbuild restore too, and a RestoreSources property needs no verb gate (-s on test is a settings flag).
+    || rest.some((w) => DOTNET_SOURCE_PROP.test(w));
 }
 
 const ECO_RULES: EcoRule[] = [
