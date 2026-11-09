@@ -92,6 +92,8 @@ export const addRequest = (state: CacheState, req: CacheRequest): CacheState => 
   const isMiss = held === null ? write > read : rewritten > held / 2
   // The gap the entry had to live through: from the send that last used the cache to this send.
   const idleMs = state.lastUsedAt === null ? 0 : Math.max(0, req.sentAt - state.lastUsedAt)
+  // An id with no price adds $0 to the saving and a null price to a miss: the state says so, once, for the session.
+  const saving = cacheSaving(req.usage, req.usage.model, req.oneHour)
   const miss: CacheMiss | null = isMiss
     ? { at: req.at, idleMs, rewritten, cause: causeOf(state, req, idleMs), model: req.usage.model, turnId: req.turnId, usd: coldCost(rewritten, req.usage.model, req.oneHour) }
     : null
@@ -100,7 +102,7 @@ export const addRequest = (state: CacheState, req: CacheRequest): CacheState => 
     input: state.input + req.usage.input_tokens,
     read: state.read + read,
     write: state.write + write,
-    savedUsd: state.savedUsd + (cacheSaving(req.usage, req.usage.model, req.oneHour) ?? 0),
+    savedUsd: state.savedUsd + (saving ?? 0),
     contextTokens: size,
     // A request that neither read nor wrote leaves the entry, and its clock, as they were.
     cachedTokens: used ? Math.min(read + write, size) : state.cachedTokens,
@@ -113,6 +115,7 @@ export const addRequest = (state: CacheState, req: CacheRequest): CacheState => 
     oneHour: req.oneHour,
     misses: miss === null ? state.misses : [...state.misses, miss].slice(-MISS_CAP),
     missCount: state.missCount + (miss === null ? 0 : 1),
+    ...(state.hasUnknownModelCost === true || saving === null ? { hasUnknownModelCost: true } : {}),
   }
 }
 
@@ -205,6 +208,7 @@ export const cacheReport = (state: CacheState, now: number): string => {
     `  hit rate      ${rate.toFixed(1)}%`,
     `  read / write  ${fmtTokens(state.read)} / ${fmtTokens(state.write)} tokens`,
     `  saved         ≈ ${saved} (list price, estimate)`,
+    ...(state.hasUnknownModelCost === true ? ['  unpriced      a request ran on a model with no price: saved and the miss costs leave it out'] : []),
     `  state         ${stateLine(state, view)}`,
     '',
     `Misses (${state.missCount})`,

@@ -61,6 +61,9 @@ const entryOf = (model: string): Entry | null => {
 // Every token count in this file passes through count(), including the `tokens` of coldCost and warmCost.
 const count = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0)
 
+/** A token count as the Agent Ledger and the HUD sum it: negative, NaN, infinite or not a number is 0. */
+export const tokenCount = count
+
 /** The token classes of one request. `w5` holds the remainder; `split` says whether the usage named a 5m/1h split. */
 type Parts = { input: number; read: number; w5: number; w1: number; out: number; split: boolean }
 
@@ -110,20 +113,58 @@ export const estimate = (usage: Usage, model: string): number | null => {
   return tokenCost(entry, partsOf(usage), usage) + count(usage.server_tool_use?.web_search_requests) * WEB_SEARCH_USD
 }
 
+/** Dollars, and whether a part of the request had no price (an id the table lacks). */
+export type StepCost = { usd: number; unknown: boolean }
+
+/** The `advisor_message` entries of `usage.iterations`, each at its own model's rates; an entry on an unknown model adds $0 and sets `unknown`. */
+const advisorSum = (usage: Usage): StepCost => {
+  const sum: StepCost = { usd: 0, unknown: false }
+  if (!Array.isArray(usage.iterations)) return sum
+  for (const item of usage.iterations as unknown[]) {
+    if (typeof item !== 'object' || item === null) continue
+    const it = item as Usage & { type?: unknown; model?: unknown }
+    if (it.type !== 'advisor_message') continue
+    const entry = typeof it.model === 'string' ? entryOf(it.model) : null
+    if (entry === null) sum.unknown = true
+    else sum.usd += tokenCost(entry, partsOf(it), { ...it, inference_geo: usage.inference_geo })
+  }
+  return sum
+}
+
 /**
- * Dollars for the `advisor_message` entries of `usage.iterations`, each at its own model's rates.
- * An entry whose model is not in the table adds nothing. The caller adds this to estimate() where it wants the advisor in.
+ * Tokens of the `advisor_message` entries of `usage.iterations` (input, output, cache read and cache write), the same entries
+ * advisorCost() prices, with the same guards. A run shows these with its top-level tokens, because its dollars include both.
  */
-export const advisorCost = (usage: Usage): number => {
+export const advisorTokens = (usage: Usage): number => {
   if (!Array.isArray(usage.iterations)) return 0
   let sum = 0
   for (const item of usage.iterations as unknown[]) {
     if (typeof item !== 'object' || item === null) continue
-    const it = item as Usage & { type?: unknown; model?: unknown }
-    const entry = it.type === 'advisor_message' && typeof it.model === 'string' ? entryOf(it.model) : null
-    if (entry !== null) sum += tokenCost(entry, partsOf(it), { ...it, inference_geo: usage.inference_geo })
+    const it = item as Usage & { type?: unknown }
+    if (it.type !== 'advisor_message') continue
+    sum += count(it.input_tokens) + count(it.output_tokens) + count(it.cache_read_input_tokens) + count(it.cache_creation_input_tokens)
   }
   return sum
+}
+
+/**
+ * Dollars for the `advisor_message` entries of `usage.iterations`, each at its own model's rates.
+ * An entry whose model is not in the table adds nothing. The caller adds this to estimate() where it wants the advisor in.
+ */
+export const advisorCost = (usage: Usage): number => advisorSum(usage).usd
+
+/**
+ * One request in full: estimate() of its top-level usage plus advisorCost(). A model id with no price adds $0 and sets
+ * `unknown`, so a caller can tell it from a real $0 (`<synthetic>`). Never throws: a usage that breaks pricing is $0 and unknown.
+ */
+export const stepCost = (usage: Usage, model: string): StepCost => {
+  try {
+    const main = estimate(usage, model)
+    const advisor = advisorSum(usage)
+    return { usd: (main ?? 0) + advisor.usd, unknown: main === null || advisor.unknown }
+  } catch {
+    return { usd: 0, unknown: true }
+  }
 }
 
 /**

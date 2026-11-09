@@ -2,6 +2,9 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
+import { addStep, ledgerBandSpans, ledgerRows, newRun, summarize } from '../hooks/agent-ledger/model'
+import { REAL_USAGE } from './fixtures/ledger-real-usage'
+
 // Ways the Agent Ledger can fail, one test each. Checks read the /ledger pane, the band or the snapshot.
 // L1 a started subagent is not recorded (or a denied spawn is)
 // L2 tokens from several requests don't add up, or cost shows before the run ends
@@ -15,6 +18,17 @@ import type { Engine } from 'claude-code/testing'
 // L10 a refusal shows as done
 // L11 /os redesign: a spawn that a workflow started (workflow.runId) does not store workflowRunId on the run
 // L12 an empty runId (outside a real run) or no workflow field stores a workflowRunId anyway (the key must be absent, as toolUseId is); a real runId beside them is lost
+// PR C: the run's dollars price the whole usage of each request (hooks/shared/price.ts), not only its top-level tokens.
+// L13 an advisor iteration is left out of the run's cost, or priced at the run's model instead of its own
+// L14 web searches of a request are not counted in the run's cost
+// L15 a 1-hour cache write is priced as a 5-minute write
+// L16 an unknown model id shows as a plain $0 (nothing says "unpriced"), in the pane, the band or the summary
+// L17 an advisor iteration on an unknown model is skipped without a flag; a <synthetic> or empty step raises the flag
+// L18 a run saved before this change (no new fields) fails to price, or gets a flag key it never had
+// L19 a negative, NaN or infinite count lowers the run's cost or tokens, or makes them NaN
+// L20 a throw while pricing breaks the observer: the step is lost (tokens, model and effort not folded in)
+// L21 real transcript usage (advisor iterations, a 5m/1h split with a remainder, 1-hour writes) prices off the figure of an independent recompute
+// L22 a run's tokens leave out the advisor iterations that its dollars include (one row, two bases); a non-advisor, junk or negative entry adds tokens
 
 const PANE_PROPS = {
   title: 'Agents',
@@ -30,7 +44,7 @@ const posix = (p: string) => p.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '
 
 const SPARK_MD = '---\nname: spark\nmodel: sonnet\neffort: high\n---\nbody\n'
 
-type Beneath = { spawnModel: string; agentId: string; deny?: string; usage: { input_tokens: number; output_tokens: number } | null; usageModel: string }
+type Beneath = { spawnModel: string; agentId: string; deny?: string; usage: ({ input_tokens: number; output_tokens: number } & Record<string, unknown>) | null; usageModel: string }
 const beneath: Beneath = { spawnModel: 'claude-sonnet-5-5', agentId: 'a1', usage: null, usageModel: 'claude-sonnet-5-5' }
 
 const world = (on: On, env: Record<string, string> = {}) => {
@@ -234,6 +248,198 @@ describe('agent ledger', () => {
     const runs = agentRunsOf(writes)
     expect(runs).toHaveLength(1)
     expect(runs[0]?.workflowRunId).toBe('wf_1')
+  })
+
+  test('L13 an advisor iteration is priced at its own model and added to the run', async ($, on) => {
+    reset()
+    world(on)
+    await start($)
+    await spawn($, 'spark')
+    await step($, 'a1', 'claude-sonnet-5-5', 'high', {
+      input_tokens: 100_000,
+      output_tokens: 0,
+      iterations: [
+        { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 100_000, output_tokens: 10_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        { type: 'advisor_message', model: 'claude-opus-5-5', input_tokens: 50_000, output_tokens: 5_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        // Not an advisor entry: the engine's own top-level usage already holds it.
+        { type: 'message', model: 'claude-opus-5-5', input_tokens: 1_000_000, output_tokens: 0 },
+      ],
+    })
+    await finish($, 'a1')
+    // Sonnet 100k in $0.20 + Fable 100k in / 10k out $1.50 + Opus 50k in / 5k out $0.30.
+    expect(await paneText($)).toContain('≈ $2.00')
+  })
+
+  test('L14 web searches are counted at $0.01 each', async ($, on) => {
+    reset()
+    world(on)
+    await start($)
+    await spawn($, 'spark')
+    await step($, 'a1', 'claude-sonnet-5-5', 'high', { input_tokens: 0, output_tokens: 0, server_tool_use: { web_search_requests: 100 } })
+    await finish($, 'a1')
+    expect(await paneText($)).toContain('≈ $1.00')
+  })
+
+  test('L15 a 1-hour cache write is priced at the 1-hour rate', async ($, on) => {
+    reset()
+    world(on)
+    await start($)
+    await spawn($, 'spark')
+    await step($, 'a1', 'claude-sonnet-5-5', 'high', {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 1_000_000,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1_000_000 },
+    })
+    await finish($, 'a1')
+    // Sonnet 5.5: $4.00 per million at 1 hour, $2.50 at 5 minutes.
+    expect(await paneText($)).toContain('≈ $4.00')
+  })
+
+  test('L16 an unknown model id is flagged as unpriced, apart from a real $0', async ($, on) => {
+    reset({ spawnModel: 'claude-future-9' })
+    world(on)
+    await start($)
+    await spawn($, 'spark')
+    await step($, 'a1', 'claude-future-9', 'high', { input_tokens: 1_000_000, output_tokens: 1_000 })
+    await finish($, 'a1')
+    const text = await paneText($)
+    expect(text).toContain('unpriced')
+    expect(text).not.toContain('≈ $0.00')
+    // The summary and the band carry it too.
+    let run = newRun('r1', 'scout', 'd', 'claude-future-9', {}, 0)
+    run = addStep(run, { model: 'claude-future-9', effort: 'high', usage: { input_tokens: 1_000_000, output_tokens: 1_000 } })
+    expect(run.costUsd).toBe(0)
+    expect(run.hasUnknownModelCost).toBe(true)
+    expect(summarize([run]).hasUnknownModelCost).toBe(true)
+    expect(JSON.stringify(ledgerBandSpans([run]))).toContain('unpriced')
+    expect(JSON.stringify(ledgerRows([run], 1_000, 80, 20))).toContain('unpriced')
+    // A run on a priced model beside it is not flagged.
+    const known = addStep(newRun('r2', 'scout', 'd', 'claude-sonnet-5-5', {}, 0), { model: 'claude-sonnet-5-5', effort: 'high', usage: { input_tokens: 1_000_000, output_tokens: 0 } })
+    expect(known.hasUnknownModelCost).toBeUndefined()
+    expect(summarize([known]).hasUnknownModelCost).toBe(false)
+    expect(JSON.stringify(ledgerBandSpans([known]))).not.toContain('unpriced')
+  })
+
+  test('L17 an advisor iteration on an unknown model raises the flag; a synthetic or empty step does not', () => {
+    const base = newRun('r1', 'scout', 'd', 'claude-sonnet-5-5', {}, 0)
+    const advised = addStep(base, {
+      model: 'claude-sonnet-5-5',
+      effort: 'high',
+      usage: { input_tokens: 100_000, output_tokens: 0, iterations: [{ type: 'advisor_message', model: 'claude-future-9', input_tokens: 5_000, output_tokens: 500 }] } as never,
+    })
+    expect(advised.hasUnknownModelCost).toBe(true)
+    // The priced part still counts: Sonnet 100k in.
+    expect(Math.abs(advised.costUsd - 0.2)).toBeLessThan(1e-9)
+    const synthetic = addStep(base, { model: '<synthetic>', effort: null, usage: { input_tokens: 0, output_tokens: 0 } })
+    expect(synthetic.hasUnknownModelCost).toBeUndefined()
+    expect(addStep(base, { model: 'claude-future-9', effort: null, usage: null }).hasUnknownModelCost).toBeUndefined()
+  })
+
+  test('L18 a run saved before this change still prices and gains no flag key', () => {
+    // The shape a state file from before PR C holds: no hasUnknownModelCost.
+    const saved = JSON.parse(JSON.stringify(newRun('old', 'scout', 'd', 'claude-sonnet-5-5', { model: 'sonnet' }, 5))) as ReturnType<typeof newRun>
+    saved.costUsd = 0.25
+    saved.tokens = 1_000
+    const next = addStep(saved, { model: 'claude-sonnet-5-5', effort: 'high', usage: { input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 } })
+    // 0.25 kept; Sonnet 5.5 1M in $2.00 + 1M cache read $0.10.
+    expect(Math.abs(next.costUsd - 2.35)).toBeLessThan(1e-9)
+    expect(next.tokens).toBe(2_001_000)
+    expect('hasUnknownModelCost' in next).toBe(false)
+    expect(summarize([saved, next]).hasUnknownModelCost).toBe(false)
+  })
+
+  test('L19 a negative, NaN or infinite count adds nothing and never turns the run into NaN', () => {
+    const base = newRun('r1', 'scout', 'd', 'claude-sonnet-5-5', {}, 0)
+    const odd = addStep(base, {
+      model: 'claude-sonnet-5-5',
+      effort: 'high',
+      usage: {
+        input_tokens: Number.NaN,
+        output_tokens: -5_000,
+        cache_read_input_tokens: Number.POSITIVE_INFINITY,
+        cache_creation_input_tokens: -1,
+        server_tool_use: { web_search_requests: -3 },
+        iterations: [{ type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: -1, output_tokens: Number.NaN }, null, 7, 'x'],
+      } as never,
+    })
+    expect(Number.isFinite(odd.costUsd)).toBe(true)
+    expect(odd.costUsd).toBe(0)
+    expect(Number.isFinite(odd.tokens)).toBe(true)
+    expect(odd.tokens).toBe(0)
+    // A later good step still adds on top.
+    const later = addStep(odd, { model: 'claude-sonnet-5-5', effort: 'high', usage: { input_tokens: 1_000_000, output_tokens: 0 } })
+    expect(Math.abs(later.costUsd - 2)).toBeLessThan(1e-9)
+    expect(later.tokens).toBe(1_000_000)
+  })
+
+  test('L20 a throw while pricing keeps the step: tokens, model and effort fold in, the cost is flagged unpriced', () => {
+    const base = newRun('r1', 'scout', 'd', 'claude-sonnet-5-5', {}, 0)
+    const usage = { input_tokens: 10_000, output_tokens: 0 }
+    Object.defineProperty(usage, 'cache_creation', {
+      enumerable: true,
+      get: () => {
+        throw new Error('boom')
+      },
+    })
+    const next = addStep(base, { model: 'claude-sonnet-5-5', effort: 'medium', usage: usage as never })
+    expect(next.tokens).toBe(10_000)
+    expect(next.effort).toBe('medium')
+    expect(next.costUsd).toBe(0)
+    expect(next.hasUnknownModelCost).toBe(true)
+  })
+
+  test('L21 real subagent and main-loop usage prices to the independent recompute, through the engine', async ($, on) => {
+    reset()
+    const writes = world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($, false)
+    const { runA, runB, expected } = REAL_USAGE
+    const plan: [string, typeof runA.steps][] = [
+      ['a1', runA.steps],
+      ['a2', runB.steps],
+      ['a3', [...runA.steps, ...runB.steps]],
+    ]
+    for (const [id, steps] of plan) {
+      reset({ agentId: id })
+      await spawn($, 'spark')
+      for (const s of steps) await step($, id, s.model, s.effort ?? 'high', s.usage as never)
+    }
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    const runs = (JSON.parse(writes['/home/me/.claude/state/agentic-os/s1.json'] ?? '{}') as { agentRuns?: { id: string; costUsd: number }[] }).agentRuns ?? []
+    const costOf = (id: string) => runs.find(run => run.id === id)?.costUsd ?? Number.NaN
+    // The recompute sums the same records apart from price.ts: a tier-rate or advisor-less run is off by far more than a cent.
+    expect(Math.abs(costOf('a1') - expected.runA.usd)).toBeLessThan(1e-6)
+    expect(Math.abs(costOf('a2') - expected.runB.usd)).toBeLessThan(1e-6)
+    expect(Math.abs(costOf('a3') - expected.runAB.usd)).toBeLessThan(1e-6)
+    // The advisor part is a real share of run A.
+    expect(expected.runA.advisorUsd).toBeGreaterThan(0.5)
+  })
+
+  test('L22 a run counts advisor iteration tokens with the top-level ones, as its dollars do', async ($, on) => {
+    reset()
+    world(on)
+    await start($)
+    await spawn($, 'spark')
+    await step($, 'a1', 'claude-sonnet-5-5', 'high', {
+      input_tokens: 100_000,
+      output_tokens: 0,
+      iterations: [
+        { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 100_000, output_tokens: 10_000, cache_read_input_tokens: 5_000, cache_creation_input_tokens: 2_000 },
+        // Not an advisor entry, junk and a bad count: none adds tokens, and the bad count does not lower the sum.
+        { type: 'message', model: 'claude-opus-5-5', input_tokens: 1_000_000, output_tokens: 0 },
+        null,
+        'x',
+        { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: -50, output_tokens: Number.NaN },
+      ],
+    })
+    await finish($, 'a1')
+    // 100k top level + (100k + 10k + 5k + 2k) advisor = 217k.
+    expect(await paneText($)).toContain('217k tok')
+    const base = newRun('r1', 'scout', 'd', 'claude-sonnet-5-5', {}, 0)
+    expect(addStep(base, { model: 'claude-sonnet-5-5', effort: null, usage: { input_tokens: 10, output_tokens: 5, iterations: 'junk' } }).tokens).toBe(15)
+    const advisor = { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 7, output_tokens: 3 }
+    expect(addStep(base, { model: 'claude-sonnet-5-5', effort: null, usage: { input_tokens: 10, output_tokens: 5, iterations: [advisor] } }).tokens).toBe(25)
   })
 
   test('L12 an empty run id, and a spawn with no workflow, store no workflow run id; a real one beside them is stored', async ($, on) => {
