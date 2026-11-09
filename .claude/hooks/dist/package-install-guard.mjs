@@ -2,7 +2,8 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/package-install-guard.ts
-import { existsSync, readFileSync, statSync } from "fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "fs";
+import { homedir as homedir2 } from "os";
 import { dirname as dirname2, join as join2, resolve } from "path";
 import https from "https";
 
@@ -20527,8 +20528,21 @@ function mayMoveFolder(text) {
   return MAY_MOVE_WORD.test(text) || MAY_MOVE_WORD.test(plain) || MAY_MOVE_OTHER.test(text) || /npm_config_prefix/i.test(text);
 }
 var GLOBAL_MODE = /(?:^|\s)(?:-g|--global|--location[=\s]+global)(?=\s|$)|npm_config_global|npm_config_location/i;
-function localBinCwd(command, cwd) {
-  return cwd === null || mayMoveFolder(command) || GLOBAL_MODE.test(command) ? null : cwd;
+var PS_SCRIPT_END = /\.(?:ps1|psm1|bat|cmd)["']?\s*(?:[;|&)\r\n]|$)/i;
+var PS_SCRIPT_PATH = /^["']?[^\s"']*[\\/][^\s"']*\.(?:ps1|psm1|bat|cmd)["']?$/i;
+var PS_LOOKUP = /\b(?:gcm|get-command|icm|invoke-command|invoke-item)\b/i;
+var PS_CALL_OP = /&\s*[($"']/;
+function psMayMoveFolder(text) {
+  const plain = text.replace(/[`'"]/g, "");
+  if (PS_SCRIPT_END.test(text) || PS_SCRIPT_END.test(plain) || PS_LOOKUP.test(text) || PS_LOOKUP.test(plain) || PS_CALL_OP.test(text)) return true;
+  return text.split(/[;|&\r\n(){}]/).some((piece) => {
+    const first = piece.trim().split(/\s+/)[0] ?? "";
+    return /[*?]/.test(first) || PS_SCRIPT_PATH.test(first);
+  });
+}
+function localBinCwd(command, cwd, tool = "Bash") {
+  if (cwd === null || mayMoveFolder(command) || GLOBAL_MODE.test(command)) return null;
+  return tool === "PowerShell" && psMayMoveFolder(command) ? null : cwd;
 }
 function needsCheck(segment, tool, configured = false) {
   const a = analyzeInstall(segment);
@@ -20664,7 +20678,22 @@ function rawConfigMarkers(command) {
     // Whole shell words only: eslint-config-prettier, set-value and lodash.set are package names, not config writes.
     RAW_MANAGER.test(seg2) && /(?:^|\s)(?:config|c)(?=\s|$)/i.test(seg2) || RAW_SET_MANAGER.test(seg2) && /(?:^|\s)set(?=\s|$)/i.test(seg2)
   ));
-  return [.../* @__PURE__ */ new Set([...writes.map((seg2) => seg2.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0])])];
+  return [.../* @__PURE__ */ new Set([...writes.map((seg2) => seg2.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0]), ...builtNameMarkers(command, text)])];
+}
+var EXPANSION = /[{$*?[`]/;
+var BUILT_ENV_NAME = /(?<![A-Za-z0-9_])(?:npm_config_|PIP_|UV_|YARN_|BUN_CONFIG_)[A-Za-z0-9_]*[{$*?[`]/i;
+function builtNameMarkers(command, stripped) {
+  const views = [command.replace(/[\\'"]/g, ""), stripped];
+  const found = [];
+  for (const view of views) {
+    for (const token of view.split(/[\s;&|<>()]+/)) {
+      const base = token.split(/[\\/]/).pop() ?? "";
+      if (base.startsWith(".") && EXPANSION.test(base)) found.push(token.slice(0, 80));
+    }
+    const env = view.match(BUILT_ENV_NAME);
+    if (env) found.push(env[0]);
+  }
+  return found;
 }
 function persistentConfigMarkers(command, tool, depth = 0) {
   try {
@@ -21136,11 +21165,82 @@ function asksFor(segment, install, cwd, tool) {
   return asks;
 }
 var LOCAL_BIN_MAX_LEVELS = 10;
+var RC_FILES = [".npmrc", ".yarnrc.yml", "bunfig.toml", "pip.conf", "pip.ini", "uv.toml"];
+var RC_MAX_BYTES = 64 * 1024;
+var RC_PUBLIC_HOSTS = /* @__PURE__ */ new Set(["npmjs.org", "registry.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org"]);
+var RC_KEY = /^(?:@[^\s=:'"]+:)?(?:registry|npmRegistryServer|index[-_]url|extra[-_]index[-_]url|find[-_]links)$/i;
+var RC_LINE = /^\s*["']?([^\s=:"']+(?::[^\s=:"']+)?)["']?\s*[=:]\s*(.*)$/;
+var URL_IN_VALUE = /[a-z][a-z0-9+.-]*:\/\/[^\s"',}]+/i;
+function readRcFile(path) {
+  try {
+    if (!statSync(path).isFile()) return null;
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(RC_MAX_BYTES);
+      return buf.toString("utf8", 0, readSync(fd, buf, 0, RC_MAX_BYTES, 0));
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+function rcValueHost(value) {
+  const url = value.match(URL_IN_VALUE)?.[0] ?? value.trim().replace(/^["']|["']$/g, "");
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+function rcFileSettings(file, text) {
+  const keyOk = (key) => RC_KEY.test(key) || file.endsWith("uv.toml") && key.toLowerCase() === "url";
+  const lines = text.split(/\r?\n/);
+  const out = [];
+  const judge = (key, value) => {
+    const host = rcValueHost(value);
+    if (host === null || !RC_PUBLIC_HOSTS.has(host)) out.push(`${file} (${key}=${host ?? value.trim().slice(0, 60)})`);
+  };
+  lines.forEach((line, i) => {
+    if (/^\s*[#;]/.test(line)) return;
+    const m = line.match(RC_LINE);
+    if (!m || !keyOk(m[1])) return;
+    if (m[2].trim() !== "") {
+      judge(m[1], m[2]);
+      return;
+    }
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^\s*[#;]/.test(lines[j]); j++) judge(m[1], lines[j]);
+  });
+  return out;
+}
+function rcFileMarkers(cwd) {
+  const dirs = /* @__PURE__ */ new Set();
+  let dir = resolve(cwd);
+  for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
+    dirs.add(dir);
+    const parent = dirname2(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  try {
+    dirs.add(resolve(process.env.CCV3_GUARD_RC_HOME || homedir2()));
+  } catch {
+  }
+  const out = [];
+  for (const d of dirs) {
+    for (const name of RC_FILES) {
+      const path = join2(d, name);
+      const text = readRcFile(path);
+      if (text !== null) out.push(...rcFileSettings(path, text));
+    }
+  }
+  return out;
+}
 function hasLocalBin(name, cwd) {
   let dir = resolve(cwd);
   for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
     try {
-      if (statSync(join2(dir, "node_modules", ".bin", name)).isFile()) return true;
+      if (statSync(join2(dir, "node_modules", ".bin", name)).isFile() && (level === 0 || statSync(join2(dir, "node_modules", ".package-lock.json")).isFile())) return true;
     } catch {
     }
     const parent = dirname2(dir);
@@ -21216,7 +21316,8 @@ async function main() {
     return;
   }
   const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd)));
+  const rcMarkers = payloadCwd === null ? [] : rcFileMarkers(payloadCwd);
+  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : void 0));
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   const wholeOverride = PS_OVERRIDE.test(command);
   const checked = installs.filter(({ segment }) => !wholeOverride && !checkOverride(segment));
@@ -21249,6 +21350,9 @@ async function main() {
   const config = [.../* @__PURE__ */ new Set([...indexConfigMarkers(command), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(command)])];
   if (config.length > 0 && !asks.some((a) => a.startsWith("Custom package index"))) {
     asks.push(`Custom package index or config in the command: ${config.join(", ")}. The checks read the public PyPI or npm registry, not this index.`);
+  }
+  if (rcMarkers.length > 0) {
+    asks.push(`Registry or index set in an rc file on disk: ${rcMarkers.join(", ")}. The checks read the public PyPI or npm registry, not this one.`);
   }
   if (asks.length > 0) {
     const decision = isUnattended(input) ? "deny" : "ask";

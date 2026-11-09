@@ -19,7 +19,8 @@
  * Override: prefix command with SKIP_PACKAGE_GUARD=1
  */
 
-import { existsSync, readFileSync, statSync } from 'fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'fs';
+import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import https from 'https';
 import http from 'http';
@@ -425,9 +426,33 @@ function mayMoveFolder(text: string): boolean {
 // npm global mode looks in the global .bin, not node_modules/.bin, so the local bin does not count.
 const GLOBAL_MODE = /(?:^|\s)(?:-g|--global|--location[=\s]+global)(?=\s|$)|npm_config_global|npm_config_location/i;
 
-/** The folder the local-bin skip and the lockfile read may trust: the payload cwd, or null (every check runs) when the text may move it. */
-function localBinCwd(command: string, cwd: string | null): string | null {
-  return cwd === null || mayMoveFolder(command) || GLOBAL_MODE.test(command) ? null : cwd;
+// PowerShell can move the folder with no cd word: a script, function or alias run by name, a call operator, a command lookup, a wildcard command word.
+// A script (.ps1, .psm1, .bat, .cmd) that ends a statement. Its name may be a path, quoted.
+const PS_SCRIPT_END = /\.(?:ps1|psm1|bat|cmd)["']?\s*(?:[;|&)\r\n]|$)/i;
+// A command word that is a path to a script, with arguments: C:\tools\go.ps1 -Verbose.
+const PS_SCRIPT_PATH = /^["']?[^\s"']*[\\/][^\s"']*\.(?:ps1|psm1|bat|cmd)["']?$/i;
+// Command lookup and indirect run: & (gcm Set-Loc*) X, icm { ... }, Invoke-Item go.ps1.
+const PS_LOOKUP = /\b(?:gcm|get-command|icm|invoke-command|invoke-item)\b/i;
+// The call operator `&` before a group, a variable or a quoted name. Bash `&` is a background job, so only PowerShell reads this.
+const PS_CALL_OP = /&\s*[($"']/;
+
+function psMayMoveFolder(text: string): boolean {
+  const plain = text.replace(/[`'"]/g, '');
+  if (PS_SCRIPT_END.test(text) || PS_SCRIPT_END.test(plain) || PS_LOOKUP.test(text) || PS_LOOKUP.test(plain) || PS_CALL_OP.test(text)) return true;
+  // The command word of each statement: a wildcard in it (Set-Loc*, S?t-Location) names a command at run time.
+  return text.split(/[;|&\r\n(){}]/).some((piece) => {
+    const first = piece.trim().split(/\s+/)[0] ?? '';
+    return /[*?]/.test(first) || PS_SCRIPT_PATH.test(first);
+  });
+}
+
+/**
+ * The folder the local-bin skip and the lockfile read may trust: the payload cwd, or null (every check runs)
+ * when the text may move it. `tool` is the dialect the text is read in: PowerShell has extra rules (psMayMoveFolder).
+ */
+function localBinCwd(command: string, cwd: string | null, tool = 'Bash'): string | null {
+  if (cwd === null || mayMoveFolder(command) || GLOBAL_MODE.test(command)) return null;
+  return tool === 'PowerShell' && psMayMoveFolder(command) ? null : cwd;
 }
 
 /**
@@ -660,7 +685,34 @@ function rawConfigMarkers(command: string): string[] {
   const writes = text.split(/[;&|\r\n]/).filter((seg) =>
     // Whole shell words only: eslint-config-prettier, set-value and lodash.set are package names, not config writes.
     (RAW_MANAGER.test(seg) && /(?:^|\s)(?:config|c)(?=\s|$)/i.test(seg)) || (RAW_SET_MANAGER.test(seg) && /(?:^|\s)set(?=\s|$)/i.test(seg)));
-  return [...new Set([...writes.map((seg) => seg.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0])])];
+  return [...new Set([...writes.map((seg) => seg.trim().slice(0, 80)), ...[...text.matchAll(RAW_CONFIG_WORD)].map((m) => m[0]), ...builtNameMarkers(command, text)])];
+}
+
+// G2 run-time-built names: the shell builds an rc file name or an env variable name, so the raw text never holds
+// ".npmrc" or "npm_config_registry" (.np{m,}rc, .n${X}pmrc, npm_config_{reg,}istry, npm_config_reg$()istry).
+// An expansion char: a brace, a variable, a glob or a backtick.
+const EXPANSION = /[{$*?[`]/;
+// An env-name prefix of a package manager, then name characters, then an expansion char inside the name.
+const BUILT_ENV_NAME = /(?<![A-Za-z0-9_])(?:npm_config_|PIP_|UV_|YARN_|BUN_CONFIG_)[A-Za-z0-9_]*[{$*?[`]/i;
+
+/**
+ * (a) a word whose basename starts with a dot and holds an expansion char; (b) an env-name prefix with one
+ * inside the name. Read from the raw text twice: once with quotes and backslashes removed (a backtick stays,
+ * it is an expansion here) and once with the backticks removed as well. Fail closed: `ls .cache/*` is not
+ * one (the glob is not in the dot word), `.eslintrc.{js,json}` is.
+ */
+function builtNameMarkers(command: string, stripped: string): string[] {
+  const views = [command.replace(/[\\'"]/g, ''), stripped];
+  const found: string[] = [];
+  for (const view of views) {
+    for (const token of view.split(/[\s;&|<>()]+/)) {
+      const base = token.split(/[\\/]/).pop() ?? '';
+      if (base.startsWith('.') && EXPANSION.test(base)) found.push(token.slice(0, 80));
+    }
+    const env = view.match(BUILT_ENV_NAME);
+    if (env) found.push(env[0]);
+  }
+  return found;
 }
 
 /**
@@ -1368,18 +1420,105 @@ function asksFor(segment: string, install: InstallAnalysis | null, cwd: string |
 
 const LOCAL_BIN_MAX_LEVELS = 10;
 
+// ---------------------------------------------------------------------------
+// rc files on disk (G2, disk half)
+// ---------------------------------------------------------------------------
+
+const RC_FILES = ['.npmrc', '.yarnrc.yml', 'bunfig.toml', 'pip.conf', 'pip.ini', 'uv.toml'];
+const RC_MAX_BYTES = 64 * 1024;
+// Hosts whose registry or index the checks read. Any other host in a registry key asks.
+const RC_PUBLIC_HOSTS = new Set(['npmjs.org', 'registry.npmjs.org', 'registry.yarnpkg.com', 'pypi.org', 'files.pythonhosted.org']);
+// The KEY decides, not a line that holds the word: `//registry.npmjs.org/:_authToken=` is an auth key.
+// npm @scope:registry, yarn npmRegistryServer, pip and uv index-url, extra-index-url, find-links. uv.toml also lists an index as `url`.
+const RC_KEY = /^(?:@[^\s=:'"]+:)?(?:registry|npmRegistryServer|index[-_]url|extra[-_]index[-_]url|find[-_]links)$/i;
+const RC_LINE = /^\s*["']?([^\s=:"']+(?::[^\s=:"']+)?)["']?\s*[=:]\s*(.*)$/;
+const URL_IN_VALUE = /[a-z][a-z0-9+.-]*:\/\/[^\s"',}]+/i;
+
+/** The first 64 KB of a regular file as text. A missing file, a folder or any read error gives null. */
+function readRcFile(path: string): string | null {
+  try {
+    if (!statSync(path).isFile()) return null;
+    const fd = openSync(path, 'r');
+    try {
+      const buf = Buffer.alloc(RC_MAX_BYTES);
+      return buf.toString('utf8', 0, readSync(fd, buf, 0, RC_MAX_BYTES, 0));
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** The host a registry value names, or null when it is not a URL (a path, ${VAR}, protocol-relative). */
+function rcValueHost(value: string): string | null {
+  const url = value.match(URL_IN_VALUE)?.[0] ?? value.trim().replace(/^["']|["']$/g, '');
+  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+}
+
+/** Registry-key settings in one rc file whose host is not a public registry: "path (key=host)". */
+function rcFileSettings(file: string, text: string): string[] {
+  const keyOk = (key: string) => RC_KEY.test(key) || (file.endsWith('uv.toml') && key.toLowerCase() === 'url');
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  const judge = (key: string, value: string) => {
+    const host = rcValueHost(value);
+    if (host === null || !RC_PUBLIC_HOSTS.has(host)) out.push(`${file} (${key}=${host ?? value.trim().slice(0, 60)})`);
+  };
+  lines.forEach((line, i) => {
+    if (/^\s*[#;]/.test(line)) return;
+    const m = line.match(RC_LINE);
+    if (!m || !keyOk(m[1])) return;
+    if (m[2].trim() !== '') { judge(m[1], m[2]); return; }
+    // pip lists several values on the indented lines after an empty key: extra-index-url =\n  URL\n  URL
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j]) && !/^\s*[#;]/.test(lines[j]); j++) judge(m[1], lines[j]);
+  });
+  return out;
+}
+
+/**
+ * Registry or index settings that point away from the public registries, read from the rc files an install reads:
+ * the cwd, up to 10 folders above it, and the home folder (CCV3_GUARD_RC_HOME overrides it, for tests).
+ * Read errors are ignored. A null cwd is not read by the caller.
+ */
+function rcFileMarkers(cwd: string): string[] {
+  const dirs = new Set<string>();
+  let dir = resolve(cwd);
+  for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
+    dirs.add(dir);
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  try { dirs.add(resolve(process.env.CCV3_GUARD_RC_HOME || homedir())); } catch { /* no home folder: skip it */ }
+  const out: string[] = [];
+  for (const d of dirs) {
+    for (const name of RC_FILES) {
+      const path = join(d, name);
+      const text = readRcFile(path);
+      if (text !== null) out.push(...rcFileSettings(path, text));
+    }
+  }
+  return out;
+}
+
 /**
  * A node_modules/.bin/<name> file (a symlink to a file counts) in cwd or an ancestor, up to 10 levels.
  * npm 11.12.1 (libnpmexec localFileExists) starts at the local prefix and walks up to the root:
  * the first folder with that file wins, and then npx runs it and fetches nothing.
  * So a bin in a parent node_modules counts, even when a nearer folder has package.json.
+ * An ANCESTOR node_modules counts only when it holds .package-lock.json, the hidden lockfile npm writes
+ * into a node_modules it installed. Any earlier command can plant a bare bin file in a workspace root.
  * The guard stops at 10 levels. A bin higher up reads as not found, so the checks still run.
  */
 function hasLocalBin(name: string, cwd: string): boolean {
   let dir = resolve(cwd);
   for (let level = 0; level < LOCAL_BIN_MAX_LEVELS; level++) {
     // npm (libnpmexec) runs only a file with the exact name. A folder, or a lone .cmd or .ps1, is not one.
-    try { if (statSync(join(dir, 'node_modules', '.bin', name)).isFile()) return true; } catch { /* no bin here: check the parent */ }
+    try {
+      if (statSync(join(dir, 'node_modules', '.bin', name)).isFile()
+        && (level === 0 || statSync(join(dir, 'node_modules', '.package-lock.json')).isFile())) return true;
+    } catch { /* no bin here, or no marker above cwd: check the parent */ }
     const parent = dirname(dir);
     if (parent === dir) return false;
     dir = parent;
@@ -1473,7 +1612,10 @@ async function main() {
   // A desktop-commander shell is chosen at run time, so its text is read as Bash and PowerShell.
   // A desktop-commander shell keeps its own folder, not the session folder: the local-bin skip and the lockfile read cannot use it.
   const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
-  const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd)));
+  // An rc file on disk (the cwd, its ancestors, the home folder) that points at another registry makes every install a configured one.
+  const rcMarkers = payloadCwd === null ? [] : rcFileMarkers(payloadCwd);
+  const plans = shell.dialects.flatMap((dialect) =>
+    installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : undefined));
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   // F08: the override applies to the segment it prefixes, as a shell env assignment does.
   // A PowerShell `$env:SKIP_PACKAGE_GUARD=1;` first statement sets it for the whole command.
@@ -1515,6 +1657,10 @@ async function main() {
   const config = [...new Set([...indexConfigMarkers(command), ...shell.dialects.flatMap((dialect) => persistentConfigMarkers(command, dialect)), ...rawConfigMarkers(command)])];
   if (config.length > 0 && !asks.some((a) => a.startsWith('Custom package index'))) {
     asks.push(`Custom package index or config in the command: ${config.join(', ')}. The checks read the public PyPI or npm registry, not this index.`);
+  }
+
+  if (rcMarkers.length > 0) {
+    asks.push(`Registry or index set in an rc file on disk: ${rcMarkers.join(', ')}. The checks read the public PyPI or npm registry, not this one.`);
   }
 
   // The checks could not vouch for part of the install: ask, or deny where no human can answer.
