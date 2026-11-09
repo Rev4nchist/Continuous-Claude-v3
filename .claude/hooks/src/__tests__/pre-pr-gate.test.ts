@@ -1630,6 +1630,8 @@ describe('B: the checkpoint gate (PR B)', () => {
     // A real PR number still matches, whatever the script is called.
     'node scripts/foo.mjs --apply 2',
     'node scripts/foo.mjs --apply=2 --json',
+    'node scripts/foo.mjs --apply=2>&1',
+    'node scripts/foo.mjs --apply=12>/dev/null',
     'node scripts/foo.mjs --apply 12 2>&1',
   ];
   const SELF_OK = [
@@ -1642,7 +1644,6 @@ describe('B: the checkpoint gate (PR B)', () => {
     'some-other-tool --confirm none',
     // The digit after --apply is a stderr redirect, not a PR number (seen on the M2 settings script).
     'node scripts/foo.mjs --apply 2>&1',
-    'node scripts/foo.mjs --apply=2>&1',
     'node scripts/foo.mjs --apply 2>/dev/null',
     'node scripts/foo.mjs --apply 2>> out.log',
     'node scripts/foo.mjs --apply 1>out.txt',
