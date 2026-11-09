@@ -15,6 +15,8 @@ export const QUOTA_AMBER_PCT = 80;
 export const SESSION_AMBER_USD = 150;
 /** A reading of 0 is trusted only when another reading under this backs it. */
 const QUOTA_ZERO_BACKING_PCT = 5;
+// Only these two levels are below `high`. xhigh and max are above it; an unknown string is not a break.
+const BELOW_HIGH_EFFORT: ReadonlySet<string> = new Set(['low', 'medium']);
 
 /** A ledger sum. `floor`: any run with `advised > 0`. `unpriced`: runs with no price (left out of `usd`). */
 export type Usd = { usd: number; floor: boolean; unpriced: number };
@@ -127,7 +129,7 @@ export function foldBreaks(snapshots: readonly FoldSnapshot[]): BreaksTile {
       if (run.hasSpec) out.driftChecked += 1;
       const tier = run.model === null ? 'other' : tierOf(run.model);
       const haiku = tier === 'haiku';
-      const sonnetLow = tier === 'sonnet' && run.effort !== null && run.effort !== 'high';
+      const sonnetLow = tier === 'sonnet' && run.effort !== null && BELOW_HIGH_EFFORT.has(run.effort.toLowerCase());
       // A haiku run already reads "Haiku is banned" in drift: it counts in the haiku arm only.
       const drift = !haiku && run.drift !== null && run.drift !== '';
       if (haiku) out.haiku += 1;

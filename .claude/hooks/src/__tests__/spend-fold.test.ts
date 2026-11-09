@@ -242,6 +242,23 @@ describe('spend fold: rule breaks', () => {
     expect(f.breaks.runs).toBe(3);
   });
 
+  it('5b only low and medium are below high: xhigh, max, High and unknown strings are not in sonnetLow', () => {
+    const f = fold([
+      snap('a', {
+        agentRuns: [
+          run({ model: 'claude-sonnet-4-5', effort: 'low' }),
+          run({ model: 'claude-sonnet-4-5', effort: 'MEDIUM' }),
+          run({ model: 'claude-sonnet-4-5', effort: 'xhigh' }),
+          run({ model: 'claude-sonnet-4-5', effort: 'max' }),
+          run({ model: 'claude-sonnet-4-5', effort: 'High' }),
+          run({ model: 'claude-sonnet-4-5', effort: 'turbo' }),
+        ],
+      }),
+    ]);
+    expect(f.breaks.sonnetLow).toBe(2);
+    expect(f.breaks.distinct).toBe(2);
+  });
+
   it('6 a sonnet run with a null effort is not in sonnetLow', () => {
     const f = fold([snap('a', { agentRuns: [run({ effort: null })] })]);
     expect(f.breaks.sonnetLow).toBe(0);
