@@ -24,6 +24,9 @@ Every hook with meaningful logic MUST be registered in settings.json to run. Unr
 | Active dist | `~/.claude/hooks/dist/*.mjs` |
 | Full command scripts | `@references/audit-commands.md` |
 
+**Retained on purpose** (source and dist stay, registration removed; the audit lists them apart and never suggests wiring them):
+`references/retained-unregistered.json` maps hook name to reason. Add an entry there when Dave decides to keep unregistered code.
+
 **Exclusions** from source inventory (not standalone hooks):
 - `shared/` -- utility modules imported by hooks
 - `__tests__/` -- test files

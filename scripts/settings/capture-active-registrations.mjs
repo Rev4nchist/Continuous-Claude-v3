@@ -37,6 +37,7 @@ const STALE_DEREGISTERED = new Set([
   'navigator-safety.mjs',
   'pageindex-navigator.mjs',
   'sync-to-repo.mjs',
+  'git-auto-commit.mjs', // M2 2026-11-09: a no-op (~/.claude has no .git). Source and dist stay; the registration does not.
 ]);
 
 // Superseded PER EVENT by prompt-submit.mjs (2026-10-29): one node process runs these 5 jobs

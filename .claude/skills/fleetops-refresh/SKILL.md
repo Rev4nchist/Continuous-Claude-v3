@@ -9,6 +9,8 @@ FleetOps is Dave's lane dashboard: https://claude.ai/artifact/Vnf8urTCv7awKXwNT4
 
 The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It writes the 7 files to `~/.claude/state/lane-dash` and uploads nothing. This skill does the upload. The task also writes `flow.json` and `factory.json` for the Fleet app. They are not dashboard sources: never copy or upload them.
 
+The task `CCv3-FleetOps-Auto`, when Dave enables it, runs the export every 30 minutes. It clears the pending flag when the data did not change. It uploads nothing.
+
 ## Rules
 
 - Anyone who can open the dashboard can read the 7 files. They hold lane titles. Dave decided that.
@@ -52,6 +54,10 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
      2. Delete the new uploads you made in step 4.
      3. Leave the pending flag on. Report the failing ids.
 6. Clear the pending flag. Do this only when step 5 found no failure. Use the `key` from your last read of `refresh.json`.
+   First record the upload. The timed task uses it to see that the data did not change.
+   `node C:/Users/dkhay/continuous-claude/scripts/coordination/fleetops-auto-tick.mjs --record-upload <your scratchpad folder>`
+   - It reads the 7 copies you uploaded. It exits 1 and stores nothing when a copy has an `exportedAt` that is not the `key` of `refresh.json`. A newer export ran: start again from step 1.
+   Then clear the flag:
    `node C:/Users/dkhay/continuous-claude/scripts/coordination/export-dash-data.mjs --clear-refresh <key>`
    - A key mismatch means a newer export ran. Start again from step 1.
    - The message `export lock is held` means an export runs now. Wait 1 minute and run this step again.

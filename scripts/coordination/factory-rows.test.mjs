@@ -22,6 +22,8 @@
  *   12  an end row counts as a run, or notStarted is read                                (mutation M5)
  *   13  a free purpose string becomes a row id
  *   14  a quiet family is blanked, or as_of equals today
+ *   14b the CodeRabbit quiet note reads like an outage, or the new wording leaks into the pre-PR and hand families
+ *   14c the review quiet day comes from an end row, or a live family still gets a note
  *   15  the cap reads the total files, not PR files                                      (mutation M4)
  *   16  a row with no kind is not a PR row
  *   17  the month is not a calendar month
@@ -148,6 +150,7 @@ const TEXT_OK = [
   /^\d{4}-\d{2}-\d{2}$/, // an ISO day
   /^\d+$/, /^\d+\.\d%$/, /^\$\d+\.\d{2}$/, /^\d+ files a month$/, /^\$\d+\.\d{2} per file$/, // number forms
   /^\d+ of \d+ days of data$/, /^no data: (missing|empty|corrupt|too large|reader error|unreachable)$/, /^no data since [A-Z][a-z]{2} \d{1,2}$/,
+  /^no (review runs|paid CodeRabbit run) since [A-Z][a-z]{2} \d{1,2}$/,
   /^[A-Z][a-z]{2} \d{4}$/, // "Nov 2026"
   /^(Runs|Runs with a FAIL|FAIL rows|First runs|First-run pass|Review runs|CodeRabbit \$|Files|Succeeded|Partial plus|Partial minus|Failed|Other)$/,
   /^(PRs opened|PRs landed)$/,
@@ -317,7 +320,7 @@ test('14 a quiet review ledger: as_of Nov 4, the note, and real zeros after it',
   // Breaks when a stale family is blanked, or the note shows when as_of equals today.
   const rows = build({ rev: okFam([start('2026-11-03'), start('2026-11-04')]) });
   assert.equal(txt(rows, 'rev.as_of'), '2026-11-04');
-  assert.equal(txt(rows, 'rev.note'), 'no data since Nov 4');
+  assert.equal(txt(rows, 'rev.note'), 'no review runs since Nov 4');
   for (const r of [11, 12, 13, 14]) assert.strictEqual(val(rows, `rev.bar.${r}.runs`), 0, `rank ${r} is a real zero`);
   assert.equal(val(rows, 'rev.bar.10.runs'), 1);
   assert.equal(val(rows, 'rev.today.runs'), 0);
@@ -329,6 +332,31 @@ test('14 a quiet review ledger: as_of Nov 4, the note, and real zeros after it',
 });
 
 // ---------------------------------------------------------------- coderabbit
+
+test('14b a quiet CodeRabbit ledger says "no paid CodeRabbit run since", and the pre-PR and hand families keep "no data since"', () => {
+  // Breaks when the CodeRabbit quiet note reads like an outage, or when the wording change leaks into the other families.
+  const rows = build({
+    coderabbit: okFam([cr('2026-11-04', 1, 0.25)]),
+    prpr: okFam([pr('2026-11-07', 'a', 'h', 'PASS')]), hand: okFam([hd('2026-11-06', 'SUCCEEDED')]),
+  });
+  assert.equal(txt(rows, 'rev.coderabbit.note'), 'no paid CodeRabbit run since Nov 4');
+  assert.equal(txt(rows, 'prpr.note'), 'no data since Nov 7');
+  assert.equal(txt(rows, 'hand.note'), 'no data since Nov 6');
+  assert.equal(val(rows, 'rev.coderabbit.today.usd'), 0, 'real zeros stay');
+});
+
+test('14c the review quiet day counts start rows only: an end row on a later day is not a run (D8)', () => {
+  // Breaks when the note date comes from as_of (any row) and not from the newest start row.
+  const rows = build({ rev: okFam([start('2026-11-03'), end('2026-11-04')]) });
+  assert.equal(txt(rows, 'rev.as_of'), '2026-11-04');
+  assert.equal(txt(rows, 'rev.note'), 'no review runs since Nov 3');
+  assert.match(txt(rows, 'rev.summary'), /Last run Nov 3./);
+  const endsOnly = build({ rev: okFam([end('2026-11-04')]) });
+  assert.equal(txt(endsOnly, 'rev.note'), 'no data since Nov 4', 'no start row: the plain wording');
+  const live = build({ rev: okFam([start('2026-11-08')]), coderabbit: okFam([cr('2026-11-08', 1, 0.25)]) });
+  assert.equal(find(live, 'rev.note'), undefined);
+  assert.equal(find(live, 'rev.coderabbit.note'), undefined);
+});
 
 test('15 one PR row and one CLI row on one day: the bars sum both, the month splits them, cap.pct reads PR files (M4)', () => {
   // Breaks when the cap reads total files (6 of 160 is 3.8%, not 2.5%).

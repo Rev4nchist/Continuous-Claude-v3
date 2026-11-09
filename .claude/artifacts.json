@@ -274,6 +274,28 @@
         "A SNAPSHOT of 2026-11-04 09:30 CST built from workflow wf_a2567539-ff2. It does not know about per-project lanes, PR0 or PR1. Refresh by re-running a survey, not by editing the HTML.",
         "Source lives in .claudedocs (untracked, machine-local). The page declares the db capability for per-part status overrides (collections nodes and meta); publish WITHOUT capabilities."
       ]
+    },
+    {
+      "id": "harness-resource-index",
+      "url": "https://claude.ai/artifact/6wL9fuxXPQ2cs4QsUVwdkc",
+      "source": ".claudedocs/harness-resource-index/harness-resource-index.html",
+      "title": "Harness Resource Index",
+      "favicon": "index",
+      "description": "Interactive index of 273 harness and software-factory tracking and presentation resources made in the two weeks to 2026-11-09.",
+      "session": "general",
+      "refresh": "on-request",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-11-09",
+      "verified": {
+        "on": "2026-11-09",
+        "by_session": "7e86c731",
+        "listing": "Artifact action:list returns it (version 1, 273 items, published 2026-11-09)"
+      },
+      "notes": [
+        "A SNAPSHOT of 2026-11-09 built by a 10-agent workflow. It does not refresh by itself: re-run the discovery workflow, update inventory.json, then run build.mjs.",
+        "Source, template, build script and data live in .claudedocs/harness-resource-index/ (untracked, machine-local). build.mjs also applies one-off fixes to inventory.json, so it is not a clean render: edit inventory.json and template.html, check the script, then rebuild and publish. Content model is narrative-snapshot for that reason, like the three entries above it.",
+        "Dave said yes on 2026-11-09 to registering it. Publish WITHOUT capabilities."
+      ]
     }
   ]
 }

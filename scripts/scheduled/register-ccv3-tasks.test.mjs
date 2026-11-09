@@ -135,3 +135,21 @@ test('dry run on the REAL tasks.json: CCv3-Lane-Snapshot is daily 23:55, allowed
   assert.doesNotMatch(line, /WindowStyle/);
   assert.match(r.stdout, /^DRY RUN: nothing changed/m);
 });
+
+test('dry run on the REAL tasks.json: CCv3-FleetOps-Auto is every 30m, allowed on battery, hidden through conhost --headless', win, () => {
+  const realTasks = join(dirname(SCRIPT), '..', '..', '..', 'scripts', 'scheduled', 'tasks.json');
+  const tasks = JSON.parse(readFileSync(realTasks, 'utf8')).tasks;
+  const home = join(mkdtempSync(join(tmpdir(), 'reg-real-')), 'home');
+  mkdirSync(join(home, 'scripts', 'scheduled'), { recursive: true });
+  for (const t of tasks) writeFileSync(join(home, 'scripts', 'scheduled', basename(t.script)), 'rem stub\r\n');
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT, '-TasksFile', realTasks, '-ClaudeHome', home, '-Only', 'CCv3-FleetOps-Auto'],
+    { encoding: 'utf8', windowsHide: true, timeout: 90000 });
+  assert.equal(r.status, 0, (r.stdout ?? '') + (r.stderr ?? ''));
+  const line = (r.stdout ?? '').split(/\r?\n/).find((l) => l.startsWith('CCv3-FleetOps-Auto:'));
+  assert.ok(line, r.stdout);
+  const conhost = join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'conhost.exe').toLowerCase();
+  assert.ok(line.toLowerCase().startsWith(`ccv3-fleetops-auto: ${conhost} --headless powershell.exe -noprofile -executionpolicy bypass -file "`), line);
+  assert.match(line, / -File ".*scheduled-fleetops-auto\.ps1"  \[every 30m, limit 5 min, llm=false battery=allow wake=no\]$/);
+  assert.doesNotMatch(line, /WindowStyle/);
+  assert.match(r.stdout, /^DRY RUN: nothing changed/m);
+});
