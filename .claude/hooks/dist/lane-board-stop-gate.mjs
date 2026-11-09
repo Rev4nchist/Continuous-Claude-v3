@@ -2,7 +2,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/lane-board-stop-gate.ts
-import * as fs3 from "fs";
+import * as fs4 from "fs";
 
 // src/shared/lane-board.ts
 import * as fs from "node:fs";
@@ -109,23 +109,136 @@ function pendingKey(sid, board) {
   return wmKey(sid, board).replace(/[^A-Za-z0-9@_-]/g, "_");
 }
 
-// src/shared/lane-board-pending.ts
+// src/shared/lane-dash-refresh.ts
 import * as fs2 from "fs";
 import * as path2 from "path";
+var STALE_AFTER_HOURS = 36;
+var SHOW_EVERY_MS = 60 * 60 * 1e3;
+var REFRESH_FILE = "refresh.json";
+var MARKER_FILE = ".refresh-shown.json";
+var MAX_BYTES = 65536;
+var CHICAGO = "America/Chicago";
+var isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+function laneDashDir(env = process.env) {
+  if (env.LANE_DASH_STATE_DIR) return env.LANE_DASH_STATE_DIR;
+  const home = env.HOME || env.USERPROFILE || "";
+  return path2.join(home, ".claude", "state", "lane-dash");
+}
+function parseRefresh(text) {
+  let d;
+  try {
+    d = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isObj(d)) return null;
+  const at = typeof d.exported_at === "string" && !Number.isNaN(Date.parse(d.exported_at)) ? d.exported_at : null;
+  const key = typeof d.key === "string" ? d.key : "";
+  return { pending: d.pending === true, key, exportedAt: at };
+}
+function staleKind(r, now) {
+  if (r.pending) return "pending";
+  if (r.exportedAt === null) return null;
+  return now - Date.parse(r.exportedAt) > STALE_AFTER_HOURS * 36e5 ? "age" : null;
+}
+function formatChicago(iso) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short"
+  }).formatToParts(new Date(iso));
+  const p = (t) => parts.find((x) => x.type === t)?.value ?? "";
+  return `${p("month")} ${p("day")}, ${p("hour")}:${p("minute")} ${p("dayPeriod")} ${p("timeZoneName")}`;
+}
+function staleLine(r, now) {
+  const kind = staleKind(r, now);
+  if (!kind) return "";
+  const why = kind === "pending" ? "not uploaded" : `older than ${STALE_AFTER_HOURS} hours`;
+  const when = r.exportedAt ? `exported ${formatChicago(r.exportedAt)}, ${why}` : why;
+  return `FleetOps data is stale (${when}). Tell Dave in one line. Run the fleetops-refresh skill only if he asks.`;
+}
+function shouldShow(marker, key, now) {
+  if (!marker || marker.key !== key) return true;
+  const shown = Date.parse(marker.shown_at);
+  if (Number.isNaN(shown)) return true;
+  const age = now - shown;
+  return age < 0 || age > SHOW_EVERY_MS;
+}
+function readSmall(file) {
+  if (fs2.statSync(file).size > MAX_BYTES) return null;
+  return fs2.readFileSync(file, "utf8");
+}
+function readMarker(file) {
+  try {
+    const text = readSmall(file);
+    if (text === null) return null;
+    const m = JSON.parse(text);
+    return isObj(m) && typeof m.key === "string" && typeof m.shown_at === "string" ? { key: m.key, shown_at: m.shown_at } : null;
+  } catch {
+    return null;
+  }
+}
+function writeMarker(file, marker) {
+  try {
+    if (fs2.lstatSync(file).isSymbolicLink()) throw new Error("is a symlink");
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs2.writeFileSync(tmp, JSON.stringify(marker));
+    fs2.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs2.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+function fleetopsLine(env = process.env, now = Date.now()) {
+  try {
+    const dir = laneDashDir(env);
+    const text = readSmall(path2.join(dir, REFRESH_FILE));
+    const r = text === null ? null : parseRefresh(text);
+    if (!r) return "";
+    const line = staleLine(r, now);
+    if (!line) return "";
+    const markerFile = path2.join(dir, MARKER_FILE);
+    if (!shouldShow(readMarker(markerFile), r.key, now)) return "";
+    try {
+      writeMarker(markerFile, { key: r.key, shown_at: new Date(now).toISOString() });
+    } catch (e) {
+      console.error(`lane-board-stop-gate: cannot write ${MARKER_FILE}, so the FleetOps line is dropped: ${e.message}`);
+      return "";
+    }
+    return line;
+  } catch {
+    return "";
+  }
+}
+
+// src/shared/lane-board-pending.ts
+import * as fs3 from "fs";
+import * as path3 from "path";
 var PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
-var isObj = (v) => v !== null && typeof v === "object";
+var isObj2 = (v) => v !== null && typeof v === "object";
 function pendingDir(env = process.env) {
   if (env.LANE_BOARD_PENDING_DIR) return env.LANE_BOARD_PENDING_DIR;
   const home = env.HOME || env.USERPROFILE || "";
-  return path2.join(home, ".claude", "state", "lane-board-pending");
+  return path3.join(home, ".claude", "state", "lane-board-pending");
 }
 function pendingFile(sessionId, board = DEFAULT_BOARD, env = process.env) {
-  return path2.join(pendingDir(env), `${pendingKey(sessionId, board)}.json`);
+  return path3.join(pendingDir(env), `${pendingKey(sessionId, board)}.json`);
 }
 function readPending(file) {
   try {
-    const s = JSON.parse(fs2.readFileSync(file, "utf8"));
-    return isObj(s) ? s : null;
+    const s = JSON.parse(fs3.readFileSync(file, "utf8"));
+    return isObj2(s) ? s : null;
   } catch {
     return null;
   }
@@ -135,7 +248,7 @@ function listPending(sessionId, env = process.env) {
   const stem = pendingKey(sessionId, DEFAULT_BOARD);
   let names;
   try {
-    names = fs2.readdirSync(dir).sort();
+    names = fs3.readdirSync(dir).sort();
   } catch {
     return [];
   }
@@ -144,7 +257,7 @@ function listPending(sessionId, env = process.env) {
     if (!name.endsWith(".json")) continue;
     const base = name.slice(0, -5);
     if (base !== stem && !base.startsWith(`${stem}@`)) continue;
-    const file = path2.join(dir, name);
+    const file = path3.join(dir, name);
     const pending = readPending(file);
     if (!pending) continue;
     const board = typeof pending.board === "string" && pending.board ? pending.board : base === stem ? DEFAULT_BOARD : base.slice(stem.length + 1);
@@ -156,12 +269,12 @@ function sweepStalePending(env = process.env, now = Date.now()) {
   const dir = pendingDir(env);
   let n = 0;
   try {
-    for (const name of fs2.readdirSync(dir)) {
+    for (const name of fs3.readdirSync(dir)) {
       if (!name.endsWith(".json")) continue;
-      const file = path2.join(dir, name);
+      const file = path3.join(dir, name);
       try {
-        if (now - fs2.statSync(file).mtimeMs > PENDING_MAX_AGE_MS) {
-          fs2.rmSync(file, { force: true });
+        if (now - fs3.statSync(file).mtimeMs > PENDING_MAX_AGE_MS) {
+          fs3.rmSync(file, { force: true });
           n += 1;
         }
       } catch {
@@ -173,7 +286,7 @@ function sweepStalePending(env = process.env, now = Date.now()) {
 }
 
 // src/lane-board-stop-gate.ts
-var isObj2 = (v) => v !== null && typeof v === "object";
+var isObj3 = (v) => v !== null && typeof v === "object";
 function blockReason(board, env = process.env) {
   const a = boardArtifact(board, { env });
   if (!a) return "";
@@ -185,7 +298,7 @@ function isHeadless(env) {
 }
 function decideStop(payload, env, entries) {
   const approve = { action: "approve" };
-  if (!isObj2(payload)) return approve;
+  if (!isObj3(payload)) return approve;
   if (payload.stop_hook_active === true) return approve;
   if (isHeadless(env)) return approve;
   if (typeof payload.session_id !== "string" || !payload.session_id) return approve;
@@ -200,17 +313,20 @@ var stateDir = pendingDir;
 var stateFile = pendingFile;
 function stopGate(payload, env = process.env, now = Date.now()) {
   sweepStalePending(env, now);
-  const sid = isObj2(payload) && typeof payload.session_id === "string" ? payload.session_id : "";
+  const sid = isObj3(payload) && typeof payload.session_id === "string" ? payload.session_id : "";
   const entries = sid ? listPending(sid, env) : [];
   const d = decideStop(payload, env, entries.map(({ board, pending }) => ({ board, pending })));
   if (d.action !== "block") return { output: null };
   const hit = entries.find((e) => e.board === d.board);
   try {
-    fs3.writeFileSync(hit.file, JSON.stringify({ ...hit?.pending, stopBlocked: true }));
+    fs4.writeFileSync(hit.file, JSON.stringify({ ...hit?.pending, stopBlocked: true }));
   } catch {
     return { output: null };
   }
-  return { output: { decision: "block", reason: d.reason } };
+  const headless = (env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
+  const line = headless ? "" : fleetopsLine(env, now);
+  return { output: { decision: "block", reason: line ? `${d.reason}
+${line}` : d.reason } };
 }
 async function readStdin() {
   return new Promise((resolve2) => {
