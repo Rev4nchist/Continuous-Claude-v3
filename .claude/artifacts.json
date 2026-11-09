@@ -296,6 +296,30 @@
         "Source, template, build script and data live in .claudedocs/harness-resource-index/ (untracked, machine-local). build.mjs also applies one-off fixes to inventory.json, so it is not a clean render: edit inventory.json and template.html, check the script, then rebuild and publish. Content model is narrative-snapshot for that reason, like the three entries above it.",
         "Dave said yes on 2026-11-09 to registering it. Publish WITHOUT capabilities."
       ]
+    },
+    {
+      "id": "harness-reporting-hub",
+      "url": "https://claude.ai/artifact/MkQVVPwT937yhWdNesNJxh",
+      "source": ".claudedocs/reporting-hub/hub.template.html",
+      "title": "Harness Reporting Hub",
+      "favicon": "dashboard",
+      "description": "One hub for every harness and software-factory reporting page: what each does, its link, and its status against five checks.",
+      "session": "*",
+      "refresh": "on-request",
+      "content_model": "generated",
+      "render": "node .claudedocs/reporting-hub/build-seed.mjs && node .claudedocs/reporting-hub/render.mjs",
+      "publish_from": ".claudedocs/reporting-hub/hub.html",
+      "last_published": "2026-11-09",
+      "verified": {
+        "on": "2026-11-09",
+        "by_session": "7e86c731",
+        "listing": "Artifact action:list returns it (version 1, 47 pages, private)"
+      },
+      "notes": [
+        "Built 2026-11-09 from a scout workflow (46 pages) plus Video Intake Proposal. Design: .claudedocs/reporting-hub/design.md. Source files are untracked and machine-local, like the Harness Resource Index.",
+        "The page list is a seed inside the page. Dave edits (status override, note, ticks) live in the page db under overrides/<id>. A session refreshes the seed: read the live page, read the db rows, list new artifacts, re-run the render, republish to the same url. Headless claude -p cannot publish.",
+        "Republish WITHOUT capabilities (the stored db rules and user declaration carry forward). The first publish declared db rules {path:\"\",read:\"view\",write:\"owner\"} and user:{}. Do not publish to the Harness Resource Index url."
+      ]
     }
   ]
 }
