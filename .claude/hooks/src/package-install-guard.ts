@@ -427,6 +427,21 @@ function decodeEncodedCommand(raw: string): string | null {
  * (no value, not base64, odd byte count, empty or a NUL in the text): fail closed.
  */
 function encodedCommands(segment: string): { payloads: string[]; bad: boolean } {
+  const whole = scanEncodedCommands(segment);
+  if (!/[\r\n]/.test(segment)) return whole;
+  // The tokenizer reads a newline as part of a word, so a command that follows one (text the parser could not split) hides its shell name.
+  // Read each line too and join the results: a union only adds payloads and failures, so it is never more permissive.
+  const payloads = new Set(whole.payloads);
+  let bad = whole.bad;
+  for (const line of segment.split(/\r\n|\n|\r/)) {
+    const part = scanEncodedCommands(line);
+    bad = bad || part.bad;
+    part.payloads.forEach((text) => payloads.add(text));
+  }
+  return { payloads: [...payloads].slice(0, ENCODED_MAX), bad: bad || payloads.size > ENCODED_MAX };
+}
+
+function scanEncodedCommands(segment: string): { payloads: string[]; bad: boolean } {
   // Cheap gate: quotes, backslashes, backticks and carets inside the shell name (p"w"sh, pw\sh) are dropped first.
   if (!/pwsh|powershell/i.test(segment.replace(/[\\'"`^]/g, ''))) return { payloads: [], bad: false };
   const words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(',')).filter(Boolean);
@@ -513,8 +528,17 @@ export function installPlans(command: string, tool = 'Bash', cwd: string | null 
       ...decoded.flatMap((text) => installPlans(text, 'PowerShell', null, depth + 1, config || undefined)),
     ];
   } catch {
-    return needsCheck(command, tool, config) || encodedCommands(command).bad ? [{ segment: command.trim(), cwd: null, tool }] : [];
+    // A parser error (a heredoc delimiter too long for its RegExp) leaves the command unread. Fail closed: a command that
+    // may hold an encoded PowerShell command, or that needs a check, asks. Its segment is the raw text.
+    const encoded = encodedCommands(command);
+    const risky = needsCheck(command, tool, config) || encoded.bad || encoded.payloads.length > 0 || mayEncode(command);
+    return risky ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+
+/** Text that may run an -EncodedCommand: a shell name and a flag that starts with -e or /e, read raw and with quotes and escapes removed. */
+function mayEncode(text: string): boolean {
+  return ENCODED_HINT.test(text) || ENCODED_HINT.test(text.replace(/[\\'"`^]/g, ''));
 }
 
 /** Registry, index or config text in a command (indexConfigMarkers, persistentConfigMarkers, rawConfigMarkers): a bare install then installs from it. */
@@ -1033,8 +1057,14 @@ function persistentConfigMarkers(command: string, tool: string, depth = 0): stri
     const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
     const own = segments.flatMap((seg) => [...indexConfigMarkers(stripQuotedStrings(seg, tool), PERSISTENT_CONFIG), ...registrySet(seg)]);
     if (depth >= 3) return own;
-    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments), ...segments.flatMap((s) => encodedCommands(s).payloads)];
-    return [...own, ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1))];
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
+    // A decoded -EncodedCommand payload is PowerShell text whatever the outer tool is: its backtick escapes (regi`stry) must be resolved as PowerShell.
+    const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
+    return [
+      ...own,
+      ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1)),
+      ...decoded.flatMap((text) => persistentConfigMarkers(text, 'PowerShell', depth + 1)),
+    ];
   } catch {
     return [...indexConfigMarkers(command, PERSISTENT_CONFIG), ...registrySet(command)];
   }

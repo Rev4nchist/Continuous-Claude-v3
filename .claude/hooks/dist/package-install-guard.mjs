@@ -20531,6 +20531,18 @@ function decodeEncodedCommand(raw) {
   return text.trim() === "" || text.includes("\0") ? null : text;
 }
 function encodedCommands(segment) {
+  const whole = scanEncodedCommands(segment);
+  if (!/[\r\n]/.test(segment)) return whole;
+  const payloads = new Set(whole.payloads);
+  let bad = whole.bad;
+  for (const line of segment.split(/\r\n|\n|\r/)) {
+    const part = scanEncodedCommands(line);
+    bad = bad || part.bad;
+    part.payloads.forEach((text) => payloads.add(text));
+  }
+  return { payloads: [...payloads].slice(0, ENCODED_MAX), bad: bad || payloads.size > ENCODED_MAX };
+}
+function scanEncodedCommands(segment) {
   if (!/pwsh|powershell/i.test(segment.replace(/[\\'"`^]/g, ""))) return { payloads: [], bad: false };
   const words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(",")).filter(Boolean);
   const payloads = [];
@@ -20600,8 +20612,13 @@ function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured)
       ...decoded.flatMap((text) => installPlans(text, "PowerShell", null, depth + 1, config || void 0))
     ];
   } catch {
-    return needsCheck(command, tool, config) || encodedCommands(command).bad ? [{ segment: command.trim(), cwd: null, tool }] : [];
+    const encoded = encodedCommands(command);
+    const risky = needsCheck(command, tool, config) || encoded.bad || encoded.payloads.length > 0 || mayEncode(command);
+    return risky ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+function mayEncode(text) {
+  return ENCODED_HINT.test(text) || ENCODED_HINT.test(text.replace(/[\\'"`^]/g, ""));
 }
 function configMarkersIn(text, tool) {
   return indexConfigMarkers(text).length > 0 || persistentConfigMarkers(text, tool).length > 0 || rawConfigMarkers(text).length > 0;
@@ -20909,8 +20926,13 @@ function persistentConfigMarkers(command, tool, depth = 0) {
     const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
     const own = segments.flatMap((seg2) => [...indexConfigMarkers(stripQuotedStrings(seg2, tool), PERSISTENT_CONFIG), ...registrySet(seg2)]);
     if (depth >= 3) return own;
-    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments), ...segments.flatMap((s) => encodedCommands(s).payloads)];
-    return [...own, ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1))];
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
+    const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
+    return [
+      ...own,
+      ...nested.flatMap((text) => persistentConfigMarkers(text, tool, depth + 1)),
+      ...decoded.flatMap((text) => persistentConfigMarkers(text, "PowerShell", depth + 1))
+    ];
   } catch {
     return [...indexConfigMarkers(command, PERSISTENT_CONFIG), ...registrySet(command)];
   }
