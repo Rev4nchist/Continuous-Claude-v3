@@ -320,6 +320,27 @@
         "The page list is a seed inside the page. Dave edits (status override, note, ticks) live in the page db under overrides/<id>. A session refreshes the seed: read the live page, read the db rows, list new artifacts, re-run the render, republish to the same url. Headless claude -p cannot publish.",
         "Republish WITHOUT capabilities (the stored db rules and user declaration carry forward). The first publish declared db rules {path:\"\",read:\"view\",write:\"owner\"} and user:{}. Do not publish to the Harness Resource Index url."
       ]
+    },
+    {
+      "id": "harness-hub-field-guide",
+      "url": "https://claude.ai/artifact/PvTuiW2Ts1tCvEWbkYTiQg",
+      "source": ".claudedocs/reporting-hub/guide.html",
+      "title": "Hub Field Guide",
+      "favicon": "guide",
+      "description": "Short guide to when to open each harness and factory reporting page, what to look at, and what to do next.",
+      "session": "*",
+      "refresh": "on-request",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-11-09",
+      "verified": {
+        "on": "2026-11-09",
+        "by_session": "7e86c731",
+        "listing": "Artifact action:publish returned version 1, private; headless check at 390px and 1280px passed"
+      },
+      "notes": [
+        "Companion to the Harness Reporting Hub (harness-reporting-hub). Covers the 35 active hub pages by routine. 28 have a routine, 7 say no routine yet. Source is untracked and machine-local.",
+        "A snapshot of 2026-11-09. When the hub page list changes, update guide.html by hand (it is not generated), read the live page first, then republish to the same url with no capabilities. The page has no script and no db."
+      ]
     }
   ]
 }
