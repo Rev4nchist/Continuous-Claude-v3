@@ -403,6 +403,7 @@ function entryProblem(t) {
   if (!t || typeof t.name !== 'string' || !t.name) return 'has no name';
   if (!Array.isArray(t.allowedExit) || !t.allowedExit.every(Number.isInteger)) return 'allowedExit is not an array of integers';
   if (!(t.maxAgeHours > 0)) return 'maxAgeHours is not a positive number';
+  if ('warnExit' in t && (!Array.isArray(t.warnExit) || !t.warnExit.every(Number.isInteger))) return 'warnExit is not an array of integers';
   for (const field of ['llm', 'wake', 'battery', 'hidden']) if (field in t && typeof t[field] !== 'boolean') return `${field} is not true or false`;
   return null;
 }
@@ -533,6 +534,7 @@ function judgeTask(t, row, now, xml = null) {
     if (first > now) return result('PASS', 'schedule', t.name, `info: registered, never ran, not due yet: first scheduled run ${fmtLocal(first)} (trigger ${t.trigger})`);
     return result('WARN', 'schedule', t.name, `task is registered but never ran (trigger ${t.trigger}${first <= now ? `; first scheduled run ${fmtLocal(first)} has passed` : ''})`);
   }
+  if (code !== TASK_RUNNING && !t.allowedExit.includes(code) && t.warnExit?.includes(code)) return result('WARN', 'schedule', t.name, `last result ${code} is in warnExit [${t.warnExit}]: the task ran and reported a warning; read its log; last run ${row.lastRun}`);
   if (code !== TASK_RUNNING && !t.allowedExit.includes(code)) return result('FAIL', 'schedule', t.name, `last result ${code} is not in allowedExit [${t.allowedExit}]; last run ${row.lastRun}`);
   if (Number.isNaN(ran)) return result('WARN', 'schedule', t.name, `Last Run Time "${row.lastRun}" is not a date the doctor reads`);
   const hours = (now - ran) / HOUR;

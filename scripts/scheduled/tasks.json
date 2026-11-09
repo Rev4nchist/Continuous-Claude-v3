@@ -63,6 +63,19 @@
       "battery": true,
       "hidden": true,
       "wake": false
+    },
+    {
+      "name": "CCv3-Cost-Reconcile",
+      "script": ".claude/scripts/scheduled/scheduled-cost-reconcile.ps1",
+      "trigger": "daily 23:50",
+      "execLimitMin": 10,
+      "allowedExit": [0],
+      "warnExit": [10],
+      "maxAgeHours": 30,
+      "llm": false,
+      "battery": true,
+      "hidden": true,
+      "wake": false
     }
   ]
 }
