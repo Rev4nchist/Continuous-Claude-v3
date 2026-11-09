@@ -30,7 +30,7 @@ const MAX_BYTES = 1024 * 1024;
 /** A string longer than this is cut BEFORE redaction, only to bound regex work. */
 const PRE_REDACT_CAP = 20_000;
 
-const CLIP = {
+export const CLIP = {
   title: 120,
   goal: 200,
   stopAt: 200,
@@ -157,7 +157,7 @@ function clip(text: string, max: number): string {
  * ("sk-<U+200B>ant-...") matches no redact pattern, and a strip after redact would show it whole.
  * Redact, scrub and clip add only fixed ASCII markers or cut the text, so no second strip is needed.
  */
-function str(value: unknown, max: number): string | null {
+export function str(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = stripControl(value.slice(0, PRE_REDACT_CAP)).trim();
   if (trimmed === '') return null;

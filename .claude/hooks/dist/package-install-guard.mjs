@@ -20584,6 +20584,23 @@ function iexPayload(segment) {
   const text = words.slice(1).filter((w) => !IEX_COMMAND_FLAG.test(w)).join(" ").trim();
   return text === "" ? null : text;
 }
+var PIPE_TEXT_WRITER = /^(?:echo|write-output|write-host|printf)$/i;
+function pipedIexText(segment, previous) {
+  if (previous === void 0) return null;
+  const words = tokenize(stripPrefixes(segment));
+  if (words[0] === "&") words.shift();
+  if (!IEX_WORD.test(words[0] ?? "") || iexPayload(segment) !== null) return null;
+  const before = stripPrefixes(stripLeaders(previous));
+  const prior = tokenize(before);
+  if (prior[0] === "&") prior.shift();
+  let text;
+  if (PIPE_TEXT_WRITER.test(prior[0] ?? "")) text = prior.slice(1).filter((w) => !w.startsWith("-"));
+  else if (/^["']/.test(before)) text = prior;
+  else return null;
+  const joined = text.join(" ").trim();
+  return joined === "" ? null : joined;
+}
+var PIPE_INTO_IEX = /\|\s*(?:&\s*)?(?:iex|invoke-expression)(?![\w-])/i;
 function decodedTexts(command, tool, depth = 0) {
   if (depth >= 3 || !ENCODED_HINT.test(command)) return [];
   try {
@@ -20602,10 +20619,10 @@ function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured)
     const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
     const found = [];
     const viaIex = [];
-    for (const raw of segments) {
+    for (const [k, raw] of segments.entries()) {
       const segment = stripLeaders(raw);
-      const iex = depth < 3 && !checkOverride(segment) ? iexPayload(segment) : null;
-      const inner = iex === null ? [] : installPlans(iex, tool, cwd, depth + 1, config);
+      const iex = depth < 3 && !checkOverride(segment) ? iexPayload(segment) ?? pipedIexText(segment, segments[k - 1]) : null;
+      const inner = iex === null ? [] : iexPlans(iex, tool, cwd, depth + 1, config);
       viaIex.push(...inner);
       if (inner.length === 0 && (needsCheck(segment, tool, config) || encodedCommands(segment).bad)) found.push({ segment, cwd, tool });
     }
@@ -20620,9 +20637,18 @@ function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured)
     ];
   } catch {
     const encoded = encodedCommands(command);
-    const risky = needsCheck(command, tool, config) || encoded.bad || encoded.payloads.length > 0 || mayEncode(command);
+    const risky = needsCheck(command, tool, config) || encoded.bad || encoded.payloads.length > 0 || mayEncode(command) || pipesIntoIex(command);
     return risky ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+function iexPlans(text, tool, cwd, depth, configured) {
+  const own = installPlans(text, tool, cwd, depth, configured);
+  if (tool === "PowerShell") return own;
+  const seen = new Set(own.map((plan) => plan.segment));
+  return [...own, ...installPlans(text, "PowerShell", cwd, depth, configured).filter((plan) => !seen.has(plan.segment))];
+}
+function pipesIntoIex(text) {
+  return PIPE_INTO_IEX.test(text) || PIPE_INTO_IEX.test(text.replace(/[\\'"`^]/g, ""));
 }
 function mayEncode(text) {
   return ENCODED_HINT.test(text) || ENCODED_HINT.test(text.replace(/[\\'"`^]/g, ""));
@@ -20761,7 +20787,8 @@ var BREW_BUNDLE_READ_ONLY = /^(?:check|list|dump|cleanup|exec|env|sh|edit|remove
 function pair(pos, a, next) {
   return pos.some((w, i) => w === a && next.test(pos[i + 1] ?? ""));
 }
-var SOURCE_VERBS = /^(?:add|update)$/;
+var SOURCE_VERBS = /^(?:add|update|remove|enable|disable)$/;
+var TOOL_SOURCE_VERBS = /^(?:add|update|remove|reset|enable|disable)$/;
 var SOURCE_WORDS = /^(?:source|sources)$/;
 function nugetSourceChange(rest) {
   const pos = positionals(rest, 6);
@@ -20773,6 +20800,10 @@ function dotnetSourceChange(rest) {
   const nuget = pos.indexOf("nuget");
   const verb = nuget < 0 ? -1 : pos.findIndex((w, i) => i > nuget && SOURCE_VERBS.test(w));
   return verb >= 0 && pos.slice(verb + 1).some((w) => SOURCE_WORDS.test(w));
+}
+function toolSourceChange(rest) {
+  const [first, verb] = positionals(rest, 2);
+  return SOURCE_WORDS.test(first ?? "") && (/^[$`]/.test(verb ?? "") || TOOL_SOURCE_VERBS.test(verb ?? ""));
 }
 function dotnetInstall(rest) {
   const pos = positionals(rest, 8);
@@ -20796,7 +20827,10 @@ var ECO_RULES = [
   // Source changes: not installs, but a later install reads from the new source and no check covers it. Read forms (nuget sources list) are not here.
   { ecosystem: "nuget", names: /^nuget$/, commandOnly: false, installs: nugetSourceChange, source: true },
   { ecosystem: "nuget", names: /^dotnet$/, commandOnly: false, installs: dotnetSourceChange, source: true },
-  { ecosystem: "powershell", names: /^(?:register|set)-(?:psrepository|packagesource)$/, commandOnly: false, installs: () => true, source: true },
+  { ecosystem: "chocolatey", names: /^choco$/, commandOnly: false, installs: toolSourceChange, source: true },
+  { ecosystem: "winget", names: /^winget$/, commandOnly: false, installs: toolSourceChange, source: true },
+  // PowerShellGet and PSResourceGet: register, change or remove a repository. Get-* is not here.
+  { ecosystem: "powershell", names: /^(?:register|set|unregister)-(?:psrepository|packagesource|psresourcerepository)$/, commandOnly: false, installs: () => true, source: true },
   { ecosystem: "conda", names: /^(?:conda|mamba|micromamba)$/, commandOnly: false, installs: (r) => installVerbFirst(r, CONDA_VERBS, CONDA_READ_ONLY) },
   { ecosystem: "brew", names: /^brew$/, commandOnly: false, installs: (r) => {
     const [a, b] = positionals(r, 2);
@@ -21378,7 +21412,7 @@ function asksFor(segment, install, cwd, tool) {
       return [`Encoded PowerShell command the guard cannot read: "${segment.slice(0, 200)}". It is not valid base64 of UTF-16 text, or it is empty, so no package check ran. Confirm it.`];
     }
     const rule = ecosystemRule(segment);
-    if (rule?.source) return [`Non-registry source change: ${segment.slice(0, 200)}. It adds or changes a ${rule.ecosystem} package source that stays for later installs. No blocklist, OSV or age check will cover later installs from it.`];
+    if (rule?.source) return [`Non-registry source change: ${segment.slice(0, 200)}. It adds, changes, removes or disables a ${rule.ecosystem} package source that stays for later installs. No blocklist, OSV or age check will cover later installs from it.`];
     if (rule) return [`No blocklist, OSV or age check exists for ${rule.ecosystem} packages: ${segment.slice(0, 200)}.`];
     return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
   }

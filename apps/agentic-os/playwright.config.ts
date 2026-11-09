@@ -53,6 +53,14 @@ mkdirSync(E2E_STATE_DIR, { recursive: true });
 export const E2E_IDENTITY_DIR = join(tmpdir(), 'agentic-os-e2e-identity');
 mkdirSync(E2E_IDENTITY_DIR, { recursive: true });
 
+/**
+ * Where the E2E server reads the spend rollup (AGENTIC_OS_SPEND_DIR), one `<CDT day>.json` per day, written by
+ * the later W4 task to ~/.claude/state/spend. A temp dir for the same reason as E2E_STATE_DIR.
+ * e2e/state-fixture.ts imports this constant.
+ */
+export const E2E_SPEND_DIR = join(tmpdir(), 'agentic-os-e2e-spend');
+mkdirSync(E2E_SPEND_DIR, { recursive: true });
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
@@ -85,6 +93,7 @@ export default defineConfig({
       AGENTIC_OS_DIST_DIR: '.next-e2e',
       AGENTIC_OS_STATE_DIR: E2E_STATE_DIR,
       AGENTIC_OS_IDENTITY_DIR: E2E_IDENTITY_DIR,
+      AGENTIC_OS_SPEND_DIR: E2E_SPEND_DIR,
     },
     url: `${ORIGIN}/icon.svg`,
     reuseExistingServer: false,

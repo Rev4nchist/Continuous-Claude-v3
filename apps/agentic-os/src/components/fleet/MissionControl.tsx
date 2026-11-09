@@ -17,6 +17,7 @@ import { ReadyForDave } from './ReadyForDave';
 import { SessionCards } from './SessionCards';
 import { SessionDetail, SessionUnavailable } from './SessionDetail';
 import { SessionsTable } from './SessionsTable';
+import { SpendView } from './SpendView';
 import { SourceHealth } from './SourceHealth';
 import { StatTiles } from './StatTiles';
 import { UnmatchedPanel } from './UnmatchedPanel';
@@ -43,10 +44,11 @@ export type { ViewId } from './NavTabs';
 
 const BASE_ENDPOINT = '/api/mission-control';
 
-/** The one endpoint. The Board is asked for only while the Board tab is active. */
+/** The one endpoint. The Board and the Spend tab are asked for only while their tab is active. */
 function endpointFor(view: ViewId, session: string | null, project: string | null): string {
   const params = new URLSearchParams();
   if (view === 'board') params.set('view', 'board');
+  if (view === 'spend') params.set('view', 'spend');
   // Without the board key every poll would fall back to the default board.
   if (view === 'board' && project !== null) params.set('project', project);
   if (session !== null) params.set('session', session);
@@ -203,6 +205,18 @@ export function MissionControl({
               className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
             >
               Loading board
+            </p>
+          )
+        ) : view === 'spend' ? (
+          // Same rule as the Board: the old data stays until the answer for this view lands.
+          data.spend !== null ? (
+            <SpendView spend={data.spend} />
+          ) : (
+            <p
+              data-testid="spend-loading"
+              className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
+            >
+              Loading spend
             </p>
           )
         ) : view === 'sessions' ? (

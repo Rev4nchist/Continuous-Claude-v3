@@ -16,8 +16,8 @@ import { safeMessage } from '@/server/sources/safe-message';
  * `?session=<id>` adds the detail of that session to the snapshot. An id of the wrong
  * format is ignored (never a 400): both detail fields stay null.
  *
- * `?view=board` adds the lane Board. Any other `view` value is ignored (board stays null),
- * never an error. Without it the 5 second poll stays small.
+ * `?view=board` adds the lane Board, and `?view=spend` adds the Spend tab. Any other `view` value is ignored
+ * (board and spend stay null), never an error. Without them the 5 second poll stays small.
  *
  * `?project=<key>` picks the board for `view=board` (default continuous-claude). A key that does not
  * match ^[a-z0-9][a-z0-9-]*$ is a 400, unlike `session` and `view`: an unknown board must not read as the default.
@@ -43,7 +43,12 @@ export async function GET(request: NextRequest) {
         { status: 400, headers: { 'cache-control': 'no-store' } },
       );
     }
-    const snapshot = await getMissionControlSnapshot(sessionId, view === 'board', project.key ?? undefined);
+    const snapshot = await getMissionControlSnapshot(
+      sessionId,
+      view === 'board',
+      project.key ?? undefined,
+      view === 'spend',
+    );
     return NextResponse.json(snapshot, {
       headers: { 'cache-control': 'no-store' },
     });
