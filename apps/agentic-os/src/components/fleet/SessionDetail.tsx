@@ -4,7 +4,7 @@ import type { DetailUnavailable, SessionDetail as Detail } from '@/server/querie
 
 import { cn } from '@/lib/utils';
 
-import { chipTone, chipWord, formatAgo } from './format';
+import { chipTone, chipWord, costLabel, formatAgo } from './format';
 import { SessionLabel } from './SessionLabel';
 
 const WRAP = '[overflow-wrap:anywhere]';
@@ -286,10 +286,14 @@ function HealthSection({ detail }: { detail: Detail }) {
             ? 'cache -'
             : `cache ${detail.cache.hitPct}% hit, saved ${usd(detail.cache.savedUsd)}`}
         </li>
-        <li data-testid="health-agent-cost">
+        <li
+          data-testid="health-agent-cost"
+          data-unpriced={runs === null ? undefined : runs.unpriced}
+          data-floor={runs === null ? undefined : String(runs.advisedRuns > 0)}
+        >
           {runs === null
             ? 'agents -'
-            : `agents ${usd(runs.costUsd)} (${runs.count} ${runs.count === 1 ? 'run' : 'runs'}, ${runs.running} running)`}
+            : `agents ${costLabel({ usd: runs.costUsd, unpriced: runs.unpriced, floor: runs.advisedRuns > 0 })} (${runs.count} ${runs.count === 1 ? 'run' : 'runs'}, ${runs.running} running)`}
         </li>
         <li data-testid="health-session-cost">
           {detail.sessionCost === null ? 'session cost - (not recorded)' : `session cost ${usd(detail.sessionCost)}`}

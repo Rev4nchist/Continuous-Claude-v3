@@ -99,6 +99,10 @@ export type StateSnapshot = {
     status: string | null;
     tokens: number;
     costUsd: number;
+    /** True only when the ledger wrote `true`: the run used a model with no price, so `costUsd` leaves it out. */
+    hasUnknownModelCost: boolean;
+    /** Advisor floor from the ledger (written only above 0). Under 0, a wrong type or absent reads 0. */
+    advised: number;
     startedAt: number | null;
     endedAt: number | null;
   }[];
@@ -314,6 +318,8 @@ function parseAgentRuns(value: unknown): StateSnapshot['agentRuns'] {
       status: str(item.status, CLIP.kind),
       tokens: num(item.tokens) ?? 0,
       costUsd: num(item.costUsd) ?? 0,
+      hasUnknownModelCost: item.hasUnknownModelCost === true,
+      advised: Math.max(0, num(item.advised) ?? 0),
       startedAt: num(item.startedAt),
       endedAt: num(item.endedAt),
     });
