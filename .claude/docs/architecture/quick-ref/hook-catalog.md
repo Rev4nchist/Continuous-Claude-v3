@@ -114,7 +114,7 @@ Key blockers:
 
 ```
 ~/.claude/hooks/
-  src/              # TypeScript source
+  src/              # TypeScript source (repo only: ~/continuous-claude/.claude/hooks/src/, not mirrored)
   dist/             # Compiled JS (esbuild output, .mjs)
   package.json      # Dependencies and build script
 ```
