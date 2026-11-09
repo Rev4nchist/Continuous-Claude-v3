@@ -84,6 +84,7 @@ import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
+import { blankInertQuotes } from './shared/inert-quotes.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { readShellCommand } from './shared/shell-tools.js';
 
@@ -596,7 +597,8 @@ export function decide(input: HookInput, deps: Deps): Decision {
 
 function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
   const raw = text ?? commandOf(input);
-  const command = normalizeGh(joinContinuations(raw, shellOf(input)));
+  // The words of a create inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text, not a create.
+  const command = normalizeGh(joinContinuations(blankInertQuotes(raw), shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: 'allow' };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
@@ -754,8 +756,9 @@ export function handle(raw: string, deps: Deps): string {
     if (!COMMAND_TOOLS.has(tool)) return '{}';
     command = commandOf(input);
     // Known before anything can throw: an error on a gated shape must not let the command through unchecked.
-    create = isPrOpenCommand(command);
-    gated = create || ['bash', 'pwsh'].some((s) => isGated(shapesOf(joinContinuations(command, isDesktopCommander(input) ? (s as 'bash' | 'pwsh') : shellOf(input)))));
+    const seen = blankInertQuotes(command);
+    create = isPrOpenCommand(seen);
+    gated = create || ['bash', 'pwsh'].some((s) => isGated(shapesOf(joinContinuations(seen, isDesktopCommander(input) ? (s as 'bash' | 'pwsh') : shellOf(input)))));
     const d = decide(input, deps);
     if (d.action === 'override') logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
     if (d.action === 'allow' && d.warn) logGuardDecision(HOOK, input, 'warn', d.warn, { command });
