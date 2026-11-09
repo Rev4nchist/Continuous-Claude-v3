@@ -20660,12 +20660,12 @@ var ECO_RULES = [
   { ecosystem: "winget", names: /^(?:install|update)-wingetpackage$/, commandOnly: false, installs: () => true },
   { ecosystem: "powershell", names: /^(?:install-(?:module|script|package|psresource|packageprovider)|save-(?:module|script|package|psresource)|update-(?:module|script|psresource))$/, commandOnly: false, installs: () => true }
 ];
-var LAUNCHER2 = /^(?:xargs|call|start|\/[ck]|cmd|cmd\.exe|invoke-expression|iex|[{(&]|then|do|else|elif|if|while|until|!)$/i;
+var LAUNCHER2 = /^(?:xargs|call|start|\/[ck]|cmd|cmd\.exe|[{(&]|then|do|else|elif|if|while|until|!)$/i;
 var LOOKUP = /^(?:which|where|where\.exe|type|whereis|man|help|get-help|get-command|gcm|get-alias|echo|write-host|write-output|printf)$/i;
 function ecosystemInstall(segment) {
   let words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(",")).filter(Boolean);
   if (words[0] === "&") words.shift();
-  const spawns = START_PROCESS.test(words[0] ?? "");
+  const spawns = START_PROCESS.test(words[0] ?? "") || /^(?:iex|invoke-expression)$/i.test(words[0] ?? "");
   if (spawns) words = words.flatMap((w) => w.split(/\s+/)).filter(Boolean);
   for (let i = 0; i < words.length; i++) {
     if (i > 0 && !spawns && LOOKUP.test(words[i - 1])) continue;
