@@ -405,9 +405,9 @@ const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => whe
  * and not in the other, so each mask can hide a cd the other shows). The readings (bash, pwsh, quotes deleted) are united and de-duplicated,
  * and the cds are part of the id: the same shape in two folders is two shapes. An extra shape only makes the gate stricter.
  */
-function shapesOf(raw: string): Shape[] {
+function shapesOf(raw: string, tool?: string): Shape[] {
   // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
-  const text = normalizeGh(blankInertQuotes(raw));
+  const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
   const out: Shape[] = [];
   const seen = new Set<string>();
@@ -898,7 +898,7 @@ function judgeCommand(input: HookInput, deps: Deps): Deny[] {
   if (cmd.kind !== 'command' || cmd.text === '') return [];
   const cwd = input.cwd || process.cwd();
   if (writesStoreText(cmd.text, deps)) return [deny('store-write', STORE_WHY)];
-  const shapes = shapesOf(cmd.text);
+  const shapes = shapesOf(cmd.text, cmd.tool);
   const denies: Deny[] = [];
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(deny('subagent', SUBAGENT_WHY));
@@ -962,7 +962,7 @@ function gatedScopes(input: HookInput): Set<Scope> {
   const tool = input.tool_name || input.tool || '';
   if (WRITE_TOOLS.has(tool)) return new Set<Scope>(['other']);
   const cmd = readShellCommand(input);
-  return new Set(cmd.kind === 'command' ? shapesOf(cmd.text).map(scopeOf) : []);
+  return new Set(cmd.kind === 'command' ? shapesOf(cmd.text, cmd.tool).map(scopeOf) : []);
 }
 
 /**

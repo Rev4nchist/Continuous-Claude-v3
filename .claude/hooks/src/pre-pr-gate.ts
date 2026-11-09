@@ -598,7 +598,7 @@ export function decide(input: HookInput, deps: Deps): Decision {
 function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
   const raw = text ?? commandOf(input);
   // The words of a create inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text, not a create.
-  const command = normalizeGh(joinContinuations(blankInertQuotes(raw), shellOf(input)));
+  const command = normalizeGh(joinContinuations(blankInertQuotes(raw, input.tool_name || input.tool), shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: 'allow' };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
@@ -756,7 +756,7 @@ export function handle(raw: string, deps: Deps): string {
     if (!COMMAND_TOOLS.has(tool)) return '{}';
     command = commandOf(input);
     // Known before anything can throw: an error on a gated shape must not let the command through unchecked.
-    const seen = blankInertQuotes(command);
+    const seen = blankInertQuotes(command, tool);
     create = isPrOpenCommand(seen);
     gated = create || ['bash', 'pwsh'].some((s) => isGated(shapesOf(joinContinuations(seen, isDesktopCommander(input) ? (s as 'bash' | 'pwsh') : shellOf(input)))));
     const d = decide(input, deps);

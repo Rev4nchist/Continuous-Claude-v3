@@ -1042,6 +1042,31 @@ function dialectsFor(tool) {
   return tool && SHELL_TOOLS.get(tool)?.dialects || ["Bash"];
 }
 
+// src/shared/doc-heredoc.ts
+var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt))`;
+var DELIM = String.raw`(?<dash>-?)(?<q>['"])(?<d>[A-Za-z_]\w*)\k<q>`;
+var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`);
+var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`);
+var ODD_BREAK = /[\r\0\v\f\x85\u2028\u2029]/;
+function blankDocHeredocBody(command) {
+  if (!command.includes("<<") || ODD_BREAK.test(command)) return command;
+  const lines = command.split("\n");
+  const head = HEAD_FILE_FIRST.exec(lines[0]) ?? HEAD_MARKER_FIRST.exec(lines[0]);
+  if (!head || !head.groups) return command;
+  const { dash, d } = head.groups;
+  let close = -1;
+  for (let i = 1; i < lines.length; i++) {
+    const line = dash ? lines[i].replace(/^\t+/, "") : lines[i];
+    if (line === d) {
+      close = i;
+      break;
+    }
+  }
+  if (close < 1) return command;
+  if (lines.slice(close + 1).some((l) => l.trim() !== "")) return command;
+  return lines.map((l, i) => i >= 1 && i < close ? " ".repeat(l.length) : l).join("\n");
+}
+
 // src/destructive-command-guard.ts
 var HOOK = "destructive-command-guard";
 var UNREADABLE_PATTERN = "unreadable command text";
@@ -1050,8 +1075,10 @@ var SCOPED_PATTERNS = /* @__PURE__ */ new Set(["recursive rm", "PowerShell recur
 function decide(command, input, env = process.env, scopedDeps) {
   const overridden = env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
   let pattern = null;
-  for (const dialect of dialectsFor(input.tool_name || input.tool)) {
-    pattern = classifyDestructive(command, 0, dialect);
+  const toolName = input.tool_name || input.tool;
+  const scanned = toolName === "Bash" ? blankDocHeredocBody(command) : command;
+  for (const dialect of dialectsFor(toolName)) {
+    pattern = classifyDestructive(scanned, 0, dialect);
     if (pattern) break;
   }
   if (overridden) return pattern ? { decision: "allow", pattern, override: true } : { decision: "allow" };

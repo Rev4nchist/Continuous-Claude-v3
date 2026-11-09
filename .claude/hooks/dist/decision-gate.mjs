@@ -465,6 +465,31 @@ function quotedSpans(command, tool = "Bash") {
   return [...command.matchAll(tool === "PowerShell" ? PWSH_STRING : BASH_STRING)].map((m) => [m.index, m.index + m[0].length]);
 }
 
+// src/shared/doc-heredoc.ts
+var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt))`;
+var DELIM = String.raw`(?<dash>-?)(?<q>['"])(?<d>[A-Za-z_]\w*)\k<q>`;
+var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`);
+var HEAD_MARKER_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]*<<${DELIM}[ \t]*>>?[ \t]*${PATH}[ \t]*$`);
+var ODD_BREAK = /[\r\0\v\f\x85\u2028\u2029]/;
+function blankDocHeredocBody(command) {
+  if (!command.includes("<<") || ODD_BREAK.test(command)) return command;
+  const lines = command.split("\n");
+  const head = HEAD_FILE_FIRST.exec(lines[0]) ?? HEAD_MARKER_FIRST.exec(lines[0]);
+  if (!head || !head.groups) return command;
+  const { dash, d } = head.groups;
+  let close = -1;
+  for (let i = 1; i < lines.length; i++) {
+    const line = dash ? lines[i].replace(/^\t+/, "") : lines[i];
+    if (line === d) {
+      close = i;
+      break;
+    }
+  }
+  if (close < 1) return command;
+  if (lines.slice(close + 1).some((l) => l.trim() !== "")) return command;
+  return lines.map((l, i) => i >= 1 && i < close ? " ".repeat(l.length) : l).join("\n");
+}
+
 // src/shared/inert-quotes.ts
 var INERT_HEAD = new RegExp(
   String.raw`^\s*(?:echo|printf|Write-(?:Host|Output|Warning|Information)|git\s+commit|claude|ntn|curl|gh\s+(?:pr|issue)\s+comment` + String.raw`|node(?:\.exe)?\s+(?:\S*[\\/])?lane\.mjs\s+(?:add|note|say))(?=\s|$)`,
@@ -504,7 +529,11 @@ function inertSpans(command, tool) {
   }
   return out2;
 }
-function blankInertQuotes(command) {
+function blankInertQuotes(command, tool) {
+  if (tool === "Bash") {
+    const doc = blankDocHeredocBody(command);
+    if (doc !== command) return doc;
+  }
   const bash = inertSpans(command, "Bash");
   const pwsh = inertSpans(command, "PowerShell");
   let out2 = command;
@@ -762,8 +791,8 @@ function cmdSegments(view) {
 }
 var whereId = (at) => `${at.unknown ? "?" : ""}${at.loose ? "~" : ""}${at.cds.join("\0")}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
-function shapesOf(raw) {
-  const text = normalizeGh(blankInertQuotes(raw));
+function shapesOf(raw, tool) {
+  const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
@@ -775,8 +804,8 @@ function shapesOf(raw) {
   };
   let created = false;
   for (const view of views) {
-    const reads = ["Bash", "PowerShell"].map((tool) => {
-      const masked = maskQuoted(view, tool);
+    const reads = ["Bash", "PowerShell"].map((tool2) => {
+      const masked = maskQuoted(view, tool2);
       return { masked, pos: cdPositions(masked, view) };
     });
     for (const { seg, from } of cmdSegments(view)) {
@@ -1094,7 +1123,7 @@ function judgeCommand(input, deps) {
   if (cmd.kind !== "command" || cmd.text === "") return [];
   const cwd = input.cwd || process.cwd();
   if (writesStoreText(cmd.text, deps)) return [deny("store-write", STORE_WHY)];
-  const shapes = shapesOf(cmd.text);
+  const shapes = shapesOf(cmd.text, cmd.tool);
   const denies = [];
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(deny("subagent", SUBAGENT_WHY));
   const pushes = shapes.filter((s) => s.kind === "push");
@@ -1143,7 +1172,7 @@ function gatedScopes(input) {
   const tool = input.tool_name || input.tool || "";
   if (WRITE_TOOLS.has(tool)) return /* @__PURE__ */ new Set(["other"]);
   const cmd = readShellCommand(input);
-  return new Set(cmd.kind === "command" ? shapesOf(cmd.text).map(scopeOf) : []);
+  return new Set(cmd.kind === "command" ? shapesOf(cmd.text, cmd.tool).map(scopeOf) : []);
 }
 function unreadableInput() {
   const note = "decision-gate: the hook input is not readable JSON, so no command shape can be judged; the call is allowed.";
