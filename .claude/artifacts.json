@@ -205,7 +205,7 @@
         "Private artifact, owned by Dave. Attached data files are readable by everyone who can open it and hold lane titles (Dave decided, 2026-11-08).",
         "Never render or screenshot the real dashboard. Read its check and runs documents (data/users/me) after a write.",
         "Page look: Notion style, built from frame tokens only. Before changing the page, read the Dashboard SKILL.md, design-defaults.md and one-writer.md on the artifact.",
-        "Data refresh is manual for now. Run the fleetops-refresh skill. A stale-data line in the stop gate is planned."
+        "Data refresh is manual for now. Run the fleetops-refresh skill. The stop gate adds a stale-data line at most once an hour (lane-board-stop-gate)."
       ]
     }
   ]

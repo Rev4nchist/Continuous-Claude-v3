@@ -74,7 +74,14 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    - Read the result back before you report success: the returned url must equal `<url>` and the stamp must say `board=<key>`. On a mismatch, stop and report the stray url.
    - Until this republish, an open page still shows the band it was drawn with. Dave may see the old band in the Band select for a short time. The new page shows the applied band. A band saved on an In progress card applies only after the session releases the lane.
 
-8. Report. Say how many priority, state, band and note changes you applied. Name each skipped card and its reason. Quote each new question from Dave with its lane id.
+8. Dashboard line. Read `~/.claude/state/lane-dash/refresh.json`. Skip this step when the file is missing, empty or not valid JSON.
+   - The data is stale when `pending` is `true`, or `exported_at` is over 36 hours old.
+   - When it is stale, say so in the report. Use "FleetOps data is stale (exported <time>, not uploaded)" or "FleetOps data is stale (exported <time>, older than 36 hours)".
+   - Give the time in Central time.
+   - Offer the `fleetops-refresh` skill. Never run it unless Dave asks.
+   - Otherwise say nothing about FleetOps.
+
+9. Report. Say how many priority, state, band and note changes you applied. Name each skipped card and its reason. Quote each new question from Dave with its lane id.
 
 ## What the sync changes
 
