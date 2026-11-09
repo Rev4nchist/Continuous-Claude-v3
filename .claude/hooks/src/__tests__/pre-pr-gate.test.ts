@@ -1627,6 +1627,12 @@ describe('B: the checkpoint gate (PR B)', () => {
     'node scripts/github/cp.mjs --apply=201',
     'node scripts/github/cp.mjs --confirm none --by dave',
     'node.exe .\\scripts\\github\\x.mjs --by default --confirm=both',
+    // A real PR number still matches, whatever the script is called.
+    'node scripts/foo.mjs --apply 2',
+    'node scripts/foo.mjs --apply=2 --json',
+    'node scripts/foo.mjs --apply=2>&1',
+    'node scripts/foo.mjs --apply=12>/dev/null',
+    'node scripts/foo.mjs --apply 12 2>&1',
   ];
   const SELF_OK = [
     'node scripts/github/pr-checkpoint.mjs --json',
@@ -1636,6 +1642,11 @@ describe('B: the checkpoint gate (PR B)', () => {
     'node --test scripts/github/pr-checkpoint.test.mjs',
     'git add scripts/github/pr-checkpoint.mjs',
     'some-other-tool --confirm none',
+    // The digit after --apply is a stderr redirect, not a PR number (seen on the M2 settings script).
+    'node scripts/foo.mjs --apply 2>&1',
+    'node scripts/foo.mjs --apply 2>/dev/null',
+    'node scripts/foo.mjs --apply 2>> out.log',
+    'node scripts/foo.mjs --apply 1>out.txt',
   ];
 
   it('B7: a shell text that names pr-checkpoint with --confirm or --apply is denied (Bash and PowerShell); --json and other tools are allowed with no git call', () => {
