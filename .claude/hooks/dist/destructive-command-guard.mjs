@@ -334,8 +334,8 @@ function matchWrapper(seg2) {
     if (!m || !(m[1] || m[3])) continue;
     if (!m[1]) return { payload: /^["']/.test(m[3]) ? dropQuotes(m[3]) : unwrapPayload(m[3]), shell };
     if (!m[2]?.trim()) return { payload: unwrapPayload(m[1]), shell };
-    const join2 = shell === "posix" ? " ; " : " ";
-    return { payload: unwrapPayload(m[1]) + join2 + dropQuotes(m[2]), shell };
+    const join3 = shell === "posix" ? " ; " : " ";
+    return { payload: unwrapPayload(m[1]) + join3 + dropQuotes(m[2]), shell };
   }
   return null;
 }
@@ -636,7 +636,7 @@ function logGuardError(hook, err, opts = {}) {
 
 // src/shared/scoped-cleanup.ts
 import { execFileSync } from "child_process";
-import { lstatSync, readdirSync, realpathSync } from "fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { tmpdir } from "os";
 import * as nodePath from "path";
 var BASH_RM = /^rm[ \t]+(?:-rf|-fr|-r[ \t]+-f|-f[ \t]+-r)[ \t]+(?:'([^']*)'|"([^"]*)"|([^\s'"]+))$/;
@@ -781,11 +781,89 @@ function defaultGitCommonDir(cwd) {
     return null;
   }
 }
+function kindOf(p) {
+  try {
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) return "link";
+    return st.isDirectory() ? "dir" : st.isFile() ? "file" : "other";
+  } catch {
+    return null;
+  }
+}
+function realOf(p, ctx) {
+  try {
+    return ctx.realpath(p);
+  } catch {
+    return null;
+  }
+}
+function readSmall(p) {
+  if (kindOf(p) !== "file") return null;
+  try {
+    if (statSync(p).size > 4096) return null;
+    const text = readFileSync(p, "utf8");
+    return text.includes("\0") ? null : text;
+  } catch {
+    return null;
+  }
+}
+function isGenuineGitDir(dir) {
+  return kindOf(dir) === "dir" && kindOf(nodePath.join(dir, "HEAD")) === "file" && kindOf(nodePath.join(dir, "objects")) === "dir" && kindOf(nodePath.join(dir, "refs")) === "dir" && kindOf(nodePath.join(dir, "commondir")) === null && kindOf(nodePath.join(dir, "gitdir")) === null;
+}
+function gitdirTarget(gitFile, ctx) {
+  const text = readSmall(gitFile);
+  const m = text === null ? null : /^gitdir:[ \t]*([^\r\n]+?)[ \t]*\r?\n?$/.exec(text);
+  return m ? ctx.p.resolve(ctx.p.dirname(gitFile), m[1]) : null;
+}
+function adminPath(adminDir, name, ctx) {
+  const text = readSmall(ctx.p.join(adminDir, name));
+  const line = text === null ? null : /^([^\r\n]+?)[ \t]*\r?\n?$/.exec(text);
+  return line ? ctx.p.resolve(adminDir, line[1]) : null;
+}
+function primaryGitFromWorktreeFile(gitFile, ctx) {
+  const adminDir = gitdirTarget(gitFile, ctx);
+  if (!adminDir) return null;
+  const worktrees = ctx.p.dirname(adminDir);
+  const primaryGit = ctx.p.dirname(worktrees);
+  if (!sameName(ctx.p.basename(worktrees), "worktrees", ctx) || !sameName(ctx.p.basename(primaryGit), ".git", ctx)) return null;
+  if (!isGenuineGitDir(primaryGit) || kindOf(adminDir) !== "dir") return null;
+  const realPrimary = realOf(primaryGit, ctx);
+  const realAdmin = realOf(adminDir, ctx);
+  if (!realPrimary || !realAdmin) return null;
+  if (!sameName(realAdmin, ctx.p.join(realPrimary, "worktrees", ctx.p.basename(adminDir)), ctx)) return null;
+  const back = adminPath(adminDir, "gitdir", ctx);
+  const common = adminPath(adminDir, "commondir", ctx);
+  const realBack = back ? realOf(back, ctx) : null;
+  const realFile = realOf(gitFile, ctx);
+  const realCommon = common ? realOf(common, ctx) : null;
+  if (!realBack || !realFile || !realCommon) return null;
+  if (!sameName(realBack, realFile, ctx) || !sameName(realCommon, realPrimary, ctx)) return null;
+  return primaryGit;
+}
+function provenGitDir(cwd, ctx) {
+  const real = realOf(cwd, ctx);
+  if (!real) return null;
+  for (let dir = real; ; dir = ctx.p.dirname(dir)) {
+    const dotGit = ctx.p.join(dir, ".git");
+    const kind = kindOf(dotGit);
+    if (kind === "dir") return isGenuineGitDir(dotGit) ? dotGit : null;
+    if (kind === "file") return primaryGitFromWorktreeFile(dotGit, ctx);
+    if (kind !== null) return null;
+    if (ctx.p.dirname(dir) === dir) return null;
+  }
+}
 function worktreesRoot(cwd, deps, ctx) {
   if (!cwd || !ctx.p.isAbsolute(cwd)) return null;
+  const realCwd = realOf(cwd, ctx);
+  if (!realCwd || !sameName(realCwd, ctx.p.resolve(cwd), ctx)) return null;
+  const proven = provenGitDir(cwd, ctx);
+  if (!proven || !sameName(ctx.p.basename(proven), ".git", ctx)) return null;
   const common = (deps.gitCommonDir ?? defaultGitCommonDir)(cwd);
-  if (!common || ctx.p.basename(common).toLowerCase() !== ".git") return null;
-  return ctx.p.join(ctx.p.dirname(common), ".claude", "worktrees");
+  if (!common) return null;
+  const realProven = realOf(proven, ctx);
+  const realCommon = realOf(common, ctx);
+  if (!realProven || !realCommon || !sameName(realProven, realCommon, ctx)) return null;
+  return ctx.p.join(ctx.p.dirname(proven), ".claude", "worktrees");
 }
 function inWorktrees(target, real, wtRoot, ctx) {
   const realRepo = realResolve(ctx.p.dirname(ctx.p.dirname(wtRoot)), ctx);

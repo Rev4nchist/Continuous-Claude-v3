@@ -32,18 +32,30 @@
  * a subfolder or a worktree), so any single slug segment is accepted. The exact session id and the
  * fixed `claude` and `scratchpad` names carry the match.
  *
- * Worktree root: the primary checkout is the parent of `git rev-parse --git-common-dir` for the
- * payload cwd (a linked worktree gives its primary checkout). No cwd, no git or no `.git`
- * directory name means no match. The repo is whatever repo the payload cwd resolves to: any
- * `.claude/worktrees/<x>` of that repo is deletable, including a worktree of another session. The
- * log row carries the cwd, so an audit can name the repo.
+ * Worktree root: the primary checkout that owns the payload cwd, PROVEN from plain fs reads
+ * (lstat, readFileSync; no shell, no lexer). Git alone is not trusted: a planted `.git` FILE
+ * (`gitdir: <other repo>/.git`) makes `git rev-parse --git-common-dir` name the OTHER repo (TREX
+ * verify N3). The cwd itself must be a real path: its realpath equals its lexical path, so a cwd
+ * reached through a junction or symlink is refused (git would follow it to another repo). The
+ * nearest `.git` above the real cwd decides:
+ *   - a real DIRECTORY with HEAD, objects and refs, and no `commondir` or `gitdir` file: that is the
+ *     primary checkout;
+ *   - a FILE `gitdir: <P>/.git/worktrees/<name>` (absolute or relative): the admin folder must name
+ *     this exact file back in its `gitdir` and name `<P>/.git` in its `commondir`, and `<P>/.git`
+ *     must be a genuine directory;
+ *   - a link, a missing or odd entry, an empty `.git` directory or any failed check: no match.
+ * Then `git rev-parse --git-common-dir` must name the same directory (second witness; a mismatch,
+ * no git or a git failure means no match). Not covered: `GIT_CEILING_DIRECTORIES`, bare repos and
+ * `--separate-git-dir` primaries; they fail closed. The repo is whatever repo the payload cwd
+ * resolves to: any `.claude/worktrees/<x>` of that repo is deletable, including a worktree of
+ * another session. The log row carries the cwd, so an audit can name the repo.
  *
  * Every function here catches its own errors and returns "no match": a throw in decide() would
  * reach main()'s fail-open catch and allow the command.
  */
 
 import { execFileSync } from 'child_process';
-import { lstatSync, readdirSync, realpathSync } from 'fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import * as nodePath from 'path';
 
@@ -227,11 +239,119 @@ function defaultGitCommonDir(cwd: string): string | null {
   } catch { return null; }
 }
 
+/** lstat kind of a path, or null when it is missing or unreadable. A link is reported as 'link'. */
+function kindOf(p: string): 'file' | 'dir' | 'link' | 'other' | null {
+  try {
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) return 'link';
+    return st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other';
+  } catch { return null; }
+}
+
+function realOf(p: string, ctx: Ctx): string | null {
+  try { return ctx.realpath(p); } catch { return null; }
+}
+
+/** First line of a small plain file, or null. The files read here are a few hundred bytes. */
+function readSmall(p: string): string | null {
+  if (kindOf(p) !== 'file') return null;
+  try {
+    if (statSync(p).size > 4096) return null;
+    const text = readFileSync(p, 'utf8');
+    return text.includes('\0') ? null : text;
+  } catch { return null; }
+}
+
+/** A `.git` DIRECTORY that looks like a repo and redirects nowhere (no `commondir`, no `gitdir`). */
+function isGenuineGitDir(dir: string): boolean {
+  return kindOf(dir) === 'dir'
+    && kindOf(nodePath.join(dir, 'HEAD')) === 'file'
+    && kindOf(nodePath.join(dir, 'objects')) === 'dir'
+    && kindOf(nodePath.join(dir, 'refs')) === 'dir'
+    && kindOf(nodePath.join(dir, 'commondir')) === null
+    && kindOf(nodePath.join(dir, 'gitdir')) === null;
+}
+
+/** The single path in a `gitdir: <path>` file, resolved against the folder that holds the file. */
+function gitdirTarget(gitFile: string, ctx: Ctx): string | null {
+  const text = readSmall(gitFile);
+  const m = text === null ? null : /^gitdir:[ \t]*([^\r\n]+?)[ \t]*\r?\n?$/.exec(text);
+  return m ? ctx.p.resolve(ctx.p.dirname(gitFile), m[1]) : null;
+}
+
+/** The one-line path inside a worktree admin file (`gitdir`, `commondir`), resolved against `adminDir`. */
+function adminPath(adminDir: string, name: string, ctx: Ctx): string | null {
+  const text = readSmall(ctx.p.join(adminDir, name));
+  const line = text === null ? null : /^([^\r\n]+?)[ \t]*\r?\n?$/.exec(text);
+  return line ? ctx.p.resolve(adminDir, line[1]) : null;
+}
+
+/**
+ * The primary `.git` directory proven by a linked worktree's `.git` FILE, or null. The file must
+ * name `<P>/.git/worktrees/<name>`, and that admin folder must name this exact file back (`gitdir`)
+ * and name `<P>/.git` as its common dir (`commondir`). A planted file has no such backlink.
+ */
+function primaryGitFromWorktreeFile(gitFile: string, ctx: Ctx): string | null {
+  const adminDir = gitdirTarget(gitFile, ctx);
+  if (!adminDir) return null;
+  const worktrees = ctx.p.dirname(adminDir);
+  const primaryGit = ctx.p.dirname(worktrees);
+  if (!sameName(ctx.p.basename(worktrees), 'worktrees', ctx) || !sameName(ctx.p.basename(primaryGit), '.git', ctx)) return null;
+  if (!isGenuineGitDir(primaryGit) || kindOf(adminDir) !== 'dir') return null;
+  const realPrimary = realOf(primaryGit, ctx);
+  const realAdmin = realOf(adminDir, ctx);
+  if (!realPrimary || !realAdmin) return null;
+  // `worktrees` must not be a link out of the primary .git.
+  if (!sameName(realAdmin, ctx.p.join(realPrimary, 'worktrees', ctx.p.basename(adminDir)), ctx)) return null;
+  const back = adminPath(adminDir, 'gitdir', ctx);
+  const common = adminPath(adminDir, 'commondir', ctx);
+  const realBack = back ? realOf(back, ctx) : null;
+  const realFile = realOf(gitFile, ctx);
+  const realCommon = common ? realOf(common, ctx) : null;
+  if (!realBack || !realFile || !realCommon) return null;
+  if (!sameName(realBack, realFile, ctx) || !sameName(realCommon, realPrimary, ctx)) return null;
+  return primaryGit;
+}
+
+/**
+ * The primary `.git` directory of the repo that owns `cwd`, proven from the files on disk, or null.
+ * The nearest `.git` entry above the real cwd decides (as git's own discovery does), so a planted
+ * `.git` in a subfolder is never skipped for a real repo further up. A link, an empty or redirecting
+ * `.git` directory, a `.git` file without a verified backlink, or no `.git` at all gives null.
+ */
+function provenGitDir(cwd: string, ctx: Ctx): string | null {
+  const real = realOf(cwd, ctx);
+  if (!real) return null;
+  for (let dir = real; ; dir = ctx.p.dirname(dir)) {
+    const dotGit = ctx.p.join(dir, '.git');
+    const kind = kindOf(dotGit);
+    if (kind === 'dir') return isGenuineGitDir(dotGit) ? dotGit : null;
+    if (kind === 'file') return primaryGitFromWorktreeFile(dotGit, ctx);
+    if (kind !== null) return null; // a link or something odd named .git
+    if (ctx.p.dirname(dir) === dir) return null;
+  }
+}
+
+/**
+ * <primary>/.claude/worktrees for the repo that owns cwd. Two independent witnesses must agree:
+ * the on-disk proof above and `git rev-parse --git-common-dir`. Git alone follows a planted
+ * `.git` file to another repo, so it is never trusted by itself.
+ */
 function worktreesRoot(cwd: string | undefined, deps: ScopedCleanupDeps, ctx: Ctx): string | null {
   if (!cwd || !ctx.p.isAbsolute(cwd)) return null;
+  // A cwd reached through a junction or symlink (itself or any parent) is the same redirect class:
+  // git and the on-disk proof both follow it to the repo it points at. Refuse unless the real path
+  // is the lexical path (case-folded on Windows). 8.3 short names and `\\?\` forms also refuse.
+  const realCwd = realOf(cwd, ctx);
+  if (!realCwd || !sameName(realCwd, ctx.p.resolve(cwd), ctx)) return null;
+  const proven = provenGitDir(cwd, ctx);
+  if (!proven || !sameName(ctx.p.basename(proven), '.git', ctx)) return null;
   const common = (deps.gitCommonDir ?? defaultGitCommonDir)(cwd);
-  if (!common || ctx.p.basename(common).toLowerCase() !== '.git') return null;
-  return ctx.p.join(ctx.p.dirname(common), '.claude', 'worktrees');
+  if (!common) return null;
+  const realProven = realOf(proven, ctx);
+  const realCommon = realOf(common, ctx);
+  if (!realProven || !realCommon || !sameName(realProven, realCommon, ctx)) return null;
+  return ctx.p.join(ctx.p.dirname(proven), '.claude', 'worktrees');
 }
 
 /**

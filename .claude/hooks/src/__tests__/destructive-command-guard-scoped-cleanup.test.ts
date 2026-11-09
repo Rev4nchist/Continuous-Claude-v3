@@ -99,11 +99,116 @@ beforeAll(() => {
   OUTSIDE_CLAUDE = join(TMP, OUTSIDE_CLAUDE_NAME);
   mkdirSync(join(OUTSIDE_CLAUDE, 'worktrees', 'precious'), { recursive: true });
   symlinkSync(OUTSIDE_CLAUDE, join(REPO_JC, '.claude'), 'junction');
+
+  buildRedirectFixtures();
 }, 60_000);
 
 afterAll(() => {
   if (TMP) rmSync(TMP, { recursive: true, force: true });
 });
+
+// Fixtures for the planted-.git redirect class (TREX verify N3). REPO_B is the victim repo: a
+// second, genuine repo whose .claude/worktrees/victim must never be deletable from another cwd.
+let REPO_B = '';
+let VICTIM = '';
+let PLANT_TO_GIT = '';
+let PLANT_TO_WT = '';
+let PLANT_REL = '';
+let PLANT_SUB = '';
+let PLANT_DIR_EMPTY = '';
+let PLANT_DIR_COMMONDIR = '';
+let PLANT_MISSING = '';
+let WT_NOLINK = '';
+let WT_BADLINK = '';
+let WT_BADCOMMON = '';
+let WT_NOCOMMON = '';
+let WT_REL = '';
+let WT_CASE = '';
+let JUNC_TO_B = '';
+let JUNC_TO_B_WT = '';
+let JUNC_IN_REPO = '';
+let JUNC_TO_REPO = '';
+
+const plantFile = (dir: string, text: string) => {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.git'), text);
+};
+const gitText = (p: string) => `gitdir: ${forward(p)}\n`;
+/** Git marks a worktree's .git file hidden on Windows; a plain write to a hidden file is EPERM. */
+const rewrite = (file: string, text: string) => {
+  rmSync(file, { force: true });
+  writeFileSync(file, text);
+};
+
+function linkedWorktree(name: string): string {
+  const dir = join(WT_ROOT, name);
+  git(REPO, 'worktree', 'add', '-q', '-b', `b-${name}`, dir);
+  return dir;
+}
+
+function buildRedirectFixtures(): void {
+  REPO_B = join(TMP, 'repo-b');
+  mkdirSync(REPO_B, { recursive: true });
+  git(REPO_B, 'init', '-q');
+  writeFileSync(join(REPO_B, 'a.txt'), 'a');
+  git(REPO_B, 'add', 'a.txt');
+  git(REPO_B, 'commit', '-q', '-m', 'x');
+  VICTIM = join(REPO_B, '.claude', 'worktrees', 'victim');
+  mkdirSync(join(VICTIM, 'src'), { recursive: true });
+
+  // A plain folder with a planted .git FILE: to a primary .git, to a real worktrees/<name>, relative.
+  PLANT_TO_GIT = join(TMP, 'plant-git');
+  plantFile(PLANT_TO_GIT, gitText(join(REPO_B, '.git')));
+  PLANT_TO_WT = join(TMP, 'plant-wt');
+  git(REPO_B, 'worktree', 'add', '-q', '-b', 'b-linked', join(TMP, 'repo-b-linked'));
+  plantFile(PLANT_TO_WT, gitText(join(REPO_B, '.git', 'worktrees', 'repo-b-linked')));
+  PLANT_REL = join(TMP, 'plant-rel');
+  plantFile(PLANT_REL, 'gitdir: ../repo-b/.git\n');
+  PLANT_MISSING = join(TMP, 'plant-missing');
+  plantFile(PLANT_MISSING, gitText(join(TMP, 'nowhere', '.git')));
+  // A planted file in a SUBFOLDER of the cwd path, above a cwd that sits inside a real repo's tree.
+  PLANT_SUB = join(REPO, 'plant-sub');
+  plantFile(PLANT_SUB, gitText(join(REPO_B, '.git')));
+  mkdirSync(join(PLANT_SUB, 'deep'), { recursive: true });
+
+  // A .git DIRECTORY in a plain folder: empty (points nowhere), and one that redirects by commondir.
+  PLANT_DIR_EMPTY = join(TMP, 'plant-dir-empty');
+  mkdirSync(join(PLANT_DIR_EMPTY, '.git'), { recursive: true });
+  PLANT_DIR_COMMONDIR = join(TMP, 'plant-dir-commondir');
+  mkdirSync(join(PLANT_DIR_COMMONDIR, '.git', 'objects'), { recursive: true });
+  mkdirSync(join(PLANT_DIR_COMMONDIR, '.git', 'refs'), { recursive: true });
+  writeFileSync(join(PLANT_DIR_COMMONDIR, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(PLANT_DIR_COMMONDIR, '.git', 'commondir'), `${forward(join(REPO_B, '.git'))}\n`);
+
+  // Real linked worktrees of REPO with one thing broken or rewritten each.
+  const meta = (name: string) => join(REPO, '.git', 'worktrees', name);
+  WT_NOLINK = linkedWorktree('nolink');
+  rmSync(join(meta('nolink'), 'gitdir'));
+  WT_BADLINK = linkedWorktree('badlink');
+  rewrite(join(meta('badlink'), 'gitdir'), `${forward(join(LINKED_WT, '.git'))}\n`);
+  WT_BADCOMMON = linkedWorktree('badcommon');
+  rewrite(join(meta('badcommon'), 'commondir'), `${forward(join(REPO_B, '.git'))}\n`);
+  WT_NOCOMMON = linkedWorktree('nocommon');
+  rmSync(join(meta('nocommon'), 'commondir'));
+  WT_REL = linkedWorktree('rel');
+  rewrite(join(WT_REL, '.git'), 'gitdir: ../../../.git/worktrees/rel\n');
+  rewrite(join(meta('rel'), 'gitdir'), '../../../.claude/worktrees/rel/.git\n');
+  WT_CASE = linkedWorktree('case');
+  const gd = meta('case');
+  rewrite(join(WT_CASE, '.git'), gitText(WIN ? gd.toUpperCase() : gd));
+  if (WIN) rewrite(join(gd, 'gitdir'), `${forward(join(WT_CASE, '.git')).toLowerCase()}\n`);
+
+  // A cwd that is itself a link: to another repo, to another repo's linked worktree, a link planted
+  // inside a real repo, and a link to the repo that would otherwise own the cwd.
+  JUNC_TO_B = join(TMP, 'junc-to-b');
+  symlinkSync(REPO_B, JUNC_TO_B, 'junction');
+  JUNC_TO_B_WT = join(TMP, 'junc-to-b-wt');
+  symlinkSync(join(TMP, 'repo-b-linked'), JUNC_TO_B_WT, 'junction');
+  JUNC_IN_REPO = join(REPO, 'evil-j');
+  symlinkSync(REPO_B, JUNC_IN_REPO, 'junction');
+  JUNC_TO_REPO = join(TMP, 'junc-to-repo');
+  symlinkSync(REPO, JUNC_TO_REPO, 'junction');
+}
 
 const forward = (p: string) => p.replace(/\\/g, '/');
 /** Git Bash spells C:\x as /c/x. */
@@ -424,5 +529,97 @@ describe('scoped cleanup: fails closed when it cannot check', () => {
 
   it('a cwd that is not inside a git repo denies the worktree root', () => {
     expectGated(`rm -rf "${WT}"`, 'Bash', { cwd: OUTSIDE });
+  });
+});
+
+// TREX verify N3 (CRITICAL): worktreesRoot trusted `git rev-parse --git-common-dir` for the payload
+// cwd, so a planted `.git` FILE made git report ANOTHER repo and the allow ran under that repo.
+// The repo that owns cwd must be proven genuine from the files on disk.
+describe('scoped cleanup: a planted .git cannot redirect the worktrees root', () => {
+  const victim = () => `rm -rf "${join(VICTIM, 'src')}"`;
+  const own = () => `rm -rf "${join(WT, 'src')}"`;
+
+  it('a .git file naming another repo .git is refused (the primary-.git redirect)', () => {
+    expectGated(victim(), 'Bash', { cwd: PLANT_TO_GIT });
+    expectGated(`Remove-Item -Recurse -Force -Path '${VICTIM}'`, 'PowerShell', { cwd: PLANT_TO_GIT });
+  });
+
+  it('a .git file naming a real worktrees/<name> of another repo is refused (the backlink names a different file)', () => {
+    expectGated(victim(), 'Bash', { cwd: PLANT_TO_WT });
+  });
+
+  it('a relative gitdir in a planted file is refused', () => {
+    expectGated(victim(), 'Bash', { cwd: PLANT_REL });
+  });
+
+  it('a planted file naming a gitdir that does not exist is refused', () => {
+    expectGated(victim(), 'Bash', { cwd: PLANT_MISSING });
+  });
+
+  it('a planted .git file in a subfolder above the cwd wins over the real repo further up (nearest .git, as git does)', () => {
+    expectGated(victim(), 'Bash', { cwd: join(PLANT_SUB, 'deep') });
+    expectGated(own(), 'Bash', { cwd: join(PLANT_SUB, 'deep') });
+  });
+
+  it('a .git directory with nothing in it, planted in a plain folder, is refused', () => {
+    expectGated(`rm -rf "${join(PLANT_DIR_EMPTY, '.claude', 'worktrees', 'x')}"`, 'Bash', { cwd: PLANT_DIR_EMPTY });
+    expectGated(victim(), 'Bash', { cwd: PLANT_DIR_EMPTY });
+  });
+
+  it('a .git directory whose commondir file redirects to another repo is refused', () => {
+    expectGated(victim(), 'Bash', { cwd: PLANT_DIR_COMMONDIR });
+  });
+
+  it('a real linked worktree with no backlink, a backlink to another file, a wrong commondir or no commondir is refused', () => {
+    for (const cwd of [WT_NOLINK, WT_BADLINK, WT_BADCOMMON, WT_NOCOMMON]) {
+      expectGated(own(), 'Bash', { cwd });
+    }
+  });
+
+  it('a wrong commondir does not move the allow to the other repo either', () => {
+    expectGated(victim(), 'Bash', { cwd: WT_BADCOMMON });
+  });
+
+  it('legit: cwd in the primary checkout (real .git directory), its subfolder, and a second genuine repo', () => {
+    expectScoped(own(), 'Bash', 'worktree', { cwd: REPO });
+    expectScoped(own(), 'Bash', 'worktree', { cwd: join(REPO, '.claude') });
+    expectScoped(victim(), 'Bash', 'worktree', { cwd: REPO_B });
+  });
+
+  it('legit: cwd in a linked worktree with a verified backlink and commondir', () => {
+    expectScoped(own(), 'Bash', 'worktree', { cwd: LINKED_WT });
+    expectScoped(own(), 'Bash', 'worktree', { cwd: join(LINKED_WT, 'pkg') });
+  });
+
+  it('legit: a linked worktree whose gitdir and backlink are relative paths', () => {
+    expectScoped(own(), 'Bash', 'worktree', { cwd: WT_REL });
+  });
+
+  it.runIf(WIN)('legit on Windows: an upper-cased gitdir path and a lower-cased backlink still verify', () => {
+    expectScoped(own(), 'Bash', 'worktree', { cwd: WT_CASE });
+    expectScoped(own(), 'Bash', 'worktree', { cwd: WT_CASE.toUpperCase() });
+  });
+
+  it('a genuine repo is not the owner of another repo path: the victim is not reachable from REPO', () => {
+    expectGated(victim(), 'Bash', { cwd: REPO });
+    expectGated(victim(), 'Bash', { cwd: LINKED_WT });
+  });
+
+  // Reviewer finding: git follows a cwd junction to the other repo and names its .git, and the
+  // on-disk proof of that repo passes. The cwd must be a real path, not reached through a link.
+  it('a cwd that is a junction to another repo or to its linked worktree is refused', () => {
+    expectGated(victim(), 'Bash', { cwd: JUNC_TO_B });
+    expectGated(`Remove-Item -Recurse -Force -LiteralPath '${VICTIM}'`, 'PowerShell', { cwd: JUNC_TO_B });
+    expectGated(victim(), 'Bash', { cwd: JUNC_TO_B_WT });
+  });
+
+  it('a junction planted inside a real repo that points to another repo is refused as a cwd', () => {
+    expectGated(victim(), 'Bash', { cwd: JUNC_IN_REPO });
+    expectGated(own(), 'Bash', { cwd: JUNC_IN_REPO });
+  });
+
+  it('a cwd reached through a link to its own repo is refused too (fail closed)', () => {
+    expectGated(own(), 'Bash', { cwd: JUNC_TO_REPO });
+    expectGated(own(), 'Bash', { cwd: join(JUNC_TO_REPO, '.claude') });
   });
 });
