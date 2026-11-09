@@ -15,7 +15,7 @@ import { parseSessionId } from '@/server/queries/session-detail';
  * `initial`. So the first paint is real data with no loading skeleton and no
  * client round-trip, and polling only ever refreshes something already correct.
  *
- * `?view=sessions&session=<id>` selects the view and the session (`overview`, `board`, `sessions`, `spend`). `searchParams` is a
+ * `?view=sessions&session=<id>` selects the view and the session (`overview`, `board`, `sessions`, `flow`, `spend`). `searchParams` is a
  * Promise in Next 16. A `view` that is not a known value and a `session` of the wrong
  * format are ignored. `?project=<key>` picks the Board's lane board; a malformed key shows the default board
  * (the API answers 400 for it, the page never errors).
@@ -32,12 +32,13 @@ export default async function MissionControlPage({
   const initialView = parseViewName(params.view) ?? 'overview';
   const parsed = parseProjectKey(params.project);
   const initialProject = parsed.ok ? parsed.key : null;
-  // The Board and the Spend tab are in the first snapshot only when the page opens on them.
+  // The Board, the Spend tab and the Flow tab are in the first snapshot only when the page opens on them.
   const snapshot = await getMissionControlSnapshot(
     initialSession,
     initialView === 'board',
     initialProject ?? undefined,
     initialView === 'spend',
+    initialView === 'flow',
   );
 
   return (

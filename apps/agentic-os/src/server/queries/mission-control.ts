@@ -13,6 +13,7 @@ import {
   type SessionCard,
 } from '@/server/queries/fleet-sessions';
 import { stateFilesSource } from '@/server/queries/fleet-join';
+import type { FlowView } from '@/server/queries/lane-dash-parse';
 import { DEFAULT_BOARD, getLaneBoard, type LaneBoard } from '@/server/queries/lane-board';
 import { getFleetOverview, type FleetOverview } from '@/server/queries/projects';
 import {
@@ -32,6 +33,7 @@ import {
 } from '@/server/queries/spend-fold';
 import type { RollupResult } from '@/server/queries/spend-rollup-parse';
 import { readSessionNames } from '@/server/sources/identity-names';
+import { readLaneDash } from '@/server/sources/lane-dash';
 import { safeMessage } from '@/server/sources/safe-message';
 import { readSpendRollup } from '@/server/sources/spend-rollup';
 import { readStateFiles, type StateFiles, type StateSnapshot } from '@/server/sources/state-files';
@@ -76,7 +78,7 @@ export type StatTiles = {
 
 export type { DetailUnavailable, LaneBoard, PrRow, ReadyItem, SessionCard, SessionDetail };
 
-export const VIEW_IDS = ['overview', 'board', 'sessions', 'spend'] as const;
+export const VIEW_IDS = ['overview', 'board', 'sessions', 'flow', 'spend'] as const;
 export type ViewName = (typeof VIEW_IDS)[number];
 
 /** A `view` from a query string: one of the known values, else null. Never an error. */
@@ -128,6 +130,8 @@ export type MissionControlSnapshot = {
   board: LaneBoard | null;
   /** The Spend tab. Computed only when the request carries `view=spend`, else null. Not `tiles.spend`. */
   spend: SpendView | null;
+  /** The Flow tab: the lane-dashboard export, read only. Computed only when the request carries `view=flow`, else null. */
+  flow: FlowView | null;
   /** When the server produced this, ISO-8601 UTC. The UI shows staleness relative
    *  to receipt rather than to this value — a clock difference between server and
    *  browser is not the user's problem to reason about. */
@@ -190,6 +194,7 @@ async function buildSpendView(
  * `sessionId` must already pass parseSessionId(); the caller validates it.
  * `withBoard` is true only for a request that carries `view=board`.
  * `withSpend` is true only for a request that carries `view=spend`.
+ * `withFlow` is true only for a request that carries `view=flow`.
  * `project` is the board key for that view; it must already pass parseProjectKey(). Default: continuous-claude.
  * The active-lane tile (getActiveLaneCount) stays machine-wide: it counts every board.
  */
@@ -198,8 +203,9 @@ export async function getMissionControlSnapshot(
   withBoard = false,
   project: string = DEFAULT_BOARD,
   withSpend = false,
+  withFlow = false,
 ): Promise<MissionControlSnapshot> {
-  const [databaseRaw, fleet, active, files, lanes, heldLanes, board] = await Promise.all([
+  const [databaseRaw, fleet, active, files, lanes, heldLanes, board, flow] = await Promise.all([
     checkDatabaseReady(),
     getFleetOverview(),
     getActiveSessions(),
@@ -207,6 +213,7 @@ export async function getMissionControlSnapshot(
     settle(getActiveLaneCount),
     settle(getHeldLanes),
     withBoard ? getLaneBoard(project) : Promise.resolve(null),
+    withFlow ? readLaneDash() : Promise.resolve(null),
   ]);
 
   const database: MissionControlSnapshot['database'] = databaseRaw.ok
@@ -275,6 +282,7 @@ export async function getMissionControlSnapshot(
     prs: sessions.prs,
     board,
     spend,
+    flow,
     generatedAt: new Date().toISOString(),
   };
 }
