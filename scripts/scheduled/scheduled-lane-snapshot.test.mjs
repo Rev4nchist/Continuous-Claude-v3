@@ -16,6 +16,12 @@
 //   branch       the repo branch is not in the log (a scheduled run reads whatever branch is checked out)
 //   missing      no export script: a clear message and a nonzero exit, not a silent 0
 //   repo root    the override is ignored and the wrapper runs the machine's real checkout
+// The second command (export-factory-data.mjs, design 2026-11-09-factory-json-design.md D9, tests 37 to 41):
+//   both run      the factory is not started, or its finish line is missing
+//   export fails  the factory is skipped when the export exits 1 or is killed (it must run whatever the export code)
+//   factory fails the factory exit code is swallowed (must be 5), a missing factory script is silent, or it hides the export code
+//   factory hang  a hung factory is not killed at CCV3_FACTORY_TIMEOUT_SEC
+//   key strip     ANTHROPIC_API_KEY reaches the factory child
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -37,28 +43,40 @@ if (process.env.FAKE_HANG) setInterval(() => {}, 1000);
 else process.exit(Number(process.env.FAKE_EXIT ?? 0));
 `;
 
+// The fake factory records its own call file (FAKE_FACTORY_CALL_FILE) so the export's record stays intact.
+const FAKE_FACTORY = `
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.env.FAKE_FACTORY_CALL_FILE, JSON.stringify({ argv: process.argv.slice(2), pid: process.pid, envKeys: Object.keys(process.env), script: process.argv[1] }));
+console.log('fake factory stdout line');
+console.error('fake factory stderr line');
+if (process.env.FAKE_FACTORY_HANG) setInterval(() => {}, 1000);
+else process.exit(Number(process.env.FAKE_FACTORY_EXIT ?? 0));
+`;
+
 function git(cwd, args) {
   const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8', windowsHide: true });
   assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
 }
 
-function fixture({ withExport = true, branch = null } = {}) {
+function fixture({ withExport = true, withFactory = true, branch = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ccv3-snapshot-wrapper-'));
   const repo = join(root, 'repo');
   mkdirSync(join(repo, 'scripts', 'coordination'), { recursive: true });
   if (withExport) writeFileSync(join(repo, 'scripts', 'coordination', 'export-dash-data.mjs'), FAKE_EXPORT);
+  if (withFactory) writeFileSync(join(repo, 'scripts', 'coordination', 'export-factory-data.mjs'), FAKE_FACTORY);
   if (branch) { git(repo, ['init', '-q', '-b', branch]); git(repo, ['commit', '-q', '--allow-empty', '-m', 'init']); }
-  return { root, repo, logDir: join(root, 'logs'), log: join(root, 'logs', '2026-11-07.log'), call: join(root, 'call.json') };
+  return { root, repo, logDir: join(root, 'logs'), log: join(root, 'logs', '2026-11-07.log'), call: join(root, 'call.json'), factoryCall: join(root, 'factory-call.json') };
 }
 
 function run(fx, extraEnv = {}) {
-  const env = { ...process.env, CCV3_LANE_SNAPSHOT_REPO_ROOT: fx.repo, CCV3_LANE_SNAPSHOT_LOG: fx.log, FAKE_CALL_FILE: fx.call, ...extraEnv };
+  const env = { ...process.env, CCV3_LANE_SNAPSHOT_REPO_ROOT: fx.repo, CCV3_LANE_SNAPSHOT_LOG: fx.log, FAKE_CALL_FILE: fx.call, FAKE_FACTORY_CALL_FILE: fx.factoryCall, ...extraEnv };
   for (const k of Object.keys(extraEnv)) if (extraEnv[k] === undefined) delete env[k];
   const started = Date.now();
   const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', WRAPPER], { env, encoding: 'utf8', windowsHide: true, timeout: 120000 });
   return { status: r.status, ms: Date.now() - started, log: existsSync(fx.log) ? readFileSync(fx.log, 'utf8') : '', out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 const called = (fx) => JSON.parse(readFileSync(fx.call, 'utf8'));
+const factoryCalled = (fx) => JSON.parse(readFileSync(fx.factoryCall, 'utf8'));
 const win = { skip: !onWindows };
 
 test('the export exit code passes through the wait: 0 and 1', win, () => {
@@ -89,6 +107,7 @@ test('with no override and a profile repoRoot that has no export, the wrapper fa
   const homeRepo = join(home, 'continuous-claude');
   mkdirSync(join(homeRepo, 'scripts', 'coordination'), { recursive: true });
   writeFileSync(join(homeRepo, 'scripts', 'coordination', 'export-dash-data.mjs'), FAKE_EXPORT);
+  writeFileSync(join(homeRepo, 'scripts', 'coordination', 'export-factory-data.mjs'), FAKE_FACTORY);
   const profileName = 'snapshot-test';
   mkdirSync(join(fx.root, 'machine'), { recursive: true });
   writeFileSync(join(fx.root, 'machine', `${profileName}.json`), JSON.stringify({ repoRoot: fx.repo }));
@@ -189,4 +208,82 @@ test('CCV3_LANE_SNAPSHOT_REPO_ROOT picks the repo: the export that runs is the o
   assert.equal(r.status, 0, r.log);
   assert.ok(called(fx).script.startsWith(fx.repo), called(fx).script);
   assert.ok(r.log.includes(`repo ${fx.repo}`), r.log);
+});
+
+// ---------------------------------------------------------------- the second command: export-factory-data.mjs
+
+test('37 both commands run: the log has both finish lines, the factory runs bare, and the exit is 0', win, () => {
+  // Breaks when the factory is not started, its finish line is missing, or it runs with arguments by default.
+  const fx = fixture();
+  const r = run(fx);
+  assert.equal(r.status, 0, r.log);
+  assert.match(r.log, /export finished, exit 0\b/);
+  assert.match(r.log, /factory starting/);
+  assert.match(r.log, /fake factory stdout line/);
+  assert.match(r.log, /fake factory stderr line/);
+  assert.match(r.log, /factory finished, exit 0\b/);
+  assert.deepEqual(factoryCalled(fx).argv, []);
+  assert.equal(factoryCalled(fx).script, join(fx.repo, 'scripts', 'coordination', 'export-factory-data.mjs'));
+  assert.ok(r.log.indexOf('export finished') < r.log.indexOf('factory starting'), 'the factory runs after the export');
+  const fx2 = fixture();
+  const r2 = run(fx2, { CCV3_FACTORY_EXTRA_ARGS: `--out ${join(fx2.root, 'out')}` });
+  assert.equal(r2.status, 0, r2.log);
+  assert.deepEqual(factoryCalled(fx2).argv, ['--out', join(fx2.root, 'out')]);
+  assert.deepEqual(called(fx2).argv, [], 'the factory extra args never reach the export');
+});
+
+test('38 export exit 1 and factory exit 0: the wrapper exits 1 and the factory still ran', win, () => {
+  // Breaks when the factory is skipped on an export failure (the four families need no database).
+  const fx = fixture();
+  const r = run(fx, { FAKE_EXIT: '1' });
+  assert.equal(r.status, 1, r.log);
+  assert.ok(existsSync(fx.factoryCall), 'the factory must run after a failed export');
+  assert.match(r.log, /export finished, exit 1\b/);
+  assert.match(r.log, /factory finished, exit 0\b/);
+});
+
+test('38b a killed export (124) does not skip the factory, and export 1 with factory 2 exits 1', win, () => {
+  // Breaks when the export code is replaced by the factory code, or a killed export skips the factory.
+  const fx = fixture();
+  const r = run(fx, { FAKE_HANG: '1', CCV3_LANE_SNAPSHOT_TIMEOUT_SEC: '3' });
+  assert.equal(r.status, 124, r.log);
+  assert.ok(existsSync(fx.factoryCall), 'the factory runs after a killed export');
+  const fx2 = fixture();
+  const r2 = run(fx2, { FAKE_EXIT: '1', FAKE_FACTORY_EXIT: '2' });
+  assert.equal(r2.status, 1, r2.log);
+  assert.match(r2.log, /factory finished, exit 2\b/);
+});
+
+test('39 export 0 and factory exit 2: the wrapper exits 5; a missing factory script exits 5 and the export still ran', win, () => {
+  // Breaks when a factory failure is swallowed (the health check reads only the exit code), or a missing script is silent.
+  const fx = fixture();
+  const r = run(fx, { FAKE_FACTORY_EXIT: '2' });
+  assert.equal(r.status, 5, r.log);
+  assert.match(r.log, /factory finished, exit 2\b/);
+  const fx2 = fixture({ withFactory: false });
+  const r2 = run(fx2);
+  assert.equal(r2.status, 5, r2.log);
+  assert.match(r2.log, /ERROR: export-factory-data\.mjs not found at .*export-factory-data\.mjs/);
+  assert.ok(existsSync(fx2.call), 'the export still ran');
+  assert.match(r2.log, /export finished, exit 0\b/);
+});
+
+test('40 a hung factory is killed at CCV3_FACTORY_TIMEOUT_SEC and the wrapper exits 5', win, () => {
+  // Breaks when the factory has no limit, or the kill leaves the process alive.
+  const fx = fixture();
+  const r = run(fx, { FAKE_FACTORY_HANG: '1', CCV3_FACTORY_TIMEOUT_SEC: '3' });
+  assert.equal(r.status, 5, r.log);
+  assert.match(r.log, /TIMEOUT: factory killed/);
+  assert.match(r.log, /factory finished, exit 124\b/);
+  assert.ok(r.ms < 60000, `wrapper waited ${r.ms} ms`);
+  assert.throws(() => process.kill(factoryCalled(fx).pid, 0), 'the hung factory process must be dead');
+});
+
+test('41 ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN never reach the factory', win, () => {
+  // Breaks when the key strip moves after the factory starts.
+  const fx = fixture();
+  const r = run(fx, { ANTHROPIC_API_KEY: 'sk-test-not-real', ANTHROPIC_AUTH_TOKEN: 'tok-test-not-real' });
+  assert.equal(r.status, 0, r.log);
+  const keys = factoryCalled(fx).envKeys;
+  assert.ok(!keys.some((k) => /^ANTHROPIC_(API_KEY|AUTH_TOKEN)$/i.test(k)), keys.filter((k) => /ANTHROPIC/i.test(k)).join(','));
 });
