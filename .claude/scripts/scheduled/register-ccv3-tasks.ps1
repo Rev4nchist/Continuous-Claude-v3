@@ -41,8 +41,10 @@ if (-not $ClaudeHome) { $ClaudeHome = Join-Path $env:USERPROFILE '.claude' }
 if (-not $TasksFile) {
   # In the repo this script is three folders below the root. The installed copy under ~/.claude is not: scripts\scheduled\tasks.json
   # lives in the repo and does not sync. Then ask profile-paths.ps1: the machine profile repoRoot, else CCV3_REPO_ROOT, else ~/continuous-claude.
+  # The installed copy never uses the relative path: a stale file at ~\scripts\scheduled\tasks.json must not beat the configured repo.
   $near = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path 'scripts\scheduled\tasks.json'
-  if (Test-Path -LiteralPath $near -PathType Leaf) {
+  $installed = $PSScriptRoot.TrimEnd('\').StartsWith($ClaudeHome.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+  if (-not $installed -and (Test-Path -LiteralPath $near -PathType Leaf)) {
     $TasksFile = $near
   } else {
     . (Join-Path $PSScriptRoot 'profile-paths.ps1')
