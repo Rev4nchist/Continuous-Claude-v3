@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "day": "2026-01-01",
+  "builtAt": "2026-01-01T17:45:00.000Z",
+  "rows": [
+    {
+      "model": "claude-opus-4-7",
+      "effort": "high",
+      "kind": "main",
+      "requests": 40,
+      "input": 1200,
+      "cacheRead": 90000,
+      "write5m": 3000,
+      "write1h": 500,
+      "writeRem": 0,
+      "output": 8000,
+      "thinking": 2500,
+      "webSearches": 0,
+      "estUsd": 6
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "high",
+      "kind": "agent",
+      "requests": 12,
+      "input": 400,
+      "cacheRead": 20000,
+      "write5m": 800,
+      "write1h": 0,
+      "writeRem": 0,
+      "output": 2200,
+      "thinking": 600,
+      "webSearches": 1,
+      "estUsd": 2
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "low",
+      "kind": "advisor",
+      "requests": 3,
+      "input": 150,
+      "cacheRead": 0,
+      "write5m": 0,
+      "write1h": 0,
+      "writeRem": 0,
+      "output": 900,
+      "thinking": 0,
+      "webSearches": 0,
+      "estUsd": 1
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "kind": "main",
+      "requests": 25,
+      "input": 700,
+      "cacheRead": 50000,
+      "write5m": 1200,
+      "write1h": 0,
+      "writeRem": 0,
+      "output": 4000,
+      "thinking": 1000,
+      "webSearches": 0,
+      "estUsd": 3.5
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "effort": null,
+      "kind": "helper",
+      "requests": 9,
+      "input": 300,
+      "cacheRead": 0,
+      "write5m": 0,
+      "write1h": 0,
+      "writeRem": 0,
+      "output": 450,
+      "thinking": 0,
+      "webSearches": 0,
+      "estUsd": null
+    }
+  ],
+  "engineByModel": [
+    { "model": "claude-opus-4-7", "engineUsd": 10.5 },
+    { "model": "claude-sonnet-5-5", "engineUsd": 4 },
+    { "model": "claude-haiku-4-5", "engineUsd": 0.75 }
+  ],
+  "quality": { "sessions": 5, "clean": 4, "resumed": 1, "sliced": 0, "residualBandPct": 4.5 }
+}

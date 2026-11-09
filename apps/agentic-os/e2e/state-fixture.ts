@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Client } from 'pg';
 
-import { E2E_IDENTITY_DIR, E2E_STATE_DIR } from '../playwright.config';
+import { E2E_IDENTITY_DIR, E2E_SPEND_DIR, E2E_STATE_DIR } from '../playwright.config';
 import { laneOrderSql } from '../src/server/queries/lane-sort';
 
 /**
@@ -283,6 +283,32 @@ export function clearStateDir(): void {
   mkdirSync(STATE_DIR, { recursive: true });
   for (const name of readdirSync(STATE_DIR)) {
     rmSync(join(STATE_DIR, name), { recursive: true, force: true });
+  }
+}
+
+// --- Spend rollup files (the Spend tab) -----------------------------------------------------------
+
+/** The E2E server's spend folder (AGENTIC_OS_SPEND_DIR). Never the real ~/.claude/state/spend. */
+export const SPEND_DIR = E2E_SPEND_DIR;
+
+/** Write `<day>.json` into the E2E spend dir. `day` is the CDT date, `YYYY-MM-DD`. Returns the path. */
+export function writeRollup(day: string, rollup: unknown): string {
+  return writeSpendRaw(`${day}.json`, JSON.stringify(rollup, null, 2));
+}
+
+/** Write any text under any name in the E2E spend dir (for a file that is not valid JSON). */
+export function writeSpendRaw(fileName: string, text: string): string {
+  mkdirSync(SPEND_DIR, { recursive: true });
+  const path = join(SPEND_DIR, fileName);
+  writeFileSync(path, text);
+  return path;
+}
+
+/** Remove EVERY file in the E2E spend dir, so a rollup of one test never reaches the next. */
+export function clearSpendDir(): void {
+  mkdirSync(SPEND_DIR, { recursive: true });
+  for (const name of readdirSync(SPEND_DIR)) {
+    rmSync(join(SPEND_DIR, name), { recursive: true, force: true });
   }
 }
 
