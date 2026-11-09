@@ -926,7 +926,7 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     opts: { tool?: string; stub?: Stub; cwd?: string; env?: Record<string, string> } = {},
   ): Promise<{ decision: string | undefined; reason: string }> {
     const { spawnSync } = await import('node:child_process');
-    const { existsSync, mkdtempSync } = await import('node:fs');
+    const { existsSync, mkdtempSync, writeFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const { fileURLToPath } = await import('node:url');
@@ -934,6 +934,14 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     const netStub = fileURLToPath(new URL('./package-guard-net-stub.cjs', import.meta.url));
     expect(existsSync(dist)).toBe(true);
     expect(existsSync(netStub)).toBe(true);
+    const rcHome = mkdtempSync(join(tmpdir(), 'pig-rchome-'));
+    // The default cwd is a fresh temp folder outside the checkout, so a .npmrc in a folder above the checkout never reaches a case.
+    // It holds a package-lock.json, as the hooks folder did when it was the default. An explicit cwd is used as given.
+    let cwd = opts.cwd;
+    if (!cwd) {
+      cwd = mkdtempSync(join(tmpdir(), 'pig-defcwd-'));
+      writeFileSync(join(cwd, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}');
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CCV3_GUARD_DECISIONS_LOG: join(mkdtempSync(join(tmpdir(), 'pig-f08-')), 'guard-decisions.jsonl'),
@@ -944,7 +952,9 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       PIG_STUB_REGISTRY_MODE: opts.stub?.registryMode ?? '',
       PIG_STUB_REGISTRY_ONLY: opts.stub?.registryOnly ?? '',
       // The guard reads rc files in the cwd, its ancestors and this home folder. An empty temp home keeps a real ~/.npmrc out of every case.
-      CCV3_GUARD_RC_HOME: mkdtempSync(join(tmpdir(), 'pig-rchome-')),
+      CCV3_GUARD_RC_HOME: rcHome,
+      // pip reads %APPDATA%\pip\pip.ini on Windows: point it at the empty temp home too.
+      APPDATA: join(rcHome, 'AppData', 'Roaming'),
     };
     delete env.CDPATH;
     Object.assign(env, opts.env);
@@ -954,14 +964,14 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       session_id: 'test-session',
       tool_name: opts.tool ?? 'Bash',
       tool_input: (opts.tool ?? '').endsWith('__interact_with_process') ? { input: command } : { command },
-      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      cwd,
     };
     const res = spawnSync(process.execPath, ['-r', netStub, dist], {
       input: JSON.stringify(payload),
       encoding: 'utf8',
       timeout: 20_000,
       env,
-      cwd: opts.cwd,
+      cwd,
     });
     expect(res.status).toBe(0);
     const out = JSON.parse(res.stdout.trim().split('\n').pop()!);
@@ -3004,6 +3014,86 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     });
     it('a key past 60 KB of comments is still read (cap is 64 KB)', async () => {
       await rcAsk('npm ci', await project({ '.npmrc': `# ${'x'.repeat(60_000)}\nregistry=${EVIL}\n` }));
+    });
+
+    // ----- CodeRabbit CLI findings on 5f40bee -----
+    // 1: a file over 64 KB is not fully read. That is parse doubt, so the install asks (any content, even a public registry).
+    it.each([
+      ['evil key after the cap', `# ${'x'.repeat(70_000)}\nregistry=${EVIL}\n`],
+      ['public registry, big file', `registry=https://registry.npmjs.org/\n# ${'x'.repeat(70_000)}\n`],
+      ['just over the cap', `# ${'x'.repeat(65_534)}\n`],
+    ])('a .npmrc larger than 64 KB (%s) asks and says it was not fully read', async (_label, text) => {
+      const r = await rcAsk('npm ci', await project({ '.npmrc': text }));
+      expect(r.reason).toMatch(/larger than 65536 bytes, not fully read/);
+    });
+    it('a .npmrc of exactly 64 KB with a public registry is read fully and allows', async () => {
+      const head = 'registry=https://registry.npmjs.org/\n# ';
+      const text = head + 'x'.repeat(65_536 - head.length);
+      expect(text.length).toBe(65_536);
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: await project({ '.npmrc': text }) });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
+    });
+    // 2: pip lists more values on the indented lines after the key, also when the key line holds the first one.
+    it.each([
+      ['pip.conf', `[global]\nextra-index-url = https://pypi.org/simple\n    ${EVIL}simple\n`],
+      ['pip.ini', `[global]\nindex-url = https://pypi.org/simple\r\n\t${EVIL}simple\r\n`],
+      ['pip.conf', `[global]\nextra-index-url = https://pypi.org/simple\n    https://files.pythonhosted.org/simple\n    ${EVIL}simple\n`],
+      ['pip.conf', `[global]\nfind-links = https://pypi.org/simple\n    /srv/wheels\n`],
+    ])('%s: a continuation line after a non-empty first value is judged too (%#)', async (name, text) => {
+      await rcAsk('npm ci', await project({ [name]: text }));
+    });
+    it.each([
+      ['uv.toml', 'index-url = "https://pypi.org/simple"\n  cache-keys = 1\n'],
+      ['bunfig.toml', '[install]\nregistry = "https://registry.npmjs.org"\n  scopes = { zz = "x" }\n'],
+      ['pip.conf', '[global]\nextra-index-url = https://pypi.org/simple\n    # https://evil.example/simple\n'],
+      ['pip.conf', '[global]\nextra-index-url = https://pypi.org/simple\n    https://files.pythonhosted.org/simple\ntimeout = 60\n'],
+    ])('%s: an indented key = value line, a comment or the next key is not a continuation value (%#)', async (name, text) => {
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: await project({ [name]: text }) });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
+    });
+    // 3: the home folder has its own list of user-config locations (the same names are read in the cwd and above it).
+    it.each([
+      ['.npmrc', `registry=${EVIL}\n`],
+      ['.yarnrc.yml', `npmRegistryServer: "${EVIL}"\n`],
+      ['.bunfig.toml', `[install]\nregistry = "${EVIL}"\n`],
+      ['.config/pip/pip.conf', `[global]\nindex-url = ${EVIL}simple\n`],
+      ['.pip/pip.conf', `[global]\nindex-url = ${EVIL}simple\n`],
+      ['.config/uv/uv.toml', `index-url = "${EVIL}simple"\n`],
+      ['AppData/Roaming/pip/pip.ini', `[global]\nindex-url = ${EVIL}simple\n`],
+    ])('home folder %s with a custom registry asks', async (rel, text) => {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join, dirname } = await import('node:path');
+      const home = mkdtempSync(join(tmpdir(), 'pig-rchome3-'));
+      made.push(home);
+      mkdirSync(dirname(join(home, rel)), { recursive: true });
+      writeFileSync(join(home, rel), text);
+      await rcAsk('npm ci', await project({}), { CCV3_GUARD_RC_HOME: home });
+    });
+    it('%APPDATA%\\pip\\pip.ini asks when APPDATA is set', async () => {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const appdata = mkdtempSync(join(tmpdir(), 'pig-appdata-'));
+      made.push(appdata);
+      mkdirSync(join(appdata, 'pip'));
+      writeFileSync(join(appdata, 'pip', 'pip.ini'), `[global]\nindex-url = ${EVIL}simple\n`);
+      await rcAsk('npm ci', await project({}), { APPDATA: appdata });
+    });
+    it('a public registry in a home user-config file allows', async () => {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const home = mkdtempSync(join(tmpdir(), 'pig-rchome4-'));
+      made.push(home);
+      mkdirSync(join(home, '.config', 'pip'), { recursive: true });
+      writeFileSync(join(home, '.config', 'pip', 'pip.conf'), '[global]\nindex-url = https://pypi.org/simple\n');
+      writeFileSync(join(home, '.bunfig.toml'), '[install]\nregistry = "https://registry.npmjs.org"\n');
+      const r = await runHookFull('npm ci', { stub: OLD, cwd: await project({}), env: { CCV3_GUARD_RC_HOME: home } });
+      expect(r.reason).not.toMatch(/rc file on disk/i);
+      expect(r.decision).toBeUndefined();
     });
 
     // Allow side: public hosts, other keys, comments, and files the guard cannot read.
