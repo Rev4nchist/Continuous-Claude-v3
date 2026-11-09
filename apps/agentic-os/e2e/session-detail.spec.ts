@@ -114,7 +114,7 @@ type Detail = {
   decisions: { text: string; by: string; ageSeconds: number }[];
   ctxPct: number | null;
   cache: { hitPct: number; savedUsd: number } | null;
-  agentRuns: { count: number; running: number; costUsd: number } | null;
+  agentRuns: { count: number; running: number; costUsd: number; unpriced: number; advisedRuns: number } | null;
   prs: { pr: number; state: string | null }[];
   sessionCost: number | null;
   limits: { label: string; percent: number }[] | null;
@@ -864,7 +864,7 @@ test.describe('GET /api/mission-control?session=<id>', () => {
     expect(detail.decisions[1].ageSeconds).toBeGreaterThanOrEqual(2 * HOUR - 10);
     expect(detail.cache).toMatchObject({ savedUsd: 3.2 });
     expect(typeof detail.cache?.hitPct).toBe('number');
-    expect(detail.agentRuns).toEqual({ count: 2, running: 1, costUsd: 1.75 });
+    expect(detail.agentRuns).toEqual({ count: 2, running: 1, costUsd: 1.75, unpriced: 0, advisedRuns: 0 });
     expect(detail.prs).toEqual([{ pr: 1234, state: 'PENDING' }]);
   });
 

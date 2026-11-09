@@ -20601,7 +20601,81 @@ function hiddenInstall(segment, tool) {
   const scan = stripQuotedStrings(segment, tool).replace(/\$\([^)]*\)?|`[^`]*`?/g, "");
   if (INSTALL_PATTERNS.some((p) => p.loose.test(scan))) return true;
   if (anyManagerInstall(tokenize(scan))) return true;
-  return commandWordInstall(segment);
+  return commandWordInstall(segment) || ecosystemInstall(segment) !== null;
+}
+var isFlagWord = (w) => /^[-/]/.test(w);
+function positionals(rest, max) {
+  const out = [];
+  for (const w of rest) {
+    if (out.length >= max) break;
+    if (!isFlagWord(w)) out.push(w.replace(/\\/g, "").toLowerCase());
+  }
+  return out;
+}
+function installVerbFirst(rest, verbs, readOnly) {
+  for (const w of positionals(rest, 4)) {
+    if (/^[$`]/.test(w) || verbs.test(w)) return true;
+    if (readOnly.test(w)) return false;
+  }
+  return false;
+}
+var CHOCO_VERBS = /^(?:install|upgrade|update|download|sync|synchronize)$/;
+var CHOCO_READ_ONLY = /^(?:list|ls|search|find|info|help|outdated|config|source|feature|pin|apikey|setapikey|new|pack|push|uninstall|export|license|template|templates)$/;
+var WINGET_VERBS = /^(?:install|add|upgrade|update|import|download|configure|repair)$/;
+var WINGET_READ_ONLY = /^(?:list|ls|search|find|show|view|source|settings|setting|hash|validate|export|features|complete|uninstall|remove|rm|pin|test)$/;
+var NUGET_VERBS = /^(?:install|update)$/;
+var NUGET_READ_ONLY = /^(?:locals|sources|source|config|help|list|pack|push|delete|setapikey|spec|verify|sign|trusted-signers|client-certs|init|add)$/;
+var NUGET_SOURCE_FLAG = /^-(?:source|configfile|fallbacksource)(?:[=:].*)?$/i;
+var DOTNET_SOURCE_FLAG = /^(?:--source|-s|--add-source|--configfile|--config-file)(?:[=:].*)?$/i;
+var DOTNET_SOURCE_PROP = /restoresources|restoreadditionalprojectsources|restoreconfigfile/i;
+var DOTNET_RESTORING = /^(?:restore|build|publish|pack)$/;
+var BREW_BUNDLE_READ_ONLY = /^(?:check|list|dump|cleanup|exec|env|sh|edit|remove)$/;
+function pair(pos, a, next) {
+  return pos.some((w, i) => w === a && next.test(pos[i + 1] ?? ""));
+}
+function dotnetInstall(rest) {
+  const pos = positionals(rest, 8);
+  const add = pos.indexOf("add");
+  return pair(pos, "new", /^(?:install|update)$/) || pos.includes("new") && rest.some((w) => /^(?:--install|-i)(?:[=:].*)?$/i.test(w)) || pair(pos, "workload", /^(?:install|update|restore)$/) || pair(pos, "tool", /^(?:install|update|exec|run)$/) || pair(pos, "package", /^add$/) || add >= 0 && pos.indexOf("package", add + 1) >= 0 || pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w)) || rest.some((w) => DOTNET_SOURCE_PROP.test(w));
+}
+var ECO_RULES = [
+  { ecosystem: "cargo", names: /^cargo-binstall$/, commandOnly: false, installs: () => true },
+  { ecosystem: "chocolatey", names: /^choco$/, commandOnly: false, installs: (r) => installVerbFirst(r, CHOCO_VERBS, CHOCO_READ_ONLY) },
+  { ecosystem: "chocolatey", names: /^cinst$/, commandOnly: false, installs: () => true },
+  // cup is a common English word: it counts only as a command.
+  { ecosystem: "chocolatey", names: /^cup$/, commandOnly: true, installs: () => true },
+  { ecosystem: "winget", names: /^winget$/, commandOnly: false, installs: (r) => installVerbFirst(r, WINGET_VERBS, WINGET_READ_ONLY) },
+  {
+    ecosystem: "nuget",
+    names: /^nuget$/,
+    commandOnly: false,
+    installs: (r) => installVerbFirst(r, NUGET_VERBS, NUGET_READ_ONLY) || positionals(r, 4).includes("restore") && r.some((w) => NUGET_SOURCE_FLAG.test(w))
+  },
+  { ecosystem: "nuget", names: /^dotnet$/, commandOnly: false, installs: dotnetInstall },
+  { ecosystem: "brew", names: /^brew$/, commandOnly: false, installs: (r) => {
+    const [a, b] = positionals(r, 2);
+    return a === "bundle" && !BREW_BUNDLE_READ_ONLY.test(b ?? "");
+  } },
+  // The cmdlets install, save or update a module, script or package. A block body counts ({ Install-Module x }).
+  { ecosystem: "winget", names: /^(?:install|update)-wingetpackage$/, commandOnly: false, installs: () => true },
+  { ecosystem: "powershell", names: /^(?:install-(?:module|script|package|psresource|packageprovider)|save-(?:module|script|package|psresource)|update-(?:module|script|psresource))$/, commandOnly: false, installs: () => true }
+];
+var LAUNCHER2 = /^(?:xargs|call|start|\/[ck]|cmd|cmd\.exe|[{(&]|then|do|else|elif|if|while|until|!)$/i;
+var LOOKUP = /^(?:which|where|where\.exe|type|whereis|man|help|get-help|get-command|gcm|get-alias|echo|write-host|write-output|printf)$/i;
+function ecosystemInstall(segment) {
+  let words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(",")).filter(Boolean);
+  if (words[0] === "&") words.shift();
+  const spawns = START_PROCESS.test(words[0] ?? "") || /^(?:iex|invoke-expression)$/i.test(words[0] ?? "");
+  if (spawns) words = words.flatMap((w) => w.split(/\s+/)).filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    if (i > 0 && !spawns && LOOKUP.test(words[i - 1])) continue;
+    const word2 = words[i].replace(/^[({]+(?=.)/, "");
+    const names = [commandName(word2), commandName(word2.replace(/\\/g, ""))];
+    const atCommand = i === 0 || spawns || LAUNCHER2.test(words[i - 1]) || word2 !== words[i];
+    const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs(words.slice(i + 1)));
+    if (rule) return rule.ecosystem;
+  }
+  return null;
 }
 function commandWordInstall(segment) {
   const words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(",")).filter(Boolean);
@@ -21136,6 +21210,8 @@ function readStdin() {
 var OVERRIDE = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
 function asksFor(segment, install, cwd, tool) {
   if (!install) {
+    const eco = ecosystemInstall(segment);
+    if (eco) return [`No blocklist, OSV or age check exists for ${eco} packages: ${segment.slice(0, 200)}.`];
     return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
   }
   const asks = [];

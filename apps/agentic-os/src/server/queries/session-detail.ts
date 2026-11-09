@@ -91,7 +91,8 @@ export type SessionDetail = {
   // Health
   ctxPct: number | null;
   cache: { hitPct: number; savedUsd: number } | null;
-  agentRuns: { count: number; running: number; costUsd: number } | null;
+  /** `unpriced`: runs on a model with no price (their dollars are left out). `advisedRuns`: runs that used the advisor (the sum is a floor). */
+  agentRuns: { count: number; running: number; costUsd: number; unpriced: number; advisedRuns: number } | null;
   prs: { pr: number; state: string | null }[];
   /** From the state file's `hud`. Null when absent: the panel shows a dash. */
   sessionCost: number | null;
@@ -213,6 +214,8 @@ function agentRunsOf(runs: StateSnapshot['agentRuns']): SessionDetail['agentRuns
     count: runs.length,
     running: runs.filter((r) => r.status === 'running').length,
     costUsd: money(runs.reduce((sum, r) => sum + r.costUsd, 0)),
+    unpriced: runs.filter((r) => r.hasUnknownModelCost).length,
+    advisedRuns: runs.filter((r) => r.advised > 0).length,
   };
 }
 

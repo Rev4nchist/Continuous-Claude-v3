@@ -54,7 +54,7 @@ interface PackageInfo {
   version: string | undefined;
 }
 
-type Ecosystem = 'pypi' | 'npm' | 'cargo' | 'go' | 'gem' | 'composer' | 'nuget' | 'brew' | null;
+type Ecosystem = 'pypi' | 'npm' | 'cargo' | 'go' | 'gem' | 'composer' | 'nuget' | 'brew' | 'chocolatey' | 'winget' | 'powershell' | null;
 
 interface MaliciousCheckResult {
   blocked: boolean;
@@ -545,7 +545,133 @@ function hiddenInstall(segment: string, tool: string): boolean {
   const scan = stripQuotedStrings(segment, tool).replace(/\$\([^)]*\)?|`[^`]*`?/g, '');
   if (INSTALL_PATTERNS.some((p) => p.loose.test(scan))) return true;
   if (anyManagerInstall(tokenize(scan))) return true;
-  return commandWordInstall(segment);
+  return commandWordInstall(segment) || ecosystemInstall(segment) !== null;
+}
+
+// ---------------------------------------------------------------------------
+// Ecosystems with no registry check: Chocolatey, winget, NuGet and dotnet, brew bundle, the PowerShell
+// Gallery cmdlets, cargo-binstall. The guard reads only the npm and PyPI registries, so an install from
+// one of these always asks (fail closed): it cannot say what the install fetches.
+// Read from the raw words of a segment, no shell lexer: the same disguises as the other managers
+// (path, .exe suffix, quotes or a backslash inside the name, a call operator, sudo and env prefixes).
+// ---------------------------------------------------------------------------
+
+type EcoName = Exclude<Ecosystem, null>;
+
+interface EcoRule {
+  ecosystem: EcoName;
+  /** The command name: lower case, no folder, no .exe/.cmd/.ps1. */
+  names: RegExp;
+  /** true: the name counts only as the command word (or after a launcher), because the name is a common word or a cmdlet. */
+  commandOnly: boolean;
+  /** The words after the command name. */
+  installs: (rest: string[]) => boolean;
+}
+
+// A word that may start a flag: -y, --source, /p:Prop (msbuild), /? (winget).
+const isFlagWord = (w: string) => /^[-/]/.test(w);
+// The first non-flag words, lower case, with a backslash inside removed (in\stall).
+function positionals(rest: string[], max: number): string[] {
+  const out: string[] = [];
+  for (const w of rest) {
+    if (out.length >= max) break;
+    if (!isFlagWord(w)) out.push(w.replace(/\\/g, '').toLowerCase());
+  }
+  return out;
+}
+
+/**
+ * Some positional (the first 4) is an install verb, or hides its text ($VERB). A read-only verb before it
+ * ends the scan: `choco list install` and `winget search install` look for a package named "install".
+ */
+function installVerbFirst(rest: string[], verbs: RegExp, readOnly: RegExp): boolean {
+  for (const w of positionals(rest, 4)) {
+    if (/^[$`]/.test(w) || verbs.test(w)) return true;
+    if (readOnly.test(w)) return false;
+  }
+  return false;
+}
+
+const CHOCO_VERBS = /^(?:install|upgrade|update|download|sync|synchronize)$/;
+const CHOCO_READ_ONLY = /^(?:list|ls|search|find|info|help|outdated|config|source|feature|pin|apikey|setapikey|new|pack|push|uninstall|export|license|template|templates)$/;
+const WINGET_VERBS = /^(?:install|add|upgrade|update|import|download|configure|repair)$/;
+const WINGET_READ_ONLY = /^(?:list|ls|search|find|show|view|source|settings|setting|hash|validate|export|features|complete|uninstall|remove|rm|pin|test)$/;
+const NUGET_VERBS = /^(?:install|update)$/;
+const NUGET_READ_ONLY = /^(?:locals|sources|source|config|help|list|pack|push|delete|setapikey|spec|verify|sign|trusted-signers|client-certs|init|add)$/;
+// nuget.exe restore, install: -Source and -ConfigFile name another feed.
+const NUGET_SOURCE_FLAG = /^-(?:source|configfile|fallbacksource)(?:[=:].*)?$/i;
+// dotnet restore, build, publish, pack: --source, -s, --add-source, --configfile (also -s:URL, --source=URL), and the msbuild properties.
+const DOTNET_SOURCE_FLAG = /^(?:--source|-s|--add-source|--configfile|--config-file)(?:[=:].*)?$/i;
+const DOTNET_SOURCE_PROP = /restoresources|restoreadditionalprojectsources|restoreconfigfile/i;
+const DOTNET_RESTORING = /^(?:restore|build|publish|pack)$/;
+// brew bundle sub-commands that install nothing. A bare `brew bundle`, `install`, `add` and a --file option install.
+const BREW_BUNDLE_READ_ONLY = /^(?:check|list|dump|cleanup|exec|env|sh|edit|remove)$/;
+
+/** A positional `a` directly followed by a positional that matches `next`: dotnet new install. */
+function pair(pos: string[], a: string, next: RegExp): boolean {
+  return pos.some((w, i) => w === a && next.test(pos[i + 1] ?? ''));
+}
+
+function dotnetInstall(rest: string[]): boolean {
+  const pos = positionals(rest, 8);
+  const add = pos.indexOf('add');
+  return pair(pos, 'new', /^(?:install|update)$/)
+    || (pos.includes('new') && rest.some((w) => /^(?:--install|-i)(?:[=:].*)?$/i.test(w)))
+    || pair(pos, 'workload', /^(?:install|update|restore)$/)
+    || pair(pos, 'tool', /^(?:install|update|exec|run)$/)
+    || pair(pos, 'package', /^add$/)
+    || (add >= 0 && pos.indexOf('package', add + 1) >= 0)
+    || (pos.some((w) => DOTNET_RESTORING.test(w)) && rest.some((w) => DOTNET_SOURCE_FLAG.test(w)))
+    // test, run and msbuild restore too, and a RestoreSources property needs no verb gate (-s on test is a settings flag).
+    || rest.some((w) => DOTNET_SOURCE_PROP.test(w));
+}
+
+const ECO_RULES: EcoRule[] = [
+  { ecosystem: 'cargo', names: /^cargo-binstall$/, commandOnly: false, installs: () => true },
+  { ecosystem: 'chocolatey', names: /^choco$/, commandOnly: false, installs: (r) => installVerbFirst(r, CHOCO_VERBS, CHOCO_READ_ONLY) },
+  { ecosystem: 'chocolatey', names: /^cinst$/, commandOnly: false, installs: () => true },
+  // cup is a common English word: it counts only as a command.
+  { ecosystem: 'chocolatey', names: /^cup$/, commandOnly: true, installs: () => true },
+  { ecosystem: 'winget', names: /^winget$/, commandOnly: false, installs: (r) => installVerbFirst(r, WINGET_VERBS, WINGET_READ_ONLY) },
+  {
+    ecosystem: 'nuget',
+    names: /^nuget$/,
+    commandOnly: false,
+    installs: (r) => installVerbFirst(r, NUGET_VERBS, NUGET_READ_ONLY)
+      || (positionals(r, 4).includes('restore') && r.some((w) => NUGET_SOURCE_FLAG.test(w))),
+  },
+  { ecosystem: 'nuget', names: /^dotnet$/, commandOnly: false, installs: dotnetInstall },
+  { ecosystem: 'brew', names: /^brew$/, commandOnly: false, installs: (r) => { const [a, b] = positionals(r, 2); return a === 'bundle' && !BREW_BUNDLE_READ_ONLY.test(b ?? ''); } },
+  // The cmdlets install, save or update a module, script or package. A block body counts ({ Install-Module x }).
+  { ecosystem: 'winget', names: /^(?:install|update)-wingetpackage$/, commandOnly: false, installs: () => true },
+  { ecosystem: 'powershell', names: /^(?:install-(?:module|script|package|psresource|packageprovider)|save-(?:module|script|package|psresource)|update-(?:module|script|psresource))$/, commandOnly: false, installs: () => true },
+];
+
+// A word after which the next word is a command: xargs, cmd /c, start, a block opener ({ ( &), then, do, else.
+const LAUNCHER = /^(?:xargs|call|start|\/[ck]|cmd|cmd\.exe|[{(&]|then|do|else|elif|if|while|until|!)$/i;
+// A word that looks a name up or prints it: `which choco`, `Get-Help Install-Module`, `echo cinst`. The next word is text, not a command.
+const LOOKUP = /^(?:which|where|where\.exe|type|whereis|man|help|get-help|get-command|gcm|get-alias|echo|write-host|write-output|printf)$/i;
+
+/**
+ * The ecosystem a segment installs from, or null. Any word of the segment may be the command (a leader the
+ * guard does not know, xargs, cmd /c, a PowerShell block), except after a lookup word and for the names marked commandOnly.
+ */
+function ecosystemInstall(segment: string): EcoName | null {
+  let words = tokenize(stripPrefixes(segment)).flatMap((w) => w.split(',')).filter(Boolean);
+  if (words[0] === '&') words.shift();
+  // Start-Process pwsh -ArgumentList "-c","Install-Module x" and iex "choco install x": a quoted argument holds the command.
+  const spawns = START_PROCESS.test(words[0] ?? '') || /^(?:iex|invoke-expression)$/i.test(words[0] ?? '');
+  if (spawns) words = words.flatMap((w) => w.split(/\s+/)).filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    if (i > 0 && !spawns && LOOKUP.test(words[i - 1])) continue;
+    // A block opener glued to the name: {Install-Module, (choco.
+    const word = words[i].replace(/^[({]+(?=.)/, '');
+    const names = [commandName(word), commandName(word.replace(/\\/g, ''))];
+    const atCommand = i === 0 || spawns || LAUNCHER.test(words[i - 1]) || word !== words[i];
+    const rule = ECO_RULES.find((r) => names.some((n) => r.names.test(n)) && (atCommand || !r.commandOnly) && r.installs(words.slice(i + 1)));
+    if (rule) return rule.ecosystem;
+  }
+  return null;
 }
 
 /**
@@ -1387,6 +1513,9 @@ interface InstallVerdict { deny?: string; asks: string[]; advisories: string[] }
  */
 function asksFor(segment: string, install: InstallAnalysis | null, cwd: string | null, tool: string): string[] {
   if (!install) {
+    // An ecosystem with no registry check: say which, in the same words as cargo, nuget and brew.
+    const eco = ecosystemInstall(segment);
+    if (eco) return [`No blocklist, OSV or age check exists for ${eco} packages: ${segment.slice(0, 200)}.`];
     return [`Install command the guard cannot parse: "${segment.slice(0, 200)}". No package check ran. Run it as a plain install (no wrapper or leader) or confirm it.`];
   }
   const asks: string[] = [];

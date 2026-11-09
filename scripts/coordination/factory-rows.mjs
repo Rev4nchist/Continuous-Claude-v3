@@ -12,16 +12,21 @@
  * "other" and never copied. The run and head keys are opaque and only group rows in memory.
  *
  * ---------------------------------------------------------------- input
- * buildFactoryRows({today, exportedAt, targets, cap, prpr, rev, coderabbit, hand})
+ * buildFactoryRows({today, exportedAt, targets, cap, prpr, rev, coderabbit, hand, prsLanded, prsOpened, prsCheck})
  *   today        Chicago day of the run, YYYY-MM-DD
  *   exportedAt   the run time, ISO UTC. A row after it is a bad line
  *   targets      rows {key, value}; window_days sets the week (default 7)
  *   cap          the CodeRabbit monthly file cap (a whole number, 0 allowed) or null
- *   each family  {ok: true, rows, bad} or {ok: false, reason}. reason is one of missing, empty, corrupt, too large, reader error
+ *   each family  {ok: true, rows, bad} or {ok: false, reason}. reason is one of missing, empty, corrupt, too large, reader error, unreachable
  *     prpr       rows {ts, run, head, status}      head '' is a headless run
  *     rev        rows {ts, phase, purpose, timedOut}
  *     coderabbit rows {ts, kind, files, cost}      kind null is a PR row; cost in dollars
  *     hand       rows {date, outcome}               date is a calendar day, no time
+ *     prsLanded  rows {ts}                          a PR landed on main (git), every event read, in the grid or not
+ *     prsOpened  rows {ts}                          a PR opened (GitHub), every event read
+ *   prsCheck     {ok: true, apiCount, weekStart} or {ok: false, reason}: the GitHub count of PRs merged this week. One integer
+ *                and the first day of the week it was asked for. A missing key leaves the check row out.
+ * Design for the PR rows: .claudedocs/2026-11-09-factory-json-b2-design.md (revision 4).
  *
  * ---------------------------------------------------------------- factory.json rows
  * The 7 columns of tiles.json (TILE_COLUMNS), tile is the string "factory", tone is always null. Kinds: figure, text, day, bar.
@@ -31,7 +36,9 @@
  *   F.rows | F.bad_lines | F.as_of | F.first_day | F.note     for F in prpr, rev, rev.coderabbit, hand
  *   F.note                                                    "no data: <reason>" (family dark: the only row of F)
  *                                                             or "no data since <Mon D>" (family quiet: real zeros stay)
- *   prpr.bar.<r>.runs|fail_runs|fail_rows|heads|first_pass   prpr.week.* prpr.today.* prpr.summary prpr.prs.note
+ *   prpr.bar.<r>.runs|fail_runs|fail_rows|heads|first_pass   prpr.week.* prpr.today.* prpr.summary
+ *   prpr.prs.S.bar.<r>  prpr.prs.S.week|today|as_of|rows|bad_lines|note   for S in landed, opened (no first_day: a lookback is not history)
+ *   prpr.prs.landed.check   figure: GitHub count minus git count for the week; text "GitHub agrees", "GitHub counts more" or "git counts more"
  *   rev.bar.<r>.runs  rev.week.runs|purpose.<p>|timed_out  rev.today.*  rev.all.runs  rev.summary
  *   rev.coderabbit.bar.<r>.usd|files  .today.usd  .week.usd|files  .month.*  .price_per_file  .floor_note  .summary
  *   hand.bar.<r>.<outcome>  hand.week.total|<outcome>|success_pct  hand.today.total  hand.summary
@@ -40,7 +47,7 @@ import { addDays, chicagoDay, formatDay, inWindow, pluralize, targetMap, windowO
 
 export const FACTORY_TILE = 'factory';
 
-const REASONS = ['missing', 'empty', 'corrupt', 'too large', 'reader error'];
+const REASONS = ['missing', 'empty', 'corrupt', 'too large', 'reader error', 'unreachable'];
 const STATUS_KEYS = { PASS: 'pass', NOTE: 'note', FAIL: 'fail', SKIP: 'skip' };
 const PURPOSES = ['review', 'bench', 'eval', 'other', 'verify', 'unknown'];
 const OUTCOMES = [
@@ -55,7 +62,6 @@ const CENTS_PER_FILE = 25;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const SENTENCE = {
-  noWriter: 'no writer yet',
   capSource: 'repo cap: review-router.config.json coderabbit.monthly_file_cap, PR rows only',
   floorNote: 'paid rounds only; a review on a free slot is not in the ledger',
 };
@@ -96,8 +102,11 @@ function intake(fam, { today, exportedMs, isHand }) {
   return rows.length === 0 ? { reason: 'empty' } : { rows, bad };
 }
 
-/** The status rows every readable family has: rows, bad_lines, as_of, first_day, and the quiet note. Returns false for a dark one. */
-function familyHeader(add, id, info, today) {
+/**
+ * The status rows every readable family has: rows, bad_lines, as_of, first_day, and the quiet note. Returns false for a dark one.
+ * `firstDay: false` leaves first_day out: for the PR families the oldest row read is a lookback bound, not the start of history.
+ */
+function familyHeader(add, id, info, today, { firstDay = true } = {}) {
   if (info.reason) {
     add(`${id}.note`, 'text', { text: `no data: ${info.reason}` });
     return false;
@@ -107,7 +116,7 @@ function familyHeader(add, id, info, today) {
   add(`${id}.as_of`, 'text', { text: asOf });
   add(`${id}.rows`, 'figure', { value: info.rows.length, text: String(info.rows.length) });
   add(`${id}.bad_lines`, 'figure', { value: info.bad, text: String(info.bad) });
-  add(`${id}.first_day`, 'text', { text: days[0] });
+  if (firstDay) add(`${id}.first_day`, 'text', { text: days[0] });
   if (asOf < today) add(`${id}.note`, 'text', { text: `no data since ${formatDay(asOf)}` });
   return true;
 }
@@ -284,12 +293,55 @@ function handRows(add, info, g) {
   });
 }
 
+/** Events per Chicago day, from intake rows. */
+function countByDay(rows) {
+  const by = new Map();
+  for (const r of rows) bump(by, r.day);
+  return by;
+}
+
+/** One PR sub-family (landed or opened): a bar per grid day, the week and today figures. `id` is the row id prefix. */
+function prsRows(add, id, info, g, label) {
+  const by = countByDay(info.rows);
+  g.grid.forEach((day, i) => add(`${id}.bar.${i + 1}`, 'bar', { rank: i + 1, value: by.get(day) ?? 0, text: label }));
+  const week = sumOver(by, g.weekDays);
+  add(`${id}.week`, 'figure', { value: week, text: String(week) });
+  const todayCount = by.get(g.today) ?? 0;
+  add(`${id}.today`, 'figure', { value: todayCount, text: String(todayCount) });
+}
+
+/** The three texts of the check row. */
+const CHECK_TEXT = { 0: 'GitHub agrees', 1: 'GitHub counts more', [-1]: 'git counts more' };
+
+/**
+ * prpr.prs.landed.check: the GitHub search count of the week minus the git week sum (from the landed rows, never from the key).
+ * Left out, with no note, when either PR family is dark, the key is dark or for another week, or the count is not a whole number.
+ */
+function checkRow(add, landed, opened, g, prsCheck) {
+  if (landed.reason || opened.reason || prsCheck?.ok !== true) return;
+  if (!Number.isInteger(prsCheck.apiCount) || prsCheck.apiCount < 0 || prsCheck.weekStart !== g.weekDays[0]) return;
+  const diff = prsCheck.apiCount - sumOver(countByDay(landed.rows), g.weekDays);
+  add('prpr.prs.landed.check', 'figure', { value: diff, text: CHECK_TEXT[Math.sign(diff)] });
+}
+
+/** The grid of a run: window_days from the targets (default 7), the 2 x window_days grid start and the first day of the week. */
+export function gridOf(today, targets) {
+  const configured = targetMap(targets ?? []).window_days;
+  const windowDays = Number.isInteger(configured) && configured > 0 ? configured : 7;
+  const size = 2 * windowDays;
+  return { windowDays, size, start: addDays(today, -(size - 1)), weekStart: addDays(today, -(windowDays - 1)) };
+}
+
+/** The instant a Chicago day starts, ISO UTC: 05:00:00Z in CDT, 06:00:00Z in CST. */
+export function chicagoMidnight(day) {
+  const cdt = `${day}T05:00:00Z`;
+  return chicagoDay(cdt) === day ? cdt : `${day}T06:00:00Z`;
+}
+
 /** The rows of factory.json. See the header for the input. Returns an array of {id, tile, kind, rank, value, text, tone}. */
 export function buildFactoryRows(input) {
   const { today, exportedAt } = input;
-  const configured = targetMap(input.targets ?? []).window_days;
-  const windowDays = Number.isInteger(configured) && configured > 0 ? configured : 7;
-  const size = 2 * windowDays;
+  const { windowDays, size } = gridOf(today, input.targets);
   const grid = Array.from({ length: size }, (_, i) => addDays(today, i - (size - 1)));
   const w = windowOf(today, windowDays);
   const g = { today, windowDays, grid, w, weekDays: grid.filter((d) => inWindow(d, w)) };
@@ -303,7 +355,11 @@ export function buildFactoryRows(input) {
 
   const prpr = intake(input.prpr, ctx);
   if (familyHeader(add, 'prpr', prpr, today)) prprRows(add, prpr, g);
-  add('prpr.prs.note', 'text', { text: SENTENCE.noWriter });
+  const landed = intake(input.prsLanded, ctx);
+  if (familyHeader(add, 'prpr.prs.landed', landed, today, { firstDay: false })) prsRows(add, 'prpr.prs.landed', landed, g, 'PRs landed');
+  const opened = intake(input.prsOpened, ctx);
+  if (familyHeader(add, 'prpr.prs.opened', opened, today, { firstDay: false })) prsRows(add, 'prpr.prs.opened', opened, g, 'PRs opened');
+  checkRow(add, landed, opened, g, input.prsCheck);
   const rev = intake(input.rev, ctx);
   if (familyHeader(add, 'rev', rev, today)) revRows(add, rev, g);
   const cr = intake(input.coderabbit, ctx);

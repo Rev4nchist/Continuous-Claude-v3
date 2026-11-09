@@ -35,6 +35,15 @@
  *   27  an invalid or future timestamp reaches the grid
  *   28  the summaries lose their fixed shape
  *   M6  the empty head counted as a head (5b)       M7  cap.pct written with cap 0 (18b)
+ *
+ * Phase B2 (PR counts per Chicago day), design .claudedocs/2026-11-09-factory-json-b2-design.md section 8:
+ *   P41 the PR day is a slice, or the week includes rank 7                               (F11)
+ *   P42 a gh failure writes zeros or blanks landed                                       (F13, M8)
+ *   P43 the placeholder prpr.prs.note stays                                              (F16)
+ *   P44 first_day is written for the PR sub-families                                     (F15, M12)
+ *   P45 the check row: dark family, wrong sign text, grid or key sum                     (F21, F22, F27, M17, M18, M19)
+ *   P46 chicagoMidnight uses a fixed offset or UTC midnight                              (F24, M16)
+ *   P14b pre-grid PR events are dropped, or the quiet rule skips the PR families         (M14)
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -42,7 +51,9 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { buildFactoryRows } from './factory-rows.mjs';
-import { TILE_COLUMNS } from './lane-dash-metrics.mjs';
+// A namespace import: a named import of a name that is missing is a SyntaxError that hides every other test in the file.
+import * as FR from './factory-rows.mjs';
+import { addDays, chicagoDay, TILE_COLUMNS } from './lane-dash-metrics.mjs';
 
 const TODAY = '2026-11-08';
 const NOW = '2026-11-08T20:00:00.000Z'; // 14:00 CST
@@ -66,6 +77,9 @@ const start = (day, purpose = null, time) => ({ ts: at(day, time), phase: 'start
 const end = (day, timedOut = false, time) => ({ ts: at(day, time), phase: 'end', purpose: null, timedOut });
 const cr = (day, files, cost, kind = null) => ({ ts: at(day), kind, files, cost });
 const hd = (date, outcome) => ({ date, outcome });
+const ev = (day, time) => ({ ts: at(day, time) }); // a PR event row: ts only
+const WEEK_START = '2026-11-02';
+const chk = (apiCount, weekStart = WEEK_START) => ({ ok: true, apiCount, weekStart });
 
 /** One input with every family readable, and hostile strings in every free field. */
 function fullInput() {
@@ -78,6 +92,9 @@ function fullInput() {
     rev: okFam([start('2026-11-04', 'review'), start('2026-11-04', 'SECRET-purpose'), start('2026-11-04'), end('2026-11-04', true)], 2),
     coderabbit: okFam([cr('2026-11-04', 4, 1), cr('2026-11-04', 2, 0.5, 'cli'), cr('2026-11-03', 1, 0.25, 'SECRET-kind')], 0),
     hand: okFam([hd('2026-11-08', 'SUCCEEDED'), hd('2026-11-07', 'PARTIAL_PLUS'), hd('2026-11-06', 'SECRET-outcome')], 3),
+    prsLanded: okFam([ev('2026-11-07'), ev('2026-11-08')], 1),
+    prsOpened: okFam([ev('2026-11-06'), ev('2026-11-08')], 0),
+    prsCheck: chk(2),
   };
 }
 
@@ -130,10 +147,11 @@ test('3 every row has the 7 columns in order, tile factory, unique id, tone null
 const TEXT_OK = [
   /^\d{4}-\d{2}-\d{2}$/, // an ISO day
   /^\d+$/, /^\d+\.\d%$/, /^\$\d+\.\d{2}$/, /^\d+ files a month$/, /^\$\d+\.\d{2} per file$/, // number forms
-  /^\d+ of \d+ days of data$/, /^no data: (missing|empty|corrupt|too large|reader error)$/, /^no data since [A-Z][a-z]{2} \d{1,2}$/,
+  /^\d+ of \d+ days of data$/, /^no data: (missing|empty|corrupt|too large|reader error|unreachable)$/, /^no data since [A-Z][a-z]{2} \d{1,2}$/,
   /^[A-Z][a-z]{2} \d{4}$/, // "Nov 2026"
   /^(Runs|Runs with a FAIL|FAIL rows|First runs|First-run pass|Review runs|CodeRabbit \$|Files|Succeeded|Partial plus|Partial minus|Failed|Other)$/,
-  /^no writer yet$/,
+  /^(PRs opened|PRs landed)$/,
+  /^(GitHub agrees|GitHub counts more|git counts more)$/,
   /^repo cap: review-router\.config\.json coderabbit\.monthly_file_cap, PR rows only$/,
   /^paid rounds only; a review on a free slot is not in the ledger$/,
   /^In the \d+ days to [A-Z][a-z]{2} \d{1,2}, today so far, \d+ pre-PR runs?, \d+ with a FAIL\.( First-run pass \d+ of \d+ heads? \(\d+\.\d%\)\.)?( \d+ of \d+ days of data\.)?$/,
@@ -242,15 +260,23 @@ test('11 the today rows and the bar.14 rows both exist (schema only)', () => {
   assert.equal(val(rows, 'hand.today.total'), 1);
 });
 
-test('11b prpr family rows: rows, bad_lines, as_of, first_day, the quiet note, and the prs placeholder', () => {
+test('11b prpr family rows: rows, bad_lines, as_of, first_day, the quiet note, and the PR sub-family schema', () => {
   // Breaks when a status row is left out, or the note shows for a family that wrote today.
-  const live = build({ prpr: okFam([pr('2026-11-07', 'a', 'h1', 'PASS'), pr('2026-11-08', 'b', 'h2', 'PASS')], 4) });
+  const live = build({
+    prpr: okFam([pr('2026-11-07', 'a', 'h1', 'PASS'), pr('2026-11-08', 'b', 'h2', 'PASS')], 4),
+    prsLanded: okFam([ev('2026-11-08')]), prsOpened: okFam([ev('2026-11-08')]), prsCheck: chk(1),
+  });
   assert.equal(val(live, 'prpr.rows'), 2);
   assert.equal(val(live, 'prpr.bad_lines'), 4);
   assert.equal(txt(live, 'prpr.as_of'), '2026-11-08');
   assert.equal(txt(live, 'prpr.first_day'), '2026-11-07');
   assert.equal(find(live, 'prpr.note'), undefined);
-  assert.equal(txt(live, 'prpr.prs.note'), 'no writer yet');
+  for (const sub of ['landed', 'opened']) {
+    for (const id of ['as_of', 'rows', 'bad_lines', 'week', 'today']) assert.ok(find(live, `prpr.prs.${sub}.${id}`), `${sub}.${id}`);
+    for (const r of [1, 7, 8, 14]) assert.ok(find(live, `prpr.prs.${sub}.bar.${r}`), `${sub}.bar.${r}`);
+    assert.equal(find(live, `prpr.prs.${sub}.note`), undefined);
+  }
+  assert.equal(find(live, 'prpr.prs.landed.check')?.kind, 'figure');
   const quiet = build({ prpr: okFam([pr('2026-11-07', 'a', 'h1', 'PASS')]) });
   assert.equal(txt(quiet, 'prpr.note'), 'no data since Nov 7');
 });
@@ -415,11 +441,14 @@ test('23 a dark family gives one note row and no other row of its own, never a z
     rev: (id) => id.startsWith('rev.') && !id.startsWith('rev.coderabbit.'),
     coderabbit: (id) => id.startsWith('rev.coderabbit.'),
     hand: (id) => id.startsWith('hand.'),
+    prsLanded: (id) => id.startsWith('prpr.prs.landed.'),
+    prsOpened: (id) => id.startsWith('prpr.prs.opened.'),
   };
-  const noteId = { prpr: 'prpr.note', rev: 'rev.note', coderabbit: 'rev.coderabbit.note', hand: 'hand.note' };
+  // prsCheck has no entry: its row lives in the landed id space and is a figure, not a bar.
+  const noteId = { prpr: 'prpr.note', rev: 'rev.note', coderabbit: 'rev.coderabbit.note', hand: 'hand.note', prsLanded: 'prpr.prs.landed.note', prsOpened: 'prpr.prs.opened.note' };
   const live = fullInput();
   for (const fam of Object.keys(own)) {
-    for (const reason of ['missing', 'empty', 'corrupt', 'too large', 'reader error']) {
+    for (const reason of ['missing', 'empty', 'corrupt', 'too large', 'reader error', 'unreachable']) {
       const rows = build({ ...live, [fam]: { ok: false, reason } });
       const mine = rows.filter((r) => own[fam](r.id));
       assert.deepEqual(mine.map((r) => r.id), [noteId[fam]], `${fam}/${reason}`);
@@ -501,4 +530,111 @@ test('28 the four summaries read as the design says', () => {
   assert.equal(txt(rows, 'rev.summary'), '1 review run in the 7 days to Nov 8. Last run Nov 4. 2 runs since Nov 1.');
   assert.equal(txt(rows, 'rev.coderabbit.summary'), 'CodeRabbit: $0.00 today, $1.00 this week, $1.00 in Nov 2026 ($1.00 on PRs, 4 of 160 files). Last paid run Nov 4.');
   assert.equal(txt(rows, 'hand.summary'), '2 handoffs in the 7 days to Nov 8, 1 succeeded (50.0%). 2 today.');
+});
+
+// ---------------------------------------------------------------- B2: PR counts per Chicago day
+
+const subs = ['landed', 'opened'];
+const sid = (sub, rest) => `prpr.prs.${sub}.${rest}`;
+
+test('P41 PR events bucket by Chicago day: 11-01 is rank 7 outside the week, 05:30Z on 11-08 is 11-07 (rank 13)', () => {
+  // Breaks when the day is the ISO slice (the 05:30Z row lands on rank 14) or the week sum includes rank 7.
+  const events = [ev('2026-11-01'), ev('2026-11-07'), ev('2026-11-08'), { ts: '2026-11-08T05:30:00.000Z' }];
+  const rows = build({ prsLanded: okFam(events), prsOpened: okFam(events) });
+  for (const sub of subs) {
+    assert.equal(val(rows, sid(sub, 'bar.7')), 1, `${sub} rank 7`);
+    assert.equal(val(rows, sid(sub, 'bar.13')), 2, `${sub} rank 13`);
+    assert.equal(val(rows, sid(sub, 'bar.14')), 1, `${sub} rank 14`);
+    assert.equal(val(rows, sid(sub, 'bar.1')), 0, `${sub} real zero`);
+    assert.equal(val(rows, sid(sub, 'week')), 3, `${sub} week is ranks 8..14`);
+    assert.equal(val(rows, sid(sub, 'today')), 1, `${sub} today is rank 14`);
+    assert.equal(txt(rows, sid(sub, 'week')), '3');
+    assert.equal(find(rows, sid(sub, 'bar.14')).kind, 'bar');
+    assert.equal(txt(rows, sid(sub, 'bar.14')), sub === 'landed' ? 'PRs landed' : 'PRs opened');
+    assert.equal(val(rows, sid(sub, 'rows')), 4);
+    assert.equal(txt(rows, sid(sub, 'as_of')), '2026-11-08');
+  }
+});
+
+test('P42 a gh failure darkens opened only: one note row, no bar, and landed keeps its rows', () => {
+  // Breaks when a gh failure writes zeros for opened or blanks landed (M8).
+  const rows = build({ prsLanded: okFam([ev('2026-11-08')]), prsOpened: { ok: false, reason: 'unreachable' }, prsCheck: { ok: false, reason: 'unreachable' } });
+  const opened = rows.filter((r) => r.id.startsWith('prpr.prs.opened.'));
+  assert.deepEqual(opened.map((r) => r.id), ['prpr.prs.opened.note']);
+  assert.equal(opened[0].text, 'no data: unreachable');
+  assert.equal(opened[0].value, null);
+  for (let r = 1; r <= 14; r++) assert.equal(typeof val(rows, `prpr.prs.landed.bar.${r}`), 'number', `landed bar ${r}`);
+  assert.equal(val(rows, 'prpr.prs.landed.week'), 1);
+});
+
+test('P43 no row is prpr.prs.note and no text is "no writer yet", for every input of test 4', () => {
+  // Breaks when the placeholder stays.
+  for (const input of [fullInput(), { ...fullInput(), cap: null }, { ...fullInput(), cap: 0 }, {}]) {
+    const rows = build(input);
+    assert.equal(find(rows, 'prpr.prs.note'), undefined);
+    assert.ok(!rows.some((r) => r.text === 'no writer yet'));
+  }
+  const empty = build({});
+  assert.equal(txt(empty, 'prpr.prs.landed.note'), 'no data: missing');
+  assert.equal(txt(empty, 'prpr.prs.opened.note'), 'no data: missing');
+});
+
+test('P44 the PR sub-families have no first_day; rows, bad_lines and as_of exist; prpr keeps its own', () => {
+  // Breaks when familyHeader ignores the firstDay option (the lookback start would read as history).
+  const rows = build({ ...fullInput() });
+  for (const sub of subs) {
+    assert.equal(find(rows, sid(sub, 'first_day')), undefined, sub);
+    for (const k of ['rows', 'bad_lines', 'as_of']) assert.ok(find(rows, sid(sub, k)), `${sub}.${k}`);
+  }
+  assert.ok(find(rows, 'prpr.first_day'));
+  assert.equal(val(rows, sid('landed', 'bad_lines')), 1);
+});
+
+test('P45 check row: api minus git over the week only; three texts; absent when a family or the key is dark', () => {
+  // Breaks when the row is written from a dark family (M17), the sign text is wrong, the week sum covers the grid or every row (M19),
+  // or the key's own count replaces the row sum (M18).
+  const landed = okFam([ev('2026-11-02'), ev('2026-11-03'), ev('2026-11-04'), ev('2026-11-06'), ev('2026-11-08'), ev('2026-10-28')]); // 10-28 is rank 3: in the grid, not the week
+  const opened = okFam([ev('2026-11-08')]);
+  const row = (key, over = {}) => find(build({ prsLanded: landed, prsOpened: opened, prsCheck: key, ...over }), 'prpr.prs.landed.check');
+  const agree = row(chk(5));
+  assert.equal(agree.kind, 'figure');
+  assert.equal(agree.text, 'GitHub agrees');
+  assert.equal(agree.value, 0);
+  assert.equal(agree.rank, null);
+  const more = row(chk(7));
+  assert.deepEqual([more.text, more.value], ['GitHub counts more', 2]);
+  const less = row(chk(3));
+  assert.deepEqual([less.text, less.value], ['git counts more', -2]);
+  assert.equal(row({ ...chk(5), gitCount: 9 }).text, 'GitHub agrees', 'a gitCount in the key is never read');
+  assert.equal(row(chk(5), { prsLanded: dark }), undefined, 'landed dark');
+  assert.equal(row(chk(5), { prsOpened: { ok: false, reason: 'unreachable' } }), undefined, 'opened dark');
+  assert.equal(row({ ok: false, reason: 'unreachable' }), undefined, 'prsCheck dark');
+  assert.equal(row(chk(5, '2026-11-03')), undefined, 'weekStart one day off');
+  assert.equal(row(undefined), undefined, 'prsCheck missing');
+  assert.equal(row(chk(5.5)), undefined, 'a count that is not a whole number');
+  assert.equal(find(build({ prsLanded: landed, prsOpened: opened, prsCheck: { ok: false, reason: 'unreachable' } }), 'prpr.prs.landed.note'), undefined, 'no check note');
+});
+
+test('P46 chicagoMidnight: 05:00Z in CDT, 06:00Z in CST; the result is that Chicago day and the second before is the day before', () => {
+  // Breaks on UTC midnight or a fixed offset (M16).
+  const want = { '2026-10-26': '05:00:00Z', '2026-11-01': '05:00:00Z', '2026-07-28': '05:00:00Z', '2026-11-03': '06:00:00Z', '2026-03-07': '06:00:00Z', '2026-03-08': '06:00:00Z' };
+  for (const [day, tail] of Object.entries(want)) {
+    const at0 = FR.chicagoMidnight(day);
+    assert.equal(at0, `${day}T${tail}`, day);
+    assert.equal(chicagoDay(at0), day, `${day} result`);
+    assert.equal(chicagoDay(new Date(Date.parse(at0) - 1000).toISOString()), addDays(day, -1), `${day} second before`);
+  }
+});
+
+test('P14b PR events all before the grid: 14 real zero bars, as_of the pre-grid day, the quiet note', () => {
+  // Breaks when pre-grid events are dropped in the builder, or the quiet rule skips the PR families (M14).
+  const today = '2026-11-09';
+  const rows = build({ today, exportedAt: '2026-11-09T20:00:00.000Z', prsLanded: okFam([ev('2026-10-20')]), prsOpened: okFam([ev('2026-10-20')]) });
+  for (const sub of subs) {
+    for (let r = 1; r <= 14; r++) assert.strictEqual(val(rows, sid(sub, `bar.${r}`)), 0, `${sub} rank ${r}`);
+    assert.equal(txt(rows, sid(sub, 'as_of')), '2026-10-20');
+    assert.equal(txt(rows, sid(sub, 'note')), 'no data since Oct 20');
+    assert.equal(val(rows, sid(sub, 'rows')), 1);
+    assert.equal(val(rows, sid(sub, 'week')), 0);
+  }
 });

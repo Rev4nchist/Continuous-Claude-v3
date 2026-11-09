@@ -22,6 +22,21 @@
  *   35  one dark family stops the run
  *   36  the envelope has the wrong shape or goes over 256 KB
  *   CLI an unknown flag runs, or --dash-config is ignored
+ *
+ * Phase B2 (PR counts per Chicago day), design .claudedocs/2026-11-09-factory-json-b2-design.md section 8. Fake runners only:
+ * no real git, no real gh, no network.
+ *   R45  a squash is missed, a `|` subject is split, a chore counts, a duplicate doubles, a CR defeats the anchor     (F5, F6, F25, M9)
+ *   R45b the commit time goes through the local zone                                                                  (F11, M11)
+ *   R45c pre-grid lines are filtered, or skipped lines count as lines                                                 (F7, F7b, M14)
+ *   R46  a git failure is exit 1, or a null status passes as success                                                  (F4)
+ *   R47  paging never stops, a boundary duplicate doubles, the grid-start stop is missing                             (F8, F9)
+ *   R48  a gh failure is a zero, exit 1, or its stdout or stderr tail is logged                                       (F1, F14, M8)
+ *   R48b the per-call timeout is a constant, or the budget is dropped                                                 (F2, M15)
+ *   R48c the fallback gh path is missing                                                                              (F3)
+ *   R48d a partial page set is kept                                                                                   (F9b, M13)
+ *   R50  the pager is not a GET or loses the jq cut                                                                   (F18)
+ *   R51  HEAD replaces main, --since is a bare day                                                                    (F10, F20, M10)
+ *   R52  the search bound is UTC midnight, or loses its upper bound, base:main or its guard; a 0 is not trusted       (F23, F24, F26, F28, M16, M20)
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, utimesSync, writeFileSync } from 'node:fs';
@@ -33,6 +48,8 @@ import { fileURLToPath } from 'node:url';
 import {
   defaultPaths, main, MAX_BYTES, readDashTargets, readHandoffs, readJsonlFamily, readRouterCap, writeFactory,
 } from './export-factory-data.mjs';
+// A namespace import: a named import of a missing reader is a SyntaxError that hides every other test in the file.
+import * as EX from './export-factory-data.mjs';
 import { buildFactoryRows } from './factory-rows.mjs';
 
 const NOW = '2026-11-08T20:00:00.000Z';
@@ -44,6 +61,52 @@ const quiet = () => ({ err: () => {}, log: () => {} });
 const HEX40 = '0123456789abcdef0123456789abcdef01234567';
 const good = (i, extra = {}) => ({ ts: `2026-11-08T1${i}:00:00.000Z`, run_id: `run-${i}`, head: HEX40, status: 'PASS', step: 'x', ...extra });
 const read = (file, family, deps = {}) => readJsonlFamily(file, family, NOW, { ...quiet(), ...deps });
+
+// ---------------------------------------------------------------- B2 fakes: one `run(file, args, opts)` for git and gh
+
+const SEP = '\x1f';
+const P1 = 'aaaa1111';
+const P2 = 'aaaa1111 bbbb2222';
+const unix = (iso) => Math.floor(Date.parse(iso) / 1000);
+const gl = (parents, iso, subject) => `${parents}${SEP}${unix(iso)}${SEP}${subject}`;
+const gitText = (lines) => lines.join('\n') + '\n';
+/** An error as execFileSync throws it. The message holds the command line, as the real one does. */
+const fail = (o) => Object.assign(new Error('Command failed: gh api repos/Rev4nchist/Continuous-Claude-v3 SECRET'), o);
+const TIMEOUT = () => fail({ code: 'ETIMEDOUT', status: null, signal: 'SIGTERM' });
+const item = (number, created_at, extra = {}) => ({ number, created_at, ...extra });
+const pageOf = (url) => Number(/[?&]page=(\d+)/.exec(url)?.[1] ?? 1);
+const kindOf = (args) => (args[0] === 'log' ? 'git' : (args.some((a) => String(a).includes('search/issues')) ? 'search' : 'pager'));
+
+const WORLD_GIT = () => gitText([
+  gl(P2, '2026-11-07T18:00:00Z', 'Merge pull request #999 from Rev4nchist/feat/SECRET-branch'),
+  gl(P1, '2026-11-08T17:00:00Z', 'feat: SECRET title (#998)'),
+  gl(P2, '2026-11-05T18:00:00Z', 'Merge pull request #997 from Rev4nchist/feat/SECRET-branch'),
+  gl(P1, '2026-11-08T01:00:00Z', 'chore(security): daily blocklist update [automated]'),
+]);
+const WORLD_ITEMS = () => [
+  item(997, '2026-11-08T17:30:00Z', { title: 'SECRET title', user: { login: 'SECRET' }, head: { ref: 'feat/SECRET' }, draft: true, merged_at: '2026-11-08T18:00:00Z' }),
+  item(996, '2026-11-07T17:30:00Z', { title: 'SECRET title', user: { login: 'SECRET' }, head: { ref: 'feat/SECRET' }, draft: false }),
+  item(995, '2026-11-02T17:30:00Z', { title: 'SECRET title', user: { login: 'SECRET' }, head: { ref: 'feat/SECRET' }, draft: false }),
+];
+const WORLD_SEARCH = () => '{"total_count": 7, "items": [{"title": "SECRET"}]}';
+
+/**
+ * A fake run. `h` = {git, pager, search}: each (call, calls) => string, or throws. A call is {kind, file, args, opts}. The
+ * handler is picked by the args, never by the call order. Returns {run, calls}.
+ */
+function fakeRun(h = {}) {
+  const calls = [];
+  const handlers = { git: WORLD_GIT, pager: () => JSON.stringify(WORLD_ITEMS()), search: WORLD_SEARCH, ...h };
+  const run = (file, args, opts) => {
+    const call = { kind: kindOf(args), file, args, opts };
+    calls.push(call);
+    return handlers[call.kind](call, calls);
+  };
+  return { run, calls };
+}
+const ghDown = () => { throw fail({ status: 1, stderr: 'error connecting to api.github.com', stdout: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest/pulls/pulls#list-pull-requests","status":"404"}' }); };
+const gitDown = () => { throw fail({ status: 128, stderr: 'fatal: not a git repository' }); };
+const readerDeps = (run, extra = {}) => ({ run, err: () => {}, clock: () => 0, ...extra });
 
 // ---------------------------------------------------------------- 27 file states
 
@@ -237,7 +300,7 @@ test('32 the reducers keep only the allowed keys, and run and head are opaque', 
 
 // ---------------------------------------------------------------- the CLI
 
-function world({ dark = false, extra = {} } = {}) {
+function world({ dark = false, extra = {}, handlers = {}, deps: moreDeps = {} } = {}) {
   const d = tmp();
   const f = {
     out: path.join(d, 'out'),
@@ -259,11 +322,12 @@ function world({ dark = false, extra = {} } = {}) {
   put(f.handoffs, 'general/a.yaml', HEADER('2026-11-08', 'SUCCEEDED'));
   put(f.handoffs, 'general/b.yaml', HEADER('2026-11-07', 'PARTIAL_PLUS'));
   if (dark) for (const k of ['gates', 'reviews', 'coderabbit', 'handoffs']) f[k] = path.join(d, `missing-${k}`);
-  const argv = ['--out', f.out, '--gates', f.gates, '--reviews', f.reviews, '--coderabbit', f.coderabbit, '--handoffs', f.handoffs, '--router-config', f.routerConfig, '--dash-config', f.dashConfig];
+  const argv = ['--out', f.out, '--gates', f.gates, '--reviews', f.reviews, '--coderabbit', f.coderabbit, '--handoffs', f.handoffs, '--router-config', f.routerConfig, '--dash-config', f.dashConfig, '--git-root', d, '--repo', 'owner/repo'];
   const logs = [];
   const errs = [];
-  const deps = { now: () => NOW, log: (m) => logs.push(m), err: (m) => errs.push(m) };
-  return { d, f, argv, logs, errs, deps, file: path.join(f.out, 'factory.json') };
+  const { run, calls } = fakeRun(handlers);
+  const deps = { now: () => NOW, log: (m) => logs.push(m), err: (m) => errs.push(m), run, ...moreDeps };
+  return { d, f, argv, logs, errs, deps, calls, file: path.join(f.out, 'factory.json') };
 }
 const readOut = (w) => JSON.parse(readFileSync(w.file, 'utf8'));
 
@@ -273,9 +337,12 @@ test('33 privacy, end to end: no path, branch, head, session id, prompt, finding
   const w = world();
   assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
   const doc = readOut(w);
-  const forbidden = [/SECRET/i, /abcdef12/i, /C:\\/, /Users/, /notion/i, /unowned/i, /feat\//, /secret\.(ts|mjs)/i];
+  const forbidden = [/SECRET/i, /abcdef12/i, /C:\\/, /Users/, /notion/i, /unowned/i, /feat\//, /secret\.(ts|mjs)/i,
+    /Rev4nchist/, /#\d+/, /Merge pull request/, /\(#/, /https?:\/\//, /search\/issues/];
   for (const r of doc.rows) for (const s of [r.id, r.text ?? '']) for (const re of forbidden) assert.ok(!re.test(s), `${r.id}: ${s} matches ${re}`);
   const raw = readFileSync(w.file, 'utf8');
+  for (const re of forbidden) assert.ok(!re.test(raw), `raw bytes match ${re}`);
+  assert.ok(w.calls.some((c) => c.kind === 'git') && w.calls.some((c) => c.kind === 'pager') && w.calls.some((c) => c.kind === 'search'), 'all three fake runners were used');
   assert.ok(!/[0-9a-f]{40}/.test(raw), 'a 40-hex head in the raw bytes');
   assert.ok(!/#[0-9a-f]{8}/.test(raw), 'a session handle in the raw bytes');
   assert.ok(!/SECRET|abcdef12/i.test(raw), 'a seeded string in the raw bytes');
@@ -284,18 +351,23 @@ test('33 privacy, end to end: no path, branch, head, session id, prompt, finding
   }
   const prpr = doc.rows.find((r) => r.id === 'prpr.rows');
   assert.equal(prpr.value, 3);
+  const landed = doc.rows.find((r) => r.id === 'prpr.prs.landed.week');
+  assert.equal(landed.value, 3, 'the PR families are in the file, so the privacy check ran over them');
 });
 
 test('33b the log has one counts-only line per family and one for the file', async () => {
   // Breaks when a family or the file has no line, or a line carries a name.
   const w = world();
   await main(w.argv, w.deps);
-  assert.equal(w.logs.length, 5, w.logs.join('\n'));
+  assert.equal(w.logs.length, 8, w.logs.join('\n'));
   assert.match(w.logs[0], /^prpr: 3 rows, 0 bad lines, as of 2026-11-08$/);
   assert.match(w.logs[1], /^rev: 2 rows, 0 bad lines, as of 2026-11-04$/);
   assert.match(w.logs[2], /^rev\.coderabbit: 1 rows, 0 bad lines, as of 2026-11-04$/);
   assert.match(w.logs[3], /^hand: 2 files, 0 bad lines, as of 2026-11-08$/);
-  assert.match(w.logs[4], /^factory\.json: \d+ rows, \d+ bytes/);
+  assert.match(w.logs[4], /^prpr\.prs\.landed: 3 events, 0 bad lines, as of 2026-11-08$/);
+  assert.match(w.logs[5], /^prpr\.prs\.opened: 3 events, 0 bad lines, as of 2026-11-08$/);
+  assert.match(w.logs[6], /^prpr\.prs\.check: 7 merged this week$/);
+  assert.match(w.logs[7], /^factory\.json: \d+ rows, \d+ bytes/);
 });
 
 const NEIGHBOURS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles', 'flow'].map((n) => `${n}.json`).concat('refresh.json');
@@ -331,16 +403,19 @@ test('34 the write is temp then rename, under .factory.lock; a held lock gives e
   assert.equal(existsSync(path.join(w.f.out, '.factory.lock')), false);
 });
 
-test('35 all four families dark: exit 0, the shared rows and four notes', async () => {
+test('35 all four families dark, git and gh down: exit 0, the shared rows and six notes, no check row', async () => {
   // Breaks when one dark family stops the run, or the run writes nothing.
-  const w = world({ dark: true });
+  const w = world({ dark: true, handlers: { git: gitDown, pager: ghDown, search: ghDown } });
   assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
   const doc = readOut(w);
   const byId = Object.fromEntries(doc.rows.map((r) => [r.id, r]));
   for (const id of ['prpr.note', 'rev.note', 'rev.coderabbit.note', 'hand.note']) assert.equal(byId[id].text, 'no data: missing', id);
   assert.equal(byId['factory.days'].value, 14);
   assert.equal(byId['factory.today'].text, '2026-11-08');
-  assert.equal(byId['prpr.prs.note'].text, 'no writer yet');
+  assert.equal(byId['prpr.prs.landed.note'].text, 'no data: reader error');
+  assert.equal(byId['prpr.prs.opened.note'].text, 'no data: unreachable');
+  assert.equal(byId['prpr.prs.note'], undefined, 'the placeholder is gone');
+  assert.equal(byId['prpr.prs.landed.check'], undefined, 'no check row when landed and opened are dark');
   assert.ok(!doc.rows.some((r) => r.kind === 'bar'), 'no bar rows from dark families');
   assert.ok(w.logs.some((l) => l === 'prpr: no data: missing'), w.logs.join('\n'));
 });
@@ -353,7 +428,7 @@ test('36 the envelope is {sql, exportedAt, rows}, under 256 KB, with the run clo
   assert.deepEqual(Object.keys(doc), ['sql', 'exportedAt', 'rows']);
   assert.equal(doc.exportedAt, NOW);
   assert.ok(Number.isFinite(Date.parse(doc.exportedAt)));
-  assert.match(doc.sql, /^Computed in Node by scripts\/coordination\/factory-rows\.mjs from four local files\. No query\.$/);
+  assert.match(doc.sql, /^Computed in Node by scripts\/coordination\/factory-rows\.mjs from four local files, git log on main and two GitHub reads\. No query\.$/);
   assert.ok(readFileSync(w.file).length < 256 * 1024);
   const d = tmp();
   assert.throws(() => writeFactory(d, { sql: 's', exportedAt: NOW, rows: [{ id: 'x'.repeat(300 * 1024) }] }), /256 KB/);
@@ -389,4 +464,279 @@ test('38 an unknown flag or a flag with no value exits 2 and writes nothing', as
   assert.equal(await main(['--out'], w.deps), 2);
   assert.equal(existsSync(w.file), false);
   assert.equal(await main(['--help'], w.deps), 0);
+});
+
+// ---------------------------------------------------------------- B2: PR counts per Chicago day
+
+const rowsById = (w) => Object.fromEntries(readOut(w).rows.map((r) => [r.id, r]));
+const landedOf = (lines, deps = {}) => EX.readLanded({ cwd: '/x', since: '2026-07-28T00:00:00Z' }, readerDeps(fakeRun({ git: () => gitText(lines) }).run, deps));
+const CHORE = () => gl(P1, '2026-11-08T01:00:00Z', 'chore(security): daily blocklist update [automated]');
+
+test('R45 git lines: merge, squash, a squash with | and a CR are rows; chores and plain merges are skipped; a duplicate and a bad ct are lines', async () => {
+  // Breaks when the squash is missed (M9), a plain split drops the | subject, a chore counts, a duplicate doubles, or a CR defeats the $ anchor.
+  const r = landedOf([
+    gl(P2, '2026-11-07T18:00:00Z', 'Merge pull request #101 from o/feat/x'),
+    gl(P1, '2026-11-07T19:00:00Z', 'feat: a thing (#102)'),
+    gl(P1, '2026-11-07T20:00:00Z', 'fix: a | b (#998)'),
+    CHORE(),
+    gl(P2, '2026-11-07T21:00:00Z', "Merge remote-tracking branch 'fork/main' into x"),
+    gl(P2, '2026-11-07T22:00:00Z', 'Merge pull request #101 from o/feat/x'),
+    `${P2}${SEP}x${SEP}Merge pull request #103 from o/feat/y`,
+    `${gl(P1, '2026-11-07T23:00:00Z', 'feat: crlf (#997)')}\r`,
+  ]);
+  assert.equal(r.ok, true);
+  assert.equal(r.bad, 1);
+  assert.deepEqual(r.rows.map((x) => x.ts), ['2026-11-07T18:00:00.000Z', '2026-11-07T19:00:00.000Z', '2026-11-07T20:00:00.000Z', '2026-11-07T23:00:00.000Z']);
+  for (const row of r.rows) assert.deepEqual(Object.keys(row), ['ts'], 'a row is {ts} and nothing else');
+});
+
+test('R45 plain one-parent lines (a rebase land, a direct push) are skipped, not bad', () => {
+  // Breaks when a plain commit with no PR shape is a bad line (F5b).
+  const r = landedOf([gl(P2, '2026-11-07T18:00:00Z', 'Merge pull request #101 from o/x'), gl(P1, '2026-11-07T19:00:00Z', 'fix: a plain commit'), gl(P1, '2026-11-07T19:30:00Z', 'fix: another plain commit')]);
+  assert.deepEqual([r.ok, r.rows.length, r.bad], [true, 1, 0]);
+});
+
+test('R45b the ct is unix seconds read as UTC: 06:30Z on 11-01 is exactly that ISO instant (M11)', () => {
+  // Breaks when the reader goes through the local zone, the commit offset or a slice.
+  const r = landedOf([gl(P2, '2026-11-01T06:30:00Z', 'Merge pull request #5 from o/x'), gl(P2, '2026-11-01T07:30:00Z', 'Merge pull request #6 from o/x')]);
+  assert.deepEqual(r.rows.map((x) => x.ts), ['2026-11-01T06:30:00.000Z', '2026-11-01T07:30:00.000Z']);
+});
+
+test('R45c lines before the grid stay rows; only chores is "empty"; skipped lines are not lines', async () => {
+  // Breaks when pre-grid lines are filtered in the reader or the collector (M14), or a skipped line counts in `lines`.
+  const pre = landedOf([gl(P2, '2026-10-20T18:00:00Z', 'Merge pull request #7 from o/x'), gl(P1, '2026-10-21T18:00:00Z', 'feat: y (#8)')]);
+  assert.deepEqual(pre.rows.map((x) => x.ts), ['2026-10-20T18:00:00.000Z', '2026-10-21T18:00:00.000Z']);
+  const chores = landedOf(Array.from({ length: 14 }, CHORE));
+  assert.deepEqual(chores, { ok: false, reason: 'empty' }, 'chores only is empty, never corrupt');
+  const mostlyBad = landedOf([gl(P2, '2026-11-07T18:00:00Z', 'Merge pull request #9 from o/x'), `${P2}${SEP}x${SEP}Merge pull request #10 from o/x`, `${P1}${SEP}y${SEP}feat: z (#11)`, ...Array.from({ length: 6 }, CHORE)]);
+  assert.deepEqual(mostlyBad, { ok: false, reason: 'corrupt' }, '2 bad of 3 lines: the 6 chores are not lines');
+  const w = world({ handlers: { git: () => gitText([gl(P2, '2026-10-20T18:00:00Z', 'Merge pull request #7 from o/x')]) } });
+  assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
+  const byId = rowsById(w);
+  assert.equal(byId['prpr.prs.landed.as_of'].text, '2026-10-20');
+  assert.equal(byId['prpr.prs.landed.note'].text, 'no data since Oct 20');
+  assert.equal(byId['prpr.prs.landed.rows'].value, 1);
+  for (let i = 1; i <= 14; i++) assert.strictEqual(byId[`prpr.prs.landed.bar.${i}`].value, 0);
+});
+
+test('R46 git fails (ENOENT, exit 128, a timeout with a null status): landed is "reader error", one stderr line, opened rows stay, exit 0', async () => {
+  // Breaks when a git failure is exit 1, throws, or a null status passes as success.
+  const downs = [() => { throw fail({ code: 'ENOENT' }); }, gitDown, () => { throw TIMEOUT(); }];
+  for (const git of downs) {
+    const errs = [];
+    const direct = EX.readLanded({ cwd: '/x', since: 'S' }, readerDeps(fakeRun({ git }).run, { err: (m) => errs.push(m) }));
+    assert.deepEqual(direct, { ok: false, reason: 'reader error' });
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].length <= 200 && !/Rev4nchist/.test(errs[0]), errs[0]);
+    const w = world({ handlers: { git } });
+    assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
+    const byId = rowsById(w);
+    assert.equal(byId['prpr.prs.landed.note'].text, 'no data: reader error');
+    assert.ok(byId['prpr.prs.opened.bar.14'], 'opened still has rows');
+    assert.equal(byId['prpr.prs.landed.check'], undefined);
+  }
+});
+
+const itemsOn = (from, n, day = '2026-11-08T17:00:00Z') => Array.from({ length: n }, (_, i) => item(from + i, day));
+const opened = (pager, deps = {}) => {
+  const f = fakeRun({ pager });
+  return { f, result: EX.readOpened({ repo: 'o/r', start: '2026-10-26' }, readerDeps(f.run, deps)) };
+};
+
+test('R47 paging: a short page stops it, a boundary duplicate counts once, 10 full pages is "too large", a page past the grid start stops at once', () => {
+  // Breaks when paging never stops, a duplicate doubles, pre-grid items are dropped, or the grid-start stop is missing.
+  const one = opened((c) => JSON.stringify(pageOf(c.args.join(' ')) === 1 ? itemsOn(1, 100) : [...itemsOn(100, 30, '2026-10-01T17:00:00Z')]));
+  assert.equal(one.f.calls.length, 2);
+  assert.equal(one.result.ok, true);
+  assert.equal(one.result.rows.length, 129, '130 items, one boundary duplicate (#100), pre-grid items kept');
+  assert.equal(one.result.bad, 0);
+  const many = opened((c) => JSON.stringify(itemsOn(pageOf(c.args.join(' ')) * 1000, 100)));
+  assert.equal(many.f.calls.length, 10);
+  assert.deepEqual(many.result, { ok: false, reason: 'too large' });
+  const past = opened(() => JSON.stringify([...itemsOn(1, 99), item(500, '2026-10-20T17:00:00Z')]));
+  assert.equal(past.f.calls.length, 1, 'page 1 crosses the grid start: no second call');
+  assert.equal(past.result.rows.length, 100);
+});
+
+test('R47 items with no usable created_at or number are bad; an empty first page is "empty"', () => {
+  // Breaks when a malformed item becomes a row or an empty list is read as zero PRs.
+  const r = opened(() => JSON.stringify([item(1, '2026-11-08T17:00:00Z'), item(2, 'nope'), { number: 3 }, item(4, '2026-11-08T17:00:00Z'), item(5, '2026-11-08T17:00:00Z')])).result;
+  assert.deepEqual([r.ok, r.rows.length, r.bad], [true, 3, 2]);
+  assert.deepEqual(opened(() => '[]').result, { ok: false, reason: 'empty' });
+});
+
+test('R48 gh fails with a body that holds a URL: opened is "unreachable", landed stays, no check row, exit 0, one short stderr line, no URL or repo in any log', async () => {
+  // Breaks when a gh failure is exit 1 or a zero (M8), or when e.stdout, the command line or the repo reach a log.
+  const w = world({ handlers: { pager: ghDown, search: ghDown } });
+  assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
+  const byId = rowsById(w);
+  assert.equal(byId['prpr.prs.opened.note'].text, 'no data: unreachable');
+  assert.deepEqual(Object.keys(byId).filter((id) => id.startsWith('prpr.prs.opened.')), ['prpr.prs.opened.note']);
+  assert.ok(byId['prpr.prs.landed.bar.14']);
+  assert.equal(byId['prpr.prs.landed.check'], undefined);
+  assert.ok(w.logs.includes('prpr.prs.opened: no data: unreachable'), w.logs.join('\n'));
+  assert.ok(w.logs.includes('prpr.prs.check: no data: unreachable'), w.logs.join('\n'));
+  const mine = w.errs.filter((m) => /prpr\.prs\.opened/.test(m));
+  assert.equal(mine.length, 1, w.errs.join('\n'));
+  assert.ok(mine[0].length <= 200, mine[0]);
+  for (const line of w.logs.concat(w.errs)) assert.ok(!/https?:\/\/|owner\/repo|Rev4nchist|documentation_url|Command failed/.test(line), `log leaks: ${line}`);
+});
+
+test('R48 a gh stderr line is cut after its (HTTP nnn) token: the user id and request id never reach the log', () => {
+  // Breaks when the whole stderr line is logged.
+  const errs = [];
+  const run = () => { throw fail({ status: 1, stderr: 'gh: API rate limit exceeded (HTTP 403) user ID 123456789 request ABCD-1234\nmore' }); };
+  const r = EX.readOpened({ repo: 'o/r', start: '2026-10-26' }, readerDeps(run, { err: (m) => errs.push(m) }));
+  assert.deepEqual(r, { ok: false, reason: 'unreachable' });
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /\(HTTP 403\)$/);
+  assert.ok(!/123456789|ABCD/.test(errs[0]), errs[0]);
+});
+
+/** A fake gh that honours the timeout it is given: it takes 9.9 s a call, or the whole timeout when that is shorter, and then times out. */
+function slowWorld() {
+  const clock = { t: 0 };
+  const timeouts = [];
+  let n = 0;
+  const handlers = {
+    git: () => { clock.t += 10_000; return WORLD_GIT(); },
+    search: () => { throw new Error('the search must not be called when no budget is left'); },
+    pager: (call) => {
+      timeouts.push(call.opts.timeout);
+      clock.t += Math.min(9_900, call.opts.timeout);
+      if (call.opts.timeout < 9_900) throw TIMEOUT();
+      return JSON.stringify(itemsOn(++n * 1000, 100));
+    },
+  };
+  return { clock, timeouts, handlers };
+}
+
+test('R48b the per-call timeout shrinks with the budget: 10000 x4 then 400; the pager takes at most 40 s, pager plus git at most 50 s', async () => {
+  // Breaks when the timeout is a constant 10 s (M15: 49.5 s of gh), the budget is checked only between pages, or the budget is dropped.
+  const s = slowWorld();
+  const direct = EX.readOpened({ repo: 'o/r', start: '2026-10-26' }, readerDeps(fakeRun(s.handlers).run, { clock: () => s.clock.t }));
+  assert.deepEqual(direct, { ok: false, reason: 'unreachable' });
+  assert.deepEqual(s.timeouts, [10_000, 10_000, 10_000, 10_000, 400]);
+  assert.equal(s.clock.t, 40_000);
+
+  const s2 = slowWorld();
+  const w = world({ handlers: s2.handlers, deps: { clock: () => s2.clock.t } });
+  assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
+  assert.deepEqual(s2.timeouts, [10_000, 10_000, 10_000, 10_000, 400]);
+  assert.ok(s2.clock.t <= 50_000, `pager plus git took ${s2.clock.t} ms`);
+  assert.equal(w.calls.filter((c) => c.kind === 'search').length, 0, 'no budget left: no search call');
+  const byId = rowsById(w);
+  assert.equal(byId['prpr.prs.opened.note'].text, 'no data: unreachable');
+  assert.ok(byId['prpr.prs.landed.bar.14'], 'landed present');
+  assert.equal(byId['prpr.prs.landed.check'], undefined);
+  assert.equal(w.calls.find((c) => c.kind === 'git').opts.timeout, 10_000);
+});
+
+test('R48c gh missing from PATH (ENOENT): the next call uses the fallback file; two ENOENT is "unreachable"; the default fallback is the machine-wide gh.exe', () => {
+  // Breaks when the fallback is missing.
+  const files = [];
+  const only = (okFile) => (call) => { files.push(call.file); if (call.file !== okFile) throw fail({ code: 'ENOENT' }); return '[]'; };
+  const fb = 'X:\\fake\\gh.exe';
+  const ok = EX.readOpened({ repo: 'o/r', start: '2026-10-26' }, readerDeps(fakeRun({ pager: only(fb) }).run, { ghFallback: fb }));
+  assert.deepEqual(files, ['gh', fb]);
+  assert.deepEqual(ok, { ok: false, reason: 'empty' }, 'the fallback call worked: an empty list is empty, not unreachable');
+  files.length = 0;
+  const none = EX.readOpened({ repo: 'o/r', start: '2026-10-26' }, readerDeps(fakeRun({ pager: only('never') }).run, { ghFallback: fb }));
+  assert.deepEqual(none, { ok: false, reason: 'unreachable' });
+  if (process.platform === 'win32') {
+    files.length = 0;
+    EX.readOpened({ repo: 'o/r', start: '2026-10-26' }, readerDeps(fakeRun({ pager: only('never') }).run));
+    assert.deepEqual(files, ['gh', 'C:\\Program Files\\GitHub CLI\\gh.exe']);
+  }
+});
+
+test('R48d page 1 is fine and page 2 fails: the whole opened family is dark, no bar from page 1 (M13)', async () => {
+  // Breaks when the reader keeps the pages it read.
+  const pager = (c) => (pageOf(c.args.join(' ')) === 1 ? JSON.stringify(itemsOn(1, 100)) : ghDown());
+  assert.deepEqual(opened(pager).result, { ok: false, reason: 'unreachable' });
+  const w = world({ handlers: { pager } });
+  assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
+  const byId = rowsById(w);
+  assert.deepEqual(Object.keys(byId).filter((id) => id.startsWith('prpr.prs.opened.')), ['prpr.prs.opened.note']);
+});
+
+test('R50 the pager is a GET with the jq cut: no write method, no field flag, no merged_at', () => {
+  // Breaks when the call becomes a write or loses the jq cut.
+  const { f } = opened(() => '[]');
+  const args = f.calls[0].args;
+  const flat = args.join(' ');
+  assert.equal(args[0], 'api');
+  assert.equal(args[args.indexOf('-X') + 1], 'GET');
+  assert.ok(args.includes('--jq'));
+  assert.match(flat, /per_page=100/);
+  assert.match(flat, /sort=created/);
+  assert.match(flat, /state=all/);
+  assert.match(flat, /repos\/o\/r\/pulls\?/);
+  assert.ok(!/merged_at/.test(args[args.indexOf('--jq') + 1]), 'the jq filter does not read merged_at');
+  assert.ok(!args.some((a) => /^(POST|PATCH|PUT|DELETE)$/.test(a)) && !args.includes('-f') && !args.includes('-F'));
+  assert.equal(f.calls[0].opts.windowsHide, true);
+});
+
+test('R51 the git call names main, never HEAD, with --since as a UTC instant 90 days before the grid start', async () => {
+  // Breaks when HEAD replaces main (M10), --since becomes a bare day, or the 90 changes.
+  const w = world();
+  assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
+  const call = w.calls.find((c) => c.kind === 'git');
+  assert.equal(call.file, 'git');
+  assert.deepEqual(call.args, ['log', '--first-parent', 'main', '--since', '2026-07-28T00:00:00Z', '--format=%P%x1f%ct%x1f%s']);
+  assert.ok(!call.args.includes('HEAD'));
+  assert.equal(call.opts.cwd, w.d, '--git-root is the cwd');
+  assert.equal(call.opts.timeout, 10_000);
+});
+
+const MW = { repo: 'o/r', weekStart: '2026-11-03', from: '2026-11-03T06:00:00Z', to: '2026-11-10T05:55:01.000Z' };
+const search = (reply, mw = MW) => {
+  const f = fakeRun({ search: typeof reply === 'function' ? reply : () => reply });
+  return { f, result: EX.readMergedWeek(mw, readerDeps(f.run)) };
+};
+
+test('R52 readMergedWeek: the exact merged: literal, a GET, base:main, one integer; 0 is trusted; a non-integer or a failure is "unreachable"', () => {
+  // Breaks when the bound is UTC midnight (M16), the upper bound or base:main is missing, a non-integer passes, or a failure is a number.
+  const ok = search('{"total_count": 173}');
+  assert.deepEqual(ok.result, { ok: true, apiCount: 173, weekStart: '2026-11-03' });
+  const args = ok.f.calls[0].args;
+  assert.equal(ok.f.calls.length, 1);
+  assert.equal(args[args.indexOf('-X') + 1], 'GET');
+  assert.equal(args[args.indexOf('--jq') + 1], '.total_count');
+  const url = args.find((a) => a.includes('search/issues'));
+  for (const part of ['is:pr', 'base:main', 'per_page=1', 'repo:o/r', 'merged:2026-11-03T06:00:00Z..2026-11-10T05:55:01.000Z']) assert.ok(url.includes(part), `${part} in ${url}`);
+  assert.ok(!args.some((a) => /^(POST|PATCH|PUT|DELETE)$/.test(a)) && !args.includes('-f') && !args.includes('-F'));
+  assert.deepEqual(search('173\n').result, { ok: true, apiCount: 173, weekStart: '2026-11-03' }, 'gh prints the bare integer when --jq cuts');
+  assert.equal(search('{"total_count": 0}').result.apiCount, 0, 'a 0 that passes the guard is trusted');
+  for (const bad of ['{"total_count": "173"}', '{}', '{"total_count": -1}', '{"total_count": 1.5}', 'not json', '']) {
+    assert.deepEqual(search(bad).result, { ok: false, reason: 'unreachable' }, bad);
+  }
+  assert.deepEqual(search(ghDown).result, { ok: false, reason: 'unreachable' });
+  assert.deepEqual(search(() => { throw TIMEOUT(); }).result, { ok: false, reason: 'unreachable' });
+});
+
+test('R52 a malformed bound makes no call and is "reader error" (GitHub would answer 0 with exit 0) (M20)', () => {
+  // Breaks when the bound guard is dropped.
+  for (const mw of [{ ...MW, to: '2026-11-10T05:55:01.XYZZ' }, { ...MW, from: '2026-11-03' }, { ...MW, from: '2026-13-45T00:00:00Z' }, { ...MW, to: '2026-11-10T05:55:01.12Z' }]) {
+    const s = search('{"total_count": 0}', mw);
+    assert.deepEqual(s.result, { ok: false, reason: 'reader error' }, JSON.stringify(mw));
+    assert.equal(s.f.calls.length, 0, 'no call is made');
+  }
+});
+
+test('R52 through main: the week starts at Chicago midnight, the check agrees when the counts match, a search failure darkens the check only', async () => {
+  // Breaks when the collector passes the wrong weekStart, a UTC-midnight from, or lets a search failure darken opened.
+  const w = world({ handlers: { search: () => '3' } });
+  assert.equal(await main(w.argv, w.deps), 0, w.errs.join('\n'));
+  const url = w.calls.find((c) => c.kind === 'search').args.find((a) => a.includes('search/issues'));
+  assert.ok(url.includes('merged:2026-11-02T06:00:00Z..2026-11-08T20:00:00.000Z'), url);
+  const check = rowsById(w)['prpr.prs.landed.check'];
+  assert.deepEqual([check.text, check.value, check.kind], ['GitHub agrees', 0, 'figure']);
+  assert.ok(w.logs.includes('prpr.prs.check: 3 merged this week'));
+  const w2 = world({ handlers: { search: ghDown } });
+  assert.equal(await main(w2.argv, w2.deps), 0, w2.errs.join('\n'));
+  const byId = rowsById(w2);
+  assert.ok(byId['prpr.prs.opened.bar.14'], 'opened stays');
+  assert.equal(byId['prpr.prs.landed.check'], undefined);
+  assert.equal(byId['prpr.prs.opened.note'], undefined);
 });
