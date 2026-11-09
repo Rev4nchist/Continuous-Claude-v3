@@ -106,7 +106,7 @@
     "shared/extraction-state.ts": "144b96c680814697c9f0b6e32d76bd82cb085b3982b3a8dfe1c9df5a0860a941",
     "shared/git-call.ts": "0cc724dbec4f1c13f95bc8d47961e7a96d8777a76368d702b42b35953709e77b",
     "shared/git-head.ts": "6cea04b8914ff6e0059a56832420b7cf5dd8bd2e978d4f43611ae39da15ba6db",
-    "shared/guard-log.ts": "97443eed0f25749a1a081a851ef8c37fda02ba469f028f1d203d9a25e0855a33",
+    "shared/guard-log.ts": "2aacebb84509697e51115f20767a5928dd8ff92259706c4f8b3f6df40cdc6ebb",
     "shared/handoff-select.ts": "47663a88da961b112c399ac34749dde9a7e3a06ff5b49cc4e5bdf22005f35a90",
     "shared/health-alert.ts": "b965223443f44a96f65f690ecddf9252c85912cce4db822ba8c19664130e5074",
     "shared/host-ram.ts": "201bf91867ca7eb006372b2a54d786399fcce190c0843e3e7924a5cb345ab2f1",

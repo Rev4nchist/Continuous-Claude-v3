@@ -4,8 +4,10 @@
  * Every PreToolUse hook that can deny or ask appends ONE JSON line per deny, ask or override to
  * ~/.claude/logs/guard-decisions.jsonl:
  *
- *   {ts, hook, tool, decision: 'deny'|'ask'|'override'|'warn'|'inject'|'allow', reason, session_id, agent, agent_id?,
- *    cwd?, permission_mode?, target?, command?}
+ *   {ts, hook, tool, decision: 'deny'|'ask'|'override'|'warn'|'inject'|'allow', reason, session_id, agent, source,
+ *    agent_id?, cwd?, permission_mode?, target?, command?}
+ *
+ * `source` is 'live', 'test' or 'probe' (see guardSource). The harness doctor ignores a row whose source is 'test' or 'probe'.
  *
  * `agent` is true when the payload has agent_id or CLAUDE_AGENT_ID is set. `cwd` and `permission_mode` come from
  * the payload: they decide a guard's result, so a replay needs them. `target` is the thing a non-command tool acts
@@ -20,7 +22,7 @@
  * 'warn' = a guard rule in warn mode let a command through and recorded the rule that would have denied it (pre-pr-gate, PR B).
  * This log records the hooks this process runs.
  *
- * A crash line is different: {ts, hook, kind:'error', message, stack}. It has no `decision`. A guard writes it
+ * A crash line is different: {ts, hook, kind:'error', message, stack, source}. It has no `decision`. A guard writes it
  * (logGuardError) in the catch that turns a crash into its allow or deny output.
  *
  * Secrets: the log never holds a raw command. `reason` is a rule name, and `command` is at most
@@ -114,9 +116,24 @@ export function commandHead(command: string): string {
   return maskSecrets(command).replace(/\s+/g, ' ').trim().slice(0, COMMAND_HEAD_CHARS);
 }
 
-/** False under VITEST with no CCV3_GUARD_DECISIONS_LOG: a test must never write the real log. */
+/**
+ * False under VITEST with no CCV3_GUARD_DECISIONS_LOG: a test must never write the real log.
+ * VITEST set to an empty string counts as set. A test that clears it with `VITEST: ''` still has the marker.
+ */
 export function shouldWrite(env: NodeJS.ProcessEnv): boolean {
-  return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
+  return !!env.CCV3_GUARD_DECISIONS_LOG || !Object.hasOwn(env, 'VITEST');
+}
+
+/**
+ * Where a row came from: 'test' (VITEST is set), 'probe' (a log path override and no VITEST), else 'live'.
+ * CCV3_GUARD_SOURCE may name 'test' or 'probe' when a caller knows better. Any other value is ignored.
+ * The harness doctor counts a row with any other source, or none, as a fault.
+ */
+export function guardSource(env: NodeJS.ProcessEnv): string {
+  const named = env.CCV3_GUARD_SOURCE;
+  if (named === 'test' || named === 'probe') return named;
+  if (Object.hasOwn(env, 'VITEST')) return 'test';
+  return env.CCV3_GUARD_DECISIONS_LOG ? 'probe' : 'live';
 }
 
 /** A non-empty string cut to `max` characters, or undefined. Not masked: replay needs a path exact. */
@@ -158,6 +175,7 @@ export function logGuardDecision(
       reason: maskSecrets(String(reason)).replace(/\s+/g, ' ').trim().slice(0, REASON_CHARS),
       session_id: input?.session_id || '',
       agent: !!agent,
+      source: guardSource(env),
     };
     if (agent) entry.agent_id = agent;
     const cwd = pathText(input?.cwd);
@@ -209,7 +227,7 @@ export function logGuardError(hook: string, err: unknown, opts: { env?: NodeJS.P
   try {
     const env = opts.env ?? process.env;
     if (!shouldWrite(env)) return;
-    const entry = { ts: new Date().toISOString(), hook, kind: 'error', message: errorMessage(err), stack: firstFrame(err) };
+    const entry = { ts: new Date().toISOString(), hook, kind: 'error', message: errorMessage(err), stack: firstFrame(err), source: guardSource(env) };
     const path = guardLogPath(env);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     appendFileSync(path, JSON.stringify(entry) + '\n', { mode: 0o600 });

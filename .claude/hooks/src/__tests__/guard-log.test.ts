@@ -17,12 +17,13 @@
  *     (a UUID directory) is erased. These are paths: replay needs them exact, so they are cut, not masked.
  * 12. Dropping the new fields changes the old shape: command stays 80 chars, agent_id stays absent without an agent.
  * 13. The file is not owner-only (POSIX only: Windows ignores the mode).
+ * 14. A probe leaks into the live log: an empty VITEST counts as unset, or the row has no source tag for the doctor to skip.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { logGuardDecision, maskSecrets, commandHead, guardLogPath, COMMAND_HEAD_CHARS } from '../shared/guard-log.js';
+import { logGuardDecision, logGuardError, maskSecrets, commandHead, guardLogPath, COMMAND_HEAD_CHARS } from '../shared/guard-log.js';
 import { decide } from '../destructive-command-guard.js';
 
 /**
@@ -282,5 +283,45 @@ describe('replay fields: cwd, permission_mode, target, agent', () => {
   it.skipIf(process.platform === 'win32')('creates the log owner-only (0o600)', () => {
     row({});
     expect(statSync(log).mode & 0o777).toBe(0o600);
+  });
+});
+
+// M5: a probe or a test that leaks into the live log must be skipped, or tagged so the doctor can ignore it.
+describe('source tag and the empty VITEST gate', () => {
+  /** A temp home with no log path set: the live log of that home. Both HOME vars point at it. */
+  const homeEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ HOME: dir, USERPROFILE: dir, ...extra });
+  const liveLog = (): string => join(dir, '.claude', 'logs', 'guard-decisions.jsonl');
+  const liveRows = (): Array<Record<string, unknown>> =>
+    readFileSync(liveLog(), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+
+  it('writes nothing when VITEST is set to an empty string and no log path is set', () => {
+    logGuardDecision('h', { tool_name: 'Bash', session_id: 'probe' }, 'deny', 'r', { env: homeEnv({ VITEST: '' }) });
+    logGuardError('h', new Error('x'), { env: homeEnv({ VITEST: '' }) });
+    expect(existsSync(join(dir, '.claude'))).toBe(false);
+  });
+
+  it('tags a row with source "live" when no test or probe marker is set', () => {
+    logGuardDecision('h', { tool_name: 'Bash' }, 'deny', 'r', { env: homeEnv() });
+    logGuardError('h', new Error('x'), { env: homeEnv() });
+    expect(liveRows().map((r) => r.source)).toEqual(['live', 'live']);
+  });
+
+  it('tags a row with source "probe" when only a log path override is set', () => {
+    logGuardDecision('h', { tool_name: 'Bash' }, 'deny', 'r', { env: env() });
+    logGuardError('h', new Error('x'), { env: env() });
+    expect(lines().map((r) => r.source)).toEqual(['probe', 'probe']);
+  });
+
+  it('tags a row with source "test" when VITEST is set with a log path, even an empty VITEST', () => {
+    logGuardDecision('h', { tool_name: 'Bash' }, 'deny', 'r', { env: env({ VITEST: 'true' }) });
+    logGuardError('h', new Error('x'), { env: env({ VITEST: '' }) });
+    expect(lines().map((r) => r.source)).toEqual(['test', 'test']);
+  });
+
+  it('lets CCV3_GUARD_SOURCE name only test or probe, and ignores any other value', () => {
+    logGuardDecision('h', { tool_name: 'Bash' }, 'deny', 'r', { env: env({ CCV3_GUARD_SOURCE: 'test' }) });
+    logGuardDecision('h', { tool_name: 'Bash' }, 'deny', 'r', { env: env({ CCV3_GUARD_SOURCE: 'ci-run' }) });
+    logGuardDecision('h', { tool_name: 'Bash' }, 'deny', 'r', { env: env({ CCV3_GUARD_SOURCE: 'bad value\nx' }) });
+    expect(lines().map((r) => r.source)).toEqual(['test', 'probe', 'probe']);
   });
 });
