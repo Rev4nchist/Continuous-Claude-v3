@@ -320,15 +320,18 @@ function Test-DecisionsEnforced {
 # Red CI checks on a head commit, one line each. Review bots are not CI: the Greptile app's check run and CodeRabbit's commit status
 # are review results, which -IgnoreReview skips (review-status.mjs reads them the same way). Red means a run that ended
 # failure, timed_out, startup_failure or action_required, or a commit status that is failure or error. Skipped, neutral,
-# cancelled and still-running checks are not red. A failed read or a page that holds fewer items than total_count stops the land.
+# cancelled and still-running checks are not red. Every page is read. A failed read, or fewer items than total_count, stops the land.
 function Get-RedChecks([string]$Sha) {
-  $runsDoc = gh api "repos/$Repo/commits/$Sha/check-runs?per_page=100" | ConvertFrom-Json
-  if ($LASTEXITCODE) { Fail "cannot read the check runs of #$Pr. Nothing was merged." }
-  $statusDoc = gh api "repos/$Repo/commits/$Sha/status?per_page=100" | ConvertFrom-Json
-  if ($LASTEXITCODE) { Fail "cannot read the commit statuses of #$Pr. Nothing was merged." }
-  $runs = @($runsDoc.check_runs); $statuses = @($statusDoc.statuses)
-  if ([int]$runsDoc.total_count -gt $runs.Count) { Fail "#$Pr has more than $($runs.Count) check runs; cannot read them all. Nothing was merged." }
-  if ([int]$statusDoc.total_count -gt $statuses.Count) { Fail "#$Pr has more than $($statuses.Count) commit statuses; cannot read them all. Nothing was merged." }
+  # --paginate --slurp: one JSON array holding every page. Any failed page makes gh exit non-zero, and the land stops.
+  $runPages = @(gh api --paginate --slurp "repos/$Repo/commits/$Sha/check-runs?per_page=100" | ConvertFrom-Json | Where-Object { $_ })
+  if ($LASTEXITCODE -or -not $runPages) { Fail "cannot read the check runs of #$Pr. Nothing was merged." }
+  $statusPages = @(gh api --paginate --slurp "repos/$Repo/commits/$Sha/status?per_page=100" | ConvertFrom-Json | Where-Object { $_ })
+  if ($LASTEXITCODE -or -not $statusPages) { Fail "cannot read the commit statuses of #$Pr. Nothing was merged." }
+  $runs = @($runPages | ForEach-Object { $_.check_runs }); $statuses = @($statusPages | ForEach-Object { $_.statuses })
+  $runsTotal = ($runPages | ForEach-Object { [int]$_.total_count } | Measure-Object -Maximum).Maximum
+  $statusTotal = ($statusPages | ForEach-Object { [int]$_.total_count } | Measure-Object -Maximum).Maximum
+  if ($runsTotal -gt $runs.Count) { Fail "#$Pr has $runsTotal check runs but only $($runs.Count) were read; cannot read them all. Nothing was merged." }
+  if ($statusTotal -gt $statuses.Count) { Fail "#$Pr has $statusTotal commit statuses but only $($statuses.Count) were read; cannot read them all. Nothing was merged." }
   $badConclusions = 'failure', 'timed_out', 'startup_failure', 'action_required'
   foreach ($r in $runs) {
     if ($r.app.slug -ne 'greptile-apps' -and $r.status -eq 'completed' -and $r.conclusion -in $badConclusions) { "check run `"$($r.name)`" ended $($r.conclusion)" }
