@@ -168,6 +168,9 @@ export const SURFACES = [
       '.claude/hooks/package-lock.json', '.claude/hooks/tsconfig*.json', 'scripts/worktree/**/*.mjs', '.github/workflows/*.yml', '.github/workflows/*.yaml', // code and YAML only: a README beside them is docs and runs no gate
     ],
     gates: [
+      // Type check first: it fails fast and names the line. The build (esbuild) strips types and never reports a type error. The `check` script of
+      // .claude/hooks/package.json is the same command. npx finds tsc by the walk up from the folder, so a worktree uses the shared store link.
+      { id: 'hooks-tsc', cmd: 'npx', args: ['tsc', '--noEmit'], cwd: '.claude/hooks', timeoutMs: 5 * MIN },
       {
         id: 'hooks-build', cmd: 'npm', args: ['run', 'build'], cwd: '.claude/hooks', timeoutMs: 5 * MIN,
         // `git diff` (content) and `ls-files --others` (new files), not `git status`: after a build on Windows, status

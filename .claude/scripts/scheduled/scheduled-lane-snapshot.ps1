@@ -3,7 +3,7 @@
 # Runs under Windows PowerShell 5.1: no PS7-only syntax here. ASCII only.
 #
 # It runs `node scripts/coordination/export-dash-data.mjs` with no arguments. The export reads the lane board
-# (SELECT only), writes the seven lane-dash JSON documents to its default folder (~/.claude/state/lane-dash)
+# (SELECT only), writes the eight lane-dash JSON documents to its default folder (~/.claude/state/lane-dash)
 # and upserts one row per Chicago day into snapshots.json there. A run at 23:55 puts one row per day in the file,
 # so the daily snapshots add up. It uploads nothing and calls no model: llm=false in tasks.json.
 # tasks.json sets battery=true, so the job also runs on battery.

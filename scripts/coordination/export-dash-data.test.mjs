@@ -17,6 +17,7 @@ import {
 } from './export-dash-data.mjs';
 import { compileRules } from './lane-dash-project.mjs';
 import { normalizeConfig } from './lane-dash-config.mjs';
+import { buildFlowRows } from './lane-dash-flow.mjs';
 import { buildTileRows } from './lane-dash-metrics.mjs';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dash-export-'));
@@ -248,6 +249,7 @@ function collected(exportedAt, { lanes = [lane({ id: 'a', state: 'backlog' }), l
   return {
     ...(bornDone ? { bornDone } : {}),
     directOpen: directOpen ?? lanes.filter((l) => l.state !== 'done').length,
+    rework: [],
     envelopes: {
       lanes: env(lanes),
       assignments: env([]),
@@ -264,7 +266,7 @@ function collected(exportedAt, { lanes = [lane({ id: 'a', state: 'backlog' }), l
     },
   };
 }
-/** Adds the snapshots and tiles documents the way writeExport does, so checkInvariants sees all seven. */
+/** Adds the snapshots, tiles and flow documents the way writeExport does, so checkInvariants sees all eight. */
 const withSnapshots = (c) => {
   const e = c.envelopes;
   const exportedAt = e.lanes.exportedAt;
@@ -275,7 +277,11 @@ const withSnapshots = (c) => {
       lanes: e.lanes.rows, assignments: e.assignments.rows, projects: e.projects.rows, targets: e.targets.rows, meta: e.meta.rows[0], snapshots: snapshots.rows,
     }),
   };
-  return { ...c, envelopes: { ...e, snapshots, tiles } };
+  const flow = {
+    sql: 'f', exportedAt,
+    rows: buildFlowRows({ lanes: e.lanes.rows, assignments: e.assignments.rows, rework: c.rework, targets: e.targets.rows, meta: e.meta.rows[0] }),
+  };
+  return { ...c, envelopes: { ...e, snapshots, tiles, flow } };
 };
 
 describe('checkInvariants', () => {
@@ -293,7 +299,7 @@ describe('checkInvariants', () => {
   });
 
   it('fails when exportedAt differs between documents', () => {
-    // Breaks if the stamps are not compared across all seven documents.
+    // Breaks if the stamps are not compared across all eight documents.
     const c = withSnapshots(collected(T1));
     c.envelopes.meta.exportedAt = T2;
     assert.throws(() => checkInvariants(c), /exportedAt/);
@@ -316,6 +322,20 @@ describe('checkInvariants', () => {
     assert.throws(() => checkInvariants(big), /tiles\.json.*(262144|256 KB)/s);
     const skew = withSnapshots(collected(T1));
     skew.envelopes.tiles.exportedAt = T2;
+    assert.throws(() => checkInvariants(skew), /exportedAt/);
+  });
+
+  it('covers the flow document: missing, over 256 KB, or a different exportedAt each fail and name flow.json', () => {
+    // Breaks if flow is left out of DATASETS, so its cap and stamp are never checked.
+    assert.ok(DATASETS.includes('flow'));
+    const missing = withSnapshots(collected(T1));
+    delete missing.envelopes.flow;
+    assert.throws(() => checkInvariants(missing), /flow\.json is missing/);
+    const big = withSnapshots(collected(T1));
+    big.envelopes.flow.rows = [{ id: 'x', tile: 'flow', kind: 'text', rank: null, value: null, text: 'é'.repeat(140000), tone: null }];
+    assert.throws(() => checkInvariants(big), /flow\.json.*(262144|256 KB)/s);
+    const skew = withSnapshots(collected(T1));
+    skew.envelopes.flow.exportedAt = T2;
     assert.throws(() => checkInvariants(skew), /exportedAt/);
   });
 
@@ -354,13 +374,13 @@ describe('checkInvariants', () => {
 });
 
 describe('writeExport', () => {
-  it('writes the seven documents and the refresh doc, atomically, with no temp files left', () => {
+  it('writes the eight documents and the refresh doc, atomically, with no temp files left', () => {
     // Breaks if a document is skipped (tiles.json included), a temp file is left, or refresh.json is not written.
     const out = tmpDir();
     const r = writeExport(out, collected(T1));
     const names = fs.readdirSync(out).sort();
-    assert.equal(DATASETS.length, 7);
-    assert.deepEqual(names, ['assignments.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
+    assert.equal(DATASETS.length, 8);
+    assert.deepEqual(names, ['assignments.json', 'flow.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
     assert.deepEqual(names, [...DATASETS.map((d) => `${d}.json`), 'refresh.json'].sort());
     for (const d of DATASETS) {
       const doc = JSON.parse(fs.readFileSync(path.join(out, `${d}.json`), 'utf8'));
@@ -393,6 +413,30 @@ describe('writeExport', () => {
     assert.equal(get('pile.trend.note').text, 'Trend after 7 daily snapshots: 1 so far'); // the snapshots document is built first
     const refresh = JSON.parse(fs.readFileSync(path.join(out, 'refresh.json'), 'utf8'));
     assert.ok(refresh.files.includes('tiles.json'));
+    assert.ok(refresh.files.includes('flow.json'));
+  });
+
+  it('flow.json is built from the in-memory documents and the rework rows, with meta.today as "today", and carries no lane id', () => {
+    // Breaks if the rework rows are not passed to buildFlowRows, flow is computed from a clock, or a lane id reaches flow.json.
+    const out = tmpDir();
+    const c = collected(T1, { lanes: [lane({ id: 'secret-lane', state: 'ready' })] });
+    c.rework = [{ lane_id: 'secret-lane', done_at: '2026-11-07T15:00:00.000Z', reopen_at: '2026-11-07T16:00:00.000Z' }];
+    c.reworkSql = 'SELECT rework-marker';
+    mock.timers.enable({ apis: ['Date'], now: Date.parse('2030-01-01T00:00:00Z') });
+    try {
+      writeExport(out, c);
+    } finally {
+      mock.timers.reset();
+    }
+    const flow = JSON.parse(fs.readFileSync(path.join(out, 'flow.json'), 'utf8'));
+    assert.deepEqual(Object.keys(flow).sort(), ['exportedAt', 'rows', 'sql']);
+    assert.equal(flow.exportedAt, T1);
+    assert.ok(flow.sql.includes('rework-marker'));
+    const get = (id) => flow.rows.find((r) => r.id === id);
+    assert.equal(get('flow.bar.14.reopened').value, 1); // today is 2026-11-07 on the export clock: rank 14
+    assert.equal(get('flow.week.rework.lanes').value, 1);
+    assert.equal(get('flow.week.rework.pct').text, '100.0%');
+    assert.ok(!JSON.stringify(flow).includes('secret-lane'));
   });
 
   it('adds one snapshot row per Chicago day: a second run the same day replaces, a new day appends, .bak is kept', () => {

@@ -207,6 +207,73 @@
         "Page look: Notion style, built from frame tokens only. Before changing the page, read the Dashboard SKILL.md, design-defaults.md and one-writer.md on the artifact.",
         "Data refresh is manual for now. Run the fleetops-refresh skill. The stop gate adds a stale-data line at most once an hour (lane-board-stop-gate)."
       ]
+    },
+    {
+      "id": "ccv3-phase3-progress",
+      "url": "https://claude.ai/artifact/EusCghJQP2Yomn49NDVDf5",
+      "source": ".claudedocs/phase3-progress.html",
+      "title": "CCv3 Phase 3 Progress",
+      "favicon": "progress",
+      "description": "Living status board for CCv3 Phase 3 (DW-80) and the phases after it: units, steps, waits, loose ends and a dated log.",
+      "session": "general",
+      "refresh": "at-handoff",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-10-29",
+      "verified": {
+        "on": "2026-10-27",
+        "by_session": "4b739767",
+        "listing": "Artifact action:list returns it first (CCv3 Phase 3 Progress, updated 2026-10-27).",
+        "publish": "Version 51 published at 13:16 CT from the same session that wrote it."
+      },
+      "notes": [
+        "Dave asked (2026-10-26) that Code keep this page current through each session. Edit the DATA object at the top of the script; republish the same source to this url.",
+        "Every log time must come from Get-Date, git or the GitHub API; mark an unknown minute as 17:1x. Guessed times were caught and corrected on 2026-10-26.",
+        "Source lives in .claudedocs (untracked, machine-local). If it is lost, rebuild from Artifact action:read of this url."
+      ]
+    },
+    {
+      "id": "per-project-lanes-plan",
+      "url": "https://claude.ai/artifact/RLy6Hz3F6xh7WyuJqGQoG1",
+      "source": ".claudedocs/per-project-lanes-plan.html",
+      "title": "Per-Project Lanes Plan",
+      "favicon": "plan",
+      "description": "Interactive plan for per-project lane boards: resolver simulator, risks, migration, propagation, and a section where Dave answers the open questions.",
+      "session": "general",
+      "refresh": "at-handoff",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-11-05",
+      "verified": {
+        "on": "2026-11-05",
+        "by_session": "4b24b2ac",
+        "listing": "Artifact action:list returns it (version 5 published 2026-11-05, id 1793900684-0f2b: Option B landed, 7 of 7 planned PRs; 22 of 22 answers intact per ArtifactData list before and after the publish)"
+      },
+      "notes": [
+        "Source lives in .claudedocs (untracked, machine-local). If it is lost, rebuild from Artifact action:read of this url.",
+        "The page keeps Dave's answers in its own db, collection answers. Publish WITHOUT capabilities so the db declaration carries forward. Read answers with ArtifactData list.",
+        "The plan of record is .claudedocs/2026-11-04-per-project-lanes-plan.md. Keep the page in step with it.",
+        "2026-11-05: version 5 (id 1793900684-0f2b) published after Option B landed (#313, #315, #318, #320; main f3453705). The verified block above was updated to version 5 the same day (Dave's yes). 22 of 22 answers intact after publish."
+      ]
+    },
+    {
+      "id": "ccv3-factory-floor",
+      "url": "https://claude.ai/artifact/PSVMUKZtjQgcpPYyaBSeHY",
+      "source": ".claudedocs/ccv3-factory-floor.html",
+      "title": "CCv3 Factory Floor",
+      "favicon": "diagram",
+      "description": "Multi-level map of the CCv3 software factory: stations, rails, flows, git pulse and every part by its state.",
+      "session": "general",
+      "refresh": "on-request",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-11-04",
+      "verified": {
+        "on": "2026-11-04",
+        "by_session": "4b24b2ac",
+        "listing": "Artifact action:list returns it"
+      },
+      "notes": [
+        "A SNAPSHOT of 2026-11-04 09:30 CST built from workflow wf_a2567539-ff2. It does not know about per-project lanes, PR0 or PR1. Refresh by re-running a survey, not by editing the HTML.",
+        "Source lives in .claudedocs (untracked, machine-local). The page declares the db capability for per-part status overrides (collections nodes and meta); publish WITHOUT capabilities."
+      ]
     }
   ]
 }
