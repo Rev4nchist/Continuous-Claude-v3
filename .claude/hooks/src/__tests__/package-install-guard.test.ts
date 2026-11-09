@@ -972,6 +972,8 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
   const FRESH: Stub = { ageHours: 1 }; // the package was published an hour ago: a detected install is denied
   const OLD: Stub = { ageHours: 2400 }; // 100 days old and clean
   const gated = (decision: string | undefined) => expect(['ask', 'deny']).toContain(decision);
+  // A test that expects 'ask' blanks these: the CI runner sets CI=true, and an unattended session turns every ask into a deny.
+  const attended = { CLAUDE_AGENT_ID: '', CI: '' };
 
   // ----- 2026-11-05 F3 residual: a package the registry answers 404 for is not allowed silently -----
   // Dave's decision: a real HTTP 404 from npm or PyPI is an ASK. A timeout, a socket error, any other
@@ -1891,11 +1893,16 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       const CRIT: Stub = { ageHours: 2400, osvCrit: true };
       it.each(['npm install zz-fake-pkg-a1', 'npm install zz-fake-pkg-a1@latest', 'npm install zz-fake-pkg-a1@^1.0.0', 'npx zz-fake-pkg-a1'])(
         'CRITICAL with no exact version: %j asks and says the version is unknown', async (cmd) => {
-          const r = await runHookFull(cmd, { stub: CRIT, cwd: await emptyDir() });
+          const r = await runHookFull(cmd, { stub: CRIT, cwd: await emptyDir(), env: attended });
           expect(r.decision).toBe('ask');
           expect(r.reason).toMatch(/GHSA-zzzz-crit-0001/);
           expect(r.reason).toMatch(/version[^.]*unknown|unknown[^.]*version/i);
         });
+      it('CRITICAL with no exact version in an unattended run (CI=true): the ask becomes a deny', async () => {
+        const r = await runHookFull('npm install zz-fake-pkg-a1', { stub: CRIT, cwd: await emptyDir(), env: { CLAUDE_AGENT_ID: '', CI: 'true' } });
+        expect(r.decision).toBe('deny');
+        expect(r.reason).toMatch(/GHSA-zzzz-crit-0001/);
+      });
       it('CRITICAL with an exact version: npm install zz-fake-pkg-a1@1.0.0 still denies', async () => {
         const r = await runHookFull('npm install zz-fake-pkg-a1@1.0.0', { stub: CRIT, cwd: await emptyDir() });
         expect(r.decision).toBe('deny');
@@ -2502,7 +2509,7 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     });
 
     it('a custom registry after a redirect names the URL, not the redirect', async () => {
-      const r = await runHookFull('npm install --registry 2>&1 https://e.invalid/', { stub: FRESH, cwd: await lockDir(true) });
+      const r = await runHookFull('npm install --registry 2>&1 https://e.invalid/', { stub: FRESH, cwd: await lockDir(true), env: attended });
       expect(r.decision).toBe('ask');
       expect(r.reason).toMatch(/e\.invalid/);
       expect(r.reason).not.toMatch(/--registry 2>/);

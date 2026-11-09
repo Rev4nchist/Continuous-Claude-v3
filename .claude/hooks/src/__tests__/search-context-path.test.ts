@@ -31,7 +31,9 @@ describe('search-context handshake directory (QW-02)', () => {
     expect(WRITER_CONTEXT_DIR).toBe(path.join(os.tmpdir(), 'claude-search-context'));
   });
 
-  it('(b) is NOT the old hardcoded POSIX literal', () => {
+  // Windows only: on POSIX os.tmpdir() is '/tmp', so the relocation is a no-op
+  // and the new value equals the old literal by design.
+  it.skipIf(process.platform !== 'win32')('(b) is NOT the old hardcoded POSIX literal', () => {
     expect(WRITER_CONTEXT_DIR).not.toBe('/tmp/claude-search-context');
   });
 

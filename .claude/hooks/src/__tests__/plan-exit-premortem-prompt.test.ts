@@ -7,7 +7,7 @@
  * state, and fails open on any error.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
   handlePlanExitPrompt,
@@ -17,6 +17,16 @@ import {
 
 const TEST_SESSION = 'plan-exit-premortem-test-session';
 const TEST_SESSION_B = 'plan-exit-premortem-test-session-b';
+
+// The hook stays silent when CI or CLAUDE_AGENT_ID is set (CI runners, subagents).
+// Tests that call the handler with the default env must not inherit either.
+beforeEach(() => {
+  vi.stubEnv('CI', '');
+  vi.stubEnv('CLAUDE_AGENT_ID', '');
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 // =============================================================================
 // extractPlanPath -- candidate field detection

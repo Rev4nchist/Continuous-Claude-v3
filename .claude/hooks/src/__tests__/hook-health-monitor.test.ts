@@ -586,7 +586,8 @@ describe('hook-health-monitor: active ~/.claude tree', () => {
     expect(checkHookHealth(info).status).toBe('healthy');
   });
 
-  it('active layout written with backslashes: healthy', () => {
+  // A backslash settings.json layout only occurs on Windows; on Linux existsSync sees a nonexistent name.
+  it.skipIf(process.platform !== 'win32')('active layout written with backslashes: healthy', () => {
     const info = layout(path.join(fakeHome, '.claude'), 'act-backslash', {
       src: 'export const old = 1;\n',
       manifestFor: 'export const built = 2;\n',
