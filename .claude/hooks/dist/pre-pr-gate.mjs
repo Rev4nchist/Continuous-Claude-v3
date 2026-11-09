@@ -436,6 +436,60 @@ var blank = (s) => s[0] + " ".repeat(s.length - 2) + s[s.length - 1];
 function maskQuoted(command, tool = "Bash") {
   return command.replace(tool === "PowerShell" ? PWSH_STRING : BASH_STRING, blank);
 }
+function quotedSpans(command, tool = "Bash") {
+  return [...command.matchAll(tool === "PowerShell" ? PWSH_STRING : BASH_STRING)].map((m) => [m.index, m.index + m[0].length]);
+}
+
+// src/shared/inert-quotes.ts
+var INERT_HEAD = new RegExp(
+  String.raw`^\s*(?:echo|printf|Write-(?:Host|Output|Warning|Information)|git\s+commit|claude|ntn|curl|gh\s+(?:pr|issue)\s+comment` + String.raw`|node(?:\.exe)?\s+(?:\S*[\\/])?lane\.mjs\s+(?:add|note|say))(?=\s|$)`,
+  "i"
+);
+var PLAIN_HEAD = /^\s*(?:cd|Set-Location|git\s+(?:add|status))(?=\s|$)/i;
+var SEGMENT_BREAK = /[;&|\r\n]+/g;
+var HARMLESS_REDIRECT = /\d*>&\d+|&>\s*\/dev\/null(?=[\s;&|]|$)|\d*>>?\s*(?:\/dev\/null|\$null|nul)(?=[\s;&|]|$)/gi;
+var RUNS_TEXT = /\$\(|`|<<|@['"]/;
+var SPECIAL_STRING = /\$['"]|[\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]/u;
+var OUTSIDE_RISK = /[#(){}'"]/;
+function inertSpans(command, tool) {
+  const none = /* @__PURE__ */ new Set();
+  if (RUNS_TEXT.test(command) || SPECIAL_STRING.test(command)) return none;
+  const spans = quotedSpans(command, tool);
+  if (spans.some(([s]) => s > 0 && command[s - 1] === "\\")) return none;
+  const chars = command.split("");
+  for (const [s, e] of spans) chars.fill(" ", s, e);
+  const masked = chars.join("");
+  if (OUTSIDE_RISK.test(masked)) return none;
+  const cut = masked.replace(HARMLESS_REDIRECT, (r) => " ".repeat(r.length));
+  const out = /* @__PURE__ */ new Set();
+  let from = 0;
+  const breaks = [...cut.matchAll(SEGMENT_BREAK)].map((m) => ({ at: m.index, len: m[0].length }));
+  for (const end of [...breaks, { at: cut.length, len: 0 }]) {
+    const seg = cut.slice(from, end.at);
+    if (seg.trim() !== "") {
+      if (seg.includes(">")) return none;
+      if (PLAIN_HEAD.test(seg)) {
+        from = end.at + end.len;
+        continue;
+      }
+      if (!INERT_HEAD.test(seg)) return none;
+      for (const [s, e] of spans) if (s >= from && e <= end.at) out.add(`${s}:${e}`);
+    }
+    from = end.at + end.len;
+  }
+  return out;
+}
+function blankInertQuotes(command) {
+  const bash = inertSpans(command, "Bash");
+  const pwsh = inertSpans(command, "PowerShell");
+  let out = command;
+  for (const id of bash) {
+    if (!pwsh.has(id)) continue;
+    const [s, e] = id.split(":").map(Number);
+    out = out.slice(0, s + 1) + " ".repeat(e - s - 2) + out.slice(e - 1);
+  }
+  return out;
+}
 
 // src/shared/shell-tools.ts
 var BOTH = ["Bash", "PowerShell"];
@@ -768,7 +822,7 @@ function decide(input, deps) {
 }
 function decideAs(input, deps, text) {
   const raw = text ?? commandOf(input);
-  const command = normalizeGh(joinContinuations(raw, shellOf(input)));
+  const command = normalizeGh(joinContinuations(blankInertQuotes(raw), shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: "allow" };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
@@ -891,8 +945,9 @@ The stamp comes from: ${RUN}`;
     const tool = input.tool_name || input.tool || "";
     if (!COMMAND_TOOLS2.has(tool)) return "{}";
     command = commandOf(input);
-    create = isPrOpenCommand(command);
-    gated = create || ["bash", "pwsh"].some((s) => isGated(shapesOf(joinContinuations(command, isDesktopCommander(input) ? s : shellOf(input)))));
+    const seen = blankInertQuotes(command);
+    create = isPrOpenCommand(seen);
+    gated = create || ["bash", "pwsh"].some((s) => isGated(shapesOf(joinContinuations(seen, isDesktopCommander(input) ? s : shellOf(input)))));
     const d = decide(input, deps);
     if (d.action === "override") logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
     if (d.action === "allow" && d.warn) logGuardDecision(HOOK, input, "warn", d.warn, { command });

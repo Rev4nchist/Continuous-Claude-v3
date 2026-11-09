@@ -68,6 +68,7 @@ import { CCV3_REPO, namedRepo } from './shared/checkpoint-shapes.js';
 import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared/decisions-store.js';
 import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
+import { blankInertQuotes } from './shared/inert-quotes.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand } from './shared/shell-tools.js';
@@ -405,7 +406,8 @@ const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => whe
  * and the cds are part of the id: the same shape in two folders is two shapes. An extra shape only makes the gate stricter.
  */
 function shapesOf(raw: string): Shape[] {
-  const text = normalizeGh(raw);
+  // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
+  const text = normalizeGh(blankInertQuotes(raw));
   const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
   const out: Shape[] = [];
   const seen = new Set<string>();

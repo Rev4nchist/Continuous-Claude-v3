@@ -18,3 +18,8 @@ const blank = (s: string): string => s[0] + ' '.repeat(s.length - 2) + s[s.lengt
 export function maskQuoted(command: string, tool: string = 'Bash'): string {
   return command.replace(tool === 'PowerShell' ? PWSH_STRING : BASH_STRING, blank);
 }
+
+/** The quoted strings maskQuoted blanks, as [start, end) offsets (the quote marks are part of the span). Same pairing rules as maskQuoted. */
+export function quotedSpans(command: string, tool: string = 'Bash'): Array<[number, number]> {
+  return [...command.matchAll(tool === 'PowerShell' ? PWSH_STRING : BASH_STRING)].map((m) => [m.index!, m.index! + m[0].length]);
+}
