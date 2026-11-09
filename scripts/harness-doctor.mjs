@@ -22,7 +22,7 @@
  * One line per check: PASS|WARN|FAIL  <section>:<check>  <detail>. Last line: harness: N pass / N warn / N fail.
  * Info is not a status: a state that is owed later or not yet due is a PASS whose detail starts "info:" (an unlisted worktree folder under 24 h old,
  * a task that never ran before its first scheduled time, a worktree lane.mjs ahead of main on a feature branch). A WARN is a real fault.
- * logs:* WARN at 3 or more distinct (message, folder) pairs in 24 h, FAIL at 5 or more error rows. A "directory not found" row for a path that is gone is benign.
+ * logs:* WARN at 3 or more distinct (hook, message, folder) pairs in 24 h, FAIL at 5 or more error rows. A "directory not found" row for a path that is gone is benign. In guard-decisions.jsonl a row with a `source` of "test" or "probe" (a test or probe wrote it) is ignored and counted.
  * Exit 1 on any FAIL, else 0.
  *
  * lanes:shim, lanes:hook-client-version, hooks:render-check, hooks:dist-parity and lanes:relative-path-guard read the lane propagation files:
@@ -227,14 +227,17 @@ function goneDirectory(message, exists) {
 
 /**
  * Counts the error lines of the last `windowMs`. `isError` picks the lines; a line that is not JSON or has no valid ts is skipped and counted.
- * `pairs` is the number of distinct (message, folder) pairs; the folder is the row's cwd (only some logs carry one).
+ * `pairs` is the number of distinct (hook, message, folder) pairs; the folder is the row's cwd (only some logs carry one).
  * A benign row ("directory not found" for a path that is gone) is counted in `benign` and in nothing else.
+ * A row that `isIgnored` picks (guard-decisions: a `source` of "test" or "probe", so a test or a probe wrote it) is counted in `ignored` and in nothing else.
+ * `top` names the biggest (hook, message) group as `hook: message`; a row with no hook gives the bare message.
  */
-export function scanLog(text, isError, windowMs, nowMs = Date.now(), exists = existsSync) {
+export function scanLog(text, isError, windowMs, nowMs = Date.now(), exists = existsSync, isIgnored = () => false) {
   const tally = new Map();
   const seen = new Set();
   let count = 0;
   let benign = 0;
+  let ignored = 0;
   let unparsable = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -244,25 +247,27 @@ export function scanLog(text, isError, windowMs, nowMs = Date.now(), exists = ex
     const t = Date.parse(obj.ts);
     if (Number.isNaN(t)) { unparsable++; continue; }
     if (nowMs - t > windowMs) continue;
+    if (isIgnored(obj)) { ignored++; continue; }
     const full = String(obj.error ?? obj.reason ?? obj.msg ?? obj.message ?? '(no message)');
     if (goneDirectory(full, exists)) { benign++; continue; }
     count++;
     const m = full.slice(0, 100);
-    seen.add(`${m}\u0000${obj.cwd ?? obj.data?.cwd ?? ''}`);
-    tally.set(m, (tally.get(m) ?? 0) + 1);
+    const group = typeof obj.hook === 'string' && obj.hook ? `${obj.hook}: ${m}` : m;
+    seen.add(`${group}\u0000${obj.cwd ?? obj.data?.cwd ?? ''}`);
+    tally.set(group, (tally.get(group) ?? 0) + 1);
   }
   const [top, topN] = [...tally.entries()].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
-  return { count, pairs: seen.size, benign, unparsable, top, topN };
+  return { count, pairs: seen.size, benign, ignored, unparsable, top, topN };
 }
 
 const LOG_FAIL_ROWS = 5; // this many error rows in 24 h is a FAIL
-const LOG_WARN_PAIRS = 3; // this many distinct (message, folder) pairs is a WARN; one repeating error is not
-/** FAIL at 5 or more error rows, WARN at 3 or more distinct (message, folder) pairs, else PASS. */
+const LOG_WARN_PAIRS = 3; // this many distinct (hook, message, folder) pairs is a WARN; one repeating error is not
+/** FAIL at 5 or more error rows, WARN at 3 or more distinct (hook, message, folder) pairs, else PASS. */
 export const logLevel = ({ count, pairs }) => (count >= LOG_FAIL_ROWS ? 'FAIL' : pairs >= LOG_WARN_PAIRS ? 'WARN' : 'PASS');
 
 const LOGS = [
   { check: 'pre-pr-gate-errors', dir: 'logs', file: 'pre-pr-gate-errors.jsonl', isError: () => true },
-  { check: 'guard-decisions', dir: 'logs', file: 'guard-decisions.jsonl', isError: (o) => o.kind === 'error' },
+  { check: 'guard-decisions', dir: 'logs', file: 'guard-decisions.jsonl', isError: (o) => o.kind === 'error', isIgnored: (o) => o.source === 'test' || o.source === 'probe' },
   { check: 'memory-write-failures', dir: 'state', file: 'memory-write-failures.jsonl', isError: () => true },
   { check: 'hooks.log', dir: 'logs', file: 'hooks.log', isError: (o) => (o.level !== undefined ? o.level === 'error' : /error/i.test(JSON.stringify(o))) },
 ];
@@ -270,11 +275,12 @@ const LOGS = [
 function logCheck(o, spec) {
   const file = join(o.home, '.claude', spec.dir, spec.file);
   if (!existsSync(file)) return absent('logs', spec.check, file);
-  const s = scanLog(readTail(file), spec.isError, DAY);
+  const s = scanLog(readTail(file), spec.isError, DAY, Date.now(), existsSync, spec.isIgnored);
   const skipped = s.unparsable ? `; ${s.unparsable} unparsable line(s) skipped` : '';
-  const top = s.top ? `; ${s.pairs} distinct (message, folder) pair(s); top: "${s.top}" x${s.topN}` : '';
+  const top = s.top ? `; ${s.pairs} distinct (hook, message, folder) pair(s); top: "${s.top}" x${s.topN}` : '';
   const benign = s.benign ? `; ${s.benign} benign (directory not found, path no longer exists), not counted` : '';
-  return result(logLevel(s), 'logs', spec.check, `${s.count} error(s) in the last 24 h in ${file}${top}${benign}${skipped}`);
+  const ignored = s.ignored ? `; ${s.ignored} ignored (source is test or probe: a test or probe wrote them)` : '';
+  return result(logLevel(s), 'logs', spec.check, `${s.count} error(s) in the last 24 h in ${file}${top}${benign}${ignored}${skipped}`);
 }
 
 const logsSection = (o) => LOGS.map((spec) => logCheck(o, spec));

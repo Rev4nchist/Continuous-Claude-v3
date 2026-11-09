@@ -8,7 +8,7 @@
 //          command; younger is info; node_modules is never an orphan)
 //   hooks: missing build manifest (read from the repo, not the home), dirty baseline, child script exit 1 and exit 0,
 //          a missing child script (WARN, not a vacuous PASS)
-//   logs: 0 / 1 / 4 rows (PASS), 3 distinct (message, folder) pairs (WARN), 5 rows (FAIL), a benign "directory not found" row, the 24 h window,
+//   logs: 0 / 1 / 4 rows (PASS), 3 distinct (hook, message, folder) pairs (WARN), 5 rows (FAIL), a benign "directory not found" row, the 24 h window,
 //          bad JSON lines, each log's own error rule
 //   review: ledger at 80% of the day cap, rows of another day, stale review count date
 //   output: exit code, summary line, --json artifact, no artifact without --json
@@ -430,7 +430,7 @@ test('error rows map 0 to PASS, a repeat of one error to PASS up to 4 rows, and 
 
 const gateAt = (n, cwdOf, error = 'spawnSync git ETIMEDOUT') => Array.from({ length: n }, (_, i) => ({ ts: iso(HOUR), hook: 'pre-pr-gate', error, cwd: cwdOf(i) }));
 
-test('a log is a WARN at 3 distinct (message, folder) pairs, not before; the same pair repeated stays below it', () => {
+test('a log is a WARN at 3 distinct (hook, message, folder) pairs, not before; the same pair repeated stays below it', () => {
   const same = fixture();
   put(logPath(same, 'pre-pr-gate-errors.jsonl'), jsonl(gateAt(4, () => 'C:\\work\\a')));
   const one = run(same).checks['logs:pre-pr-gate-errors'];
@@ -499,6 +499,59 @@ test('guard-decisions counts only lines with kind error', () => {
   assert.equal(c.status, 'PASS');
   assert.match(c.detail, /^1 error\(s\)/, 'only the kind error line counts');
   assert.match(c.detail, /guard crashed/);
+});
+
+const crash = (n, hook, message, extra = {}) => Array.from({ length: n }, () => ({ ts: iso(HOUR), hook, kind: 'error', message, ...extra }));
+
+test('guard-decisions ignores error rows tagged test or probe, and says how many', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([...crash(6, 'decision-gate', 'spawnSync git ENOENT', { source: 'probe' }), ...crash(2, 'decision-gate', 'x', { source: 'test' })]));
+  const c = run(fx).checks['logs:guard-decisions'];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /^0 error\(s\)/);
+  assert.match(c.detail, /8 ignored \(source is test or probe/);
+});
+
+test('guard-decisions counts a row with source live and a row with no source', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([...crash(3, 'decision-gate', 'boom', { source: 'live' }), ...crash(2, 'decision-gate', 'boom')]));
+  const c = run(fx).checks['logs:guard-decisions'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /^5 error\(s\)/);
+});
+
+test('guard-decisions counts a row with an unknown source: only test and probe are ignored', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl(crash(5, 'decision-gate', 'boom', { source: 'ci-run' })));
+  const c = run(fx).checks['logs:guard-decisions'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /^5 error\(s\)/);
+});
+
+test('guard-decisions groups by hook and message: 5 rows of one group make one entry with x5 and the hook name', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl(crash(5, 'decision-gate', 'spawnSync git ENOENT')));
+  const c = run(fx).checks['logs:guard-decisions'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /top: "decision-gate: spawnSync git ENOENT" x5/);
+  assert.equal(c.detail.split('spawnSync git ENOENT').length - 1, 1, 'the group is named once');
+});
+
+test('guard-decisions keeps the same message from two hooks apart', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([...crash(2, 'decision-gate', 'boom'), ...crash(2, 'pre-pr-gate', 'boom')]));
+  const c = run(fx).checks['logs:guard-decisions'];
+  assert.match(c.detail, /2 distinct/, c.detail);
+  assert.match(c.detail, /x2/);
+});
+
+test('guard-decisions: 5 different live errors still FAIL', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl(['a', 'b', 'c', 'd', 'e'].flatMap((m) => crash(1, 'decision-gate', `err ${m}`))));
+  const c = run(fx).checks['logs:guard-decisions'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /^5 error\(s\)/);
+  assert.equal(run(fx).code, 1);
 });
 
 test('hooks.log counts level error lines and ignores info lines', () => {

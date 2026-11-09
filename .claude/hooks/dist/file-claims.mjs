@@ -5834,7 +5834,13 @@ function commandHead(command) {
   return maskSecrets(command).replace(/\s+/g, " ").trim().slice(0, COMMAND_HEAD_CHARS);
 }
 function shouldWrite(env) {
-  return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
+  return !!env.CCV3_GUARD_DECISIONS_LOG || !Object.hasOwn(env, "VITEST");
+}
+function guardSource(env) {
+  const named = env.CCV3_GUARD_SOURCE;
+  if (named === "test" || named === "probe") return named;
+  if (Object.hasOwn(env, "VITEST")) return "test";
+  return env.CCV3_GUARD_DECISIONS_LOG ? "probe" : "live";
 }
 function pathText(value, max = PATH_CHARS) {
   return typeof value === "string" && value ? value.slice(0, max) : void 0;
@@ -5860,7 +5866,8 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
       decision,
       reason: maskSecrets(String(reason)).replace(/\s+/g, " ").trim().slice(0, REASON_CHARS),
       session_id: input?.session_id || "",
-      agent: !!agent
+      agent: !!agent,
+      source: guardSource(env)
     };
     if (agent) entry.agent_id = agent;
     const cwd = pathText(input?.cwd);
