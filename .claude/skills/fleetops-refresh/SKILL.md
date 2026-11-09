@@ -1,6 +1,6 @@
 ---
 name: fleetops-refresh
-description: Refreshes the data on Dave's FleetOps lane dashboard from the lane export. Use when Dave says "refresh FleetOps" or "the FleetOps data is stale", or a session reports a pending refresh.
+description: Refreshes the data on Dave's FleetOps lane dashboard from the lane export. Use when Dave says "refresh FleetOps" or asks for a FleetOps refresh.
 ---
 
 # FleetOps refresh
@@ -12,6 +12,7 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
 ## Rules
 
 - Anyone who can open the dashboard can read the 7 files. They hold lane titles. Dave decided that.
+- Ask Dave with AskUserQuestion before step 2 (the export), unless Dave's own message asked for the refresh.
 - A refresh writes to a shared dashboard. Ask Dave with AskUserQuestion before step 4. Skip the question when Dave's own message asked for the refresh.
 - Never render, screenshot or browse the real dashboard. Read only its `check` and `runs` documents.
 - Never change `files/index.html` in a refresh.
@@ -19,7 +20,7 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
 
 ## Steps
 
-1. Read `~/.claude/state/lane-dash/refresh.json`. If it is missing, treat the data as stale.
+1. Read `~/.claude/state/lane-dash/refresh.json`. If it is missing, treat the data as stale. A missing file means no export has run yet; go to step 2 after Dave's ask.
    - `pending: true` means the files are newer than the last upload. Go to step 3. If Dave asked for a fresh export, go to step 2 instead.
    - `pending: false` and `exported_at` under 1 hour old: tell Dave nothing is stale. Stop, unless Dave asked for a refresh.
 2. Export new files. Do this only when nothing is pending and the data is stale, or Dave asked for a fresh export.

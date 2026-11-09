@@ -25,6 +25,16 @@
  *   - anything fails (fail open)
  * Block: stdout {"decision":"block","reason":"..."} and exit 0.
  *
+ * FleetOps line: when this hook blocks, it may add one more line to the reason.
+ * The text lives in staleLine() in shared/lane-dash-refresh.ts.
+ * The line never causes a block. With nothing to say about the lane board, the hook approves.
+ * Then it does not read the FleetOps state.
+ * The line shows at most once an hour per machine.
+ * The marker is ~/.claude/state/lane-dash/.refresh-shown.json. A new export (new key) shows it at once.
+ * The marker is written after the stopBlocked flag.
+ * If it cannot be written, the block still happens, without the line.
+ * A headless run (entrypoint "sdk...") never gets the line, even when LANE_CONTEXT_HEADLESS=1 opts it in.
+ *
  * The file names, the pending dir and the board constants come from shared/lane-board-pending.ts and
  * shared/lane-board.ts, which the reminder hook imports too. Neither hook imports the other (that would
  * run its main()). The drift test in __tests__/lane-board-stop-gate.test.ts keeps them in step.
@@ -32,6 +42,7 @@
 
 import * as fs from 'fs';
 import { DEFAULT_BOARD, boardArtifact, primaryRepo, renderBoardCmd } from './shared/lane-board.js';
+import { fleetopsLine } from './shared/lane-dash-refresh.js';
 import { listPending, pendingDir, pendingFile, sweepStalePending, type Pending } from './shared/lane-board-pending.js';
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object';
@@ -101,7 +112,11 @@ export function stopGate(payload: unknown, env: Env = process.env, now: number =
     // If the flag cannot be written the block would repeat. Approve instead.
     return { output: null };
   }
-  return { output: { decision: 'block', reason: d.reason } };
+  // The FleetOps line only rides on a block that already happens. It is computed after the block is final
+  // and marked, so it can never turn an approve into a block.
+  const headless = (env.CLAUDE_CODE_ENTRYPOINT ?? '').startsWith('sdk');
+  const line = headless ? '' : fleetopsLine(env, now);
+  return { output: { decision: 'block', reason: line ? `${d.reason}\n${line}` : d.reason } };
 }
 
 async function readStdin(): Promise<string> {

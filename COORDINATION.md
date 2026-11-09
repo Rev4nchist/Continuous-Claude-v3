@@ -101,6 +101,14 @@ Then publish `lane-board.html` with the Artifact tool, passing
 minting a second board. For another board, render with `--project <key>`, publish `lane-board-<key>.html` to that board's `laneArtifact`
 url and pass no `capabilities`. A board with no `laneArtifact` renders `lane-board-<key>.html` with no artifact. It shows a read-only Priorities section drawn from lane state and priority.
 
+The lane-board Stop gate may add one line to its block reason: "FleetOps data is stale (<when>). Tell Dave in one line. Run the fleetops-refresh skill only if he asks."
+<when> is "exported <time>, not uploaded" or "exported <time>, older than 36 hours".
+The line never causes a block. It rides only on a block that already happens.
+It shows at most once an hour per machine. A new export shows it at once.
+Marker: `~/.claude/state/lane-dash/.refresh-shown.json`.
+Stale means `refresh.json` has `pending: true`, or its `exported_at` is over 36 hours old.
+A missing or corrupt `refresh.json` says nothing.
+
 Before trusting the claim path after any change to it:
 
 ```
