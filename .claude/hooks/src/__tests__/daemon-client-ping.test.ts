@@ -66,10 +66,27 @@ const PROJECT_DIR = join(tmpdir(), `daemon-client-ping-${process.pid}`);
 
 let endpointCounter = 0;
 
+// Every endpoint a test used. A POSIX socket file outlives its owner (SIGTERM
+// and SIGKILL skip server.close()), so the top-level afterEach removes them.
+const touchedEndpoints = new Set<string>();
+
+/** Remove a POSIX socket file. A named pipe on win32 needs no cleanup. */
+function removeSocketFile(endpoint: string): void {
+  if (IS_WINDOWS) return;
+  try { unlinkSync(endpoint); } catch { /* already gone */ }
+}
+
+afterEach(() => {
+  for (const ep of touchedEndpoints) removeSocketFile(ep);
+  touchedEndpoints.clear();
+});
+
 /** A unique endpoint a node server can listen on, per platform. */
 function uniqueEndpoint(): string {
   const name = `ccv3-ping-${process.pid}-${Date.now()}-${endpointCounter++}.sock`;
-  return IS_WINDOWS ? `\\\\.\\pipe\\${name}` : join(tmpdir(), name);
+  const endpoint = IS_WINDOWS ? `\\\\.\\pipe\\${name}` : join(tmpdir(), name);
+  touchedEndpoints.add(endpoint);
+  return endpoint;
 }
 
 type ServerMode = 'answer' | 'silent';
@@ -91,8 +108,13 @@ function startChildServer(
     '    if(process.env.MOCK_MODE==="answer"){c.write(\'{"status":"ok"}\\n\');c.end();}',
     '  });',
     '});',
+    // A listen failure (EADDRINUSE, a too-long path) must say why, then exit.
+    's.on("error",e=>{console.error("mock listen failed: "+e.code+" "+e.message);process.exit(1);});',
     's.listen(process.env.MOCK_SOCKET,()=>console.log("ready"));',
   ].join('\n');
+  touchedEndpoints.add(endpoint);
+  // A file left by a crashed earlier run would make listen() fail with EADDRINUSE.
+  removeSocketFile(endpoint);
   const child: ChildProcess = spawn(process.execPath, ['-e', script], {
     env: {
       ...process.env,
@@ -101,8 +123,10 @@ function startChildServer(
       MOCK_SOCKET: endpoint,
       MOCK_MODE: mode,
     },
-    stdio: ['ignore', 'pipe', 'inherit'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let stderr = '';
+  child.stderr!.on('data', (d) => { stderr += String(d); });
   const exit = (signal: NodeJS.Signals): Promise<void> =>
     new Promise<void>((res) => {
       if (child.exitCode !== null || child.signalCode !== null) return res();
@@ -111,11 +135,21 @@ function startChildServer(
     });
   return new Promise((res, rej) => {
     child.once('error', rej);
-    child.once('exit', (code) => rej(new Error(`mock daemon exited early (${code})`)));
+    child.once('exit', (code) =>
+      rej(new Error(`mock daemon exited early (${code}): ${stderr.trim() || 'no stderr'}`)));
     child.stdout!.once('data', () => {
       child.removeAllListeners('exit');
-      // SIGKILL leaves a POSIX socket file behind: a stale socket.
-      res({ stop: () => exit('SIGTERM'), kill: () => exit('SIGKILL') });
+      res({
+        // A signalled node child skips server.close(), so the POSIX socket
+        // file stays behind. A clean stop removes it.
+        stop: async () => {
+          await exit('SIGTERM');
+          removeSocketFile(endpoint);
+        },
+        // SIGKILL leaves the file on purpose: a stale socket. The top-level
+        // afterEach removes it once the test is done.
+        kill: () => exit('SIGKILL'),
+      });
     });
   });
 }
