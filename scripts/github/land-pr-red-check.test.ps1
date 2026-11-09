@@ -29,8 +29,8 @@ $env:CCV3_LAND_LOCK = Join-Path $work 'land.lock'; $env:CCV3_LAND_LOCK_LOG = Joi
 $sha = '0123456789abcdef0123456789abcdef01234567'
 $branch = 'fix/red-check-wiring'
 $prUrl = 'repos/Rev4nchist/Continuous-Claude-v3/pulls/7'
-$runsUrl = "repos/Rev4nchist/Continuous-Claude-v3/commits/$sha/check-runs?per_page=100"
-$statusUrl = "repos/Rev4nchist/Continuous-Claude-v3/commits/$sha/status?per_page=100"
+$runsUrl = "repos/Rev4nchist/Continuous-Claude-v3/commits/$sha/check-runs?per_page"   # cmd.exe splits an unquoted argument at "=", so a stub sees %~2 up to "?per_page"
+$statusUrl = "repos/Rev4nchist/Continuous-Claude-v3/commits/$sha/status?per_page"
 
 function New-Run([string]$name, [string]$status, $conclusion, [string]$app = 'github-actions') {
   @{ id = 1; name = $name; status = $status; conclusion = $conclusion; app = @{ slug = $app } }
