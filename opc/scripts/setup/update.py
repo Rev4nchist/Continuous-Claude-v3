@@ -37,6 +37,8 @@ except ImportError:
     console = _FallbackConsole()
     Confirm = None  # type: ignore
 
+from scripts.setup.hooks_build import build_and_sync_hooks  # noqa: E402
+
 
 def file_hash(path: Path) -> str:
     """Get MD5 hash of file contents."""
@@ -169,45 +171,6 @@ def copy_file(src: Path, dst: Path) -> bool:
         return False
 
 
-def build_typescript_hooks(hooks_dir: Path) -> tuple[bool, str]:
-    """Build TypeScript hooks using npm."""
-    if not (hooks_dir / "package.json").exists():
-        return True, "No package.json"
-
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        return False, "npm not found"
-
-    try:
-        # Install deps
-        result = subprocess.run(
-            [npm_cmd, "install"],
-            cwd=hooks_dir,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            return False, f"npm install failed: {result.stderr[:100]}"
-
-        # Build
-        result = subprocess.run(
-            [npm_cmd, "run", "build"],
-            cwd=hooks_dir,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            return False, f"npm build failed: {result.stderr[:100]}"
-
-        return True, "Built successfully"
-    except subprocess.TimeoutExpired:
-        return False, "Timed out"
-    except Exception as e:
-        return False, str(e)
-
-
 def run_update() -> None:
     """Run the update wizard."""
     console.print("[bold]OPC UPDATE WIZARD[/bold]\n")
@@ -242,7 +205,6 @@ def run_update() -> None:
     # Note: scripts subdirs are listed explicitly to avoid duplicate scanning
     checks = [
         ("hooks", claude_dir / "hooks", {".py", ".sh"}),  # Python/shell hooks
-        ("hooks/src", claude_dir / "hooks" / "src", {".ts"}),  # TypeScript hooks
         ("skills", claude_dir / "skills", {".md"}),
         ("rules", claude_dir / "rules", {".md"}),
         ("agents", claude_dir / "agents", {".md", ".yaml", ".yml"}),
@@ -252,7 +214,6 @@ def run_update() -> None:
 
     all_new = []
     all_updated = []
-    ts_updated = False
 
     for subdir, installed_path, extensions in checks:
         source_path = integration_source / subdir
@@ -262,8 +223,6 @@ def run_update() -> None:
             all_new.append((subdir, f, source_path, installed_path))
         for f in diff["updated"]:
             all_updated.append((subdir, f, source_path, installed_path))
-            if f.endswith(".ts"):
-                ts_updated = True
 
         # Show status
         status = []
@@ -362,19 +321,14 @@ def run_update() -> None:
     else:
         console.print("  [dim]TLDR not installed, skipping[/dim]")
 
-    # Step 5: Rebuild hooks if needed
-    console.print("\n[bold]Step 5/5: Rebuilding TypeScript hooks...[/bold]")
+    # Step 5: Build hooks in the repo, then sync them to ~/.claude
+    console.print("\n[bold]Step 5/5: Building TypeScript hooks in the repo and syncing...[/bold]")
 
-    if ts_updated or all_new:
-        hooks_dir = claude_dir / "hooks"
-        success, msg = build_typescript_hooks(hooks_dir)
-        if success:
-            console.print(f"  [green]OK[/green] {msg}")
-        else:
-            console.print(f"  [yellow]WARN[/yellow] {msg}")
-            console.print("  You can build manually: cd ~/.claude/hooks && npm run build")
+    success, msg = build_and_sync_hooks(integration_source, claude_dir, log=console.print)
+    if success:
+        console.print(f"  [green]OK[/green] {msg}")
     else:
-        console.print("  [dim]No TypeScript changes, skipping build[/dim]")
+        console.print(f"  [yellow]WARN[/yellow] {msg}")
 
     # Done
     console.print("\n[bold green]Update complete![/bold green]")
