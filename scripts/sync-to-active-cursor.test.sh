@@ -685,6 +685,21 @@ out="$(env -u CCV3_MACHINE_PROFILE CCV3_MACHINE_PROFILE=personal HOME="$HOMEDIR"
 chk "named profile missing on disk: exit 0" "$( [ "$rc" -eq 0 ] && echo 1 || echo 0)"
 chk "named profile missing on disk: WARN" "$(printf '%s' "$out" | grep -q 'WARN:' && echo 1 || echo 0)"
 
+echo "=== T19: hooks/package-lock.json reaches ~/.claude/hooks in both sync modes ==="
+# Failure modes: (a) --changed maps no path for the lock file, so a lock-only commit never arrives,
+# (b) the full mirror skips it, (c) an edited lock does not update the active copy,
+# Without the lock in active, the deps stamp (package.json + lock hash) never changes on a lock-only commit.
+mkdir -p "$REPO/.claude/hooks"
+printf '{"lock":1}\n' > "$REPO/.claude/hooks/package-lock.json"; commit t19-lock-v1
+sync --changed >/dev/null
+chk "(a) --changed: package-lock.json reaches ~/.claude/hooks" "$( [ "$(cat "$ACT/hooks/package-lock.json" 2>/dev/null)" = '{"lock":1}' ] && echo 1 || echo 0)"
+printf '{"lock":2}\n' > "$REPO/.claude/hooks/package-lock.json"; commit t19-lock-v2
+sync --changed >/dev/null
+chk "(c) --changed: an edited lock file updates the active copy" "$( [ "$(cat "$ACT/hooks/package-lock.json" 2>/dev/null)" = '{"lock":2}' ] && echo 1 || echo 0)"
+rm -f "$ACT/hooks/package-lock.json"
+sync >/dev/null
+chk "(b) full mirror: package-lock.json reaches ~/.claude/hooks" "$( [ "$(cat "$ACT/hooks/package-lock.json" 2>/dev/null)" = '{"lock":2}' ] && echo 1 || echo 0)"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

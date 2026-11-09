@@ -263,6 +263,32 @@ def test_runtime_deps_installed_when_lock_file_changed(layout):
     assert len(runner.active_install_calls()) == 1
 
 
+def test_copy_brings_the_lock_file_to_active(layout):
+    _repo, opc_source, claude_dir = layout
+    (opc_source / "hooks" / "package-lock.json").write_text('{"v": 1}')
+    ok, msg = run_helper(layout, Runner())
+    assert ok, msg
+    assert (claude_dir / "hooks" / "package-lock.json").read_text() == '{"v": 1}'
+
+
+def test_lock_only_change_in_repo_triggers_reinstall(layout):
+    _repo, opc_source, claude_dir = layout
+    repo_lock = opc_source / "hooks" / "package-lock.json"
+    repo_lock.write_text('{"v": 1}')
+    settled_install(layout)
+    unchanged = Runner()
+    run_helper(layout, unchanged)
+    assert unchanged.active_install_calls() == []
+    stamp_before = (claude_dir / "hooks" / hooks_build.DEPS_STAMP_NAME).read_text()
+    repo_lock.write_text('{"v": 2}')  # package.json stays the same
+    runner = Runner()
+    ok, msg = run_helper(layout, runner)
+    assert ok, msg
+    assert len(runner.active_install_calls()) == 1
+    stamp_after = (claude_dir / "hooks" / hooks_build.DEPS_STAMP_NAME).read_text()
+    assert stamp_after != stamp_before
+
+
 def test_runtime_deps_installed_once_when_lock_file_appears(layout):
     _repo, _opc, claude_dir = layout
     settled_install(layout)
