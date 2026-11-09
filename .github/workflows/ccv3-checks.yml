@@ -144,7 +144,8 @@ jobs:
         run: |
           set -euo pipefail
           npm run build
-          git diff --exit-code -- dist
+          # The committed dist files hold CRLF (Windows autocrlf) and Linux writes LF: compare content, not line endings.
+          git diff --exit-code --ignore-cr-at-eol -- dist
           test -z "$(git ls-files --others --exclude-standard -- dist)"
       - name: Hooks tests (vitest)
         if: ${{ !cancelled() }}
