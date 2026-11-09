@@ -780,7 +780,7 @@ test('a README that names only tasks in tasks.json is a PASS that reports the co
   put(readmeOf(fx), `The \`${TASK_NAME}\` task runs daily. It is the same \`${TASK_NAME}\`.\n`);
   const r = run(fx);
   assert.equal(r.checks[READMEcheck].status, 'PASS', r.checks[READMEcheck].detail);
-  assert.match(r.checks[READMEcheck].detail, /2 task name/);
+  assert.match(r.checks[READMEcheck].detail, /^2 task name\(s\)/);
   assert.equal(r.code, 0, r.stdout);
 });
 
@@ -789,7 +789,7 @@ test('a task name that is only a prefix of a real task is still a FAIL (positive
   put(readmeOf(fx), 'The CCv3-Fake task runs daily.\n');
   const c = run(fx).checks[READMEcheck];
   assert.equal(c.status, 'FAIL', c.detail);
-  assert.match(c.detail, /CCv3-Fake\b/);
+  assert.match(c.detail, /CCv3-Fake \(line 1\)/);
   put(readmeOf(fx), `The ${TASK_NAME}-2 task runs daily.\n`);
   assert.equal(run(fx).checks[READMEcheck].status, 'FAIL');
   put(readmeOf(fx), `The ${TASK_NAME}_v2 task runs daily.\n`);
