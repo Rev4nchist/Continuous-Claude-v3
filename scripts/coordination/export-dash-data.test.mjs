@@ -455,6 +455,26 @@ describe('writeExport', () => {
     assert.deepEqual(snaps.map((s) => s.day), ['2026-11-07', '2026-11-08']);
   });
 
+  it('snapshots.json.bak is written once per Chicago day: later runs the same day keep it, the first run of a new day replaces it', () => {
+    // Breaks if every 30-minute run overwrites the .bak, so it covers 30 minutes and not one day (lane fleetops-bak-once-a-day).
+    const out = tmpDir();
+    const bakFile = path.join(out, 'snapshots.json.bak');
+    const snapFile = path.join(out, 'snapshots.json');
+    writeExport(out, collected(T1));
+    writeExport(out, collected(T2, { lanes: [lane({ id: 'a' }), lane({ id: 'c' })] })); // same day: the .bak is the T1 file
+    const bakAfterSecond = fs.readFileSync(bakFile, 'utf8');
+    assert.equal(readSnapshots(bakFile)[0].snapshot_at, T1);
+    writeExport(out, collected(T2, { lanes: [lane({ id: 'a' }), lane({ id: 'c' }), lane({ id: 'd' })] })); // third run, same day
+    assert.equal(fs.readFileSync(bakFile, 'utf8'), bakAfterSecond, 'a later run on the same day must not replace the .bak');
+    assert.notEqual(fs.readFileSync(snapFile, 'utf8'), bakAfterSecond, 'the snapshots file moved on');
+    const endOfDay = fs.readFileSync(snapFile, 'utf8');
+    writeExport(out, collected(T3)); // first run of the next day: the .bak is the file as the old day left it
+    assert.equal(fs.readFileSync(bakFile, 'utf8'), endOfDay);
+    const bakDayTwo = fs.readFileSync(bakFile, 'utf8');
+    writeExport(out, collected(T3, { lanes: [lane({ id: 'z' })] })); // later run, day two
+    assert.equal(fs.readFileSync(bakFile, 'utf8'), bakDayTwo);
+  });
+
   it('a snapshots file that does not parse fails the export and changes nothing', () => {
     // Breaks if a parse error is swallowed and an empty history is written over the old one.
     const out = tmpDir();
