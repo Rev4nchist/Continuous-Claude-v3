@@ -261,7 +261,7 @@ function labelShape(raw, create) {
 }
 var SELF_FLAG = /(?:^|\s)--(?:confirm|apply)(?:=|\s|$)/;
 var NODE_CMD = /\bnode(?:\.exe)?["']?\s/i;
-var APPLY_N = /(?:^|\s)--apply(?:=|\s+)["']?\d+/;
+var APPLY_N = /(?:^|\s)--apply(?:=|\s+)["']?\d+(?![\d>])/;
 var CONFIRM_PATHWAY = /(?:^|\s)--confirm(?:=|\s+)["']?(?:none|coderabbit|both|wait)\b/;
 var BY_FLAG = /(?:^|\s)--by(?:=|\s)/;
 var SCRIPT_GLOB = /scripts[\\/]+github[\\/]+[^\s"']*[*?[]/i;
