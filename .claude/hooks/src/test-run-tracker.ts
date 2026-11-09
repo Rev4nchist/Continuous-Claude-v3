@@ -9,10 +9,12 @@
  * Hook: PostToolUse and PostToolUseFailure (Bash|PowerShell). A failing command arrives only as
  * PostToolUseFailure, so both events must be registered or a failed run is never recorded.
  * State: $TEMP/claude-recent-test-runs-{sessionId}.json = {lastTestRun, command, ok}
+ * `command` is stored with secrets masked (maskSecrets). done-proof reads it for isRatchet and for the failure message.
  */
 
 import * as fs from 'fs';
 import { isRatchet } from './shared/done-proof.js';
+import { maskSecrets } from './shared/guard-log.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { getStateFile } from './shared/test-run-state.js';
 import { exitCodeOf } from './shared/tool-error.js';
@@ -169,9 +171,11 @@ async function main() {
       return;
     }
     try {
+      // The state file is a plain temp file. Store the command with secrets masked.
+      // Every check above ran on the raw command, so the masked text changes no decision.
       fs.writeFileSync(
         stateFile,
-        JSON.stringify({ lastTestRun: Date.now(), command, ok: okOf(data) })
+        JSON.stringify({ lastTestRun: Date.now(), command: maskSecrets(command), ok: okOf(data) })
       );
     } catch {
       // Fail open
