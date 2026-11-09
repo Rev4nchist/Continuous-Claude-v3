@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Client } from 'pg';
 
-import { E2E_IDENTITY_DIR, E2E_SPEND_DIR, E2E_STATE_DIR } from '../playwright.config';
+import { E2E_IDENTITY_DIR, E2E_LANE_DASH_DIR, E2E_SPEND_DIR, E2E_STATE_DIR } from '../playwright.config';
 import { laneOrderSql } from '../src/server/queries/lane-sort';
 
 /**
@@ -309,6 +309,32 @@ export function clearSpendDir(): void {
   mkdirSync(SPEND_DIR, { recursive: true });
   for (const name of readdirSync(SPEND_DIR)) {
     rmSync(join(SPEND_DIR, name), { recursive: true, force: true });
+  }
+}
+
+// --- Lane-dash export files (the Flow tab) ---------------------------------------------------------
+
+/** The E2E server's lane-dash folder (AGENTIC_OS_LANE_DASH_DIR). Never the real ~/.claude/state/lane-dash. */
+export const LANE_DASH_DIR = E2E_LANE_DASH_DIR;
+
+/** Write `<name>.json` (`flow` or `factory`) into the E2E lane-dash dir. Returns the path. */
+export function writeLaneDash(name: string, file: unknown): string {
+  return writeLaneDashRaw(`${name}.json`, JSON.stringify(file, null, 2));
+}
+
+/** Write any text under any name in the E2E lane-dash dir (for a file that is not valid JSON). */
+export function writeLaneDashRaw(fileName: string, text: string): string {
+  mkdirSync(LANE_DASH_DIR, { recursive: true });
+  const path = join(LANE_DASH_DIR, fileName);
+  writeFileSync(path, text);
+  return path;
+}
+
+/** Remove EVERY file in the E2E lane-dash dir, so an export of one test never reaches the next. */
+export function clearLaneDashDir(): void {
+  mkdirSync(LANE_DASH_DIR, { recursive: true });
+  for (const name of readdirSync(LANE_DASH_DIR)) {
+    rmSync(join(LANE_DASH_DIR, name), { recursive: true, force: true });
   }
 }
 

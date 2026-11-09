@@ -305,15 +305,18 @@ function ghTail(e, repo) {
   return (repo ? noUrl.split(repo).join('<repo>') : noUrl).slice(0, 200);
 }
 
+/** deps for a reader's gh calls: the caller's own budget when it has one, else a new budget in a copy. The caller's object is never written. */
+const withBudget = (deps) => (deps.ghBudget ? deps : { ...deps, ghBudget: { start: clockOf(deps) } });
+
 /**
- * One gh call under the shared time budget (GH_BUDGET_MS from the first gh call). The timeout of a call is the smaller of
+ * One gh call under the shared time budget (GH_BUDGET_MS from the first gh call; deps.ghBudget is set by withBudget). The timeout of a call is the smaller of
  * GH_CALL_MS and what the budget has left; with nothing left no call is made. ENOENT retries once with deps.ghFallback.
  * Returns the stdout text, or null after one stderr line. A failed call's stdout is never read.
  */
 function ghRun(args, deps, repo, label) {
   const err = deps.err ?? console.error;
   const run = deps.run ?? execFileSync;
-  const budget = (deps.ghBudget ??= { start: clockOf(deps) });
+  const budget = deps.ghBudget;
   const left = Math.floor(GH_BUDGET_MS - (clockOf(deps) - budget.start));
   if (left <= 0) {
     err(`export-factory-data: ${label}: gh time budget used up`);
@@ -359,13 +362,13 @@ export function readLanded({ cwd, since }, deps = {}) {
   const run = deps.run ?? execFileSync;
   let out;
   try {
-    const args = ['log', '--first-parent', 'main', '--since', since, '--format=%P%x1f%ct%x1f%s'];
+    const args = ['log', '--first-parent', 'main', '--since', since, '--no-show-signature', '--format=%P%x1f%ct%x1f%s'];
     out = String(run('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }));
   } catch (e) {
     err(`export-factory-data: prpr.prs.landed: git ${why(e)}`);
     return { ok: false, reason: 'reader error' };
   }
-  const reduce = reducers(0).landed;
+  const reduce = reducers().landed; // the cutoff is applied by intake, not here
   const rows = [];
   let lines = 0;
   let bad = 0;
@@ -385,9 +388,10 @@ export function readLanded({ cwd, since }, deps = {}) {
  * reaches a Chicago day before `start`, or the page cap ("too large"). Any gh failure is "unreachable" for the whole family:
  * no partial pages are kept. deps = {run, err, clock, ghFallback, ghBudget}.
  */
-export function readOpened({ repo, start }, deps = {}) {
+export function readOpened({ repo, start }, callerDeps = {}) {
+  const deps = withBudget(callerDeps);
   const label = 'prpr.prs.opened';
-  const reduce = reducers(0).opened;
+  const reduce = reducers().opened; // the cutoff is applied by intake, not here
   const rows = [];
   let lines = 0;
   let bad = 0;
@@ -422,12 +426,13 @@ const goodBound = (s) => typeof s === 'string' && BOUND.test(s) && Number.isFini
  * the same week. GitHub answers a malformed bound with 0 and exit 0, so both bounds are checked here and a miss makes no call.
  * Returns {ok: true, apiCount, weekStart} or {ok: false, reason}. deps as readOpened.
  */
-export function readMergedWeek({ repo, weekStart, from, to }, deps = {}) {
+export function readMergedWeek({ repo, weekStart, from, to }, callerDeps = {}) {
   const label = 'prpr.prs.check';
   if (!goodBound(from) || !goodBound(to)) {
-    (deps.err ?? console.error)(`export-factory-data: ${label}: bad time bound`);
+    (callerDeps.err ?? console.error)(`export-factory-data: ${label}: bad time bound`);
     return { ok: false, reason: 'reader error' };
   }
+  const deps = withBudget(callerDeps);
   const url = `search/issues?q=repo:${repo}+is:pr+base:main+merged:${from}..${to}&per_page=1`;
   const out = ghRun(['api', '-X', 'GET', url, '--jq', '.total_count'], deps, repo, label);
   if (out === null) return UNREACHABLE;
@@ -511,7 +516,7 @@ export function writeFactory(outDir, envelope, deps = {}) {
 const USAGE = `usage: export-factory-data.mjs [--out <dir>] [--gates <file>] [--reviews <file>] [--coderabbit <file>]
                                [--handoffs <dir>] [--dash-config <file>] [--router-config <file>]
                                [--repo <owner/name>] [--git-root <dir>]
-  --out           output folder (default ~/.claude/state/lane-dash)
+  --out            output folder (default ~/.claude/state/lane-dash)
   --gates          pre-PR gate log (default ~/.claude/logs/pre-pr-gates.jsonl)
   --reviews        review ledger (default ~/.claude/state/cursor-review-ledger.jsonl)
   --coderabbit     CodeRabbit paid ledger (default ~/.claude/state/coderabbit-paid.jsonl)

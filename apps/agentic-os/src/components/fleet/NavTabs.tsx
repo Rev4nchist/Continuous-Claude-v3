@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 
-export type ViewId = 'overview' | 'board' | 'sessions' | 'spend';
+export type ViewId = 'overview' | 'board' | 'sessions' | 'flow' | 'spend';
 
 type Tab = { id: string; label: string; tag: 'NEXT' | 'LATER' | null };
 
@@ -10,7 +10,7 @@ const TABS: Tab[] = [
   { id: 'board', label: 'Board', tag: null },
   { id: 'sessions', label: 'Sessions', tag: null },
   { id: 'workflows', label: 'Workflows', tag: 'NEXT' },
-  { id: 'handoffs', label: 'Handoffs', tag: 'NEXT' },
+  { id: 'flow', label: 'Flow', tag: null },
   { id: 'notes', label: 'Notes', tag: 'NEXT' },
   { id: 'spend', label: 'Spend', tag: null },
   { id: 'swarm', label: 'Swarm', tag: 'LATER' },
@@ -20,7 +20,7 @@ const isLive = (tab: Tab): tab is Tab & { id: ViewId } => tab.tag === null;
 
 /**
  * The left half of the top strip: the mark and the view tabs. Pure props. Only Overview, Board,
- * Sessions and Spend work; the rest are disabled buttons (not focusable) with a NEXT or LATER tag. The active
+ * Sessions, Flow and Spend work; the rest are disabled buttons (not focusable) with a NEXT or LATER tag. The active
  * tab has aria-current="page" and an underline. The `nav` has no box of its own: MissionControl draws
  * the strip around it and puts the live indicator on the right. Wraps on a phone.
  */
