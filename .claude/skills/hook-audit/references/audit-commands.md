@@ -30,8 +30,8 @@ for (const [eventType, entries] of Object.entries(hooks)) {
     const matcher = entry.matcher || '(all)';
     const hookList = entry.hooks || [];
     for (const h of hookList) {
-      if (h.command) {
-        const match = h.command.match(/dist\/([^\.]+)\.mjs/);
+      if (h.command || h.args) {
+        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
         if (match) {
           registeredMap.set(match[1], { eventType, matcher, timeout: h.timeout, command: h.command });
         }
@@ -43,7 +43,11 @@ for (const [eventType, entries] of Object.entries(hooks)) {
 const registered = new Set(registeredMap.keys());
 
 // 3. Cross-reference
-const unregistered = srcFiles.filter(f => !registered.has(f));
+// Retained on purpose: source stays, no registration (see retained-unregistered.json). Not reported as unregistered.
+let RETAINED = {};
+try { RETAINED = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'skills', 'hook-audit', 'references', 'retained-unregistered.json'), 'utf8')); } catch (e) { console.log('WARN: retained-unregistered.json not readable (' + e.code + '); retained hooks show as unregistered until main syncs to ~/.claude/skills'); }
+const retained = srcFiles.filter(f => !registered.has(f) && RETAINED[f]);
+const unregistered = srcFiles.filter(f => !registered.has(f) && !RETAINED[f]);
 const brokenRegs = [];
 const staleBuilds = [];
 
@@ -65,6 +69,10 @@ for (const [name, info] of registeredMap) {
 // Output
 console.log('=== UNREGISTERED HOOKS (' + unregistered.length + ') ===');
 unregistered.forEach(h => console.log('  ' + h));
+
+console.log('');
+console.log('=== RETAINED, UNREGISTERED ON PURPOSE (' + retained.length + ') ===');
+retained.forEach(h => console.log('  ' + h + ' -- ' + RETAINED[h]));
 
 console.log('');
 console.log('=== BROKEN REGISTRATIONS (' + brokenRegs.length + ') ===');
@@ -95,14 +103,17 @@ const SRC_DIR = path.join(os.homedir(), 'continuous-claude', '.claude', 'hooks',
 const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 
 // Get registered set
+// Retained on purpose: source stays, no registration (see retained-unregistered.json). Not reported as unregistered.
+let RETAINED = {};
+try { RETAINED = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'skills', 'hook-audit', 'references', 'retained-unregistered.json'), 'utf8')); } catch (e) { console.log('WARN: retained-unregistered.json not readable (' + e.code + '); retained hooks show as unregistered until main syncs to ~/.claude/skills'); }
 const settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
 const registered = new Set();
 for (const [eventType, entries] of Object.entries(settings.hooks || {})) {
   if (!Array.isArray(entries)) continue;
   for (const entry of entries) {
     for (const h of (entry.hooks || [])) {
-      if (h.command) {
-        const match = h.command.match(/dist\/([^\.]+)\.mjs/);
+      if (h.command || h.args) {
+        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
         if (match) registered.add(match[1]);
       }
     }
@@ -113,7 +124,7 @@ for (const [eventType, entries] of Object.entries(settings.hooks || {})) {
 const srcFiles = fs.readdirSync(SRC_DIR)
   .filter(f => f.endsWith('.ts') && !fs.statSync(path.join(SRC_DIR, f)).isDirectory())
   .map(f => f.replace('.ts', ''))
-  .filter(f => !registered.has(f));
+  .filter(f => !registered.has(f) && !RETAINED[f]);
 
 console.log('| Hook | Event Type | Matcher | Lines | Classification |');
 console.log('|------|-----------|---------|-------|----------------|');
@@ -165,14 +176,17 @@ const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 const DIST_PREFIX = path.join(os.homedir(), '.claude', 'hooks', 'dist');
 
 // Build registered set
+// Retained on purpose: source stays, no registration (see retained-unregistered.json). Not reported as unregistered.
+let RETAINED = {};
+try { RETAINED = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'skills', 'hook-audit', 'references', 'retained-unregistered.json'), 'utf8')); } catch (e) { console.log('WARN: retained-unregistered.json not readable (' + e.code + '); retained hooks show as unregistered until main syncs to ~/.claude/skills'); }
 const settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
 const registered = new Set();
 for (const [eventType, entries] of Object.entries(settings.hooks || {})) {
   if (!Array.isArray(entries)) continue;
   for (const entry of entries) {
     for (const h of (entry.hooks || [])) {
-      if (h.command) {
-        const match = h.command.match(/dist\/([^\.]+)\.mjs/);
+      if (h.command || h.args) {
+        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
         if (match) registered.add(match[1]);
       }
     }
@@ -190,7 +204,7 @@ const timeouts = {
 const srcFiles = fs.readdirSync(SRC_DIR)
   .filter(f => f.endsWith('.ts') && !fs.statSync(path.join(SRC_DIR, f)).isDirectory())
   .map(f => f.replace('.ts', ''))
-  .filter(f => !registered.has(f));
+  .filter(f => !registered.has(f) && !RETAINED[f]);
 
 const suggestions = {};
 
@@ -275,10 +289,10 @@ for (const [eventType, entries] of Object.entries(settings.hooks || {})) {
   if (!Array.isArray(entries)) continue;
   for (const entry of entries) {
     for (const h of (entry.hooks || [])) {
-      if (h.command) {
-        const match = h.command.match(/dist\/([^\.]+)\.mjs/);
+      if (h.command || h.args) {
+        const match = [h.command, ...(h.args || [])].filter(Boolean).join(' ').match(/dist\/([^\.]+)\.mjs/);
         if (match && !srcFiles.has(match[1])) {
-          if (h.command.includes('.py')) continue;
+          if ((h.command || '').includes('.py')) continue;
           console.log('  ' + match[1] + ' (' + eventType + ':' + (entry.matcher || 'all') + ')');
           count++;
         }
