@@ -9,6 +9,8 @@
 //   AO4  the job runs on every PR                -> a script step loses its scope `if`, or the scope step stops matching apps/agentic-os/
 //   AO5  an action is not pinned, or a secret    -> a `uses:` tag replaces a SHA, or the job reads `secrets.`
 //   AO6  a step can hang the runner              -> the job or a script step loses its timeout-minutes
+//   AO7  CI typecheck cannot find @playwright/test -> the root `npm ci --ignore-scripts` step is removed, gated off, or moved after the app install
+//        (seen on PR 466: e2e/*.spec.ts import the root package, which `npm ci` in apps/agentic-os does not install)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -52,11 +54,23 @@ for (const script of ['lint', 'typecheck', 'build']) {
   });
 }
 
+/** The `npm ci` step that runs in the app folder (the job also has one at the repo root: AO7). */
+const appInstall = (block) => steps(block).find((s) => /^npm ci\b/.test(field(s, 'run') ?? '') && field(s, 'working-directory') === APP);
+
 test('AO3: the install is a lockfile install without scripts, in the app folder', () => {
-  const step = stepRunning(job() ?? '', /^npm ci\b/);
-  assert.ok(step, 'no "npm ci" step');
+  const step = appInstall(job() ?? '');
+  assert.ok(step, `no "npm ci" step in ${APP}`);
   assert.match(field(step, 'run'), /--ignore-scripts/);
-  assert.equal(field(step, 'working-directory'), APP);
+});
+
+test('AO7: the root dev dependencies are installed before the app, so e2e/ specs find @playwright/test', () => {
+  const block = job() ?? '';
+  const all = steps(block);
+  const root = all.find((s) => /^npm ci\b/.test(field(s, 'run') ?? '') && !field(s, 'working-directory'));
+  assert.ok(root, 'no root "npm ci" step (CI typecheck fails: e2e/*.spec.ts import @playwright/test from the root package)');
+  assert.match(field(root, 'run'), /--ignore-scripts/);
+  assert.ok(/steps\.scope\.outputs\.run == 'true'/.test(field(root, 'if') ?? ''), 'the root install is not gated on the scope step');
+  assert.ok(all.indexOf(root) < all.indexOf(appInstall(block)), 'the root install must run before the app install');
 });
 
 test('AO4: the job runs only when apps/agentic-os or this workflow changed', () => {
@@ -69,8 +83,8 @@ test('AO4: the job runs only when apps/agentic-os or this workflow changed', () 
     const step = stepRunning(block, new RegExp(`^npm run ${script}$`));
     assert.ok(step && /steps\.scope\.outputs\.run == 'true'/.test(field(step, 'if') ?? ''), `"npm run ${script}" is not gated on the scope step`);
   }
-  const install = stepRunning(block, /^npm ci\b/);
-  assert.ok(install && /steps\.scope\.outputs\.run == 'true'/.test(field(install, 'if') ?? ''), 'the install is not gated on the scope step');
+  const install = appInstall(block);
+  assert.ok(install &&/steps\.scope\.outputs\.run == 'true'/.test(field(install, 'if') ?? ''), 'the install is not gated on the scope step');
 });
 
 test('AO5: every action is pinned to a full SHA and the job reads no secret', () => {
