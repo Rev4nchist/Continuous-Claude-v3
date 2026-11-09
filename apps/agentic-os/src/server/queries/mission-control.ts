@@ -21,9 +21,20 @@ import {
   type SessionDetail,
 } from '@/server/queries/session-detail';
 import { getActiveSessions, type ActiveSessions } from '@/server/queries/sessions';
-import { foldTiles, type BreaksTile, type QuotaTile, type SpendTile } from '@/server/queries/spend-fold';
+import {
+  foldSpendView,
+  foldTiles,
+  type BreaksTile,
+  type QuotaTile,
+  type SessionRow,
+  type SpendFoldView,
+  type SpendTile,
+} from '@/server/queries/spend-fold';
+import type { RollupResult } from '@/server/queries/spend-rollup-parse';
+import { readSessionNames } from '@/server/sources/identity-names';
 import { safeMessage } from '@/server/sources/safe-message';
-import { readStateFiles, type StateFiles } from '@/server/sources/state-files';
+import { readSpendRollup } from '@/server/sources/spend-rollup';
+import { readStateFiles, type StateFiles, type StateSnapshot } from '@/server/sources/state-files';
 
 /**
  * ONE snapshot, assembled in ONE place.
@@ -65,10 +76,10 @@ export type StatTiles = {
 
 export type { DetailUnavailable, LaneBoard, PrRow, ReadyItem, SessionCard, SessionDetail };
 
-export const VIEW_IDS = ['overview', 'board', 'sessions'] as const;
+export const VIEW_IDS = ['overview', 'board', 'sessions', 'spend'] as const;
 export type ViewName = (typeof VIEW_IDS)[number];
 
-/** A `view` from a query string: one of the three known values, else null. Never an error. */
+/** A `view` from a query string: one of the known values, else null. Never an error. */
 export function parseViewName(value: unknown): ViewName | null {
   const first = Array.isArray(value) ? value[0] : value;
   return VIEW_IDS.find((view) => view === first) ?? null;
@@ -88,6 +99,15 @@ export function parseProjectKey(value: unknown): { ok: true; key: string | null 
   return { ok: true, key: first };
 }
 
+/** A by-session row with the session name (from the identity file), or null when the session has none. */
+export type SpendSessionRow = SessionRow & { name: string | null };
+
+/**
+ * The Spend tab: the fold of today's state files, the by-session names and the engine-by-model rollup.
+ * `rollup.status` tells "not built yet" (absent or bad) from "schema not known".
+ */
+export type SpendView = Omit<SpendFoldView, 'bySession'> & { bySession: SpendSessionRow[]; rollup: RollupResult };
+
 export type MissionControlSnapshot = {
   fleet: FleetOverview;
   active: ActiveSessions;
@@ -106,6 +126,8 @@ export type MissionControlSnapshot = {
   prs: PrRow[];
   /** The lane Board. Computed only when the request carries `view=board`, else null. */
   board: LaneBoard | null;
+  /** The Spend tab. Computed only when the request carries `view=spend`, else null. Not `tiles.spend`. */
+  spend: SpendView | null;
   /** When the server produced this, ISO-8601 UTC. The UI shows staleness relative
    *  to receipt rather than to this value — a clock difference between server and
    *  browser is not the user's problem to reason about. */
@@ -146,9 +168,28 @@ function laneSource(
   return { ...base, status: 'ok', detail: `active lanes ${lanes.value}, lanes ${board.total}` };
 }
 
+/** The Spend tab. Reads the rollup file and the names of the (at most 10) by-session rows; nothing else. */
+async function buildSpendView(
+  snapshots: readonly StateSnapshot[],
+  liveIds: ReadonlySet<string>,
+  nowMs: number,
+): Promise<SpendView> {
+  const folded = foldSpendView(snapshots, liveIds, nowMs);
+  const [rollup, names] = await Promise.all([
+    readSpendRollup(folded.day),
+    readSessionNames(folded.bySession.map((row) => row.sessionId)),
+  ]);
+  return {
+    ...folded,
+    bySession: folded.bySession.map((row) => ({ ...row, name: names.get(row.sessionId) ?? null })),
+    rollup,
+  };
+}
+
 /**
  * `sessionId` must already pass parseSessionId(); the caller validates it.
  * `withBoard` is true only for a request that carries `view=board`.
+ * `withSpend` is true only for a request that carries `view=spend`.
  * `project` is the board key for that view; it must already pass parseProjectKey(). Default: continuous-claude.
  * The active-lane tile (getActiveLaneCount) stays machine-wide: it counts every board.
  */
@@ -156,6 +197,7 @@ export async function getMissionControlSnapshot(
   sessionId: string | null = null,
   withBoard = false,
   project: string = DEFAULT_BOARD,
+  withSpend = false,
 ): Promise<MissionControlSnapshot> {
   const [databaseRaw, fleet, active, files, lanes, heldLanes, board] = await Promise.all([
     checkDatabaseReady(),
@@ -187,6 +229,7 @@ export async function getMissionControlSnapshot(
   // A state file has no live flag: fold only the files of the live sessions.
   const liveIds = new Set(active.sessions.map((s) => s.id));
   const cost = foldTiles(stateFiles.snapshots, liveIds);
+  const spend = withSpend ? await buildSpendView(stateFiles.snapshots, liveIds, nowMs) : null;
   const tiles: StatTiles = {
     liveSessions: active.sessions.length,
     working: sessions.cards.filter((c) => c.chip === 'working').length,
@@ -231,6 +274,7 @@ export async function getMissionControlSnapshot(
         : { id: sessionId as string, reason: 'unknown id' },
     prs: sessions.prs,
     board,
+    spend,
     generatedAt: new Date().toISOString(),
   };
 }
