@@ -630,6 +630,17 @@ test('a last result outside allowedExit is a FAIL naming the result; one inside 
   assert.equal(ok.status, 'PASS');
 });
 
+test('a last result in warnExit is a WARN naming the result; a warnExit that is not an integer array is a WARN on the entry', () => {
+  const warn = only(sched([task({ warnExit: [10] })], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Result': '10' }) }));
+  assert.equal(warn.status, 'WARN');
+  assert.match(warn.detail, /\b10\b.*warnExit/);
+  const fail = only(sched([task({ warnExit: [10] })], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Result': '1' }) }));
+  assert.equal(fail.status, 'FAIL');
+  const bad = only(sched([task({ warnExit: 10 })], { [TASK_NAME]: taskCsv(TASK_NAME) }));
+  assert.equal(bad.status, 'WARN');
+  assert.match(bad.detail, /warnExit/);
+});
+
 test('a last run older than maxAgeHours is a WARN; one inside it is a PASS', () => {
   const stale = only(sched([task({ maxAgeHours: 48 })], { [TASK_NAME]: taskCsv(TASK_NAME, { 'Last Run Time': usTime(49 * HOUR) }) }));
   assert.equal(stale.status, 'WARN');
