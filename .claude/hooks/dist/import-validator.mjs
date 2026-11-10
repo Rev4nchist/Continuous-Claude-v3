@@ -587,6 +587,28 @@ function tryStartDaemon(projectDir) {
     return false;
   }
 }
+var UNIX_QUERY_SCRIPT = [
+  "const net=require('net');",
+  "let inp='';",
+  "process.stdin.setEncoding('utf8');",
+  "process.stdin.on('data',d=>{inp+=d;});",
+  "process.stdin.on('end',()=>{",
+  "  let buf='',fin=false;",
+  "  const done=()=>{",
+  "    if(fin)return;fin=true;",
+  "    const nl=buf.indexOf('\\n');",
+  "    const out=(nl<0?buf:buf.slice(0,nl)).trim();",
+  "    if(!out)process.exit(1);",
+  "    process.stdout.write(out+'\\n',()=>process.exit(0));",
+  "  };",
+  "  const s=net.connect(process.argv[1],()=>{s.write(inp.trim()+'\\n');});",
+  "  s.setEncoding('utf8');",
+  "  s.on('data',d=>{buf+=d;if(buf.includes('\\n'))done();});",
+  "  s.on('end',done);",
+  "  s.on('close',done);",
+  "  s.on('error',()=>{if(!fin){fin=true;process.exit(1);}});",
+  "});"
+].join("");
 function buildDaemonInvocation(connInfo, input) {
   if (connInfo.type === "tcp") {
     const psScript = [
@@ -604,7 +626,7 @@ function buildDaemonInvocation(connInfo, input) {
     ].join("; ");
     return { file: "powershell", args: ["-NoProfile", "-NonInteractive", "-Command", psScript], stdin: input };
   }
-  return { file: "nc", args: ["-U", connInfo.path || ""], stdin: input };
+  return { file: process.execPath, args: ["-e", UNIX_QUERY_SCRIPT, connInfo.path || ""], stdin: input };
 }
 function queryDaemonSync(query, projectDir) {
   if (isIndexing(projectDir)) {
