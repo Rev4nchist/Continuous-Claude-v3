@@ -2,7 +2,8 @@
 
 The repo owns the hooks source. The build runs in <repo>/.claude/hooks.
 The copy covers the files that the repo sync script copies for hooks.
-Those are the top-level hook scripts, package.json, tsconfig.json and dist/*.mjs.
+Those are the top-level hook scripts, package.json, package-lock.json, tsconfig.json
+and dist/*.mjs.
 The copy never includes hooks/src or node_modules.
 
 Used by scripts/setup/wizard.py and scripts/setup/update.py.
@@ -28,7 +29,7 @@ _DEPS_FILES = ("package.json", "package-lock.json")
 
 # Top-level hook files to copy, by suffix and by exact name.
 _TOP_LEVEL_SUFFIXES = (".sh", ".py", ".mjs", ".ps1")
-_TOP_LEVEL_NAMES = ("package.json", "tsconfig.json")
+_TOP_LEVEL_NAMES = ("package.json", "package-lock.json", "tsconfig.json")
 
 
 def manual_steps(repo_root: Path) -> str:
