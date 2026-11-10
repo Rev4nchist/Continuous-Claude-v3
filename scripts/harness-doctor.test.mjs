@@ -258,7 +258,9 @@ function commitBlocklist(repo, days) {
 function run(fx, extra = [], envExtra = {}) {
   // HARNESS_DOCTOR_SCHTASKS_DIR points the doctor at fake schtasks output, so a test never reads the real Task Scheduler.
   // HARNESS_DOCTOR_NO_DB=1 keeps a test from reading whatever database the shell points at.
-  const env = { ...process.env, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks, HARNESS_DOCTOR_NO_DB: '1', ...envExtra };
+  // CCV3_HOOK_TRACE is dropped from the caller env: the doctor reads it (hooks:trace-fresh), so a shell that sets it must not change a test.
+  const { CCV3_HOOK_TRACE: _callerTrace, ...callerEnv } = process.env;
+  const env = { ...callerEnv, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks, HARNESS_DOCTOR_NO_DB: '1', ...envExtra };
   const r = spawnSync(process.execPath, [DOCTOR, '--home', fx.home, '--repo', fx.repo, ...extra], { encoding: 'utf8', windowsHide: true, timeout: 60000, env });
   const lines = (r.stdout ?? '').split(/\r?\n/).filter(Boolean);
   const checks = {};
@@ -2162,6 +2164,18 @@ test('hooks:trace-fresh is the off WARN when CCV3_HOOK_TRACE is 0 in <home>/.cla
   assert.equal(c.status, 'WARN', c.detail);
   assert.match(c.detail, /off/);
   assert.match(c.detail, /CCV3_HOOK_TRACE/);
+});
+
+test('hooks:trace-fresh tests do not depend on the caller env: CCV3_HOOK_TRACE=0 in the test process does not turn the clean fixture into a WARN', () => {
+  const had = Object.hasOwn(process.env, 'CCV3_HOOK_TRACE');
+  const before = process.env.CCV3_HOOK_TRACE;
+  process.env.CCV3_HOOK_TRACE = '0';
+  try {
+    const c = traceCheck(fixture());
+    assert.equal(c.status, 'PASS', c.detail);
+  } finally {
+    if (had) process.env.CCV3_HOOK_TRACE = before; else delete process.env.CCV3_HOOK_TRACE;
+  }
 });
 
 test('hooks:trace-fresh is the off WARN when CCV3_HOOK_TRACE is 0 in the process env, and a settings.json with another value is not', () => {
