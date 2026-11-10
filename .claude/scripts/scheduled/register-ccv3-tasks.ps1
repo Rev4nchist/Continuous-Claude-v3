@@ -6,6 +6,8 @@
   Reads tasks.json and, for each task, builds one scheduled-task action:
     .bat  ->  cmd.exe /c "<installed script>"
     .ps1  ->  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed script>"
+  Run from the installed copy (~/.claude/scripts/scheduled), tasks.json is read from the repo found by profile-paths.ps1
+  (the machine profile repoRoot, else CCV3_REPO_ROOT, else ~/continuous-claude). -TasksFile overrides it.
   The script path in tasks.json is relative to the repo root. The task runs the INSTALLED copy under
   ~/.claude (the forward sync puts it there), so the job that runs is always main's version.
   The trigger ("daily HH:MM", "weekly <Day> HH:MM" or "every Nm", N from 1 to 1439: repeat every N minutes all day, for ever)
@@ -36,7 +38,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $ClaudeHome) { $ClaudeHome = Join-Path $env:USERPROFILE '.claude' }
-if (-not $TasksFile) { $TasksFile = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path 'scripts\scheduled\tasks.json' }
+if (-not $TasksFile) {
+  # In the repo this script is three folders below the root. The installed copy under ~/.claude is not: scripts\scheduled\tasks.json
+  # lives in the repo and does not sync. Then ask profile-paths.ps1: the machine profile repoRoot, else CCV3_REPO_ROOT, else ~/continuous-claude.
+  # The installed copy never uses the relative path: a stale file at ~\scripts\scheduled\tasks.json must not beat the configured repo.
+  $near = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path 'scripts\scheduled\tasks.json'
+  $installed = $PSScriptRoot.TrimEnd('\').StartsWith($ClaudeHome.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+  if (-not $installed -and (Test-Path -LiteralPath $near -PathType Leaf)) {
+    $TasksFile = $near
+  } else {
+    . (Join-Path $PSScriptRoot 'profile-paths.ps1')
+    $TasksFile = Join-Path (Get-Ccv3Paths 3>$null).RepoRoot 'scripts\scheduled\tasks.json'
+  }
+}
+if (-not (Test-Path -LiteralPath $TasksFile -PathType Leaf)) {
+  Write-Host "[REFUSED] tasks.json not found at $TasksFile. Pass -TasksFile, or set CCV3_REPO_ROOT to the repo (a machine profile repoRoot wins over it)."
+  exit 1
+}
 
 function Get-Trigger([string]$text) {
   if ($text -match '^daily (\d{2}:\d{2})$') { return New-ScheduledTaskTrigger -Daily -At $Matches[1] }

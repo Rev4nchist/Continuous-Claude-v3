@@ -10,11 +10,13 @@
 //   -Only: a name that matches nothing is refused with exit 1
 //   every Nm: "every 5m" is accepted and a battery:true task prints battery=allow with llm=false; "every 0m" and "every 1440m" are refused;
 //             the existing four lines stay as they were; only a hidden:true .ps1 task runs through conhost.exe --headless
+//   active copy: run from <home>scriptsscheduled with no -TasksFile, the repo tasks.json is found through CCV3_REPO_ROOT (profile-paths.ps1); a repo with no tasks.json is
+//                refused with exit 1 and a message that names tasks.json (lane active-register-path)
 //   real tasks.json: CCv3-Lane-Snapshot prints daily 23:55, limit 5 min, battery=allow, and the conhost --headless action (dry run, -Only)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -152,4 +154,49 @@ test('dry run on the REAL tasks.json: CCv3-FleetOps-Auto is every 30m, allowed o
   assert.match(line, / -File ".*scheduled-fleetops-auto\.ps1"  \[every 30m, limit 5 min, llm=false battery=allow wake=no\]$/);
   assert.doesNotMatch(line, /WindowStyle/);
   assert.match(r.stdout, /^DRY RUN: nothing changed/m);
+});
+
+// The active copy (~/.claude/scripts/scheduled) cannot reach the repo by a relative path: scripts/scheduled/tasks.json does not sync.
+function runActiveCopy(repoHasTasks, staleHomeTasks = false) {
+  const root = mkdtempSync(join(tmpdir(), 'reg-active-'));
+  const home = join(root, 'home');
+  const active = join(home, 'scripts', 'scheduled');
+  mkdirSync(active, { recursive: true });
+  const here = dirname(SCRIPT);
+  for (const f of ['register-ccv3-tasks.ps1', 'profile-paths.ps1']) copyFileSync(join(here, f), join(active, f));
+  writeFileSync(join(active, 'a.bat'), 'rem stub\r\n');
+  const repo = join(root, 'repo');
+  mkdirSync(join(repo, 'scripts', 'scheduled'), { recursive: true });
+  if (repoHasTasks) writeFileSync(join(repo, 'scripts', 'scheduled', 'tasks.json'), JSON.stringify({ tasks: [TASKS[0]] }));
+  // A stale file at the home-level path the old default read (<root>scriptsscheduled	asks.json, three folders above the installed copy).
+  if (staleHomeTasks) {
+    mkdirSync(join(root, 'scripts', 'scheduled'), { recursive: true });
+    writeFileSync(join(root, 'scripts', 'scheduled', 'tasks.json'), JSON.stringify({ tasks: [{ ...TASKS[0], name: 'CCv3-T-Stale' }] }));
+  }
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(active, 'register-ccv3-tasks.ps1'), '-ClaudeHome', home],
+    { encoding: 'utf8', windowsHide: true, timeout: 90000, env: { ...process.env, CCV3_REPO_ROOT: repo, CCV3_MACHINE_PROFILE: 'no-such-profile-for-test' } });
+  return { code: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') };
+}
+
+test('active copy with no -TasksFile finds the repo tasks.json through profile-paths (CCV3_REPO_ROOT, no machine profile) and lists the task', win, () => {
+  // Breaks if the default path stays relative to the script folder: from ~/.claude it points at ~\scripts\scheduled\tasks.json.
+  const r = runActiveCopy(true);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /CCv3-T-Plain:/);
+  assert.match(r.out, /^DRY RUN: nothing changed/m);
+});
+
+test('active copy with no tasks.json anywhere is refused with exit 1 and names tasks.json', win, () => {
+  // Breaks if the script dies with a raw Get-Content error, or goes on with an empty task list.
+  const r = runActiveCopy(false);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /\[REFUSED\].*tasks\.json/);
+});
+
+test('active copy ignores a stale tasks.json at the home-level relative path and uses the configured repo', win, () => {
+  // Breaks if the relative default is tried first from the installed copy: a stale file there would register the wrong tasks.
+  const r = runActiveCopy(true, true);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /CCv3-T-Plain:/);
+  assert.doesNotMatch(r.out, /CCv3-T-Stale/);
 });
