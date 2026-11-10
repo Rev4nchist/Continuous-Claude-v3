@@ -3,7 +3,7 @@
 | Status | Value |
 |---|---|
 | State | DRAFT |
-| Date | 2026-11-10 11:42 CST; two reviews applied 12:13 CST |
+| Date | 2026-11-10 11:42 CST; two reviews applied 12:13 CST; decisions by Dave and the milestone rules (M4.11 to M4.16) added the same day |
 | Lane | `std-coordination` (holder: puffin #0f5ea433) |
 | Branch | `docs/coordination-standard` |
 | Loaded by | no session loads this file yet |
@@ -31,7 +31,7 @@ A session can be of two kinds. Order: subagent, headless, cloud, then the folder
 
 | Id | Kind | First commands, in order | Gets with no action | Loader | Level | Evidence | Verified |
 |---|---|---|---|---|---|---|---|
-| S1.1 | Interactive, board folder | 1. `kanban-sync` skill, when the board has a phone page. 2. `L mine`. If it lists the lane for this work, continue on it. 3. `L board --by priority`. If a lane for this work exists, read its scope, then `L claim <id>`. 4. Only when no lane exists and `L board --all` shows the id in no state: `L add <new-id> --title "..." --scope "..."` with no `--band` (Dave sets the band), then `L claim <new-id>`. 5. Publish the phone page (P5.7). | Two blocks: "MULTI-SESSION COORDINATION ACTIVE" and the lane banner (held lanes, live peers and scopes, reminders, "Claimable next", commands). | SessionStart banner (`lane-context.ts`) | advice | code today `lane-context.ts:667` "`## Lane board ${board} (concurrent sessions on this board)`"; `session-register.ts:206` "MULTI-SESSION COORDINATION ACTIVE"; `lane.mjs:912` (`board --all` lists done lanes too) | yes (code read; no live run) |
+| S1.1 | Interactive, board folder | 1. `kanban-sync` skill, when the board has a phone page. 2. `L mine`. If it lists the lane for this work, continue on it. 3. `L board --by priority`. If a lane for this work exists, read its scope, then `L claim <id>`. 4. Only when no lane exists and `L board --all` shows the id in no state: `L add <new-id> --title "..." --scope "..."` with no `--band` (Dave sets the band), then `L claim <new-id>`. 5. Publish the phone page (P5.7). 6. After a new claim only: read the note of each related lane, then send the start message (M4.11). | Two blocks: "MULTI-SESSION COORDINATION ACTIVE" and the lane banner (held lanes, live peers and scopes, reminders, "Claimable next", commands). | SessionStart banner (`lane-context.ts`) | advice | code today `lane-context.ts:667` "`## Lane board ${board} (concurrent sessions on this board)`"; `session-register.ts:206` "MULTI-SESSION COORDINATION ACTIVE"; `lane.mjs:912` (`board --all` lists done lanes too) | yes (code read; no live run) |
 | S1.2 | Worktree of a board repo | Same as S1.1. Run the shim from the worktree. Never run `lane.mjs` from the worktree copy. | Same as S1.1 when the worktree is under a registry root or is listed in the root's `.git/worktrees`. | SessionStart banner (`lane-context.ts`) | advice | code today `shared/lane-board.ts:211` "`isUnder(here, e.root) && (!best \|\| e.root.length > best.root.length)`"; `:221` "`source: 'worktree-gitdir'`" | yes (code read) |
 | S1.3 | Unregistered folder | 1. `L board --project <key>` when the work belongs to a board. 2. Else no lane command. Ask Dave before `L project register`. | The session-register block with the line "no lane board (unregistered dir)", and direct messages. No lane banner. Lane verbs exit 1. | the session-register line; the hooks pull request adds the `board --project` command to it | deny (exit 1) | code today `session-register.ts:204-216` (the block); `shared/session-names.ts:188` "`'no lane board (unregistered dir)'`"; `lane-context.ts:606` "`isHeadless() ? {} : await directMessagesOnly(`"; `lane.mjs:224` "`no lane board for ${cwd}; register it:`" | yes (code read) |
 | S1.4 | Headless `claude -p` | None, unless the prompt names a lane. Then `L claim <id>`. Before the run ends: `L release <id>`, or `L done <id>` when the work is merged. The launcher sets `LANE_CONTEXT_HEADLESS=1` before it starts `claude -p`; the session cannot set it. | By the code path: nothing from the lane hook, and an empty board line. The CLI still works. Not verified by a run; a memory note of 2026-11-04 says lane notes reached headless runs. | the prompt or the wrapper that starts the run; none in code | advice | code today `shared/lane-board.ts:145` "`startsWith('sdk') && env.LANE_CONTEXT_HEADLESS !== '1'`"; `shared/session-names.ts:186` "`if (isHeadless(env)) return '';`"; `lane.mjs:188` "`{ cli: true, projectFlag:`" | not verified |
@@ -51,7 +51,7 @@ Loader: top of `lane-board.md`, except L2.13 (handoff skills).
 | L2.3 | `claim` refuses a lane that is `blocked`, `done` or has an open dependency. The exit code is not settled (pre-go §5.3 point 6). | deny (planned) | planned pre-go §3.2, §7 rows 1-2. Today: a claim on `blocked` or `done` succeeds and keeps the state (code today `lane.mjs:1124` "`CASE WHEN l.state IN ('backlog','ready') THEN 'active' ELSE l.state END`"). Read the state on `L board` before you claim. To reopen a `done` lane: `L state <id> ready`, then `L claim <id>` |
 | L2.4 | Do not claim a lane that `next` or the banner offers before you read its scope. Old lanes stay claimable. | advice | code today `lane.mjs:1084` "`l.state IN ('ready','backlog') AND ${RECLAIMABLE}`" |
 | L2.5 | Claim before your first edit. The claim declares your scope. | advice | code today `COORDINATION.md:68` "Claim a lane before you start. The claim is the declaration of scope" |
-| L2.6 | Scope text holds two parts: `OWNS: ...` and `NEVER: ...`. Declare a wait as a dependency; the command is not designed (pre-go §5.3 points 1, 2 and 5). | advice; deny (planned) for a claim with an open dependency | planned pre-go §3.2. Today: put `WAITS ON: <lane>` first in the scope text, not in the note (pre-go §7 rows 1, 13). `note` replaces the whole note: code today `lane.mjs:1192` "`UPDATE agentic_os.lane SET note=$2, updated_at=now()`" |
+| L2.6 | Scope text holds two parts: `OWNS: ...` and `NEVER: ...`. It can end with `RELATES TO: <lane ids>` (M4.12). Declare a wait as a dependency; the command is not designed (pre-go §5.3 points 1, 2 and 5). | advice; deny (planned) for a claim with an open dependency | planned pre-go §3.2. Today: put `WAITS ON: <lane>` first in the scope text, not in the note (pre-go §7 rows 1, 13). `note` replaces the whole note: code today `lane.mjs:1192` "`UPDATE agentic_os.lane SET note=$2, updated_at=now()`" |
 | L2.7 | Note one status line at each phase: `L note <id> "..."`. The owner's note renews the lease. | advice | code today `lane.mjs:1193` "`lease_expires_at = CASE WHEN owner_session_id=$3`" |
 | L2.8 | A lane stays held while its lease is live or its holder is active. A reclaim needs both: a lease that ended (90 minutes after the last renew) and a holder quiet for 5 minutes. | deny | code today `lane.mjs:137` "`const LEASE_MINUTES = 90;`"; `:363-373` (RECLAIMABLE) "`l.lease_expires_at < now()`" |
 | L2.8a | The hook renews your leases at each prompt. Run `L renew` before a wait that can pass 90 minutes. After an idle time of more than 90 minutes, run `L mine` before your next edit. Before you claim a lane another session held, read its note and check its worktree for uncommitted work. | advice | code today `lane-context.ts:598-603` "`SET lease_expires_at = now() + interval '${LEASE_MINUTES} minutes'`" |
@@ -96,6 +96,21 @@ Loader: top of `lane-board.md`. A message to an idle session waits until Dave ty
 | M4.9 | Any | message form | Plain text with names, SHAs and paths. Write a session as "name #sid8". | advice | code today `CLAUDE.md.template:20` "Cross-session messages are plain text with names, SHAs and paths"; `CONTEXT.md:49` (Session handle) |
 | M4.10 | Any | a message that must arrive | Also write it in your lane note. Ask Dave when no reply comes. | advice (new rule) | follows from M4.1 |
 
+### Milestone messages
+
+Related sessions exchange status at each milestone, without a prompt from Dave (Dave, in words, 2026-11-10; findings row 26).
+The three review-engine sessions already send milestone DMs: 14 direct messages and 2 commit-run broadcasts between 12:49 and 15:14 CST on 2026-11-10 (lane events 2782 to 2812; findings rows 28 to 30).
+The design: a file carries the items, the DM points to the file, and the reply is the receipt.
+
+| Id | Rule | Level | Evidence |
+|---|---|---|---|
+| M4.11 | At each milestone, send one lane DM (M4.1) to each session that holds a related lane: `L say "..." --to <name> --lane <your lane>`. A session that holds two related lanes gets one DM. Milestones: you claim, adopt or reclaim the lane (send the scope); your write set changes; a commit, a revert or a pull request that the receiver builds on or must read; a decision by Dave on the receiver's files; a finding in the receiver's files; a block that waits on the receiver; an earlier item is now false; your lane is done, released, parked or handed off. Send decisions and findings with your next commit DM, or within 30 minutes. A subagent sends none: its parent sends (S1.5). A headless run sends the first and the last only (S1.4). | advice (new rule) | Dave, 2026-11-10 (findings row 26). Practice: lane events 2786 (a contract to review), 2792 (a design is done), 2798 (a commit, decisions and findings) |
+| M4.12 | A lane is related to yours when both scopes name one file path, or one lane waits on the other, or Dave says so. A phrase such as "every other file" names no path. Write the ids last in your scope text: `RELATES TO: <lane ids>`. Only `add` writes the scope, and it also replaces the title and the track (L2.1). So run `L add <id> --title "<same title>" --track <same track> --scope "<full scope>"`. When a related lane belongs to a program, send to the seat of that program only. The seat passes the items to its sessions (M4.14). A lane with no holder, or a reclaimable lane (L2.8), gets no DM. `say --to` fails for a session that is quiet for more than 2 hours: tell Dave (M4.16). | advice (new rule) | code today `lane.mjs:1349` "`title=EXCLUDED.title, track=EXCLUDED.track,`"; `:1355` "`flags.track \|\| 'unsorted'`"; `:509` "`> now() - interval '2 hours'`"; `:531` "`no recent session matching`". planned pre-go §5.3 points 1 and 5: a dependency names the lane that another lane waits on. Practice: lane event 2798 went to the seat only, and event 2803 passed the items to the builder sessions |
+| M4.13 | Form of a milestone DM. The first sentence says what the message is. Then at most 5 numbered items. Each item gives the fact, its path or SHA, and the lane or file of the receiver that it bears on. The last sentence is "Reply once (M4.14)" for a decision, a finding or a request, and "No reply needed" for status. "No reply needed" means "do not block on a reply". It does not mean "send no more". Never put a holdout or gold PR id, or a secret, in a DM or in its file copy. | advice (new rule) | M4.9; lane event 2798 (4 items); code today `docs/review-engine/README.md:80` "no holdout or gold PR id, and no answer, in a note, a prompt or a PR body" |
+| M4.14 | The receiver of a DM that carries a decision, a finding or a request replies one time: read, conflict or no conflict, and where each item goes. It records the items in a file that the next holder of its lane can read. A DM that carries only status needs no reply. | advice (new rule) | lane event 2803: the seat's reply names a lane for each item and the file `.claudedocs/re-execution/contracts/seat-inputs.md` (findings row 29) |
+| M4.15 | Budget: one DM for each milestone and each receiver. Put all items of one milestone in one DM. Routine progress goes in your lane note (L2.7), not in a DM. Send no reply to a reply that says "no conflict". A reply that says "conflict" gets one answer. After that, ask Dave (M4.8). An idle receiver gets only its newest 12 unread events at its next prompt. A working receiver gets the newest 5 DMs between tool calls. Notes and broadcasts count against both limits. | advice (new rule) | code today `lane-context.ts:514` "`for (const e of unread.slice(-MAX_EVENTS))`"; `:140` "`const DM_MAX_EVENTS = 5;`"; `:467` "`const shown = dms.slice(-DM_MAX_EVENTS);`". Findings rows 18 and 20 (both UNCLEAR) |
+| M4.16 | The file is the carrier. Append each milestone to `.claudedocs/coordination/milestones/<lane-id>.md` in the primary checkout: the time from a clock, the receiver, the items. The DM gives the items and this path. Keep `MS: <path>` last in your lane note. A new note replaces the old one, so write `WAITS ON` and `NEXT` again in each note (L2.9, L2.13). The reply (M4.14) is the only receipt. No reply by your next milestone: write `NOT READ: <holder>` in the file and tell Dave. An idle session reads no message until Dave types in it (M4.7). | advice (new rule) | code today `lane.mjs:1192` "`UPDATE agentic_os.lane SET note=$2`"; follows from M4.1, M4.7 and M4.10; findings row 31 (a time in a message body differs from the stored time) |
+
 ## Part 5. Shared pages
 
 Loader: top of `lane-board.md`.
@@ -137,6 +152,8 @@ The exact lines each loader gets. `<shim>` is `node C:/Users/dkhay/.claude/scrip
   `You hold no lane. 1. kanban-sync when the board has a phone page. 2. <shim> mine. 3. <shim> board --by priority, then claim the lane for your work by id.`
   `No lane for it: <shim> add <new-id> only when <shim> board --all shows the id in no state, then claim it. Never add on a lane you do not hold.`
   `Rules: lane-board.md. Rule ids: docs/coordination/standard.md.`
+- S1.1 and S1.2, banner, when the session holds a lane (1 line, after `You hold:`; code today `lane-context.ts:670-672`):
+  `Milestone (start, commit, decision by Dave, finding, block, done): send one DM to each holder in your RELATES TO list (M4.11).`
 - S1.3, session-register line (2 lines):
   `no lane board (unregistered dir). Work for a board: <shim> board --project <key>. Else run no lane command.`
   `Register a folder only with Dave's yes.`
@@ -153,6 +170,7 @@ The exact lines each loader gets. `<shim>` is `node C:/Users/dkhay/.claude/scrip
 - The Artifact tool refusal of a publish without a live read. It is tool behaviour, not repo code.
 - The owner of a lane at the time of a past event. `adopt` moves the owner and logs no `claimed` event (`lane.mjs:1024-1025`).
 - No probe was run. Probes write fixtures to the live database. The SQL that was run is in the findings log.
+- The milestone rules (M4.11 to M4.16) are new. No data shows yet if sessions follow them, or how many messages they make in a day.
 
 ## Decided by Dave (2026-11-10, by tap in session puffin #0f5ea433)
 
@@ -161,6 +179,8 @@ The exact lines each loader gets. `<shim>` is `node C:/Users/dkhay/.claude/scrip
 - Point 8: O3.4 in full (one lane, one worktree, one branch, one pull request) applies to the review-engine program only. Any other lane that changes tracked files uses its own branch.
 - Point 9: a reclaimable lane has no holder for L2.10. Any session may change it after a note that says why. Findings row 13 depends on this.
 - Point 10: to reopen a `done` lane, run `L state <id> ready`, then `L claim <id>` (L2.3). Never claim a `done` lane directly (findings rows 3, 4 and 6).
+
+Stated by Dave in words, not by tap (2026-11-10, findings row 26): sessions on related lanes exchange status at a high level from the start. Dave said yes to a rule for it, folded into this standard. The text of M4.11 to M4.16 is this lane's draft. Dave has not reviewed the text.
 
 ## Open points for Dave
 
@@ -183,6 +203,9 @@ pre-go §3.2 and §4.1 name gate-2 as the owner of `lane-context.ts`. pre-go §3
 | 2 to 7 (Id, Rule, Level) | top section of `.claude/rules-ondemand/lane-board.md` | after the seat releases by name: `.claude/rules-ondemand/lane-board.md`, `COORDINATION.md`, `docs/harness/lane-board-claude-md-pointer.md` |
 | L2.13 | one lane step in `create_handoff` and `resume_handoff` | after Dave's yes; both skills are outside this lane's write set |
 | All | `COORDINATION.md` becomes a pointer to this file | with row 2 |
+| M4.11, M4.12 (proposal) | SessionStart banner, a data line parsed from `RELATES TO`: `Related: <lane-id> (<name #sid8> or no holder), ...` | with row 1; the seat decides if `coord-gate-2-cli` takes it |
+| M4.14 (proposal) | the footer of a DM that the hook shows (code today `lane-context.ts:478` "otherwise carry on"): `A DM with a decision, a finding or a request: reply one time (M4.14).` | with row 1 |
+| M4.11 (proposal) | `.claude/rules-ondemand/pr-and-commit-style.md`, which loads at each commit: `After a commit on a lane with RELATES TO: send the milestone DM (M4.11).` | after the seat releases the file by name, and with Dave's yes |
 
 No standard text goes in an always-loaded file: 180 characters are free of 26000 (pre-go §6).
 The hooks pull request also removes the false banner line "Research findings are shared automatically" (`session-register.ts:214`).
