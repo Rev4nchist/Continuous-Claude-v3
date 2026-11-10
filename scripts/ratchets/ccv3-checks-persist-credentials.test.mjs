@@ -43,10 +43,16 @@ function jobBlock(name) {
 }
 
 /** The checkout steps of a job, each as its own text (a step runs from `      - ` to the next one). */
-const checkouts = (block) => block.split(/\n(?= {6}- )/).slice(1).filter((s) => /^ {6}- uses:\s*actions\/checkout@/.test(s));
+const checkouts = (block) => block.split(/\n(?= {6}- )/).slice(1).filter((s) => /^ {6}- uses:\s*actions\/checkout@/.test(s) || /^ {8}uses:\s*actions\/checkout@/m.test(s));
 
-/** The value of `persist-credentials:` inside one step, without a trailing comment. Undefined when absent. */
-const persist = (step) => /^ +persist-credentials:\s*(\S+)/m.exec(step)?.[1];
+/** The value of `persist-credentials:` in the `with:` mapping of one step, without a trailing comment. Undefined when absent. */
+const persist = (step) => {
+  const at = step.split('\n');
+  const w = at.findIndex((l) => /^ {8}with:\s*$/.test(l));
+  if (w < 0) return undefined;
+  const end = at.findIndex((l, i) => i > w && /^ {0,8}\S/.test(l));
+  return /^ {10}persist-credentials:\s*(\S+)/m.exec(at.slice(w + 1, end < 0 ? at.length : end).join('\n'))?.[1];
+};
 
 for (const name of KNOWN_JOBS) {
   test(`PC1/PC2: the ${name} job has a checkout, and it sets persist-credentials: false`, () => {
