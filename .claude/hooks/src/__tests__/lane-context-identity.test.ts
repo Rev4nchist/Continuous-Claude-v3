@@ -37,7 +37,7 @@ vi.mock('pg', () => ({
           { sid: P2, lanes: null, scopes: null, total: peerTotal ?? 2 },
         ] };
       }
-      if (/FROM agentic_os.lane_event/.test(sql)) {
+      if (/FROM agentic_os\.lane_event e\b/.test(sql)) {
         return { rows: [{ id: 7, occurred_at: '', lane_id: null, kind: 'note', session_id: P1, to_session_id: null, body: 'hello' }] };
       }
       return { rows: [] };
