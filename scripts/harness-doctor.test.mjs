@@ -1995,6 +1995,20 @@ test('hooks:trace-fresh is PASS with recent activity and a recent live trace row
   assert.match(c.detail, /live/);
 });
 
+test('hooks:trace-fresh is a FAIL that names the file, not a crash, when a day file cannot be read', () => {
+  const fx = fixture();
+  dropTrace(fx);
+  // A directory with a day-file name: the stat works and the read throws EISDIR (a stand-in for a file pruned or locked mid-run).
+  const day = `hook-trace-${new Date().toISOString().slice(0, 10)}.jsonl`;
+  mkdirSync(join(fx.home, '.claude', 'cache', day), { recursive: true });
+  const r = run(fx);
+  const c = r.checks['hooks:trace-fresh'];
+  assert.ok(c, 'the check must still report');
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /cannot read/i);
+  assert.ok(c.detail.includes(day), c.detail);
+});
+
 test('hooks:trace-fresh is FAIL when only test or probe rows follow the activity', () => {
   const fx = fixture();
   dropTrace(fx);

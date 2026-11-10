@@ -1011,7 +1011,9 @@ const TRACE_IDLE_MS = 6 * 60 * 60 * 1000; // activity older than this is idle: n
 /** The newest valid ts (ms) and its row among the rows `counted` picks in a JSONL file, or null. */
 function newestRow(file, counted) {
   let best = null;
-  for (const line of readTail(file).split(/\r?\n/)) {
+  let text;
+  try { text = readTail(file); } catch (e) { if (e && typeof e === 'object' && !e.path) e.path = file; throw e; } // EISDIR has no path: name the file
+  for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let r;
     try { r = JSON.parse(line); } catch { continue; }
@@ -1062,6 +1064,16 @@ function traceOffByEnv(home) {
  * A live trace row is one with source live: a test, a probe, or a run of the repo dist writes source test or probe.
  */
 export function hookTraceFresh(o) {
+  try {
+    return hookTraceFreshBody(o);
+  } catch (e) {
+    // A day file pruned, locked or unreadable mid-run, or an unreadable cache dir: report it, never crash the doctor.
+    const where = fwdPath(typeof e?.path === 'string' ? e.path : join(o.home, '.claude', 'cache'));
+    return result('FAIL', 'hooks', 'trace-fresh', `cannot read the hook trace files: ${e?.code || e?.name || 'error'} at ${where}; the tracer cannot be judged`);
+  }
+}
+
+function hookTraceFreshBody(o) {
   const cacheDir = join(o.home, '.claude', 'cache');
   const modeFile = join(o.home, '.claude', 'state', 'hook-trace-mode');
   let mode = 'hot';
