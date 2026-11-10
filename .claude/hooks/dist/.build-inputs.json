@@ -44,7 +44,7 @@
     "msys-crash-capture.ts": "b465bbe4929fdcd3680e4e5860690720b502dc6012586fac872e4f69447f463d",
     "navigator-validate.ts": "838f8a918d6784d3e5d7dc5dbd9cb7d91f1b4b58e212b828bef464fa8b56d728",
     "no-haiku-enforcer.ts": "b3b70182285d45f34b7f1c308c5a41ecfc0f87b6f643535a4c1fa82818202b7e",
-    "package-install-guard.ts": "cb7a62b028c6f456905dfab2d6194efb6db25249245b2f63740a0956aff4ae3e",
+    "package-install-guard.ts": "b47ae882e0b008f2d8b433b85e7ce918a98e31ee32f1ededa5daf0d221129f00",
     "pageindex-watch.ts": "f5451eeba5638d69ffb6b6756a9398ad44196136d5f11a4d769e882baea637a1",
     "patterns/adversarial.ts": "603ed1c809091d0b3f3e31af5c1c3b4fe81b8b1f36d90bdc1b847feceeacb770",
     "patterns/blackboard.ts": "a272b110664d69d176753e69200070e20adf7de599fb5381b3a5ed5c480c5a3a",

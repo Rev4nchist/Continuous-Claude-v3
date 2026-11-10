@@ -20916,7 +20916,7 @@ var PIPE_TEXT_WRITER = /^(?:echo|write-output|write-host|printf)$/i;
 function joinConcat(text) {
   let out = text;
   for (let i = 0; i < 64; i++) {
-    const next = out.replace(/(["'])((?:(?!\1).)*)\1[ \t]*\+[ \t]*(["'])((?:(?!\3).)*)\3/, "$1$2$4$1");
+    const next = out.replace(/(["'])((?:(?!\1).)*)\1[ \t]*\+[ \t]*(["'])((?:(?!\3).)*)\3/g, "$1$2$4$1");
     if (next === out) break;
     out = next;
   }

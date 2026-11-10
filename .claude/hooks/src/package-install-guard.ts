@@ -484,13 +484,14 @@ const PIPE_TEXT_WRITER = /^(?:echo|write-output|write-host|printf)$/i;
 
 /**
  * Quoted strings joined by `+` ('npm i'+'nstall x'), read as the one string they build. Raw text, no lexer: it only
- * joins two quoted pieces (the closing quote of the second piece wins) and repeats until no join is left. Joined text
+ * joins two quoted pieces (the closing quote of the second piece wins) and repeats until no join is left. Each pass
+ * joins every disjoint pair (flag g), so the piece count halves per pass and 64 passes cover any chain. Joined text
  * can only make an install pattern appear, so reading it never loosens a verdict.
  */
 function joinConcat(text: string): string {
   let out = text;
   for (let i = 0; i < 64; i++) {
-    const next = out.replace(/(["'])((?:(?!\1).)*)\1[ \t]*\+[ \t]*(["'])((?:(?!\3).)*)\3/, '$1$2$4$1');
+    const next = out.replace(/(["'])((?:(?!\1).)*)\1[ \t]*\+[ \t]*(["'])((?:(?!\3).)*)\3/g, '$1$2$4$1');
     if (next === out) break;
     out = next;
   }
