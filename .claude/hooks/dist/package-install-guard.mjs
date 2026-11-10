@@ -20913,20 +20913,44 @@ function iexPayload(segment) {
   return text === "" ? null : text;
 }
 var PIPE_TEXT_WRITER = /^(?:echo|write-output|write-host|printf)$/i;
-function pipedIexText(segment, previous) {
-  if (previous === void 0) return null;
-  const words = tokenize(stripPrefixes(segment));
-  if (words[0] === "&") words.shift();
-  if (!IEX_WORD.test(words[0] ?? "") || iexPayload(segment) !== null) return null;
-  const before = stripPrefixes(stripLeaders(previous));
+function joinConcat(text) {
+  let out = text;
+  for (let i = 0; i < 64; i++) {
+    const next = out.replace(/(["'])((?:(?!\1).)*)\1[ \t]*\+[ \t]*(["'])((?:(?!\3).)*)\3/g, "$1$2$4$1");
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+var HERE_STRING_ONLY = /^@(['"])[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1@$/;
+function literalText(previous) {
+  const before = stripPrefixes(stripLeaders(joinConcat(previous).trim().replace(/^@(?=\()/, "")));
+  const here = HERE_STRING_ONLY.exec(before);
+  if (here) return here[2].trim() === "" ? null : here[2];
   const prior = tokenize(before);
   if (prior[0] === "&") prior.shift();
   let text;
   if (PIPE_TEXT_WRITER.test(prior[0] ?? "")) text = prior.slice(1).filter((w) => !w.startsWith("-"));
-  else if (/^["']/.test(before)) text = prior;
+  else if (/^@?["']/.test(before)) text = prior;
   else return null;
   const joined = text.join(" ").trim();
   return joined === "" ? null : joined;
+}
+function pipedIexTexts(segment, earlier) {
+  const words = tokenize(stripPrefixes(segment));
+  if (words[0] === "&") words.shift();
+  if (!IEX_WORD.test(words[0] ?? "") || iexPayload(segment) !== null) return [];
+  return earlier.map(literalText).filter((t) => t !== null);
+}
+function uniqueBySegment(plans) {
+  const seen = /* @__PURE__ */ new Set();
+  return plans.filter((p) => seen.has(p.segment) ? false : (seen.add(p.segment), true));
+}
+var ASSIGNED_HERE_STRING = /^[ \t]*\$[\w:]+[ \t]*=[ \t]*@(['"])[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1@/gm;
+var IEX_ANYWHERE = /(?<![\w-])(?:iex|invoke-expression)(?![\w-])/i;
+function assignedHereStringBodies(command) {
+  if (!IEX_ANYWHERE.test(command) && !IEX_ANYWHERE.test(command.replace(/[\\'"`^]/g, ""))) return [];
+  return [...command.matchAll(ASSIGNED_HERE_STRING)].map((m) => m[2]).filter((body) => body.trim() !== "");
 }
 var PIPE_INTO_IEX = /\|\s*(?:&\s*)?(?:iex|invoke-expression)(?![\w-])/i;
 function decodedTexts(command, tool, depth = 0) {
@@ -20949,17 +20973,17 @@ function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured)
     const viaIex = [];
     for (const [k, raw] of segments.entries()) {
       const segment = stripLeaders(raw);
-      const iex = depth < 3 && !checkOverride(segment) ? iexPayload(segment) ?? pipedIexText(segment, segments[k - 1]) : null;
-      const inner = iex === null ? [] : iexPlans(iex, tool, cwd, depth + 1, config);
+      const inner = depth < 3 && !checkOverride(segment) ? iexSegmentPlans(segment, segments.slice(0, k), tool, cwd, depth + 1, config) : [];
       viaIex.push(...inner);
       if (inner.length === 0 && (needsCheck(segment, tool, config) || encodedCommands(segment).bad)) found.push({ segment, cwd, tool });
     }
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
     const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
+    const hereStrings = assignedHereStringBodies(command).flatMap((body) => iexPlans(body, tool, cwd, depth + 1, config));
     return [
       ...found,
-      ...viaIex,
+      ...uniqueBySegment([...viaIex, ...hereStrings]),
       ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config)),
       ...decoded.flatMap((text) => installPlans(text, "PowerShell", null, depth + 1, config || void 0))
     ];
@@ -20968,6 +20992,13 @@ function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured)
     const risky = needsCheck(command, tool, config) || encoded.bad || encoded.payloads.length > 0 || mayEncode(command) || pipesIntoIex(command);
     return risky ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+function iexSegmentPlans(segment, earlier, tool, cwd, depth, configured) {
+  const direct = iexPayload(segment);
+  if (direct === null) return uniqueBySegment(pipedIexTexts(segment, earlier).flatMap((text) => iexPlans(text, tool, cwd, depth, configured)));
+  const joined = iexPayload(joinConcat(segment));
+  const joinedPlans = joined !== null && joined !== direct ? iexPlans(joined, tool, cwd, depth, configured) : [];
+  return joinedPlans.length > 0 ? joinedPlans : iexPlans(direct, tool, cwd, depth, configured);
 }
 function iexPlans(text, tool, cwd, depth, configured) {
   const own = installPlans(text, tool, cwd, depth, configured);
