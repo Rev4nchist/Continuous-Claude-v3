@@ -52,10 +52,10 @@ describe('buildDaemonInvocation — GAP4-02 injection-safety (payload via stdin,
     expect(inv.args.join(' ')).toContain('[Console]::In.ReadLine()');
   });
 
-  it('Unix: nc reads stdin; payload not interpolated into args', () => {
+  it('Unix: node reads stdin; payload not interpolated into args', () => {
     const inv = buildDaemonInvocation({ type: 'unix', path: '/tmp/tldr-abc.sock' }, payload);
-    expect(inv.file).toBe('nc');
-    expect(inv.args).toEqual(['-U', '/tmp/tldr-abc.sock']);
+    expect(inv.file).toBe(process.execPath);
+    expect(inv.args).toContain('/tmp/tldr-abc.sock');
     expect(inv.stdin).toBe(payload);
     expect(inv.args.some((a) => a.includes(payload))).toBe(false);
   });
