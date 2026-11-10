@@ -44,6 +44,9 @@ interface RunResult {
 
 function runInvocation(inv: DaemonInvocation, timeoutMs = 8000): Promise<RunResult> {
   return new Promise((resolveRun, rejectRun) => {
+    // Safe: test code. The program is process.execPath, the args are an array with shell:false, and
+    // the script is the repo's own Node client. Dave approved this suppression 2026-11-09.
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
     const child = spawn(inv.file, inv.args, { stdio: ['pipe', 'pipe', 'ignore'], shell: false });
     let stdout = '';
     child.stdout!.setEncoding('utf8');
