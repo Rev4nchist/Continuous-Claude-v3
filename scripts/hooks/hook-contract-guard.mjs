@@ -35,6 +35,9 @@
  * gate reporting "0 hook registrations all resolve" while 85 hooks were firing
  * (fixed in ee29181). Do not simplify it.
  *
+ * C. TRACE MARKER. The per-process latency tracer is injected by esbuild (--inject in scripts.build). A registered dist without
+ *    the marker, or a build line without the flag, is a finding (scripts/hooks/trace-marker-check.mjs).
+ *
  * USAGE
  *   node scripts/hooks/hook-contract-guard.mjs          # exit 1 on violation
  *   node scripts/hooks/hook-contract-guard.mjs --json
@@ -44,6 +47,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { traceMarkerFindings } from './trace-marker-check.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SRC = join(REPO, '.claude', 'hooks', 'src');
@@ -90,6 +94,9 @@ if (registered.names.length < MIN_REGISTERED) {
     detail: `resolved ${registered.names.length} hook names from ${registered.entries} live entries, floor is ${MIN_REGISTERED}. Either registrations were removed, or the parser stopped resolving them -- check the args-aware branch before assuming the former.`,
   });
 }
+
+// --- C. the tracer marker (the repo dist; the harness doctor checks the live copy) ---
+findings.push(...traceMarkerFindings({ hooksDir: join(REPO, '.claude', 'hooks'), names: registered.names, minCount: MIN_REGISTERED }));
 
 // --- A. output contract --------------------------------------------------
 /** Fields the harness reads. */

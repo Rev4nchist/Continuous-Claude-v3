@@ -1,150 +1,16 @@
 #!/usr/bin/env node
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
-// src/plan-mode-approval-gate.ts
-import { readFileSync as readFileSync2, statSync as statSync2 } from "fs";
-import { join as join4 } from "path";
-import { homedir as homedir3 } from "os";
-
-// src/shared/logger.ts
-import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
-import { dirname, join } from "path";
-import { homedir } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join(homedir(), ".claude", "logs", "hooks.log");
-var LOG_DIR = dirname(LOG_FILE);
-var MAX_LOG_SIZE = 5 * 1024 * 1024;
-var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
-var LEVEL_ORDER = {
-  debug: 0,
-  info: 1,
-  warn: 2,
-  error: 3
-};
-function shouldLog(level) {
-  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
-}
-function ensureLogDir() {
-  if (!existsSync(LOG_DIR)) {
-    mkdirSync(LOG_DIR, { recursive: true });
-  }
-}
-function rotateIfNeeded() {
-  try {
-    if (existsSync(LOG_FILE)) {
-      const stat = statSync(LOG_FILE);
-      if (stat.size > MAX_LOG_SIZE) {
-        const rotated = LOG_FILE + ".1";
-        renameSync(LOG_FILE, rotated);
-      }
-    }
-  } catch {
-  }
-}
-function getSessionId() {
-  return process.env.CLAUDE_SESSION_ID || void 0;
-}
-function writeLog(entry) {
-  try {
-    ensureLogDir();
-    rotateIfNeeded();
-    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
-  } catch {
-  }
-}
-function createLogger(hookName) {
-  function log2(level, msg, data) {
-    if (!shouldLog(level)) return;
-    const entry = {
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      level,
-      hook: hookName,
-      msg,
-      sessionId: getSessionId()
-    };
-    if (data && Object.keys(data).length > 0) {
-      entry.data = data;
-    }
-    writeLog(entry);
-    if (level === "error" || level === "warn") {
-      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
-    }
-  }
-  return {
-    debug: (msg, data) => log2("debug", msg, data),
-    info: (msg, data) => log2("info", msg, data),
-    warn: (msg, data) => log2("warn", msg, data),
-    error: (msg, data) => log2("error", msg, data)
-  };
-}
-
-// src/shared/session-activity.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync, writeFileSync } from "fs";
-import { join as join2 } from "path";
-function getHomeDir() {
-  return process.env.HOME || process.env.USERPROFILE || "/tmp";
-}
-function getActivityPath(sessionId) {
-  const dir = join2(getHomeDir(), ".claude", "cache", "session-activity");
-  try {
-    mkdirSync2(dir, { recursive: true });
-  } catch {
-  }
-  return join2(dir, `${sessionId}.json`);
-}
-function readActivity(sessionId) {
-  const filePath = getActivityPath(sessionId);
-  try {
-    if (!existsSync2(filePath)) {
-      return null;
-    }
-    const raw = readFileSync(filePath, "utf-8");
-    if (!raw.trim()) {
-      return null;
-    }
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-function loadOrCreate(sessionId) {
-  const existing = readActivity(sessionId);
-  if (existing) {
-    if (!existing.agents) existing.agents = [];
-    if (!existing.mcp_servers) existing.mcp_servers = [];
-    return existing;
-  }
-  return {
-    session_id: sessionId,
-    started_at: (/* @__PURE__ */ new Date()).toISOString(),
-    skills: [],
-    hooks: [],
-    agents: [],
-    mcp_servers: []
-  };
-}
-function upsertEntry(entries, name) {
-  const existing = entries.find((e) => e.name === name);
-  if (existing) {
-    existing.count++;
-  } else {
-    entries.push({
-      name,
-      first_seen: (/* @__PURE__ */ new Date()).toISOString(),
-      count: 1
-    });
-  }
-}
-function logHook(sessionId, hookName) {
-  const activity = loadOrCreate(sessionId);
-  upsertEntry(activity.hooks, hookName);
-  const filePath = getActivityPath(sessionId);
-  writeFileSync(filePath, JSON.stringify(activity), { encoding: "utf-8" });
-}
+// src/lib/trace-boot.ts
+import fs from "fs";
+import { homedir as homedir2 } from "os";
+import { basename, join as join2, resolve, sep } from "path";
+import { syncBuiltinESMExports } from "module";
 
 // src/shared/guard-log.ts
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync3 } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname2, join as join3 } from "path";
+import { appendFileSync, mkdirSync } from "fs";
+import { homedir } from "os";
+import { dirname, join } from "path";
 var COMMAND_HEAD_CHARS = 80;
 var REASON_CHARS = 200;
 var PATH_CHARS = 300;
@@ -157,8 +23,8 @@ var TARGET_FIELD = {
   Skill: "skill"
 };
 function guardLogPath(env = process.env) {
-  const home = env.USERPROFILE || env.HOME || homedir2();
-  return env.CCV3_GUARD_DECISIONS_LOG || join3(home, ".claude", "logs", "guard-decisions.jsonl");
+  const home = env.USERPROFILE || env.HOME || homedir();
+  return env.CCV3_GUARD_DECISIONS_LOG || join(home, ".claude", "logs", "guard-decisions.jsonl");
 }
 var SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
 var MASKS = [
@@ -217,9 +83,9 @@ var PATH_MASKS = [
 function maskedPath(value, max = PATH_CHARS) {
   if (typeof value !== "string" || !value) return void 0;
   const kept = [];
-  const shielded = value.replace(UUID_SEGMENT, (_m, sep, uuid) => {
+  const shielded = value.replace(UUID_SEGMENT, (_m, sep2, uuid) => {
     kept.push(uuid);
-    return `${sep}${MARK_OPEN}${kept.length - 1}${MARK_CLOSE}`;
+    return `${sep2}${MARK_OPEN}${kept.length - 1}${MARK_CLOSE}`;
   });
   const masked = PATH_MASKS.reduce((acc, [re, to]) => acc.replace(re, to), shielded);
   return masked.replace(UUID_MARK, (m, i) => kept[Number(i)] ?? m).slice(0, max);
@@ -258,10 +124,453 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
     if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
     const path = guardLogPath(env);
-    mkdirSync3(dirname2(path), { recursive: true, mode: 448 });
-    appendFileSync2(path, JSON.stringify(entry) + "\n", { mode: 384 });
+    mkdirSync(dirname(path), { recursive: true, mode: 448 });
+    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
+}
+
+// src/lib/trace-boot.ts
+var TRACE_MARKER = "__CCV3_HOOK_TRACE_V1__";
+var HOT_PROGRAMS = [
+  "architecture-stats-sync",
+  "commit-preflight",
+  "decision-gate",
+  "destructive-command-guard",
+  "git-commit-roadmap",
+  "hook-health-monitor",
+  "identity-probe",
+  "lane-agent-tag",
+  "lane-board-republish-reminder",
+  "lane-context",
+  "mcp-activity-tracker",
+  "msys-crash-capture",
+  "package-install-guard",
+  "periodic-extract",
+  "pr-opened-review-loop",
+  "pre-pr-gate",
+  "roadmap-completion",
+  "roadmap-reconcile",
+  "rule-router",
+  "scan-scope-guard",
+  "session-register",
+  "session-start-context-loaders",
+  "session-start-continuity",
+  "session-start-docker",
+  "session-start-init-check",
+  "session-start-intel-prune",
+  "session-start-memory-loaders",
+  "smarter-everyday",
+  "test-run-tracker"
+];
+var DAY_CAP_BYTES = 32 * 1024 * 1024;
+var PRUNE_DAYS = 10;
+var STDIN_KEEP = 64 * 1024;
+var STDOUT_KEEP = 8 * 1024;
+var ERROR_MAX = 120;
+function traceModeFrom(env, modeText) {
+  if (env.CCV3_HOOK_TRACE === "0") return "off";
+  const t = (modeText ?? "").trim().toLowerCase();
+  return t === "off" || t === "all" ? t : "hot";
+}
+function readTraceMode(env, read = (p) => fs.readFileSync(p, "utf8")) {
+  let text = null;
+  try {
+    text = read(env.CCV3_HOOK_TRACE_MODE_FILE || join2(homedir2(), ".claude", "state", "hook-trace-mode"));
+  } catch {
+  }
+  return traceModeFrom(env, text);
+}
+function shouldTrace(name, mode) {
+  return mode === "all" || mode === "hot" && HOT_PROGRAMS.includes(name);
+}
+var realPath = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+};
+var caseKey = (p) => process.platform === "win32" ? p.toLowerCase() : p;
+function underLiveDist(script, home) {
+  if (!script) return false;
+  try {
+    return caseKey(realPath(script)).startsWith(caseKey(realPath(join2(home, ".claude", "hooks", "dist"))) + sep);
+  } catch {
+    return false;
+  }
+}
+function traceSource(env, script = process.argv[1], home = homedir2()) {
+  const g = guardSource(env);
+  if (g !== "live") return g;
+  if (env.CCV3_HOOK_TRACE_DIR) return "probe";
+  return underLiveDist(script, home) ? "live" : "probe";
+}
+var traceDir = (env) => env.CCV3_HOOK_TRACE_DIR || join2(homedir2(), ".claude", "cache");
+var SESSION_ID = /^[A-Za-z0-9._:-]{1,100}$/;
+var EVENT_NAME = /^[A-Za-z]{1,40}$/;
+var TOOL_NAME = /^[\w.:-]{1,100}$/;
+var pick = (v, re) => typeof v === "string" && re.test(v) ? v : null;
+function extractPayloadFields(text) {
+  try {
+    const o = JSON.parse(text);
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      return { sessionId: pick(o.session_id, SESSION_ID), event: pick(o.hook_event_name, EVENT_NAME), tool: pick(o.tool_name, TOOL_NAME) };
+    }
+  } catch {
+  }
+  const key = (k, re) => pick(new RegExp(`"${k}"\\s*:\\s*"([^"\\\\]{1,100})"`).exec(text)?.[1], re);
+  return { sessionId: key("session_id", SESSION_ID), event: key("hook_event_name", EVENT_NAME), tool: key("tool_name", TOOL_NAME) };
+}
+function classifyObject(o) {
+  const hso = o.hookSpecificOutput ?? {};
+  const pd = hso.permissionDecision ?? o.permissionDecision;
+  if (pd === "deny" || pd === "ask" || pd === "allow") return pd;
+  if (o.decision === "block" || o.result === "block") return "block";
+  if (typeof hso.additionalContext === "string") return "inject";
+  if (typeof o.systemMessage === "string") return "message";
+  return "none";
+}
+function classifyOut(text) {
+  const t = text.trim();
+  if (!t) return "none";
+  try {
+    const o = JSON.parse(t);
+    return o && typeof o === "object" && !Array.isArray(o) ? classifyObject(o) : "none";
+  } catch {
+  }
+  const pd = /"permissionDecision"\s*:\s*"(deny|ask|allow)"/.exec(t)?.[1];
+  if (pd) return pd;
+  if (/"decision"\s*:\s*"block"/.test(t)) return "block";
+  if (/"additionalContext"\s*:/.test(t)) return "inject";
+  if (/"systemMessage"\s*:/.test(t)) return "message";
+  return "none";
+}
+var ERROR_WORD = /^[A-Za-z0-9_.]{1,40}$/;
+var ERROR_CODE = /^[A-Za-z0-9_]{1,40}$/;
+function maskError(err) {
+  if (!(err instanceof Error)) return typeof err;
+  try {
+    const rawName = err.name;
+    const name = typeof rawName === "string" && ERROR_WORD.test(rawName) ? rawName : "Error";
+    const code = err.code;
+    return (typeof code === "string" && ERROR_CODE.test(code) ? `${name}/${code}` : name).slice(0, ERROR_MAX);
+  } catch {
+    return "Error";
+  }
+}
+var round1 = (n) => Math.round(n * 10) / 10;
+function buildRow(i) {
+  return {
+    ts: i.ts.toISOString(),
+    name: i.name,
+    event: i.event,
+    tool: i.tool,
+    startupMs: round1(i.startupMs),
+    durationMs: round1(i.durationMs),
+    exitCode: i.code === 0 ? 0 : 1,
+    code: i.code,
+    sessionId: i.sessionId,
+    out: i.out,
+    error: i.error,
+    source: i.source
+  };
+}
+var DAY_FILE = /^hook-trace-(\d{4}-\d{2}-\d{2})\.(?:jsonl|dropped)$/;
+function pruneOld(dir, day, days) {
+  const cutoff = new Date(Date.parse(`${day}T00:00:00Z`) - days * 864e5).toISOString().slice(0, 10);
+  for (const f of fs.readdirSync(dir)) {
+    const m = DAY_FILE.exec(f);
+    if (m && m[1] < cutoff) {
+      try {
+        fs.unlinkSync(join2(dir, f));
+      } catch {
+      }
+    }
+  }
+}
+function bumpDropped(file) {
+  let n = 0;
+  try {
+    n = Number(JSON.parse(fs.readFileSync(file, "utf8")).dropped) || 0;
+  } catch {
+  }
+  fs.writeFileSync(file, `${JSON.stringify({ dropped: n + 1, ts: (/* @__PURE__ */ new Date()).toISOString() })}
+`);
+}
+function appendTraceRow(row, opts = {}) {
+  try {
+    const dir = opts.dir ?? traceDir(process.env);
+    const day = row.ts.slice(0, 10);
+    const file = join2(dir, `hook-trace-${day}.jsonl`);
+    let size = 0;
+    try {
+      size = fs.statSync(file).size;
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+      fs.mkdirSync(dir, { recursive: true });
+      try {
+        pruneOld(dir, day, opts.pruneDays ?? PRUNE_DAYS);
+      } catch {
+      }
+    }
+    if (size >= (opts.capBytes ?? DAY_CAP_BYTES)) {
+      bumpDropped(join2(dir, `hook-trace-${day}.dropped`));
+      return "dropped";
+    }
+    fs.appendFileSync(file, `${JSON.stringify(row)}
+`);
+    return "written";
+  } catch {
+    return "error";
+  }
+}
+var keep = (cur, chunk, max) => {
+  if (cur.length >= max) return cur;
+  const s = typeof chunk === "string" ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk).toString("utf8") : "";
+  return cur + s.slice(0, max - cur.length);
+};
+function lazyTap(name, onStream) {
+  const d = Object.getOwnPropertyDescriptor(process, name);
+  if (!d || !d.get || !d.configurable) return;
+  const orig = d.get;
+  let seen;
+  Object.defineProperty(process, name, {
+    configurable: true,
+    enumerable: d.enumerable,
+    get() {
+      const s = orig.call(this);
+      if (s && s !== seen) {
+        seen = s;
+        try {
+          onStream(s);
+        } catch {
+        }
+      }
+      return s;
+    }
+  });
+}
+function bootTrace(env = process.env, _bootCall) {
+  try {
+    if (!process.argv[1]) return;
+    const name = basename(process.argv[1], ".mjs");
+    if (!shouldTrace(name, readTraceMode(env))) return;
+    const startupMs = process.uptime() * 1e3;
+    const t0 = performance.now();
+    const state = { v: 1, stdinTouched: false, stdoutTouched: false };
+    globalThis[TRACE_MARKER] = state;
+    let stdinText = "";
+    let stdoutText = "";
+    let errText = null;
+    const rawRead = fs.readFileSync;
+    fs.readFileSync = function(...args) {
+      const r = rawRead.apply(this, args);
+      try {
+        if (args[0] === 0 || args[0] === "/dev/stdin") stdinText = keep(stdinText, r, STDIN_KEEP);
+      } catch {
+      }
+      return r;
+    };
+    try {
+      Object.defineProperty(fs.readFileSync, "name", { value: "readFileSync", configurable: true });
+      Object.defineProperty(fs.readFileSync, "length", { value: 2, configurable: true });
+    } catch {
+    }
+    syncBuiltinESMExports();
+    lazyTap("stdin", (s) => {
+      state.stdinTouched = true;
+      const emit = s.emit;
+      s.emit = function(ev, chunk) {
+        if (ev === "data") {
+          try {
+            stdinText = keep(stdinText, chunk, STDIN_KEEP);
+          } catch {
+          }
+        }
+        return emit.apply(this, arguments);
+      };
+    });
+    lazyTap("stdout", (s) => {
+      state.stdoutTouched = true;
+      const write = s.write;
+      s.write = function(chunk) {
+        try {
+          stdoutText = keep(stdoutText, chunk, STDOUT_KEEP);
+        } catch {
+        }
+        return write.apply(this, arguments);
+      };
+    });
+    process.on("uncaughtExceptionMonitor", (err) => {
+      try {
+        errText = maskError(err);
+      } catch {
+      }
+    });
+    process.on("exit", (code) => {
+      try {
+        const f = extractPayloadFields(stdinText);
+        const row = buildRow({
+          ts: /* @__PURE__ */ new Date(),
+          name,
+          event: f.event,
+          tool: f.tool,
+          startupMs,
+          durationMs: performance.now() - t0,
+          code: typeof code === "number" ? code : 0,
+          sessionId: f.sessionId,
+          out: classifyOut(stdoutText),
+          error: errText,
+          source: traceSource(env, process.argv[1])
+        });
+        appendTraceRow(row, { dir: traceDir(env) });
+      } catch {
+      }
+    });
+  } catch {
+  }
+}
+if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
+
+// src/plan-mode-approval-gate.ts
+import { readFileSync as readFileSync2, statSync as statSync2 } from "fs";
+import { join as join5 } from "path";
+import { homedir as homedir4 } from "os";
+
+// src/shared/logger.ts
+import { appendFileSync as appendFileSync2, existsSync, mkdirSync as mkdirSync2, statSync, renameSync } from "fs";
+import { dirname as dirname2, join as join3 } from "path";
+import { homedir as homedir3 } from "os";
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join3(homedir3(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname2(LOG_FILE);
+var MAX_LOG_SIZE = 5 * 1024 * 1024;
+var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
+var LEVEL_ORDER = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function shouldLog(level) {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
+}
+function ensureLogDir() {
+  if (!existsSync(LOG_DIR)) {
+    mkdirSync2(LOG_DIR, { recursive: true });
+  }
+}
+function rotateIfNeeded() {
+  try {
+    if (existsSync(LOG_FILE)) {
+      const stat = statSync(LOG_FILE);
+      if (stat.size > MAX_LOG_SIZE) {
+        const rotated = LOG_FILE + ".1";
+        renameSync(LOG_FILE, rotated);
+      }
+    }
+  } catch {
+  }
+}
+function getSessionId() {
+  return process.env.CLAUDE_SESSION_ID || void 0;
+}
+function writeLog(entry) {
+  try {
+    ensureLogDir();
+    rotateIfNeeded();
+    appendFileSync2(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch {
+  }
+}
+function createLogger(hookName) {
+  function log2(level, msg, data) {
+    if (!shouldLog(level)) return;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      level,
+      hook: hookName,
+      msg,
+      sessionId: getSessionId()
+    };
+    if (data && Object.keys(data).length > 0) {
+      entry.data = data;
+    }
+    writeLog(entry);
+    if (level === "error" || level === "warn") {
+      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
+    }
+  }
+  return {
+    debug: (msg, data) => log2("debug", msg, data),
+    info: (msg, data) => log2("info", msg, data),
+    warn: (msg, data) => log2("warn", msg, data),
+    error: (msg, data) => log2("error", msg, data)
+  };
+}
+
+// src/shared/session-activity.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync, writeFileSync } from "fs";
+import { join as join4 } from "path";
+function getHomeDir() {
+  return process.env.HOME || process.env.USERPROFILE || "/tmp";
+}
+function getActivityPath(sessionId) {
+  const dir = join4(getHomeDir(), ".claude", "cache", "session-activity");
+  try {
+    mkdirSync3(dir, { recursive: true });
+  } catch {
+  }
+  return join4(dir, `${sessionId}.json`);
+}
+function readActivity(sessionId) {
+  const filePath = getActivityPath(sessionId);
+  try {
+    if (!existsSync2(filePath)) {
+      return null;
+    }
+    const raw = readFileSync(filePath, "utf-8");
+    if (!raw.trim()) {
+      return null;
+    }
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function loadOrCreate(sessionId) {
+  const existing = readActivity(sessionId);
+  if (existing) {
+    if (!existing.agents) existing.agents = [];
+    if (!existing.mcp_servers) existing.mcp_servers = [];
+    return existing;
+  }
+  return {
+    session_id: sessionId,
+    started_at: (/* @__PURE__ */ new Date()).toISOString(),
+    skills: [],
+    hooks: [],
+    agents: [],
+    mcp_servers: []
+  };
+}
+function upsertEntry(entries, name) {
+  const existing = entries.find((e) => e.name === name);
+  if (existing) {
+    existing.count++;
+  } else {
+    entries.push({
+      name,
+      first_seen: (/* @__PURE__ */ new Date()).toISOString(),
+      count: 1
+    });
+  }
+}
+function logHook(sessionId, hookName) {
+  const activity = loadOrCreate(sessionId);
+  upsertEntry(activity.hooks, hookName);
+  const filePath = getActivityPath(sessionId);
+  writeFileSync(filePath, JSON.stringify(activity), { encoding: "utf-8" });
 }
 
 // src/plan-mode-approval-gate.ts
@@ -307,8 +616,8 @@ function isGoalModeActive(projectDir, sessionId) {
   if (!sessionId) return false;
   try {
     const mangled = mangleProjectDir(projectDir);
-    const transcriptPath = join4(
-      homedir3(),
+    const transcriptPath = join5(
+      homedir4(),
       ".claude",
       "projects",
       mangled,
@@ -349,8 +658,8 @@ function resolveEffectivePermissionMode(projectDir, sessionId) {
   if (!sessionId) return null;
   try {
     const mangled = mangleProjectDir(projectDir);
-    const transcriptPath = join4(
-      homedir3(),
+    const transcriptPath = join5(
+      homedir4(),
       ".claude",
       "projects",
       mangled,

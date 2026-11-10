@@ -1066,13 +1066,21 @@ def compute_canary_timeout(history_path: Path | None = None) -> float:
 # Hook runtime: trace + settings consumption
 # ---------------------------------------------------------------------------
 
+# The tracer (.claude/hooks/src/lib/trace-boot.ts) writes one file per UTC day:
+# ~/.claude/cache/hook-trace-YYYY-MM-DD.jsonl (10-day prune, 32 MB cap).
+# The reader takes the last N day files. DEFAULT_HOOK_TRACE_PATH is the legacy
+# single file; an explicit trace_path argument still reads it.
+DEFAULT_HOOK_TRACE_DIR = Path(os.path.expanduser("~/.claude/cache"))
+DEFAULT_HOOK_TRACE_MODE_PATH = Path(os.path.expanduser("~/.claude/state/hook-trace-mode"))
 DEFAULT_HOOK_TRACE_PATH = Path(
     os.path.expanduser("~/.claude/cache/hook-trace.jsonl")
 )
 DEFAULT_HOOK_SETTINGS_PATH = Path(
     os.path.expanduser("~/.claude/settings.json")
 )
-_HOOK_TRACE_MAX_LINES = 100_000
+_HOOK_TRACE_MAX_LINES = 150_000  # per file: a day file holds ~125k rows at the 32 MB cap
+_HOOK_TRACE_DAY_FILE = re.compile(r"^hook-trace-(\d{4}-\d{2}-\d{2})\.jsonl$")
+_HOOK_TRACE_KEEP_KEYS = ("ts", "name", "event", "tool", "durationMs", "exitCode")
 _HOOK_RUNTIME_MIN_FIRES_FOR_STATS = 10
 _HOOK_RUNTIME_ERROR_RATE_THRESHOLD = 0.05  # 5%
 _HOOK_RUNTIME_MIN_HISTORY_DAYS = 3
@@ -1096,61 +1104,105 @@ def _parse_iso8601(ts: str) -> datetime | None:
     return dt
 
 
+def hook_trace_day_files(trace_dir: Path | None = None, since_days: int = 7) -> list[Path]:
+    """The hook-trace-YYYY-MM-DD.jsonl files of the last `since_days` days, oldest first.
+
+    The UTC date in the file name decides, not the rows: a file named 9 days ago
+    is not read even if a row in it looks recent. The legacy hook-trace.jsonl
+    never matches. A missing dir gives an empty list.
+    """
+    d = trace_dir if trace_dir is not None else DEFAULT_HOOK_TRACE_DIR
+    if not d or not d.is_dir():
+        return []
+    cutoff_day = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d")
+    found: list[tuple[str, Path]] = []
+    for f in d.iterdir():
+        m = _HOOK_TRACE_DAY_FILE.match(f.name)
+        if m and m.group(1) >= cutoff_day:
+            found.append((m.group(1), f))
+    return [f for _, f in sorted(found)]
+
+
+def read_hook_trace_mode(mode_path: Path | None = None) -> str:
+    """The tracer mode: off, hot or all.
+
+    CCV3_HOOK_TRACE=0 is off. A missing or odd file means hot.
+    """
+    if os.environ.get("CCV3_HOOK_TRACE") == "0":
+        return "off"
+    p = mode_path if mode_path is not None else DEFAULT_HOOK_TRACE_MODE_PATH
+    try:
+        text = p.read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return "hot"
+    return text if text in ("off", "all") else "hot"
+
+
+def _read_trace_rows(path: Path, cutoff: datetime, slim: bool) -> list[dict]:
+    """Rows of one trace file newer than `cutoff`.
+
+    Skips malformed lines, test or probe rows and job rows. Tails the file: the
+    last _HOOK_TRACE_MAX_LINES lines through a bounded deque, so a file past the
+    cap still surfaces its newest rows. `slim` keeps only the keys the checks
+    read (a week of day files is large).
+    """
+    if not os.access(path, os.R_OK):
+        return []
+    events: list[dict] = []
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        tail = deque(f, maxlen=_HOOK_TRACE_MAX_LINES)
+    for line in tail:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("source") in ("test", "probe") or rec.get("kind") == "job":
+            continue
+        ts = _parse_iso8601(rec.get("ts", ""))
+        if ts is None or ts < cutoff:
+            continue
+        events.append({k: rec[k] for k in _HOOK_TRACE_KEEP_KEYS if k in rec} if slim else rec)
+    return events
+
+
 def parse_hook_trace(
     trace_path: Path | None = None,
     since_days: int = 7,
+    trace_dir: Path | None = None,
 ) -> list[dict]:
-    """Parse hook-trace.jsonl, return events from the last `since_days` days.
+    """Return hook trace events from the last `since_days` days.
 
-    Skips malformed lines silently. Reads at most 100k lines to bound memory.
-    Returns empty list if the file does not exist.
+    With no `trace_path` it reads the day files hook-trace-YYYY-MM-DD.jsonl of the last `since_days`
+    days under `trace_dir` (default ~/.claude/cache). An explicit `trace_path` reads that one legacy
+    file. Test and probe rows and job rows are skipped. Malformed lines are skipped silently.
+    Returns an empty list if nothing exists.
 
     Args:
-        trace_path: Override the default ~/.claude/cache/hook-trace.jsonl path.
+        trace_path: Read this single file (legacy single-file layout).
         since_days: Only include events newer than this many days.
+        trace_dir: Override the default ~/.claude/cache day-file directory.
 
     Returns:
         List of event dicts (raw JSONL records that parsed cleanly + are recent).
     """
-    path = trace_path if trace_path is not None else DEFAULT_HOOK_TRACE_PATH
-    if not path or not path.exists():
-        return []
-    # Permissions can change between runs (e.g. another user wrote the trace
-    # file with restrictive umask). Skip readability failures up front so the
-    # downstream telemetry checks see an empty event list rather than a
-    # half-populated one from a partially-readable file.
-    if not os.access(path, os.R_OK):
-        return []
-
     cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
-    events: list[dict] = []
     try:
-        # Tail the file: read the last _HOOK_TRACE_MAX_LINES lines via a
-        # bounded deque. The previous head-read approach truncated AFTER
-        # _HOOK_TRACE_MAX_LINES, so once the trace file grew past the cap
-        # it would only ever surface ancient events. Tailing keeps the
-        # window aligned with the most recent activity.
-        with path.open("r", encoding="utf-8", errors="replace") as f:
-            tail = deque(f, maxlen=_HOOK_TRACE_MAX_LINES)
-        for line in tail:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(rec, dict):
-                continue
-            ts = _parse_iso8601(rec.get("ts", ""))
-            if ts is None:
-                continue
-            if ts < cutoff:
-                continue
-            events.append(rec)
+        if trace_path is not None:
+            if not trace_path.exists():
+                return []
+            # Permissions can change between runs: an unreadable file gives an empty list.
+            return _read_trace_rows(trace_path, cutoff, slim=False)
+        events: list[dict] = []
+        for f in hook_trace_day_files(trace_dir, since_days):
+            events.extend(_read_trace_rows(f, cutoff, slim=True))
+        return events
     except OSError:
         return []
-    return events
 
 
 def aggregate_by_hook(events: list[dict]) -> dict[str, dict]:
@@ -1333,13 +1385,17 @@ def _percentile(values: list[float], pct: float) -> float:
 def check_hook_runtime(
     trace_path: Path | None = None,
     settings_path: Path | None = None,
+    trace_dir: Path | None = None,
+    trace_mode: str | None = None,
 ) -> list[CheckResult]:
     """Hook-runtime category: 4 sub-checks driven by trace.jsonl + settings.json.
 
     Sub-checks:
         1. hook-trace-file-present  -- PASS if file exists, SKIP otherwise.
         2. hook-fire-rate           -- WARN MEDIUM on registered-but-unfired hooks
-                                       (only when history span >= 3 days).
+                                       (only when history span >= 3 days, and only
+                                       in trace mode all: in hot mode only the hot
+                                       set writes rows, so an unfired hook is no fault).
         3. hook-error-rate          -- WARN HIGH if any hook with >=10 fires has
                                        >5% nonzero-exit rate.
         4. hook-timing-p95          -- INFO PASS, evidence reports top-3 P95.
@@ -1348,8 +1404,10 @@ def check_hook_runtime(
     exception message. Never crashes the parent runner.
 
     Args:
-        trace_path: Override default ~/.claude/cache/hook-trace.jsonl.
+        trace_path: Read this one legacy file instead of the day files.
         settings_path: Override default ~/.claude/settings.json.
+        trace_dir: Override the default ~/.claude/cache day-file directory.
+        trace_mode: Override the tracer mode (off, hot, all); default reads the mode file.
 
     Returns:
         List of CheckResult, all in category "hook-runtime".
@@ -1358,11 +1416,19 @@ def check_hook_runtime(
     start = time.perf_counter()
     results: list[CheckResult] = []
     try:
-        path = trace_path if trace_path is not None else DEFAULT_HOOK_TRACE_PATH
+        use_days = trace_path is None
+        tdir = trace_dir if trace_dir is not None else DEFAULT_HOOK_TRACE_DIR
+        day_files = hook_trace_day_files(tdir, 7) if use_days else []
+        if use_days:
+            path = day_files[-1] if day_files else tdir / "hook-trace-YYYY-MM-DD.jsonl"
+            present = bool(day_files)
+        else:
+            path = trace_path
+            present = path.exists()
         sett = settings_path if settings_path is not None else DEFAULT_HOOK_SETTINGS_PATH
 
         # 1. hook-trace-file-present
-        if not path.exists():
+        if not present:
             results.append(_skip(
                 "hook-trace-file-present", category,
                 f"trace file not yet present at {path}",
@@ -1414,12 +1480,15 @@ def check_hook_runtime(
 
         results.append(_pass(
             "hook-trace-file-present", category,
-            f"trace file present at {path}",
+            (f"{len(day_files)} trace day file(s) under {tdir}, newest {path.name}"
+             if use_days else f"trace file present at {path}"),
             duration_ms=int((time.perf_counter() - start) * 1000),
         ))
 
         # Parse + aggregate (shared work)
-        events = parse_hook_trace(trace_path=path, since_days=7)
+        events = parse_hook_trace(
+            trace_path=None if use_days else path, since_days=7, trace_dir=tdir,
+        )
         aggregated = aggregate_by_hook(events)
         registered = get_registered_hooks(settings_path=sett)
 
@@ -1431,7 +1500,15 @@ def check_hook_runtime(
             events=events,
         )
         fr_dur = int((time.perf_counter() - fr_start) * 1000)
-        if not sufficient:
+        mode = trace_mode if trace_mode is not None else read_hook_trace_mode()
+        if use_days and mode != "all":
+            results.append(_skip(
+                "hook-fire-rate", category,
+                f"trace mode is {mode}: only the hot set writes rows, so a hook "
+                "with zero rows is not a fault. Use mode all to judge fire rate.",
+                duration_ms=fr_dur,
+            ))
+        elif not sufficient:
             results.append(_skip(
                 "hook-fire-rate", category,
                 "insufficient history (<3 days of trace data)",
@@ -1481,7 +1558,7 @@ def check_hook_runtime(
                 f"{len(offenders)} hook(s) over 5% error rate. Top: {top_str}",
                 severity="HIGH",
                 remediation=(
-                    "investigate failing hooks; check ~/.claude/cache/hook-trace.jsonl"
+                    "investigate failing hooks; check ~/.claude/cache/hook-trace-*.jsonl"
                 ),
                 duration_ms=er_dur,
                 metadata={
@@ -2771,7 +2848,7 @@ def build_runner(output_dir: Path | None = None,
     r.register("hook-vitest-tests-pass", "hooks",
                check_hook_vitest, slow=True)
 
-    # 2.5 Hook runtime (consumes ~/.claude/cache/hook-trace.jsonl)
+    # 2.5 Hook runtime (consumes ~/.claude/cache/hook-trace-YYYY-MM-DD.jsonl day files)
     # check_hook_runtime returns 4 results, but the runner expects one per
     # registration. Cache the call and emit one wrapper per sub-check.
     _hook_runtime_cache: dict[str, CheckResult] = {}
