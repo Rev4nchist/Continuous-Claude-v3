@@ -65,3 +65,29 @@ test('PC3: every job in the file that checks out code sets persist-credentials: 
     for (const step of checkouts(jobBlock(name))) assert.equal(persist(step), 'false', `a checkout in ${name} does not set persist-credentials: false`);
   }
 });
+
+// The ratchet's own parsing, on small step texts. CodeRabbit CLI review of the first push found two ways PC1 and PC3 pass with nothing checked.
+//   PC5  a named checkout step (`- name: X` then `uses: actions/checkout@`) is not seen -> checkouts() only reads `- uses:` as the first line
+//   PC6  `persist-credentials: false` under `env:` counts as the input                  -> persist() reads any line of the step, not the `with:` mapping
+const NAMED = '      - name: Checkout\n        uses: actions/checkout@abc # v1\n        with:\n          persist-credentials: false';
+const PLAIN = '      - uses: actions/checkout@abc # v1\n        with:\n          fetch-depth: 0\n          persist-credentials: false   # why';
+const IN_ENV = '      - uses: actions/checkout@abc # v1\n        env:\n          persist-credentials: false';
+const BEFORE_WITH = '      - uses: actions/checkout@abc # v1\n        with:\n          fetch-depth: 0\n        env:\n          persist-credentials: false';
+
+test('PC5: a named checkout step is found as a checkout', () => {
+  assert.equal(checkouts(`  job:\n    steps:\n${NAMED}`).length, 1);
+});
+
+test('PC5: a named step that is not a checkout is not found', () => {
+  assert.equal(checkouts('  job:\n    steps:\n      - name: Build\n        uses: actions/setup-node@abc').length, 0);
+});
+
+test('PC6: persist-credentials under env: is not the input', () => {
+  assert.notEqual(persist(IN_ENV), 'false');
+  assert.notEqual(persist(BEFORE_WITH), 'false');
+});
+
+test('PC6: persist-credentials in with: is read, with a comment and after other inputs', () => {
+  assert.equal(persist(PLAIN), 'false');
+  assert.equal(persist(NAMED), 'false');
+});
