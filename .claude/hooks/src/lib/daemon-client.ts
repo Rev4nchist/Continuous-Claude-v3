@@ -641,7 +641,7 @@ export function queryDaemon(query: DaemonQuery, projectDir: string): Promise<Dae
 }
 
 /**
- * Query the daemon synchronously using nc (netcat) or PowerShell (Windows).
+ * Query the daemon synchronously: a child node process on Unix, PowerShell on Windows.
  * Fallback for contexts where async is not available.
  *
  * @param query - Query to send to daemon
@@ -653,6 +653,40 @@ export interface DaemonInvocation {
   args: string[];
   stdin: string;
 }
+
+/**
+ * Query script, run as `node -e <script> <socketPath>` with the payload on
+ * STDIN. The path arrives as argv DATA, never interpolated into code. It reads
+ * stdin to the end, connects, sends the payload as one line, then prints the
+ * first reply line (or whatever arrived before the daemon closed) and exits 0.
+ * No reply, a connect error or any socket error exits 1 with no stdout.
+ * The socket stays half-open after the write (like the async queryDaemon), and
+ * decodes as UTF-8 through setEncoding so multibyte characters split across
+ * chunks stay intact. Exit waits for the stdout write callback so a large
+ * reply is not truncated on a pipe.
+ */
+const UNIX_QUERY_SCRIPT = [
+  "const net=require('net');",
+  "let inp='';",
+  "process.stdin.setEncoding('utf8');",
+  "process.stdin.on('data',d=>{inp+=d;});",
+  "process.stdin.on('end',()=>{",
+  "  let buf='',fin=false;",
+  "  const done=()=>{",
+  "    if(fin)return;fin=true;",
+  "    const nl=buf.indexOf('\\n');",
+  "    const out=(nl<0?buf:buf.slice(0,nl)).trim();",
+  "    if(!out)process.exit(1);",
+  "    process.stdout.write(out+'\\n',()=>process.exit(0));",
+  "  };",
+  "  const s=net.connect(process.argv[1],()=>{s.write(inp.trim()+'\\n');});",
+  "  s.setEncoding('utf8');",
+  "  s.on('data',d=>{buf+=d;if(buf.includes('\\n'))done();});",
+  "  s.on('end',done);",
+  "  s.on('close',done);",
+  "  s.on('error',()=>{if(!fin){fin=true;process.exit(1);}});",
+  "});",
+].join('');
 
 /**
  * Build the daemon spawn invocation. SECURITY (GAP4-02 / ST-08 cluster): the
@@ -680,8 +714,9 @@ export function buildDaemonInvocation(connInfo: ConnectionInfo, input: string): 
     ].join('; ');
     return { file: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command', psScript], stdin: input };
   }
-  // Unix: nc reads the payload from stdin (was `echo '<input>' | nc`).
-  return { file: 'nc', args: ['-U', connInfo.path || ''], stdin: input };
+  // Unix: a child node process reads the payload from stdin and talks to the
+  // socket with node's own net module (was `nc -U`; no nc on a minimal Linux).
+  return { file: process.execPath, args: ['-e', UNIX_QUERY_SCRIPT, connInfo.path || ''], stdin: input };
 }
 
 export function queryDaemonSync(query: DaemonQuery, projectDir: string): DaemonResponse {

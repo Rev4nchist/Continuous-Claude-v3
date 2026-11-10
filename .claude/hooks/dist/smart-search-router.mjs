@@ -667,6 +667,28 @@ function queryDaemon(query, projectDir) {
     });
   });
 }
+var UNIX_QUERY_SCRIPT = [
+  "const net=require('net');",
+  "let inp='';",
+  "process.stdin.setEncoding('utf8');",
+  "process.stdin.on('data',d=>{inp+=d;});",
+  "process.stdin.on('end',()=>{",
+  "  let buf='',fin=false;",
+  "  const done=()=>{",
+  "    if(fin)return;fin=true;",
+  "    const nl=buf.indexOf('\\n');",
+  "    const out=(nl<0?buf:buf.slice(0,nl)).trim();",
+  "    if(!out)process.exit(1);",
+  "    process.stdout.write(out+'\\n',()=>process.exit(0));",
+  "  };",
+  "  const s=net.connect(process.argv[1],()=>{s.write(inp.trim()+'\\n');});",
+  "  s.setEncoding('utf8');",
+  "  s.on('data',d=>{buf+=d;if(buf.includes('\\n'))done();});",
+  "  s.on('end',done);",
+  "  s.on('close',done);",
+  "  s.on('error',()=>{if(!fin){fin=true;process.exit(1);}});",
+  "});"
+].join("");
 var FAST_PROBE_TIMEOUT_MS = 250;
 var NEG_CACHE_TTL_MS = 1e4;
 function negCachePath(projectDir) {

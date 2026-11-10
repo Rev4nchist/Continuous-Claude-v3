@@ -52,10 +52,10 @@ describe('buildDaemonInvocation — GAP4-02 injection-safety (payload via stdin,
     expect(inv.args.join(' ')).toContain('[Console]::In.ReadLine()');
   });
 
-  it('Unix: nc reads stdin; payload not interpolated into args', () => {
+  it('Unix: node reads stdin; payload not interpolated into args', () => {
     const inv = buildDaemonInvocation({ type: 'unix', path: '/tmp/tldr-abc.sock' }, payload);
-    expect(inv.file).toBe('nc');
-    expect(inv.args).toEqual(['-U', '/tmp/tldr-abc.sock']);
+    expect(inv.file).toBe(process.execPath);
+    expect(inv.args).toContain('/tmp/tldr-abc.sock');
     expect(inv.stdin).toBe(payload);
     expect(inv.args.some((a) => a.includes(payload))).toBe(false);
   });
@@ -149,20 +149,12 @@ function stopMockServer(server: net.Server | null): Promise<void> {
 }
 
 /**
- * True when a `nc` binary exists. On POSIX queryDaemonSync still sends the
- * query through `nc -U` (buildDaemonInvocation), so a test that needs a live
- * Unix daemon to answer a query cannot pass without it. The reachability probe
- * no longer needs nc (probeUnixSocket uses node's net module).
- */
-const NC_AVAILABLE = IS_WINDOWS || !spawnSync('nc', ['-h'], { stdio: 'ignore' }).error;
-
-/**
  * Host the mock Unix-socket daemon in a CHILD process. The client probes the
  * socket with a blocking spawnSync; an in-process server shares the test's
  * event loop, so it cannot accept while spawnSync blocks and the probe cannot
  * connect. A child process keeps accepting.
  * The child parses each request line as JSON. It answers {"cmd":"ping"} with
- * {"status":"ok"} (the client's ncPing probe needs that), answers the request
+ * {"status":"ok"} (the client's ping probe needs that), answers the request
  * whose cmd equals `cmd` with the canned `response`, and for any other command
  * closes the connection and writes nothing. A client that sends the wrong
  * command gets no answer, so the test fails.
@@ -305,7 +297,7 @@ describe('getStatusFile', () => {
 // =============================================================================
 
 // =============================================================================
-// Test 4: queryDaemonSync() - sync version using nc or direct socket
+// Test 4: queryDaemonSync() - sync version (child node on Unix, PowerShell on Windows)
 // =============================================================================
 
 describe('queryDaemonSync', () => {
@@ -361,23 +353,8 @@ describe('queryDaemon async', () => {
     cleanupTestEnv();
   });
 
-  // On CI a missing nc must fail loudly, not skip: the two tests below would
-  // silently stop covering the Unix path.
-  it('nc is installed on CI', () => {
-    const ci = process.env.CI;
-    const onCi = ci !== undefined && ci !== '' && ci !== 'false';
-    if (onCi && process.platform !== 'win32' && !NC_AVAILABLE) {
-      throw new Error(
-        'nc is not installed on this CI runner. lib/daemon-client.ts isDaemonReachable has no node ' +
-          'net.connect fallback, so it reports a live Unix daemon as unreachable and the queryDaemon ' +
-          'tests cannot run. Install netcat-openbsd.',
-      );
-    }
-  });
-
-  // POSIX: the live-daemon tests need a child-process mock AND `nc` (see
-  // NC_AVAILABLE). Windows uses the in-process TCP mock and never needs nc.
-  it.skipIf(!NC_AVAILABLE)('should connect to daemon and receive response', { timeout: 30000 }, async () => {
+  // Windows uses the in-process TCP mock; POSIX uses a child-process Unix mock.
+  it('should connect to daemon and receive response', { timeout: 30000 }, async () => {
     const response = { status: 'ok' };
     if (IS_WINDOWS) {
       // Create mock server on same transport as real implementation
@@ -403,7 +380,7 @@ describe('queryDaemon async', () => {
     expect(result.status).toBe('ok');
   });
 
-  it.skipIf(!NC_AVAILABLE)('should handle search command', { timeout: 30000 }, async () => {
+  it('should handle search command', { timeout: 30000 }, async () => {
     const response = {
       status: 'ok',
       results: [
