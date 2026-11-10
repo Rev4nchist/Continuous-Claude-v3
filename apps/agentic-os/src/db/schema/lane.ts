@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { bigint, bigserial, check, index, integer, jsonb, text, timestamp } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, check, index, integer, jsonb, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 import { agenticOs } from './project';
 
 /**
@@ -194,6 +194,35 @@ export const lane = agenticOs.table(
     check('lane_remind_state_check', sql`${t.remindState} IN ('scheduled','due','needs_dave','failed','acked')`),
     // No unique index on (project_key, id): id is the primary key, so such an index
     // could never reject a row the primary key had not already rejected.
+  ],
+);
+
+/**
+ * Lane dependencies (migration 0006): one row is one edge, lane `lane_id` waits on lane `depends_on`.
+ * The table holds edges only: no state, no SHA, no hold. Design: .claudedocs/re-execution/contracts/t2.1-contract.md, point 1.
+ *
+ * No FK on either column: a dependency whose lane row does not exist must count as open, and a foreign key would
+ * refuse that row (`lane` and `lane_event` also have none, for their own reason: a constraint error must never
+ * abort a write). An edge stays when its lane row goes (no cascade).
+ * No default on `project_key`: the 0004 default exists for old writers that do not know boards, and no old writer of
+ * this table exists, so a writer that forgets the board must fail at once (23502).
+ * `project_key` copies a fact of `lane_id` (a known 2NF break). It is not in the key: lane ids are global.
+ * No index beyond the key: it serves "edges of one lane" (leading column). The key and the check are named here,
+ * in code, so drizzle-kit does not pick the names.
+ */
+export const laneDep = agenticOs.table(
+  'lane_dep',
+  {
+    /** The lane that waits. */
+    laneId: text('lane_id').notNull(),
+    /** The lane it waits on. May name an id with no lane row. */
+    dependsOn: text('depends_on').notNull(),
+    /** The board of `lane_id`. The writer sets it to the board it resolved. */
+    projectKey: text('project_key').notNull(),
+  },
+  (t) => [
+    primaryKey({ name: 'lane_dep_pkey', columns: [t.laneId, t.dependsOn] }),
+    check('lane_dep_no_self_check', sql`${t.laneId} <> ${t.dependsOn}`),
   ],
 );
 
