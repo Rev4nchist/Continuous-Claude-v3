@@ -772,7 +772,7 @@ if $CHANGED; then
                 [[ "$rest" == */* ]] && return 0   # top-level dist only
                 printf '%s\n' "$ACTIVE_CLAUDE/hooks/dist/$rest"
                 ;;
-            .claude/hooks/*.sh|.claude/hooks/*.py|.claude/hooks/*.mjs|.claude/hooks/*.ps1|.claude/hooks/package.json|.claude/hooks/tsconfig.json)
+            .claude/hooks/*.sh|.claude/hooks/*.py|.claude/hooks/*.mjs|.claude/hooks/*.ps1|.claude/hooks/package.json|.claude/hooks/package-lock.json|.claude/hooks/tsconfig.json)
                 rest="${p#.claude/hooks/}"
                 [[ "$rest" == */* ]] && return 0   # top-level hooks/ files only (hooks/src excluded)
                 printf '%s\n' "$ACTIVE_CLAUDE/hooks/$rest"
@@ -989,7 +989,7 @@ for src_file in "$REPO_CLAUDE"/*.md; do
     guarded_copy "$src_file" "$dst_file"
 done
 
-for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/package.json" "hooks/tsconfig.json"; do
+for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/package.json" "hooks/package-lock.json" "hooks/tsconfig.json"; do
     for src_file in $REPO_CLAUDE/$pattern; do
         [[ ! -f "$src_file" ]] && continue
         rel="${src_file#$REPO_CLAUDE/}"
