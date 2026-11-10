@@ -233,6 +233,16 @@
       ]
     },
     {
+      "id": "review-engine",
+      "files": [
+        "review-engine.md"
+      ],
+      "mode": "deny-first",
+      "segment": [
+        "^(?:\"[^\"]*node(?:\\.exe)?\"|'[^']*node(?:\\.exe)?'|[^\\s\"']*node(?:\\.exe)?)(?:\\s+-[\\w-]+(?:=\\S+)?)*\\s+(?:\"[^\"]*lane\\.mjs\"|'[^']*lane\\.mjs'|[^\\s\"']*lane\\.mjs|\"?\\$\\w+\"?)(?:\\s+--[\\w-]+(?:\\s+(?!--)(?:\"[^\"]*\"|'[^']*'|[^\\s\"']\\S*))?)*\\s+claim(?:\\s+--[\\w-]+(?:\\s+(?!--)(?:\"[^\"]*\"|'[^']*'|[^\\s\"']\\S*))?)*\\s+[\"']?(?:re-[a-z0-9]|(?:force-high-security-tier|hf-judge-precheck)(?![\\w-]))"
+      ]
+    },
+    {
       "id": "headless-claude",
       "files": [
         "headless-claude-mcp.md"
