@@ -37,6 +37,10 @@ jobs:
         run: node scripts/agents/check-agent-body.mjs
       - name: Hook manifest (rendered template)
         run: node scripts/hook-manifest-check.mjs --repo
+      - name: Hook coverage ratchet (every registered hook has a test)
+        run: node scripts/hooks/hook-coverage-ratchet.mjs
+      - name: hook-coverage-ratchet unit tests
+        run: node --test scripts/hooks/hook-coverage-ratchet.test.mjs
       - name: scan-ratchet unit tests
         run: node --test scripts/ratchets/scan-ratchet.test.mjs
       - name: Reviewer skip-list in sync (REVIEW.md vs Greptile + CodeRabbit)
