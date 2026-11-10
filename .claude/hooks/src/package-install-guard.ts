@@ -483,25 +483,67 @@ function iexPayload(segment: string): string | null {
 const PIPE_TEXT_WRITER = /^(?:echo|write-output|write-host|printf)$/i;
 
 /**
- * The text a bare iex / Invoke-Expression segment runs when a string is piped into it ("npm install x" | iex,
- * echo "npm i x" | iex), read from the segment before it, or null. The parser drops which operator cut the segments,
- * so `echo "npm i x"; iex` reads the same way: that is stricter, never looser. A variable, (Get-Content f) and
- * (iwr url) are not literal strings: they give null and stay as they were.
+ * Quoted strings joined by `+` ('npm i'+'nstall x'), read as the one string they build. Raw text, no lexer: it only
+ * joins two quoted pieces (the closing quote of the second piece wins) and repeats until no join is left. Joined text
+ * can only make an install pattern appear, so reading it never loosens a verdict.
  */
-function pipedIexText(segment: string, previous: string | undefined): string | null {
-  if (previous === undefined) return null;
-  const words = tokenize(stripPrefixes(segment));
-  if (words[0] === '&') words.shift();
-  if (!IEX_WORD.test(words[0] ?? '') || iexPayload(segment) !== null) return null;
-  const before = stripPrefixes(stripLeaders(previous));
+function joinConcat(text: string): string {
+  let out = text;
+  for (let i = 0; i < 64; i++) {
+    const next = out.replace(/(["'])((?:(?!\1).)*)\1[ \t]*\+[ \t]*(["'])((?:(?!\3).)*)\3/, '$1$2$4$1');
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+// A whole PowerShell here-string: @'<newline>text<newline>'@ or the @" form. Group 2 is the text.
+const HERE_STRING_ONLY = /^@(['"])[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1@$/;
+
+/** The literal text one segment writes to its pipeline (a quoted string, a here-string, echo/Write-Output text), or null. */
+function literalText(previous: string): string | null {
+  const before = stripPrefixes(stripLeaders(joinConcat(previous).trim().replace(/^@(?=\()/, '')));
+  const here = HERE_STRING_ONLY.exec(before);
+  if (here) return here[2].trim() === '' ? null : here[2];
   const prior = tokenize(before);
   if (prior[0] === '&') prior.shift();
   let text: string[];
   if (PIPE_TEXT_WRITER.test(prior[0] ?? '')) text = prior.slice(1).filter((w) => !w.startsWith('-'));
-  else if (/^["']/.test(before)) text = prior;
+  else if (/^@?["']/.test(before)) text = prior;
   else return null;
   const joined = text.join(' ').trim();
   return joined === '' ? null : joined;
+}
+
+/**
+ * The texts a bare iex / Invoke-Expression segment runs when a string is piped into it ("npm install x" | iex,
+ * echo "npm i x" | iex, @'..'@ | iex), read from EVERY segment before it. A pass-through cmdlet between the string and
+ * iex (Out-String, ForEach-Object, %) changes nothing: no cmdlet is named, every earlier literal counts. The parser drops
+ * which operator cut the segments, so `echo "npm i x"; iex` reads the same way: that is stricter, never looser. A variable,
+ * (Get-Content f) and (iwr url) are not literal strings: they give no text and stay as they were.
+ */
+function pipedIexTexts(segment: string, earlier: string[]): string[] {
+  const words = tokenize(stripPrefixes(segment));
+  if (words[0] === '&') words.shift();
+  if (!IEX_WORD.test(words[0] ?? '') || iexPayload(segment) !== null) return [];
+  return earlier.map(literalText).filter((t): t is string => t !== null);
+}
+
+/** One plan per segment text: the same literal read twice (an upstream string and a here-string body) asks once. */
+function uniqueBySegment(plans: InstallPlan[]): InstallPlan[] {
+  const seen = new Set<string>();
+  return plans.filter((p) => (seen.has(p.segment) ? false : (seen.add(p.segment), true)));
+}
+
+// PowerShell keeps a here-string in a variable ($h = @'..'@). executableView drops that block, so its text is read raw.
+const ASSIGNED_HERE_STRING = /^[ \t]*\$[\w:]+[ \t]*=[ \t]*@(['"])[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1@/gm;
+// An iex word anywhere in raw text, with quotes and escapes removed too (i"e"x).
+const IEX_ANYWHERE = /(?<![\w-])(?:iex|invoke-expression)(?![\w-])/i;
+
+/** The bodies of `$var = @'..'@` here-strings, when the command also has an iex word anywhere. No variable is tracked: fail closed. */
+function assignedHereStringBodies(command: string): string[] {
+  if (!IEX_ANYWHERE.test(command) && !IEX_ANYWHERE.test(command.replace(/[\\'"`^]/g, ''))) return [];
+  return [...command.matchAll(ASSIGNED_HERE_STRING)].map((m) => m[2]).filter((body) => body.trim() !== '');
 }
 
 /** A pipe into iex or Invoke-Expression, read raw. The catch path of installPlans uses it: an unread command must ask. */
@@ -541,17 +583,17 @@ export function installPlans(command: string, tool = 'Bash', cwd: string | null 
     for (const [k, raw] of segments.entries()) {
       const segment = stripLeaders(raw);
       // An iex string that holds an install is covered by that plan, so the segment does not ask twice. An override prefix stays on the iex segment.
-      const iex = depth < 3 && !checkOverride(segment) ? (iexPayload(segment) ?? pipedIexText(segment, segments[k - 1])) : null;
-      const inner = iex === null ? [] : iexPlans(iex, tool, cwd, depth + 1, config);
+      const inner = depth < 3 && !checkOverride(segment) ? iexSegmentPlans(segment, segments.slice(0, k), tool, cwd, depth + 1, config) : [];
       viaIex.push(...inner);
       if (inner.length === 0 && (needsCheck(segment, tool, config) || encodedCommands(segment).bad)) found.push({ segment, cwd, tool });
     }
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
     const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
+    const hereStrings = assignedHereStringBodies(command).flatMap((body) => iexPlans(body, tool, cwd, depth + 1, config));
     return [
       ...found,
-      ...viaIex,
+      ...uniqueBySegment([...viaIex, ...hereStrings]),
       ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config)),
       ...decoded.flatMap((text) => installPlans(text, 'PowerShell', null, depth + 1, config || undefined)),
     ];
@@ -562,6 +604,18 @@ export function installPlans(command: string, tool = 'Bash', cwd: string | null 
     const risky = needsCheck(command, tool, config) || encoded.bad || encoded.payloads.length > 0 || mayEncode(command) || pipesIntoIex(command);
     return risky ? [{ segment: command.trim(), cwd: null, tool }] : [];
   }
+}
+
+/**
+ * The plans of one iex / Invoke-Expression segment: the text in its arguments, or the literal strings piped into a bare iex.
+ * A concatenation in the arguments is read joined; when the joined read finds no plan, the plain read is used, so this adds, never drops.
+ */
+function iexSegmentPlans(segment: string, earlier: string[], tool: string, cwd: string | null, depth: number, configured: boolean): InstallPlan[] {
+  const direct = iexPayload(segment);
+  if (direct === null) return uniqueBySegment(pipedIexTexts(segment, earlier).flatMap((text) => iexPlans(text, tool, cwd, depth, configured)));
+  const joined = iexPayload(joinConcat(segment));
+  const joinedPlans = joined !== null && joined !== direct ? iexPlans(joined, tool, cwd, depth, configured) : [];
+  return joinedPlans.length > 0 ? joinedPlans : iexPlans(direct, tool, cwd, depth, configured);
 }
 
 /**

@@ -88,6 +88,8 @@ describe('gap 1: a here-string piped to iex gets the verdict of the bare iex com
     ['PowerShell', `@'\n${EVIL}\n'@ | Out-String | iex`],
     ['PowerShell', `$h = @'\n${EVIL}\n'@\n$h | iex`],
     ['PowerShell', `$h = @"\n${EVIL}\n"@\niex $h`],
+    // No variable is tracked: a here-string body in the command with an iex anywhere is read, whichever variable iex gets.
+    ['PowerShell', `$h = @'\n${EVIL}\n'@\n$other | iex`],
     ['Bash', `@'\n${EVIL}\n'@ | iex`],
   ])('[%s] %j asks once', (tool, command) => {
     expectOneAsk(tool, command);
@@ -109,7 +111,6 @@ describe('gap 1: a here-string piped to iex gets the verdict of the bare iex com
     ['PowerShell', `@'\nnpm install lodash\n'@ | iex`],
     ['PowerShell', `@'\n${EVIL}\n'@ | Out-File x.ps1`],
     ['PowerShell', `$h = @'\n${EVIL}\n'@\nWrite-Host $h`],
-    ['PowerShell', `$h = @'\n${EVIL}\n'@\n$other | iex`],
   ])('[%s] %j stays allowed', (tool, command) => {
     expect(runHook(command, tool).decision).toBeUndefined();
   });
