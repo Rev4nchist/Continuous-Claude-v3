@@ -1046,3 +1046,116 @@ def test_postgres_remediation_uses_repo_docker_dir(returncode):
         r = hc.check_postgres_container()
     assert r.status == "FAIL"
     assert (hc.REPO_ROOT / "docker").as_posix() in r.remediation
+
+
+# ---------------------------------------------------------------------------
+# Hook runtime: day files (hook-trace-YYYY-MM-DD.jsonl, written by the esbuild
+# inject boot module). How the reader can fail, one test each:
+#   it reads a day file outside the last 7 days, or the legacy hook-trace.jsonl;
+#   it counts a test/probe row or a job row;
+#   it stays on a single file, so the 7-day stats shrink to one day;
+#   hot mode (only ~29 programs write) makes hook-fire-rate WARN on ~38 hooks that never ran.
+# ---------------------------------------------------------------------------
+
+
+def _day_name(days_ago: int) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    day = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    return f"hook-trace-{day}.jsonl"
+
+
+def _day_row(name: str, days_ago: int = 0, **extra) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    when = datetime.now(timezone.utc) - timedelta(days=days_ago, minutes=5)
+    ts = when.isoformat().replace("+00:00", "Z")
+    row = {"ts": ts, "name": name, "event": "PreToolUse", "tool": "Bash", "startupMs": 30.0,
+           "durationMs": 12.0, "exitCode": 0, "code": 0, "sessionId": "s", "out": "none",
+           "error": None, "source": "live"}
+    row.update(extra)
+    return json.dumps(row)
+
+
+def _runtime(cache, settings, mode):
+    from scripts.health_check import check_hook_runtime
+
+    results = check_hook_runtime(trace_dir=cache, settings_path=settings, trace_mode=mode)
+    return {r.name: r for r in results}
+
+
+def test_parse_hook_trace_reads_the_last_7_day_files_only(tmp_path):
+    from scripts.health_check import parse_hook_trace
+
+    (tmp_path / _day_name(0)).write_text(_day_row("today") + "\n", encoding="utf-8")
+    (tmp_path / _day_name(6)).write_text(_day_row("six-days") + "\n", encoding="utf-8")
+    # A file named 9 days ago holds a row with a recent ts: the name decides, so it is not read.
+    (tmp_path / _day_name(9)).write_text(_day_row("old-file", days_ago=0) + "\n", encoding="utf-8")
+    (tmp_path / "hook-trace.jsonl").write_text(_day_row("legacy") + "\n", encoding="utf-8")
+
+    names = sorted(e["name"] for e in parse_hook_trace(trace_dir=tmp_path, since_days=7))
+    assert names == ["six-days", "today"]
+
+
+def test_parse_hook_trace_skips_test_probe_and_job_rows(tmp_path):
+    from scripts.health_check import parse_hook_trace
+
+    lines = [
+        _day_row("keep"),
+        _day_row("test-row", source="test"),
+        _day_row("probe-row", source="probe"),
+        _day_row("prompt-submit/job", kind="job"),
+    ]
+    (tmp_path / _day_name(0)).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert [e["name"] for e in parse_hook_trace(trace_dir=tmp_path)] == ["keep"]
+
+
+def test_parse_hook_trace_reads_every_day_file_not_just_the_newest(tmp_path):
+    from scripts.health_check import parse_hook_trace
+
+    for d in range(5):
+        row = _day_row(f"hook-d{d}", days_ago=d)
+        (tmp_path / _day_name(d)).write_text(row + "\n", encoding="utf-8")
+    assert len(parse_hook_trace(trace_dir=tmp_path)) == 5
+
+
+def test_parse_hook_trace_missing_dir_returns_empty(tmp_path):
+    from scripts.health_check import parse_hook_trace
+
+    assert parse_hook_trace(trace_dir=tmp_path / "nope") == []
+
+
+def test_hook_runtime_day_files_present_passes_and_none_skips(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    by = _runtime(cache, settings, "hot")
+    assert by["hook-trace-file-present"].status == "SKIP"
+
+    (cache / _day_name(0)).write_text(_day_row("a") + "\n", encoding="utf-8")
+    by = _runtime(cache, settings, "hot")
+    assert by["hook-trace-file-present"].status == "PASS"
+    assert "hook-trace-" in by["hook-trace-file-present"].evidence
+
+
+def test_hook_runtime_fire_rate_skips_in_hot_mode_and_warns_in_all_mode(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "node", "args": ["x/dist/ran.mjs"]},
+        {"type": "command", "command": "node", "args": ["x/dist/never-ran.mjs"]},
+    ]}]}}), encoding="utf-8")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / _day_name(5)).write_text(_day_row("ran", days_ago=5) + "\n", encoding="utf-8")
+    (cache / _day_name(0)).write_text(_day_row("ran") + "\n", encoding="utf-8")
+
+    hot = _runtime(cache, settings, "hot")
+    assert hot["hook-fire-rate"].status == "SKIP"
+    assert "hot" in hot["hook-fire-rate"].evidence
+
+    full = _runtime(cache, settings, "all")
+    assert full["hook-fire-rate"].status == "WARN"
+    assert "never-ran" in full["hook-fire-rate"].evidence

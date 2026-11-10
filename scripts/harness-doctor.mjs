@@ -23,6 +23,10 @@
  * Info is not a status: a state that is owed later or not yet due is a PASS whose detail starts "info:" (an unlisted worktree folder under 24 h old,
  * a task that never ran before its first scheduled time, a worktree lane.mjs ahead of main on a feature branch). A WARN is a real fault.
  * logs:* WARN at 3 or more distinct (hook, message, folder) pairs in 24 h, FAIL at 5 or more error rows. A "directory not found" row for a path that is gone is benign. In guard-decisions.jsonl a row with a `source` of "test" or "probe" (a test or probe wrote it) is ignored and counted.
+ * hooks:trace-fresh: the per-process hook tracer still writes live rows (see hookTraceFresh). FAIL when the newest live row is more than 30 min older
+ * than the newest activity (<repo>/.claude/logs/identity-probe.jsonl, <home>/.claude/logs/guard-decisions.jsonl), when the hook of that activity (a hot guard or
+ * identity-probe) has no live row of its own within 30 min, or when there is activity and no day file; PASS "info: idle" when the newest activity is over 6 h old
+ * and a day file exists; WARN when there is no activity signal or tracing is off (mode file, or CCV3_HOOK_TRACE=0 in the env or settings.json). Never a vacuous PASS.
  * Exit 1 on any FAIL, else 0.
  *
  * lanes:shim, lanes:hook-client-version, hooks:render-check, hooks:dist-parity and lanes:relative-path-guard read the lane propagation files:
@@ -145,7 +149,7 @@ function buildInputs(o) {
 }
 
 // hooksRenderCheck and hooksDistParity are defined in the lane propagation block below; they run when the section runs.
-const hooksSection = (o) => [...HOOK_CHECKS.map(([n, rel]) => runRepoCheck(o, n, rel)), baselineClean(o), buildInputs(o), hooksRenderCheck(o), hooksDistParity(o)];
+const hooksSection = (o) => [...HOOK_CHECKS.map(([n, rel]) => runRepoCheck(o, n, rel)), baselineClean(o), buildInputs(o), hooksRenderCheck(o), hooksDistParity(o), hookTraceFresh(o)];
 
 // ---- sync ----
 function syncCursor(o) {
@@ -994,6 +998,114 @@ export function hooksDistParity(o) {
   }
   return bad.length ? result('WARN', 'hooks', 'dist-parity', `${bad.length} lane hook bundle(s) out of step between ${fwdPath(join(o.repo, '.claude', 'hooks', 'dist'))} and ${fwdPath(join(o.home, '.claude', 'hooks', 'dist'))}: ${bad.join('; ')}; ${SYNC_FIX}`)
     : result('PASS', 'hooks', 'dist-parity', `all ${LANE_DISTS.length} lane hook bundles in the home equal the repo build`);
+}
+
+// ---- hooks:trace-fresh ----
+const TRACE_GRACE_MS = 30 * 60 * 1000; // the newest live trace row may lag the newest activity by this much
+const TRACE_DAY_FILE = /^hook-trace-\d{4}-\d{2}-\d{2}\.jsonl$/;
+const TRACE_DAY_FILES_READ = 3; // the newest day files scanned for a live row (covers a UTC midnight and an idle day)
+const notTestOrProbe = (r) => r.source !== 'test' && r.source !== 'probe';
+
+const TRACE_IDLE_MS = 6 * 60 * 60 * 1000; // activity older than this is idle: nothing to judge the tracer by
+
+/** The newest valid ts (ms) and its row among the rows `counted` picks in a JSONL file, or null. */
+function newestRow(file, counted) {
+  let best = null;
+  let text;
+  try { text = readTail(file); } catch (e) { if (e && typeof e === 'object' && !e.path) e.path = file; throw e; } // EISDIR has no path: name the file
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let r;
+    try { r = JSON.parse(line); } catch { continue; }
+    if (!r || typeof r !== 'object' || !counted(r)) continue;
+    const t = Date.parse(r.ts);
+    if (!Number.isNaN(t) && (best === null || t > best.ts)) best = { ts: t, row: r };
+  }
+  return best;
+}
+
+/** The newest live trace row ts (ms) in the newest day files, among rows `counted` picks (source live is always required), or null. */
+function newestLiveTrace(cacheDir, days, counted = () => true) {
+  return days.slice(0, TRACE_DAY_FILES_READ).map((f) => newestRow(join(cacheDir, f), (r) => r.source === 'live' && counted(r))?.ts ?? null)
+    .filter((t) => t !== null).sort((a, b) => b - a)[0] ?? null;
+}
+
+/** The HOT_PROGRAMS names in the tracer source of this repo (the one list trace-boot.test.ts checks against the template), or null when unreadable. */
+function hotPrograms(repo) {
+  try {
+    const text = readFileSync(join(repo, '.claude', 'hooks', 'src', 'lib', 'trace-boot.ts'), 'utf8');
+    const block = /HOT_PROGRAMS[^=]*=\s*\[([\s\S]*?)\]/.exec(text)?.[1];
+    const names = [...(block ?? '').matchAll(/'([A-Za-z0-9._-]+)'/g)].map((m) => m[1]);
+    return names.length ? new Set(names) : null;
+  } catch { return null; }
+}
+
+/** True when CCV3_HOOK_TRACE is 0 in the doctor's env or in the env block of <home>/.claude/settings.json (the tracer reads the process env that block feeds). */
+function traceOffByEnv(home) {
+  if (process.env.CCV3_HOOK_TRACE === '0') return 'the process env';
+  try { if (String(JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'))?.env?.CCV3_HOOK_TRACE ?? '') === '0') return fwdPath(join(home, '.claude', 'settings.json')); } catch { /* no settings file, or not JSON */ }
+  return null;
+}
+
+/**
+ * The per-process hook tracer (.claude/hooks/src/lib/trace-boot.ts) still writes rows. It cannot pass on an idle machine:
+ * the activity signal is independent of the tracer (the newest live row of <repo>/.claude/logs/identity-probe.jsonl, written by
+ * every SessionStart, and of <home>/.claude/logs/guard-decisions.jsonl). Rules, in order:
+ *   mode file <home>/.claude/state/hook-trace-mode says off, or CCV3_HOOK_TRACE is 0 in the process env or in the env block of
+ *     <home>/.claude/settings.json: WARN (a missing file means hot, not off).
+ *   neither activity file has a live row: WARN "no activity signal" (never a vacuous PASS).
+ *   activity and no <home>/.claude/cache/hook-trace-YYYY-MM-DD.jsonl: FAIL (also when the activity is old).
+ *   the newest activity is more than 6 h old (a day file exists): PASS, detail starts "info: idle".
+ *   activity and no live row (source live) in the newest day files: FAIL.
+ *   the newest activity is more than 30 min newer than the newest live trace row of any name: FAIL.
+ *   per name: the newest activity is a guard-decisions row whose hook is in HOT_PROGRAMS, or an identity-probe row. The newest live
+ *     trace row WITH THAT NAME must be no more than 30 min older than the activity, or FAIL. Rows of other hooks must not hide a gap.
+ *   else PASS.
+ * A live trace row is one with source live: a test, a probe, or a run of the repo dist writes source test or probe.
+ */
+export function hookTraceFresh(o) {
+  try {
+    return hookTraceFreshBody(o);
+  } catch (e) {
+    // A day file pruned, locked or unreadable mid-run, or an unreadable cache dir: report it, never crash the doctor.
+    const where = fwdPath(typeof e?.path === 'string' ? e.path : join(o.home, '.claude', 'cache'));
+    return result('FAIL', 'hooks', 'trace-fresh', `cannot read the hook trace files: ${e?.code || e?.name || 'error'} at ${where}; the tracer cannot be judged`);
+  }
+}
+
+function hookTraceFreshBody(o) {
+  const cacheDir = join(o.home, '.claude', 'cache');
+  const modeFile = join(o.home, '.claude', 'state', 'hook-trace-mode');
+  let mode = 'hot';
+  try { mode = readFileSync(modeFile, 'utf8').trim().toLowerCase() || 'hot'; } catch { /* a missing file means hot */ }
+  if (mode === 'off') return result('WARN', 'hooks', 'trace-fresh', `tracing off by flag: ${fwdPath(modeFile)} says off; delete it or write hot to turn the hook tracer on`);
+  const offBy = traceOffByEnv(o.home);
+  if (offBy) return result('WARN', 'hooks', 'trace-fresh', `tracing off by flag: CCV3_HOOK_TRACE is 0 in ${offBy}; remove it to turn the hook tracer on`);
+  const probeLog = join(o.repo, '.claude', 'logs', 'identity-probe.jsonl');
+  const guardLog = join(o.home, '.claude', 'logs', 'guard-decisions.jsonl');
+  const signals = [{ file: probeLog, name: () => 'identity-probe' }, { file: guardLog, name: (row) => (typeof row.hook === 'string' ? row.hook : null) }]
+    .map((s) => ({ file: s.file, newest: existsSync(s.file) ? newestRow(s.file, notTestOrProbe) : null, nameOf: s.name })).filter((s) => s.newest !== null);
+  if (!signals.length) return result('WARN', 'hooks', 'trace-fresh', `no activity signal: ${fwdPath(probeLog)} and ${fwdPath(guardLog)} have no live row, so the trace cannot be judged`);
+  const top = signals.sort((a, b) => b.newest.ts - a.newest.ts)[0];
+  const activity = { file: top.file, ts: top.newest.ts, hook: top.nameOf(top.newest.row) };
+  const seen = `activity at ${new Date(activity.ts).toISOString()} in ${fwdPath(activity.file)}`;
+  const days = existsSync(cacheDir) ? readdirSync(cacheDir).filter((f) => TRACE_DAY_FILE.test(f)).sort().reverse() : [];
+  if (!days.length) return result('FAIL', 'hooks', 'trace-fresh', `${seen}, but no hook-trace-YYYY-MM-DD.jsonl under ${fwdPath(cacheDir)}: the tracer writes nothing (run the hooks build and sync-to-active.sh --changed, then check the mode file)`);
+  if (Date.now() - activity.ts > TRACE_IDLE_MS) return result('PASS', 'hooks', 'trace-fresh', `info: idle, the newest ${seen} is more than 6 h old, so the tracer is not judged now`);
+  const live = newestLiveTrace(cacheDir, days);
+  if (live === null) return result('FAIL', 'hooks', 'trace-fresh', `${seen}, but no live trace row (source live) in the newest ${Math.min(days.length, TRACE_DAY_FILES_READ)} day file(s) under ${fwdPath(cacheDir)}: only test or probe rows, or none`);
+  const lag = activity.ts - live;
+  if (lag > TRACE_GRACE_MS) return result('FAIL', 'hooks', 'trace-fresh', `newest live trace row ${new Date(live).toISOString()} is ${Math.round(lag / 60000)} min older than the newest ${seen}: the tracer stopped (limit 30 min) under ${fwdPath(cacheDir)}`);
+  const hot = hotPrograms(o.repo);
+  const wanted = activity.hook && (activity.hook === 'identity-probe' || (hot !== null && hot.has(activity.hook))) ? activity.hook : null;
+  if (wanted) {
+    const named = newestLiveTrace(cacheDir, days, (r) => r.name === wanted);
+    if (named === null || activity.ts - named > TRACE_GRACE_MS) {
+      const was = named === null ? 'none' : `${new Date(named).toISOString()}, ${Math.round((activity.ts - named) / 60000)} min older`;
+      return result('FAIL', 'hooks', 'trace-fresh', `no live trace row named ${wanted} within 30 min of the newest ${seen} (newest ${wanted} row: ${was}); rows of other hooks are fresh, so the tracer is missing from ${wanted}'s bundle or stopped for it`);
+    }
+  }
+  return result('PASS', 'hooks', 'trace-fresh', `newest live trace row ${new Date(live).toISOString()} under ${fwdPath(cacheDir)}, within 30 min of the newest ${seen}${wanted ? `; ${wanted} has its own live row` : ''}; mode ${mode}`);
 }
 
 /** The relative-path ratchet (scripts/coordination/lane-path-guard.mjs): bare `scripts/coordination/lane.mjs` text may only fall. */

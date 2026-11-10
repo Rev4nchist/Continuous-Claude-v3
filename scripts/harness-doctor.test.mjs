@@ -49,7 +49,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, symlinkSync, rmdirSync, unlinkSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, symlinkSync, rmdirSync, unlinkSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,6 +192,7 @@ function fixture({ blocklistDaysAgo = 0 } = {}) {
   put(join(home, '.claude', 'state', 'sync-cursor'), `${git(repo, 'rev-parse', 'main')}\n`);
   seedHooksInstall(repo);
   seedStoreLink(repo);
+  seedTraceFresh({ repo, home });
   return { root, repo, home, schtasks };
 }
 
@@ -204,6 +205,24 @@ function seedStoreLink(repo) {
   put(join(repo, 'scripts', 'coordination', 'lane.mjs'), 'console.log(1);\n');
   mkdirSync(join(repo, '.claude', 'worktrees'), { recursive: true });
   symlinkSync(join(repo, '.claude', 'hooks', 'node_modules'), join(repo, '.claude', 'worktrees', 'node_modules'), 'junction');
+}
+
+/** A recent identity-probe row (repo copy) and a recent live trace row: the clean state of hooks:trace-fresh. */
+function seedTraceFresh(fx) {
+  // The doctor reads the hot program list from the tracer source, as a real repo has it.
+  put(join(fx.repo, '.claude', 'hooks', 'src', 'lib', 'trace-boot.ts'), `export const HOT_PROGRAMS: readonly string[] = [
+  'destructive-command-guard', 'identity-probe', 'msys-crash-capture',
+];
+`);
+  put(join(fx.repo, '.claude', 'logs', 'identity-probe.jsonl'), jsonl([{ ts: iso(5 * 60000), hook: 'identity-probe' }]));
+  writeTrace(fx, [{ ts: iso(5 * 60000), name: 'identity-probe', source: 'live' }]);
+}
+
+/** Writes trace rows into the day file of each row's UTC date, under the home cache dir. */
+function writeTrace(fx, rows) {
+  const byDay = new Map();
+  for (const r of rows) byDay.set(r.ts.slice(0, 10), [...(byDay.get(r.ts.slice(0, 10)) ?? []), { event: 'SessionStart', tool: null, startupMs: 30, durationMs: 10, exitCode: 0, code: 0, sessionId: 's', out: 'none', error: null, ...r }]);
+  for (const [day, list] of byDay) put(join(fx.home, '.claude', 'cache', `hook-trace-${day}.jsonl`), jsonl(list));
 }
 
 /** Removes the store link (the link only, never recursive) so a test can put another state there. */
@@ -239,7 +258,9 @@ function commitBlocklist(repo, days) {
 function run(fx, extra = [], envExtra = {}) {
   // HARNESS_DOCTOR_SCHTASKS_DIR points the doctor at fake schtasks output, so a test never reads the real Task Scheduler.
   // HARNESS_DOCTOR_NO_DB=1 keeps a test from reading whatever database the shell points at.
-  const env = { ...process.env, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks, HARNESS_DOCTOR_NO_DB: '1', ...envExtra };
+  // CCV3_HOOK_TRACE is dropped from the caller env: the doctor reads it (hooks:trace-fresh), so a shell that sets it must not change a test.
+  const { CCV3_HOOK_TRACE: _callerTrace, ...callerEnv } = process.env;
+  const env = { ...callerEnv, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks, HARNESS_DOCTOR_NO_DB: '1', ...envExtra };
   const r = spawnSync(process.execPath, [DOCTOR, '--home', fx.home, '--repo', fx.repo, ...extra], { encoding: 'utf8', windowsHide: true, timeout: 60000, env });
   const lines = (r.stdout ?? '').split(/\r?\n/).filter(Boolean);
   const checks = {};
@@ -1947,4 +1968,222 @@ test('deps:store-link judges the PRIMARY: a bare worktree of a primary with the 
   const wt = join(fx.root, 'wt2');
   git(fx.repo, 'worktree', 'add', '-q', '-b', 'zz-wt2', wt);
   assert.equal(depsStoreLink({ repo: wt }).status, 'PASS');
+});
+
+// ---- hooks:trace-fresh ----
+// How the check can fail, one test each below:
+//   activity and no day file (FAIL, names both files); activity and a live row (PASS); only test or probe rows after activity (FAIL);
+//   a live row more than 30 min older than the newest activity (FAIL), 29 min older (PASS); neither activity file (WARN, never a vacuous PASS);
+//   mode file off (WARN); the identity-probe row read from the HOME instead of the repo (it must be the repo copy);
+//   guard-decisions as the second signal (live rows count, test and probe rows do not).
+const traceCheck = (fx) => run(fx).checks['hooks:trace-fresh'];
+const probeFile = (fx) => join(fx.repo, '.claude', 'logs', 'identity-probe.jsonl');
+const dropTrace = (fx) => rmSync(join(fx.home, '.claude', 'cache'), { recursive: true, force: true });
+
+test('hooks:trace-fresh is FAIL when there is recent activity and no trace day file, and names the trace dir and the activity file', () => {
+  const fx = fixture();
+  dropTrace(fx);
+  const r = run(fx);
+  const c = r.checks['hooks:trace-fresh'];
+  assert.equal(c.status, 'FAIL', c?.detail);
+  assert.ok(c.detail.includes('identity-probe.jsonl'), c.detail);
+  assert.ok(c.detail.replace(/\\/g, '/').includes('/.claude/cache'), c.detail);
+  assert.equal(r.code, 1);
+});
+
+test('hooks:trace-fresh is PASS with recent activity and a recent live trace row, and says so', () => {
+  const c = traceCheck(fixture());
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /live/);
+});
+
+test('hooks:trace-fresh is a FAIL that names the file, not a crash, when a day file cannot be read', () => {
+  const fx = fixture();
+  dropTrace(fx);
+  // A directory with a day-file name: the stat works and the read throws EISDIR (a stand-in for a file pruned or locked mid-run).
+  const day = `hook-trace-${new Date().toISOString().slice(0, 10)}.jsonl`;
+  mkdirSync(join(fx.home, '.claude', 'cache', day), { recursive: true });
+  const r = run(fx);
+  const c = r.checks['hooks:trace-fresh'];
+  assert.ok(c, 'the check must still report');
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /cannot read/i);
+  assert.ok(c.detail.includes(day), c.detail);
+});
+
+test('hooks:trace-fresh is FAIL when only test or probe rows follow the activity', () => {
+  const fx = fixture();
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(60000), name: 'x', source: 'test' }, { ts: iso(30000), name: 'y', source: 'probe' }]);
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /live/);
+});
+
+test('hooks:trace-fresh is FAIL when the newest live row is more than 30 min older than the newest activity, and PASS at 29 min', () => {
+  const fx = fixture();
+  put(probeFile(fx), jsonl([{ ts: iso(60000), hook: 'identity-probe' }]));
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(60000 + 31 * 60000), name: 'identity-probe', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'FAIL');
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(60000 + 29 * 60000), name: 'identity-probe', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'PASS');
+});
+
+test('hooks:trace-fresh is a WARN, not a PASS, when neither activity file exists', () => {
+  const fx = fixture();
+  rmSync(probeFile(fx));
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /no activity signal/);
+});
+
+test('hooks:trace-fresh reads identity-probe.jsonl from the REPO, not the home', () => {
+  const fx = fixture();
+  rmSync(probeFile(fx));
+  put(join(fx.home, '.claude', 'logs', 'identity-probe.jsonl'), jsonl([{ ts: iso(60000), hook: 'identity-probe' }]));
+  dropTrace(fx);
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'WARN', `a home copy must not count as activity: ${c.detail}`);
+});
+
+test('hooks:trace-fresh uses guard-decisions.jsonl as the second signal, and ignores its test and probe rows', () => {
+  const fx = fixture();
+  rmSync(probeFile(fx));
+  dropTrace(fx);
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([{ ts: iso(60000), hook: 'g', kind: 'deny', decision: 'deny', source: 'test' }]));
+  assert.equal(traceCheck(fx).status, 'WARN', 'a test row is not activity');
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([{ ts: iso(60000), hook: 'g', kind: 'deny', decision: 'deny', source: 'live' }]));
+  assert.equal(traceCheck(fx).status, 'FAIL', 'a live guard row is activity, and there is no day file');
+  writeTrace(fx, [{ ts: iso(30000), name: 'g', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'PASS');
+});
+
+test('hooks:trace-fresh is a WARN when the mode file says off, and a missing mode file is not a WARN', () => {
+  const fx = fixture();
+  assert.equal(traceCheck(fx).status, 'PASS', 'a missing mode file means hot');
+  put(join(fx.home, '.claude', 'state', 'hook-trace-mode'), 'off\n');
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /off/);
+});
+
+// ---- hooks:trace-fresh, review fixes 2026-11-09 ----
+// How each can fail, one test each:
+//   a guard-decisions row of a hot program is the newest activity and only other names have live rows (the gap hides) -> FAIL naming the hook;
+//   the same, with a live row of that name (PASS); a cold hook's guard row asks for no per-name row (PASS);
+//   identity-probe activity needs a live row named identity-probe;
+//   a repo-dist run (source probe) is no live row; activity older than 6 h with a day file is info: idle (PASS), with no day file stays FAIL;
+//   CCV3_HOOK_TRACE=0 in <home>/.claude/settings.json or in the process env is the same off WARN as the mode file.
+const HOUR_MS = 60 * 60 * 1000;
+const guardRow = (hook, msAgo) => ({ ts: iso(msAgo), hook, kind: 'deny', decision: 'deny', source: 'live' });
+
+test('hooks:trace-fresh is FAIL when the newest activity is a hot guard and only other hooks wrote live rows, and names the guard', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([guardRow('destructive-command-guard', 60000)]));
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(30000), name: 'session-register', source: 'live' }, { ts: iso(40000), name: 'identity-probe', source: 'live' }]);
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /destructive-command-guard/);
+});
+
+test('hooks:trace-fresh is PASS when that hot guard has a live row within 30 min of its activity', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([guardRow('destructive-command-guard', 60000)]));
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(60000 + 29 * 60000), name: 'destructive-command-guard', source: 'live' }, { ts: iso(30000), name: 'identity-probe', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'PASS');
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(60000 + 31 * 60000), name: 'destructive-command-guard', source: 'live' }, { ts: iso(30000), name: 'identity-probe', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'FAIL', 'a row of that name 31 min older is too old');
+});
+
+test('hooks:trace-fresh asks no per-name row for a guard that is not a hot program', () => {
+  const fx = fixture();
+  put(logPath(fx, 'guard-decisions.jsonl'), jsonl([guardRow('tldr-read-enforcer', 60000)]));
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(30000), name: 'identity-probe', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'PASS');
+});
+
+test('hooks:trace-fresh needs a live row named identity-probe when identity-probe is the newest activity', () => {
+  const fx = fixture();
+  put(probeFile(fx), jsonl([{ ts: iso(60000), hook: 'identity-probe' }]));
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(30000), name: 'session-register', source: 'live' }]);
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /identity-probe/);
+  writeTrace(fx, [{ ts: iso(30000), name: 'session-register', source: 'live' }, { ts: iso(45000), name: 'identity-probe', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'PASS');
+});
+
+test('hooks:trace-fresh does not count a repo-dist run: it writes source probe, so only probe rows after activity is FAIL', () => {
+  const fx = fixture();
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(30000), name: 'identity-probe', source: 'probe' }, { ts: iso(20000), name: 'destructive-command-guard', source: 'probe' }]);
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /live/);
+});
+
+test('hooks:trace-fresh is a PASS that starts with info: idle when the newest activity is more than 6 h old and a day file exists', () => {
+  const fx = fixture();
+  put(probeFile(fx), jsonl([{ ts: iso(7 * HOUR_MS), hook: 'identity-probe' }]));
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(8 * HOUR_MS), name: 'session-register', source: 'live' }]);
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.ok(c.detail.startsWith('info: idle'), c.detail);
+});
+
+test('hooks:trace-fresh stays FAIL for old activity when no day file exists', () => {
+  const fx = fixture();
+  put(probeFile(fx), jsonl([{ ts: iso(7 * HOUR_MS), hook: 'identity-probe' }]));
+  dropTrace(fx);
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.ok(!c.detail.startsWith('info: idle'), c.detail);
+});
+
+test('hooks:trace-fresh is not idle at 5 h: the stale trace is still a FAIL', () => {
+  const fx = fixture();
+  put(probeFile(fx), jsonl([{ ts: iso(5 * HOUR_MS), hook: 'identity-probe' }]));
+  dropTrace(fx);
+  writeTrace(fx, [{ ts: iso(5 * HOUR_MS + 40 * 60000), name: 'identity-probe', source: 'live' }]);
+  assert.equal(traceCheck(fx).status, 'FAIL');
+});
+
+test('hooks:trace-fresh is the off WARN when CCV3_HOOK_TRACE is 0 in <home>/.claude/settings.json', () => {
+  const fx = fixture();
+  dropTrace(fx);
+  put(liveFile(fx.home), JSON.stringify({ env: { CCV3_HOOK_TRACE: '0' } }));
+  const c = traceCheck(fx);
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /off/);
+  assert.match(c.detail, /CCV3_HOOK_TRACE/);
+});
+
+test('hooks:trace-fresh tests do not depend on the caller env: CCV3_HOOK_TRACE=0 in the test process does not turn the clean fixture into a WARN', () => {
+  const had = Object.hasOwn(process.env, 'CCV3_HOOK_TRACE');
+  const before = process.env.CCV3_HOOK_TRACE;
+  process.env.CCV3_HOOK_TRACE = '0';
+  try {
+    const c = traceCheck(fixture());
+    assert.equal(c.status, 'PASS', c.detail);
+  } finally {
+    if (had) process.env.CCV3_HOOK_TRACE = before; else delete process.env.CCV3_HOOK_TRACE;
+  }
+});
+
+test('hooks:trace-fresh is the off WARN when CCV3_HOOK_TRACE is 0 in the process env, and a settings.json with another value is not', () => {
+  const fx = fixture();
+  dropTrace(fx);
+  const c = run(fx, [], { CCV3_HOOK_TRACE: '0' }).checks['hooks:trace-fresh'];
+  assert.equal(c.status, 'WARN', c.detail);
+  assert.match(c.detail, /off/);
+  put(liveFile(fx.home), JSON.stringify({ env: { CCV3_HOOK_TRACE: '1' } }));
+  assert.equal(traceCheck(fx).status, 'FAIL', 'value 1 is not off: no day file is a FAIL again');
 });

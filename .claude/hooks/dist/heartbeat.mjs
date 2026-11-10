@@ -12,6 +12,14 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   if (typeof require !== "undefined") return require.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
 var __commonJS = (cb, mod) => function __require2() {
   try {
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
@@ -36,10 +44,375 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/shared/guard-log.ts
+function guardSource(env) {
+  const named = env.CCV3_GUARD_SOURCE;
+  if (named === "test" || named === "probe") return named;
+  if (Object.hasOwn(env, "VITEST")) return "test";
+  return env.CCV3_GUARD_DECISIONS_LOG ? "probe" : "live";
+}
+var SECRET_NAME, MASKS, MARK_OPEN, MARK_CLOSE, UUID_MARK, PATH_MASKS;
+var init_guard_log = __esm({
+  "src/shared/guard-log.ts"() {
+    "use strict";
+    init_trace_boot();
+    SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
+    MASKS = [
+      // A URL inside quotes may hold a password with a space: the closing quote ends it, not the space.
+      [/(["'])([a-z][\w+.-]*:\/\/)[^\s/@:"']+:(?:(?!\1)[^/@])+@/gi, "$1$2***@"],
+      [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***@"],
+      // `curl -u user:pass`, `curl --user user:pass`. A numeric user (`docker run -u 1000:1000`) is a uid:gid.
+      // Quoting decides where the credential ends: `-u "user:two words"`, `-u user:"two words"`.
+      [/(\s(?:-u[\s=]*|--user[\s=]+)")(?!\d+:)([^":]+):[^"]*"/g, '$1$2:***"'],
+      [/(\s(?:-u[\s=]*|--user[\s=]+)')(?!\d+:)([^':]+):[^']*'/g, "$1$2:***'"],
+      [/(\s(?:-u[\s=]*|--user[\s=]+))(?!\d+:)([^\s:"']+):(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1$2:***"],
+      // `mysql -uroot -pS3cret`: the password is glued to -p. Case matters: -P is the port.
+      [/(\b(?:mysql|mariadb)\w*\b[^|;&\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1***"],
+      // `sshpass -p pw ssh host`
+      [/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "$1***"],
+      [/\b(Bearer|Basic|Token)\s+[^\s'"]+/gi, "$1 ***"],
+      [new RegExp(`(${SECRET_NAME})(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s'"]+)`, "gi"), "$1$2***"],
+      [new RegExp(`(--?${SECRET_NAME})(\\s+)("[^"]*"|'[^']*'|[^\\s'"-][^\\s'"]*)`, "gi"), "$1$2***"],
+      [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "***"],
+      [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***"],
+      [/\bgithub_pat_\w+/g, "***"],
+      [/\bxox[abprs]-[\w-]+/g, "***"],
+      [/\bnpm_[A-Za-z0-9]{20,}/g, "***"],
+      [/\bAKIA[0-9A-Z]{16}\b/g, "***"],
+      [/\bAIza[\w-]{30,}/g, "***"],
+      [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "***"],
+      // Any other long opaque run that mixes letters and digits (hex, base64url keys).
+      [/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}/g, "***"]
+    ];
+    MARK_OPEN = String.fromCharCode(57344);
+    MARK_CLOSE = String.fromCharCode(57345);
+    UUID_MARK = new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g");
+    PATH_MASKS = [
+      ...MASKS.slice(0, -1),
+      [/\b(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{32,}/g, "***"]
+    ];
+  }
+});
+
+// src/lib/trace-boot.ts
+import fs from "fs";
+import { homedir } from "os";
+import { basename, join, resolve, sep } from "path";
+import { syncBuiltinESMExports } from "module";
+function traceModeFrom(env, modeText) {
+  if (env.CCV3_HOOK_TRACE === "0") return "off";
+  const t = (modeText ?? "").trim().toLowerCase();
+  return t === "off" || t === "all" ? t : "hot";
+}
+function readTraceMode(env, read = (p) => fs.readFileSync(p, "utf8")) {
+  let text = null;
+  try {
+    text = read(env.CCV3_HOOK_TRACE_MODE_FILE || join(homedir(), ".claude", "state", "hook-trace-mode"));
+  } catch {
+  }
+  return traceModeFrom(env, text);
+}
+function shouldTrace(name, mode) {
+  return mode === "all" || mode === "hot" && HOT_PROGRAMS.includes(name);
+}
+function underLiveDist(script, home) {
+  if (!script) return false;
+  try {
+    return caseKey(realPath(script)).startsWith(caseKey(realPath(join(home, ".claude", "hooks", "dist"))) + sep);
+  } catch {
+    return false;
+  }
+}
+function traceSource(env, script = process.argv[1], home = homedir()) {
+  const g = guardSource(env);
+  if (g !== "live") return g;
+  if (env.CCV3_HOOK_TRACE_DIR) return "probe";
+  return underLiveDist(script, home) ? "live" : "probe";
+}
+function extractPayloadFields(text) {
+  try {
+    const o = JSON.parse(text);
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      return { sessionId: pick(o.session_id, SESSION_ID), event: pick(o.hook_event_name, EVENT_NAME), tool: pick(o.tool_name, TOOL_NAME) };
+    }
+  } catch {
+  }
+  const key = (k, re) => pick(new RegExp(`"${k}"\\s*:\\s*"([^"\\\\]{1,100})"`).exec(text)?.[1], re);
+  return { sessionId: key("session_id", SESSION_ID), event: key("hook_event_name", EVENT_NAME), tool: key("tool_name", TOOL_NAME) };
+}
+function classifyObject(o) {
+  const hso = o.hookSpecificOutput ?? {};
+  const pd = hso.permissionDecision ?? o.permissionDecision;
+  if (pd === "deny" || pd === "ask" || pd === "allow") return pd;
+  if (o.decision === "block" || o.result === "block") return "block";
+  if (typeof hso.additionalContext === "string") return "inject";
+  if (typeof o.systemMessage === "string") return "message";
+  return "none";
+}
+function classifyOut(text) {
+  const t = text.trim();
+  if (!t) return "none";
+  try {
+    const o = JSON.parse(t);
+    return o && typeof o === "object" && !Array.isArray(o) ? classifyObject(o) : "none";
+  } catch {
+  }
+  const pd = /"permissionDecision"\s*:\s*"(deny|ask|allow)"/.exec(t)?.[1];
+  if (pd) return pd;
+  if (/"decision"\s*:\s*"block"/.test(t)) return "block";
+  if (/"additionalContext"\s*:/.test(t)) return "inject";
+  if (/"systemMessage"\s*:/.test(t)) return "message";
+  return "none";
+}
+function maskError(err) {
+  if (!(err instanceof Error)) return typeof err;
+  try {
+    const rawName = err.name;
+    const name = typeof rawName === "string" && ERROR_WORD.test(rawName) ? rawName : "Error";
+    const code = err.code;
+    return (typeof code === "string" && ERROR_CODE.test(code) ? `${name}/${code}` : name).slice(0, ERROR_MAX);
+  } catch {
+    return "Error";
+  }
+}
+function buildRow(i) {
+  return {
+    ts: i.ts.toISOString(),
+    name: i.name,
+    event: i.event,
+    tool: i.tool,
+    startupMs: round1(i.startupMs),
+    durationMs: round1(i.durationMs),
+    exitCode: i.code === 0 ? 0 : 1,
+    code: i.code,
+    sessionId: i.sessionId,
+    out: i.out,
+    error: i.error,
+    source: i.source
+  };
+}
+function pruneOld(dir, day, days) {
+  const cutoff = new Date(Date.parse(`${day}T00:00:00Z`) - days * 864e5).toISOString().slice(0, 10);
+  for (const f of fs.readdirSync(dir)) {
+    const m = DAY_FILE.exec(f);
+    if (m && m[1] < cutoff) {
+      try {
+        fs.unlinkSync(join(dir, f));
+      } catch {
+      }
+    }
+  }
+}
+function bumpDropped(file) {
+  let n = 0;
+  try {
+    n = Number(JSON.parse(fs.readFileSync(file, "utf8")).dropped) || 0;
+  } catch {
+  }
+  fs.writeFileSync(file, `${JSON.stringify({ dropped: n + 1, ts: (/* @__PURE__ */ new Date()).toISOString() })}
+`);
+}
+function appendTraceRow(row, opts = {}) {
+  try {
+    const dir = opts.dir ?? traceDir(process.env);
+    const day = row.ts.slice(0, 10);
+    const file = join(dir, `hook-trace-${day}.jsonl`);
+    let size = 0;
+    try {
+      size = fs.statSync(file).size;
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+      fs.mkdirSync(dir, { recursive: true });
+      try {
+        pruneOld(dir, day, opts.pruneDays ?? PRUNE_DAYS);
+      } catch {
+      }
+    }
+    if (size >= (opts.capBytes ?? DAY_CAP_BYTES)) {
+      bumpDropped(join(dir, `hook-trace-${day}.dropped`));
+      return "dropped";
+    }
+    fs.appendFileSync(file, `${JSON.stringify(row)}
+`);
+    return "written";
+  } catch {
+    return "error";
+  }
+}
+function lazyTap(name, onStream) {
+  const d = Object.getOwnPropertyDescriptor(process, name);
+  if (!d || !d.get || !d.configurable) return;
+  const orig = d.get;
+  let seen;
+  Object.defineProperty(process, name, {
+    configurable: true,
+    enumerable: d.enumerable,
+    get() {
+      const s = orig.call(this);
+      if (s && s !== seen) {
+        seen = s;
+        try {
+          onStream(s);
+        } catch {
+        }
+      }
+      return s;
+    }
+  });
+}
+function bootTrace(env = process.env, _bootCall) {
+  try {
+    if (!process.argv[1]) return;
+    const name = basename(process.argv[1], ".mjs");
+    if (!shouldTrace(name, readTraceMode(env))) return;
+    const startupMs = process.uptime() * 1e3;
+    const t0 = performance.now();
+    const state = { v: 1, stdinTouched: false, stdoutTouched: false };
+    globalThis[TRACE_MARKER] = state;
+    let stdinText = "";
+    let stdoutText = "";
+    let errText = null;
+    const rawRead = fs.readFileSync;
+    fs.readFileSync = function(...args) {
+      const r = rawRead.apply(this, args);
+      try {
+        if (args[0] === 0 || args[0] === "/dev/stdin") stdinText = keep(stdinText, r, STDIN_KEEP);
+      } catch {
+      }
+      return r;
+    };
+    try {
+      Object.defineProperty(fs.readFileSync, "name", { value: "readFileSync", configurable: true });
+      Object.defineProperty(fs.readFileSync, "length", { value: 2, configurable: true });
+    } catch {
+    }
+    syncBuiltinESMExports();
+    lazyTap("stdin", (s) => {
+      state.stdinTouched = true;
+      const emit = s.emit;
+      s.emit = function(ev, chunk) {
+        if (ev === "data") {
+          try {
+            stdinText = keep(stdinText, chunk, STDIN_KEEP);
+          } catch {
+          }
+        }
+        return emit.apply(this, arguments);
+      };
+    });
+    lazyTap("stdout", (s) => {
+      state.stdoutTouched = true;
+      const write = s.write;
+      s.write = function(chunk) {
+        try {
+          stdoutText = keep(stdoutText, chunk, STDOUT_KEEP);
+        } catch {
+        }
+        return write.apply(this, arguments);
+      };
+    });
+    process.on("uncaughtExceptionMonitor", (err) => {
+      try {
+        errText = maskError(err);
+      } catch {
+      }
+    });
+    process.on("exit", (code) => {
+      try {
+        const f = extractPayloadFields(stdinText);
+        const row = buildRow({
+          ts: /* @__PURE__ */ new Date(),
+          name,
+          event: f.event,
+          tool: f.tool,
+          startupMs,
+          durationMs: performance.now() - t0,
+          code: typeof code === "number" ? code : 0,
+          sessionId: f.sessionId,
+          out: classifyOut(stdoutText),
+          error: errText,
+          source: traceSource(env, process.argv[1])
+        });
+        appendTraceRow(row, { dir: traceDir(env) });
+      } catch {
+      }
+    });
+  } catch {
+  }
+}
+var TRACE_MARKER, HOT_PROGRAMS, DAY_CAP_BYTES, PRUNE_DAYS, STDIN_KEEP, STDOUT_KEEP, ERROR_MAX, realPath, caseKey, traceDir, SESSION_ID, EVENT_NAME, TOOL_NAME, pick, ERROR_WORD, ERROR_CODE, round1, DAY_FILE, keep;
+var init_trace_boot = __esm({
+  "src/lib/trace-boot.ts"() {
+    "use strict";
+    init_guard_log();
+    TRACE_MARKER = "__CCV3_HOOK_TRACE_V1__";
+    HOT_PROGRAMS = [
+      "architecture-stats-sync",
+      "commit-preflight",
+      "decision-gate",
+      "destructive-command-guard",
+      "git-commit-roadmap",
+      "hook-health-monitor",
+      "identity-probe",
+      "lane-agent-tag",
+      "lane-board-republish-reminder",
+      "lane-context",
+      "mcp-activity-tracker",
+      "msys-crash-capture",
+      "package-install-guard",
+      "periodic-extract",
+      "pr-opened-review-loop",
+      "pre-pr-gate",
+      "roadmap-completion",
+      "roadmap-reconcile",
+      "rule-router",
+      "scan-scope-guard",
+      "session-register",
+      "session-start-context-loaders",
+      "session-start-continuity",
+      "session-start-docker",
+      "session-start-init-check",
+      "session-start-intel-prune",
+      "session-start-memory-loaders",
+      "smarter-everyday",
+      "test-run-tracker"
+    ];
+    DAY_CAP_BYTES = 32 * 1024 * 1024;
+    PRUNE_DAYS = 10;
+    STDIN_KEEP = 64 * 1024;
+    STDOUT_KEEP = 8 * 1024;
+    ERROR_MAX = 120;
+    realPath = (p) => {
+      try {
+        return fs.realpathSync(p);
+      } catch {
+        return resolve(p);
+      }
+    };
+    caseKey = (p) => process.platform === "win32" ? p.toLowerCase() : p;
+    traceDir = (env) => env.CCV3_HOOK_TRACE_DIR || join(homedir(), ".claude", "cache");
+    SESSION_ID = /^[A-Za-z0-9._:-]{1,100}$/;
+    EVENT_NAME = /^[A-Za-z]{1,40}$/;
+    TOOL_NAME = /^[\w.:-]{1,100}$/;
+    pick = (v, re) => typeof v === "string" && re.test(v) ? v : null;
+    ERROR_WORD = /^[A-Za-z0-9_.]{1,40}$/;
+    ERROR_CODE = /^[A-Za-z0-9_]{1,40}$/;
+    round1 = (n) => Math.round(n * 10) / 10;
+    DAY_FILE = /^hook-trace-(\d{4}-\d{2}-\d{2})\.(?:jsonl|dropped)$/;
+    keep = (cur, chunk, max) => {
+      if (cur.length >= max) return cur;
+      const s = typeof chunk === "string" ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk).toString("utf8") : "";
+      return cur + s.slice(0, max - cur.length);
+    };
+    if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
+  }
+});
+
 // node_modules/postgres-array/index.js
 var require_postgres_array = __commonJS({
   "node_modules/postgres-array/index.js"(exports) {
     "use strict";
+    init_trace_boot();
     exports.parse = function(source, transform) {
       return new ArrayParser(source, transform).parse();
     };
@@ -133,6 +506,7 @@ var require_postgres_array = __commonJS({
 // node_modules/pg-types/lib/arrayParser.js
 var require_arrayParser = __commonJS({
   "node_modules/pg-types/lib/arrayParser.js"(exports, module) {
+    init_trace_boot();
     var array = require_postgres_array();
     module.exports = {
       create: function(source, transform) {
@@ -150,6 +524,7 @@ var require_arrayParser = __commonJS({
 var require_postgres_date = __commonJS({
   "node_modules/postgres-date/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var DATE_TIME = /(\d{1,})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(\.\d{1,})?.*?( BC)?$/;
     var DATE = /^(\d{1,})-(\d{2})-(\d{2})( BC)?$/;
     var TIME_ZONE = /([Z+-])(\d{2})?:?(\d{2})?:?(\d{2})?/;
@@ -236,6 +611,7 @@ var require_postgres_date = __commonJS({
 // node_modules/xtend/mutable.js
 var require_mutable = __commonJS({
   "node_modules/xtend/mutable.js"(exports, module) {
+    init_trace_boot();
     module.exports = extend;
     var hasOwnProperty = Object.prototype.hasOwnProperty;
     function extend(target) {
@@ -256,6 +632,7 @@ var require_mutable = __commonJS({
 var require_postgres_interval = __commonJS({
   "node_modules/postgres-interval/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var extend = require_mutable();
     module.exports = PostgresInterval;
     function PostgresInterval(raw) {
@@ -347,6 +724,7 @@ var require_postgres_interval = __commonJS({
 var require_postgres_bytea = __commonJS({
   "node_modules/postgres-bytea/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var bufferFrom = Buffer.from || Buffer;
     module.exports = function parseBytea(input) {
       if (/^\\x/.test(input)) {
@@ -382,6 +760,7 @@ var require_postgres_bytea = __commonJS({
 // node_modules/pg-types/lib/textParsers.js
 var require_textParsers = __commonJS({
   "node_modules/pg-types/lib/textParsers.js"(exports, module) {
+    init_trace_boot();
     var array = require_postgres_array();
     var arrayParser = require_arrayParser();
     var parseDate = require_postgres_date();
@@ -583,6 +962,7 @@ var require_textParsers = __commonJS({
 var require_pg_int8 = __commonJS({
   "node_modules/pg-int8/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var BASE = 1e6;
     function readInt8(buffer) {
       var high = buffer.readInt32BE(0);
@@ -662,6 +1042,7 @@ var require_pg_int8 = __commonJS({
 // node_modules/pg-types/lib/binaryParsers.js
 var require_binaryParsers = __commonJS({
   "node_modules/pg-types/lib/binaryParsers.js"(exports, module) {
+    init_trace_boot();
     var parseInt64 = require_pg_int8();
     var parseBits = function(data, bits, offset, invert, callback) {
       offset = offset || 0;
@@ -862,6 +1243,7 @@ var require_binaryParsers = __commonJS({
 // node_modules/pg-types/lib/builtins.js
 var require_builtins = __commonJS({
   "node_modules/pg-types/lib/builtins.js"(exports, module) {
+    init_trace_boot();
     module.exports = {
       BOOL: 16,
       BYTEA: 17,
@@ -930,6 +1312,7 @@ var require_builtins = __commonJS({
 // node_modules/pg-types/index.js
 var require_pg_types = __commonJS({
   "node_modules/pg-types/index.js"(exports) {
+    init_trace_boot();
     var textParsers = require_textParsers();
     var binaryParsers = require_binaryParsers();
     var arrayParser = require_arrayParser();
@@ -972,6 +1355,7 @@ var require_pg_types = __commonJS({
 var require_defaults = __commonJS({
   "node_modules/pg/lib/defaults.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var user;
     try {
       user = process.platform === "win32" ? process.env.USERNAME : process.env.USER;
@@ -1041,6 +1425,7 @@ var require_defaults = __commonJS({
 var require_utils = __commonJS({
   "node_modules/pg/lib/utils.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var defaults2 = require_defaults();
     var nodeUtils = __require("util");
     var { isDate } = __require("util/types");
@@ -1204,6 +1589,7 @@ var require_utils = __commonJS({
 // node_modules/pg/lib/crypto/utils.js
 var require_utils2 = __commonJS({
   "node_modules/pg/lib/crypto/utils.js"(exports, module) {
+    init_trace_boot();
     var nodeCrypto = __require("crypto");
     module.exports = {
       postgresMd5PasswordHash,
@@ -1255,6 +1641,7 @@ var require_utils2 = __commonJS({
 // node_modules/pg/lib/crypto/cert-signatures.js
 var require_cert_signatures = __commonJS({
   "node_modules/pg/lib/crypto/cert-signatures.js"(exports, module) {
+    init_trace_boot();
     function x509Error(msg, cert) {
       return new Error("SASL channel binding: " + msg + " when parsing public certificate " + cert.toString("base64"));
     }
@@ -1369,6 +1756,7 @@ var require_cert_signatures = __commonJS({
 var require_sasl = __commonJS({
   "node_modules/pg/lib/crypto/sasl.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var crypto = require_utils2();
     var { signatureAlgorithmHashFromCertificate } = require_cert_signatures();
     function saslprep(password) {
@@ -1554,6 +1942,7 @@ var require_sasl = __commonJS({
 var require_type_overrides = __commonJS({
   "node_modules/pg/lib/type-overrides.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var types2 = require_pg_types();
     function TypeOverrides2(userTypes) {
       this._types = userTypes || types2;
@@ -1589,6 +1978,7 @@ var require_type_overrides = __commonJS({
 var require_pg_connection_string = __commonJS({
   "node_modules/pg-connection-string/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     function parse(str, options = {}) {
       if (str.charAt(0) === "/") {
         const config2 = str.split(" ");
@@ -1645,15 +2035,15 @@ var require_pg_connection_string = __commonJS({
       if (config.sslnegotiation === "direct" && config.ssl === void 0) {
         config.ssl = true;
       }
-      const fs = config.sslcert || config.sslkey || config.sslrootcert ? __require("fs") : null;
+      const fs2 = config.sslcert || config.sslkey || config.sslrootcert ? __require("fs") : null;
       if (config.sslcert) {
-        config.ssl.cert = fs.readFileSync(config.sslcert).toString();
+        config.ssl.cert = fs2.readFileSync(config.sslcert).toString();
       }
       if (config.sslkey) {
-        config.ssl.key = fs.readFileSync(config.sslkey).toString();
+        config.ssl.key = fs2.readFileSync(config.sslkey).toString();
       }
       if (config.sslrootcert) {
-        config.ssl.ca = fs.readFileSync(config.sslrootcert).toString();
+        config.ssl.ca = fs2.readFileSync(config.sslrootcert).toString();
       }
       if (options.useLibpqCompat && config.uselibpqcompat) {
         throw new Error("Both useLibpqCompat and uselibpqcompat are set. Please use only one of them.");
@@ -1777,6 +2167,7 @@ See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode de
 var require_connection_parameters = __commonJS({
   "node_modules/pg/lib/connection-parameters.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var dns = __require("dns");
     var defaults2 = require_defaults();
     var parse = require_pg_connection_string().parse;
@@ -1928,6 +2319,7 @@ var require_connection_parameters = __commonJS({
 var require_result = __commonJS({
   "node_modules/pg/lib/result.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var types2 = require_pg_types();
     var matchRegexp = /^([A-Za-z]+)(?: (\d+))?(?: (\d+))?/;
     var Result2 = class {
@@ -2019,6 +2411,7 @@ var require_result = __commonJS({
 var require_query = __commonJS({
   "node_modules/pg/lib/query.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var { EventEmitter } = __require("events");
     var Result2 = require_result();
     var utils = require_utils();
@@ -2221,6 +2614,7 @@ var require_query = __commonJS({
 var require_messages = __commonJS({
   "node_modules/pg-protocol/dist/messages.js"(exports) {
     "use strict";
+    init_trace_boot();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.NoticeMessage = exports.DataRowMessage = exports.CommandCompleteMessage = exports.ReadyForQueryMessage = exports.NotificationResponseMessage = exports.BackendKeyDataMessage = exports.AuthenticationMD5Password = exports.ParameterStatusMessage = exports.ParameterDescriptionMessage = exports.RowDescriptionMessage = exports.Field = exports.CopyResponse = exports.CopyDataMessage = exports.DatabaseError = exports.copyDone = exports.emptyQuery = exports.replicationStart = exports.portalSuspended = exports.noData = exports.closeComplete = exports.bindComplete = exports.parseComplete = void 0;
     exports.parseComplete = {
@@ -2386,6 +2780,7 @@ var require_messages = __commonJS({
 var require_buffer_writer = __commonJS({
   "node_modules/pg-protocol/dist/buffer-writer.js"(exports) {
     "use strict";
+    init_trace_boot();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.Writer = void 0;
     var Writer = class {
@@ -2499,6 +2894,7 @@ var require_buffer_writer = __commonJS({
 var require_serializer = __commonJS({
   "node_modules/pg-protocol/dist/serializer.js"(exports) {
     "use strict";
+    init_trace_boot();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.serialize = void 0;
     var buffer_writer_1 = require_buffer_writer();
@@ -2713,6 +3109,7 @@ var require_serializer = __commonJS({
 var require_buffer_reader = __commonJS({
   "node_modules/pg-protocol/dist/buffer-reader.js"(exports) {
     "use strict";
+    init_trace_boot();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.BufferReader = void 0;
     var BufferReader = class {
@@ -2772,6 +3169,7 @@ var require_buffer_reader = __commonJS({
 var require_parser = __commonJS({
   "node_modules/pg-protocol/dist/parser.js"(exports) {
     "use strict";
+    init_trace_boot();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.Parser = void 0;
     var messages_1 = require_messages();
@@ -3079,6 +3477,7 @@ var require_parser = __commonJS({
 var require_dist = __commonJS({
   "node_modules/pg-protocol/dist/index.js"(exports) {
     "use strict";
+    init_trace_boot();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DatabaseError = exports.serialize = void 0;
     exports.parse = parse;
@@ -3094,7 +3493,7 @@ var require_dist = __commonJS({
     function parse(stream, callback) {
       const parser = new parser_1.Parser();
       stream.on("data", (buffer) => parser.parse(buffer, callback));
-      return new Promise((resolve) => stream.on("end", () => resolve()));
+      return new Promise((resolve2) => stream.on("end", () => resolve2()));
     }
   }
 });
@@ -3103,6 +3502,7 @@ var require_dist = __commonJS({
 var require_empty = __commonJS({
   "node_modules/pg-cloudflare/dist/empty.js"(exports) {
     "use strict";
+    init_trace_boot();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.default = {};
   }
@@ -3111,6 +3511,7 @@ var require_empty = __commonJS({
 // node_modules/pg/lib/stream.js
 var require_stream = __commonJS({
   "node_modules/pg/lib/stream.js"(exports, module) {
+    init_trace_boot();
     var { getStream, getSecureStream } = getStreamFuncs();
     module.exports = {
       /**
@@ -3178,6 +3579,7 @@ var require_stream = __commonJS({
 var require_connection = __commonJS({
   "node_modules/pg/lib/connection.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var EventEmitter = __require("events").EventEmitter;
     var { parse, serialize } = require_dist();
     var stream = require_stream();
@@ -3380,6 +3782,7 @@ var require_connection = __commonJS({
 var require_split2 = __commonJS({
   "node_modules/split2/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var { Transform } = __require("stream");
     var { StringDecoder } = __require("string_decoder");
     var kLast = /* @__PURE__ */ Symbol("last");
@@ -3481,6 +3884,7 @@ var require_split2 = __commonJS({
 var require_helper = __commonJS({
   "node_modules/pgpass/lib/helper.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var path = __require("path");
     var Stream = __require("stream").Stream;
     var split = require_split2();
@@ -3652,16 +4056,17 @@ var require_helper = __commonJS({
 var require_lib = __commonJS({
   "node_modules/pgpass/lib/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var path = __require("path");
-    var fs = __require("fs");
+    var fs2 = __require("fs");
     var helper = require_helper();
     module.exports = function(connInfo, cb) {
       var file = helper.getFileName();
-      fs.stat(file, function(err, stat) {
+      fs2.stat(file, function(err, stat) {
         if (err || !helper.usePgPass(stat, file)) {
           return cb(void 0);
         }
-        var st = fs.createReadStream(file);
+        var st = fs2.createReadStream(file);
         helper.getPassword(connInfo, st, cb);
       });
     };
@@ -3672,6 +4077,7 @@ var require_lib = __commonJS({
 // node_modules/pg/lib/client.js
 var require_client = __commonJS({
   "node_modules/pg/lib/client.js"(exports, module) {
+    init_trace_boot();
     var EventEmitter = __require("events").EventEmitter;
     var utils = require_utils();
     var nodeUtils = __require("util");
@@ -3863,12 +4269,12 @@ var require_client = __commonJS({
           this._connect(callback);
           return;
         }
-        return new this._Promise((resolve, reject) => {
+        return new this._Promise((resolve2, reject) => {
           this._connect((error) => {
             if (error) {
               reject(error);
             } else {
-              resolve(this);
+              resolve2(this);
             }
           });
         });
@@ -4250,8 +4656,8 @@ var require_client = __commonJS({
         } else {
           query = new Query2(config, values, callback);
           if (!query.callback) {
-            result = new this._Promise((resolve, reject) => {
-              query.callback = (err, res) => err ? reject(err) : resolve(res);
+            result = new this._Promise((resolve2, reject) => {
+              query.callback = (err, res) => err ? reject(err) : resolve2(res);
             }).catch((err) => {
               Error.captureStackTrace(err);
               throw err;
@@ -4351,8 +4757,8 @@ var require_client = __commonJS({
         if (cb) {
           this.connection.once("end", cb);
         } else {
-          return new this._Promise((resolve) => {
-            this.connection.once("end", resolve);
+          return new this._Promise((resolve2) => {
+            this.connection.once("end", resolve2);
           });
         }
       }
@@ -4370,6 +4776,7 @@ var require_client = __commonJS({
 var require_pg_pool = __commonJS({
   "node_modules/pg-pool/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var EventEmitter = __require("events").EventEmitter;
     var NOOP = function() {
     };
@@ -4401,8 +4808,8 @@ var require_pg_pool = __commonJS({
       const cb = function(err, client) {
         err ? rej(err) : res(client);
       };
-      const result = new Promise2(function(resolve, reject) {
-        res = resolve;
+      const result = new Promise2(function(resolve2, reject) {
+        res = resolve2;
         rej = reject;
       }).catch((err) => {
         Error.captureStackTrace(err);
@@ -4463,7 +4870,7 @@ var require_pg_pool = __commonJS({
         if (typeof Promise2.try === "function") {
           return Promise2.try(f);
         }
-        return new Promise2((resolve) => resolve(f()));
+        return new Promise2((resolve2) => resolve2(f()));
       }
       _isFull() {
         return this._clients.length >= this.options.max;
@@ -4796,6 +5203,7 @@ var require_pg_pool = __commonJS({
 var require_query2 = __commonJS({
   "node_modules/pg/lib/native/query.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var EventEmitter = __require("events").EventEmitter;
     var util = __require("util");
     var utils = require_utils();
@@ -4858,8 +5266,8 @@ var require_query2 = __commonJS({
     NativeQuery.prototype._getPromise = function() {
       if (this._promise) return this._promise;
       this._promise = new Promise(
-        function(resolve, reject) {
-          this._once("end", resolve);
+        function(resolve2, reject) {
+          this._once("end", resolve2);
           this._once("error", reject);
         }.bind(this)
       );
@@ -4938,6 +5346,7 @@ var require_query2 = __commonJS({
 // node_modules/pg/lib/native/client.js
 var require_client2 = __commonJS({
   "node_modules/pg/lib/native/client.js"(exports, module) {
+    init_trace_boot();
     var nodeUtils = __require("util");
     var Native;
     try {
@@ -5038,12 +5447,12 @@ var require_client2 = __commonJS({
         this._connect(callback);
         return;
       }
-      return new this._Promise((resolve, reject) => {
+      return new this._Promise((resolve2, reject) => {
         this._connect((error) => {
           if (error) {
             reject(error);
           } else {
-            resolve(this);
+            resolve2(this);
           }
         });
       });
@@ -5067,8 +5476,8 @@ var require_client2 = __commonJS({
         query = new NativeQuery(config, values, callback);
         if (!query.callback) {
           let resolveOut, rejectOut;
-          result = new this._Promise((resolve, reject) => {
-            resolveOut = resolve;
+          result = new this._Promise((resolve2, reject) => {
+            resolveOut = resolve2;
             rejectOut = reject;
           }).catch((err) => {
             Error.captureStackTrace(err);
@@ -5131,8 +5540,8 @@ var require_client2 = __commonJS({
       }
       let result;
       if (!cb) {
-        result = new this._Promise(function(resolve, reject) {
-          cb = (err) => err ? reject(err) : resolve();
+        result = new this._Promise(function(resolve2, reject) {
+          cb = (err) => err ? reject(err) : resolve2();
         });
       }
       const doEnd = function() {
@@ -5277,6 +5686,7 @@ var require_client2 = __commonJS({
 var require_native = __commonJS({
   "node_modules/pg/lib/native/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     module.exports = require_client2();
   }
 });
@@ -5285,6 +5695,7 @@ var require_native = __commonJS({
 var require_lib2 = __commonJS({
   "node_modules/pg/lib/index.js"(exports, module) {
     "use strict";
+    init_trace_boot();
     var Client2 = require_client();
     var defaults2 = require_defaults();
     var Connection2 = require_connection();
@@ -5348,10 +5759,21 @@ var require_lib2 = __commonJS({
 });
 
 // src/heartbeat.ts
+init_trace_boot();
 import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync3, mkdirSync as mkdirSync4 } from "fs";
-import { join as join6 } from "path";
+import { join as join7 } from "path";
+
+// src/shared/db-utils-pg.ts
+init_trace_boot();
+
+// src/shared/opc-path.ts
+init_trace_boot();
+
+// src/shared/pg-client.ts
+init_trace_boot();
 
 // node_modules/pg/esm/index.mjs
+init_trace_boot();
 var import_lib = __toESM(require_lib2(), 1);
 var Client = import_lib.default.Client;
 var Pool = import_lib.default.Pool;
@@ -5417,9 +5839,16 @@ async function withPgClient(fn) {
   }
 }
 
+// src/shared/coordination-events.ts
+init_trace_boot();
+
 // src/shared/leases.ts
+init_trace_boot();
 var FILE_LEASE_MS = 10 * 60 * 1e3;
 var HARNESS_LEASE_MS = 60 * 60 * 1e3;
+
+// src/shared/pattern-router.ts
+init_trace_boot();
 
 // src/shared/db-utils-pg.ts
 async function registerSession(sessionId, project, workingOn = "", opts) {
@@ -5471,20 +5900,21 @@ async function selectLiveSessions(client, selfId, previousId) {
 }
 
 // src/shared/session-id.ts
+init_trace_boot();
 import { execFileSync } from "child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
 var SESSION_ID_FILENAME = ".coordination-session-id";
 function getSessionIdFile(options = {}) {
-  const claudeDir = join(process.env.HOME || process.env.USERPROFILE || homedir(), ".claude");
+  const claudeDir = join2(process.env.HOME || process.env.USERPROFILE || homedir2(), ".claude");
   if (options.createDir) {
     try {
       mkdirSync(claudeDir, { recursive: true, mode: 448 });
     } catch {
     }
   }
-  return join(claudeDir, SESSION_ID_FILENAME);
+  return join2(claudeDir, SESSION_ID_FILENAME);
 }
 function generateSessionId() {
   const spanId = process.env.BRAINTRUST_SPAN_ID;
@@ -5530,11 +5960,13 @@ function normalizeProjectKey(p) {
 }
 
 // src/shared/session-identity.ts
+init_trace_boot();
 import { closeSync as closeSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync3, readSync, readdirSync, statSync as statSync3 } from "fs";
-import { homedir as homedir3 } from "os";
-import { join as join5 } from "path";
+import { homedir as homedir4 } from "os";
+import { join as join6 } from "path";
 
 // src/shared/atomic-write.ts
+init_trace_boot();
 import {
   writeFileSync as writeFileSync2,
   renameSync as renameSync2,
@@ -5546,13 +5978,14 @@ import {
   statSync as statSync2,
   constants
 } from "fs";
-import { dirname as dirname2, basename, join as join3 } from "path";
+import { dirname as dirname2, basename as basename2, join as join4 } from "path";
 
 // src/shared/logger.ts
+init_trace_boot();
 import { appendFileSync, existsSync, mkdirSync as mkdirSync2, statSync, renameSync } from "fs";
-import { dirname, join as join2 } from "path";
-import { homedir as homedir2 } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join2(homedir2(), ".claude", "logs", "hooks.log");
+import { dirname, join as join3 } from "path";
+import { homedir as homedir3 } from "os";
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join3(homedir3(), ".claude", "logs", "hooks.log");
 var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
@@ -5623,7 +6056,7 @@ function createLogger(hookName) {
 var log = createLogger("atomic-write");
 function atomicWriteSync(filePath, content) {
   const dir = dirname2(filePath);
-  const tmpFile = join3(dir, `.${basename(filePath)}.tmp.${process.pid}`);
+  const tmpFile = join4(dir, `.${basename2(filePath)}.tmp.${process.pid}`);
   try {
     writeFileSync2(tmpFile, content, "utf-8");
     renameSync2(tmpFile, filePath);
@@ -5637,9 +6070,10 @@ function atomicWriteSync(filePath, content) {
 }
 
 // src/lib/spawn-hidden.ts
+init_trace_boot();
 import { tmpdir } from "os";
-import { join as join4 } from "path";
-var RELAY_ERROR_LOG = join4(tmpdir(), "ccv3-spawn-hidden.log");
+import { join as join5 } from "path";
+var RELAY_ERROR_LOG = join5(tmpdir(), "ccv3-spawn-hidden.log");
 var RELAY_LAUNCH_FAILED = 127;
 var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
 
@@ -5648,11 +6082,11 @@ var TAIL_BYTES = 256 * 1024;
 var HEAD_BYTES = 512 * 1024;
 var SAFE_ID_RE = /^[0-9a-fA-F-]{8,64}$/;
 function identityDir() {
-  return process.env.CCV3_IDENTITY_DIR || join5(homedir3(), ".claude", "state", "identity");
+  return process.env.CCV3_IDENTITY_DIR || join6(homedir4(), ".claude", "state", "identity");
 }
 var shortId = (uuid) => uuid.slice(0, 8);
 function identityPath(uuid) {
-  return SAFE_ID_RE.test(uuid) ? join5(identityDir(), `${uuid}.json`) : null;
+  return SAFE_ID_RE.test(uuid) ? join6(identityDir(), `${uuid}.json`) : null;
 }
 function asString(v) {
   return typeof v === "string" && v ? v : null;
@@ -5686,16 +6120,16 @@ function writeIdentity(uuid, patch) {
   const file = identityPath(uuid);
   if (!file) return null;
   const cur = readIdentity(uuid);
-  const pick = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] ?? null : null;
+  const pick2 = (k) => patch[k] !== void 0 ? patch[k] : cur ? cur[k] ?? null : null;
   const next = {
     uuid,
     short: shortId(uuid),
-    name: pick("name"),
-    previous: pick("previous"),
-    cwd: pick("cwd"),
-    endedAt: pick("endedAt"),
-    endReason: pick("endReason"),
-    pid: pick("pid"),
+    name: pick2("name"),
+    previous: pick2("previous"),
+    cwd: pick2("cwd"),
+    endedAt: pick2("endedAt"),
+    endReason: pick2("endReason"),
+    pid: pick2("pid"),
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   try {
@@ -5741,8 +6175,8 @@ function resolveName(sessionTitle, transcriptPath) {
 
 // src/heartbeat.ts
 var CACHE_TTL_MS = 3e4;
-var CACHE_DIR = join6(process.env.HOME || process.env.USERPROFILE || "", ".claude", "cache");
-var CACHE_FILE = join6(CACHE_DIR, "heartbeat-last.json");
+var CACHE_DIR = join7(process.env.HOME || process.env.USERPROFILE || "", ".claude", "cache");
+var CACHE_FILE = join7(CACHE_DIR, "heartbeat-last.json");
 function shouldUpdateHeartbeat(sessionId) {
   try {
     if (!existsSync4(CACHE_FILE)) return true;
