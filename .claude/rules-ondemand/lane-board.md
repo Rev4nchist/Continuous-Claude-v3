@@ -42,6 +42,17 @@ Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-projec
 - `done <dep> --merged <sha>` or `done <dep> --no-pr --evidence <path>` meets a dependency. A plain `done <dep>` meets none and prints a hint.
 - `board` prints `waits on: <ids>`. `board --json` has `waits_on`. A missing key means unknown: migration 0006 is not applied.
 
+## Owner check and park
+
+- Live holder: `state`, `release`, `done`, `note`, `add` give `[not-holder]`, exit 4. No holder: open; `park` refuses.
+- Quiet holder or unowned blocked lane: `--reason`. `--override --reason`: any held lane; seat only.
+- `state <id> <to> --if-state <from>`: write only from `<from>`. Exit 1 only for `--if-state` on `release`, `done`, `park`; `--blocked` on `state`, `done`; `--override` on `note`, `add`, `park`, `claim`. Other flags: no effect.
+- `release <id> --blocked --reason`: holder only; no owner.
+- `park <id> --for 2h..7d --reason`: holder only, default 24h. The lease is the park; `board` shows `parked to` only above 90m. Never park `re-program`.
+- A park ends: holder's `state`, `release`, `done`; new `park`; the end time; `state <id> <to> --override --reason` (lease 90m); `release --override`.
+- Owner gone: `release <id> --override --reason handover; claim <id>` in ONE command.
+- No owner test: kanban, `reminder-sync.mjs`, `seed`, `--as`, `remind`.
+
 ## Phone page
 
 - `continuous-claude` has the page `RtrTNVfAq9uowmb2tfbzid` (`.claude/artifacts.json`). Any other board has a published, interactive page only when its registry entry carries `laneArtifact` (a `https://claude.ai/artifact/<id>` url). Dave starts one with `/publish-board <key>`. `project register` only prints a hint.

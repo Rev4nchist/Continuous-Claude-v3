@@ -16,7 +16,7 @@ node scripts/review-engine/program.mjs <verb> [options]
 | `check --diff <lane-id> [--branch <ref>] [--base <ref>]` | Lists changed files outside the lane's Owns. Default branch: `re/<lane-id>`, or the shared branch of its pack. Base main. A pack uses the union of the Owns lists of its lanes (`NOTE pack:` line). Line 2 is `files: <n> base <sha12> branch <sha12>`. An empty diff is `RESULT diff-empty` and exit 1, never a pass. |
 | `seed-file [--out <file>] [--project <key>] [--rank <file>]` | Writes the object `{ "lanes": [...], "edges": [...] }`: one blocked item per Waves lane, and the edges from `Depends on`. No `--out`: the object on stdout, banner and notes on stderr. |
 | `ready [--project <key>] [--as <session-id>]` | Prints the lanes the caller may claim now, the cap, the Cursor eval slot, and what waits on Dave. |
-| `sync-board [--apply] [--project <key>] [--as <session-id>]` | Plans the moves from `blocked` to `backlog`. Dry run by default. `--apply` runs `lane.mjs state <id> backlog` once per move. |
+| `sync-board [--apply] [--project <key>] [--as <session-id>]` | Plans the moves from `blocked` to `backlog`. Dry run by default. `--apply` runs `lane.mjs state <id> backlog --if-state blocked --reason "program.mjs sync-board --apply"` once per move. |
 | `check --board [--project <key>]` | Does the board match the map: cards, edges, branches, holds, done lanes and their merged SHAs. |
 | `check --claims [--project <key>] [--since <event-id>]` | Did a claim break the dependency gate, was `--dep-override` used, does an owner hold two cap units. |
 | `check --orphans [--project <key>]` | The seat line, parked long lanes, and lanes whose owner is dead. |
@@ -64,10 +64,10 @@ A database URL never reaches the output with its password. It prints as `postgre
 - Refuses (exit 3) when the board has no program seed event, or no stored edges for the map lanes. The seed event is the earliest `seeded` event with an `edges` key in its detail (the object-form seed). An array-form seed or a later re-seed does not move it.
 - A lane that was set to `blocked` by hand after the program seed stays `blocked` (`hand-blocked`).
 - A plan with an error (`edges-differ`: the stored edges differ from the map) writes nothing, even with `--apply`.
-- `--apply` re-reads each lane before its write. A lane that is no longer `blocked` and free is skipped. It runs `lane.mjs state <id> backlog --project <board>` and never passes `--note`. A failed child stops the loop and exits 1. A second run plans 0 moves.
+- `--apply` re-reads each lane before its write. A lane that is no longer `blocked` and free is skipped. It runs `lane.mjs state <id> backlog --if-state blocked --reason "program.mjs sync-board --apply" --project <board>` and never passes `--note`. A failed child stops the loop and exits 1. A second run plans 0 moves.
 - The child is the shim `~/.claude/scripts/lane.mjs` (the primary checkout's lane.mjs). `--lane-cli <path>` replaces it in test mode only.
 
-Residual risk: `lane.mjs state` has no compare-and-set. A lane that changes between the re-read and the write can still be moved.
+Residual risk: `--if-state blocked` is a compare-and-set, so a lane that left `blocked` between the re-read and the write is refused (`[if-state]`, or `[not-holder]` if another session claimed it, exit 4) and the loop stops. Only a lane that is `blocked` again at the write can still be moved.
 
 ## Live mode
 

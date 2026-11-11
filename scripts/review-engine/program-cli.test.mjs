@@ -765,8 +765,8 @@ test('Z6b sync-board --apply: one child per move in id order, argv exact, sessio
   assert.match(r.out.join('\n'), /^RESULT applied 2 moves, 0 skipped$/m);
   const calls = cli.calls();
   assert.deepEqual(calls.map((c) => c.argv), [
-    ['state', 're-dummy-2', 'backlog', '--project', 'continuous-claude'],
-    ['state', 're-dummy-3', 'backlog', '--project', 'continuous-claude'],
+    ['state', 're-dummy-2', 'backlog', '--if-state', 'blocked', '--reason', 'program.mjs sync-board --apply', '--project', 'continuous-claude'],
+    ['state', 're-dummy-3', 'backlog', '--if-state', 'blocked', '--reason', 'program.mjs sync-board --apply', '--project', 'continuous-claude'],
   ]);
   assert.ok(calls.every((c) => c.session === 'sess-1' && c.urls.every((u) => u === SCRATCH_URL)));
   assert.ok(calls.every((c) => !c.argv.includes('--note')), 'Z9: state --note would replace the stored note');
@@ -778,7 +778,7 @@ test('Z6c sync-board --apply takes the board from --project and the session from
   io.env.CLAUDE_CODE_SESSION_ID = 'env-sess';
   const r = await inProc(['sync-board', '--apply', '--project', 'zz-board'], io, ['--lane-cli', cli.file]);
   assert.equal(r.code, 0, r.err.join('\n'));
-  assert.deepEqual(cli.calls().map((c) => [c.argv[4], c.session]), [['zz-board', 'env-sess'], ['zz-board', 'env-sess']]);
+  assert.deepEqual(cli.calls().map((c) => [c.argv[c.argv.indexOf('--project') + 1], c.session]), [['zz-board', 'env-sess'], ['zz-board', 'env-sess']]);
 });
 
 test('Z7 a failing child: exit 1, the FAIL line names the lane with the URL masked, later moves do not run', async () => {

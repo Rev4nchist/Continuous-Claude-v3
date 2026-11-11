@@ -1346,3 +1346,92 @@ describe('project which / register / unregister', () => {
     });
   });
 });
+
+describe('owner rule for note and add: refuse only a lane that a live session other than the caller holds (M7, F14)', () => {
+  const QUIET = randomUUID();
+  let seq = 0;
+  /** A pb-a lane. `owner` null: no holder. `quiet`: an owner with no sessions row and a lease that ended. Else a live holder (lease runs). */
+  async function mkLane(prefix, { owner = null, quiet = false, st = 'active', track = 'zz' } = {}) {
+    const id = `zz-pbprobe-${prefix}${++seq}`;
+    const holder = quiet ? QUIET : owner;
+    await q(
+      `INSERT INTO agentic_os.lane (id,title,track,state,project_key,owner_session_id,lease_expires_at,note)
+       VALUES ($1,$2,$3,$4,'pb-a',$5::text, CASE WHEN $5::text IS NULL THEN NULL WHEN $6::boolean THEN now() - interval '3 hours' ELSE now() + interval '30 minutes' END, 'old note')`,
+      [id, `title of ${id}`, track, st, holder, quiet]);
+    return id;
+  }
+  const evCount = async (id) => (await one(`SELECT count(*)::int AS n FROM agentic_os.lane_event WHERE lane_id=$1`, [id])).n;
+  const rowOf = (id) => one(`SELECT title, track, note, owner_session_id, lease_expires_at FROM agentic_os.lane WHERE id=$1`, [id]);
+
+  it('F14: a stranger note on a lane that a live session holds gives [not-holder], exit 4; the status line and the event log stay', async () => {
+    const id = await mkLane('n', { owner: SD });
+    const r = lane(state.dirs.A, SA, ['note', id, 'overwritten by a stranger']);
+    assert.equal(r.code, 4, r.all);
+    assert.match(r.err.split('\n')[0], new RegExp(`^REFUSED note ${id} \\[not-holder\\] -- the lane is held by `));
+    assert.doesNotMatch(r.err, /--override/, 'note has no override: the hint must not offer one');
+    assert.equal((await rowOf(id)).note, 'old note');
+    assert.equal(await evCount(id), 0);
+  });
+
+  it('F14: under --json the refusal adds the stderr line with the verb, the rule and the holder', async () => {
+    const id = await mkLane('nj', { owner: SD });
+    const r = lane(state.dirs.A, SA, ['note', id, 'x', '--json']);
+    assert.equal(r.code, 4);
+    assert.deepEqual(JSON.parse(r.err.trim().split('\n').at(-1)), { refused: true, verb: 'note', id, rule: 'not-holder', holder: SD });
+  });
+
+  it('F14: the holder note works, and a stranger note on another board lane is still exit 1 (the board check comes first)', async () => {
+    const id = await mkLane('nh', { owner: SA });
+    assert.equal(lane(state.dirs.A, SA, ['note', id, 'mine now']).code, 0);
+    assert.equal((await rowOf(id)).note, 'mine now');
+    assert.equal(lane(state.dirs.A, SA, ['note', 'zz-pbprobe-b1', 'x']).code, 1);
+  });
+
+  it('M7: note and add need no --reason on a lane with no holder: an unowned blocked lane and a lane whose owner is quiet', async () => {
+    const free = await mkLane('nb', { st: 'blocked' });
+    assert.equal(lane(state.dirs.A, SA, ['note', free, 'seat note']).code, 0);
+    assert.equal((await rowOf(free)).note, 'seat note');
+    assert.equal(lane(state.dirs.A, SA, ['add', free, '--title', 'renamed free']).code, 0);
+    assert.equal((await rowOf(free)).title, 'renamed free');
+    const quiet = await mkLane('nq', { quiet: true });
+    const before = await rowOf(quiet);
+    assert.equal(lane(state.dirs.A, SA, ['note', quiet, 'seat note on a quiet lane']).code, 0);
+    const after = await rowOf(quiet);
+    assert.equal(after.note, 'seat note on a quiet lane');
+    assert.equal(after.owner_session_id, QUIET, 'a stranger note keeps the owner');
+    assert.equal(+after.lease_expires_at, +before.lease_expires_at, 'a stranger note does not touch the lease');
+    assert.equal(lane(state.dirs.A, SA, ['add', quiet, '--title', 'renamed quiet']).code, 0);
+    assert.equal((await rowOf(quiet)).title, 'renamed quiet');
+  });
+
+  it('F14: a stranger add on a held lane gives [not-holder], exit 4; title, track and the event log stay', async () => {
+    const id = await mkLane('a', { owner: SD, track: 'keep-me' });
+    const before = await rowOf(id);
+    const r = lane(state.dirs.A, SA, ['add', id, '--title', 'hijacked', '--track', 'evil', '--priority', '1']);
+    assert.equal(r.code, 4, r.all);
+    assert.match(r.err.split('\n')[0], new RegExp(`^REFUSED add ${id} \\[not-holder\\] -- the lane is held by `));
+    assert.doesNotMatch(r.err, /--override/);
+    assert.deepEqual(await rowOf(id), before);
+    assert.equal(await evCount(id), 0);
+  });
+
+  it('F14: the holder add without --track keeps the stored track; with --track it changes it; a new lane still gets unsorted', async () => {
+    const id = await mkLane('at', { owner: SA, track: 'keep-me' });
+    const r = lane(state.dirs.A, SA, ['add', id, '--title', 'RELATES TO x']);
+    assert.equal(r.code, 0, r.all);
+    const after = await rowOf(id);
+    assert.equal(after.title, 'RELATES TO x');
+    assert.equal(after.track, 'keep-me');
+    assert.equal(lane(state.dirs.A, SA, ['add', id, '--title', 'again', '--track', 'moved']).code, 0);
+    assert.equal((await rowOf(id)).track, 'moved');
+    assert.equal(lane(state.dirs.A, SA, ['add', 'zz-pbprobe-fresh-track', '--title', 'new']).code, 0);
+    assert.equal((await one(`SELECT track FROM agentic_os.lane WHERE id='zz-pbprobe-fresh-track'`)).track, 'unsorted');
+  });
+
+  it('F14: add with --band on a held lane of another session is refused the same way (the band placeholder is in the same statement)', async () => {
+    const id = await mkLane('ab', { owner: SD });
+    const r = lane(state.dirs.A, SA, ['add', id, '--title', 'x', '--band', 'P0']);
+    assert.equal(r.code, 4, r.all);
+    assert.match(r.err.split('\n')[0], /^REFUSED add .* \[not-holder\]/);
+  });
+});
