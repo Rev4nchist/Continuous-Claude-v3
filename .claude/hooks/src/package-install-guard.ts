@@ -541,8 +541,10 @@ function iexRunsUnreadText(segment: string, earlier: string[]): boolean {
   if (!IEX_WORD.test(words[0] ?? '')) return false;
   const direct = iexPayload(segment);
   if (direct !== null) return direct.includes('$');
-  // A script block with a manager word in it may make the text, whatever literal string comes first.
-  return pipedIexTexts(segment, earlier).length === 0 || earlier.some((s) => s.includes('{') && hasManagerWord(s));
+  // A script block before iex can replace the text of an earlier literal or emit a variable: unread. Only a plain
+  // pass-through block ({ $_ } or { $PSItem }) changes nothing. Any other block text fails closed.
+  const hasOwnBlock = (s: string) => s.replace(/\{\s*(?:\$_|\$PSItem)\s*\}/gi, '').includes('{');
+  return pipedIexTexts(segment, earlier).length === 0 || earlier.some(hasOwnBlock);
 }
 
 /** One plan per segment text: the same literal read twice (an upstream string and a here-string body) asks once. */

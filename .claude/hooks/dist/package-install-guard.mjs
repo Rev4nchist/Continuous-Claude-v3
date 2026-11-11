@@ -21542,7 +21542,8 @@ function iexRunsUnreadText(segment, earlier) {
   if (!IEX_WORD.test(words[0] ?? "")) return false;
   const direct = iexPayload(segment);
   if (direct !== null) return direct.includes("$");
-  return pipedIexTexts(segment, earlier).length === 0 || earlier.some((s) => s.includes("{") && hasManagerWord(s));
+  const hasOwnBlock = (s) => s.replace(/\{\s*(?:\$_|\$PSItem)\s*\}/gi, "").includes("{");
+  return pipedIexTexts(segment, earlier).length === 0 || earlier.some(hasOwnBlock);
 }
 function uniqueBySegment(plans) {
   const seen = /* @__PURE__ */ new Set();
