@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseMap, parseHeld, parseOwns, parseDeps } from './lib/map-parse.mjs';
-import { globToRegExp, ownsMatch, entriesOverlap } from './lib/owns.mjs';
+import { globToRegExp, ownsMatch, entriesOverlap, conflicts } from './lib/owns.mjs';
 
 const FIXTURE = new URL('./fixtures/map.fixture.md', import.meta.url);
 // The checkout may have CRLF on disk (core.autocrlf), so fix the endings here.
@@ -179,7 +179,7 @@ test('sections keep file order and the model has every key S2 needs', () => {
     'fx-base', 'fx-keys', 'fx-mid', 'fx-gate-a', 'fx-gate-b', 'fx-top', 'fx-holder', 'fx-ext',
   ]);
   assert.deepEqual(Object.keys(model).sort(), [
-    'chainUnparsed', 'dropped', 'errors', 'externals', 'lanes', 'ownerChains', 'ownerPhrases', 'sections', 'source',
+    'chainUnparsed', 'dropped', 'errors', 'externals', 'lanes', 'ownerChains', 'ownerPhrases', 'packs', 'sections', 'source',
   ]);
   assert.equal(parseMap(LF, { kind: 'file', path: 'x' }).source.path, 'x');
 });
@@ -289,4 +289,39 @@ test('owns: globs and dirs that share a file still overlap, in both directions (
     assert.equal(entriesOverlap({ path: a }, { path: b }), true, `${a} vs ${b}`);
     assert.equal(entriesOverlap({ path: b }, { path: a }), true, `${b} vs ${a}`);
   }
+});
+
+test('parseMap carries the packs it reads (A6); no Pack line gives an empty list', () => {
+  assert.deepEqual(model.packs, []);
+  const packLine = 'Pack: fx-gate-a, fx-gate-b (branch re/fx-gate-a)';
+  const withPack = parseMap(LF.replace('## Dropped or merged lanes', `${packLine}\n\n## Dropped or merged lanes`));
+  assert.deepEqual(withPack.packs.map(({ branch, lanes }) => ({ branch, lanes })), [{ branch: 're/fx-gate-a', lanes: ['fx-gate-a', 'fx-gate-b'] }]);
+  assert.deepEqual(withPack.errors, []);
+});
+
+test('parseMap puts a Pack line it cannot read into model.errors with its line', () => {
+  const bad = parseMap(LF.replace('## Dropped or merged lanes', 'Pack: fx-gate-a\n\n## Dropped or merged lanes'));
+  assert.deepEqual(bad.errors.map((e) => e.rule), ['pack-line']);
+  assert.equal(bad.errors[0].line, 17);
+});
+
+test('A8 parseHeld reads seat-hold as a keyword token', () => {
+  assert.deepEqual(parseHeld('seat-hold; DP2.4'), [{ kind: 'seat-hold' }, { kind: 'decision', id: 'DP2.4' }]);
+});
+
+test('owns: conflicts lists overlapping entry pairs that are not both key-scoped', () => {
+  const file = { path: 'scripts/a.mjs', kind: 'file', scope: null };
+  const glob = { path: 'scripts/*.mjs', kind: 'glob', scope: null };
+  const other = { path: 'docs/x.md', kind: 'file', scope: null };
+  assert.deepEqual(conflicts([file, other], [glob]), [[file, glob]]);
+  assert.deepEqual(conflicts([other], [glob]), []);
+  assert.deepEqual(conflicts([], [glob]), []);
+});
+
+test('owns: conflicts skips a pair only when both entries are scoped to named keys', () => {
+  const keyed = (path, scope) => ({ path, kind: 'file', scope });
+  assert.deepEqual(conflicts([keyed('c.json', 'keys only: a')], [keyed('c.json', 'keys only: b')]), []);
+  assert.equal(conflicts([keyed('c.json', 'keys only: a')], [keyed('c.json', null)]).length, 1);
+  assert.equal(conflicts([keyed('c.json', 'keys only: a')], [keyed('c.json', 'keep it short')]).length, 1);
+  assert.equal(conflicts([keyed('c.json', 'key only')], [keyed('c.json', 'keys only')]).length, 0);
 });
