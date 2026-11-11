@@ -5,6 +5,8 @@
 //  V10-V12 unknown kind, no *ToolCall key, hook context -> turn the allow list into a deny list, skip such events, drop the check
 //  V13-V15 no init, init cwd of another form, empty or missing stream -> default the tree, test the prefix only, let an empty list pass
 //  V16 / N2 symlink to the primary checkout, failed ls-tree -> drop the mode filter, the target check or the failure rule
+//  SL-a..f a link target walked through the other links of the head -> go back to a text-only normalize, drop the step cap, resolve a substituted link from the root
+//  F7b-F7c --summary --runs with a missing or unreadable runs file -> read it with readLines
 //  G1-G9  glob `files` exemption (seat answer 3, B and C): `../.\` + a tracked path or one of 5 harness files at tree level, `../` + the folder path + a tracked path for a folder call
 //         -> accept another start, drop the head list, drop the answer-key check on the rest, strip two leading .., resolve against targetDirectory
 //  D1-D4  brace patterns; T1-T2 event types; F8-F9 stream gaps; E1-E2 a failed state write; A6-A8 symlinkCheck and the head list
@@ -339,6 +341,18 @@ function repoWithLink(target) {
   return { dir, head: run(null, 'rev-parse', 'HEAD') };
 }
 
+function repoWithLinks(links) {
+  const dir = tmpDir();
+  const run = (input, ...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, ...(input === null ? {} : { input }) }).trim();
+  run(null, 'init', '-q', '-b', 'main');
+  run(null, 'config', 'user.email', 't@t'); run(null, 'config', 'user.name', 't'); run(null, 'config', 'commit.gpgsign', 'false');
+  writeFileSync(path.join(dir, 'f.txt'), '1');
+  run(null, 'add', 'f.txt');
+  for (const [name, target] of Object.entries(links)) run(null, 'update-index', '--add', '--cacheinfo', `120000,${run(target, 'hash-object', '-w', '--stdin')},${name}`);
+  run(null, 'commit', '-qm', 'c1');
+  return { dir, head: run(null, 'rev-parse', 'HEAD') };
+}
+
 test('V16b a real repo with a mode 120000 entry whose target is ../../.. voids', () => {
   // Breaks when: a relative escape is not resolved. No symlink right is needed: the entry is made with update-index.
   const { dir, head } = repoWithLink('../../..');
@@ -350,6 +364,67 @@ test('V16c a real repo with a link to a file inside the tree passes', () => {
   // Breaks when: every mode 120000 entry voids.
   const { dir, head } = repoWithLink('f.txt');
   assert.deepEqual(checkHeadSymlinks({ git: gitIn(dir), head }), []);
+});
+
+// ---- SL a link target is walked through the other links of the head ----
+/** A scripted git for a head with several links. links: { name: target }. Each name gets its own blob id, so cat-file answers per link. */
+function scriptedLinks(links) {
+  const entries = Object.entries(links);
+  const oid = (i) => String(i + 1).padStart(40, '0');
+  const ls = entries.map(([name], i) => `120000 blob ${oid(i)}\t${name}\0`).join('');
+  const git = (args) => {
+    if (args[0] === 'ls-tree') return { status: 0, stdout: ls, stderr: '' };
+    if (args[0] === 'cat-file') return { status: 0, stdout: entries[Number(args[2]) - 1][1], stderr: '' };
+    return { status: 1, stdout: '', stderr: '' };
+  };
+  return git;
+}
+const symlinkRules = (links) => checkHeadSymlinks({ git: scriptedLinks(links), head: HEAD }).filter((x) => x.rule === 'symlink');
+
+test('SL-a a link through another link to a path above the root voids', () => {
+  // Breaks when: the target is normalized as text only: alias/../outside reads as "outside" and passes, but a real lookup follows alias (to .) and then leaves the tree.
+  assert.equal(symlinkRules({ alias: '.', leak: 'alias/../outside' }).length, 1);
+});
+
+test('SL-a2 a link through a link in a folder, then up past the root, voids', () => {
+  // Breaks when: the substituted target is resolved from the repo root instead of the folder of the link it replaces.
+  assert.equal(symlinkRules({ 'd/up': '..', 'e/leak': '../d/up/../x' }).length, 1, 'd/up is the root, so d/up/.. leaves the tree');
+  assert.equal(symlinkRules({ 'a/b/up': '..', 'c/leak': '../a/b/up/../../y' }).length, 1, 'a/b/up is a, so a/b/up/../.. leaves the tree');
+});
+
+test('SL-b a link through another link that stays inside the tree passes', () => {
+  // Breaks when: every link that names another link voids, or a substituted target is read from the wrong folder.
+  assert.deepEqual(symlinkRules({ alias: 'sub', 'sub2/l': '../alias/x' }), []);
+});
+
+test('SL-b2 a link through a link that goes up one folder and stays inside passes', () => {
+  // Breaks when: a .. that follows a substituted link folder is counted against the wrong depth.
+  assert.deepEqual(symlinkRules({ 'a/b/up': '..', 'c/l': '../a/b/up/../y' }), []);
+});
+
+test('SL-c a link loop voids at the step cap and does not hang', () => {
+  // Breaks when: the walk has no cap (it never returns) or a capped walk passes.
+  assert.equal(symlinkRules({ a: 'b', b: 'a' }).length, 2);
+  assert.equal(symlinkRules({ self: 'self/x' }).length, 1);
+});
+
+test('SL-d an absolute target reached through a link still voids', () => {
+  // Breaks when: the absolute check is applied to the first target only.
+  assert.equal(symlinkRules({ hop: 'next', next: PRIMARY }).length, 2);
+});
+
+test('SL-e a .. above the root at any step voids, a .. inside the tree passes', () => {
+  // Breaks when: pop on an empty path is ignored (the .. is dropped) instead of voiding.
+  assert.equal(symlinkRules({ l: 'x/../../y' }).length, 1);
+  assert.deepEqual(symlinkRules({ l: 'x/../y' }), []);
+});
+
+test('SL-f a real repo: alias -> . and leak -> alias/../outside voids, alias -> sub with a link through it passes', () => {
+  // Breaks when: the walk uses the scripted map but not the ls-tree and cat-file of a real head.
+  const bad = repoWithLinks({ alias: '.', leak: 'alias/../outside' });
+  assert.equal(checkHeadSymlinks({ git: gitIn(bad.dir), head: bad.head }).filter((x) => x.rule === 'symlink').length, 1);
+  const ok = repoWithLinks({ alias: 'sub', 'sub2/l': '../alias/x' });
+  assert.deepEqual(checkHeadSymlinks({ git: gitIn(ok.dir), head: ok.head }), []);
 });
 
 test('N2 a failed git ls-tree voids with symlink-check-failed', () => {
@@ -1060,6 +1135,30 @@ test('F7 --heads with a missing folder is a usage error (exit 2) that prints no 
   assert.equal(code, 2);
   assert.match(c.text(), /usage/);
   assert.equal(c.text().includes('no-such-head-folder'), false);
+});
+
+test('F7b --summary --runs with a missing or unreadable runs file is an error (exit 2), not "void runs: 0"', () => {
+  // Breaks when: readLines is used for the runs file, so a missing file reads as no runs and the summary exits 0.
+  const dir = tmpDir();
+  for (const bad of [path.join(dir, 'no-such-runs-file.jsonl'), dir]) {
+    const c = io();
+    let code;
+    assert.doesNotThrow(() => { code = main(['--summary', '--runs', bad, '--state', path.join(dir, 'state.jsonl')], c); });
+    assert.equal(code, 2);
+    assert.equal(/void runs: 0/.test(c.text()), false);
+    assert.equal(c.text().includes('no-such-runs-file'), false);
+    assert.equal(/\n\s+at /.test(c.text()), false);
+  }
+});
+
+test('F7c a missing state file is still allowed: the runs are unaudited (exit 1), not an error', () => {
+  // Breaks when: the runs-file check is also applied to the state file.
+  const dir = tmpDir();
+  const runs = path.join(dir, 'runs.jsonl');
+  writeFileSync(runs, `${JSON.stringify(row())}\n`);
+  const c = io();
+  assert.equal(main(['--summary', '--runs', runs, '--state', path.join(dir, 'no-state.jsonl')], c), 1);
+  assert.match(c.text(), /unaudited: 1/);
 });
 
 // ---- seat answer 3: D brace patterns, event types, F stream gaps, E a failed state write, symlinkCheck ----

@@ -325,11 +325,35 @@ export function auditFile(file, opts = {}) {
 const FAILED = { rule: 'symlink-check-failed', tool: null, field: 'git', callId: null, answerKey: false };
 const SYMLINK = { rule: 'symlink', tool: null, field: 'tree-entry', callId: null, answerKey: false };
 
-function escapesTree(name, target) {
-  const t = target.replace(/\\/g, '/');
-  if (PREFIX.test(t) || DRIVE_REL.test(t) || parseRoot(t) !== null) return true;
-  const joined = path.posix.normalize(path.posix.join(path.posix.dirname(name), t));
-  return joined === '..' || joined.startsWith('../');
+/** The most links one walk may follow. A longer chain, or a loop, voids. */
+const MAX_LINK_STEPS = 40;
+
+const isAbsoluteTarget = (t) => PREFIX.test(t) || DRIVE_REL.test(t) || parseRoot(t) !== null;
+
+/**
+ * Does a link leave the tree? The target is walked one segment at a time from the folder of the link, as a real lookup does.
+ * When a path prefix is itself a link of the head (links: Map name -> target), its target replaces it, resolved from that link's folder, before the next segment.
+ * Voids on: an absolute target at any step, a `..` above the root, more than MAX_LINK_STEPS links followed.
+ */
+function escapesTree(name, target, links) {
+  const here = name.split('/').slice(0, -1);
+  const rest = target.replace(/\\/g, '/').split('/');
+  if (isAbsoluteTarget(rest.join('/'))) return true;
+  let steps = 0;
+  while (rest.length > 0) {
+    const seg = rest.shift();
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (here.length === 0) return true; here.pop(); continue; }
+    here.push(seg);
+    const via = links.get(here.join('/'));
+    if (via === undefined) continue;
+    steps += 1;
+    const next = via.replace(/\\/g, '/');
+    if (steps > MAX_LINK_STEPS || isAbsoluteTarget(next)) return true;
+    here.pop();
+    rest.unshift(...next.split('/'));
+  }
+  return false;
 }
 
 /**
@@ -343,6 +367,7 @@ export function readHeadCommit({ git, head }) {
   if (ls.status !== 0) return { ran: true, tracked: null, rules: [FAILED] };
   const rules = [];
   const tracked = new Set();
+  const links = new Map(); // name -> target of every mode 120000 entry the head holds
   for (const entry of String(ls.stdout ?? '').split('\0')) {
     const m = /^(\d+) \w+ ([0-9a-f]+)\t([\s\S]+)$/.exec(entry);
     if (!m) continue;
@@ -350,8 +375,9 @@ export function readHeadCommit({ git, head }) {
     if (m[1] !== '120000') continue;
     const blob = git(['cat-file', 'blob', m[2]]);
     if (blob.status !== 0) rules.push(FAILED);
-    else if (escapesTree(m[3], String(blob.stdout ?? ''))) rules.push(SYMLINK);
+    else links.set(m[3], String(blob.stdout ?? ''));
   }
+  for (const [name, target] of links) if (escapesTree(name, target, links)) rules.push(SYMLINK);
   return { ran: true, tracked, rules };
 }
 
@@ -370,7 +396,11 @@ export function appendLine(file, line) {
 
 /** Every readable line of a JSONL file. A missing file gives []; a damaged line is skipped. */
 export function readLines(file) {
-  if (!existsSync(file)) return [];
+  return existsSync(file) ? readRequiredLines(file) : [];
+}
+
+/** Every readable line of a JSONL file that must exist. A missing or unreadable file throws; a damaged line is skipped. */
+function readRequiredLines(file) {
   const out = [];
   for (const l of readFileSync(file, 'utf8').split('\n')) {
     if (l.trim() === '') continue;
@@ -477,7 +507,10 @@ function summaryMode(a, io) {
   let heads;
   try { heads = a.heads.map(readHead); } catch { io.err(`a head folder cannot be read
 ${USAGE}`); return 2; } // the error text holds the folder path: never print it
-  const s = summarize({ runs: a.runs ? readLines(a.runs) : [], lines, heads });
+  let runs = [];
+  try { if (a.runs) runs = readRequiredLines(a.runs); } catch { io.err(`the runs file is missing or cannot be read
+${USAGE}`); return 2; } // a missing runs file is not "0 void": the batch was not read. The error text holds the path: never print it
+  const s = summarize({ runs, lines, heads });
   io.out(`void runs: ${s.voids.length}\n`);
   for (const v of s.voids) io.out(`VOID ${v}\n`);
   for (const k of s.replaced) io.out(`REPLACED ${k}\n`);
