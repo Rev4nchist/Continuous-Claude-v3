@@ -99,15 +99,15 @@ For a lane that owns `scripts/github/land-pr.ps1`, each subagent prompt also hol
 |---|---|
 | The dependency gate T2.1: `claim` refuses a lane with an open dependency | built: PRs #484 (schema), #486 (CLI), #488 (page and docs) |
 | `lane.mjs done --merged <sha>` and `done --no-pr --evidence <file>`: the done forms that meet a dependency | built, PR #486 |
-| T2.3 (owner check on `state`) and T2.4 (the `park` verb): one PR, the fourth, after T2.1 and before wave 1 (Dave, 2026-11-10) | not built (card `coord-park-owner`) |
+| T2.3 (the owner rule: `state`, `release`, `done`, `note` and `add` refuse a lane that another session holds) and T2.4 (the `park` verb and `release <id> --blocked`): one PR, after T2.1 and before wave 1 (Dave, 2026-11-10) | built, PR #490 |
 | `scripts/review-engine/program.mjs`: the verbs `check`, `ready`, `seed-file`, `sync-board`, `status` | built: every verb, PRs #485 and #487 |
 | The on-demand rule `.claude/rules-ondemand/review-engine.md` | built, PR #485 |
-| The seed: the cards and the edges that come from `map.md` | not run yet |
+| The seed: the cards and the edges that come from `map.md` | run on 2026-11-11: 61 lanes, 152 edges; `program.mjs check --board` passes |
 
 - A claim on a `blocked` card is refused: exit 4, or exit 3 when a live session holds the lane.
-  `state` has no owner check until T2.3, so a session can still move a card out of `blocked`. The HOLD rule stays a guard.
-- Until the seed, the lane board shows the old cards, and every `re-` card is `blocked`.
+  `state` on a lane that another session holds is refused: exit 4, `[not-holder]`. An unowned `blocked` card, or a card whose holder is quiet (the lease ended and the session is not live), needs `--reason "<why>"`. So any session can still move an unowned card out of `blocked` with a reason. The HOLD rule stays a guard.
+- The seed ran on 2026-11-11. Of the 61 seeded lanes, 35 are in `backlog` and 26 are `blocked`.
 - After the seed, a wave 0 lane stays `blocked` until GO. A held lane stays `blocked` until its hold ends.
   A lane with open dependencies sits in `backlog`, where the dependency gate refuses a claim.
   (Reading of the map and plan section 3.3.)
-- Order to GO: this folder, T2.1 and `program.mjs` with the rule (all on `main`), the map PR with the holds, the seed, the cold-start tests, Dave's GO.
+- Order to GO: this folder, T2.1, T2.3 and T2.4, `program.mjs` with the rule, the map PR with the holds and the seed (all done), then the cold-start tests and Dave's GO.

@@ -8888,37 +8888,85 @@ async function main5() {
   const out = await runLaneContext(await readStdin4());
   if (out !== null) process.stdout.write(JSON.stringify(out));
 }
-async function advanceWatermark(client, key, eventId) {
+var UNREAD_BOARD_SQL = `SELECT e.*, (SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id = $3::text) AS board_wm
+  FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`;
+async function readUnread(client, sql, params) {
+  const rows = (await client.query(sql, params)).rows;
+  return rows.map((r) => ({ ...r, id: Number(r.id), board_wm: r.board_wm == null ? null : Number(r.board_wm) }));
+}
+function pageUnread(unread, opts) {
+  const max = opts.max ?? MAX_EVENTS;
+  const dms = unread.filter((e) => e.to_session_id);
+  const bcs = unread.filter((e) => !e.to_session_id);
+  const skipped = opts.cold && !opts.noBoard ? Math.max(0, bcs.length - max) : 0;
+  const live = bcs.slice(skipped);
+  const shownDms = dms.slice(0, max);
+  const cutDms = dms.slice(max);
+  const shownBcs = cutDms.length ? [] : live.slice(0, max - shownDms.length);
+  const cutBcs = live.slice(shownBcs.length);
+  const onPage = /* @__PURE__ */ new Set([...shownDms, ...shownBcs]);
+  const rows = cursorRows(unread, shownDms, [cutDms[0], cutBcs[0]], opts);
+  return {
+    events: unread.filter((e) => onPage.has(e)),
+    cut: cutDms.length + cutBcs.length,
+    cutDm: cutDms.length,
+    skipped,
+    ...rows
+  };
+}
+function cursorRows(unread, shownDms, firstCut, opts) {
+  const lastDm = shownDms.length ? shownDms[shownDms.length - 1].id : null;
+  const cutIds = firstCut.filter((e) => e !== void 0).map((e) => e.id);
+  if (opts.noBoard) return { boardRow: null, sentinel: lastDm };
+  if (opts.cold && firstCut[0]) return { boardRow: null, sentinel: lastDm };
+  if (!unread.length) return { boardRow: null, sentinel: null };
+  const boardRow = cutIds.length ? Math.min(...cutIds) - 1 : unread[unread.length - 1].id;
+  return { boardRow, sentinel: lastDm !== null && lastDm > boardRow ? lastDm : null };
+}
+function cursorWrites(me, board, page) {
+  const rows = [];
+  if (board !== null && page.boardRow !== null) rows.push([wmKey(me, board), page.boardRow]);
+  if (page.sentinel !== null) rows.push([wmKey(me, ""), page.sentinel]);
+  return rows;
+}
+async function writeCursors(client, rows) {
+  if (!rows.length) return;
+  const values = rows.map((_, i) => `($${2 * i + 1},$${2 * i + 2},now())`).join(", ");
   await client.query(
-    `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at)
-     VALUES ($1,$2,now())
-     ON CONFLICT (session_id) DO UPDATE SET last_event_id=EXCLUDED.last_event_id, updated_at=now()`,
-    [key, eventId]
+    `INSERT INTO agentic_os.lane_watermark AS w (session_id, last_event_id, updated_at)
+     VALUES ${values}
+     ON CONFLICT (session_id) DO UPDATE
+       SET last_event_id = GREATEST(w.last_event_id, EXCLUDED.last_event_id), updated_at = now()`,
+    rows.flat()
   );
 }
-function unreadLines(unread, board) {
+function moreLine(page, withCmd) {
+  const direct = page.cutDm > 0 ? `, ${page.cutDm} direct to you` : "";
+  const cmd = withCmd ? `, or run: ${laneCliCmd()} inbox` : ".";
+  return `  (${page.cut} more unread${direct}. Later prompts show them, oldest first${cmd})`;
+}
+function unreadLines(page, board, withCmd) {
   const here = board ?? DEFAULT_BOARD;
-  const lines = [`## ${unread.length} lane update(s) since you last looked`];
-  for (const e of unread.slice(-MAX_EVENTS)) {
+  const lines = [`## ${page.events.length + page.cut} lane update(s) since you last looked`];
+  for (const e of page.events) {
     const from = who(e.session_id);
     const dm = e.to_session_id ? " (direct to you)" : "";
     const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : "";
     const lane = e.lane_id ? ` [${e.lane_id}]` : "";
     lines.push(`- ${from}${crossed} ${e.kind}${lane}${dm}: ${e.body || ""}`);
   }
-  if (unread.length > MAX_EVENTS) {
-    lines.push(`  (${unread.length - MAX_EVENTS} older suppressed \u2014 \`${laneCliCmd()} inbox --peek\` for all)`);
+  if (page.cut > 0) lines.push(moreLine(page, withCmd));
+  if (page.skipped > 0 && page.boardRow !== null) {
+    lines.push(`  (${page.skipped} older board events are not shown on your first look at this board.)`);
   }
   return lines;
 }
 async function directMessagesOnly(client, me, eventName) {
-  const dms = (await client.query(
-    `SELECT e.* FROM agentic_os.lane_event e WHERE ${DM_ONLY_SQL} ORDER BY e.id`,
-    [me]
-  )).rows;
+  const dms = await readUnread(client, `SELECT e.* FROM agentic_os.lane_event e WHERE ${DM_ONLY_SQL} ORDER BY e.id`, [me]);
   if (!dms.length) return {};
-  await advanceWatermark(client, wmKey(me, ""), dms[dms.length - 1].id);
-  return buildOutput(unreadLines(dms, null).join("\n"), eventName);
+  const page = pageUnread(dms, { cold: false, noBoard: true });
+  await writeCursors(client, cursorWrites(me, null, page));
+  return buildOutput(unreadLines(page, null, false).join("\n"), eventName);
 }
 async function runLaneContext(raw) {
   let payload = {};
@@ -8954,10 +9002,9 @@ async function runLaneContext(raw) {
     );
     const board = resolveBoardKey(me, payload.cwd || process.cwd());
     if (!board) return isHeadless() ? {} : await directMessagesOnly(client, me, eventName);
-    const unread = (await client.query(
-      `SELECT e.* FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`,
-      [me, board, wmKey(me, board)]
-    )).rows;
+    const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
+    const cold = unread.length > 0 && unread[0].board_wm === null;
+    const page = pageUnread(unread, { cold });
     const lines = [];
     if (isStart) {
       const mine = (await client.query(
@@ -9043,10 +9090,10 @@ async function runLaneContext(raw) {
     }
     if (unread.length) {
       if (lines.length) lines.push("");
-      lines.push(...unreadLines(unread, board));
+      lines.push(...unreadLines(page, board, !cold));
     }
     if (unread.length && lines.length) {
-      await advanceWatermark(client, wmKey(me, board), unread[unread.length - 1].id);
+      await writeCursors(client, cursorWrites(me, board, page));
     }
     return buildOutput(lines.join("\n"), eventName);
   } catch (err) {
