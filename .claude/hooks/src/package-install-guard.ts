@@ -2159,7 +2159,7 @@ async function main() {
   // The extra reading keeps only an install that no first reading found, so it can only add a verdict.
   if (mayRunUnderCmd(shell.tool) && /['"]/.test(command)) {
     const flat = (s: string) => s.replace(/['"]/g, '').replace(/\s+/g, ' ').trim();
-    const key = (p: { segment: string; cwd: string | null }) => `${flat(p.segment)} ${p.cwd ?? ''}`;
+    const key = (p: { segment: string; cwd: string | null }) => `${flat(p.segment)}\u0000${p.cwd ?? ''}`;
     const known = new Set(plans.map(key));
     const unquoted = command.replace(/['"]/g, ' ');
     for (const dialect of shell.dialects) {
