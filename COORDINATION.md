@@ -33,19 +33,36 @@ Details: `.claude/rules-ondemand/lane-board.md`.
 | `board` | every lane, grouped by track, with who holds what. A lane with an open dependency shows `waits on: <ids>`; `--json` has `waits_on` (a missing key means unknown) |
 | `next` | the highest-priority lane you may claim. It skips a lane with an open dependency |
 | `claim <id>` | **atomic** — one winner; a loser is told who won, by session id. A lane held by a live session exits 3, checked first. Then a done, blocked or open-dependency lane prints `REFUSED claim <id> [<token>] -- <text>` and exits 4. `--dep-override --reason "<text>"` skips the open-dependency refusal only |
-| `note <id> "..."` | update the status line the other session reads |
+| `note <id> "..."` | update the status line the other session reads. Refused (`[not-holder]`, exit 4) only when a live session other than you holds the lane |
+| `state <id> <to>` | set the state. Only the holder may: a lane that another live session holds gives `REFUSED state <id> [not-holder] -- ...`, exit 4. A lane with no holder opens for any session. A quiet holder or an unowned blocked lane needs `--reason "<why>"` (`[needs-reason]`). `--if-state <from>` writes only if the lane is in `<from>` (`[if-state]`). `--override --reason "<why>"` also changes a held lane |
+| `release <id>` | state `ready`, no owner. The holder, any session for a lane with no holder, or a session for a quiet holder's lane with `--reason` (else `[not-holder]`, exit 4). `release <id> --blocked --reason "<why>"` (holder only) goes to `blocked` with no owner in one statement: the long hold |
+| `park <id> [--for 2h..7d] --reason "<why>"` | the holder keeps the lane and the lease runs to the end time. `--until <time>` replaces `--for`. Default 24h, from 2h to 7 days. See "Owner check and park" |
 | `compact <id> "..."` | log a compaction as an event only; the status line stays (the PreCompact hook runs this) |
 | `say "..." [--to <sid>]` | message the branch, or one peer |
 | `inbox` | unread updates since you last looked |
-| `done <id>` | land it and release the lane. Only `--merged <sha>` or `--no-pr --evidence <path>` meets a dependency; a plain `done` meets none and prints a hint |
+| `done <id>` | land it and release the lane. The holder, or any session for a lane with no holder (a quiet holder needs `--reason`); else `[not-holder]`, exit 4; an unowned `blocked` lane needs `--reason` for a plain `done`. Only `--merged <sha>` or `--no-pr --evidence <path>` meets a dependency; a plain `done` meets none and prints a hint |
 | `seed <file>` | bulk add or update lanes from JSON. The object form `{ lanes, edges }` replaces the edges of its lanes in one transaction and refuses a cycle (`seed refused: cycle a -> b -> a`); the array form never touches the edges |
 | `peers` | who else is live right now |
 | `remind set\|list\|snooze\|ack\|clear` | timed reminders on lanes; due ones show at session start; `next` never offers them |
 | `remind tick` | the 5-minute `CCv3-Reminder-Tick` job: fires due reminders on every board, toasts P0/P1, and mirrors changed ones to the Notion To-Do Board (one headless `claude -p`, only when a row changed or the Done poll is due). The Notion sync is off until `remind sync on`, polls Done every 2 hours, and is capped at 12 runs a day. |
 | `export-dash-data.mjs` | the nightly `CCv3-Lane-Snapshot` job: runs the lane export at 23:55 local (Central) time, hidden, on battery too, no model. It writes the lane-dash files to `~/.claude/state/lane-dash` and adds one row per Chicago day to `snapshots.json`, so daily snapshots add up. The export has eight documents, including `flow.json` for the Fleet app. Then the wrapper runs `export-factory-data.mjs` (no database, four local files), which writes `factory.json` beside them: pre-PR, review, CodeRabbit and handoff counts. A failure of one never hides the other; exit 5 means only the factory failed. A run that starts after midnight (laptop asleep at 23:55) lands on the next day, and the missed day has no row. It reads the primary checkout's current branch; the log names it. A manual export running at 23:55 makes the nightly run exit 1. Log: `~/.claude/logs/lane-snapshot/<date>.log` (14 days kept). Limit 2 min in the wrapper, 5 min in the task. Code: `.claude/scripts/scheduled/scheduled-lane-snapshot.ps1`. |
 
+## Owner check and park
+
+`state`, `release`, `done`, `note` and `add` change a lane only for its holder. A lane that another live session holds gives `REFUSED <verb> <id> [not-holder] -- the lane is held by <label>`, exit 4, and writes nothing. A lane with no holder opens for any session. `park` is the holder's alone: it refuses a lane with no holder (`claim` it first). The rule prevents accidents, not malice.
+
+- **`--reason`:** a lane whose holder is quiet (the lease ended) needs `--reason "<why>"`, and so does an unowned `blocked` lane (`[needs-reason]`). A plain `done` on an unowned `blocked` lane needs it too. `done --merged` and `done --no-pr --evidence` need it only for a quiet holder. The change goes to the board as one event.
+- **`--override --reason "<why>"`:** also changes a held lane. The old holder gets a DM and the board gets one event. A usage error without `--reason`. In the program only the seat uses it.
+- **`state <id> <to> --if-state <from>`:** writes only if the lane is in `<from>`, else `[if-state]`. Only these flag and verb pairs are a usage error (exit 1, nothing written); other foreign flags pass with no effect: `--if-state` on `release`, `done` and `park`; `--blocked` on `state` and `done`; `--override` on `note`, `add`, `park` and `claim`.
+- **`release <id> --blocked --reason "<why>"`:** holder only. One statement sets state `blocked`, no owner, no lease and the note. Use it for a hold of more than 7 days and for a seat handoff. A later `claim` gets `[blocked]`.
+- **`park`:** holder only. Default `--for 24h`; the end must be from 2 hours to 7 days away (else exit 1). The lane keeps its owner and the lease runs to the end. State becomes `review`; a `blocked` lane stays `blocked`. The note starts `PARKED until <time> -- <reason> || <old note>`. A lane in state `review` with a `PARKED` note is a park, not a review request. The lease, not the note, is the park: a changed note hides the prefix, and the lane stays parked while the lease is ahead. `board` shows `parked to <time>` only while the lease is more than the normal lease (90 minutes, plus 1) ahead; the note plays no part, and its `PARKED` text still prints under the lane. A `claim` of a reclaimable lane cuts the `PARKED` prefix from the note. `renew`, `note`, `compact` and the hook keep the later lease. Another session's `claim` exits 3 and, if you may adopt the holder, names `adopt --from <uuid>`. Never park the master card of a program: a seat handoff is `release --blocked`.
+- **End of a park:** the holder's next `state` (`state <id> active` resumes), `release` or `done`; a new `park` (the new end); the end time (the next renew gives 90 minutes); a non-holder `state <id> <to> --override --reason "<why>"` (it cuts the lease to 90 minutes and drops the `PARKED` prefix; the owner stays until the lease and the quiet time end); `release --override` or `done --override` (the lane is free).
+- **Handover of a parked lane whose owner is gone:** `release <id> --override --reason "handover to <label>"; claim <id>`, in ONE command.
+- **Hook sync:** `park` warns when `~/.claude/hooks/dist/lane-context.mjs` or `~/.claude/hooks/dist/prompt-submit.mjs` lacks `GREATEST(lease_expires_at`, and names the one that lacks it. The old hook cuts a park back to 90 minutes.
+- **No owner test:** `apply-kanban` (Dave's taps; its planner skips a held lane), `reminder-sync.mjs` (closes reclaimable reminder lanes), `seed`, `--as` and `remind`.
+
 You do not have to remember to run these. The `lane-context` hook injects the board at
-session start and any unread updates on every prompt, and renews your leases while you work.
+session start and any unread updates on every prompt, and renews your leases while you work. A renew never shortens a park.
 
 ## Band and rank
 
@@ -82,7 +99,7 @@ A kanban drag, Do next and Move to change rank only. By band keeps band first, s
 | Schema + the full design rationale | `apps/agentic-os/src/db/schema/lane.ts` |
 | CLI | `C:/Users/dkhay/continuous-claude/scripts/coordination/lane.mjs`, called through the shim `~/.claude/scripts/lane.mjs` |
 | Context-injection hook | `.claude/hooks/src/lane-context.ts` |
-| Correctness gate (10 properties) | `scripts/coordination/lane-race-probe.mjs` |
+| Correctness gate (34 properties) | `scripts/coordination/lane-race-probe.mjs` |
 | Board renderer | `scripts/coordination/render-board.mjs` |
 | Published board | generated artifact `RtrTNVfAq9uowmb2tfbzid` (`https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`) |
 
@@ -116,7 +133,7 @@ Before trusting the claim path after any change to it:
 node scripts/coordination/lane-race-probe.mjs --racers 24
 ```
 
-24 real concurrent processes race one lane. It checks both reclaim negatives — a live
+24 real concurrent processes race one lane. It also checks the owner rule, `park`, `release --blocked` and the plain `done` race. It checks both reclaim negatives — a live
 holder with a lapsed lease must still be denied, and a lease alone must still protect a
 claim — because reclaiming on either condition alone is the bug that made the file lock
 steal files from sessions that were merely mid-turn.
