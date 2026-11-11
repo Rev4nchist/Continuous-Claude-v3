@@ -92,10 +92,11 @@ cost more than 30 minutes, or happened twice. Name the new lessons under Finding
 
 Run `node C:/Users/dkhay/.claude/scripts/lane.mjs mine`. For each lane you keep, write its note again with the
 next step. Then make "Take the lane first" the first section of the handoff. It gives the lane id and board,
-this session's id and `node C:/Users/dkhay/.claude/scripts/lane.mjs adopt --from <this session id>`. Keep the
-lane. The same session resumed keeps the lane and its address. A fresh session needs this session's name
-(`/rename`) before `adopt`. If `adopt` is refused: do not claim, ask Dave. Rule L2.13 in
-`docs/coordination/standard.md`.
+this session's name and id, the line `/rename <this session's name>` and
+`node C:/Users/dkhay/.claude/scripts/lane.mjs adopt --from <this session id>`. Keep the lane. The same session
+resumed keeps the lane and its address. A fresh session runs the `/rename` line first: `adopt` needs the old
+session's chosen name. If this session has only an automatic name (an animal word), ask Dave to `/rename` it
+before the handoff. If `adopt` is refused: do not claim, ask Dave. Rule L2.13 in `docs/coordination/standard.md`.
 
 ### 1. Filepath & Metadata (local YAML copy)
 Use the following information to understand how to create your document:
