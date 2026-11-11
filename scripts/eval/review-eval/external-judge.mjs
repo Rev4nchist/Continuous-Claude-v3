@@ -3,13 +3,15 @@
 // - Reuses judgePair from judge.mjs and runClaude from scripts/lib/headless.mjs (key strip, shared 30/day Chicago cap).
 // - Headless session id is "review-external", purpose "external-judge". It never consumes the P0 eval budget (session "review-eval").
 // - Own ledger .claude/cache/hf-datasets/external-judge-ledger.jsonl: at most --daily-share (default 10) judge calls per Chicago day.
-// - Resumable: a pair with a judged end row in the ledger is skipped, on this day or a later one.
+// - Resumable: a pair with a judged end row in the ledger is skipped, on this day or a later one. Only when the end row's candidateSource is the one the pair has now: an old row judged on another prompt (source all, or none recorded) is judged again.
+// - Pairs with no candidate action leave the sample before the shuffle. A sample drawn before that change is not comparable with a new one for the same seed.
 // - --dry-run reads rows and the ledger, prints the plan and prompts, makes 0 headless calls and writes nothing.
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chicagoDay, runClaude } from '../../lib/headless.mjs';
+import { cohenKappa } from './agreement.mjs';
 import { judgePair, judgePrompt } from './judge.mjs';
 import { assertPinned, datasetDirName, DEFAULT_ROOT, PullRefusal } from './external-pull.mjs';
 
@@ -42,25 +44,51 @@ export function toFinding(x) {
 
 function findAction(actions, wanted) {
   if (!Array.isArray(actions) || !present(wanted)) return null;
-  const hit = actions.find((a) => a && typeof a === 'object' && [a.action_id, a.id, a.actionId].some((k) => present(k) && String(k) === String(wanted)));
-  if (hit) return hit;
-  const idx = Number(wanted);
-  return Number.isInteger(idx) && idx >= 0 && idx < actions.length ? actions[idx] : null;
+  // By id only. A wanted id that matches no action is not a list position: a wrong action would skew the agreement.
+  return actions.find((a) => a && typeof a === 'object' && [a.action_id, a.id, a.actionId].some((k) => present(k) && String(k) === String(wanted))) ?? null;
+}
+
+const words = (s) => new Set(String(s ?? '').toLowerCase().match(/[a-z0-9_]{3,}/g) ?? []);
+const findingText = (f) => `${f.title} ${f.body}`;
+
+/**
+ * One action of the list for a no row with no old-judge match. It never reads the label. The action with the most distinct words
+ * (3 characters or more) in common with the finding text wins, so the negative is a hard case, not a random one. Between equal
+ * actions task_id decides: sha256 of task_id as an integer, modulo their count, in list order. null for an empty list.
+ */
+export function pickAction(taskId, actions, text = '') {
+  if (!Array.isArray(actions) || actions.length === 0) return null;
+  const want = words(text);
+  const scores = actions.map((a) => { let n = 0; for (const w of words(findingText(toFinding(a)))) if (want.has(w)) n += 1; return n; });
+  const best = Math.max(...scores);
+  const top = actions.filter((_, i) => scores[i] === best);
+  const idx = Number(BigInt(`0x${createHash('sha256').update(String(taskId)).digest('hex')}`) % BigInt(top.length));
+  return top[idx];
 }
 
 /**
- * The human label and the judge pair for one row. cr = the bot suggestion. eng = the developer action the human matched,
- * else the one the LLM judge matched, else all actions. candidateSource records which. Uncertain rows have human = null.
+ * The human label and the judge pair for one row. cr = the bot suggestion. eng = ONE developer action for every row, so the prompt
+ * shape does not show the label. yes: the action the human matched. no: the action the old judge matched, else one picked by
+ * pickAction. candidateSource is human, judge, picked or none. none (no action to show) has pair null and is left out of the sample.
+ * Uncertain rows have human = null and source none.
  */
 export function rowToPair(row) {
   const d = String(row.human_match_decision ?? '').trim().toLowerCase();
   const human = d === 'yes' ? 'yes' : d === 'no' ? 'no' : null;
   const actions = parseMaybe(row.developer_actions);
-  let candidateSource = 'human';
-  let action = findAction(actions, row.human_matched_action_id);
-  if (!action) { candidateSource = 'judge'; action = findAction(actions, row.judge_matched_action_id); }
-  const eng = action ? toFinding(action) : (candidateSource = 'all', { title: 'all developer actions', body: text(actions), severity: '' });
-  return { pairId: String(row.task_id), human, candidateSource, pair: { cr: toFinding(row.bot_suggestion), eng, hunk: '' } };
+  const pairId = String(row.task_id);
+  let action = null;
+  let candidateSource = 'none';
+  if (human === 'yes') {
+    action = findAction(actions, row.human_matched_action_id);
+    if (action) candidateSource = 'human';
+  } else if (human === 'no') {
+    action = findAction(actions, row.judge_matched_action_id);
+    if (action) candidateSource = 'judge';
+    else { action = pickAction(pairId, actions, findingText(toFinding(row.bot_suggestion))); if (action) candidateSource = 'picked'; }
+  }
+  const pair = action ? { cr: toFinding(row.bot_suggestion), eng: toFinding(action), hunk: '' } : null;
+  return { pairId, human, candidateSource, pair };
 }
 
 // ---- sample, interval ----------------------------------------------------------------------------------------------
@@ -123,12 +151,32 @@ export function judgedMap(rows, dataset) {
   return m;
 }
 
+const kappaOf = (records) => { const k = cohenKappa(records.map((r) => [r.human, r.judge])); return Number.isFinite(k) ? k : null; };
+
+/**
+ * n, agree, agreement, ci95, kappa (human against judge on sameIssue; null when undefined), bySource {n, agree, agreement} and hard
+ * {n, agree, agreement, kappa}: the same numbers over the records whose source is not picked (picked negatives are built cases).
+ * No kappa per source: a source holds one human label (human = yes, judge and picked = no), so its kappa is 0 or undefined.
+ */
 export function summarize(records, extra = {}) {
   const n = records.length;
   const agree = records.filter((r) => r.agree).length;
   const ci = wilson(agree, n);
-  return { n, agree, agreement: n ? agree / n : null, ci95: ci ? [ci.lo, ci.hi] : null, notMeasured: ['real'], ...extra };
+  const hardRecs = records.filter((r) => r.candidateSource !== 'picked');
+  const hardAgree = hardRecs.filter((r) => r.agree).length;
+  const hard = { n: hardRecs.length, agree: hardAgree, agreement: hardRecs.length ? hardAgree / hardRecs.length : null, kappa: kappaOf(hardRecs) };
+  const bySource = {};
+  for (const r of records) {
+    const g = (bySource[r.candidateSource ?? 'unknown'] ??= { n: 0, agree: 0, agreement: null });
+    g.n += 1;
+    if (r.agree) g.agree += 1;
+    g.agreement = g.agree / g.n;
+  }
+  return { n, agree, agreement: n ? agree / n : null, ci95: ci ? [ci.lo, ci.hi] : null, kappa: kappaOf(records), bySource, hard, notMeasured: ['real'], ...extra };
 }
+
+const fmt3 = (x) => (x === null || x === undefined ? 'undefined' : x.toFixed(3));
+const splitLine = (by) => `by source: ${Object.entries(by).map(([s, g]) => `${s} n=${g.n} agree ${g.agree} (${fmt3(g.agreement)})`).join('; ') || 'none'}. kappa by source: not defined (each source holds one human label).${by.picked ? ' Note: picked negatives are built cases, not human-paired cases (the action with the most words in common with the finding).' : ''}`;
 
 // ---- rows from disk ------------------------------------------------------------------------------------------------
 
@@ -171,17 +219,25 @@ export async function run(opts, deps = {}) {
     const rows = deps.rows ?? loadRows({ id, sha, file }, { root: deps.root });
     const dataset = `${id}@${sha}`;
     const all = rows.map(rowToPair);
-    const decisive = all.filter((p) => p.human);
-    const uncertain = all.length - decisive.length;
+    const labelled = all.filter((p) => p.human);
+    const decisive = labelled.filter((p) => p.candidateSource !== 'none');
+    const uncertain = all.length - labelled.length;
+    const noCandidate = labelled.length - decisive.length;
+    const noCandidateByLabel = { yes: 0, no: 0 };
+    for (const p of labelled) if (p.candidateSource === 'none') noCandidateByLabel[p.human] += 1;
     const byId = new Map(decisive.map((p) => [p.pairId, p]));
     const ids = sampleIds([...byId.keys()], sample, seed);
 
     const ledger = readOwnLedger(ledgerPath);
-    const judged = judgedMap(ledger, dataset);
+    // An end row counts only when it was judged on the candidate the pair has now.
+    const fresh = (m) => new Map([...m].filter(([i, r]) => byId.get(i)?.candidateSource === r.candidateSource));
+    const judgedAny = judgedMap(ledger, dataset);
+    const judged = fresh(judgedAny);
+    const staleRejudged = ids.filter((i) => judgedAny.has(i) && !judged.has(i)).length;
     const pending = ids.filter((i) => !judged.has(i));
     const used = usedToday(ledger, now());
     const allowed = Math.max(0, Math.min(dailyShare - used, pending.length));
-    stdout(`plan: dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}; sample ${ids.length} seed ${seed}; already judged ${ids.length - pending.length}, pending ${pending.length}; external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
+    stdout(`plan: dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}, no candidate ${noCandidate} (yes ${noCandidateByLabel.yes}, no ${noCandidateByLabel.no}); sample ${ids.length} seed ${seed}; already judged ${ids.length - pending.length}, pending ${pending.length}, stale ${staleRejudged} (judged on another prompt, judged again); external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
 
     if (dryRun) {
       for (const i of pending.slice(0, showPrompts)) stdout(`--- prompt for pair ${i} (human: ${byId.get(i).human}, candidate: ${byId.get(i).candidateSource}) ---\n${judgePrompt(byId.get(i).pair)}`);
@@ -208,20 +264,22 @@ export async function run(opts, deps = {}) {
       append(ledgerPath, { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, human: p.human, judge: res.sameIssue, confidence: res.confidence, candidateSource: p.candidateSource });
     }
 
-    const final = judgedMap(readOwnLedger(ledgerPath), dataset);
+    const final = fresh(judgedMap(readOwnLedger(ledgerPath), dataset));
     const records = ids.filter((i) => final.has(i)).map((i) => {
       const r = final.get(i);
       return { pairId: i, human: r.human, judge: r.judge, agree: r.human === r.judge, candidateSource: r.candidateSource, confidence: r.confidence ?? null };
     });
     const out = {
-      dataset, file, seed, sampleRequested: sample, sampleIds: ids, uncertainExcluded: uncertain, pendingAfterRun: ids.length - records.length,
+      dataset, file, seed, sampleRequested: sample, sampleIds: ids, uncertainExcluded: uncertain, noCandidate, noCandidateByLabel, staleRejudged, pendingAfterRun: ids.length - records.length,
       generatedAt: new Date(now()).toISOString(), pairs: records, summary: summarize(records),
     };
     mkdirSync(outDir, { recursive: true });
     const outPath = path.join(outDir, `${chicagoDay(now())}-hf-judge-precheck.json`);
     writeFileSync(outPath, `${JSON.stringify(out, null, 2)}\n`);
-    stdout(`external-judge: ${calls} judge calls this run; ${records.length}/${ids.length} judged; agreement ${out.summary.agree}/${out.summary.n}${stopped ? `; stopped: shared headless ${stopped}` : ''}`);
+    const s = out.summary;
     stdout(`wrote ${outPath}`);
+    stdout(splitLine(s.bySource));
+    stdout(`external-judge: ${calls} judge calls this run; ${records.length}/${ids.length} judged; n ${s.n}; agreement ${s.agree}/${s.n} (${fmt3(s.agreement)}); kappa: ${fmt3(s.kappa)}; hard (not picked): n ${s.hard.n}; agreement ${s.hard.agree}/${s.hard.n} (${fmt3(s.hard.agreement)}); kappa: ${fmt3(s.hard.kappa)}; real: not measured${stopped ? `; stopped: shared headless ${stopped}` : ''}`);
     return { code: stopped ? 2 : 0, calls, outPath, out };
   } catch (e) {
     if (e instanceof PullRefusal) { stderr(`external-judge refused: ${e.message}`); return { code: 2, reason: 'refused' }; }
