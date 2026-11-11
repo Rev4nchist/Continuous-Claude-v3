@@ -865,7 +865,7 @@ async def extract_incremental(
             else:
                 error = store_result.get("error", "Unknown error")
                 result["errors"].append(error)
-                if _is_connection_error(error):
+                if store_result.get("retryable") or _is_connection_error(error):
                     held_back.append(cand)
         except Exception as e:
             result["errors"].append(str(e))
