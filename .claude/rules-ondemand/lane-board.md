@@ -18,7 +18,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | L2.3 | `claim` refuses a lane that is `blocked`, `done` or has an open dependency. It exits 4 with `REFUSED claim <id> [blocked]`, `[done]` or `[open-dependency]`. A lane that another session holds and that is not reclaimable (L2.8) still gives exit 3 (L2.2). To reopen a `done` lane: `L state <id> ready`, then `L claim <id>`. | deny |
 | L2.4 | Do not claim a lane that `next` or the banner offers before you read its scope. Old lanes stay claimable. Both skip a lane with an open dependency. | advice |
 | L2.5 | Claim before your first edit. The claim declares your scope. | advice |
-| L2.6 | Scope text holds two parts: `OWNS: ...` and `NEVER: ...`. It can end with `RELATES TO: <lane ids>` (M4.12). Declare a wait as a dependency. The only writer is `L seed <file.json>` with an object `{"lanes": [...], "edges": [{"lane": "<id>", "dependsOn": "<id>"}]}`. It replaces every edge of each lane in `lanes`, and the title and the track of each lane (L2.1). No verb writes one edge. Also put `WAITS ON: <lane>` first in the scope text, not in the note. | advice; deny for a claim with an open dependency (L2.3) |
+| L2.6 | Scope text holds two parts: `OWNS: ...` and `NEVER: ...`. It can end with `RELATES TO: <lane ids>` (M4.12). Declare a wait as a dependency. The only writer is `L seed <file.json>` with an object `{"lanes": [...], "edges": [{"lane": "<id>", "dependsOn": "<id>"}]}`. It replaces every edge of each lane in `lanes`, and the title and the track of each lane (L2.1). No verb writes one edge. Also put `WAITS ON: <lane>` first in the scope text: a new note replaces the old note (M4.16). | advice; deny for a claim with an open dependency (L2.3) |
 | L2.7 | Note one status line at each phase: `L note <id> "..."`. The owner's note renews the lease. | advice |
 | L2.8 | A lane stays held while its lease is live or its holder is active. A reclaim needs both: a lease that ended (90 minutes after the last renew, or at the end time of a park, L2.9) and a holder quiet for 5 minutes. | deny |
 | L2.8a | The hook renews your leases at each prompt. Run `L renew` before a wait that can pass 90 minutes. For a wait of 2 hours or more, park the lane (L2.9). The hook and `L renew` never cut a park. After an idle time of more than 90 minutes, run `L mine` before your next edit. Before you claim a lane another session held, read its note and check its worktree for uncommitted work. | advice |
@@ -33,7 +33,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 
 | Id | Rule | Level |
 |---|---|---|
-| O3.1 | One writer per file set at a time. A file that two lanes name has one writer at a time. | advice; deny inside one checkout for a file that another live session holds |
+| O3.1 | One writer per file set at a time. A file that two lanes name has one writer at a time. | advice; deny on Edit and Write inside one checkout for a file that another live session holds (`file-claims` hook) |
 | O3.2 | The scope text lists the write set and the never-touch set. A program lane's overlap holds `ready`. | advice; deny (planned) for program lanes |
 | O3.3 | Before a pull request opens, run `git diff --name-only main...<branch>`. Compare it with the scope. Put the output in Evidence. | advice; warn (planned) |
 | O3.4 | A lane that changes tracked files works on its own branch. A new branch or a new worktree needs Dave's yes. For `re-` lanes after GO: one lane, one worktree, one branch `re/<lane-id>`, one pull request (one exception in the README: the one trial pack on the Pack line of `map.md`; Dave, 2026-11-10). | advice |
@@ -142,8 +142,8 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 
 ## Owner check and park
 
-- Held (lease runs, or holder active in last 5m): `state`, `release`, `done`, `note`, `add` give `[not-holder]`, exit 4. No holder: open; `park` refuses.
-- Quiet holder (lease ended, 5m idle) or unowned blocked lane: `state`, `release`, `done` need `--reason`; `note`, `add` do not. `--override --reason`: any held lane; no code test, seat by rule.
+- Held by another session (lease runs, or holder active in last 5m): `state`, `release`, `done`, `note`, `add` give `[not-holder]`, exit 4. The holder always passes this owner check. No holder: open; `park` refuses.
+- Quiet holder (lease ended, 5m idle) or unowned blocked lane: `state`, `release`, `done` need `--reason`; `note`, `add` do not. Exception: `done --merged` and `done --no-pr` on an unowned blocked lane need none. `--override --reason`: any held lane; no code test, seat by rule.
 - `state <id> <to> --if-state <from>`: write only from `<from>`; owner checks first. Exit 1 for `--if-state` on `release`, `done`, `park`; `--blocked` on `state`, `done`; `--override` on `note`, `add`, `park`, `claim`; a bare `--reason`, `--if-state`, `--merged`, `--evidence`. Other flags: no effect.
 - `release <id> --blocked --reason`: holder or `--override`; no owner.
 - `park <id> --for 2h..7d --reason`: holder only, default 24h. The lease is the park; `board` shows `parked to` only above 91m. Never park `re-program`.
