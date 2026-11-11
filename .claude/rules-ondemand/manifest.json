@@ -224,7 +224,8 @@
       "files": [
         "lane-board.md"
       ],
-      "mode": "inject",
+      "mode": "deny-first",
+      "subagent": "block",
       "segment": [
         "^node(\\.exe)?\\s+\\S*lane\\.mjs\\b"
       ],

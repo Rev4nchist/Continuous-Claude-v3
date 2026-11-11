@@ -23,7 +23,7 @@ message, a page design, a CMA job). The hook fires at the tool call, too late fo
 | `cross-terminal-db.md` | local Postgres (sessions, claims) | inject |
 | `headless-claude-mcp.md` | headless `claude -p` | inject |
 | `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP or its skill | inject |
-| `lane-board.md` | lane commands, `kanban-sync` | inject |
+| `lane-board.md` | lane commands, `kanban-sync` | block |
 | `review-engine.md` | claim of a `re-` lane, `force-high-security-tier` or `hf-judge-precheck` | block |
 | `fabric-playbook.md` | Microsoft Fabric, OneLake, Power BI | inject |
 | `proactive-delegation.md` | delegating to agents | inject |

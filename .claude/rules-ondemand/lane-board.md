@@ -1,5 +1,9 @@
 # Lane boards
 
+This rule stops your first lane command one time. Read it, then run the same command again.
+If you see only a preview of this text, read `C:/Users/dkhay/.claude/rules-ondemand/lane-board.md` in full with the Read tool first.
+Run every lane command as `node C:/Users/dkhay/.claude/scripts/lane.mjs <verb>`.
+
 A board is a set of lanes and events keyed by `project_key`. Every project with a registry entry can have one.
 Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-project-lanes-plan.md`.
 
