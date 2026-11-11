@@ -519,7 +519,7 @@ async def store_learning_v2(
 
     except Exception as e:
         record_write_failure("store_learning", e, session_id)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e) or type(e).__name__}
 
 
 # Mapping from legacy v1 bundle categories to v2 learning types.
