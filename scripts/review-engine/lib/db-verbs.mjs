@@ -71,7 +71,7 @@ function setup(ctx, verb) {
   const lint = checkTable(model);
   if (lint.errors.length) facts.notes.push(`the map has ${lint.errors.length} lint errors; run check --table`);
   const caller = flags.as || io.env.CLAUDE_CODE_SESSION_ID || null;
-  return { io, flags, map, model, facts, board: flags.project ?? DEFAULT_BOARD, caller };
+  return { io, flags, map, model, facts, board: flags.project ?? DEFAULT_BOARD, caller, lintErrors: lint.errors.length };
 }
 
 // The checked database URL (test mode: a scratch database only), then one snapshot reader for fn. The reader always ends.
@@ -161,6 +161,8 @@ function applyText(plan, { log, verify }) {
 export async function syncBoard(ctx) {
   const s = setup(ctx, 'sync-board');
   if (s.flags.apply && !s.caller) throw usageError('sync-board --apply needs CLAUDE_CODE_SESSION_ID or --as <session>');
+  // The one verb that writes does not trust a map that fails the lint. The read verbs answer with a NOTE.
+  if (s.flags.apply && s.lintErrors) throw new ExitError(1, `sync-board --apply: the map has ${s.lintErrors} lint errors; nothing written. Run check --table and fix the map first.`);
   const plan = await readPlan(s);
   if (plan.refusal) return refusalOut(s, 'sync-board', plan.refusal);
   if (plan.errors.length) return emit(s, 'sync-board', { code: 1, text: [...noteLines(s.facts), renderSync(plan), 'nothing written'], body: planBody(s, plan, false) });

@@ -955,6 +955,20 @@ test('L1 status and check --board on a map with a lint error: they answer, and a
   assert.match(board.out.join('\n'), /^FAIL no-card re-dummy-1 /m);
 });
 
+test('L1b sync-board on a map with a lint error: the dry run answers with a NOTE, --apply refuses with exit 1 and opens no connection', async () => {
+  const bad = join(tempDir('l1b'), 'lint.md');
+  writeFileSync(bad, readFileSync(R9, 'utf8').replace('| 1 | `re-dummy-3` | P3 | re-dummy-1 |', '| 1 | `re-dummy-3` | P3 | re-dummy-nope |'));
+  const argv = (extra) => ['sync-board', ...extra, '--test-mode', '--map', bad, '--repo', readOnly, '--as', 'zz-l1b'];
+  let opened = 0;
+  const io = fakeIo();
+  const open = io.open;
+  io.open = async (...a) => { opened += 1; return open(...a); };
+  const applied = await main(argv(['--apply']), HERE, io);
+  assert.equal(applied.code, 1, applied.out.join('\n'));
+  assert.match(applied.err.join('\n'), /sync-board --apply: the map has \d+ lint errors; nothing written/);
+  assert.equal(opened, 0, 'no database connection before the refusal');
+});
+
 test('L2 a map that does not parse (no Waves table) stops every board verb with exit 1 and no connection', async () => {
   const none = join(tempDir('l2'), 'none.md');
   writeFileSync(none, '# nothing here\n');

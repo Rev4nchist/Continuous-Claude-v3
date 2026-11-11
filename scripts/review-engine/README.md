@@ -52,7 +52,7 @@ One form only: the line starts with `Program state:` (an optional `- ` bullet be
 ## Board verbs: order of work and safety
 
 Every board verb does these steps in order, and a refusal stops it before the next step:
-1. Read the map (live mode: the self-check). A map with lint errors exits 1.
+1. Read the map (live mode: the self-check). A map that does not parse exits 1. A map with lint errors adds a NOTE and the read verbs go on; `sync-board --apply` refuses it with exit 1 and writes nothing.
 2. Usage checks: `ready` and `sync-board --apply` need a session id (exit 2). `ready` needs the Cursor eval slot bullet (exit 1).
 3. `dbTarget`: pick the database URL. In test mode it must name a scratch database (exit 3).
 4. One read-only snapshot (`REPEATABLE READ READ ONLY`). Migration 0006 (`lane_dep`) must be applied (exit 1 if not).

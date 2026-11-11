@@ -25,6 +25,7 @@ import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from '../coordination/scratch-db.mjs';
 import { laneEnv, makeBoards } from '../coordination/probe-boards.mjs';
 import { maskDbUrl } from './lib/db.mjs';
+import { isLinkedWorktree } from './lib/git.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -336,6 +337,12 @@ async function p14() {
   check('P14 test mode with the live database name: exit 3, no password in the text', t.code === 3 && !/claude_dev/.test(t.all), t.all.slice(0, 200));
   // Live mode on purpose: the self-check refuses before any connection, and every URL variable still holds the scratch URL,
   // so even a missing refusal could not reach the live database.
+  // Only a linked worktree gives this refusal for certain. In the primary checkout with files equal to main the
+  // self-check passes, so the live-mode run is skipped there.
+  if (!isLinkedWorktree(REPO)) {
+    log('SKIP  P14 live mode from a linked worktree: this is not a linked worktree');
+    return;
+  }
   const l = spawnSync(process.execPath, [PROGRAM, 'ready', '--as', 'zz-rp-me'], { cwd: REPO, encoding: 'utf8', env: childEnv('zz-rp-me') });
   record(`program.mjs ready --as zz-rp-me, live mode (exit ${l.status})`, `${l.stdout}\n${l.stderr}`);
   check('P14 live mode from a linked worktree: exit 3 by the self-check', l.status === 3 && /linked worktree|not the one on main/.test(l.stderr), (l.stderr ?? '').slice(0, 200));
