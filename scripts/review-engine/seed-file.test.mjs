@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseMap } from './lib/map-parse.mjs';
-import { seedItems, buildEdges, renderSeed } from './lib/seed.mjs';
+import { seedItems, buildEdges, renderSeed, assertProgramRule } from './lib/seed.mjs';
+import { rankOf } from './lib/rank.mjs';
 
 const FIXTURE = new URL('./fixtures/map.fixture.md', import.meta.url);
 const LF = readFileSync(FIXTURE, 'utf8').replace(/\r\n/g, '\n');
@@ -76,7 +77,11 @@ test('S5d a section with no subtitle falls back to the id for the title', () => 
   assert.equal(seedItems(bare, CTX)[0].title, 'fx-base');
 });
 
-test("S7 today's format (array); flips to object in part 2", () => {
+test('S7 the default shape is the object form; the array form stays available', () => {
+  const dflt = JSON.parse(renderSeed(items, buildEdges(model)));
+  assert.equal(Array.isArray(dflt), false);
+  assert.deepEqual(Object.keys(dflt).sort(), ['edges', 'lanes']);
+  assert.equal(dflt.edges.length, 7);
   const text = renderSeed(items, buildEdges(model), 'array');
   assert.equal(typeof text, 'string');
   assert.equal(text.endsWith('\n'), true);
@@ -144,4 +149,66 @@ test('T2 a map read from a file has no sha: no "undefined", no path in the outpu
 test('T3 project defaults to continuous-claude and follows ctx.project', () => {
   assert.equal(seedItems(model, { sha: SHA })[0].project, 'continuous-claude');
   assert.equal(seedItems(model, { sha: SHA, project: 'other' })[0].project, 'other');
+});
+
+// ---- part 2: pack branch, rank, program rule
+
+const PACKED = parseMap(LF.replace('## Dropped or merged lanes', 'Pack: fx-gate-a, fx-gate-b (branch re/fx-gate-a)\n\n## Dropped or merged lanes'));
+
+test('S11 both lanes of a pack get the pack branch; every other lane keeps re/<id>', () => {
+  const list = seedItems(PACKED, CTX);
+  assert.equal(item('fx-gate-a', list).branch, 're/fx-gate-a');
+  assert.equal(item('fx-gate-b', list).branch, 're/fx-gate-a');
+  assert.equal(item('fx-base', list).branch, 're/fx-base');
+  assert.equal(item('fx-gate-b').branch, 're/fx-gate-b', 'the same map with no Pack line');
+});
+
+test('S4b no item has a band key, also with a rank', () => {
+  const rank = { 'fx-base': 5, 'fx-top': 900 };
+  for (const it of fromFile(seedItems(model, { ...CTX, rank }))) assert.equal('band' in it, false, it.id);
+});
+
+test('S4c no priority key without a rank; a rank writes priority for the ranked ids only', () => {
+  for (const it of fromFile(seedItems(model, CTX))) assert.equal('priority' in it, false, it.id);
+  const ranked = fromFile(seedItems(model, { ...CTX, rank: { 'fx-base': 5, 'fx-top': 900 } }));
+  assert.equal(ranked.find((i) => i.id === 'fx-base').priority, 5);
+  assert.equal(ranked.find((i) => i.id === 'fx-top').priority, 900);
+  for (const it of ranked.filter((i) => !['fx-base', 'fx-top'].includes(i.id))) assert.equal('priority' in it, false, it.id);
+});
+
+test('R2 a packages.json rank gives priority 10 + position, externals counted but not written', () => {
+  const pkg = {
+    packageOrder: { ids: ['p1', 'p2'] },
+    packages: [{ id: 'p1', lanes: ['fx-base', 'fx-keys'] }, { id: 'p2', lanes: ['fx-mid', 'fx-ext'] }],
+  };
+  const { rank, errors, notes } = rankOf(pkg, model);
+  assert.deepEqual(errors, []);
+  assert.equal(notes.some((n) => n.includes('fx-ext')), true);
+  const list = fromFile(seedItems(model, { ...CTX, rank }));
+  assert.deepEqual(list.filter((i) => 'priority' in i).map((i) => [i.id, i.priority]), [['fx-base', 10], ['fx-keys', 11], ['fx-mid', 12]]);
+  assert.equal(list.some((i) => i.id === 'fx-ext'), false);
+});
+
+test('R3 a rank for an unknown lane is an error from rankOf, and seedItems never invents an item for it', () => {
+  assert.match(rankOf({ 'fx-nope': 5 }, model).errors[0], /fx-nope.*not a map lane/);
+  const list = seedItems(model, { ...CTX, rank: { 'fx-nope': 5, 'fx-ext': 6 } });
+  assert.equal(list.length, 7);
+  assert.equal(list.some((i) => 'priority' in i), false);
+});
+
+test('S2b the program rule assert fires on a hand-edited item', () => {
+  assert.doesNotThrow(() => assertProgramRule(items));
+  const bad = (over) => assert.throws(() => assertProgramRule([{ ...items[0], ...over }]), /program rule/);
+  bad({ state: 'backlog' });
+  bad({ state: undefined });
+  bad({ track: 'unsorted' });
+  bad({ band: 'P0' });
+  bad({ priority: 0 });
+  bad({ priority: 1000 });
+  bad({ priority: 2.5 });
+  assert.doesNotThrow(() => assertProgramRule([{ ...items[0], priority: 999 }]));
+});
+
+test('S2c seedItems runs the assert itself: a rank that is not a whole number in range stops the build', () => {
+  assert.throws(() => seedItems(model, { ...CTX, rank: { 'fx-base': 5000 } }), /program rule/);
 });

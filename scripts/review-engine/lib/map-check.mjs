@@ -1,18 +1,16 @@
 // Lint rules for a parsed review-engine map. Pure: a model in, findings out. No I/O.
 // A finding is { rule, lane, line, message }. Errors fail the check; notes do not.
 // examined counts what each rule group looked at, so a pass over zero items shows.
-import { entriesOverlap, ownsMatch } from './owns.mjs';
+import { entriesOverlap, ownsMatch, bothKeyScoped } from './owns.mjs';
 import { parseDeps } from './map-parse.mjs';
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const CHANGES = ['new', 'changed', 'unchanged', 'deferred'];
 const REQUIRED = ['Depends on', 'Unblocks', 'Related', 'Owns', 'Do not touch', 'Cost', 'Needs Dave', 'Scope', 'Done when', 'Why'];
 // GROUPS: a zero count means the rule saw nothing, so it adds a 'vacuous' note. COUNTERS also count chainUnparsed,
-// where zero is the good state.
+// where zero is the good state (a map with no pack has packs 0).
 const GROUPS = ['ownerChains', 'ownerPhrases', 'overlapPairs', 'deps', 'heldTokens', 'sections', 'rows', 'dropped'];
-const COUNTERS = [...GROUPS, 'chainUnparsed'];
-// Two Owns entries on one path may skip the dependency-path rule only when both scopes name keys.
-const KEY_SCOPE = /\bkeys? only\b/;
+const COUNTERS = [...GROUPS, 'chainUnparsed', 'packs'];
 
 const finding = (rule, lane, line, message) => ({ rule, lane, line, message });
 const listText = (deps) => (deps.length ? deps.join(', ') : 'none');
@@ -94,7 +92,7 @@ function checkDeps(ctx, out) {
   }
 }
 
-const HELD_FORMS = "is not a decision id, a lane id, '<lane> if <DP> = <answer>', first-flip, dave-yes or item-trigger";
+const HELD_FORMS = "is not a decision id, a lane id, '<lane> if <DP> = <answer>', first-flip, dave-yes, item-trigger or seat-hold";
 
 // Rule group: Held until.
 function checkHeld(ctx, out) {
@@ -157,7 +155,7 @@ function judgeOverlap(ctx, out, a, b, x, y) {
   if (ctx.reach(a.id).has(b.id) || ctx.reach(b.id).has(a.id)) return;
   const path = (x.kind === 'file' ? x : y).path;
   const line = a.section?.line ?? null;
-  if (KEY_SCOPE.test(x.scope ?? '') && KEY_SCOPE.test(y.scope ?? '')) {
+  if (bothKeyScoped(x, y)) {
     const msg = `file '${path}': '${a.id}' [${x.scope}] and '${b.id}' [${y.scope}] overlap, scoped to named keys, no dependency path`;
     out.notes.push(finding('owns-exempt', a.id, line, msg));
     return;
@@ -238,6 +236,46 @@ function proseNotes(ctx, out) {
   }
 }
 
+// Rule group: packs (amendment A6). A pack is lanes that share one branch and count as one cap unit.
+function checkPackBranch(pack, out) {
+  if (pack.lanes.some((id) => pack.branch === `re/${id}`)) return;
+  out.errors.push(finding('pack-branch', pack.lanes[0], pack.line,
+    `Pack line ${pack.line}: branch '${pack.branch}' is not re/<one of its lanes> (${pack.lanes.join(', ')})`));
+}
+
+function checkPackDeps(ctx, pack, out) {
+  const inRows = pack.lanes.filter((id) => ctx.rows.has(id));
+  for (let i = 0; i < inRows.length; i++) {
+    for (const b of inRows.slice(i + 1)) {
+      if (!ctx.reach(inRows[i]).has(b) && !ctx.reach(b).has(inRows[i])) continue;
+      out.errors.push(finding('pack-dep', inRows[i], pack.line,
+        `Pack line ${pack.line}: '${inRows[i]}' and '${b}' have a dependency path, so they cannot share one worktree`));
+    }
+  }
+}
+
+function checkPackLanes(ctx, pack, seen, out) {
+  for (const id of pack.lanes) {
+    if (!ctx.rows.has(id)) {
+      out.errors.push(finding('pack-lane', id, pack.line, `Pack line ${pack.line}: '${id}' is not a Waves lane`));
+    }
+    if (seen.has(id)) {
+      out.errors.push(finding('pack-dup', id, pack.line, `Pack line ${pack.line}: '${id}' is already in the pack of line ${seen.get(id)}`));
+    }
+    seen.set(id, seen.get(id) ?? pack.line);
+  }
+}
+
+function checkPacks(ctx, out) {
+  const seen = new Map();
+  for (const pack of ctx.model.packs ?? []) {
+    ctx.examined.packs++;
+    checkPackLanes(ctx, pack, seen, out);
+    checkPackDeps(ctx, pack, out);
+    checkPackBranch(pack, out);
+  }
+}
+
 function vacuousNotes(ctx, out) {
   for (const g of GROUPS.filter((name) => ctx.examined[name] === 0)) {
     out.notes.push(finding('vacuous', null, null, `vacuous: ${g} examined 0 items`));
@@ -248,7 +286,7 @@ export function checkTable(model) {
   const out = { errors: [...model.errors], notes: [] };
   const ctx = buildCtx(model);
   if (model.errors.some((e) => e.rule === 'waves-missing')) return { ...out, examined: ctx.examined };
-  for (const group of [checkRows, checkDeps, checkHeld, checkSections, checkDropped, checkOverlaps, checkOwnerChains, noteUnparsedChains, checkOwnerPhrases, checkOwnsTokens, proseNotes]) {
+  for (const group of [checkRows, checkDeps, checkHeld, checkSections, checkDropped, checkOverlaps, checkOwnerChains, noteUnparsedChains, checkOwnerPhrases, checkOwnsTokens, checkPacks, proseNotes]) {
     group(ctx, out);
   }
   vacuousNotes(ctx, out);

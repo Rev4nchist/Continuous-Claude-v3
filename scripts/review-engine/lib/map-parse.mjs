@@ -2,6 +2,7 @@
 // It keeps raw cells and every row. The checks (map-check.mjs) judge them.
 // Parse-level findings go to model.errors as { rule, lane, line, message }.
 import { kindOf } from './owns.mjs';
+import { scanPacks } from './pack.mjs';
 
 const WAVES_HEADER = '| Wave | Lane | Phase | Depends on | Needs Dave | Change | Held until |';
 const SECTION = /^### (\S+)$/;
@@ -21,7 +22,8 @@ const backtickIds = (text) => [...text.matchAll(/`([a-z0-9][a-z0-9-]*)`/g)].map(
 
 const DECISION = /^DP\d+(\.\d+)*$/;
 const CONDITIONAL = /^([a-z0-9][a-z0-9-]*) if (DP\d+(?:\.\d+)*) = (\S+)$/;
-const KEYWORDS = ['first-flip', 'dave-yes', 'item-trigger'];
+// seat-hold (amendment A8): always held. Only the seat ends it, by deleting it from the map.
+const KEYWORDS = ['first-flip', 'dave-yes', 'item-trigger', 'seat-hold'];
 
 function heldToken(text) {
   const cond = CONDITIONAL.exec(text);
@@ -233,8 +235,12 @@ export function parseMap(text, source = null) {
   for (const lane of lanes) lane.section = byId.get(lane.id) ?? null;
   const externals = sections.filter((s) => s.external).map((s) => ({ id: s.id, wave: 0, section: s }));
   const chains = parseOwnerChains(lines);
+  const { packs, bad } = scanPacks(text);
+  for (const b of bad) {
+    errors.push({ rule: 'pack-line', lane: null, line: b.line, message: `Pack line ${b.line}: not 'Pack: <lane>, <lane> (branch re/<lane>)': '${b.text}'` });
+  }
   return {
-    source, errors, lanes, sections, externals,
+    source, errors, lanes, sections, externals, packs,
     dropped: parseDropped(lines), ownerChains: chains.chains, chainUnparsed: chains.unparsed,
     ownerPhrases: parseOwnerPhrases(lines),
   };

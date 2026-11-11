@@ -199,7 +199,7 @@ test('owner-phrase: an Owner phrase naming a lane that does not own the file', (
 test('examined counts what each rule group looked at', () => {
   assert.deepEqual(run().examined, {
     ownerChains: 2, ownerPhrases: 1, overlapPairs: 4, deps: 7, heldTokens: 6, sections: 8,
-    rows: 7, dropped: 1, chainUnparsed: 0,
+    rows: 7, dropped: 1, chainUnparsed: 0, packs: 0,
   });
 });
 
@@ -301,4 +301,59 @@ test('chain-unparsed: a chain clause no rule can read gets a note with its map l
   assert.equal(res.examined.chainUnparsed, 2);
   assert.equal(res.examined.ownerChains, 2);
   assert.equal(notesOf(res, 'vacuous').length, 0);
+});
+
+// checkPacks (amendment A6). A Pack line goes before the Dropped heading, so the Waves table is not touched.
+const withPack = (...lines) => mutate(['## Dropped or merged lanes', `${lines.join('\n')}\n\n## Dropped or merged lanes`]);
+const PACK_OK = 'Pack: fx-gate-a, fx-gate-b (branch re/fx-gate-a)';
+
+test('pack: a valid pack passes, is counted, and adds no vacuous note', () => {
+  const res = run(withPack(PACK_OK));
+  assert.deepEqual(res.errors, []);
+  assert.equal(res.examined.packs, 1);
+  assert.equal(notesOf(res, 'vacuous').length, 0);
+});
+
+test('pack: a map with no Pack line examines 0 packs and still has no error or vacuous note', () => {
+  const res = run();
+  assert.equal(res.examined.packs, 0);
+  assert.equal(res.notes.some((n) => /packs/.test(n.message)), false);
+});
+
+test('pack-lane: a pack lane that is not a Waves lane fails, an external included', () => {
+  const ext = run(withPack('Pack: fx-gate-a, fx-ext (branch re/fx-gate-a)'));
+  assert.equal(hits(ext, 'pack-lane', 'fx-ext').length, 1);
+  const ghost = run(withPack('Pack: fx-gate-a, fx-ghost (branch re/fx-gate-a)'));
+  assert.equal(hits(ghost, 'pack-lane', 'fx-ghost').length, 1);
+});
+
+test('pack-dep: a dependency path between two lanes of one pack fails, direct or through other lanes', () => {
+  const direct = run(withPack('Pack: fx-base, fx-mid (branch re/fx-base)'));
+  assert.equal(hits(direct, 'pack-dep').length, 1);
+  const deep = run(withPack('Pack: fx-top, fx-base (branch re/fx-top)'));
+  assert.equal(hits(deep, 'pack-dep').length, 1);
+});
+
+test('pack-dup: a lane in two packs fails', () => {
+  const res = run(withPack(PACK_OK, 'Pack: fx-gate-b, fx-holder (branch re/fx-holder)'));
+  assert.equal(hits(res, 'pack-dup', 'fx-gate-b').length, 1);
+  assert.equal(res.examined.packs, 2);
+});
+
+test('pack-branch: the branch must be re/<one of its lanes>', () => {
+  assert.equal(hits(run(withPack('Pack: fx-gate-a, fx-gate-b (branch re/fx-other)')), 'pack-branch').length, 1);
+  assert.equal(hits(run(withPack('Pack: fx-gate-a, fx-gate-b (branch main)')), 'pack-branch').length, 1);
+  assert.equal(hits(run(withPack('Pack: fx-gate-a, fx-gate-b (branch re/fx-gate-b)')), 'pack-branch').length, 0);
+});
+
+test('pack-line: a line that starts with Pack: but has no readable form is an error, not "no pack"', () => {
+  const res = run(withPack('Pack: fx-gate-a, fx-gate-b'));
+  assert.equal(hits(res, 'pack-line').length, 1);
+  assert.match(hits(res, 'pack-line')[0].message, /Pack: fx-gate-a, fx-gate-b/);
+});
+
+test('held-token: seat-hold is a known form (A8), so check --table accepts it', () => {
+  const res = run(mutate(['| yes | new | first-flip |', '| yes | new | seat-hold |']));
+  assert.deepEqual(res.errors, []);
+  assert.equal(res.examined.heldTokens, 6);
 });

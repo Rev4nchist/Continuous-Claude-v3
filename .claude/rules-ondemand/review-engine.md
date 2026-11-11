@@ -15,7 +15,7 @@ Script: `node C:/Users/dkhay/continuous-claude/scripts/review-engine/program.mjs
 7. Make no engine-file change inside a counted CRITICAL window. The CLI window (path F, DP1.5) counts the pinned engine copy, so an engine PR on `main` does not reset it. See `docs/review-engine/evidence-bar.md`, "Counted weeks".
 8. A lane marked "Needs Dave" stops at that point. Ask Dave with AskUserQuestion, recommended option first. While a lane waits on Dave or on a review, set state `review` with a note: what it waits on and the next step.
 9. Write "risk band" for LOW to CRITICAL. "Band" alone means P0, P1 or P2.
-10. Done means the lane's done-check ran and its output is saved in `.claudedocs/e2e-<lane-id>/` in the primary checkout. Name that folder in the done note and in the PR.
+10. Done means the lane's done-check ran and its output is saved in `.claudedocs/e2e-<lane-id>/` in the primary checkout. Name that folder in the done note and in the PR. End the lane with `node C:/Users/dkhay/.claude/scripts/lane.mjs done <id> --merged <sha>` (the merge commit on `main`) or `node C:/Users/dkhay/.claude/scripts/lane.mjs done <id> --no-pr --evidence <path>`. A plain `done` opens no dependent lane. Then run `program.mjs sync-board --apply` (without `--apply` it is a dry run).
 
 ## The cap
 
@@ -26,6 +26,13 @@ Script: `node C:/Users/dkhay/continuous-claude/scripts/review-engine/program.mjs
 ## Subagents
 
 This rule does not load on Edit or Write. Put the Owns list and rules 3 to 5 in every subagent prompt. Subagents never claim a lane.
+
+## Messages
+
+- Send one DM per milestone and receiver: `node C:/Users/dkhay/.claude/scripts/lane.mjs say "<text>" --to <name>`.
+- A DM has at most 5 numbered items. The receiver replies one time.
+- A session outside the program sends program items to the seat only.
+- Take every time you write from a clock in the same command. Never type a time from memory.
 
 ## Next
 
