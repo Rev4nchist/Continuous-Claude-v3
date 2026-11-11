@@ -59,13 +59,13 @@ const gitIn = (cwd, ...args) => execFileSync('git',
 const git = (...args) => gitIn(s.repo, ...args);
 
 /** Run the worktree lane.mjs in the temp repo against one scratch database. */
-function lane(args, { url = s.url6, cwd = s.repo } = {}) {
+function lane(args, { url = s.url6, cwd = s.repo, as = ME } = {}) {
   assertScratchUrl(url);
   const env = cleanGitEnv();
   delete env.LANE_PROJECT; delete env.CLAUDE_CODE_ENTRYPOINT; delete env.LANE_SKIP_HOOK_PRECHECK;
   Object.assign(env, {
     CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
-    LANE_REGISTRY_PATH: s.registry, CCV3_IDENTITY_DIR: s.idDir, CLAUDE_CODE_SESSION_ID: ME,
+    LANE_REGISTRY_PATH: s.registry, CCV3_IDENTITY_DIR: s.idDir, CLAUDE_CODE_SESSION_ID: as,
   });
   const r = spawnSync(process.execPath, [LANE, ...args], { cwd, env, encoding: 'utf8', windowsHide: true });
   return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}`, line1: r.stderr.split('\n')[0] };
@@ -318,6 +318,89 @@ describe('done --merged refusals: token, exit 4, nothing written', () => {
     assert.deepEqual(JSON.parse(lastLine(r.err)), { refused: true, verb: 'done', id, rule: 'not-on-main' });
     const nac = lane(['done', id, '--merged', 'deadbeef', '--json']);
     assert.deepEqual(JSON.parse(lastLine(nac.err)), { refused: true, verb: 'done', id, rule: 'not-a-commit' });
+  });
+});
+
+describe('owner rule on done: F3 and S3', () => {
+  const HOLDER = randomUUID();
+  /** Give a lane an owner. A live holder has a future lease; a quiet one has a lapsed lease and no sessions row. */
+  const hold = (id, owner, lapsed = false) => q(s.url6,
+    `UPDATE agentic_os.lane SET owner_session_id=$2, lease_expires_at=now() + ($3 || ' minutes')::interval WHERE id=$1`, [id, owner, lapsed ? '-60' : '60']);
+  const refusedDone = async (id, args, token, opts) => {
+    const before = (await events(id)).length;
+    const r = lane(args, opts);
+    assert.equal(r.code, 4, r.all);
+    assert.match(r.line1, new RegExp(`^REFUSED done ${id} \\[${token}\\] -- `));
+    assert.equal((await events(id)).length, before, 'a refusal writes no event');
+    return r;
+  };
+
+  it('F3: done --merged and done --no-pr by a stranger on a lane that a live session holds give [not-holder] and write nothing', async () => {
+    const a = await mk('f3a'); await hold(a, HOLDER);
+    await refusedDone(a, ['done', a, '--merged', s.A], 'not-holder');
+    const b = await mk('f3b'); await hold(b, HOLDER);
+    await refusedDone(b, ['done', b, '--no-pr', '--evidence', evidenceFile(b)], 'not-holder');
+    for (const id of [a, b]) {
+      assert.equal(await stateOf(id), 'active');
+      assert.equal((await one(s.url6, `SELECT owner_session_id AS o FROM agentic_os.lane WHERE id=$1`, [id])).o, HOLDER);
+      assert.equal(await met(id), false);
+    }
+  });
+
+  it('F3: the holder may run done --merged', async () => {
+    const id = await mk('f3h'); await hold(id, HOLDER);
+    const r = lane(['done', id, '--merged', s.A], { as: HOLDER });
+    assert.equal(r.code, 0, r.all);
+    assert.equal(await met(id), true);
+  });
+
+  it('S3: plain done on an unowned blocked lane needs --reason; with it the lane is done', async () => {
+    const id = await mk('s3p', 'blocked');
+    const r = await refusedDone(id, ['done', id], 'needs-reason');
+    assert.match(r.line1, /-- the lane is blocked$/);
+    assert.equal(await stateOf(id), 'blocked');
+    const ok = lane(['done', id, '--reason', 'closed by hand']);
+    assert.equal(ok.code, 0, ok.all);
+    assert.equal(await stateOf(id), 'done');
+  });
+
+  it('S3: done --merged and done --no-pr --evidence on an unowned blocked lane need no --reason', async () => {
+    const a = await mk('s3m', 'blocked');
+    assert.equal(lane(['done', a, '--merged', s.A]).code, 0);
+    assert.equal(await met(a), true);
+    const b = await mk('s3n', 'blocked');
+    assert.equal(lane(['done', b, '--no-pr', '--evidence', evidenceFile(b)]).code, 0);
+    assert.equal(await met(b), true);
+  });
+
+  it('a quiet holder (lease ended, no live session): done --merged needs --reason, with it the lane is met', async () => {
+    const id = await mk('s3q'); await hold(id, HOLDER, true);
+    const r = await refusedDone(id, ['done', id, '--merged', s.A], 'needs-reason');
+    assert.match(r.line1, /-- its holder .+ is quiet and the lease ended$/);
+    const ok = lane(['done', id, '--merged', s.A, '--reason', 'builder is gone']);
+    assert.equal(ok.code, 0, ok.all);
+    assert.equal(await met(id), true);
+    assert.equal((await events(id)).at(-1).detail.prevOwner, HOLDER);
+  });
+
+  it('F6 and met: done --merged --override on a live-held lane writes the DM first and the done event last, and the lane is met', async () => {
+    const id = await mk('ovm'); await hold(id, HOLDER);
+    const r = lane(['done', id, '--merged', s.A, '--override', '--reason', 'builder idle']);
+    assert.equal(r.code, 0, r.all);
+    const evs = await events(id);
+    assert.equal(evs.length, 2);
+    assert.deepEqual(evs.map((e) => [e.kind, e.to_session_id]), [['note', HOLDER], ['done', null]]);
+    assert.equal(await met(id), true, 'the DM must not be a lifecycle event after the merged done');
+  });
+
+  it('--override on done without --reason is a usage error (exit 1) before any git step', async () => {
+    const id = await mk('ovu'); await hold(id, HOLDER);
+    for (const args of [['done', id, '--merged', s.A, '--override'], ['done', id, '--override']]) {
+      const r = lane(args);
+      assert.equal(r.code, 1, r.all);
+      assert.match(r.err, /--override needs --reason/);
+    }
+    assert.equal((await events(id)).length, 0);
   });
 });
 

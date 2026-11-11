@@ -125,10 +125,14 @@ const planBody = (s, plan, apply, results = new Map()) => ({
   moves: plan.moves.map((m) => ({ ...m, result: results.get(m.id) ?? 'planned' })),
 });
 
-// One move: re-read the lane, then run `lane.mjs state <id> backlog`. No --note: state --note replaces the stored note.
+/** The argv of the one lane.mjs call that sync-board --apply makes for each move. lane-race-probe.mjs imports it, so the probe runs the exact call. */
+export const syncBoardStateArgv = (id, board) => ['state', id, 'backlog', '--if-state', 'blocked', '--reason', 'program.mjs sync-board --apply', '--project', board];
+
+// One move: re-read the lane, then run `lane.mjs state <id> backlog --if-state blocked --reason ...`. --if-state is the compare-and-set;
+// --reason is required on an unowned blocked lane. No --note: state --note replaces the stored note.
 function applyOne(s, cli, id, now) {
   if (!now || now.state !== 'blocked' || now.owner) return { id, result: 'skipped', text: `SKIP ${id} changed since the plan` };
-  const run = runLane(['state', id, 'backlog', '--project', s.board], { cli, testMode: s.map.testMode, url: s.url, sessionId: s.caller });
+  const run = runLane(syncBoardStateArgv(id, s.board), { cli, testMode: s.map.testMode, url: s.url, sessionId: s.caller });
   return run.failure ? { id, result: 'failed', text: `FAIL ${id} ${run.failure}` } : { id, result: 'applied', text: null };
 }
 
