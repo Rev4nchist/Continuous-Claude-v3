@@ -1192,12 +1192,17 @@ function enforceIn(deps, top) {
 function decide(input, deps) {
   if (!isDesktopCommander(input)) return decideAs(input, deps);
   const text = commandOf(input);
-  const both = [decideAs({ ...input, tool_name: "Bash" }, deps, text), decideAs({ ...input, tool_name: "PowerShell" }, deps, text)];
-  return both.find((d) => d.action === "deny") ?? both.find((d) => d.action === "override") ?? both.find((d) => d.action === "allow" && d.warn) ?? both[0];
+  const realName = input.tool_name || input.tool;
+  const runs = [];
+  for (const shell of ["Bash", "PowerShell"]) runs.push(decideAs({ ...input, tool_name: shell }, deps, text));
+  for (const shell of ["Bash", "PowerShell"]) {
+    if (blankInertQuotes(text, shell) !== text) runs.push(decideAs({ ...input, tool_name: shell }, deps, text, realName));
+  }
+  return runs.find((d) => d.action === "deny") ?? runs.find((d) => d.action === "override") ?? runs.find((d) => d.action === "allow" && d.warn) ?? runs[0];
 }
-function decideAs(input, deps, text) {
+function decideAs(input, deps, text, quoteTool = input.tool_name || input.tool) {
   const raw = text ?? commandOf(input);
-  const command = normalizeGh(joinContinuations(blankInertQuotes(raw, input.tool_name || input.tool), shellOf(input)));
+  const command = normalizeGh(joinContinuations(blankInertQuotes(raw, quoteTool), shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: "allow" };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
