@@ -11,9 +11,14 @@ d. A permanent error ("No content provided") holds the pointer back (control: it
 e. All stores succeed and the pointer or hashes change from today (control).
 f. A re-run after the DB returns stores the held-back candidate again, or stores the
    others a second time.
+g. The real store_learning_v2 turns an asyncio.TimeoutError (empty text) into an empty
+   error string, so the store timeout reads as permanent.
+h. Through extract_incremental with the real store_learning_v2, that timeout still
+   advances the pointer and saves the hash.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -154,3 +159,36 @@ async def test_f_rerun_after_db_returns_stores_only_the_held_back_candidate(tmp_
     assert result["learnings_stored"] == 1 and result["learnings_deduped"] == 1
     assert _saved(state_file)["last_extracted_line"] == 4
     assert set(_saved(state_file)["recent_hashes"]) == set(HASHES)
+
+
+@pytest.fixture
+def real_store_times_out(monkeypatch):
+    """The real store_learning_v2 runs; the memory service times out with empty error text."""
+    import db.memory_factory as factory
+
+    async def timing_out(**kwargs):
+        raise asyncio.TimeoutError()
+
+    assert str(asyncio.TimeoutError()) == ""
+    monkeypatch.setenv("CCV3_DISTILL", "0")
+    monkeypatch.setattr(factory, "create_memory_service", timing_out)
+
+
+async def test_g_real_store_names_the_exception_when_its_text_is_empty(real_store_times_out):
+    result = await store_learning.store_learning_v2(
+        session_id=SESSION, content=TEXTS[0], source="hook", candidate_hash=HASHES[0]
+    )
+    assert result["success"] is False
+    assert result["error"] != ""
+    assert ie._is_connection_error(result["error"])
+
+
+async def test_h_real_store_timeout_is_held_back_through_extract_incremental(
+    tmp_path, real_store_times_out
+):
+    state_file = tmp_path / "state.json"
+    result = await _run(tmp_path, state_file)
+    saved = _saved(state_file)
+    assert result["learnings_stored"] == 0
+    assert saved["last_extracted_line"] == LINES[0]
+    assert saved["recent_hashes"] == [] and result["hashes"] == []
