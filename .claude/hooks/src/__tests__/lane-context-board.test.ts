@@ -33,7 +33,7 @@ const fake = vi.hoisted(() => ({
   claimable: [] as Array<Record<string, unknown>>,
   unread: [] as Array<Record<string, unknown>>,
   /** The Related lookup: lane rows (id, owner_session_id). The fake returns the rows whose id is in the query array. */
-  lanes: [] as Array<{ id: string; owner_session_id: string | null }>,
+  lanes: [] as Array<{ id: string; owner_session_id: string | null; reclaimable?: boolean }>,
   failOn: null as RegExp | null,
   /** P15: the watermark INSERT settles this many ms late, and records that it did. */
   insertDelayMs: 0,
@@ -348,7 +348,7 @@ describe('B7-B10: SessionStart banner', () => {
 
 describe('E1: the no-lane lines and the Milestone line', () => {
   const L1 = `You hold no lane. 1. kanban-sync when the board has a phone page. 2. ${SHIM} mine. 3. ${SHIM} board --by priority, then claim the lane for your work by id.`;
-  const L2 = `No lane for it: ${SHIM} add <new-id> --title "..." --scope "..." only when ${SHIM} board --all shows the id in no state, then claim it. Never add on a lane you do not hold.`;
+  const L2 = `No lane for it: ${SHIM} add <new-id> --title "..." --scope "..." only when ${SHIM} board --all shows the id in no state, then claim it. Never run add on an existing lane that you do not hold.`;
   const L3 = 'Rules: lane-board.md. Rule ids: docs/coordination/standard.md.';
   const MILESTONE = 'Milestone (start, commit, decision by Dave, finding, block, done): send one DM to each holder in your RELATES TO list (M4.11).';
   const held = (id: string, scope: string | null, project_key = 'continuous-claude'): Record<string, unknown> =>
@@ -425,7 +425,7 @@ describe('E3: the Related line in the SessionStart banner', () => {
   it('E3: owner gives who(owner), a null owner gives "no holder", a missing row gives "no such lane"; the line follows Milestone', async () => {
     writeIdentity(PEER_ID, { name: 'trex', cwd: 'C:/work/repo', endedAt: null });
     fake.mine = [held('c-1', 'src only. RELATES TO: peer-1, none-1, ghost-9')];
-    fake.lanes = [{ id: 'peer-1', owner_session_id: PEER_ID }, { id: 'none-1', owner_session_id: null }];
+    fake.lanes = [{ id: 'peer-1', owner_session_id: PEER_ID, reclaimable: false }, { id: 'none-1', owner_session_id: null, reclaimable: false }];
     const t = text(await run('SessionStart', ccv3));
     const lines = t.split('\n');
     const at = lines.findIndex((l) => l.startsWith('Milestone'));
@@ -433,7 +433,19 @@ describe('E3: the Related line in the SessionStart banner', () => {
     expect(lines[at + 1]).toBe('Related: peer-1 (trex #bbbbbbbb), none-1 (no holder), ghost-9 (no such lane)');
     expect(lookups()).toHaveLength(1);
     expect(lookups()[0].params).toEqual([['peer-1', 'none-1', 'ghost-9']]);
-    expect(lookups()[0].sql.replace(/\s+/g, ' ')).toContain('SELECT id, owner_session_id FROM agentic_os.lane WHERE id = ANY($1::text[])');
+    const sql = lookups()[0].sql.replace(/\s+/g, ' ').trim();
+    expect(sql).toMatch(/^SELECT id, owner_session_id, .+ AS reclaimable FROM agentic_os\.lane WHERE id = ANY\(\$1::text\[\]\)$/);
+    // The reclaim test of rule L2.8, the same as lane.mjs: the lease ended AND the holder is quiet for 5 minutes.
+    expect(sql).toContain('lease_expires_at IS NULL OR lease_expires_at < now()');
+    expect(sql).toContain("GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '5 minutes'");
+  });
+
+  it('E3: a lane whose holder is quiet and whose lease ended prints "reclaimable", not the old holder (M4.12: no DM)', async () => {
+    writeIdentity(PEER_ID, { name: 'trex', cwd: 'C:/work/repo', endedAt: null });
+    fake.mine = [held('c-1', 'RELATES TO: gone-1, live-1')];
+    fake.lanes = [{ id: 'gone-1', owner_session_id: PEER_ID, reclaimable: true }, { id: 'live-1', owner_session_id: PEER_ID, reclaimable: false }];
+    const t = text(await run('SessionStart', ccv3));
+    expect(t).toContain('Related: gone-1 (reclaimable), live-1 (trex #bbbbbbbb)');
   });
 
   it('E3: the ids of every lane held on this board are used; an id of a lane the session holds is dropped; no repeats', async () => {
@@ -581,6 +593,11 @@ describe('B14: the SessionStart board line', () => {
   it('gives the two-line text for an unregistered folder: the board command, then the register rule', () => {
     expect(laneBoardLine(nowhere, process.env)).toBe(
       `no lane board (unregistered dir). Work for a board: ${SHIM} board --project <key>. Else run no lane command.\nRegister a folder only with Dave's yes.`,
+    );
+  });
+  it('takes the shim path from the env it was given, the same env that resolves the board', () => {
+    expect(laneBoardLine(nowhere, { ...process.env, CCV3_USER_HOME: 'C:/Users/Other' })).toContain(
+      'Work for a board: node C:/Users/Other/.claude/scripts/lane.mjs board --project <key>.',
     );
   });
   it('says nothing in a headless session', () => {

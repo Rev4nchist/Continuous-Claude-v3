@@ -187,7 +187,7 @@ export function laneBoardLine(
     if (isHeadless(env)) return '';
     const b = resolveBoard(cwd || process.cwd(), { env });
     if (b) return `lane board: ${b.key}`;
-    return `no lane board (unregistered dir). Work for a board: ${laneCliCmd()} board --project <key>. Else run no lane command.\nRegister a folder only with Dave's yes.`;
+    return `no lane board (unregistered dir). Work for a board: ${laneCliCmd(env)} board --project <key>. Else run no lane command.\nRegister a folder only with Dave's yes.`;
   } catch {
     return '';
   }

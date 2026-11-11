@@ -121,7 +121,7 @@ describe('D3-D5: the text', () => {
     const t = await start();
     const cmd = 'node C:/Users/Tester/.claude/scripts/lane.mjs';
     const L1 = `You hold no lane. 1. kanban-sync when the board has a phone page. 2. ${cmd} mine. 3. ${cmd} board --by priority, then claim the lane for your work by id.`;
-    const L2 = `No lane for it: ${cmd} add <new-id> --title "..." --scope "..." only when ${cmd} board --all shows the id in no state, then claim it. Never add on a lane you do not hold.`;
+    const L2 = `No lane for it: ${cmd} add <new-id> --title "..." --scope "..." only when ${cmd} board --all shows the id in no state, then claim it. Never run add on an existing lane that you do not hold.`;
     const L3 = 'Rules: lane-board.md. Rule ids: docs/coordination/standard.md.';
     expect(t).toContain([L1, L2, L3].join('\n'));
     expect(t).not.toContain('Claim one by id before starting work');
@@ -183,7 +183,7 @@ describe('D13: the Related line', () => {
     const calls = fake.calls.filter((c) => /FROM agentic_os\.lane WHERE id = ANY/.test(c.sql));
     expect(calls).toHaveLength(1);
     expect(calls[0].params).toEqual([['a-1', 'b-2', 'c-3']]);
-    expect(fold(calls[0].sql)).toContain('SELECT id, owner_session_id FROM agentic_os.lane WHERE id = ANY($1::text[])');
+    expect(fold(calls[0].sql)).toMatch(/SELECT id, owner_session_id, .+ AS reclaimable FROM agentic_os\.lane WHERE id = ANY\(\$1::text\[\]\)/);
   });
 
   it('prints no Related line and runs no lookup when no held scope has RELATES TO', async () => {

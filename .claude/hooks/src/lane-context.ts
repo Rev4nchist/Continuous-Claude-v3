@@ -696,15 +696,25 @@ async function relatedLine(client: Client, held: LaneRow[], own: LaneRow[]): Pro
   const ids = [...new Set(held.flatMap((l) => parseRelatesTo(l.scope)))].filter((id) => !mine.has(id));
   if (!ids.length) return null;
   const shown = ids.slice(0, RELATED_MAX);
-  const rows = (await client.query<{ id: string; owner_session_id: string | null }>(
-    'SELECT id, owner_session_id FROM agentic_os.lane WHERE id = ANY($1::text[])',
+  // `reclaimable` is the reclaim test of lane.mjs (rule L2.8): the lease ended AND the holder is quiet. Such a lane
+  // gets no DM (M4.12), so the line must not name its old holder as a peer to message.
+  const rows = (await client.query<{ id: string; owner_session_id: string | null; reclaimable: boolean | null }>(
+    `SELECT id, owner_session_id,
+            ((lease_expires_at IS NULL OR lease_expires_at < now())
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions s
+               WHERE s.id = agentic_os.lane.owner_session_id
+                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+             )) AS reclaimable
+       FROM agentic_os.lane WHERE id = ANY($1::text[])`,
     [shown],
   )).rows;
-  const owners = new Map(rows.map((r) => [r.id, r.owner_session_id]));
+  const found = new Map(rows.map((r) => [r.id, r]));
   const tag = (id: string): string => {
-    if (!owners.has(id)) return 'no such lane';
-    const owner = owners.get(id);
-    return owner ? who(owner) : 'no holder';
+    const row = found.get(id);
+    if (!row) return 'no such lane';
+    if (!row.owner_session_id) return 'no holder';
+    return row.reclaimable ? 'reclaimable' : who(row.owner_session_id);
   };
   const more = ids.length > shown.length ? `, +${ids.length - shown.length} more` : '';
   return `Related: ${shown.map((id) => `${id} (${tag(id)})`).join(', ')}${more}`;
@@ -851,7 +861,7 @@ export async function runLaneContext(raw: string): Promise<object | null> {
       } else {
         const cmd = laneCliCmd();
         lines.push(`You hold no lane. 1. kanban-sync when the board has a phone page. 2. ${cmd} mine. 3. ${cmd} board --by priority, then claim the lane for your work by id.`);
-        lines.push(`No lane for it: ${cmd} add <new-id> --title "..." --scope "..." only when ${cmd} board --all shows the id in no state, then claim it. Never add on a lane you do not hold.`);
+        lines.push(`No lane for it: ${cmd} add <new-id> --title "..." --scope "..." only when ${cmd} board --all shows the id in no state, then claim it. Never run add on an existing lane that you do not hold.`);
         lines.push('Rules: lane-board.md. Rule ids: docs/coordination/standard.md.');
       }
       if (elsewhere.length) {
