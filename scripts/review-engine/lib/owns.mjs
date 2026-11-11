@@ -95,3 +95,14 @@ export function entriesOverlap(a, b) {
   if (fileB) return ownsMatch(a, b.path);
   return patternsMeet(a.path, b.path);
 }
+
+// Two Owns entries on one path may skip the dependency-path rule only when both scopes name keys.
+// The one copy of this test: map-check.mjs and conflicts() both use it.
+const KEY_SCOPE = /\bkeys? only\b/;
+export const bothKeyScoped = (x, y) => KEY_SCOPE.test(x.scope ?? '') && KEY_SCOPE.test(y.scope ?? '');
+
+// The overlapping entry pairs [x, y] of two Owns lists that are not both key-scoped. Dependencies are not judged here:
+// the caller (`ready`) asks about work in progress at the same time.
+export function conflicts(ownsA, ownsB) {
+  return ownsA.flatMap((x) => ownsB.map((y) => [x, y])).filter(([x, y]) => entriesOverlap(x, y) && !bothKeyScoped(x, y));
+}

@@ -720,3 +720,100 @@ test('COLUMNS lists next, later, waiting and no now', async () => {
   const { COLUMNS } = await import('./kanban-apply.mjs');
   assert.deepEqual(COLUMNS, ['next', 'later', 'waiting']);
 });
+
+// ---- coord-gate-3: a `ready` card on a lane with an open dependency is CONSUMED (applied, refused), never fired later
+
+const waiting = (l, ids = ['dep-x']) => ({ ...l, waits_on: ids });
+const refused = { laneId: 'a', syncResult: 'refused: open dependency', applied: true, refusedStatus: 'ready', appliedNote: null, appliedQuestion: null };
+const readyCard = (f = {}) => card('a', { status: 'ready', ...f });
+
+test('ready card on a lane with an open dependency: no state action, consumed with the refusal, also listed as skipped', () => {
+  const p = plan({ cards: [readyCard()] }, [waiting(lane('a', 'backlog'))]);
+  assert.deepEqual(p.actions, []);
+  assert.deepEqual(result(p, 'a'), refused);
+  assert.deepEqual(p.skipped, [{ laneId: 'a', reason: 'open dependency' }]);
+});
+
+test('a blocked lane with an open dependency is not set ready by its card either', () => {
+  const p = plan({ cards: [readyCard()] }, [waiting(lane('a', 'blocked'))]);
+  assert.deepEqual(p.actions, []);
+  assert.equal(result(p, 'a').syncResult, 'refused: open dependency');
+});
+
+test('an empty waits_on list does not block: the ready card applies', () => {
+  const p = plan({ cards: [readyCard()] }, [waiting(lane('a', 'backlog'), [])]);
+  assert.deepEqual(kinds(p), ['a:state:backlog->ready']);
+  assert.equal(result(p, 'a').syncResult, 'applied: state');
+  assert.deepEqual(p.skipped, []);
+});
+
+test('a lane row with no waits_on key (migration 0006 absent) does not block: the ready card applies', () => {
+  const p = plan({ cards: [readyCard()] }, [lane('a', 'backlog')]);
+  assert.deepEqual(kinds(p), ['a:state:backlog->ready']);
+});
+
+test('a card on an open dependency still applies its note and question', () => {
+  const p = plan({ cards: [readyCard({ note: 'go', question: 'when?' })] }, [waiting(lane('a', 'backlog', 50, 'old'))]);
+  assert.deepEqual(kinds(p).map((k) => k.split(':')[1]), ['note', 'note']);
+  assert.equal(result(p, 'a').syncResult, 'refused: open dependency');
+  assert.equal(result(p, 'a').appliedNote, 'go');
+  assert.equal(result(p, 'a').appliedQuestion, 'when?');
+});
+
+test('a card on an open dependency still applies its band and consumes it', () => {
+  const p = plan({ cards: [readyCard({ band: 'P0' })] }, [waiting(lane('a', 'backlog'))]);
+  assert.deepEqual(bandActs(p).map((a) => [a.from, a.to]), [[null, 'P0']]);
+  assert.equal(result(p, 'a').appliedBand, 'P0');
+  assert.ok(!p.actions.some((a) => a.kind === 'state'));
+});
+
+test('only ready is refused: backlog and blocked card statuses apply on a lane with an open dependency', () => {
+  for (const [from, to] of [['ready', 'backlog'], ['ready', 'blocked'], ['backlog', 'done']]) {
+    const p = plan({ cards: [card('a', { status: to })] }, [waiting(lane('a', from))]);
+    assert.deepEqual(kinds(p), [`a:state:${from}->${to}`], `${from} -> ${to}`);
+    assert.equal(result(p, 'a').syncResult, 'applied: state');
+  }
+});
+
+test('a lane that is already ready with an open dependency: the ready card is a plain no-op, not a refusal', () => {
+  const p = plan({ cards: [readyCard()] }, [waiting(lane('a', 'ready'))]);
+  assert.deepEqual(p.actions, []);
+  assert.equal(result(p, 'a').syncResult, 'no change');
+  assert.deepEqual(p.skipped, []);
+});
+
+test('a done lane with an open dependency and a ready card stays done: no rank, no band action, band consumed', () => {
+  const p = plan({ board: board({ next: ['d'] }), cards: [card('d', { status: 'ready', band: 'P0' })] }, [waiting(lane('d', 'done', 50))]);
+  assert.deepEqual(p.actions, []);
+  assert.equal(result(p, 'd').syncResult, 'refused: open dependency');
+  assert.equal(result(p, 'd').appliedBand, 'P0');
+});
+
+test('a held lane with an open dependency: the held skip wins, the card stays pending', () => {
+  const p = plan({ cards: [readyCard()] }, [held(waiting(lane('a', 'backlog')))]);
+  assert.equal(result(p, 'a').syncResult, 'skipped: held');
+  assert.equal(result(p, 'a').applied, false);
+  assert.deepEqual(p.skipped, [{ laneId: 'a', reason: 'held' }]);
+});
+
+test('a column move into waiting still blocks a lane whose ready card was refused, and the board is done', () => {
+  const p = plan({ board: board({ waiting: ['a'] }), cards: [readyCard()] }, [waiting(lane('a', 'backlog', 50))]);
+  assert.deepEqual(kinds(p), ['a:priority:50->1', 'a:state:backlog->blocked', `a:note:null->${WAITING_NOTE}`]);
+  assert.equal(p.boardDone, true);
+  assert.equal(result(p, 'a').syncResult, 'refused: open dependency');
+});
+
+// The skill writes status: null on the card (guarded by refusedStatus) after the sync. The card doc below is what it leaves.
+test('after the write-back clears the status, a note-only edit with the dependency met gives a note and no state action', () => {
+  const left = { status: null, syncedAt: '2026-11-02T12:00:00Z', appliedNote: null, appliedQuestion: null };
+  const resaved = card('a', { ...left, note: 'fyi', updatedAt: '2026-11-02T13:00:00Z' });
+  const p = plan({ cards: [resaved] }, [waiting(lane('a', 'backlog'), [])]);
+  assert.deepEqual(kinds(p), ['a:note:null->Dave (kanban): fyi']);
+  assert.ok(!p.actions.some((a) => a.kind === 'state'));
+});
+
+test('the hazard the write-back prevents: a card that keeps status ready fires it on the next edit once the dependency is met', () => {
+  const kept = card('a', { status: 'ready', syncedAt: '2026-11-02T12:00:00Z', note: 'fyi', updatedAt: '2026-11-02T13:00:00Z' });
+  const p = plan({ cards: [kept] }, [waiting(lane('a', 'backlog'), [])]);
+  assert.ok(kinds(p).includes('a:state:backlog->ready'), 'so the skill must write status: null while the doc status equals refusedStatus');
+});

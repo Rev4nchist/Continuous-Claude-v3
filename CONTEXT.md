@@ -41,6 +41,7 @@
 
 - **Lane**: a unit of concurrent work claimed by one session. The
   **lane board** lists lanes and holders. **Claim / release** a lane; **note** progress on it.
+- **Dependency**: lane A waits on lane B (table `lane_dep`). Open until B is done with proof (`done --merged <sha>` or `done --no-pr --evidence`). `claim` refuses A; the page shows "waits on".
 - **Band**: P0, P1, P2 or NULL (Unsorted). Written only by an explicit choice (the `band` verb or a card's Band select), never by a drag. **Rank**: `lane.priority`, the order inside a band. **Reminder**: a lane with a due time (`remind set`); `next` skips it. See COORDINATION.md "Band and rank".
 - **Risk band**: LOW, MID, ELEVATED, HIGH or CRITICAL, set for a PR by `bandOf` in `scripts/github/review-router.mjs`. It is not a **Band**: write "risk band" in full.
 - **Program**: lanes with one goal and one map, `docs/<program>/map.md`. The review engine has the `re-` lanes. **Wave**: a group of lanes in the map's Waves table. Each dependency is in an earlier wave.

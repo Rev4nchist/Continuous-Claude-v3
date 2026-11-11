@@ -64,6 +64,7 @@ export const CARD_STATUSES = ['backlog', 'ready', 'blocked', 'done'];
 /** A card band: P0, P1, P2, or 'none' (clear: lane.band becomes NULL). A missing key or null means no opinion. */
 export const CARD_BANDS = ['P0', 'P1', 'P2', 'none'];
 const NOTE_MAX = 1000;
+const REFUSED_DEP = 'refused: open dependency';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const time = (v) => (typeof v === 'string' ? Date.parse(v) : NaN);
@@ -91,6 +92,12 @@ function columnOf(columns) {
 }
 
 /**
+ * A `ready` card on a lane that is not ready and has an open dependency (waits_on non-empty). A missing key
+ * (migration 0006 absent) or [] never blocks: without table lane_dep the gate is off, and the claim does not check dependencies either.
+ */
+const waitsBlock = (row, card) => card?.status === 'ready' && row.state !== 'ready' && Array.isArray(row.waits_on) && row.waits_on.length > 0;
+
+/**
  * The state a lane has after this run's card status. Only a pending card with a valid
  * status counts, and not on an active lane (skipped whole) or a held lane (status waits).
  * Column rules never move a lane into or out of done, so they do not matter here.
@@ -98,6 +105,7 @@ function columnOf(columns) {
 function finalState(row, card) {
   if (!card || row.state === 'active' || !isPending(card.updatedAt, card.syncedAt)) return row.state;
   if (!CARD_STATUSES.includes(card.status)) return row.state;
+  if (waitsBlock(row, card)) return row.state;
   return row.held && card.status !== row.state ? row.state : card.status;
 }
 
@@ -204,6 +212,11 @@ function readCard(card, lane) {
   if (lane.held && ((card.status && card.status !== lane.state) || bandChange)) {
     return { status: null, notes, held: true, result: { ...applied, applied: false, syncResult: 'skipped: held' } };
   }
+  // An open dependency refuses `ready`. The card is CONSUMED (applied: true): it gets syncedAt, and the skill clears the card status (refusedStatus), so the old `ready` never fires
+  // after the dependency is met or a session reopens the lane. Notes, question and band still apply. Held keeps priority (above).
+  if (waitsBlock(lane, card)) {
+    return { status: null, notes, waits: true, band: wantBand ? { to, value: card.band } : null, result: { ...applied, syncResult: REFUSED_DEP, refusedStatus: 'ready' } };
+  }
   return { status: card.status || null, notes, band: wantBand ? { to, value: card.band } : null, result: applied };
 }
 
@@ -275,10 +288,14 @@ export function planKanban(input, lanes) {
       const kept = 'appliedNote' in read.result ? { appliedNote: read.result.appliedNote, appliedQuestion: read.result.appliedQuestion } : {};
       // appliedBand: the band value this run consumed. The sync clears card.band only while the doc still holds it.
       const bandKept = read.band ? { appliedBand: read.band.value } : {};
-      results.push({ laneId: id, syncResult, applied: read.result.applied, ...kept, ...bandKept });
+      // refusedStatus: the card status this run refused. The sync clears card.status only while the doc still holds it.
+      const refusedKept = read.result.refusedStatus ? { refusedStatus: read.result.refusedStatus } : {};
+      results.push({ laneId: id, syncResult, applied: read.result.applied, ...kept, ...bandKept, ...refusedKept });
       if (!read.result.applied && !skipped.some((k) => k.laneId === id)) {
         skipped.push({ laneId: id, reason: syncResult.replace(/^skipped: /, '') });
       }
+      // A refused card is consumed (applied), so it is listed here by hand: the summary and the report still show it.
+      if (read.waits && !skipped.some((k) => k.laneId === id)) skipped.push({ laneId: id, reason: 'open dependency' });
     }
   }
   // boardDone false: a held column move waits, so the sync must not mark the board synced.
