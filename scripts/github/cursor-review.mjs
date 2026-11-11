@@ -43,7 +43,7 @@
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +53,8 @@ import { acquireGrokSlot } from './lib/grok-slots.mjs';
 import { killTree } from './lib/proc.mjs';
 
 export const EXIT = { OK: 0, FAILED: 1, REFUSED: 2, CAP: 3 };
+/** The fixed reason word of the refusal for a range with no reviewable file. It is the start of `reason` and the value of `reasonCode`. */
+export const NO_FILES = 'no-files';
 export const MODEL_ALLOWLIST = new Set(['grok-4.7-high', 'grok-4.7-xhigh']);
 export const BAND_MODEL = { MID: 'grok-4.7-high', ELEVATED: 'grok-4.7-high', HIGH: 'grok-4.7-high', CRITICAL: 'grok-4.7-xhigh' };
 export const WEEKLY_CAP = 300;
@@ -61,8 +63,15 @@ export const PER_REF_CAP = 8;
 export const DEFAULT_TIMEOUT_SEC = 1800;
 export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const SEVERITIES = ['critical', 'major', 'minor', 'info'];
-/** Folders left out of the review tree: answers and old review output the model must not see. */
-export const TREE_EXCLUDES = Object.freeze(['.git', '.claudedocs', '.claude/cache', '.claude/reviews', 'artifacts', 'thoughts']);
+/**
+ * Folders and files left out of the review tree and of PR.diff: answers and old review output the model must not see.
+ * The four scripts/eval/review-eval entries are the answer key of the review engine (gold, seeds, rubrics, link labels).
+ * An entry is a whole path with no trailing slash: it matches itself and everything under it.
+ */
+export const TREE_EXCLUDES = Object.freeze([
+  '.git', '.claudedocs', '.claude/cache', '.claude/reviews', 'artifacts', 'thoughts',
+  'scripts/eval/review-eval/gold', 'scripts/eval/review-eval/seeds', 'scripts/eval/review-eval/rubrics', 'scripts/eval/review-eval/linktype-labels.json',
+]);
 /**
  * Files and folders the review agent must never read as instructions, at any depth. Cursor loads agent rules (AGENTS.md, CLAUDE.md,
  * .cursorrules, .cursor), runs Claude Code project hooks (.claude/settings*.json) and starts MCP servers (.mcp.json) from the tree it
@@ -859,7 +868,35 @@ export function defaultExtract({ dir, work, root, head }) {
   const git = (args) => spawnSync('git', args, { cwd: root, env, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
   const read = git(['read-tree', head]);
   if (read.error || read.status !== 0) return read;
-  return git(['-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', 'checkout-index', '-a', '-f', `--prefix=${dir.replaceAll('\\', '/')}/`]);
+  // core.symlinks=false: a symlink entry of the head (mode 120000) is written as a plain text file, never as a link that could point out of the tree.
+  return git(['-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', '-c', 'core.symlinks=false', 'checkout-index', '-a', '-f', `--prefix=${dir.replaceAll('\\', '/')}/`]);
+}
+
+/** True when `child` is `parent` or sits under it. path.relative folds case on win32; a different drive gives an absolute result, which is outside. */
+function isInside(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/**
+ * Removes one excluded entry from the tree, after proving that the real path of its parent folder is inside the tree. A parent that is a
+ * link (junction or symlink) to a folder outside would make rmSync delete files outside. The last part of the entry is never followed.
+ * A parent that does not exist, or is a file, means there is nothing to remove. Any other error stays an error.
+ */
+function removeExcluded(treeReal, dir, rel) {
+  const parent = path.dirname(path.join(dir, rel));
+  let parentReal;
+  try {
+    parentReal = realpathSync.native(parent);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return;
+    throw err;
+  }
+  if (!isInside(treeReal, parentReal)) throw new Error(`review tree escape: ${rel} resolves outside the review tree`);
+  // realpath succeeds on a regular file too (a symlink entry written as a plain file): rmSync of '<file>/x' is ENOENT on win32, ENOTDIR on linux.
+  // statSync of the real path is safe here: the path is already resolved, so no link is left to follow.
+  if (!statSync(parentReal).isDirectory()) return;
+  rmSync(path.join(dir, rel), { recursive: true, force: true });
 }
 
 /**
@@ -965,7 +1002,8 @@ export async function prepareReview({ root, input, tmpRoot = os.tmpdir(), gh = d
     if (tar.error) throw new Error(`tree checkout failed to start: ${tar.error.message}`);
     // Any non-zero status is a failed prepare: a part-way checkout leaves a partial tree, and a review of it could answer clean.
     if (tar.status !== 0) throw new Error(`tree checkout failed (status ${tar.status}): ${(tar.stderr ?? '').trim()}`);
-    for (const x of TREE_EXCLUDES) rmSync(path.join(dir, x), { recursive: true, force: true });
+    const treeReal = realpathSync.native(dir);
+    for (const x of TREE_EXCLUDES) removeExcluded(treeReal, dir, x);
     stripAgentFiles(dir, platform);
     writeFileSync(path.join(dir, 'PR.diff'), gitOut(root, ['diff', '--no-color', '--no-ext-diff', mergeBase, head, '--', '.', ...excludePathspecs(platform)]));
     const files = changedPaths(root, mergeBase, head);
@@ -1007,7 +1045,8 @@ function summaryText(rec) {
 
 /**
  * One review. opts: { input, band, model, ledgerPath, outDir, timeoutMs, dryRun, keepTree, root, repo, remote }.
- * deps (tests): { now, env, agent, prepare, runner }. Returns { exit, ... }.
+ * deps (tests): { now, env, agent, prepare, runner }. Returns { exit, reason, reasonCode? } (a refusal) or { exit, ... }. reasonCode is set only on the
+ * no-files refusal (NO_FILES); a caller tells it from a bad input by this field.
  */
 export async function runReview(opts, deps = {}) {
   const now = deps.now ?? Date.now;
@@ -1032,6 +1071,12 @@ export async function runReview(opts, deps = {}) {
     prep = await (deps.prepare ?? prepareReview)({ root: opts.root, input: opts.input, repo: opts.repo, remote: opts.remote });
   } catch (err) {
     return refuse(err.code === 'BAD_INPUT' ? EXIT.REFUSED : EXIT.FAILED, err.message);
+  }
+  if (prep.files.length === 0) {
+    // Every changed file is left out of the tree (TREE_EXCLUDES): nothing to review. Refused before a run is reserved, for a dry run too.
+    // The tree is removed here, so --keep-tree does not apply.
+    prep.cleanup();
+    return { ...refuse(EXIT.REFUSED, `${NO_FILES}: ${prep.ref} has no changed file that the review tree keeps (the range is empty, or every changed path is left out of the tree): nothing to review`), reasonCode: NO_FILES };
   }
   const prompt = buildPrompt({ ref: prep.ref, files: prep.files });
   if (opts.dryRun) {
