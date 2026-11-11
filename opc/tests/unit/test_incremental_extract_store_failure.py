@@ -15,6 +15,8 @@ g. The real store_learning_v2 turns an asyncio.TimeoutError (empty text) into an
    error string, so the store timeout reads as permanent.
 h. Through extract_incremental with the real store_learning_v2, that timeout still
    advances the pointer and saves the hash.
+i-l. A BrokenPipeError (text "Broken pipe", no marker) from the real store is not marked
+   retryable or is not held back; a ValueError is marked retryable or stops advancing.
 """
 from __future__ import annotations
 
@@ -192,3 +194,60 @@ async def test_h_real_store_timeout_is_held_back_through_extract_incremental(
     assert result["learnings_stored"] == 0
     assert saved["last_extracted_line"] == LINES[0]
     assert saved["recent_hashes"] == [] and result["hashes"] == []
+
+
+@pytest.fixture
+def real_store_raises(monkeypatch):
+    """Like real_store_times_out, but the memory service raises the exception the test gives."""
+    import db.memory_factory as factory
+
+    def install(exc: Exception) -> None:
+        async def raising(**kwargs):
+            raise exc
+
+        monkeypatch.setenv("CCV3_DISTILL", "0")
+        monkeypatch.setattr(factory, "create_memory_service", raising)
+
+    return install
+
+
+async def _real_store(index: int = 0) -> dict:
+    return await store_learning.store_learning_v2(
+        session_id=SESSION, content=TEXTS[index], source="hook", candidate_hash=HASHES[index]
+    )
+
+
+async def test_i_real_store_marks_a_broken_pipe_retryable(real_store_raises):
+    real_store_raises(BrokenPipeError("Broken pipe"))
+    result = await _real_store()
+    assert result["success"] is False
+    assert not ie._is_connection_error(result["error"])  # the text alone cannot tell
+    assert result["retryable"] is True
+
+
+async def test_j_real_store_broken_pipe_is_held_back_through_extract_incremental(
+    tmp_path, real_store_raises
+):
+    real_store_raises(BrokenPipeError("Broken pipe"))
+    state_file = tmp_path / "state.json"
+    result = await _run(tmp_path, state_file)
+    saved = _saved(state_file)
+    assert saved["last_extracted_line"] == LINES[0]
+    assert saved["recent_hashes"] == [] and result["hashes"] == []
+
+
+async def test_k_real_store_value_error_advances_the_pointer_as_before(
+    tmp_path, real_store_raises
+):
+    real_store_raises(ValueError("bad row"))
+    state_file = tmp_path / "state.json"
+    await _run(tmp_path, state_file)
+    saved = _saved(state_file)
+    assert saved["last_extracted_line"] == 4
+    assert set(saved["recent_hashes"]) == set(HASHES)
+
+
+async def test_l_real_store_value_error_is_not_retryable(real_store_raises):
+    real_store_raises(ValueError("bad row"))
+    result = await _real_store()
+    assert result["success"] is False and result["retryable"] is False
