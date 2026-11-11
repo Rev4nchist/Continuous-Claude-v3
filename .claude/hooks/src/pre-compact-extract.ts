@@ -15,6 +15,7 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import * as path from 'path';
 import { mutateStateWithLock } from './shared/atomic-write.js';
@@ -64,14 +65,44 @@ function readStateOrNull(stateFile: string): string | null {
   }
 }
 
-function runBackgroundExtraction(
-  transcriptPath: string,
-  sessionId: string,
-  startLine: number,
-  stateFile: string,
-  projectDir: string
-): boolean {
-  const opcDir = getOpcDir();
+/** Where the extractor child's stdout and stderr go. Override: CCV3_PRE_COMPACT_EXTRACT_LOG. */
+export function defaultExtractLogPath(): string {
+  return process.env.CCV3_PRE_COMPACT_EXTRACT_LOG ||
+    path.join(os.homedir(), '.claude', 'logs', 'pre-compact-extract.log');
+}
+
+/**
+ * Open the log for append and write one start line. Returns the file descriptor,
+ * or null when the log cannot be opened (the caller then uses stdio 'ignore').
+ */
+function openExtractLog(logPath: string, sessionId: string): number | null {
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    const fd = fs.openSync(logPath, 'a');
+    try {
+      fs.writeSync(fd, `[${new Date().toISOString()}] pre-compact-extract: start session=${sessionId}
+`);
+    } catch { /* the start line is optional */ }
+    return fd;
+  } catch {
+    return null;
+  }
+}
+
+function closeQuietly(fd: number | null): void {
+  if (fd === null) return;
+  try { fs.closeSync(fd); } catch { /* already closed */ }
+}
+
+export interface ExtractLaunchDeps {
+  spawnHidden?: typeof spawnDetachedHidden;
+  opcDir?: string;
+  logPath?: string;
+}
+
+export function runBackgroundExtraction(a: LaunchArgs, deps: ExtractLaunchDeps = {}): boolean {
+  const spawnHidden = deps.spawnHidden ?? spawnDetachedHidden;
+  const opcDir = deps.opcDir ?? getOpcDir();
   const extractScript = path.join(opcDir, 'scripts', 'core', 'incremental_extract.py');
 
   if (!fs.existsSync(extractScript)) {
@@ -79,31 +110,37 @@ function runBackgroundExtraction(
     return false;
   }
 
+  const logFd = openExtractLog(deps.logPath ?? defaultExtractLogPath(), a.sessionId);
   try {
-    const child = spawnDetachedHidden('uv', [
+    const child = spawnHidden('uv', [
       'run', 'python', 'scripts/core/incremental_extract.py',
-      '--transcript', transcriptPath,
-      '--session-id', sessionId,
-      '--start-line', startLine.toString(),
-      '--state-file', stateFile,
-      '--project-dir', projectDir,
+      '--transcript', a.transcriptPath,
+      '--session-id', a.sessionId,
+      '--start-line', a.startLine.toString(),
+      '--state-file', a.stateFile,
+      '--project-dir', a.projectDir,
       '--max-learnings', '5',
       '--json'
     ], {
       cwd: opcDir,
-      stdio: 'ignore',
+      stdio: logFd === null ? 'ignore' : ['ignore', logFd, logFd],
       env: { ...process.env, PYTHONPATH: opcDir },
     });
     child.unref();
     return true;
   } catch {
     return false;
+  } finally {
+    // The child holds its own copy of the descriptor.
+    closeQuietly(logFd);
   }
 }
 
 export interface ExtractDeps {
   launcher?: (a: LaunchArgs) => boolean;
   now?: () => number;
+  /** Test seam for the default launcher: spawn helper, opc dir, log path. */
+  extract?: ExtractLaunchDeps;
 }
 
 export interface LaunchArgs {
@@ -122,8 +159,7 @@ export function runPreCompactExtract(
   projectDir: string,
   deps: ExtractDeps = {}
 ): HookOutput {
-  const launcher = deps.launcher ?? ((a: LaunchArgs) =>
-    runBackgroundExtraction(a.transcriptPath, a.sessionId, a.startLine, a.stateFile, a.projectDir));
+  const launcher = deps.launcher ?? ((a: LaunchArgs) => runBackgroundExtraction(a, deps.extract));
   const now = deps.now ?? Date.now;
   const sessionId = data.session_id;
   const transcriptPath = data.transcript_path;

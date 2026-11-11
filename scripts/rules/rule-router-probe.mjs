@@ -209,6 +209,8 @@ const CASES = [
   // Paid-review policy (Dave, 2026-10-30): a cr-paid.mjs run loads both rules, in a pipeline segment too.
   ['node cr-paid.mjs injects the review loop rule and the CodeRabbit rule', bash('s98', 'node scripts/github/cr-paid.mjs check --pr 225 --json'), 'inject', ['pr-review-loop', 'coderabbit-cli'], []],
   ['cr-paid.mjs after a cd injects both rules', bash('s99', 'cd scripts && node github/cr-paid.mjs record --pr 225 --head abc1234 --files 3'), 'inject', ['pr-review-loop', 'coderabbit-cli'], []],
+  // Review-engine program (coord-program-rule): the first claim of a program lane blocks once with the ten rules.
+  ['lane.mjs claim of a re- lane blocks once with the review-engine rule', bash('s100', 'node C:/Users/dkhay/.claude/scripts/lane.mjs claim re-land-ledger --note "claimed"'), 'deny', ['review-engine'], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'grok exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];

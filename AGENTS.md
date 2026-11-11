@@ -22,6 +22,7 @@ End-to-end check per surface:
 
 Put artifacts in `.claude/cache/e2e/<YYYY-MM-DD>-<name>.<ext>` (gitignored) and name the file in the
 PR's Evidence section.
+A program lane saves its artifacts in `.claudedocs/e2e-<lane-id>/` in the primary checkout: a worktree cache goes with the worktree.
 
 Isolated tests (vitest in `.claude/hooks`, pytest in `opc`):
 - Only for logic an end-to-end check cannot reach cheaply: parsers, regexes, guards, date math.

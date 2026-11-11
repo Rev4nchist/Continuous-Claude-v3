@@ -49,17 +49,30 @@
  *                                                       # --by priority: one flat list of open lanes, band shown before each id
  *   node scripts/coordination/lane.mjs next             # first claimable lane in the shared order (band, due_at, priority, id)
  *   node scripts/coordination/lane.mjs mine             # my lanes + lease time left
- *   node scripts/coordination/lane.mjs claim <id> [--note "..."]
- *   node scripts/coordination/lane.mjs note  <id> "status line"
+ *   node scripts/coordination/lane.mjs claim <id> [--note "..."] [--dep-override --reason "..."]
+ *                                                       # a rule refusal prints `REFUSED claim <id> [token] -- text` and exits 4; a lane held by a live session exits 3
+ *   node scripts/coordination/lane.mjs note  <id> "status line"   # refused ([not-holder], exit 4) only on a lane that a live session other than you holds
  *   node scripts/coordination/lane.mjs compact <id> "text"   # log a compaction as an event; the note stays (PreCompact hook)
- *   node scripts/coordination/lane.mjs state <id> <backlog|ready|active|blocked|review|done>
- *   node scripts/coordination/lane.mjs release <id> [--note "why"]
- *   node scripts/coordination/lane.mjs done <id> [--note "evidence"]
- *   node scripts/coordination/lane.mjs renew            # push my leases out
+ *   node scripts/coordination/lane.mjs state <id> <backlog|ready|active|blocked|review|done> [--if-state <from>] [--reason "..."] [--override --reason "..."]
+ *                                                       # state, release and done change a lane only for its holder. A lane with no holder opens for any session; a quiet
+ *                                                       # holder or an unowned blocked lane needs --reason; --override --reason (cooperative) also changes a held lane and
+ *                                                       # sends the old holder a DM. A refusal prints `REFUSED <verb> <id> [not-holder|needs-reason|if-state] -- text`, exit 4
+ *   node scripts/coordination/lane.mjs release <id> [--note "why"]   # state ready
+ *   node scripts/coordination/lane.mjs release <id> --blocked --reason "text"   # holder only: state blocked, no owner, no lease, note = text, in one statement
+ *   node scripts/coordination/lane.mjs park <id> [--until <time> | --for 2h..7d] --reason "text"   # holder only; you keep the lane and the lease runs to the end (default 24h).
+ *                                                       # State review (a blocked lane stays blocked), note = PARKED until <time> -- <reason> || <old note>. Your next state,
+ *                                                       # release or done ends it (state <id> active resumes). A hold of more than 7 days is release --blocked, not a park.
+ *                                                       # Warns when the active hook ~/.claude/hooks/dist/lane-context.mjs lacks GREATEST(lease_expires_at (the old hook cuts a park)
+ *   node scripts/coordination/lane.mjs done <id> [--note "evidence"]   # plain: meets no dependency; a lane already met is not written
+ *   node scripts/coordination/lane.mjs done <id> --merged <sha> [--note "..."]   # <sha> must be on local main of the board root (the cwd only when the board has no root); meets dependencies
+ *   node scripts/coordination/lane.mjs done <id> --no-pr --evidence <path> [--note "..."]   # <path>: a file under .claudedocs/e2e-<id>/; records the main SHA
+ *                                                       # a rule refusal prints `REFUSED done <id> [token] -- text` and exits 4; --merged, --evidence, --reason need a value
+ *   node scripts/coordination/lane.mjs renew            # push my leases out to now+90m; a later lease (a park) stays
  *   node scripts/coordination/lane.mjs say "message" [--to <name|sid-prefix>] [--lane <id>]
  *   node scripts/coordination/lane.mjs inbox [--peek]   # unread; advances watermark unless --peek
  *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--band P0|P1|P2|none] [--priority 1-999]
- *                                                       # on an existing lane an omitted --band / --priority keeps the stored value
+ *                                                       # on an existing lane an omitted --track / --band / --priority keeps the stored value; a lane that a live
+ *                                                       # session other than you holds is refused: `REFUSED add <id> [not-holder] -- text`, exit 4
  *   node scripts/coordination/lane.mjs band <id> P0|P1|P2|none   # set the importance band; needs migration 0005; no claim needed
  *   node scripts/coordination/lane.mjs band-backfill --dry-run [--p0 id,id|none] [--json]   # read-only: band table (now, after), a triage list,
  *                                                       # and the exact "to apply:" line to copy (it carries --expect N)
@@ -97,16 +110,19 @@
  * Global flags: --as <session-id>, --json, --project <board-key>
  */
 
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
-import { repoPath } from './canon-home.mjs';
+import { repoPath, userHome } from './canon-home.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
 import { planKanban } from './kanban-apply.mjs';
 import { parseBand, parseExpect, parseP0List, parsePriority } from './lane-band.mjs';
+import { landedShaSql, laneMetSql, openDepSql, waitsOnSql } from './lane-dep.mjs';
+import { findCycle, parseSeedFile } from './lane-seed-file.mjs';
 import { bandTag, laneOrderSql } from './lane-sort.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import {
@@ -147,6 +163,11 @@ function connString() {
 
 // ---------------------------------------------------------------- args
 
+/** Flags that never take a value: `done --no-pr re-x` keeps `re-x` as the lane id. Every other flag takes the next token that is not a flag. */
+const BOOLEAN_FLAGS = new Set(['no-pr', 'dep-override', 'override', 'blocked']);
+/** Flags that need a text. A bare one (no value) is a usage error. */
+const TEXT_FLAGS = ['merged', 'evidence', 'reason', 'if-state'];
+
 const argv = process.argv.slice(2);
 const flags = {};
 const positional = [];
@@ -155,11 +176,12 @@ for (let i = 0; i < argv.length; i++) {
   if (a.startsWith('--')) {
     const key = a.slice(2);
     const next = argv[i + 1];
-    if (next === undefined || next.startsWith('--')) flags[key] = true;
+    if (BOOLEAN_FLAGS.has(key) || next === undefined || next.startsWith('--')) flags[key] = true;
     else { flags[key] = next; i++; }
   } else positional.push(a);
 }
 const JSON_OUT = flags.json === true;
+const BARE_TEXT_FLAG = TEXT_FLAGS.find((k) => flags[k] === true);
 
 function me() {
   const id = typeof flags.as === 'string' ? flags.as : process.env.CLAUDE_CODE_SESSION_ID;
@@ -360,17 +382,18 @@ const ALIVE_AT = (alias = '') => `GREATEST(${alias}last_heartbeat, ${alias}last_
  * layers disagree about what "abandoned" means, the humans reading them stop
  * trusting either.
  */
-const RECLAIMABLE = `(
-  l.owner_session_id IS NULL
+const reclaimableSql = (alias) => `(
+  ${alias}.owner_session_id IS NULL
   OR (
-    (l.lease_expires_at IS NULL OR l.lease_expires_at < now())
+    (${alias}.lease_expires_at IS NULL OR ${alias}.lease_expires_at < now())
     AND NOT EXISTS (
       SELECT 1 FROM sessions s
-      WHERE s.id = l.owner_session_id
+      WHERE s.id = ${alias}.owner_session_id
         AND ${ALIVE_AT('s.')} > now() - interval '${STALE_MINUTES} minutes'
     )
   )
 )`;
+const RECLAIMABLE = reclaimableSql('l');
 
 // ---------------------------------------------------------------- render
 
@@ -384,13 +407,17 @@ function laneLine(l, myId, showBoard = false) {
   const lease = l.lease_expires_at
     ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000)
     : null;
+  // The lease is the park (the writers keep the later lease). Parked tag: the lease is more than one lease length ahead. The note plays
+  // no part: it can hold a stale PARKED prefix. A park that ended, or a lease that ran out, shows as a plain lease or LAPSED.
+  const parked = lease > LEASE_MINUTES + 1;
   const leaseTag = l.owner_session_id
-    ? (lease === null ? '' : lease > 0 ? ` ${lease}m` : ` LAPSED`)
+    ? (lease === null ? '' : parked ? ` parked to ${fmtCT(l.lease_expires_at)}` : lease > 0 ? ` ${lease}m` : ` LAPSED`)
     : '';
   const head = `${STATE_MARK[l.state] || '·'} ${bandTag(l.band)} ${l.id.padEnd(26)} ${String(l.state).padEnd(8)} ${(who + leaseTag).padEnd(30)}`;
   const lines = [`${head} ${showBoard ? `[${l.project_key}] ` : ''}${l.title}`];
   if (l.note) lines.push(`${' '.repeat(30)}${l.note}`);
   if (l.scope) lines.push(`${' '.repeat(30)}scope: ${l.scope}`);
+  if (l.waits_on?.length) lines.push(`${' '.repeat(30)}waits on: ${l.waits_on.join(', ')}`);
   return lines.join('\n');
 }
 
@@ -482,6 +509,606 @@ async function foreignId(c, id) {
 
 const badId = (id) => `lane id '${id}' is not valid: use lower case letters, digits and '-', starting with a letter or digit`;
 
+// ---------------------------------------------------------------- refusals, done --merged, the met guard
+
+/**
+ * A lane rule refused the command and nothing was written: exit 4 (contract t2.1, point 6). Line 1 is
+ * `REFUSED <verb> <id> [<token>] -- <text>`; `hint` is line 2. Under --json the exit handler adds one stderr JSON line from `refusal`.
+ */
+function refusal(verb, id, token, text, hint, extra = {}) {
+  const e = new Error(`REFUSED ${verb} ${id} [${token}] -- ${text}${hint ? `\n  ${hint}` : ''}`);
+  e.exitCode = 4;
+  e.refusal = { refused: true, verb, id, rule: token, ...extra };
+  return e;
+}
+
+// ---------------------------------------------------------------- the owner rule (contract park-owner, point 1)
+
+/** `--override` and `--reason`, checked before any write. A usage error is exit 1 and nothing runs. */
+function ownerFlags() {
+  const override = flags.override === true;
+  const reason = typeof flags.reason === 'string' ? flags.reason : null;
+  if (reason !== null && !reason.trim()) throw new Error('--reason needs a text that is not empty (usage error; nothing was run)');
+  if (override && reason === null) throw new Error('--override needs --reason "<text>" (usage error; nothing was run)');
+  return { override, reason };
+}
+
+/**
+ * The holder test: one clause in the WHERE of the one UPDATE that writes (alias `l`). `p` names the bound parameters.
+ * A lane with no holder (RECLAIMABLE, which counts a NULL owner) opens for any session when its owner is NULL and it is not blocked.
+ * A quiet owner (RECLAIMABLE with an owner) or a blocked lane with no owner needs a reason. `unownedBlockedFree` is for done --merged
+ * and --no-pr: the SHA or the file is the reason. `holderOnly` is release --blocked: the holder or an override, nothing else.
+ */
+function ownerWhere(p, { holderOnly = false, unownedBlockedFree = false, ifState = false } = {}) {
+  const open = holderOnly
+    ? `(l.owner_session_id = ${p.me}::text OR ${p.override}::boolean)`
+    : `(l.owner_session_id = ${p.me}::text
+         OR (${RECLAIMABLE} AND (${p.reason}::text IS NOT NULL OR (l.owner_session_id IS NULL${unownedBlockedFree ? '' : " AND l.state <> 'blocked'"})))
+         OR ${p.override}::boolean)`;
+  return `AND ${open}${ifState ? ` AND (${p.ifState}::text IS NULL OR l.state = ${p.ifState}::text)` : ''}`;
+}
+
+/** One transaction. `fn` returns { value, commit = true }; commit false rolls back (nothing was written) and still returns the value. Any throw rolls back. */
+async function inLaneTx(c, fn) {
+  await c.query('BEGIN');
+  try {
+    const { value, commit = true } = await fn();
+    await c.query(commit ? 'COMMIT' : 'ROLLBACK');
+    return value;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
+  }
+}
+
+/** Lock the lane row for the rest of the transaction. No row on this board: the noLane error (exit 1), before any holder test. */
+async function lockLane(c, id, board) {
+  const cur = (await c.query(
+    `SELECT owner_session_id, state FROM agentic_os.lane WHERE id=$1 AND project_key=$2 FOR UPDATE`, [id, board.key],
+  )).rows[0];
+  if (!cur) throw await noLane(c, id, board);
+  return cur;
+}
+
+/** A direct INSERT, never logEvent: logEvent swallows an error, and in a failed transaction the COMMIT would turn into a ROLLBACK unseen. */
+async function insertEvent(c, { id, kind, myId, to = null, body, detail }) {
+  await c.query(
+    `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail, project_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [id, kind, myId, to, body, JSON.stringify(detail), eventBoard()],
+  );
+}
+
+/**
+ * The events of one change, in the transaction of the change. A --reason makes the main event carry {from, reason, prevOwner}. An override of
+ * another session's lane writes a DM to that session FIRST (kind note: not a lifecycle event), then the main event (to_session_id NULL, the
+ * board broadcast) LAST, so a done --merged --override stays met.
+ */
+async function writeChangeEvents(c, { id, myId, cur, to, kind, body, detail, override, reason, extraDetail = {} }) {
+  const prev = cur.owner_session_id ?? null;
+  const overrode = override && prev !== null && prev !== myId;
+  if (overrode) {
+    await insertEvent(c, {
+      id, kind: 'note', myId, to: prev,
+      body: `${id}: ${L(myId)} changed it from ${cur.state} to ${to} over your hold (override). Reason: ${reason}`,
+      detail: { override: true, reason, state: to, from: cur.state },
+    });
+  }
+  const via = reason === null ? '' : overrode ? ` [override of ${L(prev)}, reason: ${reason}]` : ` [reason: ${reason}]`;
+  const more = reason === null ? {} : { from: cur.state, reason, prevOwner: prev, ...(override ? { override: true } : {}), ...extraDetail };
+  await insertEvent(c, { id, kind, myId, body: `${body}${via}`, detail: { ...detail, ...more } });
+}
+
+/** M5: the sentence that names `adopt`, for a caller whose own earlier session holds the lane (see adoptAllowed). */
+const adoptHint = (owner) => `If that was your session before a restart, run: ${laneCliCmd()} adopt --from ${owner}.`;
+
+/**
+ * REFUSED <verb> <id> [not-holder]. A holder who looks like the caller's own earlier session gets the adopt command (M5).
+ * `withOverride` false (note, add and park take no --override) leaves the override sentence out and says "claim it first" in line 1.
+ */
+function notHolderRefusal(verb, id, owner, myId, { withOverride = true } = {}) {
+  const cmd = laneCliCmd();
+  const override = withOverride ? ' The seat may add --override --reason "<why>".' : '';
+  if (!owner) {
+    return refusal(verb, id, 'not-holder', withOverride ? 'the lane has no holder' : 'the lane has no holder; claim it first',
+      withOverride ? `Claim it first: ${cmd} claim ${id}.${override}` : null, { holder: null });
+  }
+  const adopt = adoptAllowed(owner, myId, readIdentity(owner), readIdentity(myId)) ? `${adoptHint(owner)} Otherwise: ` : '';
+  // --to takes the first 8 hex of the owner id, quoted and with no "#": a bare # starts a shell comment, and a bare --to broadcasts the DM.
+  return refusal(verb, id, 'not-holder', `the lane is held by ${L(owner)}`,
+    `${adopt}Only the holder changes it. Ask them: ${cmd} say "..." --to '${owner.slice(0, 8)}'.${override}`, { holder: owner });
+}
+
+/** The error for a note or add that matched no row: no lane on this board (exit 1), else a live holder other than the caller ([not-holder], exit 4). */
+async function heldByOther(c, verb, id, board, myId) {
+  const cur = (await c.query(`SELECT owner_session_id FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [id, board.key])).rows[0];
+  if (!cur) return await noLane(c, id, board);
+  return notHolderRefusal(verb, id, cur.owner_session_id, myId, { withOverride: false });
+}
+
+/**
+ * A park shows in the note as a prefix: `PARKED until <time> -- <reason> || <old note>`. SQL: the note with that prefix cut off (NULL when
+ * nothing follows the separator). A note that does not start with the prefix stays as it is. The reason never holds " || " (park writes "|").
+ */
+const unparkedNote = (col) => `(CASE WHEN ${col} LIKE 'PARKED until %' THEN substr(${col}, NULLIF(position(' || ' IN ${col}), 0) + 4) ELSE ${col} END)`;
+
+/**
+ * Why the one UPDATE matched no row, read under the same row lock. The order (contract point 1): no row, held by another session
+ * without --override, no holder but no --reason, a wrong --if-state. Returns the error to throw, or null when none applies.
+ */
+async function ownerRefusal(c, { verb, id, board, myId, reason, override, ifState = null, holderOnly = false, unownedBlockedFree = false }) {
+  const cur = (await c.query(
+    `SELECT l.owner_session_id AS owner, l.state, ${RECLAIMABLE} AS reclaimable FROM agentic_os.lane l WHERE l.id=$1 AND l.project_key=$2`,
+    [id, board.key],
+  )).rows[0];
+  if (!cur) return await noLane(c, id, board);
+  const { owner } = cur;
+  if (!override) {
+    if (holderOnly ? owner !== myId : owner && owner !== myId && !cur.reclaimable) return notHolderRefusal(verb, id, owner, myId);
+    const free = owner === null && (unownedBlockedFree || cur.state !== 'blocked');
+    if (cur.reclaimable && owner !== myId && reason === null && !free) {
+      return refusal(verb, id, 'needs-reason',
+        owner === null ? 'the lane is blocked' : `its holder ${L(owner)} is quiet and the lease ended`,
+        'Add --reason "<why>". The change is logged and sent to the board.');
+    }
+  }
+  if (ifState !== null && cur.state !== ifState) {
+    return refusal(verb, id, 'if-state', `the lane is ${cur.state}, not ${ifState}`, null, { state: cur.state });
+  }
+  return null;
+}
+
+const SHA_ARG_RE = /^[0-9a-fA-F]{7,40}$/;
+const FULL_SHA_RE = /^[0-9a-f]{40}$/;
+const DONE_USAGE = 'usage: lane.mjs done <id> [--note "..."] | done <id> --merged <sha> [--note "..."] | done <id> --no-pr --evidence <path> [--note "..."]; any form takes [--reason "..."] [--override --reason "..."]';
+/** The usage line of each verb that runs through stateChange, named by the verb the caller typed. */
+const STATE_USAGE = {
+  state: `usage: lane.mjs state <lane-id> <${LANE_STATES.join('|')}> [--if-state <from>] [--reason "..."] [--override --reason "..."]`,
+  release: 'usage: lane.mjs release <lane-id> [--blocked --reason "<text>"] [--reason "..."] [--override --reason "..."]',
+  done: DONE_USAGE,
+};
+
+/** One git call: argument array, no shell, 10 s. A failed spawn or a timeout throws (exit 1). */
+function gitRun(dir, args) {
+  const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  if (r.error) throw new Error(`git ${args[0]} failed in ${dir}: ${r.error.message}`);
+  return { status: r.status, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
+}
+
+/** The full SHA of refs/heads/main. --verify, so a missing branch is an error and never an echo of the argument. */
+function mainSha(dir) {
+  const r = gitRun(dir, ['rev-parse', '--verify', '--quiet', 'refs/heads/main']);
+  if (r.status !== 0 || !FULL_SHA_RE.test(r.out)) throw new Error(`cannot read refs/heads/main in ${dir}: ${r.err || 'no such branch'}`);
+  return r.out;
+}
+
+/** The 4 git steps of `done --merged` (contract point 3). Returns the full SHAs git resolved, never the argument. */
+function landedCommit(id, dir) {
+  const sha = flags.merged;
+  if (!SHA_ARG_RE.test(sha)) throw new Error(`--merged needs a commit SHA of 7 to 40 hex characters; got '${sha}'`);
+  const c = gitRun(dir, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]);
+  // Only "git ran and says there is no such commit" (status 1, no output) is a refusal. Any other failure (not a repo,
+  // a signal, status 128) is an error: it says nothing about the SHA (contract point 6, B6).
+  if (c.status === 1 && !c.out) {
+    throw refusal('done', id, 'not-a-commit', `${sha} is not a commit in ${fwd(dir)}`,
+      'Run done from the repo of the lane, with the merge commit on main. Fetch and update local main first.');
+  }
+  if (c.status !== 0) throw new Error(`git rev-parse failed in ${fwd(dir)} (${c.status === null ? 'killed by a signal' : `status ${c.status}`}): ${c.err || 'no message'}`);
+  if (!FULL_SHA_RE.test(c.out)) throw new Error(`git resolved '${sha}' to '${c.out}', which is not a 40 hex SHA`);
+  const a = gitRun(dir, ['merge-base', '--is-ancestor', c.out, 'refs/heads/main']);
+  if (a.status !== 0 && a.status !== 1) throw new Error(`git merge-base failed in ${dir} (status ${a.status}): ${a.err}`);
+  const main = mainSha(dir);
+  if (a.status === 1) {
+    throw refusal('done', id, 'not-on-main', `${c.out.slice(0, 12)} is not on main (main is ${main.slice(0, 12)})`, 'Land the PR, update local main, then run done again.');
+  }
+  return { merged: c.out, main };
+}
+
+/**
+ * The folder git runs in for `done --merged` and `--no-pr`: the root of the lane's board from the registry (the entry's own
+ * path, real case), else the process cwd. A SHA of an unrelated repo must not meet a dependency (contract point 3, B2).
+ */
+function landedDir(board) {
+  if (!board?.root) return process.cwd();
+  const live = loadRegistry().filter((x) => x.status.toLowerCase() !== 'inactive');
+  const e = live.find((x) => x.key === board.via) ?? live.find((x) => x.root === board.root);
+  return realOrSelf(e?.path || board.root);
+}
+
+const pathSegs = (p) => {
+  const s = fwd(p).split('/').filter(Boolean);
+  return process.platform === 'win32' ? s.map((x) => x.toLowerCase()) : s;
+};
+
+/** The repo that holds the evidence folder: the board root, else the top level of the cwd repo. */
+function evidenceBase(board, dir) {
+  if (board?.root) return dir;
+  const r = gitRun(dir, ['rev-parse', '--show-toplevel']);
+  if (r.status !== 0 || !r.out) throw new Error(`cannot find the repo of ${fwd(dir)} for the evidence folder: ${r.err || 'not a git repository'}`);
+  return r.out;
+}
+
+/**
+ * The evidence rule of `done --no-pr`: a regular file whose REAL path (links resolved) is under
+ * <board root>/.claudedocs/e2e-<id>/, compared by path segments. Returns that real path, forward slashes (contract point 3, B3).
+ */
+function evidencePath(id, board, dir) {
+  let base;
+  try { base = fs.realpathSync.native(evidenceBase(board, dir)); } catch (e) { throw new Error(`the evidence base folder cannot be read: ${e.code ?? e.message}`); }
+  let real = null;
+  try {
+    const r = fs.realpathSync.native(resolve(flags.evidence));
+    if (fs.statSync(r).isFile()) real = r;
+  } catch { /* a missing path is the refusal below */ }
+  const want = [...pathSegs(base), '.claudedocs', `e2e-${id}`];
+  const got = real ? pathSegs(real) : [];
+  if (real && got.length > want.length && want.every((x, i) => got[i] === x)) return fwd(real);
+  throw refusal('done', id, 'no-evidence', `${flags.evidence} is not a file under .claudedocs/e2e-${id}/`, 'Save the evidence there first, then run done again.');
+}
+
+/** The two landed forms never mix, and each flag has one partner. Usage errors (exit 1). */
+function assertDoneForm() {
+  const noPr = flags['no-pr'] === true;
+  const merged = typeof flags.merged === 'string';
+  const evidence = typeof flags.evidence === 'string';
+  if (merged && (noPr || evidence)) throw new Error(`use one form, never both. ${DONE_USAGE}`);
+  if (noPr && !evidence) throw new Error(`--no-pr needs --evidence <path>. ${DONE_USAGE}`);
+  if (evidence && !noPr) throw new Error(`--evidence goes with --no-pr. ${DONE_USAGE}`);
+}
+
+/**
+ * One transaction: the row is locked, the lane goes done and released, and the events are direct INSERTs (a failed insert rolls the UPDATE back).
+ * The holder clause is in the WHERE. A lane that has no owner needs no --reason here, a blocked one too: the SHA or the file is the reason (S3).
+ */
+async function writeDone(c, { board, id, myId, note, body, detail, owner }) {
+  const { override, reason } = owner;
+  return inLaneTx(c, async () => {
+    const cur = await lockLane(c, id, board);
+    const { rows } = await c.query(
+      `UPDATE agentic_os.lane l SET state='done', note=COALESCE($3::text, ${unparkedNote('l.note')}), owner_session_id=NULL, lease_expires_at=NULL, updated_at=now()
+       WHERE l.id=$1 AND l.project_key=$2
+         ${ownerWhere({ me: '$4', reason: '$5', override: '$6' }, { unownedBlockedFree: true })}
+       RETURNING l.*`,
+      [id, board.key, note, myId, reason, override],
+    );
+    if (!rows.length) {
+      throw (await ownerRefusal(c, { verb: 'done', id, board, myId, reason, override, unownedBlockedFree: true }))
+        ?? new Error(`done ${id} refused for no known reason; run ${laneCliCmd()} board and retry`);
+    }
+    await writeChangeEvents(c, { id, myId, cur, to: 'done', kind: 'done', body, detail, override, reason });
+    return { value: rows[0] };
+  });
+}
+
+/** `done <id> --merged <sha>` and `done <id> --no-pr --evidence <path>`. Git and the evidence rule run before any write. */
+async function doneLanded(c) {
+  const myId = me();
+  const id = positional[1];
+  if (!id) throw new Error(DONE_USAGE);
+  const board = await projectForOwnedLane(c, id, myId);
+  const owner = ownerFlags();
+  const dir = landedDir(board);
+  const noPr = flags['no-pr'] === true;
+  const evidence = noPr ? evidencePath(id, board, dir) : null;
+  const { merged, main } = noPr ? ((m) => ({ merged: m, main: m }))(mainSha(dir)) : landedCommit(id, dir);
+  const note = typeof flags.note === 'string' ? flags.note : null;
+  const how = noPr ? `no PR, evidence ${flags.evidence}` : `merged ${merged.slice(0, 12)}`;
+  const detail = { state: 'done', merged, main, ...(noPr ? { noPr: true, evidence } : {}) };
+  const body = `${id} -> done (${how})${note ? ` (${note})` : ''}`;
+  const row = await writeDone(c, { board, id, myId, note, body, detail, owner });
+  if (JSON_OUT) return { ...row, merged, main };
+  return `${id} -> done (${noPr ? `no PR; main ${main.slice(0, 12)}` : `merged ${merged.slice(0, 12)} on main`}; released)`;
+}
+
+/** The merged SHA of a lane that is already met (state done, latest lifecycle event a merged done), else null. Reads lane_event only. */
+async function metSha(c, id, board) {
+  const row = (await c.query(
+    `SELECT ${laneMetSql('l')} AS met, ${landedShaSql('l')} AS sha FROM agentic_os.lane l WHERE l.id=$1 AND l.project_key=$2`,
+    [id, board.key],
+  )).rows[0];
+  return row?.met ? row.sha : null;
+}
+
+/** After a plain done: one stderr hint when a lane_dep row waits on this lane. Silent without the table (0006) and never an error. */
+async function hintPlainDone(c, id) {
+  try {
+    if (!(await c.query(`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`)).rows[0].has) return;
+    if ((await c.query(`SELECT 1 FROM agentic_os.lane_dep WHERE depends_on=$1 LIMIT 1`, [id])).rowCount) {
+      process.stderr.write('[lane] note: a done without --merged meets no dependency\n');
+    }
+  } catch { /* a hint must never fail a done that was written */ }
+}
+
+/**
+ * The lease CASE (contract point 6): done and ready free the lane; the owner's own change sets now+90m, which ends a park (L2.9). A non-owner
+ * --override (the seat) also ends a park: it caps a lease at now+90m (LEAST would turn a NULL lease into now+90m, so NULL stays NULL) and
+ * strips the PARKED prefix; the owner stays. A reclaim with --reason leaves the lease. The prefix goes in the same cases as the lease.
+ */
+const STATE_SQL = `UPDATE agentic_os.lane l SET state=$2, updated_at=now(),
+     note = COALESCE($3, CASE WHEN $2 IN ('done','ready') OR l.owner_session_id = $5::text OR $7::boolean THEN ${unparkedNote('l.note')} ELSE l.note END),
+     owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE l.owner_session_id END,
+     lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL
+                             WHEN l.owner_session_id = $5::text THEN now() + interval '${LEASE_MINUTES} minutes'
+                             WHEN $7::boolean AND l.lease_expires_at IS NOT NULL THEN LEAST(l.lease_expires_at, now() + interval '${LEASE_MINUTES} minutes')
+                             ELSE l.lease_expires_at END
+   WHERE l.id=$1 AND l.project_key=$4
+     ${ownerWhere({ me: '$5', reason: '$6', override: '$7', ifState: '$8' }, { ifState: true })}
+   RETURNING l.*`;
+
+/** release --blocked: state blocked, no owner, no lease and the note in ONE statement, so the lane is never ready and never ownerless-and-offered. */
+const RELEASE_BLOCKED_SQL = `UPDATE agentic_os.lane l SET state='blocked', owner_session_id=NULL, lease_expires_at=NULL, note=$3::text, updated_at=now()
+   WHERE l.id=$1 AND l.project_key=$2
+     ${ownerWhere({ me: '$4', override: '$5' }, { holderOnly: true })}
+   RETURNING l.*`;
+
+/**
+ * `state`, `release` and plain `done`: the owner rule in one transaction (contract park-owner, points 1 to 4 and S1).
+ * 1. The row is locked. 2. A plain done reads the met test under that lock, so a concurrent done --merged cannot be undone. 3. The one UPDATE
+ * carries the holder clause. 4. The events are direct INSERTs. A refusal is read under the same lock and writes nothing.
+ * `verb` is the verb the caller typed: it names the REFUSED line and the usage line. Only `state` gets --if-state (the main block refuses it elsewhere).
+ */
+async function stateChange(c, verb) {
+  const myId = me();
+  const id = positional[1];
+  const board = await projectForOwnedLane(c, id, myId);
+  const blocked = verb === 'release' && flags.blocked === true;
+  const to = blocked ? 'blocked' : { release: 'ready', done: 'done' }[verb] ?? positional[2];
+  if (!id || !LANE_STATES.includes(to)) throw new Error(STATE_USAGE[verb]);
+  const { override, reason } = ownerFlags();
+  if (blocked && reason === null) throw new Error('release --blocked needs --reason "<text>" (usage error; nothing was run)');
+  // --if-state belongs to `state` alone: the main block already refused it on release, done and park.
+  const ifState = typeof flags['if-state'] === 'string' ? flags['if-state'] : null;
+  if (ifState !== null && !LANE_STATES.includes(ifState)) {
+    throw new Error(`--if-state needs one of ${LANE_STATES.join('|')}; got '${ifState}' (usage error; nothing was run)`);
+  }
+  const note = typeof flags.note === 'string' ? flags.note : null;
+  const out = await inLaneTx(c, async () => {
+    const cur = await lockLane(c, id, board);
+    // A lane that is already met (done, with a merged done as its latest lifecycle event) is never written by a plain done:
+    // one stray `done <id>` must not unmeet it and close every dependent (contract t2.1, point 3). Read under the row lock (point 4).
+    if (to === 'done') {
+      const sha = await metSha(c, id, board);
+      if (sha) return { value: { met: sha }, commit: false };
+    }
+    const { rows } = blocked
+      ? await c.query(RELEASE_BLOCKED_SQL, [id, board.key, reason, myId, override])
+      : await c.query(STATE_SQL, [id, to, note, board.key, myId, reason, override, ifState]);
+    if (!rows.length) {
+      throw (await ownerRefusal(c, { verb, id, board, myId, reason, override, ifState, holderOnly: blocked }))
+        ?? new Error(`${verb} ${id} refused for no known reason; run ${laneCliCmd()} board and retry`);
+    }
+    await writeChangeEvents(c, {
+      id, myId, cur, to, kind: to === 'done' ? 'done' : 'state_changed', override, reason,
+      body: blocked ? `${id} -> blocked (released)` : `${id} -> ${to}${note ? ` (${note})` : ''}`,
+      detail: { state: to }, extraDetail: blocked ? { released: true } : {},
+    });
+    return { value: { row: rows[0] } };
+  });
+  if (out.met) return JSON_OUT ? { id, already_met: true, merged: out.met } : `${id} already met (merged ${out.met.slice(0, 12)}); nothing written`;
+  if (to === 'done') await hintPlainDone(c, id);
+  return JSON_OUT ? out.row : `${id} -> ${to}${to === 'done' || to === 'ready' ? ' (released)' : blocked ? ' (released; no owner)' : ''}`;
+}
+
+// ---------------------------------------------------------------- park (contract park-owner, point 6 and the review changes H1, M6, L9, L10, L11)
+
+const PARK_USAGE = 'usage: lane.mjs park <lane-id> [--until <time> | --for <N>m|<N>h|<N>d] --reason "<text>"   (default --for 24h; from 2h to 7 days)';
+const PARK_DEFAULT_MS = 24 * 3_600_000;
+/** The park end, in SQL: $1 is an exact time (--until) or NULL, $2 the milliseconds from now (--for) or NULL. now() is the transaction time, so the bounds are exact. */
+const PARK_END_SQL = `COALESCE($1::timestamptz, now() + $2::bigint * interval '1 millisecond')`;
+
+/** The args of `park`, checked before the first query (the connection is already open, so a bad arg still opens it). A usage error is exit 1 and nothing is written. */
+function parkArgs() {
+  const id = positional[1];
+  if (!id) throw new Error(PARK_USAGE);
+  if (typeof flags.reason !== 'string' || !flags.reason.trim()) throw new Error(`park needs --reason "<text>" (usage error; nothing was run)\n${PARK_USAGE}`);
+  if (flags.until !== undefined && flags.for !== undefined) throw new Error('park takes --until or --for, not both (usage error; nothing was run)');
+  const until = flags.until === undefined ? null : parseDue(flags.until);
+  const ms = flags.until !== undefined ? null : flags.for === undefined ? PARK_DEFAULT_MS : parseFor(flags.for);
+  const reason = flags.reason.trim();
+  // The note keeps one line, and a " || " in the reason must not look like the separator before the old note.
+  return { id, reason, noteReason: reason.replace(/\s+/g, ' ').replace(/\|{2,}/g, '|'), until, ms };
+}
+
+/** The active hook bundles that renew a lease: lane-context.mjs (session start, compact) and prompt-submit.mjs (each prompt). Both must hold the fix. */
+const LEASE_HOOK_BUNDLES = ['lane-context.mjs', 'prompt-submit.mjs'];
+
+/** L11: until `sync-to-active.sh` copies the new hooks, each prompt of the parking session cuts the park back to 90 minutes. Returns the warning, or null when both bundles hold the fix. */
+function activeHookWarning() {
+  const lacking = LEASE_HOOK_BUNDLES.map((f) => join(userHome(), '.claude', 'hooks', 'dist', f)).filter((file) => {
+    try { return !readFileSync(file, 'utf8').includes('GREATEST(lease_expires_at'); } catch { return true; /* a missing file warns too */ }
+  });
+  if (!lacking.length) return null;
+  return `[lane] warn: ${lacking.map(fwd).join(' and ')} ${lacking.length > 1 ? 'do' : 'does'} not hold GREATEST(lease_expires_at yet. Until the hook sync, each prompt of this session sets the lease back to ${LEASE_MINUTES} minutes and ends the park early.`;
+}
+
+/**
+ * `park`: the holder keeps the lane and the lease is pushed to the end time (no schema change). State becomes review (a blocked lane stays blocked),
+ * the note gets the PARKED prefix, and one state_changed broadcast carries the detail. One transaction under the row lock; only the holder may park.
+ * The end is read in SQL against now(): below 2 hours or above 7 days is a usage error (exit 1), not a REFUSED.
+ */
+async function parkLane(c) {
+  const myId = me();
+  const { id, reason, noteReason, until, ms } = parkArgs();
+  const board = await projectForOwnedLane(c, id, myId);
+  const row = await inLaneTx(c, async () => {
+    const cur = await lockLane(c, id, board);
+    if (cur.owner_session_id !== myId) throw notHolderRefusal('park', id, cur.owner_session_id, myId, { withOverride: false });
+    if (cur.state === 'done') throw refusal('park', id, 'done', 'the lane is done', 'A done lane has nothing to park.');
+    const end = (await c.query(
+      `SELECT ${PARK_END_SQL} AS e, ${PARK_END_SQL} >= now() + interval '2 hours' AS ok_min, ${PARK_END_SQL} <= now() + interval '7 days' AS ok_max`,
+      [until, ms],
+    )).rows[0];
+    if (!end.ok_min || !end.ok_max) {
+      throw new Error(`park ends ${fmtCT(end.e)}, which is ${end.ok_min ? 'more than 7 days' : 'less than 2 hours'} from now (usage error; nothing was run). ` +
+        'Use --for 2h up to 7d. A longer hold is: release <id> --blocked --reason "<text>".');
+    }
+    const when = fmtCT(end.e);
+    const { rows } = await c.query(
+      `UPDATE agentic_os.lane l SET
+         state = CASE WHEN l.state = 'blocked' THEN 'blocked' ELSE 'review' END,
+         lease_expires_at = ${PARK_END_SQL},
+         note = 'PARKED until ' || $3::text || ' -- ' || $4::text || COALESCE(' || ' || NULLIF(${unparkedNote('l.note')}, ''), ''),
+         updated_at = now()
+       WHERE l.id=$5 AND l.project_key=$6 AND l.owner_session_id=$7::text AND l.state <> 'done'
+       RETURNING l.*`,
+      [until, ms, when, noteReason, id, board.key, myId],
+    );
+    if (!rows.length) throw new Error(`park ${id} refused for no known reason; run ${laneCliCmd()} board and retry`);
+    await insertEvent(c, {
+      id, kind: 'state_changed', myId, body: `${id} parked until ${when}: ${reason}`,
+      detail: { state: rows[0].state, parked: true, until: end.e.toISOString(), reason, fromState: cur.state },
+    });
+    return { value: { ...rows[0], parked_until: end.e.toISOString(), parked_until_text: when } };
+  });
+  const warn = activeHookWarning();
+  if (warn) process.stderr.write(`${warn}\n`);
+  if (JSON_OUT) return row;
+  return `${id} parked until ${row.parked_until_text} (state ${row.state}; you keep it; "${laneCliCmd()} state ${id} active" ends the park)`;
+}
+
+// ---------------------------------------------------------------- the lane_dep floor
+
+const DEP_OFF_WARNING = '[lane] warn: migration 0006 (lane_dep) is not applied; the dependency gate is off';
+let HAS_LANE_DEP = null;
+let DEP_WARN_DUE = false;
+let DEP_WARNED = false;
+
+/** Is table lane_dep there? One query per run, asked only by the verbs that read edges (contract t2.1, point 4). */
+async function hasLaneDep(c) {
+  HAS_LANE_DEP ??= (await c.query(`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`)).rows[0].has;
+  return HAS_LANE_DEP;
+}
+
+/** true: the dependency SQL may be used. false: the table is missing; the SQL is left out and the one warning is queued (see flushDepWarning). */
+async function depGate(c) {
+  const has = await hasLaneDep(c);
+  if (!has) DEP_WARN_DUE = true;
+  return has;
+}
+
+/** The floor warning goes to stderr once per run, after the result or after the error text: line 1 of a refusal stays its REFUSED line (contract point 6). */
+function flushDepWarning() {
+  if (!DEP_WARN_DUE || DEP_WARNED) return;
+  DEP_WARNED = true;
+  process.stderr.write(`${DEP_OFF_WARNING}\n`);
+}
+
+// ---------------------------------------------------------------- the claim rules (contract t2.1, point 6)
+
+/** The caller's other `re-` lane on this board; a lane of the same `re/` pack does not count (open point 4). $2 is the caller. */
+const secondReFrom = (select) => `SELECT ${select} FROM agentic_os.lane o
+   WHERE o.project_key = l.project_key AND o.owner_session_id = $2 AND o.state <> 'done' AND left(o.id, 3) = 're-'
+     AND o.id <> l.id AND NOT COALESCE(o.branch = l.branch AND l.branch LIKE 're/%', false)`;
+/** A lane of the same `re/` pack that a live session other than the caller holds. $2 is the caller. */
+const packHeldFrom = (select) => `SELECT ${select} FROM agentic_os.lane o
+   WHERE o.project_key = l.project_key AND o.branch = l.branch AND o.id <> l.id AND left(o.id, 3) = 're-'
+     AND o.owner_session_id <> $2 AND NOT ${reclaimableSql('o')}`;
+const SECOND_RE_LANE = `(left(l.id, 3) = 're-' AND EXISTS (${secondReFrom('1')}))`;
+const PACK_HELD = `(left(l.id, 3) = 're-' AND l.branch LIKE 're/%' AND EXISTS (${packHeldFrom('1')}))`;
+
+/** The open-dependency clause of the claim WHERE: only for a lane that is not held (backlog, ready, or no owner). Contract 1.10 as changed. */
+const claimDepClause = `AND NOT ((l.state IN ('backlog','ready') OR l.owner_session_id IS NULL) AND ${openDepSql('l')})`;
+
+/** The one atomic claim UPDATE (see `claim`). Returns the claimed row, or null when no row matched. Nothing is written on null. */
+async function claimUpdate(c, { id, myId, board, override, withDeps }) {
+  const dep = withDeps && !override ? claimDepClause : '';
+  const waits = withDeps && override ? `, ${waitsOnSql('l')} AS waits_on` : '';
+  const sql = `UPDATE agentic_os.lane l SET
+         owner_session_id = $2,
+         claimed_at       = now(),
+         lease_expires_at = now() + interval '${LEASE_MINUTES} minutes',
+         fence            = l.fence + 1,
+         state            = CASE WHEN l.state IN ('backlog','ready') THEN 'active' ELSE l.state END,
+         note             = COALESCE($3, ${unparkedNote('l.note')}),
+         updated_at       = now()
+       WHERE l.id = $1 AND l.project_key = $4 AND ${RECLAIMABLE}
+         AND l.state NOT IN ('done','blocked')
+         ${dep}
+         AND NOT ${PACK_HELD}
+         AND NOT ${SECOND_RE_LANE}
+       RETURNING l.*${waits}`;
+  const params = [id, myId, typeof flags.note === 'string' ? flags.note : null, board.key];
+  if (!override) return (await c.query(sql, params)).rows[0] ?? null;
+  return claimWithOverride(c, sql, params, { id, myId });
+}
+
+/** --dep-override: the UPDATE and the dep_override event in one transaction. A failed insert rolls the claim back (exit 1). */
+async function claimWithOverride(c, sql, params, { id, myId }) {
+  await c.query('BEGIN');
+  try {
+    const row = (await c.query(sql, params)).rows[0];
+    const waitsOn = row?.waits_on ?? [];
+    if (row) { // every override claim that matches a row is on the record, also with no open edge (waitsOn [])
+      await c.query(
+        `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail, project_key)
+         VALUES ($1,'dep_override',$2,NULL,$3,$4,$5)`,
+        [id, myId, `${id} claimed with open dependencies ${waitsOn.length ? waitsOn.join(', ') : '(none)'}: ${flags.reason}`, JSON.stringify({ waitsOn, reason: flags.reason }), eventBoard()],
+      );
+    }
+    await c.query(row ? 'COMMIT' : 'ROLLBACK');
+    if (row) delete row.waits_on;
+    return row ?? null;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
+  }
+}
+
+/** One SELECT for the diagnosis after a claim matched no row. $1 lane, $2 caller, $3 board. `withDeps` false: no lane_dep table. */
+async function diagnoseClaim(c, id, myId, board, withDeps) {
+  const pack = `CASE WHEN left(l.id, 3) = 're-' AND l.branch LIKE 're/%' THEN (${packHeldFrom("json_build_object('id', o.id, 'owner', o.owner_session_id)")} LIMIT 1) END`;
+  const other = `CASE WHEN left(l.id, 3) = 're-' THEN (${secondReFrom("json_build_object('id', o.id, 'state', o.state)")} LIMIT 1) END`;
+  return (await c.query(
+    `SELECT l.*, ${RECLAIMABLE} AS reclaimable, ${withDeps ? waitsOnSql('l') : "'{}'::text[]"} AS waits_on, ${pack} AS pack_held, ${other} AS other_re
+     FROM agentic_os.lane l WHERE l.id = $1 AND l.project_key = $3`,
+    [id, myId, board.key],
+  )).rows[0];
+}
+
+/** The line of one open dependency for the [open-dependency] text (contract: the four <status> forms). Joins on the id alone (1.4). */
+async function depStatusLines(c, id, boardKey, waits) {
+  const { rows } = await c.query(
+    `SELECT d.depends_on AS id, x.project_key, x.state, ${laneMetSql('x')} AS met
+     FROM agentic_os.lane_dep d LEFT JOIN agentic_os.lane x ON x.id = d.depends_on
+     WHERE d.lane_id = $1 ORDER BY d.depends_on`,
+    [id],
+  );
+  return rows.filter((r) => waits.includes(r.id)).map((r) => {
+    const status = r.project_key === null ? 'missing: no lane has this id'
+      : r.project_key !== boardKey ? `on board ${r.project_key}`
+      : r.state === 'done' ? 'done, but no SHA on main is recorded' : `state ${r.state}`;
+    return `  ${r.id}: ${status}`;
+  });
+}
+
+/** The refusal rows 4 to 8 of the diagnosis table, in that order. Returns nothing when none applies (row 9). `override` skips row 6. */
+async function claimRefusal(c, cur, id, board, override) {
+  const cmd = laneCliCmd();
+  if (cur.state === 'done') {
+    return refusal('claim', id, 'done', 'the lane is done', `A done lane is never claimed. To reopen it: ${cmd} state ${id} ready, then ${cmd} claim ${id}.`);
+  }
+  if (cur.state === 'blocked') {
+    return refusal('claim', id, 'blocked', 'the lane is blocked', `It waits on a hold. Read its note and scope: ${cmd} board. It opens when the hold ends and it moves to backlog.`);
+  }
+  if (!override && (['backlog', 'ready'].includes(cur.state) || cur.owner_session_id === null) && cur.waits_on.length) {
+    const lines = await depStatusLines(c, id, board.key, cur.waits_on);
+    const hint = `${lines.join('\n')}\n  A dependency is met when its lane is done with a SHA on main: ${cmd} done <dep> --merged <sha>.\n  Claim another lane by id: ${cmd} board --by priority`;
+    return refusal('claim', id, 'open-dependency', `waits on ${cur.waits_on.join(', ')}`, hint.replace(/^  /, ''), { waits_on: cur.waits_on });
+  }
+  if (cur.pack_held) {
+    return refusal('claim', id, 'pack-held', `${cur.pack_held.id} on branch ${cur.branch} is held by ${L(cur.pack_held.owner)}`,
+      `The lanes of one pack go to one session. Claim another lane by id: ${cmd} board --by priority`);
+  }
+  if (cur.other_re) {
+    const o = cur.other_re;
+    const finish = `One re- lane per session. Finish it (${cmd} done ${o.id} --merged <sha>)`;
+    return refusal('claim', id, 'second-re-lane', `you hold ${o.id}`, o.state === 'review'
+      ? `${finish}, or end this session so a fresh session can claim ${id} by id.`
+      : `${finish} or release it (${cmd} release ${o.id}), then claim ${id}.`);
+  }
+  return null;
+}
+
 /** Which of these sessions sit on the board (their project is under a board root)? Keeps the order.
  *  Roots only: owning a lane there does not count, so adopting a lane does not decide who a name means. */
 async function sessionsOnBoard(c, uuids, boardKey) {
@@ -550,6 +1177,111 @@ async function checkSeedItems(c, items, board) {
     [items.map((i) => i.id), board.key],
   )).rows[0];
   if (foreign) throw new Error(`lane id '${foreign.id}' belongs to board '${foreign.project_key}'`);
+}
+
+// ---------------------------------------------------------------- seed
+
+/**
+ * One lane item of a seed file as an upsert. Deliberately asymmetric on conflict: descriptive columns are refreshed
+ * from the seed, but `state`, `note` and every ownership column are NOT.
+ * Re-seeding must never revert a live claim or overwrite the status line
+ * the holder is currently maintaining -- the seed knows the shape of the
+ * work, the session knows what is happening to it right now.
+ * Name the band column only when some item carries a band (withBand), so a seed with no bands works before migration 0005.
+ * An omitted band or priority (undefined) keeps the stored value on conflict; a new lane gets NULL / 50.
+ */
+async function upsertSeedLane(c, it, board, withBand) {
+  const band = parseBand(it.band);
+  const priority = parsePriority(it.priority);
+  let res;
+  try {
+    res = await c.query(
+      `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,rationale,done_when,project_key${withBand ? ',band' : ''})
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11${withBand ? ',$13' : ''})
+       ON CONFLICT (id) DO UPDATE SET
+         title=EXCLUDED.title, track=EXCLUDED.track,
+         scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
+         branch=COALESCE(EXCLUDED.branch, agentic_os.lane.branch),
+         priority=CASE WHEN $12::boolean THEN EXCLUDED.priority ELSE agentic_os.lane.priority END,
+         ${withBand ? 'band=CASE WHEN $14::boolean THEN EXCLUDED.band ELSE agentic_os.lane.band END,' : ''}
+         note=COALESCE(agentic_os.lane.note, EXCLUDED.note),
+         rationale=COALESCE(EXCLUDED.rationale, agentic_os.lane.rationale),
+         done_when=COALESCE(EXCLUDED.done_when, agentic_os.lane.done_when),
+         updated_at=now()
+       WHERE agentic_os.lane.project_key = EXCLUDED.project_key`,
+      [it.id, it.title, it.track || 'unsorted', it.scope || null, it.branch || null,
+       LANE_STATES.includes(it.state) ? it.state : 'backlog', priority ?? 50, it.note || null,
+       it.rationale || null, it.doneWhen || null, board.key, priority !== undefined,
+       ...(withBand ? [band ?? null, band !== undefined] : [])],
+    );
+  } catch (e) { throw bandMigrationError(e); }
+  if (res.rowCount === 0) throw await foreignId(c, it.id);
+}
+
+/** Rule 7 (contract t2.1, point 1.4): an edge to a lane that another board owns is refused, before any write. */
+async function refuseForeignEdges(c, edges, board) {
+  const rows = (await c.query(
+    `SELECT id, project_key FROM agentic_os.lane WHERE id = ANY($1::text[]) AND project_key <> $2`,
+    [edges.map((e) => e.dependsOn), board.key],
+  )).rows;
+  const owner = new Map(rows.map((r) => [r.id, r.project_key]));
+  const bad = edges.find((e) => owner.has(e.dependsOn));
+  if (bad) throw new Error(`edge ${bad.lane} -> ${bad.dependsOn}: lane '${bad.dependsOn}' belongs to board '${owner.get(bad.dependsOn)}'`);
+}
+
+/** The replace set is every lane id of lanes[]. The DELETE has no project_key filter: lane ids are global (1.10). */
+async function replaceEdges(c, lanes, edges, board) {
+  await c.query(`DELETE FROM agentic_os.lane_dep WHERE lane_id = ANY($1::text[])`, [lanes.map((l) => l.id)]);
+  await c.query(
+    `INSERT INTO agentic_os.lane_dep (lane_id, depends_on, project_key)
+     SELECT t.l, t.d, $3 FROM unnest($1::text[], $2::text[]) AS t(l, d)`,
+    [edges.map((e) => e.lane), edges.map((e) => e.dependsOn), board.key],
+  );
+}
+
+/** After the replace: a cycle in the full edge set of the board refuses the file (1.7). The caller rolls back. */
+async function refuseCycle(c, board) {
+  const all = (await c.query(`SELECT lane_id, depends_on FROM agentic_os.lane_dep WHERE project_key = $1`, [board.key])).rows;
+  const cycle = findCycle(all.map((r) => ({ lane: r.lane_id, dependsOn: r.depends_on })));
+  if (cycle) throw new Error(`seed refused: cycle ${cycle.join(' -> ')}`);
+}
+
+/** Rule 8: the edges whose dependency has no lane row at all. They count as open; the seed warns. */
+async function missingDeps(c, edges) {
+  const have = new Set((await c.query(`SELECT id FROM agentic_os.lane WHERE id = ANY($1::text[])`, [edges.map((e) => e.dependsOn)])).rows.map((r) => r.id));
+  return edges.filter((e) => !have.has(e.dependsOn));
+}
+
+/** The object form, in the order of 1.10: BEGIN, board lock, upserts, replace, cycle check, seeded event, COMMIT. */
+async function seedObject(c, { lanes, edges, dropped }, { file, board, myId }) {
+  if (!(await hasLaneDep(c))) throw new Error('migration 0006 (lane_dep) is not applied; an object-form seed needs the lane_dep table');
+  await checkSeedItems(c, lanes, board);
+  const withBand = lanes.some((it) => parseBand(it.band) !== undefined);
+  let missing;
+  await c.query('BEGIN');
+  try {
+    await c.query(`SELECT pg_advisory_xact_lock(hashtext('lane_dep:' || $1::text))`, [board.key]);
+    await refuseForeignEdges(c, edges, board);
+    for (const it of lanes) await upsertSeedLane(c, it, board, withBand);
+    await replaceEdges(c, lanes, edges, board);
+    await refuseCycle(c, board);
+    missing = await missingDeps(c, edges);
+    // A direct INSERT, not logEvent: logEvent swallows a failed insert, and the COMMIT would then be a ROLLBACK.
+    await c.query(
+      `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, detail, project_key)
+       VALUES (NULL,'seeded',$1,NULL,$2,$3,$4)`,
+      [myId, `seeded ${lanes.length} lanes and ${edges.length} edges from ${file}`, JSON.stringify({ lanes: lanes.length, edges: edges.length }), eventBoard()],
+    );
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
+  }
+  return [
+    `seeded ${lanes.length} lane(s) and ${edges.length} edge(s) on board ${board.key}`,
+    ...(dropped ? [`  dropped ${dropped} duplicate edge(s)`] : []),
+    ...missing.map((e) => `  warning: ${e.lane} -> ${e.dependsOn}: no lane has this id; it counts as open`),
+  ].join('\n');
 }
 
 // ---------------------------------------------------------------- remind
@@ -907,8 +1639,9 @@ const commands = {
     if (flags.by !== undefined && flags.by !== 'priority') throw new Error('usage: lane.mjs board [--all] [--by priority]');
     // --by priority: one flat list of open lanes in the shared order. The plain board keeps its track groups.
     const flat = flags.by === 'priority';
+    const waits = (await depGate(c)) ? `, ${waitsOnSql('l')} AS waits_on` : '';
     const { rows } = await c.query(
-      `SELECT l.* FROM agentic_os.lane l
+      `SELECT l.*${waits} FROM agentic_os.lane l
        WHERE ${flat ? `l.state <> 'done' AND ($1::boolean OR l.project_key = $2::text)` : `$1::boolean OR (l.project_key = $2::text AND l.state <> 'done')`}
        ORDER BY l.project_key, ${flat ? '' : 'l.track, '}${laneOrderSql('l')}`,
       [all, board ? board.key : null],
@@ -1079,10 +1812,11 @@ const commands = {
   async next(c) {
     const myId = me();
     const board = projectOf();
+    const noOpenDep = (await depGate(c)) ? `AND NOT ${openDepSql('l')}` : '';
     const { rows } = await c.query(
       `SELECT l.* FROM agentic_os.lane l
        WHERE l.project_key = $1 AND l.state IN ('ready','backlog') AND ${RECLAIMABLE}
-         AND ${CLAIMABLE_NOT_REMINDER}
+         AND ${CLAIMABLE_NOT_REMINDER} ${noOpenDep}
        ORDER BY ${laneOrderSql('l')} LIMIT ${Number(flags.n) > 0 ? Number(flags.n) : 5}`,
       [board.key],
     );
@@ -1113,24 +1847,13 @@ const commands = {
     const myId = me();
     const board = projectOf();
     const id = positional[1];
-    if (!id) throw new Error('usage: lane.mjs claim <lane-id> [--note "..."]');
+    if (!id) throw new Error('usage: lane.mjs claim <lane-id> [--note "..."] [--dep-override --reason "..."]');
+    const override = flags['dep-override'] === true;
+    if (override && typeof flags.reason !== 'string') throw new Error('--dep-override needs --reason "<text>" (usage error; nothing was run)');
+    const withDeps = await depGate(c);
 
-    const { rows } = await c.query(
-      `UPDATE agentic_os.lane l SET
-         owner_session_id = $2,
-         claimed_at       = now(),
-         lease_expires_at = now() + interval '${LEASE_MINUTES} minutes',
-         fence            = l.fence + 1,
-         state            = CASE WHEN l.state IN ('backlog','ready') THEN 'active' ELSE l.state END,
-         note             = COALESCE($3, l.note),
-         updated_at       = now()
-       WHERE l.id = $1 AND l.project_key = $4 AND ${RECLAIMABLE}
-       RETURNING l.*`,
-      [id, myId, typeof flags.note === 'string' ? flags.note : null, board.key],
-    );
-
-    if (rows.length) {
-      const l = rows[0];
+    const l = await claimUpdate(c, { id, myId, board, override, withDeps });
+    if (l) {
       await logEvent(c, {
         laneId: id, kind: 'claimed', sessionId: myId,
         body: typeof flags.note === 'string' ? flags.note : null,
@@ -1140,10 +1863,15 @@ const commands = {
         : `CLAIMED ${id} (fence ${l.fence}, lease ${LEASE_MINUTES}m)\n  ${l.title}\n  scope: ${l.scope || '(undeclared -- set one)'}`;
     }
 
-    const cur = (await c.query(`SELECT * FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [id, board.key])).rows[0];
+    const cur = await diagnoseClaim(c, id, myId, board, withDeps);
     if (!cur) throw await noLane(c, id, board);
     if (cur.owner_session_id === myId) {
       return JSON_OUT ? cur : `you already hold ${id} -- use "renew" to extend, "note" to update it`;
+    }
+    if (cur.reclaimable) {
+      const refused = await claimRefusal(c, cur, id, board, override);
+      if (refused) throw refused;
+      throw new Error(`claim ${id} refused for no known reason; run ${laneCliCmd()} board and retry`);
     }
     // Displayed, not decided -- but it must answer the SAME question the deny
     // message goes on to state the rule for. Rendering bare last_heartbeat here
@@ -1167,7 +1895,9 @@ const commands = {
       `  lease: ${cur.lease_expires_at ? new Date(cur.lease_expires_at).toISOString() : 'none'}`,
       `  they were last alive: ${holder?.last_alive ? new Date(holder.last_alive).toISOString() : 'never seen'}`,
       `  Reclaim needs BOTH an expired lease AND a holder quiet ${STALE_MINUTES}m.`,
-      `  They have been told you wanted it. Pick another: lane.mjs next`,
+      // M5: a session that lost its own lane to a restart is told how to take it back, as the not-holder refusal tells it.
+      ...(adoptAllowed(cur.owner_session_id, myId, readIdentity(cur.owner_session_id), readIdentity(myId)) ? [`  ${adoptHint(cur.owner_session_id)}`] : []),
+      `  They have been told you wanted it. Claim another lane by id: ${laneCliCmd()} board --by priority`,
     ].join('\n');
     const e = new Error(err); e.soft = true; throw e;
   },
@@ -1175,7 +1905,7 @@ const commands = {
   async renew(c) {
     const myId = me();
     const { rows } = await c.query(
-      `UPDATE agentic_os.lane SET lease_expires_at = now() + interval '${LEASE_MINUTES} minutes', updated_at = now()
+      `UPDATE agentic_os.lane SET lease_expires_at = GREATEST(lease_expires_at, now() + interval '${LEASE_MINUTES} minutes'), updated_at = now()
        WHERE owner_session_id=$1 AND state <> 'done' RETURNING id, project_key`, [myId],
     );
     // Keyed on the owner, on every board: a lane held on another board must not lapse because I ran this elsewhere.
@@ -1188,13 +1918,19 @@ const commands = {
     const board = await projectForOwnedLane(c, id, myId);
     const body = positional.slice(2).join(' ') || (typeof flags.note === 'string' ? flags.note : '');
     if (!id || !body) throw new Error('usage: lane.mjs note <lane-id> "status line"');
-    const { rows } = await c.query(
-      `UPDATE agentic_os.lane SET note=$2, updated_at=now(),
-         lease_expires_at = CASE WHEN owner_session_id=$3
-           THEN now() + interval '${LEASE_MINUTES} minutes' ELSE lease_expires_at END
-       WHERE id=$1 AND project_key=$4 RETURNING *`, [id, body, myId, board.key],
-    );
-    if (!rows.length) throw await noLane(c, id, board);
+    // Refuse only a lane that a live session other than the caller holds (M7): a lane with no holder needs no reason.
+    // The update and the diagnosis of a miss run under one row lock, so a release in between cannot turn into a wrong [not-holder].
+    const rows = await inLaneTx(c, async () => {
+      await lockLane(c, id, board);
+      const res = await c.query(
+        `UPDATE agentic_os.lane l SET note=$2, updated_at=now(),
+           lease_expires_at = CASE WHEN l.owner_session_id=$3
+             THEN GREATEST(l.lease_expires_at, now() + interval '${LEASE_MINUTES} minutes') ELSE l.lease_expires_at END
+         WHERE l.id=$1 AND l.project_key=$4 AND (l.owner_session_id=$3 OR ${RECLAIMABLE}) RETURNING l.*`, [id, body, myId, board.key],
+      );
+      if (!res.rows.length) throw await heldByOther(c, 'note', id, board, myId);
+      return { value: res.rows };
+    });
     await logEvent(c, { laneId: id, kind: 'note', sessionId: myId, body, detail: agentDetail() });
     return JSON_OUT ? rows[0] : `noted on ${id}: ${body}`;
   },
@@ -1213,7 +1949,7 @@ const commands = {
     if (!id || !body) throw new Error('usage: lane.mjs compact <lane-id> "compaction text"  (event only; the note stays)');
     const { rows } = await c.query(
       `UPDATE agentic_os.lane SET lease_expires_at = CASE WHEN owner_session_id=$3
-           THEN now() + interval '${LEASE_MINUTES} minutes' ELSE lease_expires_at END
+           THEN GREATEST(lease_expires_at, now() + interval '${LEASE_MINUTES} minutes') ELSE lease_expires_at END
        WHERE id=$1 AND project_key=$2 RETURNING id`, [id, board.key, myId],
     );
     if (!rows.length) throw await noLane(c, id, board);
@@ -1227,54 +1963,16 @@ const commands = {
     return JSON_OUT ? { id, kind: 'compact', body } : `compact event on ${id}: ${body}`;
   },
 
-  async state(c) {
-    const myId = me();
-    const id = positional[1];
-    const board = await projectForOwnedLane(c, id, myId);
-    const to = positional[2];
-    if (!id || !LANE_STATES.includes(to)) {
-      throw new Error(`usage: lane.mjs state <lane-id> <${LANE_STATES.join('|')}>`);
-    }
-    // NOTE: `myId` is deliberately NOT a bind parameter here. It used to be passed as
-    // $3, but the SQL below never referenced $3 -- Postgres cannot infer the type of an
-    // unreferenced parameter, so it rejected the whole statement with "could not
-    // determine data type of parameter $3". That broke `state`, and with it `release`
-    // and `done`, which delegate here. The result: nothing was EVER markable done
-    // through this CLI, so the board silently degraded into an intake register that
-    // could record work starting but never work finishing.
-    //
-    // `myId` is still read below for logEvent attribution -- it just has no business in
-    // the SQL. It could not be recovered from `rows[0]` either, because this same
-    // UPDATE nulls owner_session_id on the done/ready transitions.
-    //
-    // Known gap, deliberately left alone: WHERE is `id=$1` with no ownership check, so
-    // any session can transition any lane. That is a behaviour change affecting other
-    // live sessions and does not belong in a parameter-binding bug fix.
-    const { rows } = await c.query(
-      `UPDATE agentic_os.lane SET state=$2, updated_at=now(),
-         note = COALESCE($3, note),
-         owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE owner_session_id END,
-         lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE lease_expires_at END
-       WHERE id=$1 AND project_key=$4 RETURNING *`,
-      [id, to, typeof flags.note === 'string' ? flags.note : null, board.key],
-    );
-    if (!rows.length) throw await noLane(c, id, board);
-    await logEvent(c, {
-      laneId: id, kind: to === 'done' ? 'done' : 'state_changed', sessionId: myId,
-      body: `${id} -> ${to}${typeof flags.note === 'string' ? ` (${flags.note})` : ''}`,
-      detail: { state: to },
-    });
-    return JSON_OUT ? rows[0] : `${id} -> ${to}${to === 'done' || to === 'ready' ? ' (released)' : ''}`;
-  },
+  async state(c) { return stateChange(c, 'state'); },
 
-  async release(c) {
-    positional[2] = 'ready';
-    return commands.state(c);
-  },
+  async release(c) { return stateChange(c, 'release'); },
+
+  async park(c) { return parkLane(c); },
 
   async done(c) {
-    positional[2] = 'done';
-    return commands.state(c);
+    assertDoneForm();
+    if (flags['no-pr'] === true || typeof flags.merged === 'string') return doneLanded(c);
+    return stateChange(c, 'done');
   },
 
   /** Message the board, or one peer (who may be on another board). This is the bus; `inbox` is the reader. */
@@ -1340,25 +2038,35 @@ const commands = {
     // so an add with no band flag still works on a database that has not had 0005 yet.
     const withBand = band !== undefined;
     // The WHERE keeps an add from rewriting a lane that belongs to another board: no row back means a foreign id.
+    // One transaction: a conflicting row stays locked when the WHERE is false, so the diagnosis below reads the same holder the WHERE saw.
     let rows;
+    await c.query('BEGIN');
     try {
       ({ rows } = await c.query(
-        `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,project_key${withBand ? ',band' : ''})
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9${withBand ? ',$11' : ''})
+        `INSERT INTO agentic_os.lane AS l (id,title,track,scope,branch,state,priority,note,project_key${withBand ? ',band' : ''})
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9${withBand ? ',$13' : ''})
          ON CONFLICT (id) DO UPDATE SET
-           title=EXCLUDED.title, track=EXCLUDED.track,
-           scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
-           priority=CASE WHEN $10::boolean THEN EXCLUDED.priority ELSE agentic_os.lane.priority END,
+           title=EXCLUDED.title,
+           track=CASE WHEN $11::boolean THEN EXCLUDED.track ELSE l.track END,
+           scope=COALESCE(EXCLUDED.scope, l.scope),
+           priority=CASE WHEN $10::boolean THEN EXCLUDED.priority ELSE l.priority END,
            ${withBand ? 'band=EXCLUDED.band,' : ''} updated_at=now()
-         WHERE agentic_os.lane.project_key = EXCLUDED.project_key
-         RETURNING *`,
+         WHERE l.project_key = EXCLUDED.project_key AND (l.owner_session_id = $12::text OR ${RECLAIMABLE})
+         RETURNING l.*`,
         [id, flags.title, flags.track || 'unsorted', flags.scope || null, flags.branch || null,
          LANE_STATES.includes(flags.state) ? flags.state : 'backlog',
          priority ?? 50, typeof flags.note === 'string' ? flags.note : null, board.key,
-         priority !== undefined, ...(withBand ? [band] : [])],
+         priority !== undefined, Boolean(flags.track), myId, ...(withBand ? [band] : [])],
       ));
-    } catch (e) { throw bandMigrationError(e); }
-    if (!rows.length) throw await foreignId(c, id);
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw bandMigrationError(e); }
+    if (!rows.length) {
+      // No row back: another board has the id, or a live session other than the caller holds the lane (M7: a lane with no holder opens).
+      const cur = (await c.query(`SELECT project_key, owner_session_id FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
+      await c.query('ROLLBACK');
+      if (!cur || cur.project_key !== board.key) throw await foreignId(c, id);
+      throw notHolderRefusal('add', id, cur.owner_session_id, myId, { withOverride: false });
+    }
+    await c.query('COMMIT');
     await logEvent(c, { laneId: id, kind: 'seeded', sessionId: myId, body: flags.title });
     if (JSON_OUT) return rows[0];
     const l = rows[0];
@@ -1478,53 +2186,21 @@ const commands = {
   /** Bulk idempotent add from JSON. Re-running never clobbers live claims,
    *  because it only ever touches the descriptive columns. Every item lands on the
    *  resolved board; an item that names another board, or an id that another board
-   *  owns, stops the run before anything is written. */
+   *  owns, stops the run before anything is written.
+   *  Two forms (contract t2.1, point 2). An array upserts lanes only and never touches lane_dep.
+   *  An object { lanes, edges } upserts the lanes and replaces the edges of every lane in lanes[], in one transaction. */
   async seed(c) {
     const myId = me();
     const board = projectOf();
     const file = positional[1];
     if (!file) throw new Error('usage: lane.mjs seed <file.json>');
-    const items = JSON.parse(readFileSync(file, 'utf8'));
-    await checkSeedItems(c, items, board);
-    // Name the band column only when some item carries a band, so a seed with no bands works before migration 0005.
-    // An omitted band or priority (undefined) keeps the stored value on conflict; a new lane gets NULL / 50.
-    const withBand = items.some((it) => parseBand(it.band) !== undefined);
-    let n = 0;
-    for (const it of items) {
-      const band = parseBand(it.band);
-      const priority = parsePriority(it.priority);
-      // Deliberately asymmetric on conflict: descriptive columns are refreshed
-      // from the seed, but `state`, `note` and every ownership column are NOT.
-      // Re-seeding must never revert a live claim or overwrite the status line
-      // the holder is currently maintaining -- the seed knows the shape of the
-      // work, the session knows what is happening to it right now.
-      let res;
-      try {
-        res = await c.query(
-          `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,rationale,done_when,project_key${withBand ? ',band' : ''})
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11${withBand ? ',$13' : ''})
-           ON CONFLICT (id) DO UPDATE SET
-             title=EXCLUDED.title, track=EXCLUDED.track,
-             scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
-             branch=COALESCE(EXCLUDED.branch, agentic_os.lane.branch),
-             priority=CASE WHEN $12::boolean THEN EXCLUDED.priority ELSE agentic_os.lane.priority END,
-             ${withBand ? 'band=CASE WHEN $14::boolean THEN EXCLUDED.band ELSE agentic_os.lane.band END,' : ''}
-             note=COALESCE(agentic_os.lane.note, EXCLUDED.note),
-             rationale=COALESCE(EXCLUDED.rationale, agentic_os.lane.rationale),
-             done_when=COALESCE(EXCLUDED.done_when, agentic_os.lane.done_when),
-             updated_at=now()
-           WHERE agentic_os.lane.project_key = EXCLUDED.project_key`,
-          [it.id, it.title, it.track || 'unsorted', it.scope || null, it.branch || null,
-           LANE_STATES.includes(it.state) ? it.state : 'backlog', priority ?? 50, it.note || null,
-           it.rationale || null, it.doneWhen || null, board.key, priority !== undefined,
-           ...(withBand ? [band ?? null, band !== undefined] : [])],
-        );
-      } catch (e) { throw bandMigrationError(e); }
-      if (res.rowCount === 0) throw await foreignId(c, it.id);
-      n++;
-    }
-    await logEvent(c, { kind: 'seeded', sessionId: myId, body: `seeded ${n} lanes from ${file}` });
-    return `seeded ${n} lane(s) on board ${board.key}`;
+    const parsed = parseSeedFile(JSON.parse(readFileSync(file, 'utf8')));
+    if (parsed.form === 'object') return seedObject(c, parsed, { file, board, myId });
+    await checkSeedItems(c, parsed.lanes, board);
+    const withBand = parsed.lanes.some((it) => parseBand(it.band) !== undefined);
+    for (const it of parsed.lanes) await upsertSeedLane(c, it, board, withBand);
+    await logEvent(c, { kind: 'seeded', sessionId: myId, body: `seeded ${parsed.lanes.length} lanes from ${file}` });
+    return `seeded ${parsed.lanes.length} lane(s) on board ${board.key}`;
   },
 
   /**
@@ -1629,11 +2305,12 @@ const commands = {
  * The lanes the kanban planner sees. `held` is NOT RECLAIMABLE: a live session owns the
  * lane, so a card or column must not change its state. Same predicate as claim and next.
  */
-const KANBAN_LANES = `SELECT l.id, l.state, l.priority, l.note, l.band, NOT ${RECLAIMABLE} AS held FROM agentic_os.lane l WHERE l.project_key = $1`;
+const kanbanLanesSql = (withDeps) => `SELECT l.id, l.state, l.priority, l.note, l.band, NOT ${RECLAIMABLE} AS held${withDeps ? `, ${waitsOnSql('l')} AS waits_on` : ''} FROM agentic_os.lane l WHERE l.project_key = $1`;
 
 /** Read the lanes for the planner. l.band needs migration 0005: a database without it gets one clear message. */
 async function kanbanLanes(c, boardKey, suffix = '') {
-  try { return (await c.query(`${KANBAN_LANES}${suffix}`, [boardKey])).rows; } catch (e) { throw bandMigrationError(e); }
+  const withDeps = await depGate(c);
+  try { return (await c.query(`${kanbanLanesSql(withDeps)}${suffix}`, [boardKey])).rows; } catch (e) { throw bandMigrationError(e); }
 }
 
 /** The board a kanban file says it is for: a string `board`, a top-level `project`, or `board.project`. null = it does not say. */
@@ -1929,12 +2606,25 @@ if (!commands[cmd]) {
   process.exit(2);
 }
 
+/** A flag a verb does not take is a usage error (exit 1) before any write. Without this the flag was dropped, and `release --if-state x` ran with no condition. */
+const FOREIGN_FLAGS = {
+  state: ['blocked'], release: ['if-state'], done: ['if-state', 'blocked'], park: ['if-state', 'override'],
+  note: ['override'], add: ['override'], claim: ['override'],
+};
+
 try {
+  const foreign = (FOREIGN_FLAGS[cmd] ?? []).find((k) => flags[k] !== undefined);
+  if (foreign) throw new Error(`--${foreign} does not apply to ${cmd} (usage error; nothing was run)`);
+  if (BARE_TEXT_FLAG) throw new Error(`--${BARE_TEXT_FLAG} needs a value (usage error; nothing was run)`);
   const needsDb = !(cmd === 'project' && positional[1] === 'which') && !(cmd === 'remind' && positional[1] === 'sync');
   const result = needsDb ? await withDb((c) => commands[cmd](c)) : await commands[cmd](null);
   process.stdout.write((JSON_OUT ? JSON.stringify(result, null, 2) : String(result)) + '\n');
+  flushDepWarning();
 } catch (e) {
   process.stderr.write(`${isMissingMigration(e) ? MIGRATION_MSG : e.message}\n`);
+  flushDepWarning();
+  // A refusal under --json also writes one machine line, last on stderr: { refused, verb, id, rule }.
+  if (JSON_OUT && e.refusal) process.stderr.write(`${JSON.stringify(e.refusal)}\n`);
   // A denied claim is a correct, expected answer -- exit 3 so a caller can tell
   // "someone else has it" apart from "the tool broke" (exit 1).
   // remind tick exits 2 when the database is not there (down, login refused, no migration), so the doctor shows red.

@@ -5,14 +5,14 @@ Apply it per project only with Dave's yes. This file is a template: no project `
 
 ```
 <!-- lane-board:start -->
-Concurrent sessions share this folder. Claim a lane first: `node C:/Users/dkhay/.claude/scripts/lane.mjs next`.
+Concurrent sessions share this folder. Claim a lane by id first: `node C:/Users/dkhay/.claude/scripts/lane.mjs board --by priority`, then `claim <id>`.
 Lane rules load on your first lane command; this project's board follows the registry.
 <!-- lane-board:end -->
 ```
 
 The markers let a script replace the block without touching the rest of the file.
 
-The block needs no change for reminders. `next` skips reminder lanes, so the line above stays correct. The verbs are in `.claude/rules-ondemand/lane-board.md`.
+The block needs no change for reminders, dependencies, the owner check or `park`. `claim` refuses a lane with an open dependency and `next` skips it. `state`, `release`, `done`, `note` and `add` refuse a lane that another live session holds. The verbs are in `.claude/rules-ondemand/lane-board.md`.
 
 Bands: a lane has a band (`P0`, `P1`, `P2`, or none) set with `node C:/Users/dkhay/.claude/scripts/lane.mjs band <id> P0|P1|P2|none`, or with the Band select in a phone card's Details (the sync applies it after Dave's yes; a drag never writes a band). The phone page opens on **By band**. The block above needs no change for it.
 

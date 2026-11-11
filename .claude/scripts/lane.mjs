@@ -6,7 +6,7 @@
  *
  * It runs <home>/continuous-claude/scripts/coordination/lane.mjs (the primary checkout) in this process.
  * lane.mjs runs at the top level, reads process.argv.slice(2), resolves `pg` from its own location and calls
- * process.exit itself, so exit codes 1, 2 and 3 pass through with no second node start.
+ * process.exit itself, so exit codes 1, 2, 3 and 4 pass through with no second node start.
  * DO NOT give lane.mjs an `argv[1]` main check: this import would then run nothing (lane-shim.test.mjs pins it).
  *
  * The primary off `main` is a WARNING on stderr, never a refusal: a branch switch in the primary checkout

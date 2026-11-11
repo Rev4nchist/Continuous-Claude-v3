@@ -215,7 +215,7 @@ For every entry in scope:
      `publish_from`, and fix wrong output by fixing the generator or the DATA it reads — never by
      editing the rendered HTML, which the next render silently discards. If the page shows a stale
      status line that lives in the database, correct it at the source of truth (for the lane board:
-     `node C:/Users/dkhay/.claude/scripts/lane.mjs note <id> "..."`).
+     `node C:/Users/dkhay/.claude/scripts/lane.mjs note <id> "..."`, only on a lane you hold; for another session's lane send the correction with `say "..." --to <label>`).
    - `dashboard-store` — a Claude Dashboard artifact. Its page and data live in the artifact store.
      Skip steps 2, 4, 5 and 6 for it: never read it as a page, never publish a page file to it and
      never record a `last_published` from a publish. Data uploads are not page publishes: the skill

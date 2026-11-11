@@ -84,6 +84,7 @@ import { dirname, join } from 'node:path';
 
 import { Client } from 'pg';
 import { boardRoots, DEFAULT_BOARD, isHeadless, laneCliCmd, normalizeRoot, resolveBoard, wmKey } from './shared/lane-board.js';
+import { openDepSql } from './shared/lane-dep.js';
 import { bandTag, laneOrderSql } from './shared/lane-sort.js';
 import { resolveDbUrl } from './shared/pg-client.js';
 import { label } from './shared/session-identity.js';
@@ -274,7 +275,7 @@ const REMINDER_DUE_PRED = `l.due_at IS NOT NULL AND l.due_at <= now()
   AND l.remind_state IN ('scheduled','due','needs_dave','failed')`;
 
 /**
- * What Claimable next may offer as work: not a reminder lane (track 'reminders'), and no due time still ahead.
+ * What Claimable (claim by id) may offer as work: not a reminder lane (track 'reminders'), and no due time still ahead.
  * A reminder lane is never work: an acked one would stay at the top for ever. Reminders show in their own block.
  * TWIN of CLAIMABLE_NOT_REMINDER in the lane CLI source (lane.mjs); lane-context-reminders.test.ts compares the two texts.
  */
@@ -594,10 +595,11 @@ export async function runLaneContext(raw: string): Promise<object | null> {
     //      Both have their leases renewed already.
     await client.query(`SELECT set_config('lane.client_version', '${CLIENT_VERSION}', false)`);
 
-    // Proof of life for my own lanes. Harmless when I hold none.
+    // Proof of life for my own lanes. Harmless when I hold none. GREATEST keeps a later lease, so a parked
+    // lane keeps its park lease (a NULL lease gets now + LEASE_MINUTES).
     await client.query(
       `UPDATE agentic_os.lane
-         SET lease_expires_at = now() + interval '${LEASE_MINUTES} minutes'
+         SET lease_expires_at = GREATEST(lease_expires_at, now() + interval '${LEASE_MINUTES} minutes')
        WHERE owner_session_id = $1 AND state <> 'done'`,
       [me],
     );
@@ -656,20 +658,30 @@ export async function runLaneContext(raw: string): Promise<object | null> {
         [me, boardRoots(board), board],
       )).rows;
 
-      const claimable = (await client.query<LaneRow>(
-        `SELECT * FROM agentic_os.lane l
-         WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
-           AND ${CLAIMABLE_NOT_REMINDER}
-         ORDER BY ${laneOrderSql('l')} LIMIT 5`,
-        [board],
-      )).rows;
+      // Own try/catch: a missing lane_dep table (or any error here) drops the claimable block and logs it, never the banner.
+      // openDepSql keeps a lane with an open dependency off the list; owner_session_id IS NULL stays (it offers fewer lanes than `next`).
+      let claimable: LaneRow[] = [];
+      try {
+        claimable = (await client.query<LaneRow>(
+          `SELECT * FROM agentic_os.lane l
+           WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
+             AND ${CLAIMABLE_NOT_REMINDER}
+             AND NOT ${openDepSql('l')}
+           ORDER BY ${laneOrderSql('l')} LIMIT 5`,
+          [board],
+        )).rows;
+      } catch (err) { logLaneContextError(me, eventName, err); }
 
       lines.push(`## Lane board ${board} (concurrent sessions on this board)`);
       lines.push(`You are ${who(me, payload.session_title || undefined)}.`);
       lines.push('');
       lines.push(here.length
         ? `You hold: ${here.map((l) => `${bandTag(l.band)} ${l.id}`).join(', ')}`
-        : `You hold no lane. Claim one before starting work: \`${laneCliCmd()} next\``);
+        : [
+          'You hold no lane. Claim one by id before starting work:',
+          `  ${laneCliCmd()} board --by priority`,
+          `  ${laneCliCmd()} claim <id>`,
+        ].join('\n'));
       if (elsewhere.length) {
         const shown = elsewhere.slice(0, 5).map((l) => `${l.id}@${l.project_key}`).join(', ');
         lines.push(`+${elsewhere.length} on other boards: ${shown}${elsewhere.length > 5 ? ', ...' : ''}`);
@@ -699,11 +711,11 @@ export async function runLaneContext(raw: string): Promise<object | null> {
       }
       if (claimable.length) {
         lines.push('');
-        lines.push('Claimable next:');
+        lines.push('Claimable (claim by id):');
         for (const l of claimable) lines.push(`  ${bandTag(l.band)} ${l.id.padEnd(28)} ${l.title}`);
       }
       lines.push('');
-      lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id> | remind list|set|snooze|ack`);
+      lines.push(`Commands: ${laneCliCmd()} board | claim <id> | note <id> "..." | say "..." | done <id> [--merged <sha>] | remind list|set|snooze|ack`);
       lines.push('Serialize commits — same branch, two committers race .git/index.lock.');
     }
 
