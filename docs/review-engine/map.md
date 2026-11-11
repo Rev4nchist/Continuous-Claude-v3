@@ -4,7 +4,7 @@ This file is the one map of the review-engine program. It is map v2 (2026-11-09)
 
 Goal: replace CodeRabbit with the CCv3 local review engine (Dave 11-04, 11-05: the gating item of the software factory).
 
-Program state: HOLD
+Program state: GO (Dave, 2026-11-11)
 
 Pack: re-verifier, re-finder-v2 (branch re/re-verifier)
 

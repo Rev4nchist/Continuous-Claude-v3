@@ -3,8 +3,8 @@
 Goal: replace CodeRabbit with the CCv3 local review engine.
 A CodeRabbit path retires only when its gate in `evidence-bar.md` passes and Dave says yes.
 
-**HOLD: No session may claim a `re-` lane before Dave's GO.**
-The two external lanes and the card `brief-bare-wait-dave` are `blocked` too.
+**GO (Dave, 2026-11-11): claim only a lane that `program.mjs ready` prints.**
+The card `brief-bare-wait-dave` stays `blocked` until `re-szz-miner` releases it.
 
 ## Files in this folder
 
