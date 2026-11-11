@@ -21536,15 +21536,31 @@ function pipedIexTexts(segment, earlier) {
   if (!IEX_WORD.test(words[0] ?? "") || iexPayload(segment) !== null) return [];
   return earlier.map(literalText).filter((t) => t !== null);
 }
+function iexRunsUnreadText(segment, earlier) {
+  const words = tokenize(stripPrefixes(segment));
+  if (words[0] === "&") words.shift();
+  if (!IEX_WORD.test(words[0] ?? "")) return false;
+  const direct = iexPayload(segment);
+  if (direct !== null) return direct.includes("$");
+  const hasOwnBlock = (s) => s.replace(/\{\s*(?:\$_|\$PSItem)\s*\}/gi, "").includes("{");
+  return pipedIexTexts(segment, earlier).length === 0 || earlier.some(hasOwnBlock);
+}
 function uniqueBySegment(plans) {
   const seen = /* @__PURE__ */ new Set();
   return plans.filter((p) => seen.has(p.segment) ? false : (seen.add(p.segment), true));
 }
 var ASSIGNED_HERE_STRING = /^[ \t]*\$[\w:]+[ \t]*=[ \t]*@(['"])[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1@/gm;
 var IEX_ANYWHERE = /(?<![\w-])(?:iex|invoke-expression)(?![\w-])/i;
+function hasIexWord(command) {
+  return IEX_ANYWHERE.test(command) || IEX_ANYWHERE.test(command.replace(/[\\'"`^]/g, ""));
+}
 function assignedHereStringBodies(command) {
-  if (!IEX_ANYWHERE.test(command) && !IEX_ANYWHERE.test(command.replace(/[\\'"`^]/g, ""))) return [];
+  if (!hasIexWord(command)) return [];
   return [...command.matchAll(ASSIGNED_HERE_STRING)].map((m) => m[2]).filter((body) => body.trim() !== "");
+}
+function hasManagerWord(command) {
+  const joined = joinConcat(command).toLowerCase();
+  return [joined, joined.replace(/[\\'"`^]/g, "")].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text));
 }
 var PIPE_INTO_IEX = /\|\s*(?:&\s*)?(?:iex|invoke-expression)(?![\w-])/i;
 function decodedTexts(command, tool, depth = 0) {
@@ -21565,18 +21581,22 @@ function installPlans(command, tool = "Bash", cwd = null, depth = 0, configured)
     const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
     const found = [];
     const viaIex = [];
+    let unreadIex = false;
     for (const [k, raw] of segments.entries()) {
       const segment = stripLeaders(raw);
       const inner = depth < 3 && !checkOverride(segment) ? iexSegmentPlans(segment, segments.slice(0, k), tool, cwd, depth + 1, config) : [];
       viaIex.push(...inner);
+      if (depth < 3 && !checkOverride(segment) && iexRunsUnreadText(segment, segments.slice(0, k))) unreadIex = true;
       if (inner.length === 0 && (needsCheck(segment, tool, config) || encodedCommands(segment).bad)) found.push({ segment, cwd, tool });
     }
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
     const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
     const hereStrings = assignedHereStringBodies(command).flatMap((body) => iexPlans(body, tool, cwd, depth + 1, config));
+    const unread = unreadIex && hasIexWord(command) && hasManagerWord(command);
     return [
       ...found,
+      ...unread && !checkOverride(command) ? [{ segment: command.trim(), cwd: null, tool }] : [],
       ...uniqueBySegment([...viaIex, ...hereStrings]),
       ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config)),
       ...decoded.flatMap((text) => installPlans(text, "PowerShell", null, depth + 1, config || void 0))

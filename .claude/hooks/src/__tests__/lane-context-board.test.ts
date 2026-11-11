@@ -115,6 +115,13 @@ describe('B1-B4: order is a test, not a comment', () => {
     expect(fake.calls[idx(RENEW)].params).toEqual([ME]);
   });
 
+  it('B5: the renew keeps the later lease (GREATEST), so a parked lane keeps its park lease', async () => {
+    await run('UserPromptSubmit', ccv3);
+    const sql = fake.calls[idx(RENEW)].sql;
+    expect(sql).toMatch(/SET lease_expires_at = GREATEST\(lease_expires_at, now\(\) \+ interval '90 minutes'\)/);
+    expect(fake.calls[idx(RENEW)].params).toEqual([ME]);
+  });
+
   it('B3+B4: an unregistered cwd renews first, then reads direct messages only (one query, no board output)', async () => {
     const out = await run('UserPromptSubmit', nowhere);
     expect(out).toEqual({});

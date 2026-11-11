@@ -6393,7 +6393,7 @@ async function runLaneContext(raw) {
     await client.query(`SELECT set_config('lane.client_version', '${CLIENT_VERSION}', false)`);
     await client.query(
       `UPDATE agentic_os.lane
-         SET lease_expires_at = now() + interval '${LEASE_MINUTES} minutes'
+         SET lease_expires_at = GREATEST(lease_expires_at, now() + interval '${LEASE_MINUTES} minutes')
        WHERE owner_session_id = $1 AND state <> 'done'`,
       [me]
     );
