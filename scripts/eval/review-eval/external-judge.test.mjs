@@ -9,12 +9,14 @@
 //  F8 judge calls use the P0 eval session                      -> sessionId review-eval would burn the 40-run eval budget
 //  F9 an Uncertain human label counts as "no"                  -> map anything not Yes to no
 //  F10 parquet is read as if it were JSON                      -> no extension check
+//  G1-G10 the prompt gives the label away (one action per row, same shape), kappa, hard split, bySource, console line, stale end rows
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { loadRows, rowToPair, run, sampleIds, wilson } from './external-judge.mjs';
+import { loadRows, pickAction, rowToPair, run, sampleIds, summarize, toFinding, wilson } from './external-judge.mjs';
+import { judgePrompt } from './judge.mjs';
 import { pullPinned, PullRefusal } from './external-pull.mjs';
 
 const SHA = 'a'.repeat(40);
@@ -192,11 +194,11 @@ test('F9 an Uncertain label is excluded from the sample, not counted as no', () 
   assert.equal(rowToPair(row(1, 'No')).candidateSource, 'judge');
 });
 
-test('F9 an unmatched row falls back to all actions and records it', async () => {
+test('F9 an unmatched no row shows one picked action and records it', async () => {
   // Breaks when: the candidate source is not recorded, or the fallback is dropped.
   const r = rowToPair({ ...row(1, 'No'), judge_matched_action_id: null });
-  assert.equal(r.candidateSource, 'all');
-  assert.match(r.pair.eng.body, /fixed it/);
+  assert.equal(r.candidateSource, 'picked');
+  assert.match(r.pair.eng.body, /^(fixed it|other)$/);
   const v = verdictRun();
   const out = await run(base({ sample: 10 }), { rows: [row(1, 'Uncertain'), row(2, 'Yes'), row(3, 'No')], runClaudeFn: v.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
   assert.equal(v.calls.length, 2);
@@ -216,4 +218,191 @@ test('F10 parquet is refused with a clear message, a JSONL file loads, a tampere
   writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ file: 'f.jsonl', sha256: '0'.repeat(64) }));
   assert.throws(() => loadRows({ id: ID, sha: SHA, file: 'f.jsonl' }, { root }), /does not match the sha256/);
   assert.throws(() => loadRows({ id: ID, sha: SHA, file: 'missing.jsonl' }, { root }), /is missing/);
+});
+
+// ---- G: the prompt must not give the label away; the report carries kappa and the source split ---------------------------
+
+// Real action rows have no body, title or severity field: the description becomes the body and the title stays empty.
+const ACTIONS = [1, 2, 3, 4, 5].map((k) => ({ id: `a${k}`, description: `desc ${k}`, category: 'c', action_type: 't', file_path: 'f' }));
+const noRow = (id, extra = {}) => ({ task_id: id, human_match_decision: 'no', bot_suggestion: 'bot says x', developer_actions: JSON.stringify(ACTIONS), human_matched_action_id: null, judge_matched_action_id: null, ...extra });
+const yesRow = (id, extra = {}) => ({ ...noRow(id), human_match_decision: 'yes', human_matched_action_id: 'a2', ...extra });
+let recCount = 0;
+const rec = (human, judge, candidateSource = 'human') => { recCount += 1; return { pairId: `p${recCount}`, human, judge, agree: human === judge, candidateSource }; };
+const times = (n, f) => Array.from({ length: n }, (_, i) => f(i));
+const captured = () => { const lines = []; return { lines, io: { stdout: (s) => lines.push(s), stderr: () => {} } }; };
+const maskEng = (p) => judgePrompt(p).replace(p.eng.body, 'ENG_BODY');
+
+test('G1 a no row with no judge match shows exactly one action, never the whole list', () => {
+  // Breaks when: the "all developer actions" fallback comes back.
+  const r = rowToPair(noRow('t1'));
+  assert.equal(r.candidateSource, 'picked');
+  const hits = [1, 2, 3, 4, 5].filter((k) => r.pair.eng.body.includes(`desc ${k}`));
+  assert.equal(hits.length, 1);
+  assert.doesNotMatch(judgePrompt(r.pair), /all developer actions/);
+  assert.doesNotMatch(r.pair.eng.title, /all developer actions/);
+});
+
+test('G2 the pick is stable across calls and row order, changes with task_id, and ignores the label and the bot text', () => {
+  // Breaks when: the pick uses Math.random, the row index that rows.map passes, or ignores task_id (always the first action).
+  const ids = times(40, (i) => `task-${i}`);
+  const data = ids.map((id) => noRow(id));
+  const byId = (pairs) => Object.fromEntries(pairs.map((p) => [p.pairId, p.pair.eng.body]));
+  const first = byId(data.map(rowToPair));
+  assert.deepEqual(byId(data.map(rowToPair)), first, 'second call');
+  assert.deepEqual(byId([...data].reverse().map(rowToPair)), first, 'reversed row order, called through map as run() does');
+  assert.ok(new Set(Object.values(first)).size >= 3, `picks vary with task_id: ${[...new Set(Object.values(first))]}`);
+  for (const id of ids.slice(0, 10)) {
+    // No word of the bot text is in any action, so every action ties and task_id alone decides.
+    const expected = toFinding(pickAction(id, ACTIONS, 'bot says x'));
+    assert.deepEqual(rowToPair(noRow(id)).pair.eng, expected);
+    const other = noRow(id, { human_explanation: 'desc 4 is the one', human_confidence: 'high', judge_confidence: 0.9, judge_matched: true, human_matched_action_id: 'a4' });
+    assert.deepEqual(rowToPair(other).pair.eng, expected, 'no label-side field moves the pick');
+  }
+});
+
+test('G11 the pick is the action with the most words in common with the finding; task_id decides only between equal ones', () => {
+  // Breaks when: the pick ignores the finding text (an easy negative), counts a repeated word twice, or lets task_id choose a weaker action.
+  const acts = [
+    { id: 'b1', description: 'renamed the logger import' },
+    { id: 'b2', description: 'added a null check before the cache lookup in the handler' },
+    { id: 'b3', description: 'added a null check before the cache lookup in the worker' },
+    { id: 'b4', description: 'cache cache cache cache' },
+  ];
+  const ids = times(40, (i) => `task-${i}`);
+  for (const id of ids) assert.equal(pickAction(id, acts, 'Missing null check: the handler reads the cache lookup result').id, 'b2', 'the handler action has the highest overlap');
+  const tied = ids.map((id) => pickAction(id, acts, 'missing null check before the cache lookup').id);
+  assert.deepEqual([...new Set(tied)].sort(), ['b2', 'b3'], 'equal overlap: task_id picks among the equal ones only');
+  assert.deepEqual(ids.map((id) => pickAction(id, acts, 'missing null check before the cache lookup').id), tied, 'stable');
+  assert.equal(pickAction('x', [], 'text'), null);
+  const r = rowToPair(noRow('t1', { bot_suggestion: { body: 'Missing null check: the handler reads the cache lookup result' }, developer_actions: JSON.stringify(acts) }));
+  assert.equal(r.candidateSource, 'picked');
+  assert.equal(r.pair.eng.body, acts[1].description, 'rowToPair passes the finding text to the pick');
+});
+
+test('G3 a yes row, a judge-matched no row and a picked no row give the same prompt apart from the eng text', () => {
+  // Breaks when: the label changes the eng title or severity, adds a heading or an extra action, or shows the source in the prompt.
+  const y = rowToPair(yesRow('t1'));
+  const j = rowToPair(noRow('t1', { judge_matched_action_id: 'a4' }));
+  const n = rowToPair(noRow('t2'));
+  assert.deepEqual([y.candidateSource, j.candidateSource, n.candidateSource], ['human', 'judge', 'picked']);
+  assert.equal(y.pair.eng.title, '');
+  assert.equal(y.pair.eng.body, 'desc 2', 'the description becomes the body');
+  assert.deepEqual(y.pair.eng, toFinding(ACTIONS[1]));
+  assert.equal(maskEng(y.pair), maskEng(n.pair));
+  assert.equal(maskEng(y.pair), maskEng(j.pair));
+  assert.equal(y.pair.hunk, n.pair.hunk);
+});
+
+test('G3b a no row takes the judge action when it exists, and a picked action is built by toFinding', () => {
+  // Breaks when: the judge match is ignored, or a picked action is built by another function than a matched one.
+  const j = rowToPair(noRow('t1', { judge_matched_action_id: 'a4' }));
+  assert.equal(j.candidateSource, 'judge');
+  assert.deepEqual(j.pair.eng, toFinding(ACTIONS[3]));
+  const p = rowToPair(noRow('t9'));
+  assert.deepEqual(p.pair.eng, toFinding(pickAction('t9', ACTIONS, 'bot says x')));
+});
+
+test('G4 yes with a missing action id and no with an empty or unreadable list give none, are left out and counted by label', async () => {
+  // Breaks when: they fall back to the judge match, the list position or the whole list, or are sampled, or uncertain rows are counted with them.
+  const yesMissing = yesRow('t1', { human_matched_action_id: 'zzz', judge_matched_action_id: 'a1' });
+  const yesIndex = yesRow('t7', { human_matched_action_id: '3' }); // an id that is only a list position
+  const noEmpty = noRow('t2', { developer_actions: '[]' });
+  const noBad = noRow('t3', { developer_actions: 'not json' });
+  const noNull = noRow('t8', { developer_actions: null });
+  for (const r of [yesMissing, yesIndex, noEmpty, noBad, noNull]) assert.equal(rowToPair(r).candidateSource, 'none');
+  assert.equal(rowToPair(noRow('t6', { judge_matched_action_id: '3' })).candidateSource, 'picked', 'a judge id that is only a list position is no match');
+  const uncertain = noRow('t9', { human_match_decision: 'uncertain' });
+  const v = verdictRun();
+  const c = captured();
+  const out = await run(base({ sample: 10 }), { rows: [yesMissing, yesIndex, noEmpty, noBad, noNull, uncertain, yesRow('t4'), noRow('t5'), noRow('t6', { judge_matched_action_id: '3' })], runClaudeFn: v.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...c.io });
+  assert.equal(v.calls.length, 3);
+  assert.deepEqual([...out.out.sampleIds].sort(), ['t4', 't5', 't6']);
+  assert.match(c.lines[0], /no candidate 5 \(yes 2, no 3\)/);
+  assert.match(c.lines[0], /uncertain excluded 1/);
+  assert.equal(out.out.noCandidate, 5);
+  assert.deepEqual(out.out.noCandidateByLabel, { yes: 2, no: 3 });
+});
+
+test('G5 a known 2x2 table gives the known kappa', () => {
+  // Breaks when: kappa is computed from raw agreement, or from [human, human]. Table: yy 20, yn 5, ny 10, nn 15 -> po 0.7, pe 0.5, kappa 0.4.
+  const records = [...times(20, () => rec('yes', 'yes')), ...times(5, () => rec('yes', 'no')), ...times(10, () => rec('no', 'yes')), ...times(15, () => rec('no', 'no'))];
+  const s = summarize(records);
+  assert.ok(Math.abs(s.kappa - 0.4) < 1e-9, `kappa ${s.kappa}`);
+  assert.equal(s.n, 50);
+  assert.equal(s.agree, 35);
+  assert.equal(s.agreement, 0.7);
+  assert.deepEqual(s.notMeasured, ['real']);
+  assert.equal(s.ci95.length, 2);
+});
+
+test('G6 both raters with one class give kappa null, never NaN; the console says kappa: undefined and has no easy-case note without picked rows', async () => {
+  // Breaks when: the null from cohenKappa becomes NaN or "null" in the report, or the picked note prints with no picked record.
+  assert.equal(summarize([rec('yes', 'yes'), rec('yes', 'yes')]).kappa, null);
+  assert.equal(summarize([]).kappa, null);
+  const v = verdictRun('yes');
+  const c = captured();
+  const out = await run(base({ sample: 3 }), { rows: [yesRow('t1'), yesRow('t2'), yesRow('t3')], runClaudeFn: v.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...c.io });
+  assert.equal(out.out.summary.kappa, null);
+  assert.ok(c.lines.some((l) => l.includes('kappa: undefined')), c.lines.join('\n'));
+  assert.ok(!c.lines.some((l) => /NaN/.test(l)));
+  assert.ok(!c.lines.some((l) => /built cases/.test(l)), 'no picked record, no note');
+});
+
+test('G7 the final console line holds n, agreement, kappa with 3 decimals, the hard split and "real: not measured"; a split line names the easy picked negatives', async () => {
+  // Breaks when: the report line drops kappa, the hard numbers, the real-not-measured words, or the source split.
+  const v = verdictRun('yes');
+  const c = captured();
+  const data = [yesRow('t1'), yesRow('t2'), noRow('t3'), noRow('t4', { judge_matched_action_id: 'a1' })];
+  await run(base({ sample: 4 }), { rows: data, runClaudeFn: v.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...c.io });
+  const last = c.lines[c.lines.length - 1];
+  assert.match(last, /n 4/);
+  assert.match(last, /agreement 2\/4/);
+  assert.match(last, /kappa: 0\.000;/);
+  assert.match(last, /hard \(not picked\): n 3; agreement 2\/3 \(0\.667\); kappa: 0\.000/);
+  assert.match(last, /real: not measured/);
+  const split = c.lines.find((l) => /by source/.test(l));
+  assert.ok(split, 'a split line');
+  assert.match(split, /human n=2/);
+  assert.match(split, /judge n=1/);
+  assert.match(split, /picked n=1/);
+  assert.match(split, /picked negatives are built cases, not human-paired cases/);
+  assert.match(split, /kappa by source: not defined \(each source holds one human label\)/);
+});
+
+test('G8 bySource counts n, agree and agreement for each candidateSource', () => {
+  // Breaks when: records are grouped by human label, or a source is dropped or double counted.
+  const s = summarize([rec('yes', 'yes', 'human'), rec('yes', 'no', 'human'), rec('no', 'no', 'picked'), rec('no', 'no', 'picked'), rec('no', 'yes', 'judge')]);
+  assert.deepEqual(s.bySource, {
+    human: { n: 2, agree: 1, agreement: 0.5 },
+    picked: { n: 2, agree: 2, agreement: 1 },
+    judge: { n: 1, agree: 0, agreement: 0 },
+  });
+  assert.deepEqual(summarize([]).bySource, {});
+});
+
+test('G9 hard leaves out the picked records and has its own n, agree, agreement and kappa', () => {
+  // Breaks when: hard includes picked records (the easy negatives inflate it) or is dropped. hard here: yy 1, yn 1, ny 1, nn 1 -> kappa 0.
+  const s = summarize([rec('yes', 'yes', 'human'), rec('yes', 'no', 'human'), rec('no', 'yes', 'judge'), rec('no', 'no', 'judge'), rec('no', 'no', 'picked'), rec('no', 'no', 'picked')]);
+  assert.equal(s.n, 6);
+  assert.deepEqual(s.hard, { n: 4, agree: 2, agreement: 0.5, kappa: 0 });
+  assert.deepEqual(summarize([rec('no', 'no', 'picked')]).hard, { n: 0, agree: 0, agreement: null, kappa: null });
+});
+
+test('G10 an old end row is reused only when its source is the one the pair has now; the others are judged again and counted', async () => {
+  // Breaks when: a verdict given on the old whole-list prompt (source all) or on an unknown source still counts in n, agreement and kappa.
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  const ds = `${ID}@${SHA}`;
+  const end = (pairId, human, judge, candidateSource) => JSON.stringify({ ts: new Date(NOW - 5000).toISOString(), phase: 'end', dataset: ds, pairId, human, judge, ...(candidateSource ? { candidateSource } : {}) });
+  writeFileSync(ledgerPath, `${[end('t1', 'yes', 'yes', 'human'), end('t2', 'no', 'yes', 'all'), end('t3', 'no', 'yes')].join('\n')}\n`);
+  const v = verdictRun('no');
+  const c = captured();
+  const r = await run(base({ sample: 10 }), { rows: [yesRow('t1'), noRow('t2'), noRow('t3')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
+  assert.equal(v.calls.length, 2, 'the all row and the row with no source are judged again; the human row is not');
+  assert.match(c.lines[0], /already judged 1, pending 2/);
+  assert.match(c.lines[0], /stale 2/);
+  assert.equal(r.out.staleRejudged, 2);
+  assert.equal(r.out.summary.n, 3);
+  assert.deepEqual(Object.keys(r.out.summary.bySource).sort(), ['human', 'picked']);
+  assert.equal(r.out.pairs.find((p) => p.pairId === 't2').judge, 'no', 'the new verdict replaces the old one');
+  assert.equal(r.out.pairs.find((p) => p.pairId === 't1').judge, 'yes', 'the human row keeps its old verdict');
 });
