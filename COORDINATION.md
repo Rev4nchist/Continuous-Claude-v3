@@ -65,7 +65,8 @@ Details: `.claude/rules-ondemand/lane-board.md`.
 - **No owner test:** `apply-kanban` (Dave's taps; on a held lane it skips status, column and band changes and applies rank and notes; on an `active` lane it applies only the rank), `reminder-sync.mjs` (closes reclaimable reminder lanes), `seed`, `--as` and `remind`.
 
 You do not have to remember to run these. The `lane-context` hook injects the board at
-session start and any unread updates on every prompt, and renews your leases while you work. A renew never shortens a park.
+session start and up to 12 unread updates on each prompt, oldest first, and renews your leases while you work. A renew never shortens a park.
+Direct messages take the places first. The rest stay unread for later prompts. A first look at a board counts only its newest 12 board events. The row `<uuid>@` records the newest direct message shown.
 
 ## Band and rank
 
