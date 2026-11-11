@@ -342,6 +342,42 @@
         "Companion to the Harness Reporting Hub (harness-reporting-hub). Covers the 35 active hub pages by routine. 28 have a routine, 7 say no routine yet. Source is untracked and machine-local.",
         "A snapshot of 2026-11-09. When the hub page list changes, update guide.html by hand (it is not generated), read the live page first, then republish to the same url with no capabilities. The page has no script and no db."
       ]
+    },
+    {
+      "id": "lane-board-multi-session-portal",
+      "url": "https://claude.ai/artifact/MiFy9bsJDVwzL9JgeZYhdP",
+      "source": null,
+      "title": "Lane Board Multi-Session Architecture",
+      "favicon": "chart",
+      "description": "Dave's management portal for lane std-coordination: the steps, what is in work, who waits on whom, the decisions, the rules of the coordination standard and the findings log.",
+      "session": "std-coordination",
+      "refresh": "at-milestone",
+      "content_model": "dashboard-store",
+      "refresh_skill": null,
+      "refresh_doc": ".claudedocs/coordination/portal/README.md (git-ignored, primary checkout)",
+      "data_source": ".claudedocs/coordination/portal: state.json (hand-kept) and export.mjs (reads the standard, the findings log, the lane rows and git)",
+      "last_published": "2026-11-11",
+      "notes": [
+        "Dave decided on 2026-11-10: no scheduled task. The holder of lane std-coordination refreshes the data at each milestone of the lane; the checklist is at the top of .claudedocs/coordination/milestones/std-coordination.md.",
+        "A Dashboard artifact: never publish a page file to it. The data goes up as an asset, then the dataset documents are written with ArtifactData (steps in the README)."
+      ]
+    },
+    {
+      "id": "lane-board-architecture-3d",
+      "url": "https://claude.ai/artifact/Y56UxBA6MPRp59wbNdYGcM",
+      "source": ".claudedocs/coordination/diagram/model.json",
+      "render": "node .claudedocs/coordination/diagram/build.mjs",
+      "publish_from": ".claudedocs/coordination/diagram/index.html",
+      "title": "Lane Board Architecture 3D",
+      "favicon": "diagram",
+      "description": "Interactive 3D diagram of the lane board architecture: sessions, lanes, the lane database, hooks, messages and shared pages.",
+      "session": "std-coordination",
+      "refresh": "on-request",
+      "content_model": "generated",
+      "last_published": "2026-11-10",
+      "notes": [
+        "The source folder .claudedocs/coordination/diagram is git-ignored and lives in the primary checkout: model.json is the content, src/ and build.mjs make index.html, harness/preview.mjs renders it in headless Chromium."
+      ]
     }
   ]
 }

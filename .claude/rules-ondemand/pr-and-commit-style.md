@@ -70,6 +70,7 @@ times its original ask is a failure even if every comment was addressed.
 
 - One logical change per commit. Same title rule.
 - Commit only your own work. Other sessions share this tree; stage the files you touched, never `git add -A`.
+- After a commit on a lane with RELATES TO: send the milestone DM (M4.11).
 - Commit and push through `pwsh -File scripts/git-safe.ps1 -C <repo> ...` (retries the MSYS crash). Use `commit -F <msgfile>` for the body, never `-m` with backticks.
 - `gh pr create` and `gh pr merge` hang on this machine: use `gh api` (REST), e.g. `gh api repos/<O>/<R>/pulls -X POST -f title=... -f head=... -f base=main -F body=@<file>`.
 - End the body with the `Co-Authored-By` / `Claude-Session` trailers the session prompt specifies.
