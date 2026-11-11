@@ -40,7 +40,9 @@ vi.mock('pg', () => {
 import { runLaneContext } from '../lane-context.js';
 import { openDepSql } from '../shared/lane-dep.js';
 
-const ME = 'aaaaaaaa-0000-4000-8000-000000000001';
+// An id no other test file uses: logLaneContextError throttles per session id through a stamp in os.tmpdir(),
+// and lane-context-reminders.test.ts logs under aaaaaaaa-...-01 in a parallel worker.
+const ME = 'dddddddd-0000-4000-8000-0000000000d2';
 let tmp: string;
 let ccv3: string;
 const keys = ['LANE_REGISTRY_PATH', 'DATABASE_URL', 'CONTINUOUS_CLAUDE_DB_URL', 'CCV3_IDENTITY_DIR', 'CCV3_USER_HOME',

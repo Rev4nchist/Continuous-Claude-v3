@@ -56,7 +56,7 @@
  *   node scripts/coordination/lane.mjs state <id> <backlog|ready|active|blocked|review|done>
  *   node scripts/coordination/lane.mjs release <id> [--note "why"]
  *   node scripts/coordination/lane.mjs done <id> [--note "evidence"]   # plain: meets no dependency; a lane already met is not written
- *   node scripts/coordination/lane.mjs done <id> --merged <sha> [--note "..."]   # <sha> must be on local main (git runs in the cwd); meets dependencies
+ *   node scripts/coordination/lane.mjs done <id> --merged <sha> [--note "..."]   # <sha> must be on local main of the board root (the cwd only when the board has no root); meets dependencies
  *   node scripts/coordination/lane.mjs done <id> --no-pr --evidence <path> [--note "..."]   # <path>: a file under .claudedocs/e2e-<id>/; records the main SHA
  *                                                       # a rule refusal prints `REFUSED done <id> [token] -- text` and exits 4; --merged, --evidence, --reason need a value
  *   node scripts/coordination/lane.mjs renew            # push my leases out
