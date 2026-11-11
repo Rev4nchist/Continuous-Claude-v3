@@ -619,6 +619,44 @@ async def store_tool_error_learning(
     return result
 
 
+_CONNECTION_EXCEPTIONS = (ConnectionError, OSError, asyncio.TimeoutError)
+_CONNECTION_MARKERS = (
+    "connection", "connect call failed", "refused", "timeout", "timed out",
+    "could not connect", "network", "name or service not known", "getaddrinfo",
+    "too many clients", "the database system is starting up", "pool",
+)
+# Permanent errors: a retry cannot fix them (an ImportError stays an ImportError).
+_PERMANENT_MARKERS = ("no content provided", "source is required", "memory service not available")
+
+
+def _is_connection_error(error: object) -> bool:
+    """True when a store error looks like a database or network outage, so a retry can work."""
+    text = str(error).lower()
+    if any(marker in text for marker in _PERMANENT_MARKERS):
+        return False
+    return any(marker in text for marker in _CONNECTION_MARKERS)
+
+
+def _hold_back_lost_stores(
+    held_back: list[_Candidate], new_hashes: list[str], result: ExtractionResult
+) -> None:
+    """Keep learnings the store lost on a connection error for the next run.
+
+    Drops their hashes (a saved hash would make the retry look like a duplicate) and
+    moves the pointer back to the earliest of them. Stored candidates keep their hashes,
+    so the re-read dedupes them.
+    """
+    if not held_back:
+        return
+    lost = {c.raw_hash for c in held_back}
+    new_hashes[:] = [h for h in new_hashes if h not in lost]
+    line = min(c.line for c in held_back)
+    result["new_last_line"] = line
+    result["errors"].append(
+        f"store failed on connection error, held back at line {line} ({len(held_back)} candidates)"
+    )
+
+
 async def extract_incremental(
     transcript_path: str,
     session_id: str,
@@ -814,7 +852,9 @@ async def extract_incremental(
     else:
         store_items.extend(_StoreItem(c.text, c) for c in thinking_cands)
 
-    async def _tally(coro) -> None:
+    held_back: list[_Candidate] = []
+
+    async def _tally(coro, cand: _Candidate) -> None:
         try:
             store_result = await coro
             if store_result.get("success"):
@@ -823,9 +863,14 @@ async def extract_incremental(
                 else:
                     result["learnings_stored"] += 1
             else:
-                result["errors"].append(store_result.get("error", "Unknown error"))
+                error = store_result.get("error", "Unknown error")
+                result["errors"].append(error)
+                if store_result.get("retryable") or _is_connection_error(error):
+                    held_back.append(cand)
         except Exception as e:
             result["errors"].append(str(e))
+            if isinstance(e, _CONNECTION_EXCEPTIONS) or _is_connection_error(e):
+                held_back.append(cand)
 
     # Store thinking learnings (distilled or verbatim)
     for item in store_items:
@@ -840,7 +885,8 @@ async def extract_incremental(
                 is_inference=item.is_inference,
                 candidate_hash=item.candidate.raw_hash,
                 evidence=item.candidate.evidence,
-            )
+            ),
+            item.candidate,
         )
 
     # Store tool error learnings
@@ -852,9 +898,11 @@ async def extract_incremental(
                 project_dir=project_dir,
                 candidate_hash=cand.raw_hash,
                 evidence=cand.evidence,
-            )
+            ),
+            cand,
         )
 
+    _hold_back_lost_stores(held_back, new_hashes, result)
     result["hashes"] = new_hashes
 
     # Update and save state if state_file provided
