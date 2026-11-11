@@ -994,6 +994,18 @@ function classifyDestructive(command, depth = 0, tool = "Bash") {
   }
   return unparsedRedirect(lastBare);
 }
+function classifyQuotesKept(command, tool = "Bash") {
+  if (!command || typeof command !== "string") return null;
+  const patterns = tool === "PowerShell" ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
+  const joined = normalizeEscapes(command, tool);
+  for (const text of joined === command ? [command] : [command, joined]) {
+    const scan = normalizeGitGlobalOptions(text);
+    for (const p of patterns) if (p.re.test(scan)) return p.name;
+    const segHit = classifySegments(text.replace(/["']/g, ";"), tool);
+    if (segHit) return segHit;
+  }
+  return null;
+}
 function classifyText(command, depth, tool) {
   if (!command || typeof command !== "string") return null;
   let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
@@ -1347,6 +1359,9 @@ function readShellCommand(input) {
   }
   return { kind: "command", tool, text, dialects: spec.dialects };
 }
+function mayRunUnderCmd(tool) {
+  return !!tool && tool.startsWith("mcp__plugin_desktop-commander_");
+}
 function dialectsFor(tool) {
   return tool && SHELL_TOOLS.get(tool)?.dialects || ["Bash"];
 }
@@ -1389,6 +1404,13 @@ function decide(command, input, env = process.env, scopedDeps) {
   for (const dialect of dialectsFor(toolName)) {
     pattern = classifyDestructive(scanned, 0, dialect);
     if (pattern) break;
+  }
+  if (!pattern && mayRunUnderCmd(toolName)) {
+    for (const dialect of dialectsFor(toolName)) {
+      if (stripQuotedStrings(scanned, dialect) === scanned) continue;
+      pattern = classifyQuotesKept(scanned, dialect);
+      if (pattern) break;
+    }
   }
   if (overridden) return pattern ? { decision: "allow", pattern, override: true } : { decision: "allow" };
   if (!pattern) return { decision: "allow" };

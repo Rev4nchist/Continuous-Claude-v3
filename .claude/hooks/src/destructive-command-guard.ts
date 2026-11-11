@@ -60,11 +60,12 @@ import {
   parseExecutable,
   extractShellWrapperPayloads,
   normalizeGitGlobalOptions,
+  classifyQuotesKept,
 } from './shared/destructive-classifier.js';
 import { isUnattended } from './shared/unattended.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { scopedCleanupKind, type ScopedCleanupDeps, type ScopedKind } from './shared/scoped-cleanup.js';
-import { readShellCommand, dialectsFor } from './shared/shell-tools.js';
+import { readShellCommand, dialectsFor, mayRunUnderCmd } from './shared/shell-tools.js';
 import { blankDocHeredocBody } from './shared/doc-heredoc.js';
 
 // Re-exported so existing imports (and the test file) keep working.
@@ -146,6 +147,16 @@ export function decide(
   for (const dialect of dialectsFor(toolName)) {
     pattern = classifyDestructive(scanned, 0, dialect);
     if (pattern) break;
+  }
+  // Third reading, Desktop Commander only, and only when blanking changed the text. The shell may be cmd.exe,
+  // where a single quote is a plain character and & breaks the command, so quoted text can run. Quotes stay.
+  // It can only add a verdict: the two readings above stay first. A double-quoted echo of a command also asks.
+  if (!pattern && mayRunUnderCmd(toolName)) {
+    for (const dialect of dialectsFor(toolName)) {
+      if (stripQuotedStrings(scanned, dialect) === scanned) continue;
+      pattern = classifyQuotesKept(scanned, dialect);
+      if (pattern) break;
+    }
   }
   if (overridden) return pattern ? { decision: 'allow', pattern, override: true } : { decision: 'allow' };
   if (!pattern) return { decision: 'allow' };

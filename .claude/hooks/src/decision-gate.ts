@@ -71,7 +71,7 @@ import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { blankInertQuotes, isTextOnlyCommand } from './shared/inert-quotes.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
-import { readShellCommand } from './shared/shell-tools.js';
+import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
 
 const HOOK = 'decision-gate';
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
@@ -284,7 +284,7 @@ interface RawPush { opts: string; args: string; cds: string[]; loose: boolean; u
  * The push calls of one view. `masked` and `raw` have the same length. `atStart`: the call must open the text (the squashed view).
  * `before`: the cd targets that come before the text (the squashed view is one segment; the segments before it hold the cds).
  */
-function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Where = { cds: [], unknown: false, loose: false }): RawPush[] {
+function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Where = { cds: [], unknown: false, loose: false }, cutView: string = masked): RawPush[] {
   const calls: RawPush[] = [];
   const kinds: [RegExp, (token: string) => boolean][] = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -294,7 +294,7 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Wher
       if (atStart && masked.slice(0, m.index!).trim() !== '') continue;
       const optsStart = tokenStart + m[2].length;
       const end = m.index! + m[0].length;
-      const cut = masked.slice(end).search(ARGS_END_RE);
+      const cut = cutView.slice(end).search(ARGS_END_RE);
       const own = cdsBefore(masked.slice(0, tokenStart), raw.slice(0, tokenStart));
       calls.push({
         opts: raw.slice(optsStart, optsStart + m[3].length), args: raw.slice(end, cut < 0 ? raw.length : end + cut),
@@ -305,13 +305,26 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Wher
   return calls;
 }
 
-/** The push calls of a command: the bash view, the pwsh view, and each bash segment with its quotes deleted (`g"i"t push`, `git "push"`). */
-function pushCallsIn(raw: string): RawPush[] {
+/** The quote marks of a view become segment breaks, same length. A call inside a quoted string then sits at a command position. */
+const quotesToBreaks = (view: string): string => view.replace(/["']/g, ';');
+
+/**
+ * The push calls of a command: the bash view, the pwsh view, and each bash segment with its quotes deleted (`g"i"t push`, `git "push"`).
+ * `cmdExe`: Desktop Commander may run cmd.exe. cmd.exe treats ' as a plain character and & as a command break, so
+ * echo 'x & git push fork b & rem ' runs the push. Then a third reading (only when blanking changed the text) sees a call inside quotes.
+ * The arguments of that call end at the first break in the real text (quotes kept). A double-quoted echo of a push is denied too (accepted over-deny).
+ */
+function pushCallsIn(raw: string, cmdExe = false): RawPush[] {
   const bash = joinContinuations(raw, 'bash');
   const pwsh = joinContinuations(raw, 'pwsh');
   const maskedBash = maskQuoted(bash, 'Bash');
   const maskedPwshOnBash = maskQuoted(bash, 'PowerShell');
-  const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskQuoted(pwsh, 'PowerShell'), pwsh, false)];
+  const maskedPwsh = maskQuoted(pwsh, 'PowerShell');
+  const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskedPwsh, pwsh, false)];
+  if (cmdExe) {
+    if (maskedBash !== bash) calls.push(...pushCallsOf(quotesToBreaks(bash), bash, false, undefined, bash));
+    if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(quotesToBreaks(pwsh), pwsh, false, undefined, pwsh));
+  }
   let from = 0;
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const);
   for (const [start, next] of [...breaks, [bash.length, bash.length] as const]) {
@@ -373,10 +386,10 @@ function pushShapesFrom(call: RawPush): Shape[] {
 }
 
 /** Every push shape of a command, de-duplicated across the views. */
-function pushShapesOf(raw: string): Shape[] {
+function pushShapesOf(raw: string, tool?: string): Shape[] {
   const out: Shape[] = [];
   const seen = new Set<string>();
-  for (const call of pushCallsIn(raw)) {
+  for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push!;
       const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.loose, p.unknown, p.cds.join('\0')].join('|');
@@ -452,7 +465,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
       add({ kind: 'create', pr: null, at, text: view, mtext: masked }, `create|${whereId(at)}|${view}`);
     }
   }
-  out.push(...pushShapesOf(raw));
+  out.push(...pushShapesOf(raw, tool));
   return out;
 }
 
