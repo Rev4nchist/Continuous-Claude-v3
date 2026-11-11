@@ -2,7 +2,7 @@
  * lane-context shows due reminders at SessionStart (lane reminders, phase 3).
  *
  * Failure list, one test (or group) each:
- *   M1  no "Reminders due" block, or it sits below "Claimable next", or a row is lost
+ *   M1  no "Reminders due" block, or it sits below "Claimable (claim by id)", or a row is lost
  *   M2  the reminders SQL lacks a part of the contract (due_at <= now(), remind_state, LIMIT 5, project_key, the shared order)
  *   M3  the reminders SQL contains text that the board test stub routes on, so it steals another query's rows
  *   M4  the claimable SQL still offers a lane whose due_at is in the future, or a reminder lane (track reminders) as work
@@ -42,7 +42,7 @@ vi.mock('pg', () => {
       // The reminders query is told apart by its remind_state predicate (the claimable query filters on track instead). Its text must not match any other route (M3).
       if (/remind_state IN/.test(sql)) return { rows: fake.reminders };
       if (/FROM sessions s/.test(sql)) return { rows: [] };
-      if (/FROM agentic_os\.lane_event/.test(sql)) return { rows: [] };
+      if (/FROM agentic_os\.lane_event e\b/.test(sql)) return { rows: [] };
       if (/state IN \('ready','backlog'\)/.test(sql)) return { rows: fake.claimable };
       return { rows: [] };
     }
@@ -105,12 +105,12 @@ const row = (id: string, band: string | null, minLate: number, extra: Record<str
 
 describe('M1: the block', () => {
   // Row order is the SQL's job (M2 asserts the ORDER BY text, the probe asserts the real order). The formatter keeps input order.
-  it('prints "## Reminders due (3)" above "Claimable next" with every row', async () => {
+  it('prints "## Reminders due (3)" above "Claimable (claim by id)" with every row', async () => {
     fake.claimable = [{ id: 'c-1', title: 'claim me', band: 'P1' }];
     fake.reminders = [row('zz-p0', 'P0', 30), row('zz-p1', 'P1', 20), row('zz-none', null, 10)];
     const t = text(await run('SessionStart'));
     expect(t).toContain('## Reminders due (3)');
-    expect(t.indexOf('## Reminders due (3)')).toBeLessThan(t.indexOf('Claimable next'));
+    expect(t.indexOf('## Reminders due (3)')).toBeLessThan(t.indexOf('Claimable (claim by id)'));
     for (const id of ['zz-p0', 'zz-p1', 'zz-none']) expect(t).toContain(id);
     expect(t).toMatch(/P0 zz-p0/);
   });
@@ -187,7 +187,7 @@ describe('M7: failure posture', () => {
     fake.claimable = [{ id: 'c-1', title: 'claim me', band: null }];
     const t = text(await run('SessionStart'));
     expect(t).toContain('## Lane board continuous-claude');
-    expect(t).toContain('Claimable next');
+    expect(t).toContain('Claimable (claim by id)');
     expect(t).not.toContain('Reminders due');
   });
 
