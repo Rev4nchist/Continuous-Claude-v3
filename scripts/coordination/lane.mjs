@@ -336,8 +336,9 @@ const P0_CAP = 5;
 
 /** Record a lane event on the current board. Never throws into the caller's result path --
  *  a failed log line must not make a successful claim look like a failure. The one
- *  exception is a database without migration 0004: that is a setup error, and a `say`
- *  that reports "sent" while recording nothing would be worse than a loud failure. */
+ *  exception is a database without migration 0004: that is a setup error, and it must
+ *  stay loud. A verb whose event is its whole result (`say`, `compact`) does not use this:
+ *  it writes with insertEvent or a direct INSERT, so a failed write reaches the caller. */
 async function logEvent(c, { laneId = null, kind, sessionId, to = null, body = null, detail = {} }) {
   try {
     await c.query(
@@ -684,7 +685,7 @@ function mainSha(dir) {
 
 /** The 4 git steps of `done --merged` (contract point 3). Returns the full SHAs git resolved, never the argument. */
 function landedCommit(id, dir) {
-  const sha = flags.merged;
+  const sha = flags.merged; // assertDoneForm checks the format first; this guard keeps a later caller from passing an option to git
   if (!SHA_ARG_RE.test(sha)) throw new Error(`--merged needs a commit SHA of 7 to 40 hex characters; got '${sha}'`);
   const c = gitRun(dir, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]);
   // Only "git ran and says there is no such commit" (status 1, no output) is a refusal. Any other failure (not a repo,
@@ -754,6 +755,8 @@ function assertDoneForm() {
   if (merged && (noPr || evidence)) throw new Error(`use one form, never both. ${DONE_USAGE}`);
   if (noPr && !evidence) throw new Error(`--no-pr needs --evidence <path>. ${DONE_USAGE}`);
   if (evidence && !noPr) throw new Error(`--evidence goes with --no-pr. ${DONE_USAGE}`);
+  // A malformed SHA is a usage error for every caller, so it is checked before the owner test and before git.
+  if (merged && !SHA_ARG_RE.test(flags.merged)) throw new Error(`--merged needs a commit SHA of 7 to 40 hex characters; got '${flags.merged}'`);
 }
 
 /**
@@ -787,6 +790,9 @@ async function doneLanded(c) {
   if (!id) throw new Error(DONE_USAGE);
   const board = await projectForOwnedLane(c, id, myId);
   const owner = ownerFlags();
+  // A read-only owner test first, so a stranger never learns the git or evidence result. writeDone's WHERE stays the test under the row lock.
+  const early = await ownerRefusal(c, { verb: 'done', id, board, myId, reason: owner.reason, override: owner.override, unownedBlockedFree: true });
+  if (early) throw early;
   const dir = landedDir(board);
   const noPr = flags['no-pr'] === true;
   const evidence = noPr ? evidencePath(id, board, dir) : null;
@@ -866,9 +872,10 @@ async function stateChange(c, verb) {
     const cur = await lockLane(c, id, board);
     // A lane that is already met (done, with a merged done as its latest lifecycle event) is never written by a plain done:
     // one stray `done <id>` must not unmeet it and close every dependent (contract t2.1, point 3). Read under the row lock (point 4).
+    // A wrong --if-state is not "already met": the shortcut applies only when --if-state is absent or names the current state.
     if (to === 'done') {
       const sha = await metSha(c, id, board);
-      if (sha) return { value: { met: sha }, commit: false };
+      if (sha && (ifState === null || cur.state === ifState)) return { value: { met: sha }, commit: false };
     }
     const { rows } = blocked
       ? await c.query(RELEASE_BLOCKED_SQL, [id, board.key, reason, myId, override])
@@ -1987,7 +1994,15 @@ const commands = {
     if (laneId && !(await c.query(`SELECT 1 FROM agentic_os.lane WHERE id=$1 AND project_key=$2`, [laneId, board.key])).rowCount) {
       throw await noLane(c, laneId, board);
     }
-    await logEvent(c, { laneId, kind: 'note', sessionId: myId, to, body, detail: agentDetail() });
+    // insertEvent, not logEvent: logEvent swallows its error, and the event is the only effect of this verb.
+    // Exit 1 means "not confirmed", not "not written": the 8 s client timer can fire after the server commits.
+    // A missing migration is not wrapped: the exit handler prints its own message.
+    try {
+      await insertEvent(c, { id: laneId, kind: 'note', myId, to, body, detail: agentDetail() });
+    } catch (e) {
+      if (isMissingMigration(e)) throw e;
+      throw new Error(`not confirmed: ${e.message}. It may already be on the board; a resend can post it twice.`);
+    }
     return `sent to ${to ? L(to) : `board ${board.key}`}${laneId ? ` re ${laneId}` : ''}`;
   },
 
@@ -2006,10 +2021,11 @@ const commands = {
       `SELECT e.* FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`, unreadParams(myId, board.key),
     );
     if (rows.length && flags.peek !== true) {
+      // GREATEST, as in the lane-context hook: an upsert that waited on a row lock must not move a cursor back.
       await c.query(
-        `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at)
+        `INSERT INTO agentic_os.lane_watermark AS w (session_id, last_event_id, updated_at)
          VALUES ($1,$2,now())
-         ON CONFLICT (session_id) DO UPDATE SET last_event_id=EXCLUDED.last_event_id, updated_at=now()`,
+         ON CONFLICT (session_id) DO UPDATE SET last_event_id=GREATEST(w.last_event_id, EXCLUDED.last_event_id), updated_at=now()`,
         [wmKey(myId, board.key), rows[rows.length - 1].id],
       );
     }
@@ -2304,8 +2320,10 @@ const commands = {
 /**
  * The lanes the kanban planner sees. `held` is NOT RECLAIMABLE: a live session owns the
  * lane, so a card or column must not change its state. Same predicate as claim and next.
+ * `note` of a reclaimable lane is read without the PARKED prefix: its park is over, and the planner builds its note
+ * actions (and their `from` value) from this text. A held lane keeps its note as it is.
  */
-const kanbanLanesSql = (withDeps) => `SELECT l.id, l.state, l.priority, l.note, l.band, NOT ${RECLAIMABLE} AS held${withDeps ? `, ${waitsOnSql('l')} AS waits_on` : ''} FROM agentic_os.lane l WHERE l.project_key = $1`;
+const kanbanLanesSql = (withDeps) => `SELECT l.id, l.state, l.priority, CASE WHEN ${RECLAIMABLE} THEN ${unparkedNote('l.note')} ELSE l.note END AS note, l.band, NOT ${RECLAIMABLE} AS held${withDeps ? `, ${waitsOnSql('l')} AS waits_on` : ''} FROM agentic_os.lane l WHERE l.project_key = $1`;
 
 /** Read the lanes for the planner. l.band needs migration 0005: a database without it gets one clear message. */
 async function kanbanLanes(c, boardKey, suffix = '') {
@@ -2320,14 +2338,18 @@ function kanbanFileBoard(input) {
   return typeof v === 'string' && v ? v : null;
 }
 
-/** One planned action as one UPDATE. The state SQL mirrors the `state` command: done and ready release the lane. */
+/**
+ * One planned action as one UPDATE. The state SQL mirrors the `state` command: done and ready release the lane.
+ * It also drops the PARKED prefix from the note. Only a reclaimable lane gets a state action, so its park is over;
+ * the prefix goes on every target. The `state` command keeps it on a non-owner backlog or blocked move.
+ */
 async function applyKanbanAction(c, a, boardKey) {
   const sql = {
     priority: `UPDATE agentic_os.lane SET priority=$2, updated_at=now() WHERE id=$1 AND project_key=$3`,
     note: `UPDATE agentic_os.lane SET note=$2, updated_at=now() WHERE id=$1 AND project_key=$3`,
     // band, not priority. The ::text cast types the NULL that 'none' sends.
     band: `UPDATE agentic_os.lane SET band=$2::text, updated_at=now() WHERE id=$1 AND project_key=$3`,
-    state: `UPDATE agentic_os.lane SET state=$2, updated_at=now(),
+    state: `UPDATE agentic_os.lane SET state=$2, updated_at=now(), note=${unparkedNote('note')},
               owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE owner_session_id END,
               lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE lease_expires_at END
             WHERE id=$1 AND project_key=$3`,
