@@ -673,6 +673,32 @@ export function classifyDestructive(command: string, depth = 0, tool: string = '
   return unparsedRedirect(lastBare);
 }
 
+/**
+ * Pattern scan with the quotes NOT blanked. Add-only: it runs after the normal scans found nothing.
+ * Use it for a shell the guard cannot name (Desktop Commander may run cmd.exe). In cmd.exe a single
+ * quote is a plain character and & is a command break, so a quoted delete after & still runs.
+ * It reads the top-level pattern table and the segment table (SEGMENT_PATTERNS). No wrapper or
+ * interpreter layer, no recursion.
+ */
+export function classifyQuotesKept(command: string, tool: string = 'Bash'): string | null {
+  if (!command || typeof command !== 'string') return null;
+  const patterns = tool === 'PowerShell' ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
+  const joined = normalizeEscapes(command, tool);
+  for (const text of joined === command ? [command] : [command, joined]) {
+    const scan = normalizeGitGlobalOptions(text);
+    for (const p of patterns) if (p.re.test(scan)) return p.name;
+    // The segment table (Fabric calls) too. Each quote mark becomes a break, so a call inside quotes
+    // opens a segment. A parse of the real text would keep the whole quoted string as one word.
+    // A second view turns each quote mark into a space instead: a quoted URL then stays in its own segment
+    // (`az rest --url "https://..."`), and a quoted program name (`"az" rest`) still reads as a word.
+    for (const mark of [';', ' ']) {
+      const segHit = classifySegments(text.replace(/["']/g, mark), tool);
+      if (segHit) return segHit;
+    }
+  }
+  return null;
+}
+
 function classifyText(command: string, depth: number, tool: string): string | null {
   if (!command || typeof command !== 'string') return null;
   // R2: the top-level scan reads the RAW command, heredoc bodies included, as on fork/main. A body that

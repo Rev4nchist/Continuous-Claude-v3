@@ -54,6 +54,11 @@ export function readShellCommand(input: { tool_name?: string; tool?: string; too
   return { kind: 'command', tool, text, dialects: spec.dialects };
 }
 
+/** True for a tool whose shell may be cmd.exe, chosen at run time (Desktop Commander). */
+export function mayRunUnderCmd(tool: string | undefined): boolean {
+  return !!tool && tool.startsWith('mcp__plugin_desktop-commander_');
+}
+
 /** Classifier dialects for a tool name. An unlisted name keeps the old Bash default. */
 export function dialectsFor(tool: string | undefined): Dialect[] {
   return (tool && SHELL_TOOLS.get(tool)?.dialects) || ['Bash'];

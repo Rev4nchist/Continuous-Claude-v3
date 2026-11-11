@@ -901,6 +901,9 @@ function readShellCommand(input) {
   }
   return { kind: "command", tool, text, dialects: spec.dialects };
 }
+function mayRunUnderCmd(tool) {
+  return !!tool && tool.startsWith("mcp__plugin_desktop-commander_");
+}
 
 // src/decision-gate.ts
 var HOOK = "decision-gate";
@@ -1003,7 +1006,7 @@ var MOVE_OPT_RE = /(?:^|\s)--(?:git-dir|work-tree)(?:=|\s)/;
 var REDIRECT_RE = /(?:^|\s)\d*[<>]+\S*/g;
 var VALUE_OPTS = /* @__PURE__ */ new Set(["--repo", "--receive-pack", "--exec", "--push-option", "-o"]);
 var FORCE_LONG = /^--(?:force(?:-with-lease|-if-includes)?|mirror|all|branches|tags|delete|prune)(?:=.*)?$/;
-function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, loose: false }) {
+function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, loose: false }, cutView = masked) {
   const calls = [];
   const kinds = [[PUSH_GIT, isGitToken], [PUSH_SAFE, (t) => isSafeToken(t, PUSH_WRAPPERS)]];
   for (const [re, valid] of kinds) {
@@ -1013,7 +1016,7 @@ function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, l
       if (atStart && masked.slice(0, m.index).trim() !== "") continue;
       const optsStart = tokenStart + m[2].length;
       const end = m.index + m[0].length;
-      const cut = masked.slice(end).search(ARGS_END_RE);
+      const cut = cutView.slice(end).search(ARGS_END_RE);
       const own = cdsBefore(masked.slice(0, tokenStart), raw.slice(0, tokenStart));
       calls.push({
         opts: raw.slice(optsStart, optsStart + m[3].length),
@@ -1026,12 +1029,21 @@ function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, l
   }
   return calls;
 }
-function pushCallsIn(raw) {
+var quotesToBreaks = (view) => view.replace(/["']/g, ";");
+var quotesToSpaces = (view) => view.replace(/["']/g, " ");
+function pushCallsIn(raw, cmdExe = false) {
   const bash = joinContinuations(raw, "bash");
   const pwsh = joinContinuations(raw, "pwsh");
   const maskedBash = maskQuoted(bash, "Bash");
   const maskedPwshOnBash = maskQuoted(bash, "PowerShell");
-  const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskQuoted(pwsh, "PowerShell"), pwsh, false)];
+  const maskedPwsh = maskQuoted(pwsh, "PowerShell");
+  const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskedPwsh, pwsh, false)];
+  if (cmdExe) {
+    for (const view of [quotesToBreaks, quotesToSpaces]) {
+      if (maskedBash !== bash) calls.push(...pushCallsOf(view(bash), bash, false, void 0, bash));
+      if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(view(pwsh), pwsh, false, void 0, pwsh));
+    }
+  }
   let from = 0;
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]);
   for (const [start, next] of [...breaks, [bash.length, bash.length]]) {
@@ -1103,10 +1115,10 @@ function pushShapesFrom(call) {
   }
   return out2;
 }
-function pushShapesOf(raw) {
+function pushShapesOf(raw, tool) {
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
-  for (const call of pushCallsIn(raw)) {
+  for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
     for (const shape of pushShapesFrom(call)) {
       const p = shape.push;
       const id = [p.remote, p.branch, p.src, p.dir, p.force, p.moved, p.loose, p.unknown, p.cds.join("\0")].join("|");
@@ -1172,7 +1184,7 @@ function shapesOf(raw, tool) {
       add({ kind: "create", pr: null, at, text: view, mtext: masked }, `create|${whereId(at)}|${view}`);
     }
   }
-  out2.push(...pushShapesOf(raw));
+  out2.push(...pushShapesOf(raw, tool));
   return out2;
 }
 var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforce");
