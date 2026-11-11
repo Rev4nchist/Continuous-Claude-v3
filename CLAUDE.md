@@ -7,7 +7,7 @@ Glossary, loaded in every session. Use these exact terms: @CONTEXT.md
 ## Start here
 
 - Refinement work: `docs/harness-strategy/README.md`.
-- Concurrent sessions share this tree. Claim a lane first: `node C:/Users/dkhay/.claude/scripts/lane.mjs next`.
+- Sessions share this tree. Claim a lane by id first: `node C:/Users/dkhay/.claude/scripts/lane.mjs board`.
 - Before you claim a lane, run the `kanban-sync` skill. It copies Dave's kanban changes into the lane DB.
 
 ## Repo facts

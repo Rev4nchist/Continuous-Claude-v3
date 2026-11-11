@@ -72,6 +72,11 @@ or using a ticket number to resume from the most recent handoff for that ticket:
 
 Then wait for the user's input.
 
+**Take the lane first** (rule L2.13 in `docs/coordination/standard.md`): when the handoff names a lane, run
+`node C:/Users/dkhay/.claude/scripts/lane.mjs mine`. If the lane is not listed, run the handoff's
+`adopt --from <old session id>` command. This session needs the old session's name first (`/rename`). If
+`adopt` is refused: do not claim, ask Dave.
+
 ## Process Steps
 
 ### Step 1: Read and Analyze Handoff

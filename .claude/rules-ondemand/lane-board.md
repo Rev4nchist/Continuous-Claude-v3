@@ -3,6 +3,103 @@
 A board is a set of lanes and events keyed by `project_key`. Every project with a registry entry can have one.
 Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-project-lanes-plan.md`.
 
+<!-- standard-rules:start -->
+## Rules of the coordination standard
+
+Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard first, then make this section again. The evidence for each rule is in the standard.
+`L` means `node C:/Users/dkhay/.claude/scripts/lane.mjs`. Levels: advice (text only), warn (code prints a warning), deny (code blocks the action).
+
+### Lane life cycle
+
+| Id | Rule | Level |
+|---|---|---|
+| L2.1 | Add a lane for planned work before you start: `L add <id> --title "..." --scope "..."`. A new lane is `backlog`. `add` on an id that exists replaces its title. It replaces the track, the scope, the priority and the band only when you give that flag. When another session holds the lane and the lane is not reclaimable (L2.8: its lease runs, or its holder was active in the last 5 minutes), `add` gets `REFUSED add <id> [not-holder] -- the lane is held by <label>`, exit 4, and nothing is written. A lane with no owner, or with a quiet holder whose lease ended (L2.8), is open to any session with no `--reason`. Run `add` on an id that exists only for a lane you hold. | advice; deny for a lane that another session holds and that is not reclaimable |
+| L2.2 | Claim by id: `L claim <id>`. One session wins. The loser gets exit 3 and the holder's label. | deny |
+| L2.3 | `claim` refuses a lane that is `blocked`, `done` or has an open dependency. It exits 4 with `REFUSED claim <id> [blocked]`, `[done]` or `[open-dependency]`. A lane that another session holds and that is not reclaimable (L2.8) still gives exit 3 (L2.2). To reopen a `done` lane: `L state <id> ready`, then `L claim <id>`. | deny |
+| L2.4 | Do not claim a lane that `next` or the banner offers before you read its scope. Old lanes stay claimable. Both skip a lane with an open dependency. | advice |
+| L2.5 | Claim before your first edit. The claim declares your scope. | advice |
+| L2.6 | Scope text holds two parts: `OWNS: ...` and `NEVER: ...`. It can end with `RELATES TO: <lane ids>` (M4.12). Declare a wait as a dependency. The only writer is `L seed <file.json>` with an object `{"lanes": [...], "edges": [{"lane": "<id>", "dependsOn": "<id>"}]}`. It replaces every edge of each lane in `lanes`, and the title and the track of each lane (L2.1). No verb writes one edge. Also put `WAITS ON: <lane>` first in the scope text, not in the note. | advice; deny for a claim with an open dependency (L2.3) |
+| L2.7 | Note one status line at each phase: `L note <id> "..."`. The owner's note renews the lease. | advice |
+| L2.8 | A lane stays held while its lease is live or its holder is active. A reclaim needs both: a lease that ended (90 minutes after the last renew, or at the end time of a park, L2.9) and a holder quiet for 5 minutes. | deny |
+| L2.8a | The hook renews your leases at each prompt. Run `L renew` before a wait that can pass 90 minutes. For a wait of 2 hours or more, park the lane (L2.9). The hook and `L renew` never cut a park. After an idle time of more than 90 minutes, run `L mine` before your next edit. Before you claim a lane another session held, read its note and check its worktree for uncommitted work. | advice |
+| L2.9 | Park a lane you hold that waits 2 hours to 7 days: `L park <id> --for 6h --reason "<what it waits on>"`. `--for` takes a time from `2h` to `7d`, or give `--until <time>`. The default is 24 hours. You keep the lane, and the lease runs to the end time. The state goes to `review`; a `blocked` lane stays `blocked`. The note gets the prefix `PARKED until <time> -- <reason>` before the old note. A claim by another session gets exit 3 until the park ends and the holder is quiet 5 minutes (L2.2, L2.8). To resume: `L state <id> active`. Your next `state`, `release` or `done` also ends the park. A park by a session that is not the holder gets `REFUSED park <id> [not-holder]`, exit 4. A park of a `done` lane gets `[not-holder]`, exit 4, because a `done` lane has no owner. A `done` lane that you still hold gets `[done]`, exit 4. An end under 2 hours or over 7 days, or no `--reason`, is a usage error, exit 1. Do not park `re-program`. For a longer wait: `L release <id> --blocked --reason "<text>"`. Only the holder runs it, or a session with `--override` (L2.10); any other session gets `[not-holder]`, exit 4. In one write it sets `blocked`, no owner, no lease, and the note to the text. | advice; deny for `park` or `release --blocked` by a session that is not the holder |
+| L2.10 | Only the holder changes a lane with `state`, `release`, `done` in all three forms, or `note`. When another session holds the lane and the lane is not reclaimable (L2.8: its lease runs, or its holder was active in the last 5 minutes), the verb gets `REFUSED <verb> <id> [not-holder] -- the lane is held by <label>`, exit 4, and nothing is written. When the holder is your own earlier session, the hint names `adopt --from` (L2.13). A reclaimable lane (L2.8) has no holder for this rule (Dave, 2026-11-10). A lane with no owner that is not `blocked` is open to any session. A quiet holder whose lease ended, or a `blocked` lane with no owner, needs `--reason "<why>"`. Without it the verb gets `[needs-reason] -- its holder <label> is quiet and the lease ended` or `-- the lane is blocked`, exit 4. `done --merged` and `done --no-pr` need no `--reason` on a `blocked` lane with no owner. `note` and `add` (L2.1) never need `--reason`. The event of a change with `--reason` carries the reason to the board. `--override --reason "<why>"` lets `state`, `release` and `done` change a held lane, and sends the old holder a message. The code lets any session use it; in the review-engine program only the seat uses it. `--override` without `--reason` is a usage error, exit 1. `state <id> <to> --if-state <from>` writes only when the lane is in `<from>`, else `[if-state]`, exit 4. `release --blocked` is for the holder, or a session with `--override` (L2.9). These paths do not use this holder test. The kanban sync skips a status or band change on a held lane and still writes its notes. The reminder sync closes only a reclaimable lane on track `reminders`. `remind set` on a lane that another session holds changes only the reminder columns. `seed` writes each lane of its board. With `--as <id>` the command runs as that session. | deny |
+| L2.11 | Release a lane you stop without finishing: `L release <id>`. It goes to `ready` and loses its owner. On a lane that another session holds (L2.8), `release` is refused (L2.10). For a hold of more than 7 days: `L release <id> --blocked --reason "<text>"` (L2.9). | advice |
+| L2.12 | Mark done only after the merge: `L done <id> --merged <sha>`. A lane with no pull request: `L done <id> --no-pr --evidence <path>`. The path is a file under `.claudedocs/e2e-<lane-id>/`. The command records the SHA of `main` at that time. Both forms meet a dependency. A plain `L done <id>` still works but meets no dependency, and on a met lane it writes nothing. A wrong `done` opens the dependent lanes until the seat's recheck. | advice; deny for a `--merged` SHA that is not on `main` or an `--evidence` path outside the folder |
+| L2.13 | Hand off: before `/create_handoff`, note the lane with the next step. Write the lane id and your session id in the handoff. Keep the lane. On `/resume_handoff`: run `L mine`. If the lane is not listed, run `L adopt --from <old-session-uuid>`. Adopt works only when this session has the old session's chosen name (not an auto word) or names it as previous, and the old session ended or is quiet 5 minutes. It moves every open lane of the old session. If adopt is refused, do not claim: ask Dave. | advice (new rule) |
+| L2.14 | Drop a lane you added by mistake: `L done <id> --note "DROPPED: <why>"`. | advice (new rule) |
+
+### Ownership
+
+| Id | Rule | Level |
+|---|---|---|
+| O3.1 | One writer per file set at a time. A file that two lanes name has one writer at a time. | advice; deny inside one checkout for a file that another live session holds |
+| O3.2 | The scope text lists the write set and the never-touch set. A program lane's overlap holds `ready`. | advice; deny (planned) for program lanes |
+| O3.3 | Before a pull request opens, run `git diff --name-only main...<branch>`. Compare it with the scope. Put the output in Evidence. | advice; warn (planned) |
+| O3.4 | A lane that changes tracked files works on its own branch. A new branch or a new worktree needs Dave's yes. For `re-` lanes after GO: one lane, one worktree, one branch `re/<lane-id>`, one pull request (one exception in the README: the one trial pack on the Pack line of `map.md`; Dave, 2026-11-10). | advice |
+| O3.5 | A commit or a push needs Dave's yes for that task. Commit only your own files. Commits on one branch run one after another. Say so with `L say` before a commit run. | advice |
+| O3.6 | File claims deny inside one checkout. They do not see across worktrees. In a worktree, the scope text is the only guard. | advice; warn (planned, after GO) |
+| O3.7 | Never edit a worktree copy of `lane.mjs` outside your lane's write set. Run a worktree copy only against a scratch database (`CONTINUOUS_CLAUDE_DB_URL`). | advice |
+| O3.8 | Stage `.claude/hooks/dist/*` only for your own hook build. One hook build is in work at a time. A dist commit on `main` reaches every session. | advice |
+| O3.9 | Run a `*-probe.mjs` only with `CONTINUOUS_CLAUDE_DB_URL` set to a scratch database. A probe can write to the live database by default. | advice |
+| O3.10 | The shim prints one WARNING when the primary checkout is off `main`, and still runs. | warn |
+
+### Messages
+
+| Id | Pathway | Use it for | What it guarantees | Level |
+|---|---|---|---|---|
+| M4.1 | Lane DM `L say "..." --to <name>` | one live peer, any board | Stored as an event. Shown at the peer's next prompt only when it is one of the peer's newest 12 unread events, tagged `[from <board>]` across boards. For older unread events the hook prints only a count and `inbox --peek`, then moves the read cursor past all of them, so `inbox --peek` no longer lists them. No receipt. Prints "sent" even when the insert failed (warning on stderr). | advice |
+| M4.2 | Broadcast `L say "..."` | the whole board: a commit run, a CLI change before it lands | Same limits as M4.1. Stays on this board. | advice |
+| M4.3 | Lane note `L note <id>` | the status of your lane | Replaces the previous note. Peers see it in their inbox. | advice |
+| M4.4 | Notion handoff row | a future session, not a live peer | Found by `/resume_handoff`. No delivery time. | advice |
+| M4.5 | `SendMessage` | your subagents; a session that `ListAgents` shows | Not verified. | advice |
+| M4.6 | AskUserQuestion | a choice for Dave; never a peer | Dave answers in this session. | advice |
+| M4.7 | Any | a session that is idle | `peers` lists only sessions active in the last 5 minutes. The banner shows at most 12 unread events and marks all as read (M4.1). | advice |
+| M4.8 | Any | a reply | A held or unanswered message is not a reply. Do other work, not the shared resource. No reply after that: ask Dave. | advice |
+| M4.9 | Any | message form | Plain text with names, SHAs and paths. Write a session as "name #sid8". | advice |
+| M4.10 | Any | a message that must arrive | Also write it in your lane note. Ask Dave when no reply comes. | advice (new rule) |
+
+### Milestone messages
+
+| Id | Rule | Level |
+|---|---|---|
+| M4.11 | At each milestone, send one lane DM (M4.1) to each session that holds a related lane: `L say "..." --to <name> --lane <your lane>`. A session that holds two related lanes gets one DM. Milestones: you claim, adopt or reclaim the lane (send the scope); your write set changes; a commit, a revert or a pull request that the receiver builds on or must read; a decision by Dave on the receiver's files; a finding in the receiver's files; a block that waits on the receiver; an earlier item is now false; your lane is done, released, parked or handed off. Send decisions and findings with your next commit DM, or within 30 minutes. A subagent sends none: its parent sends (S1.5). A headless run sends the first and the last only (S1.4). | advice (new rule) |
+| M4.12 | A lane is related to yours when both scopes name one file path, or one lane waits on the other, or Dave says so. A phrase such as "every other file" names no path. Write the ids last in your scope text: `RELATES TO: <lane ids>`. Only `add` and `seed` write the scope. Both replace the title. `seed` also replaces the track. `add` replaces the track only with `--track` (L2.1, L2.6). So run `L add <id> --title "<same title>" --scope "<full scope>"`. With no `--track`, the track stays. When a related lane belongs to a program, send to the seat of that program only. The seat passes the items to its sessions (M4.14). A lane with no holder, or a reclaimable lane (L2.8), gets no DM. `say --to` fails for a session that is quiet for more than 2 hours: tell Dave (M4.16). | advice (new rule) |
+| M4.13 | Form of a milestone DM. The first sentence says what the message is. Then at most 5 numbered items. Each item gives the fact, its path or SHA, and the lane or file of the receiver that it bears on. The last sentence is "Reply once (M4.14)" for a decision, a finding or a request, and "No reply needed" for status. "No reply needed" means "do not block on a reply". It does not mean "send no more". Never put a holdout or gold PR id, or a secret, in a DM or in its file copy. | advice (new rule) |
+| M4.14 | The receiver of a DM that carries a decision, a finding or a request replies one time: read, conflict or no conflict, and where each item goes. It records the items in a file that the next holder of its lane can read. A DM that carries only status needs no reply. | advice (new rule) |
+| M4.15 | Budget: one DM for each milestone and each receiver. Put all items of one milestone in one DM. Routine progress goes in your lane note (L2.7), not in a DM. Send no reply to a reply that says "no conflict". A reply that says "conflict" gets one answer. After that, ask Dave (M4.8). An idle receiver gets only its newest 12 unread events at its next prompt. A working receiver gets the newest 5 DMs between tool calls. Notes and broadcasts count against both limits. | advice (new rule) |
+| M4.16 | The file is the carrier. Append each milestone to `.claudedocs/coordination/milestones/<lane-id>.md` in the primary checkout: the time from a clock, the receiver, the items. The DM gives the items and this path. Keep `MS: <path>` last in your lane note. A new note replaces the old one, so write `WAITS ON` and `NEXT` again in each note (L2.13). A new note on a parked lane also replaces the `PARKED` prefix. The lane stays parked, because the lease is the park (L2.9). The reply (M4.14) is the only receipt. No reply by your next milestone: write `NOT READ: <holder>` in the file and tell Dave. An idle session reads no message until Dave types in it (M4.7). | advice (new rule) |
+
+### Shared pages
+
+| Id | Rule | Level |
+|---|---|---|
+| P5.1 | Read the live phone page (Artifact tool, action `read`, no `path`), render, publish at once. Render with the primary checkout's `render-board.mjs --project <key>`, never a worktree copy. | advice |
+| P5.2 | Publish a board's phone page only to that board's own url, with no `capabilities`. | advice |
+| P5.3 | Before you sync, check the `<meta name="lane-board">` stamp names this board. Stop if it does not. | advice |
+| P5.4 | Fix a wrong status at the source (`L note`), never in rendered HTML. `L note` is refused on a lane that another session holds (L2.8) (L2.10). Then send the holder the correction: `L say "..." --to <name>` (M4.1). | advice |
+| P5.5 | A board with no `laneArtifact` renders a local page. Never publish it. | advice |
+| P5.6 | Never pass `force: true` unless Dave asks to discard that version. | advice |
+| P5.7 | After a lane change on a board with a phone page, publish the phone page before the turn ends. Use the three steps the Stop gate prints: read live, render from the primary checkout, publish. The gate blocks the end of the turn once for each batch of lane changes. | warn (one block) |
+
+### Board contract
+
+| Id | Rule | Level |
+|---|---|---|
+| B6.1 | A board needs an active registry entry. The longest matching root wins, then a worktree gitdir. | deny (no board: exit 1) |
+| B6.2 | Register a folder only with Dave's yes, from the primary checkout, with `L project register`. Remove a board only with Dave's yes: `L project unregister <key>` (never `continuous-claude`). | advice |
+| B6.3 | Lane ids are global. `add` refuses an id of another board. A new board's starter lane uses the `<key>-` prefix. | deny (foreign id) |
+| B6.4 | `continuous-claude` has the phone page in `.claude/artifacts.json`. Another board has a phone page only with `laneArtifact`. Dave starts one with `/publish-board <key>`. | advice |
+| B6.5 | Reserved prefixes: `re-` (review-engine program, HOLD until Dave's GO) and `coord-` (lane tooling lanes). Other sessions claim neither. | advice; deny for a second `re-` lane per owner |
+| B6.6 | A database writer sets `lane.client_version` before it writes. Without it, the trigger refuses a change or a delete of a lane on a board other than `continuous-claude` (error 42501). `continuous-claude` lanes are not protected. The setting is a cooperative flag, not security. | deny (other boards only) |
+
+### One service line
+
+| Id | Rule | Level |
+|---|---|---|
+| V7.1 | During a wave, no session changes verb behaviour, exit codes, banner text or `lane-board.md` without the agreement of the seat. | advice (new rule) |
+<!-- standard-rules:end -->
+
 ## Command path
 
 - Run every lane command through the shim: `node C:/Users/dkhay/.claude/scripts/lane.mjs <verb>`.
@@ -37,19 +134,19 @@ Full design: `C:/Users/dkhay/continuous-claude/.claudedocs/2026-11-04-per-projec
 
 ## Dependencies
 
-- `claim <id>` on a lane held by a live session exits 3. Otherwise it refuses a done lane, a blocked lane and a lane with an open dependency: `REFUSED claim <id> [<token>] -- <text>`, exit 4.
+- `claim <id>` on a lane held (lease runs, or holder active in last 5m) exits 3. Otherwise it refuses a done lane, a blocked lane and a lane with an open dependency: `REFUSED claim <id> [<token>] -- <text>`, exit 4.
 - `claim <id> --dep-override --reason "<text>"` skips the open-dependency refusal only. A kanban card cannot override it.
 - `done <dep> --merged <sha>` or `done <dep> --no-pr --evidence <path>` meets a dependency. A plain `done <dep>` meets none and prints a hint.
 - `board` prints `waits on: <ids>`. `board --json` has `waits_on`. A missing key means unknown: migration 0006 is not applied.
 
 ## Owner check and park
 
-- Live holder: `state`, `release`, `done`, `note`, `add` give `[not-holder]`, exit 4. No holder: open; `park` refuses.
-- Quiet holder or unowned blocked lane: `--reason`. `--override --reason`: any held lane; seat only.
-- `state <id> <to> --if-state <from>`: write only from `<from>`. Exit 1 only for `--if-state` on `release`, `done`, `park`; `--blocked` on `state`, `done`; `--override` on `note`, `add`, `park`, `claim`. Other flags: no effect.
-- `release <id> --blocked --reason`: holder only; no owner.
-- `park <id> --for 2h..7d --reason`: holder only, default 24h. The lease is the park; `board` shows `parked to` only above 90m. Never park `re-program`.
-- A park ends: holder's `state`, `release`, `done`; new `park`; the end time; `state <id> <to> --override --reason` (lease 90m); `release --override`.
+- Held (lease runs, or holder active in last 5m): `state`, `release`, `done`, `note`, `add` give `[not-holder]`, exit 4. No holder: open; `park` refuses.
+- Quiet holder (lease ended, 5m idle) or unowned blocked lane: `state`, `release`, `done` need `--reason`; `note`, `add` do not. `--override --reason`: any held lane; no code test, seat by rule.
+- `state <id> <to> --if-state <from>`: write only from `<from>`; owner checks first. Exit 1 for `--if-state` on `release`, `done`, `park`; `--blocked` on `state`, `done`; `--override` on `note`, `add`, `park`, `claim`; a bare `--reason`, `--if-state`, `--merged`, `--evidence`. Other flags: no effect.
+- `release <id> --blocked --reason`: holder or `--override`; no owner.
+- `park <id> --for 2h..7d --reason`: holder only, default 24h. The lease is the park; `board` shows `parked to` only above 91m. Never park `re-program`.
+- A park ends: holder's `state`, `release`, `done`; new `park`; the end time; `state <id> <to> --override --reason` (lease 90m; to `ready`/`done`: free); `release --override`, `done --override`.
 - Owner gone: `release <id> --override --reason handover; claim <id>` in ONE command.
 - No owner test: kanban, `reminder-sync.mjs`, `seed`, `--as`, `remind`.
 
