@@ -15,6 +15,7 @@ import { underLocalReview } from './config.mjs';
 import { runEngine, toEvalFindings } from './engine-run.mjs';
 import { checkEngineFreeze, checkFreeze } from './freeze.mjs';
 import { fetchPr } from './github.mjs';
+import { auditReplay } from './read-audit.mjs';
 
 /** A sync git bound to a folder: (args) => { status, stdout, stderr }. */
 export const REVIEWERS = ['engine', 'cursor-review'];
@@ -143,7 +144,7 @@ export async function replayRun({ pr, round, buildOnly = false, set = 'holdout',
 
   const outDir = path.join(outRoot, String(pr), r.sha40.slice(0, 8));
   const env = { ...(deps.env ?? process.env), CLAUDE_CODE_SESSION_ID: kind === 'shadow' ? SHADOW_SESSION : EVAL_SESSION };
-  if (reviewer === 'engine') return replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDir, runsPath, ledgerPath, env, record });
+  if (reviewer === 'engine') return replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDir, runsPath, ledgerPath, env, record, git });
   let res;
   try {
     res = await (deps.runReview ?? runReview)({ root, input: { range: r.spec }, model: 'grok-4.7-high', band: 'MID', ledgerPath, outDir }, { env });
@@ -153,12 +154,13 @@ export async function replayRun({ pr, round, buildOnly = false, set = 'holdout',
   let found = {};
   if (res.findingsPath) { try { found = (deps.readFindings ?? readJson)(res.findingsPath); } catch { found = {}; } }
   const status = res.exit === 0 ? 'ok' : res.exit === 3 ? 'cap' : 'failed';
+  const audit = status === 'ok' ? auditReplay({ env, ...deps.auditOpts, kind: 'cursor-review', streamPath: res.rawPath ?? res.findingsPath?.replace(/\.findings\.json$/, '.raw.json') ?? null, runId: res.runId, head: r.sha40, pr, round, git }) : null;
   const rec = record({
     status, base40: r.base, range: r.range, cursorRunId: res.runId ?? null, findingsPath: res.findingsPath ?? null, durationMs: found.durationMs ?? 0,
-    usage: found.usage ?? null, findingCount: Array.isArray(found.findings) ? found.findings.length : 0, ...(res.error || res.reason ? { reason: res.error ?? res.reason } : {}),
+    usage: found.usage ?? null, findingCount: Array.isArray(found.findings) ? found.findings.length : 0, ...(res.error || res.reason ? { reason: res.error ?? res.reason } : {}), ...audit?.patch,
   });
   appendRun(runsPath, rec);
-  return { exit: res.exit === 0 ? 0 : res.exit ?? 1, status, pr, round, record: rec, findingsPath: res.findingsPath };
+  return { exit: rec.void ? 1 : res.exit === 0 ? 0 : res.exit ?? 1, status: rec.status, pr, round, record: rec, findingsPath: res.findingsPath };
 }
 
 function appendRun(file, rec) {
@@ -171,7 +173,7 @@ function appendRun(file, rec) {
  * the band config source and its sha256. The findings file has the shape evaluateRuns reads (line = the engine startLine), plus the withdrawn list.
  * State of the run (records, slots) sits in <outRoot>/engine-state, never under a local-review folder.
  */
-async function replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDir, runsPath, ledgerPath, env, record }) {
+async function replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDir, runsPath, ledgerPath, env, record, git }) {
   const configText = (deps.readConfigText ?? (() => readFileSync(path.join(root, 'review-router.config.json'), 'utf8')))();
   const res = await (deps.runEngine ?? runEngine)({
     pr, sha40: r.sha40, base40: r.base, root, stateRoot: path.join(outRoot, 'engine-state'), stateDir: outRoot, ledgerPath, env, configText, bodyMode, gh: deps.gh, repo: deps.repo, log: deps.log,
@@ -184,12 +186,13 @@ async function replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDi
     findingsPath = path.join(outDir, `${res.record.runId}.findings.json`);
     writeFileSync(findingsPath, `${JSON.stringify(found, null, 2)}\n`);
   }
+  const audit = ['ok', 'incomplete'].includes(res.status) ? auditReplay({ env, ...deps.auditOpts, kind: 'engine', streamPath: res.recordPath?.replace(/\.json$/, '.stream.jsonl.gz') ?? null, runId: res.record?.runId, head: r.sha40, pr, round, git }) : null;
   const rec = record({
     status: res.status, base40: r.base, range: r.range, cursorRunId: res.record?.runId ?? null, findingsPath, durationMs: found?.durationMs ?? 0, usage: found?.usage ?? null,
     findingCount: found?.findings.length ?? 0, trusted: false, bodyMode, baseConfig: res.baseConfig ?? null, recordPath: res.recordPath ?? null, tracePath: found?.tracePath ?? null,
     funnel: found?.funnel ?? null, withdrawnCount: found?.withdrawn.length ?? 0, modelVerified: found?.modelVerified ?? false, coverageComplete: res.record?.coverage?.complete ?? null,
-    ...(res.record ? { promptSha256: res.record.promptSha256 ?? null } : {}), ...(res.reason ? { reason: res.reason } : {}),
+    ...(res.record ? { promptSha256: res.record.promptSha256 ?? null } : {}), ...(res.reason ? { reason: res.reason } : {}), ...audit?.patch,
   });
   appendRun(runsPath, rec);
-  return { exit: res.status === 'ok' ? 0 : res.status === 'cap' ? 3 : 1, status: res.status, ...(res.reason ? { reason: res.reason } : {}), pr, round, record: rec, findingsPath };
+  return { exit: rec.status === 'ok' ? 0 : rec.status === 'cap' ? 3 : 1, status: rec.status, ...(rec.reason ? { reason: rec.reason } : {}), pr, round, record: rec, findingsPath };
 }
