@@ -73,6 +73,7 @@ Only a lane-id token ends by script. Every other token ends when the seat delete
 | 0 | `re-land-ledger` | P3 | none |  | changed |  |
 | 0 | `re-test-globs` | GATE | none |  | new |  |
 | 0 | `re-critical-model-check` | P1-followup | none |  | unchanged |  |
+| 0 | `re-answer-key-audit` | P1-followup | none | yes | new |  |
 | 0 | `re-gold-schema` | P3 | none |  | unchanged |  |
 | 0 | `re-dispositions` | P3 | none |  | unchanged |  |
 | 0 | `re-finder-v2` | P4 | none |  | unchanged |  |
@@ -80,20 +81,20 @@ Only a lane-id token ends by script. Every other token ends when the seat delete
 | 0 | `re-engine-seam` | P4 | none |  | changed |  |
 | 0 | `re-claude-backend` | P4 | none |  | unchanged |  |
 | 0 | `re-test-escapes` | TEST | none |  | new |  |
-| 1 | `re-live-advisory` | GATE | re-critical-model-check |  | new |  |
+| 1 | `re-live-advisory` | GATE | re-critical-model-check, re-answer-key-audit |  | new |  |
 | 1 | `re-eval-contract` | P3 | re-gold-schema |  | changed |  |
 | 1 | `re-engine-cli-schema` | P4 | re-engine-seam |  | new |  |
 | 1 | `re-cr-keys` | DEMOTE | force-high-security-tier |  | new |  |
 | 1 | `re-prepr-bundle` | GATE | re-test-globs |  | changed |  |
 | 1 | `re-szz-miner` | P3 | re-critical-model-check, re-gold-schema, re-test-escapes |  | changed |  |
-| 1 | `re-seed-gold-b` | P3 | re-critical-model-check, re-gold-schema | yes | unchanged |  |
+| 1 | `re-seed-gold-b` | P3 | re-critical-model-check, re-gold-schema, re-answer-key-audit | yes | changed |  |
 | 1 | `re-gold-c-external` | P3 | hf-judge-precheck, re-critical-model-check, re-gold-schema |  | unchanged |  |
 | 1 | `re-rubrics` | P6 | re-critical-model-check |  | unchanged |  |
 | 1 | `re-property-tests` | TEST | re-test-escapes | yes | deferred | dave-yes |
 | 2 | `re-live-accrual` | GATE | re-live-advisory | yes | new |  |
 | 2 | `re-label-two-family` | P6 | re-live-advisory, re-dispositions |  | new |  |
 | 2 | `re-score-paired` | P3 | re-gold-schema, re-eval-contract |  | changed |  |
-| 2 | `re-verifier-replay` | P4 | re-verifier, re-engine-seam, re-eval-contract |  | new |  |
+| 2 | `re-verifier-replay` | P4 | re-verifier, re-engine-seam, re-eval-contract, re-answer-key-audit |  | new |  |
 | 2 | `re-prepr-cli-consumer` | DEMOTE | re-prepr-bundle, re-cr-keys, re-land-ledger, re-test-escapes |  | new |  |
 | 2 | `re-shadow-retro` | P3 | re-eval-contract, re-live-advisory |  | changed |  |
 | 2 | `re-gate-ready-a` | GATE | re-engine-seam, re-engine-cli-schema, force-high-security-tier |  | changed |  |
@@ -109,7 +110,7 @@ Only a lane-id token ends by script. Every other token ends when the seat delete
 | 3 | `re-gate-summary-sample` | GATE | re-cr-rule2, re-live-advisory | yes | changed |  |
 | 3 | `re-scores-ledger` | P6 | re-rubric-runners |  | deferred | first-flip |
 | 4 | `re-retire-prepr-cli` | DEMOTE | re-live-accrual, re-land-ledger, re-dispositions, re-test-escapes, re-cr-keys, re-prepr-cli-consumer, re-label-two-family, re-judge-calibrate | yes | new | re-cr-trustlist; seat-hold |
-| 4 | `re-p4-harness` | P4 | re-p4-wire, re-eval-contract, re-score-paired, re-gold-assemble |  | new |  |
+| 4 | `re-p4-harness` | P4 | re-p4-wire, re-eval-contract, re-score-paired, re-gold-assemble, re-answer-key-audit |  | new |  |
 | 4 | `re-demote-mechanism` | DEMOTE | re-gate-ready-a, re-gate-ready-b, re-gate-summary-sample, re-shadow-retro, re-cr-trustlist, re-score-paired, re-live-advisory |  | changed |  |
 | 4 | `re-l1-schedule` | P3 | re-shadow-retro, re-land-ledger, re-dispositions, re-judge-calibrate, re-test-escapes | yes | changed |  |
 | 4 | `re-delta-wire` | GATE | re-gate-shadow-run, re-engine-cli-schema | yes | changed | DP2.5 |
@@ -144,14 +145,15 @@ Row notes for `re-retire-prepr-cli` after Dave's DP1 answers of 2026-11-09. The 
 - Split (DP1.18, decided): the lane waits for `re-live-accrual` (the sweep weeks), not for `re-live-advisory`.
 - No edge from `re-cr-trustlist` to `re-retire-prepr-cli` is added (T02). That edge would pull `re-cr-rule2` and `re-verifier` into the CLI gate closure. `re-engine-cli-schema` is in the closure already under route J.
 
-Counts: 61 lanes (59 before the premortem; the split of `re-gate-ready` adds 1; the split of `re-live-advisory`, DP1.18, adds `re-live-accrual`). 14 new, 24 changed, 9 unchanged, 14 deferred (13 from 11-05 plus the new `re-property-tests`). 3 dropped. 18 lanes need Dave (24 before the DP1 answers of 2026-11-09). 16 lanes have a hold (23 before the answers; the answers end every DP1 hold; 14 before the conditional hold on `re-retire-critical` of 2026-11-10; 15 before the holds of the seat on `re-retire-prepr-cli`). The 2 external lanes are not in these counts. `re-holdout-rotate` moves from unchanged to changed (T20).
+Counts: 62 lanes (59 before the premortem; the split of `re-gate-ready` adds 1; the split of `re-live-advisory`, DP1.18, adds `re-live-accrual`; Dave's yes of 2026-11-11 adds `re-answer-key-audit`). 15 new, 25 changed, 8 unchanged, 14 deferred (13 from 11-05 plus the new `re-property-tests`). 3 dropped. 19 lanes need Dave (24 before the DP1 answers of 2026-11-09). 16 lanes have a hold (23 before the answers; the answers end every DP1 hold; 14 before the conditional hold on `re-retire-critical` of 2026-11-10; 15 before the holds of the seat on `re-retire-prepr-cli`). The 2 external lanes are not in these counts. `re-holdout-rotate` moves from unchanged to changed (T20). `re-seed-gold-b` moves from unchanged to changed (its edge on `re-answer-key-audit`).
 
-Dependency closure of `re-retire-prepr-cli` under path F with route J (computed from the table, 20 lanes): `re-live-accrual`, `re-live-advisory`, `re-land-ledger`, `re-dispositions`, `re-test-escapes`, `re-cr-keys`, `force-high-security-tier`, `re-prepr-cli-consumer`, `re-prepr-bundle`, `re-test-globs`, `re-label-two-family`, `re-judge-calibrate`, `re-rubrics`, `re-critical-model-check`, `hf-judge-precheck`, `re-seed-gold-b`, `re-gold-schema`, `re-rubric-runners`, `re-engine-cli-schema`, `re-engine-seam`.
-- Route J brings 9 of the 20: `re-judge-calibrate` and its chain. Two gold lanes are in the closure (`re-seed-gold-b`, `re-gold-schema`), and the two P4 prefactor lanes (`re-engine-seam`, `re-engine-cli-schema`).
+Dependency closure of `re-retire-prepr-cli` under path F with route J (computed from the table, 21 lanes): `re-live-accrual`, `re-live-advisory`, `re-land-ledger`, `re-dispositions`, `re-test-escapes`, `re-cr-keys`, `force-high-security-tier`, `re-prepr-cli-consumer`, `re-prepr-bundle`, `re-test-globs`, `re-label-two-family`, `re-judge-calibrate`, `re-rubrics`, `re-critical-model-check`, `hf-judge-precheck`, `re-seed-gold-b`, `re-gold-schema`, `re-rubric-runners`, `re-engine-cli-schema`, `re-engine-seam`, `re-answer-key-audit`.
+- Route J brings 9 of the 21: `re-judge-calibrate` and its chain. Two gold lanes are in the closure (`re-seed-gold-b`, `re-gold-schema`), and the two P4 prefactor lanes (`re-engine-seam`, `re-engine-cli-schema`).
 - No P4 A/B lane is in it: no `re-p4-wire`, `re-p4-harness`, `re-p4-ab` or `re-gold-assemble`.
+- `re-answer-key-audit` comes in through `re-live-advisory`, and through `re-seed-gold-b` too.
 - Before the answers the closure held 10 lanes (path F with route T). That reading is void.
 
-Dependency closure of `re-retire-critical`: 44 lanes (43 before the `re-gate-ready` split), through `re-p4-winner-evidence`, `re-judge-calibrate` and the gold lanes. `re-live-accrual` is not in it.
+Dependency closure of `re-retire-critical`: 45 lanes (43 before the `re-gate-ready` split, 44 before `re-answer-key-audit`), through `re-p4-winner-evidence`, `re-judge-calibrate` and the gold lanes. `re-live-accrual` is not in it.
 
 ## Dropped or merged lanes
 
@@ -212,7 +214,7 @@ Every shared contract is written in full here (T17). No 11-05 contract text stay
 Contracts restated from the 11-05 map, with the owners of this map:
 
 - **Gold-row contract.** Owner `re-gold-schema` (scripts/eval/review-eval/gold.mjs, wave 0). Fields: {id, source:'A'|'B'|'C', suite:'regression'|'capability', split:'dev'|'holdout'|'reserve', target:{pr,round,sha40}|{range:'base..head'}, file, line?, severity, linkType, labels:[{by,verdict,judgeVersion?}], provenance}. Readers: `re-eval-contract` (dataset.mjs), `re-szz-miner`, `re-seed-gold-b`, `re-gold-c-external`, `re-score-paired`, `re-gold-assemble`, `re-p4-harness` and `re-judge-calibrate`. gold/*.json has one file per producer lane. gold-a, clean-controls and escape-baseline: `re-szz-miner`. gold-b: `re-seed-gold-b`. gold-c: `re-gold-c-external`. adjudicated-cr: `re-gold-assemble`.
-- **Answer-key isolation.** Owner `re-critical-model-check` (cursor-review.mjs TREE_EXCLUDES). scripts/eval/review-eval/gold, seeds, rubrics and linktype-labels.json never reach a review tree or PR.diff. Every gold-producing lane depends on this lane.
+- **Answer-key isolation.** Owner `re-critical-model-check` (cursor-review.mjs TREE_EXCLUDES). scripts/eval/review-eval/gold, seeds, rubrics and linktype-labels.json never reach a review tree or PR.diff. Every gold-producing lane depends on this lane. The excludes do not stop a read by absolute path: Windows has no Cursor sandbox (cursor-review.mjs:36). Owner `re-answer-key-audit` (scripts/eval/review-eval/read-audit.mjs) audits the saved stream of each counted run and voids a run that reads outside its tree. Every lane that counts a Cursor run over gold, seeds, rubrics or same-head pairs depends on that lane, directly or through another lane.
 - **Backend contract.** Owner `re-engine-seam`. backends/<name>.mjs exports run({promptPath, reviewDir, model, effort, timeoutMs}) -> {text, traceEvents, exitCode, costTag}. backends/cursor.mjs comes from `re-engine-seam`. backends/claude.mjs comes from `re-claude-backend`. verify.mjs calls a backend through injection. Model ids are checked in code: Cursor MODEL_ALLOWLIST only (no -fast, no auto), Claude never haiku. That check lands in `re-engine-cli-schema`.
 - **Record schema.** Owner `re-engine-cli-schema` (local-review/record.mjs). The 11-05 map named `re-engine-seam`; PR B is now its own lane. One RECORD_SCHEMA bump (from 1) declares these fields: verify[] {findingId, verdict, refutedAt?}, uncertainMajors, armId, promptVersion, contextVersion, impactRows, overallCorrectness, runIds[], cursorRunId, engineMainSha. Prompt v2 (`re-finder-v2`) produces overallCorrectness. Readers: `re-p4-wire`, `re-cr-rule2`, `re-gate-ready-a`, `re-gate-summary-sample`, `re-rubric-runners`, `re-scoreboard`, `re-p5-multirun` (deferred) and the land ledger.
 - **ENGINE_FILES** (local-review.mjs:62). It grows in the lane that adds each file, in the same PR: backends/cursor.mjs (`re-engine-seam`); verify.mjs and backends/claude.mjs (`re-p4-wire`); refs.mjs, owners.json, hotspots.json and checklist.json (`re-refs-impact`, deferred).
@@ -250,7 +252,7 @@ Contracts that this map changed or added:
   - local-review-sweep.mjs and its test: `re-live-advisory`, `re-live-accrual` (fixes only, after the build lane is done). engine-version.mjs: `re-live-advisory` only.
   - cli.mjs: `re-eval-contract`, `re-gold-assemble`, `re-p4-harness`.
   - trace.mjs: `re-p4-wire`, `re-p5-multirun` (deferred).
-  - replay.mjs and engine-run.mjs: `re-p4-harness`.
+  - replay.mjs: `re-answer-key-audit`, `re-p4-harness`. engine-run.mjs: `re-p4-harness`.
   - prompt.mjs: `re-finder-v2`, `re-p4-ab` (default flip), `re-p7-impact-arms` (deferred).
   - context.mjs: `re-refs-impact` (deferred), `re-p7-impact-arms` (deferred).
   - parser-fixtures/registry.mjs: `re-verifier`, `re-refs-impact` (deferred).
@@ -292,12 +294,56 @@ Unchanged lanes. Their sections are below, after `re-retire-critical`, in Waves-
 - `re-finder-v2`: unchanged.
 - `re-claude-backend`: unchanged.
 - `re-critical-model-check`: unchanged. It must land before any live CRITICAL run (A4). `re-live-advisory` depends on it by edge: the frozen SHA is the `main` SHA right after it lands (Dave, 2026-11-10).
-- `re-seed-gold-b`: unchanged.
 - `re-gold-c-external`: unchanged.
 - `re-rubrics`: unchanged.
 - `re-gold-assemble`: unchanged.
 
 `re-holdout-rotate` is no longer in this list (T20). Its corrected section is below, after `re-rule-docs`.
+
+`re-seed-gold-b` is no longer in this list. It gained an edge on `re-answer-key-audit` (2026-11-11). Its section stays below.
+
+### re-answer-key-audit
+
+**Answer-key read audit: void a run whose agent reads outside its review tree** (wave 0, phase P1-followup, new)
+
+Dave said yes to this lane on 2026-11-11, before the first counted run over gold. It closes finding 1 of the principal review of `re-critical-model-check` (`.claudedocs/e2e-re-critical-model-check/review-principal.txt`).
+
+- Depends on: none
+- Unblocks: re-live-advisory, re-seed-gold-b, re-verifier-replay, re-p4-harness
+- Related: re-critical-model-check, re-shadow-retro, re-label-two-family, re-p4-ab, re-p4-winner-evidence, re-claude-backend, re-gate-ready-a
+- Owns: `scripts/eval/review-eval/read-audit.mjs` (new), `scripts/eval/review-eval/read-audit.test.mjs` (new), `scripts/eval/review-eval/fixtures/read-audit/**` (new), `scripts/eval/review-eval/replay.mjs` (the audit calls in replayRun and replayEngine only), `scripts/eval/review-eval/replay.test.mjs`
+- Do not touch: `scripts/github/cursor-review.mjs`, `scripts/github/local-review.mjs`, `scripts/github/local-review/**`, `scripts/github/review-filter.mjs`, `scripts/eval/review-eval/score.mjs`, `scripts/eval/review-eval/shadow.mjs`, `scripts/eval/review-eval/config.json`, `scripts/eval/review-eval/gold/**`
+- Cost: up to 2 Cursor runs for the canary (purpose bench, own ledger session id, outside every eval scope and outside the Cursor eval slot); 0 claude -p
+- Needs Dave: DECIDED (Dave, 2026-11-11): yes to up to 2 canary runs. A third run needs a new yes. No DP1.2 number covers this lane.
+
+Scope:
+- Place. The guard is a new file outside the freeze set. A guard in cursor-review.mjs would change the reviewer set, and the pinned copy at the frozen SHA would not hold it. The engine does not call runReview: runOnce calls runAgent and parseReviewOutput itself (local-review.mjs:645-652).
+- Input: the saved stream, after the run. The engine writes `<runId>.stream.jsonl.gz` beside the record (trace.mjs:250-253). cursor-review.mjs writes `<stem>.raw.json`. Never trace.json: it drops the grep path and the glob folder (trace.mjs:186-187).
+- The tree is the cwd of the system/init event. It must have the form `<tmpdir>\cursor-review-<id>\tree`: any other init cwd voids the run. The tree is deleted before the audit runs (local-review.mjs:787-789; cursor-review.mjs:1094), so the audit resolves no link and no 8.3 name. It compares path text: whole segments, both slash forms, case-blind on a drive path.
+- A run is void when one of these holds:
+  - The stream is missing or empty, or it has no init cwd.
+  - A tool call has no `*ToolCall` key, or its kind is not read, grep or glob. This covers shell, MCP and subagent calls and each new tool kind of a later cursor-agent.
+  - A string in the arguments or in the result of a tool call is an absolute path, or holds `..`, and points outside the tree. This rule reads every string field, not a list of names: the read path, the grep path and glob, the glob targetDirectory and pattern, the result path and files, the workspaceResults keys, relatedCursorRulePaths and relatedCursorRules. Two fields are not read: the grep pattern text and returned file content. An empty path and a path relative to the tree do not void.
+  - An outside path that holds an answer-key segment gets the rule name answer-key in its verdict line: `review-eval/gold`, `review-eval/seeds`, `review-eval/rubrics`, `linktype-labels.json`, `.claudedocs`, `local-review-shadow`, `cli-pairs`, `holdout.json`, `.git`. A segment matches whole: `.git` does not match `.github`. Inside the tree a segment does not void: a reviewed PR may change a file with such a name.
+  - A tool call has a non-empty hookAdditionalContexts list.
+  - The head commit holds a symlink (git ls-tree mode 120000) whose target is absolute or leaves the tree.
+  - The run has no tool call that the audit can read.
+- Not checked: grep pattern text and file content. Some grep patterns look like paths, and tracked files hold the primary checkout path.
+- Agent change: the 40-stream check ran on the cursor-agent of 2026-11-04. When the agent version of a stream differs from the last checked version, the lane that runs the batch runs the audit on its first stream and reads the tool kinds before the batch goes on. An unknown kind voids, so a new agent stops a batch; it never passes unseen.
+- The audit keeps its own list of answer-key segments. It does not import TREE_EXCLUDES: the frozen copy holds that list, and this list must grow.
+- Record: one line per audited run in `~/.claude/state/review-engine/read-audit.jsonl`: runId, kind, stream path and sha256, verdict (pass or void), rules hit, auditVersion. A run counts only when its newest line is pass. Never a .json file beside a record: record.mjs:83 reads each .json file in a head folder as a record.
+- Eval and replay runs: replay.mjs writes a run row in two places, replayRun for the cursor-review path (:160) and replayEngine for the engine path (:193). Each audits the run before it writes the row, in the stream form of its path (`.raw.json` or `.stream.jsonl.gz`). A void run gets status failed, void true and a reason that starts `read-audit:`. The scorecard then drops the round and counts no miss (score.mjs:157-166, :185). shadow treats it as a failed round (shadow.mjs:252). No new status: shadow returns null for one, and the round retries at each sync (shadow.mjs:253).
+- A void is never silent. The scorecard shows no void, and a later run of the same round would replace the void row (score.mjs:157-166). So read-audit.mjs has a summary mode: for a runs file or a list of heads it prints the number of void runs, their rounds, and each round where a later row replaced a void. Every artifact of a counted batch holds that output. A batch with one void or more is NOTE, not PASS, until the seat has read each void stream and written the reason. A round with a void line stays out of the counted set, also after a re-run.
+- Live PR reviews: the audit never blocks a review, a push or a land, and it changes no record. The sweep audits each run it starts (`re-live-advisory`). cli-gate.mjs counts a pair only when the newest read-audit line of its engine run is pass (`re-label-two-family`). A run with no line does not count; this covers each run from before the audit.
+- Caps: a void run keeps its ledger start, so it counts against the weekly cap, the live cap and the eval budget. The audit writes no ledger line and starts no retry.
+- On a void: the lane that ran it stops its batch and tells the seat (`lane.mjs say`). The seat reads the stream before the batch goes on.
+- Canary: put a canary file outside every tree. It holds a fixed token and no real answer. Run 1: cursor-review.mjs on a local range, with a prompt that asks the agent to read the canary file by its absolute path. Same flags and env as a review run. Run 2 is only for a retry. The lane also searches the answer text for the token. A token in the answer with no outside read in the stream means a channel that the stream does not show: the lane is then not done and goes to the seat.
+- Fixtures: synthetic only. Build the planted streams from `scripts/github/fixtures/cursor-review/stream-json-read-glob.jsonl`. Never copy a holdout stream into git.
+- Not covered: the Claude backend stream (`re-claude-backend`); a Claude arm needs its own audit before it counts. The claude -p label and judge runs over gold or rubrics (`re-szz-miner`, `re-rubric-runners`, `re-judge-calibrate`). A read that leaves no tool call event, for example in a gap of the stream after a reconnect.
+
+Done when: `node scripts/eval/review-eval/read-audit.mjs` reads the 40 saved P1 streams in place (`.claude/cache/e2e/2026-11-04-p1-holdout-*/engine-state/**/*.stream.jsonl.gz`) and voids 0. The artifact holds counts only. Planted fixtures each void: a read of the primary checkout's linktype-labels.json in the forms `C:\`, `c:/`, `/c/` and `\\?\C:\`; a read path with `..` out of the tree; a grep path outside; a glob targetDirectory outside; a grep glob argument outside; a relatedCursorRulePaths entry outside; a shellToolCall line; a tool call with no `*ToolCall` key; a non-empty hookAdditionalContexts list; no init event; an init cwd of another form; an empty stream; a head with a symlink to the primary checkout. Planted fixtures that pass: an empty path, a path relative to the tree, a read of a file named holdout.json inside the tree. Two replay.test.mjs cases run the real replay code with a planted stream as the stub output, one on the cursor-review path (`.raw.json`) and one on the engine path (`.stream.jsonl.gz`): the run row has status failed and void true, and the scorecard over that runs file counts no row for the round. The summary mode on that runs file prints 1 void run and names its round; with a later ok row for the same round it names the round as replaced. The planted and replay checks fail with the audit call removed. Run the tests by hand and save the output until `re-test-globs` lands. The canary has three results. The stream shows the outside read and the audit voids it: done. The stream shows no outside read and the answer does not hold the token: the artifact says that the agent did not read the file and that the stream form of an outside read stays unproven. The answer holds the token and the stream shows no outside read: not done, the seat decides. Artifact: `.claude/cache/e2e/<date>-re-answer-key-audit.json`.
+
+Why: The tree excludes keep the answer key out of the tree and PR.diff. They do not stop a read by absolute path. Windows has no Cursor sandbox, and `--mode ask` is the only guard (cursor-review.mjs:36). A counted run that reads gold, a holdout file or the same-head CLI output is not a sample.
 
 ### re-live-advisory
 
@@ -305,7 +351,7 @@ Unchanged lanes. Their sections are below, after `re-retire-critical`, in Waves-
 
 Dave split the old lane on 2026-11-09 (DP1.18). This lane is the build lane. It is done when the first sweep PR lands and the first sweep is proven. The sweep weeks are the lane `re-live-accrual`.
 
-- Depends on: re-critical-model-check
+- Depends on: re-critical-model-check, re-answer-key-audit
 - Unblocks: re-live-accrual, re-label-two-family, re-shadow-retro, re-gate-summary-sample, re-demote-mechanism
 - Related: re-critical-model-check, re-eval-contract, re-gate-shadow-run, re-engine-cli-schema, re-live-accrual
 - Owns: `scripts/github/local-review-sweep.mjs` (new), `scripts/github/local-review-sweep.test.mjs` (new), `scripts/eval/review-eval/engine-version.mjs` (new), `scripts/eval/review-eval/engine-version.test.mjs` (new)
@@ -326,10 +372,11 @@ Scope (the script and the first sweep; `re-live-accrual` runs the script each da
 - Labels: every row is "rehearsal, prompt v1" until the frozen SHA is recorded. Path F is decided (DP1.5), so rows with the frozen engineVersion lose the rehearsal label. DECIDED (Dave, 2026-11-10): the frozen SHA is the `main` SHA right after `re-critical-model-check` lands. The coordinator records the value then, before the first counted run.
 - Path F: `--engine-sha <sha40>` extracts scripts/ and review-router.config.json at that SHA into `<records>/engine/<sha>/`, as pinEngine does (local-review.mjs:228-250), and runs that copy with LOCAL_REVIEW_PINNED set. checkPin accepts it (local-review.mjs:264-269). Re-extract when pruneEngines removed the copy (it keeps 3). Such a record shows trusted:false once fork/main moves; the gate counts by engineVersion. [Speculation: the copy runs unchanged from that folder; the done check proves it.]
 - Pinned tag (T21). The sweep tags every record that a pinned copy wrote, so READY never reads it (`re-gate-ready-a`). The frozen copy cannot write a new record field, and local-review.mjs is in "Do not touch". So the sweep writes the tag itself: one line per pinned record in a list file in the pairs folder. [Speculation: the form of the tag. T21 gives source 'pinned' as an example. The test in `re-gate-ready-a` proves that READY skips a tagged record.]
+- Read audit (`re-answer-key-audit`). After each run the sweep runs read-audit.mjs on the stream beside the record and writes the verdict line. A void run is not a counted row. The report counts the void runs.
 - Report: the sweep script prints the report that `re-live-accrual` saves each week. Fields: runs per band, runs per PR p50 and p90, facts share, pairs saved, ledger load. Per risk band (T05): heads the CLI reviewed, heads with an engine record, and the share. The CLI-Major heads in the window, and the share of them with an engine record (T03).
 - It does not replace `re-gate-shadow-run`. DP2 decides after 2 weeks of data from `re-live-accrual`.
 
-Done when: The sweep PR is landed. One live sweep writes an engine record for an open HIGH or MID PR, with the CLI output copied beside it and the rehearsal label. Tests show the sweep refuses at the cap, skips CRITICAL while the model check is open, and gives one engineVersion for two runs on one SHA. One `--engine-sha` run writes a record whose engineVersion equals the frozen value. One run on an earlier head with a CLI Major writes a record with bodyMode withheld and a pinned tag. Artifact: `.claude/cache/e2e/<date>-re-live-advisory.json` (the first sweep report and the test output). The long check (2 weeks of pairs) moved to `re-live-accrual`.
+Done when: The sweep PR is landed. One live sweep writes an engine record for an open HIGH or MID PR, with the CLI output copied beside it and the rehearsal label. Tests show the sweep refuses at the cap, skips CRITICAL while the model check is open, and gives one engineVersion for two runs on one SHA. One `--engine-sha` run writes a record whose engineVersion equals the frozen value. One run on an earlier head with a CLI Major writes a record with bodyMode withheld and a pinned tag. The first sweep record has a stream beside it and a pass line in the read-audit file. The sweep report prints the read-audit summary (void runs and their heads). A planted void stream gives a void line and no counted row. Artifact: `.claude/cache/e2e/<date>-re-live-advisory.json` (the first sweep report and the test output). The long check (2 weeks of pairs) moved to `re-live-accrual`.
 
 Why: Finding 1. The engine already runs on any open PR. The same-head pairs exist at finding level nowhere else today.
 
@@ -584,6 +631,7 @@ Changes from the premortem:
   - It sends every CLI-only Major of the counted PRs to the two-family labels.
   - It prints rows 1 to 4 of the `re-retire-prepr-cli` bar, with the source file of each number and the counts per risk band.
   - It prints row 3 as NOTE when no link writer ran, and when a counted PR is younger than 30 days. DECIDED (Dave, 2026-11-10): the counted set closes on a stated end date, and row 3 is scored 30 days after the last merge in that set. Until then row 3 is NOTE. See evidence-bar.md, "Counted weeks". cli-gate.mjs follows that rule.
+  - It counts a pair only when the newest read-audit line of the engine run of that head is pass (`re-answer-key-audit`). A run with no line does not count. read-audit.mjs also audits the lane's own Cursor label runs.
 - Budget (paper tiger measure-10). This lane has no edge to `re-eval-contract`, so the P6 scope tag may not exist when it runs. Its Cursor runs start under their own ledger session id, not under `review-eval`. They then do not count as untagged P1 starts. The lane enforces its stop at 20 runs, inside the cap of 40, from the ledger rows of that session id (DECIDED, Dave, 2026-11-10). No edge is added: an edge would put `re-eval-contract` in the CLI gate closure. (`re-gold-schema` is in the closure already under route J.) [Speculation: the name of the session id, for example `review-label`.]
 - After this lane is done, `re-retire-prepr-cli` runs cli-gate.mjs on the PRs that are counted later. It runs the script and edits no script. Those label runs use the 20 runs that stay for the gate (DECIDED, Dave, 2026-11-10).
 
@@ -668,7 +716,7 @@ Why: Every keep-or-kill call uses this bar. Findings 7 and 8.
 
 **D2: verifier false-refute replay on dev-split real Majors, before re-p4-wire** (wave 2, phase P4, new)
 
-- Depends on: re-verifier, re-engine-seam, re-eval-contract
+- Depends on: re-verifier, re-engine-seam, re-eval-contract, re-answer-key-audit
 - Unblocks: re-p4-wire
 - Related: re-verifier, re-p4-ab, re-claude-backend, re-seed-gold-b
 - Owns: `scripts/eval/review-eval/verify-replay.mjs` (new), `scripts/eval/review-eval/verify-replay.test.mjs` (new)
@@ -676,7 +724,7 @@ Why: Every keep-or-kill call uses this bar. Findings 7 and 8.
 - Cost: up to 20 Cursor runs (P4 scope) on backends/cursor.mjs, or up to 4 claude -p a day when `re-claude-backend` is done and chosen
 - Needs Dave: no. DP1.2 is decided (Dave, 2026-11-09): up to 20 Cursor runs.
 
-Scope: Feed verify.mjs the CodeRabbit finding text of the dev-split real Majors as candidates (no engine run), through the first backend that is done. Re-run on Gold B when it exists. Never holdout or reserve PRs. Report counts: refuted, uncertain, policy-tagged, confirmed.
+Scope: Feed verify.mjs the CodeRabbit finding text of the dev-split real Majors as candidates (no engine run), through the first backend that is done. Re-run on Gold B when it exists. Never holdout or reserve PRs. Report counts: refuted, uncertain, policy-tagged, confirmed. Each verify run keeps its raw stream, and read-audit.mjs audits it; a void run is a failed run (`re-answer-key-audit`). Unproven: the Backend contract returns no raw stream today. If this lane cannot save one, its verify runs do not count and the lane says so in its report.
 
 On a refute (T14): when the replay refutes one or more real Majors, the lane does three things. It reports each refuted one. It reopens `re-verifier`: the coordinator sets that lane back to work with a note that names the report. It raises DP2.9, which decides the next step. `re-p4-wire` stays blocked, because this lane is not done. After the verifier fix lands, the replay runs again inside the same cap.
 
@@ -961,7 +1009,7 @@ Why: Finding 5: the 11-05 sample could start only after a flip that needed the s
 
 **P4: eval half of the wiring: engine-run, replay and cli take an arm and gold range targets** (wave 4, phase P4, new)
 
-- Depends on: re-p4-wire, re-eval-contract, re-score-paired, re-gold-assemble
+- Depends on: re-p4-wire, re-eval-contract, re-score-paired, re-gold-assemble, re-answer-key-audit
 - Unblocks: re-p4-ab
 - Related: re-p4-wire, re-p4-ab, re-score-paired
 - Owns: `scripts/eval/review-eval/engine-run.mjs`, `scripts/eval/review-eval/engine-run.test.mjs`, `scripts/eval/review-eval/replay.mjs`, `scripts/eval/review-eval/replay.test.mjs`, `scripts/eval/review-eval/cli.mjs`, `scripts/eval/review-eval/cli.test.mjs`
@@ -969,7 +1017,7 @@ Why: Finding 5: the 11-05 sample could start only after a flip that needed the s
 - Cost: 0 cursor (stubs)
 - Needs Dave: no
 
-Scope: engine-run, replay and cli.mjs take an arm (promptVersion x model x backend) and gold {range} targets. The freeze key gains contextVersion and reads it with a fallback when CONTEXT_VERSION is absent (D1 follow-on). Third holder of cli.mjs.
+Scope: engine-run, replay and cli.mjs take an arm (promptVersion x model x backend) and gold {range} targets. The freeze key gains contextVersion and reads it with a fallback when CONTEXT_VERSION is absent (D1 follow-on). Third holder of cli.mjs. Second holder of replay.mjs, after `re-answer-key-audit`: keep both audit calls (replayRun and replayEngine) for arm and range targets.
 
 Done when: An offline replay with stub backends runs every cell chosen at DP1.6 on 2 dev PRs and 2 seed refs. It writes arm-tagged records. The scorecard groups by arm. A freeze with no CONTEXT_VERSION passes. Artifact: `.claude/cache/e2e/<date>-re-p4-harness.txt`.
 
@@ -1291,7 +1339,7 @@ Why: A 2x2 needs a Claude arm with the same tool access as the Grok arm, or the 
 
 **Combined-plan P3.2: Gold B seeded bugs (Claude-written plus mutation operators, test-breaking), adopts seeded-vuln-probes** (wave 1, phase P3)
 
-- Depends on: re-critical-model-check, re-gold-schema
+- Depends on: re-critical-model-check, re-gold-schema, re-answer-key-audit
 - Unblocks: re-gold-assemble, re-judge-calibrate
 - Related: seeded-vuln-probes, re-engine-cli-schema, re-gold-assemble, re-judge-calibrate
 - Owns: `scripts/eval/review-eval/seed.mjs`, `scripts/eval/review-eval/seed.test.mjs`, `scripts/eval/review-eval/seeds/**`, `scripts/eval/review-eval/gold/gold-b.json`
@@ -1300,7 +1348,7 @@ Why: A 2x2 needs a Claude arm with the same tool access as the Grok arm, or the 
 - Needs Dave: Any Grok review runs on the security probes (seeded-vuln-probes item) need the eval budget and your yes.
 - OPEN (Dave): decide if the seeded-vuln-probes card closes with an ADOPTED note.
 
-Scope: seed.mjs writes 60-100 seeded bugs as local refs (refs/eval/seed/*), never pushed. Seed both same-file and cross-file kinds, from dev-split code only. Claude seeds, never Grok. Seed part of the set with SWE-smith-style mutation operators, so the Claude arm is not scored only on Claude-written bugs. Report Gold B for the Claude arm apart, as non-gating. Keep a bug only when a named test or probe breaks. The security slice from seeded-vuln-probes stays as its own suite. Rows use the {range} target form; re-engine-cli-schema owns --range.
+Scope: seed.mjs writes 60-100 seeded bugs as local refs (refs/eval/seed/*), never pushed. Seed both same-file and cross-file kinds, from dev-split code only. Claude seeds, never Grok. Seed part of the set with SWE-smith-style mutation operators, so the Claude arm is not scored only on Claude-written bugs. Report Gold B for the Claude arm apart, as non-gating. Keep a bug only when a named test or probe breaks. The security slice from seeded-vuln-probes stays as its own suite. Rows use the {range} target form; re-engine-cli-schema owns --range. A Grok run on a seed runs only after `re-answer-key-audit` is done, and read-audit.mjs audits its stream.
 
 Done when: gold-b.json has 60+ rows. Each row has a breaking test or probe command with its failure recorded, and an author field (claude or operator). 0 rows come from holdout or reserve PRs. A check shows no seed ref tree holds a gold or seed file. seed.mjs passes cli-smoke. Artifact: .claude/cache/e2e/<date>-re-seed-gold-b.txt.
 
@@ -1669,6 +1717,7 @@ Dave answered DP1 on 2026-11-09 (decisions journal). Items 2, 4, 7, 8, 12 and 13
 13. APPROVED (DP1.13, Dave 2026-11-09). The band is applied to the lane DB on 2026-11-11. External lanes (T08): set band P1 on `force-high-security-tier` and `hf-judge-precheck` (ranks 11 and 12 of item 2), set a review-engine worker as owner when one claims the lane under the program claim rules, and write the done check from "External lanes" on each card. Until the seed, a note on both cards says that the lane is on the review-engine path. DECIDED (Dave, 2026-11-10): both cards are in state `blocked`, as the 48 old `re-` cards. This state change is applied to the lane DB (2026-11-10), so `next` offers neither. Both open with wave 0 at GO. They have no Waves row, so the GO step of `program.mjs sync-board` must name them and move them to `backlog` too. The card `brief-bare-wait-dave` stays `blocked` at GO; `re-szz-miner` releases it. The band is applied (2026-11-11). The owner is set when a worker claims the lane. The done check is a note on each card that points to "External lanes".
 14. New card `re-live-accrual` (DP1.18, Dave 2026-11-09). Applied on 2026-11-11: the seed made the card, and both notes are written. The rule was: create it with Depends on `re-live-advisory`, state `blocked` (open dependency; the DP1.2 hold ended on 2026-11-09), and the done check from its section. The `re-live-advisory` card keeps its id and gets the build-lane done check. Note on both cards: "SPLIT map v2 (DP1.18)". `re-live-accrual` is not in the P1 rank list of item 2; promote it to P1 when `re-live-advisory` is done.
 15. DECIDED (Dave, 2026-11-10; DP1.9). The card `brief-bare-wait-dave` is in state `blocked` since 2026-11-10, with the note "held: DP1.9 gold candidate; re-szz-miner releases it". This state change is applied to the lane DB (2026-11-10). The card is not a map lane, so it has no Waves row. `re-szz-miner` releases it after gold-a.json records the bug.
+16. New card `re-answer-key-audit` (Dave's yes, 2026-11-11). Create it in state `blocked`, with no Depends on and the done check from its section. Store its 4 edges: `re-live-advisory`, `re-seed-gold-b`, `re-verifier-replay` and `re-p4-harness` depend on it. Until the board holds them, `sync-board` writes nothing (`edges-differ`). Then run `program.mjs check --board`. The card has no dependency, so `sync-board --apply` then moves it from `blocked` to `backlog` (the program state is GO). Band P1 (Dave, 2026-11-11).
 ## Not covered / risks
 
 - B1 is not applied as written. B1 keeps `re-repromote-auto` on the CLI track. That lane pulls `re-demote-mechanism`, `re-gate-ready-a` and `re-gate-ready-b` onto the track. (`re-engine-cli-schema` is on the track already under route J.) Here the CLI re-promotion lives in band-state.mjs in `re-prepr-cli-consumer`. `re-repromote-auto` adds the PR-bot triggers later.
@@ -1677,6 +1726,7 @@ Dave answered DP1 on 2026-11-09 (decisions journal). Items 2, 4, 7, 8, 12 and 13
 - The CLI gate goes first while the CLI is the one CodeRabbit check that runs today (finding 27). The bar decides, but a flip removes the only live CodeRabbit signal. The band-state triggers bring it back only after an escape ships.
 - With P5 and `re-refs-impact` deferred, no gating row tests cross-file recall unless the DP2.4 trigger fires. Cross-file is 0 of 6 today.
 - Path F counts rows from a pinned engine copy. The copy shows trusted:false once fork/main moves, and the pin path through `--engine-sha` is not yet proven [Speculation]. The `re-live-advisory` done check must prove it.
+- Answer-key reads by absolute path. `re-answer-key-audit` sees only what the stream shows. A read that leaves no tool call event is not seen. A void takes its round out of the counted set, so many voids on hard rounds would bias a sample: each counted artifact prints the void count, and a batch with a void is NOTE until the seat has read the stream. The Claude backend stream is not audited; DP1.6 plans no counted Claude run.
 - The paired-bar size and the real-label calibration are OPEN. Neither is solved here.
 - `re-rule-docs` is not in the CLI gate closure. Until it lands, the rule file does not describe the CLI demotion. pre-pr prints the "demoted" SKIP line as the stopgap.
 - The two gate lanes share review-router.config.json with no dependency edge. A hold token orders them (O6: `re-retire-critical` holds `re-retire-prepr-cli`).
@@ -1703,5 +1753,5 @@ Added by the premortem (2026-11-09). These risks stay open after the edits:
 - Adopted cards (T08). DP1.19 is decided: mark the 6 adopted cards done. Applied on 2026-11-11.
 - Long lane on the path. Dave split `re-live-advisory` (DP1.18, 2026-11-09). The long lane is now `re-live-accrual`: it stays open for 2 weeks or more, and only `re-retire-prepr-cli` and `re-gate-shadow-run` wait on it by edge. The owner of its daily sweep is decided (DP1.17): the coordinator seat for the first 2 weeks. The CLI gate counts at least 4 weeks, and the accrual check covers 2. A scheduled task after the first 2 weeks needs Dave's own yes. DECIDED (Dave, 2026-11-10): the seat keeps the daily sweep until that yes.
 - Frozen SHA (DP1.5). Point (b) of "Open after DP1" is decided (Dave, 2026-11-10): the `main` SHA right after `re-critical-model-check` lands. The count cannot start before the coordinator records the value. Cost shown to Dave: the first ask moves 2 rounds later.
-- Route J cost (DP1.8). The CLI flip now waits for 20 lanes, with two gold lanes, `hf-judge-precheck` and the two P4 prefactor lanes. `re-seed-gold-b` is a long lane (60 seeds at 8 a day take 8 days or more).
+- Route J cost (DP1.8). The CLI flip now waits for 21 lanes, with two gold lanes, `hf-judge-precheck`, the two P4 prefactor lanes and `re-answer-key-audit`. `re-seed-gold-b` is a long lane (60 seeds at 8 a day take 8 days or more).
 - Dave's load (E03). The decision points hold 36 items. DP1 is answered, so 17 remain (DP2 and DP3). The orchestration plan holds the rest of that finding (several lanes per PR, 2 workers at GO, the "waiting on Dave" list).
