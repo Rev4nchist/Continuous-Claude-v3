@@ -1,10 +1,11 @@
 // Tests for gold.mjs (the gold row schema, the validator and the loader). Every test names the source change that would break it.
 // All values are made up: no real gold or holdout PR id appears here.
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { after, test } from 'node:test';
+import { after, mock, test } from 'node:test';
 import { LINK_TYPES } from './linktype.mjs';
 import { GOLD_DIR, GOLD_ROW, GoldError, SEVERITIES, SOURCES, SPLITS, SUITES, loadGold, validateRow } from './gold.mjs';
 import * as goldModule from './gold.mjs';
@@ -461,19 +462,30 @@ test('rule 5: a bad repo shape is refused for source C and the value is not prin
   noEcho(cRow({ target: { repo: `${MARK} x/y`, pr: 9001, round: 1, sha40: sha('a') } }), 'target.repo');
 });
 
-test('rule 5: owner/name accepts dots, dashes and underscores (breaks if the repo check is stricter than one slash, no space, two parts)', () => {
-  for (const repo of ['a/b', 'My-Org.x/repo_name.js']) {
+test('rule 5: owner/name accepts lower-case dots, dashes and underscores inside a part (breaks if the repo check is stricter than one slash, no space, two parts)', () => {
+  for (const repo of ['a/b', 'my-org.x/repo_name.js']) {
     assert.deepEqual(validateRow(cRow({ target: { repo, pr: 9001, round: 1, sha40: sha('a') } })), [], repo);
   }
 });
 
+const repoHits = (repo) => validateRow(cRow({ target: { repo, pr: 9001, round: 1, sha40: sha('a') } })).filter((p) => p.startsWith('target.repo:'));
+
 test('review fix 4: repo parts are letters, digits, dot, dash and underscore only, and never "." or ".." (breaks if REPO_RE goes back to any non-space character)', () => {
   const bad = ['a/..', '../b', './b', 'a/.', 'a/b\u0000', 'a\u0000/b', 'a/b\u007f', 'a@b/c', 'a/b@c', 'org/re po', 'a/b:c'];
+  for (const repo of bad) assert.equal(repoHits(repo).length, 1, JSON.stringify(repo));
+});
+
+test('seat B2: one repo has one key: upper case, a .git suffix, and a dot or dash at the start or end of a part are refused (breaks if REPO_RE or repoOk accepts one of these forms again)', () => {
+  const bad = ['Org/repo', 'org/Repo', 'ORG/REPO', 'org/repo.git', 'org/x.git', 'org/.git', '.org/repo', 'org-/repo', 'org/-repo', 'org/repo.', '-org/repo', 'org./repo', 'org/..b'];
   for (const repo of bad) {
-    const hit = validateRow(cRow({ target: { repo, pr: 9001, round: 1, sha40: sha('a') } })).filter((p) => p.startsWith('target.repo:'));
-    assert.equal(hit.length, 1, JSON.stringify(repo));
+    const hit = repoHits(repo);
+    assert.equal(hit.length, 1, `${JSON.stringify(repo)} was accepted`);
+    assert.match(hit[0], /lower-case/);
   }
-  for (const repo of ['Org-1/repo.name_x', 'a/..b', 'a./b']) {
+});
+
+test('seat B2: lower-case parts with inner dots, dashes and underscores stay valid (breaks if the part rule is stricter than start and end)', () => {
+  for (const repo of ['org-1/repo.name_x', 'a/b', 'a_/_b', 'org/repo.github', 'org/my.git.x', 'o.r-g/r-e.p_o']) {
     assert.deepEqual(validateRow(cRow({ target: { repo, pr: 9001, round: 1, sha40: sha('a') } })), [], repo);
   }
 });
@@ -654,6 +666,125 @@ test('review fix 3: text inside the file that looks like a position is never rep
   assert.equal(err.problems.length, 1);
   assert.ok(!err.message.includes('999'), err.message);
   assert.match(err.problems[0], /^pos\.json: not valid JSON/);
+});
+
+// --- Seat check of PR 508: B1 (file name case), R1 and R2 (range), R3 (folder read errors) ---
+
+const EXT_MSG = (n) => `${JSON.stringify(n)}: the extension must be lower-case .json`;
+const NAME_MSG = (n, exact) => `${JSON.stringify(n)}: the name must be exactly ${exact} (lower case)`;
+
+test('seat B1: a row file with an upper-case or mixed-case extension is a problem, not a silent drop (breaks if the .json filter goes back to a case-sensitive endsWith)', () => {
+  for (const name of ['GOLD-A.JSON', 'gold-a.Json', 'gold-a.jSON']) {
+    const err = loadErr(folder({ [name]: [row()] }));
+    assert.ok(err instanceof GoldError, `${name} was dropped with no sign`);
+    assert.deepEqual(err.problems, [EXT_MSG(name)], name);
+  }
+});
+
+test('seat B1: a bad-case file is never read as rows, and a good file beside it is not hidden (breaks if the variant is loaded, or the loader stops at the good file)', () => {
+  const err = loadErr(folder({ 'ok.json': [row()], 'BAD.JSON': [row({ id: 'g-other' })], 'worse.JSON': '{nope' }));
+  assert.ok(err instanceof GoldError);
+  assert.deepEqual(err.problems, [EXT_MSG('BAD.JSON'), EXT_MSG('worse.JSON')]);
+});
+
+test('seat B1: a case variant of a non-row file name is a problem, not skipped and not loaded as rows (breaks if NON_ROW_FILES is matched case-sensitively)', () => {
+  for (const [name, exact] of [['Clean-Controls.json', 'clean-controls.json'], ['CLEAN-CONTROLS.JSON', 'clean-controls.json'], ['Escape-Baseline.json', 'escape-baseline.json'], ['escape-baseline.JSON', 'escape-baseline.json']]) {
+    const err = loadErr(folder({ [name]: [] }));
+    assert.ok(err instanceof GoldError, `${name} was accepted`);
+    assert.deepEqual(err.problems, [NAME_MSG(name, exact)], name);
+  }
+});
+
+test('seat B1: a folder named with another case of .json is still ignored, like sub.json (breaks if the case-blind match reports a folder)', () => {
+  const dir = folder();
+  mkdirSync(path.join(dir, 'SUB.JSON'));
+  assert.deepEqual(loadGold(dir), { rows: [], files: [], skipped: [] });
+});
+
+test('seat B1: a bad-case file name prints through the 40-character cap (breaks if the name is printed whole)', () => {
+  const name = `${'n'.repeat(60)}.JSON`;
+  const err = loadErr(folder({ [name]: [] }));
+  assert.ok(err instanceof GoldError);
+  assert.equal(err.problems.length, 1);
+  assert.ok(err.problems[0].includes('n'.repeat(40)) && !err.problems[0].includes('n'.repeat(41)), err.problems[0]);
+});
+
+test('seat B1: a symlink with a bad-case extension is reported by name and not followed (breaks if the case check skips links)', (t) => {
+  const outside = folder({ 'real.json': [row()] });
+  const dir = folder();
+  try {
+    symlinkSync(path.join(outside, 'real.json'), path.join(dir, 'link.JSON'), 'file');
+  } catch (e) {
+    t.skip(`this account cannot create a file symlink (${e.code})`);
+    return;
+  }
+  assert.deepEqual(loadErr(dir).problems, [EXT_MSG('link.JSON')]);
+});
+
+test('seat B1: a case variant of clean-controls.json is a problem in loadCleanControls, read from the real directory entry (breaks if only the asked-for path is checked)', () => {
+  for (const name of ['Clean-Controls.json', 'CLEAN-CONTROLS.JSON', 'clean-controls.Json']) {
+    const err = ctlErr(folder({ [name]: [control()] }));
+    assert.ok(err instanceof GoldError, `${name} was read or dropped with no sign`);
+    assert.deepEqual(err.problems, [NAME_MSG(name, 'clean-controls.json')], name);
+  }
+});
+
+test('seat B1: loadCleanControls still reads the exact name, and other files with similar names do not matter (breaks if the case-blind scan matches too much)', () => {
+  const dir = folder({ 'clean-controls.json': [control()], 'clean-controls.json.bak': '{nope', 'my-clean-controls.json': '{nope' });
+  assert.equal(goldModule.loadCleanControls(dir).length, 1);
+});
+
+test('seat R1: a range whose base equals its head is refused, in sha and in ref form (breaks if the empty-range check is removed)', () => {
+  const same = [`${sha('b')}..${sha('b')}`, 'refs/eval/seed/s1..refs/eval/seed/s1'];
+  for (const range of same) {
+    const hit = noEcho({ target: { range } }, 'target.range', 'seed/s1');
+    assert.match(hit[0], /same/);
+  }
+  assert.deepEqual(validateRow(row({ target: { range: 'refs/eval/seed/s1..refs/eval/seed/s2' } })), []);
+  assert.deepEqual(validateRow(row({ target: { range: `${sha('b')}..${sha('c')}` } })), []);
+});
+
+test('seat R2: a ref that ends with / or .lock or holds a . part is refused on either side (breaks if one of the three ref rules is removed or limited to one side)', () => {
+  const bad = [
+    `refs/heads/x/..${sha('c')}`, `${sha('b')}..refs/heads/x/`,
+    `refs/heads/x.lock..${sha('c')}`, `${sha('b')}..refs/heads/x.lock`,
+    `refs/heads/./x..${sha('c')}`, `${sha('b')}..refs/heads/./x`, `${sha('b')}..refs/heads/x/.`,
+  ];
+  for (const range of bad) expectProblem({ target: { range } }, 'target.range:');
+  for (const ok of ['refs/heads/x.locker', 'refs/heads/a.b', 'refs/heads/x']) {
+    assert.deepEqual(validateRow(row({ target: { range: `${ok}..${sha('c')}` } })), [], ok);
+    assert.deepEqual(validateRow(row({ target: { range: `${sha('b')}..${ok}` } })), [], ok);
+  }
+});
+
+// Reaches readdirSync and statSync with no private export: the node:fs ESM bindings are live after syncBuiltinESMExports.
+function failFs(name, dir, code, fn) {
+  const real = fs[name];
+  const m = mock.method(fs, name, (p, ...rest) => {
+    if (p === dir) throw Object.assign(new Error(`boom ${dir}`), { code });
+    return real(p, ...rest);
+  });
+  syncBuiltinESMExports();
+  try { return fn(); } finally { m.mock.restore(); syncBuiltinESMExports(); }
+}
+
+test('seat R3: a readdirSync or statSync error is a GoldError with the code and no path, in both loaders (breaks if the raw Error escapes or the path is printed)', () => {
+  for (const name of ['readdirSync', 'statSync']) {
+    const dir = folder({ 'a.json': [row()], 'clean-controls.json': [control()] });
+    const want = [`${path.basename(dir)}: cannot read (EACCES)`];
+    for (const [what, run] of [['loadGold', loadErr], ['loadCleanControls', ctlErr]]) {
+      const err = failFs(name, dir, 'EACCES', () => run(dir));
+      assert.ok(err instanceof GoldError, `${what} with ${name}: ${err}`);
+      assert.deepEqual(err.problems, want, `${what} with ${name}`);
+      assert.ok(!err.message.includes(os.tmpdir()), err.message);
+    }
+  }
+});
+
+test('seat R3: a read error with no code says unknown (breaks if the code fallback is removed)', () => {
+  const dir = folder();
+  const err = failFs('readdirSync', dir, undefined, () => loadErr(dir));
+  assert.deepEqual(err.problems, [`${path.basename(dir)}: cannot read (unknown)`]);
 });
 
 // --- Reader finding 2: the export list ---

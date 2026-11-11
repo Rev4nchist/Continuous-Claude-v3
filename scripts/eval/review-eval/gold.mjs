@@ -8,6 +8,9 @@
 // `target.repo` is 'owner/name': required when source is 'C', refused for A, B and CR. The range form never has it.
 // Clean controls (gold/clean-controls.json, read by loadCleanControls): {id, split, target, provenance}.
 //   The target has the same two forms as a gold row; repo is refused (a control is one of our own PRs, map.md:678).
+// `target.repo` is lower case only, with no `.git` suffix and no leading or trailing `.` or `-` in a part: this module
+//   refuses a second spelling of one repository and never folds it (the producer folds before it writes).
+// A file name with `.json` in another case, or a case variant of clean-controls.json or escape-baseline.json, is a problem.
 // A row with an unknown key or an unknown field value is rejected: a bad gold row must never drop silently.
 // `provenance` is the only open slot: each producer lane puts its own data there and checks its own keys.
 // This module reads no config.json and no data. Tests write rows into a temp folder.
@@ -49,10 +52,13 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 const REF_RE = /^refs\/[A-Za-z0-9_-][A-Za-z0-9._\/-]*$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const BY_RE = /^[a-z][a-z0-9.-]*$/;
-const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+// One repository must have one key, and this module never folds a value: it only refuses. A part starts and ends with
+// a letter, digit or _ (so it is never "." or ".."), and has . - inside. The producer folds before it writes.
+const REPO_PART = '[a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?';
+const REPO_RE = new RegExp(`^${REPO_PART}/${REPO_PART}$`);
 const PR_KEYS = ['pr', 'round', 'sha40'];
 const FORMS = 'expected exactly one of {pr, round, sha40} (with repo for source C) or {range}';
-const REPO_WHAT = 'owner/name (one slash, both parts non-empty, only letters, digits, . _ -, no part "." or "..")';
+const REPO_WHAT = 'owner/name (lower-case only, one slash, both parts non-empty, only letters, digits, . _ -, no part starting or ending with . or -, a name not ending in .git)';
 
 const isPlain = (o) => {
   if (o === null || typeof o !== 'object' || Array.isArray(o)) return false;
@@ -104,10 +110,14 @@ function checkFile(f) {
   return badPath ? bad('file', `${kind(f)}, expected ${PATH_WHAT}`) : [];
 }
 
+/** A ref side: REF_RE, and no trailing '/', no trailing '.lock', no '.' part (git refuses these names). */
+const refOk = (s) => REF_RE.test(s) && !s.endsWith('/') && !s.endsWith('.lock') && !s.split('/').includes('.');
+
 function checkRange(r) {
   const sides = typeof r === 'string' ? r.split('..') : [];
-  const ok = sides.length === 2 && !r.includes('...') && sides.every((s) => SHA_RE.test(s) || REF_RE.test(s));
-  return ok ? [] : bad('target.range', `${kind(r)}, expected <sha40|refs/...>..<sha40|refs/...>`);
+  const ok = sides.length === 2 && !r.includes('...') && sides.every((s) => SHA_RE.test(s) || refOk(s));
+  if (!ok) return bad('target.range', `${kind(r)}, expected <sha40|refs/...>..<sha40|refs/...>`);
+  return sides[0] === sides[1] ? bad('target.range', 'base and head are the same, an empty range') : [];
 }
 
 /**
@@ -119,7 +129,7 @@ function repoRule(source) {
   return SOURCES.includes(source) ? 'refused' : 'free';
 }
 
-const repoOk = (v) => typeof v === 'string' && REPO_RE.test(v) && !v.split('/').some((s) => s === '.' || s === '..');
+const repoOk = (v) => typeof v === 'string' && REPO_RE.test(v) && !v.endsWith('.git');
 
 function checkRepo(t, rule) {
   if (!Object.hasOwn(t, 'repo')) return rule === 'required' ? bad('target.repo', 'required when source is C') : [];
@@ -268,6 +278,38 @@ function readItems(dir, name, problems, seen, { what, validate }) {
 
 const readRowFile = (dir, name, problems, seen) => readItems(dir, name, problems, seen, ROW_KIND);
 
+const fail = (problem) => { throw new GoldError([problem]); };
+const cannotRead = (dir, e) => `${path.basename(dir)}: cannot read (${e.code ?? 'unknown'})`;
+
+/** The entries of dir. A read error is a GoldError with the code and the folder name, never the path. */
+function readDir(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return fail(cannotRead(dir, e));
+  }
+}
+
+function isFolder(dir) {
+  try {
+    return statSync(dir).isDirectory();
+  } catch (e) {
+    return fail(cannotRead(dir, e));
+  }
+}
+
+/**
+ * The problem for a file name in gold/, or null. A name with .json in any case is a candidate row file.
+ * A non-row file name (NON_ROW_FILES) must match exactly, and the extension must be lower-case.
+ */
+function nameProblem(name) {
+  const lower = name.toLowerCase();
+  if (!lower.endsWith('.json')) return null;
+  const exact = NON_ROW_FILES.find((n) => n === lower);
+  if (exact && name !== exact) return `${quoteCapped(name)}: the name must be exactly ${exact} (lower case)`;
+  return name.endsWith('.json') ? null : `${quoteCapped(name)}: the extension must be lower-case .json`;
+}
+
 /**
  * Load every row file in dir (default gold/). A missing folder is empty. Throws GoldError when any file or row is bad,
  * or when dir is a regular file (`<dir name>: not a folder`).
@@ -275,20 +317,24 @@ const readRowFile = (dir, name, problems, seen) => readItems(dir, name, problems
  */
 export function loadGold(dir = GOLD_DIR) {
   if (!existsSync(dir)) return { rows: [], files: [], skipped: [] };
-  if (!statSync(dir).isDirectory()) throw new GoldError([`${path.basename(dir)}: not a folder`]);
-  const entries = readdirSync(dir, { withFileTypes: true }).filter((e) => e.name.endsWith('.json'));
-  const names = entries.filter((e) => e.isFile()).map((e) => e.name).sort();
-  const links = entries.filter((e) => e.isSymbolicLink()).map((e) => e.name).sort();
+  if (!isFolder(dir)) fail(`${path.basename(dir)}: not a folder`);
+  // Case-blind: a name with .json in any case is a candidate. A wrong case is a problem, never a silent drop.
+  const entries = readDir(dir).filter((e) => e.name.toLowerCase().endsWith('.json'));
+  const listed = (pick) => entries.filter(pick).map((e) => e.name).sort();
+  const fileNames = listed((e) => e.isFile());
+  const linkNames = listed((e) => e.isSymbolicLink());
+  const okName = (n) => nameProblem(n) === null;
+  const problems = [...fileNames, ...linkNames].sort().map(nameProblem).filter(Boolean);
+  const names = fileNames.filter(okName);
+  const links = linkNames.filter(okName);
   const skipped = names.filter((n) => NON_ROW_FILES.includes(n));
   const files = names.filter((n) => !NON_ROW_FILES.includes(n));
-  const problems = links.filter((n) => !NON_ROW_FILES.includes(n)).map((n) => `${n}: is a link, not a file`);
+  problems.push(...links.filter((n) => !NON_ROW_FILES.includes(n)).map((n) => `${n}: is a link, not a file`));
   const seen = new Map();
   const rows = files.flatMap((name) => readRowFile(dir, name, problems, seen));
   if (problems.length) throw new GoldError(problems);
   return { rows, files, skipped };
 }
-
-const fail = (problem) => { throw new GoldError([problem]); };
 
 /**
  * Load the clean controls: <dir>/clean-controls.json only (default gold/). A missing folder or file is an empty list.
@@ -296,13 +342,17 @@ const fail = (problem) => { throw new GoldError([problem]); };
  * @returns {object[]} the controls in file order.
  */
 export function loadCleanControls(dir = GOLD_DIR) {
+  if (!existsSync(dir)) return [];
+  // Windows reports ENOENT, not ENOTDIR, for a path below a regular file: test the folder itself.
+  if (!isFolder(dir)) fail(`${CONTROLS_FILE}: cannot read (ENOTDIR)`);
+  // A case-blind file system resolves a case variant to the exact path: compare with the real entry names.
+  const variants = readDir(dir).map((e) => e.name).filter((n) => n.toLowerCase() === CONTROLS_FILE && n !== CONTROLS_FILE).sort();
+  if (variants.length) throw new GoldError(variants.map(nameProblem));
   let st;
   try {
     st = lstatSync(path.join(dir, CONTROLS_FILE));
   } catch (e) {
-    // Windows reports ENOENT, not ENOTDIR, for a path below a regular file: test the folder itself.
-    const code = e.code === 'ENOENT' && existsSync(dir) && !statSync(dir).isDirectory() ? 'ENOTDIR' : e.code;
-    return code === 'ENOENT' ? [] : fail(`${CONTROLS_FILE}: cannot read (${code ?? 'unknown'})`);
+    return e.code === 'ENOENT' ? [] : fail(`${CONTROLS_FILE}: cannot read (${e.code ?? 'unknown'})`);
   }
   if (st.isSymbolicLink()) fail(`${CONTROLS_FILE}: is a link, not a file`);
   const problems = [];
