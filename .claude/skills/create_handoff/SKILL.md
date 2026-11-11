@@ -88,6 +88,16 @@ log `docs/playground/FABRIC-LESSONS.md`), run it before you write the handoff. M
 lesson it matches, or add a new lesson row and mark it. Promote a lesson to its on-demand rule when it cost money,
 cost more than 30 minutes, or happened twice. Name the new lessons under Findings in the handoff.
 
+### 0c. Name the lane (when this session holds one)
+
+Run `node C:/Users/dkhay/.claude/scripts/lane.mjs mine`. For each lane you keep, write its note again with the
+next step. Then make "Take the lane first" the first section of the handoff. It gives the lane id and board,
+this session's name and id, the line `/rename <this session's name>` and
+`node C:/Users/dkhay/.claude/scripts/lane.mjs adopt --from <this session id>`. Keep the lane. The same session
+resumed keeps the lane and its address. A fresh session runs the `/rename` line first: `adopt` needs the old
+session's chosen name. If this session has only an automatic name (an animal word), ask Dave to `/rename` it
+before the handoff. If `adopt` is refused: do not claim, ask Dave. Rule L2.13 in `docs/coordination/standard.md`.
+
 ### 1. Filepath & Metadata (local YAML copy)
 Use the following information to understand how to create your document:
 
