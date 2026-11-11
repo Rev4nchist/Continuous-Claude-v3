@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
+import { wmKey } from './lane-board.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
@@ -596,6 +597,70 @@ describe('owner rule: the [not-holder] hint recipient works in `say --to`', () =
     assert.equal(say.code, 0, say.err);
     const ev = await one(`SELECT to_session_id FROM agentic_os.lane_event WHERE kind='note' AND body='hint check' ORDER BY id DESC LIMIT 1`);
     assert.equal(ev?.to_session_id, holder);
+  });
+});
+
+describe('say: a note insert that fails is reported, never "sent"', () => {
+  it('say-F1: a failed note insert gives exit 1, the "not confirmed" line, no "sent" and no event row', async () => {
+    const r = await withBlockedEventKind('note', async () => lane(['say', 'sf1 body']));
+    assert.equal(r.code, 1, `stdout: ${r.out} stderr: ${r.err}`);
+    assert.match(r.err, /^not confirmed: .+\. It may already be on the board; a resend can post it twice\.\n$/, r.err);
+    assert.doesNotMatch(r.out, /sent/);
+    assert.equal((await q(`SELECT 1 FROM agentic_os.lane_event WHERE body='sf1 body'`)).rowCount, 0);
+  });
+
+  it('say: a missing migration still prints the migration message, unwrapped (guard: passes before and after)', async () => {
+    // A trigger raises what Postgres raises for a missing project_key column. The insert of a note fails with 42703.
+    await q(`CREATE FUNCTION agentic_os.zz_say_mig() RETURNS trigger LANGUAGE plpgsql AS $f$
+      BEGIN RAISE EXCEPTION USING ERRCODE = '42703', MESSAGE = 'column "project_key" of relation "lane_event" does not exist'; END $f$`);
+    await q(`CREATE TRIGGER zz_say_mig BEFORE INSERT ON agentic_os.lane_event FOR EACH ROW WHEN (NEW.kind = 'note') EXECUTE FUNCTION agentic_os.zz_say_mig()`);
+    let r;
+    try { r = lane(['say', 'smig body']); } finally {
+      await q(`DROP TRIGGER IF EXISTS zz_say_mig ON agentic_os.lane_event`);
+      await q(`DROP FUNCTION IF EXISTS agentic_os.zz_say_mig()`);
+    }
+    assert.equal(r.code, 1, r.err);
+    assert.equal(r.err, 'migration 0004 is not applied to this database\n');
+    assert.equal(r.out, '');
+  });
+});
+
+describe('inbox: the cursor never moves back (row 49)', () => {
+  it('F49: an inbox that waited on the cursor row while a higher cursor committed leaves the higher cursor', async () => {
+    const reader = sid();
+    const key = wmKey(reader, BOARD);
+    const base = (await one(`SELECT COALESCE(max(id),0)::int AS n FROM agentic_os.lane_event`)).n;
+    const high = base + 1000;
+    // The cursor row exists first, below the broadcast the inbox will read.
+    await q(`INSERT INTO agentic_os.lane_watermark (session_id, last_event_id) VALUES ($1,$2)`, [key, base]);
+    await q(`INSERT INTO agentic_os.lane_event (kind, session_id, body, project_key) VALUES ('note',$1,'f49 broadcast',$2)`, [sid(), BOARD]);
+    const holder = new Client({ connectionString: s.url6 });
+    await holder.connect();
+    let child = null;
+    let waiting = false;
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT 1 FROM agentic_os.lane_watermark WHERE session_id=$1 FOR UPDATE`, [key]);
+      child = laneAsync(['inbox'], reader);
+      // 15 s: the test files run in parallel, so a slow runner can need more than 5 s. The loop exits at the first hit.
+      for (const end = Date.now() + 15000; !waiting && Date.now() < end; await new Promise((ok) => setTimeout(ok, 50))) {
+        waiting = (await one(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
+             AND pid <> pg_backend_pid() AND query LIKE '%INTO agentic_os.lane_watermark%'`)).n > 0;
+      }
+      if (waiting) {
+        await holder.query(`UPDATE agentic_os.lane_watermark SET last_event_id=$2 WHERE session_id=$1`, [key, high]);
+        await holder.query('COMMIT');
+      }
+    } finally {
+      await holder.query('ROLLBACK').catch(() => {});
+      await holder.end().catch(() => {});
+    }
+    const r = child ? await child : { code: null, err: 'inbox was never started' };
+    assert.ok(waiting, 'the inbox upsert was never seen waiting on the cursor row: the test would prove nothing');
+    assert.equal(r.code, 0, r.err);
+    const wm = await one(`SELECT last_event_id::int AS n FROM agentic_os.lane_watermark WHERE session_id=$1`, [key]);
+    assert.equal(wm.n, high, 'the cursor must keep the higher value');
   });
 });
 

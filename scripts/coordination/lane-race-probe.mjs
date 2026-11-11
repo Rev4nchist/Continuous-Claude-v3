@@ -266,7 +266,9 @@ async function doneRaceChecks() {
     const plain = run('done', id, H);
     let waiting = false;
     for (const end = Date.now() + 10000; !waiting && Date.now() < end; await sleep(100)) {
-      waiting = (await c.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`)).rows[0].n > 0;
+      // Only the lane row lock of the plain done counts: lockLane's own query, not any other lock waiter on the database.
+      waiting = (await c.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()
+        AND query LIKE '%owner_session_id, state FROM agentic_os.lane WHERE id=$1%FOR UPDATE%'`)).rows[0].n > 0;
     }
     await c2.query(`UPDATE agentic_os.lane SET state='done', owner_session_id=NULL, lease_expires_at=NULL WHERE id=$1`, [id]);
     await c2.query(`INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, body, detail, project_key) VALUES ($1,'done',$2,'probe merged done',$3,'continuous-claude')`,
