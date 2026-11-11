@@ -32,6 +32,8 @@ const fake = vi.hoisted(() => ({
   mine: [] as Array<Record<string, unknown>>,
   claimable: [] as Array<Record<string, unknown>>,
   unread: [] as Array<Record<string, unknown>>,
+  /** The Related lookup: lane rows (id, owner_session_id). The fake returns the rows whose id is in the query array. */
+  lanes: [] as Array<{ id: string; owner_session_id: string | null }>,
   failOn: null as RegExp | null,
   /** P15: the watermark INSERT settles this many ms late, and records that it did. */
   insertDelayMs: 0,
@@ -50,6 +52,10 @@ vi.mock('pg', () => {
         await new Promise((res) => setTimeout(res, fake.insertDelayMs));
         fake.insertSettled = true;
       }
+      if (/FROM agentic_os\.lane WHERE id = ANY/.test(sql)) {
+        const want = (params?.[0] ?? []) as string[];
+        return { rows: fake.lanes.filter((l) => want.includes(l.id)) };
+      }
       if (/FROM sessions s/.test(sql)) return { rows: [{ sid: 'bbbbbbbb-0000-4000-8000-000000000002', lanes: 'zz-1', scopes: 'src', total: 1 }] };
       if (/FROM agentic_os\.lane_event e\b/.test(sql)) return { rows: fake.unread };
       if (/state IN \('ready','backlog'\)/.test(sql)) return { rows: fake.claimable };
@@ -60,11 +66,16 @@ vi.mock('pg', () => {
   return { Client, default: { Client } };
 });
 
-import { runLaneContext, deliverDirectMessages, dmStatePath, pageUnread } from '../lane-context.js';
+import { runLaneContext, deliverDirectMessages, dmStatePath, pageUnread, parseRelatesTo } from '../lane-context.js';
 import { writeIdentity } from '../shared/session-identity.js';
 import { laneBoardLine, sameNameHint } from '../shared/session-names.js';
 
 const ME = 'aaaaaaaa-0000-4000-8000-000000000001';
+const PEER_ID = 'bbbbbbbb-0000-4000-8000-000000000002';
+/** What laneCliCmd() prints under CCV3_USER_HOME=C:/Users/Tester. */
+const SHIM = 'node C:/Users/Tester/.claude/scripts/lane.mjs';
+/** The reply footer, one shared text for the prompt path and the mid-turn path (M4.14). */
+const REPLY_FOOTER = 'A DM with a decision, a finding or a request: reply one time (M4.14).';
 const SRC_LANE_MJS = readFileSync(join(__dirname, '../../../../scripts/coordination/lane.mjs'), 'utf8');
 
 let tmp: string;
@@ -93,7 +104,7 @@ beforeEach(() => {
   process.env.LANE_CONTEXT_ERROR_LOG = join(tmp, 'errors.jsonl');
   delete process.env.CLAUDE_CODE_ENTRYPOINT;
   delete process.env.LANE_CONTEXT_HEADLESS;
-  fake.calls.length = 0; fake.mine = []; fake.claimable = []; fake.unread = []; fake.failOn = null;
+  fake.calls.length = 0; fake.mine = []; fake.claimable = []; fake.unread = []; fake.lanes = []; fake.failOn = null;
   fake.insertDelayMs = 0; fake.insertSettled = false;
 });
 afterEach(() => {
@@ -230,7 +241,8 @@ describe('B5-B6: unread events and the watermark', () => {
   });
 
   it('B5+B6: on another board the cursor row is <id>@<board>', async () => {
-    fake.unread = [{ id: 9, occurred_at: '', lane_id: null, kind: 'note', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: null, body: 'hi', project_key: 'zz-board' }];
+    // board_wm 5: a WARM board (a cursor row exists). Without it the read takes the cold branch.
+    fake.unread = [{ id: 9, occurred_at: '', lane_id: null, kind: 'note', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: null, body: 'hi', project_key: 'zz-board', board_wm: 5 }];
     const out = await run('UserPromptSubmit', zz);
     expect(text(out)).toContain('hi');
     const q = fake.calls.find((c) => /FROM agentic_os\.lane_event/.test(c.sql));
@@ -240,7 +252,7 @@ describe('B5-B6: unread events and the watermark', () => {
   });
 
   it('B6: the default board still writes the bare id', async () => {
-    fake.unread = [{ id: 4, occurred_at: '', lane_id: null, kind: 'note', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: null, body: 'x', project_key: 'continuous-claude' }];
+    fake.unread = [{ id: 4, occurred_at: '', lane_id: null, kind: 'note', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: null, body: 'x', project_key: 'continuous-claude', board_wm: 1 }];
     await run('UserPromptSubmit', ccv3);
     const w = fake.calls.find((c) => /INSERT INTO agentic_os\.lane_watermark/.test(c.sql));
     expect(w?.params).toEqual([ME, 4]);
@@ -248,8 +260,8 @@ describe('B5-B6: unread events and the watermark', () => {
 
   it('a DM that crossed boards is tagged [from <board>]; a same-board DM is not', async () => {
     fake.unread = [
-      { id: 5, occurred_at: '', lane_id: null, kind: 'say', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: ME, body: 'cross', project_key: 'continuous-claude' },
-      { id: 6, occurred_at: '', lane_id: null, kind: 'say', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: ME, body: 'same', project_key: 'zz-board' },
+      { id: 5, occurred_at: '', lane_id: null, kind: 'say', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: ME, body: 'cross', project_key: 'continuous-claude', board_wm: 1 },
+      { id: 6, occurred_at: '', lane_id: null, kind: 'say', session_id: 'bbbbbbbb-0000-4000-8000-000000000002', to_session_id: ME, body: 'same', project_key: 'zz-board', board_wm: 1 },
     ];
     const t = text(await run('UserPromptSubmit', zz));
     expect(t).toMatch(/\[from continuous-claude\][^\n]*cross/);
@@ -311,15 +323,178 @@ describe('B7-B10: SessionStart banner', () => {
     expect(t).toContain('+1 on other boards: ccv3-1@continuous-claude');
   });
 
-  it('B9: hints name the shim, never the relative path', async () => {
+  it('B9: every lane command in the three no-lane lines uses the shim path, never a relative path', async () => {
     const t = text(await run('SessionStart', ccv3));
-    expect(t).toContain('node C:/Users/Tester/.claude/scripts/lane.mjs claim <id>');
+    const lines = t.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('You hold no lane.'));
+    expect(at, 'no "You hold no lane" line').toBeGreaterThan(-1);
+    const block = lines.slice(at, at + 3).join('\n');
+    const paths = [...block.matchAll(/\S*lane\.mjs/g)].map((m) => m[0]);
+    // L1 has mine and board; L2 has add and board --all: four commands.
+    expect(paths.length).toBeGreaterThanOrEqual(4);
+    for (const p of paths) expect(p).toBe('C:/Users/Tester/.claude/scripts/lane.mjs');
+    expect(block).toContain(`${SHIM} mine`);
+    expect(block).toContain(`${SHIM} board --by priority`);
+    expect(block).toContain(`${SHIM} add <new-id>`);
+    expect(block).toContain(`${SHIM} board --all`);
     expect(t).not.toMatch(/node scripts\/coordination\/lane\.mjs/);
   });
 
   it('B10: the header names the board', async () => {
     expect(text(await run('SessionStart', zz))).toContain('## Lane board zz-board (concurrent sessions on this board)');
     expect(text(await run('SessionStart', ccv3))).toContain('## Lane board continuous-claude (concurrent sessions on this board)');
+  });
+});
+
+describe('E1: the no-lane lines and the Milestone line', () => {
+  const L1 = `You hold no lane. 1. kanban-sync when the board has a phone page. 2. ${SHIM} mine. 3. ${SHIM} board --by priority, then claim the lane for your work by id.`;
+  const L2 = `No lane for it: ${SHIM} add <new-id> --title "..." --scope "..." only when ${SHIM} board --all shows the id in no state, then claim it. Never add on a lane you do not hold.`;
+  const L3 = 'Rules: lane-board.md. Rule ids: docs/coordination/standard.md.';
+  const MILESTONE = 'Milestone (start, commit, decision by Dave, finding, block, done): send one DM to each holder in your RELATES TO list (M4.11).';
+  const held = (id: string, scope: string | null, project_key = 'continuous-claude'): Record<string, unknown> =>
+    ({ id, title: 't', track: 'a', state: 'active', scope, note: null, owner_session_id: ME, lease_expires_at: null, project_key, band: 'P1' });
+
+  it('E1: a session with no lane gets L1, L2 and L3, in that order, and no Milestone line', async () => {
+    const t = text(await run('SessionStart', ccv3));
+    const lines = t.split('\n');
+    const at = lines.indexOf(L1);
+    expect(at, 'L1 not found as a whole line').toBeGreaterThan(-1);
+    expect(lines[at + 1]).toBe(L2);
+    expect(lines[at + 2]).toBe(L3);
+    expect(t).not.toContain('Milestone');
+    expect(t).not.toContain('Claim one by id before starting work');
+    expect(lines.slice(at, at + 3).join('\n')).not.toContain('\u2014');
+  });
+
+  it('E1: a session that holds a lane gets the Milestone line directly after the "You hold:" line', async () => {
+    fake.mine = [held('c-1', null)];
+    const t = text(await run('SessionStart', ccv3));
+    const lines = t.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('You hold:'));
+    expect(lines[at]).toBe('You hold: P1 c-1');
+    expect(lines[at + 1]).toBe(MILESTONE);
+    expect(t).not.toContain('You hold no lane');
+    expect(t).not.toContain(L3);
+  });
+
+  it('E1: a session that holds a lane only on another board gets no Milestone line (it holds none on this board)', async () => {
+    fake.mine = [held('ccv3-1', null, 'continuous-claude')];
+    const t = text(await run('SessionStart', zz));
+    expect(t).toContain('You hold no lane');
+    expect(t).not.toContain('Milestone');
+  });
+});
+
+describe('E3: parseRelatesTo', () => {
+  it('takes the ids that come last in the scope text', () => {
+    expect(parseRelatesTo('keep out of src/. RELATES TO: a-1, b-2')).toEqual(['a-1', 'b-2']);
+  });
+  it('splits on commas and on white space', () => {
+    expect(parseRelatesTo('RELATES TO: a-1 b-2,c.3,   d-4')).toEqual(['a-1', 'b-2', 'c.3', 'd-4']);
+  });
+  it('strips a trailing full stop from an id', () => {
+    expect(parseRelatesTo('RELATES TO: a-1, b-2.')).toEqual(['a-1', 'b-2']);
+  });
+  it('uses the text after the LAST "RELATES TO:"', () => {
+    expect(parseRelatesTo('RELATES TO: old-1 | other text | RELATES TO: new-1, new-2')).toEqual(['new-1', 'new-2']);
+  });
+  it('removes duplicates and keeps the order of first use', () => {
+    expect(parseRelatesTo('RELATES TO: b-2, a-1, b-2, a-1')).toEqual(['b-2', 'a-1']);
+  });
+  it('drops a token that has a character outside [A-Za-z0-9._-]', () => {
+    expect(parseRelatesTo('RELATES TO: a-1, b/2, (c-3)')).toEqual(['a-1']);
+  });
+  it('gives [] with no "RELATES TO:", for null and for undefined', () => {
+    expect(parseRelatesTo('only scope text, a-1')).toEqual([]);
+    expect(parseRelatesTo(null)).toEqual([]);
+    expect(parseRelatesTo(undefined)).toEqual([]);
+    expect(parseRelatesTo('')).toEqual([]);
+  });
+});
+
+describe('E3: the Related line in the SessionStart banner', () => {
+  const held = (id: string, scope: string | null, project_key = 'continuous-claude'): Record<string, unknown> =>
+    ({ id, title: 't', track: 'a', state: 'active', scope, note: null, owner_session_id: ME, lease_expires_at: null, project_key, band: 'P1' });
+  const lookups = (): Array<{ sql: string; params: unknown[] | undefined }> =>
+    fake.calls.filter((c) => /FROM agentic_os\.lane WHERE id = ANY/.test(c.sql));
+  const errLog = (): string => process.env.LANE_CONTEXT_ERROR_LOG as string;
+  const stamp = (): string => join(tmpdir(), `claude-lane-err-${ME}.json`);
+  beforeEach(() => { rmSync(stamp(), { force: true }); });
+  afterEach(() => { rmSync(stamp(), { force: true }); });
+
+  it('E3: owner gives who(owner), a null owner gives "no holder", a missing row gives "no such lane"; the line follows Milestone', async () => {
+    writeIdentity(PEER_ID, { name: 'trex', cwd: 'C:/work/repo', endedAt: null });
+    fake.mine = [held('c-1', 'src only. RELATES TO: peer-1, none-1, ghost-9')];
+    fake.lanes = [{ id: 'peer-1', owner_session_id: PEER_ID }, { id: 'none-1', owner_session_id: null }];
+    const t = text(await run('SessionStart', ccv3));
+    const lines = t.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('Milestone'));
+    expect(at).toBeGreaterThan(-1);
+    expect(lines[at + 1]).toBe('Related: peer-1 (trex #bbbbbbbb), none-1 (no holder), ghost-9 (no such lane)');
+    expect(lookups()).toHaveLength(1);
+    expect(lookups()[0].params).toEqual([['peer-1', 'none-1', 'ghost-9']]);
+    expect(lookups()[0].sql.replace(/\s+/g, ' ')).toContain('SELECT id, owner_session_id FROM agentic_os.lane WHERE id = ANY($1::text[])');
+  });
+
+  it('E3: the ids of every lane held on this board are used; an id of a lane the session holds is dropped; no repeats', async () => {
+    fake.mine = [
+      held('c-1', 'RELATES TO: a-1, c-2, b-2'),
+      held('c-2', 'RELATES TO: b-2, c-1, a-1'),
+      held('other-1', 'RELATES TO: elsewhere-9', 'zz-board'),
+    ];
+    fake.lanes = [{ id: 'a-1', owner_session_id: null }, { id: 'b-2', owner_session_id: null }];
+    const t = text(await run('SessionStart', ccv3));
+    expect(t).toContain('Related: a-1 (no holder), b-2 (no holder)');
+    expect(t).not.toMatch(/Related:[^\n]*(c-1|c-2|elsewhere-9)/);
+    expect(lookups()[0].params).toEqual([['a-1', 'b-2']]);
+  });
+
+  it('E3: an id of a lane the session holds on another board is dropped too (lane ids are global)', async () => {
+    fake.mine = [
+      held('c-1', 'RELATES TO: a-1, other-1'),
+      held('other-1', null, 'zz-board'),
+    ];
+    fake.lanes = [{ id: 'a-1', owner_session_id: null }, { id: 'other-1', owner_session_id: ME }];
+    const t = text(await run('SessionStart', ccv3));
+    expect(t).toContain('Related: a-1 (no holder)');
+    expect(t).not.toMatch(/Related:[^\n]*other-1/);
+    expect(lookups()[0].params).toEqual([['a-1']]);
+  });
+
+  it('E3: no RELATES TO in any scope prints no Related line', async () => {
+    fake.mine = [held('c-1', 'src only'), held('c-2', null)];
+    const t = text(await run('SessionStart', ccv3));
+    expect(t).toContain('Milestone');
+    expect(t).not.toContain('Related:');
+  });
+
+  it('E3: a session with no lane prints no Related line', async () => {
+    fake.lanes = [{ id: 'a-1', owner_session_id: null }];
+    expect(text(await run('SessionStart', ccv3))).not.toContain('Related:');
+  });
+
+  it('E3: at most 8 ids show, then ", +N more"', async () => {
+    const ids = Array.from({ length: 10 }, (_, i) => `r-${i + 1}`);
+    fake.mine = [held('c-1', `RELATES TO: ${ids.join(', ')}`)];
+    fake.lanes = ids.map((id) => ({ id, owner_session_id: null }));
+    const line = text(await run('SessionStart', ccv3)).split('\n').find((l) => l.startsWith('Related:')) ?? '';
+    expect(line).toBe(`Related: ${ids.slice(0, 8).map((id) => `${id} (no holder)`).join(', ')}, +2 more`);
+    expect(line).not.toContain('r-9');
+  });
+
+  it('E3: a failing lookup keeps the banner, drops the Related line and logs one line', async () => {
+    fake.mine = [held('c-1', 'RELATES TO: peer-1')];
+    fake.lanes = [{ id: 'peer-1', owner_session_id: PEER_ID }];
+    fake.failOn = /FROM agentic_os\.lane WHERE id = ANY/;
+    const t = text(await run('SessionStart', ccv3));
+    expect(t).toContain('## Lane board continuous-claude');
+    expect(t).toContain('You hold: P1 c-1');
+    expect(t).toContain('Commands:');
+    expect(t).not.toContain('Related:');
+    expect(existsSync(errLog()), 'no error line logged').toBe(true);
+    const lines = readFileSync(errLog(), 'utf8').split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]).error).toMatch(/boom/);
   });
 });
 
@@ -403,8 +578,10 @@ describe('B14: the SessionStart board line', () => {
     expect(laneBoardLine(zz, process.env)).toBe('lane board: zz-board');
     expect(laneBoardLine(join(ccv3, 'sub'), process.env)).toBe('lane board: continuous-claude');
   });
-  it('says "no lane board (unregistered dir)" for an unregistered folder', () => {
-    expect(laneBoardLine(nowhere, process.env)).toBe('no lane board (unregistered dir)');
+  it('gives the two-line text for an unregistered folder: the board command, then the register rule', () => {
+    expect(laneBoardLine(nowhere, process.env)).toBe(
+      `no lane board (unregistered dir). Work for a board: ${SHIM} board --project <key>. Else run no lane command.\nRegister a folder only with Dave's yes.`,
+    );
   });
   it('says nothing in a headless session', () => {
     expect(laneBoardLine(nowhere, { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' })).toBe('');
@@ -524,7 +701,8 @@ describe('P: the banner pages unread events without losing any', () => {
     expect(tags(t)).toEqual(seq('dm', 221, 232));
     expect(inserts()).toHaveLength(1);
     expect(inserts()[0].params).toEqual([SENT, 232]);
-    expect(t).toContain('(13 more unread, 1 direct to you. Later prompts show them, oldest first.)');
+    // Row 46: a cold page that cuts a DM and 12 board events. The board events show later only while they stay in the newest 12.
+    expect(t).toContain('  (13 more unread, 1 direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest 12 of this board.)');
     expect(t).not.toMatch(/inbox/);
     // No board row is written, so the cold line waits for the page that writes it.
     expect(t).not.toMatch(/not shown on your first look/);
@@ -573,11 +751,18 @@ describe('P: the banner pages unread events without losing any', () => {
     expect(inserts()[0].params).toEqual([SENT, 106]);
   });
 
-  it('P12 (C3): string ids and a string board_wm on a board: "99" then "100" keep numeric order', async () => {
-    fake.unread = Array.from({ length: 14 }, (_, i) => ev(String(95 + i), `bc${95 + i}`, { wm: '94' as unknown as number }));
+  it('P12 (C3): string ids on a board, a DM behind a cut: the DM sentinel is the NUMBER 108, not the string "108"', async () => {
+    // 13 broadcasts "95".."107" (the ids cross 99 -> 100) and a DM "108". The DM shows, 11 broadcasts show, 2 are cut.
+    // The board row is one below the first cut broadcast (a number, from the minus). Only the sentinel carries the DM's
+    // own id, so only it shows whether readUnread converted the id: remove the Number() there and it is the string "108".
+    fake.unread = [
+      ...Array.from({ length: 13 }, (_, i) => ev(String(95 + i), `bc${95 + i}`, { wm: '94' as unknown as number })),
+      ev('108', 'dm108', { dm: true, wm: '94' as unknown as number }),
+    ];
     const t = text(await run('UserPromptSubmit', ccv3));
-    expect(tags(t)).toEqual(seq('bc', 95, 106));
-    expect(inserts()[0].params).toEqual([ME, 106]);
+    expect(tags(t)).toEqual([...seq('bc', 95, 105), 'dm108']);
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 105, SENT, 108]);
   });
 
   it('P12b (C3): string ids, nothing cut: "99" is not above "100", so no sentinel row is written', async () => {
@@ -660,6 +845,92 @@ describe('P: the banner pages unread events without losing any', () => {
     expect(inserts()[0].params).toEqual([ME, 111, SENT, 114]);
     expect(text(out)).toContain('<dm114>');
   });
+
+  const COLD_CUT_LINE = (cut: number, cutDm: number): string =>
+    `  (${cut} more unread, ${cutDm} direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest 12 of this board.)`;
+
+  it('P18 (row 46): cold board page, 13 DMs and 3 broadcasts: the cut DM and the cut broadcasts get the new line, with no command', async () => {
+    fake.unread = [...bcs(201, 203, null), ...dms(211, 223, null)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(seq('dm', 211, 222));
+    // 1 cut DM + 3 broadcasts that wait behind it.
+    expect(t.split('\n')).toContain(COLD_CUT_LINE(4, 1));
+    expect(t).not.toMatch(/inbox/);
+    expect(t).not.toContain(String.fromCharCode(0x2014));
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([SENT, 222]);
+  });
+
+  it('P18b (row 46): cold board page that cuts only a DM (no board event is cut) keeps today\'s line', async () => {
+    fake.unread = dms(101, 113, null);
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(t).toContain('  (1 more unread, 1 direct to you. Later prompts show them, oldest first.)');
+    expect(t).not.toMatch(/newest 12/);
+  });
+
+  it('P18c (row 46): a WARM board page that cuts a DM and broadcasts keeps today\'s line, with the inbox command', async () => {
+    fake.unread = [...bcs(101, 105), ...dms(106, 118)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(t).toContain(`  (6 more unread, 1 direct to you. Later prompts show them, oldest first, or run: ${MORE_CMD}`);
+    expect(t).not.toMatch(/newest 12/);
+  });
+
+  it('P19 (F1): SessionStart pages too: 14 broadcasts show the oldest 12 under the banner, and the row stops at the 12th', async () => {
+    fake.unread = bcs(101, 114);
+    const t = text(await run('SessionStart', ccv3));
+    expect(t).toContain('## Lane board continuous-claude');
+    // The banner text holds tags like <id>: keep only this file's event tags.
+    expect(tags(t).filter((x) => /^(bc|dm)\d+$/.test(x))).toEqual(seq('bc', 101, 112));
+    expect(t).toContain('## 14 lane update(s) since you last looked');
+    expect(t).toContain('(2 more unread. Later prompts show them');
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 112]);
+  });
+
+  describe('E4: the reply footer on the prompt, SessionStart and no-board paths', () => {
+    const lastLine = (t: string): string => t.split('\n').slice(-1)[0];
+    const count = (t: string): number => t.split(REPLY_FOOTER).length - 1;
+
+    it('F1: a page with direct messages ends with the footer, one time, however many DMs it shows', async () => {
+      fake.unread = [...bcs(101, 102), ...dms(103, 104)];
+      const t = text(await run('UserPromptSubmit', ccv3));
+      expect(lastLine(t)).toBe(REPLY_FOOTER);
+      expect(count(t)).toBe(1);
+    });
+
+    it('F2: the footer is the LAST line, after the "more" line and the cold line', async () => {
+      fake.unread = [...bcs(201, 220, null), ...dms(221, 223, null)];
+      const t = text(await run('UserPromptSubmit', ccv3));
+      expect(t).toContain('(3 more unread.');
+      expect(t).toContain('(8 older board events are not shown on your first look at this board.)');
+      expect(lastLine(t)).toBe(REPLY_FOOTER);
+      expect(count(t)).toBe(1);
+    });
+
+    it('F3: a page with only board events has no footer', async () => {
+      fake.unread = bcs(101, 114);
+      const t = text(await run('UserPromptSubmit', ccv3));
+      expect(t).toContain('(2 more unread.');
+      expect(t).not.toContain(REPLY_FOOTER);
+      expect(t).not.toContain('reply one time');
+    });
+
+    it('F4: a session with no board gets the footer after its direct messages', async () => {
+      fake.unread = dms(101, 102);
+      const t = text(await run('UserPromptSubmit', nowhere));
+      expect(lastLine(t)).toBe(REPLY_FOOTER);
+      expect(count(t)).toBe(1);
+    });
+
+    it('F5: SessionStart: the footer is the last line of the block, after the banner and the events', async () => {
+      fake.unread = [...bcs(101, 101), ...dms(102, 102)];
+      const t = text(await run('SessionStart', ccv3));
+      expect(t).toContain('## Lane board continuous-claude');
+      expect(t).toContain('<dm102>');
+      expect(lastLine(t)).toBe(REPLY_FOOTER);
+      expect(count(t)).toBe(1);
+    });
+  });
 });
 
 describe('U: pageUnread, the pure paging rule', () => {
@@ -737,12 +1008,17 @@ describe('U: pageUnread, the pure paging rule', () => {
       ['warm, 3 broadcasts, 13 DMs, 3 broadcasts', [...b(101, 103), ...d(104, 116), ...b(117, 119)], false],
       ['cold, 20 broadcasts then 3 DMs', [...b(201, 220), ...d(221, 223)], true],
       ['cold, 3 DMs then 30 broadcasts', [...d(201, 203), ...b(204, 233)], true],
+      ['cold, 20 broadcasts then 13 DMs (a DM is cut)', [...b(1, 20), ...d(21, 33)], true],
       ['warm, nothing cut', [...b(101, 105), ...d(106, 108)], false],
     ];
     it.each(shapes)('%s', (_name, rows, cold) => {
       const p = pageUnread(rows, { cold });
       const shown = new Set(ids(p.events));
-      const skipped = new Set(cold ? ids(rows.filter((r) => !r.to_session_id)).slice(0, p.skipped) : []);
+      // The expected skip comes from the rule (a cold start leaves out all but the newest 12 broadcasts), never from p.skipped.
+      const broadcasts = rows.filter((r) => !r.to_session_id);
+      const expectedSkip = cold ? Math.max(0, broadcasts.length - 12) : 0;
+      expect(p.skipped, 'skipped count').toBe(expectedSkip);
+      const skipped = new Set(ids(broadcasts).slice(0, expectedSkip));
       const maxRow = Math.max(p.boardRow ?? 0, p.sentinel ?? 0);
       const covered = (r: R): boolean => (r.to_session_id ? r.id <= maxRow : p.boardRow !== null && r.id <= p.boardRow);
       for (const r of rows) {
