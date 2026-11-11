@@ -811,35 +811,46 @@ var HARMLESS_REDIRECT = /\d*>&\d+|&>\s*\/dev\/null(?=[\s;&|]|$)|\d*>>?\s*(?:\/de
 var RUNS_TEXT = /\$\(|`|<<|@['"]/;
 var SPECIAL_STRING = /\$['"]|[\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]/u;
 var OUTSIDE_RISK = /[#(){}'"]/;
-function inertSpans(command, tool) {
-  const none = /* @__PURE__ */ new Set();
-  if (RUNS_TEXT.test(command) || SPECIAL_STRING.test(command)) return none;
+function headMatches(head, masked, raw) {
+  return head.test(masked) && head.test(raw);
+}
+function plainSegments(command, tool) {
+  if (RUNS_TEXT.test(command) || SPECIAL_STRING.test(command)) return null;
   const spans = quotedSpans(command, tool);
-  if (spans.some(([s]) => s > 0 && command[s - 1] === "\\")) return none;
+  if (spans.some(([s]) => s > 0 && command[s - 1] === "\\")) return null;
   const chars = command.split("");
   for (const [s, e] of spans) chars.fill(" ", s, e);
   const masked = chars.join("");
-  if (OUTSIDE_RISK.test(masked)) return none;
+  if (OUTSIDE_RISK.test(masked)) return null;
   const cut = masked.replace(HARMLESS_REDIRECT, (r) => " ".repeat(r.length));
-  const out = /* @__PURE__ */ new Set();
+  const segs = [];
   let from = 0;
   const breaks = [...cut.matchAll(SEGMENT_BREAK)].map((m) => ({ at: m.index, len: m[0].length }));
   for (const end of [...breaks, { at: cut.length, len: 0 }]) {
     const seg = cut.slice(from, end.at);
     if (seg.trim() !== "") {
-      if (seg.includes(">")) return none;
-      if (PLAIN_HEAD.test(seg)) {
-        from = end.at + end.len;
-        continue;
-      }
-      if (!INERT_HEAD.test(seg)) return none;
-      for (const [s, e] of spans) if (s >= from && e <= end.at) out.add(`${s}:${e}`);
+      if (seg.includes(">")) return null;
+      segs.push({ from, end: end.at, masked: seg });
     }
     from = end.at + end.len;
+  }
+  return { spans, segs };
+}
+function inertSpans(command, tool) {
+  const none = /* @__PURE__ */ new Set();
+  const plain = plainSegments(command, tool);
+  if (!plain) return none;
+  const out = /* @__PURE__ */ new Set();
+  for (const { from, end, masked } of plain.segs) {
+    const raw = command.slice(from, end);
+    if (headMatches(PLAIN_HEAD, masked, raw)) continue;
+    if (!headMatches(INERT_HEAD, masked, raw)) return none;
+    for (const [s, e] of plain.spans) if (s >= from && e <= end) out.add(`${s}:${e}`);
   }
   return out;
 }
 function blankInertQuotes(command, tool) {
+  if (tool !== void 0 && tool !== "Bash" && tool !== "PowerShell") return command;
   if (tool === "Bash") {
     const doc = blankDocHeredocBody(command);
     if (doc !== command) return doc;

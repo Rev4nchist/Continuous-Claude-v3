@@ -167,6 +167,31 @@ describe('the Met table of contract point 3, read through laneMetSql', () => {
     assert.equal((await events(id)).length, before);
   });
 
+  it('row 3b: state done --if-state review on a met lane is refused [if-state], exit 4, writes nothing, and the lane stays met', async () => {
+    const id = await mk('r3b');
+    assert.equal(lane(['done', id, '--merged', s.A]).code, 0);
+    const before = (await events(id)).length;
+    const r = lane(['state', id, 'done', '--if-state', 'review']);
+    assert.equal(r.code, 4, r.all);
+    assert.match(r.line1, new RegExp(`^REFUSED state ${id} \\[if-state\\] -- the lane is done, not review`));
+    assert.doesNotMatch(r.out, /already met/);
+    assert.equal((await events(id)).length, before, 'a refusal writes no event');
+    assert.equal(await met(id), true);
+    const j = lane(['state', id, 'done', '--if-state', 'review', '--json']);
+    assert.equal(j.code, 4, j.all);
+    assert.deepEqual(JSON.parse(lastLine(j.err)), { refused: true, verb: 'state', id, rule: 'if-state', state: 'done' });
+  });
+
+  it('row 3b guard: state done --if-state done on a met lane is still already met, exit 0 (passes before and after)', async () => {
+    const id = await mk('r3g');
+    assert.equal(lane(['done', id, '--merged', s.A]).code, 0);
+    const before = (await events(id)).length;
+    const r = lane(['state', id, 'done', '--if-state', 'done']);
+    assert.equal(r.code, 0, r.all);
+    assert.equal(r.out.trim(), `${id} already met (merged ${s.A.slice(0, 12)}); nothing written`);
+    assert.equal((await events(id)).length, before);
+  });
+
   it('row 4: done --merged, state ready, done --merged is met', async () => {
     const id = await mk('r4');
     assert.equal(lane(['done', id, '--merged', s.A]).code, 0);
@@ -213,6 +238,92 @@ describe('the Met table of contract point 3, read through laneMetSql', () => {
       `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, body, detail, project_key) VALUES ($1,'done',$2,$3,$4,$5)`,
       [id, ME, `${id} -> done (Done in Notion)`, JSON.stringify({ state: 'done', via: 'notion' }), BOARD]);
     assert.equal(await met(id), false);
+  });
+});
+
+describe('k36: a kanban move on a lane whose park ended drops the PARKED prefix', () => {
+  const PARKED = 'PARKED until 2026-11-01 10:00 -- waiting on x || old';
+  const OLD_OWNER = randomUUID();
+  /** A lane in review with the PARKED note. Reclaimable: a dead owner (no session row) and a lapsed lease. `held`: the lease is live. */
+  async function parkedLane(name, held = false, note = PARKED) {
+    const id = await mk(name, 'review');
+    await q(s.url6, `UPDATE agentic_os.lane SET owner_session_id=$2, lease_expires_at=now() + ($3 || ' minutes')::interval, note=$4 WHERE id=$1`,
+      [id, OLD_OWNER, held ? '180' : '-1', note]);
+    return id;
+  }
+  const laneRow = (id) => one(s.url6, `SELECT state, note, owner_session_id AS owner, lease_expires_at AS lease FROM agentic_os.lane WHERE id=$1`, [id]);
+  function kanban(id, input) {
+    const file = path.join(s.tmp, `k36-${id}.json`);
+    fs.writeFileSync(file, JSON.stringify({ project: BOARD, ...input }));
+    const r = lane(['apply-kanban', file, '--json']);
+    assert.equal(r.code, 0, r.all);
+    return JSON.parse(r.out);
+  }
+  const card = (id, f) => ({ id, updatedAt: new Date().toISOString(), ...f });
+  const action = (out, kind) => out.actions.find((a) => a.kind === kind);
+
+  it('k36: a status card ready writes the note without the prefix, and frees the owner and the lease', async () => {
+    const id = await parkedLane('k36r');
+    const out = kanban(id, { cards: [card(id, { status: 'ready' })] });
+    assert.equal(action(out, 'state').to, 'ready');
+    assert.deepEqual({ ...(await laneRow(id)) }, { state: 'ready', note: 'old', owner: null, lease: null });
+  });
+
+  it('k36: a status card backlog writes the note without the prefix and keeps the owner', async () => {
+    const id = await parkedLane('k36b');
+    kanban(id, { cards: [card(id, { status: 'backlog' })] });
+    const row = await laneRow(id);
+    assert.equal(row.state, 'backlog');
+    assert.equal(row.note, 'old');
+    assert.equal(row.owner, OLD_OWNER);
+  });
+
+  it('k36: a note-only card on a reclaimable lane strips the prefix, and the action shows the stripped note as its from value', async () => {
+    const id = await parkedLane('k36n');
+    const out = kanban(id, { cards: [card(id, { note: 'hi' })] });
+    assert.equal(action(out, 'note').from, 'old');
+    assert.equal(action(out, 'note').to, 'Dave (kanban): hi || before: old');
+    const row = await laneRow(id);
+    assert.equal(row.note, 'Dave (kanban): hi || before: old');
+    assert.equal(row.state, 'review');
+  });
+
+  it('k36: a note-only card on a PARKED note with no tail strips it to nothing, and the action has no from value', async () => {
+    const id = await parkedLane('k36t', false, 'PARKED until 2026-11-01 10:00 -- waiting on x');
+    const out = kanban(id, { cards: [card(id, { note: 'hi' })] });
+    assert.equal(action(out, 'note').from, null);
+    assert.equal(action(out, 'note').to, 'Dave (kanban): hi');
+    assert.equal((await laneRow(id)).note, 'Dave (kanban): hi');
+  });
+
+  it('k36: a move into the waiting column keeps the stripped note behind the waiting marker', async () => {
+    const id = await parkedLane('k36w');
+    kanban(id, { board: { columns: { next: [], later: [], waiting: [id] }, updatedAt: new Date().toISOString() } });
+    const row = await laneRow(id);
+    assert.equal(row.state, 'blocked');
+    assert.equal(row.note, 'Waiting on Dave (kanban) || before: old');
+  });
+
+  it('k36 guard: a status card on a held lane (live lease) is skipped held, and the whole row, note included, is unchanged', async () => {
+    const id = await parkedLane('k36g', true);
+    const before = await laneRow(id);
+    const out = kanban(id, { cards: [card(id, { status: 'ready' })] });
+    assert.deepEqual(out.skipped, [{ laneId: id, reason: 'held' }]);
+    assert.equal(action(out, 'state'), undefined);
+    assert.deepEqual({ ...(await laneRow(id)) }, { ...before });
+    assert.equal(before.note, PARKED);
+  });
+
+  it('k36 guard: a card note on a held lane still sits behind the unstripped note (the ELSE branch of the read)', async () => {
+    const id = await parkedLane('k36h', true);
+    const before = await laneRow(id);
+    const out = kanban(id, { cards: [card(id, { status: 'ready', note: 'hi' })] });
+    assert.deepEqual(out.skipped, [{ laneId: id, reason: 'held' }]);
+    assert.equal(action(out, 'state'), undefined);
+    assert.equal(action(out, 'note').from, PARKED, 'a held lane keeps its note as it is');
+    const after = await laneRow(id);
+    assert.deepEqual({ ...after, note: null }, { ...before, note: null }, 'state, owner and lease are unchanged');
+    assert.equal(after.note, `Dave (kanban): hi || before: ${PARKED}`);
   });
 });
 
@@ -352,6 +463,39 @@ describe('owner rule on done: F3 and S3', () => {
     const r = lane(['done', id, '--merged', s.A], { as: HOLDER });
     assert.equal(r.code, 0, r.all);
     assert.equal(await met(id), true);
+  });
+
+  it('F3b: a stranger with a SHA that is no commit, or with evidence that does not exist, gets [not-holder] before any git or evidence step', async () => {
+    const a = await mk('f3ba'); await hold(a, HOLDER);
+    await refusedDone(a, ['done', a, '--merged', 'deadbeef'], 'not-holder');
+    await refusedDone(a, ['done', a, '--no-pr', '--evidence', 'nope.md'], 'not-holder');
+    assert.equal(await stateOf(a), 'active');
+  });
+
+  it('F3b: a quiet holder with no --reason gets [needs-reason] before the git step', async () => {
+    const b = await mk('f3bb'); await hold(b, HOLDER, true);
+    await refusedDone(b, ['done', b, '--merged', 'deadbeef'], 'needs-reason');
+  });
+
+  it('F3b guard: the holder with a SHA that is no commit still gets [not-a-commit] (passes before and after)', async () => {
+    const a = await mk('f3bg'); await hold(a, HOLDER);
+    await refusedDone(a, ['done', a, '--merged', 'deadbeef'], 'not-a-commit', { as: HOLDER });
+  });
+
+  it('R3: a stranger with a malformed SHA gets the usage error (exit 1), not [not-holder], and nothing is written', async () => {
+    const a = await mk('r3m'); await hold(a, HOLDER);
+    const r = lane(['done', a, '--merged', 'abc']);
+    assert.equal(r.code, 1, r.all);
+    assert.match(r.err, /--merged needs a commit SHA of 7 to 40 hex characters; got 'abc'/);
+    assert.doesNotMatch(r.err, /REFUSED/);
+    assert.equal((await events(a)).length, 0);
+  });
+
+  it('F3b: an unknown lane with a SHA that is no commit gets the no-lane error (exit 1) before git', async () => {
+    const r = lane(['done', 'gd-no-such-lane', '--merged', 'deadbeef']);
+    assert.equal(r.code, 1, r.all);
+    assert.doesNotMatch(r.err, /REFUSED/);
+    assert.match(r.err, /^no lane gd-no-such-lane on board /);
   });
 
   it('S3: plain done on an unowned blocked lane needs --reason; with it the lane is done', async () => {

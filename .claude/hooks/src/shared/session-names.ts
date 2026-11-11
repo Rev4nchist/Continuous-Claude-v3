@@ -175,8 +175,9 @@ export function sameNameHint(
 }
 
 /**
- * One line for the SessionStart banner: which lane board this folder uses. Headless sessions get no line (they get no
- * board). Reads the registry only; no database call. Fails to an empty string.
+ * The SessionStart banner text for this folder's lane board. A registered folder gets one line. An unregistered folder
+ * gets two: the board command, then the register rule. Headless sessions get nothing (they get no board).
+ * Reads the registry only; no database call. Fails to an empty string.
  */
 export function laneBoardLine(
   cwd: string | null | undefined,
@@ -185,7 +186,8 @@ export function laneBoardLine(
   try {
     if (isHeadless(env)) return '';
     const b = resolveBoard(cwd || process.cwd(), { env });
-    return b ? `lane board: ${b.key}` : 'no lane board (unregistered dir)';
+    if (b) return `lane board: ${b.key}`;
+    return `no lane board (unregistered dir). Work for a board: ${laneCliCmd(env)} board --project <key>. Else run no lane command.\nRegister a folder only with Dave's yes.`;
   } catch {
     return '';
   }

@@ -211,7 +211,6 @@ ${laneBoardLine(input.cwd)}
 ${hint ? `${hint}\n` : ''}
 Coordination features:
 - File edits are tracked to prevent conflicts
-- Research findings are shared automatically
 - Use Task tool normally - coordination happens via hooks
 </system-reminder>`;
 

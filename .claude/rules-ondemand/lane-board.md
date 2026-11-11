@@ -52,7 +52,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 
 | Id | Pathway | Use it for | What it guarantees | Level |
 |---|---|---|---|---|
-| M4.1 | Lane DM `L say "..." --to <name>` | one live peer, any board | Stored as an event. Each prompt picks at most 12 unread events: the oldest DMs first, then the oldest board events in the free places. With more than 12 DMs, no board event shows. The prompt prints them in event order and tags a DM from another board `[from <board>]`. A cut event stays unread: later prompts show it, oldest first, and `inbox --peek` lists it. On a first look at a board, only the newest 12 board events count. The hook skips the older board events, never a DM. No receipt. Prints "sent" even when the insert failed (warning on stderr). | advice |
+| M4.1 | Lane DM `L say "..." --to <name>` | one live peer, any board | Stored as an event. Each prompt picks at most 12 unread events: the oldest DMs first, then the oldest board events in the free places. With more than 12 DMs, no board event shows. The prompt prints them in event order and tags a DM from another board `[from <board>]`. A cut event stays unread: later prompts show it, oldest first, and `inbox --peek` lists it. On a first look at a board, only the newest 12 board events count. The hook skips the older board events, never a DM. One exception: a first look that cuts a DM. A board event that it cuts shows later only while it is among the newest 12 of the board. The banner line says so. No receipt. Prints "sent" even when the insert failed (warning on stderr). | advice |
 | M4.2 | Broadcast `L say "..."` | the whole board: a commit run, a CLI change before it lands | Same page as M4.1. A broadcast takes only the places that DMs leave free, and a first look at a board skips all but the newest 12. Stays on this board. | advice |
 | M4.3 | Lane note `L note <id>` | the status of your lane | Replaces the previous note. Peers see it in their inbox. | advice |
 | M4.4 | Notion handoff row | a future session, not a live peer | Found by `/resume_handoff`. No delivery time. | advice |
@@ -94,7 +94,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | B6.2 | Register a folder only with Dave's yes, from the primary checkout, with `L project register`. Remove a board only with Dave's yes: `L project unregister <key>` (never `continuous-claude`). | advice |
 | B6.3 | Lane ids are global. `add` refuses an id of another board. A new board's starter lane uses the `<key>-` prefix. | deny (foreign id) |
 | B6.4 | `continuous-claude` has the phone page in `.claude/artifacts.json`. Another board has a phone page only with `laneArtifact`. Dave starts one with `/publish-board <key>`. | advice |
-| B6.5 | Reserved prefixes: `re-` (review-engine program, HOLD until Dave's GO) and `coord-` (lane tooling lanes). Other sessions claim neither. | advice; deny for a second `re-` lane per owner |
+| B6.5 | Reserved prefixes: `re-` (review-engine program; GO since 2026-11-11: claim only a lane that `program.mjs ready` prints) and `coord-` (lane tooling lanes). Other sessions claim neither. | advice; deny for a second `re-` lane per owner |
 | B6.6 | A database writer sets `lane.client_version` before it writes. Without it, the trigger refuses a change or a delete of a lane on a board other than `continuous-claude` (error 42501). `continuous-claude` lanes are not protected. The setting is a cooperative flag, not security. | deny (other boards only) |
 
 ### One service line

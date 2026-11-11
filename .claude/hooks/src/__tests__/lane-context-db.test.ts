@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
-import { runLaneContext } from '../lane-context.js';
+import { deliverDirectMessages, dmStatePath, runLaneContext } from '../lane-context.js';
 
 const URL_ENV = process.env.LANE_TEST_DB_URL ?? '';
 const dbName = (() => { try { return new URL(URL_ENV).pathname.replace(/^\//, ''); } catch { return ''; } })();
@@ -301,12 +301,13 @@ describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)'
     const far = ids.bc5 + 1000;
     const holder = new Client({ connectionString: URL_ENV });
     await holder.connect();
+    let pending: Promise<string> | undefined;
     try {
       // The row is locked with the new value before the hook starts. The hook reads the OLD value (the update is
       // not committed), then its write waits on the lock. The commit lets the write run against the new row.
       await holder.query('BEGIN');
       await holder.query('UPDATE agentic_os.lane_watermark SET last_event_id = $1 WHERE session_id = $2', [far, ME2]);
-      const pending = prompt(ccv3);
+      pending = prompt(ccv3);
       let waiting = false;
       for (let i = 0; i < 40 && !waiting; i += 1) {
         await new Promise((res) => setTimeout(res, 25));
@@ -321,7 +322,10 @@ describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)'
       const t = await pending;
       expect(tags(t)).toEqual(seq('bc', 1, 5));
     } finally {
+      // The ROLLBACK frees the row lock, so a pending prompt that never got its COMMIT can finish. Settle it before
+      // the next test resets the rows, or its write lands in that test. A rejection here must not hide the real failure.
       await holder.query('ROLLBACK').catch(() => {});
+      await pending?.catch(() => {});
       await holder.end();
     }
     expect((await marks())[ME2]).toBe(far);
@@ -350,8 +354,9 @@ describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)'
     await many('bc', 63, 100, 'continuous-claude', false);
     const p1 = await prompt(ccv3);
     expect(tags(p1)).toEqual(seq('dm', 50, 61));
-    // Page 1 writes no board row: no cold line yet, and no `inbox` (it has no cold rule).
-    expect(p1).toContain('(13 more unread, 1 direct to you. Later prompts show them, oldest first.)');
+    // Page 1 writes no board row: no cold line yet, and no `inbox` (it has no cold rule). A cold page that cuts a
+    // direct message and board events (ROW 46) must not promise that the board events show later.
+    expect(p1).toContain('  (13 more unread, 1 direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest 12 of this board.)');
     expect(p1).not.toMatch(/inbox|not shown on your first look/);
     expect(await marks()).toEqual({ [SENT]: ids.dm61 });
     const p2 = await prompt(ccv3);
@@ -363,6 +368,24 @@ describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)'
     const p3 = await prompt(ccv3);
     expect(tags(p3)).toEqual(['bc100']);
     expect(p3).not.toMatch(/not shown on your first look/);
+    expect(await prompt(ccv3)).toBe('');
+  });
+
+  it('D12 (seat row 47): the mid-turn page shows the newest 5 of 7 DMs and marks none as read; the next prompt shows all 7, oldest first', async () => {
+    await warm(ME2);
+    await many('dm', 1, 7, 'continuous-claude', true);
+    rmSync(dmStatePath(ME2), { force: true });
+    let mid = '';
+    try {
+      await deliverDirectMessages(ME2, Date.now(), (context) => { mid = context; });
+    } finally {
+      rmSync(dmStatePath(ME2), { force: true });
+    }
+    expect(tags(mid)).toEqual(seq('dm', 3, 7));
+    expect(mid).toContain('(2 older not shown. The next prompt shows your direct messages, oldest first, 12 at a time.)');
+    // The mid-turn page wrote no cursor: the warm row is still at 0 and no sentinel row exists. So its line is true.
+    expect(await marks()).toEqual({ [ME2]: 0 });
+    expect(tags(await prompt(ccv3))).toEqual(seq('dm', 1, 7));
     expect(await prompt(ccv3)).toBe('');
   });
 });
