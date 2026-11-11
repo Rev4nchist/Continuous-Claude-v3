@@ -6540,7 +6540,9 @@ function laneBoardLine(cwd, env = process.env) {
   try {
     if (isHeadless(env)) return "";
     const b = resolveBoard(cwd || process.cwd(), { env });
-    return b ? `lane board: ${b.key}` : "no lane board (unregistered dir)";
+    if (b) return `lane board: ${b.key}`;
+    return `no lane board (unregistered dir). Work for a board: ${laneCliCmd(env)} board --project <key>. Else run no lane command.
+Register a folder only with Dave's yes.`;
   } catch {
     return "";
   }
@@ -6674,7 +6676,6 @@ ${hint ? `${hint}
 ` : ""}
 Coordination features:
 - File edits are tracked to prevent conflicts
-- Research findings are shared automatically
 - Use Task tool normally - coordination happens via hooks
 </system-reminder>`;
   const output = {
