@@ -50,6 +50,8 @@ Cap 30 a day, shared with non-RE sessions. Each lane checks its slot in the head
 | B | seeding weeks, even days | seed-gold-b 8, hf-judge-precheck 8, verifier-replay 4 (Claude backend only), escape labels 2, non-RE reserve 6 | 28 |
 | C | after seeding ends | gold-assemble 6, rubric-runners 4, judge-calibrate 6, label-two-family 4, escape labels 2, non-RE reserve 6 | 28 |
 | D | eval-run days: shadow retro, P4 A/B (Grok-only), winner evidence | same-issue judge 10, judge-calibrate 6, rule-docs 2, escape labels 2, non-RE reserve 6 | 26 |
+
+- DECIDED (Dave, 2026-11-11): until `re-seed-gold-b` starts, `hf-judge-precheck` runs 8 judge calls a day on odd days too. The cap of 30 a day stays, and the lane checks the headless ledger before each batch.
 | E | P4 A/B, 2x2 only | P4 Claude arm 10, same-issue judge 10, escape labels 2, non-RE reserve 6 | 28 |
 | F | after DP2, live verifier on claude -p only | live verifier 12, label-two-family 4, escape labels 2, non-RE reserve 6 | 24 |
 
