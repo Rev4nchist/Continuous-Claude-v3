@@ -33,6 +33,9 @@ const fake = vi.hoisted(() => ({
   claimable: [] as Array<Record<string, unknown>>,
   unread: [] as Array<Record<string, unknown>>,
   failOn: null as RegExp | null,
+  /** P15: the watermark INSERT settles this many ms late, and records that it did. */
+  insertDelayMs: 0,
+  insertSettled: false,
 }));
 
 vi.mock('pg', () => {
@@ -43,6 +46,10 @@ vi.mock('pg', () => {
     async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
       fake.calls.push({ sql, params });
       if (fake.failOn && fake.failOn.test(sql)) throw Object.assign(new Error('boom: ' + sql.slice(0, 30)), { code: '42501' });
+      if (/INSERT INTO agentic_os\.lane_watermark/.test(sql) && fake.insertDelayMs) {
+        await new Promise((res) => setTimeout(res, fake.insertDelayMs));
+        fake.insertSettled = true;
+      }
       if (/FROM sessions s/.test(sql)) return { rows: [{ sid: 'bbbbbbbb-0000-4000-8000-000000000002', lanes: 'zz-1', scopes: 'src', total: 1 }] };
       if (/FROM agentic_os\.lane_event e\b/.test(sql)) return { rows: fake.unread };
       if (/state IN \('ready','backlog'\)/.test(sql)) return { rows: fake.claimable };
@@ -53,7 +60,7 @@ vi.mock('pg', () => {
   return { Client, default: { Client } };
 });
 
-import { runLaneContext, deliverDirectMessages, dmStatePath } from '../lane-context.js';
+import { runLaneContext, deliverDirectMessages, dmStatePath, pageUnread } from '../lane-context.js';
 import { writeIdentity } from '../shared/session-identity.js';
 import { laneBoardLine, sameNameHint } from '../shared/session-names.js';
 
@@ -87,6 +94,7 @@ beforeEach(() => {
   delete process.env.CLAUDE_CODE_ENTRYPOINT;
   delete process.env.LANE_CONTEXT_HEADLESS;
   fake.calls.length = 0; fake.mine = []; fake.claimable = []; fake.unread = []; fake.failOn = null;
+  fake.insertDelayMs = 0; fake.insertSettled = false;
 });
 afterEach(() => {
   for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
@@ -410,5 +418,339 @@ describe('B15: the adopt hint names the shim', () => {
     const line = sameNameHint('dddddddd-0000-4000-8000-0000000000bb', 'foo', 'C:/work/repo');
     expect(line).toContain(`node C:/Users/Tester/.claude/scripts/lane.mjs adopt --from ${X}`);
     expect(line).not.toContain('scripts/coordination/lane.mjs');
+  });
+});
+
+/**
+ * The banner cursor (coord-banner-cursor). Failure list, one case each. Ids P1.. are new; B ids above are old.
+ *   F1  an event after the 12th is marked read and never shown
+ *   F2  a DM behind 12 or more broadcasts is not on page 1
+ *   F3  an event is shown twice, or a cut event is covered by a written cursor
+ *   F4  the board row passes a cut DM
+ *   F5  a cold start pages from event 1, or drops a DM
+ *   F6  the sentinel is written when nothing is cut, or when it is not above the board row
+ *   F7  two statements, or a write that is not awaited
+ *   F8  the no-board path keeps the old newest-12 slice
+ *   F9  the "more" line is missing, has a wrong count, or prints a relative lane.mjs
+ *   B2/B3/B4 of the note: cold skipped events count as shown for the cursor; the no-board sentinel; the header count
+ *   C3  ids from pg are strings and must not be compared or sorted as strings
+ * P1 to P15 run the real runLaneContext on the stub client. U1 to U7 run the real pageUnread. The paging SQL runs
+ * for real in lane-context-db.test.ts (D6 and up).
+ */
+describe('P: the banner pages unread events without losing any', () => {
+  const PEER = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const SENT = `${ME}@`;
+  const MORE_CMD = 'node C:/Users/Tester/.claude/scripts/lane.mjs inbox)';
+  type Row = Record<string, unknown>;
+  /** One unread row. wm is the board_wm column: a number or string for a warm board, null for a cold one. */
+  const ev = (id: number | string, tag: string, o: { dm?: boolean; wm?: number | string | null } = {}): Row => ({
+    id, occurred_at: '', lane_id: null, kind: 'note', session_id: PEER, to_session_id: o.dm ? ME : null,
+    body: `<${tag}>`, project_key: 'continuous-claude', board_wm: o.wm === undefined ? 100 : o.wm,
+  });
+  const bcs = (from: number, to: number, wm: number | null = 100): Row[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => ev(from + i, `bc${from + i}`, { wm }));
+  const dms = (from: number, to: number, wm: number | null = 100): Row[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => ev(from + i, `dm${from + i}`, { dm: true, wm }));
+  const tags = (t: string): string[] => [...t.matchAll(/<(\w+)>/g)].map((m) => m[1]);
+  const seq = (prefix: string, from: number, to: number): string[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => `${prefix}${from + i}`);
+  const inserts = (): Array<{ sql: string; params: unknown[] | undefined }> =>
+    fake.calls.filter((c) => /INSERT INTO agentic_os\.lane_watermark/.test(c.sql));
+
+  it('P1 (F1): 14 broadcasts show the OLDEST 12, in id order, and the row stops at the last one shown', async () => {
+    fake.unread = bcs(101, 114);
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(seq('bc', 101, 112));
+    expect(t).toContain('## 14 lane update(s) since you last looked');
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 112]);
+  });
+
+  it('P2 (F2, F7): a DM behind 13 broadcasts is on page 1; one statement writes the board row and the sentinel', async () => {
+    fake.unread = [...bcs(101, 113), ...dms(114, 114)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual([...seq('bc', 101, 111), 'dm114']);
+    expect(t).toMatch(/\(direct to you\): <dm114>/);
+    expect(t).toContain('## 14 lane update(s) since you last looked');
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 111, SENT, 114]);
+    expect(inserts()[0].sql).toMatch(/^\s*INSERT INTO agentic_os\.lane_watermark AS w/);
+    expect(inserts()[0].sql).toContain('GREATEST(w.last_event_id, EXCLUDED.last_event_id)');
+  });
+
+  it('P3 (F4, extra 3): 13 DMs above 5 broadcasts: no broadcast on page 1, and the row stays below the lowest broadcast', async () => {
+    fake.unread = [...bcs(101, 105), ...dms(106, 118)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(seq('dm', 106, 117));
+    expect(t).toContain('## 18 lane update(s) since you last looked');
+    expect(t).toContain('(6 more unread, 1 direct to you.');
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 100, SENT, 117]);
+  });
+
+  it('P4 (F4): 13 DMs and no broadcast: the row is one below the cut DM, so the 13th DM stays unread', async () => {
+    fake.unread = dms(101, 113);
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(seq('dm', 101, 112));
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 112]);
+  });
+
+  it('P5 (F5, B1): a cold start with 30 broadcasts shows the newest 12 and says 18 were not shown, with no command', async () => {
+    fake.unread = bcs(101, 130, null);
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(seq('bc', 119, 130));
+    expect(t).toContain('## 12 lane update(s) since you last looked');
+    expect(t).toContain('(18 older board events are not shown on your first look at this board.)');
+    expect(t).not.toMatch(/more unread/);
+    expect(inserts()[0].params).toEqual([ME, 130]);
+  });
+
+  it('P6 (B2, B4, F9): cold, 20 broadcasts and 3 DMs: 3 DMs and 9 of the newest 12; header counts shown + cut, not the 8 skipped', async () => {
+    fake.unread = [...bcs(201, 220, null), ...dms(221, 223, null)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual([...seq('bc', 209, 217), 'dm221', 'dm222', 'dm223']);
+    expect(t).toContain('## 15 lane update(s) since you last looked');
+    // A cold page has no board row to read from, so `inbox` would print all history: no command on the line.
+    expect(t).toContain('(3 more unread. Later prompts show them, oldest first.)');
+    expect(t).not.toMatch(/inbox/);
+    expect(t).toContain('(8 older board events are not shown on your first look at this board.)');
+    expect(inserts()[0].params).toEqual([ME, 217, SENT, 223]);
+  });
+
+  it('P7 (C2, F5): cold with a cut DM writes ONLY the sentinel, so the next prompt is cold again', async () => {
+    fake.unread = [...bcs(201, 220, null), ...dms(221, 233, null)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(seq('dm', 221, 232));
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([SENT, 232]);
+    expect(t).toContain('(13 more unread, 1 direct to you. Later prompts show them, oldest first.)');
+    expect(t).not.toMatch(/inbox/);
+    // No board row is written, so the cold line waits for the page that writes it.
+    expect(t).not.toMatch(/not shown on your first look/);
+  });
+
+  it('P8 (F8, B3): no board, 13 DMs: the OLDEST 12 now, the sentinel on the 12th, the 13th on the next prompt', async () => {
+    fake.unread = dms(101, 113);
+    const t = text(await run('UserPromptSubmit', nowhere));
+    expect(tags(t)).toEqual(seq('dm', 101, 112));
+    expect(t).toContain('## 13 lane update(s) since you last looked');
+    // `inbox` needs a board, and this folder has none: the line names no command.
+    expect(t).toContain('(1 more unread, 1 direct to you. Later prompts show them, oldest first.)');
+    expect(t).not.toMatch(/inbox/);
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([SENT, 112]);
+    fake.calls.length = 0;
+    fake.unread = dms(113, 113);
+    expect(tags(text(await run('UserPromptSubmit', nowhere)))).toEqual(['dm113']);
+    expect(inserts()[0].params).toEqual([SENT, 113]);
+  });
+
+  it('P9 (F9): the "more" line names the shim, counts the cut, and prints no em dash or "suppressed"', async () => {
+    fake.unread = bcs(101, 114);
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(t).toContain(`(2 more unread. Later prompts show them, oldest first, or run: ${MORE_CMD}`);
+    expect(t).not.toMatch(/suppressed/);
+    expect(t).not.toContain('\u2014');
+    expect(t).not.toMatch(/node scripts\/coordination\/lane\.mjs/);
+  });
+
+  it('P10 (F6): nothing cut, DM among broadcasts: one row [key, newest id], no sentinel row, no "more" line', async () => {
+    fake.unread = [...bcs(101, 102), ...dms(103, 103), ...bcs(104, 104)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(['bc101', 'bc102', 'dm103', 'bc104']);
+    expect(t).not.toMatch(/more unread/);
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 104]);
+    // The code before the change also passes the lines above. The next line is the new write contract.
+    expect(inserts()[0].sql).toContain('GREATEST(w.last_event_id, EXCLUDED.last_event_id)');
+  });
+
+  it('P11 (C3, extra 2): string ids from pg, no board: 13 DMs 95..107 give 95..106 and a NUMERIC sentinel 106', async () => {
+    fake.unread = Array.from({ length: 13 }, (_, i) => ev(String(95 + i), `dm${95 + i}`, { dm: true }));
+    const t = text(await run('UserPromptSubmit', nowhere));
+    expect(tags(t)).toEqual(seq('dm', 95, 106));
+    expect(inserts()[0].params).toEqual([SENT, 106]);
+  });
+
+  it('P12 (C3): string ids and a string board_wm on a board: "99" then "100" keep numeric order', async () => {
+    fake.unread = Array.from({ length: 14 }, (_, i) => ev(String(95 + i), `bc${95 + i}`, { wm: '94' as unknown as number }));
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(seq('bc', 95, 106));
+    expect(inserts()[0].params).toEqual([ME, 106]);
+  });
+
+  it('P12b (C3): string ids, nothing cut: "99" is not above "100", so no sentinel row is written', async () => {
+    fake.unread = [ev('98', 'bc98', { wm: '94' }), ev('99', 'dm99', { dm: true, wm: '94' }), ev('100', 'bc100', { wm: '94' })];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(t)).toEqual(['bc98', 'dm99', 'bc100']);
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 100]);
+  });
+
+  it('P16 (C1): the unread read is ONE statement that carries the board row, so the cold test has one snapshot', async () => {
+    fake.unread = bcs(101, 102);
+    await run('UserPromptSubmit', ccv3);
+    const reads = fake.calls.filter((c) => /lane_event/.test(c.sql));
+    expect(reads).toHaveLength(1);
+    expect(reads[0].sql).toContain('board_wm');
+    expect(reads[0].params).toEqual([ME, 'continuous-claude', ME]);
+  });
+
+  it('P17 (C6b, extra 1): the cold line prints once, on the page that writes the board row', async () => {
+    const cold = (rows: Row[]): Row[] => rows.map((r) => ({ ...r, board_wm: null }));
+    const lineRe = /\(75 older board events are not shown on your first look at this board\.\)/;
+    // Page 1: a cut DM, so only the sentinel is written. No cold line yet.
+    fake.unread = cold([...bcs(1, 49), ...dms(50, 62), ...bcs(63, 100)]);
+    const p1 = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(p1)).toEqual(seq('dm', 50, 61));
+    expect(p1).not.toMatch(/not shown on your first look/);
+    expect(inserts()[0].params).toEqual([SENT, 61]);
+    // Page 2: still cold, the board row is written, the cold line prints.
+    fake.calls.length = 0;
+    fake.unread = cold([...bcs(1, 49), ...dms(62, 62), ...bcs(63, 100)]);
+    const p2 = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(p2)).toEqual(['dm62', ...seq('bc', 89, 99)]);
+    expect(p2).toMatch(lineRe);
+    expect(inserts()[0].params).toEqual([ME, 99]);
+    // Page 3: warm, no cold line.
+    fake.calls.length = 0;
+    fake.unread = bcs(100, 100, 99);
+    const p3 = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(p3)).toEqual(['bc100']);
+    expect(p3).not.toMatch(/not shown on your first look/);
+  });
+
+  it('P13 (F1, extra 4): 30 broadcasts page as 12, 12, 6 with the right counts', async () => {
+    fake.unread = bcs(101, 130, 100);
+    const p1 = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(p1)).toEqual(seq('bc', 101, 112));
+    expect(p1).toContain('(18 more unread. Later prompts show them');
+    expect(inserts()[0].params).toEqual([ME, 112]);
+    fake.calls.length = 0;
+    fake.unread = bcs(113, 130, 112);
+    const p2 = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(p2)).toEqual(seq('bc', 113, 124));
+    expect(p2).toContain('(6 more unread. Later prompts show them');
+    expect(inserts()[0].params).toEqual([ME, 124]);
+    fake.calls.length = 0;
+    fake.unread = bcs(125, 130, 124);
+    const p3 = text(await run('UserPromptSubmit', ccv3));
+    expect(tags(p3)).toEqual(seq('bc', 125, 130));
+    expect(p3).not.toMatch(/more unread/);
+    expect(inserts()[0].params).toEqual([ME, 130]);
+  });
+
+  it('P14 (extra 6): cold with 12 broadcasts and a DM: no "not shown" line, because nothing was skipped', async () => {
+    fake.unread = [...bcs(201, 212, null), ...dms(213, 213, null)];
+    const t = text(await run('UserPromptSubmit', ccv3));
+    expect(t).not.toMatch(/not shown on your first look/);
+    expect(tags(t)).toEqual([...seq('bc', 201, 211), 'dm213']);
+    expect(t).toContain('(1 more unread. Later prompts show them, oldest first.)');
+    expect(t).not.toMatch(/inbox/);
+    expect(inserts()[0].params).toEqual([ME, 211, SENT, 213]);
+  });
+
+  it('P15 (F7, extra 7): the two-row write is ONE statement and it settles before runLaneContext returns', async () => {
+    fake.unread = [...bcs(101, 113), ...dms(114, 114)];
+    fake.insertDelayMs = 60;
+    const out = await run('UserPromptSubmit', ccv3);
+    expect(fake.insertSettled, 'the write was not awaited').toBe(true);
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toEqual([ME, 111, SENT, 114]);
+    expect(text(out)).toContain('<dm114>');
+  });
+});
+
+describe('U: pageUnread, the pure paging rule', () => {
+  type R = { id: number; to_session_id: string | null };
+  const b = (from: number, to: number): R[] => Array.from({ length: to - from + 1 }, (_, i) => ({ id: from + i, to_session_id: null }));
+  const d = (from: number, to: number): R[] => Array.from({ length: to - from + 1 }, (_, i) => ({ id: from + i, to_session_id: 'me' }));
+  const ids = (rs: R[]): number[] => rs.map((r) => r.id);
+  const span = (from: number, to: number): number[] => ids(b(from, to));
+
+  it('U1 (extra 1): cold, broadcasts 1..49 and 63..100, DMs 50..62: three pages, 63..88 never show', () => {
+    const all = [...b(1, 49), ...d(50, 62), ...b(63, 100)];
+    const p1 = pageUnread(all, { cold: true });
+    expect(ids(p1.events)).toEqual(span(50, 61));
+    expect(p1.sentinel).toBe(61);
+    expect(p1.boardRow).toBeNull();
+    expect([p1.cut, p1.cutDm, p1.skipped]).toEqual([13, 1, 75]);
+    // Next prompt: the SQL returns the DM above the sentinel and every broadcast again (still cold).
+    const p2 = pageUnread([...b(1, 49), ...d(62, 62), ...b(63, 100)], { cold: true });
+    expect(ids(p2.events)).toEqual([62, ...span(89, 99)]);
+    expect(p2.boardRow).toBe(99);
+    expect(p2.sentinel).toBeNull();
+    // Third prompt: warm at 99.
+    const p3 = pageUnread(b(100, 100), { cold: false });
+    expect(ids(p3.events)).toEqual([100]);
+    expect(p3.boardRow).toBe(100);
+    expect([p3.cut, p3.skipped]).toEqual([0, 0]);
+  });
+
+  it('U2: the page keeps the input (SQL id) order; nothing is sorted again', () => {
+    const p = pageUnread([...b(5, 6), ...d(7, 7), ...b(8, 8)], { cold: false });
+    expect(ids(p.events)).toEqual([5, 6, 7, 8]);
+  });
+
+  it('U3 (F6): nothing cut gives board row = newest unread and NO sentinel, DMs included', () => {
+    const p = pageUnread([...b(5, 6), ...d(7, 7)], { cold: false });
+    expect(p.boardRow).toBe(7);
+    expect(p.sentinel).toBeNull();
+    expect([p.cut, p.cutDm, p.skipped]).toEqual([0, 0, 0]);
+  });
+
+  it('U4 (B3): no board: oldest 12 DMs, sentinel on the 12th, no board row', () => {
+    const p = pageUnread(d(1, 13), { cold: false, noBoard: true });
+    expect(ids(p.events)).toEqual(span(1, 12));
+    expect([p.boardRow, p.sentinel, p.cut, p.cutDm]).toEqual([null, 12, 1, 1]);
+    const q = pageUnread(d(13, 13), { cold: false, noBoard: true });
+    expect([q.boardRow, q.sentinel, q.cut, q.cutDm]).toEqual([null, 13, 0, 0]);
+  });
+
+  it('U5 (C4): while a DM is cut no broadcast is shown, and the board row sits one below the lowest unshown event', () => {
+    const p = pageUnread([...b(1, 5), ...d(6, 18)], { cold: false });
+    expect(ids(p.events)).toEqual(span(6, 17));
+    expect([p.boardRow, p.sentinel, p.cut, p.cutDm]).toEqual([0, 17, 6, 1]);
+    const q = pageUnread([...d(6, 18), ...b(19, 20)], { cold: false });
+    expect([q.boardRow, q.sentinel]).toEqual([17, null]);
+  });
+
+  it('U6 (C2): cold with a cut DM has no board row and always a sentinel; the cold-skipped count is kept out of cut', () => {
+    const p = pageUnread([...b(1, 20), ...d(21, 33)], { cold: true });
+    expect(ids(p.events)).toEqual(span(21, 32));
+    expect([p.boardRow, p.sentinel, p.cut, p.cutDm, p.skipped]).toEqual([null, 32, 13, 1, 8]);
+  });
+
+  /**
+   * The invariant, over a matrix of shapes (F3, F4): a shown event is covered by what is written, and a cut event is
+   * not. A broadcast is covered by the board row. A DM is covered by the highest written row, because the DM cursor
+   * is the MAX over every row of the session.
+   */
+  describe('U7 (F3, F4): the written cursors cover every shown event and no cut event', () => {
+    const shapes: Array<[string, R[], boolean]> = [
+      ['warm, 14 broadcasts', b(101, 114), false],
+      ['warm, 13 broadcasts then a DM', [...b(101, 113), ...d(114, 114)], false],
+      ['warm, 5 broadcasts then 13 DMs', [...b(101, 105), ...d(106, 118)], false],
+      ['warm, 13 DMs then 5 broadcasts', [...d(101, 113), ...b(114, 118)], false],
+      ['warm, DM first then 20 broadcasts', [...d(101, 101), ...b(102, 121)], false],
+      ['warm, 3 broadcasts, 13 DMs, 3 broadcasts', [...b(101, 103), ...d(104, 116), ...b(117, 119)], false],
+      ['cold, 20 broadcasts then 3 DMs', [...b(201, 220), ...d(221, 223)], true],
+      ['cold, 3 DMs then 30 broadcasts', [...d(201, 203), ...b(204, 233)], true],
+      ['warm, nothing cut', [...b(101, 105), ...d(106, 108)], false],
+    ];
+    it.each(shapes)('%s', (_name, rows, cold) => {
+      const p = pageUnread(rows, { cold });
+      const shown = new Set(ids(p.events));
+      const skipped = new Set(cold ? ids(rows.filter((r) => !r.to_session_id)).slice(0, p.skipped) : []);
+      const maxRow = Math.max(p.boardRow ?? 0, p.sentinel ?? 0);
+      const covered = (r: R): boolean => (r.to_session_id ? r.id <= maxRow : p.boardRow !== null && r.id <= p.boardRow);
+      for (const r of rows) {
+        if (shown.has(r.id)) expect(covered(r), `shown ${r.id} must be covered`).toBe(true);
+        else if (!skipped.has(r.id)) expect(covered(r), `cut ${r.id} must NOT be covered`).toBe(false);
+      }
+      expect(p.events.length + p.cut + p.skipped).toBe(rows.length);
+      expect(p.events.length).toBeLessThanOrEqual(12);
+    });
   });
 });

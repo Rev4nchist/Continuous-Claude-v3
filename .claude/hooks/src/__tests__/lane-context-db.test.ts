@@ -18,7 +18,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
 import { runLaneContext } from '../lane-context.js';
@@ -160,5 +160,209 @@ describe.skipIf(!usable)('lane-context cursors on a scratch database (set LANE_T
     const cc = await prompt(ccv3);
     expect(cc).toContain('haz-broadcast');
     expect(cc).not.toContain('haz-dm');
+  });
+});
+
+/**
+ * The banner cursor on the real paging SQL (coord-banner-cursor). Each case has its own session, and clears its
+ * own events first, so the cases do not depend on each other or on D1 to D5.
+ *   D6   14 broadcasts then 1 DM: page 1 holds the DM and 11 broadcasts, page 2 the other 3, page 3 nothing
+ *   D7   a cold start with 20 broadcasts and 3 DMs: the DMs and 9 of the newest 12; the next page the other 3
+ *   D8   no board, 13 DMs: 12 now, 1 on the next prompt
+ *   D9   a second connection moves the row further between the hook's read and its write: it does not move back
+ *   D10  two boards: the DM cursor spans them, the broadcast cursors stay apart
+ *   D11  a cold start with a cut DM: 13 DMs, then 40 broadcasts over three prompts; 1 to 49 never show
+ * Bodies are `<tag>`, so a test reads the printed order and cannot confuse bc1 with bc11.
+ */
+describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)', () => {
+  const ME2 = 'aaaaaaaa-0000-4000-8000-0000000000e1';
+  const PEER2 = 'bbbbbbbb-0000-4000-8000-0000000000e2';
+  const SENT = `${ME2}@`;
+  const saved: Record<string, string | undefined> = {};
+  let tmp = '';
+  let ccv3 = '';
+  let zz = '';
+  let nowhere = '';
+  let db: Client;
+  const ids: Record<string, number> = {};
+
+  const send = async (tag: string, board: string, to: string | null): Promise<void> => {
+    const r = await db.query(
+      `INSERT INTO agentic_os.lane_event (kind, session_id, to_session_id, body, project_key)
+       VALUES ('note', $1, $2, $3, $4) RETURNING id`,
+      [PEER2, to, `<${tag}>`, board],
+    );
+    ids[tag] = Number(r.rows[0].id);
+  };
+  /** n events in id order: broadcasts `<prefix><i>` on `board`, or DMs to ME2 when `dm` is true. */
+  const many = async (prefix: string, from: number, to: number, board: string, dm: boolean): Promise<void> => {
+    for (let i = from; i <= to; i += 1) await send(`${prefix}${i}`, board, dm ? ME2 : null);
+  };
+  const seq = (prefix: string, from: number, to: number): string[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => `${prefix}${from + i}`);
+  const prompt = async (cwd: string): Promise<string> => {
+    const out = (await runLaneContext(JSON.stringify({ session_id: ME2, hook_event_name: 'UserPromptSubmit', cwd }))) as
+      { hookSpecificOutput?: { additionalContext: string } };
+    return out.hookSpecificOutput?.additionalContext ?? '';
+  };
+  const tags = (t: string): string[] => [...t.matchAll(/<(\w+)>/g)].map((m) => m[1]);
+  const marks = async (): Promise<Record<string, number>> => Object.fromEntries(
+    (await db.query(
+      'SELECT session_id, last_event_id FROM agentic_os.lane_watermark WHERE session_id = $1 OR starts_with(session_id, $1 || $2)',
+      [ME2, '@'],
+    )).rows.map((r: { session_id: string; last_event_id: string }) => [r.session_id, Number(r.last_event_id)]),
+  );
+  /** A warm board: a row at 0 exists, so board_wm is not NULL and the cold rule stays off. */
+  const warm = async (key: string): Promise<void> => {
+    await db.query('INSERT INTO agentic_os.lane_watermark (session_id, last_event_id) VALUES ($1, 0)', [key]);
+  };
+  const reset = async (): Promise<void> => {
+    await db.query('DELETE FROM agentic_os.lane_event WHERE session_id = $1', [PEER2]);
+    await db.query('DELETE FROM agentic_os.lane_watermark WHERE session_id = $1 OR starts_with(session_id, $1 || $2)', [ME2, '@']);
+  };
+
+  beforeAll(async () => {
+    for (const k of KEYS) saved[k] = process.env[k];
+    tmp = mkdtempSync(join(tmpdir(), 'lc-db2-'));
+    ccv3 = join(tmp, 'ccv3'); zz = join(tmp, 'zz'); nowhere = join(tmp, 'nowhere');
+    for (const d of [ccv3, zz, nowhere]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(tmp, 'registry.json'), JSON.stringify({ projects: [
+      { name: 'CCv3', key: 'continuous-claude', path: ccv3, status: 'active' },
+      { name: 'ZZ', key: 'zz-board', path: zz, status: 'active' },
+    ] }));
+    process.env.LANE_REGISTRY_PATH = join(tmp, 'registry.json');
+    process.env.CONTINUOUS_CLAUDE_DB_URL = URL_ENV;
+    delete process.env.DATABASE_URL;
+    delete process.env.OPC_POSTGRES_URL;
+    process.env.CCV3_IDENTITY_DIR = join(tmp, 'ident');
+    process.env.LANE_BOARD_CACHE = '0';
+    process.env.LANE_CONTEXT_ERROR_LOG = join(tmp, 'errors.jsonl');
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    delete process.env.LANE_CONTEXT_HEADLESS;
+    db = new Client({ connectionString: URL_ENV });
+    await db.connect();
+    await db.query("SELECT set_config('lane.client_version', '2', false)");
+  });
+  beforeEach(reset);
+  afterAll(async () => {
+    try { await reset(); } finally { await db.end(); }
+    for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('D6: 14 broadcasts then 1 DM: page 1 = DM + 11 broadcasts, page 2 = the other 3, page 3 = nothing', async () => {
+    await warm(ME2);
+    await many('bc', 1, 14, 'continuous-claude', false);
+    await send('dm', 'continuous-claude', ME2);
+    const p1 = await prompt(ccv3);
+    expect(p1).toContain('## 15 lane update(s) since you last looked');
+    expect(p1).toMatch(/\(direct to you\): <dm>/);
+    expect(tags(p1)).toEqual([...seq('bc', 1, 11), 'dm']);
+    // Warm board: the row exists, so the line names `inbox`.
+    expect(p1).toMatch(/\(3 more unread\. Later prompts show them, oldest first, or run: .*lane\.mjs inbox\)/);
+    expect(await marks()).toEqual({ [ME2]: ids.bc11, [SENT]: ids.dm });
+    const p2 = await prompt(ccv3);
+    expect(tags(p2)).toEqual(seq('bc', 12, 14));
+    expect(p2).not.toMatch(/more unread/);
+    expect(await marks()).toEqual({ [ME2]: ids.bc14, [SENT]: ids.dm });
+    expect(await prompt(ccv3)).toBe('');
+  });
+
+  it('D7: cold, 20 broadcasts then 3 DMs: the DMs and 9 of the newest 12; next page the other 3, nothing older', async () => {
+    await many('bc', 1, 20, 'continuous-claude', false);
+    await many('dm', 1, 3, 'continuous-claude', true);
+    const p1 = await prompt(ccv3);
+    expect(tags(p1)).toEqual([...seq('bc', 9, 17), ...seq('dm', 1, 3)]);
+    expect(p1).toContain('## 15 lane update(s) since you last looked');
+    expect(p1).toContain('(8 older board events are not shown on your first look at this board.)');
+    expect(p1).toContain('(3 more unread. Later prompts show them');
+    expect(await marks()).toEqual({ [ME2]: ids.bc17, [SENT]: ids.dm3 });
+    const p2 = await prompt(ccv3);
+    expect(tags(p2)).toEqual(seq('bc', 18, 20));
+    expect(p2).not.toMatch(/not shown on your first look/);
+    expect(await prompt(ccv3)).toBe('');
+  });
+
+  it('D8: no board, 13 DMs: 12 on this prompt, 1 on the next, none after', async () => {
+    await many('dm', 1, 13, 'continuous-claude', true);
+    const p1 = await prompt(nowhere);
+    expect(tags(p1)).toEqual(seq('dm', 1, 12));
+    expect(p1).toContain('## 13 lane update(s) since you last looked');
+    expect(await marks()).toEqual({ [SENT]: ids.dm12 });
+    expect(tags(await prompt(nowhere))).toEqual(['dm13']);
+    expect(await marks()).toEqual({ [SENT]: ids.dm13 });
+    expect(await prompt(nowhere)).toBe('');
+  });
+
+  it('D9: a second connection moves the row further between the read and the write: the row does not move back', async () => {
+    // Five events fit on one page, so the page is the same before and after the change. Only the write differs.
+    await warm(ME2);
+    await many('bc', 1, 5, 'continuous-claude', false);
+    const far = ids.bc5 + 1000;
+    const holder = new Client({ connectionString: URL_ENV });
+    await holder.connect();
+    try {
+      // The row is locked with the new value before the hook starts. The hook reads the OLD value (the update is
+      // not committed), then its write waits on the lock. The commit lets the write run against the new row.
+      await holder.query('BEGIN');
+      await holder.query('UPDATE agentic_os.lane_watermark SET last_event_id = $1 WHERE session_id = $2', [far, ME2]);
+      const pending = prompt(ccv3);
+      let waiting = false;
+      for (let i = 0; i < 40 && !waiting; i += 1) {
+        await new Promise((res) => setTimeout(res, 25));
+        waiting = (await db.query(
+          `SELECT 1 FROM pg_stat_activity
+            WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query LIKE $1`,
+          ['%INSERT INTO agentic_os.lane_watermark%'],
+        )).rows.length > 0;
+      }
+      expect(waiting, 'the hook write never reached the row lock').toBe(true);
+      await holder.query('COMMIT');
+      const t = await pending;
+      expect(tags(t)).toEqual(seq('bc', 1, 5));
+    } finally {
+      await holder.query('ROLLBACK').catch(() => {});
+      await holder.end();
+    }
+    expect((await marks())[ME2]).toBe(far);
+  });
+
+  it('D10: two boards: the DM cursor spans them, the broadcast cursors stay apart', async () => {
+    await warm(ME2);
+    await many('y', 1, 12, 'zz-board', false);
+    await many('d', 1, 13, 'continuous-claude', true);
+    await many('x', 1, 6, 'continuous-claude', false);
+    const px = await prompt(ccv3);
+    expect(tags(px)).toEqual(seq('d', 1, 12));
+    expect(await marks()).toEqual({ [ME2]: ids.d12 });
+    const py = await prompt(zz);
+    expect(tags(py)).toEqual([...seq('y', 1, 11), 'd13']);
+    expect(await marks()).toEqual({ [ME2]: ids.d12, [`${ME2}@zz-board`]: ids.y11, [SENT]: ids.d13 });
+    expect(tags(await prompt(ccv3))).toEqual(seq('x', 1, 6));
+    expect(tags(await prompt(zz))).toEqual(['y12']);
+    expect(await prompt(ccv3)).toBe('');
+    expect(await prompt(zz)).toBe('');
+  });
+
+  it('D11: cold with a cut DM: only the sentinel is written; the old broadcasts never show; the cut DM and the newest follow', async () => {
+    await many('bc', 1, 49, 'continuous-claude', false);
+    await many('dm', 50, 62, 'continuous-claude', true);
+    await many('bc', 63, 100, 'continuous-claude', false);
+    const p1 = await prompt(ccv3);
+    expect(tags(p1)).toEqual(seq('dm', 50, 61));
+    // Page 1 writes no board row: no cold line yet, and no `inbox` (it has no cold rule).
+    expect(p1).toContain('(13 more unread, 1 direct to you. Later prompts show them, oldest first.)');
+    expect(p1).not.toMatch(/inbox|not shown on your first look/);
+    expect(await marks()).toEqual({ [SENT]: ids.dm61 });
+    const p2 = await prompt(ccv3);
+    expect(tags(p2)).toEqual(['dm62', ...seq('bc', 89, 99)]);
+    // Page 2 writes the board row: the cold line prints here, once.
+    expect(p2).toContain('(75 older board events are not shown on your first look at this board.)');
+    expect(p2).toContain('(1 more unread. Later prompts show them, oldest first.)');
+    expect(await marks()).toEqual({ [ME2]: ids.bc99, [SENT]: ids.dm61 });
+    const p3 = await prompt(ccv3);
+    expect(tags(p3)).toEqual(['bc100']);
+    expect(p3).not.toMatch(/not shown on your first look/);
+    expect(await prompt(ccv3)).toBe('');
   });
 });
