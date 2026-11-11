@@ -44,7 +44,7 @@ vi.mock('pg', () => {
       fake.calls.push({ sql, params });
       if (fake.failOn && fake.failOn.test(sql)) throw Object.assign(new Error('boom: ' + sql.slice(0, 30)), { code: '42501' });
       if (/FROM sessions s/.test(sql)) return { rows: [{ sid: 'bbbbbbbb-0000-4000-8000-000000000002', lanes: 'zz-1', scopes: 'src', total: 1 }] };
-      if (/FROM agentic_os\.lane_event/.test(sql)) return { rows: fake.unread };
+      if (/FROM agentic_os\.lane_event e\b/.test(sql)) return { rows: fake.unread };
       if (/state IN \('ready','backlog'\)/.test(sql)) return { rows: fake.claimable };
       if (/WHERE owner_session_id=\$1 AND state<>'done'/.test(sql)) return { rows: fake.mine };
       return { rows: [] };
@@ -298,7 +298,7 @@ describe('B7-B10: SessionStart banner', () => {
 
   it('B9: hints name the shim, never the relative path', async () => {
     const t = text(await run('SessionStart', ccv3));
-    expect(t).toContain('node C:/Users/Tester/.claude/scripts/lane.mjs next');
+    expect(t).toContain('node C:/Users/Tester/.claude/scripts/lane.mjs claim <id>');
     expect(t).not.toMatch(/node scripts\/coordination\/lane\.mjs/);
   });
 
