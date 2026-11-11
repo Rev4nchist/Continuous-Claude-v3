@@ -19,12 +19,12 @@ Dates come from the file name or the file head.
 
 | Path | Date | Subject | Mark |
 |---|---|---|---|
-| `docs/review-engine/README.md` | after the docs PR lands | The entry point: the goal, the lane loop, the rules and the parts that are not built. | in force |
-| `docs/review-engine/map.md` | after the docs PR lands | The one program map: Waves table, lane sections, shared contracts. | in force |
-| `docs/review-engine/evidence-bar.md` | after the docs PR lands | The bar for each gate and the open items. | in force |
-| `docs/review-engine/decisions.md` | after the docs PR lands | Each decision point with Dave's answer and date. | in force |
-| `docs/review-engine/capacity.md` | after the docs PR lands | Each cap, the ledger that enforces it, and the last measured use. | in force |
-| `docs/review-engine/research-index.md` | after the docs PR lands | This file: each review-engine document with one mark. | in force |
+| `docs/review-engine/README.md` | 2026-11-10 | The entry point: the goal, the lane loop, the rules and the build status of the board tooling. | in force |
+| `docs/review-engine/map.md` | 2026-11-10 | The one program map: Waves table, lane sections, shared contracts. | in force |
+| `docs/review-engine/evidence-bar.md` | 2026-11-10 | The bar for each gate and the open items. | in force |
+| `docs/review-engine/decisions.md` | 2026-11-10 | Each decision point with Dave's answer and date. | in force |
+| `docs/review-engine/capacity.md` | 2026-11-10 | Each cap, the ledger that enforces it, and the last measured use. | in force |
+| `docs/review-engine/research-index.md` | 2026-11-10 | This file: each review-engine document with one mark. | in force |
 | `.claudedocs/re-decisions-journal.md` | 2026-11-09 | Log of Dave's answered decisions. It is the log between PRs. It wins over older text. | in force |
 | `.claudedocs/2026-11-09-review-engine-orchestration-plan.md` | 2026-11-09 | Plan for several sessions to work the program without collisions. It holds the readiness list R1 to GO. The docs PR does not copy it. | in force (file head says PROPOSED; the decisions of 2026-11-09 and 2026-11-10 apply) |
 | `.claudedocs/2026-11-09-multi-session-coordination-proposal.md` | 2026-11-09 | Proposal for the dependency gate and other coordination tools. It holds the T2.1 design. The docs PR does not copy it. | in force (file head says PROPOSED; the decisions of 2026-11-09 and 2026-11-10 apply) |
