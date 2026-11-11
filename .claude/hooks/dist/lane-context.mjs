@@ -6349,6 +6349,7 @@ function namesInbox(o) {
 }
 var lineBytes = (s) => utf8Bytes(s) + 1;
 var fitsId = (id) => utf8Bytes(id) <= ID_MAX_BYTES;
+var laneTag = (id) => !id ? "" : fitsId(id) ? ` [${id}]` : " [lane id not shown]";
 function idList(items, idOf, show, max, more) {
   const shown = items.filter((x) => fitsId(idOf(x))).slice(0, max);
   const rest = items.length - shown.length;
@@ -6414,7 +6415,7 @@ async function deliverDirectMessages(me, now = Date.now(), emitFn = emit, budget
     ];
     const prefix = (e) => {
       const from = e.project_key && e.project_key !== DEFAULT_BOARD ? ` [from ${e.project_key}]` : "";
-      return `- ${who(e.session_id)}${from}${e.lane_id ? ` [${e.lane_id}]` : ""}: `;
+      return `- ${who(e.session_id)}${from}${laneTag(e.lane_id)}: `;
     };
     const fixed = [heading, older(dms.length), ...tail].reduce((n, l) => n + lineBytes(l), 0);
     const { shown, bodies } = newestThatFit(dms, budget - fixed, DM_MAX_EVENTS, prefix);
@@ -6560,7 +6561,7 @@ var coldLine = (n) => `  (${n} older board events are not shown on your first lo
 function eventPrefix(e, here) {
   const dm = e.to_session_id ? " (direct to you)" : "";
   const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : "";
-  const lane = e.lane_id ? ` [${e.lane_id}]` : "";
+  const lane = laneTag(e.lane_id);
   return `- ${who(e.session_id)}${crossed} ${e.kind}${lane}${dm}: `;
 }
 function pageReserve(unread) {

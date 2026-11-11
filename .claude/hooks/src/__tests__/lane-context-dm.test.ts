@@ -302,6 +302,21 @@ describe('mid-turn text (ROW 47 and the reply footer, EDIT 4)', () => {
     expect(readDmState(s).lastShownDmId).toBe(1);
   });
 
+  it('C4: a direct message with a 6,000-byte lane id prints the tag, not the id, and the page stays within 4,000 bytes', async () => {
+    const s = session();
+    fake.rows = [{
+      id: 1, occurred_at: '2026-11-11T00:00:00Z', lane_id: 'L'.repeat(6000), kind: 'note',
+      session_id: PEER, to_session_id: s, body: '<dm1>hello', project_key: 'continuous-claude',
+    }];
+    const emitFn = vi.fn();
+    await deliverDirectMessages(s, Date.now(), emitFn);
+    expect(emitFn, 'no context was emitted').toHaveBeenCalledTimes(1);
+    const text = String(emitFn.mock.calls[0][0]);
+    expect(text).toContain(' [lane id not shown]: <dm1>hello');
+    expect(text).not.toContain('LLLL');
+    expect(bytes(text)).toBeLessThanOrEqual(4000);
+  });
+
   it('F12 (C7): ordinary direct messages are whole: the newest that fit show, the older one waits, nothing is cut', async () => {
     const { text, s } = await deliverBodies(['a'.repeat(1500), 'b'.repeat(1500), 'c'.repeat(1500)]);
     expect(bytes(text)).toBeLessThanOrEqual(4000);

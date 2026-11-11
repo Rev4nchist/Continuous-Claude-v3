@@ -533,6 +533,8 @@ export function namesInbox(o: { rowBefore: boolean; rowWritten: boolean }): bool
 /** Bytes of one printed line plus its newline. */
 const lineBytes = (s: string): number => utf8Bytes(s) + 1;
 const fitsId = (id: string): boolean => utf8Bytes(id) <= ID_MAX_BYTES;
+/** The lane id part of an event line prefix. An id over 64 bytes is not printed, so no line prefix grows without a bound (C4). */
+const laneTag = (id: string | null): string => (!id ? '' : fitsId(id) ? ` [${id}]` : ' [lane id not shown]');
 
 /** "a, b, c" with at most `max` ids, then ", +N". An id over 64 bytes is not printed and counts in N (C4). */
 function idList<T>(items: T[], idOf: (x: T) => string, show: (x: T) => string, max: number, more: (n: number) => string): string {
@@ -629,7 +631,7 @@ export async function deliverDirectMessages(
     ];
     const prefix = (e: EventRow): string => {
       const from = e.project_key && e.project_key !== DEFAULT_BOARD ? ` [from ${e.project_key}]` : '';
-      return `- ${who(e.session_id)}${from}${e.lane_id ? ` [${e.lane_id}]` : ''}: `;
+      return `- ${who(e.session_id)}${from}${laneTag(e.lane_id)}: `;
     };
     // C7: the newest DMs that fit the budget whole, at most 5. The older ones wait for the prompt page.
     const fixed = [heading, older(dms.length), ...tail].reduce((n, l) => n + lineBytes(l), 0);
@@ -881,7 +883,7 @@ const coldLine = (n: number): string => `  (${n} older board events are not show
 function eventPrefix(e: EventRow, here: string): string {
   const dm = e.to_session_id ? ' (direct to you)' : '';
   const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : '';
-  const lane = e.lane_id ? ` [${e.lane_id}]` : '';
+  const lane = laneTag(e.lane_id);
   return `- ${who(e.session_id)}${crossed} ${e.kind}${lane}${dm}: `;
 }
 

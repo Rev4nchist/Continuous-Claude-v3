@@ -425,6 +425,48 @@ describe('F6: the fixed page lines stay inside the budget', () => {
   });
 });
 
+describe('C4: an event line never prints a lane id over 64 bytes (the id is not printed, never printed cut)', () => {
+  const TAG = ' [lane id not shown]';
+  const withLane = (row: Row, laneId: string): Row => ({ ...row, lane_id: laneId });
+
+  it('a board event with a 6,000-byte lane id does not stop the page: all 3 show, the tag stands for the id, the cursor passes all 3', async () => {
+    const long = 'L'.repeat(6000);
+    fake.unread = [withLane(bc(101, 'one'), long), bc(102, 'two'), bc(103, 'three')];
+    const t = await run('UserPromptSubmit', ccv3);
+    expect(tags(t)).toEqual(['bc101', 'bc102', 'bc103']);
+    const first = t.split(NL).find((l) => l.includes('<bc101>')) ?? '';
+    expect(first).toContain(`note${TAG}: <bc101>one`);
+    expect(t).not.toContain('LLLL');
+    expect(bytes(t)).toBeLessThanOrEqual(6000);
+    expect(t).not.toContain('Lane text over its budget');
+    expect(inserts()[0].params).toEqual([ME, 103]);
+  });
+
+  it('a lane id of exactly 64 bytes prints in full; one of 65 bytes prints the tag', async () => {
+    const id64 = 'a'.repeat(64);
+    const id65 = 'k'.repeat(65);
+    fake.unread = [withLane(bc(101, 'one'), id64), withLane(bc(102, 'two'), id65)];
+    const t = await run('UserPromptSubmit', ccv3);
+    const lines = t.split(NL);
+    expect(lines.find((l) => l.includes('<bc101>'))).toContain(` [${id64}]: <bc101>`);
+    const second = lines.find((l) => l.includes('<bc102>')) ?? '';
+    expect(second).toContain(`${TAG}: <bc102>`);
+    expect(second).not.toContain('kkkk');
+  });
+
+  it('a direct message with a 6,000-byte lane id is whole, with the tag: not cut, not the fallback text', async () => {
+    fake.unread = [withLane(dm(101, 'hello'), 'L'.repeat(6000))];
+    const t = await run('UserPromptSubmit', ccv3);
+    expect(tags(t)).toEqual(['dm101']);
+    expect(t).toContain(`${TAG} (direct to you): <dm101>hello`);
+    expect(t).not.toMatch(/\[cut,/);
+    expect(t).not.toContain('Lane text over its budget');
+    expect(t).not.toContain('LLLL');
+    expect(bytes(t)).toBeLessThanOrEqual(6000);
+    expect(inserts()[0].params).toEqual([ME, 101]);
+  });
+});
+
 describe('C3: each budget holds from both sides (a DM that just fits is whole; one byte more is cut, in the budget)', () => {
   /** The text for one DM of `pad` bytes, and whether it is cut. */
   const page = async (event: string, cwd: string, pad: number): Promise<{ t: string; cut: boolean }> => {
