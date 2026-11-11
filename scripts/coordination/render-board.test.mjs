@@ -114,6 +114,9 @@ const ROW_OVERHEAD_MAX = 240;
 // of CSS inside the desktop block: one scrollbar family for the board and the lists (about 1.1 KB: thumb, hover, press, corner, inset tracks, Firefox guard), the card finish (inset state bar, quiet
 // rank disc, button press and disabled states, grip hover, about 1.3 KB), less the two scrollbar-width:thin declarations it replaces (44 bytes). No markup and no script grew.
 // Measured 2026-11-07 (desktop polish merged with PR-G, band select): test page 176,976 bytes. Main on the same fixture measures 174,542, so the polish adds +2,434 (the same +2,434 as in the note above). PAGE_BYTES_MAX is that page plus about 1 KB (178,000). Dave approved 178,000 on 2026-11-07; main's value is 175,000.
+// Measured 2026-11-10 (coord-gate-3-page, waits on): the --through 5 test page (the one this ratchet measures) was 177,002 bytes before and is 177,224 after (+222: the notice
+// is not on this page, only its CSS and the stateMatch term; no lane row, card or By band row grows without an open dependency). PAGE_BYTES_MAX is unchanged: 778 bytes of headroom.
+// A --through 6 page with seven waiting lanes of thirteen measures 142,483 bytes; the same database with no edge, 141,339 (+1,144 for the wait markup).
 const PAGE_BYTES_MAX = 178000;
 const DONE_OVERHEAD_MAX = 420;
 // A title long enough to need more than three lines in a narrow card.
@@ -1760,6 +1763,224 @@ describe('render-board.mjs against a scratch database', () => {
         const overhead = card.length - text.reduce((n, t) => n + t.length, 0);
         assert.ok(overhead <= SCHED_OVERHEAD_MAX, `scheduled card has ${overhead} bytes of markup (limit ${SCHED_OVERHEAD_MAX}): ${card}`);
       }
+    });
+  });
+
+  // ---------------------------------------------------------------- waits on (coord-gate-3-page)
+  // Two databases: the one above is built --through 5 (no lane_dep table, so the key is missing and the page says "Dependencies unknown");
+  // this one is built --through 6 and holds edges. Each render of it asserts ITS url is a scratch url (renderPage only checks E2E.url).
+  //
+  // How the "waits on" page can fail, one test each:
+  //   - a database without table lane_dep: the query fails, the notice is missing, shows twice or shows on the read-only page only
+  //   - a database with table lane_dep shows the notice (keyed on empty lists instead of the table)
+  //   - an open dependency is missing from the By band row, the card front, the card Details or the Lanes list, or the front shows more than two ids
+  //   - a met dependency or a lane with no edge shows a "waits on" line (the page reads every edge instead of waitsOnSql)
+  //   - a dependency id with markup comes out raw, in any of the three places it is written
+  //   - the Scheduled card, a done lane or the read-only page of another board leaves the row out (or a done lane shows one)
+  //   - the claimable counter and chip count a ready lane that claim refuses, or the state filter still shows it
+  //   - a wait row grows (bytes beyond its text)
+  describe('waits on (a database with table lane_dep)', () => {
+    const DEP = { url: '' };
+    const HEX40 = 'a'.repeat(40);
+    const FRONT = 'waits on: zz-rb-d1, zz-rb-d2 +1 more';
+    const ESC_TARGET = 'zz-&lt;b&gt;x&lt;/b&gt;';
+    let html = '';   // continuous-claude, editable, 0006
+    let ro = '';     // zz-rb-a, read-only, 0006
+    let roNone = ''; // zz-rb-bad, read-only, 0006, one lane and no edge anywhere
+    let page5 = '';  // continuous-claude, editable, --through 5
+    let ro5 = '';    // zz-rb-a, read-only, --through 5
+    let err5 = '';
+    let err6 = '';
+
+    /** renderPage against the 0006 database. The three url variables are replaced, so this url is the one to check. */
+    const renderDep = (args) => {
+      assertScratchUrl(DEP.url);
+      return renderPage(args, { env: { CONTINUOUS_CLAUDE_DB_URL: DEP.url, DATABASE_URL: DEP.url, OPC_POSTGRES_URL: DEP.url } });
+    };
+
+    before(async () => {
+      const created = spawnSync(process.execPath, [SCRATCH, 'create', '--through', '6'], { encoding: 'utf8' });
+      assert.equal(created.status, 0, created.stderr);
+      DEP.url = JSON.parse(created.stdout).url;
+      assertScratchUrl(DEP.url);
+      const { Client } = loadPg();
+      const c = new Client({ connectionString: DEP.url });
+      await c.connect();
+      try {
+        await c.query(`INSERT INTO agentic_os.lane (id, title, track, state, priority, project_key, due_at) VALUES
+          ('zz-rb-d1', 'open dependency one', 'zz', 'backlog', 50, 'continuous-claude', NULL),
+          ('zz-rb-d2', 'open dependency two', 'zz', 'backlog', 50, 'continuous-claude', NULL),
+          ('zz-rb-d3', 'open dependency three', 'zz', 'backlog', 50, 'continuous-claude', NULL),
+          ('zz-rb-d-done', 'a met dependency', 'zz', 'done', 50, 'continuous-claude', NULL),
+          ('zz-rb-w-open', 'ready, three open dependencies', 'zz', 'ready', 50, 'continuous-claude', NULL),
+          ('zz-rb-w-one', 'backlog, one open dependency', 'zz', 'backlog', 50, 'continuous-claude', NULL),
+          ('zz-rb-w-met', 'backlog, its dependency is met', 'zz', 'backlog', 50, 'continuous-claude', NULL),
+          ('zz-rb-w-none', 'ready, no edge', 'zz', 'ready', 50, 'continuous-claude', NULL),
+          ('zz-rb-w-esc', 'backlog, a dependency id with markup', 'zz', 'backlog', 50, 'continuous-claude', NULL),
+          ('zz-rb-w-sch', 'ready, scheduled, one open dependency', 'zz', 'ready', 50, 'continuous-claude', now() + interval '5 hours 30 minutes'),
+          ('zz-rb-w-done', 'done, with an open edge', 'zz', 'done', 50, 'continuous-claude', NULL),
+          ('zz-rb-a-d1', 'board a dependency', 'zz', 'backlog', 50, 'zz-rb-a', NULL),
+          ('zz-rb-a-w', 'board a lane that waits', 'zz', 'ready', 50, 'zz-rb-a', NULL),
+          ('zz-rb-b-lane', 'board bad lane, no edge', 'zz', 'ready', 50, 'zz-rb-bad', NULL)`);
+        // zz-rb-d-done is met: state done, newest lifecycle event is a done event with a 40 hex merged SHA, same board as the edge.
+        await c.query(`INSERT INTO agentic_os.lane_event (session_id, kind, lane_id, project_key, detail) VALUES
+          ('zz-rb-s-dep', 'done', 'zz-rb-d-done', 'continuous-claude', $1::jsonb)`, [JSON.stringify({ merged: HEX40 })]);
+        await c.query(`INSERT INTO agentic_os.lane_dep (lane_id, depends_on, project_key) VALUES
+          ('zz-rb-w-open', 'zz-rb-d1', 'continuous-claude'), ('zz-rb-w-open', 'zz-rb-d2', 'continuous-claude'), ('zz-rb-w-open', 'zz-rb-d3', 'continuous-claude'),
+          ('zz-rb-w-one', 'zz-rb-d1', 'continuous-claude'),
+          ('zz-rb-w-met', 'zz-rb-d-done', 'continuous-claude'),
+          ('zz-rb-w-esc', 'zz-<b>x</b>', 'continuous-claude'),
+          ('zz-rb-w-sch', 'zz-rb-d1', 'continuous-claude'),
+          ('zz-rb-w-done', 'zz-rb-d1', 'continuous-claude'),
+          ('zz-rb-a-w', 'zz-rb-a-d1', 'zz-rb-a')`);
+      } finally { await c.end(); }
+      const one = (name, board, dep) => {
+        const out = path.join(E2E.tmp, `${name}.html`);
+        const r = dep ? renderDep(['--project', board, '--out', out]) : renderPage(['--project', board, '--out', out]);
+        assert.equal(r.code, 0, r.all);
+        return { page: fs.readFileSync(out, 'utf8'), err: r.err };
+      };
+      ({ page: html, err: err6 } = one('dep-edit', 'continuous-claude', true));
+      ({ page: ro } = one('dep-ro', 'zz-rb-a', true));
+      ({ page: roNone } = one('dep-none', 'zz-rb-bad', true));
+      ({ page: page5, err: err5 } = one('dep5-edit', 'continuous-claude', false));
+      ({ page: ro5 } = one('dep5-ro', 'zz-rb-a', false));
+    });
+
+    after(() => {
+      if (DEP.url) { assertScratchUrl(DEP.url); spawnSync(process.execPath, [SCRATCH, 'drop', DEP.url], { encoding: 'utf8' }); }
+    });
+
+    const bbRowOf = (page, id) => {
+      const bbHtml = /<div class="bb" id="bb">[\s\S]*?<!-- \/bb -->/.exec(page)?.[0] ?? '';
+      return bbHtml.split('<li class="bb-row"').slice(1).map((r) => r.slice(0, r.indexOf('</li>') + 5)).find((r) => r.includes(`class="bb-id mono">${id}<`)) ?? '';
+    };
+    const cardOf = (page, id) => new RegExp(`<li class="card kb-card[^"]*" data-id="${id}"[\\s\\S]*?</li>`).exec(page)?.[0] ?? '';
+    const schedOf = (page, id) => [...page.matchAll(/<li class="card kb-done-card"[\s\S]*?<\/li>/g)].map((m) => m[0]).find((x) => x.includes(`class="kb-id mono">${id}<`)) ?? '';
+    /** The <dl> inside a Lanes list row: from the row's button to the end of its detail list. */
+    const laneDlOf = (page, id) => {
+      const at = page.indexOf(`${id}<small>`);
+      if (at < 0) return '';
+      const end = page.indexOf('</dl>', at);
+      return page.slice(at, end + 5);
+    };
+    const spanText = (markup, cls) => new RegExp(`<span class="${cls} mono">([^<]*)</span>`).exec(markup)?.[1];
+    const ddOf = (markup) => /<dt>waits on<\/dt><dd>([^<]*)<\/dd>/.exec(markup)?.[1];
+    const counter = (page) => /<b>(\d+)<\/b><span>claimable<\/span>/.exec(page)?.[1];
+    const chip = (page) => /data-f="ready" aria-pressed="false">claimable (\d+)</.exec(page)?.[1];
+    /** The ready lane rows of the Lanes list, counted from the markup: one count with, one without a waits flag. */
+    const readyRows = (page) => {
+      const btns = [...page.matchAll(/<button class="lane[^>]*>/g)].map((m) => m[0]).filter((b) => b.includes('data-state="ready"'));
+      return { all: btns.length, clean: btns.filter((b) => !b.includes('data-waits="1"')).length, waiting: btns.filter((b) => b.includes('data-waits="1"')).length };
+    };
+
+    it('R1 a database without table lane_dep: the page renders and says "Dependencies unknown" once (editable and read-only), with no "waits on" and a warning on stderr', () => {
+      for (const page of [page5, ro5]) {
+        assert.equal(page.split('Dependencies unknown').length - 1, 1, 'the notice is not on the page exactly once');
+        assert.match(page, /<p class="dep-unk" role="note">Dependencies unknown: migration 0006 \(lane_dep\) is not applied\.<\/p>/);
+        assert.ok(!/waits on/.test(page.replace(/<script[\s\S]*?<\/script>/g, '')), 'a "waits on" shows on a page with no lane_dep');
+        assert.ok(!page.includes('data-waits='), 'a lane row carries a waits flag without the table');
+      }
+      assert.match(err5, /\[render-board\] warn: migration 0006 \(lane_dep\) is not applied; waits on is unknown/);
+    });
+
+    it('R2 a database with table lane_dep has no notice and no warning, and a lane with no open dependency is still on the page', () => {
+      // roNone has a lane and no edge at all: a notice keyed on "some lane waits" would show there.
+      assert.ok(roNone.includes('zz-rb-b-lane'));
+      for (const page of [html, ro, roNone]) {
+        assert.ok(!page.includes('Dependencies unknown') && !page.includes('class="dep-unk"'), 'the notice shows with table lane_dep');
+      }
+      assert.ok(!/warn: migration 0006/.test(err6), 'the warning prints with table lane_dep');
+      assert.ok(bbRowOf(html, 'zz-rb-w-none') && cardOf(html, 'zz-rb-w-none'), 'zz-rb-w-none is not on the page');
+    });
+
+    it('R3 three open dependencies show on the By band row and the card front as two ids and "+1 more", and every id in the card Details and the Lanes list', () => {
+      assert.equal(spanText(bbRowOf(html, 'zz-rb-w-open'), 'bb-wait'), FRONT);
+      assert.equal(spanText(cardOf(html, 'zz-rb-w-open'), 'kb-wait'), FRONT);
+      assert.equal(ddOf(cardOf(html, 'zz-rb-w-open')), 'zz-rb-d1, zz-rb-d2, zz-rb-d3');
+      assert.equal(ddOf(laneDlOf(html, 'zz-rb-w-open')), 'zz-rb-d1, zz-rb-d2, zz-rb-d3');
+      // One open dependency: its id and no "+N more".
+      assert.equal(spanText(bbRowOf(html, 'zz-rb-w-one'), 'bb-wait'), 'waits on: zz-rb-d1');
+      assert.equal(spanText(cardOf(html, 'zz-rb-w-one'), 'kb-wait'), 'waits on: zz-rb-d1');
+      assert.equal(ddOf(laneDlOf(html, 'zz-rb-w-one')), 'zz-rb-d1');
+    });
+
+    it('R4 a met dependency and a lane with no edge show nothing, in every place', () => {
+      for (const id of ['zz-rb-w-met', 'zz-rb-w-none']) {
+        const parts = [bbRowOf(html, id), cardOf(html, id), laneDlOf(html, id)];
+        assert.ok(parts.every(Boolean), `${id} is missing from a view`);
+        for (const p of parts) assert.ok(!/waits on|wait mono|wait"/.test(p), `${id} shows a wait: ${p}`);
+      }
+    });
+
+    it('R5 a dependency id with markup (and no lane row) is escaped inside the wait text, the card Details and the Lanes list, and counts as open', () => {
+      assert.equal(spanText(bbRowOf(html, 'zz-rb-w-esc'), 'bb-wait'), `waits on: ${ESC_TARGET}`);
+      assert.equal(spanText(cardOf(html, 'zz-rb-w-esc'), 'kb-wait'), `waits on: ${ESC_TARGET}`);
+      assert.equal(ddOf(cardOf(html, 'zz-rb-w-esc')), ESC_TARGET);
+      assert.equal(ddOf(laneDlOf(html, 'zz-rb-w-esc')), ESC_TARGET);
+      assert.ok(!html.includes('zz-<b>x'), 'the id is on the page unescaped');
+    });
+
+    it('R6 the Scheduled card lists the open dependency in its <dl>', () => {
+      const card = schedOf(html, 'zz-rb-w-sch');
+      assert.ok(card, 'zz-rb-w-sch is not in Scheduled');
+      assert.equal(ddOf(card), 'zz-rb-d1');
+    });
+
+    it('R7 a done lane with an open edge shows nothing, in the Done column and the Lanes list', () => {
+      const done = /<ul class="kb-list" id="kb-list-done">([\s\S]*?)<\/ul>/.exec(html)[1];
+      const card = done.split('<li class="card kb-done-card">').find((x) => x.includes('class="kb-id mono">zz-rb-w-done<'));
+      assert.ok(card, 'zz-rb-w-done is not in Done');
+      assert.ok(!/waits on/.test(card), 'a done card shows a wait');
+      const dl = laneDlOf(html, 'zz-rb-w-done');
+      assert.ok(dl.includes('<dt>track</dt>'), 'the Lanes row of zz-rb-w-done is missing');
+      assert.ok(!/waits on/.test(dl), 'the Lanes list shows a wait for a done lane');
+      assert.equal(bbRowOf(html, 'zz-rb-w-done'), '', 'a done lane is in By band');
+    });
+
+    it('R8 the read-only page of another board shows the wait on its card, its By band row and its Details', () => {
+      assert.equal(spanText(bbRowOf(ro, 'zz-rb-a-w'), 'bb-wait'), 'waits on: zz-rb-a-d1');
+      const card = cardOf(ro, 'zz-rb-a-w');
+      assert.ok(card.includes('kb-ro'), 'the card is not the read-only card');
+      assert.equal(spanText(card, 'kb-wait'), 'waits on: zz-rb-a-d1');
+      assert.equal(ddOf(card), 'zz-rb-a-d1');
+      assert.equal(ddOf(laneDlOf(ro, 'zz-rb-a-w')), 'zz-rb-a-d1');
+    });
+
+    it('the claimable counter and chip count a ready lane only when it has no open dependency; without table lane_dep every ready lane counts', () => {
+      const rows = readyRows(html);
+      assert.deepEqual(rows, { all: 3, clean: 1, waiting: 2 }, 'zz-rb-w-open and zz-rb-w-sch wait, zz-rb-w-none does not');
+      assert.equal(counter(html), '1');
+      assert.equal(chip(html), '1');
+      assert.equal(counter(ro), String(readyRows(ro).clean));
+      assert.equal(counter(ro), '0', 'zz-rb-a-w waits, so board a has no claimable lane');
+      const rows5 = readyRows(page5);
+      assert.equal(rows5.waiting, 0);
+      assert.equal(counter(page5), String(rows5.all));
+      assert.equal(chip(page5), String(rows5.all));
+    });
+
+    it('the Claimable chip hides a ready lane that waits (the page script: stateMatch, taken from the page)', () => {
+      const src = /function stateMatch\(f, lane\) \{[\s\S]*?\n    \}/.exec(html)?.[0];
+      assert.ok(src, 'stateMatch is not in the page script');
+      const stateMatch = vm.runInNewContext(`(${src})`);
+      const lane = (state, waits) => ({ dataset: { state, held: '0', ...(waits ? { waits: '1' } : {}) } });
+      assert.equal(stateMatch('ready', lane('ready', true)), false, 'a ready lane that waits shows under Claimable');
+      assert.equal(stateMatch('ready', lane('ready', false)), true);
+      assert.equal(stateMatch('open', lane('ready', true)), true, 'a waiting lane is still open');
+      assert.equal(stateMatch('all', lane('ready', true)), true);
+      assert.equal(stateMatch('blocked', lane('blocked', true)), true, 'only the ready filter looks at the flag');
+    });
+
+    it('a wait span carries no bytes beyond its text (size ratchet for the wait markup)', () => {
+      const WAIT_SPAN_OVERHEAD_MAX = 40;
+      const spans = [...html.matchAll(/<span class="(?:bb|kb)-wait mono">([^<]*)<\/span>/g)];
+      assert.ok(spans.length >= 7, `only ${spans.length} wait spans on the page`);
+      for (const m of spans) assert.ok(m[0].length - m[1].length <= WAIT_SPAN_OVERHEAD_MAX, `a wait span has ${m[0].length - m[1].length} bytes of markup: ${m[0]}`);
+      // A By band row with a wait stays inside the row limit plus the one span.
+      const row = bbRowOf(html, 'zz-rb-w-open');
+      const overhead = row.length + '<li class="bb-row"'.length - 'zz-rb-w-open'.length - 'ready, three open dependencies'.length - FRONT.length;
+      assert.ok(overhead <= ROW_OVERHEAD_MAX + WAIT_SPAN_OVERHEAD_MAX, `row with a wait has ${overhead} bytes of markup`);
     });
   });
 

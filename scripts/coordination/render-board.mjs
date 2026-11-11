@@ -41,6 +41,7 @@ import { compareLanes, laneOrderSql } from './lane-sort.mjs';
 import { BAND_CAP, BAND_GROUPS, bandChipHtml, bandKey, capState, groupByBand } from './board-band-view.mjs';
 import { DONE_DAYS, DONE_SQL, clockText, cutNote, dayLabel, pickDone } from './board-done-view.mjs';
 import { dueChip, splitScheduled } from './board-scheduled-view.mjs';
+import { waitsOnSql } from './lane-dep.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -148,6 +149,9 @@ await c.connect();
  * because the predicate spans four languages). Moving this out of the file would
  * drop that count. The guard is the thing that keeps the two spellings agreeing.
  */
+// Open dependencies (migration 0006). Without table lane_dep the column is never selected, so the key is MISSING on each row: that means unknown, never "none" (the lane.mjs board rule).
+const HAS_DEP = (await c.query("SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has")).rows[0].has;
+if (!HAS_DEP) console.error('[render-board] warn: migration 0006 (lane_dep) is not applied; waits on is unknown');
 const lanes = (await c.query(`
   SELECT l.*,
          (l.owner_session_id IS NOT NULL AND NOT (
@@ -157,7 +161,7 @@ const lanes = (await c.query(`
               WHERE s.id = l.owner_session_id
                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
             )
-         )) AS held_now
+         )) AS held_now${HAS_DEP ? `, ${waitsOnSql('l')} AS waits_on` : ''}
     FROM agentic_os.lane l
    WHERE l.project_key = $1::text
    ORDER BY l.track, ${laneOrderSql('l')}`, [KEY])).rows;
@@ -227,6 +231,13 @@ const tracks = [...new Set(lanes.map((l) => l.track))];
 const ordOf = new Map(lanes.slice().sort(compareLanes).map((l, i) => [l.id, i]));
 const seqOf = new Map(lanes.map((l, i) => [l.id, i]));
 const bandCount = (key) => open.filter((l) => bandKey(l) === key).length;
+// Open dependencies of a lane. A done lane shows none (waitsOnSql does not look at the lane's own state); a missing key (no table) gives none to show.
+const waitsOf = (l) => (l.state !== 'done' && Array.isArray(l.waits_on) ? l.waits_on : []);
+const waitFront = (l) => { const w = waitsOf(l); return w.length ? `waits on: ${w.slice(0, 2).map(esc).join(', ')}${w.length > 2 ? ` +${w.length - 2} more` : ''}` : ''; };
+const waitSpan = (l, cls) => (waitsOf(l).length ? `<span class="${cls} mono">${waitFront(l)}</span>` : '');
+const waitDt = (l) => (waitsOf(l).length ? `<dt>waits on</dt><dd>${waitsOf(l).map(esc).join(', ')}</dd>` : '');
+// A ready lane counts as claimable only with no open dependency (claim refuses it otherwise). Without table lane_dep the gate is off and every ready lane counts.
+const claimable = open.filter((l) => l.state === 'ready' && waitsOf(l).length === 0).length;
 
 const STRIPE = {
   active: 's-ok', ready: 's-info', blocked: 's-crit',
@@ -245,7 +256,7 @@ const laneRow = (l, i) => {
     ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000) : null;
   const detailId = `d${i}`;
   return `
-  <button class="lane${l.held_now ? ' is-held' : ''}" aria-expanded="false" aria-controls="${detailId}" data-state="${esc(l.state)}" data-track="${esc(l.track)}" data-held="${l.held_now ? '1' : '0'}" data-band="${bandKey(l)}" data-ord="${ordOf.get(l.id)}" data-seq="${seqOf.get(l.id)}">
+  <button class="lane${l.held_now ? ' is-held' : ''}" aria-expanded="false" aria-controls="${detailId}" data-state="${esc(l.state)}" data-track="${esc(l.track)}" data-held="${l.held_now ? '1' : '0'}"${waitsOf(l).length ? ' data-waits="1"' : ''} data-band="${bandKey(l)}" data-ord="${ordOf.get(l.id)}" data-seq="${seqOf.get(l.id)}">
     <span class="stripe ${STRIPE[l.state] || 's-idle'}"></span>
     <span class="nm">${bandChipHtml(l)}${esc(l.id)}<small>${esc(l.title)}</small></span>
     <span class="state-c"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span></span>
@@ -260,7 +271,7 @@ const laneRow = (l, i) => {
     <dl>
       <dt>track</dt><dd>${esc(l.track)}</dd>
       ${l.branch ? `<dt>branch</dt><dd>${esc(l.branch)}</dd>` : ''}
-      ${l.scope ? `<dt>scope</dt><dd>${esc(l.scope)}</dd>` : ''}
+      ${l.scope ? `<dt>scope</dt><dd>${esc(l.scope)}</dd>` : ''}${waitDt(l)}
       ${owner ? `<dt>holder</dt><dd>${esc(owner)} · fence ${esc(l.fence)}</dd>` : ''}
       ${l.note ? `<dt>status</dt><dd>${esc(l.note)}</dd>` : ''}
       ${l.done_when ? `<dt>done when</dt><dd>${esc(l.done_when)}</dd>` : ''}
@@ -340,12 +351,12 @@ const kbCard = (l, movable, rank, col, ro = false) => {
     return `<li class="card kb-card kb-ro" data-id="${esc(l.id)}" data-state="${esc(l.state)}" data-hash="${esc(kbHash(l))}">
       <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Priority order (not a saved order)">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span></div>
       <p class="kb-title">${esc(l.title)}</p>
-      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${band}${prio}</div>
+      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${band}${prio}${waitSpan(l, 'kb-wait')}</div>
       ${movable ? '' : kbHolder(l, true)}
       <details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary>
         <dl class="kb-dl">
           <dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd>
-          <dt>last note</dt><dd>${esc(l.note || 'none')}</dd>
+          <dt>last note</dt><dd>${esc(l.note || 'none')}</dd>${waitDt(l)}
         </dl>
       </details>
     </li>`;
@@ -356,7 +367,7 @@ const kbCard = (l, movable, rank, col, ro = false) => {
   return `<li class="card kb-card" data-id="${esc(l.id)}" data-state="${esc(l.state)}" data-hash="${esc(kbHash(l))}">
       <div class="kb-top">${movable ? `<span class="kb-rank mono" title="Rank in this column">${rank}</span>` : ''}<span class="kb-id mono">${esc(l.id)}</span>${movable ? '<span class="kb-grip" title="Drag to move" aria-hidden="true">&#8942;&#8942;</span>' : ''}</div>
       <p class="kb-title">${esc(l.title)}</p>
-      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${band}${prio}<span class="kb-sync" hidden></span></div>
+      <div class="kb-meta"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="kb-track mono">${esc(l.track)}</span>${band}${prio}${waitSpan(l, 'kb-wait')}<span class="kb-sync" hidden></span></div>
       ${movable ? '' : kbHolder(l)}
       <button class="kb-btn kb-plain" type="button" hidden aria-expanded="false" aria-controls="kb-p${n}">Plain English</button>
       <p class="kb-plain-out" id="kb-p${n}" role="status" hidden></p>
@@ -364,7 +375,7 @@ const kbCard = (l, movable, rank, col, ro = false) => {
       <div class="kb-detail" id="kb-d${n}" hidden>
         <dl class="kb-dl">
           <dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd>
-          <dt>last note</dt><dd>${esc(l.note || 'none')}</dd>
+          <dt>last note</dt><dd>${esc(l.note || 'none')}</dd>${waitDt(l)}
         </dl>
         <div class="kb-edit">
           <label class="kb-fl"><span>Status</span><select class="kb-st" disabled>${statusOpts}</select></label>
@@ -398,7 +409,7 @@ const kbDoneCard = ({ lane: l, at }) => `<li class="card kb-done-card"><div clas
 const kbSchedCard = ({ lane: l, dueMs }) => {
   const d = new Date(dueMs);
   const due = dueMs <= GENERATED_AT.getTime();
-  return `<li class="card kb-done-card"><div class="kb-top"><span class="kb-id mono">${esc(l.id)}</span></div><p class="kb-title">${esc(l.title)}</p><div class="kb-meta"><span class="kb-track mono">${esc(l.track)}</span><span class="sc-chip mono${due ? ' sc-due' : ''}">${dueChip(dueMs, GENERATED_AT.getTime())}</span></div><details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary><dl class="kb-dl"><dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd><dt>last note</dt><dd>${esc(cutNote(l.note) || 'none')}</dd><dt>due</dt><dd>${dayLabel(d, GENERATED_AT)} ${clockText(d)}</dd></dl></details></li>`;
+  return `<li class="card kb-done-card"><div class="kb-top"><span class="kb-id mono">${esc(l.id)}</span></div><p class="kb-title">${esc(l.title)}</p><div class="kb-meta"><span class="kb-track mono">${esc(l.track)}</span><span class="sc-chip mono${due ? ' sc-due' : ''}">${dueChip(dueMs, GENERATED_AT.getTime())}</span></div><details class="kb-ro-detail"><summary>Details<span class="sr"> for ${esc(l.id)}</span></summary><dl class="kb-dl"><dt>scope</dt><dd>${esc(l.scope || 'none set')}</dd><dt>last note</dt><dd>${esc(cutNote(l.note) || 'none')}</dd><dt>due</dt><dd>${dayLabel(d, GENERATED_AT)} ${clockText(d)}</dd>${waitDt(l)}</dl></details></li>`;
 };
 
 // The first column. Fixed like Done: data-col is "scheduled", so the client finds it (colEls) but does not move cards in it. It needs a .kb-head (syncHeads).
@@ -449,7 +460,7 @@ const kbColumn = (key, name, ids, movable, ro = false) => `<div class="kcol"${mo
 // Rows use bb-* classes and never kb-card, lane, detail or chip: the card editor, the lane list and the filter look those up.
 // A row has no chip, no data-id and no title attribute: the group heading names the band, the id is in the text, and the page is
 // near its size ratchet (render-board.test.mjs).
-const bbRow = (l) => `<li class="bb-row" data-state="${esc(l.state)}"><span class="bb-id mono">${esc(l.id)}</span><span class="bb-t">${esc(l.title)}</span><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="bb-track mono">${esc(l.track)}</span>${kbPrio(l) !== null ? `<span class="bb-rank mono">rank ${kbPrio(l)}</span>` : ''}</li>`;
+const bbRow = (l) => `<li class="bb-row" data-state="${esc(l.state)}"><span class="bb-id mono">${esc(l.id)}</span><span class="bb-t">${esc(l.title)}</span><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span><span class="bb-track mono">${esc(l.track)}</span>${kbPrio(l) !== null ? `<span class="bb-rank mono">rank ${kbPrio(l)}</span>` : ''}${waitSpan(l, 'bb-wait')}</li>`;
 
 const bbGroup = (g) => {
   const cap = g.key === 'P0' ? capState(g.n) : null;
@@ -472,6 +483,8 @@ const BB_HTML = `<div class="bb" id="bb">
 // By band is built when the page is rendered. A drag saves to the page db, and a session copies it to the lane DB at the next sync.
 const BB_NOTE = 'From the last render; a drag shows here after the next sync.';
 
+// One line at the top of Priorities when the database has no table lane_dep: the page cannot say which lanes wait. Empty with the table, so a 0006 page is unchanged.
+const DEP_UNK = HAS_DEP ? '' : '<p class="dep-unk" role="note">Dependencies unknown: migration 0006 (lane_dep) is not applied.</p>';
 const VIEW_BAR = `<div class="vt-bar" role="group" aria-label="Priorities view"><button class="vt" type="button" data-g="view" data-v="band" aria-pressed="true">By band</button><button class="vt" type="button" data-g="view" data-v="columns" aria-pressed="false">Columns</button></div>`;
 
 // The client script is plain ES5 text: placeLanes' own source, then the page code.
@@ -894,10 +907,11 @@ const html = `${STAMP}
   .bb-id { min-width:0; font:600 12.5px/1.3 var(--mono); overflow-wrap:anywhere; }
   .bb-t { flex:1 1 100%; min-width:0; margin:0; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; overflow:hidden;
     color:var(--muted); font:400 12px/1.45 var(--sans); overflow-wrap:anywhere; }
-  .bb-track, .bb-rank { color:var(--muted); font:500 10.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .bb-track, .bb-rank, .bb-wait, .kb-wait { color:var(--muted); font:500 10.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .kb-wait { flex-basis:100%; }
   .bb-empty { margin:0; padding:14px 10px; border:1px dashed var(--line); border-radius:var(--r); color:var(--muted); font:400 11px/1.4 var(--mono); text-align:center; }
   .bb-q { grid-column:1 / -1; }
-  .bb-note { margin:0 0 10px; color:var(--muted); font:400 11.5px/1.4 var(--mono); }
+  .bb-note, .dep-unk { margin:0 0 10px; color:var(--muted); font:400 11.5px/1.4 var(--mono); }
   [data-view="columns"] .bb-note { display:none; }
 
   @media (max-width:1080px) { .lane { grid-template-columns:3px minmax(160px,1.4fr) 92px 130px 56px; } .lane .scope { display:none; } }
@@ -923,7 +937,7 @@ const html = `${STAMP}
     html { scroll-padding-top:calc(var(--top-h) + var(--bar-h,0px) + 8px); }
     /* The By band rules are above this block, so its type sizes must be here to win. */
     .bb-t { font-size:14px; }
-    .bb-track, .bb-rank { font-size:12px; }
+    .bb-track, .bb-rank, .bb-wait, .kb-wait { font-size:12px; }
     .bb-row { cursor:pointer; touch-action:manipulation; }
     .stripe { grid-row:1/3; }
     .lane .state-c { grid-area:2/2; padding:0 13px 10px; }
@@ -947,7 +961,7 @@ const html = `${STAMP}
     <div class="counters">
       <span class="ctr"><b>${open.length}</b><span>open lanes</span></span>
       <span class="ctr is-ok"><b>${held}</b><span>held now</span></span>
-      <span class="ctr"><b>${byState('ready')}</b><span>claimable</span></span>
+      <span class="ctr"><b>${claimable}</b><span>claimable</span></span>
       <span class="ctr${byState('blocked') ? ' is-crit' : ''}"><b>${byState('blocked')}</b><span>blocked</span></span>
       <span class="ctr is-ok"><b>${sessions.length}</b><span>active (${STALE_MINUTES} min)</span></span>
       <span class="ctr"><b>${quietCount}</b><span>open, quiet</span></span>
@@ -963,7 +977,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       <h2 id="kb-title">Priorities</h2>
       <p>By band lists open lanes by importance, P0 first. Columns is the drag board, with read-only Scheduled and reminders and Done columns. Drag, or use Do next and Move to, to reorder. Your order saves to this board and Claude reads it.</p>
     </div>
-    ${VIEW_BAR}
+    ${VIEW_BAR}${DEP_UNK}
     <div class="kb-bar">
       <p class="kb-status" id="kb-status" role="status" data-k="idle">Default order. Saved order not loaded yet.</p>
       <span class="kb-chip" id="kb-order" data-k="pending" hidden>Order not yet synced to sessions</span>
@@ -984,7 +998,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
       <h2 id="kb-title">Priorities</h2>
       <p>${KB_RO_INTRO}</p>
     </div>
-    ${VIEW_BAR}
+    ${VIEW_BAR}${DEP_UNK}
     ${BB_HTML}
     <div class="kb-board" id="kb-board" role="region" aria-label="Priorities columns">
       ${kbScheduledColumn(true)}
@@ -1032,7 +1046,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     </div>
     <div class="filters" role="group" aria-label="Filter lanes by state">
       <button class="chip" data-g="state" data-f="open" aria-pressed="true">open ${open.length}</button>
-      <button class="chip" data-g="state" data-f="ready" aria-pressed="false">claimable ${byState('ready')}</button>
+      <button class="chip" data-g="state" data-f="ready" aria-pressed="false">claimable ${claimable}</button>
       <button class="chip" data-g="state" data-f="held" aria-pressed="false">held ${held}</button>
       <button class="chip" data-g="state" data-f="blocked" aria-pressed="false">blocked ${byState('blocked')}</button>
       <button class="chip" data-g="state" data-f="all" aria-pressed="false">all ${lanes.length}</button>
@@ -1161,7 +1175,7 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
     var fBand = null;
     function stateMatch(f, lane) {
       var st = lane.dataset.state, held = lane.dataset.held === '1';
-      return f === 'all' ? true : f === 'open' ? st !== 'done' : f === 'held' ? held : st === f;
+      return f === 'all' ? true : f === 'open' ? st !== 'done' : f === 'held' ? held : st === f && !(f === 'ready' && lane.dataset.waits);
     }
     // Group headings: "N open / M" counted from the lanes now inside each group. A group with nothing visible is noise, not structure.
     function recount() {

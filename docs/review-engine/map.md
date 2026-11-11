@@ -4,6 +4,12 @@ This file is the one map of the review-engine program. It is map v2 (2026-11-09)
 
 Goal: replace CodeRabbit with the CCv3 local review engine (Dave 11-04, 11-05: the gating item of the software factory).
 
+Program state: HOLD
+
+Pack: re-verifier, re-finder-v2 (branch re/re-verifier)
+
+`program.mjs` reads the two lines above from `main`. The first line is the GO line: an absent or unreadable line reads as HOLD. GO is a later one-line PR after Dave's GO tap. It changes that line and the HOLD line of README.md. The second line is the one trial pack (Dave, 2026-11-10): two lanes in one PR on one branch, one cap unit. A wider pack needs a new yes after this pack lands clean. No such line means no pack.
+
 Premortem 2026-11-09 applied: see 2026-11-09-review-engine-premortem.md
 
 - Ids T01 to T22 and E01 to E04 in this map name findings in that file (`.claudedocs/2026-11-09-review-engine-premortem.md`).
@@ -11,9 +17,9 @@ Premortem 2026-11-09 applied: see 2026-11-09-review-engine-premortem.md
 - Dave's taps on 2026-11-09, later the same day (decisions journal, the four DP1 rows). All four are applied in this map. (4) DP1.5: path F. Freeze today's engine and count from the first sweep, with a stop rule at decision point 2 (stop the attempt when the forecast is under 20%). Dave saw the note that the bar almost surely fails at today's recall. (5) DP1.8: route J, a calibrated judge. The CLI flip waits on `re-judge-calibrate` and its chain. (6) DP1.15: per band. The CLI demotion is a band list. LOW keeps the CodeRabbit CLI while the engine does not review LOW. The CLI is skipped only when an engine record exists for that head. (7) DP1.18: split `re-live-advisory` into a short build lane and a long accrual lane (`re-live-accrual`).
 - Dave's taps on 2026-11-09, last round (decisions journal, the rows DP1.1 to DP1.19). All are applied in this map. (8) DP1.1: the P1 band list, as listed, in rank order. (9) DP1.2: the spend caps are approved as our own numbers. The pool share is measured in the first sweep week, and no cap goes up before that. (10) DP1.3: `re-` PRs get the CodeRabbit CLI plus the engine, no PR bot. (11) DP1.4, DP1.9, DP1.10, DP1.11 and DP1.12: all five accepted. (12) DP1.6: Grok-only first, 2 arms. DP1.7 is not asked. (13) DP1.13: the two external lanes get band P1, a review-engine worker as owner, the map's done checks and the program claim rules. (14) DP1.14: CRITICAL stays on the CodeRabbit PR bot under the interim rule. (15) DP1.16: cut the phase 4 design to fit 120 runs, arms interleaved. (16) DP1.17: the coordinator seat runs the daily sweep for the first 2 weeks. (17) DP1.19: the 6 adopted cards are marked done. (18) The old `re-gate-ready` card is marked done with the SPLIT note. (19) All `re-` cards stay `blocked` until GO, wave 0 included.
 - "Only the 3 dropped lanes close" in tap (2) covers map lanes. Cards that are not map lanes close under taps (11), (17) and (18): see "Board actions".
-- Decision point 1 is fully answered. The items of DP2 and DP3 are not answered. Two points came up after DP1. Point (a) is DECIDED (Dave, 2026-11-10). Point (b) is open. "Open after DP1" in decisions.md lists what is still open before GO.
+- Decision point 1 is fully answered. The items of DP2 and DP3 are not answered. Two points came up after DP1. Points (a) and (b) are DECIDED (Dave, 2026-11-10). "Open after DP1" in decisions.md lists what is still open before GO.
 
-What changed from the 11-05 map and why. The 11-05 map was one serial research chain, and every CodeRabbit flip waited at its end in wave 10. Nothing on it had moved since 11-05. This map starts the evidence now: a wave-0 sweep runs today's engine as advice on open PRs and saves the CodeRabbit CLI output for the same head. It replaces the one retirement gate with two gates: pre-pr CLI and CRITICAL PR bot. It drops the HIGH gate, a no-op today. It takes the P5 arms, the loop dry run and P7 off the path. It fixes the capacity rules, the freeze window and the circular blind sample, splits three over-size lanes, and batches Dave's choices into three decision points. The pre-pr CLI gate now sits at wave 4 (route J, DP1.8). Its dependency closure holds no P4 A/B lane. Route J puts two gold lanes and the two P4 prefactor lanes in it (see the closure text under the Waves table).
+What changed from the 11-05 map and why. The 11-05 map was one serial research chain, and every CodeRabbit flip waited at its end in wave 10. Nothing on it had moved since 11-05. This map starts the evidence early: a wave-1 sweep runs today's engine as advice on open PRs and saves the CodeRabbit CLI output for the same head. It replaces the one retirement gate with two gates: pre-pr CLI and CRITICAL PR bot. It drops the HIGH gate, a no-op today. It takes the P5 arms, the loop dry run and P7 off the path. It fixes the capacity rules, the freeze window and the circular blind sample, splits three over-size lanes, and batches Dave's choices into three decision points. The pre-pr CLI gate now sits at wave 4 (route J, DP1.8). Its dependency closure holds no P4 A/B lane. Route J puts two gold lanes and the two P4 prefactor lanes in it (see the closure text under the Waves table).
 
 Inputs. These files are outside git. [research-index.md](research-index.md) lists the `.claudedocs` files.
 - 11-05 map: `.claudedocs/2026-11-05-review-engine-lane-map.md`
@@ -33,15 +39,15 @@ Three sections of map v2 are in their own files in this folder. A reference in t
 
 ## How to use this map
 
-- Claim a lane only when every lane in its "Depends on" is met and every token in its "Held until" cell is met. A dependency is met only when its lane is `done` AND a done event names a SHA that is an ancestor of `main`. A `done` set by hand or by a kanban tap does not count. Until T2.1 lands, the coordinator checks this by hand (`git merge-base --is-ancestor <sha> main`; orchestration plan, section 3.6).
+- Claim a lane only when every lane in its "Depends on" is met and every token in its "Held until" cell is met. A dependency is met only when its lane is `done` AND a done event names a SHA that is an ancestor of `main`. A `done` set by hand or by a kanban tap does not count. T2.1 is on `main` (PRs #484, #486, #488): `claim` refuses a lane with an open dependency, and a dependency is met by `done --merged <sha>` or `done --no-pr --evidence <file>`. A plain `done` meets no dependency.
 - A wave 0 `re-` lane (no open dependency) stays `blocked` until Dave's GO tap. Then `program.mjs sync-board` moves it to `backlog`. No session claims a `re-` lane before GO. (Confirmed by Dave, 2026-11-09; orchestration plan, section 3.3.)
 - Edit only the files in your lane's "Owns" list. A change to a file another lane owns goes through that lane's holder (`lane.mjs say --to <name>`).
 - Before you start, read your lane section here, then the sections of the lanes in "Depends on", "Unblocks" and "Related".
-- At most 3 `re-` lanes are in work at once. OPEN: the premortem recommends 2 workers at GO (E03; the orchestration plan, section 3.8, holds that item).
+- At most 3 `re-` lanes are in work at once. The pack of the Pack line counts as one. DECIDED (Dave, 2026-11-10): 2 worker sessions at GO. A third joins from round 3, only if rounds 1 and 2 show no claim fault and no Owns fault. The seat is extra and builds nothing.
 - The 11-05 sections of the unchanged lanes and the deferred lanes are merged into "Lanes" in this map. For those lanes the Waves table wins for the wave and the Unblocks list.
 - "Needs Dave" in the Waves table means: the lane stops for a decision-point answer, a spend, an install or an outward-facing action. A merge tap on a CRITICAL-band PR is not marked. Every land needs a tap anyway (decisions.enforce is true). The merge yes itself stays.
 - "Held until" in the Waves table means: no session may claim the lane before each token in the cell is met. A stop in the middle of a lane is "Needs Dave", not a hold. The seed writes a held lane in state `blocked` (T02).
-- Long lanes (T14): `re-live-accrual` (sweep weeks), `re-seed-gold-b` (seed), `re-retire-prepr-cli` and `re-retire-critical` (gates) run for weeks. Between work sessions the holder sets the lane to state `review` and writes a note with the next step.
+- Long lanes (T14): `re-live-accrual` (sweep weeks), `re-seed-gold-b` (seed), `re-retire-prepr-cli` and `re-retire-critical` (gates) run for weeks. Between work sessions the holder sets the lane to state `review` and writes a note with the next step. Exception (wait O1): `re-live-accrual` has no holder during its 2 sweep weeks. The holder leaves it in state `blocked` with no owner and the note `sweep until <date>`. The seat reopens it for the closing check and gives the reason in the lane event. A hold of weeks is never a `park`.
 - Holdout data: never tune on it, never paste holdout PR ids or answers into lane notes (lane notes reach every headless session).
 - Cursor models: Grok 4.7 or Composer 2.5 only, never Auto, never -fast. Never haiku. No ultrareview, no Bugbot.
 - A lane with "Needs Dave" stops at that point and asks him by AskUserQuestion, one recommended option first.
@@ -52,18 +58,18 @@ Three sections of map v2 are in their own files in this folder. A reference in t
 Every dependency sits in an earlier wave. External lanes (not `re-` lanes): `hf-judge-precheck`, `force-high-security-tier`. They have no row in the table and count as wave 0. Each has a section in this map (see "External lanes"). A lane that depends only on an external lane sits in wave 1 or later.
 
 Column "Held until" (T02). An empty cell means no hold. Tokens are separated by "; ". A token is one of these:
-- A decision id, for example `DP2.4`: the hold ends when Dave answers that item. No row holds a DP1 token after Dave's DP1 answers of 2026-11-09.
-- A lane id: the hold ends when that lane is done. This is a hold, not an edge, so the lane may sit in the same wave or a later wave.
+- A decision id, for example `DP2.4`: the seat deletes the token after Dave answers that item. No row holds a DP1 token after Dave's DP1 answers of 2026-11-09.
+- A lane id: the hold ends when that lane is done with proof (`done --merged <sha>` or `done --no-pr --evidence <file>`). This is a hold, not an edge, so the lane may sit in the same wave or a later wave.
 - `<lane id> if <decision id> = <answer>`: a conditional hold. It applies only when Dave gives that answer. It is not a decided edge. After the answer, the coordinator moves the lane id into "Depends on" and raises the wave, or deletes the token. One row holds such a token: `re-retire-critical` (DP2.4). No row holds a DP1 form of it after Dave's DP1.5 and DP1.8 answers of 2026-11-09.
 - `first-flip`: the first of the two flips is recorded.
 - `dave-yes`: the yes that the lane section names under "Needs Dave".
 - `item-trigger`: each item of a holder card opens on its own trigger (Deferred lanes table).
+- `seat-hold`: always held. The seat deletes the token when the wait that the row notes name is over. Use it for a wait that holds a lane before its first claim, for example a clock.
 
-For a deferred lane the token names the main trigger. The Deferred lanes table holds the full text. A deferred lane with an empty cell waits only on its edges.
+Only a lane-id token ends by script. Every other token ends when the seat deletes it from the map. For a deferred lane the token names the main trigger. The Deferred lanes table holds the full text. A deferred lane with an empty cell waits only on its edges.
 
 | Wave | Lane | Phase | Depends on | Needs Dave | Change | Held until |
 |---|---|---|---|---|---|---|
-| 0 | `re-live-advisory` | GATE | none |  | new |  |
 | 0 | `re-land-ledger` | P3 | none |  | changed |  |
 | 0 | `re-test-globs` | GATE | none |  | new |  |
 | 0 | `re-critical-model-check` | P1-followup | none |  | unchanged |  |
@@ -74,17 +80,18 @@ For a deferred lane the token names the main trigger. The Deferred lanes table h
 | 0 | `re-engine-seam` | P4 | none |  | changed |  |
 | 0 | `re-claude-backend` | P4 | none |  | unchanged |  |
 | 0 | `re-test-escapes` | TEST | none |  | new |  |
+| 1 | `re-live-advisory` | GATE | re-critical-model-check |  | new |  |
 | 1 | `re-eval-contract` | P3 | re-gold-schema |  | changed |  |
 | 1 | `re-engine-cli-schema` | P4 | re-engine-seam |  | new |  |
-| 1 | `re-live-accrual` | GATE | re-live-advisory | yes | new |  |
 | 1 | `re-cr-keys` | DEMOTE | force-high-security-tier |  | new |  |
-| 1 | `re-label-two-family` | P6 | re-live-advisory, re-dispositions |  | new |  |
 | 1 | `re-prepr-bundle` | GATE | re-test-globs |  | changed |  |
 | 1 | `re-szz-miner` | P3 | re-critical-model-check, re-gold-schema, re-test-escapes |  | changed |  |
 | 1 | `re-seed-gold-b` | P3 | re-critical-model-check, re-gold-schema | yes | unchanged |  |
 | 1 | `re-gold-c-external` | P3 | hf-judge-precheck, re-critical-model-check, re-gold-schema |  | unchanged |  |
 | 1 | `re-rubrics` | P6 | re-critical-model-check |  | unchanged |  |
 | 1 | `re-property-tests` | TEST | re-test-escapes | yes | deferred | dave-yes |
+| 2 | `re-live-accrual` | GATE | re-live-advisory | yes | new |  |
+| 2 | `re-label-two-family` | P6 | re-live-advisory, re-dispositions |  | new |  |
 | 2 | `re-score-paired` | P3 | re-gold-schema, re-eval-contract |  | changed |  |
 | 2 | `re-verifier-replay` | P4 | re-verifier, re-engine-seam, re-eval-contract |  | new |  |
 | 2 | `re-prepr-cli-consumer` | DEMOTE | re-prepr-bundle, re-cr-keys, re-land-ledger, re-test-escapes |  | new |  |
@@ -101,7 +108,7 @@ For a deferred lane the token names the main trigger. The Deferred lanes table h
 | 3 | `re-gate-shadow-run` | GATE | re-prepr-cli-consumer, re-engine-cli-schema, re-live-accrual | yes | changed | DP2.5 |
 | 3 | `re-gate-summary-sample` | GATE | re-cr-rule2, re-live-advisory | yes | changed |  |
 | 3 | `re-scores-ledger` | P6 | re-rubric-runners |  | deferred | first-flip |
-| 4 | `re-retire-prepr-cli` | DEMOTE | re-live-accrual, re-land-ledger, re-dispositions, re-test-escapes, re-cr-keys, re-prepr-cli-consumer, re-label-two-family, re-judge-calibrate | yes | new |  |
+| 4 | `re-retire-prepr-cli` | DEMOTE | re-live-accrual, re-land-ledger, re-dispositions, re-test-escapes, re-cr-keys, re-prepr-cli-consumer, re-label-two-family, re-judge-calibrate | yes | new | re-cr-trustlist; seat-hold |
 | 4 | `re-p4-harness` | P4 | re-p4-wire, re-eval-contract, re-score-paired, re-gold-assemble |  | new |  |
 | 4 | `re-demote-mechanism` | DEMOTE | re-gate-ready-a, re-gate-ready-b, re-gate-summary-sample, re-shadow-retro, re-cr-trustlist, re-score-paired, re-live-advisory |  | changed |  |
 | 4 | `re-l1-schedule` | P3 | re-shadow-retro, re-land-ledger, re-dispositions, re-judge-calibrate, re-test-escapes | yes | changed |  |
@@ -116,7 +123,7 @@ For a deferred lane the token names the main trigger. The Deferred lanes table h
 | 6 | `re-refs-impact` | P5 | re-owners-hotspots, re-verifier, re-p4-wire, re-p4-ab |  | deferred | DP2.4 |
 | 7 | `re-p4-winner-evidence` | P4 | re-p4-ab, re-holdout-rotate, re-shadow-retro | yes | new |  |
 | 7 | `re-p5-multirun` | P5 | re-p4-ab, re-refs-impact, re-owners-hotspots, re-p4-wire |  | deferred | DP2.4 |
-| 8 | `re-retire-critical` | DEMOTE | re-demote-mechanism, re-repromote-auto, re-gate-summary-sample, re-gate-ready-a, re-gate-ready-b, re-score-paired, re-p4-winner-evidence, re-judge-calibrate, re-scoreboard, re-l1-schedule, re-rule-docs, re-cr-trustlist | yes | new | re-refs-impact if DP2.4 = yes; re-p5-multirun if DP2.4 = yes |
+| 8 | `re-retire-critical` | DEMOTE | re-demote-mechanism, re-repromote-auto, re-gate-summary-sample, re-gate-ready-a, re-gate-ready-b, re-score-paired, re-p4-winner-evidence, re-judge-calibrate, re-scoreboard, re-l1-schedule, re-rule-docs, re-cr-trustlist | yes | new | re-refs-impact if DP2.4 = yes; re-p5-multirun if DP2.4 = yes; re-retire-prepr-cli |
 | 8 | `re-p5-online` | P5 | re-p5-multirun, re-holdout-rotate | yes | deferred | DP2.4 |
 | 9 | `re-p5-online-hotfile` | P5 | re-p5-online | yes | deferred | DP2.4 |
 | 9 | `re-loop-dryrun` | P6 | re-review-doctor, re-gate-shadow-run, re-p5-online | yes | deferred | first-flip |
@@ -125,13 +132,19 @@ For a deferred lane the token names the main trigger. The Deferred lanes table h
 | 10 | `re-p7-backlog` | P7 | re-loop-dryrun | yes | deferred | item-trigger |
 | 11 | `re-p7-impact-arms` | P7 | re-p5-online-union | yes | deferred |  |
 
+Row notes for the holds added by the seat on 2026-11-10 (execution plan, waits O2, O5 and O6; seat calls 7a and 7b, which Dave can overrule):
+- `re-retire-prepr-cli` holds `re-cr-trustlist` (O2). Both lanes own named keys of review-router.config.json, so neither the lint nor `program.mjs ready` orders them. The token does.
+- `re-retire-prepr-cli` holds `seat-hold` (O5). The lane is claimed 1 round before the 58-day point (58 days after the first counted sweep: 4 counted weeks, then 30 days for bar row 3), not when its dependencies are done. The seat deletes the token then.
+- `re-retire-critical` holds `re-retire-prepr-cli` (O6). The CRITICAL gate lane is claimed after the CLI gate lane is done, then parks for its sample.
+- Wait O1 (nobody holds `re-live-accrual` during its 2 sweep weeks) is not a token. It is a wait in the middle of that lane. Its rule is in the long-lane bullet of "How to use this map".
+
 Row notes for `re-retire-prepr-cli` after Dave's DP1 answers of 2026-11-09. The row holds no conditional token now:
 - Route J (DP1.8, decided): the lane waits for `re-judge-calibrate`. This is a table edge, and the lane sits in wave 4. No lane depends on `re-retire-prepr-cli`, so no later wave moves.
 - Path F (DP1.5, decided): the lane does not wait for `re-p4-ab`. The path W token is removed.
 - Split (DP1.18, decided): the lane waits for `re-live-accrual` (the sweep weeks), not for `re-live-advisory`.
 - No edge from `re-cr-trustlist` to `re-retire-prepr-cli` is added (T02). That edge would pull `re-cr-rule2` and `re-verifier` into the CLI gate closure. `re-engine-cli-schema` is in the closure already under route J.
 
-Counts: 61 lanes (59 before the premortem; the split of `re-gate-ready` adds 1; the split of `re-live-advisory`, DP1.18, adds `re-live-accrual`). 14 new, 24 changed, 9 unchanged, 14 deferred (13 from 11-05 plus the new `re-property-tests`). 3 dropped. 18 lanes need Dave (24 before the DP1 answers of 2026-11-09). 15 lanes have a hold (23 before the answers; the answers end every DP1 hold; 14 before the conditional hold on `re-retire-critical` of 2026-11-10). The 2 external lanes are not in these counts. `re-holdout-rotate` moves from unchanged to changed (T20).
+Counts: 61 lanes (59 before the premortem; the split of `re-gate-ready` adds 1; the split of `re-live-advisory`, DP1.18, adds `re-live-accrual`). 14 new, 24 changed, 9 unchanged, 14 deferred (13 from 11-05 plus the new `re-property-tests`). 3 dropped. 18 lanes need Dave (24 before the DP1 answers of 2026-11-09). 16 lanes have a hold (23 before the answers; the answers end every DP1 hold; 14 before the conditional hold on `re-retire-critical` of 2026-11-10; 15 before the holds of the seat on `re-retire-prepr-cli`). The 2 external lanes are not in these counts. `re-holdout-rotate` moves from unchanged to changed (T20).
 
 Dependency closure of `re-retire-prepr-cli` under path F with route J (computed from the table, 20 lanes): `re-live-accrual`, `re-live-advisory`, `re-land-ledger`, `re-dispositions`, `re-test-escapes`, `re-cr-keys`, `force-high-security-tier`, `re-prepr-cli-consumer`, `re-prepr-bundle`, `re-test-globs`, `re-label-two-family`, `re-judge-calibrate`, `re-rubrics`, `re-critical-model-check`, `hf-judge-precheck`, `re-seed-gold-b`, `re-gold-schema`, `re-rubric-runners`, `re-engine-cli-schema`, `re-engine-seam`.
 - Route J brings 9 of the 20: `re-judge-calibrate` and its chain. Two gold lanes are in the closure (`re-seed-gold-b`, `re-gold-schema`), and the two P4 prefactor lanes (`re-engine-seam`, `re-engine-cli-schema`).
@@ -212,7 +225,7 @@ Contracts restated from the 11-05 map, with the owners of this map:
 - **Shared machine resources.** They have no file owner. The ledgers enforce the caps, not lane discipline.
   - Cursor ledger: weekly cap 300 (our own number). Eval and shadow runs stop at 240. The label runs of `re-label-two-family` count in the same 7-day ledger count, and that lane stops at 240 too. Live runs stop at the live cap (below). Dave approved the caps as our own numbers (DP1.2, 2026-11-09). No cap goes up before the pool share is measured.
   - Grok slots: max 2.
-  - Cursor eval slot: one token, claimed in the lane note. Only one of these lanes spends at a time: `re-shadow-retro`, `re-verifier-replay` (Cursor backend), `re-label-two-family` (its Cursor runs: Grok 4.7 for CLI-only findings, and a second family that is not Grok for engine findings [Speculation: Composer 2.5]), `re-p4-ab`, `re-p4-winner-evidence`, and the deferred P5 arms, loop minibatches and `re-p7-impact-arms`.
+  - Cursor eval slot: one token, claimed in the lane note. Only one of these lanes spends at a time: `re-shadow-retro`, `re-verifier-replay` (Cursor backend), `re-label-two-family` (its Cursor runs: Grok 4.7 for CLI-only findings, and a second family that is not Grok for engine findings [Speculation: Composer 2.5]), `re-p4-ab`, `re-p4-winner-evidence`, and the deferred lanes `re-p5-online`, `re-p5-online-hotfile`, `re-p5-online-union`, `re-loop-dryrun` (minibatches) and `re-p7-impact-arms`. This bullet is the one list of the lanes that spend from the slot: `program.mjs ready` reads it.
   - Headless claude -p: 30 a day, shared with non-RE sessions. The day plan in "Capacity plan" sets the shares. Each lane checks the headless ledger before a batch.
 
 Contracts that this map changed or added:
@@ -220,7 +233,7 @@ Contracts that this map changed or added:
 - **Freeze set (B3).** Two lists, both computed by `scripts/eval/review-eval/engine-version.mjs` (owner `re-live-advisory`).
   - Reviewer set: scripts/github/local-review.mjs, scripts/github/cursor-review.mjs, scripts/github/review-filter.mjs, every non-test file under scripts/github/local-review/ (with checklist.json, owners.json and hotspots.json when they exist), PROMPT_VERSION, CONTEXT_VERSION when it exists, and the local_review block of review-router.config.json.
   - Band set: bandOf and CRITICAL_TRUST_BOUNDARY in scripts/github/review-router.mjs (lines 107 and 121 today), and the matrix block of review-router.config.json.
-  - Frozen SHA (DP1.5, path F). Dave's answer of 2026-11-09 freezes today's engine. The decisions journal names no SHA. The coordinator records it before the first counted run (see `re-live-advisory`, "Labels").
+  - Frozen SHA (DP1.5, path F). Dave's answer of 2026-11-09 freezes today's engine. DECIDED (Dave, 2026-11-10): the frozen SHA is the `main` SHA right after `re-critical-model-check` lands. The coordinator records the value then, before the first counted run (see `re-live-advisory`, "Labels").
   - Exempt: the coderabbit.* keys, config blocks that neither the engine nor bandOf reads, and the local_review keys that set only caps and slots (weekly_live_cap, max_concurrent, per_branch_cap, slot_wait_min, headless_daily_cap). A cap raise therefore does not reset a counted window.
   - engineVersion is the hash of the reviewer set at one SHA. bandVersion is the hash of the band set. The 11-05 rule "engineVersion hashes every ENGINE_FILES blob" is replaced: ENGINE_FILES holds review-router.config.json (local-review.mjs:62-67), so each flip would change the version of its own evidence.
   - ENGINE_FILES itself does not change meaning. It still decides trusted:true (computeTrust, local-review.mjs:276-284).
@@ -242,16 +255,21 @@ Contracts that this map changed or added:
   - context.mjs: `re-refs-impact` (deferred), `re-p7-impact-arms` (deferred).
   - parser-fixtures/registry.mjs: `re-verifier`, `re-refs-impact` (deferred).
   - config.json (eval): `re-eval-contract`, `re-holdout-rotate`.
-  - pre-pr.mjs: `re-test-globs`, `re-prepr-bundle`, `re-prepr-cli-consumer`, `re-gate-shadow-run`. scanner-tuning no longer holds pre-pr.mjs; it keeps the zizmor and opengrep items only.
+  - pre-pr.mjs: `re-test-globs`, `re-prepr-bundle`, `re-prepr-cli-consumer`, `re-gate-shadow-run`.
   - review-router.mjs: `force-high-security-tier` (external, bandOf), `re-cr-rule2`, `re-cr-trustlist`, `re-demote-mechanism`, `re-p7-calibrated-cutoff` (deferred).
-  - review-router.config.json: `force-high-security-tier` (external), `re-cr-keys`, `re-cr-trustlist`, then the two gate lanes for their own flip key. The two gates are not ordered by an edge, because the flip order is a DP3 choice. A gate lane edits only its own coderabbit.demoted key and claims the file through the lane note before it starts. This is the one chain serialized by claim, not by dependency. No edge from `re-cr-trustlist` to `re-retire-prepr-cli` is added (T02): it would pull `re-cr-rule2` and `re-verifier` into the CLI gate closure. The ownership lint in `program.mjs check` exempts an owner that is scoped to named keys. `program.mjs ready` holds back a lane whose Owns list overlaps a lane in state `active` or `review` (T02, T18). Until that tool exists, the lane note is the only guard.
+  - review-router.config.json: `force-high-security-tier` (external), `re-cr-keys`, `re-cr-trustlist`, then the two gate lanes for their own flip key: `re-retire-prepr-cli`, then `re-retire-critical`.
   - pr-checkpoint.mjs: `re-cr-rule2`, `re-gate-summary-sample`, `re-repromote-auto`.
   - shadow.mjs: `re-shadow-retro`, `re-demote-mechanism`, `re-repromote-auto`.
   - band-state.mjs: `re-prepr-cli-consumer`, `re-repromote-auto`.
   - land-pr.ps1: `re-land-ledger`, `re-gate-ready-b`.
   - review-status.mjs: `re-gate-ready-a`. land-recheck.mjs: `re-gate-ready-b`.
   - catchers.mjs: `re-test-escapes` (new owner).
-  - tasks.json and package.json test:scripts line: `re-l1-schedule`, then `re-review-doctor` (deferred). The `scheduler-child-safe-and-wake` hold is gone (merged in PR #334).
+  - tasks.json and package.json (its test scripts line): `re-l1-schedule`, then `re-review-doctor` (deferred).
+- **Owner chain notes.** The parser of `program.mjs` reads only the chain lines above. These notes go with them.
+  - pre-pr.mjs: scanner-tuning no longer holds the file. It keeps the zizmor and opengrep items only.
+  - review-router.config.json: no edge orders the two gate lanes, because the flip order is a DP3 choice. Hold tokens order them since 2026-11-10: `re-retire-prepr-cli` holds `re-cr-trustlist` (O2), and `re-retire-critical` holds `re-retire-prepr-cli` (O6). A gate lane edits only its own coderabbit.demoted key and claims the file through the lane note before it starts. No edge from `re-cr-trustlist` to `re-retire-prepr-cli` is added (T02): it would pull `re-cr-rule2` and `re-verifier` into the CLI gate closure. This is the one chain that is ordered by holds, not by dependency.
+  - The lint (`program.mjs check`) and `program.mjs ready` both exempt two owners of one file when both name keys only. `ready` holds back a lane whose Owns list overlaps a lane in state `active` or `review` in every other case (T02, T18). So for this file the hold tokens are the guard.
+  - tasks.json: the `scheduler-child-safe-and-wake` hold is gone (merged in PR #334).
 
 ## Evidence bar
 
@@ -273,7 +291,7 @@ Unchanged lanes. Their sections are below, after `re-retire-critical`, in Waves-
 - `re-dispositions`: unchanged.
 - `re-finder-v2`: unchanged.
 - `re-claude-backend`: unchanged.
-- `re-critical-model-check`: unchanged. It must land before any live CRITICAL run (A4); `re-live-advisory` holds CRITICAL until then.
+- `re-critical-model-check`: unchanged. It must land before any live CRITICAL run (A4). `re-live-advisory` depends on it by edge: the frozen SHA is the `main` SHA right after it lands (Dave, 2026-11-10).
 - `re-seed-gold-b`: unchanged.
 - `re-gold-c-external`: unchanged.
 - `re-rubrics`: unchanged.
@@ -283,17 +301,17 @@ Unchanged lanes. Their sections are below, after `re-retire-critical`, in Waves-
 
 ### re-live-advisory
 
-**A1 build: sweep that runs today's engine as advice on open PRs and saves same-head CLI pairs** (wave 0, phase GATE, new)
+**A1 build: sweep that runs today's engine as advice on open PRs and saves same-head CLI pairs** (wave 1, phase GATE, new)
 
 Dave split the old lane on 2026-11-09 (DP1.18). This lane is the build lane. It is done when the first sweep PR lands and the first sweep is proven. The sweep weeks are the lane `re-live-accrual`.
 
-- Depends on: none
+- Depends on: re-critical-model-check
 - Unblocks: re-live-accrual, re-label-two-family, re-shadow-retro, re-gate-summary-sample, re-demote-mechanism
 - Related: re-critical-model-check, re-eval-contract, re-gate-shadow-run, re-engine-cli-schema, re-live-accrual
 - Owns: `scripts/github/local-review-sweep.mjs` (new), `scripts/github/local-review-sweep.test.mjs` (new), `scripts/eval/review-eval/engine-version.mjs` (new), `scripts/eval/review-eval/engine-version.test.mjs` (new)
 - Do not touch: `scripts/github/local-review.mjs`, `scripts/github/local-review/**`, `scripts/github/pre-pr.mjs`, `review-router.config.json`, `scripts/eval/review-eval/config.json`
 - Cost: the proof runs of the first sweep, inside the live cap of 100 Cursor ledger starts per 7 days; 0 claude -p
-- Needs Dave: no. DP1.2 is decided: the live cap of 100 is approved as our own number. DP1.5 is decided: path F. The coordinator records the frozen SHA before the first counted run ("Open after DP1", point b).
+- Needs Dave: no. DP1.2 is decided: the live cap of 100 is approved as our own number. DP1.5 is decided: path F. The frozen SHA is decided ("Open after DP1", point b): the `main` SHA right after `re-critical-model-check` lands. The coordinator records it before the first counted run.
 - Not a long lane. It closes after the first sweep. The daily runs, the weekly reports and the 2-week check are in `re-live-accrual`.
 
 Scope (the script and the first sweep; `re-live-accrual` runs the script each day after that):
@@ -305,7 +323,7 @@ Scope (the script and the first sweep; `re-live-accrual` runs the script each da
 - Facts: a run from the PR's own worktree passes `--facts` with that worktree's `.claude/cache/pre-pr/catchers.json` (pre-pr.mjs:146). A run from the primary checkout has no facts. The report counts both kinds.
 - Pairs: copy the head's CLI output (`.claude/cache/e2e/<date>-pre-pr-cr-<shortsha>.txt`, pre-pr.mjs:95) to the same-head pairs folder. The worktree cache goes when the worktree is removed. So the copy must run each day, before a worktree is removed. From `re-prepr-cli-consumer` on, pre-pr writes the copy itself at write time (T03), and the sweep copy is only a backstop.
 - engine-version.mjs: computes engineVersion and bandVersion over the freeze set at a SHA (see contracts).
-- Labels: every row is "rehearsal, prompt v1" until the frozen SHA is recorded. Path F is decided (DP1.5), so rows with the frozen engineVersion lose the rehearsal label. The decisions journal says "freeze today's engine" and names no SHA. The coordinator records the frozen SHA before the first counted run. [Speculation: it is the `main` SHA of the day of the tap, 2026-11-09. This map does not pick it.]
+- Labels: every row is "rehearsal, prompt v1" until the frozen SHA is recorded. Path F is decided (DP1.5), so rows with the frozen engineVersion lose the rehearsal label. DECIDED (Dave, 2026-11-10): the frozen SHA is the `main` SHA right after `re-critical-model-check` lands. The coordinator records the value then, before the first counted run.
 - Path F: `--engine-sha <sha40>` extracts scripts/ and review-router.config.json at that SHA into `<records>/engine/<sha>/`, as pinEngine does (local-review.mjs:228-250), and runs that copy with LOCAL_REVIEW_PINNED set. checkPin accepts it (local-review.mjs:264-269). Re-extract when pruneEngines removed the copy (it keeps 3). Such a record shows trusted:false once fork/main moves; the gate counts by engineVersion. [Speculation: the copy runs unchanged from that folder; the done check proves it.]
 - Pinned tag (T21). The sweep tags every record that a pinned copy wrote, so READY never reads it (`re-gate-ready-a`). The frozen copy cannot write a new record field, and local-review.mjs is in "Do not touch". So the sweep writes the tag itself: one line per pinned record in a list file in the pairs folder. [Speculation: the form of the tag. T21 gives source 'pinned' as an example. The test in `re-gate-ready-a` proves that READY skips a tagged record.]
 - Report: the sweep script prints the report that `re-live-accrual` saves each week. Fields: runs per band, runs per PR p50 and p90, facts share, pairs saved, ledger load. Per risk band (T05): heads the CLI reviewed, heads with an engine record, and the share. The CLI-Major heads in the window, and the share of them with an engine record (T03).
@@ -317,14 +335,15 @@ Why: Finding 1. The engine already runs on any open PR. The same-head pairs exis
 
 ### re-live-accrual
 
-**A1 accrual: daily sweeps, weekly reports and the 2-week pair check** (wave 1, phase GATE, new)
+**A1 accrual: daily sweeps, weekly reports and the 2-week pair check** (wave 2, phase GATE, new)
 
 Dave split `re-live-advisory` on 2026-11-09 (DP1.18). This lane is the long half. It writes no new script. It runs the sweep that `re-live-advisory` built.
 
 - Depends on: re-live-advisory
 - Unblocks: re-retire-prepr-cli, re-gate-shadow-run
 - Related: re-live-advisory, re-prepr-cli-consumer, re-label-two-family, re-scoreboard
-- Owns: `scripts/github/local-review-sweep.mjs` and `scripts/github/local-review-sweep.test.mjs` (second holder, for fixes that the daily runs show), the weekly sweep reports. [Speculation: the split tap names no Owns list. A lane with no file cannot fix a sweep fault, so this map gives it the sweep script after the build lane.]
+- Owns: `scripts/github/local-review-sweep.mjs` and `scripts/github/local-review-sweep.test.mjs` (second holder, for fixes that the daily runs show). [Speculation: the split tap names no Owns list. A lane with no file cannot fix a sweep fault, so this map gives it the sweep script after the build lane.]
+- Writes: the weekly sweep reports, outside git (see "Done when").
 - Do not touch: `scripts/eval/review-eval/engine-version.mjs` (it stays with `re-live-advisory`; a change to it goes through the coordinator), `scripts/github/local-review.mjs`, `scripts/github/local-review/**`, `scripts/github/pre-pr.mjs`, `review-router.config.json`, `scripts/eval/review-eval/config.json`
 - Cost: up to 100 Cursor ledger starts per 7 days (live cap), for 2 weeks or more; 0 claude -p
 - Needs Dave: his own yes for a scheduled task, when the daily sweep moves off the coordinator seat after the first 2 weeks (DP1.17, decided). DP1.2 is decided: the live cap of 100 is approved as our own number.
@@ -545,7 +564,7 @@ Why: One early owner for the keys, without the rule-2 dependencies that `re-cr-r
 
 ### re-label-two-family
 
-**B9 and B1: real, non-seeded labels from two model families** (wave 1, phase P6, new)
+**B9 and B1: real, non-seeded labels from two model families** (wave 2, phase P6, new)
 
 - Depends on: re-live-advisory, re-dispositions
 - Unblocks: re-retire-prepr-cli, re-judge-calibrate
@@ -842,7 +861,7 @@ Why: Findings 3 and 27. The CLI gate needs no P4 A/B result. Under route J it wa
 - Depends on: re-cr-rule2, re-cr-keys
 - Unblocks: re-demote-mechanism, re-retire-critical
 - Related: re-cr-rule2, force-high-security-tier
-- Owns: `scripts/github/review-router.mjs` (CRITICAL_TRUST_BOUNDARY only), `scripts/github/review-router-band.test.mjs`, `review-router.config.json` (checkpoint.critical and matrix.control_plane only)
+- Owns: `scripts/github/review-router.mjs` (CRITICAL_TRUST_BOUNDARY only), `scripts/github/review-router-band.test.mjs`, `review-router.config.json` (the checkpoint.critical and matrix.control_plane keys only)
 - Do not touch: `scripts/github/pr-checkpoint.mjs`, `scripts/github/local-review.mjs`
 - Cost: 0 cursor
 - Needs Dave: the merge tap (review-router.mjs is checkpoint.critical). DP1.3 is decided (Dave, 2026-11-09): `re-` PRs get the CodeRabbit CLI plus the engine, and no PR bot.
@@ -1183,7 +1202,7 @@ Why: Dave 11-04 goal: no CodeRabbit. The PR bot at CRITICAL is the paid piece th
 **Phase-1 leftover: CRITICAL-band model name and answer-key tree excludes in cursor-review.mjs** (wave 0, phase P1-followup)
 
 - Depends on: none
-- Unblocks: re-szz-miner, re-seed-gold-b, re-gold-c-external, re-rubrics
+- Unblocks: re-szz-miner, re-seed-gold-b, re-gold-c-external, re-rubrics, re-live-advisory
 - Related: re-p4-ab, re-engine-seam, re-engine-cli-schema
 - Owns: `scripts/github/cursor-review.mjs`, `scripts/github/cursor-review.test.mjs`
 - Do not touch: `scripts/github/local-review.mjs`
@@ -1593,7 +1612,7 @@ Two lanes on the path are not `re-` lanes (T08). They have a card on the continu
 - Depends on: none
 - Unblocks: re-cr-keys, re-gate-ready-a
 - Related: re-cr-rule2, re-cr-trustlist
-- Owns: `review-router.config.json` (bands and matrix blocks), `scripts/github/review-router.mjs` (bandOf), and the router tests for that change (card scope)
+- Owns: `review-router.config.json` (bands and matrix blocks), `scripts/github/review-router.mjs` (bandOf), with the router tests for that change. Card scope for all three.
 - Do not touch: the coderabbit.* keys, `scripts/github/pr-checkpoint.mjs`, `scripts/github/local-review.mjs` [Speculation: the card names no such list]
 - Cost: 0 cursor, 0 claude -p [Speculation: the card names no cost]
 - Needs Dave: merge tap (review-router.mjs is checkpoint.critical). Dave 11-03: a separate PR, decided with the count of past PRs that the rule would raise. Band and owner (DP1.13, decided): P1, a review-engine worker.
@@ -1611,7 +1630,7 @@ Done when (stands, DP1.13): A router test shows band HIGH or higher for a PR tha
 - Depends on: none
 - Unblocks: re-gold-c-external, re-judge-calibrate
 - Related: re-claude-backend, re-gold-c-external, re-judge-calibrate
-- Owns: `scripts/eval/review-eval/external-judge*.mjs` and its test, `.claude/cache/hf-datasets/` (gitignored) (card scope)
+- Owns: `scripts/eval/review-eval/external-judge*.mjs` (with its test), `.claude/cache/hf-datasets/` (gitignored) (card scope)
 - Do not touch: `scripts/eval/review-eval/judge.mjs`, `scripts/eval/review-eval/gold/**` [Speculation: the card names no such list]
 - Cost: 0 Grok runs; 40 to 60 headless judge calls. The day plan gives it 8 a day on type B days. The card says 10 a day; the day plan wins.
 - Needs Dave: no new yes for the runs (Dave approved step A on 11-02, decision 2 of the HF plan). Band and owner (DP1.13, decided): P1, a review-engine worker.
@@ -1660,7 +1679,7 @@ Dave answered DP1 on 2026-11-09 (decisions journal). Items 2, 4, 7, 8, 12 and 13
 - Path F counts rows from a pinned engine copy. The copy shows trusted:false once fork/main moves, and the pin path through `--engine-sha` is not yet proven [Speculation]. The `re-live-advisory` done check must prove it.
 - The paired-bar size and the real-label calibration are OPEN. Neither is solved here.
 - `re-rule-docs` is not in the CLI gate closure. Until it lands, the rule file does not describe the CLI demotion. pre-pr prints the "demoted" SKIP line as the stopgap.
-- The two gate lanes share review-router.config.json with no dependency edge. Claim discipline serializes them.
+- The two gate lanes share review-router.config.json with no dependency edge. A hold token orders them (O6: `re-retire-critical` holds `re-retire-prepr-cli`).
 - The fresh-holdout cost in `re-p4-winner-evidence` depends on the holdout size; the run count is an estimate.
 - The phase 4 run count is now a formula (T04), and its floor passes the P4 scope of 120 with the other P4 lanes. DP1.16 is decided: cut the design to fit 120. DECIDED (Dave, 2026-11-10): the cut has 15 or more controls, and bar row 8 of `re-retire-critical` asks for that count. The other numbers of the cut are not decided. The map gives no lane sizes, so no flip date is given.
 - The Cursor pool share is unmeasured (T13). The pool is weekly, additional usage is disabled, and the 152 engine starts of 11-02 to 11-04 cost $0 (facts of 2026-11-09, "Capacity plan / Cursor"). The percent that the engine week used is unknown. The 100 live cap and the 240 stop are our own numbers until the first sweep week measures the share. A run past the pool fails, so a full pool stops the sweep and every other Cursor use of that week. DP1.2 is decided: Dave approved the caps as our own numbers, and no cap goes up before the share is known. The measurement itself is still to do.
@@ -1683,6 +1702,6 @@ Added by the premortem (2026-11-09). These risks stay open after the edits:
 - Old card (T14, tap 2). Dave's answer of 2026-11-09: mark the old `re-gate-ready` card done with the SPLIT note. Until the seed step applies it, the card stays on the board as `blocked`.
 - Adopted cards (T08). DP1.19 is decided: mark the 6 adopted cards done. Until the seed step applies it, they stay in `backlog` and claimable.
 - Long lane on the path. Dave split `re-live-advisory` (DP1.18, 2026-11-09). The long lane is now `re-live-accrual`: it stays open for 2 weeks or more, and only `re-retire-prepr-cli` and `re-gate-shadow-run` wait on it by edge. The owner of its daily sweep is decided (DP1.17): the coordinator seat for the first 2 weeks. The CLI gate counts at least 4 weeks, and the accrual check covers 2. A scheduled task after the first 2 weeks needs Dave's own yes. DECIDED (Dave, 2026-11-10): the seat keeps the daily sweep until that yes.
-- Frozen SHA (DP1.5). Path F is decided, but no record names the SHA of "today's engine". The count cannot start before the coordinator records it. This is point (b) of "Open after DP1".
+- Frozen SHA (DP1.5). Point (b) of "Open after DP1" is decided (Dave, 2026-11-10): the `main` SHA right after `re-critical-model-check` lands. The count cannot start before the coordinator records the value. Cost shown to Dave: the first ask moves 2 rounds later.
 - Route J cost (DP1.8). The CLI flip now waits for 20 lanes, with two gold lanes, `hf-judge-precheck` and the two P4 prefactor lanes. `re-seed-gold-b` is a long lane (60 seeds at 8 a day take 8 days or more).
 - Dave's load (E03). The decision points hold 36 items. DP1 is answered, so 17 remain (DP2 and DP3). The orchestration plan holds the rest of that finding (several lanes per PR, 2 workers at GO, the "waiting on Dave" list).
