@@ -70,6 +70,9 @@
  *   node scripts/coordination/lane.mjs renew            # push my leases out to now+90m; a later lease (a park) stays
  *   node scripts/coordination/lane.mjs say "message" [--to <name|sid-prefix>] [--lane <id>]
  *   node scripts/coordination/lane.mjs inbox [--peek]   # unread; advances watermark unless --peek
+ *   node scripts/coordination/lane.mjs inbox --id <N>   # read-only: one event in full, no cursor write. Only a direct message to me, or a broadcast of this board
+ *                                                       # (a direct message needs no board). Line 1 `event <N> from <label> kind <kind> [lane <id>]`, then the body as stored.
+ *                                                       # Any other id: `REFUSED inbox <N> [not-yours|no-such-event] -- text`, exit 4; a malformed <N> is a usage error, exit 1
  *   node scripts/coordination/lane.mjs add <id> --title "..." [--track t] [--scope "..."] [--band P0|P1|P2|none] [--priority 1-999]
  *                                                       # on an existing lane an omitted --track / --band / --priority keeps the stored value; a lane that a live
  *                                                       # session other than you holds is refused: `REFUSED add <id> [not-holder] -- text`, exit 4
@@ -453,6 +456,32 @@ const UNREAD_SQL = `e.session_id <> $1::text AND (
      AND e.id > COALESCE((SELECT MAX(last_event_id) FROM agentic_os.lane_watermark
                            WHERE session_id = $1::text OR starts_with(session_id, $1::text || '@')), 0)))`;
 const unreadParams = (myId, board) => [myId, board, wmKey(myId, board)];
+
+/**
+ * `inbox --id <N>`: one event in full, read-only (contract C11 of coord-banner-page-budget). It prints a direct message to
+ * me, or a broadcast of the board of this folder. It writes no cursor. A direct message resolves no board, so it works in a
+ * folder with no board. The text of a refusal names neither the sender nor the body.
+ * Output: `event <N> from <label> kind <kind>[ lane <id>]`, a newline, then the body byte for byte.
+ */
+async function inboxOne(c, myId) {
+  const raw = flags.id;
+  // 18 digits at most: the id is a bigint, and a longer number would reach Postgres as an out of range error.
+  if (typeof raw !== 'string' || !/^[1-9]\d{0,17}$/.test(raw)) {
+    throw new Error('usage: lane.mjs inbox --id <N> (N is a positive whole number of at most 18 digits; nothing was run)');
+  }
+  const e = (await c.query(`SELECT * FROM agentic_os.lane_event WHERE id = $1::bigint`, [raw])).rows[0];
+  // C11: a refusal is one line, so neither refusal has a hint line.
+  if (!e) throw refusal('inbox', raw, 'no-such-event', `there is no event ${raw}`);
+  // Order matters: a direct message to me never asks for a board (softBoard throws on an unknown --project).
+  const mine = e.to_session_id === myId;
+  const board = e.to_session_id === null && !mine ? softBoard() : null;
+  if (!mine && !(board && e.project_key === board.key)) {
+    throw refusal('inbox', raw, 'not-yours', 'that event is not a direct message to you or a broadcast of this board');
+  }
+  if (JSON_OUT) return e;
+  const sender = labelWithAgent(e.session_id, ids(), e.detail?.agent);
+  return `event ${e.id} from ${sender} kind ${e.kind}${e.lane_id ? ` lane ${e.lane_id}` : ''}\n${e.body ?? ''}`;
+}
 
 /** Live sessions on a board (ALIVE_AT as everywhere), or on the whole machine when `all`. */
 async function livePeers(c, board, all) {
@@ -2016,6 +2045,7 @@ const commands = {
    */
   async inbox(c) {
     const myId = me();
+    if (flags.id !== undefined) return inboxOne(c, myId);
     const board = projectOf();
     const { rows } = await c.query(
       `SELECT e.* FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`, unreadParams(myId, board.key),

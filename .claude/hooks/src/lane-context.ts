@@ -124,7 +124,11 @@ const LEASE_MINUTES = 90;
 const STALE_MINUTES = 5;
 /** Past this, an injected digest stops being a summary and starts being a wall. */
 const MAX_EVENTS = 12;
-/** Peer sessions listed at SessionStart. The rest become a "+N more sessions" line. */
+/**
+ * Peer sessions listed at SessionStart. The rest become a "+N more sessions" line.
+ * Limit: the peer scopes share BUDGETS.scopes (2,400 bytes), so each cut scope gets at least 240 bytes. That is
+ * more than the scope cut marker. Raise this only with that pool, or a cut scope can be the marker alone.
+ */
 const MAX_PEERS = 10;
 
 /**
@@ -328,12 +332,15 @@ export function formatReminderLines(rows: ReminderRow[], now: Date = new Date())
   const n = due.length === rows.length ? Math.max(total, due.length) : due.length;
   const cmd = laneCliCmd();
   const lines = [`## Reminders due (${n})`];
-  for (const r of due) {
+  // C4 of coord-banner-page-budget: an id over 64 bytes is not printed and counts in "+N more"; titles are clipped.
+  const shown = due.filter((r) => fitsId(r.id));
+  for (const r of shown) {
     const late = overdue(r.due_at as string, now);
-    lines.push(`  ${bandTag(r.band)} ${r.id.padEnd(28)} ${dueCT(r.due_at as string)}  ${late ? `${late}  ` : ''}${r.title}`);
+    const title = cutToBytes(r.title || '', TITLE_MAX_BYTES);
+    lines.push(`  ${bandTag(r.band)} ${r.id.padEnd(28)} ${dueCT(r.due_at as string)}  ${late ? `${late}  ` : ''}${title}`);
     if (r.action_id) lines.push(`     action: ${r.action_id} (shown only, nothing runs it)`);
   }
-  if (n > due.length) lines.push(`  +${n - due.length} more: \`${cmd} remind list --due\``);
+  if (n > shown.length) lines.push(`  +${n - shown.length} more: \`${cmd} remind list --due\``);
   lines.push(`  Ack: \`${cmd} remind ack <id>\` | Snooze: \`${cmd} remind snooze <id> --for 2h\``);
   return lines;
 }
@@ -417,6 +424,144 @@ export function logLaneContextError(sid: string, eventName: string, err: unknown
   } catch { /* logging must never break the hook */ }
 }
 
+// ---------------------------------------------------------------- byte budgets (coord-banner-page-budget, CONTRACT v2)
+// The harness cuts a long hook text to a short preview (about 10,000 characters; the unit is not settled), and the
+// model then reads none of the rest. Every text this hook sends has a budget in UTF-8 bytes (C3). Bytes are never
+// fewer than characters, so the count is safe for both units.
+
+/** The byte budget of each text (C3) and of two parts of the SessionStart text (C4). */
+export interface Budgets { start: number; prompt: number; noBoard: number; midTurn: number; header: number; scopes: number }
+export const BUDGETS: Readonly<Budgets> = Object.freeze({
+  start: 8000, prompt: 6000, noBoard: 6000, midTurn: 4000, header: 5000, scopes: 2400,
+});
+/** A cut board event keeps at least this many bytes of its body (C5c). */
+const MIN_BODY_BYTES = 240;
+/** Past this hook age no cursor is written (C10): the harness may kill the hook before its text is out. */
+const UPTIME_LIMIT_S = 3.0;
+/** A lane id longer than this is never printed, and never printed cut (C4). It counts in the "+N more" text. */
+const ID_MAX_BYTES = 64;
+const TITLE_MAX_BYTES = 100;
+const HOLD_MAX = 8;
+const PEER_LANES_MAX = 3;
+
+/** Test seams. `uptime` is read at call time, so a spy on process.uptime works too. */
+export interface RunOpts { uptime?: () => number; budgets?: Partial<Budgets> }
+interface PageCtx { budgets: Budgets; late: () => boolean }
+
+function pageCtx(opts: RunOpts): PageCtx {
+  const clock = opts.uptime ?? (() => process.uptime());
+  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S };
+}
+
+export function utf8Bytes(s: string): number {
+  return Buffer.byteLength(s, 'utf8');
+}
+
+/** The longest start of `s` that is at most `max` bytes. It never splits a code point. */
+export function cutToBytes(s: string, max: number): string {
+  if (max <= 0) return '';
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.length <= max) return s;
+  let end = max;
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1; // buf[end] is a continuation byte: the cut is inside a character
+  return buf.subarray(0, end).toString('utf8');
+}
+
+/**
+ * The share rule (C6). Shares `pool` bytes between texts of the given sizes, in input order. A text smaller than
+ * its share keeps its size and gives the rest back; the larger texts get one level. Returns null when a text that
+ * must be cut gets less than `min`, and when the pool is negative and there is a text: the caller's fixed bytes
+ * (the line prefixes of C5c) do not fit, so no share can fit, not even an empty one. No I/O.
+ */
+export function shareBytes(sizes: number[], pool: number, min = 0): number[] | null {
+  if (pool < 0 && sizes.length > 0) return null;
+  const order = sizes.map((_, i) => i).sort((a, b) => sizes[a] - sizes[b]);
+  const out = sizes.map(() => 0);
+  let left = pool;
+  for (let k = 0; k < order.length; k += 1) {
+    const i = order[k];
+    const level = Math.floor(left / (order.length - k));
+    if (sizes[i] > level && level < min) return null;
+    out[i] = Math.min(sizes[i], level);
+    left -= out[i];
+  }
+  return out;
+}
+
+/** The end of a cut event body (C5b), word for word. */
+export function cutMarker(more: number, id: number | string): string {
+  return ` …[cut, ${more} more bytes. Full text: ${laneCliCmd()} inbox --id ${id}]`;
+}
+
+/** The end of a cut peer scope (C4), word for word. */
+export function scopeCutMarker(): string {
+  return ` …[cut: ${laneCliCmd()} board]`;
+}
+
+/**
+ * The body whole when it fits `allowance` bytes, else cut with the marker. The room for the marker assumes that
+ * all of the body is cut, so the real marker is never longer than the room. The result fits when the allowance
+ * is larger than that marker.
+ */
+export function cutBody(body: string, allowance: number, id: number | string): string {
+  const size = utf8Bytes(body);
+  if (size <= allowance) return body;
+  const kept = cutToBytes(body, allowance - utf8Bytes(cutMarker(size, id)));
+  return kept + cutMarker(size - utf8Bytes(kept), id);
+}
+
+const boardHeading = (board: string): string => `## Lane board ${board} (concurrent sessions on this board)`;
+
+/** C2: the text a board path sends when its own text is over its budget. It marks nothing as read. */
+export function boardFallback(board: string, me: string, oldestDmId: number | null): string {
+  const cmd = laneCliCmd();
+  const lines = [boardHeading(board), `You are ${me}.`, `Lane text over its budget. Run: ${cmd} board`];
+  if (oldestDmId !== null) lines.push(`Oldest direct message: ${cmd} inbox --id ${oldestDmId}`);
+  return lines.join('\n');
+}
+
+/** C2: the text the no-board path sends when its own text is over its budget. */
+export function noBoardFallback(oldestDmId: number): string {
+  return `A direct message waits. Run: ${laneCliCmd()} inbox --id ${oldestDmId}`;
+}
+
+/** C9: the "more unread" line names `inbox` only when a board row exists after this page. */
+export function namesInbox(o: { rowBefore: boolean; rowWritten: boolean }): boolean {
+  return o.rowBefore || o.rowWritten;
+}
+
+/** Bytes of one printed line plus its newline. */
+const lineBytes = (s: string): number => utf8Bytes(s) + 1;
+const fitsId = (id: string): boolean => utf8Bytes(id) <= ID_MAX_BYTES;
+
+/** "a, b, c" with at most `max` ids, then ", +N". An id over 64 bytes is not printed and counts in N (C4). */
+function idList<T>(items: T[], idOf: (x: T) => string, show: (x: T) => string, max: number, more: (n: number) => string): string {
+  const shown = items.filter((x) => fitsId(idOf(x))).slice(0, max);
+  const rest = items.length - shown.length;
+  return [...shown.map(show), ...(rest > 0 ? [more(rest)] : [])].join(', ');
+}
+
+/**
+ * C7: the newest direct messages, at most `max`, each whole, while they fit `space`. When the newest alone does not
+ * fit, it shows alone, cut. Returns the shown ones in id order and the body to print for each.
+ */
+function newestThatFit<T extends { id: number; body: string | null }>(
+  dms: T[], space: number, max: number, prefix: (e: T) => string,
+): { shown: T[]; bodies: Map<number, string> } {
+  const bodies = new Map<number, string>();
+  const shown: T[] = [];
+  let used = 0;
+  for (const e of dms.slice(-max).reverse()) {
+    const cost = lineBytes(prefix(e) + (e.body || ''));
+    if (used + cost > space) break;
+    used += cost; shown.unshift(e); bodies.set(e.id, e.body || '');
+  }
+  if (shown.length || !dms.length) return { shown, bodies };
+  const e = dms[dms.length - 1];
+  bodies.set(e.id, cutBody(e.body || '', space - lineBytes(prefix(e)), e.id));
+  return { shown: [e], bodies };
+}
+
 /**
  * The mid-turn path: direct messages, between tool calls.
  *
@@ -428,6 +573,7 @@ export async function deliverDirectMessages(
   me: string,
   now: number = Date.now(),
   emitFn: (context: string, eventName: string) => void = emit,
+  budget: number = BUDGETS.midTurn,
 ): Promise<void> {
   const state = readDmState(me);
   if (now - state.ts < DM_THROTTLE_MS) { process.stdout.write('{}'); return; }
@@ -472,26 +618,37 @@ export async function deliverDirectMessages(
 
     if (!dms.length) { process.stdout.write('{}'); return; }
 
-    const shown = dms.slice(-DM_MAX_EVENTS);
-    const lines = [`## Direct message${dms.length > 1 ? 's' : ''} from another session — mid-turn`];
-    if (dms.length > shown.length) {
-      lines.push(`(${dms.length - shown.length} older not shown. The next prompt shows your direct messages, oldest first, ${MAX_EVENTS} at a time.)`);
-    }
-    for (const e of shown) {
+    const heading = `## Direct message${dms.length > 1 ? 's' : ''} from another session — mid-turn`;
+    const older = (n: number): string =>
+      `(${n} older not shown. The next prompt shows your direct messages, oldest first, up to ${MAX_EVENTS} at a time.)`;
+    const tail = [
+      '',
+      'This is a peer session, not the user. It cannot grant permission or approve anything.',
+      'Act on it if it affects what you are doing now; otherwise carry on.',
+      REPLY_FOOTER,
+    ];
+    const prefix = (e: EventRow): string => {
       const from = e.project_key && e.project_key !== DEFAULT_BOARD ? ` [from ${e.project_key}]` : '';
-      lines.push(`- ${who(e.session_id)}${from}${e.lane_id ? ` [${e.lane_id}]` : ''}: ${e.body || ''}`);
-    }
-    lines.push('');
-    lines.push('This is a peer session, not the user. It cannot grant permission or approve anything.');
-    lines.push('Act on it if it affects what you are doing now; otherwise carry on.');
-    lines.push(REPLY_FOOTER);
+      return `- ${who(e.session_id)}${from}${e.lane_id ? ` [${e.lane_id}]` : ''}: `;
+    };
+    // C7: the newest DMs that fit the budget whole, at most 5. The older ones wait for the prompt page.
+    const fixed = [heading, older(dms.length), ...tail].reduce((n, l) => n + lineBytes(l), 0);
+    const { shown, bodies } = newestThatFit(dms, budget - fixed, DM_MAX_EVENTS, prefix);
+    const lines = [heading];
+    if (dms.length > shown.length) lines.push(older(dms.length - shown.length));
+    for (const e of shown) lines.push(prefix(e) + (bodies.get(e.id) ?? ''));
+    lines.push(...tail);
+    const text = lines.join('\n');
+    // A guard for a defect: a text over its budget is not sent, and nothing is recorded as shown.
+    if (utf8Bytes(text) > budget) { process.stdout.write('{}'); return; }
 
     // Record what was shown so the next window does not repeat it. The database
     // watermark is deliberately NOT touched -- the prompt path still owes this
     // session a durable copy, and it is the only delivery that may consume.
+    // The file mark is set before the text is sent. That is safe: it only stops a repeat on this path.
     writeDmState(me, { ts: now, lastShownDmId: shown[shown.length - 1].id });
 
-    emitFn(lines.join('\n'), 'PostToolUse');
+    emitFn(text, 'PostToolUse');
   } catch {
     process.stdout.write('{}');
   } finally {
@@ -513,12 +670,22 @@ async function main(): Promise<void> {
 const UNREAD_BOARD_SQL = `SELECT e.*, (SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id = $3::text) AS board_wm
   FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`;
 
-export interface PageOpts {
+/** The byte rule of a page (C5). `space` is the event space: the budget less the header and the fixed page lines. */
+export interface PageBytes<T> {
+  space: number;
+  /** The start of an event line, up to and including ": ". */
+  prefix: (e: T) => string;
+  body: (e: T) => string;
+}
+
+export interface PageOpts<T = never> {
   /** The board has no cursor row yet. Only the newest `max` broadcasts count, the older ones are skipped. */
   cold: boolean;
   /** A session with no board: DMs only, no board row. */
   noBoard?: boolean;
   max?: number;
+  /** No byte rule: the count rule only. */
+  bytes?: PageBytes<T>;
 }
 
 export interface UnreadPage<T> {
@@ -533,6 +700,8 @@ export interface UnreadPage<T> {
   boardRow: number | null;
   /** The `<id>@` row to write, or null for no write. */
   sentinel: number | null;
+  /** With a byte rule: the body to print for each event on the page, whole or cut with the marker. */
+  bodies?: Map<number, string>;
 }
 
 /** pg returns bigint as a string. Convert here, once, and never sort again: the SQL order is the id order. */
@@ -547,25 +716,84 @@ async function readUnread(client: Client, sql: string, params: unknown[]): Promi
  *
  * The board row never passes a cut event: it is one below the lowest event that is not shown. A cold start
  * counts the skipped older broadcasts as shown, so they do not hold the row back.
+ *
+ * With `opts.bytes` the page also fits the event space (C5). DMs are whole and a prefix in id order: the first one
+ * that does not fit waits, with every later one (C5a). When the oldest DM alone does not fit, it shows alone, cut
+ * (C5b). Board events share what the DMs leave (C5c). An event that waits counts in `cut`, so no cursor passes it.
  */
 export function pageUnread<T extends { id: number; to_session_id: string | null }>(
-  unread: T[], opts: PageOpts,
+  unread: T[], opts: PageOpts<T>,
 ): UnreadPage<T> {
   const max = opts.max ?? MAX_EVENTS;
   const dms = unread.filter((e) => e.to_session_id);
   const bcs = unread.filter((e) => !e.to_session_id);
   const skipped = opts.cold && !opts.noBoard ? Math.max(0, bcs.length - max) : 0;
   const live = bcs.slice(skipped);
-  const shownDms = dms.slice(0, max);
-  const cutDms = dms.slice(max);
-  const shownBcs = cutDms.length ? [] : live.slice(0, max - shownDms.length);
+  const bytes = opts.bytes ? memoPrefix(opts.bytes) : undefined;
+  const bodies = new Map<number, string>();
+  const dmPick = pickDms(dms.slice(0, max), bytes, bodies);
+  const shownDms = dmPick.shown;
+  const cutDms = dms.slice(shownDms.length);
+  const shownBcs = cutDms.length || dmPick.alone ? []
+    : pickBoardEvents(live.slice(0, max - shownDms.length), bytes, dmPick.left, bodies);
   const cutBcs = live.slice(shownBcs.length);
   const onPage = new Set<T>([...shownDms, ...shownBcs]);
   const rows = cursorRows(unread, shownDms, [cutDms[0], cutBcs[0]], opts);
   return {
     events: unread.filter((e) => onPage.has(e)),
     cut: cutDms.length + cutBcs.length, cutDm: cutDms.length, skipped, ...rows,
+    ...(bytes ? { bodies } : {}),
   };
+}
+
+/** The prefix of an event line once per event: it reads an identity file. */
+function memoPrefix<T extends { id: number }>(b: PageBytes<T>): PageBytes<T> {
+  const seen = new Map<number, string>();
+  const prefix = (e: T): string => {
+    let p = seen.get(e.id);
+    if (p === undefined) { p = b.prefix(e); seen.set(e.id, p); }
+    return p;
+  };
+  return { ...b, prefix };
+}
+
+/** C5a and C5b. `left` is the event space that the DMs leave for board events. */
+function pickDms<T extends { id: number }>(
+  dms: T[], b: PageBytes<T> | undefined, bodies: Map<number, string>,
+): { shown: T[]; left: number; alone: boolean } {
+  if (!b) return { shown: dms, left: 0, alone: false };
+  const shown: T[] = [];
+  let left = b.space;
+  for (const e of dms) {
+    const cost = lineBytes(b.prefix(e) + b.body(e));
+    if (cost > left) break;
+    left -= cost; shown.push(e); bodies.set(e.id, b.body(e));
+  }
+  if (shown.length || !dms.length) return { shown, left, alone: false };
+  const e = dms[0];
+  bodies.set(e.id, cutBody(b.body(e), b.space - lineBytes(b.prefix(e)), e.id));
+  return { shown: [e], left: 0, alone: true };
+}
+
+/**
+ * C5c. The oldest board events whose bodies share `room` bytes, each body at least MIN_BODY_BYTES plus its marker.
+ * When the minimum does not fit, the newest is removed and the share runs again. No byte rule: all of them.
+ */
+function pickBoardEvents<T extends { id: number }>(
+  cands: T[], b: PageBytes<T> | undefined, room: number, bodies: Map<number, string>,
+): T[] {
+  if (!b) return cands;
+  for (let n = cands.length; n > 0; n -= 1) {
+    const take = cands.slice(0, n);
+    const sizes = take.map((e) => utf8Bytes(b.body(e)));
+    const pool = room - take.reduce((s, e) => s + lineBytes(b.prefix(e)), 0);
+    const marker = Math.max(...take.map((e, i) => utf8Bytes(cutMarker(sizes[i], e.id))));
+    const shares = shareBytes(sizes, pool, MIN_BODY_BYTES + marker);
+    if (!shares) continue;
+    take.forEach((e, i) => bodies.set(e.id, cutBody(b.body(e), shares[i], e.id)));
+    return take;
+  }
+  return [];
 }
 
 /** The two cursor values for a page. `firstCut` holds the first cut DM and the first cut broadcast, if any. */
@@ -614,7 +842,7 @@ async function writeCursors(client: Client, rows: Array<[string, number]>): Prom
  * `coldBoard`: a board page with no cursor row. When it cuts a DM and a board event, the cut board events
  * come back only while they are among the newest MAX_EVENTS of the board (the cold start skips the rest).
  */
-function moreLine(page: UnreadPage<unknown>, withCmd: boolean, coldBoard: boolean): string {
+function moreLine(page: Pick<UnreadPage<unknown>, 'cut' | 'cutDm'>, withCmd: boolean, coldBoard: boolean): string {
   if (coldBoard && page.cutDm > 0 && page.cut > page.cutDm) {
     return `  (${page.cut} more unread, ${page.cutDm} direct to you. Later prompts show the direct ones, oldest first. `
       + `The board events show only while they are among the newest ${MAX_EVENTS} of this board.)`;
@@ -637,22 +865,43 @@ interface UnreadLineOpts {
  */
 function unreadLines(page: UnreadPage<EventRow>, board: string | null, opts: UnreadLineOpts): string[] {
   const here = board ?? DEFAULT_BOARD;
-  const lines = [`## ${page.events.length + page.cut} lane update(s) since you last looked`];
-  for (const e of page.events) {
-    const from = who(e.session_id);
-    const dm = e.to_session_id ? ' (direct to you)' : '';
-    const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : '';
-    const lane = e.lane_id ? ` [${e.lane_id}]` : '';
-    lines.push(`- ${from}${crossed} ${e.kind}${lane}${dm}: ${e.body || ''}`);
-  }
+  const lines = [countLine(page.events.length + page.cut)];
+  for (const e of page.events) lines.push(eventPrefix(e, here) + (page.bodies?.get(e.id) ?? e.body ?? ''));
   if (page.cut > 0) lines.push(moreLine(page, opts.withCmd, opts.coldBoard));
   // The cold line prints once: on the page that writes the board row. A page that writes only the sentinel stays cold.
-  if (page.skipped > 0 && page.boardRow !== null) {
-    lines.push(`  (${page.skipped} older board events are not shown on your first look at this board.)`);
-  }
+  if (page.skipped > 0 && page.boardRow !== null) lines.push(coldLine(page.skipped));
   if (page.events.some((e) => e.to_session_id)) lines.push(REPLY_FOOTER);
   return lines;
 }
+
+const countLine = (n: number): string => `## ${n} lane update(s) since you last looked`;
+const coldLine = (n: number): string => `  (${n} older board events are not shown on your first look at this board.)`;
+
+/** The start of an event line, up to and including ": ". `here` is the board of the page. */
+function eventPrefix(e: EventRow, here: string): string {
+  const dm = e.to_session_id ? ' (direct to you)' : '';
+  const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : '';
+  const lane = e.lane_id ? ` [${e.lane_id}]` : '';
+  return `- ${who(e.session_id)}${crossed} ${e.kind}${lane}${dm}: `;
+}
+
+/**
+ * C5: bytes of the fixed page lines at their longest (the count line, the longest "more unread" line, the cold line,
+ * the reply footer), each with its newline. The event space is the budget less this and less the header.
+ */
+function pageReserve(unread: EventRow[]): number {
+  const shape = { cut: unread.length, cutDm: unread.filter((e) => e.to_session_id).length };
+  const more = Math.max(lineBytes(moreLine(shape, true, false)), lineBytes(moreLine(shape, false, true)));
+  return more + [countLine(unread.length), coldLine(unread.length), REPLY_FOOTER].reduce((n, l) => n + lineBytes(l), 0);
+}
+
+/** The byte rule of a board or no-board page. */
+function eventBytes(space: number, board: string | null): PageBytes<EventRow> {
+  const here = board ?? DEFAULT_BOARD;
+  return { space, prefix: (e) => eventPrefix(e, here), body: (e) => e.body || '' };
+}
+
+const oldestDmId = (unread: EventRow[]): number | null => unread.find((e) => e.to_session_id)?.id ?? null;
 
 /**
  * An interactive session whose cwd has no board (T7: started in the home folder) still gets its direct messages.
@@ -663,13 +912,18 @@ function unreadLines(page: UnreadPage<EventRow>, board: string | null, opts: Unr
  * sentinel is read by the same MAX over `session_id = <id> OR starts_with(session_id, <id> || '@')`, so the DM is
  * not shown again on any board, and no board key is empty, so no board cursor is ever this row.
  */
-async function directMessagesOnly(client: Client, me: string, eventName: string): Promise<object> {
+async function directMessagesOnly(client: Client, me: string, eventName: string, ctx: PageCtx): Promise<object> {
   const dms = await readUnread(client, `SELECT e.* FROM agentic_os.lane_event e WHERE ${DM_ONLY_SQL} ORDER BY e.id`, [me]);
   if (!dms.length) return {};
-  // The sentinel always moves, to the newest DM shown. A cut DM stays above it for the next prompt.
-  const page = pageUnread(dms, { cold: false, noBoard: true });
-  await writeCursors(client, cursorWrites(me, null, page));
-  return buildOutput(unreadLines(page, null, { withCmd: false, coldBoard: false }).join('\n'), eventName);
+  const late = ctx.late();
+  const budget = ctx.budgets.noBoard;
+  // The sentinel moves to the newest DM shown. A DM that waits stays above it for the next prompt.
+  const page = pageUnread(dms, { cold: false, noBoard: true, bytes: eventBytes(budget - pageReserve(dms), null) });
+  const text = unreadLines(page, null, { withCmd: false, coldBoard: false }).join('\n');
+  // C2: built and measured first. Over its budget: the fallback, and no cursor moves.
+  if (utf8Bytes(text) > budget) return buildOutput(noBoardFallback(dms[0].id), eventName);
+  if (!late) await writeCursors(client, cursorWrites(me, null, page));
+  return buildOutput(text, eventName);
 }
 
 /**
@@ -694,8 +948,11 @@ export function parseRelatesTo(scope: string | null | undefined): string[] {
 async function relatedLine(client: Client, held: LaneRow[], own: LaneRow[]): Promise<string | null> {
   const mine = new Set(own.map((l) => l.id));
   const ids = [...new Set(held.flatMap((l) => parseRelatesTo(l.scope)))].filter((id) => !mine.has(id));
+  // An id over 64 bytes is not printed and counts in "+N more" (C4). The line is never cut: when no id is left
+  // to print, it is the count alone, and no lookup runs.
   if (!ids.length) return null;
-  const shown = ids.slice(0, RELATED_MAX);
+  const shown = ids.filter(fitsId).slice(0, RELATED_MAX);
+  if (!shown.length) return `Related: +${ids.length} more`;
   // `reclaimable` is the reclaim test of lane.mjs (rule L2.8): the lease ended AND the holder is quiet. Such a lane
   // gets no DM (M4.12), so the line must not name its old holder as a peer to message.
   const rows = (await client.query<{ id: string; owner_session_id: string | null; reclaimable: boolean | null }>(
@@ -720,13 +977,221 @@ async function relatedLine(client: Client, held: LaneRow[], own: LaneRow[]): Pro
   return `Related: ${shown.map((id) => `${id} (${tag(id)})`).join(', ')}${more}`;
 }
 
+// ---------------------------------------------------------------- SessionStart banner (C4)
+
+interface PeerRow { sid: string; lanes: string | null; scopes: string | null; total: string | number }
+
+/** What the SessionStart banner shows, read from the database. Each optional part fails alone (its own try/catch). */
+interface Banner {
+  here: LaneRow[];
+  elsewhere: LaneRow[];
+  peers: PeerRow[];
+  claimable: LaneRow[];
+  related: string | null;
+  reminderLines: string[];
+}
+
+/** A part of the banner and the one line it becomes when the header is over its budget (C4). */
+interface Section { full: string[]; short: string[] }
+
+/** The banner reads, in the order of today: my lanes, peers, claimable, the Related lookup, reminders. */
+async function loadBanner(client: Client, me: string, board: string, eventName: string): Promise<Banner> {
+  // Every lane I own, on any board: the banner shows this board's and summarises the rest.
+  const mine = (await client.query<LaneRow>(
+    `SELECT * FROM agentic_os.lane l WHERE owner_session_id=$1 AND state<>'done' ORDER BY ${laneOrderSql('l')}`,
+    [me],
+  )).rows;
+  const here = mine.filter((l) => (l.project_key ?? DEFAULT_BOARD) === board);
+  const elsewhere = mine.filter((l) => (l.project_key ?? DEFAULT_BOARD) !== board);
+
+  // Peers on THIS board that are alive. A peer with no lane is listed too ("holds no lane"):
+  // the reader needs its label to address it, and the LEFT JOIN keeps it.
+  //
+  // A peer of the board = its folder is under a board root, or it owns a lane on the board (T7: a
+  // session started in the home dir). starts_with, never LIKE: paths hold underscores.
+  //
+  // "Alive" is GREATEST(last_heartbeat, last_activity_at), never the heartbeat
+  // alone: heartbeat.ts fires on UserPromptSubmit only, so a peer that has been
+  // editing continuously for 25 minutes without its human typing reads as dead
+  // and is silently DROPPED from this warning -- the one place the collision
+  // was supposed to surface. GREATEST returns NULL only when both are NULL, so
+  // pre-writer rows degrade to the old behaviour rather than to "never alive".
+  //
+  // Sessions that hold a lane come first, then the newest heartbeat. LIMIT keeps the
+  // banner short on a busy day; `total` (a window count, taken before the LIMIT) lets
+  // the banner say how many were cut.
+  const peers = (await client.query<PeerRow>(
+    `SELECT s.id AS sid,
+            string_agg(l.id, ', ' ORDER BY l.id)              AS lanes,
+            string_agg(COALESCE(l.scope,''), ' | ')           AS scopes,
+            count(*) OVER ()                                  AS total
+     FROM sessions s
+     LEFT JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done' AND l.project_key = $3::text
+     WHERE GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+       AND s.id <> $1
+       AND ${peerOfBoardSql('$2', '$3')}
+     GROUP BY s.id
+     ORDER BY (count(l.id) > 0) DESC,
+              max(GREATEST(s.last_heartbeat, s.last_activity_at)) DESC NULLS LAST,
+              s.id
+     LIMIT ${MAX_PEERS}`,
+    [me, boardRoots(board), board],
+  )).rows;
+
+  // Own try/catch: a missing lane_dep table (or any error here) drops the claimable block and logs it, never the banner.
+  // openDepSql keeps a lane with an open dependency off the list; owner_session_id IS NULL stays (it offers fewer lanes than `next`).
+  let claimable: LaneRow[] = [];
+  try {
+    claimable = (await client.query<LaneRow>(
+      `SELECT * FROM agentic_os.lane l
+       WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
+         AND ${CLAIMABLE_NOT_REMINDER}
+         AND NOT ${openDepSql('l')}
+       ORDER BY ${laneOrderSql('l')} LIMIT 5`,
+      [board],
+    )).rows;
+  } catch (err) { logLaneContextError(me, eventName, err); }
+
+  // Own try/catch, like the reminders block: a failing lookup drops the Related line, never the banner.
+  let related: string | null = null;
+  if (here.length) {
+    try { related = await relatedLine(client, here, mine); } catch (err) { logLaneContextError(me, eventName, err); }
+  }
+  // Own try/catch: a failing reminders query (or a formatter bug) drops this block and logs it, never the banner.
+  let reminderLines: string[] = [];
+  try {
+    reminderLines = formatReminderLines((await client.query<ReminderRow>(REMINDERS_SQL, [board])).rows, new Date());
+  } catch (err) { logLaneContextError(me, eventName, err); }
+  return { here, elsewhere, peers, claimable, related, reminderLines };
+}
+
+/**
+ * The banner header, at most `budgets.header` bytes (C4). The lines that are never cut come first. Peer scopes
+ * share `budgets.scopes`. When the header is still over its budget, whole sections become one line each, in this
+ * order: peer scopes, Claimable, Reminders.
+ */
+function buildHeader(b: Banner, meLabel: string, board: string, budgets: Budgets): string[] {
+  const cmd = laneCliCmd();
+  const top = topLines(b, meLabel, board, cmd);
+  const order = [peerSection(b.peers, budgets.scopes, cmd), claimSection(b.claimable, cmd), reminderSection(b.reminderLines, cmd)];
+  let lines: string[] = [];
+  for (let n = 0; n <= order.length; n += 1) {
+    const [peers, claim, rem] = order.map((s, i) => (i < n ? s.short : s.full));
+    lines = [...top, '', ...peers];
+    if (rem.length) lines.push('', ...rem);
+    if (claim.length) lines.push('', ...claim);
+    lines.push('', `Commands: ${cmd} board | claim <id> | note <id> "..." | say "..." | done <id> [--merged <sha>] | remind list|set|snooze|ack`);
+    lines.push('Serialize commits — same branch, two committers race .git/index.lock.');
+    if (utf8Bytes(lines.join('\n')) <= budgets.header) break;
+  }
+  return lines;
+}
+
+/** The lines that are never cut: heading, "You are", "You hold" or the three no-lane lines, Milestone, Related. */
+function topLines(b: Banner, meLabel: string, board: string, cmd: string): string[] {
+  const lines = [boardHeading(board), `You are ${meLabel}.`, ''];
+  if (b.here.length) {
+    const held = idList(b.here, (l) => l.id, (l) => `${bandTag(l.band)} ${l.id}`, HOLD_MAX, (n) => `+${n} more: ${cmd} mine`);
+    lines.push(`You hold: ${held}`);
+    lines.push('Milestone (start, commit, decision by Dave, finding, block, done): send one DM to each holder in your RELATES TO list (M4.11).');
+    if (b.related) lines.push(b.related);
+  } else {
+    lines.push(`You hold no lane. 1. kanban-sync when the board has a phone page. 2. ${cmd} mine. 3. ${cmd} board --by priority, then claim the lane for your work by id.`);
+    lines.push(`No lane for it: ${cmd} add <new-id> --title "..." --scope "..." only when ${cmd} board --all shows the id in no state, then claim it. Never run add on an existing lane that you do not hold.`);
+    lines.push('Rules: lane-board.md. Rule ids: docs/coordination/standard.md.');
+  }
+  if (b.elsewhere.length) {
+    const shown = b.elsewhere.filter((l) => fitsId(l.id)).slice(0, 5).map((l) => `${l.id}@${l.project_key}`);
+    // C4: the ids not shown (past 5, or over 64 bytes) count in "+N more".
+    const hidden = b.elsewhere.length - shown.length;
+    const rest = hidden > 0 ? (shown.length ? `, +${hidden} more: ${cmd} mine` : `${cmd} mine`) : '';
+    lines.push(`+${b.elsewhere.length} on other boards: ${shown.join(', ')}${rest}`);
+  }
+  return lines;
+}
+
+/** Peer lines: 3 lane ids each, then "+N". The scope texts share `pool` bytes; a cut one ends with the scope marker. */
+function peerSection(peers: PeerRow[], pool: number, cmd: string): Section {
+  if (!peers.length) return { full: ['No other live session.'], short: ['No other live session.'] };
+  const head = 'Other live sessions and their scope — do not edit inside these:';
+  const scopes = peers.map((p) => (p.scopes || '').split('|').map((s) => s.trim()).filter(Boolean).join(' | '));
+  const shares = shareBytes(scopes.map(utf8Bytes), pool) ?? scopes.map(() => 0);
+  const full = [head];
+  const short = [head];
+  peers.forEach((p, i) => {
+    const lanes = p.lanes ? `holds ${idList(p.lanes.split(', '), (x) => x, (x) => x, PEER_LANES_MAX, (n) => `+${n}`)}` : 'holds no lane';
+    full.push(`  ${who(p.sid)} ${lanes}`);
+    short.push(`  ${who(p.sid)} ${lanes}`);
+    if (scopes[i]) full.push(`     scope: ${fitScope(scopes[i], shares[i])}`);
+  });
+  if (scopes.some(Boolean)) short.push(`     scopes: ${cmd} board`);
+  const cut = Number(peers[0].total) - peers.length;
+  const more = cut > 0 ? [`  +${cut} more sessions`] : [];
+  return { full: [...full, ...more], short: [...short, ...more] };
+}
+
+function fitScope(scope: string, share: number): string {
+  if (utf8Bytes(scope) <= share) return scope;
+  const marker = scopeCutMarker();
+  return cutToBytes(scope, share - utf8Bytes(marker)) + marker;
+}
+
+/** Claimable rows: an id over 64 bytes is not printed and counts in "+N more"; titles are clipped to 100 bytes. */
+function claimSection(rows: LaneRow[], cmd: string): Section {
+  if (!rows.length) return { full: [], short: [] };
+  const shown = rows.filter((l) => fitsId(l.id));
+  const full = ['Claimable (claim by id):',
+    ...shown.map((l) => `  ${bandTag(l.band)} ${l.id.padEnd(28)} ${cutToBytes(l.title || '', TITLE_MAX_BYTES)}`)];
+  if (rows.length > shown.length) full.push(`  +${rows.length - shown.length} more: ${cmd} next`);
+  return { full, short: [`Claimable (claim by id): ${cmd} next`] };
+}
+
+/** The reminder block, or its heading with the command when the header is over its budget. */
+function reminderSection(lines: string[], cmd: string): Section {
+  return { full: lines, short: lines.length ? [`${lines[0]}: ${cmd} remind list`] : [] };
+}
+
+interface BoardPageArgs {
+  me: string; meLabel: string; board: string; eventName: string;
+  unread: EventRow[];
+  /** The SessionStart header, or [] on the prompt path. */
+  header: string[];
+}
+
+/**
+ * The board text: the header (SessionStart only) and the page of unread events, in its budget (C3).
+ * C2: the text is built and measured before the write; over its budget the fallback goes out and no cursor moves.
+ * C10: the time is read once, after the last read query, so the inbox hint (C9) and the write agree.
+ */
+async function boardPage(client: Client, a: BoardPageArgs, ctx: PageCtx): Promise<object> {
+  const { me, board, unread, header } = a;
+  const late = ctx.late();
+  const budget = header.length ? ctx.budgets.start : ctx.budgets.prompt;
+  const cold = unread.length > 0 && unread[0].board_wm === null;
+  const headBytes = header.length ? utf8Bytes(header.join('\n')) + 2 : 0;
+  const page = pageUnread(unread, { cold, bytes: eventBytes(budget - headBytes - pageReserve(unread), board) });
+  const withCmd = namesInbox({ rowBefore: !cold, rowWritten: !late && page.boardRow !== null });
+  const lines = [...header];
+  if (unread.length) {
+    if (lines.length) lines.push('');
+    lines.push(...unreadLines(page, board, { withCmd, coldBoard: cold }));
+  }
+  const text = lines.join('\n');
+  if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
+  // Advance the cursors only for what was actually injected. Nothing was
+  // shown on a turn that produced no output, so nothing may be marked read.
+  // Events cut from the page stay above the cursors (see pageUnread).
+  if (unread.length && lines.length && !late) await writeCursors(client, cursorWrites(me, board, page));
+  return buildOutput(text, a.eventName);
+}
+
 /**
  * The job. Takes the raw stdin text so prompt-submit can run it in one process with
  * the other prompt hooks. Returns the object main() prints, or null when the
  * PostToolUse path has already written its own output. Never writes on the
  * SessionStart / UserPromptSubmit path.
  */
-export async function runLaneContext(raw: string): Promise<object | null> {
+export async function runLaneContext(raw: string, opts: RunOpts = {}): Promise<object | null> {
   let payload: { session_id?: string; hook_event_name?: string; session_title?: string; cwd?: string } = {};
   try { payload = JSON.parse(raw); } catch { /* fall through to the guard below */ }
 
@@ -780,140 +1245,15 @@ export async function runLaneContext(raw: string): Promise<object | null> {
       [me],
     );
 
+    const ctx = pageCtx(opts);
     const board = resolveBoardKey(me, payload.cwd || process.cwd());
-    if (!board) return isHeadless() ? {} : await directMessagesOnly(client, me, eventName);
+    if (!board) return isHeadless() ? {} : await directMessagesOnly(client, me, eventName, ctx);
 
     // Broadcasts are this board's; direct messages come from any board. See UNREAD_SQL.
     const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
-    const cold = unread.length > 0 && unread[0].board_wm === null;
-    const page = pageUnread(unread, { cold });
-
-    const lines: string[] = [];
-
-    if (isStart) {
-      // Every lane I own, on any board: the banner shows this board's and summarises the rest.
-      const mine = (await client.query<LaneRow>(
-        `SELECT * FROM agentic_os.lane l WHERE owner_session_id=$1 AND state<>'done' ORDER BY ${laneOrderSql('l')}`,
-        [me],
-      )).rows;
-      const here = mine.filter((l) => (l.project_key ?? DEFAULT_BOARD) === board);
-      const elsewhere = mine.filter((l) => (l.project_key ?? DEFAULT_BOARD) !== board);
-
-      // Peers on THIS board that are alive. A peer with no lane is listed too ("holds no lane"):
-      // the reader needs its label to address it, and the LEFT JOIN keeps it.
-      //
-      // A peer of the board = its folder is under a board root, or it owns a lane on the board (T7: a
-      // session started in the home dir). starts_with, never LIKE: paths hold underscores.
-      //
-      // "Alive" is GREATEST(last_heartbeat, last_activity_at), never the heartbeat
-      // alone: heartbeat.ts fires on UserPromptSubmit only, so a peer that has been
-      // editing continuously for 25 minutes without its human typing reads as dead
-      // and is silently DROPPED from this warning -- the one place the collision
-      // was supposed to surface. GREATEST returns NULL only when both are NULL, so
-      // pre-writer rows degrade to the old behaviour rather than to "never alive".
-      //
-      // Sessions that hold a lane come first, then the newest heartbeat. LIMIT keeps the
-      // banner short on a busy day; `total` (a window count, taken before the LIMIT) lets
-      // the banner say how many were cut.
-      const peers = (await client.query<{ sid: string; lanes: string | null; scopes: string | null; total: string | number }>(
-        `SELECT s.id AS sid,
-                string_agg(l.id, ', ' ORDER BY l.id)              AS lanes,
-                string_agg(COALESCE(l.scope,''), ' | ')           AS scopes,
-                count(*) OVER ()                                  AS total
-         FROM sessions s
-         LEFT JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done' AND l.project_key = $3::text
-         WHERE GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
-           AND s.id <> $1
-           AND ${peerOfBoardSql('$2', '$3')}
-         GROUP BY s.id
-         ORDER BY (count(l.id) > 0) DESC,
-                  max(GREATEST(s.last_heartbeat, s.last_activity_at)) DESC NULLS LAST,
-                  s.id
-         LIMIT ${MAX_PEERS}`,
-        [me, boardRoots(board), board],
-      )).rows;
-
-      // Own try/catch: a missing lane_dep table (or any error here) drops the claimable block and logs it, never the banner.
-      // openDepSql keeps a lane with an open dependency off the list; owner_session_id IS NULL stays (it offers fewer lanes than `next`).
-      let claimable: LaneRow[] = [];
-      try {
-        claimable = (await client.query<LaneRow>(
-          `SELECT * FROM agentic_os.lane l
-           WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
-             AND ${CLAIMABLE_NOT_REMINDER}
-             AND NOT ${openDepSql('l')}
-           ORDER BY ${laneOrderSql('l')} LIMIT 5`,
-          [board],
-        )).rows;
-      } catch (err) { logLaneContextError(me, eventName, err); }
-
-      lines.push(`## Lane board ${board} (concurrent sessions on this board)`);
-      lines.push(`You are ${who(me, payload.session_title || undefined)}.`);
-      lines.push('');
-      if (here.length) {
-        lines.push(`You hold: ${here.map((l) => `${bandTag(l.band)} ${l.id}`).join(', ')}`);
-        lines.push('Milestone (start, commit, decision by Dave, finding, block, done): send one DM to each holder in your RELATES TO list (M4.11).');
-        // Own try/catch, like the reminders block: a failing lookup drops the Related line, never the banner.
-        try {
-          const related = await relatedLine(client, here, mine);
-          if (related) lines.push(related);
-        } catch (err) { logLaneContextError(me, eventName, err); }
-      } else {
-        const cmd = laneCliCmd();
-        lines.push(`You hold no lane. 1. kanban-sync when the board has a phone page. 2. ${cmd} mine. 3. ${cmd} board --by priority, then claim the lane for your work by id.`);
-        lines.push(`No lane for it: ${cmd} add <new-id> --title "..." --scope "..." only when ${cmd} board --all shows the id in no state, then claim it. Never run add on an existing lane that you do not hold.`);
-        lines.push('Rules: lane-board.md. Rule ids: docs/coordination/standard.md.');
-      }
-      if (elsewhere.length) {
-        const shown = elsewhere.slice(0, 5).map((l) => `${l.id}@${l.project_key}`).join(', ');
-        lines.push(`+${elsewhere.length} on other boards: ${shown}${elsewhere.length > 5 ? ', ...' : ''}`);
-      }
-      if (peers.length) {
-        lines.push('');
-        lines.push('Other live sessions and their scope — do not edit inside these:');
-        for (const p of peers) {
-          lines.push(`  ${who(p.sid)} ${p.lanes ? `holds ${p.lanes}` : 'holds no lane'}`);
-          const sc = (p.scopes || '').split('|').map((s) => s.trim()).filter(Boolean).join(' | ');
-          if (sc) lines.push(`     scope: ${sc}`);
-        }
-        const cut = Number(peers[0].total) - peers.length;
-        if (cut > 0) lines.push(`  +${cut} more sessions`);
-      } else {
-        lines.push('');
-        lines.push('No other live session.');
-      }
-      // Own try/catch: a failing reminders query (or a formatter bug) drops this block and logs it, never the banner.
-      let reminderLines: string[] = [];
-      try {
-        reminderLines = formatReminderLines((await client.query<ReminderRow>(REMINDERS_SQL, [board])).rows, new Date());
-      } catch (err) { logLaneContextError(me, eventName, err); }
-      if (reminderLines.length) {
-        lines.push('');
-        lines.push(...reminderLines);
-      }
-      if (claimable.length) {
-        lines.push('');
-        lines.push('Claimable (claim by id):');
-        for (const l of claimable) lines.push(`  ${bandTag(l.band)} ${l.id.padEnd(28)} ${l.title}`);
-      }
-      lines.push('');
-      lines.push(`Commands: ${laneCliCmd()} board | claim <id> | note <id> "..." | say "..." | done <id> [--merged <sha>] | remind list|set|snooze|ack`);
-      lines.push('Serialize commits — same branch, two committers race .git/index.lock.');
-    }
-
-    if (unread.length) {
-      if (lines.length) lines.push('');
-      lines.push(...unreadLines(page, board, { withCmd: !cold, coldBoard: cold }));
-    }
-
-    // Advance the cursors only for what was actually injected. Nothing was
-    // shown on a turn that produced no output, so nothing may be marked read.
-    // Events cut from the page stay above the cursors (see pageUnread).
-    if (unread.length && lines.length) {
-      await writeCursors(client, cursorWrites(me, board, page));
-    }
-
-    return buildOutput(lines.join('\n'), eventName);
+    const meLabel = who(me, payload.session_title || undefined);
+    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets) : [];
+    return await boardPage(client, { me, meLabel, board, eventName, unread, header }, ctx);
   } catch (err) {
     // Nothing on stdout by contract. No database, no tables, no lanes, slow connect — all
     // the same answer: say nothing and let the turn proceed. One throttled line in the

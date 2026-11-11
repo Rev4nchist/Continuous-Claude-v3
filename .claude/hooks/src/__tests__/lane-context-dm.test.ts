@@ -52,6 +52,7 @@ import {
   readDmState,
   writeDmState,
 } from '../lane-context.js';
+import { laneCliCmd } from '../shared/lane-board.js';
 
 const SRC = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), '..', 'lane-context.ts'),
@@ -240,7 +241,8 @@ describe('mid-turn text (ROW 47 and the reply footer, EDIT 4)', () => {
 
   it('ROW 47: with 8 direct messages the page shows the newest 5 and the new "older not shown" line, exact', async () => {
     const lines = await deliver(8);
-    expect(lines[1]).toBe('(3 older not shown. The next prompt shows your direct messages, oldest first, 12 at a time.)');
+    // C9 of coord-banner-page-budget: "up to 12 at a time".
+    expect(lines[1]).toBe('(3 older not shown. The next prompt shows your direct messages, oldest first, up to 12 at a time.)');
     const text = lines.join(NL);
     for (const gone of ['dm1', 'dm2', 'dm3']) expect(text).not.toContain(`: ${gone}`);
     for (const kept of ['dm4', 'dm5', 'dm6', 'dm7', 'dm8']) expect(text).toContain(`: ${kept}`);
@@ -269,5 +271,45 @@ describe('mid-turn text (ROW 47 and the reply footer, EDIT 4)', () => {
 
   it('EDIT 4: the footer text is one shared constant, not a copy in each delivery path', () => {
     expect(SRC.split(FOOTER).length - 1, 'the footer text must appear once in lane-context.ts').toBe(1);
+  });
+
+  /** Direct messages with the given bodies (ids 1..n), delivered by the real function. Returns the text and the session. */
+  async function deliverBodies(bodies: string[]): Promise<{ text: string; s: string }> {
+    const s = session();
+    fake.rows = bodies.map((body, i) => ({
+      id: i + 1, occurred_at: '2026-11-11T00:00:00Z', lane_id: null, kind: 'note',
+      session_id: PEER, to_session_id: s, body: `<dm${i + 1}>${body}`, project_key: 'continuous-claude',
+    }));
+    const emitFn = vi.fn();
+    await deliverDirectMessages(s, Date.now(), emitFn);
+    expect(emitFn, 'no context was emitted').toHaveBeenCalledTimes(1);
+    return { text: String(emitFn.mock.calls[0][0]), s };
+  }
+  const bytes = (t: string): number => Buffer.byteLength(t, 'utf8');
+  const shown = (t: string): string[] => [...t.matchAll(/<(dm\d+)>/g)].map((m) => m[1]);
+
+  it('F12 (C7): one direct message over 4,000 bytes shows alone, cut, with the marker; no throw; within 4,000 bytes', async () => {
+    const body = 'w'.repeat(5000);
+    const { text, s } = await deliverBodies([body]);
+    expect(bytes(text)).toBeLessThanOrEqual(4000);
+    expect(shown(text)).toEqual(['dm1']);
+    const line = text.split(NL).find((l) => l.includes('<dm1>')) ?? '';
+    const marker = line.match(/ …\[cut, (\d+) more bytes\. Full text: (.+) inbox --id 1\]$/);
+    expect(marker, 'the cut line has no marker').not.toBeNull();
+    expect(marker![2]).toBe(laneCliCmd());
+    const kept = line.slice(line.indexOf('<dm1>'), line.length - marker![0].length);
+    expect(bytes(kept) + Number(marker![1])).toBe(bytes(`<dm1>${body}`));
+    expect(readDmState(s).lastShownDmId).toBe(1);
+  });
+
+  it('F12 (C7): ordinary direct messages are whole: the newest that fit show, the older one waits, nothing is cut', async () => {
+    const { text, s } = await deliverBodies(['a'.repeat(1500), 'b'.repeat(1500), 'c'.repeat(1500)]);
+    expect(bytes(text)).toBeLessThanOrEqual(4000);
+    expect(shown(text)).toEqual(['dm2', 'dm3']);
+    expect(text).toContain(`<dm2>${'b'.repeat(1500)}`);
+    expect(text).toContain(`<dm3>${'c'.repeat(1500)}`);
+    expect(text).not.toMatch(/\[cut,/);
+    expect(text.split(NL)[1]).toBe('(1 older not shown. The next prompt shows your direct messages, oldest first, up to 12 at a time.)');
+    expect(readDmState(s).lastShownDmId).toBe(3);
   });
 });
