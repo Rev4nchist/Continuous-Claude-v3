@@ -5913,6 +5913,23 @@ function laneCliCmd(env = process.env) {
   return `node ${laneShimPath(env)}`;
 }
 
+// src/shared/lane-dep.ts
+init_trace_boot();
+var ALIAS_RE = /^[a-z_][a-z0-9_]*$/;
+function checkAlias(alias) {
+  if (typeof alias !== "string" || !ALIAS_RE.test(alias) || alias.startsWith("ld_")) {
+    throw new Error(`lane-dep: bad alias "${alias}"`);
+  }
+  return alias;
+}
+var lifecycle = (a) => `(${a}.kind IN ('done','state_changed') OR (${a}.kind = 'kanban' AND ${a}.detail->>'kind' = 'state'))`;
+var landedSha = (a) => `(SELECT ld_e.detail->>'merged' FROM agentic_os.lane_event ld_e WHERE ld_e.lane_id = ${a}.id AND ${lifecycle("ld_e")} ORDER BY ld_e.id DESC LIMIT 1)`;
+var laneMet = (a) => `(${a}.state = 'done' AND COALESCE(${landedSha(a)} ~ '^[0-9a-f]{40}$', false))`;
+var openEdgeWhere = (a) => `ld_d.lane_id = ${a}.id AND NOT EXISTS (SELECT 1 FROM agentic_os.lane ld_x WHERE ld_x.id = ld_d.depends_on AND ld_x.project_key = ld_d.project_key AND ${laneMet("ld_x")})`;
+function openDepSql(alias) {
+  return `EXISTS (SELECT 1 FROM agentic_os.lane_dep ld_d WHERE ${openEdgeWhere(checkAlias(alias))})`;
+}
+
 // src/shared/lane-sort.ts
 init_trace_boot();
 function bandRank(band) {
@@ -6411,17 +6428,27 @@ async function runLaneContext(raw) {
          LIMIT ${MAX_PEERS}`,
         [me, boardRoots(board), board]
       )).rows;
-      const claimable = (await client.query(
-        `SELECT * FROM agentic_os.lane l
-         WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
-           AND ${CLAIMABLE_NOT_REMINDER}
-         ORDER BY ${laneOrderSql("l")} LIMIT 5`,
-        [board]
-      )).rows;
+      let claimable = [];
+      try {
+        claimable = (await client.query(
+          `SELECT * FROM agentic_os.lane l
+           WHERE project_key = $1 AND state IN ('ready','backlog') AND owner_session_id IS NULL
+             AND ${CLAIMABLE_NOT_REMINDER}
+             AND NOT ${openDepSql("l")}
+           ORDER BY ${laneOrderSql("l")} LIMIT 5`,
+          [board]
+        )).rows;
+      } catch (err) {
+        logLaneContextError(me, eventName, err);
+      }
       lines.push(`## Lane board ${board} (concurrent sessions on this board)`);
       lines.push(`You are ${who(me, payload.session_title || void 0)}.`);
       lines.push("");
-      lines.push(here.length ? `You hold: ${here.map((l) => `${bandTag(l.band)} ${l.id}`).join(", ")}` : `You hold no lane. Claim one before starting work: \`${laneCliCmd()} next\``);
+      lines.push(here.length ? `You hold: ${here.map((l) => `${bandTag(l.band)} ${l.id}`).join(", ")}` : [
+        "You hold no lane. Claim one by id before starting work:",
+        `  ${laneCliCmd()} board --by priority`,
+        `  ${laneCliCmd()} claim <id>`
+      ].join("\n"));
       if (elsewhere.length) {
         const shown = elsewhere.slice(0, 5).map((l) => `${l.id}@${l.project_key}`).join(", ");
         lines.push(`+${elsewhere.length} on other boards: ${shown}${elsewhere.length > 5 ? ", ..." : ""}`);
@@ -6452,11 +6479,11 @@ async function runLaneContext(raw) {
       }
       if (claimable.length) {
         lines.push("");
-        lines.push("Claimable next:");
+        lines.push("Claimable (claim by id):");
         for (const l of claimable) lines.push(`  ${bandTag(l.band)} ${l.id.padEnd(28)} ${l.title}`);
       }
       lines.push("");
-      lines.push(`Commands: ${laneCliCmd()} board | next | claim <id> | note <id> "..." | say "..." | done <id> | remind list|set|snooze|ack`);
+      lines.push(`Commands: ${laneCliCmd()} board | claim <id> | note <id> "..." | say "..." | done <id> [--merged <sha>] | remind list|set|snooze|ack`);
       lines.push("Serialize commits \u2014 same branch, two committers race .git/index.lock.");
     }
     if (unread.length) {

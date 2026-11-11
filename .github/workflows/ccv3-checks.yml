@@ -262,9 +262,9 @@ jobs:
         timeout-minutes: 5
         run: npm ci --ignore-scripts --no-audit --no-fund
       # Explicit file names, not a glob: a missing file fails the step, so this gate cannot pass by finding nothing.
-      - name: lane board DB tests (render-board, lane-project, scratch-db)
+      - name: lane board DB tests (render-board, lane-project, lane-dep-claim, lane-dep-done, lane-dep-seed, scratch-db)
         timeout-minutes: 5
-        run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/scratch-db.test.mjs
+        run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs
       # These 13 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
       # They sit in this job because it already has the checkout with full history and the hooks install.
       - name: lane board tests without a database (kanban, lane-shim,path guard, registry drift, session label, probe boards)

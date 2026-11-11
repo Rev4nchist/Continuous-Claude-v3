@@ -25,19 +25,25 @@
  *   2. holder alive, lease expired   -> DENIED (both conditions are required)
  *   3. holder gone, lease expired    -> GRANTED (reclamation works at all)
  *   4. holder gone, lease live       -> DENIED (the lease alone still protects)
+ *   5. the dependency and pack rules (contract t2.1, points 6 and 7), through the real CLI:
+ *      open edge -> [open-dependency] exit 4 and no event; edge met -> claim; [blocked], [done];
+ *      [pack-held]; [second-re-lane]; --dep-override writes one dep_override event.
  *
  * Cases 2 and 4 are the ones that matter. Reclaiming on either condition alone
  * is the exact bug that made the file lock steal files from sessions that were
  * merely mid-turn.
  *
- * Usage: node scripts/coordination/lane-race-probe.mjs [--racers 24]
- * Exit 0 all properties hold | 1 a property failed | 2 could not run.
+ * Usage: CONTINUOUS_CLAUDE_DB_URL=<scratch url> node scripts/coordination/lane-race-probe.mjs [--racers 24]
+ * Point CONTINUOUS_CLAUDE_DB_URL at a scratch database (scratch-db.mjs create --through 6). Section 5 is skipped
+ * when table lane_dep is missing. A database whose name does not start with lanes_pr1_ is refused before any connection.
+ * Exit 0 all properties hold | 1 a property failed | 2 could not run, or the database is not a scratch database.
  */
 
 import { execFile } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
+import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -53,21 +59,27 @@ const PREFIX = '__laneprobe__';
 const args = process.argv.slice(2);
 const RACERS = Number(args[args.indexOf('--racers') + 1]) || 24;
 
+// Same env chain as lane.mjs, but this probe writes lanes, `re-` lanes and edges, so it runs on a scratch database only.
+// The URL is never printed: only the database name (never the password) is named in the message.
+const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL
+  || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
+try { assertScratchUrl(DB_URL); } catch {
+  process.stderr.write(`lane-race-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. ` +
+    "The probe writes lanes and edges. Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
+
 let Client;
 try { ({ Client } = requireDep('pg', { repoRoot: REPO })); } catch (e) { console.error(`lane-race-probe: ${e.message}`); process.exit(2); }
 
 function db() {
-  return new Client({
-    connectionString: process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL
-      || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude',
-    connectionTimeoutMillis: 4000,
-  });
+  return new Client({ connectionString: DB_URL, connectionTimeoutMillis: 4000 });
 }
 
 /** Run the real CLI in its own process, so N racers are N OS processes. */
-function claim(laneId, asSession) {
+function claim(laneId, asSession, extra = []) {
   return new Promise((resolve) => {
-    execFile(process.execPath, [CLI, 'claim', laneId, '--as', asSession],
+    execFile(process.execPath, [CLI, 'claim', laneId, ...extra, '--as', asSession],
       { cwd: REPO }, (err, stdout, stderr) => {
         resolve({ code: err ? (err.code ?? 1) : 0, out: String(stdout), err: String(stderr) });
       });
@@ -84,12 +96,58 @@ const c = db();
 await c.connect();
 
 const LANE = `${PREFIX}lane`;
+// Section 5 lanes start with `re-`, because the pack and second-lane rules key on that prefix.
+const RE = `re-${PREFIX}`;
 const cleanup = async () => {
-  await c.query(`DELETE FROM agentic_os.lane_event WHERE lane_id LIKE $1 OR session_id LIKE $1`, [`${PREFIX}%`]);
-  await c.query(`DELETE FROM agentic_os.lane WHERE id LIKE $1`, [`${PREFIX}%`]);
+  await c.query(`DELETE FROM agentic_os.lane_event WHERE lane_id LIKE $1 OR lane_id LIKE $2 OR session_id LIKE $1`, [`${PREFIX}%`, `${RE}%`]);
+  if ((await c.query(`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`)).rows[0].has) {
+    // Both columns, by the same prefixes (contract 1.5).
+    await c.query(`DELETE FROM agentic_os.lane_dep WHERE lane_id LIKE $1 OR lane_id LIKE $2 OR depends_on LIKE $1 OR depends_on LIKE $2`, [`${PREFIX}%`, `${RE}%`]);
+  }
+  await c.query(`DELETE FROM agentic_os.lane WHERE id LIKE $1 OR id LIKE $2`, [`${PREFIX}%`, `${RE}%`]);
   await c.query(`DELETE FROM agentic_os.lane_watermark WHERE session_id LIKE $1`, [`${PREFIX}%`]);
   await c.query(`DELETE FROM sessions WHERE id LIKE $1`, [`${PREFIX}%`]);
 };
+
+const mkLane = (id, state = 'backlog', branch = null) => c.query(
+  `INSERT INTO agentic_os.lane (id,title,track,state,priority,branch) VALUES ($1,'dep probe','probe',$2,99,$3)`, [id, state, branch]);
+const events = async (id) => (await c.query(`SELECT kind FROM agentic_os.lane_event WHERE lane_id=$1`, [id])).rows.map((r) => r.kind);
+const refused = (r, token) => r.code === 4 && new RegExp(`^REFUSED claim \\S+ \\[${token}\\] -- `, 'm').test(r.err);
+
+async function dependencyChecks() {
+  const [dep, w, blocked, done] = ['dep', 'w', 'blocked', 'done'].map((n) => `${PREFIX}${n}`);
+  await mkLane(dep, 'active'); await mkLane(w); await mkLane(blocked, 'blocked'); await mkLane(done, 'done');
+  await c.query(`INSERT INTO agentic_os.lane_dep (lane_id, depends_on, project_key) VALUES ($1,$2,'continuous-claude')`, [w, dep]);
+  const r5 = await claim(w, `${PREFIX}A`);
+  check('open edge -> [open-dependency], exit 4', refused(r5, 'open-dependency') && r5.err.includes(dep), `exit ${r5.code}: ${r5.err.split('\n')[0]}`);
+  check('a refusal writes no event and no owner', (await events(w)).length === 0 && (await c.query(`SELECT owner_session_id FROM agentic_os.lane WHERE id=$1`, [w])).rows[0].owner_session_id === null, `events: ${(await events(w)).join(',') || 'none'}`);
+  await c.query(`UPDATE agentic_os.lane SET state='done' WHERE id=$1`, [dep]);
+  await c.query(`INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, body, detail, project_key)
+                 VALUES ($1,'done',$2,'probe done',$3,'continuous-claude')`, [dep, `${PREFIX}A`, JSON.stringify({ state: 'done', merged: 'a'.repeat(40) })]);
+  const r6 = await claim(w, `${PREFIX}A`);
+  check('edge met (done + merged SHA) -> claim succeeds', r6.code === 0, `exit ${r6.code}: ${r6.err.split('\n')[0]}`);
+  const rb = await claim(blocked, `${PREFIX}A`);
+  check('blocked lane -> [blocked], exit 4', refused(rb, 'blocked'), `exit ${rb.code}`);
+  const rd = await claim(done, `${PREFIX}A`);
+  check('done lane -> [done], exit 4', refused(rd, 'done'), `exit ${rd.code}`);
+
+  const [v, f, m1, m2, ov] = ['v', 'f', 'm1', 'm2', 'ov'].map((n) => `${RE}${n}`);
+  await mkLane(v, 'backlog', 're/__laneprobe__pack'); await mkLane(f, 'backlog', 're/__laneprobe__pack');
+  const pa = await claim(v, `${PREFIX}P`);
+  const pb = await claim(f, `${PREFIX}Q`);
+  const pc = await claim(f, `${PREFIX}P`);
+  check('pack: holder P claims lane 1, other session Q -> [pack-held], P claims lane 2', pa.code === 0 && refused(pb, 'pack-held') && pc.code === 0, `${pa.code}/${pb.code}/${pc.code}`);
+  await mkLane(m1, 'backlog', 'main'); await mkLane(m2, 'backlog', 'main');
+  const s1 = await claim(m1, `${PREFIX}S`);
+  const s2 = await claim(m2, `${PREFIX}S`);
+  check('two re- lanes on branch main, one session -> [second-re-lane]', s1.code === 0 && refused(s2, 'second-re-lane'), `${s1.code}/${s2.code}`);
+
+  await mkLane(ov, 'backlog');
+  await c.query(`INSERT INTO agentic_os.lane_dep (lane_id, depends_on, project_key) VALUES ($1,'__laneprobe__nobody','continuous-claude')`, [ov]);
+  const ro = await claim(ov, `${PREFIX}T`, ['--dep-override', '--reason', 'probe']);
+  const evs = await events(ov);
+  check('--dep-override with a reason claims and writes one dep_override event', ro.code === 0 && evs.filter((k) => k === 'dep_override').length === 1, `exit ${ro.code}, events ${evs.join(',')}`);
+}
 
 try {
   await cleanup();
@@ -151,6 +209,11 @@ try {
   check('dead holder + live lease -> DENIED', r4.code === 3,
     r4.code === 0 ? 'lease alone did not protect the claim' : `exit ${r4.code}`);
 
+  // ------------------------------------------- 5. dependency and pack rules
+  const hasDep = (await c.query(`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`)).rows[0].has;
+  if (!hasDep) process.stdout.write('SKIP  section 5: table lane_dep is missing (database below migration 0006)\n');
+  else await dependencyChecks();
+
 } catch (e) {
   process.stderr.write(`probe could not run: ${e.message}\n`);
   await cleanup().catch(() => {});
@@ -160,8 +223,8 @@ try {
 
 await cleanup();
 const left = (await c.query(
-  `SELECT (SELECT count(*) FROM agentic_os.lane WHERE id LIKE $1)::int
-        + (SELECT count(*) FROM sessions WHERE id LIKE $1)::int AS n`, [`${PREFIX}%`],
+  `SELECT (SELECT count(*) FROM agentic_os.lane WHERE id LIKE $1 OR id LIKE $2)::int
+        + (SELECT count(*) FROM sessions WHERE id LIKE $1)::int AS n`, [`${PREFIX}%`, `${RE}%`],
 )).rows[0].n;
 check('probe left no fixtures behind', left === 0, `${left} row(s) remain`);
 await c.end();
