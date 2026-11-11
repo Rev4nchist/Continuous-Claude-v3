@@ -595,10 +595,11 @@ export async function runLaneContext(raw: string): Promise<object | null> {
     //      Both have their leases renewed already.
     await client.query(`SELECT set_config('lane.client_version', '${CLIENT_VERSION}', false)`);
 
-    // Proof of life for my own lanes. Harmless when I hold none.
+    // Proof of life for my own lanes. Harmless when I hold none. GREATEST keeps a later lease, so a parked
+    // lane keeps its park lease (a NULL lease gets now + LEASE_MINUTES).
     await client.query(
       `UPDATE agentic_os.lane
-         SET lease_expires_at = now() + interval '${LEASE_MINUTES} minutes'
+         SET lease_expires_at = GREATEST(lease_expires_at, now() + interval '${LEASE_MINUTES} minutes')
        WHERE owner_session_id = $1 AND state <> 'done'`,
       [me],
     );

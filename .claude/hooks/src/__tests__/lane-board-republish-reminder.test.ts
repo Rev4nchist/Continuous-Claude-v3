@@ -93,6 +93,27 @@ describe('lane change fires once per batch', () => {
   });
 });
 
+describe('park and the flag forms of state, release and done are lane changes', () => {
+  it('a park command line reminds, with the verb park', () => {
+    const d = decide(bash('node scripts/coordination/lane.mjs park re-program --for 24h --reason "seat away"'), false);
+    expect(d.action).toBe('remind');
+    expect(d.verb).toBe('park');
+    expect(decide(bash('node scripts/coordination/lane.mjs park re-program --until 2026-11-12 --reason "x"'), true).action).toBe('mark');
+  });
+
+  it.each([
+    'release L1 --blocked',
+    'release --blocked L1',
+    'state L1 active --reason "why now"',
+    'state L1 active --override --reason "x"',
+    'state L1 active --if-state ready',
+    'done L1 --merged "PR 1"',
+    'done L1 --no-pr --evidence "x"',
+  ])('%s is still a lane change', (rest) => {
+    expect(decide(bash(`node scripts/coordination/lane.mjs ${rest}`), false).action).toBe('remind');
+  });
+});
+
 describe('commands that must not fire', () => {
   it.each(['board', 'next', 'inbox', 'list', 'show', 'peers', 'mine'])('read-only verb %s', (verb) => {
     expect(decide(bash(`node scripts/coordination/lane.mjs ${verb}`), false).action).toBe('none');

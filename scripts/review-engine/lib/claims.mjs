@@ -3,7 +3,8 @@
 //
 // replayLane(events, beforeId = Infinity) returns { state, owner } after the lifecycle events with id < beforeId, in id order:
 //   claimed sets state to detail.state and owner to session_id; done and state_changed set state to detail.state;
-//   a kanban state event sets state to detail.to. The owner is cleared when the state becomes done or ready. Start: 'unknown'.
+//   a kanban state event sets state to detail.to. The owner is cleared when the state becomes done or ready, or when the event has
+//   detail.released === true (`release --blocked`: state blocked, owner NULL in the database). Start: 'unknown'.
 // checkClaims({ model, facts, rows, events, edges, programSeedId, since }) returns
 //   { errors: [{ rule, id, message }], notes: [{ rule, id, message }], floor: { id, source }, limit: string }
 //   Floor: only events with id > floor.id are judged. --since wins (coerced with Number); else the program seed event id;
@@ -27,7 +28,8 @@ function step(cur, e) {
   if (e.kind === 'claimed') return { state: e.detail?.state ?? cur.state, owner: e.session_id ?? null };
   if (!isLifecycle(e)) return cur;
   const state = stateAfter(e) ?? cur.state;
-  return { state, owner: state === 'done' || state === 'ready' ? null : cur.owner };
+  const freed = state === 'done' || state === 'ready' || e.detail?.released === true;
+  return { state, owner: freed ? null : cur.owner };
 }
 
 export function replayLane(events, beforeId = Infinity) {

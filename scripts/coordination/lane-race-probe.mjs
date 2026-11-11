@@ -28,6 +28,16 @@
  *   5. the dependency and pack rules (contract t2.1, points 6 and 7), through the real CLI:
  *      open edge -> [open-dependency] exit 4 and no event; edge met -> claim; [blocked], [done];
  *      [pack-held]; [second-re-lane]; --dep-override writes one dep_override event.
+ *   6. the owner rule, park and release --blocked (contract park-owner), through the real CLI:
+ *      a non-owner `state <id> review` on a live-held lane -> [not-holder], exit 4, no change, no event;
+ *      park --for 24h, then the owner dies and the leases move back 91 minutes: the control lane is claimed (exit 0),
+ *      the parked lane is denied (exit 3), and the stored lease was within 1 minute of the requested end;
+ *      release --blocked -> blocked, no owner, no lease, in ONE statement (a trigger raises on any lane that passes
+ *      through ready, or through blocked with an owner), then a stranger's claim -> [blocked], exit 4;
+ *      the exact argv of `program.mjs sync-board --apply` (state ... --if-state blocked --reason): exit 0, then [if-state];
+ *      F13, a second connection holds the row lock while a plain done waits and a merged done commits: the lane stays met;
+ *      F6, a forced event insert failure (a NOT VALID CHECK on lane_event): the --override change and its DM roll back;
+ *      without the failure --override writes both events, the DM first.
  *
  * Cases 2 and 4 are the ones that matter. Reclaiming on either condition alone
  * is the exact bug that made the file lock steal files from sessions that were
@@ -44,6 +54,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+import { DEFAULT_BOARD } from './lane-board.mjs';
+import { syncBoardStateArgv } from '../review-engine/lib/db-verbs.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -76,15 +88,16 @@ function db() {
   return new Client({ connectionString: DB_URL, connectionTimeoutMillis: 4000 });
 }
 
-/** Run the real CLI in its own process, so N racers are N OS processes. */
-function claim(laneId, asSession, extra = []) {
+/** Run the real CLI in its own process, so N racers are N OS processes. `extra` goes after the lane id; `--as` goes last. */
+function run(verb, laneId, asSession, extra = []) {
   return new Promise((resolve) => {
-    execFile(process.execPath, [CLI, 'claim', laneId, ...extra, '--as', asSession],
+    execFile(process.execPath, [CLI, verb, laneId, ...extra, '--as', asSession],
       { cwd: REPO }, (err, stdout, stderr) => {
         resolve({ code: err ? (err.code ?? 1) : 0, out: String(stdout), err: String(stderr) });
       });
   });
 }
+const claim = (laneId, asSession, extra = []) => run('claim', laneId, asSession, extra);
 
 const results = [];
 const check = (name, pass, detail) => {
@@ -99,6 +112,10 @@ const LANE = `${PREFIX}lane`;
 // Section 5 lanes start with `re-`, because the pack and second-lane rules key on that prefix.
 const RE = `re-${PREFIX}`;
 const cleanup = async () => {
+  // Section 6 puts a CHECK on lane_event and a trigger on lane for a moment; both are dropped in a `finally`, and again here.
+  await c.query(`ALTER TABLE agentic_os.lane_event DROP CONSTRAINT IF EXISTS zz_probe_block`);
+  await c.query(`DROP TRIGGER IF EXISTS zz_probe_no_split ON agentic_os.lane`);
+  await c.query(`DROP FUNCTION IF EXISTS agentic_os.zz_probe_no_split()`);
   await c.query(`DELETE FROM agentic_os.lane_event WHERE lane_id LIKE $1 OR lane_id LIKE $2 OR session_id LIKE $1`, [`${PREFIX}%`, `${RE}%`]);
   if ((await c.query(`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`)).rows[0].has) {
     // Both columns, by the same prefixes (contract 1.5).
@@ -112,7 +129,9 @@ const cleanup = async () => {
 const mkLane = (id, state = 'backlog', branch = null) => c.query(
   `INSERT INTO agentic_os.lane (id,title,track,state,priority,branch) VALUES ($1,'dep probe','probe',$2,99,$3)`, [id, state, branch]);
 const events = async (id) => (await c.query(`SELECT kind FROM agentic_os.lane_event WHERE lane_id=$1`, [id])).rows.map((r) => r.kind);
-const refused = (r, token) => r.code === 4 && new RegExp(`^REFUSED claim \\S+ \\[${token}\\] -- `, 'm').test(r.err);
+/** A refusal: exit 4 and line 1 `REFUSED <verb> <id> [<token>] -- ...` (contract t2.1 point 6). The verb is part of the match, so a claim refusal never passes for a state refusal. */
+const refusedVerb = (r, verb, token) => r.code === 4 && new RegExp(`^REFUSED ${verb} \\S+ \\[${token}\\] -- `, 'm').test(r.err);
+const refused = (r, token) => refusedVerb(r, 'claim', token);
 
 async function dependencyChecks() {
   const [dep, w, blocked, done] = ['dep', 'w', 'blocked', 'done'].map((n) => `${PREFIX}${n}`);
@@ -147,6 +166,147 @@ async function dependencyChecks() {
   const ro = await claim(ov, `${PREFIX}T`, ['--dep-override', '--reason', 'probe']);
   const evs = await events(ov);
   check('--dep-override with a reason claims and writes one dep_override event', ro.code === 0 && evs.filter((k) => k === 'dep_override').length === 1, `exit ${ro.code}, events ${evs.join(',')}`);
+}
+
+// ------------------------------------------------ 6. owner rule, park, release --blocked (contract park-owner)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const laneRow = async (id) => (await c.query(`SELECT state, owner_session_id AS owner, lease_expires_at AS lease, note FROM agentic_os.lane WHERE id=$1`, [id])).rows[0];
+const eventRows = async (id) => (await c.query(`SELECT kind, to_session_id AS "to", detail FROM agentic_os.lane_event WHERE lane_id=$1 ORDER BY id`, [id])).rows;
+const leaseMinutes = async (id) => Number((await c.query(`SELECT EXTRACT(EPOCH FROM (lease_expires_at - now())) / 60 AS m FROM agentic_os.lane WHERE id=$1`, [id])).rows[0].m);
+const liveSession = (sid) => c.query(
+  `INSERT INTO sessions (id, project, working_on, last_heartbeat) VALUES ($1,'probe','probe',now()) ON CONFLICT (id) DO UPDATE SET last_heartbeat=now()`, [sid]);
+/** A lane held by `owner` with a 90 minute lease. `live` also gives the owner a fresh sessions row. */
+async function heldLane(id, owner, { live = true, state = 'active' } = {}) {
+  await mkLane(id, state);
+  await c.query(`UPDATE agentic_os.lane SET owner_session_id=$2, lease_expires_at = now() + interval '90 minutes' WHERE id=$1`, [id, owner]);
+  if (live) await liveSession(owner);
+}
+async function withDdl(up, down, fn) {
+  await c.query(up);
+  try { return await fn(); } finally { await c.query(down); }
+}
+
+async function strangerStateChecks() {
+  const [A, S, id] = ['A', 'S', 'own'].map((n) => `${PREFIX}own-${n}`);
+  await heldLane(id, A);
+  const r = await run('state', id, S, ['review']);
+  const row = await laneRow(id);
+  check('non-owner state <id> review on a live-held lane -> [not-holder], exit 4', refusedVerb(r, 'state', 'not-holder') && r.err.includes(A.slice(0, 8)), `exit ${r.code}: ${r.err.split('\n')[0]}`);
+  check('the refused state change leaves state and owner alone and writes no event', row.state === 'active' && row.owner === A && (await eventRows(id)).length === 0,
+    `state ${row.state}, owner ${row.owner}, events ${(await eventRows(id)).length}`);
+  const ok = await run('state', id, A, ['review']);
+  check('control: the holder changes its own lane, with one event', ok.code === 0 && (await laneRow(id)).state === 'review' && (await eventRows(id)).length === 1, `exit ${ok.code}: ${ok.err.split('\n')[0]}`);
+}
+
+async function parkChecks() {
+  const [X, C1, C2, control, parked] = ['X', 'C1', 'C2', 'ctl', 'park'].map((n) => `${PREFIX}pk-${n}`);
+  await mkLane(control, 'ready'); await mkLane(parked, 'ready');
+  await liveSession(X);
+  const claims = [await claim(control, X), await claim(parked, X)];
+  const pk = await run('park', parked, X, ['--for', '24h', '--reason', 'probe park']);
+  const minutes = await leaseMinutes(parked);
+  check('park --for 24h by the holder: exit 0, stored lease within 1 minute of the requested end',
+    claims.every((r) => r.code === 0) && pk.code === 0 && Math.abs(minutes - 1440) <= 1, `claims ${claims.map((r) => r.code)}, park exit ${pk.code}: ${pk.err.split('\n')[0]}, lease ${minutes.toFixed(1)}m`);
+  // The owner dies and 91 minutes pass: only the lease of the control lane is then spent.
+  await c.query(`DELETE FROM sessions WHERE id=$1`, [X]);
+  await c.query(`UPDATE agentic_os.lane SET lease_expires_at = lease_expires_at - interval '91 minutes' WHERE id = ANY($1)`, [[control, parked]]);
+  const rc = await claim(control, C1);
+  const rp = await claim(parked, C2);
+  check('dead owner, 91 minutes on: the control lane is claimed (exit 0), the parked lane is denied (exit 3)', rc.code === 0 && rp.code === 3, `control ${rc.code}, parked ${rp.code}`);
+  const row = await laneRow(parked);
+  check('the denied parked lane keeps its owner, the review state and the PARKED note', row.owner === X && row.state === 'review' && /^PARKED until /.test(row.note ?? ''), `${row.state}, ${row.owner}, ${row.note}`);
+}
+
+/** A trigger that raises when a lane passes through `ready`, or through `blocked` with an owner: a two statement release cannot pass it. */
+const NO_SPLIT_UP = `CREATE FUNCTION agentic_os.zz_probe_no_split() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN
+  IF NEW.id LIKE '${PREFIX}%' AND ((NEW.state = 'ready' AND OLD.state <> 'ready') OR (NEW.state = 'blocked' AND NEW.owner_session_id IS NOT NULL)) THEN
+    RAISE EXCEPTION 'zz_probe_no_split: % went through % with owner %', NEW.id, NEW.state, NEW.owner_session_id;
+  END IF; RETURN NEW; END $f$;
+  CREATE TRIGGER zz_probe_no_split BEFORE UPDATE ON agentic_os.lane FOR EACH ROW EXECUTE FUNCTION agentic_os.zz_probe_no_split()`;
+const NO_SPLIT_DOWN = `DROP TRIGGER IF EXISTS zz_probe_no_split ON agentic_os.lane; DROP FUNCTION IF EXISTS agentic_os.zz_probe_no_split()`;
+
+async function releaseBlockedChecks() {
+  const [H, S, id, other] = ['H', 'S', 'id', 'other'].map((n) => `${PREFIX}rb-${n}`);
+  await heldLane(id, H); await heldLane(other, H);
+  const r = await withDdl(NO_SPLIT_UP, NO_SPLIT_DOWN, () => run('release', id, H, ['--blocked', '--reason', 'probe hold']));
+  const row = await laneRow(id);
+  check('release --blocked by the holder: blocked, no owner, no lease, the note; never ready, never blocked with an owner',
+    r.code === 0 && row.state === 'blocked' && row.owner === null && row.lease === null && row.note === 'probe hold', `exit ${r.code}: ${r.err.split('\n')[0]}, ${JSON.stringify(row)}`);
+  const evs = await eventRows(id);
+  check('release --blocked writes one state_changed board event for blocked and none for ready', evs.length === 1 && evs[0].kind === 'state_changed' && evs[0].to === null && evs[0].detail.state === 'blocked', JSON.stringify(evs));
+  const rc = await claim(id, S);
+  check('a stranger claim on the released lane -> [blocked], exit 4', refused(rc, 'blocked'), `exit ${rc.code}: ${rc.err.split('\n')[0]}`);
+  const rs = await run('release', other, S, ['--blocked', '--reason', 'probe hold']);
+  check('release --blocked by a stranger on a held lane -> [not-holder], exit 4, the lane is unchanged', refusedVerb(rs, 'release', 'not-holder') && (await laneRow(other)).state === 'active', `exit ${rs.code}: ${rs.err.split('\n')[0]}`);
+}
+
+/** The exact argv of sync-board --apply (scripts/review-engine/lib/db-verbs.mjs), through the CLI of this checkout. */
+async function syncBoardArgvChecks() {
+  const [S, id] = ['S', 'lane'].map((n) => `${PREFIX}sb-${n}`);
+  // The argv comes from db-verbs.mjs itself, so a change there is a change here. mkLane puts the lane on the default board.
+  const [verb, laneId, ...argv] = syncBoardStateArgv(id, DEFAULT_BOARD);
+  await mkLane(id, 'blocked');
+  const first = await run(verb, laneId, S, argv);
+  check('sync-board argv on an unowned blocked lane: exit 0, state backlog, one event with the reason', first.code === 0 && (await laneRow(id)).state === 'backlog'
+    && (await eventRows(id)).filter((e) => e.detail?.reason === 'program.mjs sync-board --apply').length === 1, `exit ${first.code}: ${first.err.split('\n')[0]}`);
+  const again = await run(verb, laneId, S, argv);
+  check('the same argv on a lane that is no longer blocked -> [if-state], exit 4, no second event', refusedVerb(again, 'state', 'if-state') && (await eventRows(id)).length === 1, `exit ${again.code}: ${again.err.split('\n')[0]}`);
+}
+
+/** F13: a plain done waits on the row lock while a merged done commits. The lane must stay met and the plain done must write nothing. */
+async function doneRaceChecks() {
+  const [H, id] = ['H', 'lane'].map((n) => `${PREFIX}f13-${n}`);
+  const sha = 'b'.repeat(40);
+  await heldLane(id, H);
+  const c2 = db();
+  await c2.connect();
+  try {
+    await c2.query('BEGIN');
+    await c2.query(`SELECT 1 FROM agentic_os.lane WHERE id=$1 FOR UPDATE`, [id]);
+    const plain = run('done', id, H);
+    let waiting = false;
+    for (const end = Date.now() + 10000; !waiting && Date.now() < end; await sleep(100)) {
+      waiting = (await c.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`)).rows[0].n > 0;
+    }
+    await c2.query(`UPDATE agentic_os.lane SET state='done', owner_session_id=NULL, lease_expires_at=NULL WHERE id=$1`, [id]);
+    await c2.query(`INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, body, detail, project_key) VALUES ($1,'done',$2,'probe merged done',$3,'continuous-claude')`,
+      [id, `${PREFIX}merger`, JSON.stringify({ state: 'done', merged: sha })]);
+    await c2.query('COMMIT');
+    const r = await plain;
+    const evs = await eventRows(id);
+    check('F13: the plain done was waiting on the row lock when the merged done committed', waiting, waiting ? '' : 'no waiter seen in pg_stat_activity');
+    check('F13: the plain done exits 0 with "already met" and the lane stays met (one done event, the merged one)',
+      r.code === 0 && /already met/.test(r.out) && (await laneRow(id)).state === 'done' && evs.length === 1 && evs[0].detail.merged === sha, `exit ${r.code}: ${r.out.split('\n')[0]}${r.err.split('\n')[0]}, events ${evs.length}`);
+  } finally {
+    await c2.end().catch(() => {});
+  }
+}
+
+/** F6: the board event of an --override fails; the change and the DM roll back. Then, without the failure, both events exist. */
+async function overrideRollbackChecks() {
+  const [H, S, id] = ['H', 'S', 'lane'].map((n) => `${PREFIX}f6-${n}`);
+  await heldLane(id, H);
+  const argv = ['review', '--override', '--reason', 'probe handover'];
+  const failed = await withDdl(`ALTER TABLE agentic_os.lane_event ADD CONSTRAINT zz_probe_block CHECK (kind <> 'state_changed') NOT VALID`,
+    `ALTER TABLE agentic_os.lane_event DROP CONSTRAINT IF EXISTS zz_probe_block`, () => run('state', id, S, argv));
+  const row = await laneRow(id);
+  const evs = await eventRows(id);
+  check('F6: --override with a failing board event: exit is not 0 or 4, state and owner unchanged, no event (not even the DM)',
+    failed.code !== 0 && failed.code !== 4 && row.state === 'active' && row.owner === H && evs.length === 0, `exit ${failed.code}, ${row.state}, ${row.owner}, events ${evs.map((e) => e.kind)}`);
+  const ok = await run('state', id, S, argv);
+  const after = await eventRows(id);
+  check('F6: --override --reason writes the DM to the old owner, then one board event (note, state_changed)',
+    ok.code === 0 && (await laneRow(id)).state === 'review' && after.map((e) => e.kind).join() === 'note,state_changed' && after[0].to === H && after[1].to === null,
+    `exit ${ok.code}: ${ok.err.split('\n')[0]}, ${JSON.stringify(after.map((e) => [e.kind, e.to]))}`);
+}
+
+async function ownerRuleChecks() {
+  await strangerStateChecks();
+  await parkChecks();
+  await releaseBlockedChecks();
+  await syncBoardArgvChecks();
+  await doneRaceChecks();
+  await overrideRollbackChecks();
 }
 
 try {
@@ -213,6 +373,9 @@ try {
   const hasDep = (await c.query(`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`)).rows[0].has;
   if (!hasDep) process.stdout.write('SKIP  section 5: table lane_dep is missing (database below migration 0006)\n');
   else await dependencyChecks();
+
+  // ------------------------------------- 6. owner rule, park, release --blocked, the done race, the rollback
+  await ownerRuleChecks();
 
 } catch (e) {
   process.stderr.write(`probe could not run: ${e.message}\n`);

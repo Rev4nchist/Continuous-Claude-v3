@@ -21,7 +21,7 @@
  * Never blocks. Any error: no output, exit 0.
  *
  * The board of a change comes, as in lane.mjs, from `--project x` / `LANE_PROJECT=x` in the command, else from
- * payload.cwd through the registry, else (note|state|release|done only) from the board of the lane the caller
+ * payload.cwd through the registry, else (note|state|release|done|park only) from the board of the lane the caller
  * owns: main() looks that up (ownedLaneBoard, one read-only query, only in that case). A cwd with no board and no
  * other answer is not a lane change: lane.mjs refused it.
  *
@@ -63,6 +63,7 @@ export const CHANGING_VERBS = new Set([
   'adopt',
   'state',
   'seed',
+  'park',
 ]);
 
 /** Tools this hook accepts. Must match the settings.json.template matcher. */
@@ -133,7 +134,7 @@ export interface LaneChange {
  * lane.mjs verbs keyed on the lane OWNER: with no board for the cwd they use the board of the lane the caller
  * owns (projectForOwnedLane in lane.mjs). Every other verb needs a cwd board or --project.
  */
-export const OWNER_KEYED_VERBS = new Set(['note', 'state', 'release', 'done']);
+export const OWNER_KEYED_VERBS = new Set(['note', 'state', 'release', 'done', 'park']);
 
 /**
  * An assignment that points lane.mjs at ANOTHER database or registry: the command then changes a scratch
@@ -442,7 +443,7 @@ const defaultOwnedRun: OwnedRun = async (sql, params) => {
 };
 
 /**
- * Only for a note|state|release|done in a cwd with no board and no --project: lane.mjs then falls back to the
+ * Only for a note|state|release|done|park in a cwd with no board and no --project: lane.mjs then falls back to the
  * board of the lane the caller owns (projectForOwnedLane), so the reminder must too. Returns that board, or null
  * when no lookup applies or it fails (fail open: the change is then not seen, as before the fallback existed).
  * Connects to the database only in that one case.

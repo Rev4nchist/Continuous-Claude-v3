@@ -454,6 +454,13 @@ describe('R11: note|state|release|done in a cwd with no board use the board of t
     }
   });
 
+  it('park is owner-keyed: in a cwd with no board it uses the board of the lane the caller owns', () => {
+    const cmd = 'node lane.mjs park L1 --for 24h --reason "x"';
+    expect(laneChange(cmd, 'Bash')).toMatchObject({ verb: 'park', laneId: 'L1' });
+    expect(call(cmd, nowhere, { ownedBoard: 'continuous-claude' }).decision).toMatchObject({ action: 'remind', board: 'continuous-claude', verb: 'park' });
+    expect(call(cmd, nowhere, { ownedBoard: null }).decision.action).toBe('none');
+  });
+
   it('a lane on a board with no phone page is render-only', () => {
     expect(call('node lane.mjs done L1', nowhere, { ownedBoard: 'zz-board' }).decision).toMatchObject({ action: 'render', board: 'zz-board' });
   });

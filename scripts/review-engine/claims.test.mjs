@@ -45,6 +45,20 @@ test('K1b a claim on a lane that was released (ready, no owner) is not a reclaim
   assert.deepEqual(errs(check(events)), ['claim-open-dep re-b event 20 waits on re-a']);
 });
 
+// `release --blocked` clears the owner in the database and writes one state_changed with released:true. A later `state active` (no owner
+// change) and a claim by a new session is then a first claim, not a reclaim.
+test('K1b2 a claim after release --blocked then state active is not a reclaim: the dependency test applies', () => {
+  const events = [
+    merged(2, 're-a'), claim(5, 're-b', A), reopen(10, 're-a'),
+    ev(12, 're-b', 'state_changed', { state: 'blocked', released: true }, { session_id: A }),
+    ev(14, 're-b', 'state_changed', { state: 'active' }, { session_id: B }),
+    claim(20, 're-b', B),
+  ];
+  const res = check(events);
+  assert.deepEqual(errs(res), ['claim-open-dep re-b event 20 waits on re-a']);
+  assert.deepEqual(res.notes, []);
+});
+
 // The reclaim exemption needs an owner. A lane set to review by state_changed has none, so a claim on it is no reclaim.
 test('K1c the reclaim exemption needs an owner: an unowned review lane with an open dependency is claim-open-dep, an owned lapsed lane is a note', () => {
   const unowned = check([ev(5, 're-b', 'state_changed', { state: 'review' }), claim(20, 're-b', B)]);

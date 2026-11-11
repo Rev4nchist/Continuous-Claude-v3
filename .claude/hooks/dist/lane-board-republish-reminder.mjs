@@ -6095,7 +6095,8 @@ var CHANGING_VERBS = /* @__PURE__ */ new Set([
   "apply-kanban",
   "adopt",
   "state",
-  "seed"
+  "seed",
+  "park"
 ]);
 var HOOK_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell", "Artifact"]);
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
@@ -6116,7 +6117,7 @@ var GLOBAL_FLAGS = `(?:\\s+(?:--(?:${VALUE_FLAGS})=\\S+|--(?:${VALUE_FLAGS})\\s+
 var LANE_RE = new RegExp(
   `^[(\\s]*(?:&\\s+)?((?:\\w+=\\S+\\s+)*)node(?:\\.exe)?(?:\\s+--?[\\w-]+(?:=\\S+)?)*\\s+(?:[^\\s;&|()]*[\\\\/])?lane\\.mjs${GLOBAL_FLAGS}\\s+([a-z][a-z-]*)`
 );
-var OWNER_KEYED_VERBS = /* @__PURE__ */ new Set(["note", "state", "release", "done"]);
+var OWNER_KEYED_VERBS = /* @__PURE__ */ new Set(["note", "state", "release", "done", "park"]);
 var OTHER_DB_ASSIGN = /(?<![\w-])(?:CONTINUOUS_CLAUDE_DB_URL|DATABASE_URL|OPC_POSTGRES_URL|LANE_REGISTRY_PATH)\s*=/;
 function laneIdAfterVerb(rest) {
   const tokens = rest.trim().split(/\s+/).filter(Boolean);
