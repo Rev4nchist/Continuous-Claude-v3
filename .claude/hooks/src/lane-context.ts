@@ -189,6 +189,8 @@ interface EventRow {
   id: number; occurred_at: string; lane_id: string | null; kind: string;
   session_id: string; to_session_id: string | null; body: string | null;
   project_key?: string;
+  /** The board's cursor row at read time. NULL = no row yet (a first look at this board). Board path only. */
+  board_wm?: number | string | null;
 }
 
 function connString(): string | null {
@@ -498,29 +500,135 @@ async function main(): Promise<void> {
   if (out !== null) process.stdout.write(JSON.stringify(out));
 }
 
-/** Move my cursor for `key` to `eventId`. Called only for events that were actually injected. */
-async function advanceWatermark(client: Client, key: string, eventId: number): Promise<void> {
+// ---------------------------------------------------------------- banner paging
+// A page shows at most MAX_EVENTS events. What is cut stays above the cursors, so a later prompt shows it.
+
+/** UNREAD_SQL plus this board's cursor row. board_wm NULL = no row = a first look (one snapshot, no second query). */
+const UNREAD_BOARD_SQL = `SELECT e.*, (SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id = $3::text) AS board_wm
+  FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`;
+
+export interface PageOpts {
+  /** The board has no cursor row yet. Only the newest `max` broadcasts count, the older ones are skipped. */
+  cold: boolean;
+  /** A session with no board: DMs only, no board row. */
+  noBoard?: boolean;
+  max?: number;
+}
+
+export interface UnreadPage<T> {
+  /** The events to print, in the order the rows came in (id order). */
+  events: T[];
+  /** Unread events that are not on this page and not skipped. */
+  cut: number;
+  cutDm: number;
+  /** Older broadcasts a cold start leaves out. Not counted in `cut`. */
+  skipped: number;
+  /** The board row to write, or null for no write. */
+  boardRow: number | null;
+  /** The `<id>@` row to write, or null for no write. */
+  sentinel: number | null;
+}
+
+/** pg returns bigint as a string. Convert here, once, and never sort again: the SQL order is the id order. */
+async function readUnread(client: Client, sql: string, params: unknown[]): Promise<EventRow[]> {
+  const rows = (await client.query<EventRow>(sql, params)).rows;
+  return rows.map((r) => ({ ...r, id: Number(r.id), board_wm: r.board_wm == null ? null : Number(r.board_wm) }));
+}
+
+/**
+ * The page rule. DMs first, oldest first, up to `max`. Then the oldest broadcasts fill the free places.
+ * While a DM is cut, no broadcast is shown. Input is in id order and so is the page. No I/O.
+ *
+ * The board row never passes a cut event: it is one below the lowest event that is not shown. A cold start
+ * counts the skipped older broadcasts as shown, so they do not hold the row back.
+ */
+export function pageUnread<T extends { id: number; to_session_id: string | null }>(
+  unread: T[], opts: PageOpts,
+): UnreadPage<T> {
+  const max = opts.max ?? MAX_EVENTS;
+  const dms = unread.filter((e) => e.to_session_id);
+  const bcs = unread.filter((e) => !e.to_session_id);
+  const skipped = opts.cold && !opts.noBoard ? Math.max(0, bcs.length - max) : 0;
+  const live = bcs.slice(skipped);
+  const shownDms = dms.slice(0, max);
+  const cutDms = dms.slice(max);
+  const shownBcs = cutDms.length ? [] : live.slice(0, max - shownDms.length);
+  const cutBcs = live.slice(shownBcs.length);
+  const onPage = new Set<T>([...shownDms, ...shownBcs]);
+  const rows = cursorRows(unread, shownDms, [cutDms[0], cutBcs[0]], opts);
+  return {
+    events: unread.filter((e) => onPage.has(e)),
+    cut: cutDms.length + cutBcs.length, cutDm: cutDms.length, skipped, ...rows,
+  };
+}
+
+/** The two cursor values for a page. `firstCut` holds the first cut DM and the first cut broadcast, if any. */
+function cursorRows<T extends { id: number }>(
+  unread: T[], shownDms: T[], firstCut: Array<T | undefined>, opts: PageOpts,
+): { boardRow: number | null; sentinel: number | null } {
+  const lastDm = shownDms.length ? shownDms[shownDms.length - 1].id : null;
+  const cutIds = firstCut.filter((e): e is T => e !== undefined).map((e) => e.id);
+  if (opts.noBoard) return { boardRow: null, sentinel: lastDm };
+  // A cold start with a cut DM writes no board row: a row there would bring the skipped history back, page by page.
+  if (opts.cold && firstCut[0]) return { boardRow: null, sentinel: lastDm };
+  if (!unread.length) return { boardRow: null, sentinel: null };
+  const boardRow = cutIds.length ? Math.min(...cutIds) - 1 : unread[unread.length - 1].id;
+  return { boardRow, sentinel: lastDm !== null && lastDm > boardRow ? lastDm : null };
+}
+
+/** The cursor rows to write for a page: the board row (never on the no-board path), then the `<id>@` sentinel. */
+function cursorWrites(me: string, board: string | null, page: UnreadPage<unknown>): Array<[string, number]> {
+  const rows: Array<[string, number]> = [];
+  if (board !== null && page.boardRow !== null) rows.push([wmKey(me, board), page.boardRow]);
+  if (page.sentinel !== null) rows.push([wmKey(me, ''), page.sentinel]);
+  return rows;
+}
+
+/**
+ * Move my cursors in ONE statement, awaited. Called only for events that were actually injected.
+ * GREATEST: another writer (inbox) may have moved a row further since this hook read it. Never move back.
+ */
+async function writeCursors(client: Client, rows: Array<[string, number]>): Promise<void> {
+  if (!rows.length) return;
+  const values = rows.map((_, i) => `($${2 * i + 1},$${2 * i + 2},now())`).join(', ');
   await client.query(
-    `INSERT INTO agentic_os.lane_watermark (session_id, last_event_id, updated_at)
-     VALUES ($1,$2,now())
-     ON CONFLICT (session_id) DO UPDATE SET last_event_id=EXCLUDED.last_event_id, updated_at=now()`,
-    [key, eventId],
+    `INSERT INTO agentic_os.lane_watermark AS w (session_id, last_event_id, updated_at)
+     VALUES ${values}
+     ON CONFLICT (session_id) DO UPDATE
+       SET last_event_id = GREATEST(w.last_event_id, EXCLUDED.last_event_id), updated_at = now()`,
+    rows.flat(),
   );
 }
 
-/** The "lane update(s)" lines. `board` null = a session with no board: a DM from a non-default board is tagged. */
-function unreadLines(unread: EventRow[], board: string | null): string[] {
+/**
+ * The "(N more unread ...)" line. The cut events stay unread, so a later prompt shows them, oldest first.
+ * `withCmd` adds the inbox command. It is true only when the board has a cursor row: `inbox` with no row
+ * prints every broadcast since event 1, and with no board it cannot run at all.
+ */
+function moreLine(page: UnreadPage<unknown>, withCmd: boolean): string {
+  const direct = page.cutDm > 0 ? `, ${page.cutDm} direct to you` : '';
+  const cmd = withCmd ? `, or run: ${laneCliCmd()} inbox` : '.';
+  return `  (${page.cut} more unread${direct}. Later prompts show them, oldest first${cmd})`;
+}
+
+/**
+ * The "lane update(s)" lines. `board` null = a session with no board: a DM from a non-default board is tagged.
+ * `withCmd`: the board already has a cursor row (see moreLine).
+ */
+function unreadLines(page: UnreadPage<EventRow>, board: string | null, withCmd: boolean): string[] {
   const here = board ?? DEFAULT_BOARD;
-  const lines = [`## ${unread.length} lane update(s) since you last looked`];
-  for (const e of unread.slice(-MAX_EVENTS)) {
+  const lines = [`## ${page.events.length + page.cut} lane update(s) since you last looked`];
+  for (const e of page.events) {
     const from = who(e.session_id);
     const dm = e.to_session_id ? ' (direct to you)' : '';
     const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : '';
     const lane = e.lane_id ? ` [${e.lane_id}]` : '';
     lines.push(`- ${from}${crossed} ${e.kind}${lane}${dm}: ${e.body || ''}`);
   }
-  if (unread.length > MAX_EVENTS) {
-    lines.push(`  (${unread.length - MAX_EVENTS} older suppressed — \`${laneCliCmd()} inbox --peek\` for all)`);
+  if (page.cut > 0) lines.push(moreLine(page, withCmd));
+  // The cold line prints once: on the page that writes the board row. A page that writes only the sentinel stays cold.
+  if (page.skipped > 0 && page.boardRow !== null) {
+    lines.push(`  (${page.skipped} older board events are not shown on your first look at this board.)`);
   }
   return lines;
 }
@@ -535,13 +643,12 @@ function unreadLines(unread: EventRow[], board: string | null): string[] {
  * not shown again on any board, and no board key is empty, so no board cursor is ever this row.
  */
 async function directMessagesOnly(client: Client, me: string, eventName: string): Promise<object> {
-  const dms = (await client.query<EventRow>(
-    `SELECT e.* FROM agentic_os.lane_event e WHERE ${DM_ONLY_SQL} ORDER BY e.id`,
-    [me],
-  )).rows;
+  const dms = await readUnread(client, `SELECT e.* FROM agentic_os.lane_event e WHERE ${DM_ONLY_SQL} ORDER BY e.id`, [me]);
   if (!dms.length) return {};
-  await advanceWatermark(client, wmKey(me, ''), dms[dms.length - 1].id);
-  return buildOutput(unreadLines(dms, null).join('\n'), eventName);
+  // The sentinel always moves, to the newest DM shown. A cut DM stays above it for the next prompt.
+  const page = pageUnread(dms, { cold: false, noBoard: true });
+  await writeCursors(client, cursorWrites(me, null, page));
+  return buildOutput(unreadLines(page, null, false).join('\n'), eventName);
 }
 
 /**
@@ -608,10 +715,9 @@ export async function runLaneContext(raw: string): Promise<object | null> {
     if (!board) return isHeadless() ? {} : await directMessagesOnly(client, me, eventName);
 
     // Broadcasts are this board's; direct messages come from any board. See UNREAD_SQL.
-    const unread = (await client.query<EventRow>(
-      `SELECT e.* FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`,
-      [me, board, wmKey(me, board)],
-    )).rows;
+    const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
+    const cold = unread.length > 0 && unread[0].board_wm === null;
+    const page = pageUnread(unread, { cold });
 
     const lines: string[] = [];
 
@@ -721,13 +827,14 @@ export async function runLaneContext(raw: string): Promise<object | null> {
 
     if (unread.length) {
       if (lines.length) lines.push('');
-      lines.push(...unreadLines(unread, board));
+      lines.push(...unreadLines(page, board, !cold));
     }
 
-    // Advance the watermark only for what was actually injected. Nothing was
+    // Advance the cursors only for what was actually injected. Nothing was
     // shown on a turn that produced no output, so nothing may be marked read.
+    // Events cut from the page stay above the cursors (see pageUnread).
     if (unread.length && lines.length) {
-      await advanceWatermark(client, wmKey(me, board), unread[unread.length - 1].id);
+      await writeCursors(client, cursorWrites(me, board, page));
     }
 
     return buildOutput(lines.join('\n'), eventName);
