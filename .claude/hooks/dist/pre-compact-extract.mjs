@@ -355,6 +355,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 
 // src/pre-compact-extract.ts
 import * as fs2 from "fs";
+import * as os from "os";
 
 // src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
@@ -664,45 +665,73 @@ function readStateOrNull(stateFile) {
     return null;
   }
 }
-function runBackgroundExtraction(transcriptPath, sessionId, startLine, stateFile, projectDir) {
-  const opcDir = getOpcDir();
+function defaultExtractLogPath() {
+  return process.env.CCV3_PRE_COMPACT_EXTRACT_LOG || path.join(os.homedir(), ".claude", "logs", "pre-compact-extract.log");
+}
+function openExtractLog(logPath, sessionId) {
+  try {
+    fs2.mkdirSync(path.dirname(logPath), { recursive: true });
+    const fd = fs2.openSync(logPath, "a");
+    try {
+      fs2.writeSync(fd, `[${(/* @__PURE__ */ new Date()).toISOString()}] pre-compact-extract: start session=${sessionId}
+`);
+    } catch {
+    }
+    return fd;
+  } catch {
+    return null;
+  }
+}
+function closeQuietly(fd) {
+  if (fd === null) return;
+  try {
+    fs2.closeSync(fd);
+  } catch {
+  }
+}
+function runBackgroundExtraction(a, deps = {}) {
+  const spawnHidden = deps.spawnHidden ?? spawnDetachedHidden;
+  const opcDir = deps.opcDir ?? getOpcDir();
   const extractScript = path.join(opcDir, "scripts", "core", "incremental_extract.py");
   if (!fs2.existsSync(extractScript)) {
     console.error(`incremental_extract.py not found at ${extractScript}`);
     return false;
   }
+  const logFd = openExtractLog(deps.logPath ?? defaultExtractLogPath(), a.sessionId);
   try {
-    const child = spawnDetachedHidden("uv", [
+    const child = spawnHidden("uv", [
       "run",
       "python",
       "scripts/core/incremental_extract.py",
       "--transcript",
-      transcriptPath,
+      a.transcriptPath,
       "--session-id",
-      sessionId,
+      a.sessionId,
       "--start-line",
-      startLine.toString(),
+      a.startLine.toString(),
       "--state-file",
-      stateFile,
+      a.stateFile,
       "--project-dir",
-      projectDir,
+      a.projectDir,
       "--max-learnings",
       "5",
       "--json"
     ], {
       cwd: opcDir,
-      stdio: "ignore",
+      stdio: logFd === null ? "ignore" : ["ignore", logFd, logFd],
       env: { ...process.env, PYTHONPATH: opcDir }
     });
     child.unref();
     return true;
   } catch {
     return false;
+  } finally {
+    closeQuietly(logFd);
   }
 }
 var COOLDOWN_MS = 5 * 60 * 1e3;
 function runPreCompactExtract(data, projectDir, deps = {}) {
-  const launcher = deps.launcher ?? ((a) => runBackgroundExtraction(a.transcriptPath, a.sessionId, a.startLine, a.stateFile, a.projectDir));
+  const launcher = deps.launcher ?? ((a) => runBackgroundExtraction(a, deps.extract));
   const now = deps.now ?? Date.now;
   const sessionId = data.session_id;
   const transcriptPath = data.transcript_path;
@@ -780,5 +809,7 @@ if ((process.argv[1] || "").includes("pre-compact-extract")) {
   });
 }
 export {
+  defaultExtractLogPath,
+  runBackgroundExtraction,
   runPreCompactExtract
 };
