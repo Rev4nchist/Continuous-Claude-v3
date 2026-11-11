@@ -810,35 +810,63 @@ var HARMLESS_REDIRECT = /\d*>&\d+|&>\s*\/dev\/null(?=[\s;&|]|$)|\d*>>?\s*(?:\/de
 var RUNS_TEXT = /\$\(|`|<<|@['"]/;
 var SPECIAL_STRING = /\$['"]|[\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]/u;
 var OUTSIDE_RISK = /[#(){}'"]/;
-function inertSpans(command, tool) {
-  const none = /* @__PURE__ */ new Set();
-  if (RUNS_TEXT.test(command) || SPECIAL_STRING.test(command)) return none;
+function headMatches(head, masked, raw) {
+  return head.test(masked) && head.test(raw);
+}
+function plainSegments(command, tool) {
+  if (RUNS_TEXT.test(command) || SPECIAL_STRING.test(command)) return null;
   const spans = quotedSpans(command, tool);
-  if (spans.some(([s]) => s > 0 && command[s - 1] === "\\")) return none;
+  if (spans.some(([s]) => s > 0 && command[s - 1] === "\\")) return null;
   const chars = command.split("");
   for (const [s, e] of spans) chars.fill(" ", s, e);
   const masked = chars.join("");
-  if (OUTSIDE_RISK.test(masked)) return none;
+  if (OUTSIDE_RISK.test(masked)) return null;
   const cut = masked.replace(HARMLESS_REDIRECT, (r) => " ".repeat(r.length));
-  const out2 = /* @__PURE__ */ new Set();
+  const segs = [];
   let from = 0;
   const breaks = [...cut.matchAll(SEGMENT_BREAK)].map((m) => ({ at: m.index, len: m[0].length }));
   for (const end of [...breaks, { at: cut.length, len: 0 }]) {
     const seg = cut.slice(from, end.at);
     if (seg.trim() !== "") {
-      if (seg.includes(">")) return none;
-      if (PLAIN_HEAD.test(seg)) {
-        from = end.at + end.len;
-        continue;
-      }
-      if (!INERT_HEAD.test(seg)) return none;
-      for (const [s, e] of spans) if (s >= from && e <= end.at) out2.add(`${s}:${e}`);
+      if (seg.includes(">")) return null;
+      segs.push({ from, end: end.at, masked: seg });
     }
     from = end.at + end.len;
   }
+  return { spans, segs };
+}
+function inertSpans(command, tool) {
+  const none = /* @__PURE__ */ new Set();
+  const plain = plainSegments(command, tool);
+  if (!plain) return none;
+  const out2 = /* @__PURE__ */ new Set();
+  for (const { from, end, masked } of plain.segs) {
+    const raw = command.slice(from, end);
+    if (headMatches(PLAIN_HEAD, masked, raw)) continue;
+    if (!headMatches(INERT_HEAD, masked, raw)) return none;
+    for (const [s, e] of plain.spans) if (s >= from && e <= end) out2.add(`${s}:${e}`);
+  }
   return out2;
 }
+var TEXT_HEAD = /^\s*(?:echo|printf|Write-(?:Host|Output))(?=\s|$)/i;
+var READ_HEAD = /^\s*(?:grep|cat|head|tail|Select-String|sls|Get-Content|gc|git\s+log)(?=\s|$)/i;
+var OPTION_TRAP = /(?:^|\s)--ou/i;
+var DASH_LOOKALIKE = /[–—―]/;
+function isTextOnlyCommand(command) {
+  if (DASH_LOOKALIKE.test(command)) return false;
+  for (const tool of ["Bash", "PowerShell"]) {
+    const plain = plainSegments(command, tool);
+    if (!plain) return false;
+    for (const { from, end, masked } of plain.segs) {
+      const raw = command.slice(from, end);
+      if (!(headMatches(PLAIN_HEAD, masked, raw) || headMatches(TEXT_HEAD, masked, raw) || headMatches(READ_HEAD, masked, raw))) return false;
+      if (OPTION_TRAP.test(raw.replace(/["'\\]/g, ""))) return false;
+    }
+  }
+  return true;
+}
 function blankInertQuotes(command, tool) {
+  if (tool !== void 0 && tool !== "Bash" && tool !== "PowerShell") return command;
   if (tool === "Bash") {
     const doc = blankDocHeredocBody(command);
     if (doc !== command) return doc;
@@ -943,6 +971,7 @@ function writesStoreText(text, deps) {
 var scopeOf = (s) => s.kind === "push" ? "push" : "other";
 var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
+var PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
 var CLEANUP_RE = /(?:^|\s)-CleanupOnly\b/i;
 var MERGE_CLI_RE = /\bgh\s+pr\s+merge\b([^|;&\n]*)/i;
 var MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
@@ -950,10 +979,11 @@ var GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
 var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;
 var SEGMENT_RE = /[;&|\r\n]+/;
 var lastArg = (args, re) => re.exec(args)?.[1] ?? null;
-function landShapesOf(seg) {
+function landShapesOf(seg, textOnly = false) {
   const out2 = [];
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
-  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg)) out2.push({ kind: "land", pr: lastArg(seg, LAND_PR_RE), sha });
+  const pr = lastArg(seg, LAND_PR_RE);
+  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out2.push({ kind: "land", pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
   if (cli) out2.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), sha });
   const api = MERGE_API_RE.exec(seg);
@@ -1103,6 +1133,7 @@ var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) =>
 function shapesOf(raw, tool) {
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
+  const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand);
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
   const add = (shape, id) => {
@@ -1120,7 +1151,7 @@ function shapesOf(raw, tool) {
     for (const { seg, from } of cmdSegments(view)) {
       const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
       for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s)) {
+        for (const shape of landShapesOf(s, textOnly)) {
           for (const at of wheres) add({ ...shape, at }, `${shape.kind}|${shape.pr}|${shape.sha}|${whereId(at)}`);
         }
       }

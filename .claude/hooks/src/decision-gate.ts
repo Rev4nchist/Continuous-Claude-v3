@@ -68,7 +68,7 @@ import { CCV3_REPO, namedRepo } from './shared/checkpoint-shapes.js';
 import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared/decisions-store.js';
 import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
-import { blankInertQuotes } from './shared/inert-quotes.js';
+import { blankInertQuotes, isTextOnlyCommand } from './shared/inert-quotes.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand } from './shared/shell-tools.js';
@@ -230,7 +230,9 @@ const scopeOf = (s: Shape): Scope => (s.kind === 'push' ? 'push' : 'other');
 
 const LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 const LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
-const CLEANUP_RE = /(?:^|\s)-CleanupOnly\b/i;
+/** Looser than LAND_PR_RE: -P or -Pr, then any run of space, :, =, or quote marks, then a digit. Used only to refuse the text-only exemption. */
+const PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
+const CLEANUP_RE =/(?:^|\s)-CleanupOnly\b/i;
 const MERGE_CLI_RE = /\bgh\s+pr\s+merge\b([^|;&\n]*)/i;
 const MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
 const GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
@@ -240,10 +242,12 @@ const SEGMENT_RE = /[;&|\r\n]+/;
 const lastArg = (args: string, re: RegExp): string | null => re.exec(args)?.[1] ?? null;
 
 /** The land and merge shapes of ONE command segment (no && ; | or newline in it), with the PR and the sha read from that segment alone. */
-function landShapesOf(seg: string): Shape[] {
+function landShapesOf(seg: string, textOnly = false): Shape[] {
   const out: Shape[] = [];
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
-  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg)) out.push({ kind: 'land', pr: lastArg(seg, LAND_PR_RE), sha });
+  // textOnly: the whole command only prints or reads text (isTextOnlyCommand), so the script name is a mention. A mention that names a PR (-Pr 12) stays a land shape.
+  const pr = lastArg(seg, LAND_PR_RE);
+  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out.push({ kind: 'land', pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
   if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), sha });
   const api = MERGE_API_RE.exec(seg);
@@ -409,6 +413,13 @@ function shapesOf(raw: string, tool?: string): Shape[] {
   // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
+  // A read or print command that only names the land script is text. Only for the tools whose quote rules we read (Bash, PowerShell):
+  // Desktop Commander may run cmd.exe. All three readings of the raw text must be text-only (a continuation can differ between shells).
+  // A PR number anywhere in the raw text (class B) keeps the land shape. It is read from the RAW text, with no space needed before -Pr:
+  // an inert head blanks a quoted "-Pr 12", and LAND_PR_RE (which needs a space before -Pr) misses `"-Pr 12"`.
+  const textOnly = (tool === 'Bash' || tool === 'PowerShell')
+    && !PR_NUMBER_IN_TEXT_RE.test(raw)
+    && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every(isTextOnlyCommand);
   const out: Shape[] = [];
   const seen = new Set<string>();
   const add = (shape: Shape, id: string): void => { if (!seen.has(id)) { seen.add(id); out.push(shape); } };
@@ -418,7 +429,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
     for (const { seg, from } of cmdSegments(view)) {
       const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s)) {
+        for (const shape of landShapesOf(s, textOnly)) {
           for (const at of wheres) add({ ...shape, at }, `${shape.kind}|${shape.pr}|${shape.sha}|${whereId(at)}`);
         }
       }
