@@ -13,6 +13,7 @@
  *   - every file an index row names exists
  *   - every rule file in rules-ondemand/ is loaded by some manifest entry
  *   - a row says "block" for a deny-first rule and "inject" for an inject rule
+ *   - an inject rule fits under the hook text cap (see HOOK_CONTEXT_CAP), or is on the known list
  *
  * Usage: node scripts/rules/ondemand-index-check.mjs [--repo <dir>]   exit 1 on any problem
  */
@@ -29,11 +30,41 @@ function indexRows(indexText) {
 }
 
 /**
- * @param {{ manifest: { rules: { id: string, files: string[], mode: string }[] }, indexText: string, files: string[] }} input
+ * Claude Code cuts a hook `additionalContext` string above this size to a 2,000 character preview
+ * and saves the rest to a file that the model is not told to read (hooks guide). The router sends
+ * an inject rule as `additionalContext`. It sends a deny-first rule as the deny reason, which is
+ * not cut (probe of 2026-11-11, lane std-coordination, findings rows 56 and 57).
+ */
+export const HOOK_CONTEXT_CAP = 10000;
+/** Upper bound for what rule-router adds to one rule: its header, the path line and the false-fire footer. */
+export const ROUTER_OVERHEAD = 500;
+/** Inject files that are over the cap today. Lane `pr-review-loop-10k-cut` owns the fix. Remove a name when its file fits. */
+export const KNOWN_OVER_CAP = ['pr-review-loop.md'];
+
+/**
+ * @param {{ manifest: { rules: { id: string, files: string[], mode: string }[] }, indexText: string, files: string[],
+ *   sizes?: Record<string, number>, knownOver?: string[] }} input  `sizes` is characters per rule file; without it no size check runs
  * @returns {string[]} one line per problem; empty when the index and manifest agree
  */
-export function checkIndex({ manifest, indexText, files }) {
+export function checkIndex({ manifest, indexText, files, sizes = null, knownOver = KNOWN_OVER_CAP }) {
   const problems = [];
+  if (sizes) {
+    const stillOver = new Set();
+    for (const r of manifest.rules) {
+      if (r.mode === 'deny-first') continue;
+      const chars = r.files.reduce((n, f) => n + (sizes[f] ?? 0), 0) + ROUTER_OVERHEAD;
+      if (chars <= HOOK_CONTEXT_CAP) continue;
+      const known = r.files.filter((f) => knownOver.includes(f));
+      known.forEach((f) => stillOver.add(f));
+      if (known.length === 0) {
+        problems.push(`${r.files.join(', ')} (rule ${r.id}): inject text is ${chars} characters with the router lines, over the 10,000 character hook cap. `
+          + 'A session gets a 2,000 character preview. Make the rule deny-first or shorten the file');
+      }
+    }
+    for (const f of knownOver) {
+      if (!stillOver.has(f)) problems.push(`${f}: listed as known over the cap, but it fits now or is not an inject rule; remove it from KNOWN_OVER_CAP`);
+    }
+  }
   const onDisk = new Set(files);
   const rows = indexRows(indexText);
   const rowFor = (f) => rows.find((r) => r.files.includes(f));
@@ -65,10 +96,13 @@ function main() {
   const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
   const indexText = readFileSync(join(repo, '.claude', 'rules-src', 'on-demand-rules.md'), 'utf8');
   const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
-  const problems = checkIndex({ manifest, indexText, files });
+  // The router sends the trimmed text of the file as it is on disk, so count that.
+  const sizes = Object.fromEntries(files.map((f) => [f, readFileSync(join(dir, f), 'utf8').trim().length]));
+  const problems = checkIndex({ manifest, indexText, files, sizes });
   const fileCount = new Set(manifest.rules.flatMap((r) => r.files)).size;
   if (problems.length === 0) {
     console.log(`ondemand-index-check: OK (${manifest.rules.length} manifest entries, ${fileCount} rule files, all indexed)`);
+    for (const f of KNOWN_OVER_CAP) console.log(`  note: ${f} is ${sizes[f]} characters, over the hook cap of ${HOOK_CONTEXT_CAP}: a session gets a preview only (lane pr-review-loop-10k-cut)`);
     process.exit(0);
   }
   console.log(`ondemand-index-check: ${problems.length} problem(s) between manifest.json and on-demand-rules.md`);

@@ -46,6 +46,41 @@ test('an inject rule whose row does not say inject is reported', () => {
   assert.match(problems.join('\n'), /a\.md.*inject.*"inject"/);
 });
 
+// Claude Code cuts a hook additionalContext string above 10,000 characters to a 2,000 character
+// preview. An inject rule over that size never reaches the session (findings row 56, 2026-11-11).
+const sized = (mode, chars, knownOver = []) => checkIndex({
+  manifest: { rules: [rule('big', ['big.md'], mode)] },
+  indexText: index([`| \`big.md\` | x | ${mode === 'deny-first' ? 'block' : 'inject'} |`]),
+  files: ['big.md'],
+  sizes: { 'big.md': chars },
+  knownOver,
+});
+
+test('an inject rule whose emitted text is over the hook cap is reported', () => {
+  assert.match(sized('inject', 9600).join('\n'), /big\.md.*over the 10,000 character hook cap/);
+});
+
+test('an inject rule that fits under the hook cap with the router lines is not reported', () => {
+  assert.deepEqual(sized('inject', 9400), []);
+});
+
+test('a deny-first rule over the cap is not reported (a deny reason is not cut)', () => {
+  assert.deepEqual(sized('deny-first', 30000), []);
+});
+
+test('a known over-cap inject file is not a problem while it is still over', () => {
+  assert.deepEqual(sized('inject', 64000, ['big.md']), []);
+});
+
+test('a known over-cap file that fits now is reported, so the list cannot go stale', () => {
+  assert.match(sized('inject', 5000, ['big.md']).join('\n'), /big\.md.*known over the cap.*fits now/);
+});
+
+test('with no sizes given, no size check runs', () => {
+  const problems = checkIndex({ manifest: { rules: [rule('big', ['big.md'])] }, indexText: index(['| `big.md` | x | inject |']), files: ['big.md'] });
+  assert.deepEqual(problems, []);
+});
+
 test('a file named outside the table (a pointer line) is not an index row', () => {
   const problems = checkIndex({ manifest: { rules: [] }, indexText: index([]), files: [] });
   assert.deepEqual(problems, []);
