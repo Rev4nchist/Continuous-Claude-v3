@@ -48,8 +48,8 @@ test('an inject rule whose row does not say inject is reported', () => {
 
 // Claude Code cuts a hook additionalContext string above 10,000 characters to a 2,000 character
 // preview. An inject rule over that size never reaches the session (findings row 56, 2026-11-11).
-const sized = (mode, chars, knownOver = []) => checkIndex({
-  manifest: { rules: [rule('big', ['big.md'], mode)] },
+const sized = (mode, chars, knownOver = [], subagent = undefined) => checkIndex({
+  manifest: { rules: [{ ...rule('big', ['big.md'], mode), ...(subagent ? { subagent } : {}) }] },
   indexText: index([`| \`big.md\` | x | ${mode === 'deny-first' ? 'block' : 'inject'} |`]),
   files: ['big.md'],
   sizes: { 'big.md': chars },
@@ -64,8 +64,16 @@ test('an inject rule that fits under the hook cap with the router lines is not r
   assert.deepEqual(sized('inject', 9400), []);
 });
 
-test('a deny-first rule over the cap is not reported (a deny reason is not cut)', () => {
-  assert.deepEqual(sized('deny-first', 30000), []);
+test('a deny-first rule with subagent block over the cap is not reported (a deny reason is not cut)', () => {
+  assert.deepEqual(sized('deny-first', 30000, [], 'block'), []);
+});
+
+test('a deny-first rule over the cap with no subagent block is reported (the router sends it to a subagent as inject)', () => {
+  assert.match(sized('deny-first', 30000).join('\n'), /big\.md.*subagent.*over the 10,000 character hook cap/);
+});
+
+test('a deny-first rule under the cap needs no subagent block', () => {
+  assert.deepEqual(sized('deny-first', 3000), []);
 });
 
 test('a known over-cap inject file is not a problem while it is still over', () => {

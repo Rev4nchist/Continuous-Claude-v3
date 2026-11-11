@@ -50,15 +50,20 @@ export function checkIndex({ manifest, indexText, files, sizes = null, knownOver
   const problems = [];
   if (sizes) {
     const stillOver = new Set();
+    // Limit: the router joins every rule that fires on one call into one text. Two inject rules that
+    // each fit can pass the cap together. This check reads one rule at a time.
     for (const r of manifest.rules) {
-      if (r.mode === 'deny-first') continue;
+      // A deny-first rule reaches the main thread as a deny reason. Without `subagent: "block"` the
+      // router sends it to a subagent as inject text, so only the pair is safe at any size.
+      if (r.mode === 'deny-first' && r.subagent === 'block') continue;
       const chars = r.files.reduce((n, f) => n + (sizes[f] ?? 0), 0) + ROUTER_OVERHEAD;
       if (chars <= HOOK_CONTEXT_CAP) continue;
       const known = r.files.filter((f) => knownOver.includes(f));
       known.forEach((f) => stillOver.add(f));
       if (known.length === 0) {
-        problems.push(`${r.files.join(', ')} (rule ${r.id}): inject text is ${chars} characters with the router lines, over the 10,000 character hook cap. `
-          + 'A session gets a 2,000 character preview. Make the rule deny-first or shorten the file');
+        const who = r.mode === 'deny-first' ? 'a subagent gets it as inject text' : 'inject text';
+        problems.push(`${r.files.join(', ')} (rule ${r.id}): ${who} of ${chars} characters with the router lines, over the 10,000 character hook cap. `
+          + 'The reader gets a 2,000 character preview. Make the rule deny-first with "subagent": "block", or shorten the file');
       }
     }
     for (const f of knownOver) {
