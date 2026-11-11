@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -575,6 +575,47 @@ test('--dry-run builds the tree and prompt, runs nothing and writes no ledger li
   assert.equal(existsSync(h.opts.ledgerPath), false);
 });
 
+// A range whose changed files are all left out of the tree (TREE_EXCLUDES) has nothing to review: the run is refused with the fixed word
+// no-files before a run is reserved. Break it by removing the empty-files check in runReview: the run then reserves a ledger line and calls the agent.
+function noFilesHarness(over = {}) {
+  const { root, base, head } = repoWithHeadFiles({ 'scripts/eval/review-eval/gold/g.json': 'made-up answer text\n' });
+  const h = harness({ opts: { input: { range: `${base}..${head}` }, root, ...(over.opts ?? {}) } });
+  const trees = tmp('trees');
+  const out = { dirs: [], stderr: [], stdout: [] };
+  h.deps.prepare = async (a) => { const p = await prepareReview({ ...a, tmpRoot: trees }); out.dirs.push(p.dir); return p; };
+  h.deps.stderr = (s) => out.stderr.push(s);
+  h.deps.stdout = (s) => out.stdout.push(s);
+  return { h, out, trees };
+}
+
+test('a range whose only changed files are excluded paths is refused as no-files: exit 2, no ledger line, no agent call, tree removed', async () => {
+  const { h, out, trees } = noFilesHarness();
+  const r = await runReview(h.opts, h.deps);
+  assert.equal(r.exit, EXIT.REFUSED);
+  assert.match(r.reason, /^no-files: /);
+  assert.equal(r.reasonCode, 'no-files', 'a caller tells this refusal from a bad input by this field');
+  assert.equal(h.calls.length, 0, 'no agent call');
+  assert.equal(existsSync(h.opts.ledgerPath), false, 'no ledger line');
+  assert.equal(out.dirs.length, 1, 'the real prepare ran');
+  assert.equal(existsSync(out.dirs[0]), false, 'the temp tree is removed');
+  assert.deepEqual(readdirSync(trees), []);
+  assert.ok(out.stderr.some((l) => l.includes(r.reason)), 'the reason is printed');
+});
+
+test('the dry run on a range with no reviewable file reports the same no-files refusal, builds no prompt and leaves no tree', async () => {
+  const { h, out, trees } = noFilesHarness({ opts: { dryRun: true } });
+  const r = await runReview(h.opts, h.deps);
+  assert.equal(r.exit, EXIT.REFUSED);
+  assert.match(r.reason, /^no-files: /);
+  assert.equal(r.reasonCode, 'no-files');
+  assert.equal(r.dryRun, undefined, 'the dry run does not report success');
+  assert.ok(out.stderr.some((l) => l.includes(r.reason)), 'the dry run prints the reason');
+  assert.equal(out.stdout.length, 0, 'no "dry run:" success line');
+  assert.equal(h.calls.length, 0);
+  assert.equal(existsSync(h.opts.ledgerPath), false);
+  assert.deepEqual(readdirSync(trees), []);
+});
+
 // ---------- argument parsing and main ----------
 
 test('parseArgs reads --pr, --range, --band, --model and refuses both or neither input', () => {
@@ -1064,6 +1105,90 @@ test('isExcluded ignores letter case on win32 (NTFS) and keeps it on linux', () 
   assert.equal(isExcluded('Artifacts/x', 'linux'), false);
   assert.equal(isExcluded('artifacts/x', 'linux'), true);
   assert.equal(isExcluded('Artifacts-extra/x', 'win32'), false);
+  assert.equal(isExcluded('Scripts/Eval/Review-Eval/Gold/g.json', 'win32'), true);
+  assert.equal(isExcluded('Scripts/Eval/Review-Eval/Gold/g.json', 'linux'), false);
+});
+
+// Breaks if a review-eval answer folder or the label file is left out of TREE_EXCLUDES, or matches by prefix instead of whole path segments.
+test('isExcluded covers the four review-eval answer paths and what sits under them, and not their look-alikes', () => {
+  for (const platform of ['win32', 'linux']) {
+    for (const rel of [
+      'scripts/eval/review-eval/gold', 'scripts/eval/review-eval/gold/g.json', 'scripts/eval/review-eval/gold/deep/er/g.json',
+      'scripts/eval/review-eval/seeds', 'scripts/eval/review-eval/seeds/s.json', 'scripts/eval/review-eval/seeds/deep/er/s.json',
+      'scripts/eval/review-eval/rubrics', 'scripts/eval/review-eval/rubrics/r.md', 'scripts/eval/review-eval/rubrics/deep/er/r.md',
+      'scripts/eval/review-eval/linktype-labels.json',
+    ]) assert.equal(isExcluded(rel, platform), true, `${rel} on ${platform}`);
+    for (const rel of [
+      'scripts/eval/review-eval/gold.mjs', 'scripts/eval/review-eval/goldfish/g.json', 'scripts/eval/review-eval/seeds.mjs',
+      'scripts/eval/review-eval/rubrics.md', 'scripts/eval/review-eval/linktype.mjs', 'scripts/eval/review-eval/labels.mjs',
+      'scripts/eval/review-eval/linktype-labels.json.bak', 'scripts/eval/gold/g.json', 'other/scripts/eval/review-eval/gold/g.json',
+    ]) assert.equal(isExcluded(rel, platform), false, `${rel} on ${platform}`);
+  }
+});
+
+// Breaks if the review tree, the changed-file list or PR.diff still carries a review-eval answer file, or if a look-alike name is dropped.
+test('a PR that changes the review-eval gold, seeds, rubrics and label file leaves them out of the tree, the file list and PR.diff', async () => {
+  const { root, base, head } = repoWithHeadFiles({
+    'scripts/eval/review-eval/gold/g.json': 'SECRET ANSWER 1\n',
+    'scripts/eval/review-eval/seeds/s.json': 'SECRET ANSWER 2\n',
+    'scripts/eval/review-eval/rubrics/r.md': 'SECRET ANSWER 3\n',
+    'scripts/eval/review-eval/linktype-labels.json': 'SECRET ANSWER 4\n',
+    'scripts/eval/review-eval/gold.mjs': 'export const gold = 1;\n',
+    'scripts/eval/review-eval/linktype.mjs': 'export const linktype = 1;\n',
+    'scripts/eval/review-eval/linktype-labels.json.bak': 'bak\n',
+    'src/real.txt': 'real\n',
+  });
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.deepEqual([...prep.files].sort(), [
+      'scripts/eval/review-eval/gold.mjs', 'scripts/eval/review-eval/linktype-labels.json.bak', 'scripts/eval/review-eval/linktype.mjs', 'src/real.txt',
+    ]);
+    const diff = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
+    assert.match(diff, /review-eval\/gold\.mjs/);
+    assert.match(diff, /src\/real\.txt/);
+    assert.doesNotMatch(diff, /SECRET ANSWER/, 'PR.diff must not carry the review-eval answer files');
+    assert.doesNotMatch(diff, /review-eval\/(gold|seeds|rubrics)\//);
+    assert.doesNotMatch(diff, /linktype-labels\.json(?!\.bak)/);
+    for (const gone of ['gold/g.json', 'seeds/s.json', 'rubrics/r.md', 'linktype-labels.json']) {
+      assert.equal(existsSync(path.join(prep.dir, 'scripts', 'eval', 'review-eval', ...gone.split('/'))), false, `${gone} must not be in the tree`);
+    }
+    for (const kept of ['gold.mjs', 'linktype.mjs', 'linktype-labels.json.bak']) {
+      assert.equal(existsSync(path.join(prep.dir, 'scripts', 'eval', 'review-eval', kept)), true, `${kept} must stay in the tree`);
+    }
+    assert.equal(existsSync(path.join(prep.dir, 'src', 'real.txt')), true);
+    assert.equal(existsSync(path.join(prep.dir, 'base.txt')), true);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+// Breaks if PR.diff or the file list lets git pair a move across the gold folder as one rename: that would print the gold path in "rename from"/"rename to"
+// (remove excludePathspecs from the diff call) or hide the reviewed side of the move (remove --no-renames from changedPaths).
+test('a PR that moves a file out of and another into the review-eval gold folder shows no gold path in PR.diff and lists both reviewed paths', async () => {
+  const root = tmp('gold-rename');
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.t'); git('config', 'user.name', 't'); git('config', 'core.autocrlf', 'false');
+  mkdirSync(path.join(root, 'scripts', 'eval', 'review-eval', 'gold'), { recursive: true });
+  mkdirSync(path.join(root, 'src'), { recursive: true });
+  writeFileSync(path.join(root, 'scripts', 'eval', 'review-eval', 'gold', 'g.json'), 'SECRET ANSWER 1\n');
+  writeFileSync(path.join(root, 'src', 'plain.json'), 'plain\n');
+  git('add', '-A'); git('commit', '-q', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+  git('mv', 'scripts/eval/review-eval/gold/g.json', 'src/moved-out.json');
+  git('mv', 'src/plain.json', 'scripts/eval/review-eval/gold/plain.json');
+  git('commit', '-q', '-m', 'moves');
+  const head = git('rev-parse', 'HEAD');
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    const diff = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
+    assert.doesNotMatch(diff, /review-eval\/gold\//);
+    assert.doesNotMatch(diff, /^rename from /m);
+    assert.deepEqual([...prep.files].sort(), ['src/moved-out.json', 'src/plain.json']);
+    assert.equal(existsSync(path.join(prep.dir, 'scripts', 'eval', 'review-eval', 'gold')), false);
+  } finally {
+    prep.cleanup();
+  }
 });
 
 test('on win32 a head that changes Artifacts/ and .ClaudeDocs/ (other case) leaves them out of PR.diff; on linux they stay', async () => {
@@ -1124,6 +1249,116 @@ test('a changed dangling symlink counts as present in the tree', async (t) => {
   } finally {
     prep.cleanup();
   }
+});
+
+/** A folder outside every review tree that holds review-eval/gold/keep.txt. Returns the path of keep.txt. */
+function outsideGold() {
+  const outside = tmp('outside');
+  mkdirSync(path.join(outside, 'review-eval', 'gold'), { recursive: true });
+  const keep = path.join(outside, 'review-eval', 'gold', 'keep.txt');
+  writeFileSync(keep, 'made-up file that must survive\n');
+  return { outside, keep };
+}
+
+// Breaks if defaultExtract lets git write a symlink entry of the head as a real link. Remove `-c core.symlinks=false` from the checkout-index
+// call and the prepare fails (the escape refusal, or a checkout error on a win32 account without the symlink privilege) or the entry comes out as a link.
+test('a head that holds a symlink entry for scripts/eval comes out as a plain file, and no file outside the review tree is deleted', async () => {
+  const { outside, keep } = outsideGold();
+  const { root, base } = repoWithHeadFiles({ 'src/real.txt': 'real\n' });
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  git('config', 'core.symlinks', 'true');
+  const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: outside, encoding: 'utf8' }).stdout.trim();
+  git('update-index', '--add', '--cacheinfo', `120000,${blob},scripts/eval`);
+  git('commit', '-q', '-m', 'link');
+  const head = git('rev-parse', 'HEAD');
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    assert.equal(existsSync(keep), true, 'the exclude step must not reach a file outside the review tree');
+    const st = lstatSync(path.join(prep.dir, 'scripts', 'eval'));
+    assert.equal(st.isSymbolicLink(), false, 'a symlink entry must not come out as a link');
+    assert.equal(st.isFile(), true);
+    assert.deepEqual([...prep.files].sort(), ['scripts/eval', 'src/real.txt']);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+// Breaks if removeExcluded treats a parent that is a plain file as a folder: a symlink entry at scripts/eval/review-eval comes out as a plain
+// file (core.symlinks=false), and rmSync of '<file>/gold' then throws ENOTDIR on linux. Remove the "parent is not a directory" return to see it fail there.
+test('a head whose symlink entry is scripts/eval/review-eval comes out as a plain file, the prepare succeeds and the outside target is untouched', async () => {
+  const { outside, keep } = outsideGold();
+  const { root, base } = repoWithHeadFiles({ 'src/real.txt': 'real\n' });
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+  git('config', 'core.symlinks', 'true');
+  const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: outside, encoding: 'utf8' }).stdout.trim();
+  git('update-index', '--add', '--cacheinfo', `120000,${blob},scripts/eval/review-eval`);
+  git('commit', '-q', '-m', 'link');
+  const head = git('rev-parse', 'HEAD');
+  const prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees') });
+  try {
+    const st = lstatSync(path.join(prep.dir, 'scripts', 'eval', 'review-eval'));
+    assert.equal(st.isSymbolicLink(), false, 'a symlink entry must not come out as a link');
+    assert.equal(st.isFile(), true, 'scripts/eval/review-eval stays as a plain file');
+    assert.equal(readFileSync(keep, 'utf8'), 'made-up file that must survive\n', 'the outside target is untouched');
+    assert.equal(existsSync(path.join(outside, 'review-eval', 'gold')), true);
+  } finally {
+    prep.cleanup();
+  }
+});
+
+// Breaks if removeExcluded follows the last part of an entry: an excluded entry (here thoughts) that is itself a link to an outside folder must be
+// removed as a link, never emptied. Make rmSync follow the link, or delete the entry's target first, to see keep.txt go.
+test('an excluded entry that is itself a link to a folder outside the review tree is removed by name and its target stays', async (t) => {
+  const outside = tmp('outside');
+  const keep = path.join(outside, 'keep.txt');
+  writeFileSync(keep, 'made-up file that must survive\n');
+  const { root, base, head } = repoWithHeadFiles({ 'src/real.txt': 'real\n' });
+  const extract = (spec) => {
+    const r = defaultExtract(spec);
+    try {
+      symlinkSync(outside, path.join(spec.dir, 'thoughts'), process.platform === 'win32' ? 'junction' : 'dir');
+    } catch { return { status: 'skip' }; }
+    return r;
+  };
+  let prep;
+  try {
+    prep = await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: tmp('trees'), extract });
+  } catch (e) {
+    if (/status skip/.test(String(e.message))) { t.skip('this machine cannot create a directory link'); return; }
+    throw e;
+  }
+  try {
+    assert.equal(existsSync(path.join(prep.dir, 'thoughts')), false, 'the link entry is removed');
+    assert.equal(existsSync(keep), true, 'the file outside the review tree survives');
+  } finally {
+    prep.cleanup();
+  }
+});
+
+// Breaks if the exclude loop removes a path whose parent folder is a link to a folder outside the review tree: remove the realpath check
+// before the rmSync loop in prepareReview and the outside gold file is deleted.
+test('a parent folder of an excluded path that links outside the review tree fails the prepare, deletes nothing outside, and leaves no tree behind', async (t) => {
+  const { outside, keep } = outsideGold();
+  const { root, base, head } = repoWithHeadFiles({ 'src/real.txt': 'real\n' });
+  const trees = tmp('trees');
+  const extract = (spec) => {
+    const r = defaultExtract(spec);
+    try {
+      mkdirSync(path.join(spec.dir, 'scripts'), { recursive: true });
+      symlinkSync(outside, path.join(spec.dir, 'scripts', 'eval'), process.platform === 'win32' ? 'junction' : 'dir');
+    } catch { return { status: 'skip' }; }
+    return r;
+  };
+  let err;
+  try {
+    await prepareReview({ root, input: { range: `${base}..${head}` }, tmpRoot: trees, extract });
+  } catch (e) { err = e; }
+  if (err && /status skip/.test(String(err.message))) { t.skip('this machine cannot create a directory link'); return; }
+  assert.ok(err, 'the prepare must fail');
+  assert.match(err.message, /review tree escape: scripts\/eval\/review-eval\/gold resolves outside the review tree/);
+  assert.equal(existsSync(keep), true, 'the file outside the review tree survives the prepare and the cleanup');
+  assert.equal(existsSync(path.join(outside, 'review-eval', 'gold')), true);
+  assert.deepEqual(readdirSync(trees), [], 'the temp tree is removed');
 });
 
 test('prepareReview rejects an unknown revision with a clear error (exit 2 at the CLI)', async () => {
@@ -1234,7 +1469,10 @@ test('TREE_EXCLUDES and AGENT_FILES are exported, frozen and complete', () => {
   assert.equal(Object.isFrozen(TREE_EXCLUDES), true);
   assert.equal(Object.isFrozen(AGENT_FILES), true);
   assert.deepEqual([...AGENT_FILES], ['AGENTS.md', 'CLAUDE.md', '.cursorrules', '.cursor', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json']);
-  assert.deepEqual([...TREE_EXCLUDES], ['.git', '.claudedocs', '.claude/cache', '.claude/reviews', 'artifacts', 'thoughts']);
+  assert.deepEqual([...TREE_EXCLUDES], [
+    '.git', '.claudedocs', '.claude/cache', '.claude/reviews', 'artifacts', 'thoughts',
+    'scripts/eval/review-eval/gold', 'scripts/eval/review-eval/seeds', 'scripts/eval/review-eval/rubrics', 'scripts/eval/review-eval/linktype-labels.json',
+  ]);
 });
 
 // Breaks if cursor-review.mjs imports pre-pr.mjs again: that pulls review-router, review-status, cr-paid and cr-fix into the engine.
