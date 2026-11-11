@@ -530,6 +530,21 @@ function pipedIexTexts(segment: string, earlier: string[]): string[] {
   return earlier.map(literalText).filter((t): t is string => t !== null);
 }
 
+/**
+ * Whether an iex / Invoke-Expression segment runs text the guard did not read: a bare iex with no literal string piped
+ * into it, or with a script block that holds a manager word before it (a script block or a variable made the text), or an
+ * argument that holds a variable (iex $a).
+ */
+function iexRunsUnreadText(segment: string, earlier: string[]): boolean {
+  const words = tokenize(stripPrefixes(segment));
+  if (words[0] === '&') words.shift();
+  if (!IEX_WORD.test(words[0] ?? '')) return false;
+  const direct = iexPayload(segment);
+  if (direct !== null) return direct.includes('$');
+  // A script block with a manager word in it may make the text, whatever literal string comes first.
+  return pipedIexTexts(segment, earlier).length === 0 || earlier.some((s) => s.includes('{') && hasManagerWord(s));
+}
+
 /** One plan per segment text: the same literal read twice (an upstream string and a here-string body) asks once. */
 function uniqueBySegment(plans: InstallPlan[]): InstallPlan[] {
   const seen = new Set<string>();
@@ -541,10 +556,25 @@ const ASSIGNED_HERE_STRING = /^[ \t]*\$[\w:]+[ \t]*=[ \t]*@(['"])[ \t]*\r?\n([\s
 // An iex word anywhere in raw text, with quotes and escapes removed too (i"e"x).
 const IEX_ANYWHERE = /(?<![\w-])(?:iex|invoke-expression)(?![\w-])/i;
 
+/** An iex word anywhere in raw text, read as it is and with quotes and escapes removed. */
+function hasIexWord(command: string): boolean {
+  return IEX_ANYWHERE.test(command) || IEX_ANYWHERE.test(command.replace(/[\\'"`^]/g, ''));
+}
+
 /** The bodies of `$var = @'..'@` here-strings, when the command also has an iex word anywhere. No variable is tracked: fail closed. */
 function assignedHereStringBodies(command: string): string[] {
-  if (!IEX_ANYWHERE.test(command) && !IEX_ANYWHERE.test(command.replace(/[\\'"`^]/g, ''))) return [];
+  if (!hasIexWord(command)) return [];
   return [...command.matchAll(ASSIGNED_HERE_STRING)].map((m) => m[2]).filter((body) => body.trim() !== '');
+}
+
+/**
+ * A manager word anywhere in raw text, read as it is, joined (np'+'m) and with quotes and escapes removed. It reads no
+ * cmdlet and no variable: a string in a script block or a variable that iex runs ($a='npm install x'; iex $a) is not read,
+ * so an iex word plus a manager word in one command must ask.
+ */
+function hasManagerWord(command: string): boolean {
+  const joined = joinConcat(command).toLowerCase();
+  return [joined, joined.replace(/[\\'"`^]/g, '')].some((text) => RC_GATE_NAMES.test(text) || RC_GATE_SHORT.test(text));
 }
 
 /** A pipe into iex or Invoke-Expression, read raw. The catch path of installPlans uses it: an unread command must ask. */
@@ -581,19 +611,24 @@ export function installPlans(command: string, tool = 'Bash', cwd: string | null 
     const { segments, substitutions } = parseExecutable(normalizeEscapes(stripFdRedirects(executableView(command, tool), tool), tool));
     const found: InstallPlan[] = [];
     const viaIex: InstallPlan[] = [];
+    let unreadIex = false;
     for (const [k, raw] of segments.entries()) {
       const segment = stripLeaders(raw);
       // An iex string that holds an install is covered by that plan, so the segment does not ask twice. An override prefix stays on the iex segment.
       const inner = depth < 3 && !checkOverride(segment) ? iexSegmentPlans(segment, segments.slice(0, k), tool, cwd, depth + 1, config) : [];
       viaIex.push(...inner);
+      if (depth < 3 && !checkOverride(segment) && iexRunsUnreadText(segment, segments.slice(0, k))) unreadIex = true;
       if (inner.length === 0 && (needsCheck(segment, tool, config) || encodedCommands(segment).bad)) found.push({ segment, cwd, tool });
     }
     if (depth >= 3) return found;
     const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
     const decoded = segments.flatMap((s) => encodedCommands(s).payloads);
     const hereStrings = assignedHereStringBodies(command).flatMap((body) => iexPlans(body, tool, cwd, depth + 1, config));
+    // Fail closed on raw text: an iex that ran no readable string (script block, variable) beside a manager word asks.
+    const unread = unreadIex && hasIexWord(command) && hasManagerWord(command);
     return [
       ...found,
+      ...(unread && !checkOverride(command) ? [{ segment: command.trim(), cwd: null, tool }] : []),
       ...uniqueBySegment([...viaIex, ...hereStrings]),
       ...nested.flatMap((text) => installPlans(text, tool, cwd, depth + 1, config)),
       ...decoded.flatMap((text) => installPlans(text, 'PowerShell', null, depth + 1, config || undefined)),
