@@ -68,7 +68,8 @@ let boards = null; let urlA = null; let urlOld = null; let db = null; let plain 
 try {
   log('# lane remind verbs and the Reminders due block: scratch database probe, 2026-11-06');
   log('# Live database: NOT touched. The real lane.mjs and the built dist/lane-context.mjs run against the scratch URL below.');
-  const created = scratch('create', '--through', '5');
+  // Through 6: without table lane_dep the hook drops the claimable block (gate-2, contract "Database floor").
+  const created = scratch('create', '--through', '6');
   if (created.status !== 0) throw new Error(`scratch create failed: ${created.stderr}`);
   urlA = JSON.parse(created.stdout).url;
   assertScratchUrl(urlA);
@@ -354,7 +355,7 @@ try {
     return { code: h.status, raw, ctx, ms: Date.now() - t0, err: (h.stderr || '').trim() };
   };
   const block = (ctx) => /## Reminders due[\s\S]*?(?:\n\n|$)/.exec(ctx ?? '')?.[0] ?? '';
-  const claimBlock = (ctx) => /Claimable next:[\s\S]*?(?:\n\n|$)/.exec(ctx ?? '')?.[0] ?? '';
+  const claimBlock = (ctx) => /Claimable \(claim by id\):[\s\S]*?(?:\n\n|$)/.exec(ctx ?? '')?.[0] ?? '';
   const blockRows = (ctx) => block(ctx).split('\n').filter((l) => /^ {2}(P0|P1|P2|--) /.test(l));
 
   let h = hook(urlA, C.dir);
@@ -370,7 +371,7 @@ try {
   const rows3 = blockRows(h.ctx);
   log(`dist/lane-context.mjs stdout for a real SessionStart payload (board ${C.key}, three due reminders):\n${h.raw}`);
   check('three due reminders print "## Reminders due (3)"', h.ctx?.includes('## Reminders due (3)'), block(h.ctx).split('\n')[0]);
-  check('the heading sits above "Claimable next"', h.ctx !== null && h.ctx.indexOf('## Reminders due') > -1 && h.ctx.indexOf('## Reminders due') < h.ctx.indexOf('Claimable next'));
+  check('the heading sits above "Claimable next"', h.ctx !== null && h.ctx.indexOf('## Reminders due') > -1 && h.ctx.indexOf('## Reminders due') < h.ctx.indexOf('Claimable (claim by id)'));
   check('the P0 row is first, then P1, then P2 (band order, not due order)',
     rows3.length === 3 && /zz-rmc-p0due/.test(rows3[0]) && /zz-rmc-p1due/.test(rows3[1]) && /zz-rmc-p2due/.test(rows3[2]), rows3.join(' | '));
   check('a reminder whose due_at is in the future is absent from the block and from Claimable next',

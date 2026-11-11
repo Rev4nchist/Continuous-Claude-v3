@@ -83,7 +83,8 @@ let boards = null; let url = null; let db = null;
 try {
   log('# lane band readers: scratch database probe, 2026-11-06');
   log('# Live database: NOT touched. The real lane.mjs and the built lane-context hook run against the scratch URL below.');
-  const created = scratch('create', '--through', '5');
+  // Through 6: without table lane_dep the hook drops the claimable block (gate-2, contract "Database floor").
+  const created = scratch('create', '--through', '6');
   if (created.status !== 0) throw new Error(`scratch create failed: ${created.stderr}`);
   url = JSON.parse(created.stdout).url;
   assertScratchUrl(url);
@@ -205,7 +206,7 @@ try {
   try { ctx = JSON.parse(hookRun.stdout).hookSpecificOutput.additionalContext; } catch { /* checked below */ }
   check('the hook exits 0 and prints a SessionStart banner', hookRun.status === 0 && ctx.includes(`Lane board ${C.key}`), (hookRun.stderr || '').split('\n')[0] || (hookRun.stdout || '').slice(0, 120));
   const claimLines = ctx.split('\n');
-  const at = claimLines.findIndex((l) => l.startsWith('Claimable next:'));
+  const at = claimLines.findIndex((l) => l.startsWith('Claimable (claim by id):'));
   const got = []; if (at >= 0) for (const l of claimLines.slice(at + 1)) { const m = l.match(/^ {2}(P[012]|--) (zz-lc-\S+)\s/); if (!m) break; got.push(`${m[1]} ${m[2]}`); }
   check('Claimable next: band order with the band printed before each id (P0 due soonest, P0, P1, P2, Unsorted)',
     same(got, ['P0 zz-lc-p0d', 'P0 zz-lc-p0', 'P1 zz-lc-p1', 'P2 zz-lc-p2', '-- zz-lc-un']), JSON.stringify(got));

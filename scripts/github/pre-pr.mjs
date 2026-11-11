@@ -124,8 +124,8 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match'];
-const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'scratch-db'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match'];
+const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
 // validate-mods exits 1 when its typecheck cannot run. On Claude Code 2.1.296 and later no command writes the
