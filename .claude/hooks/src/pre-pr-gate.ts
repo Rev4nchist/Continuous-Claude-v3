@@ -587,18 +587,26 @@ function enforceIn(deps: Deps, top: string | null): boolean | null {
 /**
  * Pure given its deps. Allow, override (a deny that the override let through; it is logged) or deny.
  * A Desktop Commander shell is chosen at run time, so its text is judged as Bash, then as PowerShell: the first non-allow wins.
+ * Each shell is read twice when blanking the quotes changes the text. The first reading blanks inert quotes by that shell's rules. The second
+ * reading blanks nothing (the real tool name): cmd.exe treats a single quote as a plain character, so echo 'x & <create> & rem ' runs the create.
+ * The extra reading can only add a deny. The first two verdicts stay first in the list.
  */
 export function decide(input: HookInput, deps: Deps): Decision {
   if (!isDesktopCommander(input)) return decideAs(input, deps);
   const text = commandOf(input);
-  const both = [decideAs({ ...input, tool_name: 'Bash' }, deps, text), decideAs({ ...input, tool_name: 'PowerShell' }, deps, text)];
-  return both.find((d) => d.action === 'deny') ?? both.find((d) => d.action === 'override') ?? both.find((d) => d.action === 'allow' && d.warn) ?? both[0];
+  const realName = input.tool_name || input.tool;
+  const runs: Decision[] = [];
+  for (const shell of ['Bash', 'PowerShell'] as const) runs.push(decideAs({ ...input, tool_name: shell }, deps, text));
+  for (const shell of ['Bash', 'PowerShell'] as const) {
+    if (blankInertQuotes(text, shell) !== text) runs.push(decideAs({ ...input, tool_name: shell }, deps, text, realName));
+  }
+  return runs.find((d) => d.action === 'deny') ?? runs.find((d) => d.action === 'override') ?? runs.find((d) => d.action === 'allow' && d.warn) ?? runs[0];
 }
 
-function decideAs(input: HookInput, deps: Deps, text?: string): Decision {
+function decideAs(input: HookInput, deps: Deps, text?: string, quoteTool: string | undefined = input.tool_name || input.tool): Decision {
   const raw = text ?? commandOf(input);
   // The words of a create inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text, not a create.
-  const command = normalizeGh(joinContinuations(blankInertQuotes(raw, input.tool_name || input.tool), shellOf(input)));
+  const command = normalizeGh(joinContinuations(blankInertQuotes(raw, quoteTool), shellOf(input)));
   const shapes = shapesOf(command);
   if (!isGated(shapes)) return { action: 'allow' };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);

@@ -1166,6 +1166,66 @@ describe('DC: Desktop Commander shell tools are gated like Bash', () => {
     const enforce = { [join(ROOT, 'review-router.config.json')]: JSON.stringify({ checkpoint: { enforce: true } }) };
     expect(verdict(startInput(ready), deps({ stamp: null, stamps: enforce }))).toBe('deny');
   });
+
+  // cmd.exe reading gap. cmd.exe reads `'` as a plain character and `&` as a command break, so a create after `&` runs.
+  // How it can fail: decide() relabels the tool to Bash/PowerShell, so the inert-quote blanking hides the create -> R1..R4;
+  // the fix loses a deny the PowerShell reading gives today -> P1; the fix loses the new deny of the third reading (cmd.exe
+  // reads `"` as a quote, so a create in echo double quotes is now denied: an over-deny Dave accepts) -> P2; the fix over-denies
+  // a Bash/PowerShell call -> A1..A4; the fix always runs four readings instead of two for a plain DC command -> G.
+  // (A8 is DC1b above: a fresh stamp still lets a plain DC create through.)
+  const WRAPPED = `echo 'x & ${CREATE[0]} & rem '`;
+
+  it('DC7-R1: start_process with no shell set: a create after `&` inside echo quotes is denied', () => {
+    expect(verdict(startInput(WRAPPED), deps({ stamp: null }))).toBe('deny');
+  });
+
+  it('DC7-R2: interact_with_process: the same wrapped create is denied', () => {
+    expect(verdict(interactInput(WRAPPED), deps({ stamp: null }))).toBe('deny');
+  });
+
+  it('DC7-R3: start_process with shell cmd: the same wrapped create is denied', () => {
+    const payload = { tool_name: START, tool_input: { command: WRAPPED, shell: 'cmd', timeout_ms: 1000 }, cwd: ROOT };
+    expect(verdict(payload, deps({ stamp: null }))).toBe('deny');
+  });
+
+  it('DC7-R4: start_process: a create inside git commit -m quotes is denied', () => {
+    expect(verdict(startInput(`git commit -m 'x & ${CREATE[0]} & rem '`), deps({ stamp: null }))).toBe('deny');
+  });
+
+  it('DC7-P1: a heredoc body that holds a create stays denied (the PowerShell reading sees it)', () => {
+    expect(verdict(startInput(`cat >> n.md <<'EOF'\n${CREATE[0]}\nEOF`), deps({ stamp: null }))).toBe('deny');
+  });
+
+  it('DC7-P2: a create inside echo double quotes is now denied (a new over-deny Dave accepts: cmd.exe treats `"` as a quote)', () => {
+    expect(verdict(startInput(`echo "x ${CREATE[0]}"`), deps({ stamp: null }))).toBe('deny');
+  });
+
+  it('DC7-A1/A2: Bash and PowerShell keep the inert-quote exemption for the wrapped create', () => {
+    for (const tool of ['Bash', 'PowerShell']) {
+      expect(verdict({ tool_name: tool, tool_input: { command: WRAPPED }, cwd: ROOT }, deps({ stamp: null })), tool).toBe('allow');
+    }
+  });
+
+  it('DC7-A3/A4: Bash and PowerShell allow a create named inside echo double quotes', () => {
+    for (const tool of ['Bash', 'PowerShell']) {
+      expect(verdict({ tool_name: tool, tool_input: { command: `echo "notes: ${CREATE[0]} later"` }, cwd: ROOT }, deps({ stamp: null })), tool).toBe('allow');
+    }
+  });
+
+  // The wrapped create is hidden from the two blanked readings (no git work), so only the two unblanked readings judge it: the same count as a plain create.
+  it('DC7-G: a plain DC create makes two readings of git work, not four; the wrapped create is judged by two readings too', () => {
+    const count = (payload: unknown): number => {
+      const calls: Array<{ cwd: string; args: string[] }> = [];
+      verdict(payload, deps({ stamp: null, calls }));
+      return calls.length;
+    };
+    const bashCalls = count(input(CREATE[0]));
+    const plain = count(startInput(CREATE[0]));
+    const wrapped = count(startInput(WRAPPED));
+    expect(bashCalls, 'a Bash create must make git calls, or the count proves nothing').toBeGreaterThan(0);
+    expect(plain, 'plain DC create: Bash reading + PowerShell reading').toBe(bashCalls * 2);
+    expect(wrapped, 'wrapped DC create: the two unblanked readings judge it, the two blanked readings see no create').toBe(plain);
+  });
 });
 
 describe('L: the decision log', () => {
