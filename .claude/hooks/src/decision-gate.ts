@@ -307,6 +307,8 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Wher
 
 /** The quote marks of a view become segment breaks, same length. A call inside a quoted string then sits at a command position. */
 const quotesToBreaks = (view: string): string => view.replace(/["']/g, ';');
+/** The quote marks become spaces, same length. cmd.exe runs a quoted program name (`"git" push`), so that call has to stay one command. */
+const quotesToSpaces = (view: string): string => view.replace(/["']/g, ' ');
 
 /**
  * The push calls of a command: the bash view, the pwsh view, and each bash segment with its quotes deleted (`g"i"t push`, `git "push"`).
@@ -322,8 +324,10 @@ function pushCallsIn(raw: string, cmdExe = false): RawPush[] {
   const maskedPwsh = maskQuoted(pwsh, 'PowerShell');
   const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskedPwsh, pwsh, false)];
   if (cmdExe) {
-    if (maskedBash !== bash) calls.push(...pushCallsOf(quotesToBreaks(bash), bash, false, undefined, bash));
-    if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(quotesToBreaks(pwsh), pwsh, false, undefined, pwsh));
+    for (const view of [quotesToBreaks, quotesToSpaces]) {
+      if (maskedBash !== bash) calls.push(...pushCallsOf(view(bash), bash, false, undefined, bash));
+      if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(view(pwsh), pwsh, false, undefined, pwsh));
+    }
   }
   let from = 0;
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const);

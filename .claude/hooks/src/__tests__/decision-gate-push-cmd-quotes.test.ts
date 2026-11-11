@@ -112,6 +112,24 @@ describe('F3 verdicts that must not change', () => {
   });
 });
 
+describe('F5 a quoted executable name or quoted argument (cmd.exe runs "git")', () => {
+  const QEXE = `echo 'x & "git" push fork feat/x & rem '`;
+  const QBOTH = `echo 'x & "git" push "fork" "feat/x" & rem '`;
+  it('quoted executable, start_process', () => {
+    expect(denied(dcStart(QEXE))).toBe(true);
+  });
+  it('quoted executable and quoted arguments, start_process', () => {
+    expect(denied(dcStart(QBOTH))).toBe(true);
+  });
+  it('quoted executable, interact_with_process', () => {
+    expect(denied(dcInteract(QEXE))).toBe(true);
+  });
+  it('quoted executable stays allowed under Bash and PowerShell (inert quotes)', () => {
+    expect(denied(bash(QEXE))).toBe(false);
+    expect(denied(pwsh(QEXE))).toBe(false);
+  });
+});
+
 describe('F4 accepted over-deny: a double-quoted echo of the push under Desktop Commander', () => {
   it('start_process is denied', () => {
     expect(denied(dcStart(DQ_ECHO))).toBe(true);

@@ -72,7 +72,7 @@ function runHook(tool: string, toolInput: Record<string, unknown>, nameField: 't
   };
 }
 
-const gated = (d: string | undefined) => expect(['deny', 'ask']).toContain(d);
+const gated = (d: string | undefined) => expect(d).toBe('deny');
 const allowed = (d: string | undefined) => expect(d).toBeUndefined();
 
 // The words are split so this file does not hold a literal install command.

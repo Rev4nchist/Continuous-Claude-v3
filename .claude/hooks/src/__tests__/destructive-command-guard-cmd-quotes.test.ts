@@ -87,6 +87,21 @@ describe('segment-table command hidden in the wrapped echo', () => {
   });
 });
 
+describe('segment-table call with a double-quoted URL hidden in the wrapped echo', () => {
+  // The quote marks around the URL must not split it from the az rest segment.
+  const URL_SUSPEND = 'https://management.azure.com/subscriptions/S/resourceGroups/R/providers/Microsoft.Fabric/capacities/cap1/suspend?api-version=2023-11-01';
+  const REST = `az rest --method POST --url "${URL_SUSPEND}"`;
+  it('plain az rest suspend through Desktop Commander asks (control)', () => {
+    expect(verdict(REST, dcStart(REST, 'cmd'))).toBe('ask');
+  });
+  it('start_process: wrapped az rest suspend with a quoted URL asks', () => {
+    expect(verdict(wrap(REST), dcStart(wrap(REST), 'cmd'))).toBe('ask');
+  });
+  it('the wrapped az rest suspend under Bash is inert quote text: allow', () => {
+    expect(verdict(wrap(REST), viaBash(wrap(REST)))).toBe('allow');
+  });
+});
+
 describe('accepted over-deny: double-quoted echo of the command through Desktop Commander', () => {
   it('start_process: echo "rm -rf T" asks (cmd.exe would not run it, the guard cannot tell)', () => {
     expect(verdict(dquote(RM), dcStart(dquote(RM), 'cmd'))).toBe('ask');

@@ -689,8 +689,12 @@ export function classifyQuotesKept(command: string, tool: string = 'Bash'): stri
     for (const p of patterns) if (p.re.test(scan)) return p.name;
     // The segment table (Fabric calls) too. Each quote mark becomes a break, so a call inside quotes
     // opens a segment. A parse of the real text would keep the whole quoted string as one word.
-    const segHit = classifySegments(text.replace(/["']/g, ';'), tool);
-    if (segHit) return segHit;
+    // A second view turns each quote mark into a space instead: a quoted URL then stays in its own segment
+    // (`az rest --url "https://..."`), and a quoted program name (`"az" rest`) still reads as a word.
+    for (const mark of [';', ' ']) {
+      const segHit = classifySegments(text.replace(/["']/g, mark), tool);
+      if (segHit) return segHit;
+    }
   }
   return null;
 }

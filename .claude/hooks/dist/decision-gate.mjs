@@ -1030,6 +1030,7 @@ function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, l
   return calls;
 }
 var quotesToBreaks = (view) => view.replace(/["']/g, ";");
+var quotesToSpaces = (view) => view.replace(/["']/g, " ");
 function pushCallsIn(raw, cmdExe = false) {
   const bash = joinContinuations(raw, "bash");
   const pwsh = joinContinuations(raw, "pwsh");
@@ -1038,8 +1039,10 @@ function pushCallsIn(raw, cmdExe = false) {
   const maskedPwsh = maskQuoted(pwsh, "PowerShell");
   const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskedPwsh, pwsh, false)];
   if (cmdExe) {
-    if (maskedBash !== bash) calls.push(...pushCallsOf(quotesToBreaks(bash), bash, false, void 0, bash));
-    if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(quotesToBreaks(pwsh), pwsh, false, void 0, pwsh));
+    for (const view of [quotesToBreaks, quotesToSpaces]) {
+      if (maskedBash !== bash) calls.push(...pushCallsOf(view(bash), bash, false, void 0, bash));
+      if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(view(pwsh), pwsh, false, void 0, pwsh));
+    }
   }
   let from = 0;
   const breaks = [...maskedBash.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]);

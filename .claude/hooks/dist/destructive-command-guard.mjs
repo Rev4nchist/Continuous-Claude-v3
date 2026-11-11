@@ -1001,8 +1001,10 @@ function classifyQuotesKept(command, tool = "Bash") {
   for (const text of joined === command ? [command] : [command, joined]) {
     const scan = normalizeGitGlobalOptions(text);
     for (const p of patterns) if (p.re.test(scan)) return p.name;
-    const segHit = classifySegments(text.replace(/["']/g, ";"), tool);
-    if (segHit) return segHit;
+    for (const mark of [";", " "]) {
+      const segHit = classifySegments(text.replace(/["']/g, mark), tool);
+      if (segHit) return segHit;
+    }
   }
   return null;
 }
