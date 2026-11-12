@@ -136,11 +136,11 @@ function fakeGh(w) {
     const find = (n) => structuredClone(w.pulls.find((p) => p.number === n));
     let m = /^repos\/[^/]+\/[^/?]+\/pulls\?state=open&per_page=100&page=(\d+)$/.exec(url);
     if (m) return Number(m[1]) === 1 ? w.pulls.map((p) => structuredClone(p)) : [];
-    m = /^repos\/[^/]+\/[^/?]+\/pulls\?state=all&head=([^&]+)$/.exec(url);
+    m = /^repos\/[^/]+\/[^/?]+\/pulls\?state=all&head=([^&]+)&per_page=100&page=1$/.exec(url);
     if (m) { const branch = decodeURIComponent(m[1]).split(':')[1]; return w.pulls.filter((p) => p.head.ref === branch).map((p) => structuredClone(p)); }
     m = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/.exec(url);
     if (m) { const p = find(Number(m[1])); if (!p) throw new Error('HTTP 404'); return p; }
-    m = /^repos\/[^/]+\/[^/]+\/commits\/([0-9a-f]{40})\/pulls$/.exec(url);
+    m = /^repos\/[^/]+\/[^/]+\/commits\/([0-9a-f]{40})\/pulls\?per_page=100&page=1$/.exec(url);
     if (m) return (w.commitPulls[m[1]] ?? []).map(find);
     throw new Error(`unscripted gh ${url}`);
   };
@@ -420,6 +420,8 @@ test('T5b a copy that goes away during a run: one error line, the pinned line is
   assert.equal(one.pinned, true);
   assert.equal(one.counted, false);
   assert.match(one.reason, /engine copy/);
+  assert.equal(one.copyGone, true, 'the line says the copy went away, so a later sweep gives this head one more try');
+  assert.equal(two.copyGone, undefined);
   assert.equal(two.pinned, true);
   assert.equal(two.counted, true, 'the copy was extracted again before the second run');
   assert.ok(existsSync(path.join(copy, 'scripts', 'github', 'local-review.mjs')));
@@ -478,6 +480,10 @@ test('T6b "already run" is keyed on head + engineSha: an ok line or a void line 
     [[{ status: 'failed', audit: 'void' }], 0],
     [[{ status: 'failed', audit: 'not-run' }], 1],
     [[{ status: 'failed', audit: 'not-run' }, { status: 'failed', audit: 'pass' }], 0],
+    // A run whose engine copy went away is a failed run of the sweep, though its record says ok: one more try, then it blocks.
+    [[{ status: 'ok', audit: 'pass', copyGone: true }], 1],
+    [[{ status: 'ok', audit: 'pass', copyGone: true }, { status: 'ok', audit: 'pass', copyGone: true }], 0],
+    [[{ status: 'ok', audit: 'void', copyGone: true }], 0],
   ];
   for (const [seed, runs] of cases) {
     const { w, earlyRuns } = earlierWorld(seed);
@@ -537,6 +543,47 @@ test('T6f two candidate PRs and no branch to choose by: no run, counted as ambig
   assert.equal(stubCalls().filter((c) => c.pullHead === early).length, 0);
   assert.equal(reportOf(w).skipped.ambiguousPr, 1);
   assert.equal(existsSync(path.join(w.stateRoot, 'cli-pairs', '8')), false, 'no pair for an ambiguous head');
+});
+
+test('T6g a gh failure in the PR lookup is not read as "no PR": the head is counted under ghError, logged, and the sweep exits 1', async () => {
+  // Breaks when: ghList swallows a gh error (a rate limit then reads as "no PR" and the head is silently dropped).
+  const early = H('e');
+  const w = world({ pulls: [pullOf(7, { band: 'HIGH' })], shas: { eeeeeee: early } });
+  put(w.cliDir, '2026-11-10-pre-pr-cr-eeeeeee.txt', cliStream(['major']));
+  const over = { gh: async (args) => { if (/\/commits\/[0-9a-f]{40}\/pulls/.test(String(args[1]))) throw new Error('HTTP 403: API rate limit exceeded'); return fakeGh(w)(args); } };
+  assert.equal(await sweep(w, [], over), SWEEP_EXIT.FAILED, w.logs.join('\n'));
+  assert.equal(reportOf(w).skipped.ghError, 1);
+  assert.equal(reportOf(w).skipped.noPr, 0);
+  assert.ok(w.logs.some((l) => /rate limit/.test(l)), w.logs.join('\n'));
+});
+
+test('T6h a commit that GitHub does not know (HTTP 404 or 422) is "no PR", not an error', async () => {
+  // Breaks when: every gh failure is an error (an unpushed commit would then fail each daily sweep).
+  const early = H('e');
+  const w = world({ pulls: [pullOf(7, { band: 'HIGH' })], shas: { eeeeeee: early } });
+  put(w.cliDir, '2026-11-10-pre-pr-cr-eeeeeee.txt', cliStream(['major']));
+  const over = { gh: async (args) => { if (/\/commits\/[0-9a-f]{40}\/pulls/.test(String(args[1]))) throw new Error('gh: No commit found for SHA (HTTP 422)'); return fakeGh(w)(args); } };
+  assert.equal(await sweep(w, [], over), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.equal(reportOf(w).skipped.noPr, 1);
+  assert.equal(reportOf(w).skipped.ghError, 0);
+});
+
+test('T6i the PR lookup pages: a head whose PR is on page 2 of commits/<sha>/pulls is found', async () => {
+  // Breaks when: ghList reads one page only (GitHub gives 30 by default).
+  const early = H('e');
+  const w = world({ pulls: [pullOf(7, { band: 'HIGH' })], shas: { eeeeeee: early } });
+  put(w.cliDir, '2026-11-10-pre-pr-cr-eeeeeee.txt', cliStream(['major']));
+  const filler = Array.from({ length: 100 }, () => ({ number: null })); // 100 rows with no PR number: a full first page
+  const seen = [];
+  const over = { gh: async (args) => {
+    const m = /\/commits\/[0-9a-f]{40}\/pulls\?per_page=100&page=(\d+)$/.exec(String(args[1]));
+    if (!m) return fakeGh(w)(args);
+    seen.push(Number(m[1]));
+    return Number(m[1]) === 1 ? filler : [structuredClone(w.pulls[0])];
+  } };
+  assert.equal(await sweep(w, [], over), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.deepEqual(seen, [1, 2]);
+  assert.ok(stubCalls().some((c) => c.pullHead === early && c.opts.pr === 7));
 });
 
 // ---------- T7 pairs ----------

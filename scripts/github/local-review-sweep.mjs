@@ -245,23 +245,43 @@ function candidates(list, branch) {
   return branch ? pulls.filter((p) => p.head?.ref === branch) : pulls;
 }
 
+/** GitHub does not know the commit or the route: that is "no PR", not a failure. */
+const UNKNOWN_TO_GITHUB = /HTTP 4(?:04|22)|Not Found|No commit found/i;
+
+/** Every page of a gh list (100 a page). An unknown commit gives []. Any other gh failure throws: it must never read as "no PR". */
 async function ghList(ctx, url) {
-  try { return await ctx.gh(['api', url]); } catch { return []; }
+  const all = [];
+  const sep = url.includes('?') ? '&' : '?';
+  for (let page = 1; ; page += 1) {
+    let batch;
+    try { batch = await ctx.gh(['api', `${url}${sep}per_page=100&page=${page}`]); } catch (err) {
+      if (UNKNOWN_TO_GITHUB.test(String(err?.message))) return all;
+      throw err;
+    }
+    if (!Array.isArray(batch)) break;
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
 }
 
 /**
- * The PR of a head: { pr, branch } | { ambiguous: true } | null. By commit first (commits/<sha>/pulls). With no commit hit, by the worktree
+ * The PR of a head: { pr, branch } | { ambiguous: true } | { error } | null. By commit first (commits/<sha>/pulls). With no commit hit, by the worktree
  * branch (pulls?state=all&head=<owner>:<branch>: it finds a head that a force push replaced). Each step needs exactly one candidate, on the
- * worktree branch when one is known: two or more is ambiguous, none is no PR.
+ * worktree branch when one is known: two or more is ambiguous, none is no PR. A gh failure is { error }: the caller counts and logs it.
  */
 async function prForHead(ctx, sha40, branch) {
-  let found = candidates(await ghList(ctx, `repos/${ctx.repo}/commits/${sha40}/pulls`), branch);
-  if (found.length === 0 && branch) {
-    const owner = ctx.repo.split('/')[0];
-    found = candidates(await ghList(ctx, `repos/${ctx.repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}`), branch);
+  try {
+    let found = candidates(await ghList(ctx, `repos/${ctx.repo}/commits/${sha40}/pulls`), branch);
+    if (found.length === 0 && branch) {
+      const owner = ctx.repo.split('/')[0];
+      found = candidates(await ghList(ctx, `repos/${ctx.repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}`), branch);
+    }
+    if (found.length > 1) return { ambiguous: true };
+    return found.length === 1 ? { pr: found[0].number, branch: found[0].head?.ref ?? null } : null;
+  } catch (err) {
+    return { error: clip(String(err?.message ?? err)) };
   }
-  if (found.length > 1) return { ambiguous: true };
-  return found.length === 1 ? { pr: found[0].number, branch: found[0].head?.ref ?? null } : null;
 }
 
 const hasMajor = (text) => { const s = parseAgentStream(text).bySeverity; return (s.major ?? 0) + (s.critical ?? 0) > 0; };
@@ -276,6 +296,12 @@ async function collectCliHeads(ctx) {
     if (!sha40 || !SHA40.test(sha40)) { ctx.report.skipped.ambiguousSha += 1; continue; }
     if (heads.has(sha40)) continue;
     const owner = await prForHead(ctx, sha40, branchOfCliDir(ctx, f.dir));
+    if (owner?.error) {
+      ctx.report.skipped.ghError += 1;
+      ctx.failed = true;
+      ctx.log(`local-review-sweep: gh lookup of the PR for ${sha40.slice(0, 12)} failed: ${owner.error}`);
+      continue;
+    }
     if (!owner || owner.ambiguous) { ctx.report.skipped[owner ? 'ambiguousPr' : 'noPr'] += 1; continue; }
     let text = '';
     try { text = readFileSync(f.file, 'utf8'); } catch { /* an unreadable file names no Major */ }
@@ -405,13 +431,15 @@ async function openTargets(ctx) {
 
 /**
  * True when the list already holds this head for this engine (key head + engineSha, null for unpinned): an ok line or a void line blocks
- * for good; failed lines (status not ok) block from the second one. So a failed run gets one more try, and a rehearsal line of the checkout
- * engine never blocks a pinned run.
+ * for good; failed lines block from the second one. A failed line is a status other than ok, or a run whose engine copy went away
+ * (copyGone: the sweep reports that run as failed, though its record says ok). So a failed run gets one more try, and a rehearsal line of
+ * the checkout engine never blocks a pinned run.
  */
 function alreadyRun(rows, head, engineSha) {
   const mine = rows.filter((r) => r.head === head && (r.engineSha ?? null) === engineSha);
-  if (mine.some((r) => r.audit === 'void' || r.status === 'ok')) return true;
-  return mine.filter((r) => r.status !== 'ok').length >= 2;
+  const failed = (r) => r.status !== 'ok' || r.copyGone === true;
+  if (mine.some((r) => r.audit === 'void' || !failed(r))) return true;
+  return mine.filter(failed).length >= 2;
 }
 
 /** Earlier heads with a CLI Major. A head that is a PR's open head is covered there. fresh runs never repeat: see alreadyRun. */
@@ -553,7 +581,7 @@ function listLine(ctx, eng, t, record, res, audit, copyGone) {
     pinned: eng.pinned, engineSha: eng.pinned ? ctx.args.engineSha : null, versionSha: vsha, versionSource: eng.pinned ? 'engine-sha' : 'checkout-head',
     engineVersion, bandVersion, label, bodyMode: record?.bodyMode ?? null, facts: t.factsText !== undefined,
     audit: audit.verdict, symlinkCheck: audit.symlinkCheck, kind: t.kind, band: record?.band?.band ?? t.band ?? null, status: record?.status ?? null,
-    counted: reason === null, ...(reason ? { reason } : {}),
+    counted: reason === null, ...(reason ? { reason } : {}), ...(copyGone ? { copyGone: true } : {}),
   };
 }
 
@@ -704,7 +732,7 @@ export function textReport(r) {
   const s = r.skipped;
   const head = `local-review-sweep: ${r.dryRun ? 'DRY RUN, ' : ''}${r.mode ?? 'no'} engine${r.engineSha ? ` (--engine-sha ${r.engineSha.slice(0, 12)})` : ''}`;
   const planned = (p) => `#${p.pr} ${p.band ?? p.note} ${p.kind} ${String(p.head).slice(0, 7)}`;
-  const skips = `draft ${s.draft}, noPr ${s.noPr}, ambiguous PR ${s.ambiguousPr}, ambiguous sha ${s.ambiguousSha}, per-branch cap ${s.perBranchCap}, `
+  const skips = `draft ${s.draft}, noPr ${s.noPr}, gh error ${s.ghError}, ambiguous PR ${s.ambiguousPr}, ambiguous sha ${s.ambiguousSha}, per-branch cap ${s.perBranchCap}, `
     + `failed CLI files ${s.failedCli}, CRITICAL ${s.critical}, LOW ${s.low}, no risk band ${s.noBand}, already run ${s.alreadyRun}, `
     + `refused ${s.refused}, failed ${s.failed}, busy ${s.busy}, engine skips ${JSON.stringify(s.engineSkip)}`;
   const runs = `window ${w.days} days: ${w.runs} run(s); per risk band ${JSON.stringify(w.runsByBand)}; `
@@ -732,7 +760,7 @@ function newReport(ctx) {
     v: 1, ts: new Date(ctx.now()).toISOString(), repo: ctx.repo, mode: null, engineSha: ctx.args.engineSha ?? null, frozenSha: ctx.args.frozenSha ?? null,
     dryRun: Boolean(ctx.args.dryRun), pairsOnly: Boolean(ctx.args.pairsOnly), stopped: null, planned: [], runs: [],
     skipped: {
-      draft: 0, noPr: 0, ambiguousPr: 0, ambiguousSha: 0, perBranchCap: 0, failedCli: 0, critical: 0, low: 0, noBand: 0, alreadyRun: 0,
+      draft: 0, noPr: 0, ghError: 0, ambiguousPr: 0, ambiguousSha: 0, perBranchCap: 0, failedCli: 0, critical: 0, low: 0, noBand: 0, alreadyRun: 0,
       refused: 0, failed: 0, busy: 0, engineSkip: {},
     },
     pairs: { saved: 0, existing: 0 },
