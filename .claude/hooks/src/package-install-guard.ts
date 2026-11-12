@@ -31,7 +31,7 @@ import {
 import { isUnattended } from './shared/unattended.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
-import { readShellCommand } from './shared/shell-tools.js';
+import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
 import maliciousPackages from './shared/malicious-packages.json' with { type: 'json' };
 
 // ---------------------------------------------------------------------------
@@ -2148,12 +2148,26 @@ async function main() {
   // Fast path: no segment installs a package -> passthrough immediately.
   // A desktop-commander shell is chosen at run time, so its text is read as Bash and PowerShell.
   // A desktop-commander shell keeps its own folder, not the session folder: the local-bin skip and the lockfile read cannot use it.
-  const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
+  const payloadCwd = mayRunUnderCmd(shell.tool) ? null : typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
   // An rc file on disk (the cwd, its ancestors, the home folder) that points at another registry makes every install a configured one.
   // Read only when the text can hold an install (mayInstall): up to 20 file reads on a command that installs nothing add nothing.
   const rcMarkers = payloadCwd === null || !mayInstall(command) ? [] : rcFileMarkers(payloadCwd);
   const plans = shell.dialects.flatMap((dialect) =>
     installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : undefined));
+  // Desktop Commander may run the text with cmd.exe. cmd.exe treats a single quote as a plain character, so
+  // echo 'x & <install> & rem ' runs the install. Add one more reading with every quote mark removed.
+  // The extra reading keeps only an install that no first reading found, so it can only add a verdict.
+  if (mayRunUnderCmd(shell.tool) && /['"]/.test(command)) {
+    const flat = (s: string) => s.replace(/['"]/g, '').replace(/\s+/g, ' ').trim();
+    const key = (p: { segment: string; cwd: string | null }) => `${flat(p.segment)}\u0000${p.cwd ?? ''}`;
+    const known = new Set(plans.map(key));
+    const unquoted = command.replace(/['"]/g, ' ');
+    for (const dialect of shell.dialects) {
+      for (const plan of installPlans(unquoted, dialect, localBinCwd(stripFdRedirects(unquoted, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : undefined)) {
+        if (!known.has(key(plan))) plans.push(plan);
+      }
+    }
+  }
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   // F08: the override applies to the segment it prefixes, as a shell env assignment does.
   // A PowerShell `$env:SKIP_PACKAGE_GUARD=1;` first statement sets it for the whole command.

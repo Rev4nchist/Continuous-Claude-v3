@@ -1231,6 +1231,9 @@ function readShellCommand(input) {
   }
   return { kind: "command", tool, text, dialects: spec.dialects };
 }
+function mayRunUnderCmd(tool) {
+  return !!tool && tool.startsWith("mcp__plugin_desktop-commander_");
+}
 
 // src/shared/malicious-packages.json
 var malicious_packages_default = {
@@ -22940,9 +22943,20 @@ async function main() {
     outputContinue();
     return;
   }
-  const payloadCwd = /desktop-commander/i.test(String(input.tool_name)) ? null : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  const payloadCwd = mayRunUnderCmd(shell.tool) ? null : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const rcMarkers = payloadCwd === null || !mayInstall(command) ? [] : rcFileMarkers(payloadCwd);
   const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : void 0));
+  if (mayRunUnderCmd(shell.tool) && /['"]/.test(command)) {
+    const flat = (s) => s.replace(/['"]/g, "").replace(/\s+/g, " ").trim();
+    const key = (p) => `${flat(p.segment)}\0${p.cwd ?? ""}`;
+    const known = new Set(plans.map(key));
+    const unquoted = command.replace(/['"]/g, " ");
+    for (const dialect of shell.dialects) {
+      for (const plan of installPlans(unquoted, dialect, localBinCwd(stripFdRedirects(unquoted, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : void 0)) {
+        if (!known.has(key(plan))) plans.push(plan);
+      }
+    }
+  }
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   const wholeOverride = PS_OVERRIDE.test(command);
   const checked = installs.filter(({ segment }) => !wholeOverride && !checkOverride(segment));
