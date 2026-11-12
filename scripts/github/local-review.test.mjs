@@ -1639,17 +1639,20 @@ const LOOSE_IMPORT = /\bfrom\s*['"]\.\.?\/|\bimport\s*['"]\.\.?\//g;
 const DYNAMIC_LITERAL = /\bimport\s*\(\s*['"]([^'"`$+]+)['"]\s*\)/g;
 /** Every dynamic import(, literal or not, anywhere in the text (a comment or a string too: fail closed). */
 const DYNAMIC_ANY = /\bimport\s*\(/g;
+/** A comment directly after from or import, anywhere in the text. It can hide the specifier or the ( from every pattern above, so it is never read past (fail closed). */
+const COMMENT_AT_IMPORT = /\b(?:from|import)\s*\/[/*]/g;
 /**
  * found: the static relative imports of `text` (the file `rel`) as repo paths. unread: the loose count minus the found count; it must
  * be 0 (fail closed). dynamic: each import() with a literal relative path, as a repo path. nonLiteral: the import( calls whose
- * argument is not one quoted string; the closure cannot name their target, so it must be 0 for an engine file.
+ * argument is not one quoted string; the closure cannot name their target, so it must be 0 for an engine file. commented: the from
+ * and import words with a comment directly after them; its own count, so no found import can cancel it, and it must be 0 too.
  */
 function relImports(text, rel) {
   const at = (spec) => path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec));
   const found = [...text.matchAll(STATIC_IMPORT)].map((m) => at(m[1] ?? m[2]));
   const literal = [...text.matchAll(DYNAMIC_LITERAL)].map((m) => m[1]);
   const dynamic = literal.filter((spec) => /^\.\.?\//.test(spec)).map(at);
-  return { found, unread: (text.match(LOOSE_IMPORT) ?? []).length - found.length, dynamic, nonLiteral: (text.match(DYNAMIC_ANY) ?? []).length - literal.length };
+  return { found, unread: (text.match(LOOSE_IMPORT) ?? []).length - found.length, dynamic, nonLiteral: (text.match(DYNAMIC_ANY) ?? []).length - literal.length, commented: (text.match(COMMENT_AT_IMPORT) ?? []).length };
 }
 const staticImports = (rel) => relImports(readFileSync(path.join(REPO_ROOT, rel), 'utf8'), rel);
 
@@ -1661,7 +1664,7 @@ test('the import parser reads a specifier on the line after from and an import a
     "export { c } from '../up.mjs';",
     "const lazy = () => import('./dyn.mjs');",
   ].join('\n');
-  assert.deepEqual(relImports(text, 'scripts/x/f.mjs'), { found: ['scripts/x/next-line.mjs', 'scripts/x/same-line.mjs', 'scripts/x/bare.mjs', 'scripts/up.mjs'], unread: 0, dynamic: ['scripts/x/dyn.mjs'], nonLiteral: 0 });
+  assert.deepEqual(relImports(text, 'scripts/x/f.mjs'), { found: ['scripts/x/next-line.mjs', 'scripts/x/same-line.mjs', 'scripts/x/bare.mjs', 'scripts/up.mjs'], unread: 0, dynamic: ['scripts/x/dyn.mjs'], nonLiteral: 0, commented: 0 });
   assert.equal(relImports("import { \"a-b\" as ab } from './quoted.mjs';", 'scripts/x/f.mjs').unread, 1, 'a quote inside the import clause is not read: it must count as unread');
 });
 
@@ -1687,6 +1690,22 @@ test('S1 no engine file has a non-literal import(, and the two dynamic imports o
     'scripts/github/local-review/context.mjs -> scripts/ratchets/review-skip-sync.mjs',
     'scripts/github/review-status.mjs -> scripts/github/review-router.mjs',
   ]);
+});
+
+test('the import parser counts a comment directly after from or import, in each form, and no engine file has one (breaks if a comment hides an import from the closure)', () => {
+  const hidden = [
+    "import { a } from /* note */ './block.mjs';",
+    "import { b } from // note\n  './line.mjs';",
+    "import /* note */ './bare.mjs';",
+    "export * from/**/'./tight.mjs';",
+    "const c = await import /* note */ ('./dyn.mjs');",
+    "const d = await import // note\n  ('./dyn-line.mjs');",
+  ];
+  for (const text of hidden) assert.equal(relImports(text, 'scripts/x/f.mjs').commented, 1, text);
+  const mixed = relImports(`import { ok } from './read.mjs';\n${hidden[0]}`, 'scripts/x/f.mjs');
+  assert.deepEqual([mixed.found, mixed.unread, mixed.commented], [['scripts/x/read.mjs'], 0, 1], 'an import that is read does not cancel a hidden one');
+  const files = ENGINE_FILES.filter((f) => f.endsWith('.mjs')).map((f) => [f, staticImports(f).commented]).filter(([, n]) => n !== 0);
+  assert.deepEqual(files, []);
 });
 
 test('the import parser reads every relative import of each engine file: no engine file has an unread import (breaks if an import form the parser misses is added to an engine file)', () => {
