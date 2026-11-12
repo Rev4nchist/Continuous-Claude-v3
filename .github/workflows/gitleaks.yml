@@ -14,9 +14,10 @@ jobs:
       GITLEAKS_VERSION: "8.30.1"          # latest stable v8 as of 2026-10-25 (published 2026-03-21); sha256 matches release checksums.txt
       GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0                 # full history (L1b)
+          persist-credentials: false     # the scan needs no token after checkout (zizmor artipacked)
       - name: Install gitleaks (official release binary, pinned + checksum)
         run: |
           set -euo pipefail
