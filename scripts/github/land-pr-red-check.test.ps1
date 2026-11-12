@@ -34,14 +34,29 @@ $prUrl = 'repos/Rev4nchist/Continuous-Claude-v3/pulls/7'
 $runsUrl = "repos/Rev4nchist/Continuous-Claude-v3/commits/$sha/check-runs?per_page"   # cmd.exe splits an unquoted argument at "=", so a stub sees %~2 up to "?per_page"
 $statusUrl = "repos/Rev4nchist/Continuous-Claude-v3/commits/$sha/status?per_page"
 
-function New-Run([string]$name, [string]$status, $conclusion, [string]$app = 'github-actions') {
-  @{ id = 1; name = $name; status = $status; conclusion = $conclusion; app = @{ slug = $app } }
+# -Id is the check-run id (a re-run has a higher id). -WorkflowRun is the Actions run id inside details_url (a re-run keeps it).
+function New-Run([string]$name, [string]$status, $conclusion, [string]$app = 'github-actions', [long]$id = 1, [string]$workflowRun = '') {
+  $r = @{ id = $id; name = $name; status = $status; conclusion = $conclusion; app = @{ slug = $app } }
+  if ($workflowRun) { $r.details_url = "https://github.com/Rev4nchist/Continuous-Claude-v3/actions/runs/$workflowRun/job/$id" }
+  $r
+}
+
+# The required CI jobs, read from review-status.mjs of this checkout with the real node (the test holds no copy of the names).
+$realNode = (Get-Command node -CommandType Application | Select-Object -First 1).Source
+$reviewStatusUrl = ([Uri](Join-Path $PSScriptRoot 'review-status.mjs')).AbsoluteUri
+$requiredNames = @('import(process.argv.at(-1)).then(m => console.log(JSON.stringify(m.REQUIRED_CHECK_RUNS)))' | & $realNode --input-type=module - $reviewStatusUrl | ConvertFrom-Json)
+if ($requiredNames.Count -lt 2 -or -not $requiredNames[1]) { throw 'harness: could not read REQUIRED_CHECK_RUNS from review-status.mjs' }
+# One green run of every required job (workflow run 500), except the names in -Skip.
+function New-Required([string[]]$Skip = @()) {
+  $i = 100
+  foreach ($n in $requiredNames) { $i++; if ($n -notin $Skip) { New-Run $n 'completed' 'success' 'github-actions' $i '500' } }
 }
 
 # $runs: check run objects. $statuses: commit status objects. -RunsTotal overrides total_count (a cut-off page). -RunsExit is the exit code of the check-runs read.
 # -Page2Runs / -Page2Statuses: a second page. A plain read gets page 1 only (as the real API does); "--paginate --slurp" gets an array of every page.
 # -SlurpExit: exit code of the paginated check-runs read only (gh fails on page 2).
-function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(), [int]$runsTotal = -1, [int]$runsExit = 0, [object[]]$page2Runs = $null, [object[]]$page2Statuses = $null, [int]$slurpExit = 0) {
+# -ReqOverride: the text the stub node prints for the read of the required job names (default: the real node reads review-status.mjs). -ReqExit: its exit code.
+function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(), [int]$runsTotal = -1, [int]$runsExit = 0, [object[]]$page2Runs = $null, [object[]]$page2Statuses = $null, [int]$slurpExit = 0, [object]$reqOverride = $null, [int]$reqExit = 0) {   # [object]: a [string] parameter turns $null into ''
   $dir = Join-Path $work $name; $stub = Join-Path $dir 'stub'; $repo = Join-Path $dir 'repo'; $remote = Join-Path $dir 'fork.git'
   New-Item -ItemType Directory -Force -Path $stub, $repo | Out-Null
   git init -q -b main $repo 2>&1 | Out-Null
@@ -68,8 +83,13 @@ function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(
   if ($null -ne $page2Statuses) { $stPages += (@{ state = 'success'; total_count = $stTotal; statuses = @($page2Statuses) } | ConvertTo-Json -Compress -Depth 6) }
   Set-Content -LiteralPath (Join-Path $stub 'status.json') -Value $stPage1
   Set-Content -LiteralPath (Join-Path $stub 'status-slurp.json') -Value ('[' + ($stPages -join ',') + ']')
+  if ($null -ne $reqOverride) {
+    Set-Content -LiteralPath (Join-Path $stub 'req-override.txt') -Value $reqOverride
+    Set-Content -LiteralPath (Join-Path $stub 'req-exit.txt') -Value $reqExit
+  }
   Set-Content -LiteralPath (Join-Path $stub 'gh.cmd') -Encoding ascii -Value @(
     '@echo off',
+    'echo %* >> "%~dp0calls.log"',
     "if `"%~1`"==`"api`" if `"%~2`"==`"$prUrl/merge`" goto merge",
     "if `"%~1`"==`"api`" if `"%~2`"==`"$prUrl`" goto pull",
     "if `"%~1`"==`"api`" if `"%~2`"==`"$runsUrl`" goto runs",
@@ -107,8 +127,18 @@ function New-Case([string]$name, [object[]]$runs = @(), [object[]]$statuses = @(
     '@echo off',
     'echo %~1| findstr /c:"land-none-check" >nul && exit /b 0',
     'echo %~1| findstr /c:"migration-gate" >nul && exit /b 0',
+    'echo %~1| findstr /c:"input-type" >nul && goto reqlist',
     'echo stub node: unexpected arguments: %* 1>&2',
-    'exit /b 9')
+    'exit /b 9',
+    # The read of the required job names (stdin script, no shell special characters in the arguments): the real node, or the override text of the case.
+    ':reqlist',
+    'if exist "%~dp0req-override.txt" goto reqover',
+    "`"$realNode`" %*",
+    'exit /b %errorlevel%',
+    ':reqover',
+    'type "%~dp0req-override.txt"',
+    'set /p ec=<"%~dp0req-exit.txt"',
+    'exit /b %ec%')
   [pscustomobject]@{ Dir = $dir; Stub = $stub; Repo = $repo; Merge = (Join-Path $stub 'merge.flag') }
 }
 
@@ -120,6 +150,7 @@ function Invoke-Land($case) {
   $own = Join-Path $case.Dir 'own'; $ownGithub = Join-Path $own 'scripts\github'
   New-Item -ItemType Directory -Force -Path $ownGithub | Out-Null
   Copy-Item -LiteralPath $script -Destination (Join-Path $ownGithub 'land-pr.ps1') -Force
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'review-status.mjs') -Destination (Join-Path $ownGithub 'review-status.mjs') -Force   # the land step reads the job names from the file beside it
   $out = & pwsh -NoProfile -File (Join-Path $ownGithub 'land-pr.ps1') -Pr 7 -NoSync -IgnoreReview -RepoPath $case.Repo 2>&1
   [pscustomobject]@{ Code = $LASTEXITCODE; Text = ($out | Out-String) }
 }
@@ -127,7 +158,7 @@ function Invoke-Land($case) {
 try {
   # R1: a red check run blocks the land under -IgnoreReview
   foreach ($conclusion in 'failure', 'timed_out', 'startup_failure', 'action_required') {
-    $c1 = New-Case "r1-$conclusion" @((New-Run 'build' 'completed' 'success'), (New-Run 'unit-tests' 'completed' $conclusion))
+    $c1 = New-Case "r1-$conclusion" (@(New-Required) + @((New-Run 'build' 'completed' 'success'), (New-Run 'unit-tests' 'completed' $conclusion)))
     $r1 = Invoke-Land $c1
     Check "R1 $conclusion run: land-pr exits non-zero and makes no merge call" ($r1.Code -ne 0 -and -not (Test-Path $c1.Merge))
     Check "R1 $conclusion run: output names the check and says nothing was merged" ($r1.Text -match 'unit-tests' -and $r1.Text -match 'Nothing was merged')
@@ -135,19 +166,19 @@ try {
 
   # R2: a failed or errored commit status blocks too
   foreach ($state in 'failure', 'error') {
-    $c2 = New-Case "r2-$state" @() @(@{ context = 'ci/legacy'; state = $state })
+    $c2 = New-Case "r2-$state" @(New-Required) @(@{ context = 'ci/legacy'; state = $state })
     $r2 = Invoke-Land $c2
     Check "R2 $state status: land-pr exits non-zero and makes no merge call" ($r2.Code -ne 0 -and -not (Test-Path $c2.Merge))
     Check "R2 $state status: output names the status and says nothing was merged" ($r2.Text -match 'ci/legacy' -and $r2.Text -match 'Nothing was merged')
   }
 
   # R3: green, skipped, neutral, cancelled and still-running checks do not block
-  $c3 = New-Case 'r3' @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'skipped'), (New-Run 'docs' 'completed' 'neutral'), (New-Run 'old' 'completed' 'cancelled'), (New-Run 'slow' 'in_progress' $null)) @(@{ context = 'ci/legacy'; state = 'success' })
+  $c3 = New-Case 'r3' (@(New-Required) + @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'skipped'), (New-Run 'docs' 'completed' 'neutral'), (New-Run 'old' 'completed' 'cancelled'), (New-Run 'slow' 'in_progress' $null))) @(@{ context = 'ci/legacy'; state = 'success' })
   $r3 = Invoke-Land $c3
   Check 'R3 no red check: the merge call was made and land-pr exits 0' ((Test-Path $c3.Merge) -and $r3.Code -eq 0)
 
   # R4: review bots are review results, not CI: -IgnoreReview still skips them
-  $c4 = New-Case 'r4' @((New-Run 'build' 'completed' 'success'), (New-Run 'Greptile Review' 'completed' 'failure' 'greptile-apps')) @(@{ context = 'CodeRabbit'; state = 'failure' })
+  $c4 = New-Case 'r4' (@(New-Required) + @((New-Run 'build' 'completed' 'success'), (New-Run 'Greptile Review' 'completed' 'failure' 'greptile-apps'))) @(@{ context = 'CodeRabbit'; state = 'failure' })
   $r4 = Invoke-Land $c4
   Check 'R4 review bots: a failed Greptile check and CodeRabbit status do not block under -IgnoreReview' ((Test-Path $c4.Merge) -and $r4.Code -eq 0)
 
@@ -162,12 +193,12 @@ try {
   Check 'R6 cut-off page: land-pr exits non-zero and makes no merge call' ($r6.Code -ne 0 -and -not (Test-Path $c6.Merge))
 
   # P1: the red check run is on page 2: the land refuses and names it
-  $p1 = New-Case 'p1' @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'success')) @() -1 0 @((New-Run 'unit-tests' 'completed' 'failure'))
+  $p1 = New-Case 'p1' (@(New-Required) + @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'success'))) @() -1 0 @((New-Run 'unit-tests' 'completed' 'failure'))
   $rp1 = Invoke-Land $p1
   Check 'P1 red run on page 2: land-pr exits non-zero, makes no merge call, names the check and says nothing was merged' ($rp1.Code -ne 0 -and -not (Test-Path $p1.Merge) -and $rp1.Text -match 'unit-tests' -and $rp1.Text -match 'Nothing was merged')
 
   # P2: two pages, every check green: the check gate does not refuse
-  $p2 = New-Case 'p2' @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'success')) @() -1 0 @((New-Run 'unit-tests' 'completed' 'success'))
+  $p2 = New-Case 'p2' (@(New-Required) + @((New-Run 'build' 'completed' 'success'), (New-Run 'lint' 'completed' 'success'))) @() -1 0 @((New-Run 'unit-tests' 'completed' 'success'))
   $rp2 = Invoke-Land $p2
   Check 'P2 green on two pages: the merge call was made and land-pr exits 0' ((Test-Path $p2.Merge) -and $rp2.Code -eq 0)
 
@@ -177,9 +208,86 @@ try {
   Check 'P3 page 2 read fails: land-pr exits non-zero, makes no merge call, says the check runs cannot be read and nothing was merged' ($rp3.Code -ne 0 -and -not (Test-Path $p3.Merge) -and $rp3.Text -match 'cannot read the check runs' -and $rp3.Text -match 'Nothing was merged')
 
   # P4: the red commit status is on page 2: the land refuses and names it
-  $p4 = New-Case 'p4' @((New-Run 'build' 'completed' 'success')) @(@{ context = 'ci/ok'; state = 'success' }) -1 0 $null @(@{ context = 'ci/legacy'; state = 'failure' })
+  $p4 = New-Case 'p4' (@(New-Required) + @((New-Run 'build' 'completed' 'success'))) @(@{ context = 'ci/ok'; state = 'success' }) -1 0 $null @(@{ context = 'ci/legacy'; state = 'failure' })
   $rp4 = Invoke-Land $p4
   Check 'P4 red status on page 2: land-pr exits non-zero, makes no merge call, names the status and says nothing was merged' ($rp4.Code -ne 0 -and -not (Test-Path $p4.Merge) -and $rp4.Text -match 'ci/legacy' -and $rp4.Text -match 'Nothing was merged')
+
+  # M: the required CI jobs must be green on the head. The names are read from review-status.mjs at run time (no copy, no count in the land step).
+  $one = $requiredNames[1]   # one job that the cases below break
+  # M1: a required job has no check run at all
+  $m1 = New-Case 'm1' @(New-Required @($one))
+  $rm1 = Invoke-Land $m1
+  Check "M1 no run of required job '$one': land-pr exits non-zero, makes no merge call, names the job as missing and says nothing was merged" ($rm1.Code -ne 0 -and -not (Test-Path $m1.Merge) -and $rm1.Text -match [regex]::Escape($one) -and $rm1.Text -match 'missing' -and $rm1.Text -match 'Nothing was merged')
+
+  # M2, M3: a required job is queued or running
+  foreach ($st in 'queued', 'in_progress') {
+    $m23 = New-Case "m23-$st" (@(New-Required @($one)) + @((New-Run $one $st $null 'github-actions' 200 '500')))
+    $rm23 = Invoke-Land $m23
+    Check "M2/M3 required job ${st}: land-pr exits non-zero, makes no merge call, names the job as not completed" ($rm23.Code -ne 0 -and -not (Test-Path $m23.Merge) -and $rm23.Text -match [regex]::Escape($one) -and $rm23.Text -match 'not completed' -and $rm23.Text -match 'Nothing was merged')
+  }
+
+  # M4 to M6: a required job ended skipped, neutral or cancelled (the old gate counted these as fine)
+  foreach ($cc in 'skipped', 'neutral', 'cancelled') {
+    $m46 = New-Case "m46-$cc" (@(New-Required @($one)) + @((New-Run $one 'completed' $cc 'github-actions' 200 '500')))
+    $rm46 = Invoke-Land $m46
+    Check "M4-M6 required job ended ${cc}: land-pr exits non-zero, makes no merge call, names the job and the end" ($rm46.Code -ne 0 -and -not (Test-Path $m46.Merge) -and $rm46.Text -match [regex]::Escape($one) -and $rm46.Text -match "ended $cc" -and $rm46.Text -match 'Nothing was merged')
+  }
+
+  # M7: a first try that ended cancelled and a green re-run (same workflow run, higher id): the newest try counts, the land goes on
+  $m7 = New-Case 'm7' (@(New-Required @($one)) + @((New-Run $one 'completed' 'cancelled' 'github-actions' 150 '500'), (New-Run $one 'completed' 'success' 'github-actions' 250 '500')))
+  $rm7 = Invoke-Land $m7
+  Check 'M7 cancelled first try then green re-run of the same workflow run: the merge call was made and land-pr exits 0' ((Test-Path $m7.Merge) -and $rm7.Code -eq 0)
+
+  # M8: the same job in two workflow runs: a green run B does not hide the cancelled run A
+  $m8 = New-Case 'm8' (@(New-Required @($one)) + @((New-Run $one 'completed' 'cancelled' 'github-actions' 150 '111'), (New-Run $one 'completed' 'success' 'github-actions' 250 '222')))
+  $rm8 = Invoke-Land $m8
+  Check 'M8 same job in two workflow runs, run A cancelled and run B green: land-pr exits non-zero and makes no merge call' ($rm8.Code -ne 0 -and -not (Test-Path $m8.Merge) -and $rm8.Text -match [regex]::Escape($one))
+
+  # M9: a look-alike name from another app is not the required job
+  $m9 = New-Case 'm9' (@(New-Required @($one)) + @((New-Run $one 'completed' 'success' 'some-other-ci' 200 '500')))
+  $rm9 = Invoke-Land $m9
+  Check 'M9 green run of the job name from another app: land-pr exits non-zero and makes no merge call (the job is missing)' ($rm9.Code -ne 0 -and -not (Test-Path $m9.Merge) -and $rm9.Text -match 'missing')
+
+  # M10: every required job green and a non-required check still running: no over-block
+  $m10 = New-Case 'm10' (@(New-Required) + @((New-Run 'slow-extra' 'in_progress' $null)))
+  $rm10 = Invoke-Land $m10
+  Check 'M10 all required jobs green, a non-required check running: the merge call was made and land-pr exits 0' ((Test-Path $m10.Merge) -and $rm10.Code -eq 0)
+
+  # M11: the read of the job names fails: fail closed
+  $m11 = New-Case 'm11' @(New-Required) @() -1 0 $null $null 0 'boom' 1
+  $rm11 = Invoke-Land $m11
+  Check 'M11 job-name read fails: land-pr exits non-zero, makes no merge call, says it cannot read the names and nothing was merged' ($rm11.Code -ne 0 -and -not (Test-Path $m11.Merge) -and $rm11.Text -match 'required CI job names' -and $rm11.Text -match 'Nothing was merged')
+
+  # M12: malformed output of the read (exit 0 but not an array of one or more unique non-empty strings): fail closed
+  $bad = @{ notjson = 'not json'; empty = '[]'; number = '[1]'; dup = '["ratchets","ratchets"]'; blank = '["ratchets",""]'; object = '{}' }
+  foreach ($k in $bad.Keys) {
+    $m12 = New-Case "m12-$k" @(New-Required) @() -1 0 $null $null 0 $bad[$k] 0
+    $rm12 = Invoke-Land $m12
+    Check "M12 malformed read ($k): land-pr exits non-zero, makes no merge call, says nothing was merged" ($rm12.Code -ne 0 -and -not (Test-Path $m12.Merge) -and $rm12.Text -match 'required CI job names' -and $rm12.Text -match 'Nothing was merged')
+  }
+
+  # M13: no second copy. The land step source holds no required job name and no hard-coded count of them.
+  $src = Get-Content -LiteralPath $script -Raw
+  $copied = @($requiredNames | Where-Object { $src -match ("['`"]" + [regex]::Escape($_) + "['`"]") })
+  Check "M13 land-pr.ps1 holds no quoted required job name (found: $($copied -join ', '))" ($copied.Count -eq 0)
+  Check 'M13 land-pr.ps1 holds no hard-coded count of the required jobs' ($src -notmatch '(?i)required[^\r\n]{0,40}(-eq|-ne|-lt|-gt)\s*8\b' -and $src -notmatch '\.Count\s*(-eq|-ne|-lt)\s*8\b')
+  # M13b: a name the read returns that no run has: refused (the list comes from the read, not from the land step)
+  $m13b = New-Case 'm13b' @(New-Required) @() -1 0 $null $null 0 ('[' + (($requiredNames + 'brand-new-job' | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']') 0
+  $rm13b = Invoke-Land $m13b
+  Check 'M13b a ninth job name from the read has no run: land-pr exits non-zero and names it as missing' ($rm13b.Code -ne 0 -and -not (Test-Path $m13b.Merge) -and $rm13b.Text -match 'brand-new-job' -and $rm13b.Text -match 'missing')
+  # M13c: a one-name list from the read, that job green: the land goes on (no count in the land step)
+  $m13c = New-Case 'm13c' @((New-Run $requiredNames[0] 'completed' 'success' 'github-actions' 101 '500')) @() -1 0 $null $null 0 ('["' + $requiredNames[0] + '"]') 0
+  $rm13c = Invoke-Land $m13c
+  Check 'M13c a one-name list, that job green: the merge call was made and land-pr exits 0' ((Test-Path $m13c.Merge) -and $rm13c.Code -eq 0)
+
+  # M15: the runs are those of the head the land step merges. A green set that belongs to an older head cannot pass.
+  $m15 = New-Case 'm15' @()
+  $oldSha = 'fedcba9876543210fedcba9876543210fedcba98'
+  Set-Content -LiteralPath (Join-Path $m15.Stub 'old-head-runs.json') -Value (@{ total_count = 8; check_runs = @(New-Required) } | ConvertTo-Json -Compress -Depth 6)
+  $rm15 = Invoke-Land $m15
+  $calls = if (Test-Path (Join-Path $m15.Stub 'calls.log')) { Get-Content -LiteralPath (Join-Path $m15.Stub 'calls.log') -Raw } else { '' }
+  Check 'M15 the head has no runs (a green set exists only for an older head): land-pr exits non-zero, makes no merge call' ($rm15.Code -ne 0 -and -not (Test-Path $m15.Merge) -and $rm15.Text -match 'missing')
+  Check 'M15 the check runs were read for the head sha of the pull request and for no other sha' ($calls -match [regex]::Escape("commits/$sha/check-runs") -and $calls -notmatch $oldSha)
 }
 finally {
   $env:PATH = $oldPath
