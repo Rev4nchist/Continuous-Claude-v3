@@ -7,18 +7,37 @@
  * has one only when its project-registry entry carries `laneArtifact` (boardArtifact). When a session
  * changes the lane DB through lane.mjs, this hook:
  *   1. renders the board's page itself, in the background (auto-render, debounced 20 s per board), and
- *   2. for a board WITH a phone page, reminds the session once per batch to publish it.
+ *   2. for a board WITH a phone page, marks the change as pending. It no longer tells the session to publish:
+ *      the account allows 200 Artifact publishes per UTC day, so lane-board-stop-gate asks when one is due.
  *
  * Hook: PostToolUse, matcher Bash|PowerShell|Artifact (settings.json.template).
- * State: <pending dir>/<pendingKey(session, board)>.json = {since, verbs, board, stopBlocked?}
+ * State: <pending dir>/<pendingKey(session, board)>.json = {since, verbs, board, v?, askAt?, stopBlocked?}
+ *   `v: 2` is the shape marker. A new file gets it; a rewrite keeps what the file had. The Stop gate applies its
+ *   50-verb rule only to a file with no marker.
  *   (shared/lane-board-pending.ts; `<session>.json` on the default board, `<session>@<board>.json` elsewhere)
- *   - first lane change since the last republish: write state, emit the reminder
- *   - later lane changes while pending: update the verb list, stay silent
- *   - Artifact publish of a board page: delete that board's state. The default board clears on its artifact
- *     id in the url or its publish_from file name. A non-default board clears only on an exact match of the
- *     url's artifact id with its registry laneArtifact id (never on a file name).
+ *   - an ask verb (claim, release, done, park): write state with askAt = now and without stopBlocked (a new
+ *     batch for the Stop gate). An ask verb emits the reminder when the file's verb list holds no ask verb
+ *     yet: the page is out of date, the Stop gate asks for the publish, do not publish before it asks.
+ *     An ask verb on a list that holds one is silent.
+ *   - any other changing verb (say, note, add, state, ...): update the verb list, keep askAt and stopBlocked,
+ *     stay silent. The file stays until an accepted publish clears it. A file with an ask verb and no askAt
+ *     (written before askAt existed) gets askAt = its file time, so the rewrite does not move its change time.
+ *   - Artifact call: only an ACCEPTED PAGE PUBLISH of a board page deletes that board's state (action `publish`
+ *     or no action; not read, list, open, pin or delete; not `asset: true`; not a failed call). The default
+ *     board clears on its artifact id in the url or its publish_from file name. A non-default board clears
+ *     only on an exact match of the url's artifact id with its registry laneArtifact id (never on a file name).
  *   - a board with no phone page: no pending file; one render-only line per session per hour
  * Never blocks. Any error: no output, exit 0.
+ *
+ * Publish budget (file format and helpers: lane-board-stop-gate.ts, which this hook imports):
+ *   <pending dir>/budget/<session uuid>.json. Every accepted Artifact page publish of the session adds 1 to `n`
+ *   of the UTC day: any url. An asset upload adds nothing. A page publish whose url id is the artifact id of a board page
+ *   also sets pages[id] = now, with or without a pending file for that board. A publish by file name with no
+ *   url is a new artifact: it clears as before and sets no stamp. Only tool_name `Artifact` counts
+ *   (`ArtifactData` also reaches this hook). A session id that is not a uuid writes no budget file. Any error
+ *   in the budget code is swallowed. A refused publish gives no PostToolUse event, so nothing sets `limit`.
+ *   A subagent's Artifact call reaches this hook with the parent session id (77 of 77 calls in the transcripts
+ *   of 2026-11-07 to 2026-11-11), so it counts in the parent's file.
  *
  * The board of a change comes, as in lane.mjs, from `--project x` / `LANE_PROJECT=x` in the command, else from
  * payload.cwd through the registry, else (note|state|release|done|park only) from the board of the lane the caller
@@ -46,7 +65,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
-import { DEFAULT_BOARD, artifactIdOf, boardArtifact, pendingKey, primaryRepo, renderBoardCmd, resolveBoard } from './shared/lane-board.js';
+// The gate file holds the budget helpers. Its main() runs only under its own file name, so this import is safe.
+import { ASK_VERBS, PENDING_SHAPE, VERB_CAP, holdsAskVerb, updateBudget, type AskPending } from './lane-board-stop-gate.js';
+import { DEFAULT_BOARD, artifactIdOf, boardArtifact, loadRegistry, pendingKey, primaryRepo, resolveBoard } from './shared/lane-board.js';
 import { listPending, pendingDir, pendingFile, readPending } from './shared/lane-board-pending.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { detectToolError, exitCodeOf } from './shared/tool-error.js';
@@ -93,13 +114,12 @@ const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof
 export const stateDir = pendingDir;
 export const stateFile = pendingFile;
 
-function reminder(verb: string, board: string, env: Env, a: { url: string; publishFrom: string }): string {
+/** Short sentences, no publish steps: the Stop gate gives them when a publish is due. */
+function reminder(verb: string, board: string): string {
   return (
-    `Lane DB changed (lane.mjs ${verb}) on board ${board}. The lane board page is a snapshot. ` +
-    `When this batch of lane changes is done: read the live page first (Artifact tool, action read, url ${a.url}, without path; your held copy is old), ` +
-    `then run ${renderBoardCmd(board, env)}, then at once publish ` +
-    `${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to the same url (omit capabilities). ` +
-    `Steps: kanban-sync skill step 7.`
+    `Lane DB changed (lane.mjs ${verb}) on board ${board}. The lane board page is out of date. ` +
+    `The Stop gate asks for a publish when one is due. Do not publish before it asks. ` +
+    `The kanban-sync step 7 and a milestone portal refresh still publish.`
   );
 }
 
@@ -259,9 +279,22 @@ function publishedBoard(input: Record<string, unknown>, boards: string[], env: E
 }
 
 /**
- * Pure decision. `pending` = the session already changed lanes since the last republish: a boolean, or a
- * function of the board (a session has one batch per board). `candidates` are the boards an Artifact
- * publish may clear (default: the default board).
+ * True for an Artifact call that publishes: action `publish` or no action. A read, list, open, pin, unpin,
+ * delete or quickstart is not a publish. An asset upload is not a page publish: it clears nothing and is not counted.
+ */
+function isPublish(input: Record<string, unknown>): boolean {
+  return input.action === undefined || input.action === null || input.action === 'publish';
+}
+
+const isPagePublish = (input: Record<string, unknown>): boolean => isPublish(input) && input.asset !== true;
+
+/**
+ * Pure decision. `pending` = the board's pending file already holds an ask verb: a boolean, or a function of
+ * the board (a session has one batch per board). `candidates` are the boards an Artifact publish may clear
+ * (default: the default board).
+ *
+ * A verb outside the ask verbs gives `mark` with no message. An ask verb gives `remind` when the pending file
+ * holds no earlier ask verb, else `mark`. An Artifact call gives `clear` only for a page publish of a board page.
  */
 export function decide(
   payload: unknown,
@@ -278,7 +311,7 @@ export function decide(
   if (!isObj(input) || failed(payload)) return NONE;
 
   if (tool === 'Artifact') {
-    const board = publishedBoard(input, candidates, env);
+    const board = isPagePublish(input) ? publishedBoard(input, candidates, env) : null;
     return board ? { action: 'clear', board } : NONE;
   }
 
@@ -290,10 +323,10 @@ export function decide(
 
   const artifact = boardArtifact(board, { env });
   if (!artifact) return { action: 'render', verb: lc.verb, board, message: renderOnly(lc.verb, board) };
-  const isPending = typeof pending === 'function' ? pending(board) : pending;
-  return isPending
-    ? { action: 'mark', verb: lc.verb, board }
-    : { action: 'remind', verb: lc.verb, board, message: reminder(lc.verb, board, env, artifact) };
+  const mark: Decision = { action: 'mark', verb: lc.verb, board };
+  if (!ASK_VERBS.has(lc.verb)) return mark;
+  const asked = typeof pending === 'function' ? pending(board) : pending;
+  return asked ? mark : { action: 'remind', verb: lc.verb, board, message: reminder(lc.verb, board) };
 }
 
 // ---- thin IO ----
@@ -383,11 +416,82 @@ function shouldSayRenderOnly(sid: string, board: string, env: Env, now: number):
   }
 }
 
+/**
+ * The board whose phone page has this artifact id, or null. Looks at the default board and at every registry
+ * entry with a laneArtifact, so a board with no pending file of this session is found too.
+ */
+function boardOfPage(id: string, env: Env): string | null {
+  if (boardArtifact(DEFAULT_BOARD, { env })?.id === id) return DEFAULT_BOARD;
+  for (const e of loadRegistry({ env })) {
+    if (artifactIdOf(e.artifact) === id && boardArtifact(e.key, { env })?.id === id) return e.key;
+  }
+  return null;
+}
+
+/**
+ * Count an accepted Artifact page publish in the session's budget file: n += 1 for the UTC day, and
+ * pages[id] = now when the url is the exact url of a board page. An asset upload adds nothing: the server
+ * limit counts page publishes only (2026-11-11: it tripped at 200 of them). A publish with no url
+ * makes a new artifact, so it sets no stamp. Never throws: the hook then behaves as it did before the budget.
+ */
+function countPublish(payload: unknown, sid: string, env: Env, now: number): void {
+  try {
+    if (!isObj(payload) || payload.tool_name !== 'Artifact') return;
+    const input = payload.tool_input;
+    if (!isObj(input) || !isPagePublish(input) || failed(payload)) return;
+    const id = typeof input.url === 'string' ? artifactIdOf(input.url) : null;
+    const page = id !== null && boardOfPage(id, env) !== null ? id : null;
+    updateBudget(sid, env, now, (b) => {
+      b.n += 1;
+      if (page !== null) b.pages[page] = now;
+    });
+  } catch {
+    // the budget is best effort
+  }
+}
+
+/**
+ * The askAt to keep when a verb that is not an ask verb rewrites the file. A file from before askAt existed
+ * (an ask verb in the list, no askAt) gets its file time: the rewrite moves that time, and the Stop gate
+ * would read the old claim as a new change and ask again for a claim a publish already shows.
+ */
+function keptAskAt(file: string, prev: AskPending | null): number | undefined {
+  if (typeof prev?.askAt === 'number') return prev.askAt;
+  if (!holdsAskVerb(prev)) return undefined;
+  try {
+    return Math.round(fs.statSync(file).mtimeMs);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Add the verb to the board's pending file. An ask verb sets askAt = now and drops stopBlocked: a new batch
+ * for the Stop gate. Any other verb keeps both, so a say or a note after a block does not ask again.
+ */
+function writePending(file: string, board: string, verb: string, now: number): void {
+  const prev = readPending(file) as AskPending | null;
+  const verbs = [...(prev?.verbs ?? []), verb].slice(-VERB_CAP);
+  const askAt = ASK_VERBS.has(verb) ? undefined : keptAskAt(file, prev);
+  const kept = {
+    ...(askAt !== undefined ? { askAt } : {}),
+    ...(prev?.stopBlocked === true ? { stopBlocked: true } : {}),
+  };
+  const ask = ASK_VERBS.has(verb) ? { askAt: now } : kept;
+  // The marker goes on a new file only. An old-shape file stays old: its list may have lost an ask verb.
+  const shape = prev === null || prev.v === PENDING_SHAPE ? { v: PENDING_SHAPE } : {};
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ since: prev?.since ?? new Date().toISOString(), verbs, board, ...shape, ...ask }));
+}
+
 /** Decide, then do the file work and the render. Returns the hook output (null for silence). */
 export function handle(payload: unknown, env: Env = process.env, deps: Deps = {}): { output: object | null; decision: Decision } {
   const sid = isObj(payload) && typeof payload.session_id === 'string' ? payload.session_id : '';
+  const now = deps.now ?? Date.now();
+  // Before decide(): a publish to a url that is no board page gives `none` and still counts.
+  countPublish(payload, sid, env, now);
   const candidates = sid ? [...new Set([DEFAULT_BOARD, ...listPending(sid, env).map((e) => e.board)])] : [DEFAULT_BOARD];
-  const d = decide(payload, (b) => readPending(pendingFile(sid, b, env)) !== null, env, candidates, deps.ownedBoard ?? null);
+  const d = decide(payload, (b) => holdsAskVerb(readPending(pendingFile(sid, b, env))), env, candidates, deps.ownedBoard ?? null);
   const none = { output: null, decision: d };
   if (d.action === 'none' || !d.board) return none;
 
@@ -396,17 +500,11 @@ export function handle(payload: unknown, env: Env = process.env, deps: Deps = {}
     return none;
   }
 
-  if (d.action === 'remind' || d.action === 'mark') {
-    const file = pendingFile(sid, d.board, env);
-    const prev = readPending(file);
-    const verbs = [...(prev?.verbs ?? []), d.verb as string].slice(-50);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ since: prev?.since ?? new Date().toISOString(), verbs, board: d.board }));
-  }
+  if (d.action === 'remind' || d.action === 'mark') writePending(pendingFile(sid, d.board, env), d.board, d.verb as string, now);
 
   autoRender(d.board, env, deps);
 
-  const speak = d.action === 'remind' || (d.action === 'render' && shouldSayRenderOnly(sid, d.board, env, deps.now ?? Date.now()));
+  const speak = d.action === 'remind' || (d.action === 'render' && shouldSayRenderOnly(sid, d.board, env, now));
   if (!speak) return none;
   return {
     output: { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: d.message } },
@@ -482,7 +580,8 @@ async function main(): Promise<void> {
   if (output) console.log(JSON.stringify(output));
 }
 
-if (!process.env.VITEST) {
+// Basename check, as in lane-board-stop-gate.ts: main() runs only when this file is the script node started.
+if (!process.env.VITEST && /(^|[\\/])lane-board-republish-reminder\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
   main().catch(() => {
     // Fail open: no output, exit 0.
   });

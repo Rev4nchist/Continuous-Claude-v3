@@ -2,7 +2,7 @@
  * Pending-publish files, shared by lane-board-republish-reminder (writes) and lane-board-stop-gate (reads).
  *
  * One file per (session, board): `<dir>/<pendingKey(session, board)>.json`
- *   = { since, verbs, board, stopBlocked? }
+ *   = { since, verbs, board, askAt?, v?, stopBlocked? } (askAt: time of the last ask verb; v: shape marker)
  * A session on the default board uses `<session>.json`, the same name PR0 wrote, so old files stay valid.
  * Another board uses `<session>@<board>.json`.
  *

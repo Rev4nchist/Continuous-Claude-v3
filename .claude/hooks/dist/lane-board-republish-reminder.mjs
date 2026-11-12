@@ -2039,15 +2039,15 @@ var require_pg_connection_string = __commonJS({
       if (config.sslnegotiation === "direct" && config.ssl === void 0) {
         config.ssl = true;
       }
-      const fs5 = config.sslcert || config.sslkey || config.sslrootcert ? __require("fs") : null;
+      const fs7 = config.sslcert || config.sslkey || config.sslrootcert ? __require("fs") : null;
       if (config.sslcert) {
-        config.ssl.cert = fs5.readFileSync(config.sslcert).toString();
+        config.ssl.cert = fs7.readFileSync(config.sslcert).toString();
       }
       if (config.sslkey) {
-        config.ssl.key = fs5.readFileSync(config.sslkey).toString();
+        config.ssl.key = fs7.readFileSync(config.sslkey).toString();
       }
       if (config.sslrootcert) {
-        config.ssl.ca = fs5.readFileSync(config.sslrootcert).toString();
+        config.ssl.ca = fs7.readFileSync(config.sslrootcert).toString();
       }
       if (options.useLibpqCompat && config.uselibpqcompat) {
         throw new Error("Both useLibpqCompat and uselibpqcompat are set. Please use only one of them.");
@@ -3889,7 +3889,7 @@ var require_helper = __commonJS({
   "node_modules/pgpass/lib/helper.js"(exports, module) {
     "use strict";
     init_trace_boot();
-    var path4 = __require("path");
+    var path6 = __require("path");
     var Stream = __require("stream").Stream;
     var split = require_split2();
     var util = __require("util");
@@ -3928,7 +3928,7 @@ var require_helper = __commonJS({
     };
     module.exports.getFileName = function(rawEnv) {
       var env = rawEnv || process.env;
-      var file = env.PGPASSFILE || (isWin ? path4.join(env.APPDATA || "./", "postgresql", "pgpass.conf") : path4.join(env.HOME || "./", ".pgpass"));
+      var file = env.PGPASSFILE || (isWin ? path6.join(env.APPDATA || "./", "postgresql", "pgpass.conf") : path6.join(env.HOME || "./", ".pgpass"));
       return file;
     };
     module.exports.usePgPass = function(stats, fname) {
@@ -4061,16 +4061,16 @@ var require_lib = __commonJS({
   "node_modules/pgpass/lib/index.js"(exports, module) {
     "use strict";
     init_trace_boot();
-    var path4 = __require("path");
-    var fs5 = __require("fs");
+    var path6 = __require("path");
+    var fs7 = __require("fs");
     var helper = require_helper();
     module.exports = function(connInfo, cb) {
       var file = helper.getFileName();
-      fs5.stat(file, function(err, stat) {
+      fs7.stat(file, function(err, stat) {
         if (err || !helper.usePgPass(stat, file)) {
           return cb(void 0);
         }
-        var st = fs5.createReadStream(file);
+        var st = fs7.createReadStream(file);
         helper.getPassword(connInfo, st, cb);
       });
     };
@@ -5800,8 +5800,8 @@ var init_esm = __esm({
 
 // src/lane-board-republish-reminder.ts
 init_trace_boot();
-import * as fs4 from "fs";
-import * as path3 from "path";
+import * as fs6 from "fs";
+import * as path5 from "path";
 
 // src/lib/spawn-hidden.ts
 init_trace_boot();
@@ -5816,6 +5816,11 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
   if (platform !== "win32") return spawnFn(cmd, [...args], opts);
   return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
 }
+
+// src/lane-board-stop-gate.ts
+init_trace_boot();
+import * as fs5 from "fs";
+import * as path4 from "path";
 
 // src/shared/lane-board.ts
 init_trace_boot();
@@ -5994,24 +5999,137 @@ function pendingKey(sid, board) {
   return wmKey(sid, board).replace(/[^A-Za-z0-9@_-]/g, "_");
 }
 
-// src/shared/lane-board-pending.ts
+// src/shared/lane-dash-refresh.ts
 init_trace_boot();
 import * as fs3 from "fs";
 import * as path2 from "path";
+var STALE_AFTER_HOURS = 36;
+var SHOW_EVERY_MS = 60 * 60 * 1e3;
+var REFRESH_FILE = "refresh.json";
+var MARKER_FILE = ".refresh-shown.json";
+var MAX_BYTES = 65536;
+var CHICAGO = "America/Chicago";
+var isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+function laneDashDir(env = process.env) {
+  if (env.LANE_DASH_STATE_DIR) return env.LANE_DASH_STATE_DIR;
+  const home = env.HOME || env.USERPROFILE || "";
+  return path2.join(home, ".claude", "state", "lane-dash");
+}
+function parseRefresh(text) {
+  let d;
+  try {
+    d = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isObj(d)) return null;
+  const at = typeof d.exported_at === "string" && !Number.isNaN(Date.parse(d.exported_at)) ? d.exported_at : null;
+  const key = typeof d.key === "string" ? d.key : "";
+  return { pending: d.pending === true, key, exportedAt: at };
+}
+function staleKind(r, now) {
+  if (r.pending) return "pending";
+  if (r.exportedAt === null) return null;
+  return now - Date.parse(r.exportedAt) > STALE_AFTER_HOURS * 36e5 ? "age" : null;
+}
+function formatChicago(iso) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short"
+  }).formatToParts(new Date(iso));
+  const p = (t) => parts.find((x) => x.type === t)?.value ?? "";
+  return `${p("month")} ${p("day")}, ${p("hour")}:${p("minute")} ${p("dayPeriod")} ${p("timeZoneName")}`;
+}
+function staleLine(r, now) {
+  const kind = staleKind(r, now);
+  if (!kind) return "";
+  const why = kind === "pending" ? "not uploaded" : `older than ${STALE_AFTER_HOURS} hours`;
+  const when = r.exportedAt ? `exported ${formatChicago(r.exportedAt)}, ${why}` : why;
+  return `FleetOps data is stale (${when}). Tell Dave in one line. Run the fleetops-refresh skill only if he asks.`;
+}
+function shouldShow(marker, key, now) {
+  if (!marker || marker.key !== key) return true;
+  const shown2 = Date.parse(marker.shown_at);
+  if (Number.isNaN(shown2)) return true;
+  const age = now - shown2;
+  return age < 0 || age > SHOW_EVERY_MS;
+}
+function readSmall(file) {
+  if (fs3.statSync(file).size > MAX_BYTES) return null;
+  return fs3.readFileSync(file, "utf8");
+}
+function readMarker(file) {
+  try {
+    const text = readSmall(file);
+    if (text === null) return null;
+    const m = JSON.parse(text);
+    return isObj(m) && typeof m.key === "string" && typeof m.shown_at === "string" ? { key: m.key, shown_at: m.shown_at } : null;
+  } catch {
+    return null;
+  }
+}
+function writeMarker(file, marker) {
+  try {
+    if (fs3.lstatSync(file).isSymbolicLink()) throw new Error("is a symlink");
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs3.writeFileSync(tmp, JSON.stringify(marker));
+    fs3.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs3.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+function fleetopsLine(env = process.env, now = Date.now()) {
+  try {
+    const dir = laneDashDir(env);
+    const text = readSmall(path2.join(dir, REFRESH_FILE));
+    const r = text === null ? null : parseRefresh(text);
+    if (!r) return "";
+    const line = staleLine(r, now);
+    if (!line) return "";
+    const markerFile = path2.join(dir, MARKER_FILE);
+    if (!shouldShow(readMarker(markerFile), r.key, now)) return "";
+    try {
+      writeMarker(markerFile, { key: r.key, shown_at: new Date(now).toISOString() });
+    } catch {
+      return "";
+    }
+    return line;
+  } catch {
+    return "";
+  }
+}
+
+// src/shared/lane-board-pending.ts
+init_trace_boot();
+import * as fs4 from "fs";
+import * as path3 from "path";
 var PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
-var isObj = (v) => v !== null && typeof v === "object";
+var isObj2 = (v) => v !== null && typeof v === "object";
 function pendingDir(env = process.env) {
   if (env.LANE_BOARD_PENDING_DIR) return env.LANE_BOARD_PENDING_DIR;
   const home = env.HOME || env.USERPROFILE || "";
-  return path2.join(home, ".claude", "state", "lane-board-pending");
+  return path3.join(home, ".claude", "state", "lane-board-pending");
 }
 function pendingFile(sessionId, board = DEFAULT_BOARD, env = process.env) {
-  return path2.join(pendingDir(env), `${pendingKey(sessionId, board)}.json`);
+  return path3.join(pendingDir(env), `${pendingKey(sessionId, board)}.json`);
 }
 function readPending(file) {
   try {
-    const s = JSON.parse(fs3.readFileSync(file, "utf8"));
-    return isObj(s) ? s : null;
+    const s = JSON.parse(fs4.readFileSync(file, "utf8"));
+    return isObj2(s) ? s : null;
   } catch {
     return null;
   }
@@ -6021,7 +6139,7 @@ function listPending(sessionId, env = process.env) {
   const stem = pendingKey(sessionId, DEFAULT_BOARD);
   let names;
   try {
-    names = fs3.readdirSync(dir).sort();
+    names = fs4.readdirSync(dir).sort();
   } catch {
     return [];
   }
@@ -6030,13 +6148,364 @@ function listPending(sessionId, env = process.env) {
     if (!name.endsWith(".json")) continue;
     const base = name.slice(0, -5);
     if (base !== stem && !base.startsWith(`${stem}@`)) continue;
-    const file = path2.join(dir, name);
+    const file = path3.join(dir, name);
     const pending = readPending(file);
     if (!pending) continue;
     const board = typeof pending.board === "string" && pending.board ? pending.board : base === stem ? DEFAULT_BOARD : base.slice(stem.length + 1);
     out.push({ file, board, pending });
   }
   return out;
+}
+function sweepStalePending(env = process.env, now = Date.now()) {
+  const dir = pendingDir(env);
+  let n = 0;
+  try {
+    for (const name of fs4.readdirSync(dir)) {
+      if (!name.endsWith(".json")) continue;
+      const file = path3.join(dir, name);
+      try {
+        if (now - fs4.statSync(file).mtimeMs > PENDING_MAX_AGE_MS) {
+          fs4.rmSync(file, { force: true });
+          n += 1;
+        }
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return n;
+}
+
+// src/lane-board-stop-gate.ts
+var isObj3 = (v) => v !== null && typeof v === "object";
+var isPlain = (v) => isObj3(v) && !Array.isArray(v);
+var ASK_VERBS = /* @__PURE__ */ new Set(["claim", "release", "done", "park"]);
+var VERB_CAP = 50;
+var ASK_WINDOW_MS = 10 * 6e4;
+var DAY_CAP = 150;
+var COVER_MARGIN_MS = 12e4;
+var BUDGET_MAX_AGE_MS = 48 * 36e5;
+var CLOCK_SKEW_MS = 6e4;
+var LOCK_WAIT_MS = 200;
+var LOCK_STEP_MS = 10;
+var LOCK_STALE_MS = 5e3;
+var RENAME_RETRIES = 3;
+var RENAME_WAIT_MS = 15;
+var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EBUSY", "EACCES"]);
+var PENDING_SHAPE = 2;
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var isUuid = (s) => UUID_RE.test(s);
+var budgetDir = (env = process.env) => path4.join(pendingDir(env), "budget");
+var budgetFile = (sid, env = process.env) => path4.join(budgetDir(env), `${sid}.json`);
+var utcDay = (now) => new Date(now).toISOString().slice(0, 10);
+var emptyBudgetView = () => ({ total: 0, limit: false, lastPublish: /* @__PURE__ */ new Map(), lastAsk: /* @__PURE__ */ new Map() });
+function holdsAskVerb(p) {
+  const verbs = p?.verbs;
+  return Array.isArray(verbs) && verbs.some((v) => ASK_VERBS.has(v));
+}
+var countOf = (n) => typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : 0;
+function stampsOf(v, now) {
+  if (!isPlain(v)) return [];
+  return Object.entries(v).filter(
+    (e) => typeof e[1] === "number" && Number.isFinite(e[1]) && e[1] <= now + CLOCK_SKEW_MS
+  );
+}
+function readBudgetFile(file) {
+  try {
+    if (fs5.statSync(file).size > MAX_BYTES) return null;
+    const d = JSON.parse(fs5.readFileSync(file, "utf8"));
+    return isPlain(d) ? d : null;
+  } catch {
+    return null;
+  }
+}
+function keepNewest(into, stamps) {
+  for (const [id, t] of stamps) {
+    if (t > (into.get(id) ?? -Infinity)) into.set(id, t);
+  }
+}
+function addToView(view, d, today, now) {
+  if (d.day === today) {
+    view.total += countOf(d.n);
+    view.limit = view.limit || d.limit === true;
+  }
+  keepNewest(view.lastPublish, stampsOf(d.pages, now));
+  keepNewest(view.lastAsk, stampsOf(d.asked, now));
+}
+function readBudgets(env = process.env, now = Date.now()) {
+  const view = emptyBudgetView();
+  try {
+    const dir = budgetDir(env);
+    const today = utcDay(now);
+    for (const name of fs5.readdirSync(dir)) {
+      const d = name.endsWith(".json") ? readBudgetFile(path4.join(dir, name)) : null;
+      if (d) addToView(view, d, today, now);
+    }
+  } catch {
+  }
+  return view;
+}
+function loadBudget(file, now) {
+  const d = readBudgetFile(file) ?? {};
+  const ahead = utcDay(now + CLOCK_SKEW_MS);
+  const day = d.day === ahead ? ahead : utcDay(now);
+  const sameDay = d.day === day;
+  return {
+    day,
+    n: sameDay ? countOf(d.n) : 0,
+    limit: sameDay && d.limit === true,
+    pages: Object.fromEntries(stampsOf(d.pages, now)),
+    asked: Object.fromEntries(stampsOf(d.asked, now))
+  };
+}
+var errCode = (err) => isObj3(err) ? err.code : void 0;
+function sleepMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+  }
+}
+function removeQuiet(file) {
+  try {
+    fs5.rmSync(file, { force: true, maxRetries: 3, retryDelay: LOCK_STEP_MS });
+  } catch {
+  }
+}
+function lockIsStale(lock) {
+  try {
+    return Date.now() - fs5.statSync(lock).mtimeMs > LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+function takeLock(lock) {
+  const end = Date.now() + LOCK_WAIT_MS;
+  for (; ; ) {
+    try {
+      fs5.writeFileSync(lock, String(process.pid), { flag: "wx" });
+      return true;
+    } catch (err) {
+      const code = String(errCode(err));
+      if (code !== "EEXIST" && !BUSY_CODES.has(code)) return false;
+    }
+    if (Date.now() >= end) return false;
+    if (lockIsStale(lock)) removeQuiet(lock);
+    else sleepMs(LOCK_STEP_MS);
+  }
+}
+function renameBusySafe(from, to) {
+  for (let retry = 0; ; retry++) {
+    try {
+      fs5.renameSync(from, to);
+      return;
+    } catch (err) {
+      if (retry >= RENAME_RETRIES || !BUSY_CODES.has(String(errCode(err)))) throw err;
+      sleepMs(RENAME_WAIT_MS);
+    }
+  }
+}
+function updateBudget(sid, env, now, change) {
+  if (!isUuid(sid)) return false;
+  const file = budgetFile(sid, env);
+  const lock = `${file}.lock`;
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs5.mkdirSync(path4.dirname(file), { recursive: true });
+  } catch {
+    return false;
+  }
+  if (!takeLock(lock)) return false;
+  try {
+    const b = loadBudget(file, now);
+    change(b);
+    fs5.writeFileSync(tmp, JSON.stringify(b));
+    renameBusySafe(tmp, file);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    removeQuiet(tmp);
+    removeQuiet(lock);
+  }
+}
+function removeIfOld(file, now) {
+  try {
+    const st = fs5.statSync(file);
+    if (st.isFile() && now - st.mtimeMs > BUDGET_MAX_AGE_MS) fs5.rmSync(file, { force: true });
+  } catch {
+  }
+}
+function sweepBudget(env = process.env, now = Date.now()) {
+  try {
+    const dir = budgetDir(env);
+    for (const name of fs5.readdirSync(dir)) {
+      if (/\.(json|tmp|lock)$/.test(name)) removeIfOld(path4.join(dir, name), now);
+    }
+  } catch {
+  }
+}
+function blockReason(board, env = process.env, foreign = false) {
+  const a = boardArtifact(board, { env });
+  if (!a) return "";
+  const why = foreign ? `Another session changed the lane DB and did not publish. The lane board page for board ${board} is out of date. ` : `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. `;
+  return why + `Other sessions update this page all day, so your held copy is old. In this order: 1. Read the live page with the Artifact tool, action read, url ${a.url}, without path (a read with path does not count). Do not open or paste the saved file. 2. Run ${renderBoardCmd(board, env)}. 3. At once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). If the publish is refused for any reason other than the daily publish limit, publish the same file again: the refusal counts as the read. If the refusal names the daily publish limit, do not publish again today. Then finish your turn.`;
+}
+var isSdk = (env) => (env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
+function isHeadless2(env) {
+  return env.LANE_CONTEXT_HEADLESS !== "1" && isSdk(env);
+}
+function mayAsk(payload, env) {
+  if (!isObj3(payload) || payload.stop_hook_active === true || isHeadless2(env)) return false;
+  return typeof payload.session_id === "string" && payload.session_id !== "";
+}
+function askAtOf(p) {
+  return typeof p.askAt === "number" && Number.isFinite(p.askAt) ? p.askAt : void 0;
+}
+function changedAt(e) {
+  return askAtOf(e.pending) ?? e.mtimeMs ?? Infinity;
+}
+function shown(e, lastPublish) {
+  return lastPublish !== void 0 && changedAt(e) < lastPublish - COVER_MARGIN_MS;
+}
+function ownAsks(p) {
+  if (p.v === PENDING_SHAPE) return holdsAskVerb(p) || askAtOf(p) !== void 0;
+  return !Array.isArray(p.verbs) || p.verbs.length >= VERB_CAP || holdsAskVerb(p);
+}
+function foreignAsks(e, lastAsk, now) {
+  const verbs = e.pending.verbs;
+  if (!Array.isArray(verbs) || !(holdsAskVerb(e.pending) || askAtOf(e.pending) !== void 0)) return false;
+  const at = changedAt(e);
+  return now - at >= ASK_WINDOW_MS && at > (lastAsk ?? -Infinity);
+}
+function findCandidates(own, foreign, env, view, now) {
+  const pages = /* @__PURE__ */ new Map();
+  const pageOf = (board) => {
+    if (!pages.has(board)) pages.set(board, boardArtifact(board, { env }));
+    return pages.get(board) ?? null;
+  };
+  const pick2 = (list, isForeign) => {
+    const out = [];
+    for (const e of list) {
+      const page = pageOf(e.board);
+      if (!page || e.pending.stopBlocked === true || shown(e, view.lastPublish.get(page.id))) continue;
+      const asks = isForeign ? foreignAsks(e, view.lastAsk.get(page.id), now) : ownAsks(e.pending);
+      if (asks) out.push({ board: e.board, pageId: page.id, foreign: isForeign });
+    }
+    return out;
+  };
+  return [...pick2(own, false), ...pick2(foreign, true).slice(0, 1)];
+}
+function lastTouch(view, pageId) {
+  return Math.max(view.lastPublish.get(pageId) ?? -Infinity, view.lastAsk.get(pageId) ?? -Infinity);
+}
+function decideStop(payload, env, entries, ctx = {}) {
+  const approve = { action: "approve" };
+  if (!mayAsk(payload, env)) return approve;
+  const now = ctx.now ?? Date.now();
+  const view = ctx.budget ?? emptyBudgetView();
+  const candidates = findCandidates(entries, ctx.foreign ?? [], env, view, now);
+  if (!candidates.length || view.limit || view.total >= DAY_CAP) return approve;
+  const due = candidates.find((c) => now - lastTouch(view, c.pageId) >= ASK_WINDOW_MS);
+  if (!due) return approve;
+  return { action: "block", reason: blockReason(due.board, env, due.foreign), board: due.board, pageId: due.pageId, foreign: due.foreign };
+}
+function mtimeOf(file) {
+  try {
+    return fs5.statSync(file).mtimeMs;
+  } catch {
+    return void 0;
+  }
+}
+function cwdBoard(payload, env) {
+  if (typeof payload.cwd !== "string" || !payload.cwd) return null;
+  try {
+    return resolveBoard(payload.cwd, { headlessOk: true, env })?.key ?? null;
+  } catch {
+    return null;
+  }
+}
+function foreignEntry(file, base) {
+  const pending = readPending(file);
+  const mtimeMs = mtimeOf(file);
+  if (!pending || mtimeMs === void 0) return null;
+  const at = base.indexOf("@");
+  const named = at >= 0 ? base.slice(at + 1) : DEFAULT_BOARD;
+  return { board: typeof pending.board === "string" && pending.board ? pending.board : named, pending, mtimeMs };
+}
+function foreignPending(sid, board, env = process.env) {
+  const dir = pendingDir(env);
+  const stem = pendingKey(sid, DEFAULT_BOARD);
+  let names;
+  try {
+    names = fs5.readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    const base = name.slice(0, -5);
+    if (!name.endsWith(".json") || name.startsWith(".") || base === stem || base.startsWith(`${stem}@`)) continue;
+    const e = foreignEntry(path4.join(dir, name), base);
+    if (e && e.board === board) out.push(e);
+  }
+  return out;
+}
+function foreignFor(payload, sid, env) {
+  if (!isUuid(sid) || isSdk(env)) return [];
+  const board = cwdBoard(payload, env);
+  return board ? foreignPending(sid, board, env) : [];
+}
+function recordAsk(d, sid, own, env, now) {
+  const uuid = isUuid(sid);
+  const stamps = uuid && !isSdk(env);
+  if (stamps && !updateBudget(sid, env, now, (b) => {
+    b.asked[d.pageId] = now;
+  })) return false;
+  if (d.foreign) return uuid;
+  const hit = own.find((e) => e.board === d.board);
+  if (!hit) return false;
+  try {
+    const fresh = readPending(hit.file);
+    const was = hit.pending;
+    if (!fresh || fresh.askAt !== was.askAt || fresh.verbs?.length !== was.verbs?.length) return false;
+    fs5.writeFileSync(hit.file, JSON.stringify({ ...fresh, stopBlocked: true }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function stopGate(payload, env = process.env, now = Date.now()) {
+  sweepStalePending(env, now);
+  if (!mayAsk(payload, env)) return { output: null };
+  const sid = payload.session_id;
+  sweepBudget(env, now);
+  const own = listPending(sid, env);
+  const foreign = foreignFor(payload, sid, env);
+  const budget = own.length || foreign.length ? readBudgets(env, now) : emptyBudgetView();
+  const entries = own.map(({ file, board, pending }) => ({ board, pending, mtimeMs: mtimeOf(file) }));
+  const d = decideStop(payload, env, entries, { now, budget, foreign });
+  if (d.action !== "block" || !recordAsk(d, sid, own, env, now)) return { output: null };
+  const line = isSdk(env) ? "" : fleetopsLine(env, now);
+  return { output: { decision: "block", reason: line ? `${d.reason}
+${line}` : d.reason } };
+}
+async function readStdin() {
+  return new Promise((resolve3) => {
+    let data = "";
+    process.stdin.setEncoding("utf-8");
+    process.stdin.on("data", (chunk) => data += chunk);
+    process.stdin.on("end", () => resolve3(data));
+  });
+}
+async function main() {
+  const input = await readStdin();
+  if (!input.trim()) return;
+  const { output } = stopGate(JSON.parse(input));
+  if (output) console.log(JSON.stringify(output));
+}
+if (!process.env.VITEST && /(^|[\\/])lane-board-stop-gate\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
+  main().catch(() => {
+  });
 }
 
 // src/shared/mask-quotes.ts
@@ -6103,11 +6572,11 @@ var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var RENDER_DEBOUNCE_MS = 2e4;
 var RENDER_ONLY_EVERY_MS = 60 * 6e4;
 var NONE = { action: "none" };
-var isObj2 = (v) => v !== null && typeof v === "object";
+var isObj4 = (v) => v !== null && typeof v === "object";
 var stateDir = pendingDir;
 var stateFile = pendingFile;
-function reminder(verb, board, env, a) {
-  return `Lane DB changed (lane.mjs ${verb}) on board ${board}. The lane board page is a snapshot. When this batch of lane changes is done: read the live page first (Artifact tool, action read, url ${a.url}, without path; your held copy is old), then run ${renderBoardCmd(board, env)}, then at once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to the same url (omit capabilities). Steps: kanban-sync skill step 7.`;
+function reminder(verb, board) {
+  return `Lane DB changed (lane.mjs ${verb}) on board ${board}. The lane board page is out of date. The Stop gate asks for a publish when one is due. Do not publish before it asks. The kanban-sync step 7 and a milestone portal refresh still publish.`;
 }
 function renderOnly(verb, board) {
   return `Lane DB changed (lane.mjs ${verb}) on board ${board}. This board has no phone page: the local page is re-rendered automatically, within 20 s of the last change (render-only). Nothing to publish.`;
@@ -6163,7 +6632,7 @@ function failed(data) {
   return code !== null && code !== 0;
 }
 var cwdOf = (payload) => typeof payload.cwd === "string" && payload.cwd ? payload.cwd : process.cwd();
-function cwdBoard(payload, env) {
+function cwdBoard2(payload, env) {
   try {
     return resolveBoard(cwdOf(payload), { headlessOk: true, env })?.key ?? null;
   } catch {
@@ -6176,7 +6645,7 @@ function boardOfChange(payload, lc, env, ownedBoard) {
   } catch {
     return null;
   }
-  return cwdBoard(payload, env) ?? (OWNER_KEYED_VERBS.has(lc.verb) ? ownedBoard : null);
+  return cwdBoard2(payload, env) ?? (OWNER_KEYED_VERBS.has(lc.verb) ? ownedBoard : null);
 }
 function publishedBoard(input, boards, env) {
   const url = typeof input.url === "string" ? input.url : "";
@@ -6194,15 +6663,19 @@ function publishedBoard(input, boards, env) {
   const base = file.slice(file.lastIndexOf("/") + 1);
   return base && base === a.publishFrom.toLowerCase() ? DEFAULT_BOARD : null;
 }
+function isPublish(input) {
+  return input.action === void 0 || input.action === null || input.action === "publish";
+}
+var isPagePublish = (input) => isPublish(input) && input.asset !== true;
 function decide(payload, pending, env = process.env, candidates = [DEFAULT_BOARD], ownedBoard = null) {
-  if (!isObj2(payload)) return NONE;
+  if (!isObj4(payload)) return NONE;
   const tool = payload.tool_name;
   if (typeof tool !== "string" || !HOOK_TOOLS.has(tool)) return NONE;
   if (typeof payload.session_id !== "string" || !payload.session_id) return NONE;
   const input = payload.tool_input;
-  if (!isObj2(input) || failed(payload)) return NONE;
+  if (!isObj4(input) || failed(payload)) return NONE;
   if (tool === "Artifact") {
-    const board2 = publishedBoard(input, candidates, env);
+    const board2 = isPagePublish(input) ? publishedBoard(input, candidates, env) : null;
     return board2 ? { action: "clear", board: board2 } : NONE;
   }
   if (!COMMAND_TOOLS.has(tool) || typeof input.command !== "string") return NONE;
@@ -6212,8 +6685,10 @@ function decide(payload, pending, env = process.env, candidates = [DEFAULT_BOARD
   if (!board) return NONE;
   const artifact = boardArtifact(board, { env });
   if (!artifact) return { action: "render", verb: lc.verb, board, message: renderOnly(lc.verb, board) };
-  const isPending = typeof pending === "function" ? pending(board) : pending;
-  return isPending ? { action: "mark", verb: lc.verb, board } : { action: "remind", verb: lc.verb, board, message: reminder(lc.verb, board, env, artifact) };
+  const mark = { action: "mark", verb: lc.verb, board };
+  if (!ASK_VERBS.has(lc.verb)) return mark;
+  const asked = typeof pending === "function" ? pending(board) : pending;
+  return asked ? mark : { action: "remind", verb: lc.verb, board, message: reminder(lc.verb, board) };
 }
 var safeFile = (s) => s.replace(/[^A-Za-z0-9_-]/g, "_");
 var BOARD_KEY_RE2 = /^[a-z0-9][a-z0-9-]*$/;
@@ -6228,14 +6703,14 @@ function autoRender(board, env, deps) {
     const out = boardPageFile(board, env);
     if (!out) return false;
     const now = deps.now ?? Date.now();
-    const stamp = path3.join(pendingDir(env), `.render-${safeFile(board)}.json`);
+    const stamp = path5.join(pendingDir(env), `.render-${safeFile(board)}.json`);
     const prev = readPending(stamp) ?? {};
     const last = Number(prev.ts) || 0;
     const age = now - last;
     const inWindow = age >= 0 && age < RENDER_DEBOUNCE_MS;
     if (inWindow && prev.trailing) return false;
-    fs4.mkdirSync(path3.dirname(stamp), { recursive: true });
-    fs4.writeFileSync(stamp, JSON.stringify(inWindow ? { ts: last, trailing: true } : { ts: now }));
+    fs6.mkdirSync(path5.dirname(stamp), { recursive: true });
+    fs6.writeFileSync(stamp, JSON.stringify(inWindow ? { ts: last, trailing: true } : { ts: now }));
     const script = env.LANE_RENDER_SCRIPT || `${primaryRepo(env)}/scripts/coordination/render-board.mjs`;
     const render = [script, out, "--project", board];
     const args = inWindow ? ["-e", DELAYED_RENDER_SRC, String(RENDER_DEBOUNCE_MS - age), ...render] : render;
@@ -6249,35 +6724,74 @@ function autoRender(board, env, deps) {
 }
 function shouldSayRenderOnly(sid, board, env, now) {
   try {
-    const marker = path3.join(pendingDir(env), `.said-${safeFile(pendingKey(sid, board))}.json`);
+    const marker = path5.join(pendingDir(env), `.said-${safeFile(pendingKey(sid, board))}.json`);
     const last = Number(readPending(marker)?.ts) || 0;
     if (now - last < RENDER_ONLY_EVERY_MS) return false;
-    fs4.mkdirSync(path3.dirname(marker), { recursive: true });
-    fs4.writeFileSync(marker, JSON.stringify({ ts: now }));
+    fs6.mkdirSync(path5.dirname(marker), { recursive: true });
+    fs6.writeFileSync(marker, JSON.stringify({ ts: now }));
     return true;
   } catch {
     return false;
   }
 }
+function boardOfPage(id, env) {
+  if (boardArtifact(DEFAULT_BOARD, { env })?.id === id) return DEFAULT_BOARD;
+  for (const e of loadRegistry({ env })) {
+    if (artifactIdOf(e.artifact) === id && boardArtifact(e.key, { env })?.id === id) return e.key;
+  }
+  return null;
+}
+function countPublish(payload, sid, env, now) {
+  try {
+    if (!isObj4(payload) || payload.tool_name !== "Artifact") return;
+    const input = payload.tool_input;
+    if (!isObj4(input) || !isPagePublish(input) || failed(payload)) return;
+    const id = typeof input.url === "string" ? artifactIdOf(input.url) : null;
+    const page = id !== null && boardOfPage(id, env) !== null ? id : null;
+    updateBudget(sid, env, now, (b) => {
+      b.n += 1;
+      if (page !== null) b.pages[page] = now;
+    });
+  } catch {
+  }
+}
+function keptAskAt(file, prev) {
+  if (typeof prev?.askAt === "number") return prev.askAt;
+  if (!holdsAskVerb(prev)) return void 0;
+  try {
+    return Math.round(fs6.statSync(file).mtimeMs);
+  } catch {
+    return void 0;
+  }
+}
+function writePending(file, board, verb, now) {
+  const prev = readPending(file);
+  const verbs = [...prev?.verbs ?? [], verb].slice(-VERB_CAP);
+  const askAt = ASK_VERBS.has(verb) ? void 0 : keptAskAt(file, prev);
+  const kept = {
+    ...askAt !== void 0 ? { askAt } : {},
+    ...prev?.stopBlocked === true ? { stopBlocked: true } : {}
+  };
+  const ask = ASK_VERBS.has(verb) ? { askAt: now } : kept;
+  const shape = prev === null || prev.v === PENDING_SHAPE ? { v: PENDING_SHAPE } : {};
+  fs6.mkdirSync(path5.dirname(file), { recursive: true });
+  fs6.writeFileSync(file, JSON.stringify({ since: prev?.since ?? (/* @__PURE__ */ new Date()).toISOString(), verbs, board, ...shape, ...ask }));
+}
 function handle(payload, env = process.env, deps = {}) {
-  const sid = isObj2(payload) && typeof payload.session_id === "string" ? payload.session_id : "";
+  const sid = isObj4(payload) && typeof payload.session_id === "string" ? payload.session_id : "";
+  const now = deps.now ?? Date.now();
+  countPublish(payload, sid, env, now);
   const candidates = sid ? [.../* @__PURE__ */ new Set([DEFAULT_BOARD, ...listPending(sid, env).map((e) => e.board)])] : [DEFAULT_BOARD];
-  const d = decide(payload, (b) => readPending(pendingFile(sid, b, env)) !== null, env, candidates, deps.ownedBoard ?? null);
+  const d = decide(payload, (b) => holdsAskVerb(readPending(pendingFile(sid, b, env))), env, candidates, deps.ownedBoard ?? null);
   const none = { output: null, decision: d };
   if (d.action === "none" || !d.board) return none;
   if (d.action === "clear") {
-    fs4.rmSync(pendingFile(sid, d.board, env), { force: true });
+    fs6.rmSync(pendingFile(sid, d.board, env), { force: true });
     return none;
   }
-  if (d.action === "remind" || d.action === "mark") {
-    const file = pendingFile(sid, d.board, env);
-    const prev = readPending(file);
-    const verbs = [...prev?.verbs ?? [], d.verb].slice(-50);
-    fs4.mkdirSync(path3.dirname(file), { recursive: true });
-    fs4.writeFileSync(file, JSON.stringify({ since: prev?.since ?? (/* @__PURE__ */ new Date()).toISOString(), verbs, board: d.board }));
-  }
+  if (d.action === "remind" || d.action === "mark") writePending(pendingFile(sid, d.board, env), d.board, d.verb, now);
   autoRender(d.board, env, deps);
-  const speak = d.action === "remind" || d.action === "render" && shouldSayRenderOnly(sid, d.board, env, deps.now ?? Date.now());
+  const speak = d.action === "remind" || d.action === "render" && shouldSayRenderOnly(sid, d.board, env, now);
   if (!speak) return none;
   return {
     output: { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: d.message } },
@@ -6302,12 +6816,12 @@ var defaultOwnedRun = async (sql, params) => {
 };
 async function ownedLaneBoard(payload, env = process.env, run = defaultOwnedRun) {
   try {
-    if (!isObj2(payload) || typeof payload.tool_name !== "string" || !COMMAND_TOOLS.has(payload.tool_name)) return null;
+    if (!isObj4(payload) || typeof payload.tool_name !== "string" || !COMMAND_TOOLS.has(payload.tool_name)) return null;
     const input = payload.tool_input;
-    if (!isObj2(input) || typeof input.command !== "string" || failed(payload)) return null;
+    if (!isObj4(input) || typeof input.command !== "string" || failed(payload)) return null;
     const lc = laneChange(input.command, payload.tool_name);
     if (!lc || lc.project || !lc.laneId || !OWNER_KEYED_VERBS.has(lc.verb)) return null;
-    if (cwdBoard(payload, env)) return null;
+    if (cwdBoard2(payload, env)) return null;
     const me = lc.as ?? (typeof payload.session_id === "string" ? payload.session_id : "");
     if (!me) return null;
     const key = (await run(OWNED_BOARD_SQL, [lc.laneId, me]))[0]?.project_key;
@@ -6316,7 +6830,7 @@ async function ownedLaneBoard(payload, env = process.env, run = defaultOwnedRun)
     return null;
   }
 }
-async function readStdin() {
+async function readStdin2() {
   return new Promise((resolve3) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
@@ -6324,15 +6838,15 @@ async function readStdin() {
     process.stdin.on("end", () => resolve3(data));
   });
 }
-async function main() {
-  const input = await readStdin();
+async function main2() {
+  const input = await readStdin2();
   if (!input.trim()) return;
   const payload = JSON.parse(input);
   const { output } = handle(payload, process.env, { ownedBoard: await ownedLaneBoard(payload) });
   if (output) console.log(JSON.stringify(output));
 }
-if (!process.env.VITEST) {
-  main().catch(() => {
+if (!process.env.VITEST && /(^|[\\/])lane-board-republish-reminder\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
+  main2().catch(() => {
   });
 }
 export {
@@ -6345,7 +6859,7 @@ export {
   handle,
   laneChange,
   laneChangeVerb,
-  main,
+  main2 as main,
   ownedLaneBoard,
   stateDir,
   stateFile
