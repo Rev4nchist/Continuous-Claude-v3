@@ -1461,6 +1461,11 @@ describe('B: the checkpoint gate (PR B)', () => {
       for (const tool of ['Bash', 'PowerShell']) {
         const d = denied(c, { config: ENFORCE }, tool);
         expect(d, `${tool}: ${c}`).not.toBeNull();
+        // Two real opens in one command (a create, then a POST to .../pulls): the body check cannot tie the text to one file, so it denies first ("body").
+        if (/&&\s*gh\s+api\s/.test(c)) {
+          expect(d?.pattern, c).toBe('body');
+          continue;
+        }
         expect(d?.pattern, c).toBe('non-draft');
         expect(d?.reason, c).toContain('open as draft; call pr_checkpoint {pr}');
         expect(d?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);

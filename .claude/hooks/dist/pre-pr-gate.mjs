@@ -836,7 +836,7 @@ function plainSegments(command, tool) {
   }
   return { spans, segs };
 }
-function inertSpans(command, tool) {
+function inertSpans(command, tool, openHead) {
   const none = /* @__PURE__ */ new Set();
   const plain = plainSegments(command, tool);
   if (!plain) return none;
@@ -844,6 +844,7 @@ function inertSpans(command, tool) {
   for (const { from, end, masked } of plain.segs) {
     const raw = command.slice(from, end);
     if (headMatches(PLAIN_HEAD, masked, raw)) continue;
+    if (openHead !== void 0 && headMatches(openHead, masked, raw)) continue;
     if (!headMatches(INERT_HEAD, masked, raw)) return none;
     for (const [s, e] of plain.spans) if (s >= from && e <= end) out.add(`${s}:${e}`);
   }
@@ -855,8 +856,9 @@ function blankInertQuotes(command, tool) {
     const doc = blankDocHeredocBody(command);
     if (doc !== command) return doc;
   }
-  const bash = inertSpans(command, "Bash");
-  const pwsh = inertSpans(command, "PowerShell");
+  return blankSpans(command, inertSpans(command, "Bash"), inertSpans(command, "PowerShell"));
+}
+function blankSpans(command, bash, pwsh) {
   let out = command;
   for (const id of bash) {
     if (!pwsh.has(id)) continue;
@@ -864,6 +866,10 @@ function blankInertQuotes(command, tool) {
     out = out.slice(0, s + 1) + " ".repeat(e - s - 2) + out.slice(e - 1);
   }
   return out;
+}
+function blankInertQuotesAround(command, tool, openHead) {
+  if (tool !== void 0 && tool !== "Bash" && tool !== "PowerShell") return command;
+  return blankSpans(command, inertSpans(command, "Bash", openHead), inertSpans(command, "PowerShell", openHead));
 }
 
 // src/shared/shell-tools.ts
@@ -1038,6 +1044,19 @@ function bodyFileOf(command) {
   const path = bodyFilesOf(command)[0];
   return path !== void 0 && path !== "-" ? path : null;
 }
+var OPEN_HEAD = /^\s*gh\s+(?:pr\s+create|api)(?=\s|$)/i;
+var bodyViewOf = (command, tool) => blankInertQuotesAround(command, tool, OPEN_HEAD);
+var OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh\s+(?:pr\s+create(?=\s|$)|api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))/gi;
+function openSegmentOf(text, shell) {
+  const view = joinContinuations(joinContinuations(text, "pwsh"), "bash");
+  const opens = [...view.matchAll(OPEN_SEGMENT)];
+  if (opens.length === 0) return view;
+  if (opens.length > 1) return "";
+  const start = opens[0].index + opens[0][0].search(/g/i);
+  const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
+  const cut = masked.slice(start).search(/[;&|\r\n]/);
+  return view.slice(start, cut < 0 ? view.length : start + cut);
+}
 function singleBodyFile(command) {
   const files = bodyFilesOf(command);
   if (files.length !== 1 || INLINE_BODY.test(command) || INPUT_FLAG2.test(command)) return null;
@@ -1134,7 +1153,7 @@ var once = (f) => {
   let box;
   return () => (box ??= { v: f() }).v;
 };
-function makeCtx(input, command, deps, shapes, plan) {
+function makeCtx(input, command, deps, shapes, plan, bodyView) {
   const cwd = input.cwd || process.cwd();
   const shell = shellOf(input);
   const named = namedRepo(command, deps.env);
@@ -1171,6 +1190,7 @@ function makeCtx(input, command, deps, shapes, plan) {
     states: plan.states,
     unknown: plan.unknown,
     shell,
+    bodyView,
     named,
     top,
     isCcv3At,
@@ -1196,7 +1216,8 @@ function decide(input, deps) {
   const runs = [];
   for (const shell of ["Bash", "PowerShell"]) runs.push(decideAs({ ...input, tool_name: shell }, deps, text));
   for (const shell of ["Bash", "PowerShell"]) {
-    if (blankInertQuotes(text, shell) !== text) runs.push(decideAs({ ...input, tool_name: shell }, deps, text, realName));
+    const base = normalizeGh(joinContinuations(text, shell === "PowerShell" ? "pwsh" : "bash"));
+    if (blankInertQuotes(text, shell) !== text || bodyViewOf(base, shell) !== base) runs.push(decideAs({ ...input, tool_name: shell }, deps, text, realName));
   }
   return runs.find((d) => d.action === "deny") ?? runs.find((d) => d.action === "override") ?? runs.find((d) => d.action === "allow" && d.warn) ?? runs[0];
 }
@@ -1207,7 +1228,7 @@ function decideAs(input, deps, text, quoteTool = input.tool_name || input.tool) 
   if (!isGated(shapes)) return { action: "allow" };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
   deps = guardUnexpandedCd(deps, plan);
-  const ctx = makeCtx(input, command, deps, shapes, plan);
+  const ctx = makeCtx(input, command, deps, shapes, plan, bodyViewOf(command, quoteTool));
   const d = judge(command, deps, ctx, shapes);
   if (d.action !== "deny") return d;
   if (hasOverride(command, deps.env)) return { action: "override" };
@@ -1249,7 +1270,8 @@ function stampDenyIn(command, deps, ctx, dir) {
   const top = ctx.top(dir);
   if (top === null) return rule("no-checkout", `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
   if (named !== null && !ctx.isCcv3At(dir)) return rule("repo-identity", `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
-  const bodyPath = singleBodyFile(command);
+  const whole = singleBodyFile(ctx.bodyView);
+  const bodyPath = whole !== null && whole === singleBodyFile(openSegmentOf(ctx.bodyView, shell)) ? whole : null;
   if (bodyPath === null) return rule("body", BODY_UNVERIFIABLE);
   const branch = headBranchOf(command);
   const headRun = deps.git(top, ["rev-parse", branch ? `${branch}^{commit}` : "HEAD"]);
