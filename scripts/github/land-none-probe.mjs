@@ -4,7 +4,9 @@
 // Run: node scripts/github/land-none-probe.mjs        Exit code = the number of FAIL lines.
 //
 // 1. Router: a HIGH PR with a bare review:none label and no pathway-confirmed marker must not save pathway=none.
-// 2. READY (context only): the forged state (pathway=none saved for the head) still reads READY. review-status is unchanged on purpose.
+// 2. READY (context only): the forged state (pathway=none saved for the head) reads NOT READY, only because the fixture has no check
+//    runs (the "required checks not started" line, lane ready-no-check-runs). The pathway state itself blocks nothing: review-status
+//    reads no store, so the land gate in step 3 is the check.
 // 3. Land gate: land-none-check.mjs must refuse a missing store, a bridge pick and a stale head, and pass a valid dialog pick.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -56,8 +58,8 @@ try {
   const ready = node('review-status.mjs', ['--fixture', status, '--json']);
   let verdict = 'unreadable';
   try { verdict = JSON.parse(ready.out.split('\n').find((l) => l.startsWith('{'))).ready ? 'yes' : 'no'; } catch { /* informational only */ }
-  console.log(`      READY: ${verdict}  (review-status reads no store; the land gate below is the check)`);
-  if (verdict !== 'yes') console.log(`      ${ready.out.trim().split('\n')[0].slice(0, 600)}`);
+  console.log(`      READY: ${verdict}  (expected: no, for the required-checks line only; review-status reads no store; the land gate below is the check)`);
+  if (verdict !== 'no') console.log(`      ${ready.out.trim().split('\n')[0].slice(0, 600)}`);
 
   console.log('Step 3: land gate, four stores');
   const gate = path.join(HERE, 'land-none-check.mjs');

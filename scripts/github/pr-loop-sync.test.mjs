@@ -81,3 +81,56 @@ test('the mod CARRY_REASON_PREFIX is the start of the reason review-status.mjs w
   assert.ok(RS.noReviewCliReason(221).startsWith(prefix), `the reason "${RS.noReviewCliReason(221)}" does not start with "${prefix}"`);
   assert.match(RS.noReviewCliReason(221), /cr-fix\.mjs --pr 221/, 'the reason no longer names cr-fix.mjs');
 });
+
+// Lane ready-no-check-runs (the seat 2026-11-11): review-status.mjs writes required-checks and base-branch lines. They change as CI
+// runs, so the mod's CI_REASON keeps them out of the LIMITED/STALLED alert key, like the check, status and mergeable_state lines.
+const ciReason = () => {
+  const m = /^const CI_REASON = \/(.*)\/\s*$/m.exec(MODEL);
+  assert.ok(m, 'model.ts no longer declares CI_REASON as a one-line regex literal');
+  return new RegExp(m[1]);
+};
+const SHA = '9bd87cd599565431e5c6864266a0cad413b83977';
+const syncPull = (base = 'main') => ({ number: 7, state: 'open', merged: false, mergeable_state: 'clean', body: '', labels: [], head: { sha: SHA, ref: 'fix/x' }, base: { ref: base } });
+/** review-status.mjs's reasons for a head with no check runs, committed at 22:23:51Z and read at `now`. */
+const syncReasons = async (now, base = 'main', checkRuns = []) => {
+  const RS = await import('./review-status.mjs');
+  return RS.evaluate({ pull: syncPull(base), combined: { statuses: [] }, checkRuns, threads: [], bodyEdits: [], reviews: [], comments: [], headCommittedAt: '2026-11-11T22:23:51Z', nowMs: Date.parse(now) }).reasons;
+};
+const REQUIRED_LINE = /^required checks |^base branch "/;
+
+test('CI_REASON matches every required-checks and base-branch line review-status.mjs writes, and the older CI lines', async () => {
+  const ci = ciReason();
+  const skipped = [{ id: 1, name: 'trivy', app: { slug: 'github-actions' }, status: 'completed', conclusion: 'skipped', started_at: '2026-11-11T22:24:00Z' }];
+  const written = [
+    ...(await syncReasons('2026-11-11T22:25:51Z')),
+    ...(await syncReasons('2026-11-11T23:25:51Z')),
+    ...(await syncReasons('2026-11-11T22:25:51Z', 'feat/stack')),
+    ...(await syncReasons('2026-11-11T22:25:51Z', 'main', skipped)),
+  ].filter((x) => REQUIRED_LINE.test(x));
+  const kinds = new Set(written.map((x) => /^(required checks (not started|missing|ended skipped or neutral)|base branch)/.exec(x)?.[1]));
+  assert.equal(kinds.size, 4, `the 4 kinds of line were written: ${written.join(' | ')}`);
+  for (const line of written) assert.ok(ci.test(line), `CI_REASON does not match "${line}"`);
+  assert.ok(ci.test('required checks not started on head 9bd87cd (push time unknown): ratchets. Wait for them'));
+  assert.ok(ci.test('check "hooks" is in_progress/null'));
+  assert.ok(ci.test('status "x" is pending'));
+  assert.ok(ci.test('mergeable_state is "blocked"'));
+});
+
+test('CI_REASON does not match a review reason (the alert key keeps those)', async () => {
+  const RS = await import('./review-status.mjs');
+  const ci = ciReason();
+  for (const reason of [RS.DRAFT_REASON, 'CodeRabbit rate limited: head not reviewed', RS.noReviewCliReason(7), RS.NO_REVIEW_UNVERIFIED_REASON]) {
+    assert.equal(ci.test(reason), false, `CI_REASON matches the review reason "${reason}"`);
+  }
+});
+
+test('the required-checks line of one state is byte-identical at two reads (no minute count in the alert text)', async () => {
+  const lineOf = (reasons) => reasons.filter((x) => x.startsWith('required checks '));
+  const notStarted = [await syncReasons('2026-11-11T22:24:51Z'), await syncReasons('2026-11-11T22:31:51Z')];
+  assert.equal(lineOf(notStarted[0]).length, 1, notStarted[0].join(' | '));
+  assert.deepEqual(lineOf(notStarted[1]), lineOf(notStarted[0]));
+  assert.deepEqual(notStarted[1], notStarted[0], 'every reason, not only the required-checks line');
+  const missing = [await syncReasons('2026-11-11T22:43:51Z'), await syncReasons('2026-11-11T23:53:51Z')];
+  assert.deepEqual(missing[1], missing[0]);
+  assert.notDeepEqual(lineOf(missing[0]), lineOf(notStarted[0]), '"not started" and "missing" read differently');
+});

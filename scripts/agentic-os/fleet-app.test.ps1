@@ -53,6 +53,12 @@ try {
   $stopLnk = $sh.CreateShortcut((Join-Path $lnks 'Fleet - stop.lnk'))
   Check 'install writes Fleet.lnk to start-fleet.ps1' ($r.Code -eq 0 -and $startLnk.Arguments -like '*start-fleet.ps1*')
   Check 'install writes Fleet - stop.lnk to stop-fleet.ps1' ($stopLnk.Arguments -like '*stop-fleet.ps1*')
+  # icon: each shortcut names its own .ico file, the file exists and it is a real icon file (header 00 00 01 00)
+  foreach ($pair in @(@($startLnk, 'fleet.ico'), @($stopLnk, 'fleet-stop.ico'))) {
+    $ico = ($pair[0].IconLocation -split ',')[0]
+    $head = if (Test-Path -LiteralPath $ico) { ([IO.File]::ReadAllBytes($ico)[0..3] -join ' ') } else { 'missing' }
+    Check "install gives the shortcut the icon $($pair[1])" ((Split-Path -Leaf $ico) -eq $pair[1] -and $head -eq '0 0 1 0')
+  }
   Run 'install-fleet-shortcut.ps1' @('-Dir', $lnks) | Out-Null
   Check 'install twice keeps exactly two shortcuts' ((Get-ChildItem $lnks -Filter *.lnk).Count -eq 2)
   Run 'install-fleet-shortcut.ps1' @('-Dir', $lnks, '-Remove') | Out-Null
@@ -66,6 +72,10 @@ try {
   Check 'start: the page answers 200' ($http -eq 200)
   Check 'start writes the pid file' (Test-Path (Join-Path $state "fleet-app-$port.pid"))
   Check 'the port owner is a Fleet process' (Test-IsFleetProcess (Get-ProcInfo $owner1) $app)
+  # bind: every listener on the port is 127.0.0.1. One listener on :: or 0.0.0.0 opens the app to the network.
+  $addrs = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalAddress })
+  Write-Host "      listeners on ${port}: $($addrs -join ', ')"
+  Check 'start: the app listens on 127.0.0.1 only' ($addrs.Count -ge 1 -and @($addrs | Where-Object { $_ -ne '127.0.0.1' }).Count -eq 0)
 
   # start again: reuse, no second server
   $r = Run 'start-fleet.ps1' ($common + @('-NoWindow'))
