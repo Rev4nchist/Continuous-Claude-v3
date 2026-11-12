@@ -1,0 +1,385 @@
+<title>Where the Line Stops</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one conveyor rail down the left edge; each stoppage is a station bolted to it, biggest loss first; every station ends in a pull-cord question. */
+:root {
+  --ground: #E2E8E3; --panel: #F1F4F0; --ink: #14302D; --ink-2: #4A625E; --line: #B5C3BC;
+  --amber: #E39B00; --amber-ink: #3D2800; --go: #1C7448; --stripe: #14302D;
+  --display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --ground: #0D1A19; --panel: #142523; --ink: #DDE9E3; --ink-2: #9BB2AB; --line: #2B4440;
+  --amber: #F2B233; --amber-ink: #2A1B00; --go: #5FC892; --stripe: #0D1A19; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --ground: #0D1A19; --panel: #142523; --ink: #DDE9E3; --ink-2: #9BB2AB; --line: #2B4440;
+  --amber: #F2B233; --amber-ink: #2A1B00; --go: #5FC892; --stripe: #0D1A19; color-scheme: dark }
+
+body { background: var(--ground); color: var(--ink); font: 16px/1.55 var(--body);
+  padding-block: 28px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 860px; margin-inline: auto; display: flex; flex-direction: column; gap: 40px; }
+.tag { font: 500 12px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+h1 { font: 800 clamp(52px, 13vw, 112px)/1.02 var(--display); letter-spacing: -.01em; text-transform: uppercase; margin: 10px 0 18px; text-wrap: balance; }
+h1 em { font-style: normal; color: var(--amber-ink); background: var(--amber); padding: 0 .12em; display: inline-block; line-height: .92; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.lede { max-width: 62ch; font-size: 18px; margin: 0; }
+p { margin: 0; }
+
+.counters { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px 24px; }
+.counter { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.digits { display: flex; gap: 3px; font: 500 30px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.digits b { font-weight: 500; background: var(--ink); color: var(--ground); padding: 7px 6px 6px; border-radius: 2px; }
+.digits i { font-style: normal; align-self: flex-end; padding: 0 2px 5px 4px; font-size: 14px; color: var(--ink-2); }
+.counter span { font-size: 14px; color: var(--ink-2); }
+
+.how { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line); padding-block: 14px; display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: baseline; justify-content: space-between; }
+.how p { max-width: 58ch; font-size: 15px; }
+#tally { font: 500 13px/1.3 var(--mono); }
+#tally[data-state="saved"] { color: var(--go); }
+
+.rail { list-style: none; margin: 0; padding: 0 0 0 26px; position: relative; display: flex; flex-direction: column; gap: 56px; }
+.rail::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 10px;
+  background: repeating-linear-gradient(135deg, var(--amber) 0 9px, var(--stripe) 9px 18px); }
+.stop { display: flex; flex-direction: column; gap: 16px; min-width: 0; position: relative; }
+.stop::before { content: ""; position: absolute; left: -16px; top: 20px; width: 16px; height: 3px; background: var(--ink); }
+.plate { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 16px; }
+.plate .no { font: 800 15px/1 var(--display); letter-spacing: .1em; background: var(--amber); color: var(--amber-ink); padding: 7px 9px 6px; }
+.plate .loss { font: 500 13px/1.3 var(--mono); color: var(--ink-2); }
+h2 { font: 800 clamp(30px, 6.4vw, 46px)/.98 var(--display); text-transform: uppercase; margin: 0; text-wrap: balance; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 18px; max-width: 70ch; }
+.facts dt { font: 500 12px/1.9 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.facts dd { margin: 0; min-width: 0; }
+@media (max-width: 520px) { .facts { grid-template-columns: minmax(0, 1fr); gap: 2px; } .facts dd { margin-bottom: 10px; } }
+code { font: 400 .88em var(--mono); background: var(--panel); padding: 1px 5px; border-radius: 2px; overflow-wrap: anywhere; }
+
+.gauge { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 6px 12px; align-items: center; max-width: 560px; font: 400 13px/1.2 var(--mono); font-variant-numeric: tabular-nums; }
+.gauge .track { height: 14px; background: var(--panel); position: relative; }
+.gauge .track > span { position: absolute; inset: 0 auto 0 0; width: var(--v); background: var(--ink); }
+.gauge .track.hot > span { background: var(--amber); }
+.gauge .track .cap { inset: -4px auto -4px var(--at); width: 2px; background: var(--amber); }
+.gauge-note { font: 400 12px/1.4 var(--mono); color: var(--ink-2); max-width: 560px; }
+.taps { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font: 500 13px/1 var(--mono); }
+.taps b { width: 34px; height: 34px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 50%; font-weight: 500; }
+.taps span { color: var(--ink-2); }
+
+.decided { font-size: 14px; border-left: 3px solid var(--go); padding: 2px 0 2px 12px; max-width: 66ch; }
+.decided b { font: 500 12px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--go); display: block; }
+
+.cord { background: var(--panel); border: 1px solid var(--line); border-top: 4px solid var(--ink); padding: 16px 16px 14px; display: flex; flex-direction: column; gap: 12px; max-width: 70ch; }
+.cord[data-answered="1"] { border-top-color: var(--go); }
+.cord h3 { font: 600 17px/1.35 var(--body); margin: 0; }
+.cord .q { font: 500 12px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.opts { display: flex; flex-direction: column; gap: 8px; }
+.opt { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 2px 10px; padding: 10px 12px; border: 1.5px solid var(--line); background: var(--ground); width: 100%; }
+.opt:hover { border-color: var(--ink); }
+.opt:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+.opt .knob { width: 18px; height: 18px; border: 2px solid var(--ink); border-radius: 50%; margin-top: 3px; grid-row: span 2; }
+.opt[aria-checked="true"] { border-color: var(--ink); box-shadow: inset 4px 0 0 var(--amber); }
+.opt[aria-checked="true"] .knob { background: var(--amber); box-shadow: inset 0 0 0 3px var(--ground); }
+.opt .lab { font-weight: 600; }
+.opt .rec { font: 500 11px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; background: var(--ink); color: var(--ground); padding: 3px 5px 2px; margin-left: 6px; white-space: nowrap; }
+.opt .sub { font-size: 14px; color: var(--ink-2); grid-column: 2; }
+.note { font: 15px/1.4 var(--body); width: 100%; box-sizing: border-box; min-height: 44px; padding: 9px 10px; border: 1.5px solid var(--line); background: var(--ground); color: var(--ink); resize: vertical; font-size: 16px; }
+.note:focus-visible { outline: 3px solid var(--amber); outline-offset: 1px; }
+.state { font: 500 12px/1.3 var(--mono); color: var(--ink-2); min-height: 1.3em; }
+.state[data-s="saved"] { color: var(--go); }
+
+.after { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 32px; }
+.after h2 { font-size: 28px; margin-bottom: 10px; }
+.after ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; }
+footer { border-top: 1px solid var(--line); padding-top: 14px; font: 400 12px/1.6 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: no-preference) { .opt, .cord { transition: border-color .15s, box-shadow .15s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="tag">CCv3 software factory · time study · 11-07 to 11-11 · 97 sessions</p>
+    <h1>Where the line <em>stops</em></h1>
+    <p class="lede">Ten long sessions built and landed work for five days. I timed them from the transcripts. The code work is sound. The line stops in seven places, and none of them is the code.</p>
+  </header>
+
+  <section class="counters" aria-label="Measured totals">
+    <div class="counter"><div class="digits" data-n="937"></div><span>questions you answered by tap</span></div>
+    <div class="counter"><div class="digits" data-n="233" data-u="min"></div><span>workers idle on an unread message</span></div>
+    <div class="counter"><div class="digits" data-n="535"></div><span>lane board publishes (limit: 200 a day)</span></div>
+    <div class="counter"><div class="digits" data-n="16.6" data-u="h"></div><span>summed in pre-pr gate runs</span></div>
+  </section>
+
+  <section class="how">
+    <p>Each stop gives what happens, why, and the fix. Most end with a question for you. Tap an answer. It saves at once, and I read it from here.</p>
+    <p id="tally" role="status">0 of 9 answered</p>
+  </section>
+
+  <ol class="rail">
+
+    <li class="stop" id="stop-taps">
+      <div class="plate"><span class="no">STOP 1</span><span class="loss">937 asks · stalls up to 8 h</span></div>
+      <h2>You are the clock of every pull request</h2>
+      <div class="taps" aria-label="Five taps per pull request"><b>1</b><b>2</b><b>3</b><b>4</b><b>5</b><span>taps per PR, by rule</span></div>
+      <dl class="facts">
+        <dt>What happens</dt><dd>A session stops and asks at each step of a PR. In one session, about 100 of 130 asks were these taps. When you slept, builder A waited 8 hours at a commit tap.</dd>
+        <dt>Why</dt><dd>The rule <code>pr-review-loop.md</code> asks for five taps and says a typed word is not a tap. You typed "land N" 22 times in one session, and each time the session asked again. The sessions follow the rule as written.</dd>
+        <dt>Fix</dt><dd>One yes per lane covers commit, push and PR. A typed "land N" counts when the code did not change. The land tap stays.</dd>
+      </dl>
+      <p class="decided"><b>You decided, 11-11</b>Lane yes plus typed land. The lane <code>lane-flow-yes-typed-land</code> is in backlog, design first. Two details are open.</p>
+      <div data-q="q-bands"></div>
+      <div data-q="q-night"></div>
+    </li>
+
+    <li class="stop" id="stop-wake">
+      <div class="plate"><span class="no">STOP 2</span><span class="loss">233 min · 4 waits</span></div>
+      <h2>A message does not wake a sleeping session</h2>
+      <div class="gauge" aria-label="Minutes each worker waited">
+        <span>Builder C, 11-11</span><div class="track hot"><span style="--v:100%"></span></div><span>90 min</span>
+        <span>Coordination, 11-10</span><div class="track"><span style="--v:64%"></span></div><span>58 min</span>
+        <span>Builder A, 11-10</span><div class="track"><span style="--v:59%"></span></div><span>53 min</span>
+        <span>Coordination, 11-10</span><div class="track"><span style="--v:36%"></span></div><span>32 min</span>
+      </div>
+      <dl class="facts">
+        <dt>What happens</dt><dd>The seat ruled for builder C at 15:19, one minute after you asked. Builder C read nothing until 16:52. Its lease ended. You carried the message by hand.</dd>
+        <dt>Why</dt><dd>A lane message sits in a queue until someone types in the idle session. The usage report blamed a slow ruling. The ruling was fast. The delivery failed.</dd>
+        <dt>Fix</dt><dd>First a test: which kind of message starts a turn in an idle session. One case suggests <code>SendMessage</code> does. It is not proven. Then one send command that wakes the target or says it could not. Lane: <code>say-wake-test</code>.</dd>
+      </dl>
+      <div data-q="q-wake"></div>
+    </li>
+
+    <li class="stop" id="stop-publish">
+      <div class="plate"><span class="no">STOP 3</span><span class="loss">535 publishes · page frozen 2.5 h</span></div>
+      <h2>The board page eats the publish limit</h2>
+      <div class="gauge" aria-label="Lane board publishes per day against the limit of 200">
+        <span>11-07</span><div class="track"><span style="--v:46.5%"></span></div><span>93</span>
+        <span>11-08</span><div class="track"><span style="--v:46.5%"></span></div><span>93</span>
+        <span>11-09</span><div class="track"><span style="--v:52%"></span></div><span>104</span>
+        <span>11-10</span><div class="track"><span style="--v:59.5%"></span></div><span>119</span>
+        <span>11-11</span><div class="track hot"><span style="--v:63%"></span></div><span>126</span>
+      </div>
+      <p class="gauge-note">Full bar = 200, the daily limit. The limit day runs 18:00 to 18:00 CST, so the evening of 11-10 counted toward 11-11. 17 more attempts hit the limit and 36 lost a version race.</p>
+      <dl class="facts">
+        <dt>What happens</dt><dd>On 11-11 at about 15:13 no session could publish any page. Your phone board stayed old until 18:00, during the busiest merges. You asked why it was 104 minutes old.</dd>
+        <dt>Why</dt><dd>A rule makes each session publish the 1.4 MB board after every lane change. A message to a peer counts as a change. My one message to the seat cost 1 read, 1 render and 3 refused publishes.</dd>
+        <dt>Fix</dt><dd>A budget. Card <code>board-publish-budget</code> is P1 with no holder. It changes your 11-10 milestone rule, so the choice is yours.</dd>
+      </dl>
+      <div data-q="q-budget"></div>
+      <div data-q="q-builder"></div>
+    </li>
+
+    <li class="stop" id="stop-prepr">
+      <div class="plate"><span class="no">STOP 4</span><span class="loss">285 runs · 16.6 h summed</span></div>
+      <h2>The pre-PR gate runs again because main moved</h2>
+      <div class="gauge" aria-label="Failing steps in 70 failed pre-pr runs">
+        <span>Behind main</span><div class="track hot"><span style="--v:100%"></span></div><span>29</span>
+        <span>Summary file</span><div class="track"><span style="--v:93%"></span></div><span>27</span>
+        <span>Evidence</span><div class="track"><span style="--v:41%"></span></div><span>12</span>
+        <span>Hook tests</span><div class="track"><span style="--v:28%"></span></div><span>8</span>
+        <span>GitHub tests</span><div class="track"><span style="--v:7%"></span></div><span>2</span>
+      </div>
+      <dl class="facts">
+        <dt>What happens</dt><dd>Sessions land PRs all day, so <code>main</code> moves. A branch falls behind, the gate fails, the session merges and runs the whole gate again. PR #509 needed 6 runs, about 40 minutes.</dd>
+        <dt>Why</dt><dd>The gate checks "behind main" and stops. It does not merge. One test also fails under load, and the log does not print its name.</dd>
+        <dt>Fix</dt><dd>The gate merges <code>main</code> itself before it starts, prints the failing test name, and reruns only the checks whose inputs changed. Lane: <code>pre-pr-merge-main</code>.</dd>
+      </dl>
+      <div data-q="q-merge"></div>
+    </li>
+
+    <li class="stop" id="stop-cap">
+      <div class="plate"><span class="no">STOP 5</span><span class="loss">64,390 characters · cap 10,000</span></div>
+      <h2>The longest rule never arrives</h2>
+      <div class="gauge" aria-label="Rule size against the hook cap">
+        <span>pr-review-loop.md</span><div class="track"><span style="--v:100%"></span><span class="cap" style="--at:15.5%"></span></div><span>64,390</span>
+        <span>lane-board.md</span><div class="track"><span style="--v:46.7%"></span><span class="cap" style="--at:15.5%"></span></div><span>30,086</span>
+      </div>
+      <p class="gauge-note">Amber mark = 10,000 characters. Text past the mark arrives as a 2 KB preview.</p>
+      <dl class="facts">
+        <dt>What happens</dt><dd>The PR rule is cut on arrival. I saw it in this session at 17:58: 63.3 KB sent, 2 KB received. A PR landed on 11-11 on the belief that workers read the full text.</dd>
+        <dt>Why</dt><dd>Claude Code caps hook text at 10,000 characters. Rules such as "merge main first" exist, but they sit past the cut. Several problems that looked like a missing rule are this.</dd>
+        <dt>Fix</dt><dd>Split the rule into parts under the cap and add a size check. You picked this. The card <code>pr-review-loop-10k-cut</code> already existed, and I noted your choice on it.</dd>
+      </dl>
+    </li>
+
+    <li class="stop" id="stop-compact">
+      <div class="plate"><span class="no">STOP 6</span><span class="loss">88 compactions · same text retyped</span></div>
+      <h2>The handoff ritual runs when nothing is handed off</h2>
+      <div class="gauge" aria-label="Compactions per session">
+        <span>Package 5</span><div class="track hot"><span style="--v:100%"></span></div><span>14</span>
+        <span>Hub refresh</span><div class="track"><span style="--v:86%"></span></div><span>12</span>
+        <span>cd-residuals</span><div class="track"><span style="--v:79%"></span></div><span>11</span>
+        <span>RE seat</span><div class="track"><span style="--v:79%"></span></div><span>11</span>
+        <span>Fleet Spend</span><div class="track"><span style="--v:64%"></span></div><span>9</span>
+      </div>
+      <dl class="facts">
+        <dt>What happens</dt><dd>Before each compact, the session writes a Notion handoff and asks you how the session went. Then you type the same 40-word resume text in the same session. Choices you made before the compact were asked again after it.</dd>
+        <dt>Why</dt><dd>The handoff skill is built for a move to a new session. You stay in the same one.</dd>
+        <dt>Fix</dt><dd>One command: save a short state file with your decisions, compact, resume from the file. No Notion row, no outcome question.</dd>
+      </dl>
+      <p class="decided"><b>You decided, 11-11</b>Yes, build it. Noted on the existing lane <code>compact-session-breakpoint</code>.</p>
+    </li>
+
+    <li class="stop" id="stop-ready">
+      <div class="plate"><span class="no">STOP 7</span><span class="loss">gaps up to 116 min</span></div>
+      <h2>READY is a toast you cannot see</h2>
+      <dl class="facts">
+        <dt>What happens</dt><dd>A PR turns READY and a desktop toast shows. You work on your phone. So you ask "status?" and type "land N when ready". A PR sat READY for up to 116 minutes before the land tap.</dd>
+        <dt>Why</dt><dd>The rule sends READY by toast only. Also, READY read true twice on 11-11 for code with no check runs. A card exists for that: <code>ready-no-check-runs</code>.</dd>
+        <dt>Fix</dt><dd>READY reaches you where you are.</dd>
+      </dl>
+      <div data-q="q-ready"></div>
+    </li>
+  </ol>
+
+  <section class="how" style="border-bottom:0">
+    <p>Two more questions about the work that follows.</p>
+  </section>
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div data-q="q-lanes"></div>
+    <div data-q="q-cadence"></div>
+  </div>
+
+  <section class="after">
+    <div>
+      <h2>What works. Keep it.</h2>
+      <ul>
+        <li>Sessions rerun a subagent's tests before they accept "done". This caught real defects.</li>
+        <li>Review passes and the premortem found faults before the build: 22 risks, 11 faults from Grok, 2 blockers on PR #508.</li>
+        <li>No PR merged without your tap.</li>
+        <li>Nine package PRs landed in order on 11-07 with no conflict.</li>
+        <li>After the 11-07 restart, the workflow journals saved 4 of 5 reviews.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Also in the audit</h2>
+      <ul>
+        <li>Guards: 115 package denies and 92 destructive denies in real sessions. Most come from the bypass launch mode, not from guard bugs.</li>
+        <li>Facts reached you without a check: a "hidden" task that flashed a window, wrong prices, hand-typed times.</li>
+        <li>Guard logs are 91% test rows, so raw counts read 10 times too high.</li>
+        <li>My first status said 752 publishes and named a model-tier problem. Both were wrong. The board count is 535, and the tier point was refuted.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    Method: a script cut 537 MB of transcripts to digests. 8 reader agents found 90 problems. 2 skeptic agents checked each quote: 60 confirmed, 29 weakened, 1 refuted.<br>
+    Full audit: docs/self-improvement/audits/2026-11-11-factory-flow-audit.md · Raw findings: .claudedocs/2026-11-11-factory-flow-audit/result.json<br>
+    Counts from digests are lower bounds. Waits can include time you were away.
+  </footer>
+</div>
+
+<script>
+const QUESTIONS = [
+  { id: "q-bands", q: "Which risk bands does the one yes per lane cover?", opts: [
+    ["low-mid", "LOW and MID", "Routine work. ELEVATED, HIGH and CRITICAL keep every tap.", true],
+    ["low", "LOW only", "The smallest change. MID keeps every tap."],
+    ["to-elevated", "LOW, MID and ELEVATED", "Fewest taps. Only HIGH and CRITICAL keep every tap."] ] },
+  { id: "q-night", q: "May a session commit on its own lane branch while you are away? No push, no PR.", opts: [
+    ["yes-low-mid", "Yes, for LOW and MID", "The work is ready for your push tap in the morning. This removes the 8 hour stall.", true],
+    ["yes-all", "Yes, for every band", "A commit on a lane branch changes nothing that others see."],
+    ["no", "No", "Every commit waits for your tap, as today."] ] },
+  { id: "q-wake", q: "A peer session does not answer in 10 minutes. What should the sender do, until the wake test is done?", opts: [
+    ["send-then-tell", "Send SendMessage too, then tell you after 20 minutes", "Two tries before it costs you a turn.", true],
+    ["tell-now", "Tell you at once", "You wake the peer by typing in it."],
+    ["wait", "Keep waiting and do other work", "As today."] ] },
+  { id: "q-budget", q: "How often may a session publish the lane board?", opts: [
+    ["10min", "At most every 10 minutes, for claim, release, done and park", "No publish for a message or a note. The gate stops asking at 150 a day. Portal refresh at a milestone stays.", true],
+    ["30min", "At most every 30 minutes", "About 48 publishes a day at most. The phone page can be 30 minutes old."],
+    ["done-only", "Only when a lane is done, and when you ask", "Fewest publishes. The page is old between merges."],
+    ["no-change", "No change", "Publish after every lane change and milestone."] ] },
+  { id: "q-builder", q: "Who builds the card board-publish-budget? It is P1 and has no holder.", opts: [
+    ["audit-session", "This audit session", "It has the counts and the evidence in context. It asks the seat first, because the seat holds the Stop gate hook.", true],
+    ["new-session", "A new session, from a handoff", "A clean context. It costs one handoff and a cold start."],
+    ["seat-assigns", "The seat assigns it", "The seat picks a builder when a slot is free."] ] },
+  { id: "q-merge", q: "May the pre-PR gate merge main into the branch by itself?", opts: [
+    ["lane-yes", "Yes, under the one yes for the lane", "It merges, then runs. A conflict stops it and asks you.", true],
+    ["ask", "Ask me each time", "One tap per merge. The 29 reruns become 29 taps."],
+    ["no", "No", "The session merges by hand after a failed run, as today."] ] },
+  { id: "q-ready", q: "How should READY reach you?", opts: [
+    ["line-badge", "One line in the session and a mark on the phone board", "You see it where you already look. No new tool.", true],
+    ["push", "A push notification on the phone", "Fastest. Needs a notification path that works on your phone."],
+    ["no-change", "No change", "Desktop toast only."] ] },
+  { id: "q-lanes", q: "Which band for the three new lanes: say-wake-test, pre-pr-merge-main, lane-flow-yes-typed-land?", opts: [
+    ["all-p1", "All three P1", "Next week, after the open P0 work.", true],
+    ["wake-p0", "Wake test P0, the others P1", "The wake test is a one hour job and it unblocks idle workers now."],
+    ["all-p2", "All three P2", "Later. The review-engine program comes first."] ] },
+  { id: "q-cadence", q: "Should this audit run again?", opts: [
+    ["weekly-script", "Weekly, script only", "The digest script and the counts, no agents. About one minute. Agents only when a number moves the wrong way.", true],
+    ["weekly-full", "Weekly, with the agents", "Full findings each week. About 2 million tokens a run."],
+    ["on-demand", "Only when I ask", "No schedule."] ] },
+];
+
+const answers = {};            // qid -> {choice, label, note}
+const els = {};                // qid -> {root, opts[], note, state}
+let store = null, canSave = false;
+const chain = {};              // qid -> promise, one write at a time per document
+
+function h(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+function build(q) {
+  const host = document.querySelector('[data-q="' + q.id + '"]'); if (!host) return;
+  host.className = "cord";
+  host.append(h("span", "q", "Your call"), h("h3", "", q.q));
+  const group = h("div", "opts"); group.setAttribute("role", "radiogroup"); group.setAttribute("aria-label", q.q);
+  const btns = q.opts.map(([val, label, sub, rec]) => {
+    const b = h("button", "opt"); b.type = "button"; b.id = q.id + "-" + val; b.setAttribute("role", "radio"); b.setAttribute("aria-checked", "false");
+    const lab = h("span", "lab", label); if (rec) lab.append(h("span", "rec", "I recommend"));
+    b.append(h("span", "knob"), lab, h("span", "sub", sub));
+    b.addEventListener("click", () => choose(q.id, val, label));
+    group.append(b); return { b, val };
+  });
+  const note = h("textarea", "note"); note.id = q.id + "-note"; note.rows = 1; note.placeholder = "Add a word, or write your own answer (optional)"; note.setAttribute("aria-label", "Note for: " + q.q);
+  let t; note.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => saveNote(q.id, note.value), 900); });
+  note.addEventListener("blur", () => { clearTimeout(t); saveNote(q.id, note.value); });
+  const state = h("p", "state"); state.setAttribute("role", "status");
+  host.append(group, note, state);
+  els[q.id] = { root: host, btns, note, state };
+}
+
+function paint(qid) {
+  const a = answers[qid], e = els[qid]; if (!e) return;
+  e.btns.forEach(({ b, val }) => b.setAttribute("aria-checked", a && a.choice === val ? "true" : "false"));
+  e.root.dataset.answered = a && (a.choice || a.note) ? "1" : "0";
+  if (a && document.activeElement !== e.note && e.note.value !== (a.note || "")) e.note.value = a.note || "";
+  const n = QUESTIONS.filter(q => answers[q.id] && (answers[q.id].choice || answers[q.id].note)).length;
+  const tally = document.getElementById("tally");
+  tally.textContent = n + " of " + QUESTIONS.length + " answered" + (canSave ? "" : store === null ? "" : " · not saved here");
+  tally.dataset.state = n === QUESTIONS.length && canSave ? "saved" : "";
+}
+
+function say(qid, text, s) { const st = els[qid].state; st.textContent = text; st.dataset.s = s || ""; }
+
+function choose(qid, val, label) {
+  const cur = answers[qid] || {};
+  answers[qid] = { ...cur, choice: cur.choice === val ? "" : val, label: cur.choice === val ? "" : label };
+  paint(qid); write(qid);
+}
+function saveNote(qid, text) {
+  const cur = answers[qid] || {}; text = text.trim();
+  if ((cur.note || "") === text) return;
+  answers[qid] = { ...cur, note: text }; paint(qid); write(qid);
+}
+function write(qid) {
+  if (!store) { say(qid, "This view cannot save. Tell Claude your answer in the session."); return; }
+  const a = answers[qid]; say(qid, "Saving…");
+  const body = { choice: a.choice || "", label: a.label || "", note: a.note || "", question: QUESTIONS.find(q => q.id === qid).q, at: new Date().toISOString() };
+  chain[qid] = (chain[qid] || Promise.resolve()).then(() => store.doc("answers/" + qid).set(body))
+    .then(() => say(qid, "Saved. Claude can read it.", "saved"))
+    .catch(() => { canSave = false; say(qid, "Not saved. Tell Claude your answer in the session."); paint(qid); });
+}
+
+QUESTIONS.forEach(build);
+document.querySelectorAll(".digits").forEach(d => {
+  [...d.dataset.n].forEach(c => d.append(c === "." ? h("i", "", ".") : h("b", "", c)));
+  if (d.dataset.u) d.append(h("i", "", d.dataset.u));
+});
+QUESTIONS.forEach(q => paint(q.id));
+
+(async () => {
+  const db = window.claude && window.claude.use ? await window.claude.use("db") : null;
+  if (!db) { store = undefined; return; }
+  store = db; canSave = true;
+  const timer = setTimeout(() => { document.getElementById("tally").textContent += " · saved answers not loaded yet"; }, 10000);
+  db.collection("answers").onSnapshot(snap => {
+    if (!snap.metadata.fromCache) clearTimeout(timer);
+    snap.docs.forEach(d => { const v = d.data() || {}; if (els[d.id] && !d.metadata.hasPendingWrites) answers[d.id] = { choice: v.choice || "", label: v.label || "", note: v.note || "" }; });
+    QUESTIONS.forEach(q => paint(q.id));
+  }, () => { clearTimeout(timer); canSave = false; QUESTIONS.forEach(q => paint(q.id)); });
+})();
+</script>
