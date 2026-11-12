@@ -1576,8 +1576,11 @@ test('the engine reads exactly these fields of run and parsed, over an ok run, a
     has(t, k) { set.add(`in:${String(k)}`); return Reflect.has(t, k); },
     ownKeys(t) { set.add('<ownKeys>'); return Reflect.ownKeys(t); },
   });
+  // S2 conformance: the own keys that the Cursor backend really returns, per call. The Proxy record alone passes on a missing key.
+  const returned = [];
   const backend = async (...a) => {
     const out = await real(...a);
+    returned.push({ run: Object.keys(out.run), parsed: Object.keys(out.parsed) });
     return { ...out, run: watch(out.run, reads.run), parsed: watch(out.parsed, reads.parsed) };
   };
   assert.equal((await run(world({ runs: [streamRun([finding()])] }), {}, { backend })).exit, EXIT.OK);
@@ -1587,7 +1590,20 @@ test('the engine reads exactly these fields of run and parsed, over an ok run, a
   assert.equal((await run(retry, {}, { backend })).exit, EXIT.OK);
   assert.equal(retry.agentCalls.length, 2, 'the spawn error was retried');
   assert.deepEqual({ run: [...reads.run].sort(), parsed: [...reads.parsed].sort() }, ENGINE_READS);
+  // The fields that a path leaves out are pinned per call: the Cursor result sets some fields only on some paths (the engine reads
+  // undefined on the others). A field that goes missing where it is present today changes the pinned lists and fails here.
+  assert.equal(returned.length, 5, 'four runs, one of them with a retry');
+  // parsed is the real parseReviewOutput result. run is the result of the injected runAgent, a test fixture here (the real runAgent
+  // is never started in a test). The lists say, per call, which pinned field is NOT a key of the returned object.
+  assert.deepEqual(missingKeys(returned), PINNED_MISSING_KEYS);
 });
+
+/** Per call (ok, exit 1, time-out, spawn error, its retry), the pinned fields that the returned run and parsed objects do not have. */
+const missingKeys = (returned) => returned.map((r) => ({ run: ENGINE_READS.run.filter((k) => !r.run.includes(k)), parsed: ENGINE_READS.parsed.filter((k) => !r.parsed.includes(k)) }));
+const NO_ERR = { run: ['error', 'spawnedAt', 'toolStats'], parsed: ['notRun'] };
+// ok, exit 1, time-out, spawn error (error is set), its retry. notRun is a key only on a run that the agent did not start; spawnedAt and
+// toolStats are set by the real runAgent only, not by the test fixtures.
+const PINNED_MISSING_KEYS = [NO_ERR, NO_ERR, NO_ERR, { run: ['spawnedAt', 'toolStats'], parsed: ['notRun'] }, NO_ERR];
 
 // ---------- the engine seam: trust and stages ----------
 
@@ -1595,7 +1611,13 @@ const SEAM_FILES = ['scripts/github/local-review/backends/cursor.mjs', 'scripts/
 
 test('ENGINE_FILES ends with the Cursor backend, grok-slots.mjs, then findings-repair.mjs: appended, so the indexed entries keep their place (breaks if an entry is inserted in the middle or the order changes)', () => {
   assert.deepEqual(ENGINE_FILES.slice(-3), SEAM_FILES);
-  assert.deepEqual(ENGINE_FILES.slice(0, 5), ['scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/review-router.mjs', 'scripts/github/review-status.mjs']);
+  // The whole list as it was on main ff608f90, in order, before the three appended entries.
+  assert.deepEqual(ENGINE_FILES.slice(0, -3), [
+    'scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/review-router.mjs',
+    'scripts/github/review-status.mjs', 'scripts/github/local-review/context.mjs', 'scripts/github/local-review/prompt.mjs',
+    'scripts/github/local-review/record.mjs', 'scripts/github/local-review/trace.mjs', 'scripts/github/lib/file-lock.mjs', 'scripts/github/lib/proc.mjs',
+    'scripts/ratchets/review-skip-sync.mjs', 'review-router.config.json',
+  ]);
 });
 
 for (const rel of SEAM_FILES) {
@@ -1609,14 +1631,25 @@ for (const rel of SEAM_FILES) {
   });
 }
 
-/** Static relative imports (import ... from, export ... from, bare import) of one repo file, as repo paths. Dynamic import() is not matched. */
+/** Static relative imports (import ... from, export ... from, bare import) of one repo file, as repo paths. Dynamic import() has its own patterns below. */
 const STATIC_IMPORT = /(?:^|;)[ \t]*(?:import|export)\b[^'"();]*?\bfrom\s*['"](\.\.?\/[^'"]+)['"]|(?:^|;)[ \t]*import\s*['"](\.\.?\/[^'"]+)['"]/gm;
 /** Every from or bare import before a relative specifier, anywhere in the text. More of these than STATIC_IMPORT matches means an import the parser did not read. */
 const LOOSE_IMPORT = /\bfrom\s*['"]\.\.?\/|\bimport\s*['"]\.\.?\//g;
-/** found: the relative imports of `text` (the file `rel`) as repo paths. unread: the loose count minus the found count; it must be 0 (fail closed). */
+/** A dynamic import( whose whole argument is one quoted string; group 1 is the specifier. */
+const DYNAMIC_LITERAL = /\bimport\s*\(\s*['"]([^'"`$+]+)['"]\s*\)/g;
+/** Every dynamic import(, literal or not, anywhere in the text (a comment or a string too: fail closed). */
+const DYNAMIC_ANY = /\bimport\s*\(/g;
+/**
+ * found: the static relative imports of `text` (the file `rel`) as repo paths. unread: the loose count minus the found count; it must
+ * be 0 (fail closed). dynamic: each import() with a literal relative path, as a repo path. nonLiteral: the import( calls whose
+ * argument is not one quoted string; the closure cannot name their target, so it must be 0 for an engine file.
+ */
 function relImports(text, rel) {
-  const found = [...text.matchAll(STATIC_IMPORT)].map((m) => path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1] ?? m[2])));
-  return { found, unread: (text.match(LOOSE_IMPORT) ?? []).length - found.length };
+  const at = (spec) => path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec));
+  const found = [...text.matchAll(STATIC_IMPORT)].map((m) => at(m[1] ?? m[2]));
+  const literal = [...text.matchAll(DYNAMIC_LITERAL)].map((m) => m[1]);
+  const dynamic = literal.filter((spec) => /^\.\.?\//.test(spec)).map(at);
+  return { found, unread: (text.match(LOOSE_IMPORT) ?? []).length - found.length, dynamic, nonLiteral: (text.match(DYNAMIC_ANY) ?? []).length - literal.length };
 }
 const staticImports = (rel) => relImports(readFileSync(path.join(REPO_ROOT, rel), 'utf8'), rel);
 
@@ -1628,8 +1661,32 @@ test('the import parser reads a specifier on the line after from and an import a
     "export { c } from '../up.mjs';",
     "const lazy = () => import('./dyn.mjs');",
   ].join('\n');
-  assert.deepEqual(relImports(text, 'scripts/x/f.mjs'), { found: ['scripts/x/next-line.mjs', 'scripts/x/same-line.mjs', 'scripts/x/bare.mjs', 'scripts/up.mjs'], unread: 0 });
+  assert.deepEqual(relImports(text, 'scripts/x/f.mjs'), { found: ['scripts/x/next-line.mjs', 'scripts/x/same-line.mjs', 'scripts/x/bare.mjs', 'scripts/up.mjs'], unread: 0, dynamic: ['scripts/x/dyn.mjs'], nonLiteral: 0 });
   assert.equal(relImports("import { \"a-b\" as ab } from './quoted.mjs';", 'scripts/x/f.mjs').unread, 1, 'a quote inside the import clause is not read: it must count as unread');
+});
+
+test('S1 the import parser reads a dynamic import() with a literal relative path as an edge, and counts every other import( as non-literal (breaks if a dynamic import escapes the closure)', () => {
+  const text = [
+    "const a = await import('./dyn.mjs');",
+    "const b = () => import(  \"../up-dyn.mjs\"  );",
+    "const c = await import('node:fs');",
+    'const d = await import(name);',
+    'const e = await import(`./tpl-${x}.mjs`);',
+    "const f = await import('./a' + '.mjs');",
+  ].join('\n');
+  const r = relImports(text, 'scripts/x/f.mjs');
+  assert.deepEqual(r.dynamic, ['scripts/x/dyn.mjs', 'scripts/up-dyn.mjs']);
+  assert.equal(r.nonLiteral, 3, 'a name, a template and a joined string are not literal');
+});
+
+test('S1 no engine file has a non-literal import(, and the two dynamic imports of today are read (breaks if an engine file gains an import( whose target the closure cannot name)', () => {
+  const files = ENGINE_FILES.filter((f) => f.endsWith('.mjs'));
+  assert.deepEqual(files.map((f) => [f, staticImports(f).nonLiteral]).filter(([, n]) => n !== 0), []);
+  const dyn = files.flatMap((from) => staticImports(from).dynamic.map((to) => `${from} -> ${to}`));
+  assert.deepEqual(dyn.sort(), [
+    'scripts/github/local-review/context.mjs -> scripts/ratchets/review-skip-sync.mjs',
+    'scripts/github/review-status.mjs -> scripts/github/review-router.mjs',
+  ]);
 });
 
 test('the import parser reads every relative import of each engine file: no engine file has an unread import (breaks if an import form the parser misses is added to an engine file)', () => {
@@ -1637,9 +1694,10 @@ test('the import parser reads every relative import of each engine file: no engi
   assert.deepEqual(unread, []);
 });
 
-test('import closure: every static relative import of an engine file is an engine file (breaks if an engine file imports a file whose change trust would not see)', () => {
+test('import closure: every static relative import and every literal dynamic import() of an engine file is an engine file (breaks if an engine file imports a file whose change trust would not see)', () => {
   const engine = new Set(ENGINE_FILES);
-  const edges = ENGINE_FILES.filter((f) => f.endsWith('.mjs')).flatMap((from) => staticImports(from).found.map((to) => [from, to]));
+  const edges = ENGINE_FILES.filter((f) => f.endsWith('.mjs')).flatMap((from) => { const r = staticImports(from); return [...r.found, ...r.dynamic].map((to) => [from, to]); });
+  assert.ok(edges.some(([from, to]) => from === 'scripts/github/review-status.mjs' && to === 'scripts/github/review-router.mjs'), 'the dynamic import of review-status.mjs is not in the edges');
   const own = edges.filter(([from]) => from === 'scripts/github/local-review.mjs').map(([, to]) => to);
   // The parser must see the multi-line imports, else the gate passes on nothing.
   for (const to of ['scripts/github/cursor-review.mjs', 'scripts/github/local-review/record.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/lib/grok-slots.mjs']) assert.ok(own.includes(to), `local-review.mjs -> ${to} not seen`);
