@@ -198,11 +198,16 @@ function retryMaxOf(eng) {
   return (eng?.engine?.LOCAL_REVIEW_DEFAULTS ?? LOCAL_REVIEW_DEFAULTS).retry_max;
 }
 
-/** { liveStarts, cap, retryMax, overCap }. A run takes up to 1 + retryMax starts (one retry each), so room is checked for all of them. */
+/**
+ * { liveStarts, cap, retryMax, overCap, damaged? }. A run takes up to 1 + retryMax starts (one retry each), so room is checked for all of
+ * them. A ledger line that cannot be read can be a start row of any age: each one counts as a live start, so the check errs toward refusing
+ * a run. The report names the count (damaged) when it is not 0; repair the ledger line to get the room back.
+ */
 function ledgerLoad(ctx, eng) {
-  const used = liveStarts(readLedger(ctx.cursorLedger).entries, ctx.now());
+  const ledger = readLedger(ctx.cursorLedger);
+  const used = liveStarts(ledger.entries, ctx.now()) + ledger.damaged;
   const cap = liveCap(ctx.root);
-  return { liveStarts: used, cap, retryMax: retryMaxOf(eng), overCap: used > cap };
+  return { liveStarts: used, cap, retryMax: retryMaxOf(eng), overCap: used > cap, ...(ledger.damaged ? { damaged: ledger.damaged } : {}) };
 }
 const noRoom = (load) => load.liveStarts + 1 + load.retryMax > load.cap;
 
@@ -743,7 +748,8 @@ export function textReport(r) {
     `planned: ${r.planned.map(planned).join('; ') || 'none'}`,
     `this sweep: ${r.runs.length} run(s), ${r.runs.filter((x) => x.counted).length} counted; pairs saved ${r.pairs.saved}, already there ${r.pairs.existing}`,
     `skipped: ${skips}`,
-    `ledger load: ${r.ledger.liveStarts} live starts in 7 days of a cap of ${r.ledger.cap} (retry_max ${r.ledger.retryMax})${r.ledger.overCap ? ', OVER THE CAP' : ''}`,
+    `ledger load: ${r.ledger.liveStarts} live starts in 7 days of a cap of ${r.ledger.cap} (retry_max ${r.ledger.retryMax})${r.ledger.overCap ? ', OVER THE CAP' : ''}`
+      + (r.ledger.damaged ? `; ${r.ledger.damaged} ledger line(s) cannot be read and count as starts` : ''),
     runs,
     ...Object.entries(w.cli.byBand).map(([b, x]) => `  risk band ${b}: ${x.cliHeads} CLI head(s), ${x.withRecord} with an engine record (${pct(x.share)})`),
     `CLI-Major heads: ${w.cli.majorHeads}, ${w.cli.majorWithRecord} with an engine record (${pct(w.cli.majorShare)})`,

@@ -231,6 +231,16 @@ test('T1b liveStarts skips eval refs, old rows, other purposes, end rows and not
   assert.equal(stubCalls().length, 0);
 });
 
+test('T1e a ledger line that cannot be read counts as a live start: 97 starts and 2 damaged lines refuse the run (99 + 1 + 1 > 100)', async () => {
+  // Breaks when: the cap check reads only the lines that parse (a damaged line can be a start row, so the check must err toward refusing).
+  const w = world({ pulls: [pullOf(1)] });
+  seedLive(w, 97);
+  appendFileSync(w.cursorLedger, '{"ts":"2026-11-1\n[1,2]\n');
+  assert.equal(await sweep(w), SWEEP_EXIT.CAP, w.logs.join('\n'));
+  assert.equal(stubCalls().length, 0);
+  assert.deepEqual(reportOf(w).ledger, { liveStarts: 99, cap: WEEKLY_LIVE_CAP, retryMax: 1, overCap: false, damaged: 2 });
+});
+
 test('T1c local_review.weekly_live_cap in the root config replaces the constant; a count above the cap sets overCap', async () => {
   // Breaks when: the sweep ignores the config key a later lane adds, or does not report a count over the cap.
   const w = world({ pulls: [pullOf(1)] });
