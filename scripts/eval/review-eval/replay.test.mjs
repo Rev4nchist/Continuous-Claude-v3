@@ -560,6 +560,32 @@ for (const [title, , make, runId] of PATHS) {
   });
 }
 
+// N1: auditReplay can throw (a git handle that throws on ls-tree, a clock that throws). The row is still written: failed, void, read-audit: audit-error.
+const THROWERS = [
+  ['a git handle that throws on ls-tree', (deps) => { const inner = deps.git; deps.git = (args) => { if (args[0] === 'ls-tree') throw new Error('boom-git'); return inner(args); }; }],
+  ['a clock that throws', (deps) => { deps.auditOpts = { ...deps.auditOpts, now: () => { throw new Error('boom-clock'); } }; }],
+];
+for (const [title, , make, runId] of PATHS) {
+  for (const [what, arm] of THROWERS) {
+    test(`N1 ${title}: ${what} still writes a failed, void row with read-audit: audit-error that no score counts (breaks if auditReplay or its call site has no catch)`, async () => {
+      const { deps } = make(tmp());
+      arm(deps);
+      let r;
+      await assert.doesNotReject(async () => { r = await replayRun({ pr: 207, round: 1 }, deps); });
+      assert.deepEqual([r.exit, r.status, r.record.void, r.record.reason], [1, 'failed', true, 'read-audit: audit-error']);
+      const rows = rowsOf(deps.runsPath);
+      assert.equal(rows.length, 1, 'the row exists');
+      assert.deepEqual([rows[0].status, rows[0].void, rows[0].cursorRunId], ['failed', true, runId]);
+      assert.match(rows[0].reason, /^read-audit: audit-error/);
+      assert.equal(rows[0].reason.includes('boom'), false, 'the error text never reaches the row');
+      const { ev, card } = scoreRuns(deps.runsPath);
+      assert.deepEqual(ev.matches, []);
+      assert.deepEqual([card.perMajorRecall.strict.total, card.cost.grok.runs, card.excludedRuns], [0, 0, 0], 'the round is not counted');
+      assert.equal(summarize({ runs: rows, lines: readLines(deps.auditOpts.statePath) }).voids.length, 1);
+    });
+  }
+}
+
 // The summary mode (the CLI) over the runs file of a real replay: 1 void with its round, REPLACED after a clean re-run, exit 1 for a run with no audit line.
 for (const [title, , make] of PATHS) {
   test(`S ${title}: the summary CLI over the replay runs file names the void round, names it REPLACED after a clean re-run, and exits 1 for a run with no audit line (breaks if summary mode reads another file or drops a count)`, async () => {

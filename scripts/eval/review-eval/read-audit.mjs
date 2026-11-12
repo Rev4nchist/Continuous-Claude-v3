@@ -3,7 +3,9 @@
 // whole segments, both slash forms, case-blind. It never resolves a link and never touches the disk for a path.
 // Void rules: no-stream, unparsable, no-init, tree-form, unknown-kind (a kind that is not read, grep or glob, a tool_call key that is neither *ToolCall nor metadata, or an event type
 // outside the allow list), hook-context, outside-path (+ answer-key; a drive letter with a colon and no separator counts; a `..` segment or a root inside a brace of a glob pattern or a grep
-// glob argument counts, and so does a `..` segment in a string that holds a brace), prefix-path, symlink, symlink-check-failed, no-tool-call, record-failed (replay only: the state line could not be written).
+// glob argument counts, and so does a `..` segment in a string that holds a brace; a device path `\?\` or `\.\` that names no drive and no UNC share, such as GLOBALROOT or Volume{GUID}, is a root; a segment of only dots and spaces
+// other than one dot is a parent reference when it is two dots and trailing spaces, else unresolvable, and both count), prefix-path, symlink, symlink-check-failed, no-tool-call, no-result (no result event), record-failed and audit-error (replay only:
+// the state line could not be written, or the audit threw; the row is void with a fixed reason).
 // Two things are not read: grep pattern text (args.pattern and its echo result.success.pattern) and file text (a string named content or contentBlobId).
 // An OBJECT named content is walked: a grep result keeps its match files in workspaceResults.{key}.content.matches[].file. A relative match file resolves against the tree.
 // One exemption, glob-parent-name, for an entry of a glob result `files` list (seat answer 3, B and C). The tool prints such an entry against the parent of the tree.
@@ -12,7 +14,8 @@
 //   start with the folder's own tree-relative path; the same checks on it. The rest has no empty, dot or two-dot segment, no root, drive or prefix form, and no answer-key segment.
 //   No head list (no git, no head, a failed ls-tree) means no exemption. Every other entry with a `..` segment voids; it is never resolved against targetDirectory.
 // The verdict line and the scan count the exempt entries, tree level and folder level apart, each split into tracked and harness. They also count stream gaps (a reconnecting event or a resume
-// retry; a count, never a void). A verdict line never holds text from a tool call (path, key, entry, event type). Rule entries hold a rule name, a tool kind, a field name and a call id.
+// retry; a count, never a void). A verdict line never holds a path, key, entry or event type from a tool call. It does hold stream text that is not a path: the init model, the raw call id
+// and the name of an unknown tool-call key (the tool kind). Rule entries hold a rule name, a tool kind, a field name and a call id.
 // AUDIT_VERSION is 1: no verdict line has been written outside a test. Raise it on any rule or line-format change after the first one is written.
 // CLI: read-audit.mjs <stream> [--run-id --kind --head --repo <dir> --state <file> --no-record] | --scan [--root <dir> --prefix <p> --repo <dir>] | --summary (--runs <file> | --heads <dir>...) [--state <file>]
 import { spawnSync } from 'node:child_process';
@@ -36,7 +39,14 @@ const TREE_START = '../.\\';
 const HARNESS_FILES = new Set(['pr.diff', 'delta.diff', '.review/prompt.md', '.review/context.md', '.review/prior.json']);
 /** The event types of a cursor-agent stream-json run. Any other type is a stream this audit has not seen. */
 export const EVENT_TYPES = ['system', 'user', 'thinking', 'assistant', 'tool_call', 'result', 'connection', 'retry'];
-const DOT_DOT = /(^|[\\/])\.\.([\\/]|$)/;
+const DEVICE_DOT = /^[\\/]{2}\.[\\/]/;
+/**
+ * A path segment of only dots and spaces, other than one dot. Windows trims trailing spaces and dots of a segment, so `.. ` and `.. .` act as `..`;
+ * the audit cannot tell what `...` or `. ` resolves to. PARENT_SEG is the form it resolves as a parent. Every other such segment is unresolvable: it voids.
+ */
+const CLIMB_SEG = /^(?!\.$)(?=[. ]*\.)[. ]+$/;
+const PARENT_SEG = /^\.\.( [. ]*)?$/;
+const DOT_DOT = /(^|[\\/])(?!\.(?:[\\/]|$))(?=[. ]*\.)[. ]+(?=[\\/]|$)/;
 /** One alternative of a brace list: the text after `{` or `,` up to the next `,`, `{` or `}`. */
 const BRACE_ALT = /[{,]([^,{}]*)/g;
 const PREFIX = /^(?:[~%$]|file:)/i;
@@ -53,9 +63,12 @@ const noTypes = () => ({ ...Object.fromEntries(EVENT_TYPES.map((t) => [t, 0])), 
 /** The root of an absolute path in any of its forms, and the rest. null: the string is relative. */
 function parseRoot(s) {
   const t = s.replace(/^[\\/]{2}\?[\\/]/, '');
-  if (t !== s && /^UNC[\\/]/i.test(t)) return { root: '//', rest: t.slice(4) };
+  const longPath = t !== s;
+  if (longPath && /^UNC[\\/]/i.test(t)) return { root: '//', rest: t.slice(4) };
   let m = /^([A-Za-z]):(?:[\\/]|$)/.exec(t);
   if (m) return { root: `${m[1].toLowerCase()}:`, rest: t.slice(m[0].length) };
+  // A device path (`\\?\` or `\\.\` and a name that is no drive and no UNC share: GLOBALROOT, Volume{GUID}) is a root, never tree-relative. The `\\.\` form is never unwrapped, even before a drive.
+  if (longPath || DEVICE_DOT.test(s)) return { root: '//', rest: (longPath ? t : s.slice(4)).replace(/^[\\/]+/, '') };
   if (/^[\\/]{2}/.test(t)) return { root: '//', rest: t.replace(/^[\\/]+/, '') };
   m = /^\/([A-Za-z])(?:\/|$)/.exec(t);
   if (m) return { root: `${m[1].toLowerCase()}:`, rest: t.slice(m[0].length) };
@@ -69,9 +82,10 @@ function fold(start, parts) {
   let escaped = false;
   for (const p of parts) {
     if (p === '' || p === '.') continue;
-    if (p !== '..') segs.push(p.toLowerCase());
-    else if (segs.length > 0) segs.pop();
-    else escaped = true;
+    if (CLIMB_SEG.test(p)) {
+      if (!PARENT_SEG.test(p) || segs.length === 0) escaped = true; // an unresolvable segment, or a parent above the start
+      else segs.pop();
+    } else segs.push(p.toLowerCase());
   }
   return { segs, escaped };
 }
@@ -199,7 +213,7 @@ function exemptEntry(s, c, st) {
     level = 'folder';
   } else return null;
   const segs = rest.split(/[\\/]/).map((p) => p.toLowerCase());
-  if (rest === '' || segs.some((p) => p === '' || p === '.' || p === '..')) return null;
+  if (rest === '' || segs.some((p) => p === '' || p === '.' || CLIMB_SEG.test(p))) return null;
   if (PREFIX.test(rest) || DRIVE_REL.test(rest) || parseRoot(rest) !== null || hasAnswerKey(rest)) return null;
   if (level === 'folder' && !c.tdRel.every((p, i) => segs[i] === p)) return null;
   const key = segs.join('/');
@@ -303,6 +317,7 @@ export function auditStream(text, { tmpdir = os.tmpdir(), symlinks = [], tracked
   if (bad > 0) add('unparsable', null, 'stream');
   const init = auditInits(events, tmpdir, st);
   const { types, gaps } = auditEvents(events, st);
+  if (types.result === 0) add('no-result', null, 'stream'); // a stream cut at a line end, or a run that never finished
   events.forEach((ev, i) => { if (ev.type === 'tool_call' || ev.tool_call) auditCall(ev, i, st); });
   const kinds = [...st.seen.values()];
   const counts = { toolCalls: kinds.length, read: 0, grep: 0, glob: 0, other: 0 };
@@ -343,7 +358,7 @@ function escapesTree(name, target, links) {
   while (rest.length > 0) {
     const seg = rest.shift();
     if (seg === '' || seg === '.') continue;
-    if (seg === '..') { if (here.length === 0) return true; here.pop(); continue; }
+    if (CLIMB_SEG.test(seg)) { if (!PARENT_SEG.test(seg) || here.length === 0) return true; here.pop(); continue; }
     here.push(seg);
     const via = links.get(here.join('/'));
     if (via === undefined) continue;
@@ -453,6 +468,24 @@ function voidPatch(line) {
  * because a run counts only when its newest line is pass and a failed write leaves no line. The head list (one ls-tree) feeds both the symlink check and the exemption.
  */
 export function auditReplay(o) {
+  try { return auditReplayRun(o); } catch { return auditErrorResult(o); } // never print or store the error: it can hold path text
+}
+
+const ERROR_PATCH = { status: 'failed', void: true, reason: 'read-audit: audit-error' };
+
+/** A throw inside the audit (a git handle, a clock, a bad option). The row is still void: a fixed patch, and a best-effort state line that uses the real clock, not o.now. */
+function auditErrorResult(o) {
+  let line = null;
+  try {
+    line = buildLine({ ...voidOpts(o), result: voidResult('audit-error'), symlinkCheck: 'not-run', ts: new Date().toISOString() });
+    appendLine(o?.statePath ?? defaultStatePath(o?.env ?? process.env), line);
+  } catch { /* the patch below still voids the row */ }
+  return { patch: { ...ERROR_PATCH }, line, auditError: true };
+}
+
+const voidOpts = (o) => ({ kind: o?.kind, runId: o?.runId, streamPath: o?.streamPath, head: o?.head, pr: o?.pr, round: o?.round });
+
+function auditReplayRun(o) {
   const head = readHeadCommit({ git: o.git, head: o.head });
   const result = auditFile(o.streamPath, { tmpdir: o.tmpdir, symlinks: head.rules, tracked: head.tracked });
   const symlinkCheck = !head.ran ? 'not-run' : head.rules.length > 0 ? 'void' : 'pass';
@@ -503,7 +536,9 @@ const NOTE_UNAUDITED = 'NOTE: an unaudited run has no verdict line (the audit di
 
 function summaryMode(a, io) {
   if (!a.runs && a.heads.length === 0) { io.err('usage: read-audit.mjs --summary (--runs <runs.jsonl> | --heads <dir>...) [--state <file>]\n'); return 2; }
-  const lines = readLines(a.state ?? defaultStatePath(io.env));
+  let lines;
+  try { lines = readLines(a.state ?? defaultStatePath(io.env)); } catch { io.err(`the state file cannot be read
+${USAGE}`); return 2; } // a missing state file is [] (unaudited runs, exit 1); one that exists and cannot be read is not "no lines". The error text holds the path: never print it
   let heads;
   try { heads = a.heads.map(readHead); } catch { io.err(`a head folder cannot be read
 ${USAGE}`); return 2; } // the error text holds the folder path: never print it

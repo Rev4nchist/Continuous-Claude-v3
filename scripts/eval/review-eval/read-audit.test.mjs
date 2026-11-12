@@ -12,6 +12,9 @@
 //  D1-D4  brace patterns; T1-T2 event types; F8-F9 stream gaps; E1-E2 a failed state write; A6-A8 symlinkCheck and the head list
 //  Prefix rule (~ % $ file:), no-tool-call, content skip, answer-key whole-segment match, pattern echo skip
 //  S1-S5 summary, L1 newest line, C1-C3 scan counts only, A1-A4 auditReplay, CLI modes
+//  B1 device paths (GLOBALROOT, Volume{GUID}) in 9 fields and a symlink target -> parseRoot returns null for a `\\?\` path with no drive or UNC share
+//  N1 auditReplay throws -> no try; N2a the root compare in isInside; N2b the same-tree check of a second init; N3 no result event
+//  M1 `.. ` `.. .` `...` segments -> compare a segment to the two dots only (DOT_DOT, fold, exemptEntry, escapesTree); M2 an unreadable state file in --summary
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -1320,6 +1323,211 @@ test('A8 a failed ls-tree leaves no head list: an exempt-form entry voids beside
   assert.match(failed.patch.reason, /outside-path/);
   assert.match(failed.patch.reason, /symlink-check-failed/);
   assert.match(auditReplay(base).patch.reason, /outside-path/);
+});
+
+// ---- B1: a Windows device path that names no drive and no UNC share is a root (outside, absolute) ----
+// The `?` prefix is stripped by parseRoot; with no drive or UNC after it the string used to read as tree-relative. Breaks when: parseRoot returns null for such a string.
+const GUID = '{12345678-1234-1234-1234-123456789abc}';
+const DEVICE_PREFIXES = [['\\\\?\\', '\\'], ['\\\\.\\', '\\'], ['//?/', '/'], ['//./', '/'], ['\\/?\\', '\\'], ['/\\.\\', '\\']];
+const DEVICE_TAILS = ['GLOBALROOT\\??\\C:\\work\\primary\\x', 'GLOBALROOT\\Device\\HarddiskVolume3\\work\\primary\\x', `Volume${GUID}\\work\\primary\\x`];
+const DEVICE_FORMS = DEVICE_PREFIXES.flatMap(([p, sep]) => DEVICE_TAILS.map((t) => `${p}${sep === '/' ? t.replace(/\\/g, '/') : t}`));
+const B1_FIELDS = {
+  'read args.path': (f) => { const evs = events(CLEAN); setReadPath(evs, f); return [evs, { tool: 'read', field: 'args.path' }]; },
+  'grep args.path': (f) => { const evs = events(CLEAN); setGrep(evs, (b) => { b.args.path = f; }); return [evs, { tool: 'grep', field: 'args.path' }]; },
+  'glob targetDirectory': (f) => { const evs = events(CLEAN); setGlob(evs, { td: f }); return [evs, { tool: 'glob', field: 'args.targetDirectory' }]; },
+  'glob files entry': (f) => { const evs = events(CLEAN); setGlob(evs, { files: [f] }); return [evs, { tool: 'glob', field: 'result.success.files[0]' }]; },
+  'grep workspaceResults key': (f) => { const evs = events(CLEAN); setGrep(evs, (b) => { if (b.result) b.result.success.workspaceResults = { [f]: { content: {} } }; }); return [evs, { tool: 'grep' }]; },
+  'glob pattern': (f) => [withGlobPattern(f), { tool: 'glob', field: 'args.globPattern' }],
+  'grep glob argument': (f) => [withGrepGlob(f), { tool: 'grep', field: 'args.glob' }],
+  'glob pattern, inside a brace alternative': (f) => [withGlobPattern(`{a,${f}}`), { tool: 'glob', field: 'args.globPattern' }],
+  'grep glob argument, inside a brace alternative': (f) => [withGrepGlob(`{${f},a}`), { tool: 'grep', field: 'args.glob' }],
+};
+for (const [label, make] of Object.entries(B1_FIELDS)) {
+  for (const form of DEVICE_FORMS) {
+    test(`B1 ${label}: the device path ${form} voids`, () => {
+      const [evs, want] = make(form);
+      const r = audit(evs);
+      assert.equal(r.verdict, 'void');
+      assert.ok(hit(r, 'outside-path', want), JSON.stringify(r.rules));
+    });
+  }
+}
+for (const form of DEVICE_FORMS) {
+  test(`B1 a symlink target ${form} voids`, () => {
+    const { git } = scriptedLs({ ls: lsLine('120000', 'link'), target: form });
+    assert.ok(checkHeadSymlinks({ git, head: HEAD }).some((x) => x.rule === 'symlink'), form);
+  });
+}
+
+test('B1 a read of an answer file through a device path carries the answer-key tag', () => {
+  // Breaks when: the device path is read as tree-relative, so the read passes and no tag is set.
+  const evs = events(CLEAN);
+  setReadPath(evs, '\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\work\\primary\\review-eval\\gold\\x.json');
+  const r = audit(evs);
+  assert.ok(hit(r, 'outside-path', { tool: 'read', field: 'args.path', answerKey: true }), JSON.stringify(r.rules));
+  assert.ok(hit(r, 'answer-key'));
+});
+
+test('B1 the long-path drive form inside the tree and the existing UNC prefix keep their old verdict', () => {
+  // Breaks when: the new device-root rule swallows the drive and UNC forms that parseRoot already unwraps.
+  const inside = events(CLEAN);
+  setReadPath(inside, `\\\\?\\${TREE}\\src\\a.mjs`);
+  assert.equal(audit(inside).verdict, 'pass');
+  const slashed = events(CLEAN);
+  setReadPath(slashed, `//?/${TREE.replace(/\\/g, '/')}/src/a.mjs`);
+  assert.equal(audit(slashed).verdict, 'pass');
+  for (const form of ['\\\\?\\UNC\\server\\share\\x', '\\\\?\\D:\\fake\\tmp\\cursor-review-abc123\\tree\\x']) {
+    const evs = events(CLEAN);
+    setReadPath(evs, form);
+    assert.equal(audit(evs).verdict, 'void', form);
+  }
+});
+
+// ---- N2: the two rules the mutants left green ----
+test('N2a the root of a path is compared, not only its segments: the same segments on another drive, a UNC root or a / root are outside', () => {
+  // Breaks when: `n.root === tree.root` is dropped from isInside (read-audit.mjs, the return line of isInside).
+  const same = 'fake\\tmp\\cursor-review-abc123\\tree\\src\\a.mjs';
+  for (const form of [`D:\\${same}`, `d:/${same.replace(/\\/g, '/')}`, `\\\\${same}`, `\\${same}`, `/${same.replace(/\\/g, '/')}`, `\\\\?\\D:\\${same}`]) {
+    const evs = events(CLEAN);
+    setReadPath(evs, form);
+    const r = audit(evs);
+    assert.equal(r.verdict, 'void', form);
+    assert.ok(hit(r, 'outside-path', { tool: 'read', field: 'args.path' }), form);
+  }
+  const ok = events(CLEAN);
+  setReadPath(ok, `C:\\${same}`);
+  assert.equal(audit(ok).verdict, 'pass');
+});
+
+test('N2b a second init event with another cwd voids, one with the same cwd passes', () => {
+  // Breaks when: the `sameDir` compare is dropped from auditInits (read-audit.mjs, the `bad` line): the second cwd is itself a valid tree form.
+  const other = `${TMP}\\cursor-review-def456\\tree`;
+  const withSecond = (cwd) => { const evs = events(CLEAN); evs.splice(1, 0, { ...evs[0], cwd }); return evs; };
+  const r = audit(withSecond(other));
+  assert.equal(r.verdict, 'void');
+  assert.ok(hit(r, 'tree-form', { field: 'cwd' }), JSON.stringify(r.rules));
+  assert.equal(audit(withSecond(TREE)).verdict, 'pass');
+  assert.equal(audit(withSecond(TREE.toUpperCase().replace('C:', 'c:'))).verdict, 'pass');
+});
+
+// ---- M1: Windows drops trailing spaces and dots of a segment, so `.. ` acts as `..` ----
+// Breaks when: DOT_DOT, fold, exemptEntry or escapesTree compares a segment to the two dots only.
+const SPACED_PARENTS = ['.. ', '..  ', '.. .'];
+test('M1 a path whose parent segment carries trailing spaces or dots climbs out of the tree and voids', () => {
+  for (const seg of SPACED_PARENTS) {
+    const read = events(CLEAN);
+    setReadPath(read, `${TREE}\\${seg}\\..\\x`);
+    assert.equal(audit(read).verdict, 'void', `read ${JSON.stringify(seg)}`);
+    const rel = events(CLEAN);
+    setReadPath(rel, `${seg}\\${seg}\\x`);
+    assert.equal(audit(rel).verdict, 'void', `relative read ${JSON.stringify(seg)}`);
+    const grep = events(CLEAN);
+    setGrep(grep, (b) => { b.args.path = `${TREE}\\${seg}\\..\\x`; });
+    assert.ok(hit(audit(grep), 'outside-path', { tool: 'grep', field: 'args.path' }), `grep ${JSON.stringify(seg)}`);
+    const td = events(CLEAN);
+    setGlob(td, { td: `${TREE}\\${seg}\\..\\x` });
+    assert.ok(hit(audit(td), 'outside-path', { tool: 'glob', field: 'args.targetDirectory' }), `glob dir ${JSON.stringify(seg)}`);
+    const files = events(CLEAN);
+    setGlob(files, { files: [`${seg}\\x`] });
+    assert.ok(hit(audit(files), 'outside-path', { tool: 'glob', field: 'result.success.files[0]' }), `glob files ${JSON.stringify(seg)}`);
+    assert.equal(audit(withGlobPattern(`{a,b}/${seg}/x`)).verdict, 'void', `brace ${JSON.stringify(seg)}`);
+    assert.equal(audit(withGrepGlob(`{a,b}/${seg}/x`)).verdict, 'void', `brace grep ${JSON.stringify(seg)}`);
+    const { git } = scriptedLs({ ls: lsLine('120000', 'link'), target: `${seg}/x` });
+    assert.ok(checkHeadSymlinks({ git, head: HEAD }).some((x) => x.rule === 'symlink'), `symlink ${JSON.stringify(seg)}`);
+  }
+});
+
+test('M1b a spaced parent segment that stays inside the tree resolves as a parent and passes', () => {
+  // Breaks when: the spaced segment is kept as a folder name (fold) or every spaced segment voids.
+  const evs = events(CLEAN);
+  setReadPath(evs, `${TREE}\\src\\.. \\src\\a.mjs`);
+  assert.equal(audit(evs).verdict, 'pass');
+  const { git } = scriptedLs({ ls: lsLine('120000', 'a/b/link'), target: '.. /x' });
+  assert.deepEqual(checkHeadSymlinks({ git, head: HEAD }), []);
+});
+
+test('M1c a segment of only dots and spaces that is not one or two dots cannot be resolved: it voids as outside', () => {
+  // Breaks when: `...` is kept as a folder name. Windows treats a run of three dots as a name or trims it away: the audit cannot tell, so it fails closed.
+  for (const seg of ['...', '. ', ' .', '....']) {
+    const evs = events(CLEAN);
+    setReadPath(evs, `${TREE}\\${seg}\\a.mjs`);
+    assert.equal(audit(evs).verdict, 'void', JSON.stringify(seg));
+    const rel = events(CLEAN);
+    setReadPath(rel, `x\\${seg}\\a.mjs`);
+    assert.equal(audit(rel).verdict, 'void', `relative ${JSON.stringify(seg)}`);
+    const { git } = scriptedLs({ ls: lsLine('120000', 'link'), target: `${seg}/x` });
+    assert.ok(checkHeadSymlinks({ git, head: HEAD }).some((x) => x.rule === 'symlink'), `symlink ${JSON.stringify(seg)}`);
+  }
+});
+
+test('M1d ordinary names with dots, a single dot segment and a number range keep their verdict', () => {
+  // Breaks when: the dots-and-spaces test matches a name that holds letters, one dot, or a brace range.
+  for (const p of [`${TREE}\\src\\a.b.mjs`, `${TREE}\\.\\src\\a.mjs`, `${TREE}\\.hidden\\a.mjs`, `${TREE}\\src\\a..b.mjs`, `${TREE}\\src\\..a\\x`]) {
+    const evs = events(CLEAN);
+    setReadPath(evs, p);
+    assert.equal(audit(evs).verdict, 'pass', p);
+  }
+  assert.equal(audit(withGlobPattern('{1..3}.mjs')).verdict, 'pass');
+});
+
+test('M1e the glob-parent-name exemption refuses a spaced parent segment in the rest, even when the head lists that name', () => {
+  // Breaks when: exemptEntry tests the rest for the two dots only.
+  const evs = events(CLEAN);
+  setGlob(evs, { td: TREE, files: [`${TL}.. \\main.mjs`] });
+  const r = audit(evs, { tracked: ['.. /main.mjs'] });
+  assert.equal(r.verdict, 'void');
+  assert.deepEqual(r.exempt.tree, { tracked: 0, harness: 0 });
+});
+
+// ---- M2: a state file that exists but cannot be read ----
+test('M2 --summary with a state file that is a folder exits 2 with a fixed message, no path and no stack; a missing state file still gives exit 1', () => {
+  // Breaks when: the readLines call in summaryMode has no guard (a throw with a stack), or the guard also catches a missing file.
+  const dir = tmpDir();
+  const runs = path.join(dir, 'runs.jsonl');
+  writeFileSync(runs, `${JSON.stringify({ pr: 1, round: 1, sha40: HEAD, status: 'ok', cursorRunId: 'r1' })}\n`);
+  const folder = path.join(dir, 'state-is-a-folder');
+  mkdirSync(folder);
+  const c = io();
+  let code;
+  assert.doesNotThrow(() => { code = main(['--summary', '--runs', runs, '--state', folder], c); });
+  assert.equal(code, 2);
+  assert.match(c.text(), /state file/);
+  for (const bad of [dir, 'state-is-a-folder', 'EISDIR', 'unaudited']) assert.equal(c.text().includes(bad), false, bad);
+  assert.equal(/\n\s+at /.test(c.text()), false);
+  const m = io();
+  assert.equal(main(['--summary', '--runs', runs, '--state', path.join(dir, 'missing.jsonl')], m), 1);
+  assert.match(m.text(), /unaudited: 1\b/);
+});
+
+// ---- N1: auditReplay never throws ----
+test('N1 auditReplay catches its own throw: a git handle that throws, or a bad clock, gives a void patch with read-audit: audit-error, never a throw', () => {
+  // Breaks when: auditReplay has no try. The caller then writes no row at all.
+  const dir = tmpDir();
+  const stream = put(dir, 'n1.raw.json', events(CLEAN));
+  const o = { kind: 'cursor-review', streamPath: stream, runId: 'n1', head: HEAD, pr: 1, round: 1, tmpdir: TMP };
+  const SECRET = 'secret-path-text';
+  const throwing = { git: () => { throw new Error(SECRET); } };
+  const clock = { now: () => { throw new Error(SECRET); } };
+  for (const [name, extra] of [['git', throwing], ['clock', clock]]) {
+    const statePath = path.join(dir, `${name}.jsonl`);
+    let r;
+    assert.doesNotThrow(() => { r = auditReplay({ ...o, statePath, ...extra }); }, name);
+    assert.deepEqual(r.patch, { status: 'failed', void: true, reason: 'read-audit: audit-error' }, name);
+    const [line, ...more] = readLines(statePath);
+    assert.equal(more.length, 0);
+    assert.deepEqual([line.verdict, line.runId, line.rules.map((x) => x.rule)], ['void', 'n1', ['audit-error']], name);
+    assert.equal(JSON.stringify([r, line]).includes(SECRET), false, 'the error text never reaches the patch or the line');
+  }
+});
+
+// ---- no-result: a stream cut at a line end holds no result event ----
+test('N3 a stream with no result event voids with no-result; one with a result event passes', () => {
+  // Breaks when: the no-result rule is dropped: a stream cut exactly at a line end passes.
+  const cut = events(CLEAN).filter((e) => e.type !== 'result');
+  const r = audit(cut);
+  assert.equal(r.verdict, 'void');
+  assert.ok(hit(r, 'no-result', { field: 'stream' }), JSON.stringify(r.rules));
+  assert.equal(audit(events(CLEAN)).verdict, 'pass');
 });
 
 test('F9 the verdict line carries the gap count, and the scan counts streams with a gap and gap events', () => {
