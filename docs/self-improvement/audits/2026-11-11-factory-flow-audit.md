@@ -184,6 +184,22 @@ These bear on `re-program` and on `https://claude.ai/artifact/Fn77cw53rD1F5WEBwy
 
 No lane is claimed. No band is set: the band is Dave's choice.
 
+## Answers by Dave on the page (taps, 2026-11-11 18:19 to 18:23 CST)
+
+Read from the page store (`ArtifactData list answers`, 9 documents).
+
+| Question | Dave's answer | Where it went |
+|---|---|---|
+| Risk bands for the one yes per lane | LOW, MID and ELEVATED | Note on `lane-flow-yes-typed-land` |
+| Commit on the lane branch while Dave is away (no push, no PR) | Yes, for every band | Note on `lane-flow-yes-typed-land` |
+| A peer does not answer in 10 minutes | Send SendMessage too, then tell Dave after 20 minutes | Note on `say-wake-test`; sent to the seat |
+| Lane board publish rate | At most every 10 minutes, for claim, release, done and park | Note on `board-publish-budget` |
+| Builder of `board-publish-budget` | This audit session. His note: "tell the seat why you should claim this" | Claimed by llama #3c003362; reason sent to the seat |
+| pre-pr merges `main` by itself | Yes, under the one yes for the lane | Note on `pre-pr-merge-main` |
+| How READY reaches Dave | One line in the session and a mark on the phone board | New backlog lane `ready-line-and-board-mark` |
+| Band for the three new lanes | All three P1 | `band` set to P1 on each |
+| Run the audit again | Weekly, script only | Reminder lane `factory-audit-weekly` |
+
 ## Replies from peers
 
 - RE program seat #01895057, 17:54 CST: findings read, no conflict. Items 3 and 4 go into the seat runbook. Item 1 is a seat rule since 16:52. Item 2 is open with Dave. The portal belongs to the coordination session #0f5ea433; the seat passes it the file path. Recorded in `milestones/re-program.md`.
