@@ -9,6 +9,10 @@
 //   - opc runs pytest on the whole suite, or on a file that was not touched    -> S5
 //   - a path that no surface owns runs more than the always gate               -> S8
 //   - the coordination gates go back to gates: [] or drift from CI job coordination-db -> CO1
+//   - a glob gate misses a test file (no ** for a subfolder, one file named for a folder) -> TG1, TG2
+//   - scripts/eval/review-eval has no gate, or a path there is unowned          -> TG3
+//   - CI job ratchets drifts from a gate glob, or runs it unquoted (bash drops files) -> TG4
+//   - lane-context.ts or its db test changes and the scratch-database gate does not run, or CI drops it -> TG5, TG6
 // summaryLine
 //   - the first line is taken, not the runner's summary                        -> M1, M2
 // Git preconditions
@@ -359,7 +363,131 @@ test('GW4c: a change to test-map.mjs runs test-map.test.mjs, and one under scrip
   assert.ok(existsSync(path.join(REPO_ROOT, tm.args[1])));
   const lr = gatesFor(['scripts/github/local-review/record.mjs'], REPO_ROOT).find((x) => x.id === 'local-review-tests');
   assert.ok(lr);
-  assert.deepEqual([lr.cmd, lr.args], ['node', ['--test', 'scripts/github/local-review/*.test.mjs']]);
+  assert.deepEqual([lr.cmd, lr.args], ['node', ['--test', 'scripts/github/local-review/**/*.test.mjs']]);
+});
+
+// ---------- test globs (re-test-globs): each glob gate runs every test file it should, and CI runs the same patterns ----------
+
+/**
+ * Build a temp root with marker test files, take gate `gateId` from gatesFor([changed]) and run it with the real defaultExec.
+ * Each test file appends its name to picked.txt, so the result says which files node --test really ran. NODE_TEST_CONTEXT is
+ * cleared around the run: this file runs under node --test, and a nested node --test with that variable set runs no file and exits 0.
+ */
+function runGlobGate(gateId, changed, files) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'prepr-glob-'));
+  const marker = path.join(root, 'picked.txt');
+  try {
+    for (const rel of files) {
+      const name = path.posix.basename(rel, '.test.mjs');
+      mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), `import { test } from 'node:test';\nimport { appendFileSync } from 'node:fs';\ntest(${JSON.stringify(name)}, () => { appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(`${name}\n`)}); });\n`);
+    }
+    const gate = gatesFor([changed], REPO_ROOT).find((g) => g.id === gateId);
+    assert.ok(gate, `${changed} -> ${gateId}`);
+    const saved = process.env.NODE_TEST_CONTEXT;
+    delete process.env.NODE_TEST_CONTEXT;
+    let r;
+    try {
+      r = runGate({ ...gate, timeoutMs: 2 * 60_000 }, { root, exec: PRE.defaultExec, git: () => ({ status: 0, stdout: '', stderr: '' }) });
+    } finally {
+      if (saved !== undefined) process.env.NODE_TEST_CONTEXT = saved;
+    }
+    const picked = existsSync(marker) ? readFileSync(marker, 'utf8').split(/\r?\n/).filter(Boolean).sort() : [];
+    return { r, picked };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('TG1: local-review-tests runs the top-level tests and the tests in a subfolder (breaks if the gate pattern loses **)', async () => {
+  const { r, picked } = runGlobGate('local-review-tests', 'scripts/github/local-review/backends/x.mjs',
+    ['scripts/github/local-review/top.test.mjs', 'scripts/github/local-review/backends/deep.test.mjs']);
+  assert.equal(r.status, 'PASS', `${r.detail}\n${r.output}`);
+  assert.deepEqual(picked, ['deep', 'top']);
+});
+
+test('TG2: resolve-deps-tests runs every scripts/lib test file, not only resolve-deps.test.mjs (breaks if the gate names one file)', async () => {
+  const { r, picked } = runGlobGate('resolve-deps-tests', 'scripts/lib/headless.mjs', ['scripts/lib/a.test.mjs', 'scripts/lib/b.test.mjs']);
+  assert.equal(r.status, 'PASS', `${r.detail}\n${r.output}`);
+  assert.deepEqual(picked, ['a', 'b']);
+});
+
+test('TG3: a change under scripts/eval/review-eval (code, fixtures, config) runs review-eval-tests, and no path there is unowned', async () => {
+  for (const p of ['scripts/eval/review-eval/score.mjs', 'scripts/eval/review-eval/fixtures/x.json']) {
+    assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('review-eval-tests'), p);
+  }
+  const { r, picked } = runGlobGate('review-eval-tests', 'scripts/eval/review-eval/score.mjs', ['scripts/eval/review-eval/t.test.mjs']);
+  assert.equal(r.status, 'PASS', `${r.detail}\n${r.output}`);
+  assert.deepEqual(picked, ['t']);
+  assert.equal(notesFor(['scripts/eval/review-eval/config.json'], CONFIG).some((n) => n.step.startsWith('unowned:')), false);
+});
+
+test('TG4: CI job ratchets runs the same three glob patterns as pre-pr, each in single quotes (breaks if a pattern drifts or loses its quotes)', async () => {
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const start = wf.indexOf('\n  ratchets:');
+  assert.ok(start >= 0, 'the workflow has the ratchets job');
+  const rest = wf.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [\w-]+:/);
+  const job = next < 0 ? rest : rest.slice(0, next + 1);
+  const runs = job.split('\n').filter((l) => /^\s*run:/.test(l));
+  assert.ok(runs.length > 10, 'the ratchets job has run lines');
+  const gates = SURFACES.flatMap((s) => s.gates ?? []);
+  for (const id of ['local-review-tests', 'resolve-deps-tests', 'review-eval-tests']) {
+    const g = gates.find((x) => x.id === id);
+    assert.ok(g, id);
+    const pattern = g.args[1];
+    assert.ok(pattern.includes('*'), `${id}: ${pattern} is a glob`);
+    // Unquoted, bash reads ** as * (no globstar) and drops the top-level files with no error. Node expands a quoted pattern.
+    const hits = runs.filter((l) => l.includes(pattern));
+    assert.ok(hits.length > 0, `${id}: no run line in job ratchets names ${pattern}`);
+    for (const l of hits) assert.ok(l.includes(`'${pattern}'`), `${id}: ${pattern} is not in single quotes: ${l.trim()}`);
+  }
+});
+
+test('TG5: a change to lane-context.ts or its db test runs the lane-context-db gate; another hooks file does not (breaks if the row or a glob is dropped)', async () => {
+  for (const p of ['.claude/hooks/src/lane-context.ts', '.claude/hooks/src/__tests__/lane-context-db.test.ts']) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'lane-context-db');
+    assert.ok(g, `${p} -> lane-context-db`);
+    assert.deepEqual([g.cmd, g.args, g.cwd], ['node', ['scripts/github/lane-context-db-gate.mjs'], '.']);
+    assert.ok(g.timeoutMs >= 10 * 60_000, 'a scratch database and the vitest run get 10 min');
+  }
+  assert.equal(ids(gatesFor(['.claude/hooks/src/pre-pr-gate.ts'], REPO_ROOT)).includes('lane-context-db'), false);
+});
+
+test('TG7: each file that scratch-db.mjs create --through 6 reads runs the lane-context-db gate; a rollback file does not (breaks if a schema glob is dropped or widened)', async () => {
+  // The list comes from scratch-db.mjs: init-schema.sql (:173), the three coordination migrations (:207-208), the journal (:133)
+  // and each journal tag up to 6 (:211). A new tag changes the journal, so the gate runs for it too.
+  const journal = JSON.parse(readFileSync(path.join(REPO_ROOT, 'apps/agentic-os/drizzle/meta/_journal.json'), 'utf8'));
+  const tags = journal.entries.map((e) => e.tag).filter((t) => Number(t.slice(0, 4)) <= 6);
+  assert.equal(tags.length, 7, 'the journal has tags 0000 to 0006');
+  const read = [
+    'docker/init-schema.sql',
+    ...['001-file-claims-leases.sql', '002-g5-drop-orphan-sessions.sql', '003-sessions-lifecycle.sql'].map((f) => `scripts/coordination/migrations/${f}`),
+    'apps/agentic-os/drizzle/meta/_journal.json',
+    ...tags.map((t) => `apps/agentic-os/drizzle/${t}.sql`),
+  ];
+  read.push('scripts/coordination/scratch-db.mjs'); // the program that builds the database: a change to its create or drop can break the gate
+  for (const p of read) {
+    assert.ok(existsSync(path.join(REPO_ROOT, p)), `${p} exists`);
+    assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('lane-context-db'), `${p} -> lane-context-db`);
+  }
+  for (const p of ['apps/agentic-os/drizzle/0006_down.sql', 'apps/agentic-os/drizzle/meta/0006_snapshot.json', 'docker/docker-compose.yml']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('lane-context-db'), false, `${p} is not read by create --through 6`);
+  }
+});
+
+test('TG6: CI job coordination-db runs lane-context-db-gate.mjs (breaks if the step is dropped)', async () => {
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const start = wf.indexOf('\n  coordination-db:');
+  assert.ok(start >= 0, 'the workflow has the coordination-db job');
+  const rest = wf.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [\w-]+:/);
+  const job = next < 0 ? rest : rest.slice(0, next + 1);
+  const runs = job.split('\n').filter((l) => /^\s*run:/.test(l));
+  assert.ok(runs.some((l) => /^\s*run:\s*node scripts\/github\/lane-context-db-gate\.mjs\s*$/.test(l)), runs.join('\n'));
+  // The gate step may use 8 minutes after the earlier test steps. A 10-minute job could cancel it before the drop.
+  const jobLimit = Number(/^ {4}timeout-minutes:\s*(\d+)/m.exec(job)?.[1]);
+  assert.ok(jobLimit >= 15, `coordination-db job limit is ${jobLimit} min; it must cover the earlier steps and the 8-minute gate step`);
 });
 
 test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {
