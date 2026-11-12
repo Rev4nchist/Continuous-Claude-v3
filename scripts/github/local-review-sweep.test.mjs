@@ -807,6 +807,58 @@ test('T12d a dry run with --engine-sha and no copy reports mode unpinned (planne
   assert.equal(existsSync(path.join(w.stateRoot, 'engine')), false);
 });
 
+// ---------- F8 the pick options (a proof run on one named head) ----------
+
+/** Two HIGH pull requests, and one earlier head of PR 2 with a CLI Major. Unfiltered plan: #1 open, #2 open, #2 earlier. */
+function pickWorld() {
+  const early = H('e');
+  const w = world({ pulls: [pullOf(1, { band: 'HIGH' }), pullOf(2, { band: 'HIGH' })], shas: { eeeeeee: early }, commitPulls: { [early]: [2] } });
+  put(w.cliDir, '2026-11-10-pre-pr-cr-eeeeeee.txt', cliStream(['major']));
+  return { w, early };
+}
+
+test('F8 --only-pr with --only-kind earlier-head runs exactly that head; the other planned targets are counted as filtered', async () => {
+  // Breaks when: the filter is not applied before the runs (a proof run with --max-runs 1 then starts on the first open head).
+  const { w, early } = pickWorld();
+  assert.equal(await sweep(w, ['--only-pr', '2', '--only-kind', 'earlier-head', '--max-runs', '1']), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.deepEqual(stubCalls().map((c) => [c.opts.pr, c.pullHead]), [[2, early]]);
+  assert.equal(reportOf(w).skipped.filtered, 2);
+});
+
+test('F8b --only-pr alone keeps both kinds of that pull request; --only-kind open-head alone keeps the open heads of every pull request', async () => {
+  // Breaks when: one option silently implies the other, or the kind filter also drops by pull request.
+  const a = pickWorld();
+  assert.equal(await sweep(a.w, ['--only-pr', '2']), SWEEP_EXIT.OK, a.w.logs.join('\n'));
+  assert.deepEqual(stubCalls().map((c) => c.opts.pr), [2, 2]);
+  const b = pickWorld();
+  const before = stubCalls().length;
+  assert.equal(await sweep(b.w, ['--only-kind', 'open-head']), SWEEP_EXIT.OK, b.w.logs.join('\n'));
+  assert.deepEqual(stubCalls().slice(before).map((c) => [c.opts.pr, c.pullHead === b.early]), [[1, false], [2, false]]);
+});
+
+test('F8c a dry run shows the filtered plan; a filter that matches nothing plans nothing and exits 0', async () => {
+  // Breaks when: the dry run prints the unfiltered plan (the operator then cannot check the target before a paid run).
+  const { w } = pickWorld();
+  assert.equal(await sweep(w, ['--dry-run', '--only-pr', '2', '--only-kind', 'earlier-head']), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.deepEqual(reportOf(w).planned.map((p) => [p.pr, p.kind]), [[2, 'earlier-head']]);
+  assert.equal(stubCalls().length, 0);
+  const none = pickWorld();
+  assert.equal(await sweep(none.w, ['--dry-run', '--only-pr', '99']), SWEEP_EXIT.OK);
+  assert.deepEqual(reportOf(none.w).planned, []);
+  assert.equal(reportOf(none.w).skipped.filtered, 3);
+});
+
+test('F8d a bad --only-pr or --only-kind value is a usage error (exit 2) before any gh or git call', async () => {
+  // Breaks when: a bad value is ignored (the sweep would then run unfiltered).
+  const { w } = pickWorld();
+  for (const argv of [['--only-pr', '0'], ['--only-pr', 'x'], ['--only-pr', '2.5'], ['--only-pr'], ['--only-kind', 'head'], ['--only-kind', 'Open-Head'], ['--only-kind']]) {
+    assert.equal(await main([...argv], deps(w)), SWEEP_EXIT.USAGE, argv.join(' '));
+    assert.ok(parseArgs(argv).error, argv.join(' '));
+  }
+  assert.equal(w.ghCalls.length + w.repoGitCalls.length, 0);
+  assert.deepEqual(parseArgs(['--only-pr', '523', '--only-kind', 'earlier-head']), { onlyPr: 523, onlyKind: 'earlier-head' });
+});
+
 test('T12b an unknown flag exits 2 before any gh or git call; only the fork repo is allowed (any case); any other repo is refused', async () => {
   // Breaks when: an unknown flag is ignored, the default repo changes, or a repo other than the fork is accepted.
   const w = world({ pulls: [pullOf(1, { band: 'HIGH' })] });

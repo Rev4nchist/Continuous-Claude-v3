@@ -4,7 +4,9 @@
  * heads, saves the same-head CodeRabbit CLI pairs, and prints a report (docs/review-engine/map.md, lane re-live-advisory). No engine code changes.
  *
  * Usage: node scripts/github/local-review-sweep.mjs [--engine-sha <sha40>] [--frozen-sha <sha40>] [--band-counts <file>] [--cli-dir <dir>]...
- *          [--max-runs <n>] [--pairs-only] [--dry-run] [--json] [--repo <owner/name>]
+ *          [--max-runs <n>] [--only-pr <number>] [--only-kind open-head|earlier-head] [--pairs-only] [--dry-run] [--json] [--repo <owner/name>]
+ *   --only-pr and --only-kind pick targets: a filter on the planned list before any run (a proof run on one named head). The dry run shows the
+ *   filtered plan; the report counts the targets left out (filtered). A bad value is a usage error.
  *
  * Engine. --engine-sha (path F): scripts/ and review-router.config.json at that commit are extracted (own extract, no fetch, never pinEngine) into
  *   <records>/engine/<sha>/. Before each run the copy is extracted again when its engine file is gone (the engine's pruning removed it), then
@@ -85,8 +87,9 @@ export const FROZEN_LABEL = 'frozen';
 /** The report window: the weekly report of re-live-accrual. */
 export const WINDOW_DAYS = 7;
 const RISK_BANDS = ['LOW', 'MID', 'ELEVATED', 'HIGH', 'CRITICAL'];
+const TARGET_KINDS = ['open-head', 'earlier-head'];
 const USAGE = 'usage: local-review-sweep.mjs [--engine-sha <sha40>] [--frozen-sha <sha40>] [--band-counts <file>] [--cli-dir <dir>]... '
-  + '[--max-runs <n>] [--pairs-only] [--dry-run] [--json] [--repo <owner/name>]';
+  + '[--max-runs <n>] [--only-pr <number>] [--only-kind open-head|earlier-head] [--pairs-only] [--dry-run] [--json] [--repo <owner/name>]';
 /** The engine's refusals of the pin rule (checkPin): every later run would be refused too, so the sweep stops. */
 const PIN_REFUSAL = /not started from a pinned engine copy|LOCAL_REVIEW_PINNED is not a 40-character sha|this process runs from .*: refused/;
 const DRY_NO_COMMITS = 'risk band unknown (commits not here)';
@@ -102,6 +105,8 @@ const VALUE_FLAGS = {
   '--band-counts': (v, o) => (v ? void (o.bandCounts = v) : '--band-counts needs a file'),
   '--cli-dir': (v, o) => (v ? void (o.cliDirs = [...(o.cliDirs ?? []), v]) : '--cli-dir needs a folder'),
   '--max-runs': (v, o) => (/^\d+$/.test(v ?? '') && Number(v) > 0 ? void (o.maxRuns = Number(v)) : '--max-runs needs a whole number above 0'),
+  '--only-pr': (v, o) => (/^[1-9]\d*$/.test(v ?? '') ? void (o.onlyPr = Number(v)) : '--only-pr needs a pull request number (a whole number above 0)'),
+  '--only-kind': (v, o) => (TARGET_KINDS.includes(v) ? void (o.onlyKind = v) : `--only-kind needs one of: ${TARGET_KINDS.join(', ')}`),
   '--repo': (v, o) => (/^[\w.-]+\/[\w.-]+$/.test(v ?? '') ? void (o.repo = v) : '--repo needs owner/name'),
 };
 const BOOL_FLAGS = { '--pairs-only': 'pairsOnly', '--dry-run': 'dryRun', '--json': 'json' };
@@ -870,7 +875,7 @@ export function textReport(r) {
   const head = `local-review-sweep: ${r.dryRun ? 'DRY RUN, ' : ''}${r.mode ?? 'no'} engine${r.engineSha ? ` (--engine-sha ${r.engineSha.slice(0, 12)})` : ''}`;
   const planned = (p) => `#${p.pr} ${p.band ?? p.note} ${p.kind} ${String(p.head).slice(0, 7)}`;
   const skips = `draft ${s.draft}, noPr ${s.noPr}, gh error ${s.ghError}, ambiguous PR ${s.ambiguousPr}, ambiguous sha ${s.ambiguousSha}, per-branch cap ${s.perBranchCap}, `
-    + `failed CLI files ${s.failedCli}, CRITICAL ${s.critical}, LOW ${s.low}, no risk band ${s.noBand}, already run ${s.alreadyRun}, `
+    + `failed CLI files ${s.failedCli}, CRITICAL ${s.critical}, LOW ${s.low}, no risk band ${s.noBand}, already run ${s.alreadyRun}, filtered ${s.filtered}, `
     + `refused ${s.refused}, failed ${s.failed}, busy ${s.busy}, engine skips ${JSON.stringify(s.engineSkip)}`;
   const runs = `window ${w.days} days: ${w.runs} run(s); per risk band ${JSON.stringify(w.runsByBand)}; `
     + `runs per PR p50 ${w.runsPerPr.p50 ?? 'n/a'}, p90 ${w.runsPerPr.p90 ?? 'n/a'}; runs with facts ${w.facts.with}, without ${w.facts.without} (${pct(w.facts.share)})`;
@@ -899,7 +904,7 @@ function newReport(ctx) {
     v: 1, ts: new Date(ctx.now()).toISOString(), repo: ctx.repo, mode: null, engineSha: ctx.args.engineSha ?? null, frozenSha: ctx.args.frozenSha ?? null,
     dryRun: Boolean(ctx.args.dryRun), pairsOnly: Boolean(ctx.args.pairsOnly), stopped: null, planned: [], runs: [],
     skipped: {
-      badPull: 0, draft: 0, noPr: 0, ghError: 0, ambiguousPr: 0, ambiguousSha: 0, perBranchCap: 0, failedCli: 0, critical: 0, low: 0, noBand: 0, alreadyRun: 0,
+      badPull: 0, draft: 0, noPr: 0, ghError: 0, ambiguousPr: 0, ambiguousSha: 0, perBranchCap: 0, failedCli: 0, critical: 0, low: 0, noBand: 0, alreadyRun: 0, filtered: 0,
       refused: 0, failed: 0, busy: 0, engineSkip: {},
     },
     pairs: { saved: 0, existing: 0 },
@@ -927,7 +932,10 @@ function makeCtx(args, deps) {
 /** Plans the targets: open heads and earlier heads, their risk band and facts, in run order. */
 async function plan(ctx, eng, cliHeads, bandCounts) {
   const open = await openTargets(ctx);
-  const targets = [...open, ...earlierTargets(ctx, eng, cliHeads, open)];
+  const all = [...open, ...earlierTargets(ctx, eng, cliHeads, open)];
+  // The pick options (--only-pr, --only-kind): a filter on the planned list before any band read and any run. The dry run shows the result.
+  const targets = all.filter((t) => picked(ctx.args, t));
+  ctx.report.skipped.filtered += all.length - targets.length;
   for (const t of targets) {
     t.band = await bandOfTarget(ctx, eng, t);
     if (t.band) ctx.planBands.set(t.head, t.band);
@@ -943,6 +951,11 @@ async function plan(ctx, eng, cliHeads, bandCounts) {
     pr: t.pr, head: t.head, kind: t.kind, band: t.band, facts: t.factsText !== undefined, ...(t.bandNote ? { note: t.bandNote } : {}),
   }));
   return order;
+}
+
+/** True when the target passes --only-pr and --only-kind (each one alone is its own filter; with neither, every target passes). */
+function picked(args, t) {
+  return (args.onlyPr === undefined || t.pr === args.onlyPr) && (args.onlyKind === undefined || t.kind === args.onlyKind);
 }
 
 /** One sweep. -> { exit, report }. */
