@@ -1,4 +1,4 @@
-// Tests that every actions/checkout in .github/workflows/ccv3-checks.yml sets persist-credentials: false.
+// Tests that every actions/checkout in .github/workflows/ccv3-checks.yml (PC1 to PC6) and in every workflow file (PC7) sets persist-credentials: false.
 // Run: node --test scripts/ratchets/ccv3-checks-persist-credentials.test.mjs
 // Why: without it the checkout leaves the git token in .git/config for every later step (zizmor "artipacked", Medium).
 // No job in this workflow pushes or fetches a private remote. changed-files.sh runs only local `git diff`, and the
@@ -12,27 +12,29 @@
 //   PC4  the line sits on the wrong step             -> `persist-credentials: false` is moved to setup-node: the checkout step itself is read
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const YML = path.join(here, '..', '..', '.github', 'workflows', 'ccv3-checks.yml');
+// WORKFLOWS_DIR lets a test run point at copies of the workflow files (PC7 proof that it fails on an unprotected checkout).
+const WORKFLOWS = process.env.WORKFLOWS_DIR || path.join(here, '..', '..', '.github', 'workflows');
+const YML = path.join(WORKFLOWS, 'ccv3-checks.yml');
 const KNOWN_JOBS = ['ratchets', 'hooks', 'agentic-os', 'coordination-db', 'trivy', 'semgrep'];
 
-const lines = () => readFileSync(YML, 'utf8').replace(/\r\n/g, '\n').split('\n');
+const lines = (file = YML) => readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
 
 /** Every job name under `jobs:` (a 2-space key). */
-function jobNames() {
-  const all = lines();
+function jobNames(file = YML) {
+  const all = lines(file);
   const start = all.findIndex((l) => l === 'jobs:');
-  assert.ok(start >= 0, 'no top-level "jobs:" key');
+  assert.ok(start >= 0, `no top-level "jobs:" key in ${path.basename(file)}`);
   return all.slice(start + 1).map((l) => /^ {2}([\w-]+):\s*$/.exec(l)?.[1]).filter(Boolean);
 }
 
 /** The text of one job: from `  <name>:` to the next 2-space key. Null when absent. */
-function jobBlock(name) {
-  const all = lines();
+function jobBlock(name, file = YML) {
+  const all = lines(file);
   const start = all.findIndex((l) => l === `  ${name}:`);
   if (start < 0) return null;
   let end = all.length;
@@ -70,6 +72,24 @@ test('PC3: every job in the file that checks out code sets persist-credentials: 
   for (const name of names) {
     for (const step of checkouts(jobBlock(name))) assert.equal(persist(step), 'false', `a checkout in ${name} does not set persist-credentials: false`);
   }
+});
+
+// PC7  a workflow other than ccv3-checks.yml adds or keeps an unprotected checkout -> any file in .github/workflows, not only ccv3-checks.yml
+//      (zizmor found gitleaks.yml and no-work-user.yml this way; fixed in PR 524). Fails when a checkout there loses the line.
+test('PC7: every workflow file in .github/workflows sets persist-credentials: false on every checkout', () => {
+  const files = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f)).sort();
+  assert.ok(files.length > 0, `no workflow files in ${WORKFLOWS}`);
+  let seen = 0;
+  for (const f of files) {
+    const file = path.join(WORKFLOWS, f);
+    for (const name of jobNames(file)) {
+      for (const step of checkouts(jobBlock(name, file))) {
+        seen += 1;
+        assert.equal(persist(step), 'false', `a checkout in ${f} job ${name} does not set persist-credentials: false`);
+      }
+    }
+  }
+  assert.ok(seen >= KNOWN_JOBS.length, `only ${seen} checkout(s) found in ${files.length} file(s): the parse may be reading nothing`);
 });
 
 // The ratchet's own parsing, on small step texts. CodeRabbit CLI review of the first push found two ways PC1 and PC3 pass with nothing checked.
