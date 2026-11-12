@@ -412,16 +412,18 @@ test('T1d retry_max comes from the config of the engine that runs: retry_max 0 l
 test('T5 a copy that is gone before a run is extracted again; a failed extraction gives one error line and no list line', async () => {
   // Breaks when: the sweep trusts a copy it checked once, or writes a list line for a run that never had an engine.
   const { repo, prHead, sha } = repoWithHeads();
+  // Each sweep gets its own open head: a head with an ok line for this engine does not run again (F7).
+  const laterHead = repo.commit('later-head');
   const { w, over } = pinnedWorld(repo, [pullOf(1, { band: 'HIGH', head: prHead })]);
   const copy = path.join(w.stateRoot, 'engine', sha);
   assert.equal(await sweep(w, ['--engine-sha', sha], over), SWEEP_EXIT.OK, w.logs.join('\n'));
   rmSync(copy, { recursive: true, force: true });
-  w.pulls = [pullOf(2, { band: 'HIGH', head: prHead, ref: 'feat/two' })];
+  w.pulls = [pullOf(2, { band: 'HIGH', head: sha, ref: 'feat/two' })];
   assert.equal(await sweep(w, ['--engine-sha', sha], over), SWEEP_EXIT.OK, w.logs.join('\n'));
   assert.ok(existsSync(path.join(copy, 'scripts', 'github', 'local-review.mjs')), 'extracted again');
   assert.equal(jsonl(listFile(w)).length, 2);
   rmSync(copy, { recursive: true, force: true });
-  w.pulls = [pullOf(3, { band: 'HIGH', head: prHead, ref: 'feat/three' })];
+  w.pulls = [pullOf(3, { band: 'HIGH', head: laterHead, ref: 'feat/three' })];
   const failing = (args, o) => (args[0] === 'read-tree' ? { status: 128, stdout: '', stderr: 'fatal: planted' } : repo.git(args, o));
   w.logs.length = 0;
   assert.equal(await sweep(w, ['--engine-sha', sha], { ...over, git: failing }), SWEEP_EXIT.FAILED);
@@ -1170,4 +1172,65 @@ test('F5 an open pull whose number is not an integer or whose head is not 40 hex
   assert.equal(await sweep(w), SWEEP_EXIT.OK, w.logs.join('\n'));
   assert.deepEqual(stubCalls().map((c) => c.opts.pr), [5]);
   assert.equal(reportOf(w).skipped.badPull, 4);
+});
+
+// ---------- F7 open heads follow the run list (card sweep-open-head-repeat) ----------
+
+/** An unpinned world with one open pull (PR 7, HIGH) and list lines seeded for its open head. */
+function openWorld(seed, pullOver = {}) {
+  const pull = pullOf(7, { band: 'HIGH', ...pullOver });
+  const w = world({ pulls: [pull] });
+  const ts = new Date(NOW - DAY).toISOString();
+  seedList(w, seed.map((r, i) => ({ v: 1, ts, runId: `open-${i}`, pr: 7, head: pull.head.sha, engineSha: null, kind: 'open-head', ...r })));
+  return { w, head: pull.head.sha, runs: () => stubCalls().filter((c) => c.opts.pr === 7).length };
+}
+
+test('F7 an open head is checked against the run list: an ok line or a void line blocks; one failed line allows one more try, two block', async () => {
+  // Breaks when: plan() does not pass open heads through alreadyRun (an open head with only failed lines runs in every sweep).
+  const cases = [
+    [[{ status: 'ok', audit: 'pass' }], 0],
+    [[{ status: 'ok', audit: 'void' }], 0],
+    [[{ status: 'failed', audit: 'not-run' }], 1],
+    [[{ status: 'failed', audit: 'not-run' }, { status: 'failed', audit: 'not-run' }], 0],
+    [[{ status: 'ok', audit: 'pass', copyGone: true }], 1],
+    // The key has no kind: a line of an earlier-head run blocks the same head when it is the open head.
+    [[{ status: 'ok', audit: 'pass', kind: 'earlier-head' }], 0],
+  ];
+  for (const [seed, want] of cases) {
+    const { w, runs } = openWorld(seed);
+    assert.equal(await sweep(w), SWEEP_EXIT.OK, w.logs.join('\n'));
+    assert.equal(runs(), want, JSON.stringify(seed));
+    assert.equal(reportOf(w).skipped.alreadyRun, 1 - want, JSON.stringify(seed));
+  }
+});
+
+test('F7b an unpinned (rehearsal) line does not block a pinned run of the same open head', async () => {
+  // Breaks when: the open-head check leaves the engine SHA out of the key.
+  const { repo, sha } = repoWithHeads();
+  const { w, over } = pinnedWorld(repo, [pullOf(7, { band: 'HIGH', head: sha })]);
+  seedList(w, [{ v: 1, ts: new Date(NOW - DAY).toISOString(), runId: 'old', pr: 7, head: sha, engineSha: null, status: 'ok', audit: 'pass', kind: 'open-head' }]);
+  assert.equal(await sweep(w, ['--engine-sha', sha], over), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.equal(stubCalls().filter((c) => c.opts.pr === 7).length, 1);
+  assert.equal(reportOf(w).skipped.alreadyRun, 0);
+});
+
+test('F7c a dry run leaves a blocked open head out of the plan, and the text report counts it as already run', async () => {
+  // Breaks when: the dry run plans a head that the real run would skip.
+  const { w } = openWorld([{ status: 'ok', audit: 'void' }]);
+  assert.equal(await sweep(w, ['--dry-run']), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.deepEqual(reportOf(w).planned, []);
+  const w2 = openWorld([{ status: 'ok', audit: 'void' }]).w;
+  assert.equal(await main(['--cli-dir', w2.cliDir, '--dry-run'], deps(w2)), SWEEP_EXIT.OK, w2.logs.join('\n'));
+  assert.match(w2.out.join('\n'), /already run 1/);
+});
+
+test('N3 an open pull whose branch name has a bad shape is skipped and counted (badPull); the name reaches no gh call and no engine call', async () => {
+  // Breaks when: head.ref of an open pull goes into a target without a shape check.
+  const refs = ['../x', '-x', 'a b', 'a..b', 'x/', 'x.lock', 'a//b', `a${'b'.repeat(200)}`, '', 42, null];
+  const pulls = refs.map((ref, i) => { const p = pullOf(i + 1, { band: 'HIGH' }); p.head.ref = ref; return p; });
+  const w = world({ pulls: [...pulls, pullOf(50, { band: 'HIGH', ref: 'feat/x-1.2_y' })] });
+  assert.equal(await sweep(w), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.deepEqual(stubCalls().map((c) => c.opts.pr), [50]);
+  assert.equal(reportOf(w).skipped.badPull, refs.length);
+  assert.equal(w.ghCalls.filter((a) => /\/pulls\/(?!50\b)\d+/.test(String(a[1]))).length, 0, 'no gh call for a skipped pull');
 });
