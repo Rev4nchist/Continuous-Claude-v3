@@ -30,7 +30,7 @@
     "lane-agent-tag.ts": "17f4c254e853a58437dace859e2e7870a875e2a9b30690dace77f72100ba6b37",
     "lane-board-republish-reminder.ts": "0948d5a9dcc6e3df0d24f6757b989e1da58210dde611e1ac452a1619542bd7ef",
     "lane-board-stop-gate.ts": "b2ebc69556ce70f4271bddbd974f97ae2fff1503c14cea864655b08df33b9a8b",
-    "lane-context.ts": "55d3559e6b1f7eb76302d8a1d1032ff803dc3e3d3eaf94a70ffd0ebbbe4fba38",
+    "lane-context.ts": "c496d30862a3b926b2afdd1d57fdc91cb7d04eac76edfd9131ebcfc200e6a07e",
     "lib/daemon-client.ts": "a335bf23bab52d2a7e3fcb8b1b4636e3216d270d7be219c10b09475e6a4cba44",
     "lib/hook-trace.ts": "952444338793fa5c1b17150c4ce11042f66d5d85daa2bd564d0d75cfc5be6813",
     "lib/run-command.ts": "e224fc5c77934ea845fbce88c7c42379901f155670ddf33a8c0038b81ce746be",
