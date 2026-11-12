@@ -346,7 +346,7 @@ function Get-RedChecks([string]$Sha) {
 # never from the PR branch and never from text of the PR, so a PR cannot loosen its own list. This script holds no copy of the names
 # and no count of them: a count would refuse every land after a new job is added. Any read problem stops the land (fail closed).
 function Get-RequiredCheckNames {
-  $stop = "cannot read the required CI job names from review-status.mjs. Nothing was merged."
+  $stop = 'cannot read the required CI job names from review-status.mjs. Nothing was merged.'
   $mod = ([Uri](Join-Path $PSScriptRoot 'review-status.mjs')).AbsoluteUri
   # The script goes in on stdin: the arguments hold no shell special character (a .cmd stub or wrapper cannot mangle them).
   $out = 'import(process.argv.at(-1)).then(m => console.log(JSON.stringify(m.REQUIRED_CHECK_RUNS)), e => { console.error(e.message); process.exit(1) })' | node --input-type=module - $mod 2>$null
@@ -367,7 +367,7 @@ function Get-RequiredCheckNames {
 # action_required is already a line of Get-RedChecks. Same rule and words as review-status.mjs.
 function Get-MissingRequiredChecks($Runs, [string[]]$Names) {
   foreach ($n in $Names) {
-    $mine = @($Runs | Where-Object { $_.name -eq $n -and $_.app.slug -eq 'github-actions' })
+    $mine = @($Runs | Where-Object { $_.name -ceq $n -and $_.app.slug -ceq 'github-actions' })   # -ceq: exact, as review-status.mjs compares
     if (-not $mine.Count) { "required check `"$n`" missing on the head"; continue }
     $newest = @($mine | Group-Object { if ($_.details_url -match '/actions/runs/(\d+)/') { $Matches[1] } else { '?' } } |
       ForEach-Object { $_.Group | Sort-Object { [long]$_.id } -Descending | Select-Object -First 1 })

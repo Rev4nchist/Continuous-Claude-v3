@@ -287,6 +287,11 @@ try {
   $rm15 = Invoke-Land $m15
   $calls = if (Test-Path (Join-Path $m15.Stub 'calls.log')) { Get-Content -LiteralPath (Join-Path $m15.Stub 'calls.log') -Raw } else { '' }
   Check 'M15 the head has no runs (a green set exists only for an older head): land-pr exits non-zero, makes no merge call' ($rm15.Code -ne 0 -and -not (Test-Path $m15.Merge) -and $rm15.Text -match 'missing')
+  # M16: the job name matches exactly (review-status.mjs compares exactly). A run named with other letter case is not the job.
+  $caseOther = $one.Substring(0, 1).ToUpper() + $one.Substring(1)
+  $m16 = New-Case 'm16' (@(New-Required @($one)) + @((New-Run $caseOther 'completed' 'success' 'github-actions' 200 '500')))
+  $rm16 = Invoke-Land $m16
+  Check "M16 green run named '$caseOther' for required job '$one': land-pr exits non-zero, makes no merge call, names the job as missing" ($rm16.Code -ne 0 -and -not (Test-Path $m16.Merge) -and $rm16.Text -cmatch ('required check "' + [regex]::Escape($one) + '" missing'))
   Check 'M15 the check runs were read for the head sha of the pull request and for no other sha' ($calls -match [regex]::Escape("commits/$sha/check-runs") -and $calls -notmatch $oldSha)
 }
 finally {
