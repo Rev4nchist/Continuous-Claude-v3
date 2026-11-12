@@ -292,6 +292,44 @@ const configProperty = ({ key, field, shape }) => (fn, input, output, ctx) => {
   return want && !isDeepStrictEqual(output, want) ? `got ${JSON.stringify(output)}, expected ${JSON.stringify(want)}` : null;
 };
 
+// ---------- local-review/verify.mjs ----------
+
+const VERDICTS = ['CONFIRMED', 'REFUTED', 'UNCERTAIN'];
+
+const REFUTED_AT = '{"verdict":"REFUTED","refutedAt":"src/app.mjs:2"}';
+
+/** The shape of one parseVerdict result, with the rule that it is no REFUTED. `what` names the text that gave it. */
+function checkNotRefuted(output, what) {
+  if (!output || typeof output !== 'object') return `${what}: result is not an object`;
+  if (!VERDICTS.includes(output.verdict)) return `${what}: verdict ${JSON.stringify(output.verdict)} is not one of ${VERDICTS.join(', ')}`;
+  if (typeof output.parsed !== 'boolean') return `${what}: parsed is ${typeof output.parsed}, not a boolean`;
+  if (output.verdict === 'REFUTED') return `${what} gave REFUTED`;
+  return output.refutedAt === null ? null : `${what}: refutedAt is set on a verdict that is not REFUTED`;
+}
+
+/** The hostile text around verdict objects that must not decide: a REFUTED with no location, and a valid REFUTED with a second verdict object. */
+function checkDerived(fn, value) {
+  const texts = { 'the text before a REFUTED with no location': `${value}{"verdict":"REFUTED"}`, 'the text between a REFUTED and a second verdict object': `${REFUTED_AT}${value}{"verdict":"CONFIRMED"}` };
+  for (const [what, text] of Object.entries(texts)) {
+    let out;
+    try { out = fn(text); } catch (err) { return `${what}: threw: ${message(err)}`; }
+    const bad = checkNotRefuted(out, what);
+    if (bad) return bad;
+  }
+  return null;
+}
+
+/**
+ * parseVerdict returns one of the three verdicts and a boolean parsed flag for any text, and no hostile text is a REFUTED:
+ * not alone, not before a REFUTED that has no location, and not between a REFUTED and a second verdict object. Only one exact verdict
+ * object with a path:line location can drop a finding.
+ * Break it: let a text with no verdict object default to REFUTED, let a REFUTED with no location pass, let the first of two
+ * verdict objects win, return a lower-case verdict, or let a bad JSON span throw.
+ */
+function parseVerdictProperty(fn, input, output, ctx) {
+  return common(ctx) ?? checkNotRefuted(output, 'a generic text') ?? checkDerived(fn, input.value);
+}
+
 // ---------- the registry ----------
 
 const SAFE = 'apps/agentic-os/src/server/sources/safe-message.ts';
@@ -299,6 +337,7 @@ const BRIEF = '.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts';
 const FILTER = 'scripts/github/review-filter.mjs';
 const REVIEW = 'scripts/github/local-review.mjs';
 const CONTEXT = 'scripts/github/local-review/context.mjs';
+const VERIFY = 'scripts/github/local-review/verify.mjs';
 
 const SCRUB_INPUTS = ['text', 'path', 'path:scrub'];
 const PROSE_INPUTS = ['text', 'prose', 'prose:steps', 'prose:restate'];
@@ -315,4 +354,5 @@ export const REGISTRY = [
   { id: 'local-review.parseArgs', file: REVIEW, export: 'parseArgs', kind: 'parser', inputs: ['argv'], property: parseArgsProperty },
   { id: 'context.parsePathInstructions', file: CONTEXT, export: 'parsePathInstructions', kind: 'parser', inputs: ['text', 'text:yaml'], property: configProperty({ key: 'path_instructions', field: 'pi', shape: ['path', 'instructions'] }) },
   { id: 'context.parseFilePatterns', file: CONTEXT, export: 'parseFilePatterns', kind: 'parser', inputs: ['text', 'text:yaml'], property: configProperty({ key: 'filePatterns', field: 'fp', shape: ['files', 'applyTo'] }) },
+  { id: 'verify.parseVerdict', file: VERIFY, export: 'parseVerdict', kind: 'parser', inputs: ['text'], property: parseVerdictProperty },
 ];
