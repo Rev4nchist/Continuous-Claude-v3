@@ -11,7 +11,10 @@ import { writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+import { isEngineHost } from './shared/engine-host.js';
+
 interface HookInput {
+  hook_event_name?: string;
   session_id?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
@@ -50,6 +53,13 @@ async function main(): Promise<void> {
 
   // Only add reminder for Grep results (Read results are more reliable)
   if (tool !== 'Grep') {
+    console.log('{}');
+    return;
+  }
+
+  // Under cursor-agent (the review engine) add no context and write no flag: added context
+  // voids the engine run in the read audit (run d7e5b3f1).
+  if (isEngineHost(input)) {
     console.log('{}');
     return;
   }

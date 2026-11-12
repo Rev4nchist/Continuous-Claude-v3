@@ -28,6 +28,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+import { isEngineHost } from './shared/engine-host.js';
 import { touchSessionActivity } from './shared/session-touch.js';
 
 // ---------------------------------------------------------------------------
@@ -159,10 +160,17 @@ async function main() {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
 
-  let data: { session_id?: string; tool_name?: string };
+  let data: { session_id?: string; tool_name?: string; hook_event_name?: string };
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({}));
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no output, no DB touch, no state read or write.
+  // values.system could void the engine run, and the Cursor session id would land in the DB.
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({}));
     return;
   }

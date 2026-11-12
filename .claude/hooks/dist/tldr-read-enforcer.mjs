@@ -859,6 +859,18 @@ import * as os from "os";
 import * as path from "path";
 var CONTEXT_DIR = path.join(os.tmpdir(), "claude-search-context");
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/tldr-read-enforcer.ts
 process.env.CCV3_DAEMON_NO_AUTOSTART = "1";
 var CONTEXT_MAX_AGE_MS = 3e4;
@@ -1214,6 +1226,10 @@ var START = performance.now();
 async function main() {
   const input = JSON.parse(readStdin());
   if (input.tool_name !== "Read") {
+    console.log("{}");
+    return;
+  }
+  if (isEngineHost(input)) {
     console.log("{}");
     return;
   }
