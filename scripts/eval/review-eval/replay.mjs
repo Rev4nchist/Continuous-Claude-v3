@@ -186,7 +186,7 @@ async function replayEngine({ bodyMode, pr, round, r, deps, root, outRoot, outDi
     findingsPath = path.join(outDir, `${res.record.runId}.findings.json`);
     writeFileSync(findingsPath, `${JSON.stringify(found, null, 2)}\n`);
   }
-  const audit = ['ok', 'incomplete'].includes(res.status) ? auditReplay({ env, ...deps.auditOpts, kind: 'engine', streamPath: res.recordPath?.replace(/\.json$/, '.stream.jsonl.gz') ?? null, runId: res.record?.runId, head: r.sha40, pr, round, git }) : null;
+  const audit = ['ok', 'incomplete'].includes(res.status) ? auditReplay({ env, ...deps.auditOpts, kind: 'engine', runOk: res.status === 'ok', streamPath: res.recordPath?.replace(/\.json$/, '.stream.jsonl.gz') ?? null, runId: res.record?.runId, head: r.sha40, pr, round, git }) : null;
   const rec = record({
     status: res.status, base40: r.base, range: r.range, cursorRunId: res.record?.runId ?? null, findingsPath, durationMs: found?.durationMs ?? 0, usage: found?.usage ?? null,
     findingCount: found?.findings.length ?? 0, trusted: false, bodyMode, baseConfig: res.baseConfig ?? null, recordPath: res.recordPath ?? null, tracePath: found?.tracePath ?? null,

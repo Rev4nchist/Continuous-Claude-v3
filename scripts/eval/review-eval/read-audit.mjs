@@ -305,11 +305,12 @@ function voidResult(rule) {
 }
 
 /**
- * Audit the text of a stream. opts: { tmpdir (default os.tmpdir()), symlinks (rule entries of checkHeadSymlinks), tracked (the tracked paths of the reviewed head: any list of `/` paths; none = no exemption) }.
+ * Audit the text of a stream. opts: { tmpdir (default os.tmpdir()), symlinks (rule entries of checkHeadSymlinks), tracked (the tracked paths of the reviewed head: any list of `/` paths; none = no exemption),
+ * runOk (default true: the run reports success, so a stream with no result event voids; false switches off the no-result rule only) }.
  * Returns { verdict: 'pass' | 'void', rules[], tree, model, counts: { toolCalls, read, grep, glob, other }, exempt: { tree: { tracked, harness }, folder: { tracked, harness } }, eventTypes, gaps, braceChecked: { glob, grep } }.
  * `tree` is the init cwd: for tests only, it never goes to a verdict line.
  */
-export function auditStream(text, { tmpdir = os.tmpdir(), symlinks = [], tracked = null } = {}) {
+export function auditStream(text, { tmpdir = os.tmpdir(), symlinks = [], tracked = null, runOk = true } = {}) {
   if (text === null || text === undefined || text === '') return voidResult('no-stream');
   const { events, bad } = parseStream(text);
   const { rules, add } = ruleSet();
@@ -317,7 +318,8 @@ export function auditStream(text, { tmpdir = os.tmpdir(), symlinks = [], tracked
   if (bad > 0) add('unparsable', null, 'stream');
   const init = auditInits(events, tmpdir, st);
   const { types, gaps } = auditEvents(events, st);
-  if (types.result === 0) add('no-result', null, 'stream'); // a stream cut at a line end, or a run that never finished
+  // A stream cut at a line end. Only for a run that reports success (runOk): a run that already failed or timed out keeps its own status, and the other rules still read its stream.
+  if (types.result === 0 && runOk !== false) add('no-result', null, 'stream');
   events.forEach((ev, i) => { if (ev.type === 'tool_call' || ev.tool_call) auditCall(ev, i, st); });
   const kinds = [...st.seen.values()];
   const counts = { toolCalls: kinds.length, read: 0, grep: 0, glob: 0, other: 0 };
@@ -346,14 +348,30 @@ const MAX_LINK_STEPS = 40;
 const isAbsoluteTarget = (t) => PREFIX.test(t) || DRIVE_REL.test(t) || parseRoot(t) !== null;
 
 /**
- * Does a link leave the tree? The target is walked one segment at a time from the folder of the link, as a real lookup does.
+ * The text check: the target read as path text from the folder of the link, no link followed. Windows applies a two-dot step to the path text,
+ * so `l/../..` climbs two levels whatever `l` points at. True when the text climbs above the root or holds a segment that cannot be resolved.
+ */
+function escapesByText(name, target) {
+  const here = name.split('/').slice(0, -1);
+  for (const seg of target.replace(/\\/g, '/').split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (!CLIMB_SEG.test(seg)) { here.push(seg); continue; }
+    if (!PARENT_SEG.test(seg) || here.length === 0) return true;
+    here.pop();
+  }
+  return false;
+}
+
+/**
+ * Does a link leave the tree? Two checks, and either one voids: the text check (escapesByText, the Windows reading) and the link walk (the Unix reading).
+ * The walk goes one segment at a time from the folder of the link, as a real lookup does.
  * When a path prefix is itself a link of the head (links: Map name -> target), its target replaces it, resolved from that link's folder, before the next segment.
  * Voids on: an absolute target at any step, a `..` above the root, more than MAX_LINK_STEPS links followed.
  */
 function escapesTree(name, target, links) {
   const here = name.split('/').slice(0, -1);
   const rest = target.replace(/\\/g, '/').split('/');
-  if (isAbsoluteTarget(rest.join('/'))) return true;
+  if (isAbsoluteTarget(rest.join('/')) || escapesByText(name, target)) return true;
   let steps = 0;
   while (rest.length > 0) {
     const seg = rest.shift();
@@ -462,7 +480,7 @@ function voidPatch(line) {
 }
 
 /**
- * The only call replay.mjs makes. o: { kind: 'engine' | 'cursor-review', streamPath, runId, head, pr, round, git?, statePath?, tmpdir?, env?, now? }.
+ * The only call replay.mjs makes. o: { kind: 'engine' | 'cursor-review', streamPath, runId, head, pr, round, git?, statePath?, tmpdir?, env?, now?, runOk? (false for a run that did not report success: no no-result void) }.
  * Audits the stream, writes one line to the state file (o.statePath, else READ_AUDIT_LEDGER, else the home folder) and returns { patch, line, recordError? }.
  * It writes no Cursor ledger line and starts no run. A failed state write never throws: it voids the row with the reason read-audit: record-failed (recordError is set),
  * because a run counts only when its newest line is pass and a failed write leaves no line. The head list (one ls-tree) feeds both the symlink check and the exemption.
@@ -487,7 +505,7 @@ const voidOpts = (o) => ({ kind: o?.kind, runId: o?.runId, streamPath: o?.stream
 
 function auditReplayRun(o) {
   const head = readHeadCommit({ git: o.git, head: o.head });
-  const result = auditFile(o.streamPath, { tmpdir: o.tmpdir, symlinks: head.rules, tracked: head.tracked });
+  const result = auditFile(o.streamPath, { tmpdir: o.tmpdir, symlinks: head.rules, tracked: head.tracked, runOk: o.runOk !== false });
   const symlinkCheck = !head.ran ? 'not-run' : head.rules.length > 0 ? 'void' : 'pass';
   const line = buildLine({ ...o, result, symlinkCheck, ts: new Date((o.now ?? Date.now)()).toISOString() });
   let recordError = false;

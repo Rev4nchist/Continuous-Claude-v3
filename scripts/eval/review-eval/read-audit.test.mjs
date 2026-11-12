@@ -422,6 +422,14 @@ test('SL-e a .. above the root at any step voids, a .. inside the tree passes', 
   assert.deepEqual(symlinkRules({ l: 'x/../y' }), []);
 });
 
+test('SL-g a link whose target text climbs above the root voids, also when a link walk stays inside', () => {
+  // Breaks when: only the link walk decides. Windows applies a two-dot step to the path text: l/../.. from the root is above the tree, though the walk (l is a/b/c) ends inside.
+  assert.equal(symlinkRules({ l: 'a/b/c', x: 'l/../..' }).length, 1);
+  assert.equal(symlinkRules({ 'd/l': 'a/b/c', 'd/x': 'l/../../..' }).length, 1);
+  // Both checks agree on a plain inside link.
+  assert.deepEqual(symlinkRules({ l: 'a/b/c', 'd/y': '../l/q' }), []);
+});
+
 test('SL-f a real repo: alias -> . and leak -> alias/../outside voids, alias -> sub with a link through it passes', () => {
   // Breaks when: the walk uses the scripted map but not the ls-tree and cat-file of a real head.
   const bad = repoWithLinks({ alias: '.', leak: 'alias/../outside' });
@@ -1528,6 +1536,16 @@ test('N3 a stream with no result event voids with no-result; one with a result e
   assert.equal(r.verdict, 'void');
   assert.ok(hit(r, 'no-result', { field: 'stream' }), JSON.stringify(r.rules));
   assert.equal(audit(events(CLEAN)).verdict, 'pass');
+});
+
+test('N3b no-result applies only to a run that reports success: runOk false gives no void for it, and every other rule still applies', () => {
+  // Breaks when: the runOk option is ignored (a timed-out run is voided for good), or runOk false switches off another rule.
+  const cut = events(CLEAN).filter((e) => e.type !== 'result');
+  assert.equal(audit(cut, { runOk: false }).verdict, 'pass');
+  assert.equal(audit(cut, { runOk: true }).verdict, 'void');
+  assert.equal(audit(cut).verdict, 'void', 'the default is strict');
+  const noCalls = cut.filter((e) => e.type !== 'tool_call');
+  assert.deepEqual(audit(noCalls, { runOk: false }).rules.map((x) => x.rule), ['no-tool-call']);
 });
 
 test('F9 the verdict line carries the gap count, and the scan counts streams with a gap and gap events', () => {

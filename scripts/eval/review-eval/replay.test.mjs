@@ -112,9 +112,10 @@ const jsonText = (v) => JSON.stringify(v).slice(1, -1);
 function plantedStream(dir, mode) {
   const vars = { TREE: jsonText(path.join(dir, 'cursor-review-abc123', 'tree')), PRIMARY: jsonText(path.join(dir, 'primary')) };
   const fill = (name) => Object.entries(vars).reduce((t, [k, v]) => t.split(`{{${k}}}`).join(v), readFileSync(new URL(`${name}.jsonl`, FIX), 'utf8').trimEnd());
-  return `${['init', mode === 'void' ? 'read-outside' : 'read', 'tail'].map(fill).join('\n')}\n`;
+  const lines = ['init', mode.startsWith('void') ? 'read-outside' : 'read', 'tail'].map(fill).join('\n').split('\n');
+  return `${(mode.endsWith('-nores') ? lines.filter((l) => JSON.parse(l).type !== 'result') : lines).join('\n')}\n`;
 }
-/** mode: 'clean' (a read inside the tree) | 'void' (a read of a file outside it). A .gz name is gzipped. */
+/** mode: 'clean' (a read inside the tree) | 'void' (a read of a file outside it); with the suffix '-nores' the stream has no result event. A .gz name is gzipped. */
 function writeStream(file, dir, mode) {
   mkdirSync(path.dirname(file), { recursive: true });
   const text = plantedStream(dir, mode);
@@ -479,6 +480,36 @@ test('R4 an incomplete engine run is audited, and a void one becomes a failed ro
   const rc = await replayRun({ pr: 207, round: 1 }, clean.deps);
   assert.deepEqual([rc.status, rc.record.void], ['incomplete', undefined]);
   assert.equal(readLines(clean.deps.auditOpts.statePath)[0].verdict, 'pass');
+});
+
+test('R9 no-result voids only a run that reports success: an incomplete engine run with no result event keeps its status (breaks if runOk is not passed, or if it switches off the other rules)', async () => {
+  const incomplete = (deps) => {
+    const inner = deps.runEngine;
+    deps.runEngine = async (a) => ({ ...(await inner(a)), status: 'incomplete' });
+  };
+  // An incomplete engine run, clean stream, no result event: the row keeps status incomplete and gets no void.
+  const a = engineDeps(tmp());
+  incomplete(a.deps);
+  a.calls.stream = 'clean-nores';
+  const ra = await replayRun({ pr: 207, round: 1 }, a.deps);
+  assert.deepEqual([ra.status, ra.record.void, ra.record.reason], ['incomplete', undefined, undefined]);
+  assert.equal(readLines(a.deps.auditOpts.statePath)[0].verdict, 'pass');
+  // The same run with an outside read: the other rules still read the stream.
+  const b = engineDeps(tmp());
+  incomplete(b.deps);
+  b.calls.stream = 'void-nores';
+  const rb = await replayRun({ pr: 207, round: 1 }, b.deps);
+  assert.deepEqual([rb.exit, rb.status, rb.record.void], [1, 'failed', true]);
+  assert.match(rb.record.reason, /^read-audit: .*outside-path/);
+  assert.doesNotMatch(rb.record.reason, /no-result/);
+  // A run that reports success with no result event voids with no-result, on both paths.
+  for (const make of [baseDeps, engineDeps]) {
+    const c = make(tmp());
+    c.calls.stream = 'clean-nores';
+    const rc = await replayRun({ pr: 207, round: 1 }, c.deps);
+    assert.deepEqual([rc.exit, rc.status, rc.record.void], [1, 'failed', true]);
+    assert.match(rc.record.reason, /^read-audit: .*no-result/);
+  }
 });
 
 test('R5 an ok run with no stream is void with the rule no-stream, on both paths (breaks if a missing stream counts as pass)', async () => {
