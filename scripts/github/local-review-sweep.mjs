@@ -7,7 +7,9 @@
  *          [--max-runs <n>] [--pairs-only] [--dry-run] [--json] [--repo <owner/name>]
  *
  * Engine. --engine-sha (path F): scripts/ and review-router.config.json at that commit are extracted (own extract, no fetch, never pinEngine) into
- *   <records>/engine/<sha>/. Before each run the copy is checked (its engine file exists) and extracted again when the engine's pruning removed it.
+ *   <records>/engine/<sha>/. Before each run the copy is extracted again when its engine file is gone (the engine's pruning removed it), then
+ *   proved by blob (ruling D.8): every reviewer-set file, review-router.mjs and the config must have their blob id at the SHA. A changed or
+ *   partial copy is not repaired: error line, no engine call, the sweep stops (exit 1). The proof runs again after each run (copyChanged).
  *   reviewHead is imported FROM THE COPY and called with LOCAL_REVIEW_PINNED=<sha> and the same records root: the engine takes selfPath from its own
  *   import.meta.url, so checkPin sees a file under <records>/engine/<sha>/ and accepts it. The pin is not weakened.
  *   Without --engine-sha: the engine of this checkout runs with engineHere (records say trusted:false), and the versions are computed at the
@@ -15,7 +17,12 @@
  * Targets. Open PRs (gh api pulls?state=open, paged, read-only), and every saved CLI output <date>-pre-pr-cr-<sha7>.txt that names a Major or a
  *   Critical: that earlier head runs with the gh answer patched to it (as engine-run.mjs does), withholdBody and fresh, never evalRun (so its
  *   ledger ref is branch-<slug>: inside the live cap and the per-branch cap). "Already run" is keyed on head + engineSha (null unpinned): an ok
- *   or a void line blocks it, one failed line allows one more try, two block. The PR of a CLI head: by commit, then (no commit hit) by the
+ *   or a void line blocks it, one failed line allows one more try, two block.
+ *   An OPEN head is not checked against the list (F7): it is called again in every sweep, without fresh. The engine then skips it itself,
+ *   with no ledger start, when a complete record (status ok, coverage complete) exists at that branch and head (resolveRange 'done',
+ *   local-review.mjs:353-360, :598); a pinned copy that is trusted (equal to fork/main) counts only trusted records there. An open head whose
+ *   records are all failed or incomplete therefore runs again in every sweep and spends a start each time, up to the engine's per-branch cap
+ *   (per_branch_cap, 8 per branch in 7 days). A pull open with no record yet runs once, then skips. The PR of a CLI head: by commit, then (no commit hit) by the
  *   worktree branch; exactly one candidate, on the worktree branch when one is known, else ambiguousPr or noPr. .failed.txt files are counted.
  * Order. CRITICAL, then HIGH, then MID and ELEVATED by the --band-counts share (pushes per risk band over 4 weeks; DEFAULT_BAND_COUNTS without
  *   the flag). LOW never runs. laneState() is injected (tests, a later caller). The command line has no reader of the lane DB, so it passes
@@ -23,10 +30,13 @@
  * Live cap. WEEKLY_LIVE_CAP (or local_review.weekly_live_cap of the root config, a cap key exempt from the freeze set) Cursor ledger starts in
  *   7 days with purpose review and a ref that does not start with eval-. A run is refused, and the sweep stops, when starts + 1 + retry_max
  *   would pass the cap (retry_max from the config of the engine that runs, else LOCAL_REVIEW_DEFAULTS). The report sets overCap above the cap.
+ *   A ledger file that exists and cannot be read (not ENOENT) refuses the run: the count is unknown, so it fails closed (exit 3).
  * Facts. The engine's usage line names catchers.md, but it reads the --facts file as text (local-review.mjs:902). By the map the sweep passes the
  *   text of .claude/cache/pre-pr/catchers.json of the PR branch's worktree, only when that worktree is at the head under review.
- * Files. <records>/cli-pairs/<pr>/<sha40>.txt: the CLI output (never rewritten). <records>/cli-pairs/sweep-runs.jsonl: one line per run with a
- *   record. pinned:true there is the pinned tag (a pinned copy wrote the record). counted:true only when ALL hold: the pinned copy ran, its
+ * Files. <records>/cli-pairs/<pr>/<sha40>.txt: the CLI output (never rewritten). <records>/cli-pairs/sweep-runs.jsonl: one line per engine
+ *   answer that can follow a ledger start (a record, or status failed with recordPath null), with frozenSha and frozenEngineVersion (what the
+ *   label was tested against; null without --frozen-sha). A failed append is logged and gives exit 1 (a void stays exit 4).
+ *   pinned:true there is the pinned tag (a pinned copy wrote the record). counted:true only when ALL hold: the pinned copy ran, its
  *   engineVersion equals the frozen value (label "frozen"), status ok, coverage complete, the read audit wrote a pass line with symlinkCheck
  *   pass, and the copy was still there after the run. Otherwise `reason` names the first condition that failed.
  * Read audit. After each run with a stream: auditReplay (read-audit.mjs) on the .stream.jsonl.gz beside the record, as replay.mjs does (runOk
@@ -34,12 +44,14 @@
  *
  * Exit codes:
  *   0  done
- *   1  a run failed, the engine copy failed, or the engine refused a run (a pin refusal also stops the sweep)
- *   2  usage, or a repo other than the fork
- *   3  the live cap, or the engine's own weekly cap, stopped the sweep
+ *   1  a run failed, the engine copy failed or was changed, a list line was not written, a gh lookup failed, or the engine refused a run
+ *      (the engine's own exit 2 gives the sweep 1; a pin refusal also stops the sweep)
+ *   2  usage, or a repo other than the fork (refusals by the sweep itself)
+ *   3  the live cap, the engine's own weekly cap, or a Cursor ledger that exists and cannot be read, stopped the sweep
  *   4  a void run stopped the sweep
  */
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   constants as fsc, appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, utimesSync,
 } from 'node:fs';
@@ -204,10 +216,22 @@ function retryMaxOf(eng) {
  * a run. The report names the count (damaged) when it is not 0; repair the ledger line to get the room back.
  */
 function ledgerLoad(ctx, eng) {
+  const unreadable = ledgerUnreadable(ctx);
+  const cap = liveCap(ctx.root);
+  if (unreadable) return { liveStarts: null, cap, retryMax: retryMaxOf(eng), overCap: false, unreadable };
   const ledger = readLedger(ctx.cursorLedger);
   const used = liveStarts(ledger.entries, ctx.now()) + ledger.damaged;
-  const cap = liveCap(ctx.root);
   return { liveStarts: used, cap, retryMax: retryMaxOf(eng), overCap: used > cap, ...(ledger.damaged ? { damaged: ledger.damaged } : {}) };
+}
+
+/**
+ * Fail closed on the ledger read. readLedger (cursor-review.mjs) turns every read error into an empty ledger, so the sweep reads the file
+ * itself first: a missing file (ENOENT) is 0 starts; any other error (a folder, no permission) is the reason text, and the run is refused.
+ */
+function ledgerUnreadable(ctx) {
+  try { ctx.readLedgerText(ctx.cursorLedger); return null; } catch (err) {
+    return err?.code === 'ENOENT' ? null : `${err?.code ?? 'error'}: ${clip(String(err?.message ?? err), 120)}`;
+  }
 }
 const noRoom = (load) => load.liveStarts + 1 + load.retryMax > load.cap;
 
@@ -331,6 +355,47 @@ function savePairs(ctx, heads) {
 
 const copyPresent = (dir) => existsSync(path.join(dir, ENGINE_FILE));
 
+/** The git blob id of a file's bytes (as `git hash-object --no-filters`): no line-end filter, so a changed byte is a changed blob. */
+function blobOf(file) {
+  const buf = readFileSync(file);
+  return createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
+}
+
+/** The files the copy must hold with their blob at the SHA: the reviewer set and the band set (computeVersions) and the config file. */
+function wantedBlobs({ sha, git, root, computeVersions }) {
+  const v = computeVersions({ sha, root, git });
+  const cfg = String(git(['rev-parse', '--verify', '--quiet', `${sha}:${CONFIG_FILE}`]).stdout ?? '').trim();
+  if (!SHA40.test(cfg)) throw new Error(`no ${CONFIG_FILE} at ${sha}`);
+  return [...v.reviewerFiles, ...v.bandFiles, { path: CONFIG_FILE, blob: cfg }];
+}
+
+/**
+ * Ruling D.8: proves a pinned copy. null when every reviewer-set file, scripts/github/review-router.mjs and review-router.config.json in
+ * `dir` has the blob id it has at `sha`; else the first problem as text (a missing file, a changed file, or a list that cannot be read).
+ * `want` (the wanted list) can be given to skip computeVersions.
+ */
+export function proveCopy({ dir, sha, git, root, computeVersions, want }) {
+  let list;
+  try { list = want ?? wantedBlobs({ sha, git, root, computeVersions }); } catch (err) { return `cannot list the blobs at ${sha.slice(0, 12)}: ${clip(err.message)}`; }
+  for (const { path: rel, blob } of list) {
+    let have;
+    try { have = blobOf(path.join(dir, ...rel.split('/'))); } catch { return `${rel} is missing`; }
+    if (have !== blob) return `${rel} differs from its blob at ${sha.slice(0, 12)}`;
+  }
+  return null;
+}
+
+/** proveCopy with the wanted list read once per sweep. */
+function copyProblem(ctx, dir) {
+  const sha = ctx.args.engineSha;
+  if (!ctx.copyBlobs) {
+    try { ctx.copyBlobs = wantedBlobs({ sha, git: ctx.git, root: ctx.root, computeVersions: ctx.computeVersions }); } catch (err) {
+      return `cannot list the blobs at ${sha.slice(0, 12)}: ${clip(err.message)}`;
+    }
+  }
+  return proveCopy({ dir, sha, want: ctx.copyBlobs });
+}
+
 /** The private extractEngine of local-review.mjs, rebuilt: read-tree into a temp index, checkout-index into a stage, rename into place. */
 function extractCopy(git, sha, dir) {
   const engineRoot = path.dirname(dir);
@@ -368,8 +433,10 @@ async function importFrom(ctx, dir, pinned) {
 }
 
 /**
- * { engine, dir, pinned } or null after one error line. Pinned: the copy is extracted when its engine file is gone, and its folder time is
- * renewed (the engine's pruning keeps the 3 newest). write:false (dry run) extracts nothing: without a copy the checkout engine plans.
+ * { engine, dir, pinned } or null after one error line. Pinned: a copy whose engine file is gone (the engine's pruning removed the folder)
+ * is extracted again. Then, before EACH run, the copy is proved by blob (proveCopy): a changed or partial copy is never repaired, the engine
+ * is not started from it, and the sweep stops (exit 1) so the seat can see who changed it. The folder time is renewed (pruning keeps the 3
+ * newest). write:false (dry run) extracts and proves nothing: without a copy the checkout engine plans.
  */
 async function loadEngine(ctx, { write = true } = {}) {
   const sha = ctx.args.engineSha;
@@ -380,7 +447,10 @@ async function loadEngine(ctx, { write = true } = {}) {
     const x = extractCopy(ctx.git, sha, dir);
     if (!x.ok) { ctx.log(`local-review-sweep: engine copy ${sha.slice(0, 12)}: ${x.reason}`); return null; }
   }
-  if (write) { try { const t = new Date(ctx.now()); utimesSync(dir, t, t); } catch { /* best effort */ } }
+  if (!write) return importFrom(ctx, dir, true);
+  const problem = copyProblem(ctx, dir);
+  if (problem) { ctx.log(`local-review-sweep: engine copy ${sha.slice(0, 12)}: ${problem}: the engine is not started from it; the sweep stops`); return null; }
+  try { const t = new Date(ctx.now()); utimesSync(dir, t, t); } catch { /* best effort */ }
   return importFrom(ctx, dir, true);
 }
 
@@ -428,6 +498,12 @@ async function listOpenPulls(ctx) {
 async function openTargets(ctx) {
   const out = [];
   for (const p of await listOpenPulls(ctx)) {
+    // gh is not trusted for shape: the number and the head go into paths, gh calls and git arguments.
+    if (!Number.isInteger(p?.number) || p.number <= 0 || !SHA40.test(String(p?.head?.sha))) {
+      ctx.report.skipped.badPull += 1;
+      ctx.log(`local-review-sweep: an open pull with number ${clip(JSON.stringify(p?.number), 40)} and head ${clip(JSON.stringify(p?.head?.sha), 60)} is skipped`);
+      continue;
+    }
     if (p.draft === true) { ctx.report.skipped.draft += 1; continue; }
     out.push({ kind: 'open-head', pr: p.number, head: p.head?.sha, branch: p.head?.ref ?? null });
   }
@@ -436,13 +512,13 @@ async function openTargets(ctx) {
 
 /**
  * True when the list already holds this head for this engine (key head + engineSha, null for unpinned): an ok line or a void line blocks
- * for good; failed lines block from the second one. A failed line is a status other than ok, or a run whose engine copy went away
- * (copyGone: the sweep reports that run as failed, though its record says ok). So a failed run gets one more try, and a rehearsal line of
- * the checkout engine never blocks a pinned run.
+ * for good; failed lines block from the second one. A failed line is a status other than ok (also the line of a start that gave no record),
+ * or a run whose engine copy went away or changed (copyGone, copyChanged: the sweep reports that run as failed, though its record says ok).
+ * So a failed run gets one more try, and a rehearsal line of the checkout engine never blocks a pinned run.
  */
 function alreadyRun(rows, head, engineSha) {
   const mine = rows.filter((r) => r.head === head && (r.engineSha ?? null) === engineSha);
-  const failed = (r) => r.status !== 'ok' || r.copyGone === true;
+  const failed = (r) => r.status !== 'ok' || r.copyGone === true || r.copyChanged === true;
   if (mine.some((r) => r.audit === 'void' || !failed(r))) return true;
   return mine.filter(failed).length >= 2;
 }
@@ -550,8 +626,9 @@ const listPath = (ctx) => path.join(ctx.records, 'cli-pairs', 'sweep-runs.jsonl'
 const readList = (ctx) => readLines(listPath(ctx));
 
 /** Why a run with a record does not count, or null when it counts (the final definition: every condition below must hold). */
-function notCounted({ eng, record, audit, copyGone, label }) {
+function notCounted({ eng, record, audit, copyGone, copyChanged, label }) {
   if (copyGone) return 'the engine copy went away during the run';
+  if (copyChanged) return `the engine copy changed during the run (${copyChanged})`;
   if (!eng.pinned) return 'unpinned run (engineHere): rehearsal only, never counted';
   if (record?.status !== 'ok') return `record status ${record?.status ?? 'unreadable'}`;
   if (record.coverage?.complete !== true) return 'coverage incomplete';
@@ -576,42 +653,83 @@ function auditRun(ctx, t, res, record) {
   return { verdict: a.patch?.void ? 'void' : (a.line?.verdict ?? 'void'), symlinkCheck: a.line?.symlinkCheck ?? null };
 }
 
-function listLine(ctx, eng, t, record, res, audit, copyGone) {
+/** The fields every list line carries: the key alreadyRun reads (head + engineSha), the versions, and what the label was tested against (F2). */
+function lineBase(ctx, eng, t) {
   const vsha = versionSha(ctx, eng);
   const { engineVersion, bandVersion } = versionsAt(ctx, vsha);
-  const label = labelOf(ctx, eng, engineVersion);
-  const reason = notCounted({ eng, record, audit, copyGone, label });
+  const frozenSha = ctx.args.frozenSha ?? null;
   return {
-    v: 1, ts: new Date(ctx.now()).toISOString(), runId: record?.runId ?? res.runId ?? null, pr: t.pr, head: record?.head ?? t.head, recordPath: res.recordPath,
-    pinned: eng.pinned, engineSha: eng.pinned ? ctx.args.engineSha : null, versionSha: vsha, versionSource: eng.pinned ? 'engine-sha' : 'checkout-head',
-    engineVersion, bandVersion, label, bodyMode: record?.bodyMode ?? null, facts: t.factsText !== undefined,
-    audit: audit.verdict, symlinkCheck: audit.symlinkCheck, kind: t.kind, band: record?.band?.band ?? t.band ?? null, status: record?.status ?? null,
-    counted: reason === null, ...(reason ? { reason } : {}), ...(copyGone ? { copyGone: true } : {}),
+    v: 1, ts: new Date(ctx.now()).toISOString(), pr: t.pr, kind: t.kind, pinned: eng.pinned, engineSha: eng.pinned ? ctx.args.engineSha : null,
+    versionSha: vsha, versionSource: eng.pinned ? 'engine-sha' : 'checkout-head', engineVersion, bandVersion, label: labelOf(ctx, eng, engineVersion),
+    frozenSha, frozenEngineVersion: frozenSha ? versionsAt(ctx, frozenSha).engineVersion : null, facts: t.factsText !== undefined,
   };
+}
+
+function listLine(ctx, eng, t, record, res, audit, copy) {
+  const base = lineBase(ctx, eng, t);
+  const reason = notCounted({ eng, record, audit, copyGone: copy.gone, copyChanged: copy.changed, label: base.label });
+  return {
+    ...base, runId: record?.runId ?? res.runId ?? null, head: record?.head ?? t.head, recordPath: res.recordPath, bodyMode: record?.bodyMode ?? null,
+    audit: audit.verdict, symlinkCheck: audit.symlinkCheck, band: record?.band?.band ?? t.band ?? null, status: record?.status ?? null,
+    counted: reason === null, ...(reason ? { reason } : {}), ...(copy.gone ? { copyGone: true } : {}), ...(copy.changed ? { copyChanged: true } : {}),
+  };
+}
+
+/** The line of an answer that can follow a reserved start but gave no record: failed, not counted, with the key fields alreadyRun reads. */
+function failedLine(ctx, eng, t, res, reason) {
+  return {
+    ...lineBase(ctx, eng, t), runId: res.runId ?? null, head: t.head, recordPath: null, bodyMode: null, audit: 'not-run', symlinkCheck: null,
+    band: t.band ?? null, status: 'failed', counted: false, reason: clip(reason, 300),
+  };
+}
+
+/** Appends a list line. A failed append is logged and marks the sweep failed; it never throws, so a void stop is never lost to an I/O error. */
+function appendList(ctx, line) {
+  try {
+    mkdirSync(path.dirname(listPath(ctx)), { recursive: true });
+    ctx.appendFile(listPath(ctx), `${JSON.stringify(line)}\n`);
+  } catch (err) {
+    ctx.log(`local-review-sweep: the list line of run ${line.runId ?? '(no run id)'} (PR ${line.pr}) was not written: ${clip(String(err?.message ?? err))}`);
+    ctx.failed = true;
+  }
+  ctx.report.runs.push({ pr: line.pr, head: line.head, kind: line.kind, band: line.band, runId: line.runId, audit: line.audit, counted: line.counted });
+}
+
+/** After the run of a pinned copy: is the copy still there, and still the blobs at the SHA? -> { gone, changed: problem text | null }. */
+function copyAfterRun(ctx, eng, t) {
+  if (!eng.pinned) return { gone: false, changed: null };
+  if (!copyPresent(eng.dir)) {
+    ctx.log(`local-review-sweep: engine copy ${eng.dir} went away during the run of PR ${t.pr}: the run is not counted`);
+    ctx.failed = true;
+    return { gone: true, changed: null };
+  }
+  const changed = copyProblem(ctx, eng.dir);
+  if (changed) {
+    ctx.log(`local-review-sweep: engine copy ${eng.dir} changed during the run of PR ${t.pr} (${changed}): the run is not counted`);
+    ctx.failed = true;
+  }
+  return { gone: false, changed };
 }
 
 /** After a run with a record: copy check, read audit, the list line. Returns 'void' to stop the sweep, else null. */
 function afterRun(ctx, eng, t, res) {
   const record = readJson(res.recordPath);
-  const copyGone = eng.pinned && !copyPresent(eng.dir);
-  if (copyGone) {
-    ctx.log(`local-review-sweep: engine copy ${eng.dir} went away during the run of PR ${t.pr}: the run is not counted`);
-    ctx.failed = true;
-  }
+  const copy = copyAfterRun(ctx, eng, t);
   if (record?.status !== 'ok') {
     ctx.log(`local-review-sweep: PR ${t.pr} at ${String(t.head).slice(0, 12)}: the run failed (${clip(res.reason ?? record?.status ?? 'unreadable record')})`);
     ctx.failed = true;
   }
-  const line = listLine(ctx, eng, t, record, res, auditRun(ctx, t, res, record), copyGone);
-  mkdirSync(path.dirname(listPath(ctx)), { recursive: true });
-  appendFileSync(listPath(ctx), `${JSON.stringify(line)}\n`);
-  ctx.report.runs.push({ pr: t.pr, head: line.head, kind: t.kind, band: line.band, runId: line.runId, audit: line.audit, counted: line.counted });
+  const line = listLine(ctx, eng, t, record, res, auditRun(ctx, t, res, record), copy);
+  appendList(ctx, line);
   if (line.audit !== 'void') return null;
   ctx.log(`local-review-sweep: read audit VOID for run ${line.runId} (PR ${t.pr}, head ${line.head}): the sweep stops; the seat reads the stream first`);
   return 'void';
 }
 
-/** exit 2: the sweep is failed. A pin refusal stops it (every later run would be refused the same way). */
+/**
+ * The engine's exit 2 (a refusal, given before any ledger start) makes the SWEEP exit 1 (failed), never 2: the sweep's 2 is its own usage or
+ * repo refusal. A pin refusal also stops the sweep (every later run would be refused the same way).
+ */
 function refused(ctx, t, res) {
   ctx.report.skipped.refused += 1;
   ctx.failed = true;
@@ -623,11 +741,19 @@ function refused(ctx, t, res) {
   return 'error';
 }
 
-/** An engine answer without a record: a skip, a refusal, a cap or a failure. Returns a stop reason or null. */
-function noRecord(ctx, t, res) {
+/**
+ * An engine answer without a record. Before any ledger start (counters only, no list line; local-review.mjs line numbers): a skip row,
+ * exit 0 with a skipReason (skip() :484, from stepTarget :517-518, stepBand :526, stepRange :583/:598, all before withSlot :815); a
+ * refusal, exit 2 (refuse() :479 from checkPin :803, loadConfig :805, stepTarget :511/:513, stepBand :525, writeReviewDir :775 before
+ * runAttempts :776); a busy slot, exit 3 (withSlot :796, before stepRun); a reserveRun refusal, exit 3 'cap'/'ref-cap' (:777 when no
+ * attempt ran; cursor-review.mjs reserveRun :163/:165 returns before its append :168). Every other answer can follow a reserved start
+ * (:671), so it writes a failed list line: exit 1 with no record (record write failed :748 after the start; also a lock refusal or an
+ * agent that cannot be resolved, which come before it: kept conservative), exit 0 with no record and no skipReason, a throw. -> stop or null.
+ */
+function noRecord(ctx, eng, t, res) {
   const s = ctx.report.skipped;
   const reason = res.reason ?? '';
-  if (res.exit === 0) { bump(s.engineSkip, res.skipReason ?? 'skip'); return null; }
+  if (res.exit === 0 && res.skipReason) { bump(s.engineSkip, res.skipReason); return null; }
   if (res.exit === 2) return refused(ctx, t, res);
   if (res.exit === 3 && /^ref-cap/.test(reason)) { s.perBranchCap += 1; return null; }
   if (res.exit === 3 && /^cap reached/.test(reason)) {
@@ -635,24 +761,30 @@ function noRecord(ctx, t, res) {
     return 'engine-cap';
   }
   if (res.exit === 3) { s.busy += 1; return null; }
-  ctx.log(`local-review-sweep: PR ${t.pr} at ${String(t.head).slice(0, 12)}: engine exit ${res.exit}: ${clip(reason)}`);
+  const why = reason || `engine exit ${res.exit ?? '(none)'} with no record`;
+  ctx.log(`local-review-sweep: PR ${t.pr} at ${String(t.head).slice(0, 12)}: engine exit ${res.exit}: ${clip(why)}`);
   s.failed += 1;
   ctx.failed = true;
   ctx.runsStarted += 1;
+  appendList(ctx, failedLine(ctx, eng, t, res, why));
   return null;
 }
 
-/** Engine copy check, cap check (with the retry room of that engine), the run, then the record steps. Returns a stop reason or null. */
+/** Engine copy proof, cap check (with the retry room of that engine), the run, then the record steps. Returns a stop reason or null. */
 async function runTarget(ctx, t) {
   const eng = await loadEngine(ctx);
   if (!eng) { ctx.failed = true; return 'error'; }
   const load = ledgerLoad(ctx, eng);
+  if (load.unreadable) {
+    ctx.log(`local-review-sweep: the Cursor ledger ${ctx.cursorLedger} exists and cannot be read (${load.unreadable}): no run without the live count; the sweep stops`);
+    return 'ledger-unreadable';
+  }
   if (noRoom(load)) {
     ctx.log(`local-review-sweep: live cap: ${load.liveStarts} live starts in 7 days + 1 + retry_max ${load.retryMax} pass the cap of ${load.cap}: the sweep stops`);
     return 'live-cap';
   }
   const res = (await callEngine(ctx, eng, t)) ?? {};
-  if (!res.recordPath) return noRecord(ctx, t, res);
+  if (!res.recordPath) return noRecord(ctx, eng, t, res);
   ctx.runsStarted += 1;
   return afterRun(ctx, eng, t, res);
 }
@@ -725,7 +857,7 @@ async function finish(ctx, stopped, cliHeads, eng) {
 /** The exit code table of the header. */
 function exitOf(stopped, failed) {
   if (stopped === 'void') return SWEEP_EXIT.VOID;
-  if (stopped === 'live-cap' || stopped === 'engine-cap') return SWEEP_EXIT.CAP;
+  if (stopped === 'live-cap' || stopped === 'engine-cap' || stopped === 'ledger-unreadable') return SWEEP_EXIT.CAP;
   return stopped === 'error' || failed ? SWEEP_EXIT.FAILED : SWEEP_EXIT.OK;
 }
 
@@ -748,7 +880,8 @@ export function textReport(r) {
     `planned: ${r.planned.map(planned).join('; ') || 'none'}`,
     `this sweep: ${r.runs.length} run(s), ${r.runs.filter((x) => x.counted).length} counted; pairs saved ${r.pairs.saved}, already there ${r.pairs.existing}`,
     `skipped: ${skips}`,
-    `ledger load: ${r.ledger.liveStarts} live starts in 7 days of a cap of ${r.ledger.cap} (retry_max ${r.ledger.retryMax})${r.ledger.overCap ? ', OVER THE CAP' : ''}`
+    (r.ledger.unreadable ? `ledger load: UNKNOWN, the Cursor ledger cannot be read (${r.ledger.unreadable}); cap ${r.ledger.cap}`
+      : `ledger load: ${r.ledger.liveStarts} live starts in 7 days of a cap of ${r.ledger.cap} (retry_max ${r.ledger.retryMax})${r.ledger.overCap ? ', OVER THE CAP' : ''}`)
       + (r.ledger.damaged ? `; ${r.ledger.damaged} ledger line(s) cannot be read and count as starts` : ''),
     runs,
     ...Object.entries(w.cli.byBand).map(([b, x]) => `  risk band ${b}: ${x.cliHeads} CLI head(s), ${x.withRecord} with an engine record (${pct(x.share)})`),
@@ -766,7 +899,7 @@ function newReport(ctx) {
     v: 1, ts: new Date(ctx.now()).toISOString(), repo: ctx.repo, mode: null, engineSha: ctx.args.engineSha ?? null, frozenSha: ctx.args.frozenSha ?? null,
     dryRun: Boolean(ctx.args.dryRun), pairsOnly: Boolean(ctx.args.pairsOnly), stopped: null, planned: [], runs: [],
     skipped: {
-      draft: 0, noPr: 0, ghError: 0, ambiguousPr: 0, ambiguousSha: 0, perBranchCap: 0, failedCli: 0, critical: 0, low: 0, noBand: 0, alreadyRun: 0,
+      badPull: 0, draft: 0, noPr: 0, ghError: 0, ambiguousPr: 0, ambiguousSha: 0, perBranchCap: 0, failedCli: 0, critical: 0, low: 0, noBand: 0, alreadyRun: 0,
       refused: 0, failed: 0, busy: 0, engineSkip: {},
     },
     pairs: { saved: 0, existing: 0 },
@@ -785,6 +918,7 @@ function makeCtx(args, deps) {
     laneState: deps.laneState ?? null, computeVersions: deps.computeVersions ?? realComputeVersions, audit: deps.audit ?? auditReplay,
     log: deps.log ?? ((s) => process.stderr.write(`${s}\n`)), out: deps.out ?? ((s) => process.stdout.write(`${s}\n`)),
     runAgent: deps.runAgent, agent: deps.agent, engineDeps: deps.engineDeps ?? {}, versions: new Map(), planBands: new Map(), runsStarted: 0, failed: false,
+    readLedgerText: deps.readLedgerText ?? ((f) => readFileSync(f, 'utf8')), appendFile: deps.appendFile ?? appendFileSync,
   };
   ctx.report = newReport(ctx);
   return ctx;

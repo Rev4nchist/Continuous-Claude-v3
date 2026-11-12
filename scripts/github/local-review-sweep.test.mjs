@@ -33,7 +33,7 @@ import { REVIEWER_SET_FILES, computeVersions as realComputeVersions } from '../e
 import { readLines } from '../eval/review-eval/read-audit.mjs';
 import { checkPin } from './local-review.mjs';
 import {
-  DEFAULT_BAND_COUNTS, FROZEN_LABEL, REHEARSAL_LABEL, SWEEP_EXIT, WEEKLY_LIVE_CAP, liveStarts, main, parseArgs, parseWorktrees, planOrder,
+  DEFAULT_BAND_COUNTS, FROZEN_LABEL, REHEARSAL_LABEL, SWEEP_EXIT, WEEKLY_LIVE_CAP, liveStarts, main, parseArgs, parseWorktrees, planOrder, proveCopy,
 } from './local-review-sweep.mjs';
 import { parseAgentStream } from './pre-pr.mjs';
 
@@ -80,23 +80,29 @@ function stream(tree, outside) {
   const ev = [init, call('started', false), call('completed', true), { type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 's' }];
   return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
 }
-const ANSWERS = {
+// Answers the engine gives BEFORE any ledger start (local-review.mjs: skips, refusals, reserveRun refusals, a busy slot): no start row.
+const BEFORE_START = {
   'ref-cap': { exit: 3, reason: 'ref-cap reached (8)' },
   cap: { exit: 3, reason: 'cap reached (240)' },
   refused: { exit: 2, reason: 'branch name "x" collides with the engine folder' },
   'refused-pin': { exit: 2, reason: 'not started from a pinned engine copy: run without LOCAL_REVIEW_PINNED so the engine pins itself' },
+  skip: { exit: 0, skipReason: 'range done: a complete record exists at this head' },
 };
+// Answers that can follow a reserved start: a start row is written first.
+const AFTER_START = { empty: { exit: 0 }, 'no-record': { exit: 1, reason: 'record write failed: planted' } };
 export async function reviewHead(opts, deps) {
   const calls = (globalThis.__sweepStubCalls ??= []);
   const pull = await deps.gh(['api', 'repos/' + opts.repo + '/pulls/' + opts.pr]);
   const pinned = deps.env && deps.env.LOCAL_REVIEW_PINNED ? deps.env.LOCAL_REVIEW_PINNED : null;
   calls.push({ marker: MARKER, url: import.meta.url, pinned, opts, pullHead: pull.head.sha, stateRoot: deps.stateRoot, cursorLedger: deps.cursorLedger });
+  if (BEFORE_START[pull.fakeResult]) return { recordPath: null, skipReason: null, ...BEFORE_START[pull.fakeResult] };
   const runId = 'stub-' + calls.length + '-' + opts.pr;
   mkdirSync(path.dirname(deps.cursorLedger), { recursive: true });
   const start = { ts: new Date(deps.now()).toISOString(), phase: 'start', id: runId, ref: 'branch-' + slug(pull.head.ref), purpose: 'review' };
   appendFileSync(deps.cursorLedger, JSON.stringify(start) + '\n');
   if (deps.onRun) deps.onRun(opts, pull);
-  if (ANSWERS[pull.fakeResult]) return { recordPath: null, skipReason: null, ...ANSWERS[pull.fakeResult] };
+  if (pull.fakeResult === 'throw') throw new Error('planted engine crash');
+  if (AFTER_START[pull.fakeResult]) return { recordPath: null, skipReason: null, ...AFTER_START[pull.fakeResult] };
   const dir = path.join(deps.stateRoot, slug(pull.head.ref), pull.head.sha);
   mkdirSync(dir, { recursive: true });
   const recordPath = path.join(dir, runId + '.json');
@@ -360,6 +366,9 @@ test('T4 --engine-sha extracts the engine into <records>/engine/<sha>/, imports 
   assert.equal(row.counted, true);
   assert.equal(row.kind, 'open-head');
   assert.equal(reportOf(w).mode, 'pinned');
+  // F2: the line keeps what the label was tested against, so a later gate can check it against decisions.md.
+  assert.equal(row.frozenSha, sha);
+  assert.equal(row.frozenEngineVersion, realComputeVersions({ sha, git: repo.git }).engineVersion);
 });
 
 test('T4b a --frozen-sha whose engineVersion differs gives the rehearsal label', async () => {
@@ -384,6 +393,8 @@ test('T4c a pinned run with no --frozen-sha is rehearsal and not counted (counte
   assert.equal(row.label, REHEARSAL_LABEL);
   assert.equal(row.counted, false);
   assert.match(row.reason, /frozen/);
+  assert.equal(row.frozenSha, null, 'F2: no --frozen-sha, nothing to test against');
+  assert.equal(row.frozenEngineVersion, null);
 });
 
 test('T1d retry_max comes from the config of the engine that runs: retry_max 0 leaves room for a run at 99 live starts', async () => {
@@ -492,6 +503,8 @@ test('T6b "already run" is keyed on head + engineSha: an ok line or a void line 
     [[{ status: 'failed', audit: 'not-run' }, { status: 'failed', audit: 'pass' }], 0],
     // A run whose engine copy went away is a failed run of the sweep, though its record says ok: one more try, then it blocks.
     [[{ status: 'ok', audit: 'pass', copyGone: true }], 1],
+    // A run whose copy changed during the run (F4) is a failed run too: one more try.
+    [[{ status: 'ok', audit: 'pass', copyChanged: true }], 1],
     [[{ status: 'ok', audit: 'pass', copyGone: true }, { status: 'ok', audit: 'pass', copyGone: true }], 0],
     [[{ status: 'ok', audit: 'void', copyGone: true }], 0],
   ];
@@ -560,7 +573,9 @@ test('T6g a gh failure in the PR lookup is not read as "no PR": the head is coun
   const early = H('e');
   const w = world({ pulls: [pullOf(7, { band: 'HIGH' })], shas: { eeeeeee: early } });
   put(w.cliDir, '2026-11-10-pre-pr-cr-eeeeeee.txt', cliStream(['major']));
-  const over = { gh: async (args) => { if (/\/commits\/[0-9a-f]{40}\/pulls/.test(String(args[1]))) throw new Error('HTTP 403: API rate limit exceeded'); return fakeGh(w)(args); } };
+  const over = {
+    gh: async (args) => { if (/\/commits\/[0-9a-f]{40}\/pulls/.test(String(args[1]))) throw new Error('HTTP 403: API rate limit exceeded'); return fakeGh(w)(args); },
+  };
   assert.equal(await sweep(w, [], over), SWEEP_EXIT.FAILED, w.logs.join('\n'));
   assert.equal(reportOf(w).skipped.ghError, 1);
   assert.equal(reportOf(w).skipped.noPr, 0);
@@ -572,7 +587,9 @@ test('T6h a commit that GitHub does not know (HTTP 404 or 422) is "no PR", not a
   const early = H('e');
   const w = world({ pulls: [pullOf(7, { band: 'HIGH' })], shas: { eeeeeee: early } });
   put(w.cliDir, '2026-11-10-pre-pr-cr-eeeeeee.txt', cliStream(['major']));
-  const over = { gh: async (args) => { if (/\/commits\/[0-9a-f]{40}\/pulls/.test(String(args[1]))) throw new Error('gh: No commit found for SHA (HTTP 422)'); return fakeGh(w)(args); } };
+  const over = {
+    gh: async (args) => { if (/\/commits\/[0-9a-f]{40}\/pulls/.test(String(args[1]))) throw new Error('gh: No commit found for SHA (HTTP 422)'); return fakeGh(w)(args); },
+  };
   assert.equal(await sweep(w, [], over), SWEEP_EXIT.OK, w.logs.join('\n'));
   assert.equal(reportOf(w).skipped.noPr, 1);
   assert.equal(reportOf(w).skipped.ghError, 0);
@@ -729,6 +746,7 @@ test('T15 an engine refusal marks the sweep failed and the sweep goes on; a pin 
   assert.equal(await sweep(w), SWEEP_EXIT.FAILED, w.logs.join('\n'));
   assert.deepEqual(stubCalls().map((c) => c.opts.pr), [1, 2]);
   assert.equal(reportOf(w).skipped.refused, 1);
+  assert.deepEqual(jsonl(listFile(w)).map((x) => x.pr), [2], 'a refusal comes before any ledger start: no list line');
   const p = world({ pulls: [pullOf(1, { band: 'HIGH', result: 'refused-pin' }), pullOf(2, { band: 'HIGH' })] });
   assert.equal(await sweep(p), SWEEP_EXIT.FAILED, p.logs.join('\n'));
   assert.deepEqual(stubCalls().map((c) => c.opts.pr), [1]);
@@ -936,4 +954,168 @@ test('T14 a failed run: audited when its stream exists (runOk false), not-run wh
   assert.match(withStream.reason, /status failed/);
   assert.equal(good.counted, true);
   assert.deepEqual(readLines(w.auditState).map((l) => l.runId), [withStream.runId, good.runId]);
+});
+
+// ---------- F1 an unreadable ledger fails closed ----------
+
+test('F1 a Cursor ledger that exists and cannot be read (a folder: EISDIR) refuses the sweep with exit 3 and one log line; no engine call', async () => {
+  // Breaks when: a read error of the ledger reads as 0 starts (readLedger turns every read error into an empty ledger).
+  const w = world({ pulls: [pullOf(1, { band: 'HIGH' })] });
+  mkdirSync(w.cursorLedger, { recursive: true });
+  assert.equal(await sweep(w), SWEEP_EXIT.CAP, w.logs.join('\n'));
+  assert.equal(stubCalls().length, 0);
+  assert.equal(w.logs.filter((l) => /ledger/.test(l) && /cannot be read/.test(l)).length, 1, w.logs.join('\n'));
+  assert.equal(reportOf(w).stopped, 'ledger-unreadable');
+});
+
+test('F1b an injected ledger reader that throws EACCES refuses with exit 3; a missing ledger file is still 0 starts', async () => {
+  // Breaks when: only EISDIR is caught, or a missing file is refused too.
+  const w = world({ pulls: [pullOf(1, { band: 'HIGH' })] });
+  seedLive(w, 1);
+  const readLedgerText = () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); };
+  assert.equal(await sweep(w, [], { readLedgerText }), SWEEP_EXIT.CAP, w.logs.join('\n'));
+  assert.equal(stubCalls().length, 0);
+  const fresh = world({ pulls: [pullOf(1, { band: 'HIGH' })] });
+  assert.equal(existsSync(fresh.cursorLedger), false);
+  assert.equal(await sweep(fresh), SWEEP_EXIT.OK, fresh.logs.join('\n'));
+  assert.equal(stubCalls().length, 1);
+});
+
+// ---------- F3 every answer that can follow a start leaves a list line ----------
+
+const KEY_FIELDS = ['pr', 'head', 'engineSha', 'kind', 'pinned', 'engineVersion', 'bandVersion', 'versionSha', 'frozenSha', 'frozenEngineVersion'];
+
+test('F3 the engine throws after its start: one failed list line (recordPath null, not counted, a reason, the key fields), exit 1, the sweep goes on', async () => {
+  // Breaks when: a throw leaves no line (alreadyRun cannot see the failed start), or the sweep stops at it.
+  const w = world({ pulls: [pullOf(1, { band: 'HIGH', result: 'throw' }), pullOf(2, { band: 'HIGH' })] });
+  assert.equal(await sweep(w), SWEEP_EXIT.FAILED, w.logs.join('\n'));
+  assert.deepEqual(stubCalls().map((c) => c.opts.pr), [1, 2]);
+  const [bad, good] = jsonl(listFile(w));
+  assert.equal(bad.pr, 1);
+  assert.equal(bad.status, 'failed');
+  assert.equal(bad.recordPath, null);
+  assert.equal(bad.counted, false);
+  assert.match(bad.reason, /planted engine crash/);
+  for (const k of KEY_FIELDS) assert.ok(k in bad, `key field ${k}`);
+  assert.equal(bad.head, H(1));
+  assert.equal(bad.kind, 'open-head');
+  assert.equal(good.pr, 2);
+});
+
+test('F3b exit 0 with no record and no skip reason, and exit 1 with no record: each a failed line; a skip row (exit 0 + skipReason) gives none', async () => {
+  // Breaks when: an answer without a record is only a counter, or a skip row is listed as a failed run.
+  const pulls = [pullOf(1, { band: 'HIGH', result: 'empty' }), pullOf(2, { band: 'HIGH', result: 'no-record' }), pullOf(3, { band: 'HIGH', result: 'skip' })];
+  const w = world({ pulls });
+  assert.equal(await sweep(w), SWEEP_EXIT.FAILED, w.logs.join('\n'));
+  const rows = jsonl(listFile(w));
+  assert.deepEqual(rows.map((r) => [r.pr, r.status, r.recordPath, r.counted]), [[1, 'failed', null, false], [2, 'failed', null, false]]);
+  assert.match(rows[1].reason, /record write failed/);
+  assert.equal(reportOf(w).skipped.engineSkip['range done: a complete record exists at this head'], 1);
+});
+
+test('F3c two failed lines of an earlier head (engine throws) block it; the failed lines carry the key alreadyRun reads', async () => {
+  // Breaks when: a failed line has another head or engineSha than its run, so the "one more try" rule never closes.
+  const early = H('e');
+  const w = world({ pulls: [pullOf(7, { band: 'HIGH', result: 'throw' })], shas: { eeeeeee: early }, commitPulls: { [early]: [7] } });
+  w.pulls[0].draft = true; // only the earlier head runs
+  put(w.cliDir, '2026-11-10-pre-pr-cr-eeeeeee.txt', cliStream(['major']));
+  for (let i = 0; i < 3; i += 1) assert.equal(await sweep(w), i < 2 ? SWEEP_EXIT.FAILED : SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.equal(stubCalls().filter((c) => c.pullHead === early).length, 2);
+  assert.equal(reportOf(w).skipped.alreadyRun, 1);
+});
+
+test('F3d the append of the list line fails after a void run: the error is logged and the sweep still exits 4', async () => {
+  // Breaks when: an I/O error on the list file swallows the void stop.
+  const w = world({ pulls: [pullOf(2, { band: 'MID', result: 'void' }), pullOf(3, { band: 'MID' })] });
+  const appendFile = (file, text) => {
+    if (String(file).endsWith('sweep-runs.jsonl')) throw Object.assign(new Error('ENOSPC: no space left'), { code: 'ENOSPC' });
+    return appendFileSync(file, text);
+  };
+  assert.equal(await sweep(w, [], { appendFile }), SWEEP_EXIT.VOID, w.logs.join('\n'));
+  assert.equal(stubCalls().length, 1);
+  assert.ok(w.logs.some((l) => /list line/.test(l) && /ENOSPC/.test(l)), w.logs.join('\n'));
+});
+
+// ---------- F4 the pinned copy is proved by blob before each run ----------
+
+const REVIEWER_FILE = 'scripts/github/cursor-review.mjs';
+
+test('F4 a fresh extract proves clean: every reviewer-set file, review-router.mjs and the config have their blob at the SHA', async () => {
+  // Breaks when: the extract changes bytes (line ends) or the proof reads the wrong list.
+  const { repo, prHead, sha } = repoWithHeads();
+  const { w, over } = pinnedWorld(repo, [pullOf(1, { band: 'HIGH', head: prHead })]);
+  assert.equal(await sweep(w, ['--engine-sha', sha, '--frozen-sha', sha], over), SWEEP_EXIT.OK, w.logs.join('\n'));
+  const dir = path.join(w.stateRoot, 'engine', sha);
+  assert.equal(proveCopy({ dir, sha, git: repo.git, root: repo.dir, computeVersions: realComputeVersions }), null);
+  writeFileSync(path.join(dir, ...REVIEWER_FILE.split('/')), '// tampered\n');
+  assert.match(proveCopy({ dir, sha, git: repo.git, root: repo.dir, computeVersions: realComputeVersions }), /cursor-review\.mjs differs/);
+});
+
+/** Two sweeps: the first is clean, then `spoil(copyDir)` changes the copy, then the second sweep must not start the engine. */
+async function spoiledSecondSweep(spoil) {
+  const { repo, prHead, sha } = repoWithHeads();
+  const { w, over } = pinnedWorld(repo, [pullOf(1, { band: 'HIGH', head: prHead })]);
+  const argv = ['--engine-sha', sha, '--frozen-sha', sha];
+  assert.equal(await sweep(w, argv, over), SWEEP_EXIT.OK, w.logs.join('\n'));
+  spoil(path.join(w.stateRoot, 'engine', sha));
+  w.pulls = [pullOf(2, { band: 'HIGH', head: prHead, ref: 'feat/two' })];
+  w.logs.length = 0;
+  const code = await sweep(w, argv, over);
+  return { w, code };
+}
+
+test('F4b a copy with one changed reviewer-set file: one error line, the engine is not started from it, no new list line, exit 1', async () => {
+  // Breaks when: the copy is checked only for its engine file, or the run starts from a changed copy.
+  const { w, code } = await spoiledSecondSweep((dir) => appendFileSync(path.join(dir, ...REVIEWER_FILE.split('/')), '// one more line\n'));
+  assert.equal(code, SWEEP_EXIT.FAILED, w.logs.join('\n'));
+  assert.equal(stubCalls().filter((c) => c.opts.pr === 2).length, 0);
+  assert.deepEqual(jsonl(listFile(w)).map((r) => r.pr), [1]);
+  assert.equal(w.logs.filter((l) => /engine copy/.test(l) && /cursor-review\.mjs differs/.test(l)).length, 1, w.logs.join('\n'));
+});
+
+test('F4c a copy with one reviewer-set file deleted (the engine file still there): the same refusal', async () => {
+  // Breaks when: a partial copy passes because the engine file exists.
+  const { w, code } = await spoiledSecondSweep((dir) => rmSync(path.join(dir, 'scripts', 'github', 'review-filter.mjs')));
+  assert.equal(code, SWEEP_EXIT.FAILED, w.logs.join('\n'));
+  assert.equal(stubCalls().filter((c) => c.opts.pr === 2).length, 0);
+  assert.equal(w.logs.filter((l) => /engine copy/.test(l) && /review-filter\.mjs is missing/.test(l)).length, 1, w.logs.join('\n'));
+});
+
+test('F4d the config or review-router.mjs changed in the copy: the same refusal', async () => {
+  // Breaks when: the proof reads the reviewer set only.
+  for (const rel of ['review-router.config.json', 'scripts/github/review-router.mjs']) {
+    const { w, code } = await spoiledSecondSweep((dir) => appendFileSync(path.join(dir, ...rel.split('/')), '\n'));
+    assert.equal(code, SWEEP_EXIT.FAILED, rel);
+    assert.equal(stubCalls().filter((c) => c.opts.pr === 2).length, 0, rel);
+  }
+});
+
+test('F4e the copy changes during a run: that line is not counted (copyChanged), and the next run of the sweep does not start', async () => {
+  // Breaks when: the after-run check looks only for the engine file.
+  const { repo, prHead, sha } = repoWithHeads();
+  const { w, over } = pinnedWorld(repo, [pullOf(1, { band: 'HIGH', head: prHead }), pullOf(2, { band: 'HIGH', head: prHead, ref: 'feat/two' })]);
+  const copy = path.join(w.stateRoot, 'engine', sha);
+  const onRun = (opts) => { if (opts.pr === 1) appendFileSync(path.join(copy, ...REVIEWER_FILE.split('/')), '// during the run\n'); };
+  assert.equal(await sweep(w, ['--engine-sha', sha, '--frozen-sha', sha], { ...over, engineDeps: { onRun } }), SWEEP_EXIT.FAILED);
+  const rows = jsonl(listFile(w));
+  assert.deepEqual(rows.map((r) => r.pr), [1]);
+  assert.equal(rows[0].counted, false);
+  assert.equal(rows[0].copyChanged, true);
+  assert.match(rows[0].reason, /changed/);
+  assert.deepEqual(stubCalls().map((c) => c.opts.pr), [1]);
+});
+
+// ---------- F5 strict open-PR checks ----------
+
+test('F5 an open pull whose number is not an integer or whose head is not 40 hex is skipped and counted (badPull), never run', async () => {
+  // Breaks when: a bad number or head reaches the engine or a path.
+  const bad = [pullOf(1, { band: 'HIGH' }), pullOf(2, { band: 'HIGH' }), pullOf(3, { band: 'HIGH' }), pullOf(4, { band: 'HIGH' })];
+  bad[0].number = '1';
+  bad[1].number = 2.5;
+  bad[2].head.sha = 'abc1234';
+  bad[3].head.sha = H('A');
+  const w = world({ pulls: [...bad, pullOf(5, { band: 'HIGH' })] });
+  assert.equal(await sweep(w), SWEEP_EXIT.OK, w.logs.join('\n'));
+  assert.deepEqual(stubCalls().map((c) => c.opts.pr), [5]);
+  assert.equal(reportOf(w).skipped.badPull, 4);
 });
