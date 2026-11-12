@@ -33,6 +33,7 @@ import {
 } from './lib/daemon-client.js';
 import { CONTEXT_DIR } from './shared/search-context-path.js';
 import { logGuardDecision } from './shared/guard-log.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 // Search context from smart-search-router
 interface SearchContext {
@@ -605,6 +606,14 @@ async function main() {
   const input: HookInput = JSON.parse(readStdin());
 
   if (input.tool_name !== 'Read') {
+    console.log('{}');
+    return;
+  }
+
+  // Under cursor-agent (the review engine) allow the Read: the review model must read the real
+  // file, and the engine is read-only. NOTE: 'preToolUse' is not in the helper's set (not proven),
+  // so for a real cursor-agent PreToolUse event this is a no-op until the probe proves the name.
+  if (isEngineHost(input)) {
     console.log('{}');
     return;
   }

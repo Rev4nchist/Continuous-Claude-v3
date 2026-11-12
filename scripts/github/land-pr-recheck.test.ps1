@@ -39,6 +39,14 @@ $env:CCV3_LAND_LOCK = Join-Path $work 'land.lock'; $env:CCV3_LAND_LOCK_LOG = Joi
 $sha = '0123456789abcdef0123456789abcdef01234567'
 $branch = 'fix/recheck-wiring'
 $prUrl = 'repos/Rev4nchist/Continuous-Claude-v3/pulls/7'
+# Stubs only: the -IgnoreReview branch also needs every required CI job green on the head and a read of their names. The names come from
+# review-status.mjs of this checkout, read once with the real node (this file holds no copy). The gh stub serves them green; the node stub answers the read.
+$reviewStatusUrl = ([Uri](Join-Path $PSScriptRoot 'review-status.mjs')).AbsoluteUri
+$requiredNamesJson = ('import(process.argv.at(-1)).then(m => console.log(JSON.stringify(m.REQUIRED_CHECK_RUNS)))' | & (Get-Command node -CommandType Application | Select-Object -First 1).Source --input-type=module - $reviewStatusUrl) -join ''
+$requiredNames = @($requiredNamesJson | ConvertFrom-Json)
+if ($requiredNames.Count -lt 1) { throw 'harness: could not read REQUIRED_CHECK_RUNS from review-status.mjs' }
+$greenRuns = @($requiredNames | ForEach-Object -Begin { $i = 100 } -Process { $i++; @{ id = $i; name = $_; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' }; details_url = "https://github.com/Rev4nchist/Continuous-Claude-v3/actions/runs/500/job/$i" } })
+$greenRunsSlurp = '[' + (@{ total_count = $greenRuns.Count; check_runs = $greenRuns } | ConvertTo-Json -Compress -Depth 6) + ']'
 
 function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$noneExit = 0, [string]$noneOut = '', [int]$gateExit = 0, [string]$enforce = '', [int]$landExit = 0, [string]$ownEnforce = '') {
   # A stub dir plus a throwaway repo with a bare remote `fork`, so a merge that goes through can finish.
@@ -65,6 +73,8 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
   # decisions.enforce lives in review-router.config.json of the repo the script lands from (-RepoPath). '' writes no config file.
   if ($enforce) { Set-Content -LiteralPath (Join-Path $repo 'review-router.config.json') -Value ('{ "decisions": { "enforce": ' + $enforce + ' } }') }
   Set-Content -LiteralPath (Join-Path $stub 'gate-out.txt') -Value 'migration gate: stub answer'
+  Set-Content -LiteralPath (Join-Path $stub 'runs-slurp.json') -Value $greenRunsSlurp
+  Set-Content -LiteralPath (Join-Path $stub 'req-names.json') -Value $requiredNamesJson
   Set-Content -LiteralPath (Join-Path $stub 'gh.cmd') -Encoding ascii -Value @(
     '@echo off',
     "if `"%~1`"==`"api`" if `"%~2`"==`"$prUrl/merge`" goto merge",
@@ -74,7 +84,7 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
     'echo stub gh: unexpected arguments: %* 1>&2',
     'exit /b 1',
     ':runs',
-    'echo [{"total_count":0,"check_runs":[]}]',
+    'type "%~dp0runs-slurp.json"',
     'exit /b 0',
     ':status',
     'echo [{"state":"success","total_count":0,"statuses":[]}]',
@@ -95,8 +105,12 @@ function New-Case([string]$name, [int]$recheckExit, [string]$recheckOut, [int]$n
     'echo %~1| findstr /c:"land-none-check" >nul && goto ln',
     'echo %~1| findstr /c:"migration-gate" >nul && goto mg',
     'echo %~1| findstr /c:"land-decision" >nul && goto ld',
+    'echo %~1| findstr /c:"input-type" >nul && goto rq',
     'echo stub node: unexpected arguments: %* 1>&2',
     'exit /b 9',
+    ':rq',   # the read of the required CI job names (a stdin script): answer with the names read from review-status.mjs at the start of this test
+    'type "%~dp0req-names.json"',
+    'exit /b 0',
     ':rs',
     'type "%~dp0status.json"',
     'exit /b 0',
