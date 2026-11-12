@@ -355,11 +355,13 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 
 // src/lane-board-stop-gate.ts
 import * as fs5 from "fs";
+import * as path4 from "path";
 
 // src/shared/lane-board.ts
 import * as fs2 from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+var MAX_GITDIR_FILES = 100;
 function normalizeRoot(p) {
   let s = String(p ?? "").replace(/\\/g, "/");
   s = s.replace(/^\/\/[?.]\//, "");
@@ -370,6 +372,7 @@ function normalizeRoot(p) {
 }
 var isAbsoluteNorm = (s) => /^[a-z]:(\/|$)/.test(s) || s.startsWith("/");
 var slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+var isUnder = (child, root) => child === root || child.startsWith(root + "/");
 var registryFile = (opts, env) => opts.registryPath || env.LANE_REGISTRY_PATH || path.join(env.USERPROFILE || env.HOME || os.homedir(), ".claude", "project-registry.json");
 function loadRegistry(opts = {}) {
   const env = opts.env ?? process.env;
@@ -400,6 +403,75 @@ function loadRegistry(opts = {}) {
     });
   }
   return out;
+}
+function isHeadless(env = process.env) {
+  return String(env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk") && env.LANE_CONTEXT_HEADLESS !== "1";
+}
+function realNorm(p) {
+  try {
+    return normalizeRoot(fs2.realpathSync.native(p));
+  } catch {
+    return normalizeRoot(p);
+  }
+}
+function worktreeDirs(entry) {
+  const base = path.join(entry.path, ".git", "worktrees");
+  let names;
+  try {
+    names = fs2.readdirSync(base).sort().slice(0, MAX_GITDIR_FILES);
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const n of names) {
+    const file = path.join(base, n, "gitdir");
+    try {
+      let raw = (fs2.readFileSync(file, "utf8").split(/\r?\n/)[0] ?? "").trim();
+      if (!raw) continue;
+      if (!/^([a-zA-Z]:[\\/]|[\\/])/.test(raw)) raw = path.resolve(path.dirname(file), raw);
+      raw = raw.replace(/\\/g, "/");
+      if (!/\/\.git$/i.test(raw)) continue;
+      const dir = realNorm(raw.slice(0, -5));
+      if (dir && isAbsoluteNorm(dir)) found.push({ dir, file });
+    } catch {
+    }
+  }
+  return found;
+}
+function fromSelector(value, source, entries) {
+  const live = entries.filter((e) => e.status.toLowerCase() !== "inactive");
+  const hit = live.find((e) => e.key === value) ?? live.find((e) => e.board === value);
+  if (!hit) {
+    const keys = [...new Set(live.map((e) => e.key))];
+    throw new Error(`unknown board '${value}'; registered: ${keys.length ? keys.join(", ") : "(none)"}`);
+  }
+  return { key: hit.board, root: hit.root, source, via: hit.key };
+}
+function resolveBoard(cwd, opts = {}) {
+  const env = opts.env ?? process.env;
+  if (!opts.cli && !opts.headlessOk && isHeadless(env)) return null;
+  const entries = loadRegistry({ ...opts, env });
+  if (opts.cli) {
+    const flag = (opts.projectFlag ?? "").trim();
+    if (flag) return fromSelector(flag, "flag", entries);
+    const fromEnv = String(env.LANE_PROJECT ?? "").trim();
+    if (fromEnv) return fromSelector(fromEnv, "env", entries);
+  }
+  const live = entries.filter((e) => e.status.toLowerCase() !== "inactive" && e.root);
+  const here = realNorm(cwd);
+  let best = null;
+  for (const e of live) {
+    if (isUnder(here, e.root) && (!best || e.root.length > best.root.length)) best = e;
+  }
+  if (best) return { key: best.board, root: best.root, source: "registry", via: best.key };
+  let wt = null;
+  for (const e of live) {
+    for (const w of worktreeDirs(e)) {
+      if (isUnder(here, w.dir) && (!wt || w.dir.length > wt.dir.length)) wt = { entry: e, ...w };
+    }
+  }
+  if (wt) return { key: wt.entry.board, root: wt.entry.root, source: "worktree-gitdir", via: wt.file };
+  return null;
 }
 var DEFAULT_BOARD = "continuous-claude";
 function wmKey(sid, board) {
@@ -515,9 +587,9 @@ function staleLine(r, now) {
 }
 function shouldShow(marker, key, now) {
   if (!marker || marker.key !== key) return true;
-  const shown = Date.parse(marker.shown_at);
-  if (Number.isNaN(shown)) return true;
-  const age = now - shown;
+  const shown2 = Date.parse(marker.shown_at);
+  if (Number.isNaN(shown2)) return true;
+  const age = now - shown2;
   return age < 0 || age > SHOW_EVERY_MS;
 }
 function readSmall(file) {
@@ -638,44 +710,328 @@ function sweepStalePending(env = process.env, now = Date.now()) {
 
 // src/lane-board-stop-gate.ts
 var isObj3 = (v) => v !== null && typeof v === "object";
-function blockReason(board, env = process.env) {
+var isPlain = (v) => isObj3(v) && !Array.isArray(v);
+var ASK_VERBS = /* @__PURE__ */ new Set(["claim", "release", "done", "park"]);
+var VERB_CAP = 50;
+var ASK_WINDOW_MS = 10 * 6e4;
+var DAY_CAP = 150;
+var COVER_MARGIN_MS = 12e4;
+var BUDGET_MAX_AGE_MS = 48 * 36e5;
+var CLOCK_SKEW_MS = 6e4;
+var LOCK_WAIT_MS = 200;
+var LOCK_STEP_MS = 10;
+var LOCK_STALE_MS = 5e3;
+var RENAME_RETRIES = 3;
+var RENAME_WAIT_MS = 15;
+var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EBUSY", "EACCES"]);
+var PENDING_SHAPE = 2;
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var isUuid = (s) => UUID_RE.test(s);
+var budgetDir = (env = process.env) => path4.join(pendingDir(env), "budget");
+var budgetFile = (sid, env = process.env) => path4.join(budgetDir(env), `${sid}.json`);
+var utcDay = (now) => new Date(now).toISOString().slice(0, 10);
+var emptyBudgetView = () => ({ total: 0, limit: false, lastPublish: /* @__PURE__ */ new Map(), lastAsk: /* @__PURE__ */ new Map() });
+function holdsAskVerb(p) {
+  const verbs = p?.verbs;
+  return Array.isArray(verbs) && verbs.some((v) => ASK_VERBS.has(v));
+}
+var countOf = (n) => typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : 0;
+function stampsOf(v, now) {
+  if (!isPlain(v)) return [];
+  return Object.entries(v).filter(
+    (e) => typeof e[1] === "number" && Number.isFinite(e[1]) && e[1] <= now + CLOCK_SKEW_MS
+  );
+}
+function readBudgetFile(file) {
+  try {
+    if (fs5.statSync(file).size > MAX_BYTES) return null;
+    const d = JSON.parse(fs5.readFileSync(file, "utf8"));
+    return isPlain(d) ? d : null;
+  } catch {
+    return null;
+  }
+}
+function keepNewest(into, stamps) {
+  for (const [id, t] of stamps) {
+    if (t > (into.get(id) ?? -Infinity)) into.set(id, t);
+  }
+}
+function addToView(view, d, today, now) {
+  if (d.day === today) {
+    view.total += countOf(d.n);
+    view.limit = view.limit || d.limit === true;
+  }
+  keepNewest(view.lastPublish, stampsOf(d.pages, now));
+  keepNewest(view.lastAsk, stampsOf(d.asked, now));
+}
+function readBudgets(env = process.env, now = Date.now()) {
+  const view = emptyBudgetView();
+  try {
+    const dir = budgetDir(env);
+    const today = utcDay(now);
+    for (const name of fs5.readdirSync(dir)) {
+      const d = name.endsWith(".json") ? readBudgetFile(path4.join(dir, name)) : null;
+      if (d) addToView(view, d, today, now);
+    }
+  } catch {
+  }
+  return view;
+}
+function loadBudget(file, now) {
+  const d = readBudgetFile(file) ?? {};
+  const ahead = utcDay(now + CLOCK_SKEW_MS);
+  const day = d.day === ahead ? ahead : utcDay(now);
+  const sameDay = d.day === day;
+  return {
+    day,
+    n: sameDay ? countOf(d.n) : 0,
+    limit: sameDay && d.limit === true,
+    pages: Object.fromEntries(stampsOf(d.pages, now)),
+    asked: Object.fromEntries(stampsOf(d.asked, now))
+  };
+}
+var errCode = (err) => isObj3(err) ? err.code : void 0;
+function sleepMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+  }
+}
+function removeQuiet(file) {
+  try {
+    fs5.rmSync(file, { force: true, maxRetries: 3, retryDelay: LOCK_STEP_MS });
+  } catch {
+  }
+}
+function lockIsStale(lock) {
+  try {
+    return Date.now() - fs5.statSync(lock).mtimeMs > LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+function takeLock(lock) {
+  const end = Date.now() + LOCK_WAIT_MS;
+  for (; ; ) {
+    try {
+      fs5.writeFileSync(lock, String(process.pid), { flag: "wx" });
+      return true;
+    } catch (err) {
+      const code = String(errCode(err));
+      if (code !== "EEXIST" && !BUSY_CODES.has(code)) return false;
+    }
+    if (Date.now() >= end) return false;
+    if (lockIsStale(lock)) removeQuiet(lock);
+    else sleepMs(LOCK_STEP_MS);
+  }
+}
+function renameBusySafe(from, to) {
+  for (let retry = 0; ; retry++) {
+    try {
+      fs5.renameSync(from, to);
+      return;
+    } catch (err) {
+      if (retry >= RENAME_RETRIES || !BUSY_CODES.has(String(errCode(err)))) throw err;
+      sleepMs(RENAME_WAIT_MS);
+    }
+  }
+}
+function updateBudget(sid, env, now, change) {
+  if (!isUuid(sid)) return false;
+  const file = budgetFile(sid, env);
+  const lock = `${file}.lock`;
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs5.mkdirSync(path4.dirname(file), { recursive: true });
+  } catch {
+    return false;
+  }
+  if (!takeLock(lock)) return false;
+  try {
+    const b = loadBudget(file, now);
+    change(b);
+    fs5.writeFileSync(tmp, JSON.stringify(b));
+    renameBusySafe(tmp, file);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    removeQuiet(tmp);
+    removeQuiet(lock);
+  }
+}
+function removeIfOld(file, now) {
+  try {
+    const st = fs5.statSync(file);
+    if (st.isFile() && now - st.mtimeMs > BUDGET_MAX_AGE_MS) fs5.rmSync(file, { force: true });
+  } catch {
+  }
+}
+function sweepBudget(env = process.env, now = Date.now()) {
+  try {
+    const dir = budgetDir(env);
+    for (const name of fs5.readdirSync(dir)) {
+      if (/\.(json|tmp|lock)$/.test(name)) removeIfOld(path4.join(dir, name), now);
+    }
+  } catch {
+  }
+}
+function blockReason(board, env = process.env, foreign = false) {
   const a = boardArtifact(board, { env });
   if (!a) return "";
-  return `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. Other sessions update this page all day, so your held copy is old. In this order: 1. Read the live page with the Artifact tool, action read, url ${a.url}, without path (a read with path does not count). Do not open or paste the saved file.2. Run ${renderBoardCmd(board, env)}. 3. At once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). If the publish is refused, publish the same file again: the refusal counts as the read. Then finish your turn.`;
+  const why = foreign ? `Another session changed the lane DB and did not publish. The lane board page for board ${board} is out of date. ` : `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. `;
+  return why + `Other sessions update this page all day, so your held copy is old. In this order: 1. Read the live page with the Artifact tool, action read, url ${a.url}, without path (a read with path does not count). Do not open or paste the saved file. 2. Run ${renderBoardCmd(board, env)}. 3. At once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). If the publish is refused for any reason other than the daily publish limit, publish the same file again: the refusal counts as the read. If the refusal names the daily publish limit, do not publish again today. Then finish your turn.`;
 }
-function isHeadless(env) {
-  if (env.LANE_CONTEXT_HEADLESS === "1") return false;
-  return (env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
+var isSdk = (env) => (env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
+function isHeadless2(env) {
+  return env.LANE_CONTEXT_HEADLESS !== "1" && isSdk(env);
 }
-function decideStop(payload, env, entries) {
+function mayAsk(payload, env) {
+  if (!isObj3(payload) || payload.stop_hook_active === true || isHeadless2(env)) return false;
+  return typeof payload.session_id === "string" && payload.session_id !== "";
+}
+function askAtOf(p) {
+  return typeof p.askAt === "number" && Number.isFinite(p.askAt) ? p.askAt : void 0;
+}
+function changedAt(e) {
+  return askAtOf(e.pending) ?? e.mtimeMs ?? Infinity;
+}
+function shown(e, lastPublish) {
+  return lastPublish !== void 0 && changedAt(e) < lastPublish - COVER_MARGIN_MS;
+}
+function ownAsks(p) {
+  if (p.v === PENDING_SHAPE) return holdsAskVerb(p) || askAtOf(p) !== void 0;
+  return !Array.isArray(p.verbs) || p.verbs.length >= VERB_CAP || holdsAskVerb(p);
+}
+function foreignAsks(e, lastAsk, now) {
+  const verbs = e.pending.verbs;
+  if (!Array.isArray(verbs) || !(holdsAskVerb(e.pending) || askAtOf(e.pending) !== void 0)) return false;
+  const at = changedAt(e);
+  return now - at >= ASK_WINDOW_MS && at > (lastAsk ?? -Infinity);
+}
+function findCandidates(own, foreign, env, view, now) {
+  const pages = /* @__PURE__ */ new Map();
+  const pageOf = (board) => {
+    if (!pages.has(board)) pages.set(board, boardArtifact(board, { env }));
+    return pages.get(board) ?? null;
+  };
+  const pick2 = (list, isForeign) => {
+    const out = [];
+    for (const e of list) {
+      const page = pageOf(e.board);
+      if (!page || e.pending.stopBlocked === true || shown(e, view.lastPublish.get(page.id))) continue;
+      const asks = isForeign ? foreignAsks(e, view.lastAsk.get(page.id), now) : ownAsks(e.pending);
+      if (asks) out.push({ board: e.board, pageId: page.id, foreign: isForeign });
+    }
+    return out;
+  };
+  return [...pick2(own, false), ...pick2(foreign, true).slice(0, 1)];
+}
+function lastTouch(view, pageId) {
+  return Math.max(view.lastPublish.get(pageId) ?? -Infinity, view.lastAsk.get(pageId) ?? -Infinity);
+}
+function decideStop(payload, env, entries, ctx = {}) {
   const approve = { action: "approve" };
-  if (!isObj3(payload)) return approve;
-  if (payload.stop_hook_active === true) return approve;
-  if (isHeadless(env)) return approve;
-  if (typeof payload.session_id !== "string" || !payload.session_id) return approve;
-  for (const e of entries) {
-    if (e.pending.stopBlocked === true) continue;
-    if (!boardArtifact(e.board, { env })) continue;
-    return { action: "block", reason: blockReason(e.board, env), board: e.board };
-  }
-  return approve;
+  if (!mayAsk(payload, env)) return approve;
+  const now = ctx.now ?? Date.now();
+  const view = ctx.budget ?? emptyBudgetView();
+  const candidates = findCandidates(entries, ctx.foreign ?? [], env, view, now);
+  if (!candidates.length || view.limit || view.total >= DAY_CAP) return approve;
+  const due = candidates.find((c) => now - lastTouch(view, c.pageId) >= ASK_WINDOW_MS);
+  if (!due) return approve;
+  return { action: "block", reason: blockReason(due.board, env, due.foreign), board: due.board, pageId: due.pageId, foreign: due.foreign };
 }
 var stateDir = pendingDir;
 var stateFile = pendingFile;
+function mtimeOf(file) {
+  try {
+    return fs5.statSync(file).mtimeMs;
+  } catch {
+    return void 0;
+  }
+}
+function cwdBoard(payload, env) {
+  if (typeof payload.cwd !== "string" || !payload.cwd) return null;
+  try {
+    return resolveBoard(payload.cwd, { headlessOk: true, env })?.key ?? null;
+  } catch {
+    return null;
+  }
+}
+function foreignEntry(file, base) {
+  const pending = readPending(file);
+  const mtimeMs = mtimeOf(file);
+  if (!pending || mtimeMs === void 0) return null;
+  const at = base.indexOf("@");
+  const named = at >= 0 ? base.slice(at + 1) : DEFAULT_BOARD;
+  return { board: typeof pending.board === "string" && pending.board ? pending.board : named, pending, mtimeMs };
+}
+function foreignPending(sid, board, env = process.env) {
+  const dir = pendingDir(env);
+  const stem = pendingKey(sid, DEFAULT_BOARD);
+  let names;
+  try {
+    names = fs5.readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    const base = name.slice(0, -5);
+    if (!name.endsWith(".json") || name.startsWith(".") || base === stem || base.startsWith(`${stem}@`)) continue;
+    const e = foreignEntry(path4.join(dir, name), base);
+    if (e && e.board === board) out.push(e);
+  }
+  return out;
+}
+function foreignFor(payload, sid, env) {
+  if (!isUuid(sid) || isSdk(env)) return [];
+  const board = cwdBoard(payload, env);
+  return board ? foreignPending(sid, board, env) : [];
+}
+function recordAsk(d, sid, own, env, now) {
+  const uuid = isUuid(sid);
+  const stamps = uuid && !isSdk(env);
+  let before;
+  if (stamps && !updateBudget(sid, env, now, (b) => {
+    before = b.asked[d.pageId];
+    b.asked[d.pageId] = now;
+  })) return false;
+  if (d.foreign) return uuid;
+  const unstamp = () => {
+    if (stamps) {
+      updateBudget(sid, env, now, (b) => {
+        if (b.asked[d.pageId] !== now) return;
+        if (before === void 0) delete b.asked[d.pageId];
+        else b.asked[d.pageId] = before;
+      });
+    }
+    return false;
+  };
+  const hit = own.find((e) => e.board === d.board);
+  if (!hit) return unstamp();
+  try {
+    const fresh = readPending(hit.file);
+    const was = hit.pending;
+    if (!fresh || fresh.askAt !== was.askAt || fresh.verbs?.length !== was.verbs?.length) return unstamp();
+    fs5.writeFileSync(hit.file, JSON.stringify({ ...fresh, stopBlocked: true }));
+    return true;
+  } catch {
+    return unstamp();
+  }
+}
 function stopGate(payload, env = process.env, now = Date.now()) {
   sweepStalePending(env, now);
-  const sid = isObj3(payload) && typeof payload.session_id === "string" ? payload.session_id : "";
-  const entries = sid ? listPending(sid, env) : [];
-  const d = decideStop(payload, env, entries.map(({ board, pending }) => ({ board, pending })));
-  if (d.action !== "block") return { output: null };
-  const hit = entries.find((e) => e.board === d.board);
-  try {
-    fs5.writeFileSync(hit.file, JSON.stringify({ ...hit?.pending, stopBlocked: true }));
-  } catch {
-    return { output: null };
-  }
-  const headless = (env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
-  const line = headless ? "" : fleetopsLine(env, now);
+  if (!mayAsk(payload, env)) return { output: null };
+  const sid = payload.session_id;
+  sweepBudget(env, now);
+  const own = listPending(sid, env);
+  const foreign = foreignFor(payload, sid, env);
+  const budget = own.length || foreign.length ? readBudgets(env, now) : emptyBudgetView();
+  const entries = own.map(({ file, board, pending }) => ({ board, pending, mtimeMs: mtimeOf(file) }));
+  const d = decideStop(payload, env, entries, { now, budget, foreign });
+  if (d.action !== "block" || !recordAsk(d, sid, own, env, now)) return { output: null };
+  const line = isSdk(env) ? "" : fleetopsLine(env, now);
   return { output: { decision: "block", reason: line ? `${d.reason}
 ${line}` : d.reason } };
 }
@@ -693,17 +1049,35 @@ async function main() {
   const { output } = stopGate(JSON.parse(input));
   if (output) console.log(JSON.stringify(output));
 }
-if (!process.env.VITEST) {
+if (!process.env.VITEST && /(^|[\\/])lane-board-stop-gate\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
   main().catch(() => {
   });
 }
 export {
+  ASK_VERBS,
+  ASK_WINDOW_MS,
+  BUDGET_MAX_AGE_MS,
+  CLOCK_SKEW_MS,
+  COVER_MARGIN_MS,
+  DAY_CAP,
   DEFAULT_BOARD,
+  PENDING_SHAPE,
+  VERB_CAP,
   blockReason,
+  budgetDir,
+  budgetFile,
   decideStop,
-  isHeadless,
+  emptyBudgetView,
+  foreignPending,
+  holdsAskVerb,
+  isHeadless2 as isHeadless,
+  isUuid,
   main,
+  readBudgets,
   stateDir,
   stateFile,
-  stopGate
+  stopGate,
+  sweepBudget,
+  updateBudget,
+  utcDay
 };
