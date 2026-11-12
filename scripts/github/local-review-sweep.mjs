@@ -20,11 +20,13 @@
  *   Critical: that earlier head runs with the gh answer patched to it (as engine-run.mjs does), withholdBody and fresh, never evalRun (so its
  *   ledger ref is branch-<slug>: inside the live cap and the per-branch cap). "Already run" is keyed on head + engineSha (null unpinned): an ok
  *   or a void line blocks it, one failed line allows one more try, two block.
- *   An OPEN head is not checked against the list (F7): it is called again in every sweep, without fresh. The engine then skips it itself,
- *   with no ledger start, when a complete record (status ok, coverage complete) exists at that branch and head (resolveRange 'done',
- *   local-review.mjs:353-360, :598); a pinned copy that is trusted (equal to fork/main) counts only trusted records there. An open head whose
- *   records are all failed or incomplete therefore runs again in every sweep and spends a start each time, up to the engine's per-branch cap
- *   (per_branch_cap, 8 per branch in 7 days). A pull open with no record yet runs once, then skips. The PR of a CLI head: by commit, then (no commit hit) by the
+ *   A void line blocks its head for good: a later run for that engine needs another head.
+ *   An OPEN head is checked against the list with the same rule and key (F7): at most two runs per head and engine, so an open head whose
+ *   runs fail does not spend a start in every sweep. The key has no kind: a line of an earlier-head run blocks the same head when it is the
+ *   open head. An ok line blocks also when its record is incomplete. An open head with no list line is called without fresh; the engine
+ *   then skips it itself, with no ledger start and no list line, when a complete record (status ok, coverage complete) exists at that
+ *   branch and head (resolveRange 'done', local-review.mjs:353-360, :598). The branch name of an open pull is shape-checked (N3,
+ *   branchShapeOk); a bad one is counted as badPull. The PR of a CLI head: by commit, then (no commit hit) by the
  *   worktree branch; exactly one candidate, on the worktree branch when one is known, else ambiguousPr or noPr. .failed.txt files are counted.
  * Order. CRITICAL, then HIGH, then MID and ELEVATED by the --band-counts share (pushes per risk band over 4 weeks; DEFAULT_BAND_COUNTS without
  *   the flag). LOW never runs. laneState() is injected (tests, a later caller). The command line has no reader of the lane DB, so it passes
@@ -509,10 +511,35 @@ async function openTargets(ctx) {
       ctx.log(`local-review-sweep: an open pull with number ${clip(JSON.stringify(p?.number), 40)} and head ${clip(JSON.stringify(p?.head?.sha), 60)} is skipped`);
       continue;
     }
+    if (!branchShapeOk(p.head.ref)) {
+      ctx.report.skipped.badPull += 1;
+      ctx.log(`local-review-sweep: open pull ${p.number} has a branch name with a bad shape (${clip(JSON.stringify(p.head.ref) ?? 'undefined', 60)}): skipped`);
+      continue;
+    }
     if (p.draft === true) { ctx.report.skipped.draft += 1; continue; }
-    out.push({ kind: 'open-head', pr: p.number, head: p.head?.sha, branch: p.head?.ref ?? null });
+    out.push({ kind: 'open-head', pr: p.number, head: p.head.sha, branch: p.head.ref });
   }
   return out;
+}
+
+/**
+ * The shape of the branch name of an open pull (N3): it goes into a record path, gh calls and the ledger ref. 1 to 200 characters of
+ * letters, digits, dot, underscore, slash and hyphen; the first one a letter or a digit; no "..", no "//", no "/" or ".lock" at the end.
+ */
+function branchShapeOk(ref) {
+  return typeof ref === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(ref)
+    && !ref.includes('..') && !ref.includes('//') && !ref.endsWith('/') && !ref.endsWith('.lock');
+}
+
+/** Open heads that the run list does not block (F7): the same rule and key as an earlier head, see alreadyRun. */
+function openNotRun(ctx, eng, open) {
+  const rows = readList(ctx);
+  const engineSha = eng.pinned ? ctx.args.engineSha : null;
+  return open.filter((t) => {
+    if (!alreadyRun(rows, t.head, engineSha)) return true;
+    ctx.report.skipped.alreadyRun += 1;
+    return false;
+  });
 }
 
 /**
@@ -932,7 +959,8 @@ function makeCtx(args, deps) {
 /** Plans the targets: open heads and earlier heads, their risk band and facts, in run order. */
 async function plan(ctx, eng, cliHeads, bandCounts) {
   const open = await openTargets(ctx);
-  const all = [...open, ...earlierTargets(ctx, eng, cliHeads, open)];
+  // earlierTargets gets every open head, also a blocked one: a head that is open is never an earlier head.
+  const all = [...openNotRun(ctx, eng, open), ...earlierTargets(ctx, eng, cliHeads, open)];
   // The pick options (--only-pr, --only-kind): a filter on the planned list before any band read and any run. The dry run shows the result.
   const targets = all.filter((t) => picked(ctx.args, t));
   ctx.report.skipped.filtered += all.length - targets.length;
