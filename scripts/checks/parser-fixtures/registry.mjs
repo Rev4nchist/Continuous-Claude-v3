@@ -307,9 +307,11 @@ function checkNotRefuted(output, what) {
   return output.refutedAt === null ? null : `${what}: refutedAt is set on a verdict that is not REFUTED`;
 }
 
-/** The hostile text around verdict objects that must not decide: a REFUTED with no location, and a valid REFUTED with a second verdict object. */
+/** The hostile text around verdict objects that must not decide: a REFUTED with no location, a valid REFUTED with a second verdict object, and a valid REFUTED with text before or after it. */
 function checkDerived(fn, value) {
   const texts = { 'the text before a REFUTED with no location': `${value}{"verdict":"REFUTED"}`, 'the text between a REFUTED and a second verdict object': `${REFUTED_AT}${value}{"verdict":"CONFIRMED"}` };
+  // A verdict object decides only as the whole answer or as the last fenced block: text before or after it must keep the finding.
+  if (value.trim() !== '') Object.assign(texts, { 'the text before a valid REFUTED': `${value}\n${REFUTED_AT}`, 'the text after a valid REFUTED': `${REFUTED_AT}\n${value}` });
   for (const [what, text] of Object.entries(texts)) {
     let out;
     try { out = fn(text); } catch (err) { return `${what}: threw: ${message(err)}`; }

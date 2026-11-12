@@ -219,7 +219,8 @@ test('v2: v1 stays byte-identical, so promptSha256, the text hash, the text leng
 
 test('v2: the default call and promptVersion "v1" give the same promptText, argv, promptSha256 and promptVersion (breaks if the default moves to v2)', () => {
   assert.equal(PROMPT_VERSION, 'v1');
-  assert.deepEqual(P.PROMPT_VERSIONS, ['v1', 'v2']);
+  assert.deepEqual([...P.PROMPT_VERSIONS], ['v1', 'v2']);
+  assert.ok(Object.isFrozen(P.PROMPT_VERSIONS), 'the list is frozen: a caller cannot add a version');
   for (const mode of MODES) {
     const input = { mode, files: ['src/a.mjs'], agentFiles: ['pkg/CLAUDE.md'] };
     assert.deepEqual(P.buildEnginePrompt({ ...input, promptVersion: 'v1' }), buildEnginePrompt(input), mode);

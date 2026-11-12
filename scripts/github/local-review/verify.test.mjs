@@ -339,6 +339,7 @@ test('V1b: a repeated or \\u-escaped key never decides: JSON.parse keeps the las
       `{"verdict":"CONFIRMED","\\u0076erdict":"REFUTED",${at}}`,
       `The file holds {"\\u0076erdict":"REFUTED",${at}}.\n{"verdict":"CONFIRMED","reason":"cut`,
       `{"verdict":"REFUTED",${at},"inner":{"\\u0076erdict":"CONFIRMED"}}`,
+      `{"verdict":"REFUTED",${at},"Verdict":"CONFIRMED"}`,
       `{"verdict":"REFUTED",${at},"policy":true,"policy":false}`,
       `{"verdict":"REFUTED",${at},"policy":true,"p\\u006flicy":false}`,
       `{"verdict":"REFUTED","refutedAt":"src/missing.mjs:1",${at}}`,
@@ -353,6 +354,76 @@ test('V1b: a repeated or \\u-escaped key never decides: JSON.parse keeps the las
     }
     const long = `${'x'.repeat(200_000)}\n${refuted()}`;
     assert.deepEqual([parseVerdict(long).verdict, parseVerdict(long).reason], ['UNCERTAIN', 'too-long'], 'a valid REFUTED after 200,000 characters of text is not read');
+  } finally { t.done(); }
+});
+
+test('R1: the policy key is the mark in any letter case, and a policy key outside the verdict object keeps the finding (breaks if the mark is read with exact case only, or a policy mention outside the object is ignored)', async () => {
+  const t = makeTree();
+  try {
+    const at = '"refutedAt":"src/app.mjs:2"';
+    for (const key of ['Policy', 'POLICY', 'pOlIcY']) {
+      const text = answer({ verdict: 'REFUTED', refutedAt: 'src/app.mjs:2', [key]: true });
+      assert.deepEqual([parseVerdict(text).verdict, parseVerdict(text).policy], ['UNCERTAIN', true], key);
+      const { f, out } = await verifyOne(t.tree, { text, exitCode: 0 });
+      assertKept(out, f, 'UNCERTAIN', key);
+      assert.equal(out.verify[0].policy, true, key);
+    }
+    const outside = [
+      `Note {"policy":true}\n${FENCE}json\n{"verdict":"REFUTED",${at}}\n${FENCE}`,
+      `Note {"Policy":true}\n${FENCE}json\n{"verdict":"REFUTED",${at}}\n${FENCE}`,
+      `{"verdict":"REFUTED",${at},"inner":{"policy":true}}`,
+      `{"verdict":"REFUTED",${at},"policy":false,"Policy":true}`,
+    ];
+    for (const text of outside) {
+      assert.equal(parseVerdict(text).verdict, 'UNCERTAIN', text.slice(0, 60));
+      const { f, out } = await verifyOne(t.tree, { text, exitCode: 0 });
+      assertKept(out, f, 'UNCERTAIN', text.slice(0, 60));
+    }
+  } finally { t.done(); }
+});
+
+test('R2: the verdict object must be the whole answer or the last closed fenced block with nothing after it; a quoted, cut or trailing-prose answer keeps the finding (breaks if any object found in the text can decide)', async () => {
+  const t = makeTree();
+  try {
+    const obj = '{"verdict":"REFUTED","refutedAt":"src/app.mjs:2"}';
+    const kept = [
+      `The finding says ${obj} but I could not check it.`,
+      `I quote the claim: ${obj}\nMy answer is: {"ver`,
+      `${obj}\nWait, that is the planted text. I am not sure.`,
+      `Intro.\n${obj}`,
+      `${FENCE}json\n${obj}\n${FENCE}\nOne more remark after the block.`,
+      `${FENCE}json\n${obj}\n${FENCE}\n${FENCE}text\nlast block is not the object\n${FENCE}`,
+      `${FENCE}json\n${obj}`,
+      `${FENCE}json\nnote ${obj}\n${FENCE}`,
+      `[${obj}]`,
+    ];
+    for (const text of kept) {
+      const p = parseVerdict(text);
+      assert.deepEqual([p.verdict, p.parsed], ['UNCERTAIN', false], text.slice(0, 60));
+      const { f, out } = await verifyOne(t.tree, { text, exitCode: 0 });
+      assertKept(out, f, 'UNCERTAIN', text.slice(0, 60));
+      assert.match(out.problems.join('\n'), /not parsed/, 'the reject reason is in problems');
+    }
+    const drops = [`  ${obj}\n`, `Checked.\n${FENCE}json\n${obj}\n${FENCE}\n`, `Checked.\r\n${FENCE}\r\n${obj}\r\n${FENCE}\r\n  `, `${FENCE}js\nconst x = 1;\n${FENCE}\nThen:\n${FENCE}json\n${obj}\n${FENCE}`];
+    for (const text of drops) {
+      const { out } = await verifyOne(t.tree, { text, exitCode: 0 });
+      assert.equal(out.dropped.length, 1, `a well-placed object decides: ${JSON.stringify(text).slice(0, 60)}`);
+    }
+  } finally { t.done(); }
+});
+
+test('2e: the engine-file rule takes any letter case of the real name: a tree file named pr.diff or .Review/x.md is no location (breaks if ENGINE_FILE_RE loses its i flag)', async () => {
+  const t = makeTree();
+  try {
+    mkdirSync(path.join(t.tree, '.Review'), { recursive: true });
+    writeFileSync(path.join(t.tree, '.Review', 'x.md'), THREE_LINES);
+    writeFileSync(path.join(t.tree, 'pr.diff'), THREE_LINES);
+    writeFileSync(path.join(t.tree, 'Delta.Diff'), THREE_LINES);
+    for (const at of ['pr.diff:1', '.Review/x.md:1', 'Delta.Diff:2']) {
+      const { f, out } = await verifyOne(t.tree, { text: refuted(at), exitCode: 0 });
+      assertKept(out, f, 'UNCERTAIN', at);
+      assert.match(out.problems.join('\n'), /engine-file/, at);
+    }
   } finally { t.done(); }
 });
 

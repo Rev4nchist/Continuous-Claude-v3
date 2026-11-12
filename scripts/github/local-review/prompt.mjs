@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 
 export const PROMPT_VERSION = 'v1';
 /** The versions buildEnginePrompt builds. PROMPT_VERSION (v1, the frozen engine prompt) stays the default; v2 is one arm of an A/B test. */
-export const PROMPT_VERSIONS = ['v1', 'v2'];
+export const PROMPT_VERSIONS = Object.freeze(['v1', 'v2']);
 export const PROMPT_PATH = '.review/PROMPT.md';
 export const MAX_PROMPT_CHARS = 24000;
 const MAX_LISTED = 100;

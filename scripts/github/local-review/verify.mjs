@@ -13,20 +13,25 @@
 // Node built-ins only: no repo module, so its import closure stays empty in ENGINE_FILES.
 //
 // Verdict rules:
-//   - The answer must hold exactly one verdict object. None, two (also two equal ones) or a nested one: UNCERTAIN, parsed: false.
-//     The keys are counted in the whole answer after \uXXXX escapes are decoded: "verdict" one time, "policy" and "refutedAt" at
-//     most one time. So a repeated key (JSON.parse keeps the last one), an escaped key and a quoted or cut object give UNCERTAIN.
-//     An object inside an array counts as top-level.
+//   - The verdict object must be the whole answer, or the content of the last closed fenced block with nothing but white space
+//     after it. An object that the answer only quotes, an answer that is cut off and an answer with text after the object give
+//     UNCERTAIN, parsed: false. An array is no verdict object.
+//   - The keys "verdict", "policy" and "refutedAt" are counted in the whole answer, in any letter case, after \uXXXX escapes are
+//     decoded. "verdict" must be there one time. The others must be there as many times as the verdict object has that key (0 or 1).
+//     So a repeated key (JSON.parse keeps the last one), an escaped key, a nested key and a key outside the object give UNCERTAIN.
 //   - REFUTED needs refutedAt "path:line". The path is relative, with no drive letter, no leading slash, no ".." and no empty segment.
 //     The real path of the file (symlinks and junctions resolved) is inside the real path of reviewDir. The line is a positive
 //     integer, not above the line count (lines end at LF, as in git). A file the engine writes into the tree (.review/, PR.diff,
 //     DELTA.diff) or a file above 8 MiB is no location. Else: UNCERTAIN. refutedAt and evidence give the real path, not the model's text.
 //   - The policy mark (a documented deliberate choice) gives UNCERTAIN with policy: true, also when the model wrote REFUTED.
+//     The key is the mark in any letter case.
 //   - A throw of call, an exit code other than 0 (a timeout too) or an empty text: UNCERTAIN with unverified: true.
 //   - Only the text that call returned is parsed. No field of a finding is ever read as a verdict.
 //
 // KNOWN LIMIT: an existing path:line is all that a REFUTED needs. Text in a pull request can try to steer the verifier model to drop
 // a real Major. The library is not called on main. re-verifier-replay measures refuted real Majors, and DP2.2 is the live choice.
+// For the caller: call must always settle. This file has no timeout of its own. Nothing may write to the tree between the calls:
+// the location check reads the real path, the file type and the text one after the other.
 // KNOWN LIMIT for the caller: the model runs in the tree during call. If the backend lets it write, it can make a file and then cite
 // it. This file cannot see that. The caller binds a backend that cannot write, or checks the cited file against a list made before.
 import { readFileSync, realpathSync, statSync } from 'node:fs';
@@ -40,8 +45,10 @@ const FINDING_FIELDS = ['file', 'startLine', 'endLine', 'severity', 'category', 
 const MAX_TEXT = 200_000;
 const MAX_SUBJECTS = 20;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
-const VERDICT_KEY = /"verdict"\s*:/gi;
-const ONCE_KEYS = [/"policy"\s*:/gi, /"refutedAt"\s*:/gi];
+const COUNTED_KEYS = ['verdict', 'policy', 'refutedAt'];
+const KEY_MENTION = Object.fromEntries(COUNTED_KEYS.map((k) => [k, new RegExp(`"${k}"\\s*:`, 'gi')]));
+const FENCE_LINE = /^\s*`{3,}\s*[\w-]*\s*$/;
+const FENCE_CLOSE = /^\s*`{3,}\s*$/;
 const UNICODE_ESCAPE = /\\u([0-9a-fA-F]{4})/g;
 const LINE_RE = /^[1-9][0-9]{0,8}$/;
 // Files the engine writes into the tree (the rule of review-filter.mjs, with any letter case). They hold the prompt and the diff,
@@ -96,47 +103,39 @@ export function buildVerifyPrompt(finding, { commitSubjects } = {}) {
 const result = (verdict, reason, over = {}) => ({ verdict, refutedAt: null, policy: false, parsed: true, reason, ...over });
 const unparsed = (reason) => result('UNCERTAIN', reason, { parsed: false });
 
-/** One character inside a JSON string: an escape, the closing quote or plain text. */
-function stringStep(s, ch) {
-  if (s.escaped) s.escaped = false;
-  else if (ch === '\\') s.escaped = true;
-  else if (ch === '"') s.inString = false;
+/** The content of the last fenced block, when that block is closed and its closing fence is the last line. Else null. */
+function lastFencedBlock(trimmed) {
+  const lines = trimmed.split(/\r?\n/);
+  let open = -1;
+  let last = null;
+  lines.forEach((line, i) => {
+    if (open === -1 && FENCE_LINE.test(line)) open = i;
+    else if (open !== -1 && FENCE_CLOSE.test(line)) { last = { from: open + 1, to: i }; open = -1; }
+  });
+  if (open !== -1 || last === null || last.to !== lines.length - 1) return null;
+  return lines.slice(last.from, last.to).join('\n').trim();
 }
 
-/** The text of every top-level {...} span, in one linear pass. Strings are tracked only inside a span. */
-function topLevelSpans(text) {
-  const spans = [];
-  const s = { depth: 0, start: -1, inString: false, escaped: false };
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (s.inString) stringStep(s, ch);
-    else if (ch === '"' && s.depth > 0) s.inString = true;
-    else if (ch === '{') openBrace(s, i);
-    else if (ch === '}' && s.depth > 0) closeBrace(s, i, text, spans);
-  }
-  return spans;
-}
-
-function openBrace(s, i) {
-  if (s.depth === 0) s.start = i;
-  s.depth += 1;
-}
-
-function closeBrace(s, i, text, spans) {
-  s.depth -= 1;
-  if (s.depth === 0) spans.push(text.slice(s.start, i + 1));
+/** The one place a verdict object may sit: the whole trimmed answer, or the last closed fenced block at the end. Else null. */
+function verdictObject(text) {
+  const trimmed = text.trim();
+  const payload = trimmed.startsWith('{') ? trimmed : lastFencedBlock(trimmed);
+  if (payload === null || !payload.startsWith('{')) return null;
+  const obj = tryParse(payload);
+  return isVerdictObject(obj) ? obj : null;
 }
 
 function tryParse(span) {
   try { return JSON.parse(span); } catch { return null; }
 }
-
 const countOf = (text, re) => (text.match(re) ?? []).length;
 const isVerdictObject = (o) => o !== null && typeof o === 'object' && !Array.isArray(o) && Object.hasOwn(o, 'verdict');
 
 /** Every value that is no policy mark. Any other value is a mark: lenient on purpose, because a mark can only keep a finding. */
 const NO_MARK = new Set([undefined, null, false, 0, '', 'false', 'no']);
 const isPolicyMark = (v) => !NO_MARK.has(typeof v === 'string' ? v.trim().toLowerCase() : v);
+/** The own keys of the object that are this key in any letter case. */
+const keysLike = (obj, key) => Object.keys(obj).filter((k) => k.toLowerCase() === key.toLowerCase());
 
 /** A path that is relative, inside the tree by its text, with slashes normalised. null when it is not. */
 function cleanPath(raw) {
@@ -158,7 +157,7 @@ function parseLocation(value) {
 
 function judgeObject(obj) {
   if (!VERDICTS.includes(obj.verdict)) return unparsed('unknown-verdict');
-  if (isPolicyMark(obj.policy)) return result('UNCERTAIN', 'policy', { policy: true });
+  if (keysLike(obj, 'policy').some((k) => isPolicyMark(obj[k]))) return result('UNCERTAIN', 'policy', { policy: true });
   if (obj.verdict !== 'REFUTED') return result(obj.verdict, 'ok');
   const loc = parseLocation(obj.refutedAt);
   return loc ? result('REFUTED', 'ok', { refutedAt: `${loc.file}:${loc.line}` }) : result('UNCERTAIN', 'no-location');
@@ -173,11 +172,13 @@ export function parseVerdict(text) {
   if (text.length > MAX_TEXT) return unparsed('too-long');
   // Decoding can only add matches, so a fault here keeps the finding.
   const decoded = text.replace(UNICODE_ESCAPE, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
-  const mentions = countOf(decoded, VERDICT_KEY);
-  const objects = topLevelSpans(text).map(tryParse).filter(isVerdictObject);
-  if (objects.length !== 1 || mentions !== 1) return unparsed(objects.length === 0 && mentions === 0 ? 'no-verdict' : 'verdict-count');
-  if (ONCE_KEYS.some((re) => countOf(decoded, re) > 1)) return unparsed('duplicate-key');
-  return judgeObject(objects[0]);
+  const mentions = (key) => countOf(decoded, KEY_MENTION[key]);
+  const obj = verdictObject(text);
+  if (obj === null) return unparsed(mentions('verdict') === 0 ? 'no-verdict' : 'placement');
+  if (mentions('verdict') !== 1) return unparsed('verdict-count');
+  // A key that is in the text more often than in the object is repeated, nested, escaped or outside the object.
+  if (COUNTED_KEYS.some((key) => mentions(key) !== keysLike(obj, key).length)) return unparsed('key-count');
+  return judgeObject(obj);
 }
 
 // ---------- the refute location ----------
@@ -268,10 +269,11 @@ async function verifyOne(finding, opts, problems) {
   const text = prompt === null ? null : await answerOf(opts.call, prompt, finding, problems);
   if (text === null) return { verdict: 'UNCERTAIN', unverified: true };
   const v = parseVerdict(text);
+  if (!v.parsed) problems.push(`verify: answer for ${label(finding)} not parsed: ${v.reason}`);
   if (v.verdict !== 'REFUTED') return { verdict: v.verdict, policy: v.policy };
   const loc = checkLocation(opts.reviewDir, v.refutedAt);
   if (loc.at) return { verdict: 'REFUTED', refutedAt: loc.at };
-  problems.push(`verify: REFUTED for ${label(finding)} kept: ${loc.problem} (${v.refutedAt})`);
+  problems.push(`verify: REFUTED for ${label(finding)} kept: ${loc.problem} (${short(v.refutedAt)})`);
   return { verdict: 'UNCERTAIN' };
 }
 
