@@ -94,8 +94,11 @@ const verdict = (input: object): string => {
 const allowed = (input: object, label: string): void => { expect(verdict(input), label).toBe('allow'); };
 const denied = (input: object, label: string): void => { expect(verdict(input), label).toMatch(/^deny/); };
 const wrap = (inner: string) => `echo 'x & ${inner} & rem '`;
-/** A relative quoted target: every repo sits in the same parent. A drive-letter target is never rewritten (cd without /d keeps the current drive). */
-const rel = (r: Repo): string => `..\\${r.d.split('/').pop()}`;
+/**
+ * A relative quoted target: every repo sits in the same parent. A drive-letter target is never rewritten (cd without /d keeps the current drive).
+ * A forward slash: cmd.exe accepts it, and it names the same folder on Windows and on the Linux CI runner (a backslash is a name character there).
+ */
+const rel = (r: Repo): string => `../${r.d.split('/').pop()}`;
 
 describe('C1 a quoted cd to the folder WITH a decision is allowed under cmd (the gap)', () => {
   it('baseline: cwd A, plain push, no cd (control: passes today)', () => {
