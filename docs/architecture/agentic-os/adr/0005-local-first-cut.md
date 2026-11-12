@@ -25,7 +25,10 @@ any `agentic_os` table.
 
 Isolation in v1 is provided by two things that are real:
 
-- **The app binds to localhost.** The network is the boundary.
+- **The app binds to localhost.** The network is the boundary. The bind address is `127.0.0.1`.
+  Three places set it: the `dev` and `start` scripts in `apps/agentic-os/package.json` (`-H`) and
+  the launcher `scripts/agentic-os/start-fleet.ps1` (`--hostname`). Without the flag `next` listens
+  on every network interface.
 - **The app's database role is read-only on `public`.** This is a *verification step*, not
   a claim: `psql` as `agentic_os_reader` must prove `INSERT INTO public.sessions` is
   denied. The role also carries `statement_timeout` and `lock_timeout`.

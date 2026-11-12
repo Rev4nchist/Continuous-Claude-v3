@@ -1453,6 +1453,67 @@ export const NO_REVIEW_UNVERIFIED_REASON = 'no CodeRabbit PR-bot review of the h
 export const noReviewCliReason = (prNumber) => `no CodeRabbit PR-bot review of the head commit; the earlier review carries once the PR body has a clean CLI fix review line. Run node scripts/github/cr-fix.mjs --pr ${prNumber} and put its line in the PR body (or fix its findings, then run it again); do not request a review`;
 const noReviewReason = (pull, need, cliOnly) => (pull.draft === true ? NO_REVIEW_DRAFT_REASON : need.unverified ? NO_REVIEW_UNVERIFIED_REASON : cliOnly ? noReviewCliReason(pull.number) : NO_REVIEW_REASON);
 
+/** The 8 github-actions jobs every PR to main runs (ccv3-checks.yml, gitleaks.yml, no-work-user.yml). A test keeps it equal to those files. */
+export const REQUIRED_CHECK_RUNS = Object.freeze(['ratchets', 'hooks', 'agentic-os', 'coordination-db', 'trivy', 'semgrep', 'gitleaks', 'no-work-user']);
+/** Under this age a head with missing required jobs reads "not started"; older, "missing". A normal push starts them in about 2.5 min. */
+const CHECKS_WAIT_MS = 10 * 60 * 1000;
+const isBadRun = (c) => c.status !== 'completed' || !['success', 'neutral', 'skipped'].includes(c.conclusion);
+// A look-alike name from another app is not one of the 8: it keeps the rule for other runs.
+const isRequiredRun = (c) => REQUIRED_CHECK_RUNS.includes(c.name) && c.app?.slug === 'github-actions';
+const runStart = (c) => Date.parse(c.started_at ?? c.created_at ?? '');
+const newerRun = (a, b) => ((b.id ?? 0) > (a.id ?? 0) || ((b.id ?? 0) === (a.id ?? 0) && runStart(b) > runStart(a)) ? b : a);
+
+// The Actions workflow run of a job: details_url .../actions/runs/<run id>/job/<check-run id>. A re-run keeps the run id. An old-style
+// url (.../runs/<check-run id>?check_suite_focus=true) or none has no run id: those runs share the key '?'.
+const workflowRunOf = (c) => /\/actions\/runs\/(\d+)\//.exec(c.details_url ?? '')?.[1] ?? '?';
+
+/** name -> the newest try per workflow run of each required job on the head. A re-run has a higher id, so only its last try counts;
+ *  a second workflow run of the same job is its own key, so its green job never hides a failure of the first. */
+function newestRequiredRuns(checkRuns) {
+  const byName = new Map();
+  for (const c of checkRuns.filter(isRequiredRun)) {
+    const tries = byName.get(c.name) ?? new Map();
+    const key = workflowRunOf(c);
+    tries.set(key, tries.has(key) ? newerRun(tries.get(key), c) : c);
+    byName.set(c.name, tries);
+  }
+  return new Map([...byName].map(([name, tries]) => [name, [...tries.values()]]));
+}
+
+/** The required jobs with no good run, in two kinds: `absent` (no run at all) and `ended` (no newest try failed or still runs,
+ *  but one ended skipped or neutral). A running or failed newest try has its own check line instead. */
+function requiredGaps(newest) {
+  const absent = [];
+  const ended = [];
+  for (const n of REQUIRED_CHECK_RUNS) {
+    const runs = newest.get(n) ?? [];
+    if (runs.length === 0) absent.push(n);
+    else if (!runs.some(isBadRun) && runs.some((c) => c.conclusion !== 'success')) ended.push(n);
+  }
+  return { absent, ended };
+}
+
+/** Milliseconds since the push: the first run on the head (bots start within seconds), else the commit time. NaN with neither. */
+function pushAgeMs({ checkRuns, headCommittedAt, nowMs }) {
+  const starts = checkRuns.map(runStart).filter(Number.isFinite);
+  const pushed = starts.length > 0 ? Math.min(...starts) : Date.parse(headCommittedAt ?? '');
+  return nowMs - pushed;
+}
+
+/** One line for every absent required job. With no push time the line says "not started": a missing time is no proof that the
+ *  runs are lost. The line holds no minute count: the pr-loop mod keys its alerts on reason text, so one state must read the same
+ *  at every poll. The minutes are requiredChecksAgeMin. */
+function missingChecksReason(missing, head, age) {
+  const at = `head ${head.slice(0, 7)}`;
+  const list = missing.join(', ');
+  if (!Number.isFinite(age)) return `required checks not started on ${at} (push time unknown): ${list}. Wait for them`;
+  if (age < CHECKS_WAIT_MS) return `required checks not started on ${at}: ${list}. Wait for them`;
+  return `required checks missing on ${at}: ${list}. GitHub may have lost the runs; push a new commit`;
+}
+
+/** One line for every required job whose newest run ended skipped or neutral: none of the 8 has a job-level if, so it must succeed. */
+const endedChecksReason = (ended, head) => `required checks ended skipped or neutral on head ${head.slice(0, 7)}: ${ended.join(', ')}. A required job must end success`;
+
 export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true, nowMs = Date.now(), carry = null }) {
   const head = pull.head.sha;
   const labels = pullLabelNames(pull);
@@ -1478,8 +1539,14 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
 
   const otherStatuses = (combined.statuses || []).filter((s) => !isCodeRabbitStatus(s));
   const badStatuses = otherStatuses.filter((s) => s.state !== 'success');
-  const badRuns = (checkRuns || []).filter((c) => !isGreptileRun(c))
-    .filter((c) => c.status !== 'completed' || !['success', 'neutral', 'skipped'].includes(c.conclusion));
+  // A required job counts by its newest try per workflow run only: a green re-run clears an old failure, a new failure blocks,
+  // and a failure in one workflow run blocks whatever another run of the job did. Other runs keep their rule.
+  const allRuns = checkRuns || [];
+  const required = newestRequiredRuns(allRuns);
+  const newestTries = new Set([...required.values()].flat());
+  const badRuns = allRuns.filter((c) => !isGreptileRun(c) && (!isRequiredRun(c) || newestTries.has(c))).filter(isBadRun);
+  const gaps = requiredGaps(required);
+  const baseRef = pull.base?.ref;
   const unresolved = threads.filter((t) => !t.isResolved).length;
   const outsideDiff = codeRabbitOutsideDiff({ head, reviews });
   const outsideHandled = outsideDiffHandled(pull.body);
@@ -1504,6 +1571,19 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   }
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);
+  // The CI workflows trigger only on pull_request to main: another base gets no runs, so it gets this line instead of the missing one.
+  // These lines apply only where the proof gate applies (PROOF_REPOS): another repo has its own workflows, not these 8 jobs.
+  // requiredChecksAgeMin: whole minutes since the push, set only when the missing line is written and the push time is known.
+  let requiredChecksAgeMin = null;
+  if (proofGate && baseRef !== 'main') reasons.push(`base branch "${baseRef ?? '(none)'}" is not main: the required checks run only for PRs to main`);
+  else if (proofGate) {
+    if (gaps.absent.length > 0) {
+      const age = pushAgeMs({ checkRuns: allRuns, headCommittedAt, nowMs });
+      if (Number.isFinite(age)) requiredChecksAgeMin = Math.max(0, Math.floor(age / 60000));
+      reasons.push(missingChecksReason(gaps.absent, head, age));
+    }
+    if (gaps.ended.length > 0) reasons.push(endedChecksReason(gaps.ended, head));
+  }
   if (pull.mergeable_state && pull.mergeable_state !== 'clean') reasons.push(`mergeable_state is "${pull.mergeable_state}"`);
 
   let coderabbit = null;
@@ -1590,6 +1670,9 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     // P4b: the PR body proof. status is 'ok', 'missing' (no Proof type line), 'invalid', 'exempt' (Dependabot) or 'off' (other repos).
     proof: { required: proof.required, type: proof.type, status: proof.status, ...(proof.exemption ? { exemption: proof.exemption } : {}), problems: proof.problems },
     unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state, prState: pull.state, merged: Boolean(pull.merged),
+    // Whole minutes since the push while a required job has no run; null when none is missing or the push time is unknown.
+    // A detail for people, never a reason: the reason text stays the same from poll to poll.
+    requiredChecksAgeMin,
     ready: reasons.length === 0, reasons,
   };
 }

@@ -204,8 +204,27 @@ export const SURFACES = [
   { id: 'agents-scripts', globs: ['scripts/agents/**'], gates: [nodeTest('agents-tests', 'scripts/agents/*.test.mjs')] },
   // The workflow is here because semgrep-ccv3.test.mjs (SG2) compares the Semgrep digest in it with the wrapper default.
   { id: 'ratchets-scripts', globs: ['scripts/ratchets/**', '.github/workflows/ccv3-checks.yml'], gates: [nodeTest('ratchets-tests', 'scripts/ratchets/*.test.mjs')] },
-  // scripts/lib holds the shared dependency resolver. Its tests build real git worktrees under the temp folder.
-  { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/resolve-deps.test.mjs')] },
+  // scripts/lib holds the shared dependency resolver (its tests build real git worktrees under the temp folder), and the headless and
+  // stop-process-tree tests (PowerShell on Windows). The gate runs every scripts/lib/*.test.mjs; the id keeps its old name.
+  { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/*.test.mjs')] },
+  // scripts/eval/review-eval: every file below (fixtures, config) runs the eval node tests. The folder runs in about 5 s.
+  { id: 'eval-scripts', globs: ['scripts/eval/review-eval/**'], gates: [nodeTest('review-eval-tests', 'scripts/eval/review-eval/*.test.mjs', 5 * MIN)] },
+  // lane-context-db.test.ts skips without LANE_TEST_DB_URL. This gate makes a scratch database on local Postgres, runs that one
+  // file and FAILs when it is skipped (Postgres down = one ENV line, never a pass). CI job coordination-db runs the same program.
+  {
+    id: 'lane-context-db',
+    // The last three lines are every file that scratch-db.mjs create --through 6 reads: a change there can break the test.
+    // A new drizzle tag changes the journal, so the gate runs for it too. Rollback files (000n_down.sql) are not read.
+    // scratch-db.mjs itself is here too: the gate runs its create and drop.
+    globs: [
+      '.claude/hooks/src/lane-context.ts', '.claude/hooks/src/__tests__/lane-context-db.test.ts', 'scripts/github/lane-context-db-gate.mjs', 'scripts/github/lane-context-db-gate.test.mjs',
+      'scripts/coordination/scratch-db.mjs',
+      'docker/init-schema.sql', 'scripts/coordination/migrations/001-file-claims-leases.sql', 'scripts/coordination/migrations/002-g5-drop-orphan-sessions.sql', 'scripts/coordination/migrations/003-sessions-lifecycle.sql',
+      'apps/agentic-os/drizzle/meta/_journal.json', 'apps/agentic-os/drizzle/0000_great_trish_tilby.sql', 'apps/agentic-os/drizzle/0001_flaky_proemial_gods.sql', 'apps/agentic-os/drizzle/0002_thankful_mockingbird.sql',
+      'apps/agentic-os/drizzle/0003_daffy_korath.sql', 'apps/agentic-os/drizzle/0004_per_project_lanes.sql', 'apps/agentic-os/drizzle/0005_lane_reminders.sql', 'apps/agentic-os/drizzle/0006_lane_dep.sql',
+    ],
+    gates: [nodeGate('lane-context-db', 'scripts/github/lane-context-db-gate.mjs', [], { timeoutMs: 10 * MIN })],
+  },
   // scripts/worktree holds the shared store link script. Its tests build fake primaries and nested git worktrees under the temp folder.
   { id: 'worktree-scripts', globs: ['scripts/worktree/**'], gates: [nodeTest('shared-deps-tests', 'scripts/worktree/shared-deps.test.mjs')] },
   // No script carries its own createRequire lookup of pg: scripts/lib/resolve-deps.mjs is the one (it also tries the primary checkout).
@@ -242,7 +261,7 @@ export const SURFACES = [
   },
   { id: 'templates', globs: ['.claude/templates/**'], gates: [], manual: 'an always-loaded template: the context-budget gate runs anyway; the sync installs it' },
   // The github suite is the longest gate on this machine (real git, child processes and PowerShell).
-  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [GITHUB_TESTS, nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/*.test.mjs', 5 * MIN)] },
+  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [GITHUB_TESTS, nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/**/*.test.mjs', 5 * MIN)] },
   // Dependency row: scripts/github tests read scripts/coordination (CI github-tests caught a drift that #343 never ran locally).
   // Only github-tests, not the lib and local-review suites. scripts/github/pre-pr.mjs is already owned by github-scripts above.
   { id: 'github-deps', globs: ['scripts/coordination/**'], gates: [GITHUB_TESTS] },

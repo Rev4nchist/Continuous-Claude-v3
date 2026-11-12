@@ -1,7 +1,7 @@
 // Tests for review-status.mjs. Run: node --test scripts/github/review-status.test.mjs
 // READY and NOT READY outcomes, plus the fields the pr-loop mod reads.
 import { test } from 'node:test';
-import { readFileSync, writeFileSync, symlinkSync, unlinkSync, rmdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, symlinkSync, unlinkSync, rmdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -51,11 +51,21 @@ const run = (conclusion, status = 'completed', id = 2) => ({
 
 const GREPTILE_EDIT = { editor: { __typename: 'Bot', login: 'greptile-apps' } };
 
-function input({ prBody = body(HEAD, 5), proofBody = proof(HEAD), runs = [run('success')], threads = [], statuses = [], bodyEdits = [GREPTILE_EDIT] } = {}) {
+// Lane ready-no-check-runs: the 8 github-actions jobs every PR to main runs (ccv3-checks, gitleaks, no-work-user), all green.
+// input() adds them to every head, so the tests about reviews stay READY once READY asks for these jobs. ids 101-108: away from the Greptile ids.
+const CI_JOBS = ['ratchets', 'hooks', 'agentic-os', 'coordination-db', 'trivy', 'semgrep', 'gitleaks', 'no-work-user'];
+const ciJob = (name, k, over = {}) => ({
+  id: 101 + k, name, app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success', started_at: '2026-10-26T00:31:00Z', ...over,
+});
+const CI_GREEN = CI_JOBS.map((name, k) => ciJob(name, k));
+/** CI_GREEN without the named jobs: a test swaps in its own run for one job instead of adding a second run of that name. */
+const ciExcept = (...names) => CI_GREEN.filter((j) => !names.includes(j.name));
+
+function input({ prBody = body(HEAD, 5), proofBody = proof(HEAD), runs = [run('success')], ci = CI_GREEN, threads = [], statuses = [], bodyEdits = [GREPTILE_EDIT] } = {}) {
   return {
-    pull: { number: 111, state: 'open', merged: false, mergeable_state: 'clean', body: `${prBody}${proofBody}`, head: { sha: HEAD, ref: 'feat/x' } },
+    pull: { number: 111, state: 'open', merged: false, mergeable_state: 'clean', body: `${prBody}${proofBody}`, head: { sha: HEAD, ref: 'feat/x' }, base: { ref: 'main' } },
     combined: { statuses },
-    checkRuns: runs,
+    checkRuns: [...runs, ...ci],
     threads,
     bodyEdits,
   };
@@ -588,7 +598,7 @@ const crInput = (head, comments, reviews = [], over = {}) => {
   const i = input();
   i.pull.head.sha = head;
   i.pull.labels = [{ name: 'review:coderabbit' }];
-  i.checkRuns = [run('success')];
+  i.checkRuns = [run('success'), ...CI_GREEN];
   i.pull.body = body(head, 5) + proof(head);
   return { ...i, reviews, comments, commentEdits: neverEdited(comments), headCommittedAt: HEAD_DATE, ...over };
 };
@@ -1538,10 +1548,10 @@ test('Greptile off: a docs PR the router classified on this head needs no bot', 
 
 test('Greptile off: CI and threads still gate, and a failed manual Greptile run still blocks', () => {
   const semgrep = { name: 'semgrep', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' } };
-  const ci = evaluate({ ...OFF(['review:coderabbit'], { eval: { reviews: [CR_REVIEW] } }), checkRuns: [semgrep] });
+  const ci = evaluate({ ...OFF(['review:coderabbit'], { eval: { reviews: [CR_REVIEW] } }), checkRuns: [semgrep, ...ciExcept('semgrep')] });
   assert.equal(ci.ready, false);
   assert.ok(ci.reasons.some((x) => /semgrep/.test(x)), ci.reasons.join('; '));
-  const failed = evaluate({ ...OFF(['review:coderabbit'], { eval: { reviews: [CR_REVIEW] } }), checkRuns: [run('failure')] });
+  const failed = evaluate({ ...OFF(['review:coderabbit'], { eval: { reviews: [CR_REVIEW] } }), checkRuns: [run('failure'), ...CI_GREEN] });
   assert.equal(failed.ready, false, 'a low or failed manual Greptile review is still a finding');
 });
 
@@ -1588,7 +1598,7 @@ test('Dependabot: a person commit, an unknown commit list, or a User account nam
 
 test('Dependabot: CI and threads still gate', () => {
   const semgrep = { name: 'semgrep', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' } };
-  const ci = evaluate(DEP({ extra: { checkRuns: [semgrep] } }));
+  const ci = evaluate(DEP({ extra: { checkRuns: [semgrep, ...ciExcept('semgrep')] } }));
   assert.equal(ci.ready, false);
   assert.ok(ci.reasons.some((x) => /semgrep/.test(x)), ci.reasons.join('; '));
   const thread = evaluate(DEP({ extra: { threads: [{ isResolved: false }] } }));
@@ -3368,6 +3378,14 @@ test('ID-H2: an id inside a longer hex string is not named; the exact id, alone 
 // ---------------------------------------------------------------------------------------------
 const replayPath = (n) => new URL(`./fixtures/replay/pr${n}.json`, import.meta.url);
 const replay = (n) => JSON.parse(readFileSync(replayPath(n), 'utf8'));
+// The replay fixtures predate the jobs hooks, agentic-os and coordination-db. Add each required job the fixture lacks, green, started
+// with the fixture's own ratchets run, so READY can still ask for all 8. The JSON files stay as captured.
+const withCiJobs = (f) => {
+  const have = new Set(f.checkRuns.map((c) => c.name));
+  const at = f.checkRuns.find((c) => c.name === 'ratchets')?.started_at ?? f.headCommittedAt;
+  const added = CI_GREEN.filter((j) => !have.has(j.name)).map((j, k) => ({ ...j, id: 900000000000 + k, started_at: at }));
+  return { ...f, checkRuns: [...f.checkRuns, ...added] };
+};
 // The merged PR as it stood while open: only the PR state changes, so the reasons left are the review reasons.
 const asOpen = (f) => ({ ...f, pull: { ...f.pull, state: 'open', merged: false, draft: false, mergeable_state: 'clean' } });
 // cr-fix.mjs prints a bare `CLI fix review: <from>..<head> clean` (CF17); the live bodies of #230 and #231 have prose after "clean".
@@ -3401,7 +3419,7 @@ test('RB1: a skipped head with a Minor-only review, a small push and a clean CLI
 
 for (const n of [230, 231]) {
   test(`RB${n === 230 ? 2 : 3}: the real PR #${n} head (CodeRabbit skipped it) carries the Minor-only review through the CLI path`, () => {
-    const f = bareCliLine(asOpen(replay(n)));
+    const f = withCiJobs(bareCliLine(asOpen(replay(n))));
     const r = cliResult(f);
     assert.equal(r.coderabbitCarryBlockers.length, 0, r.coderabbitCarryBlockers.join('; '));
     assert.equal(r.coderabbitCarried?.from, f.reviews.find((x) => x.user.login === 'coderabbitai[bot]').commit_id);
@@ -3787,4 +3805,422 @@ test('FU-W: a severity-marked line with no marker outside any block counts as un
   assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap(`${plain}\n\n`, ''))] }), one, 'before the first block');
   assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(wrap('', `\n\n${plain}`))] }), one, 'after a closed block');
   assert.equal(odEval([odLive(wrap('', `\n\n${plain}`))]).ready, false);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Lane ready-no-check-runs (2026-11-11, design note v1, option C). READY read only the check runs that exist, so a head with
+// none of the 8 CI jobs read READY. Real cases: head 3966332 (only GitGuardian and CodeRabbit ran) and head 9bd87cd (read 1 min
+// after the push, before the CI jobs started). Ways it can fail, one test each:
+//   zero check runs read READY                                                                       -> NC1
+//   the real case 1 head (GitGuardian success + CodeRabbit skipped, 45 min old) reads READY            -> NC2
+//   the real case 2 head (read 1 min after the push) reads READY, or says "missing" too early          -> NC3
+//   7 of 8 jobs: the line names jobs that ran, or none                                                -> NC4
+//   a required job that ended skipped counts as done                                                   -> NC5
+//   a run named ratchets from another app counts as the job                                            -> NC6
+//   the --fixture CLI (the land-pr.ps1 path) exits 0 for case 1                                        -> NC7
+//   the list drifts from the 3 workflow files, or a trigger gets a paths filter or another base branch  -> NC8
+//   a PR whose base is not main (no CI runs) reads READY                                               -> NC9
+//   an old failed try of a job blocks after a green re-run, or an old green try hides a new failure    -> NC10a, NC10b
+//   controls (pass before and after the fix): all 8 green, a draft, a job still running                -> NC-CTL1..3
+// Opus review follow-ups:
+//   F1 a green job of a second workflow run hides a failure of the first; a re-run must still clear one -> NC11, NC12, NC12b, NC8
+//   F2 the new lines reach a repo outside PROOF_REPOS                                                   -> NC13a, NC13b
+//   F4 a required job gets a job-level if:, strategy:, uses: or needs: (it could be absent forever)       -> NC8, NC8-D1, NC8-D2
+//   F5 a skipped or neutral job reads "missing"; no push time reads "missing"                            -> NC5, NC5b, NC5c
+//   F8 started_at decides the newest try; a neutral newest run; a pull with no base                      -> NC14a..c
+// ---------------------------------------------------------------------------------------------
+// F5: a third wording, "ended skipped or neutral", for a required job whose newest run ended so. Every wording has one ": "
+// before the names (was /\):\s*.../, which needed the ")" of the first two wordings).
+const CHECKS_HEAD = /required checks (not started|missing|ended skipped or neutral) on head ([0-9a-f]{7})\b/;
+const checksLineOf = (r) => r.reasons.find((x) => CHECKS_HEAD.test(x)) ?? null;
+/** The parts of a required-checks reason (the first, or the one of `kind`): its wording, the short head and the names it
+ *  lists. null when there is none. */
+const checksOf = (r, kind = null) => {
+  const line = r.reasons.find((x) => CHECKS_HEAD.test(x) && (kind === null || CHECKS_HEAD.exec(x)[1] === kind)) ?? null;
+  if (line === null) return null;
+  const [, found, sha] = CHECKS_HEAD.exec(line);
+  const names = /: ([a-z0-9, -]+?)\. /.exec(line)?.[1].split(', ') ?? null;
+  return { line, kind: found, sha, names };
+};
+const ENDED = 'ended skipped or neutral';
+const sorted = (xs) => [...xs].sort();
+const why = (r) => r.reasons.join('; ') || '(no reasons: READY)';
+const otherRun = (name, slug, conclusion, startedAt, id) => ({ id, name, app: { slug }, status: 'completed', conclusion, started_at: startedAt });
+const CASE1_SHA = '3966332a4d3734190218f0048f35425d69c1218f';
+const CASE2_SHA = '9bd87cd599565431e5c6864266a0cad413b83977';
+// The real case 1 runs (head committed 20:33:31Z). The real head had no Greptile run: one is added, green and naming the head,
+// so the checks are the only gap and the head reads READY on today's code. started_at values are seconds after the commit.
+const CASE1_RUNS = [
+  otherRun('GitGuardian Security Checks', 'gitguardian', 'success', '2026-11-11T20:33:39Z', 5001),
+  otherRun('CodeRabbit', 'coderabbitai', 'skipped', '2026-11-11T20:33:40Z', 5002),
+];
+// The real case 2 runs (head committed 22:23:51Z): route skipped first at 22:24:36Z, the CI jobs only at 22:26:20Z.
+const CASE2_RUNS = [
+  otherRun('route', 'github-actions', 'skipped', '2026-11-11T22:24:36Z', 6001),
+  otherRun('GitGuardian Security Checks', 'gitguardian', 'success', '2026-11-11T22:24:38Z', 6002),
+  otherRun('route', 'github-actions', 'success', '2026-11-11T22:24:39Z', 6003),
+  otherRun('CodeRabbit', 'coderabbitai', 'skipped', '2026-11-11T22:24:41Z', 6004),
+];
+/** A head at `sha` with a green Greptile review of it, the given runs, and `ci` (none by default): READY today when ci is CI_GREEN. */
+const caseHead = (sha, runs, { committedAt, now, ci = [] }) => {
+  const greptile = { ...run('success'), started_at: runs[runs.length - 1].started_at };
+  const i = input({ prBody: body(sha, 5), proofBody: proof(sha), runs: [greptile, ...runs], ci });
+  i.pull.head.sha = sha;
+  return { ...i, headCommittedAt: committedAt, nowMs: Date.parse(now) };
+};
+const CASE1 = (ci) => caseHead(CASE1_SHA, CASE1_RUNS, { committedAt: '2026-11-11T20:33:31Z', now: '2026-11-11T21:18:31Z', ci });
+const CASE2 = (ci) => caseHead(CASE2_SHA, CASE2_RUNS, { committedAt: '2026-11-11T22:23:51Z', now: '2026-11-11T22:25:36Z', ci });
+
+test('NC1: a head with zero check runs is NOT READY and one line lists all 8 required jobs', () => {
+  const r = evaluate({ ...input({ runs: [], ci: [] }), headCommittedAt: '2026-11-11T22:23:51Z', nowMs: Date.parse('2026-11-11T22:25:51Z') });
+  const c = checksOf(r);
+  assert.ok(c, `a required-checks reason: ${why(r)}`);
+  assert.equal(c.sha, HEAD.slice(0, 7));
+  assert.deepEqual(sorted(c.names ?? []), sorted(CI_JOBS), c.line);
+  assert.equal(c.kind, 'not started', 'no run on the head: the push time falls back to the commit time, 2 min ago');
+  assert.equal(r.reasons.filter((x) => CHECKS_HEAD.test(x)).length, 1, 'one line, not one per job');
+  assert.equal(r.ready, false);
+});
+
+test('NC2: the real case 1 head (GitGuardian success, CodeRabbit skipped, 45 min after the push) is NOT READY: "missing"', () => {
+  const r = evaluate(CASE1([]));
+  const c = checksOf(r);
+  assert.ok(c, `a required-checks reason: ${why(r)}`);
+  assert.equal(c.kind, 'missing', c.line);
+  assert.equal(c.sha, '3966332');
+  assert.deepEqual(sorted(c.names ?? []), sorted(CI_JOBS), c.line);
+  // The seat 2026-11-11: no minute count in the line (the pr-loop mod keys its alerts on reason text); requiredChecksAgeMin holds it.
+  assert.equal(c.line, `required checks missing on head 3966332: ${RS.REQUIRED_CHECK_RUNS.join(', ')}. GitHub may have lost the runs; push a new commit`);
+  assert.equal(r.ready, false);
+});
+
+test('NC3: the real case 2 head, read 1 min after the push (route skipped at 22:24:36Z), is NOT READY: "not started"', () => {
+  const r = evaluate(CASE2([]));
+  const c = checksOf(r);
+  assert.ok(c, `a required-checks reason: ${why(r)}`);
+  assert.equal(c.kind, 'not started', c.line);
+  assert.equal(c.sha, '9bd87cd');
+  assert.deepEqual(sorted(c.names ?? []), sorted(CI_JOBS), c.line);
+  assert.equal(c.line, `required checks not started on head 9bd87cd: ${RS.REQUIRED_CHECK_RUNS.join(', ')}. Wait for them`);
+  assert.equal(r.ready, false);
+});
+
+test('NC4: 7 of 8 required jobs green: the line lists only the missing one', () => {
+  const r = evaluate(input({ ci: ciExcept('coordination-db') }));
+  const c = checksOf(r);
+  assert.ok(c, `a required-checks reason: ${why(r)}`);
+  assert.deepEqual(c.names, ['coordination-db'], c.line);
+  assert.equal(r.ready, false);
+});
+
+// F5(a) changed NC5: it read "a required job that ended skipped counts as missing" (the first line, of any wording, named trivy).
+// Now the skipped job gets its own line and no not started / missing line names it.
+test('NC5: a required job that ended skipped gets its own line ("ended skipped or neutral"), not the missing one', () => {
+  const r = evaluate(input({ ci: [...ciExcept('trivy'), ciJob('trivy', 4, { conclusion: 'skipped' })] }));
+  const c = checksOf(r, ENDED);
+  assert.ok(c, `an ended-skipped-or-neutral reason: ${why(r)}`);
+  assert.deepEqual(c.names, ['trivy'], c.line);
+  assert.equal(c.sha, HEAD.slice(0, 7));
+  assert.equal(c.line, `required checks ended skipped or neutral on head ${HEAD.slice(0, 7)}: trivy. A required job must end success`);
+  assert.equal(checksOf(r, 'missing'), null, why(r));
+  assert.equal(checksOf(r, 'not started'), null, why(r));
+  assert.equal(r.ready, false);
+});
+
+test('NC5b: one required job absent and one ended skipped: two lines, each naming its own job', () => {
+  const r = evaluate(input({ ci: [...ciExcept('trivy', 'coordination-db'), ciJob('trivy', 4, { conclusion: 'skipped' })] }));
+  assert.deepEqual(checksOf(r, ENDED)?.names, ['trivy'], why(r));
+  const absent = checksOf(r, 'missing') ?? checksOf(r, 'not started');
+  assert.deepEqual(absent?.names, ['coordination-db'], why(r));
+  assert.equal(r.reasons.filter((x) => CHECKS_HEAD.test(x)).length, 2, why(r));
+  assert.equal(r.ready, false);
+});
+
+test('NC5c: no started_at, no created_at and no headCommittedAt: the "not started" wording with "(push time unknown)"', () => {
+  const r = evaluate(input({ runs: [], ci: [] }));
+  const c = checksOf(r);
+  assert.ok(c, `a required-checks reason: ${why(r)}`);
+  assert.equal(c.kind, 'not started', c.line);
+  assert.equal(c.line, `required checks not started on head ${HEAD.slice(0, 7)} (push time unknown): ${RS.REQUIRED_CHECK_RUNS.join(', ')}. Wait for them`);
+  assert.deepEqual(sorted(c.names ?? []), sorted(CI_JOBS), c.line);
+  assert.equal(r.ready, false);
+});
+
+test('NC6: a green run named ratchets from an app other than github-actions counts as missing', () => {
+  const r = evaluate(input({ ci: [...ciExcept('ratchets'), ciJob('ratchets', 0, { app: { slug: 'ci-lookalike' } })] }));
+  const c = checksOf(r);
+  assert.ok(c, `a required-checks reason: ${why(r)}`);
+  assert.deepEqual(c.names, ['ratchets'], c.line);
+  assert.equal(r.ready, false);
+});
+
+test('NC7: the real case 1 head through the --fixture CLI exits 1 (land-pr.ps1 refuses a non-zero exit)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rs-nc7-'));
+  try {
+    const file = path.join(dir, 'in.json');
+    writeFileSync(file, JSON.stringify(CASE1([])));
+    const script = fileURLToPath(new URL('./review-status.mjs', import.meta.url));
+    const out = spawnSync(process.execPath, [script, '--fixture', file], { encoding: 'utf8' });
+    assert.equal(out.status, 1, out.stdout + out.stderr);
+    assert.match(out.stdout, /required checks missing on head 3966332/, out.stdout);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// NC8 reads the 3 workflow files that make the required jobs. review-router.yml (job `route`) is left out on purpose: it is
+// not a CI gate, and 2 of its 3 runs per push end skipped by design. GitHub names a check run by the job `name:`, else the job key.
+// Only job names are compared, never steps (lane re-test-globs adds steps to ratchets and coordination-db).
+const WORKFLOWS = ['ccv3-checks.yml', 'gitleaks.yml', 'no-work-user.yml'];
+const workflowLines = (f) => readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), 'utf8').split(/\r?\n/);
+const indentOf = (l) => l.length - l.trimStart().length;
+const isContent = (l) => l.trim() !== '' && !l.trim().startsWith('#');
+/** The lines under `key:` at `indent`, up to the next content line at that indent or less. null when the key is absent. */
+const yamlBlock = (lines, key, indent) => {
+  const head = new RegExp(`^ {${indent}}${key.replace(/[-]/g, '\\-')}:\\s*(#.*)?$`);
+  const start = lines.findIndex((l) => head.test(l));
+  if (start < 0) return null;
+  const end = lines.findIndex((l, k) => k > start && isContent(l) && indentOf(l) <= indent);
+  return lines.slice(start + 1, end < 0 ? lines.length : end);
+};
+/** Each job under `jobs:`: its key (2 spaces), its `name:` if any, and its block (the job's own keys sit at 4 spaces). */
+const jobsOf = (lines) => {
+  const jobs = yamlBlock(lines, 'jobs', 0) ?? [];
+  return jobs.map((l) => /^ {2}([A-Za-z0-9_-]+):\s*(#.*)?$/.exec(l)?.[1]).filter(Boolean).map((key) => {
+    const block = yamlBlock(jobs, key, 2) ?? [];
+    const named = block.map((l) => /^ {4}name:\s*(.+?)\s*$/.exec(l)?.[1]).find(Boolean);
+    return { key, name: named ? named.replace(/^(['"])(.*)\1$/, '$2') : null, block };
+  });
+};
+const jobNamesOf = (lines) => jobsOf(lines).map((j) => j.name ?? j.key);
+/** The other workflow files' jobs whose key or name is one of the required names: a second job of that name would also report. */
+const requiredLookalikes = (lines, required) => jobsOf(lines).filter((j) => required.includes(j.key) || required.includes(j.name)).map((j) => j.name ?? j.key);
+const WORKFLOW_DIR = new URL('../../.github/workflows/', import.meta.url);
+/** F4: the job-level keys (4 spaces) that can make a required run legitimately absent or skipped: a job `if:`, a matrix
+ *  (`strategy:` renames the run "name (a, b)"), a reusable workflow (`uses:` names it "caller / callee") or `needs:` (a
+ *  failed or skipped dependency skips the job). A step's own `if:` sits at 6+ spaces and is fine. */
+const JOB_LEVEL_BLOCKERS = ['if', 'strategy', 'uses', 'needs'];
+const jobLevelBlockersOf = (block) => block.map((l) => /^ {4}([A-Za-z0-9_-]+):/.exec(l)?.[1]).filter((k) => JOB_LEVEL_BLOCKERS.includes(k));
+/** The branches list of the pull_request trigger: flow form [a, b] or block form "- a". null when there is none. */
+const prBranchesOf = (pr) => {
+  const at = pr.findIndex((l) => /^ {4}branches:/.test(l));
+  if (at < 0) return null;
+  const flow = /^ {4}branches:\s*\[(.*)\]\s*$/.exec(pr[at]);
+  if (flow) return flow[1].split(',').map((b) => b.trim().replace(/^(['"])(.*)\1$/, '$2')).filter(Boolean);
+  const items = [];
+  for (const l of pr.slice(at + 1)) {
+    if (!isContent(l)) continue;
+    const m = /^ {6}-\s*(.+?)\s*$/.exec(l);
+    if (!m) break;
+    items.push(m[1].replace(/^(['"])(.*)\1$/, '$2'));
+  }
+  return items;
+};
+
+test('NC8: REQUIRED_CHECK_RUNS equals the job names of the 3 CI workflows, and each runs on every pull_request to main', () => {
+  const names = [];
+  for (const f of WORKFLOWS) {
+    const lines = workflowLines(f);
+    const on = yamlBlock(lines, 'on', 0);
+    assert.ok(on, `${f}: an on: block`);
+    const pr = yamlBlock(on, 'pull_request', 2);
+    assert.ok(pr, `${f}: a pull_request trigger`);
+    assert.ok(!pr.some((l) => /^\s*(paths|paths-ignore):/.test(l)), `${f}: no paths or paths-ignore filter on pull_request (a filtered PR would wait forever)`);
+    assert.deepEqual(prBranchesOf(pr), ['main'], `${f}: pull_request branches must be [main]`);
+    for (const j of jobsOf(lines)) {
+      assert.deepEqual(jobLevelBlockersOf(j.block), [], `${f}: job ${j.key} has a job-level ${JOB_LEVEL_BLOCKERS.join('/')} key: its required run could be absent or skipped on every PR`);
+    }
+    names.push(...jobNamesOf(lines));
+  }
+  assert.equal(names.length, 8, `8 jobs across the 3 files: ${names.join(', ')}`);
+  assert.ok(Array.isArray(RS.REQUIRED_CHECK_RUNS), 'review-status.mjs must export REQUIRED_CHECK_RUNS (an array of job names)');
+  assert.deepEqual(sorted(RS.REQUIRED_CHECK_RUNS), sorted(names), 'REQUIRED_CHECK_RUNS drifted from the workflow job names');
+  assert.deepEqual(sorted(CI_GREEN.map((j) => j.name)), sorted(RS.REQUIRED_CHECK_RUNS), 'the test fixture CI_GREEN covers the same jobs');
+  // F1: a job of a required name in any OTHER workflow would add a second key of that name on every head.
+  const others = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f) && !WORKFLOWS.includes(f));
+  assert.ok(others.length > 0, 'the workflows directory lists other files (review-router.yml at least): the read is not vacuous');
+  for (const f of others) {
+    assert.deepEqual(requiredLookalikes(workflowLines(f), RS.REQUIRED_CHECK_RUNS), [], `${f}: defines a job named like a required one`);
+  }
+});
+
+test('NC8-D1: the other-workflow check flags a job whose key or name: is one of the required names', () => {
+  const yaml = (job, extra = '') => ['name: x', 'on:', '  pull_request:', 'jobs:', `  ${job}:`, extra, '    runs-on: ubuntu-latest', '    steps:', '      - run: true'].filter((l) => l !== '');
+  assert.deepEqual(requiredLookalikes(yaml('semgrep'), RS.REQUIRED_CHECK_RUNS), ['semgrep'], 'by key');
+  assert.deepEqual(requiredLookalikes(yaml('scan', '    name: trivy'), RS.REQUIRED_CHECK_RUNS), ['trivy'], 'by name:');
+  assert.deepEqual(requiredLookalikes(yaml('route'), RS.REQUIRED_CHECK_RUNS), [], 'another name is fine');
+});
+
+test('NC8-D2: the job-level check flags if:, strategy:, uses: and needs: at 4 spaces and ignores a step if: at 8 spaces', () => {
+  const job = (...extra) => jobsOf(['jobs:', '  ratchets:', ...extra, '    runs-on: ubuntu-latest', '    steps:', '      - name: a step', '        if: ${{ !cancelled() }}', '        run: true'])[0].block;
+  assert.deepEqual(jobLevelBlockersOf(job()), [], 'a step if: is fine');
+  assert.deepEqual(jobLevelBlockersOf(job("    if: github.event_name == 'push'")), ['if']);
+  assert.deepEqual(jobLevelBlockersOf(job('    strategy:', '      matrix:', '        node: [20, 22]')), ['strategy']);
+  assert.deepEqual(jobLevelBlockersOf(job('    needs: [hooks]')), ['needs']);
+  assert.deepEqual(jobLevelBlockersOf(['    uses: ./.github/workflows/reusable.yml']), ['uses'], 'a reusable-workflow job');
+  assert.deepEqual(jobLevelBlockersOf(job('    env:', '      A: b', '    services:', '      pg:', '        image: x')), [], 'env: and services: are fine');
+});
+
+test('NC9: a PR whose base is not main is NOT READY, and the reason names the base', () => {
+  const i = input();
+  i.pull.base = { ref: 'feat/stack-base' };
+  const r = evaluate(i);
+  assert.ok(r.reasons.some((x) => x.includes('feat/stack-base') && /\bmain\b/.test(x)), `a reason naming the base and main: ${why(r)}`);
+  assert.equal(r.ready, false);
+});
+
+test('NC10a: newest run wins: a failed first try of ratchets and a newer green re-run reads READY', () => {
+  const tries = [ciJob('ratchets', 0, { id: 150, conclusion: 'failure', started_at: '2026-10-26T00:31:00Z' }), ciJob('ratchets', 0, { id: 160, started_at: '2026-10-26T00:40:00Z' })];
+  const r = evaluate(input({ ci: [...ciExcept('ratchets'), ...tries] }));
+  assert.equal(r.ready, true, why(r));
+});
+
+test('NC10b: newest run wins: a green first try of ratchets and a newer failed re-run is NOT READY with the failure reason', () => {
+  const tries = [ciJob('ratchets', 0, { id: 150, started_at: '2026-10-26T00:31:00Z' }), ciJob('ratchets', 0, { id: 160, conclusion: 'failure', started_at: '2026-10-26T00:40:00Z' })];
+  const r = evaluate(input({ ci: [...ciExcept('ratchets'), ...tries] }));
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.includes('check "ratchets" is completed/failure'), why(r));
+});
+
+// F1 (Opus review): the newest-try rule is per job AND per Actions workflow run. A re-run keeps the workflow run id
+// (details_url .../actions/runs/<id>/job/<check-run id>) and gets a higher check-run id; a second workflow run on the same head
+// gets a new run id, and its green job must not hide the failed one of the first run.
+const ACTIONS_URL = (runId, id) => `https://github.com/Rev4nchist/Continuous-Claude-v3/actions/runs/${runId}/job/${id}`;
+const tryOf = (name, k, id, runId, conclusion, startedAt) =>
+  ciJob(name, k, { id, conclusion, started_at: startedAt, ...(runId === null ? {} : { details_url: ACTIONS_URL(runId, id) }) });
+
+test('NC11: semgrep from two different workflow runs on one head, run 1 failed and run 2 green, is NOT READY with the failure line', () => {
+  const tries = [tryOf('semgrep', 5, 100, 1, 'failure', '2026-10-26T00:31:00Z'), tryOf('semgrep', 5, 200, 2, 'success', '2026-10-26T00:40:00Z')];
+  const r = evaluate(input({ ci: [...ciExcept('semgrep'), ...tries] }));
+  assert.equal(r.ready, false, why(r));
+  assert.ok(r.reasons.includes('check "semgrep" is completed/failure'), why(r));
+});
+
+test('NC12: a re-run in the same workflow run (first try failed id 100, re-run green id 200) reads READY (the approved loosening)', () => {
+  const tries = [tryOf('semgrep', 5, 100, 1, 'failure', '2026-10-26T00:31:00Z'), tryOf('semgrep', 5, 200, 1, 'success', '2026-10-26T00:40:00Z')];
+  const r = evaluate(input({ ci: [...ciExcept('semgrep'), ...tries] }));
+  assert.equal(r.ready, true, why(r));
+});
+
+test('NC12b: a details_url with no /actions/runs/<id>/ shares the key "?": the newest try of the job decides', () => {
+  const oldStyle = (id, conclusion, startedAt) => ciJob('semgrep', 5, { id, conclusion, started_at: startedAt, details_url: `https://github.com/Rev4nchist/Continuous-Claude-v3/runs/${id}?check_suite_focus=true` });
+  const green = evaluate(input({ ci: [...ciExcept('semgrep'), oldStyle(100, 'failure', '2026-10-26T00:31:00Z'), oldStyle(200, 'success', '2026-10-26T00:40:00Z')] }));
+  assert.equal(green.ready, true, why(green));
+  const mixed = evaluate(input({ ci: [...ciExcept('semgrep'), oldStyle(100, 'failure', '2026-10-26T00:31:00Z'), tryOf('semgrep', 5, 200, 2, 'success', '2026-10-26T00:40:00Z')] }));
+  assert.equal(mixed.ready, false, `a key "?" failure and a run-2 success are two keys: ${why(mixed)}`);
+  assert.ok(mixed.reasons.includes('check "semgrep" is completed/failure'), why(mixed));
+});
+
+// F2 (Opus review): the required-checks and base lines apply only where the proof gate applies (PROOF_REPOS: CCv3). Another repo
+// has other workflows, so the 8 CCv3 job names say nothing about it.
+const BASE_LINE = /^base branch ".*" is not main/;
+test('NC13a: proofGate false: zero check runs read no required-checks line, and a base other than main reads no base line', () => {
+  const zero = evaluate({ ...input({ runs: [], ci: [] }), proofGate: false });
+  assert.equal(checksLineOf(zero), null, why(zero));
+  const stacked = input({ ci: [] });
+  stacked.pull.base = { ref: 'feat/x' };
+  const r = evaluate({ ...stacked, proofGate: false });
+  assert.equal(r.reasons.some((x) => BASE_LINE.test(x)), false, why(r));
+  assert.equal(checksLineOf(r), null, why(r));
+  assert.equal(r.ready, true, `Greptile green, no CI, another repo: today's rule reads READY: ${why(r)}`);
+});
+
+test('NC13b: proofGate true (the default) with zero check runs reads the required-checks line', () => {
+  const r = evaluate({ ...input({ runs: [], ci: [] }), headCommittedAt: '2026-11-11T22:23:51Z', nowMs: Date.parse('2026-11-11T22:25:51Z') });
+  assert.ok(checksLineOf(r), why(r));
+  assert.equal(r.ready, false);
+});
+
+// F8 (Opus review): test gaps.
+test('NC14a: the higher check-run id is the newest try even when it started earlier (the id decides, not started_at)', () => {
+  const failNewest = [ciJob('ratchets', 0, { id: 160, conclusion: 'failure', started_at: '2026-10-26T00:31:00Z' }), ciJob('ratchets', 0, { id: 150, started_at: '2026-10-26T00:40:00Z' })];
+  const r = evaluate(input({ ci: [...ciExcept('ratchets'), ...failNewest] }));
+  assert.equal(r.ready, false, why(r));
+  assert.ok(r.reasons.includes('check "ratchets" is completed/failure'), why(r));
+  const greenNewest = [ciJob('ratchets', 0, { id: 160, started_at: '2026-10-26T00:31:00Z' }), ciJob('ratchets', 0, { id: 150, conclusion: 'failure', started_at: '2026-10-26T00:40:00Z' })];
+  const g = evaluate(input({ ci: [...ciExcept('ratchets'), ...greenNewest] }));
+  assert.equal(g.ready, true, why(g));
+});
+
+test('NC14b: the newest run of a required job ended neutral: NOT READY with the ended-skipped-or-neutral line', () => {
+  const tries = [ciJob('hooks', 1, { id: 150 }), ciJob('hooks', 1, { id: 160, conclusion: 'neutral', started_at: '2026-10-26T00:40:00Z' })];
+  const r = evaluate(input({ ci: [...ciExcept('hooks'), ...tries] }));
+  assert.deepEqual(checksOf(r, ENDED)?.names, ['hooks'], why(r));
+  assert.equal(r.ready, false);
+});
+
+test('NC14c: a pull with no base at all reads base branch "(none)" is not main', () => {
+  const i = input();
+  delete i.pull.base;
+  const r = evaluate(i);
+  assert.ok(r.reasons.includes('base branch "(none)" is not main: the required checks run only for PRs to main'), why(r));
+  assert.equal(r.ready, false);
+});
+
+// The seat 2026-11-11 (20:32 CST): the pr-loop mod builds its alert dedupe key from reason text, so a reason must not change from poll
+// to poll while the state stays the same. The minute count moves out of the reasons into requiredChecksAgeMin. Ways it can fail:
+//   a minute count in the not started or missing line: two polls of one state give different reasons      -> NC15a, NC15b
+//   the stable text merges the two states, or the 10 minute switch is lost                                -> NC15c
+//   requiredChecksAgeMin is absent, wrong, rounded up, set with no missing job or with no push time         -> NC16
+const at = (i, now) => ({ ...i, nowMs: Date.parse(now) });
+test('NC15a: "not started" at 1 and at 6 min after the push: byte-identical reasons', () => {
+  const a = evaluate(at(CASE2([]), '2026-11-11T22:25:36Z'));
+  const b = evaluate(at(CASE2([]), '2026-11-11T22:30:36Z'));
+  assert.equal(checksOf(a)?.kind, 'not started', why(a));
+  assert.equal(checksOf(b)?.kind, 'not started', why(b));
+  assert.deepEqual(b.reasons, a.reasons);
+});
+
+test('NC15b: "missing" at 44 and at 104 min after the push: byte-identical reasons', () => {
+  const a = evaluate(CASE1([]));
+  const b = evaluate(at(CASE1([]), '2026-11-11T22:18:31Z'));
+  assert.equal(checksOf(a)?.kind, 'missing', why(a));
+  assert.equal(checksOf(b)?.kind, 'missing', why(b));
+  assert.deepEqual(b.reasons, a.reasons);
+});
+
+test('NC15c: one head read 1 min and 45 min after the push: "not started" then "missing", two different lines', () => {
+  const early = checksOf(evaluate(at(CASE2([]), '2026-11-11T22:25:36Z')));
+  const late = checksOf(evaluate(at(CASE2([]), '2026-11-11T23:09:36Z')));
+  assert.equal(early?.kind, 'not started');
+  assert.equal(late?.kind, 'missing');
+  assert.notEqual(early.line, late.line);
+  assert.equal(checksOf(evaluate(at(CASE2([]), '2026-11-11T22:34:35Z')))?.kind, 'not started', '9 min 59 s: still not started');
+  assert.equal(checksOf(evaluate(at(CASE2([]), '2026-11-11T22:34:36Z')))?.kind, 'missing', '10 min: missing');
+});
+
+test('NC16: requiredChecksAgeMin holds the whole minutes since the push, only for a missing required job with a known push time', () => {
+  assert.equal(evaluate(CASE2([])).requiredChecksAgeMin, 1, 'first run 22:24:36Z, read 22:25:36Z');
+  assert.equal(evaluate(CASE1([])).requiredChecksAgeMin, 44, 'first run 20:33:39Z, read 21:18:31Z: 44 min 52 s, floored');
+  const commitTime = evaluate({ ...input({ runs: [], ci: [] }), headCommittedAt: '2026-11-11T22:23:51Z', nowMs: Date.parse('2026-11-11T22:25:51Z') });
+  assert.equal(commitTime.requiredChecksAgeMin, 2, 'no run: the commit time');
+  assert.equal(evaluate(input({ runs: [], ci: [] })).requiredChecksAgeMin, null, 'no push time');
+  assert.equal(evaluate(input()).requiredChecksAgeMin, null, 'all 8 green: no missing job');
+  assert.equal(evaluate(input({ ci: [...ciExcept('trivy'), ciJob('trivy', 4, { conclusion: 'skipped' })] })).requiredChecksAgeMin, null, 'skipped is not missing');
+  const stacked = CASE1([]);
+  stacked.pull.base = { ref: 'feat/x' };
+  assert.equal(evaluate(stacked).requiredChecksAgeMin, null, 'base not main: no missing line');
+  assert.equal(evaluate({ ...CASE1([]), proofGate: false }).requiredChecksAgeMin, null, 'proof gate off: no missing line');
+  for (const r of [evaluate(CASE1([])), evaluate(CASE2([]))]) assert.equal(r.reasons.some((x) => /\d+ min\b/.test(x)), false, why(r));
+});
+
+test('NC-CTL1: all 8 required jobs green reads READY (Greptile head and the real case heads), with no required-checks line', () => {
+  for (const [name, i] of [['default input', input()], ['case 1 head with CI', CASE1(CI_GREEN)], ['case 2 head with CI', CASE2(CI_GREEN)]]) {
+    const r = evaluate(i);
+    assert.equal(r.ready, true, `${name}: ${why(r)}`);
+    assert.equal(checksLineOf(r), null, name);
+  }
+  const off = evaluate(OFF(['review:coderabbit'], { eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(off.ready, true, `Greptile off, CodeRabbit reviewed the head: ${why(off)}`);
+});
+
+test('NC-CTL2: a draft head with all 8 jobs green is NOT READY for the draft reason only', () => {
+  const r = evaluate(routed(['review:none'], { draft: true, eval: { comments: [NONE_STATE()] } }));
+  assert.ok(r.reasons.includes(RS.DRAFT_REASON), why(r));
+  assert.equal(checksLineOf(r), null, why(r));
+  assert.equal(r.ready, false);
+});
+
+test('NC-CTL3: a required job still running keeps the check reason it has today', () => {
+  const r = evaluate(input({ ci: [...ciExcept('hooks'), ciJob('hooks', 1, { status: 'in_progress', conclusion: null })] }));
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.includes('check "hooks" is in_progress/null'), why(r));
 });
