@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"{{TREE}}","session_id":"11111111-2222-3333-4444-555555555555","model":"Grok 4.7 256K High","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Review the change. Answer in one sentence."}]},"session_id":"11111111-2222-3333-4444-555555555555"}

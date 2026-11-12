@@ -87,7 +87,7 @@ function plainSegments(command: string, tool: Tool): { spans: [number, number][]
 }
 
 /** The [start, end) spans of the quoted strings in an inert segment, or none when the command is not plain under this tool's reading. */
-function inertSpans(command: string, tool: Tool): Set<string> {
+function inertSpans(command: string, tool: Tool, openHead?: RegExp): Set<string> {
   const none = new Set<string>();
   const plain = plainSegments(command, tool);
   if (!plain) return none;
@@ -95,6 +95,8 @@ function inertSpans(command: string, tool: Tool): Set<string> {
   for (const { from, end, masked } of plain.segs) {
     const raw = command.slice(from, end);
     if (headMatches(PLAIN_HEAD, masked, raw)) continue;
+    // The one gated command (a PR open): its strings stay as they are. Every other segment must still be inert or plain.
+    if (openHead !== undefined && headMatches(openHead, masked, raw)) continue;
     if (!headMatches(INERT_HEAD, masked, raw)) return none;
     for (const [s, e] of plain.spans) if (s >= from && e <= end) out.add(`${s}:${e}`);
   }
@@ -145,8 +147,11 @@ export function blankInertQuotes(command: string, tool?: string): string {
     const doc = blankDocHeredocBody(command);
     if (doc !== command) return doc;
   }
-  const bash = inertSpans(command, 'Bash');
-  const pwsh = inertSpans(command, 'PowerShell');
+  return blankSpans(command, inertSpans(command, 'Bash'), inertSpans(command, 'PowerShell'));
+}
+
+/** Blank the strings that Bash and PowerShell BOTH read as inert. */
+function blankSpans(command: string, bash: Set<string>, pwsh: Set<string>): string {
   let out = command;
   for (const id of bash) {
     if (!pwsh.has(id)) continue;
@@ -154,4 +159,16 @@ export function blankInertQuotes(command: string, tool?: string): string {
     out = out.slice(0, s + 1) + ' '.repeat(e - s - 2) + out.slice(e - 1);
   }
   return out;
+}
+
+/**
+ * blankInertQuotes for a command that holds a gated open (openHead matches its segment). The strings of the open segment stay as they are.
+ * The strings of the other segments are blanked when each of them is an inert or plain head. Used by the PR gate to read the body flags of the open
+ * itself: `echo 'note --body here' ; gh pr create --body-file f` has one body file, f. Same fail closed rules as blankInertQuotes, and the same
+ * rule for a tool other than Bash or PowerShell (cmd.exe may run the text, so every string stays). The command is returned as it is when any
+ * segment is neither inert, plain nor the open.
+ */
+export function blankInertQuotesAround(command: string, tool: string | undefined, openHead: RegExp): string {
+  if (tool !== undefined && tool !== 'Bash' && tool !== 'PowerShell') return command;
+  return blankSpans(command, inertSpans(command, 'Bash', openHead), inertSpans(command, 'PowerShell', openHead));
 }

@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Yes: add subtracts."}]},"session_id":"11111111-2222-3333-4444-555555555555"}
+{"type":"result","subtype":"success","duration_ms":15256,"duration_api_ms":15256,"is_error":false,"result":"Yes: add subtracts.","session_id":"11111111-2222-3333-4444-555555555555","request_id":"22222222-3333-4444-5555-666666666666","usage":{"inputTokens":31172,"outputTokens":289,"cacheReadTokens":32512,"cacheWriteTokens":0}}
