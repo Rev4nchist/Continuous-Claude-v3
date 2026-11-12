@@ -12,6 +12,7 @@
 //   - a glob gate misses a test file (no ** for a subfolder, one file named for a folder) -> TG1, TG2
 //   - scripts/eval/review-eval has no gate, or a path there is unowned          -> TG3
 //   - CI job ratchets drifts from a gate glob, or runs it unquoted (bash drops files) -> TG4
+//   - lane-context.ts or its db test changes and the scratch-database gate does not run, or CI drops it -> TG5, TG6
 // summaryLine
 //   - the first line is taken, not the runner's summary                        -> M1, M2
 // Git preconditions
@@ -441,6 +442,27 @@ test('TG4: CI job ratchets runs the same three glob patterns as pre-pr, each in 
     assert.ok(hits.length > 0, `${id}: no run line in job ratchets names ${pattern}`);
     for (const l of hits) assert.ok(l.includes(`'${pattern}'`), `${id}: ${pattern} is not in single quotes: ${l.trim()}`);
   }
+});
+
+test('TG5: a change to lane-context.ts or its db test runs the lane-context-db gate; another hooks file does not (breaks if the row or a glob is dropped)', async () => {
+  for (const p of ['.claude/hooks/src/lane-context.ts', '.claude/hooks/src/__tests__/lane-context-db.test.ts']) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'lane-context-db');
+    assert.ok(g, `${p} -> lane-context-db`);
+    assert.deepEqual([g.cmd, g.args, g.cwd], ['node', ['scripts/github/lane-context-db-gate.mjs'], '.']);
+    assert.ok(g.timeoutMs >= 10 * 60_000, 'a scratch database and the vitest run get 10 min');
+  }
+  assert.equal(ids(gatesFor(['.claude/hooks/src/pre-pr-gate.ts'], REPO_ROOT)).includes('lane-context-db'), false);
+});
+
+test('TG6: CI job coordination-db runs lane-context-db-gate.mjs (breaks if the step is dropped)', async () => {
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const start = wf.indexOf('\n  coordination-db:');
+  assert.ok(start >= 0, 'the workflow has the coordination-db job');
+  const rest = wf.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [\w-]+:/);
+  const job = next < 0 ? rest : rest.slice(0, next + 1);
+  const runs = job.split('\n').filter((l) => /^\s*run:/.test(l));
+  assert.ok(runs.some((l) => /^\s*run:\s*node scripts\/github\/lane-context-db-gate\.mjs\s*$/.test(l)), runs.join('\n'));
 });
 
 test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {

@@ -209,6 +209,13 @@ export const SURFACES = [
   { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/*.test.mjs')] },
   // scripts/eval/review-eval: every file below (fixtures, config) runs the eval node tests. The folder runs in about 5 s.
   { id: 'eval-scripts', globs: ['scripts/eval/review-eval/**'], gates: [nodeTest('review-eval-tests', 'scripts/eval/review-eval/*.test.mjs', 5 * MIN)] },
+  // lane-context-db.test.ts skips without LANE_TEST_DB_URL. This gate makes a scratch database on local Postgres, runs that one
+  // file and FAILs when it is skipped (Postgres down = one ENV line, never a pass). CI job coordination-db runs the same program.
+  {
+    id: 'lane-context-db',
+    globs: ['.claude/hooks/src/lane-context.ts', '.claude/hooks/src/__tests__/lane-context-db.test.ts', 'scripts/github/lane-context-db-gate.mjs', 'scripts/github/lane-context-db-gate.test.mjs'],
+    gates: [nodeGate('lane-context-db', 'scripts/github/lane-context-db-gate.mjs', [], { timeoutMs: 10 * MIN })],
+  },
   // scripts/worktree holds the shared store link script. Its tests build fake primaries and nested git worktrees under the temp folder.
   { id: 'worktree-scripts', globs: ['scripts/worktree/**'], gates: [nodeTest('shared-deps-tests', 'scripts/worktree/shared-deps.test.mjs')] },
   // No script carries its own createRequire lookup of pg: scripts/lib/resolve-deps.mjs is the one (it also tries the primary checkout).
