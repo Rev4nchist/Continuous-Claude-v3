@@ -44,6 +44,43 @@
 //  B3  "not fixed yet" is wont_fix, "will be addressed later" is fixed -> restore the not-fixed arm; drop the guard in fixHit
 //  B4  an all-digit token is a SHA                   -> drop the digit-and-letter lookaheads
 //  B5  --out under the repo is written               -> drop outRefused
+//  Seat check of 3ead9f63 (R1 to R20; in doubt, unlabeled)
+//  R1  a negated or asked negative phrase labels     -> skip the guard for neg_fix, wrong and decline
+//  R2  "this is wrong" (agreement) gives wrong       -> restore the bare this/that/it subject in the wrong rule
+//  R3  a modal or a negation after the word, or a new block word, still labels -> read only the text before the hit; drop a word from BLOCK_WORDS
+//  R4  "done? no" or "Fixed in <sha>? No" is fixed   -> drop the bare-negative answer check
+//  R5  "I'm done reviewing" is fixed                 -> put done and applied back into the general fix word rule
+//  R6  a conflict reply loses to the marker or an earlier clean reply -> skip conflict replies in decide
+//  R7  the SHA fix rule skips the guard              -> read fix_sha without the sentence guard
+//  R8  "NOT addressed in commit <sha>" or an unmatched reply gives cr_marker -> drop the ^ anchor; check the marker before reply_unmatched
+//  R9  a later "not fixed" keeps an earlier fix      -> skip blocked replies in latestDecision
+//  R10 tilde fences or struck text are read          -> drop the ~~~ fence or the strike filter in cleanReply
+//  R11 a constant, a Set, a function or CRLF changes the hash wrongly -> hash a Set or a RegExp as {}; skip the CRLF fold
+//  R12 a rule change keeps the pinned version        -> any change of a label function or constant
+//  R13 --out in another repo, a .git file tree or the primary checkout is written -> drop the .git ancestor walk
+//  R14 a long-path or a share form of a repo path is written -> skip the prefix strip or the UNC refusal
+//  R15 --summary-out over --out overwrites the full file -> drop the same-file check
+//  R16 the default path inside a repo tree is written -> skip outRefused for the default path
+//  R17 --repo ../x, x/.. or the upstream owner reaches gh -> drop the dot-segment or the owner check
+//  R18 bad JSON or an uncaught error prints response text or a stack -> print e.message for SyntaxError; rethrow in main
+//  R19 open and closed-unmerged PRs share one count -> count unmerged PRs in one field
+//  R20 the bar is compared with itself              -> change BAR (the literal 0.9 test fails)
+//  Fix round on the R1-R20 work (X<n> is review finding n; in doubt, unlabeled)
+//  X1  a hedge, ask, partial or revert word does not block -> drop a word from BLOCK_WORDS
+//  X2  a bare "follow-up" or "separate PR" gives wont_fix -> let the decline rule match the noun with no defer verb
+//  X3  a fix word that matches no fix rule beside a negative hit labels -> drop the fixMention conflict
+//  X4  "the suggestion is not a problem" (agreement) or an off-start subject gives wrong -> restore the is-not-a-bug arm; drop the start check
+//  X5  an apostrophe run inside a word is quadratic  -> trim apostrophes with a regex again
+//  X6  single-tilde strike or a <del> that holds a tag is read -> drop the ~ arm or the inner tag strip
+//  X7  "Fixed?No" is fixed                           -> cut after ? only before a space
+//  X8  "un-fixed" is fixed                           -> drop un from BLOCK_WORDS
+//  X9  a wrong or wont_fix record carries the marker SHA -> fill sha from the marker for every disposition
+//  X10 a marker line inside a fence in the bot body counts -> scan the marker on the raw body
+//  X12 the alone flag is outside the hash            -> drop alone from rulesVersionOf
+//  X13 a failed rename leaves the .tmp file          -> drop the rmSync in writeJson
+//  X15 an alternate data stream on a repo folder is written -> drop the colon check in plainPath
+//  X16 a gh error prints gh's stderr text            -> print e.message for a gh error
+//  X17 a CLI test falls back to the live gh          -> let run() pass a missing gh through
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -77,8 +114,8 @@ const root = ({ id, pr = 90001, body = '**\u{1F7E0} Major**\n\nmade-up finding',
 const reply = ({ id, pr = 90001, to, user = OWNER, body, at = '2026-01-02T00:00:00Z', assoc = 'NONE' }) => ({
   id, pull_request_url: pullUrl(pr), in_reply_to_id: to, user, body, created_at: at, author_association: assoc,
 });
-const prRow = (n, { merged = true, created = '2026-01-01T00:00:00Z', author = 'pat' } = {}) => ({
-  id: n + 5000, number: n, state: merged ? 'closed' : 'open', merged_at: merged ? '2026-01-03T00:00:00Z' : null, created_at: created, user: { login: author },
+const prRow = (n, { merged = true, closed = false, created = '2026-01-01T00:00:00Z', author = 'pat' } = {}) => ({
+  id: n + 5000, number: n, state: merged || closed ? 'closed' : 'open', merged_at: merged ? '2026-01-03T00:00:00Z' : null, created_at: created, user: { login: author },
 });
 
 function makeGh({ prs = [], comments = [], prPages, commentPages, failOn, failMessage = 'API rate limit exceeded' } = {}) {
@@ -110,6 +147,8 @@ after(() => { for (const d of temps) rmSync(d, { recursive: true, force: true })
 
 const NOW = new Date(2026, 10, 11, 12, 0, 0).getTime();
 async function run(argv, { gh, home = tmp(), now = NOW } = {}) {
+  // X17: a test with no stub gh must fail here, never reach the live gh.
+  if (typeof gh !== 'function') throw new Error('run() needs a stub gh');
   const out = [];
   const err = [];
   const code = await main(argv, { gh, homedir: home, now: () => now, stdout: (s) => out.push(s), stderr: (s) => err.push(s) });
@@ -185,7 +224,7 @@ describe('reply rules', () => {
     assert.equal(parseReply('Is this fixed?\nFixed in a1b2c3d').evidence, 'reply_sha');
   });
 
-  for (const t of ['Fixed the incorrect check', 'Fixed the invalid input path', 'Addressed the misread', 'Done, the already handled case too', 'Fixed what does not apply']) {
+  for (const t of ['Fixed the incorrect check', 'Fixed the invalid input path', 'Addressed the misread', 'Resolved, the already handled case too', 'Fixed the case that was wrong']) {
     test(`B2 "${t}" is fixed`, () => {
       // Breaks when: a bare incorrect, invalid, misread, already handled or does-not-apply word returns to the wrong rule.
       const p = parseReply(t);
@@ -201,14 +240,14 @@ describe('reply rules', () => {
 
   test('wrong rule: tied to the finding', () => {
     // Breaks when: a wrong pattern is removed or loses its anchor.
-    for (const t of ['False positive.', 'This is incorrect', 'the finding was invalid', 'It does not apply here', 'Not applicable', "that doesn't apply", 'this is not a bug']) {
+    for (const t of ['False positive.', 'The finding is incorrect', 'the finding was invalid', 'This comment does not apply here', 'Not applicable', "the suggestion doesn't apply", 'CodeRabbit is wrong here', 'The bot was incorrect', 'No, the finding is wrong', 'Nah, the comment does not apply']) {
       assert.deepEqual([parseReply(t).disposition, parseReply(t).evidence], ['wrong', 'reply_wrong'], t);
     }
   });
 
   test('decline rule: wont_fix with reply_decline', () => {
     // Breaks when: a decline pattern is removed, or decline maps to wrong.
-    for (const t of ['Out of scope for this PR', 'By design', 'Intentionally left', 'Deferred', 'Will do a follow-up', 'a separate PR', 'Keeping it as is']) {
+    for (const t of ['Out of scope for this PR', 'By design', 'Intentionally left', 'Deferred', 'Deferred to a follow-up', 'Moved to a follow-up PR', 'Left for a follow-up issue', 'Tracked in a separate issue', 'Keeping it as is']) {
       const p = parseReply(t);
       assert.deepEqual([p.disposition, p.evidence], ['wont_fix', 'reply_decline'], t);
     }
@@ -240,7 +279,14 @@ describe('reply rules', () => {
 
   test('F27 a 1 MB reply does not hang', () => {
     // Breaks when: a rule gets a nested quantifier or the guard scans the whole prefix for each fix word.
-    const bodies = ['fixed '.repeat(180000), `fixed ${'deadbeef '.repeat(120000)}`, `${'a'.repeat(1_000_000)} fixed`, 'x\n'.repeat(500000), `${' '.repeat(1_000_000)}Addressed`];
+    const bodies = [
+      'fixed '.repeat(180000), `fixed ${'deadbeef '.repeat(120000)}`, `${'a'.repeat(1_000_000)} fixed`, 'x\n'.repeat(500000), `${' '.repeat(1_000_000)}Addressed`,
+      '~'.repeat(1_000_000), `fixed ${'~~a'.repeat(333000)}`, `fixed ${'?'.repeat(1_000_000)}x`, `fixed${' '.repeat(1_000_000)}?x`, '. '.repeat(500000), "n't ".repeat(250000),
+      'fixed. '.repeat(140000), 'Done. No. '.repeat(100000), `${'```\n~~~\n'.repeat(120000)}fixed`, `won't fix ${'not '.repeat(240000)}`,
+      // X5 X6: an apostrophe run inside a word, unclosed strike and tag runs on one line.
+      `fixed a${"'".repeat(1_000_000)}b`, '<del>'.repeat(200000), '~a'.repeat(500000), '<s '.repeat(333000), '<b'.repeat(500000), `fixed ${'<del x>a'.repeat(120000)}`,
+      `fixed ${'?a'.repeat(500000)}`, `Ignoring ${'the finding is wrong '.repeat(50000)}`,
+    ];
     for (const b of bodies) {
       const t0 = Date.now();
       parseReply(b);
@@ -252,12 +298,147 @@ describe('reply rules', () => {
     // Breaks when: the array or a rule is left mutable, or the order changes (the freeze is the holdout guard).
     assert.ok(Object.isFrozen(REPLY_RULES));
     assert.ok(REPLY_RULES.every((r) => Object.isFrozen(r)));
-    assert.deepEqual(REPLY_RULES.map((r) => r.id), ['neg_fix', 'fix_sha', 'wrong', 'decline', 'fix_word']);
+    assert.deepEqual(REPLY_RULES.map((r) => r.id), ['neg_fix', 'fix_sha', 'wrong', 'decline', 'fix_word', 'fix_done']);
   });
 
   test('parseReply on empty or non-string input is null and never throws', () => {
     // Breaks when: cleanReply or parseReply assumes a string.
     for (const v of [undefined, null, '', '   ', 42, {}]) assert.equal(parseReply(v), null);
+  });
+
+  const CONFLICT_OF = { disposition: 'unlabeled', evidence: null, rule: 'reply_conflict', sha: null };
+
+  const r1Conflicts = [
+    'This is not a false positive', 'Is this a false positive?', 'That was not intentional', 'not out of scope', 'Will you wontfix this?',
+    "It isn't out of scope", 'Maybe a false positive', 'Should we defer this?', 'If this is by design, say so', 'Not by design, I think', 'Will move this to a follow-up PR',
+  ];
+  for (const t of r1Conflicts) {
+    test(`R1 "${t}" gives unlabeled reply_conflict`, () => {
+      // Breaks when: the negative rules (neg_fix, wrong, decline) skip the sentence guard or the question check.
+      assert.deepEqual(parseReply(t), CONFLICT_OF);
+    });
+  }
+
+  test('R1 a negation inside the negative phrase itself does not block it', () => {
+    // Breaks when: the guard reads the matched phrase (won't, will not, not going to, does not, not applicable) as a blocker.
+    const cases = [["won't fix", 'reply_wont_fix'], ['We will not fix this', 'reply_wont_fix'], ['Not applicable', 'reply_wrong'], ['The finding does not apply', 'reply_wrong'], ["Out of scope, won't fix", 'reply_wont_fix']];
+    for (const [t, evidence] of cases) assert.equal(parseReply(t)?.evidence, evidence, t);
+  });
+
+  for (const t of ["You're right, this is wrong", 'that was wrong', 'It is incorrect', 'this is invalid', "it doesn't apply"]) {
+    test(`R2 "${t}" (a bare pronoun) is not wrong`, () => {
+      // Breaks when: the wrong rule takes a bare this, that or it as its subject again.
+      assert.equal(parseReply(t), null);
+    });
+  }
+
+  const r3NoLabel = [
+    "I'll get it done", 'Nothing done yet', 'If applied, this would break the build', "I'll get it fixed", "I'd say fixed", 'Must be fixed first', 'Whether this is fixed is unclear',
+    'Unsure it is resolved', 'Maybe fixed', 'It might be addressed', 'Nothing fixed yet', 'Need to get this fixed', 'Going to get it fixed', 'Plan to have it resolved',
+    'Fixed once CI passes, maybe', 'Fixed, but it is unclear', 'Fixed, if the build passes', 'Fixed yet the test still fails', 'that did not fix it', 'It could be resolved',
+    'Whether it is fixed', 'Nothing is fixed',
+  ];
+  for (const t of r3NoLabel) {
+    test(`R3 "${t}" gives no label`, () => {
+      // Breaks when: the guard reads only the text before the fix word, or a block word ('ll, 'd, must, if, whether, unsure, unclear, maybe, might, could, nothing, yet, need to, going to, plan to) is dropped.
+      assert.equal(parseReply(t), null);
+    });
+  }
+
+  for (const t of ['done? no', 'Fixed in a1b2c3d? No', 'Was this done? Not yet', 'Fixed? Nope.', 'Resolved? Not really', 'Fixed. No.', 'Fixed in a1b2c3d.\nNo, not yet']) {
+    test(`R4 "${t}" (a hit, then a bare no) gives reply_conflict`, () => {
+      // Breaks when: the bare-negative answer after a hit sentence is not read.
+      assert.deepEqual(parseReply(t), CONFLICT_OF);
+    });
+  }
+
+  test('R4 a question hit alone is no hit; a "no" before the hit or a longer answer does not block', () => {
+    // Breaks when: a question sentence counts as a fix hit, or any sentence that starts with no counts as an answer.
+    for (const t of ['Fixed in a1b2c3d?', 'Is this resolved?', 'Done?']) assert.equal(parseReply(t), null, t);
+    assert.equal(parseReply('No. Fixed in a1b2c3d').evidence, 'reply_sha');
+    assert.equal(parseReply('Fixed. No problem').disposition, 'fixed');
+  });
+
+  test('R5 done and applied count only as a short sentence with no object', () => {
+    // Breaks when: done or applied return to the general fix word rule, or the 4-word limit or the word list is dropped.
+    for (const t of ['Done.', 'Done, thanks.', 'Applied.', 'All done now', 'Done \u2705', 'Ok, applied. Thanks!']) {
+      assert.deepEqual(parseReply(t), { disposition: 'fixed', evidence: 'reply_no_sha', rule: 'fix_done', sha: null }, t);
+    }
+    for (const t of ["I'm done reviewing", 'applied to another file', 'Done with the first pass of the review', 'Done reviewing this one', 'done now thanks all ok']) assert.equal(parseReply(t), null, t);
+    assert.equal(parseReply('Done in a1b2c3d').evidence, 'reply_sha');
+  });
+
+  test('R7 the SHA fix rule has the sentence guard, after the SHA too', () => {
+    // Breaks when: fix_sha is read without the guard.
+    for (const t of ['Fixed in a1b2c3d, will push the rest', 'Should be fixed in a1b2c3d', 'Fixed in a1b2c3d if CI agrees', 'Not yet fixed in a1b2c3d']) assert.equal(parseReply(t), null, t);
+  });
+
+  test('R10 tilde fences and struck-through text are not read', () => {
+    // Breaks when: cleanReply keeps a ~~~ fence or ~~struck~~ or <del> text.
+    assert.equal(parseReply("~~~\nwon't fix\n~~~\nFixed in a1b2c3d").evidence, 'reply_sha');
+    assert.equal(parseReply("~~Won't fix~~ Fixed in a1b2c3d").evidence, 'reply_sha');
+    assert.equal(parseReply('~~Fixed in a1b2c3d~~'), null);
+    assert.equal(parseReply("<del>Won't fix</del> Fixed").disposition, 'fixed');
+    assert.equal(parseReply("```\n~~~\nwon't fix\n```\nFixed").disposition, 'fixed');
+    assert.equal(cleanReply('a\n~~~\nb\n~~~\nc'), 'a\nc');
+    assert.equal(cleanReply('a\n~~~ js\nb\n```\nc\n~~~\nd'), 'a\nd');
+  });
+
+  const hedged = [
+    ['can', 'Can be fixed later'], ['may', 'May be fixed in a1b2c3d'], ['ought', 'Fixed, ought I add'], ['probably', 'Probably fixed in a1b2c3d'],
+    ['possibly', 'Possibly resolved'], ['perhaps', 'Perhaps addressed'], ['likely', 'Likely fixed by the rebase'], ['hopefully', 'Hopefully resolved'],
+    ['think', 'I think it is fixed'], ['guess', 'I guess this is resolved'], ['seems', 'Seems fixed'], ['please', 'Please get this fixed'],
+    ['confirm', 'Confirm this is resolved'], ['partly', 'Partly fixed in a1b2c3d'], ['partially', 'Partially addressed'], ['partial', 'Partial: fixed the main path'],
+    ['half', 'Half fixed'], ['most', 'Fixed most of it'], ['some', 'Fixed some of it'], ['except', 'Fixed except the test'],
+    ['still', 'Fixed in a1b2c3d, the test still fails'], ['revert', 'Fixed, then had to revert'], ['reverted', 'Fixed in a1b2c3d, then reverted in b2c3d4e'],
+    ['undo', 'Fixed in a1b2c3d, undo pending'], ['undid', 'Fixed, then undid it'], ['un', 'un-fixed'], ['un', 'un-fixed in a1b2c3d'], ['un', 'un-resolved'], ['non', 'non-resolved'],
+  ];
+  for (const [word, t] of hedged) {
+    test(`X1 X8 "${t}" (block word ${word}) gives no label`, () => {
+      // Breaks when: ${word} is dropped from BLOCK_WORDS.
+      assert.equal(parseReply(t), null);
+    });
+  }
+
+  test('X1 a new block word beside a negative phrase gives reply_conflict', () => {
+    // Breaks when: may or still is dropped from BLOCK_WORDS (the negative rule would label).
+    for (const t of ['This may be a false positive', 'Still out of scope', 'Probably by design']) assert.deepEqual(parseReply(t), CONFLICT_OF, t);
+  });
+
+  test('X2 a bare follow-up or separate PR does not decline; a defer verb does; a fix beside the bare noun is a conflict', () => {
+    // Breaks when: the decline rule matches the noun alone again, or the bare noun stops making a conflict with a fix hit.
+    for (const t of ['Thanks for the follow-up', 'Thanks for the follow-up PR', 'I saw the follow-up issue', 'a separate PR', 'Done in a separate PR']) assert.equal(parseReply(t), null, t);
+    // A defer verb with a code noun (file, function, commit) describes a fix, not a decline; a bare follow-up has no noun.
+    for (const t of ['Moved to a separate file', 'Split into a separate function', 'Moved this into a separate commit', 'Moved to a follow-up commit', 'Moved to a follow-up']) assert.equal(parseReply(t), null, t);
+    for (const t of ['Fixed; follow-up for the rest', 'Fixed, thanks for the follow-up', 'Addressed in a separate PR', 'Fixed in a1b2c3d, the rest in a separate PR']) assert.deepEqual(parseReply(t), CONFLICT_OF, t);
+  });
+
+  test('X3 a fix-family word that matches no fix rule, beside a negative hit, is a conflict', () => {
+    // Breaks when: readReply ignores a fix word that no fix rule matched.
+    for (const t of ['Done, but out of scope for the rest', 'Out of scope. Applied the rename though.', 'By design; done with the other part']) assert.deepEqual(parseReply(t), CONFLICT_OF, t);
+  });
+
+  test('X4 agreement or a subject that does not start the sentence never gives wrong', () => {
+    // Breaks when: the is-not-a-bug arm returns, or the wrong subject arm counts away from the sentence start.
+    for (const t of ['Taking the suggestion is not a problem', 'The suggestion is not a problem', 'the comment is not a bug', 'The finding is not an issue']) assert.equal(parseReply(t), null, t);
+    for (const t of ['Ignoring the suggestion was wrong', 'Agreed, the finding is wrong', 'I agree the comment does not apply']) assert.deepEqual(parseReply(t), CONFLICT_OF, t);
+  });
+
+  test('X6 single-tilde strike and a <del> that holds a tag or attributes are not read', () => {
+    // Breaks when: the ~ arm or the inner tag strip is dropped from cleanReply.
+    assert.equal(parseReply('~Fixed in a1b2c3d~'), null);
+    assert.equal(parseReply('<del class="x">Fixed in <b>a1b2c3d</b></del>'), null);
+    assert.equal(parseReply('<s>Fixed</s> not yet'), null);
+    assert.equal(parseReply("~Won't fix~ Fixed in a1b2c3d").evidence, 'reply_sha');
+    assert.equal(parseReply('Fixed in <code>a1b2c3d</code>').sha, 'a1b2c3d');
+    assert.equal(parseReply('Fixed ~3 of 4, ~1 left').disposition, 'fixed');
+  });
+
+  test('X7 a ? with no space after it makes its sentence a question; it never cuts a block word away', () => {
+    // Breaks when: an inner ? is not read as a question, or it cuts the sentence (a URL query would part a block word from the fix word).
+    for (const t of ['Fixed?No', 'Done?no', 'Fixed in a1b2c3d?Not yet', 'Fixed (see https://x.test/a?b=1)']) assert.equal(parseReply(t), null, t);
+    for (const t of ["This won't be fixed until https://x.test/issue?id=5 is resolved", 'Could not reproduce at https://x.test/y?z=1 so marked resolved']) assert.equal(parseReply(t), null, t);
+    assert.equal(parseReply('See https://x.test/a?b=1. Fixed in a1b2c3d').evidence, 'reply_sha');
   });
 });
 
@@ -274,6 +455,24 @@ describe('marker and sha', () => {
   test('F9 a hex-only or digit-only token is no marker', () => {
     // Breaks when: the marker SHA skips the SHA-token rule.
     for (const b of ['Addressed in commit deadbeef', 'Addressed in commit 1234567', 'Addressed in commit a1b2c3', `Addressed in commit ${'1a'.repeat(20)}1`]) assert.equal(parseMarker(b), null, b);
+  });
+
+  test('R8 the marker counts only on its own line', () => {
+    // Breaks when: the ^ anchor or the end-of-line anchor is dropped from the marker pattern.
+    const refused = [
+      'x\nThe issue is NOT addressed in commit a1b2c3d', 'x\nNot addressed in commit a1b2c3d', 'x\n> Addressed in commit a1b2c3d', 'Still open: Addressed in commit a1b2c3d',
+      'x\nAddressed in commit a1b2c3d, but the test still fails', 'x\nAddressed in commit a1b2c3d? not really',
+    ];
+    for (const b of refused) assert.equal(parseMarker(b), null, b);
+    assert.equal(parseMarker('x\n\u2705 Addressed in commit a1b2c3d'), 'a1b2c3d');
+    assert.equal(parseMarker('x\n  Addressed in commits `a1b2c3d` to `b2c3d4e`.'), 'b2c3d4e');
+  });
+
+  test('X10 a marker line inside a fenced block of the bot body does not count', () => {
+    // Breaks when: parseMarker scans the raw body with its fences.
+    for (const b of ['x\n```suggestion\nAddressed in commit a1b2c3d\n```', 'x\n~~~\nAddressed in commit a1b2c3d\n~~~', 'x\n```\nAddressed in commit a1b2c3d']) assert.equal(parseMarker(b), null, b);
+    assert.equal(parseMarker('x\n```\ncode\n```\nAddressed in commit a1b2c3d'), 'a1b2c3d');
+    assert.equal(parseMarker('x\r\nAddressed in commit a1b2c3d\r\n'), 'a1b2c3d');
   });
 
   test('F27 a 1 MB root body with the marker at the end is found in time', () => {
@@ -332,7 +531,7 @@ describe('authors and trust', () => {
 describe('decide table', () => {
   const decideOf = (replies, rootOver = {}) => decide({ root: root({ id: 1, ...rootOver }), replies: replies.map((r) => ({ ...r, to: 1 })), trusted: TRUSTED });
 
-  test('R1 a trusted reply decides, with its SHA and id', () => {
+  test('decide: a trusted reply decides, with its SHA and id', () => {
     // Breaks when: replyId or sha is not carried.
     const d = decide({ root: root({ id: 1 }), replies: [reply({ id: 9, to: 1, body: 'Fixed in a1b2c3d' })], trusted: TRUSTED });
     assert.deepEqual(d, { disposition: 'fixed', evidence: 'reply_sha', reason: null, rule: 'fix_sha', sha: 'a1b2c3d', replyId: 9 });
@@ -377,16 +576,49 @@ describe('decide table', () => {
     }
   });
 
-  test('R2 the marker alone gives fixed with cr_marker and its SHA', () => {
+  test('X9 a wrong or wont_fix reply does not take the marker SHA', () => {
+    // Breaks when: decide fills sha from the marker for every disposition.
+    const body = 'finding\nAddressed in commit b2c3d4e';
+    for (const text of ['False positive', "Won't fix", 'By design']) {
+      const d = decide({ root: root({ id: 1, body }), replies: [reply({ id: 9, to: 1, body: text })], trusted: TRUSTED });
+      assert.notEqual(d.disposition, 'fixed', text);
+      assert.equal(d.sha, null, text);
+    }
+  });
+
+  test('X8 R9 a later "un-fixed" reply undoes an earlier trusted fix', () => {
+    // Breaks when: un is dropped from BLOCK_WORDS (the reply would be no hit and keep the fix).
+    const d = decideOf([reply({ id: 1, body: 'Fixed in a1b2c3d', at: '2026-01-02T00:00:00Z' }), reply({ id: 2, body: 'This got un-fixed by the merge', at: '2026-01-03T00:00:00Z' })]);
+    assert.deepEqual([d.disposition, d.reason, d.replyId], ['unlabeled', 'reply_conflict', 2]);
+  });
+
+  test('F12 R8 the marker alone gives fixed with cr_marker and its SHA', () => {
     // Breaks when: the marker arm is dropped.
     const d = decide({ root: root({ id: 1, body: 'x\nAddressed in commit a1b2c3d' }), replies: [], trusted: TRUSTED });
     assert.deepEqual(d, { disposition: 'fixed', evidence: 'cr_marker', reason: null, rule: null, sha: 'a1b2c3d', replyId: null });
   });
 
-  test('R2 an unmatched trusted reply does not hide the marker', () => {
-    // Breaks when: reply_unmatched is checked before the marker.
+  test('R8 an unmatched trusted reply beats the marker: unlabeled reply_unmatched', () => {
+    // Breaks when: the marker is checked before reply_unmatched (the marker must rank below every trusted reply).
     const d = decide({ root: root({ id: 1, body: 'x\nAddressed in commit a1b2c3d' }), replies: [reply({ id: 9, to: 1, body: 'Thanks' })], trusted: TRUSTED });
-    assert.deepEqual([d.disposition, d.evidence], ['fixed', 'cr_marker']);
+    assert.deepEqual([d.disposition, d.evidence, d.reason], ['unlabeled', null, 'reply_unmatched']);
+    const blocked = decide({ root: root({ id: 1, body: 'x\nAddressed in commit a1b2c3d' }), replies: [reply({ id: 9, to: 1, body: 'not fixed yet' })], trusted: TRUSTED });
+    assert.deepEqual([blocked.disposition, blocked.reason], ['unlabeled', 'reply_unmatched']);
+  });
+
+  test('R9 a later blocked fix reply undoes an earlier trusted fix; a later "thanks" keeps it', () => {
+    // Breaks when: latestDecision skips a reply whose fix hit the guard blocked, or a no-hit reply erases the label.
+    const fix = reply({ id: 1, body: 'Fixed in a1b2c3d', at: '2026-01-02T00:00:00Z' });
+    for (const body of ['not fixed', 'that did not fix it', 'Hm, this is not resolved yet']) {
+      const d = decideOf([fix, reply({ id: 2, body, at: '2026-01-03T00:00:00Z' })]);
+      assert.deepEqual([d.disposition, d.reason, d.rule, d.replyId], ['unlabeled', 'reply_conflict', 'reply_conflict', 2], body);
+    }
+    const kept = decideOf([fix, reply({ id: 2, body: 'thanks', at: '2026-01-03T00:00:00Z' })]);
+    assert.deepEqual([kept.disposition, kept.replyId], ['fixed', 1]);
+    const before = decideOf([reply({ id: 2, body: 'not fixed', at: '2026-01-01T00:00:00Z' }), fix]);
+    assert.deepEqual([before.disposition, before.replyId], ['fixed', 1]);
+    const wrongKept = decideOf([reply({ id: 1, body: 'False positive', at: '2026-01-02T00:00:00Z' }), reply({ id: 2, body: 'not fixed', at: '2026-01-03T00:00:00Z' })]);
+    assert.deepEqual([wrongKept.disposition, wrongKept.replyId], ['wrong', 1]);
   });
 
   test('B2 a conflict reply decides: it beats the marker and an earlier clean match', () => {
@@ -453,7 +685,7 @@ describe('findingsForPr', () => {
     assert.deepEqual(out.records[0], {
       key: '90001:31001', pr: 90001, commentId: 31001, path: 'src/a.js', line: 7, originalCommit: sha('c'), severity: 'major', disposition: 'fixed', verdict: 'real',
       by: BY, evidence: 'reply_sha', reason: null, rule: 'fix_sha', sha: 'a1b2c3d', replyId: 32001, thumbs: { up: 0, down: 0 },
-      replies: { trusted: 1, human: 0, bot: 0, unknown: 0, cr: 1 }, outdated: false, parsed: true,
+      replies: { trusted: 1, human: 0, bot: 0, unknown: 0, cr: 1 }, outdated: false, parsed: true, marker: false,
     });
     const text = JSON.stringify(out);
     for (const bad of ['made-up finding', 'Fixed in a1b2c3d', 'bot words']) assert.ok(!text.includes(bad), bad);
@@ -469,6 +701,20 @@ describe('findingsForPr', () => {
     assert.deepEqual(out.records.map((r) => [r.disposition, r.verdict, r.by]), [
       ['fixed', 'real', BY], ['wrong', 'noise', BY], ['wont_fix', 'unclear', BY], ['fixed', null, BY], ['unlabeled', null, BY],
     ]);
+  });
+
+  test('R8 a record carries marker true or false; fixedMarker counts marker roots with no trusted reply only', () => {
+    // Breaks when: the marker field is dropped or read from the decision, or unlabeledWithMarker is not counted.
+    const mk = 'x\nAddressed in commit a1b2c3d';
+    const out = one([
+      root({ id: 1, body: mk }), reply({ id: 11, to: 1, body: 'Thanks' }), root({ id: 2, body: mk }), root({ id: 3, body: mk }), reply({ id: 13, to: 3, body: 'Fixed' }),
+      root({ id: 4 }), root({ id: 5, body: mk }), reply({ id: 15, to: 5, user: STRANGER, body: 'Thanks' }),
+    ]);
+    assert.deepEqual(out.records.map((r) => [r.disposition, r.evidence, r.reason, r.marker]), [
+      ['unlabeled', null, 'reply_unmatched', true], ['fixed', 'cr_marker', null, true], ['fixed', 'reply_no_sha', null, true], ['unlabeled', null, 'no_signal', false], ['fixed', 'cr_marker', null, true],
+    ]);
+    const s = summarize({ ...out, excluded: {}, range: { from: 90000, to: 90001 }, repo: REPO, generatedAt: 'T' });
+    assert.deepEqual([s.counts.fixedMarker, s.counts.fixedHuman, s.counts.unlabeledWithMarker], [2, 1, 1]);
   });
 
   test('B13 outdated reads the raw line field; line is the original line', () => {
@@ -531,19 +777,20 @@ describe('summarize', () => {
   const std = () => findingsForPr({ pr: 90001, comments: STD_COMMENTS, prFact: { author: 'pat' }, repo: REPO });
   const sumOf = (over = {}) => {
     const f = std();
-    return summarize({ records: f.records, unparsed: f.unparsed, botReplies: f.botReplies, excluded: { unmergedPrs: 0, unmergedComments: 0 }, range: { from: 90000, to: 90001 }, repo: REPO, generatedAt: 'T', ...over });
+    return summarize({ records: f.records, unparsed: f.unparsed, botReplies: f.botReplies, excluded: {}, range: { from: 90000, to: 90001 }, repo: REPO, generatedAt: 'T', ...over });
   };
 
   test('the counts, evidence, reasons and the replied numbers on a mixed PR', () => {
     // Breaks when: a tally reads the wrong field or a branch of decide changes.
     const s = sumOf();
     assert.deepEqual(s.denominator, { rule: 'REST pulls/comments by coderabbitai[bot] (type Bot) on merged PRs in range; review-body findings are outside pulls/comments', all: 8, roots: 7, replies: 1 });
-    assert.deepEqual(s.counts, { fixed: 2, fixedHuman: 1, fixedMarker: 1, wont_fix: 0, wrong: 1, unlabeled: 4 });
+    assert.deepEqual(s.counts, { fixed: 2, fixedHuman: 1, fixedMarker: 1, wont_fix: 0, wrong: 1, unlabeled: 4, unlabeledWithMarker: 0 });
+    assert.deepEqual(s.excluded, { openPrs: 0, closedUnmergedPrs: 0, openComments: 0, closedUnmergedComments: 0 });
     assert.deepEqual(s.evidence, { reply_wont_fix: 0, reply_sha: 1, reply_wrong: 1, reply_decline: 0, reply_no_sha: 0, cr_marker: 1 });
     assert.deepEqual(s.reasons, { reply_unmatched: 1, reply_conflict: 1, thumbs_up_only: 0, thumbs_down_unverified: 1, thumbs_conflict: 0, no_signal: 1 });
     assert.deepEqual(s.replied, { findings: 4, anyReply: 4, labeled: 2, unlabeled: 2, share: 0.5 });
     assert.deepEqual(s.labeled, { count: 3, share: 3 / 7 });
-    assert.deepEqual(s.parsed, { all: 8, roots: 7, replies: 1, share: 1, rootShare: 1, bar: BAR, met: true });
+    assert.deepEqual(s.parsed, { all: 8, roots: 7, replies: 1, share: 1, rootShare: 1, bar: 0.9, met: true });
   });
 
   test('S1 counts.fixed splits into a human part and a marker part, and a marker record has no verdict', () => {
@@ -571,6 +818,28 @@ describe('summarize', () => {
     assert.match(RULES_VERSION, /^[0-9a-f]{16}$/);
   });
 
+  test('R11 rulesVersionOf reads a Set, a RegExp, a function and the fix flag; CRLF folds to LF', () => {
+    // Breaks when: a Set or a RegExp is hashed as {} by JSON, a function is hashed by name, the fix flag is left out, or CRLF is not folded.
+    const base = [{ id: 'a', re: /x/i, disposition: 'fixed', evidence: 'e' }];
+    const v = (extra, rules = base) => rulesVersionOf(rules, extra);
+    assert.notEqual(v([new Set(['will', 'not'])]), v([new Set(['will'])]));
+    assert.equal(v([new Set(['will', 'not'])]), v([new Set(['not', 'will'])]));
+    assert.notEqual(v([/a/g]), v([/b/g]));
+    assert.notEqual(v([/a/g]), v([/a/i]));
+    assert.notEqual(v([function f() { return 1; }]), v([function f() { return 2; }]));
+    assert.notEqual(v([], [{ ...base[0], fix: true }]), v([]));
+    // X12: the alone flag is hashed.
+    assert.notEqual(v([], [{ ...base[0], alone: true }]), v([]));
+    assert.equal(v(['line one\r\nline two']), v(['line one\nline two']));
+    assert.equal(v([new Function('a', 'return a;\r\n')]), v([new Function('a', 'return a;\n')]));
+    assert.notEqual(v([[1, 2]]), v([[1, 3]]));
+  });
+
+  test('R12 RULES_VERSION is pinned: a rule change needs a visible test edit', () => {
+    // Breaks when: any reply rule, block word, marker pattern or label function changes (then update this literal with the seat's word).
+    assert.equal(RULES_VERSION, '6078875a607ae18d');
+  });
+
   test('replied.unlabeled equals reply_unmatched plus reply_conflict', () => {
     // Breaks when: a replied finding is unlabeled for a reason outside those two, or the replied count reads another field.
     const s = sumOf();
@@ -579,7 +848,7 @@ describe('summarize', () => {
 
   test('F28 zero comments: share null, met false, gate 3 (no vacuous pass)', () => {
     // Breaks when: a null share counts as met.
-    const s = summarize({ records: [], unparsed: [], botReplies: { all: 0, parsed: 0 }, excluded: { unmergedPrs: 0, unmergedComments: 0 }, range: { from: 90000, to: null }, repo: REPO, generatedAt: 'T' });
+    const s = summarize({ records: [], unparsed: [], botReplies: { all: 0, parsed: 0 }, excluded: {}, range: { from: 90000, to: null }, repo: REPO, generatedAt: 'T' });
     assert.deepEqual([s.parsed.share, s.parsed.rootShare, s.parsed.met, s.replied.share, s.labeled.share], [null, null, false, null, null]);
     assert.equal(gateOf(s), 3);
   });
@@ -588,7 +857,8 @@ describe('summarize', () => {
   const badRoots = (n) => Array.from({ length: n }, (_, i) => ({ key: `90001:${900 + i}`, reason: 'bad_shape', kind: 'root' }));
 
   test('F29 below the bar gives gate 3; at the bar gives gate 0', () => {
-    // Breaks when: the compare is > 0, or > BAR instead of >= BAR.
+    // Breaks when: the compare is > 0, or > BAR instead of >= BAR, or BAR is not 0.9 (R20: a literal, not BAR against itself).
+    assert.equal(BAR, 0.9);
     const make = (good, bad) => summarize({ records: parsedRoots(good), unparsed: badRoots(bad), botReplies: { all: 0, parsed: 0 }, excluded: {}, range: { from: 90000, to: 90001 }, repo: REPO, generatedAt: 'T' });
     assert.deepEqual([make(8, 2).parsed.share, make(8, 2).parsed.met, gateOf(make(8, 2))], [0.8, false, 3]);
     assert.deepEqual([make(9, 1).parsed.share, make(9, 1).parsed.met, gateOf(make(9, 1))], [0.9, true, 0]);
@@ -656,10 +926,11 @@ describe('sweep with a stub gh', () => {
     await assert.rejects(go(makeGh({ prs: [prRow(90001)], comments: [{ body: 'no id' }] })), (e) => e.kind === 'bad_shape');
   });
 
-  test('F4 a gh error in the middle is a gh_error', async () => {
-    // Breaks when: a gh throw is swallowed or given another kind.
-    await assert.rejects(go(makeGh({ prs: [prRow(90001)], failOn: 'comments' })), (e) => e instanceof SweepError && e.kind === 'gh_error' && /rate limit/.test(e.message));
-    await assert.rejects(go(makeGh({ failOn: 'prs' })), (e) => e.kind === 'gh_error');
+  test('F4 X16 a gh error in the middle is a gh_error with a fixed text and only the HTTP status', async () => {
+    // Breaks when: a gh throw is swallowed or given another kind, or the gh message (command, stderr, API text) reaches the error.
+    await assert.rejects(go(makeGh({ prs: [prRow(90001)], failOn: 'comments' })), (e) => e instanceof SweepError && e.kind === 'gh_error' && e.message === 'gh api call failed');
+    const msg = 'Command failed: gh api repos/acme/widgets/pulls\ngh: made-up api text (HTTP 403)';
+    await assert.rejects(go(makeGh({ failOn: 'prs', failMessage: msg })), (e) => e.kind === 'gh_error' && e.message === 'gh api call failed (HTTP 403)');
   });
 
   test('the same id on two pages is counted once', async () => {
@@ -670,15 +941,16 @@ describe('sweep with a stub gh', () => {
     assert.deepEqual(file.findings.map((f) => f.commentId), [1, 2, 3]);
   });
 
-  test('F20 unmerged PRs are excluded and counted, in range only', async () => {
-    // Breaks when: the merged_at filter is dropped, or the excluded counts read the wrong list.
+  test('F20 R19 R20 open and closed-unmerged PRs are excluded and counted apart, in range only', async () => {
+    // Breaks when: the merged_at filter is dropped, the excluded counts read the wrong list, or open and closed-unmerged share one count.
     const gh = makeGh({
-      prs: [prRow(89990, { merged: false }), prRow(90001), prRow(90002, { merged: false }), prRow(90003)],
-      comments: [root({ id: 1 }), root({ id: 2, pr: 90002 }), root({ id: 3, pr: 90002 }), root({ id: 4, pr: 90003 })],
+      prs: [prRow(89990, { merged: false }), prRow(90001), prRow(90002, { merged: false }), prRow(90003, { merged: false, closed: true }), prRow(90004, { merged: false, closed: true }), prRow(90005)],
+      comments: [root({ id: 1 }), root({ id: 2, pr: 90002 }), root({ id: 3, pr: 90002 }), root({ id: 4, pr: 90003 }), reply({ id: 5, pr: 90003, to: 4, user: CR, body: 'x' }), root({ id: 6, pr: 90005 })],
     });
     const { summary } = await go(gh);
+    assert.equal(prRow(90003, { merged: false, closed: true }).state, 'closed');
     assert.equal(summary.denominator.roots, 2);
-    assert.deepEqual(summary.excluded, { unmergedPrs: 1, unmergedComments: 2 });
+    assert.deepEqual(summary.excluded, { openPrs: 1, closedUnmergedPrs: 2, openComments: 2, closedUnmergedComments: 2 });
   });
 
   test('F21 an open PR with a higher number does not move the default to', async () => {
@@ -687,7 +959,7 @@ describe('sweep with a stub gh', () => {
     const { summary } = await go(gh);
     assert.deepEqual(summary.range, { from: 90000, to: 90002 });
     assert.equal(summary.denominator.roots, 1);
-    assert.equal(summary.excluded.unmergedPrs, 0);
+    assert.deepEqual([summary.excluded.openPrs, summary.excluded.closedUnmergedPrs], [0, 0]);
   });
 
   test('F22 comments below from or above to are dropped; since comes from the lowest PR at or above from', async () => {
@@ -759,7 +1031,7 @@ describe('sweep with a stub gh', () => {
   test('the mixed PR end to end', async () => {
     // Breaks when: sweep and findingsForPr disagree on a number.
     const { summary } = await go(stdGh());
-    assert.deepEqual(summary.counts, { fixed: 2, fixedHuman: 1, fixedMarker: 1, wont_fix: 0, wrong: 1, unlabeled: 4 });
+    assert.deepEqual(summary.counts, { fixed: 2, fixedHuman: 1, fixedMarker: 1, wont_fix: 0, wrong: 1, unlabeled: 4, unlabeledWithMarker: 0 });
     assert.equal(summary.parsed.met, true);
   });
 });
@@ -805,9 +1077,10 @@ describe('main CLI', () => {
     assert.deepEqual(walk(home), []);
   });
 
-  for (const bad of [['--from', 'x'], ['--from', '0'], ['--from', '1.5'], ['--to', '-1'], ['--to', '0'], ['--from', '90005', '--to', '90001'], ['--bar', '0.5'], ['--bar', '0'], ['--repo', 'bad'], ['--repo', 'a/b/c'], ['--nope'], ['--from'], ['--out'], ['--summary-out'], ['--repo']]) {
-    test(`F34 bad flags "${bad.join(' ')}" exit 2 with no gh call and no file`, async () => {
-      // Breaks when: a check in parseArgs is dropped, or --bar is accepted again.
+  for (const bad of [['--from', 'x'], ['--from', '0'], ['--from', '1.5'], ['--to', '-1'], ['--to', '0'], ['--from', '90005', '--to', '90001'], ['--bar', '0.5'], ['--bar', '0'], ['--repo', 'bad'], ['--repo', 'a/b/c'], ['--nope'], ['--from'], ['--out'], ['--summary-out'], ['--repo'],
+    ['--repo', '../graphql'], ['--repo', 'acme/..'], ['--repo', './widgets'], ['--repo', 'acme/.'], ['--repo', '.../x'], ['--repo', 'parcadei/x'], ['--repo', 'Parcadei/widgets'], ['--repo', 'PARCADEI/y']]) {
+    test(`F34 R17 bad flags "${bad.join(' ')}" exit 2 with no gh call and no file`, async () => {
+      // Breaks when: a check in parseArgs is dropped, --bar is accepted again, or the dot-segment or upstream-owner check on --repo is dropped.
       const gh = stdGh();
       const r = await run(['sweep', ...bad], { gh });
       assert.equal(r.code, 2);
@@ -843,6 +1116,150 @@ describe('main CLI', () => {
     assert.equal(r.code, 2);
     assert.equal(gh.calls.length, 0);
     assert.ok(!existsSync(path.dirname(target)));
+  });
+
+  test('R17 a repo name with inner dots is accepted and reaches the route', async () => {
+    // Breaks when: the --repo check refuses every dot.
+    const gh = makeGh({ prs: [prRow(90001)], comments: [root({ id: 1 })] });
+    const r = await run(['sweep', '--from', '90000', '--repo', 'acme/wid.gets', '--out', path.join(tmp(), 'd.json')], { gh });
+    assert.equal(r.code, 0);
+    assert.ok(gh.calls[0].some((a) => a.startsWith('repos/acme/wid.gets/pulls?')));
+  });
+
+  /** A temp folder that holds a fake repo: `.git` as a folder (kind dir) or as a file (kind file, the worktree form). */
+  const fakeRepo = (kind = 'dir', base = tmp()) => {
+    if (kind === 'dir') mkdirSync(path.join(base, '.git'), { recursive: true });
+    else writeFileSync(path.join(base, '.git'), 'gitdir: ../elsewhere\n');
+    return base;
+  };
+  async function refusedOut(target, { home } = {}) {
+    const gh = stdGh();
+    const r = await run([...sweepArgs, '--out', target], { gh, home });
+    assert.equal(r.code, 2, target);
+    assert.equal(gh.calls.length, 0, target);
+    assert.ok(r.err.join('\n').includes('Usage'));
+    return r;
+  }
+
+  test('R13 R16 --out inside another repository (a .git folder) is refused, at any depth', async () => {
+    // Breaks when: the .git ancestor walk is dropped (only this script's own repo root is refused).
+    const repo = fakeRepo('dir');
+    await refusedOut(path.join(repo, 'x.json'));
+    await refusedOut(path.join(repo, 'a', 'b', 'c', 'x.json'));
+    assert.deepEqual(walk(repo), ['.git']);
+  });
+
+  test('R13 R16 --out inside a tree with a .git file (a worktree anywhere) is refused', async () => {
+    // Breaks when: the walk tests for a .git folder only.
+    const wt = fakeRepo('file');
+    await refusedOut(path.join(wt, 'notes', 'x.json'));
+    assert.deepEqual(walk(wt), ['.git']);
+  });
+
+  test('R13 R16 --out in the primary checkout, seen from a worktree, is refused', async () => {
+    // Breaks when: only the worktree root and .claude/worktrees count, not the primary tree above them.
+    const primary = fakeRepo('dir');
+    const worktree = path.join(primary, '.claude', 'worktrees', 'wt');
+    mkdirSync(worktree, { recursive: true });
+    fakeRepo('file', worktree);
+    await refusedOut(path.join(primary, 'docs', 'x.json'));
+    assert.ok(!existsSync(path.join(primary, 'docs')));
+  });
+
+  test('R14 R16 a long-path form of a path in a repo is refused; outside every repo it is written at the plain path', { skip: process.platform !== 'win32' }, async () => {
+    // Breaks when: the long-path prefix is not stripped before the check (the prefix hides the .git ancestor).
+    const repo = fakeRepo('dir');
+    await refusedOut(`\\\\?\\${path.join(repo, 'x.json')}`);
+    assert.deepEqual(walk(repo), ['.git']);
+    const home = tmp();
+    const plain = path.join(home, 'ok', 'd.json');
+    const r = await run([...sweepArgs, '--out', `\\\\?\\${plain}`], { gh: stdGh(), home });
+    assert.equal(r.code, 0);
+    assert.equal(JSON.parse(readFileSync(plain, 'utf8')).findings.length, 7);
+  });
+
+  test('R14 R16 every UNC form is refused, inside or outside a repo, before any file read', async () => {
+    // Breaks when: a share path, a device path or the long-path UNC form passes the check.
+    // Every target maps to a temp folder, so a broken guard writes only there.
+    const outside = tmp();
+    const rest = (p) => p.slice(3);
+    const drive = (p) => p.slice(0, 1);
+    const inside = path.join(fakeRepo('dir', outside), 'x.json');
+    const targets = [
+      `\\\\localhost\\${drive(inside)}$\\${rest(inside)}`, `//localhost/${drive(inside)}$/${rest(inside).replace(/\\/g, '/')}`,
+      `\\\\?\\UNC\\localhost\\${drive(inside)}$\\${rest(inside)}`, `\\\\.\\${inside}`, `\\\\127.0.0.1\\${drive(inside)}$\\${rest(inside)}`,
+    ];
+    for (const t of targets) await refusedOut(t);
+    assert.deepEqual(walk(outside), ['.git']);
+    const plainOutside = path.join(tmp(), 'y.json');
+    await refusedOut(`\\\\localhost\\${drive(plainOutside)}$\\${rest(plainOutside)}`);
+    assert.ok(!existsSync(plainOutside));
+  });
+
+  test('R16 the default path is checked too: a home inside a repo tree is refused', async () => {
+    // Breaks when: the default path skips outRefused.
+    const home = fakeRepo('dir');
+    const r = await run(sweepArgs, { gh: stdGh(), home });
+    assert.equal(r.code, 2);
+    assert.deepEqual(walk(home), ['.git']);
+  });
+
+  test('R16 the default path follows a changed USERPROFILE (no injected home) and is refused in a repo tree', async () => {
+    // Breaks when: the default path skips outRefused, or reads a home other than os.homedir().
+    const home = fakeRepo('dir');
+    const keep = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
+    process.env.USERPROFILE = home;
+    process.env.HOME = home;
+    try {
+      assert.equal(os.homedir(), home);
+      const gh = stdGh();
+      const err = [];
+      const code = await main(sweepArgs, { gh, now: () => NOW, stdout: () => {}, stderr: (s) => err.push(s) });
+      assert.equal(code, 2);
+      assert.equal(gh.calls.length, 0);
+      assert.deepEqual(walk(home), ['.git']);
+    } finally {
+      for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+
+  test('R15 --summary-out on the same file as --out (or the default path) exits 2 with no gh call', async () => {
+    // Breaks when: the same-file check is dropped (the summary would overwrite the full file).
+    const home = tmp();
+    const out = path.join(home, 'd.json');
+    const variants = [out, `${home}${path.sep}.${path.sep}d.json`, `${home}${path.sep}sub${path.sep}..${path.sep}d.json`];
+    if (process.platform === 'win32') variants.push(path.join(home, 'D.JSON'));
+    for (const s of variants) {
+      const gh = stdGh();
+      const r = await run([...sweepArgs, '--out', out, '--summary-out', s], { gh, home });
+      assert.equal(r.code, 2, s);
+      assert.equal(gh.calls.length, 0);
+    }
+    const gh = stdGh();
+    const def = path.join(home, '.claude', 'state', 'review-engine', '2026-11-11-dispositions.json');
+    assert.equal((await run([...sweepArgs, '--summary-out', def], { gh, home })).code, 2);
+    assert.deepEqual(walk(home), []);
+  });
+
+  test('R18 bad JSON from gh prints a fixed line, no response text', async () => {
+    // Breaks when: the SyntaxError message (which quotes the response) is printed.
+    const home = tmp();
+    const gh = async () => JSON.parse('<html>made-up secret response page</html>');
+    const r = await run([...sweepArgs, '--out', path.join(home, 'd.json')], { gh, home });
+    assert.equal(r.code, 1);
+    assert.deepEqual(r.err, ['dispositions failed (bad_shape): gh output is not JSON']);
+    assert.deepEqual(walk(home), []);
+  });
+
+  test('R18 an uncaught error prints one fixed line: no stack, no path, no file left', async () => {
+    // Breaks when: main rethrows a non-SweepError, or prints its message or stack.
+    const home = tmp();
+    writeFileSync(path.join(home, 'a-file'), 'x');
+    const out = path.join(home, 'a-file', 'd.json');
+    const r = await run([...sweepArgs, '--out', out, '--summary-out', path.join(home, 's.json')], { gh: stdGh(), home });
+    assert.equal(r.code, 1);
+    assert.deepEqual(r.err, ['dispositions failed (internal): unexpected error']);
+    assert.deepEqual(walk(home), ['a-file']);
   });
 
   test('F35 the default file lives under the home state folder, named from the injected clock', async () => {
@@ -886,8 +1303,7 @@ describe('main CLI', () => {
     const summaryOut = path.join(home, 's.json');
     const missing = await run([...sweepArgs, '--out', out, '--summary-out', summaryOut], { gh: makeGh({ prs: [prRow(90001)], failOn: 'comments' }), home });
     assert.equal(missing.code, 1);
-    assert.deepEqual(missing.err.length, 1);
-    assert.ok(/^dispositions failed \(gh_error\): .*rate limit/.test(missing.err[0]));
+    assert.deepEqual(missing.err, ['dispositions failed (gh_error): gh api call failed']);
     assert.deepEqual(walk(home), []);
     writeFileSync(out, 'OLD BYTES');
     const kept = await run([...sweepArgs, '--out', out, '--summary-out', summaryOut], { gh: makeGh({ prs: [prRow(90001)], failOn: 'comments' }), home });
@@ -905,12 +1321,32 @@ describe('main CLI', () => {
     assert.deepEqual(walk(home), []);
   });
 
-  test('the error message is cut to 200 characters', async () => {
-    // Breaks when: the message is printed whole.
-    const r = await run([...sweepArgs, '--out', path.join(tmp(), 'd.json')], { gh: makeGh({ prs: [prRow(90001)], failOn: 'comments', failMessage: `rate limit ${'x'.repeat(500)}` }) });
+  test('X16 a gh error prints no gh text: one fixed line with the HTTP status only', async () => {
+    // Breaks when: the gh message (its command line, stderr or API text) is printed.
+    const failMessage = `Command failed: gh api x\nmade-up api text ${'x'.repeat(500)} (HTTP 502)`;
+    const r = await run([...sweepArgs, '--out', path.join(tmp(), 'd.json')], { gh: makeGh({ prs: [prRow(90001)], failOn: 'comments', failMessage }) });
     assert.equal(r.code, 1);
-    assert.ok(r.err[0].length < 260);
-    assert.ok(!r.err[0].includes('\n'));
+    assert.deepEqual(r.err, ['dispositions failed (gh_error): gh api call failed (HTTP 502)']);
+  });
+
+  test('X13 a failed rename (--out is a folder) leaves no .tmp file and prints the fixed line', async () => {
+    // Breaks when: writeJson drops the rmSync of the .tmp file on failure.
+    const home = tmp();
+    const out = path.join(home, 'out-folder');
+    mkdirSync(out);
+    const r = await run([...sweepArgs, '--out', out], { gh: stdGh(), home });
+    assert.equal(r.code, 1);
+    assert.deepEqual(r.err, ['dispositions failed (internal): unexpected error']);
+    assert.deepEqual(walk(home), ['out-folder']);
+  });
+
+  test('X15 an alternate data stream path is refused, on a repo folder or anywhere', { skip: process.platform !== 'win32' }, async () => {
+    // Breaks when: plainPath lets a colon after the drive through (the write lands in a stream of the repo folder).
+    const repo = fakeRepo('dir');
+    await refusedOut(`${repo}:x`);
+    await refusedOut(`${path.join(repo, '.git')}:x.json`);
+    await refusedOut(`${path.join(tmp(), 'd.json')}:s`);
+    assert.deepEqual(walk(repo), ['.git']);
   });
 
   test('F28 zero comments exit 3 and the summary is written', async () => {
