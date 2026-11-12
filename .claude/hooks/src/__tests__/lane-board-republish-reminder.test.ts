@@ -477,6 +477,23 @@ describe('ask verbs and the publish budget (handle, against a temp pending dir)'
     expect(readPend().v).toBeUndefined();
   });
 
+  it.each([
+    'note x "y"; node lane.mjs done x',
+    'say "hi" && node lane.mjs claim x',
+    'note x "y"\nnode lane.mjs park x --for 24h --reason "away"',
+  ])('C5: an ask verb after another verb in one command is not lost: `%s`', (rest) => {
+    const r = lane(rest, NOW);
+    expect(textOf(r)).toContain('Stop gate');
+    expect(readPend().askAt).toBe(NOW);
+    expect(readPend().verbs).toHaveLength(1);
+    expect(['done', 'claim', 'park']).toContain(readPend().verbs[0]);
+  });
+
+  it('C5: two verbs that do not ask in one command still mark the first one', () => {
+    expect(lane('note x "y"; node lane.mjs say "hi"', NOW).output).toBeNull();
+    expect(readPend().verbs).toEqual(['note']);
+  });
+
   it('ruling S3: each sentence of the reminder has at most 20 words', () => {
     const text = textOf(lane('claim x'));
     expect(text).toContain('Do not publish before it asks.');

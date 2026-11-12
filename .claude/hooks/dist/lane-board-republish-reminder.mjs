@@ -6604,6 +6604,7 @@ function laneChange(command, tool) {
   const unquoted = command.replace(/(["'])([^"'\n]*lane\.mjs)\1/g, "$2");
   const masked = maskQuoted(unquoted, tool);
   if (OTHER_DB_ASSIGN.test(masked)) return null;
+  let first = null;
   for (const segment of masked.split(/[;&|\n]+/)) {
     if (/--dry-run\b/.test(segment)) continue;
     const m = segment.match(LANE_RE);
@@ -6612,14 +6613,16 @@ function laneChange(command, tool) {
     const envPrefix = /(?:^|\s)LANE_PROJECT=([A-Za-z0-9][\w-]*)/.exec(m[1])?.[1];
     const psEnv = /\$env:LANE_PROJECT\s*=\s*['"]?([A-Za-z0-9][\w-]*)/i.exec(command)?.[1];
     const as = /--as(?:=|\s+)([^\s;&|()]+)/.exec(segment)?.[1] ?? null;
-    return {
+    const change = {
       verb: m[2],
       project: flag ?? envPrefix ?? psEnv ?? null,
       laneId: laneIdAfterVerb(segment.slice(m[0].length)),
       as
     };
+    if (ASK_VERBS.has(change.verb)) return change;
+    first ??= change;
   }
-  return null;
+  return first;
 }
 function laneChangeVerb(command, tool) {
   return laneChange(command, tool)?.verb ?? null;

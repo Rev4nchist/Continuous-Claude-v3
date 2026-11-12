@@ -178,7 +178,9 @@ function laneIdAfterVerb(rest: string): string | null {
 }
 
 /**
- * The first state-changing lane.mjs call in a command, or null.
+ * The state-changing lane.mjs call of a command, or null: the first call with an ask verb (claim, release,
+ * done, park), else the first changing call. One command gives one change, so a command with calls on two
+ * boards marks one board.
  *
  * A quoted path to lane.mjs is unquoted first. Then quoted text is masked, so a commit message
  * that mentions "lane.mjs done" never counts. `node` must start the command (after an optional PowerShell
@@ -190,6 +192,7 @@ export function laneChange(command: string, tool: string): LaneChange | null {
   const unquoted = command.replace(/(["'])([^"'\n]*lane\.mjs)\1/g, '$2');
   const masked = maskQuoted(unquoted, tool);
   if (OTHER_DB_ASSIGN.test(masked)) return null; // aimed at a scratch database: not a live lane change
+  let first: LaneChange | null = null;
   for (const segment of masked.split(/[;&|\n]+/)) {
     if (/--dry-run\b/.test(segment)) continue;
     const m = segment.match(LANE_RE);
@@ -198,17 +201,20 @@ export function laneChange(command: string, tool: string): LaneChange | null {
     const envPrefix = /(?:^|\s)LANE_PROJECT=([A-Za-z0-9][\w-]*)/.exec(m[1])?.[1];
     const psEnv = /\$env:LANE_PROJECT\s*=\s*['"]?([A-Za-z0-9][\w-]*)/i.exec(command)?.[1];
     const as = /--as(?:=|\s+)([^\s;&|()]+)/.exec(segment)?.[1] ?? null;
-    return {
+    const change: LaneChange = {
       verb: m[2],
       project: flag ?? envPrefix ?? psEnv ?? null,
       laneId: laneIdAfterVerb(segment.slice(m[0].length)),
       as,
     };
+    // `note x; done x` in one command: the ask verb must not be lost behind the note.
+    if (ASK_VERBS.has(change.verb)) return change;
+    first ??= change;
   }
-  return null;
+  return first;
 }
 
-/** The first state-changing lane.mjs verb a command runs, or null. */
+/** The verb of laneChange(): the first ask verb a command runs, else its first changing verb, or null. */
 export function laneChangeVerb(command: string, tool: string): string | null {
   return laneChange(command, tool)?.verb ?? null;
 }
