@@ -117,18 +117,20 @@ describe('R2..R8: handle() against a real pending dir', () => {
   });
   afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 
-  const files = (): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => !n.startsWith('.')) : []);
+  /** The pending files: no dot-file, and not the `budget` folder that a counted publish makes. */
+  const files = (): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => !n.startsWith('.') && n.endsWith('.json')) : []);
 
-  it('R2: a CCv3 claim writes <sid>.json, reminds with the absolute render command and spawns one render', () => {
+  it('R2: a CCv3 claim writes <sid>.json, reminds with the Stop gate text (no publish steps) and spawns one render', () => {
     const r = handle(bash('node lane.mjs claim x', { session_id: SID, cwd }), env, { spawn: spawnFn as never, now: 1_700_000_000_000 });
     expect(files()).toEqual([`${SID}.json`]);
     const pend = JSON.parse(fs.readFileSync(path.join(dir, `${SID}.json`), 'utf8'));
     expect(pend.board).toBe('continuous-claude');
     expect(pend.verbs).toEqual(['claim']);
     const text = JSON.stringify(r.output);
-    expect(text).toContain(renderBoardCmd('continuous-claude', env));
+    expect(text).toContain('Stop gate');
+    expect(text).not.toContain(renderBoardCmd('continuous-claude', env));
     expect(text).not.toContain('node scripts/coordination');
-    expect(text).toContain('https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid');
+    expect(text).not.toContain('https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid');
     expect(spawned).toHaveLength(1);
     expect(spawned[0].cmd).toBe(process.execPath);
     expect(spawned[0].args).toEqual([env.LANE_RENDER_SCRIPT, pageOf('continuous-claude'), '--project', 'continuous-claude']);
@@ -141,8 +143,9 @@ describe('R2..R8: handle() against a real pending dir', () => {
     expect(pendingFile(SID, 'ph-board', env)).toBe(path.join(dir, `${SID}@ph-board.json`));
     expect(listPending(SID, env).map((e) => e.board)).toEqual(['ph-board']);
     const text = JSON.stringify(r.output);
-    expect(text).toContain(PH_URL);
-    expect(text).toContain('lane-board-ph-board.html');
+    expect(text).toContain('board ph-board');
+    expect(text).toContain('Stop gate');
+    expect(text).not.toContain(PH_URL);
     expect(text).not.toContain('RtrTNVfAq9uowmb2tfbzid');
   });
 
@@ -447,9 +450,10 @@ describe('R11: note|state|release|done in a cwd with no board use the board of t
     expect(spawned).toHaveLength(1);
   });
 
-  it('the same for note, state and release', () => {
+  it('the same board for note, state and release: note and state mark the change, release (an ask verb) reminds', () => {
     for (const cmd of ['note L1 "x"', 'state L1 active', 'release L1']) {
-      expect(call(`node lane.mjs ${cmd}`, nowhere, { ownedBoard: 'continuous-claude' }).decision.action).toBe('remind');
+      const d = call(`node lane.mjs ${cmd}`, nowhere, { ownedBoard: 'continuous-claude' }).decision;
+      expect(d).toMatchObject({ action: cmd.startsWith('release') ? 'remind' : 'mark', board: 'continuous-claude' });
       fs.rmSync(path.join(tmp, 'pending'), { recursive: true, force: true });
     }
   });

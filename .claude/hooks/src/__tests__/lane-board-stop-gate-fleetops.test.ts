@@ -14,7 +14,8 @@
  *   F9  the line replaces the board instructions instead of following them
  *   F10 two sessions each get the line inside the hour (the throttle is per machine)
  *   F11 the time is not in America/Chicago, or the zone word is wrong across the DST change
- *   F12 the line blocks a turn the board gate would have approved (or burns the marker doing so)
+ *   F12 the line blocks a turn the board gate would have approved (or burns the marker doing so);
+ *       this holds for an approve by the publish budget rules too (a say-only batch, the daily cap)
  *   F13 a huge refresh.json or marker is read whole after the block is final (memory, slow stop)
  *   F14 the marker write leaves a .tmp file behind, or is not atomic
  *   F15 a headless opt-in (LANE_CONTEXT_HEADLESS=1) burns the marker for a run that cannot act on it
@@ -250,9 +251,32 @@ describe('the line never causes a block', () => {
 
   it('F12: a pending file for a board with no phone page approves and writes no marker', () => {
     writeRefresh(refreshDoc());
-    fs.writeFileSync(path.join(pendingDir, 'sess-1@zz-board.json'), JSON.stringify({ since: 'x', verbs: ['note'], board: 'zz-board' }));
+    // `claim`, not `note`: a note-only batch approves on any board now, so `note` would not test the page rule
+    fs.writeFileSync(path.join(pendingDir, 'sess-1@zz-board.json'), JSON.stringify({ since: 'x', verbs: ['claim'], board: 'zz-board' }));
     expect(gate.stopGate(payload(), baseEnv(), NOW).output).toBeNull();
     expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('F12 (G1): a say-only batch approves and writes no marker', () => {
+    writeRefresh(refreshDoc());
+    const file = path.join(pendingDir, 'sess-1.json');
+    fs.writeFileSync(file, JSON.stringify({ since: 'x', verbs: ['say', 'note'], board: 'continuous-claude' }));
+    expect(gate.stopGate(payload(), baseEnv(), NOW).output).toBeNull();
+    expect(fs.existsSync(marker())).toBe(false);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).stopBlocked).toBeUndefined();
+  });
+
+  it('F12 (G7): a claim at 150 publishes of the UTC day approves and writes no marker', () => {
+    writeRefresh(refreshDoc());
+    fs.mkdirSync(path.join(pendingDir, 'budget'));
+    fs.writeFileSync(
+      path.join(pendingDir, 'budget', 'bbbbbbbb-0000-4000-8000-000000000002.json'),
+      JSON.stringify({ day: iso(NOW).slice(0, 10), n: 150 }),
+    );
+    batch();
+    expect(gate.stopGate(payload(), baseEnv(), NOW).output).toBeNull();
+    expect(fs.existsSync(marker())).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(pendingDir, 'sess-1.json'), 'utf8')).stopBlocked).toBeUndefined();
   });
 
   it('F3: a headless run gets no line and no marker', () => {
