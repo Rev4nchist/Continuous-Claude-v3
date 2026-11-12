@@ -17,6 +17,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import type { SessionStartInput, HookOutput } from './shared/types.js';
 import { isCompactSource } from './shared/session-source.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 /**
  * Async sleep using setTimeout (non-blocking)
@@ -161,6 +162,15 @@ async function startContainerWithRetry(): Promise<{ success: boolean; message: s
 }
 
 /**
+ * Print a context output. Under cursor-agent (the review engine) print the neutral output instead:
+ * SessionStart text can reach the review model (seat ruling, Tier B). The docker work above still
+ * runs; only the text is dropped.
+ */
+function printContext(input: SessionStartInput, output: HookOutput): void {
+  console.log(JSON.stringify(isEngineHost(input) ? { result: 'continue' } : output));
+}
+
+/**
  * Main entry point
  */
 export async function main(): Promise<void> {
@@ -196,7 +206,7 @@ export async function main(): Promise<void> {
     const output: HookOutput = {
       hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Docker not available - memory system will use SQLite fallback' }
     };
-    console.log(JSON.stringify(output));
+    printContext(input, output);
     return;
   }
 
@@ -212,7 +222,7 @@ export async function main(): Promise<void> {
     const output: HookOutput = {
       hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `Failed to start PostgreSQL container: ${startResult.message}. Memory system will use SQLite fallback.` }
     };
-    console.log(JSON.stringify(output));
+    printContext(input, output);
     return;
   }
 
@@ -220,7 +230,7 @@ export async function main(): Promise<void> {
   const output: HookOutput = {
     hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: startResult.message || 'PostgreSQL memory container started' }
   };
-  console.log(JSON.stringify(output));
+  printContext(input, output);
 }
 
 // Run main if this is the entry point

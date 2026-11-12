@@ -32,8 +32,33 @@ import { getOpcDir } from './shared/opc-path.js';
 import { runSessionHealth } from './shared/memory-health.js';
 import { buildSessionStartOutput, isClaudeHomeProject } from './shared/session-start-output.js';
 import { healthAlertForSource } from './shared/health-alert.js';
+import { isEngineHost } from './shared/engine-host.js';
+
+/** The parsed payload, or null for empty or invalid JSON. */
+function parsePayload(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
 
 export async function main(): Promise<void> {
+  // stdin first: the engine-host guard needs the payload before any check or side effect (T4).
+  let stdinContent = '{}';
+  try {
+    stdinContent = readFileSync(0, 'utf-8');
+  } catch {
+    // Empty/invalid stdin is fine for SessionStart
+  }
+
+  // Under a Cursor host (the review engine): no output, no pg SELECT, no marker write (it would
+  // reset the failed-writes count Dave's next session reads), no print-state write, no backup.
+  if (isEngineHost(parsePayload(stdinContent))) {
+    emitAndExit({});
+    return;
+  }
+
   const project = getProject();
   const homeDir = process.env.HOME || process.env.USERPROFILE || '';
 
@@ -42,12 +67,6 @@ export async function main(): Promise<void> {
     return;
   }
 
-  let stdinContent = '{}';
-  try {
-    stdinContent = readFileSync(0, 'utf-8');
-  } catch {
-    // Empty/invalid stdin is fine for SessionStart
-  }
   // After /compact only problems print, and the failed-writes marker stays (shared/session-source.ts).
   const source = parseSessionSource(stdinContent);
 

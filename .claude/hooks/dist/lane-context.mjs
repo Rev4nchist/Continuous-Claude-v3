@@ -5961,6 +5961,19 @@ function resolveDbUrl() {
   return null;
 }
 
+// src/shared/engine-host.ts
+init_trace_boot();
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/shared/session-identity.ts
 init_trace_boot();
 import { closeSync, existsSync as existsSync2, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync2, readSync, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
@@ -6440,7 +6453,17 @@ async function deliverDirectMessages(me, now = Date.now(), emitFn = emit, budget
   }
 }
 async function main() {
-  const out = await runLaneContext(await readStdin());
+  const raw = await readStdin();
+  let payload = null;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+  }
+  if (isEngineHost(payload)) {
+    process.stdout.write("{}");
+    return;
+  }
+  const out = await runLaneContext(raw);
   if (out !== null) process.stdout.write(JSON.stringify(out));
 }
 var UNREAD_BOARD_SQL = `SELECT e.*, (SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id = $3::text) AS board_wm

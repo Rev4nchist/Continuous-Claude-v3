@@ -1,11 +1,12 @@
 /**
  * isEngineHost: true only for a hook payload sent by cursor-agent (the review engine).
- * Seat ruling C1: exact, case-sensitive event names; no env signals.
+ * Seat ruling C1: exact, case-sensitive event names; no env signals. Seat ruling 2 (card
+ * engine-run-hook-silence-2): 'preToolUse' is in the set by convention, not measured.
  *
  * How the helper can fail, one test each (the source change that breaks it):
  *  1. a measured cursor-agent name gives false -> the name is dropped from the set (engine run voided again)
  *  2. the Claude Code PascalCase name gives true -> a case-insensitive compare
- *  3. 'preToolUse' gives true before the probe proves it -> the name is added to the set
+ *  3. 'preToolUse' (by convention) gives false -> the name is dropped from the set
  *  4. null, missing, undefined or non-object input throws or gives true -> no type guard
  *  5. a non-string event gives true -> String() coercion of the event
  *  6. an Object.prototype key gives true -> an object-literal lookup instead of a Set
@@ -32,8 +33,8 @@ describe('isEngineHost', () => {
     },
   );
 
-  it('preToolUse gives false: the name is not proven under cursor-agent yet', () => {
-    expect(isEngineHost({ hook_event_name: 'preToolUse' })).toBe(false);
+  it('preToolUse gives true: in the set by convention (not measured; Claude Code sends PascalCase only)', () => {
+    expect(isEngineHost({ hook_event_name: 'preToolUse' })).toBe(true);
   });
 
   it.each([

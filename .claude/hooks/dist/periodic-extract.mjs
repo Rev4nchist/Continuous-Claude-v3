@@ -5765,7 +5765,7 @@ import { join as join3 } from "path";
 
 // src/shared/engine-host.ts
 init_trace_boot();
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd"]);
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
 function isEngineHost(input) {
   try {
     if (input === null || typeof input !== "object") return false;

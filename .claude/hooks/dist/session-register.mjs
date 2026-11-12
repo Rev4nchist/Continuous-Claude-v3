@@ -5761,6 +5761,19 @@ var require_lib2 = __commonJS({
 init_trace_boot();
 import { readFileSync as readFileSync6 } from "fs";
 
+// src/shared/engine-host.ts
+init_trace_boot();
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/shared/db-utils-pg.ts
 init_trace_boot();
 
@@ -6627,6 +6640,10 @@ async function main() {
     input = JSON.parse(stdinContent);
   } catch {
     console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({}));
     return;
   }
   if (input.hook_event_name === "SessionEnd") {

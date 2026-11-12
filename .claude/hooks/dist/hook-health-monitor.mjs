@@ -396,6 +396,18 @@ function assessFileFreshness(srcPath, srcRoot, manifest) {
   return { state: "fresh" };
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/hook-health-monitor.ts
 function parseHookCommands(settings) {
   const hooks = settings.hooks;
@@ -515,6 +527,10 @@ async function main() {
     input = stdin ? JSON.parse(stdin) : { session_id: "unknown" };
   } catch {
     input = { session_id: "unknown" };
+  }
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
   }
   try {
     const userProfile = process.env.USERPROFILE || process.env.HOME || "";

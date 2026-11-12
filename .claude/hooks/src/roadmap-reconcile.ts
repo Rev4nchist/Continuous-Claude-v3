@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { isCompactSource, parseSessionSource } from './shared/session-source.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -483,6 +484,14 @@ async function readStdin(): Promise<string> {
 async function main() {
   // Read stdin (SessionStart input)
   const input = await readStdin();
+  // Under cursor-agent (the review engine) print no values.system: SessionStart text can reach
+  // the review model (seat ruling, Tier B). The reconcile only reads, so nothing is lost.
+  let payload: unknown = null;
+  try { payload = JSON.parse(input); } catch { /* empty or invalid: not the engine host */ }
+  if (isEngineHost(payload)) {
+    console.log(JSON.stringify({}));
+    return;
+  }
   // SessionStart hooks receive { session_id, source }. After /compact the roadmap
   // was reconciled at this session's start: skip it.
   if (isCompactSource(parseSessionSource(input))) {
