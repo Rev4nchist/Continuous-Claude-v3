@@ -357,6 +357,20 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 import { writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join as join2 } from "path";
+
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
+// src/epistemic-reminder.ts
 async function main() {
   let input = {};
   const chunks = [];
@@ -374,6 +388,10 @@ async function main() {
   }
   const tool = input.tool_name;
   if (tool !== "Grep") {
+    console.log("{}");
+    return;
+  }
+  if (isEngineHost(input)) {
     console.log("{}");
     return;
   }

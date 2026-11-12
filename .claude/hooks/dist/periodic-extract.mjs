@@ -5763,6 +5763,19 @@ import { readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "
 import { tmpdir as tmpdir2 } from "os";
 import { join as join3 } from "path";
 
+// src/shared/engine-host.ts
+init_trace_boot();
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/shared/session-touch.ts
 init_trace_boot();
 import { existsSync, readFileSync, writeFileSync } from "fs";
@@ -5943,6 +5956,10 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({}));
+    return;
+  }
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({}));
     return;
   }
