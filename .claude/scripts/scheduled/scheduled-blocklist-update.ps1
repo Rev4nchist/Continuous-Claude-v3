@@ -20,6 +20,11 @@
   4. node scripts/update-blocklist.mjs --apply, then npm run build in .claude/hooks.
   5. If malicious-packages.json or dist/package-install-guard.mjs changed: commit them and
      git push <Remote> HEAD:refs/heads/<Branch>. If nothing changed, skip only this step.
+     The build is slow, so <Remote>/<Branch> can move before the push. A rejected push is handled so:
+     git fetch <Remote> <Branch>. If the tip did not move since this attempt started, exit 1 at once
+     (not a race, no retry). If it moved, reset the temp worktree to the new tip (detached; the ignored
+     node_modules junction stays) and run steps 4 and 5 again, so the commit is built from the new tip.
+     At most 3 attempts; then exit 1 with the log line [PUSH-RACE] ... giving up. Never a force push.
   6. Always: advance local <Branch>. A fresh read of the checked-out branch decides how: exactly
      <Branch> -> merge --ff-only; anything else -> git fetch <Remote> <Branch>:<Branch>.
      No other branch is ever moved.
@@ -77,41 +82,79 @@ $msgFile = Join-Path ([System.IO.Path]::GetTempPath()) ('blocklist-update-msg-' 
 function Log([string]$msg) { Write-Host ('[' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '] ' + $msg) }
 function GitPrimary { & git -C $RepoPath @args 2>&1 | ForEach-Object { "$_" } }
 
-# Fetch, build, and (only if the blocklist changed) commit and push in the temp worktree.
-# Returns 0 on success, 1 on a failed step. Sets $script:pushed when a push landed.
+# One attempt in the temp worktree: update, build, and (only if the blocklist changed) commit and push.
+# Returns 0 when done (pushed, or nothing to push), 1 on a failed step, $script:PushRejected when only the push failed.
+$script:PushRejected = 2
+function Invoke-Attempt {
+  Log 'Fetching advisories from GitHub...'
+  & node $UpdateScript --apply | Out-Host
+  if ($LASTEXITCODE -ne 0) { Log '[ERROR] Blocklist update failed'; return 1 }
+
+  Log 'Rebuilding hooks...'
+  Push-Location (Join-Path $wt '.claude\hooks')
+  try { & npm.cmd run build | Out-Host; $buildRc = $LASTEXITCODE } finally { Pop-Location }
+  if ($buildRc -ne 0) { Log '[ERROR] Hook build failed'; return 1 }
+
+  # A failed add (an index.lock, say) would leave nothing staged and read as "no changes": check it.
+  $addOut = & git add -- .claude/hooks/src/shared/malicious-packages.json .claude/hooks/dist/package-install-guard.mjs 2>&1
+  if ($LASTEXITCODE -ne 0) { Log "[ERROR] git add failed: $addOut"; return 1 }
+  & git diff --cached --quiet
+  if ($LASTEXITCODE -eq 0) { Log 'No blocklist changes detected; nothing to commit or push'; return 0 }
+
+  Log "Committing updated blocklist to $Branch..."
+  Set-Content -Path $msgFile -Value 'chore(security): daily blocklist update [automated]' -Encoding ASCII
+  & $gitSafe -C $wt commit -F $msgFile | ForEach-Object { Log "  $_" }
+  if ($LASTEXITCODE -ne 0) { Log '[ERROR] Blocklist commit failed'; return 1 }
+  $newSha = (git rev-parse HEAD)
+
+  # HEAD:refs/heads/<Branch> names the target explicitly. A bare `git push fork HEAD` follows the
+  # current branch, which is how this job once pushed the wrong thing. Never forced.
+  & $gitSafe -C $wt push $Remote "HEAD:refs/heads/$Branch" | ForEach-Object { Log "  $_" }
+  if ($LASTEXITCODE -ne 0) { return $script:PushRejected }
+  Log "Pushed $($newSha.Substring(0,7)) to $Remote/$Branch"
+  return 0
+}
+
+# Fetch the remote after a rejected push and say whether it moved past $base (this attempt's start).
+# Returns the new tip when it moved, 'same' when it did not, '' when the fetch or the read failed.
+function Get-MovedTip([string]$base) {
+  GitPrimary fetch $Remote $Branch | ForEach-Object { Log "  $_" }
+  if ($LASTEXITCODE -ne 0) { Log "[ERROR] git fetch $Remote $Branch failed after the rejected push"; return '' }
+  $tip = "$(& git -C $RepoPath rev-parse "refs/remotes/$Remote/$Branch" 2>$null)".Trim()
+  if (-not $tip) { Log "[ERROR] could not read $Remote/$Branch after the fetch"; return '' }
+  if ($tip -eq $base) { return 'same' }
+  return $tip
+}
+
+# Run the attempt in the temp worktree, at most $maxAttempts times. Returns 0 on success, 1 on a failed step.
+# A rejected push is retried only when $Remote/$Branch moved meanwhile (the slow build lets it): the worktree is
+# reset to the new tip and the update and build run again, so the commit is made from the tip's own source
+# and dist. No rebase, no cherry-pick, no force. The ignored node_modules junction survives the reset
+# (never git clean -x here).
 function Update-AndPush {
+  $maxAttempts = 3
   Push-Location $wt
   try {
-    Log 'Fetching advisories from GitHub...'
-    & node $UpdateScript --apply | Out-Host
-    if ($LASTEXITCODE -ne 0) { Log '[ERROR] Blocklist update failed'; return 1 }
-
-    Log 'Rebuilding hooks...'
-    Push-Location (Join-Path $wt '.claude\hooks')
-    try { & npm.cmd run build | Out-Host; $buildRc = $LASTEXITCODE } finally { Pop-Location }
-    if ($buildRc -ne 0) { Log '[ERROR] Hook build failed'; return 1 }
-
-    # A failed add (an index.lock, say) would leave nothing staged and read as "no changes": check it.
-    $addOut = & git add -- .claude/hooks/src/shared/malicious-packages.json .claude/hooks/dist/package-install-guard.mjs 2>&1
-    if ($LASTEXITCODE -ne 0) { Log "[ERROR] git add failed: $addOut"; return 1 }
-    & git diff --cached --quiet
-    if ($LASTEXITCODE -eq 0) { Log 'No blocklist changes detected; nothing to commit or push'; return 0 }
-
-    Log "Committing updated blocklist to $Branch..."
-    Set-Content -Path $msgFile -Value 'chore(security): daily blocklist update [automated]' -Encoding ASCII
-    & $gitSafe -C $wt commit -F $msgFile | ForEach-Object { Log "  $_" }
-    if ($LASTEXITCODE -ne 0) { Log '[ERROR] Blocklist commit failed'; return 1 }
-    $newSha = (git rev-parse HEAD)
-
-    # HEAD:refs/heads/<Branch> names the target explicitly. A bare `git push fork HEAD` follows the
-    # current branch, which is how this job once pushed the wrong thing.
-    & $gitSafe -C $wt push $Remote "HEAD:refs/heads/$Branch" | ForEach-Object { Log "  $_" }
-    if ($LASTEXITCODE -ne 0) {
-      Log "[ERROR] Push to $Remote/$Branch failed. The commit existed only in the temp worktree and is discarded; the next run retries."
-      return 1
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+      $base = "$(& git rev-parse HEAD)".Trim()
+      $rc = @(Invoke-Attempt)[-1]
+      if ($rc -eq 0) { return 0 }
+      if ($rc -ne $script:PushRejected) { return 1 }
+      $tip = @(Get-MovedTip $base)[-1]
+      if (-not $tip) { return 1 }
+      if ($tip -eq 'same') {
+        Log "[ERROR] Push to $Remote/$Branch failed and $Remote/$Branch did not move, so this is not a race. The commit existed only in the temp worktree and is discarded; the next run retries."
+        return 1
+      }
+      if ($attempt -eq $maxAttempts) {
+        Log "[PUSH-RACE] $Remote/$Branch moved on each of $maxAttempts attempts; giving up. The next run retries."
+        return 1
+      }
+      Log "[PUSH-RACE] $Remote/$Branch moved to $($tip.Substring(0,7)); rebuilding on the new tip (attempt $($attempt + 1) of $maxAttempts)"
+      & git reset --hard --quiet $tip 2>&1 | ForEach-Object { Log "  $_" }
+      if ($LASTEXITCODE -ne 0) { Log "[ERROR] could not reset the temp worktree to $tip"; return 1 }
     }
-    Log "Pushed $($newSha.Substring(0,7)) to $Remote/$Branch"
-    return 0
+    return 1
   }
   finally { Pop-Location }
 }
