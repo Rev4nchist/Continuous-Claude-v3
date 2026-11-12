@@ -14,9 +14,10 @@ New-Item -ItemType Directory -Force $Dir | Out-Null
 $start = Join-Path $PSScriptRoot 'start-fleet.ps1'
 $stop = Join-Path $PSScriptRoot 'stop-fleet.ps1'
 $pwsh = (Get-Command pwsh.exe).Source
+# Icons: made by icons/build-icons.mjs. A shortcut with no icon file keeps the pwsh icon.
 $links = @(
-  @{ Name = 'Fleet'; Script = $start },
-  @{ Name = 'Fleet - stop'; Script = $stop }
+  @{ Name = 'Fleet'; Script = $start; Icon = (Join-Path $PSScriptRoot 'icons\fleet.ico') },
+  @{ Name = 'Fleet - stop'; Script = $stop; Icon = (Join-Path $PSScriptRoot 'icons\fleet-stop.ico') }
 )
 
 $shell = New-Object -ComObject WScript.Shell
@@ -36,6 +37,7 @@ foreach ($l in $links) {
   $lnk.WorkingDirectory = Split-Path -Parent $l.Script
   $lnk.WindowStyle = 7
   $lnk.Description = "Agentic OS Fleet app: $($l.Name)"
+  if (Test-Path -LiteralPath $l.Icon) { $lnk.IconLocation = "$($l.Icon),0" }
   $lnk.Save()
   Write-Host "Wrote $path"
 }
