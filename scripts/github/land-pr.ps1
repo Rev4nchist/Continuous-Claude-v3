@@ -333,11 +333,48 @@ function Get-RedChecks([string]$Sha) {
   if ($runsTotal -gt $runs.Count) { Fail "#$Pr has $runsTotal check runs but only $($runs.Count) were read; cannot read them all. Nothing was merged." }
   if ($statusTotal -gt $statuses.Count) { Fail "#$Pr has $statusTotal commit statuses but only $($statuses.Count) were read; cannot read them all. Nothing was merged." }
   $badConclusions = 'failure', 'timed_out', 'startup_failure', 'action_required'
+  $script:HeadCheckRuns = $runs   # the same runs feed Get-MissingRequiredChecks: one read, the head the land step merges
   foreach ($r in $runs) {
     if ($r.app.slug -ne 'greptile-apps' -and $r.status -eq 'completed' -and $r.conclusion -in $badConclusions) { "check run `"$($r.name)`" ended $($r.conclusion)" }
   }
   foreach ($s in $statuses) {
     if ($s.context -notmatch 'coderabbit' -and $s.state -in 'failure', 'error') { "status `"$($s.context)`" is $($s.state)" }
+  }
+}
+
+# The required CI jobs of a PR to main. Read at run time from review-status.mjs beside THIS script (the checkout the land runs from),
+# never from the PR branch and never from text of the PR, so a PR cannot loosen its own list. This script holds no copy of the names
+# and no count of them: a count would refuse every land after a new job is added. Any read problem stops the land (fail closed).
+function Get-RequiredCheckNames {
+  $stop = 'cannot read the required CI job names from review-status.mjs. Nothing was merged.'
+  $mod = ([Uri](Join-Path $PSScriptRoot 'review-status.mjs')).AbsoluteUri
+  # The script goes in on stdin: the arguments hold no shell special character (a .cmd stub or wrapper cannot mangle them).
+  $out = 'import(process.argv.at(-1)).then(m => console.log(JSON.stringify(m.REQUIRED_CHECK_RUNS)), e => { console.error(e.message); process.exit(1) })' | node --input-type=module - $mod 2>$null
+  if ($LASTEXITCODE) { Fail $stop }
+  try { $names = $out | Out-String | ConvertFrom-Json -NoEnumerate -ErrorAction Stop } catch { Fail "$stop (output is not JSON)" }
+  if ($names -isnot [array] -or $names.Count -lt 1) { Fail "$stop (not an array of one or more names)" }
+  $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  foreach ($n in $names) {
+    if ($n -isnot [string] -or [string]::IsNullOrWhiteSpace($n)) { Fail "$stop (an entry is not a non-empty string)" }
+    if (-not $seen.Add($n)) { Fail "$stop (duplicate entry)" }
+  }
+  return [string[]]$names
+}
+
+# A required job counts only when its newest try (per job name and per Actions workflow run) is completed and success, from the
+# github-actions app. The newest try is the highest check-run id: a re-run keeps the workflow run id in details_url and gets a higher id.
+# Missing, queued, running, skipped, neutral and cancelled stop the land. A newest try that ended failure, timed_out, startup_failure or
+# action_required is already a line of Get-RedChecks. Same rule and words as review-status.mjs.
+function Get-MissingRequiredChecks($Runs, [string[]]$Names) {
+  foreach ($n in $Names) {
+    $mine = @($Runs | Where-Object { $_.name -ceq $n -and $_.app.slug -ceq 'github-actions' })   # -ceq: exact, as review-status.mjs compares
+    if (-not $mine.Count) { "required check `"$n`" missing on the head"; continue }
+    $newest = @($mine | Group-Object { if ($_.details_url -match '/actions/runs/(\d+)/') { $Matches[1] } else { '?' } } |
+      ForEach-Object { $_.Group | Sort-Object { [long]$_.id } -Descending | Select-Object -First 1 })
+    foreach ($r in $newest) {
+      if ($r.status -ne 'completed') { "required check `"$n`" not completed ($($r.status))" }
+      elseif ($r.conclusion -ne 'success' -and $r.conclusion -notin 'failure', 'timed_out', 'startup_failure', 'action_required') { "required check `"$n`" ended $($r.conclusion)" }
+    }
   }
 }
 
@@ -393,11 +430,18 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     [void](Add-NoneLine $noneOut)
   } else {
     Write-Host "  -IgnoreReview: skipping the READY check and the pre-merge re-check"
-    # -IgnoreReview skips the review wait only. A red CI check on the head still blocks: branch protection is not available here
-    # (REST 403, private repo, free plan), so this script is the only gate. Fails closed on a read error or a cut-off page.
+    # -IgnoreReview skips the review wait only. A red CI check on the head still blocks, and so does a required CI job that is missing,
+    # not finished or not success: branch protection is not available here (REST 403, private repo, free plan), so this script is the
+    # only gate. Fails closed on a read error, a cut-off page or an unreadable job list.
     Step "CI check gate for #$Pr at $($head.Substring(0,7))"
     $redChecks = @(Get-RedChecks $head)
-    if ($redChecks.Count) { foreach ($rc in $redChecks) { Write-Host "  red: $rc" -ForegroundColor Red }; Fail "#$Pr has $($redChecks.Count) red CI check(s) on the head; -IgnoreReview never skips a red check. Nothing was merged. Fix the check, then re-run." }
+    $requiredNames = Get-RequiredCheckNames
+    $notGreen = @(Get-MissingRequiredChecks $script:HeadCheckRuns $requiredNames)
+    if ($redChecks.Count -or $notGreen.Count) {
+      foreach ($rc in $redChecks) { Write-Host "  red: $rc" -ForegroundColor Red }
+      foreach ($ng in $notGreen) { Write-Host "  not green: $ng" -ForegroundColor Red }
+      Fail "#$Pr has $($redChecks.Count) red CI check(s) and $($notGreen.Count) required CI job(s) not green on the head; -IgnoreReview never skips them. Nothing was merged. Fix the check or wait for the job, then re-run."
+    }
     # Dave's own yes. The none-pick check still runs, as a warning only, so the yes is informed. It never blocks.
     Step "none-pick check for #$Pr (warning only)"
     # A launch failure (node missing) must not stop the merge under -IgnoreReview: catch it and warn below.

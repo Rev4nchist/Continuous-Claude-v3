@@ -111,6 +111,7 @@ function Lane({ lane }: { lane: BoardLane }) {
       <p data-testid="board-lane-title" className="text-xs [overflow-wrap:anywhere]">
         {lane.title}
       </p>
+      <CoordChips lane={lane} />
       {(lane.owner !== null || lane.leaseLapsed || lane.branch !== null) && (
         <p className="flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[0.6875rem] text-muted-foreground">
           {lane.owner !== null && (
@@ -132,5 +133,42 @@ function Lane({ lane }: { lane: BoardLane }) {
         </p>
       )}
     </div>
+  );
+}
+
+const BAND_TONE: Record<NonNullable<BoardLane['band']>, string> = {
+  P0: 'text-bad',
+  P1: 'text-warn',
+  P2: 'text-muted-foreground',
+};
+
+/**
+ * Coordination chips, each one only when its field is set. The words carry the meaning, colour is extra.
+ * The server formatted every time as text (Central time), so this holds no clock and no formatter.
+ */
+function CoordChips({ lane }: { lane: BoardLane }) {
+  const any =
+    lane.band !== null || lane.due !== null || lane.parkedUntil !== null || lane.reclaimable || lane.waitsOn.length > 0;
+  if (!any) return null;
+  return (
+    <p className="flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[0.6875rem] text-muted-foreground">
+      {lane.band !== null && (
+        <span data-testid="board-lane-band" data-band={lane.band} className={BAND_TONE[lane.band]}>
+          {lane.band}
+        </span>
+      )}
+      {lane.due !== null && <span data-testid="board-lane-due">{`due ${lane.due}`}</span>}
+      {lane.parkedUntil !== null && <span data-testid="board-lane-parked">{`parked to ${lane.parkedUntil}`}</span>}
+      {lane.waitsOn.length > 0 && (
+        <span data-testid="board-lane-waits" data-waits-on={lane.waitsOn.join(',')} className="text-warn [overflow-wrap:anywhere]">
+          {`waits on: ${lane.waitsOn.join(', ')}${lane.waitsOnMore > 0 ? ` +${lane.waitsOnMore} more` : ''}`}
+        </span>
+      )}
+      {lane.reclaimable && (
+        <span data-testid="board-lane-reclaimable" className="text-bad">
+          reclaimable: lease ended, holder quiet 5+ min
+        </span>
+      )}
+    </p>
   );
 }
