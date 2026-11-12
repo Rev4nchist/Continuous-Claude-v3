@@ -14,7 +14,7 @@ import { FlowView } from './FlowView';
 import { LaneBoard } from './LaneBoard';
 import { NavTabs, type ViewId } from './NavTabs';
 import { PrPanel } from './PrPanel';
-import { ReadyForDave } from './ReadyForDave';
+import { ReadyCoord, ReadyForDave } from './ReadyForDave';
 import { SessionCards } from './SessionCards';
 import { SessionDetail, SessionUnavailable } from './SessionDetail';
 import { SessionsTable } from './SessionsTable';
@@ -196,6 +196,9 @@ export function MissionControl({
         <ReadyForDave items={ready} onSelect={(id) => choose(id, 'overview')} />
 
         <StatTiles tiles={tiles} databaseOk={database.ok} />
+
+        {/* Below the tiles on purpose: fleet-layout.spec.ts pins the tile row inside the first phone screen, and this list grows with the lane board. */}
+        <ReadyCoord coord={data.coord} />
 
         {view === 'board' ? (
           // The hook keeps old data after an endpoint change, so the Board shows only once it arrives.

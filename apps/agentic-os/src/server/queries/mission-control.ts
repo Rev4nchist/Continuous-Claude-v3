@@ -14,7 +14,8 @@ import {
 } from '@/server/queries/fleet-sessions';
 import { stateFilesSource } from '@/server/queries/fleet-join';
 import type { FlowView } from '@/server/queries/lane-dash-parse';
-import { DEFAULT_BOARD, getLaneBoard, type LaneBoard } from '@/server/queries/lane-board';
+import { DEFAULT_BOARD, getLaneBoard, getReadyCoord, type LaneBoard } from '@/server/queries/lane-board';
+import { coordError, type CoordRow, type ReadyCoord } from '@/server/queries/lane-coord';
 import { getFleetOverview, type FleetOverview } from '@/server/queries/projects';
 import {
   getSessionDetail,
@@ -76,7 +77,7 @@ export type StatTiles = {
   breaks: BreaksTile;
 };
 
-export type { DetailUnavailable, LaneBoard, PrRow, ReadyItem, SessionCard, SessionDetail };
+export type { CoordRow, DetailUnavailable, LaneBoard, PrRow, ReadyCoord, ReadyItem, SessionCard, SessionDetail };
 
 export const VIEW_IDS = ['overview', 'board', 'sessions', 'flow', 'spend'] as const;
 export type ViewName = (typeof VIEW_IDS)[number];
@@ -116,6 +117,12 @@ export type MissionControlSnapshot = {
   database: { ok: true; latencyMs: number } | { ok: false; error: string };
   /** One row per session that waits on Dave: its first open, unanswered, non-stale ask, oldest first. */
   ready: ReadyItem[];
+  /**
+   * Lane-board signals for Dave, all boards: idle sessions with unread direct messages (counts only), parks that
+   * end within 48 hours, due reminders. Ids, counts and times only. Separate from `ready` and `tiles.needsDave`.
+   * A failed read is `status: 'error'` here and never fails the snapshot.
+   */
+  coord: ReadyCoord;
   /** One card per live session. */
   cards: SessionCard[];
   tiles: StatTiles;
@@ -205,7 +212,7 @@ export async function getMissionControlSnapshot(
   withSpend = false,
   withFlow = false,
 ): Promise<MissionControlSnapshot> {
-  const [databaseRaw, fleet, active, files, lanes, heldLanes, board, flow] = await Promise.all([
+  const [databaseRaw, fleet, active, files, lanes, heldLanes, board, flow, coordRead] = await Promise.all([
     checkDatabaseReady(),
     getFleetOverview(),
     getActiveSessions(),
@@ -214,12 +221,15 @@ export async function getMissionControlSnapshot(
     settle(getHeldLanes),
     withBoard ? getLaneBoard(project) : Promise.resolve(null),
     withFlow ? readLaneDash() : Promise.resolve(null),
+    // The Ready strip shows on every view, so this read runs on every poll.
+    settle(getReadyCoord),
   ]);
 
   const database: MissionControlSnapshot['database'] = databaseRaw.ok
     ? databaseRaw
     : { ok: false, error: safeMessage(databaseRaw.error) };
 
+  const coord: ReadyCoord = coordRead.ok ? coordRead.value : coordError(coordRead.error);
   const heldByOwner = heldLanes.ok ? heldLanes.value : new Map<string, HeldLane[]>();
   // The session detail takes lane ids only.
   const laneIdsByOwner = new Map([...heldByOwner].map(([owner, held]) => [owner, held.map((lane) => lane.id)]));
@@ -269,6 +279,7 @@ export async function getMissionControlSnapshot(
     active,
     database,
     ready: sessions.ready,
+    coord,
     cards: sessions.cards,
     tiles,
     sources,
