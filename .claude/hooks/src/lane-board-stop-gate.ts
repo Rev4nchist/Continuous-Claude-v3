@@ -583,20 +583,33 @@ function recordAsk(d: Extract<StopDecision, { action: 'block' }>, sid: string, o
   const uuid = isUuid(sid);
   // A headless run that opted in cannot publish. Its stamp would close the 10 minutes for the sessions that can.
   const stamps = uuid && !isSdk(env);
-  if (stamps && !updateBudget(sid, env, now, (b) => { b.asked[d.pageId] = now; })) return false;
+  let before: number | undefined;
+  if (stamps && !updateBudget(sid, env, now, (b) => { before = b.asked[d.pageId]; b.asked[d.pageId] = now; })) return false;
   if (d.foreign) return uuid;
+  // No block follows a failed mark, so the stamp of this Stop goes back to its old value. A stamp with no
+  // block would close the 10 minutes, and the one ask of another session's change, for nothing.
+  const unstamp = (): false => {
+    if (stamps) {
+      updateBudget(sid, env, now, (b) => {
+        if (b.asked[d.pageId] !== now) return;
+        if (before === undefined) delete b.asked[d.pageId];
+        else b.asked[d.pageId] = before;
+      });
+    }
+    return false;
+  };
   const hit = own.find((e) => e.board === d.board);
-  if (!hit) return false;
+  if (!hit) return unstamp();
   try {
     // Read the file again: the reminder can write a new ask verb between this Stop's read and this write.
     // A file that changed is not marked. The gate approves, and a later Stop asks for the new change.
     const fresh = readPending(hit.file) as AskPending | null;
     const was = hit.pending as AskPending;
-    if (!fresh || fresh.askAt !== was.askAt || fresh.verbs?.length !== was.verbs?.length) return false;
+    if (!fresh || fresh.askAt !== was.askAt || fresh.verbs?.length !== was.verbs?.length) return unstamp();
     fs.writeFileSync(hit.file, JSON.stringify({ ...fresh, stopBlocked: true }));
     return true;
   } catch {
-    return false;
+    return unstamp();
   }
 }
 

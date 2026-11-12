@@ -6458,20 +6458,32 @@ function foreignFor(payload, sid, env) {
 function recordAsk(d, sid, own, env, now) {
   const uuid = isUuid(sid);
   const stamps = uuid && !isSdk(env);
+  let before;
   if (stamps && !updateBudget(sid, env, now, (b) => {
+    before = b.asked[d.pageId];
     b.asked[d.pageId] = now;
   })) return false;
   if (d.foreign) return uuid;
+  const unstamp = () => {
+    if (stamps) {
+      updateBudget(sid, env, now, (b) => {
+        if (b.asked[d.pageId] !== now) return;
+        if (before === void 0) delete b.asked[d.pageId];
+        else b.asked[d.pageId] = before;
+      });
+    }
+    return false;
+  };
   const hit = own.find((e) => e.board === d.board);
-  if (!hit) return false;
+  if (!hit) return unstamp();
   try {
     const fresh = readPending(hit.file);
     const was = hit.pending;
-    if (!fresh || fresh.askAt !== was.askAt || fresh.verbs?.length !== was.verbs?.length) return false;
+    if (!fresh || fresh.askAt !== was.askAt || fresh.verbs?.length !== was.verbs?.length) return unstamp();
     fs5.writeFileSync(hit.file, JSON.stringify({ ...fresh, stopBlocked: true }));
     return true;
   } catch {
-    return false;
+    return unstamp();
   }
 }
 function stopGate(payload, env = process.env, now = Date.now()) {

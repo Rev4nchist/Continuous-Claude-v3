@@ -817,6 +817,22 @@ describe('publish budget (stopGate with a fixed clock)', () => {
       expect(out).toBeNull();
       expect(readPend(`${SID}.json`)).toMatchObject({ verbs: ['claim', 'done'], askAt: NOW });
       expect(readPend(`${SID}.json`).stopBlocked).toBeUndefined();
+      expect(readBudget(SID)?.asked?.[CCV3_ID]).toBeUndefined(); // no block, so no asked stamp stays
+    });
+
+    it('C6: a failed mark puts an older asked stamp back, and the next Stop asks', () => {
+      budget(SID, { day: TODAY, n: 0, limit: false, pages: {}, asked: { [CCV3_ID]: NOW - 30 * MIN } });
+      const f = pend(`${SID}.json`, claim(MIN, { v: 2 }));
+      fsCjs.renameSync = ((from: fs.PathLike, to: fs.PathLike): void => {
+        if (String(to).endsWith(`${SID}.json`) && !fs.readFileSync(f, 'utf8').includes('done')) {
+          fs.writeFileSync(f, JSON.stringify({ ...claim(0, { v: 2 }), verbs: ['claim', 'done'] }));
+        }
+        realRename(from, to);
+      }) as typeof fs.renameSync;
+      syncBuiltinESMExports();
+      expect(stop().output).toBeNull();
+      expect(readBudget(SID)?.asked?.[CCV3_ID]).toBe(NOW - 30 * MIN);
+      expect(stop(SID, NOW + 1000).output).toMatchObject(BLOCK);
     });
 
     it('C4: a headless run that opted in blocks for its own claim and writes no asked stamp', () => {
