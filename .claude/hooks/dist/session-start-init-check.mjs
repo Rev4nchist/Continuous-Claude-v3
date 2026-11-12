@@ -444,6 +444,18 @@ function formatStaleDistWarning(srcRoot, result) {
   return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/continuous-claude/.claude/hooks && npm run build`;
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/session-start-init-check.ts
 var TREE_MAX_AGE_SECONDS = 300;
 function getOpcDir() {
@@ -712,6 +724,10 @@ async function main() {
     data = JSON.parse(input);
   } catch {
     console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  if (isEngineHost(data)) {
+    console.log(JSON.stringify({}));
     return;
   }
   const sessionType = data.source || data.type || "startup";

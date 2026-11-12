@@ -772,6 +772,18 @@ function previousFromClear(current, cwd, now = Date.now(), name) {
   return cands.length === 1 ? cands[0].uuid : null;
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/session-start-continuity.ts
 function buildHandoffDirName(sessionName, sessionId) {
   const uuidShort = sessionId.replace(/-/g, "").slice(0, 8);
@@ -1061,6 +1073,10 @@ async function main() {
     input = stdin ? JSON.parse(stdin) : { session_id: "unknown", source: "cli" };
   } catch (e) {
     input = { session_id: "unknown", source: "cli" };
+  }
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const sessionType = input.source || input.type;

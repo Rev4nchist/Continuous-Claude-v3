@@ -364,6 +364,18 @@ function isCompactSource(source) {
   return source === COMPACT_SOURCE;
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/session-start-docker.ts
 function sleep(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
@@ -468,6 +480,9 @@ async function startContainerWithRetry() {
   }
   return { success: false, message: `Failed after ${MAX_RETRIES} attempts` };
 }
+function printContext(input, output) {
+  console.log(JSON.stringify(isEngineHost(input) ? { result: "continue" } : output));
+}
 async function main() {
   let input;
   try {
@@ -495,7 +510,7 @@ async function main() {
     const output2 = {
       hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "Docker not available - memory system will use SQLite fallback" }
     };
-    console.log(JSON.stringify(output2));
+    printContext(input, output2);
     return;
   }
   if (isContainerRunning()) {
@@ -507,13 +522,13 @@ async function main() {
     const output2 = {
       hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `Failed to start PostgreSQL container: ${startResult.message}. Memory system will use SQLite fallback.` }
     };
-    console.log(JSON.stringify(output2));
+    printContext(input, output2);
     return;
   }
   const output = {
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: startResult.message || "PostgreSQL memory container started" }
   };
-  console.log(JSON.stringify(output));
+  printContext(input, output);
 }
 main().catch(() => {
   console.log(JSON.stringify({ result: "continue" }));

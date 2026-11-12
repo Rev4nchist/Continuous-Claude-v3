@@ -8658,6 +8658,19 @@ function laneOrderSql(alias) {
   return `CASE ${alias}.band WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END, ${alias}.due_at ASC NULLS LAST, ${alias}.priority, ${alias}.id`;
 }
 
+// src/shared/engine-host.ts
+init_trace_boot();
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/lane-context.ts
 var CONNECT_TIMEOUT_MS2 = 1200;
 var QUERY_TIMEOUT_MS2 = 1500;
@@ -8995,7 +9008,17 @@ async function deliverDirectMessages(me, now = Date.now(), emitFn = emit, budget
   }
 }
 async function main5() {
-  const out = await runLaneContext(await readStdin4());
+  const raw = await readStdin4();
+  let payload = null;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+  }
+  if (isEngineHost(payload)) {
+    process.stdout.write("{}");
+    return;
+  }
+  const out = await runLaneContext(raw);
   if (out !== null) process.stdout.write(JSON.stringify(out));
 }
 var UNREAD_BOARD_SQL = `SELECT e.*, (SELECT last_event_id FROM agentic_os.lane_watermark WHERE session_id = $3::text) AS board_wm

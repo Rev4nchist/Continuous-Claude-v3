@@ -611,8 +611,8 @@ async function main() {
   }
 
   // Under cursor-agent (the review engine) allow the Read: the review model must read the real
-  // file, and the engine is read-only. NOTE: 'preToolUse' is not in the helper's set (not proven),
-  // so for a real cursor-agent PreToolUse event this is a no-op until the probe proves the name.
+  // file, and the engine is read-only. NOTE: 'preToolUse' is in the helper's set by convention
+  // (not measured: no cursor-agent PreToolUse payload was captured).
   if (isEngineHost(input)) {
     console.log('{}');
     return;

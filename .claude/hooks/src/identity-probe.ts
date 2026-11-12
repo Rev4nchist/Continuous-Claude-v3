@@ -41,6 +41,7 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { execFileSync } from 'child_process';
+import { isEngineHost } from './shared/engine-host.js';
 
 /** Env vars whose presence here proves parent-shell inheritance reaches hooks. */
 const ENV_INHERITED_MARKERS = [
@@ -100,6 +101,10 @@ function main(): void {
   } catch {
     payload = {};
   }
+
+  // Under a Cursor host (the review engine) write no row: the row holds the raw DATABASE_URL
+  // value and can land in the reviewed tree, which the review model reads.
+  if (isEngineHost(payload)) return;
 
   const cwd = (payload.cwd as string) || process.cwd();
 

@@ -860,7 +860,7 @@ import * as path from "path";
 var CONTEXT_DIR = path.join(os.tmpdir(), "claude-search-context");
 
 // src/shared/engine-host.ts
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd"]);
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
 function isEngineHost(input) {
   try {
     if (input === null || typeof input !== "object") return false;
