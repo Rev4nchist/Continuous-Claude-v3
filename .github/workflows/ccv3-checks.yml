@@ -73,10 +73,11 @@ jobs:
         timeout-minutes: 5
         run: node --test scripts/github/lib/file-lock.test.mjs
       # Review engine P1 (units A, B, C). Each test builds its own temp git repos and injects the agent, gh and the clock: no network,
-      # no cursor-agent, no Windows-only binary (the tldr.exe test injects its platform). Node 22 expands the globs itself.
+      # no cursor-agent, no Windows-only binary (the tldr.exe test injects its platform). Glob patterns are in single quotes, so Node 22
+      # expands them; bash reads ** as * and would drop the top-level files.
       - name: local review engine unit tests
         timeout-minutes: 10
-        run: node --test scripts/github/local-review.test.mjs scripts/github/review-filter.test.mjs scripts/github/local-review/*.test.mjs
+        run: node --test scripts/github/local-review.test.mjs scripts/github/review-filter.test.mjs 'scripts/github/local-review/**/*.test.mjs'
       - name: review-router band tests (engine trust-boundary files are CRITICAL)
         timeout-minutes: 5
         run: node --test scripts/github/review-router-band.test.mjs
@@ -87,9 +88,9 @@ jobs:
         timeout-minutes: 5
         run: node --test scripts/harness-doctor.test.mjs
       # Worktree dependency fallback (PR1): one resolver for pg and friends, the pre-pr env step, and a ratchet against new copies.
-      - name: dependency resolver and pre-pr env step unit tests
+      - name: shared lib, dependency resolver and pre-pr env step unit tests
         timeout-minutes: 5
-        run: node --test scripts/lib/resolve-deps.test.mjs scripts/github/lib/env-step.test.mjs
+        run: node --test 'scripts/lib/*.test.mjs' scripts/github/lib/env-step.test.mjs
       # Worktree dependency fallback (PR2): the shared store link script. Each test builds a fake primary and nested worktrees under the temp folder.
       - name: shared store link unit tests
         timeout-minutes: 5
@@ -125,6 +126,10 @@ jobs:
       - name: Path scrubber grid (C1 part A, pure Node, no server, no database, no browser)
         timeout-minutes: 5
         run: npx playwright test --config apps/agentic-os/playwright.pure.config.ts
+      # The review eval scorer and its fixtures (about 5 s). The pattern is in single quotes, so Node expands it.
+      - name: review eval unit tests
+        timeout-minutes: 5
+        run: node --test 'scripts/eval/review-eval/*.test.mjs'
 
   # The hooks are TypeScript that ships as dist/*.mjs. This job type-checks, builds and tests them. Before it no workflow did:
   # a type error or a stale dist reached main if the author skipped pre-pr (lane ts-gates-prepr-ci, part two; part one is the

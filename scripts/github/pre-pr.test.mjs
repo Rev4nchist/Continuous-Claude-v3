@@ -9,6 +9,9 @@
 //   - opc runs pytest on the whole suite, or on a file that was not touched    -> S5
 //   - a path that no surface owns runs more than the always gate               -> S8
 //   - the coordination gates go back to gates: [] or drift from CI job coordination-db -> CO1
+//   - a glob gate misses a test file (no ** for a subfolder, one file named for a folder) -> TG1, TG2
+//   - scripts/eval/review-eval has no gate, or a path there is unowned          -> TG3
+//   - CI job ratchets drifts from a gate glob, or runs it unquoted (bash drops files) -> TG4
 // summaryLine
 //   - the first line is taken, not the runner's summary                        -> M1, M2
 // Git preconditions
@@ -359,7 +362,85 @@ test('GW4c: a change to test-map.mjs runs test-map.test.mjs, and one under scrip
   assert.ok(existsSync(path.join(REPO_ROOT, tm.args[1])));
   const lr = gatesFor(['scripts/github/local-review/record.mjs'], REPO_ROOT).find((x) => x.id === 'local-review-tests');
   assert.ok(lr);
-  assert.deepEqual([lr.cmd, lr.args], ['node', ['--test', 'scripts/github/local-review/*.test.mjs']]);
+  assert.deepEqual([lr.cmd, lr.args], ['node', ['--test', 'scripts/github/local-review/**/*.test.mjs']]);
+});
+
+// ---------- test globs (re-test-globs): each glob gate runs every test file it should, and CI runs the same patterns ----------
+
+/**
+ * Build a temp root with marker test files, take gate `gateId` from gatesFor([changed]) and run it with the real defaultExec.
+ * Each test file appends its name to picked.txt, so the result says which files node --test really ran. NODE_TEST_CONTEXT is
+ * cleared around the run: this file runs under node --test, and a nested node --test with that variable set runs no file and exits 0.
+ */
+function runGlobGate(gateId, changed, files) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'prepr-glob-'));
+  const marker = path.join(root, 'picked.txt');
+  try {
+    for (const rel of files) {
+      const name = path.posix.basename(rel, '.test.mjs');
+      mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), `import { test } from 'node:test';\nimport { appendFileSync } from 'node:fs';\ntest(${JSON.stringify(name)}, () => { appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(`${name}\n`)}); });\n`);
+    }
+    const gate = gatesFor([changed], REPO_ROOT).find((g) => g.id === gateId);
+    assert.ok(gate, `${changed} -> ${gateId}`);
+    const saved = process.env.NODE_TEST_CONTEXT;
+    delete process.env.NODE_TEST_CONTEXT;
+    let r;
+    try {
+      r = runGate({ ...gate, timeoutMs: 2 * 60_000 }, { root, exec: PRE.defaultExec, git: () => ({ status: 0, stdout: '', stderr: '' }) });
+    } finally {
+      if (saved !== undefined) process.env.NODE_TEST_CONTEXT = saved;
+    }
+    const picked = existsSync(marker) ? readFileSync(marker, 'utf8').split(/\r?\n/).filter(Boolean).sort() : [];
+    return { r, picked };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('TG1: local-review-tests runs the top-level tests and the tests in a subfolder (breaks if the gate pattern loses **)', async () => {
+  const { r, picked } = runGlobGate('local-review-tests', 'scripts/github/local-review/backends/x.mjs',
+    ['scripts/github/local-review/top.test.mjs', 'scripts/github/local-review/backends/deep.test.mjs']);
+  assert.equal(r.status, 'PASS', `${r.detail}\n${r.output}`);
+  assert.deepEqual(picked, ['deep', 'top']);
+});
+
+test('TG2: resolve-deps-tests runs every scripts/lib test file, not only resolve-deps.test.mjs (breaks if the gate names one file)', async () => {
+  const { r, picked } = runGlobGate('resolve-deps-tests', 'scripts/lib/headless.mjs', ['scripts/lib/a.test.mjs', 'scripts/lib/b.test.mjs']);
+  assert.equal(r.status, 'PASS', `${r.detail}\n${r.output}`);
+  assert.deepEqual(picked, ['a', 'b']);
+});
+
+test('TG3: a change under scripts/eval/review-eval (code, fixtures, config) runs review-eval-tests, and no path there is unowned', async () => {
+  for (const p of ['scripts/eval/review-eval/score.mjs', 'scripts/eval/review-eval/fixtures/x.json']) {
+    assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('review-eval-tests'), p);
+  }
+  const { r, picked } = runGlobGate('review-eval-tests', 'scripts/eval/review-eval/score.mjs', ['scripts/eval/review-eval/t.test.mjs']);
+  assert.equal(r.status, 'PASS', `${r.detail}\n${r.output}`);
+  assert.deepEqual(picked, ['t']);
+  assert.equal(notesFor(['scripts/eval/review-eval/config.json'], CONFIG).some((n) => n.step.startsWith('unowned:')), false);
+});
+
+test('TG4: CI job ratchets runs the same three glob patterns as pre-pr, each in single quotes (breaks if a pattern drifts or loses its quotes)', async () => {
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const start = wf.indexOf('\n  ratchets:');
+  assert.ok(start >= 0, 'the workflow has the ratchets job');
+  const rest = wf.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [\w-]+:/);
+  const job = next < 0 ? rest : rest.slice(0, next + 1);
+  const runs = job.split('\n').filter((l) => /^\s*run:/.test(l));
+  assert.ok(runs.length > 10, 'the ratchets job has run lines');
+  const gates = SURFACES.flatMap((s) => s.gates ?? []);
+  for (const id of ['local-review-tests', 'resolve-deps-tests', 'review-eval-tests']) {
+    const g = gates.find((x) => x.id === id);
+    assert.ok(g, id);
+    const pattern = g.args[1];
+    assert.ok(pattern.includes('*'), `${id}: ${pattern} is a glob`);
+    // Unquoted, bash reads ** as * (no globstar) and drops the top-level files with no error. Node expands a quoted pattern.
+    const hits = runs.filter((l) => l.includes(pattern));
+    assert.ok(hits.length > 0, `${id}: no run line in job ratchets names ${pattern}`);
+    for (const l of hits) assert.ok(l.includes(`'${pattern}'`), `${id}: ${pattern} is not in single quotes: ${l.trim()}`);
+  }
 });
 
 test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {

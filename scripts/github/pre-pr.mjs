@@ -204,8 +204,11 @@ export const SURFACES = [
   { id: 'agents-scripts', globs: ['scripts/agents/**'], gates: [nodeTest('agents-tests', 'scripts/agents/*.test.mjs')] },
   // The workflow is here because semgrep-ccv3.test.mjs (SG2) compares the Semgrep digest in it with the wrapper default.
   { id: 'ratchets-scripts', globs: ['scripts/ratchets/**', '.github/workflows/ccv3-checks.yml'], gates: [nodeTest('ratchets-tests', 'scripts/ratchets/*.test.mjs')] },
-  // scripts/lib holds the shared dependency resolver. Its tests build real git worktrees under the temp folder.
-  { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/resolve-deps.test.mjs')] },
+  // scripts/lib holds the shared dependency resolver (its tests build real git worktrees under the temp folder), and the headless and
+  // stop-process-tree tests (PowerShell on Windows). The gate runs every scripts/lib/*.test.mjs; the id keeps its old name.
+  { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/*.test.mjs')] },
+  // scripts/eval/review-eval: every file below (fixtures, config) runs the eval node tests. The folder runs in about 5 s.
+  { id: 'eval-scripts', globs: ['scripts/eval/review-eval/**'], gates: [nodeTest('review-eval-tests', 'scripts/eval/review-eval/*.test.mjs', 5 * MIN)] },
   // scripts/worktree holds the shared store link script. Its tests build fake primaries and nested git worktrees under the temp folder.
   { id: 'worktree-scripts', globs: ['scripts/worktree/**'], gates: [nodeTest('shared-deps-tests', 'scripts/worktree/shared-deps.test.mjs')] },
   // No script carries its own createRequire lookup of pg: scripts/lib/resolve-deps.mjs is the one (it also tries the primary checkout).
@@ -242,7 +245,7 @@ export const SURFACES = [
   },
   { id: 'templates', globs: ['.claude/templates/**'], gates: [], manual: 'an always-loaded template: the context-budget gate runs anyway; the sync installs it' },
   // The github suite is the longest gate on this machine (real git, child processes and PowerShell).
-  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [GITHUB_TESTS, nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/*.test.mjs', 5 * MIN)] },
+  { id: 'github-scripts', globs: ['scripts/github/**'], gates: [GITHUB_TESTS, nodeTest('github-lib-tests', 'scripts/github/lib/*.test.mjs', 2 * MIN), nodeTest('local-review-tests', 'scripts/github/local-review/**/*.test.mjs', 5 * MIN)] },
   // Dependency row: scripts/github tests read scripts/coordination (CI github-tests caught a drift that #343 never ran locally).
   // Only github-tests, not the lib and local-review suites. scripts/github/pre-pr.mjs is already owned by github-scripts above.
   { id: 'github-deps', globs: ['scripts/coordination/**'], gates: [GITHUB_TESTS] },
