@@ -206,6 +206,28 @@ describe('inbox --id: no cursor moves', () => {
   });
 });
 
+describe('inbox --id: no event row is added', () => {
+  const eventCount = async () => (await s.db.query(`SELECT count(*)::text AS n FROM agentic_os.lane_event`)).rows[0].n;
+
+  it('a print, a refusal and a usage error leave the lane_event row count as it was', async () => {
+    const mine = await ev({ to: ME, body: 'count me not' });
+    const foreign = await ev({ to: randomUUID(), body: 'SECRET-COUNT-DM' });
+    const before = await eventCount();
+
+    const printed = lane(['inbox', '--id', mine]);
+    assert.equal(printed.code, 0, printed.err);
+    assert.equal(await eventCount(), before, 'a successful print adds no event row');
+
+    assertRefused(lane(['inbox', '--id', foreign]), foreign, 'not-yours', 'SECRET-COUNT-DM');
+    assert.equal(await eventCount(), before, 'a refusal adds no event row');
+
+    const usage = lane(['inbox', '--id', 'abc']);
+    assert.equal(usage.code, 1, usage.err);
+    assert.match(usage.err, /usage/);
+    assert.equal(await eventCount(), before, 'a usage error adds no event row');
+  });
+});
+
 describe('inbox --id: a folder with no board', () => {
   it('control: plain inbox fails there with "no lane board for"', () => {
     const r = lane(['inbox', '--peek'], { cwd: s.bare });
@@ -251,4 +273,23 @@ describe('inbox --id: bad ids', () => {
     assert.equal(r.code, 1, r.err);
     assert.match(r.err, /usage/);
   });
+
+  // The flag parser has no --k=v form: `--id=5` is the key "id=5". It must not fall through to the plain inbox,
+  // which prints every unread event and moves the cursor past all of them.
+  for (const form of ['--id=5', '--id=', '--id=5x']) {
+    it(`"inbox ${form}" is a usage error (exit 1), prints no event and moves no lane_watermark row`, async () => {
+      await s.db.query(`DELETE FROM agentic_os.lane_watermark`);
+      await s.db.query(`INSERT INTO agentic_os.lane_watermark (session_id, last_event_id) VALUES ($1, 1), ($2, 1)`, [`${ME}@${BOARD}`, `${PEER}@${BOARD}`]);
+      await ev({ to: ME, body: 'UNREAD-EQ-DM' });
+      await ev({ body: 'UNREAD-EQ-BROADCAST' });
+      const before = await watermarks();
+      const r = lane(['inbox', form]);
+      assert.equal(r.code, 1, r.err);
+      assert.match(r.err, /usage/);
+      assert.match(r.err, /nothing was run/);
+      assert.equal(r.out.length, 0, 'no event on stdout');
+      for (const x of ['UNREAD-EQ-DM', 'UNREAD-EQ-BROADCAST']) assert.ok(!r.err.includes(x), `stderr does not hold ${x}`);
+      assert.deepEqual(await watermarks(), before, 'no watermark row changed');
+    });
+  }
 });

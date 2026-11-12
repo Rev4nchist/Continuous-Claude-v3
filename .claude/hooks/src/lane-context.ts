@@ -446,11 +446,11 @@ const PEER_LANES_MAX = 3;
 
 /** Test seams. `uptime` is read at call time, so a spy on process.uptime works too. */
 export interface RunOpts { uptime?: () => number; budgets?: Partial<Budgets> }
-interface PageCtx { budgets: Budgets; late: () => boolean }
+interface PageCtx { budgets: Budgets; late: () => boolean; age: () => number }
 
 function pageCtx(opts: RunOpts): PageCtx {
   const clock = opts.uptime ?? (() => process.uptime());
-  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S };
+  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock };
 }
 
 export function utf8Bytes(s: string): number {
@@ -535,6 +535,10 @@ const lineBytes = (s: string): number => utf8Bytes(s) + 1;
 const fitsId = (id: string): boolean => utf8Bytes(id) <= ID_MAX_BYTES;
 /** The lane id part of an event line prefix. An id over 64 bytes is not printed, so no line prefix grows without a bound (C4). */
 const laneTag = (id: string | null): string => (!id ? '' : fitsId(id) ? ` [${id}]` : ' [lane id not shown]');
+/** The board key part of a crossed event line. A key over 64 bytes is not printed (C4). */
+const fromTag = (key: string): string => (fitsId(key) ? ` [from ${key}]` : ' [from board not shown]');
+/** The kind of an event line. A kind over 64 bytes is not printed (C4). */
+const kindText = (kind: string): string => (fitsId(kind) ? kind : 'kind not shown');
 
 /** "a, b, c" with at most `max` ids, then ", +N". An id over 64 bytes is not printed and counts in N (C4). */
 function idList<T>(items: T[], idOf: (x: T) => string, show: (x: T) => string, max: number, more: (n: number) => string): string {
@@ -630,7 +634,7 @@ export async function deliverDirectMessages(
       REPLY_FOOTER,
     ];
     const prefix = (e: EventRow): string => {
-      const from = e.project_key && e.project_key !== DEFAULT_BOARD ? ` [from ${e.project_key}]` : '';
+      const from = e.project_key && e.project_key !== DEFAULT_BOARD ? fromTag(e.project_key) : '';
       return `- ${who(e.session_id)}${from}${laneTag(e.lane_id)}: `;
     };
     // C7: the newest DMs that fit the budget whole, at most 5. The older ones wait for the prompt page.
@@ -837,6 +841,24 @@ async function writeCursors(client: Client, rows: Array<[string, number]>): Prom
 }
 
 /**
+ * C10: write the cursor rows of a page, or skip the write when the hook is late. A skip that had rows to write
+ * leaves one throttled line in the error log, so a late hook is findable. No rows: no write and no line.
+ * B1: a write that throws leaves one such line too and returns normally, so the caller still sends the page.
+ */
+async function finishCursors(
+  client: Client, ctx: PageCtx, o: { me: string; eventName: string; rows: Array<[string, number]>; late: boolean },
+): Promise<void> {
+  if (!o.rows.length) return;
+  if (!o.late) {
+    // B1: a failed write (the client timer can fire while the upsert still commits) must not drop the page.
+    // The page goes out; at worst a message shows twice. Never a message marked read and not shown.
+    try { await writeCursors(client, o.rows); } catch (err) { logLaneContextError(o.me, o.eventName, err); }
+    return;
+  }
+  logLaneContextError(o.me, o.eventName, new Error(`late ${ctx.age().toFixed(2)}s: cursor write skipped`));
+}
+
+/**
  * The "(N more unread ...)" line. The cut events stay unread, so a later prompt shows them, oldest first.
  * `withCmd` adds the inbox command. It is true only when the board has a cursor row: `inbox` with no row
  * prints every broadcast since event 1, and with no board it cannot run at all.
@@ -882,9 +904,9 @@ const coldLine = (n: number): string => `  (${n} older board events are not show
 /** The start of an event line, up to and including ": ". `here` is the board of the page. */
 function eventPrefix(e: EventRow, here: string): string {
   const dm = e.to_session_id ? ' (direct to you)' : '';
-  const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : '';
+  const crossed = e.to_session_id && e.project_key && e.project_key !== here ? fromTag(e.project_key) : '';
   const lane = laneTag(e.lane_id);
-  return `- ${who(e.session_id)}${crossed} ${e.kind}${lane}${dm}: `;
+  return `- ${who(e.session_id)}${crossed} ${kindText(e.kind)}${lane}${dm}: `;
 }
 
 /**
@@ -924,7 +946,7 @@ async function directMessagesOnly(client: Client, me: string, eventName: string,
   const text = unreadLines(page, null, { withCmd: false, coldBoard: false }).join('\n');
   // C2: built and measured first. Over its budget: the fallback, and no cursor moves.
   if (utf8Bytes(text) > budget) return buildOutput(noBoardFallback(dms[0].id), eventName);
-  if (!late) await writeCursors(client, cursorWrites(me, null, page));
+  await finishCursors(client, ctx, { me, eventName, rows: cursorWrites(me, null, page), late });
   return buildOutput(text, eventName);
 }
 
@@ -1183,7 +1205,9 @@ async function boardPage(client: Client, a: BoardPageArgs, ctx: PageCtx): Promis
   // Advance the cursors only for what was actually injected. Nothing was
   // shown on a turn that produced no output, so nothing may be marked read.
   // Events cut from the page stay above the cursors (see pageUnread).
-  if (unread.length && lines.length && !late) await writeCursors(client, cursorWrites(me, board, page));
+  if (unread.length && lines.length) {
+    await finishCursors(client, ctx, { me, eventName: a.eventName, rows: cursorWrites(me, board, page), late });
+  }
   return buildOutput(text, a.eventName);
 }
 

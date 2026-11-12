@@ -317,6 +317,21 @@ describe('mid-turn text (ROW 47 and the reply footer, EDIT 4)', () => {
     expect(bytes(text)).toBeLessThanOrEqual(4000);
   });
 
+  it('C4: a direct message from a board with a 6,000-byte key prints the tag, not the key, and the page stays within 4,000 bytes', async () => {
+    const s = session();
+    fake.rows = [{
+      id: 1, occurred_at: '2026-11-11T00:00:00Z', lane_id: null, kind: 'note',
+      session_id: PEER, to_session_id: s, body: '<dm1>hello', project_key: 'B'.repeat(6000),
+    }];
+    const emitFn = vi.fn();
+    await deliverDirectMessages(s, Date.now(), emitFn);
+    expect(emitFn, 'no context was emitted').toHaveBeenCalledTimes(1);
+    const text = String(emitFn.mock.calls[0][0]);
+    expect(text).toContain(' [from board not shown]: <dm1>hello');
+    expect(text).not.toContain('BBBB');
+    expect(bytes(text)).toBeLessThanOrEqual(4000);
+  });
+
   it('F12 (C7): ordinary direct messages are whole: the newest that fit show, the older one waits, nothing is cut', async () => {
     const { text, s } = await deliverBodies(['a'.repeat(1500), 'b'.repeat(1500), 'c'.repeat(1500)]);
     expect(bytes(text)).toBeLessThanOrEqual(4000);
@@ -326,5 +341,28 @@ describe('mid-turn text (ROW 47 and the reply footer, EDIT 4)', () => {
     expect(text).not.toMatch(/\[cut,/);
     expect(text.split(NL)[1]).toBe('(1 older not shown. The next prompt shows your direct messages, oldest first, up to 12 at a time.)');
     expect(readDmState(s).lastShownDmId).toBe(3);
+  });
+
+  it('N3a: a text over its budget even after the cut prints {} and does not move the file mark; the same message in a normal budget does', async () => {
+    const s = session();
+    fake.rows = [{
+      id: 9, occurred_at: '2026-11-11T00:00:00Z', lane_id: null, kind: 'note',
+      session_id: PEER, to_session_id: s, body: '<dm9>' + 'w'.repeat(500), project_key: 'continuous-claude',
+    }];
+    writeDmState(s, { ts: 0, lastShownDmId: 7 });
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const emitFn = vi.fn();
+    const t0 = Date.now();
+    // 200 bytes: the fixed lines alone are over it, so no share can fit and the cut line is over it too (the guard).
+    await deliverDirectMessages(s, t0, emitFn, 200);
+    expect(emitFn).not.toHaveBeenCalled();
+    expect(out).toHaveBeenCalledWith('{}');
+    expect(readDmState(s)).toEqual({ ts: t0, lastShownDmId: 7 });
+    // Control: the same row with the default budget is sent and the mark moves, so the {} above came from the guard.
+    out.mockClear();
+    await deliverDirectMessages(s, t0 + DM_THROTTLE_MS, emitFn);
+    expect(emitFn).toHaveBeenCalledTimes(1);
+    expect(out).not.toHaveBeenCalled();
+    expect(readDmState(s).lastShownDmId).toBe(9);
   });
 });

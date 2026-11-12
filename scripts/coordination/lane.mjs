@@ -474,7 +474,7 @@ async function inboxOne(c, myId) {
   if (!e) throw refusal('inbox', raw, 'no-such-event', `there is no event ${raw}`);
   // Order matters: a direct message to me never asks for a board (softBoard throws on an unknown --project).
   const mine = e.to_session_id === myId;
-  const board = e.to_session_id === null && !mine ? softBoard() : null;
+  const board = e.to_session_id === null ? softBoard() : null;
   if (!mine && !(board && e.project_key === board.key)) {
     throw refusal('inbox', raw, 'not-yours', 'that event is not a direct message to you or a broadcast of this board');
   }
@@ -2045,7 +2045,8 @@ const commands = {
    */
   async inbox(c) {
     const myId = me();
-    if (flags.id !== undefined) return inboxOne(c, myId);
+    // The parser has no --k=v form: `--id=5` is the key "id=5". Treat it as the --id path (a usage error), never as a plain inbox that marks all read.
+    if (flags.id !== undefined || Object.keys(flags).some((k) => k.startsWith('id='))) return inboxOne(c, myId);
     const board = projectOf();
     const { rows } = await c.query(
       `SELECT e.* FROM agentic_os.lane_event e WHERE ${UNREAD_SQL} ORDER BY e.id`, unreadParams(myId, board.key),

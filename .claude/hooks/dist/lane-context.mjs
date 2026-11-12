@@ -6295,7 +6295,7 @@ var HOLD_MAX = 8;
 var PEER_LANES_MAX = 3;
 function pageCtx(opts) {
   const clock = opts.uptime ?? (() => process.uptime());
-  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S };
+  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock };
 }
 function utf8Bytes(s) {
   return Buffer.byteLength(s, "utf8");
@@ -6350,6 +6350,8 @@ function namesInbox(o) {
 var lineBytes = (s) => utf8Bytes(s) + 1;
 var fitsId = (id) => utf8Bytes(id) <= ID_MAX_BYTES;
 var laneTag = (id) => !id ? "" : fitsId(id) ? ` [${id}]` : " [lane id not shown]";
+var fromTag = (key) => fitsId(key) ? ` [from ${key}]` : " [from board not shown]";
+var kindText = (kind) => fitsId(kind) ? kind : "kind not shown";
 function idList(items, idOf, show, max, more) {
   const shown = items.filter((x) => fitsId(idOf(x))).slice(0, max);
   const rest = items.length - shown.length;
@@ -6414,7 +6416,7 @@ async function deliverDirectMessages(me, now = Date.now(), emitFn = emit, budget
       REPLY_FOOTER
     ];
     const prefix = (e) => {
-      const from = e.project_key && e.project_key !== DEFAULT_BOARD ? ` [from ${e.project_key}]` : "";
+      const from = e.project_key && e.project_key !== DEFAULT_BOARD ? fromTag(e.project_key) : "";
       return `- ${who(e.session_id)}${from}${laneTag(e.lane_id)}: `;
     };
     const fixed = [heading, older(dms.length), ...tail].reduce((n, l) => n + lineBytes(l), 0);
@@ -6539,6 +6541,18 @@ async function writeCursors(client, rows) {
     rows.flat()
   );
 }
+async function finishCursors(client, ctx, o) {
+  if (!o.rows.length) return;
+  if (!o.late) {
+    try {
+      await writeCursors(client, o.rows);
+    } catch (err) {
+      logLaneContextError(o.me, o.eventName, err);
+    }
+    return;
+  }
+  logLaneContextError(o.me, o.eventName, new Error(`late ${ctx.age().toFixed(2)}s: cursor write skipped`));
+}
 function moreLine(page, withCmd, coldBoard) {
   if (coldBoard && page.cutDm > 0 && page.cut > page.cutDm) {
     return `  (${page.cut} more unread, ${page.cutDm} direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest ${MAX_EVENTS} of this board.)`;
@@ -6560,9 +6574,9 @@ var countLine = (n) => `## ${n} lane update(s) since you last looked`;
 var coldLine = (n) => `  (${n} older board events are not shown on your first look at this board.)`;
 function eventPrefix(e, here) {
   const dm = e.to_session_id ? " (direct to you)" : "";
-  const crossed = e.to_session_id && e.project_key && e.project_key !== here ? ` [from ${e.project_key}]` : "";
+  const crossed = e.to_session_id && e.project_key && e.project_key !== here ? fromTag(e.project_key) : "";
   const lane = laneTag(e.lane_id);
-  return `- ${who(e.session_id)}${crossed} ${e.kind}${lane}${dm}: `;
+  return `- ${who(e.session_id)}${crossed} ${kindText(e.kind)}${lane}${dm}: `;
 }
 function pageReserve(unread) {
   const shape = { cut: unread.length, cutDm: unread.filter((e) => e.to_session_id).length };
@@ -6582,7 +6596,7 @@ async function directMessagesOnly(client, me, eventName, ctx) {
   const page = pageUnread(dms, { cold: false, noBoard: true, bytes: eventBytes(budget - pageReserve(dms), null) });
   const text = unreadLines(page, null, { withCmd: false, coldBoard: false }).join("\n");
   if (utf8Bytes(text) > budget) return buildOutput(noBoardFallback(dms[0].id), eventName);
-  if (!late) await writeCursors(client, cursorWrites(me, null, page));
+  await finishCursors(client, ctx, { me, eventName, rows: cursorWrites(me, null, page), late });
   return buildOutput(text, eventName);
 }
 function parseRelatesTo(scope) {
@@ -6759,7 +6773,9 @@ async function boardPage(client, a, ctx) {
   }
   const text = lines.join("\n");
   if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
-  if (unread.length && lines.length && !late) await writeCursors(client, cursorWrites(me, board, page));
+  if (unread.length && lines.length) {
+    await finishCursors(client, ctx, { me, eventName: a.eventName, rows: cursorWrites(me, board, page), late });
+  }
   return buildOutput(text, a.eventName);
 }
 async function runLaneContext(raw, opts = {}) {

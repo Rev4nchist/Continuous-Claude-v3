@@ -15,7 +15,7 @@
  *
  * The database is a stub that records SQL. The real SQL runs in lane-context-db.test.ts.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +29,8 @@ const fake = vi.hoisted(() => ({
   peers: [] as Row[],
   unread: [] as Row[],
   lanes: [] as Row[],
+  /** B1: when set, the lane_watermark upsert throws (the client-side query timeout). Nothing else throws. */
+  failUpsert: false,
 }));
 
 vi.mock('pg', () => {
@@ -38,7 +40,10 @@ vi.mock('pg', () => {
     async end(): Promise<void> { /* closed */ }
     async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
       fake.calls.push({ sql, params });
-      if (/INSERT INTO agentic_os\.lane_watermark/.test(sql)) return { rows: [] };
+      if (/INSERT INTO agentic_os\.lane_watermark/.test(sql)) {
+        if (fake.failUpsert) throw new Error('Query read timeout');
+        return { rows: [] };
+      }
       if (/FROM agentic_os\.lane WHERE id = ANY/.test(sql)) return { rows: fake.lanes };
       if (/state IN \('ready','backlog'\)/.test(sql)) return { rows: fake.claimable };
       if (/remind_state IN/.test(sql)) return { rows: fake.reminders };
@@ -88,6 +93,7 @@ beforeEach(() => {
   delete process.env.CLAUDE_CODE_ENTRYPOINT;
   delete process.env.LANE_CONTEXT_HEADLESS;
   fake.calls.length = 0;
+  fake.failUpsert = false;
   fake.mine = []; fake.claimable = []; fake.reminders = []; fake.peers = []; fake.unread = []; fake.lanes = [];
   // A young hook: the C10 time check passes unless a test says otherwise. The vitest worker is older than any hook.
   vi.spyOn(process, 'uptime').mockReturnValue(0.5);
@@ -467,6 +473,58 @@ describe('C4: an event line never prints a lane id over 64 bytes (the id is not 
   });
 });
 
+describe('C4: an event line never prints a board key or a kind over 64 bytes (the same rule as the lane id)', () => {
+  const FROM_TAG = ' [from board not shown]';
+  const withKind = (row: Row, kind: string): Row => ({ ...row, kind });
+  const withBoard = (row: Row, key: string): Row => ({ ...row, project_key: key });
+
+  it('a board event with a 6,000-byte kind does not stop the page: all 3 show, the text is within 6,000 bytes, the cursor passes all 3', async () => {
+    fake.unread = [withKind(bc(101, 'one'), 'K'.repeat(6000)), bc(102, 'two'), bc(103, 'three')];
+    const t = await run('UserPromptSubmit', ccv3);
+    expect(tags(t)).toEqual(['bc101', 'bc102', 'bc103']);
+    const first = t.split(NL).find((l) => l.includes('<bc101>')) ?? '';
+    expect(first).toContain(' kind not shown: <bc101>one');
+    expect(t).not.toContain('KKKK');
+    expect(bytes(t)).toBeLessThanOrEqual(6000);
+    expect(t).not.toContain('Lane text over its budget');
+    expect(inserts()[0].params).toEqual([ME, 103]);
+  });
+
+  it('a direct message from another board with a 6,000-byte board key is whole, with the tag: not cut, not the fallback text', async () => {
+    fake.unread = [withBoard(dm(101, 'hello'), 'B'.repeat(6000))];
+    const t = await run('UserPromptSubmit', ccv3);
+    expect(tags(t)).toEqual(['dm101']);
+    expect(t).toContain(`${FROM_TAG} note (direct to you): <dm101>hello`);
+    expect(t).not.toMatch(/\[cut,/);
+    expect(t).not.toContain('Lane text over its budget');
+    expect(t).not.toContain('BBBB');
+    expect(bytes(t)).toBeLessThanOrEqual(6000);
+    expect(inserts()[0].params).toEqual([ME, 101]);
+  });
+
+  it('a board key of exactly 64 bytes prints in full; one of 65 bytes prints the tag', async () => {
+    const key64 = 'a'.repeat(64);
+    const key65 = 'k'.repeat(65);
+    fake.unread = [withBoard(dm(101, 'one'), key64), withBoard(dm(102, 'two'), key65)];
+    const lines = (await run('UserPromptSubmit', ccv3)).split(NL);
+    expect(lines.find((l) => l.includes('<dm101>'))).toContain(` [from ${key64}] note`);
+    const second = lines.find((l) => l.includes('<dm102>')) ?? '';
+    expect(second).toContain(`${FROM_TAG} note`);
+    expect(second).not.toContain('kkkk');
+  });
+
+  it('a kind of exactly 64 bytes prints in full; one of 65 bytes prints "kind not shown"', async () => {
+    const kind64 = 'a'.repeat(64);
+    const kind65 = 'k'.repeat(65);
+    fake.unread = [withKind(bc(101, 'one'), kind64), withKind(bc(102, 'two'), kind65)];
+    const lines = (await run('UserPromptSubmit', ccv3)).split(NL);
+    expect(lines.find((l) => l.includes('<bc101>'))).toContain(` ${kind64}: <bc101>`);
+    const second = lines.find((l) => l.includes('<bc102>')) ?? '';
+    expect(second).toContain(' kind not shown: <bc102>');
+    expect(second).not.toContain('kkkk');
+  });
+});
+
 describe('C3: each budget holds from both sides (a DM that just fits is whole; one byte more is cut, in the budget)', () => {
   /** The text for one DM of `pad` bytes, and whether it is cut. */
   const page = async (event: string, cwd: string, pad: number): Promise<{ t: string; cut: boolean }> => {
@@ -731,5 +789,94 @@ describe('F13: the time check (C10)', () => {
     expect(t).toContain('## Lane board continuous-claude');
     expect(tags(t)).toEqual(['bc101']);
     expect(inserts()).toHaveLength(0);
+  });
+
+  describe('a skipped cursor write leaves one trace in the error log', () => {
+    const stamp = (): string => join(tmpdir(), `claude-lane-err-${ME}.json`);
+    const logLines = (): Array<{ event: string; session: string; error: string }> =>
+      existsSync(process.env.LANE_CONTEXT_ERROR_LOG as string)
+        ? readFileSync(process.env.LANE_CONTEXT_ERROR_LOG as string, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+        : [];
+    // The logger throttles per session through a stamp file in the temp folder. Clear it so a run is not throttled.
+    beforeEach(() => { rmSync(stamp(), { force: true }); });
+    afterEach(() => { rmSync(stamp(), { force: true }); });
+
+    it('board path: late with events sends the text, writes no cursor and logs one "late <s>s: cursor write skipped" line', async () => {
+      vi.spyOn(process, 'uptime').mockReturnValue(4.25);
+      fake.unread = [bc(101), dm(102)];
+      const t = await run('UserPromptSubmit', ccv3);
+      expect(tags(t)).toEqual(['bc101', 'dm102']);
+      expect(inserts()).toHaveLength(0);
+      const log = logLines();
+      expect(log).toHaveLength(1);
+      expect(log[0].error).toBe('late 4.25s: cursor write skipped');
+      expect(log[0].event).toBe('UserPromptSubmit');
+      expect(log[0].session).toBe(ME);
+    });
+
+    it('no-board path: late with a direct message sends the text, writes no cursor and logs one line', async () => {
+      fake.unread = [dm(101)];
+      const t = await run('UserPromptSubmit', nowhere, { uptime: () => 5.5 });
+      expect(tags(t)).toEqual(['dm101']);
+      expect(inserts()).toHaveLength(0);
+      const log = logLines();
+      expect(log).toHaveLength(1);
+      expect(log[0].error).toBe('late 5.50s: cursor write skipped');
+    });
+
+    it('not late: the cursor is written and nothing is logged (both paths)', async () => {
+      fake.unread = [bc(101), dm(102)];
+      await run('UserPromptSubmit', ccv3);
+      expect(inserts()).toHaveLength(1);
+      fake.calls.length = 0;
+      fake.unread = [dm(103)];
+      await run('UserPromptSubmit', nowhere);
+      expect(inserts()).toHaveLength(1);
+      expect(logLines()).toEqual([]);
+    });
+
+    it('late with nothing to write: no event, so nothing is logged (both paths)', async () => {
+      vi.spyOn(process, 'uptime').mockReturnValue(4);
+      fake.unread = [];
+      await run('UserPromptSubmit', ccv3);
+      await run('UserPromptSubmit', nowhere);
+      expect(logLines()).toEqual([]);
+    });
+
+    // B1: the timeout is a client-side timer, so the upsert may still commit on the server. The text must go out
+    // anyway: the worst case is a message shown twice, never a message marked read and not shown.
+    it('B1 board path, prompt page: the upsert throws, the text still holds the events and one line is logged', async () => {
+      fake.failUpsert = true;
+      fake.unread = [bc(101), dm(102)];
+      const t = await run('UserPromptSubmit', ccv3);
+      expect(tags(t)).toEqual(['bc101', 'dm102']);
+      expect(inserts()).toHaveLength(1);
+      const log = logLines();
+      expect(log).toHaveLength(1);
+      expect(log[0].error).toBe('Query read timeout');
+      expect(log[0].event).toBe('UserPromptSubmit');
+      expect(log[0].session).toBe(ME);
+    });
+
+    it('B1 no-board path: the upsert throws, the text still holds the direct message and one line is logged', async () => {
+      fake.failUpsert = true;
+      fake.unread = [dm(101)];
+      const t = await run('UserPromptSubmit', nowhere);
+      expect(tags(t)).toEqual(['dm101']);
+      expect(inserts()).toHaveLength(1);
+      const log = logLines();
+      expect(log).toHaveLength(1);
+      expect(log[0].error).toBe('Query read timeout');
+    });
+
+    it('B1 SessionStart: the upsert throws, the banner and the events are still returned', async () => {
+      fake.failUpsert = true;
+      fake.unread = [bc(101), dm(102)];
+      const t = await run('SessionStart', ccv3);
+      expect(t).toContain('## Lane board continuous-claude');
+      expect(tags(t)).toEqual(['bc101', 'dm102']);
+      expect(inserts()).toHaveLength(1);
+      expect(logLines()).toHaveLength(1);
+    });
   });
 });
