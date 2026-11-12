@@ -273,6 +273,13 @@ test.describe('toReadyCoord', () => {
     expect(coord.coordError('boom')).toMatchObject({ status: 'error', error: 'boom', rows: [] });
   });
 
+  test('D8f the exact park rule runs before the per-kind limit: 20 leases under the rule do not push out a real park', () => {
+    // The SQL pre-filter is loose (91 minutes). These 20 rows pass it and fail isParked (91m15s rounds to 91).
+    const under = Array.from({ length: 20 }, (_, i) => lane('park', i, NOW + 91 * 60 + 15));
+    const out = coord.toReadyCoord([...under, lane('park', 99, NOW + 3 * 3600)], new Map());
+    expect(out.rows.map((r) => (r.kind === 'park' ? r.laneId : r.kind))).toEqual(['lane-99']);
+  });
+
   test('D8e R10: with 5 reminders, 2 unread and 1 park the first four rows are unread, park, reminder, unread; no kind is hidden by another', () => {
     const names = new Map<string, string>();
     const out = coord.toReadyCoord([

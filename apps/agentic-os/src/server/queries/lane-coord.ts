@@ -350,8 +350,9 @@ function toReminder(r: CoordRaw): CoordReminder | null {
  */
 export function toReadyCoord(rows: readonly CoordRaw[], names: ReadonlyMap<string, string>): ReadyCoord {
   const of = (k: string) => rows.filter((r) => r.kind === k);
+  // Map and drop first, then cut: a raw row that a mapper rejects (a lease under the exact park rule) takes no place.
   const pick = <T>(k: string, map: (r: CoordRaw) => T | null): T[] =>
-    of(k).slice(0, COORD_KIND_LIMIT).map(map).filter((x): x is T => x !== null);
+    of(k).map(map).filter((x): x is T => x !== null).slice(0, COORD_KIND_LIMIT);
   const truncated = ['unread', 'park', 'reminder'].some((k) => of(k).length > COORD_KIND_LIMIT);
   const byKind: CoordRow[][] = [
     pick('unread', (r) => toUnread(r, names)),

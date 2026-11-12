@@ -136,20 +136,20 @@ let laneDepCheckedAt = 0;
 let laneDepPending: Promise<boolean> | null = null;
 const LANE_DEP_RECHECK_MS = 60_000;
 
+/** Throws when the check itself fails: a failed check is not "the table is absent". */
 async function askLaneDep(): Promise<boolean> {
-  try {
-    const { rows } = await db.execute<{ has: boolean }>(sql`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`);
-    laneDepSeen = rows[0]?.has === true;
-  } catch {
-    laneDepSeen = false;
-  }
+  const { rows } = await db.execute<{ has: boolean }>(sql`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`);
+  laneDepSeen = rows[0]?.has === true;
+  laneDepCheckedAt = Date.now();
   return laneDepSeen;
 }
 
 /**
- * lane.mjs:1013-1016. A true answer is kept for the life of the process. A false or failed check is asked again
- * after 60 s, so migration 0006 shows without a restart. Without the table the waits-on column is the empty array:
+ * lane.mjs:1013-1016. A true answer is kept for the life of the process. An "absent" answer is asked again after
+ * 60 s, so migration 0006 shows without a restart. Without the table the waits-on column is the empty array:
  * a SELECT that names a missing lane_dep would fail the whole board read (42P01).
+ * A check that FAILS is never kept: it rejects, getLaneBoard reports `status: 'error'`, and the next read asks again.
+ * An "ok" board with empty waits-on lists must mean that no lane waits, not that the check failed.
  * Callers that arrive while a check runs share its answer. The 60 s wait starts when a check ends, not when it starts.
  */
 async function hasLaneDep(): Promise<boolean> {
@@ -157,7 +157,6 @@ async function hasLaneDep(): Promise<boolean> {
   if (laneDepPending !== null) return laneDepPending;
   if (Date.now() - laneDepCheckedAt < LANE_DEP_RECHECK_MS) return false;
   laneDepPending = askLaneDep().finally(() => {
-    laneDepCheckedAt = Date.now();
     laneDepPending = null;
   });
   return laneDepPending;
