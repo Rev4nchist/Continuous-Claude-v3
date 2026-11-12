@@ -309,6 +309,22 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Wher
 const quotesToBreaks = (view: string): string => view.replace(/["']/g, ';');
 /** The quote marks become spaces, same length. cmd.exe runs a quoted program name (`"git" push`), so that call has to stay one command. */
 const quotesToSpaces = (view: string): string => view.replace(/["']/g, ' ');
+/**
+ * `cd "<path>"` at a command position, written with its double quotes as spaces, same length: the path is one plain word. cmd.exe pairs the double
+ * quote and cds to the path. Only a path with no space and no %, $, backtick, ^, ( ), & | ; < > (nothing that expands or splits), ending the segment.
+ * A single-quoted target stays a bare cd under the break view: cmd.exe reads 'A' as a folder name, so the shell may not move (unknown, denied).
+ * Without this the quote-break view reads `cd "A" && git push` as a bare cd and denies a push whose folder the text names.
+ */
+const PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
+const plainCdUnquoted = (view: string): string => {
+  // cmd.exe reads ^ as an escape: any ^ keeps every quote as it is (fail closed).
+  if (view.includes('^')) return view;
+  return view.replace(PLAIN_QUOTED_CD, (match: string, lead: string, cd: string, path: string, offset: number) => {
+    // A cd inside a double-quoted span of the text is no command for cmd.exe (an odd number of " before it): it stays a bare cd and is denied.
+    const quotesBefore = (view.slice(0, offset).match(/"/g) ?? []).length;
+    return quotesBefore % 2 === 0 ? `${lead}${cd} ${path} ` : match;
+  });
+};
 
 /**
  * The push calls of a command: the bash view, the pwsh view, and each bash segment with its quotes deleted (`g"i"t push`, `git "push"`).
@@ -324,9 +340,11 @@ function pushCallsIn(raw: string, cmdExe = false): RawPush[] {
   const maskedPwsh = maskQuoted(pwsh, 'PowerShell');
   const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskedPwsh, pwsh, false)];
   if (cmdExe) {
+    const cmdBash = plainCdUnquoted(bash);
+    const cmdPwsh = plainCdUnquoted(pwsh);
     for (const view of [quotesToBreaks, quotesToSpaces]) {
-      if (maskedBash !== bash) calls.push(...pushCallsOf(view(bash), bash, false, undefined, bash));
-      if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(view(pwsh), pwsh, false, undefined, pwsh));
+      if (maskedBash !== bash) calls.push(...pushCallsOf(view(cmdBash), cmdBash, false, undefined, cmdBash));
+      if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(view(cmdPwsh), cmdPwsh, false, undefined, cmdPwsh));
     }
   }
   let from = 0;
