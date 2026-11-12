@@ -12,7 +12,20 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(here, '..', '..', '..', 'apps', 'agentic-os');
-const sharp = createRequire(path.join(appDir, 'package.json'))('sharp');
+
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  console.log('Usage: node scripts/agentic-os/icons/build-icons.mjs [--preview <folder>]');
+  console.log('Writes fleet.ico and fleet-stop.ico beside this file. --preview also writes one PNG per size.');
+  process.exit(0);
+}
+
+let sharp;
+try {
+  sharp = createRequire(path.join(appDir, 'package.json'))('sharp');
+} catch {
+  console.error(`ENV: the package "sharp" is not installed in ${appDir}. Run npm ci there first. Nothing was written.`);
+  process.exit(1);
+}
 
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
 const SIMPLE_UP_TO = 32;
