@@ -11,7 +11,7 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { EXIT, finishRun, reserveRun, runAgent as realRunAgent } from './cursor-review.mjs';
+import { EXIT, finishRun, parseReviewOutput, reserveRun, runAgent as realRunAgent } from './cursor-review.mjs';
 import {
   ENGINE_FILES, buildEngineEnv, checkPin, computeTrust, loadConfig, main, parseArgs, parseNameStatus, pinEngine, releaseSlot, resolveRange,
   pathspecDiffArgv, resolveTarget, reviewHead, routeBand, sweepTmp, takeSlot,
@@ -1457,4 +1457,198 @@ test('withholdBody: CONTEXT.md carries the title and a placeholder, never the bo
   const lr = await run(live);
   assert.match(live.agentCalls[0].context, /SECRET-BODY: live/);
   assert.equal(readRecord(lr).bodyMode, 'full');
+});
+
+// ---------- the engine seam: golden output (the move of the agent call must not change one byte) ----------
+
+/** A small fixed band config, so a later edit of the real review-router.config.json does not move the golden hashes. */
+const GOLDEN_CONFIG = JSON.stringify({
+  matrix: {
+    test_markers: ['.test.'], logic_ext: ['mjs'], control_plane: [], security_tier: [], config_files: [], gate_score: [[1, 2]],
+    weights: { config: 1, code: 2 }, bands: { mid: 1, elevated: 3, high: 5 },
+  },
+});
+
+/**
+ * The output of one review as text with only the random parts made fixed: the temp folder (raw, JSON-escaped and forward-slash forms)
+ * becomes <T>, the run id (randomUUID in reserveRun) becomes <RUN>, and a JSON-escaped backslash becomes / (Windows path separators).
+ */
+function goldenText(text, w, runId) {
+  let t = String(text);
+  for (const form of [JSON.stringify(w.T).slice(1, -1), w.T, w.T.replaceAll('\\', '/')]) t = t.split(form).join('<T>');
+  return t.split(runId).join('<RUN>').replaceAll('\\\\', '/');
+}
+
+/** sha256 of the record file, the cursor ledger lines, the trace file and the stream file (gunzipped: its bytes hold the temp folder). */
+async function goldenRun(over = {}) {
+  const w = world({ runs: [streamRun([finding()])], configText: GOLDEN_CONFIG });
+  w.configPath = path.join(w.T, 'golden-config.json');
+  writeFileSync(w.configPath, GOLDEN_CONFIG);
+  const r = await run(w, {}, { platform: 'linux', ...over });
+  assert.equal(r.exit, EXIT.OK);
+  const g = (text) => sha256(goldenText(text, w, r.runId));
+  // The end line names the sha256 of the record bytes, which hold the random run id: check it, then make it fixed.
+  const recordBytes = readFileSync(r.recordPath);
+  const ledger = readFileSync(w.cursorLedger, 'utf8');
+  assert.ok(ledger.includes(`"recordSha256":"${sha256(recordBytes)}"`));
+  return {
+    w, r,
+    hashes: {
+      record: g(recordBytes.toString('utf8')),
+      ledger: g(ledger.split(sha256(recordBytes)).join('<RECORD_SHA>')),
+      trace: g(readFileSync(besideRecord(r, '.trace.json'), 'utf8')),
+      stream: g(gunzipSync(readFileSync(besideRecord(r, '.stream.jsonl.gz'))).toString('utf8')),
+    },
+  };
+}
+
+/** Taken on the code before the move (main ff608f90). A change to these literals is a change of the engine output. */
+const GOLDEN = {
+  record: 'ee2306d261e7ae6f171f2fb76dcf0bea96a91c44790ebebb8708346ad279fe1c',
+  ledger: 'e09fbd23600307377abb202c38c618713d783b5e71b589859b08494a04a0e7dc',
+  trace: '279551cd66ee48e55c6678f7be699394a6c4174128be815ffe9917935db4c668',
+  stream: 'f1135a6a11912cad7ae110bdc08592fee0a9cbb0975b211a16c78001c8e6dbb5',
+};
+
+test('golden: one review with a fixed clock, config and stream writes the same record, ledger lines, trace and stream bytes (breaks if the backend seam changes any engine output)', async () => {
+  const { hashes } = await goldenRun();
+  assert.deepEqual(hashes, GOLDEN);
+});
+
+// ---------- the engine seam: the backend ----------
+
+const cursorBackend = async () => (await import('./local-review/backends/cursor.mjs')).run;
+
+test('an explicit deps.backend = the Cursor backend run gives the golden hashes too (breaks if the engine adds work around a passed backend, or the exported run stops matching the old agent call)', async () => {
+  const { hashes } = await goldenRun({ backend: await cursorBackend() });
+  assert.deepEqual(hashes, GOLDEN);
+});
+
+test('deps.backend replaces the agent call: a backend that never calls runAgent makes the record from its run and parsed (breaks if the engine ignores deps.backend)', async () => {
+  const w = world();
+  const fake = async (input) => {
+    const r = agentRun([finding()]);
+    return { text: 'unused', traceEvents: null, exitCode: 0, costTag: 'fake', run: r, parsed: parseReviewOutput(r.stdout, { expectModel: input.model }) };
+  };
+  const r = await run(w, {}, { backend: fake });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(w.agentCalls.length, 0);
+  assert.equal(readRecord(r).findings.length, 1);
+});
+
+test('the backend gets the contract input and the engine opts: deps.runAgent, deps.agent and deps.now pass through, the env has the secrets dropped (breaks if a dep is not passed on or the input changes)', async () => {
+  const w = world();
+  const seen = [];
+  const real = await cursorBackend();
+  const now = () => NOW;
+  const d = deps(w, { now });
+  const spy = async (...a) => { seen.push(a); return real(...a); };
+  const r = await reviewHead({ pr: 7, engineHere: true, root: w.T }, { ...d, backend: spy });
+  assert.equal(r.exit, EXIT.OK);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].length, 2);
+  const [input, opts] = seen[0];
+  const tree = path.join(w.T, 'tree-1');
+  assert.deepEqual(input, { promptPath: path.join(tree, '.review', 'PROMPT.md'), reviewDir: tree, model: 'grok-4.7-high', effort: null, timeoutMs: loadConfig(REAL_CONFIG).cfg.timeout_min * 60_000 });
+  assert.deepEqual(Object.keys(opts).sort(), ['agent', 'env', 'now', 'promptArgv', 'runAgent']);
+  assert.equal(opts.runAgent, d.runAgent);
+  assert.equal(opts.agent, d.agent);
+  assert.equal(opts.now, now);
+  assert.deepEqual(opts.env, buildEngineEnv(d.env));
+  assert.equal(opts.env.ANTHROPIC_API_KEY, undefined);
+  assert.deepEqual(opts.promptArgv, w.agentCalls[0].spec.args.slice(9));
+});
+
+/**
+ * The fields of run and of parsed that the engine reads after the backend returns. A next backend must return each of them.
+ * modelVerified and modelMismatch must be computed against input.model: runError voids a run only when modelMismatch is true.
+ */
+const ENGINE_READS = {
+  run: ['durationMs', 'error', 'spawnedAt', 'status', 'stderr', 'stdout', 'timedOut', 'toolStats'],
+  parsed: ['modelMismatch', 'modelVerified', 'notRun', 'ok', 'problems', 'text', 'usage'],
+};
+
+test('the engine reads exactly these fields of run and parsed, over an ok run, an exit-1 run, a time-out and a spawn error with its retry; a key walk or an in test counts too (breaks if the engine starts or stops reading a field on any of these paths: update the backend contract with it)', async () => {
+  const real = await cursorBackend();
+  const reads = { run: new Set(), parsed: new Set() };
+  const watch = (obj, set) => new Proxy(obj, {
+    get(t, k, rcv) { if (typeof k === 'string') set.add(k); return Reflect.get(t, k, rcv); },
+    has(t, k) { set.add(`in:${String(k)}`); return Reflect.has(t, k); },
+    ownKeys(t) { set.add('<ownKeys>'); return Reflect.ownKeys(t); },
+  });
+  const backend = async (...a) => {
+    const out = await real(...a);
+    return { ...out, run: watch(out.run, reads.run), parsed: watch(out.parsed, reads.parsed) };
+  };
+  assert.equal((await run(world({ runs: [streamRun([finding()])] }), {}, { backend })).exit, EXIT.OK);
+  assert.equal((await run(world({ runs: [failRun(1)] }), {}, { backend })).exit, EXIT.FAILED);
+  assert.equal((await run(world({ runs: [timeoutRun()] }), {}, { backend })).exit, EXIT.FAILED);
+  const retry = world({ runs: [spawnErrRun(), streamRun([finding()])] });
+  assert.equal((await run(retry, {}, { backend })).exit, EXIT.OK);
+  assert.equal(retry.agentCalls.length, 2, 'the spawn error was retried');
+  assert.deepEqual({ run: [...reads.run].sort(), parsed: [...reads.parsed].sort() }, ENGINE_READS);
+});
+
+// ---------- the engine seam: trust and stages ----------
+
+const SEAM_FILES = ['scripts/github/local-review/backends/cursor.mjs', 'scripts/github/lib/grok-slots.mjs', 'scripts/github/lib/findings-repair.mjs'];
+
+test('ENGINE_FILES ends with the Cursor backend, grok-slots.mjs, then findings-repair.mjs: appended, so the indexed entries keep their place (breaks if an entry is inserted in the middle or the order changes)', () => {
+  assert.deepEqual(ENGINE_FILES.slice(-3), SEAM_FILES);
+  assert.deepEqual(ENGINE_FILES.slice(0, 5), ['scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/review-router.mjs', 'scripts/github/review-status.mjs']);
+});
+
+for (const rel of SEAM_FILES) {
+  test(`trust: a copy whose ${rel} differs from fork/main is trusted:false (breaks if the file is dropped from ENGINE_FILES)`, () => {
+    assert.ok(ENGINE_FILES.includes(rel), `${rel} is not in ENGINE_FILES`);
+    const forkMain = trustGit(engineCopy());
+    const root = engineCopy();
+    assert.deepEqual(computeTrust({ selfRoot: root, git: forkMain }), { trusted: true, mismatched: [] });
+    appendFileSync(path.join(root, rel), '\n// edited\n');
+    assert.deepEqual(computeTrust({ selfRoot: root, git: forkMain }), { trusted: false, mismatched: [rel] });
+  });
+}
+
+/** Static relative imports (import ... from, export ... from, bare import) of one repo file, as repo paths. Dynamic import() is not matched. */
+const STATIC_IMPORT = /(?:^|;)[ \t]*(?:import|export)\b[^'"();]*?\bfrom\s*['"](\.\.?\/[^'"]+)['"]|(?:^|;)[ \t]*import\s*['"](\.\.?\/[^'"]+)['"]/gm;
+/** Every from or bare import before a relative specifier, anywhere in the text. More of these than STATIC_IMPORT matches means an import the parser did not read. */
+const LOOSE_IMPORT = /\bfrom\s*['"]\.\.?\/|\bimport\s*['"]\.\.?\//g;
+/** found: the relative imports of `text` (the file `rel`) as repo paths. unread: the loose count minus the found count; it must be 0 (fail closed). */
+function relImports(text, rel) {
+  const found = [...text.matchAll(STATIC_IMPORT)].map((m) => path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1] ?? m[2])));
+  return { found, unread: (text.match(LOOSE_IMPORT) ?? []).length - found.length };
+}
+const staticImports = (rel) => relImports(readFileSync(path.join(REPO_ROOT, rel), 'utf8'), rel);
+
+test('the import parser reads a specifier on the line after from and an import after a semicolon, skips import(), and counts an import it cannot read as unread (breaks if the parser drops an edge without a failure)', () => {
+  const text = [
+    "import {\n  a,\n  b,\n} from\n  './next-line.mjs';",
+    "const z = 1; import { q } from './same-line.mjs';",
+    "import './bare.mjs';",
+    "export { c } from '../up.mjs';",
+    "const lazy = () => import('./dyn.mjs');",
+  ].join('\n');
+  assert.deepEqual(relImports(text, 'scripts/x/f.mjs'), { found: ['scripts/x/next-line.mjs', 'scripts/x/same-line.mjs', 'scripts/x/bare.mjs', 'scripts/up.mjs'], unread: 0 });
+  assert.equal(relImports("import { \"a-b\" as ab } from './quoted.mjs';", 'scripts/x/f.mjs').unread, 1, 'a quote inside the import clause is not read: it must count as unread');
+});
+
+test('the import parser reads every relative import of each engine file: no engine file has an unread import (breaks if an import form the parser misses is added to an engine file)', () => {
+  const unread = ENGINE_FILES.filter((f) => f.endsWith('.mjs')).map((f) => [f, staticImports(f).unread]).filter(([, n]) => n !== 0);
+  assert.deepEqual(unread, []);
+});
+
+test('import closure: every static relative import of an engine file is an engine file (breaks if an engine file imports a file whose change trust would not see)', () => {
+  const engine = new Set(ENGINE_FILES);
+  const edges = ENGINE_FILES.filter((f) => f.endsWith('.mjs')).flatMap((from) => staticImports(from).found.map((to) => [from, to]));
+  const own = edges.filter(([from]) => from === 'scripts/github/local-review.mjs').map(([, to]) => to);
+  // The parser must see the multi-line imports, else the gate passes on nothing.
+  for (const to of ['scripts/github/cursor-review.mjs', 'scripts/github/local-review/record.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/lib/grok-slots.mjs']) assert.ok(own.includes(to), `local-review.mjs -> ${to} not seen`);
+  assert.deepEqual(edges.filter(([, to]) => !engine.has(to)).map(([from, to]) => `${from} -> ${to}`), []);
+});
+
+test('RUN_STAGES is exported as the list run, settle, record, the names re-p4-wire inserts verify between; the golden test, not this one, proves the run order (breaks if the export or a stage name changes)', async () => {
+  const { RUN_STAGES } = await import('./local-review.mjs');
+  assert.ok(Array.isArray(RUN_STAGES), 'RUN_STAGES is not exported');
+  assert.deepEqual(RUN_STAGES.map((x) => x.name), ['run', 'settle', 'record']);
+  assert.ok(RUN_STAGES.every((x) => typeof x.run === 'function'));
 });

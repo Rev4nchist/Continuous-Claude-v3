@@ -25,11 +25,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  BAND_MODEL, DEFAULT_REPO, EXIT, buildAgentEnv, finishRun, isExcluded, parseReviewOutput, prepareReview, reserveRun,
+  BAND_MODEL, DEFAULT_REPO, EXIT, buildAgentEnv, finishRun, isExcluded, prepareReview, reserveRun,
   resolveAgent, runAgent,
 } from './cursor-review.mjs';
 import { pidAlive, withLock } from './lib/file-lock.mjs';
 import { resolveWaitMs as grokWaitMs } from './lib/grok-slots.mjs';
+import { run as cursorBackend } from './local-review/backends/cursor.mjs';
 import { buildContext, readAtSha } from './local-review/context.mjs';
 import { buildEnginePrompt, lastJsonBlock, PROMPT_PATH } from './local-review/prompt.mjs';
 import { buildTrace, condense, contextSha, cursorAgentVersion, writeTraceFiles } from './local-review/trace.mjs';
@@ -64,6 +65,7 @@ export const ENGINE_FILES = Object.freeze([
   'scripts/github/review-status.mjs', 'scripts/github/local-review/context.mjs', 'scripts/github/local-review/prompt.mjs',
   'scripts/github/local-review/record.mjs', 'scripts/github/local-review/trace.mjs', 'scripts/github/lib/file-lock.mjs', 'scripts/github/lib/proc.mjs',
   'scripts/ratchets/review-skip-sync.mjs', 'review-router.config.json',
+  'scripts/github/local-review/backends/cursor.mjs', 'scripts/github/lib/grok-slots.mjs', 'scripts/github/lib/findings-repair.mjs',
 ]);
 
 /** The landed local_review block (review-router.config.json). A missing block uses these. */
@@ -467,7 +469,7 @@ function makeDeps(opts, deps) {
     configPath: deps.configPath ?? path.resolve(path.dirname(selfPath), '..', '..', 'review-router.config.json'),
     gh: deps.gh ?? defaultGh(opts.repo ?? DEFAULT_REPO), repo: opts.repo ?? DEFAULT_REPO,
     withLock: deps.withLock ?? withLock, fetchLock: P.fetchLock, remote: deps.remote ?? 'fork',
-    runAgent: deps.runAgent ?? runAgent, reserveRun: deps.reserveRun ?? reserveRun, finishRun: deps.finishRun ?? finishRun,
+    backend: deps.backend ?? cursorBackend, runAgent: deps.runAgent ?? runAgent, reserveRun: deps.reserveRun ?? reserveRun, finishRun: deps.finishRun ?? finishRun,
     writeRecord: deps.writeRecord ?? writeRecord, prepareReview: deps.prepareReview ?? prepareReview,
     readAtSha: deps.readAtSha ?? ((r, s, p) => readAtSha(r, s, p)), agent: deps.agent, agentVersion: deps.agentVersion ?? cursorAgentVersion, writeTraceFiles: deps.writeTraceFiles ?? writeTraceFiles,
     slotDeps: { now: deps.now, pidAlive: deps.pidAlive, pid: deps.pid, sleep: deps.sleep, lockWaitMs: deps.lockWaitMs, pollMs: deps.pollMs, log: deps.stderr ? (m) => deps.stderr(`local-review: ${m}`) : undefined },
@@ -642,13 +644,9 @@ const retryable = (cur) => !cur.run.timedOut && !cur.parsed.modelMismatch && !cu
 
 async function runOnce(s, prep, plan, runId, attempt) {
   const { d, route } = s;
-  const agent = s.agent;
-  const args = [...(agent.prefixArgs ?? []), '-p', '--mode', 'ask', '--trust', '--output-format', 'stream-json', '--model', route.model, ...plan.prompt.argv];
-  const spec = { command: agent.cmd, args, cwd: prep.dir, timeoutMs: s.timeoutMs, env: buildEngineEnv(d.env, d.platform) };
-  const t0 = d.now();
-  let run;
-  try { run = await d.runAgent(spec); } catch (err) { run = { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message), durationMs: d.now() - t0 }; }
-  const parsed = parseReviewOutput(run.stdout, { expectModel: route.model });
+  // The backend makes the agent call. The engine reads only run and parsed of its result (the backend contract).
+  const input = { promptPath: path.join(prep.dir, PROMPT_PATH), reviewDir: prep.dir, model: route.model, effort: null, timeoutMs: s.timeoutMs };
+  const { run, parsed } = await d.backend(input, { agent: s.agent, env: buildEngineEnv(d.env, d.platform), promptArgv: plan.prompt.argv, runAgent: d.runAgent, now: d.now });
   return { runId, attempt, run, parsed, error: runError(run, parsed, s.timeoutMs, route.model) };
 }
 
@@ -767,23 +765,56 @@ function saveTrace(s, { prep, final, record, dir }) {
   }
 }
 
+/** Stage run: the reserved, capped agent run with its retry. A cap or lock stop before any attempt ends the review. */
+async function stageRun(s, c) {
+  const { d } = s;
+  c.out = await runAttempts(s, c.prep, c.plan);
+  if (c.out.stopped && !c.out.prev) return refuse(d, c.out.stopped.reason === 'lock' ? EXIT.FAILED : EXIT.CAP, c.out.stopped.detail ?? `${c.out.stopped.reason} reached (${c.out.stopped.count})`);
+  c.final = c.out.prev;
+  return null;
+}
+
+/** Stage settle: the final json block, the run error, then the S5 filter and the prior settle. */
+function stageSettle(s, c) {
+  const { final } = c;
+  c.answer = lastJsonBlock(final.parsed.text);
+  c.error = final.error ?? (c.answer ? null : 'the answer has no final json block with findings, reviewed and prior');
+  c.filtered = c.error ? { findings: [], dropped: [], problems: [] } : settleAndFilter(s, c.prep, c.plan, c.answer);
+  if (c.error && !final.error) final.error = c.error;
+  return null;
+}
+
+/** Stage record: build and persist the record, then the trace beside it. */
+function stageRecord(s, c) {
+  const record = buildRecord(s, c.plan, c.out, c.answer, c.filtered, c.error);
+  const result = persist(s, c.final, record, c.error);
+  if (result.recordPath) saveTrace(s, { prep: c.prep, final: c.final, record, dir: path.dirname(result.recordPath) });
+  return result;
+}
+
+/**
+ * The stages of one review run, in order. A stage returns the review result to stop, or null to go on. re-p4-wire adds verify between settle and record.
+ * Only run may return a result before record: after run, persist in record writes the ledger end line of the reserved run.
+ */
+export const RUN_STAGES = Object.freeze([
+  Object.freeze({ name: 'run', run: stageRun }),
+  Object.freeze({ name: 'settle', run: stageSettle }),
+  Object.freeze({ name: 'record', run: stageRecord }),
+]);
+
 async function stepRun(s) {
   const { d, target } = s;
   const prep = await d.prepareReview({ root: d.root, input: { range: `${target.pullBaseSha}..${target.head}` }, tmpRoot: d.tmpRoot, platform: d.platform });
   try {
     let plan;
     try { plan = writeReviewDir(s, prep); } catch (err) { return refuse(d, err.code === 'PROMPT_TOO_LONG' ? EXIT.REFUSED : EXIT.FAILED, err.message); }
-    const out = await runAttempts(s, prep, plan);
-    if (out.stopped && !out.prev) return refuse(d, out.stopped.reason === 'lock' ? EXIT.FAILED : EXIT.CAP, out.stopped.detail ?? `${out.stopped.reason} reached (${out.stopped.count})`);
-    const final = out.prev;
-    const answer = lastJsonBlock(final.parsed.text);
-    const error = final.error ?? (answer ? null : 'the answer has no final json block with findings, reviewed and prior');
-    const filtered = error ? { findings: [], dropped: [], problems: [] } : settleAndFilter(s, prep, plan, answer);
-    if (error && !final.error) final.error = error;
-    const record = buildRecord(s, plan, out, answer, filtered, error);
-    const result = persist(s, final, record, error);
-    if (result.recordPath) saveTrace(s, { prep, final, record, dir: path.dirname(result.recordPath) });
-    return result;
+    const c = { prep, plan };
+    for (const stage of RUN_STAGES) {
+      const result = await stage.run(s, c);
+      if (result) return result;
+    }
+    // record always returns a result. A stage list that ends without one is a bug: reviewHead turns this throw into a refuse with exit 1.
+    throw new Error('local-review: no stage returned a result');
   } finally {
     prep.cleanup();
   }
@@ -817,7 +848,7 @@ async function runHead(opts, d) {
 
 /**
  * One review of one PR head. opts: { pr, fresh, gatesText, factsText, engineHere, withholdBody (eval runs only), evalRun (eval runs: own cap ref), root, repo }.
- * deps (tests): { git, gh, runAgent, reserveRun, finishRun, writeRecord, prepareReview, readAtSha, agent, now, pidAlive, sleep, env, stateRoot,
+ * deps (tests): { git, gh, backend (default: backends/cursor.mjs run), runAgent, reserveRun, finishRun, writeRecord, prepareReview, readAtSha, agent, now, pidAlive, sleep, env, stateRoot,
  *   stateDir, cursorLedger, selfPath, selfRoot, configPath, tmpRoot, grep, stderr }.
  * -> { exit, recordPath|null, skipReason|null, ... }
  */
