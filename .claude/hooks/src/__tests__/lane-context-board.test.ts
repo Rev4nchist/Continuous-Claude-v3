@@ -106,8 +106,11 @@ beforeEach(() => {
   delete process.env.LANE_CONTEXT_HEADLESS;
   fake.calls.length = 0; fake.mine = []; fake.claimable = []; fake.unread = []; fake.lanes = []; fake.failOn = null;
   fake.insertDelayMs = 0; fake.insertSettled = false;
+  // C10 (coord-banner-page-budget): no cursor write past 3.0 s of process uptime. The worker is older than a hook.
+  vi.spyOn(process, 'uptime').mockReturnValue(0.5);
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -705,9 +708,8 @@ describe('P: the banner pages unread events without losing any', () => {
     const t = text(await run('UserPromptSubmit', ccv3));
     expect(tags(t)).toEqual([...seq('bc', 209, 217), 'dm221', 'dm222', 'dm223']);
     expect(t).toContain('## 15 lane update(s) since you last looked');
-    // A cold page has no board row to read from, so `inbox` would print all history: no command on the line.
-    expect(t).toContain('(3 more unread. Later prompts show them, oldest first.)');
-    expect(t).not.toMatch(/inbox/);
+    // C9: this cold page WRITES the board row (217), so `inbox` reads from it after the page: the line names it.
+    expect(t).toContain(`(3 more unread. Later prompts show them, oldest first, or run: ${MORE_CMD}`);
     expect(t).toContain('(8 older board events are not shown on your first look at this board.)');
     expect(inserts()[0].params).toEqual([ME, 217, SENT, 223]);
   });
@@ -848,8 +850,8 @@ describe('P: the banner pages unread events without losing any', () => {
     const t = text(await run('UserPromptSubmit', ccv3));
     expect(t).not.toMatch(/not shown on your first look/);
     expect(tags(t)).toEqual([...seq('bc', 201, 211), 'dm213']);
-    expect(t).toContain('(1 more unread. Later prompts show them, oldest first.)');
-    expect(t).not.toMatch(/inbox/);
+    // C9: the page writes the board row (211), so the line names `inbox`.
+    expect(t).toContain(`(1 more unread. Later prompts show them, oldest first, or run: ${MORE_CMD}`);
     expect(inserts()[0].params).toEqual([ME, 211, SENT, 213]);
   });
 

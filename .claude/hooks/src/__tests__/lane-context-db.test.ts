@@ -18,10 +18,15 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
 
-import { deliverDirectMessages, dmStatePath, runLaneContext } from '../lane-context.js';
+import { boardFallback, deliverDirectMessages, dmStatePath, noBoardFallback, runLaneContext } from '../lane-context.js';
+
+// C10: the hook writes no cursor once process.uptime() passes 3.0 s. This worker is older than any hook, so every
+// case runs with a young clock. A case that tests the clock sets its own.
+beforeEach(() => { vi.spyOn(process, 'uptime').mockReturnValue(0.5); });
+afterEach(() => { vi.restoreAllMocks(); });
 
 const URL_ENV = process.env.LANE_TEST_DB_URL ?? '';
 const dbName = (() => { try { return new URL(URL_ENV).pathname.replace(/^\//, ''); } catch { return ''; } })();
@@ -363,7 +368,8 @@ describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)'
     expect(tags(p2)).toEqual(['dm62', ...seq('bc', 89, 99)]);
     // Page 2 writes the board row: the cold line prints here, once.
     expect(p2).toContain('(75 older board events are not shown on your first look at this board.)');
-    expect(p2).toContain('(1 more unread. Later prompts show them, oldest first.)');
+    // C9: page 2 writes the board row, so the line names `inbox`.
+    expect(p2).toMatch(/\(1 more unread\. Later prompts show them, oldest first, or run: .*lane\.mjs inbox\)/);
     expect(await marks()).toEqual({ [ME2]: ids.bc99, [SENT]: ids.dm61 });
     const p3 = await prompt(ccv3);
     expect(tags(p3)).toEqual(['bc100']);
@@ -382,10 +388,221 @@ describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)'
       rmSync(dmStatePath(ME2), { force: true });
     }
     expect(tags(mid)).toEqual(seq('dm', 3, 7));
-    expect(mid).toContain('(2 older not shown. The next prompt shows your direct messages, oldest first, 12 at a time.)');
+    expect(mid).toContain('(2 older not shown. The next prompt shows your direct messages, oldest first, up to 12 at a time.)');
     // The mid-turn page wrote no cursor: the warm row is still at 0 and no sentinel row exists. So its line is true.
     expect(await marks()).toEqual({ [ME2]: 0 });
     expect(tags(await prompt(ccv3))).toEqual(seq('dm', 1, 7));
     expect(await prompt(ccv3)).toBe('');
+  });
+});
+
+/**
+ * Byte budgets on the real SQL (coord-banner-page-budget, CONTRACT v2). Own session ids; each case clears its rows.
+ *   D13 (F1, F8)  50 direct messages: whole messages only, oldest first, no board event while one waits, none lost
+ *   D14 (F3)      a text over its budget sends the fallback and moves no cursor, on the board and no-board paths
+ *   D15 (F7)      one 9,000-byte direct message: page 1 shows it alone and cut, page 2 shows the next event
+ *   D16 (F1)      board events the share rule removes stay unread and show on the next page
+ *   D17 (F15)     SessionStart and the first prompt at the same time: an event may show twice, never "read, not shown"
+ */
+describe.skipIf(!usable)('lane-context byte budgets on a scratch database (D13 and up)', () => {
+  const ME3 = 'aaaaaaaa-0000-4000-8000-0000000000f1';
+  const PEER3 = 'bbbbbbbb-0000-4000-8000-0000000000f2';
+  const saved: Record<string, string | undefined> = {};
+  let tmp = '';
+  let ccv3 = '';
+  let nowhere = '';
+  let db: Client;
+  const ids: Record<string, number> = {};
+  const bodies: Record<string, string> = {};
+  const bytes = (t: string): number => Buffer.byteLength(t, 'utf8');
+  const MARKER = / …\[cut, (\d+) more bytes\. Full text: .*lane\.mjs inbox --id (\d+)\]$/;
+
+  const send = async (tag: string, to: string | null, pad = ''): Promise<void> => {
+    const body = `<${tag}>${pad}`;
+    const r = await db.query(
+      `INSERT INTO agentic_os.lane_event (kind, session_id, to_session_id, body, project_key)
+       VALUES ('note', $1, $2, $3, 'continuous-claude') RETURNING id`,
+      [PEER3, to, body],
+    );
+    ids[tag] = Number(r.rows[0].id);
+    bodies[tag] = body;
+  };
+  const run = async (event: string, cwd: string, opts?: Parameters<typeof runLaneContext>[1]): Promise<string> => {
+    const out = (await runLaneContext(JSON.stringify({ session_id: ME3, hook_event_name: event, cwd }), opts)) as
+      { hookSpecificOutput?: { additionalContext: string } };
+    return out.hookSpecificOutput?.additionalContext ?? '';
+  };
+  const tags = (t: string): string[] => [...t.matchAll(/<((?:bc|dm|big)\d*)>/g)].map((m) => m[1]);
+  const seq = (prefix: string, from: number, to: number): string[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => `${prefix}${from + i}`);
+  const marks = async (): Promise<Record<string, number>> => Object.fromEntries(
+    (await db.query(
+      'SELECT session_id, last_event_id FROM agentic_os.lane_watermark WHERE session_id = $1 OR starts_with(session_id, $1 || $2)',
+      [ME3, '@'],
+    )).rows.map((r: { session_id: string; last_event_id: string }) => [r.session_id, Number(r.last_event_id)]),
+  );
+  const maxMark = async (): Promise<number> => Math.max(0, ...Object.values(await marks()));
+  const warm = async (): Promise<void> => {
+    await db.query('INSERT INTO agentic_os.lane_watermark (session_id, last_event_id) VALUES ($1, 0)', [ME3]);
+  };
+  const reset = async (): Promise<void> => {
+    await db.query('DELETE FROM agentic_os.lane_event WHERE session_id = $1', [PEER3]);
+    await db.query('DELETE FROM agentic_os.lane_watermark WHERE session_id = $1 OR starts_with(session_id, $1 || $2)', [ME3, '@']);
+  };
+
+  beforeAll(async () => {
+    for (const k of KEYS) saved[k] = process.env[k];
+    tmp = mkdtempSync(join(tmpdir(), 'lc-db3-'));
+    ccv3 = join(tmp, 'ccv3'); nowhere = join(tmp, 'nowhere');
+    for (const d of [ccv3, nowhere]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(tmp, 'registry.json'), JSON.stringify({ projects: [
+      { name: 'CCv3', key: 'continuous-claude', path: ccv3, status: 'active' },
+    ] }));
+    process.env.LANE_REGISTRY_PATH = join(tmp, 'registry.json');
+    process.env.CONTINUOUS_CLAUDE_DB_URL = URL_ENV;
+    delete process.env.DATABASE_URL;
+    delete process.env.OPC_POSTGRES_URL;
+    process.env.CCV3_IDENTITY_DIR = join(tmp, 'ident');
+    process.env.LANE_BOARD_CACHE = '0';
+    process.env.LANE_CONTEXT_ERROR_LOG = join(tmp, 'errors.jsonl');
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    delete process.env.LANE_CONTEXT_HEADLESS;
+    db = new Client({ connectionString: URL_ENV });
+    await db.connect();
+    await db.query("SELECT set_config('lane.client_version', '2', false)");
+  });
+  beforeEach(reset);
+  afterAll(async () => {
+    try { await reset(); } finally { await db.end(); }
+    for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('D13 (F1, F8): 50 direct messages page whole, oldest first; no board event while one waits; none lost', async () => {
+    await warm();
+    for (let i = 1; i <= 3; i += 1) await send(`bc${i}`, null);
+    const pad = 'm'.repeat(900);
+    for (let i = 1; i <= 50; i += 1) await send(`dm${i}`, ME3, pad);
+    const seen: string[] = [];
+    for (let page = 0; page < 30; page += 1) {
+      const t = await run('UserPromptSubmit', ccv3);
+      if (!t) break;
+      expect(bytes(t), `page ${page} bytes`).toBeLessThanOrEqual(6000);
+      expect(t).not.toMatch(/\[cut,/);
+      const got = tags(t);
+      const dmsHere = got.filter((x) => x.startsWith('dm'));
+      for (const d of dmsHere) expect(t).toContain(bodies[d]);
+      expect(dmsHere).toEqual(seq('dm', seen.filter((x) => x.startsWith('dm')).length + 1, seen.filter((x) => x.startsWith('dm')).length + dmsHere.length));
+      seen.push(...got);
+      const dmsLeft = 50 - seen.filter((x) => x.startsWith('dm')).length;
+      if (dmsLeft > 0) {
+        expect(got.some((x) => x.startsWith('bc')), `page ${page} shows a board event while a DM waits`).toBe(false);
+        // C1: no cursor row passes the oldest DM that waits.
+        expect(await maxMark()).toBeLessThan(ids[`dm${51 - dmsLeft}`]);
+      }
+    }
+    // A page prints in id order, and the broadcasts have the lower ids: compare the two kinds apart.
+    expect(seen.filter((x) => x.startsWith('dm'))).toEqual(seq('dm', 1, 50));
+    expect(seen.filter((x) => x.startsWith('bc'))).toEqual(seq('bc', 1, 3));
+    expect(seen).toHaveLength(53);
+    expect(await run('UserPromptSubmit', ccv3)).toBe('');
+  });
+
+  it('D14 (F3): over its budget a page sends the fallback and moves no cursor (board and no-board); the next page shows all', async () => {
+    await warm();
+    for (let i = 1; i <= 3; i += 1) await send(`bc${i}`, null, 'x'.repeat(100));
+    await send('dm1', ME3, 'hello');
+    const before = await marks();
+    expect(await run('UserPromptSubmit', ccv3, { budgets: { prompt: 100 } }))
+      .toBe(boardFallback('continuous-claude', `#${ME3.slice(0, 8)}`, ids.dm1));
+    expect(await marks()).toEqual(before);
+    expect(await run('UserPromptSubmit', nowhere, { budgets: { noBoard: 60 } })).toBe(noBoardFallback(ids.dm1));
+    expect(await marks()).toEqual(before);
+    expect(tags(await run('UserPromptSubmit', ccv3))).toEqual(['bc1', 'bc2', 'bc3', 'dm1']);
+    expect(await run('UserPromptSubmit', ccv3)).toBe('');
+  });
+
+  it('D15 (F7): one 9,000-byte DM: page 1 shows it alone and cut, page 2 shows the next event, page 3 nothing', async () => {
+    await warm();
+    await send('big', ME3, 'y'.repeat(9000));
+    await send('bc1', null, 'after');
+    const p1 = await run('UserPromptSubmit', ccv3);
+    expect(bytes(p1)).toBeLessThanOrEqual(6000);
+    expect(tags(p1)).toEqual(['big']);
+    const line = p1.split('\n').find((l) => l.includes('<big>')) ?? '';
+    const m = line.match(MARKER);
+    expect(m, 'the cut DM has no marker').not.toBeNull();
+    expect(Number(m![2])).toBe(ids.big);
+    const stored = (await db.query('SELECT body FROM agentic_os.lane_event WHERE id = $1', [ids.big])).rows[0].body as string;
+    const kept = line.slice(line.indexOf('<big>'), line.length - m![0].length);
+    expect(stored.startsWith(kept)).toBe(true);
+    expect(bytes(kept) + Number(m![1])).toBe(bytes(stored));
+    expect(await maxMark()).toBe(ids.big);
+    expect(tags(await run('UserPromptSubmit', ccv3))).toEqual(['bc1']);
+    expect(await run('UserPromptSubmit', ccv3)).toBe('');
+  });
+
+  it('D16 (F1): board events that the share rule removes stay unread and show on the next page', async () => {
+    await warm();
+    for (let i = 1; i <= 12; i += 1) await send(`bc${i}`, null, 'k'.repeat(2000));
+    const seen: string[] = [];
+    let pages = 0;
+    for (; pages < 12; pages += 1) {
+      const t = await run('UserPromptSubmit', ccv3, { budgets: { prompt: 3000 } });
+      if (!t) break;
+      expect(bytes(t)).toBeLessThanOrEqual(3000);
+      const got = tags(t);
+      expect(got.length).toBeGreaterThan(0);
+      for (const l of t.split('\n').filter((x) => x.startsWith('- '))) expect(l).toMatch(MARKER);
+      seen.push(...got);
+      // The board row is the last event shown: never past a removed one.
+      expect((await marks())[ME3]).toBe(ids[got[got.length - 1]]);
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(seen).toEqual(seq('bc', 1, 12));
+  });
+
+  it('D17 (F15): SessionStart and the first prompt at once: every event marked read shows in a text; none is lost', async () => {
+    await warm();
+    for (let i = 1; i <= 3; i += 1) await send(`bc${i}`, null);
+    for (let i = 1; i <= 2; i += 1) await send(`dm${i}`, ME3);
+    const [s, p] = await Promise.all([run('SessionStart', ccv3), run('UserPromptSubmit', ccv3)]);
+    const shown = new Set([...tags(s), ...tags(p)]);
+    const m = await marks();
+    const boardRow = m[ME3] ?? 0;
+    const dmMark = Math.max(0, ...Object.values(m));
+    for (const tag of [...seq('bc', 1, 3), ...seq('dm', 1, 2)]) {
+      const read = tag.startsWith('dm') ? ids[tag] <= dmMark : ids[tag] <= boardRow;
+      if (read) expect(shown.has(tag), `${tag} is marked read but was not shown`).toBe(true);
+    }
+    const later = tags(await run('UserPromptSubmit', ccv3));
+    for (const tag of later) shown.add(tag);
+    expect([...shown].sort()).toEqual([...seq('bc', 1, 3), ...seq('dm', 1, 2)].sort());
+  });
+
+  it('D18 (C5c): a whole DM, then 10 claims with a NULL body: no page is the fallback, and two prompts show every event', async () => {
+    // A plain `claim` writes a NULL body. Their line prefixes must fit the space the DM leaves, or the page is the
+    // fallback with no cursor write, on every prompt. The DM sizes span the band where the prefixes do not fit.
+    const failed: string[] = [];
+    for (let pad = 5100; pad <= 5700; pad += 50) {
+      await reset();
+      await warm();
+      await send('dm1', ME3, 'm'.repeat(pad));
+      for (let i = 1; i <= 10; i += 1) {
+        await db.query(
+          `INSERT INTO agentic_os.lane_event (lane_id, kind, session_id, to_session_id, body, project_key)
+           VALUES ($1, 'claimed', $2, NULL, NULL, 'continuous-claude')`,
+          [`claimed-lane-with-a-long-id-${i}`, PEER3],
+        );
+      }
+      const top = Number((await db.query('SELECT max(id) AS n FROM agentic_os.lane_event WHERE session_id = $1', [PEER3])).rows[0].n);
+      const p1 = await run('UserPromptSubmit', ccv3);
+      const p2 = await run('UserPromptSubmit', ccv3);
+      const shown = [p1, p2].flatMap((t) => t.split('\n').filter((l) => l.startsWith('- '))).length;
+      if (/over its budget/.test(p1) || bytes(p1) > 6000 || shown !== 11 || (await marks())[ME3] !== top) {
+        failed.push(`pad ${pad}: ${shown} shown`);
+      }
+    }
+    expect(failed).toEqual([]);
   });
 });
