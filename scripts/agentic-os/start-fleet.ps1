@@ -50,7 +50,8 @@ $err = Join-Path $state 'fleet-app.err.log'
 $node = (Get-Command node.exe).Source
 # Start-Process without -Redirect* uses ShellExecute, which passes no inherited handles to the app.
 # With -Redirect*, the hidden app inherits the caller's output pipe, and a caller that pipes this script never sees it end.
-$inner = "`"$node`" `"$nextBin`" dev --port $Port > `"$log`" 2> `"$err`""
+# --hostname 127.0.0.1: the app answers on this machine only. The default host of next dev is every network interface.
+$inner = "`"$node`" `"$nextBin`" dev --port $Port --hostname 127.0.0.1 > `"$log`" 2> `"$err`""
 $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d', '/c', "`"$inner`"") `
   -WorkingDirectory $app -WindowStyle Hidden -PassThru
 Set-Content -LiteralPath (Join-Path $state "fleet-app-$Port.pid") -Value $p.Id
