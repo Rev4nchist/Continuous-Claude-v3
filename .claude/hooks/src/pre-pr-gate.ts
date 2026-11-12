@@ -84,7 +84,7 @@ import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
-import { blankInertQuotes } from './shared/inert-quotes.js';
+import { blankInertQuotes, blankInertQuotesAround } from './shared/inert-quotes.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { readShellCommand } from './shared/shell-tools.js';
 
@@ -410,6 +410,37 @@ export function bodyFileOf(command: string): string | null {
   return path !== undefined && path !== '-' ? path : null;
 }
 
+/** The head of the gated open: gh pr create, or gh api (a POST to pulls). Its strings are never blanked when the body flags are read. */
+const OPEN_HEAD = /^\s*gh\s+(?:pr\s+create|api)(?=\s|$)/i;
+
+/**
+ * The command as the body check reads it: the quoted text of another echo, printf, Write-*, git commit or lane note (before or after the open) is blanked, so
+ * `echo 'note --body here' ; gh pr create --body-file f` shows one body file and no inline body. The strings of the open itself stay, and a
+ * command with any other segment stays as it is (fail closed). Only the Bash and PowerShell readings blank: for cmd.exe the text is kept.
+ */
+const bodyViewOf = (command: string, tool: string | undefined): string => blankInertQuotesAround(command, tool, OPEN_HEAD);
+
+// A gh api call counts as an open only when its path ends at /pulls (the create). A read such as .../pulls/201/comments is no open.
+const OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh\s+(?:pr\s+create(?=\s|$)|api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))/gi;
+
+/**
+ * The text of the one open (gh pr create, gh api) from its head to the next segment break outside quotes. The body flags count only there:
+ * `echo --body-file <stamped> ; gh pr create --fill` names the stamped file in another command, the create's body is not that file.
+ * A continued line (backtick or backslash before the line end) is one command here, as in isPrOpenCommand. No open found (a wrapper before gh):
+ * the whole text, as before. Two or more opens: '' (no body file, denied).
+ */
+function openSegmentOf(text: string, shell: 'bash' | 'pwsh'): string {
+  const view = joinContinuations(joinContinuations(text, 'pwsh'), 'bash');
+  const opens = [...view.matchAll(OPEN_SEGMENT)];
+  if (opens.length === 0) return view;
+  // Several opens: a second create can carry a body that is not the stamped file (--fill). The body check cannot tie the text to one file: denied.
+  if (opens.length > 1) return '';
+  const start = opens[0].index! + opens[0][0].search(/g/i);
+  const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
+  const cut = masked.slice(start).search(/[;&|\r\n]/);
+  return view.slice(start, cut < 0 ? view.length : start + cut);
+}
+
 /** The one body file the command posts, or null when the body cannot be tied to a single file (none, stdin, inline, --input, or several). */
 function singleBodyFile(command: string): string | null {
   const files = bodyFilesOf(command);
@@ -528,6 +559,8 @@ interface Ctx {
   unknown: boolean;
   /** The shell of the tool call: Git Bash paths (/c/x) are converted for bash only. */
   shell: 'bash' | 'pwsh';
+  /** The command with the quoted text of earlier inert commands blanked (bodyViewOf). The body flags of the open are read here. */
+  bodyView: string;
   /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal value beside a CCv3 signal does not hide it. */
   named: string | null;
   top: (dir: string) => string | null;
@@ -542,7 +575,7 @@ const once = <T>(f: () => T): (() => T) => {
   return () => (box ??= { v: f() }).v;
 };
 
-function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes, plan: RunPlan): Ctx {
+function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes, plan: RunPlan, bodyView: string): Ctx {
   const cwd = input.cwd || process.cwd();
   const shell = shellOf(input);
   const named = namedRepo(command, deps.env);
@@ -569,7 +602,7 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes, 
   };
   const inCcv3 = once(() => named === CCV3_REPO || isCcv3At(final) || candidateDirs(command, cwd, shell).some((d) => d !== final && isCcv3Dir(deps, d)));
   return {
-    dirs, final, cwd, states: plan.states, unknown: plan.unknown, shell, named, top, isCcv3At,
+    dirs, final, cwd, states: plan.states, unknown: plan.unknown, shell, bodyView, named, top, isCcv3At,
     ccv3: inCcv3,
     // No usable config in the cwd checkout: fail closed for a command that names CCv3, a self-confirm (repo-free, pr-checkpoint is CCv3-only)
     // and a command that runs in a CCv3 checkout. Any other command is warn mode. A readable config keeps its own value.
@@ -598,7 +631,9 @@ export function decide(input: HookInput, deps: Deps): Decision {
   const runs: Decision[] = [];
   for (const shell of ['Bash', 'PowerShell'] as const) runs.push(decideAs({ ...input, tool_name: shell }, deps, text));
   for (const shell of ['Bash', 'PowerShell'] as const) {
-    if (blankInertQuotes(text, shell) !== text) runs.push(decideAs({ ...input, tool_name: shell }, deps, text, realName));
+    // Also when the body view blanks a string: under cmd.exe the same text may run a create that the view hides (echo 'a & gh pr create --body x' ; open).
+    const base = normalizeGh(joinContinuations(text, shell === 'PowerShell' ? 'pwsh' : 'bash'));
+    if (blankInertQuotes(text, shell) !== text || bodyViewOf(base, shell) !== base) runs.push(decideAs({ ...input, tool_name: shell }, deps, text, realName));
   }
   return runs.find((d) => d.action === 'deny') ?? runs.find((d) => d.action === 'override') ?? runs.find((d) => d.action === 'allow' && d.warn) ?? runs[0];
 }
@@ -611,7 +646,7 @@ function decideAs(input: HookInput, deps: Deps, text?: string, quoteTool: string
   if (!isGated(shapes)) return { action: 'allow' };
   const plan = planRun(command, input.cwd || process.cwd(), shellOf(input), deps.env);
   deps = guardUnexpandedCd(deps, plan);
-  const ctx = makeCtx(input, command, deps, shapes, plan);
+  const ctx = makeCtx(input, command, deps, shapes, plan, bodyViewOf(command, quoteTool));
   const d = judge(command, deps, ctx, shapes);
   if (d.action !== 'deny') return d;
   if (hasOverride(command, deps.env)) return { action: 'override' };
@@ -677,7 +712,9 @@ function stampDenyIn(command: string, deps: Deps, ctx: Ctx, dir: string): Decisi
   if (top === null) return rule('no-checkout', `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
   // An explicit target skipped the checkout test above: the stamp of a foreign checkout must not open a CCv3 PR.
   if (named !== null && !ctx.isCcv3At(dir)) return rule('repo-identity', `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
-  const bodyPath = singleBodyFile(command);
+  // Both readings must agree on one body file: the whole text (every other segment counts, as before) and the open's own segment (the file belongs to the create).
+  const whole = singleBodyFile(ctx.bodyView);
+  const bodyPath = whole !== null && whole === singleBodyFile(openSegmentOf(ctx.bodyView, shell)) ? whole : null;
   if (bodyPath === null) return rule('body', BODY_UNVERIFIABLE);
   const branch = headBranchOf(command);
   const headRun = deps.git(top, ['rev-parse', branch ? `${branch}^{commit}` : 'HEAD']);

@@ -34,6 +34,7 @@ afterEach(() => {
 
 const HEAD = 'a'.repeat(40);
 const TREE = 't'.repeat(40);
+const SESSION = '7d2f4b9a-1c3e-4a58-b6f0-9e8d7c6b5a41';
 
 /** A fake git and config for a CCv3 checkout at /repo, with enforcePush on and no tap on record. */
 function deps(): Deps {
@@ -54,11 +55,11 @@ function deps(): Deps {
   };
 }
 
-const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo' });
-const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo' });
-const dcStart = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, shell: 'cmd', timeout_ms: 1000 }, cwd: '/repo' });
-const dcStartNoShell = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, timeout_ms: 1000 }, cwd: '/repo' });
-const dcInteract = (input: string) => ({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input }, cwd: '/repo' });
+const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo', session_id: SESSION });
+const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo', session_id: SESSION });
+const dcStart = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, shell: 'cmd', timeout_ms: 1000 }, cwd: '/repo', session_id: SESSION });
+const dcStartNoShell = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, timeout_ms: 1000 }, cwd: '/repo', session_id: SESSION });
+const dcInteract = (input: string) => ({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input }, cwd: '/repo', session_id: SESSION });
 const denied = (input: object): boolean => decide(input, deps()).action === 'deny';
 
 const PUSH = 'git push fork feat/x';
