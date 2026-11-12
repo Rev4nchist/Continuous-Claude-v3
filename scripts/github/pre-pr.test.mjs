@@ -454,6 +454,27 @@ test('TG5: a change to lane-context.ts or its db test runs the lane-context-db g
   assert.equal(ids(gatesFor(['.claude/hooks/src/pre-pr-gate.ts'], REPO_ROOT)).includes('lane-context-db'), false);
 });
 
+test('TG7: each file that scratch-db.mjs create --through 6 reads runs the lane-context-db gate; a rollback file does not (breaks if a schema glob is dropped or widened)', async () => {
+  // The list comes from scratch-db.mjs: init-schema.sql (:173), the three coordination migrations (:207-208), the journal (:133)
+  // and each journal tag up to 6 (:211). A new tag changes the journal, so the gate runs for it too.
+  const journal = JSON.parse(readFileSync(path.join(REPO_ROOT, 'apps/agentic-os/drizzle/meta/_journal.json'), 'utf8'));
+  const tags = journal.entries.map((e) => e.tag).filter((t) => Number(t.slice(0, 4)) <= 6);
+  assert.equal(tags.length, 7, 'the journal has tags 0000 to 0006');
+  const read = [
+    'docker/init-schema.sql',
+    ...['001-file-claims-leases.sql', '002-g5-drop-orphan-sessions.sql', '003-sessions-lifecycle.sql'].map((f) => `scripts/coordination/migrations/${f}`),
+    'apps/agentic-os/drizzle/meta/_journal.json',
+    ...tags.map((t) => `apps/agentic-os/drizzle/${t}.sql`),
+  ];
+  for (const p of read) {
+    assert.ok(existsSync(path.join(REPO_ROOT, p)), `${p} exists`);
+    assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('lane-context-db'), `${p} -> lane-context-db`);
+  }
+  for (const p of ['apps/agentic-os/drizzle/0006_down.sql', 'apps/agentic-os/drizzle/meta/0006_snapshot.json', 'docker/docker-compose.yml']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('lane-context-db'), false, `${p} is not read by create --through 6`);
+  }
+});
+
 test('TG6: CI job coordination-db runs lane-context-db-gate.mjs (breaks if the step is dropped)', async () => {
   const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
   const start = wf.indexOf('\n  coordination-db:');

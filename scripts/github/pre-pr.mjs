@@ -213,7 +213,14 @@ export const SURFACES = [
   // file and FAILs when it is skipped (Postgres down = one ENV line, never a pass). CI job coordination-db runs the same program.
   {
     id: 'lane-context-db',
-    globs: ['.claude/hooks/src/lane-context.ts', '.claude/hooks/src/__tests__/lane-context-db.test.ts', 'scripts/github/lane-context-db-gate.mjs', 'scripts/github/lane-context-db-gate.test.mjs'],
+    // The last three lines are every file that scratch-db.mjs create --through 6 reads: a change there can break the test.
+    // A new drizzle tag changes the journal, so the gate runs for it too. Rollback files (000n_down.sql) are not read.
+    globs: [
+      '.claude/hooks/src/lane-context.ts', '.claude/hooks/src/__tests__/lane-context-db.test.ts', 'scripts/github/lane-context-db-gate.mjs', 'scripts/github/lane-context-db-gate.test.mjs',
+      'docker/init-schema.sql', 'scripts/coordination/migrations/001-file-claims-leases.sql', 'scripts/coordination/migrations/002-g5-drop-orphan-sessions.sql', 'scripts/coordination/migrations/003-sessions-lifecycle.sql',
+      'apps/agentic-os/drizzle/meta/_journal.json', 'apps/agentic-os/drizzle/0000_great_trish_tilby.sql', 'apps/agentic-os/drizzle/0001_flaky_proemial_gods.sql', 'apps/agentic-os/drizzle/0002_thankful_mockingbird.sql',
+      'apps/agentic-os/drizzle/0003_daffy_korath.sql', 'apps/agentic-os/drizzle/0004_per_project_lanes.sql', 'apps/agentic-os/drizzle/0005_lane_reminders.sql', 'apps/agentic-os/drizzle/0006_lane_dep.sql',
+    ],
     gates: [nodeGate('lane-context-db', 'scripts/github/lane-context-db-gate.mjs', [], { timeoutMs: 10 * MIN })],
   },
   // scripts/worktree holds the shared store link script. Its tests build fake primaries and nested git worktrees under the temp folder.
