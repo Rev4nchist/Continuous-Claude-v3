@@ -4,9 +4,21 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 
-import { redact } from '@/server/sources/redact';
-import { safeMessage, scrubPathsInText, stripControl } from '@/server/sources/safe-message';
+import { readSessionNames } from '@/server/sources/identity-names';
+import { safeMessage } from '@/server/sources/safe-message';
 
+import {
+  cleanText,
+  laneCoordFields,
+  readyCoordSql,
+  RECLAIMABLE_TAG_SQL,
+  toReadyCoord,
+  waitsOnCol,
+  type CoordRaw,
+  type LaneCoordFields,
+  type LaneCoordRaw,
+  type ReadyCoord,
+} from './lane-coord';
 import { laneOrderSql } from './lane-sort';
 
 /**
@@ -20,6 +32,8 @@ import { laneOrderSql } from './lane-sort';
  * owner id has no session row (or no timestamp). Ages and comparisons run in SQL, in UTC.
  *
  * Never selected into the DTO: scope, note, rationale, the full owner session id.
+ * Coordination fields (band, due, parked-until, reclaimable, waits-on) come from the rules in lane-coord.ts,
+ * copied from the lane CLI; the times are text, formatted on the server.
  * Every string is redacted, then scrubbed of absolute paths, then clipped.
  */
 
@@ -36,7 +50,7 @@ export type BoardLane = {
   owner: OwnerState | null;
   leaseLapsed: boolean;
   track: string | null;
-};
+} & LaneCoordFields;
 
 export type BoardColumn = {
   state: BoardState;
@@ -73,17 +87,9 @@ type LaneRow = {
   lease_lapsed: boolean | null;
   owner_state: string | null;
   updated_epoch: number | string | null;
-};
+} & LaneCoordRaw;
 
 const OWNER_STATES: readonly string[] = ['live', 'quiet', 'ended', 'unknown'];
-
-/** Strip invisible characters, redact, scrub absolute paths, flatten whitespace, then clip. Null when nothing is left. */
-function cleanText(value: unknown, max: number): string | null {
-  if (typeof value !== 'string') return null;
-  const flat = scrubPathsInText(redact(stripControl(value.slice(0, 20_000))).text).replace(/\s+/g, ' ').trim();
-  if (flat === '') return null;
-  return flat.length <= max ? flat : `${flat.slice(0, Math.max(0, max - 3))}...`;
-}
 
 function toLane(row: LaneRow): BoardLane {
   const hasOwner = typeof row.owner_session_id === 'string' && row.owner_session_id !== '';
@@ -98,6 +104,7 @@ function toLane(row: LaneRow): BoardLane {
     owner: hasOwner ? ownerState : null,
     leaseLapsed: hasOwner && row.lease_lapsed === true,
     track: cleanText(row.track, CLIP.track),
+    ...laneCoordFields(row),
   };
 }
 
@@ -124,6 +131,38 @@ function bucketLanes(rows: LaneRow[]): BoardColumn[] {
   });
 }
 
+let laneDepSeen = false;
+let laneDepCheckedAt = 0;
+let laneDepPending: Promise<boolean> | null = null;
+const LANE_DEP_RECHECK_MS = 60_000;
+
+async function askLaneDep(): Promise<boolean> {
+  try {
+    const { rows } = await db.execute<{ has: boolean }>(sql`SELECT to_regclass('agentic_os.lane_dep') IS NOT NULL AS has`);
+    laneDepSeen = rows[0]?.has === true;
+  } catch {
+    laneDepSeen = false;
+  }
+  return laneDepSeen;
+}
+
+/**
+ * lane.mjs:1013-1016. A true answer is kept for the life of the process. A false or failed check is asked again
+ * after 60 s, so migration 0006 shows without a restart. Without the table the waits-on column is the empty array:
+ * a SELECT that names a missing lane_dep would fail the whole board read (42P01).
+ * Callers that arrive while a check runs share its answer. The 60 s wait starts when a check ends, not when it starts.
+ */
+async function hasLaneDep(): Promise<boolean> {
+  if (laneDepSeen) return true;
+  if (laneDepPending !== null) return laneDepPending;
+  if (Date.now() - laneDepCheckedAt < LANE_DEP_RECHECK_MS) return false;
+  laneDepPending = askLaneDep().finally(() => {
+    laneDepCheckedAt = Date.now();
+    laneDepPending = null;
+  });
+  return laneDepPending;
+}
+
 /**
  * One board only: lanes with `project_key = projectKey` (bound as a parameter by the drizzle sql tag).
  * The caller validates the key (parseProjectKey). Lane ids are global; each board is a project_key.
@@ -131,9 +170,16 @@ function bucketLanes(rows: LaneRow[]): BoardColumn[] {
  */
 export async function getLaneBoard(projectKey: string = DEFAULT_BOARD): Promise<LaneBoard> {
   try {
+    const withDeps = await hasLaneDep();
     const { rows } = await db.execute<LaneRow>(sql`
-      SELECT l.id, l.title, l.branch, l.track, l.state, l.owner_session_id,
+      SELECT l.id, l.title, l.branch, l.track, l.state, l.remind_state, l.owner_session_id,
         EXTRACT(EPOCH FROM l.updated_at)::float8 AS updated_epoch,
+        l.band,
+        EXTRACT(EPOCH FROM l.due_at)::float8 AS due_epoch,
+        EXTRACT(EPOCH FROM l.lease_expires_at)::float8 AS lease_epoch,
+        EXTRACT(EPOCH FROM now())::float8 AS now_epoch,
+        ${sql.raw(RECLAIMABLE_TAG_SQL)} AS reclaimable,
+        ${sql.raw(waitsOnCol(withDeps))} AS waits_on,
         (l.owner_session_id IS NOT NULL
           AND l.lease_expires_at IS NOT NULL
           AND l.lease_expires_at < now()) AS lease_lapsed,
@@ -168,4 +214,16 @@ export async function getLaneBoard(projectKey: string = DEFAULT_BOARD): Promise<
   } catch (error) {
     return { board: projectKey, status: 'error', error: safeMessage(error), columns: [], total: 0 };
   }
+}
+
+const READY_COORD_SQL = readyCoordSql();
+
+/**
+ * The Ready-for-Dave coordination rows, all boards. One statement with no bound value. Throws on a failed read:
+ * mission-control settles it into coord.status = 'error'. Session names come from the identity files, by id.
+ */
+export async function getReadyCoord(): Promise<ReadyCoord> {
+  const { rows } = await db.execute<CoordRaw>(sql.raw(READY_COORD_SQL));
+  const sids = rows.flatMap((r) => (r.kind === 'unread' && typeof r.sid === 'string' ? [r.sid] : []));
+  return toReadyCoord(rows, await readSessionNames(sids));
 }
