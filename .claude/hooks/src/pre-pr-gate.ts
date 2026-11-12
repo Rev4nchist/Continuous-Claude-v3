@@ -426,13 +426,15 @@ const OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh\s+(?:pr\s+create(?=\s|$)|api\s+(?:\S
 /**
  * The text of the one open (gh pr create, gh api) from its head to the next segment break outside quotes. The body flags count only there:
  * `echo --body-file <stamped> ; gh pr create --fill` names the stamped file in another command, the create's body is not that file.
- * A continued line (backtick or backslash before the line end) is one command here, as in isPrOpenCommand. No open found (a wrapper before gh), or
- * two opens (the rules after this one judge each; known gap: a second create can carry another body): the whole text, as before.
+ * A continued line (backtick or backslash before the line end) is one command here, as in isPrOpenCommand. No open found (a wrapper before gh):
+ * the whole text, as before. Two or more opens: '' (no body file, denied).
  */
 function openSegmentOf(text: string, shell: 'bash' | 'pwsh'): string {
   const view = joinContinuations(joinContinuations(text, 'pwsh'), 'bash');
   const opens = [...view.matchAll(OPEN_SEGMENT)];
-  if (opens.length !== 1) return view;
+  if (opens.length === 0) return view;
+  // Several opens: a second create can carry a body that is not the stamped file (--fill). The body check cannot tie the text to one file: denied.
+  if (opens.length > 1) return '';
   const start = opens[0].index! + opens[0][0].search(/g/i);
   const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
   const cut = masked.slice(start).search(/[;&|\r\n]/);

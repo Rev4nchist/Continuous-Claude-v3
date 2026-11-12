@@ -1033,7 +1033,7 @@ function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, l
 }
 var quotesToBreaks = (view) => view.replace(/["']/g, ";");
 var quotesToSpaces = (view) => view.replace(/["']/g, " ");
-var PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
+var PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"(?![A-Za-z]:)([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
 var plainCdUnquoted = (view) => {
   if (view.includes("^")) return view;
   return view.replace(PLAIN_QUOTED_CD, (match, lead, cd, path2, offset) => {

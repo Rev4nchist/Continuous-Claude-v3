@@ -1050,7 +1050,8 @@ var OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh\s+(?:pr\s+create(?=\s|$)|api\s+(?:\S+\
 function openSegmentOf(text, shell) {
   const view = joinContinuations(joinContinuations(text, "pwsh"), "bash");
   const opens = [...view.matchAll(OPEN_SEGMENT)];
-  if (opens.length !== 1) return view;
+  if (opens.length === 0) return view;
+  if (opens.length > 1) return "";
   const start = opens[0].index + opens[0][0].search(/g/i);
   const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
   const cut = masked.slice(start).search(/[;&|\r\n]/);

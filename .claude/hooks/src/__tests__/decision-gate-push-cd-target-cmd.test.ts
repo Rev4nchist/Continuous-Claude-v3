@@ -51,6 +51,8 @@ function makeRepo(name: string, remote: string, url: string, branch: string): Re
 
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'dg-cd-target-')).replace(/\\/g, '/');
+  // The quoted-cd rewrite refuses a path with a space (it would split the path). Every target here is built from this folder.
+  if (/\s/.test(home)) throw new Error(`the temp folder path has a space (${home}): set TEMP to a path without spaces to run this test`);
   saved = process.env.CCV3_DECISIONS_FILE;
   process.env.CCV3_DECISIONS_FILE = `${home}/decisions.json`;
   A = makeRepo('repoA', 'zza', CCV3, 'br-a');
@@ -92,6 +94,8 @@ const verdict = (input: object): string => {
 const allowed = (input: object, label: string): void => { expect(verdict(input), label).toBe('allow'); };
 const denied = (input: object, label: string): void => { expect(verdict(input), label).toMatch(/^deny/); };
 const wrap = (inner: string) => `echo 'x & ${inner} & rem '`;
+/** A relative quoted target: every repo sits in the same parent. A drive-letter target is never rewritten (cd without /d keeps the current drive). */
+const rel = (r: Repo): string => `..\\${r.d.split('/').pop()}`;
 
 describe('C1 a quoted cd to the folder WITH a decision is allowed under cmd (the gap)', () => {
   it('baseline: cwd A, plain push, no cd (control: passes today)', () => {
@@ -101,7 +105,7 @@ describe('C1 a quoted cd to the folder WITH a decision is allowed under cmd (the
     denied(dcCmd(B.d, pushB), 'plain push in B');
   });
   it('b: cwd B, cd "A" && git push, double quotes', () => {
-    allowed(dcCmd(B.d, `cd "${A.d}" && ${pushA}`), 'double-quoted cd to A');
+    allowed(dcCmd(B.d, `cd "${rel(A)}" && ${pushA}`), 'double-quoted cd to A');
   });
   // cmd.exe reads 'A' as a folder name, not as a quoted path. The shell may not move, so `cd 'A' & git push` pushes in the old folder.
   // The break view keeps it a bare cd (position-unknown): an accepted over-deny, stricter than the first test draft (Dave's yes was for a plain double-quoted path).
@@ -109,7 +113,7 @@ describe('C1 a quoted cd to the folder WITH a decision is allowed under cmd (the
     denied(dcCmd(B.d, `cd '${A.d}' && ${pushA}`), 'single-quoted cd to A');
   });
   it('d: cwd B, the wrapped form echo \'x & cd "A" && git push & rem \'', () => {
-    allowed(dcCmd(B.d, wrap(`cd "${A.d}" && ${pushA}`)), 'wrapped double-quoted cd to A');
+    allowed(dcCmd(B.d, wrap(`cd "${rel(A)}" && ${pushA}`)), 'wrapped double-quoted cd to A');
   });
   it('control: cwd B, an UNQUOTED cd to A is allowed today', () => {
     allowed(dcCmd(B.d, `cd ${A.d} && ${pushA}`), 'unquoted cd to A');
@@ -118,33 +122,33 @@ describe('C1 a quoted cd to the folder WITH a decision is allowed under cmd (the
 
 describe('C2 a quoted cd to a plain, non-CCv3 repo is allowed under cmd (the gap)', () => {
   it('e: cwd A, cd "P" && git push', () => {
-    allowed(dcCmd(A.d, `cd "${P.d}" && ${pushP}`), 'double-quoted cd to P');
+    allowed(dcCmd(A.d, `cd "${rel(P)}" && ${pushP}`), 'double-quoted cd to P');
   });
   it('control: cwd P (plain), cd "A" && git push is allowed today (A has a decision)', () => {
-    allowed(dcCmd(P.d, `cd "${A.d}" && ${pushA}`), 'cwd P, cd to A');
+    allowed(dcCmd(P.d, `cd "${rel(A)}" && ${pushA}`), 'cwd P, cd to A');
   });
 });
 
 describe('C3 a quoted cd to the folder WITHOUT a decision stays denied (must pass today and after the fix)', () => {
   it('a: cwd A, cd "B" && git push', () => {
-    denied(dcCmd(A.d, `cd "${B.d}" && ${pushB}`), 'double-quoted cd to B from A');
+    denied(dcCmd(A.d, `cd "${rel(B)}" && ${pushB}`), 'double-quoted cd to B from A');
   });
   it("a2: cwd A, cd 'B' && git push, single quotes", () => {
     denied(dcCmd(A.d, `cd '${B.d}' && ${pushB}`), 'single-quoted cd to B from A');
   });
   it('a3: cwd A, the wrapped form with cd "B"', () => {
-    denied(dcCmd(A.d, wrap(`cd "${B.d}" && ${pushB}`)), 'wrapped cd to B from A');
+    denied(dcCmd(A.d, wrap(`cd "${rel(B)}" && ${pushB}`)), 'wrapped cd to B from A');
   });
   it('f: cwd P, cd "B" && git push', () => {
-    denied(dcCmd(P.d, `cd "${B.d}" && ${pushB}`), 'double-quoted cd to B from P');
+    denied(dcCmd(P.d, `cd "${rel(B)}" && ${pushB}`), 'double-quoted cd to B from P');
   });
   it('f2: cwd B, cd "B" && git push (a cd to the folder it is already in)', () => {
-    denied(dcCmd(B.d, `cd "${B.d}" && ${pushB}`), 'cd to B from B');
+    denied(dcCmd(B.d, `cd "${rel(B)}" && ${pushB}`), 'cd to B from B');
   });
   // The branch of A has no tree in B (B has no br-a, git would fail the push), and the gate reads an unquoted known cd the same way: ALLOW.
   // The rule is parity: a plain double-quoted cd reads exactly like the unquoted cd, so the fix adds no new ALLOW of its own.
   it('f3: parity, cwd A, cd "B" && git push zza br-a reads like the unquoted cd', () => {
-    expect(verdict(dcCmd(A.d, `cd "${B.d}" && ${pushA}`)), 'quoted').toBe(verdict(dcCmd(A.d, `cd ${B.d} && ${pushA}`)));
+    expect(verdict(dcCmd(A.d, `cd "${rel(B)}" && ${pushA}`)), 'quoted').toBe(verdict(dcCmd(A.d, `cd ${rel(B)} && ${pushA}`)));
   });
 });
 
@@ -156,23 +160,28 @@ describe('C4 a cd the text cannot name, or a chain of cds, is never read as a kn
     denied(dcCmd(A.d, `cd "$(echo ${B.d})" && ${pushB}`), 'subshell target');
   });
   it('g3: cwd A, cd "A" & cd "B" && git push (the last cd wins)', () => {
-    denied(dcCmd(A.d, `cd "${A.d}" & cd "${B.d}" && ${pushB}`), 'chained cds, B last');
+    denied(dcCmd(A.d, `cd "${rel(A)}" & cd "${rel(B)}" && ${pushB}`), 'chained cds, B last');
   });
   it('g4: parity, cwd B, cd "A" & cd "B" && git push zza br-a reads like the unquoted chain (the last cd wins)', () => {
-    expect(verdict(dcCmd(B.d, `cd "${A.d}" & cd "${B.d}" && ${pushA}`)), 'quoted chain').toBe(verdict(dcCmd(B.d, `cd ${A.d} & cd ${B.d} && ${pushA}`)));
+    expect(verdict(dcCmd(B.d, `cd "${rel(A)}" & cd "${rel(B)}" && ${pushA}`)), 'quoted chain').toBe(verdict(dcCmd(B.d, `cd ${rel(A)} & cd ${rel(B)} && ${pushA}`)));
   });
   it('g6: cwd B, a quoted path with a space is never split into a known folder: cd "A x" && git push zza br-a', () => {
-    denied(dcCmd(B.d, `cd "${A.d} x" && ${pushA}`), 'quoted path with a space');
+    denied(dcCmd(B.d, `cd "${rel(A)} x" && ${pushA}`), 'quoted path with a space');
   });
   it('g7: cwd B, text after the closing quote: cd "A"x && git push zza br-a', () => {
-    denied(dcCmd(B.d, `cd "${A.d}"x && ${pushA}`), 'text glued to the closing quote');
+    denied(dcCmd(B.d, `cd "${rel(A)}"x && ${pushA}`), 'text glued to the closing quote');
   });
   // cmd.exe pairs the double quotes: the `& cd "A" &` below sits inside a quoted span, so it is no cd. The push after it runs in the cwd (B, no decision).
   it('g8: cwd B, a quoted cd inside a double-quoted span is no cd: echo \'x & "& cd "A" &" & git push zza br-a & rem \'', () => {
-    denied(dcCmd(B.d, `echo 'x & "& cd "${A.d}" &" & ${pushA} & rem '`), 'cd inside a double-quoted span');
+    denied(dcCmd(B.d, `echo 'x & "& cd "${rel(A)}" &" & ${pushA} & rem '`), 'cd inside a double-quoted span');
   });
   it('g9: cwd B, a ^ anywhere keeps every quote: cd "A" && git push zza br-a ^', () => {
-    denied(dcCmd(B.d, `cd "${A.d}" && ${pushA} ^`), 'caret in the text');
+    denied(dcCmd(B.d, `cd "${rel(A)}" && ${pushA} ^`), 'caret in the text');
+  });
+  // cmd.exe: cd "D:\A" without /d changes the folder of drive D only. The current drive stays and the push runs in the cwd (B, no decision).
+  it('g10: cwd B, a quoted drive-letter target is never read as a known folder: cd "C:/.../repoA" && git push zza br-a', () => {
+    if (!/^[A-Za-z]:/.test(A.d)) return; // a drive letter exists on Windows only
+    denied(dcCmd(B.d, `cd "${A.d}" && ${pushA}`), 'quoted drive-letter target');
   });
   it('g5: cwd A, a relative quoted cd "..\\\\repoB" && git push zzb br-b', () => {
     denied(dcCmd(A.d, `cd "..\\repoB" && ${pushB}`), 'relative quoted cd to B');

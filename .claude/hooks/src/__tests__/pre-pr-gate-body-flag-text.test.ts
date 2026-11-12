@@ -134,6 +134,15 @@ describe('G2b the body file must belong to the create (review finding, a hole be
   });
 });
 
+describe('G2c several opens: a second create can carry a body that is not the stamped file (CodeRabbit CLI finding)', () => {
+  it("m3: echo 'note --body here' ; stamped create ; a second create with --fill", () => {
+    denied(bash(`echo 'note --body here' ; ${CREATE} ; gh pr create --draft --title t --fill`), 'stamped create then a --fill create');
+  });
+  it('m4: the same without the echo', () => {
+    denied(bash(`${CREATE} ; gh pr create --draft --title t --fill`), 'two creates, one stamped');
+  });
+});
+
 describe('G3 a text-only head that is not echo or commit is not read as inert (kept: denied today)', () => {
   it('python -c with --body in a string, then the create', () => {
     denied(bash(`python -c 'print("x --body y")' ; ${CREATE}`), 'python -c text');

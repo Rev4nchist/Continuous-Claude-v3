@@ -313,9 +313,11 @@ const quotesToSpaces = (view: string): string => view.replace(/["']/g, ' ');
  * `cd "<path>"` at a command position, written with its double quotes as spaces, same length: the path is one plain word. cmd.exe pairs the double
  * quote and cds to the path. Only a path with no space and no %, $, backtick, ^, ( ), & | ; < > (nothing that expands or splits), ending the segment.
  * A single-quoted target stays a bare cd under the break view: cmd.exe reads 'A' as a folder name, so the shell may not move (unknown, denied).
+ * A drive-letter target (D:\A) stays too: cd without /d changes the folder of drive D only, the current drive stays and the push runs where it was.
+ * Only a relative path is read as a known folder.
  * Without this the quote-break view reads `cd "A" && git push` as a bare cd and denies a push whose folder the text names.
  */
-const PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
+const PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"(?![A-Za-z]:)([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
 const plainCdUnquoted = (view: string): string => {
   // cmd.exe reads ^ as an escape: any ^ keeps every quote as it is (fail closed).
   if (view.includes('^')) return view;
