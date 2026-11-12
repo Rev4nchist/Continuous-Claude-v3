@@ -835,7 +835,7 @@ function plainSegments(command, tool) {
   }
   return { spans, segs };
 }
-function inertSpans(command, tool) {
+function inertSpans(command, tool, openHead) {
   const none = /* @__PURE__ */ new Set();
   const plain = plainSegments(command, tool);
   if (!plain) return none;
@@ -843,6 +843,7 @@ function inertSpans(command, tool) {
   for (const { from, end, masked } of plain.segs) {
     const raw = command.slice(from, end);
     if (headMatches(PLAIN_HEAD, masked, raw)) continue;
+    if (openHead !== void 0 && headMatches(openHead, masked, raw)) continue;
     if (!headMatches(INERT_HEAD, masked, raw)) return none;
     for (const [s, e] of plain.spans) if (s >= from && e <= end) out2.add(`${s}:${e}`);
   }
@@ -871,8 +872,9 @@ function blankInertQuotes(command, tool) {
     const doc = blankDocHeredocBody(command);
     if (doc !== command) return doc;
   }
-  const bash = inertSpans(command, "Bash");
-  const pwsh = inertSpans(command, "PowerShell");
+  return blankSpans(command, inertSpans(command, "Bash"), inertSpans(command, "PowerShell"));
+}
+function blankSpans(command, bash, pwsh) {
   let out2 = command;
   for (const id of bash) {
     if (!pwsh.has(id)) continue;
@@ -1031,6 +1033,14 @@ function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, l
 }
 var quotesToBreaks = (view) => view.replace(/["']/g, ";");
 var quotesToSpaces = (view) => view.replace(/["']/g, " ");
+var PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"(?![A-Za-z]:)([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
+var plainCdUnquoted = (view) => {
+  if (view.includes("^")) return view;
+  return view.replace(PLAIN_QUOTED_CD, (match, lead, cd, path2, offset) => {
+    const quotesBefore = (view.slice(0, offset).match(/"/g) ?? []).length;
+    return quotesBefore % 2 === 0 ? `${lead}${cd} ${path2} ` : match;
+  });
+};
 function pushCallsIn(raw, cmdExe = false) {
   const bash = joinContinuations(raw, "bash");
   const pwsh = joinContinuations(raw, "pwsh");
@@ -1039,9 +1049,11 @@ function pushCallsIn(raw, cmdExe = false) {
   const maskedPwsh = maskQuoted(pwsh, "PowerShell");
   const calls = [...pushCallsOf(maskedBash, bash, false), ...pushCallsOf(maskedPwsh, pwsh, false)];
   if (cmdExe) {
+    const cmdBash = plainCdUnquoted(bash);
+    const cmdPwsh = plainCdUnquoted(pwsh);
     for (const view of [quotesToBreaks, quotesToSpaces]) {
-      if (maskedBash !== bash) calls.push(...pushCallsOf(view(bash), bash, false, void 0, bash));
-      if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(view(pwsh), pwsh, false, void 0, pwsh));
+      if (maskedBash !== bash) calls.push(...pushCallsOf(view(cmdBash), cmdBash, false, void 0, cmdBash));
+      if (maskedPwsh !== pwsh) calls.push(...pushCallsOf(view(cmdPwsh), cmdPwsh, false, void 0, cmdPwsh));
     }
   }
   let from = 0;
