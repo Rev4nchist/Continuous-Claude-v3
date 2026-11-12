@@ -185,6 +185,22 @@ test('L10: no Postgres gives exit 1 and exactly one line, which starts with ENV:
   assert.match(r2.lines[0], /^ENV: /);
 });
 
+test('L15: a schema or migration file that create rejects is a FAIL line that names the file, not an ENV line', () => {
+  for (const cause of [
+    'drizzle/0006_lane_dep.sql failed and was rolled back: syntax error at or near "TABEL"',
+    'coordination/migrations/003-sessions-lifecycle.sql failed: column "x" does not exist (position 12)',
+  ]) {
+    const fake = fakeSpawn({ create: { status: 1, stdout: '', stderr: `creating scratch database lanes_pr1_aa on localhost:5432\n${cause}\n` } });
+    const r = go(fake);
+    assert.equal(r.code, 1);
+    assert.equal(r.lines.length, 1, r.lines.join('\n'));
+    assert.match(r.lines[0], /^lane-context-db: FAIL: scratch-db create failed: /);
+    assert.ok(r.lines[0].includes(cause.split(':')[0]), 'the line names the file');
+    assert.doesNotMatch(r.lines[0], /^ENV:|not your change|start Postgres/);
+    assert.equal(fake.calls.some((c) => c.kind === 'vitest' || c.kind === 'drop'), false, 'no vitest and no drop after a failed create');
+  }
+});
+
 test('L11: create gets --through 6; vitest runs the one file in .claude/hooks with LANE_TEST_DB_URL, no shell', () => {
   const fake = fakeSpawn({ rep: report() });
   const hooksDir = path.join(os.tmpdir(), 'some-hooks');

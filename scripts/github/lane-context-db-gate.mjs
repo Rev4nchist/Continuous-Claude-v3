@@ -31,6 +31,8 @@ const HOOKS_DIR = path.join(REPO, '.claude', 'hooks');
 const MIN = 60_000;
 export const TEST_FILE = 'src/__tests__/lane-context-db.test.ts';
 export const THROUGH = '6';
+// The labels scratch-db.mjs gives the files it applies (runWholeFile and runDrizzleFile), followed by its "failed" text.
+const SCHEMA_FAILURE = /^(docker\/init-schema\.sql|coordination\/migrations\/[^ ]+|drizzle\/[^ ]+) failed\b/;
 const USAGE = 'usage: node scripts/github/lane-context-db-gate.mjs\n'
   + 'Makes a scratch database (scratch-db.mjs create --through 6), runs vitest on .claude/hooks/' + TEST_FILE + ' with LANE_TEST_DB_URL,\n'
   + 'drops the database. Exit 0 only when every test of the file ran and passed; a skipped file fails. No Postgres: exit 1, one ENV: line.\n';
@@ -77,6 +79,8 @@ function createScratch({ spawn, env }) {
   if (r.status !== 0 || !url) {
     const cause = lastLine(r.stderr) || (r.error ? String(r.error.message) : '') || `create exited ${r.status} with no url`;
     const why = redact(cause, url, ...baseUrls(env)).replace(/\s+/g, ' ');
+    // scratch-db names the file it could not apply ("<label> failed: ..."). That is a fault in a schema file, not the environment.
+    if (SCHEMA_FAILURE.test(why)) return { lines: [`lane-context-db: FAIL: scratch-db create failed: ${why}`] };
     return { lines: [`ENV: lane-context-db needs local Postgres for a scratch database: ${why}. This is the environment, not your change. Fix: start Postgres (docker compose up -d in docker/) or set CONTINUOUS_CLAUDE_DB_URL.`] };
   }
   try {

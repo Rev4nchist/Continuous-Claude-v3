@@ -232,9 +232,10 @@ jobs:
   # The lane board tests build a throwaway database (scripts/coordination/scratch-db.mjs) and run the real render-board.mjs
   # and lane.mjs against it. Before this job no workflow ran them: two render-board tests sat red on main (PR #312, 2026-11-05)
   # while every check was green. Separate job: the ratchets job has a 10 minute budget and already hit it once on a slow checkout.
+  # 15 minutes: the last step (the lane-context gate) may use 8 minutes after the test steps, and must reach its database drop.
   coordination-db:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     services:
       postgres:
         # pgvector 0.8.7 on Postgres 16, built 2026-10-01: the same bits as the dev database in docker/docker-compose.yml.

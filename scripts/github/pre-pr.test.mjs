@@ -466,6 +466,7 @@ test('TG7: each file that scratch-db.mjs create --through 6 reads runs the lane-
     'apps/agentic-os/drizzle/meta/_journal.json',
     ...tags.map((t) => `apps/agentic-os/drizzle/${t}.sql`),
   ];
+  read.push('scripts/coordination/scratch-db.mjs'); // the program that builds the database: a change to its create or drop can break the gate
   for (const p of read) {
     assert.ok(existsSync(path.join(REPO_ROOT, p)), `${p} exists`);
     assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('lane-context-db'), `${p} -> lane-context-db`);
@@ -484,6 +485,9 @@ test('TG6: CI job coordination-db runs lane-context-db-gate.mjs (breaks if the s
   const job = next < 0 ? rest : rest.slice(0, next + 1);
   const runs = job.split('\n').filter((l) => /^\s*run:/.test(l));
   assert.ok(runs.some((l) => /^\s*run:\s*node scripts\/github\/lane-context-db-gate\.mjs\s*$/.test(l)), runs.join('\n'));
+  // The gate step may use 8 minutes after the earlier test steps. A 10-minute job could cancel it before the drop.
+  const jobLimit = Number(/^ {4}timeout-minutes:\s*(\d+)/m.exec(job)?.[1]);
+  assert.ok(jobLimit >= 15, `coordination-db job limit is ${jobLimit} min; it must cover the earlier steps and the 8-minute gate step`);
 });
 
 test('GW5: the semgrep-ccv3 gate FAILs and names Docker when Docker is not available (never a SKIP or NOTE)', async () => {
