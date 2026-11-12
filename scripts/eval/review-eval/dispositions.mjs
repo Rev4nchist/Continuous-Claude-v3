@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 // What happened to each CodeRabbit inline finding on merged PRs: fixed, wont_fix, wrong or unlabeled.
-// A disposition comes only from a trusted human's reply, or from CodeRabbit's own "Addressed in commit" marker (no verdict).
+// A disposition comes only from a trusted human's reply in a closed grammar (G1, G2), or from CodeRabbit's own
+// "Addressed in commit" marker (no verdict). Every other reply leaves the finding unlabeled, with a reason.
+// G1 "<fixed|addressed|resolved|done|applied> <in|by|with|via> [commit] <sha>" labels only when git proves the SHA: one commit,
+// an ancestor of the main ref, newer than the commit the finding was made on, and it changes the file of the finding. G2: the whole reply is one sentence of a closed list.
+// G1: the label means a trusted reply names a commit on main that changes the file; it does not mean the defect is gone.
 // Thumbs never label: the REST rollup does not say who reacted. An open finding is never negative.
-// Read-only: two paged `gh api` GET calls in all. `gh` is injectable: async (args: string[]) => parsed JSON (same contract as github.mjs).
-// The full file holds PR numbers and comment ids, so --out (and the default path) is refused inside every repo tree, on a UNC path and on a stream path.
-// --summary-out holds counts only; it must not be the --out file.
+// Read-only: two paged `gh api` GET calls in all, and local git reads (rev-parse, merge-base, diff-tree); no fetch.
+// `gh` is injectable: async (args) => parsed JSON (as github.mjs). `git` is injectable: (args) => { status, stdout } (as read-audit.mjs).
+// The full file holds PR numbers and comment ids, so --out (and the default path) is refused inside every repo tree, on a UNC
+// path, on a stream path and under a dangling link. --summary-out holds counts only; it must be a plain path and not the --out file.
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +23,7 @@ import { defaultGh, ghList } from './github.mjs';
 export const BY = 'cr-disposition';
 export const BAR = 0.9;
 const DEFAULT_FROM = 188;
+const DEFAULT_MAIN_REF = 'main';
 const DENOMINATOR_RULE = 'REST pulls/comments by coderabbitai[bot] (type Bot) on merged PRs in range; review-body findings are outside pulls/comments';
 const STATE_FOLDER = 'review-engine';
 
@@ -24,19 +31,10 @@ export const VERDICT_OF = Object.freeze({ fixed: 'real', wrong: 'noise', wont_fi
 /** A bot's own "Addressed in commit" claim is not a label: no verdict. */
 export const verdictOf = (disposition, evidence) => (evidence === 'cr_marker' ? null : (VERDICT_OF[disposition] ?? null));
 
-// ---- SHA and text -------------------------------------------------------------------------------------------------------------
-
-// 7 to 40 hex characters with at least one digit and at least one a-f letter (rejects numbers, dates, ids, hex-only words).
-const SHA_BODY = '(?<![0-9a-z])(?=[0-9a-f]{0,39}[0-9])(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}(?![0-9a-z])';
-const SHA_RE = new RegExp(SHA_BODY, 'i');
-const SHA_WHOLE = /^(?=[0-9a-f]{0,39}[0-9])(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}$/i;
-
-export function findSha(text) {
-  const m = SHA_RE.exec(String(text ?? ''));
-  return m ? m[0].toLowerCase() : null;
-}
+// ---- clean text -----------------------------------------------------------------------------------------------------------------
 
 const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF]/g;
+const APOSTROPHES = /[\u2018\u2019\u00B4\u02BC]/g;
 // GFM strike-through with one or two tildes, on one line, with no space inside either edge.
 const STRUCK = /(~~?)(?=[^\s~])[^~\n]*?[^\s~]\1/g;
 // An open or close tag of <del>, <s> or <strike>, attributes allowed. Bounded: it stops at the next < or >.
@@ -59,208 +57,256 @@ function cutStrikeTags(line) {
   return out + line.slice(at);
 }
 
-/** The fence mark (``` or ~~~) a line opens or closes with, or null. */
+// A fence line as CommonMark reads it: up to three spaces, then three or more backticks or tildes, then the info text.
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/** { char, size, info } of a fence line, or null. A backtick fence has no backtick in its info text (that is inline code). */
 function fenceOf(line) {
-  const m = /^\s*(```|~~~)/.exec(line);
-  return m ? m[1] : null;
+  const m = FENCE.exec(line);
+  if (!m || (m[1][0] === '`' && m[2].includes('`'))) return null;
+  return { char: m[1][0], size: m[1].length, info: m[2] };
 }
 
-/** True when the line holds an odd count of its fence mark (an even count opens and closes on one line). */
-const togglesFence = (line, mark) => line.split(mark).length % 2 === 0;
+/** True when fence f closes the open fence: the same mark, at least as long, and no info text. */
+const closesFence = (f, open) => f !== null && f.char === open.char && f.size >= open.size && /^[ \t]*$/.test(f.info);
 
-/** The lines outside fenced blocks (``` and ~~~); the fence lines go too. An unclosed fence drops the rest. */
+/** The lines outside fenced blocks (``` and ~~~); each block, fence lines too, leaves one blank line. An unclosed fence drops the rest. */
 function dropFences(text) {
   const keep = [];
   let open = null;
   for (const line of text.split(/\r?\n/)) {
-    const mark = fenceOf(line);
+    const f = fenceOf(line);
     if (open !== null) {
-      if (mark === open && togglesFence(line, mark)) open = null;
-    } else if (mark !== null) {
-      if (togglesFence(line, mark)) open = mark;
+      if (closesFence(f, open)) open = null;
+    } else if (f !== null) {
+      keep.push('');
+      open = f;
     } else keep.push(line);
   }
   return keep;
 }
 
-/** Zero-width characters out, curly apostrophes folded; fenced blocks (``` and ~~~), quoted lines and struck text dropped. */
-export function cleanReply(text) {
-  const folded = String(text ?? '').replace(ZERO_WIDTH, '').replace(/[\u2018\u2019]/g, "'");
-  return dropFences(folded).filter((line) => !/^\s*>/.test(line)).map((line) => cutStrikeTags(line).replace(STRUCK, ' ')).join('\n');
-}
+// Block rules read the raw line (before the zero-width strip): only spaces and tabs count as blank or as indent.
+const BLANK = /^[ \t]*$/;
+const QUOTE = /^ {0,3}>/;
+const INDENTED = /^(?: {4}| {0,3}\t)/;
 
-// ---- reply rules --------------------------------------------------------------------------------------------------------------
-
-// No pattern has a nested quantifier: each runs in linear time. Every rule is a global regex; readSentence reads it with the guard.
-const NEG_FIX = /\b(?:won't|will not|not going to)\s+(?:fix|change|address)\b|\bwontfix\b/gi;
-/** The named-subject arm of the wrong rule. It counts only at the start of its sentence (see offStart). */
-const WRONG_SUBJECT = /\b(?:(?:the|this|that)\s+)?(?:finding|comment|suggestion|review|bot|coderabbit)\s+(?:(?:is|was)\s+(?:incorrect|invalid|wrong)|does(?:n't| not) apply)\b/;
-const WRONG = new RegExp(`\\bfalse[- ]positive\\b|\\bnot applicable\\b|${WRONG_SUBJECT.source}`, 'gi');
-const WRONG_SUBJECT_WHOLE = new RegExp(`^(?:${WRONG_SUBJECT.source})$`, 'i');
-/** What may stand before a named subject: nothing, or a bare no or nah. */
-const LEAD_OK = /^(?:(?:no|nah)\b[\s,.!]*)?$/i;
-// A follow-up or a separate PR declines only with a defer verb before it and a work noun after it ("moved to a follow-up PR").
-// "Moved to a separate file" or "a follow-up commit" is a code move, not a decline: no work noun, no hit.
-const DECLINE = /\bout of scope\b|\bby design\b|\bintentional(?:ly)?\b|\bdefer(?:red)?\b|\b(?:move[ds]?|moving|left|leave|leaving|punt(?:ed)?|split|track(?:ed)?)\s+(?:(?:it|this|that)\s+)?(?:to|in|into|for|as)\s+(?:a|the)\s+(?:separate|follow[- ]?up)\s+(?:pr|issue|ticket|change)s?\b|\b(?:leave|leaving|keep|keeping) (?:it |this )?as[- ]is\b/gi;
-/** A bare follow-up or separate PR: it never labels, but beside a fix hit it makes a conflict ("Fixed; follow-up for the rest"). */
-const NEG_MENTION = /\bfollow[- ]?ups?\b|\bseparate (?:pr|change|issue|ticket)s?\b/i;
-const FIX_SHA = new RegExp(`\\b(?:fixed|addressed|resolved|done|applied|fix in)\\b[^\\n]{0,60}?(${SHA_BODY})`, 'gi');
-const FIX_WORD = /\b(?:fixed|addressed|resolved)\b/gi;
-const DONE_WORD = /\b(?:done|applied)\b/gi;
-/** Any word of the fix family. A blocked sentence with one is a blocked fix (R9); it never labels on its own. */
-const FIX_FAMILY = /\b(?:fix|fixe[sd]|fixing|addressed|resolved|done|applied)\b/i;
-
-/** Frozen before the live run. Order: negatives first, then fix rules. Extend only from made-up text, with the seat's approval. */
-export const REPLY_RULES = Object.freeze([
-  Object.freeze({ id: 'neg_fix', re: NEG_FIX, disposition: 'wont_fix', evidence: 'reply_wont_fix' }),
-  Object.freeze({ id: 'fix_sha', re: FIX_SHA, disposition: 'fixed', evidence: 'reply_sha', fix: true }),
-  Object.freeze({ id: 'wrong', re: WRONG, disposition: 'wrong', evidence: 'reply_wrong' }),
-  Object.freeze({ id: 'decline', re: DECLINE, disposition: 'wont_fix', evidence: 'reply_decline' }),
-  Object.freeze({ id: 'fix_word', re: FIX_WORD, disposition: 'fixed', evidence: 'reply_no_sha', fix: true }),
-  Object.freeze({ id: 'fix_done', re: DONE_WORD, disposition: 'fixed', evidence: 'reply_no_sha', fix: true, alone: true }),
-]);
-const isFixRule = (r) => r.fix === true;
-const isNegRule = (r) => !isFixRule(r);
-const NEG_RULES = REPLY_RULES.filter(isNegRule);
-const FIX_RULES = REPLY_RULES.filter(isFixRule);
-const ANY_HIT = new RegExp([NEG_FIX, WRONG, DECLINE, FIX_FAMILY].map((r) => r.source).join('|'), 'i');
-
-// Modal, hedge, ask, partial, revert and negation words. Any of them in a hit sentence blocks the hit (in doubt, unlabeled).
-const BLOCK_WORDS = new Set([
-  'will', 'would', 'should', 'could', 'shall', 'cannot', 'never', 'not', 'gonna', 'must', 'if', 'whether', 'unsure', 'unclear', 'maybe', 'might', 'nothing', 'yet',
-  'can', 'may', 'ought', 'probably', 'possibly', 'perhaps', 'likely', 'hopefully', 'think', 'guess', 'seems', 'please', 'confirm',
-  'partly', 'partially', 'partial', 'half', 'most', 'some', 'except', 'still', 'revert', 'reverted', 'undo', 'undid', 'un', 'non',
-]);
-const BLOCK_PAIRS = new Set(['to be', 'need to', 'needs to', 'going to', 'plan to', 'plans to', 'planning to']);
-const BLOCK_ENDS = /(?:n't|'ll|'d)$/;
-const BARE_NO = /^(?:(?:no|nope)(?: not (?:yet|really))?|not (?:yet|really))$/;
-const DONE_WORDS = new Set(['done', 'applied', 'thanks', 'thank', 'you', 'ty', 'all', 'now', 'both', 'ok', 'okay', 'yes', 'yep', 'sure']);
-const SENTENCE_ENDS = new Set(['.', '!', '?']);
-
-/** Sentences: cut after . ! or ? before a space or the end, and at every ; and line break. A manual scan: linear. */
-function sentencesOf(text) {
-  const out = [];
-  let start = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text[i];
-    const next = text[i + 1];
-    if (c === '\n' || c === ';' || (SENTENCE_ENDS.has(c) && (next === undefined || /\s/.test(next)))) {
-      out.push(text.slice(start, i + 1).trim());
-      start = i + 1;
+/**
+ * The lines GitHub shows outside a quote or an indented code block. A quote runs from a > line to the next blank line (its
+ * lazy lines too). A code line is indented by four spaces or a tab, at the start, after a blank line or after a code line.
+ */
+function dropBlocks(lines) {
+  const keep = [];
+  let quote = false;
+  let code = false;
+  let blank = true;
+  for (const line of lines) {
+    if (BLANK.test(line)) {
+      keep.push(line);
+      quote = false;
+      blank = true;
+      continue;
     }
+    if (QUOTE.test(line)) quote = true;
+    code = !quote && INDENTED.test(line) && (blank || code);
+    if (!quote && !code) keep.push(line);
+    blank = false;
   }
-  out.push(text.slice(start).trim());
-  return out.filter(Boolean);
-}
-
-// A ? with no white space after it ("Fixed?No", a URL query). It does not cut the sentence: the whole sentence counts as a question.
-const INNER_ASK = /\?(?=\S)/;
-
-/** True when the trailing run of non-letters holds a question mark, or a ? stands with no white space after it. */
-function isQuestion(s) {
-  for (let i = s.length - 1; i >= 0 && !/[\p{L}\p{N}]/u.test(s[i]); i -= 1) if (s[i] === '?') return true;
-  return INNER_ASK.test(s);
-}
-
-/** The word with its edge apostrophes cut. An index loop: a regex trim is quadratic on an inner apostrophe run. */
-function trimQuotes(w) {
-  let a = 0;
-  let b = w.length;
-  while (a < b && w[a] === "'") a += 1;
-  while (b > a && w[b - 1] === "'") b -= 1;
-  return w.slice(a, b);
-}
-
-const wordsOf = (s) => s.toLowerCase().split(/[^a-z']+/).map(trimQuotes).filter(Boolean);
-const blockedWords = (ws) => ws.some((w, i) => BLOCK_WORDS.has(w) || BLOCK_ENDS.test(w) || BLOCK_PAIRS.has(`${w} ${ws[i + 1]}`));
-const isBareNo = (s) => BARE_NO.test(wordsOf(s).join(' '));
-const firstMatch = (s, re) => s.matchAll(re).next().value ?? null;
-
-/** Every negative-rule match in a sentence, as [rule, start, end], in rule order. */
-const negSpans = (s) => NEG_RULES.flatMap((rule) => [...s.matchAll(rule.re)].map((m) => [rule, m.index, m.index + m[0].length]));
-
-/** The sentence with every span cut out, so a negation inside a negative phrase blocks nothing. */
-function cutSpans(s, spans) {
-  let out = '';
-  let at = 0;
-  for (const [, start, end] of [...spans].sort((a, b) => a[1] - b[1])) {
-    if (start > at) out += s.slice(at, start);
-    out += ' ';
-    at = Math.max(at, end);
-  }
-  return out + s.slice(at);
-}
-
-/** Done or applied as a short sentence with no object: at most 4 words, each from DONE_WORDS. */
-function doneAlone(s) {
-  const ws = wordsOf(s);
-  return ws.length > 0 && ws.length <= 4 && ws.some((w) => w === 'done' || w === 'applied') && ws.every((w) => DONE_WORDS.has(w));
-}
-
-/** The first fix rule (in rule order) that matches, as [rule, match], or null. */
-function fixMatch(rest) {
-  for (const rule of FIX_RULES) {
-    const m = rule.alone ? (doneAlone(rest) ? [] : null) : firstMatch(rest, rule.re);
-    if (m) return [rule, m];
-  }
-  return null;
-}
-
-/** True when a span is the named-subject wrong arm and something other than a bare no or nah stands before it. */
-function offStart(s, [rule, start, end]) {
-  if (rule.id !== 'wrong' || !WRONG_SUBJECT_WHOLE.test(s.slice(start, end))) return false;
-  return start > 16 || !LEAD_OK.test(s.slice(0, start).trim());
+  return keep;
 }
 
 /**
- * What one sentence says, or null when no rule word is in it. The guard reads the whole sentence outside the negative
- * phrases: a block word before or after the hit blocks it. A question blocks a negative hit and voids a fix hit.
- * An off-start wrong subject blocks the negative hit. fixMention: an unblocked fix-family word that no fix rule took.
+ * Fenced blocks, quotes and indented code dropped (read on the raw lines, as GitHub reads them); then in each kept line the
+ * zero-width characters out, four apostrophe forms folded to ', and struck text dropped.
  */
-function readSentence(s) {
-  if (!ANY_HIT.test(s)) return null;
-  const spans = negSpans(s);
-  const rest = cutSpans(s, spans);
-  const ask = isQuestion(s);
-  const held = blockedWords(wordsOf(rest));
-  const fix = ask ? null : fixMatch(rest);
-  const stop = held || ask || spans.some((sp) => offStart(s, sp));
-  const family = FIX_FAMILY.test(rest);
-  return {
-    neg: stop ? null : (spans[0]?.[0] ?? null), negBlocked: spans.length > 0 && stop,
-    fix: held ? null : fix, fixBlocked: !ask && held && family, fixMention: !ask && !held && !fix && family,
+export function cleanReply(text) {
+  const fold = (line) => line.replace(ZERO_WIDTH, '').replace(APOSTROPHES, "'");
+  return dropBlocks(dropFences(String(text ?? ''))).map((line) => cutStrikeTags(fold(line)).replace(STRUCK, ' ')).join('\n');
+}
+
+// ---- the closed grammar (seat check of d0bc9b6f; a new form needs the seat's word) -------------------------------------------
+
+export const GRAMMAR = Object.freeze({
+  start: Object.freeze(['fixed', 'addressed', 'resolved', 'done', 'applied']),
+  link: Object.freeze(['in', 'by', 'with', 'via']),
+  fixed: Object.freeze(['fixed', 'done', 'applied', 'addressed', 'resolved']),
+  wont_fix: Object.freeze(["won't fix", 'wont fix', 'wontfix', 'will not fix', 'by design', 'this is by design', 'intentional', 'this is intentional', 'out of scope']),
+  wrong: Object.freeze(['false positive', 'this is a false positive', 'not applicable']),
+  courtesy: Object.freeze(['thanks', 'thank you', 'good catch', 'nice catch', 'great catch', 'agreed']),
+});
+const EVIDENCE_OF = Object.freeze({ fixed: 'reply_no_sha', wont_fix: 'reply_wont_fix', wrong: 'reply_wrong' });
+const G2_LABEL = new Map(['fixed', 'wont_fix', 'wrong'].flatMap((d) => GRAMMAR[d].map((s) => [s, d])));
+const COURTESY = new Set(GRAMMAR.courtesy);
+
+// G1, anchored: a start word, a link word, an optional "commit", then 7 to 40 hex, bare or in one pair of backticks, with a clean end.
+// No nested quantifier: one attempt at index 0, at most 34 steps back on the hex run.
+const G1 = new RegExp(`^(?:${GRAMMAR.start.join('|')})[ \\t]+(?:${GRAMMAR.link.join('|')})[ \\t]+(?:commit[ \\t]+)?(?:\`([0-9a-f]{7,40})\`|([0-9a-f]{7,40}))(?![\\w/-])`, 'i');
+// & is markup: an HTML entity such as &#63; shows as another character on GitHub.
+const MARKUP = /[`<>~*_&]/;
+const MARKUP_ALL = new RegExp(MARKUP.source, 'g');
+// Every question mark GitHub can show: ASCII, inverted, Greek, Arabic, interrobang, double forms, reversed, small, fullwidth.
+const ASK = /[?\u00BF\u037E\u061F\u203D\u2047-\u2049\u2E2E\uFE56\uFF1F]/;
+// What may follow the SHA token: the end, white space, a comma, a semicolon, a closing parenthesis, a . or ! that ends the
+// sentence, or a colon before white space or the end (seat ruling of 2026-11-12). Anything else (^, .., :path, :sha, @, =)
+// makes the token a revision expression, a range or a path, not one commit.
+const SHA_END = /^(?:$|[\s,;)]|[.!](?:\s|$)|:(?:\s|$))/;
+
+/** The text up to the first . or ! before white space or the end, or up to the first line break. A comma or ; does not end it. */
+function firstSentence(text) {
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '\n') return text.slice(0, i);
+    if ((c === '.' || c === '!') && (i + 1 === text.length || /\s/.test(text[i + 1]))) return text.slice(0, i + 1);
+  }
+  return text;
+}
+
+const EXTRA = Object.freeze({ form: null, reason: 'reply_extra_text' });
+
+/**
+ * G1 on the cleaned text: { form: 'g1', sha }, EXTRA (a G1 start with a ? or markup in the first sentence, or a SHA token
+ * that does not end cleanly), or null.
+ */
+function g1Of(text) {
+  const first = firstSentence(text);
+  const m = G1.exec(first);
+  if (!m) return G1.test(firstSentence(text.replace(MARKUP_ALL, ''))) ? EXTRA : null;
+  const rest = first.slice(m[0].length);
+  return MARKUP.test(rest) || ASK.test(rest) || !SHA_END.test(rest) ? EXTRA : { form: 'g1', sha: (m[1] ?? m[2]).toLowerCase() };
+}
+
+/** Lower case, trim, one final . or ! cut. */
+const normal = (s) => s.toLowerCase().trim().replace(/[.!]$/, '');
+/** The G2 sentences: cut at a line break and after . or ! before white space; empty ones dropped. Linear. */
+const partsOf = (text) => text.split(/\n|(?<=[.!])[ \t]+/).map(normal).filter(Boolean);
+
+/** G2: { form: 'g2', disposition, evidence } for exactly one list sentence plus courtesy, { form: 'courtesy' }, or null. */
+function g2Of(text) {
+  if (MARKUP.test(text)) return null;
+  const parts = partsOf(text);
+  const rest = parts.filter((p) => !COURTESY.has(p));
+  if (parts.length > 0 && rest.length === 0) return { form: 'courtesy' };
+  if (rest.length !== 1 || !G2_LABEL.has(rest[0])) return null;
+  const disposition = G2_LABEL.get(rest[0]);
+  return { form: 'g2', disposition, evidence: EVIDENCE_OF[disposition] };
+}
+
+/** True when the reply, markup taken out and leading courtesy skipped, starts with a G2 list sentence. */
+function startsG2(text) {
+  const head = partsOf(text.replace(MARKUP_ALL, '')).find((p) => !COURTESY.has(p));
+  return head !== undefined && G2_LABEL.has(head);
+}
+
+/**
+ * What the words of one reply say: { form: 'g1', sha } (git decides), { form: 'g2', disposition, evidence },
+ * { form: 'courtesy' }, or { form: null, reason: 'reply_extra_text' | 'reply_unmatched' }.
+ */
+export function parseReply(text) {
+  const clean = cleanReply(text).trim();
+  const g1 = g1Of(clean);
+  if (g1) return { ...g1 };
+  const g2 = g2Of(clean);
+  if (g2) return g2;
+  return { form: null, reason: startsG2(clean) ? 'reply_extra_text' : 'reply_unmatched' };
+}
+
+// ---- git evidence for G1 ------------------------------------------------------------------------------------------------------
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+const SHORT_SHA = /^[0-9a-f]{7,40}$/;
+const MAIN_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+const UNKNOWN = Object.freeze({ reason: 'sha_unknown' });
+const NOT_NEWER = Object.freeze({ reason: 'sha_not_newer' });
+
+/** stdout of a git call with status 0, else null. A throw is a failure, never a pass. */
+const tryGit = (git, args) => {
+  try {
+    const r = git(args);
+    return r && r.status === 0 ? String(r.stdout ?? '') : null;
+  } catch {
+    return null;
+  }
+};
+
+/** The integer exit status of a git call, or null for a throw, a null result or no integer status. */
+const gitStatus = (git, args) => {
+  try {
+    const r = git(args);
+    return r && Number.isInteger(r.status) ? r.status : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * null when commit `full` is newer than the finding commit `original`: it is not that commit and not its ancestor (exit 1).
+ * NOT_NEWER when it is the commit or an ancestor (exit 0). UNKNOWN for any other status, a null result or a throw.
+ */
+function notNewer(git, full, original) {
+  if (full === original) return NOT_NEWER;
+  const status = gitStatus(git, ['merge-base', '--is-ancestor', full, original]);
+  return status === 1 ? null : status === 0 ? NOT_NEWER : UNKNOWN;
+}
+
+/** The full SHA of the commit a ref names, or null (a bad name never reaches git). */
+export function mainShaOf(git, ref) {
+  if (typeof git !== 'function' || !MAIN_REF.test(String(ref ?? ''))) return null;
+  const out = tryGit(git, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])?.trim().toLowerCase();
+  return out && FULL_SHA.test(out) ? out : null;
+}
+
+/**
+ * { sha: <full> } when git proves the SHA: it names exactly one commit, that commit is an ancestor of mainSha, it is newer
+ * than `original` (the finding's original_commit_id: not that commit, not its ancestor), and its diff-tree (every parent: -m)
+ * lists `file` exactly. { reason: 'sha_not_newer' } when the commit is `original` or its ancestor. { reason: 'sha_other_file' }
+ * when only the file check fails: the newer check runs first, so that reason counts only commits that could be the fix.
+ * { reason: 'sha_unknown' } for every other case, a git failure and an `original` that is not 40 hex included.
+ */
+export function shaEvidence({ git, sha, file, mainSha, original }) {
+  const want = String(sha ?? '').toLowerCase();
+  const orig = typeof original === 'string' ? original.toLowerCase() : '';
+  if (typeof git !== 'function' || !FULL_SHA.test(String(mainSha ?? '')) || !SHORT_SHA.test(want) || typeof file !== 'string' || file === '') return UNKNOWN;
+  if (!FULL_SHA.test(orig)) return UNKNOWN;
+  const full = tryGit(git, ['rev-parse', '--verify', '--quiet', `${want}^{commit}`])?.trim().toLowerCase() ?? '';
+  if (!FULL_SHA.test(full) || !full.startsWith(want)) return UNKNOWN;
+  if (tryGit(git, ['merge-base', '--is-ancestor', full, mainSha]) === null) return UNKNOWN;
+  const older = notNewer(git, full, orig);
+  if (older !== null) return older;
+  const names = tryGit(git, ['diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', full]);
+  if (names === null) return UNKNOWN;
+  return names.split('\0').includes(file) ? { sha: full } : { reason: 'sha_other_file' };
+}
+
+/** The same git question asked twice in one sweep runs once. */
+function memoGit(git) {
+  const seen = new Map();
+  return (args) => {
+    const key = args.join('\0');
+    if (!seen.has(key)) seen.set(key, git(args));
+    return seen.get(key);
   };
 }
 
-const ruleIndex = (rule) => REPLY_RULES.indexOf(rule);
-const firstByOrder = (hits) => hits.reduce((best, h) => (best === null || ruleIndex(h[0]) < ruleIndex(best[0]) ? h : best), null);
-const labelOf = ([rule, m]) => ({ disposition: rule.disposition, evidence: rule.evidence, rule: rule.id, sha: rule.id === 'fix_sha' ? m[1].toLowerCase() : null });
-const CONFLICT = Object.freeze({ disposition: 'unlabeled', evidence: null, rule: 'reply_conflict', sha: null });
+// Variables that point git at another repo, object store, index or ref view. GIT_DIR beats -C (a run from a git hook has it set).
+const GIT_MOVES = new Set(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_REPLACE_REF_BASE', 'GIT_NAMESPACE', 'GIT_COMMON_DIR']);
 
-/** True when a sentence with a hit is followed by a bare no (no, nope, not yet, not really). */
-const answeredNo = (parts, seen) => seen.some((x, i) => x !== null && i + 1 < parts.length && isBareNo(parts[i + 1]));
+/** The env for git: those variables out (any case: a copy of the Windows env keeps the case of each name), no prompt, no lazy fetch. */
+const gitEnvOf = (env) => ({
+  ...Object.fromEntries(Object.entries(env).filter(([k]) => !GIT_MOVES.has(k.toUpperCase()))), GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1',
+});
 
-/**
- * { parsed, blocked }. parsed: { disposition, evidence, rule, sha } or null. Conflict (unlabeled reply_conflict): a blocked
- * negative hit, a hit answered by a bare no, a clean fix hit beside a negative hit, a blocked fix hit or a bare follow-up
- * mention, or a negative hit beside a fix mention. blocked: the reply holds only a blocked fix hit (it undoes an earlier fix).
- */
-function readReply(text) {
-  const clean = cleanReply(text);
-  const parts = ANY_HIT.test(clean) ? sentencesOf(clean) : [];
-  const seen = parts.map(readSentence);
-  const has = (key) => seen.some((x) => x?.[key]);
-  const neg = firstByOrder(seen.filter((x) => x?.neg).map((x) => [x.neg, null]));
-  const fix = firstByOrder(seen.map((x) => x?.fix).filter(Boolean));
-  const mixed = (fix && (neg || has('fixBlocked') || NEG_MENTION.test(clean))) || (neg && has('fixMention'));
-  if (answeredNo(parts, seen) || has('negBlocked') || mixed) return { parsed: { ...CONFLICT }, blocked: false };
-  const hit = neg ?? fix;
-  return { parsed: hit ? labelOf(hit) : null, blocked: has('fixBlocked') };
+/** git with -C on the repo root of this file and no replace objects. Its stderr is captured, never printed. spawn and env: for tests. */
+export function defaultGit(args, { spawn = spawnSync, env = process.env } = {}) {
+  const r = spawn('git', ['-C', REPO_ROOT, '--no-replace-objects', ...args], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: gitEnvOf(env) });
+  // No exit status (a spawn error or a signal) stays null: as exit 1 it would pass the newer check of shaEvidence.
+  return { status: r.status ?? null, stdout: r.stdout ?? '' };
 }
+/** The GitHub repo whose history defaultGit reads: a sweep of another --repo is refused (its SHAs are not in this history). */
+defaultGit.repo = DEFAULT_REPO;
 
-/** { disposition, evidence, rule, sha } or null. A fix rule and a negative rule together give unlabeled reply_conflict. */
-export const parseReply = (text) => readReply(text).parsed;
+// ---- the bot marker (G4, as R8) -----------------------------------------------------------------------------------------------
 
+const SHA_WHOLE = /^(?=[0-9a-f]{0,39}[0-9])(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}$/i;
 // The bot's own marker line: the line holds only "Addressed in commit(s) <sha> [to <sha>]", with an optional check mark.
 const MARKER = /^[ \t]*(?:\u2705\uFE0F?[ \t]*)?Addressed in commits?[ \t]+`?([0-9a-f]{7,40})(?![0-9a-z])`?(?:[ \t]+to[ \t]+`?([0-9a-f]{7,40})(?![0-9a-z])`?)?[ \t.]*$/gim;
 
@@ -272,22 +318,6 @@ export function parseMarker(body) {
     if (SHA_WHOLE.test(candidate)) found = candidate.toLowerCase();
   }
   return found;
-}
-
-const toLf = (s) => s.replace(/\r\n?/g, '\n');
-/** A hash part: a RegExp as source and flags, a Set sorted, a function as its LF source text, a string with LF ends. */
-function versionPart(x) {
-  if (x instanceof RegExp) return ['re', x.source, x.flags];
-  if (x instanceof Set) return ['set', [...x].map(String).sort()];
-  if (typeof x === 'function') return ['fn', toLf(x.toString())];
-  if (Array.isArray(x)) return x.map(versionPart);
-  return typeof x === 'string' ? toLf(x) : x;
-}
-
-/** 16 hex characters over the ordered rule set (id, regex source and flags, disposition, evidence, fix, alone) and the extra parts. */
-export function rulesVersionOf(rules, extra = []) {
-  const parts = rules.map((r) => [r.id, r.re.source, r.re.flags, r.disposition, r.evidence, Boolean(r.fix), Boolean(r.alone)]);
-  return createHash('sha256').update(JSON.stringify([parts, extra.map(versionPart)])).digest('hex').slice(0, 16);
 }
 
 // ---- authors, trust, rollups --------------------------------------------------------------------------------------------------
@@ -326,37 +356,52 @@ const byTime = (a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created
 const result = (over) => ({ disposition: 'unlabeled', evidence: null, reason: null, rule: null, sha: null, replyId: null, ...over });
 const thumbsReason = ({ up, down }) => (up && down ? 'thumbs_conflict' : down ? 'thumbs_down_unverified' : up ? 'thumbs_up_only' : 'no_signal');
 
-/**
- * [reply, parsed] of the latest trusted reply that parses (a conflict reply counts), or null. A later reply whose only hit is a
- * blocked fix ("not fixed") turns an earlier fix into a conflict; a later reply with no hit keeps the label.
- */
-function latestDecision(mine) {
-  let state = null;
-  for (const r of mine) {
-    const { parsed, blocked } = readReply(r.body);
-    if (parsed) state = [r, parsed];
-    else if (blocked && state?.[1].disposition === 'fixed') state = [r, { ...CONFLICT }];
+/** One trusted reply: { label }, { courtesy: true } or { reason }. G1 asks git about the file and the original commit of the finding. */
+function outcomeOf(reply, { file, original }, proof) {
+  const p = parseReply(reply.body);
+  if (p.form === 'g1') {
+    const e = shaEvidence({ git: proof?.git, sha: p.sha, file, mainSha: proof?.mainSha, original });
+    return e.sha ? { label: { disposition: 'fixed', evidence: 'reply_sha_verified', rule: 'g1', sha: e.sha } } : { reason: e.reason };
   }
-  return state;
+  if (p.form === 'g2') return { label: { disposition: p.disposition, evidence: p.evidence, rule: 'g2', sha: null } };
+  return p.form === 'courtesy' ? { courtesy: true } : { reason: p.reason };
 }
 
 /**
- * Order: the latest trusted reply that parses, then unmatched trusted replies (reply_unmatched), then the CodeRabbit marker,
- * then a thumbs reason, then no_signal. The marker ranks below every trusted reply. Only a trusted human reply gives wrong or wont_fix.
+ * G3 over the trusted replies in time order. The last label decides; two labels that differ, or a later reply that is
+ * neither a label nor courtesy only, give reply_conflict. With no label: the reason of the last reply that is not
+ * courtesy only. { label, reply }, { reason, reply }, or null when every reply is courtesy only. finding: { file, original }.
  */
-export function decide({ root, replies = [], trusted = new Set() }) {
+function readThread(mine, finding, proof) {
+  const seen = mine.map((r) => [r, outcomeOf(r, finding, proof)]);
+  const labels = seen.filter(([, o]) => o.label);
+  const last = labels.at(-1);
+  if (!last) {
+    const off = seen.filter(([, o]) => !o.courtesy).at(-1);
+    return off ? { reason: off[1].reason, reply: off[0] } : null;
+  }
+  if (labels.some(([, o]) => o.label.disposition !== last[1].label.disposition)) return { reason: 'reply_conflict', reply: last[0] };
+  const after = seen.slice(seen.indexOf(last) + 1).find(([, o]) => !o.courtesy);
+  return after ? { reason: 'reply_conflict', reply: after[0] } : { label: last[1].label, reply: last[0] };
+}
+
+/**
+ * Order: the trusted replies (G3), then the CodeRabbit marker (G4: below every trusted reply), then a thumbs reason.
+ * proof: { git, mainSha } for G1; without it no G1 reply labels. Only a trusted reply gives wrong or wont_fix.
+ * `sha` is git-verified only when rule is 'g1'. With evidence reply_no_sha or cr_marker it is the bot marker's SHA, not verified.
+ */
+export function decide({ root, replies = [], trusted = new Set(), proof = null }) {
   const mine = replies.filter((r) => authorKind(r?.user, trusted) === 'trusted').sort(byTime);
   const marker = parseMarker(root?.body);
-  const decided = latestDecision(mine);
-  if (decided) {
-    const [r, p] = decided;
-    if (p.rule === 'reply_conflict') return result({ reason: 'reply_conflict', rule: p.rule, replyId: r.id });
-    // Only a fix takes the marker SHA: a wrong or wont_fix record has no fix commit.
-    return result({ disposition: p.disposition, evidence: p.evidence, rule: p.rule, sha: p.sha ?? (p.disposition === 'fixed' ? marker : null), replyId: r.id });
+  if (mine.length === 0) {
+    return marker ? result({ disposition: 'fixed', evidence: 'cr_marker', sha: marker }) : result({ reason: thumbsReason(thumbsOf(root?.reactions)) });
   }
-  if (mine.length > 0) return result({ reason: 'reply_unmatched' });
-  if (marker) return result({ disposition: 'fixed', evidence: 'cr_marker', sha: marker });
-  return result({ reason: thumbsReason(thumbsOf(root?.reactions)) });
+  const t = readThread(mine, { file: root?.path, original: root?.original_commit_id }, proof);
+  if (t === null) return result({ reason: 'reply_unmatched' });
+  if (!t.label) return result({ reason: t.reason, replyId: t.reply.id });
+  const { disposition, evidence, rule, sha } = t.label;
+  // Only a fix takes the marker SHA: a wrong or wont_fix record has no fix commit.
+  return result({ disposition, evidence, rule, sha: sha ?? (disposition === 'fixed' ? marker : null), replyId: t.reply.id });
 }
 
 // ---- one PR -------------------------------------------------------------------------------------------------------------------
@@ -371,8 +416,8 @@ function replyCounts(replies, trusted) {
   return out;
 }
 
-function recordOf(pr, c, replies, trusted) {
-  const d = decide({ root: c, replies, trusted });
+function recordOf(pr, c, replies, trusted, proof) {
+  const d = decide({ root: c, replies, trusted, proof });
   return {
     key: `${pr}:${c.id}`, pr, commentId: c.id, path: c.path, line: c.original_line ?? null, originalCommit: c.original_commit_id.toLowerCase(),
     severity: inlineCommentSeverity(c.body), disposition: d.disposition, verdict: verdictOf(d.disposition, d.evidence), by: BY,
@@ -388,7 +433,7 @@ const repliesByParent = (comments) => {
 };
 
 /** { records, unparsed: [{ key, reason, kind }], botReplies: { all, parsed } } for the comments of one merged PR. */
-export function findingsForPr({ pr, comments = [], prFact = null, repo = DEFAULT_REPO }) {
+export function findingsForPr({ pr, comments = [], prFact = null, repo = DEFAULT_REPO, proof = null }) {
   const trusted = trustedSet({ repo, prAuthor: prFact?.author, comments });
   const rootIds = new Set(comments.filter(isRoot).map((c) => c.id));
   const kids = repliesByParent(comments);
@@ -398,7 +443,7 @@ export function findingsForPr({ pr, comments = [], prFact = null, repo = DEFAULT
   for (const c of comments.filter((x) => isCodeRabbitUser(x?.user))) {
     const key = `${pr}:${c.id}`;
     if (isRoot(c)) {
-      if (isRootShape(c)) records.push(recordOf(pr, c, kids.get(c.id) ?? [], trusted));
+      if (isRootShape(c)) records.push(recordOf(pr, c, kids.get(c.id) ?? [], trusted, proof));
       else unparsed.push({ key, reason: 'bad_shape', kind: 'root' });
     } else {
       botReplies.all += 1;
@@ -409,22 +454,6 @@ export function findingsForPr({ pr, comments = [], prFact = null, repo = DEFAULT
   records.sort((a, b) => a.commentId - b.commentId);
   return { records, unparsed, botReplies };
 }
-
-// ---- the version of the label rules --------------------------------------------------------------------------------------------
-
-/** Every part that decides a label: the constants and the source text of each label function (CRLF folded to LF). */
-const LABEL_PARTS = [
-  SHA_BODY, SHA_WHOLE, ZERO_WIDTH, STRUCK, STRIKE_TAG, MARKER, FIX_FAMILY, ANY_HIT, BLOCK_WORDS, BLOCK_PAIRS, BLOCK_ENDS, BARE_NO, DONE_WORDS, SENTENCE_ENDS, INNER_ASK,
-  WRONG_SUBJECT, WRONG_SUBJECT_WHOLE, LEAD_OK, NEG_MENTION, HEX40, CODERABBIT_LOGIN, DEFAULT_REPO, CONFLICT, VERDICT_OF, TRUSTED_ASSOCIATIONS,
-  NEG_RULES.map((r) => r.id), FIX_RULES.map((r) => r.id),
-  findSha, cutStrikeTags, fenceOf, togglesFence, dropFences, cleanReply, isFixRule, isNegRule, sentencesOf, isQuestion, trimQuotes, wordsOf, blockedWords,
-  isBareNo, firstMatch, negSpans, cutSpans, doneAlone, fixMatch, offStart, readSentence, ruleIndex, firstByOrder, labelOf, answeredNo, readReply, parseReply,
-  parseMarker, verdictOf, authorKind, isCodeRabbitUser, trustedSet, count, thumbsOf, byTime, result, thumbsReason, latestDecision, decide, isRoot, isRootShape,
-  repliesByParent, recordOf, findingsForPr,
-];
-
-/** The version of the frozen rule set. A file with another value was labeled by other rules. */
-export const RULES_VERSION = rulesVersionOf(REPLY_RULES, LABEL_PARTS);
 
 // ---- summary ------------------------------------------------------------------------------------------------------------------
 
@@ -450,21 +479,23 @@ function parsedOf({ records, unparsed, botReplies }) {
 
 /** PRs in range with no merge, and their bot comments: open apart from closed without merge. */
 const EXCLUDED_KEYS = ['openPrs', 'closedUnmergedPrs', 'openComments', 'closedUnmergedComments'];
+const EVIDENCE_KEYS = ['reply_sha_verified', 'reply_no_sha', 'reply_wont_fix', 'reply_wrong', 'cr_marker'];
+const REASON_KEYS = ['reply_extra_text', 'reply_unmatched', 'sha_unknown', 'sha_not_newer', 'sha_other_file', 'reply_conflict', 'thumbs_up_only', 'thumbs_down_unverified', 'thumbs_conflict', 'no_signal'];
 
 /** The evidence summary: counts only, no PR number per finding, no comment id, no text. Pure: the stamp comes in as `generatedAt`. */
-export function summarize({ records, unparsed, botReplies, excluded, range, repo, generatedAt }) {
+export function summarize({ records, unparsed, botReplies, excluded, range, repo, generatedAt, mainRef = null, mainSha = null }) {
   const labeled = records.filter((r) => r.disposition !== 'unlabeled').length;
   const by = tally(records, ['fixed', 'wont_fix', 'wrong', 'unlabeled'], (r) => r.disposition);
   const fixedMarker = records.filter((r) => r.disposition === 'fixed' && r.evidence === 'cr_marker').length;
   const unlabeledWithMarker = records.filter((r) => r.disposition === 'unlabeled' && r.marker === true).length;
   return {
-    v: 1, kind: 'cr-dispositions', repo, generatedAt, rulesVersion: RULES_VERSION, range,
+    v: 2, kind: 'cr-dispositions', repo, generatedAt, rulesVersion: RULES_VERSION, mainRef, mainSha, range,
     ...parsedOf({ records, unparsed, botReplies }),
     labeled: { count: labeled, share: ratio(labeled, records.length) },
     replied: repliedOf(records),
     counts: { fixed: by.fixed, fixedHuman: by.fixed - fixedMarker, fixedMarker, wont_fix: by.wont_fix, wrong: by.wrong, unlabeled: by.unlabeled, unlabeledWithMarker },
-    evidence: tally(records, ['reply_wont_fix', 'reply_sha', 'reply_wrong', 'reply_decline', 'reply_no_sha', 'cr_marker'], (r) => r.evidence),
-    reasons: tally(records, ['reply_unmatched', 'reply_conflict', 'thumbs_up_only', 'thumbs_down_unverified', 'thumbs_conflict', 'no_signal'], (r) => r.reason),
+    evidence: tally(records, EVIDENCE_KEYS, (r) => r.evidence),
+    reasons: tally(records, REASON_KEYS, (r) => r.reason),
     unparsedReasons: tally(unparsed, ['bad_shape', 'orphan_reply', 'pr_unknown', 'no_pr_url'], (u) => u.reason),
     excluded: Object.fromEntries(EXCLUDED_KEYS.map((k) => [k, excluded?.[k] ?? 0])),
   };
@@ -533,7 +564,7 @@ function excludedOf(prs, from, hi) {
 }
 
 /** Decides the grouped comments: findings of merged PRs, strays as unparsed, unmerged bot comments as excluded counts. */
-function collect({ byPr, noUrl, factOf, repo, excluded }) {
+function collect({ byPr, noUrl, factOf, repo, excluded, proof }) {
   const acc = { records: [], unparsed: [], botReplies: { all: 0, parsed: 0 } };
   const stray = (c, pr, reason) => {
     if (!isCodeRabbitUser(c.user)) return;
@@ -546,7 +577,7 @@ function collect({ byPr, noUrl, factOf, repo, excluded }) {
     if (!fact) comments.forEach((c) => stray(c, pr, 'pr_unknown'));
     else if (!fact.merged_at) excluded[isOpenPr(fact) ? 'openComments' : 'closedUnmergedComments'] += comments.filter((c) => isCodeRabbitUser(c.user)).length;
     else {
-      const got = findingsForPr({ pr, comments, prFact: { author: fact.user?.login ?? null }, repo });
+      const got = findingsForPr({ pr, comments, prFact: { author: fact.user?.login ?? null }, repo, proof });
       acc.records.push(...got.records);
       acc.unparsed.push(...got.unparsed);
       acc.botReplies.all += got.botReplies.all;
@@ -556,8 +587,11 @@ function collect({ byPr, noUrl, factOf, repo, excluded }) {
   return acc;
 }
 
-/** Calls the two listings and decides every comment. Returns { summary, file }; throws SweepError. */
-export async function sweep({ from, to, repo = DEFAULT_REPO, generatedAt }, { gh = defaultGh } = {}) {
+/**
+ * Calls the two listings and decides every comment. Returns { summary, file }; throws SweepError.
+ * git and mainSha (the resolved main ref) feed G1; with no git, no G1 reply labels.
+ */
+export async function sweep({ from, to, repo = DEFAULT_REPO, generatedAt, mainRef = null, mainSha = null }, { gh = defaultGh, git = null } = {}) {
   const prs = await fetchPrs(gh, repo);
   const hi = to ?? topMerged(prs);
   const first = prs.filter((p) => p.number >= from).sort((a, b) => a.number - b.number)[0];
@@ -566,22 +600,56 @@ export async function sweep({ from, to, repo = DEFAULT_REPO, generatedAt }, { gh
   const rows = open ? await fetchComments(gh, repo, first.created_at) : [];
   const { byPr, noUrl } = groupByPr(rows, from, hi ?? from - 1);
   const excluded = excludedOf(prs, from, hi);
-  const { records, unparsed, botReplies } = collect({ byPr, noUrl, factOf: new Map(prs.map((p) => [p.number, p])), repo, excluded });
+  const proof = { git: typeof git === 'function' ? memoGit(git) : null, mainSha };
+  const { records, unparsed, botReplies } = collect({ byPr, noUrl, factOf: new Map(prs.map((p) => [p.number, p])), repo, excluded, proof });
   records.sort((a, b) => a.pr - b.pr || a.commentId - b.commentId);
   unparsed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  const summary = summarize({ records, unparsed, botReplies, excluded, range: { from, to: hi ?? null }, repo, generatedAt });
+  const summary = summarize({ records, unparsed, botReplies, excluded, range: { from, to: hi ?? null }, repo, generatedAt, mainRef, mainSha });
   return { summary, file: { ...summary, findings: records, unparsed: unparsed.map(({ key, reason }) => ({ key, reason })) } };
 }
+
+// ---- the version of the label rules --------------------------------------------------------------------------------------------
+
+const toLf = (s) => s.replace(/\r\n?/g, '\n');
+/** A hash part: a RegExp as source and flags, a Set sorted, a Map as sorted entries, a function as its LF source, a string with LF ends. */
+function versionPart(x) {
+  if (x instanceof RegExp) return ['re', x.source, x.flags];
+  if (x instanceof Set) return ['set', [...x].map(String).sort()];
+  if (x instanceof Map) return ['map', [...x].map((e) => JSON.stringify(e)).sort()];
+  if (typeof x === 'function') return ['fn', toLf(x.toString())];
+  if (Array.isArray(x)) return x.map(versionPart);
+  return typeof x === 'string' ? toLf(x) : x;
+}
+
+/** 16 hex characters over the ordered parts. */
+export function rulesVersionOf(parts) {
+  return createHash('sha256').update(JSON.stringify(parts.map(versionPart))).digest('hex').slice(0, 16);
+}
+
+/** Every part that decides a label: the grammar lists, the patterns, and the source text of each label function. */
+export const VERSION_PARTS = Object.freeze([
+  GRAMMAR, EVIDENCE_OF, G2_LABEL, COURTESY, G1, MARKUP, MARKUP_ALL, ASK, SHA_END, EXTRA, UNKNOWN, NOT_NEWER, ZERO_WIDTH, APOSTROPHES, STRUCK, STRIKE_TAG, FENCE, BLANK, QUOTE, INDENTED,
+  FULL_SHA, SHORT_SHA, MAIN_REF, SHA_WHOLE, MARKER, HEX40, CODERABBIT_LOGIN, DEFAULT_REPO, DEFAULT_MAIN_REF, VERDICT_OF, TRUSTED_ASSOCIATIONS, GIT_MOVES,
+  cutStrikeTags, fenceOf, closesFence, dropFences, dropBlocks, cleanReply, firstSentence, g1Of, normal, partsOf, g2Of, startsG2, parseReply,
+  tryGit, gitStatus, notNewer, mainShaOf, shaEvidence, memoGit, gitEnvOf, defaultGit, parseMarker, verdictOf, authorKind, isCodeRabbitUser, trustedSet, count, thumbsOf, prOf,
+  byTime, result, thumbsReason, outcomeOf, readThread, decide, isRoot, isRootShape, replyCounts, repliesByParent, recordOf, findingsForPr,
+  groupByPr, strayEntry, isOpenPr, collect, sweep,
+]);
+
+/** The version of the frozen rule set. A file with another value was labeled by other rules. */
+export const RULES_VERSION = rulesVersionOf(VERSION_PARTS);
 
 // ---- CLI ----------------------------------------------------------------------------------------------------------------------
 
 const USAGE = [
-  'Usage: dispositions.mjs sweep [--from N] [--to N] [--repo owner/name] [--out FILE] [--summary-out FILE] [--json]',
+  'Usage: dispositions.mjs sweep [--from N] [--to N] [--repo owner/name] [--main-ref REF] [--out FILE] [--summary-out FILE] [--json]',
   '       dispositions.mjs --help | -h',
-  'Exit: 0 parsed bar met, 1 gh failure (nothing written) or another error (one fixed line), 2 bad input, 3 sweep ran but the parsed bar is not met.',
+  'G1 replies need the local repo: git proves each SHA against --main-ref (default main). No fetch. --repo must be the repo of this checkout.',
+  'Exit: 0 parsed bar met, 1 gh failure (nothing written) or another error (one fixed line), 2 bad input (a --main-ref that names no commit too),',
+  '      3 sweep ran but the parsed bar is not met.',
 ].join('\n');
 
-const WITH_VALUE = new Set(['--from', '--to', '--repo', '--out', '--summary-out']);
+const WITH_VALUE = new Set(['--from', '--to', '--repo', '--main-ref', '--out', '--summary-out']);
 const positive = (s) => (/^[1-9]\d*$/.test(s) && Number.isSafeInteger(Number(s)) ? Number(s) : null);
 
 function readFlags(rest) {
@@ -596,7 +664,7 @@ function readFlags(rest) {
   return { flags };
 }
 
-/** { opts } or { error } or { help }. Every check runs before any gh call. */
+/** { opts } or { error } or { help }. Every check runs before any gh or git call. */
 function parseArgs(argv) {
   if (argv.includes('--help') || argv.includes('-h')) return { help: true };
   if (argv[0] !== 'sweep') return { error: argv.length === 0 ? 'no command' : `unknown command ${JSON.stringify(argv[0])}` };
@@ -609,7 +677,9 @@ function parseArgs(argv) {
   const repo = flags.repo ?? DEFAULT_REPO;
   const bad = repoError(repo);
   if (bad) return { error: bad };
-  return { opts: { from, to, repo, out: flags.out, summaryOut: flags['summary-out'], json: Boolean(flags.json) } };
+  const mainRef = flags['main-ref'] ?? DEFAULT_MAIN_REF;
+  if (!MAIN_REF.test(mainRef)) return { error: '--main-ref must be a ref name' };
+  return { opts: { from, to, repo, mainRef, out: flags.out, summaryOut: flags['summary-out'], json: Boolean(flags.json) } };
 }
 
 const UPSTREAM_OWNER = 'parcadei';
@@ -643,17 +713,18 @@ const within = (root, target) => {
 };
 
 const LONG_PATH = /^[\\/]{2}\?[\\/]/;
+const LONG_DRIVE = /^[A-Za-z]:[\\/]/;
 const UNC = /^[\\/]{2}/;
 
 /**
  * The absolute path with a long-path prefix stripped, or null for every UNC form (a share, a device path, the long-path UNC
- * form) and, on Windows, for an alternate data stream (a colon after the drive: a stream on a repo folder is in no tree walk).
+ * form), a long-path form whose tail is not <drive>:\ (GLOBALROOT), and, on Windows, an alternate data stream.
  */
 function plainPath(file) {
   const raw = String(file);
   const long = LONG_PATH.test(raw);
   const bare = long ? raw.slice(4) : raw;
-  if (UNC.test(bare) || (long && /^unc[\\/]/i.test(bare))) return null;
+  if ((long && !LONG_DRIVE.test(bare)) || UNC.test(bare)) return null;
   const abs = path.resolve(bare);
   if (process.platform === 'win32' && abs.indexOf(':', 2) !== -1) return null;
   return UNC.test(abs) ? null : abs;
@@ -667,13 +738,23 @@ function inGitTree(abs) {
   }
 }
 
+/** True when `abs` or an ancestor is a link whose target is missing: lstat sees the entry, existsSync does not. */
+function underDanglingLink(abs) {
+  for (let cur = abs; ; cur = path.dirname(cur)) {
+    try {
+      if (!existsSync(cur) && lstatSync(cur, { throwIfNoEntry: false })) return true;
+    } catch { /* not a link: an ancestor is a file, the write fails later */ }
+    if (path.dirname(cur) === cur) return false;
+  }
+}
+
 /**
- * True when `file` is a UNC form, or resolves inside any repo tree (an ancestor with a .git entry, seen through the
- * plain and the real path), under the repo root of this script, or under any .claude/worktrees folder.
+ * True when `file` is a UNC form, sits under a dangling link, or resolves inside any repo tree (an ancestor with a .git entry,
+ * seen through the plain and the real path), under the repo root of this script, or under any .claude/worktrees folder.
  */
 export function outRefused(file, root = REPO_ROOT) {
   const abs = plainPath(file);
-  if (abs === null) return true;
+  if (abs === null || underDanglingLink(abs)) return true;
   const real = realish(abs);
   if (inGitTree(abs) || inGitTree(real)) return true;
   const target = fold(real);
@@ -687,13 +768,15 @@ const localDate = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-$
 const defaultOut = (home, now) => path.join(home, '.claude', 'state', STATE_FOLDER, `${localDate(now)}-dispositions.json`);
 const sameFile = (a, b) => fold(realish(a)) === fold(realish(b));
 
-/** { file, summaryFile } or { error }: the write targets, checked before any gh call. The default path takes the same check. */
+/** { file, summaryFile } or { error }: the write targets, checked before any gh or git call. The default path takes the same check. */
 function targetsOf(opts, home, now) {
   const wanted = opts.out ?? defaultOut(home, now);
-  if (outRefused(wanted)) return { error: '--out must be outside every repo tree and not a UNC or stream path' };
+  if (outRefused(wanted)) return { error: '--out must be outside every repo tree and not a UNC or stream path or under a dangling link' };
   const file = plainPath(wanted);
-  const summaryFile = opts.summaryOut === undefined ? null : (plainPath(opts.summaryOut) ?? path.resolve(opts.summaryOut));
-  if (summaryFile !== null && sameFile(file, summaryFile)) return { error: '--summary-out must not be the --out file' };
+  if (opts.summaryOut === undefined) return { file, summaryFile: null };
+  const summaryFile = plainPath(opts.summaryOut);
+  if (summaryFile === null) return { error: '--summary-out must not be a UNC or stream path' };
+  if (sameFile(file, summaryFile)) return { error: '--summary-out must not be the --out file' };
   return { file, summaryFile };
 }
 
@@ -717,13 +800,17 @@ const lineOf = (s) => `dispositions: ${s.denominator.all} bot comments, parsed $
 const INTERNAL_LINE = 'dispositions failed (internal): unexpected error';
 const failLine = (e) => (e instanceof SweepError ? `dispositions failed (${e.kind}): ${e.message.replace(/\s+/g, ' ').slice(0, 200)}` : INTERNAL_LINE);
 
-async function runSweep(opts, { file, summaryFile }, { gh, now }, out) {
-  const { summary, file: full } = await sweep({ from: opts.from, to: opts.to, repo: opts.repo, generatedAt: new Date(now).toISOString() }, { gh });
+async function runSweep(opts, { file, summaryFile }, { gh, git, now, mainSha }, out) {
+  const input = { from: opts.from, to: opts.to, repo: opts.repo, generatedAt: new Date(now).toISOString(), mainRef: opts.mainRef, mainSha };
+  const { summary, file: full } = await sweep(input, { gh, git });
   writeJson(file, full);
   if (summaryFile !== null) writeJson(summaryFile, summary);
   out(opts.json ? JSON.stringify(summary, null, 1) : lineOf(summary));
   return gateOf(summary);
 }
+
+/** True when git names no repo (an injected git), or names the --repo of the sweep (case does not count on GitHub). */
+const historyFits = (git, repo) => typeof git.repo !== 'string' || git.repo.toLowerCase() === String(repo).toLowerCase();
 
 export async function main(argv, deps = {}) {
   const out = deps.stdout ?? ((s) => console.log(s));
@@ -733,8 +820,12 @@ export async function main(argv, deps = {}) {
   const now = (deps.now ?? Date.now)();
   const targets = parsed.error ? parsed : targetsOf(parsed.opts, deps.homedir ?? os.homedir(), now);
   if (targets.error) { err(`dispositions: ${targets.error}\n${USAGE}`); return 2; }
+  const git = deps.git ?? defaultGit;
+  if (!historyFits(git, parsed.opts.repo)) { err(`dispositions: --repo must be the repo whose history git reads (${git.repo})\n${USAGE}`); return 2; }
+  const mainSha = mainShaOf(git, parsed.opts.mainRef);
+  if (mainSha === null) { err(`dispositions: --main-ref does not name a commit in this checkout\n${USAGE}`); return 2; }
   try {
-    return await runSweep(parsed.opts, targets, { gh: deps.gh ?? defaultGh, now }, out);
+    return await runSweep(parsed.opts, targets, { gh: deps.gh ?? defaultGh, git, now, mainSha }, out);
   } catch (e) {
     err(failLine(e));
     return 1;
