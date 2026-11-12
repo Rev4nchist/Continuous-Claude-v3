@@ -14,6 +14,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import { assessTreeFreshness, formatStaleDistWarning } from './shared/dist-freshness.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface SessionStartInput {
   type?: 'startup' | 'resume' | 'clear' | 'compact';
@@ -380,6 +381,13 @@ async function main() {
     data = JSON.parse(input);
   } catch {
     console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under a Cursor host (the review engine): no output, no tldr warm, no lazy_tree.py run, no
+  // knowledge-tree.json in the reviewed tree.
+  if (isEngineHost(data)) {
+    console.log(JSON.stringify({}));
     return;
   }
 

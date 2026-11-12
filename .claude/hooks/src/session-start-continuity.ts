@@ -5,6 +5,7 @@ import { getProjectIdentity, isContentRelevantToProject } from './shared/project
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
 import { buildHandoffPointer, handoffSkipReason, selectSessionHandoff } from './shared/handoff-select.js';
 import { previousFromClear, readIdentity } from './shared/session-identity.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface SessionStartInput {
   type?: 'startup' | 'resume' | 'clear' | 'compact';  // Legacy field
@@ -504,6 +505,12 @@ async function main() {
     input = stdin ? JSON.parse(stdin) : { session_id: 'unknown', source: 'cli' };
   } catch (e) {
     input = { session_id: 'unknown', source: 'cli' };
+  }
+  // Under cursor-agent (the review engine): no text, no ledger prune, no memory recall (seat
+  // ruling, Tier B: continuity skips all). SessionStart text can reach the review model.
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 

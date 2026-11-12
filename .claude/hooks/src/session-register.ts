@@ -11,6 +11,7 @@
  */
 
 import { readFileSync } from 'fs';
+import { isEngineHost } from './shared/engine-host.js';
 import { registerSession, type LiveSession } from './shared/db-utils-pg.js';
 import { resolveSessionId, writeSessionId, canonicalProject } from './shared/session-id.js';
 import { initActivity } from './shared/session-activity.js';
@@ -152,6 +153,14 @@ export async function main(): Promise<void> {
   } catch {
     // If we can't read input, just continue silently
     console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under a Cursor host (the review engine) register nothing: no DB row, no identity, global id
+  // or activity file, no banner, no sessionTitle. Before the SessionEnd check: cursor sends
+  // camelCase 'sessionEnd', which that PascalCase check misses (finding F1).
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({}));
     return;
   }
 

@@ -1,21 +1,32 @@
 /**
- * Engine host = the hook runs under cursor-agent (the review engine), not under Claude Code.
+ * Engine host = the hook runs under a Cursor host (cursor-agent), not under Claude Code.
  *
- * Why: cursor-agent runs the global Claude hooks from ~/.claude/settings.json. A hook that adds
- * context to a Read or Grep call makes the read audit void the engine run (run d7e5b3f1, PR 523,
- * voided by epistemic-reminder). Three hooks call this and print `{}` when it is true:
- * epistemic-reminder, periodic-extract, tldr-read-enforcer.
+ * The helper matches ANY Cursor host that sends these event names, not only the review engine.
+ * The review engine is the reason it exists: cursor-agent runs the global Claude hooks from
+ * ~/.claude/settings.json, and a hook that adds context makes the read audit void the engine run
+ * (run d7e5b3f1, PR 523, voided by epistemic-reminder). SessionStart text can reach the review
+ * model with no trace in the audit, so the session hooks stay silent too.
+ *
+ * Callers print `{}` (identity-probe prints nothing) and return when it is true:
+ * epistemic-reminder, periodic-extract, tldr-read-enforcer (PR 529); session-register,
+ * session-start-init-check, session-start-memory-loaders, identity-probe, and the Tier B
+ * SessionStart hooks of card engine-run-hook-silence-2.
  *
  * Signal: the payload `hook_event_name`. cursor-agent sends camelCase names; Claude Code sends
- * PascalCase. Measured under cursor-agent 2026.11.11-b912975 on 2026-11-12, run d7e5b3f1
- * (sessionStart x12, postToolUse x52, sessionEnd x1).
+ * PascalCase only (headless baseline of card engine-run-hook-silence).
+ * - MEASURED under cursor-agent 2026.11.11-b912975 on 2026-11-12, run d7e5b3f1:
+ *   sessionStart (x12), postToolUse (x52), sessionEnd (x1).
+ * - BY CONVENTION, not measured: preToolUse (seat ruling 2, card engine-run-hook-silence-2). No
+ *   cursor-agent PreToolUse row was captured. It follows the camelCase form of the measured three.
+ *   It cannot cause a false positive in Claude Code, which never sends a camelCase name. If
+ *   cursor-agent sends another name, the entry matches nothing.
  *
  * Positive match on an exact, case-sensitive set. A "not PascalCase" test is unsafe: some Claude
  * Code payloads carry a null event. A false negative voids an engine run; a false positive drops a
- * reminder in a Claude Code session, so only proven names go in.
+ * reminder in a Claude Code session, so only measured or by-convention camelCase names go in.
  *
  * No env signal (CURSOR_INVOKED_AS, CCV3_BASH_GUARD): no run has shown that a hook process sees
- * one and a Claude Code hook process does not (seat ruling, answer 2). Add one only after the probe.
+ * one and a Claude Code hook process does not (seat ruling, answer 2). Add one only after a probe.
  *
  * Kept in its own module so one hook never imports another hook's source (see shared/unattended.ts).
  *
@@ -24,11 +35,9 @@
  * behaviour under the engine.
  */
 
-// 'preToolUse' is NOT in the set: the name is not proven (no measured cursor-agent PreToolUse row).
-// Until the probe proves it, the tldr-read-enforcer check is a no-op for a real PreToolUse event.
-const ENGINE_EVENT_NAMES: ReadonlySet<string> = new Set(['sessionStart', 'postToolUse', 'sessionEnd']);
+const ENGINE_EVENT_NAMES: ReadonlySet<string> = new Set(['sessionStart', 'postToolUse', 'sessionEnd', 'preToolUse']);
 
-/** True only when the payload event name is one cursor-agent was measured to send. Never throws. */
+/** True only when the payload event name is in the set (measured or by convention). Never throws. */
 export function isEngineHost(input: unknown): boolean {
   try {
     if (input === null || typeof input !== 'object') return false;

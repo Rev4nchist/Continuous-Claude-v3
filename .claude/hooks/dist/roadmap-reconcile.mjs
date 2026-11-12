@@ -375,6 +375,18 @@ function isCompactSource(source) {
   return source === COMPACT_SOURCE;
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/roadmap-reconcile.ts
 var PACKAGE_ALIASES = {
   "passport": ["passport", "passport.js"],
@@ -653,6 +665,15 @@ async function readStdin() {
 }
 async function main() {
   const input = await readStdin();
+  let payload = null;
+  try {
+    payload = JSON.parse(input);
+  } catch {
+  }
+  if (isEngineHost(payload)) {
+    console.log(JSON.stringify({}));
+    return;
+  }
   if (isCompactSource(parseSessionSource(input))) {
     console.log(JSON.stringify({}));
     return;

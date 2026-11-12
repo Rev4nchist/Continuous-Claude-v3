@@ -87,6 +87,7 @@ import { boardRoots, DEFAULT_BOARD, isHeadless, laneCliCmd, normalizeRoot, resol
 import { openDepSql } from './shared/lane-dep.js';
 import { bandTag, laneOrderSql } from './shared/lane-sort.js';
 import { resolveDbUrl } from './shared/pg-client.js';
+import { isEngineHost } from './shared/engine-host.js';
 import { label } from './shared/session-identity.js';
 
 /**
@@ -664,8 +665,16 @@ export async function deliverDirectMessages(
 
 // main() stays right after deliverDirectMessages on purpose: lane-context-dm.test.ts
 // slices the source between the two to prove the DM path never writes the watermark.
+// The engine-host check sits here, not in runLaneContext, so prompt-submit (which imports
+// runLaneContext) gets the same result as before.
 async function main(): Promise<void> {
-  const out = await runLaneContext(await readStdin());
+  const raw = await readStdin();
+  // Under cursor-agent (the review engine): no text, no lease UPDATE, no watermark write (seat
+  // ruling, Tier B). SessionStart and PostToolUse text can reach the review model.
+  let payload: unknown = null;
+  try { payload = JSON.parse(raw); } catch { /* invalid: runLaneContext answers {} */ }
+  if (isEngineHost(payload)) { process.stdout.write('{}'); return; }
+  const out = await runLaneContext(raw);
   if (out !== null) process.stdout.write(JSON.stringify(out));
 }
 

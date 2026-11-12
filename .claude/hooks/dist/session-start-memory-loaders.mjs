@@ -6346,18 +6346,42 @@ function healthAlertForSource(source, opts = {}) {
   }
 }
 
+// src/shared/engine-host.ts
+init_trace_boot();
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/session-start-memory-loaders.ts
+function parsePayload(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
 async function main() {
+  let stdinContent = "{}";
+  try {
+    stdinContent = readFileSync3(0, "utf-8");
+  } catch {
+  }
+  if (isEngineHost(parsePayload(stdinContent))) {
+    emitAndExit({});
+    return;
+  }
   const project = getProject();
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
   if (isClaudeHomeProject(project, homeDir)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
-  }
-  let stdinContent = "{}";
-  try {
-    stdinContent = readFileSync3(0, "utf-8");
-  } catch {
   }
   const source = parseSessionSource(stdinContent);
   const hooksDir = join7(homedir4(), ".claude", "hooks").replace(/\\/g, "/");

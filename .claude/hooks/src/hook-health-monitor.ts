@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { assessFileFreshness, loadBuildInputs } from './shared/dist-freshness.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 // ============================================
 // Types
@@ -277,6 +278,13 @@ async function main() {
     input = stdin ? JSON.parse(stdin) : { session_id: 'unknown' };
   } catch {
     input = { session_id: 'unknown' };
+  }
+
+  // Under cursor-agent (the review engine) print no report: SessionStart text can reach the
+  // review model (seat ruling, Tier B). The check only reads, so nothing is lost.
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
   }
 
   try {

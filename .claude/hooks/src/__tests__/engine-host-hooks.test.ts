@@ -15,7 +15,7 @@
  *  2. epistemic-reminder writes the session flag under the engine -> move the check after the flag write
  *  3. epistemic-reminder loses the reminder for Claude Code -> the helper matches 'PostToolUse'
  *  4. periodic-extract prints values.system under the engine -> remove its isEngineHost call
- *  5. periodic-extract touches the DB or writes state under the engine -> move the check after line 186
+ *  5. periodic-extract touches the DB or writes state under the engine -> move the check after touchSessionActivity
  *  6. periodic-extract loses the checkpoint for Claude Code -> the helper matches 'PostToolUse'
  *  7. tldr-read-enforcer denies for a Cursor-shaped payload -> remove its isEngineHost call
  *  8. tldr-read-enforcer stops denying for Claude Code -> the helper matches 'PreToolUse'
@@ -24,10 +24,10 @@
  * for a stub (daemon up, extract returns ten functions). The live daemon is never used, so the
  * test does not depend on whether a daemon runs on the machine.
  *
- * Design conflict (pinned below): tldr-read-enforcer is a PreToolUse hook. 'preToolUse' is not in
- * the helper's set because no run has proven that name. So for a real cursor-agent PreToolUse event
- * the new check is a no-op. The Cursor-shaped tldr test uses 'postToolUse', the only proven
- * camelCase tool-event name.
+ * tldr-read-enforcer is a PreToolUse hook. 'preToolUse' is in the helper's set BY CONVENTION, not
+ * measured (Claude Code sends PascalCase names only, so the name cannot give a false positive).
+ * The Cursor-shaped tldr test uses 'postToolUse', a measured camelCase tool-event name; the pin
+ * test below covers 'preToolUse'.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'child_process';
@@ -208,8 +208,13 @@ describe('tldr-read-enforcer (daemon answer injected by stub)', () => {
     expect(r.stdout.trim()).toBe('{}');
   }, T);
 
-  it('DESIGN CONFLICT pin: preToolUse (not proven) still denies; the check is a no-op until the probe proves the name', () => {
+  // Pin, changed by seat ruling 2 of card engine-run-hook-silence-2: 'preToolUse' is in the set BY
+  // CONVENTION, not measured (no cursor-agent PreToolUse row was ever captured; the measured names are
+  // sessionStart, postToolUse and sessionEnd). Claude Code sends PascalCase only (headless baseline),
+  // so the name cannot match a Claude Code event. A real camelCase PreToolUse event is now silent.
+  it('pin: preToolUse (by convention, not measured) prints {} and allows the Read', () => {
     const r = runHook('tldr-read-enforcer', cursorPayload('preToolUse', 'Read', sid('tl-pre'), read()));
-    expect(r.parsed?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe('{}');
   }, T);
 });
