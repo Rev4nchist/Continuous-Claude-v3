@@ -5,6 +5,7 @@
 // G1 "<fixed|addressed|resolved|done|applied> <in|by|with|via> [commit] <sha>" labels only when git proves the SHA: one commit,
 // an ancestor of the main ref, newer than the commit the finding was made on, and it changes the file of the finding. G2: the whole reply is one sentence of a closed list.
 // G1: the label means a trusted reply names a commit on main that changes the file; it does not mean the defect is gone.
+// The reply is read raw; no text is deleted before the grammar reads it.
 // Thumbs never label: the REST rollup does not say who reacted. An open finding is never negative.
 // Read-only: two paged `gh api` GET calls in all, and local git reads (rev-parse, merge-base, diff-tree); no fetch.
 // `gh` is injectable: async (args) => parsed JSON (as github.mjs). `git` is injectable: (args) => { status, stdout } (as read-audit.mjs).
@@ -31,31 +32,47 @@ export const VERDICT_OF = Object.freeze({ fixed: 'real', wrong: 'noise', wont_fi
 /** A bot's own "Addressed in commit" claim is not a label: no verdict. */
 export const verdictOf = (disposition, evidence) => (evidence === 'cr_marker' ? null : (VERDICT_OF[disposition] ?? null));
 
-// ---- clean text -----------------------------------------------------------------------------------------------------------------
+// ---- the reply as written (seat check of 61a8567c: no text is deleted before the grammar reads it) ------------------------------
 
-const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF]/g;
+// A line ends at CRLF, CR or LF: a lone CR too.
+const LINE_END = /\r\n|\r|\n/;
+// Four apostrophe forms, each folded to ': one character for one character, so the fold deletes nothing.
 const APOSTROPHES = /[\u2018\u2019\u00B4\u02BC]/g;
-// GFM strike-through with one or two tildes, on one line, with no space inside either edge.
-const STRUCK = /(~~?)(?=[^\s~])[^~\n]*?[^\s~]\1/g;
-// An open or close tag of <del>, <s> or <strike>, attributes allowed. Bounded: it stops at the next < or >.
-const STRIKE_TAG = /<(\/?)(del|s|strike)\b[^<>\n]{0,200}>/gi;
+// Zero-width and control characters other than the line ends: C0 but LF and CR (a tab inside the text counts), DEL, C1, the soft
+// hyphen, the zero-width and direction marks, the line and paragraph separators, the invisible operators and the byte-order mark.
+const CONTROL = /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/;
+const CONTROL_ALL = new RegExp(CONTROL.source, 'g');
+// A blank line holds only spaces and tabs. An indented line starts with a space or a tab (a line of spaces only too).
+const BLANK = /^[ \t]*$/;
+const INDENTED = /^[ \t]/;
 
-/** The line with each <del|s|strike> ... </same> run cut out; inner tags are kept inside the run. One pass: linear. */
-function cutStrikeTags(line) {
-  let out = '';
-  let at = 0;
-  let open = null;
-  for (const m of line.matchAll(STRIKE_TAG)) {
-    const name = m[2].toLowerCase();
-    if (open === null && m[1] === '') open = { name, start: m.index };
-    else if (open !== null && m[1] === '/' && name === open.name) {
-      out += `${line.slice(at, open.start)} `;
-      at = m.index + m[0].length;
-      open = null;
-    }
-  }
-  return out + line.slice(at);
+/** The lines of the raw reply: split at CRLF, CR or LF. */
+const linesOf = (text) => String(text ?? '').split(LINE_END);
+/** True for an ASCII space, a tab or a line end: the only characters the trim takes. */
+const isEdge = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r';
+
+/** The text with ASCII space, tab and line ends cut at both ends (String.trim also cuts U+FEFF and U+2028). Index loops: linear. */
+function trimEnds(s) {
+  let a = 0;
+  let b = s.length;
+  while (a < b && isEdge(s[a])) a += 1;
+  while (b > a && isEdge(s[b - 1])) b -= 1;
+  return s.slice(a, b);
 }
+
+/** The reply with LF line ends, the four apostrophe forms folded to ', and the two ends trimmed. It deletes nothing else. */
+export function cleanReply(text) {
+  return trimEnds(linesOf(text).join('\n').replace(APOSTROPHES, "'"));
+}
+
+/** Read on the raw lines, before the trim. any: a line is indented. lead: the first line that is not blank is indented. */
+function indentOf(text) {
+  const lines = linesOf(text);
+  const first = lines.find((line) => !BLANK.test(line)) ?? '';
+  return { any: lines.some((line) => INDENTED.test(line)), lead: INDENTED.test(first) };
+}
+
+// ---- the bot body: fenced blocks (parseMarker only; a human reply is read raw) ------------------------------------------------
 
 // A fence line as CommonMark reads it: up to three spaces, then three or more backticks or tildes, then the info text.
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
@@ -70,7 +87,7 @@ function fenceOf(line) {
 /** True when fence f closes the open fence: the same mark, at least as long, and no info text. */
 const closesFence = (f, open) => f !== null && f.char === open.char && f.size >= open.size && /^[ \t]*$/.test(f.info);
 
-/** The lines outside fenced blocks (``` and ~~~); each block, fence lines too, leaves one blank line. An unclosed fence drops the rest. */
+/** The lines of a bot body outside fenced blocks (``` and ~~~); each block leaves one blank line. An unclosed fence drops the rest. */
 function dropFences(text) {
   const keep = [];
   let open = null;
@@ -84,44 +101,6 @@ function dropFences(text) {
     } else keep.push(line);
   }
   return keep;
-}
-
-// Block rules read the raw line (before the zero-width strip): only spaces and tabs count as blank or as indent.
-const BLANK = /^[ \t]*$/;
-const QUOTE = /^ {0,3}>/;
-const INDENTED = /^(?: {4}| {0,3}\t)/;
-
-/**
- * The lines GitHub shows outside a quote or an indented code block. A quote runs from a > line to the next blank line (its
- * lazy lines too). A code line is indented by four spaces or a tab, at the start, after a blank line or after a code line.
- */
-function dropBlocks(lines) {
-  const keep = [];
-  let quote = false;
-  let code = false;
-  let blank = true;
-  for (const line of lines) {
-    if (BLANK.test(line)) {
-      keep.push(line);
-      quote = false;
-      blank = true;
-      continue;
-    }
-    if (QUOTE.test(line)) quote = true;
-    code = !quote && INDENTED.test(line) && (blank || code);
-    if (!quote && !code) keep.push(line);
-    blank = false;
-  }
-  return keep;
-}
-
-/**
- * Fenced blocks, quotes and indented code dropped (read on the raw lines, as GitHub reads them); then in each kept line the
- * zero-width characters out, four apostrophe forms folded to ', and struck text dropped.
- */
-export function cleanReply(text) {
-  const fold = (line) => line.replace(ZERO_WIDTH, '').replace(APOSTROPHES, "'");
-  return dropBlocks(dropFences(String(text ?? ''))).map((line) => cutStrikeTags(fold(line)).replace(STRUCK, ' ')).join('\n');
 }
 
 // ---- the closed grammar (seat check of d0bc9b6f; a new form needs the seat's word) -------------------------------------------
@@ -138,51 +117,57 @@ const EVIDENCE_OF = Object.freeze({ fixed: 'reply_no_sha', wont_fix: 'reply_wont
 const G2_LABEL = new Map(['fixed', 'wont_fix', 'wrong'].flatMap((d) => GRAMMAR[d].map((s) => [s, d])));
 const COURTESY = new Set(GRAMMAR.courtesy);
 
-// G1, anchored: a start word, a link word, an optional "commit", then 7 to 40 hex, bare or in one pair of backticks, with a clean end.
-// No nested quantifier: one attempt at index 0, at most 34 steps back on the hex run.
-const G1 = new RegExp(`^(?:${GRAMMAR.start.join('|')})[ \\t]+(?:${GRAMMAR.link.join('|')})[ \\t]+(?:commit[ \\t]+)?(?:\`([0-9a-f]{7,40})\`|([0-9a-f]{7,40}))(?![\\w/-])`, 'i');
+// G1, anchored: a start word, a link word, an optional "commit", then 7 to 40 hex, bare or in one pair of backticks. No look-ahead:
+// SHA_END decides what may follow. No nested quantifier: one attempt at index 0, and the hex run is greedy with nothing after it.
+const G1 = new RegExp(`^(?:${GRAMMAR.start.join('|')})[ \\t]+(?:${GRAMMAR.link.join('|')})[ \\t]+(?:commit[ \\t]+)?(?:\`([0-9a-f]{7,40})\`|([0-9a-f]{7,40}))`, 'i');
 // & is markup: an HTML entity such as &#63; shows as another character on GitHub.
 const MARKUP = /[`<>~*_&]/;
 const MARKUP_ALL = new RegExp(MARKUP.source, 'g');
-// Every question mark GitHub can show: ASCII, inverted, Greek, Arabic, interrobang, double forms, reversed, small, fullwidth.
-const ASK = /[?\u00BF\u037E\u061F\u203D\u2047-\u2049\u2E2E\uFE56\uFF1F]/;
+// Every question mark GitHub can show: ASCII, inverted, Greek, Arabic, interrobang, double forms, the two emoji forms, reversed,
+// small, fullwidth.
+const ASK = /[?\u00BF\u037E\u061F\u203D\u2047-\u2049\u2753\u2754\u2E2E\uFE56\uFF1F]/;
 // What may follow the SHA token: the end, white space, a comma, a semicolon, a closing parenthesis, a . or ! that ends the
-// sentence, or a colon before white space or the end (seat ruling of 2026-11-12). Anything else (^, .., :path, :sha, @, =)
-// makes the token a revision expression, a range or a path, not one commit.
+// sentence, or a colon before white space or the end (seat ruling of 2026-11-12). Anything else (a hex digit, a letter, /, -,
+// ^, .., :path, :sha, @, =) makes the token a longer run, a revision expression, a range or a path, not one commit.
 const SHA_END = /^(?:$|[\s,;)]|[.!](?:\s|$)|:(?:\s|$))/;
 
-/** The text up to the first . or ! before white space or the end, or up to the first line break. A comma or ; does not end it. */
+/**
+ * The text up to the first . or ! before an ASCII space, a tab, a line end or the end, or up to the first line break. A comma
+ * or ; does not end it, and no character GitHub does not show (U+FEFF, U+2028) ends it.
+ */
 function firstSentence(text) {
   for (let i = 0; i < text.length; i += 1) {
     const c = text[i];
     if (c === '\n') return text.slice(0, i);
-    if ((c === '.' || c === '!') && (i + 1 === text.length || /\s/.test(text[i + 1]))) return text.slice(0, i + 1);
+    if ((c === '.' || c === '!') && (i + 1 === text.length || isEdge(text[i + 1]))) return text.slice(0, i + 1);
   }
   return text;
 }
 
 const EXTRA = Object.freeze({ form: null, reason: 'reply_extra_text' });
+/** The text with markup and control characters out: used only to pick the reason of a reply that does not label. */
+const bareOf = (text) => text.replace(MARKUP_ALL, '').replace(CONTROL_ALL, '');
 
 /**
- * G1 on the cleaned text: { form: 'g1', sha }, EXTRA (a G1 start with a ? or markup in the first sentence, or a SHA token
- * that does not end cleanly), or null.
+ * G1 on the cleaned text: { form: 'g1', sha }, EXTRA (a G1 start with a control character anywhere in the first sentence, a ?
+ * or markup after the SHA, or a SHA token that does not end cleanly), or null.
  */
 function g1Of(text) {
   const first = firstSentence(text);
   const m = G1.exec(first);
-  if (!m) return G1.test(firstSentence(text.replace(MARKUP_ALL, ''))) ? EXTRA : null;
+  if (!m) return G1.test(firstSentence(bareOf(text))) ? EXTRA : null;
   const rest = first.slice(m[0].length);
-  return MARKUP.test(rest) || ASK.test(rest) || !SHA_END.test(rest) ? EXTRA : { form: 'g1', sha: (m[1] ?? m[2]).toLowerCase() };
+  return CONTROL.test(first) || MARKUP.test(rest) || ASK.test(rest) || !SHA_END.test(rest) ? EXTRA : { form: 'g1', sha: (m[1] ?? m[2]).toLowerCase() };
 }
 
-/** Lower case, trim, one final . or ! cut. */
-const normal = (s) => s.toLowerCase().trim().replace(/[.!]$/, '');
-/** The G2 sentences: cut at a line break and after . or ! before white space; empty ones dropped. Linear. */
+/** Lower case, ASCII trim, one final . or ! cut. */
+const normal = (s) => trimEnds(s.toLowerCase()).replace(/[.!]$/, '');
+/** The G2 sentences: cut at a line break and after . or ! before spaces or tabs; empty ones dropped. Linear. */
 const partsOf = (text) => text.split(/\n|(?<=[.!])[ \t]+/).map(normal).filter(Boolean);
 
 /** G2: { form: 'g2', disposition, evidence } for exactly one list sentence plus courtesy, { form: 'courtesy' }, or null. */
 function g2Of(text) {
-  if (MARKUP.test(text)) return null;
+  if (MARKUP.test(text) || CONTROL.test(text)) return null;
   const parts = partsOf(text);
   const rest = parts.filter((p) => !COURTESY.has(p));
   if (parts.length > 0 && rest.length === 0) return { form: 'courtesy' };
@@ -191,21 +176,23 @@ function g2Of(text) {
   return { form: 'g2', disposition, evidence: EVIDENCE_OF[disposition] };
 }
 
-/** True when the reply, markup taken out and leading courtesy skipped, starts with a G2 list sentence. */
+/** True when the reply, markup and control characters taken out and leading courtesy skipped, starts with a G2 list sentence. */
 function startsG2(text) {
-  const head = partsOf(text.replace(MARKUP_ALL, '')).find((p) => !COURTESY.has(p));
+  const head = partsOf(bareOf(text)).find((p) => !COURTESY.has(p));
   return head !== undefined && G2_LABEL.has(head);
 }
 
 /**
  * What the words of one reply say: { form: 'g1', sha } (git decides), { form: 'g2', disposition, evidence },
- * { form: 'courtesy' }, or { form: null, reason: 'reply_extra_text' | 'reply_unmatched' }.
+ * { form: 'courtesy' }, or { form: null, reason: 'reply_extra_text' | 'reply_unmatched' }. G1 reads the first sentence and
+ * needs a first line with no indent; G2 reads the whole reply and needs no indented line, no markup and no control character.
  */
 export function parseReply(text) {
-  const clean = cleanReply(text).trim();
+  const clean = cleanReply(text);
+  const indent = indentOf(text);
   const g1 = g1Of(clean);
-  if (g1) return { ...g1 };
-  const g2 = g2Of(clean);
+  if (g1) return indent.lead ? { ...EXTRA } : { ...g1 };
+  const g2 = indent.any ? null : g2Of(clean);
   if (g2) return g2;
   return { form: null, reason: startsG2(clean) ? 'reply_extra_text' : 'reply_unmatched' };
 }
@@ -628,9 +615,9 @@ export function rulesVersionOf(parts) {
 
 /** Every part that decides a label: the grammar lists, the patterns, and the source text of each label function. */
 export const VERSION_PARTS = Object.freeze([
-  GRAMMAR, EVIDENCE_OF, G2_LABEL, COURTESY, G1, MARKUP, MARKUP_ALL, ASK, SHA_END, EXTRA, UNKNOWN, NOT_NEWER, ZERO_WIDTH, APOSTROPHES, STRUCK, STRIKE_TAG, FENCE, BLANK, QUOTE, INDENTED,
+  GRAMMAR, EVIDENCE_OF, G2_LABEL, COURTESY, G1, MARKUP, MARKUP_ALL, ASK, SHA_END, EXTRA, UNKNOWN, NOT_NEWER, LINE_END, APOSTROPHES, CONTROL, CONTROL_ALL, BLANK, INDENTED, FENCE,
   FULL_SHA, SHORT_SHA, MAIN_REF, SHA_WHOLE, MARKER, HEX40, CODERABBIT_LOGIN, DEFAULT_REPO, DEFAULT_MAIN_REF, VERDICT_OF, TRUSTED_ASSOCIATIONS, GIT_MOVES,
-  cutStrikeTags, fenceOf, closesFence, dropFences, dropBlocks, cleanReply, firstSentence, g1Of, normal, partsOf, g2Of, startsG2, parseReply,
+  linesOf, isEdge, trimEnds, cleanReply, indentOf, fenceOf, closesFence, dropFences, firstSentence, bareOf, g1Of, normal, partsOf, g2Of, startsG2, parseReply,
   tryGit, gitStatus, notNewer, mainShaOf, shaEvidence, memoGit, gitEnvOf, defaultGit, parseMarker, verdictOf, authorKind, isCodeRabbitUser, trustedSet, count, thumbsOf, prOf,
   byTime, result, thumbsReason, outcomeOf, readThread, decide, isRoot, isRootShape, replyCounts, repliesByParent, recordOf, findingsForPr,
   groupByPr, strayEntry, isOpenPr, collect, sweep,

@@ -12,7 +12,9 @@
 //  F12 a marker loses to a thumbs-down               -> check thumbs before the marker
 //  F13 a marker beats a human reply                  -> check the marker before the trusted replies
 //  F15 an untrusted human reply labels               -> treat every human as trusted
-//  F16 quoted or fenced text is read                 -> drop the quote and fence filter in cleanReply
+//  F16 a cleaner deletes text the grammar never reads -> put a quote, fence, strike or zero-width drop back into cleanReply
+//  N1 to N4 (seat check of 61a8567c): the reply is read raw; a lone CR ends a line; a control character, a quote, a fence or an
+//      indented line gives no G2; an indented first line or a control character in the first sentence gives no G1
 //  F18 an outdated thread gets a label               -> let line == null decide
 //  F19 an open finding turns negative                -> map no_signal to a disposition
 //  F20 unmerged PRs count in the denominator         -> drop the merged_at filter
@@ -260,7 +262,7 @@ const CORPUS = [
   ['No follow-up needed', U], ['not out of scope', U], ['Is this out of scope?', U], ['Will you wontfix this?', U], ['done? no', U],
   ['applied to another file', U], ['Fixed in a1b2c3d? No', U], ['Was this done? Not yet', U], ['Done? No.', U], ['Fixed? Not really.', U],
   ['Nothing done yet', U], ['If applied, this would break the build', U], ["I'm done reviewing", U], ['not fixed', U], ['Is it fixed?', U],
-  ['Fixed; out of scope for the rest', U], ['wontfix', W], ['Fi\u200Bxed', F], ['Addressed in commit deadbeef', G], ['Addressed in commit a1b2c3d', G],
+  ['Fixed; out of scope for the rest', U], ['wontfix', W], ['Fi\u200Bxed', U],['Addressed in commit deadbeef', G], ['Addressed in commit a1b2c3d', G],
   ['not fixed yet', U], ['will be fixed in a1b2c3d', U], ['Is this fixed?', U], ['Not fixed', U], ['Will fix later', U],
   ["I don't think this is wrong", U], ['not a false positive', U], ['Is it a false positive?', U], ['This is a false-positive? No, real.', U],
   ["You're right, this is incorrect.", U], ["Good catch, it doesn't apply the limit there", U], ['Good catch, that is wrong', U],
@@ -352,6 +354,12 @@ const CORPUS = [
   ['Fixed in a1b2c3d, maybe', S], ['Fixed in a1b2c3d, then reverted in b2c3d4e', S], ['Addressed in commit a1b2c3d is what the bot claims; still broken.', S],
   // Seat ruling of 2026-11-12: a colon and white space after the SHA ends the token; a colon and any other character does not.
   ['Fixed in a1b2c3d: moved the guard up.', G], ['Fixed in a1b2c3d:src/a.js', U],
+  // Seat check of 61a8567c (N1 to N6): the reply is read raw. Each row below labeled before, because a cleaner deleted text.
+  // A: a list line right after a quote line takes the G2 sentence back. B: a question mark between two pairs of tildes is shown.
+  // C: a lone CR ends a line. Then an indented line, a lazy quote line, an indented G1 line and the U+2754 question mark.
+  ['False positive.\n> the bot says the guard is missing\n- not a false positive after all, my mistake', U], ['Done ~~?~~', U],
+  ['False positive.\n> the guard is missing\r\rNo, the bug is real.', U], ['False positive.\n\n    No, the bug is real.', U],
+  ['False positive.\n> quoted line\nNot really, it is real.', U], ['  Fixed in a1b2c3d', U], ['Fixed in a1b2c3d \u2754', U],
 ];
 
 describe('T1 corpus of both review rounds', () => {
@@ -434,7 +442,7 @@ describe('T2 grammar forms', () => {
   test('T2 G1 is anchored at the start of the cleaned reply', () => {
     // Breaks when: the ^ anchor is dropped (a fix phrase inside a sentence would label).
     for (const t of ['Yes. Fixed in a1b2c3d', 'I fixed in a1b2c3d', 'Not fixed in a1b2c3d', 'Was this fixed in a1b2c3d']) assert.deepEqual(parseReply(t), NONE('reply_unmatched'), t);
-    assert.deepEqual(parseReply('\n\n  Fixed in a1b2c3d'), G1_FORM('a1b2c3d'));
+    assert.deepEqual(parseReply('\n\nFixed in a1b2c3d'), G1_FORM('a1b2c3d'));
   });
 
   test('T2 G1 refuses a question mark (ASCII or fullwidth) or a markup character in the first sentence', () => {
@@ -459,14 +467,14 @@ describe('T2 grammar forms', () => {
       'Fixed in a1b2c3d.b', 'Fixed in a1b2c3d=', "Fixed in a1b2c3d'", 'Fixed in a1b2c3d~1', 'Fixed in `a1b2c3d`^']) {
       assert.deepEqual(parseReply(t), NONE('reply_extra_text'), t);
     }
-    for (const t of ['Fixed in a1b2c3d', 'Fixed in a1b2c3d.', 'Fixed in a1b2c3d!', 'Fixed in a1b2c3d (x)', 'Fixed in a1b2c3d)', 'Fixed in a1b2c3d\tok', 'Fixed in a1b2c3d.\nNo.', 'Fixed in `a1b2c3d`.']) {
+    for (const t of ['Fixed in a1b2c3d', 'Fixed in a1b2c3d.', 'Fixed in a1b2c3d!', 'Fixed in a1b2c3d (x)', 'Fixed in a1b2c3d)', 'Fixed in a1b2c3d.\nNo.', 'Fixed in `a1b2c3d`.']) {
       assert.deepEqual(parseReply(t), G1_FORM('a1b2c3d'), t);
     }
   });
 
   test('T2 G1 a colon then white space or the end of the first sentence ends the SHA: it labels when git proves it', () => {
     // Breaks when: the colon form leaves SHA_END (seat ruling of 2026-11-12), or it needs more than white space or the end after it.
-    for (const t of ['Fixed in a1b2c3d: moved the guard up', 'Fixed in a1b2c3d:\tok', 'Fixed in a1b2c3d:', 'Fixed in a1b2c3d:\nmore text', 'Fixed in `a1b2c3d`: moved it']) {
+    for (const t of ['Fixed in a1b2c3d: moved the guard up', 'Fixed in a1b2c3d: ok', 'Fixed in a1b2c3d:', 'Fixed in a1b2c3d:\nmore text', 'Fixed in `a1b2c3d`: moved it']) {
       assert.deepEqual(parseReply(t), G1_FORM('a1b2c3d'), JSON.stringify(t));
     }
     const d = decideBodies(['Fixed in a1b2c3d: moved the guard up']);
@@ -499,9 +507,11 @@ describe('T2 grammar forms', () => {
   for (const [entry, disposition] of LISTS) {
     test(`T2 G2 "${entry}" gives ${disposition}; "${entry} here" does not`, () => {
       // Breaks when: the entry leaves its list or moves to another, or the compare is not on the whole reply.
-      for (const t of [entry, cap(entry), `${cap(entry)}.`, `${cap(entry)}!`, `  ${entry.toUpperCase()}  `]) assert.deepEqual(parseReply(t), G2_FORM(disposition), t);
+      for (const t of [entry, cap(entry), `${cap(entry)}.`, `${cap(entry)}!`, `\r\n${entry.toUpperCase()} \t\n`]) assert.deepEqual(parseReply(t), G2_FORM(disposition), t);
       assert.deepEqual(brief(decideBodies([`${cap(entry)}.`])), [disposition, G2_FORM(disposition).evidence, null]);
       assert.equal(parseReply(`${entry} here`).form, null);
+      // N2: an indented line is no G2; the reply starts with a G2 form, so the reason is reply_extra_text.
+      assert.deepEqual(parseReply(`  ${entry.toUpperCase()}  `), NONE('reply_extra_text'));
     });
   }
 
@@ -545,74 +555,131 @@ describe('T2 grammar forms', () => {
   });
 });
 
-// ---- cleaning ---------------------------------------------------------------------------------------------------------------
+// ---- N1 to N4: the reply is read raw (seat check of 61a8567c) ---------------------------------------------------------------
 
-describe('cleanReply', () => {
-  test('F16 quoted lines and fenced blocks are not read', () => {
-    // Breaks when: cleanReply keeps quoted lines or fenced code.
-    assert.equal(cleanReply('a\n> b\n```\nc\n```\nd'), 'a\n\nd');
-    assert.deepEqual(parseReply("> won't fix\n\nFixed in a1b2c3d"), G1_FORM('a1b2c3d'));
-    assert.deepEqual(parseReply("```\nwon't fix\n```\nDone"), G2_FORM('fixed'));
-    assert.deepEqual(parseReply('> Fixed in a1b2c3d\nwhy?'), NONE('reply_unmatched'));
+describe('N1 to N4 the reply is read raw', () => {
+  test('N1 cleanReply ends a line at CRLF, CR or LF and trims ASCII space, tab and line ends at both ends', () => {
+    // Breaks when: a lone CR stays inside a line, or the trim takes more or less than space, tab and line ends (a Unicode trim deletes U+FEFF).
+    assert.equal(cleanReply('a\r\nb\rc\nd\r\re'), 'a\nb\nc\nd\n\ne');
+    assert.equal(cleanReply(' \t\r\n a \t\r\n\r '), 'a');
+    assert.equal(cleanReply('\uFEFF\u00A0a\u00A0\u200B'), '\uFEFF\u00A0a\u00A0\u200B');
+    for (const v of [undefined, null, '']) assert.equal(cleanReply(v), '');
   });
 
-  test('a quoted paragraph runs on to the next blank line or fence: its lazy lines are not read', () => {
-    // Breaks when: only the > line is dropped (GitHub shows the next line inside the quote, but G1 or G2 reads it).
-    for (const t of ['> quoted text\nFixed in a1b2c3d', "> won't fix\nFixed in a1b2c3d"]) assert.deepEqual(parseReply(t), NONE('reply_unmatched'), t);
-    assert.deepEqual(parseReply('Thanks!\n> quote\nFalse positive'), { form: 'courtesy' });
-    assert.deepEqual(brief(decideBodies(['Thanks!\n> quote\nFalse positive'])), ['unlabeled', null, 'reply_unmatched']);
-    assert.equal(cleanReply('a\n> b\nc\n\nd'), 'a\n\nd');
-    assert.deepEqual(parseReply('> q\n\nFixed in a1b2c3d'), G1_FORM('a1b2c3d'));
-    assert.deepEqual(parseReply('> q\n```\nx\n```\nDone'), G2_FORM('fixed'));
-    assert.deepEqual(brief(decideBodies(['> quoted text\nFixed in a1b2c3d'])), ['unlabeled', null, 'reply_unmatched']);
+  test('F16 N1 cleanReply deletes nothing: quotes, fences, indented code, strike-through, tags, comments and zero-width characters stay', () => {
+    // Breaks when: a drop or a strip of text comes back into cleanReply (unread text could change what the reply means).
+    const body = 'a\n> b\nlazy\n```\nc\n```\n~~~\nd\n~~~\n\n    code\n\tcode\n~~e~~ ~f~ <del>g</del> <s>h</s> <strike>i</strike> <!-- j --> Fi\u200Bxed\u2060 \uFEFFk\u00AD';
+    assert.equal(cleanReply(body), body);
   });
 
-  test('a quote ends only at a raw line of spaces and tabs: a zero-width or no-break space line is quote text', () => {
-    // Breaks when: the blank test runs after the zero-width strip, or takes any white space (\s holds U+00A0 and U+FEFF).
-    for (const t of ['> q\n\u200B\nFixed in a1b2c3d', '> q\n\u00A0\nFixed in a1b2c3d', '> q\n\uFEFF\nFixed in a1b2c3d']) assert.deepEqual(parseReply(t), NONE('reply_unmatched'), JSON.stringify(t));
-    assert.deepEqual(parseReply('> q\n \t\nFixed in a1b2c3d'), G1_FORM('a1b2c3d'));
+  test('N1 the apostrophe fold maps one character to one character: it deletes nothing', () => {
+    // Breaks when: an apostrophe form leaves the fold, or the fold changes the length of the reply.
+    const t = 'won\u2018t won\u2019t won\u00B4t won\u02BCt';
+    assert.equal(cleanReply(t), "won't won't won't won't");
+    assert.equal(cleanReply(t).length, t.length);
   });
 
-  test('a fence is a CommonMark fence: up to three spaces, no backtick in a backtick info string, a close as long and with no info', () => {
-    // Breaks when: fenceOf takes any indent or any line with three marks, or a close may be shorter or hold text (GitHub shows
-    // the lines as prose or as code, and the reply would be read the other way).
-    for (const t of ['> q\n``` ```\nFixed in a1b2c3d', '> q\n    ```\nx\n    ```\nFixed in a1b2c3d', '~~~ x ~~~\nFixed in a1b2c3d', '```\n``` x\nFixed in a1b2c3d\n```',
-      '````\n```\nFixed in a1b2c3d\n````', '\u200B```\nx\n```\nFixed in a1b2c3d']) {
-      assert.notEqual(parseReply(t).form, 'g1', JSON.stringify(t));
+  test('N1 a lone CR is a line end for G1 and G2', () => {
+    // Breaks when: the line split takes CRLF and LF only (a lone CR would join two lines into one sentence).
+    assert.deepEqual(parseReply('Fixed in a1b2c3d\rNot yet?'), G1_FORM('a1b2c3d'));
+    assert.deepEqual(parseReply('Thanks.\rDone.'), G2_FORM('fixed'));
+    assert.deepEqual(parseReply('Done.\rNot yet.'), NONE('reply_extra_text'));
+  });
+
+  test('N2 G2 reads the whole reply: a quote, a fence, strike-through, a tag or a comment anywhere gives no G2', () => {
+    // Breaks when: the markup check of G2 is dropped, or a deleted cleaner comes back (each of these labeled before).
+    const extra = ["```\nwon't fix\n```\nDone", 'Done.\n> not yet', 'Done.\n```\nnot yet\n```', 'Done.\n~~~\nnot yet\n~~~', 'Done. ~~not yet~~', 'Done. <del>not yet</del>',
+      'Done. <!-- not yet -->', '\u200B    Done.'];
+    for (const t of extra) assert.deepEqual(parseReply(t), NONE('reply_extra_text'), JSON.stringify(t));
+    for (const t of ["~~Won't fix~~ Done", "<del>Won't fix</del> Done", 'Thanks!\n> quote\nFalse positive', '> q\n```\nx\n```\nDone', '<del class="x">Fixed in <b>a1b2c3d</b></del>']) {
+      assert.deepEqual(parseReply(t), NONE('reply_unmatched'), JSON.stringify(t));
     }
-    assert.deepEqual(parseReply('Done.\n``` not yet ```'), NONE('reply_extra_text'));
-    assert.deepEqual(parseReply('Done.\n    ```\nNot yet\n    ```'), NONE('reply_extra_text'));
-    assert.deepEqual(parseReply('   ```\nx\n   ```\nDone'), G2_FORM('fixed'));
-    assert.deepEqual(parseReply('```js\nx\n```  \nDone'), G2_FORM('fixed'));
+    assert.deepEqual(brief(decideBodies(['Thanks!\n> quote\nFalse positive'])), ['unlabeled', null, 'reply_unmatched']);
   });
 
-  test('an indented code block (four spaces or a tab, at the start, after a blank line or after a fence) is not read', () => {
-    // Breaks when: the indented-code drop is missing (trim would lift the code block into the reply) or it takes an indented paragraph line.
-    const code = ['    Addressed in commit a1b2c3d', '\tFixed in a1b2c3d', '  \tFixed in a1b2c3d', '    False positive', '\n    Done.', 'Thanks.\n\n    Fixed in a1b2c3d',
-      'Thanks!\n```\nx\n```\n    False positive', '    x\n    Done.'];
-    for (const t of code) assert.ok(['reply_unmatched', undefined].includes(parseReply(t).reason) && !['g1', 'g2'].includes(parseReply(t).form), JSON.stringify(t));
-    assert.deepEqual(brief(decideBodies(['    False positive'])), ['unlabeled', null, 'reply_unmatched']);
-    assert.deepEqual(brief(decideBodies(['    Fixed in a1b2c3d'])), ['unlabeled', null, 'reply_unmatched']);
-    assert.equal(cleanReply('a\n\n    code\n    more\n\n    again\nb\n    lazy'), 'a\n\n\nb\n    lazy');
-    for (const t of ['   Fixed in a1b2c3d', '\n\n  Fixed in a1b2c3d']) assert.deepEqual(parseReply(t), G1_FORM('a1b2c3d'), t);
-    assert.deepEqual(parseReply('   False positive'), G2_FORM('wrong'));
-    // A zero-width space before the indent makes a paragraph line: GitHub shows "Done." as prose, so it reads as prose.
-    assert.deepEqual(parseReply('\u200B    Done.'), G2_FORM('fixed'));
+  test('N2 a zero-width or control character anywhere gives no G2', () => {
+    // Breaks when: the control class leaves the G2 check or loses a range (with a tab the sentence cut reads past it and G2 labels).
+    const marks = ['\u0000', '\u0007', '\t', '\u000B', '\u000C', '\u001F', '\u007F', '\u0085', '\u009F', '\u00AD', '\u200B', '\u200F', '\u2028', '\u2029', '\u202E', '\u2060', '\u2064',
+      '\u2066', '\u206F', '\uFEFF'];
+    for (const m of marks) assert.deepEqual(parseReply(`Done.${m} Thanks.`), NONE('reply_extra_text'), JSON.stringify(m));
+    for (const t of ['\uFEFFDone.', 'Done.\u2028', 'Fi\u200Bxed', 'False positive\t.']) assert.deepEqual(parseReply(t), NONE('reply_extra_text'), JSON.stringify(t));
+    // The tab taken out joins the two sentences, so the reason is reply_unmatched; without the check G2 would split at the tab.
+    assert.deepEqual(parseReply('Done.\tThanks.'), NONE('reply_unmatched'));
+    // A line end is no control character.
+    assert.deepEqual(parseReply('Done.\r\nThanks.'), G2_FORM('fixed'));
   });
 
-  test('R10 tilde fences and struck-through text are not read', () => {
-    // Breaks when: cleanReply keeps a ~~~ fence or ~~struck~~ or <del> text.
-    assert.equal(cleanReply('a\n~~~\nb\n~~~\nc'), 'a\n\nc');
-    assert.equal(cleanReply('a\n~~~ js\nb\n```\nc\n~~~\nd'), 'a\n\nd');
-    assert.deepEqual(parseReply("~~Won't fix~~ Done"), G2_FORM('fixed'));
-    assert.deepEqual(parseReply("<del>Won't fix</del> Done"), G2_FORM('fixed'));
-    assert.deepEqual(parseReply('~~Fixed in a1b2c3d~~'), NONE('reply_unmatched'));
-    assert.deepEqual(parseReply('<del class="x">Fixed in <b>a1b2c3d</b></del>'), NONE('reply_unmatched'));
+  test('N2 an indented line anywhere gives no G2, a line of spaces only too', () => {
+    // Breaks when: the indent check reads the trimmed reply (the first indent would vanish) or skips a later line.
+    for (const t of ['  Done.', '\tDone.', '   False positive', 'Done.\n    Thanks.', 'False positive.\n\n    No, the bug is real.', 'Done.\n\tok', 'Done.\n  ', ' \nDone.', '\r\n  Done.']) {
+      assert.deepEqual(parseReply(t), NONE('reply_extra_text'), JSON.stringify(t));
+    }
+    assert.deepEqual(parseReply('  Thanks!'), NONE('reply_unmatched'));
+    assert.deepEqual(brief(decideBodies(['    False positive'])), ['unlabeled', null, 'reply_extra_text']);
+    assert.deepEqual(parseReply('\n\nDone.\r\n\r\n'), G2_FORM('fixed'));
   });
 
-  test('a zero-width character and the four apostrophe forms are folded', () => {
-    // Breaks when: the zero-width strip or an apostrophe fold is dropped from cleanReply.
-    assert.equal(cleanReply('Fi\u200Bxed won\u2018t won\u2019t won\u00B4t won\u02BCt'), "Fixed won't won't won't won't");
+  test('N2 N6 the inputs A, B and C of the seat check and a lazy quote are unlabeled with the right reason', () => {
+    // Breaks when: a quote run, a strike strip or a CR-blind line split comes back (each of these labeled before).
+    const A = 'False positive.\n> the bot says the guard is missing\n- not a false positive after all, my mistake';
+    const C = 'False positive.\n> the guard is missing\r\rNo, the bug is real.';
+    const LAZY = 'False positive.\n> quoted line\nNot really, it is real.';
+    for (const t of [A, C, LAZY]) {
+      assert.deepEqual(parseReply(t), NONE('reply_extra_text'), JSON.stringify(t));
+      assert.deepEqual(brief(decideBodies([t])), ['unlabeled', null, 'reply_extra_text']);
+    }
+    assert.deepEqual(parseReply('Done ~~?~~'), NONE('reply_unmatched'));
+    assert.deepEqual(parseReply('Fixed in a1b2c3d ~~?~~'), NONE('reply_extra_text'));
+  });
+
+  test('N3 an indented first line is not G1 (read before the trim); blank lines before it are fine', () => {
+    // Breaks when: the indent test runs after the trim, or reads a line other than the first line that is not blank.
+    for (const t of ['  Fixed in a1b2c3d', '\tFixed in a1b2c3d', '   Fixed in a1b2c3d', '\n\n  Fixed in a1b2c3d', ' \t\n   Fixed in a1b2c3d', '    Addressed in commit a1b2c3d',
+      '\r  Fixed in a1b2c3d, then more']) {
+      assert.deepEqual(parseReply(t), NONE('reply_extra_text'), JSON.stringify(t));
+    }
+    assert.deepEqual(brief(decideBodies(['  Fixed in a1b2c3d'], { proof: { git: yesGit, mainSha: MAIN } })), ['unlabeled', null, 'reply_extra_text']);
+    assert.deepEqual(parseReply('  hello'), NONE('reply_unmatched'));
+    for (const t of ['\n\nFixed in a1b2c3d', ' \t\n\r\nFixed in a1b2c3d', '\r\rFixed in a1b2c3d', 'Fixed in a1b2c3d\n    code']) assert.deepEqual(parseReply(t), G1_FORM('a1b2c3d'), JSON.stringify(t));
+  });
+
+  test('N3 a zero-width or control character in the first sentence is not G1', () => {
+    // Breaks when: the control check of G1 is dropped, or the first sentence ends at a character that is not an ASCII space, tab or line end.
+    for (const t of ['Fixed in a1b2c3d, see\u200B log', 'Fixed in a1b2c3d\uFEFF', 'Fi\u200Bxed in a1b2c3d', '\uFEFFFixed in a1b2c3d', 'Fixed\tin a1b2c3d', 'Fixed in a1b2c3d\tok',
+      'Fixed in a1b2c3d:\tok', 'Fixed in a1b2c3d.\uFEFFnot', 'Fixed in a1b2c3d\u2028Not yet']) {
+      assert.deepEqual(parseReply(t), NONE('reply_extra_text'), JSON.stringify(t));
+    }
+    // The text after the first sentence is not read, as before (the label rests on git).
+    assert.deepEqual(parseReply('Fixed in a1b2c3d.\n\u200B'), G1_FORM('a1b2c3d'));
+  });
+
+  test('N3 a reply that starts with a quote, a fence or other text is not G1', () => {
+    // Breaks when: a quote or a fence before the G1 line is skipped (the old cleaner dropped it and G1 read the next line).
+    for (const t of ['> Fixed in a1b2c3d', '```\nx\n```\nFixed in a1b2c3d', 'ok\nFixed in a1b2c3d', '- Fixed in a1b2c3d', '<del>x</del>\nFixed in a1b2c3d']) assert.notEqual(parseReply(t).form, 'g1', t);
+    assert.deepEqual(parseReply("> won't fix\n\nFixed in a1b2c3d"), NONE('reply_extra_text'));
+    assert.deepEqual(parseReply('> q\n\nFixed in a1b2c3d'), NONE('reply_unmatched'));
+    assert.deepEqual(parseReply('~~Fixed in a1b2c3d~~'), NONE('reply_extra_text'));
+    assert.deepEqual(brief(decideBodies(['> q\n\nFixed in a1b2c3d'], { proof: { git: yesGit, mainSha: MAIN } })), ['unlabeled', null, 'reply_unmatched']);
+  });
+
+  test('N4 U+2753 and U+2754 are question marks: no G1', () => {
+    // Breaks when: U+2753 or U+2754 leaves the ASK class.
+    for (const t of ['Fixed in a1b2c3d \u2753', 'Fixed in a1b2c3d, ok\u2754', 'Fixed in a1b2c3d \u2754']) assert.deepEqual(parseReply(t), NONE('reply_extra_text'), JSON.stringify(t));
+  });
+
+  test('N4 the end list decides after the SHA: a slash, a hyphen, an underscore or a letter gives reply_extra_text', () => {
+    // Breaks when: SHA_END lets these through, or a look-ahead after the SHA comes back (it gave reply_unmatched).
+    for (const t of ['Fixed in a1b2c3d/x', 'Fixed in a1b2c3d-x', 'Fixed in a1b2c3dz', 'Fixed in a1b2c3d_x', 'Fixed in `a1b2c3d`/x']) assert.deepEqual(parseReply(t), NONE('reply_extra_text'), t);
+    assert.deepEqual(brief(decideBodies(['Fixed in a1b2c3d/x'], { proof: { git: yesGit, mainSha: MAIN } })), ['unlabeled', null, 'reply_extra_text']);
+  });
+
+  test('N4 a hex run longer than 40 never labels on its first 40 characters', () => {
+    // Breaks when: SHA_END takes a hex character, or the hex run may stop inside a longer run.
+    const long = `${'a1'.repeat(20)}b`;
+    for (const t of [`Fixed in ${long}`, `Fixed in ${'a1'.repeat(25)}`, `Fixed in \`${long}\``]) {
+      assert.deepEqual(parseReply(t), NONE('reply_extra_text'), t);
+      assert.deepEqual(brief(decideBodies([t], { proof: { git: yesGit, mainSha: MAIN } })), ['unlabeled', null, 'reply_extra_text'], t);
+    }
   });
 });
 
@@ -954,6 +1021,10 @@ describe('F27 a 1 MB body does not hang', () => {
       `Fixed${' \t'.repeat(500000)}in a1b2c3d`, `${'\n'.repeat(1_000_000)}Fixed in a1b2c3d`, '!'.repeat(1_000_000),
       `${'    x\n'.repeat(170000)}Done`, `${'> q\n'.repeat(250000)}Done`, `${'\t\n\n'.repeat(330000)}Done`, `Fixed in a1b2c3d${'^'.repeat(1_000_000)}`,
       '&#63;'.repeat(200000), `Fixed in a1b2c3d ${'\u203D'.repeat(1_000_000)}`,
+      // N1 to N4: the ASCII trim, the lone CR split, the control class and the indent test.
+      `Done${' '.repeat(1_000_000)}x`, `Done${' \t\n'.repeat(330000)}x`, '\r'.repeat(1_000_000), `${'\r'.repeat(1_000_000)}Fixed in a1b2c3d`, '\u200B'.repeat(1_000_000),
+      `Fixed in a1b2c3d${'\u200B'.repeat(1_000_000)}`, `${' \n'.repeat(500000)}Done.`, `${'  \r'.repeat(330000)}Fixed in a1b2c3d`, `\t${'a'.repeat(1_000_000)}`,
+      `Fixed in ${'a1'.repeat(500000)}`, `${'\u2753'.repeat(1_000_000)}`,
     ];
     for (const b of bodies) {
       const t0 = Date.now();
@@ -1210,13 +1281,20 @@ describe('summarize', () => {
     assert.ok(Object.isFrozen(VERSION_PARTS));
     const names = VERSION_PARTS.filter((p) => typeof p === 'function').map((f) => f.name);
     const want = ['collect', 'prOf', 'groupByPr', 'sweep', 'findingsForPr', 'recordOf', 'decide', 'readThread', 'outcomeOf', 'parseReply', 'g1Of', 'g2Of', 'startsG2', 'partsOf',
-      'firstSentence', 'cleanReply', 'dropFences', 'dropBlocks', 'cutStrikeTags', 'shaEvidence', 'mainShaOf', 'tryGit', 'memoGit', 'gitEnvOf', 'defaultGit', 'parseMarker',
-      'authorKind', 'trustedSet', 'byTime', 'gitStatus', 'notNewer'];
+      'firstSentence', 'cleanReply', 'linesOf', 'isEdge', 'trimEnds', 'indentOf', 'bareOf', 'dropFences', 'shaEvidence', 'mainShaOf', 'tryGit', 'memoGit', 'gitEnvOf', 'defaultGit',
+      'parseMarker', 'authorKind', 'trustedSet', 'byTime', 'gitStatus', 'notNewer'];
     for (const n of want) assert.ok(names.includes(n), n);
+    // The deleted cleaner (seat check of 61a8567c, N1) is gone from the version parts.
+    for (const n of ['dropBlocks', 'cutStrikeTags']) assert.ok(!names.includes(n), n);
     assert.ok(VERSION_PARTS.includes(GRAMMAR));
-    // The new patterns join too: the SHA end check, the question marks, the markup class and the quote and indent rules.
+    // The patterns join too: the SHA end check, the question marks, the markup class, the line split, the control class, the
+    // blank and indent rules, and the fence of the bot body.
     const sources = VERSION_PARTS.filter((p) => p instanceof RegExp).map((r) => r.source);
-    for (const s of ['\\u203D', '&', '[.!](?:\\s|$)', '^(?: {4}| {0,3}\\t)', '^ {0,3}>', '^[ \\t]*$', '`{3,}|~{3,}']) assert.ok(sources.some((x) => x.includes(s)), s);
+    for (const s of ['\\u203D', '\\u2753\\u2754', '&', '[.!](?:\\s|$)', '\\r\\n|\\r|\\n', '\\u0000-\\u0009', '\\uFEFF]', '`{3,}|~{3,}']) {
+      assert.ok(sources.some((x) => x.includes(s)), s);
+    }
+    // The blank and indent rules match exactly: '^[ \\t]' is also a prefix of the blank rule.
+    for (const s of ['^[ \\t]*$', '^[ \\t]']) assert.ok(sources.includes(s), s);
     for (const n of ['fenceOf', 'closesFence']) assert.ok(names.includes(n), n);
     assert.ok(VERSION_PARTS.some((p) => p instanceof Set && p.has('GIT_DIR')));
     // The constant results join too: UNKNOWN given a sha would label every unproved G1 reply.
@@ -1226,7 +1304,7 @@ describe('summarize', () => {
 
   test('R12 RULES_VERSION is pinned: a rule change needs a visible test edit', () => {
     // Breaks when: any grammar list, git check, marker pattern or label function changes (then update this literal with the seat's word).
-    assert.equal(RULES_VERSION, 'd4d435f2c90cf39d');
+    assert.equal(RULES_VERSION, '1f63b48eaefda718');
   });
 
   test('F28 zero comments: share null, met false, gate 3 (no vacuous pass)', () => {
