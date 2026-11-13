@@ -51,7 +51,8 @@ const HOOK = process.env.DM_PROBE_HOOK
 
 const CONN = process.env.CONTINUOUS_CLAUDE_DB_URL
   || process.env.DATABASE_URL
-  || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
+  || process.env.OPC_POSTGRES_URL
+  || ''; // no live default: an unset URL refuses (rule O3.9)
 // Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any connection.
 try { assertScratchUrl(CONN); } catch {
   process.stderr.write(`dm-delivery-probe: refusing to run: database '${dbNameOf(CONN) || '(no name)'}' is not a scratch database. `

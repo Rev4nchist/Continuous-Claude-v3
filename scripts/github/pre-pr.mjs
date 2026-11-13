@@ -291,7 +291,8 @@ export const SURFACES = [
     id: 'coordination',
     // .claude/scripts/lane.mjs is the lane shim; lane-shim.test.mjs tests that file. scratch-db.mjs builds its
     // throwaway database from docker/init-schema.sql and the apps/agentic-os/drizzle migrations.
-    globs: ['scripts/coordination/**', '.claude/scripts/lane.mjs', 'docker/init-schema.sql', 'apps/agentic-os/drizzle/**'],
+    // scripts/**/*-probe.mjs: probe-scratch-guard.test.mjs (T2, T3) scans every probe under scripts/, not only coordination.
+    globs: ['scripts/coordination/**', 'scripts/**/*-probe.mjs', '.claude/scripts/lane.mjs', 'docker/init-schema.sql', 'apps/agentic-os/drizzle/**'],
     gates: [
       { id: 'coordination-tests', cmd: 'node', args: ['--test', ...COORDINATION_TESTS.map(coordTest)], cwd: '.', timeoutMs: 5 * MIN },
       // These build a throwaway database on local Postgres. Postgres down = FAIL with ECONNREFUSED, never a skip: start it with

@@ -31,7 +31,8 @@ import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
 // in this checkout or the primary one, so no second copy of the driver is added.
 const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL
   || process.env.DATABASE_URL
-  || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
+  || process.env.OPC_POSTGRES_URL
+  || ''; // no live default: an unset URL refuses (rule O3.9)
 // Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any connection.
 try { assertScratchUrl(DB_URL); } catch {
   process.stderr.write(`claim-sql-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `

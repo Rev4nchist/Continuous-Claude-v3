@@ -28,8 +28,10 @@
  *   4. UPDATE-ONLY  ending an id that never registered affects 0 rows and creates
  *                 nothing -- the hook must never invent a session row, because
  *                 that is how a second opinion about project spelling gets in
- *   5. INDEXED    the dashboard's liveness query plans as an Index Scan on
- *                 sessions_last_signal_idx, not a Seq Scan
+ *   5. INDEXED    the dashboard's liveness query can use sessions_last_signal_idx
+ *                 (EXPLAIN with seq scans off): the index exists and matches the
+ *                 GREATEST expression. On a scratch table it does not prove that
+ *                 a big table prefers the index.
  *
  * SAFETY
  * ------
