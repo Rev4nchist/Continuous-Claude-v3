@@ -58,6 +58,23 @@
   After the sync (not with -NoSync) it compares ~/.claude/state/sync-cursor ($env:CCV3_SYNC_CURSOR overrides)
   with main. The lock is released first. It prints "SYNC CONFIRMED" or "NOT confirmed synced" after the LANDED
   line, and exits 1 when not confirmed: the merge has already happened by then.
+  Land-outcomes ledger: after a merge THIS run made (never on the already-merged path, never with -CleanupOnly), right after the
+  tap is used up and still inside the lock, the script appends one JSON line to ~/.claude/state/land-outcomes.jsonl
+  ($env:CCV3_LAND_LEDGER overrides). A set lock variable moves the ledger beside the lock: with $env:CCV3_LAND_LOCK set and no
+  ledger variable, the file is land-outcomes.jsonl in the lock's folder, so a test with a temp lock never writes the real ledger.
+  A failure only warns (one WARNING line) and never changes the land. band is null in this version: readers compute the risk band.
+  "engine" in reviewers means only that an engine record exists for this head, not that the run counted. reviewers can be
+  ["none","engine"]: no bot was required and an engine record exists. "coderabbit" means a finished CodeRabbit review on the PR,
+  not one proven for this head. mergeCall is "ok" (the merge call succeeded), "failed-but-merged" (the call failed, and a second read
+  shows the checked head merged at a merged_at no earlier than 120 s before the call), or "merged-elsewhere" (the call failed and the
+  merge cannot be tied to this run: another head, or a merged_at that is older, missing or unreadable; mergeSha is then null).
+  Readers count only "ok" and "failed-but-merged" as lands made by the land step, and skip "merged-elsewhere".
+  reviewers is built only when the ready-check JSON holds routing.required as an array; otherwise it is "not read" (null).
+  A CCV3_LAND_LEDGER set in the caller's shell also reaches the five older land tests (they set only the lock variable), so
+  clear it before running the land tests.
+  The engine-record slug and folder copy branchSlug, stateRoot and checkHead in scripts/github/local-review/record.mjs (lines 19-36).
+  A reader opens the ledger with write-share (FileShare.ReadWrite), so the next land can still append, and treats a line as
+  evidence only, never as an approval.
   -TestFailUnlink and -TestSwitchPrimary are TEST-ONLY switches (land-pr-worktree-links.test.ps1).
   Never use them in a real land. They replace the old LAND_PR_TEST_* env vars, which are no longer read.
 
@@ -202,6 +219,16 @@ if ($env:CCV3_LAND_LOCK_STALE_MIN) {
 $lockUnreadableMin = 2.0   # an empty or unreadable lock may be a racer mid-write: stale only after this long, by file time
 $lockHost = [Environment]::MachineName
 $script:lockMine = $null   # what this run wrote; Exit-LandLock deletes the file only when it still holds exactly this
+# The land-outcomes ledger (see Add-LandOutcome): $env:CCV3_LAND_LEDGER; else, when the lock variable is set, land-outcomes.jsonl in the
+# lock's folder; else ~/.claude/state/land-outcomes.jsonl. A path that cannot be formed is $null, and the write then only warns.
+$ledgerPath = $null
+try {
+  # The folder comes from the FULL path of the lock value, so a bare file name gives the current folder, not an empty parent.
+  $ledgerPath = if ($env:CCV3_LAND_LEDGER) { $env:CCV3_LAND_LEDGER } elseif ($env:CCV3_LAND_LOCK) { Join-Path ([System.IO.Path]::GetDirectoryName($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($env:CCV3_LAND_LOCK))) 'land-outcomes.jsonl' } else { Join-Path $HOME '.claude\state\land-outcomes.jsonl' }
+} catch { $ledgerPath = $null }
+$script:readyJson = $null   # the ready-check JSON, kept for the ledger; it stays $null under -IgnoreReview (no ready check ran)
+$mergeCallFailed = $false   # set to $true where the merge call's exit code is tested; the ledger's mergeCall
+$mergeCallAt = $null   # the UTC time just before the merge call; the ledger ties a failed call's merged_at to this run with it
 
 # The lock file as an object, or $null when it cannot be read or parsed (missing, empty, half written, held open by its writer).
 function Get-LockInfo([string]$Path) {
@@ -302,6 +329,115 @@ function Exit-LandLock {
       Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
     } else { Write-Host "  land lock: not releasing $lockPath (it no longer holds this run's record)" }
   } catch { Write-Host "  land lock: could not release ${lockPath}: $($_.Exception.Message)" }
+}
+
+# ---- Land-outcomes ledger ----------------------------------------------------------------------------------------------
+# The newest engine record of this branch and head, as "<slug>/<head40>/<file>.json" relative to the local-review root
+# ($env:LOCAL_REVIEW_STATE_DIR, else ~/.claude/state/local-review), or $null. Relative on purpose: the line holds no home path.
+# The slug, the root and the head check copy branchSlug, stateRoot and checkHead in scripts/github/local-review/record.mjs
+# (lines 19-36): a change there must be made here too. A record name is a run id, so "newest" is the last write time (UTC), then the
+# greater name (ordinal) on a tie. The files are those readJsonFiles in record.mjs reads: every *.json but a trace file
+# (<runId>.trace.json). A record still being written is .<runId>.<pid>.tmp there, which is no *.json. Never throws; starts no program.
+function Get-LandEngineRecord([string]$Branch, [string]$Head) {
+  try {
+    if ($Branch.Contains('..')) { return $null }
+    $slug = $Branch -creplace '[^A-Za-z0-9._-]', '-'
+    $h = $Head.ToLowerInvariant()
+    if ($slug -eq '' -or $slug -cmatch '^\.+\z' -or $h -cnotmatch '^[0-9a-f]{40}\z') { return $null }
+    $root = if ($env:LOCAL_REVIEW_STATE_DIR) { $env:LOCAL_REVIEW_STATE_DIR } else { Join-Path $HOME '.claude\state\local-review' }
+    $dir = Join-Path (Join-Path $root $slug) $h
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $null }
+    $best = $null
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction Stop)) {
+      $n = $f.Name
+      if (-not $n.EndsWith('.json', [StringComparison]::Ordinal) -or $n.EndsWith('.trace.json', [StringComparison]::Ordinal)) { continue }
+      if (-not $best -or $f.LastWriteTimeUtc -gt $best.LastWriteTimeUtc -or ($f.LastWriteTimeUtc -eq $best.LastWriteTimeUtc -and [string]::CompareOrdinal($n, $best.Name) -gt 0)) { $best = $f }
+    }
+    if ($best) { return "$slug/$h/$($best.Name)" }
+    return $null
+  } catch { return $null }
+}
+
+# mergeCall of a merge call that failed while a second read said merged. A second read alone does not prove THIS run merged: another
+# lander or a web merge gives the same answer. "failed-but-merged" only when the read shows the checked head and a merged_at no earlier
+# than 120 s before the call (the clock margin of the ready check); anything else, also a missing or unreadable time, is
+# "merged-elsewhere". ConvertFrom-Json may already have made merged_at a DateTime; a string is parsed as Get-LockInfo does. Never throws.
+function Get-LandMergeCall($PullAgain, [string]$HeadSha, $CallAt) {
+  try {
+    if ($CallAt -isnot [datetime] -or -not $HeadSha -or "$($PullAgain.head.sha)" -cne $HeadSha) { return 'merged-elsewhere' }
+    $at = $PullAgain.merged_at
+    $atUtc = if ($at -is [datetime]) { $at.ToUniversalTime() }
+             elseif ($at -is [string] -and $at) { [datetime]::Parse($at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal) }
+             else { $null }
+    if ($null -ne $atUtc -and $atUtc -ge $CallAt.ToUniversalTime().AddSeconds(-120)) { return 'failed-but-merged' }
+    return 'merged-elsewhere'
+  } catch { return 'merged-elsewhere' }
+}
+
+# The ledger record of this land: the keys of schema 1 in their fixed order, from values the run already holds plus the engine-record
+# folder. "Not read" is $null, never [] and never 0: under -IgnoreReview no ready check ran, so reviewers and crRounds are unknown.
+# band is $null in this version (readers compute the risk band); waiver is $null until a later lane fills it. Never throws: it returns
+# $null when the record cannot be built. Arrays are assigned in plain statements, so a list of one stays a JSON array.
+function Get-LandOutcome($PullRecord, $MergeAnswer, $PullAgain, $Ready, [int]$Number, [string]$RepoName, [string]$MergeMethod, [bool]$Ignored, [bool]$MergeCallFailed, $MergeCallAt) {
+  try {
+    $headSha = "$($PullRecord.head.sha)"
+    $call = if ($MergeCallFailed) { Get-LandMergeCall -PullAgain $PullAgain -HeadSha $headSha -CallAt $MergeCallAt } else { 'ok' }
+    # ts has the form of JavaScript's toISOString (three fraction digits), so node readers compare it as text.
+    $rec = [ordered]@{ schema = 1; ts = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [Globalization.CultureInfo]::InvariantCulture); pr = $Number; repo = $RepoName
+      headSha = $headSha; mergeSha = $null; mergeCall = $call; method = $MergeMethod
+      band = $null; labels = $null; reviewers = $null; engineRecord = $null; crRounds = $null; ignoreReview = $Ignored; waiver = $null }
+    $hex40 = '^[0-9a-f]{40}\z'
+    # "ok": the sha of the call's answer. The answer holds gh's stderr lines too (2>&1); only its text lines can be the JSON.
+    # "failed-but-merged": the second read's merge_commit_sha. "merged-elsewhere": no sha, the merge is not this run's.
+    if ($call -eq 'ok') {
+      try { $ans = @($MergeAnswer | Where-Object { $_ -is [string] }) | Out-String | ConvertFrom-Json -ErrorAction Stop; if ("$($ans.sha)" -cmatch $hex40) { $rec.mergeSha = "$($ans.sha)" } } catch { }
+    } elseif ($call -eq 'failed-but-merged' -and "$($PullAgain.merge_commit_sha)" -cmatch $hex40) { $rec.mergeSha = "$($PullAgain.merge_commit_sha)" }
+    if ($null -ne $PullRecord.labels) { $names = [string[]]@($PullRecord.labels | ForEach-Object { "$($_.name)" }); [Array]::Sort($names, [StringComparer]::Ordinal); $rec.labels = $names }
+    $rec.engineRecord = Get-LandEngineRecord "$($PullRecord.head.ref)" $rec.headSha
+    # A count from the ready check is a JSON number (Int32, Int64 or Double); a string, a bool or a missing field is "not read".
+    $reviews = $Ready.coderabbitReviews; $rounds = $Ready.coderabbitRounds
+    $list = $null
+    # Built only from a routing.required ARRAY (ConvertFrom-Json gives Object[] for any JSON array, also [] and one item). A missing,
+    # null, string or object value is "not read".
+    if (-not $Ignored -and $null -ne $Ready -and $Ready.routing -isnot [array] -and $Ready.routing.required -is [array]) {
+      $list = [System.Collections.Generic.List[string]]::new()
+      foreach ($n in $Ready.routing.required) { if ($n -is [string] -and -not $list.Contains($n)) { $list.Add($n) } }
+      if (($reviews -is [int] -or $reviews -is [long] -or $reviews -is [double]) -and $reviews -gt 0 -and -not $list.Contains('coderabbit')) { $list.Add('coderabbit') }
+      if (-not $list.Count) { $list.Add('none') }
+    }
+    if ($rec.engineRecord) { if ($null -eq $list) { $list = [System.Collections.Generic.List[string]]::new() }; $list.Add('engine') }
+    if ($null -ne $list) { $rec.reviewers = [string[]]$list.ToArray() }
+    if (-not $Ignored -and ($rounds -is [int] -or $rounds -is [long] -or $rounds -is [double])) { $rec.crRounds = $rounds }
+    return $rec
+  } catch { return $null }
+}
+
+# Append the record to the ledger as ONE line: one Open and one Write of the whole line with its LF, UTF-8 without BOM. The lock
+# keeps two writers apart; one Write call per line. A last line cut short earlier (no LF at the end) gets its LF in that same Write,
+# so the new line stands alone. The open shares read and write, so a reader that holds the file with write-share does not stop it.
+# Never throws, never exits, adds nothing to $done and prints nothing on success. A failure prints one WARNING line, and the land
+# goes on: the merge is already done.
+function Add-LandOutcome([string]$Path, $Record) {
+  $fs = $null
+  try {
+    if (-not $Path) { throw 'no ledger path' }
+    if ($null -eq $Record) { throw 'the record could not be built' }
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $dir = [System.IO.Path]::GetDirectoryName($full)
+    if ($dir) {
+      [void](New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop)
+      if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "cannot make the folder $dir" }
+    }
+    $line = ($Record | ConvertTo-Json -Compress -Depth 5) + "`n"
+    $fs = [System.IO.File]::Open($full, 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+    if ($fs.Length -gt 0) { [void]$fs.Seek(-1, 'End'); if ($fs.ReadByte() -ne 10) { $line = "`n" + $line } }
+    [void]$fs.Seek(0, 'End')
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($line)
+    $fs.Write($bytes, 0, $bytes.Length)
+    $fs.Flush()
+  } catch {
+    Write-Host "  WARNING: land ledger not written ($($_.Exception.GetBaseException().Message -replace '[\r\n]+', ' '))" -ForegroundColor Yellow
+  } finally { if ($fs) { try { $fs.Dispose() } catch { } } }
 }
 
 # decisions.enforce of <root>/review-router.config.json. Only a literal true enforces; a missing or unreadable file is "off".
@@ -408,6 +544,7 @@ if (-not $pull.merged -and -not $CleanupOnly) {
       $statusJson = node (Join-Path $PSScriptRoot 'review-status.mjs') $Pr --repo $Repo --json
       $ready = $LASTEXITCODE
       $st = $null; try { $st = $statusJson | ConvertFrom-Json } catch { }
+      $script:readyJson = $st   # kept for the land-outcomes ledger (reviewers, crRounds)
       if (-not $st -or $st.mergeable_state -ne 'unknown') { break }
       Write-Host "  mergeable_state is unknown; GitHub is still computing it (try $try of 7)"
       Start-Sleep -Seconds 15
@@ -469,8 +606,10 @@ if (-not $pull.merged -and -not $CleanupOnly) {
   # One lander at a time: every check above is read-only and runs outside the lock. From here to the sync-cursor check only one run works.
   Hold-LandLock
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
+  $mergeCallAt = [DateTime]::UtcNow   # for the ledger's mergeCall
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1
   if ($LASTEXITCODE) {
+    $mergeCallFailed = $true   # for the ledger's mergeCall
     # A timed-out or failed call may still have merged server-side: verify before failing.
     $again = gh api "repos/$Repo/pulls/$Pr" | ConvertFrom-Json
     if (-not $again.merged) { Fail "merge refused: $res" }
@@ -480,6 +619,13 @@ if (-not $pull.merged -and -not $CleanupOnly) {
   if ($decisionsEnforced) {
     try { (Invoke-LandDecision @('use', "$Pr", '--repo', $Repo, '--head', $head)).Out | Out-Host } catch { Write-Host "  WARNING: could not use up the land decision: $($_.Exception.Message)" }
   }
+  # Land-outcomes ledger: one line for the merge this run made (see Add-LandOutcome). It starts no program, and $LASTEXITCODE is
+  # put back after it, so every later line reads what it read before. A failure only warns and never changes the land.
+  $ledgerExit = $LASTEXITCODE
+  try {
+    $null = Add-LandOutcome -Path $ledgerPath -Record (Get-LandOutcome -PullRecord $pull -MergeAnswer $res -PullAgain $again -Ready $script:readyJson -Number $Pr -RepoName $Repo -MergeMethod $Method -Ignored $IgnoreReview.IsPresent -MergeCallFailed ([bool]$mergeCallFailed) -MergeCallAt $mergeCallAt)
+  } catch { Write-Host "  WARNING: land ledger not written ($($_.Exception.GetBaseException().Message -replace '[\r\n]+', ' '))" -ForegroundColor Yellow }
+  $global:LASTEXITCODE = $ledgerExit
 } elseif ($pull.merged) {
   Step "#$Pr is already merged; continuing with the local steps"
 }
