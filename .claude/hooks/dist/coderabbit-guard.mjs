@@ -123,9 +123,9 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
     const target = targetOf(input, tool);
     if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
-    const path = guardLogPath(env);
-    mkdirSync(dirname(path), { recursive: true, mode: 448 });
-    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+    const path2 = guardLogPath(env);
+    mkdirSync(dirname(path2), { recursive: true, mode: 448 });
+    appendFileSync(path2, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
 }
@@ -434,8 +434,8 @@ function bootTrace(env = process.env, _bootCall) {
 if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
 
 // src/coderabbit-guard.ts
-import { execFileSync } from "child_process";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
+import { execFileSync, spawnSync } from "child_process";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname as dirname2, join as join3, resolve as resolve2 } from "path";
 
@@ -453,6 +453,75 @@ function outputDeny(reason, decision = "deny") {
   }));
 }
 
+// ../../scripts/github/lib/answer-paths.mjs
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+// ../../scripts/ratchets/lib/review-md.mjs
+var CannotCompare = class extends Error {
+};
+var lines = (text) => String(text).split(/\r?\n/);
+function parseReviewMd(text) {
+  const all = lines(text);
+  const at = all.findIndex((l) => /^##\s+Skip paths\s*$/i.test(l));
+  if (at < 0) throw new CannotCompare('REVIEW.md has no "## Skip paths" section');
+  const rest = all.slice(at + 1);
+  const end = rest.findIndex((l) => /^##\s/.test(l));
+  const section = end < 0 ? rest : rest.slice(0, end);
+  const open = section.findIndex((l) => /^```/.test(l));
+  const close = open < 0 ? -1 : section.findIndex((l, i) => i > open && /^```\s*$/.test(l));
+  if (open < 0 || close < 0) throw new CannotCompare('REVIEW.md "Skip paths" has no fenced block');
+  const globs = section.slice(open + 1, close).map((l) => l.trim()).filter(Boolean);
+  if (globs.length === 0) throw new CannotCompare('REVIEW.md "Skip paths" block is empty');
+  return globs;
+}
+
+// ../../scripts/github/lib/answer-paths.mjs
+var escapeRe = (s) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+var segmentToRe = (seg) => escapeRe(seg).replace(/\*+/g, "[^/]*").replace(/\?/g, "[^/]");
+function globToRegExp(glob) {
+  if (typeof glob !== "string" || glob === "") throw new Error("empty glob");
+  const segs = glob.split("/");
+  let re = "";
+  segs.forEach((seg, i) => {
+    const last = i === segs.length - 1;
+    if (seg === "**") re += last ? ".+" : "(?:[^/]+/)*";
+    else re += segmentToRe(seg) + (last ? "" : "/");
+  });
+  return new RegExp(`^${re}$`);
+}
+var matchGlob = (glob, p) => globToRegExp(glob).test(p);
+var ANSWER_KEY_GLOBS = Object.freeze([
+  "scripts/eval/review-eval/gold/**",
+  "scripts/eval/review-eval/seeds/**",
+  "scripts/eval/review-eval/rubrics/**",
+  "scripts/eval/review-eval/linktype-labels.json"
+]);
+var slashLower = (p) => String(p).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+function answerKeyGlobs(root) {
+  let text;
+  try {
+    text = readFileSync(path.join(root, "REVIEW.md"), "utf8");
+  } catch (err) {
+    return { reason: `REVIEW.md could not be read (${err.code ?? "error"})` };
+  }
+  let listed;
+  try {
+    listed = parseReviewMd(text).map(slashLower);
+  } catch (err) {
+    return { reason: String(err.message) };
+  }
+  const missing = ANSWER_KEY_GLOBS.filter((g) => !listed.includes(slashLower(g)));
+  return missing.length === 0 ? { globs: ANSWER_KEY_GLOBS } : { reason: `REVIEW.md "Skip paths" lacks ${missing.join(", ")}` };
+}
+function answerKeyCheck({ root, paths }) {
+  if (!Array.isArray(paths)) return { closed: "the changed-file list is unknown" };
+  const { globs, reason } = answerKeyGlobs(root);
+  if (!globs) return { closed: reason };
+  const hits = paths.filter((p) => globs.some((g) => matchGlob(slashLower(g), slashLower(p))));
+  return hits.length === 0 ? null : { hits };
+}
+
 // src/coderabbit-guard.ts
 var BASH_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var DELEGATE_TOOLS = /* @__PURE__ */ new Set(["Task", "Agent", "Skill"]);
@@ -463,21 +532,21 @@ function statePath(env = process.env) {
   const base = env.CCV3_CODERABBIT_GUARD_STATE || join3(tmpdir(), STATE_BASENAME);
   return base;
 }
-function readState(path) {
+function readState(path2) {
   try {
-    if (!existsSync(path)) return { counts: {} };
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (!existsSync(path2)) return { counts: {} };
+    const parsed = JSON.parse(readFileSync2(path2, "utf8"));
     return { counts: parsed?.counts && typeof parsed.counts === "object" ? parsed.counts : {} };
   } catch {
     return { counts: {} };
   }
 }
-function writeState(path, state) {
-  const tmp = `${path}.${process.pid}.tmp`;
+function writeState(path2, state) {
+  const tmp = `${path2}.${process.pid}.tmp`;
   try {
-    mkdirSync2(dirname2(path), { recursive: true });
+    mkdirSync2(dirname2(path2), { recursive: true });
     writeFileSync(tmp, JSON.stringify(state), "utf8");
-    renameSync(tmp, path);
+    renameSync(tmp, path2);
   } catch {
     try {
       unlinkSync(tmp);
@@ -1048,6 +1117,43 @@ function effectiveCwd(command, cwd, ps = false) {
   }
   return dir;
 }
+var CCV3_KEY = /^[^/#]+\/(?:rev4nchist|parcadei)\/continuous-claude(?:-v3)?#/i;
+var ANSWER_BASES = ["main", "refs/remotes/fork/main"];
+var ANSWER_GIT_TIMEOUT_MS = 1e4;
+var DENY_PREFIX = "CodeRabbit guard:";
+function isCcv3Key(key) {
+  return CCV3_KEY.test(key);
+}
+function diffPaths(root, base) {
+  const r = spawnSync("git", ["-c", "core.quotepath=false", "diff", "--name-only", "--no-renames", "-z", `${base}...HEAD`], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: ANSWER_GIT_TIMEOUT_MS,
+    windowsHide: true,
+    maxBuffer: 64 * 1024 * 1024
+  });
+  if (r.error || r.status !== 0 || typeof r.stdout !== "string") return null;
+  return r.stdout.split("\0").filter(Boolean);
+}
+function answerKeyDeny(cwd) {
+  try {
+    const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", timeout: ANSWER_GIT_TIMEOUT_MS, windowsHide: true });
+    const root = top.status === 0 && typeof top.stdout === "string" ? top.stdout.trim() : "";
+    if (!root) return `${DENY_PREFIX} the git root is unknown: no CLI review runs on a diff it cannot check for answer-key`;
+    const union = /* @__PURE__ */ new Set();
+    for (const base of ANSWER_BASES) {
+      const paths = diffPaths(root, base);
+      if (paths === null) return `${DENY_PREFIX} git diff failed: no CLI review runs on a diff it cannot check for answer-key`;
+      for (const p of paths) union.add(p);
+    }
+    const check = answerKeyCheck({ root, paths: [...union] });
+    if (check === null) return null;
+    if ("closed" in check) return `${DENY_PREFIX} the REVIEW.md skip list is not usable: no CLI review runs on a diff it cannot check for answer-key`;
+    return `${DENY_PREFIX} no CLI review may read the paths in the diff (${check.hits.length}) that are answer-key`;
+  } catch {
+    return `${DENY_PREFIX} the check failed with an error: no CLI review runs on a diff it cannot check for answer-key`;
+  }
+}
 function checkRunCap(state, key, runs = 1) {
   const count = state.counts[key] ?? 0;
   return { ok: count + runs <= MAX_RUNS, count };
@@ -1101,9 +1207,14 @@ function decide(input, env = process.env) {
   if (verdict.verdict === "block") return { allow: false, reason: verdict.reason };
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
-  const path = statePath(env);
-  const state = readState(path);
-  const key = repoBranchKey(effectiveCwd(command, input.cwd || process.cwd(), ps), env);
+  const cwd = effectiveCwd(command, input.cwd || process.cwd(), ps);
+  const key = repoBranchKey(cwd, env);
+  if (isCcv3Key(key)) {
+    const reason = answerKeyDeny(cwd);
+    if (reason) return { allow: false, reason };
+  }
+  const path2 = statePath(env);
+  const state = readState(path2);
   const cap = checkRunCap(state, key, runs);
   if (!cap.ok) {
     return {
@@ -1111,11 +1222,11 @@ function decide(input, env = process.env) {
       reason: `CodeRabbit guard: run cap reached (${cap.count} of ${MAX_RUNS} cr review --agent runs used for ${key}; this command adds ${runs})`
     };
   }
-  writeState(path, recordRun(state, key, runs));
+  writeState(path2, recordRun(state, key, runs));
   return { allow: true, increment: true };
 }
 function readStdin() {
-  return readFileSync(0, "utf-8");
+  return readFileSync2(0, "utf-8");
 }
 function main() {
   let input;
@@ -1144,6 +1255,7 @@ if (!process.env.VITEST) {
 }
 export {
   BILLING_REASON,
+  answerKeyDeny,
   checkRunCap,
   classifyCommand,
   classifyDelegate,
@@ -1152,6 +1264,7 @@ export {
   decide,
   effectiveCwd,
   hasForbiddenFlags,
+  isCcv3Key,
   isCodeWorkspace,
   isCrExecutable,
   isReadOnlyAutofixDelegate,

@@ -68,12 +68,14 @@
  *
  * Output contract: ALWAYS exit 0; blocks use permissionDecision deny via shared/output.ts.
  */
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
 import { logGuardDecision } from './shared/guard-log.js';
+// A side-effect-free lib (esbuild bundles it; it holds no isDirectRun). Typed by src/shared/answer-paths.d.ts.
+import { answerKeyCheck } from '../../../scripts/github/lib/answer-paths.mjs';
 
 const BASH_TOOLS = new Set(['Bash', 'PowerShell']);
 const DELEGATE_TOOLS = new Set(['Task', 'Agent', 'Skill']);
@@ -905,6 +907,59 @@ export function effectiveCwd(command: string, cwd: string, ps = false): string {
   return dir;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Answer-key check: no CLI review may start on a diff that holds an answer-key path
+// ---------------------------------------------------------------------------------------------
+
+/** The CCv3 repo key: remote Rev4nchist or parcadei, repo continuous-claude (or the -v3 name), then `#branch`. */
+const CCV3_KEY = /^[^/#]+\/(?:rev4nchist|parcadei)\/continuous-claude(?:-v3)?#/i;
+/** The two ranges pre-pr.mjs checks: local main and fork/main. `--no-renames`: a move out of gold/ names the old path too. */
+const ANSWER_BASES = ['main', 'refs/remotes/fork/main'];
+const ANSWER_GIT_TIMEOUT_MS = 10000;
+// The log masker reads `key` followed by a word or a colon as a secret name: keep `answer-key` at the end of a sentence.
+const DENY_PREFIX = 'CodeRabbit guard:';
+
+export function isCcv3Key(key: string): boolean {
+  return CCV3_KEY.test(key);
+}
+
+/** Every path of `base...HEAD`, or null when git fails, times out or the ref is missing. A null list never means "no paths". */
+function diffPaths(root: string, base: string): string[] | null {
+  const r = spawnSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-renames', '-z', `${base}...HEAD`], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: ANSWER_GIT_TIMEOUT_MS,
+    windowsHide: true,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error || r.status !== 0 || typeof r.stdout !== 'string') return null;
+  return r.stdout.split('\0').filter(Boolean);
+}
+
+/**
+ * A deny reason when the diff holds an answer-key path or the check cannot finish, else null. The reason holds the COUNT of
+ * matched paths and never a path. Any failure denies: this function has its own catch, because the hook's outer catch allows.
+ */
+export function answerKeyDeny(cwd: string): string | null {
+  try {
+    const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', timeout: ANSWER_GIT_TIMEOUT_MS, windowsHide: true });
+    const root = top.status === 0 && typeof top.stdout === 'string' ? top.stdout.trim() : '';
+    if (!root) return `${DENY_PREFIX} the git root is unknown: no CLI review runs on a diff it cannot check for answer-key`;
+    const union = new Set<string>();
+    for (const base of ANSWER_BASES) {
+      const paths = diffPaths(root, base);
+      if (paths === null) return `${DENY_PREFIX} git diff failed: no CLI review runs on a diff it cannot check for answer-key`;
+      for (const p of paths) union.add(p);
+    }
+    const check = answerKeyCheck({ root, paths: [...union] });
+    if (check === null) return null;
+    if ('closed' in check) return `${DENY_PREFIX} the REVIEW.md skip list is not usable: no CLI review runs on a diff it cannot check for answer-key`;
+    return `${DENY_PREFIX} no CLI review may read the paths in the diff (${check.hits.length}) that are answer-key`;
+  } catch {
+    return `${DENY_PREFIX} the check failed with an error: no CLI review runs on a diff it cannot check for answer-key`;
+  }
+}
+
 /** ok is true when `runs` more runs still fit under the cap. */
 export function checkRunCap(state: RunState, key: string, runs = 1): { ok: boolean; count: number } {
   const count = state.counts[key] ?? 0;
@@ -976,9 +1031,15 @@ export function decide(input: PreToolUseInput, env: NodeJS.ProcessEnv = process.
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
 
+  const cwd = effectiveCwd(command, input.cwd || process.cwd(), ps);
+  const key = repoBranchKey(cwd, env);
+  // A review in the CCv3 repo may not read an answer-key path. The check runs before the cap, so a deny uses no slot.
+  if (isCcv3Key(key)) {
+    const reason = answerKeyDeny(cwd);
+    if (reason) return { allow: false, reason };
+  }
   const path = statePath(env);
   const state = readState(path);
-  const key = repoBranchKey(effectiveCwd(command, input.cwd || process.cwd(), ps), env);
   const cap = checkRunCap(state, key, runs);
   if (!cap.ok) {
     return {
