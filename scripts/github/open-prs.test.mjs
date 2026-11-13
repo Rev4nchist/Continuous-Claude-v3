@@ -1,7 +1,7 @@
 // Tests for scripts/github/open-prs.mjs (card prflow-open-prs). Design: .claudedocs/e2e-prflow-open-prs/2026-11-13-design-note.md, section 6.
 // RED step: the script does not exist yet, so every test fails on the missing module. Each test imports the module itself, so a missing
 // module fails each test by name. No test calls GitHub, a model or a database; gh and review-status are injected fakes. Paths use /
-// and node:path only (CI runs this file on ubuntu too). The one real child process is the Q1 import probe and the contract test 17.
+// and node:path only (CI runs this file on ubuntu too). The real child processes are the Q1 import probe, the contract test 17 and the runChild tests 18 and 18b.
 //
 // The dependency contract these tests pin (the writer builds to it):
 //   main(argv, deps) -> Promise<exit code>.  argv: --out <dir> (the folder of open-prs.json), --cap <n> (default 20).
@@ -41,7 +41,6 @@ const load = () => import('./open-prs.mjs');
 
 const T0 = Date.parse('2026-11-13T12:00:00.000Z');
 const sha = (n) => n.toString(16).padStart(40, '0');
-const RATE = /API rate limit|secondary rate limit|HTTP (403|429)/i;
 const scratch = [];
 const mk = () => { const d = mkdtempSync(join(tmpdir(), 'ccv3-open-prs-')); scratch.push(d); return d; };
 // The store path is the one the real decisions lib reads. Every test points it at a temp path, so no test reads the real store.
@@ -76,7 +75,8 @@ const storeOf = (taps) => ({ version: 1, offers: {}, decisions: Object.fromEntri
 /**
  * Runs main() in a temp folder. spec: prs (list items), files {pr: [names]}, listFail, filesFail {pr: result}, status {pr: result or fn},
  * statusStep (ms the fake clock moves per review-status call), old (text of an existing open-prs.json), store (store object or raw text),
- * lock (text of an existing lock), args, deps (override any dep).
+ * lock (text of an existing lock), lockMtimeMs, args, deps (override any dep),
+ * onStatus({ out, pr }) (runs inside each review-status call), onLine(line, out) (runs on each log line).
  */
 async function run(spec = {}) {
   const { main } = await load();
@@ -121,6 +121,7 @@ async function run(spec = {}) {
     calls.status.push({ pr, opts });
     calls.lockDuring.push(existsSync(join(out, '.open-prs.lock')));
     clock.t += spec.statusStep ?? 0;
+    spec.onStatus?.({ out, pr });
     const given = spec.status?.[pr];
     if (typeof given === 'function') return given(pr);
     return given ?? okStatus(pr);
@@ -128,7 +129,7 @@ async function run(spec = {}) {
   const argv = ['--out', out, ...(spec.args ?? [])];
   const deps = {
     now: () => new Date(clock.t), home, runGh, runStatus, readConfig: () => CONFIG,
-    killTree: (pid) => calls.kill.push(pid), log: (m) => lines.push(m), err: (m) => errs.push(m), ...spec.deps,
+    killTree: (pid) => calls.kill.push(pid), log: (m) => { lines.push(m); spec.onLine?.(m, out); }, err: (m) => errs.push(m), ...spec.deps,
   };
   const code = await main(argv, deps);
   const text = existsSync(outFile) ? readFileSync(outFile, 'utf8') : null;
@@ -188,6 +189,30 @@ test('2b with no old file, an abort writes nothing at all', async () => {
   assert.equal(r.code, 10);
   assert.equal(r.text, null);
   assert.deepEqual(leftovers(r), []);
+});
+
+test('4b a 403 line on the stderr of a review-status that answered (exit 0 or 1) does not abort: the row is kept', async () => {
+  // Breaks when the rate rule reads the stderr of a child that gave an answer: one side-call 403 would freeze the whole file.
+  const side = (doc, line) => ({ ...doc, stderr: `${line}\n` });
+  const r = await run({ status: {
+    2: side(okStatus(2), 'gh: Resource not accessible by integration (HTTP 403)'),
+    3: side(okStatus(3, { ready: false }), 'warning: a side call said HTTP 403'),
+  } });
+  assert.equal(r.code, 0, r.errs.join('\n'));
+  assert.deepEqual(statusPrs(r), [1, 2, 3]);
+  assert.deepEqual([rowOf(r, 2).status, rowOf(r, 2).ready, rowOf(r, 3).status, rowOf(r, 3).ready], ['ok', true, 'ok', false]);
+});
+
+test('5a the abort line holds the first stderr line that matches the rate rule, not the first line', async () => {
+  // Breaks when maskTail keeps its first-non-empty-line rule for a rate-limit abort: the log would name an unrelated line.
+  const viaStatus = await run({ old: OLD, status: { 1: { status: 2, stdout: '', stderr: 'review-status: first line is noise\ngh: API rate limit exceeded\n' } } });
+  assert.equal(viaStatus.code, 10);
+  assert.match(viaStatus.errs[0], /API rate limit exceeded/);
+  assert.doesNotMatch(viaStatus.errs[0], /noise/);
+  const viaList = await run({ old: OLD, listFail: { status: 1, stdout: '', stderr: 'gh: first line is noise\ngh: HTTP 429 Too Many Requests\n' } });
+  assert.equal(viaList.code, 10);
+  assert.match(viaList.errs[0], /HTTP 429/);
+  assert.doesNotMatch(viaList.errs[0], /noise/);
 });
 
 test('3 a files call that answers HTTP 403, or fails for any reason, aborts: no write, nothing after it, exit 10', async () => {
@@ -320,6 +345,16 @@ test('pages: a full page of 100 asks for page 2; the list ends on a short page',
   assert.equal(r.doc.listed, 103);
   const pages = r.calls.gh.map((c) => /state=open&per_page=100&page=(\d+)/.exec(c.args.join(' '))?.[1]).filter(Boolean);
   assert.deepEqual(pages, ['1', '2']);
+});
+
+test('pages 10: a full tenth page logs one line that the list may be longer; a short list logs none', async () => {
+  // Breaks when the 10-page stop is silent: PRs beyond number 1000 would vanish with no trace in the log.
+  const full = await run({ prs: items(1000), args: ['--cap', '2'] });
+  assert.equal(full.code, 0);
+  assert.equal(full.doc.listed, 1000);
+  assert.equal(full.lines.filter((l) => /page 10/.test(l)).length, 1, full.lines.join('\n'));
+  const short = await run({ prs: items(103), args: ['--cap', '2'] });
+  assert.ok(!short.lines.some((l) => /page 10/.test(l)));
 });
 
 // ---------------------------------------------------------------- the file: shape, privacy, labels
@@ -493,6 +528,46 @@ test('12c a normal run holds the lock while it works and leaves none, and no tmp
   assert.deepEqual(leftovers(r), []);
 });
 
+const OTHER = (ms) => `${process.pid} ${iso(ms)} OTHER-OWNER-TOKEN`;
+
+test('12e a lock replaced by another owner during the run is not deleted by this run', async () => {
+  // Breaks when the finally block unlinks the lock without checking that the lock text is still this run's token.
+  const replaceLock = ({ out }) => writeFileSync(join(out, '.open-prs.lock'), OTHER(T0 - 1000));
+  const r = await run({ onStatus: replaceLock });
+  assert.equal(r.code, 0);
+  assert.equal(r.doc.rows.length, 3);
+  assert.equal(readFileSync(r.lock, 'utf8'), OTHER(T0 - 1000));
+});
+
+test('12f a stale lock that another run replaces between the stale judgement and the unlink is not deleted', async () => {
+  // Breaks when the takeover unlinks with no re-read: it would delete the live lock of the run that just took it.
+  const swap = (line, out) => { if (/taking over a stale lock/.test(line)) writeFileSync(join(out, '.open-prs.lock'), OTHER(T0 - 1000)); };
+  const r = await run({ lock: `${process.pid} ${iso(T0 - 21 * 60_000)}`, onLine: swap });
+  assert.equal(r.code, 0);
+  assert.ok(r.lines.includes('open-prs: another run holds the lock'), r.lines.join('\n'));
+  assert.equal(r.calls.gh.length, 0);
+  assert.equal(readFileSync(r.lock, 'utf8'), OTHER(T0 - 1000));
+});
+
+test('12g a lock dated in the future is stale: it is taken over and the run writes the file', async () => {
+  // Breaks when a clock jump or a bad date lets a lock with a live pid hold for ever (the 20-minute age test never fires on a negative age).
+  const r = await run({ lock: `${process.pid} ${iso(T0 + 3 * 3600_000)}`, lockMtimeMs: T0 - 60_000 });
+  assert.equal(r.code, 0);
+  assert.equal(r.doc.rows.length, 3);
+  assert.ok(r.lines.includes('open-prs: taking over a stale lock'), r.lines.join('\n'));
+  assert.deepEqual(leftovers(r), []);
+});
+
+test('12h judgeLock: an unreadable lock follows its mtime age; a future date and a young live lock', async () => {
+  // Breaks when an unreadable lock (null text) holds for ever, or a lock dated ahead of the clock counts as held.
+  const { judgeLock } = await load();
+  assert.equal(judgeLock(null, T0 - 21 * 60_000, T0), 'stale', 'unreadable and old');
+  assert.equal(judgeLock(null, T0 - 60_000, T0), 'held', 'unreadable and young');
+  assert.equal(judgeLock(`${process.pid} ${iso(T0 + 3 * 3600_000)}`, T0, T0), 'stale', 'dated in the future');
+  assert.equal(judgeLock(`${process.pid} ${iso(T0 - 60_000)} TOKEN`, T0, T0), 'held', 'young, live pid, with a token');
+  assert.equal(judgeLock(`${process.pid} ${iso(T0 - 21 * 60_000)}`, T0, T0), 'stale', 'live pid, 21 minutes old');
+});
+
 // ---------------------------------------------------------------- write path (tests 13, 14)
 
 test('13 a rename that throws: old file intact, no tmp file, no lock, one err line, exit 1', async () => {
@@ -602,6 +677,62 @@ test('C1c a token glued to a word or an underscore is masked too', async () => {
   assert.equal(r.code, 10);
   const all = [...r.errs, ...r.lines].join('\n');
   for (const tail of tokenTails) assert.ok(!all.includes(tail), `token tail ${tail} leaked: ${all}`);
+});
+
+test('C1d "token <x>" and "Basic <x>" are masked; a 40-hex head sha is not', async () => {
+  // Breaks when only the gh token shapes and Bearer are masked (an Authorization: token line would leak), or the mask eats a head sha.
+  const stderr = `gh: HTTP 500 Authorization: token Tk7Tk7Tk7Tk7 Basic Qm9Qm9Qm9Qm9 head ${sha(7)} ${TOK.bearer}`;
+  const r = await run({ old: OLD, listFail: { status: 1, stdout: '', stderr } });
+  assert.equal(r.code, 10);
+  assert.ok(r.errs[0].includes(sha(7)), `the sha must survive: ${r.errs[0]}`);
+  for (const tail of ['Tk7Tk7', 'Qm9Qm9', ...tokenTails]) assert.ok(!r.errs[0].includes(tail), `leaked ${tail}: ${r.errs[0]}`);
+  assert.ok(r.errs[0].includes(`gh: HTTP 500 Authorization: token <token> Basic <token> head ${sha(7)} Bearer <token>)`), `exact masked line: ${r.errs[0]}`);
+});
+
+test('C1e plain words after "token" or "Basic" stay readable: only a value-shaped word is masked', async () => {
+  // Breaks when the token/Basic rule masks any next word: the log would lose its reason text.
+  const stderr = 'gh: HTTP 403 personal access token (HTTP 403) lacks scope; Basic auth is off';
+  const r = await run({ old: OLD, listFail: { status: 1, stdout: '', stderr } });
+  assert.equal(r.code, 10);
+  assert.ok(r.errs[0].includes('personal access token (HTTP 403) lacks scope; Basic auth is off'), `reason text lost: ${r.errs[0]}`);
+});
+
+// ---------------------------------------------------------------- runChild: the real review-status timer and pid hand-off
+
+const gone = async (pid, ms) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try { process.kill(pid, 0); } catch { return true; }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+};
+
+test('18 runChild: a hung child gives timedOut and its pid at the timer; killTree then removes it', async () => {
+  // Breaks when the timer does not fire, the pid is not handed back, or the child is spawned so that killTree cannot reach it.
+  const { runChild } = await load();
+  const { killTree } = await import('./lib/proc.mjs');
+  const res = await runChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 300);
+  try {
+    assert.equal(res.timedOut, true);
+    assert.equal(res.status, null);
+    assert.ok(Number.isInteger(res.pid) && res.pid > 0, `pid ${res.pid}`);
+    assert.doesNotThrow(() => process.kill(res.pid, 0), 'the child is still alive at the timer');
+    killTree(res.pid);
+    assert.ok(await gone(res.pid, 30_000), 'killTree must remove the child');
+  } finally {
+    try { process.kill(res.pid, 'SIGKILL'); } catch { /* gone */ }
+  }
+});
+
+test('18b runChild: a child that exits in time returns its code and output with no timedOut', async () => {
+  // Breaks when the exit path drops stdout, stderr or the code, or the timer still marks the run as timed out.
+  const { runChild } = await load();
+  const res = await runChild(process.execPath, ['-e', "console.log('out-line'); console.error('err-line'); process.exit(3)"], 20_000);
+  assert.equal(res.status, 3);
+  assert.match(res.stdout, /out-line/);
+  assert.match(res.stderr, /err-line/);
+  assert.notEqual(res.timedOut, true);
 });
 
 // ---------------------------------------------------------------- Q1 import probe, test 16 static guard, Q3 header

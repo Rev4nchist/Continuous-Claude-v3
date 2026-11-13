@@ -216,6 +216,16 @@ test('W5 a missing open-prs script exits 3 with an ERROR line in the log, and no
   assert.ok(!existsSync(fx.call));
 });
 
+test('W9 a node path that does not exist exits 1 with an ERROR line in the log and leaves no redirect file', win, () => {
+  // Breaks when a Start-Process failure is not caught: the run ends with no reason in the log, or exit 0 (the doctor would see a green run).
+  const fx = fixture();
+  const r = run(fx, { CCV3_OPEN_PRS_NODE: join(fx.root, 'no-such-dir', 'node.exe') });
+  assert.equal(r.status, 1, `exit code; log:\n${r.log}\n${r.err}`);
+  assert.match(r.log, /ERROR: .*node/i);
+  assert.ok(!existsSync(fx.call), 'no child ran');
+  assert.deepEqual(readdirSync(fx.logDir).filter((f) => /\.tmp$/i.test(f)), [], 'no .tmp left in the log folder');
+});
+
 test('W6 ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN never reach open-prs', win, () => {
   // Breaks when the key strip is dropped: a script that calls no model must not carry a billing key.
   const fx = fixture();

@@ -13,11 +13,14 @@
 // Run: gh lists the open PRs (newest updated first, at most CAP = 20 are checked). Per PR, one gh files call feeds bandOf and
 // a child process runs review-status.mjs <pr> --json. This file only runs review-status as a child; it takes nothing else
 // from it and only bandOf from the router. The decisions store is read, never written.
-// Abort (exit 10, old file kept): the list call or a files call fails, or any stderr says rate limit / HTTP 403 / HTTP 429.
+// Abort (exit 10, old file kept): the list call or a files call fails, or the stderr of a review-status child that did not answer
+// (an exit other than 0 or 1, or a time-out) says rate limit / HTTP 403 / HTTP 429. A child that answered (exit 0 or 1) is not read for it.
 // A review-status exit 2 or a time-out gives a per-PR status. The run budget is 420 s: PRs not started by then get status deadline.
-// Lock: <out>/.open-prs.lock holds "pid startedIso". A live holder younger than 20 minutes makes this run exit 0 at once.
+// Lock: <out>/.open-prs.lock holds "pid startedIso token". A live holder younger than 20 minutes makes this run exit 0 at once.
+// A run deletes the lock only while its text is still this run's own (the token is unique per run).
 // Exit codes: 0 written (or skipped by the lock), 10 gh abort, 1 write failure, 2 bad arguments.
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,6 +42,7 @@ const MIN_LEFT_MS = 100_000;
 const GH_MS = 30_000;
 const STATUS_MS = 60_000;
 const LOCK_STALE_MS = 20 * 60_000;
+const FUTURE_SKEW_MS = 60_000;
 const RATE = /API rate limit|secondary rate limit|HTTP (403|429)/i;
 const STEPS = new Set(['ship', 'open-pr', 'review', 'land', 'paid-round']);
 const BRANCH_STEPS = new Set(['ship', 'open-pr']);
@@ -53,12 +57,17 @@ const clean = (v, n) => asText(v).replace(/[^\x20-\x7e]/g, '?').slice(0, n);
 
 // ---------------------------------------------------------------- stderr tail (masked)
 
-/** The first non-empty stderr line, tokens and urls hidden, at most 200 characters. Mask first, cut last. */
-export function maskTail(stderr) {
-  const line = asText(stderr).split(/\r?\n/).find((l) => l.trim()) ?? '';
+/**
+ * One stderr line, tokens and urls hidden, at most 200 characters. Mask first, cut last. The line is the first one that
+ * matches `prefer` (when given), else the first non-empty one. A 40-hex head sha is not a secret and is not masked.
+ */
+export function maskTail(stderr, prefer) {
+  const lines = asText(stderr).split(/\r?\n/);
+  const line = (prefer && lines.find((l) => prefer.test(l))) ?? lines.find((l) => l.trim()) ?? '';
   return clean(line
     .replace(/(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '<token>')
-    .replace(/Bearer\s+\S+/gi, 'Bearer <token>')
+    .replace(/\b(Bearer)\s+(?!<token>)\S+/gi, '$1 <token>')
+    .replace(/\b(token|Basic)\s+(?!<token>)(?=[A-Za-z0-9+/=._-]*\d)[A-Za-z0-9+/=._-]{8,}/gi, '$1 <token>')
     .replace(/https?:\/\/\S+/g, '<url>'), 200);
 }
 
@@ -136,7 +145,7 @@ const leftMs = (ctx) => BUDGET_MS - (ctx.d.now().getTime() - ctx.start);
 
 async function ghJson(ctx, args) {
   const res = await settle(() => ctx.d.runGh(args, { timeoutMs: Math.max(1, Math.min(GH_MS, leftMs(ctx))) }));
-  if (RATE.test(res.stderr) || res.status !== 0) throw new GhAbort(maskTail(res.stderr) || `exit ${res.status}`);
+  if (RATE.test(res.stderr) || res.status !== 0) throw new GhAbort(maskTail(res.stderr, RATE) || `exit ${res.status}`);
   try { return JSON.parse(res.stdout); } catch { throw new GhAbort('answer is not JSON'); }
 }
 
@@ -154,6 +163,7 @@ async function listOpen(ctx) {
     if (!Array.isArray(rows)) throw new GhAbort('list answer is not an array');
     all.push(...rows);
     if (rows.length < PAGE) break;
+    if (page === MAX_PAGES) ctx.d.log(`open-prs: list stopped at page ${MAX_PAGES}, it was full: later pull requests are not listed`);
   }
   return all.map(pickItem).filter(Boolean);
 }
@@ -170,7 +180,8 @@ async function statusOf(ctx, pr) {
   if (res.timedOut && Number.isInteger(res.pid) && res.pid > 0) {
     try { await ctx.d.killTree(res.pid); } catch { /* already gone */ }
   }
-  if (RATE.test(res.stderr)) throw new GhAbort(maskTail(res.stderr));
+  const answered = res.status === 0 || res.status === 1;
+  if (!answered && RATE.test(res.stderr)) throw new GhAbort(maskTail(res.stderr, RATE));
   return res;
 }
 
@@ -234,30 +245,56 @@ const summaryLine = (rows) => {
 
 // ---------------------------------------------------------------- lock and write
 
+const readText = (lock) => {
+  try { return readFileSync(lock, 'utf8'); } catch (e) { return e?.code === 'ENOENT' ? undefined : null; }
+};
+
 /**
- * True when the lock started less than 20 minutes ago and names a live pid. An empty or unreadable
- * pid (a run between create and write) counts as held until it is stale. A lock that vanished is not held.
+ * 'held' or 'stale'. text is the lock text, or null when it could not be read. A lock is stale when it started more than
+ * 20 minutes ago, is dated more than a minute ahead of the clock, or names a dead pid. With no readable start date the file
+ * mtime is the start. An empty or unreadable pid (a run between create and write) counts as held until it is stale.
  */
-function lockHeld(lock, d) {
-  let text;
-  try { text = readFileSync(lock, 'utf8'); } catch (e) { return e?.code !== 'ENOENT'; }
-  const [pid, started] = text.trim().split(' ');
-  let startMs = Date.parse(started);
-  if (!Number.isFinite(startMs)) { try { startMs = statSync(lock).mtimeMs; } catch { return false; } }
-  if (d.now().getTime() - startMs > LOCK_STALE_MS) return false;
+export function judgeLock(text, mtimeMs, nowMs) {
+  const [pid, started] = (text ?? '').trim().split(' ');
+  const startMs = Number.isFinite(Date.parse(started)) ? Date.parse(started) : mtimeMs;
+  const age = nowMs - startMs;
+  if (age > LOCK_STALE_MS || age < -FUTURE_SKEW_MS) return 'stale';
   const n = Number.parseInt(pid, 10);
-  return !(n > 0) || pidAlive(n);
+  return n > 0 && !pidAlive(n) ? 'stale' : 'held';
 }
 
-/** True when this run now owns the lock. False when a live run holds it. */
+/** 'gone' when the lock vanished, else 'held' or 'stale'. */
+function lockState(lock, text, d) {
+  if (text === undefined) return 'gone';
+  try { return judgeLock(text, statSync(lock).mtimeMs, d.now().getTime()); } catch { return 'gone'; }
+}
+
+/**
+ * Removes the lock only while its text is still the text that was judged stale. The re-read leaves a window of a few
+ * system calls: a run that took the lock inside it loses it. That needs a fresh run at exactly that moment.
+ */
+function unlinkIfSame(lock, text) {
+  if (readText(lock) !== text) return;
+  try { unlinkSync(lock); } catch { /* another run took it; the retry finds out */ }
+}
+
+/** The lock text of this run when this run now owns the lock. null when a live run holds it. */
 function takeLock(lock, d) {
+  const mine = `${process.pid} ${d.now().toISOString()} ${randomUUID()}`;
   for (let attempt = 0; attempt < 2; attempt++) {
-    try { writeFileSync(lock, `${process.pid} ${d.now().toISOString()}`, { flag: 'wx' }); return true; } catch (e) { if (e?.code !== 'EEXIST') throw e; }
-    if (lockHeld(lock, d)) return false;
-    d.log('open-prs: taking over a stale lock');
-    try { unlinkSync(lock); } catch { /* another run took it; the retry finds out */ }
+    try { writeFileSync(lock, mine, { flag: 'wx' }); return mine; } catch (e) { if (e?.code !== 'EEXIST') throw e; }
+    const text = readText(lock);
+    const state = lockState(lock, text, d);
+    if (state === 'held') return null;
+    if (state === 'stale') { d.log('open-prs: taking over a stale lock'); unlinkIfSame(lock, text); }
   }
-  return false;
+  return null;
+}
+
+/** Deletes the lock only while it still holds this run's text. */
+function releaseLock(lock, mine) {
+  if (readText(lock) !== mine) return;
+  try { unlinkSync(lock); } catch { /* already gone */ }
 }
 
 function writeDoc(d, out, doc) {
@@ -308,11 +345,10 @@ function defaultRunGh(args, { timeoutMs }) {
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr || note };
 }
 
-/** review-status.mjs <pr> --json as a child with its own timer. At the timer it returns timedOut with the pid; the caller kills the tree. */
-function defaultRunStatus(pr, { repo, timeoutMs }) {
+/** A child with its own timer. At the timer it returns timedOut with the pid; the caller kills the tree. */
+export function runChild(command, args, timeoutMs) {
   return new Promise((resolve) => {
-    const args = [REVIEW_STATUS, String(pr), '--repo', repo, '--json'];
-    const child = spawn(process.execPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: ghEnv(), detached: process.platform !== 'win32' });
+    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: ghEnv(), detached: process.platform !== 'win32' });
     let stdout = '';
     let stderr = '';
     let timer = null;
@@ -329,6 +365,9 @@ function defaultRunStatus(pr, { repo, timeoutMs }) {
     child.on('close', (code) => finish({ status: code }));
   });
 }
+
+/** review-status.mjs <pr> --json as a child. */
+const defaultRunStatus = (pr, { repo, timeoutMs }) => runChild(process.execPath, [REVIEW_STATUS, String(pr), '--repo', repo, '--json'], timeoutMs);
 
 const defaultReadConfig = () => JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
 
@@ -369,19 +408,19 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (opts.help) { d.log(USAGE); return 0; }
   const out = path.resolve(opts.out ?? path.join(d.home, '.claude', 'state', 'lane-dash'));
   const lock = path.join(out, '.open-prs.lock');
-  let owned;
+  let mine;
   try {
     mkdirSync(out, { recursive: true });
-    owned = takeLock(lock, d);
+    mine = takeLock(lock, d);
   } catch (e) {
     d.err(`open-prs: cannot take the lock (${maskTail(e?.message)})`);
     return 1;
   }
-  if (!owned) { d.log('open-prs: another run holds the lock'); return 0; }
+  if (!mine) { d.log('open-prs: another run holds the lock'); return 0; }
   try {
     return await run(d, opts, out);
   } finally {
-    try { unlinkSync(lock); } catch { /* already gone */ }
+    releaseLock(lock, mine);
   }
 }
 

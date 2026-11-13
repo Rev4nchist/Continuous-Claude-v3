@@ -17,7 +17,8 @@
 #
 # Exit code: the exit code of open-prs.mjs. 0 = written, or skipped because a run holds the lock or the mutex.
 # 10 = gh failed or hit a rate limit and the old file was kept (tasks.json warnExit [10] shows it as a doctor WARN).
-# 1 = write failure. 3 = open-prs.mjs not found (nothing runs). 124 = killed at the time limit.
+# 1 = write failure, or node could not start, or any other error in this file (an ERROR line is in the log).
+# 3 = open-prs.mjs not found (nothing runs). 124 = killed at the time limit.
 #
 # This file lives in the repo at .claude/scripts/scheduled/ and the forward sync installs it at ~/.claude/scripts/scheduled/
 # (with profile-paths.ps1 beside it). open-prs.mjs lives in the repo (scripts\github\) and is not synced, so this file finds the
@@ -28,6 +29,7 @@
 #   CCV3_OPEN_PRS_LOG          log file path (default ~/.claude/logs/open-prs/<yyyy-MM-dd>.log)
 #   CCV3_OPEN_PRS_TIMEOUT_SEC  time limit in seconds (default 540)
 #   CCV3_OPEN_PRS_EXTRA_ARGS   extra open-prs arguments, e.g. --out <dir> --cap 5
+#   CCV3_OPEN_PRS_NODE         node executable (default: node from PATH, else C:\Program Files\nodejs\node.exe)
 #   CCV3_OPEN_PRS_MUTEX        mutex name (default Local\CCv3-Open-PRs). Tests set a unique name so a live run cannot block them.
 
 $logPath = if ($env:CCV3_OPEN_PRS_LOG) { $env:CCV3_OPEN_PRS_LOG } else { Join-Path $env:USERPROFILE ('.claude\logs\open-prs\' + (Get-Date -Format 'yyyy-MM-dd') + '.log') }
@@ -48,6 +50,7 @@ if (-not $acquired) {
 # node: PATH first, then the default install (Task Scheduler's PATH is not the user's PATH).
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 $node = if ($nodeCmd) { $nodeCmd.Source } else { 'C:\Program Files\nodejs\node.exe' }
+if ($env:CCV3_OPEN_PRS_NODE) { $node = $env:CCV3_OPEN_PRS_NODE }
 
 # Repo root: the override wins. Else the machine profile. If that checkout has no script, the default checkout.
 $scriptRel = 'scripts\github\open-prs.mjs'
@@ -83,24 +86,44 @@ function Invoke-Bounded([string]$label, [string]$script, [string]$extra, [int]$l
   if ($extra) { $argText = $argText + ' ' + $extra }
   $outFile = Join-Path $logDir ('open-prs.' + $PID + '.out.tmp')
   $errFile = Join-Path $logDir ('open-prs.' + $PID + '.err.tmp')
-  $p = Start-Process -FilePath $node -ArgumentList $argText -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
-  $null = $p.Handle
-  if ($p.WaitForExit($limit * 1000)) {
-    $rc = $p.ExitCode
-  } else {
-    Stop-Child $p.Id
-    Write-Log "TIMEOUT: $label killed"
-    $rc = 124
+  $p = Start-Child $argText $outFile $errFile
+  $rc = 1
+  if ($p) {
+    if ($p.WaitForExit($limit * 1000)) {
+      $rc = $p.ExitCode
+    } else {
+      Stop-Child $p.Id
+      Write-Log "TIMEOUT: $label killed"
+      $rc = 124
+    }
   }
-  foreach ($f in @($outFile, $errFile)) {
-    try { Get-Content -LiteralPath $f -ErrorAction Stop | ForEach-Object { Write-Log "$_" } } catch { }
-    Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
-  }
+  Copy-ChildLog @($outFile, $errFile)
   Write-Log "$label finished, exit $rc"
   $script:boundedRc = $rc
 }
 
+# Starts node. A start failure (node not found) is logged and returns $null. $p.Handle is read first (see above).
+function Start-Child([string]$argText, [string]$outFile, [string]$errFile) {
+  try {
+    $p = Start-Process -FilePath $node -ArgumentList $argText -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile -ErrorAction Stop
+    $null = $p.Handle
+    return $p
+  } catch {
+    Write-Log "ERROR: could not start node ($node): $($_.Exception.Message)"
+    return $null
+  }
+}
+
+# Copies the child output files into the log, then deletes them.
+function Copy-ChildLog([string[]]$files) {
+  foreach ($f in $files) {
+    try { Get-Content -LiteralPath $f -ErrorAction Stop | ForEach-Object { Write-Log "$_" } } catch { }
+    Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+  }
+}
+
 $exitCode = 0
+$script:boundedRc = 1
 $script_ = Join-Path $R $scriptRel
 try {
   Write-Log "open-prs starting, repo $R, branch $branch"
@@ -117,6 +140,9 @@ try {
   Get-ChildItem -LiteralPath $logDir -Filter '*.log' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}\.log$' -and $_.LastWriteTime -lt (Get-Date).AddDays(-14) } |
     Remove-Item -Force -ErrorAction SilentlyContinue
+} catch {
+  Write-Log "ERROR: $($_.Exception.Message)"
+  $exitCode = 1
 } finally {
   try { $mutex.ReleaseMutex() } catch { }
   $mutex.Dispose()
