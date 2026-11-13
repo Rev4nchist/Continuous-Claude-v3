@@ -6292,6 +6292,7 @@ function normalizeProjectKey(p) {
 init_trace_boot();
 import { existsSync, lstatSync, readFileSync as readFileSync2, realpathSync } from "fs";
 import { dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve2 } from "path";
+var isNetworkPath = (p) => /^[\\/]{2}/.test(p);
 var FOLDS_CASE = /* @__PURE__ */ new Set(["win32", "darwin"]);
 var real = (p) => realpathSync.native(p);
 function nearestExisting(abs) {
@@ -6308,8 +6309,9 @@ function commonDirOf(top) {
   let st;
   try {
     st = lstatSync(dotGit);
-  } catch {
-    return void 0;
+  } catch (err) {
+    const code = err?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? void 0 : null;
   }
   if (st.isDirectory()) return dotGit;
   if (!st.isFile()) return null;
@@ -6325,7 +6327,9 @@ function commonDirOf(top) {
 function resolveClaimKey(rawPath, options = {}) {
   try {
     const platform = options.platform ?? process.platform;
-    const abs = resolve2(rawPath);
+    if (isNetworkPath(rawPath)) return null;
+    const abs = options.cwd ? resolve2(options.cwd, rawPath) : resolve2(rawPath);
+    if (isNetworkPath(abs)) return null;
     const anchor = nearestExisting(abs);
     if (!anchor) return null;
     const realFile = join4(real(anchor), relative(anchor, abs));
@@ -6338,8 +6342,9 @@ function resolveClaimKey(rawPath, options = {}) {
           real(common).replace(/\\/g, "/").replace(/\/?\.git\/?$/, "")
         );
         let rel = relative(dir, realFile).replace(/\\/g, "/");
-        if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
-        if (isHarnessPath(realFile) !== isHarnessPath(rel)) return null;
+        if (!rel || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) return null;
+        const harness = isHarnessPath(rel);
+        if (isHarnessPath(abs) !== harness || isHarnessPath(realFile) !== harness) return null;
         if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();
         return { filePath: rel, project };
       }
@@ -6382,7 +6387,7 @@ async function main() {
     return;
   }
   const sessionId = resolveSessionId(input.session_id);
-  const key = resolveClaimKey(filePath);
+  const key = resolveClaimKey(filePath, { cwd: input.cwd });
   const claimPath = key ? key.filePath : filePath;
   const project = key ? key.project : canonicalProject(input.cwd);
   const decision = await resolveFileClaim(

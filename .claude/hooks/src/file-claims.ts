@@ -90,9 +90,11 @@ export async function main(): Promise<void> {
 
   // Key by the FILE's own repo: repo-relative path plus the repo's common git dir. Two worktrees
   // of one repo then claim the same key, and a session in repo A editing repo B meets a session
-  // in repo B. Reads files only (no git process). A file outside any repo, or a repo that cannot
-  // be read, keeps the old key: raw path and the project of cwd. That path still needs git.
-  const key = resolveClaimKey(filePath);
+  // in repo B. Reads files only (no git process). The cases that keep the old key (raw path and
+  // the project of cwd, which still needs git) are listed in shared/claim-target.ts. A stored row
+  // with an absolute path (a live session that started before this change) is not seen by the new
+  // key until it expires.
+  const key = resolveClaimKey(filePath, { cwd: input.cwd });
   const claimPath = key ? key.filePath : filePath;
   const project = key ? key.project : canonicalProject(input.cwd);
 

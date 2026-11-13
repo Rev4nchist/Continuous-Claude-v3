@@ -120,6 +120,15 @@ describe('file-claims key', () => {
     );
   });
 
+  it('6. resolves a relative file_path against the payload cwd, not the hook process cwd', async () => {
+    const a = makeRepo('a');
+    await runHook(a, join('src', 'x.ts'));
+    expect(seen.calls[0].filePath).toBe('src/x.ts');
+    expect(seen.calls[0].project).toBe(
+      (await import('../shared/session-id.js')).canonicalProject(a),
+    );
+  });
+
   it('5. names the holder and the repo-relative path in the deny, not an absolute path', async () => {
     const a = makeRepo('a');
     seen.decision = { outcome: 'blocked', holder: 'sess-holder', leaseClass: 'file' };
