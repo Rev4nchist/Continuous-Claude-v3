@@ -3572,7 +3572,7 @@ var require_dist = __commonJS({
     function parse(stream, callback) {
       const parser = new parser_1.Parser();
       stream.on("data", (buffer) => parser.parse(buffer, callback));
-      return new Promise((resolve2) => stream.on("end", () => resolve2()));
+      return new Promise((resolve3) => stream.on("end", () => resolve3()));
     }
   }
 });
@@ -4348,12 +4348,12 @@ var require_client = __commonJS({
           this._connect(callback);
           return;
         }
-        return new this._Promise((resolve2, reject) => {
+        return new this._Promise((resolve3, reject) => {
           this._connect((error) => {
             if (error) {
               reject(error);
             } else {
-              resolve2(this);
+              resolve3(this);
             }
           });
         });
@@ -4735,8 +4735,8 @@ var require_client = __commonJS({
         } else {
           query = new Query2(config, values, callback);
           if (!query.callback) {
-            result = new this._Promise((resolve2, reject) => {
-              query.callback = (err, res) => err ? reject(err) : resolve2(res);
+            result = new this._Promise((resolve3, reject) => {
+              query.callback = (err, res) => err ? reject(err) : resolve3(res);
             }).catch((err) => {
               Error.captureStackTrace(err);
               throw err;
@@ -4836,8 +4836,8 @@ var require_client = __commonJS({
         if (cb) {
           this.connection.once("end", cb);
         } else {
-          return new this._Promise((resolve2) => {
-            this.connection.once("end", resolve2);
+          return new this._Promise((resolve3) => {
+            this.connection.once("end", resolve3);
           });
         }
       }
@@ -4887,8 +4887,8 @@ var require_pg_pool = __commonJS({
       const cb = function(err, client) {
         err ? rej(err) : res(client);
       };
-      const result = new Promise2(function(resolve2, reject) {
-        res = resolve2;
+      const result = new Promise2(function(resolve3, reject) {
+        res = resolve3;
         rej = reject;
       }).catch((err) => {
         Error.captureStackTrace(err);
@@ -4949,7 +4949,7 @@ var require_pg_pool = __commonJS({
         if (typeof Promise2.try === "function") {
           return Promise2.try(f);
         }
-        return new Promise2((resolve2) => resolve2(f()));
+        return new Promise2((resolve3) => resolve3(f()));
       }
       _isFull() {
         return this._clients.length >= this.options.max;
@@ -5345,8 +5345,8 @@ var require_query2 = __commonJS({
     NativeQuery.prototype._getPromise = function() {
       if (this._promise) return this._promise;
       this._promise = new Promise(
-        function(resolve2, reject) {
-          this._once("end", resolve2);
+        function(resolve3, reject) {
+          this._once("end", resolve3);
           this._once("error", reject);
         }.bind(this)
       );
@@ -5526,12 +5526,12 @@ var require_client2 = __commonJS({
         this._connect(callback);
         return;
       }
-      return new this._Promise((resolve2, reject) => {
+      return new this._Promise((resolve3, reject) => {
         this._connect((error) => {
           if (error) {
             reject(error);
           } else {
-            resolve2(this);
+            resolve3(this);
           }
         });
       });
@@ -5555,8 +5555,8 @@ var require_client2 = __commonJS({
         query = new NativeQuery(config, values, callback);
         if (!query.callback) {
           let resolveOut, rejectOut;
-          result = new this._Promise((resolve2, reject) => {
-            resolveOut = resolve2;
+          result = new this._Promise((resolve3, reject) => {
+            resolveOut = resolve3;
             rejectOut = reject;
           }).catch((err) => {
             Error.captureStackTrace(err);
@@ -5619,8 +5619,8 @@ var require_client2 = __commonJS({
       }
       let result;
       if (!cb) {
-        result = new this._Promise(function(resolve2, reject) {
-          cb = (err) => err ? reject(err) : resolve2();
+        result = new this._Promise(function(resolve3, reject) {
+          cb = (err) => err ? reject(err) : resolve3();
         });
       }
       const doEnd = function() {
@@ -5839,7 +5839,7 @@ var require_lib2 = __commonJS({
 
 // src/file-claims.ts
 init_trace_boot();
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync3 } from "fs";
 
 // src/shared/db-utils-pg.ts
 init_trace_boot();
@@ -6288,6 +6288,69 @@ function normalizeProjectKey(p) {
   return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+// src/shared/claim-target.ts
+init_trace_boot();
+import { existsSync, lstatSync, readFileSync as readFileSync2, realpathSync } from "fs";
+import { dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve2 } from "path";
+var FOLDS_CASE = /* @__PURE__ */ new Set(["win32", "darwin"]);
+var real = (p) => realpathSync.native(p);
+function nearestExisting(abs) {
+  let cur = abs;
+  for (; ; ) {
+    if (existsSync(cur)) return cur;
+    const up = dirname2(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+}
+function commonDirOf(top) {
+  const dotGit = join4(top, ".git");
+  let st;
+  try {
+    st = lstatSync(dotGit);
+  } catch {
+    return void 0;
+  }
+  if (st.isDirectory()) return dotGit;
+  if (!st.isFile()) return null;
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync2(dotGit, "utf8"));
+  if (!m) return null;
+  const gitdir = resolve2(top, m[1]);
+  if (!existsSync(gitdir)) return null;
+  const commonFile = join4(gitdir, "commondir");
+  if (!existsSync(commonFile)) return gitdir;
+  const common = resolve2(gitdir, readFileSync2(commonFile, "utf8").trim());
+  return existsSync(common) ? common : null;
+}
+function resolveClaimKey(rawPath, options = {}) {
+  try {
+    const platform = options.platform ?? process.platform;
+    const abs = resolve2(rawPath);
+    const anchor = nearestExisting(abs);
+    if (!anchor) return null;
+    const realFile = join4(real(anchor), relative(anchor, abs));
+    let dir = dirname2(realFile);
+    for (; ; ) {
+      const common = commonDirOf(dir);
+      if (common === null) return null;
+      if (common !== void 0) {
+        const project = normalizeProjectKey(
+          real(common).replace(/\\/g, "/").replace(/\/?\.git\/?$/, "")
+        );
+        let rel = relative(dir, realFile).replace(/\\/g, "/");
+        if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+        if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();
+        return { filePath: rel, project };
+      }
+      const up = dirname2(dir);
+      if (up === dir) return null;
+      dir = up;
+    }
+  } catch {
+    return null;
+  }
+}
+
 // src/file-claims.ts
 init_guard_log();
 var STALE_THRESHOLD_MS = 5 * 60 * 1e3;
@@ -6302,7 +6365,7 @@ function humanizeUntil(iso) {
 async function main() {
   let input;
   try {
-    const stdinContent = readFileSync2(0, "utf-8");
+    const stdinContent = readFileSync3(0, "utf-8");
     input = JSON.parse(stdinContent);
   } catch {
     console.log(JSON.stringify({ result: "continue" }));
@@ -6318,16 +6381,18 @@ async function main() {
     return;
   }
   const sessionId = resolveSessionId(input.session_id);
-  const project = canonicalProject(input.cwd);
+  const key = resolveClaimKey(filePath);
+  const claimPath = key ? key.filePath : filePath;
+  const project = key ? key.project : canonicalProject(input.cwd);
   const decision = await resolveFileClaim(
-    filePath,
+    claimPath,
     project,
     sessionId,
     STALE_THRESHOLD_MS,
     input.tool_name,
     { breakGlass: BREAK_GLASS }
   );
-  const fileName = filePath.split(/[/\\]/).pop() || filePath;
+  const fileName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
   let output;
   switch (decision.outcome) {
     case "blocked": {
