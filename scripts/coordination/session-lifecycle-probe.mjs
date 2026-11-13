@@ -97,7 +97,10 @@ function psqlText(result) {
 
 /** Run SQL and return the text psql would print: through the pg module with --db-url, else docker exec psql. */
 async function psql(sql) {
-  if (DB_URL) return psqlText(await pgClient.query({ text: sql, rowMode: 'array' }));
+  if (DB_URL) {
+    const r = await pgClient.query({ text: sql, rowMode: 'array' });
+    return psqlText(Array.isArray(r) ? r.at(-1) : r); // several statements: psql prints the last result only
+  }
   return dockerPsql(sql);
 }
 
@@ -250,7 +253,12 @@ async function main() {
       `hook exit=${absentRan.status} rows=${absent}`);
 
     // --- 5. INDEXED --------------------------------------------------------
+    // A scratch table has a few rows, so the planner prefers Seq Scan + Sort there. With seq scans off it still picks
+    // sessions_last_signal_idx only when the index exists and matches the GREATEST expression: the check proves the
+    // index is usable, not that a big table prefers it. One psql call (docker exec runs each call in a new session);
+    // on the --db-url path the client is one session, so the setting is reset after.
     const plan = await psql(`
+      SET enable_seqscan = off;
       EXPLAIN SELECT s.id FROM public.sessions s
        WHERE s.id NOT LIKE 's-%' AND s.last_heartbeat IS NOT NULL
          AND GREATEST(s.last_heartbeat, s.last_activity_at, s.ended_at)
@@ -258,6 +266,7 @@ async function main() {
        ORDER BY GREATEST(s.last_heartbeat, s.last_activity_at, s.ended_at) DESC
        LIMIT 51
     `);
+    if (DB_URL) await psql('RESET enable_seqscan');
     check('5 INDEXED   liveness query plans as an Index Scan',
       plan.includes('sessions_last_signal_idx') && !plan.includes('Seq Scan'),
       plan.split('\n')[1]?.trim() ?? plan.split('\n')[0]?.trim());

@@ -23,7 +23,7 @@
  *   node scripts/coordination/degradation-probe.mjs
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { canonProject, repoPath } from './canon-home.mjs';
 import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
 
@@ -46,6 +46,14 @@ const REPO = repoPath();
 const CANON = canonProject();
 console.log(`canonical project: ${CANON}`);
 const TARGET = join(REPO, '.claude', 'hooks', 'src', '__step4guard__.ts');
+// The claim key the file-claims hook stores since PR 536 (.claude/hooks/src/shared/claim-target.ts resolveClaimKey):
+// the path relative to the repo top folder, forward slashes, lower-cased where the file system ignores case.
+// SQL seeds and reads use it; the hook payload keeps the absolute path, as Claude Code sends it.
+const claimKey = (abs) => {
+  const rel = relative(REPO, abs).replace(/\\/g, '/');
+  return process.platform === 'win32' || process.platform === 'darwin' ? rel.toLowerCase() : rel;
+};
+
 const HOLDER = 'step4guard-holder-0000-0000-0000000';
 const ME = 'step4guard-me-0000-0000-00000000000';
 
@@ -74,7 +82,7 @@ const check = (name, got, want) => {
 };
 
 const purge = () => psql(`
-  DELETE FROM file_claims WHERE file_path = '${TARGET}';
+  DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET)}';
   DELETE FROM sessions WHERE id LIKE 'step4guard-%';
   DELETE FROM agentic_os.coordination_event WHERE session_id LIKE 'step4guard-%';
 `);
@@ -99,7 +107,7 @@ async function main() {
   psql(`
     INSERT INTO sessions (id, project, last_heartbeat) VALUES ('${HOLDER}', '${CANON}', NOW());
     INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-    VALUES ('${TARGET}', '${CANON}', '${HOLDER}', NOW());
+    VALUES ('${claimKey(TARGET)}', '${CANON}', '${HOLDER}', NOW());
   `);
 
   let renamed = false;
@@ -117,7 +125,7 @@ async function main() {
     // THE point: the guard's decision survives the instrumentation failure.
     check('B the BLOCK still happens', bj.hookSpecificOutput?.permissionDecision, 'deny');
     check('B the holder keeps the claim',
-      psql(`SELECT session_id FROM file_claims WHERE file_path='${TARGET}'`), HOLDER);
+      psql(`SELECT session_id FROM file_claims WHERE file_path='${claimKey(TARGET)}'`), HOLDER);
     check('B the loss is announced on stderr', /not recorded|dropped/.test(blocked.err), true);
 
     // And the claim transaction still committed its OTHER work — the heartbeat
@@ -142,7 +150,7 @@ async function main() {
   psql(`
     INSERT INTO sessions (id, project, last_heartbeat) VALUES ('${HOLDER}', '${CANON}', NOW());
     INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-    VALUES ('${TARGET}', '${CANON}', '${HOLDER}', NOW());
+    VALUES ('${claimKey(TARGET)}', '${CANON}', '${HOLDER}', NOW());
   `);
   const after = await runHook('.claude/hooks/dist/file-claims.mjs', {
     session_id: ME, cwd: REPO, tool_name: 'Edit', tool_input: { file_path: TARGET },
@@ -155,7 +163,7 @@ async function main() {
   check('D fixtures removed',
     Number(psql(`SELECT (SELECT count(*) FROM agentic_os.coordination_event WHERE session_id LIKE 'step4guard-%')
                       + (SELECT count(*) FROM sessions WHERE id LIKE 'step4guard-%')
-                      + (SELECT count(*) FROM file_claims WHERE file_path='${TARGET}')`)), 0);
+                      + (SELECT count(*) FROM file_claims WHERE file_path='${claimKey(TARGET)}')`)), 0);
 
   const failed = results.filter((r) => !r).length;
   console.log(`\n${failed ? `FAILED ${failed}/${results.length}` : `ALL ${results.length} GUARD CHECKS PASS`}`);

@@ -18,7 +18,7 @@
  *   node scripts/coordination/event-recording-probe.mjs
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { canonProject, repoPath } from './canon-home.mjs';
 import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
 
@@ -41,6 +41,14 @@ const REPO = repoPath();
 const CANON = canonProject();
 console.log(`canonical project: ${CANON}`);
 const TARGET = join(REPO, '.claude', 'hooks', 'src', '__step4e2e__.ts');
+// The claim key the file-claims hook stores since PR 536 (.claude/hooks/src/shared/claim-target.ts resolveClaimKey):
+// the path relative to the repo top folder, forward slashes, lower-cased where the file system ignores case.
+// SQL seeds and reads use it; the hook payload keeps the absolute path, as Claude Code sends it.
+const claimKey = (abs) => {
+  const rel = relative(REPO, abs).replace(/\\/g, '/');
+  return process.platform === 'win32' || process.platform === 'darwin' ? rel.toLowerCase() : rel;
+};
+
 const HOLDER = 'step4e2e-holder-0000-0000-000000000000';
 const INTRUDER = 'step4e2e-intruder-0000-0000-00000000';
 const STALE = 'step4e2e-stale-0000-0000-000000000000';
@@ -71,7 +79,7 @@ const check = (name, got, want) => {
 
 function purge() {
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${TARGET}';
+    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET)}';
     DELETE FROM sessions WHERE id LIKE 'step4e2e-%';
     DELETE FROM agentic_os.coordination_event WHERE session_id LIKE 'step4e2e-%';
   `);
@@ -84,7 +92,7 @@ async function main() {
   psql(`
     INSERT INTO sessions (id, project, last_heartbeat) VALUES ('${HOLDER}', '${CANON}', NOW());
     INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-    VALUES ('${TARGET}', '${CANON}', '${HOLDER}', NOW());
+    VALUES ('${claimKey(TARGET)}', '${CANON}', '${HOLDER}', NOW());
   `);
 
   const blocked = await runHook('.claude/hooks/dist/file-claims.mjs', {
@@ -100,11 +108,11 @@ async function main() {
     psql(`SELECT holder_session_id FROM agentic_os.coordination_event
           WHERE kind='claim_blocked' AND session_id='${INTRUDER}'`), HOLDER);
   check('1 the holder still owns the claim',
-    psql(`SELECT session_id FROM file_claims WHERE file_path='${TARGET}'`), HOLDER);
+    psql(`SELECT session_id FROM file_claims WHERE file_path='${claimKey(TARGET)}'`), HOLDER);
 
   // === 2. The ordinary grant writes NOTHING ===============================
   // One row per Edit is how file_claims reached 8,170 dead rows. Prove silence.
-  psql(`DELETE FROM file_claims WHERE file_path = '${TARGET}';`);
+  psql(`DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET)}';`);
   const granted = await runHook('.claude/hooks/dist/file-claims.mjs', {
     session_id: INTRUDER, cwd: REPO, tool_name: 'Edit', tool_input: { file_path: TARGET },
   });
@@ -120,11 +128,11 @@ async function main() {
   // a holder with a live lease, which correctly BLOCKS. Omitting it here made
   // this case fail in exactly the way the new rule is supposed to.
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${TARGET}';
+    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET)}';
     INSERT INTO sessions (id, project, last_heartbeat)
       VALUES ('${STALE}', '${CANON}', NOW() - INTERVAL '10 minutes');
     INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
-      VALUES ('${TARGET}', '${CANON}', '${STALE}',
+      VALUES ('${claimKey(TARGET)}', '${CANON}', '${STALE}',
               NOW() - INTERVAL '10 minutes', NOW() - INTERVAL '5 minutes');
   `);
   const took = await runHook('.claude/hooks/dist/file-claims.mjs', {
@@ -166,7 +174,7 @@ async function main() {
   check('6 fixtures fully removed',
     Number(psql(`SELECT (SELECT count(*) FROM agentic_os.coordination_event WHERE session_id LIKE 'step4e2e-%')
                       + (SELECT count(*) FROM sessions WHERE id LIKE 'step4e2e-%')
-                      + (SELECT count(*) FROM file_claims WHERE file_path='${TARGET}')`)), 0);
+                      + (SELECT count(*) FROM file_claims WHERE file_path='${claimKey(TARGET)}')`)), 0);
 
   const failed = results.filter((r) => !r).length;
   console.log(`\n${failed ? `FAILED ${failed}/${results.length}` : `ALL ${results.length} CHECKS PASS`}`);

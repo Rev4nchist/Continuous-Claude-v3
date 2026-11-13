@@ -57,7 +57,7 @@
 
 import { execFileSync, spawn } from 'child_process';
 import { writeFileSync } from 'fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { canonProject, repoPath } from './canon-home.mjs';
 import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
 
@@ -102,6 +102,14 @@ const PROJECT_CWD = repoPath();
 const CANONICAL_PROJECT = canonProject();
 console.log(`canonical project: ${CANONICAL_PROJECT}`);
 const TARGET_FILE = join(PROJECT_CWD, '.claude', 'hooks', 'src', '__loadprobe__.ts');
+// The claim key the file-claims hook stores since PR 536 (.claude/hooks/src/shared/claim-target.ts resolveClaimKey):
+// the path relative to the repo top folder, forward slashes, lower-cased where the file system ignores case.
+// SQL seeds and reads use it; the hook payload keeps the absolute path, as Claude Code sends it.
+const claimKey = (abs) => {
+  const rel = relative(PROJECT_CWD, abs).replace(/\\/g, '/');
+  return process.platform === 'win32' || process.platform === 'darwin' ? rel.toLowerCase() : rel;
+};
+
 const OWNER = 'loadprobe-owner-0000-0000-000000000000';
 
 function psql(sql) {
@@ -131,19 +139,19 @@ const PURGE_EVENTS =
 
 function setup() {
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${TARGET_FILE}';
+    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET_FILE)}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
     ${PURGE_EVENTS}
     INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat)
     VALUES ('${OWNER}', '${CANONICAL_PROJECT}', 'load probe owner', NOW(), NOW());
     INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
-    VALUES ('${TARGET_FILE}', '${CANONICAL_PROJECT}', '${OWNER}', NOW(), NOW() + INTERVAL '30 minutes');
+    VALUES ('${claimKey(TARGET_FILE)}', '${CANONICAL_PROJECT}', '${OWNER}', NOW(), NOW() + INTERVAL '30 minutes');
   `);
 }
 
 function teardown() {
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${TARGET_FILE}';
+    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET_FILE)}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
     ${PURGE_EVENTS}
   `);
