@@ -27,7 +27,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { changeOf, checkSummary, hashOf, SUMMARY_REL } from './pr-summary.mjs';
+import { changeOf, checkSummary, hashOf, summaryFieldsOf, SUMMARY_REL } from './pr-summary.mjs';
 
 const run = (cwd, args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', windowsHide: true });
 const sh = (cwd, ...args) => { const r = run(cwd, args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
@@ -280,6 +280,17 @@ test('PS15: changeOf returns the Change sentence, or null', () => {
   assert.equal(changeOf('Problem: x\n'), null);
   assert.equal(changeOf(null), null);
   assert.equal(changeOf('Change:   \n'), null);
+});
+
+test('PS19: summaryFieldsOf returns Problem, Change and You will see, each the first value of its label, or null', () => {
+  assert.deepEqual(summaryFieldsOf(textOf(FIELDS('abc1234'))), {
+    problem: 'Dave cannot see what a pull request does before it opens.',
+    change: 'Pre-pr now reads a short plain summary and prints it first.',
+    youWillSee: 'A new summary line at the top of the pre-pr output.',
+  });
+  assert.deepEqual(summaryFieldsOf('- **Problem:** p1\n* You will see: y1\nProblem: p2\nChange:   \n'), { problem: 'p1', change: null, youWillSee: 'y1' });
+  for (const bad of [null, undefined, 7, '']) assert.deepEqual(summaryFieldsOf(bad), { problem: null, change: null, youWillSee: null });
+  assert.equal(summaryFieldsOf(textOf(FIELDS('abc1234'))).change, changeOf(textOf(FIELDS('abc1234'))), 'one parser: the Change equals changeOf');
 });
 
 test('PS5b: files that a merge of the base brought in do not count as changed since Head', () => {
