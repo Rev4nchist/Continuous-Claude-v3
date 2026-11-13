@@ -6508,8 +6508,10 @@ var CUE_DEFS = [
   { name: "erase", src: "erase" },
   { name: "ri", src: "ri" },
   { name: "remove-item", src: "remove-item" },
-  // Flags before -i are allowed (`sed -E -i`, `sed -e x -i`). [a-hj-z] leaves out "i", so the run of flags cannot backtrack.
-  { name: "sed -i", src: "sed\\s+(?:(?:-e\\s+\\S+|-f\\s+\\S+|-[a-hj-z]+)\\s+)*(?:-[a-z]*i[a-z]*(?:\\.\\w+)?|--in-place(?:=\\S+)?)" },
+  // Flags before -i are allowed (`sed -E -i`, `sed -e x -i`). [a-hj-z] leaves out "i". The script after -e or -f
+  // may not start with "-" (?!-), so a bare "-e" token has ONE parse: a flag. Without that, "-e -e -e ..." split
+  // in exponentially many ways (CR 11-13 major).
+  { name: "sed -i", src: "sed\\s+(?:(?:-[ef]\\s+(?!-)\\S+|-[a-hj-z]+)\\s+)*(?:-[a-z]*i[a-z]*(?:\\.\\w+)?|--in-place(?:=\\S+)?)" },
   { name: "git checkout", src: "git\\s+checkout" },
   { name: "git restore", src: "git\\s+restore" },
   { name: "git apply", src: "git\\s+apply" },
@@ -6537,7 +6539,9 @@ var FIRST_OPERAND_GAP = /\s+(?:-\S+\s+)*['"]?/y;
 function firstOperandAt(t, cueEnd) {
   FIRST_OPERAND_GAP.lastIndex = cueEnd;
   const m = FIRST_OPERAND_GAP.exec(t);
-  return m ? cueEnd + m[0].length : -1;
+  if (!m) return -1;
+  if (/(?:^|\s)-de(?:s(?:t\w*)?)?(?=\s)/i.test(m[0])) return -1;
+  return cueEnd + m[0].length;
 }
 function classifyShellText(text, claims, fold) {
   if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: "none" };

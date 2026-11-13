@@ -104,6 +104,7 @@ describe('review round 1 (seat reviewer, 2026-11-13 11:21)', () => {
     ['cp -r src/a.ts out.txt'],
     ['Copy-Item src/a.ts out.txt'],
     ['Copy-Item -Force -LiteralPath src/a.ts out.txt'],
+    ['Copy-Item -Path src/a.ts -Destination out.txt'],
   ])('F4 F5 F1a: a mention, never a deny: %s', (text) => {
     expect(verdict(text).kind).toBe('mention');
   });
@@ -123,6 +124,10 @@ describe('review round 1 (seat reviewer, 2026-11-13 11:21)', () => {
     ['cp x src/a.ts', 'cp'],
     ['echo x &>src/a.ts', '>'],
     ['echo x 2>src/a.ts', '>'],
+    // CR 11-13 (major): a named -Destination is the copy TARGET, never a source operand.
+    ['Copy-Item -Destination src/a.ts -Path seed.ts', 'copy-item'],
+    ['Copy-Item -Dest src/a.ts seed.ts', 'copy-item'],
+    ['Copy-Item -Path seed.ts -Destination src/a.ts', 'copy-item'],
   ])('F3 F1: denies and names the cue: %s', (text, cue) => {
     const v = verdict(text);
     expect(v.kind).toBe('deny');
@@ -141,6 +146,14 @@ describe('review round 1 (seat reviewer, 2026-11-13 11:21)', () => {
     expect(verdict(`sed ${'-ab '.repeat(10000)}src/a.ts`).kind).toBe('mention');
     expect(Date.now() - t0).toBeLessThan(500);
     expect(verdict(`${'x '.repeat(40000)} > src/a.ts`)).toEqual({ kind: 'none' });
+  });
+
+  it('F8b (CR 11-13 major): a run of -e tokens has one parse, so the sed cue cannot backtrack', () => {
+    const t0 = Date.now();
+    expect(verdict(`sed ${'-e '.repeat(40)}x src/a.ts`).kind).toBe('mention');
+    expect(verdict(`sed ${'-e '.repeat(40)}x -i src/a.ts`).kind).toBe('deny');
+    expect(verdict(`sed ${'-f '.repeat(40)}x src/a.ts`).kind).toBe('mention');
+    expect(Date.now() - t0).toBeLessThan(200);
   });
 
   it('F2: a form that came from the lower-cased project key matches in any case, even where case is kept', () => {
