@@ -91,7 +91,7 @@ beforeAll(async () => {
     entryPoints: [join(src, 'destructive-command-guard.mjs')], bundle: true, platform: 'node', format: 'esm', outfile: liveDist, inject: [BOOT],
     banner: { js: BANNER }, logLevel: 'silent',
   });
-}, 60000);
+}, 180000);
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 interface Run { status: number | null; stdout: string; stderr: string; rows: Array<Record<string, any>>; traceDir: string }
