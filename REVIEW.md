@@ -21,4 +21,8 @@ scripts/github/fixtures/**
 docs/**
 thoughts/**
 .claude/skills/_vendor/**
+scripts/eval/review-eval/gold/**
+scripts/eval/review-eval/seeds/**
+scripts/eval/review-eval/rubrics/**
+scripts/eval/review-eval/linktype-labels.json
 ```
