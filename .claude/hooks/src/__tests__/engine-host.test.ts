@@ -37,6 +37,14 @@ describe('isEngineHost', () => {
     expect(isEngineHost({ hook_event_name: 'preToolUse' })).toBe(true);
   });
 
+  // Card engine-run-hook-files, seat ruling 2026-11-13 09:10 CST. Breaks if the name is dropped from the set
+  // (the prompt-job guards then match no payload), if the PascalCase form is matched, or if a null event matches.
+  it('userPromptSubmit gives true: by convention, NOT measured; UserPromptSubmit and a null event give false', () => {
+    expect(isEngineHost({ hook_event_name: 'userPromptSubmit' })).toBe(true);
+    expect(isEngineHost({ hook_event_name: 'UserPromptSubmit' })).toBe(false);
+    expect(isEngineHost({ hook_event_name: null })).toBe(false);
+  });
+
   it.each([
     ['undefined input', undefined],
     ['null input', null],

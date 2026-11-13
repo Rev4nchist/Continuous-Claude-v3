@@ -45,6 +45,7 @@ import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-saniti
 import { readBus } from './shared/context-bus.js';
 import { appendIntelBus } from './shared/intel-bus.js';
 import { extractBusFocus, buildFocusBlock } from './shared/bus-focus.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 // Floors gate base_score (pre-decay). Measured on the 48-pair gold set v2
 // (2026-10-27, 130 live rows, hook scope). Report: opc/tests/recall_eval_v2_report.md.
@@ -522,6 +523,14 @@ export async function runMemoryAwareness(raw: string): Promise<object> {
 async function memoryAwarenessJob(raw: string): Promise<object> {
   const t0 = Date.now();
   const input: UserPromptSubmitInput = JSON.parse(raw);
+
+  // Under cursor-agent (the review engine): no recall log and no intel-bus row in the reviewed tree
+  // (card engine-run-hook-files). The cursor-agent name for UserPromptSubmit is not measured: this guard is by
+  // convention, not proven.
+  if (isEngineHost(input)) {
+    return { result: 'continue' };
+  }
+
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
 
   // Skip for subagents - they don't need memory recall (saves tokens)

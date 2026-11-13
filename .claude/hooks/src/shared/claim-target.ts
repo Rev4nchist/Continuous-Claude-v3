@@ -11,8 +11,9 @@
  * names a linked worktree's git dir, and the `commondir` file there names the common dir.
  * Any failure returns null, and the caller keeps today's key (raw path, cwd project): a file
  * outside any repo, a `.git` entry that cannot be read (any error but "not found"), a path on a
- * network share (no file read at all: sync calls have no time limit), or a path whose lease class
- * would change.
+ * network share (no file read at all: sync calls have no time limit), a path whose lease class
+ * would change, or a path under `.claude/cache` (git-ignored, one copy per worktree: see
+ * `isWorktreeCache`).
  *
  * What it does not do:
  *  - A stored row with an absolute path (a live session that started before this change) is not
@@ -50,6 +51,23 @@ const isNetworkPath = (p: string): boolean => /^[\\/]{2}/.test(p);
 const FOLDS_CASE: ReadonlySet<NodeJS.Platform> = new Set<NodeJS.Platform>(['win32', 'darwin']);
 
 const real = (p: string): string => realpathSync.native(p);
+
+/**
+ * `.claude/cache/**` holds git-ignored files that each worktree makes for itself (the pre-pr summary,
+ * its logs). One key for every worktree would make two sessions fight over files they cannot share
+ * (card coord-file-claims-worktree-local). Such a file keeps today's key (raw absolute path, cwd
+ * project), which differs per worktree. No .gitignore parser: a wrong ignore rule could weaken the
+ * guard for a tracked file, and this prefix rule can only ever make a claim narrower for a file
+ * under `.claude/cache`. The relative path is already resolved (".." gone) when this runs.
+ *
+ * The rule ASSUMES `.claude/cache/` is git-ignored (see the repo `.gitignore`). A file force-added
+ * there loses the cross-worktree claim. For such a path the fallback key is the raw `file_path`, so
+ * two spellings of one file (slash, case, relative) in one worktree are two keys, as before PR 536.
+ */
+const isWorktreeCache = (rel: string, fold: boolean): boolean => {
+  const r = fold ? rel.toLowerCase() : rel;
+  return r === '.claude/cache' || r.startsWith('.claude/cache/');
+};
 
 /** The nearest existing folder or file at or above `abs`. */
 function nearestExisting(abs: string): string | null {
@@ -90,8 +108,9 @@ function commonDirOf(top: string): string | null | undefined {
 }
 
 /**
- * Resolve the claim key of `rawPath`, or null when the file is outside any repo (or the repo
- * cannot be read). Never throws.
+ * Resolve the claim key of `rawPath`, or null when the file is outside any repo, the repo cannot
+ * be read, or the file is under `.claude/cache` (a per-worktree file: the caller keeps the old key,
+ * raw path plus cwd project, which differs per worktree). Never throws.
  */
 export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}): ClaimKey | null {
   try {
@@ -115,6 +134,7 @@ export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}):
         let rel = relative(dir, realFile).replace(/\\/g, '/');
         // Outside the repo: "..", or a path that starts with "../". A folder named "..foo" is fine.
         if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) return null;
+        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) return null;
         // The lease class is decided from the key (resolveFileClaim). A repo rooted inside a harness
         // folder (`<x>/.claude/skills/plugin`, or `~/.claude` itself) has a relative path with no
         // `.claude/<dir>` segment, and a link can make the raw and the real path differ. Main

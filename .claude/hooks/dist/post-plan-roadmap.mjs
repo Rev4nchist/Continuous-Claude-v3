@@ -370,6 +370,18 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
   return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/shared/project-relevance.ts
 import * as fs2 from "fs";
 import * as path from "path";
@@ -1584,6 +1596,10 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
