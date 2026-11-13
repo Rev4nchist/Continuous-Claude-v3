@@ -12,7 +12,7 @@ import { conflicts } from './owns.mjs';
 import { judgeHolds } from './holds.mjs';
 import { isProgramId, isWorkerRe, owner8, metTable, workRows, laneIndex } from './board-util.mjs';
 
-export const CAP_LIMIT = 3;
+export const CAP_LIMIT = 5; // Dave 2026-11-13 (card coord-program-cap-5): cap 5 for now, was 3.
 const OPEN = ['backlog', 'ready'];
 const isBranch = (key) => /^re\//.test(key);
 
