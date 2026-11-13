@@ -12,7 +12,14 @@
  * identity-probe prints nothing. The callers are: epistemic-reminder, periodic-extract,
  * tldr-read-enforcer (PR 529); session-register, session-start-init-check,
  * session-start-memory-loaders, identity-probe, and the Tier B SessionStart hooks of card
- * engine-run-hook-silence-2.
+ * engine-run-hook-silence-2. Card engine-run-hook-files adds the hooks that write a FILE into the
+ * project folder (the reviewed tree) or start a child for it, 16 callers: bus-tool-populator,
+ * bus-session-populator, memory-awareness, user-confirmation-detector, post-edit-diagnostics,
+ * session-end-handoff-indexer, session-end-extract, session-start-intel-prune,
+ * agent-recall-injector, tree-invalidate, architecture-stats-sync, prd-roadmap-sync,
+ * git-commit-roadmap, import-validator, pageindex-watch and post-plan-roadmap.
+ * bus-session-populator, memory-awareness and user-confirmation-detector run inside prompt-submit
+ * (UserPromptSubmit), so their guards need the userPromptSubmit name (see below).
  *
  * tldr-read-enforcer is the one caller that has a deny branch. It may import this module because
  * seat ruling 1 made it ALLOW a Read under the engine host: its deny text would be hook text in
@@ -27,6 +34,11 @@
  *   cursor-agent PreToolUse row was captured. It follows the camelCase form of the measured three.
  *   It cannot cause a false positive in Claude Code, which never sends a camelCase name. If
  *   cursor-agent sends another name, the entry matches nothing.
+ * - BY CONVENTION, NOT MEASURED: userPromptSubmit (seat ruling, card engine-run-hook-files, 2026-11-13
+ *   09:10 CST). No cursor-agent prompt row was captured. Same ground as preToolUse. Only the three
+ *   in-process prompt jobs (bus-session-populator, memory-awareness, user-confirmation-detector) need it. No other event name is
+ *   added: every other guarded hook is registered on SessionStart, PreToolUse, PostToolUse or
+ *   SessionEnd (registered-hooks.txt), so stop, subagentStop and preCompact get no entry.
  *
  * Positive match on an exact, case-sensitive set. A "not PascalCase" test is unsafe: some Claude
  * Code payloads carry a null event. A false negative voids an engine run; a false positive drops a
@@ -42,7 +54,7 @@
  * behaviour under the engine. The one exception is tldr-read-enforcer (seat ruling 1, above).
  */
 
-const ENGINE_EVENT_NAMES: ReadonlySet<string> = new Set(['sessionStart', 'postToolUse', 'sessionEnd', 'preToolUse']);
+const ENGINE_EVENT_NAMES: ReadonlySet<string> = new Set(['sessionStart', 'postToolUse', 'sessionEnd', 'preToolUse', 'userPromptSubmit']);
 
 /** True only when the payload event name is in the set (measured or by convention). Never throws. */
 export function isEngineHost(input: unknown): boolean {

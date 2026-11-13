@@ -403,6 +403,18 @@ function isCompactSource(source) {
   return source === COMPACT_SOURCE;
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/session-start-intel-prune.ts
 function runPrune(projectDir) {
   if (process.env.CCV3_BUS_OFF === "1") return;
@@ -413,6 +425,15 @@ function main() {
   try {
     stdin = readFileSync(0, "utf-8");
   } catch {
+  }
+  let engine = false;
+  try {
+    engine = isEngineHost(JSON.parse(stdin));
+  } catch {
+  }
+  if (engine) {
+    console.log("{}");
+    return;
   }
   if (isCompactSource(parseSessionSource(stdin))) {
     console.log("{}");

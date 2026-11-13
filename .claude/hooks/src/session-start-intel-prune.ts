@@ -14,6 +14,7 @@
 import { readFileSync } from 'fs';
 import { pruneIntelBus } from './shared/intel-bus.js';
 import { isCompactSource, parseSessionSource } from './shared/session-source.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 /** Run the prune against a given project dir (default: env/cwd). Exported for the smoke test. */
 export function runPrune(projectDir?: string): void {
@@ -27,6 +28,17 @@ function main(): void {
     stdin = readFileSync(0, 'utf-8');
   } catch {
     /* ignore */
+  }
+  // Under cursor-agent (the review engine): never rename or delete files in the reviewed tree (card engine-run-hook-files).
+  let engine = false;
+  try {
+    engine = isEngineHost(JSON.parse(stdin));
+  } catch {
+    /* not JSON: not an engine payload */
+  }
+  if (engine) {
+    console.log('{}');
+    return;
   }
   // After /compact the prune already ran at this session's start.
   if (isCompactSource(parseSessionSource(stdin))) {

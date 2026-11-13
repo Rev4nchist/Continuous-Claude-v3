@@ -1004,6 +1004,18 @@ function insertUnderSection(content, sectionPrefix, entry) {
   return result.join("\n");
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/prd-roadmap-sync.ts
 function readStdin() {
   return new Promise((resolve4) => {
@@ -1396,6 +1408,10 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }

@@ -18,6 +18,7 @@ import * as path from 'path';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import * as fs from 'fs';
 import { parseState, sessionStartLine } from './shared/extraction-state.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface SessionEndInput {
   session_id: string;
@@ -151,6 +152,12 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no extraction-state.json and no Python child for the reviewed tree. (card engine-run-hook-files).
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
